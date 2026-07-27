@@ -1,13 +1,13 @@
 
 
-import React, { useEffect, useRef, useState, useCallback, Fragment } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   LiveKpiCard,
-  LiveLineChart,
   useLiveSeries,
   type LivePoint,
 } from "../components/LiveKpiCard";
+import { HourlyHeatmap } from "../components/HourlyHeatmap";
 import {
   OWNER_THEME as HOME_THEME,
   homeButtonStyle,
@@ -351,302 +351,9 @@ function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
   );
 }
 
-/** Given a window duration ending at `endIso`, format [start, end] axis labels.
- *  Sub-day windows show ET clock time; multi-day windows show month/day. */
-function sparkTimeLabels(durationMs: number, endIso?: string | null): [string, string] {
-  if (!endIso) return ["", ""];
-  const end = new Date(endIso);
-  if (isNaN(end.getTime())) return ["", ""];
-  const start = new Date(end.getTime() - durationMs);
-  const daily = durationMs > 36 * 3_600_000; // > 36h → date labels read better than clock time
-  const fmt = (d: Date) => daily
-    ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/New_York" })
-    : d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: false, timeZone: "America/New_York" });
-  return [fmt(start), fmt(end)];
-}
-
-/** Card trend line. Same call signature the old inline sparkline had — every
- *  existing `<Sparkline data={...} accent={...} />` call site keeps working —
- *  but it now renders the shared live line chart: monotone curve, gradient
- *  fill, pulsing tip dot, crosshair tooltip, animated y-axis.
- *
- *  `durationMs` + `endIso` still map each sample index back to a real
- *  timestamp for the tooltip; `axisLabels` still overrides the start/end
- *  labels printed under the line. Tiny inline uses (height < 34, e.g. the
- *  Overview infra rows) drop the axes and the value badge automatically so
- *  they stay legible at 64px wide. */
-function Sparkline({
-  data, accent, height = 22, axisLabels, durationMs, endIso, formatValue,
-}: {
-  data: number[]; accent: string; height?: number; axisLabels?: [string, string];
-  durationMs?: number; endIso?: string | null; formatValue?: (v: number) => string;
-}) {
-  if (!data || data.length < 1) return null;
-  const compact = height < 34;
-
-  const stamp = (i: number, n: number): string => {
-    if (!durationMs || !endIso) return "";
-    const end = new Date(endIso).getTime();
-    if (isNaN(end)) return "";
-    const t = end - durationMs + (n > 1 ? (i / (n - 1)) * durationMs : durationMs);
-    const d = new Date(t);
-    return durationMs > 36 * 3_600_000
-      ? d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: false, timeZone: "America/New_York" })
-      : d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "America/New_York" }) + " ET";
-  };
-
-  const points: LivePoint[] = data.map((value, i) => ({ value, label: stamp(i, data.length) }));
-  // axisLabels wins for the two printed end labels when there is no timestamp.
-  if (axisLabels && points.length) {
-    if (!points[0].label) points[0] = { ...points[0], label: axisLabels[0] };
-    const li = points.length - 1;
-    if (!points[li].label) points[li] = { ...points[li], label: axisLabels[1] };
-  }
-
-  return (
-    <LiveLineChart
-      points={points}
-      color={accent}
-      height={height}
-      formatValue={formatValue ?? ((v: number) => v.toFixed(2))}
-      showYAxis={!compact}
-      showXAxis={!compact}
-      showGrid={!compact}
-      showBadge={!compact}
-      pulse={!compact}
-    />
-  );
-}
-
-/** % change across a raw sample array — feeds the delta pill on stat cards
- *  whose history arrives as `number[]` rather than LivePoint[]. */
-function pctDelta(data: number[] | undefined | null): number | null {
-  if (!data || data.length < 2) return null;
-  const first = data[0], last = data[data.length - 1];
-  if (first === 0) return last === 0 ? 0 : null;
-  return ((last - first) / Math.abs(first)) * 100;
-}
-
-function StatCard({
-  label,
-  value,
-  accent = HOME_THEME.cyan,
-  mono = false,
-  footer,
-  sub,
-  delta,
-  invertDelta = false,
-}: {
-  label: string;
-  value: React.ReactNode;
-  accent?: string;
-  mono?: boolean;
-  footer?: React.ReactNode;
-  sub?: React.ReactNode;
-  /** % change vs. the start of the card's window. `null`/omitted hides the pill. */
-  delta?: number | null;
-  /** Metrics where down is good — egress, memory, CPU. */
-  invertDelta?: boolean;
-}) {
-  return (
-    <LiveKpiCard
-      label={label}
-      value={value}
-      sub={sub}
-      accent={accent}
-      mono={mono}
-      delta={delta ?? null}
-      invertDelta={invertDelta}
-      footer={footer}
-    />
-  );
-}
-
-
-/**
- * Live SPX index-feed health. Polls /proxy/status every 5s and reads spotAgeMs
- * (how long since the Theta index stream last moved spot). A frozen feed was
- * silently recording thousands of dead-spot rows into greeks_ts; this surfaces it.
- *   < 20s  → HEALTHY (green)   feed ticking
- *   20–120s → SLOW (amber)     lagging
- *   > 120s / never → STALE (red)  index stream frozen — needs a Theta re-subscribe
- */
-function SpotFeedHealth() {
-  const [ageMs, setAgeMs] = useState<number | null | undefined>(undefined);
-  const [spot, setSpot] = useState<number | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    const poll = async () => {
-      try {
-        const r = await fetch("/proxy/status", { cache: "no-store" });
-        const j = await r.json();
-        if (!alive) return;
-        setAgeMs(j?.spotAgeMs ?? null);
-        setSpot(Number(j?.spot) || null);
-      } catch { if (alive) setAgeMs(null); }
-    };
-    poll();
-    const t = setInterval(poll, 5000);
-    return () => { alive = false; clearInterval(t); };
-  }, []);
-
-  const stale = ageMs == null || ageMs > 120_000;
-  const slow = !stale && ageMs != null && ageMs > 20_000;
-  const color = stale ? HOME_THEME.red : slow ? "#facc15" : "#00e676";
-  const label = ageMs === undefined ? "…" : stale ? "STALE" : slow ? "SLOW" : "HEALTHY";
-  const ageStr = ageMs == null ? "no ticks" : ageMs < 1000 ? "<1s ago" : `${Math.round(ageMs / 1000)}s ago`;
-
-  return (
-    <div style={{
-      display: "flex", alignItems: "center", gap: 12, padding: "10px 14px",
-      borderRadius: 12, border: `1px solid ${color}59`, background: `${color}12`,
-    }}>
-      <span style={{ width: 10, height: 10, borderRadius: "50%", background: color, boxShadow: `0 0 8px ${color}` }} />
-      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <div style={{ fontSize: 17, fontWeight: 700, color }}>SPX Index Feed · {label}</div>
-        <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>
-          spot {spot != null ? spot.toFixed(2) : "--"} · updated {ageStr}
-        </div>
-      </div>
-      {stale && ageMs !== undefined && (
-        <div style={{ marginLeft: "auto", fontSize: 14, color: HOME_THEME.red, opacity: 1, maxWidth: 220, textAlign: "right" }}>
-          Index stream frozen — re-subscribe Theta / recreate dashboard.
-        </div>
-      )}
-    </div>
-  );
-}
-
-type ThetaStatsResp = {
-  ok: boolean;
-  cpuPercent?: number | null;
-  memUsageBytes?: number | null;
-  memLimitBytes?: number | null;
-  memPercent?: number | null;
-  pids?: number | null;
-  status?: string;
-  health?: string | null;
-  restarting?: boolean;
-  oomKilled?: boolean;
-};
-
-const MIB = 1024 * 1024;
-
-// Live docker-stats readout for the theta-terminal container. Added after the
-// 2026-07-07 heap OOM (options prints stopped mid-session, JVM heap exhausted
-// — see docker-compose.yml theta-terminal comment) so a recurrence shows up
-// here before it silently kills the feed again. Sources /api/owner/theta-stats,
-// which reads the docker-socket-proxy sidecar (no raw docker.sock in the app
-// container).
-function ThetaTerminalStats() {
-  const [data, setData] = useState<ThetaStatsResp | null | undefined>(undefined);
-
-  useEffect(() => {
-    let alive = true;
-    const poll = async () => {
-      try {
-        const r = await fetch("/api/owner/theta-stats", { cache: "no-store" });
-        const j = await r.json();
-        if (alive) setData(r.ok ? j : null);
-      } catch { if (alive) setData(null); }
-    };
-    poll();
-    const t = setInterval(poll, 5000);
-    return () => { alive = false; clearInterval(t); };
-  }, []);
-
-  const errored = data === null;
-  const memPct = data?.memPercent ?? null;
-  const unhealthy =
-    !errored && data != null &&
-    (data.status !== "running" || data.restarting || data.oomKilled || data.health === "unhealthy" || (memPct != null && memPct > 95));
-  const warn = !errored && !unhealthy && ((memPct != null && memPct > 80) || data?.health === "starting");
-
-  const color = errored || unhealthy ? HOME_THEME.red : warn ? "#facc15" : "#00e676";
-  const label = data === undefined ? "…" : errored ? "UNREACHABLE" : unhealthy ? "UNHEALTHY" : warn ? "WARN" : "HEALTHY";
-
-  const memStr = data?.memUsageBytes != null && data?.memLimitBytes
-    ? `${(data.memUsageBytes / MIB).toFixed(0)}MiB / ${(data.memLimitBytes / MIB / 1024).toFixed(1)}GiB (${memPct?.toFixed(0)}%)`
-    : "--";
-  const cpuStr = data?.cpuPercent != null ? `${data.cpuPercent.toFixed(1)}%` : "--";
-
-  return (
-    <div style={{
-      display: "flex", alignItems: "center", gap: 12, padding: "10px 14px",
-      borderRadius: 12, border: `1px solid ${color}59`, background: `${color}12`,
-    }}>
-      <span style={{ width: 10, height: 10, borderRadius: "50%", background: color, boxShadow: `0 0 8px ${color}` }} />
-      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <div style={{ fontSize: 17, fontWeight: 700, color }}>Theta Terminal · {label}</div>
-        <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>
-          cpu {cpuStr} · mem {memStr} · pids {data?.pids ?? "--"}
-        </div>
-      </div>
-      {errored && (
-        <div style={{ marginLeft: "auto", fontSize: 14, color: HOME_THEME.red, opacity: 1, maxWidth: 220, textAlign: "right" }}>
-          Stats unreachable — check docker-proxy sidecar.
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Maps each accordion section to its sidebar nav key.
-const SECTION_TAB = {
-  system:   "infra",
-  hosting:  "infra",
-  // Controls moved under the Infra tab (its own tab was removed).
-  controls: "infra",
-} as const;
-
-
-/**
- * Collapsible section card for the owner dashboard. The whole header is the
- * click target; each card toggles independently (multi-open via the parent's
- * `openSet`), and all cards start expanded on load. `subtitle` shows an
- * at-a-glance summary on the collapsed header so the card is useful when closed.
- */
-function AccordionCard({
-  id, title, subtitle, open, onToggle, children, accent = HOME_THEME.cyan,
-}: {
-  id: string;
-  title: string;
-  subtitle?: React.ReactNode;
-  open: boolean;
-  onToggle: (id: string) => void;
-  children: React.ReactNode;
-  accent?: string;
-}) {
-  void open; void onToggle; void id; void accent;
-  return (
-    <div style={{ ...homePanelStyle, overflow: "visible", background: "transparent" }}>
-      <div
-        style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-          padding: "12px 16px",
-          borderBottom: `1px solid ${HOME_THEME.border}`,
-          background: "transparent",
-          borderTopLeftRadius: 10, borderTopRightRadius: 10,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
-          <span style={{ width: 3, height: 14, borderRadius: 2, background: HOME_THEME.border, flexShrink: 0 }} />
-          <span style={{ fontSize: 17, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em", whiteSpace: "nowrap" }}>
-            {title}
-          </span>
-          {subtitle != null && (
-            <span style={{ fontSize: 14, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {subtitle}
-            </span>
-          )}
-        </div>
-      </div>
-      <div style={{ padding: "16px 18px" }}>{children}</div>
-    </div>
-  );
-}
-
+// Sparkline / StatCard / pctDelta / sparkTimeLabels all retired here: the
+// cards that used them now render <LiveKpiCard>, which does its own curve,
+// axis labels, crosshair tooltip and delta pill.
 
 // Ticker visit tracker — ranks tickers by how often they've been opened
 // (click) on a given surface, from the ticker_events log via GET
@@ -755,37 +462,8 @@ function dailyVisitSeries(visits: PageVisit[], days = 12): { counts: number[]; l
   return { counts, labels };
 }
 
-/**
- * Bucket page-visit timestamps into a 7×24 grid of counts — weekday (Mon..Sun,
- * ET) × hour-of-day (ET, 0-23). Powers the Overview tab's "Hourly load
- * heatmap" from real page_visits rows instead of the placeholder sample.
- * Returns { grid, max } where grid[weekdayIdx][hour] = visit count.
- */
-const HEATMAP_WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
-const heatmapPartsFmt = new Intl.DateTimeFormat("en-US", {
-  timeZone: ET_TZ,
-  weekday: "short",
-  hour: "numeric",
-  hour12: false,
-});
-function hourlyHeatmap(visits: PageVisit[]): { grid: number[][]; max: number } {
-  const grid: number[][] = HEATMAP_WEEKDAYS.map(() => Array(24).fill(0));
-  const weekdayIdx: Record<string, number> = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
-  for (const v of visits) {
-    if (!v.createdAt) continue;
-    const t = new Date(v.createdAt);
-    if (isNaN(t.getTime())) continue;
-    const parts = heatmapPartsFmt.formatToParts(t);
-    const weekday = parts.find((p) => p.type === "weekday")?.value ?? "";
-    let hour = Number(parts.find((p) => p.type === "hour")?.value ?? NaN);
-    if (hour === 24) hour = 0; // some locales format midnight as "24"
-    const di = weekdayIdx[weekday];
-    if (di == null || isNaN(hour) || hour < 0 || hour > 23) continue;
-    grid[di][hour] += 1;
-  }
-  const max = Math.max(1, ...grid.flat());
-  return { grid, max };
-}
+// hourlyHeatmap and its ET formatter moved into components/HourlyHeatmap.tsx,
+// which owns the once-a-day fetch and the localStorage snapshot.
 
 /**
  * Bucket signups (Clerk recent users, by createdAt ms) into the last `days`
@@ -1142,6 +820,208 @@ function MetricsTabSection({
   );
 }
 
+/** Turn a raw sample array into chart points, mapping each index back to a real
+ *  timestamp so the crosshair reads a time rather than an index. */
+function sparkPoints(data: number[] | undefined, durationMs: number, endIso?: string | null): LivePoint[] {
+  if (!data?.length) return [];
+  const end = endIso ? new Date(endIso).getTime() : NaN;
+  return data.map((value, i) => {
+    if (isNaN(end)) return { value };
+    const t = end - durationMs + (data.length > 1 ? (i / (data.length - 1)) * durationMs : durationMs);
+    const d = new Date(t);
+    return {
+      value,
+      label: durationMs > 36 * 3_600_000
+        ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: ET_TZ })
+        : d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: false, timeZone: ET_TZ }),
+    };
+  });
+}
+
+/** Server health tiles, formerly the Infra tab's "System" card.
+ *
+ *  Only the five that actually get looked at survived the move — uptime, feed
+ *  freshness, the two feed-connection states and the deployed version. Last
+ *  Feed is the one with a real curve: it's a live age-in-seconds, so a rising
+ *  line is exactly what a stalling feed looks like. The rest are states, not
+ *  series, so they render as plain tiles. */
+function SystemStrip({
+  isMobile, displayUptime, lastFeedAgo, dxLinkState, dxOk, ttAuthenticated, ttOk,
+}: {
+  isMobile: boolean;
+  displayUptime: number | undefined;
+  lastFeedAgo: number | null;
+  dxLinkState: string | undefined;
+  dxOk: boolean;
+  ttAuthenticated: boolean | undefined;
+  ttOk: boolean;
+}) {
+  // Age-in-seconds since the last feed tick, accumulated across polls.
+  const feedSeries = useLiveSeries(lastFeedAgo, 60);
+  const feedHealthy = lastFeedAgo != null && lastFeedAgo < 10;
+  // Connection states as 1/0 over time. A flat line at the top is a solid
+  // session; the dips are the flaps you'd otherwise only catch by staring at
+  // the tile at the exact wrong moment.
+  const dxSeries = useLiveSeries(dxLinkState == null ? null : dxOk ? 1 : 0, 60);
+  const ttSeries = useLiveSeries(ttAuthenticated == null ? null : ttOk ? 1 : 0, 60);
+  const upDown = (v: number) => (v >= 0.5 ? "up" : "down");
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0,1fr))" : "repeat(5, minmax(0,1fr))", gap: 10 }}>
+      <LiveKpiCard
+        label="Server Uptime"
+        value={displayUptime != null ? fmtUptime(displayUptime) : "—"}
+        sub="since last restart"
+        accent={HOME_THEME.green}
+        delta={null}
+      />
+      <LiveKpiCard
+        label="Last Feed"
+        value={lastFeedAgo != null ? `${lastFeedAgo}s` : "—"}
+        sub="since last tick"
+        accent={feedHealthy ? HOME_THEME.green : HOME_THEME.orange}
+        points={feedSeries}
+        formatValue={(v) => `${Math.round(v)}s`}
+        // Rising age is bad here, so a positive delta should read red.
+        invertDelta
+        height={52}
+        showAxes={false}
+      />
+      <LiveKpiCard
+        label="dxLink Feed"
+        value={dxLinkState || "—"}
+        sub="TT → Proxy"
+        accent={dxOk ? HOME_THEME.green : HOME_THEME.red}
+        points={dxSeries}
+        formatValue={upDown}
+        delta={null}
+        height={52}
+        showAxes={false}
+      />
+      <LiveKpiCard
+        label="TT Auth"
+        value={ttAuthenticated == null ? "—" : ttOk ? "OK" : "FAIL"}
+        sub="tastytrade session"
+        accent={ttOk ? HOME_THEME.green : HOME_THEME.red}
+        points={ttSeries}
+        formatValue={upDown}
+        delta={null}
+        height={52}
+        showAxes={false}
+      />
+      <LiveKpiCard
+        label="Version"
+        value={(import.meta as { env?: { VITE_APP_VERSION?: string } }).env?.VITE_APP_VERSION || "—"}
+        sub="deployed build"
+        accent={HOME_THEME.orange}
+        delta={null}
+      />
+    </div>
+  );
+}
+
+/** Hetzner + Cloudflare usage, formerly the Infra tab's "Hosting" card.
+ *
+ *  Keeps its own live/7d/30d switcher rather than following the page's
+ *  daily/weekly/monthly/yearly control: those are different time concepts, and
+ *  the upstream APIs only expose these three windows (there is no yearly). */
+function HostingStrip({
+  isMobile, renderMetrics, cfMetrics, renderWindow, renderLoading, onWindow, memAccent, cpuAccent,
+}: {
+  isMobile: boolean;
+  renderMetrics: RenderMetrics | null;
+  cfMetrics: CfMetrics | null;
+  renderWindow: "live" | "weekly" | "monthly";
+  renderLoading: boolean;
+  onWindow: (w: "live" | "weekly" | "monthly") => void;
+  memAccent: string;
+  cpuAccent: string;
+}) {
+  const hostMs = renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000;
+  const cfMs = renderWindow === "live" ? 86_400_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000;
+  const winLabel = renderWindow === "live" ? "24h" : renderWindow === "weekly" ? "7d" : "30d";
+  const hostLabel = renderWindow === "live" ? "1h" : renderWindow === "weekly" ? "7d" : "30d";
+
+  const fmtMb = (v: number) => v < 1024 ? `${v.toFixed(1)} MB` : v < 1024 * 1024 ? `${(v / 1024).toFixed(2)} GB` : `${(v / 1024 / 1024).toFixed(2)} TB`;
+  const fmtBytes = (v: number) => v < 1024 * 1024 ? `${(v / 1024).toFixed(0)} KB` : `${(v / 1024 / 1024).toFixed(0)} MB`;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.45 }}>
+          Hosting · Hetzner + Cloudflare
+        </span>
+        <div style={{ display: "flex", gap: 4, background: "rgba(0,0,0,0.25)", borderRadius: 8, padding: 3 }}>
+          {(["live", "weekly", "monthly"] as const).map((w) => (
+            <button
+              key={w}
+              onClick={() => onWindow(w)}
+              style={{
+                padding: "3px 10px", borderRadius: 6, border: "none", cursor: "pointer",
+                fontSize: 12, fontWeight: 700, fontFamily: "inherit", letterSpacing: "0.04em",
+                background: renderWindow === w ? HOME_THEME.cyan : "transparent",
+                color: renderWindow === w ? "#04141a" : HOME_THEME.text,
+              }}
+            >
+              {w === "live" ? "Live" : w === "weekly" ? "7 Day" : "30 Day"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{
+        display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0,1fr))" : "repeat(4, minmax(0,1fr))",
+        gap: 10, opacity: renderLoading ? 0.5 : 1, transition: "opacity 0.2s",
+      }}>
+        <LiveKpiCard
+          label={`CF Egress · ${winLabel}`}
+          value={cfMetrics?.egress.value != null ? fmtMb(cfMetrics.egress.value) : cfMetrics?.unconfigured ? "Setup" : "—"}
+          sub={cfMetrics?.unconfigured ? "needs CLOUDFLARE_API_TOKEN" : "edge bandwidth served"}
+          accent={HOME_THEME.orange}
+          points={sparkPoints(cfMetrics?.egress.spark, cfMs, cfMetrics?.fetchedAt)}
+          formatValue={fmtMb}
+          invertDelta
+          height={64}
+          showAxes={false}
+        />
+        <LiveKpiCard
+          label={`Host Net · ${hostLabel}`}
+          value={renderMetrics?.bandwidth.value != null ? fmtMb(renderMetrics.bandwidth.value) : renderMetrics?.unconfigured ? "Setup" : "—"}
+          sub={renderMetrics?.unconfigured ? "needs HETZNER_API_TOKEN" : "server egress"}
+          accent={HOME_THEME.cyan}
+          points={sparkPoints(renderMetrics?.bandwidth.spark, hostMs, renderMetrics?.fetchedAt)}
+          formatValue={fmtMb}
+          invertDelta
+          height={64}
+          showAxes={false}
+        />
+        <LiveKpiCard
+          label="Memory · App RSS"
+          value={renderMetrics?.memory.value != null ? fmtBytes(renderMetrics.memory.value) : "—"}
+          sub="resident set size"
+          accent={memAccent}
+          points={sparkPoints(renderMetrics?.memory.spark, hostMs, renderMetrics?.fetchedAt)}
+          formatValue={fmtBytes}
+          invertDelta
+          height={64}
+          showAxes={false}
+        />
+        <LiveKpiCard
+          label={`CPU · ${renderWindow === "live" ? "Latest" : `${hostLabel} Avg`}`}
+          value={renderMetrics?.cpu.value != null ? `${(renderMetrics.cpu.value * 100).toFixed(1)}%` : "—"}
+          sub="host utilisation"
+          accent={cpuAccent}
+          points={sparkPoints(renderMetrics?.cpu.spark, hostMs, renderMetrics?.fetchedAt)}
+          formatValue={(v) => `${(v * 100).toFixed(1)}%`}
+          invertDelta
+          height={64}
+          showAxes={false}
+        />
+      </div>
+    </div>
+  );
+}
+
 /** Overview's headline tiles.
  *
  *  Split out of OverviewSection so the `useLiveSeries` hooks below can run at a
@@ -1236,7 +1116,6 @@ function OverviewSection({ metrics, gran }: {
   gran: OverviewGran;
   metrics: {
     daily: { counts: number[]; labels: string[] };
-    heatmap: { grid: number[][]; max: number };
     dailySignups: { counts: number[]; labels: string[] };
     weekly: { counts: number[]; labels: string[] };
     totalVisits: number;
@@ -1261,7 +1140,7 @@ function OverviewSection({ metrics, gran }: {
     };
   };
 }) {
-  const { heatmap, totalVisits, activePages, users, waitlist, activeSessions, onToday, topPages, rowsToday, visits, signups, infra } = metrics;
+  const { totalVisits, activePages, users, waitlist, activeSessions, onToday, topPages, rowsToday, visits, signups, infra } = metrics;
   void activePages;
   const isMobile = useIsMobile();
 
@@ -1338,36 +1217,10 @@ function OverviewSection({ metrics, gran }: {
           projection + 177-feature re-render on every hover was dominating this
           tab's frame budget. */}
 
-      {/* Hourly heatmap — real page_visits rows, bucketed by hour × weekday (ET). */}
-      <div style={cardStyle}>
-        <div style={{ ...titleStyle, display: "flex", justifyContent: "space-between" }}>
-          <span>Hourly load heatmap · visits by hour × weekday (ET)</span>
-          <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, fontFamily: "var(--font-mono)" }}>
-            {heatmap.grid.flat().reduce((a, b) => a + b, 0)} visits · last 5000
-          </span>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "32px repeat(24, 1fr)", gap: 2 }}>
-          <div />
-          {Array.from({ length: 24 }, (_, h) => (
-            <div key={"h" + h} style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, textAlign: "center" }}>{h % 6 === 0 ? h : ""}</div>
-          ))}
-          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, di) => (
-            <Fragment key={d}>
-              <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, lineHeight: "30px" }}>{d}</div>
-              {heatmap.grid[di].map((count, h) => {
-                const v = count > 0 ? 0.06 + (count / heatmap.max) * 0.85 : 0.03;
-                return (
-                  <div
-                    key={d + h}
-                    title={`${d} ${h}:00 ET · ${count} visit${count === 1 ? "" : "s"}`}
-                    style={{ height: 30, borderRadius: 2, background: `rgba(91,155,213,${v.toFixed(2)})` }}
-                  />
-                );
-              })}
-            </Fragment>
-          ))}
-        </div>
-      </div>
+      {/* Hourly heatmap — now self-contained: it fetches and folds the visit
+          log at most once per ET day and caches the finished grid, instead of
+          rebuilding a 7×24 grid from 5,000 rows on every render of this page. */}
+      <HourlyHeatmap />
 
     </div>
   );
@@ -1375,13 +1228,13 @@ function OverviewSection({ metrics, gran }: {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-// FE / BE tab + accordion (one section open at a time). The `tab` of each
-// section decides which page it shows on; sort sections later by editing TAB.
-type OwnerTab = "overview" | "infra";
+// Only one tab left since Infra was removed — System/Hosting moved to the top
+// of Overview and Controls moved to Admin. The type and nav machinery stay so
+// adding a second tab back is a one-line change.
+type OwnerTab = "overview";
 
 export default function ControlPanel() {
   const isMobile = useIsMobile();
-  // Active page tab (persisted). Sections are assigned to a tab via SECTION_TAB.
   const [ownerTab, setOwnerTab] = useState<OwnerTab>("overview");
 
   // Overview's one time-window control. Lives here so the header can render it
@@ -1391,7 +1244,7 @@ export default function ControlPanel() {
     try {
       // A ?tab= URL param wins over the persisted tab (e.g. the admin page's
       // "Owner ↗" link deep-links to /dev/owner?tab=overview).
-      const VALID_TABS: string[] = ["overview", "infra", "probe", "social-media"];
+      const VALID_TABS: string[] = ["overview", "probe", "social-media"];
       const param = new URLSearchParams(window.location.search).get("tab");
       if (param && VALID_TABS.includes(param)) {
         setOwnerTab(param as OwnerTab);
@@ -1411,39 +1264,13 @@ export default function ControlPanel() {
   // keeps this page mounted, so the mount effect above won't re-run).
   const [searchParams] = useSearchParams();
   useEffect(() => {
-    const VALID_TABS: OwnerTab[] = ["overview","infra"];
+    const VALID_TABS: OwnerTab[] = ["overview"];
     const param = searchParams.get("tab") as OwnerTab | null;
     if (param && VALID_TABS.includes(param)) {
       setOwnerTab(param);
       try { localStorage.setItem("owner-tab", param); } catch { /* ignore */ }
     }
   }, [searchParams]);
-
-  // Section cards: multi-open. ALL sections start expanded on page load. Each
-  // card toggles independently (no longer an accordion). Persisted so a reload
-  // keeps the user's open/closed choices; first-ever load defaults to all open.
-  const [openSet, setOpenSet] = useState<Set<string>>(() => new Set(Object.keys(SECTION_TAB)));
-  useEffect(() => {
-    try {
-      const v = localStorage.getItem("owner-open-sections");
-      if (v != null) {
-        // Restore persisted open/closed choices, but always include any sections
-        // added since the set was last saved (e.g. "feedback") so a new card
-        // isn't hidden by a stale localStorage value.
-        const restored = new Set(JSON.parse(v) as string[]);
-        for (const k of Object.keys(SECTION_TAB)) restored.add(k);
-        setOpenSet(restored);
-      }
-    } catch { /* ignore */ }
-  }, []);
-  const toggleSection = useCallback((id: string) => {
-    setOpenSet((cur) => {
-      const next = new Set(cur);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      try { localStorage.setItem("owner-open-sections", JSON.stringify([...next])); } catch { /* ignore */ }
-      return next;
-    });
-  }, []);
 
   const [server, setServer] = useState<ServerStatus>({});
   const [waitlistCount, setWaitlistCount] = useState<number | null>(null);
@@ -1626,46 +1453,6 @@ export default function ControlPanel() {
     setCtlMsg({ key, text, ok });
     setTimeout(() => setCtlMsg((m) => (m?.key === key ? null : m)), 4000);
   }, []);
-
-  // Signal Alerts — live DB-backed per-alert-key toggles for the background
-  // trade-signal engine (server-v2/signals-engine.js). Replaces the old
-  // compile-time env-var kill switches; flipping one here takes effect within
-  // ~20s (the engine's poll cadence), no redeploy/restart needed.
-  type SignalAlertRow = { key: string; label: string; group: string; enabled: boolean };
-  const [signalAlerts, setSignalAlerts] = useState<SignalAlertRow[] | null>(null);
-  const [signalAlertsBusy, setSignalAlertsBusy] = useState<string | null>(null);
-
-  const loadSignalAlerts = useCallback(async () => {
-    try {
-      const r = await fetch("/proxy/signal-alerts");
-      const j = await r.json();
-      if (Array.isArray(j?.alerts)) setSignalAlerts(j.alerts);
-    } catch { /* non-fatal */ }
-  }, []);
-
-  useEffect(() => { void loadSignalAlerts(); }, [loadSignalAlerts]);
-
-  const toggleSignalAlert = useCallback(async (key: string, current: boolean) => {
-    const next = !current;
-    setSignalAlertsBusy(key);
-    // Optimistic flip.
-    setSignalAlerts((rows) => rows ? rows.map((r) => (r.key === key ? { ...r, enabled: next } : r)) : rows);
-    try {
-      const r = await fetch("/proxy/signal-alerts", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key, enabled: next }),
-      });
-      const j = await r.json();
-      if (!j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      flashMsg(`sigalert-${key}`, `${key} → ${next ? "ON" : "OFF"}`, true);
-    } catch (e) {
-      // Revert on failure.
-      setSignalAlerts((rows) => rows ? rows.map((r) => (r.key === key ? { ...r, enabled: current } : r)) : rows);
-      flashMsg(`sigalert-${key}`, `Failed: ${String((e as Error)?.message || e)}`, false);
-    } finally {
-      setSignalAlertsBusy(null);
-    }
-  }, [flashMsg]);
 
   // /ws/gex status socket (drives the "Proxy WS" badge + snapshot-derived KPIs).
   const [wsConnected, setWsConnected] = useState(false);
@@ -1930,68 +1717,6 @@ export default function ControlPanel() {
     } finally { setCtlBusy(null); void refresh(); }
   }, [flashMsg, refresh]);
 
-  const doEodRun = useCallback(async () => {
-    setCtlBusy("eod");
-    try {
-      const r = await fetch("/proxy/eod-gex-run", { method: "POST" });
-      const j = await r.json();
-      const saved = j?.result?.saved?.length ? j.result.saved.join(", ") : "none";
-      flashMsg("eod", j?.ok ? `EOD GEX saved: ${saved}` : `Failed: ${j?.error || r.status}`, !!j?.ok);
-    } catch (e) {
-      flashMsg("eod", `Failed: ${String((e as Error)?.message || e)}`, false);
-    } finally { setCtlBusy(null); void refresh(); }
-  }, [flashMsg, refresh]);
-
-  const doMvcSnapshot = useCallback(async () => {
-    setCtlBusy("mvcSnap");
-    try {
-      // force=1 → manual owner snapshot overrides the outside-RTH guard.
-      const r = await fetch("/proxy/mvc-snapshot?force=1", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ force: true }),
-      });
-      const j = await r.json();
-      flashMsg("mvcSnap", j?.ok ? `Snapshot saved · MVC ${j.strike} · SPX ${j.spot}` : `Skipped: ${j?.error || r.status}`, !!j?.ok);
-    } catch (e) {
-      flashMsg("mvcSnap", `Failed: ${String((e as Error)?.message || e)}`, false);
-    } finally { setCtlBusy(null); void refresh(); }
-  }, [flashMsg, refresh]);
-
-  const doPremarketRun = useCallback(async () => {
-    setCtlBusy("premarket");
-    try {
-      const r = await fetch("/proxy/premarket-summary-run", { method: "POST" });
-      const j = await r.json();
-      flashMsg("premarket", j?.ok ? "Premarket summary generated" : `Failed: ${j?.error || r.status}`, !!j?.ok);
-    } catch (e) {
-      flashMsg("premarket", `Failed: ${String((e as Error)?.message || e)}`, false);
-    } finally { setCtlBusy(null); void refresh(); }
-  }, [flashMsg, refresh]);
-
-  const doStrategyRun = useCallback(async () => {
-    setCtlBusy("strategy");
-    try {
-      const r = await fetch("/proxy/strategy-run", { method: "POST" });
-      const j = await r.json();
-      flashMsg("strategy", j?.ok ? "Daily strategy generated" : `Failed: ${j?.error || r.status}`, !!j?.ok);
-    } catch (e) {
-      flashMsg("strategy", `Failed: ${String((e as Error)?.message || e)}`, false);
-    } finally { setCtlBusy(null); void refresh(); }
-  }, [flashMsg, refresh]);
-
-  const doClearChat = useCallback(async () => {
-    if (!window.confirm("Erase ALL subscriber chat messages? This cannot be undone.")) return;
-    setCtlBusy("clearChat");
-    try {
-      const r = await fetch("/api/chat/clear", { method: "POST" });
-      const j = await r.json();
-      flashMsg("clearChat", j?.ok ? `Chat cleared (${j.deleted ?? "?"} messages)` : `Failed: ${j?.error || r.status}`, !!j?.ok);
-    } catch (e) {
-      flashMsg("clearChat", `Failed: ${String((e as Error)?.message || e)}`, false);
-    } finally { setCtlBusy(null); }
-  }, [flashMsg]);
-
   const fetchRenderWindow = useCallback(async (w: "live" | "weekly" | "monthly") => {
     setRenderWindow(w);
     setRenderLoading(true);
@@ -2248,7 +1973,6 @@ export default function ControlPanel() {
 
     return {
       daily: dailyVisitSeries(visits, 7),
-      heatmap: hourlyHeatmap(visits),
       dailySignups: dailySignupSeries(signups, 7),
       weekly: weeklySignupSeries(signups, 7),
       totalVisits,
@@ -2271,7 +1995,6 @@ export default function ControlPanel() {
   // ── Sidebar nav items ──────────────────────────────────────────────────────
   const NAV_ITEMS: { id: OwnerTab; label: string; badge?: string | number; badgeRed?: boolean }[] = [
     { id: "overview",       label: "Overview" },
-    { id: "infra",          label: "Infra" },
   ];
   // Inject feedback badge on overview
   const feedbackBadge = feedbackOpenCount > 0 ? feedbackOpenCount : undefined;
@@ -2544,6 +2267,32 @@ export default function ControlPanel() {
             WebkitOverflowScrolling: "touch",
           } as React.CSSProperties}
         >
+        {/* Server health + hosting usage — the two rows worth keeping from the
+            deleted Infra tab, now leading the Overview page. */}
+        {ownerTab === "overview" && (
+          <>
+            <SystemStrip
+              isMobile={isMobile}
+              displayUptime={displayUptime}
+              lastFeedAgo={lastFeedAgo}
+              dxLinkState={server.dxLinkState}
+              dxOk={dxOk}
+              ttAuthenticated={server.ttAuthenticated}
+              ttOk={ttOk}
+            />
+            <HostingStrip
+              isMobile={isMobile}
+              renderMetrics={renderMetrics}
+              cfMetrics={cfMetrics}
+              renderWindow={renderWindow}
+              renderLoading={renderLoading}
+              onWindow={fetchRenderWindow}
+              memAccent={memAccent}
+              cpuAccent={cpuAccent}
+            />
+          </>
+        )}
+
         {/* ── Overview dashboard (real front-end data) ── */}
         {ownerTab === "overview" && <OverviewSection metrics={overviewMetrics} gran={overviewGran} />}
 
@@ -2559,482 +2308,12 @@ export default function ControlPanel() {
             metric, and it belongs next to the other customer panels. The open
             count is still fetched here to badge the Overview nav item. */}
 
-        {/* ── System KPIs ── */}
-        {/* Note: live status dots (server/postgres/theta/feed/etc.) already show
-            in the sidebar (STATUS_ROWS) — no need to duplicate them here. */}
-        {SECTION_TAB.system === ownerTab && (
-        <AccordionCard
-          accent={HOME_THEME.cyan}
-          id="system"
-          title="System"
-          open={openSet.has("system")}
-          onToggle={toggleSection}
-        >
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(6, minmax(0, 1fr))", gap: 10 }}>
-            <StatCard label="Server Uptime" value={displayUptime != null ? fmtUptime(displayUptime) : "—"} accent={HOME_THEME.green} mono />
-            <StatCard
-              label="Postgres"
-              value={dbHealth == null ? "—" : dbHealth.ok ? `OK · ${dbHealth.latencyMs}ms` : "DOWN"}
-              accent={dbHealth == null ? HOME_THEME.cyan : dbHealth.ok ? HOME_THEME.green : HOME_THEME.red}
-              mono
-            />
-            <StatCard label="Idle Mode" value={server.idleMode == null ? "—" : server.idleMode ? "ON" : "OFF"} accent={server.idleMode ? HOME_THEME.red : HOME_THEME.green} />
-            <StatCard label="dxLink Feed (TT→Proxy)" value={server.dxLinkState || "—"} accent={dxOk ? HOME_THEME.green : HOME_THEME.red} mono />
-            <StatCard label="TT Auth" value={server.ttAuthenticated == null ? "—" : ttOk ? "OK" : "FAIL"} accent={ttOk ? HOME_THEME.green : HOME_THEME.red} />
-            <StatCard label="Contracts Sub'd" value={server.contractsSubscribed ?? "—"} accent={HOME_THEME.orange} />
-            <StatCard label="Last Feed" value={lastFeedAgo != null ? `${lastFeedAgo}s ago` : "—"} accent={lastFeedAgo != null && lastFeedAgo < 10 ? HOME_THEME.green : HOME_THEME.orange} mono />
-            <StatCard label="WS Clients" value={wsConnected ? (server.wsClients ?? 0) : "offline"} accent={wsConnected ? HOME_THEME.green : HOME_THEME.red} mono />
-            <StatCard label="SPX Spot" value={server.spot != null ? server.spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"} accent={HOME_THEME.green} mono />
-            <StatCard label="Waitlist Signups" value={waitlistCount != null ? waitlistCount.toLocaleString() : "—"} accent={HOME_THEME.purple} mono />
-            <StatCard label="Version" value={(import.meta as { env?: { VITE_APP_VERSION?: string } }).env?.VITE_APP_VERSION || "—"} accent={HOME_THEME.orange} mono />
-          </div>
-        </AccordionCard>
-        )}
+        {/* System KPIs, Hosting metrics and Controls all moved off this file
+            when the Infra tab was removed: the handful of system tiles worth
+            keeping now render as cards at the top of Overview (see
+            SystemStrip / HostingStrip), and Controls + Signal Alerts live on
+            the Admin page as <OwnerControls />. */}
 
-        {/* ── Hetzner hosting + Cloudflare edge metrics ── */}
-        {SECTION_TAB.hosting === ownerTab && (
-        <AccordionCard
-          accent={HOME_THEME.orange}
-          id="hosting"
-          title="Hosting · Hetzner + Cloudflare"
-          subtitle={renderMetrics?.unconfigured ? "setup needed" : `cpu ${renderMetrics?.cpu.value != null ? (renderMetrics.cpu.value * 100).toFixed(0) + "%" : "—"} · mem ${renderMetrics?.memory.value != null ? (renderMetrics.memory.value / 1024 / 1024).toFixed(0) + "MB" : "—"}`}
-          open={openSet.has("hosting")}
-          onToggle={toggleSection}
-        >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, fontWeight: 400, letterSpacing: "0.01em" }}>Window</div>
-            <div style={{ display: "flex", gap: 2, background: HOME_THEME.panelBg, borderRadius: 6, padding: 2 }}>
-              {(["live", "weekly", "monthly"] as const).map(w => (
-                <button
-                  key={w}
-                  onClick={() => void fetchRenderWindow(w)}
-                  disabled={renderLoading}
-                  style={{
-                    padding: "3px 10px",
-                    fontSize: 14,
-                    fontWeight: 500,
-                    borderRadius: 4,
-                    border: "none",
-                    cursor: renderLoading ? "wait" : "pointer",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.08em",
-                    background: renderWindow === w ? "rgba(255,255,255,0.07)" : "transparent",
-                    color: renderWindow === w ? HOME_THEME.cyan : HOME_THEME.text,
-                    opacity: renderWindow === w ? 1 : 0.5,
-                  }}
-                >
-                  {w === "live" ? "Live" : w === "weekly" ? "7 Day" : "30 Day"}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(1, minmax(0, 1fr))" : "repeat(2, minmax(0, 1fr))", gap: 10, opacity: renderLoading ? 0.5 : 1, transition: "opacity 0.2s" }}>
-            <StatCard
-              label={`CF Egress · ${renderWindow === "live" ? "24h" : renderWindow === "weekly" ? "7d" : "30d"}`}
-              value={cfMetrics?.egress.value != null
-                ? cfMetrics.egress.value < 1024
-                  ? `${cfMetrics.egress.value.toFixed(1)} MB`
-                  : cfMetrics.egress.value < 1024 * 1024
-                    ? `${(cfMetrics.egress.value / 1024).toFixed(2)} GB`
-                    : `${(cfMetrics.egress.value / 1024 / 1024).toFixed(2)} TB`
-                : cfMetrics?.unconfigured
-                  ? "Setup needed"
-                  : "—"}
-              accent={HOME_THEME.orange}
-              mono
-              delta={pctDelta(cfMetrics?.egress.spark)}
-              invertDelta
-              footer={cfMetrics?.unconfigured && cfMetrics.egress.value == null
-                ? <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, lineHeight: 1.4 }}>Set <b style={{ color: HOME_THEME.orange }}>CLOUDFLARE_API_TOKEN</b> + <b style={{ color: HOME_THEME.orange }}>CLOUDFLARE_ZONE_ID</b> in <code>.env.local</code></div>
-                : <Sparkline
-                    data={cfMetrics?.egress.spark ?? []}
-                    accent={HOME_THEME.orange}
-                    height={44}
-                    durationMs={renderWindow === "live" ? 86_400_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000}
-                    endIso={cfMetrics?.fetchedAt}
-                    formatValue={(v) => v < 1024 ? `${v.toFixed(1)} MB` : v < 1024 * 1024 ? `${(v / 1024).toFixed(2)} GB` : `${(v / 1024 / 1024).toFixed(2)} TB`}
-                    axisLabels={sparkTimeLabels(
-                      renderWindow === "live" ? 86_400_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000,
-                      cfMetrics?.fetchedAt
-                    )}
-                  />}
-            />
-            <StatCard
-              label={`Host Net · ${renderWindow === "live" ? "1h" : renderWindow === "weekly" ? "7d" : "30d"}`}
-              value={renderMetrics?.bandwidth.value != null
-                ? renderMetrics.bandwidth.value < 1024
-                  ? `${renderMetrics.bandwidth.value.toFixed(1)} MB`
-                  : `${(renderMetrics.bandwidth.value / 1024).toFixed(2)} GB`
-                : renderMetrics?.unconfigured
-                  ? "Setup needed"
-                  : "—"}
-              accent={HOME_THEME.cyan}
-              mono
-              delta={pctDelta(renderMetrics?.bandwidth.spark)}
-              invertDelta
-              footer={renderMetrics?.unconfigured && renderMetrics.bandwidth.value == null
-                ? <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, lineHeight: 1.4 }}>Set <b style={{ color: HOME_THEME.cyan }}>HETZNER_API_TOKEN</b> + <b style={{ color: HOME_THEME.cyan }}>HETZNER_SERVER_ID</b> in <code>.env.local</code></div>
-                : <Sparkline
-                    data={renderMetrics?.bandwidth.spark ?? []}
-                    accent={HOME_THEME.cyan}
-                    height={44}
-                    durationMs={renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000}
-                    endIso={renderMetrics?.fetchedAt}
-                    formatValue={(v) => v < 1024 ? `${v.toFixed(1)} MB` : `${(v / 1024).toFixed(2)} GB`}
-                    axisLabels={sparkTimeLabels(
-                      renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000,
-                      renderMetrics?.fetchedAt
-                    )}
-                  />}
-            />
-            <StatCard
-              label="Memory · App RSS"
-              value={renderMetrics?.memory.value != null
-                ? renderMetrics.memory.value < 1024 * 1024
-                  ? `${(renderMetrics.memory.value / 1024).toFixed(0)} KB`
-                  : `${(renderMetrics.memory.value / 1024 / 1024).toFixed(0)} MB`
-                : "—"}
-              accent={memAccent}
-              mono
-              delta={pctDelta(renderMetrics?.memory.spark)}
-              invertDelta
-              footer={<Sparkline
-                data={renderMetrics?.memory.spark ?? []}
-                accent={memAccent}
-                height={44}
-                durationMs={renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000}
-                endIso={renderMetrics?.fetchedAt}
-                formatValue={(v) => v < 1024 * 1024 ? `${(v / 1024).toFixed(0)} KB` : `${(v / 1024 / 1024).toFixed(0)} MB`}
-                axisLabels={sparkTimeLabels(
-                  renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000,
-                  renderMetrics?.fetchedAt
-                )}
-              />}
-            />
-            <StatCard
-              label={`CPU · ${renderWindow === "live" ? "Latest" : renderWindow === "weekly" ? "7d Avg" : "30d Avg"}`}
-              value={renderMetrics?.cpu.value != null
-                ? `${(renderMetrics.cpu.value * 100).toFixed(1)}%`
-                : "—"}
-              accent={cpuAccent}
-              mono
-              delta={pctDelta(renderMetrics?.cpu.spark)}
-              invertDelta
-              footer={<Sparkline
-                data={renderMetrics?.cpu.spark ?? []}
-                accent={cpuAccent}
-                height={44}
-                durationMs={renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000}
-                endIso={renderMetrics?.fetchedAt}
-                formatValue={(v) => `${(v * 100).toFixed(1)}%`}
-                axisLabels={sparkTimeLabels(
-                  renderWindow === "live" ? 3_600_000 : renderWindow === "weekly" ? 604_800_000 : 2_592_000_000,
-                  renderMetrics?.fetchedAt
-                )}
-              />}
-            />
-          </div>
-          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-              <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em" }}>Updated</span>
-              <span style={{ fontSize: 14, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1 }}>
-                {renderMetrics?.fetchedAt
-                  ? new Date(renderMetrics.fetchedAt).toLocaleTimeString("en-US", { hour12: false, timeZone: "America/New_York" }) + " ET"
-                  : "—"}
-              </span>
-            </div>
-          </div>
-
-          {/* WS outbound — in-app per-frame bandwidth (the gex-vs-flow split the
-              host bandwidth card can't show). Live trailing-60s window. */}
-          <div style={{ marginTop: 12 }}>
-            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 6 }}>
-              <div style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, opacity: 1, letterSpacing: "0.01em" }}>
-                /ws/gex Outbound · Live (last 60s)
-              </div>
-              <div style={{ fontSize: 14, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1 }}>
-                {wsBw ? `${wsBw.clients} client${wsBw.clients === 1 ? "" : "s"}` : "—"}
-              </div>
-            </div>
-            {(() => {
-              const fmtRate = (bytesPerMin: number) => {
-                const gbHr = (bytesPerMin * 60) / 1073741824;
-                if (gbHr >= 1) return `${gbHr.toFixed(2)} GB/hr`;
-                const mbHr = (bytesPerMin * 60) / 1048576;
-                return `${mbHr.toFixed(mbHr >= 100 ? 0 : 1)} MB/hr`;
-              };
-              const total = wsBw?.lastMinTotal ?? 0;
-              // Frame types we care about, in display order; "other" catches the rest.
-              const KNOWN = ["flow", "gex", "snapshot", "spot", "aux", "status", "esCandles"];
-              const lastMin: Record<string, number> = wsBw?.lastMin ?? {};
-              const entries = Object.entries(lastMin)
-                .filter(([, b]) => b > 0)
-                .sort((a, b) => b[1] - a[1]);
-              const ACCENT: Record<string, string> = {
-                flow: HOME_THEME.orange, gex: HOME_THEME.cyan, snapshot: HOME_THEME.purple,
-                spot: HOME_THEME.green, aux: HOME_THEME.cyan, status: HOME_THEME.text, esCandles: HOME_THEME.purple,
-              };
-              return (
-                <>
-                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: 10 }}>
-                    <StatCard
-                      label="Projected Total"
-                      value={wsBw ? fmtRate(total) : "—"}
-                      accent={total * 60 / 1073741824 >= 1 ? HOME_THEME.red : HOME_THEME.cyan}
-                      mono
-                    />
-                    {["flow", "gex", "snapshot"].map((t) => (
-                      <StatCard
-                        key={t}
-                        label={`${t === "snapshot" ? "Snapshot (connects)" : t.toUpperCase()} · proj`}
-                        value={wsBw ? fmtRate(lastMin[t] ?? 0) : "—"}
-                        accent={ACCENT[t] ?? HOME_THEME.text}
-                        mono
-                        footer={
-                          <div style={{ fontSize: 14, fontFamily: "var(--font-mono)", color: HOME_THEME.text, opacity: 1 }}>
-                            {wsBw && total > 0 ? `${(((lastMin[t] ?? 0) / total) * 100).toFixed(0)}% of out` : "—"}
-                          </div>
-                        }
-                      />
-                    ))}
-                  </div>
-                  {/* Any extra frame types beyond the headline three. */}
-                  {entries.some(([t]) => !["flow", "gex", "snapshot"].includes(t)) && (
-                    <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                      {entries.filter(([t]) => !["flow", "gex", "snapshot"].includes(t)).map(([t, b]) => (
-                        <span key={t} style={{
-                          fontSize: 14, fontFamily: "var(--font-mono)", fontWeight: 700,
-                          color: ACCENT[t] ?? HOME_THEME.text,
-                          border: `1px solid ${ACCENT[t] ?? HOME_THEME.text}44`,
-                          background: `${ACCENT[t] ?? HOME_THEME.text}10`,
-                          padding: "3px 8px", borderRadius: 5,
-                        }}>
-                          {KNOWN.includes(t) ? t : `${t}?`} {fmtRate(b)}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 1, marginTop: 8, lineHeight: 1.5 }}>
-                    Projected from the trailing 60s × open clients. If <b style={{ color: HOME_THEME.orange }}>FLOW</b> dominates and the
-                    number is high while the market is closed, the flow-tape dedupe regressed. Cross-check Cloudflare Outbound.
-                  </div>
-                </>
-              );
-            })()}
-          </div>
-        </AccordionCard>
-        )}
-
-        {/* ── Database tab removed — all DB surfaces live on the backend /database page ── */}
-
-        {/* ── Controls ── */}
-        {SECTION_TAB.controls === ownerTab && (
-        <AccordionCard
-          accent="#3FB8A0"
-          id="controls"
-          title="Controls"
-          subtitle={`idle ${isIdle == null ? "—" : isIdle ? "ON" : "OFF"} · mvc ${mvcAuto == null ? "—" : mvcAuto ? "ON" : "OFF"} · maint ${maint == null ? "—" : maint ? "ON" : "OFF"}`}
-          open={openSet.has("controls")}
-          onToggle={toggleSection}
-        >
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            {/* SPX index-feed health (frozen-spot detector) + quick link to the page */}
-            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-              <div style={{ flex: "1 1 260px", minWidth: 260 }}><SpotFeedHealth /></div>
-              <a href="/greeks" style={{ ...homeSecondaryButtonStyle, padding: "8px 16px", borderRadius: 8, textDecoration: "none", fontSize: 14, whiteSpace: "nowrap" }}>
-                Open Greeks →
-              </a>
-            </div>
-            {/* theta-terminal container health (cpu/mem/pids) — live docker stats */}
-            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-              <div style={{ flex: "1 1 260px", minWidth: 260 }}><ThetaTerminalStats /></div>
-            </div>
-            {/* Toggles */}
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 20 }}>
-              {/* Idle */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <span style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Idle Mode (feed)</span>
-                <button
-                  onClick={toggleIdle}
-                  disabled={ctlBusy === "idle"}
-                  title="Pause/resume the live TT/dxLink feed. Idle ON stops recompute, flow, OI, and candle timers."
-                  style={{
-                    ...homeButtonStyle, padding: "7px 18px", borderRadius: 8, fontSize: 14,
-                    opacity: ctlBusy === "idle" ? 0.6 : 1,
-                    cursor: ctlBusy === "idle" ? "wait" : "pointer",
-                  }}
-                >
-                  {ctlBusy === "idle" ? "…" : isIdle == null ? "—" : isIdle ? "● Idle ON — resume" : "○ Idle OFF — pause"}
-                </button>
-              </div>
-              {/* MVC auto */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <span style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>CB Auto (5m)</span>
-                <button
-                  onClick={toggleMvcAuto}
-                  disabled={ctlBusy === "mvcAuto"}
-                  title="Enable/disable the in-process CB - Core Bullseye auto-collector (writes mvc_snapshots every 5m during RTH)."
-                  style={{
-                    ...homeButtonStyle, padding: "7px 18px", borderRadius: 8, fontSize: 14,
-                    opacity: ctlBusy === "mvcAuto" ? 0.6 : 1,
-                    cursor: ctlBusy === "mvcAuto" ? "wait" : "pointer",
-                  }}
-                >
-                  {ctlBusy === "mvcAuto" ? "…" : mvcAuto == null ? "—" : mvcAuto ? "● Auto ON — disable" : "○ Auto OFF — enable"}
-                </button>
-              </div>
-              {/* Maintenance mode */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <span style={{ fontSize: 14, fontWeight: 500, color: HOME_THEME.text, letterSpacing: "0.01em" }}>Maintenance</span>
-                <button
-                  onClick={toggleMaint}
-                  disabled={ctlBusy === "maint"}
-                  title="When ON, all non-owner users are redirected to the maintenance page. You (owner) keep full access."
-                  style={{
-                    ...homeButtonStyle, padding: "7px 18px", borderRadius: 8, fontSize: 14,
-                    opacity: ctlBusy === "maint" ? 0.6 : 1,
-                    cursor: ctlBusy === "maint" ? "wait" : "pointer",
-                  }}
-                >
-                  {ctlBusy === "maint" ? "…" : maint == null ? "—" : maint ? "● Maint ON — go live" : "○ Maint OFF — enable"}
-                </button>
-              </div>
-            </div>
-
-            {/* Action buttons */}
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              <button
-                onClick={doReconnect}
-                disabled={ctlBusy === "reconnect"}
-                title="Tear down and re-establish the TT/dxLink feed (recovers from a dropped socket or expired auth without a Render restart)."
-                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 14, opacity: ctlBusy === "reconnect" ? 0.6 : 1, cursor: ctlBusy === "reconnect" ? "wait" : "pointer" }}
-              >
-                {ctlBusy === "reconnect" ? "Reconnecting…" : "↻ Reconnect Feed"}
-              </button>
-              <button
-                onClick={doEodRun}
-                disabled={ctlBusy === "eod"}
-                title="Manually fire the EOD GEX recorder for $SPX/SPY/QQQ (in case the 3:55–4:05 ET window was missed)."
-                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 14, opacity: ctlBusy === "eod" ? 0.6 : 1, cursor: ctlBusy === "eod" ? "wait" : "pointer" }}
-              >
-                {ctlBusy === "eod" ? "Recording…" : "▶ Run EOD GEX now"}
-              </button>
-              <button
-                onClick={doMvcSnapshot}
-                disabled={ctlBusy === "mvcSnap"}
-                title="Write a single CB - Core Bullseye snapshot right now (overrides the outside-RTH guard; still needs a live chain)."
-                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 14, opacity: ctlBusy === "mvcSnap" ? 0.6 : 1, cursor: ctlBusy === "mvcSnap" ? "wait" : "pointer" }}
-              >
-                {ctlBusy === "mvcSnap" ? "Snapshotting (may reconnect)…" : "📸 CB Snapshot now"}
-              </button>
-              <button
-                onClick={doPremarketRun}
-                disabled={ctlBusy === "premarket"}
-                title="Generate the Analytics Premarket card's 5-bullet AI summary now (instead of waiting for the ~8am ET run)."
-                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 14, opacity: ctlBusy === "premarket" ? 0.6 : 1, cursor: ctlBusy === "premarket" ? "wait" : "pointer" }}
-              >
-                {ctlBusy === "premarket" ? "Generating…" : "📝 Premarket Summary now"}
-              </button>
-              <button
-                onClick={doStrategyRun}
-                disabled={ctlBusy === "strategy"}
-                title="Generate the Analytics Strategy Builder card's full daily AI plan now (instead of waiting for the hourly run)."
-                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 14, opacity: ctlBusy === "strategy" ? 0.6 : 1, cursor: ctlBusy === "strategy" ? "wait" : "pointer" }}
-              >
-                {ctlBusy === "strategy" ? "Generating…" : "🎯 Strategy now"}
-              </button>
-              <button
-                onClick={doClearChat}
-                disabled={ctlBusy === "clearChat"}
-                title="Permanently delete ALL subscriber chat messages. Cannot be undone."
-                style={{ ...homeButtonStyle, padding: "7px 16px", borderRadius: 8, fontSize: 14, opacity: ctlBusy === "clearChat" ? 0.6 : 1, cursor: ctlBusy === "clearChat" ? "wait" : "pointer" }}
-              >
-                {ctlBusy === "clearChat" ? "Erasing…" : "🗑️ Erase all chat"}
-              </button>
-            </div>
-
-            {/* Result message */}
-            {ctlMsg && (
-              <div style={{
-                fontSize: 14, fontFamily: "var(--font-mono)", padding: "8px 10px", borderRadius: 8,
-                background: ctlMsg.ok ? "rgba(255,255,255,0.05)" : "rgba(239,68,68,0.10)",
-                border: `1px solid ${ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red}44`,
-                color: ctlMsg.ok ? HOME_THEME.green : HOME_THEME.red,
-              }}>
-                {ctlMsg.ok ? "✓ " : "✗ "}{ctlMsg.text}
-              </div>
-            )}
-
-            {/* ── Signal Alerts — live per-kind toggles for the background trade-signal
-                engine (Discord "CB Edge Signals"). DB-backed; a flip here takes effect
-                within ~20s, no redeploy. Replaces the old compile-time env kill switches. */}
-            <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.text }}>Signal Alerts</span>
-                <span style={{ fontSize: 14, color: HOME_THEME.textMuted }}>
-                  on/off per alert type for the background signals engine → Discord. No redeploy needed.
-                </span>
-              </div>
-              {!signalAlerts ? (
-                <span style={{ fontSize: 14, color: HOME_THEME.textMuted }}>Loading…</span>
-              ) : (() => {
-                const masterEnabled = signalAlerts.find((r) => r.key === "bzila_confluence")?.enabled ?? true;
-                return (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {signalAlerts.map((row) => {
-                      const isBzilaSub = row.group === "bzila" && row.key !== "bzila_confluence";
-                      const dimmed = isBzilaSub && !masterEnabled;
-                      const busy = signalAlertsBusy === row.key;
-                      return (
-                        <div
-                          key={row.key}
-                          style={{
-                            display: "flex", alignItems: "center", gap: 10,
-                            paddingLeft: isBzilaSub ? 22 : 0,
-                            opacity: dimmed ? 0.45 : 1,
-                          }}
-                        >
-                          <button
-                            onClick={() => toggleSignalAlert(row.key, row.enabled)}
-                            disabled={busy}
-                            title={
-                              row.key === "bzila_confluence"
-                                ? "Master switch — must be ON for any Bzila sub-setup below to fire."
-                                : isBzilaSub
-                                ? "Independently toggleable, but only fires while the Bzila Confluence master switch above is also ON."
-                                : undefined
-                            }
-                            style={{
-                              ...homeButtonStyle, padding: "4px 12px", borderRadius: 7, fontSize: 14,
-                              minWidth: 74, textAlign: "center",
-                              opacity: busy ? 0.6 : 1,
-                              cursor: busy ? "wait" : "pointer",
-                              background: row.enabled ? homeButtonStyle.background : "rgba(255,255,255,0.04)",
-                            }}
-                          >
-                            {busy ? "…" : row.enabled ? "● ON" : "○ OFF"}
-                          </button>
-                          <span style={{ fontSize: 14, color: HOME_THEME.text }}>{row.label}</span>
-                          <span
-                            style={{
-                              fontSize: 12, fontWeight: 600, letterSpacing: "0.03em", textTransform: "uppercase",
-                              padding: "2px 7px", borderRadius: 5,
-                              color: row.group === "bzila" ? HOME_THEME.cyan : HOME_THEME.textMuted,
-                              border: `1px solid ${row.group === "bzila" ? HOME_THEME.cyan : HOME_THEME.border}66`,
-                            }}
-                          >
-                            {row.group}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              })()}
-            </div>
-          </div>
-        </AccordionCard>
-        )}
 
         {/* ── EOD GEX save status moved to the backend /database page ── */}
 

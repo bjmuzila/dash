@@ -19,7 +19,6 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       { label: "Admin", href: "/owner/dev/admin", glyph: "⚿", key: "Admin" },
       { label: "Sales", href: "/owner/dev/sales", glyph: "$", key: "Sales" },
       { label: "Overview", href: "/owner/dev/owner?tab=overview", glyph: "⊞", key: "ControlPanel" },
-      { label: "Infra", href: "/owner/dev/owner?tab=infra", glyph: "◈", key: "ControlPanel" },
       { label: "Visitors", href: "/owner/visitors", glyph: "◍", key: "Visitors" },
       { label: "Probe", href: "/owner/probe", glyph: "🔍", key: "Probe" },
       { label: "Results", href: "/owner/dev/results", glyph: "▤", key: "Results" },
@@ -54,10 +53,11 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
   },
 ];
 
-// The Control Panel (/owner/dev/owner) is one page with ?tab= sections.
+// The Control Panel (/owner/dev/owner) is one page. The Infra tab was removed:
+// its system + hosting cards moved to the top of Overview, and its Controls
+// section moved to the Admin page.
 export const OWNER_CONTROL_SECTIONS: { id: string; label: string }[] = [
   { id: "overview", label: "Overview" },
-  { id: "infra", label: "Infra" },
 ];
 
 /** Flattened, de-duplicated route list (pathname → page key). */

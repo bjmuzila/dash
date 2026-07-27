@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
+import { OwnerControls } from "../components/OwnerControls";
 import {
   OWNER_THEME as T,
   homeButtonStyle,
@@ -674,6 +675,10 @@ export default function Admin() {
 
       {/* Body */}
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "clamp(14px,2vw,22px)", display: "flex", flexDirection: "column", gap: 20 }}>
+
+        {/* Server controls + signal alerts — moved off the (now deleted) Infra
+            tab. Feed toggles, maintenance mode, manual job triggers. */}
+        <OwnerControls />
 
         {/* Customer feedback queue — moved off the Owner → Overview tab. */}
         <FeedbackPanel />
