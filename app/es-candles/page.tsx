@@ -345,8 +345,22 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
 //   brightness  — 0..100 opacity gradient steepness for smaller strikes
 const BUBBLE_CFG_KEY = "es-candles-bubble-cfg-v1";
 type BubbleCfg = { topStrikes: number; highlight: number; minSize: number; maxSize: number; brightness: number };
-const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 10, highlight: 3, minSize: 0.5, maxSize: 7, brightness: 84 };
+const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 10, highlight: 3, minSize: 0.5, maxSize: 4, brightness: 84 };
 const BUBBLE_CFG_KEYS: Array<keyof BubbleCfg> = ["topStrikes", "highlight", "minSize", "maxSize", "brightness"];
+// Slider bounds, single-sourced so the UI and the restore clamp can't drift.
+// The size ranges are deliberately CENTERED on the defaults (min 0.5 sits mid
+// of 0..1, max 4.0 sits mid of 1..7): the useful sizes are all small, so a
+// 0..20 / 1..40 range wasted 90% of the travel and made fine tuning at the low
+// end impossible. Half a slider of headroom above the default is plenty.
+const BUBBLE_CFG_RANGE: Record<keyof BubbleCfg, { min: number; max: number }> = {
+  topStrikes: { min: 1, max: 30 },
+  highlight: { min: 0, max: 30 },
+  minSize: { min: 0, max: 1 },
+  maxSize: { min: 1, max: 7 },
+  brightness: { min: 0, max: 100 },
+};
+const clampBubbleVal = (k: keyof BubbleCfg, v: number) =>
+  Math.min(BUBBLE_CFG_RANGE[k].max, Math.max(BUBBLE_CFG_RANGE[k].min, v));
 
 // The blob also carries two settings that are NOT slider values and therefore
 // live in their own React state: `mins` (the 1m/5m bucket) and `on` (the
@@ -981,7 +995,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     const patch: Partial<BubbleCfg> = {};
     for (const k of BUBBLE_CFG_KEYS) {
       const v = p[k];
-      if (typeof v === "number" && Number.isFinite(v)) patch[k] = v;
+      // Clamp on read: a blob saved under the older, much wider size ranges can
+      // hold values (e.g. maxSize 20) that no longer exist on the slider, which
+      // would render as a pinned handle you couldn't explain.
+      if (typeof v === "number" && Number.isFinite(v)) patch[k] = clampBubbleVal(k, v);
     }
     if (Object.keys(patch).length) setBubbleCfg((c) => ({ ...c, ...patch }));
     // The two non-slider settings.
@@ -1026,7 +1043,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     if (saved) {
       for (const k of BUBBLE_CFG_KEYS) {
         const v = saved[k];
-        if (typeof v === "number" && Number.isFinite(v)) next[k] = v;
+        if (typeof v === "number" && Number.isFinite(v)) next[k] = clampBubbleVal(k, v);
       }
       if (saved.mins === 1 || saved.mins === 5) mins = saved.mins;
     }
@@ -2744,7 +2761,11 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                   // tapers as gamma builds/bleeds; walls sit near maxSize + a boost.
                   let r = cfg.minSize + Math.sqrt(ratio) * sizeSpan;
                   if (isHi) r *= HIGHLIGHT_BOOST;
-                  if (r < 0.5) continue;
+                  // Cull only degenerate radii. This used to be < 0.5, which
+                  // silently dropped every bubble once the Min-size slider went
+                  // sub-pixel — canvas antialiases arcs well below 1px, so let
+                  // them draw and only skip effectively-invisible ones.
+                  if (r < 0.12) continue;
                   // Opacity: smallest → minOpacity, largest → 1.0. Walls always full.
                   const opacity = isHi ? 1 : minOpacity + ratio * (1 - minOpacity);
                   // Sign sets hue (blue = +GEX, red = −GEX). Walls shift toward white
@@ -3313,12 +3334,12 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                   />
                   <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, margin: "8px 0 4px" }}>Bubble size</div>
                   <DockSlider
-                    label="min" value={bubbleCfg.minSize} min={0.5} max={20} step={0.5}
-                    format={(v) => v.toFixed(1)} onChange={(v) => updateBubbleCfg({ minSize: v })}
-                    title="Min bubble radius (px) — the size of the smallest strike (can't exceed Max)"
+                    label="min" value={bubbleCfg.minSize} min={BUBBLE_CFG_RANGE.minSize.min} max={BUBBLE_CFG_RANGE.minSize.max} step={0.05}
+                    format={(v) => v.toFixed(2)} onChange={(v) => updateBubbleCfg({ minSize: v })}
+                    title="Min bubble radius (px) — the size of the smallest strike (can't exceed Max). Default 0.50 = center of the slider"
                   />
                   <DockSlider
-                    label="max" value={bubbleCfg.maxSize} min={1} max={40} step={0.5}
+                    label="max" value={bubbleCfg.maxSize} min={BUBBLE_CFG_RANGE.maxSize.min} max={BUBBLE_CFG_RANGE.maxSize.max} step={0.1}
                     format={(v) => v.toFixed(1)} onChange={(v) => updateBubbleCfg({ maxSize: v })}
                     title="Max bubble radius (px) — the size of the largest wall (√-scaled so area ∝ |GEX|)"
                   />

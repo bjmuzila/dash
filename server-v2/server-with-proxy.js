@@ -1918,10 +1918,10 @@ async function main() {
                                        THEN (sg.gex_now + sg.gex_open) END), 0) AS neg_gex,
                      COUNT(*) FILTER (WHERE (sg.gex_now + sg.gex_open) > 0) AS n_pos,
                      COUNT(*) FILTER (WHERE (sg.gex_now + sg.gex_open) < 0) AS n_neg
-              FROM strike_growth sg, d
+              FROM strike_growth sg
               JOIN ranked r
                 ON r.symbol = sg.symbol AND r.expiry = sg.expiry AND r.ts = sg.ts
-              WHERE sg.date = d.date AND r.exp_idx <= $2
+              WHERE sg.date = (SELECT date FROM d) AND r.exp_idx <= $2
               GROUP BY sg.symbol, sg.expiry, r.exp_idx
               ORDER BY sg.symbol ASC, r.exp_idx ASC`;
             const { rows } = await p.query(sql, [asOf, nExp]);

@@ -680,19 +680,6 @@ export default function GexChart({
       : null;
     const touchGexNow = touchedRow ? getNet(touchedRow) : null;
 
-    // ── Counterpart cluster on the other side of spot ─────────────────────────
-    // The MVC sits on one side of spot; this is the largest |GEX| strike on the
-    // opposite side — the level price rotates toward once the MVC is worked.
-    const oppBelow = peakStrike != null && peakStrike >= spotPrice;   // MVC above → look below
-    const oppPeak  = (trackMvcTouch && peakStrike != null && spotPrice > 0)
-      ? chain.reduce<ChainRow | null>((b, r) => {
-          const onOtherSide = oppBelow ? r.strike < spotPrice : r.strike > spotPrice;
-          if (!onOtherSide) return b;
-          const rv = Math.abs(getNet(r));
-          return rv > (b ? Math.abs(getNet(b)) : 0) ? r : b;
-        }, null)
-      : null;
-
     const peakIdx = peak ? data.findIndex(r => r.strike === peak.strike) : -1;
     if (peak && peakIdx >= 0) {
       const pi  = peakIdx;
@@ -720,32 +707,6 @@ export default function GexChart({
     // xForStrike clamps to the edges, which would otherwise pin them to the frame.
     const inView = (s: number | null | undefined) =>
       s != null && data.length > 0 && s >= data[0].strike && s <= data[data.length - 1].strike;
-
-    // ── Opposite-side cluster label (dimmer twin of the MVC box) ──────────────
-    if (oppPeak && oppPeak.strike !== peakStrike && inView(oppPeak.strike)) {
-      const ov = getNet(oppPeak);
-      const ox = xForStrike(oppPeak.strike);
-      const oy = clamp(yFor(ov), PAD_T + 2, PAD_T + cH - 2);
-      const oc = ov >= 0 ? "rgba(41,182,246,0.55)" : "rgba(255,179,0,0.55)";
-      ctx.save();
-      ctx.setLineDash([3, 3]);
-      ctx.strokeStyle = oc; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(ox, PAD_T); ctx.lineTo(ox, PAD_T + cH); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.font = "bold 9px Arial";
-      const olbl = `${oppBelow ? "▼" : "▲"} ${oppPeak.strike.toLocaleString()}`;
-      const otw  = ctx.measureText(olbl).width;
-      const obw  = otw + 8, obh = 13;
-      const obx  = clamp(ox - obw / 2, 2, W - obw - 2);
-      const oby  = Math.max(2, oy - 17);
-      ctx.fillStyle = "rgba(0,0,0,0.75)";
-      ctx.fillRect(obx, oby, obw, obh);
-      ctx.strokeStyle = oc; ctx.strokeRect(obx, oby, obw, obh);
-      ctx.fillStyle = oc; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillText(olbl, obx + obw / 2, oby + obh / 2 + 0.5);
-      ctx.textBaseline = "alphabetic";
-      ctx.restore();
-    }
 
     // ── MVC touch overlay: origin marker + migration arrow ────────────────────
     if (trackMvcTouch && track.touched && inView(track.touchStrike)) {
