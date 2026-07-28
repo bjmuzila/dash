@@ -123,6 +123,7 @@ export default function EconomicCalendarPage() {
   const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(new Set(["all"]));
   const [dropOpen,      setDropOpen]      = useState(false);
   const [earnings,      setEarnings]      = useState<EarnRow[]>([]);
+  const [activeTab,     setActiveTab]     = useState<"calendar" | "earnings">("calendar");
   const dropRef   = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -307,6 +308,55 @@ export default function EconomicCalendarPage() {
     return result;
   }
 
+  // Earnings-only view: every date that has pre/after earnings, newest first,
+  // with an optional ticker/company search — independent of the impact filters.
+  const earningsDates = Array.from(earnByDate.keys()).sort();
+  const q = search.trim().toLowerCase();
+  function matchesQ(r: EarnRow) {
+    if (!q) return true;
+    return r.symbol.toLowerCase().includes(q) || (r.company || "").toLowerCase().includes(q);
+  }
+  const earningsSections = earningsDates
+    .map(date => {
+      const bucket = earnByDate.get(date)!;
+      const pre = bucket.pre.filter(matchesQ);
+      const after = bucket.after.filter(matchesQ);
+      return { date, pre, after };
+    })
+    .filter(s => s.pre.length > 0 || s.after.length > 0);
+
+  function renderEarningsOnly() {
+    if (earningsSections.length === 0) {
+      return <div style={{ color: HT.text, fontSize: 14, padding: 20 }}>No earnings match.</div>;
+    }
+    return earningsSections.map(({ date, pre, after }) => {
+      const isTod = date === today;
+      return (
+        <div key={`earn-sec-${date}`}>
+          <div
+            style={{
+              padding: "6px 16px",
+              background: isTod ? "rgba(33,158,188,0.06)" : HT.panelBg,
+              borderTop: `1px solid ${HT.border}`,
+              display: "flex", alignItems: "center", gap: 8,
+            }}
+          >
+            <span style={{ fontSize: 12, fontWeight: 800, color: isTod ? HT.cyan : "#3a5570", letterSpacing: "0.1em" }}>
+              {fullDayLabel(date, today)}
+            </span>
+            {isTod && (
+              <span style={{ fontSize: 10, fontWeight: 900, background: HT.cyan, color: "#05080d", padding: "1px 5px", borderRadius: 2, letterSpacing: "0.1em" }}>
+                TODAY
+              </span>
+            )}
+          </div>
+          {pre.length > 0 && <EarnRowBlock kind="pre" rows={pre} />}
+          {after.length > 0 && <EarnRowBlock kind="after" rows={after} />}
+        </div>
+      );
+    });
+  }
+
   return (
     <div style={{ ...homeShellStyle, height: "100%" }}>
 
@@ -325,10 +375,30 @@ export default function EconomicCalendarPage() {
               {today}
             </span>
           )}
+
+          {/* Tabs: full calendar vs earnings-only */}
+          <div style={{ display: "flex", gap: 4, background: HT.panelBg, borderRadius: 6, padding: 3, border: `1px solid ${HT.border}` }}>
+            {(["calendar", "earnings"] as const).map(t => (
+              <button
+                key={t}
+                onClick={() => setActiveTab(t)}
+                style={{
+                  fontSize: 11, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+                  padding: "5px 12px", borderRadius: 4, border: "none", cursor: "pointer",
+                  background: activeTab === t ? HT.cyan : "transparent",
+                  color: activeTab === t ? "#05080d" : HT.text,
+                  transition: "background 0.15s, color 0.15s",
+                }}
+              >
+                {t === "calendar" ? "Calendar" : "Earnings"}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {/* Multi-select dropdown */}
+          {/* Multi-select dropdown — only meaningful on the calendar tab */}
+          {activeTab === "calendar" && (
           <div ref={dropRef} style={{ position: "relative" }}>
             <button onClick={() => setDropOpen(o => !o)} style={{ ...homeButtonStyle, display: "flex", alignItems: "center", gap: 6 }}>
               {filterLabel} <span style={{ fontSize: 10 }}>▾</span>
@@ -371,9 +441,10 @@ export default function EconomicCalendarPage() {
               </div>
             )}
           </div>
+          )}
 
           <input
-            type="text" placeholder="Search…" value={search}
+            type="text" placeholder={activeTab === "earnings" ? "Search ticker…" : "Search…"} value={search}
             onChange={e => setSearch(e.target.value)}
             style={{ fontSize: 12, padding: "4px 10px", background: "rgba(0,0,0,0.4)", border: `1px solid ${HT.border}`, color: HT.text, outline: "none", borderRadius: 3, width: 140 }}
           />
@@ -384,7 +455,7 @@ export default function EconomicCalendarPage() {
       </div>
 
       {/* Quote */}
-      {quote && (
+      {activeTab === "calendar" && quote && (
         <div style={{ padding: "10px 20px", borderBottom: `1px solid ${HT.border}`, background: HT.panelBgStrong, backdropFilter: "blur(16px)", flexShrink: 0, textAlign: "center" }}>
           <span style={{ fontSize: 14, fontStyle: "italic", color: HT.text, lineHeight: 1.7 }}>
             &ldquo;{quote}&rdquo;
@@ -396,15 +467,21 @@ export default function EconomicCalendarPage() {
           that was showing raw upstream text to customers. The hardcoded "showing
           saved events" prefix is gone too: it was wrong whenever the source was
           the cache rather than events.json, and `warning` already says which. */}
-      {isOwner && warning && !error && (
+      {activeTab === "calendar" && isOwner && warning && !error && (
         <div style={{ padding: "6px 16px", fontSize: 12, color: "#f59e0b", background: "rgba(245,158,11,0.06)", borderBottom: "1px solid rgba(245,158,11,0.25)", flexShrink: 0 }}>
           ⚠ {warning}
         </div>
       )}
 
-      {/* Event list */}
+      {/* Event / earnings list */}
       <div style={{ flex: 1, overflowY: "auto" }}>
-        {error && isOwner ? (
+        {activeTab === "earnings" ? (
+          loading && earnings.length === 0 ? (
+            <div style={{ color: HT.text, fontSize: 14, textAlign: "center", marginTop: 60 }}>Loading…</div>
+          ) : (
+            renderEarningsOnly()
+          )
+        ) : error && isOwner ? (
           // Raw fetch error, owner only. Customers fall through to the neutral
           // empty-state line below rather than seeing upstream status text.
           <div style={{ fontSize: 14, color: HT.red, padding: 16, margin: 16, border: `1px solid rgba(239,68,68,0.3)`, borderRadius: 4, background: "rgba(239,68,68,0.05)" }}>

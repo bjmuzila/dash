@@ -245,6 +245,33 @@ export default function GexPctTab() {
     return { mostCall, mostPut, avg, flip: flips[0] || null, n: front.length };
   }, [filtered]);
 
+  // Call-side lean per ACTUAL expiration date. Tickers don't share a front
+  // three — one name's E1 is a 0DTE, another's is next Friday — so slot index
+  // is meaningless to average across. Group by the real date instead.
+  //
+  // Two averages, because they answer different questions:
+  //   avgPct    — mean of each ticker's call%, every ticker weighted equally
+  //   dollarPct — Σpos / Σ(pos+neg), weighted by size (SPX dominates this one)
+  const byExpiry = useMemo(() => {
+    const m = new Map<string, { pos: number; neg: number; sum: number; n: number }>();
+    for (const t of filtered) {
+      for (const leg of t.legs) {
+        if (!leg || leg.posPct == null) continue;
+        let e = m.get(leg.expiry);
+        if (!e) { e = { pos: 0, neg: 0, sum: 0, n: 0 }; m.set(leg.expiry, e); }
+        e.pos += leg.pos; e.neg += leg.neg; e.sum += leg.posPct; e.n += 1;
+      }
+    }
+    return [...m.entries()]
+      .map(([expiry, v]) => ({
+        expiry,
+        n: v.n,
+        avgPct: v.sum / v.n,
+        dollarPct: v.pos + v.neg > 0 ? (v.pos / (v.pos + v.neg)) * 100 : null,
+      }))
+      .sort((a, b) => a.expiry.localeCompare(b.expiry));
+  }, [filtered]);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       {/* Headline split */}
@@ -300,6 +327,41 @@ export default function GexPctTab() {
           ) : (
             <div style={{ color: HOME_THEME.text, fontSize: 13 }}>
               {loading ? "Loading…" : err ? `Error: ${err}` : "No recorded snapshots yet."}
+            </div>
+          )}
+
+          {byExpiry.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{
+                fontSize: 11, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase",
+                color: HOME_THEME.cyan, marginBottom: 8,
+              }}>
+                Call-side lean by expiration
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(158px,1fr))", gap: 10 }}>
+                {byExpiry.map((e) => (
+                  <div
+                    key={e.expiry}
+                    style={{
+                      border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "10px 12px",
+                      background: "rgba(13,17,25,0.72)", display: "flex", flexDirection: "column", gap: 6,
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text }}>{fmtExpiry(e.expiry)}</span>
+                      <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.7 }}>n={e.n}</span>
+                    </div>
+                    <SegSplitMeter posPct={e.avgPct} n={14} />
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>
+                      <span style={{ color: POS }}>{e.avgPct.toFixed(0)}%</span>
+                      <span style={{ color: NEG }}>{(100 - e.avgPct).toFixed(0)}%</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.7 }}>
+                      {e.dollarPct != null ? `$-wtd ${e.dollarPct.toFixed(0)}% call` : "—"}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>

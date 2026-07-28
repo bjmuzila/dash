@@ -981,9 +981,9 @@ function buildFlowPrintsWhere(f, sinceMs = null) {
 
 function parseFlowFilters(searchParams) {
   const date = searchParams.get('date') || todayYmdET();
-  // SPX-only lock: force underlying=SPX and disable the "All − Indices" scope so
-  // flow-netprem / flow-premsplit can only ever return SPX.
-  const underlying = 'SPX';
+  // Use the requested underlying (defaulting to SPX) so flow-netprem /
+  // flow-premsplit can return data for any selected ticker, not just SPX.
+  const underlying = (searchParams.get('underlying') || 'SPX').toUpperCase();
   let minPremium = Number(searchParams.get('minPremium') || 0);
   if (!Number.isFinite(minPremium) || minPremium < 0) minPremium = 0;
   let minSize = Number(searchParams.get('minSize') || 0);

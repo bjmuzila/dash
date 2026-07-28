@@ -130,6 +130,33 @@ export function ChainReplay({
 
   const frame = frames[idx];
 
+  // Smoothly glide the displayed spot (and its line) toward the recorded
+  // frame's spot instead of snapping — recorded frames land every N events,
+  // so a hard jump every 6-8 events read as choppy. Tween over the same
+  // window as one playback tick (capped so scrubbing still feels responsive).
+  const animSpot = useRef(0);
+  const animSpotInit = useRef(false);
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    const target = frame?.spot || 0;
+    if (!animSpotInit.current) { animSpot.current = target; animSpotInit.current = true; forceTick((x) => x + 1); return; }
+    const start = animSpot.current;
+    if (start === target) return;
+    const duration = Math.min(BASE_MS / speed, 450);
+    const t0 = performance.now();
+    let raf = 0;
+    const step = (now: number) => {
+      const t = Math.min(1, (now - t0) / duration);
+      const ease = 1 - Math.pow(1 - t, 2); // ease-out
+      animSpot.current = start + (target - start) * ease;
+      forceTick((x) => x + 1);
+      if (t < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frame?.ts, frame?.spot]);
+
   const maxAbs = useMemo(() => {
     let m = 0;
     for (const f of frames) for (const s of f.strikes) m = Math.max(m, Math.abs(s.net));
@@ -161,7 +188,23 @@ export function ChainReplay({
   // "frame" = rescale each snapshot to its own max (bars always readable).
   const denom = (scaleMode === "day" ? maxAbs : frameMax) || 1;
 
-  const spot = frame?.spot || 0;
+  const spot = animSpot.current;
+
+  // Continuous vertical position of the spot line among the rendered strike
+  // rows (interpolated between the two bracketing strikes), so the line and
+  // label glide smoothly instead of hopping row-to-row.
+  const ROW_H = 19; // ~16px bar + 3px row gap
+  const spotTop = useMemo(() => {
+    if (!allStrikes.length || spot <= 0) return null;
+    let i = 0;
+    while (i < allStrikes.length && allStrikes[i] > spot) i++;
+    if (i === 0) return -ROW_H / 2;
+    if (i >= allStrikes.length) return (allStrikes.length - 1) * ROW_H + ROW_H / 2;
+    const hi = allStrikes[i - 1], lo = allStrikes[i];
+    const frac = hi === lo ? 0 : (hi - spot) / (hi - lo);
+    return (i - 1) * ROW_H + frac * ROW_H;
+  }, [allStrikes, spot]);
+
   const selStyle: React.CSSProperties = { ...homeInputStyle, padding: "6px 10px", cursor: "pointer" };
 
   const body = (
@@ -248,26 +291,28 @@ export function ChainReplay({
       )}
 
       {!loading && !err && frame && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-          {allStrikes.map((k, i) => {
-            const net = netByStrike.get(k) ?? 0;
-            const pct = Math.min(100, (Math.abs(net) / denom) * 100);
-            const positive = net >= 0;
-            const prev = allStrikes[i - 1];
-            const showSpot = spot > 0 && ((prev === undefined && spot > k) || (prev !== undefined && spot < prev && spot >= k));
-            return (
-              <div key={k}>
-                {showSpot && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "2px 0" }}>
-                    <div style={{ width: 56 }} />
-                    <div style={{ flex: 1, height: 0, borderTop: `1px dashed ${HOME_THEME.text}`, position: "relative" }}>
-                      <span style={{ position: "absolute", right: 0, top: -8, fontSize: 10, color: HOME_THEME.text, background: HOME_THEME.panel, padding: "0 4px" }}>
-                        spot {spot.toFixed(2)}
-                      </span>
-                    </div>
-                  </div>
-                )}
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ position: "relative" }}>
+          {spotTop !== null && (
+            <div
+              style={{
+                position: "absolute", left: 64, right: 0, top: spotTop,
+                height: 0, borderTop: `1px dashed ${HOME_THEME.text}`,
+                pointerEvents: "none", zIndex: 1,
+                transition: "top 90ms linear",
+              }}
+            >
+              <span style={{ position: "absolute", right: 0, top: -8, fontSize: 10, color: HOME_THEME.text, background: HOME_THEME.panel, padding: "0 4px" }}>
+                spot {spot.toFixed(2)}
+              </span>
+            </div>
+          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            {allStrikes.map((k) => {
+              const net = netByStrike.get(k) ?? 0;
+              const pct = Math.min(100, (Math.abs(net) / denom) * 100);
+              const positive = net >= 0;
+              return (
+                <div key={k} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <div style={{ width: 56, textAlign: "right", fontSize: 12, color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{k}</div>
                   <div style={{ flex: 1, display: "flex", alignItems: "center", height: 16 }}>
                     <div style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
@@ -280,9 +325,9 @@ export function ChainReplay({
                   </div>
                   <div style={{ width: 68, textAlign: "left", fontSize: 11, color: positive ? POS : NEG, fontVariantNumeric: "tabular-nums" }}>{fmtGex(net)}</div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       )}
     </>
