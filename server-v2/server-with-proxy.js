@@ -57,6 +57,14 @@ let startEtfGexRecorder = () => {};
 try { ({ startEtfGexRecorder } = require('./etf-gex-recorder')); }
 catch (e) { console.warn('[etf-gex] recorder not loaded:', e.message); }
 const { startEodGexRecorder } = require('./eod-gex-recorder');
+// Once-a-day (9:32 ET) per-strike OPEN INTEREST snapshot across the scanner
+// watchlist. Backs the Options Chain page's OI tab and its day-over-day ΔOI.
+// OI is a settled overnight number, so this is a daily job, not a poll — see
+// the header of oi-daily-recorder.js. Loaded defensively: a broken chain-fetch
+// dependency here must degrade one tab, not kill boot for the whole dashboard.
+let startOiDailyRecorder = () => {};
+try { ({ startOiDailyRecorder } = require('./oi-daily-recorder')); }
+catch (e) { console.warn('[oi-daily] recorder not loaded:', e.message); }
 // Backs the /mult-greek click card's 15m/30m/open NET GEX change. Optional —
 // load defensively so a missing/broken module can't crash the origin.
 let multGreekGexRecorder = null;
@@ -1624,6 +1632,49 @@ async function main() {
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
+      // ── Daily open-interest snapshot ─────────────────────────────────────
+      // Day-over-day ΔOI per (expiry, strike) for one symbol. Backs the
+      // Options Chain page's OI tab.
+      //   GET /proxy/oi-change?symbol=SPX[&expiries=2026-07-28,2026-07-29]
+      // Returns { ok, symbol, date, prevDate, rows:[{expiry,strike,callOI,
+      // putOI,callChg,putChg,hadPrev}] }. date/prevDate are the two most recent
+      // snapshot DATES that exist for the symbol — not calendar today/yesterday
+      // — so a holiday or a missed 9:32 run degrades to "compare against the
+      // last day we actually have" instead of returning nothing. Before the
+      // second snapshot ever lands, prevDate is null and every change reads 0.
+      if (pathname === '/proxy/oi-change' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { getOiChange } = require('./oi-daily-recorder');
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
+            if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
+            const expParam = (u.searchParams.get('expiries') || '').trim();
+            const expiries = expParam
+              ? expParam.split(',').map((s) => s.trim().slice(0, 10)).filter(Boolean)
+              : null;
+            const out = await getOiChange(symbol, expiries);
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manual fire of the daily OI sweep (normally automatic at 9:32 ET).
+      // Safe to re-run: writes are upserts keyed (date,symbol,expiry,strike).
+      //   POST /proxy/oi-daily-run[?symbol=SPX][&date=YYYY-MM-DD]
+      if (pathname === '/proxy/oi-daily-run' && req.method === 'POST') {
+        (async () => {
+          try {
+            const { runSweep } = require('./oi-daily-recorder');
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const one = (u.searchParams.get('symbol') || '').toUpperCase().trim();
+            const date = (u.searchParams.get('date') || '').trim() || null;
+            const out = await runSweep({ ...(one ? { symbols: [one] } : {}), date });
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // ── Strike-growth tracker ────────────────────────────────────────────
       // Ranked latest snapshot: which strikes grew most vs today's open.
       //   GET /proxy/strike-growth?min=0&type=all&symbol=NVDA&limit=200
@@ -2871,6 +2922,12 @@ async function main() {
     // with symbol='SPY'/'QQQ' — the same table and writer the live SPX feed
     // uses. Backs the ES-Candles page's SPY/QQQ heatmap, bubbles and rail.
     startEtfGexRecorder();
+    // Daily per-strike OPEN INTEREST snapshot (9:32 ET, weekdays) across the
+    // scanner watchlist → oi_daily. OI settles overnight and does not tick
+    // intraday, so one snapshot a day is the whole signal; the Options Chain
+    // OI tab diffs today's row against the previous snapshot date to show what
+    // positioning was actually opened or closed overnight.
+    startOiDailyRecorder();
     // GEX Levels history recorder: persists the /test GEX Levels "History of
     // key level changes" row (walls/flip/$gamma/CPG/R2/S2/OI) forever in PG.
     require('./gex-levels-history-recorder').startGexLevelsHistoryRecorder(PORT);

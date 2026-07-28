@@ -655,12 +655,23 @@ async function getForwardBuildStructure(opts = {}) {
 // spot marker goes live. Falls back to the DB spot when the feed has no live
 // value (e.g. this process just restarted, or after hours). Cheap (a Map.get
 // per ticker), so it runs on every request including cache hits.
+//
+// Also attaches the day change (prevClose + dayPct) from the same REST backstop
+// that feeds the live spot, so the UI can label and SORT cards by % gain on the
+// day. Both are null when the backstop hasn't seen a prior close for that root
+// yet (fresh process, or a symbol TT returns no `prev-close` for) — the UI
+// renders "—" and sorts those last rather than guessing a baseline.
 function overlayLiveSpot(tickers) {
   const getLive = _proxy?.getStrikeGrowthSpot ? (sym) => Number(_proxy.getStrikeGrowthSpot(sym)) : null;
-  if (!getLive) return tickers;
+  const getPrev = _proxy?.getStrikeGrowthPrevClose ? (sym) => Number(_proxy.getStrikeGrowthPrevClose(sym)) : null;
+  if (!getLive && !getPrev) return tickers;
   return tickers.map((t) => {
-    const live = getLive(t.symbol);
-    return live > 0 ? { ...t, spot: live } : t;
+    const live = getLive ? getLive(t.symbol) : 0;
+    const spot = live > 0 ? live : t.spot;
+    const prev = getPrev ? getPrev(t.symbol) : 0;
+    const dayPct = prev > 0 && spot > 0 ? ((spot - prev) / prev) * 100 : null;
+    if (spot === t.spot && dayPct == null) return t;
+    return { ...t, spot, prevClose: prev > 0 ? prev : null, dayPct };
   });
 }
 

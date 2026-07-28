@@ -1998,6 +1998,11 @@ class TastytradeProxy {
     this.strikeGrowthContracts = new Map(); // option streamerSymbol -> ticker root
     this.strikeGrowthSpotSym = new Map();   // underlying streamerSymbol -> ticker root
     this.strikeGrowthSpot = new Map();      // ticker root -> live spot
+    // Prior-session close per root, harvested from the same REST spot backstop
+    // batch (TT `prev-close`). Powers the Forward Build cards' day % change and
+    // its "sort by % gain" mode. NOT cleared on a dxLink reconnect — it's REST
+    // sourced and stable for the whole session.
+    this.strikeGrowthPrevClose = new Map(); // ticker root -> prior-session close
     this.strikeGrowthTickers = [];          // roster this feed is currently tracking
     this.strikeGrowthTimer = null;          // window-refresh interval
     this.flowGexAccumulator = new FlowGexAccumulator(); // tracks dealer inventory for flow GEX
@@ -3152,6 +3157,13 @@ class TastytradeProxy {
     return Number(this.strikeGrowthSpot.get(String(root).toUpperCase())) || 0;
   }
 
+  /** Prior-session close for a strike-growth root (from the REST backstop's
+   *  `prev-close`). 0 until the first backstop pass lands. Paired with
+   *  getStrikeGrowthSpot it gives the Forward Build cards a day % change. */
+  getStrikeGrowthPrevClose(root) {
+    return Number(this.strikeGrowthPrevClose.get(String(root).toUpperCase())) || 0;
+  }
+
   /** Directly set a live strike-growth spot (used by the REST backstop poller). */
   setStrikeGrowthSpot(root, px) {
     const p = Number(px);
@@ -3191,8 +3203,12 @@ class TastytradeProxy {
           const sym = chainTicker(String(it.symbol || '').toUpperCase());
           const bid = n(it.bid), ask = n(it.ask);
           const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
-          const px = n(it.mark) || mid || n(it.last) || n(it['prev-close']) || 0;
+          const pc = n(it['prev-close']);
+          const px = n(it.mark) || mid || n(it.last) || pc || 0;
           if (sym && px > 0) { this.strikeGrowthSpot.set(sym, px); updated++; }
+          // Same batch already carries the official prior close — keep it so the
+          // Forward Build cards can show a day % change without a second call.
+          if (sym && pc > 0) this.strikeGrowthPrevClose.set(sym, pc);
         }
       }
     };

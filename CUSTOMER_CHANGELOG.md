@@ -6,6 +6,8 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 * Started the new Options dashboard layout — ticker dropdown with Favorites and Watchlist, a daily/yearly heatmap, the S&P 500 sunburst, a candlestick chart and live orderflow, all following whichever ticker you pick.
 * The heatmap and sunburst now stay on screen no matter which Options tab you're on. Everything is still empty placeholders while the live data gets connected.
+* New **Flip X** overlay on ES Candles — the gamma flip now draws as a glowing trail across the whole session, brightest at the current bar, so you can see where the flip has been and where it sits right now. A single tag tells you whether price is currently in positive or negative gamma.
+* Your bubble settings finally stick. The 1m/5m setting and the Bubbles on/off switch are now remembered along with the sliders, so the chart reopens exactly as you left it — and a new **Save default** button lets you pin your favorite setup and get back to it in one click.
 
 ## Sunday 7/26/2026
 

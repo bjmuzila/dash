@@ -4,17 +4,23 @@
 // Forward Build — STRUCTURE view ("where is the GEX flow going?")
 //
 // Full roster as a 5-across CARD grid. Each card carries the essentials — spot,
-// net GEX per DTE (0d/1d/2d), call/put wall migration, and a tiny 0→1→2 net
-// sparkline — so the whole roster is scannable at a glance. Click a card to open
-// that ticker's front 0DTE / 1DTE / 2DTE GEX walls in a full-width panel below,
-// on a shared strike ladder, with each strike's net-$ and its day-over-day Δ
-// (is gamma building here or leaving?). The bars are styled to match the
-// Logic & Order page's GexStructure (solid centre-anchored fill in a subtle
-// track, spot row outlined in orange with a ◄ marker).
+// day % change, the front expiry's +GEX/−GEX share and its biggest wall (with
+// how far OTM that strike sits), net GEX per DTE (0d/1d/2d), call/put wall
+// migration, and a tiny 0→1→2 net sparkline — so the whole roster is scannable
+// at a glance. Cards start COLLAPSED; click one to open that ticker's front
+// 0DTE / 1DTE / 2DTE GEX walls in a full-width panel below, on a shared strike
+// ladder, with each strike's net-$ and its day-over-day Δ (is gamma building
+// here or leaving?). The bars are styled to match the Logic & Order page's
+// GexStructure (solid centre-anchored fill in a subtle track, spot row outlined
+// in orange with a ◄ marker).
+//
+// The grid re-orders on the fly: default (server roster order), alphabetical,
+// % change on the day, or the front wall's OTM % — see SORTS below.
 //
 // Reads GET /proxy/forward-build-structure (getForwardBuildStructure in
 // server-v2/strike-growth-recorder.js) — one query over rows the strike-growth
 // sweep already wrote, grouped in Node. No live network call per request.
+// dayPct rides along from the REST spot backstop's `prev-close`.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -29,13 +35,20 @@ type Dte = {
   callWall: { strike: number; net: number } | null;
   putWall: { strike: number; net: number } | null;
 };
-type Ticker = { symbol: string; spot: number; dtes: Dte[] };
+type Ticker = {
+  symbol: string; spot: number; dtes: Dte[];
+  /** Prior-session close + % change on the day. null until the REST spot
+   *  backstop has a `prev-close` for this root (fresh process / odd symbol). */
+  prevClose?: number | null;
+  dayPct?: number | null;
+};
 
 const GREEN = HOME_THEME.green;
 const RED = HOME_THEME.red;
 const SPOT = HOME_THEME.orange;
 // Secondary label text — near-white instead of the faint border gray.
 const DIM = "rgba(255,255,255,0.82)";
+const MONO = "var(--font-mono, monospace)";
 
 // Adaptive $ formatting — SPX nets run to billions, single names to millions.
 const fmtGex = (v: number): string => {
@@ -48,20 +61,70 @@ const fmtStrike = (v: number): string =>
   Number.isInteger(v) ? v.toLocaleString("en-US") : String(v);
 const fmtSpot = (v: number): string =>
   v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtPct = (v: number): string => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}%`;
 
 const DTE_LABEL = (d: number) => (d === 0 ? "0DTE" : `${d}DTE`);
 const dteColor = (d: number) => (d === 0 ? SPOT : d === 1 ? HOME_THEME.cyan : HOME_THEME.purple);
 
+// ── Front-expiry derivations (every card-face metric below comes from here) ──
+
+/** The FRONT / closest expiry we have for this ticker — slot 0 when present,
+ *  otherwise the nearest slot that survived the "still in the current
+ *  structure" filter applied server-side. */
+const frontOf = (t: Ticker): Dte | null =>
+  t.dtes.length ? t.dtes.reduce((m, d) => (d.dte < m.dte ? d : m)) : null;
+
+/**
+ * +GEX / −GEX share for the front expiry — the SAME calc as the home page's
+ * "+GEX %" tile (posGexPct in app/home/HomeClient.tsx): the share of TOTAL
+ * |net GEX| that is positive. 100% = pure long-gamma chain, 0% = pure short.
+ * The two numbers add to 100 by construction.
+ */
+function gexSplitOf(t: Ticker): { pos: number; neg: number } | null {
+  const f = frontOf(t);
+  if (!f || !f.strikes.length) return null;
+  let pos = 0, abs = 0;
+  for (const s of f.strikes) { if (s.net > 0) pos += s.net; abs += Math.abs(s.net); }
+  if (!(abs > 0)) return null;
+  const p = (pos / abs) * 100;
+  return { pos: p, neg: 100 - p };
+}
+
+/**
+ * The front expiry's BIGGEST wall — largest |net GEX| on either side — and how
+ * far that strike sits from spot, signed: + above spot, − below. This is the
+ * "front expiration highest GEX OTM%" shown on each card, and the key behind
+ * the OTM sort.
+ */
+function topWallOf(t: Ticker): { strike: number; net: number; otmPct: number; dte: number } | null {
+  const f = frontOf(t);
+  if (!f || !f.strikes.length || !(t.spot > 0)) return null;
+  const w = f.strikes.reduce((m, s) => (Math.abs(s.net) > Math.abs(m.net) ? s : m));
+  return { strike: w.strike, net: w.net, otmPct: ((w.strike - t.spot) / t.spot) * 100, dte: f.dte };
+}
+
+// ── Sorting ─────────────────────────────────────────────────────────────────
+
+type SortKey = "default" | "alpha" | "day" | "otm";
+// `dir` is the direction a key SNAPS TO when it's picked (A→Z for alpha,
+// biggest-first for the numerics); the ▲/▼ button flips it from there.
+const SORTS: { key: SortKey; label: string; dir: 1 | -1 }[] = [
+  { key: "default", label: "Default (roster order)", dir: 1 },
+  { key: "alpha", label: "Alphabetical", dir: 1 },
+  { key: "day", label: "% change on day", dir: -1 },
+  { key: "otm", label: "Front wall OTM %", dir: -1 },
+];
+
 // Tiny 0→1→2 net sparkline for the card face (3 points, self-normalized).
 function CardSpark({ pts }: { pts: number[] }) {
-  const w = 46, h = 16;
+  const w = 56, h = 19;
   if (pts.length < 2) return null;
   const lo = Math.min(...pts), hi = Math.max(...pts), span = hi - lo || 1;
   const d = pts.map((v, i) => `${((i / (pts.length - 1)) * w).toFixed(1)},${(h - ((v - lo) / span) * h).toFixed(1)}`).join(" ");
   const up = pts[pts.length - 1] >= pts[0];
   return (
     <svg width={w} height={h} style={{ display: "block", opacity: 0.6 }}>
-      <polyline points={d} fill="none" stroke={up ? GREEN : RED} strokeWidth={1.4} strokeLinejoin="round" strokeLinecap="round" />
+      <polyline points={d} fill="none" stroke={up ? GREEN : RED} strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" />
     </svg>
   );
 }
@@ -83,31 +146,31 @@ function LadderColumn({ dte, info, rows, col, spot }: {
     let m = 0; col.forEach((s) => { if (s.delta != null && Math.abs(s.delta) > m) m = Math.abs(s.delta); }); return m;
   }, [col]);
   const cell: CSSProperties = {
-    display: "grid", gridTemplateColumns: "44px 1fr 56px 48px", alignItems: "center",
-    gap: 6, padding: "1px 5px", borderRadius: 3,
+    display: "grid", gridTemplateColumns: "56px 1fr 68px 60px", alignItems: "center",
+    gap: 7, padding: "1px 5px", borderRadius: 3,
   };
   return (
-    <div style={{ background: HOME_THEME.panel, padding: "8px 10px 9px" }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 6 }}>
-        <span style={{ fontWeight: 800, fontSize: 11.5, color: dteColor(dte) }}>{DTE_LABEL(dte)}</span>
-        <span style={{ color: DIM, fontSize: 9.5, fontFamily: "var(--font-mono, monospace)" }}>{info ? info.expiry.slice(5) : ""}</span>
-        <span style={{ marginLeft: "auto", fontSize: 10.5, fontWeight: 700, fontFamily: "var(--font-mono, monospace)", color: info ? (info.netTotal >= 0 ? GREEN : RED) : DIM }}>
+    <div style={{ background: HOME_THEME.panel, padding: "9px 11px 11px" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 7, marginBottom: 7 }}>
+        <span style={{ fontWeight: 800, fontSize: 14, color: dteColor(dte) }}>{DTE_LABEL(dte)}</span>
+        <span style={{ color: DIM, fontSize: 11.5, fontFamily: MONO }}>{info ? info.expiry.slice(5) : ""}</span>
+        <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, fontFamily: MONO, color: info ? (info.netTotal >= 0 ? GREEN : RED) : DIM }}>
           {info ? fmtSigned(info.netTotal) : "no data"}
         </span>
       </div>
-      <div style={{ ...cell, padding: "0 5px 3px", borderBottom: `1px solid ${HOME_THEME.border}`, marginBottom: 4 }}>
-        <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: DIM }}>Strike</span>
-        <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.03em", textAlign: "center", color: DIM }}>◄ fading · building ►</span>
-        <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", textAlign: "right", color: DIM }}>Net GEX</span>
-        <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", textAlign: "right", color: DIM }}>Δ DoD</span>
+      <div style={{ ...cell, padding: "0 5px 4px", borderBottom: `1px solid ${HOME_THEME.border}`, marginBottom: 5 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: DIM }}>Strike</span>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.03em", textAlign: "center", color: DIM }}>◄ fading · building ►</span>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", textAlign: "right", color: DIM }}>Net GEX</span>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", textAlign: "right", color: DIM }}>Δ DoD</span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
         {rows.map((r, i) => {
           if ("spot" in r) {
             return (
-              <div key={`s${i}`} style={{ position: "relative", height: 8 }}>
-                <div style={{ position: "absolute", left: 0, right: 0, top: 3, height: 2, background: "#fff", boxShadow: "0 0 5px rgba(255,255,255,0.4)", borderRadius: 1 }} />
-                <span style={{ position: "absolute", left: 0, top: -2, fontSize: 8.5, fontWeight: 800, color: "#fff", fontFamily: "var(--font-mono, monospace)", background: HOME_THEME.panel, paddingRight: 4 }}>{fmtSpot(spot)}</span>
+              <div key={`s${i}`} style={{ position: "relative", height: 10 }}>
+                <div style={{ position: "absolute", left: 0, right: 0, top: 4, height: 2, background: "#fff", boxShadow: "0 0 5px rgba(255,255,255,0.4)", borderRadius: 1 }} />
+                <span style={{ position: "absolute", left: 0, top: -3, fontSize: 10, fontWeight: 800, color: "#fff", fontFamily: MONO, background: HOME_THEME.panel, paddingRight: 4 }}>{fmtSpot(spot)}</span>
               </div>
             );
           }
@@ -125,17 +188,17 @@ function LadderColumn({ dte, info, rows, col, spot }: {
           const arrow = build ? "▲ " : fade ? "▼ " : "";
           return (
             <div key={r.strike} style={cell}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: HOME_THEME.text, fontFamily: "var(--font-mono, monospace)" }}>{fmtStrike(r.strike)}</span>
-              <div style={{ position: "relative", height: 10, background: "rgba(255,255,255,0.04)", borderRadius: 2, overflow: "hidden" }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.text, fontFamily: MONO }}>{fmtStrike(r.strike)}</span>
+              <div style={{ position: "relative", height: 12, background: "rgba(255,255,255,0.04)", borderRadius: 2, overflow: "hidden" }}>
                 <div style={{ position: "absolute", left: "50%", top: 0, bottom: 0, width: 1, background: HOME_THEME.border }} />
                 {(build || fade) && (
                   <div style={{ position: "absolute", top: 1, bottom: 1, [build ? "left" : "right"]: "50%", width: `${Math.max(2, frac * 50)}%`, background: build ? GREEN : RED, borderRadius: 2 } as CSSProperties} />
                 )}
               </div>
-              <span style={{ fontSize: 10, fontWeight: 700, textAlign: "right", fontFamily: "var(--font-mono, monospace)", color: s ? (pos ? GREEN : RED) : DIM }}>
+              <span style={{ fontSize: 12, fontWeight: 700, textAlign: "right", fontFamily: MONO, color: s ? (pos ? GREEN : RED) : DIM }}>
                 {s ? fmtSigned(s.net) : "—"}
               </span>
-              <span style={{ fontSize: 9.5, fontWeight: 700, textAlign: "right", fontFamily: "var(--font-mono, monospace)", color: dTone }}>
+              <span style={{ fontSize: 11.5, fontWeight: 700, textAlign: "right", fontFamily: MONO, color: dTone }}>
                 {s && s.delta != null ? `${arrow}${fmtGex(Math.abs(s.delta))}` : "—"}
               </span>
             </div>
@@ -167,11 +230,14 @@ function DetailPanel({ t, onClose }: { t: Ticker; onClose: () => void }) {
   const hasWalls = cw.filter((x) => x != null).length + pw.filter((x) => x != null).length > 1;
 
   return (
-    <div style={{ marginTop: 10, maxWidth: 820, background: HOME_THEME.panel, border: `1px solid ${HOME_THEME.cyan}`, borderRadius: 10, overflow: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
-        <span style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.cyan, letterSpacing: "0.03em" }}>{t.symbol}</span>
-        <span style={{ fontSize: 12, fontFamily: "var(--font-mono, monospace)", color: SPOT }}>spot {fmtSpot(t.spot)}</span>
-        <span style={{ marginLeft: "auto", cursor: "pointer", color: HOME_THEME.text, fontSize: 15, lineHeight: 1 }} onClick={onClose}>✕</span>
+    <div style={{ marginTop: 10, maxWidth: 980, background: HOME_THEME.panel, border: `1px solid ${HOME_THEME.cyan}`, borderRadius: 10, overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "9px 14px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
+        <span style={{ fontSize: 18, fontWeight: 800, color: HOME_THEME.cyan, letterSpacing: "0.03em" }}>{t.symbol}</span>
+        <span style={{ fontSize: 14, fontFamily: MONO, color: SPOT }}>spot {fmtSpot(t.spot)}</span>
+        {t.dayPct != null && (
+          <span style={{ fontSize: 14, fontWeight: 700, fontFamily: MONO, color: t.dayPct >= 0 ? GREEN : RED }}>{fmtPct(t.dayPct)}</span>
+        )}
+        <span style={{ marginLeft: "auto", cursor: "pointer", color: HOME_THEME.text, fontSize: 18, lineHeight: 1 }} onClick={onClose}>✕</span>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1, background: HOME_THEME.border }}>
         {[0, 1, 2].map((d) => (
@@ -179,13 +245,13 @@ function DetailPanel({ t, onClose }: { t: Ticker; onClose: () => void }) {
         ))}
       </div>
       {hasWalls && (
-        <div style={{ padding: "7px 12px", borderTop: `1px solid ${HOME_THEME.border}` }}>
-          <table style={{ borderCollapse: "collapse", fontSize: 10.5, fontFamily: "var(--font-mono, monospace)" }}>
+        <div style={{ padding: "8px 14px", borderTop: `1px solid ${HOME_THEME.border}` }}>
+          <table style={{ borderCollapse: "collapse", fontSize: 12.5, fontFamily: MONO }}>
             <tbody>
               <tr>
-                <th style={{ textAlign: "left", fontWeight: 600, fontSize: 9, letterSpacing: "0.04em", color: DIM, padding: "1px 10px 1px 0" }}></th>
+                <th style={{ textAlign: "left", fontWeight: 600, fontSize: 11, letterSpacing: "0.04em", color: DIM, padding: "1px 10px 1px 0" }}></th>
                 {[0, 1, 2].map((d) => (
-                  <th key={d} style={{ textAlign: "right", fontWeight: 600, fontSize: 9, letterSpacing: "0.04em", color: DIM, padding: "1px 8px" }}>{d}D</th>
+                  <th key={d} style={{ textAlign: "right", fontWeight: 600, fontSize: 11, letterSpacing: "0.04em", color: DIM, padding: "1px 8px" }}>{d}D</th>
                 ))}
               </tr>
               <tr>
@@ -214,7 +280,12 @@ export default function ForwardBuildStructure() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState("");
+  // Nothing is expanded on arrival — the grid IS the view; a card opens only on
+  // click. (It used to auto-open the first ticker, which shoved the roster down
+  // the page and made it look like only one thing had loaded.)
   const [sel, setSel] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey>("default");
+  const [sortDir, setSortDir] = useState<1 | -1>(1);
 
   const load = () => {
     setLoading(true); setErr(null);
@@ -224,7 +295,6 @@ export default function ForwardBuildStructure() {
         if (!j.ok) throw new Error(j.error || "load failed");
         const rows: Ticker[] = Array.isArray(j.tickers) ? j.tickers : [];
         setTickers(rows); setAsOf(j.asOf || "");
-        setSel(rows.length ? rows[0].symbol : null);
       })
       .catch((e) => setErr(String((e as Error)?.message || e)))
       .finally(() => setLoading(false));
@@ -255,20 +325,44 @@ export default function ForwardBuildStructure() {
     return () => clearInterval(id);
   }, []);
 
+  // Front-expiry derivations, computed once per data refresh and shared by the
+  // card faces AND the sort comparators — topWallOf walks every strike, so
+  // deriving it inside a comparator would redo that work O(n log n) times.
+  const derived = useMemo(() => {
+    const m = new Map<string, { split: ReturnType<typeof gexSplitOf>; wall: ReturnType<typeof topWallOf> }>();
+    for (const t of tickers) m.set(t.symbol, { split: gexSplitOf(t), wall: topWallOf(t) });
+    return m;
+  }, [tickers]);
+
   const view = useMemo(() => {
     const needle = q.trim().toUpperCase();
-    return needle ? tickers.filter((t) => t.symbol.includes(needle)) : tickers;
-  }, [tickers, q]);
-  // Scroll the open accordion panel into view on click (skip the initial auto-open).
+    const filtered = needle ? tickers.filter((t) => t.symbol.includes(needle)) : tickers;
+    if (sortKey === "default") return filtered; // server roster order (hot/majors first)
+    const arr = [...filtered];
+    // Missing values always sink to the bottom, whichever direction is active —
+    // a ticker with no prior close shouldn't win "biggest gainer" by being null.
+    const byNum = (get: (t: Ticker) => number | null | undefined) => (a: Ticker, b: Ticker) => {
+      const x = get(a), y = get(b);
+      const xn = x == null || !Number.isFinite(x), yn = y == null || !Number.isFinite(y);
+      if (xn && yn) return a.symbol.localeCompare(b.symbol);
+      if (xn) return 1;
+      if (yn) return -1;
+      return ((x as number) - (y as number)) * sortDir;
+    };
+    if (sortKey === "alpha") arr.sort((a, b) => a.symbol.localeCompare(b.symbol) * sortDir);
+    else if (sortKey === "day") arr.sort(byNum((t) => t.dayPct));
+    else if (sortKey === "otm") arr.sort(byNum((t) => derived.get(t.symbol)?.wall?.otmPct));
+    return arr;
+  }, [tickers, q, sortKey, sortDir, derived]);
+
+  // Scroll the open accordion panel into view on click.
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const firstRender = useRef(true);
   useEffect(() => {
-    if (firstRender.current) { firstRender.current = false; return; }
     if (sel && panelRef.current) panelRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [sel]);
 
   const inputStyle: CSSProperties = {
-    minWidth: 160, padding: "7px 10px", borderRadius: 8, fontSize: 13,
+    minWidth: 180, padding: "8px 11px", borderRadius: 8, fontSize: 15,
     border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text,
   };
   const net = (t: Ticker, d: number) => t.dtes.find((x) => x.dte === d)?.netTotal;
@@ -291,38 +385,100 @@ export default function ForwardBuildStructure() {
     <>
       <style>{`
         .fb-grid{ display:grid; grid-template-columns:repeat(5,1fr); gap:12px; }
-        @media (max-width:1400px){ .fb-grid{ grid-template-columns:repeat(4,1fr); } }
-        @media (max-width:1100px){ .fb-grid{ grid-template-columns:repeat(3,1fr); } }
-        @media (max-width:820px){ .fb-grid{ grid-template-columns:repeat(2,1fr); } }
+        @media (max-width:1600px){ .fb-grid{ grid-template-columns:repeat(4,1fr); } }
+        @media (max-width:1250px){ .fb-grid{ grid-template-columns:repeat(3,1fr); } }
+        @media (max-width:900px){ .fb-grid{ grid-template-columns:repeat(2,1fr); } }
+        @media (max-width:620px){ .fb-grid{ grid-template-columns:1fr; } }
         .fb-card{ background:${HOME_THEME.panel}; border:1px solid ${HOME_THEME.border}; border-radius:11px;
-          padding:13px 14px; cursor:pointer; transition:border-color .12s, transform .12s; position:relative; }
+          padding:14px 15px; cursor:pointer; transition:border-color .12s, transform .12s; position:relative; }
         .fb-card:hover{ border-color:#2b3a4d; transform:translateY(-1px); }
         .fb-card.sel{ border-color:${HOME_THEME.cyan}; box-shadow:0 0 0 1px ${HOME_THEME.cyan} inset; }
+        .fb-select{ padding:8px 11px; border-radius:8px; font-size:15px; border:1px solid ${HOME_THEME.border};
+          background:rgba(0,0,0,0.4); color:${HOME_THEME.text}; }
       `}</style>
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-        <div style={{ fontSize: 14, color: HOME_THEME.text }}>
+        <div style={{ fontSize: 16, color: HOME_THEME.text }}>
           {loading ? "Loading forward build…"
             : asOf ? `0/1/2-DTE GEX structure by ticker · as of ${asOf} · ${tickers.length} tickers`
             : "No structure yet (needs live dxLink data + a session or two of history)."}
         </div>
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter ticker…" style={inputStyle} />
-        <button onClick={load} style={homeButtonStyle}>Refresh</button>
+        {/* Card ordering. Picking a key snaps the direction to that key's natural
+            default (A→Z for alpha, biggest-first for the numerics); ▲/▼ flips it. */}
+        <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 15, color: DIM }}>
+          Sort
+          <select
+            className="fb-select"
+            value={sortKey}
+            onChange={(e) => {
+              const k = e.target.value as SortKey;
+              setSortKey(k);
+              setSortDir(SORTS.find((s) => s.key === k)?.dir ?? 1);
+            }}
+          >
+            {SORTS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+          </select>
+        </label>
+        {sortKey !== "default" && (
+          <button
+            onClick={() => setSortDir((d) => (d === 1 ? -1 : 1))}
+            style={{ ...homeButtonStyle, fontSize: 15, minWidth: 44 }}
+            title={sortDir === 1 ? "Ascending — click for descending" : "Descending — click for ascending"}
+          >
+            {sortDir === 1 ? "▲" : "▼"}
+          </button>
+        )}
+        <button onClick={load} style={{ ...homeButtonStyle, fontSize: 15 }}>Refresh</button>
       </div>
-      {err && <div style={{ fontSize: 14, color: RED, marginBottom: 8 }}>Error: {err}</div>}
+      {err && <div style={{ fontSize: 16, color: RED, marginBottom: 8 }}>Error: {err}</div>}
 
       <Card variant="budget" accent={SPOT} title="Forward Build — GEX structure & day-over-day flow">
         <div className="fb-grid">
           {view.map((t) => {
             const chips = [0, 1, 2].map((d) => ({ d, v: net(t, d) })).filter((x) => x.v != null) as { d: number; v: number }[];
             const isOpen = sel === t.symbol;
+            const der = derived.get(t.symbol);
+            const split = der?.split ?? null;
+            const wall = der?.wall ?? null;
             return (
               <Fragment key={t.symbol}>
               <div className={`fb-card${isOpen ? " sel" : ""}`} onClick={() => setSel(isOpen ? null : t.symbol)}>
-                <div style={{ position: "absolute", top: 12, right: 12 }}><CardSpark pts={chips.map((c) => c.v)} /></div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
-                  <span style={{ fontSize: 21, fontWeight: 800, letterSpacing: "0.03em", color: "#cfe0ff" }}>{t.symbol}</span>
-                  <span style={{ fontSize: 14, fontFamily: "var(--font-mono, monospace)", color: SPOT, background: "rgba(233,185,73,0.08)", border: `1px solid ${SPOT}44`, borderRadius: 5, padding: "3px 7px" }}>{fmtSpot(t.spot)}</span>
+                {/* Identity row: ticker · spot · day % · front-expiry +/−GEX share. */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, rowGap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                  <span style={{ fontSize: 25, fontWeight: 800, letterSpacing: "0.03em", color: "#cfe0ff" }}>{t.symbol}</span>
+                  <span style={{ fontSize: 17, fontFamily: MONO, color: SPOT, background: "rgba(233,185,73,0.08)", border: `1px solid ${SPOT}44`, borderRadius: 5, padding: "3px 8px" }}>{fmtSpot(t.spot)}</span>
+                  {t.dayPct != null && (
+                    <span style={{ fontSize: 15, fontWeight: 800, fontFamily: MONO, color: t.dayPct >= 0 ? GREEN : RED }}>{fmtPct(t.dayPct)}</span>
+                  )}
+                  {split && (
+                    <span
+                      style={{ marginLeft: "auto", fontSize: 15, fontWeight: 800, fontFamily: MONO, whiteSpace: "nowrap" }}
+                      title="Front expiry — share of total |net GEX| that is positive vs negative"
+                    >
+                      <span style={{ color: GREEN }}>+{split.pos.toFixed(0)}%</span>
+                      <span style={{ color: DIM, opacity: 0.55 }}> / </span>
+                      <span style={{ color: RED }}>−{split.neg.toFixed(0)}%</span>
+                    </span>
+                  )}
+                </div>
+                {/* The same split as a bar — long-gamma share left, short right. */}
+                {split && (
+                  <div style={{ display: "flex", height: 5, borderRadius: 3, overflow: "hidden", background: "rgba(255,255,255,0.06)", marginBottom: 9 }}>
+                    <div style={{ width: `${split.pos}%`, background: GREEN }} />
+                    <div style={{ width: `${split.neg}%`, background: RED }} />
+                  </div>
+                )}
+                {/* Front expiry's biggest wall + how far OTM that strike sits. */}
+                <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 9, fontSize: 12.5 }}>
+                  <span style={{ color: DIM, letterSpacing: "0.03em", flexShrink: 0 }}>{`${wall ? DTE_LABEL(wall.dte) : "front"} top wall`}</span>
+                  {wall ? (
+                    <>
+                      <span style={{ fontFamily: MONO, fontWeight: 800, fontSize: 15, color: wall.net >= 0 ? GREEN : RED }}>{fmtStrike(wall.strike)}</span>
+                      <span style={{ fontFamily: MONO, fontWeight: 800, fontSize: 15, color: SPOT }} title="Distance from spot — + above, − below">{fmtPct(wall.otmPct)}</span>
+                    </>
+                  ) : <span style={{ color: DIM }}>—</span>}
+                  <span style={{ marginLeft: "auto" }}><CardSpark pts={chips.map((c) => c.v)} /></span>
                 </div>
                 {/* Flow-first: the day-over-day movers are the hero. Per expiry, the
                     strike whose wall grew most (▲ green) and shrank most (▼ red). */}
@@ -331,36 +487,36 @@ export default function ForwardBuildStructure() {
                     const has = t.dtes.some((x) => x.dte === d);
                     const f = flowOf(t, d);
                     return (
-                      <div key={d} style={{ flex: 1, border: `1px solid ${HOME_THEME.border}`, borderRadius: 7, padding: "6px 4px", background: "rgba(255,255,255,0.02)" }}>
-                        <div style={{ fontSize: 9.5, color: DIM, textAlign: "center", letterSpacing: "0.04em", marginBottom: 5 }}>{d}D</div>
+                      <div key={d} style={{ flex: 1, border: `1px solid ${HOME_THEME.border}`, borderRadius: 7, padding: "7px 4px", background: "rgba(255,255,255,0.02)" }}>
+                        <div style={{ fontSize: 11.5, color: DIM, textAlign: "center", letterSpacing: "0.04em", marginBottom: 5 }}>{d}D</div>
                         {has ? (
                           <>
-                            <div style={{ textAlign: "center", fontFamily: "var(--font-mono, monospace)", fontSize: 13, fontWeight: 800, color: GREEN, lineHeight: 1.15 }}>
+                            <div style={{ textAlign: "center", fontFamily: MONO, fontSize: 15.5, fontWeight: 800, color: GREEN, lineHeight: 1.15 }}>
                               {f?.build ? `▲ ${fmtStrike(f.build.strike)}` : "▲ —"}
                             </div>
-                            <div style={{ textAlign: "center", fontFamily: "var(--font-mono, monospace)", fontSize: 9, color: GREEN, opacity: 0.85, marginBottom: 5 }}>
-                              {f?.build ? `+${fmtGex(Math.abs(f.build.delta as number))}` : " "}
+                            <div style={{ textAlign: "center", fontFamily: MONO, fontSize: 11, color: GREEN, opacity: 0.85, marginBottom: 5 }}>
+                              {f?.build ? `+${fmtGex(Math.abs(f.build.delta as number))}` : " "}
                             </div>
-                            <div style={{ textAlign: "center", fontFamily: "var(--font-mono, monospace)", fontSize: 13, fontWeight: 800, color: RED, lineHeight: 1.15 }}>
+                            <div style={{ textAlign: "center", fontFamily: MONO, fontSize: 15.5, fontWeight: 800, color: RED, lineHeight: 1.15 }}>
                               {f?.fade ? `▼ ${fmtStrike(f.fade.strike)}` : "▼ —"}
                             </div>
-                            <div style={{ textAlign: "center", fontFamily: "var(--font-mono, monospace)", fontSize: 9, color: RED, opacity: 0.85 }}>
-                              {f?.fade ? `-${fmtGex(Math.abs(f.fade.delta as number))}` : " "}
+                            <div style={{ textAlign: "center", fontFamily: MONO, fontSize: 11, color: RED, opacity: 0.85 }}>
+                              {f?.fade ? `-${fmtGex(Math.abs(f.fade.delta as number))}` : " "}
                             </div>
                           </>
-                        ) : <div style={{ textAlign: "center", color: DIM, fontSize: 11, padding: "8px 0" }}>—</div>}
+                        ) : <div style={{ textAlign: "center", color: DIM, fontSize: 13, padding: "8px 0" }}>—</div>}
                       </div>
                     );
                   })}
                 </div>
                 {/* Walls, demoted to a compact secondary row: put · call per expiry. */}
-                <div style={{ display: "flex", alignItems: "center", gap: 6, paddingTop: 6, borderTop: `1px solid ${HOME_THEME.border}` }}>
-                  <span style={{ fontSize: 9, color: DIM, letterSpacing: "0.03em", flexShrink: 0 }}>walls</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, paddingTop: 7, borderTop: `1px solid ${HOME_THEME.border}` }}>
+                  <span style={{ fontSize: 11, color: DIM, letterSpacing: "0.03em", flexShrink: 0 }}>walls</span>
                   {[0, 1, 2].map((d) => {
                     const cwS = t.dtes.find((x) => x.dte === d)?.callWall?.strike ?? null;
                     const pwS = t.dtes.find((x) => x.dte === d)?.putWall?.strike ?? null;
                     return (
-                      <div key={d} style={{ flex: 1, textAlign: "center", fontSize: 9.5, fontFamily: "var(--font-mono, monospace)" }}>
+                      <div key={d} style={{ flex: 1, textAlign: "center", fontSize: 11.5, fontFamily: MONO }}>
                         <span style={{ color: "rgba(255,92,102,0.7)" }}>{pwS != null ? fmtStrike(pwS) : "—"}</span>
                         <span style={{ color: DIM, opacity: 0.6 }}> · </span>
                         <span style={{ color: "rgba(38,222,129,0.7)" }}>{cwS != null ? fmtStrike(cwS) : "—"}</span>
@@ -382,13 +538,18 @@ export default function ForwardBuildStructure() {
           )}
         </div>
 
-        <div style={{ fontSize: 12, color: HOME_THEME.text, marginTop: 12, lineHeight: 1.6 }}>
-          Each card is a ticker — spot, net GEX for the front <b>0/1/2-DTE</b> expiries, and where the call/put walls are
-          migrating across the three days. Click a card to open its ladder: bars are net GEX per strike
-          (<span style={{ color: GREEN }}>green</span> = support, <span style={{ color: RED }}>red</span> = resistance),
-          the right numbers are the strike&rsquo;s net-$ and its <b>day-over-day Δ</b> vs the same expiry&rsquo;s prior
-          session (<span style={{ color: GREEN }}>▲</span> building, <span style={{ color: RED }}>▼</span> leaving). A 2DTE
-          strike that just entered the window shows &ldquo;—&rdquo; until it has a prior session to compare.
+        <div style={{ fontSize: 14, color: HOME_THEME.text, marginTop: 12, lineHeight: 1.6 }}>
+          Each card is a ticker — spot, % change on the day, and for the <b>front (closest) expiry</b> the
+          <span style={{ color: GREEN }}> +GEX</span> / <span style={{ color: RED }}>−GEX</span> share (the positive
+          slice of total |net GEX|, the same measure as the home page&rsquo;s +GEX %) plus that expiry&rsquo;s biggest
+          wall and how far the strike sits from spot (<b>+</b> above, <b>−</b> below). Under it: net GEX for the front
+          <b> 0/1/2-DTE</b> expiries and where the call/put walls are migrating across the three days. Use <b>Sort</b> to
+          reorder the grid by name, day move, or that OTM distance. Click a card to open its ladder: bars are net GEX
+          per strike (<span style={{ color: GREEN }}>green</span> = support, <span style={{ color: RED }}>red</span> =
+          resistance), the right numbers are the strike&rsquo;s net-$ and its <b>day-over-day Δ</b> vs the same
+          expiry&rsquo;s prior session (<span style={{ color: GREEN }}>▲</span> building,
+          <span style={{ color: RED }}> ▼</span> leaving). A 2DTE strike that just entered the window shows
+          &ldquo;—&rdquo; until it has a prior session to compare.
         </div>
       </Card>
     </>

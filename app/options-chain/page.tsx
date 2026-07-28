@@ -353,7 +353,12 @@ function pushRecentTicker(list: string[], ticker: string): string[] {
 }
 
 const DISPLAY_PERCENTS = [5, 10, 15, 20, 25, 30, 50, 100] as const;
-const GREEK_MODES = ["gex", "dex", "chex", "vex"] as const;
+// "oi" is not a greek — it rides in this list because it is the same kind of
+// per-strike, per-expiry lens as the four greeks and reuses the whole matrix
+// (heat scale, column totals, ⅀ Total). Its cells render differently though:
+// call OI and put OI on two lines, each with its day-over-day change, sourced
+// from /proxy/oi-change (see server-v2/oi-daily-recorder.js).
+const GREEK_MODES = ["gex", "dex", "chex", "vex", "oi"] as const;
 type GreekMode = typeof GREEK_MODES[number];
 
 const DATA_MODES = ["oi-vol", "vol-only", "flow"] as const;
@@ -425,6 +430,14 @@ type GreekCell = {
   dex: number;
   chex: number;
   vex: number;
+  /**
+   * Net open interest = callOI − putOI. Signed on purpose: it is what the OI
+   * tab's heat scale, per-column totals and ⅀ Total column read through
+   * valueAt(), so a call-heavy strike colors blue and a put-heavy one red,
+   * exactly like the greeks. The two-line call/put breakdown the OI cell
+   * actually displays comes from callOI/putOI below.
+   */
+  oi: number;
   /** Pure volume-only GEX (volume-weighted gamma), independent of dataMode. */
   volGex: number;
   /** Raw per-side book stats for the hover card. */
@@ -600,6 +613,24 @@ function fmtMoney(value: number) {
   return `${sign}$${abs.toFixed(0)}`;
 }
 
+// Open interest is a CONTRACT COUNT, not dollars — fmtMoney's "$" and its
+// always-on sign would both be wrong for it. Unsigned compact count: 12.4K, 1.2M.
+function fmtCount(value: number) {
+  const abs = Math.abs(value);
+  const sign = value < 0 ? "-" : "";
+  if (abs >= 1_000_000) return `${sign}${(abs / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000) return `${sign}${(abs / 1_000).toFixed(1)}K`;
+  return `${sign}${abs.toFixed(0)}`;
+}
+
+// Signed compact count for the ΔOI column: "+1.2K", "-430", "·" for flat.
+// Flat is rendered as a dot rather than "+0" because on any given morning most
+// strikes genuinely didn't change, and a wall of "+0" buries the ones that did.
+function fmtChg(value: number) {
+  if (!value) return "·";
+  return `${value > 0 ? "+" : "-"}${fmtCount(Math.abs(value))}`;
+}
+
 // Compact column header for an expiration: "Mon 06-23".
 function fmtExpHeader(iso: string): string {
   // Parse as UTC to avoid local-TZ date shift (e.g. "2026-07-01" → Jun 30 in UTC-N).
@@ -725,6 +756,10 @@ function parseExpiration(items: unknown[], expDate: string, spot: number, dataMo
         dex:  live ? (Math.abs(num(c, "delta")) * cc - Math.abs(num(p, "delta")) * pc) * S * 100 : 0,
         chex: live ? (-num(c, "theta") * cc + num(p, "theta") * pc) * S * 100 : 0,
         vex:  live ? (num(c, "vega") * cc - num(p, "vega") * pc) * S * 100 : 0,
+        // Net OI is always the settled book (cOI/pOI), never the Vol-only
+        // basis — the OI tab is about positioning, so the "Vol Only" toggle
+        // must not blank it out the way it zeroes the greeks' contract counts.
+        oi: cOI - pOI,
         volGex: volGexValue,
         callOI: cOI, putOI: pOI,
         callVol: cVol, putVol: pVol,
@@ -977,6 +1012,28 @@ function Row({ k, v, strong }: { k: string; v: string; strong?: boolean }) {
   );
 }
 
+// One line of an OI cell: side letter, settled open interest, and the change
+// vs the previous snapshot date. `chg === null` means this strike has no stored
+// baseline (see the OI tab's fallback in ChainMatrix) — rendered as a dash so
+// "we don't know" never reads as "unchanged".
+//
+// The side letter is tinted with the same blue/red the heat scale uses for
+// call-heavy / put-heavy, so a glance down the column reads as call rows vs put
+// rows without needing to parse the numbers.
+function OiSideLine({ side, oi, chg }: { side: "C" | "P"; oi: number; chg: number | null }) {
+  const sideColor = side === "C" ? "#29b6f6" : "#ff4757";
+  const chgColor = chg == null ? "#3a4a5e" : chg > 0 ? "#22c55e" : chg < 0 ? "#ef4444" : "#4a6a88";
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "flex-end", gap: 4, whiteSpace: "nowrap" }}>
+      <span style={{ color: sideColor, fontWeight: 800, marginRight: "auto", fontSize: 8 }}>{side}</span>
+      <span style={{ color: oi ? SOFT_WHITE : "#3a4a5e" }}>{fmtCount(oi)}</span>
+      <span style={{ color: chgColor, fontWeight: 700, minWidth: 34, textAlign: "right" }}>
+        {chg == null ? "—" : fmtChg(chg)}
+      </span>
+    </div>
+  );
+}
+
 // ── Memoized chain matrix ───────────────────────────────────────────────────
 interface ChainMatrixProps {
   columns: ExpColumn[];
@@ -1002,6 +1059,14 @@ interface ChainMatrixProps {
   emLevels: { close: number; em: number } | null;
   activeTicker: string;
   atmRowRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * OI tab only: `exp|strike` → the stored settled call/put OI plus the
+   * day-over-day change. Empty (and ignored) in every other greek mode.
+   * The OI *values* the cell shows come from this map when present so the
+   * numbers and their deltas are always from the same snapshot; it falls back
+   * to the live chain's callOI/putOI for strikes the recorder hasn't captured.
+   */
+  oiChangeMap: Map<string, { callOI: number; putOI: number; callChg: number; putChg: number }>;
   onCellClick: (v: { strike: number; expiration: string }) => void;
   onCellHover: (v: { strike: number; colIdx: number; x: number; y: number } | null) => void;
 }
@@ -1014,8 +1079,12 @@ const ChainMatrix = memo(function ChainMatrix({
   columns, gridCols, visibleStrikes, nearestStrike, spot, greekMode, dataMode,
   intensity, colScales, volMvcByCol, mvcByCol, pinByCol, valueAt, isStandalone,
   changeMode, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
-  emLevels, activeTicker, atmRowRef, onCellClick, onCellHover,
+  emLevels, activeTicker, atmRowRef, oiChangeMap, onCellClick, onCellHover,
 }: ChainMatrixProps) {
+  // OI is a contract count, not dollars — every value readout in this matrix
+  // (cells, per-column totals, ⅀ Total) switches formatter with the mode.
+  const isOiMode = greekMode === "oi";
+  const fmtVal = isOiMode ? fmtCount : fmtMoney;
   // Drop holiday/non-trading expirations (e.g. observed Jul 3) entirely.
   const renderIdx = Array.from({ length: gridCols })
     .map((_, i) => i)
@@ -1040,7 +1109,9 @@ const ChainMatrix = memo(function ChainMatrix({
     renderIdx.forEach((colIdx) => {
       const col = columns[colIdx];
       if (!col || col.expiration === todayKey) return;
-      const isCh = !isStandalone && changeMode !== "live" && changeMeta.hasData && changeMeta.expiries.has(col.expiration);
+      // !isOiMode mirrors the per-cell guard below — the Δ columns carry
+      // volume-GEX dollars, which must never be summed into an OI total.
+      const isCh = !isOiMode && !isStandalone && changeMode !== "live" && changeMeta.hasData && changeMeta.expiries.has(col.expiration);
       const v = isCh ? (changeMap.get(`${col.expiration}|${strike}`) ?? null) : valueAt(col, strike);
       if (v != null) sum += v;
     });
@@ -1052,7 +1123,9 @@ const ChainMatrix = memo(function ChainMatrix({
   return (
     <div style={{
       display: "grid",
-      gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(78px, 1fr)) minmax(88px, 1.15fr)`,
+      // OI cells carry two lines (call / put) each with a value AND a delta, so
+      // they need materially more room than a single greek figure.
+      gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(${isOiMode ? 122 : 78}px, 1fr)) minmax(${isOiMode ? 104 : 88}px, 1.15fr)`,
       borderRadius: 12,
       overflow: "clip",
       border: `1px solid ${HT.border}`,
@@ -1065,7 +1138,7 @@ const ChainMatrix = memo(function ChainMatrix({
       </div>
       {renderIdx.map((i) => {
         const col = columns[i];
-        const isChangeCol = !isStandalone && changeMode !== "live" && changeMeta.hasData && col != null &&
+        const isChangeCol = !isOiMode && !isStandalone && changeMode !== "live" && changeMeta.hasData && col != null &&
           changeMeta.expiries.has(col.expiration);
         const colTotal = col
           ? (isChangeCol
@@ -1077,7 +1150,7 @@ const ChainMatrix = memo(function ChainMatrix({
             <div style={{ fontSize: 10, fontWeight: 500, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
             {!isStandalone && (
               <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
-                {colTotal == null ? "—" : fmtMoney(colTotal)}
+                {colTotal == null ? "—" : fmtVal(colTotal)}
               </div>
             )}
           </div>
@@ -1087,7 +1160,7 @@ const ChainMatrix = memo(function ChainMatrix({
       <div style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.24)} 0%, ${rgba(HT.cyan, 0.07)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}`, borderLeft: `2px solid ${rgba(HT.cyan, 0.45)}` }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: HT.cyan, letterSpacing: "0.04em" }}>Total</div>
         <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)", color: grandVisibleTotal >= 0 ? HT.green : HT.red }}>
-          {fmtMoney(grandVisibleTotal)}
+          {fmtVal(grandVisibleTotal)}
         </div>
       </div>
 
@@ -1157,8 +1230,11 @@ const ChainMatrix = memo(function ChainMatrix({
             {renderIdx.map((colIdx, posInRow) => {
               const col = columns[colIdx];
               const scale = colScales[colIdx] ?? { max: 1, top3: [] as number[] };
+              // The 15/30/60m Δ columns carry volume-GEX deltas. In OI mode
+              // they would be a second, unrelated "change" fighting the cell's
+              // own day-over-day ΔOI — so OI mode always reads live columns.
               const isChangeCol =
-                !isStandalone && changeMode !== "live" && changeMeta.hasData && col != null &&
+                !isOiMode && !isStandalone && changeMode !== "live" && changeMeta.hasData && col != null &&
                 changeMeta.expiries.has(col.expiration);
               const chKey = isChangeCol ? `${col!.expiration}|${strike}` : "";
               const value = isChangeCol
@@ -1171,7 +1247,9 @@ const ChainMatrix = memo(function ChainMatrix({
               // ❌ marks the pure-volume GEX peak — OI+Vol view + GEX mode only.
               const isVolMvc = !isChangeCol && greekMode === "gex" && dataMode === "oi-vol" && col != null && volMvcByCol[colIdx] === strike;
               const pin = pinByCol[colIdx];
-              const isPin = !isChangeCol && col != null && pin != null && (strike === pin.above || strike === pin.below);
+              // Suppressed in OI mode — the pin glyph is a gamma-structure
+              // marker, and its width breaks the two-line call/put layout.
+              const isPin = !isOiMode && !isChangeCol && col != null && pin != null && (strike === pin.above || strike === pin.below);
               const isFirst = posInRow === 0;
               // ATM box: use box-shadow so it overlays without shifting layout.
               // Top+bottom on every cell; left edge on first col. The right edge
@@ -1185,6 +1263,23 @@ const ChainMatrix = memo(function ChainMatrix({
                 : undefined;
               // Click any populated cell to open its stats card.
               const isClickable = col != null;
+              // OI tab: prefer the recorded snapshot's call/put OI so the value
+              // and its Δ always describe the same book. Strikes the 9:32 sweep
+              // didn't capture (a root outside the watchlist, an expiry past
+              // the recorded depth, or a strike listed intraday) still show
+              // live OI from the chain — just with no Δ to report.
+              const oiKey = col ? `${col.expiration}|${strike}` : "";
+              const oiSnap = isOiMode && oiKey ? oiChangeMap.get(oiKey) : undefined;
+              const liveCell = isOiMode && col ? col.cells.get(strike) : undefined;
+              const oiCall = oiSnap?.callOI ?? liveCell?.callOI ?? 0;
+              const oiPut = oiSnap?.putOI ?? liveCell?.putOI ?? 0;
+              // A strike can be zero on BOTH sides today and still be the most
+              // interesting cell on the grid — that is a full overnight unwind.
+              // The recorder skips zero/zero rows, so /proxy/oi-change surfaces
+              // those via a prev-only FULL JOIN row: OI 0/0 with a large
+              // negative change. Keying "has anything to show" off the OI alone
+              // would render them as "·" and hide exactly the biggest closes.
+              const oiHasAny = isOiMode && (oiCall > 0 || oiPut > 0 || !!oiSnap?.callChg || !!oiSnap?.putChg);
               return (
                 <div
                   key={`${strike}-${colIdx}`}
@@ -1192,17 +1287,23 @@ const ChainMatrix = memo(function ChainMatrix({
                   onClick={isClickable ? (e) => onCellHover({ strike, colIdx, x: e.clientX, y: e.clientY }) : undefined}
                   title={isClickable ? "Click for volume / OI / net premium" : undefined}
                   style={{
-                    padding: "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
+                    padding: isOiMode ? "3px 6px" : "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
                     color: value == null ? "#3a4a5e" : SOFT_WHITE,
                     background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
                     borderTop: rowEmBorder,
                     boxShadow: atmShadow,
                     whiteSpace: "nowrap", overflow: "hidden",
-                    display: "flex", alignItems: "baseline", justifyContent: "flex-end", gap: 5,
+                    display: "flex", alignItems: isOiMode ? "center" : "baseline", justifyContent: "flex-end", gap: 5,
                     cursor: isClickable ? "pointer" : undefined,
                     ...(isMvc ? { outline: "2px solid #ffb300", outlineOffset: "-2px" } : {}),
                   }}
                 >
+                  {/* OI tab renders a two-line call/put breakdown instead of a
+                      single figure: side letter, settled OI, and the change vs
+                      the previous snapshot. Everything else about the cell —
+                      heat background, ATM box, EM row border — is unchanged,
+                      because the background is still driven by net OI through
+                      valueAt(). */}
                   {isMvc && <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)" }}>★</span>}
                   {isVolMvc && <span title="Highest volume GEX" style={{ fontSize: 10, lineHeight: 1 }}>❌</span>}
                   {isPin && (
@@ -1213,7 +1314,18 @@ const ChainMatrix = memo(function ChainMatrix({
                       </svg>
                     </span>
                   )}
-                  <span><SignVal text={value == null ? "·" : fmtMoney(value)} /></span>
+                  {isOiMode ? (
+                    !oiHasAny ? (
+                      <span style={{ color: "#3a4a5e" }}>·</span>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", width: "100%", lineHeight: 1.25, fontSize: 9 }}>
+                        <OiSideLine side="C" oi={oiCall} chg={oiSnap?.callChg ?? null} />
+                        <OiSideLine side="P" oi={oiPut} chg={oiSnap?.putChg ?? null} />
+                      </div>
+                    )
+                  ) : (
+                    <span><SignVal text={value == null ? "·" : fmtMoney(value)} /></span>
+                  )}
                 </div>
               );
             })}
@@ -1234,7 +1346,7 @@ const ChainMatrix = memo(function ChainMatrix({
                   whiteSpace: "nowrap", overflow: "hidden",
                   display: "flex", alignItems: "baseline", justifyContent: "flex-end",
                 }}>
-                  <SignVal text={tot === 0 ? "·" : fmtMoney(tot)} />
+                  <SignVal text={tot === 0 ? "·" : fmtVal(tot)} />
                 </div>
               );
             })()}
@@ -1871,6 +1983,68 @@ export default function OptionsChainPage({
     return () => { cancelled = true; };
   }, [changeMode, activeTicker, refreshSeed]);
 
+  // ── Day-over-day ΔOI (OI tab only) ────────────────────────────────────────
+  // Open interest is settled overnight by the OCC and republished pre-open; it
+  // does NOT tick during the session. So there is no live "change since 9:30"
+  // to compute client-side — the meaningful delta is today's settled book vs
+  // the previous trading day's, and that has to come from a stored snapshot.
+  // server-v2/oi-daily-recorder.js takes exactly one snapshot per day at 9:32
+  // ET across the scanner watchlist; /proxy/oi-change diffs its two most recent
+  // dates for this symbol. Fetched only while the OI tab is active, and keyed
+  // on ticker (not expiry) since one call returns every expiry we record.
+  // `symbol` is carried IN the state, and every read below is gated on it
+  // matching activeTicker. The map keys are `expiry|strike` with no symbol in
+  // them, so without that gate the previous ticker's snapshot would keep
+  // rendering under the new ticker's chain for the whole round trip — SPY's
+  // settled OI shown against QQQ strikes, indistinguishable from real data.
+  // (Worse without it: switching ticker while on a non-OI tab skips the fetch
+  // entirely, so the stale map would survive until the tab is opened again.)
+  const [oiChange, setOiChange] = useState<{
+    symbol: string | null;
+    map: Map<string, { callOI: number; putOI: number; callChg: number; putChg: number }>;
+    date: string | null;
+    prevDate: string | null;
+  }>({ symbol: null, map: new Map(), date: null, prevDate: null });
+
+  useEffect(() => {
+    if (greekMode !== "oi") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/proxy/oi-change?symbol=${encodeURIComponent(activeTicker)}`, { cache: "no-store" });
+        const j = await res.json().catch(() => null);
+        if (cancelled) return;
+        if (!j?.ok || !Array.isArray(j.rows)) {
+          setOiChange({ symbol: activeTicker, map: new Map(), date: null, prevDate: null });
+          return;
+        }
+        const m = new Map<string, { callOI: number; putOI: number; callChg: number; putChg: number }>();
+        for (const r of j.rows) {
+          m.set(`${String(r.expiry ?? "")}|${Number(r.strike)}`, {
+            callOI: Number(r.callOI) || 0,
+            putOI: Number(r.putOI) || 0,
+            callChg: Number(r.callChg) || 0,
+            putChg: Number(r.putChg) || 0,
+          });
+        }
+        setOiChange({ symbol: activeTicker, map: m, date: j.date ?? null, prevDate: j.prevDate ?? null });
+      } catch {
+        if (!cancelled) setOiChange({ symbol: activeTicker, map: new Map(), date: null, prevDate: null });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [greekMode, activeTicker, refreshSeed]);
+
+  // The snapshot as the UI is allowed to see it: empty unless it belongs to the
+  // ticker currently on screen. One place to gate, so the matrix and the
+  // provenance label can never disagree about which ticker they're describing.
+  const oiSnapshot = useMemo(
+    () => (oiChange.symbol === activeTicker
+      ? oiChange
+      : { symbol: activeTicker, map: new Map<string, { callOI: number; putOI: number; callChg: number; putChg: number }>(), date: null, prevDate: null }),
+    [oiChange, activeTicker],
+  );
+
   // Per-expiry heatmap scale for change columns: each change column colors
   // against its own |Δ| max over the visible strikes. Keyed by expiration.
   const changeScaleByExp = useMemo(() => {
@@ -2074,10 +2248,26 @@ export default function OptionsChainPage({
             Total Net {greekMode.toUpperCase()}
           </span>
           <span style={{ fontFamily: "var(--font-mono)", fontWeight: 800, fontSize: 12, color: visibleTotal >= 0 ? HT.green : HT.red }}>
-            {fmtMoney(visibleTotal)}
+            {greekMode === "oi" ? fmtCount(visibleTotal) : fmtMoney(visibleTotal)}
           </span>
           <span style={{ color: HT.border }}>·</span>
           <span style={{ color: HT.muted, opacity: 0.75 }}>{activeTicker} · {displayPercent}% strikes{autoPercentNote ? ` · ${autoPercentNote}` : ""}</span>
+          {/* OI tab provenance. The Δ column is only meaningful once TWO daily
+              snapshots exist, so say plainly which two days are being compared
+              — and say so just as plainly when there is no baseline yet, rather
+              than letting a column of "—" look like a bug. */}
+          {greekMode === "oi" && (
+            <>
+              <span style={{ color: HT.border }}>·</span>
+              <span style={{ color: oiSnapshot.prevDate ? HT.cyan : HT.muted, opacity: 0.9 }}>
+                {oiSnapshot.prevDate
+                  ? `ΔOI ${oiSnapshot.date} vs ${oiSnapshot.prevDate}`
+                  : oiSnapshot.date
+                    ? `OI ${oiSnapshot.date} · no prior snapshot yet`
+                    : "OI snapshot not recorded for this ticker"}
+              </span>
+            </>
+          )}
         </div>
       )}
       </div>
@@ -2104,6 +2294,7 @@ export default function OptionsChainPage({
             nearestStrike={nearestStrike}
             spot={spot}
             greekMode={greekMode}
+            oiChangeMap={oiSnapshot.map}
             dataMode={dataMode}
             intensity={deferredIntensity}
             colScales={colScales}

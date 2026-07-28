@@ -412,26 +412,28 @@ export default function EsCandlesFullPanel() {
     const series = candleSeriesRef.current;
     if (!series) return;
 
-    const defs: Array<{ price: number | null; color: string; title: string; style: LineStyle; width: 1 | 2 }> = [
-      { price: lineLevels.callWall, color: "#30d158", title: "Call Wall", style: LineStyle.Dashed, width: 1 },
-      { price: lineLevels.putWall, color: "#ff5b5b", title: "Put Wall", style: LineStyle.Dashed, width: 1 },
-      { price: lineLevels.gexFlip, color: "#f5c518", title: "Flip", style: LineStyle.Dashed, width: 1 },
-      { price: lineLevels.cb, color: "#ffffff", title: "CB", style: LineStyle.Solid, width: 1 },
+    // `key` is the stable map key; `title` is the text drawn on the chart. The
+    // Flip line carries an empty title on purpose — line only, no label.
+    const defs: Array<{ key: string; price: number | null; color: string; title: string; style: LineStyle; width: 1 | 2 }> = [
+      { key: "callWall", price: lineLevels.callWall, color: "#30d158", title: "Call Wall", style: LineStyle.Dashed, width: 1 },
+      { key: "putWall", price: lineLevels.putWall, color: "#ff5b5b", title: "Put Wall", style: LineStyle.Dashed, width: 1 },
+      { key: "gexFlip", price: lineLevels.gexFlip, color: "#f5c518", title: "", style: LineStyle.Dashed, width: 1 },
+      { key: "cb", price: lineLevels.cb, color: "#ffffff", title: "CB", style: LineStyle.Solid, width: 1 },
     ];
 
     const lines = priceLinesRef.current;
     for (const d of defs) {
       const live = d.price != null && d.price > 0;
-      const existing = lines.get(d.title);
+      const existing = lines.get(d.key);
       if (!live) {
-        if (existing) { try { series.removePriceLine(existing); } catch {} lines.delete(d.title); }
+        if (existing) { try { series.removePriceLine(existing); } catch {} lines.delete(d.key); }
         continue;
       }
       if (existing) {
         try { existing.applyOptions({ price: d.price as number }); } catch {}
         continue;
       }
-      lines.set(d.title, series.createPriceLine({
+      lines.set(d.key, series.createPriceLine({
         price: d.price as number,
         color: d.color,
         lineWidth: d.width,

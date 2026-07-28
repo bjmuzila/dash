@@ -23,6 +23,7 @@ import TpoForecastCard from "@/components/scanner/TpoForecastCard";
 import TpoForwardMap from "@/components/scanner/TpoForwardMap";
 import TpoOpenLocation from "@/components/scanner/TpoOpenLocation";
 import GexChangeTop from "@/components/scanner/GexChangeTop";
+import GexPctTab from "@/components/scanner/GexPctTab";
 import Link from "next/link";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
@@ -60,7 +61,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "gexchangetop";
+type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "gexchangetop" | "gexpct";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  OVERVIEW / LANDING (default tab) — cards explaining each scanner
@@ -139,6 +140,14 @@ const SCAN_META: ScanMeta[] = [
     scope: "Stocks · hourly ★ very-strong picks",
     what: "A recorded, going-forward log of the top 5 ★ Very strong strikes by combined score — captured automatically at the top of every RTH hour off the GEX Change Scanner (60m window, |Δ| ≥ $500k AND |% vs open| ≥ 30%).",
     tells: "Which strikes were building hardest each hour, hour by hour, without leaving a browser tab open — scroll back through the day to see how the strongest names rotated.",
+  },
+  {
+    tab: "gexpct",
+    title: "GEX%",
+    accent: LIGHT_BLUE,
+    scope: "Watchlist · front 3 expiries",
+    what: "For every recorded ticker, the positive/negative split of net GEX (carried OI gamma + today's volume gamma) at each of the front three expirations, shown as a share of that expiry's total |net GEX| with the dollar figures behind it.",
+    tells: "Whether dealers are net long or short gamma in a name — and how that flips as you walk out the expiry curve. A name that's 80% call-side on the front expiry but put-heavy by the third is carrying its risk further out than the tape suggests.",
   },
 ];
 
@@ -3025,6 +3034,7 @@ export default function ScannerPage() {
         <option value="ibstats">IB Stats</option>
         <option value="statprompter">Stat Prompter</option>
         <option value="gexchangetop">GEX Change Top</option>
+        <option value="gexpct">GEX%</option>
       </select>
 
       {/* Top-level tabs */}
@@ -3062,6 +3072,11 @@ export default function ScannerPage() {
           border: `1px solid ${tab === "gexchangetop" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
           background: tab === "gexchangetop" ? `${HOME_THEME.orange}22` : "transparent",
         }}>GEX Change Top</button>
+        <button onClick={() => setTab("gexpct")} style={{
+          ...tabStyle(tab === "gexpct"),
+          border: `1px solid ${tab === "gexpct" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
+          background: tab === "gexpct" ? `${LIGHT_BLUE}22` : "transparent",
+        }}>GEX%</button>
         {/* Forward Build moved to its own route (/forward-build). This tab-styled
             link navigates there instead of rendering inline. */}
         <Link href="/forward-build" prefetch={false} style={{
@@ -3085,6 +3100,7 @@ export default function ScannerPage() {
       {tab === "ibstats" && <IbStatsTab />}
       {tab === "statprompter" && <StatPrompterTab />}
       {tab === "gexchangetop" && <GexChangeTop />}
+      {tab === "gexpct" && <GexPctTab />}
     </PageShell>
   );
 }
