@@ -1012,6 +1012,36 @@ function Row({ k, v, strong }: { k: string; v: string; strong?: boolean }) {
   );
 }
 
+/**
+ * Which side of the book the OI tab shows at a given strike.
+ *
+ * Above the ATM strike only calls are OTM; below it only puts are. Showing both
+ * everywhere meant half of every cell was the deep-ITM mirror of a strike on the
+ * other side of the ladder — high OI, no information, and it doubled the row
+ * height for nothing. The ATM row itself is the pivot and shows both.
+ *
+ * This rule drives the CELL RENDERING and the VALUE the heat scale / column
+ * totals / ⅀ Total read (see oiSideValue). Those have to agree — coloring a
+ * cell by a number the cell doesn't display is how a heatmap starts lying.
+ */
+function oiSides(strike: number, atm: number): { call: boolean; put: boolean } {
+  if (strike > atm) return { call: true, put: false };
+  if (strike < atm) return { call: false, put: true };
+  return { call: true, put: true };
+}
+
+/**
+ * The signed OI value for heat/totals under the calls-above/puts-below rule:
+ * call OI above ATM (positive → blue), put OI below ATM (negative → red), and
+ * the true net at the ATM pivot. Deliberately NOT cell.oi — that is the
+ * both-sides net, which would color a cell by contracts it isn't showing.
+ */
+function oiSideValue(cell: GreekCell, strike: number, atm: number): number {
+  const { call, put } = oiSides(strike, atm);
+  if (call && put) return cell.callOI - cell.putOI;
+  return call ? cell.callOI : -cell.putOI;
+}
+
 // One line of an OI cell: side letter, settled open interest, and the change
 // vs the previous snapshot date. `chg === null` means this strike has no stored
 // baseline (see the OI tab's fallback in ChainMatrix) — rendered as a dash so
@@ -1027,7 +1057,7 @@ function OiSideLine({ side, oi, chg }: { side: "C" | "P"; oi: number; chg: numbe
     <div style={{ display: "flex", alignItems: "baseline", justifyContent: "flex-end", gap: 4, whiteSpace: "nowrap" }}>
       <span style={{ color: sideColor, fontWeight: 800, marginRight: "auto", fontSize: 8 }}>{side}</span>
       <span style={{ color: oi ? SOFT_WHITE : "#3a4a5e" }}>{fmtCount(oi)}</span>
-      <span style={{ color: chgColor, fontWeight: 700, minWidth: 34, textAlign: "right" }}>
+      <span style={{ color: chgColor, fontWeight: 700, minWidth: 42, textAlign: "right" }}>
         {chg == null ? "—" : fmtChg(chg)}
       </span>
     </div>
@@ -1271,6 +1301,8 @@ const ChainMatrix = memo(function ChainMatrix({
               const oiKey = col ? `${col.expiration}|${strike}` : "";
               const oiSnap = isOiMode && oiKey ? oiChangeMap.get(oiKey) : undefined;
               const liveCell = isOiMode && col ? col.cells.get(strike) : undefined;
+              // Calls above ATM, puts below, both at the pivot.
+              const sides = isOiMode ? oiSides(strike, nearestStrike) : { call: false, put: false };
               const oiCall = oiSnap?.callOI ?? liveCell?.callOI ?? 0;
               const oiPut = oiSnap?.putOI ?? liveCell?.putOI ?? 0;
               // A strike can be zero on BOTH sides today and still be the most
@@ -1279,7 +1311,13 @@ const ChainMatrix = memo(function ChainMatrix({
               // those via a prev-only FULL JOIN row: OI 0/0 with a large
               // negative change. Keying "has anything to show" off the OI alone
               // would render them as "·" and hide exactly the biggest closes.
-              const oiHasAny = isOiMode && (oiCall > 0 || oiPut > 0 || !!oiSnap?.callChg || !!oiSnap?.putChg);
+              // Only the side(s) actually rendered count toward "is there
+              // anything here" — an ITM put below a call-only strike must not
+              // keep an otherwise-empty call cell from reading as "·".
+              const oiHasAny = isOiMode && (
+                (sides.call && (oiCall > 0 || !!oiSnap?.callChg)) ||
+                (sides.put && (oiPut > 0 || !!oiSnap?.putChg))
+              );
               return (
                 <div
                   key={`${strike}-${colIdx}`}
@@ -1318,9 +1356,9 @@ const ChainMatrix = memo(function ChainMatrix({
                     !oiHasAny ? (
                       <span style={{ color: "#3a4a5e" }}>·</span>
                     ) : (
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", width: "100%", lineHeight: 1.25, fontSize: 9 }}>
-                        <OiSideLine side="C" oi={oiCall} chg={oiSnap?.callChg ?? null} />
-                        <OiSideLine side="P" oi={oiPut} chg={oiSnap?.putChg ?? null} />
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", width: "100%", lineHeight: 1.3, fontSize: 10 }}>
+                        {sides.call && <OiSideLine side="C" oi={oiCall} chg={oiSnap?.callChg ?? null} />}
+                        {sides.put && <OiSideLine side="P" oi={oiPut} chg={oiSnap?.putChg ?? null} />}
                       </div>
                     )
                   ) : (
@@ -1859,9 +1897,12 @@ export default function OptionsChainPage({
     (col: ExpColumn, strike: number): number | null => {
       const cell = col.cells.get(strike);
       if (!cell) return null;
+      // OI tab only ever displays one side per strike, so the heat scale and
+      // every total must be computed from that same side.
+      if (greekMode === "oi") return oiSideValue(cell, strike, nearestStrike);
       return cell[greekMode];
     },
-    [greekMode],
+    [greekMode, nearestStrike],
   );
 
   // Per-column max + top-3 (by |active greek|) over the VISIBLE strikes, so each
@@ -2106,12 +2147,13 @@ export default function OptionsChainPage({
       if (col.expiration === todayKey) continue;
       for (const s of visibleStrikes) {
         if (s == null) continue;
-        const v = col.cells.get(s)?.[greekMode];
-        if (v != null) sum += v;
+        const cell = col.cells.get(s);
+        if (!cell) continue;
+        sum += greekMode === "oi" ? oiSideValue(cell, s, nearestStrike) : cell[greekMode];
       }
     }
     return sum;
-  }, [columns, visibleStrikes, greekMode]);
+  }, [columns, visibleStrikes, greekMode, nearestStrike]);
 
   // Toolbar button styled to match the right-side SegGroup tiles (height 34,
   // radius 8, fontSize 11–12, weight 700) so GO + Recent line up with them.
