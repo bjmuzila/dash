@@ -29,4 +29,5 @@ export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
   Budget: lazy(() => import("./Budget")),
   Todo: lazy(() => import("./Todo")),
   ChartsUI: lazy(() => import("./ChartsUI")),
+  Watchlists: lazy(() => import("./Watchlists")),
 };

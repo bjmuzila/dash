@@ -13,7 +13,7 @@
 
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { HOME_THEME, homeInputStyle, LIGHT_BLUE } from "@/components/shared/homeTheme";
 import { TickerListDropdown } from "@/components/shared/TickerListDropdown";
@@ -142,6 +142,11 @@ export function ChainReplay({
     if (!animSpotInit.current) { animSpot.current = target; animSpotInit.current = true; forceTick((x) => x + 1); return; }
     const start = animSpot.current;
     if (start === target) return;
+    // Scrubbing (or any non-playback idx change) should snap instantly —
+    // animating here would restart a fresh tween on every intermediate
+    // frame while dragging, stacking overlapping tweens that overshoot and
+    // make the value bounce around instead of tracking the handle.
+    if (!playing) { animSpot.current = target; forceTick((x) => x + 1); return; }
     const duration = Math.min(BASE_MS / speed, 450);
     const t0 = performance.now();
     let raf = 0;
@@ -155,7 +160,7 @@ export function ChainReplay({
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frame?.ts, frame?.spot]);
+  }, [frame?.ts, frame?.spot, playing]);
 
   const maxAbs = useMemo(() => {
     let m = 0;
@@ -192,17 +197,42 @@ export function ChainReplay({
 
   // Continuous vertical position of the spot line among the rendered strike
   // rows (interpolated between the two bracketing strikes), so the line and
-  // label glide smoothly instead of hopping row-to-row.
-  const ROW_H = 19; // ~16px bar + 3px row gap
-  const spotTop = useMemo(() => {
-    if (!allStrikes.length || spot <= 0) return null;
+  // label glide smoothly instead of hopping row-to-row. Measured directly
+  // off the actual row DOM nodes — a guessed pixel-per-row constant drifts
+  // further off the further it is from the top of the list (compounding
+  // rounding error), which is why the line used to land on the wrong strike.
+  const rowsContainerRef = useRef<HTMLDivElement | null>(null);
+  const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const [spotTop, setSpotTop] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const container = rowsContainerRef.current;
+    if (!allStrikes.length || spot <= 0 || !container) { setSpotTop(null); return; }
     let i = 0;
     while (i < allStrikes.length && allStrikes[i] > spot) i++;
-    if (i === 0) return -ROW_H / 2;
-    if (i >= allStrikes.length) return (allStrikes.length - 1) * ROW_H + ROW_H / 2;
+    const containerTop = container.getBoundingClientRect().top;
+    const midOf = (idx: number) => {
+      const el = rowRefs.current[idx];
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return r.top - containerTop + r.height / 2;
+    };
+    if (i === 0) {
+      const m = midOf(0);
+      setSpotTop(m === null ? null : m - 19);
+      return;
+    }
+    if (i >= allStrikes.length) {
+      const m = midOf(allStrikes.length - 1);
+      setSpotTop(m === null ? null : m + 19);
+      return;
+    }
+    const hiMid = midOf(i - 1);
+    const loMid = midOf(i);
+    if (hiMid === null || loMid === null) { setSpotTop(null); return; }
     const hi = allStrikes[i - 1], lo = allStrikes[i];
     const frac = hi === lo ? 0 : (hi - spot) / (hi - lo);
-    return (i - 1) * ROW_H + frac * ROW_H;
+    setSpotTop(hiMid + frac * (loMid - hiMid));
   }, [allStrikes, spot]);
 
   const selStyle: React.CSSProperties = { ...homeInputStyle, padding: "6px 10px", cursor: "pointer" };
@@ -291,7 +321,7 @@ export function ChainReplay({
       )}
 
       {!loading && !err && frame && (
-        <div style={{ position: "relative" }}>
+        <div ref={rowsContainerRef} style={{ position: "relative" }}>
           {spotTop !== null && (
             <div
               style={{
@@ -307,12 +337,12 @@ export function ChainReplay({
             </div>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-            {allStrikes.map((k) => {
+            {allStrikes.map((k, i) => {
               const net = netByStrike.get(k) ?? 0;
               const pct = Math.min(100, (Math.abs(net) / denom) * 100);
               const positive = net >= 0;
               return (
-                <div key={k} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div key={k} ref={(el) => { rowRefs.current[i] = el; }} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <div style={{ width: 56, textAlign: "right", fontSize: 12, color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{k}</div>
                   <div style={{ flex: 1, display: "flex", alignItems: "center", height: 16 }}>
                     <div style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
