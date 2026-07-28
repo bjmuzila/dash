@@ -21,15 +21,17 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
-import { HOME_THEME, LIGHT_BLUE, homeButtonStyle, homeInputStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, homeButtonStyle, homeInputStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
+import { SegSplitMeter, GEX_POS, GEX_NEG } from "@/components/shared/SegMeter";
 
 const N_EXP = 3;
 
-// Split-bar colors: positive = light blue (the one card accent), negative =
-// orange. Both come from the theme — do not hardcode a hex here.
-const POS = LIGHT_BLUE;
-const NEG = HOME_THEME.orange;
+// Split-bar colors: the /home gauge-rail palette — positive/calls blue,
+// negative/puts red. Sourced from SegMeter so the scanner bars and the home
+// bars can never drift apart.
+const POS = GEX_POS;
+const NEG = GEX_NEG;
 const DIM = "rgba(255,255,255,0.35)";
 
 type ApiRow = {
@@ -103,10 +105,9 @@ function SplitCell({ leg }: { leg: Leg | null }) {
   const n = 100 - p;
   return (
     <td style={{ ...td, borderLeft: "1px solid rgba(255,255,255,0.08)" }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-end", minWidth: 118 }}>
-        <div style={{ display: "flex", height: 9, width: "100%", borderRadius: 5, overflow: "hidden", background: "rgba(255,255,255,0.06)" }}>
-          <div style={{ width: `${p}%`, background: POS }} />
-          <div style={{ width: `${n}%`, background: NEG }} />
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", minWidth: 118 }}>
+        <div style={{ width: "100%" }}>
+          <SegSplitMeter posPct={p} />
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", width: "100%", fontSize: 12, fontWeight: 700 }}>
           <span style={{ color: POS }}>{p.toFixed(0)}%</span>

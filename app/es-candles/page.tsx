@@ -268,6 +268,40 @@ function slotFloorMs(ts: number): number {
   return Math.floor(ts / SLOT_MS) * SLOT_MS;
 }
 
+// ── Default zoom ─────────────────────────────────────────────────────────────
+// The chart opens on the most recent ~4 HOURS, not the whole loaded history.
+// fitContent() crushed a full session (plus overnight) into the container, which
+// left the candles hairline-thin and — worse — packed the 1-min GEX bubbles so
+// tightly they merged into one solid rail. 4h at 5-min bars = 48 candles, which
+// is roughly the width where individual bubbles still separate. Anything older
+// is one scroll-out away; the user's pan/zoom is never overridden after the
+// initial fit (see didFitRef).
+const DEFAULT_VIEW_MS = 4 * 60 * 60_000;
+const DEFAULT_VIEW_BARS = Math.round(DEFAULT_VIEW_MS / CANDLE_MS);
+// Right gutter, in bars, so the newest candle isn't jammed against the price
+// axis (fitContent leaves a similar gap).
+const DEFAULT_VIEW_RIGHT_PAD = 2;
+// Show the last DEFAULT_VIEW_BARS of `barCount` bars. Falls back to fitContent
+// when there isn't enough history to fill the window (early premarket, a thin
+// replay slice), so a short session still fills the width instead of rendering
+// a handful of bars stranded on the right.
+function applyDefaultView(chart: IChartApi | null, barCount: number) {
+  if (!chart) return;
+  const ts = chart.timeScale();
+  try {
+    if (barCount > DEFAULT_VIEW_BARS) {
+      ts.setVisibleLogicalRange({
+        from: barCount - DEFAULT_VIEW_BARS,
+        to: barCount - 1 + DEFAULT_VIEW_RIGHT_PAD,
+      });
+    } else {
+      ts.fitContent();
+    }
+  } catch {
+    try { ts.fitContent(); } catch { /* ignore */ }
+  }
+}
+
 /**
  * GEX heatmap color (ES Candles page variant). Positive GEX = cyan
  * (41,182,246), negative = red (255,71,87). The 3 largest magnitudes get fixed
@@ -686,6 +720,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // shifts → the whole chart visibly nudges.
   const priceLinesRef = useRef<Map<string, IPriceLine>>(new Map());
   const didFitRef = useRef(false);
+  // How many candles are currently on the series. applyDefaultView needs it, and
+  // the chart-init effect (double-click recenter, collapsed-container re-fit)
+  // runs with an empty dep array so it can't close over candleData.
+  const barCountRef = useRef(0);
   // ET date of the latest bar the last fitContent() ran for. When the session
   // rolls to a new ET day, new bars append far to the right; without re-fitting
   // the viewport stays parked on the prior day (looks "stuck"), or a manual fit
@@ -1764,7 +1802,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         lastW = w; lastH = h;
         chart.applyOptions({ width: w, height: h });
         if (wasCollapsed) {
-          chart.timeScale().fitContent();
+          applyDefaultView(chart, barCountRef.current);
           drawOverlayRef.current();
         }
       });
@@ -1773,10 +1811,12 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       lastH = Math.round(container.clientHeight);
       chart.applyOptions({ width: lastW, height: lastH });
 
-      // Double-click anywhere on the chart → recenter: fit all candles in the
-      // time axis and snap both price scales back to autoscale (right axis right).
+      // Double-click anywhere on the chart → recenter: back to the DEFAULT 4h
+      // view (not fit-all — that was the old behavior and it re-crushed the
+      // bubbles every time you tried to undo a stray scroll) and snap both price
+      // scales back to autoscale (right axis right).
       const onDblClick = () => {
-        chart.timeScale().fitContent();
+        applyDefaultView(chart, barCountRef.current);
         chart.priceScale("right").applyOptions({ autoScale: true });
         drawOverlayRef.current();
       };
@@ -1861,8 +1901,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // day instead of staying parked on the prior one. Within the same day we
     // never re-center, preserving the user's pan/zoom on live updates.
     const lastDay = candleData.length ? rows[rows.length - 1].date : "";
+    barCountRef.current = candleData.length;
     if (candleData.length && (!didFitRef.current || lastDay !== lastFitDayRef.current)) {
-      chart.timeScale().fitContent();
+      applyDefaultView(chart, candleData.length);
       didFitRef.current = true;
       lastFitDayRef.current = lastDay;
     }
