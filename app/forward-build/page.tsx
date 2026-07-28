@@ -9,14 +9,19 @@
  * /app/forward-build (see app-vite/src/App.tsx); under Next it's /forward-build.
  * The whole view is the self-contained <ForwardBuildStructure/> component, which
  * fetches GET /proxy/forward-build-structure and renders its own card grid.
+ *
+ * The scanner tab strip renders above it (link mode) so this page isn't a dead
+ * end — every tab navigates back to /scanner?tab=<id>.
  */
 
 import { PageShell } from "@/components/shared/PageCard";
+import ScannerTabsBar from "@/components/scanner/ScannerTabsBar";
 import ForwardBuildStructure from "@/components/scanner/ForwardBuildStructure";
 
 export default function ForwardBuildPage() {
   return (
     <PageShell>
+      <ScannerTabsBar active="forwardbuild" />
       <ForwardBuildStructure />
     </PageShell>
   );

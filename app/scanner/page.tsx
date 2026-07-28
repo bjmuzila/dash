@@ -24,7 +24,7 @@ import TpoForwardMap from "@/components/scanner/TpoForwardMap";
 import TpoOpenLocation from "@/components/scanner/TpoOpenLocation";
 import GexChangeTop from "@/components/scanner/GexChangeTop";
 import GexPctTab from "@/components/scanner/GexPctTab";
-import Link from "next/link";
+import ScannerTabsBar, { readTabFromUrl } from "@/components/scanner/ScannerTabsBar";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
 
@@ -3002,94 +3002,17 @@ function TpoStructuresScanner() {
 export default function ScannerPage() {
   const [tab, setTab] = useState<MainTab>("gex");
 
-  const tabStyle = (active: boolean): React.CSSProperties => ({
-    padding: "8px 20px", borderRadius: 8, fontSize: 14, cursor: "pointer", fontWeight: 700,
-    border: `1px solid ${active ? HOME_THEME.cyan : "rgba(255,255,255,0.1)"}`,
-    background: active ? "rgba(33,158,188,0.15)" : "transparent",
-    color: active ? HOME_THEME.text : "rgba(255,255,255,0.55)",
-    transition: "all 0.15s",
-  });
+  // Deep link support: /scanner?tab=ibstats opens straight on that tab. Read in
+  // an effect (not useSearchParams) so the page stays prerenderable and there's
+  // no hydration mismatch — the default tab renders first, then swaps on mount.
+  useEffect(() => {
+    const fromUrl = readTabFromUrl();
+    if (fromUrl) setTab(fromUrl as MainTab);
+  }, []);
 
   return (
     <PageShell>
-      {/* Mobile-only: the 8 tab buttons take half the screen on a phone, so swap
-          them for a single dropdown (CSS shows exactly one of the two). */}
-      <select
-        className="scanner-tab-select"
-        value={tab}
-        onChange={(e) => setTab(e.target.value as MainTab)}
-        style={{
-          display: "none", width: "100%", padding: "8px 10px", borderRadius: 8,
-          fontSize: 14, fontWeight: 700, marginBottom: 4,
-          border: `1px solid ${HOME_THEME.cyan}`,
-          background: "rgba(0,0,0,0.5)", color: HOME_THEME.text,
-        }}
-      >
-        <option value="overview">Overview</option>
-        <option value="gex">GEX Scanner</option>
-        <option value="strike">Strike Query</option>
-        <option value="watch">Watch This</option>
-        <option value="marketquality">Market Quality</option>
-        <option value="tpo">TPO Structures</option>
-        <option value="ibstats">IB Stats</option>
-        <option value="statprompter">Stat Prompter</option>
-        <option value="gexchangetop">GEX Change Top</option>
-        <option value="gexpct">GEX%</option>
-      </select>
-
-      {/* Top-level tabs */}
-      <div className="scanner-tabs" style={{ display: "flex", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
-        <button onClick={() => setTab("overview")} style={tabStyle(tab === "overview")}>Overview</button>
-        <button onClick={() => setTab("gex")}    style={tabStyle(tab === "gex")}>GEX Scanner</button>
-        <button onClick={() => setTab("strike")} style={tabStyle(tab === "strike")}>Strike Query</button>
-        <button onClick={() => setTab("watch")} style={{
-          ...tabStyle(tab === "watch"),
-          border: `1px solid ${tab === "watch" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
-          background: tab === "watch" ? `${LIGHT_BLUE}22` : "transparent",
-        }}>Watch This</button>
-        <button onClick={() => setTab("marketquality")} style={{
-          ...tabStyle(tab === "marketquality"),
-          border: `1px solid ${tab === "marketquality" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
-          background: tab === "marketquality" ? `${HOME_THEME.orange}22` : "transparent",
-        }}>Market Quality</button>
-        <button onClick={() => setTab("tpo")} style={{
-          ...tabStyle(tab === "tpo"),
-          border: `1px solid ${tab === "tpo" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
-          background: tab === "tpo" ? `${LIGHT_BLUE}22` : "transparent",
-        }}>TPO Structures</button>
-        <button onClick={() => setTab("ibstats")} style={{
-          ...tabStyle(tab === "ibstats"),
-          border: `1px solid ${tab === "ibstats" ? HOME_THEME.green : "rgba(255,255,255,0.1)"}`,
-          background: tab === "ibstats" ? `${HOME_THEME.green}22` : "transparent",
-        }}>IB Stats</button>
-        <button onClick={() => setTab("statprompter")} style={{
-          ...tabStyle(tab === "statprompter"),
-          border: `1px solid ${tab === "statprompter" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
-          background: tab === "statprompter" ? `${LIGHT_BLUE}22` : "transparent",
-        }}>Stat Prompter</button>
-        <button onClick={() => setTab("gexchangetop")} style={{
-          ...tabStyle(tab === "gexchangetop"),
-          border: `1px solid ${tab === "gexchangetop" ? HOME_THEME.orange : "rgba(255,255,255,0.1)"}`,
-          background: tab === "gexchangetop" ? `${HOME_THEME.orange}22` : "transparent",
-        }}>GEX Change Top</button>
-        <button onClick={() => setTab("gexpct")} style={{
-          ...tabStyle(tab === "gexpct"),
-          border: `1px solid ${tab === "gexpct" ? LIGHT_BLUE : "rgba(255,255,255,0.1)"}`,
-          background: tab === "gexpct" ? `${LIGHT_BLUE}22` : "transparent",
-        }}>GEX%</button>
-        {/* Forward Build moved to its own route (/forward-build). This tab-styled
-            link navigates there instead of rendering inline. */}
-        <Link href="/forward-build" prefetch={false} style={{
-          ...tabStyle(false),
-          textDecoration: "none",
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 5,
-          border: `1px solid ${HOME_THEME.orange}`,
-          background: `${HOME_THEME.orange}22`,
-          color: HOME_THEME.text,
-        }}>Forward Build <span style={{ fontSize: 11, opacity: 0.8 }}>↗</span></Link>
-      </div>
+      <ScannerTabsBar active={tab} onSelect={(t) => setTab(t as MainTab)} />
 
       {tab === "overview" && <ScannerOverview onSelect={setTab} />}
       {tab === "gex"    && <GexScanner />}

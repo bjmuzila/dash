@@ -2,6 +2,10 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Tuesday 7/28/2026
+
+* Smoothed out the spot price in the Option Chain Replay — it now glides between updates instead of jumping every few frames, and the dashed spot line lines up correctly with the price axis.
+
 ## Monday 7/27/2026
 
 * Started the new Options dashboard layout — ticker dropdown with Favorites and Watchlist, a daily/yearly heatmap, the S&P 500 sunburst, a candlestick chart and live orderflow, all following whichever ticker you pick.
