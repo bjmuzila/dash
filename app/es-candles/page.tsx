@@ -2988,20 +2988,49 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
 
           ctx.save();
 
-          // (b) the flip path
-          ctx.setLineDash([2, 5]);
-          ctx.strokeStyle = "rgba(251,133,1,.55)";
+          // (b) the flip path, drawn as a COMET: alpha ramps from faint at the
+          //     open to full at the live bar, so the eye lands on where the flip
+          //     IS instead of the line shouting across the whole session.
+          //
+          //     Stroke width is deliberately CONSTANT. A tapered comet reads as
+          //     "this level matters more now than it did at 10am", which isn't
+          //     what's being measured — only recency is. Age is carried by alpha
+          //     alone. One stroke per segment is what buys the per-segment
+          //     alpha; a single path can only hold one strokeStyle.
+          ctx.lineCap = "round";
+          ctx.lineJoin = "round";
           ctx.lineWidth = 1.3;
-          ctx.beginPath();
-          let started = false;
-          for (const p of flipPts) {
-            const px = xAt(p.ts);
-            const py = series.priceToCoordinate(p.es);
-            if (px == null || py == null) { started = false; continue; }
-            if (!started) { ctx.moveTo(px, py); started = true; } else ctx.lineTo(px, py);
+          let prevPt: { x: number; y: number } | null = null;
+          let headPt: { x: number; y: number } | null = null;
+          for (let i = 0; i < flipPts.length; i++) {
+            const p = flipPts[i];
+            const pxc = xAt(p.ts);
+            const pyc = series.priceToCoordinate(p.es);
+            if (pxc == null || pyc == null) { prevPt = null; continue; }
+            const cur = { x: pxc, y: pyc as number };
+            headPt = cur;
+            if (prevPt) {
+              const t = flipPts.length > 1 ? i / (flipPts.length - 1) : 1;
+              ctx.strokeStyle = `rgba(251,133,1,${(0.1 + t * 0.78).toFixed(3)})`;
+              ctx.beginPath();
+              ctx.moveTo(prevPt.x, prevPt.y);
+              ctx.lineTo(cur.x, cur.y);
+              ctx.stroke();
+            }
+            prevPt = cur;
           }
-          ctx.stroke();
-          ctx.setLineDash([]);
+          // Comet head — the newest reading that resolved on screen.
+          if (headPt) {
+            ctx.shadowColor = "rgba(251,133,1,1)";
+            ctx.shadowBlur = 14;
+            ctx.beginPath(); ctx.arc(headPt.x, headPt.y, 3.4, 0, Math.PI * 2);
+            ctx.fillStyle = "rgb(251,133,1)"; ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.beginPath(); ctx.arc(headPt.x, headPt.y, 8, 0, Math.PI * 2);
+            ctx.strokeStyle = "rgba(251,133,1,.35)";
+            ctx.lineWidth = 1.2; ctx.stroke();
+            ctx.lineWidth = 1.3;
+          }
 
           // (c) crossings — today's bars only (the flip series is single-day)
           const flipDay = etDayKey(flipPts[flipPts.length - 1].ts);
