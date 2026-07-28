@@ -1901,7 +1901,10 @@ async function main() {
               -- pins "as of now" per symbol.
               sym_latest AS (
                 SELECT sg.symbol, MAX(sg.ts) AS ts
-                FROM strike_growth sg, d
+                FROM strike_growth sg
+                JOIN strike_growth_watchlist w
+                  ON w.symbol = sg.symbol AND w.active
+                CROSS JOIN d
                 WHERE sg.date = d.date
                 GROUP BY sg.symbol
               ),
