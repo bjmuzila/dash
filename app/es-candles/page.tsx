@@ -3034,19 +3034,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         }
 
         if (flipPts.length >= 2) {
-          // Last reading at or before t, held flat forward — but never across a
-          // gap bigger than 30m, or a stale pre-lunch flip would "cross" a bar
-          // hours later.
-          const flipEsAt = (tMs: number): number | null => {
-            let lo = 0, hiIdx = flipPts.length - 1, found = -1;
-            while (lo <= hiIdx) {
-              const mid = (lo + hiIdx) >> 1;
-              if (flipPts[mid].ts <= tMs) { found = mid; lo = mid + 1; } else hiIdx = mid - 1;
-            }
-            if (found < 0) return null;
-            if (tMs - flipPts[found].ts > 30 * 60 * 1000) return null;
-            return flipPts[found].es;
-          };
+          // (The flipEsAt lookup that lived here — last reading at or before t,
+          // held flat forward, never across a >30m gap — was only ever used by
+          // the cross detection below, which is gone with the label. Restore it
+          // from git if a cross marker comes back.)
 
           ctx.save();
 
@@ -3094,47 +3085,16 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
             ctx.lineWidth = 1.3;
           }
 
-          // (c) crossings — today's bars only (the flip series is single-day)
-          const flipDay = etDayKey(flipPts[flipPts.length - 1].ts);
-          const crosses: Array<{ ts: number; es: number; up: boolean }> = [];
-          let prevSide: number | null = null;
-          for (const r of rows) {
-            if (etDayKey(r.timestamp) !== flipDay) continue;
-            if (replayTsRef.current != null && r.timestamp > replayTsRef.current) continue;
-            const f = flipEsAt(r.timestamp);
-            if (f == null) { prevSide = null; continue; }
-            const side = r.close >= f ? 1 : -1;
-            if (prevSide != null && side !== prevSide) crosses.push({ ts: r.timestamp, es: f, up: side > 0 });
-            prevSide = side;
-          }
-
-          // Per-cross rings / dots / arrows were tried and removed: on a chop
-          // day the flip gets crossed a dozen times and the chart filled with
-          // circles over old bars, which buried the candles and the bubbles for
-          // no read. The comet already shows where the flip is; the crossings
-          // are only interesting for the CURRENT regime, which the chip states
-          // outright. Old crossings get no mark at all.
-
-          // Label the MOST RECENT cross only — one chip, not N overlapping ones.
-          const last = crosses[crosses.length - 1];
-          if (last) {
-            const lx = xAt(last.ts);
-            const ly = series.priceToCoordinate(last.es);
-            if (lx != null && ly != null) {
-              const rgb = last.up ? "125,211,252" : "244,148,142";
-              const txt = `${last.up ? "▲" : "▼"} INTO ${last.up ? "+" : "−"}GEX  ${Math.round(last.es)}`;
-              ctx.font = "700 10px ui-monospace, SFMono-Regular, Menlo, monospace";
-              const tw = ctx.measureText(txt).width + 12;
-              const bx = Math.min(Math.max(2, lx + 12), Math.max(2, w - tw - 4));
-              const by = last.up ? ly - 34 : ly + 24;
-              ctx.fillStyle = "rgba(5,6,10,.88)";
-              ctx.fillRect(bx, by - 8, tw, 16);
-              ctx.strokeStyle = `rgba(${rgb},.6)`; ctx.lineWidth = 1;
-              ctx.strokeRect(bx + 0.5, by - 7.5, tw - 1, 15);
-              ctx.fillStyle = `rgb(${rgb})`;
-              ctx.fillText(txt, bx + 6, by + 3.5);
-            }
-          }
+          // (c) crossings — DELIBERATELY UNMARKED.
+          // Per-cross rings / dots / arrows went first: on a chop day the flip
+          // gets crossed a dozen times and the chart filled with circles over
+          // old bars, burying the candles and the bubbles for no read. The
+          // "▼ INTO −GEX 7446" chip on the most recent cross went next — it sat
+          // right on top of the candles at the one price area you're actually
+          // reading, and it restated what the comet's position relative to price
+          // already shows at a glance (plus the regime chip states it in text).
+          // If a cross marker is ever wanted back, compute it from `flipPts` +
+          // `rows` here; nothing else depends on it.
 
           ctx.restore();
         }

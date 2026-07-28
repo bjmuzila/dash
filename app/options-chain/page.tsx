@@ -1161,6 +1161,10 @@ const ChainMatrix = memo(function ChainMatrix({
       border: `1px solid ${HT.border}`,
       borderTop: `2px solid ${rgba(HT.cyan, 0.85)}`,
       background: HT.panelBg,
+      // Replaces the scroll container's old padding-top — see the comment at
+      // chainScrollRef. Scrolls away under the sticky header rather than
+      // holding open a gap rows can show through.
+      marginTop: 8,
     }}>
       {/* ── Header row: empty strike corner + one expiry header per column ── */}
       <div style={{ position: "sticky", left: 0, top: 0, zIndex: 6, padding: "7px 5px", background: HDR_BG, borderBottom: `1px solid ${HT.border}`, borderRight: `1px solid ${HT.border}`, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.03em", color: HT.muted, display: "flex", alignItems: "flex-end" }}>
@@ -2328,7 +2332,16 @@ export default function OptionsChainPage({
       ) : (
         /* ── Carded columns: each expiry is its own cyan dock card (Strike + value
            inside), all sharing ONE outer scroll so rows stay strike-aligned. ── */
-        <div ref={chainScrollRef} style={{ flex: 1, overflow: "auto", minHeight: 0, padding: "8px 10px 10px" }}>
+        <div ref={chainScrollRef} style={{
+          flex: 1, overflow: "auto", minHeight: 0,
+          // NO top padding. A sticky `top: 0` header inside a scroll container
+          // with padding-top sticks to the CONTENT edge, not the padding edge —
+          // leaving a band the height of that padding where rows scroll through
+          // ABOVE the header and show behind it. The breathing room at rest is
+          // now marginTop on the grid itself, which correctly scrolls away under
+          // the header instead of holding open a permanent gap.
+          padding: "0 10px 10px",
+        }}>
           <ChainMatrix
             columns={columns}
             gridCols={gridCols}
