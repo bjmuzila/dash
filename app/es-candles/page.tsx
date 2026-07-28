@@ -3046,26 +3046,12 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
             prevSide = side;
           }
 
-          for (const c of crosses) {
-            const cx = xAt(c.ts);
-            const cy = series.priceToCoordinate(c.es);
-            if (cx == null || cy == null || cx < -30 || cx > w + 30 || cy < -30 || cy > h + 30) continue;
-            const rgb = c.up ? "125,211,252" : "244,148,142";
-            ctx.beginPath(); ctx.arc(cx, cy, 13, 0, Math.PI * 2);
-            ctx.strokeStyle = `rgba(${rgb},.28)`; ctx.lineWidth = 4; ctx.stroke();
-            ctx.beginPath(); ctx.arc(cx, cy, 8.5, 0, Math.PI * 2);
-            ctx.strokeStyle = `rgba(${rgb},.85)`; ctx.lineWidth = 1.6; ctx.stroke();
-            ctx.beginPath(); ctx.arc(cx, cy, 2.6, 0, Math.PI * 2);
-            ctx.fillStyle = `rgb(${rgb})`; ctx.fill();
-            // Arrow points the way price went through the level.
-            const d = c.up ? -1 : 1;
-            ctx.beginPath();
-            ctx.moveTo(cx, cy + d * 17);
-            ctx.lineTo(cx - 3.6, cy + d * 23);
-            ctx.lineTo(cx + 3.6, cy + d * 23);
-            ctx.closePath();
-            ctx.fillStyle = `rgba(${rgb},.9)`; ctx.fill();
-          }
+          // Per-cross rings / dots / arrows were tried and removed: on a chop
+          // day the flip gets crossed a dozen times and the chart filled with
+          // circles over old bars, which buried the candles and the bubbles for
+          // no read. The comet already shows where the flip is; the crossings
+          // are only interesting for the CURRENT regime, which the chip states
+          // outright. Old crossings get no mark at all.
 
           // Label the MOST RECENT cross only — one chip, not N overlapping ones.
           const last = crosses[crosses.length - 1];
