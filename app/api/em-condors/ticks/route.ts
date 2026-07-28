@@ -17,12 +17,16 @@ import { mondayOf } from "@/lib/em-condor/compute";
 //
 // POST /api/em-condors/ticks
 //   { week_start?, prune?: 120 }
-//   -> snapshots every OPEN condor in that week from the live chain NBBO and
-//      appends one tick each. Returns { ts, written, priced, errors }.
+//   -> snapshots every OPEN condor in that week from the live TastyTrade chain
+//      NBBO and appends one tick each. Returns { ts, written, priced, errors }.
 //
 // One chain-quote call per (ticker, expiry) prices all four legs, so a full
-// board is ~20 Theta calls — cheap enough to run at the top of every RTH hour.
+// board is ~20 TT calls — cheap enough to run at the top of every RTH hour.
 // Settled condors are skipped: their P&L is already final.
+//
+// These ticks are also the ONLY source the daily marks are built from (there is
+// no historical option feed to backfill with), so a missed hour is a permanent
+// hole in that day's curve.
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";

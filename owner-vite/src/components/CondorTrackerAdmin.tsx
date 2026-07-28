@@ -459,9 +459,9 @@ export default function CondorTrackerAdmin() {
     finally { setBusy(false); }
   }
 
-  /** Price every condor in the selected week off Theta's per-contract EOD
-   *  history and store one row per session. On-demand: 4 leg calls per condor,
-   *  so it takes a few seconds for a full board. */
+  /** Roll the week's recorded TastyTrade snapshots up into one daily row per
+   *  condor per session — the last 4-leg tick of each day becomes that day's
+   *  close. On-demand; a full board is a handful of local reads. */
   async function refreshMarks() {
     setMarksBusy(true); setMsg(null);
     try {
@@ -584,7 +584,7 @@ export default function CondorTrackerAdmin() {
           )}
           <button onClick={refreshMarks} disabled={marksBusy || busy}
             style={{ ...homeButtonStyle, borderColor: `${HOME_THEME.orange}44`, color: HOME_THEME.orange, opacity: marksBusy || busy ? 0.5 : 1 }}
-            title="Price all four legs of every condor in the selected week, day by day, from ThetaData">
+            title="Rebuild the day-by-day marks for the selected week from the recorded TastyTrade snapshots (last 4-leg tick of each session)">
             {marksBusy ? "Pricing…" : "Refresh Marks"}
           </button>
           <button onClick={snapshotNow} disabled={marksBusy || busy}
@@ -675,7 +675,7 @@ export default function CondorTrackerAdmin() {
                 ? tk.map((t) => ({ open_pnl: t.open_pnl, pct_max: t.pct_max, cushion: t.cushion, at: t.ts }))
                 : mk.map((m) => ({ open_pnl: m.open_pnl, pct_max: m.pct_max, cushion: m.cushion, at: Date.parse(m.d + "T16:00:00") }));
               // Prefer the P&L curve; fall back to cushion when no leg priced
-              // (futures, or a week Theta has no option history for).
+              // (futures, or a week with no recorded snapshots to roll up).
               const hasPnl = curve.some((c) => c.open_pnl != null);
               const series = curve.map((c) => (hasPnl ? c.open_pnl : c.cushion));
               const last = [...curve].reverse().find((c) => (hasPnl ? c.open_pnl != null : c.cushion != null)) ?? null;

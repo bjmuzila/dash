@@ -16,12 +16,14 @@ import { mondayOf } from "@/lib/em-condor/compute";
 //
 // POST /api/em-condors/marks
 //   { week_start?: "2026-07-27", ticker?: "SPX", through?: "2026-07-29" }
-//   -> prices every condor in that week off ThetaData's per-contract EOD
-//      history, stores one row per session, returns { priced, rows, errors }
+//   -> rolls the recorded TastyTrade snapshots (em_condor_ticks) up into one
+//      row per condor per session, returns { priced, rows, errors }
 //
-// On-demand only — there is no cron. Pricing 20 condors is 80 Theta calls
-// funnelled through that module's global concurrency governor, so a run takes
-// a few seconds; the UI drives it from the "Refresh Marks" button.
+// TastyTrade has no per-contract daily option history, so this is a rollup of
+// what the hourly recorder captured, not a historical re-pricing: a week the
+// recorder never ran for gets underlying/cushion rows only, and says so in
+// `errors`. Cheap enough to hit freely — the UI drives it from the "Refresh
+// Marks" button and the recorder fires it once at 16:15 ET.
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -98,8 +100,9 @@ export async function POST(req: NextRequest) {
       condors: condors.length,
       priced,
       rows,
-      // Surfaced, not swallowed: a leg Theta couldn't return is the difference
-      // between "flat week" and "no data", and those look identical on a chart.
+      // Surfaced, not swallowed: a session with no snapshot to roll up is the
+      // difference between "flat week" and "no data", and those look identical
+      // on a chart.
       errors: errors.slice(0, 40),
       marks,
     });

@@ -18,12 +18,18 @@
  *   HOURLY  at :00 of each RTH hour (10:00–16:00 ET)
  *           POST /api/em-condors/ticks  → live NBBO mid on all four legs of
  *           every OPEN condor in the current week, appended to em_condor_ticks.
- *           ~1 Theta chain call per ticker, so a full board is ~20 calls.
+ *           ~1 TastyTrade chain call per ticker, so a full board is ~20 calls.
+ *
+ *           This is the load-bearing job. TastyTrade has no per-contract daily
+ *           option history, so these snapshots are the ONLY record of what a
+ *           condor was worth on a given day — an hour missed is a hole in the
+ *           curve that cannot be backfilled afterwards.
  *
  *   EOD     16:15 ET (after the closing prints settle)
- *           POST /api/em-condors/marks  → re-prices the week off Theta's
- *           per-contract EOD history and upserts em_condor_marks, the
- *           authoritative daily series. Also prunes ticks older than 120 days.
+ *           POST /api/em-condors/marks  → rolls the day's ticks up into
+ *           em_condor_marks (last 4-leg tick of each session becomes that day's
+ *           close), the authoritative daily series. Also prunes ticks older
+ *           than 120 days.
  *
  * The EOD run is what the sparkline and day-by-day table read; the hourly ticks
  * fill in the shape between those dots. Running both means an intraday spike
@@ -220,7 +226,7 @@ function startCondorMarkRecorder(port) {
     runHourly(base, weekStart, `${hour}:00 ET`);
   };
 
-  // Give the server (and Theta) a moment to come up before the first check.
+  // Give the server (and the TastyTrade session) a moment to come up first.
   const first = setTimeout(tick, 60_000);
   first.unref?.();
   const timer = setInterval(tick, CHECK_MS);

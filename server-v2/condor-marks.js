@@ -6,27 +6,49 @@
  * Iron Condors tab can show how a position moved Monday → Friday instead of
  * only the Friday verdict.
  *
- * For each condor it pulls the EOD close of all four legs from ThetaData's
- * per-contract history and builds, per session:
+ * Per session it builds:
  *
  *     mark      = (put_short − put_long) + (call_short − call_long)      [debit to close]
  *     open_pnl  = (net_credit − mark) × multiplier × contracts
  *     pct_max   = open_pnl / max_profit
  *     cushion   = distance from the underlying close to the nearer SHORT strike
  *
- * Option history is a THETA capability. `tt-snapshot.js` exports
- * fetchOptionDailyHistoryTheta as a benign stub that returns [], so this module
- * requires proxy-thetadata DIRECTLY rather than going through
- * config/data-source. Running with DATA_SOURCE=tt would otherwise report "0 legs
- * priced" for every condor with no explanation. When Theta is unreachable the
- * per-leg error is captured and surfaced, never swallowed.
+ * DATA SOURCE — TastyTrade only. This module used to require proxy-thetadata
+ * directly for per-contract EOD option history. That endpoint needs a paid Theta
+ * tier and 403s on this account, so every leg came back null and "Refresh Marks"
+ * reported 0 priced for every condor. TastyTrade has no per-contract daily
+ * history equivalent, so the daily series is now ROLLED UP from the hourly TT
+ * ticks the recorder already writes into em_condor_ticks:
  *
- * Futures (ESM/NQM) have no Theta options feed. Those still get underlying rows
- * — built from the es_candles / nq_candles 5m tables the app already streams —
- * so cushion/breach tracking works even though the condor mark can't be priced.
+ *     day's leg prices = the last tick of that ET session that priced all four
+ *                        legs (the 16:00 ET snapshot on a normal day)
+ *
+ * open_pnl/pct_max are RECOMPUTED here from the condor's current net_credit
+ * rather than copied off the tick, so editing a credit after the fact reflows
+ * the whole week instead of leaving a stale curve.
+ *
+ * Consequence worth knowing: a week the hourly recorder was not running for has
+ * no ticks, so it gets underlying/cushion rows only and the per-leg mark stays
+ * null. There is no way to backfill option prices after the fact without a paid
+ * history feed — that is stated in the returned `errors`, never swallowed.
+ *
+ * Underlying daily OHLC comes from tt-snapshot's Yahoo daily feed (free, and
+ * what the rest of the TT path already uses). Futures (ESM/NQM) have no options
+ * chain here at all; those still get underlying rows built from the
+ * es_candles / nq_candles 5m tables the app already streams, so cushion/breach
+ * tracking works even though the condor mark can't be priced.
  */
 
-const theta = require('./proxy-thetadata');
+// tt-snapshot pulls in proxy-tastytrade, which the proxy server has already
+// loaded in this process. Required lazily anyway: this module is eval-required
+// from a Next route handler, and a top-level require here would drag the whole
+// TT client into that first request's load path for the sake of one daily-bar
+// call that futures rows never make.
+let _feed = null;
+function feed() {
+  if (!_feed) _feed = require('./tt-snapshot');
+  return _feed;
+}
 
 // ── date helpers ────────────────────────────────────────────────────────────
 
@@ -83,16 +105,23 @@ const INDICES = new Set(['SPX', 'NDX', 'XSP', 'RUT', 'VIX']);
 
 function isFutures(t) { return FUTURES.has(String(t || '').toUpperCase()); }
 
-/** Daily underlying OHLC for the window. Index vs stock routes differ. */
+/**
+ * Daily underlying OHLC for the window, from the Yahoo daily feed tt-snapshot
+ * exposes. The *Theta suffix on these two names is historical — under
+ * DATA_SOURCE=tt they resolve to Yahoo 1d bars, not ThetaData.
+ */
 async function underlyingDaily(ticker, startYmd, endYmd) {
   const t = String(ticker).toUpperCase();
   const start = toDate(startYmd);
   const end = toDate(endYmd);
-  if (INDICES.has(t)) return theta.fetchIndexDailyHistoryTheta(t, start, end);
-  return theta.fetchStockDailyHistoryTheta(t, start, end);
+  const f = feed();
+  const bars = INDICES.has(t)
+    ? await f.fetchIndexDailyHistoryTheta(t, start, end)
+    : await f.fetchStockDailyHistoryTheta(t, start, end);
+  return Array.isArray(bars) ? bars : [];
 }
 
-// ── futures underlying (no Theta feed) ──────────────────────────────────────
+// ── database ────────────────────────────────────────────────────────────────
 
 let _pool = null;
 function pool() {
@@ -139,29 +168,68 @@ async function futuresDaily(ticker, startYmd, endYmd) {
   return Array.from(byDay.values()).sort((a, b) => (a.d < b.d ? -1 : 1));
 }
 
-// ── leg pricing ─────────────────────────────────────────────────────────────
+// ── leg pricing: daily rollup of the recorded TT ticks ──────────────────────
+
+const px4 = (t) => [t.put_long_px, t.put_short_px, t.call_short_px, t.call_long_px];
 
 /**
- * Theta selects contracts by a ±dollar window around THAT DAY's spot, not by an
- * exact strike, so the window has to be wide enough to still contain the strike
- * on the day price has run furthest from it. Distance from the reference price
- * plus ~6% of the underlying covers a normal week with room to spare.
+ * Last full-condor tick of each ET session, keyed by date.
+ *
+ * "Full" means all four legs quoted. A 3-leg tick is a different position, not
+ * an approximation of this one, so it never becomes a day's close over a clean
+ * one — but it IS kept as a fallback so the row still shows which wing went
+ * unquotable instead of the day vanishing entirely.
+ *
+ * The tick rows carry prices for whatever strikes the condor had when the tick
+ * was written. Re-striking a condor mid-week therefore leaves the earlier days
+ * priced off the old wings; that is the honest record of what was actually
+ * quoted, and re-deriving strikes is already a "this is a different position"
+ * action everywhere else in the tracker.
+ *
+ * Never throws — a DB hiccup degrades to underlying-only rows.
  */
-function strikeRangeFor(strike, ref) {
-  const r = Number(ref) > 0 ? Number(ref) : Number(strike);
-  return Math.max(40, Math.ceil(Math.abs(Number(strike) - r) + r * 0.06));
-}
+async function tickRollup(condorId, startYmd, endYmd) {
+  const out = { byDate: new Map(), error: null, ticks: 0 };
+  if (!(Number(condorId) > 0)) { out.error = 'no condor id'; return out; }
+  const p = pool();
+  if (!p) { out.error = 'no DATABASE_URL — cannot read em_condor_ticks'; return out; }
 
-/** EOD close series for one leg, keyed by ET date. Never throws. */
-async function legSeries(ticker, expiry, strike, right, startYmd, endYmd, ref) {
-  const out = { byDate: new Map(), error: null };
-  if (!(Number(strike) > 0)) { out.error = 'no strike'; return out; }
+  // Pad the epoch window generously and filter on the ET date afterwards, so
+  // the boundary is right in both EST and EDT without hardcoding an offset.
+  const from = Date.parse(`${startYmd}T00:00:00Z`) - 36 * 3600 * 1000;
+  const to = Date.parse(`${endYmd}T00:00:00Z`) + 60 * 3600 * 1000;
+
   try {
-    const bars = await theta.fetchOptionDailyHistoryTheta(
-      ticker, toDate(expiry), Number(strike), right,
-      toDate(startYmd), toDate(endYmd), strikeRangeFor(strike, ref)
+    const { rows } = await p.query(
+      `SELECT ts, underlying, put_long_px, put_short_px, call_short_px, call_long_px, legs_priced
+         FROM em_condor_ticks
+        WHERE condor_id = $1 AND ts >= $2 AND ts <= $3
+        ORDER BY ts ASC`,
+      [Number(condorId), from, to]
     );
-    for (const b of bars) out.byDate.set(etDateStr(b.time), Number(b.close));
+    for (const r of rows) {
+      const ts = Number(r.ts);
+      if (!(ts > 0)) continue;
+      const d = etDateStr(ts);
+      if (d < startYmd || d > endYmd) continue;
+      out.ticks++;
+      const num = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+      const t = {
+        ts,
+        underlying: num(r.underlying),
+        put_long_px: num(r.put_long_px),
+        put_short_px: num(r.put_short_px),
+        call_short_px: num(r.call_short_px),
+        call_long_px: num(r.call_long_px),
+      };
+      const full = px4(t).every((v) => v != null);
+      const prev = out.byDate.get(d);
+      // Later beats earlier at the same completeness; complete always beats
+      // partial, so a thin 15:00 wing can't overwrite a clean 14:00 close.
+      if (!prev || (full && !prev.full) || (full === prev.full && ts >= prev.ts)) {
+        out.byDate.set(d, { ...t, full });
+      }
+    }
   } catch (e) {
     out.error = e && e.message ? e.message : String(e);
   }
@@ -173,7 +241,7 @@ async function legSeries(ticker, expiry, strike, right, startYmd, endYmd, ref) {
 /**
  * Price ONE condor across its week.
  *
- * @param {object} c  { ticker, week_start, put_long, put_short, call_short,
+ * @param {object} c  { id, ticker, week_start, put_long, put_short, call_short,
  *                      call_long, net_credit, contracts, multiplier, ref_price }
  * @param {object} [opts] { through }  last session to price (default: today ET)
  * @returns {Promise<{ rows: Array, errors: string[], legs_available: number }>}
@@ -195,9 +263,6 @@ async function priceCondorWeek(c, opts = {}) {
   const qty = Number(c.contracts) > 0 ? Number(c.contracts) : 1;
   const credit = Number(c.net_credit);
   const hasCredit = Number.isFinite(credit) && credit !== 0;
-  const ref = Number(c.ref_price) > 0
-    ? Number(c.ref_price)
-    : (Number(c.put_short) + Number(c.call_short)) / 2;
 
   const errors = [];
 
@@ -213,40 +278,42 @@ async function priceCondorWeek(c, opts = {}) {
     errors.push(`${ticker} underlying: ${e && e.message ? e.message : String(e)}`);
   }
 
-  // legs — futures have no Theta options chain, so skip rather than 4× fail
+  // legs — futures never had an options chain here, so skip rather than 4× fail
   let legs = null;
   if (!isFutures(ticker)) {
-    const [pl, ps, cs, cl] = await Promise.all([
-      legSeries(ticker, expiry, c.put_long, 'P', weekStart, end, ref),
-      legSeries(ticker, expiry, c.put_short, 'P', weekStart, end, ref),
-      legSeries(ticker, expiry, c.call_short, 'C', weekStart, end, ref),
-      legSeries(ticker, expiry, c.call_long, 'C', weekStart, end, ref),
-    ]);
-    legs = { pl, ps, cs, cl };
-    for (const [name, s] of Object.entries(legs)) {
-      if (s.error) errors.push(`${ticker} ${name}: ${s.error}`);
+    legs = await tickRollup(c.id, weekStart, end);
+    if (legs.error) {
+      errors.push(`${ticker} ticks: ${legs.error}`);
+    } else if (!legs.ticks) {
+      // The single most likely reason a board reads "0 priced". Say it plainly:
+      // there is no historical option feed to backfill from on this account.
+      errors.push(
+        `${ticker}: no recorded TT ticks for ${weekStart}→${end} — daily marks roll up `
+        + 'from the hourly snapshots, so only weeks the recorder ran for can be priced'
+      );
     }
   } else {
-    errors.push(`${ticker}: futures — no Theta options feed, underlying only`);
+    errors.push(`${ticker}: futures — no options chain, underlying only`);
   }
 
   // Union of every session we have ANY data for, so a leg that stopped trading
   // doesn't silently truncate the week.
   const dates = new Set(under.map((u) => u.d));
-  if (legs) for (const s of Object.values(legs)) for (const d of s.byDate.keys()) dates.add(d);
+  if (legs) for (const d of legs.byDate.keys()) dates.add(d);
 
   const putShort = Number(c.put_short), callShort = Number(c.call_short);
   const rows = [];
   for (const d of Array.from(dates).sort()) {
     if (d < weekStart || d > end) continue;
     const u = under.find((x) => x.d === d) || null;
+    const t = legs ? legs.byDate.get(d) || null : null;
 
-    const px = legs
+    const px = t
       ? {
-          put_long_px: legs.pl.byDate.get(d) ?? null,
-          put_short_px: legs.ps.byDate.get(d) ?? null,
-          call_short_px: legs.cs.byDate.get(d) ?? null,
-          call_long_px: legs.cl.byDate.get(d) ?? null,
+          put_long_px: t.put_long_px,
+          put_short_px: t.put_short_px,
+          call_short_px: t.call_short_px,
+          call_long_px: t.call_long_px,
         }
       : { put_long_px: null, put_short_px: null, call_short_px: null, call_long_px: null };
 
@@ -256,10 +323,16 @@ async function priceCondorWeek(c, opts = {}) {
     const mark = priced === 4
       ? (px.put_short_px - px.put_long_px) + (px.call_short_px - px.call_long_px)
       : null;
+    // Recomputed from the condor's CURRENT credit, not copied off the tick, so
+    // a credit stamped or corrected after the fact reflows the whole week.
     const openPnl = mark != null && hasCredit ? (credit - mark) * mult * qty : null;
     const maxProfit = hasCredit ? credit * mult * qty : null;
 
-    const close = u && Number.isFinite(u.close) ? Number(u.close) : null;
+    // Session close from the daily feed; the tick's own spot is the fallback for
+    // a day the daily bar hasn't printed yet (today, pre-settle).
+    const close = u && Number.isFinite(u.close)
+      ? Number(u.close)
+      : (t && t.underlying != null ? t.underlying : null);
     const cushion = close != null && Number.isFinite(putShort) && Number.isFinite(callShort)
       ? Math.min(callShort - close, close - putShort)
       : null;
@@ -275,17 +348,17 @@ async function priceCondorWeek(c, opts = {}) {
       pct_max: openPnl != null && maxProfit ? openPnl / maxProfit : null,
       cushion,
       legs_priced: priced,
+      source: 'tt',
     });
   }
 
-  return { rows, errors, legs_available: legs ? 4 : 0 };
+  return { rows, errors, legs_available: legs && legs.ticks ? 4 : 0 };
 }
 
 /**
- * Price many condors. Sequential across condors (each already fires 4 parallel
- * leg calls, and thetaGet's global governor caps concurrency at 3 — firing every
- * condor at once just queues behind the same limit while risking 429s on the
- * calls that keep the live flow stream alive).
+ * Price many condors. Sequential across condors: each is one small local DB read
+ * plus one daily-bar call, and firing 20 of those at once buys nothing but a
+ * rate-limit on the daily feed.
  */
 async function priceCondors(condors, opts = {}) {
   const out = [];
@@ -304,18 +377,12 @@ async function priceCondors(condors, opts = {}) {
 }
 
 // ── live intraday snapshot (hourly writer) ──────────────────────────────────
-
-// ── live pricing source: TastyTrade chains, not Theta ───────────────────────
 //
-// Theta's option endpoints require a paid tier and 403 on this account
-// ("Requesting an option endpoint requiring a value subscription, but you only
-// have a FREE subscription"), which nulled every leg on every tick. The
-// TastyTrade chain behind /api/chains carries bid/ask/mark for the whole
-// expiration in one call — the same payload the Estimated-Move engine prices
-// its straddles from — so the live path reads from there instead.
-//
-// Theta is still required by the EOD path below (per-contract daily history has
-// no TastyTrade equivalent), so the require stays.
+// The TastyTrade chain behind /api/chains carries bid/ask/mark for the whole
+// expiration in one call — the same payload the Estimated-Move engine prices its
+// straddles from — so one round trip prices all four legs of every condor on
+// that expiry. These ticks are also what the EOD rollup above reads, which makes
+// the hourly writer the only thing standing between a week and a blank chart.
 
 function localBase() {
   return `http://localhost:${process.env.PORT || 3001}`;
@@ -437,10 +504,9 @@ async function spotNow(ticker) {
  * Snapshot the CURRENT value of a set of condors — the hourly writer's payload.
  *
  * One chain-quote call per (ticker, expiry) prices all four legs at once, so a
- * 20-name board costs ~20 Theta calls instead of the 80 the EOD historical path
- * needs. Returns one tick per condor; condors whose legs aren't all quotable are
- * returned with mark null rather than dropped, so a thin wing is visible as a
- * gap instead of vanishing from the series.
+ * 20-name board costs ~20 TT calls. Returns one tick per condor; condors whose
+ * legs aren't all quotable are returned with mark null rather than dropped, so a
+ * thin wing is visible as a gap instead of vanishing from the series.
  */
 async function snapshotCondorsNow(condors) {
   const ts = Date.now();
@@ -451,7 +517,7 @@ async function snapshotCondorsNow(condors) {
   const groups = new Map();
   for (const c of condors) {
     const ticker = String(c.ticker).toUpperCase();
-    if (isFutures(ticker)) continue; // no Theta options feed
+    if (isFutures(ticker)) continue; // no options chain for the futures roots
     const weekStart = ymdOf(c.week_start);
     if (!weekStart) {
       // One unparseable row must not take the whole board down — the old code
@@ -519,6 +585,7 @@ async function snapshotCondorsNow(condors) {
         pct_max: openPnl != null && maxProfit ? openPnl / maxProfit : null,
         cushion,
         legs_priced: priced,
+        source: 'tt',
       });
     }
   }

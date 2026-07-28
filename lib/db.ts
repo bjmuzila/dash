@@ -636,13 +636,14 @@ async function ensureAllTables(pool: Pool): Promise<void> {
 
     -- Day-by-day valuation of a condor across its week. One row per
     -- (condor, ET session). Written on demand by /api/em-condors/marks, which
-    -- prices all four legs off ThetaData's per-contract EOD history.
+    -- rolls the hourly em_condor_ticks up into one row per session (the last
+    -- tick that priced all four legs becomes that day's close).
     --   mark     = (put_short − put_long) + (call_short − call_long)  [debit to close]
     --   open_pnl = (net_credit − mark) × multiplier × contracts
     --   cushion  = underlying close → nearer SHORT strike (+ inside, − beyond)
     -- legs_priced < 4 means the mark is NULL: a partial condor is a different
     -- position, not an estimate of this one. Futures rows carry underlying and
-    -- cushion only (no Theta options feed).
+    -- cushion only (no options chain for the futures roots).
     CREATE TABLE IF NOT EXISTS em_condor_marks (
       id SERIAL PRIMARY KEY,
       condor_id INTEGER NOT NULL REFERENCES em_condors(id) ON DELETE CASCADE,
@@ -659,7 +660,7 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       pct_max REAL,
       cushion REAL,
       legs_priced INTEGER DEFAULT 0,
-      source TEXT DEFAULT 'theta',
+      source TEXT DEFAULT 'tt',
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
@@ -669,9 +670,11 @@ async function ensureAllTables(pool: Pool): Promise<void> {
 
     -- Intraday condor ticks, written at the top of each RTH hour by
     -- server-v2/condor-mark-recorder.js. Same value columns as em_condor_marks
-    -- but priced from the LIVE chain NBBO mid instead of an EOD close, keyed by
-    -- epoch-ms so a week holds ~35 points instead of 5. em_condor_marks stays
-    -- the authoritative daily series; these are the shape between the dots.
+    -- but priced from the LIVE TastyTrade chain NBBO mid, keyed by epoch-ms so
+    -- a week holds ~35 points instead of 5. em_condor_marks stays the
+    -- authoritative daily series and is ROLLED UP FROM THESE ROWS (last 4-leg
+    -- tick of each ET session) — TastyTrade sells no per-contract daily option
+    -- history, so a missed hour cannot be backfilled later.
     CREATE TABLE IF NOT EXISTS em_condor_ticks (
       id SERIAL PRIMARY KEY,
       condor_id INTEGER NOT NULL REFERENCES em_condors(id) ON DELETE CASCADE,
@@ -686,7 +689,7 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       pct_max REAL,
       cushion REAL,
       legs_priced INTEGER DEFAULT 0,
-      source TEXT DEFAULT 'theta',
+      source TEXT DEFAULT 'tt',
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_em_condor_ticks_condor_ts ON em_condor_ticks(condor_id, ts);
@@ -2755,7 +2758,7 @@ export async function upsertEmCondorMarks(condor_id: number, marks: EmCondorMark
         condor_id, m.d, m.underlying ?? null, m.under_high ?? null, m.under_low ?? null,
         m.put_long_px ?? null, m.put_short_px ?? null, m.call_short_px ?? null, m.call_long_px ?? null,
         m.mark ?? null, m.open_pnl ?? null, m.pct_max ?? null, m.cushion ?? null,
-        m.legs_priced ?? 0, m.source ?? "theta",
+        m.legs_priced ?? 0, m.source ?? "tt",
       ]
     );
     n++;
@@ -2824,7 +2827,7 @@ export async function insertEmCondorTicks(ticks: EmCondorTick[]): Promise<number
         t.condor_id, Math.round(Number(t.ts)), t.underlying ?? null,
         t.put_long_px ?? null, t.put_short_px ?? null, t.call_short_px ?? null, t.call_long_px ?? null,
         t.mark ?? null, t.open_pnl ?? null, t.pct_max ?? null, t.cushion ?? null,
-        t.legs_priced ?? 0, t.source ?? "theta",
+        t.legs_priced ?? 0, t.source ?? "tt",
       ]
     );
     n += res.rowCount ?? 0;
