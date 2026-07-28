@@ -19,37 +19,15 @@ function rgba(hex: string, a: number): string {
   return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
 }
 
-// ── Full scanner ticker universe (mirrors server-v2/scanner-tickers.js) ──────
-const SCANNER_MAIN = [
-  "SPY", "QQQ", "SPX", "NDX", "VIX",
-  "AAPL", "AMD", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "SPCX", "TSLA",
-];
-const SCANNER_SHARES = [
-  "AAPU", "ASTS", "AVGO", "BYND", "CMG", "COIN", "CWVX", "ETHA", "FBL", "FIG",
-  "GME", "HIMZ", "HOOD", "IBIT", "LLYX", "MSFU", "NFLX", "NOK", "NVDX", "OSCR",
-  "PLTR", "PONY", "QBTS", "QUBT", "RGTI", "RIVN", "SLV", "SMCI", "SOFI", "SOUN",
-  "SOXL", "TQQQ", "TSLL", "UUUU",
-];
-const SCANNER_SPREADS = [
-  "ABNB", "AFRM", "ARM", "BA", "BABA", "CCJ", "CHWY", "COST", "CRCL", "CRM",
-  "CRWD", "CRWV", "DJT", "FDX", "GS", "HIMS", "INTC", "IREN", "IWM", "LAC",
-  "LLY", "MA", "MARA", "MCD", "MRK", "MRNA", "MU", "NIO", "NKE", "NNE",
-  "NXE", "OKLO", "OPEN", "OXY", "PDD", "PFE", "PTON", "RBLX", "RIOT", "RKLB",
-  "ROKU", "SE", "SMH", "SNDK", "SNOW", "TGT", "TSM", "TTD", "U", "UNH",
-  "UPS", "UPST", "V", "XPEV", "XYZ",
-];
-const SCANNER_OPTVOL = [
-  "ORCL", "SKHY", "MSTR", "WBD", "WULF", "NBIS", "MRVL", "PYPL", "BE", "IBM",
-  "HTZ", "BAC", "ONDS", "GOOG", "NOW", "RKT", "QXO", "FHN", "SLS", "BMNR",
-  "BTDR", "FRMI", "WEN", "CORZ", "ADBE", "PBR", "LCID", "CIFR", "VFC", "WMT",
-  "BB", "IONQ",
-  "TLT", "HYG", "FXI", "DRAM", "EWZ", "EEM", "XLF", "GLD", "LQD", "EFA",
-  "USO", "XLB", "XLE", "GDX", "KWEB", "KRE", "XLI", "EWY", "ARKK", "IGV",
-  "KORU", "SOXX", "XBI", "XLU", "DIA", "XLP",
-];
-export const SCANNER_TICKERS: string[] = [
-  ...new Set([...SCANNER_MAIN, ...SCANNER_SHARES, ...SCANNER_SPREADS, ...SCANNER_OPTVOL]),
-].map((t) => t.trim().toUpperCase()).filter(Boolean);
+// ── Scanner ticker universe ──────────────────────────────────────────────────
+// Was a hardcoded copy of server-v2/scanner-tickers.js. It drifted: removed
+// tickers stayed in this dropdown and selecting one returned an empty chart.
+// Now sourced from lib/scannerTickers (live via /proxy/scanner-tickers, static
+// fallback for SSR). Re-exported so existing importers keep working.
+import { SCANNER_TICKERS } from "@/lib/scannerTickers";
+import { useScannerTickers } from "@/lib/useScannerTickers";
+
+export { SCANNER_TICKERS };
 
 // Favorite tickers persisted in the browser (shared key across chain + replay).
 const FAV_TICKERS_KEY = "options-chain-fav-tickers-v1";
@@ -85,7 +63,10 @@ export function TickerListDropdown({
   const menuRef = useRef<HTMLDivElement>(null);
   const [rect, setRect] = useState<{ left: number; top: number } | null>(null);
 
-  const list = (universe && universe.length ? universe : SCANNER_TICKERS)
+  // Hook must run unconditionally; its result is ignored when `universe` is
+  // supplied (e.g. ChainReplay passes only the symbols it actually recorded).
+  const { tickers: liveTickers } = useScannerTickers();
+  const list = (universe && universe.length ? universe : liveTickers)
     .map((t) => t.toUpperCase());
 
   useEffect(() => { setFavs(loadFavTickers()); }, []);

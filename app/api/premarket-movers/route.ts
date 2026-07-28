@@ -6,25 +6,14 @@ export const revalidate = 0;
 
 // Top 5 up / top 5 down across the trading watchlist, ranked by change from the
 // prior regular close using the broker feed (extended-hours aware). No API key.
-// Keep in sync with server-v2/scanner-tickers.js (single-name/ETF universe;
-// indices SPX/VIX/SPY/QQQ intentionally excluded from "movers").
+//
+// The universe was a third hardcoded copy of server-v2/scanner-tickers.js and had
+// drifted 33 tickers out of date. It now comes from lib/scannerTickers, which
+// mirrors the server file. SCANNER_MOVERS strips indices (SPX/NDX/VIX/RUT/XSP)
+// and funds — neither belongs in a "movers" scan.
+import { SCANNER_MOVERS } from "@/lib/scannerTickers";
 
-const WATCHLIST: string[] = [
-  // MAIN mega-caps
-  "AAPL", "AMD", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "SPCX", "TSLA",
-  // SHARES
-  "AAPU", "ASTS", "AVGO", "BYND", "CMG", "COIN", "CWVX", "ETHA", "FBL", "FIG",
-  "GME", "HIMZ", "HOOD", "IBIT", "LLYX", "MSFU", "NFLX", "NOK", "NVDX", "OSCR",
-  "PLTR", "PONY", "QBTS", "QUBT", "RGTI", "RIVN", "SLV", "SMCI", "SOFI", "SOUN",
-  "SOXL", "TQQQ", "TSLL", "UUUU",
-  // SPREADS
-  "ABNB", "AFRM", "ARM", "BA", "BABA", "CCJ", "CHWY", "COST", "CRCL", "CRM",
-  "CRWD", "CRWV", "DJT", "FDX", "GS", "HIMS", "INTC", "IREN", "IWM", "LAC",
-  "LLY", "MA", "MARA", "MCD", "MRK", "MRNA", "MU", "NIO", "NKE", "NNE",
-  "NXE", "OKLO", "OPEN", "OXY", "PDD", "PFE", "PTON", "RBLX", "RIOT", "RKLB",
-  "ROKU", "SE", "SMH", "SNDK", "SNOW", "TGT", "TSM", "TTD", "U", "UNH",
-  "UPS", "UPST", "V", "XPEV", "XYZ",
-];
+const WATCHLIST: string[] = SCANNER_MOVERS;
 
 export interface Mover {
   symbol: string;

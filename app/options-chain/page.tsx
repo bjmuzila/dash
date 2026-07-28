@@ -9,6 +9,7 @@ import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 import { Dock, SegGroup } from "@/components/shared/DockToolbar";
 import { ChainReplay } from "@/components/shared/ChainReplay";
+import { useScannerTickers } from "@/lib/useScannerTickers";
 
 // rgba helper — matches the convention used across themed pages.
 function rgba(hex: string, a: number): string {
@@ -140,38 +141,10 @@ function CustomDropdown<T extends string | number>({
   );
 }
 
-// ── Full scanner ticker universe (mirrors server-v2/scanner-tickers.js) ──────
-// Kept in sync manually — if that server list drifts, update these arrays.
-const SCANNER_MAIN = [
-  "SPY", "QQQ", "SPX", "NDX", "VIX",
-  "AAPL", "AMD", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "SPCX", "TSLA",
-];
-const SCANNER_SHARES = [
-  "AAPU", "ASTS", "AVGO", "BYND", "CMG", "COIN", "CWVX", "ETHA", "FBL", "FIG",
-  "GME", "HIMZ", "HOOD", "IBIT", "LLYX", "MSFU", "NFLX", "NOK", "NVDX", "OSCR",
-  "PLTR", "PONY", "QBTS", "QUBT", "RGTI", "RIVN", "SLV", "SMCI", "SOFI", "SOUN",
-  "SOXL", "TQQQ", "TSLL", "UUUU",
-];
-const SCANNER_SPREADS = [
-  "ABNB", "AFRM", "ARM", "BA", "BABA", "CCJ", "CHWY", "COST", "CRCL", "CRM",
-  "CRWD", "CRWV", "DJT", "FDX", "GS", "HIMS", "INTC", "IREN", "IWM", "LAC",
-  "LLY", "MA", "MARA", "MCD", "MRK", "MRNA", "MU", "NIO", "NKE", "NNE",
-  "NXE", "OKLO", "OPEN", "OXY", "PDD", "PFE", "PTON", "RBLX", "RIOT", "RKLB",
-  "ROKU", "SE", "SMH", "SNDK", "SNOW", "TGT", "TSM", "TTD", "U", "UNH",
-  "UPS", "UPST", "V", "XPEV", "XYZ",
-];
-const SCANNER_OPTVOL = [
-  "ORCL", "SKHY", "MSTR", "WBD", "WULF", "NBIS", "MRVL", "PYPL", "BE", "IBM",
-  "HTZ", "BAC", "ONDS", "GOOG", "NOW", "RKT", "QXO", "FHN", "SLS", "BMNR",
-  "BTDR", "FRMI", "WEN", "CORZ", "ADBE", "PBR", "LCID", "CIFR", "VFC", "WMT",
-  "BB", "IONQ",
-  "TLT", "HYG", "FXI", "DRAM", "EWZ", "EEM", "XLF", "GLD", "LQD", "EFA",
-  "USO", "XLB", "XLE", "GDX", "KWEB", "KRE", "XLI", "EWY", "ARKK", "IGV",
-  "KORU", "SOXX", "XBI", "XLU", "DIA", "XLP",
-];
-const SCANNER_TICKERS: string[] = [
-  ...new Set([...SCANNER_MAIN, ...SCANNER_SHARES, ...SCANNER_SPREADS, ...SCANNER_OPTVOL]),
-].map((t) => t.trim().toUpperCase()).filter(Boolean);
+// ── Scanner ticker universe ──────────────────────────────────────────────────
+// Was a second hardcoded copy of server-v2/scanner-tickers.js, kept in sync by
+// hand (and drifting). Now imported from lib/scannerTickers — live via
+// /proxy/scanner-tickers with a static fallback.
 
 // Favorite tickers (starred in the ticker dropdown) persisted in the browser.
 const FAV_TICKERS_KEY = "options-chain-fav-tickers-v1";
@@ -233,9 +206,10 @@ function TickerListDropdown({ activeTicker, onSelect }: { activeTicker: string; 
       return next;
     });
 
+  const { tickers: scannerTickers } = useScannerTickers();
   const favSet = new Set(favs);
   const q = query.trim().toUpperCase();
-  const matches = SCANNER_TICKERS.filter((t) => !q || t.includes(q));
+  const matches = scannerTickers.filter((t) => !q || t.includes(q));
   const favList = matches.filter((t) => favSet.has(t)).sort();
   const rest = matches.filter((t) => !favSet.has(t)).sort();
   const rows: Array<{ t: string; fav: boolean; divider?: boolean }> = [

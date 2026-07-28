@@ -1896,16 +1896,29 @@ async function main() {
               WITH d AS (
                 SELECT MAX(date) AS date FROM strike_growth WHERE date <= $1
               ),
-              latest AS (
-                SELECT sg.symbol, sg.expiry, MAX(sg.ts) AS ts
+              -- Each symbol's most recent successful sweep. Every expiry in a
+              -- sweep shares one ts (see the recorder's sweep loop), so this
+              -- pins "as of now" per symbol.
+              sym_latest AS (
+                SELECT sg.symbol, MAX(sg.ts) AS ts
                 FROM strike_growth sg, d
                 WHERE sg.date = d.date
-                GROUP BY sg.symbol, sg.expiry
+                GROUP BY sg.symbol
+              ),
+              -- Only the expiries present in THAT sweep. Ranking over every
+              -- expiry seen today instead lets one that has since rolled off (a
+              -- 0DTE that expired, a ticker whose front three moved) keep slot 1
+              -- with stale numbers AND pushes the real third expiry past the cut.
+              current_exp AS (
+                SELECT DISTINCT sg.symbol, sg.expiry, sg.ts
+                FROM strike_growth sg
+                JOIN sym_latest sl ON sl.symbol = sg.symbol AND sl.ts = sg.ts
+                WHERE sg.date = (SELECT date FROM d)
               ),
               ranked AS (
                 SELECT symbol, expiry, ts,
                        ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY expiry ASC) AS exp_idx
-                FROM latest
+                FROM current_exp
               )
               SELECT sg.symbol,
                      sg.expiry,

@@ -32,7 +32,8 @@ const N_EXP = 3;
 // bars can never drift apart.
 const POS = GEX_POS;
 const NEG = GEX_NEG;
-const DIM = "rgba(255,255,255,0.35)";
+// All body text on this tab is full white (no muted greys).
+const DIM = HOME_THEME.text;
 
 type ApiRow = {
   symbol: string;
@@ -82,7 +83,7 @@ const fmtExpiry = (e: string): string => {
 
 const th: CSSProperties = {
   padding: "6px 10px", textAlign: "right", fontWeight: 700, fontSize: 12,
-  letterSpacing: "0.05em", color: "rgba(255,255,255,0.55)", whiteSpace: "nowrap",
+  letterSpacing: "0.05em", color: HOME_THEME.text, whiteSpace: "nowrap",
   borderBottom: `1px solid rgba(255,255,255,0.14)`, cursor: "pointer", userSelect: "none",
 };
 const td: CSSProperties = {
@@ -93,7 +94,7 @@ const seg = (active: boolean): CSSProperties => ({
   padding: "6px 12px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontWeight: 700,
   border: `1px solid ${active ? HOME_THEME.cyan : "rgba(255,255,255,0.15)"}`,
   background: active ? "rgba(33,158,188,0.15)" : "transparent",
-  color: active ? HOME_THEME.text : "rgba(255,255,255,0.7)",
+  color: HOME_THEME.text,
 });
 
 // One expiry cell: split bar + the two percentages + the two dollar figures.
@@ -106,6 +107,11 @@ function SplitCell({ leg }: { leg: Leg | null }) {
   return (
     <td style={{ ...td, borderLeft: "1px solid rgba(255,255,255,0.08)" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", minWidth: 118 }}>
+        {/* Each ticker's OWN expiry — tickers without a 0DTE have a different
+            front three, so the date belongs per-cell, not in a shared header. */}
+        <div style={{ fontSize: 11, fontWeight: 600, color: HOME_THEME.text, opacity: 0.75, alignSelf: "flex-start" }}>
+          {fmtExpiry(leg.expiry)}
+        </div>
         <div style={{ width: "100%" }}>
           <SegSplitMeter posPct={p} />
         </div>
@@ -113,7 +119,7 @@ function SplitCell({ leg }: { leg: Leg | null }) {
           <span style={{ color: POS }}>{p.toFixed(0)}%</span>
           <span style={{ color: NEG }}>{n.toFixed(0)}%</span>
         </div>
-        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.38)" }}>
+        <div style={{ fontSize: 11, color: HOME_THEME.text }}>
           +{fmtB(leg.pos)} / −{fmtB(leg.neg)}
         </div>
       </div>
@@ -127,13 +133,13 @@ function Tile({ label, value, note, color }: { label: string; value: string; not
       border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "12px 14px",
       background: "rgba(13,17,25,0.72)",
     }}>
-      <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.45)", fontWeight: 700 }}>
+      <div style={{ fontSize: 11, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.text, fontWeight: 700 }}>
         {label}
       </div>
       <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6, fontVariantNumeric: "tabular-nums", color: color || HOME_THEME.text }}>
         {value}
       </div>
-      <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", marginTop: 2 }}>{note}</div>
+      <div style={{ fontSize: 12, color: HOME_THEME.text, marginTop: 2 }}>{note}</div>
     </div>
   );
 }
@@ -204,16 +210,6 @@ export default function GexPctTab() {
     return [...by.values()];
   }, [rows]);
 
-  // Column headers carry the actual expiry dates — take them from the most
-  // complete ticker so a name missing its E3 doesn't blank the header.
-  const expiryLabels = useMemo(() => {
-    const out: string[] = Array(N_EXP).fill("");
-    for (const t of tickers) {
-      for (let i = 0; i < N_EXP; i++) if (!out[i] && t.legs[i]) out[i] = t.legs[i]!.expiry;
-    }
-    return out;
-  }, [tickers]);
-
   const filtered = useMemo(() => {
     const needle = q.trim().toUpperCase();
     let f = tickers;
@@ -261,7 +257,7 @@ export default function GexPctTab() {
             <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.cyan }}>
               Positioning Split
             </div>
-            <div style={{ fontSize: 12, color: "rgba(255,255,255,0.45)" }}>
+            <div style={{ fontSize: 12, color: HOME_THEME.text }}>
               front expiry · {stats?.n ?? 0} tickers{date ? ` · ${date}` : ""}
               {stale ? <span style={{ color: HOME_THEME.orange }}> · last recorded session</span> : null}
             </div>
@@ -302,7 +298,7 @@ export default function GexPctTab() {
               />
             </div>
           ) : (
-            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 13 }}>
+            <div style={{ color: HOME_THEME.text, fontSize: 13 }}>
               {loading ? "Loading…" : err ? `Error: ${err}` : "No recorded snapshots yet."}
             </div>
           )}
@@ -319,7 +315,7 @@ export default function GexPctTab() {
             <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HOME_THEME.cyan }}>
               GEX% by ticker &amp; expiration
             </div>
-            <div style={{ fontSize: 12, color: "rgba(255,255,255,0.45)" }}>
+            <div style={{ fontSize: 12, color: HOME_THEME.text }}>
               share of net gamma on the call side (+) vs the put side (−)
             </div>
           </div>
@@ -340,47 +336,25 @@ export default function GexPctTab() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
             <thead>
               <tr>
-                <th rowSpan={2} style={{ ...th, textAlign: "left", verticalAlign: "bottom" }} onClick={() => toggle("symbol")}>
+                <th style={{ ...th, textAlign: "left" }} onClick={() => toggle("symbol")}>
                   Ticker{arrow("symbol")}
                 </th>
-                <th rowSpan={2} style={{ ...th, verticalAlign: "bottom", cursor: "default" }}>Spot</th>
-                <th rowSpan={2} style={{ ...th, verticalAlign: "bottom" }} onClick={() => toggle("size")}>
+                <th style={{ ...th, cursor: "default" }}>Spot</th>
+                <th style={{ ...th }} onClick={() => toggle("size")}>
                   Size{arrow("size")}
-                  <br />
-                  <span style={{ fontWeight: 600, color: "rgba(255,255,255,0.3)" }}>Σ|net|</span>
                 </th>
-                {expiryLabels.map((_, i) => (
+                {Array.from({ length: N_EXP }, (_, i) => (
                   <th
                     key={`h${i}`}
-                    style={{
-                      ...th, textAlign: "center", color: HOME_THEME.cyan, fontSize: 11,
-                      letterSpacing: "0.14em", borderBottom: "none", paddingBottom: 2,
-                      borderLeft: "1px solid rgba(255,255,255,0.08)",
-                    }}
+                    style={{ ...th, textAlign: "center", color: HOME_THEME.cyan, borderLeft: "1px solid rgba(255,255,255,0.08)" }}
                     onClick={() => toggle(i as SortCol)}
                   >
                     E{i + 1}{arrow(i as SortCol)}
                   </th>
                 ))}
-                <th rowSpan={2} style={{ ...th, verticalAlign: "bottom" }} onClick={() => toggle("skew")}>
+                <th style={{ ...th }} onClick={() => toggle("skew")}>
                   Skew{arrow("skew")}
-                  <br />
-                  <span style={{ fontWeight: 600, color: "rgba(255,255,255,0.3)" }}>E1→E3</span>
                 </th>
-              </tr>
-              <tr>
-                {expiryLabels.map((e, i) => (
-                  <th
-                    key={`d${i}`}
-                    style={{
-                      ...th, textAlign: "center", fontSize: 11, fontWeight: 600,
-                      color: "rgba(255,255,255,0.35)", letterSpacing: "0.02em", paddingTop: 0,
-                      borderLeft: "1px solid rgba(255,255,255,0.08)", cursor: "default",
-                    }}
-                  >
-                    {e ? fmtExpiry(e) : "—"}
-                  </th>
-                ))}
               </tr>
             </thead>
             <tbody>
@@ -390,7 +364,7 @@ export default function GexPctTab() {
                     {t.symbol}
                   </td>
                   <td style={td}>{fmtSpot(t.spot)}</td>
-                  <td style={{ ...td, color: "rgba(255,255,255,0.55)" }}>{fmtB(t.total)}</td>
+                  <td style={{ ...td, color: HOME_THEME.text }}>{fmtB(t.total)}</td>
                   {t.legs.map((leg, i) => <SplitCell key={i} leg={leg} />)}
                   <td style={{
                     ...td, fontWeight: 800, fontSize: 13,
@@ -402,7 +376,7 @@ export default function GexPctTab() {
               ))}
               {!filtered.length && (
                 <tr>
-                  <td colSpan={N_EXP + 4} style={{ ...td, textAlign: "center", color: "rgba(255,255,255,0.45)", padding: 20 }}>
+                  <td colSpan={N_EXP + 4} style={{ ...td, textAlign: "center", color: HOME_THEME.text, padding: 20 }}>
                     {loading ? "Loading…" : err ? `Error: ${err}` : "No tickers match."}
                   </td>
                 </tr>
@@ -411,7 +385,7 @@ export default function GexPctTab() {
           </table>
         </div>
 
-        <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", padding: "10px 16px", borderTop: "1px solid rgba(255,255,255,0.14)", lineHeight: 1.6 }}>
+        <div style={{ fontSize: 12, color: HOME_THEME.text, padding: "10px 16px", borderTop: "1px solid rgba(255,255,255,0.14)", lineHeight: 1.6 }}>
           <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
               <i style={{ width: 10, height: 10, borderRadius: 3, background: POS, display: "inline-block" }} />
