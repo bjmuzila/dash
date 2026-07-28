@@ -1042,21 +1042,21 @@ function oiSideValue(cell: GreekCell, strike: number, atm: number): number {
   return call ? cell.callOI : -cell.putOI;
 }
 
-// One line of an OI cell: side letter, settled open interest, and the change
-// vs the previous snapshot date. `chg === null` means this strike has no stored
+// One line of an OI cell: settled open interest, then its change vs the
+// previous snapshot date. `chg === null` means this strike has no stored
 // baseline (see the OI tab's fallback in ChainMatrix) — rendered as a dash so
 // "we don't know" never reads as "unchanged".
 //
-// The side letter is tinted with the same blue/red the heat scale uses for
-// call-heavy / put-heavy, so a glance down the column reads as call rows vs put
-// rows without needing to parse the numbers.
+// No C/P label: the calls-above/puts-below rule already makes the side obvious
+// from where the row sits relative to ATM. The OI figure itself carries the
+// side tint instead, which is what keeps the ATM row — the one row that shows
+// both sides — readable without a letter.
 function OiSideLine({ side, oi, chg }: { side: "C" | "P"; oi: number; chg: number | null }) {
-  const sideColor = side === "C" ? "#29b6f6" : "#ff4757";
+  const sideColor = side === "C" ? "#7fd4f7" : "#ff8f98";
   const chgColor = chg == null ? "#3a4a5e" : chg > 0 ? "#22c55e" : chg < 0 ? "#ef4444" : "#4a6a88";
   return (
-    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "flex-end", gap: 4, whiteSpace: "nowrap" }}>
-      <span style={{ color: sideColor, fontWeight: 800, marginRight: "auto", fontSize: 8 }}>{side}</span>
-      <span style={{ color: oi ? SOFT_WHITE : "#3a4a5e" }}>{fmtCount(oi)}</span>
+    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "flex-end", gap: 6, whiteSpace: "nowrap" }}>
+      <span style={{ color: oi ? sideColor : "#3a4a5e" }}>{fmtCount(oi)}</span>
       <span style={{ color: chgColor, fontWeight: 700, minWidth: 42, textAlign: "right" }}>
         {chg == null ? "—" : fmtChg(chg)}
       </span>

@@ -28,12 +28,29 @@ import type { CSSProperties } from "react";
 import { HOME_THEME, homeButtonStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 
-type StrikeRow = { strike: number; side: "call" | "put"; net: number; delta: number | null };
+type StrikeRow = {
+  strike: number;
+  /** Sign of this strike's NET (calls minus puts) — NOT "this is a put". */
+  side: "call" | "put";
+  net: number;
+  delta: number | null;
+  /** Minutes since this strike last made the top-N, relative to the newest
+   *  reading in its expiry. 0 = current, >0 = rotated out that long ago. */
+  ageMin?: number | null;
+};
 type Dte = {
   dte: number; expiry: string; netTotal: number;
   strikes: StrikeRow[];
   callWall: { strike: number; net: number } | null;
   putWall: { strike: number; net: number } | null;
+  /** True CALL-side / PUT-side GEX totals over the full ±20-strike subscribed
+   *  window (strike_growth_expiry). callGex >= 0, putGex <= 0. null on expiries
+   *  recorded before that table existed — see gexSplitOf's fallback. */
+  callGex?: number | null;
+  putGex?: number | null;
+  /** How many strikes went into callGex/putGex. */
+  coverage?: number | null;
+  latestTs?: string | null;
 };
 type Ticker = {
   symbol: string; spot: number; dtes: Dte[];
@@ -50,11 +67,19 @@ const SPOT = HOME_THEME.orange;
 const DIM = "rgba(255,255,255,0.82)";
 const MONO = "var(--font-mono, monospace)";
 
-// Adaptive $ formatting — SPX nets run to billions, single names to millions.
+// Adaptive $ formatting — SPX nets run to billions, single names to thousands.
+// Everything under $1M used to collapse to "$0M", which made a $12K strike and a
+// $480K strike look identical (and look like exactly zero, which they aren't —
+// a genuinely absent strike renders "—"). Step down through M/K so small single
+// -name strikes stay readable.
 const fmtGex = (v: number): string => {
   const a = Math.abs(v), s = v < 0 ? "-" : "";
   if (a >= 1e9) return `${s}$${(a / 1e9).toFixed(1)}B`;
-  return `${s}$${(a / 1e6).toFixed(0)}M`;
+  if (a >= 1e7) return `${s}$${(a / 1e6).toFixed(0)}M`;
+  if (a >= 1e6) return `${s}$${(a / 1e6).toFixed(1)}M`;
+  if (a >= 1e3) return `${s}$${(a / 1e3).toFixed(0)}K`;
+  if (a >= 1) return `${s}$${Math.round(a)}`;
+  return "$0";
 };
 const fmtSigned = (v: number): string => (v >= 0 ? "+" : "") + fmtGex(v);
 const fmtStrike = (v: number): string =>
@@ -74,21 +99,43 @@ const dteColor = (d: number) => (d === 0 ? SPOT : d === 1 ? HOME_THEME.cyan : HO
 const frontOf = (t: Ticker): Dte | null =>
   t.dtes.length ? t.dtes.reduce((m, d) => (d.dte < m.dte ? d : m)) : null;
 
+type Split = { pos: number; neg: number; basis: "sides" | "net"; coverage: number | null };
+
 /**
- * +GEX / −GEX share for the front expiry — the SAME calc as the home page's
- * "+GEX %" tile (posGexPct in app/home/HomeClient.tsx): the share of TOTAL
- * |net GEX| that is positive. 100% = pure long-gamma chain, 0% = pure short.
- * The two numbers add to 100 by construction.
+ * +GEX / −GEX share for the front expiry.
+ *
+ * PREFERRED BASIS ("sides"): true CALL-side vs PUT-side gamma, summed over the
+ * full ±20-strike subscribed window and never netted call-against-put within a
+ * strike. That's the question the card is actually asking — how much of this
+ * expiry's gamma is calls vs puts.
+ *
+ * FALLBACK BASIS ("net"), used only for expiries recorded before the backend
+ * started writing side totals: the share of total |net GEX| sitting on positive
+ * strikes, over the stored top-N strikes. It answers a DIFFERENT question and
+ * skews hard — a couple of ATM strikes where puts happen to outweigh calls can
+ * read as "90% negative" even on a balanced chain — so the card marks it with a
+ * ˜ and says so on hover.
  */
-function gexSplitOf(t: Ticker): { pos: number; neg: number } | null {
+function gexSplitOf(t: Ticker): Split | null {
   const f = frontOf(t);
-  if (!f || !f.strikes.length) return null;
+  if (!f) return null;
+  if (f.callGex != null && f.putGex != null) {
+    const c = Math.abs(f.callGex), p = Math.abs(f.putGex);
+    if (c + p > 0) {
+      return { pos: (c / (c + p)) * 100, neg: (p / (c + p)) * 100, basis: "sides", coverage: f.coverage ?? null };
+    }
+  }
+  if (!f.strikes.length) return null;
   let pos = 0, abs = 0;
   for (const s of f.strikes) { if (s.net > 0) pos += s.net; abs += Math.abs(s.net); }
   if (!(abs > 0)) return null;
-  const p = (pos / abs) * 100;
-  return { pos: p, neg: 100 - p };
+  const v = (pos / abs) * 100;
+  return { pos: v, neg: 100 - v, basis: "net", coverage: null };
 }
+
+/** A strike this many minutes behind its expiry's newest reading is drawn dim —
+ *  it rotated out of the top-N walls and its net/Δ are frozen at that time. */
+const STALE_MIN = 30;
 
 /**
  * The front expiry's BIGGEST wall — largest |net GEX| on either side — and how
@@ -186,8 +233,16 @@ function LadderColumn({ dte, info, rows, col, spot }: {
           // so raw Δ would show ▼ even though the wall grew; that mismatch confused.
           const dTone = build ? GREEN : fade ? RED : HOME_THEME.text;
           const arrow = build ? "▲ " : fade ? "▼ " : "";
+          // Rotated out of the walls a while ago → its numbers are frozen at that
+          // sweep. Dim the whole row instead of dropping it, so the day's strike
+          // list stays intact but you can see at a glance what's actually live.
+          const stale = s?.ageMin != null && s.ageMin >= STALE_MIN;
           return (
-            <div key={r.strike} style={cell}>
+            <div
+              key={r.strike}
+              style={{ ...cell, opacity: stale ? 0.42 : 1 }}
+              title={stale ? `Last recorded ${s?.ageMin}m before this expiry's latest sweep — rotated out of the top walls, values frozen at that time.` : undefined}
+            >
               <span style={{ fontSize: 13, fontWeight: 700, color: HOME_THEME.text, fontFamily: MONO }}>{fmtStrike(r.strike)}</span>
               <div style={{ position: "relative", height: 12, background: "rgba(255,255,255,0.04)", borderRadius: 2, overflow: "hidden" }}>
                 <div style={{ position: "absolute", left: "50%", top: 0, bottom: 0, width: 1, background: HOME_THEME.border }} />
@@ -454,21 +509,17 @@ export default function ForwardBuildStructure() {
                   {split && (
                     <span
                       style={{ marginLeft: "auto", fontSize: 15, fontWeight: 800, fontFamily: MONO, whiteSpace: "nowrap" }}
-                      title="Front expiry — share of total |net GEX| that is positive vs negative"
+                      title={split.basis === "sides"
+                        ? `Front expiry — call-side vs put-side GEX across ${split.coverage ?? "all"} strikes (±20 around spot). Calls and puts summed separately, not netted per strike.`
+                        : "Approximate — no side totals recorded for this expiry yet, so this is the share of |net GEX| on positive strikes over the stored top-N walls. It over-reads the dominant side."}
                     >
                       <span style={{ color: GREEN }}>+{split.pos.toFixed(0)}%</span>
                       <span style={{ color: DIM, opacity: 0.55 }}> / </span>
                       <span style={{ color: RED }}>−{split.neg.toFixed(0)}%</span>
+                      {split.basis === "net" && <span style={{ color: DIM, opacity: 0.6, fontSize: 12 }}> ˜</span>}
                     </span>
                   )}
                 </div>
-                {/* The same split as a bar — long-gamma share left, short right. */}
-                {split && (
-                  <div style={{ display: "flex", height: 5, borderRadius: 3, overflow: "hidden", background: "rgba(255,255,255,0.06)", marginBottom: 9 }}>
-                    <div style={{ width: `${split.pos}%`, background: GREEN }} />
-                    <div style={{ width: `${split.neg}%`, background: RED }} />
-                  </div>
-                )}
                 {/* Front expiry's biggest wall + how far OTM that strike sits. */}
                 <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 9, fontSize: 12.5 }}>
                   <span style={{ color: DIM, letterSpacing: "0.03em", flexShrink: 0 }}>{`${wall ? DTE_LABEL(wall.dte) : "front"} top wall`}</span>
@@ -540,16 +591,21 @@ export default function ForwardBuildStructure() {
 
         <div style={{ fontSize: 14, color: HOME_THEME.text, marginTop: 12, lineHeight: 1.6 }}>
           Each card is a ticker — spot, % change on the day, and for the <b>front (closest) expiry</b> the
-          <span style={{ color: GREEN }}> +GEX</span> / <span style={{ color: RED }}>−GEX</span> share (the positive
-          slice of total |net GEX|, the same measure as the home page&rsquo;s +GEX %) plus that expiry&rsquo;s biggest
-          wall and how far the strike sits from spot (<b>+</b> above, <b>−</b> below). Under it: net GEX for the front
+          <span style={{ color: GREEN }}> +GEX</span> / <span style={{ color: RED }}>−GEX</span> share: call-side vs
+          put-side gamma summed <b>separately</b> across the ±20 strikes around spot, not netted against each other
+          per strike. (A <span style={{ color: DIM }}>˜</span> means that expiry predates the side totals and is
+          falling back to the older net-based estimate, which over-reads the dominant side.) Next to it: that
+          expiry&rsquo;s biggest wall and how far the strike sits from spot (<b>+</b> above, <b>−</b> below).
+          Under it: net GEX for the front
           <b> 0/1/2-DTE</b> expiries and where the call/put walls are migrating across the three days. Use <b>Sort</b> to
           reorder the grid by name, day move, or that OTM distance. Click a card to open its ladder: bars are net GEX
           per strike (<span style={{ color: GREEN }}>green</span> = support, <span style={{ color: RED }}>red</span> =
           resistance), the right numbers are the strike&rsquo;s net-$ and its <b>day-over-day Δ</b> vs the same
           expiry&rsquo;s prior session (<span style={{ color: GREEN }}>▲</span> building,
           <span style={{ color: RED }}> ▼</span> leaving). A 2DTE strike that just entered the window shows
-          &ldquo;—&rdquo; until it has a prior session to compare.
+          &ldquo;—&rdquo; until it has a prior session to compare. <b>Dimmed ladder rows</b> are strikes that dropped
+          out of the top walls more than {STALE_MIN} minutes ago — still shown for context, but their numbers are
+          frozen at that sweep.
         </div>
       </Card>
     </>

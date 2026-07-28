@@ -200,6 +200,34 @@ async function ensureSchema() {
   await p.query(`CREATE INDEX IF NOT EXISTS idx_strike_growth_fb
                  ON strike_growth (symbol, expiry, strike, date, ts DESC);`);
 
+  // Per-expiry CALL-SIDE / PUT-SIDE GEX totals, one row per (date,symbol,expiry,
+  // sweep). strike_growth only keeps the TOP_N_EACH_SIDE strikes per side and
+  // only their NET (calls minus puts at that strike), so you cannot recover a
+  // call-vs-put share from it: summing per-strike nets answers "how much of the
+  // net sits on positive strikes", not "how much gamma is calls vs puts".
+  // These totals are summed over the FULL subscribed window
+  // (STRIKE_GROWTH_FEED_WINDOW = ±20 strikes around spot), same OI+Vol basis as
+  // gex_now+gex_open, so call_gex + put_gex is the expiry's true net over that
+  // window. call_gex is >= 0, put_gex is <= 0 (the put term is already negated
+  // by computeGexRows' dealer-sign convention).
+  await p.query(`
+    CREATE TABLE IF NOT EXISTS strike_growth_expiry (
+      date      DATE NOT NULL,
+      symbol    TEXT NOT NULL,
+      expiry    TEXT NOT NULL,
+      ts        TIMESTAMPTZ NOT NULL DEFAULT now(),
+      spot      DOUBLE PRECISION,
+      call_gex  DOUBLE PRECISION NOT NULL,
+      put_gex   DOUBLE PRECISION NOT NULL,
+      strikes_n INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (date, symbol, expiry, ts)
+    );
+  `);
+  // Matches the DISTINCT ON (symbol, expiry, date) ORDER BY … ts DESC the
+  // Forward Build endpoint uses to pull each expiry's latest totals.
+  await p.query(`CREATE INDEX IF NOT EXISTS idx_strike_growth_expiry_latest
+                 ON strike_growth_expiry (symbol, expiry, date, ts DESC);`);
+
   // Day-over-day: TWO rows per (date,symbol) — bucket '0DTE' (expiry = its own
   // session date) and 'SWING' (all later expiries, summed per strike) — each the
   // biggest day-over-day net-GEX (OI+Vol) strike, kept at its intraday PEAK.
@@ -320,6 +348,36 @@ function pickTopEachSide(legRows, spot) {
 }
 
 /**
+ * CALL-SIDE and PUT-SIDE GEX totals for one expiry, summed over EVERY strike in
+ * the feed's subscribed window — not the top-N the ladder stores, and never
+ * netted call-against-put within a strike. This is what the Forward Build card's
+ * "+62% / −38%" share is built from.
+ *
+ * Basis matches the per-strike `net` the rest of this file uses (OI + Vol):
+ *   call side = callGEX(OI)  + callGamma × callVolume × S²   → >= 0
+ *   put side  = putGEX(OI)   − putGamma  × putVolume  × S²   → <= 0
+ * computeGexRows already negates the put OI term (dealer-sign convention), so
+ * callGEX + putGEX = netGEX and the two sums add back to the expiry's net.
+ * The per-side VOLUME terms aren't returned by computeGexRows (it only exposes
+ * the combined netVolGEX), so they're rebuilt here from the gamma/volume fields
+ * it does return.
+ */
+function sideTotals(legRows, spot) {
+  const flatRows = legRows
+    .filter((r) => r.gamma > 0 || r.oi > 0 || r.volume > 0)
+    .map((r) => ({ strike: r.strike, side: r.type === 'C' ? 'call' : 'put', oi: r.oi, volume: r.volume, gamma: r.gamma }));
+  if (!flatRows.length) return null;
+  const s2 = spot * spot;
+  let call = 0, put = 0, n = 0;
+  for (const r of computeGexRows(flatRows, spot)) {
+    call += Number(r.callGEX || 0) + Number(r.callGamma || 0) * Number(r.callVolume || 0) * s2;
+    put += Number(r.putGEX || 0) - Number(r.putGamma || 0) * Number(r.putVolume || 0) * s2;
+    n++;
+  }
+  return { callGex: call, putGex: put, strikes: n };
+}
+
+/**
  * Snapshot the front EXPIRIES_PER_TICKER expiries for one ticker straight off
  * the live dxLink feed (TastytradeProxy.getStrikeGrowthSnapshot) — no network
  * call, just a read of the in-memory feed maps the shared connection already
@@ -336,7 +394,9 @@ async function snapshotTicker(chainTicker) {
   const out = [];
   for (const { expiry, rows: legRows } of targetExps) {
     const picked = pickTopEachSide(legRows, snap.spot);
-    if (picked.length) out.push({ expiry, rows: picked });
+    // Side totals come from the FULL window (legRows), deliberately not from
+    // `picked` — the whole point is a share that isn't truncated to the walls.
+    if (picked.length) out.push({ expiry, rows: picked, totals: sideTotals(legRows, snap.spot) });
   }
   if (!out.length) throw new Error(`no usable expiries ${chainTicker}`);
   return { spot: snap.spot, expiries: out };
@@ -370,6 +430,20 @@ async function writeSnapshot(p, date, symbol, expiry, spot, ts, rows) {
       [date, symbol, strike, expiry, gex, open, deltaAbs, deltaPct, spot, ts]
     );
   }
+}
+
+/** One row per (date, symbol, expiry, sweep): the full-window call/put split. */
+async function writeExpiryTotals(p, date, symbol, expiry, spot, ts, totals) {
+  if (!totals) return;
+  await p.query(
+    `INSERT INTO strike_growth_expiry
+       (date, symbol, expiry, ts, spot, call_gex, put_gex, strikes_n)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     ON CONFLICT (date, symbol, expiry, ts) DO UPDATE SET
+       spot = EXCLUDED.spot, call_gex = EXCLUDED.call_gex,
+       put_gex = EXCLUDED.put_gex, strikes_n = EXCLUDED.strikes_n`,
+    [date, symbol, expiry, ts, spot, totals.callGex, totals.putGex, totals.strikes]
+  );
 }
 
 // Biggest day-over-day net-GEX (OI+Vol) strike per symbol, kept at its intraday
@@ -568,13 +642,44 @@ async function getForwardBuildStructure(opts = {}) {
      )
      SELECT DISTINCT ON (symbol, expiry, strike, date)
        to_char(date, 'YYYY-MM-DD') AS date, symbol, strike, expiry,
-       gex_now, gex_open, spot
+       gex_now, gex_open, spot, ts
      FROM strike_growth
      WHERE date IN (SELECT date FROM recent) AND symbol = ANY($1)
      ORDER BY symbol, expiry, strike, date, ts DESC`,
     [symbols]
   );
   if (!raw.length) return { asOf: null, tickers: [] };
+
+  // Full-window call/put split per expiry, latest sweep of the latest session.
+  // Separate (tiny) query — one row per symbol+expiry, not per strike. Missing
+  // for any expiry recorded before strike_growth_expiry existed, which the UI
+  // handles by falling back to the per-strike net share.
+  const totalsBy = new Map(); // `${symbol}|${expiry}` -> { callGex, putGex, strikes }
+  try {
+    const { rows: tot } = await p.query(
+      `WITH recent AS (
+         SELECT DISTINCT date FROM strike_growth_expiry
+         WHERE date >= (CURRENT_DATE - INTERVAL '9 days')
+         ORDER BY date DESC LIMIT 1
+       )
+       SELECT DISTINCT ON (symbol, expiry)
+         symbol, expiry, call_gex, put_gex, strikes_n
+       FROM strike_growth_expiry
+       WHERE date IN (SELECT date FROM recent) AND symbol = ANY($1)
+       ORDER BY symbol, expiry, ts DESC`,
+      [symbols]
+    );
+    for (const r of tot) {
+      totalsBy.set(`${r.symbol}|${r.expiry}`, {
+        callGex: Number(r.call_gex || 0),
+        putGex: Number(r.put_gex || 0),
+        strikes: Number(r.strikes_n || 0),
+      });
+    }
+  } catch (e) {
+    // Never let the split break the page — the ladder is the primary view.
+    console.warn('[strike-growth] expiry totals query failed:', String(e?.message || e).slice(0, 160));
+  }
 
   const asOf = raw.reduce((m, r) => (r.date > m ? r.date : m), raw[0].date);
   const asOfMs = new Date(`${asOf}T00:00:00Z`).getTime();
@@ -596,7 +701,14 @@ async function getForwardBuildStructure(opts = {}) {
     const e = s.exps.get(expiry);
     const sk = Number(r.strike);
     if (!e.strikes.has(sk)) e.strikes.set(sk, []);
-    e.strikes.get(sk).push({ date: r.date, net: Number(r.gex_now || 0) + Number(r.gex_open || 0) });
+    e.strikes.get(sk).push({
+      date: r.date,
+      net: Number(r.gex_now || 0) + Number(r.gex_open || 0),
+      // Sweep timestamp of this reading. A strike only gets a row on sweeps
+      // where it made the top-N, so an old ts means "rotated out of the walls
+      // N minutes ago" — the UI dims those rather than dropping them.
+      tsMs: r.ts ? new Date(r.ts).getTime() : 0,
+    });
   }
 
   const tickers = [];
@@ -615,26 +727,47 @@ async function getForwardBuildStructure(opts = {}) {
         // Only show strikes that are part of the CURRENT (asOf) structure — a
         // strike whose latest recorded point is stale rotated out of the walls.
         if (pts[pts.length - 1].date !== asOf) continue;
-        const net = pts[pts.length - 1].net;
+        const last = pts[pts.length - 1];
+        const net = last.net;
         const prev = pts.length >= 2 ? pts[pts.length - 2].net : null;
         strikes.push({
           strike,
+          // NOTE: this is the sign of the strike's NET (calls minus puts), not
+          // "these are puts". Kept for backwards compat; the card's call/put
+          // share comes from callGex/putGex below, never from this field.
           side: net >= 0 ? 'call' : 'put',
           net,
           delta: prev != null ? net - prev : null,
+          tsMs: last.tsMs || 0,
         });
       }
       if (!strikes.length) continue;
       strikes.sort((a, b) => b.strike - a.strike); // high -> low, spot sits in the middle
+      // Freshness, relative to the newest reading in THIS expiry (not wall-clock),
+      // so it reads correctly after hours and on a stalled feed. ageMin > 0 means
+      // the strike dropped out of the top-N that many minutes ago.
+      const latestTsMs = strikes.reduce((m, r) => (r.tsMs > m ? r.tsMs : m), 0);
+      for (const r of strikes) {
+        r.ageMin = latestTsMs > 0 && r.tsMs > 0 ? Math.max(0, Math.round((latestTsMs - r.tsMs) / 60000)) : null;
+        delete r.tsMs;
+      }
       const netTotal = strikes.reduce((a, r) => a + r.net, 0);
       const calls = strikes.filter((r) => r.net > 0);
       const puts = strikes.filter((r) => r.net < 0);
       const callWall = calls.length ? calls.reduce((m, r) => (r.net > m.net ? r : m)) : null;
       const putWall = puts.length ? puts.reduce((m, r) => (r.net < m.net ? r : m)) : null;
+      const tot = totalsBy.get(`${symbol}|${expiry}`) || null;
       dtes.push({
         dte: slot, expiry, netTotal, strikes,
         callWall: callWall ? { strike: callWall.strike, net: callWall.net } : null,
         putWall: putWall ? { strike: putWall.strike, net: putWall.net } : null,
+        // Full-window call/put split (see strike_growth_expiry). callGex >= 0,
+        // putGex <= 0, coverage = how many strikes went into the sums. null on
+        // expiries recorded before this table existed.
+        callGex: tot ? tot.callGex : null,
+        putGex: tot ? tot.putGex : null,
+        coverage: tot ? tot.strikes : null,
+        latestTs: latestTsMs > 0 ? new Date(latestTsMs).toISOString() : null,
       });
     }
     if (!dtes.length) continue;
@@ -705,8 +838,9 @@ async function runSweep(opts = {}) {
   for (const symbol of symbols) {
     try {
       const { spot, expiries } = await snapshotTicker(symbol);
-      for (const { expiry, rows } of expiries) {
+      for (const { expiry, rows, totals } of expiries) {
         await writeSnapshot(p, date, symbol, expiry, spot, ts, rows);
+        await writeExpiryTotals(p, date, symbol, expiry, spot, ts, totals);
       }
       done.push(`${symbol}(${expiries.length}exp)`);
     } catch (e) {
