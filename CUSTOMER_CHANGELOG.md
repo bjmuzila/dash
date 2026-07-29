@@ -2,6 +2,12 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Wednesday 7/29/2026
+
+* Added a new **OI** tab to the Option Chain, next to GEX, DEX, CHEX and VEX — it shows the open interest sitting at each strike, with calls above the current price and puts below.
+* The OI tab also shows how much open interest changed overnight, so you can see the positioning that was actually opened or closed since the previous session. It needs two days of readings before the change column fills in.
+* Fixed the Option Chain date header — a sliver of the rows underneath is no longer visible above it while you scroll.
+
 ## Tuesday 7/28/2026
 
 * Smoothed out the spot price in the Option Chain Replay — it now glides between updates instead of jumping every few frames, and the dashed spot line lines up correctly with the price axis.
