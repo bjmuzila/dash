@@ -775,10 +775,22 @@ async function handleGexHistory(req, res) {
   const expiry = searchParams.get('expiry') || marketState.getState().expiry || '';
   const ages = (searchParams.get('ages') || '5,15,30')
     .split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
-  // basis=vol → per-strike VOL-ONLY baselines (net_vol_gex) for the heatmap's
-  // Vol GEX Speed column. Default stays net_gex so existing callers are unchanged.
-  const basis = searchParams.get('basis') === 'vol' ? 'vol' : 'net';
-  const col = basis === 'vol' ? 'net_vol_gex' : 'net_gex';
+  // basis=vol   → per-strike VOL-ONLY baselines (net_vol_gex), for the heatmap's
+  //               Vol GEX Speed column.
+  // basis=oivol → the OI+Vol COMPOSITE (net_gex + net_vol_gex). This is what the
+  //               home heatmap's NET GEX column actually displays
+  //               (toHeatmapRows: netGEX + netVolGEX), so a Δ against a plain
+  //               net_gex baseline was computing (OI+Vol) − (OI only) — i.e. the
+  //               volume component, not a change over time. That read as absurd
+  //               percentages whenever volume GEX outweighed OI GEX.
+  // Default stays net_gex so every existing caller is unchanged.
+  const basisParam = searchParams.get('basis');
+  const basis = basisParam === 'vol' ? 'vol' : basisParam === 'oivol' ? 'oivol' : 'net';
+  const col = basis === 'vol'
+    ? 'net_vol_gex'
+    : basis === 'oivol'
+      ? '(net_gex + COALESCE(net_vol_gex, 0))'
+      : 'net_gex';
 
   // mode=series → full-session strike × time grid (/gex-3d). Default is the
   // original point-in-time baseline shape; existing callers are untouched.
@@ -801,12 +813,15 @@ async function handleGexHistory(req, res) {
   // For each age, pick — per strike — the row whose timestamp is closest to
   // (now − age minutes). DISTINCT ON keeps one row per strike, ordered by
   // proximity to the target time.
+  // COALESCE(...) is never NULL, so the composite basis must null-guard on the
+  // underlying net_gex column instead of the expression.
+  const nullGuard = basis === 'oivol' ? 'net_gex' : col;
   for (const age of ages) {
     const target = now - age * 60_000;
     const { rows } = await pool.query(
       `SELECT DISTINCT ON (strike) strike, ${col} AS val
          FROM option_strike_gex_history
-        WHERE date = $1 AND expiry = $2 AND timestamp <= $3 AND ${col} IS NOT NULL
+        WHERE date = $1 AND expiry = $2 AND timestamp <= $3 AND ${nullGuard} IS NOT NULL
         ORDER BY strike, ABS(timestamp - $4) ASC`,
       [date, expiry, target, target]
     );

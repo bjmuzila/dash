@@ -24,7 +24,19 @@ export function useStrikeGexHistory(
   expiry: string,
   ages: number[] = [5, 15, 30],
   pollMs = 30_000,
-  tolerant = false
+  tolerant = false,
+  /**
+   * Which stored series the baselines come from.
+   *   "net"   — net_gex only (OI-based). The historical default.
+   *   "oivol" — net_gex + net_vol_gex, the OI+Vol composite.
+   *
+   * Pass "oivol" when you are differencing against a LIVE value that is itself
+   * the composite (e.g. the home heatmap's NET GEX column, which is
+   * netGEX + netVolGEX). Mixing the two computes (OI+Vol) − (OI only) — the
+   * volume component rather than a change over time — which produces wild
+   * percentages whenever volume GEX outweighs OI GEX.
+   */
+  basis: "net" | "oivol" = "net"
 ): GexBaselines {
   const [baselines, setBaselines] = useState<GexBaselines>({});
   const agesKey = ages.join(",");
@@ -41,8 +53,8 @@ export function useStrikeGexHistory(
           `/proxy/gex-history?expiry=${encodeURIComponent(
             expiry
           )}&ages=${encodeURIComponent(agesKey)}${
-            tolerant ? "&tolerant=1" : ""
-          }`,
+            basis === "oivol" ? "&basis=oivol" : ""
+          }${tolerant ? "&tolerant=1" : ""}`,
           { cache: "no-store" }
         );
         if (!r.ok) return;
@@ -59,7 +71,7 @@ export function useStrikeGexHistory(
       cancelled = true;
       clearInterval(id);
     };
-  }, [expiry, agesKey, pollMs, tolerant]);
+  }, [expiry, agesKey, pollMs, tolerant, basis]);
 
   return baselines;
 }

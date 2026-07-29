@@ -1182,9 +1182,15 @@ export function HomeClient({
   // Point-in-time net GEX baselines (open / 5 / 15 / 30 min) for the popup's
   // rolling-difference boxes — and, while Δ stamps are on, for the heatmap's
   // NET GEX column. Polls when a strike is selected OR the mode is active.
+  // basis "oivol": netGexVal is the OI+Vol composite (see toHeatmapRows), so the
+  // baseline has to be the same composite. Differencing it against a plain
+  // net_gex baseline measured the VOLUME COMPONENT, not a change over time.
   const strikeBaselines = useStrikeGexHistory(
     (selectedStrike || deltaWindow !== 0) ? selectedExpiry : "",
-    [5, 15, 30]
+    [5, 15, 30],
+    30_000,
+    false,
+    "oivol"
   );
 
   // Δ per strike, RANKED strikes only (row.rank is already top-5-each-side, see
