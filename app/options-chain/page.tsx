@@ -995,7 +995,7 @@ function Row({ k, v, strong }: { k: string; v: string; strong?: boolean }) {
  * height for nothing. The ATM row itself is the pivot and shows both.
  *
  * This rule drives the CELL RENDERING and the VALUE the heat scale / column
- * totals / ⅀ Total read (see oiSideValue). Those have to agree — coloring a
+ * totals / ⅀ Total read (see oiSideChange). Those have to agree — coloring a
  * cell by a number the cell doesn't display is how a heatmap starts lying.
  */
 function oiSides(strike: number, atm: number): { call: boolean; put: boolean } {
@@ -1005,33 +1005,50 @@ function oiSides(strike: number, atm: number): { call: boolean; put: boolean } {
 }
 
 /**
- * The signed OI value for heat/totals under the calls-above/puts-below rule:
- * call OI above ATM (positive → blue), put OI below ATM (negative → red), and
- * the true net at the ATM pivot. Deliberately NOT cell.oi — that is the
- * both-sides net, which would color a cell by contracts it isn't showing.
+ * The signed day-over-day OI CHANGE for heat/totals under the
+ * calls-above/puts-below rule: call ΔOI above ATM (adds positive → blue), put
+ * ΔOI below ATM (adds negative → red), and the true net Δ at the ATM pivot.
+ *
+ * The OI tab prints the change and nothing else, so the heat scale, the
+ * per-column totals and the ⅀ Total column are all computed from this same
+ * number — the color a cell wears and the figure it shows can never disagree.
  */
-function oiSideValue(cell: GreekCell, strike: number, atm: number): number {
+function oiSideChange(
+  snap: { callChg: number; putChg: number },
+  strike: number,
+  atm: number,
+): number {
   const { call, put } = oiSides(strike, atm);
-  if (call && put) return cell.callOI - cell.putOI;
-  return call ? cell.callOI : -cell.putOI;
+  if (call && put) return snap.callChg - snap.putChg;
+  return call ? snap.callChg : -snap.putChg;
 }
 
-// One line of an OI cell: settled open interest, then its change vs the
-// previous snapshot date. `chg === null` means this strike has no stored
-// baseline (see the OI tab's fallback in ChainMatrix) — rendered as a dash so
-// "we don't know" never reads as "unchanged".
+// One line of an OI cell: the day-over-day change in open interest, and nothing
+// else. The settled OI level is deliberately NOT printed — the tab exists to
+// show what moved overnight, and the level sat right next to the delta drowning
+// it in digits.
 //
-// No C/P label: the calls-above/puts-below rule already makes the side obvious
-// from where the row sits relative to ATM. The OI figure itself carries the
-// side tint instead, which is what keeps the ATM row — the one row that shows
-// both sides — readable without a letter.
-function OiSideLine({ side, oi, chg }: { side: "C" | "P"; oi: number; chg: number | null }) {
-  const sideColor = side === "C" ? "#7fd4f7" : "#ff8f98";
-  const chgColor = chg == null ? "#3a4a5e" : chg > 0 ? "#22c55e" : chg < 0 ? "#ef4444" : "#4a6a88";
+// Near-white text on purpose. The change rides on top of a blue/red heat cell,
+// and a red number on a red background was the one thing you could not read.
+// Direction is carried twice over without needing text color: the leading +/−
+// on the figure itself, and the cell tint underneath it.
+//
+// `chg === null` means this strike has no stored baseline — rendered as a dash
+// so "we don't know" never reads as "unchanged".
+function OiChgLine({ label, chg }: { label: string | null; chg: number | null }) {
+  const has = chg != null && chg !== 0;
   return (
     <div style={{ display: "flex", alignItems: "baseline", justifyContent: "flex-end", gap: 6, whiteSpace: "nowrap" }}>
-      <span style={{ color: oi ? sideColor : "#3a4a5e" }}>{fmtCount(oi)}</span>
-      <span style={{ color: chgColor, fontWeight: 700, minWidth: 42, textAlign: "right" }}>
+      {label && (
+        <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 9, fontWeight: 700, marginRight: "auto" }}>
+          {label}
+        </span>
+      )}
+      <span style={{
+        color: has ? "rgba(255,255,255,0.96)" : "#3a4a5e",
+        fontWeight: 700,
+        textShadow: has ? "0 1px 2px rgba(0,0,0,0.85)" : undefined,
+      }}>
         {chg == null ? "—" : fmtChg(chg)}
       </span>
     </div>
@@ -1066,9 +1083,10 @@ interface ChainMatrixProps {
   /**
    * OI tab only: `exp|strike` → the stored settled call/put OI plus the
    * day-over-day change. Empty (and ignored) in every other greek mode.
-   * The OI *values* the cell shows come from this map when present so the
-   * numbers and their deltas are always from the same snapshot; it falls back
-   * to the live chain's callOI/putOI for strikes the recorder hasn't captured.
+   * This map is now the OI tab's ONLY source: the cell prints the change from
+   * it, and valueAt() colors the cell from the same entry. A strike the
+   * recorder never captured has no change to report, so it renders empty
+   * rather than falling back to a live OI level with no delta beside it.
    */
   oiChangeMap: Map<string, { callOI: number; putOI: number; callChg: number; putChg: number }>;
   onCellClick: (v: { strike: number; expiration: string }) => void;
@@ -1085,10 +1103,11 @@ const ChainMatrix = memo(function ChainMatrix({
   changeMode, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
   emLevels, activeTicker, atmRowRef, oiChangeMap, onCellClick, onCellHover,
 }: ChainMatrixProps) {
-  // OI is a contract count, not dollars — every value readout in this matrix
-  // (cells, per-column totals, ⅀ Total) switches formatter with the mode.
+  // OI is a contract count, not dollars — and on this tab every readout is a
+  // CHANGE in that count, so it takes the signed compact formatter (+1.2K /
+  // -430 / "·" for flat) rather than the dollar one.
   const isOiMode = greekMode === "oi";
-  const fmtVal = isOiMode ? fmtCount : fmtMoney;
+  const fmtVal = isOiMode ? fmtChg : fmtMoney;
   // Drop holiday/non-trading expirations (e.g. observed Jul 3) entirely.
   const renderIdx = Array.from({ length: gridCols })
     .map((_, i) => i)
@@ -1127,9 +1146,10 @@ const ChainMatrix = memo(function ChainMatrix({
   return (
     <div style={{
       display: "grid",
-      // OI cells carry two lines (call / put) each with a value AND a delta, so
-      // they need materially more room than a single greek figure.
-      gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(${isOiMode ? 122 : 78}px, 1fr)) minmax(${isOiMode ? 104 : 88}px, 1.15fr)`,
+      // OI cells can carry two lines (call / put) on the ATM pivot row, but each
+      // line is now a single delta figure — so they need barely more width than
+      // a greek cell, not the double-width the old value+delta pair demanded.
+      gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(${isOiMode ? 84 : 78}px, 1fr)) minmax(${isOiMode ? 92 : 88}px, 1.15fr)`,
       borderRadius: 12,
       overflow: "clip",
       border: `1px solid ${HT.border}`,
@@ -1271,31 +1291,27 @@ const ChainMatrix = memo(function ChainMatrix({
                 : undefined;
               // Click any populated cell to open its stats card.
               const isClickable = col != null;
-              // OI tab: prefer the recorded snapshot's call/put OI so the value
-              // and its Δ always describe the same book. Strikes the 9:32 sweep
-              // didn't capture (a root outside the watchlist, an expiry past
-              // the recorded depth, or a strike listed intraday) still show
-              // live OI from the chain — just with no Δ to report.
+              // OI tab: the recorded snapshot is the only source. Strikes the
+              // 9:32 sweep didn't capture (a root outside the watchlist, an
+              // expiry past the recorded depth, or a strike listed intraday)
+              // have no day-over-day change to report and render empty — a live
+              // OI level with no delta beside it is not what this tab shows.
               const oiKey = col ? `${col.expiration}|${strike}` : "";
               const oiSnap = isOiMode && oiKey ? oiChangeMap.get(oiKey) : undefined;
-              const liveCell = isOiMode && col ? col.cells.get(strike) : undefined;
               // Calls above ATM, puts below, both at the pivot.
               const sides = isOiMode ? oiSides(strike, nearestStrike) : { call: false, put: false };
-              const oiCall = oiSnap?.callOI ?? liveCell?.callOI ?? 0;
-              const oiPut = oiSnap?.putOI ?? liveCell?.putOI ?? 0;
-              // A strike can be zero on BOTH sides today and still be the most
-              // interesting cell on the grid — that is a full overnight unwind.
-              // The recorder skips zero/zero rows, so /proxy/oi-change surfaces
-              // those via a prev-only FULL JOIN row: OI 0/0 with a large
-              // negative change. Keying "has anything to show" off the OI alone
-              // would render them as "·" and hide exactly the biggest closes.
               // Only the side(s) actually rendered count toward "is there
               // anything here" — an ITM put below a call-only strike must not
-              // keep an otherwise-empty call cell from reading as "·".
-              const oiHasAny = isOiMode && (
-                (sides.call && (oiCall > 0 || !!oiSnap?.callChg)) ||
-                (sides.put && (oiPut > 0 || !!oiSnap?.putChg))
+              // keep an otherwise-flat call cell from reading as "·". A strike
+              // that went to zero on both sides overnight still lands here with
+              // a large negative change (the recorder's prev-only FULL JOIN
+              // row), which is exactly the cell you least want hidden.
+              const oiHasAny = isOiMode && !!oiSnap && (
+                (sides.call && !!oiSnap.callChg) || (sides.put && !!oiSnap.putChg)
               );
+              // Side letters only where position can't tell you the side — the
+              // ATM pivot, the one row that renders both call and put.
+              const oiBothSides = sides.call && sides.put;
               return (
                 <div
                   key={`${strike}-${colIdx}`}
@@ -1314,12 +1330,12 @@ const ChainMatrix = memo(function ChainMatrix({
                     ...(isMvc ? { outline: "2px solid #ffb300", outlineOffset: "-2px" } : {}),
                   }}
                 >
-                  {/* OI tab renders a two-line call/put breakdown instead of a
-                      single figure: side letter, settled OI, and the change vs
-                      the previous snapshot. Everything else about the cell —
-                      heat background, ATM box, EM row border — is unchanged,
-                      because the background is still driven by net OI through
-                      valueAt(). */}
+                  {/* OI tab renders the day-over-day CHANGE only — one line
+                      per side actually shown at this strike (two only on the
+                      ATM pivot). Everything else about the cell — heat
+                      background, ATM box, EM row border — is unchanged, and the
+                      background now tracks that same change through valueAt(),
+                      so the tint and the number always agree. */}
                   {isMvc && <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)" }}>★</span>}
                   {isVolMvc && <span title="Highest volume GEX" style={{ fontSize: 10, lineHeight: 1 }}>❌</span>}
                   {isPin && (
@@ -1335,8 +1351,8 @@ const ChainMatrix = memo(function ChainMatrix({
                       <span style={{ color: "#3a4a5e" }}>·</span>
                     ) : (
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", width: "100%", lineHeight: 1.3, fontSize: 10 }}>
-                        {sides.call && <OiSideLine side="C" oi={oiCall} chg={oiSnap?.callChg ?? null} />}
-                        {sides.put && <OiSideLine side="P" oi={oiPut} chg={oiSnap?.putChg ?? null} />}
+                        {sides.call && <OiChgLine label={oiBothSides ? "C" : null} chg={oiSnap?.callChg ?? null} />}
+                        {sides.put && <OiChgLine label={oiBothSides ? "P" : null} chg={oiSnap?.putChg ?? null} />}
                       </div>
                     )
                   ) : (
@@ -1362,7 +1378,14 @@ const ChainMatrix = memo(function ChainMatrix({
                   whiteSpace: "nowrap", overflow: "hidden",
                   display: "flex", alignItems: "baseline", justifyContent: "flex-end",
                 }}>
-                  <SignVal text={tot === 0 ? "·" : fmtVal(tot)} />
+                  {/* OI mode drops SignVal's colored +/−: this cell can be a
+                      full-strength red heat tile, and a red sign on it is the
+                      unreadable case. White figure, direction from the tint. */}
+                  {isOiMode
+                    ? <span style={{ color: tot === 0 ? "#3a4a5e" : "rgba(255,255,255,0.96)", textShadow: tot === 0 ? undefined : "0 1px 2px rgba(0,0,0,0.85)" }}>
+                        {tot === 0 ? "·" : fmtVal(tot)}
+                      </span>
+                    : <SignVal text={tot === 0 ? "·" : fmtVal(tot)} />}
                 </div>
               );
             })()}
@@ -1870,17 +1893,51 @@ export default function OptionsChainPage({
     return () => cancelAnimationFrame(id);
   }, [visibleStrikes, activeTicker]);
 
+  // ── Day-over-day ΔOI state (OI tab only) ──────────────────────────────────
+  // Declared here, ahead of valueAt, because valueAt now reads the snapshot:
+  // the OI tab colors and totals every cell off the CHANGE, not a live level.
+  // The fetch that fills it stays down with the other data effects.
+  //
+  // `symbol` is carried IN the state, and every read is gated on it matching
+  // activeTicker (see oiSnapshot). The map keys are `expiry|strike` with no
+  // symbol in them, so without that gate the previous ticker's snapshot would
+  // keep rendering under the new ticker's chain for the whole round trip —
+  // SPY's ΔOI shown against QQQ strikes, indistinguishable from real data.
+  const [oiChange, setOiChange] = useState<{
+    symbol: string | null;
+    map: Map<string, { callOI: number; putOI: number; callChg: number; putChg: number }>;
+    date: string | null;
+    prevDate: string | null;
+  }>({ symbol: null, map: new Map(), date: null, prevDate: null });
+
+  // The snapshot as the UI is allowed to see it: empty unless it belongs to the
+  // ticker currently on screen. One place to gate, so the matrix and the
+  // provenance label can never disagree about which ticker they're describing.
+  const oiSnapshot = useMemo(
+    () => (oiChange.symbol === activeTicker
+      ? oiChange
+      : { symbol: activeTicker, map: new Map<string, { callOI: number; putOI: number; callChg: number; putChg: number }>(), date: null, prevDate: null }),
+    [oiChange, activeTicker],
+  );
+
   // Active-greek value lookup: column index → strike → number.
   const valueAt = useCallback(
     (col: ExpColumn, strike: number): number | null => {
+      // OI tab shows the day-over-day CHANGE and nothing else, so the heat
+      // scale and every total read that change — from the recorded snapshot,
+      // not the live chain. No snapshot entry → nothing to color or sum.
+      if (greekMode === "oi") {
+        const snap = oiSnapshot.map.get(`${col.expiration}|${strike}`);
+        if (!snap) return null;
+        // Only the side(s) this strike actually renders count (calls above ATM,
+        // puts below, both at the pivot) — same rule the cell draws by.
+        return oiSideChange(snap, strike, nearestStrike);
+      }
       const cell = col.cells.get(strike);
       if (!cell) return null;
-      // OI tab only ever displays one side per strike, so the heat scale and
-      // every total must be computed from that same side.
-      if (greekMode === "oi") return oiSideValue(cell, strike, nearestStrike);
       return cell[greekMode];
     },
-    [greekMode, nearestStrike],
+    [greekMode, nearestStrike, oiSnapshot],
   );
 
   // Per-column max + top-3 (by |active greek|) over the VISIBLE strikes, so each
@@ -2011,20 +2068,14 @@ export default function OptionsChainPage({
   // ET across the scanner watchlist; /proxy/oi-change diffs its two most recent
   // dates for this symbol. Fetched only while the OI tab is active, and keyed
   // on ticker (not expiry) since one call returns every expiry we record.
-  // `symbol` is carried IN the state, and every read below is gated on it
-  // matching activeTicker. The map keys are `expiry|strike` with no symbol in
-  // them, so without that gate the previous ticker's snapshot would keep
-  // rendering under the new ticker's chain for the whole round trip — SPY's
-  // settled OI shown against QQQ strikes, indistinguishable from real data.
-  // (Worse without it: switching ticker while on a non-OI tab skips the fetch
-  // entirely, so the stale map would survive until the tab is opened again.)
-  const [oiChange, setOiChange] = useState<{
-    symbol: string | null;
-    map: Map<string, { callOI: number; putOI: number; callChg: number; putChg: number }>;
-    date: string | null;
-    prevDate: string | null;
-  }>({ symbol: null, map: new Map(), date: null, prevDate: null });
-
+  //
+  // The `oiChange` state and its ticker-gated `oiSnapshot` view are declared
+  // further up, above valueAt — the OI grid's heat and totals read them, so
+  // they have to exist before valueAt closes over them. Only the fetch lives
+  // here, with the rest of the data effects. Worth restating why the gate
+  // exists: switching ticker while on a non-OI tab skips this fetch entirely,
+  // so without it the previous symbol's snapshot would survive under the new
+  // chain until the OI tab is opened again.
   useEffect(() => {
     if (greekMode !== "oi") return;
     let cancelled = false;
@@ -2053,16 +2104,6 @@ export default function OptionsChainPage({
     })();
     return () => { cancelled = true; };
   }, [greekMode, activeTicker, refreshSeed]);
-
-  // The snapshot as the UI is allowed to see it: empty unless it belongs to the
-  // ticker currently on screen. One place to gate, so the matrix and the
-  // provenance label can never disagree about which ticker they're describing.
-  const oiSnapshot = useMemo(
-    () => (oiChange.symbol === activeTicker
-      ? oiChange
-      : { symbol: activeTicker, map: new Map<string, { callOI: number; putOI: number; callChg: number; putChg: number }>(), date: null, prevDate: null }),
-    [oiChange, activeTicker],
-  );
 
   // Per-expiry heatmap scale for change columns: each change column colors
   // against its own |Δ| max over the visible strikes. Keyed by expiration.
@@ -2125,13 +2166,19 @@ export default function OptionsChainPage({
       if (col.expiration === todayKey) continue;
       for (const s of visibleStrikes) {
         if (s == null) continue;
+        // OI tab totals the day-over-day CHANGE, matching the ⅀ Total column.
+        if (greekMode === "oi") {
+          const snap = oiSnapshot.map.get(`${col.expiration}|${s}`);
+          if (snap) sum += oiSideChange(snap, s, nearestStrike);
+          continue;
+        }
         const cell = col.cells.get(s);
         if (!cell) continue;
-        sum += greekMode === "oi" ? oiSideValue(cell, s, nearestStrike) : cell[greekMode];
+        sum += cell[greekMode];
       }
     }
     return sum;
-  }, [columns, visibleStrikes, greekMode, nearestStrike]);
+  }, [columns, visibleStrikes, greekMode, nearestStrike, oiSnapshot]);
 
   // Toolbar button styled to match the right-side SegGroup tiles (height 34,
   // radius 8, fontSize 11–12, weight 700) so GO + Recent line up with them.
@@ -2265,10 +2312,10 @@ export default function OptionsChainPage({
       {showGrandTotal && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 2px", fontSize: 11, whiteSpace: "nowrap" }}>
           <span style={{ fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HT.muted }}>
-            Total Net {greekMode.toUpperCase()}
+            {greekMode === "oi" ? "Total ΔOI" : `Total Net ${greekMode.toUpperCase()}`}
           </span>
           <span style={{ fontFamily: "var(--font-mono)", fontWeight: 800, fontSize: 12, color: visibleTotal >= 0 ? HT.green : HT.red }}>
-            {greekMode === "oi" ? fmtCount(visibleTotal) : fmtMoney(visibleTotal)}
+            {greekMode === "oi" ? fmtChg(visibleTotal) : fmtMoney(visibleTotal)}
           </span>
           <span style={{ color: HT.border }}>·</span>
           <span style={{ color: HT.muted, opacity: 0.75 }}>{activeTicker} · {displayPercent}% strikes{autoPercentNote ? ` · ${autoPercentNote}` : ""}</span>

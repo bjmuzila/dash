@@ -4304,24 +4304,65 @@ if (libDb) {
             send(res, 200, { error: 'strike is required', rows: [] });
             return;
           }
-          // Covered by idx_osgh_symbol_lookup (symbol, date, expiry, strike, timestamp DESC).
+          // IV skew needs an ATM reference AT EACH SNAPSHOT, not one for the
+          // session: spot moves, so the strike nearest spot changes during the
+          // day, and pinning ATM to a single strike would smear that drift into
+          // the skew line. The CTE picks, per timestamp, the strike with the
+          // smallest |strike − spot| — the chosen ATM definition — and takes
+          // the call/put average IV there as the reference.
+          //
+          // Main select is covered by idx_osgh_symbol_lookup
+          // (symbol, date, expiry, strike, timestamp DESC).
           const seriesRows = await libDb.queryAll(
-            `SELECT timestamp, spot, net_gex, net_vol_gex, call_gamma, put_gamma
-               FROM option_strike_gex_history
-              WHERE symbol = ? AND date = ? AND expiry = ? AND strike = ?
-              ORDER BY timestamp ASC`,
-            [symbol, date, expiry, strike]
+            `WITH atm AS (
+               SELECT DISTINCT ON (timestamp)
+                      timestamp,
+                      strike AS atm_strike,
+                      COALESCE((call_iv + put_iv) / 2.0, call_iv, put_iv) AS atm_iv
+                 FROM option_strike_gex_history
+                WHERE symbol = ? AND date = ? AND expiry = ?
+                  AND spot IS NOT NULL AND spot > 0
+                  AND (call_iv IS NOT NULL OR put_iv IS NOT NULL)
+                ORDER BY timestamp, ABS(strike - spot) ASC
+             )
+             SELECT h.timestamp, h.spot, h.net_gex, h.net_vol_gex,
+                    h.call_gamma, h.put_gamma, h.call_iv, h.put_iv,
+                    a.atm_strike, a.atm_iv
+               FROM option_strike_gex_history h
+               LEFT JOIN atm a ON a.timestamp = h.timestamp
+              WHERE h.symbol = ? AND h.date = ? AND h.expiry = ? AND h.strike = ?
+              ORDER BY h.timestamp ASC`,
+            [symbol, date, expiry, symbol, date, expiry, strike]
           );
+          const num = (v) => (v == null ? null : Number(v));
           send(res, 200, {
             mode: 'series', symbol, date, expiry, strike,
-            rows: seriesRows.map((r) => ({
-              t: Number(r.timestamp),
-              spot: r.spot == null ? null : Number(r.spot),
-              netGex: Number(r.net_gex ?? 0),
-              netVolGex: r.net_vol_gex == null ? null : Number(r.net_vol_gex),
-              callGamma: r.call_gamma == null ? null : Number(r.call_gamma),
-              putGamma: r.put_gamma == null ? null : Number(r.put_gamma),
-            })),
+            // ATM reference is the strike nearest spot at each snapshot; IV at
+            // both K and ATM is the call/put average, so the subtraction is
+            // like-for-like rather than call-IV minus a blended reference.
+            atmRule: 'nearest-strike-to-spot',
+            rows: seriesRows.map((r) => {
+              const callIv = num(r.call_iv);
+              const putIv = num(r.put_iv);
+              const ivK = callIv != null && putIv != null ? (callIv + putIv) / 2 : (callIv ?? putIv);
+              const atmIv = num(r.atm_iv);
+              // Skew is null unless BOTH legs of the subtraction exist — a
+              // missing ATM reading must not silently render as "zero skew".
+              const skew = ivK != null && atmIv != null ? ivK - atmIv : null;
+              return {
+                t: Number(r.timestamp),
+                spot: num(r.spot),
+                netGex: Number(r.net_gex ?? 0),
+                netVolGex: num(r.net_vol_gex),
+                callGamma: num(r.call_gamma),
+                putGamma: num(r.put_gamma),
+                callIv, putIv, ivK,
+                atmStrike: num(r.atm_strike),
+                atmIv,
+                skew,
+                skewPct: skew != null && atmIv ? skew / atmIv : null,
+              };
+            }),
           });
         } catch (err) { send(res, 200, { error: String(err), rows: [] }); }
       },

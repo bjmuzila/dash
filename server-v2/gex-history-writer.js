@@ -59,6 +59,12 @@ async function ensureVolColumn(p) {
     // ever having "now"'s value out of the in-memory FlowGexAccumulator.
     await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS call_gamma REAL');
     await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS put_gamma REAL');
+    // Per-side implied vol. Needed for IV skew — skew(K) = IV(K) − IV(ATM),
+    // and "ATM" is whichever strike sat nearest spot AT THAT SNAPSHOT, so IV
+    // has to be stored per strike per tick; it cannot be reconstructed later
+    // from anything else in this table.
+    await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS call_iv REAL');
+    await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS put_iv REAL');
     // Multi-underlying. Mirrors the DDL in _lib-db.cjs ensureAllTables — kept
     // here too because server-v2 boots without running that Next-side init, and
     // this writer must not INSERT a symbol column that doesn't exist yet.
@@ -174,12 +180,20 @@ async function writeGexSnapshot(gexRows, spot, expiry, symbol) {
       let putGamma = Number(row.putGamma);
       if (!Number.isFinite(putGamma)) putGamma = null;
       else if (Math.abs(putGamma) < 1e-30) putGamma = 0;
-      values.push(`($${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i})`);
-      params.push(now, date, expiry, spot, strike, netGex, netVolGex, callGamma, putGamma, sym);
+      // computeGexSummary already emits callIV/putIV per strike (it just was
+      // never persisted). It uses `Number(call?.iv ?? 0)`, so a MISSING iv
+      // arrives as 0 — store that as NULL, not as "0% vol", or the skew math
+      // downstream reads a hole as a real reading.
+      let callIv = Number(row.callIV);
+      if (!Number.isFinite(callIv) || callIv <= 0) callIv = null;
+      let putIv = Number(row.putIV);
+      if (!Number.isFinite(putIv) || putIv <= 0) putIv = null;
+      values.push(`($${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i})`);
+      params.push(now, date, expiry, spot, strike, netGex, netVolGex, callGamma, putGamma, sym, callIv, putIv);
     }
     if (!values.length) return;
     await p.query(
-      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex, call_gamma, put_gamma, symbol)
+      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex, call_gamma, put_gamma, symbol, call_iv, put_iv)
        VALUES ${values.join(', ')}`,
       params
     );

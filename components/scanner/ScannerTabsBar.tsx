@@ -9,7 +9,8 @@
  *   onSelect given  → <button>s that flip local tab state (used on /scanner).
  *   onSelect absent → <Link>s to /scanner?tab=<id> (used on standalone routes,
  *                     where there is no local tab state to flip).
- * Forward Build is always a link to /forward-build in either mode.
+ * Forward Build and Strike History are always links to their own routes in
+ * either mode — they are split-out pages, not inline tabs.
  *
  * The mobile <select> (globals.css .scanner-tab-select / .scanner-tabs swap one
  * for the other by viewport) travels with the bar so both pages get it.
@@ -25,7 +26,7 @@ export type ScannerTabId =
   | "tpo" | "ibstats" | "statprompter" | "gexchangetop" | "gexpct";
 
 /** What the bar can mark as current: a /scanner tab, or a split-out route. */
-export type ScannerBarActive = ScannerTabId | "forwardbuild" | null;
+export type ScannerBarActive = ScannerTabId | "forwardbuild" | "strikehistory" | null;
 
 type TabDef = { id: ScannerTabId; label: string; color: string };
 
@@ -87,6 +88,7 @@ export default function ScannerTabsBar({
 
   const go = (value: string) => {
     if (value === "forwardbuild") { router.push("/forward-build"); return; }
+    if (value === "strikehistory") { router.push("/strike-history"); return; }
     if (!isScannerTabId(value)) return;
     if (onSelect) onSelect(value);
     else router.push(scannerTabHref(value));
@@ -111,6 +113,7 @@ export default function ScannerTabsBar({
           <option key={t.id} value={t.id}>{t.label}</option>
         ))}
         <option value="forwardbuild">Forward Build</option>
+        <option value="strikehistory">Strike History</option>
       </select>
 
       {/* Top-level tabs */}
@@ -140,6 +143,23 @@ export default function ScannerTabsBar({
         >
           Forward Build
           {active === "forwardbuild"
+            ? null
+            : <span style={{ fontSize: 11, opacity: 0.8 }}>↗</span>}
+        </Link>
+        {/* Strike History is its own route (/strike-history) — per-strike net
+            GEX + IV skew over time. Same split-out treatment as Forward Build:
+            a tab-styled link, never an inline tab. */}
+        <Link
+          href="/strike-history"
+          prefetch={false}
+          style={{
+            ...tabStyle(true, LIGHT_BLUE),
+            color: HOME_THEME.text,
+            opacity: active === "strikehistory" ? 1 : 0.95,
+          }}
+        >
+          Strike History
+          {active === "strikehistory"
             ? null
             : <span style={{ fontSize: 11, opacity: 0.8 }}>↗</span>}
         </Link>
