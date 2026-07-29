@@ -181,7 +181,7 @@ const FLOW_RECORD_TAPE_CAP = Number(process.env.FLOW_RECORD_TAPE_CAP || 8000);
 const FLOW_RECORD_TAPE_FLOOR = Number(process.env.FLOW_RECORD_TAPE_FLOOR || 1000);
 
 // ── Multi-ticker flow via dxLink (DATA_SOURCE=tt), replaces Theta MultiFlowManager ──
-// Extra option roots (FLOW_TICKERS) whose 0DTE-30DTE near-the-money OTM trades
+// Extra option roots (TT_FLOW_TICKERS_LIST) whose 0DTE-30DTE near-the-money OTM trades
 // we subscribe on the SAME shared dxLink connection already open for SPX, and
 // route into the SAME this.flow (not an isolated FlowProcessor like
 // FLOW_RECORD_TICKERS above) so the /flow page's non-SPX ticker chips populate
@@ -190,7 +190,7 @@ const FLOW_RECORD_TAPE_FLOOR = Number(process.env.FLOW_RECORD_TAPE_FLOOR || 1000
 // Same comma/whitespace parsing convention as multi-flow.js's parseFlowTickers().
 // SPX/SPXW are dropped — the core engine already owns them.
 function parseTtFlowTickers() {
-  return String(process.env.FLOW_TICKERS || '')
+  return String(process.env.TT_FLOW_TICKERS_LIST || '')
     .split(/[,\s]+/)
     .map((s) => s.trim().toUpperCase())
     .filter(Boolean)
@@ -198,7 +198,10 @@ function parseTtFlowTickers() {
 }
 const TT_FLOW_TICKERS = parseTtFlowTickers();
 // Gate: must be explicitly enabled, same convention as the old MultiFlowManager
-// gate it replaces (FLOW_TICKERS_ENABLE=1).
+// gate it replaces (FLOW_TICKERS_ENABLE=1). Deliberately a NEW/distinct var
+// name from the existing FLOW_TICKERS (already used by the Theta bulk-stream
+// path for FLOW_TICKERS=EM/SCANNER — reusing it here would collide, treating
+// e.g. the literal string "EM" as a ticker symbol instead of the EM roster).
 const TT_FLOW_ENABLED = process.env.FLOW_TICKERS_ENABLE === '1' && TT_FLOW_TICKERS.length > 0;
 // Near-the-money OTM strike band per root, as a % of spot.
 const TT_FLOW_WINDOW_PCT = Number(process.env.TT_FLOW_WINDOW_PCT || 0.05);
@@ -2020,7 +2023,7 @@ class TastytradeProxy {
   tapeCap: Number(process.env.FLOW_TAPE_CAP || 8000),
   // spxOnly:false so TT_FLOW-ingested non-SPX prints (see _startTtMultiFlow)
   // survive addPrint instead of being silently dropped. Inert when
-  // FLOW_TICKERS is empty — no non-SPX streamerSymbol ever reaches addPrint
+  // TT_FLOW_TICKERS_LIST is empty — no non-SPX streamerSymbol ever reaches addPrint
   // in that case, so SPX-only behavior is unchanged.
   spxOnly: false,
 });
@@ -2034,7 +2037,7 @@ class TastytradeProxy {
     this.flowRecordSpotSym = new Map();   // underlying streamerSymbol -> root (spot key)
     this.flowRecordSpot = new Map();      // root -> live spot (for isOtm tagging)
     this.flowRecordTimer = null;          // window-refresh interval
-    // Multi-ticker flow via dxLink (FLOW_TICKERS) — SAME this.flow tape, NOT an
+    // Multi-ticker flow via dxLink (TT_FLOW_TICKERS_LIST) — SAME this.flow tape, NOT an
     // isolated FlowProcessor like flowRecord above. See _startTtMultiFlow.
     this.ttFlowContracts = new Map(); // option streamerSymbol -> root (routing key)
     this.ttFlowSpotSym = new Map();   // underlying streamerSymbol -> root (spot key)
@@ -2318,7 +2321,7 @@ class TastytradeProxy {
         console.warn('[FLOW-RECORD] start failed:', String(e?.message || e).slice(0, 160)));
     }
 
-    // Multi-ticker flow via dxLink (FLOW_TICKERS): replaces the old
+    // Multi-ticker flow via dxLink (TT_FLOW_TICKERS_LIST): replaces the old
     // Theta-based MultiFlowManager (server-v2/multi-flow.js — no longer
     // started, see the removed wiring further down in this method). Streams
     // each extra root's 0DTE-30DTE near-the-money OTM contracts' TimeAndSale
@@ -2464,7 +2467,7 @@ class TastytradeProxy {
       }
       this._subscribeThetaFlow();
       // DISABLED: the Theta-based MultiFlowManager (server-v2/multi-flow.js)
-      // used to stream extra FLOW_TICKERS roots' near-spot option trades here
+      // used to stream extra FLOW_TICKERS (Theta) roots' near-spot option trades here
       // via the shared ThetaStreamClient. It is replaced by the dxLink-based
       // _startTtMultiFlow() (see the !useTheta() branch above, TT_FLOW_ENABLED)
       // which streams 0DTE-30DTE multi-expiry windows on the Tastytrade dxLink
@@ -2500,7 +2503,7 @@ class TastytradeProxy {
     };
     scheduleRecompute();
     // Aggregate + broadcast the flow tape every 500ms (independent of GEX).
-    // Tape is multi-ticker (SPX engine + FLOW_TICKERS via MultiFlowManager);
+    // Tape is multi-ticker (SPX engine + TT_FLOW_TICKERS_LIST via _startTtMultiFlow);
     // SYMBOL here only labels the bucket, it does not filter the tape.
     this._flowDebugTick = 0;
     this.flowTimer = setInterval(() => {
@@ -3053,7 +3056,7 @@ class TastytradeProxy {
   }
 
   // ── Multi-ticker flow via dxLink (tt) ─────────────────────────────────────
-  // Replaces the Theta-based MultiFlowManager. Subscribes each FLOW_TICKERS
+  // Replaces the Theta-based MultiFlowManager. Subscribes each TT_FLOW_TICKERS_LIST
   // root's near-the-money OTM contracts, spanning EVERY expiry from 0DTE out
   // to TT_FLOW_MAX_DTE days (not just the nearest expiry — see the class
   // comment on TT_FLOW_MAX_DTE), for TimeAndSale on the SAME shared dxLink
@@ -4044,7 +4047,7 @@ class TastytradeProxy {
       if (!(price > 0) || !(size > 0)) return;
       const agg = String(ev.aggressorSide || '').toLowerCase();
       const side = agg === 'buy' ? 'buy' : agg === 'sell' ? 'sell' : undefined;
-      // TT multi-flow (FLOW_TICKERS): extra-root option prints route into the
+      // TT multi-flow (TT_FLOW_TICKERS_LIST): extra-root option prints route into the
       // SAME this.flow tape as SPX (see _startTtMultiFlow), just tagged with
       // that root's own tracked spot for correct isOtm classification. These
       // contracts are ONLY TimeAndSale-subscribed (no Quote/Greeks/Summary),
