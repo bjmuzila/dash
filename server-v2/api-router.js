@@ -4235,6 +4235,100 @@ if (libDb) {
     });
   }
 
+  // /api/strike-gex-series — ONE strike, every recorded snapshot. Powers the
+  // /strike-history page: pick a session + expiry + strike and get the net GEX
+  // path over time instead of the per-strike ladder the heatmap route returns.
+  //
+  // Uses libDb.queryAll (raw SQL) on purpose rather than adding helpers to
+  // lib/db.ts: the checked-in lib/db.ts is BEHIND server-v2/_lib-db.cjs — the
+  // bundle exports normGexSymbol() and takes a `symbol` arg on every
+  // option_strike_gex_history query, the TypeScript source does neither. Adding
+  // a helper to the source would mean regenerating the bundle, which would drop
+  // symbol support and break SPY/QQQ. Nothing here needs that regeneration.
+  if (libDb) {
+    register('/api/strike-gex-series', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const symbol = libDb.normGexSymbol(sp.get('symbol'));
+          const mode = sp.get('mode') ?? 'series';
+
+          // Which (date, expiry) sessions actually have rows. Retention in
+          // insertOptionStrikeGexRows prunes to ~2 days, so this list is short
+          // by design — do NOT present it as a full history picker.
+          if (mode === 'meta') {
+            const metaRows = await libDb.queryAll(
+              `SELECT date, expiry, COUNT(*)::int AS snaps
+                 FROM option_strike_gex_history
+                WHERE symbol = ?
+                GROUP BY date, expiry
+                ORDER BY date DESC, expiry ASC`,
+              [symbol]
+            );
+            send(res, 200, {
+              mode: 'meta', symbol,
+              days: metaRows.map((r) => ({
+                date: String(r.date), expiry: String(r.expiry), snaps: Number(r.snaps ?? 0),
+              })),
+            });
+            return;
+          }
+
+          const date = sp.get('date') ?? todayET();
+          const expiry = sp.get('expiry') ?? '';
+          if (!expiry) { send(res, 200, { error: 'expiry is required', rows: [] }); return; }
+
+          if (mode === 'strikes') {
+            const strikeRows = await libDb.queryAll(
+              `SELECT strike, COUNT(*)::int AS snaps, AVG(net_gex) AS avg_net_gex
+                 FROM option_strike_gex_history
+                WHERE symbol = ? AND date = ? AND expiry = ?
+                GROUP BY strike
+                ORDER BY strike ASC`,
+              [symbol, date, expiry]
+            );
+            send(res, 200, {
+              mode: 'strikes', symbol, date, expiry,
+              strikes: strikeRows.map((r) => ({
+                strike: Number(r.strike),
+                snaps: Number(r.snaps ?? 0),
+                avgNetGex: Number(r.avg_net_gex ?? 0),
+              })),
+            });
+            return;
+          }
+
+          const strike = Number(sp.get('strike'));
+          if (!Number.isFinite(strike) || strike <= 0) {
+            send(res, 200, { error: 'strike is required', rows: [] });
+            return;
+          }
+          // Covered by idx_osgh_symbol_lookup (symbol, date, expiry, strike, timestamp DESC).
+          const seriesRows = await libDb.queryAll(
+            `SELECT timestamp, spot, net_gex, net_vol_gex, call_gamma, put_gamma
+               FROM option_strike_gex_history
+              WHERE symbol = ? AND date = ? AND expiry = ? AND strike = ?
+              ORDER BY timestamp ASC`,
+            [symbol, date, expiry, strike]
+          );
+          send(res, 200, {
+            mode: 'series', symbol, date, expiry, strike,
+            rows: seriesRows.map((r) => ({
+              t: Number(r.timestamp),
+              spot: r.spot == null ? null : Number(r.spot),
+              netGex: Number(r.net_gex ?? 0),
+              netVolGex: r.net_vol_gex == null ? null : Number(r.net_vol_gex),
+              callGamma: r.call_gamma == null ? null : Number(r.call_gamma),
+              putGamma: r.put_gamma == null ? null : Number(r.put_gamma),
+            })),
+          });
+        } catch (err) { send(res, 200, { error: String(err), rows: [] }); }
+      },
+    });
+  }
+
+
   // /api/public-stats — UNGATED landing-page graded-performance strip. Ported
   // verbatim from app/api/public-stats/route.ts. ISR (revalidate=86400) replaced
   // by a module-level 24h TTL cache so anonymous traffic never hits PG per view;
