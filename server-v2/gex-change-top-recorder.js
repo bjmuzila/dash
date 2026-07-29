@@ -123,8 +123,14 @@ async function ensureSchema() {
 }
 
 // ── Scoring query (mirrors /proxy/strike-growth/scanner) ──────────────────────
-// Score normalized over the full candidate set, THEN filtered to "very strong",
-// so a recorded row's score matches what the tab shows for the same row.
+// IMPORTANT: the |Δ|/|%| min-max normalization is done over the QUALIFYING
+// ("very strong") candidates only — not the whole scanned universe. Normalizing
+// against the full universe let a handful of huge, non-qualifying $ movers
+// dominate the denominator, crushing every qualifying pick's ratio toward 0 and
+// making score.toFixed(0) read as "0" or "1" for nearly every recorded row.
+// Also enforces max ONE row per symbol (the best-scored strike for that ticker)
+// via DISTINCT ON, so a single ticker with several strikes qualifying can't
+// occupy more than one of the top-N slots.
 const SCAN_SQL = `
   WITH changes AS (
     SELECT sg.symbol, sg.expiry, sg.strike, sg.ts, sg.spot, sg.delta_pct,
@@ -155,21 +161,33 @@ const SCAN_SQL = `
     FROM stats s
     WHERE s.n >= 2 AND s.latest_chg IS NOT NULL
   ),
+  -- Filter down to "very strong" candidates FIRST ...
+  qualified AS (
+    SELECT symbol, expiry, strike, latest_chg, pct_open, spot, z_score
+    FROM scored
+    WHERE ABS(latest_chg) >= $3
+      AND pct_open IS NOT NULL AND ABS(pct_open) >= $4
+      AND otm_dist >= $5
+      AND ($6 = 'all'
+        OR ($6 = 'build' AND spot > 0 AND ((strike > spot AND latest_chg > 0) OR (strike < spot AND latest_chg < 0)))
+        OR ($6 = 'pos'   AND spot > 0 AND strike > spot AND latest_chg > 0)
+        OR ($6 = 'neg'   AND spot > 0 AND strike < spot AND latest_chg < 0))
+  ),
+  -- ... THEN normalize/score over just that qualifying set.
   ranked AS (
-    SELECT symbol, expiry, strike, latest_chg, pct_open, spot, z_score, otm_dist,
+    SELECT symbol, expiry, strike, latest_chg, pct_open, spot, z_score,
            (${W_ABS} * COALESCE(ABS(latest_chg) / NULLIF(MAX(ABS(latest_chg)) OVER (), 0), 0)
           + ${W_PCT} * COALESCE(ABS(pct_open)  / NULLIF(MAX(ABS(pct_open))  OVER (), 0), 0)) * 100 AS score
-    FROM scored
+    FROM qualified
+  ),
+  -- Max ONE row per ticker: keep only its best-scored strike.
+  deduped AS (
+    SELECT DISTINCT ON (symbol) symbol, expiry, strike, latest_chg, pct_open, spot, z_score, score
+    FROM ranked
+    ORDER BY symbol, score DESC NULLS LAST
   )
   SELECT symbol, expiry, strike, latest_chg, pct_open, spot, z_score, score
-  FROM ranked
-  WHERE ABS(latest_chg) >= $3
-    AND pct_open IS NOT NULL AND ABS(pct_open) >= $4
-    AND otm_dist >= $5
-    AND ($6 = 'all'
-      OR ($6 = 'build' AND spot > 0 AND ((strike > spot AND latest_chg > 0) OR (strike < spot AND latest_chg < 0)))
-      OR ($6 = 'pos'   AND spot > 0 AND strike > spot AND latest_chg > 0)
-      OR ($6 = 'neg'   AND spot > 0 AND strike < spot AND latest_chg < 0))
+  FROM deduped
   ORDER BY score DESC NULLS LAST
   LIMIT $7`;
 

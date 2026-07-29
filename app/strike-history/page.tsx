@@ -21,7 +21,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { HOME_THEME, homeRefreshButtonStyle, homeButtonStyle, homeSecondaryButtonStyle, statTileStyle, LIGHT_BLUE, SOFT_RED } from "@/components/shared/homeTheme";
+import { HOME_THEME, homeRefreshButtonStyle, homeButtonStyle, homeSecondaryButtonStyle, homeInputStyle, statTileStyle, DOCK_THEME, LIGHT_BLUE, SOFT_RED } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import ScannerTabsBar from "@/components/scanner/ScannerTabsBar";
@@ -249,6 +249,166 @@ function Panel({
   );
 }
 
+/* ── strike input ─────────────────────────────────────────────────────────── */
+
+/**
+ * Typeable strike field with an on-theme suggestion list.
+ *
+ * A plain <select> is unusable once a session records hundreds of strikes, so
+ * this takes free text and commits to the NEAREST RECORDED strike rather than
+ * whatever was typed — asking for 7423 on a 5-point grid should land you on
+ * 7425, not on an empty chart. Exact-vs-snapped is shown under the field so a
+ * snap is never silent.
+ */
+function StrikeInput({
+  strikes, value, onCommit,
+}: {
+  strikes: StrikeMeta[];
+  value: string;
+  onCommit: (v: string) => void;
+}) {
+  const [text, setText] = useState(value);
+  const [open, setOpen] = useState(false);
+  const [cursor, setCursor] = useState(0);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+
+  // Parent can change the strike on its own (day switch auto-picks the dominant
+  // one) — mirror that back into the field instead of leaving stale text.
+  useEffect(() => { setText(value); }, [value]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const matches = useMemo(() => {
+    const q = text.trim();
+    if (!q) return strikes;
+    // Prefix first: typing "74" should show the 74xx block, NOT the strikes
+    // numerically closest to 74 (which would be the bottom of the chain).
+    const pref = strikes.filter((s) => String(s.strike).startsWith(q));
+    if (pref.length) return pref;
+    const n = Number(q);
+    if (Number.isFinite(n)) {
+      return [...strikes]
+        .sort((a, b) => Math.abs(a.strike - n) - Math.abs(b.strike - n))
+        .slice(0, 9)
+        .sort((a, b) => a.strike - b.strike);
+    }
+    return [];
+  }, [text, strikes]);
+
+  const exact = useMemo(
+    () => strikes.some((s) => String(s.strike) === text.trim()),
+    [strikes, text]
+  );
+
+  const nearestTo = useCallback((n: number) => {
+    if (!strikes.length) return null;
+    return strikes.reduce((best, s) =>
+      Math.abs(s.strike - n) < Math.abs(best.strike - n) ? s : best, strikes[0]);
+  }, [strikes]);
+
+  const commit = useCallback((raw: string) => {
+    const n = Number(String(raw).trim());
+    if (!Number.isFinite(n)) { setText(value); setOpen(false); return; }
+    const hit = strikes.find((s) => s.strike === n) ?? nearestTo(n);
+    if (hit) { setText(String(hit.strike)); onCommit(String(hit.strike)); }
+    setOpen(false);
+  }, [strikes, nearestTo, onCommit, value]);
+
+  const step = useCallback((dir: 1 | -1) => {
+    if (!strikes.length) return;
+    const sorted = [...strikes].sort((a, b) => a.strike - b.strike);
+    const i = sorted.findIndex((s) => String(s.strike) === value);
+    const next = sorted[Math.max(0, Math.min(sorted.length - 1, (i < 0 ? 0 : i) + dir))];
+    if (next) { setText(String(next.strike)); onCommit(String(next.strike)); }
+  }, [strikes, value, onCommit]);
+
+  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") { e.preventDefault(); commit(open && matches[cursor] ? String(matches[cursor].strike) : text); return; }
+    if (e.key === "Escape") { setOpen(false); setText(value); return; }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      // Closed field: arrows walk the chain. Open list: arrows move the highlight.
+      if (!open) { step(1); return; }
+      setCursor((c) => Math.min(matches.length - 1, c + 1));
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) { step(-1); return; }
+      setCursor((c) => Math.max(0, c - 1));
+    }
+  };
+
+  return (
+    <div ref={boxRef} style={{ position: "relative", width: 160 }}>
+      <input
+        value={text}
+        onChange={(e) => { setText(e.target.value); setOpen(true); setCursor(0); }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={onKey}
+        onBlur={() => { if (!open) commit(text); }}
+        placeholder={strikes.length ? "type a strike" : "—"}
+        disabled={!strikes.length}
+        inputMode="decimal"
+        autoComplete="off"
+        spellCheck={false}
+        style={{ ...homeInputStyle, width: "100%", fontVariantNumeric: "tabular-nums" }}
+      />
+
+      <div style={{ fontSize: 10, marginTop: 3, color: HOME_THEME.green, opacity: 0.7, height: 12 }}>
+        {!strikes.length ? ""
+          : text.trim() === "" ? `${strikes.length} recorded`
+          : exact ? `exact · ${strikes.length} recorded`
+          : `↵ snaps to nearest of ${strikes.length}`}
+      </div>
+
+      {open && matches.length > 0 && (
+        <div
+          style={{
+            position: "absolute", top: "100%", left: 0, marginTop: 2, zIndex: 40,
+            width: "100%", maxHeight: 240, overflowY: "auto",
+            borderRadius: 8, borderTop: `2px solid ${DOCK_THEME.cyanTop}`,
+            background: DOCK_THEME.bg, boxShadow: DOCK_THEME.shadow,
+          }}
+        >
+          {matches.map((s, i) => {
+            const isCur = String(s.strike) === value;
+            const isCursor = i === cursor;
+            return (
+              <div
+                key={s.strike}
+                // mousedown, not click: blur fires first on click and would
+                // commit the typed text before the row's handler ever ran.
+                onMouseDown={(e) => { e.preventDefault(); commit(String(s.strike)); }}
+                onMouseEnter={() => setCursor(i)}
+                style={{
+                  padding: "6px 10px", fontSize: 13, cursor: "pointer",
+                  display: "flex", justifyContent: "space-between", gap: 8,
+                  fontVariantNumeric: "tabular-nums",
+                  color: isCur || isCursor ? HOME_THEME.text : HOME_THEME.green,
+                  background: isCur ? DOCK_THEME.activeTile : isCursor ? DOCK_THEME.hoverTile : "transparent",
+                  border: `1px solid ${isCur ? DOCK_THEME.activeBorder : "transparent"}`,
+                  borderRadius: 6,
+                }}
+              >
+                <span>{s.strike}</span>
+                <span style={{ opacity: 0.55, fontSize: 11 }}>{s.snaps}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── page ─────────────────────────────────────────────────────────────────── */
 
 export default function StrikeHistoryPage() {
@@ -404,15 +564,9 @@ export default function StrikeHistoryPage() {
               placeholder="Loading…"
             />
           </div>
-          <div style={{ minWidth: 160 }}>
+          <div>
             <div style={label}>Strike</div>
-            <ThemedSelect
-              value={strike}
-              onChange={setStrike}
-              options={strikes.map((s) => ({ value: String(s.strike), label: String(s.strike) }))}
-              placeholder={strikes.length ? "Pick a strike" : "—"}
-              disabled={!strikes.length}
-            />
+            <StrikeInput strikes={strikes} value={strike} onCommit={setStrike} />
           </div>
 
           {/* RTH / ETH window. Filters the already-fetched series client-side. */}

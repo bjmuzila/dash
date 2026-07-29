@@ -14,6 +14,7 @@ import { autoGexTrialEmail, autoGexTrialText, AUTO_GEX_TRIAL_SUBJECT } from "@/l
 import { cbConfidenceEmail, cbConfidenceText, CB_CONFIDENCE_SUBJECT } from "@/lib/emails/cb-confidence";
 import { reorgBetaNoticeEmail, reorgBetaNoticeText, REORG_BETA_NOTICE_SUBJECT } from "@/lib/emails/reorg-beta-notice";
 import { weeklyEdgeEmail, weeklyEdgeText, WEEKLY_EDGE_SUBJECT } from "@/lib/emails/weekly-edge";
+import { subscriberPriceMatchEmail, subscriberPriceMatchText, SUBSCRIBER_PRICE_MATCH_SUBJECT } from "@/lib/emails/subscriber-price-match";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -123,6 +124,13 @@ function buildTemplates(): Template[] {
       subject: WEEKLY_EDGE_SUBJECT,
       html: weeklyEdgeEmail(),
       text: weeklyEdgeText(),
+    },
+    {
+      id: "subscriber-price-match",
+      label: "💲 Subscriber price match — monthly subscribers moved to $45/mo",
+      subject: SUBSCRIBER_PRICE_MATCH_SUBJECT,
+      html: subscriberPriceMatchEmail(),
+      text: subscriberPriceMatchText(),
     },
   ];
 }
