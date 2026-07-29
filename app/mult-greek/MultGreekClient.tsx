@@ -73,7 +73,11 @@ interface ComputedResult {
   rows: ComputedRow[];
   cols: string[];                                 // expiry dates, front → back
   maxAbs: Record<string, number>;                 // per-column |max| for shading
-  top3: Record<string, Record<number, number>>;   // per-column top-3 strike ranks
+  top3: Record<string, Record<number, number>>;
+  /** Per expiry: strike -> rank 1..5 among the top 5 POSITIVE and top 5 NEGATIVE
+   *  GEX strikes in that column. Mirrors the home heatmap's rank badges (top 5
+   *  each side by |GEX|). Only these strikes carry a Δ stamp. */
+  top5PerSide: Record<string, Record<number, number>>;   // per-column top-3 strike ranks
   atmStrike: number;
   mvcStrike: Record<string, number | null>;       // per-column peak |GEX| strike
 }
@@ -288,6 +292,7 @@ function computeRows(
 
   const maxAbs: Record<string, number> = {};
   const top3: Record<string, Record<number, number>> = {};
+  const top5PerSide: Record<string, Record<number, number>> = {};
   const mvcStrike: Record<string, number | null> = {};
   cols.forEach(e => {
     let mx = 1;
@@ -300,13 +305,24 @@ function computeRows(
       .forEach((row, idx) => { ranks[row.strike] = idx + 1; });
     top3[e] = ranks;
 
+    // Top 5 each side, by |GEX| within the sign — same rule the home heatmap
+    // uses for its rank badges, so "top 5" means the same thing on both pages.
+    const side: Record<number, number> = {};
+    [...out].filter(r => r.gex[e] > 0)
+      .sort((a, b) => Math.abs(b.gex[e]) - Math.abs(a.gex[e])).slice(0, 5)
+      .forEach((row, idx) => { side[row.strike] = idx + 1; });
+    [...out].filter(r => r.gex[e] < 0)
+      .sort((a, b) => Math.abs(b.gex[e]) - Math.abs(a.gex[e])).slice(0, 5)
+      .forEach((row, idx) => { if (side[row.strike] == null) side[row.strike] = idx + 1; });
+    top5PerSide[e] = side;
+
     // Core Bullseye per column = strike with the highest ABSOLUTE net GEX.
     let peak: number | null = null, peakAbs = 0;
     out.forEach(r => { const a = Math.abs(r.gex[e]); if (a > peakAbs) { peakAbs = a; peak = r.strike; } });
     mvcStrike[e] = peak;
   });
 
-  return { rows: out, cols, maxAbs, top3, atmStrike, mvcStrike };
+  return { rows: out, cols, maxAbs, top3, top5PerSide, atmStrike, mvcStrike };
 }
 
 interface Walls {
@@ -336,43 +352,38 @@ function computeWalls(rows: ComputedRow[], expiry: string): Walls {
 
 interface GexChange { now: number; d15: number | null; d30: number | null; dOpen: number | null; spanMs: number; }
 
-/** Δ bar mode lookback. 0 = off (cells show NET GEX values). */
+/** Δ bar mode lookback. 0 = off. */
 type DeltaWindow = 0 | 5 | 15 | 30;
 
 /** One (ticker, expiry) slice of recorded baselines, keyed by strike. */
 type GexGridCell = { vNow: number | null; v5: number | null; v15: number | null; v30: number | null };
 type GexGrid = Record<string, Record<number, GexGridCell>>;
 
-/** Diverging Δ bar — replaces the cell value in Δ bar mode.
- *  Grows right from a center axis when GEX is building, left when unwinding.
- *  Height is 1.2em (the text line box) so toggling the mode never reflows a row. */
-function DeltaBar({ d, max }: { d: number | null; max: number }) {
-  const pct = d == null || !Number.isFinite(d) || max <= 0
-    ? 0
-    : Math.min(Math.abs(d) / max, 1) * 48;
-  const pos = (d ?? 0) > 0;
-  const fill = pos
-    ? "linear-gradient(90deg, rgba(34,197,94,.40), rgba(34,197,94,.96))"
-    : "linear-gradient(90deg, rgba(239,68,68,.96), rgba(239,68,68,.40))";
+/** Compact magnitude for the stamp: whole millions, no $ — keeps it 2-3 glyphs. */
+function stampNum(d: number): string {
+  const a = Math.abs(d);
+  if (a >= 1000) return (a / 1000).toFixed(1) + "B";
+  if (a >= 100) return String(Math.round(a));
+  return a.toFixed(a < 10 ? 1 : 0);
+}
+
+/** Ghost Δ stamp — hairline border + coloured caret and magnitude, no fill, so it
+ *  sits behind the GEX value in the visual hierarchy instead of competing with the
+ *  cell's heat shading. Rendered only on the top-5-per-side strikes. */
+function DeltaStamp({ d }: { d: number | null }) {
+  if (d == null || !Number.isFinite(d)) return null;
+  const pos = d > 0;
+  const rgb = pos ? "34,197,94" : "239,68,68";
+  const col = pos ? "#22c55e" : "#ef4444";
   return (
-    <span style={{ display: "flex", alignItems: "center", height: "1.2em", padding: "0 2px" }}>
-      <span style={{ position: "relative", width: "100%", height: 9, borderRadius: 2, background: "rgba(255,255,255,.045)" }}>
-        {/* center axis = no change */}
-        <span style={{ position: "absolute", left: "50%", top: -2, bottom: -2, width: 1, background: "rgba(255,255,255,.28)" }} />
-        {pct > 0 && (
-          <span style={{
-            position: "absolute", top: 1, bottom: 1, borderRadius: 2, background: fill,
-            ...(pos ? { left: "50%", width: `${pct}%` } : { right: "50%", width: `${pct}%` }),
-          }} />
-        )}
-        {pct === 0 && (
-          <span style={{
-            position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)",
-            width: 3, height: 3, borderRadius: "50%", background: "rgba(255,255,255,.25)",
-          }} />
-        )}
-      </span>
-    </span>
+    <span
+      title={`Δ ${pos ? "+" : "−"}$${stampNum(d)}M vs baseline`}
+      style={{
+        flexShrink: 0, fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)",
+        lineHeight: 1.4, padding: "0 3px", borderRadius: 3, whiteSpace: "nowrap",
+        background: "transparent", border: `1px solid rgba(${rgb},0.5)`, color: col,
+      }}
+    >{pos ? "▲" : "▼"}{stampNum(d)}</span>
   );
 }
 
@@ -401,8 +412,7 @@ function TickerPanel({
   captureWindow: number | null;
   /** Read a cell's 15m / 30m / open NET GEX change for the click card. */
   getGexChange: (ticker: string, expiry: string, strike: number) => GexChange;
-  /** Δ bar mode: 0 = off (show NET GEX values), else the lookback in minutes.
-   *  When on, every cell's value is replaced by a diverging change bar. */
+  /** Δ stamp lookback in minutes; 0 = off. */
   deltaWindow: DeltaWindow;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -472,10 +482,10 @@ function TickerPanel({
     return { ...computedFull, rows: rows.slice(start, end) };
   })();
 
-  // ---- Δ bar mode ---------------------------------------------------------
+  // ---- Δ stamps -----------------------------------------------------------
   // One bulk pull per expiry column (not per cell) — see /api/mult-greek-gex-grid.
-  // Only fetched while the mode is on; cleared when it's switched off so we don't
-  // hold stale baselines across an expiry change.
+  // Only fetched while the mode is on; cleared when switched off so stale
+  // baselines can't survive an expiry change.
   const [gexGrid, setGexGrid] = useState<GexGrid>({});
   const colDatesKey = colDates.join(",");
   useEffect(() => {
@@ -494,9 +504,7 @@ function TickerPanel({
           const byStrike: Record<number, GexGridCell> = {};
           for (const [k, v] of Object.entries(cells)) byStrike[Number(k)] = v;
           return [date, byStrike] as const;
-        } catch {
-          return [date, {}] as const;
-        }
+        } catch { return [date, {}] as const; }
       }));
       if (cancelled) return;
       setGexGrid(Object.fromEntries(entries));
@@ -507,33 +515,28 @@ function TickerPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deltaWindow, ticker, colDatesKey]);
 
-  // Δ per cell = live NET GEX (what the cell would print) − recorded baseline.
-  // Scale is per expiry column, matching how the heat scale already works, so a
-  // quiet back-month column still shows readable bars.
+  // Δ per cell = live NET GEX − recorded baseline. Computed ONLY for the
+  // top-5-per-side strikes, since those are the only ones that get a stamp.
   const deltas = useMemo(() => {
-    const out: { by: Record<string, Record<number, number>>; max: Record<string, number> } = { by: {}, max: {} };
-    if (deltaWindow === 0 || !computed) return out;
+    const by: Record<string, Record<number, number>> = {};
+    if (deltaWindow === 0 || !computed) return by;
     const key = `v${deltaWindow}` as "v5" | "v15" | "v30";
     for (const e of computed.cols) {
       const grid = gexGrid[e];
+      const ranked = computed.top5PerSide[e] ?? {};
       const col: Record<number, number> = {};
-      let max = 0;
       if (grid) {
         for (const r of computed.rows) {
+          if (ranked[r.strike] == null) continue;   // not top 5 on its side
           const live = r.gex[e];
-          const cell = grid[r.strike];
-          const past = cell ? cell[key] : null;
+          const past = grid[r.strike]?.[key] ?? null;
           if (live == null || past == null) continue;
-          const d = live - past;
-          col[r.strike] = d;
-          const a = Math.abs(d);
-          if (a > max) max = a;
+          col[r.strike] = live - past;
         }
       }
-      out.by[e] = col;
-      out.max[e] = max;
+      by[e] = col;
     }
-    return out;
+    return by;
   }, [deltaWindow, gexGrid, computed]);
 
   // EM band strikes (snapped to this panel's strikes). Only when current-week.
@@ -641,7 +644,7 @@ function TickerPanel({
             <div key={c.date} style={{ padding: "3px 4px", textAlign: "center", lineHeight: 1.15 }}>
               <div style={{ color: HT.cyan, fontSize: 10, fontWeight: 800, letterSpacing: "0.04em" }}>{lbl.dte}</div>
               <div style={{ color: HT.muted, fontSize: 8, fontWeight: 700 }}>
-                {deltaWindow !== 0 ? `Δ ${deltaWindow}M` : "GEX"} · {lbl.md}
+                {deltaWindow !== 0 ? `GEX +Δ${deltaWindow}M` : "GEX"} · {lbl.md}
               </div>
             </div>
           );
@@ -652,16 +655,8 @@ function TickerPanel({
       <div style={{ display: "grid", gridTemplateColumns: gridCols, background: "rgba(33,158,188,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
         <div style={{ padding: "4px 4px", fontSize: 10, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
         {cols.map(c => {
-          // In Δ bar mode the TOTAL row keeps NUMBERS — it becomes the net Δ for
-          // the column, so there's still one hard figure per expiry to read.
-          const dSum = deltaWindow !== 0
-            ? Object.values(deltas.by[c.date] ?? {}).reduce((s, x) => s + x, 0)
-            : null;
-          const hasD = deltaWindow !== 0 && Object.keys(deltas.by[c.date] ?? {}).length > 0;
-          const v = deltaWindow !== 0 ? (dSum ?? 0) : (totals?.[c.date] ?? 0);
-          const fmt = deltaWindow !== 0
-            ? (hasD ? fmtMoney(v) : { sign: "", value: "--" })
-            : (totals != null ? fmtMoney(v) : { sign: "", value: "--" });
+          const v = totals?.[c.date] ?? 0;
+          const fmt = totals != null ? fmtMoney(v) : { sign: "", value: "--" };
           return (
             <div key={c.date} style={{
               padding: "4px 4px", fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)",
@@ -737,19 +732,15 @@ function TickerPanel({
                   : null;
                 const isCB = lvl?.t === "CB";
                 const isSel = clickCell != null && clickCell.strike === r.strike && clickCell.expiry === e;
-                // Δ bar mode: the bar REPLACES the value. Heat background comes off
-                // (green/red Δ over blue/red GEX heat reads muddy), but the top-rank
-                // and CB/CW/PW outlines stay so the walls are still locatable. The
-                // corner badges/star are hidden — at 1.2em they'd occlude the bar.
+                // Δ stamp — only on the top 5 strikes each side of this column.
+                // Everything about the GEX value and its heat is unchanged; the
+                // stamp takes a fixed 30px slot on the left so values stay aligned
+                // whether or not a given row is ranked.
                 const dMode = deltaWindow !== 0;
-                const dVal = dMode ? (deltas.by[e]?.[r.strike] ?? null) : null;
-                const dTitle = dMode
-                  ? `${ticker} ${r.strike} · ${colLabel(e).dte} — Δ${deltaWindow}m ${
-                      dVal == null ? "no baseline yet" : `${fmtMoney(dVal).sign}${fmtMoney(dVal).value}`
-                    } · now ${val == null ? "--" : `${formatted.sign}${formatted.value}`}`
-                  : undefined;
+                const dVal = dMode ? (deltas[e]?.[r.strike] ?? null) : null;
+                const dRanked = dMode && (computed.top5PerSide[e]?.[r.strike] ?? null) != null;
                 return (
-                  <div key={e} data-gexcell="1" title={dTitle} className={isCB && !dMode ? "mvc-peak-cell" : undefined}
+                  <div key={e} data-gexcell="1" className={isCB ? "mvc-peak-cell" : undefined}
                     onClick={isCapturing ? undefined : (ev) => {
                       ev.stopPropagation();
                       setClickCell(prev => (prev && prev.strike === r.strike && prev.expiry === e)
@@ -760,7 +751,8 @@ function TickerPanel({
                     padding: "4px 4px", fontSize: 10, fontFamily: "var(--font-mono)",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                     textAlign: "center", color: SOFT_WHITE, cursor: isCapturing ? "default" : "pointer",
-                    background: (dMode || val == null) ? "transparent" : metricBg(val, scaleMax, topRank, intensity),
+                    ...(dMode ? { display: "flex", alignItems: "center", gap: 4 } : {}),
+                    background: val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity),
                     fontWeight: weight,
                     position: "relative",
                     ...(topRank === 1 && val != null ? { outline: `1px solid ${val >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", zIndex: 1 } : {}),
@@ -768,13 +760,13 @@ function TickerPanel({
                     ...(isSel ? { outline: "2px solid #ffffff", outlineOffset: "-2px", zIndex: 3 } : {}),
                   }}>
                     {/* Non-front columns keep the plain gold peak star. */}
-                    {!dMode && !isFront && topRank === 1 && (
+                    {!isFront && topRank === 1 && (
                       <span style={{
                         position: "absolute", top: 1, left: 2, fontSize: 10, lineHeight: 1,
                         color: "#ffd600", textShadow: "0 0 2px rgba(0,0,0,.8)", pointerEvents: "none",
                       }}>★</span>
                     )}
-                    {!dMode && lvl && (
+                    {lvl && (
                       <span title={lvl.title} style={{
                         position: "absolute", top: 0, right: 1, fontSize: 8, fontWeight: 900,
                         lineHeight: 1.2, letterSpacing: "0.02em",
@@ -782,9 +774,14 @@ function TickerPanel({
                         pointerEvents: "none",
                       }}>{lvl.t}</span>
                     )}
-                    {dMode
-                      ? <DeltaBar d={dVal} max={deltas.max[e] ?? 0} />
-                      : <><span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}</>}
+                    {dMode && (
+                      <span style={{ flexShrink: 0, width: 30, display: "flex", justifyContent: "flex-start" }}>
+                        {dRanked ? <DeltaStamp d={dVal} /> : null}
+                      </span>
+                    )}
+                    <span style={dMode ? { marginLeft: "auto", whiteSpace: "nowrap" } : undefined}>
+                      <span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}
+                    </span>
                   </div>
                 );
               })}
@@ -917,7 +914,7 @@ export function MultGreekClient({
 
   // Front-column level badges: CB (highest |GEX|), CW (2nd), PW (3rd). Toggled
   // from the toolbar; all on by default.
-  // Δ bar mode — 0 = off (cells show NET GEX). Drives every panel at once.
+  // Δ stamps — 0 = off. Drives every panel at once.
   const [deltaWindow, setDeltaWindow] = useState<DeltaWindow>(0);
   const [showCB, setShowCB] = useState(true);
   const [showCW, setShowCW] = useState(true);
@@ -1436,8 +1433,8 @@ export function MultGreekClient({
 
         <DockGap />
 
-        {/* Δ bar mode — OFF shows NET GEX values; 5M/15M/30M replaces every cell
-            value with a diverging change bar. Applies to all panels at once. */}
+        {/* Δ stamps — OFF is today's view; 5M/15M/30M adds a change stamp to the
+            left of the value on the top 5 strikes each side of every column. */}
         <SegGroup
           options={[
             { label: "Δ OFF", value: "0" },

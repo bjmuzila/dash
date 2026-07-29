@@ -139,36 +139,31 @@ function fmtMoney(v: number) {
   return s + "$" + a.toFixed(0);
 }
 
-/** Diverging Δ bar — replaces the NET GEX value when Δ bar mode is on.
- *  Grows right from a center axis when GEX is building, left when unwinding.
- *  Fixed 11px track inside the existing cell padding, so switching modes does
- *  not change the row height. */
-function DeltaBar({ d, max }: { d: number | null; max: number }) {
-  const pct = d == null || !Number.isFinite(d) || max <= 0
-    ? 0
-    : Math.min(Math.abs(d) / max, 1) * 48;
-  const pos = (d ?? 0) > 0;
-  const fill = pos
-    ? "linear-gradient(90deg, rgba(34,197,94,.40), rgba(34,197,94,.96))"
-    : "linear-gradient(90deg, rgba(239,68,68,.96), rgba(239,68,68,.40))";
+/** Compact magnitude for the Δ stamp: whole millions, no $ — 2-3 glyphs wide. */
+function stampNum(d: number): string {
+  const a = Math.abs(d);
+  if (a >= 1000) return (a / 1000).toFixed(1) + "B";
+  if (a >= 100) return String(Math.round(a));
+  return a.toFixed(a < 10 ? 1 : 0);
+}
+
+/** Ghost Δ stamp — hairline border, coloured caret + magnitude, no fill, so it
+ *  reads behind the GEX value rather than competing with the cell's heat. Only
+ *  rendered on ranked strikes (top 5 each side). */
+function DeltaStamp({ d }: { d: number | null }) {
+  if (d == null || !Number.isFinite(d)) return null;
+  const pos = d > 0;
+  const rgb = pos ? "34,197,94" : "239,68,68";
+  const col = pos ? "#22c55e" : "#ef4444";
   return (
-    <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", height: "100%", padding: "0 2px" }}>
-      <div style={{ position: "relative", width: "100%", height: 11, borderRadius: 2, background: "rgba(255,255,255,0.045)" }}>
-        {/* center axis = no change */}
-        <div style={{ position: "absolute", left: "50%", top: -2, bottom: -2, width: 1, background: "rgba(255,255,255,0.28)" }} />
-        {pct > 0 ? (
-          <div style={{
-            position: "absolute", top: 1, bottom: 1, borderRadius: 2, background: fill,
-            ...(pos ? { left: "50%", width: `${pct}%` } : { right: "50%", width: `${pct}%` }),
-          }} />
-        ) : (
-          <div style={{
-            position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)",
-            width: 3, height: 3, borderRadius: "50%", background: "rgba(255,255,255,0.25)",
-          }} />
-        )}
-      </div>
-    </div>
+    <span
+      title={`\u0394 ${pos ? "+" : "\u2212"}$${stampNum(d)}M vs baseline`}
+      style={{
+        flexShrink: 0, fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)",
+        lineHeight: 1.4, padding: "0 3px", borderRadius: 3, whiteSpace: "nowrap",
+        background: "transparent", border: `1px solid rgba(${rgb},0.5)`, color: col,
+      }}
+    >{pos ? "\u25B2" : "\u25BC"}{stampNum(d)}</span>
   );
 }
 
@@ -605,7 +600,7 @@ export function HomeClient({
   // option chain. ("table" divergent-bars view retired from the switcher; kept in
   // the union so its now-unreachable render branch stays valid without a refactor.)
   const [heatmapView, setHeatmapView] = useState<"heatmap" | "table" | "chain">("heatmap");
-  // Δ bar mode for the heatmap's NET GEX column. 0 = off (print the value).
+  // Δ stamps on the heatmap's NET GEX column. 0 = off (today's view).
   const [deltaWindow, setDeltaWindow] = useState<0 | 5 | 15 | 30>(0);
   // GEX chart card view: the Net GEX bar chart, or the live ES 5m candles in its
   // place. Moved here from the bottom tab strip.
@@ -1155,34 +1150,28 @@ export function HomeClient({
     return () => clearInterval(id);
   }, []);
   // Point-in-time net GEX baselines (open / 5 / 15 / 30 min) for the popup's
-  // rolling-difference boxes — and, when Δ bar mode is on, for the heatmap's
-  // NET GEX column. Polls while a strike is selected OR the mode is active.
+  // rolling-difference boxes — and, while Δ stamps are on, for the heatmap's
+  // NET GEX column. Polls when a strike is selected OR the mode is active.
   const strikeBaselines = useStrikeGexHistory(
     (selectedStrike || deltaWindow !== 0) ? selectedExpiry : "",
     [5, 15, 30]
   );
 
-  // Δ bar mode: per-strike NET GEX change vs the recorded baseline, plus the
-  // column scale the bars are drawn against. Declared AFTER strikeBaselines —
-  // it reads it, so it cannot sit above the declaration.
-  //
-  // NOTE this only covers NET GEX. useStrikeGexHistory returns ONE baseline per
-  // strike (the OI+Vol composite) — there is no recorded history for Vol Only,
-  // DEX, or the SPY/QQQ columns, so those keep printing their values.
+  // Δ per strike = live NET GEX − recorded baseline, for RANKED strikes only.
+  // row.rank is already "top 5 each side" (see toHeatmapRows), so gating on it
+  // gives exactly the top 5 positive + top 5 negative strikes.
   const heatmapDeltas = useMemo(() => {
     const by: Record<number, number> = {};
-    let max = 0;
-    if (deltaWindow === 0) return { by, max };
+    if (deltaWindow === 0) return by;
     const key = String(deltaWindow);
     for (const r of heatmapRows) {
+      if (r.rank == null) continue;
       const live = Number(r.netGexVal ?? NaN);
       const past = Number(strikeBaselines?.[r.strikeNum]?.[key] ?? NaN);
       if (!Number.isFinite(live) || !Number.isFinite(past)) continue;
-      const d = live - past;
-      by[r.strikeNum] = d;
-      if (Math.abs(d) > max) max = Math.abs(d);
+      by[r.strikeNum] = live - past;
     }
-    return { by, max };
+    return by;
   }, [deltaWindow, heatmapRows, strikeBaselines]);
 
   // Chart ghost-bar baselines — poll the full chain whenever any prior-state
@@ -1707,33 +1696,23 @@ export function HomeClient({
                     <BoxDiscordBtn targetRef={heatmapBodyRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                     </>
                     )}
-                    {/* Δ bar mode — OFF prints the NET GEX value; 5M/15M/30M replaces
-                        it with a diverging change bar against the recorded baseline.
-                        Heatmap view only (Chain has no per-strike GEX column). */}
+                    {/* Δ stamps — adds the change to the left of the NET GEX value on
+                        the top 5 strikes each side. Heatmap view only. */}
                     {heatmapView === "heatmap" && (
                       <div style={{ display: "flex", gap: 2, marginLeft: 4, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden" }}>
                         {([0, 5, 15, 30] as const).map((v) => (
                           <button
                             key={v}
                             onClick={() => setDeltaWindow(v)}
-                            title={v === 0
-                              ? "Show NET GEX values"
-                              : `Replace NET GEX with its change over the last ${v} minutes`}
+                            title={v === 0 ? "Hide change stamps" : `Show each ranked strike's net GEX change over the last ${v} minutes`}
                             style={{
-                              padding: "2px 8px",
-                              fontSize: 10,
-                              fontWeight: 700,
-                              textTransform: "uppercase",
-                              letterSpacing: "0.08em",
-                              cursor: "pointer",
-                              border: "none",
-                              fontFamily: "inherit",
+                              padding: "2px 8px", fontSize: 10, fontWeight: 700,
+                              textTransform: "uppercase", letterSpacing: "0.08em",
+                              cursor: "pointer", border: "none", fontFamily: "inherit",
                               background: deltaWindow === v ? "rgba(33,158,188,0.14)" : "transparent",
                               color: deltaWindow === v ? "#219EBC" : "#5a7a98",
                             }}
-                          >
-                            {v === 0 ? "Δ off" : `${v}m`}
-                          </button>
+                          >{v === 0 ? "\u0394 off" : `${v}m`}</button>
                         ))}
                       </div>
                     )}
@@ -1786,9 +1765,9 @@ export function HomeClient({
                       {[
                         { label: "Strike", tip: undefined as string | undefined },
                         {
-                          label: deltaWindow !== 0 && heatmapView === "heatmap" ? `Δ ${deltaWindow}M Net GEX` : "Net GEX",
+                          label: deltaWindow !== 0 && heatmapView === "heatmap" ? `Net GEX +\u0394${deltaWindow}M` : "Net GEX",
                           tip: deltaWindow !== 0 && heatmapView === "heatmap"
-                            ? `Change in net GEX over the last ${deltaWindow} minutes, per strike. Bar grows right (green) when GEX is building, left (red) when it's unwinding; length is scaled to the largest move in the column. Hover a bar for the exact figure.`
+                            ? `Each ranked strike (top 5 each side) carries a stamp with its net GEX change over the last ${deltaWindow} minutes. \u25B2 green = building, \u25BC red = unwinding. Hover a stamp for the exact figure.`
                             : undefined,
                         },
                         { label: "Vol Only GEX", tip: undefined },
@@ -1829,10 +1808,6 @@ export function HomeClient({
                       // Light white frame drawn around the full ATM row (top/bottom on
                       // every cell, plus a right edge on the final column).
                       const atmBorder = "1px solid rgba(255,255,255,0.55)";
-
-                      // Δ bar mode replaces the NET GEX value with a change bar.
-                      // Heatmap view only — Table view already draws its own bars.
-                      const dMode = deltaWindow !== 0 && heatmapView === "heatmap";
 
                       // Left-anchored gradient bar (table view): width 0–100% scaled to the
                       // column max, grows rightward from the left edge. Green = positive,
@@ -1911,22 +1886,14 @@ export function HomeClient({
                                 {isAtm && <span style={{ color: C.cyan, fontWeight: 900, fontSize: 12, fontFamily: "sans-serif", letterSpacing: "0.1em" }}>ATM</span>}
                               </div>
                             </td>
-                            <td key={1} title={dMode
-                                ? `${row.strike} — Δ${deltaWindow}m ${
-                                    heatmapDeltas.by[row.strikeNum] == null
-                                      ? "no baseline yet"
-                                      : fmtMoney(heatmapDeltas.by[row.strikeNum])
-                                  } · now ${row.netGex}`
-                                : undefined}
-                              className={!dMode && heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? "mvc-peak-cell" : undefined} style={{ position: "relative", padding: "0 8px 0 6px", textAlign: "right", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder } : {}), background: dMode || heatmapView === "table" || row.netGexVal == null ? "transparent" : metricBg(row.netGexVal, heatmapColorMeta.max["netGexVal"] ?? 1, intensity, heatmapColorMeta.top3["netGexVal"] ?? []), fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : SOFT_WHITE, ...(!dMode && heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? { border: "3px solid #ffffff", zIndex: 2 } : {}) }}>
-                              {dMode ? (
-                                <DeltaBar d={heatmapDeltas.by[row.strikeNum] ?? null} max={heatmapDeltas.max} />
-                              ) : heatmapView === "table" ? (
+                            <td key={1} className={heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? "mvc-peak-cell" : undefined} style={{ position: "relative", padding: "0 8px 0 6px", textAlign: "right", lineHeight: 1.1, overflow: "hidden", ...(isAtm ? { borderTop: atmBorder, borderBottom: atmBorder } : {}), background: heatmapView === "table" || row.netGexVal == null ? "transparent" : metricBg(row.netGexVal, heatmapColorMeta.max["netGexVal"] ?? 1, intensity, heatmapColorMeta.top3["netGexVal"] ?? []), fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : SOFT_WHITE, ...(heatmapView !== "table" && row.strikeNum === mvcStrikeHeatmap ? { border: "3px solid #ffffff", zIndex: 2 } : {}) }}>
+                              {heatmapView === "table" ? (
                                 barEl(row.netGexVal, "netGexVal")
                               ) : (
                                 <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
-                                  <span style={{ flexShrink: 0, minWidth: 28 }}>
+                                  <span style={{ flexShrink: 0, minWidth: 28, display: "flex", alignItems: "center", gap: 4 }}>
                                     {row.rank && <img src={rankBadgeDataUri(row.rank, row.rankColor ?? "#8B94A7")} width={20} height={13} style={{ display: "block" }} alt={`#${row.rank}`} />}
+                                    {deltaWindow !== 0 && <DeltaStamp d={heatmapDeltas[row.strikeNum] ?? null} />}
                                   </span>
                                   <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
                                     {row.strikeNum === mvcStrikeHeatmap && (

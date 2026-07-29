@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, ClipboardEvent, DragEvent } from "react";
 import {
   homeShellStyle,
   homeHeaderStyle,
@@ -14,62 +14,94 @@ import {
 } from "../lib/theme";
 
 /**
- * Newsletter — weekly builder for the CB Edge letter.
- * Sections: last week's daily recaps (Mon–Fri), upcoming events & earnings,
- * this-week outlook. Each recap and the outlook hold chart slots — drop in the
- * screenshots of what CB Edge called or saw. Draft auto-saves to localStorage;
- * "Export HTML" renders a standalone, email-ready newsletter you can copy/send.
+ * Newsletter — the idea log the weekly letter gets written from.
+ *
+ * One thing per entry: the idea (one line), what you want to say about it, and
+ * the screenshots that prove it. Capture them any day; at the end of the week
+ * pick the week, hit "Copy week", and write the newsletter off the real notes
+ * instead of memory.
+ *
+ * Everything lives in Postgres behind /api/newsletter-ideas (owner-gated), so
+ * it survives a cache clear and follows you between machines. Screenshots are
+ * stored server-side and streamed back from /api/newsletter-ideas/shot?id=N —
+ * they never sit in localStorage.
  */
 
 // ── model ────────────────────────────────────────────────────────────────────
-type Chart = { id: string; src: string; caption: string };
-type Recap = { day: string; date: string; body: string; charts: Chart[] };
-type EventRow = { id: string; date: string; title: string; kind: "event" | "earnings" };
-type Draft = {
-  weekLabel: string;
-  subject: string;
-  intro: string;
-  recaps: Recap[];
-  events: EventRow[];
-  outlook: string;
-  outlookCharts: Chart[];
+type Shot = { id: number; caption: string };
+type Idea = {
+  id: number;
+  title: string;
+  body: string;
+  day: string;        // YYYY-MM-DD
+  week_start: string; // YYYY-MM-DD (Monday)
+  used: boolean;
+  shots: Shot[];
 };
+type WeekRow = { week: string; n: number };
+/** A screenshot staged in the composer, before the idea has an id. */
+type Pending = { key: string; dataUrl: string; caption: string };
 
-const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
-const STORAGE_KEY = "cbedge:newsletter:draft:v1";
+const API = "/api/newsletter-ideas";
+const shotUrl = (id: number) => `${API}/shot?id=${id}`;
 const uid = () => Math.random().toString(36).slice(2, 10);
 
-function emptyDraft(): Draft {
-  return {
-    weekLabel: "",
-    subject: "CB Edge Weekly — Week of ",
-    intro: "",
-    recaps: DAYS.map((day) => ({ day, date: "", body: "", charts: [] })),
-    events: [],
-    outlook: "",
-    outlookCharts: [],
-  };
+// ── dates (local, matches the server's ET-anchored week) ─────────────────────
+function todayStr(): string {
+  return new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }))
+    .toISOString()
+    .slice(0, 10);
+}
+function mondayOf(ds: string): string {
+  const d = new Date(`${ds}T12:00:00Z`);
+  const dow = d.getUTCDay();
+  d.setUTCDate(d.getUTCDate() - (dow === 0 ? 6 : dow - 1));
+  return d.toISOString().slice(0, 10);
+}
+function fmtDay(ds: string): string {
+  const d = new Date(`${ds}T12:00:00Z`);
+  return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+}
+function fmtWeek(ds: string): string {
+  const a = new Date(`${ds}T12:00:00Z`);
+  const b = new Date(a);
+  b.setUTCDate(b.getUTCDate() + 4);
+  const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", timeZone: "UTC" };
+  return `${a.toLocaleDateString("en-US", opts)} – ${b.toLocaleDateString("en-US", opts)}`;
 }
 
-function loadDraft(): Draft {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return emptyDraft();
-    const p = JSON.parse(raw) as Partial<Draft>;
-    const base = emptyDraft();
-    return {
-      ...base,
-      ...p,
-      recaps: Array.isArray(p.recaps) && p.recaps.length ? (p.recaps as Recap[]) : base.recaps,
-      events: Array.isArray(p.events) ? (p.events as EventRow[]) : base.events,
-      outlookCharts: Array.isArray(p.outlookCharts) ? (p.outlookCharts as Chart[]) : base.outlookCharts,
+// ── image handling — downscale before upload so a 4K screenshot isn't 6 MB ────
+const MAX_EDGE = 1800;
+const JPEG_Q = 0.78;
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("read failed"));
+    reader.onload = () => {
+      const src = String(reader.result || "");
+      const img = new Image();
+      img.onerror = () => resolve(src); // can't decode → ship the original
+      img.onload = () => {
+        const scale = Math.min(1, MAX_EDGE / Math.max(img.width, img.height));
+        if (scale >= 1 && src.length < 900_000) { resolve(src); return; }
+        const c = document.createElement("canvas");
+        c.width = Math.round(img.width * scale);
+        c.height = Math.round(img.height * scale);
+        const ctx = c.getContext("2d");
+        if (!ctx) { resolve(src); return; }
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL("image/jpeg", JPEG_Q));
+      };
+      img.src = src;
     };
-  } catch {
-    return emptyDraft();
-  }
+    reader.readAsDataURL(file);
+  });
+}
+function imagesFrom(list: FileList | File[] | null | undefined): File[] {
+  return Array.from(list || []).filter((f) => f.type.startsWith("image/"));
 }
 
-// ── small styled atoms ───────────────────────────────────────────────────────
+// ── styled atoms ─────────────────────────────────────────────────────────────
 const label: CSSProperties = {
   fontSize: 10,
   fontWeight: 800,
@@ -77,516 +109,542 @@ const label: CSSProperties = {
   textTransform: "uppercase",
   color: LIGHT_BLUE,
 };
-const sectionTitle: CSSProperties = {
-  fontSize: 15,
-  fontWeight: 800,
-  letterSpacing: "0.02em",
-  color: OWNER_THEME.text,
-};
 const areaStyle: CSSProperties = {
   ...homeInputStyle,
   width: "100%",
-  minHeight: 96,
+  minHeight: 110,
   resize: "vertical",
   lineHeight: 1.6,
   fontFamily: "inherit",
+  boxSizing: "border-box",
 };
+const dangerButton: CSSProperties = {
+  ...homeSecondaryButtonStyle,
+  padding: "7px 10px",
+  fontSize: 12,
+  color: OWNER_THEME.red,
+  borderColor: rgba(OWNER_THEME.red, 0.4),
+};
+const smallButton: CSSProperties = { ...homeSecondaryButtonStyle, padding: "7px 10px", fontSize: 12 };
 
-function Field({
-  value,
-  onChange,
-  placeholder,
-  area,
-  style,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  area?: boolean;
-  style?: CSSProperties;
-}) {
-  if (area) {
-    return (
-      <textarea
-        value={value}
-        placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
-        style={{ ...areaStyle, ...style }}
-      />
-    );
-  }
+function Card({ children, style }: { children: React.ReactNode; style?: CSSProperties }) {
   return (
-    <input
-      value={value}
-      placeholder={placeholder}
-      onChange={(e) => onChange(e.target.value)}
-      style={{ ...homeInputStyle, width: "100%", ...style }}
-    />
-  );
-}
-
-// ── chart slot ───────────────────────────────────────────────────────────────
-function ChartSlot({
-  chart,
-  onChange,
-  onRemove,
-}: {
-  chart: Chart;
-  onChange: (c: Chart) => void;
-  onRemove: () => void;
-}) {
-  const fileRef = useRef<HTMLInputElement | null>(null);
-
-  const pickFile = (f?: File | null) => {
-    if (!f) return;
-    const r = new FileReader();
-    r.onload = () => onChange({ ...chart, src: String(r.result || "") });
-    r.readAsDataURL(f);
-  };
-
-  return (
-    <div
-      style={{
-        border: `1px dashed ${rgba(LIGHT_BLUE, 0.35)}`,
-        borderRadius: 12,
-        padding: 10,
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-        background: rgba(LIGHT_BLUE, 0.03),
-      }}
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => {
-        e.preventDefault();
-        pickFile(e.dataTransfer.files?.[0]);
-      }}
-    >
-      {chart.src ? (
-        <img
-          src={chart.src}
-          alt={chart.caption || "chart"}
-          style={{ width: "100%", borderRadius: 8, display: "block", border: `1px solid ${OWNER_THEME.border}` }}
-        />
-      ) : (
-        <button
-          type="button"
-          onClick={() => fileRef.current?.click()}
-          style={{
-            border: "none",
-            background: "transparent",
-            color: LIGHT_BLUE,
-            cursor: "pointer",
-            padding: "26px 10px",
-            fontSize: 13,
-            fontWeight: 700,
-          }}
-        >
-          ＋ Add chart / screenshot — click or drop an image
-        </button>
-      )}
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/*"
-        style={{ display: "none" }}
-        onChange={(e) => pickFile(e.target.files?.[0])}
-      />
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <Field
-          value={chart.caption}
-          onChange={(v) => onChange({ ...chart, caption: v })}
-          placeholder="Caption — e.g. SPX 0DTE gamma flip we flagged at 10:14"
-          style={{ fontSize: 12 }}
-        />
-        {chart.src && (
-          <button
-            type="button"
-            onClick={() => fileRef.current?.click()}
-            style={{ ...homeSecondaryButtonStyle, padding: "8px 10px", fontSize: 12, whiteSpace: "nowrap" }}
-          >
-            Replace
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={onRemove}
-          style={{
-            ...homeSecondaryButtonStyle,
-            padding: "8px 10px",
-            fontSize: 12,
-            color: OWNER_THEME.red,
-            borderColor: rgba(OWNER_THEME.red, 0.4),
-          }}
-        >
-          ✕
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function ChartGrid({
-  charts,
-  set,
-}: {
-  charts: Chart[];
-  set: (c: Chart[]) => void;
-}) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 10 }}>
-        {charts.map((c) => (
-          <ChartSlot
-            key={c.id}
-            chart={c}
-            onChange={(nc) => set(charts.map((x) => (x.id === c.id ? nc : x)))}
-            onRemove={() => set(charts.filter((x) => x.id !== c.id))}
-          />
-        ))}
-      </div>
-      <button
-        type="button"
-        onClick={() => set([...charts, { id: uid(), src: "", caption: "" }])}
-        style={{ ...homeSecondaryButtonStyle, alignSelf: "flex-start", fontSize: 12 }}
-      >
-        ＋ Chart slot
-      </button>
-    </div>
-  );
-}
-
-function Section({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ ...classicCardAccentStyle, padding: "18px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
+    <div style={{ ...classicCardAccentStyle, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 12, ...style }}>
       {children}
     </div>
   );
 }
 
-// ── export → standalone HTML ─────────────────────────────────────────────────
-function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-function para(s: string): string {
-  return esc(s)
-    .split(/\n{2,}/)
-    .filter((b) => b.trim())
-    .map((b) => `<p style="margin:0 0 12px;line-height:1.6">${b.replace(/\n/g, "<br>")}</p>`)
-    .join("");
-}
-// dashboard-theme tokens for the exported HTML (mirror lib/theme.ts)
-const NL = {
-  bg: "#05060A",
-  card: "background:rgba(13,17,25,0.55);border:1px solid rgba(255,255,255,0.10);border-radius:18px;box-shadow:0 18px 40px rgba(0,0,0,0.35)",
-  cyan: "#7dd3fc",
-  orange: "#FB8501",
-  green: "#8ECAE6",
-  text: "#e8edf5",
-  muted: "#8aa0b8",
-  hair: "rgba(255,255,255,0.10)",
-};
-function kicker(t: string): string {
-  return `<div style="display:flex;align-items:center;gap:10px;margin:0 0 14px"><span style="font-size:12px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;color:${NL.orange}">${esc(
-    t
-  )}</span><span style="flex:1;height:1px;background:linear-gradient(90deg,${NL.orange}55,transparent)"></span></div>`;
-}
-function chartsHtml(charts: Chart[]): string {
-  const shown = charts.filter((c) => c.src);
-  if (!shown.length) return "";
-  return shown
-    .map(
-      (c) =>
-        `<figure style="margin:16px 0 0"><img src="${c.src}" style="width:100%;border-radius:12px;border:1px solid ${NL.hair};box-shadow:0 10px 26px rgba(0,0,0,0.35);display:block"/>${
-          c.caption
-            ? `<figcaption style="font-size:12px;color:${NL.green};margin-top:8px;letter-spacing:.01em">${esc(c.caption)}</figcaption>`
-            : ""
-        }</figure>`
-    )
-    .join("");
-}
-function buildHtml(d: Draft): string {
-  const recaps = d.recaps
-    .filter((r) => r.body.trim() || r.charts.some((c) => c.src))
-    .map(
-      (r) =>
-        `<div style="${NL.card};padding:18px 20px;margin:0 0 14px"><div style="display:flex;align-items:baseline;gap:10px;margin:0 0 8px"><span style="font-size:16px;font-weight:800;color:${NL.cyan}">${esc(
-          r.day
-        )}</span>${
-          r.date ? `<span style="font-size:12px;color:${NL.muted};font-weight:600">${esc(r.date)}</span>` : ""
-        }</div><div style="color:${NL.text}">${para(r.body)}</div>${chartsHtml(r.charts)}</div>`
-    )
-    .join("");
-  const events = d.events.length
-    ? `<div style="${NL.card};padding:14px 18px"><table style="width:100%;border-collapse:collapse">${d.events
-        .map(
-          (e, i) =>
-            `<tr style="${i ? `border-top:1px solid ${NL.hair}` : ""}"><td style="padding:9px 12px 9px 0;color:${
-              NL.muted
-            };white-space:nowrap;vertical-align:top;font-size:13px">${esc(
-              e.date
-            )}</td><td style="padding:9px 0;vertical-align:top;color:${NL.text}"><span style="font-size:10px;font-weight:800;letter-spacing:.08em;padding:2px 8px;border-radius:999px;margin-right:8px;${
-              e.kind === "earnings"
-                ? `background:rgba(251,133,1,0.12);border:1px solid rgba(251,133,1,0.35);color:${NL.orange}`
-                : `background:rgba(125,211,252,0.12);border:1px solid rgba(125,211,252,0.35);color:${NL.cyan}`
-            }">${e.kind === "earnings" ? "EARNINGS" : "EVENT"}</span>${esc(e.title)}</td></tr>`
-        )
-        .join("")}</table></div>`
-    : "";
-  const outlook =
-    d.outlook.trim() || d.outlookCharts.some((c) => c.src)
-      ? `<div style="${NL.card};padding:18px 20px;color:${NL.text};font-size:15px">${para(d.outlook)}${chartsHtml(
-          d.outlookCharts
-        )}</div>`
-      : "";
-  const shellGlow =
-    "radial-gradient(circle at 15% 8%,rgba(33,158,188,0.10) 0%,transparent 42%),radial-gradient(circle at 85% 4%,rgba(251,133,1,0.06) 0%,transparent 40%),radial-gradient(circle at 50% 100%,rgba(18,103,131,0.10) 0%,transparent 55%)";
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(
-    d.subject || "CB Edge Weekly"
-  )}</title></head><body style="margin:0;background:${NL.bg};background-image:${shellGlow};color:${NL.text};font-family:Inter,-apple-system,'Helvetica Neue',Arial,sans-serif;-webkit-font-smoothing:antialiased">
-<div style="max-width:680px;margin:0 auto;padding:28px 20px 40px">
-  <div style="${NL.card};position:relative;overflow:hidden;padding:24px 24px 22px;margin:0 0 22px">
-    <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,rgba(33,158,188,0.9) 50%,transparent)"></div>
-    <div style="font-size:11px;letter-spacing:.20em;text-transform:uppercase;color:${NL.cyan};font-weight:800">CB Edge Weekly</div>
-    <h1 style="margin:8px 0 2px;font-size:27px;line-height:1.1;color:#fff">${esc(d.subject || "CB Edge Weekly")}</h1>
-    ${d.weekLabel ? `<div style="color:${NL.muted};font-size:14px;font-weight:600">${esc(d.weekLabel)}</div>` : ""}
-    ${d.intro.trim() ? `<div style="font-size:15px;margin-top:14px;color:${NL.text}">${para(d.intro)}</div>` : ""}
-  </div>
-  ${recaps ? `<div style="margin-bottom:26px">${kicker("Last Week — Daily Recaps")}${recaps}</div>` : ""}
-  ${events ? `<div style="margin-bottom:26px">${kicker("Upcoming Events & Earnings")}${events}</div>` : ""}
-  ${outlook ? `<div style="margin-bottom:26px">${kicker("This Week — Outlook")}${outlook}</div>` : ""}
-  <div style="margin-top:14px;padding-top:16px;border-top:1px solid ${NL.hair};color:${NL.muted};font-size:12px;text-align:center">CB Edge · <span style="color:${NL.cyan}">cbedge.net</span> · Not financial advice.</div>
-</div></body></html>`;
+/** Thumbnail strip — click to blow one up, ✕ to drop it. */
+function Thumbs({
+  items,
+  onOpen,
+  onRemove,
+  onCaption,
+}: {
+  items: { key: string; src: string; caption: string }[];
+  onOpen: (src: string) => void;
+  onRemove: (key: string) => void;
+  onCaption?: (key: string, caption: string) => void;
+}) {
+  if (!items.length) return null;
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(190px,1fr))", gap: 10 }}>
+      {items.map((it) => (
+        <div
+          key={it.key}
+          style={{
+            border: `1px solid ${OWNER_THEME.border}`,
+            borderRadius: 12,
+            overflow: "hidden",
+            background: rgba(LIGHT_BLUE, 0.03),
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <img
+            src={it.src}
+            alt={it.caption || "screenshot"}
+            onClick={() => onOpen(it.src)}
+            style={{ width: "100%", display: "block", cursor: "zoom-in", maxHeight: 150, objectFit: "cover" }}
+          />
+          <div style={{ display: "flex", gap: 6, alignItems: "center", padding: 8 }}>
+            {onCaption ? (
+              <input
+                value={it.caption}
+                placeholder="caption…"
+                onChange={(e) => onCaption(it.key, e.target.value)}
+                style={{ ...homeInputStyle, fontSize: 12, padding: "6px 8px", flex: 1, minWidth: 0 }}
+              />
+            ) : (
+              <span style={{ flex: 1, fontSize: 12, color: OWNER_THEME.muted, opacity: 0.75 }}>{it.caption}</span>
+            )}
+            <button type="button" onClick={() => onRemove(it.key)} style={dangerButton} title="Remove">
+              ✕
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // ── page ─────────────────────────────────────────────────────────────────────
 export default function Newsletter() {
-  const [d, setD] = useState<Draft>(loadDraft);
-  const [saved, setSaved] = useState<"idle" | "saved">("idle");
-  const [preview, setPreview] = useState(false);
+  const [week, setWeek] = useState<string>(() => mondayOf(todayStr()));
+  const [weeks, setWeeks] = useState<WeekRow[]>([]);
+  const [ideas, setIdeas] = useState<Idea[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string>("");
+  const [lightbox, setLightbox] = useState<string>("");
 
-  // autosave (debounced)
-  useEffect(() => {
-    const t = setTimeout(() => {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(d));
-        setSaved("saved");
-        const c = setTimeout(() => setSaved("idle"), 1200);
-        return () => clearTimeout(c);
-      } catch {
-        /* quota — ignore */
-      }
-    }, 500);
-    return () => clearTimeout(t);
-  }, [d]);
+  // composer
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [day, setDay] = useState<string>(todayStr);
+  const [pending, setPending] = useState<Pending[]>([]);
+  const [saving, setSaving] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
-  const html = useMemo(() => buildHtml(d), [d]);
-  const set = (patch: Partial<Draft>) => setD((p) => ({ ...p, ...patch }));
-  const setRecap = (i: number, patch: Partial<Recap>) =>
-    setD((p) => ({ ...p, recaps: p.recaps.map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
+  // editing an existing idea
+  const [editId, setEditId] = useState<number | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editBody, setEditBody] = useState("");
 
-  const chartCount =
-    d.recaps.reduce((n, r) => n + r.charts.filter((c) => c.src).length, 0) +
-    d.outlookCharts.filter((c) => c.src).length;
-
-  const copyHtml = async () => {
+  const load = useCallback(async (w: string) => {
+    setLoading(true);
+    setErr("");
     try {
-      await navigator.clipboard.writeText(html);
-      alert("Newsletter HTML copied to clipboard.");
-    } catch {
-      /* ignore */
+      const r = await fetch(`${API}?week=${encodeURIComponent(w)}`, { headers: { Accept: "application/json" } });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      setIdeas(Array.isArray(data.ideas) ? data.ideas : []);
+      setWeeks(Array.isArray(data.weeks) ? data.weeks : []);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setIdeas([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(week); }, [week, load]);
+
+  const post = useCallback(async (payload: Record<string, unknown>) => {
+    const r = await fetch(API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`);
+    return data as { ok?: boolean; idea?: Idea; shot?: Shot };
+  }, []);
+
+  // ── composer actions ───────────────────────────────────────────────────────
+  const stage = useCallback(async (files: File[]) => {
+    const imgs = imagesFrom(files);
+    if (!imgs.length) return;
+    const staged = await Promise.all(imgs.map(async (f) => ({ key: uid(), dataUrl: await fileToDataUrl(f), caption: "" })));
+    setPending((p) => [...p, ...staged]);
+  }, []);
+
+  const onPaste = (e: ClipboardEvent) => {
+    const files = Array.from(e.clipboardData?.items || [])
+      .filter((i) => i.kind === "file")
+      .map((i) => i.getAsFile())
+      .filter((f): f is File => !!f);
+    if (files.length) { e.preventDefault(); void stage(files); }
+  };
+  const onDrop = (e: DragEvent) => {
+    e.preventDefault();
+    void stage(Array.from(e.dataTransfer?.files || []));
+  };
+
+  const save = async () => {
+    if (!title.trim() && !body.trim() && !pending.length) return;
+    setSaving(true);
+    setErr("");
+    try {
+      const { idea } = await post({
+        action: "create",
+        title: title.trim(),
+        body,
+        day,
+        shots: pending.map((p) => ({ dataUrl: p.dataUrl, caption: p.caption })),
+      });
+      setTitle("");
+      setBody("");
+      setPending([]);
+      // Landed in a week you're not looking at → jump there so it isn't "lost".
+      const w = idea?.week_start || mondayOf(day);
+      if (week !== "all" && w !== week) setWeek(w);
+      else await load(week);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
     }
   };
-  const downloadHtml = () => {
-    const blob = new Blob([html], { type: "text/html" });
+
+  // ── per-idea actions ───────────────────────────────────────────────────────
+  const addShotTo = async (ideaId: number, files: File[]) => {
+    const imgs = imagesFrom(files);
+    if (!imgs.length) return;
+    try {
+      for (const f of imgs) {
+        await post({ action: "addShot", ideaId, dataUrl: await fileToDataUrl(f), caption: "" });
+      }
+      await load(week);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const removeShot = async (id: number) => {
+    setIdeas((p) => p.map((i) => ({ ...i, shots: i.shots.filter((s) => s.id !== id) })));
+    try { await post({ action: "deleteShot", id }); } catch { await load(week); }
+  };
+  const captionShot = (id: number, caption: string) => {
+    setIdeas((p) => p.map((i) => ({ ...i, shots: i.shots.map((s) => (s.id === id ? { ...s, caption } : s)) })));
+    void post({ action: "shotCaption", id, caption }).catch(() => undefined);
+  };
+  const toggleUsed = async (idea: Idea) => {
+    setIdeas((p) => p.map((i) => (i.id === idea.id ? { ...i, used: !i.used } : i)));
+    try { await post({ action: "used", id: idea.id, used: !idea.used }); } catch { await load(week); }
+  };
+  const removeIdea = async (idea: Idea) => {
+    if (!confirm(`Delete "${idea.title || "this idea"}"?`)) return;
+    setIdeas((p) => p.filter((i) => i.id !== idea.id));
+    try { await post({ action: "delete", id: idea.id }); } catch { await load(week); }
+  };
+  const startEdit = (idea: Idea) => {
+    setEditId(idea.id);
+    setEditTitle(idea.title);
+    setEditBody(idea.body);
+  };
+  const commitEdit = async () => {
+    if (editId == null) return;
+    const id = editId;
+    setIdeas((p) => p.map((i) => (i.id === id ? { ...i, title: editTitle, body: editBody } : i)));
+    setEditId(null);
+    try { await post({ action: "update", id, title: editTitle, body: editBody }); } catch { await load(week); }
+  };
+
+  // ── end-of-week export ─────────────────────────────────────────────────────
+  const weekText = useMemo(() => {
+    const head = week === "all" ? "All ideas" : `Week of ${fmtWeek(week)}`;
+    const blocks = [...ideas]
+      .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.id - b.id))
+      .map((i) => {
+        const shots = i.shots.length
+          ? `\n  screenshots: ${i.shots.map((s) => s.caption || "(no caption)").join(" · ")}`
+          : "";
+        return `${fmtDay(i.day)} — ${i.title || "(untitled)"}\n${i.body.trim() ? `  ${i.body.trim().replace(/\n/g, "\n  ")}` : "  (no notes)"}${shots}`;
+      });
+    return `${head}\n${"=".repeat(head.length)}\n\n${blocks.join("\n\n") || "(nothing captured)"}\n`;
+  }, [ideas, week]);
+
+  const copyWeek = async () => {
+    try {
+      await navigator.clipboard.writeText(weekText);
+      alert("Week copied — paste it wherever you're drafting the letter.");
+    } catch {
+      setErr("Clipboard blocked — select the text manually.");
+    }
+  };
+  const downloadWeek = () => {
+    const blob = new Blob([weekText], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `cbedge-newsletter-${(d.weekLabel || "draft").replace(/[^\w.-]+/g, "-")}.html`;
+    a.download = `newsletter-ideas-${week}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };
-  const resetDraft = () => {
-    if (confirm("Clear the whole newsletter draft?")) setD(emptyDraft());
-  };
+
+  const shotCount = ideas.reduce((n, i) => n + i.shots.length, 0);
+  const byDay = useMemo(() => {
+    const m = new Map<string, Idea[]>();
+    for (const i of ideas) m.set(i.day, [...(m.get(i.day) || []), i]);
+    return [...m.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
+  }, [ideas]);
 
   return (
     <div style={homeShellStyle}>
       <div style={homeHeaderStyle}>
-        <span style={{ fontSize: 17, fontWeight: 600, color: OWNER_THEME.text }}>Newsletter</span>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <span style={{ fontSize: 11, color: saved === "saved" ? OWNER_THEME.green : OWNER_THEME.muted, opacity: 0.7 }}>
-            {saved === "saved" ? "✓ saved" : "auto-saves"}
-          </span>
-          <button type="button" onClick={() => setPreview((v) => !v)} style={homeSecondaryButtonStyle}>
-            {preview ? "Edit" : "Preview"}
+        <span style={{ fontSize: 17, fontWeight: 600, color: OWNER_THEME.text }}>Newsletter · Ideas</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <select value={week} onChange={(e) => setWeek(e.target.value)} style={{ ...homeInputStyle, minWidth: 200 }}>
+            <option value={mondayOf(todayStr())}>This week — {fmtWeek(mondayOf(todayStr()))}</option>
+            {weeks
+              .filter((w) => w.week !== mondayOf(todayStr()))
+              .map((w) => (
+                <option key={w.week} value={w.week}>
+                  {fmtWeek(w.week)} · {w.n}
+                </option>
+              ))}
+            <option value="all">All weeks</option>
+          </select>
+          <button type="button" onClick={() => void load(week)} style={smallButton}>
+            Refresh
           </button>
-          <button type="button" onClick={copyHtml} style={homeSecondaryButtonStyle}>
-            Copy HTML
+          <button type="button" onClick={downloadWeek} style={homeSecondaryButtonStyle}>
+            Download .txt
           </button>
-          <button type="button" onClick={downloadHtml} style={homeButtonStyle}>
-            Export HTML
+          <button type="button" onClick={copyWeek} style={homeButtonStyle}>
+            Copy week
           </button>
         </div>
       </div>
 
-      {preview ? (
-        <div style={{ flex: 1, minHeight: 0, padding: "clamp(14px,2vw,22px)" }}>
-          <iframe
-            title="newsletter preview"
-            srcDoc={html}
-            style={{ width: "100%", height: "100%", border: `1px solid ${OWNER_THEME.border}`, borderRadius: 16, background: "#05060a" }}
-          />
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          padding: "clamp(14px,2vw,22px)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 16,
+        }}
+      >
+        {err && (
+          <div
+            style={{
+              ...classicCardAccentStyle,
+              padding: "10px 14px",
+              fontSize: 13,
+              color: OWNER_THEME.red,
+              border: `1px solid ${rgba(OWNER_THEME.red, 0.4)}`,
+            }}
+          >
+            {err}
+          </div>
+        )}
+
+        {/* stat row */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+          {[
+            { k: "Ideas", v: ideas.length },
+            { k: "Screenshots", v: shotCount },
+            { k: "Days covered", v: byDay.length },
+            { k: "Already used", v: ideas.filter((i) => i.used).length },
+          ].map((s) => (
+            <div key={s.k} style={{ ...statTileStyle, padding: "12px 16px" }}>
+              <div style={label}>{s.k}</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: OWNER_THEME.text, marginTop: 4 }}>{s.v}</div>
+            </div>
+          ))}
         </div>
-      ) : (
-        <div
-          style={{
-            flex: 1,
-            minHeight: 0,
-            overflowY: "auto",
-            padding: "clamp(14px,2vw,22px)",
-            display: "flex",
-            flexDirection: "column",
-            gap: 16,
-          }}
-        >
-          {/* stat row */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
-            {[
-              { k: "Recaps", v: `${d.recaps.filter((r) => r.body.trim()).length}/5` },
-              { k: "Charts", v: chartCount },
-              { k: "Events", v: d.events.length },
-              { k: "Outlook", v: d.outlook.trim() ? "drafted" : "—" },
-            ].map((s) => (
-              <div key={s.k} style={{ ...statTileStyle, padding: "12px 16px" }}>
-                <div style={label}>{s.k}</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: OWNER_THEME.text, marginTop: 4 }}>{s.v}</div>
-              </div>
-            ))}
+
+        {/* composer */}
+        <Card style={{ border: `1px solid ${rgba(LIGHT_BLUE, 0.28)}` }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <div style={{ ...label, minWidth: 40 }}>Idea</div>
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onPaste={onPaste}
+              placeholder="One line — the thing you'd tell someone about"
+              style={{ ...homeInputStyle, flex: 1, fontSize: 15, fontWeight: 600 }}
+            />
+            <input
+              type="date"
+              value={day}
+              onChange={(e) => setDay(e.target.value || todayStr())}
+              style={{ ...homeInputStyle, width: 150, colorScheme: "dark" }}
+              title="Day this belongs to"
+            />
           </div>
 
-          {/* meta */}
-          <Section>
-            <div style={sectionTitle}>Issue</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <div style={label}>Subject line</div>
-                <Field value={d.subject} onChange={(v) => set({ subject: v })} placeholder="CB Edge Weekly — Week of Jul 21" />
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <div style={label}>Week label</div>
-                <Field value={d.weekLabel} onChange={(v) => set({ weekLabel: v })} placeholder="Jul 14 – Jul 18, 2026" />
-              </div>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={label}>Intro / note</div>
-              <Field area value={d.intro} onChange={(v) => set({ intro: v })} placeholder="One or two lines setting up the week…" />
-            </div>
-          </Section>
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            onPaste={onPaste}
+            onDrop={onDrop}
+            onDragOver={(e) => e.preventDefault()}
+            placeholder="Type it out — what happened, the level, why it mattered, how you'd say it in the letter. Paste a screenshot right in here (Ctrl+V) or drop an image."
+            style={areaStyle}
+          />
 
-          {/* daily recaps */}
-          <Section>
-            <div style={sectionTitle}>Last Week — Daily Recaps</div>
-            {d.recaps.map((r, i) => (
-              <div
-                key={r.day}
-                style={{ display: "flex", flexDirection: "column", gap: 10, paddingBottom: 14, borderBottom: i < 4 ? `1px solid ${OWNER_THEME.border}` : "none" }}
-              >
-                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                  <span style={{ fontSize: 14, fontWeight: 800, color: LIGHT_BLUE, minWidth: 92 }}>{r.day}</span>
-                  <Field value={r.date} onChange={(v) => setRecap(i, { date: v })} placeholder="Jul 14" style={{ maxWidth: 140, fontSize: 12 }} />
-                </div>
-                <Field
-                  area
-                  value={r.body}
-                  onChange={(v) => setRecap(i, { body: v })}
-                  placeholder={`What CB Edge called / saw on ${r.day} — levels hit, GEX flips, flow, the trade…`}
-                />
-                <ChartGrid charts={r.charts} set={(c) => setRecap(i, { charts: c })} />
-              </div>
-            ))}
-          </Section>
-
-          {/* events & earnings */}
-          <Section>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={sectionTitle}>Upcoming Events &amp; Earnings</div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button
-                  type="button"
-                  onClick={() => set({ events: [...d.events, { id: uid(), date: "", title: "", kind: "event" }] })}
-                  style={{ ...homeSecondaryButtonStyle, fontSize: 12 }}
-                >
-                  ＋ Event
-                </button>
-                <button
-                  type="button"
-                  onClick={() => set({ events: [...d.events, { id: uid(), date: "", title: "", kind: "earnings" }] })}
-                  style={{ ...homeSecondaryButtonStyle, fontSize: 12 }}
-                >
-                  ＋ Earnings
-                </button>
-              </div>
-            </div>
-            {d.events.length === 0 && (
-              <div style={{ fontSize: 13, color: OWNER_THEME.muted, opacity: 0.6 }}>
-                No rows yet — add CPI/FOMC/OPEX and the week's earnings.
-              </div>
-            )}
-            {d.events.map((e) => (
-              <div key={e.id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <select
-                  value={e.kind}
-                  onChange={(ev) => set({ events: d.events.map((x) => (x.id === e.id ? { ...x, kind: ev.target.value as EventRow["kind"] } : x)) })}
-                  style={{ ...homeInputStyle, width: 110, flexShrink: 0 }}
-                >
-                  <option value="event">Event</option>
-                  <option value="earnings">Earnings</option>
-                </select>
-                <Field
-                  value={e.date}
-                  onChange={(v) => set({ events: d.events.map((x) => (x.id === e.id ? { ...x, date: v } : x)) })}
-                  placeholder="Mon Jul 21, 8:30a"
-                  style={{ maxWidth: 180 }}
-                />
-                <Field
-                  value={e.title}
-                  onChange={(v) => set({ events: d.events.map((x) => (x.id === e.id ? { ...x, title: v } : x)) })}
-                  placeholder={e.kind === "earnings" ? "TSLA after close" : "CPI · FOMC · Monthly OPEX"}
-                />
-                <button
-                  type="button"
-                  onClick={() => set({ events: d.events.filter((x) => x.id !== e.id) })}
-                  style={{ ...homeSecondaryButtonStyle, padding: "8px 10px", fontSize: 12, color: OWNER_THEME.red, borderColor: rgba(OWNER_THEME.red, 0.4) }}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-          </Section>
-
-          {/* outlook */}
-          <Section>
-            <div style={sectionTitle}>This Week — Outlook</div>
-            <Field
-              area
-              value={d.outlook}
-              onChange={(v) => set({ outlook: v })}
-              placeholder="The setup into the week — key SPX levels, gamma regime, the events that matter, what you're watching…"
-              style={{ minHeight: 140 }}
+          <div
+            onPaste={onPaste}
+            onDrop={onDrop}
+            onDragOver={(e) => e.preventDefault()}
+            style={{
+              border: `1px dashed ${rgba(LIGHT_BLUE, 0.35)}`,
+              borderRadius: 12,
+              padding: pending.length ? 10 : 18,
+              background: rgba(LIGHT_BLUE, 0.03),
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+            }}
+          >
+            <Thumbs
+              items={pending.map((p) => ({ key: p.key, src: p.dataUrl, caption: p.caption }))}
+              onOpen={setLightbox}
+              onRemove={(k) => setPending((p) => p.filter((x) => x.key !== k))}
+              onCaption={(k, c) => setPending((p) => p.map((x) => (x.key === k ? { ...x, caption: c } : x)))}
             />
-            <div style={label}>Charts / examples</div>
-            <ChartGrid charts={d.outlookCharts} set={(c) => set({ outlookCharts: c })} />
-          </Section>
-
-          <div style={{ display: "flex", justifyContent: "flex-end", paddingBottom: 8 }}>
             <button
               type="button"
-              onClick={resetDraft}
-              style={{ ...homeSecondaryButtonStyle, fontSize: 12, color: OWNER_THEME.red, borderColor: rgba(OWNER_THEME.red, 0.4) }}
+              onClick={() => fileRef.current?.click()}
+              style={{
+                border: "none",
+                background: "transparent",
+                color: LIGHT_BLUE,
+                cursor: "pointer",
+                padding: pending.length ? "4px" : "10px",
+                fontSize: 13,
+                fontWeight: 700,
+                alignSelf: "center",
+              }}
             >
-              Clear draft
+              ＋ Screenshot — click, drop, or paste
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              multiple
+              style={{ display: "none" }}
+              onChange={(e) => { void stage(Array.from(e.target.files || [])); e.target.value = ""; }}
+            />
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            {(title || body || pending.length) && (
+              <button type="button" onClick={() => { setTitle(""); setBody(""); setPending([]); }} style={smallButton}>
+                Clear
+              </button>
+            )}
+            <button type="button" onClick={save} disabled={saving} style={{ ...homeButtonStyle, opacity: saving ? 0.6 : 1 }}>
+              {saving ? "Saving…" : "Save idea"}
             </button>
           </div>
+        </Card>
+
+        {/* the week */}
+        {loading ? (
+          <div style={{ fontSize: 13, color: OWNER_THEME.muted, opacity: 0.6 }}>Loading…</div>
+        ) : !ideas.length ? (
+          <div style={{ fontSize: 13, color: OWNER_THEME.muted, opacity: 0.6 }}>
+            Nothing captured for {week === "all" ? "any week" : fmtWeek(week)} yet — first idea goes above.
+          </div>
+        ) : (
+          byDay.map(([d, list]) => (
+            <div key={d} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 13, fontWeight: 800, color: LIGHT_BLUE, letterSpacing: "0.04em" }}>{fmtDay(d)}</span>
+                <span style={{ flex: 1, height: 1, background: `linear-gradient(90deg, ${rgba(LIGHT_BLUE, 0.35)}, transparent)` }} />
+                <span style={{ fontSize: 11, color: OWNER_THEME.muted, opacity: 0.5 }}>{list.length}</span>
+              </div>
+
+              {list.map((idea) => (
+                <Card key={idea.id} style={{ opacity: idea.used ? 0.62 : 1 }}>
+                  <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {editId === idea.id ? (
+                        <input
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          style={{ ...homeInputStyle, width: "100%", fontSize: 15, fontWeight: 700 }}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            fontSize: 15,
+                            fontWeight: 700,
+                            color: OWNER_THEME.text,
+                            textDecoration: idea.used ? "line-through" : "none",
+                          }}
+                        >
+                          {idea.title || "(untitled)"}
+                        </div>
+                      )}
+                    </div>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: OWNER_THEME.muted, cursor: "pointer" }}>
+                      <input type="checkbox" checked={idea.used} onChange={() => void toggleUsed(idea)} />
+                      used
+                    </label>
+                    {editId === idea.id ? (
+                      <>
+                        <button type="button" onClick={() => void commitEdit()} style={{ ...smallButton, color: LIGHT_BLUE }}>
+                          Save
+                        </button>
+                        <button type="button" onClick={() => setEditId(null)} style={smallButton}>
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button type="button" onClick={() => startEdit(idea)} style={smallButton}>
+                        Edit
+                      </button>
+                    )}
+                    <button type="button" onClick={() => void removeIdea(idea)} style={dangerButton}>
+                      ✕
+                    </button>
+                  </div>
+
+                  {editId === idea.id ? (
+                    <textarea value={editBody} onChange={(e) => setEditBody(e.target.value)} style={areaStyle} />
+                  ) : (
+                    idea.body.trim() && (
+                      <div style={{ fontSize: 14, lineHeight: 1.65, color: OWNER_THEME.text, whiteSpace: "pre-wrap" }}>
+                        {idea.body}
+                      </div>
+                    )
+                  )}
+
+                  <Thumbs
+                    items={idea.shots.map((s) => ({ key: String(s.id), src: shotUrl(s.id), caption: s.caption }))}
+                    onOpen={setLightbox}
+                    onRemove={(k) => void removeShot(Number(k))}
+                    onCaption={(k, c) => captionShot(Number(k), c)}
+                  />
+
+                  <label
+                    style={{ ...smallButton, alignSelf: "flex-start", display: "inline-block" }}
+                    onDrop={(e: DragEvent) => { e.preventDefault(); void addShotTo(idea.id, Array.from(e.dataTransfer?.files || [])); }}
+                    onDragOver={(e: DragEvent) => e.preventDefault()}
+                  >
+                    ＋ Screenshot
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      style={{ display: "none" }}
+                      onChange={(e) => { void addShotTo(idea.id, Array.from(e.target.files || [])); e.target.value = ""; }}
+                    />
+                  </label>
+                </Card>
+              ))}
+            </div>
+          ))
+        )}
+      </div>
+
+      {lightbox && (
+        <div
+          onClick={() => setLightbox("")}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.85)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 28,
+            zIndex: 60,
+            cursor: "zoom-out",
+          }}
+        >
+          <img
+            src={lightbox}
+            alt="screenshot"
+            style={{ maxWidth: "100%", maxHeight: "100%", borderRadius: 12, border: `1px solid ${OWNER_THEME.border}` }}
+          />
         </div>
       )}
     </div>

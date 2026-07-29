@@ -257,10 +257,9 @@ async function queryGexChange(ticker, expiry, strike) {
  * in a single round trip, shaped { cells: { <strike>: { vNow, v5, v15, v30 } } }.
  *
  * The per-cell query above is fine for the click popout (one cell at a time), but
- * the ladder's Δ bar mode needs a value for EVERY visible cell — ~13 strikes ×
- * 4 expiries × 4 tickers. That would be ~200 HTTP round trips per poll; this is 4
- * SQL statements total. DISTINCT ON (strike) + ORDER BY strike, ts DESC gives the
- * latest reading at-or-before each cutoff for all strikes at once.
+ * the ladder's Delta stamps need a baseline for many cells at once. This is 4 SQL
+ * statements total regardless of strike count: DISTINCT ON (strike) + ORDER BY
+ * strike, ts DESC gives the latest reading at-or-before each cutoff for all strikes.
  */
 async function queryGexGrid(ticker, expiry) {
   const p = getPool();
@@ -281,10 +280,7 @@ async function queryGexGrid(ticker, expiry) {
   };
   try {
     const [mNow, m5, m15, m30] = await Promise.all([
-      slice(null),
-      slice(now - 5 * 60_000),
-      slice(now - 15 * 60_000),
-      slice(now - 30 * 60_000),
+      slice(null), slice(now - 5 * 60_000), slice(now - 15 * 60_000), slice(now - 30 * 60_000),
     ]);
     const cells = {};
     for (const [strike, vNow] of mNow) {

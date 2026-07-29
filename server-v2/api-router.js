@@ -453,8 +453,7 @@ register('/api/tt-quotes', {
   },
 });
 
-// /api/mult-greek-gex-grid?... → /proxy/mult-greek-gex-grid (pass-through, no-store)
-// Bulk per-strike GEX baselines for the /mult-greek ladder's Δ bar mode.
+// /api/mult-greek-gex-grid?... -> /proxy/mult-greek-gex-grid (pass-through, no-store)
 register('/api/mult-greek-gex-grid', {
   auth: 'subscriber', methods: ['GET'],
   async handler(req, res, ctx) {
