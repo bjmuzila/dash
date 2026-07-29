@@ -11,18 +11,24 @@
  * ATM is the strike nearest spot AT THAT SNAPSHOT (recomputed per tick, since
  * spot drifts through the session). The API returns it precomputed.
  *
+ * The recorder writes 24/7, so the RTH/ETH switch is a client-side window over
+ * already-fetched rows — no refetch, and every derived number (stat tiles, OI
+ * step detection, axis ranges) recomputes against the visible window so a
+ * "session low" always means the low of the session you're looking at.
+ *
  * Data: GET /api/strike-gex-series (server-v2/api-router.js), fetch-on-load +
  * explicit refresh — no polling, so an open tab never hammers the pool.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { HOME_THEME, homeRefreshButtonStyle, statTileStyle, LIGHT_BLUE, SOFT_RED } from "@/components/shared/homeTheme";
+import { HOME_THEME, homeRefreshButtonStyle, homeButtonStyle, homeSecondaryButtonStyle, statTileStyle, LIGHT_BLUE, SOFT_RED } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import ScannerTabsBar from "@/components/scanner/ScannerTabsBar";
 
 type DayMeta = { date: string; expiry: string; snaps: number };
 type StrikeMeta = { strike: number; snaps: number; avgNetGex: number };
+type SessionWindow = "eth" | "rth";
 type Row = {
   t: number;
   spot: number | null;
@@ -38,10 +44,31 @@ type Row = {
   skew: number | null;
   skewPct: number | null;
 };
+/** Row plus its ET minute-of-day, computed once on load rather than per render. */
+type VRow = Row & { etMin: number; hhmm: string };
 
 const ET = "America/New_York";
-const hhmm = (ms: number) =>
-  new Date(ms).toLocaleTimeString("en-US", { timeZone: ET, hour12: false, hour: "2-digit", minute: "2-digit" });
+/**
+ * ONE formatter, module-level. Building an Intl.DateTimeFormat is expensive and
+ * these run per row per render across four panels — instantiating inside the
+ * loop is what turns a 550-row series into visible lag on every hover.
+ */
+const ET_FMT = new Intl.DateTimeFormat("en-US", {
+  timeZone: ET, hour12: false, hour: "2-digit", minute: "2-digit",
+});
+function etParts(ms: number): { hhmm: string; etMin: number } {
+  const p = ET_FMT.formatToParts(new Date(ms));
+  let h = Number(p.find((x) => x.type === "hour")?.value ?? 0);
+  const m = Number(p.find((x) => x.type === "minute")?.value ?? 0);
+  // hour12:false yields "24" for midnight in some ICU builds — normalize, or
+  // every midnight row sorts past 16:00 and lands inside the RTH window.
+  if (h === 24) h = 0;
+  return { hhmm: `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`, etMin: h * 60 + m };
+}
+
+/** Regular trading hours, ET: 09:30 inclusive → 16:00 exclusive. */
+const RTH_OPEN_MIN = 9 * 60 + 30;
+const RTH_CLOSE_MIN = 16 * 60;
 
 const fmtM = (v: number | null | undefined, digits = 2) =>
   v == null || !Number.isFinite(v) ? "—" : (v / 1e6).toFixed(digits) + "M";
@@ -57,7 +84,7 @@ const fmtIv = (v: number | null | undefined) =>
  * the size term, so a jump with gamma flat can only have come from the OI side.
  * Marking them matters because levels either side of one are not comparable.
  */
-function findOiSteps(rows: Row[]): number[] {
+function findOiSteps(rows: VRow[]): number[] {
   if (rows.length < 12) return [];
   const deltas: number[] = [];
   for (let i = 1; i < rows.length; i++) deltas.push(Math.abs(rows[i].netGex - rows[i - 1].netGex));
@@ -95,7 +122,7 @@ function niceTicks(lo: number, hi: number, n: number): number[] {
 function Panel({
   rows, values, color, fmt, refLine, refLabel, steps, hover, onHover,
 }: {
-  rows: Row[];
+  rows: VRow[];
   values: (number | null)[];
   color: string;
   fmt: (v: number) => string;
@@ -141,10 +168,13 @@ function Panel({
   const ticks = niceTicks(lo, hi, 4);
   const last = pts.length ? pts[pts.length - 1] : null;
 
-  const hourIdx: number[] = [];
-  for (let i = 1; i < n; i++) {
-    if (hhmm(rows[i].t).slice(0, 2) !== hhmm(rows[i - 1].t).slice(0, 2)) hourIdx.push(i);
-  }
+  const hourIdx = useMemo(() => {
+    const out: number[] = [];
+    for (let i = 1; i < n; i++) {
+      if (rows[i].hhmm.slice(0, 2) !== rows[i - 1].hhmm.slice(0, 2)) out.push(i);
+    }
+    return out;
+  }, [rows, n]);
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const handleMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
@@ -178,7 +208,7 @@ function Panel({
         <g key={`h${i}`}>
           <line x1={xAt(i)} x2={xAt(i)} y1={M.t} y2={VB_H - M.b} stroke={HOME_THEME.border} strokeWidth={1} />
           <text x={xAt(i)} y={VB_H - M.b + 14} textAnchor="middle" fontSize={10} fill={HOME_THEME.text} opacity={0.45}>
-            {hhmm(rows[i].t)}
+            {rows[i].hhmm}
           </text>
         </g>
       ))}
@@ -228,6 +258,7 @@ export default function StrikeHistoryPage() {
 
   const [dayKey, setDayKey] = useState("");
   const [strike, setStrike] = useState("");
+  const [session, setSession] = useState<SessionWindow>("eth");
   const [hover, setHover] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [refreshState, setRefreshState] = useState<"idle" | "refreshing" | "success" | "error">("idle");
@@ -287,36 +318,47 @@ export default function StrikeHistoryPage() {
 
   useEffect(() => { void loadSeries(); }, [loadSeries]);
 
-  const steps = useMemo(() => findOiSteps(rows), [rows]);
+  // ET time is stamped once per fetch; the RTH/ETH switch then costs a filter.
+  const stamped = useMemo<VRow[]>(
+    () => rows.map((r) => ({ ...r, ...etParts(r.t) })),
+    [rows]
+  );
+  const view = useMemo<VRow[]>(
+    () => (session === "rth" ? stamped.filter((r) => r.etMin >= RTH_OPEN_MIN && r.etMin < RTH_CLOSE_MIN) : stamped),
+    [stamped, session]
+  );
+
+  // Hover is an index into `view`; switching windows changes what that index
+  // points at, so drop it rather than leave a crosshair on an unrelated bar.
+  useEffect(() => { setHover(null); }, [session, strike, dayKey]);
+
+  const steps = useMemo(() => findOiSteps(view), [view]);
   const strikeNum = Number(strike);
-  const skewCount = useMemo(() => rows.filter((r) => r.skew != null).length, [rows]);
+  const skewCount = useMemo(() => view.filter((r) => r.skew != null).length, [view]);
 
   const stats = useMemo(() => {
-    if (!rows.length) return null;
-    const g = rows.map((r) => r.netGex);
+    if (!view.length) return null;
+    const g = view.map((r) => r.netGex);
     const lo = Math.min(...g), hi = Math.max(...g);
-    const flips = rows.filter((r, i) => i > 0 && Math.sign(r.netGex) !== Math.sign(rows[i - 1].netGex)).length;
-    const vol = rows.map((r) => r.netVolGex).filter((v): v is number => v != null);
-    const spots = rows.map((r) => r.spot).filter((v): v is number => v != null);
-    const sk = rows.map((r) => r.skew).filter((v): v is number => v != null);
-    const lastRow = rows[rows.length - 1];
+    const flips = view.filter((r, i) => i > 0 && Math.sign(r.netGex) !== Math.sign(view[i - 1].netGex)).length;
+    const vol = view.map((r) => r.netVolGex).filter((v): v is number => v != null);
+    const spots = view.map((r) => r.spot).filter((v): v is number => v != null);
+    const sk = view.map((r) => r.skew).filter((v): v is number => v != null);
+    const lastRow = view[view.length - 1];
     return {
       current: g[g.length - 1],
-      lo, loAt: hhmm(rows[g.indexOf(lo)].t),
-      hi, hiAt: hhmm(rows[g.indexOf(hi)].t),
+      lo, loAt: view[g.indexOf(lo)].hhmm,
+      hi, hiAt: view[g.indexOf(hi)].hhmm,
       flips,
       volFirst: vol[0] ?? null, volLast: vol[vol.length - 1] ?? null,
       spotLo: spots.length ? Math.min(...spots) : null,
       spotHi: spots.length ? Math.max(...spots) : null,
       spotNow: spots.length ? spots[spots.length - 1] : null,
       skewNow: sk.length ? sk[sk.length - 1] : null,
-      skewLo: sk.length ? Math.min(...sk) : null,
-      skewHi: sk.length ? Math.max(...sk) : null,
       ivK: lastRow.ivK, atmIv: lastRow.atmIv, atmStrike: lastRow.atmStrike,
-      skewPct: lastRow.skewPct,
-      first: hhmm(rows[0].t), last: hhmm(lastRow.t),
+      first: view[0].hhmm, last: lastRow.hhmm,
     };
-  }, [rows]);
+  }, [view]);
 
   const label: React.CSSProperties = { fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.green, opacity: 0.7 };
   const value: React.CSSProperties = { fontSize: 18, fontWeight: 700, color: HOME_THEME.text, marginTop: 3, fontVariantNumeric: "tabular-nums" };
@@ -324,10 +366,10 @@ export default function StrikeHistoryPage() {
   const panelTitle: React.CSSProperties = { fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, display: "flex", alignItems: "center", gap: 8 };
   const panelNote: React.CSSProperties = { fontSize: 11.5, color: HOME_THEME.green, opacity: 0.75, margin: "2px 0 8px" };
 
-  const hoverRow = hover != null ? rows[hover] : null;
+  const hoverRow = hover != null ? view[hover] : null;
 
   const PanelCard = ({ title, color, subtitle, children }: { title: string; color: string; subtitle: string; children: React.ReactNode }) => (
-    <Card variant="classic" padding={18}>
+    <Card variant="classic" padding={18} style={{ minWidth: 0 }}>
       <div style={panelTitle}>
         <span style={{ width: 9, height: 9, borderRadius: 2, background: color, display: "inline-block" }} />
         {title}
@@ -342,6 +384,7 @@ export default function StrikeHistoryPage() {
       {/* Same treatment as /forward-build: the scanner tab strip renders in link
           mode so this route is not a dead end. */}
       <ScannerTabsBar active="strikehistory" />
+
       <Card
         variant="classic"
         title="Strike GEX + IV skew history"
@@ -371,14 +414,37 @@ export default function StrikeHistoryPage() {
               disabled={!strikes.length}
             />
           </div>
+
+          {/* RTH / ETH window. Filters the already-fetched series client-side. */}
+          <div>
+            <div style={label}>Hours</div>
+            <div style={{ display: "inline-flex", gap: 6, marginTop: 4 }}>
+              <button
+                onClick={() => setSession("eth")}
+                style={session === "eth" ? homeButtonStyle : homeSecondaryButtonStyle}
+                title="Full recorded session, 24h"
+              >
+                ETH
+              </button>
+              <button
+                onClick={() => setSession("rth")}
+                style={session === "rth" ? homeButtonStyle : homeSecondaryButtonStyle}
+                title="Regular trading hours, 09:30–16:00 ET"
+              >
+                RTH
+              </button>
+            </div>
+          </div>
+
           <button style={homeRefreshButtonStyle(refreshState)} onClick={() => void loadSeries()} disabled={refreshState === "refreshing"}>
             {refreshState === "refreshing" ? "Loading" : "Refresh"}
           </button>
+
           {stats && (
             <div style={{ fontSize: 11.5, color: HOME_THEME.green, opacity: 0.75, paddingBottom: 6 }}>
-              {rows.length} snapshots · {stats.first}–{stats.last} ET
+              {view.length} of {stamped.length} snapshots · {stats.first}–{stats.last} ET
               {steps.length > 0 && ` · ${steps.length} OI refresh step${steps.length > 1 ? "s" : ""}`}
-              {` · ${skewCount}/${rows.length} with IV`}
+              {` · ${skewCount} with IV`}
             </div>
           )}
         </div>
@@ -400,7 +466,7 @@ export default function StrikeHistoryPage() {
             <div style={{ ...statTileStyle, padding: "12px 14px" }}>
               <div style={label}>Sign flips</div>
               <div style={value}>{stats.flips}</div>
-              <div style={note}>{stats.lo < 0 && stats.hi < 0 ? "short gamma all session" : stats.lo > 0 && stats.hi > 0 ? "long gamma all session" : "crosses zero"}</div>
+              <div style={note}>{stats.lo < 0 && stats.hi < 0 ? "short gamma throughout" : stats.lo > 0 && stats.hi > 0 ? "long gamma throughout" : "crosses zero"}</div>
             </div>
             <div style={{ ...statTileStyle, padding: "12px 14px" }}>
               <div style={label}>Vol-weighted build</div>
@@ -428,7 +494,7 @@ export default function StrikeHistoryPage() {
         <div style={{ minHeight: 20, marginTop: 14, fontSize: 12, color: HOME_THEME.text, opacity: 0.85, fontVariantNumeric: "tabular-nums" }}>
           {hoverRow ? (
             <>
-              <strong>{hhmm(hoverRow.t)} ET</strong>
+              <strong>{hoverRow.hhmm} ET</strong>
               {"  ·  spot "}{hoverRow.spot?.toFixed(2) ?? "—"}
               {"  ·  net GEX "}{fmtM(hoverRow.netGex)}
               {"  ·  vol GEX "}{fmtM(hoverRow.netVolGex, 1)}
@@ -443,20 +509,26 @@ export default function StrikeHistoryPage() {
         </div>
       </Card>
 
-      {!rows.length ? (
+      {!view.length ? (
         <Card variant="classic" padding={24}>
-          <div style={{ fontSize: 13, color: HOME_THEME.green, opacity: 0.7, padding: "40px 0", textAlign: "center" }}>
-            {strike ? "No snapshots for this strike." : "Pick a session and strike."}
+          <div style={{ fontSize: 13, color: HOME_THEME.green, opacity: 0.7, padding: "40px 0", textAlign: "center", lineHeight: 1.7 }}>
+            {!strike ? "Pick a session and strike."
+              : !stamped.length ? "No snapshots for this strike."
+              : <>No RTH snapshots in this session yet — the cash open is 09:30 ET.<br />
+                  <span style={{ opacity: 0.75 }}>{stamped.length} overnight snapshots are recorded; switch to ETH to see them.</span></>}
           </div>
         </Card>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: "clamp(16px, 2vw, 28px)" }}>
+        // Locked 2×2 — repeat(2, …) rather than auto-fit, so the grid never
+        // reflows to a single column. minmax(0,1fr) (not 1fr) is what stops the
+        // SVGs from forcing tracks wider than half the row on narrow viewports.
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "clamp(12px, 1.6vw, 28px)" }}>
           <PanelCard
             title={`Net GEX at ${strike}`}
             color={HOME_THEME.cyan}
             subtitle="Stored net_gex. Dashed red = GEX stepped while gamma held flat — an OI refresh, not flow."
           >
-            <Panel rows={rows} values={rows.map((r) => r.netGex)} color={HOME_THEME.cyan}
+            <Panel rows={view} values={view.map((r) => r.netGex)} color={HOME_THEME.cyan}
               fmt={(v) => fmtM(v, 0)} steps={steps} hover={hover} onHover={setHover} />
           </PanelCard>
 
@@ -465,7 +537,7 @@ export default function StrikeHistoryPage() {
             color={HOME_THEME.orange}
             subtitle="net_vol_gex — continuous across OI refreshes, so real intraday accumulation shows here."
           >
-            <Panel rows={rows} values={rows.map((r) => r.netVolGex)} color={HOME_THEME.orange}
+            <Panel rows={view} values={view.map((r) => r.netVolGex)} color={HOME_THEME.orange}
               fmt={(v) => fmtM(v, 0)} steps={[]} hover={hover} onHover={setHover} />
           </PanelCard>
 
@@ -476,15 +548,15 @@ export default function StrikeHistoryPage() {
           >
             {skewCount === 0 ? (
               <div style={{ fontSize: 12.5, color: HOME_THEME.green, opacity: 0.75, padding: "48px 8px", textAlign: "center", lineHeight: 1.7 }}>
-                No IV stored for this session.<br />
+                No IV stored for this window.<br />
                 <span style={{ opacity: 0.75 }}>
-                  `call_iv` / `put_iv` began recording when this build deployed — the feed always computed them,
-                  the writer just never persisted them. Skew fills in from the next snapshot forward, and
+                  call_iv / put_iv began recording when this build deployed — the feed always computed them,
+                  the writer just never persisted them. Skew fills in from the next snapshot forward;
                   back-sessions stay blank permanently.
                 </span>
               </div>
             ) : (
-              <Panel rows={rows} values={rows.map((r) => r.skew)} color={LIGHT_BLUE}
+              <Panel rows={view} values={view.map((r) => r.skew)} color={LIGHT_BLUE}
                 fmt={(v) => fmtVp(v, 1)} refLine={0} refLabel="flat" steps={[]} hover={hover} onHover={setHover} />
             )}
           </PanelCard>
@@ -494,7 +566,7 @@ export default function StrikeHistoryPage() {
             color={HOME_THEME.green}
             subtitle="Dashed line marks the selected strike."
           >
-            <Panel rows={rows} values={rows.map((r) => r.spot)} color={HOME_THEME.green}
+            <Panel rows={view} values={view.map((r) => r.spot)} color={HOME_THEME.green}
               fmt={(v) => v.toFixed(0)} refLine={Number.isFinite(strikeNum) ? strikeNum : undefined}
               refLabel={strike} steps={[]} hover={hover} onHover={setHover} />
           </PanelCard>

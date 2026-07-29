@@ -39,10 +39,16 @@ const R = 208;
 // space (which is also what makes industry labels fit at this size).
 const RING_ALL   = { holeOut: 0.30, secOut: 0.44,  indOut: 0.52 };
 const RING_FOCUS = { holeOut: 0.30, secOut: 0.325, indOut: 0.52 };
-const R0 = R * 0.56;             // zero ring
-const AMP = R * 0.40;            // bar length at the full-scale move
+const R0 = R * 0.54;             // zero ring
+const AMP = R * 0.33;            // bar length at the full-scale move
 const CLAMP = 1.06;
 const CAPS = [2, 3, 5];
+// The bars stop short of the edge on purpose: the band outside them is where
+// the biggest winners/losers get named. Callout labels sit on R_CALL and follow
+// the circle, so they cost one line of radial room rather than the horizontal
+// run a straight leader-line callout would need.
+const R_CALL = R * 0.955;
+const TAU = Math.PI * 2;
 
 /** Progressively shorter forms, tried in order until one fits the sector arc. */
 const SECTOR_SHORT: Record<string, string[]> = {
@@ -87,6 +93,13 @@ function inkOn(hex: string): string {
 
 // ── geometry ─────────────────────────────────────────────────────────────────
 const pt = (r: number, a: number) => `${(r * Math.sin(a)).toFixed(2)},${(-r * Math.cos(a)).toFixed(2)}`;
+const px = (r: number, a: number) => r * Math.sin(a);
+const py = (r: number, a: number) => -r * Math.cos(a);
+/** Do two angular spans overlap? Checked at ±2π so the seam at 12 o'clock counts. */
+function angOverlap(a0: number, a1: number, b0: number, b1: number): boolean {
+  for (const s of [-TAU, 0, TAU]) if (a0 < b1 + s && b0 + s < a1) return true;
+  return false;
+}
 
 function arcPath(a0: number, a1: number, r0: number, r1: number): string {
   if (r1 <= r0 || a1 <= a0) return "";
@@ -237,6 +250,34 @@ export default function SectorSunburst() {
     [cap]
   );
 
+  // ── callouts: name the extremes right on the wheel ──
+  // Biggest winners and losers of whatever is currently on screen (so zooming a
+  // sector re-picks them). Placed greedily, biggest move first — if a label
+  // would collide with one already down, the smaller mover simply goes unnamed
+  // rather than the two overprinting. The footer list still has every name.
+  const calloutCount = expanded ? 5 : 3;
+  const callouts = useMemo(() => {
+    const fs = expanded ? 7.5 : 9.5;
+    const idx = leaves.map((l, k) => ({ l, k }));
+    const winners = [...idx].sort((a, b) => b.l.chg - a.l.chg).slice(0, calloutCount).filter((x) => x.l.chg > 0);
+    const losers  = [...idx].sort((a, b) => a.l.chg - b.l.chg).slice(0, calloutCount).filter((x) => x.l.chg < 0);
+
+    const placed: { a0: number; a1: number }[] = [];
+    const out: { k: number; mid: number; tip: number; text: string; chg: number; fs: number }[] = [];
+    for (const { l, k } of [...winners, ...losers].sort((a, b) => Math.abs(b.l.chg) - Math.abs(a.l.chg))) {
+      const text = `${l.name} ${l.chg >= 0 ? "+" : "−"}${Math.abs(l.chg).toFixed(1)}%`;
+      const mid = (l.a0 + l.a1) / 2;
+      const half = (textW(text, fs) / 2 + 5) / R_CALL;   // angular half-width + gap
+      const a0 = mid - half, a1 = mid + half;
+      if (placed.some((p) => angOverlap(p.a0, p.a1, a0, a1))) continue;
+      placed.push({ a0, a1 });
+      out.push({ k, mid, tip: R0 + barLen(l.chg), text, chg: l.chg, fs });
+    }
+    return out;
+  }, [leaves, calloutCount, expanded, barLen]);
+  /** Bars that already have a callout skip the ticker printed inside them. */
+  const calledOut = useMemo(() => new Set(callouts.map((c) => c.k)), [callouts]);
+
   // Three names each fits under the card; the pop-out has room for a real list.
   const moverCount = expanded ? 8 : 3;
   const movers = useMemo(() => {
@@ -263,6 +304,14 @@ export default function SectorSunburst() {
     setHover({ x: e.clientX - b.left, y: e.clientY - b.top, bw: b.width, title, sub, val });
   };
   const fmt = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}%`;
+
+  // What the hub number covers. Zoomed in that's the sector — and it has to be
+  // the shortest form we have, because the hub is only ~100 units across.
+  const hubLabel = useMemo(() => {
+    if (!focus) return "S&P 500";
+    const forms = nameForms(focus);
+    return forms[forms.length - 1].toUpperCase();
+  }, [focus]);
 
   const asOf = data?.updatedAt
     ? new Date(data.updatedAt).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" })
@@ -311,7 +360,12 @@ export default function SectorSunburst() {
 
       {/* body — stacked in the card, wheel-beside-movers when popped out */}
       <div style={{
-        display: "flex", flexWrap: "wrap",
+        display: "flex",
+        // Only the popped-out row layout ever wants to wrap. Left on in the
+        // stacked layout, a column-wrap container will spill the movers block
+        // into a second column on top of the wheel once the card is wide enough
+        // for the square SVG to exceed the available height.
+        flexWrap: expanded ? "wrap" : "nowrap",
         flexDirection: expanded ? "row" : "column",
         alignItems: expanded ? "flex-start" : "stretch",
         gap: expanded ? 28 : 0,
@@ -441,8 +495,33 @@ export default function SectorSunburst() {
               );
             })}
 
+            {/* callouts — the biggest movers, named on the rim with a tick back
+                to the bar they belong to */}
+            {callouts.map((c) => {
+              const col = c.chg >= 0 ? HT.green : HT.red;
+              const rIn = c.tip + 2.5;
+              const rOut = R_CALL - c.fs * 0.9;
+              const flip = Math.cos(c.mid) < 0 ? " rotate(180)" : "";
+              return (
+                <g key={`co-${c.k}`} style={{ pointerEvents: "none" }}>
+                  {rOut > rIn && (
+                    <line
+                      x1={px(rIn, c.mid)} y1={py(rIn, c.mid)}
+                      x2={px(rOut, c.mid)} y2={py(rOut, c.mid)}
+                      stroke={rgba(col, 0.5)} strokeWidth={0.9}
+                    />
+                  )}
+                  <text
+                    transform={`rotate(${(c.mid * 180) / Math.PI}) translate(0,${-R_CALL})${flip}`}
+                    textAnchor="middle" dy="0.34em" fontSize={c.fs} fontWeight={800} fill={col}
+                  >{c.text}</text>
+                </g>
+              );
+            })}
+
             {/* tickers, printed inside a bar that is both wide and long enough */}
             {leaves.map((l, k) => {
+              if (calledOut.has(k)) return null;   // already named on the rim
               const fs = expanded ? 5.6 : 7.5;
               const len = barLen(l.chg);
               const w = textW(l.name, fs);
@@ -462,16 +541,21 @@ export default function SectorSunburst() {
               );
             })}
 
-            {/* hero + back-out target */}
-            <text textAnchor="middle" dy="-0.5em" fontSize={22} fontWeight={800} fill={net >= 0 ? HT.green : HT.red} style={{ pointerEvents: "none" }}>
+            {/* hero + back-out target — the hub names what the number covers,
+                so the reading is unambiguous both zoomed out and zoomed in */}
+            <text textAnchor="middle" y={-26} fontSize={10.5} fontWeight={800} letterSpacing="0.1em"
+              fill={HT.muted} opacity={0.55} style={{ pointerEvents: "none" }}>
+              {hubLabel}
+            </text>
+            <text textAnchor="middle" y={-3} fontSize={22} fontWeight={800} fill={net >= 0 ? HT.green : HT.red} style={{ pointerEvents: "none" }}>
               {fmt(net)}
             </text>
-            <text textAnchor="middle" dy="1.5em" fontSize={9.5} fill={HT.muted} opacity={0.7} style={{ pointerEvents: "none" }}>
+            <text textAnchor="middle" y={12} fontSize={9.5} fill={HT.muted} opacity={0.7} style={{ pointerEvents: "none" }}>
               {up} up · {down} down
             </text>
             {focus && (
               <>
-                <text textAnchor="middle" dy="3.5em" fontSize={9} fontWeight={700} fill={HT.cyan} style={{ pointerEvents: "none" }}>
+                <text textAnchor="middle" y={30} fontSize={9} fontWeight={700} fill={HT.cyan} style={{ pointerEvents: "none" }}>
                   ← all sectors
                 </text>
                 <circle

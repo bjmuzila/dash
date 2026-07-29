@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HOME_THEME as HT } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { useMobileNav } from "@/components/shared/MobileNavContext";
 import SectorSunburst from "@/components/dashboard/SectorSunburst";
+import CopySnapButton from "@/components/shared/CopySnapButton";
 
 // rgba helper — matches the convention used across themed pages.
 function rgba(hex: string, a: number): string {
@@ -116,6 +117,9 @@ export default function TradersDashboardPage() {
   const [editTasks, setEditTasks] = useState(false);
   const [editLinks, setEditLinks] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  // What the snapshot button captures — everything inside the content column,
+  // header card included, but not the app chrome around it.
+  const snapRef = useRef<HTMLDivElement>(null);
 
   // ── Clock ──
   useEffect(() => {
@@ -142,7 +146,9 @@ export default function TradersDashboardPage() {
   }, []);
 
   // ── Save prefs (debounced) once loaded ──
-  const savePrefs = useCallback((patch: { schedule?: ScheduleItem[]; tasks?: TaskItem[]; zip?: string | null }) => {
+  // `links` was already being posted by updLinks but was missing from the patch
+  // type, so that call site was a type error. The route already reads it back.
+  const savePrefs = useCallback((patch: { schedule?: ScheduleItem[]; tasks?: TaskItem[]; links?: LinkItem[]; zip?: string | null }) => {
     fetch("/api/traders-dashboard", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -288,15 +294,22 @@ export default function TradersDashboardPage() {
 
   return (
     <PageShell maxWidth={1200}>
+      {/* One capture target for the snapshot button. Repeats PageShell's column
+          gap explicitly because that column inherits it from the <main>. */}
+      <div ref={snapRef} style={{ display: "flex", flexDirection: "column", gap: "clamp(16px, 2vw, 32px)" }}>
 
         {/* Header */}
         <Card accent="cyan" variant="classic" padding={20} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
           <div>
-            <h1 style={{ margin: 0, fontSize: 30, fontWeight: 800, background: `linear-gradient(90deg,${HT.cyan},${HT.purple})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+            {/* data-snap-plain: the gradient fill can't be rasterized, so the
+                snapshot flattens this heading to solid cyan. */}
+            <h1 data-snap-plain={HT.cyan} style={{ margin: 0, fontSize: 30, fontWeight: 800, background: `linear-gradient(90deg,${HT.cyan},${HT.purple})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
               Traders Dashboard
             </h1>
             <div style={{ color: HT.muted, fontSize: 14, marginTop: 4 }}>{dateStr}</div>
           </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <CopySnapButton targetRef={snapRef} filename="traders-dashboard.png" />
           <div style={{ textAlign: "right" }}>
             {weather ? (
               <>
@@ -315,6 +328,7 @@ export default function TradersDashboardPage() {
             {weather && (
               <button onClick={() => { setWeather(null); setZip(""); setZipInput(""); savePrefs({ zip: null }); }} style={{ ...miniBtn, marginTop: 4 }}>Change ZIP</button>
             )}
+          </div>
           </div>
         </Card>
 
@@ -524,6 +538,7 @@ export default function TradersDashboardPage() {
 
           </div>
         </div>
+      </div>
     </PageShell>
   );
 }
