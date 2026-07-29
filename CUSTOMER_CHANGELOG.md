@@ -7,6 +7,9 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * Added a new **OI** tab to the Option Chain, next to GEX, DEX, CHEX and VEX — it shows the open interest sitting at each strike, with calls above the current price and puts below.
 * The OI tab also shows how much open interest changed overnight, so you can see the positioning that was actually opened or closed since the previous session. It needs two days of readings before the change column fills in.
 * Fixed the Option Chain date header — a sliver of the rows underneath is no longer visible above it while you scroll.
+* The sector wheel on the Traders Dashboard now labels the biggest winners and losers right on the wheel, and the middle reads **S&P 500** — or the sector name once you click in to zoom.
+* Added a **Snapshot** button to the Traders Dashboard. One click copies a picture of the whole page to your clipboard, ready to paste straight into Discord or a note.
+* Fixed the sector wheel's Top/Bottom list printing on top of the wheel on wider screens.
 
 ## Tuesday 7/28/2026
 

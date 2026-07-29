@@ -139,36 +139,61 @@ function fmtMoney(v: number) {
   return s + "$" + a.toFixed(0);
 }
 
-/** Ghost \u0394 stamp — percent change vs the recorded baseline, no decimals.
+/** Δ stamp — percent change, intensity ramped by how big that move is relative
+ *  to the biggest move currently on the heatmap.
  *
- *  Percent, not dollars: the magnitude version re-implemented fmtCellM's unit
- *  scaling, drifted out of sync with it, and printed raw figures that collided
- *  with the GEX value. Percent is unit-free and never more than 5 glyphs.
+ *  ratio = |pct| / maxPct: the largest % move renders solid and saturated, the
+ *  smallest fades back. Fill, border and opacity all ramp together — any one
+ *  alone is too subtle to rank by at this size. The floor is non-zero so the
+ *  quietest stamp stays readable, just clearly subordinate.
  *
- *  Hairline border, no fill, so it sits behind the value rather than competing
- *  with the cell's heat. Only rendered on ranked strikes (top 5 each side). */
-function DeltaStamp({ d, live }: { d: number | null; live: number }) {
-  if (d == null || !Number.isFinite(d) || d === 0) return null;
-  const base = live - d;
-  // Near-zero baseline makes the percent meaningless — skip rather than scream.
-  if (!Number.isFinite(base) || Math.abs(base) < 1e-6) return null;
-  const raw = (d / Math.abs(base)) * 100;
-  if (!Number.isFinite(raw)) return null;
-  const rounded = Math.round(Math.abs(raw));
-  if (rounded < 1) return null;                 // sub-1% is noise
-  const capped = Math.min(rounded, 999);
-  const pos = d > 0;
-  const rgb = pos ? "34,197,94" : "239,68,68";
-  const col = pos ? "#22c55e" : "#ef4444";
+ *  Percent (not dollars) because it's unit-free — a dollar stamp has to
+ *  re-implement fmtCellM's unit scaling and drifts out of sync with it. */
+/** Δ stamp scale — diverging, deep red ← white → deep green.
+ *
+ *  rank is 1..5 by |% move| within each sign, so the pair of scales together form
+ *  one continuous ramp: deep red (biggest unwind) → pale → white-ish (smallest
+ *  move either way) → pale green → deep green (biggest build).
+ *
+ *  ⚠ Known trade-off: a white midpoint is designed for LIGHT backgrounds, where
+ *  white recedes. On this dark ladder white is the most luminous colour available,
+ *  so the SMALLEST moves (rank 4-5) draw the eye harder than the biggest ones.
+ *  To invert that, swap in the dark-midpoint values below — same red/green ends,
+ *  midpoint sunk to near-black so small moves recede:
+ *    NEG ["#FF7C64","#E8452A","#B32E12","#7A230F","#40180C"]
+ *    POS ["#63DA97","#2FB86A","#1E7D45","#17512F","#0F2A1B"]
+ *    TXT ["#1a1a1a","#fff","#fff","#fff","#e6eef5"]
+ */
+const DELTA_SCALE_NEG = ["#C8290D", "#ED3615", "#FF6347", "#FF9E8A", "#FFD6CE"] as const;
+const DELTA_SCALE_POS = ["#12803F", "#22A85F", "#4ECB8B", "#93E3B7", "#D2F2E0"] as const;
+/** Label colour per rank — the deep ends need light text, the pale ends dark. */
+const DELTA_SCALE_TEXT = ["#ffffff", "#ffffff", "#1a1a1a", "#1a1a1a", "#1a1a1a"] as const;
+
+function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) {
+  const pos = pct > 0;
+  // rank is 1..5 by |% move| within this sign — 1 is the biggest mover. Ranks
+  // past 5 are possible (change-sign is independent of GEX-sign, so one side can
+  // hold more than five movers) and clamp onto the midpoint step.
+  const i = Math.max(0, Math.min(4, rank - 1));
+  const bg = (pos ? DELTA_SCALE_POS : DELTA_SCALE_NEG)[i];
+  const shown = Math.min(Math.round(Math.abs(pct)), 999);
   return (
     <span
-      title={`\u0394 ${pos ? "+" : "\u2212"}${rounded}% vs ${fmtCellM(base)} baseline`}
+      title={`Δ ${pos ? "+" : "−"}${Math.abs(Math.round(pct))}% (${fmtCellM(d)}) — #${rank} mover`}
       style={{
-        flexShrink: 0, fontSize: 8, fontWeight: 800, fontFamily: "var(--font-mono)",
-        lineHeight: 1.5, padding: "0 2px", borderRadius: 3, whiteSpace: "nowrap",
-        background: "transparent", border: `1px solid rgba(${rgb},0.5)`, color: col,
+        flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+        height: 15, boxSizing: "border-box",
+        fontSize: i === 0 ? 11 : 10, fontWeight: i <= 1 ? 900 : 800,
+        fontFamily: "var(--font-mono)", lineHeight: 1,
+        padding: "0 4px", borderRadius: 4, whiteSpace: "nowrap",
+        background: bg,
+        color: DELTA_SCALE_TEXT[i],
+        // White hairline: the deep ends of the scale (#C8290D / #12803F) are dark
+        // enough to sink into a dark cell, and a black border made that worse. A
+        // light border lifts every chip off the heat regardless of its fill.
+        border: "1px solid rgba(255,255,255,0.9)",
       }}
-    >{pos ? "\u25B2" : "\u25BC"}{capped}%</span>
+    >{pos ? "▲" : "▼"}{shown}%</span>
   );
 }
 
@@ -1162,21 +1187,37 @@ export function HomeClient({
     [5, 15, 30]
   );
 
-  // Δ per strike = live NET GEX − recorded baseline, for RANKED strikes only.
-  // row.rank is already "top 5 each side" (see toHeatmapRows), so gating on it
-  // gives exactly the top 5 positive + top 5 negative strikes.
+  // Δ per strike, RANKED strikes only (row.rank is already top-5-each-side, see
+  // toHeatmapRows). Stores percent + raw dollar delta, plus the max |pct| that
+  // stamp brightness is scaled against, so the biggest move reads brightest.
   const heatmapDeltas = useMemo(() => {
-    const by: Record<number, number> = {};
-    if (deltaWindow === 0) return by;
+    const by: Record<number, { d: number; pct: number; rank: number }> = {};
+    let maxPct = 0;
+    if (deltaWindow === 0) return { by, maxPct };
     const key = String(deltaWindow);
     for (const r of heatmapRows) {
       if (r.rank == null) continue;
       const live = Number(r.netGexVal ?? NaN);
       const past = Number(strikeBaselines?.[r.strikeNum]?.[key] ?? NaN);
       if (!Number.isFinite(live) || !Number.isFinite(past)) continue;
-      by[r.strikeNum] = live - past;
+      const d = live - past;
+      // Baseline at ~0 makes the percent meaningless AND would set the scale for
+      // every other stamp — skip it rather than let it wash the others out.
+      if (d === 0 || Math.abs(past) < 1e-6) continue;
+      const pct = (d / Math.abs(past)) * 100;
+      if (!Number.isFinite(pct) || Math.abs(pct) < 1) continue;   // sub-1% is noise
+      by[r.strikeNum] = { d, pct, rank: 5 };
+      if (Math.abs(pct) > maxPct) maxPct = Math.abs(pct);
     }
-    return by;
+    // Rank 1..5 by |% move| WITHIN each sign, so call-side and put-side each get
+    // their own full 1-5 scale rather than sharing one.
+    for (const sign of [1, -1]) {
+      Object.entries(by)
+        .filter(([, v]) => (sign > 0 ? v.pct > 0 : v.pct < 0))
+        .sort((x, y) => Math.abs(y[1].pct) - Math.abs(x[1].pct))
+        .forEach(([k], idx) => { by[Number(k)].rank = idx + 1; });
+    }
+    return { by, maxPct };
   }, [deltaWindow, heatmapRows, strikeBaselines]);
 
   // Chart ghost-bar baselines — poll the full chain whenever any prior-state
@@ -1707,9 +1748,8 @@ export function HomeClient({
                       <div style={{
                         display: "flex", gap: 2, marginLeft: 4,
                         border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden",
-                        // Lift the control onto its own layer with an opaque backing so
-                        // the panel gradient behind it can't bleed through and muddy the
-                        // active/inactive states.
+                        // Own layer with an opaque backing so the panel gradient
+                        // behind can't bleed through and muddy the active state.
                         position: "relative", zIndex: 3, isolation: "isolate",
                         background: "#0D1119", boxShadow: "0 1px 6px rgba(0,0,0,0.45)",
                       }}>
@@ -1725,19 +1765,14 @@ export function HomeClient({
                               background: deltaWindow === v ? "rgba(33,158,188,0.14)" : "transparent",
                               color: deltaWindow === v ? "#219EBC" : "#5a7a98",
                             }}
-                          >{v === 0 ? "\u0394 off" : `${v}m`}</button>
+                          >{v === 0 ? "Δ off" : `${v}m`}</button>
                         ))}
                       </div>
                     )}
                     {/* Heatmap|Chain switch — pinned as the LAST child so it sits at the
                         panel's right edge and never shifts when the heatmap-only controls
                         above it hide in Chain view. */}
-                    <div style={{
-                      display: "flex", gap: 2, marginLeft: 4,
-                      border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden",
-                      position: "relative", zIndex: 3, isolation: "isolate",
-                      background: "#0D1119", boxShadow: "0 1px 6px rgba(0,0,0,0.45)",
-                    }}>
+                    <div style={{ display: "flex", gap: 2, marginLeft: 4, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden" }}>
                       {(["heatmap", "chain"] as const).map((v) => (
                         <button
                           key={v}
@@ -1783,9 +1818,9 @@ export function HomeClient({
                       {[
                         { label: "Strike", tip: undefined as string | undefined },
                         {
-                          label: deltaWindow !== 0 && heatmapView === "heatmap" ? `Net GEX +\u0394${deltaWindow}M` : "Net GEX",
+                          label: deltaWindow !== 0 && heatmapView === "heatmap" ? `Net GEX +Δ${deltaWindow}M` : "Net GEX",
                           tip: deltaWindow !== 0 && heatmapView === "heatmap"
-                            ? `Each ranked strike (top 5 each side) carries a stamp with its net GEX change over the last ${deltaWindow} minutes. \u25B2 green = building, \u25BC red = unwinding. Hover a stamp for the exact figure.`
+                            ? `Each ranked strike (top 5 each side) carries a stamp with its net GEX change over the last ${deltaWindow} minutes. ▲ green = building, ▼ red = unwinding. The brightest stamp is the biggest % move on the board; smaller moves fade back. Hover for the exact figure.`
                             : undefined,
                         },
                         { label: "Vol Only GEX", tip: undefined },
@@ -1911,7 +1946,13 @@ export function HomeClient({
                                 <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
                                   <span style={{ flexShrink: 0, minWidth: 28, display: "flex", alignItems: "center", gap: 3 }}>
                                     {row.rank && <img src={rankBadgeDataUri(row.rank, row.rankColor ?? "#8B94A7")} width={20} height={13} style={{ display: "block" }} alt={`#${row.rank}`} />}
-                                    {deltaWindow !== 0 && <DeltaStamp d={heatmapDeltas[row.strikeNum] ?? null} live={Number(row.netGexVal ?? 0)} />}
+                                    {deltaWindow !== 0 && heatmapDeltas.by[row.strikeNum] && (
+                                      <DeltaStamp
+                                        d={heatmapDeltas.by[row.strikeNum].d}
+                                        pct={heatmapDeltas.by[row.strikeNum].pct}
+                                        rank={heatmapDeltas.by[row.strikeNum].rank}
+                                      />
+                                    )}
                                   </span>
                                   <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
                                     {row.strikeNum === mvcStrikeHeatmap && (

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { HOME_THEME as HT } from "@/components/shared/homeTheme";
+import CopySnapButton from "@/components/shared/CopySnapButton";
 
 /**
  * S&P sector wheel — sector → industry → ticker.
@@ -119,6 +120,9 @@ const textW = (s: string, fs: number) => s.length * fs * 0.6;
 interface Node { name: string; a0: number; a1: number; rows: Row[]; chg: number }
 
 export default function SectorSunburst() {
+  // Capture target for this card's own snapshot button — wraps the wheel and
+  // everything around it in whichever shell is live (inline card or pop-out).
+  const snapRef = useRef<HTMLDivElement>(null);
   const [data, setData] = useState<Payload | null>(null);
   const [err, setErr] = useState(false);
   const [cap, setCap] = useState(3);
@@ -340,6 +344,12 @@ export default function SectorSunburst() {
             <button key={c} onClick={() => setCap(c)} style={capBtn(cap === c)}>{c}%</button>
           ))}
           <span style={{ width: 6 }} />
+          <CopySnapButton
+            targetRef={snapRef}
+            filename="sp-sector-wheel.png"
+            label="Snap"
+            title="Copy a PNG of the sector wheel to the clipboard"
+          />
           {expanded ? (
             <>
               <button onClick={toggleFullscreen} style={iconBtn} title={isFs ? "Exit full screen" : "Full screen"}>
@@ -665,12 +675,12 @@ export default function SectorSunburst() {
           boxShadow: isFs ? "none" : "0 40px 100px -30px rgba(0,0,0,0.6)",
           padding: "clamp(16px, 2vw, 28px)",
         }}>
-          {content}
+          <div ref={snapRef}>{content}</div>
         </div>
       </div>,
       document.body
     );
   }
 
-  return <div>{content}</div>;
+  return <div ref={snapRef}>{content}</div>;
 }

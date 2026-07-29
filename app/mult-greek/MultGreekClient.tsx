@@ -359,45 +359,63 @@ type DeltaWindow = 0 | 5 | 15 | 30;
 type GexGridCell = { vNow: number | null; v5: number | null; v15: number | null; v30: number | null };
 type GexGrid = Record<string, Record<number, GexGridCell>>;
 
-/** Ghost Δ stamp — percent change vs the recorded baseline, no decimals.
+/** Δ stamp — percent change, with its intensity ramped by how big that move is
+ *  relative to the biggest move in the same column.
  *
- *  Percent, not dollars: the magnitude version had to re-implement fmtMoney's
- *  unit scaling and drifted out of sync with it, printing raw figures that ran
- *  straight into the GEX value. A percent is unit-free, never more than 5
- *  glyphs, and answers the more useful question anyway.
+ *  ratio = |pct| / maxPct, so the largest % move renders as a solid, saturated
+ *  chip and the smallest fades back. Three things ramp together — fill,
+ *  border and overall opacity — because any one alone is too subtle to rank by
+ *  at this size. The floor is deliberately non-zero: the quietest stamp still
+ *  has to be readable, just clearly subordinate.
  *
- *  Hairline border, no fill, so it reads behind the value rather than competing
- *  with the cell's heat. Only rendered on the top-5-per-side strikes. */
-function DeltaStamp({ d, live }: { d: number | null; live: number }) {
-  if (d == null || !Number.isFinite(d) || d === 0) return null;
-  const base = live - d;
-  // A baseline at (or near) zero makes the percent meaningless/infinite — a
-  // strike coming from nothing would read as a huge move. Skip the stamp.
-  if (!Number.isFinite(base) || Math.abs(base) < 1e-6) return null;
-  const raw = (d / Math.abs(base)) * 100;
-  if (!Number.isFinite(raw)) return null;
-  const rounded = Math.round(Math.abs(raw));
-  if (rounded < 1) return null;                 // sub-1% is noise, not signal
-  const capped = Math.min(rounded, 999);        // keeps the stamp 5 glyphs max
-  const pos = d > 0;
-  const rgb = pos ? "34,197,94" : "239,68,68";
-  const col = pos ? "#22c55e" : "#ef4444";
+ *  Percent (not dollars) because it's unit-free — the dollar version had to
+ *  re-implement fmtMoney's scaling and drifted out of sync with it. */
+/** Δ stamp scale — diverging, deep red ← white → deep green.
+ *
+ *  rank is 1..5 by |% move| within each sign, so the pair of scales together form
+ *  one continuous ramp: deep red (biggest unwind) → pale → white-ish (smallest
+ *  move either way) → pale green → deep green (biggest build).
+ *
+ *  ⚠ Known trade-off: a white midpoint is designed for LIGHT backgrounds, where
+ *  white recedes. On this dark ladder white is the most luminous colour available,
+ *  so the SMALLEST moves (rank 4-5) draw the eye harder than the biggest ones.
+ *  To invert that, swap in the dark-midpoint values below — same red/green ends,
+ *  midpoint sunk to near-black so small moves recede:
+ *    NEG ["#FF7C64","#E8452A","#B32E12","#7A230F","#40180C"]
+ *    POS ["#63DA97","#2FB86A","#1E7D45","#17512F","#0F2A1B"]
+ *    TXT ["#1a1a1a","#fff","#fff","#fff","#e6eef5"]
+ */
+const DELTA_SCALE_NEG = ["#C8290D", "#ED3615", "#FF6347", "#FF9E8A", "#FFD6CE"] as const;
+const DELTA_SCALE_POS = ["#12803F", "#22A85F", "#4ECB8B", "#93E3B7", "#D2F2E0"] as const;
+/** Label colour per rank — the deep ends need light text, the pale ends dark. */
+const DELTA_SCALE_TEXT = ["#ffffff", "#ffffff", "#1a1a1a", "#1a1a1a", "#1a1a1a"] as const;
+
+function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) {
+  const pos = pct > 0;
+  // rank is 1..5 by |% move| within this sign — 1 is the biggest mover. Ranks
+  // past 5 are possible (change-sign is independent of GEX-sign, so one side can
+  // hold more than five movers) and clamp onto the midpoint step.
+  const i = Math.max(0, Math.min(4, rank - 1));
+  const bg = (pos ? DELTA_SCALE_POS : DELTA_SCALE_NEG)[i];
+  const shown = Math.min(Math.round(Math.abs(pct)), 999);
   return (
     <span
-      title={`Δ ${pos ? "+" : "−"}${rounded}% vs ${deltaLabelBase(base)} baseline`}
+      title={`Δ ${pos ? "+" : "−"}${Math.abs(Math.round(pct))}% (${fmtMoney(d).sign}${fmtMoney(d).value}) — #${rank} mover`}
       style={{
-        flexShrink: 0, fontSize: 8, fontWeight: 800, fontFamily: "var(--font-mono)",
-        lineHeight: 1.5, padding: "0 2px", borderRadius: 3, whiteSpace: "nowrap",
-        background: "transparent", border: `1px solid rgba(${rgb},0.5)`, color: col,
+        flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+        height: 15, boxSizing: "border-box",
+        fontSize: i === 0 ? 11 : 10, fontWeight: i <= 1 ? 900 : 800,
+        fontFamily: "var(--font-mono)", lineHeight: 1,
+        padding: "0 4px", borderRadius: 4, whiteSpace: "nowrap",
+        background: bg,
+        color: DELTA_SCALE_TEXT[i],
+        // White hairline: the deep ends of the scale (#C8290D / #12803F) are dark
+        // enough to sink into a dark cell, and a black border made that worse. A
+        // light border lifts every chip off the heat regardless of its fill.
+        border: "1px solid rgba(255,255,255,0.9)",
       }}
-    >{pos ? "▲" : "▼"}{capped}%</span>
+    >{pos ? "▲" : "▼"}{shown}%</span>
   );
-}
-
-/** Baseline value for the stamp tooltip, in the same units the cell prints. */
-function deltaLabelBase(base: number): string {
-  const f = fmtMoney(base);
-  return `${f.sign}${f.value}`;
 }
 
 function TickerPanel({
@@ -528,28 +546,55 @@ function TickerPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deltaWindow, ticker, colDatesKey]);
 
-  // Δ per cell = live NET GEX − recorded baseline. Computed ONLY for the
-  // top-5-per-side strikes, since those are the only ones that get a stamp.
+  // Δ per cell, for the top-5-per-side strikes only. Stores the percent move and
+  // the raw dollar delta (for the tooltip), plus maxPct per column — the stamp's
+  // brightness is |pct| / maxPct, so it's scaled against the biggest move in the
+  // SAME column. Per column, not per panel, matching how the heat scale already
+  // works: a quiet back-month column still gets a readable spread of its own.
   const deltas = useMemo(() => {
-    const by: Record<string, Record<number, number>> = {};
-    if (deltaWindow === 0 || !computed) return by;
+    const by: Record<string, Record<number, { d: number; pct: number; rank: number }>> = {};
+    const maxPct: Record<string, number> = {};
+    if (deltaWindow === 0 || !computed) return { by, maxPct };
     const key = `v${deltaWindow}` as "v5" | "v15" | "v30";
     for (const e of computed.cols) {
       const grid = gexGrid[e];
       const ranked = computed.top5PerSide[e] ?? {};
-      const col: Record<number, number> = {};
+      const col: Record<number, { d: number; pct: number; rank: number }> = {};
+      let mx = 0;
       if (grid) {
         for (const r of computed.rows) {
-          if (ranked[r.strike] == null) continue;   // not top 5 on its side
+          if (ranked[r.strike] == null) continue;      // not top 5 on its side
           const live = r.gex[e];
           const past = grid[r.strike]?.[key] ?? null;
           if (live == null || past == null) continue;
-          col[r.strike] = live - past;
+          const d = live - past;
+          if (d === 0) continue;
+          const base = live - d;
+          // A baseline at ~0 makes the percent meaningless (a strike coming from
+          // nothing reads as an enormous move) — skip rather than let it set the
+          // scale and wash out every other stamp in the column.
+          if (!Number.isFinite(base) || Math.abs(base) < 1e-6) continue;
+          const pct = (d / Math.abs(base)) * 100;
+          if (!Number.isFinite(pct) || Math.abs(pct) < 1) continue;   // sub-1% is noise
+          col[r.strike] = { d, pct, rank: 5 };
+          const a = Math.abs(pct);
+          if (a > mx) mx = a;
         }
       }
+      // Rank 1..5 by |% move| WITHIN each sign, so the 5 call-side stamps get
+      // red/green steps 1-5 and the 5 put-side stamps get their own 1-5. Ranking
+      // across both signs together would waste half the scale whenever one side
+      // happened to be quiet.
+      for (const sign of [1, -1]) {
+        Object.entries(col)
+          .filter(([, v]) => (sign > 0 ? v.pct > 0 : v.pct < 0))
+          .sort((x, y) => Math.abs(y[1].pct) - Math.abs(x[1].pct))
+          .forEach(([k], idx) => { col[Number(k)].rank = idx + 1; });
+      }
       by[e] = col;
+      maxPct[e] = mx;
     }
-    return by;
+    return { by, maxPct };
   }, [deltaWindow, gexGrid, computed]);
 
   // EM band strikes (snapped to this panel's strikes). Only when current-week.
@@ -750,8 +795,8 @@ function TickerPanel({
                 // stamp takes a fixed 30px slot on the left so values stay aligned
                 // whether or not a given row is ranked.
                 const dMode = deltaWindow !== 0;
-                const dVal = dMode ? (deltas[e]?.[r.strike] ?? null) : null;
-                const dRanked = dMode && (computed.top5PerSide[e]?.[r.strike] ?? null) != null;
+                const dEntry = dMode ? (deltas.by[e]?.[r.strike] ?? null) : null;
+                const dMaxPct = deltas.maxPct[e] ?? 0;
                 return (
                   <div key={e} data-gexcell="1" className={isCB ? "mvc-peak-cell" : undefined}
                     onClick={isCapturing ? undefined : (ev) => {
@@ -764,7 +809,7 @@ function TickerPanel({
                     padding: "4px 4px", fontSize: 10, fontFamily: "var(--font-mono)",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                     textAlign: "center", color: SOFT_WHITE, cursor: isCapturing ? "default" : "pointer",
-                    ...(dMode ? { display: "flex", alignItems: "center", gap: 4 } : {}),
+                    ...(dMode ? { display: "flex", alignItems: "center", gap: 4, minHeight: 23 } : {}),
                     background: val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity),
                     fontWeight: weight,
                     position: "relative",
@@ -791,7 +836,9 @@ function TickerPanel({
                         auto, so it stays aligned across rows whether or not this one
                         carries a stamp — and unranked rows give all their width to
                         the number instead of reserving space for nothing. */}
-                    {dMode && dRanked ? <DeltaStamp d={dVal} live={val ?? 0} /> : null}
+                    {dMode && dEntry
+                      ? <DeltaStamp d={dEntry.d} pct={dEntry.pct} rank={dEntry.rank} />
+                      : null}
                     <span style={dMode ? { marginLeft: "auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } : undefined}>
                       <span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}
                     </span>
