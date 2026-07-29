@@ -1176,11 +1176,12 @@ const ChainMatrix = memo(function ChainMatrix({
         return (
           <div key={`hdr-${col?.expiration ?? i}`} style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HDR_BG}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}` }}>
             <div style={{ fontSize: 10, fontWeight: 500, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
-            {!isStandalone && (
-              <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
-                {colTotal == null ? "—" : fmtVal(colTotal)}
-              </div>
-            )}
+            {/* Per-expiry total of the ACTIVE greek across the visible strike
+                window — the column-wise counterpart to the ⅀ Total column's
+                figure, so every expiry header reads like the totals cell. */}
+            <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)", color: colTotal == null ? HT.muted : colTotal >= 0 ? HT.green : HT.red }}>
+              {colTotal == null ? "—" : fmtVal(colTotal)}
+            </div>
           </div>
         );
       })}
@@ -1422,7 +1423,8 @@ export default function OptionsChainPage({
   // Number of sequential columns to render (default 14; embeds may narrow it).
   const seqColumns = Math.max(1, Math.floor(expiryCount ?? EXP_COLUMNS));
   // Standalone /options-chain route (no external ticker) = stripped-down view:
-  // no Δ change columns, no per-expiry $ totals, no toolbar grand total.
+  // no Δ change columns, no toolbar grand total. (Per-expiry header totals DO
+  // render here — they're the column-wise twin of the ⅀ Total column.)
   const isStandalone = externalTicker == null;
   // Fallback calendar list (used only until/if the per-ticker expirations
   // fetch resolves). Real listings come from /api/expirations so we never

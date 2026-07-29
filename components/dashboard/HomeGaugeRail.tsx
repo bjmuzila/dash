@@ -82,7 +82,15 @@ function SegMeter({
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ display: "block" }}>
       {rects}
       {kind === "signed" && (
-        <rect x={midX - 0.6} y={y - 2} width={1.2} height={segH + 4} fill="rgba(255,255,255,0.4)" />
+        <rect
+          x={midX - 0.9}
+          y={y - 3}
+          width={1.8}
+          height={segH + 6}
+          rx={0.9}
+          fill="rgba(255,255,255,0.92)"
+          style={{ filter: "drop-shadow(0 0 3px rgba(255,255,255,0.55))" }}
+        />
       )}
     </svg>
   );
@@ -117,7 +125,7 @@ function Cell({ g }: { g: GaugeDef }) {
           fontSize: 9.5,
           letterSpacing: "0.06em",
           textTransform: "uppercase",
-          color: "rgba(255,255,255,0.45)",
+          color: "#FFFFFF",
           textAlign: "center",
           minHeight: 22,
           display: "flex",
@@ -133,7 +141,7 @@ function Cell({ g }: { g: GaugeDef }) {
           fontSize: 14,
           fontWeight: 800,
           fontVariantNumeric: "tabular-nums",
-          color: has ? g.color : "rgba(255,255,255,0.35)",
+          color: has ? "#FFFFFF" : "rgba(255,255,255,0.45)",
         }}
       >
         {has ? g.fmt(g.value as number) : "--"}

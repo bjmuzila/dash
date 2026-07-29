@@ -66,6 +66,13 @@ function etParts(ms: number): { hhmm: string; etMin: number } {
   return { hhmm: `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`, etMin: h * 60 + m };
 }
 
+/**
+ * Shared height for every control in the filter row. ThemedSelect's trigger and
+ * a padded <input> both compute to 34px, so pinning buttons to the same number
+ * is what keeps the row on one baseline.
+ */
+const CTRL_H = 34;
+
 /** Regular trading hours, ET: 09:30 inclusive → 16:00 exclusive. */
 const RTH_OPEN_MIN = 9 * 60 + 30;
 const RTH_CLOSE_MIN = 16 * 60;
@@ -359,7 +366,21 @@ function StrikeInput({
         inputMode="decimal"
         autoComplete="off"
         spellCheck={false}
-        style={{ ...homeInputStyle, width: "100%", fontVariantNumeric: "tabular-nums" }}
+        style={{
+          ...homeInputStyle,
+          width: "100%",
+          // Box-match ThemedSelect's trigger exactly: same height, radius,
+          // weight and family, so the two controls read as one row. <input>
+          // does NOT inherit font-family by default — without this it renders
+          // in the browser UI font and sits a hair off everything else.
+          height: CTRL_H,
+          boxSizing: "border-box",
+          borderRadius: 8,
+          fontFamily: "inherit",
+          fontWeight: 700,
+          color: HOME_THEME.cyan,
+          fontVariantNumeric: "tabular-nums",
+        }}
       />
 
       <div style={{ fontSize: 10, marginTop: 3, color: HOME_THEME.green, opacity: 0.7, height: 12 }}>
@@ -372,7 +393,7 @@ function StrikeInput({
       {open && matches.length > 0 && (
         <div
           style={{
-            position: "absolute", top: "100%", left: 0, marginTop: 2, zIndex: 40,
+            position: "absolute", top: CTRL_H + 18, left: 0, zIndex: 40,
             width: "100%", maxHeight: 240, overflowY: "auto",
             borderRadius: 8, borderTop: `2px solid ${DOCK_THEME.cyanTop}`,
             background: DOCK_THEME.bg, boxShadow: DOCK_THEME.shadow,
@@ -524,9 +545,25 @@ export default function StrikeHistoryPage() {
   const value: React.CSSProperties = { fontSize: 18, fontWeight: 700, color: HOME_THEME.text, marginTop: 3, fontVariantNumeric: "tabular-nums" };
   const note: React.CSSProperties = { fontSize: 11, color: HOME_THEME.green, opacity: 0.7, marginTop: 2 };
   const panelTitle: React.CSSProperties = { fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, display: "flex", alignItems: "center", gap: 8 };
+  /** Pins a short button to the shared control height and centers its label. */
+  const centeredCtrl: React.CSSProperties = {
+    height: CTRL_H, display: "inline-flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box",
+  };
   const panelNote: React.CSSProperties = { fontSize: 11.5, color: HOME_THEME.green, opacity: 0.75, margin: "2px 0 8px" };
 
   const hoverRow = hover != null ? view[hover] : null;
+
+  /**
+   * One control column: fixed-height label, then the control. The row is
+   * top-aligned, so a field with extra text underneath (the strike hint) grows
+   * downward instead of pushing its own control out of line.
+   */
+  const Field = ({ text, width, children }: { text?: string; width?: number; children: React.ReactNode }) => (
+    <div style={{ width }}>
+      <div style={{ ...label, height: 13, lineHeight: "13px", marginBottom: 5 }}>{text ?? "\u00A0"}</div>
+      {children}
+    </div>
+  );
 
   const PanelCard = ({ title, color, subtitle, children }: { title: string; color: string; subtitle: string; children: React.ReactNode }) => (
     <Card variant="classic" padding={18} style={{ minWidth: 0 }}>
@@ -540,7 +577,10 @@ export default function StrikeHistoryPage() {
   );
 
   return (
-    <PageShell>
+    // no-card-lift: the shell-level opt-out from globals.css. These cards hold
+    // dense charts you hover CONSTANTLY to read the crosshair — the default
+    // rise-on-hover would make the whole panel twitch under the cursor.
+    <PageShell className="no-card-lift">
       {/* Same treatment as /forward-build: the scanner tab strip renders in link
           mode so this route is not a dead end. */}
       <ScannerTabsBar active="strikehistory" />
@@ -551,9 +591,8 @@ export default function StrikeHistoryPage() {
         subtitle="One strike, every recorded snapshot. Net GEX is read from the stored column — not recomputed."
         padding={20}
       >
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
-          <div style={{ minWidth: 220 }}>
-            <div style={label}>Session · expiry</div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
+          <Field text="Session · expiry" width={230}>
             <ThemedSelect
               value={dayKey}
               onChange={setDayKey}
@@ -563,43 +602,50 @@ export default function StrikeHistoryPage() {
               }))}
               placeholder="Loading…"
             />
-          </div>
-          <div>
-            <div style={label}>Strike</div>
+          </Field>
+
+          <Field text="Strike">
             <StrikeInput strikes={strikes} value={strike} onCommit={setStrike} />
-          </div>
+          </Field>
 
           {/* RTH / ETH window. Filters the already-fetched series client-side. */}
-          <div>
-            <div style={label}>Hours</div>
-            <div style={{ display: "inline-flex", gap: 6, marginTop: 4 }}>
+          <Field text="Hours">
+            <div style={{ display: "inline-flex", gap: 6 }}>
               <button
                 onClick={() => setSession("eth")}
-                style={session === "eth" ? homeButtonStyle : homeSecondaryButtonStyle}
+                style={{ ...(session === "eth" ? homeButtonStyle : homeSecondaryButtonStyle), ...centeredCtrl }}
                 title="Full recorded session, 24h"
               >
                 ETH
               </button>
               <button
                 onClick={() => setSession("rth")}
-                style={session === "rth" ? homeButtonStyle : homeSecondaryButtonStyle}
+                style={{ ...(session === "rth" ? homeButtonStyle : homeSecondaryButtonStyle), ...centeredCtrl }}
                 title="Regular trading hours, 09:30–16:00 ET"
               >
                 RTH
               </button>
             </div>
-          </div>
+          </Field>
 
-          <button style={homeRefreshButtonStyle(refreshState)} onClick={() => void loadSeries()} disabled={refreshState === "refreshing"}>
-            {refreshState === "refreshing" ? "Loading" : "Refresh"}
-          </button>
+          <Field>
+            <button
+              style={{ ...homeRefreshButtonStyle(refreshState), ...centeredCtrl }}
+              onClick={() => void loadSeries()}
+              disabled={refreshState === "refreshing"}
+            >
+              {refreshState === "refreshing" ? "Loading" : "Refresh"}
+            </button>
+          </Field>
 
           {stats && (
-            <div style={{ fontSize: 11.5, color: HOME_THEME.green, opacity: 0.75, paddingBottom: 6 }}>
-              {view.length} of {stamped.length} snapshots · {stats.first}–{stats.last} ET
-              {steps.length > 0 && ` · ${steps.length} OI refresh step${steps.length > 1 ? "s" : ""}`}
-              {` · ${skewCount} with IV`}
-            </div>
+            <Field>
+              <div style={{ height: CTRL_H, display: "flex", alignItems: "center", fontSize: 11.5, color: HOME_THEME.green, opacity: 0.75 }}>
+                {view.length} of {stamped.length} snapshots · {stats.first}–{stats.last} ET
+                {steps.length > 0 && ` · ${steps.length} OI refresh step${steps.length > 1 ? "s" : ""}`}
+                {` · ${skewCount} with IV`}
+              </div>
+            </Field>
           )}
         </div>
 
