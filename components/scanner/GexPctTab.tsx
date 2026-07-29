@@ -31,6 +31,11 @@ const N_EXP = 3;
 /** Under this many tickers an expiry's lean is one or two names, not a read —
  *  those cells render dimmed so an n=1 expiry stops shouting as loud as n=160. */
 const THIN_N = 5;
+/** The meter is drawn at SegMeter's native proportions, so a full-width table
+ *  column stretches its segments into slabs. The block is pinned to this width
+ *  and centered; the three expiry columns share the table's slack around it. */
+const METER_W = 152;
+const EXP_COL_W = "22%";
 
 // Meter colors: the /home gauge-rail palette — positive/calls blue,
 // negative/puts red. Sourced from SegMeter so the scanner bars and the home
@@ -114,20 +119,21 @@ function SplitCell({ leg }: { leg: Leg | null }) {
   const n = 100 - p;
   const lead = p >= 50 ? POS : NEG;
   return (
-    <td style={{ ...td, borderLeft: "1px solid rgba(255,255,255,0.08)" }}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", minWidth: 118 }}>
-        {/* Each ticker's OWN expiry — tickers without a 0DTE have a different
-            front three, so the date belongs per-cell, not in a shared header. */}
-        <div style={{ fontSize: 11, fontWeight: 600, color: HOME_THEME.text, opacity: 0.75, alignSelf: "flex-start" }}>
-          {fmtExpiry(leg.expiry)}
+    <td style={{ ...td, width: EXP_COL_W, padding: "7px 10px", borderLeft: "1px solid rgba(255,255,255,0.08)" }}>
+      {/* Fixed-width, centered block — see METER_W. */}
+      <div style={{ width: METER_W, margin: "0 auto", display: "flex", flexDirection: "column", gap: 3 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+          {/* Each ticker's OWN expiry — tickers without a 0DTE have a different
+              front three, so the date belongs per-cell, not in a shared header. */}
+          <span style={{ fontSize: 11, fontWeight: 600, color: HOME_THEME.text, opacity: 0.7 }}>
+            {fmtExpiry(leg.expiry)}
+          </span>
+          <span style={{ fontSize: 12, fontWeight: 800, color: lead }}>
+            {p.toFixed(0)}% / {n.toFixed(0)}%
+          </span>
         </div>
-        <div style={{ width: "100%" }}>
-          <SegMeter t={p / 100} midT={0.5} tick={0.5} color={lead} kind="pct" fill />
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", width: "100%", fontSize: 12, fontWeight: 700 }}>
-          <span style={{ color: lead }}>{p.toFixed(0)}% / {n.toFixed(0)}%</span>
-        </div>
-        <div style={{ fontSize: 11, color: HOME_THEME.text }}>
+        <SegMeter t={p / 100} midT={0.5} tick={0.5} color={lead} kind="pct" fill />
+        <div style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.7, textAlign: "right" }}>
           +{fmtB(leg.pos)} / −{fmtB(leg.neg)}
         </div>
       </div>
@@ -445,7 +451,7 @@ export default function GexPctTab() {
                 {Array.from({ length: N_EXP }, (_, i) => (
                   <th
                     key={`h${i}`}
-                    style={{ ...th, textAlign: "center", color: HOME_THEME.cyan, borderLeft: "1px solid rgba(255,255,255,0.08)" }}
+                    style={{ ...th, textAlign: "center", width: EXP_COL_W, color: HOME_THEME.cyan, borderLeft: "1px solid rgba(255,255,255,0.08)" }}
                     onClick={() => toggle(i as SortCol)}
                   >
                     E{i + 1}{arrow(i as SortCol)}

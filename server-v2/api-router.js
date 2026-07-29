@@ -4825,6 +4825,122 @@ if (libDb) {
       };
     };
 
+    // Consolidates gex_change_top (top-N very-strong strikes per 30m slot) from
+    // slot/strike rows into one row per ticker for a session. NOTE:
+    // gex_change_top.date is TEXT ('YYYY-MM-DD'), not a date column — never
+    // compare it to CURRENT_DATE (strike_growth.date IS a real date; the two
+    // tables do not share a predicate).
+    const gexChangeSummary = async (dateArg) => {
+      let date = String(dateArg || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        const [r] = await libDb.queryAll('SELECT max(date) AS d FROM gex_change_top');
+        date = r?.d || '';
+      }
+      if (!date) return { by_ticker: [], detail: [], note: 'gex_change_top is empty.' };
+
+      const rows = await libDb.queryAll(
+        `WITH src AS (SELECT * FROM gex_change_top WHERE date = ?),
+         strikes AS (
+           SELECT symbol, count(*) AS n_strikes,
+                  string_agg(lbl, ', ' ORDER BY strike) AS strike_list
+           FROM (SELECT DISTINCT symbol, strike,
+                        to_char(strike, 'FM999990.##') AS lbl FROM src) x
+           GROUP BY symbol
+         )
+         SELECT s.symbol,
+                count(*)                                  AS hits,
+                count(DISTINCT s.slot)                    AS slots,
+                min(s.slot)                               AS first_slot,
+                max(s.slot)                               AS last_slot,
+                min(s.rank)                               AS best_rank,
+                max(s.score)                              AS best_score,
+                sum(s.latest_chg)                         AS net_chg,
+                sum(abs(s.latest_chg))                    AS abs_chg,
+                count(*) FILTER (WHERE s.strike > s.spot) AS above_spot,
+                count(*) FILTER (WHERE s.strike < s.spot) AS below_spot,
+                count(DISTINCT s.expiry)                  AS n_expiries,
+                min(s.expiry)                             AS near_expiry,
+                k.n_strikes, k.strike_list,
+                max(s.spot)                               AS spot
+         FROM src s JOIN strikes k ON k.symbol = s.symbol
+         GROUP BY s.symbol, k.n_strikes, k.strike_list
+         ORDER BY abs_chg DESC`, [date]);
+
+      const detailRows = await libDb.queryAll(
+        `SELECT symbol, strike, expiry,
+                count(*)             AS hits,
+                count(DISTINCT slot) AS slots,
+                min(slot)            AS first_slot,
+                max(slot)            AS last_slot,
+                sum(latest_chg)      AS net_chg,
+                sum(abs(latest_chg)) AS abs_chg,
+                max(abs(latest_chg)) AS biggest_hit,
+                min(rank)            AS best_rank
+         FROM gex_change_top WHERE date = ?
+         GROUP BY symbol, strike, expiry
+         ORDER BY abs_chg DESC`, [date]);
+
+      const [slotStats] = await libDb.queryAll(
+        `SELECT count(*) AS n, COALESCE(max(cnt), 0) AS cap FROM (
+           SELECT slot, count(*) AS cnt FROM gex_change_top WHERE date = ? GROUP BY slot
+         ) s`, [date]);
+
+      const M = (v) => round(num(v) / 1e6, 2);
+
+      const by_ticker = rows.map((r) => {
+        const abs = num(r.abs_chg), net = num(r.net_chg);
+        const callShare = abs > 0 ? Math.round((100 * ((abs + net) / 2)) / abs) : 0;
+        return {
+          symbol: r.symbol,
+          '$M abs': M(r.abs_chg),
+          '$M net': M(r.net_chg),
+          'call %': callShare,
+          side: callShare >= 70 ? 'call/resist' : callShare <= 30 ? 'put/support' : 'two-sided',
+          hits: num(r.hits),
+          slots: num(r.slots),
+          window: `${r.first_slot}–${r.last_slot}`,
+          'best rank': num(r.best_rank),
+          above: num(r.above_spot),
+          below: num(r.below_spot),
+          strikes: r.strike_list,
+          expiries: num(r.n_expiries),
+          'near exp': r.near_expiry,
+          spot: round(num(r.spot), 2),
+        };
+      });
+
+      const detail = detailRows.map((r) => {
+        const abs = num(r.abs_chg);
+        return {
+          symbol: r.symbol,
+          strike: num(r.strike),
+          expiry: r.expiry,
+          '$M abs': M(r.abs_chg),
+          '$M net': M(r.net_chg),
+          'biggest hit $M': M(r.biggest_hit),
+          'concentration %': abs > 0 ? Math.round((100 * num(r.biggest_hit)) / abs) : 0,
+          hits: num(r.hits),
+          slots: num(r.slots),
+          window: `${r.first_slot}–${r.last_slot}`,
+          'best rank': num(r.best_rank),
+        };
+      });
+
+      const totalAbs = by_ticker.reduce((s, r) => s + num(r['$M abs']), 0);
+      const totalHits = by_ticker.reduce((s, r) => s + num(r.hits), 0);
+      const nSlots = num(slotStats?.n), cap = num(slotStats?.cap);
+      const saturated = nSlots > 0 && cap > 0 && totalHits >= nSlots * cap;
+
+      return {
+        by_ticker, detail,
+        note: `${date} · ${by_ticker.length} tickers · ${totalHits} hits across ${nSlots} slots · $${round(totalAbs, 1)}M flagged.`
+          + (saturated
+            ? ` ⚠ Board saturated — every slot filled the top-${cap} cap, so real activity exceeds what is shown here. Raise GEX_CHANGE_TOP_N to widen coverage.`
+            : '')
+          + ` "call %" = share of |Δ| on the call / above-spot side. "$M net" is call-build minus put-build, not the ticker's net day GEX change.`,
+      };
+    };
+
     register('/api/backtests', {
       auth: 'owner', methods: ['GET'],
       async handler(req, res, ctx) {
@@ -4839,6 +4955,7 @@ if (libDb) {
           else if (test === 'gamma-wall') body = await gammaWall(n('tol', 5), n('near', 150), n('minRange', 5));
           else if (test === 'normalized-gex') body = await normalizedGex(ctx, (q.get('ticker') || 'SPX').trim().toUpperCase(), (q.get('expiration') || '').trim());
           else if (test === 'gex-dex-cross') body = await gexDexCross(n('horizon', 30), n('hit', 5), n('band', 60), n('days', 30), n('gap', 5));
+          else if (test === 'gex-change-summary') body = await gexChangeSummary(q.get('date') || '');
           else { send(res, 400, { error: 'unknown test' }); return; }
           send(res, 200, { ok: true, test, ...body });
         } catch (e) { send(res, 500, { ok: false, error: e.message }); }
