@@ -139,31 +139,36 @@ function fmtMoney(v: number) {
   return s + "$" + a.toFixed(0);
 }
 
-/** Compact magnitude for the Δ stamp: whole millions, no $ — 2-3 glyphs wide. */
-function stampNum(d: number): string {
-  const a = Math.abs(d);
-  if (a >= 1000) return (a / 1000).toFixed(1) + "B";
-  if (a >= 100) return String(Math.round(a));
-  return a.toFixed(a < 10 ? 1 : 0);
-}
-
-/** Ghost Δ stamp — hairline border, coloured caret + magnitude, no fill, so it
- *  reads behind the GEX value rather than competing with the cell's heat. Only
- *  rendered on ranked strikes (top 5 each side). */
-function DeltaStamp({ d }: { d: number | null }) {
-  if (d == null || !Number.isFinite(d)) return null;
+/** Ghost \u0394 stamp — percent change vs the recorded baseline, no decimals.
+ *
+ *  Percent, not dollars: the magnitude version re-implemented fmtCellM's unit
+ *  scaling, drifted out of sync with it, and printed raw figures that collided
+ *  with the GEX value. Percent is unit-free and never more than 5 glyphs.
+ *
+ *  Hairline border, no fill, so it sits behind the value rather than competing
+ *  with the cell's heat. Only rendered on ranked strikes (top 5 each side). */
+function DeltaStamp({ d, live }: { d: number | null; live: number }) {
+  if (d == null || !Number.isFinite(d) || d === 0) return null;
+  const base = live - d;
+  // Near-zero baseline makes the percent meaningless — skip rather than scream.
+  if (!Number.isFinite(base) || Math.abs(base) < 1e-6) return null;
+  const raw = (d / Math.abs(base)) * 100;
+  if (!Number.isFinite(raw)) return null;
+  const rounded = Math.round(Math.abs(raw));
+  if (rounded < 1) return null;                 // sub-1% is noise
+  const capped = Math.min(rounded, 999);
   const pos = d > 0;
   const rgb = pos ? "34,197,94" : "239,68,68";
   const col = pos ? "#22c55e" : "#ef4444";
   return (
     <span
-      title={`\u0394 ${pos ? "+" : "\u2212"}$${stampNum(d)}M vs baseline`}
+      title={`\u0394 ${pos ? "+" : "\u2212"}${rounded}% vs ${fmtCellM(base)} baseline`}
       style={{
-        flexShrink: 0, fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)",
-        lineHeight: 1.4, padding: "0 3px", borderRadius: 3, whiteSpace: "nowrap",
+        flexShrink: 0, fontSize: 8, fontWeight: 800, fontFamily: "var(--font-mono)",
+        lineHeight: 1.5, padding: "0 2px", borderRadius: 3, whiteSpace: "nowrap",
         background: "transparent", border: `1px solid rgba(${rgb},0.5)`, color: col,
       }}
-    >{pos ? "\u25B2" : "\u25BC"}{stampNum(d)}</span>
+    >{pos ? "\u25B2" : "\u25BC"}{capped}%</span>
   );
 }
 
@@ -1699,7 +1704,15 @@ export function HomeClient({
                     {/* Δ stamps — adds the change to the left of the NET GEX value on
                         the top 5 strikes each side. Heatmap view only. */}
                     {heatmapView === "heatmap" && (
-                      <div style={{ display: "flex", gap: 2, marginLeft: 4, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden" }}>
+                      <div style={{
+                        display: "flex", gap: 2, marginLeft: 4,
+                        border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden",
+                        // Lift the control onto its own layer with an opaque backing so
+                        // the panel gradient behind it can't bleed through and muddy the
+                        // active/inactive states.
+                        position: "relative", zIndex: 3, isolation: "isolate",
+                        background: "#0D1119", boxShadow: "0 1px 6px rgba(0,0,0,0.45)",
+                      }}>
                         {([0, 5, 15, 30] as const).map((v) => (
                           <button
                             key={v}
@@ -1719,7 +1732,12 @@ export function HomeClient({
                     {/* Heatmap|Chain switch — pinned as the LAST child so it sits at the
                         panel's right edge and never shifts when the heatmap-only controls
                         above it hide in Chain view. */}
-                    <div style={{ display: "flex", gap: 2, marginLeft: 4, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden" }}>
+                    <div style={{
+                      display: "flex", gap: 2, marginLeft: 4,
+                      border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden",
+                      position: "relative", zIndex: 3, isolation: "isolate",
+                      background: "#0D1119", boxShadow: "0 1px 6px rgba(0,0,0,0.45)",
+                    }}>
                       {(["heatmap", "chain"] as const).map((v) => (
                         <button
                           key={v}
@@ -1891,9 +1909,9 @@ export function HomeClient({
                                 barEl(row.netGexVal, "netGexVal")
                               ) : (
                                 <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
-                                  <span style={{ flexShrink: 0, minWidth: 28, display: "flex", alignItems: "center", gap: 4 }}>
+                                  <span style={{ flexShrink: 0, minWidth: 28, display: "flex", alignItems: "center", gap: 3 }}>
                                     {row.rank && <img src={rankBadgeDataUri(row.rank, row.rankColor ?? "#8B94A7")} width={20} height={13} style={{ display: "block" }} alt={`#${row.rank}`} />}
-                                    {deltaWindow !== 0 && <DeltaStamp d={heatmapDeltas[row.strikeNum] ?? null} />}
+                                    {deltaWindow !== 0 && <DeltaStamp d={heatmapDeltas[row.strikeNum] ?? null} live={Number(row.netGexVal ?? 0)} />}
                                   </span>
                                   <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
                                     {row.strikeNum === mvcStrikeHeatmap && (

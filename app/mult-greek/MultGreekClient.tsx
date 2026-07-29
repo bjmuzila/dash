@@ -359,32 +359,45 @@ type DeltaWindow = 0 | 5 | 15 | 30;
 type GexGridCell = { vNow: number | null; v5: number | null; v15: number | null; v30: number | null };
 type GexGrid = Record<string, Record<number, GexGridCell>>;
 
-/** Compact magnitude for the stamp: whole millions, no $ — keeps it 2-3 glyphs. */
-function stampNum(d: number): string {
-  const a = Math.abs(d);
-  if (a >= 1000) return (a / 1000).toFixed(1) + "B";
-  if (a >= 100) return String(Math.round(a));
-  return a.toFixed(a < 10 ? 1 : 0);
-}
-
-/** Ghost Δ stamp — hairline border + coloured caret and magnitude, no fill, so it
- *  sits behind the GEX value in the visual hierarchy instead of competing with the
- *  cell's heat shading. Rendered only on the top-5-per-side strikes. */
-function DeltaStamp({ d }: { d: number | null }) {
-  if (d == null || !Number.isFinite(d)) return null;
+/** Ghost Δ stamp — percent change vs the recorded baseline, no decimals.
+ *
+ *  Percent, not dollars: the magnitude version had to re-implement fmtMoney's
+ *  unit scaling and drifted out of sync with it, printing raw figures that ran
+ *  straight into the GEX value. A percent is unit-free, never more than 5
+ *  glyphs, and answers the more useful question anyway.
+ *
+ *  Hairline border, no fill, so it reads behind the value rather than competing
+ *  with the cell's heat. Only rendered on the top-5-per-side strikes. */
+function DeltaStamp({ d, live }: { d: number | null; live: number }) {
+  if (d == null || !Number.isFinite(d) || d === 0) return null;
+  const base = live - d;
+  // A baseline at (or near) zero makes the percent meaningless/infinite — a
+  // strike coming from nothing would read as a huge move. Skip the stamp.
+  if (!Number.isFinite(base) || Math.abs(base) < 1e-6) return null;
+  const raw = (d / Math.abs(base)) * 100;
+  if (!Number.isFinite(raw)) return null;
+  const rounded = Math.round(Math.abs(raw));
+  if (rounded < 1) return null;                 // sub-1% is noise, not signal
+  const capped = Math.min(rounded, 999);        // keeps the stamp 5 glyphs max
   const pos = d > 0;
   const rgb = pos ? "34,197,94" : "239,68,68";
   const col = pos ? "#22c55e" : "#ef4444";
   return (
     <span
-      title={`Δ ${pos ? "+" : "−"}$${stampNum(d)}M vs baseline`}
+      title={`Δ ${pos ? "+" : "−"}${rounded}% vs ${deltaLabelBase(base)} baseline`}
       style={{
-        flexShrink: 0, fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)",
-        lineHeight: 1.4, padding: "0 3px", borderRadius: 3, whiteSpace: "nowrap",
+        flexShrink: 0, fontSize: 8, fontWeight: 800, fontFamily: "var(--font-mono)",
+        lineHeight: 1.5, padding: "0 2px", borderRadius: 3, whiteSpace: "nowrap",
         background: "transparent", border: `1px solid rgba(${rgb},0.5)`, color: col,
       }}
-    >{pos ? "▲" : "▼"}{stampNum(d)}</span>
+    >{pos ? "▲" : "▼"}{capped}%</span>
   );
+}
+
+/** Baseline value for the stamp tooltip, in the same units the cell prints. */
+function deltaLabelBase(base: number): string {
+  const f = fmtMoney(base);
+  return `${f.sign}${f.value}`;
 }
 
 function TickerPanel({
@@ -774,12 +787,12 @@ function TickerPanel({
                         pointerEvents: "none",
                       }}>{lvl.t}</span>
                     )}
-                    {dMode && (
-                      <span style={{ flexShrink: 0, width: 30, display: "flex", justifyContent: "flex-start" }}>
-                        {dRanked ? <DeltaStamp d={dVal} /> : null}
-                      </span>
-                    )}
-                    <span style={dMode ? { marginLeft: "auto", whiteSpace: "nowrap" } : undefined}>
+                    {/* No fixed-width slot: the value is right-aligned by marginLeft
+                        auto, so it stays aligned across rows whether or not this one
+                        carries a stamp — and unranked rows give all their width to
+                        the number instead of reserving space for nothing. */}
+                    {dMode && dRanked ? <DeltaStamp d={dVal} live={val ?? 0} /> : null}
+                    <span style={dMode ? { marginLeft: "auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } : undefined}>
                       <span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}
                     </span>
                   </div>
@@ -1435,16 +1448,24 @@ export function MultGreekClient({
 
         {/* Δ stamps — OFF is today's view; 5M/15M/30M adds a change stamp to the
             left of the value on the top 5 strikes each side of every column. */}
-        <SegGroup
-          options={[
-            { label: "Δ OFF", value: "0" },
-            { label: "5M", value: "5" },
-            { label: "15M", value: "15" },
-            { label: "30M", value: "30" },
-          ]}
-          active={String(deltaWindow)}
-          onChange={(v) => setDeltaWindow(Number(v) as DeltaWindow)}
-        />
+        {/* Wrapped in its own opaque, isolated layer so the page gradient behind
+            the dock can't bleed through and wash out the active state. */}
+        <span style={{
+          position: "relative", zIndex: 3, isolation: "isolate",
+          background: HT.panel, borderRadius: 10, display: "inline-flex",
+          boxShadow: "0 1px 6px rgba(0,0,0,0.45)",
+        }}>
+          <SegGroup
+            options={[
+              { label: "Δ OFF", value: "0" },
+              { label: "5M", value: "5" },
+              { label: "15M", value: "15" },
+              { label: "30M", value: "30" },
+            ]}
+            active={String(deltaWindow)}
+            onChange={(v) => setDeltaWindow(Number(v) as DeltaWindow)}
+          />
+        </span>
 
         <DockGap />
 
