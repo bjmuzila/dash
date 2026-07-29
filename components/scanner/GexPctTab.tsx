@@ -3,9 +3,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // GEX% — positive vs negative gamma split, per ticker, per expiration
 //
-// One row per ticker; for each of the front 3 expiries a split bar showing what
-// share of that expiry's |net GEX| sits on the positive (call / dealers-long-
-// gamma) side vs the negative (put / dealers-short-gamma) side.
+// One row per ticker; for each of the front 3 expiries a gauge-rail meter (the
+// /home SegMeter, pct fill) showing what share of that expiry's |net GEX| sits
+// on the positive (call / dealers-long-gamma) side vs the negative (put /
+// dealers-short-gamma) side. The bar fills from the left to the call share and
+// takes the color of whichever side leads; the tick marks an even split.
 //
 //   net      = gex_now + gex_open   (today's volume gamma + carried OI gamma —
 //              the same "net" the replay frames and day-over-day rollups use)
@@ -23,11 +25,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { HOME_THEME, homeButtonStyle, homeInputStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
-import { SegSplitMeter, GEX_POS, GEX_NEG } from "@/components/shared/SegMeter";
+import { SegMeter, GEX_POS, GEX_NEG } from "@/components/shared/SegMeter";
 
 const N_EXP = 3;
+/** Under this many tickers an expiry's lean is one or two names, not a read —
+ *  those cells render dimmed so an n=1 expiry stops shouting as loud as n=160. */
+const THIN_N = 5;
 
-// Split-bar colors: the /home gauge-rail palette — positive/calls blue,
+// Meter colors: the /home gauge-rail palette — positive/calls blue,
 // negative/puts red. Sourced from SegMeter so the scanner bars and the home
 // bars can never drift apart.
 const POS = GEX_POS;
@@ -97,13 +102,17 @@ const seg = (active: boolean): CSSProperties => ({
   color: HOME_THEME.text,
 });
 
-// One expiry cell: split bar + the two percentages + the two dollar figures.
+// One expiry cell, in the same gauge-rail language as the lean strip above:
+// the bar fills from the left to the call share, colored by whichever side is
+// leading, with a tick at an even split. Same meter, same reading, everywhere
+// on this tab — the two-tone split bar is gone.
 function SplitCell({ leg }: { leg: Leg | null }) {
   if (!leg || leg.posPct == null) {
     return <td style={{ ...td, color: DIM, borderLeft: "1px solid rgba(255,255,255,0.08)" }}>—</td>;
   }
   const p = leg.posPct;
   const n = 100 - p;
+  const lead = p >= 50 ? POS : NEG;
   return (
     <td style={{ ...td, borderLeft: "1px solid rgba(255,255,255,0.08)" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", minWidth: 118 }}>
@@ -113,11 +122,10 @@ function SplitCell({ leg }: { leg: Leg | null }) {
           {fmtExpiry(leg.expiry)}
         </div>
         <div style={{ width: "100%" }}>
-          <SegSplitMeter posPct={p} />
+          <SegMeter t={p / 100} midT={0.5} tick={0.5} color={lead} kind="pct" fill />
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", width: "100%", fontSize: 12, fontWeight: 700 }}>
-          <span style={{ color: POS }}>{p.toFixed(0)}%</span>
-          <span style={{ color: NEG }}>{n.toFixed(0)}%</span>
+          <span style={{ color: lead }}>{p.toFixed(0)}% / {n.toFixed(0)}%</span>
         </div>
         <div style={{ fontSize: 11, color: HOME_THEME.text }}>
           +{fmtB(leg.pos)} / −{fmtB(leg.neg)}
@@ -338,29 +346,57 @@ export default function GexPctTab() {
               }}>
                 Call-side lean by expiration
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(158px,1fr))", gap: 10 }}>
-                {byExpiry.map((e) => (
-                  <div
-                    key={e.expiry}
-                    style={{
-                      border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, padding: "10px 12px",
-                      background: "rgba(13,17,25,0.72)", display: "flex", flexDirection: "column", gap: 6,
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: HOME_THEME.text }}>{fmtExpiry(e.expiry)}</span>
-                      <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.7 }}>n={e.n}</span>
+              <div style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.55, marginBottom: 8 }}>
+                bar fills to the call share · tick marks an even split · $-wtd weights by size ·
+                fewer than {THIN_N} tickers renders dimmed
+              </div>
+              {/* One strip in the /home gauge-rail chrome: uppercase label, the
+                  same SegMeter the rail uses (pct fill from the left, faint tick
+                  at an even split), value underneath in the leading side's color.
+                  The 1px grid gap over a light background IS the divider — with
+                  auto-fit columns there's no way to know which cell starts a row,
+                  so borders can't be placed per-cell. */}
+              <div style={{
+                display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(132px,1fr))", gap: 1,
+                background: "rgba(255,255,255,0.07)", border: `1px solid ${HOME_THEME.border}`,
+                borderRadius: 14, overflow: "hidden",
+              }}>
+                {byExpiry.map((e) => {
+                  const lead = e.avgPct >= 50 ? POS : NEG;
+                  const thin = e.n < THIN_N;
+                  return (
+                    <div
+                      key={e.expiry}
+                      title={
+                        `${fmtExpiry(e.expiry)} — ${e.n} ticker${e.n === 1 ? "" : "s"}. ` +
+                        `${e.avgPct.toFixed(0)}% of gamma on the call side, every ticker weighted equally` +
+                        (e.dollarPct != null ? `; ${e.dollarPct.toFixed(0)}% weighted by size.` : ".") +
+                        (thin ? " Thin sample — treat as noise." : "")
+                      }
+                      style={{
+                        padding: "11px 12px 12px", background: "rgba(13,17,25,0.86)",
+                        display: "flex", flexDirection: "column", alignItems: "center", gap: 6,
+                        opacity: thin ? 0.45 : 1,
+                      }}
+                    >
+                      <div style={{
+                        fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase",
+                        color: HOME_THEME.text, opacity: 0.6, whiteSpace: "nowrap",
+                      }}>
+                        {fmtExpiry(e.expiry)} · n={e.n}
+                      </div>
+                      <div style={{ width: "100%", maxWidth: 132 }}>
+                        <SegMeter t={e.avgPct / 100} midT={0.5} tick={0.5} color={lead} kind="pct" fill />
+                      </div>
+                      <div style={{ fontSize: 15, fontWeight: 800, color: lead, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+                        {e.avgPct.toFixed(0)}% / {(100 - e.avgPct).toFixed(0)}%
+                      </div>
+                      <div style={{ fontSize: 10, color: HOME_THEME.text, opacity: 0.45, marginTop: -2, whiteSpace: "nowrap" }}>
+                        {e.dollarPct != null ? `$-wtd ${e.dollarPct.toFixed(0)}%` : "—"}
+                      </div>
                     </div>
-                    <SegSplitMeter posPct={e.avgPct} n={14} />
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>
-                      <span style={{ color: POS }}>{e.avgPct.toFixed(0)}%</span>
-                      <span style={{ color: NEG }}>{(100 - e.avgPct).toFixed(0)}%</span>
-                    </div>
-                    <div style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.7 }}>
-                      {e.dollarPct != null ? `$-wtd ${e.dollarPct.toFixed(0)}% call` : "—"}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -378,7 +414,8 @@ export default function GexPctTab() {
               GEX% by ticker &amp; expiration
             </div>
             <div style={{ fontSize: 12, color: HOME_THEME.text }}>
-              share of net gamma on the call side (+) vs the put side (−)
+              share of net gamma on the call side (+) vs the put side (−) · bar fills to the call
+              share, tick marks an even split
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>

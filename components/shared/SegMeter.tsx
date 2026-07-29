@@ -65,6 +65,7 @@ export function SegMeter({
   kind,
   n = 20,
   fill = false,
+  tick = null,
 }: {
   t: number | null;
   midT: number;
@@ -72,6 +73,11 @@ export function SegMeter({
   kind: "signed" | "pct";
   n?: number;
   fill?: boolean;
+  /**
+   * Reference tick for "pct" meters, 0..1 — e.g. 0.5 to mark an even split on a
+   * left-filling bar. "signed" meters always tick at midT and ignore this.
+   */
+  tick?: number | null;
 }) {
   const has = t != null && Number.isFinite(t);
   const tv = has ? clamp(t as number, 0, 1) : midT;
@@ -95,12 +101,14 @@ export function SegMeter({
       />,
     );
   }
-  const midX = PAD + midT * (W - PAD * 2);
+  // Signed meters always mark the pivot; pct meters mark whatever `tick` asks for.
+  const tickT = kind === "signed" ? midT : tick;
+  const tickX = tickT != null ? PAD + clamp(tickT, 0, 1) * (W - PAD * 2) : null;
   return (
     <Svg fill={fill}>
       {rects}
-      {kind === "signed" && (
-        <rect x={midX - 0.6} y={Y - 2} width={1.2} height={SEG_H + 4} fill="rgba(255,255,255,0.4)" />
+      {tickX != null && (
+        <rect x={tickX - 0.6} y={Y - 2} width={1.2} height={SEG_H + 4} fill="rgba(255,255,255,0.4)" />
       )}
     </Svg>
   );
