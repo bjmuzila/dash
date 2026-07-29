@@ -981,8 +981,11 @@ function buildFlowPrintsWhere(f, sinceMs = null) {
 
 function parseFlowFilters(searchParams) {
   const date = searchParams.get('date') || todayYmdET();
-  // Use the requested underlying (defaulting to SPX) so flow-netprem /
-  // flow-premsplit can return data for any selected ticker, not just SPX.
+  // Honor an explicit ?underlying= (mirrors handleFlowHistory's pattern above),
+  // defaulting to SPX. The old SPX-only hardcode is gone now that non-SPX flow
+  // is ingested via the shared dxLink connection (see proxy-tastytrade.js
+  // _startTtMultiFlow) instead of the Theta-based MultiFlowManager, so
+  // flow-netprem / flow-premsplit can return any ticker's tape, not just SPX.
   const underlying = (searchParams.get('underlying') || 'SPX').trim().toUpperCase();
   let minPremium = Number(searchParams.get('minPremium') || 0);
   if (!Number.isFinite(minPremium) || minPremium < 0) minPremium = 0;

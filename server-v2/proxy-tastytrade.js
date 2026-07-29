@@ -180,6 +180,42 @@ const FLOW_RECORD_TAPE_CAP = Number(process.env.FLOW_RECORD_TAPE_CAP || 8000);
 // index blocks, so keep this low so real prints survive to flow_prints.
 const FLOW_RECORD_TAPE_FLOOR = Number(process.env.FLOW_RECORD_TAPE_FLOOR || 1000);
 
+// ── Multi-ticker flow via dxLink (DATA_SOURCE=tt), replaces Theta MultiFlowManager ──
+// Extra option roots (FLOW_TICKERS) whose 0DTE-30DTE near-the-money OTM trades
+// we subscribe on the SAME shared dxLink connection already open for SPX, and
+// route into the SAME this.flow (not an isolated FlowProcessor like
+// FLOW_RECORD_TICKERS above) so the /flow page's non-SPX ticker chips populate
+// off real dxLink TimeAndSale prints instead of the old Theta-based
+// MultiFlowManager (server-v2/multi-flow.js — now disabled, see start()).
+// Same comma/whitespace parsing convention as multi-flow.js's parseFlowTickers().
+// SPX/SPXW are dropped — the core engine already owns them.
+function parseTtFlowTickers() {
+  return String(process.env.FLOW_TICKERS || '')
+    .split(/[,\s]+/)
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean)
+    .filter((t) => t !== 'SPX' && t !== 'SPXW');
+}
+const TT_FLOW_TICKERS = parseTtFlowTickers();
+// Gate: must be explicitly enabled, same convention as the old MultiFlowManager
+// gate it replaces (FLOW_TICKERS_ENABLE=1).
+const TT_FLOW_ENABLED = process.env.FLOW_TICKERS_ENABLE === '1' && TT_FLOW_TICKERS.length > 0;
+// Near-the-money OTM strike band per root, as a % of spot.
+const TT_FLOW_WINDOW_PCT = Number(process.env.TT_FLOW_WINDOW_PCT || 0.05);
+// Max contracts (per side, so up to 2x this per expiry) kept per expiry so a
+// wide chain can't blow up the dxLink sub list.
+const TT_FLOW_MAX_PER_EXPIRY = Number(process.env.TT_FLOW_MAX_PER_EXPIRY || 40);
+// Span 0DTE out to this many calendar days — spans MULTIPLE expiries, not just
+// the nearest one (the bug this replaces relative to multi-flow.js's
+// MultiFlowManager, which only ever grabbed the single nearest expiry).
+const TT_FLOW_MAX_DTE = Number(process.env.TT_FLOW_MAX_DTE || 30);
+// Re-pick each root's window as spot drifts / days pass (0DTE rolls, etc).
+const TT_FLOW_REFRESH_MS = Number(process.env.TT_FLOW_REFRESH_MS || 5 * 60 * 1000);
+// Safety margin under Tastytrade's ~2000-symbols/subscribe-call ceiling — no
+// single subscribeTimeSales() call (pre-chunking) is handed more than this
+// many symbols at once.
+const TT_FLOW_SUB_BATCH = Number(process.env.TT_FLOW_SUB_BATCH || 1500);
+
 // ES 5-minute candle broadcast cadence. The forming bar updates on nearly every
 // flush while ES is live, so this is effectively how often the live candle
 // repaints. 10s keeps it visibly live without one delta every ~5s.
@@ -1982,6 +2018,11 @@ class TastytradeProxy {
     this.client = null;
     this.flow = new FlowProcessor({
   tapeCap: Number(process.env.FLOW_TAPE_CAP || 8000),
+  // spxOnly:false so TT_FLOW-ingested non-SPX prints (see _startTtMultiFlow)
+  // survive addPrint instead of being silently dropped. Inert when
+  // FLOW_TICKERS is empty — no non-SPX streamerSymbol ever reaches addPrint
+  // in that case, so SPX-only behavior is unchanged.
+  spxOnly: false,
 });
     // Isolated multi-ticker flow recorder (DATA_SOURCE=tt). Accepts all roots
     // (spxOnly:false) and feeds ONLY flow_prints via writeFlowTape(...,'record')
@@ -1993,6 +2034,13 @@ class TastytradeProxy {
     this.flowRecordSpotSym = new Map();   // underlying streamerSymbol -> root (spot key)
     this.flowRecordSpot = new Map();      // root -> live spot (for isOtm tagging)
     this.flowRecordTimer = null;          // window-refresh interval
+    // Multi-ticker flow via dxLink (FLOW_TICKERS) — SAME this.flow tape, NOT an
+    // isolated FlowProcessor like flowRecord above. See _startTtMultiFlow.
+    this.ttFlowContracts = new Map(); // option streamerSymbol -> root (routing key)
+    this.ttFlowSpotSym = new Map();   // underlying streamerSymbol -> root (spot key)
+    this.ttFlowSpot = new Map();      // root -> live spot (for isOtm tagging)
+    this.ttFlowTimer = null;          // window-refresh interval
+    this.ttFlowTickers = [];          // remembered roster, re-subscribed on reconnect
     // Strike-growth (DoD) recorder feed — separate from flow-record above, see
     // the STRIKE_GROWTH_FEED_* constants for the why.
     this.strikeGrowthContracts = new Map(); // option streamerSymbol -> ticker root
@@ -2270,6 +2318,19 @@ class TastytradeProxy {
         console.warn('[FLOW-RECORD] start failed:', String(e?.message || e).slice(0, 160)));
     }
 
+    // Multi-ticker flow via dxLink (FLOW_TICKERS): replaces the old
+    // Theta-based MultiFlowManager (server-v2/multi-flow.js — no longer
+    // started, see the removed wiring further down in this method). Streams
+    // each extra root's 0DTE-30DTE near-the-money OTM contracts' TimeAndSale
+    // on this SAME dxLink connection, into the SAME this.flow tape (tagged by
+    // streamerSymbol root, same as SPX). tt mode only — under useTheta() the
+    // Theta FPSS stream still owns option flow (this feature is for
+    // DATA_SOURCE=tt only). Re-runs on reconnect, same as flow-record above.
+    if (!useTheta() && TT_FLOW_ENABLED) {
+      this._startTtMultiFlow().catch((e) =>
+        console.warn('[TT-MULTIFLOW] start failed:', String(e?.message || e).slice(0, 160)));
+    }
+
     // Strike-growth (DoD) recorder feed: re-subscribe the last known roster on
     // every bring-up, same as flow-record above — a reconnect gets a brand new
     // dxLink channel with none of the prior subs, so the bookkeeping maps must
@@ -2402,12 +2463,18 @@ class TastytradeProxy {
         require('./state/flow-watchdog').startFlowWatchdog(this.thetaStream);
       }
       this._subscribeThetaFlow();
-      // Multi-ticker flow (FLOW_TICKERS): stream extra roots' near-spot option
-      // trades into the SAME this.flow tape so the /flow page's non-SPX chips
-      // populate. Flow-only — does NOT touch GEX/greeks (single-SYMBOL engine).
-      // SPX-only lock: do NOT start MultiFlowManager unless FLOW_TICKERS_ENABLE=1.
-      // (Even if it starts, FlowProcessor.addPrint now drops non-SPX prints.)
-      if (process.env.FLOW_TICKERS_ENABLE === '1' && !this.multiFlow) {
+      // DISABLED: the Theta-based MultiFlowManager (server-v2/multi-flow.js)
+      // used to stream extra FLOW_TICKERS roots' near-spot option trades here
+      // via the shared ThetaStreamClient. It is replaced by the dxLink-based
+      // _startTtMultiFlow() (see the !useTheta() branch above, TT_FLOW_ENABLED)
+      // which streams 0DTE-30DTE multi-expiry windows on the Tastytrade dxLink
+      // connection instead. Deliberately NOT started here anymore — running
+      // both simultaneously would double/conflict-write flow_prints for the
+      // same roots. If useTheta() is ever re-enabled as the primary data
+      // source for non-SPX flow, MultiFlowManager would need to be re-wired
+      // here (and TT_FLOW_ENABLED gated off for useTheta()) rather than both
+      // running at once.
+      if (false && !this.multiFlow) {
         this.multiFlow = new MultiFlowManager({ thetaStream: this.thetaStream });
         this.multiFlow.start().catch((e) =>
           console.warn('[MULTIFLOW] start failed:', String(e?.message || e).slice(0, 160)));
@@ -2981,6 +3048,129 @@ class TastytradeProxy {
         .sort((a, b) => Math.abs(a.strike - center) - Math.abs(b.strike - center))
         .slice(0, FLOW_RECORD_MAX_CONTRACTS);
       out.push(...legs);
+    }
+    return out;
+  }
+
+  // ── Multi-ticker flow via dxLink (tt) ─────────────────────────────────────
+  // Replaces the Theta-based MultiFlowManager. Subscribes each FLOW_TICKERS
+  // root's near-the-money OTM contracts, spanning EVERY expiry from 0DTE out
+  // to TT_FLOW_MAX_DTE days (not just the nearest expiry — see the class
+  // comment on TT_FLOW_MAX_DTE), for TimeAndSale on the SAME shared dxLink
+  // client, and routes trades into the SAME this.flow tape (see the
+  // TimeAndSale branch of _onEvent, which checks this.ttFlowContracts).
+  async _startTtMultiFlow() {
+    if (!this.client || !TT_FLOW_ENABLED) return;
+    this.ttFlowTickers = TT_FLOW_TICKERS;
+    // Rebuild routing on every bring-up: a reconnect opens a brand-new dxLink
+    // channel with none of the prior subs, so a stale "already subscribed"
+    // map would leave this feed silent.
+    this.ttFlowContracts.clear();
+    this.ttFlowSpotSym.clear();
+    for (const root of this.ttFlowTickers) {
+      // Sequential to keep TT REST (chain fetch) gentle on startup.
+      await this._subscribeTtFlowRoot(root).catch((e) => // eslint-disable-line no-await-in-loop
+        console.warn(`[TT-MULTIFLOW] ${root} subscribe failed:`, String(e?.message || e).slice(0, 120)));
+    }
+    console.log(`[TT-MULTIFLOW] streaming ${this.ttFlowTickers.join(', ')} — roots=${this.ttFlowSpotSym.size} contracts=${this.ttFlowContracts.size}`);
+    if (this.ttFlowTimer) clearInterval(this.ttFlowTimer);
+    this.ttFlowTimer = setInterval(() => {
+      for (const root of this.ttFlowTickers) {
+        this._subscribeTtFlowRoot(root).catch(() => {});
+      }
+    }, TT_FLOW_REFRESH_MS);
+    if (this.ttFlowTimer.unref) this.ttFlowTimer.unref();
+  }
+
+  /** Resolve+subscribe one root's underlying spot + its 0DTE-30DTE near-the-
+   *  money OTM window. Re-picks (adds newly-in-window contracts; never
+   *  unsubscribes a previously-live one — cheap to keep, avoids subscribe/
+   *  unsubscribe races on the shared connection, same tradeoff the
+   *  strike-growth feed makes) on every refresh tick so 0DTE rolling to the
+   *  next day and spot drift both stay covered. */
+  async _subscribeTtFlowRoot(root) {
+    if (!this.client) return;
+    // Underlying spot streamer symbol — subscribe once so isOtm/spot stay live.
+    if (![...this.ttFlowSpotSym.values()].includes(root)) {
+      try {
+        const u = await resolveUnderlying(root);
+        if (u?.streamerSymbol) {
+          this.ttFlowSpotSym.set(u.streamerSymbol, root);
+          this.client.subscribe([u.streamerSymbol]);
+        }
+      } catch (e) {
+        console.warn(`[TT-MULTIFLOW] ${root} underlying resolve failed:`, String(e?.message || e).slice(0, 120));
+      }
+    }
+    let chain;
+    try {
+      chain = await fetchChain(root); // cached (REST_CHAIN_TTL_MS)
+    } catch (e) {
+      console.warn(`[TT-MULTIFLOW] ${root} chain fetch failed:`, String(e?.message || e).slice(0, 120));
+      return;
+    }
+    if (!chain?.contracts?.length) return;
+    const spot = this.ttFlowSpot.get(root) || 0;
+    const legs = this._ttFlowWindow(chain, spot);
+    if (!legs.length) {
+      console.warn(`[TT-MULTIFLOW] ${root}: no contracts in 0-${TT_FLOW_MAX_DTE}DTE OTM window (spot=${spot})`);
+      return;
+    }
+    const fresh = [];
+    for (const c of legs) {
+      if (c.streamerSymbol && !this.ttFlowContracts.has(c.streamerSymbol)) {
+        this.ttFlowContracts.set(c.streamerSymbol, root);
+        fresh.push(c.streamerSymbol);
+      }
+    }
+    if (!fresh.length) return;
+    // Batch so no single subscribeTimeSales() call is handed more than
+    // TT_FLOW_SUB_BATCH symbols (safety margin under Tastytrade's ~2000/call
+    // ceiling). subscribeTimeSales() further chunks each batch into 500-symbol
+    // dxLink FEED_SUBSCRIPTION messages internally, so this is a second,
+    // coarser safety layer on top of that.
+    for (let i = 0; i < fresh.length; i += TT_FLOW_SUB_BATCH) {
+      this.client.subscribeTimeSales(fresh.slice(i, i + TT_FLOW_SUB_BATCH));
+    }
+    console.log(`[TT-MULTIFLOW] ${root}: +${fresh.length} contracts (total ${legs.length} in window), spot=${spot}`);
+  }
+
+  /** Near-the-money OTM legs spanning every expiry from 0DTE out to
+   *  TT_FLOW_MAX_DTE days: OTM calls (strike >= spot) and OTM puts
+   *  (strike <= spot), each capped to TT_FLOW_WINDOW_PCT of spot and
+   *  TT_FLOW_MAX_PER_EXPIRY contracts per side per expiry. This is the fix
+   *  for multi-flow.js's MultiFlowManager, which only ever windowed the
+   *  single nearest expiry. */
+  _ttFlowWindow(chain, spot) {
+    if (!chain || !Array.isArray(chain.contracts) || !chain.contracts.length) return [];
+    const exps = (chain.expirations || []).filter((e) => {
+      const dte = dteFromIso(e);
+      return Number.isFinite(dte) && dte >= 0 && dte <= TT_FLOW_MAX_DTE;
+    });
+    if (!exps.length) return [];
+    const out = [];
+    for (const exp of exps) {
+      const expContracts = chain.contracts.filter((c) => c.expiration === exp);
+      if (!expContracts.length) continue;
+      // Spot unknown yet (first pass, before a quote lands) — center on the
+      // MEDIAN strike, same fallback _flowRecordWindow / strike-growth use,
+      // rather than 0 which would grab deep-ITM/far-OTM strikes that never trade.
+      let center = spot;
+      if (!(center > 0)) {
+        const strikes = [...new Set(expContracts.map((c) => c.strike))].sort((a, b) => a - b);
+        center = strikes[Math.floor(strikes.length / 2)] || 0;
+      }
+      if (!(center > 0)) continue;
+      const band = center * TT_FLOW_WINDOW_PCT;
+      const calls = expContracts
+        .filter((c) => c.type === 'C' && c.strike >= center && c.strike - center <= band)
+        .sort((a, b) => (a.strike - center) - (b.strike - center))
+        .slice(0, TT_FLOW_MAX_PER_EXPIRY);
+      const puts = expContracts
+        .filter((c) => c.type === 'P' && c.strike <= center && center - c.strike <= band)
+        .sort((a, b) => (center - a.strike) - (center - b.strike))
+        .slice(0, TT_FLOW_MAX_PER_EXPIRY);
+      out.push(...calls, ...puts);
     }
     return out;
   }
@@ -3693,6 +3883,12 @@ class TastytradeProxy {
         if (mid > 0) this.strikeGrowthSpot.set(sgRoot, mid);
         return;
       }
+      // TT multi-flow root's underlying quote → same idea, own map.
+      const ttRoot = this.ttFlowSpotSym.get(sym);
+      if (ttRoot) {
+        if (mid > 0) this.ttFlowSpot.set(ttRoot, mid);
+        return;
+      }
       this.quotes.set(sym, { bid, ask, mid, bidSize: Number(ev.bidSize), askSize: Number(ev.askSize), t: Date.now() });
       return;
     }
@@ -3769,6 +3965,12 @@ class TastytradeProxy {
         if (px > 0) this.strikeGrowthSpot.set(sgRootT, px);
         return;
       }
+      const ttRootT = this.ttFlowSpotSym.get(sym);
+      if (ttRootT) {
+        const px = Number(ev.price);
+        if (px > 0) this.ttFlowSpot.set(ttRootT, px);
+        return;
+      }
       // dayVolume on the Trade event is the running daily volume for the
       // contract — the correct source for per-strike volume (Summary has none).
       // Store live dayVolume even when it's 0: presence in the map means the
@@ -3842,6 +4044,27 @@ class TastytradeProxy {
       if (!(price > 0) || !(size > 0)) return;
       const agg = String(ev.aggressorSide || '').toLowerCase();
       const side = agg === 'buy' ? 'buy' : agg === 'sell' ? 'sell' : undefined;
+      // TT multi-flow (FLOW_TICKERS): extra-root option prints route into the
+      // SAME this.flow tape as SPX (see _startTtMultiFlow), just tagged with
+      // that root's own tracked spot for correct isOtm classification. These
+      // contracts are ONLY TimeAndSale-subscribed (no Quote/Greeks/Summary),
+      // so this.quotes/greeks/summaries/volumes have nothing for them — that's
+      // expected, addPrint/its downstream consumers treat those as optional.
+      const ttRoot = this.ttFlowContracts.get(sym);
+      if (ttRoot) {
+        this.flow.addPrint({
+          streamerSymbol: sym,
+          price,
+          size,
+          side,
+          quote: null,
+          spot: this.ttFlowSpot.get(ttRoot) || 0,
+          iv: undefined,
+          oi: undefined,
+          volume: undefined,
+        });
+        return;
+      }
       this.flow.addPrint({
         streamerSymbol: sym,
         price,
@@ -4520,6 +4743,8 @@ class TastytradeProxy {
     if (this.flowTimer) clearInterval(this.flowTimer);
     if (this.flowRecordTimer) clearInterval(this.flowRecordTimer);
     this.flowRecordTimer = null;
+    if (this.ttFlowTimer) clearInterval(this.ttFlowTimer);
+    this.ttFlowTimer = null;
     if (this.strikeGrowthTimer) clearInterval(this.strikeGrowthTimer);
     this.strikeGrowthTimer = null;
     if (this.premiumTimer) clearInterval(this.premiumTimer);
