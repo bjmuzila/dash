@@ -55,7 +55,19 @@ type ApiRow = {
   neg_gex: number; // negative number
   n_pos: number;
   n_neg: number;
+  // Volume-only basis — today's traded gamma alone (gex_now), carried OI book
+  // excluded. Optional so a proxy that predates these columns still renders:
+  // the switcher falls back to the net basis when they're absent.
+  pos_vol?: number;
+  neg_vol?: number; // negative number
+  n_pos_vol?: number;
+  n_neg_vol?: number;
 };
+
+/** Which gamma book the split is measured over.
+ *  net = carried OI gamma + today's volume gamma (the canonical basis)
+ *  vol = today's traded volume gamma only */
+type Basis = "net" | "vol";
 
 type Leg = {
   expiry: string;
@@ -167,6 +179,7 @@ export default function GexPctTab() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [scope, setScope] = useState<"all" | "stocks" | "index">("all");
+  const [basis, setBasis] = useState<Basis>("net");
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<{ col: SortCol; dir: "desc" | "asc" }>({ col: "size", dir: "desc" });
 
@@ -193,6 +206,13 @@ export default function GexPctTab() {
     return () => clearInterval(t);
   }, [load]);
 
+  // Does the proxy actually serve the volume-only columns? An older build
+  // doesn't, and silently showing an all-zero table would read as "no gamma
+  // traded" rather than "your server is behind" — so the switcher is disabled
+  // instead, with the reason in its tooltip.
+  const hasVol = useMemo(() => rows.some((r) => r.pos_vol != null || r.neg_vol != null), [rows]);
+  const volBasis = basis === "vol" && hasVol;
+
   // API rows (symbol × expiry) → one row per ticker with N_EXP leg slots.
   const tickers = useMemo<TickerRow[]>(() => {
     const by = new Map<string, TickerRow>();
@@ -204,14 +224,16 @@ export default function GexPctTab() {
         t = { symbol: r.symbol, spot: 0, legs: Array(N_EXP).fill(null), total: 0, skew: null };
         by.set(r.symbol, t);
       }
-      const pos = Math.max(0, Number(r.pos_gex) || 0);
-      const neg = Math.abs(Number(r.neg_gex) || 0);
+      const pos = Math.max(0, Number(volBasis ? r.pos_vol : r.pos_gex) || 0);
+      const neg = Math.abs(Number(volBasis ? r.neg_vol : r.neg_gex) || 0);
       const denom = pos + neg;
       t.legs[idx] = {
         expiry: r.expiry,
         pos, neg,
         posPct: denom > 0 ? (pos / denom) * 100 : null,
-        n: (Number(r.n_pos) || 0) + (Number(r.n_neg) || 0),
+        n: volBasis
+          ? (Number(r.n_pos_vol) || 0) + (Number(r.n_neg_vol) || 0)
+          : (Number(r.n_pos) || 0) + (Number(r.n_neg) || 0),
       };
       t.total += denom;
       if (r.spot > 0) t.spot = r.spot;
@@ -222,7 +244,7 @@ export default function GexPctTab() {
       t.skew = a != null && b != null ? b - a : null;
     }
     return [...by.values()];
-  }, [rows]);
+  }, [rows, volBasis]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toUpperCase();
@@ -303,9 +325,40 @@ export default function GexPctTab() {
               {stale ? <span style={{ color: HOME_THEME.orange }}> · last recorded session</span> : null}
             </div>
           </div>
-          <button type="button" onClick={load} style={homeButtonStyle} disabled={loading}>
-            {loading ? "Loading…" : "Refresh"}
-          </button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {/* Basis switcher — governs the whole tab (tiles, expiry strip and
+                table all read it). Both bases ship in one response, so this is
+                a pure re-render, no refetch. */}
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: HOME_THEME.text, opacity: 0.6 }}>
+                Basis
+              </span>
+              <button
+                type="button"
+                onClick={() => setBasis("net")}
+                style={seg(basis === "net")}
+                title="Carried OI gamma + today's traded volume gamma — the canonical net book."
+              >
+                OI+Vol
+              </button>
+              <button
+                type="button"
+                onClick={() => hasVol && setBasis("vol")}
+                disabled={!hasVol}
+                style={{ ...seg(volBasis), opacity: hasVol ? 1 : 0.4, cursor: hasVol ? "pointer" : "not-allowed" }}
+                title={
+                  hasVol
+                    ? "Today's traded volume gamma only — the carried OI book is excluded, so this is what flow put on today."
+                    : "This proxy build doesn't serve the volume-only columns yet."
+                }
+              >
+                Vol only
+              </button>
+            </div>
+            <button type="button" onClick={load} style={homeButtonStyle} disabled={loading}>
+              {loading ? "Loading…" : "Refresh"}
+            </button>
+          </div>
         </div>
         <div style={{ padding: "14px 16px" }}>
           {stats ? (
@@ -420,8 +473,10 @@ export default function GexPctTab() {
               GEX% by ticker &amp; expiration
             </div>
             <div style={{ fontSize: 12, color: HOME_THEME.text }}>
-              share of net gamma on the call side (+) vs the put side (−) · bar fills to the call
-              share, tick marks an even split
+              share of{" "}
+              <b style={{ color: HOME_THEME.cyan }}>{volBasis ? "today's volume gamma" : "net gamma"}</b>{" "}
+              on the call side (+) vs the put side (−) · bar fills to the call share, tick marks an
+              even split
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -501,10 +556,23 @@ export default function GexPctTab() {
               negative GEX (put side / dealers short gamma)
             </span>
           </div>
-          GEX% = share of <b>|net GEX|</b> at each expiry, where net = carried OI gamma + today&apos;s volume gamma,
-          summed over the top strikes per side the recorder tracks.{" "}
-          <span style={{ color: HOME_THEME.orange }}>Not a whole-chain figure</span> — it&apos;s the split across the
-          strikes that actually carry the exposure.
+          {volBasis ? (
+            <>
+              GEX% = share of <b>|volume GEX|</b> at each expiry — today&apos;s traded gamma only
+              (<code>gex_now</code>), with the carried OI book excluded. This is what today&apos;s flow put on,
+              not where the standing exposure sits.{" "}
+              <span style={{ color: HOME_THEME.orange }}>Not a whole-chain figure</span> — and the strike set is
+              still the top strikes per side ranked by <i>net</i> GEX, so a strike with heavy volume but little net
+              exposure can fall outside it.
+            </>
+          ) : (
+            <>
+              GEX% = share of <b>|net GEX|</b> at each expiry, where net = carried OI gamma + today&apos;s volume gamma,
+              summed over the top strikes per side the recorder tracks.{" "}
+              <span style={{ color: HOME_THEME.orange }}>Not a whole-chain figure</span> — it&apos;s the split across the
+              strikes that actually carry the exposure.
+            </>
+          )}
         </div>
       </Card>
     </div>

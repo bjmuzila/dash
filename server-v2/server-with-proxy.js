@@ -1880,6 +1880,9 @@ async function main() {
       // (symbol,expiry) at that expiry's LATEST snapshot today:
       //   pos_gex = Σ net where net>0   neg_gex = Σ net where net<0 (negative)
       //   pos_pct = pos/(pos+|neg|)·100 — computed client-side off these sums.
+      // BOTH bases ship in every response: pos_gex/neg_gex are OI+Vol (net) and
+      // pos_vol/neg_vol are today's traded gamma alone (gex_now). The tab's
+      // basis switcher flips between them client-side — no second round trip.
       // NOTE the recorder only stores the top STRIKE_GROWTH_TOP_N strikes per
       // side, so this is the split across the strikes that carry the exposure,
       // not a whole-chain figure. n_strikes is returned so the UI can say so.
@@ -1936,7 +1939,17 @@ async function main() {
                      COALESCE(SUM(CASE WHEN (sg.gex_now + sg.gex_open) < 0
                                        THEN (sg.gex_now + sg.gex_open) END), 0) AS neg_gex,
                      COUNT(*) FILTER (WHERE (sg.gex_now + sg.gex_open) > 0) AS n_pos,
-                     COUNT(*) FILTER (WHERE (sg.gex_now + sg.gex_open) < 0) AS n_neg
+                     COUNT(*) FILTER (WHERE (sg.gex_now + sg.gex_open) < 0) AS n_neg,
+                     -- VOLUME-ONLY basis: today's traded gamma alone (gex_now),
+                     -- with the carried OI book (gex_open) left out. Same shape
+                     -- as the net columns so the UI can switch bases with no
+                     -- refetch. Note the strike SET is still ranked by net, so
+                     -- this is the volume split across the strikes the recorder
+                     -- tracks — the same caveat the net basis carries.
+                     COALESCE(SUM(CASE WHEN sg.gex_now > 0 THEN sg.gex_now END), 0) AS pos_vol,
+                     COALESCE(SUM(CASE WHEN sg.gex_now < 0 THEN sg.gex_now END), 0) AS neg_vol,
+                     COUNT(*) FILTER (WHERE sg.gex_now > 0) AS n_pos_vol,
+                     COUNT(*) FILTER (WHERE sg.gex_now < 0) AS n_neg_vol
               FROM strike_growth sg
               JOIN ranked r
                 ON r.symbol = sg.symbol AND r.expiry = sg.expiry AND r.ts = sg.ts
@@ -1962,6 +1975,11 @@ async function main() {
                 neg_gex: Number(r.neg_gex) || 0,
                 n_pos: Number(r.n_pos) || 0,
                 n_neg: Number(r.n_neg) || 0,
+                // volume-only basis (gex_now, no carried OI)
+                pos_vol: Number(r.pos_vol) || 0,
+                neg_vol: Number(r.neg_vol) || 0,
+                n_pos_vol: Number(r.n_pos_vol) || 0,
+                n_neg_vol: Number(r.n_neg_vol) || 0,
               })),
             });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
