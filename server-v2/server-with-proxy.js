@@ -340,8 +340,27 @@ async function handleProxyRest(req, res) {
     return true;
   }
 
+  // /proxy/mult-greek-gex-grid?ticker=SPX&expiry=YYYY-MM-DD
+  // Bulk form of the above: { data: { cells: { <strike>: { vNow, v5, v15, v30 } } } }
+  // for EVERY recorded strike on that expiry, in one round trip. Backs the
+  // /mult-greek ladder's Δ bar mode, which needs a baseline per visible cell.
+  if (pathname === '/proxy/mult-greek-gex-grid') {
+    const u = new URL(req.url || '/', 'http://localhost');
+    const ticker = (u.searchParams.get('ticker') || '').trim().toUpperCase();
+    const expiry = (u.searchParams.get('expiry') || '').trim();
+    if (!ticker || !expiry) {
+      sendJson(res, 400, { error: 'ticker, expiry required' });
+      return true;
+    }
+    if (!multGreekGexRecorder?.queryGexGrid) { sendJson(res, 200, { data: null }); return true; }
+    multGreekGexRecorder.queryGexGrid(ticker, expiry)
+      .then((data) => sendJson(res, 200, { data }))
+      .catch((e) => sendJson(res, 500, { error: 'mult-greek-gex-grid failed', detail: String(e?.message || e) }));
+    return true;
+  }
+
   // /proxy/mult-greek-gex-change?ticker=SPX&expiry=YYYY-MM-DD&strike=7400
-  // Stored { vNow, v15, v30, vOpen } NET GEX for one /mult-greek cell
+  // Stored { vNow, v5, v15, v30, vOpen } NET GEX for one /mult-greek cell
   // (mult-greek-gex-recorder). The client diffs its live value against these.
   if (pathname === '/proxy/mult-greek-gex-change') {
     const u = new URL(req.url || '/', 'http://localhost');

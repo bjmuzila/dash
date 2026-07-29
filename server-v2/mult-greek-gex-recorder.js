@@ -211,7 +211,7 @@ async function collectOnce(base, opts = {}) {
   }
 }
 
-/** Stored { vNow, v15, v30, vOpen } for one cell — client diffs its live value. */
+/** Stored { vNow, v5, v15, v30, vOpen } for one cell — client diffs its live value. */
 async function queryGexChange(ticker, expiry, strike) {
   const p = getPool();
   if (!p) return null;
@@ -229,8 +229,9 @@ async function queryGexChange(ticker, expiry, strike) {
     return r.rows.length ? Number(r.rows[0].net_gex) : null;
   };
   try {
-    const [vNow, v15, v30, openRes] = await Promise.all([
+    const [vNow, v5, v15, v30, openRes] = await Promise.all([
       one(false),
+      one(true, now - 5 * 60_000),
       one(true, now - 15 * 60_000),
       one(true, now - 30 * 60_000),
       p.query(
@@ -242,11 +243,61 @@ async function queryGexChange(ticker, expiry, strike) {
       ),
     ]);
     return {
-      vNow, v15, v30,
+      vNow, v5, v15, v30,
       vOpen: openRes.rows.length ? Number(openRes.rows[0].net_gex) : null,
     };
   } catch (e) {
     console.warn('[mult-greek-gex] query failed:', e.message);
+    return null;
+  }
+}
+
+/**
+ * Bulk variant of queryGexChange: every recorded strike for one (ticker, expiry)
+ * in a single round trip, shaped { cells: { <strike>: { vNow, v5, v15, v30 } } }.
+ *
+ * The per-cell query above is fine for the click popout (one cell at a time), but
+ * the ladder's Δ bar mode needs a value for EVERY visible cell — ~13 strikes ×
+ * 4 expiries × 4 tickers. That would be ~200 HTTP round trips per poll; this is 4
+ * SQL statements total. DISTINCT ON (strike) + ORDER BY strike, ts DESC gives the
+ * latest reading at-or-before each cutoff for all strikes at once.
+ */
+async function queryGexGrid(ticker, expiry) {
+  const p = getPool();
+  if (!p) return null;
+  const tk = String(ticker || '').toUpperCase();
+  if (!tk || !expiry) return null;
+  const now = Date.now();
+  const slice = async (cutoff) => {
+    const params = [tk, expiry];
+    let sql = `SELECT DISTINCT ON (strike) strike, net_gex FROM mult_greek_gex_ring
+               WHERE ticker=$1 AND expiry=$2::date`;
+    if (cutoff != null) { params.push(cutoff); sql += ` AND ts <= $${params.length}`; }
+    sql += ' ORDER BY strike, ts DESC';
+    const r = await p.query(sql, params);
+    const m = new Map();
+    for (const row of r.rows) m.set(Number(row.strike), Number(row.net_gex));
+    return m;
+  };
+  try {
+    const [mNow, m5, m15, m30] = await Promise.all([
+      slice(null),
+      slice(now - 5 * 60_000),
+      slice(now - 15 * 60_000),
+      slice(now - 30 * 60_000),
+    ]);
+    const cells = {};
+    for (const [strike, vNow] of mNow) {
+      cells[strike] = {
+        vNow,
+        v5: m5.has(strike) ? m5.get(strike) : null,
+        v15: m15.has(strike) ? m15.get(strike) : null,
+        v30: m30.has(strike) ? m30.get(strike) : null,
+      };
+    }
+    return { ticker: tk, expiry, cells };
+  } catch (e) {
+    console.warn('[mult-greek-gex] grid query failed:', e.message);
     return null;
   }
 }
@@ -261,4 +312,4 @@ function startMultGreekGexRecorder(port) {
   return () => { stopped = true; clearInterval(timer); };
 }
 
-module.exports = { startMultGreekGexRecorder, collectOnce, queryGexChange };
+module.exports = { startMultGreekGexRecorder, collectOnce, queryGexChange, queryGexGrid };

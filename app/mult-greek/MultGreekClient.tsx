@@ -336,9 +336,49 @@ function computeWalls(rows: ComputedRow[], expiry: string): Walls {
 
 interface GexChange { now: number; d15: number | null; d30: number | null; dOpen: number | null; spanMs: number; }
 
+/** Δ bar mode lookback. 0 = off (cells show NET GEX values). */
+type DeltaWindow = 0 | 5 | 15 | 30;
+
+/** One (ticker, expiry) slice of recorded baselines, keyed by strike. */
+type GexGridCell = { vNow: number | null; v5: number | null; v15: number | null; v30: number | null };
+type GexGrid = Record<string, Record<number, GexGridCell>>;
+
+/** Diverging Δ bar — replaces the cell value in Δ bar mode.
+ *  Grows right from a center axis when GEX is building, left when unwinding.
+ *  Height is 1.2em (the text line box) so toggling the mode never reflows a row. */
+function DeltaBar({ d, max }: { d: number | null; max: number }) {
+  const pct = d == null || !Number.isFinite(d) || max <= 0
+    ? 0
+    : Math.min(Math.abs(d) / max, 1) * 48;
+  const pos = (d ?? 0) > 0;
+  const fill = pos
+    ? "linear-gradient(90deg, rgba(34,197,94,.40), rgba(34,197,94,.96))"
+    : "linear-gradient(90deg, rgba(239,68,68,.96), rgba(239,68,68,.40))";
+  return (
+    <span style={{ display: "flex", alignItems: "center", height: "1.2em", padding: "0 2px" }}>
+      <span style={{ position: "relative", width: "100%", height: 9, borderRadius: 2, background: "rgba(255,255,255,.045)" }}>
+        {/* center axis = no change */}
+        <span style={{ position: "absolute", left: "50%", top: -2, bottom: -2, width: 1, background: "rgba(255,255,255,.28)" }} />
+        {pct > 0 && (
+          <span style={{
+            position: "absolute", top: 1, bottom: 1, borderRadius: 2, background: fill,
+            ...(pos ? { left: "50%", width: `${pct}%` } : { right: "50%", width: `${pct}%` }),
+          }} />
+        )}
+        {pct === 0 && (
+          <span style={{
+            position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)",
+            width: 3, height: 3, borderRadius: "50%", background: "rgba(255,255,255,.25)",
+          }} />
+        )}
+      </span>
+    </span>
+  );
+}
+
 function TickerPanel({
   ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
-  showCB, showCW, showPW, getGexChange,
+  showCB, showCW, showPW, getGexChange, deltaWindow,
 }: {
   ticker: Ticker;
   /** Per-expiry strike rows for this ticker. */
@@ -361,6 +401,9 @@ function TickerPanel({
   captureWindow: number | null;
   /** Read a cell's 15m / 30m / open NET GEX change for the click card. */
   getGexChange: (ticker: string, expiry: string, strike: number) => GexChange;
+  /** Δ bar mode: 0 = off (show NET GEX values), else the lookback in minutes.
+   *  When on, every cell's value is replaced by a diverging change bar. */
+  deltaWindow: DeltaWindow;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
@@ -387,15 +430,15 @@ function TickerPanel({
   // Server-recorded baselines for the clicked cell (mult-greek-gex-recorder).
   // Preferred over the client ring — instant 15m/30m/open with no warm-up. Falls
   // back to the client ring for tickers the recorder doesn't cover.
-  const [srvChange, setSrvChange] = useState<{ key: string; vNow: number | null; v15: number | null; v30: number | null; vOpen: number | null } | null>(null);
+  const [srvChange, setSrvChange] = useState<{ key: string; vNow: number | null; v5: number | null; v15: number | null; v30: number | null; vOpen: number | null } | null>(null);
   useEffect(() => {
     if (!clickCell) { setSrvChange(null); return; }
     const key = `${ticker}|${clickCell.expiry}|${clickCell.strike}`;
     let cancelled = false;
     const load = () => fetch(`/api/mult-greek-gex-change?ticker=${encodeURIComponent(ticker)}&expiry=${encodeURIComponent(clickCell.expiry)}&strike=${clickCell.strike}`)
       .then(r => r.json())
-      .then(j => { if (!cancelled) setSrvChange({ key, vNow: j?.data?.vNow ?? null, v15: j?.data?.v15 ?? null, v30: j?.data?.v30 ?? null, vOpen: j?.data?.vOpen ?? null }); })
-      .catch(() => { if (!cancelled) setSrvChange({ key, vNow: null, v15: null, v30: null, vOpen: null }); });
+      .then(j => { if (!cancelled) setSrvChange({ key, vNow: j?.data?.vNow ?? null, v5: j?.data?.v5 ?? null, v15: j?.data?.v15 ?? null, v30: j?.data?.v30 ?? null, vOpen: j?.data?.vOpen ?? null }); })
+      .catch(() => { if (!cancelled) setSrvChange({ key, vNow: null, v5: null, v15: null, v30: null, vOpen: null }); });
     load();
     const id = setInterval(load, 20_000);
     return () => { cancelled = true; clearInterval(id); };
@@ -428,6 +471,70 @@ function TickerPanel({
     const end = Math.min(rows.length, atmIdx + captureWindow + 1);
     return { ...computedFull, rows: rows.slice(start, end) };
   })();
+
+  // ---- Δ bar mode ---------------------------------------------------------
+  // One bulk pull per expiry column (not per cell) — see /api/mult-greek-gex-grid.
+  // Only fetched while the mode is on; cleared when it's switched off so we don't
+  // hold stale baselines across an expiry change.
+  const [gexGrid, setGexGrid] = useState<GexGrid>({});
+  const colDatesKey = colDates.join(",");
+  useEffect(() => {
+    if (deltaWindow === 0 || !colDates.length) { setGexGrid({}); return; }
+    let cancelled = false;
+    const load = async () => {
+      const entries = await Promise.all(colDates.map(async (date) => {
+        try {
+          const r = await fetch(
+            `/api/mult-greek-gex-grid?ticker=${encodeURIComponent(ticker)}&expiry=${encodeURIComponent(date)}`,
+            { cache: "no-store" },
+          );
+          if (!r.ok) return [date, {}] as const;
+          const j = await r.json();
+          const cells = (j?.data?.cells ?? {}) as Record<string, GexGridCell>;
+          const byStrike: Record<number, GexGridCell> = {};
+          for (const [k, v] of Object.entries(cells)) byStrike[Number(k)] = v;
+          return [date, byStrike] as const;
+        } catch {
+          return [date, {}] as const;
+        }
+      }));
+      if (cancelled) return;
+      setGexGrid(Object.fromEntries(entries));
+    };
+    void load();
+    const id = setInterval(() => { void load(); }, 20_000);
+    return () => { cancelled = true; clearInterval(id); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deltaWindow, ticker, colDatesKey]);
+
+  // Δ per cell = live NET GEX (what the cell would print) − recorded baseline.
+  // Scale is per expiry column, matching how the heat scale already works, so a
+  // quiet back-month column still shows readable bars.
+  const deltas = useMemo(() => {
+    const out: { by: Record<string, Record<number, number>>; max: Record<string, number> } = { by: {}, max: {} };
+    if (deltaWindow === 0 || !computed) return out;
+    const key = `v${deltaWindow}` as "v5" | "v15" | "v30";
+    for (const e of computed.cols) {
+      const grid = gexGrid[e];
+      const col: Record<number, number> = {};
+      let max = 0;
+      if (grid) {
+        for (const r of computed.rows) {
+          const live = r.gex[e];
+          const cell = grid[r.strike];
+          const past = cell ? cell[key] : null;
+          if (live == null || past == null) continue;
+          const d = live - past;
+          col[r.strike] = d;
+          const a = Math.abs(d);
+          if (a > max) max = a;
+        }
+      }
+      out.by[e] = col;
+      out.max[e] = max;
+    }
+    return out;
+  }, [deltaWindow, gexGrid, computed]);
 
   // EM band strikes (snapped to this panel's strikes). Only when current-week.
   const emStrikes = (showEm && emLevels && computed)
@@ -533,7 +640,9 @@ function TickerPanel({
           return (
             <div key={c.date} style={{ padding: "3px 4px", textAlign: "center", lineHeight: 1.15 }}>
               <div style={{ color: HT.cyan, fontSize: 10, fontWeight: 800, letterSpacing: "0.04em" }}>{lbl.dte}</div>
-              <div style={{ color: HT.muted, fontSize: 8, fontWeight: 700 }}>GEX · {lbl.md}</div>
+              <div style={{ color: HT.muted, fontSize: 8, fontWeight: 700 }}>
+                {deltaWindow !== 0 ? `Δ ${deltaWindow}M` : "GEX"} · {lbl.md}
+              </div>
             </div>
           );
         })}
@@ -543,8 +652,16 @@ function TickerPanel({
       <div style={{ display: "grid", gridTemplateColumns: gridCols, background: "rgba(33,158,188,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
         <div style={{ padding: "4px 4px", fontSize: 10, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
         {cols.map(c => {
-          const v = totals?.[c.date] ?? 0;
-          const fmt = totals != null ? fmtMoney(v) : { sign: "", value: "--" };
+          // In Δ bar mode the TOTAL row keeps NUMBERS — it becomes the net Δ for
+          // the column, so there's still one hard figure per expiry to read.
+          const dSum = deltaWindow !== 0
+            ? Object.values(deltas.by[c.date] ?? {}).reduce((s, x) => s + x, 0)
+            : null;
+          const hasD = deltaWindow !== 0 && Object.keys(deltas.by[c.date] ?? {}).length > 0;
+          const v = deltaWindow !== 0 ? (dSum ?? 0) : (totals?.[c.date] ?? 0);
+          const fmt = deltaWindow !== 0
+            ? (hasD ? fmtMoney(v) : { sign: "", value: "--" })
+            : (totals != null ? fmtMoney(v) : { sign: "", value: "--" });
           return (
             <div key={c.date} style={{
               padding: "4px 4px", fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)",
@@ -620,8 +737,19 @@ function TickerPanel({
                   : null;
                 const isCB = lvl?.t === "CB";
                 const isSel = clickCell != null && clickCell.strike === r.strike && clickCell.expiry === e;
+                // Δ bar mode: the bar REPLACES the value. Heat background comes off
+                // (green/red Δ over blue/red GEX heat reads muddy), but the top-rank
+                // and CB/CW/PW outlines stay so the walls are still locatable. The
+                // corner badges/star are hidden — at 1.2em they'd occlude the bar.
+                const dMode = deltaWindow !== 0;
+                const dVal = dMode ? (deltas.by[e]?.[r.strike] ?? null) : null;
+                const dTitle = dMode
+                  ? `${ticker} ${r.strike} · ${colLabel(e).dte} — Δ${deltaWindow}m ${
+                      dVal == null ? "no baseline yet" : `${fmtMoney(dVal).sign}${fmtMoney(dVal).value}`
+                    } · now ${val == null ? "--" : `${formatted.sign}${formatted.value}`}`
+                  : undefined;
                 return (
-                  <div key={e} data-gexcell="1" className={isCB ? "mvc-peak-cell" : undefined}
+                  <div key={e} data-gexcell="1" title={dTitle} className={isCB && !dMode ? "mvc-peak-cell" : undefined}
                     onClick={isCapturing ? undefined : (ev) => {
                       ev.stopPropagation();
                       setClickCell(prev => (prev && prev.strike === r.strike && prev.expiry === e)
@@ -632,7 +760,7 @@ function TickerPanel({
                     padding: "4px 4px", fontSize: 10, fontFamily: "var(--font-mono)",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                     textAlign: "center", color: SOFT_WHITE, cursor: isCapturing ? "default" : "pointer",
-                    background: val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity),
+                    background: (dMode || val == null) ? "transparent" : metricBg(val, scaleMax, topRank, intensity),
                     fontWeight: weight,
                     position: "relative",
                     ...(topRank === 1 && val != null ? { outline: `1px solid ${val >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", zIndex: 1 } : {}),
@@ -640,13 +768,13 @@ function TickerPanel({
                     ...(isSel ? { outline: "2px solid #ffffff", outlineOffset: "-2px", zIndex: 3 } : {}),
                   }}>
                     {/* Non-front columns keep the plain gold peak star. */}
-                    {!isFront && topRank === 1 && (
+                    {!dMode && !isFront && topRank === 1 && (
                       <span style={{
                         position: "absolute", top: 1, left: 2, fontSize: 10, lineHeight: 1,
                         color: "#ffd600", textShadow: "0 0 2px rgba(0,0,0,.8)", pointerEvents: "none",
                       }}>★</span>
                     )}
-                    {lvl && (
+                    {!dMode && lvl && (
                       <span title={lvl.title} style={{
                         position: "absolute", top: 0, right: 1, fontSize: 8, fontWeight: 900,
                         lineHeight: 1.2, letterSpacing: "0.02em",
@@ -654,7 +782,9 @@ function TickerPanel({
                         pointerEvents: "none",
                       }}>{lvl.t}</span>
                     )}
-                    <span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}
+                    {dMode
+                      ? <DeltaBar d={dVal} max={deltas.max[e] ?? 0} />
+                      : <><span style={{ color: signColor }}>{formatted.sign}</span>{formatted.value}</>}
                   </div>
                 );
               })}
@@ -686,6 +816,7 @@ function TickerPanel({
           if (clientDelta != null) return { v: clientDelta, building: false };
           return { v: null, building: buildMs > 0 && ch.spanMs < buildMs };
         };
+        const r5 = deltaFor(srv?.v5, null, 5 * 60_000);
         const r15 = deltaFor(srv?.v15, ch.d15, 15 * 60_000);
         const r30 = deltaFor(srv?.v30, ch.d30, 30 * 60_000);
         const rOpen = deltaFor(srv?.vOpen, ch.dOpen, 0);
@@ -747,6 +878,7 @@ function TickerPanel({
               <span style={{ color: nowColor, fontWeight: 900 }}>{nowFmt.sign}{nowFmt.value}</span>
             </div>
             <div style={{ marginTop: 3 }}>
+              {drow("Δ 5 min", r5.v, r5.building)}
               {drow("Δ 15 min", r15.v, r15.building)}
               {drow("Δ 30 min", r30.v, r30.building)}
               {drow("Δ Open", rOpen.v, rOpen.building)}
@@ -785,6 +917,8 @@ export function MultGreekClient({
 
   // Front-column level badges: CB (highest |GEX|), CW (2nd), PW (3rd). Toggled
   // from the toolbar; all on by default.
+  // Δ bar mode — 0 = off (cells show NET GEX). Drives every panel at once.
+  const [deltaWindow, setDeltaWindow] = useState<DeltaWindow>(0);
   const [showCB, setShowCB] = useState(true);
   const [showCW, setShowCW] = useState(true);
   const [showPW, setShowPW] = useState(true);
@@ -1302,6 +1436,21 @@ export function MultGreekClient({
 
         <DockGap />
 
+        {/* Δ bar mode — OFF shows NET GEX values; 5M/15M/30M replaces every cell
+            value with a diverging change bar. Applies to all panels at once. */}
+        <SegGroup
+          options={[
+            { label: "Δ OFF", value: "0" },
+            { label: "5M", value: "5" },
+            { label: "15M", value: "15" },
+            { label: "30M", value: "30" },
+          ]}
+          active={String(deltaWindow)}
+          onChange={(v) => setDeltaWindow(Number(v) as DeltaWindow)}
+        />
+
+        <DockGap />
+
         {/* CB / CW / PW top-|GEX| level badges (front expiry). Click to toggle. */}
         {[
           { key: "CB", on: showCB, set: setShowCB, color: "#ffd600", title: "Core Bullseye — highest |GEX| level" },
@@ -1387,6 +1536,7 @@ export function MultGreekClient({
             showCW={showCW}
             showPW={showPW}
             getGexChange={getGexChange}
+            deltaWindow={deltaWindow}
           />
         ))}
       </div>

@@ -453,6 +453,18 @@ register('/api/tt-quotes', {
   },
 });
 
+// /api/mult-greek-gex-grid?... → /proxy/mult-greek-gex-grid (pass-through, no-store)
+// Bulk per-strike GEX baselines for the /mult-greek ladder's Δ bar mode.
+register('/api/mult-greek-gex-grid', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const qs = new URL(req.url || '/', 'http://localhost').searchParams.toString();
+    const r = await ctx.internalFetch(
+      `/proxy/mult-greek-gex-grid${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
+    send(res, r.status, await r.text(), { 'Cache-Control': NO_STORE });
+  },
+});
+
 // /api/mult-greek-gex-change?... → /proxy/mult-greek-gex-change (pass-through, no-store)
 register('/api/mult-greek-gex-change', {
   auth: 'subscriber', methods: ['GET'],
