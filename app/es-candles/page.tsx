@@ -771,6 +771,15 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // Dedupe key for the heatmap backfill fetch: front mode ignores `expiry`
   // server-side, so the rolling feedExpiry must not re-fire the ~700KB/5s call.
   const lastHeatmapKeyRef = useRef<string>("");
+  // The backfill key MINUS the poll counter (see the wipe rule in the backfill
+  // effect): what is being requested, vs merely when. A change here means the
+  // columns already in memory are the wrong data and must be wiped; a change to
+  // the poll counter alone is a refresh and merges.
+  const lastHeatmapShapeRef = useRef<string>("");
+  // ET day the bubble map currently holds. Bubbles are single-day, so a
+  // rollover (or a replay-day switch) has to wipe minuteColsRef even when the
+  // request shape is unchanged — see the same rule.
+  const lastBubbleDayRef = useRef<string>("");
   const bubbleCfgRef = useRef<BubbleCfg>(BUBBLE_CFG_DEFAULT);
   const bubbleMinsRef = useRef(5);
   // Replay cursor, mirrored for the imperative overlay draw (null = live).
@@ -1471,6 +1480,54 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     return () => clearInterval(id);
   }, [isEs]);
 
+  // ── Wake refetch ───────────────────────────────────────────────────────────
+  // useWsLifecycle CLOSES /ws/gex the moment the tab goes hidden (bandwidth
+  // policy — see hooks/useWsLifecycle.ts; the owner is exempt from the IDLE
+  // timeout but nobody is exempt from the visibility drop). While that socket
+  // is down no 1-min columns arrive, so the bubble trail and the newest heatmap
+  // columns simply stop growing.
+  //
+  // On ES that gap used to be PERMANENT: the 60s `gexPoll` interval above is
+  // ETF-only (`if (isEs) return`), and the backfill effect below early-returns
+  // on an unchanged `fetchKey` — so once the socket came back, nothing ever
+  // refilled the minutes missed while hidden. Come back after a while and the
+  // trail is frozen mid-session; come back across an ET day rollover and
+  // minuteColsRef still holds only YESTERDAY's minutes, which is the "bubbles
+  // don't render at all, I have to reload the page" symptom. Bumping gexPoll
+  // re-keys the backfill (gexPoll is part of `fetchKey`), which reloads the
+  // window from option_strike_gex_history — pruned to 48h server-side, so
+  // anything missed while the tab was hidden is genuinely recoverable.
+  //
+  // Gated on a MINIMUM hidden duration: alt-tabbing for two seconds must not
+  // wipe the column maps and re-pull a ~700KB query. Under the threshold the
+  // socket reconnect alone has lost at most one column, and the next WS frame
+  // overwrites that minute anyway.
+  //
+  // Deliberately NOT gated on isEs. On the ETFs this only pulls the 60s poll
+  // forward to the instant you look at the page instead of waiting out the
+  // remainder of the interval, which is the same thing the user wants.
+  const hiddenSinceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const WAKE_REFETCH_MS = 45_000;
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        hiddenSinceRef.current = Date.now();
+        return;
+      }
+      const since = hiddenSinceRef.current;
+      hiddenSinceRef.current = null;
+      if (since == null || Date.now() - since < WAKE_REFETCH_MS) return;
+      // gexPoll is part of `fetchKey`, so the bump alone invalidates the guard.
+      // lastHeatmapKeyRef is left ALONE on purpose — clearing it would make any
+      // in-flight backfill fail its own resolution-time staleness check, and
+      // this bump already supersedes it.
+      setGexPoll((n) => n + 1);
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
   // Rail bars + walls for the ETF symbols, derived from the newest recorded
   // column by the same rule the replay cursor uses. `railRows` and `levels` are
   // both fed by /ws/gex, which only carries SPX.
@@ -1514,14 +1571,43 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // Symbol is part of the key: switching ES→SPY must invalidate the in-flight
     // /  cached backfill, otherwise the resolution-time key check below would
     // accept SPX columns into the SPY chart.
-    const fetchKey = `${sym.gexSymbol}|${isFront ? "front" : queryExpiry}|${minutes}|${activeReplayDay ?? ""}|${gexPoll}`;
+    // SHAPE = everything that changes WHAT is being requested. gexPoll is
+    // deliberately excluded: it only changes WHEN (the 60s ETF poll, and the
+    // wake refetch above), and a plain refresh of the same window must not be
+    // treated like a symbol/expiry switch. See the wipe rule below.
+    const shapeKey = `${sym.gexSymbol}|${isFront ? "front" : queryExpiry}|${minutes}|${activeReplayDay ?? ""}`;
+    const fetchKey = `${shapeKey}|${gexPoll}`;
     if (fetchKey === lastHeatmapKeyRef.current) return;
     lastHeatmapKeyRef.current = fetchKey;
-    // When the picker or range changes, wipe the existing columns so we don't
-    // mix expiries or leave stale far-back columns after switching to 1D.
-    columnsRef.current.clear();
-    minuteColsRef.current.clear();
-    drawOverlayRef.current();
+    // WIPE ONLY ON A SHAPE CHANGE. When the picker or range changes, the
+    // existing columns are the WRONG data — wipe them so we don't mix expiries
+    // or leave stale far-back columns after switching to 1D.
+    //
+    // A same-shape refresh (60s ETF poll, or the wake refetch) is a MERGE, not
+    // a reload: the response is a superset of what's already on screen, and the
+    // merge below already resolves collisions correctly ("live wins" for the
+    // 5-min map, first-write-wins for the 1-min bubble map). Clearing here
+    // unconditionally meant the chart went blank for the ~1–5s the query takes
+    // — every 60 seconds on the ETFs, and, worse, at the exact moment you tab
+    // back to the page, which reads as "the bubbles vanished again".
+    //
+    // The one same-shape case that DOES need a wipe is an ET day rollover: the
+    // bubble map is single-day, so minutes carried over from yesterday would
+    // otherwise survive and poison the session-max/top-strike scaling that all
+    // the bubble radii are normalized against.
+    const dayKeyNow = replayOn && activeReplayDay ? activeReplayDay : etDayKey(Date.now());
+    const shapeChanged = shapeKey !== lastHeatmapShapeRef.current;
+    const dayChanged = dayKeyNow !== lastBubbleDayRef.current;
+    lastHeatmapShapeRef.current = shapeKey;
+    lastBubbleDayRef.current = dayKeyNow;
+    if (shapeChanged) {
+      columnsRef.current.clear();
+      minuteColsRef.current.clear();
+      drawOverlayRef.current();
+    } else if (dayChanged) {
+      minuteColsRef.current.clear();
+      drawOverlayRef.current();
+    }
     (async () => {
       try {
         // Front (live) mode = rolling 0DTE, a different expiry string every
@@ -1570,6 +1656,15 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           if (map.has(slotTs)) continue; // live wins on collisions
           map.set(slotTs, { slotTs, cells, spot });
         }
+        // Trim to the requested window. Necessary now that a same-shape refresh
+        // MERGES instead of wiping: the window is counted back from now, so its
+        // left edge walks forward all session. Without a trim the 1D heatmap
+        // would quietly accumulate columns older than 1D — every one of them
+        // already outside what the server would return. The cutoff is the same
+        // one the query used, so this can only drop what the response omitted.
+        const cutoff = Date.now() - minutes * 60_000;
+        for (const k of [...map.keys()]) if (k < cutoff) map.delete(k);
+        for (const k of [...mmap.keys()]) if (k < cutoff) mmap.delete(k);
         // Rows are in — let the derived walls/flip republish off them.
         setGexVersion((v) => v + 1);
         drawOverlayRef.current();

@@ -216,27 +216,60 @@ function useFlowInventory() {
   return { dataByTicker, errors, loadedAt, reload: load };
 }
 
-function Donut({ slices, size = 190 }: { slices: Slice[]; size?: number }) {
-  let acc = 0;
-  const stops = slices
-    .map((s) => {
-      const start = acc;
-      acc += s.pct;
-      return `${s.color} ${start}% ${acc}%`;
-    })
-    .join(", ");
+// ── Bklit-style pie ──────────────────────────────────────────────────────────
+// Matches the `pie` example on the owner-vite Chart Types page
+// (owner-vite/src/pages/charts-ui/examples.tsx → PieExample): inline SVG solid
+// wedges cut by a 0.6° gap on each side, radius = 0.41 × box. Replaces the old
+// CSS conic-gradient donut so this chart renders like the chart-styles ref.
+
+function polarPt(cx: number, cy: number, r: number, deg: number): [number, number] {
+  const a = ((deg - 90) * Math.PI) / 180;
+  return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+}
+
+/** Pie/donut wedge path. rIn = 0 gives a solid slice. */
+function arcPath(cx: number, cy: number, rOut: number, rIn: number, a0: number, a1: number): string {
+  const large = a1 - a0 > 180 ? 1 : 0;
+  const [x0, y0] = polarPt(cx, cy, rOut, a0);
+  const [x1, y1] = polarPt(cx, cy, rOut, a1);
+  if (rIn <= 0) {
+    return `M ${cx} ${cy} L ${x0} ${y0} A ${rOut} ${rOut} 0 ${large} 1 ${x1} ${y1} Z`;
+  }
+  const [x2, y2] = polarPt(cx, cy, rIn, a1);
+  const [x3, y3] = polarPt(cx, cy, rIn, a0);
+  return `M ${x0} ${y0} A ${rOut} ${rOut} 0 ${large} 1 ${x1} ${y1} L ${x2} ${y2} A ${rIn} ${rIn} 0 ${large} 0 ${x3} ${y3} Z`;
+}
+
+function Pie({ slices, size = 190 }: { slices: Slice[]; size?: number }) {
+  const c = size / 2;
+  const r = size * 0.41; // same 82/200 ratio as the charts-ui pie
+  const visible = slices.filter((s) => s.pct > 0);
+  const total = visible.reduce((sum, s) => sum + s.pct, 0);
+  let a = 0;
   return (
-    <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
-      <div style={{ width: "100%", height: "100%", borderRadius: "50%", background: `conic-gradient(${stops})` }} />
-      <div
-        style={{
-          position: "absolute",
-          inset: size * 0.3,
-          borderRadius: "50%",
-          background: HOME_THEME.panel,
-          border: `1px solid ${HOME_THEME.border}`,
-        }}
-      />
+    <div style={{ width: size, height: size, flexShrink: 0 }}>
+      <svg
+        viewBox={`0 0 ${size} ${size}`}
+        width="100%"
+        height="100%"
+        style={{ display: "block", overflow: "visible" }}
+        role="img"
+        aria-label="Options flow inventory by premium"
+      >
+        <g>
+          {visible.map((s) => {
+            const sweep = total > 0 ? (s.pct / total) * 360 : 0;
+            const gap = sweep > 2 ? 0.6 : 0; // don't let the gap swallow slivers
+            const d = arcPath(c, c, r, 0, a + gap, a + sweep - gap);
+            a += sweep;
+            return (
+              <path key={s.label} d={d} fill={s.color}>
+                <title>{`${s.label} — ${s.pct}%`}</title>
+              </path>
+            );
+          })}
+        </g>
+      </svg>
     </div>
   );
 }
@@ -356,7 +389,7 @@ function SymbolPanel({ data }: { data: SymbolData }) {
   return (
     <Card variant="budget" accent={LIGHT_BLUE} title={data.symbol} subtitle={`${data.subtitle} · Data: ${data.date}`}>
       <div style={{ display: "flex", gap: 20, alignItems: "center", flexWrap: "wrap" }}>
-        <Donut slices={data.slices} />
+        <Pie slices={data.slices} />
         <div style={{ flex: 1, minWidth: 170 }}>
           <Legend slices={data.slices} />
           <SentimentPills bullish={data.bullish} bearish={data.bearish} />

@@ -316,9 +316,20 @@ async function captureToCanvasInner(
   // Every canvas in the subtree gets blanked in the clone and composited in
   // afterwards from its live bitmap. `lt` canvases are handled by the provider's
   // own screenshot; everything else is drawn from the element directly.
-  const otherLiveCanvases = Array.from(el.querySelectorAll("canvas")).filter(
-    (c) => !(lt && lt.target.contains(c)),
-  ) as HTMLCanvasElement[];
+  //
+  // ONLY in framed mode (or when a lightweight-charts provider is present).
+  // In plain mode the blank-and-composite round trip was losing the bitmap
+  // outright — a Sector Wheel capture came back with the header text and an
+  // empty space where the wheel should be — which is strictly worse than what
+  // CopySnapButton did before, i.e. just letting html2canvas draw the canvas
+  // itself. Blanking without a working composite is the one combination that
+  // must never happen, so plain mode leaves canvases alone.
+  const compositeCanvases = framed || !!lt;
+  const otherLiveCanvases = compositeCanvases
+    ? (Array.from(el.querySelectorAll("canvas")).filter(
+        (c) => !(lt && lt.target.contains(c)),
+      ) as HTMLCanvasElement[])
+    : [];
 
   // Elements tagged [data-capture-hide] are live-page chrome (toolbars, control
   // docks) that shouldn't appear in the PNG. Framed mode drops them at the END
@@ -326,15 +337,31 @@ async function captureToCanvasInner(
   // A tagged DIRECT child sitting ABOVE the chart also removes its own height
   // from the flow, so everything below shifts up by that much — the canvas
   // composites must mirror that, since they position off LIVE rects.
-  const hideEls = framed
-    ? (Array.from(el.querySelectorAll("[data-capture-hide]")) as HTMLElement[])
-    : [];
+  // Live-page chrome, dropped in BOTH modes. This used to be framed-only, which
+  // meant every CopySnapButton capture (the S&P Sector Wheel, the traders
+  // dashboard) kept its own control cluster in the PNG — cap toggles, full
+  // screen, close, and the snap button itself mid-click reading "Capturing…".
+  const hideEls = Array.from(el.querySelectorAll("[data-capture-hide]")) as HTMLElement[];
   const chartTop = lt ? lt.target.getBoundingClientRect().top : Infinity;
   let hiddenShift = 0;
   for (const h of hideEls) {
     if (h.parentElement !== el) continue; // only direct children affect the flow
     if (h.getBoundingClientRect().bottom > chartTop) continue; // not above the chart
     hiddenShift += h.offsetHeight;
+  }
+  // Same compensation for plain mode: removing chrome above the content shifts
+  // everything below it up, and the canvas composites position off LIVE rects
+  // that still include that chrome.
+  const firstCanvasTop = otherLiveCanvases.length
+    ? Math.min(...otherLiveCanvases.map((c) => c.getBoundingClientRect().top))
+    : Infinity;
+  if (!framed) {
+    hiddenShift = 0;
+    for (const h of hideEls) {
+      if (h.parentElement !== el) continue;
+      if (h.getBoundingClientRect().bottom > Math.min(chartTop, firstCanvasTop)) continue;
+      hiddenShift += h.offsetHeight;
+    }
   }
 
   // ── Framed mode: measure the true content height ──────────────────────────
@@ -380,8 +407,16 @@ async function captureToCanvasInner(
   // Output crop width, matching the live element. See gotcha 4: pairing this
   // with `windowWidth` would reflow every ancestor flex container and change
   // the chart's real size in the clone.
+  //
+  // scrollWidth ONLY in fitContent mode. fitContent means the element has been
+  // switched to width:fit-content for the capture and genuinely extends past
+  // the viewport (mult-greek), so the overflow is the content. Everywhere else
+  // the element clips its overflow on screen, and scrollWidth drags that hidden
+  // overflow into the PNG: on ES Candles it added ~215px of empty panels to the
+  // right of the GEX rail — boxes you cannot see on the page.
+  const visibleW = Math.round(el.getBoundingClientRect().width) || el.clientWidth;
   const contentW = framed
-    ? opts.width ?? (el.scrollWidth || el.getBoundingClientRect().width)
+    ? opts.width ?? (fitContent ? (el.scrollWidth || visibleW) : visibleW)
     : opts.width;
 
   const base = await html2canvas(el, {
@@ -452,7 +487,13 @@ async function captureToCanvasInner(
       // above a chart. That holds everywhere this is used today.)
       clone.querySelectorAll('[data-noshot="1"]').forEach((n) => n.remove());
 
-      if (!framed) return;
+      if (!framed) {
+        // Plain mode drops the chrome here (framed mode does it at the very end
+        // of this callback, after its index-paired children loop). Either way it
+        // happens AFTER the canvas pairing above, never before.
+        clone.querySelectorAll("[data-capture-hide]").forEach((n) => n.remove());
+        return;
+      }
 
       // ── Framed mode: expand the clone and bake in the title band ──────────
       clone.style.position = "relative";

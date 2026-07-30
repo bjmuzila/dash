@@ -123,17 +123,38 @@ const ago = (ts: number | null | undefined): string => {
 function PickChart({ points, metric, entry }: { points: PickPoint[]; metric: Metric; entry: number | null }) {
   // Index of the sample under the cursor — drives the crosshair readout.
   const [hover, setHover] = useState<number | null>(null);
-  // Tile-sized geometry: the viewBox is close to the tile's real pixel width, so
-  // the tick text lands near its nominal size instead of being scaled to mush.
-  const W = 240, H = 88, PADL = 34, PADR = 6, PADT = 6, PADB = 14;
+  // The viewBox is set to the box's REAL pixel width at a FIXED pixel height, so
+  // one viewBox unit == one CSS pixel: tick text renders at its literal size and
+  // the chart's height never changes with the tile width (which is what let the
+  // back face overflow its tile before). Callback ref so the observer attaches
+  // whenever the box mounts, including after the "no history yet" state.
+  const [boxW, setBoxW] = useState(0);
+  const roRef = useRef<ResizeObserver | null>(null);
+  const attachBox = useCallback((el: HTMLDivElement | null) => {
+    roRef.current?.disconnect();
+    roRef.current = null;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    setBoxW(Math.round(el.getBoundingClientRect().width));
+    const ro = new ResizeObserver((entries) => {
+      const cr = entries[0]?.contentRect;
+      if (cr) setBoxW(Math.round(cr.width));
+    });
+    ro.observe(el);
+    roRef.current = ro;
+  }, []);
+  useEffect(() => () => { roRef.current?.disconnect(); }, []);
+
+  const W = Math.max(160, boxW || 240), H = 96, PADL = 44, PADR = 8, PADT = 6, PADB = 16;
   const pts = points
     .map((p) => ({ ts: p.ts, v: metric === "mark" ? p.mark : p.net_gex }))
     .filter((p) => p.v != null && Number.isFinite(p.v as number)) as { ts: number; v: number }[];
 
   if (pts.length < 2) {
     return (
-      <div style={{ fontFamily: MONO, fontSize: 10, color: tint(HOME_THEME.text, 0.5), textAlign: "center", padding: "26px 0", lineHeight: 1.5 }}>
-        not enough history yet —<br />snapshots accrue every minute through RTH
+      <div ref={attachBox} style={{ height: H, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <span style={{ fontFamily: MONO, fontSize: 10, color: tint(HOME_THEME.text, 0.5), textAlign: "center", lineHeight: 1.5 }}>
+          not enough history yet —<br />snapshots accrue every minute through RTH
+        </span>
       </div>
     );
   }
@@ -174,15 +195,17 @@ function PickChart({ points, metric, entry }: { points: PickPoint[]; metric: Met
   const hx = hp ? sx(hi as number) : 0;
   const hy = hp ? sy(hp.v) : 0;
   const tLabel = hp ? fmtT(hp.ts) : "";
-  const tW = Math.max(26, tLabel.length * 4.6 + 6);
-  const tX = Math.min(Math.max(hx - tW / 2, PADL - 4), W - PADR - tW);
+  const tW = Math.max(30, tLabel.length * 5.4 + 8);
+  const tX = Math.min(Math.max(hx - tW / 2, 0), W - tW);
   const vLabel = hp ? fmtY(hp.v) : "";
-  const vW = Math.max(24, vLabel.length * 4.6 + 6);
+  const vW = Math.min(PADL - 2, Math.max(26, vLabel.length * 5.4 + 8));
+  const vY = Math.min(Math.max(hy - 6.5, 0), H - PADB - 13);
 
   return (
+    <div ref={attachBox}>
     <svg
       viewBox={`0 0 ${W} ${H}`}
-      style={{ width: "100%", height: "auto", display: "block", cursor: "crosshair" }}
+      style={{ width: "100%", height: H, display: "block", cursor: "crosshair" }}
       onMouseMove={onMove}
       onMouseLeave={() => setHover(null)}
       // Reading the chart must not flip the card back (same as the Probe page's
@@ -197,37 +220,38 @@ function PickChart({ points, metric, entry }: { points: PickPoint[]; metric: Met
       </defs>
       {yTicks.map((v, i) => (
         <g key={i}>
-          <line x1={PADL} y1={sy(v)} x2={W - PADR} y2={sy(v)} stroke={tint(HOME_THEME.text, 0.08)} strokeWidth={0.6} />
-          <text x={PADL - 4} y={sy(v) + 2.5} textAnchor="end" fontSize={7} fill={tickFill} fontFamily={MONO}>{fmtY(v)}</text>
+          <line x1={PADL} y1={sy(v)} x2={W - PADR} y2={sy(v)} stroke={tint(HOME_THEME.text, 0.08)} strokeWidth={1} />
+          <text x={PADL - 5} y={sy(v) + 3} textAnchor="end" fontSize={9} fill={tickFill} fontFamily={MONO}>{fmtY(v)}</text>
         </g>
       ))}
-      <text x={PADL} y={H - 4} textAnchor="start" fontSize={7} fill={tickFill} fontFamily={MONO}>{fmtT(minX)}</text>
-      <text x={W - PADR} y={H - 4} textAnchor="end" fontSize={7} fill={tickFill} fontFamily={MONO}>{fmtT(maxX)}</text>
+      <text x={PADL} y={H - 4} textAnchor="start" fontSize={9} fill={tickFill} fontFamily={MONO}>{fmtT(minX)}</text>
+      <text x={W - PADR} y={H - 4} textAnchor="end" fontSize={9} fill={tickFill} fontFamily={MONO}>{fmtT(maxX)}</text>
       {metric === "net_gex" && minY < 0 && maxY > 0 && (
-        <line x1={PADL} y1={sy(0)} x2={W - PADR} y2={sy(0)} stroke={tint(HOME_THEME.text, 0.2)} strokeWidth={0.6} />
+        <line x1={PADL} y1={sy(0)} x2={W - PADR} y2={sy(0)} stroke={tint(HOME_THEME.text, 0.2)} strokeWidth={1} />
       )}
       {showEntry && (
         <line
           x1={PADL} y1={sy(entry as number)} x2={W - PADR} y2={sy(entry as number)}
-          stroke={tint(HOME_THEME.text, 0.35)} strokeWidth={0.6} strokeDasharray="3 3"
+          stroke={tint(HOME_THEME.text, 0.35)} strokeWidth={1} strokeDasharray="4 4"
         />
       )}
       <path d={area} fill="url(#gct-fill)" />
-      <path d={line} fill="none" stroke={HOME_THEME.cyan} strokeWidth={1.4} strokeLinejoin="round" strokeLinecap="round" />
+      <path d={line} fill="none" stroke={HOME_THEME.cyan} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
       {hp ? (
         <g>
           {/* Crosshair: time chip on the x axis, value chip on the y axis. */}
-          <line x1={hx} y1={PADT} x2={hx} y2={H - PADB} stroke={tint(HOME_THEME.cyan, 0.5)} strokeWidth={0.6} strokeDasharray="2 2" />
-          <circle cx={hx} cy={hy} r={2.6} fill={HOME_THEME.cyan} stroke={HOME_THEME.bg} strokeWidth={0.8} />
-          <rect x={tX} y={H - PADB + 1.5} width={tW} height={10} rx={2} fill={HOME_THEME.bg} stroke={tint(HOME_THEME.cyan, 0.4)} strokeWidth={0.5} />
-          <text x={tX + tW / 2} y={H - PADB + 8.5} textAnchor="middle" fontSize={7} fill={HOME_THEME.text} fontFamily={MONO}>{tLabel}</text>
-          <rect x={0} y={hy - 5} width={vW} height={10} rx={2} fill={HOME_THEME.bg} stroke={tint(HOME_THEME.cyan, 0.4)} strokeWidth={0.5} />
-          <text x={vW / 2} y={hy + 2.5} textAnchor="middle" fontSize={7} fill={HOME_THEME.cyan} fontFamily={MONO}>{vLabel}</text>
+          <line x1={hx} y1={PADT} x2={hx} y2={H - PADB} stroke={tint(HOME_THEME.cyan, 0.5)} strokeWidth={1} strokeDasharray="3 3" />
+          <circle cx={hx} cy={hy} r={3} fill={HOME_THEME.cyan} stroke={HOME_THEME.bg} strokeWidth={1} />
+          <rect x={tX} y={H - PADB + 2} width={tW} height={13} rx={3} fill={HOME_THEME.bg} stroke={tint(HOME_THEME.cyan, 0.4)} strokeWidth={1} />
+          <text x={tX + tW / 2} y={H - PADB + 11} textAnchor="middle" fontSize={9} fill={HOME_THEME.text} fontFamily={MONO}>{tLabel}</text>
+          <rect x={0} y={vY} width={vW} height={13} rx={3} fill={HOME_THEME.bg} stroke={tint(HOME_THEME.cyan, 0.4)} strokeWidth={1} />
+          <text x={vW / 2} y={vY + 9} textAnchor="middle" fontSize={9} fill={HOME_THEME.cyan} fontFamily={MONO}>{vLabel}</text>
         </g>
       ) : (
-        <circle cx={sx(n - 1)} cy={sy(last)} r={2.6} fill={HOME_THEME.cyan} />
+        <circle cx={sx(n - 1)} cy={sy(last)} r={3} fill={HOME_THEME.cyan} />
       )}
     </svg>
+    </div>
   );
 }
 
@@ -491,14 +515,20 @@ export default function GexChangeTop() {
                     // Both faces live inside the tile — flipping never resizes the
                     // card or reflows the grid.
                     position: "relative",
-                    minHeight: 236,
+                    // Sized for the taller of the two faces: the chart side is
+                    // header + headline + toolbar + a fixed 96px chart + hint.
+                    minHeight: 244,
                     perspective: 1200,
                     cursor: wid == null ? "default" : "pointer",
                   }}
                 >
                   <div
                     style={{
-                      position: "relative",
+                      // MUST be absolute+inset: both faces are absolutely
+                      // positioned against THIS box, so if it is left in normal
+                      // flow it has no height and the whole tile collapses.
+                      position: "absolute",
+                      inset: 0,
                       transformStyle: "preserve-3d",
                       // Only the transform animates (compositor-only, no layout or
                       // paint), and will-change is set ONLY on tiles that have

@@ -339,7 +339,11 @@ export default function SectorSunburst() {
       {/* header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, gap: 8, flexWrap: "wrap" }}>
         <div style={{ fontSize: expanded ? 20 : 17, fontWeight: 700, color: HT.cyan }}>🌐 S&amp;P Sector Wheel</div>
-        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+        {/* data-capture-hide: the whole control cluster — cap toggles, the Snap
+            button itself, full-screen and close — is live-page chrome. It sits
+            inside snapRef, so without this every PNG of the wheel carries a
+            picture of its own buttons (including one reading "Capturing…"). */}
+        <div data-capture-hide style={{ display: "flex", gap: 4, alignItems: "center" }}>
           {CAPS.map((c) => (
             <button key={c} onClick={() => setCap(c)} style={capBtn(cap === c)}>{c}%</button>
           ))}
