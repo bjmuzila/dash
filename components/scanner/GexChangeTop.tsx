@@ -172,7 +172,7 @@ function PickChart({ points, metric, entry }: { points: PickPoint[]; metric: Met
   if (pts.length < 2) {
     return (
       <div ref={attachBox} style={{ height: H, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <span style={{ fontFamily: MONO, fontSize: 10, color: tint(HOME_THEME.text, 0.5), textAlign: "center", lineHeight: 1.5 }}>
+        <span style={{ fontFamily: MONO, fontSize: 10, color: HOME_THEME.text, textAlign: "center", lineHeight: 1.5 }}>
           not enough history yet —<br />snapshots accrue every minute through RTH
         </span>
       </div>
@@ -197,7 +197,7 @@ function PickChart({ points, metric, entry }: { points: PickPoint[]; metric: Met
   const fmtY = (v: number) => (metric === "net_gex" ? fmtGex(v) : v.toFixed(2));
   const yTicks = [0, 0.5, 1].map((f) => minY + f * (maxY - minY));
   const fmtT = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  const tickFill = tint(HOME_THEME.text, 0.7);
+  const tickFill = HOME_THEME.text;
 
   // Hovered sample. Mouse x → nearest index, in viewBox units so it stays right
   // at any tile width. Cleared on leave, which restores the "latest" dot.
@@ -465,7 +465,7 @@ export default function GexChangeTop() {
     borderRadius: 5,
     border: `1px solid ${on && cyan ? tint(HOME_THEME.cyan, 0.4) : HOME_THEME.border}`,
     background: on ? (cyan ? tint(HOME_THEME.cyan, 0.12) : tint(HOME_THEME.text, 0.08)) : "transparent",
-    color: on ? (cyan ? HOME_THEME.cyan : HOME_THEME.text) : tint(HOME_THEME.text, 0.55),
+    color: on ? (cyan ? HOME_THEME.cyan : HOME_THEME.text) : HOME_THEME.text,
   });
   // .op-badge — the strike+side chip next to the ticker.
   const badgeStyle = (side: "C" | "P"): CSSProperties => {
@@ -477,7 +477,7 @@ export default function GexChangeTop() {
     };
   };
   const lblStyle: CSSProperties = {
-    color: tint(HOME_THEME.text, 0.55), fontSize: 9,
+    color: HOME_THEME.text, fontSize: 9,
     textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 3,
   };
   const th: CSSProperties = {
@@ -519,7 +519,7 @@ export default function GexChangeTop() {
         >
           Refresh
         </button>
-        <span style={{ fontSize: 12, color: tint(HOME_THEME.text, 0.5) }}>click a card for its option price line</span>
+        <span style={{ fontSize: 12, color: HOME_THEME.text }}>click a card for its option price line</span>
         <div style={{ flex: 1 }} />
         <button
           onClick={() => capture("copy")}
@@ -548,7 +548,7 @@ export default function GexChangeTop() {
             {frozen ? "EOD · final" : "live · peak so far"}
           </span>
           {results.length > 0 && (
-            <span style={{ fontSize: 12, color: tint(HOME_THEME.text, 0.6) }}>
+            <span style={{ fontSize: 12, color: HOME_THEME.text }}>
               {results.length} pick{results.length === 1 ? "" : "s"} · avg peak{" "}
               <b style={{ color: avgPeak != null && avgPeak >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{fmtPct(avgPeak)}</b>
               {" · "}≥+25% <b style={{ color: HOME_THEME.text }}>{hit(25)}</b>
@@ -571,7 +571,7 @@ export default function GexChangeTop() {
 
         {showResults && !resErr && (
           results.length === 0 ? (
-            <div style={{ color: tint(HOME_THEME.text, 0.55), fontSize: 13, padding: "8px 4px" }}>
+            <div style={{ color: HOME_THEME.text, fontSize: 13, padding: "8px 4px" }}>
               No scored picks for this date yet — rows appear once picks have been auto-probed and snapshots start landing.
             </div>
           ) : (
@@ -600,34 +600,34 @@ export default function GexChangeTop() {
                       <tr key={`${r.watch_id}-${r.first_slot}`}>
                         <td style={{ ...td, textAlign: "left", fontWeight: 800 }}>{r.symbol}</td>
                         <td style={{ ...td, textAlign: "left", color: sideC }}>
-                          {fmtStrike(r.strike)}{r.side ?? ""} <span style={{ color: tint(HOME_THEME.text, 0.45) }}>{r.expiry}</span>
+                          {fmtStrike(r.strike)}{r.side ?? ""} <span style={{ color: HOME_THEME.text }}>{r.expiry}</span>
                         </td>
-                        <td style={{ ...td, textAlign: "left", color: tint(HOME_THEME.text, 0.6) }}>
+                        <td style={{ ...td, textAlign: "left", color: HOME_THEME.text }}>
                           {r.first_slot ? slotLabel(r.first_slot).replace(" ET", "") : "—"}
                           {r.slots != null && r.slots > 1 && (
-                            <span style={{ color: tint(HOME_THEME.text, 0.4) }}> ×{r.slots}</span>
+                            <span style={{ color: HOME_THEME.text }}> ×{r.slots}</span>
                           )}
                         </td>
                         <td style={td}>{fmtPx(r.entry)}</td>
                         <td style={td}>{fmtPx(r.max_mark)}</td>
-                        <td style={{ ...td, textAlign: "left", color: tint(HOME_THEME.text, 0.6) }}>{fmtClock(r.max_ts)}</td>
-                        <td style={{ ...td, fontWeight: 800, color: r.max_pct == null ? tint(HOME_THEME.text, 0.4) : r.max_pct >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                        <td style={{ ...td, textAlign: "left", color: HOME_THEME.text }}>{fmtClock(r.max_ts)}</td>
+                        <td style={{ ...td, fontWeight: 800, color: r.max_pct == null ? HOME_THEME.text : r.max_pct >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
                           {fmtPct(r.max_pct)}
                         </td>
-                        <td style={{ ...td, color: tint(HOME_THEME.text, 0.6) }}>
+                        <td style={{ ...td, color: HOME_THEME.text }}>
                           {peakDollars == null ? "—" : `${peakDollars >= 0 ? "+" : "−"}$${Math.abs(peakDollars).toFixed(0)}`}
                         </td>
                         <td style={td}>{fmtPx(r.close_mark)}</td>
-                        <td style={{ ...td, color: r.close_pct == null ? tint(HOME_THEME.text, 0.4) : r.close_pct >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                        <td style={{ ...td, color: r.close_pct == null ? HOME_THEME.text : r.close_pct >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
                           {fmtPct(r.close_pct)}
                         </td>
-                        <td style={{ ...td, color: tint(HOME_THEME.text, 0.45) }}>{fmtPct(r.min_pct)}</td>
+                        <td style={{ ...td, color: HOME_THEME.text }}>{fmtPct(r.min_pct)}</td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
-              <div style={{ marginTop: 6, fontSize: 11, color: tint(HOME_THEME.text, 0.45) }}>
+              <div style={{ marginTop: 6, fontSize: 11, color: HOME_THEME.text }}>
                 Entry = the auto-probe mark at the slot the strike was first flagged. Peak / Low / Close are measured from
                 that entry, over snapshots taken after it — the best exit that was actually on offer, not a fill.
               </div>
@@ -639,7 +639,7 @@ export default function GexChangeTop() {
       {err && <div style={{ color: HOME_THEME.red, fontSize: 13, padding: "8px 0" }}>Error: {err}</div>}
 
       {!err && slots.length === 0 && (
-        <div style={{ color: tint(HOME_THEME.text, 0.6), fontSize: 14, padding: "16px 4px" }}>
+        <div style={{ color: HOME_THEME.text, fontSize: 14, padding: "16px 4px" }}>
           {loading ? "Loading…" : "No very-strong picks recorded yet for this date. The recorder captures the top 5 every 30 min during RTH going forward."}
         </div>
       )}
@@ -648,7 +648,7 @@ export default function GexChangeTop() {
         <div key={hb.slot} style={{ marginBottom: 22 }}>
           <div data-noshot="1" style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
             <span style={{ color: HOME_THEME.orange, fontWeight: 800, fontSize: 15 }}>{slotLabel(hb.slot)}</span>
-            <span style={{ color: tint(HOME_THEME.text, 0.5), fontSize: 12 }}>{hb.rows.length} pick{hb.rows.length === 1 ? "" : "s"}</span>
+            <span style={{ color: HOME_THEME.text, fontSize: 12 }}>{hb.rows.length} pick{hb.rows.length === 1 ? "" : "s"}</span>
           </div>
           <div className="gct-grid" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
             {hb.rows.map((r) => {
@@ -669,7 +669,7 @@ export default function GexChangeTop() {
               const lastTs = [...pts].reverse().find((p) => Number.isFinite(p.ts))?.ts ?? null;
               const pnlPct = entry != null && entry !== 0 && lastMark != null ? ((lastMark - entry) / entry) * 100 : null;
               const pnlDollars = entry != null && lastMark != null ? (lastMark - entry) * 100 : null;
-              const pnlColor = pnlPct == null ? tint(HOME_THEME.text, 0.55) : pnlPct > 0 ? HOME_THEME.green : pnlPct < 0 ? HOME_THEME.red : tint(HOME_THEME.text, 0.55);
+              const pnlColor = pnlPct == null ? HOME_THEME.text : pnlPct > 0 ? HOME_THEME.green : pnlPct < 0 ? HOME_THEME.red : HOME_THEME.text;
 
               return (
                 <div
@@ -720,7 +720,7 @@ export default function GexChangeTop() {
                           border: st ? `1px solid ${st === "busy" ? tint(HOME_THEME.text, 0.2) : HOME_THEME.green}` : "1px solid transparent",
                           borderRadius: 6, background: st && st !== "busy" ? tint(HOME_THEME.bg, 0.35) : "transparent",
                           fontSize: 12, lineHeight: 1, fontWeight: 700, padding: "3px 6px",
-                          color: st === "busy" ? tint(HOME_THEME.text, 0.5) : st ? HOME_THEME.green : tint(HOME_THEME.text, 0.45),
+                          color: st === "busy" ? HOME_THEME.text : st ? HOME_THEME.green : HOME_THEME.text,
                           display: "inline-flex", alignItems: "center", gap: 4,
                         }}
                       >
@@ -728,20 +728,20 @@ export default function GexChangeTop() {
                       </button>
                       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 4, paddingRight: 18 }}>
                         <span style={{ fontWeight: 800, fontSize: 17, color: HOME_THEME.text }}>
-                          <span style={{ color: tint(HOME_THEME.text, 0.35), marginRight: 6 }}>{r.rank}</span>{r.symbol}
+                          <span style={{ color: HOME_THEME.text, marginRight: 6 }}>{r.rank}</span>{r.symbol}
                         </span>
-                        <span style={{ fontSize: 14, color: tint(HOME_THEME.text, 0.6) }}>{fmtStrike(r.strike)}</span>
+                        <span style={{ fontSize: 14, color: HOME_THEME.text }}>{fmtStrike(r.strike)}</span>
                       </div>
                       <div style={{ fontSize: 20, fontWeight: 800, color: col, lineHeight: 1.2 }}>{fmtBig(r.latest_chg)}</div>
-                      <div style={{ fontSize: 14, color: tint(HOME_THEME.text, 0.6), marginTop: 4 }}>
+                      <div style={{ fontSize: 14, color: HOME_THEME.text, marginTop: 4 }}>
                         {r.expiry} · spot {fmtSpot(r.spot)}
                       </div>
-                      <div style={{ fontSize: 12, color: tint(HOME_THEME.text, 0.42), marginTop: 2 }}>
+                      <div style={{ fontSize: 12, color: HOME_THEME.text, marginTop: 2 }}>
                         captured {capturedLabel(date, hb.slot)}
                       </div>
                       <div style={{ display: "flex", gap: 10, fontSize: 14, marginTop: 6, flexWrap: "wrap" }}>
                         {otmPct != null && <span style={{ color: HOME_THEME.orange }}>OTM {otmPct.toFixed(1)}%</span>}
-                        <span style={{ color: r.pct_open == null ? tint(HOME_THEME.text, 0.4) : r.pct_open >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                        <span style={{ color: r.pct_open == null ? HOME_THEME.text : r.pct_open >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
                           {r.pct_open == null ? "—" : `${r.pct_open >= 0 ? "+" : ""}${r.pct_open.toFixed(0)}% vs open`}
                         </span>
                         <span style={{ color: HOME_THEME.cyan }}>score {r.score == null ? "—" : r.score.toFixed(0)}</span>
@@ -775,14 +775,14 @@ export default function GexChangeTop() {
                           title="Back to the pick"
                           style={{
                             background: "none", border: "none", cursor: "pointer", padding: "0 2px",
-                            fontSize: 15, lineHeight: 1, color: tint(HOME_THEME.text, 0.55),
+                            fontSize: 15, lineHeight: 1, color: HOME_THEME.text,
                           }}
                         >
                           ×
                         </button>
                       </div>
                       {/* .op-rowsub — expiry + when this contract was flagged. */}
-                      <div style={{ fontFamily: MONO, fontSize: 10, color: tint(HOME_THEME.text, 0.5), marginTop: 2 }}>
+                      <div style={{ fontFamily: MONO, fontSize: 10, color: HOME_THEME.text, marginTop: 2 }}>
                         {r.expiry} · {capturedLabel(date, hb.slot)}
                       </div>
                       {/* .op-bigrow — the headline move off the entry basis. */}
@@ -792,7 +792,7 @@ export default function GexChangeTop() {
                         </div>
                         <div style={{ fontFamily: MONO, fontSize: 11, color: HOME_THEME.text, marginTop: 4, whiteSpace: "nowrap" }}>
                           <span style={lblStyle}>in</span>{fmtPx(entry)}
-                          <span style={{ color: tint(HOME_THEME.text, 0.55), margin: "0 4px" }}>→</span>
+                          <span style={{ color: HOME_THEME.text, margin: "0 4px" }}>→</span>
                           <span style={lblStyle}>now</span>{fmtPx(lastMark)}
                           {pnlDollars != null && (
                             <span style={{ fontWeight: 700, color: pnlColor }}>
@@ -819,14 +819,14 @@ export default function GexChangeTop() {
                         </div>
                       </div>
                       {wid != null && histLoading[wid] && !pts.length ? (
-                        <div style={{ fontFamily: MONO, fontSize: 10, color: tint(HOME_THEME.text, 0.5), textAlign: "center", padding: "26px 0" }}>loading history…</div>
+                        <div style={{ fontFamily: MONO, fontSize: 10, color: HOME_THEME.text, textAlign: "center", padding: "26px 0" }}>loading history…</div>
                       ) : h?.error ? (
                         <div style={{ fontFamily: MONO, fontSize: 10, color: HOME_THEME.red, textAlign: "center", padding: "26px 0" }}>{h.error}</div>
                       ) : (
                         <PickChart points={pts} metric={metric} entry={entry} />
                       )}
                       {/* .op-charthint */}
-                      <div style={{ marginTop: 4, fontFamily: MONO, fontSize: 9, color: tint(HOME_THEME.text, 0.5), letterSpacing: "0.03em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      <div style={{ marginTop: 4, fontFamily: MONO, fontSize: 9, color: HOME_THEME.text, letterSpacing: "0.03em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                         {metric === "mark" ? "price (mark)" : "net gex @ strike"} · RTH · entry @ {fmtPx(entry)} · {ago(lastTs)}
                       </div>
                     </div>
@@ -844,7 +844,7 @@ export default function GexChangeTop() {
         @media (max-width: 460px)  { .gct-grid { grid-template-columns: 1fr !important; } }
       `}</style>
 
-      <div style={{ marginTop: 8, display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, color: tint(HOME_THEME.text, 0.55) }}>
+      <div style={{ marginTop: 8, display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, color: HOME_THEME.text }}>
         <span>Score = 0.6·|Δ| + 0.4·|% vs open|, normalized 0–100</span>
         <span><span style={{ color: HOME_THEME.orange }}>★ Very strong</span> = |Δ| ≥ $200k AND |% vs open| ≥ 30%</span>
         <span>Every pick is auto-probed at capture — the flip side is its recorded option price since it was flagged</span>

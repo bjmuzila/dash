@@ -68,19 +68,10 @@ const SHELL_GLOW_DEEP = `radial-gradient(1100px 520px at 12% -10%, rgba(33,158,1
 // Swatch palette for category dots.
 const CATEGORY_COLORS = ["#7dd3fc", "#34D399", "#FBBF24", "#F472B6", "#A78BFA", HOME_THEME.red];
 
-// ── Range switcher (Daily / Weekly / Monthly / Yearly) ───────────────────────
-// One control, shared by every card that can honestly be re-cut by period.
-// It reads two ways, and both are the natural reading in context:
-//   • SERIES cards (Cash Flow, Spend Pace) — the tab sets chart RESOLUTION:
-//     day-by-day or week-by-week across the month, month-by-month or quarter-
-//     by-quarter across the year.
-//   • SUMMARY cards (Where It Went, Category Spend, Safe to Spend) — the tab
-//     sets the WINDOW being summarised: today / last 7 days / this month /
-//     this year.
+// ── Period ──────────────────────────────────────────────────────────────────
+// The overview reads as a single month. RangeMode is kept because the window
+// helpers below are written in terms of it, but the page is pinned to monthly.
 type RangeMode = "daily" | "weekly" | "monthly" | "yearly";
-const RANGE_MODES: RangeMode[] = ["daily", "weekly", "monthly", "yearly"];
-const RANGE_LETTER: Record<RangeMode, string> = { daily: "D", weekly: "W", monthly: "M", yearly: "Y" };
-const RANGE_TITLE: Record<RangeMode, string> = { daily: "Daily", weekly: "Weekly", monthly: "Monthly", yearly: "Yearly" };
 const RANGE_WINDOW_LABEL: Record<RangeMode, string> = { daily: "Today", weekly: "Last 7 days", monthly: "This month", yearly: "This year" };
 
 // Chart palette lifted straight from /owner/charts-ui so every chart on this
@@ -182,10 +173,8 @@ export default function Budget() {
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<"calendar" | "projection">("calendar");
-  // ONE range for the whole overview. Every card that can honestly be re-cut by
-  // period follows it; the ones that can't (All Banks, Weekly Balance Check,
-  // Rent, Bank Accounts) simply ignore it and keep showing what they mean.
-  const [range, setRange] = useState<RangeMode>("monthly");
+  // The overview reads as a single month.
+  const range: RangeMode = "monthly";
   const cfMode = range;
   const paceRange = range;
 
@@ -712,7 +701,7 @@ export default function Budget() {
     return Array.from(weeks.entries()).sort((a, b) => a[0] - b[0]).map(([w, v]) => ({ label: `W${w}`, inflow: v.inflow, outflow: v.outflow }));
   }, [cfMode, computed.groups, yearMonths.months]);
 
-  // ── Windowed spend, one bucket per range tab ──────────────────────────────
+  // ── Windowed spend, bucketed by period ───────────────────────────────────
   // Feeds the SUMMARY cards (Safe to Spend, Where It Went, Category Spend).
   // Reads from the year's rows when they're loaded so "today" and "last 7 days"
   // stay correct across a month boundary; falls back to the month's rows.
@@ -793,7 +782,7 @@ export default function Budget() {
     return { cum: cumulate(quarters), labels: ["Q1", "Q2", "Q3", "Q4"], budget: yearBudget, upTo: Math.ceil(monthsUpTo / 3), span: 4, scope: String(year) };
   }, [paceRange, intel, computed.groups, yearMonths.months, year, month]);
 
-  // Income / expenses / net for whatever range the switcher is on. The monthly
+  // Income / expenses / net for the month. The monthly
   // view keeps the old behaviour exactly (register totals + Amazon net) so the
   // headline numbers don't move; the other ranges read off the windowed rows.
   const rangeTotals = useMemo(() => {
@@ -981,12 +970,6 @@ export default function Budget() {
             <div style={labelCap()}>Month</div>
             <ThemedMonthPicker value={month} onChange={setMonth} width={180} onOpenChange={setMonthPickerOpen} />
           </div>
-          {tab === "overview" && (
-            <div>
-              <div style={labelCap()}>Range</div>
-              <RangeTabs value={range} onChange={setRange} wide />
-            </div>
-          )}
         </div>
 
         {/* Tabs (top-level nav) */}
@@ -1025,8 +1008,7 @@ export default function Budget() {
             delta={prevAllBanks !== null ? allBanks - prevAllBanks : null}
             currency={currency}
           />
-          {/* These three follow the range switcher. Amazon net is only folded in
-              on the month view, where it's actually scoped to the same period. */}
+          {/* Month totals — Amazon net is folded into income here. */}
           <StatTile label="Income" value={fmtMoney(rangeTotals.income, currency)} sub={`${RANGE_WINDOW_LABEL[range]} inflows${range === "monthly" ? " · incl. Amazon" : ""}`} valueColor={HOME_THEME.green} />
           <StatTile label="Expenses" value={fmtMoney(rangeTotals.expenses, currency)} sub={`${RANGE_WINDOW_LABEL[range]} outflows`} valueColor={SOFT_RED} />
           <StatTile label="Net Profit" value={fmtMoney(rangeTotals.net, currency)} sub="Income − expenses" valueColor={rangeTotals.net < 0 ? SOFT_RED : HOME_THEME.green} />
@@ -1042,7 +1024,7 @@ export default function Budget() {
           <BalanceCheckCard data={reconcile} currency={currency} />
         </div>
 
-        {/* Cash flow (D/W/M) + calendar / projection */}
+        {/* Cash flow + calendar / projection */}
         <div style={{ display: "grid", gridTemplateColumns: "1.55fr 1fr", gap: 12, alignItems: "stretch" }}>
           <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 14 }}>
@@ -1722,40 +1704,6 @@ function EditableDate({ value, onCommit }: { value: string; onCommit: (v: string
 
 // ── Overview building blocks ─────────────────────────────────────────────────
 
-/**
- * Compact D / W / M / Y period switcher. Sits in a card header next to the
- * title; letters (not words) so it fits in a 280px card without wrapping —
- * the full word is on the tooltip.
- */
-function RangeTabs({ value, onChange, options = RANGE_MODES, wide }: { value: RangeMode; onChange: (v: RangeMode) => void; options?: RangeMode[]; wide?: boolean }) {
-  return (
-    <div style={{ display: "inline-flex", gap: 2, padding: 3, borderRadius: 999, border: `1px solid ${HAIRLINE}`, background: "rgba(0,0,0,0.40)", flex: "none" }}>
-      {options.map((o) => {
-        const on = o === value;
-        return (
-          <button
-            key={o}
-            type="button"
-            title={RANGE_TITLE[o]}
-            onClick={() => onChange(o)}
-            style={{
-              padding: wide ? "6px 16px" : "3px 9px", borderRadius: 999, border: "none", cursor: "pointer",
-              background: on ? bRgba(HOME_THEME.cyan, 0.30) : "transparent",
-              boxShadow: on ? `0 0 14px ${bRgba(HOME_THEME.cyan, 0.40)}, ${EDGE_LIGHT}` : "none",
-              color: on ? LIGHT_BLUE : "rgba(255,255,255,0.48)",
-              fontSize: wide ? 13 : 11, fontWeight: 900, letterSpacing: "0.08em", lineHeight: 1.4,
-              textTransform: "uppercase",
-              transition: "background .15s ease, color .15s ease",
-            }}
-          >
-            {wide ? RANGE_TITLE[o] : RANGE_LETTER[o]}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function Segmented({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
   return (
     <div style={{ display: "inline-flex", padding: 3, borderRadius: 10, background: "rgba(0,0,0,0.35)", border: `1px solid ${HOME_THEME.border}` }}>
@@ -1827,20 +1775,15 @@ function IntelHeader({ title, right }: { title: string; right?: React.ReactNode 
 /**
  * Safe-to-Spend: what's left after every bill still due this month, expressed
  * at whatever cadence the tab asks for. There's no yearly reading — the pot is
- * this month's — so the card offers D / W / M only.
  */
 function SafeToSpendCard({ intel, currency, range }: { intel: Intel; currency: string; range: RangeMode }) {
-  // safe is a fixed pot for the rest of the month; the tab just re-expresses
-  // the burn rate: per day, per week (7 days of it), or the whole pot.
-  // There is no yearly reading — the pot is this month's — so Yearly falls
-  // back to the whole-month figure rather than inventing a number.
   const rate = range === "monthly" || range === "yearly" ? intel.safe : range === "weekly" ? intel.safePerDay * 7 : intel.safePerDay;
   const unit = range === "monthly" || range === "yearly" ? "left this month" : range === "weekly" ? "/week" : "/day";
   const neg = rate < 0;
   const pct = Math.min(100, Math.max(0, (intel.todayDay / intel.daysInMonth) * 100));
   return (
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
-      <IntelHeader title="Safe to Spend" right={<span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, opacity: 0.55 }}>{RANGE_TITLE[range].toUpperCase()}</span>} />
+      <IntelHeader title="Safe to Spend" />
       <div style={{ fontSize: 34, fontWeight: 900, fontVariantNumeric: "tabular-nums", color: neg ? SOFT_RED : LIGHT_BLUE, textShadow: `0 0 30px ${bRgba(neg ? SOFT_RED : LIGHT_BLUE, 0.6)}` }}>
         {fmtMoney(rate, currency)}<span style={{ fontSize: 14, fontWeight: 800, opacity: 0.7 }}> {unit}</span>
       </div>
@@ -1886,7 +1829,7 @@ function SpendPaceCard({ series, currency, range }: { series: PaceSeries; curren
   const step = Math.max(1, Math.ceil(series.labels.length / 7));
   return (
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
-      <IntelHeader title="Spend Pace" right={<span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, opacity: 0.55 }}>{RANGE_TITLE[range].toUpperCase()}</span>} />
+      <IntelHeader title="Spend Pace" />
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: -6, marginBottom: 8 }}>
         <span style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6 }}>{series.scope}</span>
         <span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.08em", padding: "3px 10px", borderRadius: 999, color: over ? SOFT_RED : HOME_THEME.green, background: bRgba(over ? SOFT_RED : HOME_THEME.green, 0.12), border: `1px solid ${bRgba(over ? SOFT_RED : HOME_THEME.green, 0.4)}`, boxShadow: `0 0 12px ${bRgba(over ? SOFT_RED : HOME_THEME.green, 0.25)}` }}>
@@ -1957,7 +1900,7 @@ function CategoryDonutCard({ slices, currency, range }: { slices: Intel["slices"
 
   return (
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
-      <IntelHeader title="Where It Went" right={<span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.muted, opacity: 0.55 }}>{RANGE_TITLE[range].toUpperCase()}</span>} />
+      <IntelHeader title="Where It Went" />
       <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: -6, marginBottom: 8 }}>{RANGE_WINDOW_LABEL[range]}</div>
       {total <= 0 ? (
         <div style={{ flex: 1, display: "grid", placeItems: "center", opacity: 0.55, fontSize: 14, textAlign: "center" }}>No categorized spend {RANGE_WINDOW_LABEL[range].toLowerCase()}.</div>
