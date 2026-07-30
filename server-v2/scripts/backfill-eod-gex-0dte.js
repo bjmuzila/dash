@@ -36,10 +36,26 @@
  * Dry run by default: it prints what each session would get and touches nothing.
  */
 
+const path = require('node:path');
 const { Pool } = require('pg');
 // From computation/utils (pure) rather than eod-gex-recorder, so this script
 // doesn't pull in the recorder's Theta/TT module graph or its timers.
 const { etEpochMs } = require('../computation/utils');
+
+// DATABASE_URL lives in .env.local (the same file server-with-proxy.js loads with
+// dotenv override:true, and the only env_file the dashboard container mounts).
+// Load it ourselves when it isn't already in the environment, so this runs the
+// same way from a bare shell on the host as it does inside the container —
+// otherwise a host run just prints "DATABASE_URL is not set" and looks broken.
+if (!process.env.DATABASE_URL) {
+  const ROOT = path.join(__dirname, '..', '..');
+  for (const f of ['.env.local', '.env']) {
+    try {
+      require('dotenv').config({ path: path.join(ROOT, f), override: false });
+    } catch { /* dotenv absent — fall through to the explicit error below */ }
+    if (process.env.DATABASE_URL) { console.log(`[backfill-0dte] loaded DATABASE_URL from ${f}`); break; }
+  }
+}
 
 // Kept in sync with fetchSpxLadder's guards by intent — if you change them
 // there, change them here, or a backfilled bar stops matching a live one.
@@ -57,6 +73,9 @@ function parseArgs(argv) {
     else if (a.startsWith('--from=')) out.from = a.slice(7);
     else if (a.startsWith('--to=')) out.to = a.slice(5);
     else if (a.startsWith('--symbol=')) out.symbol = a.slice(9);
+    // `node -r dotenv/config script.js dotenv_config_path=…` puts dotenv's own
+    // settings in argv; ignore them instead of aborting on "unknown arg".
+    else if (a.startsWith('dotenv_config_')) continue;
     else {
       console.error(`unknown arg: ${a}`);
       process.exit(2);
@@ -68,13 +87,22 @@ function parseArgs(argv) {
 function getPool() {
   const cs = process.env.DATABASE_URL;
   if (!cs) {
-    console.error('DATABASE_URL is not set — nothing to back fill.');
+    console.error('DATABASE_URL is not set, and no .env.local / .env at the repo root supplied one.');
+    console.error('Run it where the DB is configured, e.g. inside the dashboard container:');
+    console.error('  docker compose exec dashboard node server-v2/scripts/backfill-eod-gex-0dte.js');
     process.exit(2);
   }
+  // SSL rule copied VERBATIM from eod-gex-recorder.js getPool(): TLS for every
+  // non-loopback host, regardless of what sslmode says in the URL. Gating on
+  // `sslmode=require` instead (the obvious-looking choice) connects in the clear
+  // to a TLS-only server, which closes the socket and surfaces as a bare
+  // "read ECONNRESET" that looks like a network problem rather than a TLS one.
+  const loopback = cs.includes('localhost') || cs.includes('127.0.0.1');
   return new Pool({
     connectionString: cs,
-    ssl: /sslmode=require/.test(cs) ? { rejectUnauthorized: false } : undefined,
+    ssl: loopback ? undefined : { rejectUnauthorized: false },
     max: 3,
+    keepAlive: true,
   });
 }
 
@@ -221,5 +249,13 @@ async function main() {
 
 main().catch((e) => {
   console.error('[backfill-0dte] FAILED:', e.message);
+  // Connection-level failures from a developer machine are almost always reach,
+  // not logic: the Postgres host may only accept connections from the VPS.
+  if (/ECONNRESET|ETIMEDOUT|ECONNREFUSED|EHOSTUNREACH|terminat/i.test(String(e.message))) {
+    console.error('');
+    console.error('That is a connection failure, not a data problem. If this host cannot reach');
+    console.error('the database directly, run it where the app already does:');
+    console.error('  docker compose exec dashboard node server-v2/scripts/backfill-eod-gex-0dte.js');
+  }
   process.exit(1);
 });

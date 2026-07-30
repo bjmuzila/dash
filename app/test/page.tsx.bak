@@ -1264,52 +1264,12 @@ function OiByExpirationPanel({ symbol, expirations }: { symbol: string; expirati
 
 // ── SPX EOD GEX by date ─────────────────────────────────────────────────────
 // Same once-a-day bar-chart treatment as "Open interest by expiration" above,
-// but the x-axis is trading DATE and the bar is that session's net GEX from the
-// eod_gex table (written by server-v2/eod-gex-recorder.js). Read via
+// but the x-axis is trading DATE and the bar is that session's total net GEX
+// from the eod_gex table (written by server-v2/eod-gex-recorder.js). Read via
 // GET /api/eod-gex?symbol=$SPX&limit=N — same endpoint /es-candles uses for the
 // prior-day SPX close. Positive net GEX = light blue, negative = red.
-//
-// WHICH COLUMN TO CHART. `total_gex` is NOT chartable as a single series: its
-// basis depends on which writer touched the row last (0DTE OI-only from the PM
-// ladder, ALL-expiration OI+Vol from the AM settled pass that overwrites it,
-// front-expiry OI+Vol from the header fallback). See the COLUMN BASES block at
-// the top of server-v2/eod-gex-recorder.js. The two columns below each have
-// exactly one definition, both on the OI+Vol basis the walls, the flip and
-// $Gamma already use:
-//   total_gex_0dte    0DTE expiry only          → "SPX EOD GEX by session"
-//   total_gex_ex0dte  every expiry except 0DTE  → the ex-0DTE card
-// A session missing one is DROPPED from that chart rather than plotted on the
-// wrong basis, so early sessions (recorded before net_vol_gex existed in the
-// per-strike ladder) can legitimately be absent until backfilled:
-//   node server-v2/scripts/backfill-eod-gex-0dte.js --commit
-type EodGexRow = {
-  date: string;
-  totalGex: number;
-  totalGexEx0dte: number | null;
-  totalGex0dte: number | null;
-  spot: number;
-};
-type EodGexField = "totalGex" | "totalGexEx0dte" | "totalGex0dte";
-
-// Per-field labelling for chart/tooltip/legend/empty states, so adding a basis
-// doesn't mean threading another boolean through three components.
-const EOD_GEX_FIELD_META: Record<EodGexField, { label: string; empty: string; note: string }> = {
-  totalGex: {
-    label: "Net GEX (legacy, mixed basis)",
-    empty: "no eod_gex rows",
-    note: "eod_gex.total_gex — basis varies by source, reference only",
-  },
-  totalGex0dte: {
-    label: "Net GEX (0DTE, OI+Vol)",
-    empty: "no 0DTE OI+Vol rows yet — run scripts/backfill-eod-gex-0dte.js",
-    note: "eod_gex.total_gex_0dte, OI+Vol",
-  },
-  totalGexEx0dte: {
-    label: "Net GEX (ex-0DTE, OI+Vol)",
-    empty: "no ex-0DTE data yet",
-    note: "eod_gex.total_gex_ex0dte, OI+Vol",
-  },
-};
+type EodGexRow = { date: string; totalGex: number; totalGexEx0dte: number | null; spot: number };
+type EodGexField = "totalGex" | "totalGexEx0dte";
 
 const EOD_GEX_SYMBOL = "$SPX";
 const EOD_GEX_DAYS = 30;
@@ -1330,20 +1290,11 @@ function useEodGex(days: number) {
       const raw: unknown[] = Array.isArray(json?.rows) ? json.rows : [];
       const next: EodGexRow[] = raw
         .map((r) => {
-          const o = r as {
-            date?: string;
-            total_gex?: number | string;
-            total_gex_ex0dte?: number | string | null;
-            total_gex_0dte?: number | string | null;
-            spot?: number | string;
-          };
+          const o = r as { date?: string; total_gex?: number | string; total_gex_ex0dte?: number | string | null; spot?: number | string };
           return {
             date: String(o.date ?? "").slice(0, 10),
             totalGex: Number(o.total_gex ?? 0) || 0,
             totalGexEx0dte: o.total_gex_ex0dte == null ? null : (Number(o.total_gex_ex0dte) || 0),
-            // null (not 0) when the row predates the column or the writer
-            // couldn't produce this basis — the chart drops those sessions.
-            totalGex0dte: o.total_gex_0dte == null ? null : (Number(o.total_gex_0dte) || 0),
             spot: Number(o.spot ?? 0) || 0,
           };
         })
@@ -1367,13 +1318,11 @@ function useEodGex(days: number) {
 function EodGexBarChart({ rows, field = "totalGex" }: { rows: EodGexRow[]; field?: EodGexField }) {
   const W = 700, H = 240, padL = 52, padR = 12, padB = 34, padT = 16;
   const { containerRef, hover, show, hide } = useChartHover();
-  // The OI+Vol columns can be null (sessions older than the column, or a writer
-  // that couldn't produce that basis) — drop them so a bar is never plotted on a
-  // basis it wasn't measured on.
+  // ex-0DTE rows can be null (older sessions / unreadable chain) — drop them so
+  // the bar chart only plots sessions that actually have a settled ex-0DTE total.
   const data = rows.filter((r) => Number.isFinite(r[field] as number));
   const val = (r: EodGexRow) => (r[field] as number) ?? 0;
-  const meta = EOD_GEX_FIELD_META[field];
-  if (!data.length) return <GlEmpty note={meta.empty} />;
+  if (!data.length) return <GlEmpty note={field === "totalGexEx0dte" ? "no ex-0DTE data yet" : "no eod_gex rows"} />;
   const n = data.length;
   const maxAbs = Math.max(1, ...data.map((r) => Math.abs(val(r))));
   const slotW = (W - padL - padR) / n;
@@ -1426,7 +1375,7 @@ function EodGexBarChart({ rows, field = "totalGex" }: { rows: EodGexRow[]; field
       {hover && (
         <ChartTooltip x={hover.x} y={hover.y}>
           <div style={{ fontWeight: 800 }}>{glFmtDate(data[hover.idx].date)}</div>
-          <div>{meta.label}: {glFmtBn(val(data[hover.idx]))}</div>
+          <div>{field === "totalGexEx0dte" ? "Net GEX (ex-0DTE)" : "Net GEX"}: {glFmtBn(val(data[hover.idx]))}</div>
           <div>SPX close: {glFmt2(data[hover.idx].spot)}</div>
         </ChartTooltip>
       )}
@@ -1436,13 +1385,8 @@ function EodGexBarChart({ rows, field = "totalGex" }: { rows: EodGexRow[]; field
 
 function EodGexPanel({ field = "totalGex" }: { field?: EodGexField }) {
   const { rows, loading, err, loadedAt, refresh } = useEodGex(EOD_GEX_DAYS);
-  const meta = EOD_GEX_FIELD_META[field];
-  // Count what's actually plottable on THIS basis, and surface how many sessions
-  // were dropped — a silently short chart reads as "the market was quiet", not
-  // as "those rows have no value for this column yet".
-  const plottable = rows.filter((r) => Number.isFinite(r[field] as number)).length;
-  const dropped = rows.length - plottable;
-  const hasData = plottable > 0;
+  const ex0dte = field === "totalGexEx0dte";
+  const hasData = ex0dte ? rows.some((r) => r.totalGexEx0dte != null) : rows.length > 0;
   const updatedLabel = loadedAt
     ? new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit" }).format(new Date(loadedAt))
     : null;
@@ -1450,148 +1394,17 @@ function EodGexPanel({ field = "totalGex" }: { field?: EodGexField }) {
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
         <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6 }}>
-          {loading
-            ? "Loading…"
-            : updatedLabel
-              ? `Loaded ${updatedLabel} ET · ${plottable} session${plottable === 1 ? "" : "s"} (${meta.note})` +
-                (dropped > 0 ? ` · ${dropped} without this basis, not shown` : "")
-              : "—"}
+          {loading ? "Loading…" : updatedLabel ? `Loaded ${updatedLabel} ET · one bar per session (eod_gex${ex0dte ? ", ex-0DTE" : ""})` : "—"}
         </div>
         <button onClick={refresh} style={{ ...homeButtonStyle, padding: "4px 10px", fontSize: 14, marginLeft: "auto" }}>Refresh</button>
       </div>
       {err && <div style={{ fontSize: 14, color: HOME_THEME.red, marginBottom: 8 }}>EOD GEX error: {err}</div>}
       {!hasData && !err ? (
-        <GlEmpty note={loading ? "loading eod_gex…" : meta.empty} />
+        <GlEmpty note={loading ? "loading eod_gex…" : ex0dte ? "no ex-0DTE data yet" : "no data yet"} />
       ) : (
         <>
           <EodGexBarChart rows={rows} field={field} />
-          <ChartLegend items={[{ label: `Positive · ${meta.label}`, color: LIGHT_BLUE }, { label: `Negative · ${meta.label}`, color: HOME_THEME.red }]} />
-        </>
-      )}
-    </div>
-  );
-}
-
-// ── Per-strike net GEX across expirations (all + ex-0DTE) ───────────────────
-//
-// The original "Net gamma exposure by strike" card draws /proxy/gex, which is a
-// SINGLE expiry (0DTE for SPX). These two ladders are the same curve widened to
-// the whole board, from GET /proxy/gex-by-strike-multi:
-//   all     every listed expiration, 0DTE included
-//   ex0dte  every listed expiration except the 0DTE one
-// Both OI+Vol via the server's computeGexRows, so they are directly comparable
-// to the 0DTE card and to eod_gex.total_gex_0dte / total_gex_ex0dte.
-//
-// Server-side cached ~60s (the sweep is one upstream fetch per expiration), so
-// this polls at 60s rather than riding the 15s /proxy/gex loop.
-type GexMultiLadder = { rows: GexLevelsRow[]; totalNetGex: number | null; gexFlip: number | null };
-type GexMultiPayload = {
-  spot: number;
-  sessionDate: string;
-  expiryCount: number;
-  all: GexMultiLadder;
-  ex0dte: GexMultiLadder;
-  updatedAt: number;
-  cached: boolean;
-};
-
-const GEX_MULTI_POLL_MS = 60_000;
-
-// The endpoint ships slim rows ({ strike, netGEX, netVolGEX }) — everything the
-// cumulative curve needs, since glOiVolNet sums exactly those two. Fill the rest
-// of GexLevelsRow with zeros so the shared chart components stay untouched.
-function multiRow(r: unknown): GexLevelsRow {
-  const o = (r ?? {}) as { strike?: number; netGEX?: number; netVolGEX?: number };
-  return {
-    strike: Number(o.strike ?? 0),
-    callOI: 0, putOI: 0, callVolume: 0, putVolume: 0,
-    callGEX: 0, putGEX: 0,
-    netGEX: Number(o.netGEX ?? 0),
-    netVolGEX: Number(o.netVolGEX ?? 0),
-    netDEX: 0,
-  };
-}
-
-function parseMultiLadder(v: unknown): GexMultiLadder {
-  const o = (v ?? {}) as { rows?: unknown[]; totalNetGex?: number | null; gexFlip?: number | null };
-  const rows = Array.isArray(o.rows) ? o.rows.map(multiRow).filter((r) => Number.isFinite(r.strike) && r.strike > 0) : [];
-  return {
-    rows,
-    totalNetGex: o.totalNetGex == null ? null : Number(o.totalNetGex),
-    gexFlip: o.gexFlip == null ? null : Number(o.gexFlip),
-  };
-}
-
-function useGexByStrikeMulti(symbol: string) {
-  const [data, setData] = useState<GexMultiPayload | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const run = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`/proxy/gex-by-strike-multi?symbol=${encodeURIComponent(symbol)}`, { cache: "no-store" });
-      const json = await res.json();
-      if (!res.ok || json?.ok === false) throw new Error(String(json?.error || `HTTP ${res.status}`));
-      setData({
-        spot: Number(json.spot ?? 0),
-        sessionDate: String(json.sessionDate ?? ""),
-        expiryCount: Number(json.expiryCount ?? 0),
-        all: parseMultiLadder(json.all),
-        ex0dte: parseMultiLadder(json.ex0dte),
-        updatedAt: Number(json.updatedAt ?? Date.now()),
-        cached: !!json.cached,
-      });
-      setErr(null);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [symbol]);
-
-  useEffect(() => {
-    let alive = true;
-    const tick = () => { if (alive) void run(); };
-    tick();
-    const id = setInterval(tick, GEX_MULTI_POLL_MS);
-    return () => { alive = false; clearInterval(id); };
-  }, [run]);
-
-  return { data, loading, err, refresh: run };
-}
-
-// One net-gamma card body for a multi-expiry ladder. Same chart component the
-// 0DTE card uses, so the three read identically.
-function NetGammaMultiPanel({
-  ladder, spot, loading, err, refresh, scopeNote,
-}: {
-  ladder: GexMultiLadder | null;
-  spot: number;
-  loading: boolean;
-  err: string | null;
-  refresh: () => void;
-  scopeNote: string;
-}) {
-  return (
-    <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-        <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6 }}>
-          {loading && !ladder
-            ? "Loading…"
-            : ladder
-              ? `${scopeNote} · total ${glFmtBn(ladder.totalNetGex)} · flip ${ladder.gexFlip != null ? glFmt0(ladder.gexFlip) : "—"}`
-              : "—"}
-        </div>
-        <button onClick={refresh} style={{ ...homeButtonStyle, padding: "4px 10px", fontSize: 14, marginLeft: "auto" }}>Refresh</button>
-      </div>
-      {err && <div style={{ fontSize: 14, color: HOME_THEME.red, marginBottom: 8 }}>Multi-expiry GEX error: {err}</div>}
-      {!ladder || !ladder.rows.length ? (
-        <GlEmpty note={loading ? "sweeping the board…" : err ? "no ladder available" : "no strikes returned"} />
-      ) : (
-        <>
-          <NetGammaByStrikeChart rows={ladder.rows} spot={spot} neutral={ladder.gexFlip} />
-          <ChartLegend items={[{ label: "Positive gamma$", color: GEX_POS_GREEN }, { label: "Negative gamma$", color: HOME_THEME.red }, { label: "Spot", color: LIGHT_BLUE }]} />
+          <ChartLegend items={[{ label: `Positive net GEX${ex0dte ? " (ex-0DTE)" : ""}`, color: LIGHT_BLUE }, { label: `Negative net GEX${ex0dte ? " (ex-0DTE)" : ""}`, color: HOME_THEME.red }]} />
         </>
       )}
     </div>
@@ -1808,11 +1621,7 @@ function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
 // by-strike charts (net gamma, call/put gamma, net delta).
 const LEFT_CARD_KEYS = ["oiDate", "eodGex", "eodGexEx0dte", "history"] as const;
 type LeftCardKey = (typeof LEFT_CARD_KEYS)[number];
-// netGammaAll / netGammaEx0dte are the multi-expiry siblings of netGamma (which
-// stays 0DTE-only). useCardOrder appends keys it doesn't find in saved order, so
-// adding them here lands them at the bottom for anyone with a stored layout —
-// no need to bump RIGHT_CARD_ORDER_STORAGE_KEY and reset everyone's arrangement.
-const RIGHT_CARD_KEYS = ["oiExpiry", "netGamma", "netGammaAll", "netGammaEx0dte", "callPutGamma", "netDelta"] as const;
+const RIGHT_CARD_KEYS = ["oiExpiry", "netGamma", "callPutGamma", "netDelta"] as const;
 type RightCardKey = (typeof RIGHT_CARD_KEYS)[number];
 const RIGHT_CARD_ORDER_STORAGE_KEY = "gexlevels-card-order-right-v3";
 const LEFT_CARD_ORDER_STORAGE_KEY = "gexlevels-card-order-left-v3";
@@ -1902,9 +1711,6 @@ function GexLevelsTab() {
   const [history, setHistory] = useState<GlHistoryEntry[]>([]);
 
   const d = useMemo(() => deriveGexLevels(snap), [snap]);
-  // Whole-board per-strike ladders (all expirations + ex-0DTE) for the two
-  // net-gamma cards that widen the 0DTE-only view. Own poll + own cache.
-  const multi = useGexByStrikeMulti(EOD_GEX_SYMBOL);
 
   useEffect(() => {
     // Fast-paint from localStorage, then merge in the forever Postgres history.
@@ -2035,7 +1841,7 @@ function GexLevelsTab() {
                     variant="budget"
                     accent={LIGHT_BLUE}
                     title={<CardTitleRow label="Open interest by date" onDragStart={leftOrder.handleDragStart("oiDate")} onDragEnd={leftOrder.handleDragEnd} />}
-                    subtitle="Total call+put open interest in CONTRACTS (not gamma dollars — no γ, no spot² here), one bar per trading day logged"
+                    subtitle="Total call+put OI, one bar per trading day logged (this browser only)"
                   >
                     <OiByDateChart rows={history} />
                   </Card>
@@ -2045,9 +1851,9 @@ function GexLevelsTab() {
                     variant="budget"
                     accent={LIGHT_BLUE}
                     title={<CardTitleRow label="SPX EOD GEX by session" onDragStart={leftOrder.handleDragStart("eodGex")} onDragEnd={leftOrder.handleDragEnd} />}
-                    subtitle={`0DTE net GEX at the close on the OI+Vol basis — γ × (OI + volume) × spot², the same basis as the walls, the flip and $Gamma · last ${EOD_GEX_DAYS} sessions (eod_gex.total_gex_0dte, ${EOD_GEX_SYMBOL})`}
+                    subtitle={`Total net GEX at the close · last ${EOD_GEX_DAYS} sessions (eod_gex, ${EOD_GEX_SYMBOL})`}
                   >
-                    <EodGexPanel field="totalGex0dte" />
+                    <EodGexPanel />
                   </Card>
                 ),
                 eodGexEx0dte: (
@@ -2055,7 +1861,7 @@ function GexLevelsTab() {
                     variant="budget"
                     accent={LIGHT_BLUE}
                     title={<CardTitleRow label="SPX EOD GEX (ex-0DTE) by session" onDragStart={leftOrder.handleDragStart("eodGexEx0dte")} onDragEnd={leftOrder.handleDragEnd} />}
-                    subtitle={`Net GEX at the close across all listed expirations except 0DTE, same OI+Vol basis as the card above · add the two for the whole-chain total · last ${EOD_GEX_DAYS} sessions (eod_gex.total_gex_ex0dte, ${EOD_GEX_SYMBOL})`}
+                    subtitle={`Net GEX at the close across all listed expirations except 0DTE · last ${EOD_GEX_DAYS} sessions (eod_gex.total_gex_ex0dte, ${EOD_GEX_SYMBOL})`}
                   >
                     <EodGexPanel field="totalGexEx0dte" />
                   </Card>
@@ -2101,45 +1907,11 @@ function GexLevelsTab() {
                   <Card
                     variant="budget"
                     accent={LIGHT_BLUE}
-                    title={<CardTitleRow label={`Net gamma exposure by strike (0DTE${snap?.expiry ? ` · ${glFmtExpiryLabel(snap.expiry)}` : ""})`} onDragStart={rightOrder.handleDragStart("netGamma")} onDragEnd={rightOrder.handleDragEnd} />}
-                    subtitle="The live feed's SINGLE expiry. Cumulative across ALL its strikes — green above zero (dealers long gamma), red below (short gamma); crosses zero at the gamma flip (Neutral) · scroll to zoom, drag to pan, double-click to reset"
+                    title={<CardTitleRow label="Net gamma exposure by strike" onDragStart={rightOrder.handleDragStart("netGamma")} onDragEnd={rightOrder.handleDragEnd} />}
+                    subtitle="Cumulative across ALL listed strikes — green above zero (dealers long gamma), red below (short gamma); crosses zero at the gamma flip (Neutral) · scroll to zoom, drag to pan, double-click to reset"
                   >
                     <NetGammaByStrikeChart rows={d.rows} spot={d.spot} neutral={d.neutral} />
                     <ChartLegend items={[{ label: "Positive gamma$", color: GEX_POS_GREEN }, { label: "Negative gamma$", color: HOME_THEME.red }, { label: "Spot", color: LIGHT_BLUE }]} />
-                  </Card>
-                ),
-                netGammaAll: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Net gamma exposure by strike (all expirations)" onDragStart={rightOrder.handleDragStart("netGammaAll")} onDragEnd={rightOrder.handleDragEnd} />}
-                    subtitle="Every listed expiration combined, 0DTE included — the whole board's cumulative gamma$ profile · OI+Vol basis · refreshed once a minute"
-                  >
-                    <NetGammaMultiPanel
-                      ladder={multi.data?.all ?? null}
-                      spot={multi.data?.spot ?? d.spot}
-                      loading={multi.loading}
-                      err={multi.err}
-                      refresh={multi.refresh}
-                      scopeNote={`${multi.data?.expiryCount ?? 0} expirations`}
-                    />
-                  </Card>
-                ),
-                netGammaEx0dte: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Net gamma exposure by strike (ex-0DTE)" onDragStart={rightOrder.handleDragStart("netGammaEx0dte")} onDragEnd={rightOrder.handleDragEnd} />}
-                    subtitle="Same board with the 0DTE expiry removed — what's left standing after today expires · OI+Vol basis · refreshed once a minute"
-                  >
-                    <NetGammaMultiPanel
-                      ladder={multi.data?.ex0dte ?? null}
-                      spot={multi.data?.spot ?? d.spot}
-                      loading={multi.loading}
-                      err={multi.err}
-                      refresh={multi.refresh}
-                      scopeNote={`${Math.max(0, (multi.data?.expiryCount ?? 0) - 1)} expirations, 0DTE excluded`}
-                    />
                   </Card>
                 ),
                 callPutGamma: (
@@ -2227,9 +1999,8 @@ const OVERVIEW_CARDS: OverviewCardDef[] = [
     blurb: "SqueezeMetrics-style GEX dashboard for the live 0DTE symbol.",
     points: [
       "Resistance / Support / Neutral levels + $Gamma and CPG gauges",
-      "SPX EOD GEX bar charts — 0DTE and ex-0DTE net GEX at the close, both on the OI+Vol basis, one bar per session (eod_gex)",
-      "Cumulative net gamma by strike at three scopes — 0DTE only, all expirations, and ex-0DTE",
-      "Open interest by expiration and by date (contract counts, real, once/day), call/put gamma and net delta charts",
+      "SPX EOD GEX bar charts — total net GEX and ex-0DTE net GEX at the close, one bar per session (eod_gex)",
+      "Open interest by expiration (real, once/day), cumulative net gamma, call/put gamma, net delta, and OI-by-date charts",
       "Daily history of level changes persisted forever in Postgres (gex_levels_history)",
     ],
   },
