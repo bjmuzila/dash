@@ -29,6 +29,19 @@ export const SOFT_RED = "#f4948e";
 /** The one card accent — light blue. */
 export const LIGHT_BLUE = "#7dd3fc";
 
+/**
+ * RETA_PALETTE — the four accents used by the /owner/reta tracker, kept here so
+ * the page never hardcodes hex. Brandon = blue, Heather = magenta; peach marks
+ * reconstitution figures (mg/mL) and green marks progress (weight lost, the
+ * recon in force). `blue` is the same value as LIGHT_BLUE above.
+ */
+export const RETA_PALETTE = {
+  blue: LIGHT_BLUE,
+  magenta: "#E57DFC",
+  peach: "#FCA57D",
+  green: "#94FC7D",
+} as const;
+
 const SHELL_GLOW =
   "radial-gradient(circle at 15% 50%, rgba(33,158,188,0.04) 0%, transparent 50%), radial-gradient(circle at 85% 30%, rgba(18,103,131,0.05) 0%, transparent 50%)";
 

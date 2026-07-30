@@ -1,7 +1,6 @@
-"use client";
-
 /**
- * /owner/reta — retatrutide protocol tracker (owner-only).
+ * /owner/reta — retatrutide protocol tracker (owner-only). owner-vite page;
+ * the Next twin at app/owner/reta/page.tsx is the fallback copy.
  *
  * TWO HALVES, ONE SOURCE OF TRUTH
  *   1. RECON CALCULATOR — vial mg + BAC water mL → concentration, and each
@@ -19,14 +18,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { CSSProperties } from "react";
-import { HOME_THEME, RETA_PALETTE, SOFT_RED, homeInputStyle, statTileStyle } from "@/components/shared/homeTheme";
-import { Card, PageShell } from "@/components/shared/PageCard";
-import { ThemedDatePicker } from "@/components/shared/ThemedDatePicker";
-
-// Clerk/Supabase session is mounted at runtime, so don't prerender (same as
-// the budget page).
-export const dynamic = "force-dynamic";
+import type { CSSProperties, ReactNode } from "react";
+import { HOME_THEME, RETA_PALETTE, SOFT_RED, homeInputStyle, statTileStyle } from "../lib/theme";
+import { Card, PageShell } from "../components/PageCard";
+import { ThemedDatePicker } from "../components/ThemedDatePicker";
 
 // ── types ────────────────────────────────────────────────────────────────────
 type PersonKey = "brandon" | "heather";
@@ -134,7 +129,7 @@ const TH: CSSProperties = {
 };
 
 /** Numbered step badge, matching the calculator's "1 / 2 / 3" markers. */
-function Step({ n, children }: { n: number; children: React.ReactNode }) {
+function Step({ n, children }: { n: number; children: ReactNode }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
       <span

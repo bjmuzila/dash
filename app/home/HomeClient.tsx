@@ -21,7 +21,6 @@ import GexToolbar from "@/components/dashboard/GexToolbar";
 // Reuse the exact standalone /options-chain component for the heatmap panel's
 // "Chain" tab. expirySelection="key" = compact 0DTE/1DTE/weekly/monthly columns
 // (same embed the /new-home page uses); ticker hides its own ticker input.
-import OptionsChainPage from "@/app/options-chain/page";
 import FitScale from "@/components/shared/FitScale";
 import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
 import StrikeHoverCard from "@/components/dashboard/StrikeHoverCard";
@@ -626,28 +625,21 @@ export function HomeClient({
   // Basis for the SPY 0DTE / QQQ 0DTE net GEX columns. Independent of the SPX
   // columns beside them, which always render OI+Vol and Vol-only side by side.
   const [sideBasis, setSideBasis] = useState<GexBasis>("oi-vol");
-  // Heatmap panel view: "heatmap" = colored cell backgrounds; "chain" = embedded
-  // option chain. ("table" divergent-bars view retired from the switcher; kept in
-  // the union so its now-unreachable render branch stays valid without a refactor.)
-  const [heatmapView, setHeatmapView] = useState<"heatmap" | "table" | "chain">("heatmap");
+  // Heatmap panel view. The embedded option-chain view and its Heatmap|Chain
+  // switch were removed — this card is the heatmap, full stop. ("table"
+  // divergent-bars was already retired from the switcher; it stays in the union
+  // so its render branch keeps type-checking without a wider refactor.)
+  // Wrapped in an IIFE so TypeScript keeps the declared union instead of
+  // narrowing the const to the literal "heatmap" — the retired "table" render
+  // branch below still has to type-check.
+  const heatmapView = ((): "heatmap" | "table" => "heatmap")();
   // Δ stamps on the heatmap's NET GEX column. 0 = off (today's view).
   const [deltaWindow, setDeltaWindow] = useState<0 | 5 | 15 | 30>(0);
   // GEX chart card view: the Net GEX bar chart, or the live ES 5m candles in its
   // place. Moved here from the bottom tab strip.
   const [gexView, setGexView] = useState<"gex" | "escandles">("gex");
-  // Home option-chain ticker override. `chainTicker` drives the embed; `chainTickerInput`
-  // is the raw text field. Both revert to SPX on any tab change (see effect below).
-  const [chainTicker, setChainTicker] = useState("SPX");
-  const [chainTickerInput, setChainTickerInput] = useState("SPX");
   // 30-min rolling net GEX per strike, pulled from the history DB.
   const [rollingByStrike, setRollingByStrike] = useState<Map<number, number>>(new Map());
-
-  // Always defer the home option chain back to SPX whenever a tab changes
-  // (heatmap/chain switch or the left-column tab).
-  useEffect(() => {
-    setChainTicker("SPX");
-    setChainTickerInput("SPX");
-  }, [heatmapView, activeTab]);
 
   useEffect(() => {
     quoteSnapshotsRef.current = quoteSnapshots;
@@ -1032,7 +1024,7 @@ export function HomeClient({
     sideBasis,
     selectedExpiry,
     60_000,
-    heatmapView !== "chain"
+    true,
   );
   // Effect, not a render-phase assignment — the ref is only ever read from the
   // refresh click handler, never during render.
@@ -1672,27 +1664,7 @@ export function HomeClient({
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", whiteSpace: "nowrap" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, color: "#fff", fontWeight: 700, fontSize: 14, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
-                    {heatmapView === "chain" ? "Option Chain" : "Live GEX Heatmap"}
-                    {heatmapView === "chain" && (
-                    <>
-                      <input
-                        value={chainTickerInput}
-                        onChange={(e) => setChainTickerInput(e.target.value.toUpperCase())}
-                        onBlur={() => setChainTicker((chainTickerInput || "SPX").toUpperCase())}
-                        onKeyDown={(e) => { if (e.key === "Enter") setChainTicker((chainTickerInput || "SPX").toUpperCase()); }}
-                        list="home-chain-tickers"
-                        autoComplete="off"
-                        spellCheck={false}
-                        placeholder="SPX"
-                        title="Type a ticker + Enter. Reverts to SPX when you switch tabs."
-                        style={{ marginLeft: 10, width: 70, fontSize: 12, fontWeight: 700, padding: "3px 8px", border: "1px solid rgba(33,158,188,0.35)", borderRadius: 6, background: "linear-gradient(180deg,rgba(33,158,188,.12),rgba(33,158,188,.04))", color: C.cyan, outline: "none", textTransform: "uppercase", letterSpacing: "0.08em" }}
-                      />
-                      <datalist id="home-chain-tickers">
-                        {["SPX", "SPY", "QQQ", "NVDA", "TSLA", "AAPL", "META", "AMZN", "MSFT", "GOOGL", "AMD", "NDX"].map((t) => <option key={t} value={t} />)}
-                      </datalist>
-                    </>
-                    )}
-                    {heatmapView !== "chain" && (
+                    Live GEX Heatmap
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
                       <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Intensity</span>
                       <input
@@ -1736,18 +1708,13 @@ export function HomeClient({
                         ))}
                       </div>
                     </div>
-                    )}
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginLeft: 12 }}>
-                    {heatmapView !== "chain" && (
-                    <>
                     <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4, whiteSpace: "nowrap" }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
                     <button onClick={heatmapRefresh} title="Refresh heatmap"
                       style={{ background: "rgba(33,158,188,0.06)", border: "1px solid rgba(33,158,188,0.25)", color: (heatmapRefreshStyle.color as string) ?? C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 14, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, transition: "color .2s" }}>{heatmapRefreshLabel.startsWith("✓") ? "✓" : heatmapRefreshLabel.startsWith("✗") ? "✗" : heatmapRefreshLabel.startsWith("↻ Refresh") ? "⟳" : "↻"}</button>
                     <BoxSnapBtn targetRef={heatmapBodyRef} label="GEX Heatmap" title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                     <BoxDiscordBtn targetRef={heatmapBodyRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
-                    </>
-                    )}
                     {/* Δ stamps — adds the change to the left of the NET GEX value on
                         the top 5 strikes each side. Heatmap view only. */}
                     {heatmapView === "heatmap" && (
@@ -1775,40 +1742,12 @@ export function HomeClient({
                         ))}
                       </div>
                     )}
-                    {/* Heatmap|Chain switch — pinned as the LAST child so it sits at the
-                        panel's right edge and never shifts when the heatmap-only controls
-                        above it hide in Chain view. */}
-                    <div style={{ display: "flex", gap: 2, marginLeft: 4, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden" }}>
-                      {(["heatmap", "chain"] as const).map((v) => (
-                        <button
-                          key={v}
-                          onClick={() => setHeatmapView(v)}
-                          style={{
-                            padding: "2px 10px",
-                            fontSize: 10,
-                            fontWeight: 700,
-                            textTransform: "uppercase",
-                            letterSpacing: "0.08em",
-                            cursor: "pointer",
-                            border: "none",
-                            fontFamily: "inherit",
-                            background: heatmapView === v ? "rgba(33,158,188,0.14)" : "transparent",
-                            color: heatmapView === v ? "#219EBC" : "#5a7a98",
-                          }}
-                        >
-                          {v}
-                        </button>
-                      ))}
-                    </div>
                   </div>
                 </div>
                 </FitScale>
               </div>
 
               <div ref={heatmapBodyRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative", background: "#05080d" }}>
-                {heatmapView === "chain" ? (
-                  <OptionsChainPage expirySelection="sequential" expiryCount={5} ticker={chainTicker} showGrandTotal={false} />
-                ) : (
                 <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
                 <table style={{ flex: 1, minWidth: 0, height: "100%", textAlign: "right", fontSize: 10, fontFamily: "var(--font-mono)", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
                   <colgroup>
@@ -1997,7 +1936,6 @@ export function HomeClient({
                   </tbody>
                 </table>
                 </div>
-                )}
               </div>
             </div>
           </div>

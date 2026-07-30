@@ -253,8 +253,17 @@ function dash(v?: string): string {
  *
  * If text looks HIGH, lower this. If it looks LOW, raise it. One number, every
  * pill.
+ *
+ * MEASURED, not derived. The formula above predicts ~0.05em, but a real render
+ * disagreed badly: in the HIGH/MEDIUM/LOW pills the gap above the glyphs was
+ * 16px and the gap below 3px (at scale 1.5), i.e. the text sat ~4.7 CSS px too
+ * LOW. So this is tuned from that render rather than from the model — the model
+ * is a useful explanation of the mechanism, not a reliable predictor of the
+ * magnitude. If the pills drift again, re-measure the same way (find the pill's
+ * border rows, then the glyph rows inside them, and compare the two gaps) and
+ * adjust; don't re-derive from font metrics.
  */
-const PILL_NUDGE_EM = 0.08;
+const PILL_NUDGE_EM = 0.42;
 
 function nudgePx(fontSize: number): number {
   return Math.round(PILL_NUDGE_EM * fontSize);
@@ -285,11 +294,22 @@ function earnChipsHTML(rows: EarnRow[], logos: Record<string, string>): string {
   }).join("");
 }
 
-function earnGroupHTML(kind: "pre" | "after", rows: EarnRow[], logos: Record<string, string>): string {
+const EARN_GROUP_LABEL: Record<EarnRow["session"], string> = {
+  pre: "Premarket",
+  after: "After hours",
+  // /proxy/earnings-week reports session:"unknown" when the provider hasn't
+  // confirmed the slot yet. These used to be filtered into oblivion — only
+  // "pre" and "after" were rendered — so a name like AMZN could be in today's
+  // feed and simply never appear on the snapshot. Give them their own group
+  // rather than guessing a session or dropping them.
+  unknown: "Time TBD",
+};
+
+function earnGroupHTML(kind: EarnRow["session"], rows: EarnRow[], logos: Record<string, string>): string {
   if (rows.length === 0) return "";
   return `
     <div class="ern-group">
-      <div class="ern-group-label">${kind === "pre" ? "Premarket" : "After hours"}</div>
+      <div class="ern-group-label">${EARN_GROUP_LABEL[kind]}</div>
       <div class="ern-chips">${earnChipsHTML(rows, logos)}</div>
     </div>`;
 }
@@ -330,6 +350,7 @@ export function buildSnapshotHTML(
   const presTitleSize = px(16, presScale);
   const presRowPadV = px(14, presScale);
   const presTimeCol = px(92, presScale);
+  const presTitleCol = presTimeCol;
 
   // Header labels must fit econNumCol (58 * scale ~= 62px). Bold uppercase runs
   // about 0.72em per glyph, so "FORECAST"/"PREVIOUS" need ~67px and collided
@@ -346,8 +367,13 @@ export function buildSnapshotHTML(
   const pillPadH = px(10, econScale);
   const pillPadV = Math.max(0, Math.round((pillHeight - pillFontSize) / 2));
   const pillNudge = nudgePx(pillFontSize);
+  // Height-preserving: whatever the nudge, top + bottom padding always sums to
+  // 2 * pillPadV, so tuning the centring can never change the pill's size.
+  // (The old form added the nudge to the bottom without taking it off the top
+  // once padTop hit the Math.max(0) floor, so a large nudge silently grew the
+  // pill.)
   const pillPadTop = Math.max(0, pillPadV - pillNudge);
-  const pillPadBot = pillPadV + pillNudge;
+  const pillPadBot = Math.max(0, 2 * pillPadV - pillPadTop);
   const econTimeCol = px(74, econScale);
   const econImpactCol = px(74, econScale);
   const econNumCol = px(58, econScale);
@@ -392,16 +418,39 @@ export function buildSnapshotHTML(
     </div>`;
   }).join("");
 
+  // Presidential titles were rendered raw, and the White House feed writes long
+  // ones ("The President greets the White House Internship Program Summer
+  // Class"). At this column width that wraps to eight lines, the rows push past
+  // the panel, and the last event is sliced off the bottom. Same treatment as
+  // .ec-event above — clip in JS against the measured column width, because
+  // html2canvas implements neither text-overflow:ellipsis nor line-clamp.
+  // 1280 canvas - 60 snapshot padding - 36 grid gaps = 1184 across 6.3fr; the
+  // presidential panel is 1.3fr of that.
+  const PRES_PANEL_W = Math.round((1280 - 60 - 36) * (1.3 / 6.3));
+  const presTitleColW = Math.max(90, PRES_PANEL_W - 14 * 2 - 6 * 2 - presTitleCol - 12);
+  const PRES_TITLE_LINES = 2;
+  const presMaxChars = Math.max(
+    18,
+    Math.floor((presTitleColW / (presTitleSize * 0.56)) * PRES_TITLE_LINES),
+  );
+
   const presRowsHTML = presidentEvents.map(ev => `
     <div class="pres-row">
       <div class="pr-time">${fmtTime(ev)}</div>
-      <div class="pr-title">${ev.title}</div>
+      <div class="pr-title">${clipText(ev.title, presMaxChars)}</div>
     </div>
   `).join("");
 
   const preRows = earnings.filter(e => e.session === "pre").slice(0, 12);
   const afterRows = earnings.filter(e => e.session === "after").slice(0, 12);
-  const ernCount = preRows.length + afterRows.length;
+  // Anything the feed hasn't assigned a session to. Rendered in its own group so
+  // it can't vanish — see EARN_GROUP_LABEL.unknown.
+  const tbdRows = earnings
+    .filter(e => e.session !== "pre" && e.session !== "after")
+    .slice(0, 12);
+  // Count what is actually ON the image, so the badge can never claim more (or
+  // fewer) names than you can see.
+  const ernCount = preRows.length + afterRows.length + tbdRows.length;
 
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/>
 <style>
@@ -424,7 +473,7 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .date-pill{display:inline-block;line-height:1;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:8px;padding:${12 - nudgePx(16)}px 18px ${12 + nudgePx(16)}px;font-weight:800;text-transform:uppercase;font-size: 17px;text-align:center}
 .today-pill{display:inline-block;line-height:1;background:${hexA(HT.cyan, 0.16)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);border-radius:8px;padding:${12 - nudgePx(16)}px 18px ${12 + nudgePx(16)}px;font-weight:800;text-transform:uppercase;font-size: 17px;text-align:center}
 .pill-inner-06{display:inline-block;letter-spacing:0.06em;margin-right:-0.06em}
-.quote{margin:26px auto 6px;text-align:center;font-family:Georgia,"Times New Roman",serif;font-size:22px;font-style:italic;color:var(--muted);padding:0 36px;max-width:1120px;flex-shrink:0}
+.quote{margin:22px auto 6px;text-align:center;font-family:Georgia,"Times New Roman",serif;font-size:30px;font-style:italic;color:var(--muted);padding:0 36px;max-width:1120px;flex-shrink:0}
 /* Econ lane is widened (3.3fr -> 3.6fr) because the Event column was the
    tightest thing on the canvas — titles like "Philly Fed Manufacturing Index"
    had ~200px to live in. Keep the fr total at 6.3 or update ECON_PANEL_W. */
@@ -520,6 +569,7 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
       ${ernCount > 0 ? `<div class="ern-body">
         ${earnGroupHTML("pre", preRows, tickerLogos)}
         ${earnGroupHTML("after", afterRows, tickerLogos)}
+        ${earnGroupHTML("unknown", tbdRows, tickerLogos)}
       </div>` : `<div class="empty-panel">No earnings today</div>`}
     </div>
   </div>

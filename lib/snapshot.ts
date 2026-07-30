@@ -396,6 +396,20 @@ async function captureToCanvasInner(
     ...(opts.windowWidth ? { windowWidth: opts.windowWidth } : {}),
     ...(opts.windowHeight ? { windowHeight: opts.windowHeight } : {}),
     onclone: (doc: Document, clone: HTMLElement) => {
+      // ── Strip <script> from the cloned document ──────────────────────────
+      // html2canvas clones the whole document into an about:blank iframe. Every
+      // <script src> in that clone is then re-requested with its URL resolved
+      // against about:blank, so each one 404s from `about:client`. On /home that
+      // is a dozen failed requests per snapshot (the Vite chunks: HomeRoute,
+      // DataBox, DockToolbar, IbStatsTab, useNqCandles, the page chunks…) plus
+      // one that succeeds and re-downloads lightweight-charts at 59 kB.
+      //
+      // Safe to remove, and different from the <link rel="stylesheet"> case in
+      // gotcha 3: stylesheets are what make the clone LOOK right, whereas a
+      // script can only re-run or waste a request. A capture is a static
+      // snapshot; nothing in it needs to execute.
+      doc.querySelectorAll("script").forEach((n) => n.remove());
+
       applyUniversalCloneFixes(clone);
 
       // Blank the clone's canvases so the composited live bitmaps are the only
