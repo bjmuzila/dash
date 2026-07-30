@@ -32,9 +32,20 @@
  * and they are pruned once the contract expires. Kill with
  * GEX_CHANGE_TOP_AUTOPROBE=0.
  *
+ * EOD SCORECARD: because every pick is auto-probed, the snapshot series answers
+ * "how did it actually do?". After the close (16:05 ET) runResults() walks each
+ * of the day's picks from the moment it was flagged and freezes the peak mark,
+ * WHEN the peak printed, the low, and the closing mark into
+ * gex_change_top_results — the max-favourable-excursion table, i.e. the best exit
+ * that was available after the probe. It is computed live from watch_snapshots
+ * for any date whose snapshots still exist, so the table is populated intraday
+ * too (peak SO FAR); freezing matters because auto-probed contracts are pruned
+ * at expiry and take their snapshots with them.
+ *
  * Wiring: startGexChangeTopRecorder(PORT) from server-with-proxy.js.
  * Manual fire: POST /proxy/gex-change-top-run   Read: GET /proxy/gex-change-top
  *                                     Pick chart: GET /proxy/gex-change-top-history
+ *   EOD freeze: POST /proxy/gex-change-top-eod  Scorecard: GET /proxy/gex-change-top-results
  * No-op unless DATABASE_URL is available.
  */
 
@@ -137,6 +148,36 @@ async function ensureSchema() {
     // (and rows captured before auto-probe existed, which keep watch_id NULL)
     // migrate in place.
     await p.query('ALTER TABLE gex_change_top ADD COLUMN IF NOT EXISTS watch_id INTEGER');
+    // Frozen end-of-day scorecard — one row per pick per day. Survives the
+    // pruning of auto-probed contracts (and their snapshots) at expiry.
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS gex_change_top_results (
+        date        TEXT        NOT NULL,
+        watch_id    INTEGER     NOT NULL,
+        symbol      TEXT        NOT NULL,
+        expiry      TEXT        NOT NULL,
+        strike      REAL        NOT NULL,
+        side        TEXT,
+        first_slot  TEXT,                  -- slot it was FIRST flagged that day
+        slots       SMALLINT,              -- how many slots it held a top-5 spot
+        best_rank   SMALLINT,
+        score       REAL,
+        entry       REAL,                  -- mark at/after the first flag
+        entry_ts    BIGINT,
+        max_mark    REAL,                  -- best exit available after the probe
+        max_ts      BIGINT,
+        max_pct     REAL,
+        min_mark    REAL,
+        min_pct     REAL,
+        close_mark  REAL,
+        close_ts    BIGINT,
+        close_pct   REAL,
+        samples     INTEGER,
+        recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (date, watch_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_gctr_date ON gex_change_top_results(date);
+    `);
     ensured = true;
     return true;
   } catch (e) {
@@ -455,8 +496,191 @@ async function getPickHistory({ watchId, date } = {}) {
   }
 }
 
+// ── EOD scorecard ─────────────────────────────────────────────────────────────
+// For each pick: start the clock at the slot it was FIRST flagged, then walk that
+// day's snapshots for its auto-probed contract. Peak = the best exit that was
+// available after the probe (max favourable excursion), with the time it printed
+// so a 9:45 peak and a 15:55 peak don't read the same. Low and close come along
+// for free and keep the peak honest.
+
+const pctOf = (v, entry) => (entry != null && entry > 0 && v != null ? ((v - entry) / entry) * 100 : null);
+
+/** Live computation over watch_snapshots. Works intraday (peak so far). */
+async function computeResults(date) {
+  const p = sg.getPool();
+  if (!p) return { ok: false, error: 'no DATABASE_URL in this process', rows: [] };
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : etDateStr();
+  const bounds = etDayBoundsMs(d);
+  if (!bounds) return { ok: false, error: 'bad date', rows: [] };
+
+  // One row per contract: the slot it first appeared, its best rank, how many
+  // slots it held, and the score from that best-ranked appearance.
+  const { rows: picks } = await p.query(
+    `SELECT t.watch_id,
+            MIN(t.slot)             AS first_slot,
+            COUNT(*)::int           AS slots,
+            MIN(t.rank)::int        AS best_rank,
+            MAX(t.score)            AS score,
+            MIN(t.symbol)           AS symbol,
+            MIN(t.expiry)           AS expiry,
+            MIN(t.strike)           AS strike,
+            MIN(o.side)             AS side,
+            MIN(o.added_price)      AS added_price
+       FROM gex_change_top t
+       JOIN watch_options o ON o.id = t.watch_id
+      WHERE t.date = $1 AND t.watch_id IS NOT NULL
+      GROUP BY t.watch_id`,
+    [d],
+  );
+  if (!picks.length) return { ok: true, date: d, frozen: false, rows: [] };
+
+  // Each pick's window opens at its first slot, not at the bell.
+  const ids = [], starts = [];
+  for (const r of picks) {
+    const [hh, mm] = String(r.first_slot || '09:30').split(':').map(Number);
+    ids.push(r.watch_id);
+    starts.push(bounds.start + ((hh || 0) * 60 + (mm || 0)) * 60_000);
+  }
+
+  const { rows: aggs } = await p.query(
+    `SELECT b.watch_id,
+            COUNT(*)::int                                   AS samples,
+            (array_agg(s.mark ORDER BY s.ts ASC))[1]        AS entry,
+            (array_agg(s.ts   ORDER BY s.ts ASC))[1]        AS entry_ts,
+            MAX(s.mark)                                     AS max_mark,
+            (array_agg(s.ts ORDER BY s.mark DESC, s.ts ASC))[1] AS max_ts,
+            MIN(s.mark)                                     AS min_mark,
+            (array_agg(s.mark ORDER BY s.ts DESC))[1]       AS close_mark,
+            MAX(s.ts)                                       AS close_ts
+       FROM unnest($1::int[], $2::bigint[]) AS b(watch_id, start_ms)
+       JOIN watch_snapshots s
+         ON s.watch_id = b.watch_id
+        AND s.ts >= b.start_ms AND s.ts < $3
+        AND s.mark IS NOT NULL AND s.mark > 0
+      GROUP BY b.watch_id`,
+    [ids, starts, bounds.end],
+  );
+  const byId = new Map(aggs.map((a) => [a.watch_id, a]));
+
+  const rows = picks.map((r) => {
+    const a = byId.get(r.watch_id) || {};
+    // added_price is the mark at the ORIGINAL probe; on the day a pick first
+    // appears they agree. On a later re-appearance the day's first snapshot is
+    // the honest basis, so prefer it and keep added_price for reference.
+    const entry = a.entry != null ? Number(a.entry) : (r.added_price != null ? Number(r.added_price) : null);
+    const max = a.max_mark != null ? Number(a.max_mark) : null;
+    const min = a.min_mark != null ? Number(a.min_mark) : null;
+    const close = a.close_mark != null ? Number(a.close_mark) : null;
+    return {
+      date: d,
+      watch_id: r.watch_id,
+      symbol: r.symbol,
+      expiry: r.expiry,
+      strike: Number(r.strike),
+      side: r.side,
+      first_slot: r.first_slot,
+      slots: r.slots,
+      best_rank: r.best_rank,
+      score: r.score == null ? null : Number(r.score),
+      entry,
+      entry_ts: a.entry_ts == null ? null : Number(a.entry_ts),
+      max_mark: max,
+      max_ts: a.max_ts == null ? null : Number(a.max_ts),
+      max_pct: pctOf(max, entry),
+      min_mark: min,
+      min_pct: pctOf(min, entry),
+      close_mark: close,
+      close_ts: a.close_ts == null ? null : Number(a.close_ts),
+      close_pct: pctOf(close, entry),
+      samples: a.samples || 0,
+    };
+  });
+  // Best performer first — the table is a "what was on offer" ranking.
+  rows.sort((x, y) => (y.max_pct ?? -1e9) - (x.max_pct ?? -1e9));
+  return { ok: true, date: d, frozen: false, rows };
+}
+
+/** Freeze a day's scorecard into gex_change_top_results. Idempotent (upsert). */
+async function runResults({ date } = {}) {
+  const p = sg.getPool();
+  if (!p) return { skipped: 'no DB' };
+  if (!(await ensureSchema())) return { skipped: 'no schema' };
+  const out = await computeResults(date);
+  if (!out.ok) return { skipped: 'compute failed', error: out.error };
+  let written = 0;
+  for (const r of out.rows) {
+    try {
+      await p.query(
+        `INSERT INTO gex_change_top_results
+           (date, watch_id, symbol, expiry, strike, side, first_slot, slots, best_rank, score,
+            entry, entry_ts, max_mark, max_ts, max_pct, min_mark, min_pct,
+            close_mark, close_ts, close_pct, samples, recorded_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NOW())
+         ON CONFLICT (date, watch_id) DO UPDATE SET
+           side = EXCLUDED.side, first_slot = EXCLUDED.first_slot, slots = EXCLUDED.slots,
+           best_rank = EXCLUDED.best_rank, score = EXCLUDED.score,
+           entry = EXCLUDED.entry, entry_ts = EXCLUDED.entry_ts,
+           max_mark = EXCLUDED.max_mark, max_ts = EXCLUDED.max_ts, max_pct = EXCLUDED.max_pct,
+           min_mark = EXCLUDED.min_mark, min_pct = EXCLUDED.min_pct,
+           close_mark = EXCLUDED.close_mark, close_ts = EXCLUDED.close_ts, close_pct = EXCLUDED.close_pct,
+           samples = EXCLUDED.samples, recorded_at = NOW()`,
+        [r.date, r.watch_id, r.symbol, r.expiry, r.strike, r.side, r.first_slot, r.slots,
+         r.best_rank, r.score, r.entry, r.entry_ts, r.max_mark, r.max_ts, r.max_pct,
+         r.min_mark, r.min_pct, r.close_mark, r.close_ts, r.close_pct, r.samples],
+      );
+      written++;
+    } catch (e) {
+      console.warn('[gex-change-top] result write error:', e.message);
+    }
+  }
+  console.log(`[gex-change-top] EOD scorecard ${out.date}: froze ${written} pick result(s)`);
+  return { ok: true, date: out.date, written };
+}
+
+/**
+ * Read a day's scorecard. Prefers the frozen rows (they outlive the snapshots);
+ * falls back to a live computation, which is what serves today before the close.
+ */
+async function getResults({ date } = {}) {
+  const p = sg.getPool();
+  if (!p) return { ok: false, error: 'no DATABASE_URL in this process', rows: [] };
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : etDateStr();
+  try {
+    await ensureSchema();
+    const { rows } = await p.query(
+      `SELECT * FROM gex_change_top_results WHERE date = $1 ORDER BY max_pct DESC NULLS LAST`,
+      [d],
+    );
+    if (rows.length) {
+      return {
+        ok: true, date: d, frozen: true,
+        rows: rows.map((r) => ({
+          ...r,
+          strike: Number(r.strike),
+          score: r.score == null ? null : Number(r.score),
+          entry: r.entry == null ? null : Number(r.entry),
+          entry_ts: r.entry_ts == null ? null : Number(r.entry_ts),
+          max_mark: r.max_mark == null ? null : Number(r.max_mark),
+          max_ts: r.max_ts == null ? null : Number(r.max_ts),
+          max_pct: r.max_pct == null ? null : Number(r.max_pct),
+          min_mark: r.min_mark == null ? null : Number(r.min_mark),
+          min_pct: r.min_pct == null ? null : Number(r.min_pct),
+          close_mark: r.close_mark == null ? null : Number(r.close_mark),
+          close_ts: r.close_ts == null ? null : Number(r.close_ts),
+          close_pct: r.close_pct == null ? null : Number(r.close_pct),
+        })),
+      };
+    }
+    return await computeResults(d);
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e), rows: [] };
+  }
+}
+
 // ── Scheduler: fire on every INTERVAL_MIN boundary during RTH ─────────────────
 let _timer = null;
+let _eodTimer = null;
+let _lastEodDate = null;
 function startGexChangeTopRecorder(port) {
   if (Number(port) > 0) PORT_HINT = Number(port); // internal /api/watch hop target
   if (!process.env.DATABASE_URL) {
@@ -473,7 +697,28 @@ function startGexChangeTopRecorder(port) {
     }, STEP);
     if (_timer.unref) _timer.unref();
   }, msToBoundary);
-  console.log(`[gex-change-top] recorder started — every ${INTERVAL_MIN}m, ${WINDOW_MIN}m window, top ${TOP_N} very-strong (>= $${MIN_DOLLAR.toLocaleString()} & >= ${MIN_PCT}%), auto-probe ${AUTO_PROBE ? 'ON' : 'OFF'}, first fire in ${Math.round(msToBoundary / 60000)}m`);
+
+  // EOD freeze — checks every 5 min and fires ONCE per session day at/after
+  // 16:05 ET, giving the 60s watch recorder time to land the closing snapshot.
+  _eodTimer = setInterval(() => {
+    const { hour, minute, weekday } = etParts();
+    if (weekday === 'Sat' || weekday === 'Sun') return;
+    const today = etDateStr();
+    if (MARKET_HOLIDAYS.has(today)) return;
+    if (hour * 60 + minute < 16 * 60 + 5) return;
+    if (_lastEodDate === today) return;
+    _lastEodDate = today;
+    runResults({ date: today }).catch((e) => {
+      _lastEodDate = null; // let the next tick retry
+      console.warn('[gex-change-top] EOD scorecard error:', e.message);
+    });
+  }, 5 * 60 * 1000);
+  if (_eodTimer.unref) _eodTimer.unref();
+
+  console.log(`[gex-change-top] recorder started — every ${INTERVAL_MIN}m, ${WINDOW_MIN}m window, top ${TOP_N} very-strong (>= $${MIN_DOLLAR.toLocaleString()} & >= ${MIN_PCT}%), auto-probe ${AUTO_PROBE ? 'ON' : 'OFF'}, EOD scorecard 16:05 ET, first fire in ${Math.round(msToBoundary / 60000)}m`);
 }
 
-module.exports = { startGexChangeTopRecorder, runOnce, getHistory, getPickHistory, ensureSchema };
+module.exports = {
+  startGexChangeTopRecorder, runOnce, getHistory, getPickHistory,
+  runResults, getResults, computeResults, ensureSchema,
+};

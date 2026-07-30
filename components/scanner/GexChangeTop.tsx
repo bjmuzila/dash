@@ -39,6 +39,17 @@ type PickContract = { ticker: string; expiration: string; strike: number; side: 
 type PickHist = { points: PickPoint[]; contract: PickContract | null; error?: string };
 type Metric = "mark" | "net_gex";
 
+/** One row of the EOD scorecard — /proxy/gex-change-top-results. */
+type ResultRow = {
+  watch_id: number; symbol: string; expiry: string; strike: number; side: string | null;
+  first_slot: string | null; slots: number | null; best_rank: number | null; score: number | null;
+  entry: number | null; entry_ts: number | null;
+  max_mark: number | null; max_ts: number | null; max_pct: number | null;
+  min_mark: number | null; min_pct: number | null;
+  close_mark: number | null; close_ts: number | null; close_pct: number | null;
+  samples: number | null;
+};
+
 // Theme alpha helper — colors still come from homeTheme, never a literal hex.
 const tint = (hex: string, a: number): string => {
   const h = hex.replace("#", "");
@@ -82,6 +93,15 @@ const capturedLabel = (day: string, slot: string): string => {
   return `${MONTHS[Number(m[2]) - 1]} ${Number(m[3])} · ${time}`;
 };
 // Snapshots accrue around the clock; the card only charts the cash session.
+/** epoch ms → "1:42 PM" ET, for the peak/close stamps in the scorecard. */
+const fmtClock = (ts: number | null): string => {
+  if (ts == null || !Number.isFinite(ts)) return "—";
+  return new Date(ts).toLocaleTimeString("en-US", {
+    timeZone: "America/New_York", hour: "numeric", minute: "2-digit",
+  });
+};
+const fmtPct = (v: number | null): string => (v == null || !Number.isFinite(v) ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(0)}%`);
+
 const isRth = (ts: number): boolean => {
   if (!Number.isFinite(ts)) return false;
   const p = new Intl.DateTimeFormat("en-US", {
@@ -276,11 +296,37 @@ export default function GexChangeTop() {
       .finally(() => setLoading(false));
   }, []);
 
+  // ── EOD scorecard ───────────────────────────────────────────────────────────
+  // Frozen after the close by the recorder; computed live from the snapshots
+  // before that, so during the session this reads "peak so far".
+  const [results, setResults] = useState<ResultRow[]>([]);
+  const [frozen, setFrozen] = useState(false);
+  const [resErr, setResErr] = useState<string | null>(null);
+  const [showResults, setShowResults] = useState(true);
+
+  const loadResults = useCallback((d?: string) => {
+    const u = new URL("/proxy/gex-change-top-results", window.location.origin);
+    if (d) u.searchParams.set("date", d);
+    fetch(u.toString(), { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => {
+        if (!j?.ok) { setResErr(j?.error || "load failed"); setResults([]); return; }
+        setResErr(null);
+        setResults(Array.isArray(j.rows) ? j.rows : []);
+        setFrozen(!!j.frozen);
+      })
+      .catch((e) => setResErr(String(e?.message || e)));
+  }, []);
+
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadResults(date || undefined); }, [loadResults, date]);
   useEffect(() => {
-    const t = setInterval(() => load(date || undefined), 5 * 60 * 1000);
+    const t = setInterval(() => {
+      load(date || undefined);
+      loadResults(date || undefined);
+    }, 5 * 60 * 1000);
     return () => clearInterval(t);
-  }, [load, date]);
+  }, [load, loadResults, date]);
 
   // ── Card flip → the pick's own price/net-GEX line ───────────────────────────
   // Lazy: nothing is fetched until a card is turned over. Keyed by watch_id, so
@@ -434,6 +480,21 @@ export default function GexChangeTop() {
     color: tint(HOME_THEME.text, 0.55), fontSize: 9,
     textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 3,
   };
+  const th: CSSProperties = {
+    textAlign: "right", padding: "6px 8px", fontSize: 11, fontWeight: 700,
+    letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.green,
+    borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap",
+  };
+  const td: CSSProperties = {
+    textAlign: "right", padding: "6px 8px", fontFamily: MONO, fontSize: 13,
+    color: HOME_THEME.text, borderBottom: `1px solid ${tint(HOME_THEME.text, 0.05)}`, whiteSpace: "nowrap",
+  };
+
+  // Scorecard summary — how many picks actually offered a real exit.
+  const withPeak = results.filter((r) => r.max_pct != null);
+  const hit = (n: number) => withPeak.filter((r) => (r.max_pct as number) >= n).length;
+  const avgPeak = withPeak.length ? withPeak.reduce((a, r) => a + (r.max_pct as number), 0) / withPeak.length : null;
+  const greenClose = results.filter((r) => r.close_pct != null && (r.close_pct as number) > 0).length;
 
   return (
    <div ref={cardRef}>
@@ -446,10 +507,16 @@ export default function GexChangeTop() {
         <input
           type="date"
           value={date}
-          onChange={(e) => { setDate(e.target.value); setFlipped(null); setOpened({}); load(e.target.value || undefined); }}
+          onChange={(e) => {
+            setDate(e.target.value); setFlipped(null); setOpened({});
+            load(e.target.value || undefined); loadResults(e.target.value || undefined);
+          }}
           style={{ ...homeButtonStyle, padding: "6px 10px", fontSize: 13, colorScheme: "dark" as CSSProperties["colorScheme"] }}
         />
-        <button onClick={() => load(date || undefined)} style={{ ...homeButtonStyle, padding: "6px 12px", fontSize: 13 }}>
+        <button
+          onClick={() => { load(date || undefined); loadResults(date || undefined); }}
+          style={{ ...homeButtonStyle, padding: "6px 12px", fontSize: 13 }}
+        >
           Refresh
         </button>
         <span style={{ fontSize: 12, color: tint(HOME_THEME.text, 0.5) }}>click a card for its option price line</span>
@@ -468,6 +535,105 @@ export default function GexChangeTop() {
         >
           {shooting === "download" ? "Saving…" : "📷 Screenshot"}
         </button>
+      </div>
+
+      {/* ── EOD scorecard ──────────────────────────────────────────────────────
+          The point of auto-probing: what was the best exit on offer AFTER each
+          pick was flagged, and when did it print. Peak/low/close are measured
+          from the probe mark, never from the open. */}
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+          <span style={{ color: HOME_THEME.orange, fontWeight: 800, fontSize: 15 }}>Scorecard</span>
+          <span style={{ ...tglStyle(true), cursor: "default", fontSize: 9 }}>
+            {frozen ? "EOD · final" : "live · peak so far"}
+          </span>
+          {results.length > 0 && (
+            <span style={{ fontSize: 12, color: tint(HOME_THEME.text, 0.6) }}>
+              {results.length} pick{results.length === 1 ? "" : "s"} · avg peak{" "}
+              <b style={{ color: avgPeak != null && avgPeak >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{fmtPct(avgPeak)}</b>
+              {" · "}≥+25% <b style={{ color: HOME_THEME.text }}>{hit(25)}</b>
+              {" · "}≥+50% <b style={{ color: HOME_THEME.text }}>{hit(50)}</b>
+              {" · "}≥+100% <b style={{ color: HOME_THEME.text }}>{hit(100)}</b>
+              {" · "}closed green <b style={{ color: HOME_THEME.text }}>{greenClose}</b>
+            </span>
+          )}
+          <div style={{ flex: 1 }} />
+          <button
+            data-noshot="1"
+            onClick={() => setShowResults((s) => !s)}
+            style={{ ...homeButtonStyle, padding: "4px 10px", fontSize: 11 }}
+          >
+            {showResults ? "Hide" : "Show"}
+          </button>
+        </div>
+
+        {resErr && <div style={{ color: HOME_THEME.red, fontSize: 13, padding: "4px 0" }}>Scorecard error: {resErr}</div>}
+
+        {showResults && !resErr && (
+          results.length === 0 ? (
+            <div style={{ color: tint(HOME_THEME.text, 0.55), fontSize: 13, padding: "8px 4px" }}>
+              No scored picks for this date yet — rows appear once picks have been auto-probed and snapshots start landing.
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...th, textAlign: "left" }}>Symbol</th>
+                    <th style={{ ...th, textAlign: "left" }}>Contract</th>
+                    <th style={{ ...th, textAlign: "left" }}>Flagged</th>
+                    <th style={th}>Entry</th>
+                    <th style={th}>Peak</th>
+                    <th style={{ ...th, textAlign: "left" }}>Peak at</th>
+                    <th style={th}>Peak %</th>
+                    <th style={th}>$/ct</th>
+                    <th style={th}>Close</th>
+                    <th style={th}>Close %</th>
+                    <th style={th}>Low %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {results.map((r) => {
+                    const sideC = r.side === "P" ? HOME_THEME.orange : HOME_THEME.green;
+                    const peakDollars = r.entry != null && r.max_mark != null ? (r.max_mark - r.entry) * 100 : null;
+                    return (
+                      <tr key={`${r.watch_id}-${r.first_slot}`}>
+                        <td style={{ ...td, textAlign: "left", fontWeight: 800 }}>{r.symbol}</td>
+                        <td style={{ ...td, textAlign: "left", color: sideC }}>
+                          {fmtStrike(r.strike)}{r.side ?? ""} <span style={{ color: tint(HOME_THEME.text, 0.45) }}>{r.expiry}</span>
+                        </td>
+                        <td style={{ ...td, textAlign: "left", color: tint(HOME_THEME.text, 0.6) }}>
+                          {r.first_slot ? slotLabel(r.first_slot).replace(" ET", "") : "—"}
+                          {r.slots != null && r.slots > 1 && (
+                            <span style={{ color: tint(HOME_THEME.text, 0.4) }}> ×{r.slots}</span>
+                          )}
+                        </td>
+                        <td style={td}>{fmtPx(r.entry)}</td>
+                        <td style={td}>{fmtPx(r.max_mark)}</td>
+                        <td style={{ ...td, textAlign: "left", color: tint(HOME_THEME.text, 0.6) }}>{fmtClock(r.max_ts)}</td>
+                        <td style={{ ...td, fontWeight: 800, color: r.max_pct == null ? tint(HOME_THEME.text, 0.4) : r.max_pct >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                          {fmtPct(r.max_pct)}
+                        </td>
+                        <td style={{ ...td, color: tint(HOME_THEME.text, 0.6) }}>
+                          {peakDollars == null ? "—" : `${peakDollars >= 0 ? "+" : "−"}$${Math.abs(peakDollars).toFixed(0)}`}
+                        </td>
+                        <td style={td}>{fmtPx(r.close_mark)}</td>
+                        <td style={{ ...td, color: r.close_pct == null ? tint(HOME_THEME.text, 0.4) : r.close_pct >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                          {fmtPct(r.close_pct)}
+                        </td>
+                        <td style={{ ...td, color: tint(HOME_THEME.text, 0.45) }}>{fmtPct(r.min_pct)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div style={{ marginTop: 6, fontSize: 11, color: tint(HOME_THEME.text, 0.45) }}>
+                Entry = the auto-probe mark at the slot the strike was first flagged. Peak / Low / Close are measured from
+                that entry, over snapshots taken after it — the best exit that was actually on offer, not a fill.
+              </div>
+            </div>
+          )
+        )}
       </div>
 
       {err && <div style={{ color: HOME_THEME.red, fontSize: 13, padding: "8px 0" }}>Error: {err}</div>}

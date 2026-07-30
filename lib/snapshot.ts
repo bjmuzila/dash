@@ -38,6 +38,9 @@
  *     the real bitmaps in ourselves, positioned off their live bounding rects.
  *  6. `background-clip: text` renders INVISIBLE. Gradient headings must be
  *     flattened to a solid color in the clone (see `data-snap-plain`).
+ *  8. `overflow:hidden` on a truncated text span SHEARS the glyphs — only the
+ *     top few pixels survive. Neither ellipsis nor text clipping is really
+ *     implemented, so the truncation idiom is dropped for the capture.
  *  7. `backdrop-filter` is not implemented at all. Frosted panels come out as
  *     their raw low-alpha background over whatever the capture background is,
  *     which reads as washed out. We swap them to the solid panel color.
@@ -219,6 +222,30 @@ function applyUniversalCloneFixes(root: HTMLElement) {
     if (n.style.position === "sticky") n.style.position = "static";
   });
   if (root.style.position === "sticky") root.style.position = "static";
+
+  // ── Gotcha 8: overflow:hidden shears text ────────────────────────────────
+  // An `overflow:hidden + text-overflow:ellipsis + white-space:nowrap` span is
+  // the standard one-line-truncation idiom. html2canvas implements NEITHER
+  // ellipsis nor reliable text clipping: instead it shears the glyphs, keeping
+  // only the top slice of each letter. On the Sector Wheel's SECTORS list that
+  // left ~2px of every name — the dots of the i's and the crossbars of the t's,
+  // nothing else. (Same trap the econ-calendar template hit, where it rendered
+  // "NFLX" as "NFLY"; see the .chip-sym note there.)
+  //
+  // The clipping is already non-functional in a capture, so drop it and give the
+  // line some leading. Losing a truncation is a far smaller defect than losing
+  // the text — and only elements using the full truncation idiom are touched,
+  // so real clipping containers are left alone.
+  root
+    .querySelectorAll<HTMLElement>('[style*="ellipsis"]')
+    .forEach((n) => {
+      if (n.style.overflow !== "hidden") return;
+      n.style.overflow = "visible";
+      n.style.textOverflow = "clip";
+      const fs = parseFloat(n.style.fontSize || "") || 0;
+      if (fs > 0) n.style.lineHeight = `${Math.ceil(fs * 1.35)}px`;
+      else if (!n.style.lineHeight) n.style.lineHeight = "1.35";
+    });
 
   // ── Gotcha 7: backdrop-filter is a no-op in html2canvas ───────────────────
   // A frosted panel is a low-alpha fill that only reads correctly because of the

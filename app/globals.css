@@ -73,8 +73,16 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  line-height: 1;
 }
+
+/* NOTE: no `line-height: 1` here, deliberately.
+   It was in this rule originally, and it sheared text in snapshots: a line box
+   shorter than the glyph box makes html2canvas keep only the top slice of each
+   letter. The S&P Sector Wheel's SECTORS list rendered as ~2px of confetti —
+   the dots of the i's and the crossbars of the t's — because those rows are
+   <button display:grid> elements whose truncation spans inherited it.
+   `align-items: center` already does the centring; the tight line-height was
+   never the part doing the work. */
 
 /* ── Dark dropdowns everywhere ──────────────────────────────────────────────
    Kills the default light/gray native <select> popup. color-scheme:dark makes
