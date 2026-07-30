@@ -20,7 +20,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import { HOME_THEME, homeButtonStyle, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { captureAndCopy, captureToBlob, copyOrDownload, downloadBlob } from "@/lib/snapshot";
@@ -121,15 +121,19 @@ const ago = (ts: number | null | undefined): string => {
  * line on Net GEX.
  */
 function PickChart({ points, metric, entry }: { points: PickPoint[]; metric: Metric; entry: number | null }) {
-  const W = 960, H = 300, PADL = 64, PADR = 16, PADT = 16, PADB = 28;
+  // Index of the sample under the cursor — drives the crosshair readout.
+  const [hover, setHover] = useState<number | null>(null);
+  // Tile-sized geometry: the viewBox is close to the tile's real pixel width, so
+  // the tick text lands near its nominal size instead of being scaled to mush.
+  const W = 240, H = 88, PADL = 34, PADR = 6, PADT = 6, PADB = 14;
   const pts = points
     .map((p) => ({ ts: p.ts, v: metric === "mark" ? p.mark : p.net_gex }))
     .filter((p) => p.v != null && Number.isFinite(p.v as number)) as { ts: number; v: number }[];
 
   if (pts.length < 2) {
     return (
-      <div style={{ fontFamily: MONO, fontSize: 12, color: tint(HOME_THEME.text, 0.5), textAlign: "center", padding: "48px 0" }}>
-        Not enough history yet — snapshots accrue every minute through RTH, server-side.
+      <div style={{ fontFamily: MONO, fontSize: 10, color: tint(HOME_THEME.text, 0.5), textAlign: "center", padding: "26px 0", lineHeight: 1.5 }}>
+        not enough history yet —<br />snapshots accrue every minute through RTH
       </div>
     );
   }
@@ -150,12 +154,41 @@ function PickChart({ points, metric, entry }: { points: PickPoint[]; metric: Met
   const last = pts[n - 1].v;
 
   const fmtY = (v: number) => (metric === "net_gex" ? fmtGex(v) : v.toFixed(2));
-  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => minY + f * (maxY - minY));
-  const fmtT = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const tickFill = tint(HOME_THEME.text, 0.75);
+  const yTicks = [0, 0.5, 1].map((f) => minY + f * (maxY - minY));
+  const fmtT = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const tickFill = tint(HOME_THEME.text, 0.7);
+
+  // Hovered sample. Mouse x → nearest index, in viewBox units so it stays right
+  // at any tile width. Cleared on leave, which restores the "latest" dot.
+  const hi = hover != null ? Math.min(Math.max(hover, 0), n - 1) : null;
+  const hp = hi != null ? pts[hi] : null;
+  const onMove = (e: ReactMouseEvent<SVGSVGElement>) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    if (!box.width) return;
+    const x = ((e.clientX - box.left) / box.width) * W;
+    const frac = (x - PADL) / (W - PADL - PADR);
+    setHover(Math.round(Math.min(Math.max(frac, 0), 1) * (n - 1)));
+  };
+
+  // Crosshair readout boxes, clamped so they never spill outside the plot.
+  const hx = hp ? sx(hi as number) : 0;
+  const hy = hp ? sy(hp.v) : 0;
+  const tLabel = hp ? fmtT(hp.ts) : "";
+  const tW = Math.max(26, tLabel.length * 4.6 + 6);
+  const tX = Math.min(Math.max(hx - tW / 2, PADL - 4), W - PADR - tW);
+  const vLabel = hp ? fmtY(hp.v) : "";
+  const vW = Math.max(24, vLabel.length * 4.6 + 6);
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      style={{ width: "100%", height: "auto", display: "block", cursor: "crosshair" }}
+      onMouseMove={onMove}
+      onMouseLeave={() => setHover(null)}
+      // Reading the chart must not flip the card back (same as the Probe page's
+      // .op-chartwrap, which stops the click from reaching the card).
+      onClick={(e) => e.stopPropagation()}
+    >
       <defs>
         <linearGradient id="gct-fill" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={tint(HOME_THEME.cyan, 0.28)} />
@@ -164,24 +197,36 @@ function PickChart({ points, metric, entry }: { points: PickPoint[]; metric: Met
       </defs>
       {yTicks.map((v, i) => (
         <g key={i}>
-          <line x1={PADL} y1={sy(v)} x2={W - PADR} y2={sy(v)} stroke={tint(HOME_THEME.text, 0.08)} strokeWidth={1} />
-          <text x={PADL - 6} y={sy(v) + 3} textAnchor="end" fontSize={11} fill={tickFill} fontFamily={MONO}>{fmtY(v)}</text>
+          <line x1={PADL} y1={sy(v)} x2={W - PADR} y2={sy(v)} stroke={tint(HOME_THEME.text, 0.08)} strokeWidth={0.6} />
+          <text x={PADL - 4} y={sy(v) + 2.5} textAnchor="end" fontSize={7} fill={tickFill} fontFamily={MONO}>{fmtY(v)}</text>
         </g>
       ))}
-      <text x={PADL} y={H - 6} textAnchor="start" fontSize={11} fill={tickFill} fontFamily={MONO}>{fmtT(minX)}</text>
-      <text x={W - PADR} y={H - 6} textAnchor="end" fontSize={11} fill={tickFill} fontFamily={MONO}>{fmtT(maxX)}</text>
+      <text x={PADL} y={H - 4} textAnchor="start" fontSize={7} fill={tickFill} fontFamily={MONO}>{fmtT(minX)}</text>
+      <text x={W - PADR} y={H - 4} textAnchor="end" fontSize={7} fill={tickFill} fontFamily={MONO}>{fmtT(maxX)}</text>
       {metric === "net_gex" && minY < 0 && maxY > 0 && (
-        <line x1={PADL} y1={sy(0)} x2={W - PADR} y2={sy(0)} stroke={tint(HOME_THEME.text, 0.2)} strokeWidth={1} />
+        <line x1={PADL} y1={sy(0)} x2={W - PADR} y2={sy(0)} stroke={tint(HOME_THEME.text, 0.2)} strokeWidth={0.6} />
       )}
       {showEntry && (
         <line
           x1={PADL} y1={sy(entry as number)} x2={W - PADR} y2={sy(entry as number)}
-          stroke={tint(HOME_THEME.text, 0.35)} strokeWidth={1} strokeDasharray="4 4"
+          stroke={tint(HOME_THEME.text, 0.35)} strokeWidth={0.6} strokeDasharray="3 3"
         />
       )}
       <path d={area} fill="url(#gct-fill)" />
-      <path d={line} fill="none" stroke={HOME_THEME.cyan} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx={sx(n - 1)} cy={sy(last)} r={3} fill={HOME_THEME.cyan} />
+      <path d={line} fill="none" stroke={HOME_THEME.cyan} strokeWidth={1.4} strokeLinejoin="round" strokeLinecap="round" />
+      {hp ? (
+        <g>
+          {/* Crosshair: time chip on the x axis, value chip on the y axis. */}
+          <line x1={hx} y1={PADT} x2={hx} y2={H - PADB} stroke={tint(HOME_THEME.cyan, 0.5)} strokeWidth={0.6} strokeDasharray="2 2" />
+          <circle cx={hx} cy={hy} r={2.6} fill={HOME_THEME.cyan} stroke={HOME_THEME.bg} strokeWidth={0.8} />
+          <rect x={tX} y={H - PADB + 1.5} width={tW} height={10} rx={2} fill={HOME_THEME.bg} stroke={tint(HOME_THEME.cyan, 0.4)} strokeWidth={0.5} />
+          <text x={tX + tW / 2} y={H - PADB + 8.5} textAnchor="middle" fontSize={7} fill={HOME_THEME.text} fontFamily={MONO}>{tLabel}</text>
+          <rect x={0} y={hy - 5} width={vW} height={10} rx={2} fill={HOME_THEME.bg} stroke={tint(HOME_THEME.cyan, 0.4)} strokeWidth={0.5} />
+          <text x={vW / 2} y={hy + 2.5} textAnchor="middle" fontSize={7} fill={HOME_THEME.cyan} fontFamily={MONO}>{vLabel}</text>
+        </g>
+      ) : (
+        <circle cx={sx(n - 1)} cy={sy(last)} r={2.6} fill={HOME_THEME.cyan} />
+      )}
     </svg>
   );
 }
@@ -327,28 +372,27 @@ export default function GexChangeTop() {
   // Shared surface for both faces of a pick tile — classicCardAccentStyle exactly
   // as the theme defines it: flat frosted panel, hairline edge, NO radial
   // highlight and no tint wash. Do not reintroduce a glow here.
-  // One face is in normal flow (it sets the tile's height) and the other is laid
-  // over it — which one flips with the card, so the expanded chart side can be as
-  // tall as it needs while the pick side stays a compact tile.
-  const faceStyle = (inFlow: boolean): CSSProperties => ({
+  // Both faces fill the same tile box, so the card is exactly the same size
+  // whichever way up it is.
+  const faceStyle: CSSProperties = {
     ...classicCardAccentStyle,
-    position: inFlow ? "relative" : "absolute",
-    inset: inFlow ? undefined : 0,
+    position: "absolute",
+    inset: 0,
     padding: "12px 14px",
     backfaceVisibility: "hidden",
     WebkitBackfaceVisibility: "hidden",
     overflow: "hidden",
-  });
+  };
   // The Probe page's .op-tgl pill: neutral when off, white-wash when on for the
   // range group, cyan for the metric group.
   const tglStyle = (on: boolean, cyan = false): CSSProperties => ({
     fontFamily: MONO,
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: 700,
-    letterSpacing: "0.03em",
+    letterSpacing: "0.02em",
     cursor: "pointer",
-    padding: "4px 10px",
-    borderRadius: 6,
+    padding: "3px 7px",
+    borderRadius: 5,
     border: `1px solid ${on && cyan ? tint(HOME_THEME.cyan, 0.4) : HOME_THEME.border}`,
     background: on ? (cyan ? tint(HOME_THEME.cyan, 0.12) : tint(HOME_THEME.text, 0.08)) : "transparent",
     color: on ? (cyan ? HOME_THEME.cyan : HOME_THEME.text) : tint(HOME_THEME.text, 0.55),
@@ -357,14 +401,14 @@ export default function GexChangeTop() {
   const badgeStyle = (side: "C" | "P"): CSSProperties => {
     const c = side === "P" ? HOME_THEME.orange : HOME_THEME.green;
     return {
-      fontFamily: MONO, fontSize: 12, fontWeight: 700, padding: "1px 6px",
-      borderRadius: 4, marginLeft: 6, color: c,
+      fontFamily: MONO, fontSize: 11, fontWeight: 700, padding: "1px 5px",
+      borderRadius: 4, marginLeft: 5, color: c,
       background: tint(c, 0.12), border: `1px solid ${tint(c, 0.4)}`,
     };
   };
   const lblStyle: CSSProperties = {
-    color: tint(HOME_THEME.text, 0.55), fontSize: 10,
-    textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 4,
+    color: tint(HOME_THEME.text, 0.55), fontSize: 9,
+    textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 3,
   };
 
   return (
@@ -444,14 +488,12 @@ export default function GexChangeTop() {
                   onClick={() => toggleFlip(cid, wid)}
                   title={wid == null ? undefined : isFlipped ? "Back to the pick" : `Chart ${r.symbol} ${fmtStrike(r.strike)}${side}`}
                   style={{
+                    // Both faces live inside the tile — flipping never resizes the
+                    // card or reflows the grid.
                     position: "relative",
-                    minHeight: 196,
-                    perspective: 1600,
+                    minHeight: 236,
+                    perspective: 1200,
                     cursor: wid == null ? "default" : "pointer",
-                    // Open card takes the whole row, exactly like the Probe page's
-                    // expanded tracked card (gridColumn: 1 / -1) — the axis-ticked
-                    // chart needs the width to be readable.
-                    gridColumn: isFlipped ? "1 / -1" : undefined,
                   }}
                 >
                   <div
@@ -468,7 +510,7 @@ export default function GexChangeTop() {
                     }}
                   >
                     {/* ── Front: the recorded pick ─────────────────────────── */}
-                    <div style={{ ...faceStyle(!isFlipped), minHeight: 196 }}>
+                    <div style={faceStyle}>
                       <button
                         data-noshot="1"
                         onClick={(e) => {
@@ -524,11 +566,11 @@ export default function GexChangeTop() {
 
                     {/* ── Back: the auto-probed contract's session line ─────── */}
                     {hasBack && (
-                    <div style={{ ...faceStyle(isFlipped), minHeight: 196, transform: "rotateY(180deg)", padding: 16 }}>
+                    <div style={{ ...faceStyle, transform: "rotateY(180deg)", padding: "10px 12px" }}>
                       {/* Header — .op-tcard-h: ticker, strike+side badge, close. */}
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                        <div>
-                          <span style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.text }}>{r.symbol}</span>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                        <div style={{ minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}>
+                          <span style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text }}>{r.symbol}</span>
                           <span style={badgeStyle(side)}>{fmtStrike(r.strike)}{side}</span>
                         </div>
                         <button
@@ -537,24 +579,24 @@ export default function GexChangeTop() {
                           title="Back to the pick"
                           style={{
                             background: "none", border: "none", cursor: "pointer", padding: "0 2px",
-                            fontSize: 17, lineHeight: 1, color: tint(HOME_THEME.text, 0.55),
+                            fontSize: 15, lineHeight: 1, color: tint(HOME_THEME.text, 0.55),
                           }}
                         >
                           ×
                         </button>
                       </div>
-                      {/* .op-rowsub — expiry + why this contract is here. */}
-                      <div style={{ fontFamily: MONO, fontSize: 12, color: tint(HOME_THEME.text, 0.55), marginTop: 3 }}>
-                        {r.expiry} · auto-probed from GEX change top · {capturedLabel(date, hb.slot)}
+                      {/* .op-rowsub — expiry + when this contract was flagged. */}
+                      <div style={{ fontFamily: MONO, fontSize: 10, color: tint(HOME_THEME.text, 0.5), marginTop: 2 }}>
+                        {r.expiry} · {capturedLabel(date, hb.slot)}
                       </div>
                       {/* .op-bigrow — the headline move off the entry basis. */}
-                      <div style={{ margin: "10px 0 8px" }}>
-                        <div style={{ fontFamily: MONO, fontSize: 24, fontWeight: 800, lineHeight: 1, color: pnlColor }}>
+                      <div style={{ margin: "6px 0 4px" }}>
+                        <div style={{ fontFamily: MONO, fontSize: 18, fontWeight: 800, lineHeight: 1, color: pnlColor }}>
                           {pnlPct == null ? "—" : `${pnlPct >= 0 ? "▲" : "▼"} ${Math.abs(pnlPct).toFixed(1)}%`}
                         </div>
-                        <div style={{ fontFamily: MONO, fontSize: 14, color: HOME_THEME.text, marginTop: 6 }}>
+                        <div style={{ fontFamily: MONO, fontSize: 11, color: HOME_THEME.text, marginTop: 4, whiteSpace: "nowrap" }}>
                           <span style={lblStyle}>in</span>{fmtPx(entry)}
-                          <span style={{ color: tint(HOME_THEME.text, 0.55), margin: "0 6px" }}>→</span>
+                          <span style={{ color: tint(HOME_THEME.text, 0.55), margin: "0 4px" }}>→</span>
                           <span style={lblStyle}>now</span>{fmtPx(lastMark)}
                           {pnlDollars != null && (
                             <span style={{ fontWeight: 700, color: pnlColor }}>
@@ -566,11 +608,9 @@ export default function GexChangeTop() {
                       {/* .op-toolbar — range left, metric right. 1D and Price/Net
                           GEX only: the recorder's snapshots are a session series,
                           and the other four greeks aren't what this card is for. */}
-                      <div data-noshot="1" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <span style={{ ...tglStyle(true), cursor: "default" }}>1D</span>
-                        </div>
-                        <div style={{ display: "flex", gap: 6 }}>
+                      <div data-noshot="1" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 4 }}>
+                        <span style={{ ...tglStyle(true), cursor: "default" }}>1D</span>
+                        <div style={{ display: "flex", gap: 4 }}>
                           {METRICS.map((m) => (
                             <button
                               key={m.key}
@@ -583,15 +623,15 @@ export default function GexChangeTop() {
                         </div>
                       </div>
                       {wid != null && histLoading[wid] && !pts.length ? (
-                        <div style={{ fontFamily: MONO, fontSize: 12, color: tint(HOME_THEME.text, 0.5), textAlign: "center", padding: "48px 0" }}>Loading history…</div>
+                        <div style={{ fontFamily: MONO, fontSize: 10, color: tint(HOME_THEME.text, 0.5), textAlign: "center", padding: "26px 0" }}>loading history…</div>
                       ) : h?.error ? (
-                        <div style={{ fontFamily: MONO, fontSize: 12, color: HOME_THEME.red, textAlign: "center", padding: "48px 0" }}>{h.error}</div>
+                        <div style={{ fontFamily: MONO, fontSize: 10, color: HOME_THEME.red, textAlign: "center", padding: "26px 0" }}>{h.error}</div>
                       ) : (
                         <PickChart points={pts} metric={metric} entry={entry} />
                       )}
                       {/* .op-charthint */}
-                      <div style={{ marginTop: 8, fontFamily: MONO, fontSize: 12, color: tint(HOME_THEME.text, 0.55), letterSpacing: "0.04em" }}>
-                        {metric === "mark" ? "Option price (mark)" : "Net GEX @ strike"} · RTH only · entry @ {fmtPx(entry)} · {ago(lastTs)}
+                      <div style={{ marginTop: 4, fontFamily: MONO, fontSize: 9, color: tint(HOME_THEME.text, 0.5), letterSpacing: "0.03em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {metric === "mark" ? "price (mark)" : "net gex @ strike"} · RTH · entry @ {fmtPx(entry)} · {ago(lastTs)}
                       </div>
                     </div>
                     )}
