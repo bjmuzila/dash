@@ -5,9 +5,10 @@
 //
 // Full roster as a 5-across CARD grid. Each card carries the essentials — spot,
 // day % change, the front expiry's +GEX/−GEX share and its biggest wall (with
-// how far OTM that strike sits), net GEX per DTE (0d/1d/2d), call/put wall
-// migration, and a tiny 0→1→2 net sparkline — so the whole roster is scannable
-// at a glance. Cards start COLLAPSED; click one to open that ticker's front
+// how far OTM that strike sits), a per-DTE UPSIDE/DOWNSIDE read (the strongest
+// building wall above spot over the strongest building wall below spot),
+// call/put wall migration, and a tiny 0→1→2 net sparkline — so the whole roster
+// is scannable at a glance. Cards start COLLAPSED; click one to open that ticker's front
 // 0DTE / 1DTE / 2DTE GEX walls in a full-width panel below, on a shared strike
 // ladder, with each strike's net-$ and its day-over-day Δ (is gamma building
 // here or leaving?). The bars are styled to match the Logic & Order page's
@@ -421,20 +422,37 @@ export default function ForwardBuildStructure() {
     border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.4)", color: HOME_THEME.text,
   };
   const net = (t: Ticker, d: number) => t.dtes.find((x) => x.dte === d)?.netTotal;
-  // Top mover per expiry: the strike whose wall grew most (build) and shrank most
-  // (fade) vs yesterday. "Growing" = |net| increasing (net & Δ share a sign).
-  const flowOf = (t: Ticker, d: number): { build: StrikeRow | null; fade: StrikeRow | null } | null => {
+  // Per expiry, the strongest BUILDING wall on each side of spot — the directional
+  // read the card is here for.
+  //
+  //   UPSIDE   = strike ABOVE spot whose wall grew most vs yesterday
+  //   DOWNSIDE = strike BELOW spot whose wall grew most vs yesterday
+  //
+  // "Growing" is the same test the ladder bars use: |net| increasing, i.e. net and
+  // Δ share a sign. Fading walls are deliberately NOT eligible — a wall shrinking
+  // above spot isn't upside, it's just gamma leaving, and pairing the two made the
+  // old build/fade tiles read as noise. The sign of `net` doesn't gate either side:
+  // a put wall building above spot is still gamma stacking overhead. Strikes
+  // sitting exactly at spot belong to neither side.
+  const flowOf = (t: Ticker, d: number): { up: StrikeRow | null; down: StrikeRow | null } | null => {
     const e = t.dtes.find((x) => x.dte === d);
     if (!e) return null;
-    let build: StrikeRow | null = null, fade: StrikeRow | null = null;
+    let up: StrikeRow | null = null, down: StrikeRow | null = null;
     for (const s of e.strikes) {
       if (s.delta == null) continue;
-      const g = s.net * s.delta;
-      if (g > 0) { if (!build || Math.abs(s.delta) > Math.abs(build.delta as number)) build = s; }
-      else if (g < 0) { if (!fade || Math.abs(s.delta) > Math.abs(fade.delta as number)) fade = s; }
+      if (!(s.net * s.delta > 0)) continue; // fading or flat — not a build
+      if (s.strike > t.spot) {
+        if (!up || Math.abs(s.delta) > Math.abs(up.delta as number)) up = s;
+      } else if (s.strike < t.spot) {
+        if (!down || Math.abs(s.delta) > Math.abs(down.delta as number)) down = s;
+      }
     }
-    return { build, fade };
+    return { up, down };
   };
+  // Signed distance from spot to a strike, as a %. Drives the tile subline: how far
+  // away that upside / downside build actually sits.
+  const distPct = (t: Ticker, strike: number): number | null =>
+    t.spot > 0 ? ((strike - t.spot) / t.spot) * 100 : null;
 
   return (
     <>
@@ -531,28 +549,49 @@ export default function ForwardBuildStructure() {
                   ) : <span style={{ color: DIM }}>—</span>}
                   <span style={{ marginLeft: "auto" }}><CardSpark pts={chips.map((c) => c.v)} /></span>
                 </div>
-                {/* Flow-first: the day-over-day movers are the hero. Per expiry, the
-                    strike whose wall grew most (▲ green) and shrank most (▼ red). */}
+                {/* Flow-first, and now DIRECTIONAL. Per expiry: the strike above spot
+                    with the strongest building wall (▲ upside) over the strike below
+                    spot with the strongest building wall (▼ downside). Subline is how
+                    far that strike sits from spot and how much gamma it added. */}
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 10.5, color: DIM, letterSpacing: "0.03em" }}>
+                  <span style={{ color: GREEN }}>▲ upside</span>
+                  <span style={{ opacity: 0.5 }}>·</span>
+                  <span style={{ color: RED }}>▼ downside</span>
+                  <span style={{ marginLeft: "auto", opacity: 0.7 }}>building walls vs spot</span>
+                </div>
                 <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
                   {[0, 1, 2].map((d) => {
                     const has = t.dtes.some((x) => x.dte === d);
                     const f = flowOf(t, d);
+                    const up = f?.up ?? null, down = f?.down ?? null;
+                    const upD = up ? distPct(t, up.strike) : null;
+                    const downD = down ? distPct(t, down.strike) : null;
+                    const sub = (dist: number | null, delta: number) =>
+                      `${dist != null ? fmtPct(dist) : "—"} · ${fmtGex(Math.abs(delta))}`;
                     return (
-                      <div key={d} style={{ flex: 1, border: `1px solid ${HOME_THEME.border}`, borderRadius: 7, padding: "7px 4px", background: "rgba(255,255,255,0.02)" }}>
+                      <div
+                        key={d}
+                        style={{ flex: 1, minWidth: 0, border: `1px solid ${HOME_THEME.border}`, borderRadius: 7, padding: "7px 4px", background: "rgba(255,255,255,0.02)" }}
+                        title={has
+                          ? `${DTE_LABEL(d)} — strongest building wall on each side of spot ${fmtSpot(t.spot)}.\n` +
+                            `▲ upside: ${up ? `${fmtStrike(up.strike)} (${upD != null ? fmtPct(upD) : "?"}), net ${fmtSigned(up.net)}, +${fmtGex(Math.abs(up.delta as number))} vs prior session` : "nothing building above spot"}\n` +
+                            `▼ downside: ${down ? `${fmtStrike(down.strike)} (${downD != null ? fmtPct(downD) : "?"}), net ${fmtSigned(down.net)}, +${fmtGex(Math.abs(down.delta as number))} vs prior session` : "nothing building below spot"}`
+                          : `No ${DTE_LABEL(d)} expiry recorded for ${t.symbol}.`}
+                      >
                         <div style={{ fontSize: 11.5, color: DIM, textAlign: "center", letterSpacing: "0.04em", marginBottom: 5 }}>{d}D</div>
                         {has ? (
                           <>
                             <div style={{ textAlign: "center", fontFamily: MONO, fontSize: 15.5, fontWeight: 800, color: GREEN, lineHeight: 1.15 }}>
-                              {f?.build ? `▲ ${fmtStrike(f.build.strike)}` : "▲ —"}
+                              {up ? `▲ ${fmtStrike(up.strike)}` : "▲ —"}
                             </div>
-                            <div style={{ textAlign: "center", fontFamily: MONO, fontSize: 11, color: GREEN, opacity: 0.85, marginBottom: 5 }}>
-                              {f?.build ? `+${fmtGex(Math.abs(f.build.delta as number))}` : " "}
+                            <div style={{ textAlign: "center", fontFamily: MONO, fontSize: 10.5, color: GREEN, opacity: 0.85, marginBottom: 5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                              {up ? sub(upD, up.delta as number) : " "}
                             </div>
                             <div style={{ textAlign: "center", fontFamily: MONO, fontSize: 15.5, fontWeight: 800, color: RED, lineHeight: 1.15 }}>
-                              {f?.fade ? `▼ ${fmtStrike(f.fade.strike)}` : "▼ —"}
+                              {down ? `▼ ${fmtStrike(down.strike)}` : "▼ —"}
                             </div>
-                            <div style={{ textAlign: "center", fontFamily: MONO, fontSize: 11, color: RED, opacity: 0.85 }}>
-                              {f?.fade ? `-${fmtGex(Math.abs(f.fade.delta as number))}` : " "}
+                            <div style={{ textAlign: "center", fontFamily: MONO, fontSize: 10.5, color: RED, opacity: 0.85, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                              {down ? sub(downD, down.delta as number) : " "}
                             </div>
                           </>
                         ) : <div style={{ textAlign: "center", color: DIM, fontSize: 13, padding: "8px 0" }}>—</div>}
@@ -596,8 +635,14 @@ export default function ForwardBuildStructure() {
           per strike. (A <span style={{ color: DIM }}>˜</span> means that expiry predates the side totals and is
           falling back to the older net-based estimate, which over-reads the dominant side.) Next to it: that
           expiry&rsquo;s biggest wall and how far the strike sits from spot (<b>+</b> above, <b>−</b> below).
-          Under it: net GEX for the front
-          <b> 0/1/2-DTE</b> expiries and where the call/put walls are migrating across the three days. Use <b>Sort</b> to
+          Under it, one tile per <b>0/1/2-DTE</b> expiry, split by side of spot:
+          <span style={{ color: GREEN }}> ▲ upside</span> is the strike <b>above</b> price whose wall is building
+          fastest day-over-day, <span style={{ color: RED }}>▼ downside</span> is the strike <b>below</b> price whose
+          wall is building fastest. The small line under each is that strike&rsquo;s distance from spot and how much
+          gamma it added vs the prior session. Only <b>building</b> walls qualify (|net| growing) — a wall that is
+          fading isn&rsquo;t a level being defended, so a side reads &ldquo;—&rdquo; when nothing there is growing.
+          Note the sign of net GEX doesn&rsquo;t pick the side: a put wall stacking up above price still counts as
+          upside structure. Below that: where the call/put walls are migrating across the three days. Use <b>Sort</b> to
           reorder the grid by name, day move, or that OTM distance. Click a card to open its ladder: bars are net GEX
           per strike (<span style={{ color: GREEN }}>green</span> = support, <span style={{ color: RED }}>red</span> =
           resistance), the right numbers are the strike&rsquo;s net-$ and its <b>day-over-day Δ</b> vs the same

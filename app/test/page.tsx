@@ -1531,6 +1531,19 @@ function useGexByStrikeMulti(symbol: string) {
     setLoading(true);
     try {
       const res = await fetch(`/proxy/gex-by-strike-multi?symbol=${encodeURIComponent(symbol)}`, { cache: "no-store" });
+      // Guard the parse. When server-v2 is running without this route (i.e. it
+      // hasn't been redeployed yet) the request falls through to Next, which
+      // answers with an HTML 404 page — and res.json() on HTML throws
+      // `Unexpected token '<', "<!DOCTYPE "... is not valid JSON`, which reads
+      // like a data bug instead of a missing endpoint. Say what it actually is.
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        throw new Error(
+          res.status === 404 || ct.includes("text/html")
+            ? "endpoint /proxy/gex-by-strike-multi not found — server-v2 needs a restart/redeploy to pick up the route"
+            : `unexpected ${ct || "empty"} response (HTTP ${res.status})`
+        );
+      }
       const json = await res.json();
       if (!res.ok || json?.ok === false) throw new Error(String(json?.error || `HTTP ${res.status}`));
       setData({

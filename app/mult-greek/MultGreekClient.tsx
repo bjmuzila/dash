@@ -370,51 +370,27 @@ type GexGrid = Record<string, Record<number, GexGridCell>>;
  *
  *  Percent (not dollars) because it's unit-free — the dollar version had to
  *  re-implement fmtMoney's scaling and drifted out of sync with it. */
-/** Δ stamp scale — diverging, deep red ← white → deep green.
- *
- *  rank is 1..5 by |% move| within each sign, so the pair of scales together form
- *  one continuous ramp: deep red (biggest unwind) → pale → white-ish (smallest
- *  move either way) → pale green → deep green (biggest build).
- *
- *  ⚠ Known trade-off: a white midpoint is designed for LIGHT backgrounds, where
- *  white recedes. On this dark ladder white is the most luminous colour available,
- *  so the SMALLEST moves (rank 4-5) draw the eye harder than the biggest ones.
- *  To invert that, swap in the dark-midpoint values below — same red/green ends,
- *  midpoint sunk to near-black so small moves recede:
- *    NEG ["#FF7C64","#E8452A","#B32E12","#7A230F","#40180C"]
- *    POS ["#63DA97","#2FB86A","#1E7D45","#17512F","#0F2A1B"]
- *    TXT ["#1a1a1a","#fff","#fff","#fff","#e6eef5"]
- */
-const DELTA_SCALE_NEG = ["#C8290D", "#ED3615", "#FF6347", "#FF9E8A", "#FFD6CE"] as const;
-const DELTA_SCALE_POS = ["#12803F", "#22A85F", "#4ECB8B", "#93E3B7", "#D2F2E0"] as const;
-/** Label colour per rank — the deep ends need light text, the pale ends dark. */
-const DELTA_SCALE_TEXT = ["#ffffff", "#ffffff", "#1a1a1a", "#1a1a1a", "#1a1a1a"] as const;
-
 function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) {
-  const pos = pct > 0;
-  // rank is 1..5 by |% move| within this sign — 1 is the biggest mover. Ranks
-  // past 5 are possible (change-sign is independent of GEX-sign, so one side can
-  // hold more than five movers) and clamp onto the midpoint step.
-  const i = Math.max(0, Math.min(4, rank - 1));
-  const bg = (pos ? DELTA_SCALE_POS : DELTA_SCALE_NEG)[i];
-  const shown = Math.min(Math.round(Math.abs(pct)), 999);
+  const MONEY_ABS_V = `$${Math.abs(d) >= 1000 ? (Math.abs(d) / 1000).toFixed(1) + "B" : Math.round(Math.abs(d)) + "M"}`;
+  const pos = d > 0;
+  // Uniform plate on every chip — HOME_THEME.panel. Opaque and darker than any
+  // cell metricBg() can produce, so the chip reads identically on a rank-1 wall
+  // (0.90 alpha, near-solid) and on a quiet far strike. Direction is carried by
+  // the number's colour alone; nothing here encodes rank.
   return (
     <span
-      title={`Δ ${pos ? "+" : "−"}${Math.abs(Math.round(pct))}% (${fmtMoney(d).sign}${fmtMoney(d).value}) — #${rank} mover`}
+      title={`Δ ${pos ? "+" : "−"}${MONEY_ABS_V} over the window · #${rank} mover (${Math.abs(Math.round(pct))}%)`}
       style={{
         flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
         height: 15, boxSizing: "border-box",
-        fontSize: i === 0 ? 11 : 10, fontWeight: i <= 1 ? 900 : 800,
+        fontSize: 10, fontWeight: rank === 1 ? 900 : 800,
         fontFamily: "var(--font-mono)", lineHeight: 1,
-        padding: "0 4px", borderRadius: 4, whiteSpace: "nowrap",
-        background: bg,
-        color: DELTA_SCALE_TEXT[i],
-        // White hairline: the deep ends of the scale (#C8290D / #12803F) are dark
-        // enough to sink into a dark cell, and a black border made that worse. A
-        // light border lifts every chip off the heat regardless of its fill.
-        border: "1px solid rgba(255,255,255,0.9)",
+        padding: "0 5px", borderRadius: 4, whiteSpace: "nowrap",
+        background: "#0D1119",
+        color: pos ? "#4ade80" : "#f87171",
+        border: "none",
       }}
-    >{pos ? "▲" : "▼"}{shown}%</span>
+    >{pos ? "+" : "−"}{MONEY_ABS_V}</span>
   );
 }
 
@@ -518,12 +494,15 @@ function TickerPanel({
   // Only fetched while the mode is on; cleared when switched off so stale
   // baselines can't survive an expiry change.
   const [gexGrid, setGexGrid] = useState<GexGrid>({});
-  const colDatesKey = colDates.join(",");
+  // Δ stamps are front-expiry only, so only the nearest contract's baselines
+  // are worth pulling — this is one request per ticker instead of one per
+  // expiry column.
+  const frontDate = colDates[0] ?? "";
   useEffect(() => {
-    if (deltaWindow === 0 || !colDates.length) { setGexGrid({}); return; }
+    if (deltaWindow === 0 || !frontDate) { setGexGrid({}); return; }
     let cancelled = false;
     const load = async () => {
-      const entries = await Promise.all(colDates.map(async (date) => {
+      const entries = await Promise.all([frontDate].map(async (date) => {
         try {
           const r = await fetch(
             `/api/mult-greek-gex-grid?ticker=${encodeURIComponent(ticker)}&expiry=${encodeURIComponent(date)}`,
@@ -544,7 +523,7 @@ function TickerPanel({
     const id = setInterval(() => { void load(); }, 20_000);
     return () => { cancelled = true; clearInterval(id); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deltaWindow, ticker, colDatesKey]);
+  }, [deltaWindow, ticker, frontDate]);
 
   // Δ per cell, for the top-5-per-side strikes only. Stores the percent move and
   // the raw dollar delta (for the tooltip), plus maxPct per column — the stamp's
@@ -556,7 +535,8 @@ function TickerPanel({
     const maxPct: Record<string, number> = {};
     if (deltaWindow === 0 || !computed) return { by, maxPct };
     const key = `v${deltaWindow}` as "v5" | "v15" | "v30";
-    for (const e of computed.cols) {
+    // Front expiry only — the other columns render plain values.
+    for (const e of computed.cols.slice(0, 1)) {
       const grid = gexGrid[e];
       const ranked = computed.top5PerSide[e] ?? {};
       const col: Record<number, { d: number; pct: number; rank: number }> = {};
@@ -696,13 +676,13 @@ function TickerPanel({
       {/* Column headers — STRIKE + one NET GEX column per expiry */}
       <div style={{ display: "grid", gridTemplateColumns: gridCols, background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
         <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", alignSelf: "center" }}>STRIKE</div>
-        {cols.map(c => {
+        {cols.map((c, ci) => {
           const lbl = colLabel(c.date);
           return (
             <div key={c.date} style={{ padding: "3px 4px", textAlign: "center", lineHeight: 1.15 }}>
               <div style={{ color: HT.cyan, fontSize: 10, fontWeight: 800, letterSpacing: "0.04em" }}>{lbl.dte}</div>
               <div style={{ color: HT.muted, fontSize: 8, fontWeight: 700 }}>
-                {deltaWindow !== 0 ? `GEX +Δ${deltaWindow}M` : "GEX"} · {lbl.md}
+                {deltaWindow !== 0 && ci === 0 ? `GEX +Δ${deltaWindow}M` : "GEX"} · {lbl.md}
               </div>
             </div>
           );
@@ -836,7 +816,11 @@ function TickerPanel({
                         auto, so it stays aligned across rows whether or not this one
                         carries a stamp — and unranked rows give all their width to
                         the number instead of reserving space for nothing. */}
-                    {dMode && dEntry
+                    {/* rank > 5 is possible (change-sign is independent of GEX-sign,
+                        so one side can hold more than five movers). The scale only
+                        has 5 steps, so those go unstamped rather than piling onto
+                        the faintest colour with a "#7" label. */}
+                    {dMode && isFront && dEntry && dEntry.rank <= 5
                       ? <DeltaStamp d={dEntry.d} pct={dEntry.pct} rank={dEntry.rank} />
                       : null}
                     <span style={dMode ? { marginLeft: "auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } : undefined}>
@@ -1411,10 +1395,6 @@ export function MultGreekClient({
     return new Promise<void>(res => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(res, 50))));
   }, []);
   const endCapture = useCallback(() => setCaptureWindow(null), []);
-  // Title band text for the snapshot. Without this the shared engine falls back
-  // to "SPX GEX", which mislabels a four-ticker Multi-Greek capture.
-  const snapTitle = `Multi-Greek — Net GEX by Expiry  •  ${TICKERS.join("  ")}`;
-
 
   const isCapturing = captureWindow != null;
 
@@ -1466,12 +1446,8 @@ export function MultGreekClient({
         </div>
       )}
 
-      {/* Toolbar — data-capture-hide keeps the whole control dock (date picker,
-          mode toggles, intensity slider, the snap/Discord buttons themselves)
-          out of the PNG. Without it every shared snapshot carried a picture of
-          the controls, and captureElement subtracts this row's height from the
-          capture so nothing shifts. */}
-      <div data-capture-hide style={{ display: "flex", padding: "6px 10px 2px", flexShrink: 0 }}>
+      {/* Toolbar */}
+      <div style={{ display: "flex", padding: "6px 10px 2px", flexShrink: 0 }}>
       <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%" }}>
 
         {/* Status dot */}
@@ -1579,8 +1555,8 @@ export function MultGreekClient({
         {!isStatic && (
           <DockButton onClick={trigger} title="Refresh" style={{ color: btnStyle.color as string }}>{btnLabel}</DockButton>
         )}
-        <BoxSnapBtn targetRef={pageRef} label="📷" title={snapTitle} fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} />
-        <BoxDiscordBtn targetRef={pageRef} title={snapTitle} fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} message={`📊 Multi-Greek GEX by Expiry — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
+        <BoxSnapBtn targetRef={pageRef} label="📷" fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} />
+        <BoxDiscordBtn targetRef={pageRef} fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} message={`📊 Multi-Greek GEX by Expiry — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
       </Dock>
       </div>
 

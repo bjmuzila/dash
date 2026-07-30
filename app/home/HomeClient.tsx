@@ -21,6 +21,7 @@ import GexToolbar from "@/components/dashboard/GexToolbar";
 // Reuse the exact standalone /options-chain component for the heatmap panel's
 // "Chain" tab. expirySelection="key" = compact 0DTE/1DTE/weekly/monthly columns
 // (same embed the /new-home page uses); ticker hides its own ticker input.
+import OptionsChainPage from "@/app/options-chain/page";
 import FitScale from "@/components/shared/FitScale";
 import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
 import StrikeHoverCard from "@/components/dashboard/StrikeHoverCard";
@@ -148,51 +149,27 @@ function fmtMoney(v: number) {
  *
  *  Percent (not dollars) because it's unit-free — a dollar stamp has to
  *  re-implement fmtCellM's unit scaling and drifts out of sync with it. */
-/** Δ stamp scale — diverging, deep red ← white → deep green.
- *
- *  rank is 1..5 by |% move| within each sign, so the pair of scales together form
- *  one continuous ramp: deep red (biggest unwind) → pale → white-ish (smallest
- *  move either way) → pale green → deep green (biggest build).
- *
- *  ⚠ Known trade-off: a white midpoint is designed for LIGHT backgrounds, where
- *  white recedes. On this dark ladder white is the most luminous colour available,
- *  so the SMALLEST moves (rank 4-5) draw the eye harder than the biggest ones.
- *  To invert that, swap in the dark-midpoint values below — same red/green ends,
- *  midpoint sunk to near-black so small moves recede:
- *    NEG ["#FF7C64","#E8452A","#B32E12","#7A230F","#40180C"]
- *    POS ["#63DA97","#2FB86A","#1E7D45","#17512F","#0F2A1B"]
- *    TXT ["#1a1a1a","#fff","#fff","#fff","#e6eef5"]
- */
-const DELTA_SCALE_NEG = ["#C8290D", "#ED3615", "#FF6347", "#FF9E8A", "#FFD6CE"] as const;
-const DELTA_SCALE_POS = ["#12803F", "#22A85F", "#4ECB8B", "#93E3B7", "#D2F2E0"] as const;
-/** Label colour per rank — the deep ends need light text, the pale ends dark. */
-const DELTA_SCALE_TEXT = ["#ffffff", "#ffffff", "#1a1a1a", "#1a1a1a", "#1a1a1a"] as const;
-
 function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) {
-  const pos = pct > 0;
-  // rank is 1..5 by |% move| within this sign — 1 is the biggest mover. Ranks
-  // past 5 are possible (change-sign is independent of GEX-sign, so one side can
-  // hold more than five movers) and clamp onto the midpoint step.
-  const i = Math.max(0, Math.min(4, rank - 1));
-  const bg = (pos ? DELTA_SCALE_POS : DELTA_SCALE_NEG)[i];
-  const shown = Math.min(Math.round(Math.abs(pct)), 999);
+  const MONEY_ABS_V = `$${Math.abs(d) >= 1000 ? (Math.abs(d) / 1000).toFixed(1) + "B" : Math.round(Math.abs(d)) + "M"}`;
+  const pos = d > 0;
+  // Uniform plate on every chip — HOME_THEME.panel. Opaque and darker than any
+  // cell metricBg() can produce, so the chip reads identically on a rank-1 wall
+  // (0.90 alpha, near-solid) and on a quiet far strike. Direction is carried by
+  // the number's colour alone; nothing here encodes rank.
   return (
     <span
-      title={`Δ ${pos ? "+" : "−"}${Math.abs(Math.round(pct))}% (${fmtCellM(d)}) — #${rank} mover`}
+      title={`Δ ${pos ? "+" : "−"}${MONEY_ABS_V} over the window · #${rank} mover (${Math.abs(Math.round(pct))}%)`}
       style={{
         flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
         height: 15, boxSizing: "border-box",
-        fontSize: i === 0 ? 11 : 10, fontWeight: i <= 1 ? 900 : 800,
+        fontSize: 10, fontWeight: rank === 1 ? 900 : 800,
         fontFamily: "var(--font-mono)", lineHeight: 1,
-        padding: "0 4px", borderRadius: 4, whiteSpace: "nowrap",
-        background: bg,
-        color: DELTA_SCALE_TEXT[i],
-        // White hairline: the deep ends of the scale (#C8290D / #12803F) are dark
-        // enough to sink into a dark cell, and a black border made that worse. A
-        // light border lifts every chip off the heat regardless of its fill.
-        border: "1px solid rgba(255,255,255,0.9)",
+        padding: "0 5px", borderRadius: 4, whiteSpace: "nowrap",
+        background: "#0D1119",
+        color: pos ? "#4ade80" : "#f87171",
+        border: "none",
       }}
-    >{pos ? "▲" : "▼"}{shown}%</span>
+    >{pos ? "+" : "−"}{MONEY_ABS_V}</span>
   );
 }
 
@@ -625,21 +602,28 @@ export function HomeClient({
   // Basis for the SPY 0DTE / QQQ 0DTE net GEX columns. Independent of the SPX
   // columns beside them, which always render OI+Vol and Vol-only side by side.
   const [sideBasis, setSideBasis] = useState<GexBasis>("oi-vol");
-  // Heatmap panel view. The embedded option-chain view and its Heatmap|Chain
-  // switch were removed — this card is the heatmap, full stop. ("table"
-  // divergent-bars was already retired from the switcher; it stays in the union
-  // so its render branch keeps type-checking without a wider refactor.)
-  // Wrapped in an IIFE so TypeScript keeps the declared union instead of
-  // narrowing the const to the literal "heatmap" — the retired "table" render
-  // branch below still has to type-check.
-  const heatmapView = ((): "heatmap" | "table" => "heatmap")();
+  // Heatmap panel view: "heatmap" = colored cell backgrounds; "chain" = embedded
+  // option chain. ("table" divergent-bars view retired from the switcher; kept in
+  // the union so its now-unreachable render branch stays valid without a refactor.)
+  const [heatmapView, setHeatmapView] = useState<"heatmap" | "table" | "chain">("heatmap");
   // Δ stamps on the heatmap's NET GEX column. 0 = off (today's view).
   const [deltaWindow, setDeltaWindow] = useState<0 | 5 | 15 | 30>(0);
   // GEX chart card view: the Net GEX bar chart, or the live ES 5m candles in its
   // place. Moved here from the bottom tab strip.
   const [gexView, setGexView] = useState<"gex" | "escandles">("gex");
+  // Home option-chain ticker override. `chainTicker` drives the embed; `chainTickerInput`
+  // is the raw text field. Both revert to SPX on any tab change (see effect below).
+  const [chainTicker, setChainTicker] = useState("SPX");
+  const [chainTickerInput, setChainTickerInput] = useState("SPX");
   // 30-min rolling net GEX per strike, pulled from the history DB.
   const [rollingByStrike, setRollingByStrike] = useState<Map<number, number>>(new Map());
+
+  // Always defer the home option chain back to SPX whenever a tab changes
+  // (heatmap/chain switch or the left-column tab).
+  useEffect(() => {
+    setChainTicker("SPX");
+    setChainTickerInput("SPX");
+  }, [heatmapView, activeTab]);
 
   useEffect(() => {
     quoteSnapshotsRef.current = quoteSnapshots;
@@ -1024,7 +1008,7 @@ export function HomeClient({
     sideBasis,
     selectedExpiry,
     60_000,
-    true,
+    heatmapView !== "chain"
   );
   // Effect, not a render-phase assignment — the ref is only ever read from the
   // refresh click handler, never during render.
@@ -1664,7 +1648,27 @@ export function HomeClient({
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", whiteSpace: "nowrap" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, color: "#fff", fontWeight: 700, fontSize: 14, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
-                    Live GEX Heatmap
+                    {heatmapView === "chain" ? "Option Chain" : "Live GEX Heatmap"}
+                    {heatmapView === "chain" && (
+                    <>
+                      <input
+                        value={chainTickerInput}
+                        onChange={(e) => setChainTickerInput(e.target.value.toUpperCase())}
+                        onBlur={() => setChainTicker((chainTickerInput || "SPX").toUpperCase())}
+                        onKeyDown={(e) => { if (e.key === "Enter") setChainTicker((chainTickerInput || "SPX").toUpperCase()); }}
+                        list="home-chain-tickers"
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="SPX"
+                        title="Type a ticker + Enter. Reverts to SPX when you switch tabs."
+                        style={{ marginLeft: 10, width: 70, fontSize: 12, fontWeight: 700, padding: "3px 8px", border: "1px solid rgba(33,158,188,0.35)", borderRadius: 6, background: "linear-gradient(180deg,rgba(33,158,188,.12),rgba(33,158,188,.04))", color: C.cyan, outline: "none", textTransform: "uppercase", letterSpacing: "0.08em" }}
+                      />
+                      <datalist id="home-chain-tickers">
+                        {["SPX", "SPY", "QQQ", "NVDA", "TSLA", "AAPL", "META", "AMZN", "MSFT", "GOOGL", "AMD", "NDX"].map((t) => <option key={t} value={t} />)}
+                      </datalist>
+                    </>
+                    )}
+                    {heatmapView !== "chain" && (
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
                       <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>Intensity</span>
                       <input
@@ -1708,13 +1712,18 @@ export function HomeClient({
                         ))}
                       </div>
                     </div>
+                    )}
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginLeft: 12 }}>
+                    {heatmapView !== "chain" && (
+                    <>
                     <div style={{ fontSize: 12, color: "#8da8c2", fontWeight: 700, marginRight: 4, whiteSpace: "nowrap" }}>{fmtExpiryLabel(selectedExpiry, expiryOptions.find((option) => option.value === selectedExpiry)?.label ?? "")}</div>
                     <button onClick={heatmapRefresh} title="Refresh heatmap"
                       style={{ background: "rgba(33,158,188,0.06)", border: "1px solid rgba(33,158,188,0.25)", color: (heatmapRefreshStyle.color as string) ?? C.cyan, borderRadius: 2, padding: "2px 6px", fontSize: 14, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, transition: "color .2s" }}>{heatmapRefreshLabel.startsWith("✓") ? "✓" : heatmapRefreshLabel.startsWith("✗") ? "✗" : heatmapRefreshLabel.startsWith("↻ Refresh") ? "⟳" : "↻"}</button>
                     <BoxSnapBtn targetRef={heatmapBodyRef} label="GEX Heatmap" title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
                     <BoxDiscordBtn targetRef={heatmapBodyRef} label="GEX Heatmap" message={`GEX Heatmap • ${selectedExpiry}`} title={`SPX GEX Heatmap  •  ${heatmapTitleDate}`} />
+                    </>
+                    )}
                     {/* Δ stamps — adds the change to the left of the NET GEX value on
                         the top 5 strikes each side. Heatmap view only. */}
                     {heatmapView === "heatmap" && (
@@ -1742,12 +1751,40 @@ export function HomeClient({
                         ))}
                       </div>
                     )}
+                    {/* Heatmap|Chain switch — pinned as the LAST child so it sits at the
+                        panel's right edge and never shifts when the heatmap-only controls
+                        above it hide in Chain view. */}
+                    <div style={{ display: "flex", gap: 2, marginLeft: 4, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden" }}>
+                      {(["heatmap", "chain"] as const).map((v) => (
+                        <button
+                          key={v}
+                          onClick={() => setHeatmapView(v)}
+                          style={{
+                            padding: "2px 10px",
+                            fontSize: 10,
+                            fontWeight: 700,
+                            textTransform: "uppercase",
+                            letterSpacing: "0.08em",
+                            cursor: "pointer",
+                            border: "none",
+                            fontFamily: "inherit",
+                            background: heatmapView === v ? "rgba(33,158,188,0.14)" : "transparent",
+                            color: heatmapView === v ? "#219EBC" : "#5a7a98",
+                          }}
+                        >
+                          {v}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
                 </FitScale>
               </div>
 
               <div ref={heatmapBodyRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative", background: "#05080d" }}>
+                {heatmapView === "chain" ? (
+                  <OptionsChainPage expirySelection="sequential" expiryCount={5} ticker={chainTicker} showGrandTotal={false} />
+                ) : (
                 <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
                 <table style={{ flex: 1, minWidth: 0, height: "100%", textAlign: "right", fontSize: 10, fontFamily: "var(--font-mono)", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
                   <colgroup>
@@ -1891,7 +1928,7 @@ export function HomeClient({
                                 <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
                                   <span style={{ flexShrink: 0, minWidth: 28, display: "flex", alignItems: "center", gap: 3 }}>
                                     {row.rank && <img src={rankBadgeDataUri(row.rank, row.rankColor ?? "#8B94A7")} width={20} height={13} style={{ display: "block" }} alt={`#${row.rank}`} />}
-                                    {deltaWindow !== 0 && heatmapDeltas.by[row.strikeNum] && (
+                                    {deltaWindow !== 0 && heatmapDeltas.by[row.strikeNum] && heatmapDeltas.by[row.strikeNum].rank <= 5 && (
                                       <DeltaStamp
                                         d={heatmapDeltas.by[row.strikeNum].d}
                                         pct={heatmapDeltas.by[row.strikeNum].pct}
@@ -1936,6 +1973,7 @@ export function HomeClient({
                   </tbody>
                 </table>
                 </div>
+                )}
               </div>
             </div>
           </div>
