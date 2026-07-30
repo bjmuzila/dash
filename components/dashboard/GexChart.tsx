@@ -184,6 +184,9 @@ export default function GexChart({
   trackMvcTouch = true,
 }: GexChartProps) {
   const canvasRef    = useRef<HTMLCanvasElement>(null);
+  // True only while a snapshot is being taken. Live-only chrome (the
+  // scroll/drag/dbl hint) is skipped in that pass — see __snapRedraw below.
+  const capturingRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Viewport — matches vanilla ovViewport: { count, start }
@@ -837,8 +840,13 @@ export default function GexChart({
     // ── Legend (top-left) — removed per design ──
 
     // ── Viewport hint (bottom-right, very dim) ──
-    ctx.fillStyle = "#1a2a38"; ctx.font = "bold 8px Arial"; ctx.textAlign = "right";
-    ctx.fillText("scroll=zoom · drag=pan · dbl=recenter", W - 3, PAD_T + cH - 3);
+    // Omitted from snapshots: "scroll=zoom · drag=pan · dbl=recenter" is an
+    // affordance for a live chart and means nothing in a shared PNG, where it
+    // just reads as stray text in the corner.
+    if (!capturingRef.current) {
+      ctx.fillStyle = "#1a2a38"; ctx.font = "bold 8px Arial"; ctx.textAlign = "right";
+      ctx.fillText("scroll=zoom · drag=pan · dbl=recenter", W - 3, PAD_T + cH - 3);
+    }
 
     // ── Sync the HTML readout with the latched track (no-ops when unchanged) ──
     if (trackMvcTouch && track.touched && track.touchStrike != null && track.liveStrike != null
@@ -858,6 +866,22 @@ export default function GexChart({
 
   // Draw on changes + resize
   useEffect(() => { draw(); }, [draw]);
+
+  // Snapshot hook. lib/snapshot.ts finds [data-snap-redraw] inside the capture
+  // target and calls this synchronously with true before reading the canvas
+  // bitmap, then false afterwards to restore the live view. Same idea as
+  // es-candles' __ltScreenshot, but for "redraw without live-only chrome"
+  // rather than "hand me your own bitmap".
+  useEffect(() => {
+    const canvas = canvasRef.current as
+      (HTMLCanvasElement & { __snapRedraw?: (capturing: boolean) => void }) | null;
+    if (!canvas) return;
+    canvas.__snapRedraw = (capturing: boolean) => {
+      capturingRef.current = capturing;
+      draw();
+    };
+    return () => { if (canvas) delete canvas.__snapRedraw; };
+  }, [draw]);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -1035,7 +1059,7 @@ export default function GexChart({
       onClick={onClick}
       onDoubleClick={onDblClick}
     >
-      <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />
+      <canvas ref={canvasRef} data-snap-redraw="" style={{ display: "block", width: "100%", height: "100%" }} />
 
       {/* MVC touch readout — appears once spot trades into the peak-GEX strike */}
       {mvcBadge && (() => {

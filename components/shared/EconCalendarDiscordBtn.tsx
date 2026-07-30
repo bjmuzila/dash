@@ -16,6 +16,7 @@ import { useState, useCallback } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { buildCalendarTemplateImage } from "@/lib/discord/econSnapshot";
 import { shareToDiscord, base64ToPngBlob } from "@/lib/discord/share";
+import { copyOrDownload } from "@/lib/snapshot";
 
 type TemplateBtnState = "idle" | "busy" | "ok" | "err";
 
@@ -36,9 +37,13 @@ function postToDiscord(imageBase64: string): Promise<void> {
   });
 }
 
-async function copyImageToClipboard(imageBase64: string): Promise<void> {
-  const blob = base64ToPngBlob(imageBase64);
-  await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+async function copyImageToClipboard(imageBase64: string): Promise<"copied" | "saved"> {
+  // Via the shared helper so this button gets the same clipboard-then-download
+  // fallback as every other snapshot button. A bare clipboard.write() throws
+  // wherever image writes aren't implemented (Firefox, older Safari) or outside
+  // a secure context, and this handler turned that into a silent "ERR" with no
+  // image — the one capture path in the app that could leave you empty-handed.
+  return copyOrDownload(base64ToPngBlob(imageBase64), "econ-calendar.png");
 }
 
 // ── Icons ─────────────────────────────────────────────────────────────────────

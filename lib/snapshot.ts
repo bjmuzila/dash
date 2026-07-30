@@ -48,8 +48,20 @@ import { HOME_THEME } from "@/components/shared/homeTheme";
 /** Single source of truth for capture background. Never hardcode hex (AGENTS.md). */
 export const SNAP_BG = HOME_THEME.bg;
 export const SNAP_WATERMARK = "Data provided by CBEdge.net";
-/** Height of the framed-mode title band, in CSS px. */
-export const SNAP_BAND_H = 44;
+/**
+ * Height of the framed-mode title band, in CSS px.
+ *
+ * The band's two lines carry EXPLICIT line-heights (see the band CSS below) so
+ * this number is font-independent: 8 padding + 18 title + 3 gap + 13 watermark
+ * + 8 padding = 50, leaving 2px of slack. Relying on the font's natural
+ * line-height instead is what sliced the watermark in half on the GEX heatmap —
+ * 44px was enough with the Arial fallback but not with Inter, which the app
+ * actually loads, so it only reproduced on real pages and never in a fixture.
+ */
+export const SNAP_BAND_H = 52;
+/** Band line-heights, in CSS px. SNAP_BAND_H is derived from these. */
+const BAND_TITLE_LH = 18;
+const BAND_WATERMARK_LH = 13;
 /**
  * Breathing room between the band and the first row of content. The band holds
  * a 15px title + 3px gap + 11px watermark inside 8px/8px padding — about 45px,
@@ -119,6 +131,29 @@ export type SnapOptions = {
 };
 
 type LtProvider = () => { canvas: HTMLCanvasElement; target: HTMLElement } | null;
+type SnapRedraw = (capturing: boolean) => void;
+
+/**
+ * Ask every canvas in the subtree that exposes `__snapRedraw` to repaint for (or
+ * back from) a capture.
+ *
+ * A <canvas> is opaque to the DOM fixes above — anything painted into it is just
+ * pixels, so live-only chrome drawn on a chart cannot be removed with
+ * [data-capture-hide]. The GEX chart's "scroll=zoom · drag=pan · dbl=recenter"
+ * hint was being baked into every shared PNG for exactly that reason. Components
+ * opt in by tagging their canvas [data-snap-redraw] and attaching the hook; this
+ * must be synchronous, since the bitmap is read immediately after.
+ */
+function setCanvasCaptureMode(el: HTMLElement, capturing: boolean) {
+  const nodes: Element[] = [...el.querySelectorAll("[data-snap-redraw]")];
+  if (el.matches("[data-snap-redraw]")) nodes.push(el);
+  for (const n of nodes) {
+    const fn = (n as unknown as { __snapRedraw?: SnapRedraw }).__snapRedraw;
+    if (typeof fn === "function") {
+      try { fn(capturing); } catch { /* a chart that can't redraw is not fatal */ }
+    }
+  }
+}
 
 /**
  * True when `el` is, for capture purposes, just a canvas — exactly one canvas
@@ -168,6 +203,23 @@ function applyUniversalCloneFixes(root: HTMLElement) {
       if (clip === "text") flatten(n, HOME_THEME.text);
     });
 
+  // ── position:sticky has no meaning in a static capture ────────────────────
+  // A sticky header sticks to the top of its scroll container. The capture
+  // reserves space at the top for the title band and sets the root's overflow
+  // to visible, which changes which ancestor is the scroll container — so a
+  // sticky `top: 0` header slides UP out of the content and paints its opaque
+  // background over the band. That is what covered the watermark on the GEX
+  // heatmap (its header is position:sticky, top:0, background #070c14) and it
+  // affects every sticky header in the app: the options-chain toolbar, the
+  // scanner tables, the fails and budget pages.
+  //
+  // Nothing scrolls in a PNG, so demote sticky to static and let the header sit
+  // where it belongs in the flow.
+  root.querySelectorAll<HTMLElement>('[style*="sticky"]').forEach((n) => {
+    if (n.style.position === "sticky") n.style.position = "static";
+  });
+  if (root.style.position === "sticky") root.style.position = "static";
+
   // ── Gotcha 7: backdrop-filter is a no-op in html2canvas ───────────────────
   // A frosted panel is a low-alpha fill that only reads correctly because of the
   // blur behind it. With no blur it looks washed out, so promote the fill to the
@@ -185,6 +237,20 @@ function applyUniversalCloneFixes(root: HTMLElement) {
  * Capture `el` to a canvas. This is the only html2canvas call in the codebase.
  */
 export async function captureToCanvas(
+  el: HTMLElement,
+  opts: SnapOptions = {},
+): Promise<HTMLCanvasElement> {
+  setCanvasCaptureMode(el, true);
+  try {
+    return await captureToCanvasInner(el, opts);
+  } finally {
+    // Always restore, including on failure — otherwise the live chart silently
+    // loses its interaction hint until the next unrelated redraw.
+    setCanvasCaptureMode(el, false);
+  }
+}
+
+async function captureToCanvasInner(
   el: HTMLElement,
   opts: SnapOptions = {},
 ): Promise<HTMLCanvasElement> {
@@ -235,10 +301,10 @@ export async function captureToCanvas(
     octx.textAlign = "left";
     octx.fillStyle = HOME_THEME.text;
     octx.font = `700 ${Math.round(15 * scale)}px Inter, Arial, sans-serif`;
-    octx.fillText(titleText, 12 * scale, 20 * scale);
+    octx.fillText(titleText, 12 * scale, (8 + BAND_TITLE_LH - 4) * scale);
     octx.fillStyle = "rgba(255,255,255,0.7)";
     octx.font = `700 ${Math.round(11 * scale)}px Inter, Arial, sans-serif`;
-    octx.fillText(SNAP_WATERMARK, 12 * scale, 36 * scale);
+    octx.fillText(SNAP_WATERMARK, 12 * scale, (8 + BAND_TITLE_LH + 3 + BAND_WATERMARK_LH - 3) * scale);
     return out;
   }
 
@@ -414,15 +480,18 @@ export async function captureToCanvas(
       band.style.cssText = [
         "position:absolute", "top:0", "left:0", "right:0",
         "padding:8px 12px 8px", `background:${bg}`,
-        `height:${SNAP_BAND_H}px`, "box-sizing:border-box", "overflow:hidden",
+        `height:${SNAP_BAND_H}px`, "box-sizing:border-box",
+        // Deliberately NOT overflow:hidden — with the explicit line-heights
+        // below the band cannot outgrow its height, and clipping its own
+        // watermark is the exact failure this is guarding against.
         "z-index:9999", "pointer-events:none",
       ].join(";");
       const t1 = doc.createElement("div");
       t1.textContent = titleText;
-      t1.style.cssText = `font:700 15px ${inter};color:${HOME_THEME.text};white-space:nowrap;`;
+      t1.style.cssText = `font:700 15px/${BAND_TITLE_LH}px ${inter};color:${HOME_THEME.text};white-space:nowrap;`;
       const t2 = doc.createElement("div");
       t2.textContent = SNAP_WATERMARK;
-      t2.style.cssText = `font:700 11px ${inter};color:rgba(255,255,255,0.7);white-space:nowrap;margin-top:3px;`;
+      t2.style.cssText = `font:700 11px/${BAND_WATERMARK_LH}px ${inter};color:rgba(255,255,255,0.7);white-space:nowrap;margin-top:3px;`;
       band.appendChild(t1);
       band.appendChild(t2);
       clone.appendChild(band);

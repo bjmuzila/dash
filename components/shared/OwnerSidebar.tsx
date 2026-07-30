@@ -53,6 +53,7 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
     accent: HOME_THEME.green,
     links: [
       { label: "Budget", href: "/owner/budget", glyph: "⚖" },
+      { label: "Reta", href: "/owner/reta", glyph: "⌀" },
       { label: "To-Do", href: "/owner/personal/todo", glyph: "☑" },
     ],
   },

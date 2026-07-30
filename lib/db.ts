@@ -453,6 +453,45 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     -- Added after the table shipped: existing rows are all prop purchases.
     ALTER TABLE budget_prop ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'prop';
 
+    -- ── Reta (retatrutide) protocol tracker — owner-only ──────────────────────
+    -- Reconstitution changes week to week, so each recon is its own row keyed by
+    -- the Sunday it takes effect. A shot resolves the setup with the greatest
+    -- effective_from <= its own date, which is why editing this week's recon can
+    -- never rewrite the math of a week already logged.
+    CREATE TABLE IF NOT EXISTS reta_setups (
+      id SERIAL PRIMARY KEY,
+      effective_from TEXT NOT NULL UNIQUE,
+      vial_mg REAL NOT NULL DEFAULT 10,
+      bac_ml REAL NOT NULL DEFAULT 2,
+      syringe_units INTEGER NOT NULL DEFAULT 100,
+      note TEXT,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- One row per person per shot date (shot day is Sunday). dose_mg is what was
+    -- actually drawn; units/mL are DERIVED from the recon in force at render
+    -- time, never stored, so correcting a recon fixes that whole week at once.
+    CREATE TABLE IF NOT EXISTS reta_shots (
+      id SERIAL PRIMARY KEY,
+      shot_date TEXT NOT NULL,
+      person TEXT NOT NULL,
+      dose_mg REAL NOT NULL DEFAULT 0,
+      weight_lb REAL,
+      taken INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (shot_date, person)
+    );
+    CREATE INDEX IF NOT EXISTS idx_reta_shots_date ON reta_shots(shot_date);
+
+    -- One free-text note per week, shared by both people (sides, skips, refills).
+    CREATE TABLE IF NOT EXISTS reta_week_notes (
+      shot_date TEXT PRIMARY KEY,
+      note TEXT,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS waitlist (
       id SERIAL PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
@@ -5243,6 +5282,149 @@ export async function listPropRows(profileId: number, fromDate: string, toDate: 
   return queryAll<BudgetPropRecord>(
     "SELECT * FROM budget_prop WHERE profile_id = ? AND entry_date >= ? AND entry_date <= ? ORDER BY entry_date DESC, id DESC",
     [profileId, fromDate, toDate]
+  );
+}
+
+// ── Reta protocol tracker (recon setups + weekly shots) ──────────────────────
+// Owner-only and single-household, so there is no profile_id here: the /api/reta
+// route is gated to OWNER_USER_ID and these three tables hold exactly one log.
+export interface RetaSetupRecord {
+  id: number;
+  /** Sunday (YYYY-MM-DD) this reconstitution takes effect. Unique. */
+  effective_from: string;
+  vial_mg: number;
+  bac_ml: number;
+  /** Syringe barrel capacity in units (30 / 50 / 100) — for the ruler only. */
+  syringe_units: number;
+  note?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface RetaShotRecord {
+  id: number;
+  shot_date: string;
+  person: string;
+  dose_mg: number;
+  weight_lb: number | null;
+  taken: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface RetaWeekNoteRecord {
+  shot_date: string;
+  note: string | null;
+}
+
+/** Every recon, oldest first — the client picks the one in force per week. */
+export async function listRetaSetups(): Promise<RetaSetupRecord[]> {
+  return queryAll<RetaSetupRecord>(
+    "SELECT * FROM reta_setups ORDER BY effective_from ASC"
+  );
+}
+
+/** Upsert by effective_from: re-saving the same Sunday edits that recon. */
+export async function upsertRetaSetup(input: {
+  effective_from: string;
+  vial_mg: number;
+  bac_ml: number;
+  syringe_units?: number;
+  note?: string | null;
+}): Promise<RetaSetupRecord> {
+  const pool = await getDb();
+  const result = await pool.query(
+    `INSERT INTO reta_setups (effective_from, vial_mg, bac_ml, syringe_units, note)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (effective_from) DO UPDATE SET
+       vial_mg = EXCLUDED.vial_mg,
+       bac_ml = EXCLUDED.bac_ml,
+       syringe_units = EXCLUDED.syringe_units,
+       note = EXCLUDED.note,
+       updated_at = CURRENT_TIMESTAMP
+     RETURNING *`,
+    [
+      input.effective_from,
+      input.vial_mg,
+      input.bac_ml,
+      Math.round(input.syringe_units ?? 100) || 100,
+      input.note ?? null,
+    ]
+  );
+  return result.rows[0] as RetaSetupRecord;
+}
+
+export async function deleteRetaSetup(id: number): Promise<void> {
+  const pool = await getDb();
+  await pool.query(`DELETE FROM reta_setups WHERE id = $1`, [id]);
+}
+
+export async function listRetaShots(): Promise<RetaShotRecord[]> {
+  return queryAll<RetaShotRecord>(
+    "SELECT * FROM reta_shots ORDER BY shot_date ASC, person ASC"
+  );
+}
+
+/**
+ * Upsert one person's week. Only the fields present in `patch` are written, so
+ * ticking "taken" never wipes a weight typed a second earlier (COALESCE keeps
+ * the stored value when the client sends undefined).
+ */
+export async function upsertRetaShot(input: {
+  shot_date: string;
+  person: string;
+  dose_mg?: number;
+  weight_lb?: number | null;
+  taken?: number;
+}): Promise<RetaShotRecord> {
+  const pool = await getDb();
+  const result = await pool.query(
+    // Every param is cast explicitly: a bare `COALESCE($3, 0)` would let
+    // Postgres infer $3 as integer from the literal and reject "0.5".
+    `INSERT INTO reta_shots (shot_date, person, dose_mg, weight_lb, taken)
+     VALUES ($1,$2,COALESCE($3::real,0),$4::real,COALESCE($5::int,0))
+     ON CONFLICT (shot_date, person) DO UPDATE SET
+       dose_mg   = COALESCE($3::real, reta_shots.dose_mg),
+       weight_lb = CASE WHEN $6::boolean THEN $4::real ELSE reta_shots.weight_lb END,
+       taken     = COALESCE($5::int, reta_shots.taken),
+       updated_at = CURRENT_TIMESTAMP
+     RETURNING *`,
+    [
+      input.shot_date,
+      input.person,
+      input.dose_mg ?? null,
+      input.weight_lb ?? null,
+      input.taken ?? null,
+      // weight_lb is nullable and clearable, so "was it sent?" can't be inferred
+      // from the value — pass the intent explicitly.
+      input.weight_lb !== undefined,
+    ]
+  );
+  return result.rows[0] as RetaShotRecord;
+}
+
+export async function deleteRetaShot(shotDate: string, person: string): Promise<void> {
+  const pool = await getDb();
+  await pool.query(`DELETE FROM reta_shots WHERE shot_date = $1 AND person = $2`, [shotDate, person]);
+}
+
+export async function listRetaWeekNotes(): Promise<RetaWeekNoteRecord[]> {
+  return queryAll<RetaWeekNoteRecord>(
+    "SELECT shot_date, note FROM reta_week_notes ORDER BY shot_date ASC"
+  );
+}
+
+export async function upsertRetaWeekNote(shotDate: string, note: string | null): Promise<void> {
+  const pool = await getDb();
+  const text = note && note.trim() ? note.trim() : null;
+  if (!text) {
+    await pool.query(`DELETE FROM reta_week_notes WHERE shot_date = $1`, [shotDate]);
+    return;
+  }
+  await pool.query(
+    `INSERT INTO reta_week_notes (shot_date, note) VALUES ($1,$2)
+     ON CONFLICT (shot_date) DO UPDATE SET note = EXCLUDED.note, updated_at = CURRENT_TIMESTAMP`,
+    [shotDate, text]
   );
 }
 
