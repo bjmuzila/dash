@@ -20,36 +20,9 @@
  * Guard: if Greeks/OI are missing for most strikes (< MIN_POPULATED_STRIKES
  * strikes with non-zero gamma AND non-zero OI), SKIP the write and log.
  * Never writes 0 / partial GEX.
- *
- * ── COLUMN BASES (read this before charting any of them) ────────────────────
- * `total_gex` is HISTORICALLY MIXED and is kept only for back-compat. Its
- * meaning depends on which writer touched the row last:
- *   source='ladder'       0DTE only,   OI-only     (PM pass, per-strike ladder)
- *   source='live_state'   front expiry, OI+Vol     (PM fallback, /proxy/gex header)
- *   source='theta'        ALL expirations, OI+Vol  (AM settled pass + catch-up,
- *                                                   which OVERWRITE the PM row)
- *   source='mvc_snapshot' 0DTE-ish,    OI-only     (last-resort fallback)
- * Because the AM pass overwrites yesterday, a `total_gex` series is mostly
- * all-expiration OI+Vol with today's bar on the 0DTE OI-only basis. Do not
- * chart it as a single series.
- *
- * The two columns below ARE single-definition, both on the OI+Vol basis
- * (gamma × (OI + volume) × spot², puts negated), and every path that can
- * produce them now writes both:
- *   total_gex_0dte    0DTE expiry ONLY          <- "SPX EOD GEX by session" card
- *   total_gex_ex0dte  every expiry EXCEPT 0DTE  <- the ex-0DTE card
- * Their sum is the whole-chain OI+Vol total. NULL means "this path could not
- * produce it", never 0 — see the COALESCE in upsertEodGex.
- *
- * One caveat no column can hide: the PM pass sees PROVISIONAL intraday OI, the
- * AM pass sees SETTLED OPRA OI, so a row's values firm up the next morning.
- * That is a data-vintage difference, not a basis difference.
  */
 
-// computeGexRows is SINGLE-EXPIRY (it groups by strike alone, so multi-expiry
-// input keeps only the last expiry per strike/side). Anything spanning more than
-// one expiration must use computeGexRowsMultiExpiry.
-const { computeGexRows, computeGexRowsMultiExpiry, totalNetGex, findGexFlip } = require('./computation/gex-calculator');
+const { computeGexRows, totalNetGex } = require('./computation/gex-calculator');
 const { useTheta } = require('./config/data-source');
 // Option data source follows the SAME DATA_SOURCE flag as the main feed:
 // Theta when on, TastyTrade REST (tt-snapshot) when the subscription is paused.
@@ -65,7 +38,7 @@ const {
   fetchIndexEodTheta,
   fetchStockEodTheta,
 } = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
-const { bsGreeks, impliedVol, yearsToExpiry, etEpochMs } = require('./computation/utils');
+const { bsGreeks, impliedVol, yearsToExpiry } = require('./computation/utils');
 
 // `exp|strike|type` key matching proxy-thetadata's keyOf()
 const keyOf = (exp, strike, type) => `${exp}|${Number(strike)}|${type}`;
@@ -81,10 +54,6 @@ const EOD_SYMBOLS = [
 
 // Minimum number of strikes with gamma AND OI present to trust the data.
 const MIN_POPULATED_STRIKES = 20;
-
-// Fraction of a persisted ladder's strikes that must carry a non-NULL
-// net_vol_gex before we will call the sum an OI+Vol total. See fetchSpxLadder.
-const VOL_COVERAGE_MIN = 0.5;
 
 // EOD window: 15:55–16:05 ET (minutes-since-midnight)
 const WINDOW_OPEN_MINS  = 15 * 60 + 55; // 955
@@ -197,9 +166,20 @@ function isAmWindow() {
 
 // ── Data fetchers ─────────────────────────────────────────────────────────────
 
-// etEpochMs (DST-correct "hh:mm ET on this date" → epoch ms) now lives in
-// computation/utils.js so scripts/backfill-eod-gex-0dte.js can use the exact
-// same 16:00-ET cutoff without importing this module's Theta/TT graph.
+// Epoch ms for `hh:mm` ET on an ET date string, DST-correct (no hardcoded -4/-5).
+function etEpochMs(dateStr, hh, mm) {
+  const asUtc = Date.parse(
+    `${dateStr}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00Z`
+  );
+  const tzn = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', timeZoneName: 'longOffset',
+  }).formatToParts(new Date(asUtc)).find((p) => p.type === 'timeZoneName')?.value || 'GMT-4';
+  const m = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(tzn);
+  const offMin = m
+    ? (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3] || 0))
+    : -240;
+  return asUtc - offMin * 60_000;
+}
 
 /**
  * $SPX net GEX from the PERSISTED per-strike ladder, not from live market-state.
@@ -223,18 +203,7 @@ function isAmWindow() {
  * drift materially on some sessions (2026-07-24 moves -21.3B -> -8.9B if you
  * take max(timestamp) instead), so the cutoff is load-bearing, not cosmetic.
  *
- * TWO totals come back, from the SAME snapshot row set:
- *   totalNetGex      Σ net_gex                  — OI-only, what total_gex has
- *                                                 always held for source='ladder'
- *   totalNetGex0dte  Σ (net_gex + net_vol_gex)  — OI+Vol, the basis the walls,
- *                                                 the flip and $Gamma all use
- * The OI+Vol one is null unless net_vol_gex is actually populated (see
- * VOL_COVERAGE_MIN): the column was added after this table existed, so older
- * snapshots have it NULL, and COALESCE-ing those to 0 would silently emit an
- * OI-only number wearing an OI+Vol label.
- *
- * Returns { totalNetGex, totalNetGex0dte, totalFlowGex, spot, pinStrike,
- *           pinNetGex, pinShare, snapMs }.
+ * Returns { totalNetGex, totalFlowGex, spot, pinStrike, pinNetGex, pinShare }.
  */
 async function fetchSpxLadder(date) {
   const p = getPool();
@@ -247,7 +216,7 @@ async function fetchSpxLadder(date) {
        FROM option_strike_gex_history
        WHERE symbol = $1 AND date = $2 AND expiry = $2 AND timestamp < $3
      )
-     SELECT h.strike, h.spot, h.net_gex, h.net_vol_gex, h.call_gamma, h.put_gamma, h.timestamp
+     SELECT h.strike, h.spot, h.net_gex, h.call_gamma, h.put_gamma, h.timestamp
      FROM option_strike_gex_history h, snap
      WHERE h.symbol = $1 AND h.date = $2 AND h.expiry = $2
        AND h.timestamp = snap.t`,
@@ -264,35 +233,11 @@ async function fetchSpxLadder(date) {
   }
 
   let tng = 0, absSum = 0, pin = null;
-  // OI+Vol sibling of `tng`, accumulated over the same rows. `volRows` counts
-  // strikes that actually carried a net_vol_gex value — a strike with genuinely
-  // zero volume writes 0.0, not NULL, so NULL here means "not recorded".
-  let tngOiVol = 0, volRows = 0;
   for (const r of rows) {
     const g = Number(r.net_gex) || 0;
     tng += g;
     absSum += Math.abs(g);
     if (!pin || Math.abs(g) > Math.abs(pin.g)) pin = { g, strike: Number(r.strike) };
-    if (r.net_vol_gex != null && Number.isFinite(Number(r.net_vol_gex))) {
-      volRows++;
-      tngOiVol += g + Number(r.net_vol_gex);
-    } else {
-      tngOiVol += g;
-    }
-  }
-
-  // Partial vol coverage is worse than none: it produces a number that is
-  // neither basis. Demand most of the ladder before claiming an OI+Vol total.
-  const volCovered = rows.length >= MIN_POPULATED_STRIKES
-    && volRows / rows.length >= VOL_COVERAGE_MIN;
-  if (!volCovered) {
-    console.warn(
-      `[eod-gex] $SPX ladder ${date}: ` +
-      (rows.length < MIN_POPULATED_STRIKES
-        ? `only ${rows.length} strikes in the ladder (min ${MIN_POPULATED_STRIKES})`
-        : `net_vol_gex on ${volRows}/${rows.length} strikes (need ≥${(VOL_COVERAGE_MIN * 100).toFixed(0)}%)`) +
-      ` — leaving total_gex_0dte NULL rather than writing an OI-only number as OI+Vol`
-    );
   }
 
   const spot = Number(rows[0].spot) || 0;
@@ -306,7 +251,6 @@ async function fetchSpxLadder(date) {
 
   return {
     totalNetGex: tng,
-    totalNetGex0dte: volCovered ? tngOiVol : null,
     totalFlowGex: 0,
     spot,
     pinStrike: pin.strike,
@@ -443,11 +387,21 @@ async function mapLimit(items, limit, fn) {
 
 const EXP_CONCURRENCY = 4;
 
-// Flatten the live chain for `exps` into gex-calculator input rows, each tagged
-// with its `expiration` so callers can split 0DTE out without re-fetching.
-// Shared by computeLiveGexEx0dte (EOD totals) and computeLiveGexRowsMulti (the
-// /proxy/gex-by-strike-multi ladders) so the two can never drift apart.
-async function fetchLiveFlatRows(underlying, exps, contracts) {
+// Compute combined net GEX across all expirations except 0DTE for a symbol, from
+// the live chain. `spot` is passed in from the front pass so both totals share
+// the same underlying price. Returns a number, or null if it can't be trusted.
+async function computeLiveGexEx0dte(symbol, sessionDate, spot) {
+  if (!(Number(spot) > 0)) return null;
+  const underlying = chainUnderlying(symbol);
+  const { contracts, expirations } = await fetchChainTheta(underlying);
+  if (!expirations?.length) throw new Error(`no expirations for ${underlying}`);
+
+  // Every listed expiration that is NOT the 0DTE (session-date) expiry. Past
+  // expirations never appear in a live chain, so this is "0DTE-and-out, minus 0DTE".
+  const exps = expirations.filter((e) => e && e !== sessionDate);
+  if (!exps.length) return null; // only a 0DTE listed → nothing to combine
+
+  // Greeks + OI + volume per expiration (trio coalesced upstream), flattened.
   const perExp = await mapLimit(exps, EXP_CONCURRENCY, async (exp) => {
     const [greekMap, oiMap, volMap] = await Promise.all([
       fetchGreeksTheta(underlying, exp).catch(() => new Map()),
@@ -464,138 +418,22 @@ async function fetchLiveFlatRows(underlying, exps, contracts) {
       const gamma = Math.abs(Number(g.gamma ?? 0));
       const delta = Math.abs(Number(g.delta ?? 0));
       if (!(gamma > 0) && !(oi > 0)) continue;
-      rows.push({
-        strike: c.strike,
-        side: c.type === 'C' ? 'call' : 'put',
-        oi,
-        volume: vol,
-        gamma,
-        delta,
-        expiration: c.expiration,
-      });
+      rows.push({ strike: c.strike, side: c.type === 'C' ? 'call' : 'put', oi, volume: vol, gamma, delta });
     }
     return rows;
   });
-  return perExp.flat();
-}
 
-// How many strikes of a computed ladder carry both a gamma and some OI — the
-// "is this data real" test used by every guard in this file.
-function populatedCount(gexRows) {
-  return gexRows.filter(
-    (r) => (r.callGamma > 0 || r.putGamma > 0) && (r.callOI > 0 || r.putOI > 0)
-  ).length;
-}
-
-// Compute combined net GEX across all expirations except 0DTE for a symbol, from
-// the live chain. `spot` is passed in from the front pass so both totals share
-// the same underlying price. Returns a number, or null if it can't be trusted.
-async function computeLiveGexEx0dte(symbol, sessionDate, spot) {
-  if (!(Number(spot) > 0)) return null;
-  const underlying = chainUnderlying(symbol);
-  const { contracts, expirations } = await fetchChainTheta(underlying);
-  if (!expirations?.length) throw new Error(`no expirations for ${underlying}`);
-
-  // Every listed expiration that is NOT the 0DTE (session-date) expiry. Past
-  // expirations never appear in a live chain, so this is "0DTE-and-out, minus 0DTE".
-  const exps = expirations.filter((e) => e && e !== sessionDate);
-  if (!exps.length) return null; // only a 0DTE listed → nothing to combine
-
-  const flatRows = await fetchLiveFlatRows(underlying, exps, contracts);
+  const flatRows = perExp.flat();
   if (!flatRows.length) throw new Error(`${symbol}: no ex-0DTE option rows`);
 
-  // MULTI-expiry: computeGexRows would keep only the last expiry per strike and
-  // understate this total (it did exactly that until the multi-expiry helper
-  // existed — expect this column to step UP the first time it runs after that
-  // fix, on the same sessions, without the market having changed).
-  const gexRows = computeGexRowsMultiExpiry(flatRows, Number(spot));
-  const populated = populatedCount(gexRows);
+  const gexRows = computeGexRows(flatRows, Number(spot));
+  const populated = gexRows.filter(
+    (r) => (r.callGamma > 0 || r.putGamma > 0) && (r.callOI > 0 || r.putOI > 0)
+  ).length;
   if (populated < MIN_POPULATED_STRIKES) {
     throw new Error(`${symbol}: only ${populated} ex-0DTE populated strikes — skip`);
   }
   return totalNetGex(gexRows);
-}
-
-// ── Live per-strike ladders across expirations (for the /test net-gamma cards) ──
-//
-// The GEX Levels tab's original "Net gamma exposure by strike" card is fed by
-// /proxy/gex, which is ONE expiry (0DTE for SPX). These two ladders are the same
-// curve widened to the rest of the board:
-//   all     every listed expiration, 0DTE included
-//   ex0dte  every listed expiration except the 0DTE one
-// Both on the OI+Vol basis via computeGexRows, so they are directly comparable
-// to the 0DTE card and to eod_gex.total_gex_0dte / total_gex_ex0dte.
-//
-// Returned rows are deliberately slim — { strike, netGEX, netVolGEX } is all the
-// client's cumulative curve needs (it sums netGEX + netVolGEX per strike), and a
-// full SPX board is ~1500 strikes, so shipping every greek would bloat the
-// payload for nothing.
-const MULTI_TTL_MS = Number(process.env.GEX_MULTI_TTL_MS || 60_000);
-const _multiCache = new Map(); // `symbol|sessionDate` -> { at:number, payload:object }
-
-function slimRows(gexRows) {
-  return gexRows.map((r) => ({
-    strike: r.strike,
-    netGEX: Math.round(r.netGEX || 0),
-    netVolGEX: Math.round(r.netVolGEX || 0),
-  }));
-}
-
-async function computeLiveGexRowsMulti(symbol, sessionDate, spot) {
-  if (!(Number(spot) > 0)) throw new Error(`${symbol}: spot is 0`);
-  const underlying = chainUnderlying(symbol);
-  const { contracts, expirations } = await fetchChainTheta(underlying);
-  if (!expirations?.length) throw new Error(`no expirations for ${underlying}`);
-
-  const exps = expirations.filter(Boolean);
-  const flatRows = await fetchLiveFlatRows(underlying, exps, contracts);
-  if (!flatRows.length) throw new Error(`${symbol}: no option rows across ${exps.length} expirations`);
-
-  // Both ladders span expirations, so both go through the multi-expiry path —
-  // per-strike sums across expiries, not last-expiry-wins.
-  const allRows = computeGexRowsMultiExpiry(flatRows, Number(spot));
-  const populated = populatedCount(allRows);
-  if (populated < MIN_POPULATED_STRIKES) {
-    throw new Error(`${symbol}: only ${populated} populated strikes across the board — skip`);
-  }
-
-  const exFlat = flatRows.filter((r) => r.expiration !== sessionDate);
-  // A board with nothing but 0DTE listed is possible in principle; emit an empty
-  // ex-0DTE ladder rather than pretending it equals `all`.
-  const exRows = exFlat.length ? computeGexRowsMultiExpiry(exFlat, Number(spot)) : [];
-
-  return {
-    symbol,
-    sessionDate,
-    spot: Number(spot),
-    expirations: exps,
-    expiryCount: exps.length,
-    all: {
-      rows: slimRows(allRows),
-      totalNetGex: totalNetGex(allRows),
-      gexFlip: findGexFlip(allRows, Number(spot)),
-    },
-    ex0dte: {
-      rows: slimRows(exRows),
-      totalNetGex: exRows.length ? totalNetGex(exRows) : null,
-      gexFlip: exRows.length ? findGexFlip(exRows, Number(spot)) : null,
-    },
-    updatedAt: Date.now(),
-  };
-}
-
-// Cached wrapper: the full-board sweep is one upstream call per expiration, so a
-// page with two cards open at a 15s poll must not re-run it every tick.
-async function getLiveGexRowsMulti(symbol, sessionDate, spot) {
-  const key = `${symbol}|${sessionDate}`;
-  const hit = _multiCache.get(key);
-  if (hit && Date.now() - hit.at < MULTI_TTL_MS) return { ...hit.payload, cached: true };
-  const payload = await computeLiveGexRowsMulti(symbol, sessionDate, spot);
-  _multiCache.set(key, { at: Date.now(), payload });
-  for (const k of _multiCache.keys()) {
-    if (k.split('|')[1] < sessionDate) _multiCache.delete(k);
-  }
-  return { ...payload, cached: false };
 }
 
 // ── Dealer gamma by DTE ───────────────────────────────────────────────────────
@@ -712,13 +550,6 @@ async function ensureColumns(p) {
     // matches the session date). Nullable — a row written before it could be
     // computed (e.g. the chain fetch failed) leaves it NULL, never a bogus 0.
     await p.query(`ALTER TABLE eod_gex ADD COLUMN IF NOT EXISTS total_gex_ex0dte DOUBLE PRECISION`);
-    // 0DTE-ONLY net GEX on the OI+Vol basis — the single-definition sibling of
-    // total_gex_ex0dte, and the column the "SPX EOD GEX by session" card charts.
-    // total_gex is left alone precisely because its basis varies by source (see
-    // the COLUMN BASES block at the top of this file); this one never does.
-    // Nullable: paths that cannot split 0DTE out (mvc_snapshot) or that predate
-    // net_vol_gex in the ladder leave it NULL rather than write the wrong basis.
-    await p.query(`ALTER TABLE eod_gex ADD COLUMN IF NOT EXISTS total_gex_0dte DOUBLE PRECISION`);
     // The 0DTE close collapses onto a small number of strikes, and how small
     // varies enormously session to session (13% of |GEX| on the top strike on
     // 2026-07-17, 86% on 2026-07-22). total_gex alone hides that, so record the
@@ -733,19 +564,18 @@ async function ensureColumns(p) {
   }
 }
 
-// New optional args go on the END (defaulting to null) so every existing call
-// site stays valid; only callers that have the value pass it. total_gex_0dte is
-// therefore arg 10, after `pin`.
-// COALESCE on update: a later provisional write that couldn't compute ex0dte or
-// 0dte (null) must not wipe a good value already stored for the row.
-async function upsertEodGex(date, symbol, total_gex, total_flow_gex, spot, computed_at, source = 'live', total_gex_ex0dte = null, pin = null, total_gex_0dte = null) {
+// total_gex_ex0dte is the LAST positional arg (defaults to null) so every
+// existing call site stays valid; only callers that have the value pass it.
+// COALESCE on update: a later provisional write that couldn't compute ex0dte
+// (null) must not wipe a good value already stored for the row.
+async function upsertEodGex(date, symbol, total_gex, total_flow_gex, spot, computed_at, source = 'live', total_gex_ex0dte = null, pin = null) {
   const p = getPool();
   if (!p) { console.warn('[eod-gex] no DB — skipping write'); return; }
   await ensureColumns(p);
   await p.query(
     `INSERT INTO eod_gex (date, symbol, total_gex, total_flow_gex, spot, computed_at, source, total_gex_ex0dte,
-                          pin_strike, pin_net_gex, pin_share, total_gex_0dte)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                          pin_strike, pin_net_gex, pin_share)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      ON CONFLICT (date, symbol) DO UPDATE SET
        total_gex        = EXCLUDED.total_gex,
        total_flow_gex   = EXCLUDED.total_flow_gex,
@@ -753,12 +583,11 @@ async function upsertEodGex(date, symbol, total_gex, total_flow_gex, spot, compu
        computed_at      = EXCLUDED.computed_at,
        source           = EXCLUDED.source,
        total_gex_ex0dte = COALESCE(EXCLUDED.total_gex_ex0dte, eod_gex.total_gex_ex0dte),
-       total_gex_0dte   = COALESCE(EXCLUDED.total_gex_0dte,   eod_gex.total_gex_0dte),
        pin_strike       = COALESCE(EXCLUDED.pin_strike,  eod_gex.pin_strike),
        pin_net_gex      = COALESCE(EXCLUDED.pin_net_gex, eod_gex.pin_net_gex),
        pin_share        = COALESCE(EXCLUDED.pin_share,   eod_gex.pin_share)`,
     [date, symbol, total_gex, total_flow_gex, spot, computed_at, source, total_gex_ex0dte,
-     pin?.strike ?? null, pin?.netGex ?? null, pin?.share ?? null, total_gex_0dte]
+     pin?.strike ?? null, pin?.netGex ?? null, pin?.share ?? null]
   );
 }
 
@@ -873,12 +702,7 @@ async function collectEodGex(base, opts = {}) {
         ? { strike: result.pinStrike, netGex: result.pinNetGex, share: result.pinShare }
         : null;
 
-      // 0DTE-only OI+Vol total. Only the ladder path produces it; the header
-      // fallback ('live_state') is a single expiry on an unverified basis, so it
-      // stays null and the column keeps whatever the AM pass writes tomorrow.
-      const gex0dte = Number.isFinite(result.totalNetGex0dte) ? result.totalNetGex0dte : null;
-
-      await upsertEodGex(date, symbol, tng, tfg || 0, spot, computedAt, writeSource, ex0dte, pin, gex0dte);
+      await upsertEodGex(date, symbol, tng, tfg || 0, spot, computedAt, writeSource, ex0dte, pin);
       saved.push(symbol);
 
       // Dealer gamma bucketed by DTE (eod_dte_gamma). Written AFTER the
@@ -886,7 +710,7 @@ async function collectEodGex(base, opts = {}) {
       // us the row that already succeeded.
       void pmDteGamma(symbol, date, spot);
       console.log(
-        `[eod-gex] ${symbol} ${date} — GEX ${tng >= 0 ? '+' : ''}${(tng / 1e9).toFixed(3)}B  flow ${tfg >= 0 ? '+' : ''}${((tfg || 0) / 1e9).toFixed(3)}B  exFrontGEX ${ex0dte == null ? 'n/a' : `${ex0dte >= 0 ? '+' : ''}${(ex0dte / 1e9).toFixed(3)}B`}  0dteOiVol ${gex0dte == null ? 'n/a' : `${gex0dte >= 0 ? '+' : ''}${(gex0dte / 1e9).toFixed(3)}B`}  spot=${spot.toFixed(2)}` +
+        `[eod-gex] ${symbol} ${date} — GEX ${tng >= 0 ? '+' : ''}${(tng / 1e9).toFixed(3)}B  flow ${tfg >= 0 ? '+' : ''}${((tfg || 0) / 1e9).toFixed(3)}B  exFrontGEX ${ex0dte == null ? 'n/a' : `${ex0dte >= 0 ? '+' : ''}${(ex0dte / 1e9).toFixed(3)}B`}  spot=${spot.toFixed(2)}` +
         (pin ? `  pin=${pin.strike} (${pin.share.toFixed(0)}% of |GEX|)` : '') +
         `  src=${writeSource}`
       );
@@ -986,13 +810,10 @@ async function computeHistoricalGexRows(symbol, date) {
 
   if (!flatRows.length) throw new Error(`${symbol}: no historical rows for ${date}`);
 
-  // oiMap spans the WHOLE settled chain (strikeRange 500, every expiration), so
-  // this must be the multi-expiry aggregation. With plain computeGexRows every
-  // strike kept only its last-seen expiry, which understated the settled total
-  // and every wall/flip derived from these rows (the gex_levels_history catch-up
-  // reads this same ladder).
-  const gexRows = computeGexRowsMultiExpiry(flatRows, Number(spot));
-  const populated = populatedCount(gexRows);
+  const gexRows = computeGexRows(flatRows, Number(spot));
+  const populated = gexRows.filter(
+    (r) => (r.callGamma > 0 || r.putGamma > 0) && (r.callOI > 0 || r.putOI > 0)
+  ).length;
   if (populated < MIN_POPULATED_STRIKES) {
     throw new Error(`${symbol}: only ${populated} populated strikes for ${date} — skip`);
   }
@@ -1004,19 +825,7 @@ async function computeHistoricalGexRows(symbol, date) {
 function ex0dteTotalFromFlatRows(flatRows, spot, date) {
   const ex = flatRows.filter((r) => r.expiration !== date);
   if (!ex.length) return null;
-  return totalNetGex(computeGexRowsMultiExpiry(ex, Number(spot)));
-}
-
-// Mirror of the above for the 0DTE expiry ALONE (expiration === the session
-// date). Same OI+Vol basis, so ex0dte + 0dte reconstructs the whole-chain total
-// that computeHistoricalGexRows returns. Null when the settled history had no
-// 0DTE rows for the date (a holiday-shortened board, or a Theta gap).
-function zeroDteTotalFromFlatRows(flatRows, spot, date) {
-  const z = flatRows.filter((r) => r.expiration === date);
-  if (!z.length) return null;
-  // One expiry by construction, so the multi-expiry helper is a no-op here —
-  // used anyway so this and its ex-0DTE sibling stay provably the same math.
-  return totalNetGex(computeGexRowsMultiExpiry(z, Number(spot)));
+  return totalNetGex(computeGexRows(ex, Number(spot)));
 }
 
 // Back-compat wrapper: EOD callers only need the total(s) + spot.
@@ -1025,7 +834,6 @@ async function computeHistoricalEodGex(symbol, date) {
   return {
     totalNetGex: totalNetGex(gexRows),
     totalNetGexEx0dte: ex0dteTotalFromFlatRows(flatRows, spot, date),
-    totalNetGex0dte: zeroDteTotalFromFlatRows(flatRows, spot, date),
     spot,
   };
 }
@@ -1056,7 +864,7 @@ async function collectMorningEodGex(opts = {}) {
     if (st.baked) { done.push(`${symbol}(baked)`); continue; }
 
     try {
-      const { totalNetGex: tng, totalNetGexEx0dte: ex0dte, totalNetGex0dte: gex0dte, spot } = await computeHistoricalEodGex(symbol, date);
+      const { totalNetGex: tng, totalNetGexEx0dte: ex0dte, spot } = await computeHistoricalEodGex(symbol, date);
       if (!Number.isFinite(tng) || !(spot > 0)) {
         console.warn(`[eod-gex/am] ${symbol} ${date}: invalid tng=${tng} spot=${spot} — skip`);
         continue;
@@ -1065,10 +873,8 @@ async function collectMorningEodGex(opts = {}) {
       // NOTE: this used to be upsertEodGex(date, symbol, tng, spot, computedAt) —
       // 5 args into a 6-arg signature, so `spot` landed in total_flow_gex and
       // computedAt in spot. The settled pass has no flow GEX (history has no
-      // dealer inventory), so pass 0 explicitly. ex0dte = settled all-exp-ex-0DTE,
-      // gex0dte = settled 0DTE-only — this pass overwrites the PM row's
-      // provisional-OI 0DTE value with the settled one, which is the point.
-      await upsertEodGex(date, symbol, tng, 0, spot, computedAt, 'theta', ex0dte, null, gex0dte);
+      // dealer inventory), so pass 0 explicitly. ex0dte = settled all-exp-ex-0DTE.
+      await upsertEodGex(date, symbol, tng, 0, spot, computedAt, 'theta', ex0dte);
 
       // Bake-in: at/after 09:30, if unchanged from the previous poll, freeze it.
       const unchanged = st.last != null && Math.abs(st.last - tng) < 1; // ~$1 of GEX
@@ -1133,9 +939,9 @@ async function catchUpMissing(opts = {}) {
 
       // 1) Theta history (settled OI) — the real fix.
       try {
-        const { totalNetGex: tng, totalNetGexEx0dte: ex0dte, totalNetGex0dte: gex0dte, spot } = await computeHistoricalEodGex(symbol, date);
+        const { totalNetGex: tng, totalNetGexEx0dte: ex0dte, spot } = await computeHistoricalEodGex(symbol, date);
         if (Number.isFinite(tng) && spot > 0) {
-          await upsertEodGex(date, symbol, tng, 0, spot, computedAt, 'theta', ex0dte, null, gex0dte);
+          await upsertEodGex(date, symbol, tng, 0, spot, computedAt, 'theta', ex0dte);
           filled.push(`${symbol}:${date}(theta)`);
           console.log(`[eod-gex/catchup] ${symbol} ${date} — theta  GEX ${tng >= 0 ? '+' : ''}${(tng / 1e9).toFixed(3)}B  spot=${spot.toFixed(2)}`);
           continue;
@@ -1215,8 +1021,4 @@ module.exports = {
   computeHistoricalGexRows,
   catchUpMissing,
   missingDates,
-  // Live per-strike ladders across expirations — served by
-  // GET /proxy/gex-by-strike-multi (see server-with-proxy.js).
-  getLiveGexRowsMulti,
-  computeLiveGexRowsMulti,
 };
