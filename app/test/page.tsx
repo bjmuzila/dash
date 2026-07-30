@@ -34,6 +34,8 @@ type SymbolData = {
   filters: string[];
   series: string;
   totalPremium: string;
+  /** Same figure abbreviated ($1.24B) for the pie's centre readout. */
+  totalPremiumCompact: string;
 };
 
 const CATEGORY_COLOR: Record<string, string> = {
@@ -160,6 +162,7 @@ function aggregateFlow(ticker: string, subtitle: string, orders: FlowOrder[]): S
     filters: ["Live session tape", `${orders.length.toLocaleString()} prints`],
     series: topExpiry ?? "—",
     totalPremium: fmtUsd(totalPremium),
+    totalPremiumCompact: fmtUsdCompact(totalPremium),
   };
 }
 
@@ -216,11 +219,21 @@ function useFlowInventory() {
   return { dataByTicker, errors, loadedAt, reload: load };
 }
 
-// ── Bklit-style pie ──────────────────────────────────────────────────────────
-// Matches the `pie` example on the owner-vite Chart Types page
+// ── Bklit-style interactive pie ──────────────────────────────────────────────
+// Geometry from the `pie` example on the owner-vite Chart Types page
 // (owner-vite/src/pages/charts-ui/examples.tsx → PieExample): inline SVG solid
-// wedges cut by a 0.6° gap on each side, radius = 0.41 × box. Replaces the old
-// CSS conic-gradient donut so this chart renders like the chart-styles ref.
+// wedges cut by a 0.6° gap on each side, radius = 0.41 × box.
+//
+// Interaction copied from owner-vite/src/pages/Budget.tsx → CategoryDonutCard
+// ("Where It Went"): one shared `hover` index drives both halves, so hovering a
+// wedge lights the matching legend row and vice-versa. The active wedge pops out
+// along its own mid-angle and gets a colour-matched glow, the others dim, and
+// the centre readout swaps from total premium to the hovered slice.
+//
+// Deviation from Budget.tsx: that one animates the SVG `d` attribute, which only
+// transitions in Blink — the pop hard-snaps in Firefox/Safari. Here the path is
+// fixed and the offset rides a CSS `transform` on a <g>, so it animates
+// everywhere.
 
 function polarPt(cx: number, cy: number, r: number, deg: number): [number, number] {
   const a = ((deg - 90) * Math.PI) / 180;
@@ -240,50 +253,176 @@ function arcPath(cx: number, cy: number, rOut: number, rIn: number, a0: number, 
   return `M ${x0} ${y0} A ${rOut} ${rOut} 0 ${large} 1 ${x1} ${y1} L ${x2} ${y2} A ${rIn} ${rIn} 0 ${large} 0 ${x3} ${y3} Z`;
 }
 
-function Pie({ slices, size = 190 }: { slices: Slice[]; size?: number }) {
+/** Compact $ for the pie's centre readout — "$1.24B" beats an 11-digit string. */
+function fmtUsdCompact(n: number): string {
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "-" : "";
+  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(1)}M`;
+  if (abs >= 1e3) return `${sign}$${Math.round(abs / 1e3)}K`;
+  return `${sign}$${Math.round(abs)}`;
+}
+
+type PieHover = { hover: number | null; onHover: (i: number | null) => void };
+
+function Pie({
+  slices,
+  size = 190,
+  hover,
+  onHover,
+  centerValue,
+  centerLabel,
+}: { slices: Slice[]; size?: number; centerValue: string; centerLabel: string } & PieHover) {
   const c = size / 2;
   const r = size * 0.41; // same 82/200 ratio as the charts-ui pie
-  const visible = slices.filter((s) => s.pct > 0);
-  const total = visible.reduce((sum, s) => sum + s.pct, 0);
+  const POP = r * 0.11; // same pop-out ratio as Budget's CategoryDonutCard (5/46)
+  const total = slices.reduce((sum, s) => sum + Math.max(s.pct, 0), 0);
+  const active = hover !== null ? slices[hover] : null;
+
+  // Angles are accumulated over the ORIGINAL indices so the pie and the legend
+  // stay index-aligned even when a category is at 0% and draws nothing.
   let a = 0;
+  const arcs = slices.map((s) => {
+    const sweep = total > 0 && s.pct > 0 ? (s.pct / total) * 360 : 0;
+    const seg = { s, a0: a, a1: a + sweep, sweep };
+    a += sweep;
+    return seg;
+  });
+
   return (
-    <div style={{ width: size, height: size, flexShrink: 0 }}>
+    <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
       <svg
         viewBox={`0 0 ${size} ${size}`}
         width="100%"
         height="100%"
+        onMouseLeave={() => onHover(null)}
         style={{ display: "block", overflow: "visible" }}
         role="img"
         aria-label="Options flow inventory by premium"
       >
-        <g>
-          {visible.map((s) => {
-            const sweep = total > 0 ? (s.pct / total) * 360 : 0;
-            const gap = sweep > 2 ? 0.6 : 0; // don't let the gap swallow slivers
-            const d = arcPath(c, c, r, 0, a + gap, a + sweep - gap);
-            a += sweep;
-            return (
-              <path key={s.label} d={d} fill={s.color}>
+        {arcs.map(({ s, a0, a1, sweep }, i) => {
+          if (sweep <= 0) return null;
+          const on = hover === i;
+          const dim = hover !== null && !on;
+          const gap = sweep > 2 ? 0.6 : 0; // don't let the gap swallow slivers
+          const d = arcPath(c, c, r, 0, a0 + gap, a1 - gap);
+          const mid = (((a0 + a1) / 2 - 90) * Math.PI) / 180;
+          const ox = on ? Math.cos(mid) * POP : 0;
+          const oy = on ? Math.sin(mid) * POP : 0;
+          return (
+            <g
+              key={s.label}
+              style={{ transform: `translate(${ox.toFixed(2)}px, ${oy.toFixed(2)}px)`, transition: "transform .15s ease" }}
+            >
+              <path
+                d={d}
+                fill={s.color}
+                stroke={HOME_THEME.bg}
+                strokeWidth={1.5}
+                opacity={dim ? 0.32 : 1}
+                onMouseEnter={() => onHover(i)}
+                style={{
+                  cursor: "pointer",
+                  transition: "opacity .15s ease",
+                  filter: on ? `drop-shadow(0 0 10px ${s.color})` : "none",
+                }}
+              >
                 <title>{`${s.label} — ${s.pct}%`}</title>
               </path>
-            );
-          })}
-        </g>
+            </g>
+          );
+        })}
       </svg>
+
+      {/* Centre readout floats over the pie so the wedges stay solid. */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "grid",
+          placeItems: "center",
+          pointerEvents: "none",
+          textAlign: "center",
+        }}
+      >
+        <div style={{ maxWidth: size * 0.92 }}>
+          <div
+            style={{
+              fontSize: 17,
+              fontWeight: 900,
+              color: HOME_THEME.text,
+              fontVariantNumeric: "tabular-nums",
+              textShadow: "0 2px 8px rgba(0,0,0,0.9)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {active ? `${active.pct}%` : centerValue}
+          </div>
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 800,
+              letterSpacing: "0.1em",
+              color: "rgba(255,255,255,0.65)",
+              textTransform: "uppercase",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              textShadow: "0 2px 8px rgba(0,0,0,0.9)",
+            }}
+          >
+            {active ? active.label : centerLabel}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-function Legend({ slices }: { slices: Slice[] }) {
+function Legend({ slices, hover, onHover }: { slices: Slice[] } & PieHover) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      {slices.map((s) => (
-        <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 14 }}>
-          <span style={{ width: 12, height: 12, borderRadius: 3, background: s.color, flexShrink: 0 }} />
-          <span style={{ color: HOME_THEME.text }}>{s.label}</span>
-          <span style={{ color: HOME_THEME.text, fontWeight: 700, marginLeft: "auto" }}>{s.pct}%</span>
-        </div>
-      ))}
+    <div
+      style={{ display: "flex", flexDirection: "column", gap: 2, marginLeft: -8 }}
+      onMouseLeave={() => onHover(null)}
+    >
+      {slices.map((s, i) => {
+        const on = hover === i;
+        const dim = hover !== null && !on;
+        return (
+          <div
+            key={s.label}
+            onMouseEnter={() => onHover(i)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              fontSize: 14,
+              padding: "4px 8px",
+              borderRadius: 7,
+              cursor: "pointer",
+              background: on ? "rgba(255,255,255,0.07)" : "transparent",
+              opacity: dim ? 0.45 : 1,
+              transition: "background .15s ease, opacity .15s ease",
+            }}
+          >
+            <span
+              style={{
+                width: 12,
+                height: 12,
+                borderRadius: 3,
+                background: s.color,
+                flexShrink: 0,
+                boxShadow: on ? `0 0 8px ${s.color}` : "none",
+                transition: "box-shadow .15s ease",
+              }}
+            />
+            <span style={{ color: HOME_THEME.text, fontWeight: on ? 800 : 500 }}>{s.label}</span>
+            <span style={{ color: HOME_THEME.text, fontWeight: 700, marginLeft: "auto" }}>{s.pct}%</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -386,12 +525,22 @@ function Footer({ data }: { data: SymbolData }) {
 }
 
 function SymbolPanel({ data }: { data: SymbolData }) {
+  // One hover index shared by the pie and its legend, so hovering either side
+  // highlights both (same pattern as Budget.tsx → CategoryDonutCard).
+  const [hover, setHover] = useState<number | null>(null);
+
   return (
     <Card variant="budget" accent={LIGHT_BLUE} title={data.symbol} subtitle={`${data.subtitle} · Data: ${data.date}`}>
       <div style={{ display: "flex", gap: 20, alignItems: "center", flexWrap: "wrap" }}>
-        <Pie slices={data.slices} />
+        <Pie
+          slices={data.slices}
+          hover={hover}
+          onHover={setHover}
+          centerValue={data.totalPremiumCompact}
+          centerLabel="Premium"
+        />
         <div style={{ flex: 1, minWidth: 170 }}>
-          <Legend slices={data.slices} />
+          <Legend slices={data.slices} hover={hover} onHover={setHover} />
           <SentimentPills bullish={data.bullish} bearish={data.bearish} />
         </div>
       </div>

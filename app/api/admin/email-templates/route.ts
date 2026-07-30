@@ -15,6 +15,7 @@ import { cbConfidenceEmail, cbConfidenceText, CB_CONFIDENCE_SUBJECT } from "@/li
 import { reorgBetaNoticeEmail, reorgBetaNoticeText, REORG_BETA_NOTICE_SUBJECT } from "@/lib/emails/reorg-beta-notice";
 import { weeklyEdgeEmail, weeklyEdgeText, WEEKLY_EDGE_SUBJECT } from "@/lib/emails/weekly-edge";
 import { subscriberPriceMatchEmail, subscriberPriceMatchText, SUBSCRIBER_PRICE_MATCH_SUBJECT } from "@/lib/emails/subscriber-price-match";
+import { edgeCatchAmdEmail, edgeCatchAmdText, EDGE_CATCH_AMD_SUBJECT } from "@/lib/emails/edge-catch-amd";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -131,6 +132,13 @@ function buildTemplates(): Template[] {
       subject: SUBSCRIBER_PRICE_MATCH_SUBJECT,
       html: subscriberPriceMatchEmail(),
       text: subscriberPriceMatchText(),
+    },
+    {
+      id: "edge-catch-amd",
+      label: "⚡ EDGE + heatmap — AMD 505C +283% · MSFT +17.4%",
+      subject: EDGE_CATCH_AMD_SUBJECT,
+      html: edgeCatchAmdEmail(),
+      text: edgeCatchAmdText(),
     },
   ];
 }
