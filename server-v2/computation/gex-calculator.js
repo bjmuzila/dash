@@ -10,6 +10,10 @@
  *   - flip = zero-crossing of cumulative net GEX (linear interpolation)
  *   - walls = extreme net-GEX strikes above/below spot
  *
+ * SCOPE WARNING: computeGexRows() is SINGLE-EXPIRY. It groups by strike alone,
+ * so multi-expiry input keeps only the last expiry per (strike, side). For a
+ * whole-board ladder use computeGexRowsMultiExpiry() instead.
+ *
  * Input: flat option rows + spot. Output: per-strike rows + summary.
  * No I/O, no side effects — fully testable.
  */
@@ -203,6 +207,76 @@ function totalNetGex(gexRows) {
   return gexRows.reduce((sum, r) => sum + oiVolNet(r), 0);
 }
 
+/**
+ * Per-strike ladder summed across MULTIPLE EXPIRATIONS.
+ *
+ * WHY THIS EXISTS. computeGexRows() groups by strike ALONE:
+ *     byStrike.get(row.strike)[row.side] = row
+ * so if you hand it rows from more than one expiration, every (strike, side)
+ * keeps only the LAST expiry seen and the rest are silently discarded — a
+ * two-expiry board with identical books returns the same GEX as one expiry, not
+ * double. It was only ever designed for the single-expiry live feed.
+ *
+ * GEX is additive across expirations (γ × qty × spot², summed), so the correct
+ * whole-board ladder is: compute each expiry's ladder independently, then sum
+ * the exposure fields per strike. That is what this does.
+ *
+ * Rows must carry an `expiration` field; rows without one are treated as a
+ * single unnamed expiry.
+ *
+ * ADDITIVE fields are summed: OI, volume, callGEX/putGEX/netGEX, netVolGEX,
+ * netVolGexDir, flowGEX, netDEX, volNetDEX, vanna/chex.
+ * PER-CONTRACT fields (callGamma, putGamma, callDelta, putDelta, IVs, marks,
+ * dte) cannot be summed and are taken from the NEAREST expiry at that strike —
+ * representative only. Do not read a merged row's gamma as "the" gamma; the
+ * exposure fields are the meaningful output. `expiryCount` records how many
+ * expirations contributed.
+ *
+ * flowInventory is deliberately NOT accepted: dealer inventory is tracked per
+ * expiry, so there is no correct way to apply one map across a whole board.
+ */
+function computeGexRowsMultiExpiry(rows, spot) {
+  if (!Array.isArray(rows) || !rows.length || !(spot > 0)) return [];
+
+  const byExpiry = new Map();
+  for (const row of rows) {
+    const k = row?.expiration ?? '__single__';
+    if (!byExpiry.has(k)) byExpiry.set(k, []);
+    byExpiry.get(k).push(row);
+  }
+
+  const SUM_FIELDS = [
+    'callOI', 'putOI', 'callVolume', 'putVolume',
+    'callGEX', 'putGEX', 'netGEX', 'netVolGEX', 'netVolGexDir', 'flowGEX',
+    'netDEX', 'volNetDEX', 'netVanna', 'netVolVanna', 'chex', 'volChex',
+  ];
+  // Carried from the nearest-dated expiry present at that strike, not summed.
+  const NEAREST_FIELDS = [
+    'callGamma', 'putGamma', 'callDelta', 'putDelta',
+    'callIV', 'putIV', 'callMark', 'putMark',
+  ];
+
+  const merged = new Map(); // strike -> accumulated row
+  for (const [, expRows] of byExpiry) {
+    for (const r of computeGexRows(expRows, spot)) {
+      const cur = merged.get(r.strike);
+      if (!cur) {
+        merged.set(r.strike, { ...r, expiryCount: 1 });
+        continue;
+      }
+      for (const f of SUM_FIELDS) cur[f] = (Number(cur[f]) || 0) + (Number(r[f]) || 0);
+      // Nearer expiry wins the per-contract fields (dte ascending).
+      if ((Number(r.dte) || 0) < (Number(cur.dte) || 0)) {
+        for (const f of NEAREST_FIELDS) cur[f] = r[f];
+        cur.dte = r.dte;
+      }
+      cur.expiryCount += 1;
+    }
+  }
+
+  return [...merged.values()].sort((a, b) => a.strike - b.strike);
+}
+
 /** Adds normalizedGexPct to each row: |netGEX| / Σ|netGEX| × 100. */
 function normalizeGex(gexRows) {
   const totalAbs = gexRows.reduce((sum, r) => sum + Math.abs(oiVolNet(r)), 0);
@@ -235,6 +309,7 @@ function computeGexSummary(rows, spot, flowInventory = null) {
 
 module.exports = {
   computeGexRows,
+  computeGexRowsMultiExpiry,
   findGexFlip,
   findCallWall,
   findPutWall,

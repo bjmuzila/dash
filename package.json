@@ -1,6 +1,6 @@
 {
     "name":  "bzila-dashboard",
-    "version":  "v7.29.16",
+    "version":  "v7.30.1",
     "private":  true,
     "workspaces":  [
 
@@ -8,9 +8,11 @@
     "scripts":  {
                     "dev":  "node server-v2/server-with-proxy.js",
                     "dev:full":  "node server-v2/server-with-proxy.js",
+                    "prebuild":  "node scripts/audit-ui.mjs --strict",
                     "build":  "next build --no-lint",
                     "analyze":  "node -e \"process.env.ANALYZE=\u0027true\u0027;require(\u0027child_process\u0027).execSync(\u0027next build --no-lint\u0027,{stdio:\u0027inherit\u0027,env:process.env})\"",
                     "test":  "tsx --test tests/**/*.test.ts",
+                    "test:snapshot":  "node scripts/snapshot-fixtures.mjs",
                     "start":  "node server-v2/server-with-proxy.js",
                     "bot":  "node discord-bot.js",
                     "bot:register":  "node register-commands.js"

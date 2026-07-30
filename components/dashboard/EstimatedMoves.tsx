@@ -5,12 +5,7 @@ import EmTrackerAdmin from "@/components/dashboard/EmTrackerAdmin";
 import LevelsPublish from "@/components/dashboard/LevelsPublish";
 import { HOME_THEME as HT, homeShellStyle } from "@/components/shared/homeTheme";
 import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockExpiryPicker } from "@/components/shared/DockToolbar";
-
-async function getHtml2Canvas() {
-  const mod = await import("html2canvas" as never);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (mod as any).default ?? mod;
-}
+import { captureAndCopy } from "@/lib/snapshot";
 
 type DashboardView = "estimated" | "zones" | "tracker";
 
@@ -1206,32 +1201,14 @@ export default function EstimatedMoves() {
     if (!shotRef.current || !hasCurrentData) return;
     setStatus({ text: "Capturing...", color: "#219EBC" });
     try {
-      const html2canvas = await getHtml2Canvas();
-      const canvas = await html2canvas(shotRef.current, {
-        backgroundColor: "#080c14",
-        scale: 2,
-        useCORS: true,
-        logging: false,
+      const name = `${activeView === "estimated" ? "em-shot" : "zones-shot"}-${new Date().toISOString().slice(0, 10)}.png`;
+      const result = await captureAndCopy(shotRef.current, name);
+      setStatus({
+        text: result === "copied" ? "Copied!" : "Saved image",
+        color: "#00e676",
       });
-      canvas.toBlob(async (blob: Blob | null) => {
-        if (!blob) return;
-        try {
-          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-          setStatus({ text: "Copied!", color: "#00e676" });
-        } catch {
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = `${activeView === "estimated" ? "em-shot" : "zones-shot"}-${new Date().toISOString().slice(0, 10)}.png`;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          URL.revokeObjectURL(url);
-          setStatus({ text: "Saved image", color: "#00e676" });
-        }
-      }, "image/png");
     } catch (e) {
-      console.error(e);
+      console.error("[EstimatedMoves] copyShot", e);
       setStatus({ text: "Copy failed", color: "#EF4444" });
     }
   }, [activeView, hasCurrentData]);

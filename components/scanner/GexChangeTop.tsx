@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { HOME_THEME, homeButtonStyle, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
+import { captureAndCopy, captureToBlob, copyOrDownload, downloadBlob } from "@/lib/snapshot";
 
 type Row = {
   slot: string; rank: number; symbol: string; expiry: string; strike: number;
@@ -69,50 +70,24 @@ export default function GexChangeTop() {
     return () => clearInterval(t);
   }, [load, date]);
 
-  // ── Screenshot the card (html2canvas, dynamically imported, client-only) ──────
+  // ── Screenshot the card ─────────────────────────────────────────────────────
+  // Capture mechanics live in lib/snapshot.ts. Controls inside a card are marked
+  // data-noshot="1" and the shared engine drops them from the image; the
+  // clipboard-then-download fallback is shared too, so all three call sites
+  // below behave identically instead of each rolling their own.
   const cardRef = useRef<HTMLDivElement>(null);
   const [shooting, setShooting] = useState<null | "download" | "copy">(null);
 
   const capture = useCallback(async (mode: "download" | "copy") => {
     if (!cardRef.current || shooting) return;
     setShooting(mode);
+    const fname = `gex-change-top-${date || "today"}.png`;
     try {
-      const html2canvas = (await import("html2canvas")).default;
-      const canvas = await html2canvas(cardRef.current, {
-        backgroundColor: (HOME_THEME as { bg?: string }).bg || "#0a0e14",
-        scale: 2,
-        useCORS: true,
-        // Exclude the controls row (date picker + buttons) from the image.
-        ignoreElements: (el) => (el as HTMLElement).dataset?.noshot === "1",
-      });
-      const fname = `gex-change-top-${date || "today"}.png`;
-      if (mode === "copy" && typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
-        await new Promise<void>((resolve, reject) =>
-          canvas.toBlob((b) => {
-            if (!b) return reject(new Error("no blob"));
-            navigator.clipboard.write([new ClipboardItem({ "image/png": b })]).then(resolve, reject);
-          }, "image/png"),
-        );
-      } else {
-        const a = document.createElement("a");
-        a.download = fname;
-        a.href = canvas.toDataURL("image/png");
-        a.click();
-      }
-    } catch (e) {
-      // Clipboard blocked or capture failed → fall back to a download.
-      try {
-        const html2canvas = (await import("html2canvas")).default;
-        const canvas = await html2canvas(cardRef.current, {
-          backgroundColor: (HOME_THEME as { bg?: string }).bg || "#0a0e14",
-          scale: 2, useCORS: true,
-          ignoreElements: (el) => (el as HTMLElement).dataset?.noshot === "1",
-        });
-        const a = document.createElement("a");
-        a.download = `gex-change-top-${date || "today"}.png`;
-        a.href = canvas.toDataURL("image/png");
-        a.click();
-      } catch { /* give up silently */ }
+      const blob = await captureToBlob(cardRef.current);
+      if (mode === "copy") await copyOrDownload(blob, fname);
+      else downloadBlob(blob, fname);
+    } catch {
+      /* capture failed — nothing useful to show, the button just resets */
     } finally {
       setShooting(null);
     }
@@ -121,45 +96,17 @@ export default function GexChangeTop() {
   // Per-card capture state so the 📷 gives feedback: idle → busy → "copied"/"saved".
   const [cardState, setCardState] = useState<Record<string, "busy" | "copied" | "saved">>({});
 
-  // Capture a SINGLE pick card to PNG. `node` is the card element; controls inside
-  // it are marked data-noshot so they never appear in the image.
+  // Capture a SINGLE pick card to PNG.
   const shotCard = useCallback(async (node: HTMLElement | null, id: string, name: string) => {
     if (!node || cardState[id] === "busy") return;
     setCardState((s) => ({ ...s, [id]: "busy" }));
-    let result: "copied" | "saved" = "saved";
     try {
-      const html2canvas = (await import("html2canvas")).default;
-      const canvas = await html2canvas(node, {
-        backgroundColor: (HOME_THEME as { bg?: string }).bg || "#0a0e14",
-        scale: 2, useCORS: true,
-        ignoreElements: (el) => (el as HTMLElement).dataset?.noshot === "1",
-      });
-      // Try clipboard first, fall back to a download.
-      let copied = false;
-      if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
-        try {
-          await new Promise<void>((resolve, reject) =>
-            canvas.toBlob((b) => {
-              if (!b) return reject(new Error("no blob"));
-              navigator.clipboard.write([new ClipboardItem({ "image/png": b })]).then(resolve, reject);
-            }, "image/png"),
-          );
-          copied = true;
-        } catch { /* clipboard blocked → download */ }
-      }
-      if (!copied) {
-        const a = document.createElement("a");
-        a.download = `${name}.png`;
-        a.href = canvas.toDataURL("image/png");
-        a.click();
-      }
-      result = copied ? "copied" : "saved";
+      const result = await captureAndCopy(node, `${name}.png`);
+      setCardState((s) => ({ ...s, [id]: result }));
+      setTimeout(() => setCardState((s) => { const n = { ...s }; delete n[id]; return n; }), 1800);
     } catch {
       setCardState((s) => { const n = { ...s }; delete n[id]; return n; });
-      return;
     }
-    setCardState((s) => ({ ...s, [id]: result }));
-    setTimeout(() => setCardState((s) => { const n = { ...s }; delete n[id]; return n; }), 1800);
   }, [cardState]);
 
   return (

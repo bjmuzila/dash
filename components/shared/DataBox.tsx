@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, type ReactNode, type CSSProperties, type RefObject } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { shareToDiscord } from "@/lib/discord/share";
+import { captureToDataUrl } from "@/lib/snapshot";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type BtnState = "idle" | "busy" | "ok" | "err";
@@ -15,361 +16,17 @@ function useIsOwner(): boolean {
 }
 
 // ── Screenshot capture ────────────────────────────────────────────────────────
-// Captures `el` to a PNG via html2canvas, with a baked-in title band + watermark.
-// Hard-won gotchas (see memory "html2canvas screenshot gotchas"):
-//  • Text/images drawn onto the RETURNED canvas no-op in this browser — they MUST
-//    be injected as real DOM in onclone so html2canvas renders them natively.
-//  • Never set the clone height to "auto" on a flex/percentage-height table — it
-//    collapses to 0 and crashes html2canvas ("createPattern ... height of 0").
-//    Measure the table's scrollHeight and set an explicit px height instead.
-//  • onclone must NOT strip external <link rel="stylesheet"> tags — that also
-//    deletes the compiled Tailwind stylesheet, breaking any className-styled
-//    (not inline-style) element's layout during capture (confirmed on ES
-//    Candles' CALL WALL/PUT WALL/FLIP/CB row).
-async function captureElement(el: HTMLElement, title?: string, fitContent = false): Promise<string> {
-  const titleText = title && title.trim() ? title : "SPX GEX";
-  // Measure the true content height of the scrollable body so the capture wraps
-  // the data tightly (no empty space) without collapsing rows to zero.
-  // Prefer a <table>; otherwise (grid/card layouts like the options chain) find
-  // the scrollable body and measure its real content height so the capture wraps
-  // tightly instead of inheriting the page's full 100% height (blank bottom).
-  const inner = el.querySelector("table") as HTMLElement | null;
-  // A lightweight-charts target (ES Candles) is a FLEX COLUMN (chart card +
-  // lanes), not a bare bitmap. It happens to contain a <canvas> (the heatmap
-  // overlay), but it must take the flex-summation path below — not the bare-
-  // canvas fast-path — or html2canvas clips to the clamped flex height and only
-  // the bottom of the chart is captured. Detect it via the __ltScreenshot hook.
-  const isLtChart = !!(el as unknown as { __ltScreenshot?: unknown }).__ltScreenshot;
-  // A canvas chart (e.g. GEX chart) is a fixed-pixel bitmap that won't re-flow,
-  // so we must NOT add height for the title band — that leaves blank space at the
-  // bottom. Instead the band overlays the top of the chart at its true height.
-  const isCanvas = !inner && !isLtChart && !!el.querySelector("canvas");
-
-  // Plain <canvas> charts (e.g. GexChart): bypass html2canvas entirely. Its
-  // only content is the canvas itself (plus an optional hover tooltip that's
-  // irrelevant to a static capture) — after four rounds of chasing html2canvas's
-  // clone/reflow/width-vs-windowWidth quirks (crops, double-scaling, off-center
-  // frames), the robust fix is to skip the DOM-clone pipeline altogether and
-  // build the PNG straight from the canvas's own pixel buffer plus a manually
-  // drawn title band. No clone, no reflow, no bounding-rect alignment to get wrong.
-  if (isCanvas) {
-    const plainCanvas = el.querySelector("canvas") as HTMLCanvasElement;
-    const scale = window.devicePixelRatio || 1;
-    const bandH = Math.round(44 * scale);
-    const out = document.createElement("canvas");
-    out.width = plainCanvas.width;
-    out.height = plainCanvas.height + bandH;
-    const octx = out.getContext("2d")!;
-    octx.fillStyle = "#05080d";
-    octx.fillRect(0, 0, out.width, out.height);
-    octx.drawImage(plainCanvas, 0, bandH);
-    octx.textBaseline = "alphabetic";
-    octx.textAlign = "left";
-    octx.fillStyle = "#ffffff";
-    octx.font = `700 ${Math.round(15 * scale)}px Inter, Arial, sans-serif`;
-    octx.fillText(titleText, 12 * scale, 20 * scale);
-    octx.fillStyle = "rgba(255,255,255,0.7)";
-    octx.font = `700 ${Math.round(11 * scale)}px Inter, Arial, sans-serif`;
-    octx.fillText("Data provided by CBEdge.net", 12 * scale, 36 * scale);
-    return out.toDataURL("image/png");
-  }
-
-  const { default: html2canvas } = await import("html2canvas");
-
-  // lightweight-charts (ES candles) renders candles into internal canvases that
-  // html2canvas copies blank. If the target exposes __ltScreenshot, its own
-  // screenshot is composited over the chart layer's position afterward (below).
-  // Looked up early (not just after html2canvas runs) so `lt.target` can also
-  // be used to scope the "other plain canvas" handling right below.
-  const ltProvider = (el as unknown as {
-    __ltScreenshot?: () => { canvas: HTMLCanvasElement; target: HTMLElement } | null;
-  }).__ltScreenshot;
-  const lt = ltProvider?.();
-
-  // A page can contain OTHER plain <canvas> elements beside the lightweight
-  // chart — e.g. ES Candles' EsGexRail (GEX-by-strike bars), a devicePixelRatio-
-  // backed canvas of its own. Those aren't covered by the isCanvas bypass above
-  // (isCanvas requires the WHOLE captured element to be nothing but a canvas),
-  // so they'd otherwise fall through to html2canvas's native <canvas> handling —
-  // the same double-scale bug the bypass exists to avoid, so they vanish/crop
-  // to nothing in the capture. Strip each one from the clone (a placeholder div
-  // keeps the layout box) and composite the real bitmap in ourselves afterward.
-  const otherLiveCanvases = Array.from(el.querySelectorAll("canvas")).filter(
-    (c) => !(lt && lt.target.contains(c))
-  ) as HTMLCanvasElement[];
-
-  // Elements tagged [data-capture-hide] are live-page chrome (toolbars, control
-  // docks) that shouldn't appear in the PNG. They're dropped from the clone at
-  // the END of onclone (after the index-paired children loop, so pairing stays
-  // exact). Any tagged DIRECT child sitting ABOVE the chart also removes its own
-  // height from the flow, so everything below shifts up by that much — which the
-  // canvas composites below must mirror, since they position off LIVE rects.
-  const hideEls = Array.from(el.querySelectorAll("[data-capture-hide]")) as HTMLElement[];
-  const elTop = el.getBoundingClientRect().top;
-  const chartTop = lt ? lt.target.getBoundingClientRect().top : Infinity;
-  let hiddenShift = 0;
-  for (const h of hideEls) {
-    if (h.parentElement !== el) continue; // only direct children affect the flow
-    if (h.getBoundingClientRect().bottom > chartTop) continue; // not above the chart
-    hiddenShift += h.offsetHeight;
-  }
-
-  let contentH: number;
-  if (inner) {
-    contentH = inner.scrollHeight;
-  } else {
-    // Sum the height of every direct child up to (and including) the scroll body,
-    // measuring the scroll body by its scrollHeight not its clamped client height.
-    let h = 0;
-    Array.from(el.children).forEach((c) => {
-      const ch = c as HTMLElement;
-      if (ch.hasAttribute("data-capture-hide")) return; // dropped from the clone
-      h += ch.scrollHeight > ch.clientHeight ? ch.scrollHeight : ch.offsetHeight;
-    });
-    contentH = h || el.scrollHeight;
-  }
-  // fitContent mode (element hugs its content during capture, e.g. mult-greek
-  // screenshot mode): measure the REAL rendered content box — bottom of the
-  // last child relative to the element's top — instead of the child-sum
-  // heuristic, which can overshoot and leave a blank void below the data.
-  if (fitContent) {
-    const r = el.getBoundingClientRect();
-    const last = el.lastElementChild?.getBoundingClientRect();
-    if (last && last.bottom > r.top) contentH = Math.ceil(last.bottom - r.top);
-    contentH -= hiddenShift;
-  }
-  // Reserve room for the title band for every path. Canvas charts used to skip
-  // this (band overlaid the top of the bitmap instead), back when html2canvas
-  // rendered the canvas natively filling the whole box with no room to shift
-  // it down. Now that the canvas is composited in ourselves (see below), we can
-  // push it down below the band like everything else — otherwise the band
-  // covers the chart's own top-of-canvas annotations (spot label, CB tag).
-  const captureH = contentH + 48;
-  // Output crop width, matching the live element. Note: this must NOT be paired
-  // with a `windowWidth` override — windowWidth reflows the ENTIRE cloned page
-  // at that viewport width (it's meant for responsive/media-query accuracy),
-  // and since this chart sits in a two-column flex row, narrowing the virtual
-  // window down to just the chart's own width reflows every ancestor flex
-  // container and changes the chart's actual size/position in the clone. Only
-  // `width` (a pure output-crop size, no reflow) is safe here.
-  const contentW = el.scrollWidth || el.getBoundingClientRect().width;
-  const base = await html2canvas(el, {
-    backgroundColor: "#05080d",
-    useCORS: true,
-    allowTaint: true,
-    width: contentW,
-    scale: window.devicePixelRatio || 1,
-    // `height` alone is a pure output-crop size — no reflow. `windowHeight`
-    // (deliberately omitted) reflows the ENTIRE cloned document as if the
-    // browser viewport were that short, same footgun as `windowWidth` above.
-    // For a page whose captureH is much shorter than the real viewport (e.g.
-    // a trimmed table), that broke a vh-based ancestor layout (the app's
-    // global toolbar shell) and leaked it into the crop.
-    height: captureH,
-    logging: false,
-    onclone: (doc, clone) => {
-      // Do NOT strip <link rel="stylesheet"> tags. This used to remove them
-      // ("can 404 and abort the render"), but that also deletes Next.js's
-      // compiled Tailwind stylesheet — any element styled via className
-      // utilities (not inline style) silently loses its layout during capture.
-      // Confirmed cause of the ES Candles CALL WALL/PUT WALL/FLIP/CB row
-      // collapsing (its wrapper is `className="flex flex-wrap ..."`; each
-      // StatBox kept its own inline space-between, so losing the wrapper's
-      // flex context stretched every box full-width — label far left, value
-      // shoved to the far right edge). html2canvas's useCORS/allowTaint
-      // options already handle a missing/CORS-blocked stylesheet resource
-      // without aborting, so the original 404 concern doesn't need this.
-      // Strip each "other plain canvas" (see otherLiveCanvases above) from the
-      // clone by matching DOM order — querySelectorAll order is identical
-      // between the live tree and its deep clone, so index-matching is exact.
-      // Snapshot BOTH lists once, up front. Index-matching only holds while the
-      // clone's canvas list is untouched — the placeholder swap below removes
-      // canvases from the clone, so re-querying afterward (as the lt block used
-      // to) shifts every later index and hides the wrong elements. On
-      // /es-candles the heatmap overlay canvas is stripped here and sits BEFORE
-      // the chart's canvases in DOM order, so the shift left one live copy of
-      // the chart visible under the composited __ltScreenshot bitmap → two
-      // candle series at slightly different scales in the PNG.
-      const liveAll = Array.from(el.querySelectorAll("canvas"));
-      const cloneCanvases = Array.from(clone.querySelectorAll("canvas")) as HTMLElement[];
-      if (otherLiveCanvases.length) {
-        otherLiveCanvases.forEach((liveCanvas) => {
-          const idx = liveAll.indexOf(liveCanvas);
-          const cloned = idx >= 0 ? cloneCanvases[idx] : undefined;
-          if (cloned) {
-            const placeholder = doc.createElement("div");
-            placeholder.style.cssText = cloned.style.cssText;
-            cloned.replaceWith(placeholder);
-          }
-        });
-      }
-      // Same treatment for the lightweight-charts canvases themselves. The
-      // comment above says html2canvas copies them BLANK — that is no longer
-      // reliably true, and when it does copy them we end up with the chart TWICE:
-      // once from html2canvas's own copy, and once from the __ltScreenshot bitmap
-      // we composite on top at the target's rect. The two land at slightly
-      // different offsets/scales → two candle series and two price axes in the
-      // PNG. The composite is the trustworthy one (it's the library's own
-      // renderer), so blank the clone's copies and let it be the only chart.
-      // Uses the pre-swap lists captured above — never re-query the clone here.
-      if (lt) {
-        liveAll.forEach((liveCanvas, i) => {
-          if (!lt.target.contains(liveCanvas)) return;
-          const cloned = cloneCanvases[i];
-          if (cloned) {
-            cloned.style.visibility = "hidden";
-            // visibility alone leaves html2canvas free to paint a parent's
-            // background over the composite region on some paths; belt-and-
-            // braces so the clone copy can never contribute pixels.
-            cloned.style.opacity = "0";
-          }
-        });
-      }
-      // Inject overlay text as real DOM so html2canvas renders it natively
-      // (drawing text onto the returned canvas no-ops in this browser).
-      clone.style.position = "relative";
-      // Expand to full content so all rows render (no scroll clipping), and
-      // reserve space at the top for the title band so nothing hides behind it.
-      // Expand to the measured content height (explicit px — never auto/0) and
-      // reserve room for the title band so no rows hide behind it.
-      clone.style.height = `${captureH}px`;
-      clone.style.maxHeight = "none";
-      clone.style.overflow = "visible";
-      clone.style.paddingTop = "44px";
-      const tbl = clone.querySelector("table") as HTMLElement | null;
-      if (tbl) {
-        tbl.style.height = `${contentH}px`;
-      } else {
-        // Grid/card layout (e.g. options chain): un-clamp the flex scroll body so
-        // every row renders and the clone collapses to its real content height
-        // — no blank space below the data box.
-        // Pair clone children with the LIVE element's children so we can read
-        // their real rendered height (the clone isn't laid out yet).
-        const liveKids = Array.from(el.children) as HTMLElement[];
-        Array.from(clone.children).forEach((c, i) => {
-          const ch = c as HTMLElement;
-          const live = liveKids[i];
-          ch.style.flex = "none";
-          ch.style.flexShrink = "0";
-          // A flex-1 chart card holds its chart via absolute inset-0 children, so
-          // height:auto collapses it to 0. Pin it to the real rendered height.
-          const liveH = live ? live.offsetHeight : ch.offsetHeight;
-          if (liveH > 0) ch.style.height = `${liveH}px`;
-          ch.style.overflow = "visible";
-        });
-      }
-      const inter = "var(--font-inter), Inter, Arial, sans-serif";
-      // Solid title band across the top so it never collides with table headers
-      // or chart legends behind it.
-      const band = doc.createElement("div");
-      band.style.cssText = [
-        "position:absolute", "top:0", "left:0", "right:0",
-        "padding:8px 12px 8px", "background:#05080d",
-        "z-index:9999", "pointer-events:none",
-      ].join(";");
-      const t1 = doc.createElement("div");
-      t1.textContent = titleText;
-      t1.style.cssText = `font:700 15px ${inter};color:#ffffff;white-space:nowrap;`;
-      const t2 = doc.createElement("div");
-      t2.textContent = "Data provided by CBEdge.net";
-      t2.style.cssText = `font:700 11px ${inter};color:rgba(255,255,255,0.7);white-space:nowrap;margin-top:3px;`;
-      band.appendChild(t1);
-      band.appendChild(t2);
-      clone.appendChild(band);
-      // Drop live-page chrome LAST — the children loop above pairs clone kids to
-      // live kids by index, so removing anything before it would desync them.
-      // The attribute survives cloneNode, so no index matching is needed here.
-      clone.querySelectorAll("[data-capture-hide]").forEach((n) => n.remove());
-    },
-  });
-
-  // lt (looked up above) composited over the chart layer's position so the
-  // candles appear — html2canvas copies lightweight-charts' internal canvases
-  // blank.
-  if (lt) {
-    const scale = window.devicePixelRatio || 1;
-    const elRect = el.getBoundingClientRect();
-    const tRect = lt.target.getBoundingClientRect();
-    // Offset of the chart layer within the captured element, in canvas px.
-    // The clone reserves 44px of paddingTop for the title band, so shift the
-    // composited candle bitmap down by that same amount — and back UP by any
-    // [data-capture-hide] chrome above the chart that the clone dropped, since
-    // these rects come from the LIVE tree where that chrome still occupies space.
-    const dx = (tRect.left - elRect.left) * scale;
-    const dy = (tRect.top - elRect.top + 44 - hiddenShift) * scale;
-    const dw = tRect.width * scale;
-    const dh = tRect.height * scale;
-    const ctx = base.getContext("2d");
-    if (ctx) ctx.drawImage(lt.canvas, dx, dy, dw, dh);
-  }
-
-  // Composite each "other plain canvas" (see otherLiveCanvases above) — e.g.
-  // EsGexRail — using its own live bounding rect, same technique as the lt
-  // chart composite just above.
-  if (otherLiveCanvases.length) {
-    const scale = window.devicePixelRatio || 1;
-    const elRect = el.getBoundingClientRect();
-    const ctx = base.getContext("2d");
-    if (ctx) {
-      for (const liveCanvas of otherLiveCanvases) {
-        const cRect = liveCanvas.getBoundingClientRect();
-        const dx = (cRect.left - elRect.left) * scale;
-        const dy = (cRect.top - elRect.top + 44 - hiddenShift) * scale;
-        const dw = cRect.width * scale;
-        const dh = cRect.height * scale;
-        ctx.drawImage(liveCanvas, dx, dy, dw, dh);
-      }
-    }
-  }
-
-  // fitContent: DOM-based height estimates keep overshooting (some ancestor
-  // stretches the live panels row taller than its rendered rows), so guarantee
-  // "no empty space" at the bitmap level — scan the rendered pixels for the
-  // last row/column that differs from the page background and crop there.
-  if (fitContent) {
-    try {
-      const ctx = base.getContext("2d");
-      if (ctx && base.width > 4 && base.height > 4) {
-        const { width: bw, height: bh } = base;
-        const data = ctx.getImageData(0, 0, bw, bh).data;
-        // Sample the background from the bottom-right corner (blank region).
-        const ci = ((bh - 2) * bw + (bw - 2)) * 4;
-        const bgR = data[ci], bgG = data[ci + 1], bgB = data[ci + 2];
-        const isContent = (i: number) =>
-          Math.abs(data[i] - bgR) + Math.abs(data[i + 1] - bgG) + Math.abs(data[i + 2] - bgB) > 24;
-        let bottom = bh - 1;
-        outerY: for (let y = bh - 1; y >= 0; y--) {
-          for (let x = 0; x < bw; x += 2) {
-            if (isContent((y * bw + x) * 4)) { bottom = y; break outerY; }
-          }
-        }
-        let right = bw - 1;
-        outerX: for (let x = bw - 1; x >= 0; x--) {
-          for (let y = 0; y <= bottom; y += 2) {
-            if (isContent((y * bw + x) * 4)) { right = x; break outerX; }
-          }
-        }
-        const scale = window.devicePixelRatio || 1;
-        const pad = Math.round(10 * scale);
-        const newH = Math.min(bh, bottom + 1 + pad);
-        const newW = Math.min(bw, right + 1 + pad);
-        // Only re-encode if the crop actually removes something meaningful.
-        if (newH < bh - 4 || newW < bw - 4) {
-          const out = document.createElement("canvas");
-          out.width = newW;
-          out.height = newH;
-          const octx = out.getContext("2d")!;
-          octx.fillStyle = "#05080d";
-          octx.fillRect(0, 0, newW, newH);
-          octx.drawImage(base, 0, 0);
-          return out.toDataURL("image/png");
-        }
-      }
-    } catch { /* tainted canvas or getImageData failure — return uncropped */ }
-  }
-
-  return base.toDataURL("image/png");
-}
+// The capture engine used to live here, and every other snapshot button in the
+// app had its own copy with a different subset of the html2canvas workarounds.
+// It now lives in lib/snapshot.ts and is shared by all of them, so a fix here
+// is a fix everywhere.
+//
+// Every DataBox capture is `framed: true` — title band + watermark baked in,
+// the clone expanded to its real content height so scroll containers don't cut
+// rows off, and [data-capture-hide] chrome dropped. Note that `framed` is
+// passed explicitly rather than inferred from `title`: most callers of the
+// buttons below pass no title and rely on the default, and they need the
+// content-height expansion just as much as the band.
 
 function postToDiscord(imageBase64: string, content: string): Promise<void> {
   return shareToDiscord({ content, image: imageBase64, filename: "snap.png" });
@@ -431,7 +88,7 @@ export function BoxSnapBtn({ targetRef, title, onBeforeCapture, onAfterCapture, 
     set("busy");
     try {
       await onBeforeCapture?.();
-      const img = await captureElement(targetRef.current, title, fitContent);
+      const img = await captureToDataUrl(targetRef.current, { framed: true, title, fitContent });
       // Convert base64 data URL → Blob → ClipboardItem
       const base64 = img.replace(/^data:image\/\w+;base64,/, "");
       const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
@@ -483,7 +140,7 @@ export function BoxDiscordBtn({
     set("busy");
     try {
       await onBeforeCapture?.();
-      const img = await captureElement(targetRef.current, title, fitContent);
+      const img = await captureToDataUrl(targetRef.current, { framed: true, title, fitContent });
       const now = new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false });
       const content = message ?? `📸 **${label || "Panel"}** — ${now} ET`;
       await postToDiscord(img, content);

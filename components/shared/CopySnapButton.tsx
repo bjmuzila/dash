@@ -2,24 +2,15 @@
 
 import { useCallback, useRef, useState, type RefObject } from "react";
 import { HOME_THEME as HT } from "@/components/shared/homeTheme";
+import { captureAndCopy } from "@/lib/snapshot";
 
 /**
  * Snapshot button — renders a DOM subtree to a PNG and puts it on the clipboard,
  * so it can be pasted straight into Discord/Slack/a doc.
  *
- * html2canvas is already a dependency (SnapButton's Discord share uses the
- * canvas path); it is imported dynamically here so pages that never click this
- * don't pay for it in their bundle.
- *
- * Clipboard image writes need a secure context and aren't implemented
- * everywhere (Firefox, older Safari), so a failed write falls back to a plain
- * download — the snapshot always lands somewhere.
- *
- * Two things html2canvas can't render are worth knowing about:
- *   • backdrop-filter — frosted panels come out flat. Cosmetic, ignored.
- *   • background-clip:text — gradient headings would render invisible, so mark
- *     them `data-snap-plain="#RRGGBB"` and they're flattened to that color in
- *     the cloned document just for the capture.
+ * All the capture mechanics (background, scale, the html2canvas workarounds, the
+ * clipboard-with-download fallback) live in lib/snapshot.ts and are shared with
+ * every other snapshot path in the app. This component is only the button.
  */
 
 type State = "idle" | "working" | "copied" | "saved" | "err";
@@ -50,39 +41,7 @@ export default function CopySnapButton({
     setState("working");
     try {
       const el = targetRef.current ?? document.body;
-      const { default: html2canvas } = await import("html2canvas");
-      const canvas = await html2canvas(el, {
-        backgroundColor: HT.bg,
-        scale: Math.min(2, window.devicePixelRatio || 1),
-        useCORS: true,
-        logging: false,
-        onclone: (doc: Document) => {
-          doc.querySelectorAll<HTMLElement>("[data-snap-plain]").forEach((n) => {
-            const c = n.getAttribute("data-snap-plain") || HT.text;
-            n.style.background = "none";
-            n.style.webkitTextFillColor = c;
-            n.style.color = c;
-          });
-        },
-      });
-
-      const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/png"));
-      if (!blob) throw new Error("canvas.toBlob returned null");
-
-      try {
-        // Promise-valued (rather than Blob-valued) because Safari only accepts
-        // that form, and it types cleanly against both lib.dom signatures.
-        await navigator.clipboard.write([new ClipboardItem({ "image/png": Promise.resolve(blob) })]);
-        flash("copied");
-      } catch {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-        flash("saved");
-      }
+      flash(await captureAndCopy(el, filename));
     } catch (e) {
       console.error("[CopySnapButton]", e);
       flash("err");
@@ -106,6 +65,10 @@ export default function CopySnapButton({
       onClick={onClick}
       title={title}
       style={{
+        // Vertical centring comes from the global `button` rule in globals.css.
+        // Do not set `display` here — an inline value would override it and the
+        // label would ride high in the box on touch widths, and the emoji/text
+        // label swap ("📸 Snapshot" ↔ "Capturing…") would visibly jump.
         padding: "6px 12px",
         borderRadius: 6,
         border: `1px solid ${color === HT.cyan ? "rgba(33,158,188,.35)" : color}`,

@@ -8,6 +8,7 @@ import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { SqueezeBoard } from "@/app/squeeze/page";
+import DealerGammaTab from "./DealerGammaTab";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test page: SPX / SPY / QQQ directional options-flow inventory, live from the
@@ -2004,6 +2005,18 @@ const OVERVIEW_CARDS: OverviewCardDef[] = [
     ],
   },
   {
+    key: "dealergamma",
+    label: "Dealer Gamma",
+    accent: LIGHT_BLUE,
+    blurb: "End-of-day dealer gamma broken out by time to expiry, from the 15:55 ET close snapshot.",
+    points: [
+      "Net dealer gamma per 1% move, split into 0DTE / 1–7 / 8–30 / 31–90 / 90+",
+      "Ex-0DTE and All-expirations rollups — the ex-0DTE figure pairs with eod_gex.total_gex_ex0dte",
+      "Every row labelled measured or convention: position sign is only measured inside 7 DTE",
+      "Snapshot taken before the bell, so 0DTE gamma is captured instead of settling to zero",
+    ],
+  },
+  {
     key: "flow",
     label: "Flow Inventory",
     accent: HOME_THEME.orange,
@@ -2100,13 +2113,14 @@ function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
   );
 }
 
-type TestTab = "overview" | "flow" | "gexlevels" | "squeeze";
+type TestTab = "overview" | "flow" | "gexlevels" | "squeeze" | "dealergamma";
 
 function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: TestTab) => void }) {
   const tabs: { key: TestTab; label: string }[] = [
     { key: "overview", label: "Overview" },
     { key: "squeeze", label: "Squeeze" },
     { key: "gexlevels", label: "GEX Levels" },
+    { key: "dealergamma", label: "Dealer Gamma" },
     { key: "flow", label: "Flow Inventory" },
   ];
   return (
@@ -2206,6 +2220,8 @@ export default function TestPage() {
         <SqueezeBoard />
       ) : tab === "gexlevels" ? (
         <GexLevelsTab />
+      ) : tab === "dealergamma" ? (
+        <DealerGammaTab />
       ) : (
         <FlowInventoryTab />
       )}

@@ -1346,6 +1346,11 @@ function CalendarGrid({
             onClick={() => g && onSelect(iso(d))}
             disabled={!g}
             style={{
+              // Explicit column layout: this is a calendar day CELL whose two
+              // stacked children must flow top-down, left-aligned. The global
+              // `button { display: inline-flex }` centring rule in globals.css
+              // would otherwise lay them out as one centred row.
+              display: "flex", flexDirection: "column", alignItems: "stretch", justifyContent: "flex-start",
               textAlign: "left", minHeight: 56, padding: "6px 7px", borderRadius: 9, cursor: g ? "pointer" : "default",
               background: tint,
               border: `1px solid ${isSel ? "#7dd3fc" : isToday ? "rgba(255,255,255,0.6)" : g ? HOME_THEME.border : "transparent"}`,

@@ -1411,6 +1411,10 @@ export function MultGreekClient({
     return new Promise<void>(res => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(res, 50))));
   }, []);
   const endCapture = useCallback(() => setCaptureWindow(null), []);
+  // Title band text for the snapshot. Without this the shared engine falls back
+  // to "SPX GEX", which mislabels a four-ticker Multi-Greek capture.
+  const snapTitle = `Multi-Greek — Net GEX by Expiry  •  ${TICKERS.join("  ")}`;
+
 
   const isCapturing = captureWindow != null;
 
@@ -1462,8 +1466,12 @@ export function MultGreekClient({
         </div>
       )}
 
-      {/* Toolbar */}
-      <div style={{ display: "flex", padding: "6px 10px 2px", flexShrink: 0 }}>
+      {/* Toolbar — data-capture-hide keeps the whole control dock (date picker,
+          mode toggles, intensity slider, the snap/Discord buttons themselves)
+          out of the PNG. Without it every shared snapshot carried a picture of
+          the controls, and captureElement subtracts this row's height from the
+          capture so nothing shifts. */}
+      <div data-capture-hide style={{ display: "flex", padding: "6px 10px 2px", flexShrink: 0 }}>
       <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%" }}>
 
         {/* Status dot */}
@@ -1571,8 +1579,8 @@ export function MultGreekClient({
         {!isStatic && (
           <DockButton onClick={trigger} title="Refresh" style={{ color: btnStyle.color as string }}>{btnLabel}</DockButton>
         )}
-        <BoxSnapBtn targetRef={pageRef} label="📷" fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} />
-        <BoxDiscordBtn targetRef={pageRef} fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} message={`📊 Multi-Greek GEX by Expiry — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
+        <BoxSnapBtn targetRef={pageRef} label="📷" title={snapTitle} fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} />
+        <BoxDiscordBtn targetRef={pageRef} title={snapTitle} fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} message={`📊 Multi-Greek GEX by Expiry — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
       </Dock>
       </div>
 

@@ -1507,6 +1507,11 @@ export default function OptionsChainPage({
   const dataModeRef = useRef<DataMode>("oi-vol");
   useEffect(() => { dataModeRef.current = dataMode; }, [dataMode]);
   const pageRef = useRef<HTMLDivElement>(null);
+
+  // Title band text for snapshots. Without it the shared engine falls back to
+  // "SPX GEX", which is wrong for any non-SPX ticker and says nothing about
+  // which expiry range or greek the image is showing.
+  const snapTitle = `Options Chain — ${activeTicker}  •  ${greekMode.toUpperCase()}  •  ${dataMode === "oi-vol" ? "OI+Vol" : "Vol only"}`;
   // Scroll container + ATM row refs — used to vertically center the ATM strike
   // in the visible table area on first load / ticker or expiry change (rather
   // than leaving the view scrolled to the top of the strike list).
@@ -2220,7 +2225,11 @@ export default function OptionsChainPage({
           grid scrolls below it in its own container, keeping its expiry-date
           header row stuck to the top of that scroll area. */}
       <div style={{ display: "flex", flexDirection: "column", gap: 3, padding: "3px 10px 4px", flexShrink: 0, position: "sticky", top: 0, zIndex: 60, minWidth: 0, background: "#05060A", borderBottom: `1px solid ${HT.border}` }}>
-      <Dock className="dock-noscroll" flat fullWidth style={{ width: "100%", flexWrap: "nowrap", overflowX: "auto", scrollbarWidth: "none" }}>
+      {/* data-capture-hide drops the control dock from snapshots (ticker picker,
+          strike %, GO, REPLAY, intensity, the greek tabs, the snap button
+          itself). Only the Dock is tagged, not its wrapper — the wrapper also
+          holds the TOTAL NET GEX row, which belongs in the image. */}
+      <Dock captureHide className="dock-noscroll" flat fullWidth style={{ width: "100%", flexWrap: "nowrap", overflowX: "auto", scrollbarWidth: "none" }}>
         <span style={{ fontSize: 12, fontWeight: 800, color: HT.cyan, letterSpacing: "0.14em", textTransform: "uppercase" }}>
           Options Chain
         </span>
@@ -2304,9 +2313,10 @@ export default function OptionsChainPage({
         </div>
 
         <button onClick={trigger} style={{ ...homeButtonStyle }}>{refreshLabel}</button>
-        <BoxSnapBtn targetRef={pageRef} />
+        <BoxSnapBtn targetRef={pageRef} title={snapTitle} />
         <BoxDiscordBtn
           targetRef={pageRef}
+          title={snapTitle}
           message={`📊 Options Chain — ${activeTicker} ${selectedExpiry}`}
         />
       </Dock>

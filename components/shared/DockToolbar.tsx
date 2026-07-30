@@ -49,6 +49,7 @@ export function Dock({
   flat = false,
   fullWidth = false,
   noScroll = false,
+  captureHide = false,
 }: {
   children: ReactNode;
   accent?: string;
@@ -60,10 +61,17 @@ export function Dock({
   fullWidth?: boolean;
   /** Disable horizontal scroll so the bar lays out at full content width (for scale-to-fit wrappers). */
   noScroll?: boolean;
+  /**
+   * Drop this dock from screenshots. Sets [data-capture-hide], which
+   * lib/snapshot.ts removes from the clone — a control bar (and the snapshot
+   * button itself) has no business being in a shared PNG.
+   */
+  captureHide?: boolean;
 }) {
   return (
     <div
       className={className}
+      data-capture-hide={captureHide ? "" : undefined}
       style={{
         display: "flex",
         alignItems: "center",

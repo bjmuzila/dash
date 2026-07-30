@@ -21,6 +21,7 @@
  */
 
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
+import { captureToDataUrl } from "@/lib/snapshot";
 
 // Single source of truth for the snapshot palette — dashboard theme, no ad-hoc hex.
 const HT = {
@@ -547,20 +548,18 @@ async function renderAndCapture(html: string): Promise<string> {
     // Wait for fonts/layout
     await new Promise(r => setTimeout(r, 400));
 
-    const { default: html2canvas } = await import("html2canvas");
     const root = doc.getElementById("root") ?? doc.body;
-    const canvas = await html2canvas(root, {
-      backgroundColor: "#08111f",
-      useCORS: true,
-      allowTaint: true,
+    // Shared engine (lib/snapshot.ts). windowWidth/windowHeight are the one
+    // legitimate use of the reflow options in the app: this document really is
+    // laid out at a fixed 1280x720 inside an off-screen iframe, so the virtual
+    // viewport SHOULD match it. The background used to be a hardcoded #08111f
+    // that didn't match the document's own --bg (HOME_THEME.bg), which tinted
+    // every transparent gap in the render.
+    return await captureToDataUrl(root, {
       scale: 1.5,
-      logging: false,
-      // Tell html2canvas to render inside the iframe's window
       windowWidth: 1280,
       windowHeight: 720,
     });
-
-    return canvas.toDataURL("image/png");
   } finally {
     document.body.removeChild(iframe);
   }

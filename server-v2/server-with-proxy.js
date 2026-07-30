@@ -1393,6 +1393,39 @@ async function main() {
         })();
         return;
       }
+      // ── Per-strike net GEX across expirations (all + ex-0DTE) ─────────────
+      //   GET /proxy/gex-by-strike-multi?symbol=$SPX
+      //
+      // /proxy/gex above is ONE expiry (0DTE for SPX). This is the same
+      // per-strike ladder widened to the whole board, returned twice: every
+      // listed expiration, and every listed expiration except the 0DTE one.
+      // Feeds the two extra "Net gamma exposure by strike" cards on /test.
+      //
+      // Both ladders are OI+Vol (gamma × (OI + volume) × spot²) via
+      // computeGexRows, so they line up with eod_gex.total_gex_0dte /
+      // total_gex_ex0dte and with the 0DTE card already on the page.
+      //
+      // Cached ~60s server-side (GEX_MULTI_TTL_MS): the sweep is one upstream
+      // fetch per expiration, so it must not ride the page's 15s poll.
+      if (pathname === '/proxy/gex-by-strike-multi' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { getLiveGexRowsMulti } = require('./eod-gex-recorder');
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = (u.searchParams.get('symbol') || '$SPX').trim();
+            // Spot comes from the live feed so every ladder on the page shares
+            // one underlying price; an explicit ?spot= is honored for testing.
+            const st = marketState.getState();
+            const spot = Number(u.searchParams.get('spot')) || Number(st.spot) || 0;
+            if (!(spot > 0)) { sendJson(res, 503, { ok: false, error: 'no spot yet' }); return; }
+            // Session date defines what "0DTE" means; default to today ET.
+            const sessionDate = (u.searchParams.get('date') || '').trim() || todayYmdET();
+            const payload = await getLiveGexRowsMulti(symbol, sessionDate, spot);
+            sendJson(res, 200, { ok: true, ...payload });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // ── Day-over-day GEX movers ──────────────────────────────────────────
       //   GET /proxy/strike-dod?limit=1000
       // Latest session's biggest OI+Vol net-GEX day-over-day mover per ticker

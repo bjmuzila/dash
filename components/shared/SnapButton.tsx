@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type RefObject } from "react";
 import { saveMVCSnapshot } from "@/lib/snapdb";
 import { shareToDiscord } from "@/lib/discord/share";
+import { captureToDataUrl } from "@/lib/snapshot";
 
 declare global {
   interface Window {
@@ -32,20 +33,33 @@ function getHighestRow<T extends Record<string, number | undefined>>(
   , chain[0]);
 }
 
-function captureGexCanvas(): string | null {
+/**
+ * Find the element to screenshot for the Discord share.
+ *
+ * This used to be `querySelectorAll("canvas")` picking whichever canvas had the
+ * largest pixel area anywhere on the page. On any page with more than one chart
+ * that was a coin flip — a prime suspect for snapshots that came back showing
+ * the wrong thing — and it also bypassed the shared capture pipeline, so the
+ * PNG had no title band, no watermark, and none of the html2canvas fixes.
+ *
+ * Now it's explicit: pass a `targetRef`, or mark the element you want captured
+ * with `data-snap-target`. No guessing.
+ */
+function resolveShareTarget(targetRef?: RefObject<HTMLElement | null>): HTMLElement | null {
+  if (targetRef?.current) return targetRef.current;
+  return document.querySelector<HTMLElement>("[data-snap-target]");
+}
+
+async function captureShareImage(
+  targetRef?: RefObject<HTMLElement | null>,
+): Promise<string | null> {
+  const el = resolveShareTarget(targetRef);
+  if (!el) return null;
   try {
-    const canvases = document.querySelectorAll<HTMLCanvasElement>("canvas");
-    if (!canvases.length) return null;
-    let best: HTMLCanvasElement | null = null;
-    let bestArea = 0;
-    canvases.forEach(c => {
-      const area = c.width * c.height;
-      if (area > bestArea) { bestArea = area; best = c; }
-    });
-    if (!best || bestArea < 1000) return null;
-    return (best as HTMLCanvasElement).toDataURL("image/png");
-  } catch {
-    return null;
+    return await captureToDataUrl(el, { title: "SPX GEX" });
+  } catch (e) {
+    console.error("[SnapButton] capture failed", e);
+    return null; // still post the text summary
   }
 }
 
@@ -136,9 +150,9 @@ export async function saveManualMvcSnapshot(): Promise<void> {
   window.dispatchEvent(new CustomEvent("db-mvc-updated", { detail: { triggerType: "manual" } }));
 }
 
-async function shareManualSnapshot(): Promise<void> {
+async function shareManualSnapshot(targetRef?: RefObject<HTMLElement | null>): Promise<void> {
   const snap = await fetchSnapshotData();
-  const screenshot = captureGexCanvas();
+  const screenshot = await captureShareImage(targetRef);
   const now = new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false });
   const lines = [
     `📸 **GEX Snap** — ${now} ET`,
@@ -151,7 +165,14 @@ async function shareManualSnapshot(): Promise<void> {
   await sendToDiscord({ content: lines, imageBase64: screenshot });
 }
 
-export default function SnapButton({ mode = "save" }: { mode?: SnapMode }) {
+export default function SnapButton({
+  mode = "save",
+  targetRef,
+}: {
+  mode?: SnapMode;
+  /** Share mode only: the element to screenshot. See resolveShareTarget. */
+  targetRef?: RefObject<HTMLElement | null>;
+}) {
   const [state, setState] = useState<BtnState>("idle");
   const isSave = mode === "save";
 
@@ -160,7 +181,7 @@ export default function SnapButton({ mode = "save" }: { mode?: SnapMode }) {
     setState("saving");
     try {
       if (mode === "save") await saveManualMvcSnapshot();
-      else await shareManualSnapshot();
+      else await shareManualSnapshot(targetRef);
       setState("ok");
       setTimeout(() => setState("idle"), 1800);
     } catch (e) {

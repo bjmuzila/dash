@@ -85,6 +85,29 @@ function yearsToExpiry(expirationIso, now = Date.now()) {
   return days / 262;
 }
 
+/**
+ * Epoch ms for `hh:mm` ET on an ET date string, DST-correct (no hardcoded
+ * -4/-5). Used to anchor "the last snapshot before 16:00 ET" style cutoffs,
+ * where being an hour off silently picks up post-close rows.
+ *
+ * Lives in this pure, side-effect-free module rather than inside a recorder so
+ * one-off scripts can reuse it without importing a recorder's Theta/TT module
+ * graph and its timers.
+ */
+function etEpochMs(dateStr, hh, mm) {
+  const asUtc = Date.parse(
+    `${dateStr}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00Z`
+  );
+  const tzn = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', timeZoneName: 'longOffset',
+  }).formatToParts(new Date(asUtc)).find((p) => p.type === 'timeZoneName')?.value || 'GMT-4';
+  const m = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(tzn);
+  const offMin = m
+    ? (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3] || 0))
+    : -240;
+  return asUtc - offMin * 60_000;
+}
+
 // ---------------------------------------------------------------------------
 // Symbol parsing (ported + extended)
 // ---------------------------------------------------------------------------
@@ -220,6 +243,7 @@ module.exports = {
   todayYmd,
   dteFromIso,
   yearsToExpiry,
+  etEpochMs,
   // symbols
   optionExpirationCompact,
   isSpxwSymbol,

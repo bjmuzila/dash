@@ -53,6 +53,29 @@ textarea {
   font: inherit;
 }
 
+/* ── Buttons centre their own label ─────────────────────────────────────────
+   Most buttons in this app are inline-styled and centre their label with
+   padding alone. That reads fine until something gives the button a height it
+   didn't ask for, and then the label sits at the TOP of the box instead of the
+   middle. Three things do that:
+     • the `main button { min-height: 38px }` touch-target rule below, under
+       @media (max-width: 899px) — an inline-block button with a min-height
+       puts its text at the top of the taller box;
+     • a flex parent with the default `align-items: stretch`, which grows the
+       button to the row height while the label stays at padding-top;
+     • an emoji in the label (📸 ✓ ✕) having a taller line box than the Latin
+       text beside it, which shifts the baseline — visible as a jump when a
+       snapshot button swaps "📸 Snapshot" for "Capturing…".
+   Fixing it here rather than at ~190 call sites. An inline
+   `display: flex/grid/block` on a specific button still wins over this, so
+   anything already laid out deliberately is unaffected. */
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
 /* ── Dark dropdowns everywhere ──────────────────────────────────────────────
    Kills the default light/gray native <select> popup. color-scheme:dark makes
    the option list render dark in Chromium/WebKit; appearance:none removes the

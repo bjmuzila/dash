@@ -436,6 +436,79 @@ async function computeLiveGexEx0dte(symbol, sessionDate, spot) {
   return totalNetGex(gexRows);
 }
 
+// ── Dealer gamma by DTE ───────────────────────────────────────────────────────
+//
+// computeLiveGexEx0dte above deliberately drops two things the DTE breakdown
+// needs: it EXCLUDES the 0DTE expiry, and its flatRows discard `expiration`
+// entirely (they are keyed by strike+side only). Rather than change that
+// function — it produces the live total_gex_ex0dte number and is not worth the
+// risk — this sweeps the chain again, keeping the expiry on every row.
+//
+// COST: one extra full-chain pass per (date, symbol), once per session, cached
+// below. The greeks/OI/volume trio is coalesced upstream, so the second pass
+// mostly hits warm caches.
+async function sweepChainByExpiry(symbol, sessionDate) {
+  const underlying = chainUnderlying(symbol);
+  const { contracts, expirations } = await fetchChainTheta(underlying);
+  if (!expirations?.length) throw new Error(`no expirations for ${underlying}`);
+
+  // ALL listed expirations, 0DTE included — that row is the whole point.
+  const exps = expirations.filter(Boolean);
+
+  const perExp = await mapLimit(exps, EXP_CONCURRENCY, async (exp) => {
+    const [greekMap, oiMap] = await Promise.all([
+      fetchGreeksTheta(underlying, exp).catch(() => new Map()),
+      fetchOpenInterestTheta(underlying, exp).catch(() => new Map()),
+    ]);
+    // Pair the call and put leg of each strike into one row, which is the shape
+    // computation/dte-buckets.js consumes.
+    const byStrike = new Map();
+    for (const c of contracts) {
+      if (c.expiration !== exp) continue;
+      const k = keyOf(c.expiration, c.strike, c.type);
+      const gamma = Math.abs(Number(greekMap.get(k)?.gamma ?? 0));
+      const oi = Number(oiMap.get(k)?.oi ?? 0);
+      if (!(gamma > 0) && !(oi > 0)) continue;
+      if (!byStrike.has(c.strike)) {
+        byStrike.set(c.strike, {
+          expiration: exp, strike: c.strike,
+          callGamma: 0, putGamma: 0, callOi: 0, putOi: 0,
+        });
+      }
+      const row = byStrike.get(c.strike);
+      if (c.type === 'C') { row.callGamma = gamma; row.callOi = oi; }
+      else { row.putGamma = gamma; row.putOi = oi; }
+    }
+    return [...byStrike.values()];
+  });
+
+  const rows = perExp.flat();
+  if (!rows.length) throw new Error(`${symbol}: no option rows for the DTE sweep`);
+  return rows;
+}
+
+// Once per (date, symbol), same caching rationale as _exDteCache. Best-effort
+// throughout: a failure here must never sink the eod_gex row.
+const _dteDone = new Set(); // `date|symbol`
+async function pmDteGamma(symbol, date, spot) {
+  const key = `${date}|${symbol}`;
+  if (_dteDone.has(key)) return null;
+  if (!(Number(spot) > 0)) return null;
+  try {
+    const { recordDteGamma } = require('./eod-dte-gamma-recorder');
+    const strikes = await sweepChainByExpiry(symbol, date);
+    const out = await recordDteGamma({
+      date, symbol, spot, strikes,
+      underlying: chainUnderlying(symbol),
+    });
+    _dteDone.add(key);
+    return out;
+  } catch (e) {
+    console.warn(`[eod-gex] ${symbol} DTE buckets — ${e.message}`);
+    return null;
+  }
+}
+
 // One PM computation of the ex-0DTE total per (date, symbol): the full-chain
 // sweep is heavy, and the value barely moves across the 10-minute window, so we
 // compute it on the first tick that succeeds and reuse it for later ticks (which
@@ -631,6 +704,11 @@ async function collectEodGex(base, opts = {}) {
 
       await upsertEodGex(date, symbol, tng, tfg || 0, spot, computedAt, writeSource, ex0dte, pin);
       saved.push(symbol);
+
+      // Dealer gamma bucketed by DTE (eod_dte_gamma). Written AFTER the
+      // eod_gex upsert and fully swallowed on failure, so this can never cost
+      // us the row that already succeeded.
+      void pmDteGamma(symbol, date, spot);
       console.log(
         `[eod-gex] ${symbol} ${date} — GEX ${tng >= 0 ? '+' : ''}${(tng / 1e9).toFixed(3)}B  flow ${tfg >= 0 ? '+' : ''}${((tfg || 0) / 1e9).toFixed(3)}B  exFrontGEX ${ex0dte == null ? 'n/a' : `${ex0dte >= 0 ? '+' : ''}${(ex0dte / 1e9).toFixed(3)}B`}  spot=${spot.toFixed(2)}` +
         (pin ? `  pin=${pin.strike} (${pin.share.toFixed(0)}% of |GEX|)` : '') +

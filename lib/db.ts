@@ -697,9 +697,18 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       ON em_condor_ticks(condor_id, ts);
 
     -- EOD GEX snapshot: one row per (date, symbol), upserted at 3:55–4:05 ET.
-    -- total_gex  signed net GEX (same value as the dashboard header)
-    -- spot       underlying price at compute time
+    -- total_gex   signed net GEX — MIXED BASIS across sources, kept for
+    --             back-compat only. It was originally "same as the dashboard
+    --             header", but the PM ladder, AM settled pass and header
+    --             fallback all write it on different scopes/bases. Chart
+    --             total_gex_0dte / total_gex_ex0dte instead (both OI+Vol, one
+    --             definition each) — see the COLUMN BASES block at the top of
+    --             server-v2/eod-gex-recorder.js.
+    -- spot        underlying price at compute time
     -- computed_at ISO timestamp of the actual computation
+    -- NOTE: total_flow_gex, source, total_gex_ex0dte, total_gex_0dte and the
+    -- pin_* columns are added idempotently by that recorder's ensureColumns(),
+    -- which predates this DDL — they are intentionally not repeated here.
     CREATE TABLE IF NOT EXISTS eod_gex (
       id          SERIAL PRIMARY KEY,
       date        TEXT NOT NULL,
@@ -5243,12 +5252,24 @@ export interface EodGexRecord {
   id?: number;
   date: string;
   symbol: string;
+  // HISTORICALLY MIXED BASIS — do not chart as a single series. Its meaning
+  // depends on which writer touched the row last (0DTE OI-only from the PM
+  // ladder, all-expiration OI+Vol from the AM settled pass that overwrites it,
+  // front-expiry OI+Vol from the header fallback). See the COLUMN BASES block at
+  // the top of server-v2/eod-gex-recorder.js, and prefer the two columns below.
   total_gex: number;
   spot: number;
   computed_at: string;
-  // Combined net GEX across all expirations EXCEPT 0DTE. Nullable — older rows
-  // and any where the chain couldn't be read have no value.
+  // Combined net GEX across all expirations EXCEPT 0DTE, on the OI+Vol basis
+  // (γ × (OI + volume) × spot², puts negated). Nullable — older rows and any
+  // where the chain couldn't be read have no value.
   total_gex_ex0dte?: number | null;
+  // Net GEX for the 0DTE expiry ALONE, same OI+Vol basis — so this plus
+  // total_gex_ex0dte is the whole-chain total. Nullable: writers that can't
+  // split 0DTE out, and sessions whose persisted ladder predates net_vol_gex,
+  // leave it NULL rather than pass an OI-only number off as OI+Vol.
+  // Backfill with: node server-v2/scripts/backfill-eod-gex-0dte.js --commit
+  total_gex_0dte?: number | null;
 }
 
 /** Upsert one EOD GEX row. Overwrites an existing (date, symbol) row. */

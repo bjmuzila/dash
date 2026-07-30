@@ -24,6 +24,7 @@ import type { UTCTimestamp, IChartApi, ISeriesApi, CandlestickData } from "light
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useNqCandles } from "@/hooks/useNqCandles";
 import { BoxDiscordBtn } from "@/components/shared/DataBox";
+import { captureAndCopy } from "@/lib/snapshot";
 import {
   analyzeICT, activeWindows, ICT_WINDOWS, etMinutes,
   type IctCandle, type IctAnalysis, type TimeWindow,
@@ -1120,10 +1121,14 @@ export default function IctPage() {
 
 /**
  * Labeled "Copyshot" button — screenshots the target element (chart + live
- * panels) and writes a PNG to the clipboard. Self-contained (lazy-loads
- * html2canvas) so it doesn't depend on DataBox internals.
+ * panels) and writes a PNG to the clipboard.
+ *
+ * This used to lazy-load html2canvas and hand-composite the live chart and
+ * overlay canvases itself. lib/snapshot.ts now does that for every canvas in the
+ * captured subtree, so overlayRef/chartRef are no longer needed to locate them —
+ * they stay in the prop type only so the call site doesn't have to change.
  */
-function CopyshotBtn({ targetRef, overlayRef, chartRef }: {
+function CopyshotBtn({ targetRef }: {
   targetRef: RefObject<HTMLElement | null>;
   overlayRef?: RefObject<HTMLCanvasElement | null>;
   chartRef?: RefObject<HTMLDivElement | null>;
@@ -1133,39 +1138,14 @@ function CopyshotBtn({ targetRef, overlayRef, chartRef }: {
     if (s === "busy" || !targetRef.current) return;
     set("busy");
     try {
-      const { default: html2canvas } = await import("html2canvas");
-      const scale = 2;
-      const canvas = await html2canvas(targetRef.current, { backgroundColor: "#080b10", scale, logging: false });
-
-      // html2canvas does not capture the bitmaps of live <canvas> elements
-      // (the lightweight-charts chart + our ICT overlay), so it grabs a blank
-      // chart with no drawings. Composite the LIVE chart canvas(es) and the
-      // ICT overlay canvas onto the screenshot manually, positioned by their
-      // offset relative to the capture root.
-      const ctx = canvas.getContext("2d");
-      const root = targetRef.current.getBoundingClientRect();
-      const paint = (src: HTMLCanvasElement | null | undefined) => {
-        if (!ctx || !src || !src.width || !src.height) return;
-        const r = src.getBoundingClientRect();
-        ctx.drawImage(
-          src,
-          (r.left - root.left) * scale, (r.top - root.top) * scale,
-          r.width * scale, r.height * scale,
-        );
-      };
-      // The lightweight-charts internal canvases live inside chartRef.
-      if (chartRef?.current) {
-        chartRef.current.querySelectorAll("canvas").forEach((c) => paint(c as HTMLCanvasElement));
-      }
-      paint(overlayRef?.current);
-
-      const blob: Blob | null = await new Promise((res) => canvas.toBlob(res, "image/png"));
-      if (!blob) throw new Error("no blob");
-      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      await captureAndCopy(targetRef.current, "ict-copyshot.png");
       set("ok");
-    } catch { set("err"); }
+    } catch (e) {
+      console.error("[CopyshotBtn]", e);
+      set("err");
+    }
     finally { setTimeout(() => set("idle"), 1800); }
-  }, [s, targetRef, overlayRef, chartRef]);
+  }, [s, targetRef]);
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#a78bfa";
   const text = s === "busy" ? "Copying…" : s === "ok" ? "✓ Copied" : s === "err" ? "✕ Failed" : "📸 Copyshot";
