@@ -96,12 +96,22 @@ function normTicker(u: string | null | undefined): string {
   return ROOT_TO_TICKER[up] ?? up;
 }
 
-function dteOf(o: FlowOrder): number | null {
+// DTE relative to the SESSION DATE being viewed — NOT to "today". Measuring from
+// today's midnight made every past session's 0DTE flow go negative on lookback
+// (a 7/29 expiry viewed on 7/30 scored −1), so any active DTE filter — including
+// the 0–7DTE ≥$500K whale preset, whose dteMin of 0 rejects anything negative —
+// silently dropped the whole 0DTE tape for that day. It looked correct live and
+// wrong the moment the date rolled over. Both sides are parsed as UTC midnight so
+// the subtraction is a clean whole-day count with no DST/offset drift.
+// Keep this in sync with the server's dteMin/dteMax SQL in
+// server-v2/server-with-proxy.js buildFlowPrintsWhere(), or the chart and the
+// tape will disagree about what "0DTE" means for a historical date.
+function dteOf(o: FlowOrder, sessionYmd: string): number | null {
   if (!o.expiration) return null;
-  const exp = new Date(`${o.expiration}T00:00:00`);
-  if (Number.isNaN(exp.getTime())) return null;
-  const now = new Date();
-  return Math.round((exp.getTime() - new Date(now.toDateString()).getTime()) / 86_400_000);
+  const exp = Date.parse(`${o.expiration}T00:00:00Z`);
+  const base = Date.parse(`${sessionYmd}T00:00:00Z`);
+  if (!Number.isFinite(exp) || !Number.isFinite(base)) return null;
+  return Math.round((exp - base) / 86_400_000);
 }
 
 // ── RTH session bounds (9:30–16:00 America/New_York) for TODAY, as UTC seconds.
@@ -125,6 +135,21 @@ function rthBoundsToday(): { openSec: number; closeSec: number } {
 function rthBoundsForYmd(ymd: string): { openSec: number; closeSec: number } {
   const [y, m, d] = ymd.split("-").map(Number);
   return { openSec: etWallToUtcSec(y, m, d, 9, 30), closeSec: etWallToUtcSec(y, m, d, 16, 0) };
+}
+// Full ET calendar day (00:00–24:00) for a session date, as UTC seconds. Hard
+// outer clamp for the 24H axis: `flow_prints.date` is stamped with the ET day at
+// write time, so a row on date D can carry any ts inside D — pre-open, RTH, or
+// the Cboe global session in the evening — and nothing outside it.
+function etDayBoundsForYmd(ymd: string): { startSec: number; endSec: number } {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return { startSec: etWallToUtcSec(y, m, d, 0, 0), endSec: etWallToUtcSec(y, m, d, 24, 0) };
+}
+// UTC seconds → "HH:MM" ET. Used to label the 24H axis window, whose bounds are
+// data-derived rather than the fixed 9:30–4:00, so they need spelling out.
+function fmtEtHm(utcSec: number): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(new Date(utcSec * 1000));
 }
 // Today's ET session date as "YYYY-MM-DD" (matches the server's todayYmdET()).
 function todayYmdET(): string {
@@ -277,6 +302,12 @@ export default function FlowPage() {
     return v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v);
   });
   const [otmOnly, setOtmOnly] = useState(true);
+  // Net Drift x-axis span. "rth" = the classic hardcoded 9:30–4:00 grid. "24h"
+  // widens it to cover pre-open and the Cboe global (evening) session, which the
+  // RTH grid silently discarded — SPX now trades nearly around the clock, so a
+  // day whose only prints landed at 08:58 and 21:30 drew as a flat zero line.
+  // Tape/filter behavior is untouched; this is purely which bins the chart walks.
+  const [chartSpan, setChartSpan] = useState<"rth" | "24h">("rth");
 
   const [history, setHistory] = useState<FlowOrder[]>([]);
 
@@ -568,14 +599,14 @@ export default function FlowPage() {
       if (Number(o.size || 0) < minSize) return false;
       if (expiry !== "all" && o.expiration !== expiry) return false;
       if (dteMin > 0 || dteMax != null) {
-        const d = dteOf(o);
+        const d = dteOf(o, date);
         if (d == null) return false;
         if (d < dteMin) return false;
         if (dteMax != null && d > dteMax) return false;
       }
       return true;
     });
-  }, [merged, active, side, optType, otmOnly, minPremium, minSize, expiry, dteMin, dteMax]);
+  }, [merged, active, side, optType, otmOnly, minPremium, minSize, expiry, dteMin, dteMax, date]);
 
   // Tape display order (newest-first).
   const filtered = useMemo(() => [...filteredAsc].reverse(), [filteredAsc]);
@@ -600,7 +631,7 @@ export default function FlowPage() {
       if (Number(o.size || 0) < minSize) return false;
       if (expiry !== "all" && o.expiration !== expiry) return false;
       if (dteMin > 0 || dteMax != null) {
-        const d = dteOf(o);
+        const d = dteOf(o, date);
         if (d == null) return false;
         if (d < dteMin) return false;
         if (dteMax != null && d > dteMax) return false;
@@ -608,7 +639,7 @@ export default function FlowPage() {
       return true;
     });
     return rows.reverse();
-  }, [mergedCombined, scope, side, optType, otmOnly, minPremium, minSize, expiry, dteMin, dteMax]);
+  }, [mergedCombined, scope, side, optType, otmOnly, minPremium, minSize, expiry, dteMin, dteMax, date]);
 
   const combinedExpiryOptions = useMemo(() => {
     const set = new Set<string>();
@@ -679,15 +710,33 @@ export default function FlowPage() {
   // The server applies the same filters as the tape, so the chart still moves
   // with the filter panel.
   const netSeries = useMemo(() => {
-    const { openSec, closeSec } = isToday ? rthBoundsToday() : rthBoundsForYmd(date);
+    const rth = isToday ? rthBoundsToday() : rthBoundsForYmd(date);
+    let openSec = rth.openSec, closeSec = rth.closeSec;
+    // 24H span: widen the grid to the extent of the bins the server actually
+    // returned (it filters on `date` only and never clamped to RTH — the client
+    // was throwing those bins away), clamped to the ET calendar day so one
+    // mis-stamped ts can't stretch the axis across a week. RTH always stays
+    // inside the window, so the familiar 9:30–4:00 shape is still there.
+    if (chartSpan === "24h") {
+      const day = etDayBoundsForYmd(isToday ? todayYmdET() : date);
+      let lo = openSec, hi = closeSec;
+      for (const b of netBins) {
+        if (b.sec >= day.startSec && b.sec < lo) lo = b.sec;
+        if (b.sec <= day.endSec && b.sec > hi) hi = b.sec;
+      }
+      // Snap to the bin grid — the loop below steps by BIN_SEC from openSec, and
+      // an unaligned start would miss every bin by a constant offset.
+      openSec = Math.floor(lo / BIN_SEC) * BIN_SEC;
+      closeSec = Math.ceil(hi / BIN_SEC) * BIN_SEC;
+    }
     const byBin = new Map<number, NetBin>();
     for (const b of netBins) byBin.set(b.sec, b);
     const hasData = netBins.length > 0;
 
-    // Fixed 1-min bins across the whole RTH session → proportional, hardcoded
-    // 9:30–4:00 axis. Walk the aggregate into cumulative net-drift lines; bins up
-    // to "now" carry the running total, future bins are whitespace (axis still
-    // spans to the close before data arrives).
+    // Fixed 1-min bins across [openSec, closeSec] → proportional axis (9:30–4:00
+    // on the RTH span, the day's full data extent on 24H). Walk the aggregate into
+    // cumulative net-drift lines; bins up to "now" carry the running total, future
+    // bins are whitespace (axis still spans to the close before data arrives).
     const nowSec = Math.floor(Date.now() / 1000);
     const callPts: (LineData | WhitespaceData)[] = [];
     const putPts: (LineData | WhitespaceData)[] = [];
@@ -708,7 +757,7 @@ export default function FlowPage() {
       }
     }
     return { callPts, putPts, volPts, lastCall: call, lastPut: put, openSec, closeSec, hasData, byBin };
-  }, [netBins, isToday, date]);
+  }, [netBins, isToday, date, chartSpan]);
 
   // ── lightweight-charts setup ──
   const chartHostRef = useRef<HTMLDivElement | null>(null);
@@ -1246,11 +1295,35 @@ export default function FlowPage() {
               {netSwitching && <span style={{ marginLeft: 8, fontSize: 14, fontWeight: 700, color: C.muted }}>· loading…</span>}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 26, justifyContent: "center", padding: "0 12px 10px", fontSize: 14, fontWeight: 700, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 26, justifyContent: "center", alignItems: "center", padding: "0 12px 10px", fontSize: 14, fontWeight: 700, flexWrap: "wrap" }}>
             <span style={{ color: BULLISH }}>● Calls {fmtPremium(netSeries.lastCall)}</span>
             <span style={{ color: BEARISH }}>● Puts {fmtPremium(netSeries.lastPut)}</span>
             <span style={{ color: C.muted }}>Net {fmtPremium(netSeries.lastCall + netSeries.lastPut)}</span>
+            {/* Axis span. RTH = the classic 9:30–4:00 grid; 24H widens it to the
+                day's real data extent so pre-open and the Cboe global session are
+                visible instead of being dropped off the left/right edge. */}
+            {!chartOnly && (
+              <span style={{ ...segWrapStyle, width: 132 }}>
+                <button
+                  className="flow-chip"
+                  style={segBtn(chartSpan === "rth")}
+                  onClick={() => setChartSpan("rth")}
+                  title="Regular trading hours only (9:30–4:00 ET)"
+                >RTH</button>
+                <button
+                  className="flow-chip"
+                  style={segBtn(chartSpan === "24h")}
+                  onClick={() => setChartSpan("24h")}
+                  title="Full session — includes pre-open and the overnight global session"
+                >24H</button>
+              </span>
+            )}
           </div>
+          {chartSpan === "24h" && netSeries.hasData && (
+            <p style={{ margin: 0, fontSize: 13, padding: "0 20px 8px", color: C.muted, textAlign: "center", fontFamily: "var(--font-mono)" }}>
+              {fmtEtHm(netSeries.openSec)}–{fmtEtHm(netSeries.closeSec)} ET
+            </p>
+          )}
           <div ref={chartHostRef} style={{ height: 340, width: "100%" }} />
           {!netSeries.hasData && (
             <p style={{ fontSize: 14, padding: "0 20px 12px", color: C.muted, textAlign: "center" }}>
@@ -1356,7 +1429,7 @@ export default function FlowPage() {
               const open = expandedKey === identity;
 
               const stat = lookupStat(o);
-              const d = dteOf(o);
+              const d = dteOf(o, date);
               // Live moneyness: + = still OTM, − = has gone ITM since the print.
               const liveSpot = spotByTicker[ticker] ?? o.spot ?? 0;
               const otmPct = liveSpot > 0 && o.strike

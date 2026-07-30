@@ -21,6 +21,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { HOME_THEME, homeRefreshButtonStyle, homeButtonStyle, homeSecondaryButtonStyle, homeInputStyle, statTileStyle, DOCK_THEME, LIGHT_BLUE, SOFT_RED } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
@@ -266,6 +267,12 @@ function Panel({
  * whatever was typed — asking for 7423 on a 5-point grid should land you on
  * 7425, not on an empty chart. Exact-vs-snapped is shown under the field so a
  * snap is never silent.
+ *
+ * The suggestion list is PORTALED to <body> with fixed positioning, exactly like
+ * ThemedSelect's menu. Every Card carries backdrop-filter, which makes each card
+ * its own stacking context — so an absolutely positioned menu inside the toolbar
+ * card, no matter how high its z-index, still paints UNDER the sibling card that
+ * follows it in the DOM. A portal is the only fix that survives that.
  */
 function StrikeInput({
   strikes, value, onCommit,
@@ -278,15 +285,49 @@ function StrikeInput({
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [rect, setRect] = useState<{ left: number; top?: number; bottom?: number; width: number; maxH: number } | null>(null);
 
   // Parent can change the strike on its own (day switch auto-picks the dominant
   // one) — mirror that back into the field instead of leaving stale text.
   useEffect(() => { setText(value); }, [value]);
 
+  // Anchor the portaled list under the input; flip above when it would overflow
+  // the viewport bottom. Recomputed on scroll (capture: the page scrolls inside
+  // PageShell's <main>, not the window) and on resize.
+  useEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const r = inputRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const GAP = 6, PAD = 8, MAX_H = 260;
+      const below = window.innerHeight - r.bottom - GAP - PAD;
+      const above = r.top - GAP - PAD;
+      const flip = below < Math.min(MAX_H, 160) && above > below;
+      setRect({
+        left: Math.max(PAD, Math.min(r.left, window.innerWidth - r.width - PAD)),
+        ...(flip ? { bottom: window.innerHeight - r.top + GAP } : { top: r.bottom + GAP }),
+        width: r.width,
+        maxH: Math.max(120, Math.min(MAX_H, flip ? above : below)),
+      });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      // The list lives in a portal, so it is NOT inside boxRef — check both.
+      if (boxRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
@@ -356,6 +397,7 @@ function StrikeInput({
   return (
     <div ref={boxRef} style={{ position: "relative", width: 160 }}>
       <input
+        ref={inputRef}
         value={text}
         onChange={(e) => { setText(e.target.value); setOpen(true); setCursor(0); }}
         onFocus={() => setOpen(true)}
@@ -390,13 +432,27 @@ function StrikeInput({
           : `↵ snaps to nearest of ${strikes.length}`}
       </div>
 
-      {open && matches.length > 0 && (
+      {open && matches.length > 0 && rect && createPortal(
         <div
+          ref={menuRef}
           style={{
-            position: "absolute", top: CTRL_H + 18, left: 0, zIndex: 40,
-            width: "100%", maxHeight: 240, overflowY: "auto",
-            borderRadius: 8, borderTop: `2px solid ${DOCK_THEME.cyanTop}`,
-            background: DOCK_THEME.bg, boxShadow: DOCK_THEME.shadow,
+            position: "fixed",
+            ...(rect.bottom !== undefined ? { bottom: rect.bottom } : { top: rect.top }),
+            left: rect.left,
+            width: rect.width,
+            maxHeight: rect.maxH,
+            overflowY: "auto",
+            // Same layer as ThemedSelect's menu, so the two dropdowns in this
+            // toolbar row can never end up on opposite sides of a card edge.
+            zIndex: 9999,
+            padding: 4,
+            borderRadius: 12,
+            border: `1px solid ${HOME_THEME.border}`,
+            borderTop: `2px solid ${DOCK_THEME.cyanTop}`,
+            background: DOCK_THEME.bg,
+            backdropFilter: "blur(18px)",
+            WebkitBackdropFilter: "blur(18px)",
+            boxShadow: DOCK_THEME.shadow,
           }}
         >
           {matches.map((s, i) => {
@@ -424,7 +480,8 @@ function StrikeInput({
               </div>
             );
           })}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

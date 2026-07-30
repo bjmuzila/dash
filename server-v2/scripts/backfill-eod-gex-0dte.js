@@ -106,14 +106,41 @@ function getPool() {
   });
 }
 
-/** eod_gex rows in scope, oldest first. */
-async function targetRows(p, args) {
+/**
+ * Does eod_gex.total_gex_0dte exist yet?
+ *
+ * The column is created by eod-gex-recorder.js ensureColumns(), which only runs
+ * when that recorder writes — so on a database where the new server code has not
+ * booted yet, every query naming the column fails with
+ * `column "total_gex_0dte" does not exist`. This script must therefore work
+ * BEFORE the deploy as well as after it.
+ */
+async function hasTargetColumn(p) {
+  const { rows } = await p.query(
+    `SELECT 1 FROM information_schema.columns
+     WHERE table_name = 'eod_gex' AND column_name = 'total_gex_0dte' LIMIT 1`
+  );
+  return rows.length > 0;
+}
+
+/** Same DDL the recorder uses. Idempotent. */
+async function addTargetColumn(p) {
+  await p.query(`ALTER TABLE eod_gex ADD COLUMN IF NOT EXISTS total_gex_0dte DOUBLE PRECISION`);
+}
+
+/**
+ * eod_gex rows in scope, oldest first.
+ *
+ * `colExists` false means the column hasn't been created yet, so it can be
+ * neither selected nor filtered on — every row is in scope by definition.
+ */
+async function targetRows(p, args, colExists) {
   const where = ['symbol = $1'];
   const params = [args.symbol];
-  if (!args.force) where.push('total_gex_0dte IS NULL');
+  if (!args.force && colExists) where.push('total_gex_0dte IS NULL');
   if (args.from) { params.push(args.from); where.push(`date >= $${params.length}`); }
   if (args.to) { params.push(args.to); where.push(`date <= $${params.length}`); }
-  let sql = `SELECT date, symbol, total_gex, total_gex_0dte, source
+  let sql = `SELECT date, symbol, total_gex, ${colExists ? 'total_gex_0dte' : 'NULL AS total_gex_0dte'}, source
              FROM eod_gex WHERE ${where.join(' AND ')} ORDER BY date ASC`;
   if (args.days) { params.push(args.days); sql = `${sql.replace('ORDER BY date ASC', 'ORDER BY date DESC')} LIMIT $${params.length}`; }
   const { rows } = await p.query(sql, params);
@@ -180,7 +207,22 @@ async function main() {
   const args = parseArgs(process.argv);
   const p = getPool();
 
-  const rows = await targetRows(p, args);
+  // Create the column when committing; on a dry run, report its absence and
+  // carry on read-only rather than performing a schema write nobody asked for.
+  let colExists = await hasTargetColumn(p);
+  if (!colExists) {
+    if (args.commit) {
+      await addTargetColumn(p);
+      colExists = true;
+      console.log('[backfill-0dte] created column eod_gex.total_gex_0dte (DOUBLE PRECISION, nullable)');
+    } else {
+      console.log('[backfill-0dte] eod_gex.total_gex_0dte does not exist yet — --commit will create it');
+      console.log('[backfill-0dte] (the recorder also creates it on its first write after deploy)');
+      console.log('[backfill-0dte] every session therefore counts as in-scope below');
+    }
+  }
+
+  const rows = await targetRows(p, args, colExists);
   if (!rows.length) {
     console.log(`[backfill-0dte] nothing to do (${args.force ? 'no rows in range' : 'every row in range already has total_gex_0dte'})`);
     await p.end();

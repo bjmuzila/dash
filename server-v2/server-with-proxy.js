@@ -991,13 +991,19 @@ function buildFlowPrintsWhere(f, sinceMs = null) {
     params.push(f.expiry);
     where += ` AND expiration = $${params.length}`;
   }
+  // DTE is measured against the SESSION DATE being queried ($1, pushed above),
+  // NOT CURRENT_DATE. With CURRENT_DATE, every past session's 0DTE flow scored
+  // −1 or lower on lookback (a 7/29 expiry queried on 7/30), so any dteMin >= 0
+  // — including the 0–7DTE whale preset — silently excluded the day's 0DTE prints
+  // while quietly admitting the NEXT day's expiry as "0DTE". Mirrors dteOf() in
+  // app/flow/page.tsx; change both together or the chart and tape will disagree.
   if (f.dteMin > 0) {
     params.push(f.dteMin);
-    where += ` AND (expiration::date - CURRENT_DATE) >= $${params.length}`;
+    where += ` AND (expiration::date - $1::date) >= $${params.length}`;
   }
   if (f.dteMax != null) {
     params.push(f.dteMax);
-    where += ` AND (expiration::date - CURRENT_DATE) <= $${params.length}`;
+    where += ` AND (expiration::date - $1::date) <= $${params.length}`;
   }
   if (f.otmOnly) {
     where += ' AND is_otm = true';
