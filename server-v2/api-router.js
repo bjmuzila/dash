@@ -5359,7 +5359,12 @@ if (libDb) {
             }
             const [options, latest] = await Promise.all([libDb.getWatchOptions(), libDb.getLatestWatchSnapshots()]);
             const byId = new Map(latest.map((s) => [s.watch_id, s]));
-            const rows = options.map((o) => ({ ...o, snapshot: byId.get(o.id) ?? null }));
+            // Auto-probed rows (watch_options.source, currently only
+            // 'gex-change-top') are pipeline plumbing for the scanner card flip,
+            // not things the owner chose to track — keep them out of the list so
+            // /owner/probe stays the manual watchlist. They ARE still snapshotted
+            // by the refresh action below; only the listing hides them.
+            const rows = options.filter((o) => !o.source).map((o) => ({ ...o, snapshot: byId.get(o.id) ?? null }));
             send(res, 200, { rows });
           } catch (err) { send(res, 500, { error: String(err) }); }
           return;
@@ -5402,7 +5407,9 @@ if (libDb) {
             await Promise.all(options.map(async (o) => { const snap = await probe(ctx, o); if (snap) { await libDb.insertWatchSnapshot(snap); recorded++; } }));
             const latest = await libDb.getLatestWatchSnapshots();
             const byId = new Map(latest.map((s) => [s.watch_id, s]));
-            const rows = options.map((o) => ({ ...o, snapshot: byId.get(o.id) ?? null }));
+            // Every contract gets refreshed (auto-probed ones included — that's
+            // what fills the scanner card's chart); only the response hides them.
+            const rows = options.filter((o) => !o.source).map((o) => ({ ...o, snapshot: byId.get(o.id) ?? null }));
             send(res, 200, { ok: true, recorded, rows });
             return;
           }

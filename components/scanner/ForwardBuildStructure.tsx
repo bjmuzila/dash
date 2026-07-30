@@ -35,12 +35,23 @@ type StrikeRow = {
   side: "call" | "put";
   net: number;
   delta: number | null;
+  /** VOLUME-ONLY basis: today's traded volume at this strike, no OI. The server
+   *  stores the two terms separately (gex_now = netVolGEX, gex_open = netGEX);
+   *  `net` above is their sum. Optional because an older server build won't
+   *  send it — the basis tab hides itself when it's absent rather than
+   *  rendering a ladder of zeros. */
+  netVol?: number;
+  /** Day-over-day change of netVol, same treatment as `delta`. */
+  deltaVol?: number | null;
   /** Minutes since this strike last made the top-N, relative to the newest
    *  reading in its expiry. 0 = current, >0 = rotated out that long ago. */
   ageMin?: number | null;
 };
 type Dte = {
   dte: number; expiry: string; netTotal: number;
+  /** Column total on the volume-only basis. Optional for the same reason as
+   *  StrikeRow.netVol. */
+  netVolTotal?: number;
   strikes: StrikeRow[];
   callWall: { strike: number; net: number } | null;
   putWall: { strike: number; net: number } | null;
@@ -91,6 +102,43 @@ const fmtPct = (v: number): string => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFi
 
 const DTE_LABEL = (d: number) => (d === 0 ? "0DTE" : `${d}DTE`);
 const dteColor = (d: number) => (d === 0 ? SPOT : d === 1 ? HOME_THEME.cyan : HOME_THEME.purple);
+
+// ── Contract basis ───────────────────────────────────────────────────────────
+//
+// The ladder can be read on either of two bases, and they answer different
+// questions:
+//
+//   "oivol"  net = OI + today's volume. The carried book plus today's activity.
+//            What this view has always shown, and what the card faces use.
+//   "vol"    net = today's traded volume ONLY, no open interest. Strips out the
+//            positioning the day started with, so what's left is purely what
+//            traded today. On multi-day expiries this is a thin layer on a much
+//            larger OI base and the two look alike; they separate on 0DTE and
+//            late in the session, where today's volume IS the whole book.
+//
+// Both terms are already stored per row (gex_now = volume-only,
+// gex_open = OI-only) — this is a field swap on data already fetched, not a
+// second request, and it works retroactively over the whole history.
+type Basis = "oivol" | "vol";
+
+const BASES: { key: Basis; label: string; hint: string }[] = [
+  { key: "oivol", label: "OI + Vol", hint: "Carried open interest plus today's traded volume — the default basis, and what the card faces above use." },
+  { key: "vol", label: "Vol Only", hint: "Today's traded volume only, with carried open interest removed. Separates from OI+Vol most on 0DTE and into the close." },
+];
+
+/** This strike's net on the active basis. */
+const netOn = (s: StrikeRow, b: Basis): number => (b === "vol" ? Number(s.netVol ?? 0) : s.net);
+/** This strike's day-over-day Δ on the active basis. */
+const deltaOn = (s: StrikeRow, b: Basis): number | null =>
+  b === "vol" ? (s.deltaVol ?? null) : s.delta;
+/** A DTE column's total on the active basis. */
+const totalOn = (d: Dte, b: Basis): number => (b === "vol" ? Number(d.netVolTotal ?? 0) : d.netTotal);
+
+/** Does this payload carry the volume-only term? An older server build won't
+ *  send netVol, and a silent ladder of zeros would read as "no gamma today"
+ *  rather than "your API is behind" — so the tab strip hides instead. */
+const hasVolBasis = (t: Ticker): boolean =>
+  t.dtes.some((d) => d.strikes.some((s) => s.netVol != null));
 
 // ── Front-expiry derivations (every card-face metric below comes from here) ──
 
@@ -182,17 +230,22 @@ function CardSpark({ pts }: { pts: number[] }) {
 // `col` maps strike→this DTE's row. Bars scale to THIS column's own max net GEX
 // (per-profile): the biggest wall in each expiry fills the bar. Scaling across the
 // whole ticker instead flattened 1DTE/2DTE to slivers next to 0DTE's huge walls.
-function LadderColumn({ dte, info, rows, col, spot }: {
+function LadderColumn({ dte, info, rows, col, spot, basis }: {
   dte: number; info: Dte | null; rows: Array<{ spot: true } | { strike: number }>;
-  col: Map<number, StrikeRow>; spot: number;
+  col: Map<number, StrikeRow>; spot: number; basis: Basis;
 }) {
   // Bars encode the DAY-OVER-DAY FLOW, not the static net: length = |Δ| scaled to
   // this column's biggest move; a wall "building" (|net| grew vs yesterday) points
   // right/green, "fading" (|net| shrank) points left/red. That's the whole point —
   // see which walls are gaining/losing GEX day to day, i.e. where gamma is flowing.
+  // Recomputed per basis — the two bases have different magnitudes (vol-only is
+  // a subset of OI+Vol), so sharing one scale would flatten the vol ladder to
+  // slivers. Each basis normalizes to its own biggest move.
   const colMaxD = useMemo(() => {
-    let m = 0; col.forEach((s) => { if (s.delta != null && Math.abs(s.delta) > m) m = Math.abs(s.delta); }); return m;
-  }, [col]);
+    let m = 0;
+    col.forEach((s) => { const d = deltaOn(s, basis); if (d != null && Math.abs(d) > m) m = Math.abs(d); });
+    return m;
+  }, [col, basis]);
   const cell: CSSProperties = {
     display: "grid", gridTemplateColumns: "56px 1fr 68px 60px", alignItems: "center",
     gap: 7, padding: "1px 5px", borderRadius: 3,
@@ -202,14 +255,14 @@ function LadderColumn({ dte, info, rows, col, spot }: {
       <div style={{ display: "flex", alignItems: "baseline", gap: 7, marginBottom: 7 }}>
         <span style={{ fontWeight: 800, fontSize: 14, color: dteColor(dte) }}>{DTE_LABEL(dte)}</span>
         <span style={{ color: DIM, fontSize: 11.5, fontFamily: MONO }}>{info ? info.expiry.slice(5) : ""}</span>
-        <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, fontFamily: MONO, color: info ? (info.netTotal >= 0 ? GREEN : RED) : DIM }}>
-          {info ? fmtSigned(info.netTotal) : "no data"}
+        <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, fontFamily: MONO, color: info ? (totalOn(info, basis) >= 0 ? GREEN : RED) : DIM }}>
+          {info ? fmtSigned(totalOn(info, basis)) : "no data"}
         </span>
       </div>
       <div style={{ ...cell, padding: "0 5px 4px", borderBottom: `1px solid ${HOME_THEME.border}`, marginBottom: 5 }}>
         <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: DIM }}>Strike</span>
         <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.03em", textAlign: "center", color: DIM }}>◄ fading · building ►</span>
-        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", textAlign: "right", color: DIM }}>Net GEX</span>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", textAlign: "right", color: DIM }}>{basis === "vol" ? "Vol GEX" : "Net GEX"}</span>
         <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", textAlign: "right", color: DIM }}>Δ DoD</span>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
@@ -223,12 +276,17 @@ function LadderColumn({ dte, info, rows, col, spot }: {
             );
           }
           const s = col.get(r.strike) ?? null;
-          const pos = !!s && s.net >= 0;
+          // Every metric below reads through the active basis. On "vol" the
+          // build/fade question becomes "is today's traded gamma at this strike
+          // bigger than yesterday's was" — same shape, different book.
+          const sNet = s ? netOn(s, basis) : 0;
+          const sDelta = s ? deltaOn(s, basis) : null;
+          const pos = !!s && sNet >= 0;
           // Wall building = |net| grew vs yesterday (net & Δ share a sign); fading =
           // |net| shrank. Bar length = |Δ| scaled to this column's biggest move.
-          const build = !!s && s.delta != null && s.net * s.delta > 0;
-          const fade = !!s && s.delta != null && s.net * s.delta < 0;
-          const frac = s && s.delta != null && colMaxD > 0 ? Math.abs(s.delta) / colMaxD : 0;
+          const build = !!s && sDelta != null && sNet * sDelta > 0;
+          const fade = !!s && sDelta != null && sNet * sDelta < 0;
+          const frac = s && sDelta != null && colMaxD > 0 ? Math.abs(sDelta) / colMaxD : 0;
           // Δ arrow/color mean BUILDING vs FADING (wall growth), matching the bar —
           // NOT the raw net sign. A put wall building has net going more negative,
           // so raw Δ would show ▼ even though the wall grew; that mismatch confused.
@@ -252,10 +310,10 @@ function LadderColumn({ dte, info, rows, col, spot }: {
                 )}
               </div>
               <span style={{ fontSize: 12, fontWeight: 700, textAlign: "right", fontFamily: MONO, color: s ? (pos ? GREEN : RED) : DIM }}>
-                {s ? fmtSigned(s.net) : "—"}
+                {s ? fmtSigned(sNet) : "—"}
               </span>
               <span style={{ fontSize: 11.5, fontWeight: 700, textAlign: "right", fontFamily: MONO, color: dTone }}>
-                {s && s.delta != null ? `${arrow}${fmtGex(Math.abs(s.delta))}` : "—"}
+                {s && sDelta != null ? `${arrow}${fmtGex(Math.abs(sDelta))}` : "—"}
               </span>
             </div>
           );
@@ -265,7 +323,49 @@ function LadderColumn({ dte, info, rows, col, spot }: {
   );
 }
 
+/** Basis tab strip for the detail panel — same visual language as the DTE
+ *  headers (active tab takes the panel's cyan accent, inactive stays hairline). */
+function BasisTabs({ value, onChange }: { value: Basis; onChange: (b: Basis) => void }) {
+  return (
+    <div style={{ display: "flex", gap: 1, background: HOME_THEME.border, borderRadius: 6, overflow: "hidden", padding: 1 }}>
+      {BASES.map((b) => {
+        const on = b.key === value;
+        return (
+          <button
+            key={b.key}
+            type="button"
+            onClick={() => onChange(b.key)}
+            title={b.hint}
+            style={{
+              appearance: "none",
+              border: "none",
+              cursor: "pointer",
+              fontSize: 11,
+              fontWeight: 800,
+              letterSpacing: "0.04em",
+              textTransform: "uppercase",
+              padding: "4px 10px",
+              borderRadius: 5,
+              fontFamily: "inherit",
+              background: on ? HOME_THEME.cyan : HOME_THEME.panel,
+              color: on ? HOME_THEME.bg : DIM,
+            }}
+          >
+            {b.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function DetailPanel({ t, onClose }: { t: Ticker; onClose: () => void }) {
+  // Basis is panel-local and resets when you open a different ticker — the tab
+  // is a way to interrogate one name, not a global display mode.
+  const [basis, setBasis] = useState<Basis>("oivol");
+  const volOk = useMemo(() => hasVolBasis(t), [t]);
+  // Guard against a stale payload arriving under an already-switched tab.
+  const activeBasis: Basis = volOk ? basis : "oivol";
   const byDte = useMemo(() => {
     const m = new Map<number, Map<number, StrikeRow>>();
     for (const d of t.dtes) { const sm = new Map<number, StrikeRow>(); d.strikes.forEach((s) => sm.set(s.strike, s)); m.set(d.dte, sm); }
@@ -293,11 +393,16 @@ function DetailPanel({ t, onClose }: { t: Ticker; onClose: () => void }) {
         {t.dayPct != null && (
           <span style={{ fontSize: 14, fontWeight: 700, fontFamily: MONO, color: t.dayPct >= 0 ? GREEN : RED }}>{fmtPct(t.dayPct)}</span>
         )}
-        <span style={{ marginLeft: "auto", cursor: "pointer", color: HOME_THEME.text, fontSize: 18, lineHeight: 1 }} onClick={onClose}>✕</span>
+        {volOk && (
+          <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+            <BasisTabs value={activeBasis} onChange={setBasis} />
+          </span>
+        )}
+        <span style={{ marginLeft: volOk ? 4 : "auto", cursor: "pointer", color: HOME_THEME.text, fontSize: 18, lineHeight: 1 }} onClick={onClose}>✕</span>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1, background: HOME_THEME.border }}>
         {[0, 1, 2].map((d) => (
-          <LadderColumn key={d} dte={d} info={t.dtes.find((x) => x.dte === d) ?? null} rows={ladder} col={byDte.get(d) ?? new Map()} spot={t.spot} />
+          <LadderColumn key={d} dte={d} info={t.dtes.find((x) => x.dte === d) ?? null} rows={ladder} col={byDte.get(d) ?? new Map()} spot={t.spot} basis={activeBasis} />
         ))}
       </div>
       {hasWalls && (
@@ -324,6 +429,14 @@ function DetailPanel({ t, onClose }: { t: Ticker; onClose: () => void }) {
               </tr>
             </tbody>
           </table>
+          {activeBasis === "vol" && (
+            // The walls are ranked server-side on OI+Vol and there is no
+            // vol-only ranking stored, so they do NOT follow the tab. Say so
+            // rather than let the panel read as one basis throughout.
+            <div style={{ marginTop: 5, fontSize: 10.5, color: DIM, opacity: 0.75 }}>
+              Walls stay on the OI + Vol basis — they're ranked server-side and have no vol-only equivalent stored.
+            </div>
+          )}
         </div>
       )}
     </div>

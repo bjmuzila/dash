@@ -2,6 +2,10 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Thursday 7/30/2026
+
+* Hovering any of the four Strike History charts now shows the reading right on the chart — the value in a tag beside your cursor and the time on the bottom axis — instead of only in the summary line above. Spot reads to the cent while you hover.
+
 ## Wednesday 7/29/2026
 
 * Added a new **OI** tab to the Option Chain, next to GEX, DEX, CHEX and VEX — it shows the open interest sitting at each strike, with calls above the current price and puts below.

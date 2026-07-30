@@ -704,6 +704,14 @@ async function getForwardBuildStructure(opts = {}) {
     e.strikes.get(sk).push({
       date: r.date,
       net: Number(r.gex_now || 0) + Number(r.gex_open || 0),
+      // Volume-only basis, carried alongside the OI+Vol net so the UI's basis
+      // tab can switch bases without a second query or any new data capture.
+      // gex_now IS netVolGEX (today's traded volume at this strike, no OI) and
+      // gex_open is netGEX (the carried OI the day started with) — see
+      // volOnlyNet/oiOnlyNet above. `net` is their sum; this is its volume term,
+      // and it is populated for every row ever written, so the vol-only view is
+      // fully retroactive over the existing history.
+      netVol: Number(r.gex_now || 0),
       // Sweep timestamp of this reading. A strike only gets a row on sweeps
       // where it made the top-N, so an old ts means "rotated out of the walls
       // N minutes ago" — the UI dims those rather than dropping them.
@@ -730,6 +738,12 @@ async function getForwardBuildStructure(opts = {}) {
         const last = pts[pts.length - 1];
         const net = last.net;
         const prev = pts.length >= 2 ? pts[pts.length - 2].net : null;
+        // Same day-over-day treatment on the volume-only basis: today's traded
+        // volume at this strike vs the prior session's. Deliberately the SAME
+        // shape as net/delta so the UI's basis tab is a field swap, not a
+        // different code path.
+        const netVol = Number(last.netVol || 0);
+        const prevVol = pts.length >= 2 ? Number(pts[pts.length - 2].netVol || 0) : null;
         strikes.push({
           strike,
           // NOTE: this is the sign of the strike's NET (calls minus puts), not
@@ -738,6 +752,8 @@ async function getForwardBuildStructure(opts = {}) {
           side: net >= 0 ? 'call' : 'put',
           net,
           delta: prev != null ? net - prev : null,
+          netVol,
+          deltaVol: prevVol != null ? netVol - prevVol : null,
           tsMs: last.tsMs || 0,
         });
       }
@@ -752,13 +768,16 @@ async function getForwardBuildStructure(opts = {}) {
         delete r.tsMs;
       }
       const netTotal = strikes.reduce((a, r) => a + r.net, 0);
+      // Volume-only column total, so the ladder header follows the basis tab.
+      // Same strike set, same reduction — only the field differs.
+      const netVolTotal = strikes.reduce((a, r) => a + r.netVol, 0);
       const calls = strikes.filter((r) => r.net > 0);
       const puts = strikes.filter((r) => r.net < 0);
       const callWall = calls.length ? calls.reduce((m, r) => (r.net > m.net ? r : m)) : null;
       const putWall = puts.length ? puts.reduce((m, r) => (r.net < m.net ? r : m)) : null;
       const tot = totalsBy.get(`${symbol}|${expiry}`) || null;
       dtes.push({
-        dte: slot, expiry, netTotal, strikes,
+        dte: slot, expiry, netTotal, netVolTotal, strikes,
         callWall: callWall ? { strike: callWall.strike, net: callWall.net } : null,
         putWall: putWall ? { strike: putWall.strike, net: putWall.net } : null,
         // Full-window call/put split (see strike_growth_expiry). callGex >= 0,

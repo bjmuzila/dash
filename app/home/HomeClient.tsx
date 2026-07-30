@@ -149,8 +149,22 @@ function fmtMoney(v: number) {
  *
  *  Percent (not dollars) because it's unit-free — a dollar stamp has to
  *  re-implement fmtCellM's unit scaling and drifts out of sync with it. */
+/** Δ chip text. `d` arrives in RAW DOLLARS — the same units as every other GEX
+ *  value on this page — so it must be divided by 1e6 exactly as fmtMoney does.
+ *  (Treating it as pre-scaled is what produced "−$1693787.3B" filling a cell.)
+ *
+ *  Always millions, so the chip and the value beside it share one unit; a move
+ *  under $1M reports as "<$1M" rather than rounding to a meaningless "$0M". */
+function fmtDeltaChip(d: number): string {
+  if (!isFinite(d)) return "--";
+  const sign = d < 0 ? "\u2212" : "+";
+  const m = Math.round(Math.abs(d) / 1e6);
+  if (m === 0) return `${sign}<$1M`;
+  return `${sign}$${m.toLocaleString("en-US")}M`;
+}
+
 function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) {
-  const MONEY_ABS_V = `$${Math.abs(d) >= 1000 ? (Math.abs(d) / 1000).toFixed(1) + "B" : Math.round(Math.abs(d)) + "M"}`;
+  const text = fmtDeltaChip(d);
   const pos = d > 0;
   // Uniform plate on every chip — HOME_THEME.panel. Opaque and darker than any
   // cell metricBg() can produce, so the chip reads identically on a rank-1 wall
@@ -158,7 +172,7 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
   // the number's colour alone; nothing here encodes rank.
   return (
     <span
-      title={`Δ ${pos ? "+" : "−"}${MONEY_ABS_V} over the window · #${rank} mover (${Math.abs(Math.round(pct))}%)`}
+      title={`Δ ${text} over the window · #${rank} mover (${Math.abs(Math.round(pct))}%)`}
       style={{
         flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
         height: 15, boxSizing: "border-box",
@@ -169,7 +183,7 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
         color: pos ? "#4ade80" : "#f87171",
         border: "none",
       }}
-    >{pos ? "+" : "−"}{MONEY_ABS_V}</span>
+    >{text}</span>
   );
 }
 

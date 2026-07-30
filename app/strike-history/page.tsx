@@ -128,12 +128,14 @@ function niceTicks(lo: number, hi: number, n: number): number[] {
 }
 
 function Panel({
-  rows, values, color, fmt, refLine, refLabel, steps, hover, onHover,
+  rows, values, color, fmt, hoverFmt, refLine, refLabel, steps, hover, onHover,
 }: {
   rows: VRow[];
   values: (number | null)[];
   color: string;
   fmt: (v: number) => string;
+  /** Axis ticks want round numbers; the hover tag wants precision. Defaults to `fmt`. */
+  hoverFmt?: (v: number) => string;
   refLine?: number;
   refLabel?: string;
   steps: number[];
@@ -245,12 +247,46 @@ function Panel({
         </>
       )}
 
-      {hover != null && values[hover] != null && Number.isFinite(values[hover] as number) && (
-        <>
-          <line x1={xAt(hover)} x2={xAt(hover)} y1={M.t} y2={VB_H - M.b} stroke={HOME_THEME.text} strokeOpacity={0.35} strokeWidth={1} strokeDasharray="3 3" />
-          <circle cx={xAt(hover)} cy={yAt(values[hover] as number)} r={4.5} fill={color} stroke={HOME_THEME.bg} strokeWidth={2} />
-        </>
-      )}
+      {hover != null && values[hover] != null && Number.isFinite(values[hover] as number) && (() => {
+        const hv = values[hover] as number;
+        const hx = xAt(hover);
+        const hy = yAt(hv);
+        const vTxt = (hoverFmt ?? fmt)(hv);
+        // SVG has no text metrics before paint, so size the chips off character
+        // count — 5.9px/char at fontSize 10 in a tabular face is close enough
+        // that the box never clips.
+        const vW = vTxt.length * 5.9 + 10;
+        const tTxt = rows[hover].hhmm;
+        const tW = tTxt.length * 5.9 + 10;
+        // Flip the value chip to the left of the dot near the right edge, or it
+        // paints over the last-value label and off the plot.
+        const flip = hx + 8 + vW > VB_W - M.r;
+        const vX = flip ? hx - 8 - vW : hx + 8;
+        // Clamp the time chip so it stays inside the plot at either end.
+        const tX = Math.max(M.l, Math.min(VB_W - M.r - tW, hx - tW / 2));
+        return (
+          <>
+            <line x1={hx} x2={hx} y1={M.t} y2={VB_H - M.b} stroke={HOME_THEME.text} strokeOpacity={0.35} strokeWidth={1} strokeDasharray="3 3" />
+            <circle cx={hx} cy={hy} r={4.5} fill={color} stroke={HOME_THEME.bg} strokeWidth={2} />
+
+            {/* value at the cursor, pinned to the dot */}
+            <rect x={vX} y={hy - 9} width={vW} height={18} rx={4}
+              fill={HOME_THEME.bg} fillOpacity={0.92} stroke={color} strokeOpacity={0.55} strokeWidth={1} />
+            <text x={vX + vW / 2} y={hy + 3.5} textAnchor="middle" fontSize={10} fontWeight={700}
+              fill={color} style={{ fontVariantNumeric: "tabular-nums" }}>
+              {vTxt}
+            </text>
+
+            {/* timestamp on the x axis, under the crosshair */}
+            <rect x={tX} y={VB_H - M.b + 3} width={tW} height={16} rx={4}
+              fill={HOME_THEME.bg} fillOpacity={0.92} stroke={HOME_THEME.border} strokeWidth={1} />
+            <text x={tX + tW / 2} y={VB_H - M.b + 14.5} textAnchor="middle" fontSize={10} fontWeight={700}
+              fill={HOME_THEME.text} opacity={0.85} style={{ fontVariantNumeric: "tabular-nums" }}>
+              {tTxt}
+            </text>
+          </>
+        );
+      })()}
 
       <line x1={M.l} x2={VB_W - M.r} y1={VB_H - M.b} y2={VB_H - M.b} stroke={HOME_THEME.border} strokeWidth={1} />
     </svg>
@@ -786,7 +822,7 @@ export default function StrikeHistoryPage() {
             subtitle="Stored net_gex. Dashed red = GEX stepped while gamma held flat — an OI refresh, not flow."
           >
             <Panel rows={view} values={view.map((r) => r.netGex)} color={HOME_THEME.cyan}
-              fmt={(v) => fmtM(v, 0)} steps={steps} hover={hover} onHover={setHover} />
+              fmt={(v) => fmtM(v, 0)} hoverFmt={(v) => fmtM(v, 1)} steps={steps} hover={hover} onHover={setHover} />
           </PanelCard>
 
           <PanelCard
@@ -795,7 +831,7 @@ export default function StrikeHistoryPage() {
             subtitle="net_vol_gex — continuous across OI refreshes, so real intraday accumulation shows here."
           >
             <Panel rows={view} values={view.map((r) => r.netVolGex)} color={HOME_THEME.orange}
-              fmt={(v) => fmtM(v, 0)} steps={[]} hover={hover} onHover={setHover} />
+              fmt={(v) => fmtM(v, 0)} hoverFmt={(v) => fmtM(v, 1)} steps={[]} hover={hover} onHover={setHover} />
           </PanelCard>
 
           <PanelCard
@@ -814,7 +850,7 @@ export default function StrikeHistoryPage() {
               </div>
             ) : (
               <Panel rows={view} values={view.map((r) => r.skew)} color={LIGHT_BLUE}
-                fmt={(v) => fmtVp(v, 1)} refLine={0} refLabel="flat" steps={[]} hover={hover} onHover={setHover} />
+                fmt={(v) => fmtVp(v, 1)} hoverFmt={(v) => fmtVp(v, 2)} refLine={0} refLabel="flat" steps={[]} hover={hover} onHover={setHover} />
             )}
           </PanelCard>
 
@@ -824,7 +860,7 @@ export default function StrikeHistoryPage() {
             subtitle="Dashed line marks the selected strike."
           >
             <Panel rows={view} values={view.map((r) => r.spot)} color={HOME_THEME.green}
-              fmt={(v) => v.toFixed(0)} refLine={Number.isFinite(strikeNum) ? strikeNum : undefined}
+              fmt={(v) => v.toFixed(0)} hoverFmt={(v) => v.toFixed(2)} refLine={Number.isFinite(strikeNum) ? strikeNum : undefined}
               refLabel={strike} steps={[]} hover={hover} onHover={setHover} />
           </PanelCard>
         </div>

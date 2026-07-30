@@ -29,6 +29,9 @@ const RANGE_MS: Record<string, number> = {
 
 export const dynamic = "force-dynamic";
 
+/** Manual watchlist entries — anything without a `source` tag (see GET below). */
+const isManual = (o: WatchOption): boolean => !(o as WatchOption & { source?: string | null }).source;
+
 const num = (v: unknown): number | null => {
   const n = Number(v);
   return Number.isFinite(n) && n !== 0 ? n : null;
@@ -181,7 +184,11 @@ export async function GET(req: NextRequest) {
       getLatestWatchSnapshots(),
     ]);
     const byId = new Map(latest.map((s) => [s.watch_id, s]));
-    const rows = options.map((o) => ({ ...o, snapshot: byId.get(o.id) ?? null }));
+    // Auto-probed rows (watch_options.source, currently only 'gex-change-top')
+    // are pipeline plumbing for the scanner GEX-Change-Top card flip, not
+    // contracts the owner chose to track — hide them from the list. They are
+    // still refreshed/snapshotted by the "refresh" action below.
+    const rows = options.filter(isManual).map((o) => ({ ...o, snapshot: byId.get(o.id) ?? null }));
     return NextResponse.json({ rows });
   } catch (err) {
     console.error("[/api/watch GET]", err);
@@ -247,7 +254,9 @@ export async function POST(req: NextRequest) {
       );
       const latest = await getLatestWatchSnapshots();
       const byId = new Map(latest.map((s) => [s.watch_id, s]));
-      const rows = options.map((o) => ({ ...o, snapshot: byId.get(o.id) ?? null }));
+      // Every contract is refreshed above (auto-probed ones included — that's
+      // what fills the scanner card's chart); only the response hides them.
+      const rows = options.filter(isManual).map((o) => ({ ...o, snapshot: byId.get(o.id) ?? null }));
       return NextResponse.json({ ok: true, recorded, rows });
     }
 

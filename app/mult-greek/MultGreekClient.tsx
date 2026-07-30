@@ -370,8 +370,22 @@ type GexGrid = Record<string, Record<number, GexGridCell>>;
  *
  *  Percent (not dollars) because it's unit-free — the dollar version had to
  *  re-implement fmtMoney's scaling and drifted out of sync with it. */
+/** Δ chip text. `d` arrives in RAW DOLLARS — the same units as every other GEX
+ *  value on this page — so it must be divided by 1e6 exactly as fmtMoney does.
+ *  (Treating it as pre-scaled is what produced "−$1693787.3B" filling a cell.)
+ *
+ *  Always millions, so the chip and the value beside it share one unit; a move
+ *  under $1M reports as "<$1M" rather than rounding to a meaningless "$0M". */
+function fmtDeltaChip(d: number): string {
+  if (!isFinite(d)) return "--";
+  const sign = d < 0 ? "\u2212" : "+";
+  const m = Math.round(Math.abs(d) / 1e6);
+  if (m === 0) return `${sign}<$1M`;
+  return `${sign}$${m.toLocaleString("en-US")}M`;
+}
+
 function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) {
-  const MONEY_ABS_V = `$${Math.abs(d) >= 1000 ? (Math.abs(d) / 1000).toFixed(1) + "B" : Math.round(Math.abs(d)) + "M"}`;
+  const text = fmtDeltaChip(d);
   const pos = d > 0;
   // Uniform plate on every chip — HOME_THEME.panel. Opaque and darker than any
   // cell metricBg() can produce, so the chip reads identically on a rank-1 wall
@@ -379,7 +393,7 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
   // the number's colour alone; nothing here encodes rank.
   return (
     <span
-      title={`Δ ${pos ? "+" : "−"}${MONEY_ABS_V} over the window · #${rank} mover (${Math.abs(Math.round(pct))}%)`}
+      title={`Δ ${text} over the window · #${rank} mover (${Math.abs(Math.round(pct))}%)`}
       style={{
         flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
         height: 15, boxSizing: "border-box",
@@ -390,7 +404,7 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
         color: pos ? "#4ade80" : "#f87171",
         border: "none",
       }}
-    >{pos ? "+" : "−"}{MONEY_ABS_V}</span>
+    >{text}</span>
   );
 }
 
@@ -463,7 +477,16 @@ function TickerPanel({
   }, [clickCell?.strike, clickCell?.expiry, ticker]);
 
   const colDates = useMemo(() => cols.map(c => c.date), [cols]);
-  const gridCols = `64px ${cols.map(() => "1fr").join(" ")}`.trim() || "64px";
+  // In Δ mode the FRONT column also carries a chip, and at 4 expiries a 1fr
+  // column (~94px in a 440px panel) cannot hold "−$1,694M" plus the value —
+  // measured, it needs ~146px. Widening the front to 1.9fr fits both while
+  // leaving the other columns (~77px) enough for their value. Non-front columns
+  // are unchanged, and with the mode off the grid is exactly as it was.
+  const gridCols = (
+    deltaWindow !== 0 && cols.length > 1
+      ? `64px 1.9fr ${cols.slice(1).map(() => "1fr").join(" ")}`
+      : `64px ${cols.map(() => "1fr").join(" ")}`
+  ).trim() || "64px";
 
   const hasData = cols.length > 0 && cols.some(c => (strikesByExp[c.date]?.length ?? 0) > 0);
   const computedFull = hasData
