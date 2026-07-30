@@ -619,7 +619,9 @@ export function HomeClient({
   // Heatmap panel view: "heatmap" = colored cell backgrounds; "chain" = embedded
   // option chain. ("table" divergent-bars view retired from the switcher; kept in
   // the union so its now-unreachable render branch stays valid without a refactor.)
-  const [heatmapView, setHeatmapView] = useState<"heatmap" | "table" | "chain">("heatmap");
+  // Switcher removed from the header — this is now always "heatmap". The union and
+  // the chain/table render branches stay so nothing needs a refactor.
+  const [heatmapView] = useState<"heatmap" | "table" | "chain">("heatmap");
   // Δ stamps on the heatmap's NET GEX column. 0 = off (today's view).
   const [deltaWindow, setDeltaWindow] = useState<0 | 5 | 15 | 30>(0);
   // GEX chart card view: the Net GEX bar chart, or the live ES 5m candles in its
@@ -1662,7 +1664,6 @@ export function HomeClient({
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", whiteSpace: "nowrap" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, color: "#fff", fontWeight: 700, fontSize: 14, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                     <span style={{ color: C.cyan }}><LayersIcon /></span>
-                    {heatmapView === "chain" ? "Option Chain" : "Live GEX Heatmap"}
                     {heatmapView === "chain" && (
                     <>
                       <input
@@ -1765,31 +1766,9 @@ export function HomeClient({
                         ))}
                       </div>
                     )}
-                    {/* Heatmap|Chain switch — pinned as the LAST child so it sits at the
-                        panel's right edge and never shifts when the heatmap-only controls
-                        above it hide in Chain view. */}
-                    <div style={{ display: "flex", gap: 2, marginLeft: 4, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 4, overflow: "hidden" }}>
-                      {(["heatmap", "chain"] as const).map((v) => (
-                        <button
-                          key={v}
-                          onClick={() => setHeatmapView(v)}
-                          style={{
-                            padding: "2px 10px",
-                            fontSize: 10,
-                            fontWeight: 700,
-                            textTransform: "uppercase",
-                            letterSpacing: "0.08em",
-                            cursor: "pointer",
-                            border: "none",
-                            fontFamily: "inherit",
-                            background: heatmapView === v ? "rgba(33,158,188,0.14)" : "transparent",
-                            color: heatmapView === v ? "#219EBC" : "#5a7a98",
-                          }}
-                        >
-                          {v}
-                        </button>
-                      ))}
-                    </div>
+                    {/* Heatmap|Chain switch removed — the panel is heatmap-only now.
+                        heatmapView state stays (default "heatmap") so the chain-view
+                        branches below remain valid but unreachable. */}
                   </div>
                 </div>
                 </FitScale>

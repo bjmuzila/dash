@@ -21,7 +21,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { HOME_THEME, LIGHT_BLUE, homeButtonStyle, classicCardAccentStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, homeButtonStyle, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { captureAndCopy, captureToBlob, copyOrDownload, downloadBlob } from "@/lib/snapshot";
 
@@ -99,63 +99,89 @@ const METRICS: { key: Metric; label: string }[] = [
   { key: "net_gex", label: "Net GEX" },
 ];
 
+// Mono numerals, matching the Probe page's --sm-mono treatment.
+const MONO = "var(--font-mono)";
+
+/** "42s ago" / "6m ago" — the Probe card's freshness stamp. */
+const ago = (ts: number | null | undefined): string => {
+  const t = Number(ts);
+  if (!Number.isFinite(t) || t <= 0) return "—";
+  const s = Math.round((Date.now() - t) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  return `${Math.round(s / 3600)}h ago`;
+};
+
 /**
- * The flip-side line: one metric, one session, sized for the tile. Entry (the
- * mark when the strike was first flagged) is the dashed baseline on Price so the
- * card answers "has this contract gone anywhere since it showed up here?".
+ * The flip side's chart — a port of ProbeChart from the owner Probe page
+ * (owner-vite/src/pages/Probe.tsx): same 960-wide viewBox, 5 gridlines with
+ * left-hand value ticks, first/last time labels along the bottom, cyan line over
+ * a fading area fill. Kept deliberately identical so the two pages read the
+ * same; the only additions are the dashed entry baseline on Price and the zero
+ * line on Net GEX.
  */
 function PickChart({ points, metric, entry }: { points: PickPoint[]; metric: Metric; entry: number | null }) {
-  const W = 260, H = 74, PADX = 4, PADT = 6, PADB = 6;
+  const W = 960, H = 300, PADL = 64, PADR = 16, PADT = 16, PADB = 28;
   const pts = points
     .map((p) => ({ ts: p.ts, v: metric === "mark" ? p.mark : p.net_gex }))
     .filter((p) => p.v != null && Number.isFinite(p.v as number)) as { ts: number; v: number }[];
 
   if (pts.length < 2) {
     return (
-      <div style={{ fontSize: 11, color: tint(HOME_THEME.text, 0.45), textAlign: "center", padding: "22px 0" }}>
-        building history — snapshots accrue every minute during RTH
+      <div style={{ fontFamily: MONO, fontSize: 12, color: tint(HOME_THEME.text, 0.5), textAlign: "center", padding: "48px 0" }}>
+        Not enough history yet — snapshots accrue every minute through RTH, server-side.
       </div>
     );
   }
 
   const showEntry = metric === "mark" && entry != null && Number.isFinite(entry);
-  const ys = pts.map((p) => p.v);
+  const xs = pts.map((p) => p.ts), ys = pts.map((p) => p.v);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
   const dom = showEntry ? [...ys, entry as number] : ys;
   let minY = Math.min(...dom), maxY = Math.max(...dom);
   if (minY === maxY) { minY -= 1; maxY += 1; }
-  const pad = (maxY - minY) * 0.12; minY -= pad; maxY += pad;
+  const pad = (maxY - minY) * 0.08; minY -= pad; maxY += pad;
 
   const n = pts.length;
-  const sx = (i: number) => PADX + (n <= 1 ? 0 : i / (n - 1)) * (W - PADX * 2);
+  const sx = (i: number) => PADL + (n <= 1 ? 0 : i / (n - 1)) * (W - PADL - PADR);
   const sy = (v: number) => H - PADB - ((v - minY) / (maxY - minY || 1)) * (H - PADT - PADB);
   const line = pts.map((p, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(p.v).toFixed(1)}`).join(" ");
   const area = `${line} L${sx(n - 1).toFixed(1)},${H - PADB} L${sx(0).toFixed(1)},${H - PADB} Z`;
   const last = pts[n - 1].v;
-  const dotColor =
-    metric === "mark"
-      ? (entry == null ? HOME_THEME.cyan : last > entry ? HOME_THEME.green : last < entry ? HOME_THEME.red : HOME_THEME.cyan)
-      : (last >= 0 ? HOME_THEME.green : HOME_THEME.red);
+
+  const fmtY = (v: number) => (metric === "net_gex" ? fmtGex(v) : v.toFixed(2));
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => minY + f * (maxY - minY));
+  const fmtT = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const tickFill = tint(HOME_THEME.text, 0.75);
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
       <defs>
         <linearGradient id="gct-fill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={tint(HOME_THEME.cyan, 0.3)} />
+          <stop offset="0%" stopColor={tint(HOME_THEME.cyan, 0.28)} />
           <stop offset="100%" stopColor={tint(HOME_THEME.cyan, 0)} />
         </linearGradient>
       </defs>
+      {yTicks.map((v, i) => (
+        <g key={i}>
+          <line x1={PADL} y1={sy(v)} x2={W - PADR} y2={sy(v)} stroke={tint(HOME_THEME.text, 0.08)} strokeWidth={1} />
+          <text x={PADL - 6} y={sy(v) + 3} textAnchor="end" fontSize={11} fill={tickFill} fontFamily={MONO}>{fmtY(v)}</text>
+        </g>
+      ))}
+      <text x={PADL} y={H - 6} textAnchor="start" fontSize={11} fill={tickFill} fontFamily={MONO}>{fmtT(minX)}</text>
+      <text x={W - PADR} y={H - 6} textAnchor="end" fontSize={11} fill={tickFill} fontFamily={MONO}>{fmtT(maxX)}</text>
       {metric === "net_gex" && minY < 0 && maxY > 0 && (
-        <line x1={PADX} y1={sy(0)} x2={W - PADX} y2={sy(0)} stroke={tint(HOME_THEME.text, 0.18)} strokeWidth={1} />
+        <line x1={PADL} y1={sy(0)} x2={W - PADR} y2={sy(0)} stroke={tint(HOME_THEME.text, 0.2)} strokeWidth={1} />
       )}
       {showEntry && (
         <line
-          x1={PADX} y1={sy(entry as number)} x2={W - PADX} y2={sy(entry as number)}
+          x1={PADL} y1={sy(entry as number)} x2={W - PADR} y2={sy(entry as number)}
           stroke={tint(HOME_THEME.text, 0.35)} strokeWidth={1} strokeDasharray="4 4"
         />
       )}
       <path d={area} fill="url(#gct-fill)" />
-      <path d={line} fill="none" stroke={HOME_THEME.cyan} strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx={sx(n - 1)} cy={sy(last)} r={3} fill={dotColor} />
+      <path d={line} fill="none" stroke={HOME_THEME.cyan} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={sx(n - 1)} cy={sy(last)} r={3} fill={HOME_THEME.cyan} />
     </svg>
   );
 }
@@ -194,6 +220,22 @@ export default function GexChangeTop() {
   const [metric, setMetric] = useState<Metric>("mark");
   const [hist, setHist] = useState<Record<number, PickHist>>({});
   const [histLoading, setHistLoading] = useState<Record<number, boolean>>({});
+  // Cards whose back face has ever been shown. The back face is a SECOND frosted
+  // (backdrop-filter) surface, so mounting one per tile up front would double the
+  // blur passes across ~65 tiles for a chart nobody has asked for yet. Only these
+  // mount a back — and they stay mounted so the flip-back animates with content.
+  const [opened, setOpened] = useState<Record<string, true>>({});
+  // Honour the OS "reduce motion" setting — and give us a single place to kill
+  // the rotation if it ever costs more than it's worth.
+  const [reduceMotion, setReduceMotion] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (!mq) return;
+    const sync = () => setReduceMotion(mq.matches);
+    sync();
+    mq.addEventListener?.("change", sync);
+    return () => mq.removeEventListener?.("change", sync);
+  }, []);
 
   const loadPick = useCallback(async (watchId: number, day: string) => {
     setHistLoading((s) => ({ ...s, [watchId]: true }));
@@ -234,6 +276,7 @@ export default function GexChangeTop() {
 
   const toggleFlip = useCallback((cid: string, watchId: number | null) => {
     if (watchId == null) return; // recorded before auto-probe existed — nothing to chart
+    setOpened((s) => (s[cid] ? s : { ...s, [cid]: true }));
     setFlipped((cur) => {
       if (cur === cid) return null;
       void loadPick(watchId, date);
@@ -281,27 +324,48 @@ export default function GexChangeTop() {
     }
   }, [cardState]);
 
-  // Shared surface for both faces of a pick tile — the dashboard card treatment
-  // (frosted panel, hairline edge) with a faint light-blue top glow instead of
-  // the old flat gold wash.
-  const faceStyle: CSSProperties = {
+  // Shared surface for both faces of a pick tile — classicCardAccentStyle exactly
+  // as the theme defines it: flat frosted panel, hairline edge, NO radial
+  // highlight and no tint wash. Do not reintroduce a glow here.
+  // One face is in normal flow (it sets the tile's height) and the other is laid
+  // over it — which one flips with the card, so the expanded chart side can be as
+  // tall as it needs while the pick side stays a compact tile.
+  const faceStyle = (inFlow: boolean): CSSProperties => ({
     ...classicCardAccentStyle,
-    position: "absolute",
-    inset: 0,
+    position: inFlow ? "relative" : "absolute",
+    inset: inFlow ? undefined : 0,
     padding: "12px 14px",
-    background: `radial-gradient(circle at 50% 0%, ${tint(LIGHT_BLUE, 0.1)} 0%, transparent 62%), ${HOME_THEME.panelBg}`,
     backfaceVisibility: "hidden",
     WebkitBackfaceVisibility: "hidden",
     overflow: "hidden",
-  };
-  const toggleStyle = (on: boolean): CSSProperties => ({
-    ...homeButtonStyle,
-    padding: "3px 8px",
-    fontSize: 9,
-    borderColor: on ? tint(HOME_THEME.cyan, 0.55) : HOME_THEME.border,
-    background: on ? tint(HOME_THEME.cyan, 0.16) : "transparent",
-    color: on ? HOME_THEME.cyan : tint(HOME_THEME.text, 0.55),
   });
+  // The Probe page's .op-tgl pill: neutral when off, white-wash when on for the
+  // range group, cyan for the metric group.
+  const tglStyle = (on: boolean, cyan = false): CSSProperties => ({
+    fontFamily: MONO,
+    fontSize: 12,
+    fontWeight: 700,
+    letterSpacing: "0.03em",
+    cursor: "pointer",
+    padding: "4px 10px",
+    borderRadius: 6,
+    border: `1px solid ${on && cyan ? tint(HOME_THEME.cyan, 0.4) : HOME_THEME.border}`,
+    background: on ? (cyan ? tint(HOME_THEME.cyan, 0.12) : tint(HOME_THEME.text, 0.08)) : "transparent",
+    color: on ? (cyan ? HOME_THEME.cyan : HOME_THEME.text) : tint(HOME_THEME.text, 0.55),
+  });
+  // .op-badge — the strike+side chip next to the ticker.
+  const badgeStyle = (side: "C" | "P"): CSSProperties => {
+    const c = side === "P" ? HOME_THEME.orange : HOME_THEME.green;
+    return {
+      fontFamily: MONO, fontSize: 12, fontWeight: 700, padding: "1px 6px",
+      borderRadius: 4, marginLeft: 6, color: c,
+      background: tint(c, 0.12), border: `1px solid ${tint(c, 0.4)}`,
+    };
+  };
+  const lblStyle: CSSProperties = {
+    color: tint(HOME_THEME.text, 0.55), fontSize: 10,
+    textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 4,
+  };
 
   return (
    <div ref={cardRef}>
@@ -314,7 +378,7 @@ export default function GexChangeTop() {
         <input
           type="date"
           value={date}
-          onChange={(e) => { setDate(e.target.value); setFlipped(null); load(e.target.value || undefined); }}
+          onChange={(e) => { setDate(e.target.value); setFlipped(null); setOpened({}); load(e.target.value || undefined); }}
           style={{ ...homeButtonStyle, padding: "6px 10px", fontSize: 13, colorScheme: "dark" as CSSProperties["colorScheme"] }}
         />
         <button onClick={() => load(date || undefined)} style={{ ...homeButtonStyle, padding: "6px 12px", fontSize: 13 }}>
@@ -361,12 +425,17 @@ export default function GexChangeTop() {
               const st = cardState[cid];
               const wid = r.watch_id;
               const isFlipped = flipped === cid;
+              const hasBack = isFlipped || !!opened[cid]; // see `opened` above
               const h = wid != null ? hist[wid] : undefined;
               const pts = h?.points ?? [];
               const side = r.spot != null && r.spot > 0 && r.strike < r.spot ? "P" : "C";
               const entry = h?.contract?.added_price ?? null;
-              const lastMark = [...pts].reverse().find((p) => p.mark != null)?.mark ?? null;
+              const lastPt = [...pts].reverse().find((p) => p.mark != null) ?? null;
+              const lastMark = lastPt?.mark ?? null;
+              const lastTs = [...pts].reverse().find((p) => Number.isFinite(p.ts))?.ts ?? null;
               const pnlPct = entry != null && entry !== 0 && lastMark != null ? ((lastMark - entry) / entry) * 100 : null;
+              const pnlDollars = entry != null && lastMark != null ? (lastMark - entry) * 100 : null;
+              const pnlColor = pnlPct == null ? tint(HOME_THEME.text, 0.55) : pnlPct > 0 ? HOME_THEME.green : pnlPct < 0 ? HOME_THEME.red : tint(HOME_THEME.text, 0.55);
 
               return (
                 <div
@@ -377,21 +446,29 @@ export default function GexChangeTop() {
                   style={{
                     position: "relative",
                     minHeight: 196,
-                    perspective: 1200,
+                    perspective: 1600,
                     cursor: wid == null ? "default" : "pointer",
+                    // Open card takes the whole row, exactly like the Probe page's
+                    // expanded tracked card (gridColumn: 1 / -1) — the axis-ticked
+                    // chart needs the width to be readable.
+                    gridColumn: isFlipped ? "1 / -1" : undefined,
                   }}
                 >
                   <div
                     style={{
-                      position: "absolute",
-                      inset: 0,
+                      position: "relative",
                       transformStyle: "preserve-3d",
-                      transition: "transform 0.5s cubic-bezier(0.2,0.7,0.2,1)",
+                      // Only the transform animates (compositor-only, no layout or
+                      // paint), and will-change is set ONLY on tiles that have
+                      // actually been opened — leaving it on every tile would
+                      // promote ~65 layers for nothing.
+                      transition: reduceMotion ? "none" : "transform 0.32s ease-out",
                       transform: isFlipped ? "rotateY(180deg)" : "rotateY(0deg)",
+                      willChange: hasBack ? "transform" : undefined,
                     }}
                   >
                     {/* ── Front: the recorded pick ─────────────────────────── */}
-                    <div style={faceStyle}>
+                    <div style={{ ...faceStyle(!isFlipped), minHeight: 196 }}>
                       <button
                         data-noshot="1"
                         onClick={(e) => {
@@ -446,54 +523,78 @@ export default function GexChangeTop() {
                     </div>
 
                     {/* ── Back: the auto-probed contract's session line ─────── */}
-                    <div style={{ ...faceStyle, transform: "rotateY(180deg)", display: "flex", flexDirection: "column" }}>
-                      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 6 }}>
-                        <span style={{ fontWeight: 800, fontSize: 14, color: HOME_THEME.text }}>
-                          {r.symbol} <span style={{ color: side === "P" ? HOME_THEME.orange : HOME_THEME.green }}>{fmtStrike(r.strike)}{side}</span>
-                        </span>
-                        <span style={{ fontSize: 11, color: tint(HOME_THEME.text, 0.5) }}>{isFlipped ? "▾ back" : ""}</span>
+                    {hasBack && (
+                    <div style={{ ...faceStyle(isFlipped), minHeight: 196, transform: "rotateY(180deg)", padding: 16 }}>
+                      {/* Header — .op-tcard-h: ticker, strike+side badge, close. */}
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                        <div>
+                          <span style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.text }}>{r.symbol}</span>
+                          <span style={badgeStyle(side)}>{fmtStrike(r.strike)}{side}</span>
+                        </div>
+                        <button
+                          data-noshot="1"
+                          onClick={(e) => { e.stopPropagation(); toggleFlip(cid, wid); }}
+                          title="Back to the pick"
+                          style={{
+                            background: "none", border: "none", cursor: "pointer", padding: "0 2px",
+                            fontSize: 17, lineHeight: 1, color: tint(HOME_THEME.text, 0.55),
+                          }}
+                        >
+                          ×
+                        </button>
                       </div>
-                      <div style={{ fontSize: 11, color: tint(HOME_THEME.text, 0.5), marginTop: 2 }}>
-                        {r.expiry} · entry {fmtPx(entry)}
-                        {pnlPct != null && (
-                          <span style={{ color: pnlPct >= 0 ? HOME_THEME.green : HOME_THEME.red, fontWeight: 700 }}>
-                            {" · "}{pnlPct >= 0 ? "▲" : "▼"} {Math.abs(pnlPct).toFixed(1)}%
-                          </span>
-                        )}
+                      {/* .op-rowsub — expiry + why this contract is here. */}
+                      <div style={{ fontFamily: MONO, fontSize: 12, color: tint(HOME_THEME.text, 0.55), marginTop: 3 }}>
+                        {r.expiry} · auto-probed from GEX change top · {capturedLabel(date, hb.slot)}
                       </div>
-                      <div data-noshot="1" style={{ display: "flex", gap: 5, margin: "8px 0 4px" }}>
-                        {METRICS.map((m) => (
-                          <button
-                            key={m.key}
-                            onClick={(e) => { e.stopPropagation(); setMetric(m.key); }}
-                            style={toggleStyle(metric === m.key)}
-                          >
-                            {m.label}
-                          </button>
-                        ))}
-                        <div style={{ flex: 1 }} />
-                        <span style={{ ...toggleStyle(true), cursor: "default" }}>1D</span>
+                      {/* .op-bigrow — the headline move off the entry basis. */}
+                      <div style={{ margin: "10px 0 8px" }}>
+                        <div style={{ fontFamily: MONO, fontSize: 24, fontWeight: 800, lineHeight: 1, color: pnlColor }}>
+                          {pnlPct == null ? "—" : `${pnlPct >= 0 ? "▲" : "▼"} ${Math.abs(pnlPct).toFixed(1)}%`}
+                        </div>
+                        <div style={{ fontFamily: MONO, fontSize: 14, color: HOME_THEME.text, marginTop: 6 }}>
+                          <span style={lblStyle}>in</span>{fmtPx(entry)}
+                          <span style={{ color: tint(HOME_THEME.text, 0.55), margin: "0 6px" }}>→</span>
+                          <span style={lblStyle}>now</span>{fmtPx(lastMark)}
+                          {pnlDollars != null && (
+                            <span style={{ fontWeight: 700, color: pnlColor }}>
+                              {` · ${pnlDollars >= 0 ? "+" : "−"}$${Math.abs(pnlDollars).toFixed(0)}/ct`}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <div style={{ flex: 1, display: "flex", alignItems: "center" }}>
-                        {wid != null && histLoading[wid] && !pts.length ? (
-                          <div style={{ width: "100%", fontSize: 11, color: tint(HOME_THEME.text, 0.45), textAlign: "center" }}>Loading…</div>
-                        ) : h?.error ? (
-                          <div style={{ width: "100%", fontSize: 11, color: HOME_THEME.red, textAlign: "center" }}>{h.error}</div>
-                        ) : (
-                          <div style={{ width: "100%" }}>
-                            <PickChart points={pts} metric={metric} entry={entry} />
-                          </div>
-                        )}
+                      {/* .op-toolbar — range left, metric right. 1D and Price/Net
+                          GEX only: the recorder's snapshots are a session series,
+                          and the other four greeks aren't what this card is for. */}
+                      <div data-noshot="1" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <span style={{ ...tglStyle(true), cursor: "default" }}>1D</span>
+                        </div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          {METRICS.map((m) => (
+                            <button
+                              key={m.key}
+                              onClick={(e) => { e.stopPropagation(); setMetric(m.key); }}
+                              style={tglStyle(metric === m.key, true)}
+                            >
+                              {m.label}
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                      <div style={{ fontSize: 10, color: tint(HOME_THEME.text, 0.45), display: "flex", justifyContent: "space-between", gap: 6 }}>
-                        <span>{metric === "mark" ? "Option price (mark)" : "Net GEX @ strike"} · RTH</span>
-                        <span>
-                          {metric === "mark"
-                            ? fmtPx(lastMark)
-                            : fmtGex([...pts].reverse().find((p) => p.net_gex != null)?.net_gex ?? null)}
-                        </span>
+                      {wid != null && histLoading[wid] && !pts.length ? (
+                        <div style={{ fontFamily: MONO, fontSize: 12, color: tint(HOME_THEME.text, 0.5), textAlign: "center", padding: "48px 0" }}>Loading history…</div>
+                      ) : h?.error ? (
+                        <div style={{ fontFamily: MONO, fontSize: 12, color: HOME_THEME.red, textAlign: "center", padding: "48px 0" }}>{h.error}</div>
+                      ) : (
+                        <PickChart points={pts} metric={metric} entry={entry} />
+                      )}
+                      {/* .op-charthint */}
+                      <div style={{ marginTop: 8, fontFamily: MONO, fontSize: 12, color: tint(HOME_THEME.text, 0.55), letterSpacing: "0.04em" }}>
+                        {metric === "mark" ? "Option price (mark)" : "Net GEX @ strike"} · RTH only · entry @ {fmtPx(entry)} · {ago(lastTs)}
                       </div>
                     </div>
+                    )}
                   </div>
                 </div>
               );
