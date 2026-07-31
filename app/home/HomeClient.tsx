@@ -1871,9 +1871,14 @@ export function HomeClient({
                       };
 
                       // Numeric cell: heatmap view paints a background; table view draws a bar.
-                      const dataCell = (text: string, value: number | null, colKey: string, colIdx: number, title?: string) => {
+                      // `prefix` (SPY/QQQ columns) pins the ticker's OWN strike to the left edge
+                      // of the cell so the moneyness-offset join is visible while scanning
+                      // instead of hover-only. Flex space-between rather than absolute
+                      // positioning so a long value can never overlap the strike.
+                      const dataCell = (text: string, value: number | null, colKey: string, colIdx: number, title?: string, prefix?: number | null) => {
                         const isTable = heatmapView === "table";
-                        const base: React.CSSProperties = { position: "relative", padding: "0 16px", textAlign: isTable ? "left" : "right", lineHeight: 1.1, overflow: "hidden" };
+                        const hasPrefix = !isTable && prefix != null;
+                        const base: React.CSSProperties = { position: "relative", padding: hasPrefix ? "0 10px 0 8px" : "0 16px", textAlign: isTable ? "left" : "right", lineHeight: 1.1, overflow: "hidden" };
                         const bg = isTable || value == null
                           ? "transparent"
                           : metricBg(value, heatmapColorMeta.max[colKey] ?? 1, intensity, heatmapColorMeta.top3[colKey] ?? []);
@@ -1882,11 +1887,23 @@ export function HomeClient({
                           : {};
                         // Column peak (SPY/QQQ) — same white box + glow as the SPX NET GEX peak.
                         const isPeak = !isTable && peakStrikeByCol[colKey] != null && row.strikeNum === peakStrikeByCol[colKey];
+                        // Rank 1/2 cells are painted at 0.90 / 0.45 alpha by metricBg, where a
+                        // #5a7a98 strike goes unreadable — brighten it on those two tiers only.
+                        const heatRank = value == null ? 0 : (heatmapColorMeta.top3[colKey] ?? []).indexOf(Math.abs(value)) + 1;
+                        const prefixColor = heatRank === 1 || heatRank === 2 ? "rgba(255,255,255,0.78)" : "#5a7a98";
+                        const valEl = <SignVal text={text} />;
                         return (
                           <td key={colIdx} title={title} className={isPeak ? "mvc-peak-cell" : undefined} style={{ ...base, ...atmEdges, background: bg, fontWeight: isAtm ? 700 : 400, color: isAtm ? "rgba(255,255,255,0.82)" : SOFT_WHITE, ...(isPeak ? { border: "3px solid #ffffff", zIndex: 2 } : {}) }}>
                             {isTable
                               ? barEl(value, colKey)
-                              : <span style={{ position: "relative", zIndex: 1 }}><SignVal text={text} /></span>}
+                              : hasPrefix
+                                ? (
+                                  <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
+                                    <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.02em", color: prefixColor, flexShrink: 0 }}>{prefix}</span>
+                                    <span>{valEl}</span>
+                                  </div>
+                                )
+                                : <span style={{ position: "relative", zIndex: 1 }}>{valEl}</span>}
                           </td>
                         );
                       };
@@ -1943,21 +1960,24 @@ export function HomeClient({
                             {/* SPY / QQQ 0DTE net GEX — same moneyness offset as this SPX row,
                                 NOT the same strike. Rendered through the shared dataCell so they
                                 use the identical heatmap palette as every other column; each has
-                                its own color scale (see heatmapColorMeta). The tooltip names the
-                                actual contract so the offset join is never ambiguous. */}
+                                its own color scale (see heatmapColorMeta). Each cell carries its
+                                ticker's own strike inline on the left, so the offset join reads
+                                without hovering; the tooltip still names the full contract. */}
                             {dataCell(
                               row.spyGex,
                               row.spyGexVal,
                               "spyGexVal",
                               4,
-                              row.spyStrike == null ? "No SPY strike at this offset" : `SPY ${row.spyStrike} • ${sideBasis === "vol-only" ? "vol only" : "OI+Vol"}`
+                              row.spyStrike == null ? "No SPY strike at this offset" : `SPY ${row.spyStrike} • ${sideBasis === "vol-only" ? "vol only" : "OI+Vol"}`,
+                              row.spyStrike
                             )}
                             {dataCell(
                               row.qqqGex,
                               row.qqqGexVal,
                               "qqqGexVal",
                               5,
-                              row.qqqStrike == null ? "No QQQ strike at this offset" : `QQQ ${row.qqqStrike} • ${sideBasis === "vol-only" ? "vol only" : "OI+Vol"}`
+                              row.qqqStrike == null ? "No QQQ strike at this offset" : `QQQ ${row.qqqStrike} • ${sideBasis === "vol-only" ? "vol only" : "OI+Vol"}`,
+                              row.qqqStrike
                             )}
                           </tr>
                         </React.Fragment>

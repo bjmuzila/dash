@@ -38,8 +38,12 @@ import { SPX_2Y_DAILY, type SpxDailyClose } from "./spxHeatmapData";
  *  tab rolls over on its own. The route caches upstream, so a miss is cheap. */
 const REFRESH_MS = 60 * 60_000;
 
-const CELL = 13;
-const GAP = 3;
+// Cell/gap are the only size knobs — every other dimension (column height,
+// month-block widths, the sticky year gutter) is derived from them, so scaling
+// the whole grid is a two-number change. ~1/3 down from the original 13/3.
+const CELL = 9;
+const GAP = 2;
+const MONTH_ROW_H = 12; // month-label strip above each year row
 const DAY_OFFSETS = [1, 2, 3, 4, 5]; // Mon..Fri, relative to each week's Sunday
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -286,12 +290,12 @@ export default function SpxHeatmap() {
 
       {/* Grid — one row per calendar year; a new year automatically gets its own row */}
       <div className={scrollClass}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 18, width: "max-content" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, width: "max-content" }}>
           {years.map((y) => {
             const weeks = yearWeeks.get(y)!;
             const monthBlocks = yearMonthBlocks.get(y)!;
             return (
-              <div key={y} style={{ display: "flex", gap: 10 }}>
+              <div key={y} style={{ display: "flex", gap: 8 }}>
                 <div
                   style={{
                     display: "flex",
@@ -300,17 +304,17 @@ export default function SpxHeatmap() {
                     left: 0,
                     zIndex: 6,
                     background: HOME_THEME.panel,
-                    paddingRight: 10,
-                    minWidth: 44,
+                    paddingRight: 8,
+                    minWidth: 34,
                   }}
                 >
-                  <span style={{ height: 14, marginBottom: 4 }} />
+                  <span style={{ height: MONTH_ROW_H, marginBottom: 3 }} />
                   <span
                     style={{
                       height: colHeight,
                       display: "flex",
                       alignItems: "center",
-                      fontSize: 13,
+                      fontSize: 11,
                       fontWeight: 700,
                       color: HOME_THEME.text,
                       opacity: 0.75,
@@ -322,11 +326,11 @@ export default function SpxHeatmap() {
 
                 <div>
                   {/* Month header row (per-year, since each year's Jan 1 falls on a different weekday) */}
-                  <div style={{ display: "flex", gap: GAP, marginBottom: 4, height: 14 }}>
+                  <div style={{ display: "flex", gap: GAP, marginBottom: 3, height: MONTH_ROW_H }}>
                     {weeks.map((w, i) => {
                       const showLabel = i === 0 || weeks[i - 1].month !== w.month;
                       return (
-                        <div key={i} style={{ minWidth: CELL, flex: `0 0 ${CELL}px`, fontSize: 10, color: HOME_THEME.text, opacity: 0.55, whiteSpace: "nowrap" }}>
+                        <div key={i} style={{ minWidth: CELL, flex: `0 0 ${CELL}px`, fontSize: 9, color: HOME_THEME.text, opacity: 0.55, whiteSpace: "nowrap" }}>
                           {showLabel ? MONTH_NAMES[w.month] : ""}
                         </div>
                       );
@@ -355,7 +359,7 @@ export default function SpxHeatmap() {
                                 style={{
                                   width: CELL,
                                   height: CELL,
-                                  borderRadius: 3,
+                                  borderRadius: 2,
                                   background: bg,
                                   border: "1px solid rgba(255,255,255,0.03)",
                                   opacity: entry ? 1 : 0.5,

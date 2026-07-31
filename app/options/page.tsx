@@ -119,6 +119,12 @@ function TickerCard({
  * Heatmap stays live — SpxHeatmap pulls /api/spx-heatmap and rolls forward on
  * its own each trading day (SPX only for now). Card carries no subtitle: the
  * grid and its tooltips are the whole story here.
+ *
+ * `flex: 0 0 auto` (not the `flex: 1` its siblings use) is deliberate. The two
+ * columns are stretch-aligned, so any card that grows soaks up the height
+ * difference between them — and at the grid's size that left this card as a
+ * mostly-empty box. Pinning it to its content pushes that slack onto the
+ * candlestick card below, which has a chart to fill it with.
  */
 function HeatmapCard() {
   const { ticker } = useTicker();
@@ -128,7 +134,7 @@ function HeatmapCard() {
       variant="budget"
       accent={LIGHT_BLUE}
       title={`Heatmap · ${ticker}`}
-      style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}
+      style={{ display: "flex", flexDirection: "column", flex: "0 0 auto", minWidth: 0 }}
     >
       {isSpx ? (
         <SpxHeatmap />
@@ -136,7 +142,7 @@ function HeatmapCard() {
         <OptionsPlaceholder
           label="daily / yearly heatmap"
           shape="rows"
-          minHeight={260}
+          minHeight={230}
           note="placeholder — heatmap is SPX-only until per-ticker data is wired"
         />
       )}
