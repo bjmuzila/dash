@@ -163,6 +163,11 @@ function db() {
   return _libDb;
 }
 
+// Set on every tick() so `diagnose` can answer "is the recorder alive?" without
+// a heartbeat table. Process-local: a restart resets it, which is itself the
+// answer when the UI says the recorder has never run.
+let _lastTick = null;
+
 let _tablesReady = null;
 function ensureTables() {
   if (_tablesReady) return _tablesReady;
@@ -207,9 +212,11 @@ function ensureTables() {
         pnl              REAL,                   -- exit - entry, per contract
         pnl_usd          REAL,                   -- pnl x multiplier
         polls            INTEGER NOT NULL DEFAULT 0,
+        last_error       TEXT,                   -- why the most recent poll did not price
         updated_at       BIGINT,
         UNIQUE (date, checkpoint)
       );
+      ALTER TABLE cb_trades ADD COLUMN IF NOT EXISTS last_error TEXT;
       CREATE INDEX IF NOT EXISTS idx_cb_trades_date ON cb_trades(date);
       CREATE INDEX IF NOT EXISTS idx_cb_trades_status ON cb_trades(status);
 
@@ -247,17 +254,33 @@ async function q(sql, params = []) {
  * { found:false, reason } so the caller writes a row explaining itself.
  */
 async function probeContract(ctx, { expiry, side, strike }) {
+  // A strike of 0/NaN would make probeRestTT snap to the CHEAPEST strike in the
+  // chain and return a confident price for a contract nobody asked about. Refuse
+  // rather than record a fabricated fill.
+  if (!Number.isFinite(Number(strike)) || Number(strike) <= 100) {
+    return { found: false, reason: `refusing to probe a nonsense strike (${strike})` };
+  }
   const path = `/proxy/probe-rest?ticker=${encodeURIComponent(PROBE_TICKER)}`
     + `&expiry=${encodeURIComponent(expiry)}&type=${side}&strike=${encodeURIComponent(strike)}`;
   let j = null;
+  let httpStatus = 0;
   try {
     const r = await ctx.internalFetch(path, { cache: 'no-store' });
+    httpStatus = r.status ?? 0;
     j = await r.json();
   } catch (e) {
-    return { found: false, reason: `probe failed: ${e.message}` };
+    return { found: false, reason: `probe request failed: ${e.message}`, path };
   }
   if (!j || !j.found || !j.result) {
-    return { found: false, reason: `probe ${j?.status || 'miss'}` };
+    // Say WHAT the probe answered, not just that it missed. 'no-expiry' with the
+    // chain's real expirations attached is the difference between a five-second
+    // fix and an afternoon of guessing; the first cut of this only logged "miss".
+    const bits = [
+      j?.status || (httpStatus && httpStatus !== 200 ? `HTTP ${httpStatus}` : 'miss'),
+      j?.error ? String(j.error).slice(0, 120) : null,
+      j?.availableExpirations?.length ? `chain has ${j.availableExpirations.slice(0, 4).join(', ')}` : null,
+    ].filter(Boolean);
+    return { found: false, reason: `probe ${bits.join(' — ')}`, path, raw: j };
   }
   const qf = j.result.feeds?.Quote ?? {};
   const ex = j.result.exposures ?? {};
@@ -394,10 +417,19 @@ async function pollOpen(ctx, { date } = {}) {
   const open = date
     ? await q(`SELECT * FROM cb_trades WHERE status = 'open' AND date = $1`, [date])
     : await q(`SELECT * FROM cb_trades WHERE status = 'open'`);
-  let closed = 0, polled = 0;
+  let closed = 0, polled = 0, errors = 0;
   for (const t of open) {
     const p = await probeContract(ctx, { expiry: t.expiration, side: t.side, strike: t.strike });
-    if (!p.found) continue;
+    if (!p.found) {
+      // A `continue` here is how a dead probe becomes an invisible one: the row
+      // simply stops moving and nothing on the page says why. Stamp the reason
+      // and the attempt time so a stale last_ts is diagnosable from the UI.
+      errors += 1;
+      await q(`UPDATE cb_trades SET last_error = $1, updated_at = $2 WHERE id = $3`,
+        [String(p.reason).slice(0, 300), Date.now(), t.id]);
+      console.warn(`[cb-trades] poll ${t.date} ${t.checkpoint} ${t.strike}${t.side} — ${p.reason}`);
+      continue;
+    }
     const now = Date.now();
     const spot = p.spot ?? num(t.last_spot);
     const { dist, fire, tight } = sellCheck(spot, num(t.strike));
@@ -427,12 +459,12 @@ async function pollOpen(ctx, { date } = {}) {
     }
     await q(
       `UPDATE cb_trades SET last_ts=$1, last_price=$2, last_spot=$3, last_dist=$4,
-         best_price=$5, worst_price=$6, closest_dist=$7, polls=polls+1, updated_at=$1 WHERE id=$8`,
+         best_price=$5, worst_price=$6, closest_dist=$7, polls=polls+1, last_error=NULL, updated_at=$1 WHERE id=$8`,
       [now, round2(mark), round2(spot), dist, round2(Number.isFinite(best) ? best : null),
         round2(Number.isFinite(worst) ? worst : null), Number.isFinite(closest) ? closest : null, t.id],
     );
   }
-  return { ok: true, open: open.length, polled, closed };
+  return { ok: true, open: open.length, polled, closed, errors };
 }
 
 /** 16:00 ET: 0DTE, so everything still open is marked out at its last print. */
@@ -458,14 +490,46 @@ async function settle(ctx, { date } = {}) {
 }
 
 /**
- * The recorder's single entry point: open whatever checkpoints are due, re-price
- * whatever is open, settle at the bell. One call a minute does the whole job,
- * and every branch is idempotent.
+ * Close out anything left 'open' from a PRIOR session.
+ *
+ * The 16:00 settle only fires if the process happens to be alive between 16:00
+ * and the recorder's 16:10 window close. Miss that ten-minute slot — a deploy, a
+ * restart, a crash — and yesterday's position stays 'open' forever: pollOpen and
+ * settle are both scoped to today's date, so nothing ever touches it again. It
+ * would sit at the top of the board with a live-looking mark from days ago.
+ * These are 0DTE contracts; anything from a past session expired worthless or
+ * was assigned, so mark it out at its last known price and label it honestly.
+ */
+async function settleStale(ctx, { today } = {}) {
+  const d = today || etParts().date;
+  const stale = await q(`SELECT * FROM cb_trades WHERE status = 'open' AND date < $1`, [d]);
+  for (const t of stale) {
+    const now = Date.now();
+    const mark = num(t.last_price);
+    const { pnl, pnlUsd } = computePnl(num(t.entry_price), mark);
+    await q(
+      `UPDATE cb_trades SET status='closed', exit_ts=COALESCE(last_ts,$1), exit_price=$2, exit_spot=last_spot,
+         exit_reason='stale', pnl=$3, pnl_usd=$4, updated_at=$1 WHERE id=$5`,
+      [now, round2(mark), pnl, pnlUsd, t.id],
+    );
+    console.log(`[cb-trades] closed stale ${t.date} ${t.checkpoint} at its last mark — the ${t.date} settle never ran`);
+  }
+  return { staleClosed: stale.length };
+}
+
+/**
+ * The recorder's single entry point: close out any stragglers, open whatever
+ * checkpoints are due, re-price whatever is open, settle at the bell. One call a
+ * minute does the whole job, and every branch is idempotent.
  */
 async function tick(ctx, { now = new Date() } = {}) {
   const et = etParts(now);
-  const out = { date: et.date, opened: [], polled: null, settled: null };
+  _lastTick = { at: Date.now(), date: et.date, minutes: et.minutes };
+  const out = { date: et.date, opened: [], polled: null, settled: null, stale: null };
   if (et.weekday === 'Sat' || et.weekday === 'Sun') return { ...out, note: 'weekend' };
+
+  const st = await settleStale(ctx, { today: et.date });
+  if (st.staleClosed) out.stale = st;
 
   for (const cp of dueCheckpoints(et.minutes)) {
     const r = await runCheckpoint(ctx, { date: et.date, checkpoint: cp.key });
@@ -476,6 +540,69 @@ async function tick(ctx, { now = new Date() } = {}) {
   }
   if (et.minutes >= 16 * 60) {
     out.settled = await settle(ctx, { date: et.date });
+  }
+  _lastTick.result = out;
+  return out;
+}
+
+/**
+ * Answer "why is nothing updating?" in one call instead of an afternoon of
+ * guessing. Reports whether the recorder has ticked at all, what the CB resolves
+ * to right now, what a LIVE probe of that contract actually returns (raw status
+ * included), and the state of today's rows. Read-only — it records nothing.
+ */
+async function diagnose(ctx, { date } = {}) {
+  const et = etParts();
+  const d = date || et.date;
+  const out = {
+    now: { etDate: et.date, etMinutes: et.minutes, weekday: et.weekday },
+    recorder: _lastTick
+      ? { lastTickAt: _lastTick.at, agoSeconds: Math.round((Date.now() - _lastTick.at) / 1000), lastResult: _lastTick.result ?? null }
+      : { lastTickAt: null, note: 'no tick has run in this process — the recorder is not firing, or the process restarted' },
+    config: { AUTO_BUY_MAX, SELL_TRIGGER_PTS, SELL_TIGHT_PTS, PROBE_TICKER, CHECKPOINT_GRACE_MIN },
+    dueNow: dueCheckpoints(et.minutes).map((c) => c.key),
+    checkpoints: [],
+    rows: [],
+  };
+  try {
+    out.rows = await q(
+      `SELECT id, checkpoint, strike, side, status, skip_reason, last_error, polls, probe_price,
+              entry_price, last_price, last_ts, updated_at
+         FROM cb_trades WHERE date = $1 ORDER BY checkpoint`, [d]);
+    const ticks = await q(
+      `SELECT trade_id, count(*)::int AS ticks FROM cb_trade_ticks
+        WHERE trade_id = ANY($1::int[]) GROUP BY trade_id`,
+      [out.rows.map((r) => r.id)],
+    );
+    const byId = new Map(ticks.map((x) => [x.trade_id, x.ticks]));
+    out.rows = out.rows.map((r) => ({ ...r, tickCount: byId.get(r.id) ?? 0 }));
+  } catch (e) { out.rowsError = String(e.message || e); }
+
+  // Resolve each checkpoint's CB from mvc_snapshots, then probe the one that is
+  // live right now — the two failure modes (no snapshot vs. probe miss) look
+  // identical from the UI and this is what separates them.
+  for (const cp of CHECKPOINTS) {
+    const entry = { key: cp.key, label: cp.label };
+    try {
+      const cb = await cbAtCheckpoint(d, cp.min);
+      entry.cb = cb ? { strike: cb.strike, spx: cb.spx, snapshotMin: cb.min } : null;
+      if (!cb) entry.note = 'no mvc_snapshots row within the checkpoint window';
+    } catch (e) { entry.error = String(e.message || e); }
+    out.checkpoints.push(entry);
+  }
+  const liveCb = out.checkpoints.filter((c) => c.cb).pop();
+  if (liveCb?.cb?.strike) {
+    const side = decideSide(liveCb.cb.spx, liveCb.cb.strike) || 'C';
+    const p = await probeContract(ctx, { expiry: d, side, strike: liveCb.cb.strike });
+    out.liveProbe = {
+      asked: { ticker: PROBE_TICKER, expiry: d, side, strike: liveCb.cb.strike },
+      found: p.found,
+      reason: p.reason ?? null,
+      mark: p.mark ?? null, bid: p.bid ?? null, ask: p.ask ?? null, spot: p.spot ?? null,
+      occSymbol: p.occSymbol ?? null,
+    };
+  } else {
+    out.liveProbe = { skipped: 'no CB resolved for any checkpoint today — mvc_snapshots is empty or unparseable' };
   }
   return out;
 }
@@ -596,7 +723,9 @@ module.exports = {
   runCheckpoint,
   pollOpen,
   settle,
+  settleStale,
   tick,
+  diagnose,
   listTrades,
   listTicks,
   summarize,

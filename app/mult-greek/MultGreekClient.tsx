@@ -1437,22 +1437,18 @@ export function MultGreekClient({
 
   const isCapturing = captureWindow != null;
 
-  // ── Full-screen chain overlay ──────────────────────────────────────────────
-  // Double-clicking a panel header sets this to that panel's ticker; the
-  // overlay below renders the real /options-chain page for it. Esc closes.
+  // ── Chain overlay ──────────────────────────────────────────────────────────
+  // Double-clicking a panel header sets this to that panel's ticker; the chain
+  // then covers the panels row — exactly the 4 cards, toolbar untouched. Esc
+  // closes. (No body scroll-lock: the overlay is inside the page's own layout,
+  // not a viewport-covering modal, so nothing can scroll out from under it.)
   const [chainTicker, setChainTicker] = useState<string | null>(null);
   const closeChain = useCallback(() => setChainTicker(null), []);
   useEffect(() => {
     if (!chainTicker) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setChainTicker(null); };
     window.addEventListener("keydown", onKey);
-    // The page body scrolls under a full-viewport overlay otherwise.
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prevOverflow;
-    };
+    return () => window.removeEventListener("keydown", onKey);
   }, [chainTicker]);
   // A screenshot capture must never bake the overlay into the shot.
   useEffect(() => { if (isCapturing) setChainTicker(null); }, [isCapturing]);
@@ -1626,7 +1622,10 @@ export function MultGreekClient({
           .mg-panels.mg-embed > div { flex: 1 1 0 !important; width: auto !important; min-height: 0 !important; }
         `}</style>
       )}
-      <div className={`mg-panels${embed ? " mg-embed" : ""}`} style={{ flex: isCapturing ? "0 0 auto" : 1, display: "flex", alignItems: isCapturing ? "flex-start" : "stretch", gap: 8, padding: 8, overflow: isCapturing ? "visible" : "hidden", minHeight: 0 }}>
+      {/* position:relative so the chain overlay below can pin itself to EXACTLY
+          this box — the 4 cards and nothing else. The page toolbar above stays
+          live and visible while the chain is open. */}
+      <div className={`mg-panels${embed ? " mg-embed" : ""}`} style={{ position: "relative", flex: isCapturing ? "0 0 auto" : 1, display: "flex", alignItems: isCapturing ? "flex-start" : "stretch", gap: 8, padding: 8, overflow: isCapturing ? "visible" : "hidden", minHeight: 0 }}>
         {TICKERS.map(ticker => (
           <TickerPanel
             key={ticker}
@@ -1648,29 +1647,22 @@ export function MultGreekClient({
             onExpandChain={setChainTicker}
           />
         ))}
-      </div>
 
-      {/* ── Full-screen option chain (double-click a panel header) ──────────── */}
-      {chainTicker && typeof document !== "undefined" && createPortal(
-        <div
-          onClick={(e) => { if (e.target === e.currentTarget) closeChain(); }}
-          style={{
-            position: "fixed", inset: 0, zIndex: 9000,
-            background: "rgba(3,6,12,0.86)", backdropFilter: "blur(3px)",
-            display: "flex", alignItems: "stretch", justifyContent: "center",
-            padding: 16,
-          }}
-        >
-          {/* homeShellStyle is NOT re-applied here — OptionsChainPage brings its
-              own shell (background, glow, font). Doubling it just paints the
-              same gradient twice. */}
+        {/* ── Option chain, overlaying the 4 cards ─────────────────────────────
+            Pinned to the panels row (inset 8 = this container's own padding),
+            so it lands on the exact footprint of the four cards — edge to edge,
+            top of the first card header to the bottom of the last row — and
+            nothing else on the page is covered. homeShellStyle is NOT applied:
+            OptionsChainPage brings its own shell (background, glow, font), and
+            doubling it just paints the same gradient twice. */}
+        {chainTicker && (
           <div style={{
-            flex: 1, minWidth: 0, minHeight: 0,
+            position: "absolute", inset: 8, zIndex: 40,
             display: "flex", flexDirection: "column",
             background: HT.bg,
             borderRadius: 16, overflow: "hidden",
             border: `1px solid ${HT.cyan}55`,
-            boxShadow: "0 24px 80px rgba(0,0,0,0.7)",
+            boxShadow: "0 18px 60px rgba(0,0,0,0.75)",
           }}>
             <div style={{
               display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
@@ -1702,9 +1694,8 @@ export function MultGreekClient({
               </Suspense>
             </div>
           </div>
-        </div>,
-        document.body,
-      )}
+        )}
+      </div>
     </div>
   );
 }

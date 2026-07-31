@@ -88,10 +88,10 @@ export default function GexPulsePanel(props: GexPulsePanelProps) {
         <div style={{ width: 104, fontFamily: MONO, fontSize: 15, fontWeight: 600, textAlign: "right" }}>
           {r.v}
         </div>
+        {/* Per-signal point contribution still drives the row color, but the
+            number itself is deliberately not rendered — the card shows the
+            read, not the arithmetic. */}
         <div style={{ flex: 1, paddingLeft: 20, fontFamily: MONO, fontSize: 12, color: c }}>{r.note}</div>
-        <div style={{ width: 52, fontFamily: MONO, fontSize: 13.5, fontWeight: 700, textAlign: "right", color: c }}>
-          {sp(r.p)}
-        </div>
       </div>
     );
   };

@@ -6318,6 +6318,12 @@ if (libDb) {
           try {
             const ticksFor = sp.get('ticks');
             if (ticksFor) { send(res, 200, { ticks: await cbTrack.listTicks(ticksFor) }, { 'Cache-Control': NO_STORE }); return; }
+            // ?diag=1 mirrors POST {action:'diagnose'} so it can be opened
+            // straight from the browser address bar while signed in as owner.
+            if (sp.get('diag') === '1') {
+              send(res, 200, await cbTrack.diagnose(ctx, { date: sp.get('date') || undefined }), { 'Cache-Control': NO_STORE });
+              return;
+            }
             const date = sp.get('date') || undefined;
             const all = sp.get('all') === '1';
             const since = Number(sp.get('since')) || 20;
@@ -6338,6 +6344,10 @@ if (libDb) {
           if (action === 'tick') { send(res, 200, await cbTrack.tick(ctx)); return; }
           if (action === 'poll') { send(res, 200, await cbTrack.pollOpen(ctx, { date })); return; }
           if (action === 'settle') { send(res, 200, await cbTrack.settle(ctx, { date })); return; }
+          // Read-only "why is nothing updating?" — recorder liveness, the CB each
+          // checkpoint resolves to, a LIVE probe of the current one with its raw
+          // status, and per-row tick counts. Records nothing.
+          if (action === 'diagnose') { send(res, 200, await cbTrack.diagnose(ctx, { date })); return; }
           if (action === 'checkpoint') {
             const checkpoint = String(body.checkpoint || '');
             const d = date || cbTrack.etParts().date;

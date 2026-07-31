@@ -770,6 +770,7 @@ type CbTrade = {
   last_ts: number | string | null; last_price: number | null; last_spot: number | null; last_dist: number | null;
   best_price: number | null; worst_price: number | null; closest_dist: number | null;
   pnl: number | null; pnl_usd: number | null; polls: number;
+  last_error: string | null;   // why the most recent poll did not price
 };
 type CbSummary = {
   key: string; label: string; probes: number; trades: number; openNow: number;
@@ -808,6 +809,9 @@ function TradesView() {
   const [openTrade, setOpenTrade] = useState<CbTrade | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<{ text: string; bad: boolean } | null>(null);
+  const [diag, setDiag] = useState<unknown>(null);
 
   const qs = range === "all" ? "?all=1" : range === "7d" ? "?since=7" : "?since=20";
 
@@ -825,6 +829,48 @@ function TradesView() {
   }, [qs]);
 
   useEffect(() => { setLoaded(false); load(); const id = setInterval(load, 60_000); return () => clearInterval(id); }, [load]);
+
+  // Force one recorder pass. Same code path the 60s tick uses and idempotent, so
+  // pressing it twice costs nothing — it just re-polls whatever is open.
+  const runNow = useCallback(async () => {
+    setBusy(true); setStatus(null);
+    try {
+      const r = await fetch("/api/cb-trades", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "tick" }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      const opened = (j.opened ?? []).length;
+      const polled = j.polled?.polled ?? 0;
+      const errors = j.polled?.errors ?? 0;
+      setStatus({
+        text: `${opened} opened · ${polled} priced · ${errors} probe error${errors === 1 ? "" : "s"}`
+          + `${j.note ? ` · ${j.note}` : ""}`,
+        bad: errors > 0 || (polled === 0 && (j.polled?.open ?? 0) > 0),
+      });
+      await load();
+    } catch (e) { setStatus({ text: String(e), bad: true }); }
+    finally { setBusy(false); }
+  }, [load]);
+
+  const runDiagnose = useCallback(async () => {
+    setBusy(true); setStatus(null);
+    try {
+      const r = await fetch("/api/cb-trades?diag=1", { cache: "no-store" });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setDiag(j);
+    } catch (e) { setStatus({ text: String(e), bad: true }); }
+    finally { setBusy(false); }
+  }, []);
+
+  const actionBtn = (disabled: boolean): React.CSSProperties => ({
+    fontSize: 13, fontWeight: 800, padding: "6px 14px", borderRadius: 8,
+    cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.6 : 1,
+    border: `1px solid ${C.border}`, background: "transparent", color: C.label,
+    letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
+  });
 
   const buyMax = config?.AUTO_BUY_MAX ?? 1.0;
   const band: [number, number] = [config?.SELL_TIGHT_PTS ?? 5, config?.SELL_TRIGGER_PTS ?? 10];
@@ -882,6 +928,18 @@ function TradesView() {
           <button onClick={() => setRange("20d")} style={rangeBtn("20d")}>20d</button>
           <button onClick={() => setRange("all")} style={rangeBtn("all")}>All</button>
         </div>
+      </div>
+
+      {/* Recorder controls. "Nothing is updating" is the failure this feature is
+          most likely to hit — the whole thing hangs off a 60s in-process poll —
+          so forcing a tick and reading the diagnosis are one click, not an SSH
+          session. */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <button onClick={() => void runNow()} disabled={busy} style={actionBtn(busy)}>
+          {busy ? "Running…" : "Run now"}
+        </button>
+        <button onClick={() => void runDiagnose()} disabled={busy} style={actionBtn(busy)}>Diagnose</button>
+        {status && <span style={{ fontSize: 13, color: status.bad ? AMBER : GREEN, fontFamily: "var(--font-mono)" }}>{status.text}</span>}
       </div>
 
       {/* Per-checkpoint roll-up */}
@@ -1044,7 +1102,31 @@ function TradesView() {
       )}
 
       {openTrade && <CbProbeModal trade={openTrade} band={band} mult={mult} onClose={() => setOpenTrade(null)} />}
+      {diag != null && <DiagnoseModal data={diag} onClose={() => setDiag(null)} />}
     </>
+  );
+}
+
+/** Raw diagnosis dump — deliberately unformatted; it is meant to be read and pasted. */
+function DiagnoseModal({ data, onClose }: { data: unknown; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(5,6,10,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ ...CARD, width: "min(900px, 100%)", maxHeight: "88vh", overflow: "auto", padding: "18px 20px" }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 12 }}>
+          <span style={{ fontSize: 16, fontWeight: 800, color: C.purple, textTransform: "uppercase", letterSpacing: "0.08em" }}>Recorder diagnosis</span>
+          <span style={{ fontSize: 12, color: MUTED }}>recorder liveness · CB per checkpoint · a live probe · row/tick counts</span>
+          <button onClick={onClose} style={{ marginLeft: "auto", font: "inherit", fontSize: 18, fontWeight: 800, cursor: "pointer", background: "transparent", border: `1px solid ${C.border}`, color: C.label, borderRadius: 7, padding: "2px 10px" }}>×</button>
+        </div>
+        <pre style={{ margin: 0, fontSize: 12, lineHeight: 1.55, color: C.label, fontFamily: "var(--font-mono)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          {JSON.stringify(data, null, 2)}
+        </pre>
+      </div>
+    </div>
   );
 }
 
@@ -1074,12 +1156,15 @@ function CbProbeChart({
     .filter((p): p is { ts: number; v: number } => p.ts != null && p.v != null);
 
   if (pts.length < 2) {
+    // Only real positions reach the chart — a never-taken checkpoint is handled
+    // upstream with its own explanation. The first cut reported every one of
+    // these as "0 polls recorded", which reads as a broken chart even when the
+    // honest answer was "this was never a position".
     return (
-      <div style={{ padding: "48px 0", textAlign: "center", color: MUTED, fontSize: 13, fontFamily: "var(--font-mono)" }}>
-        Only {pts.length} poll{pts.length === 1 ? "" : "s"} recorded — not enough for a chart.
-        <div style={{ marginTop: 6, fontSize: 12 }}>
-          The recorder writes one tick a minute while a position is open; a trade that sold on its first poll has nothing to draw.
-        </div>
+      <div style={{ padding: "40px 0", textAlign: "center", color: MUTED, fontSize: 13, fontFamily: "var(--font-mono)", lineHeight: 1.7 }}>
+        {pts.length === 0
+          ? <>No polls recorded yet. The recorder writes one tick a minute while a position is open — if this stays at zero, the poll is failing rather than pending. Press <b>Diagnose</b>.</>
+          : <>Only one poll recorded — not enough for a line. A trade that sold on its first poll has a single point.</>}
       </div>
     );
   }
@@ -1259,15 +1344,38 @@ function CbProbeModal({
           {stat("Polls", String(trade.polls ?? 0))}
         </div>
 
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {CB_METRICS.map((m) => (
-            <button key={m.key} onClick={() => setMetric(m.key)} style={tgl(metric === m.key)}>{m.label}</button>
-          ))}
-        </div>
+        {trade.status !== "skipped" && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {CB_METRICS.map((m) => (
+              <button key={m.key} onClick={() => setMetric(m.key)} style={tgl(metric === m.key)}>{m.label}</button>
+            ))}
+          </div>
+        )}
+
+        {trade.last_error && (
+          <div style={{ color: AMBER, fontSize: 13, fontFamily: "var(--font-mono)", border: `1px solid ${rgba(AMBER, 0.4)}`, background: rgba(AMBER, 0.1), borderRadius: 8, padding: "9px 12px", lineHeight: 1.6 }}>
+            Last poll did not price this contract — <b>{trade.last_error}</b>
+            <div style={{ marginTop: 4, color: MUTED }}>
+              The row stops moving when this happens; the mark shown above is the last one that did price.
+            </div>
+          </div>
+        )}
 
         {err ? (
           <div style={{ color: RED, fontSize: 14, fontFamily: "var(--font-mono)", padding: "24px 0", textAlign: "center" }}>
             Couldn&apos;t load the poll curve: {err}
+          </div>
+        ) : trade.status === "skipped" ? (
+          // Never a position, so there is no curve and never will be. Say that
+          // plainly instead of rendering an empty chart frame.
+          <div style={{ padding: "28px 22px", textAlign: "center", border: `1px dashed ${C.border}`, borderRadius: 10, lineHeight: 1.75 }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: AMBER, marginBottom: 6 }}>Not taken</div>
+            <div style={{ fontSize: 13, color: C.label, fontFamily: "var(--font-mono)" }}>{trade.skip_reason ?? "no reason recorded"}</div>
+            <div style={{ marginTop: 8, fontSize: 12, color: MUTED }}>
+              Probed at {etClock(n(trade.probe_ts) ?? 0)}
+              {trade.probe_price != null ? ` — the contract came back at $${Number(trade.probe_price).toFixed(2)}` : ""}.
+              {" "}No position was opened, so there are no polls and no curve for this checkpoint.
+            </div>
           </div>
         ) : ticks == null ? (
           <div style={{ color: C.label, fontSize: 14, padding: "48px 0", textAlign: "center" }}>Loading probe history…</div>
