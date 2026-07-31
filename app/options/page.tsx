@@ -3,12 +3,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
-import DashGrid, { type GridItem } from "@/components/shared/DashGrid";
-import FitBox from "@/components/shared/FitBox";
+import DashGrid, { compactLayout, type GridItem } from "@/components/shared/DashGrid";
+import { useFitUnit } from "@/components/shared/useFitUnit";
 import LayoutBar from "@/components/shared/LayoutBar";
 import { useDashboardLayout } from "@/components/shared/useDashboardLayout";
 import SpxHeatmap from "@/components/spx/SpxHeatmap";
 import SectorSunburst from "@/components/dashboard/SectorSunburst";
+import GexChangeTop from "@/components/scanner/GexChangeTop";
+import IbLevelCanvas from "@/components/scanner/IbLevelCanvas";
 import { TickerProvider, useTicker } from "./tickerContext";
 import TickerSelect from "./TickerSelect";
 import OptionsPlaceholder from "./OptionsPlaceholder";
@@ -21,27 +23,24 @@ import OptionsPlaceholder from "./OptionsPlaceholder";
  * saved to Postgres per user as a named template (dashboard_layouts) through
  * useDashboardLayout, and the default template auto-loads on open.
  *
- * Two rules the grid enforces for us:
+ * In edit mode each card gets an ✕ to remove it and the bar gets an "Add card"
+ * menu, so the board is a SET of cards the user chooses — not a fixed six.
+ *
+ * Three rules the grid enforces for us:
  *   - Cards never overlap. DashGrid pushes whatever a dragged card lands on
  *     straight down and then floats the board up to close the gap.
- *   - Card CONTENT tracks the card. Bodies are flex-filled; the two widgets
- *     with an intrinsic size (the heatmap's fixed-cell grid, the sector wheel)
- *     go through FitBox, which scales them to whatever tile they're given.
+ *   - Card CONTENT tracks the card. Bodies are flex-filled; widgets with an
+ *     intrinsic size are refitted (the heatmap redraws at a smaller cell, the
+ *     wheel's SVG letterboxes) rather than left to overflow.
+ *   - Card TYPE lives in the id, as `type#n` (see CARD_TYPES). That keeps the
+ *     stored layout a plain {id,x,y,w,h} list — no schema change to support
+ *     adding, removing, or duplicating cards.
  *
- * Default arrangement (what a user sees before they've saved anything):
- *
- *   ┌──────────────────────────┬───────────────────────────┐
- *   │ ticker selector          │                           │
- *   │ daily / yearly heatmap   │  S&P 500 sunburst         │
- *   ├──────────────────────────┼───────────────────────────┤
- *   │ candlestick (ES-based)   │  orderflow graph          │
- *   │                          │  live orderflow feed      │
- *   └──────────────────────────┴───────────────────────────┘
- *
- * Every card reads the selected symbol from TickerProvider, so the dropdown
- * drives the whole page. The heatmap and the sector wheel are live; the
- * candlestick and the two orderflow panels are still placeholders — no
- * fetches, sockets, or chart libs behind those yet.
+ * Ticker-bound cards read the symbol from TickerProvider, so the dropdown
+ * drives them. Cards marked `universal` in the catalog are market-wide (the
+ * sector wheel, the hourly scanner) or instrument-fixed (ES initial balance)
+ * and ignore it — their headers say so rather than showing a symbol they
+ * aren't actually using.
  */
 
 /** Grid geometry. Row pitch is ROW_H + GUTTER, so h:9 ≈ 380px tall. */
@@ -51,37 +50,172 @@ const GUTTER = 16;
 /** Below this the absolute grid gets too cramped — cards stack full width. */
 const STACK_BELOW_PX = 900;
 
+/* ── card catalog ────────────────────────────────────────────────────────── */
+
+type CardDef = {
+  /** Menu label in "Add card". */
+  label: string;
+  /** Ignores the ticker dropdown — market-wide or instrument-fixed. */
+  universal?: boolean;
+  /** Header line. Ticker-bound cards get the symbol appended. */
+  title?: string;
+  subtitle?: string;
+  /** Card body. Bare cards (`chrome: false`) bring their own Card + header. */
+  body: () => ReactNode;
+  /** Default tile size when added from the menu. */
+  w: number;
+  h: number;
+  /** false = mount the component raw, it renders its own card shell. */
+  chrome?: boolean;
+  padding?: number;
+  overflow?: "visible";
+  /** Only one of these may exist on a board (the ticker picker). */
+  singleton?: boolean;
+};
+
 /**
- * Built-in arrangement. This is also the reconciliation key: a saved template
- * keeps geometry for ids listed here, unknown ids are dropped, and any id added
- * here later is appended below a user's saved cards rather than lost.
+ * Every card the page can show. The key is the card TYPE; a card on the board
+ * is an INSTANCE of one, with id `type#n`. Add an entry here and it appears in
+ * the Add-card menu — nothing else to register.
+ */
+const CARD_TYPES: Record<string, CardDef> = {
+  ticker: {
+    label: "Ticker selector",
+    universal: true,
+    singleton: true,
+    body: () => (
+      <div style={{ display: "flex", alignItems: "center", height: "100%", minHeight: 0 }}>
+        <TickerSelect maxWidth="100%" />
+      </div>
+    ),
+    w: 7, h: 3, padding: 16, overflow: "visible",
+  },
+  heatmap: {
+    label: "Heatmap",
+    title: "Heatmap",
+    body: () => <HeatmapBody />,
+    w: 7, h: 9, padding: 14,
+  },
+  candles: {
+    label: "Candlestick (ES chart)",
+    title: "Candlestick",
+    subtitle: "ES-based chart",
+    body: () => (
+      <OptionsPlaceholder label="candles" shape="candles" note="placeholder — chart component goes here" />
+    ),
+    w: 7, h: 9,
+  },
+  sunburst: {
+    label: "S&P sector wheel",
+    universal: true,
+    body: () => <SunburstBody />,
+    w: 5, h: 10, padding: 14,
+  },
+  orderflow: {
+    label: "Orderflow graph",
+    title: "Orderflow Graph",
+    subtitle: "cumulative delta",
+    body: () => <OptionsPlaceholder label="orderflow" shape="bars" />,
+    w: 5, h: 5,
+  },
+  feed: {
+    label: "Live orderflow feed",
+    title: "Live Orderflow Feed",
+    subtitle: "idle — no stream connected",
+    body: () => <OrderflowFeedBody />,
+    w: 5, h: 6,
+  },
+  // GexChangeTop and IbLevelCanvas each render their own <Card> with a title,
+  // so they mount bare — wrapping them in a titled GridCard would double the
+  // header. chrome:false also means the drag handle is the whole tile top
+  // strip rather than a header row we own (see GridCard).
+  scanner: {
+    label: "Top 5 scanner",
+    universal: true,
+    chrome: false,
+    body: () => <GexChangeTop />,
+    w: 5, h: 12,
+  },
+  ib: {
+    label: "Initial balance",
+    universal: true,
+    chrome: false,
+    body: () => <IbLevelCanvas />,
+    w: 5, h: 12,
+  },
+};
+
+const cardTypeOf = (id: string) => id.split("#")[0];
+const canRenderCard = (id: string) => cardTypeOf(id) in CARD_TYPES;
+const defOf = (id: string): CardDef | undefined => CARD_TYPES[cardTypeOf(id)];
+
+/** `heatmap` → `heatmap#3`, picking the lowest free suffix. */
+function nextInstanceId(type: string, layout: GridItem[]): string {
+  const taken = new Set(layout.map((i) => i.id));
+  for (let n = 1; n < 999; n++) {
+    const id = `${type}#${n}`;
+    if (!taken.has(id)) return id;
+  }
+  return `${type}#${Date.now()}`;
+}
+
+/**
+ * Built-in board — what a user sees before they've saved a template. Once they
+ * have one, THEIR card set is authoritative: useDashboardLayout does not merge
+ * these back in, or removing a card would just resurrect it on reload.
  */
 const DEFAULT_LAYOUT: GridItem[] = [
-  { id: "ticker",    x: 0, y: 0,  w: 7, h: 3 },
-  { id: "heatmap",   x: 0, y: 3,  w: 7, h: 9 },
-  { id: "candles",   x: 0, y: 12, w: 7, h: 9 },
-  { id: "sunburst",  x: 7, y: 0,  w: 5, h: 10 },
-  { id: "orderflow", x: 7, y: 10, w: 5, h: 5 },
-  { id: "feed",      x: 7, y: 15, w: 5, h: 6 },
+  { id: "ticker#1",    x: 0, y: 0,  w: 7, h: 3 },
+  { id: "heatmap#1",   x: 0, y: 3,  w: 7, h: 9 },
+  { id: "candles#1",   x: 0, y: 12, w: 7, h: 9 },
+  { id: "sunburst#1",  x: 7, y: 0,  w: 5, h: 10 },
+  { id: "orderflow#1", x: 7, y: 10, w: 5, h: 5 },
+  { id: "feed#1",      x: 7, y: 15, w: 5, h: 6 },
 ];
 
 export default function OptionsPage() {
-  const L = useDashboardLayout("options", DEFAULT_LAYOUT);
+  // The third arg gates what a loaded template may put on the board: an id
+  // whose type isn't in CARD_TYPES has no renderer, so it's dropped rather than
+  // left as a hole in the grid.
+  const L = useDashboardLayout("options", DEFAULT_LAYOUT, canRenderCard);
   const narrow = useIsNarrow(STACK_BELOW_PX);
   const editing = L.editing && !narrow;
 
   // On phones / narrow windows the 12-col grid isn't usable, so ignore the
   // saved x/w and stack every card full width in its saved reading order.
   // Nothing is written back — the desktop arrangement stays exactly as saved.
-  const layout = narrow ? stackLayout(L.layout) : L.layout;
+  // Only ids the catalog knows how to draw. A template saved when a card type
+  // existed (or was named differently) can't wedge an unrenderable tile onto
+  // the board — it just doesn't come back.
+  const known = L.layout.filter((it) => defOf(it.id));
+  const items = narrow ? stackLayout(known) : known;
+
+  const addCard = (type: string) => {
+    const def = CARD_TYPES[type];
+    if (!def) return;
+    const bottom = L.layout.reduce((m, i) => Math.max(m, i.y + i.h), 0);
+    const id = nextInstanceId(type, L.layout);
+    // Dropped in at the bottom-left, then compacted — it lands in the first
+    // gap big enough for it rather than always starting a new row.
+    L.setLayout(compactLayout([...L.layout, { id, x: 0, y: bottom, w: def.w, h: def.h }]));
+  };
+
+  const removeCard = (id: string) => {
+    L.setLayout(compactLayout(L.layout.filter((i) => i.id !== id)));
+  };
+
+  // Singletons (the ticker picker) drop out of the menu once they're placed.
+  const addOptions = Object.entries(CARD_TYPES)
+    .filter(([type, def]) => !def.singleton || !L.layout.some((i) => cardTypeOf(i.id) === type))
+    .map(([type, def]) => ({ value: type, label: def.label }));
 
   return (
     <TickerProvider>
       <PageShell className={editing ? "no-card-lift" : undefined}>
-        {!narrow && <LayoutBar {...L.bar} />}
+        {!narrow && <LayoutBar {...L.bar} addOptions={addOptions} onAdd={addCard} />}
 
         <DashGrid
-          layout={layout}
+          layout={items}
           onLayoutChange={L.setLayout}
           locked={!editing}
           cols={COLS}
@@ -90,59 +224,25 @@ export default function OptionsPage() {
           minW={3}
           minH={3}
         >
-          {/* Overflow stays visible here so the ticker dropdown isn't clipped
-              by the card's box — DashGrid also raises this tile's z-index. */}
-          <GridCard key="ticker" id="ticker" editing={editing} padding={16} overflow="visible">
-            <div style={{ display: "flex", alignItems: "center", height: "100%", minHeight: 0 }}>
-              <TickerSelect maxWidth="100%" />
-            </div>
-          </GridCard>
-
-          <GridCard key="heatmap" id="heatmap" editing={editing} title={<TickerTitle label="Heatmap" />}>
-            <HeatmapBody />
-          </GridCard>
-
-          <GridCard
-            key="candles"
-            id="candles"
-            editing={editing}
-            title={<TickerTitle label="Candlestick" />}
-            subtitle="ES-based chart"
-          >
-            <OptionsPlaceholder
-              label="candles"
-              shape="candles"
-              note="placeholder — chart component goes here"
-            />
-          </GridCard>
-
-          {/* SectorSunburst brings its own header, expand/full-screen and
-              snapshot button and self-fetches /api/spx-sunburst, so it drops
-              into a bare card. It shows the whole index rather than the
-              selected symbol, hence no ticker in the heading. */}
-          <GridCard key="sunburst" id="sunburst" editing={editing}>
-            <SunburstBody />
-          </GridCard>
-
-          <GridCard
-            key="orderflow"
-            id="orderflow"
-            editing={editing}
-            title={<TickerTitle label="Orderflow Graph" />}
-            subtitle="cumulative delta"
-          >
-            <OptionsPlaceholder label="orderflow" shape="bars" />
-          </GridCard>
-
-          <GridCard
-            key="feed"
-            id="feed"
-            editing={editing}
-            title={<TickerTitle label="Live Orderflow Feed" />}
-            subtitle="idle — no stream connected"
-          >
-            <OrderflowFeedBody />
-          </GridCard>
+          {items.map((it) => {
+            const def = defOf(it.id)!;
+            return (
+              <GridCard
+                key={it.id}
+                id={it.id}
+                editing={editing}
+                title={def.title}
+                subtitle={def.subtitle}
+                universal={def.universal}
+                chrome={def.chrome !== false}
+                padding={def.padding}
+                overflow={def.overflow}
+                onRemove={removeCard}
+              >
+                {def.body()}
+              </GridCard>
+            );
+          })}
         </DashGrid>
       </PageShell>
     </TickerProvider>
@@ -182,26 +282,116 @@ function useIsNarrow(px: number) {
  * header doubles as the drag handle while editing (`data-dashgrid-handle`) —
  * drag is deliberately limited to it so dropdowns, buttons and charts inside a
  * card keep working normally.
+ *
+ * `chrome={false}` is for components that already render their own <Card> with
+ * a title (the scanner, the IB canvas). Those mount raw and get a slim edit-mode
+ * strip across the top for the grip and the ✕, instead of a header we own —
+ * otherwise every one of them would show two stacked titles.
  */
 function GridCard({
   id,
   title,
   subtitle,
+  universal,
   editing,
+  chrome = true,
   padding = 20,
   overflow,
+  onRemove,
   children,
 }: {
   id: string;
-  title?: ReactNode;
-  subtitle?: ReactNode;
+  title?: string;
+  subtitle?: string;
+  universal?: boolean;
   editing: boolean;
+  chrome?: boolean;
   padding?: number;
   overflow?: "visible";
+  onRemove?: (id: string) => void;
   children: ReactNode;
 }) {
   const visible = overflow === "visible";
-  const showHeader = title != null || editing;
+  const heading = title == null ? null : universal ? title : <TickerTitle label={title} />;
+  const showHeader = heading != null || editing;
+
+  const grip = (
+    <span
+      aria-hidden
+      title="Drag to move"
+      style={{ fontSize: 12, lineHeight: 1, letterSpacing: 1, color: HOME_THEME.cyan, opacity: 0.8 }}
+    >
+      ⠿
+    </span>
+  );
+
+  // Sits inside the drag handle, so DashGrid's own "ignore interactive
+  // elements" check is what keeps a click here from starting a drag.
+  const removeBtn = onRemove ? (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onRemove(id); }}
+      title="Remove this card"
+      aria-label="Remove this card"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 18,
+        height: 18,
+        marginLeft: "auto",
+        flexShrink: 0,
+        padding: 0,
+        borderRadius: 4,
+        border: `1px solid ${HOME_THEME.border}`,
+        background: "rgba(255,255,255,0.04)",
+        color: HOME_THEME.text,
+        opacity: 0.7,
+        fontSize: 11,
+        lineHeight: 1,
+        cursor: "pointer",
+      }}
+    >
+      ✕
+    </button>
+  ) : null;
+
+  if (!chrome) {
+    return (
+      <div
+        data-grid-id={id}
+        style={{ position: "relative", width: "100%", height: "100%", overflow: "auto" }}
+      >
+        {editing && (
+          <div
+            data-dashgrid-handle=""
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              zIndex: 6,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "4px 8px",
+              cursor: "grab",
+              userSelect: "none",
+              background: "rgba(5,6,10,0.72)",
+              borderBottom: `1px solid ${HOME_THEME.border}`,
+              borderTopLeftRadius: 12,
+              borderTopRightRadius: 12,
+            }}
+          >
+            {grip}
+            {removeBtn}
+          </div>
+        )}
+        {children}
+      </div>
+    );
+  }
+
   return (
     <div data-grid-id={id} data-grid-overflow={overflow} style={{ width: "100%", height: "100%" }}>
       <Card
@@ -224,25 +414,19 @@ function GridCard({
             data-dashgrid-handle={editing ? "" : undefined}
             style={{
               display: "flex",
-              alignItems: "baseline",
+              alignItems: "center",
               gap: 8,
-              marginBottom: title != null || subtitle != null ? 14 : 8,
+              // Tight against the body. The old 14px gap plus the card's own
+              // padding was most of the "empty space at the top" of a tile.
+              marginBottom: heading != null || subtitle != null ? 8 : 4,
               flexShrink: 0,
               cursor: editing ? "grab" : undefined,
               userSelect: editing ? "none" : undefined,
             }}
           >
-            {editing && (
-              <span
-                aria-hidden
-                title="Drag to move"
-                style={{ fontSize: 12, lineHeight: 1, letterSpacing: 1, color: HOME_THEME.cyan, opacity: 0.8 }}
-              >
-                ⠿
-              </span>
-            )}
-            <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-              {title != null && (
+            {editing && grip}
+            <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
+              {heading != null && (
                 <div
                   style={{
                     fontSize: 14,
@@ -257,11 +441,12 @@ function GridCard({
                     textOverflow: "ellipsis",
                   }}
                 >
-                  {title}
+                  {heading}
                 </div>
               )}
               {subtitle != null && <div style={{ fontSize: 12, color: HOME_THEME.green }}>{subtitle}</div>}
             </div>
+            {editing && removeBtn}
           </div>
         )}
         {/* Flex column, not a plain block: children get the leftover height to
@@ -289,53 +474,20 @@ function GridCard({
 
 /* ── card bodies ─────────────────────────────────────────────────────────── */
 
-/** Live px size of an element, for content that has to be told how big to draw. */
-function useBoxSize<T extends HTMLElement>() {
-  const ref = useRef<T | null>(null);
-  const [size, setSize] = useState({ w: 0, h: 0 });
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const read = () =>
-      setSize((s) => {
-        const w = el.clientWidth, h = el.clientHeight;
-        return Math.abs(s.w - w) > 1 || Math.abs(s.h - h) > 1 ? { w, h } : s;
-      });
-    const ro = new ResizeObserver(read);
-    ro.observe(el);
-    read();
-    return () => ro.disconnect();
-  }, []);
-  return [ref, size] as const;
-}
-
 /**
- * Sector wheel, sized from the tile rather than from a constant.
+ * Sector wheel that fills its tile.
  *
- * The wheel's SVG is square at width:100%, so left to itself it renders as tall
- * as the card is wide and overruns everything under it. This used to be handled
- * by a hand-derived SUNBURST_WHEEL_PX that had to be re-tuned whenever the
- * card's chrome changed — and it couldn't follow a resizable tile at all.
+ * `fill` puts the component's body in a flex column and lets the SVG take the
+ * leftover height (preserveAspectRatio keeps it round), so the wheel is as big
+ * as the card allows and grows when the card does. `showMovers={false}` drops
+ * the Top/Bottom table under it — the wheel already calls out its extremes, and
+ * on a resizable tile that table was taking the space the wheel wanted.
  *
- * Now the wheel is a share of the measured tile (WHEEL_SHARE of its height,
- * never wider than the tile), so it grows and shrinks as the card is dragged.
- * The ratio only has to get CLOSE: FitBox wraps the result and scales away any
- * remainder, with a floor that stops the labels from going microscopic.
+ * This replaces the old measure-and-scale approach: no wheel-diameter constant,
+ * no transform, so the header and labels stay at full size at any tile size.
  */
-const WHEEL_SHARE = 0.62;
-
 function SunburstBody() {
-  const [ref, { w, h }] = useBoxSize<HTMLDivElement>();
-  const wheel = w > 0 && h > 0
-    ? Math.max(120, Math.min(w - 8, Math.round(h * WHEEL_SHARE), 560))
-    : undefined;
-  return (
-    <div ref={ref} style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-      <FitBox fluidWidth min={0.5} max={1}>
-        <SectorSunburst maxWheel={wheel} />
-      </FitBox>
-    </div>
-  );
+  return <SectorSunburst fill showMovers={false} />;
 }
 
 /** Header text that carries the selected symbol. */
@@ -348,13 +500,16 @@ function TickerTitle({ label }: { label: string }) {
  * Heatmap stays live — SpxHeatmap pulls /api/spx-heatmap and rolls forward on
  * its own each trading day (SPX only for now).
  *
- * It draws on a fixed 9px cell, so nothing about it responds to the card's
- * size on its own: in a small tile it scrolled, in a large one it sat in the
- * corner. FitBox measures the grid's natural box and scales it to the tile —
- * up to 2x when there's room, down to 0.35 when there isn't.
+ * It draws on a fixed cell size, so it can't flex on its own. Rather than
+ * CSS-scaling a 9px render (blurry when grown, and it scales the mode buttons
+ * and year labels too), useFitUnit hands it the CELL SIZE that fits the tile
+ * and the grid redraws crisply at that size — bigger squares in a bigger card,
+ * smaller in a smaller one.
  */
 function HeatmapBody() {
   const { ticker } = useTicker();
+  const [boxRef, contentRef, cell] = useFitUnit(9, { min: 3, max: 22 });
+
   if (ticker !== "SPX") {
     return (
       <OptionsPlaceholder
@@ -365,9 +520,11 @@ function HeatmapBody() {
     );
   }
   return (
-    <FitBox min={0.35} max={2}>
-      <SpxHeatmap />
-    </FitBox>
+    <div ref={boxRef} style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
+      <div ref={contentRef} style={{ width: "max-content" }}>
+        <SpxHeatmap cell={cell} />
+      </div>
+    </div>
   );
 }
 

@@ -674,6 +674,53 @@ async function fetchStockDailyHistoryTheta(symbol, startDate, endDate) {
   return _mapDailyOhlc(json);
 }
 
+// Intraday RTH bars for a CASH INDEX (SPX/NDX/VIX…) — the index sibling of
+// fetchOptionIntradayTheta above. Used by the CB contract tracker to replay,
+// bar by bar, where SPX actually was relative to the CB strike, so an
+// "SPX came within N pts" trigger is evaluated on real price action rather than
+// on the coarse mvc_snapshots cadence.
+//
+// Shape follows /v3/index/history/ohlc as proven by scripts/backtest-orb-spx-theta.mjs:
+// FLAT rows (rowsFromV3, not the nested contract/data shape the option routes
+// use), `interval` is a duration STRING ('1m'/'5m'), and `timestamp` is a bare
+// ET wall-clock string with no offset — so it must be pinned through
+// _parseEtWallClock or a UTC host shifts every bar by 4-5 hours.
+//
+// Note the root rule does NOT apply here: index history wants 'SPX', never the
+// SPXW options root, so this deliberately skips thetaRoot().
+// Returns [{ time(ms), open, high, low, close, volume }] ascending; [] if the
+// session has no bars (holiday, or a tier without index intraday).
+async function fetchIndexIntradayTheta(symbol, date, interval = '1m', endDate = null, startTime = '09:30:00', endTime = '16:00:00') {
+  const sym = String(symbol || SYMBOL).toUpperCase().replace(/^\$/, '');
+  const ymd = ymdCompact(date);
+  const ymdEnd = endDate ? ymdCompact(endDate) : ymd;
+  const json = await thetaGet(
+    `/v3/index/history/ohlc?symbol=${encodeURIComponent(sym)}`
+    + `&start_date=${ymd}&end_date=${ymdEnd}`
+    + `&interval=${encodeURIComponent(interval)}`
+    + `&start_time=${encodeURIComponent(startTime)}&end_time=${encodeURIComponent(endTime)}`,
+  );
+  return rowsFromV3(json)
+    .map((r) => {
+      let time = _parseEtWallClock(String(r.timestamp ?? ''));
+      if (!Number.isFinite(time)) {
+        const msOfDay = Number(r.ms_of_day ?? r.msOfDay);
+        const base = _etMidnightMs(String(r.date ?? ymd));
+        if (Number.isFinite(msOfDay) && Number.isFinite(base)) time = base + msOfDay;
+      }
+      return {
+        time,
+        open: Number(r.open),
+        high: Number(r.high),
+        low: Number(r.low),
+        close: Number(r.close),
+        volume: Number(r.volume ?? r.count) || 0,
+      };
+    })
+    .filter((b) => Number.isFinite(b.time) && Number.isFinite(b.close) && b.close > 0)
+    .sort((a, b) => a.time - b.time);
+}
+
 // Daily EOD close series for ONE specific contract (exact strike + type) over a
 // date range — used by the far-CB "Tracked results" popup to show how the
 // watched contract's premium moved day-to-day since it was flagged.
@@ -1217,6 +1264,7 @@ module.exports = {
   fetchIndexEodTheta,
   fetchStockEodTheta,
   fetchIndexDailyHistoryTheta,
+  fetchIndexIntradayTheta,
   fetchStockDailyHistoryTheta,
   fetchOptionDailyHistoryTheta,
   fetchOptionIntradayTheta,

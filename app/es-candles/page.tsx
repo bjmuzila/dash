@@ -32,6 +32,60 @@ function toChartTime(ts: number): UTCTimestamp {
   return Math.floor(ts / 1000) as UTCTimestamp;
 }
 
+/**
+ * Section divider for the Overlays panel — a small-caps label followed by a
+ * hairline that eats the remaining width. Replaces the old full-height header
+ * rows: same legibility at roughly half the vertical cost, and the rules give
+ * the panel real structure instead of a stack of loose sliders.
+ */
+function PanelSection({ title, first, children }: { title: string; first?: boolean; children: ReactNode }) {
+  return (
+    <div style={{ marginTop: first ? 0 : 9 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
+        <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: ".11em", textTransform: "uppercase", color: HOME_THEME.muted, whiteSpace: "nowrap", opacity: 0.85 }}>
+          {title}
+        </span>
+        <span style={{ flex: 1, height: 1, background: HOME_THEME.border }} />
+      </div>
+      <div style={{ display: "grid", gap: 3 }}>{children}</div>
+    </div>
+  );
+}
+
+/**
+ * Shared label-column width for every slider in the Overlays panel. One
+ * constant, so "top" / "highlight" / "min" / "max" / "bright" all start their
+ * tracks at the same x and the value + stepper columns line up down the panel.
+ */
+const SLIDER_LABEL_W = 46;
+
+/** Compact on/off chip — one visual language for every toggle in the panel. */
+function PanelChip({ label, on, onClick, title }: { label: string; on: boolean; onClick: () => void; title?: string }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-xs"
+      style={{
+        borderRadius: 7, minWidth: 0, fontWeight: 600,
+        border: on ? `1px solid ${DOCK_THEME.activeBorder}` : "1px solid transparent",
+        background: on ? DOCK_THEME.activeTile : "transparent",
+        color: on ? HOME_THEME.cyan : HOME_THEME.text,
+      }}
+      onMouseEnter={(e) => { if (!on) e.currentTarget.style.background = DOCK_THEME.hoverTile; }}
+      onMouseLeave={(e) => { if (!on) e.currentTarget.style.background = "transparent"; }}
+    >
+      <span style={{
+        width: 12, height: 12, flexShrink: 0, borderRadius: 3,
+        border: `1px solid ${on ? HOME_THEME.cyan : HOME_THEME.border}`,
+        background: on ? HOME_THEME.cyan : "transparent",
+        color: DOCK_THEME.bg, fontSize: 9, lineHeight: "10px", textAlign: "center", fontWeight: 900,
+      }}>{on ? "✓" : ""}</span>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
+    </button>
+  );
+}
+
 // One painted heatmap cell: a strike bucket at a given 5-min slot.
 // netOiVol = gamma×(OI+vol), netVol = gamma×vol only. The active metric is
 // chosen at draw time by gexMetric so the toggle re-renders without new data.
@@ -266,6 +320,27 @@ function slotFloorMs(ts: number): number {
 // is roughly the width where individual bubbles still separate. Anything older
 // is one scroll-out away; the user's pan/zoom is never overridden after the
 // initial fit (see didFitRef).
+// Spot / last-price line. Same gray as PDH/PDL so the "reference, not signal"
+// lines read as one family.
+const SPOT_LINE_GRAY = "#9ca3af";
+// Estimated-move bands — violet, deliberately clear of the gray session lines,
+// the blue overnight lines, the amber IB lines and the cyan/red GEX walls.
+const EM_VIOLET = "#a78bfa";
+
+/**
+ * Parse a price out of a ticker_levels field.
+ *
+ * levels-engine.js stores these via toLocaleString, so they arrive as formatted
+ * strings ("7,650.25"). Number() on that is NaN. Values under 1000 (SPY, QQQ)
+ * carry no separator and parse fine either way — which is exactly what makes
+ * skipping this a bug that only ever shows up on ES and SPX.
+ */
+function parseLevelNum(v: unknown): number | null {
+  if (v == null) return null;
+  const n = Number(String(v).replace(/,/g, "").trim());
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 const DEFAULT_VIEW_MS = 4 * 60 * 60_000;
 const DEFAULT_VIEW_BARS = Math.round(DEFAULT_VIEW_MS / CANDLE_MS);
 // Right gutter, in bars, so the newest candle isn't jammed against the price
@@ -688,6 +763,43 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const historical = isEs ? esHistorical : etfRows;
   const connected = isEs ? esConnected : etfConnected;
 
+  // ── Weekly estimated-move bands (rides the PDH/ON overlay) ─────────────────
+  // Source: GET /api/levels?ticker=ES|SPY|QQQ → one ticker_levels row, published
+  // by server-v2/levels-auto-publish.js each Friday 16:00 ET.
+  //
+  // Two things about this endpoint that are easy to get wrong:
+  //   • It answers 200 with a literal `null` body when the ticker has never been
+  //     published — not a 404. `!r.ok` does NOT catch that.
+  //   • up/down/close are FORMATTED STRINGS, not numbers — levels-engine.js runs
+  //     them through toLocaleString, so ES arrives as "7,650.25". Every existing
+  //     consumer (EmCustomer) renders them raw as text, so the thousands
+  //     separator has never mattered until now. Number("7,650.25") is NaN, and
+  //     because SPY/QQQ sit under 1000 and carry no comma, a naive parse would
+  //     look perfectly fine on the ETFs and silently drop the bands on ES only.
+  //
+  // Already in the CHART's price space — no basis conversion, unlike the GEX
+  // walls. levels-engine computes ES as `indexClose + em + (esClose - indexClose)`
+  // i.e. esClose ± em, and SPY/QQQ natively.
+  const [emWeekly, setEmWeekly] = useState<{ up: number; down: number; exp: string } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/levels?ticker=${encodeURIComponent(sym.key)}`, { cache: "no-store" });
+        if (!r.ok) { if (!cancelled) setEmWeekly(null); return; }
+        const j = await r.json();
+        if (cancelled) return;
+        const up = parseLevelNum(j?.up);
+        const down = parseLevelNum(j?.down);
+        // Bands are NULLed server-side by /api/levels/expire-stale once the week
+        // they were struck for has passed, so "missing" is the correct signal to
+        // draw nothing rather than to fall back to a stale band.
+        setEmWeekly(up != null && down != null ? { up, down, exp: String(j?.exp_label ?? "") } : null);
+      } catch { if (!cancelled) setEmWeekly(null); }
+    })();
+    return () => { cancelled = true; };
+  }, [sym.key]);
+
   // Chart candles: 2-day rolling window, deliberately matched to the GEX
   // retention. The heatmap's historical columns resolve via timeToCoordinate,
   // which only works for timestamps ON the chart's time scale — so the window
@@ -745,7 +857,13 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // DRAW time using the live ESU basis (same as the other levels), so the line
   // tracks the current /ESU price — not the stale per-row esPrice.
   const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; spx: number; spxPx: number; basis: number | null }>>([]);
-  const showMvcLine = true; // CB level always on
+  // CB (central band / MVC) step line. Lives with the BUBBLES controls, not the
+  // Levels group: the top bubble — or `highlight 1` — is already marking the MVC
+  // strike, so CB is the same read in line form and belongs beside the controls
+  // that govern it. Persisted in the bubble blob alongside `on` / `mins`.
+  // Defaults true, which is what it was before (a hardcoded `showMvcLine = true`).
+  const [showCb, setShowCb] = useState(true);
+  const updateShowCb = useCallback((on: boolean) => { setShowCb(on); writeBubbleBlob({ cb: on }); }, []);
   // Default OFF everywhere (was: on unless embedded). The default read on this
   // chart is candles + GEX bubbles + the rail; the heatmap is the heaviest thing
   // here (a ~1.6MB backfill and a full-canvas per-column paint) and is now
@@ -934,7 +1052,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // Deriving it per-column means the marker can never disagree with the bubbles
   // the user is looking at, and it costs no new fetch. Single-day, like bubbles.
   const [showFlipCross, setShowFlipCross] = useState(false);
-  const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
+  // Call/Put/Flip dashed lines. The MVC/CB step line used to ride along here;
+  // it now lives under the Bubbles sub-panel (see showCb).
+  const [showLevels, setShowLevels] = useState(false);
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
   // Right-side vertical GEX-by-strike rail. On by default EVERYWHERE, including
   // the home card (`embedded`) — the rail + bubbles are the default read. If the
@@ -1034,6 +1154,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // The two non-slider settings.
     if (p.mins === 1 || p.mins === 5) setBubbleMins(p.mins);
     if (typeof p.on === "boolean") setShowGexBubbles(p.on);
+    if (typeof p.cb === "boolean") setShowCb(p.cb);
   }, []);
   // Patch the config with slider constraints enforced, then persist:
   //   • Highlight can't exceed Show Top Strikes (lowering N pulls X down).
@@ -1883,6 +2004,12 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         borderVisible: true,
         borderUpColor: "#30d158",
         borderDownColor: "#ff5b5b",
+        // Spot / last-price line + its axis tag in NEUTRAL GRAY. Left unset it
+        // inherits the candle color, so it flipped green/red with the current
+        // bar — which put a saturated line right where the eye needs a stable
+        // reference, and made it compete with the Call/Put/Flip levels that
+        // actually earn their color. Gray reads as "you are here", not "signal".
+        priceLineColor: SPOT_LINE_GRAY,
       });
       chartApiRef.current = chart;
       candleSeriesRef.current = candleSeries;
@@ -2223,6 +2350,35 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     prevSymbolRef.current = symbol;
     columnsRef.current.clear();
     minuteColsRef.current.clear();
+    // ── Re-fit the view for the new instrument ────────────────────────────────
+    // ES trades ~7500 and SPY ~750 — a 10x price-space change. Two things kept
+    // the axis parked on the old range:
+    //   1. `didFitRef` stays true after the first fit (by design — the user's
+    //      pan/zoom must never be stomped on live updates), so the candle-data
+    //      effect's `!didFitRef.current || dayChanged` condition never fired for
+    //      a symbol switch and the time window was never re-derived.
+    //   2. lightweight-charts turns the right scale's `autoScale` OFF the moment
+    //      you drag the price axis, and never turns it back on. Once off, new
+    //      data at a completely different magnitude does NOT rescale — the
+    //      candles just render off-screen above or below the visible band.
+    // A symbol change is exactly the case where overriding the user's framing is
+    // correct: their zoom was for a different instrument. Same two calls the
+    // double-click "recenter" handler makes.
+    //
+    // Both a flag reset AND an immediate apply, because effects flush in
+    // DECLARATION order and the candle-data effect is declared above this one.
+    // On the render where `symbol` flips, `rows` has already recomputed (isEs is
+    // in its deps), so that effect runs first — with the new bars but with
+    // didFitRef still true, so it skips the fit. Clearing the flag alone would
+    // then rely on `rows` changing AGAIN to trigger it, which isn't guaranteed
+    // when the new symbol's candles were already cached. Applying here catches
+    // that case (barCountRef was just updated by the effect above, so it's the
+    // new count); leaving the flag false lets the definitive fit re-run when the
+    // rest of the new symbol's history streams in.
+    didFitRef.current = false;
+    lastFitDayRef.current = "";
+    try { chartApiRef.current?.priceScale("right").applyOptions({ autoScale: true }); } catch { /* chart not up yet */ }
+    applyDefaultView(chartApiRef.current, barCountRef.current);
     // Deliberately NOT touching lastHeatmapKeyRef. Effects flush in declaration
     // order, and the backfill effect above already ran for the new symbol — it
     // set the key and started its fetch. Clearing it here would make that
@@ -2361,6 +2517,19 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       );
     }
 
+    // Weekly EM bands, on the same PDH/ON toggle — all four are "where did this
+    // instrument already trade / where is it expected to stay" reference levels,
+    // as opposed to the GEX walls, which are positioning. Dashed + violet so
+    // they don't read as another session high/low. The expiry label rides in the
+    // title so the axis tag says which week the band was struck for.
+    if (showSessions && emWeekly) {
+      const wk = emWeekly.exp ? ` ${emWeekly.exp}` : "";
+      defs.push(
+        { price: emWeekly.up,   color: EM_VIOLET, title: `EM+${wk}`, style: LineStyle.Dashed, width: 1 },
+        { price: emWeekly.down, color: EM_VIOLET, title: `EM−${wk}`, style: LineStyle.Dashed, width: 1 },
+      );
+    }
+
     // Initial Balance (IBH / IBL / 50%) — toggled by the IB tab. ES prices.
     if (showIb && ibLevels) {
       defs.push(
@@ -2396,7 +2565,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         title: d.title,
       }));
     }
-  }, [lineLevels, showLevels, showSessions, sessionLevels, showIb, ibLevels]);
+  }, [lineLevels, showLevels, showSessions, sessionLevels, showIb, ibLevels, emWeekly]);
 
   // ── Heatmap canvas overlay ────────────────────────────────────────────────
   // Paints one column per 5-min GEX snapshot. Each cell spans its strike bucket
@@ -3033,7 +3202,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       // Each constant-value run draws as one flat line from its first timestamp
       // to the change point; when MVC jumps we lift the pen (small gap), then
       // start the next flat segment — so you never see the vertical move.
-      if (showMvcLine && mvcHistory.length) {
+      if (showCb && mvcHistory.length) {
         ctx.save();
         ctx.strokeStyle = "rgba(255,255,255,.95)"; // MVC — thick white
         ctx.lineWidth = 3;
@@ -3247,7 +3416,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       container?.removeEventListener("pointerup", schedule);
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, showGexBubbles, bubbleCfg, bubbleMins, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, showFlipCross, mvcHistory]);
+  }, [showHeatmap, showGexBubbles, bubbleCfg, bubbleMins, intensity, gexMetric, rows, showProfile, profile, showTpo, tpoProfiles, showLevels, showFlipCross, mvcHistory, showCb]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -3387,88 +3556,96 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 { label: "Profile", on: showProfile, toggle: () => setShowProfile((v) => !v) },
                 { label: "TPO", on: showTpo, toggle: () => setShowTpo((v) => !v) },
                 { label: "Levels", on: showLevels, toggle: () => setShowLevels((v) => !v) },
-                { label: "PDH/ON", on: showSessions, toggle: () => setShowSessions((v) => !v) },
+                { label: "PDH/ON+EM", on: showSessions, toggle: () => setShowSessions((v) => !v) },
                 { label: "GEX Rail", on: showRail, toggle: () => setShowRail((v) => !v) },
                 { label: "Bubbles", on: showGexBubbles, toggle: () => updateShowBubbles(!showGexBubbles) },
                 { label: "Flip X", on: showFlipCross, toggle: () => setShowFlipCross((v) => !v) },
               ] as const).map((o) => (
-                <button
-                  key={o.label}
-                  onClick={o.toggle}
-                  className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-xs"
-                  style={{ borderRadius: 7, border: o.on ? `1px solid ${DOCK_THEME.activeBorder}` : "1px solid transparent", background: o.on ? DOCK_THEME.activeTile : "transparent", color: o.on ? HOME_THEME.cyan : HOME_THEME.text, fontWeight: 600, minWidth: 0 }}
-                  onMouseEnter={(e) => { if (!o.on) e.currentTarget.style.background = DOCK_THEME.hoverTile; }}
-                  onMouseLeave={(e) => { if (!o.on) e.currentTarget.style.background = "transparent"; }}
-                >
-                  <span
-                    style={{
-                      width: 12, height: 12, flexShrink: 0, borderRadius: 3,
-                      border: `1px solid ${o.on ? HOME_THEME.cyan : HOME_THEME.border}`,
-                      background: o.on ? HOME_THEME.cyan : "transparent",
-                      color: DOCK_THEME.bg, fontSize: 9, lineHeight: "10px", textAlign: "center", fontWeight: 900,
-                    }}
-                  >
-                    {o.on ? "✓" : ""}
-                  </span>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{o.label}</span>
-                </button>
+                <PanelChip key={o.label} label={o.label} on={o.on} onClick={o.toggle} />
               ))}
               </div>
 
-              {/* Sub-controls only make sense when their overlay is on */}
+              {/* Sub-controls only make sense when their overlay is on.
+                  SLIDER_LABEL_W is shared by every slider below so the labels,
+                  tracks, values and steppers form real columns across sections
+                  instead of each row sizing itself to its own label. */}
               {showHeatmap && (
-                <div className="mt-1 px-3 pb-1 pt-2" style={{ borderTop: `1px solid ${HOME_THEME.border}` }} title="Heatmap backfill range">
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, marginBottom: 4 }}>Heatmap range</div>
-                  <SegGroup
-                    options={[{ label: "1D", value: "1" }, { label: "2D", value: "2" }]}
-                    active={String(heatmapDays)}
-                    onChange={(v) => setHeatmapDays(Number(v) === 2 ? 2 : 1)}
-                  />
+                <div style={{ marginTop: 7, paddingTop: 8, borderTop: `1px solid ${HOME_THEME.border}` }}>
+                  <PanelSection title="Heatmap range" first>
+                    <SegGroup
+                      options={[{ label: "1D", value: "1" }, { label: "2D", value: "2" }]}
+                      active={String(heatmapDays)}
+                      onChange={(v) => setHeatmapDays(Number(v) === 2 ? 2 : 1)}
+                    />
+                  </PanelSection>
                 </div>
               )}
               {showGexBubbles && (
-                <div className="mt-1 px-3 pb-1 pt-2" style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, marginBottom: 4 }}>Strikes shown</div>
-                  <DockSlider
-                    label="top" value={bubbleCfg.topStrikes} min={1} max={30} step={1}
-                    format={(v) => v.toFixed(0)} onChange={(v) => updateBubbleCfg({ topStrikes: Math.round(v) })}
-                    title="Show Top Strikes — draw only the N strongest strikes (by |GEX|) per column"
-                  />
-                  <DockSlider
-                    label="highlight" value={bubbleCfg.highlight} min={0} max={bubbleCfg.topStrikes} step={1}
-                    format={(v) => v.toFixed(0)} onChange={(v) => updateBubbleCfg({ highlight: Math.round(v) })}
-                    title="Highlight Top N Walls — the strongest X of the shown strikes render larger, brighter, glowing (can't exceed Top)"
-                  />
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, margin: "8px 0 4px" }}>Bubble size</div>
-                  <DockSlider
-                    label="min" value={bubbleCfg.minSize} min={BUBBLE_CFG_RANGE.minSize.min} max={BUBBLE_CFG_RANGE.minSize.max} step={0.05}
-                    format={(v) => v.toFixed(2)} onChange={(v) => updateBubbleCfg({ minSize: v })}
-                    title="Min bubble radius (px) — the size of the smallest strike (can't exceed Max). Default 0.50 = center of the slider"
-                  />
-                  <DockSlider
-                    label="max" value={bubbleCfg.maxSize} min={BUBBLE_CFG_RANGE.maxSize.min} max={BUBBLE_CFG_RANGE.maxSize.max} step={0.1}
-                    format={(v) => v.toFixed(1)} onChange={(v) => updateBubbleCfg({ maxSize: v })}
-                    title="Max bubble radius (px) — the size of the largest wall (√-scaled so area ∝ |GEX|)"
-                  />
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, margin: "8px 0 4px" }}>Brightness</div>
-                  <DockSlider
-                    label="bright" value={bubbleCfg.brightness} min={0} max={100} step={1}
-                    format={(v) => `${v.toFixed(0)}%`} onChange={(v) => updateBubbleCfg({ brightness: Math.round(v) })}
-                    title="Brightness gradient — 0% = every strike full opacity; higher fades smaller strikes so walls dominate"
-                  />
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, margin: "8px 0 4px" }}>Bubble time</div>
-                  <SegGroup
-                    options={[{ label: "1m", value: "1" }, { label: "5m", value: "5" }]}
-                    active={String(bubbleMins)}
-                    onChange={(v) => updateBubbleMins(Number(v) === 1 ? 1 : 5)}
-                  />
+                <div style={{ marginTop: 7, paddingTop: 8, borderTop: `1px solid ${HOME_THEME.border}` }}>
+                  <PanelSection title="Strikes shown" first>
+                    <DockSlider
+                      label="top" labelWidth={SLIDER_LABEL_W} width="auto"
+                      value={bubbleCfg.topStrikes} min={1} max={30} step={1}
+                      format={(v) => v.toFixed(0)} onChange={(v) => updateBubbleCfg({ topStrikes: Math.round(v) })}
+                      title="Show Top Strikes — draw only the N strongest strikes (by |GEX|) per column"
+                    />
+                    <DockSlider
+                      label="highlight" labelWidth={SLIDER_LABEL_W} width="auto"
+                      value={bubbleCfg.highlight} min={0} max={bubbleCfg.topStrikes} step={1}
+                      format={(v) => v.toFixed(0)} onChange={(v) => updateBubbleCfg({ highlight: Math.round(v) })}
+                      title="Highlight Top N Walls — the strongest X of the shown strikes render larger, brighter, glowing (can't exceed Top)"
+                    />
+                  </PanelSection>
+
+                  <PanelSection title="Bubble size">
+                    <DockSlider
+                      label="min" labelWidth={SLIDER_LABEL_W} width="auto"
+                      value={bubbleCfg.minSize} min={BUBBLE_CFG_RANGE.minSize.min} max={BUBBLE_CFG_RANGE.minSize.max} step={0.05}
+                      format={(v) => v.toFixed(2)} onChange={(v) => updateBubbleCfg({ minSize: v })}
+                      title="Min bubble radius (px) — the size of the smallest strike (can't exceed Max). Default 0.50 = center of the slider"
+                    />
+                    <DockSlider
+                      label="max" labelWidth={SLIDER_LABEL_W} width="auto"
+                      value={bubbleCfg.maxSize} min={BUBBLE_CFG_RANGE.maxSize.min} max={BUBBLE_CFG_RANGE.maxSize.max} step={0.1}
+                      format={(v) => v.toFixed(1)} onChange={(v) => updateBubbleCfg({ maxSize: v })}
+                      title="Max bubble radius (px) — the size of the largest wall (√-scaled so area ∝ |GEX|)"
+                    />
+                    <DockSlider
+                      label="bright" labelWidth={SLIDER_LABEL_W} width="auto"
+                      value={bubbleCfg.brightness} min={0} max={100} step={1}
+                      format={(v) => `${v.toFixed(0)}%`} onChange={(v) => updateBubbleCfg({ brightness: Math.round(v) })}
+                      title="Brightness gradient — 0% = every strike full opacity; higher fades smaller strikes so walls dominate"
+                    />
+                  </PanelSection>
+
+                  <PanelSection title="Bucket">
+                    <SegGroup
+                      options={[{ label: "1m", value: "1" }, { label: "5m", value: "5" }]}
+                      active={String(bubbleMins)}
+                      onChange={(v) => updateBubbleMins(Number(v) === 1 ? 1 : 5)}
+                    />
+                  </PanelSection>
+
+                  {/* CB (MVC) lives HERE, not under Levels. The top bubble — or
+                      `highlight 1` — is already marking the MVC strike, so the CB
+                      step line is the same read in line form; it belongs beside
+                      the controls that decide what the bubbles emphasize. */}
+                  <PanelSection title="Marker">
+                    <PanelChip
+                      label="CB line"
+                      on={showCb}
+                      onClick={() => updateShowCb(!showCb)}
+                      title="Central Band (MVC) as a white step line. Same strike the top bubble marks — turn it off if the bubble is enough."
+                    />
+                  </PanelSection>
+
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, paddingTop: 8, borderTop: `1px solid ${HOME_THEME.border}` }}>
                     <button
                       onClick={saveBubbleDefault}
                       title="Pin the current sliders + bucket as your default. Survives a hard refresh; Reset comes back here."
                       style={{
-                        fontSize: 9.5, letterSpacing: ".06em", textTransform: "uppercase",
-                        padding: "3px 9px", borderRadius: 6, cursor: "pointer", fontWeight: 700,
+                        flex: 1, fontSize: 9, letterSpacing: ".07em", textTransform: "uppercase",
+                        padding: "4px 6px", borderRadius: 6, cursor: "pointer", fontWeight: 800,
                         border: `1px solid ${DOCK_THEME.activeBorder}`, background: DOCK_THEME.activeTile, color: HOME_THEME.cyan,
                       }}
                     >
@@ -3478,16 +3655,24 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                       onClick={resetBubbleCfg}
                       title="Restore your saved default (or the factory values if you haven't saved one)"
                       style={{
-                        fontSize: 9.5, letterSpacing: ".06em", textTransform: "uppercase",
-                        padding: "3px 9px", borderRadius: 6, cursor: "pointer",
+                        flex: 1, fontSize: 9, letterSpacing: ".07em", textTransform: "uppercase",
+                        padding: "4px 6px", borderRadius: 6, cursor: "pointer", fontWeight: 800,
                         border: `1px solid ${HOME_THEME.border}`, background: "transparent", color: HOME_THEME.muted,
                       }}
                     >
                       Reset
                     </button>
-                    <span style={{ marginLeft: "auto", fontSize: 9.5, letterSpacing: ".06em", textTransform: "uppercase", color: defSavedFlash ? "#1FD98A" : HOME_THEME.muted, opacity: defSavedFlash ? 1 : 0.55, transition: "opacity .2s, color .2s" }}>
-                      {defSavedFlash ? "saved ✓" : "auto-saved"}
-                    </span>
+                    {/* Status moved onto its own line-end dot+word so the two
+                        buttons can share the width evenly instead of being
+                        squeezed by a variable-length label. */}
+                    <span
+                      title={defSavedFlash ? "Saved" : "Changes are saved automatically"}
+                      style={{
+                        flexShrink: 0, width: 7, height: 7, borderRadius: 99,
+                        background: defSavedFlash ? "#1FD98A" : HOME_THEME.muted,
+                        opacity: defSavedFlash ? 1 : 0.4, transition: "opacity .2s, background .2s",
+                      }}
+                    />
                   </div>
                 </div>
               )}

@@ -119,7 +119,26 @@ const textW = (s: string, fs: number) => s.length * fs * 0.6;
 
 interface Node { name: string; a0: number; a1: number; rows: Row[]; chg: number }
 
-export default function SectorSunburst({ maxWheel }: { maxWheel?: number } = {}) {
+export default function SectorSunburst({
+  maxWheel,
+  showMovers = true,
+  fill = false,
+}: {
+  maxWheel?: number;
+  /** Top/Bottom movers table under the wheel. Off for a wheel-only tile. */
+  showMovers?: boolean;
+  /**
+   * Fill the parent box instead of sizing from width.
+   *
+   * Default (false) is the original behaviour: the SVG is width:100% and, being
+   * square, ends up as tall as the column is wide. In `fill` mode the body
+   * becomes a flex column and the wheel takes whatever height is left over
+   * after the header and footer — so in a resizable dashboard tile the wheel
+   * grows and shrinks with the card, and the SVG's own preserveAspectRatio
+   * keeps it round in any box shape.
+   */
+  fill?: boolean;
+} = {}) {
   // `maxWheel` caps the inline wheel at N px so the card can be sized to match a
   // neighbour (the Options page pairs it with the SPX heatmap). The SVG is
   // square and width:100%, so without a cap the wheel's height is just the
@@ -141,6 +160,10 @@ export default function SectorSunburst({ maxWheel }: { maxWheel?: number } = {})
   // cap and the loaded payload all survive the move.
   const [expanded, setExpanded] = useState(false);
   const [isFs, setIsFs] = useState(false);
+  // `fill` is an inline-card layout mode. The pop-out is a fixed overlay that
+  // sizes itself from the viewport, so it keeps the original flow. Declared
+  // here and not up with `compact` because it reads `expanded`.
+  const fillInline = fill && !expanded;
   const RING = focus ? RING_FOCUS : RING_ALL;
   const boxRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -396,13 +419,23 @@ export default function SectorSunburst({ maxWheel }: { maxWheel?: number } = {})
         flexDirection: expanded ? "row" : "column",
         alignItems: expanded ? "flex-start" : "stretch",
         gap: expanded ? 28 : 0,
+        // fill: take the card's leftover height so the wheel can claim it.
+        ...(fillInline ? { flex: 1, minHeight: 0 } : null),
       }}>
-      <div style={{ flex: expanded ? "1 1 460px" : undefined, minWidth: 0, display: "flex", justifyContent: "center" }}>
+      <div style={{
+        flex: expanded ? "1 1 460px" : fillInline ? 1 : undefined,
+        minWidth: 0,
+        minHeight: fillInline ? 0 : undefined,
+        display: "flex",
+        justifyContent: "center",
+      }}>
       <div ref={boxRef} style={{
-        position: "relative", width: "100%",
+        position: "relative",
+        width: "100%",
         maxWidth: expanded
           ? "min(100%, calc(100vh - 200px))"
           : compact ? maxWheel : undefined,
+        ...(fillInline ? { minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center" } : null),
       }}>
         {!data && !err && (
           <div style={{ padding: "48px 12px", textAlign: "center", color: HT.muted, opacity: 0.6, fontSize: 12 }}>
@@ -416,7 +449,15 @@ export default function SectorSunburst({ maxWheel }: { maxWheel?: number } = {})
         )}
 
         {data && (
-          <svg viewBox={`${-VB / 2} ${-VB / 2} ${VB} ${VB}`} style={{ display: "block", width: "100%", height: "auto" }}>
+          <svg
+            viewBox={`${-VB / 2} ${-VB / 2} ${VB} ${VB}`}
+            // height:100% + the default preserveAspectRatio letterboxes the
+            // square wheel inside whatever box the tile leaves it, so it grows
+            // and shrinks with the card without ever going oval.
+            style={fillInline
+              ? { display: "block", width: "100%", height: "100%", minHeight: 0 }
+              : { display: "block", width: "100%", height: "auto" }}
+          >
             {/* scale rings */}
             {[0.5, 1].map((f) => (
               <circle key={f} r={R0 + f * AMP} fill="none" stroke={HT.border} strokeWidth={1} />
@@ -613,9 +654,16 @@ export default function SectorSunburst({ maxWheel }: { maxWheel?: number } = {})
       </div>
 
       {/* side rail when popped out, footer stack when in the card */}
-      <div style={{ flex: expanded ? "0 1 280px" : undefined, minWidth: expanded ? 220 : 0, width: expanded ? undefined : "100%" }}>
-      {/* biggest movers — the wheel is too small for callouts, so name them here */}
-      {data && (
+      <div style={{
+        flex: expanded ? "0 1 280px" : undefined,
+        minWidth: expanded ? 220 : 0,
+        width: expanded ? undefined : "100%",
+        ...(fillInline ? { flexShrink: 0 } : null),
+      }}>
+      {/* biggest movers — the wheel is too small for callouts, so name them
+          here. Suppressed by showMovers={false} (the wheel-only tile), and
+          always shown in the pop-out, which has the room. */}
+      {data && (showMovers || expanded) && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
           {([["Top", movers.top], ["Bottom", movers.bottom]] as const).map(([head, list]) => (
             <div key={head}>
@@ -701,5 +749,19 @@ export default function SectorSunburst({ maxWheel }: { maxWheel?: number } = {})
     );
   }
 
-  return <div ref={snapRef}>{content}</div>;
+  // In fill mode this wrapper is the link between the card's flex column and the
+  // wheel's own: left as a plain block it takes its natural height (wheel +
+  // chrome), the card body scrolls, and the wheel never learns how much room it
+  // actually has. As a zero-basis flex column it inherits the tile's height and
+  // hands the leftover down to the SVG.
+  return (
+    <div
+      ref={snapRef}
+      style={fillInline
+        ? { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }
+        : undefined}
+    >
+      {content}
+    </div>
+  );
 }

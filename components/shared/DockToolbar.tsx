@@ -318,6 +318,8 @@ export function DockSlider({
   accent = ACCENT,
   title,
   steppers = true,
+  labelWidth,
+  valueWidth = 34,
 }: {
   label?: string;
   value: number;
@@ -326,11 +328,21 @@ export function DockSlider({
   step?: number;
   onChange: (v: number) => void;
   format?: (v: number) => string;
-  width?: number;
+  /** Track width in px, or "auto" to flex-fill the remaining row width. */
+  width?: number | "auto";
   accent?: string;
   title?: string;
   steppers?: boolean;
+  /**
+   * Fixed label column width. Set this on every slider in a stacked group and
+   * the labels, tracks, values and steppers line up into real columns — without
+   * it each row is sized by its own label ("top" vs "highlight") and the whole
+   * group reads as ragged.
+   */
+  labelWidth?: number;
+  valueWidth?: number;
 }) {
+  const fluid = width === "auto";
   // Latest value for the hold-to-repeat timer, which would otherwise close over
   // the value from the render that started it and step only once.
   const valueRef = useRef(value);
@@ -366,6 +378,8 @@ export function DockSlider({
   const atMin = value <= min;
   const atMax = value >= max;
 
+  // One bordered pill split by a hairline, rather than two floating boxes —
+  // reads as a single control and holds a tidy column in a stacked group.
   const stepBtn = (dir: 1 | -1, disabled: boolean) => (
     <button
       type="button"
@@ -377,22 +391,15 @@ export function DockSlider({
       onPointerLeave={stopHold}
       onPointerCancel={stopHold}
       style={{
-        // Flex-centred, not display:block + a hand-tuned lineHeight. The block
-        // version pinned the glyph with `lineHeight: 7px` inside a 9px box,
-        // which scripts/audit-ui.mjs flags (--strict, so it fails the build):
-        // an inline non-flex `display` plus an explicit height defeats the
-        // globals.css centring rule. Same 14x9 stepper, centred by layout.
         display: "flex", alignItems: "center", justifyContent: "center",
-        width: 14, height: 9, padding: 0, lineHeight: 1,
-        fontSize: 7, fontWeight: 900,
-        borderRadius: 3,
-        border: `1px solid ${disabled ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.16)"}`,
-        background: disabled ? "transparent" : "rgba(255,255,255,.06)",
-        color: disabled ? "rgba(255,255,255,.18)" : accent,
+        width: 15, height: 9, padding: 0,
+        fontSize: 6, fontWeight: 900, border: "none", background: "transparent",
+        borderBottom: dir === 1 ? "1px solid rgba(255,255,255,.10)" : "none",
+        color: disabled ? "rgba(255,255,255,.16)" : accent,
         cursor: disabled ? "default" : "pointer",
       }}
-      onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.background = "rgba(255,255,255,.14)"; }}
-      onMouseLeave={(e) => { if (!disabled) e.currentTarget.style.background = "rgba(255,255,255,.06)"; }}
+      onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.background = "rgba(255,255,255,.12)"; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
     >
       {dir === 1 ? "▲" : "▼"}
     </button>
@@ -405,7 +412,10 @@ export function DockSlider({
     // targets the slider.
     <span
       title={title}
-      style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}
+      style={{
+        display: "flex", alignItems: "center", gap: 5,
+        flexShrink: 0, ...(fluid ? { width: "100%" } : null),
+      }}
     >
       <style>{`
         input.dock-slider{-webkit-appearance:none;appearance:none;height:4px;border-radius:99px;background:rgba(255,255,255,.12);outline:none;cursor:pointer}
@@ -414,9 +424,15 @@ export function DockSlider({
         input.dock-slider::-moz-range-track{height:4px;border-radius:99px;background:rgba(255,255,255,.12)}
       `}</style>
       <label
-        style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 10, color: "rgba(255,255,255,.55)", fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}
+        style={{
+          display: "flex", alignItems: "center", gap: 7, fontSize: 10,
+          color: "rgba(255,255,255,.55)", fontWeight: 700, whiteSpace: "nowrap",
+          ...(fluid ? { flex: 1, minWidth: 0 } : { flexShrink: 0 }),
+        }}
       >
-        {label && <span>{label}</span>}
+        {label && (
+          <span style={labelWidth ? { width: labelWidth, flexShrink: 0 } : undefined}>{label}</span>
+        )}
         <input
           className="dock-slider"
           type="range"
@@ -425,12 +441,21 @@ export function DockSlider({
           step={step}
           value={value}
           onChange={(e) => onChange(Number(e.target.value))}
-          style={{ width, accentColor: accent }}
+          style={fluid
+            ? { flex: 1, minWidth: 0, accentColor: accent }
+            : { width, accentColor: accent }}
         />
-        <span style={{ minWidth: 34, fontVariantNumeric: "tabular-nums", fontSize: 10, color: accent }}>{format(value)}</span>
+        <span style={{
+          width: valueWidth, flexShrink: 0, textAlign: "right",
+          fontVariantNumeric: "tabular-nums", fontSize: 10, color: accent,
+        }}>{format(value)}</span>
       </label>
       {steppers && (
-        <span style={{ display: "flex", flexDirection: "column", gap: 1, flexShrink: 0 }}>
+        <span style={{
+          display: "flex", flexDirection: "column", flexShrink: 0,
+          borderRadius: 4, overflow: "hidden",
+          border: "1px solid rgba(255,255,255,.14)", background: "rgba(255,255,255,.04)",
+        }}>
           {stepBtn(1, atMax)}
           {stepBtn(-1, atMin)}
         </span>

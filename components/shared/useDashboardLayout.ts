@@ -38,36 +38,27 @@ export type LayoutTemplate = {
 export type SaveState = "idle" | "saving" | "saved" | "error";
 
 /**
- * Reconcile a saved layout against the page's current card set.
- * Saved geometry wins for ids that still exist; cards the user has never seen
- * are appended below everything else so nothing lands hidden.
+ * Reconcile a saved layout against what the page can actually render.
  *
- * The result is run through compactLayout, so a template saved before a card
- * was added — or written by an older client that allowed overlaps — can never
- * come back as a stack of cards on top of each other.
+ * A saved template is the user's OWN card set — which cards, and where. So when
+ * one exists it wins outright: we keep its items (minus any the page can no
+ * longer draw) and do NOT merge the built-in cards back in. Merging them would
+ * undo every removal the moment the page reloaded.
+ *
+ * `defaults` is only the fallback for someone with nothing saved yet.
+ *
+ * The result is compacted, so a template written by an older client that
+ * allowed overlaps can never come back as a stack of cards on top of each other.
  */
-export function mergeLayout(saved: GridItem[], defaults: GridItem[]): GridItem[] {
-  const savedById = new Map(saved.map((i) => [i.id, i]));
-  const known = new Set(defaults.map((d) => d.id));
-  const kept: GridItem[] = [];
-  const missing: GridItem[] = [];
-
-  for (const d of defaults) {
-    const s = savedById.get(d.id);
-    if (s) kept.push({ ...d, x: s.x, y: s.y, w: s.w, h: s.h });
-    else missing.push(d);
-  }
-  // User-added cards (iframe tiles etc.) aren't in `defaults` — keep them.
-  for (const s of saved) if (!known.has(s.id) && s.type) kept.push({ ...s });
-
-  if (missing.length) {
-    let y = kept.reduce((m, i) => Math.max(m, i.y + i.h), 0);
-    for (const m of missing) {
-      kept.push({ ...m, y });
-      y += m.h;
-    }
-  }
-  return compactLayout(kept);
+export function mergeLayout(
+  saved: GridItem[],
+  defaults: GridItem[],
+  /** Optional gate — return false for ids this page has no renderer for. */
+  canRender?: (id: string) => boolean,
+): GridItem[] {
+  const keep = (saved ?? []).filter((i) => i && typeof i.id === "string" && (!canRender || canRender(i.id)));
+  if (!keep.length) return compactLayout(defaults.map((d) => ({ ...d })));
+  return compactLayout(keep.map((i) => ({ ...i })));
 }
 
 function sameLayout(a: GridItem[], b: GridItem[]): boolean {
@@ -77,7 +68,12 @@ function sameLayout(a: GridItem[], b: GridItem[]): boolean {
   return key(a) === key(b);
 }
 
-export function useDashboardLayout(page: string, defaults: GridItem[]) {
+export function useDashboardLayout(
+  page: string,
+  defaults: GridItem[],
+  /** Ids this page can draw. Anything else is dropped when a template loads. */
+  canRender?: (id: string) => boolean,
+) {
   const [layout, setLayoutState] = useState<GridItem[]>(defaults);
   const [templates, setTemplates] = useState<LayoutTemplate[]>([]);
   const [activeName, setActiveName] = useState<string | null>(null);
@@ -89,6 +85,8 @@ export function useDashboardLayout(page: string, defaults: GridItem[]) {
   // `defaults` is almost always a module constant, but don't rely on that.
   const defaultsRef = useRef(defaults);
   defaultsRef.current = defaults;
+  const canRenderRef = useRef(canRender);
+  canRenderRef.current = canRender;
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeName;
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -113,7 +111,7 @@ export function useDashboardLayout(page: string, defaults: GridItem[]) {
         const pick = list.find((t) => t.isDefault) ?? list[0];
         if (pick) {
           setActiveName(pick.name);
-          setLayoutState(mergeLayout(pick.layout ?? [], defaultsRef.current));
+          setLayoutState(mergeLayout(pick.layout ?? [], defaultsRef.current, canRenderRef.current));
         }
       } catch {
         /* offline / blocked — built-in layout stands */
@@ -204,7 +202,7 @@ export function useDashboardLayout(page: string, defaults: GridItem[]) {
       if (!t) return;
       if (timerRef.current) clearTimeout(timerRef.current);
       setActiveName(name);
-      setLayoutState(mergeLayout(t.layout ?? [], defaultsRef.current));
+      setLayoutState(mergeLayout(t.layout ?? [], defaultsRef.current, canRenderRef.current));
       void post({ name, action: "set-default" }).then(refresh).catch(() => {});
     },
     [templates, post, refresh],
@@ -223,7 +221,7 @@ export function useDashboardLayout(page: string, defaults: GridItem[]) {
       if (activeRef.current === name) {
         const next = rest[0] ?? null;
         setActiveName(next?.name ?? null);
-        setLayoutState(next ? mergeLayout(next.layout ?? [], defaultsRef.current) : defaultsRef.current);
+        setLayoutState(next ? mergeLayout(next.layout ?? [], defaultsRef.current, canRenderRef.current) : defaultsRef.current);
       }
       void refresh();
     },

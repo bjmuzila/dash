@@ -24,6 +24,7 @@ import ThemedSelect from "./ThemedSelect";
 import type { LayoutBarProps } from "./useDashboardLayout";
 
 const NEW = "__new__";
+const ADD = "__add__";
 
 export default function LayoutBar({
   editing,
@@ -37,7 +38,13 @@ export default function LayoutBar({
   onSelect,
   onDelete,
   onReset,
-}: LayoutBarProps) {
+  addOptions,
+  onAdd,
+}: LayoutBarProps & {
+  /** Card types the page can add. Omit to hide the Add-card control. */
+  addOptions?: { value: string; label: string }[];
+  onAdd?: (value: string) => void;
+}) {
   const [naming, setNaming] = useState(false);
   const [draftName, setDraftName] = useState("");
 
@@ -82,6 +89,19 @@ export default function LayoutBar({
 
       {editing && (
         <>
+          {onAdd && addOptions && addOptions.length > 0 && (
+            <div style={{ minWidth: 150 }}>
+              <ThemedSelect
+                ariaLabel="Add a card"
+                value=""
+                placeholder="+ Add card"
+                width={150}
+                options={addOptions.map((o) => ({ value: o.value, label: o.label }))}
+                onChange={(v) => { if (v && v !== ADD) onAdd(v); }}
+              />
+            </div>
+          )}
+
           {templates.length > 0 && (
             <div style={{ minWidth: 180 }}>
               <ThemedSelect

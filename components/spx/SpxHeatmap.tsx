@@ -41,9 +41,12 @@ const REFRESH_MS = 60 * 60_000;
 // Cell/gap are the only size knobs — every other dimension (column height,
 // month-block widths, the sticky year gutter) is derived from them, so scaling
 // the whole grid is a two-number change. ~1/3 down from the original 13/3.
-const CELL = 9;
-const GAP = 2;
-const MONTH_ROW_H = 12; // month-label strip above each year row
+//
+// These are now the DEFAULTS: the component takes a `cell` prop so a caller
+// that owns a resizable box (the Options dashboard tile) can redraw the grid at
+// whatever size fits, crisply, instead of CSS-scaling a fixed-size render.
+const CELL_DEFAULT = 9;
+const GAP_DEFAULT = 2;
 const DAY_OFFSETS = [1, 2, 3, 4, 5]; // Mon..Fri, relative to each week's Sunday
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -103,7 +106,15 @@ function fmtPct(ret: number): string {
   return `${sign}${(ret * 100).toFixed(2)}%`;
 }
 
-export default function SpxHeatmap() {
+export default function SpxHeatmap({ cell }: { cell?: number } = {}) {
+  // Everything downstream reads CELL/GAP/MONTH_ROW_H, so overriding them here
+  // rescales the entire grid — column height, month blocks, the year gutter —
+  // with no other change. Gap tightens on small cells so the grid stays a grid
+  // rather than dissolving into gaps; the month strip tracks the cell so its
+  // labels never crowd the squares.
+  const CELL = Math.max(3, Math.round(cell ?? CELL_DEFAULT));
+  const GAP = CELL >= 7 ? GAP_DEFAULT : 1;
+  const MONTH_ROW_H = Math.max(8, Math.round(CELL * 1.34));
   const uid = useId().replace(/[:]/g, "");
   const [mode, setMode] = useState<Mode>("daily");
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -240,11 +251,16 @@ export default function SpxHeatmap() {
     }
     return blocks;
   }
+  // CELL/GAP are in the deps because buildMonthBlocks bakes PIXEL offsets
+  // (left/width) into every block. Without them a resize recomputes the cells
+  // but reuses stale month-block geometry, and the monthly overlay drifts out
+  // of alignment with the grid underneath it.
   const yearMonthBlocks = useMemo(() => {
     const map = new Map<string, ReturnType<typeof buildMonthBlocks>>();
     years.forEach((y) => map.set(y, buildMonthBlocks(yearWeeks.get(y)!)));
     return map;
-  }, [years, yearWeeks, monthStats]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [years, yearWeeks, monthStats, CELL, GAP]);
 
   const showTooltip = useCallback((e: React.MouseEvent, text: string) => {
     setTooltip({ x: e.clientX, y: e.clientY, text });
