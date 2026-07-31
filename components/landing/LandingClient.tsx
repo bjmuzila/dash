@@ -60,6 +60,12 @@ export default function LandingClient() {
         @media (prefers-reduced-motion: reduce) { .fw { animation: none !important; opacity: 1; } }
         .landing-feature { transition: border-color .18s, box-shadow .18s, transform .18s; cursor: pointer; }
         .landing-feature:hover { border-color: rgba(33,158,188,0.45) !important; box-shadow: 0 0 18px rgba(33,158,188,0.25); transform: translateY(-2px); }
+        /* Below the two-column breakpoint the card goes back to a single
+           stacked column and the feature grid drops from 3-up to 2-up. */
+        @media (max-width: 900px) {
+          .landing-card .landing-top { grid-template-columns: 1fr !important; gap: 0 !important; }
+          .landing-card .landing-features { grid-template-columns: 1fr 1fr !important; }
+        }
         @media (max-width: 640px) {
           .landing-card .landing-logo { max-height: 96px !important; margin: 8px 0 10px !important; }
           .landing-card .landing-intro { font-size: 14px !important; margin: 0 0 12px !important; line-height: 1.4 !important; }
@@ -124,27 +130,36 @@ export default function LandingClient() {
           {/* Accent glow bleeding through the glass */}
           <div style={cardGlow} aria-hidden />
 
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/cb-edge-logo.png" alt={APP_NAME} style={logo} className="landing-logo" />
+          {/* Two columns on desktop: pitch + proof on the left, product shot on
+              the right. Stacking all of it vertically pushed the card well past
+              the viewport; side by side it lands in one screen with no scroll. */}
+          <div style={topGrid} className="landing-top">
+            <div>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/cb-edge-logo.png" alt={APP_NAME} style={logo} className="landing-logo" />
 
-          <div style={trialBadge} className="landing-trial">
-            <span style={trialDot} /> 2-DAY FREE TRIAL · NO CHARGE UP FRONT
+              <div style={trialBadge} className="landing-trial">
+                <span style={trialDot} /> 2-DAY FREE TRIAL · NO CHARGE UP FRONT
+              </div>
+
+              <p className="landing-intro" style={{ color: T.muted, fontSize: 16, margin: "0 0 16px", maxWidth: 520, lineHeight: 1.5 }}>
+                A real-time SPX gamma-exposure &amp; options-flow dashboard for serious 0DTE and index
+                traders. See dealer positioning, flow, and key levels the moment they move.
+              </p>
+
+              {/* Receipts sit with the pitch and above the CTA: see it →
+                  believe it → start. With a 2-day trial there isn't room to be
+                  convinced later, so the proof has to land before the click. */}
+              <ReceiptsStrip />
+            </div>
+
+            {/* Show the product before asking for anything. Drop /hero-loop.mp4
+                into public/ and this becomes a live capture; until then it holds
+                the frame with the existing still. */}
+            <div style={{ alignSelf: "center", minWidth: 0 }}>
+              <HeroVideo />
+            </div>
           </div>
-
-          <p className="landing-intro" style={{ color: T.muted, fontSize: 17, margin: "0 0 22px", maxWidth: 520, lineHeight: 1.5 }}>
-            A real-time SPX gamma-exposure &amp; options-flow dashboard for serious 0DTE and index
-            traders. See dealer positioning, flow, and key levels the moment they move.
-          </p>
-
-          {/* Show the product before asking for anything. Drop /hero-loop.mp4
-              into public/ and this becomes a live capture; until then it holds
-              the frame with the existing still. */}
-          <HeroVideo />
-
-          {/* Receipts sit directly under the product shot and above the CTA:
-              see it → believe it → start. With a 2-day trial there isn't room
-              to be convinced later, so the proof has to land before the click. */}
-          <ReceiptsStrip />
 
           <div style={featureGrid} className="landing-features">
             {FEATURES.map((f) => (
@@ -164,7 +179,7 @@ export default function LandingClient() {
           </div>
 
           {/* ONE primary action. Everything above exists to earn this click. */}
-          <div style={{ marginTop: 24 }}>
+          <div style={{ marginTop: 18, display: "flex", justifyContent: "center" }}>
             <Link href="/pricing?from=landing&trial=1" style={{ ...ctaBtn, textDecoration: "none" }}>
               <span>Start your 2-day free trial</span>
               <span style={{ fontSize: 12, fontWeight: 700, opacity: 0.85, letterSpacing: "0.04em" }}>
@@ -287,13 +302,13 @@ const trialDot: React.CSSProperties = {
 const card: React.CSSProperties = {
   position: "relative",
   overflow: "hidden",
-  width: "min(620px, 100%)",
+  width: "min(1080px, 100%)",
   background: "linear-gradient(180deg, rgba(13,17,25,0.78), rgba(7,9,14,0.86))",
   backdropFilter: "blur(22px)",
   WebkitBackdropFilter: "blur(22px)",
   border: "1px solid rgba(33,158,188,0.14)",
   borderRadius: 20,
-  padding: "clamp(16px, 4vw, 40px)",
+  padding: "clamp(16px, 3vw, 30px)",
   boxShadow:
     "0 30px 80px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px rgba(33,158,188,0.04)",
 };
@@ -316,16 +331,27 @@ const logo: React.CSSProperties = {
   width: "100%",
   maxWidth: "100%",
   height: "auto",
-  maxHeight: 200,
+  maxHeight: 132,
   objectFit: "contain",
-  margin: "18px 0 18px",
+  margin: "0 0 14px",
   filter: "drop-shadow(0 6px 20px rgba(33,158,188,0.25))",
 };
 
+// Three across on purpose: six features in two rows instead of three keeps the
+// whole card inside one viewport.
 const featureGrid: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "1fr 1fr",
+  gridTemplateColumns: "repeat(3, 1fr)",
   gap: 12,
+  marginTop: 18,
+};
+
+const topGrid: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+  gap: 26,
+  alignItems: "start",
+  textAlign: "left",
 };
 
 const featureCell: React.CSSProperties = {
@@ -341,8 +367,8 @@ const featureCell: React.CSSProperties = {
 // The one primary action on the page. Full-width and visually unambiguous:
 // nothing else on the landing is styled to compete with it.
 const ctaBtn: React.CSSProperties = {
-  width: "100%",
-  padding: "15px 18px",
+  width: "min(560px, 100%)",
+  padding: "14px 18px",
   borderRadius: 12,
   border: "1px solid rgba(33,158,188,0.65)",
   background: "linear-gradient(180deg, rgba(33,158,188,0.42), rgba(33,158,188,0.20))",
@@ -364,7 +390,7 @@ const ctaBtn: React.CSSProperties = {
 // being weighed against the trial.
 const signInLink: React.CSSProperties = {
   display: "block",
-  marginTop: 14,
+  marginTop: 10,
   textAlign: "center",
   fontSize: 14,
   fontWeight: 600,

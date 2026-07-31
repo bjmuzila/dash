@@ -23,22 +23,10 @@ import FitScale from "@/components/shared/FitScale";
 import { HOME_THEME, DOCK_THEME, LIGHT_BLUE, SOFT_RED, dissolveCardStyle } from "@/components/shared/homeTheme";
 import EsGexRail, { type RailRow } from "@/components/dashboard/EsGexRail";
 import type { EsCandleRecord } from "@/lib/snapdb";
-import { classifyBars, VSA_DEFAULTS, type VsaTuning, type VsaResult } from "@/lib/vsa";
 
 
 // Card/accent styling now sourced from the shared theme (see BUDGET_UI_STYLE.md).
 const dissolveCard = dissolveCardStyle;
-
-// VSA candle palette. The default series colors live on the series options
-// (addSeries below); these are the per-bar overrides for the two inefficient
-// classes only. Both classes render HOLLOW — transparent body, colored outline —
-// so a signal bar is legible as a signal at a glance and the heatmap / GEX
-// bubbles behind the chart stay readable through it. Churn = theme orange,
-// thin = its own direction outlined.
-const VSA_UP = "#30d158";
-const VSA_DOWN = "#ff5b5b";
-const VSA_CHURN = HOME_THEME.orange;
-const VSA_HOLLOW = "rgba(0,0,0,0)";
 
 function toChartTime(ts: number): UTCTimestamp {
   return Math.floor(ts / 1000) as UTCTimestamp;
@@ -685,18 +673,18 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // further than 2 days: the chart window below is 2 days, the heatmap/bubble
   // backfill is capped at 2880min (option_strike_gex_history is pruned to 48h
   // server-side), and sessionCandles is a 30h rolling window. The 20-day pull was
-  // ~114KB / 250ms on every load to feed avg5/avg14 — which this page does not
-  // even destructure — plus the VSA baseline (see the vsaMap note below).
+  // ~114KB / 250ms on every load to feed avg5/avg14 (which this page never
+  // destructured) and the VSA baseline (since removed).
   // The hook DEFAULT stays 20 so RelVol / IB Logic keep their full baselines.
   const { sessionCandles: liveRows, historical: esHistorical, connected: esConnected, refresh: esRefresh } = useEsCandles(true, 2);
   // ETF bars come over HTTP from the etf_candles recorder, not /ws/gex. Passing
   // "" when ES is active keeps the hook completely idle — no fetch, no interval.
   const { rows: etfRows, connected: etfConnected, refresh: etfRefresh } = useEtfCandles(isEs ? "" : sym.gexSymbol, 5, 5);
 
-  // History feed for the derived layers (VSA baselines, prior-session levels,
-  // the ES basis anchor). ES has 20 sessions from SQLite; the ETF side has the
-  // 5-day window the recorder backfills, and that same array doubles as its
-  // "live" rows since there is no separate streaming source.
+  // History feed for the derived layers (prior-session levels, the ES basis
+  // anchor). ES has 2 sessions from SQLite; the ETF side has the window the
+  // recorder backfills, and that same array doubles as its "live" rows since
+  // there is no separate streaming source.
   const historical = isEs ? esHistorical : etfRows;
   const connected = isEs ? esConnected : etfConnected;
 
@@ -935,10 +923,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
 
   const [showProfile, setShowProfile] = useState(false);
   const [showTpo, setShowTpo] = useState(false); // prev-day + today TPO box profile
-  // VSA candle coloring — effort (RVOL) vs result (body/range). Volume-based,
-  // NOT delta: dxFeed candles carry no aggressor side, and per-print TimeAndSale
-  // classification saturated the streamer last time. See lib/vsa.ts.
-  const [showVsa, setShowVsa] = useState(false);
   // Flip Cross Pulse — rings the bars where price actually CROSSED the gamma
   // flip, plus the derived flip path itself.
   //
@@ -950,27 +934,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // Deriving it per-column means the marker can never disagree with the bubbles
   // the user is looking at, and it costs no new fetch. Single-day, like bubbles.
   const [showFlipCross, setShowFlipCross] = useState(false);
-  const [vsaTuning, setVsaTuning] = useState<VsaTuning>(VSA_DEFAULTS);
-  // VSA classification for the visible bars. MUST stay below the showVsa /
-  // vsaTuning declarations above: it closes over both, and hoisting it up beside
-  // the other `rows` memos put it in their temporal dead zone — which typechecks
-  // and dev-renders fine, then dies only in the prerender as
-  // "Cannot access 'aA' before initialization".
-  // Baseline comes from `historical` rather than `rows` so the per-slot median
-  // sees every session that was loaded, not just what's on screen.
-  //
-  // CAVEAT: `historical` is now a 2-day pull (see the useEsCandles call above),
-  // so this median is built from ~2 prior sessions instead of ~20. VSA still
-  // classifies, but its thin/wide-spread calls are noisier than they were. If
-  // that starts mattering, make the pull follow the toggle:
-  //     useEsCandles(true, showVsa ? 20 : 2)
-  // — VSA defaults OFF, so the deep pull would only be paid when it's actually on.
-  const vsaMap = useMemo(() => {
-    if (!showVsa) return new Map<string, VsaResult>();
-    // The bar covering "now" has partial volume and would always read as thin.
-    const formingBefore = Date.now() - 5 * 60 * 1000;
-    return classifyBars(rows, historical, vsaTuning, formingBefore);
-  }, [showVsa, rows, historical, vsaTuning]);
   const [showLevels, setShowLevels] = useState(false);  // Call/Put/Flip/MVC dashed lines + MVC step line
   const [showSessions, setShowSessions] = useState(false); // prior-day + overnight H/L
   // Right-side vertical GEX-by-strike rail. On by default EVERYWHERE, including
@@ -1849,12 +1812,11 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         upColor: "#30d158",
         wickDownColor: "#ff5b5b",
         downColor: "#ff5b5b",
-        // Borders ON, in the SAME color as the fills. Normal candles look
-        // identical to the old borderVisible:false rendering (a 1px border over
-        // a matching body is invisible), but a per-bar `color: transparent` +
-        // `borderColor` can now render a hollow candle — which is how the VSA
-        // signal bars are drawn. borderVisible:false would swallow the outline
-        // and leave those bars as empty gaps.
+        // Borders ON, in the SAME color as the fills — visually identical to
+        // borderVisible:false (a 1px border over a matching body is invisible).
+        // Kept on so a future per-bar `color: transparent` + `borderColor` can
+        // render a hollow candle; borderVisible:false would swallow the outline
+        // and leave such bars as empty gaps.
         borderVisible: true,
         borderUpColor: "#30d158",
         borderDownColor: "#ff5b5b",
@@ -1955,33 +1917,13 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
 
     // Replay: reveal only bars at/before the cursor (null = live, full history).
     const srcRows = replayTs != null ? rows.filter((r) => r.timestamp <= replayTs) : rows;
-    const candleData: CandlestickData[] = srcRows.map((row) => {
-      const base: CandlestickData = {
-        time: toChartTime(row.timestamp),
-        open: row.open,
-        high: row.high,
-        low: row.low,
-        close: row.close,
-      };
-      if (!showVsa) return base;
-      const v = vsaMap.get(row.slotKey);
-      // "normal" and unscored bars keep the default series colors — only the two
-      // inefficient classes are repainted, so an unusual bar stays unusual to the
-      // eye instead of every bar shouting.
-      if (!v || v.cls === "normal") return base;
-      if (v.cls === "churn") {
-        // Effort with no ground: hollow orange. NOTE the wick is orange too, not
-        // tinted by closePos as it was when the body was solid — a churn bar is
-        // small-body BY DEFINITION (bodyPct <= smallBody), so once hollow it is
-        // almost all wick. A green/red wick would have made the bar read as a
-        // normal candle and buried the one thing it is there to say.
-        return { ...base, color: VSA_HOLLOW, borderColor: VSA_CHURN, wickColor: VSA_CHURN };
-      }
-      // Ground with no effort: hollow, in its own direction. This is the classic
-      // hollow-candle idiom — same move, no one behind it.
-      const dir = row.close >= row.open ? VSA_UP : VSA_DOWN;
-      return { ...base, color: VSA_HOLLOW, borderColor: dir, wickColor: dir };
-    });
+    const candleData: CandlestickData[] = srcRows.map((row) => ({
+      time: toChartTime(row.timestamp),
+      open: row.open,
+      high: row.high,
+      low: row.low,
+      close: row.close,
+    }));
 
     candleSeries.setData(candleData);
     // Track the price band the candles actually occupy so the heatmap can fade
@@ -2011,7 +1953,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     drawOverlayRef.current();
     drawLanesRef.current();
     railDrawRef.current();
-  }, [rows, showVsa, vsaMap, replayTs]);
+  }, [rows, replayTs]);
 
   // Live SPX badge: last ES close → SPX, pinned at its y-coordinate on the
   // right gutter. Recomputed on data, basis, and pan/zoom (range subscribe).
@@ -3359,7 +3301,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
             <DockButton onClick={openOvl} title="Chart overlays">
               <span>Overlays</span>
               {(() => {
-                const n = [showHeatmap, showProfile, showTpo, showLevels, showSessions, showRail, showGexBubbles, showVsa, showFlipCross].filter(Boolean).length;
+                const n = [showHeatmap, showProfile, showTpo, showLevels, showSessions, showRail, showGexBubbles, showFlipCross].filter(Boolean).length;
                 return n ? (
                   <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 6px", borderRadius: 999, background: DOCK_THEME.activeTile, border: `1px solid ${DOCK_THEME.activeBorder}`, color: HOME_THEME.cyan }}>{n}</span>
                 ) : null;
@@ -3382,7 +3324,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 { label: "GEX Rail", on: showRail, toggle: () => setShowRail((v) => !v) },
                 { label: "Bubbles", on: showGexBubbles, toggle: () => updateShowBubbles(!showGexBubbles) },
                 { label: "Flip X", on: showFlipCross, toggle: () => setShowFlipCross((v) => !v) },
-                { label: "VSA", on: showVsa, toggle: () => setShowVsa((v) => !v) },
               ] as const).map((o) => (
                 <button
                   key={o.label}
@@ -3480,28 +3421,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                       {defSavedFlash ? "saved ✓" : "auto-saved"}
                     </span>
                   </div>
-                </div>
-              )}
-              {showVsa && (
-                <div className="mt-1 px-3 pb-1 pt-2" style={{ borderTop: `1px solid ${HOME_THEME.border}` }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, marginBottom: 4 }}>
-                    VSA — effort vs result
-                  </div>
-                  <div style={{ fontSize: 10, color: HOME_THEME.muted, opacity: 0.65, lineHeight: 1.4, marginBottom: 6 }}>
-                    <span style={{ color: VSA_CHURN, fontWeight: 800 }}>▢</span> churn: heavy vol, no ground (absorption)<br />
-                    <span style={{ color: VSA_UP, fontWeight: 800 }}>▢</span> hollow: ground, no vol (unopposed)<br />
-                    <span style={{ opacity: 0.7 }}>Signal bars are hollow. Volume-based, not delta — no aggressor side.</span>
-                  </div>
-                  <DockSlider label="hi rvol" value={vsaTuning.hiRvol} min={1.2} max={3} step={0.1} width={70} format={(v) => `${v.toFixed(1)}x`}
-                    onChange={(v) => setVsaTuning((t) => ({ ...t, hiRvol: v }))} title="Churn: RVOL at/above this = heavy effort" />
-                  <DockSlider label="lo rvol" value={vsaTuning.loRvol} min={0.2} max={1} step={0.05} width={70} format={(v) => `${v.toFixed(2)}x`}
-                    onChange={(v) => setVsaTuning((t) => ({ ...t, loRvol: v }))} title="Thin: RVOL at/below this = no effort" />
-                  <DockSlider label="sm body" value={vsaTuning.smallBody} min={0.1} max={0.5} step={0.02} width={70}
-                    onChange={(v) => setVsaTuning((t) => ({ ...t, smallBody: v }))} title="Churn: body/range at/below this = no ground" />
-                  <DockSlider label="big body" value={vsaTuning.bigBody} min={0.5} max={0.95} step={0.02} width={70}
-                    onChange={(v) => setVsaTuning((t) => ({ ...t, bigBody: v }))} title="Thin: body/range at/above this = ground gained" />
-                  <DockSlider label="lookback" value={vsaTuning.lookbackDays} min={3} max={20} step={1} width={70} format={(v) => `${Math.round(v)}d`}
-                    onChange={(v) => setVsaTuning((t) => ({ ...t, lookbackDays: Math.round(v) }))} title="Prior sessions feeding the per-slot volume baseline" />
                 </div>
               )}
             </div>,
