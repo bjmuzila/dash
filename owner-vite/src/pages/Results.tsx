@@ -871,7 +871,7 @@ function TradesView() {
   }, []);
 
   const actionBtn = (disabled: boolean): React.CSSProperties => ({
-    fontSize: 13, fontWeight: 800, padding: "6px 14px", borderRadius: 8,
+    fontSize: 14, fontWeight: 800, padding: "6px 14px", borderRadius: 8,
     cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.6 : 1,
     border: `1px solid ${C.border}`, background: "transparent", color: C.label,
     letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
@@ -906,7 +906,7 @@ function TradesView() {
     color: range === key ? C.cyan : C.label, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
   });
 
-  const th: React.CSSProperties = { padding: "10px 14px", fontSize: 13, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
+  const th: React.CSSProperties = { padding: "10px 14px", fontSize: 14, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
   const td: React.CSSProperties = { padding: "10px 14px", fontSize: 14, whiteSpace: "nowrap", fontFamily: "var(--font-mono)" };
 
   return (
@@ -944,7 +944,7 @@ function TradesView() {
           {busy ? "Running…" : "Run now"}
         </button>
         <button onClick={() => void runDiagnose()} disabled={busy} style={actionBtn(busy)}>Diagnose</button>
-        {status && <span style={{ fontSize: 13, color: status.bad ? AMBER : GREEN, fontFamily: "var(--font-mono)" }}>{status.text}</span>}
+        {status && <span style={{ fontSize: 14, color: status.bad ? AMBER : GREEN, fontFamily: "var(--font-mono)" }}>{status.text}</span>}
       </div>
 
       {/* Per-checkpoint roll-up */}
@@ -953,17 +953,21 @@ function TradesView() {
           const accent = wrColor(s.winRate);
           return (
             <div key={s.key} className="card-hover" style={{ ...CARD, borderTop: `2px solid ${rgba(accent, 0.5)}`, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 17, fontWeight: 800, color: C.label }}>{s.label}</span>
-                <span style={{ fontSize: 13, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              {/* Type scale is the dashboard's, not this card's own: 17 for the
+                  title, 14 for everything else, C.label for text, mono only on
+                  numbers — the same block the ICT and Confidence cards use. A
+                  20px headline stat here made this one card shout next to them. */}
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+                <span style={{ fontSize: 17, fontWeight: 800, color: C.label, letterSpacing: "0.02em" }}>{s.label}</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.12em", whiteSpace: "nowrap" }}>
                   {s.trades}/{s.probes} taken
                 </span>
               </div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                <span style={{ fontSize: 20, fontWeight: 800, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1 }}>
+                <span style={{ fontSize: 14, fontWeight: 800, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1 }}>
                   {s.winRate != null ? `${Math.round(s.winRate * 100)}%` : "—"}
                 </span>
-                <span style={{ fontSize: 13, color: C.label, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                <span style={{ fontSize: 14, color: C.label, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>
                   win rate{s.trades > 0 ? ` · ${s.wins}/${s.trades - s.openNow}` : ""}
                 </span>
               </div>
@@ -986,7 +990,7 @@ function TradesView() {
                 </span>
               </div>
               {s.openNow > 0 && (
-                <span style={{ fontSize: 13, color: C.cyan, fontWeight: 700 }}>{s.openNow} open right now</span>
+                <span style={{ fontSize: 14, color: C.cyan, fontWeight: 700 }}>{s.openNow} open right now</span>
               )}
             </div>
           );
@@ -1054,7 +1058,7 @@ function TradesView() {
                               only one of them is how you end up reading a 6635C as if the
                               board had said the CB was 6635. */}
                           {t.cb_strike != null && Number(t.cb_strike) !== Number(t.strike) && (
-                            <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: MUTED }}>
+                            <span style={{ marginLeft: 6, fontSize: 14, fontWeight: 700, color: MUTED }}>
                               ←CB {Number(t.cb_strike).toFixed(0)}
                             </span>
                           )}
@@ -1081,7 +1085,7 @@ function TradesView() {
                             style={{ color: t.exit_reason === "sell-signal" ? GREEN : AMBER, fontWeight: 700 }}
                           >
                             ${Number(t.exit_price).toFixed(2)}
-                            <span style={{ marginLeft: 5, fontSize: 11, color: MUTED }}>
+                            <span style={{ marginLeft: 5, fontSize: 14, color: MUTED }}>
                               {t.exit_reason === "sell-signal" ? `${Number(t.signal_dist).toFixed(1)}pt` : "eod"}
                             </span>
                           </span>
@@ -1095,7 +1099,7 @@ function TradesView() {
                         {shown != null ? (
                           <>
                             {`${shown > 0 ? "+" : ""}${shown.toFixed(2)}${pnl == null ? "*" : ""}`}
-                            <span style={{ marginLeft: 7, fontSize: 12, fontWeight: 700, color: MUTED }}>
+                            <span style={{ marginLeft: 7, fontSize: 14, fontWeight: 700, color: MUTED }}>
                               {shown >= 0 ? "+" : "−"}${Math.abs(shown * mult).toFixed(0)}
                             </span>
                           </>
@@ -1107,7 +1111,7 @@ function TradesView() {
               </tbody>
             </table>
           </div>
-          <div style={{ borderTop: `1px solid ${C.border}`, padding: "10px 14px", display: "flex", gap: 18, flexWrap: "wrap", fontSize: 13, color: MUTED }}>
+          <div style={{ borderTop: `1px solid ${C.border}`, padding: "10px 14px", display: "flex", gap: 18, flexWrap: "wrap", fontSize: 14, color: MUTED }}>
             <span>{totals.probes} checkpoints probed · {totals.taken} traded · {totals.open} open</span>
             <span>{totals.winRate != null ? `${Math.round(totals.winRate * 100)}% win rate (${totals.wins}/${totals.closed})` : "nothing closed yet"}</span>
             <span style={{ color: totals.usd >= 0 ? GREEN : RED, fontWeight: 800 }}>
@@ -1137,11 +1141,11 @@ function DiagnoseModal({ data, onClose }: { data: unknown; onClose: () => void }
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(5,6,10,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ ...CARD, width: "min(900px, 100%)", maxHeight: "88vh", overflow: "auto", padding: "18px 20px" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 12 }}>
-          <span style={{ fontSize: 16, fontWeight: 800, color: C.purple, textTransform: "uppercase", letterSpacing: "0.08em" }}>Recorder diagnosis</span>
-          <span style={{ fontSize: 12, color: MUTED }}>recorder liveness · CB per checkpoint · a live probe · row/tick counts</span>
-          <button onClick={onClose} style={{ marginLeft: "auto", font: "inherit", fontSize: 18, fontWeight: 800, cursor: "pointer", background: "transparent", border: `1px solid ${C.border}`, color: C.label, borderRadius: 7, padding: "2px 10px" }}>×</button>
+          <span style={{ fontSize: 17, fontWeight: 800, color: C.purple, textTransform: "uppercase", letterSpacing: "0.08em" }}>Recorder diagnosis</span>
+          <span style={{ fontSize: 14, color: MUTED }}>recorder liveness · CB per checkpoint · a live probe · row/tick counts</span>
+          <button onClick={onClose} style={{ marginLeft: "auto", font: "inherit", fontSize: 17, fontWeight: 800, cursor: "pointer", background: "transparent", border: `1px solid ${C.border}`, color: C.label, borderRadius: 7, padding: "2px 10px" }}>×</button>
         </div>
-        <pre style={{ margin: 0, fontSize: 12, lineHeight: 1.55, color: C.label, fontFamily: "var(--font-mono)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+        <pre style={{ margin: 0, fontSize: 14, lineHeight: 1.55, color: C.label, fontFamily: "var(--font-mono)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
           {JSON.stringify(data, null, 2)}
         </pre>
       </div>
@@ -1180,7 +1184,7 @@ function CbProbeChart({
     // these as "0 polls recorded", which reads as a broken chart even when the
     // honest answer was "this was never a position".
     return (
-      <div style={{ padding: "40px 0", textAlign: "center", color: MUTED, fontSize: 13, fontFamily: "var(--font-mono)", lineHeight: 1.7 }}>
+      <div style={{ padding: "40px 0", textAlign: "center", color: MUTED, fontSize: 14, fontFamily: "var(--font-mono)", lineHeight: 1.7 }}>
         {pts.length === 0
           ? <>No polls recorded yet. The recorder writes one tick a minute while a position is open — if this stays at zero, the poll is failing rather than pending. Press <b>Diagnose</b>.</>
           : <>Only one poll recorded — not enough for a line. A trade that sold on its first poll has a single point.</>}
@@ -1238,7 +1242,7 @@ function CbProbeChart({
             height={Math.max(0, sy(band[0]) - sy(band[1]))}
             fill={rgba(GREEN, 0.1)} stroke={rgba(GREEN, 0.35)} strokeWidth={1}
           />
-          <text x={W - PADR - 4} y={sy(band[1]) - 4} textAnchor="end" fontSize={10} fill={rgba(GREEN, 0.9)} fontFamily="var(--font-mono)">
+          <text x={W - PADR - 4} y={sy(band[1]) - 4} textAnchor="end" fontSize={11} fill={rgba(GREEN, 0.9)} fontFamily="var(--font-mono)">
             sell band {band[0]}–{band[1]} pt
           </text>
         </>
@@ -1249,7 +1253,7 @@ function CbProbeChart({
       {metric === "mark" && entry != null && (
         <>
           <line x1={PADL} y1={sy(entry)} x2={W - PADR} y2={sy(entry)} stroke={rgba(MUTED, 0.6)} strokeWidth={1} strokeDasharray="4 4" />
-          <text x={PADL + 4} y={sy(entry) - 5} fontSize={10} fill={MUTED} fontFamily="var(--font-mono)">entry ${entry.toFixed(2)}</text>
+          <text x={PADL + 4} y={sy(entry) - 5} fontSize={11} fill={MUTED} fontFamily="var(--font-mono)">entry ${entry.toFixed(2)}</text>
         </>
       )}
 
@@ -1308,12 +1312,12 @@ function CbProbeModal({
 
   const stat = (label: string, value: string, color: string = C.label) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      <span style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.08em" }}>{label}</span>
-      <span style={{ fontSize: 15, fontWeight: 800, color, fontFamily: "var(--font-mono)" }}>{value}</span>
+      <span style={{ fontSize: 14, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.08em" }}>{label}</span>
+      <span style={{ fontSize: 14, fontWeight: 800, color, fontFamily: "var(--font-mono)" }}>{value}</span>
     </div>
   );
   const tgl = (on: boolean): React.CSSProperties => ({
-    fontSize: 13, fontWeight: 800, padding: "5px 12px", borderRadius: 7, cursor: "pointer",
+    fontSize: 14, fontWeight: 800, padding: "5px 12px", borderRadius: 7, cursor: "pointer",
     border: `1px solid ${on ? C.cyan : C.border}`,
     background: on ? rgba(C.cyan, 0.18) : "transparent",
     color: on ? C.cyan : C.label, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
@@ -1332,16 +1336,16 @@ function CbProbeModal({
         style={{ ...CARD, width: "min(1040px, 100%)", maxHeight: "90vh", overflowY: "auto", padding: "20px 22px", display: "flex", flexDirection: "column", gap: 16 }}
       >
         <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 18, fontWeight: 800, color: C.cyan, fontFamily: "var(--font-mono)" }}>
+          <span style={{ fontSize: 17, fontWeight: 800, color: C.cyan, fontFamily: "var(--font-mono)" }}>
             {trade.ticker} {contractLabel(trade)}
           </span>
-          <span style={{ fontSize: 13, color: MUTED, fontFamily: "var(--font-mono)" }}>
+          <span style={{ fontSize: 14, color: MUTED, fontFamily: "var(--font-mono)" }}>
             {trade.expiration} 0DTE · {trade.checkpoint_label ?? trade.checkpoint} checkpoint · {trade.date}
           </span>
           <button
             onClick={onClose}
             title="Close (Esc)"
-            style={{ marginLeft: "auto", font: "inherit", fontSize: 18, fontWeight: 800, lineHeight: 1, cursor: "pointer", background: "transparent", border: `1px solid ${C.border}`, color: C.label, borderRadius: 7, padding: "4px 11px" }}
+            style={{ marginLeft: "auto", font: "inherit", fontSize: 17, fontWeight: 800, lineHeight: 1, cursor: "pointer", background: "transparent", border: `1px solid ${C.border}`, color: C.label, borderRadius: 7, padding: "4px 11px" }}
           >
             ×
           </button>
@@ -1380,7 +1384,7 @@ function CbProbeModal({
         )}
 
         {trade.last_error && (
-          <div style={{ color: AMBER, fontSize: 13, fontFamily: "var(--font-mono)", border: `1px solid ${rgba(AMBER, 0.4)}`, background: rgba(AMBER, 0.1), borderRadius: 8, padding: "9px 12px", lineHeight: 1.6 }}>
+          <div style={{ color: AMBER, fontSize: 14, fontFamily: "var(--font-mono)", border: `1px solid ${rgba(AMBER, 0.4)}`, background: rgba(AMBER, 0.1), borderRadius: 8, padding: "9px 12px", lineHeight: 1.6 }}>
             Last poll did not price this contract — <b>{trade.last_error}</b>
             <div style={{ marginTop: 4, color: MUTED }}>
               The row stops moving when this happens; the mark shown above is the last one that did price.
@@ -1396,9 +1400,9 @@ function CbProbeModal({
           // Never a position, so there is no curve and never will be. Say that
           // plainly instead of rendering an empty chart frame.
           <div style={{ padding: "28px 22px", textAlign: "center", border: `1px dashed ${C.border}`, borderRadius: 10, lineHeight: 1.75 }}>
-            <div style={{ fontSize: 15, fontWeight: 800, color: AMBER, marginBottom: 6 }}>Not taken</div>
-            <div style={{ fontSize: 13, color: C.label, fontFamily: "var(--font-mono)" }}>{trade.skip_reason ?? "no reason recorded"}</div>
-            <div style={{ marginTop: 8, fontSize: 12, color: MUTED }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: AMBER, marginBottom: 6 }}>Not taken</div>
+            <div style={{ fontSize: 14, color: C.label, fontFamily: "var(--font-mono)" }}>{trade.skip_reason ?? "no reason recorded"}</div>
+            <div style={{ marginTop: 8, fontSize: 14, color: MUTED }}>
               Probed at {etClock(n(trade.probe_ts) ?? 0)}
               {trade.cb_price != null
                 ? ` — the CB ${Number(trade.cb_strike ?? 0).toFixed(0)} came back at $${Number(trade.cb_price).toFixed(2)}`
@@ -1418,7 +1422,7 @@ function CbProbeModal({
           />
         )}
 
-        <div style={{ fontSize: 12, color: MUTED, fontFamily: "var(--font-mono)", letterSpacing: "0.04em", lineHeight: 1.6 }}>
+        <div style={{ fontSize: 14, color: MUTED, fontFamily: "var(--font-mono)", letterSpacing: "0.04em", lineHeight: 1.6 }}>
           {metric === "mark" ? "Contract mark" : metric === "spot" ? "SPX spot at each poll" : "SPX distance to the CB"}
           {" · "}priced through <b>/proxy/probe-rest</b> (TastyTrade / dxLink), one poll a minute while the position was open —
           the same pipeline the /owner/probe page uses. TastyTrade has no per-contract history, so this curve is the only
