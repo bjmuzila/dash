@@ -9,6 +9,7 @@ import { useRefreshButton } from "@/hooks/useRefreshButton";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { SqueezeBoard } from "@/app/squeeze/page";
 import DealerGammaTab from "./DealerGammaTab";
+import VolGexFlowPanel from "@/components/dashboard/VolGexFlowPanel";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test page: SPX / SPY / QQQ directional options-flow inventory, live from the
@@ -2089,7 +2090,10 @@ type LeftCardKey = (typeof LEFT_CARD_KEYS)[number];
 // stays 0DTE-only). useCardOrder appends keys it doesn't find in saved order, so
 // adding them here lands them at the bottom for anyone with a stored layout —
 // no need to bump RIGHT_CARD_ORDER_STORAGE_KEY and reset everyone's arrangement.
-const RIGHT_CARD_KEYS = ["oiExpiry", "netGamma", "netGammaAll", "netGammaEx0dte", "callPutGamma", "netDelta"] as const;
+// volFlow is the only TIME-series card in this column — everything else is
+// by-strike. It answers "how did today's vol GEX get to the level the boards
+// above are showing", which a strike ladder structurally cannot.
+const RIGHT_CARD_KEYS = ["oiExpiry", "netGamma", "netGammaAll", "netGammaEx0dte", "callPutGamma", "netDelta", "volFlow"] as const;
 type RightCardKey = (typeof RIGHT_CARD_KEYS)[number];
 const RIGHT_CARD_ORDER_STORAGE_KEY = "gexlevels-card-order-right-v3";
 const LEFT_CARD_ORDER_STORAGE_KEY = "gexlevels-card-order-left-v3";
@@ -2439,6 +2443,18 @@ function GexLevelsTab() {
                   >
                     <NetDeltaByStrikeChart rows={d.rows} spot={d.spot} />
                     <ChartLegend items={[{ label: "Positive", color: LIGHT_BLUE }, { label: "Negative", color: HOME_THEME.red }]} />
+                  </Card>
+                ),
+                volFlow: (
+                  <Card
+                    variant="budget"
+                    accent={LIGHT_BLUE}
+                    title={<CardTitleRow label="Net vol GEX flow (today)" onDragStart={rightOrder.handleDragStart("volFlow")} onDragEnd={rightOrder.handleDragEnd} />}
+                    subtitle="Intraday path of the volume leg, 5m buckets from option_strike_gex_history · front expiry · above zero = flow adding long gamma (dampening), below = short gamma (amplifying) · SPX spot shares the x-axis"
+                  >
+                    <div style={{ height: 460 }}>
+                      <VolGexFlowPanel />
+                    </div>
                   </Card>
                 ),
               };

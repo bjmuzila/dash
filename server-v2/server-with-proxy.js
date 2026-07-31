@@ -432,6 +432,15 @@ async function handleProxyRest(req, res) {
     return true;
   }
 
+  // /proxy/gex-vol-flow?bin=300&scope=front — today's net VOL GEX by time
+  // bucket (plus the OI leg and spot), for the Vol GEX Flow tab / card.
+  if (pathname === '/proxy/gex-vol-flow') {
+    handleGexVolFlow(req, res).catch((e) => {
+      sendJson(res, 500, { error: 'gex-vol-flow failed', detail: String(e?.message || e) });
+    });
+    return true;
+  }
+
   // /proxy/candles-intraday?symbol=SPY&interval=1m&daysBack=1
   // Intraday OHLC for any dxLink symbol (SPY/QQQ price lines), collected via a
   // short-lived isolated dxLink candle subscription (see candle-history.js).
@@ -1180,6 +1189,113 @@ async function handleFlowPremSplit(req, res) {
     for (const [k, v] of _premSplitCache) if (v.at < cutoff) _premSplitCache.delete(k);
   }
   sendJson(res, 200, payload, req, sessionCacheOpts(f.date));
+}
+
+// ── /proxy/gex-vol-flow ────────────────────────────────────────────────────
+// Intraday flow of NET VOL GEX for today's ET session, bucketed server-side.
+//
+// Reads option_strike_gex_history — the same table the ES-Candles heatmap and
+// the strike-popup baselines come off. It is written ~1/min by the recorder and
+// pruned to 48h, so "today" is always warm and the whole session is a small scan.
+//
+// Bucketing rule: within each bucket take the LAST reading per (expiry, strike),
+// NOT an average. These are point-in-time positioning snapshots; averaging
+// smears the level and makes the bucket-over-bucket delta meaningless.
+//
+// scope=front (default) pins to the front expiry, derived from the most recent
+// snapshot rather than from the calendar — each session is recorded under its
+// own front-expiry string, so assuming "front == today's date" breaks on any
+// day the recorder rolls late. scope=all sums every expiry in the window.
+const _volFlowCache = new Map(); // key -> { at, payload }
+const VOLFLOW_TTL_MS = 20_000;   // recorder writes ~1/min; 20s keeps polls cheap
+
+async function handleGexVolFlow(req, res) {
+  const { searchParams } = new URL(req.url || '/', 'http://localhost');
+
+  let binSec = Number(searchParams.get('bin') || 300);
+  if (!Number.isFinite(binSec) || binSec <= 0) binSec = 300;
+  binSec = Math.max(60, Math.min(3600, Math.round(binSec)));
+  const binMs = binSec * 1000;
+
+  const scope = searchParams.get('scope') === 'all' ? 'all' : 'front';
+  const expiryParam = (searchParams.get('expiry') || '').trim();
+
+  const key = `${binMs}|${scope}|${expiryParam}`;
+  const hit = _volFlowCache.get(key);
+  if (hit && Date.now() - hit.at < VOLFLOW_TTL_MS) return sendJson(res, 200, hit.payload, req);
+
+  const pool = getHistPool();
+  if (!pool) return sendJson(res, 200, { ok: false, reason: 'no-db', expiry: null, binSec, points: [] }, req);
+
+  // ET midnight → epoch ms, computed in SQL so the app server's TZ can't drift
+  // it. date_trunc runs on the ET wall clock, then converts back to timestamptz.
+  const DAY_START = `(extract(epoch from date_trunc('day', now() AT TIME ZONE 'America/New_York')
+                      AT TIME ZONE 'America/New_York') * 1000)::bigint`;
+
+  // Front expiry = the nearest expiry present in the newest snapshot of the
+  // session. MIN() breaks a tie when one timestamp carries several expiries;
+  // ISO date strings sort chronologically, so MIN is the nearest.
+  let expiry = expiryParam;
+  if (!expiry && scope === 'front') {
+    const { rows: exp } = await pool.query(
+      `SELECT MIN(expiry) AS expiry
+         FROM option_strike_gex_history
+        WHERE timestamp = (SELECT MAX(timestamp) FROM option_strike_gex_history
+                            WHERE timestamp >= ${DAY_START})`
+    );
+    expiry = exp[0]?.expiry || '';
+  }
+
+  const { rows } = await pool.query(
+    `WITH src AS (
+       SELECT (timestamp / $1::bigint) * $1::bigint AS bucket_ms,
+              timestamp, expiry, strike, spot, net_gex, net_vol_gex
+         FROM option_strike_gex_history
+        WHERE timestamp >= ${DAY_START}
+          AND ($2 = '' OR expiry = $2)
+     ),
+     latest AS (
+       SELECT DISTINCT ON (bucket_ms, expiry, strike)
+              bucket_ms, spot, net_gex, net_vol_gex
+         FROM src
+        ORDER BY bucket_ms, expiry, strike, timestamp DESC
+     )
+     SELECT bucket_ms,
+            MAX(spot)                     AS spot,
+            SUM(COALESCE(net_vol_gex, 0)) AS vol_gex,
+            SUM(COALESCE(net_gex, 0))     AS oi_gex,
+            COUNT(*)::int                 AS strikes
+       FROM latest
+      GROUP BY bucket_ms
+      ORDER BY bucket_ms ASC`,
+    [binMs, expiry || '']
+  );
+
+  let prev = null;
+  const points = rows.map((r) => {
+    const volGex = Number(r.vol_gex) || 0;
+    const oiGex = Number(r.oi_gex) || 0;
+    const p = {
+      ts: Number(r.bucket_ms),
+      spot: Number(r.spot) || 0,
+      volGex,
+      oiGex,
+      combined: volGex + oiGex,
+      // Bucket-over-bucket change in the vol leg — the "flow" of the flow.
+      dVol: prev == null ? null : volGex - prev,
+      strikes: Number(r.strikes) || 0,
+    };
+    prev = volGex;
+    return p;
+  });
+
+  const payload = { ok: true, scope, expiry: expiry || null, binSec, points };
+  _volFlowCache.set(key, { at: Date.now(), payload });
+  if (_volFlowCache.size > 32) {
+    const cutoff = Date.now() - 10 * 60 * 1000;
+    for (const [k, v] of _volFlowCache) if (v.at < cutoff) _volFlowCache.delete(k);
+  }
+  sendJson(res, 200, payload, req);
 }
 
 // ── Netprem prewarm ─────────────────────────────────────────────────────────

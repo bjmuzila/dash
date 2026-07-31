@@ -7,6 +7,7 @@ import FlowNetPremPanel from "@/components/dashboard/FlowNetPremPanel";
 import WhaleOrdersPanel from "@/components/dashboard/WhaleOrdersPanel";
 import GreeksHomePanel from "@/components/dashboard/GreeksHomePanel";
 import ScannerHomePanel from "@/components/dashboard/ScannerHomePanel";
+import VolGexFlowPanel from "@/components/dashboard/VolGexFlowPanel";
 import IbStatsTab from "@/components/scanner/IbStatsTab";
 // The GEX card's "ES Candles" view reuses the exact standalone /es-candles page
 // (same pattern as the Chain tab reusing /options-chain below) rather than the
@@ -442,6 +443,13 @@ const FlowIcon = () => (
     <path d="M3 12h4l3 8 4-16 3 8h4" />
   </svg>
 );
+// Zero-split area — the shape of the Vol GEX Flow series itself (fill above and
+// below a baseline), so the tab icon reads as "signed flow over time".
+const VolGexIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="3" y1="12" x2="21" y2="12" strokeDasharray="2 2" opacity="0.6" /><path d="M3 9c3 6 5 8 7 8s3-9 5-9 3 4 6 4" />
+  </svg>
+);
 const WhaleIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M3 14c4 4 8 4 9 1 1 3 5 3 9-1" /><path d="M12 15V4" />
@@ -528,7 +536,7 @@ export function HomeClient({
   const lastFlowAppliedRef = useRef(0);
 
   // "escandles" left the strip — it now lives on the GEX panel's view switcher.
-  const [activeTab, setActiveTab] = useState<"calendar" | "signals" | "flow" | "whale" | "greeks" | "scanner" | "ib">("calendar");
+  const [activeTab, setActiveTab] = useState<"calendar" | "signals" | "volgex" | "flow" | "whale" | "greeks" | "scanner" | "ib">("calendar");
   // Left-column econ/tabs section height: "min" = tab bar only, "half" = shares
   // the column with the GEX chart above it, "full" = fills the whole left column
   // (chart hidden). Replaces the old econCollapsed boolean.
@@ -1570,6 +1578,7 @@ export function HomeClient({
               <div className="grad-divider-b tab-strip" style={{ display: "flex", flexShrink: 0, whiteSpace: "nowrap" }}>
                 {([
                   { id: "calendar", label: "Economic Calendar", icon: <CalendarIcon /> },
+                  { id: "volgex", label: "Vol GEX Flow", icon: <VolGexIcon /> },
                   { id: "flow", label: "Flow", icon: <FlowIcon /> },
                   { id: "whale", label: "Whale", icon: <WhaleIcon /> },
                   { id: "greeks", label: "Greeks", icon: <GreeksIcon /> },
@@ -1615,6 +1624,11 @@ export function HomeClient({
                 {activeTab === "calendar" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
                     <EconCalendarPanel controlsPortalEl={econControlsSlotEl} />
+                  </div>
+                )}
+                {activeTab === "volgex" && (
+                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
+                    <VolGexFlowPanel />
                   </div>
                 )}
                 {activeTab === "flow" && (
