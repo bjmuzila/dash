@@ -4279,7 +4279,12 @@ if (libDb) {
             })).filter((row) => row.expiry && row.strike > 0 && Number.isFinite(row.net_gex));
             await libDb.insertOptionStrikeGexRows(normalized);
             send(res, 200, { ok: true, count: normalized.length });
-          } catch (err) { send(res, 200, { error: String(err) }); }
+          } catch (err) {
+            // LOG IT. This used to fail into a 200 with an `error` key and no
+            // console output at all — a bad recorder POST was invisible.
+            console.error('[option-strike-gex-history] POST failed:', err);
+            send(res, 200, { error: String(err) });
+          }
           return;
         }
         try {
@@ -4354,7 +4359,16 @@ if (libDb) {
           const sinceTimestamp = Date.now() - minutes * 60 * 1000;
           const rows = await libDb.getOptionStrikeRollingNetGex(date, expiry, sinceTimestamp, symbol);
           send(res, 200, { rows, minutes, symbol });
-        } catch (err) { send(res, 200, { error: String(err), rows: [] }); }
+        } catch (err) {
+          // LOG IT. Returning 200 with an `error` key and NO server-side log is
+          // how `libDb.normGexSymbol is not a function` stayed hidden: the
+          // client's `if (!res.ok) return` never fired, the missing `columns`
+          // key was treated as "no data yet", and the heatmap + bubble backfill
+          // silently returned nothing for days. The 200 is kept (callers depend
+          // on it) — but it is never again silent.
+          console.error('[option-strike-gex-history] GET failed:', req.url, err);
+          send(res, 200, { error: String(err), rows: [] });
+        }
       },
     });
   }

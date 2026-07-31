@@ -11,7 +11,11 @@ const LIST_KEYS = Object.keys(TICKER_LISTS) as TickerList[];
  * The page's ticker dropdown. Inside it, top-left, sits a second small dropdown
  * that switches which list you're picking from (Favorites / Watchlist).
  */
-export default function TickerSelect() {
+export default function TickerSelect({
+  // Capped at a comfortable control width by default. The Options page sits in
+  // a resizable grid and passes "100%" so the control tracks its card.
+  maxWidth = 380,
+}: { maxWidth?: number | string } = {}) {
   const { ticker, name, list, setTicker, setList } = useTicker();
   const [open, setOpen] = useState(false);
   const [listOpen, setListOpen] = useState(false);
@@ -47,7 +51,7 @@ export default function TickerSelect() {
   });
 
   return (
-    <div ref={wrapRef} style={{ position: "relative", width: "100%", maxWidth: 380 }}>
+    <div ref={wrapRef} style={{ position: "relative", width: "100%", maxWidth }}>
       <button
         onClick={() => setOpen((v) => !v)}
         style={{

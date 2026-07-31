@@ -297,7 +297,15 @@ export function DockGap() {
   return <span style={{ width: "clamp(4px, 1vw, 14px)", flexShrink: 1, minWidth: 4 }} />;
 }
 
-/** Themed range slider — cyan glossy thumb, dark track, optional label + value. */
+/**
+ * Themed range slider — cyan glossy thumb, dark track, optional label + value,
+ * plus a ▲/▼ stepper on the right.
+ *
+ * The stepper exists because dragging a 90px track at step 0.02 is a game of
+ * pixel-hunting: one pixel is roughly one step, so landing an exact value by
+ * mouse is luck. The buttons nudge by exactly one `step` and hold-to-repeat.
+ * Pass `steppers={false}` in a width-constrained inline dock row.
+ */
 export function DockSlider({
   label,
   value,
@@ -309,6 +317,7 @@ export function DockSlider({
   width = 90,
   accent = ACCENT,
   title,
+  steppers = true,
 }: {
   label?: string;
   value: number;
@@ -320,11 +329,77 @@ export function DockSlider({
   width?: number;
   accent?: string;
   title?: string;
+  steppers?: boolean;
 }) {
+  // Latest value for the hold-to-repeat timer, which would otherwise close over
+  // the value from the render that started it and step only once.
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const holdRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const delayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Snap to the step's own precision. Repeated float addition drifts
+  // (0.5 + 0.05 → 0.55000000000000004), and a value that isn't an exact
+  // multiple of `step` makes the native input round it back on the next drag.
+  const decimals = (String(step).split(".")[1] || "").length;
+  const bump = (dir: 1 | -1) => {
+    const raw = valueRef.current + dir * step;
+    const next = Number(Math.min(max, Math.max(min, raw)).toFixed(decimals));
+    if (next !== valueRef.current) onChange(next);
+  };
+
+  const stopHold = () => {
+    if (delayRef.current) { clearTimeout(delayRef.current); delayRef.current = null; }
+    if (holdRef.current) { clearInterval(holdRef.current); holdRef.current = null; }
+  };
+  // Fire once immediately, then repeat after a short delay — standard
+  // press-and-hold feel, so a single click is still exactly one step.
+  const startHold = (dir: 1 | -1) => {
+    stopHold();
+    bump(dir);
+    delayRef.current = setTimeout(() => {
+      holdRef.current = setInterval(() => bump(dir), 60);
+    }, 350);
+  };
+  useEffect(() => stopHold, []);
+
+  const atMin = value <= min;
+  const atMax = value >= max;
+
+  const stepBtn = (dir: 1 | -1, disabled: boolean) => (
+    <button
+      type="button"
+      tabIndex={-1}
+      disabled={disabled}
+      aria-label={dir === 1 ? "increase" : "decrease"}
+      onPointerDown={(e) => { e.preventDefault(); if (!disabled) startHold(dir); }}
+      onPointerUp={stopHold}
+      onPointerLeave={stopHold}
+      onPointerCancel={stopHold}
+      style={{
+        display: "block", width: 14, height: 9, padding: 0, lineHeight: "7px",
+        fontSize: 7, fontWeight: 900,
+        borderRadius: 3,
+        border: `1px solid ${disabled ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.16)"}`,
+        background: disabled ? "transparent" : "rgba(255,255,255,.06)",
+        color: disabled ? "rgba(255,255,255,.18)" : accent,
+        cursor: disabled ? "default" : "pointer",
+      }}
+      onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.background = "rgba(255,255,255,.14)"; }}
+      onMouseLeave={(e) => { if (!disabled) e.currentTarget.style.background = "rgba(255,255,255,.06)"; }}
+    >
+      {dir === 1 ? "▲" : "▼"}
+    </button>
+  );
+
   return (
-    <label
+    // Outer wrapper is NOT a <label>: a <button> inside a label forwards its
+    // click to the labelled control, which would yank focus to the range input
+    // on every step. The label/input/value stay wrapped so the text still
+    // targets the slider.
+    <span
       title={title}
-      style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 10, color: "rgba(255,255,255,.55)", fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}
+      style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}
     >
       <style>{`
         input.dock-slider{-webkit-appearance:none;appearance:none;height:4px;border-radius:99px;background:rgba(255,255,255,.12);outline:none;cursor:pointer}
@@ -332,19 +407,29 @@ export function DockSlider({
         input.dock-slider::-moz-range-thumb{width:13px;height:13px;border-radius:99px;background:linear-gradient(180deg,#bfffff,${ACCENT});border:1px solid rgba(255,255,255,.5);box-shadow:0 0 8px ${rgba(ACCENT,0.6)};cursor:pointer}
         input.dock-slider::-moz-range-track{height:4px;border-radius:99px;background:rgba(255,255,255,.12)}
       `}</style>
-      {label && <span>{label}</span>}
-      <input
-        className="dock-slider"
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        style={{ width, accentColor: accent }}
-      />
-      <span style={{ minWidth: 34, fontVariantNumeric: "tabular-nums", fontSize: 10, color: accent }}>{format(value)}</span>
-    </label>
+      <label
+        style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 10, color: "rgba(255,255,255,.55)", fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}
+      >
+        {label && <span>{label}</span>}
+        <input
+          className="dock-slider"
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+          style={{ width, accentColor: accent }}
+        />
+        <span style={{ minWidth: 34, fontVariantNumeric: "tabular-nums", fontSize: 10, color: accent }}>{format(value)}</span>
+      </label>
+      {steppers && (
+        <span style={{ display: "flex", flexDirection: "column", gap: 1, flexShrink: 0 }}>
+          {stepBtn(1, atMax)}
+          {stepBtn(-1, atMin)}
+        </span>
+      )}
+    </span>
   );
 }
 

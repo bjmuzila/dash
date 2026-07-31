@@ -109,6 +109,8 @@ __export(db_exports, {
   getMomentumBiasSummary: () => getMomentumBiasSummary,
   getMvcSnapshots: () => getMvcSnapshots,
   getNqCandles: () => getNqCandles,
+  // hand-added with the option_strike_gex_history symbol patch below
+  normGexSymbol: () => normGexSymbol,
   getOptionStrikeGexSlots: () => getOptionStrikeGexSlots,
   getOptionStrikeGexSlotsWindow: () => getOptionStrikeGexSlotsWindow,
   getOptionStrikeGexSlotsWindowAny: () => getOptionStrikeGexSlotsWindowAny,
@@ -3987,13 +3989,37 @@ function clampReal(v) {
   if (!Number.isFinite(v)) return 0;
   return Math.abs(v) < REAL_MIN_MAGNITUDE ? 0 : v;
 }
+// ─── option_strike_gex_history: multi-underlying support ────────────────────
+// HAND-PATCHED INTO THIS BUNDLE. api-router.js calls libDb.normGexSymbol() and
+// passes a `symbol` argument to every option_strike_gex_history helper, but the
+// bundle was never regenerated with them — so normGexSymbol was `undefined` and
+// the FIRST line of the /api/snapshots/option-strike-gex-history handler threw
+// `TypeError: libDb.normGexSymbol is not a function` on EVERY request, in every
+// mode. The route's catch turned that into `200 {error, rows:[]}`, so the
+// heatmap backfill and the bubble trail silently got nothing while the live
+// websocket kept drawing — the "no historical bubbles, live ones fine" symptom.
+//
+// Regenerating this bundle from the TypeScript source would drop symbol support
+// again (see the note in api-router.js). If you ever DO regenerate, port these
+// three things forward: normGexSymbol, the `symbol` parameter on the helpers
+// below, and the symbol column in insertOptionStrikeGexRows.
+//
+// Legacy rows predate the symbol column and are all '$SPX', so absent/blank/
+// 'SPX' MUST normalize to '$SPX' or they go invisible. This mirrors normSymbol()
+// in server-v2/gex-history-writer.js — the two have to agree or reads miss writes.
+var DEFAULT_GEX_SYMBOL = "$SPX";
+function normGexSymbol(sym) {
+  const s = String(sym ?? "").trim().toUpperCase();
+  if (!s || s === "SPX") return DEFAULT_GEX_SYMBOL;
+  return s;
+}
 async function insertOptionStrikeGexRows(rows) {
   if (!rows.length) return;
   const pool = await getDb();
   for (const row of rows) {
     await pool.query(
-      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex, symbol)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
       [
         row.timestamp,
         row.date,
@@ -4001,16 +4027,22 @@ async function insertOptionStrikeGexRows(rows) {
         row.spot,
         row.strike,
         clampReal(row.net_gex),
-        Number.isFinite(row.net_vol_gex) ? clampReal(row.net_vol_gex) : null
+        Number.isFinite(row.net_vol_gex) ? clampReal(row.net_vol_gex) : null,
+        // Without this every POSTed row fell to the column DEFAULT ('$SPX'), so
+        // SPY/QQQ history was being written into the SPX series.
+        normGexSymbol(row.symbol)
       ]
     );
   }
+  // Retention. Deliberately NOT scoped by symbol, and anchored to Date.now() —
+  // never to an incoming row's timestamp, or a recorder posting a bad future
+  // timestamp would wipe the live day.
   await pool.query(
     `DELETE FROM option_strike_gex_history WHERE timestamp < $1`,
     [Date.now() - 2 * 24 * 60 * 60 * 1e3]
   );
 }
-async function getOptionStrikeRollingNetGex(date, expiry, sinceTimestamp) {
+async function getOptionStrikeRollingNetGex(date, expiry, sinceTimestamp, symbol) {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT strike,
@@ -4020,9 +4052,10 @@ async function getOptionStrikeRollingNetGex(date, expiry, sinceTimestamp) {
       WHERE date = $1
         AND expiry = $2
         AND timestamp >= $3
+        AND symbol = $4
       GROUP BY strike
       ORDER BY strike ASC`,
-    [date, expiry, sinceTimestamp]
+    [date, expiry, sinceTimestamp, normGexSymbol(symbol)]
   );
   return result.rows.map((row) => ({
     strike: Number(row.strike ?? 0),
@@ -4030,7 +4063,7 @@ async function getOptionStrikeRollingNetGex(date, expiry, sinceTimestamp) {
     points: Number(row.points ?? 0)
   }));
 }
-async function getOptionStrikeGexSlots(date, expiry) {
+async function getOptionStrikeGexSlots(date, expiry, symbol) {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT DISTINCT ON ((FLOOR(timestamp / 60000) * 60000), strike)
@@ -4042,8 +4075,9 @@ async function getOptionStrikeGexSlots(date, expiry) {
        FROM option_strike_gex_history
       WHERE date = $1
         AND expiry = $2
+        AND symbol = $3
       ORDER BY (FLOOR(timestamp / 60000) * 60000) ASC, strike ASC, timestamp DESC`,
-    [date, expiry]
+    [date, expiry, normGexSymbol(symbol)]
   );
   return result.rows.map((row) => ({
     slot_ts: Number(row.slot_ts ?? 0),
@@ -4056,7 +4090,7 @@ async function getOptionStrikeGexSlots(date, expiry) {
     spot: Number(row.spot ?? 0)
   }));
 }
-async function getOptionStrikeGexSlotsWindow(sinceTs, expiry) {
+async function getOptionStrikeGexSlotsWindow(sinceTs, expiry, symbol) {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT DISTINCT ON ((FLOOR(timestamp / 60000) * 60000), strike)
@@ -4068,8 +4102,9 @@ async function getOptionStrikeGexSlotsWindow(sinceTs, expiry) {
        FROM option_strike_gex_history
       WHERE timestamp >= $1
         AND expiry = $2
+        AND symbol = $3
       ORDER BY (FLOOR(timestamp / 60000) * 60000) ASC, strike ASC, timestamp DESC`,
-    [sinceTs, expiry]
+    [sinceTs, expiry, normGexSymbol(symbol)]
   );
   return result.rows.map((row) => ({
     slot_ts: Number(row.slot_ts ?? 0),
@@ -4079,7 +4114,7 @@ async function getOptionStrikeGexSlotsWindow(sinceTs, expiry) {
     spot: Number(row.spot ?? 0)
   }));
 }
-async function getOptionStrikeGexSlotsWindowAny(sinceTs) {
+async function getOptionStrikeGexSlotsWindowAny(sinceTs, symbol) {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT DISTINCT ON ((FLOOR(timestamp / 60000) * 60000), strike)
@@ -4090,8 +4125,9 @@ async function getOptionStrikeGexSlotsWindowAny(sinceTs) {
             spot
        FROM option_strike_gex_history
       WHERE timestamp >= $1
+        AND symbol = $2
       ORDER BY (FLOOR(timestamp / 60000) * 60000) ASC, strike ASC, timestamp DESC`,
-    [sinceTs]
+    [sinceTs, normGexSymbol(symbol)]
   );
   return result.rows.map((row) => ({
     slot_ts: Number(row.slot_ts ?? 0),
@@ -4101,7 +4137,7 @@ async function getOptionStrikeGexSlotsWindowAny(sinceTs) {
     spot: Number(row.spot ?? 0)
   }));
 }
-async function getOptionStrikeNetGexAsOf(date, expiry, asOfTimestamp) {
+async function getOptionStrikeNetGexAsOf(date, expiry, asOfTimestamp, symbol) {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT DISTINCT ON (strike) strike, net_gex, net_vol_gex, timestamp
@@ -4109,8 +4145,9 @@ async function getOptionStrikeNetGexAsOf(date, expiry, asOfTimestamp) {
       WHERE date = $1
         AND expiry = $2
         AND timestamp <= $3
+        AND symbol = $4
       ORDER BY strike ASC, timestamp DESC`,
-    [date, expiry, asOfTimestamp]
+    [date, expiry, asOfTimestamp, normGexSymbol(symbol)]
   );
   return result.rows.map((row) => ({
     strike: Number(row.strike ?? 0),
@@ -4119,20 +4156,21 @@ async function getOptionStrikeNetGexAsOf(date, expiry, asOfTimestamp) {
     timestamp: Number(row.timestamp ?? 0)
   }));
 }
-async function getOptionStrikeNetGexAsOfOrNearest(date, expiry, asOfTimestamp) {
+async function getOptionStrikeNetGexAsOfOrNearest(date, expiry, asOfTimestamp, symbol) {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT DISTINCT ON (strike) strike, net_gex, net_vol_gex, timestamp
        FROM option_strike_gex_history
       WHERE date = $1
         AND expiry = $2
+        AND symbol = $4
       ORDER BY strike ASC,
                (timestamp <= $3) DESC,
                CASE WHEN timestamp <= $3
                     THEN $3 - timestamp
                     ELSE timestamp - $3
                END ASC`,
-    [date, expiry, asOfTimestamp]
+    [date, expiry, asOfTimestamp, normGexSymbol(symbol)]
   );
   return result.rows.map((row) => ({
     strike: Number(row.strike ?? 0),
@@ -4141,15 +4179,16 @@ async function getOptionStrikeNetGexAsOfOrNearest(date, expiry, asOfTimestamp) {
     timestamp: Number(row.timestamp ?? 0)
   }));
 }
-async function getOptionStrikeNetGexAtOpen(date, expiry) {
+async function getOptionStrikeNetGexAtOpen(date, expiry, symbol) {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT DISTINCT ON (strike) strike, net_gex, net_vol_gex, timestamp
        FROM option_strike_gex_history
       WHERE date = $1
         AND expiry = $2
+        AND symbol = $3
       ORDER BY strike ASC, timestamp ASC`,
-    [date, expiry]
+    [date, expiry, normGexSymbol(symbol)]
   );
   return result.rows.map((row) => ({
     strike: Number(row.strike ?? 0),
@@ -4679,6 +4718,7 @@ async function getLatestMultGreekStaticSnapshot() {
   getMomentumBiasSummary,
   getMvcSnapshots,
   getNqCandles,
+  normGexSymbol,
   getOptionStrikeGexSlots,
   getOptionStrikeGexSlotsWindow,
   getOptionStrikeGexSlotsWindowAny,

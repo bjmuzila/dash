@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import DashGrid, { type GridItem } from "@/components/shared/DashGrid";
+import FitBox from "@/components/shared/FitBox";
 import LayoutBar from "@/components/shared/LayoutBar";
 import { useDashboardLayout } from "@/components/shared/useDashboardLayout";
 import SpxHeatmap from "@/components/spx/SpxHeatmap";
@@ -19,6 +20,13 @@ import OptionsPlaceholder from "./OptionsPlaceholder";
  * layout" in the bar unlocks drag handles + resize grips; the arrangement is
  * saved to Postgres per user as a named template (dashboard_layouts) through
  * useDashboardLayout, and the default template auto-loads on open.
+ *
+ * Two rules the grid enforces for us:
+ *   - Cards never overlap. DashGrid pushes whatever a dragged card lands on
+ *     straight down and then floats the board up to close the gap.
+ *   - Card CONTENT tracks the card. Bodies are flex-filled; the two widgets
+ *     with an intrinsic size (the heatmap's fixed-cell grid, the sector wheel)
+ *     go through FitBox, which scales them to whatever tile they're given.
  *
  * Default arrangement (what a user sees before they've saved anything):
  *
@@ -57,15 +65,6 @@ const DEFAULT_LAYOUT: GridItem[] = [
   { id: "feed",      x: 7, y: 15, w: 5, h: 6 },
 ];
 
-/**
- * Wheel diameter for the sector card. The wheel's SVG is square at width:100%,
- * so uncapped it renders as tall as its column is wide and towers over the
- * card. Capping keeps the card readable at the default tile size; the card's
- * own scroll covers a user shrinking the tile further, and the wheel's Expand
- * button still opens it full size.
- */
-const SUNBURST_WHEEL_PX = 190;
-
 export default function OptionsPage() {
   const L = useDashboardLayout("options", DEFAULT_LAYOUT);
   const narrow = useIsNarrow(STACK_BELOW_PX);
@@ -94,7 +93,9 @@ export default function OptionsPage() {
           {/* Overflow stays visible here so the ticker dropdown isn't clipped
               by the card's box — DashGrid also raises this tile's z-index. */}
           <GridCard key="ticker" id="ticker" editing={editing} padding={16} overflow="visible">
-            <TickerSelect />
+            <div style={{ display: "flex", alignItems: "center", height: "100%", minHeight: 0 }}>
+              <TickerSelect maxWidth="100%" />
+            </div>
           </GridCard>
 
           <GridCard key="heatmap" id="heatmap" editing={editing} title={<TickerTitle label="Heatmap" />}>
@@ -111,7 +112,6 @@ export default function OptionsPage() {
             <OptionsPlaceholder
               label="candles"
               shape="candles"
-              minHeight={220}
               note="placeholder — chart component goes here"
             />
           </GridCard>
@@ -121,7 +121,7 @@ export default function OptionsPage() {
               into a bare card. It shows the whole index rather than the
               selected symbol, hence no ticker in the heading. */}
           <GridCard key="sunburst" id="sunburst" editing={editing}>
-            <SectorSunburst maxWheel={SUNBURST_WHEEL_PX} />
+            <SunburstBody />
           </GridCard>
 
           <GridCard
@@ -131,7 +131,7 @@ export default function OptionsPage() {
             title={<TickerTitle label="Orderflow Graph" />}
             subtitle="cumulative delta"
           >
-            <OptionsPlaceholder label="orderflow" shape="bars" minHeight={140} />
+            <OptionsPlaceholder label="orderflow" shape="bars" />
           </GridCard>
 
           <GridCard
@@ -210,6 +210,9 @@ function GridCard({
         padding={padding}
         style={{
           height: "100%",
+          // Explicit: the grid sizes this box to the tile, and padding must come
+          // out of that height rather than being added to it.
+          boxSizing: "border-box",
           display: "flex",
           flexDirection: "column",
           minWidth: 0,
@@ -247,6 +250,11 @@ function GridCard({
                     letterSpacing: "0.12em",
                     textTransform: "uppercase",
                     color: HOME_THEME.text,
+                    // A narrow tile truncates the heading instead of wrapping it
+                    // onto a second line and eating the body's height.
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
                   }}
                 >
                   {title}
@@ -256,7 +264,22 @@ function GridCard({
             </div>
           </div>
         )}
-        <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: visible ? "visible" : "auto" }}>
+        {/* Flex column, not a plain block: children get the leftover height to
+            stretch into instead of sitting at their natural size in a tile the
+            user just made taller. */}
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
+            // Content flexes first; `auto` is the safety net for a tile dragged
+            // smaller than the content's own floor, so it scrolls instead of
+            // being clipped by the card edge.
+            overflow: visible ? "visible" : "auto",
+          }}
+        >
           {children}
         </div>
       </Card>
@@ -265,6 +288,55 @@ function GridCard({
 }
 
 /* ── card bodies ─────────────────────────────────────────────────────────── */
+
+/** Live px size of an element, for content that has to be told how big to draw. */
+function useBoxSize<T extends HTMLElement>() {
+  const ref = useRef<T | null>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const read = () =>
+      setSize((s) => {
+        const w = el.clientWidth, h = el.clientHeight;
+        return Math.abs(s.w - w) > 1 || Math.abs(s.h - h) > 1 ? { w, h } : s;
+      });
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    read();
+    return () => ro.disconnect();
+  }, []);
+  return [ref, size] as const;
+}
+
+/**
+ * Sector wheel, sized from the tile rather than from a constant.
+ *
+ * The wheel's SVG is square at width:100%, so left to itself it renders as tall
+ * as the card is wide and overruns everything under it. This used to be handled
+ * by a hand-derived SUNBURST_WHEEL_PX that had to be re-tuned whenever the
+ * card's chrome changed — and it couldn't follow a resizable tile at all.
+ *
+ * Now the wheel is a share of the measured tile (WHEEL_SHARE of its height,
+ * never wider than the tile), so it grows and shrinks as the card is dragged.
+ * The ratio only has to get CLOSE: FitBox wraps the result and scales away any
+ * remainder, with a floor that stops the labels from going microscopic.
+ */
+const WHEEL_SHARE = 0.62;
+
+function SunburstBody() {
+  const [ref, { w, h }] = useBoxSize<HTMLDivElement>();
+  const wheel = w > 0 && h > 0
+    ? Math.max(120, Math.min(w - 8, Math.round(h * WHEEL_SHARE), 560))
+    : undefined;
+  return (
+    <div ref={ref} style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
+      <FitBox fluidWidth min={0.5} max={1}>
+        <SectorSunburst maxWheel={wheel} />
+      </FitBox>
+    </div>
+  );
+}
 
 /** Header text that carries the selected symbol. */
 function TickerTitle({ label }: { label: string }) {
@@ -275,18 +347,27 @@ function TickerTitle({ label }: { label: string }) {
 /**
  * Heatmap stays live — SpxHeatmap pulls /api/spx-heatmap and rolls forward on
  * its own each trading day (SPX only for now).
+ *
+ * It draws on a fixed 9px cell, so nothing about it responds to the card's
+ * size on its own: in a small tile it scrolled, in a large one it sat in the
+ * corner. FitBox measures the grid's natural box and scales it to the tile —
+ * up to 2x when there's room, down to 0.35 when there isn't.
  */
 function HeatmapBody() {
   const { ticker } = useTicker();
-  return ticker === "SPX" ? (
-    <SpxHeatmap />
-  ) : (
-    <OptionsPlaceholder
-      label="daily / yearly heatmap"
-      shape="rows"
-      minHeight={200}
-      note="placeholder — heatmap is SPX-only until per-ticker data is wired"
-    />
+  if (ticker !== "SPX") {
+    return (
+      <OptionsPlaceholder
+        label="daily / yearly heatmap"
+        shape="rows"
+        note="placeholder — heatmap is SPX-only until per-ticker data is wired"
+      />
+    );
+  }
+  return (
+    <FitBox min={0.35} max={2}>
+      <SpxHeatmap />
+    </FitBox>
   );
 }
 
@@ -305,14 +386,32 @@ const FEED_COLS = "80px 56px 1fr 1fr 76px";
 function OrderflowFeedBody() {
   const { ticker } = useTicker();
   return (
-    <>
-      <div style={{ border: `1px solid ${HOME_THEME.border}`, borderRadius: 12, overflow: "hidden", fontSize: 11 }}>
+    // Column that owns the whole tile: the tape takes the leftover height and
+    // its rows share it, so the table grows and shrinks with the card instead
+    // of leaving a gap under six fixed-height rows.
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+          border: `1px solid ${HOME_THEME.border}`,
+          borderRadius: 12,
+          // Rows stretch to fill a tall tile and compress in a short one; past
+          // their legible floor the tape scrolls rather than spilling out.
+          overflowX: "hidden",
+          overflowY: "auto",
+          fontSize: 11,
+        }}
+      >
         <div
           style={{
             display: "grid",
             gridTemplateColumns: FEED_COLS,
             gap: 8,
             padding: "8px 14px",
+            flexShrink: 0,
             color: HOME_THEME.text,
             opacity: 0.55,
             fontWeight: 700,
@@ -333,8 +432,13 @@ function OrderflowFeedBody() {
             style={{
               display: "grid",
               gridTemplateColumns: FEED_COLS,
+              alignItems: "center",
               gap: 8,
-              padding: "7px 14px",
+              // Rows divide whatever height the tile has left, down to a legible
+              // floor — that's what makes the tape fill a tall card.
+              flex: "1 1 0",
+              minHeight: 20,
+              padding: "0 14px",
               borderBottom: i === FEED_ROWS.length - 1 ? "none" : `1px solid ${HOME_THEME.border}`,
               color: HOME_THEME.text,
               opacity: 0.55,
@@ -357,10 +461,11 @@ function OrderflowFeedBody() {
           textTransform: "uppercase",
           color: HOME_THEME.text,
           opacity: 0.5,
+          flexShrink: 0,
         }}
       >
         {ticker} — placeholder rows
       </div>
-    </>
+    </div>
   );
 }

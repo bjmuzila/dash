@@ -1583,12 +1583,27 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=${minutes}&expiry=${encodeURIComponent(queryExpiry)}${isFront ? "&anyExpiry=1" : ""}&symbol=${encodeURIComponent(sym.gexSymbol)}`,
           { cache: "no-store" }
         );
-        if (!res.ok) return;
+        if (!res.ok) {
+          console.warn("[gex-backfill] HTTP", res.status, "— heatmap/bubble history will be empty");
+          return;
+        }
         const json = await res.json();
+        // The route answers 200 EVEN ON A SERVER EXCEPTION, with an `error` key
+        // and no `columns` (see its catch in server-v2/api-router.js). That is
+        // how a `TypeError: libDb.normGexSymbol is not a function` went
+        // unnoticed for days: `res.ok` was true, `columns` was absent, and the
+        // empty result read as "no data recorded yet". Never silent again.
+        if (json?.error) {
+          console.warn("[gex-backfill] server returned an error — heatmap/bubble history will be empty:", json.error);
+          return;
+        }
         // History persists both net_gex (OI+vol) and net_vol_gex (vol-only), so
         // the Vol-only heatmap mode now has backfill too. netVol falls back to 0
         // for legacy rows written before the column existed.
         type RawCol = { slotTs: number; cells: Array<{ strike: number; net: number; netVol?: number }>; spot?: number };
+        if (!Array.isArray(json?.columns)) {
+          console.warn("[gex-backfill] response has no `columns` array — got keys:", Object.keys(json ?? {}));
+        }
         const raw = Array.isArray(json.columns) ? (json.columns as RawCol[]) : [];
         // Only a genuine key change (DTE pick / range switch) invalidates this
         // response; a same-key WS re-render must NOT discard it.
@@ -1633,7 +1648,11 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         // Rows are in — let the derived walls/flip republish off them.
         setGexVersion((v) => v + 1);
         drawOverlayRef.current();
-      } catch { /* live feed still populates the front expiry going forward */ }
+      } catch (e) {
+        // Live feed still populates the front expiry going forward, so this is
+        // survivable — but it must not be invisible.
+        console.warn("[gex-backfill] failed:", e);
+      }
     })();
     // No cleanup cancel: a same-key re-render must not abort a valid in-flight
     // backfill; the resolution-time key check handles real invalidation.
@@ -3312,9 +3331,13 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           {ovlOpen && ovlRect && createPortal(
             <div
               ref={ovlMenuRef}
-              className="w-56 py-1"
+              className="w-56"
               style={{ position: "fixed", left: ovlRect.left, top: ovlRect.top, borderRadius: 14, border: `1px solid ${HOME_THEME.border}`, borderTop: `2px solid ${DOCK_THEME.cyanTop}`, background: DOCK_THEME.bg, backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)", boxShadow: DOCK_THEME.shadow, zIndex: 100000, padding: 6 }}
             >
+              {/* Two columns. Eight one-per-row toggles left the top half of this
+                  menu mostly whitespace and pushed the sub-controls off-screen on
+                  short viewports; the labels are all short enough to pair up. */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 3 }}>
               {([
                 { label: "Heatmap", on: showHeatmap, toggle: () => setShowHeatmap((v) => !v) },
                 { label: "Profile", on: showProfile, toggle: () => setShowProfile((v) => !v) },
@@ -3328,24 +3351,25 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 <button
                   key={o.label}
                   onClick={o.toggle}
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs"
-                  style={{ borderRadius: 8, border: o.on ? `1px solid ${DOCK_THEME.activeBorder}` : "1px solid transparent", background: o.on ? DOCK_THEME.activeTile : "transparent", color: o.on ? HOME_THEME.cyan : HOME_THEME.text, fontWeight: 600 }}
+                  className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-xs"
+                  style={{ borderRadius: 7, border: o.on ? `1px solid ${DOCK_THEME.activeBorder}` : "1px solid transparent", background: o.on ? DOCK_THEME.activeTile : "transparent", color: o.on ? HOME_THEME.cyan : HOME_THEME.text, fontWeight: 600, minWidth: 0 }}
                   onMouseEnter={(e) => { if (!o.on) e.currentTarget.style.background = DOCK_THEME.hoverTile; }}
                   onMouseLeave={(e) => { if (!o.on) e.currentTarget.style.background = "transparent"; }}
                 >
                   <span
                     style={{
-                      width: 14, height: 14, flexShrink: 0, borderRadius: 4,
+                      width: 12, height: 12, flexShrink: 0, borderRadius: 3,
                       border: `1px solid ${o.on ? HOME_THEME.cyan : HOME_THEME.border}`,
                       background: o.on ? HOME_THEME.cyan : "transparent",
-                      color: DOCK_THEME.bg, fontSize: 10, lineHeight: "12px", textAlign: "center", fontWeight: 900,
+                      color: DOCK_THEME.bg, fontSize: 9, lineHeight: "10px", textAlign: "center", fontWeight: 900,
                     }}
                   >
                     {o.on ? "✓" : ""}
                   </span>
-                  <span>{o.label}</span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{o.label}</span>
                 </button>
               ))}
+              </div>
 
               {/* Sub-controls only make sense when their overlay is on */}
               {showHeatmap && (

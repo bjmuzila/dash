@@ -11,11 +11,64 @@
 // Geometry: column width is derived from the measured container width; row
 // height is a fixed px value (rowH). Item pixel box = grid units * cell size,
 // minus gutter. Positions snap to whole grid units on drop.
+//
+// CARDS NEVER OVERLAP. Every gesture runs through compactLayout(): whatever the
+// dragged/resized card lands on is pushed straight down, and the whole board
+// then floats up to close the gaps. Cards can't be stacked on top of each other
+// even deliberately, which is what makes a saved template safe to reload.
 
 import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { GridItem } from "@/lib/layoutStore";
 
 export type { GridItem };
+
+/** Do two items share any cell? Touching edges don't count. */
+export function collides(a: GridItem, b: GridItem): boolean {
+  if (a.id === b.id) return false;
+  if (a.x + a.w <= b.x || b.x + b.w <= a.x) return false;
+  if (a.y + a.h <= b.y || b.y + b.h <= a.y) return false;
+  return true;
+}
+
+/**
+ * Resolve overlaps and pull everything upward (gravity), the way every
+ * dashboard grid behaves.
+ *
+ * Items are placed in reading order (top row first, then left to right). Each
+ * one floats up until the cell above is taken, then drops past anything it
+ * still overlaps. `fixedId` pins one card to its exact coordinates — that's the
+ * card under the cursor mid-gesture, so the preview tracks the pointer instead
+ * of snapping away while the others get out of its way.
+ *
+ * Input order is preserved in the result so React keys and child matching stay
+ * stable; only x/y/w/h change.
+ */
+export function compactLayout(items: GridItem[], fixedId?: string | null): GridItem[] {
+  const sorted = [...items].sort((a, b) => a.y - b.y || a.x - b.x);
+  // The pinned card claims its cells before anyone else gets to reason about them.
+  const order = fixedId
+    ? [...sorted.filter((i) => i.id === fixedId), ...sorted.filter((i) => i.id !== fixedId)]
+    : sorted;
+
+  const placed: GridItem[] = [];
+  for (const src of order) {
+    const it: GridItem = { ...src, x: Math.max(0, src.x), y: Math.max(0, src.y) };
+    if (fixedId && it.id === fixedId) { placed.push(it); continue; }
+    // Float up while the row above is clear…
+    while (it.y > 0 && !placed.some((p) => collides({ ...it, y: it.y - 1 }, p))) it.y--;
+    // …then fall past anything still in the way. Each hop clears at least one
+    // item, so this ends after at most one pass per placed card.
+    for (let guard = 0; guard <= placed.length; guard++) {
+      const hit = placed.find((p) => collides(it, p));
+      if (!hit) break;
+      it.y = hit.y + hit.h;
+    }
+    placed.push(it);
+  }
+
+  const byId = new Map(placed.map((p) => [p.id, p]));
+  return items.map((orig) => byId.get(orig.id) ?? orig);
+}
 
 type DragState =
   | { kind: "move"; id: string; startX: number; startY: number; origX: number; origY: number }
@@ -54,6 +107,9 @@ export default function DashGrid({
   const [draft, setDraft] = useState<GridItem[] | null>(null);
   const dragRef = useRef<DragState>(null);
   const draftRef = useRef<GridItem[] | null>(null);
+  // Layout as it was when the current gesture began — every frame is derived
+  // from this, never from the previous frame (see onMove).
+  const startRef = useRef<GridItem[] | null>(null);
   const baseId = useId();
 
   dragRef.current = drag;
@@ -97,8 +153,10 @@ export default function DashGrid({
     if (!it) return;
     e.preventDefault();
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    const snapshot = active.map((x) => ({ ...x }));
+    startRef.current = snapshot;
     setDrag({ kind: "move", id, startX: e.clientX, startY: e.clientY, origX: it.x, origY: it.y });
-    setDraft(active.map((x) => ({ ...x })));
+    setDraft(snapshot);
   }, [active, byId, locked]);
 
   const onPointerDownResize = useCallback((e: React.PointerEvent, id: string) => {
@@ -108,8 +166,10 @@ export default function DashGrid({
     e.preventDefault();
     e.stopPropagation();
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    const snapshot = active.map((x) => ({ ...x }));
+    startRef.current = snapshot;
     setDrag({ kind: "resize", id, startX: e.clientX, startY: e.clientY, origW: it.w, origH: it.h });
-    setDraft(active.map((x) => ({ ...x })));
+    setDraft(snapshot);
   }, [active, byId, locked]);
 
   // Global move/up while a gesture is active.
@@ -118,12 +178,16 @@ export default function DashGrid({
     const cell = rowH + gutter;
     const onMove = (e: PointerEvent) => {
       const d = dragRef.current;
-      const base = draftRef.current;
+      // Always recompute from the layout as it was when the gesture STARTED.
+      // Deriving each frame from the previous frame would let the push-down /
+      // float-up passes accumulate, and the board would creep while the pointer
+      // sat still.
+      const base = startRef.current;
       if (!d || !base || colW <= 0) return;
       const dxCols = Math.round((e.clientX - d.startX) / colW);
       const dyRows = Math.round((e.clientY - d.startY) / cell);
       const next = base.map((it) => {
-        if (it.id !== d.id) return it;
+        if (it.id !== d.id) return { ...it };
         if (d.kind === "move") {
           const w = it.w, h = it.h;
           return { ...it, x: clamp(d.origX + dxCols, 0, cols - w), y: Math.max(0, d.origY + dyRows) };
@@ -133,13 +197,20 @@ export default function DashGrid({
           return { ...it, w, h };
         }
       });
-      setDraft(next);
+      // Pin the card being dragged so the preview tracks the pointer; everything
+      // it lands on is pushed out of the way live, not on drop.
+      setDraft(compactLayout(next, d.id));
     };
     const onUp = () => {
       const committed = draftRef.current;
+      const d = dragRef.current;
       setDrag(null);
       setDraft(null);
-      if (committed) onLayoutChange(committed);
+      startRef.current = null;
+      // Second pass with nothing pinned: the card that was under the cursor now
+      // falls into the board's gravity too, so releasing never leaves a hole
+      // above it.
+      if (committed) onLayoutChange(compactLayout(compactLayout(committed, d?.id ?? null)));
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);

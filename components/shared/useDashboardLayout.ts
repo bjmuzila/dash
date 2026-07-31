@@ -22,6 +22,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { compactLayout } from "./DashGrid";
 import type { GridItem } from "@/lib/layoutStore";
 
 const API = "/api/dashboard-layout";
@@ -39,7 +40,11 @@ export type SaveState = "idle" | "saving" | "saved" | "error";
 /**
  * Reconcile a saved layout against the page's current card set.
  * Saved geometry wins for ids that still exist; cards the user has never seen
- * are appended in one row below everything else so nothing lands hidden.
+ * are appended below everything else so nothing lands hidden.
+ *
+ * The result is run through compactLayout, so a template saved before a card
+ * was added — or written by an older client that allowed overlaps — can never
+ * come back as a stack of cards on top of each other.
  */
 export function mergeLayout(saved: GridItem[], defaults: GridItem[]): GridItem[] {
   const savedById = new Map(saved.map((i) => [i.id, i]));
@@ -62,7 +67,7 @@ export function mergeLayout(saved: GridItem[], defaults: GridItem[]): GridItem[]
       y += m.h;
     }
   }
-  return kept;
+  return compactLayout(kept);
 }
 
 function sameLayout(a: GridItem[], b: GridItem[]): boolean {
