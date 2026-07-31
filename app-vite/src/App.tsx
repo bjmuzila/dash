@@ -25,7 +25,6 @@ const Fails        = lazy(() => import('@/app/fails/page'))
 const Premarket    = lazy(() => import('@/app/premarket/page'))
 const EconCalendar = lazy(() => import('@/app/economic-calendar/page'))
 const TestLab      = lazy(() => import('@/app/test/page'))
-const ForwardBuild = lazy(() => import('@/app/forward-build/page'))
 const StrikeHistory = lazy(() => import('@/app/strike-history/page'))
 const Replay       = lazy(() => import('@/app/replay/page'))
 
@@ -52,7 +51,6 @@ export default function App() {
               <Route path="/flow" element={S(<Flow />)} />
               <Route path="/es-candles" element={S(<EsCandles />)} />
               <Route path="/scanner" element={S(<Scanner />)} />
-              <Route path="/forward-build" element={S(<ForwardBuild />)} />
               <Route path="/strike-history" element={S(<StrikeHistory />)} />
               <Route path="/replay" element={S(<Replay />)} />
               <Route path="/ict" element={S(<Ict />)} />

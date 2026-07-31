@@ -2,15 +2,15 @@
 
 /**
  * ScannerTabsBar — the /scanner top tab strip, extracted so routes that were
- * split out of /scanner (currently /forward-build) can render the same bar and
+ * split out of /scanner (currently /strike-history) can render the same bar and
  * jump straight back to any scanner tab.
  *
  * Two modes:
  *   onSelect given  → <button>s that flip local tab state (used on /scanner).
  *   onSelect absent → <Link>s to /scanner?tab=<id> (used on standalone routes,
  *                     where there is no local tab state to flip).
- * Forward Build and Strike History are always links to their own routes in
- * either mode — they are split-out pages, not inline tabs.
+ * Strike History is always a link to its own route in either mode — it is a
+ * split-out page, not an inline tab.
  *
  * The mobile <select> (globals.css .scanner-tab-select / .scanner-tabs swap one
  * for the other by viewport) travels with the bar so both pages get it.
@@ -26,7 +26,7 @@ export type ScannerTabId =
   | "tpo" | "ibstats" | "statprompter" | "gexchangetop" | "gexpct";
 
 /** What the bar can mark as current: a /scanner tab, or a split-out route. */
-export type ScannerBarActive = ScannerTabId | "forwardbuild" | "strikehistory" | null;
+export type ScannerBarActive = ScannerTabId | "strikehistory" | null;
 
 type TabDef = { id: ScannerTabId; label: string; color: string };
 
@@ -87,7 +87,6 @@ export default function ScannerTabsBar({
   });
 
   const go = (value: string) => {
-    if (value === "forwardbuild") { router.push("/forward-build"); return; }
     if (value === "strikehistory") { router.push("/strike-history"); return; }
     if (!isScannerTabId(value)) return;
     if (onSelect) onSelect(value);
@@ -112,7 +111,6 @@ export default function ScannerTabsBar({
         {SCANNER_TABS.map((t) => (
           <option key={t.id} value={t.id}>{t.label}</option>
         ))}
-        <option value="forwardbuild">Forward Build</option>
         <option value="strikehistory">Strike History</option>
       </select>
 
@@ -130,25 +128,9 @@ export default function ScannerTabsBar({
             </Link>
           );
         })}
-        {/* Forward Build lives on its own route (/forward-build); this tab-styled
-            link navigates there instead of rendering inline. */}
-        <Link
-          href="/forward-build"
-          prefetch={false}
-          style={{
-            ...tabStyle(true, HOME_THEME.orange),
-            color: HOME_THEME.text,
-            opacity: active === "forwardbuild" ? 1 : 0.95,
-          }}
-        >
-          Forward Build
-          {active === "forwardbuild"
-            ? null
-            : <span style={{ fontSize: 11, opacity: 0.8 }}>↗</span>}
-        </Link>
         {/* Strike History is its own route (/strike-history) — per-strike net
-            GEX + IV skew over time. Same split-out treatment as Forward Build:
-            a tab-styled link, never an inline tab. */}
+            GEX + IV skew over time. Split out of /scanner: a tab-styled link,
+            never an inline tab. */}
         <Link
           href="/strike-history"
           prefetch={false}

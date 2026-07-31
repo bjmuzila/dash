@@ -57,13 +57,47 @@ check('a missing spot or strike picks no side at all', () => {
   assert.strictEqual(t.decideSide(6650, null), null);
 });
 
-// ── Rule 1: the $1.00 auto-buy gate ────────────────────────────────────────
-check('a mark at the cap buys', () => assert.strictEqual(t.shouldBuy(1.0), true));
-check('a mark under the cap buys', () => assert.strictEqual(t.shouldBuy(0.55), true));
-check('a mark over the cap does not', () => assert.strictEqual(t.shouldBuy(1.01), false));
-check('a null or zero mark never buys', () => {
-  assert.strictEqual(t.shouldBuy(null), false);
-  assert.strictEqual(t.shouldBuy(0), false);
+// ── Rule 1: $1.00 is a FLOOR ───────────────────────────────────────────────
+check('a mark over the floor qualifies', () => assert.strictEqual(t.qualifies(1.05), true));
+check('a mark exactly at the floor does NOT — "over 1.0" is strict', () => {
+  assert.strictEqual(t.qualifies(1.0), false);
+});
+check('a mark under the floor does not qualify', () => assert.strictEqual(t.qualifies(0.35), false));
+check('a null or zero mark never qualifies', () => {
+  assert.strictEqual(t.qualifies(null), false);
+  assert.strictEqual(t.qualifies(0), false);
+});
+
+// ── The walk: which strikes, in what order, and where it stops ─────────────
+check('the walk starts AT the CB', () => {
+  assert.strictEqual(t.walkCandidates(4500, 4470, 'C')[0], 4500);
+});
+check('a call walks DOWN toward the money (the owner\'s 4500 → 4495 → 4490)', () => {
+  assert.deepStrictEqual(t.walkCandidates(4500, 4470, 'C').slice(0, 4), [4500, 4495, 4490, 4485]);
+});
+check('a put walks UP toward the money', () => {
+  assert.deepStrictEqual(t.walkCandidates(4500, 4530, 'P').slice(0, 4), [4500, 4505, 4510, 4515]);
+});
+check('the walk stops AT the money, never through it into ITM', () => {
+  // spot 4470, so 4470 and below would be ITM calls — a different instrument.
+  const c = t.walkCandidates(4500, 4470, 'C');
+  assert.strictEqual(c[c.length - 1], 4475);
+  assert.ok(c.every((k) => k > 4470));
+});
+check('the put side stops at the money too', () => {
+  const c = t.walkCandidates(4500, 4530, 'P');
+  assert.ok(c.every((k) => k < 4530));
+  assert.strictEqual(c[c.length - 1], 4525);
+});
+check('a CB already at the money yields only the CB itself', () => {
+  assert.deepStrictEqual(t.walkCandidates(4500, 4500, 'C'), [4500]);
+});
+check('the walk is bounded even when the CB is miles away', () => {
+  assert.ok(t.walkCandidates(9000, 4000, 'C').length <= t.CONFIG.WALK_MAX_STEPS + 1);
+});
+check('a missing CB or spot walks nowhere', () => {
+  assert.deepStrictEqual(t.walkCandidates(null, 4470, 'C'), []);
+  assert.deepStrictEqual(t.walkCandidates(4500, null, 'C'), []);
 });
 
 // ── Rule 3: the 5-10 pt sell band ──────────────────────────────────────────
@@ -135,7 +169,8 @@ check('an empty session matches nothing', () => {
 
 // ── Config is the spec ─────────────────────────────────────────────────────
 check('defaults match the owner spec, and the probe root is SPXW', () => {
-  assert.strictEqual(t.CONFIG.AUTO_BUY_MAX, 1.0);
+  assert.strictEqual(t.CONFIG.BUY_MIN, 1.0);
+  assert.strictEqual(t.CONFIG.STRIKE_STEP, 5);
   assert.strictEqual(t.CONFIG.SELL_TRIGGER_PTS, 10);
   assert.strictEqual(t.CONFIG.SELL_TIGHT_PTS, 5);
   assert.strictEqual(t.CONFIG.PROBE_TICKER, 'SPXW');
@@ -221,6 +256,115 @@ function stubCtx(handler) {
     const p = await t.probeContract(ctx, { expiry: '2026-07-15', side: 'C', strike: 6650 });
     assert.strictEqual(p.found, false);
     assert.match(p.reason, /ECONNREFUSED/);
+  });
+
+  // ── The walk, driven through the real probe path ─────────────────────────
+  // The owner's example: CB 4500, SPX 4470, and the 4500 call is $0.35. Premium
+  // rises as the strike approaches spot; the walk should land on the first one
+  // over a dollar and stop there.
+  const CHAIN = { 4500: 0.35, 4495: 0.55, 4490: 0.80, 4485: 1.10, 4480: 1.65, 4475: 2.40 };
+  const chainCtx = () => {
+    const asked = [];
+    return {
+      asked,
+      internalFetch: async (path) => {
+        const k = Number(new URLSearchParams(path.split('?')[1]).get('strike'));
+        asked.push(k);
+        const mark = CHAIN[k];
+        return {
+          status: 200,
+          json: async () => (mark == null
+            ? { found: false, status: 'no-strike' }
+            : {
+              found: true, status: 'ready', resolvedStrike: k, occSymbol: `OCC${k}`, resolvedSymbol: `.S${k}`,
+              result: { feeds: { Quote: { bid: mark - 0.05, ask: mark + 0.05, mark } }, exposures: { spot: 4470 } },
+            }),
+        };
+      },
+    };
+  };
+
+  await checkAsync('the walk lands on the first strike over $1.00, not the cheapest', async () => {
+    const ctx = chainCtx();
+    const w = await t.walkForContract(ctx, { expiry: '2026-07-15', side: 'C', cbStrike: 4500, spot: 4470 });
+    assert.strictEqual(w.ok, true);
+    assert.strictEqual(w.strike, 4485, 'first strike over a dollar');
+    assert.strictEqual(w.probe.mark, 1.10);
+    assert.strictEqual(w.steps, 3);
+  });
+
+  await checkAsync('the walk stops at the first qualifier — it does not run to the money', async () => {
+    const ctx = chainCtx();
+    await t.walkForContract(ctx, { expiry: '2026-07-15', side: 'C', cbStrike: 4500, spot: 4470 });
+    assert.deepStrictEqual(ctx.asked, [4500, 4495, 4490, 4485], 'must not price 4480 or 4475');
+  });
+
+  await checkAsync('it records what the CB itself cost — the reason the walk happened', async () => {
+    const ctx = chainCtx();
+    const w = await t.walkForContract(ctx, { expiry: '2026-07-15', side: 'C', cbStrike: 4500, spot: 4470 });
+    assert.strictEqual(w.cbPrice, 0.35);
+    assert.strictEqual(w.trail[0].strike, 4500);
+    assert.strictEqual(w.trail[0].mark, 0.35);
+  });
+
+  await checkAsync('a CB already over $1.00 is bought outright — no walk', async () => {
+    const ctx = chainCtx();
+    const w = await t.walkForContract(ctx, { expiry: '2026-07-15', side: 'C', cbStrike: 4485, spot: 4470 });
+    assert.strictEqual(w.strike, 4485);
+    assert.strictEqual(w.steps, 0);
+    assert.deepStrictEqual(ctx.asked, [4485]);
+  });
+
+  await checkAsync('duplicate resolutions are priced once, not repeatedly', async () => {
+    // A 25-wide chain where three 5-point steps all snap to the same listing.
+    const asked = [];
+    const ctx = {
+      asked,
+      internalFetch: async (path) => {
+        const k = Number(new URLSearchParams(path.split('?')[1]).get('strike'));
+        asked.push(k);
+        const snapped = Math.round(k / 25) * 25;      // chain lists 25-wide
+        const mark = snapped <= 4425 ? 1.4 : 0.4;
+        return {
+          status: 200,
+          json: async () => ({
+            found: true, status: 'ready', resolvedStrike: snapped, occSymbol: 'X', resolvedSymbol: 'X',
+            result: { feeds: { Quote: { mark } }, exposures: { spot: 4400 } },
+          }),
+        };
+      },
+    };
+    const w = await t.walkForContract(ctx, { expiry: '2026-07-15', side: 'C', cbStrike: 4450, spot: 4400 });
+    assert.strictEqual(w.ok, true);
+    assert.strictEqual(w.strike, 4425);
+    const priced = w.trail.filter((x) => x.strike != null).map((x) => x.strike);
+    assert.deepStrictEqual(priced, [4450, 4425], 'each distinct listing appears once');
+  });
+
+  await checkAsync('a chain where nothing clears a dollar skips, and says how far it walked', async () => {
+    const cheap = { 4500: 0.1, 4495: 0.15, 4490: 0.2, 4485: 0.25, 4480: 0.3, 4475: 0.4 };
+    const ctx = {
+      internalFetch: async (path) => {
+        const k = Number(new URLSearchParams(path.split('?')[1]).get('strike'));
+        const mark = cheap[k];
+        return { status: 200, json: async () => (mark == null ? { found: false, status: 'no-strike' } : {
+          found: true, status: 'ready', resolvedStrike: k,
+          result: { feeds: { Quote: { mark } }, exposures: { spot: 4470 } },
+        }) };
+      },
+    };
+    const w = await t.walkForContract(ctx, { expiry: '2026-07-15', side: 'C', cbStrike: 4500, spot: 4470 });
+    assert.strictEqual(w.ok, false);
+    assert.match(w.reason, /walked 6 strikes/);
+    assert.match(w.reason, /best \$0\.40/);
+  });
+
+  await checkAsync('a dead probe reads as a probe failure, not as "nothing qualified"', async () => {
+    const ctx = { internalFetch: async () => { throw new Error('ECONNREFUSED'); } };
+    const w = await t.walkForContract(ctx, { expiry: '2026-07-15', side: 'C', cbStrike: 4500, spot: 4470 });
+    assert.strictEqual(w.ok, false);
+    assert.match(w.reason, /could be priced/);
+    assert.match(w.reason, /ECONNREFUSED/);
   });
 
   // ── Rollups ──────────────────────────────────────────────────────────────

@@ -674,8 +674,8 @@ export default function StrikeHistoryPage() {
     // dense charts you hover CONSTANTLY to read the crosshair — the default
     // rise-on-hover would make the whole panel twitch under the cursor.
     <PageShell className="no-card-lift">
-      {/* Same treatment as /forward-build: the scanner tab strip renders in link
-          mode so this route is not a dead end. */}
+      {/* The scanner tab strip renders in link mode so this split-out route is
+          not a dead end. */}
       <ScannerTabsBar active="strikehistory" />
 
       <Card

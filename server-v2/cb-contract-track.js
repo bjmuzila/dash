@@ -13,14 +13,37 @@
  * NBBO / dxLink. No Theta anywhere in this file.
  *
  * THE RULES (owner spec — encoded here and nowhere else)
- *   1. AUTO-BUY   at 9:45, 10:30 and 12:00 ET, if the CB-strike 0DTE contract's
- *                 probed mark is at or below $1.00 (CB_AUTO_BUY_MAX).
+ *   1. THE WALK   at 9:45, 10:30 and 12:00 ET, price the CB strike. If it is
+ *                 over $1.00 (CB_BUY_MIN), buy it. If it is not, step ONE strike
+ *                 at a time TOWARD THE MONEY and buy the first one that prices
+ *                 over $1.00.
+ *
+ *                 Worked example, the owner's: CB 4500, SPX below it, and the
+ *                 4500 call is $0.35. Too cheap. Try 4495, then 4490, then 4485
+ *                 — premium rises as the strike approaches spot — and take the
+ *                 first one over $1.00.
+ *
+ *                 $1.00 is a FLOOR, not a ceiling. A sub-$1.00 0DTE contract is
+ *                 mostly a lottery ticket with almost no delta: SPX can travel
+ *                 20 points toward the CB and the thing barely moves, so the
+ *                 sell rule fires on a contract that never repriced. Walking in
+ *                 until the premium clears a dollar buys something that actually
+ *                 responds to the move being traded. There is deliberately NO
+ *                 upper bound (owner's call) — the walk stops at the FIRST
+ *                 strike over $1.00, so it naturally lands just over it unless
+ *                 the CB itself is already near the money.
+ *
  *   2. SIDE       the leg that gains as SPX travels TO the CB: SPX under the CB
- *                 buys the CB call, SPX over it buys the CB put. The CB is a
- *                 magnet, so this is always the cheap/OTM side — which is why
- *                 the sub-$1.00 filter selects real setups rather than ATM
- *                 premium.
+ *                 buys calls, SPX over it buys puts. The CB is a magnet, so the
+ *                 walk always runs from OTM toward the money — and it stops at
+ *                 the money. Crossing spot would make it an ITM contract, a
+ *                 different instrument with different behaviour, and the rule
+ *                 says "closest to the money", not "through it".
  *   3. AUTO-SELL  the first poll where SPX is within the 5-10 pt band of the CB.
+ *                 Measured to the CB, NOT to the strike that was bought — the CB
+ *                 is the target the whole thesis is built on; the traded strike
+ *                 is just the instrument used to express it. Both are stored
+ *                 (`cb_strike` vs `strike`) precisely so they cannot drift.
  *                 The trigger is the OUTER edge (<= CB_SELL_TRIGGER_PTS, 10):
  *                 price entering the band from outside crosses 10 before 5, and
  *                 a gap straight through to 3 pts is still "within 10". The
@@ -58,7 +81,15 @@
  */
 
 // ── Tunables (env-overridable so a rule change needs no code deploy) ────────
-const AUTO_BUY_MAX = Number(process.env.CB_AUTO_BUY_MAX || 1.0);        // $ premium
+// The buy price is a FLOOR, not a ceiling. See "THE WALK" in the header.
+const BUY_MIN = Number(process.env.CB_BUY_MIN || 1.0);                  // $ premium, strictly greater
+// SPX 0DTE lists 5-wide almost everywhere, 25-wide far out. The walk STEPS by
+// this and then uses whatever strike the chain actually resolved to, so a wrong
+// guess here costs a duplicate probe, never a phantom contract.
+const STRIKE_STEP = Number(process.env.CB_STRIKE_STEP || 5);
+// Hard bound on probes per checkpoint. A qualifying strike is normally 1-5 steps
+// away; this only matters when the whole near-CB chain is under $1.00.
+const WALK_MAX_STEPS = Number(process.env.CB_WALK_MAX_STEPS || 24);
 const SELL_TRIGGER_PTS = Number(process.env.CB_SELL_TRIGGER_PTS || 10); // outer edge of the band
 const SELL_TIGHT_PTS = Number(process.env.CB_SELL_TIGHT_PTS || 5);      // inner edge (reported only)
 const PROBE_TICKER = process.env.CB_PROBE_TICKER || 'SPXW';             // see note below
@@ -121,9 +152,27 @@ function decideSide(spot, strike) {
   return spot < strike ? 'C' : spot > strike ? 'P' : 'C';
 }
 
-/** Rule 1: the probed mark has to exist and be at or under the cap. */
-function shouldBuy(mark, max = AUTO_BUY_MAX) {
-  return Number.isFinite(mark) && mark > 0 && mark <= max;
+/** Rule 1: a contract qualifies once its mark clears the floor. */
+function qualifies(mark, min = BUY_MIN) {
+  return Number.isFinite(mark) && mark > min;
+}
+
+/**
+ * The candidate strikes for the walk, in order: the CB first, then one step at a
+ * time toward the money, stopping AT the money (never through it).
+ * Pure, so the ordering and the stop condition are testable without a chain.
+ */
+function walkCandidates(cbStrike, spot, side, { step = STRIKE_STEP, maxSteps = WALK_MAX_STEPS } = {}) {
+  if (!Number.isFinite(cbStrike) || !Number.isFinite(spot)) return [];
+  const dir = side === 'C' ? -1 : 1;      // calls cheapen upward, so walk down
+  const out = [cbStrike];                  // step 0 is always the CB itself
+  for (let i = 1; i <= maxSteps; i++) {
+    const k = cbStrike + dir * i * step;
+    // At or past spot the contract is ATM/ITM — a different instrument.
+    if (side === 'C' ? k <= spot : k >= spot) break;
+    out.push(k);
+  }
+  return out;
 }
 
 /** Rule 3: distance from spot to the CB, and whether that fires the sell. */
@@ -181,7 +230,10 @@ function ensureTables() {
         checkpoint_label TEXT,
         ticker           TEXT NOT NULL DEFAULT 'SPXW',
         expiration       TEXT NOT NULL,          -- = date (0DTE)
-        strike           REAL NOT NULL,          -- the CB live at the checkpoint
+        strike           REAL NOT NULL,          -- the contract actually bought (the walk's landing strike)
+        cb_strike        REAL,                   -- the CB live at the checkpoint — what distance is measured to
+        cb_price         REAL,                   -- what the CB strike itself priced at (why the walk happened)
+        walk_steps       INTEGER,                -- strikes stepped from the CB toward the money (0 = the CB itself)
         side             TEXT NOT NULL,          -- 'C' | 'P'
         occ_symbol       TEXT,
         streamer_symbol  TEXT,
@@ -217,6 +269,9 @@ function ensureTables() {
         UNIQUE (date, checkpoint)
       );
       ALTER TABLE cb_trades ADD COLUMN IF NOT EXISTS last_error TEXT;
+      ALTER TABLE cb_trades ADD COLUMN IF NOT EXISTS cb_strike REAL;
+      ALTER TABLE cb_trades ADD COLUMN IF NOT EXISTS cb_price REAL;
+      ALTER TABLE cb_trades ADD COLUMN IF NOT EXISTS walk_steps INTEGER;
       CREATE INDEX IF NOT EXISTS idx_cb_trades_date ON cb_trades(date);
       CREATE INDEX IF NOT EXISTS idx_cb_trades_status ON cb_trades(status);
 
@@ -340,11 +395,13 @@ async function runCheckpoint(ctx, { date, checkpoint }) {
   const now = Date.now();
   const write = (row) => q(
     `INSERT INTO cb_trades
-       (date, checkpoint, checkpoint_label, ticker, expiration, strike, side, occ_symbol, streamer_symbol,
+       (date, checkpoint, checkpoint_label, ticker, expiration, strike, cb_strike, cb_price, walk_steps,
+        side, occ_symbol, streamer_symbol,
         status, skip_reason, probe_ts, probe_price, probe_bid, probe_ask, probe_spot, probe_dist,
         entry_ts, entry_price, entry_spot, last_ts, last_price, last_spot, last_dist,
         best_price, worst_price, closest_dist, polls, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+             $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
      ON CONFLICT (date, checkpoint) DO NOTHING
      RETURNING *`,
     row,
@@ -352,52 +409,103 @@ async function runCheckpoint(ctx, { date, checkpoint }) {
 
   const cb = await cbAtCheckpoint(date, cp.min);
   if (!cb) {
-    const [r] = await write([date, cp.key, cp.label, PROBE_TICKER, date, 0, 'C', null, null,
+    const [r] = await write([date, cp.key, cp.label, PROBE_TICKER, date, 0, null, null, null,
+      'C', null, null,
       'skipped', 'no MVC snapshot within the checkpoint window', now, null, null, null, null, null,
       null, null, null, null, null, null, null, null, null, null, 0, now]);
     return { ok: true, status: 'skipped', reason: 'no MVC snapshot', id: r?.id ?? null };
   }
 
-  const strike = cb.strike;
-  // Prefer the snapshot's SPX for the side call; fall back to the probe's own
-  // spot below if the snapshot didn't carry one.
-  let side = decideSide(cb.spx, strike) || 'C';
-  const probe = await probeContract(ctx, { expiry: date, side, strike });
-
-  if (!probe.found) {
-    const [r] = await write([date, cp.key, cp.label, PROBE_TICKER, date, strike, side, null, null,
-      'skipped', probe.reason, now, null, null, null, cb.spx, null,
+  const cbStrike = cb.strike;
+  // The snapshot's SPX picks the side. When it is missing, one probe of the CB
+  // strike gives us a spot to decide with — logging a trade on the wrong leg is
+  // worse than spending a call to avoid it.
+  let spot = cb.spx;
+  if (spot == null) {
+    const seed = await probeContract(ctx, { expiry: date, side: 'C', strike: cbStrike });
+    spot = seed.found ? seed.spot : null;
+  }
+  if (spot == null) {
+    const [r] = await write([date, cp.key, cp.label, PROBE_TICKER, date, cbStrike, cbStrike, null, null,
+      'C', null, null,
+      'skipped', 'no SPX price at the checkpoint — cannot pick a side', now, null, null, null, null, null,
       null, null, null, null, null, null, null, null, null, null, 0, now]);
-    return { ok: true, status: 'skipped', reason: probe.reason, id: r?.id ?? null };
+    return { ok: true, status: 'skipped', reason: 'no SPX price', id: r?.id ?? null };
   }
 
-  const spot = probe.spot ?? cb.spx;
-  // If the snapshot had no SPX, the probe's spot decides the side — re-probe
-  // once rather than logging a trade on the wrong leg.
-  let p = probe;
-  if (cb.spx == null && spot != null) {
-    const corrected = decideSide(spot, strike);
-    if (corrected && corrected !== side) {
-      const re = await probeContract(ctx, { expiry: date, side: corrected, strike });
-      if (re.found) { side = corrected; p = re; }
+  const side = decideSide(spot, cbStrike) || 'C';
+  const walk = await walkForContract(ctx, { expiry: date, side, cbStrike, spot });
+  // Distance is to the CB, always — the traded strike is only the instrument.
+  const { dist } = sellCheck(spot, cbStrike);
+
+  if (!walk.ok) {
+    const [r] = await write([date, cp.key, cp.label, PROBE_TICKER, date, cbStrike, cbStrike,
+      round2(walk.cbPrice), null, side, null, null,
+      'skipped', walk.reason, now, null, null, null, round2(spot), dist,
+      null, null, null, null, null, null, null, null, null, dist, 0, now]);
+    return { ok: true, status: 'skipped', reason: walk.reason, id: r?.id ?? null, cbStrike, side };
+  }
+
+  const p = walk.probe;
+  const [row] = await write([
+    date, cp.key, cp.label, PROBE_TICKER, date, walk.strike, cbStrike, round2(walk.cbPrice), walk.steps,
+    side, p.occSymbol, p.streamerSymbol,
+    'open', null, now, round2(p.mark), round2(p.bid), round2(p.ask), round2(spot), dist,
+    now, round2(p.mark), round2(spot), now, round2(p.mark), round2(spot), dist,
+    round2(p.mark), round2(p.mark), dist, 0, now,
+  ]);
+  if (row) await recordTick(row.id, now, p.mark, p.bid, p.ask, spot, dist);
+  return {
+    ok: true, status: 'open', id: row?.id ?? null,
+    cbStrike, strike: walk.strike, side, steps: walk.steps,
+    cbPrice: round2(walk.cbPrice), mark: round2(p.mark),
+  };
+}
+
+/**
+ * Rule 1, executed: price the CB, then step toward the money until something
+ * clears $1.00.
+ *
+ * Strikes are resolved through the probe rather than assumed. probeRestTT snaps
+ * to the nearest strike in the TT chain and reports `resolvedStrike`, so a step
+ * that lands between listings still prices a REAL contract, and a chain that is
+ * 25-wide out where we assumed 5 just resolves several steps onto the same
+ * strike (deduped below) instead of inventing three that don't exist.
+ *
+ * Returns the qualifying contract plus the full trail — every strike tried and
+ * what it priced at — because "walked 4 strikes, nothing cleared a dollar" is a
+ * different problem from "the probe was down", and a skipped row has to be able
+ * to tell them apart.
+ */
+async function walkForContract(ctx, { expiry, side, cbStrike, spot }) {
+  const trail = [];
+  const seen = new Set();
+  let cbPrice = null;
+  const candidates = walkCandidates(cbStrike, spot, side);
+  if (!candidates.length) return { ok: false, reason: 'no walkable strikes (CB or spot missing)', trail, cbPrice };
+
+  for (let i = 0; i < candidates.length; i++) {
+    const want = candidates[i];
+    const p = await probeContract(ctx, { expiry, side, strike: want });
+    if (!p.found) { trail.push({ want, error: p.reason }); continue; }
+    const strike = p.resolvedStrike ?? want;
+    if (seen.has(strike)) continue;          // the step fell inside one listing gap
+    seen.add(strike);
+    trail.push({ strike, mark: p.mark, steps: i });
+    // Only step 0 is the CB. If the CB itself could not be priced this stays
+    // null, which is the honest answer — not the price of whatever we walked to.
+    if (i === 0) cbPrice = p.mark;
+    if (qualifies(p.mark)) {
+      return { ok: true, strike, probe: p, steps: i, trail, cbPrice };
     }
   }
-  const { dist } = sellCheck(spot, strike);
-  const buy = shouldBuy(p.mark);
-  const status = buy ? 'open' : 'skipped';
-  const reason = buy ? null
-    : p.mark == null ? 'no mark on the probe'
-      : `mark $${p.mark.toFixed(2)} over the $${AUTO_BUY_MAX.toFixed(2)} cap`;
-
-  const [row] = await write([
-    date, cp.key, cp.label, PROBE_TICKER, date, strike, side, p.occSymbol, p.streamerSymbol,
-    status, reason, now, round2(p.mark), round2(p.bid), round2(p.ask), round2(spot), dist,
-    buy ? now : null, buy ? round2(p.mark) : null, buy ? round2(spot) : null,
-    now, round2(p.mark), round2(spot), dist,
-    buy ? round2(p.mark) : null, buy ? round2(p.mark) : null, dist, 0, now,
-  ]);
-  if (row && buy) await recordTick(row.id, now, p.mark, p.bid, p.ask, spot, dist);
-  return { ok: true, status, reason, id: row?.id ?? null, strike, side, mark: round2(p.mark) };
+  const priced = trail.filter((x) => x.mark != null);
+  const reason = priced.length
+    ? `walked ${priced.length} strike${priced.length === 1 ? '' : 's'} from the CB to `
+      + `${priced[priced.length - 1].strike} — none priced over $${BUY_MIN.toFixed(2)} `
+      + `(best $${Math.max(...priced.map((x) => x.mark)).toFixed(2)})`
+    : `no strike near the CB could be priced — ${trail[0]?.error ?? 'probe returned nothing'}`;
+  return { ok: false, reason, trail, cbPrice };
 }
 
 async function recordTick(tradeId, ts, mark, bid, ask, spot, dist) {
@@ -432,7 +540,9 @@ async function pollOpen(ctx, { date } = {}) {
     }
     const now = Date.now();
     const spot = p.spot ?? num(t.last_spot);
-    const { dist, fire, tight } = sellCheck(spot, num(t.strike));
+    // To the CB, never to the strike we happen to be holding. Rows written
+    // before cb_strike existed fall back to strike, which is what they meant.
+    const { dist, fire, tight } = sellCheck(spot, num(t.cb_strike) ?? num(t.strike));
     const mark = p.mark;
     polled += 1;
     await recordTick(t.id, now, mark, p.bid, p.ask, spot, dist);
@@ -453,7 +563,7 @@ async function pollOpen(ctx, { date } = {}) {
           pnl, pnlUsd, t.id],
       );
       closed += 1;
-      console.log(`[cb-trades] ${t.date} ${t.checkpoint_label} ${t.strike}${t.side} SOLD @ $${mark.toFixed(2)} `
+      console.log(`[cb-trades] ${t.date} ${t.checkpoint_label} ${t.strike}${t.side} (CB ${t.cb_strike ?? t.strike}) SOLD @ $${mark.toFixed(2)} `
         + `(SPX ${dist} pts from CB${tight ? ', inside 5' : ''}) — P&L ${pnl >= 0 ? '+' : ''}${pnl}`);
       continue;
     }
@@ -559,15 +669,15 @@ async function diagnose(ctx, { date } = {}) {
     recorder: _lastTick
       ? { lastTickAt: _lastTick.at, agoSeconds: Math.round((Date.now() - _lastTick.at) / 1000), lastResult: _lastTick.result ?? null }
       : { lastTickAt: null, note: 'no tick has run in this process — the recorder is not firing, or the process restarted' },
-    config: { AUTO_BUY_MAX, SELL_TRIGGER_PTS, SELL_TIGHT_PTS, PROBE_TICKER, CHECKPOINT_GRACE_MIN },
+    config: { BUY_MIN, STRIKE_STEP, WALK_MAX_STEPS, SELL_TRIGGER_PTS, SELL_TIGHT_PTS, PROBE_TICKER, CHECKPOINT_GRACE_MIN },
     dueNow: dueCheckpoints(et.minutes).map((c) => c.key),
     checkpoints: [],
     rows: [],
   };
   try {
     out.rows = await q(
-      `SELECT id, checkpoint, strike, side, status, skip_reason, last_error, polls, probe_price,
-              entry_price, last_price, last_ts, updated_at
+      `SELECT id, checkpoint, strike, cb_strike, cb_price, walk_steps, side, status, skip_reason,
+              last_error, polls, probe_price, entry_price, last_price, last_ts, updated_at
          FROM cb_trades WHERE date = $1 ORDER BY checkpoint`, [d]);
     const ticks = await q(
       `SELECT trade_id, count(*)::int AS ticks FROM cb_trade_ticks
@@ -591,18 +701,21 @@ async function diagnose(ctx, { date } = {}) {
     out.checkpoints.push(entry);
   }
   const liveCb = out.checkpoints.filter((c) => c.cb).pop();
-  if (liveCb?.cb?.strike) {
+  if (liveCb?.cb?.strike && liveCb.cb.spx != null) {
+    // Run the REAL walk, so the diagnosis shows every strike it would try and
+    // what each priced at — that trail is the whole answer to "why did it skip".
     const side = decideSide(liveCb.cb.spx, liveCb.cb.strike) || 'C';
-    const p = await probeContract(ctx, { expiry: d, side, strike: liveCb.cb.strike });
-    out.liveProbe = {
-      asked: { ticker: PROBE_TICKER, expiry: d, side, strike: liveCb.cb.strike },
-      found: p.found,
-      reason: p.reason ?? null,
-      mark: p.mark ?? null, bid: p.bid ?? null, ask: p.ask ?? null, spot: p.spot ?? null,
-      occSymbol: p.occSymbol ?? null,
+    const w = await walkForContract(ctx, { expiry: d, side, cbStrike: liveCb.cb.strike, spot: liveCb.cb.spx });
+    out.liveWalk = {
+      asked: { ticker: PROBE_TICKER, expiry: d, side, cb: liveCb.cb.strike, spot: liveCb.cb.spx, buyMin: BUY_MIN },
+      candidates: walkCandidates(liveCb.cb.strike, liveCb.cb.spx, side).slice(0, 10),
+      trail: w.trail,
+      picked: w.ok ? { strike: w.strike, mark: w.probe.mark, steps: w.steps } : null,
+      reason: w.ok ? null : w.reason,
+      cbPrice: w.cbPrice ?? null,
     };
   } else {
-    out.liveProbe = { skipped: 'no CB resolved for any checkpoint today — mvc_snapshots is empty or unparseable' };
+    out.liveWalk = { skipped: 'no CB + SPX resolved for any checkpoint today — mvc_snapshots is empty or unparseable' };
   }
   return out;
 }
@@ -673,6 +786,9 @@ async function enrichWithTrades(data) {
       const t = byKey.get(`${day.date}|${cell.key}`);
       if (!t) { cell.contractNote = 'not recorded — the tracker was not running this session'; continue; }
       cell.right = t.side;
+      cell.tradedStrike = num(t.strike);
+      cell.cbPrice = num(t.cb_price);
+      cell.walkSteps = t.walk_steps == null ? null : Number(t.walk_steps);
       cell.contractPrice = num(t.probe_price);
       cell.contractPricedAt = num(t.probe_ts);
       cell.autoEntry = t.entry_price != null ? { price: Number(t.entry_price), ts: Number(t.entry_ts) } : null;
@@ -708,7 +824,7 @@ async function enrichWithTrades(data) {
   data.contracts = {
     enabled: true,
     source: 'tastytrade',
-    autoBuyMax: AUTO_BUY_MAX,
+    buyMin: BUY_MIN,
     sellBand: [SELL_TIGHT_PTS, SELL_TRIGGER_PTS],
     multiplier: MULTIPLIER,
     daysRecorded: new Set(rows.map((r) => r.date)).size,
@@ -734,11 +850,13 @@ module.exports = {
   cbAtCheckpoint,
   // pure helpers, exported for the selftest
   decideSide,
-  shouldBuy,
+  qualifies,
+  walkCandidates,
+  walkForContract,
   sellCheck,
   computePnl,
   dueCheckpoints,
   snapshotAt,
   etParts,
-  CONFIG: { AUTO_BUY_MAX, SELL_TRIGGER_PTS, SELL_TIGHT_PTS, PROBE_TICKER, MULTIPLIER, CHECKPOINT_GRACE_MIN },
+  CONFIG: { BUY_MIN, STRIKE_STEP, WALK_MAX_STEPS, SELL_TRIGGER_PTS, SELL_TIGHT_PTS, PROBE_TICKER, MULTIPLIER, CHECKPOINT_GRACE_MIN },
 };

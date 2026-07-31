@@ -65,7 +65,7 @@ const HOT_MINS = Number(process.env.STRIKE_GROWTH_HOT_MINS || 2);
 // REST spot backstop: how often to refresh EVERY roster ticker's live spot via
 // TT /market-data/by-type. The dxLink feed only carries an underlying quote for
 // roots it has actively subscribed, so other tickers showed a stale last-swept
-// DB spot. This poll keeps all Forward Build spots current (RTH + ext hours).
+// DB spot. This poll keeps every roster ticker's spot current (RTH + ext hours).
 // Set to 0 to disable.
 const SPOT_REFRESH_MINS = Number(process.env.STRIKE_GROWTH_SPOT_REFRESH_MINS || 15);
 // How many strikes to WRITE to strike_growth per side, per expiry — ranked by
@@ -77,8 +77,7 @@ const TOP_N_EACH_SIDE = Number(process.env.STRIKE_GROWTH_TOP_N || 5);
 // How many front expiries to snapshot per ticker. Must be <= the live feed's
 // STRIKE_GROWTH_FEED_EXPIRIES (proxy-tastytrade.js) — a larger value here just
 // gets clamped to whatever the feed actually subscribed. 3 = 0DTE+1DTE+2DTE,
-// what getForwardBuildLeaderboard() needs to rank strikes accelerating ahead
-// of today, not just today's front expiry.
+// so history exists for the next couple of expiries, not just today's front one.
 const EXPIRIES_PER_TICKER = Number(process.env.STRIKE_GROWTH_EXPIRIES || 3);
 // Delay between tickers in a sweep (ms) — insurance against a burst of cold
 // fetchChain() cache misses on startup, not per-request network pacing.
@@ -191,12 +190,12 @@ async function ensureSchema() {
   // Supports the 15/30/60-min lateral lookbacks (per symbol+expiry+strike, by ts).
   await p.query(`CREATE INDEX IF NOT EXISTS idx_strike_growth_lookback
                  ON strike_growth (date, symbol, expiry, strike, ts DESC);`);
-  // Forward Build: getForwardBuildStructure does
+  // Latest-per-(symbol,expiry,strike,date) reads do
   //   DISTINCT ON (symbol, expiry, strike, date) ... ORDER BY symbol, expiry, strike, date, ts DESC
   // The two indexes above lead with `date`, so the planner couldn't satisfy that
-  // ordering and fell back to a full 9-day roster scan + a huge in-memory sort
-  // (the "Forward Build takes forever" load). This index matches the DISTINCT ON
-  // ordering exactly, so it becomes an ordered index scan with no sort.
+  // ordering and fell back to a full multi-day roster scan + a huge in-memory
+  // sort. This index matches the DISTINCT ON ordering exactly, so it becomes an
+  // ordered index scan with no sort.
   await p.query(`CREATE INDEX IF NOT EXISTS idx_strike_growth_fb
                  ON strike_growth (symbol, expiry, strike, date, ts DESC);`);
 
@@ -223,8 +222,8 @@ async function ensureSchema() {
       PRIMARY KEY (date, symbol, expiry, ts)
     );
   `);
-  // Matches the DISTINCT ON (symbol, expiry, date) ORDER BY … ts DESC the
-  // Forward Build endpoint uses to pull each expiry's latest totals.
+  // Matches the DISTINCT ON (symbol, expiry, date) ORDER BY … ts DESC used to
+  // pull each expiry's latest totals.
   await p.query(`CREATE INDEX IF NOT EXISTS idx_strike_growth_expiry_latest
                  ON strike_growth_expiry (symbol, expiry, date, ts DESC);`);
 
@@ -350,8 +349,8 @@ function pickTopEachSide(legRows, spot) {
 /**
  * CALL-SIDE and PUT-SIDE GEX totals for one expiry, summed over EVERY strike in
  * the feed's subscribed window — not the top-N the ladder stores, and never
- * netted call-against-put within a strike. This is what the Forward Build card's
- * "+62% / −38%" share is built from.
+ * netted call-against-put within a strike. This is what a call/put share
+ * ("+62% / −38%") is built from.
  *
  * Basis matches the per-strike `net` the rest of this file uses (OI + Vol):
  *   call side = callGEX(OI)  + callGamma × callVolume × S²   → >= 0
@@ -500,333 +499,6 @@ async function rollupDayOverDay(p, date) {
   }
 }
 
-// ── Forward Build: 0/1/2-DTE acceleration leaderboard ───────────────────────
-// A DIFFERENT cut than the 0DTE/SWING split above. Question this answers: for
-// EVERY active ticker's front 3 expiries (0DTE/1DTE/2DTE as of the latest
-// recorded session), which strike is ACCELERATING — today's day-over-day Δ
-// bigger than yesterday's Δ — not just biggest total growth? A strike quietly
-// speeding up on tomorrow's or the day-after's expiry is where price may be
-// headed before it ever becomes today's 0DTE. Needs EXPIRIES_PER_TICKER>=3
-// (bumped 2->3 for this) and STRIKE_GROWTH_FEED_EXPIRIES>=3 in
-// proxy-tastytrade.js so 2DTE actually gets subscribed/recorded at all.
-// Pure read over rows the sweep already wrote — one query, no extra network
-// call, computed in JS since the per-strike history here is small (top 5/side
-// × 3 expiries × ~130 tickers × a few days ≈ a few thousand rows).
-const FORWARD_BUILD_MIN_BASE = Number(process.env.STRIKE_GROWTH_FORWARD_MIN_BASE || 20e6);
-const FORWARD_BUILD_LOOKBACK_DAYS = Number(process.env.STRIKE_GROWTH_FORWARD_LOOKBACK_DAYS || 3);
-
-async function getForwardBuildLeaderboard(opts = {}) {
-  const limit = Math.min(200, Number(opts.limit) || 40);
-  const minBase = Number(opts.minBase) || FORWARD_BUILD_MIN_BASE;
-  if (!(await ensureSchema())) return { asOf: null, rows: [] };
-  const p = getPool();
-  const symbols = await getActiveSymbols(p);
-  if (!symbols.length) return { asOf: null, rows: [] };
-
-  // Last snapshot per (symbol,expiry,strike,date) over a short calendar window
-  // (generous vs FORWARD_BUILD_LOOKBACK_DAYS=3 trading days to absorb weekends).
-  const { rows: raw } = await p.query(
-    `SELECT DISTINCT ON (symbol, expiry, strike, date)
-       to_char(date, 'YYYY-MM-DD') AS date, symbol, strike, expiry,
-       gex_now, gex_open, spot
-     FROM strike_growth
-     WHERE date >= (CURRENT_DATE - INTERVAL '9 days') AND symbol = ANY($1)
-     ORDER BY symbol, expiry, strike, date, ts DESC`,
-    [symbols]
-  );
-  if (!raw.length) return { asOf: null, rows: [] };
-
-  // "Today" = the most recent session actually present, not wall-clock — so
-  // this stays correct pre-open/after-hours when the latest sweep is stale.
-  const asOf = raw.reduce((m, r) => (r.date > m ? r.date : m), raw[0].date);
-  const asOfMs = new Date(`${asOf}T00:00:00Z`).getTime();
-
-  // `symbol|expiry` -> { symbol, expiry, dte, spot, strikes: Map<strike, [{date,net}]> }
-  const groups = new Map();
-  for (const r of raw) {
-    const expiry = String(r.expiry || '');
-    if (!/^\d{4}-\d{2}-\d{2}/.test(expiry)) continue;
-    const expMs = new Date(`${expiry.slice(0, 10)}T00:00:00Z`).getTime();
-    const dte = Math.round((expMs - asOfMs) / 86400000);
-    if (dte < 0 || dte > 2) continue; // only 0/1/2-DTE — the forward window this view is about
-    const gk = `${r.symbol}|${expiry}`;
-    if (!groups.has(gk)) groups.set(gk, { symbol: r.symbol, expiry, dte, spot: 0, strikes: new Map() });
-    const g = groups.get(gk);
-    if (Number(r.spot) > 0) g.spot = Number(r.spot);
-    const sk = Number(r.strike);
-    if (!g.strikes.has(sk)) g.strikes.set(sk, []);
-    g.strikes.get(sk).push({ date: r.date, net: Number(r.gex_now || 0) + Number(r.gex_open || 0) });
-  }
-
-  const out = [];
-  for (const g of groups.values()) {
-    for (const [strike, pts] of g.strikes) {
-      pts.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-      const last = pts.slice(-FORWARD_BUILD_LOOKBACK_DAYS);
-      if (last.length < 2) continue; // need at least one Δ to rank anything
-      const latest = last[last.length - 1].net;
-      if (Math.abs(latest) < minBase) continue; // tiny strikes → noisy % / accel, skip
-      const deltaLast = last[last.length - 1].net - last[last.length - 2].net;
-      // deltaPrev = the Δ BEFORE deltaLast (needs a 3rd point) — accel compares
-      // the two, so a strike whose Δ is growing day-over-day ranks above one
-      // that grew a lot once and has since flattened.
-      const deltaPrev = last.length >= 3 ? last[last.length - 2].net - last[last.length - 3].net : null;
-      const accel = deltaPrev != null ? deltaLast - deltaPrev : deltaLast;
-      out.push({
-        symbol: g.symbol, dte: g.dte, expiry: g.expiry, strike, spot: g.spot,
-        side: latest >= 0 ? 'call' : 'put',
-        trend: last.map((x) => ({ date: x.date, net: x.net })),
-        delta_last: deltaLast, delta_prev: deltaPrev, accel,
-        has_accel: deltaPrev != null,
-      });
-    }
-  }
-
-  out.sort((a, b) => {
-    if (a.has_accel !== b.has_accel) return a.has_accel ? -1 : 1;
-    return b.accel - a.accel;
-  });
-
-  return { asOf, rows: out.slice(0, limit) };
-}
-
-// ── Forward Build STRUCTURE: per-ticker 0/1/2-DTE GEX ladder + DoD Δ per strike ─
-// Same source rows as the leaderboard above, but a DIFFERENT shape: instead of
-// ranking individual accelerating strikes across the whole roster, this groups
-// by ticker and, for each of the front 0/1/2-DTE expiries, returns the CURRENT
-// wall structure (top strikes each side, from the latest session) plus each
-// strike's day-over-day Δ vs the SAME expiry's prior session. Feeds the
-// grouped, collapsible "Forward Build" structure tab: see where each ticker's
-// gamma is stacking and which strikes are building/leaving day to day.
-//
-// Δ availability note (data-driven, not a UI choice): an expiry first enters the
-// recorded window when it's 2DTE (1 point -> no Δ), becomes 1DTE the next session
-// (2 points -> 1 Δ) and 0DTE the session after (3 points). So 0DTE/1DTE strikes
-// normally have a Δ; a freshly-appeared 2DTE strike shows "—" until it has a
-// prior session to compare against.
-// Short in-process cache: the DB scan over ~9 days of strike_growth for the
-// whole roster is the expensive part of this endpoint, and the data only
-// changes each sweep (2–5 min). Cache the grouped structure for
-// FB_STRUCT_CACHE_MS so re-opening the tab is instant; the live spot is overlaid
-// FRESH on every request (a cheap Map.get) so it stays live even on a cache hit.
-const FB_STRUCT_CACHE_MS = Number(process.env.STRIKE_GROWTH_FB_CACHE_MS || 45000);
-let _fbStructCache = { at: 0, key: '', asOf: null, tickers: null };
-
-async function getForwardBuildStructure(opts = {}) {
-  const maxTickers = Math.min(600, Number(opts.limit) || 400);
-  const cacheKey = String(maxTickers);
-  const nowMs = Date.now();
-
-  // Fast path: recent cached build → skip the query entirely.
-  if (_fbStructCache.tickers && _fbStructCache.key === cacheKey
-      && nowMs - _fbStructCache.at < FB_STRUCT_CACHE_MS) {
-    return { asOf: _fbStructCache.asOf, tickers: overlayLiveSpot(_fbStructCache.tickers).slice(0, maxTickers) };
-  }
-
-  if (!(await ensureSchema())) return { asOf: null, tickers: [] };
-  const p = getPool();
-  const symbols = await getActiveSymbols(p); // sort_idx order (hot/majors first)
-  if (!symbols.length) return { asOf: null, tickers: [] };
-  const order = new Map(symbols.map((s, i) => [s, i]));
-
-  // Only the 2 most recent sessions are needed (today's net + the prior session
-  // for the day-over-day Δ). Scanning the whole 9-day window was the "Forward Build
-  // takes forever" load (9 calendar days × full roster × every-few-min snapshots =
-  // ~17M rows). The `recent` CTE picks the last 2 dates present (index-only on the
-  // date-led index); the main scan then hits just those 2 dates via idx_strike_growth_fb.
-  const { rows: raw } = await p.query(
-    `WITH recent AS (
-       SELECT DISTINCT date FROM strike_growth
-       WHERE date >= (CURRENT_DATE - INTERVAL '9 days')
-       ORDER BY date DESC LIMIT 2
-     )
-     SELECT DISTINCT ON (symbol, expiry, strike, date)
-       to_char(date, 'YYYY-MM-DD') AS date, symbol, strike, expiry,
-       gex_now, gex_open, spot, ts
-     FROM strike_growth
-     WHERE date IN (SELECT date FROM recent) AND symbol = ANY($1)
-     ORDER BY symbol, expiry, strike, date, ts DESC`,
-    [symbols]
-  );
-  if (!raw.length) return { asOf: null, tickers: [] };
-
-  // Full-window call/put split per expiry, latest sweep of the latest session.
-  // Separate (tiny) query — one row per symbol+expiry, not per strike. Missing
-  // for any expiry recorded before strike_growth_expiry existed, which the UI
-  // handles by falling back to the per-strike net share.
-  const totalsBy = new Map(); // `${symbol}|${expiry}` -> { callGex, putGex, strikes }
-  try {
-    const { rows: tot } = await p.query(
-      `WITH recent AS (
-         SELECT DISTINCT date FROM strike_growth_expiry
-         WHERE date >= (CURRENT_DATE - INTERVAL '9 days')
-         ORDER BY date DESC LIMIT 1
-       )
-       SELECT DISTINCT ON (symbol, expiry)
-         symbol, expiry, call_gex, put_gex, strikes_n
-       FROM strike_growth_expiry
-       WHERE date IN (SELECT date FROM recent) AND symbol = ANY($1)
-       ORDER BY symbol, expiry, ts DESC`,
-      [symbols]
-    );
-    for (const r of tot) {
-      totalsBy.set(`${r.symbol}|${r.expiry}`, {
-        callGex: Number(r.call_gex || 0),
-        putGex: Number(r.put_gex || 0),
-        strikes: Number(r.strikes_n || 0),
-      });
-    }
-  } catch (e) {
-    // Never let the split break the page — the ladder is the primary view.
-    console.warn('[strike-growth] expiry totals query failed:', String(e?.message || e).slice(0, 160));
-  }
-
-  const asOf = raw.reduce((m, r) => (r.date > m ? r.date : m), raw[0].date);
-  const asOfMs = new Date(`${asOf}T00:00:00Z`).getTime();
-
-  // symbol -> { spot, exps: Map<expiry, { dte, strikes: Map<strike, [{date,net}]> }> }
-  const bySym = new Map();
-  for (const r of raw) {
-    const expiry = String(r.expiry || '');
-    if (!/^\d{4}-\d{2}-\d{2}/.test(expiry)) continue;
-    // Drop already-expired expiries; the front 3 UPCOMING expiries become the
-    // 0/1/2-DTE columns by RANK (see slotOf below). Calendar-day DTE broke on
-    // Fridays/holidays — Monday is +3 calendar days, so the old `dte<=2` filter
-    // emptied the 1/2-DTE columns every Friday.
-    if (expiry.slice(0, 10) < asOf) continue;
-    if (!bySym.has(r.symbol)) bySym.set(r.symbol, { spot: 0, exps: new Map() });
-    const s = bySym.get(r.symbol);
-    if (Number(r.spot) > 0) s.spot = Number(r.spot);
-    if (!s.exps.has(expiry)) s.exps.set(expiry, { strikes: new Map() });
-    const e = s.exps.get(expiry);
-    const sk = Number(r.strike);
-    if (!e.strikes.has(sk)) e.strikes.set(sk, []);
-    e.strikes.get(sk).push({
-      date: r.date,
-      net: Number(r.gex_now || 0) + Number(r.gex_open || 0),
-      // Volume-only basis, carried alongside the OI+Vol net so the UI's basis
-      // tab can switch bases without a second query or any new data capture.
-      // gex_now IS netVolGEX (today's traded volume at this strike, no OI) and
-      // gex_open is netGEX (the carried OI the day started with) — see
-      // volOnlyNet/oiOnlyNet above. `net` is their sum; this is its volume term,
-      // and it is populated for every row ever written, so the vol-only view is
-      // fully retroactive over the existing history.
-      netVol: Number(r.gex_now || 0),
-      // Sweep timestamp of this reading. A strike only gets a row on sweeps
-      // where it made the top-N, so an old ts means "rotated out of the walls
-      // N minutes ago" — the UI dims those rather than dropping them.
-      tsMs: r.ts ? new Date(r.ts).getTime() : 0,
-    });
-  }
-
-  const tickers = [];
-  for (const [symbol, s] of bySym) {
-    const dtes = [];
-    // Rank this symbol's UPCOMING expiries: nearest = slot 0 (0DTE), next = 1, … .
-    // Only the front 3 fill the columns. Robust across weekends/holidays where the
-    // next expiry is >1 calendar day out (Fri→Mon = 3 days).
-    const slotOf = new Map([...s.exps.keys()].sort().map((exp, i) => [exp, i]));
-    for (const [expiry, e] of s.exps) {
-      const slot = slotOf.get(expiry);
-      if (slot == null || slot > 2) continue;
-      const strikes = [];
-      for (const [strike, pts] of e.strikes) {
-        pts.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-        // Only show strikes that are part of the CURRENT (asOf) structure — a
-        // strike whose latest recorded point is stale rotated out of the walls.
-        if (pts[pts.length - 1].date !== asOf) continue;
-        const last = pts[pts.length - 1];
-        const net = last.net;
-        const prev = pts.length >= 2 ? pts[pts.length - 2].net : null;
-        // Same day-over-day treatment on the volume-only basis: today's traded
-        // volume at this strike vs the prior session's. Deliberately the SAME
-        // shape as net/delta so the UI's basis tab is a field swap, not a
-        // different code path.
-        const netVol = Number(last.netVol || 0);
-        const prevVol = pts.length >= 2 ? Number(pts[pts.length - 2].netVol || 0) : null;
-        strikes.push({
-          strike,
-          // NOTE: this is the sign of the strike's NET (calls minus puts), not
-          // "these are puts". Kept for backwards compat; the card's call/put
-          // share comes from callGex/putGex below, never from this field.
-          side: net >= 0 ? 'call' : 'put',
-          net,
-          delta: prev != null ? net - prev : null,
-          netVol,
-          deltaVol: prevVol != null ? netVol - prevVol : null,
-          tsMs: last.tsMs || 0,
-        });
-      }
-      if (!strikes.length) continue;
-      strikes.sort((a, b) => b.strike - a.strike); // high -> low, spot sits in the middle
-      // Freshness, relative to the newest reading in THIS expiry (not wall-clock),
-      // so it reads correctly after hours and on a stalled feed. ageMin > 0 means
-      // the strike dropped out of the top-N that many minutes ago.
-      const latestTsMs = strikes.reduce((m, r) => (r.tsMs > m ? r.tsMs : m), 0);
-      for (const r of strikes) {
-        r.ageMin = latestTsMs > 0 && r.tsMs > 0 ? Math.max(0, Math.round((latestTsMs - r.tsMs) / 60000)) : null;
-        delete r.tsMs;
-      }
-      const netTotal = strikes.reduce((a, r) => a + r.net, 0);
-      // Volume-only column total, so the ladder header follows the basis tab.
-      // Same strike set, same reduction — only the field differs.
-      const netVolTotal = strikes.reduce((a, r) => a + r.netVol, 0);
-      const calls = strikes.filter((r) => r.net > 0);
-      const puts = strikes.filter((r) => r.net < 0);
-      const callWall = calls.length ? calls.reduce((m, r) => (r.net > m.net ? r : m)) : null;
-      const putWall = puts.length ? puts.reduce((m, r) => (r.net < m.net ? r : m)) : null;
-      const tot = totalsBy.get(`${symbol}|${expiry}`) || null;
-      dtes.push({
-        dte: slot, expiry, netTotal, netVolTotal, strikes,
-        callWall: callWall ? { strike: callWall.strike, net: callWall.net } : null,
-        putWall: putWall ? { strike: putWall.strike, net: putWall.net } : null,
-        // Full-window call/put split (see strike_growth_expiry). callGex >= 0,
-        // putGex <= 0, coverage = how many strikes went into the sums. null on
-        // expiries recorded before this table existed.
-        callGex: tot ? tot.callGex : null,
-        putGex: tot ? tot.putGex : null,
-        coverage: tot ? tot.strikes : null,
-        latestTs: latestTsMs > 0 ? new Date(latestTsMs).toISOString() : null,
-      });
-    }
-    if (!dtes.length) continue;
-    dtes.sort((a, b) => a.dte - b.dte);
-    // Store the last-swept DB spot in the cache; the live spot is overlaid at
-    // return time (see overlayLiveSpot) so a cache hit still shows a live spot.
-    tickers.push({ symbol, spot: s.spot, dtes });
-  }
-
-  tickers.sort((a, b) => (order.get(a.symbol) ?? 1e9) - (order.get(b.symbol) ?? 1e9));
-  _fbStructCache = { at: nowMs, key: cacheKey, asOf, tickers };
-  return { asOf, tickers: overlayLiveSpot(tickers).slice(0, maxTickers) };
-}
-
-// Overlay the LIVE in-memory spot (updated on every underlying Quote/Trade)
-// onto each cached ticker, replacing the last-swept DB spot which lags by up to
-// a sweep (≤5 min). The GEX structure/walls stay from the last sweep — only the
-// spot marker goes live. Falls back to the DB spot when the feed has no live
-// value (e.g. this process just restarted, or after hours). Cheap (a Map.get
-// per ticker), so it runs on every request including cache hits.
-//
-// Also attaches the day change (prevClose + dayPct) from the same REST backstop
-// that feeds the live spot, so the UI can label and SORT cards by % gain on the
-// day. Both are null when the backstop hasn't seen a prior close for that root
-// yet (fresh process, or a symbol TT returns no `prev-close` for) — the UI
-// renders "—" and sorts those last rather than guessing a baseline.
-function overlayLiveSpot(tickers) {
-  const getLive = _proxy?.getStrikeGrowthSpot ? (sym) => Number(_proxy.getStrikeGrowthSpot(sym)) : null;
-  const getPrev = _proxy?.getStrikeGrowthPrevClose ? (sym) => Number(_proxy.getStrikeGrowthPrevClose(sym)) : null;
-  if (!getLive && !getPrev) return tickers;
-  return tickers.map((t) => {
-    const live = getLive ? getLive(t.symbol) : 0;
-    const spot = live > 0 ? live : t.spot;
-    const prev = getPrev ? getPrev(t.symbol) : 0;
-    const dayPct = prev > 0 && spot > 0 ? ((spot - prev) / prev) * 100 : null;
-    if (spot === t.spot && dayPct == null) return t;
-    return { ...t, spot, prevClose: prev > 0 ? prev : null, dayPct };
-  });
-}
-
 /**
  * One full sweep over the active watchlist. Sequential, paced. Returns a small
  * summary. `force` skips the RTH gate (for the manual /proxy route + dry runs).
@@ -884,9 +556,10 @@ let _timer = null;
 let _spotTimer = null;
 
 // REST spot backstop: fetch fresh underlying marks for the whole active roster
-// and push them into the proxy's live strikeGrowthSpot map (which overlayLiveSpot
-// reads). Runs on its own cadence, independent of the RTH-gated sweeps, so spots
-// stay current for every ticker — not just the ones the dxLink feed subscribes.
+// and push them into the proxy's live strikeGrowthSpot map (which the feed's
+// strike-window picker reads). Runs on its own cadence, independent of the
+// RTH-gated sweeps, so spots stay current for every ticker — not just the ones
+// the dxLink feed subscribes.
 async function refreshRosterSpots() {
   if (!_proxy?.refreshStrikeGrowthSpots) return;
   try {
@@ -977,6 +650,4 @@ module.exports = {
   getPool,
   snapshotTicker,
   rollupDayOverDay,
-  getForwardBuildLeaderboard,
-  getForwardBuildStructure,
 };

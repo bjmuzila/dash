@@ -1831,43 +1831,6 @@ async function main() {
         })();
         return;
       }
-      // Forward Build leaderboard: across every active strike-growth ticker,
-      // rank strikes on the front 0/1/2-DTE expiries by ACCELERATION (is
-      // today's Δ bigger than yesterday's?), not just total growth — surfaces
-      // a strike quietly speeding up on tomorrow's/the day-after's expiry
-      // before it becomes today's 0DTE. See getForwardBuildLeaderboard in
-      // strike-growth-recorder.js for the full explanation.
-      //   GET /proxy/forward-build?limit=40&minBase=20000000
-      if (pathname === '/proxy/forward-build' && req.method === 'GET') {
-        (async () => {
-          try {
-            const { getForwardBuildLeaderboard } = require('./strike-growth-recorder');
-            const u = new URL(req.url, `http://localhost:${PORT}`);
-            const limit = Math.min(200, Number(u.searchParams.get('limit') || 40));
-            const minBase = Number(u.searchParams.get('minBase') || 0) || undefined;
-            const result = await getForwardBuildLeaderboard({ limit, minBase });
-            sendJson(res, 200, { ok: true, ...result });
-          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
-        })();
-        return;
-      }
-      // Forward Build STRUCTURE: same source rows, grouped by ticker. Per ticker,
-      // the front 0/1/2-DTE GEX wall structure (top strikes each side, latest
-      // session) with each strike's day-over-day Δ vs the same expiry's prior
-      // session. Feeds the collapsible grouped "Forward Build" structure tab.
-      //   GET /proxy/forward-build-structure?limit=400
-      if (pathname === '/proxy/forward-build-structure' && req.method === 'GET') {
-        (async () => {
-          try {
-            const { getForwardBuildStructure } = require('./strike-growth-recorder');
-            const u = new URL(req.url, `http://localhost:${PORT}`);
-            const limit = Math.min(600, Number(u.searchParams.get('limit') || 400));
-            const result = await getForwardBuildStructure({ limit });
-            sendJson(res, 200, { ok: true, ...result });
-          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
-        })();
-        return;
-      }
       // Manual fire (testing): POST /proxy/gex-levels-history-run
       if (pathname === '/proxy/gex-levels-history-run' && req.method === 'POST') {
         const { collectGexLevelsHistory } = require('./gex-levels-history-recorder');

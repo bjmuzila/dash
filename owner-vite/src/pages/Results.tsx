@@ -759,7 +759,11 @@ function CheckpointsView() {
 // and reason that disqualified them.
 type CbTrade = {
   id: number; date: string; checkpoint: string; checkpoint_label: string | null;
-  ticker: string; expiration: string; strike: number; side: "C" | "P";
+  ticker: string; expiration: string; side: "C" | "P";
+  strike: number;              // the contract actually bought (where the walk landed)
+  cb_strike: number | null;    // the CB it targets — what the sell distance measures to
+  cb_price: number | null;     // what the CB strike itself cost (why the walk happened)
+  walk_steps: number | null;   // strikes stepped from the CB toward the money
   occ_symbol: string | null; streamer_symbol: string | null;
   status: "skipped" | "open" | "closed"; skip_reason: string | null;
   probe_ts: number | string; probe_price: number | null; probe_bid: number | null; probe_ask: number | null;
@@ -778,7 +782,8 @@ type CbSummary = {
   avgPnl: number | null; totalPnl: number | null; totalPnlUsd: number | null; takeRate: number | null;
 };
 type CbConfig = {
-  AUTO_BUY_MAX: number; SELL_TRIGGER_PTS: number; SELL_TIGHT_PTS: number;
+  BUY_MIN: number; STRIKE_STEP: number; WALK_MAX_STEPS: number;
+  SELL_TRIGGER_PTS: number; SELL_TIGHT_PTS: number;
   PROBE_TICKER: string; MULTIPLIER: number; CHECKPOINT_GRACE_MIN: number;
 };
 type CbTick = { ts: number | string; mark: number | null; bid: number | null; ask: number | null; spot: number | null; dist: number | null };
@@ -872,7 +877,7 @@ function TradesView() {
     letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
   });
 
-  const buyMax = config?.AUTO_BUY_MAX ?? 1.0;
+  const buyMin = config?.BUY_MIN ?? 1.0;
   const band: [number, number] = [config?.SELL_TIGHT_PTS ?? 5, config?.SELL_TRIGGER_PTS ?? 10];
   const mult = config?.MULTIPLIER ?? 100;
 
@@ -909,7 +914,7 @@ function TradesView() {
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
         <span style={{ fontSize: 17, fontWeight: 800, color: C.purple, textTransform: "uppercase", letterSpacing: "0.1em" }}>Contracts</span>
         <span style={{ fontSize: 14, color: C.label }}>
-          CB-strike 0DTE probed on TastyTrade at 9:45 / 10:30 / 12:00 · buy ≤ ${buyMax.toFixed(2)} · sell inside {band[0]}–{band[1]} pts · ×{mult}
+          0DTE probed on TastyTrade at 9:45 / 10:30 / 12:00 · from the CB, walk toward the money to the first strike over ${buyMin.toFixed(2)} · sell inside {band[0]}–{band[1]} pts of the CB · ×{mult}
         </span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           <button
@@ -1032,8 +1037,12 @@ function TradesView() {
                           type="button"
                           onClick={() => setOpenTrade(t)}
                           title={skipped
-                            ? `${t.skip_reason ?? "not taken"} — click for the probe chart`
-                            : `${t.ticker} ${t.expiration} · click for the probe chart`}
+                            ? `${t.skip_reason ?? "not taken"} — click for detail`
+                            : `${t.ticker} ${t.expiration}`
+                              + `${t.cb_strike != null ? ` · CB ${Number(t.cb_strike).toFixed(0)}` : ""}`
+                              + `${t.cb_price != null ? ` priced $${Number(t.cb_price).toFixed(2)}` : ""}`
+                              + `${t.walk_steps ? ` · walked ${t.walk_steps} strike${t.walk_steps === 1 ? "" : "s"} in` : " · the CB itself cleared the floor"}`
+                              + " · click for the probe chart"}
                           style={{
                             font: "inherit", fontFamily: "var(--font-mono)", cursor: "pointer",
                             background: "transparent", border: `1px solid ${rgba(skipped ? MUTED : C.cyan, 0.4)}`,
@@ -1041,12 +1050,20 @@ function TradesView() {
                           }}
                         >
                           {contractLabel(t)}
-                          <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: MUTED }}>0DTE</span>
+                          {/* The CB is the target, the strike is the instrument. Showing
+                              only one of them is how you end up reading a 6635C as if the
+                              board had said the CB was 6635. */}
+                          {t.cb_strike != null && Number(t.cb_strike) !== Number(t.strike) && (
+                            <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: MUTED }}>
+                              ←CB {Number(t.cb_strike).toFixed(0)}
+                            </span>
+                          )}
                         </button>
                       </td>
                       <td style={{ ...td, textAlign: "right", color: C.label }}>
                         {t.entry_price != null ? (
-                          <span title={`filled ${etClock(n(t.entry_ts) ?? 0)} · SPX ${n(t.entry_spot)?.toFixed(2) ?? "—"}`}>
+                          <span title={`filled ${etClock(n(t.entry_ts) ?? 0)} · SPX ${n(t.entry_spot)?.toFixed(2) ?? "—"}`
+                            + `${t.cb_price != null ? ` · the CB ${Number(t.cb_strike ?? 0).toFixed(0)} was $${Number(t.cb_price).toFixed(2)}` : ""}`}>
                             ${Number(t.entry_price).toFixed(2)}
                           </span>
                         ) : (
@@ -1096,7 +1113,9 @@ function TradesView() {
             <span style={{ color: totals.usd >= 0 ? GREEN : RED, fontWeight: 800 }}>
               net {totals.usd >= 0 ? "+" : "−"}${Math.abs(totals.usd).toFixed(0)}
             </span>
-            <span style={{ marginLeft: "auto" }}>click a contract for its probe chart · <span style={{ fontWeight: 800 }}>*</span> unrealized</span>
+            <span style={{ marginLeft: "auto" }}>
+              ←CB marks a walked strike · click a contract for its probe chart · <span style={{ fontWeight: 800 }}>*</span> unrealized
+            </span>
           </div>
         </div>
       )}
@@ -1329,6 +1348,14 @@ function CbProbeModal({
         </div>
 
         <div style={{ display: "flex", gap: 26, flexWrap: "wrap", paddingBottom: 14, borderBottom: `1px solid ${C.border}` }}>
+          {stat("CB target", trade.cb_strike != null
+            ? `${Number(trade.cb_strike).toFixed(0)}${trade.cb_price != null ? ` @ $${Number(trade.cb_price).toFixed(2)}` : ""}`
+            : "—", C.cyan)}
+          {stat("Walk", trade.walk_steps == null
+            ? "—"
+            : trade.walk_steps === 0
+              ? "0 — the CB itself cleared the floor"
+              : `${trade.walk_steps} strike${trade.walk_steps === 1 ? "" : "s"} toward the money`)}
           {stat("Entry", entry != null ? `$${entry.toFixed(2)} · ${etClock(n(trade.entry_ts) ?? 0)}` : `not taken — ${trade.skip_reason ?? "—"}`,
             entry != null ? C.label : MUTED)}
           {stat("Sell", exitV != null
@@ -1373,7 +1400,9 @@ function CbProbeModal({
             <div style={{ fontSize: 13, color: C.label, fontFamily: "var(--font-mono)" }}>{trade.skip_reason ?? "no reason recorded"}</div>
             <div style={{ marginTop: 8, fontSize: 12, color: MUTED }}>
               Probed at {etClock(n(trade.probe_ts) ?? 0)}
-              {trade.probe_price != null ? ` — the contract came back at $${Number(trade.probe_price).toFixed(2)}` : ""}.
+              {trade.cb_price != null
+                ? ` — the CB ${Number(trade.cb_strike ?? 0).toFixed(0)} came back at $${Number(trade.cb_price).toFixed(2)}`
+                : ""}.
               {" "}No position was opened, so there are no polls and no curve for this checkpoint.
             </div>
           </div>
