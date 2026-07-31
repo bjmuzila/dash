@@ -1235,7 +1235,7 @@ const ChainMatrix = memo(function ChainMatrix({
             {/* Shared strike label (sticky left) */}
             <div ref={isATM ? atmRowRef : undefined} title={emTip || undefined} style={{
               position: "sticky", left: 0, zIndex: 2,
-              padding: "2px 5px", fontSize: 10, fontWeight: 400, fontFamily: "var(--font-mono)", textAlign: "right",
+              padding: "2px 5px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right",
               // ATM reads like the /home GEX heatmap: no amber fill, blue strike
               // text with a blue "ATM" tag beside it, inside the white rule.
               color: isATM ? HT.cyan : "#e4e4e7",

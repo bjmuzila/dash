@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
@@ -8,6 +8,13 @@ import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { HOME_THEME as HT, homeShellStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockSlider, DockExpiryPicker } from "@/components/shared/DockToolbar";
+
+// Double-clicking a panel header blows that ticker's chain up full screen. The
+// real /options-chain page is reused (same trick the home GEX card uses), so
+// the overlay is the actual chain — every column, greek and basis control — not
+// a second, drifting copy. lazy() keeps it out of this page's initial bundle:
+// nothing loads until the first double-click.
+const OptionsChainPage = lazy(() => import("@/app/options-chain/page"));
 // expirations always fetched fresh — no cache import needed
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -410,7 +417,7 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
 
 function TickerPanel({
   ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
-  showCB, showCW, showPW, getGexChange, deltaWindow,
+  showCB, showCW, showPW, getGexChange, deltaWindow, onExpandChain,
 }: {
   ticker: Ticker;
   /** Per-expiry strike rows for this ticker. */
@@ -435,6 +442,8 @@ function TickerPanel({
   getGexChange: (ticker: string, expiry: string, strike: number) => GexChange;
   /** Δ stamp lookback in minutes; 0 = off. */
   deltaWindow: DeltaWindow;
+  /** Double-click on the panel header → open this ticker's full-screen chain. */
+  onExpandChain: (ticker: Ticker) => void;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
@@ -666,8 +675,15 @@ function TickerPanel({
     >
       <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,255,255,.35)}50%{box-shadow:0 0 10px rgba(255,255,255,.85)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}`}</style>
 
-      {/* Panel header — ticker · CB/CW/PW front-expiry levels · spot */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
+      {/* Panel header — ticker · CB/CW/PW front-expiry levels · spot.
+          Double-click anywhere on it opens this ticker's full-screen chain.
+          userSelect:none so the second click of the gesture doesn't leave the
+          header text highlighted behind the overlay. */}
+      <div
+        onDoubleClick={() => onExpandChain(ticker)}
+        title={`Double-click for the full-screen ${ticker} option chain`}
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0, cursor: "zoom-in", userSelect: "none" }}
+      >
         <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em", flexShrink: 0 }}>{ticker}</span>
         <div style={{ display: "flex", gap: 5, alignItems: "center", overflow: "hidden", flex: 1, justifyContent: "flex-end" }}>
           {/* Header readout always shows the CB/CW/PW levels — the toolbar
@@ -1421,6 +1437,26 @@ export function MultGreekClient({
 
   const isCapturing = captureWindow != null;
 
+  // ── Full-screen chain overlay ──────────────────────────────────────────────
+  // Double-clicking a panel header sets this to that panel's ticker; the
+  // overlay below renders the real /options-chain page for it. Esc closes.
+  const [chainTicker, setChainTicker] = useState<string | null>(null);
+  const closeChain = useCallback(() => setChainTicker(null), []);
+  useEffect(() => {
+    if (!chainTicker) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setChainTicker(null); };
+    window.addEventListener("keydown", onKey);
+    // The page body scrolls under a full-viewport overlay otherwise.
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [chainTicker]);
+  // A screenshot capture must never bake the overlay into the shot.
+  useEffect(() => { if (isCapturing) setChainTicker(null); }, [isCapturing]);
+
   return (
     <div ref={pageRef} style={{ ...homeShellStyle, display: isCapturing ? "block" : "flex", height: isCapturing ? "auto" : "100%", width: isCapturing ? "fit-content" : "100%", minWidth: isCapturing ? "min-content" : undefined, overflow: isCapturing ? "visible" : "hidden" }}>
 
@@ -1609,9 +1645,66 @@ export function MultGreekClient({
             showPW={showPW}
             getGexChange={getGexChange}
             deltaWindow={deltaWindow}
+            onExpandChain={setChainTicker}
           />
         ))}
       </div>
+
+      {/* ── Full-screen option chain (double-click a panel header) ──────────── */}
+      {chainTicker && typeof document !== "undefined" && createPortal(
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) closeChain(); }}
+          style={{
+            position: "fixed", inset: 0, zIndex: 9000,
+            background: "rgba(3,6,12,0.86)", backdropFilter: "blur(3px)",
+            display: "flex", alignItems: "stretch", justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          {/* homeShellStyle is NOT re-applied here — OptionsChainPage brings its
+              own shell (background, glow, font). Doubling it just paints the
+              same gradient twice. */}
+          <div style={{
+            flex: 1, minWidth: 0, minHeight: 0,
+            display: "flex", flexDirection: "column",
+            background: HT.bg,
+            borderRadius: 16, overflow: "hidden",
+            border: `1px solid ${HT.cyan}55`,
+            boxShadow: "0 24px 80px rgba(0,0,0,0.7)",
+          }}>
+            <div style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+              padding: "8px 12px", flexShrink: 0,
+              background: "rgba(33,158,188,0.06)", borderBottom: `1px solid ${HT.border}`,
+            }}>
+              <span style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
+                <span style={{ fontSize: 18, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em" }}>{chainTicker}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.55)", letterSpacing: "0.08em", textTransform: "uppercase" }}>Option Chain</span>
+              </span>
+              <button
+                onClick={closeChain}
+                title="Close (Esc)"
+                style={{
+                  flexShrink: 0, cursor: "pointer",
+                  padding: "3px 12px", borderRadius: 8,
+                  border: `1px solid ${HT.cyan}55`, background: "rgba(33,158,188,0.10)",
+                  color: HT.cyan, fontSize: 13, fontWeight: 800, letterSpacing: "0.06em",
+                }}
+              >ESC ✕</button>
+            </div>
+            <div style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
+              <Suspense fallback={
+                <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.55)", fontSize: 13, letterSpacing: "0.08em" }}>
+                  LOADING CHAIN…
+                </div>
+              }>
+                <OptionsChainPage ticker={chainTicker} />
+              </Suspense>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }
