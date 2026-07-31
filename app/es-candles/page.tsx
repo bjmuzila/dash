@@ -103,7 +103,13 @@ type GexCell = { strike: number; netOiVol: number; netVol: number };
 // reconstructed PER SESSION from these spots (see basisForCols in the overlay
 // draw). The live basis alone mis-places older columns: ES−SPX drifts with
 // carry/dividends, decays into expiry, and steps at the quarterly roll.
-type GexColumn = { slotTs: number; cells: GexCell[]; spot?: number };
+// `flip` / `flipVol` are computed SERVER-SIDE on the untruncated ladder (see
+// the heatmap branch in server-v2/api-router.js) and are authoritative. A
+// truncated `cells` array cannot be used to rederive them: dropping strikes
+// changes adjacency and can invent sign changes that the full profile does
+// not have. Live WS columns have no flip field and fall back to the local
+// scan below, which is correct there because WS frames are never truncated.
+type GexColumn = { slotTs: number; cells: GexCell[]; spot?: number; flip?: number | null; flipVol?: number | null };
 type GexMetric = "voloi" | "vol";
 
 // ET calendar date (YYYY-MM-DD) for a ms timestamp. Module-level so the overlay
@@ -1728,8 +1734,27 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     //
     // Part of shapeKey, so flipping any of these re-fetches at full resolution
     // and wipes the truncated columns rather than leaving a half-empty ladder.
-    const needsFullLadder = showHeatmap || showFlipCross || replayOn || !isEs;
-    const topStrikes = needsFullLadder ? 0 : Math.max(1, Math.min(30, bubbleCfg.topStrikes));
+    // showFlipCross is deliberately NOT here any more: the flip now arrives
+    // per-column from the server (col.flip / col.flipVol), computed on the
+    // full ladder, so the overlay no longer needs every strike shipped to it.
+    // Heatmap still does (it paints each strike), and replay / the ETFs still
+    // rederive walls from the cells via deriveColumnLevels.
+    const needsFullLadder = showHeatmap || replayOn || !isEs;
+    // Request the slider's MAXIMUM, not its current value. Asking for exactly
+    // `cfg.topStrikes` made the URL move every time the slider did — and worse,
+    // the saved bubble config is restored in an effect AFTER mount, so the
+    // default 10 fired one request and the restored value immediately fired a
+    // second. The client already filters to `cfg.topStrikes` at draw time, so a
+    // constant max-30 request serves every slider position from one response:
+    // stable URL, no refetch on drag, no restore-triggered duplicate.
+    const topStrikes = needsFullLadder ? 0 : BUBBLE_CFG_RANGE.topStrikes.max;
+    // `expiry` is IGNORED server-side under anyExpiry=1 (the Any query takes only
+    // since+symbol), but it still has to be CONSTANT or the URL churns: the live
+    // feed publishes an expiry a moment after mount, `heatmapExpiry` flips from
+    // "" to "2026-07-31", and the request re-fired against a different URL that
+    // dedupeFetch could not collapse — while shapeKey still said "front", so the
+    // guard never saw a change. Send the literal placeholder in front mode.
+    const urlExpiry = isFront ? "front" : queryExpiry;
     const shapeKey = `${sym.gexSymbol}|${isFront ? "front" : queryExpiry}|${minutes}|${activeReplayDay ?? ""}|top${topStrikes}`;
     const fetchKey = `${shapeKey}|${gexPoll}`;
     if (fetchKey === lastHeatmapKeyRef.current) return;
@@ -1776,7 +1801,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         // concurrent GETs can only want the same bytes, so they share one
         // request. Not a cache: the entry is dropped as soon as it settles.
         const res = await dedupeFetch(
-          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=${minutes}&expiry=${encodeURIComponent(queryExpiry)}${isFront ? "&anyExpiry=1" : ""}&symbol=${encodeURIComponent(sym.gexSymbol)}${topStrikes > 0 ? `&top=${topStrikes}` : ""}`,
+          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=${minutes}&expiry=${encodeURIComponent(urlExpiry)}${isFront ? "&anyExpiry=1" : ""}&symbol=${encodeURIComponent(sym.gexSymbol)}${topStrikes > 0 ? `&top=${topStrikes}` : ""}`,
           { cache: "no-store" }
         );
         if (!res.ok) {
@@ -1858,7 +1883,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // the wider set. Both land as a shapeKey change, so the truncated columns get
     // wiped rather than merged into.
   }, [heatmapExpiry, heatmapDays, replayOn, activeReplayDay, selectedExpiry, sym.gexSymbol, gexPoll,
-      showHeatmap, showFlipCross, isEs, bubbleCfg.topStrikes]);
+      showHeatmap, isEs]);
 
   // Load today's full MVC history (raw SPX strikeOIVol) and refresh every 60s.
   // ES conversion happens at draw time with the live basis.
@@ -3329,6 +3354,14 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         let prevPickSpx: number | null = null;
         for (const m of [...minuteColsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs)) {
           if (replayTsRef.current != null && m.slotTs > replayTsRef.current) continue; // replay clamp
+          // Server-computed flip wins when present — it was derived from every
+          // strike, before ?top truncation dropped the small ones.
+          const served = metricFc === "vol" ? m.flipVol : m.flip;
+          if (served != null && Number.isFinite(served)) {
+            prevPickSpx = served;
+            flipPts.push({ ts: m.slotTs, es: served + basisAt(m.slotTs) });
+            continue;
+          }
           const cells = [...m.cells].sort((a, b) => a.strike - b.strike);
           if (cells.length < 3) continue;
           const crossings: number[] = [];

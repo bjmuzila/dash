@@ -74,14 +74,6 @@ catch (e) { console.warn('[api-router] _lib-ibdaily.cjs not loaded:', e.message)
 let libConfRoute = null;
 try { libConfRoute = require('./_lib-confidence-route.cjs'); }
 catch (e) { console.warn('[api-router] _lib-confidence-route.cjs not loaded:', e.message); }
-// CB contract trade tracker — probes the CB-strike 0DTE contract on TastyTrade
-// at 9:45/10:30/12:00, auto-buys under $1.00, auto-sells inside the 5-10 pt band.
-// Plain server-v2 module (no esbuild step); it owns its own tables via
-// libDb.getPool(). Loaded defensively: without it /api/confidence/checkpoints
-// still returns the hit-rate half of the payload exactly as it did before.
-let cbTrack = null;
-try { cbTrack = require('./cb-contract-track'); }
-catch (e) { console.warn('[api-router] cb-contract-track not loaded — contract tracking off:', e.message); }
 // Pure broker-CSV parser/matcher (lib/journal/csv.ts — zero imports):
 //   esbuild lib/journal/csv.ts --bundle --platform=node --format=cjs --outfile=server-v2/_lib-journal-csv.cjs
 let libJournalCsv = null;
@@ -4403,34 +4395,56 @@ if (libDb) {
               const absVals = cells.map((c) => Math.abs(c.net)).filter((v) => v > 0);
               const max = absVals.length ? Math.max(...absVals) : 1;
               const top3 = [...absVals].sort((a, b) => b - a).slice(0, 3);
-              let out = cells;
-              if (topN > 0 && cells.length > topN) {
-                // Top N by |net| — the bubbles' own ranking.
-                const byStrike = [...cells].sort((a, b) => a.strike - b.strike);
-                const keep = new Set(
-                  [...cells].sort((a, b) => Math.abs(b.net) - Math.abs(a.net)).slice(0, topN).map((c) => c.strike)
-                );
-                // …PLUS both strikes bracketing every sign change.
-                //
-                // THIS IS LOAD-BEARING. The gamma flip is the zero-crossing of
-                // the net-GEX profile (findGEXFlip / the Flip Cross overlay),
-                // and a crossing lives exactly where |net| is SMALLEST — which
-                // is precisely what a top-N-by-magnitude filter throws away
-                // first. Truncating naively would leave the flip to be
-                // interpolated between two far-apart surviving walls, i.e.
-                // silently wrong by tens of points. Keeping the bracketing pair
-                // costs a handful of cells per column and makes the crossing
-                // exact.
+              // ── Gamma flip, computed HERE on the FULL ladder ────────────────
+              // Shipped as one number per column so no client ever has to
+              // reconstruct it from the cells.
+              //
+              // This replaces an earlier attempt that truncated the cells but
+              // kept every sign-change bracket to protect the flip. Two things
+              // were wrong with that. It barely truncated in practice (measured
+              // on live data: 330 strikes/column with 13.5 sign changes, so the
+              // brackets re-admitted ~27 strikes on top of the top-N), and more
+              // importantly it was UNSOUND — dropping intermediate strikes
+              // changes which strikes are adjacent, so a truncated ladder can
+              // manufacture sign changes that do not exist in the full profile.
+              // Any "truncate, then rebuild the flip from the survivors" scheme
+              // has that hole. Computing it before truncation closes it, and
+              // lets the Flip X overlay stop demanding the whole ladder.
+              //
+              // Rule is byte-for-byte the client's: interpolate each sign
+              // change, then pick the crossing NEAREST this column's spot
+              // (falling back to the lowest crossing when spot is missing, as
+              // legacy rows have no spot).
+              const spot = spotBySlot.get(slotTs) ?? 0;
+              const byStrike = [...cells].sort((a, b) => a.strike - b.strike);
+              const flipOn = (valOf) => {
+                const crossings = [];
                 for (let i = 0; i < byStrike.length - 1; i++) {
-                  const a = byStrike[i].net, b = byStrike[i + 1].net;
-                  if (a === 0 || b === 0 || (a > 0 && b < 0) || (a < 0 && b > 0)) {
-                    keep.add(byStrike[i].strike);
-                    keep.add(byStrike[i + 1].strike);
+                  const a = valOf(byStrike[i]);
+                  const b = valOf(byStrike[i + 1]);
+                  if (a === 0) { crossings.push(byStrike[i].strike); continue; }
+                  if (b === 0) { crossings.push(byStrike[i + 1].strike); continue; }
+                  if ((a > 0 && b < 0) || (a < 0 && b > 0)) {
+                    const sA = byStrike[i].strike, sB = byStrike[i + 1].strike;
+                    const z = sA + (sB - sA) * (Math.abs(a) / (Math.abs(a) + Math.abs(b)));
+                    if (Number.isFinite(z)) crossings.push(Math.round(z * 10) / 10);
                   }
                 }
-                out = byStrike.filter((c) => keep.has(c.strike));
-              }
-              return { slotTs, cells: out, max, top3, spot: spotBySlot.get(slotTs) ?? 0 };
+                if (!crossings.length) return null;
+                if (!(spot > 0)) return crossings[0];
+                return crossings.reduce((best, c) => (Math.abs(c - spot) < Math.abs(best - spot) ? c : best));
+              };
+              // Both metrics: the client's Vol+OI / Vol-only toggle picks which
+              // series the flip is read off, and it must not trigger a refetch.
+              const flip = flipOn((c) => c.net);
+              const flipVol = flipOn((c) => c.netVol);
+
+              // Truncation is now purely a bubble-rendering concern — nothing
+              // downstream reads the ladder's shape, only its peaks.
+              const out = topN > 0 && cells.length > topN
+                ? [...cells].sort((a, b) => Math.abs(b.net) - Math.abs(a.net)).slice(0, topN).sort((a, b) => a.strike - b.strike)
+                : cells;
+              return { slotTs, cells: out, max, top3, spot, flip, flipVol };
             });
             const payload = { mode: 'heatmap', symbol, columns };
             heatmapCache.set(cacheKey, { at: Date.now(), payload });
@@ -6267,95 +6281,10 @@ if (libDb) {
           const sp = new URL(req.url || '/', 'http://localhost').searchParams;
           const all = sp.get('all') === '1';
           const since = Number(sp.get('since')) || 20;
-          // Contract columns are ON by default and opted OUT with ?contracts=0.
-          // The owner Confidence tab now sends contracts=0 — the dollar side
-          // lives on its own Contracts tab off /api/cb-trades — so in practice
-          // this merge only runs for direct/API callers. Kept because it is one
-          // plain read of the cb_trades rows the recorder already wrote (no
-          // upstream calls), and it is what makes a single request able to
-          // answer both halves of a checkpoint.
-          const wantContracts = sp.get('contracts') !== '0';
           const dates = await checkpointDates(all ? 365 : since);
           const data = await computeCheckpointData(dates);
-          if (wantContracts && cbTrack) {
-            // Never let the trade table take the hit-rate board down with it.
-            try { await cbTrack.enrichWithTrades(data); }
-            catch (e) {
-              console.warn('[api-router] cb-trades merge failed —', e.message);
-              data.contracts = { enabled: false, note: String(e.message || e) };
-            }
-          } else {
-            data.contracts = { enabled: false, note: wantContracts ? 'tracker module not loaded' : 'disabled by request' };
-          }
           send(res, 200, data);
         } catch (e) { send(res, 500, { error: String(e) }); }
-      },
-    });
-  }
-
-  // /api/cb-trades — the CB contract trade log behind the owner Results →
-  // Confidence → Trades tab. Every row is one checkpoint of one session: the
-  // probed CB-strike 0DTE contract, whether the <= $1.00 rule bought it, and if
-  // so what the 5-10 pt auto-sell did with it.
-  //
-  // GET   ?since=20 | ?all=1 | ?date=YYYY-MM-DD   → { trades, summary, config }
-  //       ?ticks=<tradeId>                        → { ticks } (the poll curve)
-  // POST  { action: 'tick' | 'checkpoint' | 'poll' | 'settle' }
-  //       'tick' is what server-v2/cb-trade-recorder.js calls once a minute and
-  //       does the whole job; the other three exist so a session can be repaired
-  //       or replayed by hand without waiting on the clock.
-  //
-  // Owner-gated, with the standard x-internal-token bypass (enforceAuth) so the
-  // in-process recorder can post without a session. Writes are the ONLY way rows
-  // appear — TastyTrade has no per-contract history, so nothing here can be
-  // backfilled after the fact.
-  if (cbTrack) {
-    register('/api/cb-trades', {
-      auth: 'owner', methods: ['GET', 'POST'],
-      async handler(req, res, ctx) {
-        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
-        if (req.method === 'GET') {
-          try {
-            const ticksFor = sp.get('ticks');
-            if (ticksFor) { send(res, 200, { ticks: await cbTrack.listTicks(ticksFor) }, { 'Cache-Control': NO_STORE }); return; }
-            // ?diag=1 mirrors POST {action:'diagnose'} so it can be opened
-            // straight from the browser address bar while signed in as owner.
-            if (sp.get('diag') === '1') {
-              send(res, 200, await cbTrack.diagnose(ctx, { date: sp.get('date') || undefined }), { 'Cache-Control': NO_STORE });
-              return;
-            }
-            const date = sp.get('date') || undefined;
-            const all = sp.get('all') === '1';
-            const since = Number(sp.get('since')) || 20;
-            const trades = await cbTrack.listTrades({ date, all, since });
-            send(res, 200, {
-              trades,
-              summary: cbTrack.summarize(trades),
-              config: cbTrack.CONFIG,
-              checkpoints: cbTrack.CHECKPOINTS,
-            }, { 'Cache-Control': NO_STORE });
-          } catch (err) { send(res, 500, { error: String(err) }); }
-          return;
-        }
-        try {
-          const body = await readJson(req).catch(() => ({}));
-          const action = String(body.action || 'tick');
-          const date = body.date ? String(body.date) : undefined;
-          if (action === 'tick') { send(res, 200, await cbTrack.tick(ctx)); return; }
-          if (action === 'poll') { send(res, 200, await cbTrack.pollOpen(ctx, { date })); return; }
-          if (action === 'settle') { send(res, 200, await cbTrack.settle(ctx, { date })); return; }
-          // Read-only "why is nothing updating?" — recorder liveness, the CB each
-          // checkpoint resolves to, a LIVE probe of the current one with its raw
-          // status, and per-row tick counts. Records nothing.
-          if (action === 'diagnose') { send(res, 200, await cbTrack.diagnose(ctx, { date })); return; }
-          if (action === 'checkpoint') {
-            const checkpoint = String(body.checkpoint || '');
-            const d = date || cbTrack.etParts().date;
-            send(res, 200, await cbTrack.runCheckpoint(ctx, { date: d, checkpoint }));
-            return;
-          }
-          send(res, 400, { error: 'unknown action' });
-        } catch (err) { send(res, 500, { error: String(err) }); }
       },
     });
   }
