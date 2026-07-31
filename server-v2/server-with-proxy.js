@@ -3509,6 +3509,18 @@ async function main() {
     // watched contract's greeks/price/flow → /api/watch (writes watch_snapshots)
     // so the /owner/watch history keeps filling even when the page is closed.
     require('./watch-recorder').startWatchRecorder(PORT);
+    // CB contract trade tracker: every 60s from 09:44-16:10 ET it opens the due
+    // checkpoint (9:45/10:30/12:00) by probing the CB-strike 0DTE contract on
+    // TastyTrade — the same /proxy/probe-rest pipeline /owner/probe and
+    // /api/watch use — buys it when the mark is <= $1.00, re-prices every open
+    // trade, sells the first poll SPX is inside the 5-10 pt band of the CB, and
+    // marks out the rest at the bell → cb_trades / cb_trade_ticks, read by the
+    // owner Results → Confidence → Trades tab. TT has no per-contract history,
+    // so these live polls are the ONLY record — a session the process is down
+    // for cannot be backfilled afterwards. Guarded so an optional feature module
+    // can never take the origin down on boot (the etf-candle-recorder lesson).
+    try { require('./cb-trade-recorder').startCbTradeRecorder(PORT); }
+    catch (e) { console.warn('[cb-trades] start failed:', e.message); }
 
     // Nightly retention prune (00:05-00:40 ET): deletes aged-out rows from the
     // high-volume tape/snapshot tables (flow_prints, option_strike_gex_history,

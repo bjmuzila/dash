@@ -269,7 +269,7 @@ function Metric({ label, value, color }: { label: string; value: string; color: 
   );
 }
 
-type TabKey = "ict" | "fails" | "checkpoints";
+type TabKey = "ict" | "fails" | "checkpoints" | "contracts";
 
 export default function Results() {
   const [tab, setTab] = useState<TabKey>("ict");
@@ -387,9 +387,10 @@ export default function Results() {
         <button onClick={() => setTab("ict")} style={tabBtn("ict", "ICT Results")}>ICT Results</button>
         <button onClick={() => setTab("fails")} style={tabBtn("fails", "Fail Rate")}>Fail Rate</button>
         <button onClick={() => setTab("checkpoints")} style={tabBtn("checkpoints", "Confidence")}>Confidence</button>
+        <button onClick={() => setTab("contracts")} style={tabBtn("contracts", "Contracts")}>Contracts</button>
       </div>
 
-      {tab === "checkpoints" ? <CheckpointsView /> : tab === "fails" ? <FailsView /> : (<>
+      {tab === "contracts" ? <TradesView /> : tab === "checkpoints" ? <CheckpointsView /> : tab === "fails" ? <FailsView /> : (<>
       <ShareCard overall={overall} cardRef={shareCardRef} onDownload={downloadShareCard} snap={snap} />
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 4, flexWrap: "wrap" }}>
@@ -552,32 +553,27 @@ function FailsView() {
 // ── Confidence tab: MVC checkpoint tracking (9:45 / 10:30 / 12:00) ──
 // For each session, how close SPX got to the MVC strike that was active at each
 // checkpoint, and whether it was hit (within HIT_PTS). Data: /api/confidence/checkpoints.
-// Extension: contract pricing tracking — auto-buy at checkpoints if under $1.0,
-// auto-sell when SPX within 5-10 pts of CB/MVC.
+//
+// Deliberately hit rates ONLY. The dollar side of the same three checkpoints —
+// what the CB-strike 0DTE contract cost, whether the <= $1.00 rule bought it,
+// and what the auto-sell did with it — lives on the Contracts tab, because
+// bolting three more columns onto a table that already carries a strike, a
+// distance and three tier ticks per checkpoint made both halves unreadable.
+// This view fetches with ?contracts=0 so the server skips that join entirely.
 type CpCell = {
   key: string; label: string;
   strike: number | null; spxAt: number | null; distAt: number | null;
   closest: number | null; hit: boolean; matched: boolean;
   tiers?: Record<number, boolean | null>;
   changed?: boolean;
-  // Contract pricing fields
-  contractPrice?: number | null; contractPricedAt?: number | null;
-  autoEntry?: { price: number; ts: number } | null;
-  sellSignal?: { distPts: number; ts: number } | null;
-  sold?: { price: number; ts: number } | null;
-  pnl?: number | null;
 };
 type CpDay = { date: string; checkpoints: CpCell[] };
 type CpSummary = {
   key: string; label: string; samples: number; hits: number;
   hitRate: number | null; avgClosest: number | null;
   tiers?: Record<number, { hits: number; rate: number | null }>;
-  // Contract pricing summary
-  contractTrades?: number; sellHits?: number; avgPnl?: number | null;
 };
 const TIERS = [5, 10, 15] as const;
-const SELL_DISTANCE_RANGE = [5, 10] as const;
-const AUTO_BUY_PRICE_THRESHOLD = 1.0;
 
 function CheckpointsView() {
   const [days, setDays] = useState<CpDay[]>([]);
@@ -587,7 +583,7 @@ function CheckpointsView() {
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const qs = range === "all" ? "?all=1" : range === "7d" ? "?since=7" : "?since=20";
+  const qs = `${range === "all" ? "?all=1" : range === "7d" ? "?since=7" : "?since=20"}&contracts=0`;
 
   const load = useCallback(async () => {
     setErr(null);
@@ -633,11 +629,10 @@ function CheckpointsView() {
         </div>
       </div>
 
-      {/* Per-checkpoint hit-rate & contract pricing roll-up */}
+      {/* Per-checkpoint hit-rate roll-up */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14, marginBottom: 22 }}>
         {summary.map((s) => {
           const accent = wrColor(s.hitRate);
-          const pnlColor = s.avgPnl == null ? MUTED : s.avgPnl >= 0 ? GREEN : RED;
           return (
             <div key={s.key} className="card-hover" style={{ ...CARD, borderTop: `2px solid ${rgba(accent, 0.5)}`, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
@@ -671,29 +666,6 @@ function CheckpointsView() {
                   );
                 })}
               </div>
-
-              {/* Contract pricing summary — if available */}
-              {s.contractTrades != null && s.contractTrades > 0 && (
-                <div style={{ paddingTop: 12, borderTop: `1px solid ${rgba(C.border, 0.6)}`, display: "flex", flexDirection: "column", gap: 6 }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em" }}>Contract Pricing</span>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
-                    <span style={{ color: C.label }}>Trades</span>
-                    <span style={{ color: C.cyan, fontWeight: 700, fontFamily: "var(--font-mono)" }}>{s.contractTrades}</span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
-                    <span style={{ color: C.label }}>Sell Hits</span>
-                    <span style={{ color: wrColor(s.sellHits != null ? s.sellHits / s.contractTrades : null), fontWeight: 700, fontFamily: "var(--font-mono)" }}>
-                      {s.sellHits}/{s.contractTrades}
-                    </span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
-                    <span style={{ color: C.label }}>Avg P&amp;L</span>
-                    <span style={{ color: pnlColor, fontWeight: 700, fontFamily: "var(--font-mono)" }}>
-                      {s.avgPnl != null ? `${s.avgPnl > 0 ? "+" : ""}${s.avgPnl.toFixed(2)}` : "—"}
-                    </span>
-                  </div>
-                </div>
-              )}
             </div>
           );
         })}
@@ -708,14 +680,14 @@ function CheckpointsView() {
           No MVC snapshots in this range yet.
         </div>
       ) : (
-        <div style={{ ...CARD, padding: 0, overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 400px)" }}>
-          <div>
+        <div style={{ ...CARD, padding: 0, overflow: "hidden" }}>
+          <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${C.border}` }}>
                   <th style={th}>Date</th>
                   {["9:45", "10:30", "12:00"].map((l) => (
-                    <th key={l} style={{ ...th, textAlign: "center", borderLeft: `1px solid ${C.border}` }} colSpan={8}>{l} CB</th>
+                    <th key={l} style={{ ...th, textAlign: "center", borderLeft: `1px solid ${C.border}` }} colSpan={5}>{l} CB</th>
                   ))}
                 </tr>
                 <tr style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -727,9 +699,6 @@ function CheckpointsView() {
                       {TIERS.map((t) => (
                         <th key={t} style={{ ...th, textAlign: "center" }}>≤{t}</th>
                       ))}
-                      <th style={{ ...th, textAlign: "right", fontSize: 13 }}>Contract $</th>
-                      <th style={{ ...th, textAlign: "center", fontSize: 13 }}>Entry/Sell</th>
-                      <th style={{ ...th, textAlign: "right", fontSize: 13 }}>P&amp;L</th>
                     </React.Fragment>
                   ))}
                 </tr>
@@ -738,54 +707,29 @@ function CheckpointsView() {
                 {days.map((d, di) => (
                   <tr key={d.date} style={{ borderTop: di ? `1px solid ${C.border}` : undefined }}>
                     <td style={{ ...td, color: C.label }}>{d.date}</td>
-                    {d.checkpoints.map((c) => {
-                      const hasEntry = c.autoEntry != null;
-                      const hasSell = c.sellSignal != null;
-                      const hasSold = c.sold != null;
-                      const status = hasSold ? "sold" : hasSell ? "signal" : hasEntry ? "entry" : null;
-                      const statusColor = status === "sold" ? GREEN : status === "signal" ? AMBER : status === "entry" ? C.cyan : MUTED;
-                      return (
-                        <React.Fragment key={c.key}>
-                          <td style={{ ...td, textAlign: "right", color: C.label, borderLeft: `1px solid ${C.border}` }}>
-                            {c.strike != null ? c.strike.toFixed(0) : "—"}
-                            {c.changed && (
-                              <span title="CB changed at next checkpoint — window scored only until then" style={{ marginLeft: 5, fontSize: 14, color: AMBER, fontWeight: 700 }}>↻</span>
-                            )}
-                          </td>
-                          <td style={{ ...td, textAlign: "right", color: distColor(c.closest), fontWeight: 700 }}>
-                            {c.closest != null ? `${c.closest.toFixed(1)}` : "—"}
-                          </td>
-                          {TIERS.map((t) => {
-                            const v = c.tiers?.[t];
-                            return (
-                              <td key={t} style={{ ...td, textAlign: "center" }}>
-                                {!c.matched || v == null ? <span style={{ color: MUTED }}>·</span>
-                                  : v ? <span style={{ color: GREEN, fontWeight: 800 }}>✓</span>
-                                  : <span style={{ color: RED, fontWeight: 800 }}>✗</span>}
-                              </td>
-                            );
-                          })}
-                          {/* Contract pricing cells */}
-                          <td style={{ ...td, textAlign: "right", color: c.contractPrice != null ? C.label : MUTED, fontWeight: c.autoEntry != null ? 700 : 400 }}>
-                            {c.contractPrice != null ? `$${c.contractPrice.toFixed(2)}` : "—"}
-                          </td>
-                          <td style={{ ...td, textAlign: "center", fontSize: 13, fontWeight: 700 }}>
-                            {status === "sold" ? (
-                              <span title={`Bought @ ${c.autoEntry?.price.toFixed(2)}, sold @ ${c.sold?.price.toFixed(2)}`} style={{ color: GREEN }}>✓</span>
-                            ) : status === "signal" ? (
-                              <span title={`Sell signal @ ${c.sellSignal?.distPts.toFixed(1)} pts`} style={{ color: AMBER }}>🔔</span>
-                            ) : status === "entry" ? (
-                              <span title="Auto-buy triggered" style={{ color: C.cyan }}>⬇</span>
-                            ) : (
-                              <span style={{ color: MUTED }}>—</span>
-                            )}
-                          </td>
-                          <td style={{ ...td, textAlign: "right", color: c.pnl != null ? (c.pnl >= 0 ? GREEN : RED) : MUTED, fontWeight: c.pnl != null ? 700 : 400 }}>
-                            {c.pnl != null ? `${c.pnl > 0 ? "+" : ""}${c.pnl.toFixed(2)}` : "—"}
-                          </td>
-                        </React.Fragment>
-                      );
-                    })}
+                    {d.checkpoints.map((c) => (
+                      <React.Fragment key={c.key}>
+                        <td style={{ ...td, textAlign: "right", color: C.label, borderLeft: `1px solid ${C.border}` }}>
+                          {c.strike != null ? c.strike.toFixed(0) : "—"}
+                          {c.changed && (
+                            <span title="CB changed at next checkpoint — window scored only until then" style={{ marginLeft: 5, fontSize: 14, color: AMBER, fontWeight: 700 }}>↻</span>
+                          )}
+                        </td>
+                        <td style={{ ...td, textAlign: "right", color: distColor(c.closest), fontWeight: 700 }}>
+                          {c.closest != null ? `${c.closest.toFixed(1)}` : "—"}
+                        </td>
+                        {TIERS.map((t) => {
+                          const v = c.tiers?.[t];
+                          return (
+                            <td key={t} style={{ ...td, textAlign: "center" }}>
+                              {!c.matched || v == null ? <span style={{ color: MUTED }}>·</span>
+                                : v ? <span style={{ color: GREEN, fontWeight: 800 }}>✓</span>
+                                : <span style={{ color: RED, fontWeight: 800 }}>✗</span>}
+                            </td>
+                          );
+                        })}
+                      </React.Fragment>
+                    ))}
                   </tr>
                 ))}
               </tbody>
@@ -794,6 +738,557 @@ function CheckpointsView() {
         </div>
       )}
     </>
+  );
+}
+
+// ── Contracts tab: the CB contract trade log ───────────────────────────────
+// One row per checkpoint of one session: the CB-strike 0DTE contract probed on
+// TastyTrade (server-v2/cb-contract-track.js, via the same /proxy/probe-rest
+// pipeline /owner/probe uses), what the <= $1.00 rule paid for it, what the
+// 5-10 pt auto-sell got out at, and the P&L. Data: /api/cb-trades.
+//
+// Clicking the contract opens the probe chart for that exact trade — the same
+// chart /owner/probe draws, but plotted from cb_trade_ticks (the recorder's
+// poll-by-poll marks) instead of watch_snapshots, so it covers exactly the span
+// the position was live.
+//
+// SKIPPED ROWS ARE THE POINT. A checkpoint where the contract came back at
+// $2.40 is a recorded decision, not a gap — without it the board silently
+// rewrites its own history and "no trades this week" becomes indistinguishable
+// from "the recorder was down". They stay in the table, greyed, with the price
+// and reason that disqualified them.
+type CbTrade = {
+  id: number; date: string; checkpoint: string; checkpoint_label: string | null;
+  ticker: string; expiration: string; strike: number; side: "C" | "P";
+  occ_symbol: string | null; streamer_symbol: string | null;
+  status: "skipped" | "open" | "closed"; skip_reason: string | null;
+  probe_ts: number | string; probe_price: number | null; probe_bid: number | null; probe_ask: number | null;
+  probe_spot: number | null; probe_dist: number | null;
+  entry_ts: number | string | null; entry_price: number | null; entry_spot: number | null;
+  signal_ts: number | string | null; signal_dist: number | null;
+  exit_ts: number | string | null; exit_price: number | null; exit_spot: number | null; exit_reason: string | null;
+  last_ts: number | string | null; last_price: number | null; last_spot: number | null; last_dist: number | null;
+  best_price: number | null; worst_price: number | null; closest_dist: number | null;
+  pnl: number | null; pnl_usd: number | null; polls: number;
+};
+type CbSummary = {
+  key: string; label: string; probes: number; trades: number; openNow: number;
+  sellHits: number; wins: number; winRate: number | null;
+  avgPnl: number | null; totalPnl: number | null; totalPnlUsd: number | null; takeRate: number | null;
+};
+type CbConfig = {
+  AUTO_BUY_MAX: number; SELL_TRIGGER_PTS: number; SELL_TIGHT_PTS: number;
+  PROBE_TICKER: string; MULTIPLIER: number; CHECKPOINT_GRACE_MIN: number;
+};
+type CbTick = { ts: number | string; mark: number | null; bid: number | null; ask: number | null; spot: number | null; dist: number | null };
+
+// BIGINT columns come back from node-pg as STRINGS (no type parser is
+// registered in lib/db.ts), so every timestamp has to be coerced before it goes
+// anywhere near a Date. Doing it here rather than at each call site is what
+// keeps "Invalid Date" out of the table.
+//
+// The null/"" guard is load-bearing, not defensive noise: Number(null) is 0 and
+// Number("") is 0, and both pass Number.isFinite. Without it every open and
+// every skipped row rendered its P&L as a confident "0.00" instead of "—" — a
+// fabricated number indistinguishable from a real flat trade.
+const n = (v: unknown): number | null => {
+  if (v == null || v === "") return null;
+  const x = Number(v);
+  return Number.isFinite(x) ? x : null;
+};
+const contractLabel = (t: CbTrade) =>
+  t.strike ? `${Number(t.strike).toFixed(0)}${t.side}` : "—";
+
+function TradesView() {
+  const [trades, setTrades] = useState<CbTrade[]>([]);
+  const [summary, setSummary] = useState<CbSummary[]>([]);
+  const [config, setConfig] = useState<CbConfig | null>(null);
+  const [range, setRange] = useState<"7d" | "20d" | "all">("20d");
+  const [showSkipped, setShowSkipped] = useState(true);
+  const [openTrade, setOpenTrade] = useState<CbTrade | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const qs = range === "all" ? "?all=1" : range === "7d" ? "?since=7" : "?since=20";
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const r = await fetch(`/api/cb-trades${qs}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      setTrades(Array.isArray(j.trades) ? j.trades : []);
+      setSummary(Array.isArray(j.summary) ? j.summary : []);
+      setConfig(j.config ?? null);
+      setLoaded(true);
+    } catch (e) { setErr(String(e)); setLoaded(true); }
+  }, [qs]);
+
+  useEffect(() => { setLoaded(false); load(); const id = setInterval(load, 60_000); return () => clearInterval(id); }, [load]);
+
+  const buyMax = config?.AUTO_BUY_MAX ?? 1.0;
+  const band: [number, number] = [config?.SELL_TIGHT_PTS ?? 5, config?.SELL_TRIGGER_PTS ?? 10];
+  const mult = config?.MULTIPLIER ?? 100;
+
+  const visible = useMemo(
+    () => (showSkipped ? trades : trades.filter((t) => t.status !== "skipped")),
+    [trades, showSkipped],
+  );
+  const totals = useMemo(() => {
+    const closed = trades.filter((t) => t.pnl != null);
+    const wins = closed.filter((t) => (t.pnl ?? 0) > 0).length;
+    return {
+      probes: trades.length,
+      taken: trades.filter((t) => t.status !== "skipped").length,
+      open: trades.filter((t) => t.status === "open").length,
+      closed: closed.length,
+      wins,
+      winRate: closed.length ? wins / closed.length : null,
+      usd: closed.reduce((a, t) => a + (n(t.pnl_usd) ?? 0), 0),
+    };
+  }, [trades]);
+
+  const rangeBtn = (key: typeof range): React.CSSProperties => ({
+    fontSize: 14, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer",
+    border: `1px solid ${range === key ? C.cyan : C.border}`,
+    background: range === key ? rgba(C.cyan, 0.18) : "transparent",
+    color: range === key ? C.cyan : C.label, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
+  });
+
+  const th: React.CSSProperties = { padding: "10px 14px", fontSize: 13, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: C.label, textAlign: "left", whiteSpace: "nowrap" };
+  const td: React.CSSProperties = { padding: "10px 14px", fontSize: 14, whiteSpace: "nowrap", fontFamily: "var(--font-mono)" };
+
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 17, fontWeight: 800, color: C.purple, textTransform: "uppercase", letterSpacing: "0.1em" }}>Contracts</span>
+        <span style={{ fontSize: 14, color: C.label }}>
+          CB-strike 0DTE probed on TastyTrade at 9:45 / 10:30 / 12:00 · buy ≤ ${buyMax.toFixed(2)} · sell inside {band[0]}–{band[1]} pts · ×{mult}
+        </span>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          <button
+            onClick={() => setShowSkipped((v) => !v)}
+            title="Skipped rows are checkpoints that were probed but never qualified — keeping them visible is what separates 'nothing set up' from 'the recorder was down'."
+            style={{
+              fontSize: 14, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer",
+              border: `1px solid ${showSkipped ? C.purple : C.border}`,
+              background: showSkipped ? rgba(C.purple, 0.18) : "transparent",
+              color: showSkipped ? C.purple : C.label, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
+            }}
+          >
+            Skipped {showSkipped ? "on" : "off"}
+          </button>
+          <button onClick={() => setRange("7d")} style={rangeBtn("7d")}>7d</button>
+          <button onClick={() => setRange("20d")} style={rangeBtn("20d")}>20d</button>
+          <button onClick={() => setRange("all")} style={rangeBtn("all")}>All</button>
+        </div>
+      </div>
+
+      {/* Per-checkpoint roll-up */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14, marginBottom: 22 }}>
+        {summary.map((s) => {
+          const accent = wrColor(s.winRate);
+          return (
+            <div key={s.key} className="card-hover" style={{ ...CARD, borderTop: `2px solid ${rgba(accent, 0.5)}`, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 17, fontWeight: 800, color: C.label }}>{s.label}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                  {s.trades}/{s.probes} taken
+                </span>
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <span style={{ fontSize: 20, fontWeight: 800, color: accent, fontFamily: "var(--font-mono)", lineHeight: 1 }}>
+                  {s.winRate != null ? `${Math.round(s.winRate * 100)}%` : "—"}
+                </span>
+                <span style={{ fontSize: 13, color: C.label, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                  win rate{s.trades > 0 ? ` · ${s.wins}/${s.trades - s.openNow}` : ""}
+                </span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+                <span style={{ color: C.label }}>Sell hits</span>
+                <span style={{ color: s.sellHits > 0 ? GREEN : MUTED, fontWeight: 700, fontFamily: "var(--font-mono)" }}>
+                  {s.sellHits}/{s.trades}
+                </span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+                <span style={{ color: C.label }}>Avg P&amp;L</span>
+                <span style={{ color: s.avgPnl == null ? MUTED : s.avgPnl >= 0 ? GREEN : RED, fontWeight: 700, fontFamily: "var(--font-mono)" }}>
+                  {s.avgPnl != null ? `${s.avgPnl > 0 ? "+" : ""}${s.avgPnl.toFixed(2)}` : "—"}
+                </span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+                <span style={{ color: C.label }}>Total</span>
+                <span style={{ color: s.totalPnlUsd == null ? MUTED : s.totalPnlUsd >= 0 ? GREEN : RED, fontWeight: 800, fontFamily: "var(--font-mono)" }}>
+                  {s.totalPnlUsd != null ? `${s.totalPnlUsd > 0 ? "+" : "−"}$${Math.abs(s.totalPnlUsd).toFixed(0)}` : "—"}
+                </span>
+              </div>
+              {s.openNow > 0 && (
+                <span style={{ fontSize: 13, color: C.cyan, fontWeight: 700 }}>{s.openNow} open right now</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {err && <div style={{ color: RED, fontSize: 14, marginBottom: 14, fontFamily: "var(--font-mono)" }}>Couldn&apos;t load contracts: {err}</div>}
+
+      {!loaded ? (
+        <div style={{ color: C.label, fontSize: 14 }}>Loading contracts…</div>
+      ) : trades.length === 0 ? (
+        <div style={{ ...CARD, padding: "20px 22px", color: C.label, fontSize: 14, lineHeight: 1.6 }}>
+          No checkpoints recorded yet. The tracker writes a row per checkpoint as each session runs —
+          TastyTrade has no per-contract history, so this table fills forward from the day the recorder
+          went live and cannot be backfilled. First rows appear at 9:45 ET on the next trading day.
+        </div>
+      ) : (
+        <div style={{ ...CARD, padding: 0, overflow: "hidden" }}>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <th style={th}>Date</th>
+                  <th style={th}>Time</th>
+                  <th style={th}>Contract</th>
+                  <th style={{ ...th, textAlign: "right" }}>Entry</th>
+                  <th style={{ ...th, textAlign: "right" }}>Sell</th>
+                  <th style={{ ...th, textAlign: "right" }}>P/L</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((t, i) => {
+                  const skipped = t.status === "skipped";
+                  const pnl = n(t.pnl);
+                  // An open position is marked to its last poll. It is shown, but
+                  // starred and dimmed — an unrealized number that reads exactly
+                  // like a booked one is how a board starts lying to you.
+                  const live = t.status === "open" && t.entry_price != null && t.last_price != null
+                    ? Math.round((n(t.last_price)! - n(t.entry_price)!) * 100) / 100
+                    : null;
+                  const shown = pnl ?? live;
+                  return (
+                    <tr key={t.id} style={{ borderTop: i ? `1px solid ${C.border}` : undefined, opacity: skipped ? 0.55 : 1 }}>
+                      <td style={{ ...td, color: C.label }}>{t.date}</td>
+                      <td style={{ ...td, color: C.label, fontWeight: 700 }}>{t.checkpoint_label ?? t.checkpoint}</td>
+                      <td style={td}>
+                        <button
+                          type="button"
+                          onClick={() => setOpenTrade(t)}
+                          title={skipped
+                            ? `${t.skip_reason ?? "not taken"} — click for the probe chart`
+                            : `${t.ticker} ${t.expiration} · click for the probe chart`}
+                          style={{
+                            font: "inherit", fontFamily: "var(--font-mono)", cursor: "pointer",
+                            background: "transparent", border: `1px solid ${rgba(skipped ? MUTED : C.cyan, 0.4)}`,
+                            color: skipped ? MUTED : C.cyan, fontWeight: 800, borderRadius: 6, padding: "3px 9px",
+                          }}
+                        >
+                          {contractLabel(t)}
+                          <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: MUTED }}>0DTE</span>
+                        </button>
+                      </td>
+                      <td style={{ ...td, textAlign: "right", color: C.label }}>
+                        {t.entry_price != null ? (
+                          <span title={`filled ${etClock(n(t.entry_ts) ?? 0)} · SPX ${n(t.entry_spot)?.toFixed(2) ?? "—"}`}>
+                            ${Number(t.entry_price).toFixed(2)}
+                          </span>
+                        ) : (
+                          <span style={{ color: MUTED }} title={t.skip_reason ?? "not taken"}>
+                            {t.probe_price != null ? `($${Number(t.probe_price).toFixed(2)})` : "—"}
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ ...td, textAlign: "right" }}>
+                        {t.exit_price != null ? (
+                          <span
+                            title={t.exit_reason === "sell-signal"
+                              ? `sell signal at ${Number(t.signal_dist).toFixed(1)} pts from the CB · filled ${etClock(n(t.exit_ts) ?? 0)}`
+                              : `marked out at the bell ${etClock(n(t.exit_ts) ?? 0)} — SPX never came within ${band[1]} pts`}
+                            style={{ color: t.exit_reason === "sell-signal" ? GREEN : AMBER, fontWeight: 700 }}
+                          >
+                            ${Number(t.exit_price).toFixed(2)}
+                            <span style={{ marginLeft: 5, fontSize: 11, color: MUTED }}>
+                              {t.exit_reason === "sell-signal" ? `${Number(t.signal_dist).toFixed(1)}pt` : "eod"}
+                            </span>
+                          </span>
+                        ) : t.status === "open" && t.last_price != null ? (
+                          <span title={`live mark · closest ${n(t.last_dist)?.toFixed(1) ?? "—"} pt`} style={{ color: C.cyan }}>
+                            ${Number(t.last_price).toFixed(2)}*
+                          </span>
+                        ) : <span style={{ color: MUTED }}>—</span>}
+                      </td>
+                      <td style={{ ...td, textAlign: "right", fontWeight: 800, color: shown == null ? MUTED : shown >= 0 ? GREEN : RED, opacity: pnl == null && live != null ? 0.75 : 1 }}>
+                        {shown != null ? (
+                          <>
+                            {`${shown > 0 ? "+" : ""}${shown.toFixed(2)}${pnl == null ? "*" : ""}`}
+                            <span style={{ marginLeft: 7, fontSize: 12, fontWeight: 700, color: MUTED }}>
+                              {shown >= 0 ? "+" : "−"}${Math.abs(shown * mult).toFixed(0)}
+                            </span>
+                          </>
+                        ) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ borderTop: `1px solid ${C.border}`, padding: "10px 14px", display: "flex", gap: 18, flexWrap: "wrap", fontSize: 13, color: MUTED }}>
+            <span>{totals.probes} checkpoints probed · {totals.taken} traded · {totals.open} open</span>
+            <span>{totals.winRate != null ? `${Math.round(totals.winRate * 100)}% win rate (${totals.wins}/${totals.closed})` : "nothing closed yet"}</span>
+            <span style={{ color: totals.usd >= 0 ? GREEN : RED, fontWeight: 800 }}>
+              net {totals.usd >= 0 ? "+" : "−"}${Math.abs(totals.usd).toFixed(0)}
+            </span>
+            <span style={{ marginLeft: "auto" }}>click a contract for its probe chart · <span style={{ fontWeight: 800 }}>*</span> unrealized</span>
+          </div>
+        </div>
+      )}
+
+      {openTrade && <CbProbeModal trade={openTrade} band={band} mult={mult} onClose={() => setOpenTrade(null)} />}
+    </>
+  );
+}
+
+// ── Probe chart popup ──────────────────────────────────────────────────────
+// The /owner/probe chart, pointed at one CB trade. Same shape as ProbeChart
+// there — gradient area under a cyan line, five gridlines with value labels,
+// first/last timestamps, a dot on the latest point — but plotted from
+// cb_trade_ticks, so the x-axis spans exactly the minutes the position was live
+// rather than a rolling 1D/1W window.
+const CB_METRICS = [
+  { key: "mark", label: "Price", dec: 2, prefix: "$" },
+  { key: "spot", label: "SPX", dec: 2, prefix: "" },
+  { key: "dist", label: "Dist to CB", dec: 1, prefix: "" },
+] as const;
+type CbMetricKey = typeof CB_METRICS[number]["key"];
+
+function CbProbeChart({
+  ticks, metric, entry, exit, band,
+}: {
+  ticks: CbTick[]; metric: CbMetricKey;
+  entry: number | null; exit: { v: number; ts: number } | null;
+  band: [number, number];
+}) {
+  const W = 960, H = 340, PADL = 62, PADR = 16, PADT = 16, PADB = 28;
+  const pts = ticks
+    .map((t) => ({ ts: n(t.ts), v: n(t[metric]) }))
+    .filter((p): p is { ts: number; v: number } => p.ts != null && p.v != null);
+
+  if (pts.length < 2) {
+    return (
+      <div style={{ padding: "48px 0", textAlign: "center", color: MUTED, fontSize: 13, fontFamily: "var(--font-mono)" }}>
+        Only {pts.length} poll{pts.length === 1 ? "" : "s"} recorded — not enough for a chart.
+        <div style={{ marginTop: 6, fontSize: 12 }}>
+          The recorder writes one tick a minute while a position is open; a trade that sold on its first poll has nothing to draw.
+        </div>
+      </div>
+    );
+  }
+
+  const spec = CB_METRICS.find((m) => m.key === metric)!;
+  const xs = pts.map((p) => p.ts), ys = pts.map((p) => p.v);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  // The entry line and the sell band are part of the picture, not annotations on
+  // top of it — if the domain excludes them they'd be drawn off-canvas.
+  const domain = [...ys];
+  if (metric === "mark" && entry != null) domain.push(entry);
+  if (metric === "dist") domain.push(band[0], band[1]);
+  let minY = Math.min(...domain), maxY = Math.max(...domain);
+  if (minY === maxY) { minY -= 1; maxY += 1; }
+  const gpad = (maxY - minY) * 0.08; minY -= gpad; maxY += gpad;
+
+  const cnt = pts.length;
+  const sx = (i: number) => PADL + (cnt <= 1 ? 0 : i / (cnt - 1)) * (W - PADL - PADR);
+  const sy = (v: number) => H - PADB - ((v - minY) / (maxY - minY || 1)) * (H - PADT - PADB);
+  const path = pts.map((p, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(p.v).toFixed(1)}`).join(" ");
+  const area = `${path} L${sx(cnt - 1).toFixed(1)},${H - PADB} L${sx(0).toFixed(1)},${H - PADB} Z`;
+  const fmtY = (v: number) => `${spec.prefix}${v.toFixed(spec.dec)}`;
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => minY + f * (maxY - minY));
+  const fmtT = (ts: number) => new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(new Date(ts));
+  // Index of the tick nearest the exit, so the sell is marked where it happened.
+  const exitIdx = exit ? pts.reduce((best, p, i) => (Math.abs(p.ts - exit.ts) < Math.abs(pts[best].ts - exit.ts) ? i : best), 0) : -1;
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+      <defs>
+        <linearGradient id="cbwg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={rgba(C.cyan, 0.28)} />
+          <stop offset="100%" stopColor={rgba(C.cyan, 0)} />
+        </linearGradient>
+      </defs>
+
+      {yTicks.map((v, i) => (
+        <g key={i}>
+          <line x1={PADL} y1={sy(v)} x2={W - PADR} y2={sy(v)} stroke="rgba(255,255,255,0.08)" strokeWidth={1} />
+          <text x={PADL - 6} y={sy(v) + 3} textAnchor="end" fontSize={11} fill={C.label} fontFamily="var(--font-mono)">{fmtY(v)}</text>
+        </g>
+      ))}
+
+      {/* The 5-10 pt sell band, on the distance view: the whole strategy is
+          "get out when price enters this stripe", so it belongs on the chart. */}
+      {metric === "dist" && (
+        <>
+          <rect
+            x={PADL} y={sy(band[1])} width={W - PADL - PADR}
+            height={Math.max(0, sy(band[0]) - sy(band[1]))}
+            fill={rgba(GREEN, 0.1)} stroke={rgba(GREEN, 0.35)} strokeWidth={1}
+          />
+          <text x={W - PADR - 4} y={sy(band[1]) - 4} textAnchor="end" fontSize={10} fill={rgba(GREEN, 0.9)} fontFamily="var(--font-mono)">
+            sell band {band[0]}–{band[1]} pt
+          </text>
+        </>
+      )}
+
+      {/* Entry line on the price view. Without it a rising curve reads as a
+          winner even when it never got back to what was paid. */}
+      {metric === "mark" && entry != null && (
+        <>
+          <line x1={PADL} y1={sy(entry)} x2={W - PADR} y2={sy(entry)} stroke={rgba(MUTED, 0.6)} strokeWidth={1} strokeDasharray="4 4" />
+          <text x={PADL + 4} y={sy(entry) - 5} fontSize={10} fill={MUTED} fontFamily="var(--font-mono)">entry ${entry.toFixed(2)}</text>
+        </>
+      )}
+
+      <path d={area} fill="url(#cbwg)" />
+      <path d={path} fill="none" stroke={C.cyan} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
+
+      {exitIdx >= 0 && (
+        <>
+          <line x1={sx(exitIdx)} y1={PADT} x2={sx(exitIdx)} y2={H - PADB} stroke={rgba(GREEN, 0.55)} strokeWidth={1} strokeDasharray="3 3" />
+          <circle cx={sx(exitIdx)} cy={sy(pts[exitIdx].v)} r={4} fill={GREEN} stroke="#05060a" strokeWidth={1} />
+        </>
+      )}
+      <circle cx={sx(cnt - 1)} cy={sy(pts[cnt - 1].v)} r={3.5} fill={C.cyan} />
+
+      <text x={PADL} y={H - 6} textAnchor="start" fontSize={11} fill={C.label} fontFamily="var(--font-mono)">{fmtT(minX)}</text>
+      <text x={W - PADR} y={H - 6} textAnchor="end" fontSize={11} fill={C.label} fontFamily="var(--font-mono)">{fmtT(maxX)}</text>
+    </svg>
+  );
+}
+
+function CbProbeModal({
+  trade, band, mult, onClose,
+}: { trade: CbTrade; band: [number, number]; mult: number; onClose: () => void }) {
+  const [ticks, setTicks] = useState<CbTick[] | null>(null);
+  const [metric, setMetric] = useState<CbMetricKey>("mark");
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setTicks(null); setErr(null);
+    (async () => {
+      try {
+        const r = await fetch(`/api/cb-trades?ticks=${trade.id}`, { cache: "no-store" });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json();
+        if (!cancelled) setTicks(Array.isArray(j.ticks) ? j.ticks : []);
+      } catch (e) { if (!cancelled) { setErr(String(e)); setTicks([]); } }
+    })();
+    return () => { cancelled = true; };
+  }, [trade.id]);
+
+  // Esc closes, and the body doesn't scroll behind the overlay.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { window.removeEventListener("keydown", onKey); document.body.style.overflow = prev; };
+  }, [onClose]);
+
+  const entry = n(trade.entry_price);
+  const exitV = n(trade.exit_price);
+  const exitTs = n(trade.exit_ts);
+  const pnl = n(trade.pnl) ?? (entry != null && n(trade.last_price) != null
+    ? Math.round((n(trade.last_price)! - entry) * 100) / 100 : null);
+
+  const stat = (label: string, value: string, color: string = C.label) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      <span style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.08em" }}>{label}</span>
+      <span style={{ fontSize: 15, fontWeight: 800, color, fontFamily: "var(--font-mono)" }}>{value}</span>
+    </div>
+  );
+  const tgl = (on: boolean): React.CSSProperties => ({
+    fontSize: 13, fontWeight: 800, padding: "5px 12px", borderRadius: 7, cursor: "pointer",
+    border: `1px solid ${on ? C.cyan : C.border}`,
+    background: on ? rgba(C.cyan, 0.18) : "transparent",
+    color: on ? C.cyan : C.label, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
+  });
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 1000, background: "rgba(5,6,10,0.72)",
+        backdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ ...CARD, width: "min(1040px, 100%)", maxHeight: "90vh", overflowY: "auto", padding: "20px 22px", display: "flex", flexDirection: "column", gap: 16 }}
+      >
+        <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 18, fontWeight: 800, color: C.cyan, fontFamily: "var(--font-mono)" }}>
+            {trade.ticker} {contractLabel(trade)}
+          </span>
+          <span style={{ fontSize: 13, color: MUTED, fontFamily: "var(--font-mono)" }}>
+            {trade.expiration} 0DTE · {trade.checkpoint_label ?? trade.checkpoint} checkpoint · {trade.date}
+          </span>
+          <button
+            onClick={onClose}
+            title="Close (Esc)"
+            style={{ marginLeft: "auto", font: "inherit", fontSize: 18, fontWeight: 800, lineHeight: 1, cursor: "pointer", background: "transparent", border: `1px solid ${C.border}`, color: C.label, borderRadius: 7, padding: "4px 11px" }}
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{ display: "flex", gap: 26, flexWrap: "wrap", paddingBottom: 14, borderBottom: `1px solid ${C.border}` }}>
+          {stat("Entry", entry != null ? `$${entry.toFixed(2)} · ${etClock(n(trade.entry_ts) ?? 0)}` : `not taken — ${trade.skip_reason ?? "—"}`,
+            entry != null ? C.label : MUTED)}
+          {stat("Sell", exitV != null
+            ? `$${exitV.toFixed(2)} · ${trade.exit_reason === "sell-signal" ? `${Number(trade.signal_dist).toFixed(1)} pt` : "eod"}`
+            : trade.status === "open" ? "open" : "—",
+          exitV != null ? (trade.exit_reason === "sell-signal" ? GREEN : AMBER) : MUTED)}
+          {stat("P/L", pnl != null ? `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)} · ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl * mult).toFixed(0)}` : "—",
+            pnl == null ? MUTED : pnl >= 0 ? GREEN : RED)}
+          {stat("Best / worst", trade.best_price != null
+            ? `$${Number(trade.best_price).toFixed(2)} / $${Number(trade.worst_price ?? 0).toFixed(2)}` : "—")}
+          {stat("Closest to CB", trade.closest_dist != null ? `${Number(trade.closest_dist).toFixed(1)} pt` : "—",
+            trade.closest_dist != null && Number(trade.closest_dist) <= band[1] ? GREEN : AMBER)}
+          {stat("Polls", String(trade.polls ?? 0))}
+        </div>
+
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {CB_METRICS.map((m) => (
+            <button key={m.key} onClick={() => setMetric(m.key)} style={tgl(metric === m.key)}>{m.label}</button>
+          ))}
+        </div>
+
+        {err ? (
+          <div style={{ color: RED, fontSize: 14, fontFamily: "var(--font-mono)", padding: "24px 0", textAlign: "center" }}>
+            Couldn&apos;t load the poll curve: {err}
+          </div>
+        ) : ticks == null ? (
+          <div style={{ color: C.label, fontSize: 14, padding: "48px 0", textAlign: "center" }}>Loading probe history…</div>
+        ) : (
+          <CbProbeChart
+            ticks={ticks}
+            metric={metric}
+            entry={entry}
+            exit={exitV != null && exitTs != null && trade.exit_reason === "sell-signal" ? { v: exitV, ts: exitTs } : null}
+            band={band}
+          />
+        )}
+
+        <div style={{ fontSize: 12, color: MUTED, fontFamily: "var(--font-mono)", letterSpacing: "0.04em", lineHeight: 1.6 }}>
+          {metric === "mark" ? "Contract mark" : metric === "spot" ? "SPX spot at each poll" : "SPX distance to the CB"}
+          {" · "}priced through <b>/proxy/probe-rest</b> (TastyTrade / dxLink), one poll a minute while the position was open —
+          the same pipeline the /owner/probe page uses. TastyTrade has no per-contract history, so this curve is the only
+          record of what the position was worth; minutes the recorder was down are simply absent.
+        </div>
+      </div>
+    </div>
   );
 }
 

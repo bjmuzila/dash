@@ -74,13 +74,14 @@ catch (e) { console.warn('[api-router] _lib-ibdaily.cjs not loaded:', e.message)
 let libConfRoute = null;
 try { libConfRoute = require('./_lib-confidence-route.cjs'); }
 catch (e) { console.warn('[api-router] _lib-confidence-route.cjs not loaded:', e.message); }
-// CB contract pricing + auto-buy/auto-sell replay for the owner Confidence tab.
-// A plain server-v2 module (no esbuild step) — see server-v2/cb-contract-track.js.
-// Loaded defensively: without it /api/confidence/checkpoints still returns the
-// hit-rate half of the payload exactly as it did before contract tracking existed.
+// CB contract trade tracker — probes the CB-strike 0DTE contract on TastyTrade
+// at 9:45/10:30/12:00, auto-buys under $1.00, auto-sells inside the 5-10 pt band.
+// Plain server-v2 module (no esbuild step); it owns its own tables via
+// libDb.getPool(). Loaded defensively: without it /api/confidence/checkpoints
+// still returns the hit-rate half of the payload exactly as it did before.
 let cbTrack = null;
 try { cbTrack = require('./cb-contract-track'); }
-catch (e) { console.warn('[api-router] cb-contract-track not loaded — contract pricing off:', e.message); }
+catch (e) { console.warn('[api-router] cb-contract-track not loaded — contract tracking off:', e.message); }
 // Pure broker-CSV parser/matcher (lib/journal/csv.ts — zero imports):
 //   esbuild lib/journal/csv.ts --bundle --platform=node --format=cjs --outfile=server-v2/_lib-journal-csv.cjs
 let libJournalCsv = null;
@@ -6214,14 +6215,9 @@ if (libDb) {
     };
     const computeCheckpointData = async (dates) => {
       const days = [];
-      // date -> [{min,spx,ts}] — the snapshot-resolution SPX path. Handed to the
-      // contract tracker as its fallback when Theta's index intraday tier is
-      // unavailable; never serialized to the client.
-      const spxByDate = {};
       for (const date of dates) {
         const rows = await libDb.queryAll(`SELECT * FROM mvc_snapshots WHERE date = ? ORDER BY timestamp ASC LIMIT 2000`, [date]);
-        const timed = rows.map((r) => { const rawSpx = cnum(r.spxPrice); const spx = rawSpx != null && rawSpx > 1000 ? rawSpx : null; return { min: rowMinutesET(r), strike: strikeOf(r), spx, ts: Number(r.timestamp) || 0 }; }).filter((x) => x.min != null);
-        spxByDate[date] = timed.filter((t) => t.spx != null).map((t) => ({ min: t.min, spx: t.spx, ts: t.ts }));
+        const timed = rows.map((r) => { const rawSpx = cnum(r.spxPrice); const spx = rawSpx != null && rawSpx > 1000 ? rawSpx : null; return { min: rowMinutesET(r), strike: strikeOf(r), spx }; }).filter((x) => x.min != null);
         if (!timed.length) continue;
         if (!timed.some((t) => t.spx != null)) continue;
         const resolved = CHECKPOINTS.map((cp) => {
@@ -6258,7 +6254,7 @@ if (libDb) {
         for (const t of TIERS) { const h = cells.filter((c) => c.tiers?.[t]).length; tierStats[t] = { hits: h, rate: cells.length ? h / cells.length : null }; }
         return { key: cp.key, label: cp.label, samples: cells.length, hits, hitRate: cells.length ? hits / cells.length : null, avgClosest, tiers: tierStats };
       });
-      return { days, summary, hitPts: HIT_PTS, tiers: [...TIERS], spxByDate };
+      return { days, summary, hitPts: HIT_PTS, tiers: [...TIERS] };
     };
     const checkpointDates = async (limit) => {
       const rows = await libDb.queryAll(`SELECT DISTINCT date FROM mvc_snapshots ORDER BY date DESC LIMIT ?`, [limit]);
@@ -6271,17 +6267,21 @@ if (libDb) {
           const sp = new URL(req.url || '/', 'http://localhost').searchParams;
           const all = sp.get('all') === '1';
           const since = Number(sp.get('since')) || 20;
-          // Contract pricing is ON by default and opted OUT with ?contracts=0 —
-          // it is cached per session, so the steady-state cost of leaving it on
-          // is one Theta sweep per new session, not one per 60s poll.
+          // Contract columns are ON by default and opted OUT with ?contracts=0.
+          // The owner Confidence tab now sends contracts=0 — the dollar side
+          // lives on its own Contracts tab off /api/cb-trades — so in practice
+          // this merge only runs for direct/API callers. Kept because it is one
+          // plain read of the cb_trades rows the recorder already wrote (no
+          // upstream calls), and it is what makes a single request able to
+          // answer both halves of a checkpoint.
           const wantContracts = sp.get('contracts') !== '0';
           const dates = await checkpointDates(all ? 365 : since);
-          const { spxByDate, ...data } = await computeCheckpointData(dates);
+          const data = await computeCheckpointData(dates);
           if (wantContracts && cbTrack) {
-            // Never let a Theta outage take the hit-rate board down with it.
-            try { await cbTrack.enrichWithContracts(data, CHECKPOINTS, spxByDate); }
+            // Never let the trade table take the hit-rate board down with it.
+            try { await cbTrack.enrichWithTrades(data); }
             catch (e) {
-              console.warn('[api-router] contract tracking failed —', e.message);
+              console.warn('[api-router] cb-trades merge failed —', e.message);
               data.contracts = { enabled: false, note: String(e.message || e) };
             }
           } else {
@@ -6289,6 +6289,63 @@ if (libDb) {
           }
           send(res, 200, data);
         } catch (e) { send(res, 500, { error: String(e) }); }
+      },
+    });
+  }
+
+  // /api/cb-trades — the CB contract trade log behind the owner Results →
+  // Confidence → Trades tab. Every row is one checkpoint of one session: the
+  // probed CB-strike 0DTE contract, whether the <= $1.00 rule bought it, and if
+  // so what the 5-10 pt auto-sell did with it.
+  //
+  // GET   ?since=20 | ?all=1 | ?date=YYYY-MM-DD   → { trades, summary, config }
+  //       ?ticks=<tradeId>                        → { ticks } (the poll curve)
+  // POST  { action: 'tick' | 'checkpoint' | 'poll' | 'settle' }
+  //       'tick' is what server-v2/cb-trade-recorder.js calls once a minute and
+  //       does the whole job; the other three exist so a session can be repaired
+  //       or replayed by hand without waiting on the clock.
+  //
+  // Owner-gated, with the standard x-internal-token bypass (enforceAuth) so the
+  // in-process recorder can post without a session. Writes are the ONLY way rows
+  // appear — TastyTrade has no per-contract history, so nothing here can be
+  // backfilled after the fact.
+  if (cbTrack) {
+    register('/api/cb-trades', {
+      auth: 'owner', methods: ['GET', 'POST'],
+      async handler(req, res, ctx) {
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        if (req.method === 'GET') {
+          try {
+            const ticksFor = sp.get('ticks');
+            if (ticksFor) { send(res, 200, { ticks: await cbTrack.listTicks(ticksFor) }, { 'Cache-Control': NO_STORE }); return; }
+            const date = sp.get('date') || undefined;
+            const all = sp.get('all') === '1';
+            const since = Number(sp.get('since')) || 20;
+            const trades = await cbTrack.listTrades({ date, all, since });
+            send(res, 200, {
+              trades,
+              summary: cbTrack.summarize(trades),
+              config: cbTrack.CONFIG,
+              checkpoints: cbTrack.CHECKPOINTS,
+            }, { 'Cache-Control': NO_STORE });
+          } catch (err) { send(res, 500, { error: String(err) }); }
+          return;
+        }
+        try {
+          const body = await readJson(req).catch(() => ({}));
+          const action = String(body.action || 'tick');
+          const date = body.date ? String(body.date) : undefined;
+          if (action === 'tick') { send(res, 200, await cbTrack.tick(ctx)); return; }
+          if (action === 'poll') { send(res, 200, await cbTrack.pollOpen(ctx, { date })); return; }
+          if (action === 'settle') { send(res, 200, await cbTrack.settle(ctx, { date })); return; }
+          if (action === 'checkpoint') {
+            const checkpoint = String(body.checkpoint || '');
+            const d = date || cbTrack.etParts().date;
+            send(res, 200, await cbTrack.runCheckpoint(ctx, { date: d, checkpoint }));
+            return;
+          }
+          send(res, 400, { error: 'unknown action' });
+        } catch (err) { send(res, 500, { error: String(err) }); }
       },
     });
   }

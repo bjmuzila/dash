@@ -2,419 +2,614 @@
 /**
  * server-v2/cb-contract-track.js
  *
- * CONTRACT PRICING + AUTO-TRIGGER REPLAY for the owner Results → Confidence tab.
+ * CB CONTRACT TRADE TRACKER — TastyTrade / dxLink, priced exactly the way a
+ * contract is PROBED everywhere else in this app.
  *
- * The Confidence tab already answers "how close did SPX get to the CB (Core
- * Bullseye / MVC strike) that was live at 9:45 / 10:30 / 12:00 ET". This module
- * answers the money question next to it: if you had mechanically bought the CB
- * strike's 0DTE contract at each of those checkpoints whenever it was priced at
- * or under $1.00, and sold it the moment SPX came within the 5–10 pt band of the
- * CB, what would that have paid?
+ * The Confidence board answers "how close did SPX get to the CB (Core Bullseye /
+ * MVC strike) that was live at 9:45 / 10:30 / 12:00 ET". This module answers it
+ * in dollars, and it does so from the SAME pipeline /owner/probe and /api/watch
+ * use: `/proxy/probe-rest?ticker=SPXW&expiry=<today>&type=<C|P>&strike=<CB>`,
+ * which resolves the contract off the TastyTrade chain and prices it from TT
+ * NBBO / dxLink. No Theta anywhere in this file.
  *
- * THE RULES (owner spec — all three are encoded here, nowhere else)
- *   1. AUTO-BUY   at 9:45, 10:30 and 12:00 ET, if the CB-strike 0DTE contract is
- *                 trading at or below $1.00 (CB_AUTO_BUY_MAX).
- *   2. SIDE       the contract is the one that profits as SPX travels TO the CB:
- *                 SPX under the CB → buy the CB call; SPX over it → the CB put.
- *                 The CB is a magnet, so this is always the OTM/cheap side —
- *                 which is exactly why the sub-$1.00 filter selects real setups
- *                 rather than random ATM premium.
- *   3. AUTO-SELL  the first time SPX trades within the 5–10 pt band of the CB.
+ * THE RULES (owner spec — encoded here and nowhere else)
+ *   1. AUTO-BUY   at 9:45, 10:30 and 12:00 ET, if the CB-strike 0DTE contract's
+ *                 probed mark is at or below $1.00 (CB_AUTO_BUY_MAX).
+ *   2. SIDE       the leg that gains as SPX travels TO the CB: SPX under the CB
+ *                 buys the CB call, SPX over it buys the CB put. The CB is a
+ *                 magnet, so this is always the cheap/OTM side — which is why
+ *                 the sub-$1.00 filter selects real setups rather than ATM
+ *                 premium.
+ *   3. AUTO-SELL  the first poll where SPX is within the 5-10 pt band of the CB.
  *                 The trigger is the OUTER edge (<= CB_SELL_TRIGGER_PTS, 10):
  *                 price entering the band from outside crosses 10 before 5, and
  *                 a gap straight through to 3 pts is still "within 10". The
- *                 actual distance at the fire is reported as `sellSignal.distPts`
- *                 so a 10-pt touch and a 2-pt spike are distinguishable in the UI.
+ *                 distance at the fire is stored, so a 10-pt graze and a 2-pt
+ *                 spike stay distinguishable.
+ *   4. EOD        anything still open at 16:00 ET is marked out at its last
+ *                 probed mark. 0DTE — there is no next session to carry into.
  *
- * WHY REPLAY AND NOT A LIVE POLLER
- *   The obvious build is a recorder that wakes at 9:45/10:30/12:00, snapshots a
- *   quote, then polls for the sell. That design has a hole this one doesn't: any
- *   minute the process is down is a trade that silently never existed, and it
- *   can never be backfilled. ThetaData serves per-contract intraday bars for
- *   past sessions, so instead every trigger is REPLAYED from the tape on read —
- *   deterministic, identical on every call, backfills the entire history the
- *   first time it runs, and survives a redeploy mid-session with no gap. It also
- *   needs no new table and no lib/db.ts rebundle.
+ * WHY THIS IS A RECORDER AND NOT A BACKFILL
+ *   TastyTrade has no per-contract history. `server-v2/condor-marks.js` already
+ *   documents this the hard way: the condor board's daily series had to be
+ *   rolled up from hourly TT ticks precisely because no historical option
+ *   endpoint exists on this account. So the ONLY way a TT/dxLink-priced trade
+ *   log can exist is to write it as it happens — which is what this module plus
+ *   `cb-trade-recorder.js` do. Consequence, stated plainly rather than hidden:
+ *   the table starts empty on deploy and fills forward, one session at a time.
+ *   Sessions the process was down for are gone; they cannot be reconstructed.
  *
- * DATA IN
- *   • CB strike + SPX-at-checkpoint per day — mvc_snapshots, already loaded by
- *     the /api/confidence/checkpoints handler; passed in, never re-queried here.
- *   • SPX path — Theta /v3/index/history/ohlc (1m). Falls back to the
- *     mvc_snapshots SPX points when the index tier returns nothing, so the tab
- *     still works, just at snapshot resolution.
- *   • Contract path — Theta /v3/option/history/ohlc (1m) for SPXW, expiry = the
- *     session date (0DTE).
+ * STORAGE
+ *   `cb_trades` — one row per (session date, checkpoint). Every checkpoint gets
+ *   a row, including the ones that never traded: a 'skipped' row with the probed
+ *   price and the reason is the difference between "the contract was $2.40" and
+ *   "the recorder wasn't running", and without it the board silently rewrites
+ *   its own history.
+ *   `cb_trade_ticks` — the poll-by-poll mark/spot curve for each open trade, so
+ *   the UI can show what the position did between entry and exit.
  *
- * COST + CACHING
- *   One index call per day plus one call per distinct CB strike per day (the CB
- *   usually holds across two or three checkpoints, so it is normally 2–3 calls a
- *   day, not 4). Completed sessions are immutable, so their result is cached for
- *   the life of the process; today's is cached for CB_TRACK_TTL_MS. The route
- *   polls every 60s, so without this the tab would hammer theta-terminal.
+ *   Both are created here via libDb.getPool() rather than in lib/db.ts, the same
+ *   escape hatch /api/social-media/day-list uses — this needs no esbuild rebundle
+ *   of _lib-db.cjs to ship.
  *
- * Nothing here throws at the caller. Theta being down, a tier that lacks index
- * intraday, a strike outside the returned window — every one of those degrades
- * to "no contract data for that cell" plus a `contractNote`, and the hit-rate
- * half of the tab renders exactly as it did before this file existed.
+ * Nothing here throws at the caller. A probe miss, a chain gap, no MVC snapshot
+ * at the checkpoint — each degrades to a row with a reason, and the hit-rate
+ * half of the Confidence board renders exactly as it did before this existed.
  */
 
-const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
-
-// ── Tunables (env-overridable so a rule change needs no redeploy of logic) ──
-const AUTO_BUY_MAX = Number(process.env.CB_AUTO_BUY_MAX || 1.0);      // $ premium
+// ── Tunables (env-overridable so a rule change needs no code deploy) ────────
+const AUTO_BUY_MAX = Number(process.env.CB_AUTO_BUY_MAX || 1.0);        // $ premium
 const SELL_TRIGGER_PTS = Number(process.env.CB_SELL_TRIGGER_PTS || 10); // outer edge of the band
-const SELL_TIGHT_PTS = Number(process.env.CB_SELL_TIGHT_PTS || 5);     // inner edge (reported only)
-const INTERVAL = process.env.CB_TRACK_INTERVAL || '1m';
-const FALLBACK_INTERVAL = '5m';
-const MAX_DAYS = Number(process.env.CB_TRACK_MAX_DAYS || 40);
-const TTL_MS = Number(process.env.CB_TRACK_TTL_MS || 60_000);
-const CONCURRENCY = Number(process.env.CB_TRACK_CONCURRENCY || 2);
-// Theta selects option strikes by a ± dollar window around THAT day's spot, so
-// the request has to be wide enough to still contain a CB that sits far from
-// where SPX opened. |strike − spx| + this cushion, floored at 40 by the adapter.
-const STRIKE_RANGE_CUSHION = Number(process.env.CB_TRACK_STRIKE_CUSHION || 80);
-// A checkpoint's price is taken from the last bar at or before the checkpoint
-// minute; if the tape starts late we accept a bar up to this many minutes after.
-const BAR_MATCH_BEFORE_MIN = 15;
-const BAR_MATCH_AFTER_MIN = 10;
+const SELL_TIGHT_PTS = Number(process.env.CB_SELL_TIGHT_PTS || 5);      // inner edge (reported only)
+const PROBE_TICKER = process.env.CB_PROBE_TICKER || 'SPXW';             // see note below
+const MULTIPLIER = Number(process.env.CB_CONTRACT_MULTIPLIER || 100);
+// How far past a checkpoint minute the recorder may still open that checkpoint.
+// A restart at 10:05 should still catch 9:45; a restart at 14:00 must NOT — a
+// "9:45 entry" filled at 2pm is a fabricated trade, worse than a missing one.
+const CHECKPOINT_GRACE_MIN = Number(process.env.CB_CHECKPOINT_GRACE_MIN || 20);
+// Widest gap between a checkpoint and the MVC snapshot used to source its CB.
+// Same window the Confidence board itself matches on.
+const SNAPSHOT_MATCH_MIN = Number(process.env.CB_SNAPSHOT_MATCH_MIN || 20);
 
-let theta = null;
-try { theta = require('./proxy-thetadata'); }
-catch (e) { console.warn('[cb-contract-track] proxy-thetadata not loadable — contract pricing disabled:', e.message); }
+const CHECKPOINTS = [
+  { key: '0945', label: '9:45', min: 9 * 60 + 45 },
+  { key: '1030', label: '10:30', min: 10 * 60 + 30 },
+  { key: '1200', label: '12:00', min: 12 * 60 },
+];
+
+// PROBE TICKER — 'SPXW', deliberately, not 'SPX'. probeRestTT() resolves the
+// chain under chainTicker('SPXW') === 'SPX' (so the same cached chain is reused)
+// but keeps 'SPXW' as the ROOT it prefers when several contracts share one
+// expiration. That only matters on monthly-expiration Fridays, where TT returns
+// both the AM-settled SPX monthly and the PM-settled SPXW weekly at the same
+// date/strike/type — asking as 'SPX' would pick the AM contract, which is not
+// the 0DTE instrument this strategy trades and would price it wrong once a month.
+
+// The null/'' guard is load-bearing: Number(null) === 0 and Number('') === 0,
+// and both pass Number.isFinite. Without it a NULL DB column reads back as a
+// confident 0 — a CB strike of 0, a $0.00 bid, a best_price that starts at zero
+// — every one of which is a fabricated value that looks like a real one.
+const num = (v) => {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+const round2 = (v) => (v == null ? null : Math.round(v * 100) / 100);
 
 // ── ET helpers ─────────────────────────────────────────────────────────────
 function etParts(d = new Date()) {
   const p = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+    timeZone: 'America/New_York', weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hour12: false,
   }).formatToParts(d);
   const get = (t) => p.find((x) => x.type === t)?.value;
+  const hour = Number(get('hour')) % 24;
   return {
     date: `${get('year')}-${get('month')}-${get('day')}`,
-    minutes: (Number(get('hour')) % 24) * 60 + Number(get('minute')),
+    weekday: get('weekday'),
+    hour,
+    minute: Number(get('minute')),
+    minutes: hour * 60 + Number(get('minute')),
   };
 }
-/** Minutes-since-ET-midnight for an epoch ms — the unit every checkpoint uses. */
-function etMinutesOf(ms) {
-  const p = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
-  }).formatToParts(new Date(ms));
-  const get = (t) => Number(p.find((x) => x.type === t)?.value);
-  return (get('hour') % 24) * 60 + get('minute');
-}
-/** A session is final once the ET clock is past the close on a LATER date. */
-function sessionComplete(date) {
-  const now = etParts();
-  if (date < now.date) return true;
-  if (date > now.date) return false;
-  return now.minutes >= 16 * 60;
+
+// ── Pure rule helpers (unit-tested by cb-contract-track.selftest.js) ────────
+
+/** The leg that gains as SPX travels to the CB. At the CB exactly → call. */
+function decideSide(spot, strike) {
+  if (!Number.isFinite(spot) || !Number.isFinite(strike)) return null;
+  return spot < strike ? 'C' : spot > strike ? 'P' : 'C';
 }
 
-// ── Bar helpers ────────────────────────────────────────────────────────────
-/** Stamp each bar with its ET minute-of-day once, so scans stay cheap. */
-function withMinutes(bars) {
-  return (bars || [])
-    .map((b) => ({ ...b, min: etMinutesOf(b.time) }))
-    .filter((b) => Number.isFinite(b.min))
-    .sort((a, b) => a.time - b.time);
-}
-/**
- * The bar that represents "the price at `minute`": the last bar at or before it,
- * else the first bar shortly after (a tape that starts late still prices the
- * 9:45 checkpoint rather than reporting a hole).
- */
-function barAtMinute(bars, minute) {
-  let before = null, after = null;
-  for (const b of bars) {
-    if (b.min <= minute) { if (!before || b.min > before.min) before = b; }
-    else if (!after) { after = b; break; }
-  }
-  if (before && minute - before.min <= BAR_MATCH_BEFORE_MIN) return before;
-  if (after && after.min - minute <= BAR_MATCH_AFTER_MIN) return after;
-  return before || null;
-}
-/** How far a bar's RANGE got from `strike` — 0 when the bar traded through it. */
-function barDistanceTo(bar, strike) {
-  const hi = num(bar.high), lo = num(bar.low), close = num(bar.close);
-  if (hi != null && lo != null) {
-    if (strike >= lo && strike <= hi) return 0;
-    return Math.min(Math.abs(hi - strike), Math.abs(lo - strike));
-  }
-  return close != null ? Math.abs(close - strike) : Infinity;
+/** Rule 1: the probed mark has to exist and be at or under the cap. */
+function shouldBuy(mark, max = AUTO_BUY_MAX) {
+  return Number.isFinite(mark) && mark > 0 && mark <= max;
 }
 
-// ── Pure simulator — the whole rule set, no I/O, so it is unit-testable ─────
+/** Rule 3: distance from spot to the CB, and whether that fires the sell. */
+function sellCheck(spot, strike, trigger = SELL_TRIGGER_PTS, tight = SELL_TIGHT_PTS) {
+  if (!Number.isFinite(spot) || !Number.isFinite(strike)) return { dist: null, fire: false, tight: false };
+  const dist = Math.abs(spot - strike);
+  return { dist: Math.round(dist * 10) / 10, fire: dist <= trigger, tight: dist <= tight };
+}
+
+/** Premium P&L per contract, and the dollar figure at the 100x multiplier. */
+function computePnl(entry, exit, multiplier = MULTIPLIER) {
+  if (!Number.isFinite(entry) || !Number.isFinite(exit)) return { pnl: null, pnlUsd: null };
+  const pnl = Math.round((exit - entry) * 100) / 100;
+  return { pnl, pnlUsd: Math.round(pnl * multiplier * 100) / 100 };
+}
+
+/** Which checkpoints are due at `nowMin`, newest-eligible first. */
+function dueCheckpoints(nowMin, grace = CHECKPOINT_GRACE_MIN) {
+  return CHECKPOINTS.filter((c) => nowMin >= c.min && nowMin <= c.min + grace);
+}
+
+/** Pick the MVC snapshot that represents a checkpoint (nearest within window). */
+function snapshotAt(rows, minute, window = SNAPSHOT_MATCH_MIN) {
+  let best = null, bestGap = Infinity;
+  for (const r of rows) {
+    if (!Number.isFinite(r.min)) continue;
+    const gap = Math.abs(r.min - minute);
+    if (gap < bestGap) { bestGap = gap; best = r; }
+  }
+  return best && bestGap <= window ? best : null;
+}
+
+// ── Schema ─────────────────────────────────────────────────────────────────
+let _libDb = null;
+function db() {
+  if (!_libDb) _libDb = require('./_lib-db.cjs');
+  return _libDb;
+}
+
+let _tablesReady = null;
+function ensureTables() {
+  if (_tablesReady) return _tablesReady;
+  _tablesReady = (async () => {
+    const pool = db().getPool();
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS cb_trades (
+        id               SERIAL PRIMARY KEY,
+        date             TEXT NOT NULL,          -- ET session date
+        checkpoint       TEXT NOT NULL,          -- '0945' | '1030' | '1200'
+        checkpoint_label TEXT,
+        ticker           TEXT NOT NULL DEFAULT 'SPXW',
+        expiration       TEXT NOT NULL,          -- = date (0DTE)
+        strike           REAL NOT NULL,          -- the CB live at the checkpoint
+        side             TEXT NOT NULL,          -- 'C' | 'P'
+        occ_symbol       TEXT,
+        streamer_symbol  TEXT,
+        status           TEXT NOT NULL,          -- 'skipped' | 'open' | 'closed'
+        skip_reason      TEXT,
+        probe_ts         BIGINT NOT NULL,
+        probe_price      REAL,                   -- the mark the $1.00 rule judged
+        probe_bid        REAL,
+        probe_ask        REAL,
+        probe_spot       REAL,
+        probe_dist       REAL,
+        entry_ts         BIGINT,
+        entry_price      REAL,
+        entry_spot       REAL,
+        signal_ts        BIGINT,
+        signal_dist      REAL,
+        exit_ts          BIGINT,
+        exit_price       REAL,
+        exit_spot        REAL,
+        exit_reason      TEXT,                   -- 'sell-signal' | 'eod' | 'manual'
+        last_ts          BIGINT,
+        last_price       REAL,
+        last_spot        REAL,
+        last_dist        REAL,
+        best_price       REAL,                   -- MFE on the mark
+        worst_price      REAL,                   -- MAE on the mark
+        closest_dist     REAL,                   -- closest SPX got to the CB while open
+        pnl              REAL,                   -- exit - entry, per contract
+        pnl_usd          REAL,                   -- pnl x multiplier
+        polls            INTEGER NOT NULL DEFAULT 0,
+        updated_at       BIGINT,
+        UNIQUE (date, checkpoint)
+      );
+      CREATE INDEX IF NOT EXISTS idx_cb_trades_date ON cb_trades(date);
+      CREATE INDEX IF NOT EXISTS idx_cb_trades_status ON cb_trades(status);
+
+      CREATE TABLE IF NOT EXISTS cb_trade_ticks (
+        id        SERIAL PRIMARY KEY,
+        trade_id  INTEGER NOT NULL REFERENCES cb_trades(id) ON DELETE CASCADE,
+        ts        BIGINT NOT NULL,
+        mark      REAL,
+        bid       REAL,
+        ask       REAL,
+        spot      REAL,
+        dist      REAL,
+        UNIQUE (trade_id, ts)
+      );
+      CREATE INDEX IF NOT EXISTS idx_cb_trade_ticks_tid ON cb_trade_ticks(trade_id, ts);
+    `);
+  })().catch((e) => {
+    _tablesReady = null;                  // let a transient DB blip retry later
+    throw e;
+  });
+  return _tablesReady;
+}
+
+async function q(sql, params = []) {
+  await ensureTables();
+  const { rows } = await db().getPool().query(sql, params);
+  return rows;
+}
+
+// ── Probe (TastyTrade / dxLink, via the in-process /proxy/probe-rest) ───────
 /**
- * @param {object} a
- * @param {number} a.checkpointMin  9:45 → 585
- * @param {number} a.strike         CB strike live at that checkpoint
- * @param {number} a.spxAt          SPX at that checkpoint (picks the side)
- * @param {Array}  a.optionBars     [{time,min,open,high,low,close}] for the contract
- * @param {Array}  a.spxBars        [{time,min,high,low,close}] SPX path
- * @param {boolean} a.complete      session is final (else P&L is mark-to-market)
+ * One contract, one price. Returns the same handful of fields /api/watch pulls
+ * off the probe result, plus the CB distance the sell rule needs.
+ * Never throws — an unreachable proxy or an unresolvable strike returns
+ * { found:false, reason } so the caller writes a row explaining itself.
  */
-function simulateCheckpoint({ checkpointMin, strike, spxAt, optionBars, spxBars, complete }) {
-  const out = {
-    right: null, contractPrice: null, contractPricedAt: null,
-    autoEntry: null, sellSignal: null, sold: null, pnl: null, open: false, contractNote: null,
+async function probeContract(ctx, { expiry, side, strike }) {
+  const path = `/proxy/probe-rest?ticker=${encodeURIComponent(PROBE_TICKER)}`
+    + `&expiry=${encodeURIComponent(expiry)}&type=${side}&strike=${encodeURIComponent(strike)}`;
+  let j = null;
+  try {
+    const r = await ctx.internalFetch(path, { cache: 'no-store' });
+    j = await r.json();
+  } catch (e) {
+    return { found: false, reason: `probe failed: ${e.message}` };
+  }
+  if (!j || !j.found || !j.result) {
+    return { found: false, reason: `probe ${j?.status || 'miss'}` };
+  }
+  const qf = j.result.feeds?.Quote ?? {};
+  const ex = j.result.exposures ?? {};
+  const bid = num(qf.bid), ask = num(qf.ask);
+  const mark = num(qf.mark) ?? num(qf.mid) ?? (bid != null && ask != null ? (bid + ask) / 2 : null);
+  const spot = num(ex.spot);
+  return {
+    found: true,
+    mark, bid, ask, spot,
+    occSymbol: j.occSymbol ?? j.result.occSymbol ?? null,
+    streamerSymbol: j.resolvedSymbol ?? j.result.eventSymbol ?? null,
+    resolvedStrike: num(j.resolvedStrike) ?? Number(strike),
   };
-  if (!Number.isFinite(strike) || !Number.isFinite(spxAt)) { out.contractNote = 'no strike/SPX at checkpoint'; return out; }
-  // Side: the leg that gains as SPX travels to the CB. Exactly-at-the-CB is a
-  // degenerate case that can never pass the $1.00 filter anyway — call it a call.
-  out.right = spxAt < strike ? 'C' : spxAt > strike ? 'P' : 'C';
+}
 
-  if (!optionBars || !optionBars.length) { out.contractNote = 'no contract bars'; return out; }
-  const at = barAtMinute(optionBars, checkpointMin);
-  if (!at || !Number.isFinite(at.close)) { out.contractNote = 'no bar at checkpoint'; return out; }
-  out.contractPrice = at.close;
-  out.contractPricedAt = at.time;
-
-  if (at.close > AUTO_BUY_MAX) return out;                 // priced out — no trade, price still shown
-  out.autoEntry = { price: at.close, ts: at.time };
-
-  // Sell scan starts strictly AFTER the entry bar: a checkpoint that fires while
-  // SPX is already inside the band would otherwise buy and sell on one bar.
-  const path = (spxBars && spxBars.length ? spxBars : []).filter((b) => b.min > at.min);
-  let trigger = null;
-  for (const b of path) {
-    const d = barDistanceTo(b, strike);
-    if (d <= SELL_TRIGGER_PTS) { trigger = { bar: b, dist: d }; break; }
-  }
-
-  const after = optionBars.filter((b) => b.min > at.min);
-  const last = after.length ? after[after.length - 1] : null;
-
-  if (trigger) {
-    out.sellSignal = {
-      distPts: Math.round(trigger.dist * 10) / 10,
-      ts: trigger.bar.time,
-      tight: trigger.dist <= SELL_TIGHT_PTS,
+// ── The CB at a checkpoint, from the same table the board reads ────────────
+async function cbAtCheckpoint(date, checkpointMin) {
+  const rows = await db().queryAll(
+    `SELECT time, timestamp, "strikeOIVol", "strikeVolOnly", "spxPrice"
+       FROM mvc_snapshots WHERE date = ? ORDER BY timestamp ASC LIMIT 2000`,
+    [date],
+  );
+  const timed = rows.map((r) => {
+    const t = String(r.time ?? '');
+    const mm = /^(\d{1,2}):(\d{2})/.exec(t);
+    let min = mm ? Number(mm[1]) * 60 + Number(mm[2]) : null;
+    if (min == null && Number(r.timestamp)) {
+      const hhmm = new Date(Number(r.timestamp)).toLocaleTimeString('en-US', {
+        timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit',
+      });
+      const p = /^(\d{1,2}):(\d{2})/.exec(hhmm);
+      min = p ? Number(p[1]) * 60 + Number(p[2]) : null;
+    }
+    const rawSpx = num(r.spxPrice);
+    return {
+      min,
+      strike: num(r.strikeOIVol) ?? num(r.strikeVolOnly),
+      spx: rawSpx != null && rawSpx > 1000 ? rawSpx : null,
     };
-    // Fill on the option bar covering the trigger minute (or the next one that
-    // exists). No bar at all = signal fired but unfillable; the UI shows 🔔.
-    const fill = after.find((b) => b.min >= trigger.bar.min) || null;
-    if (fill && Number.isFinite(fill.close)) {
-      out.sold = { price: fill.close, ts: fill.time };
-      out.pnl = Math.round((fill.close - at.close) * 100) / 100;
-    } else {
-      out.contractNote = 'sell signal fired but no contract bar to fill';
-    }
-    return out;
-  }
-
-  // Never triggered. A finished session settles at the last print (0DTE, so an
-  // untriggered contract is almost always a total loss); a live one is marked to
-  // the last bar and flagged open so the UI can read it as unrealized.
-  if (last && Number.isFinite(last.close)) {
-    out.pnl = Math.round((last.close - at.close) * 100) / 100;
-    out.open = !complete;
-  } else if (complete) {
-    out.pnl = Math.round((0 - at.close) * 100) / 100;
-  }
-  return out;
+  }).filter((x) => x.min != null && x.strike != null);
+  return snapshotAt(timed, checkpointMin);
 }
 
-// ── Caches ─────────────────────────────────────────────────────────────────
-// Keyed on immutable inputs. Completed sessions never expire (they cannot
-// change); today's expire on TTL. Bounded so a long-lived process can't grow
-// without limit off an ?all=1 sweep.
-const MAX_CACHE = 600;
-const dayCache = new Map();   // date -> { at, complete, cells:{key->fields} }
-const barCache = new Map();   // `${date}|${strike}|${right}` -> { at, complete, bars }
-const spxCache = new Map();   // date -> { at, complete, bars }
+// ── Actions ────────────────────────────────────────────────────────────────
 
-function cacheGet(map, key) {
-  const hit = map.get(key);
-  if (!hit) return null;
-  if (!hit.complete && Date.now() - hit.at > TTL_MS) { map.delete(key); return null; }
-  return hit;
-}
-function cacheSet(map, key, value) {
-  if (map.size >= MAX_CACHE) map.delete(map.keys().next().value);
-  map.set(key, value);
-}
-
-// ── Theta fetches (cached, never throwing) ─────────────────────────────────
-async function spxBarsFor(date, complete, fallbackSeries) {
-  const hit = cacheGet(spxCache, date);
-  if (hit) return hit.bars;
-  let bars = [];
-  if (theta?.fetchIndexIntradayTheta) {
-    try {
-      bars = withMinutes(await theta.fetchIndexIntradayTheta('SPX', date, INTERVAL));
-      if (!bars.length && INTERVAL !== FALLBACK_INTERVAL) {
-        bars = withMinutes(await theta.fetchIndexIntradayTheta('SPX', date, FALLBACK_INTERVAL));
-      }
-    } catch (e) {
-      console.warn(`[cb-contract-track] SPX bars ${date} failed — ${e.message}`);
-      bars = [];
-    }
-  }
-  // Snapshot-resolution fallback: mvc_snapshots SPX points. Coarser, but a
-  // checkpoint tab with approximate sell timing beats an empty column.
-  if (!bars.length && Array.isArray(fallbackSeries) && fallbackSeries.length) {
-    bars = fallbackSeries
-      .filter((p) => Number.isFinite(p.min) && Number.isFinite(p.spx))
-      .map((p) => ({ min: p.min, time: p.ts ?? 0, high: p.spx, low: p.spx, close: p.spx }))
-      .sort((a, b) => a.min - b.min);
-  }
-  cacheSet(spxCache, date, { at: Date.now(), complete, bars });
-  return bars;
-}
-
-async function contractBarsFor(date, strike, right, spotHint, complete) {
-  const key = `${date}|${strike}|${right}`;
-  const hit = cacheGet(barCache, key);
-  if (hit) return hit.bars;
-  let bars = [];
-  if (theta?.fetchOptionIntradayTheta) {
-    const range = Math.abs(strike - (spotHint ?? strike)) + STRIKE_RANGE_CUSHION;
-    try {
-      // expiry === date: these are the 0DTE contracts the rule trades.
-      bars = withMinutes(await theta.fetchOptionIntradayTheta('SPX', date, strike, right, date, INTERVAL, range));
-      if (!bars.length && INTERVAL !== FALLBACK_INTERVAL) {
-        bars = withMinutes(await theta.fetchOptionIntradayTheta('SPX', date, strike, right, date, FALLBACK_INTERVAL, range));
-      }
-    } catch (e) {
-      console.warn(`[cb-contract-track] ${date} ${strike}${right} bars failed — ${e.message}`);
-      bars = [];
-    }
-  }
-  cacheSet(barCache, key, { at: Date.now(), complete, bars });
-  return bars;
-}
-
-// ── Per-day tracking ───────────────────────────────────────────────────────
 /**
- * @param {string} date            YYYY-MM-DD
- * @param {Array}  cells           the day's checkpoint cells from the route
- * @param {Array}  checkpointDefs  [{key,min}] — the ET minute each cell means
- * @param {Array}  spxFallback     [{min,spx,ts}] from mvc_snapshots
- * @returns {Promise<Object>} key -> contract fields
+ * Open (or explicitly skip) ONE checkpoint for ONE session. Idempotent: the
+ * UNIQUE (date, checkpoint) constraint means a double-fire is a no-op, so a
+ * restart mid-morning can safely re-run every due checkpoint.
  */
-async function trackDay(date, cells, checkpointDefs, spxFallback) {
-  const complete = sessionComplete(date);
-  const cached = cacheGet(dayCache, date);
-  if (cached) return cached.cells;
+async function runCheckpoint(ctx, { date, checkpoint }) {
+  const cp = CHECKPOINTS.find((c) => c.key === checkpoint);
+  if (!cp) return { ok: false, reason: 'unknown checkpoint' };
+  const existing = await q(`SELECT id, status FROM cb_trades WHERE date = $1 AND checkpoint = $2`, [date, cp.key]);
+  if (existing.length) return { ok: true, skipped: true, reason: 'already recorded', id: existing[0].id };
 
-  const minByKey = new Map(checkpointDefs.map((c) => [c.key, c.min]));
-  const out = {};
+  const now = Date.now();
+  const write = (row) => q(
+    `INSERT INTO cb_trades
+       (date, checkpoint, checkpoint_label, ticker, expiration, strike, side, occ_symbol, streamer_symbol,
+        status, skip_reason, probe_ts, probe_price, probe_bid, probe_ask, probe_spot, probe_dist,
+        entry_ts, entry_price, entry_spot, last_ts, last_price, last_spot, last_dist,
+        best_price, worst_price, closest_dist, polls, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
+     ON CONFLICT (date, checkpoint) DO NOTHING
+     RETURNING *`,
+    row,
+  );
 
-  // One fetch per DISTINCT strike+side: the CB usually holds across checkpoints,
-  // so this is what keeps a 20-day board at ~2-3 option calls a day.
-  const wanted = new Map();
-  for (const c of cells || []) {
-    const strike = num(c.strike), spxAt = num(c.spxAt);
-    if (!c.matched || strike == null || spxAt == null) continue;
-    const right = spxAt < strike ? 'C' : spxAt > strike ? 'P' : 'C';
-    const k = `${strike}|${right}`;
-    if (!wanted.has(k)) wanted.set(k, { strike, right, spotHint: spxAt });
+  const cb = await cbAtCheckpoint(date, cp.min);
+  if (!cb) {
+    const [r] = await write([date, cp.key, cp.label, PROBE_TICKER, date, 0, 'C', null, null,
+      'skipped', 'no MVC snapshot within the checkpoint window', now, null, null, null, null, null,
+      null, null, null, null, null, null, null, null, null, null, 0, now]);
+    return { ok: true, status: 'skipped', reason: 'no MVC snapshot', id: r?.id ?? null };
   }
 
-  const spxBars = await spxBarsFor(date, complete, spxFallback);
-  const barsByContract = new Map();
-  for (const [k, w] of wanted) {
-    barsByContract.set(k, await contractBarsFor(date, w.strike, w.right, w.spotHint, complete));
+  const strike = cb.strike;
+  // Prefer the snapshot's SPX for the side call; fall back to the probe's own
+  // spot below if the snapshot didn't carry one.
+  let side = decideSide(cb.spx, strike) || 'C';
+  const probe = await probeContract(ctx, { expiry: date, side, strike });
+
+  if (!probe.found) {
+    const [r] = await write([date, cp.key, cp.label, PROBE_TICKER, date, strike, side, null, null,
+      'skipped', probe.reason, now, null, null, null, cb.spx, null,
+      null, null, null, null, null, null, null, null, null, null, 0, now]);
+    return { ok: true, status: 'skipped', reason: probe.reason, id: r?.id ?? null };
   }
 
-  for (const c of cells || []) {
-    const strike = num(c.strike), spxAt = num(c.spxAt);
-    const checkpointMin = minByKey.get(c.key);
-    if (!Number.isFinite(checkpointMin) || strike == null || spxAt == null || !c.matched) continue;
-    const right = spxAt < strike ? 'C' : spxAt > strike ? 'P' : 'C';
-    out[c.key] = simulateCheckpoint({
-      checkpointMin, strike, spxAt, complete,
-      optionBars: barsByContract.get(`${strike}|${right}`) || [],
-      spxBars,
-    });
+  const spot = probe.spot ?? cb.spx;
+  // If the snapshot had no SPX, the probe's spot decides the side — re-probe
+  // once rather than logging a trade on the wrong leg.
+  let p = probe;
+  if (cb.spx == null && spot != null) {
+    const corrected = decideSide(spot, strike);
+    if (corrected && corrected !== side) {
+      const re = await probeContract(ctx, { expiry: date, side: corrected, strike });
+      if (re.found) { side = corrected; p = re; }
+    }
   }
+  const { dist } = sellCheck(spot, strike);
+  const buy = shouldBuy(p.mark);
+  const status = buy ? 'open' : 'skipped';
+  const reason = buy ? null
+    : p.mark == null ? 'no mark on the probe'
+      : `mark $${p.mark.toFixed(2)} over the $${AUTO_BUY_MAX.toFixed(2)} cap`;
 
-  cacheSet(dayCache, date, { at: Date.now(), complete, cells: out });
+  const [row] = await write([
+    date, cp.key, cp.label, PROBE_TICKER, date, strike, side, p.occSymbol, p.streamerSymbol,
+    status, reason, now, round2(p.mark), round2(p.bid), round2(p.ask), round2(spot), dist,
+    buy ? now : null, buy ? round2(p.mark) : null, buy ? round2(spot) : null,
+    now, round2(p.mark), round2(spot), dist,
+    buy ? round2(p.mark) : null, buy ? round2(p.mark) : null, dist, 0, now,
+  ]);
+  if (row && buy) await recordTick(row.id, now, p.mark, p.bid, p.ask, spot, dist);
+  return { ok: true, status, reason, id: row?.id ?? null, strike, side, mark: round2(p.mark) };
+}
+
+async function recordTick(tradeId, ts, mark, bid, ask, spot, dist) {
+  await q(
+    `INSERT INTO cb_trade_ticks (trade_id, ts, mark, bid, ask, spot, dist)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (trade_id, ts) DO NOTHING`,
+    [tradeId, ts, round2(mark), round2(bid), round2(ask), round2(spot), dist],
+  );
+}
+
+/**
+ * Re-price every OPEN trade and apply the sell rule. One probe per open trade,
+ * so at most three calls a minute — the same order of cost as the watchlist
+ * recorder that already runs on this box.
+ */
+async function pollOpen(ctx, { date } = {}) {
+  const open = date
+    ? await q(`SELECT * FROM cb_trades WHERE status = 'open' AND date = $1`, [date])
+    : await q(`SELECT * FROM cb_trades WHERE status = 'open'`);
+  let closed = 0, polled = 0;
+  for (const t of open) {
+    const p = await probeContract(ctx, { expiry: t.expiration, side: t.side, strike: t.strike });
+    if (!p.found) continue;
+    const now = Date.now();
+    const spot = p.spot ?? num(t.last_spot);
+    const { dist, fire, tight } = sellCheck(spot, num(t.strike));
+    const mark = p.mark;
+    polled += 1;
+    await recordTick(t.id, now, mark, p.bid, p.ask, spot, dist);
+
+    const best = Math.max(num(t.best_price) ?? -Infinity, mark ?? -Infinity);
+    const worst = Math.min(num(t.worst_price) ?? Infinity, mark ?? Infinity);
+    const closest = Math.min(num(t.closest_dist) ?? Infinity, dist ?? Infinity);
+
+    if (fire && mark != null) {
+      const { pnl, pnlUsd } = computePnl(num(t.entry_price), mark);
+      await q(
+        `UPDATE cb_trades SET status='closed', signal_ts=$1, signal_dist=$2, exit_ts=$1, exit_price=$3,
+           exit_spot=$4, exit_reason='sell-signal', last_ts=$1, last_price=$3, last_spot=$4, last_dist=$2,
+           best_price=$5, worst_price=$6, closest_dist=$7, pnl=$8, pnl_usd=$9, polls=polls+1, updated_at=$1
+         WHERE id=$10`,
+        [now, dist, round2(mark), round2(spot), round2(Number.isFinite(best) ? best : null),
+          round2(Number.isFinite(worst) ? worst : null), Number.isFinite(closest) ? closest : null,
+          pnl, pnlUsd, t.id],
+      );
+      closed += 1;
+      console.log(`[cb-trades] ${t.date} ${t.checkpoint_label} ${t.strike}${t.side} SOLD @ $${mark.toFixed(2)} `
+        + `(SPX ${dist} pts from CB${tight ? ', inside 5' : ''}) — P&L ${pnl >= 0 ? '+' : ''}${pnl}`);
+      continue;
+    }
+    await q(
+      `UPDATE cb_trades SET last_ts=$1, last_price=$2, last_spot=$3, last_dist=$4,
+         best_price=$5, worst_price=$6, closest_dist=$7, polls=polls+1, updated_at=$1 WHERE id=$8`,
+      [now, round2(mark), round2(spot), dist, round2(Number.isFinite(best) ? best : null),
+        round2(Number.isFinite(worst) ? worst : null), Number.isFinite(closest) ? closest : null, t.id],
+    );
+  }
+  return { ok: true, open: open.length, polled, closed };
+}
+
+/** 16:00 ET: 0DTE, so everything still open is marked out at its last print. */
+async function settle(ctx, { date } = {}) {
+  const d = date || etParts().date;
+  const open = await q(`SELECT * FROM cb_trades WHERE status = 'open' AND date = $1`, [d]);
+  let settled = 0;
+  for (const t of open) {
+    const p = await probeContract(ctx, { expiry: t.expiration, side: t.side, strike: t.strike });
+    const now = Date.now();
+    const mark = p.found && p.mark != null ? p.mark : num(t.last_price);
+    const spot = (p.found ? p.spot : null) ?? num(t.last_spot);
+    const { pnl, pnlUsd } = computePnl(num(t.entry_price), mark);
+    await q(
+      `UPDATE cb_trades SET status='closed', exit_ts=$1, exit_price=$2, exit_spot=$3, exit_reason='eod',
+         last_ts=$1, last_price=$2, last_spot=$3, pnl=$4, pnl_usd=$5, updated_at=$1 WHERE id=$6`,
+      [now, round2(mark), round2(spot), pnl, pnlUsd, t.id],
+    );
+    if (mark != null) await recordTick(t.id, now, mark, p.bid, p.ask, spot, null);
+    settled += 1;
+  }
+  return { ok: true, date: d, settled };
+}
+
+/**
+ * The recorder's single entry point: open whatever checkpoints are due, re-price
+ * whatever is open, settle at the bell. One call a minute does the whole job,
+ * and every branch is idempotent.
+ */
+async function tick(ctx, { now = new Date() } = {}) {
+  const et = etParts(now);
+  const out = { date: et.date, opened: [], polled: null, settled: null };
+  if (et.weekday === 'Sat' || et.weekday === 'Sun') return { ...out, note: 'weekend' };
+
+  for (const cp of dueCheckpoints(et.minutes)) {
+    const r = await runCheckpoint(ctx, { date: et.date, checkpoint: cp.key });
+    if (r && !r.skipped) out.opened.push({ checkpoint: cp.key, ...r });
+  }
+  if (et.minutes >= 9 * 60 + 30 && et.minutes < 16 * 60) {
+    out.polled = await pollOpen(ctx, { date: et.date });
+  }
+  if (et.minutes >= 16 * 60) {
+    out.settled = await settle(ctx, { date: et.date });
+  }
   return out;
 }
 
-/** Tiny worker pool — theta.thetaGet already caps global concurrency at 3. */
-async function mapLimit(items, limit, fn) {
-  const out = new Array(items.length);
-  let i = 0;
-  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
-    while (i < items.length) {
-      const idx = i++;
-      try { out[idx] = await fn(items[idx], idx); }
-      catch (e) { console.warn('[cb-contract-track] day failed —', e.message); out[idx] = null; }
-    }
+// ── Reads ──────────────────────────────────────────────────────────────────
+async function listTrades({ date, since = 20, all = false, limit = 500 } = {}) {
+  if (date) return q(`SELECT * FROM cb_trades WHERE date = $1 ORDER BY checkpoint ASC`, [date]);
+  if (all) return q(`SELECT * FROM cb_trades ORDER BY date DESC, checkpoint ASC LIMIT $1`, [limit]);
+  const dates = await q(`SELECT DISTINCT date FROM cb_trades ORDER BY date DESC LIMIT $1`, [since]);
+  if (!dates.length) return [];
+  return q(
+    `SELECT * FROM cb_trades WHERE date = ANY($1::text[]) ORDER BY date DESC, checkpoint ASC`,
+    [dates.map((d) => d.date)],
+  );
+}
+
+async function listTicks(tradeId, limit = 1000) {
+  return q(`SELECT ts, mark, bid, ask, spot, dist FROM cb_trade_ticks WHERE trade_id = $1 ORDER BY ts ASC LIMIT $2`,
+    [Number(tradeId), limit]);
+}
+
+/** Per-checkpoint rollups over a set of trade rows. */
+function summarize(trades) {
+  return CHECKPOINTS.map((cp) => {
+    const rows = trades.filter((t) => t.checkpoint === cp.key);
+    const taken = rows.filter((t) => t.status !== 'skipped');
+    const withPnl = taken.filter((t) => t.pnl != null);
+    const wins = withPnl.filter((t) => t.pnl > 0).length;
+    const totalPnl = withPnl.reduce((a, t) => a + Number(t.pnl), 0);
+    return {
+      key: cp.key,
+      label: cp.label,
+      probes: rows.length,
+      trades: taken.length,
+      openNow: taken.filter((t) => t.status === 'open').length,
+      sellHits: taken.filter((t) => t.exit_reason === 'sell-signal').length,
+      wins,
+      winRate: withPnl.length ? wins / withPnl.length : null,
+      avgPnl: withPnl.length ? Math.round((totalPnl / withPnl.length) * 100) / 100 : null,
+      totalPnl: withPnl.length ? Math.round(totalPnl * 100) / 100 : null,
+      totalPnlUsd: withPnl.length
+        ? Math.round(withPnl.reduce((a, t) => a + Number(t.pnl_usd || 0), 0) * 100) / 100
+        : null,
+      takeRate: rows.length ? taken.length / rows.length : null,
+    };
   });
-  await Promise.all(workers);
-  return out;
 }
 
-// ── Public entry point ─────────────────────────────────────────────────────
 /**
- * Merge contract-pricing fields into an already-computed checkpoint payload,
- * in place, and rebuild the per-checkpoint summary rollups.
- *
- * @param {{days:Array,summary:Array}} data  the route's computed payload
- * @param {Array} checkpointDefs             [{key,label,min}]
- * @param {Object} spxByDate                 date -> [{min,spx,ts}] (mvc fallback)
+ * Merge recorded trades into an already-computed /api/confidence/checkpoints
+ * payload, so the Confidence board's contract columns and the Trades tab are
+ * one dataset rather than two that can disagree.
  */
-async function enrichWithContracts(data, checkpointDefs, spxByDate = {}) {
+async function enrichWithTrades(data) {
   if (!data || !Array.isArray(data.days) || !data.days.length) return data;
-  if (!theta) { data.contracts = { enabled: false, note: 'theta adapter unavailable' }; return data; }
+  const dates = data.days.map((d) => d.date);
+  let rows = [];
+  try {
+    rows = await q(`SELECT * FROM cb_trades WHERE date = ANY($1::text[])`, [dates]);
+  } catch (e) {
+    data.contracts = { enabled: false, note: String(e.message || e) };
+    return data;
+  }
+  const byKey = new Map(rows.map((t) => [`${t.date}|${t.checkpoint}`, t]));
 
-  // Newest sessions first, capped — an ?all=1 sweep must not turn into 365
-  // sessions of chain calls on the first render.
-  const ordered = [...data.days].sort((a, b) => (a.date < b.date ? 1 : -1));
-  const targets = ordered.slice(0, MAX_DAYS);
-
-  await mapLimit(targets, CONCURRENCY, async (day) => {
-    const fields = await trackDay(day.date, day.checkpoints, checkpointDefs, spxByDate[day.date]);
+  for (const day of data.days) {
     for (const cell of day.checkpoints || []) {
-      const f = fields[cell.key];
-      if (f) Object.assign(cell, f);
+      const t = byKey.get(`${day.date}|${cell.key}`);
+      if (!t) { cell.contractNote = 'not recorded — the tracker was not running this session'; continue; }
+      cell.right = t.side;
+      cell.contractPrice = num(t.probe_price);
+      cell.contractPricedAt = num(t.probe_ts);
+      cell.autoEntry = t.entry_price != null ? { price: Number(t.entry_price), ts: Number(t.entry_ts) } : null;
+      cell.sellSignal = t.signal_ts != null
+        ? { distPts: Number(t.signal_dist), ts: Number(t.signal_ts), tight: Number(t.signal_dist) <= SELL_TIGHT_PTS }
+        : null;
+      cell.sold = t.exit_reason === 'sell-signal' && t.exit_price != null
+        ? { price: Number(t.exit_price), ts: Number(t.exit_ts) }
+        : null;
+      cell.pnl = t.pnl != null ? Number(t.pnl)
+        : (t.status === 'open' && t.entry_price != null && t.last_price != null
+          ? computePnl(Number(t.entry_price), Number(t.last_price)).pnl : null);
+      cell.open = t.status === 'open';
+      cell.contractNote = t.skip_reason || null;
     }
-  });
+  }
 
-  const tracked = new Set(targets.map((d) => d.date));
+  const summary = summarize(rows);
+  const byCp = new Map(summary.map((s) => [s.key, s]));
   data.summary = (data.summary || []).map((s) => {
-    const cells = data.days
-      .filter((d) => tracked.has(d.date))
-      .map((d) => (d.checkpoints || []).find((c) => c.key === s.key))
-      .filter((c) => !!c && c.autoEntry);
-    const withPnl = cells.filter((c) => c.pnl != null);
-    const wins = withPnl.filter((c) => c.pnl > 0).length;
+    const c = byCp.get(s.key);
+    if (!c) return s;
     return {
       ...s,
-      contractTrades: cells.length,
-      sellHits: cells.filter((c) => c.sellSignal).length,
-      contractWins: wins,
-      contractWinRate: withPnl.length ? wins / withPnl.length : null,
-      avgPnl: withPnl.length ? Math.round((withPnl.reduce((a, c) => a + c.pnl, 0) / withPnl.length) * 100) / 100 : null,
-      totalPnl: withPnl.length ? Math.round(withPnl.reduce((a, c) => a + c.pnl, 0) * 100) / 100 : null,
+      contractTrades: c.trades,
+      sellHits: c.sellHits,
+      contractWins: c.wins,
+      contractWinRate: c.winRate,
+      avgPnl: c.avgPnl,
+      totalPnl: c.totalPnl,
     };
   });
-
   data.contracts = {
     enabled: true,
+    source: 'tastytrade',
     autoBuyMax: AUTO_BUY_MAX,
     sellBand: [SELL_TIGHT_PTS, SELL_TRIGGER_PTS],
-    interval: INTERVAL,
-    daysTracked: targets.length,
-    daysSkipped: Math.max(0, data.days.length - targets.length),
+    multiplier: MULTIPLIER,
+    daysRecorded: new Set(rows.map((r) => r.date)).size,
+    daysShown: dates.length,
   };
   return data;
 }
 
-function clearCache() { dayCache.clear(); barCache.clear(); spxCache.clear(); }
-
 module.exports = {
-  enrichWithContracts,
-  trackDay,
-  simulateCheckpoint,
-  barAtMinute,
-  barDistanceTo,
-  withMinutes,
-  etMinutesOf,
-  sessionComplete,
-  clearCache,
-  CONFIG: { AUTO_BUY_MAX, SELL_TRIGGER_PTS, SELL_TIGHT_PTS, INTERVAL, MAX_DAYS },
+  CHECKPOINTS,
+  ensureTables,
+  runCheckpoint,
+  pollOpen,
+  settle,
+  tick,
+  listTrades,
+  listTicks,
+  summarize,
+  enrichWithTrades,
+  probeContract,
+  cbAtCheckpoint,
+  // pure helpers, exported for the selftest
+  decideSide,
+  shouldBuy,
+  sellCheck,
+  computePnl,
+  dueCheckpoints,
+  snapshotAt,
+  etParts,
+  CONFIG: { AUTO_BUY_MAX, SELL_TRIGGER_PTS, SELL_TIGHT_PTS, PROBE_TICKER, MULTIPLIER, CHECKPOINT_GRACE_MIN },
 };

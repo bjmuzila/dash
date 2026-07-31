@@ -253,9 +253,18 @@ function headlinePriorityIndex(ev: CalEvent): number {
   return match?.rank ?? Number.MAX_SAFE_INTEGER;
 }
 
+/**
+ * HIGH is RED, MEDIUM is ORANGE, everything else is the neutral grey pill.
+ *
+ * Matched case-insensitively on the leading word so provider spellings like
+ * "HIGH", "high", or "High Impact" can't slip past the exact-match test and
+ * fall through to another colour — a High print rendering in Medium orange is
+ * the one mistake on this template that actively misleads.
+ */
 function impactBadge(impact: string): { bg: string; border: string; text: string } {
-  if (impact === "High") return { bg: hexA(HT.red, 0.16), border: hexA(HT.red, 0.4), text: HT.red };
-  if (impact === "Medium") return { bg: hexA(HT.orange, 0.16), border: hexA(HT.orange, 0.4), text: HT.orange };
+  const key = (impact || "").trim().toLowerCase();
+  if (key.startsWith("high")) return { bg: hexA(HT.red, 0.18), border: hexA(HT.red, 0.5), text: HT.red };
+  if (key.startsWith("med")) return { bg: hexA(HT.orange, 0.16), border: hexA(HT.orange, 0.4), text: HT.orange };
   return { bg: "rgba(255,255,255,0.06)", border: "rgba(255,255,255,0.12)", text: HT.muted };
 }
 
@@ -304,6 +313,54 @@ function nudgePx(fontSize: number): number {
 function densityScale(n: number): number {
   const s = 1 + (6 - n) * 0.07;
   return Math.max(0.85, Math.min(1.25, s));
+}
+
+/**
+ * The presidential lane is the sparsest on the canvas — most days it holds one
+ * or two entries in a panel ~400px tall, and at the shared densityScale cap
+ * (1.25) that read as a couple of small lines floating in an empty box. This
+ * curve is deliberately steeper and uncapped by densityScale: a one-event day
+ * should be BIG. The lane's title budget (PRES_TITLE_LINES) is computed from
+ * the resulting row height, so growing the type here can't push a row off the
+ * locked 720px canvas — it just spends the empty space.
+ */
+function presDensityScale(n: number): number {
+  if (n <= 1) return 1.8;
+  if (n === 2) return 1.5;
+  if (n === 3) return 1.3;
+  if (n === 4) return 1.15;
+  return 1;
+}
+
+/**
+ * Same problem in the earnings lane: a fixed 4-wide strip of 36px logos left
+ * the bottom half of the panel blank on a normal day (7 names = two rows in a
+ * ~415px box).
+ *
+ * Rather than scale the chips by a hand-tuned curve — which produced awkward
+ * counts like two chips per row with a wide gutter — solve for the layout:
+ * walk the candidate chips-per-row from widest to narrowest and take the first
+ * one whose rows actually fit the panel. Fewer per row = bigger chips, so this
+ * lands on the largest chip size the day's name count allows, and the fixed
+ * columns always divide the width exactly (no gutter).
+ */
+function earnLayout(groupSizes: number[], availW: number, bodyH: number) {
+  const gap = 12;
+  // Per group: 14px padding top + bottom, label, 12px label margin.
+  const overhead = groupSizes.length * 52;
+  let last = null as null | { perRow: number; chipW: number; logo: number; sym: number; gap: number };
+  for (const perRow of [2, 3, 4, 5, 6]) {
+    const chipW = Math.floor((availW - gap * (perRow - 1)) / perRow);
+    const logo = Math.min(58, Math.round(chipW * 0.78));
+    const sym = Math.max(10, Math.min(18, Math.round(logo * 0.33)));
+    const rowH = logo + 5 + sym + 3 + gap;
+    const rows = groupSizes.reduce((a, n) => a + Math.ceil(n / perRow), 0);
+    last = { perRow, chipW, logo, sym, gap };
+    if (rows * rowH + overhead <= bodyH) return last;
+  }
+  // More names than even the tightest layout fits — the group slices upstream
+  // (12 per session) bound this, so the last candidate is the floor.
+  return last!;
 }
 
 // Earnings lane mirrors the /economic-calendar page: two labelled groups
@@ -371,7 +428,7 @@ export function buildSnapshotHTML(
   const econCount = economicEvents.length;
   const presCount = presidentEvents.length;
 
-  const presScale = densityScale(Math.max(presidentEvents.length, 1));
+  const presScale = presDensityScale(presidentEvents.length);
   const econScale = densityScale(Math.max(economicEvents.length, 1));
   const px = (base: number, scale: number) => Math.round(base * scale);
 
@@ -493,6 +550,32 @@ export function buildSnapshotHTML(
   // fewer) names than you can see.
   const ernCount = preRows.length + afterRows.length + tbdRows.length;
 
+  // Chip geometry is SOLVED for the panel, not scaled by a curve — see
+  // earnLayout. Measured from a real render: the earnings body is ~415px tall
+  // inside a lane of laneW(LANE_ERN), less 16px group padding each side.
+  // Both numbers are MEASURED off a real render, not estimated: the chip strip
+  // is 229px wide and the body 413px tall. Note the -2: the panel's 1px border
+  // on each side is the difference between three chips fitting a row and
+  // wrapping to two with a dead gutter, so it has to be in the arithmetic.
+  const ERN_BODY_H = 413;
+  const ern = earnLayout(
+    [preRows.length, afterRows.length, tbdRows.length].filter(n => n > 0),
+    laneW(LANE_ERN) - 2 - 32,
+    ERN_BODY_H,
+  );
+  const chipW = ern.chipW;
+  const chipLogo = ern.logo;
+  const chipGap = ern.gap;
+  const chipSymSize = ern.sym;
+  const ernLabelSize = Math.max(11, Math.min(15, Math.round(chipSymSize * 0.95)));
+  // Fallback chip (no logo art): same nudged-padding rule as every other pill,
+  // sized so top + bottom padding + glyph exactly fill the logo box.
+  const chipFbSize = Math.max(9, Math.round(chipLogo * 0.27));
+  const chipFbPadV = Math.max(0, Math.round((chipLogo - chipFbSize) / 2));
+  const chipFbNudge = nudgePx(chipFbSize);
+  const chipFbTop = Math.max(0, chipFbPadV - chipFbNudge);
+  const chipFbBot = Math.max(0, 2 * chipFbPadV - chipFbTop);
+
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/>
 <style>
 :root{--bg:${HT.bg};--panelBg:${HT.panelBg};--border:${HT.border};--cyan:${HT.cyan};--green:${HT.green};--red:${HT.red};--orange:${HT.orange};--text:${HT.text};--muted:${HT.muted};--lblue:${LIGHT_BLUE}}
@@ -532,17 +615,17 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .ern-body{display:flex;flex-direction:column;flex:1}
 .ern-group{padding:14px 16px;border-bottom:1px solid var(--border);flex:1}
 .ern-group:last-child{border-bottom:none}
-.ern-group-label{font-size: 12px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;color:var(--cyan);margin-bottom:12px;line-height:1}
-.ern-chips{display:flex;flex-wrap:wrap;gap:12px}
-.ern-chip{width:48px;text-align:center;flex-shrink:0}
-.chip-logo{display:block;width:36px;height:36px;margin:0 auto 5px;border-radius:8px;overflow:hidden}
-.chip-logo img{width:36px;height:36px;object-fit:contain;display:block}
+.ern-group-label{font-size:${ernLabelSize}px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;color:var(--cyan);margin-bottom:12px;line-height:1}
+.ern-chips{display:flex;flex-wrap:wrap;gap:${chipGap}px}
+.ern-chip{width:${chipW}px;text-align:center;flex-shrink:0}
+.chip-logo{display:block;width:${chipLogo}px;height:${chipLogo}px;margin:0 auto 5px;border-radius:8px;overflow:hidden}
+.chip-logo img{width:${chipLogo}px;height:${chipLogo}px;object-fit:contain;display:block}
 /* Ticker fallback chip — same nudged-padding rule; 36px box matches the logos. */
-.chip-fb{display:block;width:36px;height:36px;line-height:1;padding:${13 - nudgePx(10)}px 0 ${13 + nudgePx(10)}px;text-align:center;border-radius:8px;background:rgba(33,158,188,0.10);border:1px solid var(--border);font-size:10px;font-weight:800;color:var(--cyan)}
+.chip-fb{display:block;width:${chipLogo}px;height:${chipLogo}px;line-height:1;padding:${chipFbTop}px 0 ${chipFbBot}px;text-align:center;border-radius:8px;background:rgba(33,158,188,0.10);border:1px solid var(--border);font-size:${chipFbSize}px;font-weight:800;color:var(--cyan)}
 /* Same trap as .ec-event: overflow:hidden + a tight line-height made
    html2canvas shear the bottom off every ticker (NFLX rendered as "NFLY").
    No clipping, and leading to spare. Tickers are <=5 chars — they fit. */
-.chip-sym{display:block;font-size: 12px;font-weight:800;color:var(--text);letter-spacing:0.02em;line-height:15px;white-space:nowrap}
+.chip-sym{display:block;font-size:${chipSymSize}px;font-weight:800;color:var(--text);letter-spacing:0.02em;line-height:${chipSymSize + 3}px;white-space:nowrap}
 .pres-body{padding:8px 14px;flex:1;display:flex;flex-direction:column}
 /* STACKED row: one column, two rows — time on top, title underneath. Stays a
    grid (not display:block) because align-content:center is the one vertical
