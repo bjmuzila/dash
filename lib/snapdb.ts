@@ -381,12 +381,39 @@ function normalizeCandle(r: EsCandleRecord): EsCandleRecord {
 // candle payload. TTL keeps this load-time-only; live bars still stream /ws/gex.
 const _candleCache = new Map<string, { at: number; p: Promise<EsCandleRecord[]> }>();
 const _CANDLE_TTL = 5000;
+/**
+ * Expand the ?lite=1 columnar payload ({cols, rows:[[…]]}) back into records.
+ *
+ * The verbose form repeats all twelve key names on every bar and ships pg
+ * BIGINT/REAL columns as quoted strings — a 20-day 5m pull was ~114KB, most of
+ * it punctuation. Tuples carry the same information in roughly a tenth of that.
+ *
+ * Falls through to the legacy `rows` shape when the server doesn't answer lite,
+ * so a client deployed ahead of the backend still works.
+ */
+function _expandCandles(json: { lite?: number; cols?: string[]; rows?: unknown[] }): EsCandleRecord[] {
+  const rows = json?.rows;
+  if (!Array.isArray(rows) || !rows.length) return [];
+  if (json.lite !== 1 || !Array.isArray(json.cols)) {
+    return (rows as EsCandleRecord[]).map(normalizeCandle);
+  }
+  const cols = json.cols;
+  return (rows as unknown[][]).map((tuple) => {
+    const rec: Record<string, unknown> = {};
+    for (let i = 0; i < cols.length; i++) rec[cols[i]] = tuple[i];
+    // Lite already emits real numbers, but normalizeCandle stays in the path:
+    // it is the single place that guarantees numeric types, and running it here
+    // too means the two encodings cannot drift apart.
+    return normalizeCandle(rec as EsCandleRecord);
+  });
+}
+
 function _dedupeCandles(url: string): Promise<EsCandleRecord[]> {
   const hit = _candleCache.get(url);
   if (hit && Date.now() - hit.at < _CANDLE_TTL) return hit.p;
   const p = fetch(url)
     .then((res) => res.json())
-    .then((json) => ((json.rows ?? []) as EsCandleRecord[]).map(normalizeCandle))
+    .then(_expandCandles)
     .catch((e) => { _candleCache.delete(url); throw e; });
   _candleCache.set(url, { at: Date.now(), p });
   return p;
@@ -399,7 +426,7 @@ function _dedupeCandles(url: string): Promise<EsCandleRecord[]> {
  */
 export async function queryEsCandlesToday(interval: 1 | 5 = 5): Promise<EsCandleRecord[]> {
   const today = etDateStr();
-  return _dedupeCandles(`/api/snapshots/candles?date=${today}&interval=${interval}&limit=2000`);
+  return _dedupeCandles(`/api/snapshots/candles?date=${today}&interval=${interval}&limit=2000&lite=1`);
 }
 
 /** daysBack <= 0 means "no cutoff" — every candle we have (route drops the
@@ -408,18 +435,18 @@ export async function queryEsCandlesToday(interval: 1 | 5 = 5): Promise<EsCandle
  *  them off the tail). */
 export async function queryEsCandlesHistorical(daysBack = 20, interval: 1 | 5 = 5): Promise<EsCandleRecord[]> {
   const qs = daysBack > 0 ? `daysBack=${daysBack}&limit=10000` : `limit=50000`;
-  return _dedupeCandles(`/api/snapshots/candles?${qs}&interval=${interval}`);
+  return _dedupeCandles(`/api/snapshots/candles?${qs}&interval=${interval}&lite=1`);
 }
 
 // NQ variants — same endpoint, symbol=/NQ selects the nq_candles table.
 export async function queryNqCandlesToday(): Promise<EsCandleRecord[]> {
   const today = etDateStr();
-  return _dedupeCandles(`/api/snapshots/candles?symbol=/NQ&date=${today}&limit=2000`);
+  return _dedupeCandles(`/api/snapshots/candles?symbol=/NQ&date=${today}&limit=2000&lite=1`);
 }
 
 export async function queryNqCandlesHistorical(daysBack = 20): Promise<EsCandleRecord[]> {
   const qs = daysBack > 0 ? `symbol=/NQ&daysBack=${daysBack}&limit=10000` : `symbol=/NQ&limit=50000`;
-  return _dedupeCandles(`/api/snapshots/candles?${qs}`);
+  return _dedupeCandles(`/api/snapshots/candles?${qs}&lite=1`);
 }
 
 // ── IB Levels (locked Initial Balance per day) ──────────────────────────────────

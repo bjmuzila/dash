@@ -3164,7 +3164,12 @@ async function getMvcSnapshots(date, limit = 200, sinceMs) {
   }
   if (sinceMs) {
     return queryAll(
-      "SELECT timestamp, strikeOIVol, spxPrice, esPrice FROM mvc_snapshots WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ?",
+      // Identifiers MUST be quoted. mvc_snapshots is created with quoted
+      // camelCase columns ("strikeOIVol" REAL, …), so an unquoted reference
+      // folds to `strikeoivol` and Postgres errors with `column does not
+      // exist`. This branch only fires when a caller passes ?days=, which
+      // nothing did — so it has been dead-on-arrival rather than merely wrong.
+      'SELECT timestamp, "strikeOIVol", "spxPrice", "esPrice" FROM mvc_snapshots WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ?',
       [sinceMs, limit]
     );
   }

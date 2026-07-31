@@ -3894,7 +3894,37 @@ if (libDb) {
         const sp = new URL(req.url || '/', 'http://localhost').searchParams;
         const days = Number(sp.get('days') ?? 0);
         const since = days > 0 ? Date.now() - days * 86_400_000 : undefined;
-        send(res, 200, { rows: await libDb.getMvcSnapshots(sp.get('date') ?? undefined, Math.min(Number(sp.get('limit') ?? 200), 1000), since) });
+        const limit = Math.min(Number(sp.get('limit') ?? 200), 1000);
+        // ?lite=1 — the FOUR columns the ES-candles CB line actually reads,
+        // tuple-encoded. mvc_snapshots has ~22 columns; the default read is a
+        // `SELECT *` (see getMvcSnapshots), so `?limit=1000` was shipping ~94KB
+        // to plot one step line and derive a basis. Narrow projection + tuples
+        // takes that to a few KB. Opt-in; the default path is unchanged.
+        if (sp.get('lite') === '1') {
+          const date = sp.get('date') ?? undefined;
+          const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+          // Projection matches the `sinceMs` branch of getMvcSnapshots. Done
+          // here with queryAll rather than as a new bundle export, so
+          // _lib-db.cjs needs no further hand-patching.
+          const lrows = date
+            ? await libDb.queryAll(
+                'SELECT timestamp, "strikeOIVol", "spxPrice", "esPrice" FROM mvc_snapshots WHERE date = ? ORDER BY timestamp DESC LIMIT ?',
+                [date, limit])
+            : since
+              ? await libDb.queryAll(
+                  'SELECT timestamp, "strikeOIVol", "spxPrice", "esPrice" FROM mvc_snapshots WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ?',
+                  [since, limit])
+              : await libDb.queryAll(
+                  'SELECT timestamp, "strikeOIVol", "spxPrice", "esPrice" FROM mvc_snapshots ORDER BY timestamp DESC LIMIT ?',
+                  [limit]);
+          send(res, 200, {
+            lite: 1,
+            cols: ['timestamp', 'strikeOIVol', 'spxPrice', 'esPrice'],
+            rows: lrows.map((r) => [num(r.timestamp), num(r.strikeOIVol), num(r.spxPrice), num(r.esPrice)]),
+          });
+          return;
+        }
+        send(res, 200, { rows: await libDb.getMvcSnapshots(sp.get('date') ?? undefined, limit, since) });
       } catch (err) { send(res, 500, { error: String(err) }); }
     },
   });
@@ -3930,6 +3960,33 @@ if (libDb) {
         const rows = isNq(sp.get('symbol'))
           ? await libDb.getNqCandles(date, daysBack, limit)
           : await libDb.getEsCandles(date, daysBack, limit, interval);
+        // ?lite=1 — columnar/tuple encoding. Same rows, ~8-10x fewer bytes.
+        //
+        // The verbose form repeats every key on every bar ("timestamp":,"open":,
+        // "high":,"low":,"close":,"volume":,"slotKey":,…) AND ships pg BIGINT /
+        // REAL columns as QUOTED STRINGS (see normalizeCandle in lib/snapdb.ts).
+        // A 20-day 5m pull was ~114KB of which the overwhelming majority was key
+        // names and quotes. Tuples in a fixed column order carry the same
+        // information with none of that.
+        //
+        // Opt-in: without ?lite=1 the response is byte-for-byte what it always
+        // was, so every other caller is untouched.
+        if (sp.get('lite') === '1') {
+          const cols = ['timestamp', 'date', 'slotKey', 'time', 'symbol', 'intervalMinutes', 'open', 'high', 'low', 'close', 'volume', 'avgVolume'];
+          // Numbers emitted as numbers, not strings — the client's per-row
+          // Number() coercion becomes unnecessary on the lite path.
+          const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+          send(res, 200, {
+            lite: 1,
+            cols,
+            rows: rows.map((r) => [
+              num(r.timestamp), String(r.date ?? ''), String(r.slotKey ?? ''), String(r.time ?? ''),
+              String(r.symbol ?? ''), num(r.intervalMinutes), num(r.open), num(r.high),
+              num(r.low), num(r.close), num(r.volume), num(r.avgVolume),
+            ]),
+          });
+          return;
+        }
         send(res, 200, { rows });
       } catch (err) { send(res, 500, { error: String(err) }); }
     },
@@ -4302,10 +4359,17 @@ if (libDb) {
             const winParam = sp.get('minutes');
             const winMin = winParam == null ? 1440 : Math.max(0, Math.min(2880, Number(winParam)));
             const anyExpiry = sp.get('anyExpiry') === '1';
-            // Symbol MUST be part of the cache key — without it the first
-            // underlying to warm a given window would serve its columns to the
-            // other two for the next 30s.
-            const cacheKey = `${symbol}|${winMin}|${anyExpiry ? 'any' : expiry}|${anyExpiry ? '' : date}`;
+            // ?top=N — return only the N strongest strikes per column instead of
+            // the whole ladder. The bubble trail draws exactly this (cfg.topStrikes,
+            // default 10, max 30), so shipping every strike for every minute of a
+            // 24h window and discarding ~90% of it in the browser is pure waste.
+            //
+            // 0 / absent = no truncation. The CLIENT decides, because the heatmap
+            // band genuinely needs the full ladder — see the crossing note below.
+            const topN = Math.max(0, Math.min(500, Number(sp.get('top') ?? 0)));
+            // top is part of the cache key or a bubbles-only request would serve
+            // its truncated columns to a heatmap request for the next 30s.
+            const cacheKey = `${symbol}|${winMin}|${anyExpiry ? 'any' : expiry}|${anyExpiry ? '' : date}|t${topN}`;
             const cached = heatmapCache.get(cacheKey);
             if (cached && Date.now() - cached.at < HEATMAP_TTL_MS) { send(res, 200, cached.payload); return; }
             const slots = winMin > 0
@@ -4325,10 +4389,40 @@ if (libDb) {
               if (spot > 0 && !spotBySlot.has(r.slot_ts)) spotBySlot.set(r.slot_ts, spot);
             }
             const columns = [...bySlot.entries()].sort((a, b) => a[0] - b[0]).map(([slotTs, cells]) => {
+              // max / top3 are computed from the FULL ladder, BEFORE any
+              // truncation, so the client's color ramp and radius scale are
+              // identical whether or not ?top was used.
               const absVals = cells.map((c) => Math.abs(c.net)).filter((v) => v > 0);
               const max = absVals.length ? Math.max(...absVals) : 1;
               const top3 = [...absVals].sort((a, b) => b - a).slice(0, 3);
-              return { slotTs, cells, max, top3, spot: spotBySlot.get(slotTs) ?? 0 };
+              let out = cells;
+              if (topN > 0 && cells.length > topN) {
+                // Top N by |net| — the bubbles' own ranking.
+                const byStrike = [...cells].sort((a, b) => a.strike - b.strike);
+                const keep = new Set(
+                  [...cells].sort((a, b) => Math.abs(b.net) - Math.abs(a.net)).slice(0, topN).map((c) => c.strike)
+                );
+                // …PLUS both strikes bracketing every sign change.
+                //
+                // THIS IS LOAD-BEARING. The gamma flip is the zero-crossing of
+                // the net-GEX profile (findGEXFlip / the Flip Cross overlay),
+                // and a crossing lives exactly where |net| is SMALLEST — which
+                // is precisely what a top-N-by-magnitude filter throws away
+                // first. Truncating naively would leave the flip to be
+                // interpolated between two far-apart surviving walls, i.e.
+                // silently wrong by tens of points. Keeping the bracketing pair
+                // costs a handful of cells per column and makes the crossing
+                // exact.
+                for (let i = 0; i < byStrike.length - 1; i++) {
+                  const a = byStrike[i].net, b = byStrike[i + 1].net;
+                  if (a === 0 || b === 0 || (a > 0 && b < 0) || (a < 0 && b > 0)) {
+                    keep.add(byStrike[i].strike);
+                    keep.add(byStrike[i + 1].strike);
+                  }
+                }
+                out = byStrike.filter((c) => keep.has(c.strike));
+              }
+              return { slotTs, cells: out, max, top3, spot: spotBySlot.get(slotTs) ?? 0 };
             });
             const payload = { mode: 'heatmap', symbol, columns };
             heatmapCache.set(cacheKey, { at: Date.now(), payload });

@@ -1534,7 +1534,31 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     // deliberately excluded: it only changes WHEN (the 60s ETF poll, and the
     // wake refetch above), and a plain refresh of the same window must not be
     // treated like a symbol/expiry switch. See the wipe rule below.
-    const shapeKey = `${sym.gexSymbol}|${isFront ? "front" : queryExpiry}|${minutes}|${activeReplayDay ?? ""}`;
+    // ── Server-side strike truncation (?top=N) ────────────────────────────────
+    // The bubble trail draws only the N strongest strikes per column
+    // (cfg.topStrikes, default 10, max 30). Pulling the WHOLE ladder for every
+    // minute of a 24h window and discarding ~90% of it in the browser is what
+    // made this the page's heaviest request. Asking the server for the top N
+    // collapses it by roughly an order of magnitude.
+    //
+    // GATED, because three consumers need the full ladder and would be silently
+    // WRONG on a truncated one:
+    //   • the heatmap band paints every strike, so it just looks sparse;
+    //   • deriveColumnLevels() → findGEXFlip() finds the net-GEX ZERO-CROSSING,
+    //     which lives exactly where |net| is smallest — the first thing a
+    //     top-N-by-magnitude filter discards. That feeds replay walls/flip and
+    //     the ETF walls/flip;
+    //   • the Flip Cross Pulse overlay scans minuteColsRef for sign changes.
+    // (The server also always keeps the two strikes bracketing every sign change
+    // — see the ?top handler in api-router.js — so the flip stays exact even on
+    // the truncated path. The gate is belt-and-braces: full ladder whenever
+    // anything that reads the ladder's SHAPE rather than its peaks is on.)
+    //
+    // Part of shapeKey, so flipping any of these re-fetches at full resolution
+    // and wipes the truncated columns rather than leaving a half-empty ladder.
+    const needsFullLadder = showHeatmap || showFlipCross || replayOn || !isEs;
+    const topStrikes = needsFullLadder ? 0 : Math.max(1, Math.min(30, bubbleCfg.topStrikes));
+    const shapeKey = `${sym.gexSymbol}|${isFront ? "front" : queryExpiry}|${minutes}|${activeReplayDay ?? ""}|top${topStrikes}`;
     const fetchKey = `${shapeKey}|${gexPoll}`;
     if (fetchKey === lastHeatmapKeyRef.current) return;
     lastHeatmapKeyRef.current = fetchKey;
@@ -1580,7 +1604,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         // concurrent GETs can only want the same bytes, so they share one
         // request. Not a cache: the entry is dropped as soon as it settles.
         const res = await dedupeFetch(
-          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=${minutes}&expiry=${encodeURIComponent(queryExpiry)}${isFront ? "&anyExpiry=1" : ""}&symbol=${encodeURIComponent(sym.gexSymbol)}`,
+          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=${minutes}&expiry=${encodeURIComponent(queryExpiry)}${isFront ? "&anyExpiry=1" : ""}&symbol=${encodeURIComponent(sym.gexSymbol)}${topStrikes > 0 ? `&top=${topStrikes}` : ""}`,
           { cache: "no-store" }
         );
         if (!res.ok) {
@@ -1656,7 +1680,13 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     })();
     // No cleanup cancel: a same-key re-render must not abort a valid in-flight
     // backfill; the resolution-time key check handles real invalidation.
-  }, [heatmapExpiry, heatmapDays, replayOn, activeReplayDay, selectedExpiry, sym.gexSymbol, gexPoll]);
+    // showHeatmap / showFlipCross / isEs / bubbleCfg.topStrikes are deps because
+    // they feed `topStrikes` above — turning the heatmap on has to re-request at
+    // full ladder resolution, and raising the Top Strikes slider has to re-request
+    // the wider set. Both land as a shapeKey change, so the truncated columns get
+    // wiped rather than merged into.
+  }, [heatmapExpiry, heatmapDays, replayOn, activeReplayDay, selectedExpiry, sym.gexSymbol, gexPoll,
+      showHeatmap, showFlipCross, isEs, bubbleCfg.topStrikes]);
 
   // Load today's full MVC history (raw SPX strikeOIVol) and refresh every 60s.
   // ES conversion happens at draw time with the live basis.
@@ -1669,10 +1699,24 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     let cancelled = false;
     const load = async () => {
       try {
-        const res = await fetch(`/api/snapshots/mvc?limit=1000`, { cache: "no-store" });
+        // lite=1 — four columns, tuple-encoded. mvc_snapshots has ~22 columns
+        // and the default read is a `SELECT *`, so this was ~94KB on every load
+        // to draw one step line and derive the basis. This page only ever reads
+        // timestamp / strikeOIVol / spxPrice / esPrice.
+        const res = await fetch(`/api/snapshots/mvc?limit=1000&lite=1`, { cache: "no-store" });
         if (!res.ok) return;
         const json = await res.json();
-        const rows = Array.isArray(json.rows) ? json.rows : [];
+        const rawRows = Array.isArray(json.rows) ? json.rows : [];
+        // Expand tuples → records. Falls back to the legacy object rows when the
+        // backend hasn't been deployed yet, so the client can ship independently.
+        const rows: Array<Record<string, unknown>> =
+          json?.lite === 1 && Array.isArray(json.cols)
+            ? (rawRows as unknown[][]).map((t) => {
+                const rec: Record<string, unknown> = {};
+                (json.cols as string[]).forEach((c, i) => { rec[c] = t[i]; });
+                return rec;
+              })
+            : (rawRows as Array<Record<string, unknown>>);
         const pts = rows
           .map((r: Record<string, unknown>) => {
             // Every CB snapshot stores spxPrice AND esPrice sampled at the SAME
