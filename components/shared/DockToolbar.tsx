@@ -377,7 +377,13 @@ export function DockSlider({
       onPointerLeave={stopHold}
       onPointerCancel={stopHold}
       style={{
-        display: "block", width: 14, height: 9, padding: 0, lineHeight: "7px",
+        // Flex-centred, not display:block + a hand-tuned lineHeight. The block
+        // version pinned the glyph with `lineHeight: 7px` inside a 9px box,
+        // which scripts/audit-ui.mjs flags (--strict, so it fails the build):
+        // an inline non-flex `display` plus an explicit height defeats the
+        // globals.css centring rule. Same 14x9 stepper, centred by layout.
+        display: "flex", alignItems: "center", justifyContent: "center",
+        width: 14, height: 9, padding: 0, lineHeight: 1,
         fontSize: 7, fontWeight: 900,
         borderRadius: 3,
         border: `1px solid ${disabled ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.16)"}`,
