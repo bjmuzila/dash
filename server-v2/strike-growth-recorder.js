@@ -68,6 +68,18 @@ const HOT_MINS = Number(process.env.STRIKE_GROWTH_HOT_MINS || 2);
 // DB spot. This poll keeps every roster ticker's spot current (RTH + ext hours).
 // Set to 0 to disable.
 const SPOT_REFRESH_MINS = Number(process.env.STRIKE_GROWTH_SPOT_REFRESH_MINS || 15);
+// Every sweep now ALSO refreshes the spots for exactly the symbols it is about
+// to write, immediately before writing them (see runSweep). The poller above is
+// only the between-sweeps backstop for readers like the Forward Build cards.
+// Set STRIKE_GROWTH_PRESWEEP_SPOT=0 to fall back to the old behaviour (spot =
+// whatever the feed maps last held, which on a dead subscription meant the
+// recorded price could be a whole SPOT_REFRESH_MINS window old — the /replay
+// ladder repeating one spot across many frames).
+const PRESWEEP_SPOT = process.env.STRIKE_GROWTH_PRESWEEP_SPOT !== '0';
+// Log a warning when a written spot is older than this (ms). Frozen spot is the
+// failure this recorder is least able to notice on its own — the row still
+// writes, the ladder still renders, the price is just wrong.
+const SPOT_STALE_WARN_MS = Number(process.env.STRIKE_GROWTH_SPOT_STALE_WARN_MS || 90_000);
 // How many strikes to WRITE to strike_growth per side, per expiry — ranked by
 // combined net GEX (gex_now+gex_open), not distance from spot. Keeps the table
 // to the strikes that actually matter (real call/put walls) instead of a
@@ -398,7 +410,7 @@ async function snapshotTicker(chainTicker) {
     if (picked.length) out.push({ expiry, rows: picked, totals: sideTotals(legRows, snap.spot) });
   }
   if (!out.length) throw new Error(`no usable expiries ${chainTicker}`);
-  return { spot: snap.spot, expiries: out };
+  return { spot: snap.spot, spotAgeMs: Number(snap.spotAgeMs ?? Infinity), expiries: out };
 }
 
 // ── Sweep ────────────────────────────────────────────────────────────────────
@@ -511,10 +523,10 @@ async function runSweep(opts = {}) {
 
   const p = getPool();
   const date = etDateStr();
-  const ts = new Date().toISOString();
   const symbols = await getActiveSymbols(p, onlyHot);
   const done = [];
   const failed = [];
+  let stale = 0;
 
   // Keep the live dxLink feed's roster in sync with this sweep's symbol list.
   // Additive (see startStrikeGrowthFeed in proxy-tastytrade.js) — safe to call
@@ -525,10 +537,33 @@ async function runSweep(opts = {}) {
       console.warn('[strike-growth] feed subscribe:', e.message));
   }
 
+  // Refresh the spot for exactly the symbols this sweep is about to write,
+  // right before writing them. One batched TT call per 90 symbols (the hot lane
+  // is a single call), and it makes the recorded price fresh BY CONSTRUCTION
+  // instead of depending on every root's dxLink underlying subscription being
+  // alive — the failure mode that made /replay repeat one spot for minutes.
+  // The live feed still wins for streamed roots: any event that lands after
+  // this overwrites the REST value.
+  if (PRESWEEP_SPOT && _proxy?.refreshStrikeGrowthSpots) {
+    await _proxy.refreshStrikeGrowthSpots(symbols).catch((e) =>
+      console.warn('[strike-growth] pre-sweep spot refresh:', String(e?.message || e).slice(0, 160)));
+  }
+
   console.log(`[strike-growth] ${onlyHot ? 'HOT ' : ''}sweep ${date} — ${symbols.length} symbols`);
   for (const symbol of symbols) {
     try {
-      const { spot, expiries } = await snapshotTicker(symbol);
+      const { spot, spotAgeMs, expiries } = await snapshotTicker(symbol);
+      // Stamp each ticker at the moment ITS spot was read, not at the moment the
+      // sweep started. A full roster takes minutes to walk, so one shared ts
+      // labelled late tickers with a clock they never saw — in /replay that
+      // reads as the price standing still and then jumping. Every strike_growth
+      // query is scoped to a single symbol (DISTINCT ON / MAX(ts) per symbol),
+      // so per-symbol timestamps change nothing downstream.
+      const ts = new Date().toISOString();
+      if (spotAgeMs > SPOT_STALE_WARN_MS) {
+        stale++;
+        console.warn(`[strike-growth] ${symbol} — spot ${spot} is ${Math.round(spotAgeMs / 1000)}s old (no live underlying event; check the dxLink subscription)`);
+      }
       for (const { expiry, rows, totals } of expiries) {
         await writeSnapshot(p, date, symbol, expiry, spot, ts, rows);
         await writeExpiryTotals(p, date, symbol, expiry, spot, ts, totals);
@@ -540,14 +575,14 @@ async function runSweep(opts = {}) {
     }
     await sleep(TICKER_DELAY_MS); // insurance vs a cold fetchChain() cache-miss burst
   }
-  console.log(`[strike-growth] sweep done — ${done.length} ok, ${failed.length} failed`);
+  console.log(`[strike-growth] sweep done — ${done.length} ok, ${failed.length} failed, ${stale} stale-spot`);
 
   // Day-over-day rollup: recompute the biggest overnight→now mover per symbol
   // from the rows just written, keep the intraday peak. Cheap SQL, best-effort.
   try { await rollupDayOverDay(p, date); }
   catch (e) { console.warn('[strike-growth/dod]', e.message); }
 
-  return { date, ts, ok: done.length, failed: failed.length, failures: failed.slice(0, 10) };
+  return { date, ok: done.length, failed: failed.length, staleSpot: stale, failures: failed.slice(0, 10) };
 }
 
 // ── Scheduler ────────────────────────────────────────────────────────────────

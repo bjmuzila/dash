@@ -2049,6 +2049,12 @@ class TastytradeProxy {
     this.strikeGrowthContracts = new Map(); // option streamerSymbol -> ticker root
     this.strikeGrowthSpotSym = new Map();   // underlying streamerSymbol -> ticker root
     this.strikeGrowthSpot = new Map();      // ticker root -> live spot
+    // When each root's spot was last WRITTEN (ms epoch). A frozen spot and a
+    // slow-moving one look identical in the value alone, which is how a dead
+    // underlying subscription stays invisible — it surfaced as the /replay
+    // ladder repeating one spot for minutes. Anything reading spot can now ask
+    // how old it is (getStrikeGrowthSpotAgeMs).
+    this.strikeGrowthSpotAt = new Map();    // ticker root -> Date.now() of last write
     // Prior-session close per root, harvested from the same REST spot backstop
     // batch (TT `prev-close`). Powers the Forward Build cards' day % change and
     // its "sort by % gain" mode. NOT cleared on a dxLink reconnect — it's REST
@@ -3286,6 +3292,7 @@ class TastytradeProxy {
       }
       if (Number.isFinite(full?.underlyingPrice) && full.underlyingPrice > 0 && !(this.strikeGrowthSpot.get(root) > 0)) {
         this.strikeGrowthSpot.set(root, full.underlyingPrice);
+        this.strikeGrowthSpotAt.set(root, Date.now());
       }
       const strikes = full?.items?.[0]?.strikes || [];
       let seeded = 0;
@@ -3350,6 +3357,38 @@ class TastytradeProxy {
     return Number(this.strikeGrowthSpot.get(String(root).toUpperCase())) || 0;
   }
 
+  /** How stale this root's spot is, in ms (Infinity if it was never written).
+   *  A recorded snapshot is only as honest as the age of the price it stamps,
+   *  so the recorder logs this and callers can refuse a spot that's too old. */
+  getStrikeGrowthSpotAgeMs(root) {
+    const t = this.strikeGrowthSpotAt.get(String(root).toUpperCase());
+    return t ? Date.now() - t : Infinity;
+  }
+
+  /**
+   * Write an underlying price into EVERY feed map that claims this streamer
+   * symbol.
+   *
+   * A root's underlying can be claimed by more than one feed at once: SPX and
+   * VIX are core symbols AND strike-growth roots, and anything in
+   * FLOW_RECORD_TICKERS that also sits in the scanner universe is in two maps.
+   * The per-feed branches in _onEvent each `return` after the first match, so
+   * whichever map happened to be tested first won and every OTHER feed's spot
+   * froze — for strike-growth that left the 15-minute REST backstop
+   * (STRIKE_GROWTH_SPOT_REFRESH_MINS) as the only writer, which is exactly why
+   * the /replay ladder showed one spot for minutes at a time. Fan the price out
+   * up front; the branches below then only decide control flow, not who gets fed.
+   */
+  _fanoutUnderlyingPx(sym, px) {
+    if (!(px > 0)) return;
+    const fr = this.flowRecordSpotSym.get(sym);
+    if (fr) this.flowRecordSpot.set(fr, px);
+    const sg = this.strikeGrowthSpotSym.get(sym);
+    if (sg) { this.strikeGrowthSpot.set(sg, px); this.strikeGrowthSpotAt.set(sg, Date.now()); }
+    const tt = this.ttFlowSpotSym.get(sym);
+    if (tt) this.ttFlowSpot.set(tt, px);
+  }
+
   /** Prior-session close for a strike-growth root (from the REST backstop's
    *  `prev-close`). 0 until the first backstop pass lands. Paired with
    *  getStrikeGrowthSpot it gives the Forward Build cards a day % change. */
@@ -3360,7 +3399,10 @@ class TastytradeProxy {
   /** Directly set a live strike-growth spot (used by the REST backstop poller). */
   setStrikeGrowthSpot(root, px) {
     const p = Number(px);
-    if (p > 0) this.strikeGrowthSpot.set(String(root).toUpperCase(), p);
+    if (p > 0) {
+      this.strikeGrowthSpot.set(String(root).toUpperCase(), p);
+      this.strikeGrowthSpotAt.set(String(root).toUpperCase(), Date.now());
+    }
   }
 
   /**
@@ -3398,7 +3440,11 @@ class TastytradeProxy {
           const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
           const pc = n(it['prev-close']);
           const px = n(it.mark) || mid || n(it.last) || pc || 0;
-          if (sym && px > 0) { this.strikeGrowthSpot.set(sym, px); updated++; }
+          if (sym && px > 0) {
+            this.strikeGrowthSpot.set(sym, px);
+            this.strikeGrowthSpotAt.set(sym, Date.now());
+            updated++;
+          }
           // Same batch already carries the official prior close — keep it so the
           // Forward Build cards can show a day % change without a second call.
           if (sym && pc > 0) this.strikeGrowthPrevClose.set(sym, pc);
@@ -3437,7 +3483,10 @@ class TastytradeProxy {
       if (rows.length) expiries.push({ expiry: exp, rows });
     }
     if (!expiries.length) return null;
-    return { spot, expiries };
+    // spotAgeMs rides along so the recorder can refuse (or at least flag) a
+    // price that hasn't moved because nothing is feeding it, rather than
+    // stamping a stale number onto a fresh timestamp.
+    return { spot, spotAgeMs: this.getStrikeGrowthSpotAgeMs(up), expiries };
   }
 
   setExpiry(expiry) {
@@ -3849,6 +3898,9 @@ class TastytradeProxy {
       const bid = Number(ev.bidPrice);
       const ask = Number(ev.askPrice);
       const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : null;
+      // Feed every map that claims this underlying BEFORE the single-owner
+      // branches below start returning. See _fanoutUnderlyingPx.
+      this._fanoutUnderlyingPx(sym, mid);
       if (sym === this.spotSymbol) {
         // When INDEX_SOURCE=theta, Theta's index stream owns spot — ignore the
         // dxLink SPX quote so the two sources don't fight over this.spot.
@@ -3924,6 +3976,9 @@ class TastytradeProxy {
     }
 
     if (ev.eventType === 'Trade') {
+      // Same fan-out as the Quote branch. Only underlying streamer symbols are
+      // in the *SpotSym maps, so option prints fall straight through this.
+      this._fanoutUnderlyingPx(sym, Number(ev.price));
       if (sym === this.spotSymbol) {
         const px = Number(ev.price);
         if (px > 0 && !useThetaIndex()) {

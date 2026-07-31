@@ -19,6 +19,11 @@ import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData }
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
+import { dedupeFetch } from "@/lib/dedupeFetch";
+
+// Spot / last-price line. Same gray as app/es-candles/page.tsx so the two
+// charts read identically.
+const SPOT_LINE_GRAY = "#9ca3af";
 // findGEXFlip is intentionally NOT imported: the flip is no longer recomputed
 // from live gexRows on this panel — it (and CB) come from the CB snapshot below.
 import { HOME_THEME } from "@/components/shared/homeTheme";
@@ -163,6 +168,12 @@ export default function EsCandlesFullPanel() {
       wickDownColor: "#ff5b5b",
       downColor: "#ff5b5b",
       borderVisible: false,
+      // Spot / last-price line + axis tag in neutral gray, matching
+      // app/es-candles/page.tsx. Unset, it inherits the candle color and flips
+      // green/red with the current bar — a saturated line exactly where the eye
+      // wants a stable reference, competing with the Call/Put Wall levels that
+      // actually earn their color.
+      priceLineColor: SPOT_LINE_GRAY,
     });
     chartApiRef.current = chart;
     candleSeriesRef.current = candleSeries;
@@ -431,8 +442,26 @@ export default function EsCandlesFullPanel() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(
-          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=1440&expiry=${encodeURIComponent(feedExpiry)}&anyExpiry=1`,
+        // dedupeFetch: this panel and the full /es-candles route ask the same
+        // backend for the same window, and React can mount this effect twice.
+        // Identical concurrent GETs share one request; each caller still reads
+        // its own Response clone. Not a cache — the entry drops on settle.
+        //
+        // `expiry=front` LITERAL, not the live feedExpiry. The server ignores
+        // `expiry` entirely under anyExpiry=1 (that query takes only since +
+        // symbol), but interpolating the churning feed value made the URL move
+        // for a response that never changed, which defeats any dedupe.
+        //
+        // NO `&top=` here, deliberately, unlike the full page. This panel paints
+        // a heatmap cell for EVERY strike in every column — truncating to the
+        // top N by |GEX| would punch holes in the band. `top` is only safe where
+        // the sole consumer is the bubble trail.
+        //
+        // `symbol` explicit: absent, the route falls back to '$SPX' via
+        // normGexSymbol, which is right for this ES panel — but that fallback is
+        // load-bearing now that SPY/QQQ write to the same table, so say it.
+        const res = await dedupeFetch(
+          `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=1440&expiry=front&anyExpiry=1&symbol=%24SPX`,
           { cache: "no-store" }
         );
         if (!res.ok) return;
