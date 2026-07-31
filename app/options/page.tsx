@@ -229,14 +229,14 @@ export default function OptionsPage() {
             return (
               <GridCard
                 key={it.id}
-                id={it.id}
+                data-grid-id={it.id}
+                data-grid-overflow={def.overflow}
                 editing={editing}
                 title={def.title}
                 subtitle={def.subtitle}
                 universal={def.universal}
                 chrome={def.chrome !== false}
                 padding={def.padding}
-                overflow={def.overflow}
                 onRemove={removeCard}
               >
                 {def.body()}
@@ -289,25 +289,32 @@ function useIsNarrow(px: number) {
  * otherwise every one of them would show two stacked titles.
  */
 function GridCard({
-  id,
+  "data-grid-id": id,
+  "data-grid-overflow": overflow,
   title,
   subtitle,
   universal,
   editing,
   chrome = true,
   padding = 20,
-  overflow,
   onRemove,
   children,
 }: {
-  id: string;
+  /**
+   * NAMED as the data attributes on purpose. DashGrid reads these off the child
+   * ELEMENT's props (child.props["data-grid-id"]), not off the DOM, so a prop
+   * called `id`/`overflow` here would be invisible to it — which is exactly the
+   * bug that left the ticker card clipped and painting under the heatmap.
+   * Same names on the element and on the div = they can't drift apart again.
+   */
+  "data-grid-id": string;
+  "data-grid-overflow"?: "visible";
   title?: string;
   subtitle?: string;
   universal?: boolean;
   editing: boolean;
   chrome?: boolean;
   padding?: number;
-  overflow?: "visible";
   onRemove?: (id: string) => void;
   children: ReactNode;
 }) {

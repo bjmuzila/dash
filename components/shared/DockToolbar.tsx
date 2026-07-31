@@ -414,7 +414,10 @@ export function DockSlider({
       title={title}
       style={{
         display: "flex", alignItems: "center", gap: 5,
-        flexShrink: 0, ...(fluid ? { width: "100%" } : null),
+        // minWidth:0 in fluid mode or this row becomes an un-shrinkable floor for
+        // whatever grid/flex parent holds it, and its value + stepper spill past
+        // the container's edge on a narrow viewport.
+        ...(fluid ? { width: "100%", minWidth: 0 } : { flexShrink: 0 }),
       }}
     >
       <style>{`

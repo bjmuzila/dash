@@ -552,15 +552,8 @@ function FailsView() {
 // ── Confidence tab: MVC checkpoint tracking (9:45 / 10:30 / 12:00) ──
 // For each session, how close SPX got to the MVC strike that was active at each
 // checkpoint, and whether it was hit (within HIT_PTS). Data: /api/confidence/checkpoints.
-//
-// Contract pricing (the three right-hand columns per checkpoint) is the same
-// board asked in dollars: server-v2/cb-contract-track.js replays, from
-// ThetaData's 1-minute tape, what the CB-strike 0DTE contract cost at each
-// checkpoint, auto-buys it when that price was <= $1.00, and auto-sells the
-// first time SPX traded within the 5-10 pt band of the CB. Every rule lives on
-// the server; this view only renders the outcome. Toggle it off with the
-// CONTRACTS button (sends ?contracts=0) if Theta is slow or you want the plain
-// hit-rate board.
+// Extension: contract pricing tracking — auto-buy at checkpoints if under $1.0,
+// auto-sell when SPX within 5-10 pts of CB/MVC.
 type CpCell = {
   key: string; label: string;
   strike: number | null; spxAt: number | null; distAt: number | null;
@@ -568,14 +561,11 @@ type CpCell = {
   tiers?: Record<number, boolean | null>;
   changed?: boolean;
   // Contract pricing fields
-  right?: "C" | "P" | null;
   contractPrice?: number | null; contractPricedAt?: number | null;
   autoEntry?: { price: number; ts: number } | null;
-  sellSignal?: { distPts: number; ts: number; tight?: boolean } | null;
+  sellSignal?: { distPts: number; ts: number } | null;
   sold?: { price: number; ts: number } | null;
   pnl?: number | null;
-  open?: boolean;              // position still live (P&L is mark-to-market)
-  contractNote?: string | null; // why a cell has no contract data
 };
 type CpDay = { date: string; checkpoints: CpCell[] };
 type CpSummary = {
@@ -584,12 +574,6 @@ type CpSummary = {
   tiers?: Record<number, { hits: number; rate: number | null }>;
   // Contract pricing summary
   contractTrades?: number; sellHits?: number; avgPnl?: number | null;
-  contractWins?: number; contractWinRate?: number | null; totalPnl?: number | null;
-};
-type CpContractsMeta = {
-  enabled: boolean; note?: string;
-  autoBuyMax?: number; sellBand?: [number, number];
-  interval?: string; daysTracked?: number; daysSkipped?: number;
 };
 const TIERS = [5, 10, 15] as const;
 const SELL_DISTANCE_RANGE = [5, 10] as const;
@@ -600,12 +584,10 @@ function CheckpointsView() {
   const [summary, setSummary] = useState<CpSummary[]>([]);
   const [hitPts, setHitPts] = useState(8);
   const [range, setRange] = useState<"7d" | "20d" | "all">("20d");
-  const [contractsOn, setContractsOn] = useState(true);
-  const [meta, setMeta] = useState<CpContractsMeta | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const qs = `${range === "all" ? "?all=1" : range === "7d" ? "?since=7" : "?since=20"}${contractsOn ? "" : "&contracts=0"}`;
+  const qs = range === "all" ? "?all=1" : range === "7d" ? "?since=7" : "?since=20";
 
   const load = useCallback(async () => {
     setErr(null);
@@ -615,7 +597,6 @@ function CheckpointsView() {
       const j = await r.json();
       setDays(Array.isArray(j.days) ? j.days : []);
       setSummary(Array.isArray(j.summary) ? j.summary : []);
-      setMeta(j.contracts && typeof j.contracts === "object" ? j.contracts : null);
       if (typeof j.hitPts === "number") setHitPts(j.hitPts);
       setLoaded(true);
     } catch (e) { setErr(String(e)); setLoaded(true); }
@@ -623,26 +604,12 @@ function CheckpointsView() {
 
   useEffect(() => { setLoaded(false); load(); const id = setInterval(load, 60_000); return () => clearInterval(id); }, [load]);
 
-  // Contract columns render only when the server actually returned tracking —
-  // a Theta outage collapses the table back to the plain hit-rate board rather
-  // than showing three columns of em-dashes.
-  const showContracts = contractsOn && meta?.enabled === true;
-  const buyMax = meta?.autoBuyMax ?? AUTO_BUY_PRICE_THRESHOLD;
-  const sellBand = meta?.sellBand ?? (SELL_DISTANCE_RANGE as unknown as [number, number]);
-  const cpColSpan = showContracts ? 5 + 3 : 5;
-
   const rangeBtn = (key: typeof range, _label: string): React.CSSProperties => ({
     fontSize: 14, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer",
     border: `1px solid ${range === key ? C.cyan : C.border}`,
     background: range === key ? rgba(C.cyan, 0.18) : "transparent",
     color: range === key ? C.cyan : C.label, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
   });
-  const toggleBtn: React.CSSProperties = {
-    fontSize: 14, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer",
-    border: `1px solid ${contractsOn ? C.purple : C.border}`,
-    background: contractsOn ? rgba(C.purple, 0.18) : "transparent",
-    color: contractsOn ? C.purple : C.label, letterSpacing: "0.06em", textTransform: "uppercase", fontFamily: "inherit",
-  };
 
   const distColor = (d: number | null): string => {
     if (d == null) return MUTED;
@@ -658,29 +625,13 @@ function CheckpointsView() {
     <>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
         <span style={{ fontSize: 17, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Confidence</span>
-        <span style={{ fontSize: 14, color: C.label }}>
-          CB - Core Bullseye at 9:45 / 10:30 / 12:00 · how close SPX got · hit = within {hitPts} pts
-          {showContracts ? ` · 0DTE contract auto-buy ≤ $${buyMax.toFixed(2)}, auto-sell inside ${sellBand[0]}–${sellBand[1]} pts` : ""}
-        </span>
+        <span style={{ fontSize: 14, color: C.label }}>CB - Core Bullseye at 9:45 / 10:30 / 12:00 · how close SPX got · hit = within {hitPts} pts</span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          <button
-            onClick={() => setContractsOn((v) => !v)}
-            title="Replay the CB-strike 0DTE contract at each checkpoint (ThetaData). Off = hit-rate board only."
-            style={toggleBtn}
-          >
-            Contracts {contractsOn ? "on" : "off"}
-          </button>
           <button onClick={() => setRange("7d")} style={rangeBtn("7d", "7d")}>7d</button>
           <button onClick={() => setRange("20d")} style={rangeBtn("20d", "20d")}>20d</button>
           <button onClick={() => setRange("all")} style={rangeBtn("all", "All")}>All</button>
         </div>
       </div>
-
-      {contractsOn && meta && meta.enabled === false && (
-        <div style={{ color: AMBER, fontSize: 14, marginBottom: 14, fontFamily: "var(--font-mono)" }}>
-          Contract pricing unavailable{meta.note ? ` — ${meta.note}` : ""} · showing hit rates only
-        </div>
-      )}
 
       {/* Per-checkpoint hit-rate & contract pricing roll-up */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14, marginBottom: 22 }}>
@@ -721,48 +672,26 @@ function CheckpointsView() {
                 })}
               </div>
 
-              {/* Contract pricing roll-up — shown whenever tracking ran, even at
-                  zero trades, so "no setup ever qualified" is distinguishable
-                  from "the tracker never ran". */}
-              {showContracts && s.contractTrades != null && (
+              {/* Contract pricing summary — if available */}
+              {s.contractTrades != null && s.contractTrades > 0 && (
                 <div style={{ paddingTop: 12, borderTop: `1px solid ${rgba(C.border, 0.6)}`, display: "flex", flexDirection: "column", gap: 6 }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                    Contract Pricing · buy ≤ ${buyMax.toFixed(2)}
-                  </span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em" }}>Contract Pricing</span>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
                     <span style={{ color: C.label }}>Trades</span>
                     <span style={{ color: C.cyan, fontWeight: 700, fontFamily: "var(--font-mono)" }}>{s.contractTrades}</span>
                   </div>
-                  {s.contractTrades > 0 ? (
-                    <>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
-                        <span style={{ color: C.label }}>Sell Hits</span>
-                        <span style={{ color: wrColor(s.sellHits != null ? s.sellHits / s.contractTrades : null), fontWeight: 700, fontFamily: "var(--font-mono)" }}>
-                          {s.sellHits ?? 0}/{s.contractTrades}
-                        </span>
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
-                        <span style={{ color: C.label }}>Win Rate</span>
-                        <span style={{ color: wrColor(s.contractWinRate ?? null), fontWeight: 700, fontFamily: "var(--font-mono)" }}>
-                          {s.contractWinRate != null ? `${Math.round(s.contractWinRate * 100)}%` : "—"}
-                        </span>
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
-                        <span style={{ color: C.label }}>Avg P&amp;L</span>
-                        <span style={{ color: pnlColor, fontWeight: 700, fontFamily: "var(--font-mono)" }}>
-                          {s.avgPnl != null ? `${s.avgPnl > 0 ? "+" : ""}${s.avgPnl.toFixed(2)}` : "—"}
-                        </span>
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
-                        <span style={{ color: C.label }}>Total P&amp;L</span>
-                        <span style={{ color: s.totalPnl == null ? MUTED : s.totalPnl >= 0 ? GREEN : RED, fontWeight: 700, fontFamily: "var(--font-mono)" }}>
-                          {s.totalPnl != null ? `${s.totalPnl > 0 ? "+" : ""}${s.totalPnl.toFixed(2)}` : "—"}
-                        </span>
-                      </div>
-                    </>
-                  ) : (
-                    <span style={{ fontSize: 13, color: MUTED }}>No checkpoint priced at or under ${buyMax.toFixed(2)} in this range.</span>
-                  )}
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+                    <span style={{ color: C.label }}>Sell Hits</span>
+                    <span style={{ color: wrColor(s.sellHits != null ? s.sellHits / s.contractTrades : null), fontWeight: 700, fontFamily: "var(--font-mono)" }}>
+                      {s.sellHits}/{s.contractTrades}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+                    <span style={{ color: C.label }}>Avg P&amp;L</span>
+                    <span style={{ color: pnlColor, fontWeight: 700, fontFamily: "var(--font-mono)" }}>
+                      {s.avgPnl != null ? `${s.avgPnl > 0 ? "+" : ""}${s.avgPnl.toFixed(2)}` : "—"}
+                    </span>
+                  </div>
                 </div>
               )}
             </div>
@@ -779,14 +708,14 @@ function CheckpointsView() {
           No MVC snapshots in this range yet.
         </div>
       ) : (
-        <div style={{ ...CARD, padding: 0, overflow: "hidden" }}>
-          <div style={{ overflowX: "auto" }}>
+        <div style={{ ...CARD, padding: 0, overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 400px)" }}>
+          <div>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${C.border}` }}>
                   <th style={th}>Date</th>
                   {["9:45", "10:30", "12:00"].map((l) => (
-                    <th key={l} style={{ ...th, textAlign: "center", borderLeft: `1px solid ${C.border}` }} colSpan={cpColSpan}>{l} CB</th>
+                    <th key={l} style={{ ...th, textAlign: "center", borderLeft: `1px solid ${C.border}` }} colSpan={8}>{l} CB</th>
                   ))}
                 </tr>
                 <tr style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -798,13 +727,9 @@ function CheckpointsView() {
                       {TIERS.map((t) => (
                         <th key={t} style={{ ...th, textAlign: "center" }}>≤{t}</th>
                       ))}
-                      {showContracts && (
-                        <>
-                          <th style={{ ...th, textAlign: "right", fontSize: 13 }}>Contract $</th>
-                          <th style={{ ...th, textAlign: "center", fontSize: 13 }}>Entry/Sell</th>
-                          <th style={{ ...th, textAlign: "right", fontSize: 13 }}>P&amp;L</th>
-                        </>
-                      )}
+                      <th style={{ ...th, textAlign: "right", fontSize: 13 }}>Contract $</th>
+                      <th style={{ ...th, textAlign: "center", fontSize: 13 }}>Entry/Sell</th>
+                      <th style={{ ...th, textAlign: "right", fontSize: 13 }}>P&amp;L</th>
                     </React.Fragment>
                   ))}
                 </tr>
@@ -819,11 +744,6 @@ function CheckpointsView() {
                       const hasSold = c.sold != null;
                       const status = hasSold ? "sold" : hasSell ? "signal" : hasEntry ? "entry" : null;
                       const statusColor = status === "sold" ? GREEN : status === "signal" ? AMBER : status === "entry" ? C.cyan : MUTED;
-                      const contractTitle = c.contractNote
-                        ? c.contractNote
-                        : c.contractPrice != null && c.strike != null
-                          ? `SPXW ${c.strike.toFixed(0)}${c.right ?? ""} 0DTE @ ${etClock(c.contractPricedAt ?? 0)} — $${c.contractPrice.toFixed(2)}`
-                          : "no contract price at this checkpoint";
                       return (
                         <React.Fragment key={c.key}>
                           <td style={{ ...td, textAlign: "right", color: C.label, borderLeft: `1px solid ${C.border}` }}>
@@ -846,35 +766,23 @@ function CheckpointsView() {
                             );
                           })}
                           {/* Contract pricing cells */}
-                          {showContracts && (
-                            <>
-                              <td
-                                title={contractTitle}
-                                style={{ ...td, textAlign: "right", color: c.contractPrice != null ? C.label : MUTED, fontWeight: hasEntry ? 700 : 400 }}
-                              >
-                                {c.contractPrice != null ? `$${c.contractPrice.toFixed(2)}` : "—"}
-                                {c.right && c.contractPrice != null && (
-                                  <span style={{ marginLeft: 4, fontSize: 12, color: MUTED }}>{c.right}</span>
-                                )}
-                              </td>
-                              <td style={{ ...td, textAlign: "center", fontSize: 13, fontWeight: 700, color: statusColor }}>
-                                {status === "sold" ? (
-                                  <span title={`Bought @ $${c.autoEntry?.price.toFixed(2)} ${etClock(c.autoEntry?.ts ?? 0)} → sold @ $${c.sold?.price.toFixed(2)} ${etClock(c.sold?.ts ?? 0)} (SPX within ${c.sellSignal?.distPts.toFixed(1)} pts)`}>✓</span>
-                                ) : status === "signal" ? (
-                                  <span title={`Sell signal at ${c.sellSignal?.distPts.toFixed(1)} pts ${etClock(c.sellSignal?.ts ?? 0)} — no contract print to fill`}>🔔</span>
-                                ) : status === "entry" ? (
-                                  <span title={`Auto-buy @ $${c.autoEntry?.price.toFixed(2)} ${etClock(c.autoEntry?.ts ?? 0)} — SPX never came within ${sellBand[1]} pts${c.open ? " (still open)" : ""}`}>
-                                    {c.open ? "⏳" : "⬇"}
-                                  </span>
-                                ) : (
-                                  <span title={c.contractNote ?? `Priced above $${buyMax.toFixed(2)} — no auto-buy`}>—</span>
-                                )}
-                              </td>
-                              <td style={{ ...td, textAlign: "right", color: c.pnl != null ? (c.pnl >= 0 ? GREEN : RED) : MUTED, fontWeight: c.pnl != null ? 700 : 400, opacity: c.open ? 0.75 : 1 }}>
-                                {c.pnl != null ? `${c.pnl > 0 ? "+" : ""}${c.pnl.toFixed(2)}${c.open ? "*" : ""}` : "—"}
-                              </td>
-                            </>
-                          )}
+                          <td style={{ ...td, textAlign: "right", color: c.contractPrice != null ? C.label : MUTED, fontWeight: c.autoEntry != null ? 700 : 400 }}>
+                            {c.contractPrice != null ? `$${c.contractPrice.toFixed(2)}` : "—"}
+                          </td>
+                          <td style={{ ...td, textAlign: "center", fontSize: 13, fontWeight: 700 }}>
+                            {status === "sold" ? (
+                              <span title={`Bought @ ${c.autoEntry?.price.toFixed(2)}, sold @ ${c.sold?.price.toFixed(2)}`} style={{ color: GREEN }}>✓</span>
+                            ) : status === "signal" ? (
+                              <span title={`Sell signal @ ${c.sellSignal?.distPts.toFixed(1)} pts`} style={{ color: AMBER }}>🔔</span>
+                            ) : status === "entry" ? (
+                              <span title="Auto-buy triggered" style={{ color: C.cyan }}>⬇</span>
+                            ) : (
+                              <span style={{ color: MUTED }}>—</span>
+                            )}
+                          </td>
+                          <td style={{ ...td, textAlign: "right", color: c.pnl != null ? (c.pnl >= 0 ? GREEN : RED) : MUTED, fontWeight: c.pnl != null ? 700 : 400 }}>
+                            {c.pnl != null ? `${c.pnl > 0 ? "+" : ""}${c.pnl.toFixed(2)}` : "—"}
+                          </td>
                         </React.Fragment>
                       );
                     })}
@@ -883,18 +791,6 @@ function CheckpointsView() {
               </tbody>
             </table>
           </div>
-          {showContracts && (
-            <div style={{ borderTop: `1px solid ${C.border}`, padding: "10px 14px", display: "flex", gap: 18, flexWrap: "wrap", fontSize: 13, color: MUTED }}>
-              <span><span style={{ color: C.cyan, fontWeight: 800 }}>⬇</span> auto-buy, never sold</span>
-              <span><span style={{ color: AMBER, fontWeight: 800 }}>🔔</span> sell signal, no fill</span>
-              <span><span style={{ color: GREEN, fontWeight: 800 }}>✓</span> bought and sold</span>
-              <span><span style={{ color: C.cyan, fontWeight: 800 }}>⏳</span> still open · <span style={{ fontWeight: 800 }}>*</span> unrealized</span>
-              <span style={{ marginLeft: "auto" }}>
-                {meta?.interval ?? "1m"} tape · {meta?.daysTracked ?? 0} session{(meta?.daysTracked ?? 0) === 1 ? "" : "s"} tracked
-                {meta?.daysSkipped ? ` · ${meta.daysSkipped} older skipped` : ""}
-              </span>
-            </div>
-          )}
         </div>
       )}
     </>

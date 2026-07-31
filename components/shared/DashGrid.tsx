@@ -89,6 +89,21 @@ export type DashGridProps = {
 
 function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
 
+// Warn once per id, not once per render. Deliberately not gated on NODE_ENV:
+// this file ships through the Vite SPA as well as Next, and a bare `process`
+// reference there is a page-blanking ReferenceError. One console line for a
+// genuine misconfiguration is the cheaper trade.
+const warnedIds = new Set<string>();
+function warnMissingGridId(id: string) {
+  if (warnedIds.has(id)) return;
+  warnedIds.add(id);
+  console.warn(
+    `[DashGrid] child "${id}" has no data-grid-id prop — falling back to its key. ` +
+      "Pass data-grid-id (and data-grid-overflow) as props on the child ELEMENT, " +
+      "not just on a DOM node inside it, or per-card options are silently ignored.",
+  );
+}
+
 export default function DashGrid({
   layout,
   onLayoutChange,
@@ -228,10 +243,21 @@ export default function DashGrid({
   return (
     <div ref={wrapRef} style={{ position: "relative", width: "100%", height: containerH }}>
       {childArray.map((child) => {
-        // Identify the child by its explicit data-grid-id prop. (Keys are
+        // Identify the child by its explicit data-grid-id PROP. (Keys are
         // unreliable here: React.Children.toArray rewrites them, and children
         // coming from a nested .map() get compound prefixes like ".6:0:$id".)
-        const propId = (child.props as { "data-grid-id"?: string })?.["data-grid-id"];
+        //
+        // These are read off the ELEMENT, so a child component must accept them
+        // under exactly these names — rendering data-grid-id on some inner div
+        // is invisible here. The key fallback below silently papered over that
+        // for the id; nothing covered data-grid-overflow, so a wrapper that
+        // renamed it to `overflow` lost its opt-out and got clipped. Hence the
+        // dev warning.
+        const childProps = child.props as {
+          "data-grid-id"?: string;
+          "data-grid-overflow"?: string;
+        } | undefined;
+        const propId = childProps?.["data-grid-id"];
         // Fallback: take the segment after the last "$" in the toArray key.
         const rawKey = String(child.key ?? "");
         const id = propId ?? (rawKey.includes("$") ? rawKey.slice(rawKey.lastIndexOf("$") + 1) : rawKey);
@@ -239,8 +265,8 @@ export default function DashGrid({
         // its bounds (an open dropdown, a tooltip) sets data-grid-overflow=
         // "visible" and also gets a raised base z-index, so the escaped menu
         // paints over the cards below instead of being cut off by them.
-        const overflowVisible =
-          (child.props as { "data-grid-overflow"?: string })?.["data-grid-overflow"] === "visible";
+        const overflowVisible = childProps?.["data-grid-overflow"] === "visible";
+        if (!propId) warnMissingGridId(id);
         const it = byId.get(id);
         if (!it) return null;
         const box = pxBox(it);

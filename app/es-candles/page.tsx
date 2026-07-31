@@ -40,14 +40,17 @@ function toChartTime(ts: number): UTCTimestamp {
  */
 function PanelSection({ title, first, children }: { title: string; first?: boolean; children: ReactNode }) {
   return (
-    <div style={{ marginTop: first ? 0 : 9 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
+    <div style={{ marginTop: first ? 0 : 9, minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5, minWidth: 0 }}>
         <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: ".11em", textTransform: "uppercase", color: HOME_THEME.muted, whiteSpace: "nowrap", opacity: 0.85 }}>
           {title}
         </span>
         <span style={{ flex: 1, height: 1, background: HOME_THEME.border }} />
       </div>
-      <div style={{ display: "grid", gap: 3 }}>{children}</div>
+      {/* minmax(0,1fr): an implicit `auto` track won't shrink below the row's
+          min-content, which is what let the slider values + steppers paint
+          outside the panel on a narrow viewport. */}
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr)", gap: 3, minWidth: 0 }}>{children}</div>
     </div>
   );
 }
@@ -57,7 +60,12 @@ function PanelSection({ title, first, children }: { title: string; first?: boole
  * constant, so "top" / "highlight" / "min" / "max" / "bright" all start their
  * tracks at the same x and the value + stepper columns line up down the panel.
  */
-const SLIDER_LABEL_W = 46;
+const SLIDER_LABEL_W = 42;
+/** Overlays menu geometry. Explicit, not a Tailwind `w-56`, because the portal
+ *  needs the number in JS to clamp its own left edge against the viewport. */
+const OVL_PANEL_W = 224;
+const OVL_VIEWPORT_PAD = 6;
+const OVL_MIN_H = 180;
 
 /** Compact on/off chip — one visual language for every toggle in the panel. */
 function PanelChip({ label, on, onClick, title }: { label: string; on: boolean; onClick: () => void; title?: string }) {
@@ -81,7 +89,7 @@ function PanelChip({ label, on, onClick, title }: { label: string; on: boolean; 
         background: on ? HOME_THEME.cyan : "transparent",
         color: DOCK_THEME.bg, fontSize: 9, lineHeight: "10px", textAlign: "center", fontWeight: 900,
       }}>{on ? "✓" : ""}</span>
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{label}</span>
     </button>
   );
 }
@@ -763,9 +771,18 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const historical = isEs ? esHistorical : etfRows;
   const connected = isEs ? esConnected : etfConnected;
 
-  // ── Weekly estimated-move bands (rides the PDH/ON overlay) ─────────────────
+  // ── EM ±1σ bands (rides the PDH/ON overlay) ────────────────────────────────
   // Source: GET /api/levels?ticker=ES|SPY|QQQ → one ticker_levels row, published
   // by server-v2/levels-auto-publish.js each Friday 16:00 ET.
+  //
+  // SAME source and SAME fields as the "+1σ (EM)" / "−1σ (EM)" readouts on the
+  // home GEX chart (see app/home/HomeClient.tsx — it reads /api/levels?ticker=SPX
+  // and labels up/down as ±1σ), so the two pages cannot disagree. Note that
+  // despite the ±1σ label those levels are the WEEKLY band, not a daily one:
+  // levels-engine.js's getTargetExpiration filters `d >= 1 && d <= 10` and picks
+  // the Friday, which structurally excludes 0DTE. There is no daily EM anywhere
+  // a subscriber client can read — /api/estimated-move is a 501 stub and the one
+  // real 0DTE calc (/api/social-media/daily-input) is owner-gated and SPX-only.
   //
   // Two things about this endpoint that are easy to get wrong:
   //   • It answers 200 with a literal `null` body when the ticker has never been
@@ -783,7 +800,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const [emWeekly, setEmWeekly] = useState<{ up: number; down: number; exp: string } | null>(null);
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    const load = async () => {
       try {
         const r = await fetch(`/api/levels?ticker=${encodeURIComponent(sym.key)}`, { cache: "no-store" });
         if (!r.ok) { if (!cancelled) setEmWeekly(null); return; }
@@ -795,9 +812,13 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         // they were struck for has passed, so "missing" is the correct signal to
         // draw nothing rather than to fall back to a stale band.
         setEmWeekly(up != null && down != null ? { up, down, exp: String(j?.exp_label ?? "") } : null);
-      } catch { if (!cancelled) setEmWeekly(null); }
-    })();
-    return () => { cancelled = true; };
+      } catch { /* keep the last good band rather than blanking on a blip */ }
+    };
+    load();
+    // 5 min, matching HomeClient. The band is frozen weekly, so this only exists
+    // to pick up the Friday publish (and a mid-week republish) without a reload.
+    const id = setInterval(load, 300_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [sym.key]);
 
   // Chart candles: 2-day rolling window, deliberately matched to the GEX
@@ -1007,14 +1028,37 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // and overflowed it (FitScale shrank everything to unreadable); they live in
   // a checklist menu now.
   const [ovlOpen, setOvlOpen] = useState(false);
-  const [ovlRect, setOvlRect] = useState<{ left: number; top: number } | null>(null);
+  const [ovlRect, setOvlRect] = useState<{ left: number; top: number; maxH: number } | null>(null);
   const ovlBoxRef = useRef<HTMLDivElement>(null);
   const ovlMenuRef = useRef<HTMLDivElement>(null);
-  const openOvl = useCallback(() => {
+  /**
+   * Position the menu, CLAMPED to the viewport.
+   *
+   * It renders through a portal at `position: fixed`, so it is measured against
+   * the window and nothing upstream can contain it. Anchoring naively to the
+   * button's left/bottom broke on a laptop two ways:
+   *   • the toolbar sits right-of-center, so `left = button.left` put the panel's
+   *     right edge past the window and the slider values + steppers painted
+   *     outside the panel's own border;
+   *   • with no max-height the panel ran off the bottom on a short viewport and
+   *     Save default / Reset became unreachable.
+   * Clamp x into the window, and cap the height at the space actually left below
+   * the button so the body scrolls instead of overflowing.
+   */
+  const placeOvl = useCallback(() => {
     const r = ovlBoxRef.current?.getBoundingClientRect();
-    if (r) setOvlRect({ left: r.left, top: r.bottom + 4 });
-    setOvlOpen((v) => !v);
+    if (!r) return;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const w = Math.min(OVL_PANEL_W, vw - OVL_VIEWPORT_PAD * 2);
+    const left = Math.max(OVL_VIEWPORT_PAD, Math.min(r.left, vw - w - OVL_VIEWPORT_PAD));
+    const top = r.bottom + 4;
+    setOvlRect({ left, top, maxH: Math.max(OVL_MIN_H, vh - top - OVL_VIEWPORT_PAD) });
   }, []);
+  const openOvl = useCallback(() => {
+    placeOvl();
+    setOvlOpen((v) => !v);
+  }, [placeOvl]);
   useEffect(() => {
     if (!ovlOpen) return;
     const onDoc = (e: MouseEvent) => {
@@ -1023,9 +1067,16 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       if (ovlMenuRef.current?.contains(t)) return;
       setOvlOpen(false);
     };
+    // Re-clamp while open: resizing (or rotating a laptop into a docked monitor)
+    // would otherwise leave the panel pinned to a position that no longer exists.
+    const onResize = () => placeOvl();
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [ovlOpen]);
+    window.addEventListener("resize", onResize);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [ovlOpen, placeOvl]);
 
   // DTE relative to today ET (today's expiry = 0DTE, not −1).
   const dteOf = (exp: string): number => {
@@ -2517,16 +2568,19 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       );
     }
 
-    // Weekly EM bands, on the same PDH/ON toggle — all four are "where did this
+    // EM bands, on the same PDH/ON toggle — all of these are "where did this
     // instrument already trade / where is it expected to stay" reference levels,
     // as opposed to the GEX walls, which are positioning. Dashed + violet so
-    // they don't read as another session high/low. The expiry label rides in the
-    // title so the axis tag says which week the band was struck for.
+    // they don't read as another session high/low.
+    //
+    // Labelled ±1σ to match the home GEX chart's readouts, which are the same
+    // two numbers from the same endpoint. The expiry label rides in the title so
+    // the axis tag says which week the band was struck for.
     if (showSessions && emWeekly) {
       const wk = emWeekly.exp ? ` ${emWeekly.exp}` : "";
       defs.push(
-        { price: emWeekly.up,   color: EM_VIOLET, title: `EM+${wk}`, style: LineStyle.Dashed, width: 1 },
-        { price: emWeekly.down, color: EM_VIOLET, title: `EM−${wk}`, style: LineStyle.Dashed, width: 1 },
+        { price: emWeekly.up,   color: EM_VIOLET, title: `+1σ${wk}`, style: LineStyle.Dashed, width: 1 },
+        { price: emWeekly.down, color: EM_VIOLET, title: `−1σ${wk}`, style: LineStyle.Dashed, width: 1 },
       );
     }
 
@@ -3544,13 +3598,30 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           {ovlOpen && ovlRect && createPortal(
             <div
               ref={ovlMenuRef}
-              className="w-56"
-              style={{ position: "fixed", left: ovlRect.left, top: ovlRect.top, borderRadius: 14, border: `1px solid ${HOME_THEME.border}`, borderTop: `2px solid ${DOCK_THEME.cyanTop}`, background: DOCK_THEME.bg, backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)", boxShadow: DOCK_THEME.shadow, zIndex: 100000, padding: 6 }}
+              style={{
+                position: "fixed", left: ovlRect.left, top: ovlRect.top,
+                // Explicit width + border-box: `w-56` set a CONTENT width, so the
+                // 6px padding pushed the real box to 236px while children sized
+                // themselves to 224 — part of why content sat past the border.
+                width: OVL_PANEL_W, maxWidth: `calc(100vw - ${OVL_VIEWPORT_PAD * 2}px)`,
+                boxSizing: "border-box",
+                // Scroll the body rather than overflow it on a short screen.
+                maxHeight: ovlRect.maxH, overflowY: "auto", overflowX: "hidden",
+                borderRadius: 14, border: `1px solid ${HOME_THEME.border}`, borderTop: `2px solid ${DOCK_THEME.cyanTop}`,
+                background: DOCK_THEME.bg, backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)",
+                boxShadow: DOCK_THEME.shadow, zIndex: 100000, padding: 6,
+              }}
             >
               {/* Two columns. Eight one-per-row toggles left the top half of this
                   menu mostly whitespace and pushed the sub-controls off-screen on
                   short viewports; the labels are all short enough to pair up. */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 3 }}>
+              <div style={{
+                // minmax(0,·) NOT 1fr: a plain `1fr` track carries an implicit
+                // min-width:auto, so it refuses to shrink below the widest chip's
+                // min-content and the grid overflows the panel instead. Renaming
+                // PDH/ON -> PDH/ON+EM is what pushed it over on a laptop.
+                display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 3, minWidth: 0,
+              }}>
               {([
                 { label: "Heatmap", on: showHeatmap, toggle: () => setShowHeatmap((v) => !v) },
                 { label: "Profile", on: showProfile, toggle: () => setShowProfile((v) => !v) },
