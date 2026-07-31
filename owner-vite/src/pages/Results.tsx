@@ -769,7 +769,8 @@ type CbTrade = {
   probe_ts: number | string; probe_price: number | null; probe_bid: number | null; probe_ask: number | null;
   probe_spot: number | null; probe_dist: number | null;
   entry_ts: number | string | null; entry_price: number | null; entry_spot: number | null;
-  signal_ts: number | string | null; signal_dist: number | null;
+  signal_ts: number | string | null; signal_dist: number | null;   // legacy — the auto-sell that no longer exists
+  best_ts: number | string | null; worst_ts: number | string | null;
   exit_ts: number | string | null; exit_price: number | null; exit_spot: number | null; exit_reason: string | null;
   last_ts: number | string | null; last_price: number | null; last_spot: number | null; last_dist: number | null;
   best_price: number | null; worst_price: number | null; closest_dist: number | null;
@@ -778,12 +779,11 @@ type CbTrade = {
 };
 type CbSummary = {
   key: string; label: string; probes: number; trades: number; openNow: number;
-  sellHits: number; wins: number; winRate: number | null;
+  peakedUp: number; avgPeakGain: number | null; wins: number; winRate: number | null;
   avgPnl: number | null; totalPnl: number | null; totalPnlUsd: number | null; takeRate: number | null;
 };
 type CbConfig = {
   BUY_MIN: number; STRIKE_STEP: number; WALK_MAX_STEPS: number;
-  SELL_TRIGGER_PTS: number; SELL_TIGHT_PTS: number;
   PROBE_TICKER: string; MULTIPLIER: number; CHECKPOINT_GRACE_MIN: number;
 };
 type CbTick = { ts: number | string; mark: number | null; bid: number | null; ask: number | null; spot: number | null; dist: number | null };
@@ -878,7 +878,6 @@ function TradesView() {
   });
 
   const buyMin = config?.BUY_MIN ?? 1.0;
-  const band: [number, number] = [config?.SELL_TIGHT_PTS ?? 5, config?.SELL_TRIGGER_PTS ?? 10];
   const mult = config?.MULTIPLIER ?? 100;
 
   const visible = useMemo(
@@ -886,16 +885,20 @@ function TradesView() {
     [trades, showSkipped],
   );
   const totals = useMemo(() => {
-    const closed = trades.filter((t) => t.pnl != null);
-    const wins = closed.filter((t) => (t.pnl ?? 0) > 0).length;
+    // `status === "closed"`, not `pnl != null`. Held positions now carry a
+    // mark-to-market pnl all day, so the old test folded live marks into the
+    // booked win rate and the net dollar figure — numbers that are supposed to
+    // mean "this is what the day actually paid".
+    const settled = trades.filter((t) => t.status === "closed" && t.pnl != null);
+    const wins = settled.filter((t) => (n(t.pnl) ?? 0) > 0).length;
     return {
       probes: trades.length,
       taken: trades.filter((t) => t.status !== "skipped").length,
       open: trades.filter((t) => t.status === "open").length,
-      closed: closed.length,
+      closed: settled.length,
       wins,
-      winRate: closed.length ? wins / closed.length : null,
-      usd: closed.reduce((a, t) => a + (n(t.pnl_usd) ?? 0), 0),
+      winRate: settled.length ? wins / settled.length : null,
+      usd: settled.reduce((a, t) => a + (n(t.pnl_usd) ?? 0), 0),
     };
   }, [trades]);
 
@@ -914,7 +917,7 @@ function TradesView() {
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
         <span style={{ fontSize: 17, fontWeight: 800, color: C.purple, textTransform: "uppercase", letterSpacing: "0.1em" }}>Contracts</span>
         <span style={{ fontSize: 14, color: C.label }}>
-          0DTE probed on TastyTrade at 9:45 / 10:30 / 12:00 · from the CB, walk toward the money to the first strike over ${buyMin.toFixed(2)} · sell inside {band[0]}–{band[1]} pts of the CB · ×{mult}
+          0DTE probed on TastyTrade at 9:45 / 10:30 / 12:00 · from the CB, walk toward the money to the first strike over ${buyMin.toFixed(2)} · held and re-priced every minute to the bell · ×{mult}
         </span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           <button
@@ -972,9 +975,17 @@ function TradesView() {
                 </span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
-                <span style={{ color: C.label }}>Sell hits</span>
-                <span style={{ color: s.sellHits > 0 ? GREEN : MUTED, fontWeight: 700, fontFamily: "var(--font-mono)" }}>
-                  {s.sellHits}/{s.trades}
+                <span style={{ color: C.label }} title="How often the contract ever traded above what was paid — the move was there, whether or not anyone took it.">
+                  Traded up
+                </span>
+                <span style={{ color: s.peakedUp > 0 ? GREEN : MUTED, fontWeight: 700, fontFamily: "var(--font-mono)" }}>
+                  {s.peakedUp}/{s.trades}
+                </span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+                <span style={{ color: C.label }} title="Average distance from entry to the day's peak mark.">Avg peak</span>
+                <span style={{ color: s.avgPeakGain == null ? MUTED : s.avgPeakGain >= 0 ? GREEN : RED, fontWeight: 700, fontFamily: "var(--font-mono)" }}>
+                  {s.avgPeakGain != null ? `${s.avgPeakGain > 0 ? "+" : ""}${s.avgPeakGain.toFixed(2)}` : "—"}
                 </span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
@@ -1017,21 +1028,27 @@ function TradesView() {
                   <th style={th}>Time</th>
                   <th style={th}>Contract</th>
                   <th style={{ ...th, textAlign: "right" }}>Entry</th>
-                  <th style={{ ...th, textAlign: "right" }}>Sell</th>
+                  <th style={{ ...th, textAlign: "right" }}>Peak</th>
                   <th style={{ ...th, textAlign: "right" }}>P/L</th>
                 </tr>
               </thead>
               <tbody>
                 {visible.map((t, i) => {
                   const skipped = t.status === "skipped";
-                  const pnl = n(t.pnl);
-                  // An open position is marked to its last poll. It is shown, but
+                  // A held position is marked to its last poll. It is shown, but
                   // starred and dimmed — an unrealized number that reads exactly
                   // like a booked one is how a board starts lying to you.
-                  const live = t.status === "open" && t.entry_price != null && t.last_price != null
+                  //
+                  // The flag is `status`, NOT "did the server send a pnl". Once
+                  // positions began being held all day the server started writing
+                  // pnl on open rows too, and a `pnl ?? live` test silently
+                  // stopped starring anything — every live mark read as booked.
+                  const unrealized = t.status === "open";
+                  const shown = n(t.pnl) ?? (t.entry_price != null && t.last_price != null
                     ? Math.round((n(t.last_price)! - n(t.entry_price)!) * 100) / 100
-                    : null;
-                  const shown = pnl ?? live;
+                    : null);
+                  const entryVsPeak = t.best_price != null && t.entry_price != null
+                    ? Number(t.best_price) - Number(t.entry_price) : null;
                   return (
                     <tr key={t.id} style={{ borderTop: i ? `1px solid ${C.border}` : undefined, opacity: skipped ? 0.55 : 1 }}>
                       <td style={{ ...td, color: C.label }}>{t.date}</td>
@@ -1077,28 +1094,28 @@ function TradesView() {
                         )}
                       </td>
                       <td style={{ ...td, textAlign: "right" }}>
-                        {t.exit_price != null ? (
+                        {/* The day's high-water mark, not an exit. There is no
+                            sell rule any more, so this is what was there to take
+                            rather than what a rule took. */}
+                        {t.best_price != null ? (
                           <span
-                            title={t.exit_reason === "sell-signal"
-                              ? `sell signal at ${Number(t.signal_dist).toFixed(1)} pts from the CB · filled ${etClock(n(t.exit_ts) ?? 0)}`
-                              : `marked out at the bell ${etClock(n(t.exit_ts) ?? 0)} — SPX never came within ${band[1]} pts`}
-                            style={{ color: t.exit_reason === "sell-signal" ? GREEN : AMBER, fontWeight: 700 }}
+                            title={`peak $${Number(t.best_price).toFixed(2)}`
+                              + `${t.best_ts ? ` at ${etClock(n(t.best_ts) ?? 0)}` : ""}`
+                              + `${t.worst_price != null ? ` · low $${Number(t.worst_price).toFixed(2)}` : ""}`
+                              + `${t.closest_dist != null ? ` · SPX came within ${Number(t.closest_dist).toFixed(1)} pt of the CB` : ""}`}
+                            style={{ color: entryVsPeak == null ? C.label : entryVsPeak > 0 ? GREEN : MUTED, fontWeight: 700 }}
                           >
-                            ${Number(t.exit_price).toFixed(2)}
-                            <span style={{ marginLeft: 5, fontSize: 14, color: MUTED }}>
-                              {t.exit_reason === "sell-signal" ? `${Number(t.signal_dist).toFixed(1)}pt` : "eod"}
-                            </span>
-                          </span>
-                        ) : t.status === "open" && t.last_price != null ? (
-                          <span title={`live mark · closest ${n(t.last_dist)?.toFixed(1) ?? "—"} pt`} style={{ color: C.cyan }}>
-                            ${Number(t.last_price).toFixed(2)}*
+                            ${Number(t.best_price).toFixed(2)}
+                            {t.best_ts != null && (
+                              <span style={{ marginLeft: 5, fontSize: 14, color: MUTED }}>{etClock(n(t.best_ts) ?? 0)}</span>
+                            )}
                           </span>
                         ) : <span style={{ color: MUTED }}>—</span>}
                       </td>
-                      <td style={{ ...td, textAlign: "right", fontWeight: 800, color: shown == null ? MUTED : shown >= 0 ? GREEN : RED, opacity: pnl == null && live != null ? 0.75 : 1 }}>
+                      <td style={{ ...td, textAlign: "right", fontWeight: 800, color: shown == null ? MUTED : shown >= 0 ? GREEN : RED, opacity: unrealized ? 0.75 : 1 }}>
                         {shown != null ? (
                           <>
-                            {`${shown > 0 ? "+" : ""}${shown.toFixed(2)}${pnl == null ? "*" : ""}`}
+                            {`${shown > 0 ? "+" : ""}${shown.toFixed(2)}${unrealized ? "*" : ""}`}
                             <span style={{ marginLeft: 7, fontSize: 14, fontWeight: 700, color: MUTED }}>
                               {shown >= 0 ? "+" : "−"}${Math.abs(shown * mult).toFixed(0)}
                             </span>
@@ -1118,13 +1135,13 @@ function TradesView() {
               net {totals.usd >= 0 ? "+" : "−"}${Math.abs(totals.usd).toFixed(0)}
             </span>
             <span style={{ marginLeft: "auto" }}>
-              ←CB marks a walked strike · click a contract for its probe chart · <span style={{ fontWeight: 800 }}>*</span> unrealized
+              ←CB marks a walked strike · held to the bell, no exit rule · <span style={{ fontWeight: 800 }}>*</span> unrealized
             </span>
           </div>
         </div>
       )}
 
-      {openTrade && <CbProbeModal trade={openTrade} band={band} mult={mult} onClose={() => setOpenTrade(null)} />}
+      {openTrade && <CbProbeModal trade={openTrade} mult={mult} onClose={() => setOpenTrade(null)} />}
       {diag != null && <DiagnoseModal data={diag} onClose={() => setDiag(null)} />}
     </>
   );
@@ -1167,11 +1184,11 @@ const CB_METRICS = [
 type CbMetricKey = typeof CB_METRICS[number]["key"];
 
 function CbProbeChart({
-  ticks, metric, entry, exit, band,
+  ticks, metric, entry, peak,
 }: {
   ticks: CbTick[]; metric: CbMetricKey;
-  entry: number | null; exit: { v: number; ts: number } | null;
-  band: [number, number];
+  entry: number | null;
+  peak: { v: number; ts: number } | null;   // the day's high-water mark, not an exit
 }) {
   const W = 960, H = 340, PADL = 62, PADR = 16, PADT = 16, PADB = 28;
   const pts = ticks
@@ -1187,7 +1204,7 @@ function CbProbeChart({
       <div style={{ padding: "40px 0", textAlign: "center", color: MUTED, fontSize: 14, fontFamily: "var(--font-mono)", lineHeight: 1.7 }}>
         {pts.length === 0
           ? <>No polls recorded yet. The recorder writes one tick a minute while a position is open — if this stays at zero, the poll is failing rather than pending. Press <b>Diagnose</b>.</>
-          : <>Only one poll recorded — not enough for a line. A trade that sold on its first poll has a single point.</>}
+          : <>Only one poll recorded — not enough for a line.</>}
       </div>
     );
   }
@@ -1195,11 +1212,10 @@ function CbProbeChart({
   const spec = CB_METRICS.find((m) => m.key === metric)!;
   const xs = pts.map((p) => p.ts), ys = pts.map((p) => p.v);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
-  // The entry line and the sell band are part of the picture, not annotations on
-  // top of it — if the domain excludes them they'd be drawn off-canvas.
+  // The entry line is part of the picture, not an annotation on top of it — if
+  // the domain excludes it, it gets drawn off-canvas.
   const domain = [...ys];
   if (metric === "mark" && entry != null) domain.push(entry);
-  if (metric === "dist") domain.push(band[0], band[1]);
   let minY = Math.min(...domain), maxY = Math.max(...domain);
   if (minY === maxY) { minY -= 1; maxY += 1; }
   const gpad = (maxY - minY) * 0.08; minY -= gpad; maxY += gpad;
@@ -1214,8 +1230,9 @@ function CbProbeChart({
   const fmtT = (ts: number) => new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
   }).format(new Date(ts));
-  // Index of the tick nearest the exit, so the sell is marked where it happened.
-  const exitIdx = exit ? pts.reduce((best, p, i) => (Math.abs(p.ts - exit.ts) < Math.abs(pts[best].ts - exit.ts) ? i : best), 0) : -1;
+  // Index of the tick nearest the peak, so the high-water mark is flagged where
+  // it printed. Nothing happened there — that is the point of showing it.
+  const peakIdx = peak ? pts.reduce((best, p, i) => (Math.abs(p.ts - peak.ts) < Math.abs(pts[best].ts - peak.ts) ? i : best), 0) : -1;
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
@@ -1233,21 +1250,6 @@ function CbProbeChart({
         </g>
       ))}
 
-      {/* The 5-10 pt sell band, on the distance view: the whole strategy is
-          "get out when price enters this stripe", so it belongs on the chart. */}
-      {metric === "dist" && (
-        <>
-          <rect
-            x={PADL} y={sy(band[1])} width={W - PADL - PADR}
-            height={Math.max(0, sy(band[0]) - sy(band[1]))}
-            fill={rgba(GREEN, 0.1)} stroke={rgba(GREEN, 0.35)} strokeWidth={1}
-          />
-          <text x={W - PADR - 4} y={sy(band[1]) - 4} textAnchor="end" fontSize={11} fill={rgba(GREEN, 0.9)} fontFamily="var(--font-mono)">
-            sell band {band[0]}–{band[1]} pt
-          </text>
-        </>
-      )}
-
       {/* Entry line on the price view. Without it a rising curve reads as a
           winner even when it never got back to what was paid. */}
       {metric === "mark" && entry != null && (
@@ -1260,10 +1262,10 @@ function CbProbeChart({
       <path d={area} fill="url(#cbwg)" />
       <path d={path} fill="none" stroke={C.cyan} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
 
-      {exitIdx >= 0 && (
+      {peakIdx >= 0 && (
         <>
-          <line x1={sx(exitIdx)} y1={PADT} x2={sx(exitIdx)} y2={H - PADB} stroke={rgba(GREEN, 0.55)} strokeWidth={1} strokeDasharray="3 3" />
-          <circle cx={sx(exitIdx)} cy={sy(pts[exitIdx].v)} r={4} fill={GREEN} stroke="#05060a" strokeWidth={1} />
+          <line x1={sx(peakIdx)} y1={PADT} x2={sx(peakIdx)} y2={H - PADB} stroke={rgba(GREEN, 0.55)} strokeWidth={1} strokeDasharray="3 3" />
+          <circle cx={sx(peakIdx)} cy={sy(pts[peakIdx].v)} r={4} fill={GREEN} stroke="#05060a" strokeWidth={1} />
         </>
       )}
       <circle cx={sx(cnt - 1)} cy={sy(pts[cnt - 1].v)} r={3.5} fill={C.cyan} />
@@ -1275,8 +1277,8 @@ function CbProbeChart({
 }
 
 function CbProbeModal({
-  trade, band, mult, onClose,
-}: { trade: CbTrade; band: [number, number]; mult: number; onClose: () => void }) {
+  trade, mult, onClose,
+}: { trade: CbTrade; mult: number; onClose: () => void }) {
   const [ticks, setTicks] = useState<CbTick[] | null>(null);
   const [metric, setMetric] = useState<CbMetricKey>("mark");
   const [err, setErr] = useState<string | null>(null);
@@ -1306,7 +1308,6 @@ function CbProbeModal({
 
   const entry = n(trade.entry_price);
   const exitV = n(trade.exit_price);
-  const exitTs = n(trade.exit_ts);
   const pnl = n(trade.pnl) ?? (entry != null && n(trade.last_price) != null
     ? Math.round((n(trade.last_price)! - entry) * 100) / 100 : null);
 
@@ -1362,16 +1363,17 @@ function CbProbeModal({
               : `${trade.walk_steps} strike${trade.walk_steps === 1 ? "" : "s"} toward the money`)}
           {stat("Entry", entry != null ? `$${entry.toFixed(2)} · ${etClock(n(trade.entry_ts) ?? 0)}` : `not taken — ${trade.skip_reason ?? "—"}`,
             entry != null ? C.label : MUTED)}
-          {stat("Sell", exitV != null
-            ? `$${exitV.toFixed(2)} · ${trade.exit_reason === "sell-signal" ? `${Number(trade.signal_dist).toFixed(1)} pt` : "eod"}`
-            : trade.status === "open" ? "open" : "—",
-          exitV != null ? (trade.exit_reason === "sell-signal" ? GREEN : AMBER) : MUTED)}
+          {stat("Peak", trade.best_price != null
+            ? `$${Number(trade.best_price).toFixed(2)}${trade.best_ts ? ` · ${etClock(n(trade.best_ts) ?? 0)}` : ""}`
+            : "—", trade.best_price != null ? GREEN : MUTED)}
+          {stat("Close", exitV != null ? `$${exitV.toFixed(2)} · ${trade.exit_reason}`
+            : trade.status === "open" ? "held — still open" : "—",
+          exitV != null ? AMBER : C.cyan)}
           {stat("P/L", pnl != null ? `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)} · ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl * mult).toFixed(0)}` : "—",
             pnl == null ? MUTED : pnl >= 0 ? GREEN : RED)}
-          {stat("Best / worst", trade.best_price != null
-            ? `$${Number(trade.best_price).toFixed(2)} / $${Number(trade.worst_price ?? 0).toFixed(2)}` : "—")}
-          {stat("Closest to CB", trade.closest_dist != null ? `${Number(trade.closest_dist).toFixed(1)} pt` : "—",
-            trade.closest_dist != null && Number(trade.closest_dist) <= band[1] ? GREEN : AMBER)}
+          {stat("Low", trade.worst_price != null
+            ? `$${Number(trade.worst_price).toFixed(2)}${trade.worst_ts ? ` · ${etClock(n(trade.worst_ts) ?? 0)}` : ""}` : "—")}
+          {stat("Closest to CB", trade.closest_dist != null ? `${Number(trade.closest_dist).toFixed(1)} pt` : "—")}
           {stat("Polls", String(trade.polls ?? 0))}
         </div>
 
@@ -1417,8 +1419,8 @@ function CbProbeModal({
             ticks={ticks}
             metric={metric}
             entry={entry}
-            exit={exitV != null && exitTs != null && trade.exit_reason === "sell-signal" ? { v: exitV, ts: exitTs } : null}
-            band={band}
+            peak={trade.best_price != null && trade.best_ts != null
+              ? { v: Number(trade.best_price), ts: n(trade.best_ts) as number } : null}
           />
         )}
 

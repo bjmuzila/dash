@@ -39,18 +39,26 @@
  *                 the money. Crossing spot would make it an ITM contract, a
  *                 different instrument with different behaviour, and the rule
  *                 says "closest to the money", not "through it".
- *   3. AUTO-SELL  the first poll where SPX is within the 5-10 pt band of the CB.
- *                 Measured to the CB, NOT to the strike that was bought — the CB
- *                 is the target the whole thesis is built on; the traded strike
- *                 is just the instrument used to express it. Both are stored
+ *   3. HOLD      there is NO exit rule. Once a checkpoint opens a position it is
+ *                 re-priced every minute until the closing bell and never sold
+ *                 early. An earlier version auto-sold the first time SPX came
+ *                 within 5-10 pts of the CB; that is gone, deliberately — it
+ *                 capped the record at the moment the CB was reached and hid
+ *                 everything the contract did afterwards, which is exactly the
+ *                 part worth studying when the CB is a magnet.
+ *
+ *                 What replaces it is measurement, not a decision: the peak mark
+ *                 and when it printed (best_price/best_ts), the trough
+ *                 (worst_price/worst_ts), and how close SPX ever got to the CB
+ *                 (closest_dist). Distance to the CB is still recorded on every
+ *                 poll — it just no longer triggers anything. Distance is to the
+ *                 CB, never to the strike being held; both are stored
  *                 (`cb_strike` vs `strike`) precisely so they cannot drift.
- *                 The trigger is the OUTER edge (<= CB_SELL_TRIGGER_PTS, 10):
- *                 price entering the band from outside crosses 10 before 5, and
- *                 a gap straight through to 3 pts is still "within 10". The
- *                 distance at the fire is stored, so a 10-pt graze and a 2-pt
- *                 spike stay distinguishable.
- *   4. EOD        anything still open at 16:00 ET is marked out at its last
- *                 probed mark. 0DTE — there is no next session to carry into.
+ *
+ *   4. EOD        at 16:00 ET the position is marked at its last print and the
+ *                 row closes. That is the session ending, not an exit signal —
+ *                 0DTE, so there is no next session to carry into. P&L before
+ *                 the bell is mark-to-market and flagged open.
  *
  * WHY THIS IS A RECORDER AND NOT A BACKFILL
  *   TastyTrade has no per-contract history. `server-v2/condor-marks.js` already
@@ -90,8 +98,6 @@ const STRIKE_STEP = Number(process.env.CB_STRIKE_STEP || 5);
 // Hard bound on probes per checkpoint. A qualifying strike is normally 1-5 steps
 // away; this only matters when the whole near-CB chain is under $1.00.
 const WALK_MAX_STEPS = Number(process.env.CB_WALK_MAX_STEPS || 24);
-const SELL_TRIGGER_PTS = Number(process.env.CB_SELL_TRIGGER_PTS || 10); // outer edge of the band
-const SELL_TIGHT_PTS = Number(process.env.CB_SELL_TIGHT_PTS || 5);      // inner edge (reported only)
 const PROBE_TICKER = process.env.CB_PROBE_TICKER || 'SPXW';             // see note below
 const MULTIPLIER = Number(process.env.CB_CONTRACT_MULTIPLIER || 100);
 // How far past a checkpoint minute the recorder may still open that checkpoint.
@@ -175,11 +181,15 @@ function walkCandidates(cbStrike, spot, side, { step = STRIKE_STEP, maxSteps = W
   return out;
 }
 
-/** Rule 3: distance from spot to the CB, and whether that fires the sell. */
-function sellCheck(spot, strike, trigger = SELL_TRIGGER_PTS, tight = SELL_TIGHT_PTS) {
-  if (!Number.isFinite(spot) || !Number.isFinite(strike)) return { dist: null, fire: false, tight: false };
-  const dist = Math.abs(spot - strike);
-  return { dist: Math.round(dist * 10) / 10, fire: dist <= trigger, tight: dist <= tight };
+/**
+ * How far SPX is from the CB. Recorded on every poll and used for the
+ * closest-approach stat; it triggers nothing. This used to also decide the
+ * auto-sell, which is why it was called sellCheck — the exit rule is gone and
+ * the name went with it, so nothing reads as a signal that isn't one.
+ */
+function distanceToCb(spot, cbStrike) {
+  if (!Number.isFinite(spot) || !Number.isFinite(cbStrike)) return null;
+  return Math.round(Math.abs(spot - cbStrike) * 10) / 10;
 }
 
 /** Premium P&L per contract, and the dollar figure at the 100x multiplier. */
@@ -253,13 +263,15 @@ function ensureTables() {
         exit_ts          BIGINT,
         exit_price       REAL,
         exit_spot        REAL,
-        exit_reason      TEXT,                   -- 'sell-signal' | 'eod' | 'manual'
+        exit_reason      TEXT,                   -- 'eod' | 'stale' | 'manual'  (never an exit signal)
         last_ts          BIGINT,
         last_price       REAL,
         last_spot        REAL,
         last_dist        REAL,
-        best_price       REAL,                   -- MFE on the mark
-        worst_price      REAL,                   -- MAE on the mark
+        best_price       REAL,                   -- highest mark seen all day
+        best_ts          BIGINT,                 -- when that peak printed
+        worst_price      REAL,                   -- lowest mark seen all day
+        worst_ts         BIGINT,                 -- when that trough printed
         closest_dist     REAL,                   -- closest SPX got to the CB while open
         pnl              REAL,                   -- exit - entry, per contract
         pnl_usd          REAL,                   -- pnl x multiplier
@@ -272,6 +284,8 @@ function ensureTables() {
       ALTER TABLE cb_trades ADD COLUMN IF NOT EXISTS cb_strike REAL;
       ALTER TABLE cb_trades ADD COLUMN IF NOT EXISTS cb_price REAL;
       ALTER TABLE cb_trades ADD COLUMN IF NOT EXISTS walk_steps INTEGER;
+      ALTER TABLE cb_trades ADD COLUMN IF NOT EXISTS best_ts BIGINT;
+      ALTER TABLE cb_trades ADD COLUMN IF NOT EXISTS worst_ts BIGINT;
       CREATE INDEX IF NOT EXISTS idx_cb_trades_date ON cb_trades(date);
       CREATE INDEX IF NOT EXISTS idx_cb_trades_status ON cb_trades(status);
 
@@ -436,7 +450,7 @@ async function runCheckpoint(ctx, { date, checkpoint }) {
   const side = decideSide(spot, cbStrike) || 'C';
   const walk = await walkForContract(ctx, { expiry: date, side, cbStrike, spot });
   // Distance is to the CB, always — the traded strike is only the instrument.
-  const { dist } = sellCheck(spot, cbStrike);
+  const dist = distanceToCb(spot, cbStrike);
 
   if (!walk.ok) {
     const [r] = await write([date, cp.key, cp.label, PROBE_TICKER, date, cbStrike, cbStrike,
@@ -525,7 +539,7 @@ async function pollOpen(ctx, { date } = {}) {
   const open = date
     ? await q(`SELECT * FROM cb_trades WHERE status = 'open' AND date = $1`, [date])
     : await q(`SELECT * FROM cb_trades WHERE status = 'open'`);
-  let closed = 0, polled = 0, errors = 0;
+  let polled = 0, errors = 0;
   for (const t of open) {
     const p = await probeContract(ctx, { expiry: t.expiration, side: t.side, strike: t.strike });
     if (!p.found) {
@@ -542,42 +556,46 @@ async function pollOpen(ctx, { date } = {}) {
     const spot = p.spot ?? num(t.last_spot);
     // To the CB, never to the strike we happen to be holding. Rows written
     // before cb_strike existed fall back to strike, which is what they meant.
-    const { dist, fire, tight } = sellCheck(spot, num(t.cb_strike) ?? num(t.strike));
+    const dist = distanceToCb(spot, num(t.cb_strike) ?? num(t.strike));
     const mark = p.mark;
     polled += 1;
     await recordTick(t.id, now, mark, p.bid, p.ask, spot, dist);
 
-    const best = Math.max(num(t.best_price) ?? -Infinity, mark ?? -Infinity);
-    const worst = Math.min(num(t.worst_price) ?? Infinity, mark ?? Infinity);
+    // Peak and trough carry their TIMESTAMPS now. With no exit rule the useful
+    // question stops being "what did it sell for" and becomes "what was there,
+    // and when" — a $4.20 peak at 11:03 and the same peak at 15:58 are very
+    // different facts about the same day.
+    const prevBest = num(t.best_price);
+    const prevWorst = num(t.worst_price);
+    const isBest = mark != null && (prevBest == null || mark > prevBest);
+    const isWorst = mark != null && (prevWorst == null || mark < prevWorst);
     const closest = Math.min(num(t.closest_dist) ?? Infinity, dist ?? Infinity);
+    // Mark-to-market while the session runs; `settle` freezes it at the bell.
+    const { pnl, pnlUsd } = computePnl(num(t.entry_price), mark);
 
-    if (fire && mark != null) {
-      const { pnl, pnlUsd } = computePnl(num(t.entry_price), mark);
-      await q(
-        `UPDATE cb_trades SET status='closed', signal_ts=$1, signal_dist=$2, exit_ts=$1, exit_price=$3,
-           exit_spot=$4, exit_reason='sell-signal', last_ts=$1, last_price=$3, last_spot=$4, last_dist=$2,
-           best_price=$5, worst_price=$6, closest_dist=$7, pnl=$8, pnl_usd=$9, polls=polls+1, updated_at=$1
-         WHERE id=$10`,
-        [now, dist, round2(mark), round2(spot), round2(Number.isFinite(best) ? best : null),
-          round2(Number.isFinite(worst) ? worst : null), Number.isFinite(closest) ? closest : null,
-          pnl, pnlUsd, t.id],
-      );
-      closed += 1;
-      console.log(`[cb-trades] ${t.date} ${t.checkpoint_label} ${t.strike}${t.side} (CB ${t.cb_strike ?? t.strike}) SOLD @ $${mark.toFixed(2)} `
-        + `(SPX ${dist} pts from CB${tight ? ', inside 5' : ''}) — P&L ${pnl >= 0 ? '+' : ''}${pnl}`);
-      continue;
-    }
     await q(
-      `UPDATE cb_trades SET last_ts=$1, last_price=$2, last_spot=$3, last_dist=$4,
-         best_price=$5, worst_price=$6, closest_dist=$7, polls=polls+1, last_error=NULL, updated_at=$1 WHERE id=$8`,
-      [now, round2(mark), round2(spot), dist, round2(Number.isFinite(best) ? best : null),
-        round2(Number.isFinite(worst) ? worst : null), Number.isFinite(closest) ? closest : null, t.id],
+      `UPDATE cb_trades SET
+         last_ts=$1, last_price=$2, last_spot=$3, last_dist=$4,
+         best_price=$5, best_ts=$6, worst_price=$7, worst_ts=$8,
+         closest_dist=$9, pnl=$10, pnl_usd=$11,
+         polls=polls+1, last_error=NULL, updated_at=$1
+       WHERE id=$12`,
+      [now, round2(mark), round2(spot), dist,
+        round2(isBest ? mark : prevBest), isBest ? now : (t.best_ts ?? null),
+        round2(isWorst ? mark : prevWorst), isWorst ? now : (t.worst_ts ?? null),
+        Number.isFinite(closest) ? closest : null, pnl, pnlUsd, t.id],
     );
   }
-  return { ok: true, open: open.length, polled, closed, errors };
+  // `closed` stays in the shape at 0 so the recorder's log line and every
+  // existing caller keep working — nothing closes here any more.
+  return { ok: true, open: open.length, polled, closed: 0, errors };
 }
 
-/** 16:00 ET: 0DTE, so everything still open is marked out at its last print. */
+/**
+ * 16:00 ET. The session is over and these are 0DTE contracts, so the position is
+ * marked at its last print and the row closes. This is the ONLY thing that ever
+ * closes a row during a normal day — there is no exit rule above it.
+ */
 async function settle(ctx, { date } = {}) {
   const d = date || etParts().date;
   const open = await q(`SELECT * FROM cb_trades WHERE status = 'open' AND date = $1`, [d]);
@@ -669,7 +687,7 @@ async function diagnose(ctx, { date } = {}) {
     recorder: _lastTick
       ? { lastTickAt: _lastTick.at, agoSeconds: Math.round((Date.now() - _lastTick.at) / 1000), lastResult: _lastTick.result ?? null }
       : { lastTickAt: null, note: 'no tick has run in this process — the recorder is not firing, or the process restarted' },
-    config: { BUY_MIN, STRIKE_STEP, WALK_MAX_STEPS, SELL_TRIGGER_PTS, SELL_TIGHT_PTS, PROBE_TICKER, CHECKPOINT_GRACE_MIN },
+    config: { BUY_MIN, STRIKE_STEP, WALK_MAX_STEPS, PROBE_TICKER, CHECKPOINT_GRACE_MIN },
     dueNow: dueCheckpoints(et.minutes).map((c) => c.key),
     checkpoints: [],
     rows: [],
@@ -751,7 +769,18 @@ function summarize(trades) {
       probes: rows.length,
       trades: taken.length,
       openNow: taken.filter((t) => t.status === 'open').length,
-      sellHits: taken.filter((t) => t.exit_reason === 'sell-signal').length,
+      // With no exit rule, "how often did it ever trade above entry" is the
+      // honest replacement for a sell-hit count: it says the move was there to
+      // be taken without pretending a rule took it.
+      peakedUp: taken.filter((t) => num(t.best_price) != null && num(t.entry_price) != null
+        && num(t.best_price) > num(t.entry_price)).length,
+      avgPeakGain: (() => {
+        const g = taken
+          .map((t) => (num(t.best_price) != null && num(t.entry_price) != null
+            ? num(t.best_price) - num(t.entry_price) : null))
+          .filter((v) => v != null);
+        return g.length ? Math.round((g.reduce((a, v) => a + v, 0) / g.length) * 100) / 100 : null;
+      })(),
       wins,
       winRate: withPnl.length ? wins / withPnl.length : null,
       avgPnl: withPnl.length ? Math.round((totalPnl / withPnl.length) * 100) / 100 : null,
@@ -769,6 +798,8 @@ function summarize(trades) {
  * payload, so the Confidence board's contract columns and the Trades tab are
  * one dataset rather than two that can disagree.
  */
+const n2 = (v) => { const x = num(v); return x == null ? null : x; };
+
 async function enrichWithTrades(data) {
   if (!data || !Array.isArray(data.days) || !data.days.length) return data;
   const dates = data.days.map((d) => d.date);
@@ -792,15 +823,9 @@ async function enrichWithTrades(data) {
       cell.contractPrice = num(t.probe_price);
       cell.contractPricedAt = num(t.probe_ts);
       cell.autoEntry = t.entry_price != null ? { price: Number(t.entry_price), ts: Number(t.entry_ts) } : null;
-      cell.sellSignal = t.signal_ts != null
-        ? { distPts: Number(t.signal_dist), ts: Number(t.signal_ts), tight: Number(t.signal_dist) <= SELL_TIGHT_PTS }
-        : null;
-      cell.sold = t.exit_reason === 'sell-signal' && t.exit_price != null
-        ? { price: Number(t.exit_price), ts: Number(t.exit_ts) }
-        : null;
-      cell.pnl = t.pnl != null ? Number(t.pnl)
-        : (t.status === 'open' && t.entry_price != null && t.last_price != null
-          ? computePnl(Number(t.entry_price), Number(t.last_price)).pnl : null);
+      cell.peak = t.best_price != null ? { price: Number(t.best_price), ts: n2(t.best_ts) } : null;
+      cell.closestDist = num(t.closest_dist);
+      cell.pnl = num(t.pnl);
       cell.open = t.status === 'open';
       cell.contractNote = t.skip_reason || null;
     }
@@ -814,7 +839,7 @@ async function enrichWithTrades(data) {
     return {
       ...s,
       contractTrades: c.trades,
-      sellHits: c.sellHits,
+      contractPeaked: c.peakedUp,
       contractWins: c.wins,
       contractWinRate: c.winRate,
       avgPnl: c.avgPnl,
@@ -825,7 +850,6 @@ async function enrichWithTrades(data) {
     enabled: true,
     source: 'tastytrade',
     buyMin: BUY_MIN,
-    sellBand: [SELL_TIGHT_PTS, SELL_TRIGGER_PTS],
     multiplier: MULTIPLIER,
     daysRecorded: new Set(rows.map((r) => r.date)).size,
     daysShown: dates.length,
@@ -853,10 +877,10 @@ module.exports = {
   qualifies,
   walkCandidates,
   walkForContract,
-  sellCheck,
+  distanceToCb,
   computePnl,
   dueCheckpoints,
   snapshotAt,
   etParts,
-  CONFIG: { BUY_MIN, STRIKE_STEP, WALK_MAX_STEPS, SELL_TRIGGER_PTS, SELL_TIGHT_PTS, PROBE_TICKER, MULTIPLIER, CHECKPOINT_GRACE_MIN },
+  CONFIG: { BUY_MIN, STRIKE_STEP, WALK_MAX_STEPS, PROBE_TICKER, MULTIPLIER, CHECKPOINT_GRACE_MIN },
 };

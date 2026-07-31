@@ -490,11 +490,12 @@ export default function GexChangeTop() {
     color: HOME_THEME.text, borderBottom: `1px solid ${tint(HOME_THEME.text, 0.05)}`, whiteSpace: "nowrap",
   };
 
-  // Scorecard summary — how many picks actually offered a real exit.
-  const withPeak = results.filter((r) => r.max_pct != null);
+  // Scorecard summary — filter to entry > 0.5 to remove noise, then count picks that offered real exits.
+  const filteredResults = results.filter((r) => r.entry != null && r.entry > 0.5);
+  const withPeak = filteredResults.filter((r) => r.max_pct != null);
   const hit = (n: number) => withPeak.filter((r) => (r.max_pct as number) >= n).length;
   const avgPeak = withPeak.length ? withPeak.reduce((a, r) => a + (r.max_pct as number), 0) / withPeak.length : null;
-  const greenClose = results.filter((r) => r.close_pct != null && (r.close_pct as number) > 0).length;
+  const greenClose = filteredResults.filter((r) => r.close_pct != null && (r.close_pct as number) > 0).length;
 
   return (
    <div ref={cardRef}>
@@ -547,9 +548,9 @@ export default function GexChangeTop() {
           <span style={{ ...tglStyle(true), cursor: "default", fontSize: 9 }}>
             {frozen ? "EOD · final" : "live · peak so far"}
           </span>
-          {results.length > 0 && (
+          {filteredResults.length > 0 && (
             <span style={{ fontSize: 12, color: HOME_THEME.text }}>
-              {results.length} pick{results.length === 1 ? "" : "s"} · avg peak{" "}
+              {filteredResults.length} pick{filteredResults.length === 1 ? "" : "s"} (entry &gt; $0.50) · avg peak{" "}
               <b style={{ color: avgPeak != null && avgPeak >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{fmtPct(avgPeak)}</b>
               {" · "}≥+25% <b style={{ color: HOME_THEME.text }}>{hit(25)}</b>
               {" · "}≥+50% <b style={{ color: HOME_THEME.text }}>{hit(50)}</b>
@@ -570,9 +571,9 @@ export default function GexChangeTop() {
         {resErr && <div style={{ color: HOME_THEME.red, fontSize: 13, padding: "4px 0" }}>Scorecard error: {resErr}</div>}
 
         {showResults && !resErr && (
-          results.length === 0 ? (
+          filteredResults.length === 0 ? (
             <div style={{ color: HOME_THEME.text, fontSize: 13, padding: "8px 4px" }}>
-              No scored picks for this date yet — rows appear once picks have been auto-probed and snapshots start landing.
+              {results.length === 0 ? "No scored picks for this date yet — rows appear once picks have been auto-probed and snapshots start landing." : "No picks with entry > $0.50 for this date (all entries < $0.50 filtered out as noise)."}
             </div>
           ) : (
             <div style={{ overflowX: "auto" }}>
@@ -593,7 +594,7 @@ export default function GexChangeTop() {
                   </tr>
                 </thead>
                 <tbody>
-                  {results.map((r) => {
+                  {results.filter((r) => r.entry != null && r.entry > 0.5).map((r) => {
                     const sideC = r.side === "P" ? HOME_THEME.orange : HOME_THEME.green;
                     const peakDollars = r.entry != null && r.max_mark != null ? (r.max_mark - r.entry) * 100 : null;
                     return (

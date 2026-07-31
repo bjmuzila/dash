@@ -100,27 +100,24 @@ check('a missing CB or spot walks nowhere', () => {
   assert.deepStrictEqual(t.walkCandidates(4500, null, 'C'), []);
 });
 
-// ── Rule 3: the 5-10 pt sell band ──────────────────────────────────────────
-check('the sell fires at the OUTER edge of the band', () => {
-  const r = t.sellCheck(6640, 6650);          // exactly 10 pts
-  assert.strictEqual(r.dist, 10);
-  assert.strictEqual(r.fire, true);
-  assert.strictEqual(r.tight, false);
+// ── Rule 3: distance is measured, never acted on ───────────────────────────
+check('distance to the CB is reported to a tenth', () => {
+  assert.strictEqual(t.distanceToCb(6640, 6650), 10);
+  assert.strictEqual(t.distanceToCb(6648.34, 6650), 1.7);
 });
-check('11 pts away does not fire', () => {
-  assert.strictEqual(t.sellCheck(6639, 6650).fire, false);
+check('distance is symmetric — above the CB counts the same', () => {
+  assert.strictEqual(t.distanceToCb(6657, 6650), 7);
 });
-check('a gap straight through the band still fires, and reads tight', () => {
-  const r = t.sellCheck(6648, 6650);
-  assert.strictEqual(r.dist, 2);
-  assert.strictEqual(r.fire, true);
-  assert.strictEqual(r.tight, true);
+check('a missing spot yields no distance rather than a fake zero', () => {
+  assert.strictEqual(t.distanceToCb(null, 6650), null);
+  assert.strictEqual(t.distanceToCb(6650, null), null);
 });
-check('the band is symmetric — above the CB counts too', () => {
-  assert.strictEqual(t.sellCheck(6657, 6650).fire, true);
-});
-check('no spot means no sell — never a fire on missing data', () => {
-  assert.deepStrictEqual(t.sellCheck(null, 6650), { dist: null, fire: false, tight: false });
+check('the exit rule is gone from the module surface entirely', () => {
+  // Not cosmetic: as long as a sellCheck/SELL_* export exists, something can
+  // start calling it again and quietly reintroduce an exit.
+  assert.strictEqual(t.sellCheck, undefined);
+  assert.strictEqual(t.CONFIG.SELL_TRIGGER_PTS, undefined);
+  assert.strictEqual(t.CONFIG.SELL_TIGHT_PTS, undefined);
 });
 
 // ── P&L ────────────────────────────────────────────────────────────────────
@@ -171,8 +168,6 @@ check('an empty session matches nothing', () => {
 check('defaults match the owner spec, and the probe root is SPXW', () => {
   assert.strictEqual(t.CONFIG.BUY_MIN, 1.0);
   assert.strictEqual(t.CONFIG.STRIKE_STEP, 5);
-  assert.strictEqual(t.CONFIG.SELL_TRIGGER_PTS, 10);
-  assert.strictEqual(t.CONFIG.SELL_TIGHT_PTS, 5);
   assert.strictEqual(t.CONFIG.PROBE_TICKER, 'SPXW');
   assert.strictEqual(t.CONFIG.MULTIPLIER, 100);
 });
@@ -369,28 +364,36 @@ function stubCtx(handler) {
 
   // ── Rollups ──────────────────────────────────────────────────────────────
   const rows = [
-    // 9:45 — bought at 0.55, sold on the signal at 3.40
-    { checkpoint: '0945', status: 'closed', exit_reason: 'sell-signal', pnl: 2.85, pnl_usd: 285 },
-    // 9:45 another session — bought, never triggered, marked out at the bell
-    { checkpoint: '0945', status: 'closed', exit_reason: 'eod', pnl: -0.5, pnl_usd: -50 },
-    // 9:45 a third — priced over the cap, no trade
-    { checkpoint: '0945', status: 'skipped', skip_reason: 'mark $1.35 over the $1.00 cap', pnl: null },
-    // 10:30 — still live
-    { checkpoint: '1030', status: 'open', pnl: null },
+    // 9:45 — entered 1.10, ran to 4.20 during the day, closed at the bell at 3.90
+    { checkpoint: '0945', status: 'closed', exit_reason: 'eod', entry_price: 1.10, best_price: 4.20, pnl: 2.80, pnl_usd: 280 },
+    // 9:45 another session — never traded above what was paid
+    { checkpoint: '0945', status: 'closed', exit_reason: 'eod', entry_price: 1.05, best_price: 1.05, pnl: -0.5, pnl_usd: -50 },
+    // 9:45 a third — nothing on the chain cleared the floor, no position
+    { checkpoint: '0945', status: 'skipped', skip_reason: 'none priced over $1.00', pnl: null },
+    // 10:30 — still held
+    { checkpoint: '1030', status: 'open', entry_price: 1.2, best_price: 1.9, pnl: null },
   ];
   check('summarize separates probes from trades and scores only closed P&L', () => {
     const byKey = Object.fromEntries(t.summarize(rows).map((s) => [s.key, s]));
     assert.strictEqual(byKey['0945'].probes, 3);
     assert.strictEqual(byKey['0945'].trades, 2);        // the skipped row is not a trade
-    assert.strictEqual(byKey['0945'].sellHits, 1);
     assert.strictEqual(byKey['0945'].wins, 1);
     assert.strictEqual(byKey['0945'].winRate, 0.5);
-    assert.strictEqual(byKey['0945'].avgPnl, 1.18);      // (2.85 - 0.50) / 2
-    assert.strictEqual(byKey['0945'].totalPnl, 2.35);
-    assert.strictEqual(byKey['0945'].totalPnlUsd, 235);
+    assert.strictEqual(byKey['0945'].avgPnl, 1.15);      // (2.80 - 0.50) / 2
+    assert.strictEqual(byKey['0945'].totalPnl, 2.3);
+    assert.strictEqual(byKey['0945'].totalPnlUsd, 230);
     assert.strictEqual(byKey['1030'].openNow, 1);
     assert.strictEqual(byKey['1030'].winRate, null);     // nothing closed yet
     assert.strictEqual(byKey['1200'].probes, 0);
+  });
+  check('"traded up" counts contracts that ever printed above entry', () => {
+    const byKey = Object.fromEntries(t.summarize(rows).map((s) => [s.key, s]));
+    // One of the two 9:45 positions ran above what was paid; the other never did.
+    // This is the honest stand-in for the old sell-hit count: the move was there,
+    // without pretending a rule captured it.
+    assert.strictEqual(byKey['0945'].peakedUp, 1);
+    assert.strictEqual(byKey['0945'].avgPeakGain, 1.55);   // ((4.20-1.10) + 0) / 2
+    assert.strictEqual(byKey['1030'].peakedUp, 1);
   });
   check('take rate reports how often a checkpoint actually qualified', () => {
     const byKey = Object.fromEntries(t.summarize(rows).map((s) => [s.key, s]));
