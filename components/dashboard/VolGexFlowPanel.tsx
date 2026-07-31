@@ -283,7 +283,7 @@ export default function VolGexFlowPanel() {
   }, [stats]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, gap: 10, padding: 14 }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, gap: 8, padding: 14, overflow: "auto" }}>
       {/* Header — the expiry chooser's menu portals out, but the row still needs
           to sit above the chart canvas while it's open. */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0, flexWrap: "wrap", position: "relative", zIndex: menuOpen ? 30 : 1 }}>
@@ -346,26 +346,30 @@ export default function VolGexFlowPanel() {
         </div>
       </div>
 
-      {/* Cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(138px, 1fr))", gap: 6, flexShrink: 0 }}>
+      {/* Cards — pinned to a 3×2 grid. auto-fit used to reflow from one row to
+          two to three as the window narrowed, and every row it added came
+          straight out of the chart's height. A fixed column count keeps this
+          block the same height at every width, so the chart never moves. */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 5, flexShrink: 0 }}>
         {(cards.length ? cards : Array.from({ length: 6 }, () => null)).map((c, i) => (
           <div
             key={c?.label ?? i}
-            style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, background: "rgba(13,17,25,0.35)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", minWidth: 0 }}
+            style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0, background: "rgba(13,17,25,0.35)", border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 8px", minWidth: 0 }}
           >
-            <span style={{ fontSize: 11.5, color: C.text, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, whiteSpace: "nowrap" }}>
+            <span style={{ fontSize: 9.5, color: C.text, textTransform: "uppercase", letterSpacing: "0.07em", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>
               {c?.label ?? "—"}
             </span>
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: 21, fontWeight: 800, color: c?.color ?? C.text, whiteSpace: "nowrap" }}>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 16, lineHeight: 1.25, fontWeight: 800, color: c?.color ?? C.text, whiteSpace: "nowrap" }}>
               {c?.value ?? "—"}
             </span>
-            <span style={{ fontSize: 11, color: C.text, whiteSpace: "nowrap" }}>{c?.sub ?? ""}</span>
+            <span style={{ fontSize: 9, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>{c?.sub ?? ""}</span>
           </div>
         ))}
       </div>
 
-      {/* Chart */}
-      <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+      {/* Chart — minHeight floors the canvas so a short window scrolls the panel
+          rather than squeezing the chart down to a sliver. */}
+      <div style={{ flex: 1, minHeight: 200, position: "relative" }}>
         <div ref={boxRef} style={{ position: "absolute", inset: 0 }} />
 
         {(loading || err || (!points.length && !loading)) && (

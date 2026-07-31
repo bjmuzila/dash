@@ -6,7 +6,7 @@ import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import FlowNetPremPanel from "@/components/dashboard/FlowNetPremPanel";
 import WhaleOrdersPanel from "@/components/dashboard/WhaleOrdersPanel";
 import GreeksHomePanel from "@/components/dashboard/GreeksHomePanel";
-import ScannerHomePanel from "@/components/dashboard/ScannerHomePanel";
+import GexPulsePanel from "@/components/dashboard/GexPulsePanel";
 import VolGexFlowPanel from "@/components/dashboard/VolGexFlowPanel";
 import IbStatsTab from "@/components/scanner/IbStatsTab";
 // The GEX card's "ES Candles" view reuses the exact standalone /es-candles page
@@ -460,9 +460,11 @@ const GreeksIcon = () => (
     <path d="M4 19h16" /><path d="M6 15c2-6 4-10 6-10s2 6 4 10" />
   </svg>
 );
-const ScannerIcon = () => (
+// Signed needle on a scale — the GEX Pulse tab is a −100…+100 verdict, so the
+// icon reads as "score with a direction" rather than a chart.
+const PulseIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+    <path d="M3 16a9 9 0 0 1 18 0" /><line x1="12" y1="16" x2="16.5" y2="10.5" /><circle cx="12" cy="16" r="1.4" fill="currentColor" stroke="none" />
   </svg>
 );
 const IbIcon = () => (
@@ -536,7 +538,7 @@ export function HomeClient({
   const lastFlowAppliedRef = useRef(0);
 
   // "escandles" left the strip — it now lives on the GEX panel's view switcher.
-  const [activeTab, setActiveTab] = useState<"calendar" | "signals" | "volgex" | "flow" | "whale" | "greeks" | "scanner" | "ib">("calendar");
+  const [activeTab, setActiveTab] = useState<"calendar" | "signals" | "volgex" | "flow" | "whale" | "greeks" | "pulse" | "ib">("calendar");
   // Left-column econ/tabs section height: "min" = tab bar only, "half" = shares
   // the column with the GEX chart above it, "full" = fills the whole left column
   // (chart hidden). Replaces the old econCollapsed boolean.
@@ -1168,6 +1170,14 @@ export function HomeClient({
     );
     return total / 1e9;
   }, [chartRows, chartSpot]);
+  // Net DEX ($B), OI+Vol basis — the same composite the heatmap's DEX column
+  // uses (see toHeatmapRows), summed across the in-scope chain. Feeds the GEX
+  // Pulse tab's dealer-delta row.
+  const netDex = useMemo(
+    () => chartRows.reduce((sum, r) => sum + ((r.netDEX ?? 0) + (r.volNetDEX ?? 0)), 0) / 1e9,
+    [chartRows],
+  );
+
   // Throttle the displayed value so the header doesn't jitter on every WS tick.
   const [netGex, setNetGexDisplay] = useState(0);
   const netGexLiveRef = useRef(0);
@@ -1179,6 +1189,27 @@ export function HomeClient({
     }, 1000);
     return () => clearInterval(id);
   }, []);
+
+  // Rolling net-GEX samples for the GEX Pulse tab's 15-minute delta. A small
+  // ring of {t, v} in a ref (sampled every 30s, so 15m ≈ 30 entries); the
+  // baseline is the oldest sample that is at least 15 minutes old. Stays null
+  // until the window fills, which the panel renders as "warming up".
+  const gexSamplesRef = useRef<{ t: number; v: number }[]>([]);
+  const [netGexPrev15m, setNetGexPrev15m] = useState<number | null>(null);
+  useEffect(() => {
+    const WINDOW = 15 * 60_000;
+    const id = setInterval(() => {
+      const now = Date.now();
+      const arr = gexSamplesRef.current;
+      arr.push({ t: now, v: netGexLiveRef.current });
+      // Drop samples only while the one behind them is still old enough to
+      // serve as the baseline, so the window never under-fills.
+      while (arr.length > 1 && now - arr[1].t >= WINDOW) arr.shift();
+      setNetGexPrev15m(now - arr[0].t >= WINDOW ? arr[0].v : null);
+    }, 30_000);
+    return () => clearInterval(id);
+  }, []);
+
   // Point-in-time net GEX baselines (open / 5 / 15 / 30 min) for the popup's
   // rolling-difference boxes — and, while Δ stamps are on, for the heatmap's
   // NET GEX column. Polls when a strike is selected OR the mode is active.
@@ -1582,7 +1613,7 @@ export function HomeClient({
                   { id: "flow", label: "Flow", icon: <FlowIcon /> },
                   { id: "whale", label: "Whale", icon: <WhaleIcon /> },
                   { id: "greeks", label: "Greeks", icon: <GreeksIcon /> },
-                  { id: "scanner", label: "Scanner", icon: <ScannerIcon /> },
+                  { id: "pulse", label: "GEX Pulse", icon: <PulseIcon /> },
                 ] as const).map((tab) => (
                   <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap", flexShrink: 0, background: "none", border: "none", cursor: "pointer", color: activeTab === tab.id ? C.cyan : "#fff", borderBottom: activeTab === tab.id ? `2px solid ${C.cyan}` : "2px solid transparent", marginBottom: -1 }}>
                     {tab.icon}{tab.label}
@@ -1646,9 +1677,19 @@ export function HomeClient({
                     <GreeksHomePanel />
                   </div>
                 )}
-                {activeTab === "scanner" && (
-                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
-                    <ScannerHomePanel />
+                {activeTab === "pulse" && (
+                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)", overflow: "auto" }}>
+                    <GexPulsePanel
+                      spot={chartSpot}
+                      cb={mvcStrike}
+                      callWall={callWallOiVol ?? callWall}
+                      putWall={putWallOiVol ?? putWall}
+                      flip={flipPoint}
+                      netGex={netGex}
+                      netDex={netDex}
+                      gexPct={posGexPct}
+                      netGexPrev15m={netGexPrev15m}
+                    />
                   </div>
                 )}
                 {activeTab === "ib" && (

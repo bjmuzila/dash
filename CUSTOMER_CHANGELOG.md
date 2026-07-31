@@ -2,6 +2,19 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Friday 7/31/2026
+
+* The ES Candles page now loads noticeably faster — it was opening three separate live-data connections at once and downloading several times more data than it actually used. The home dashboard got the same treatment.
+* Fixed the historical GEX bubbles and heatmap not showing at all. The chart was only ever drawing the live minute going forward; everything earlier in the session was silently failing to load.
+* Redesigned the Overlays menu — the toggles now sit in two columns instead of one long list, the sliders line up properly, and every slider has up/down arrows so you can nudge a value by exactly one step instead of fighting the handle.
+* The CB line moved into the Bubbles controls and can now be switched off. It was always on before, with no way to hide it — and the top bubble already marks the same strike.
+* Removed the VSA candle coloring.
+* Switching between ES, SPY and QQQ now re-centers the chart on the new symbol's price. Before, jumping from ES to SPY left the price axis stuck up at ES levels with the candles off-screen.
+* The current-price line is now a neutral gray instead of flipping green and red with each bar, so it stays readable against the Call Wall / Put Wall levels.
+* Added the weekly estimated-move bands to the PDH/ON overlay button, now labelled PDH/ON+EM.
+* The Overlays menu no longer runs off the edge of the screen on smaller laptop displays, and it scrolls instead of overflowing when the window is short.
+* Fixed the missing site icon in the browser tab.
+
 ## Thursday 7/30/2026
 
 * Hovering any of the four Strike History charts now shows the reading right on the chart — the value in a tag beside your cursor and the time on the bottom axis — instead of only in the summary line above. Spot reads to the cent while you hover.
