@@ -215,7 +215,12 @@ export const homeToolbarAccentBar: CSSProperties = {
 // Refresh button — themed style keyed on state. Replaces the inline style that
 // hardcoded old-cyan (#00e5ff). Uses HOME_THEME.cyan + green/red roles.
 export type RefreshState = "idle" | "refreshing" | "success" | "error";
-const REFRESH_GREEN = "#1FD98A";
+/**
+ * The "up / success" green. Exported because it is a role color, not a
+ * refresh-button detail — BzilaAlerts and GexPulsePanel both need the same
+ * value, and re-declaring it locally is how palettes drift.
+ */
+export const REFRESH_GREEN = "#1FD98A";
 export function homeRefreshButtonStyle(state: RefreshState): CSSProperties {
   return {
     fontSize: 10,

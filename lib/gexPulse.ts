@@ -172,7 +172,9 @@ export function computeGexPulse(i: GexPulseInput): GexPulse {
     const g = i.netGex, prev = i.netGexPrev15m;
     const d = g != null && prev != null ? g - prev : null;
     const p = d == null ? 0 : Math.round(clamp(d / 0.5, -1, 1) * 14);
-    const note = d == null ? "warming up · needs 15m"
+    // null means the server returned no 15-minute baseline for enough of the
+    // chain — a data gap, not a timer that hasn't elapsed. Say so plainly.
+    const note = d == null ? "no 15m baseline"
       : d > 0.25 ? `${arrow(1)} building fast`
       : d > 0 ? `${arrow(1)} building`
       : d < -0.25 ? `${arrow(-1)} draining fast`

@@ -149,13 +149,23 @@ export function useEsCandles(
   const loadFromDb = useCallback(async () => {
     const seq = ++loadSeqRef.current;
     const want = intervalMinutes;
-    const [today, hist] = await Promise.all([
+    // allSettled, NOT all. These are two independent reads and a rejection in
+    // either one used to take BOTH down: `Promise.all` rejects on the first
+    // failure, `loadFromDb` throws, and every caller wraps it in
+    // `.catch(() => {})` — so a hiccup on the today request silently left
+    // `historical` empty, which is the single input the ES/SPX basis anchor is
+    // built from. That failure mode is invisible except as levels drifting ~50pt.
+    const [todayRes, histRes] = await Promise.allSettled([
       queryEsCandlesToday(intervalMinutes),
       // 1m history is deliberately short: dxFeed only serves ~7 days of it, and
       // this array feeds buildSlotAverages — a 20-day request at 1m would be 5x
       // the rows for baselines that mostly don't exist.
       queryEsCandlesHistorical(intervalMinutes === 1 ? 2 : historyDays, intervalMinutes),
     ]);
+    if (todayRes.status === "rejected") console.warn("[es-candles] today load failed:", todayRes.reason);
+    if (histRes.status === "rejected") console.warn("[es-candles] history load failed:", histRes.reason);
+    const today = todayRes.status === "fulfilled" ? todayRes.value : [];
+    const hist = histRes.status === "fulfilled" ? histRes.value : [];
     if (unmountedRef.current) return;
     // Superseded by a newer load, or the interval moved under us → drop it.
     // Checked against the ref (not the closure) so an in-flight load can't

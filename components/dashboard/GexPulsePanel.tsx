@@ -9,11 +9,11 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE, REFRESH_GREEN } from "@/components/shared/homeTheme";
 import { computeGexPulse, type GexPulseInput, type PulseRow } from "@/lib/gexPulse";
 
-/** Direction roles — same green BzilaAlerts uses, HOME_THEME red/orange. */
-const UP = "#1FD98A";
+/** Direction roles — all three sourced from homeTheme, never re-declared. */
+const UP = REFRESH_GREEN;
 const DN = HOME_THEME.red;
 const NEU = HOME_THEME.orange;
 const toneColor = { up: UP, dn: DN, neu: NEU } as const;
@@ -25,7 +25,14 @@ const LABEL: React.CSSProperties = {
   textTransform: "uppercase",
   color: HOME_THEME.text,
 };
-const MONO = "var(--font-mono), 'JetBrains Mono', monospace";
+/**
+ * Typography comes from globals.css, not from this file. The app ships NO web
+ * fonts — the Inter download was removed and `--font-inter` is now an alias to
+ * `--font-sans` (the native system stack). Never hardcode a family here or the
+ * card drifts from every other panel.
+ */
+const SANS = "var(--font-sans)";
+const MONO = "var(--font-mono)";
 
 export interface GexPulsePanelProps extends Omit<GexPulseInput, "prevScore"> {
   /** Header stamp, e.g. "14:45 ET · Fri Jul 31". Defaults to live clock. */
@@ -123,7 +130,15 @@ export default function GexPulsePanel(props: GexPulsePanelProps) {
     v == null ? "—" : v.toLocaleString("en-US", { maximumFractionDigits: 0 });
 
   return (
-    <div style={{ height: "100%", overflow: "auto", color: HOME_THEME.text, padding: "4px 0 20px" }}>
+    <div
+      style={{
+        height: "100%",
+        overflow: "auto",
+        color: HOME_THEME.text,
+        fontFamily: SANS,
+        padding: "4px 0 20px",
+      }}
+    >
       {/* header */}
       <div style={{ display: "flex", alignItems: "center", padding: "20px 24px 16px" }}>
         <div>

@@ -74,6 +74,15 @@ catch (e) { console.warn('[api-router] _lib-ibdaily.cjs not loaded:', e.message)
 let libConfRoute = null;
 try { libConfRoute = require('./_lib-confidence-route.cjs'); }
 catch (e) { console.warn('[api-router] _lib-confidence-route.cjs not loaded:', e.message); }
+// CB contract trade tracker — probes the CB-strike 0DTE contract on TastyTrade
+// at 9:45/10:30/12:00, walks toward the money to the first strike over $1.00,
+// then auto-sells inside the 5-10 pt band of the CB. Plain server-v2 module
+// (no esbuild step); it owns its own tables via libDb.getPool(). Loaded
+// defensively: without it the /api/cb-trades route below is simply never
+// registered and nothing else in this file changes behaviour.
+let cbTrack = null;
+try { cbTrack = require('./cb-contract-track'); }
+catch (e) { console.warn('[api-router] cb-contract-track not loaded — contract tracking off:', e.message); }
 // Pure broker-CSV parser/matcher (lib/journal/csv.ts — zero imports):
 //   esbuild lib/journal/csv.ts --bundle --platform=node --format=cjs --outfile=server-v2/_lib-journal-csv.cjs
 let libJournalCsv = null;
@@ -6285,6 +6294,73 @@ if (libDb) {
           const data = await computeCheckpointData(dates);
           send(res, 200, data);
         } catch (e) { send(res, 500, { error: String(e) }); }
+      },
+    });
+  }
+
+  // /api/cb-trades — the CB contract trade log behind the owner Results →
+  // Confidence → Trades tab. Every row is one checkpoint of one session: the
+  // probed CB-strike 0DTE contract, whether the <= $1.00 rule bought it, and if
+  // so what the 5-10 pt auto-sell did with it.
+  //
+  // GET   ?since=20 | ?all=1 | ?date=YYYY-MM-DD   → { trades, summary, config }
+  //       ?ticks=<tradeId>                        → { ticks } (the poll curve)
+  // POST  { action: 'tick' | 'checkpoint' | 'poll' | 'settle' }
+  //       'tick' is what server-v2/cb-trade-recorder.js calls once a minute and
+  //       does the whole job; the other three exist so a session can be repaired
+  //       or replayed by hand without waiting on the clock.
+  //
+  // Owner-gated, with the standard x-internal-token bypass (enforceAuth) so the
+  // in-process recorder can post without a session. Writes are the ONLY way rows
+  // appear — TastyTrade has no per-contract history, so nothing here can be
+  // backfilled after the fact.
+  if (cbTrack) {
+    register('/api/cb-trades', {
+      auth: 'owner', methods: ['GET', 'POST'],
+      async handler(req, res, ctx) {
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        if (req.method === 'GET') {
+          try {
+            const ticksFor = sp.get('ticks');
+            if (ticksFor) { send(res, 200, { ticks: await cbTrack.listTicks(ticksFor) }, { 'Cache-Control': NO_STORE }); return; }
+            // ?diag=1 mirrors POST {action:'diagnose'} so it can be opened
+            // straight from the browser address bar while signed in as owner.
+            if (sp.get('diag') === '1') {
+              send(res, 200, await cbTrack.diagnose(ctx, { date: sp.get('date') || undefined }), { 'Cache-Control': NO_STORE });
+              return;
+            }
+            const date = sp.get('date') || undefined;
+            const all = sp.get('all') === '1';
+            const since = Number(sp.get('since')) || 20;
+            const trades = await cbTrack.listTrades({ date, all, since });
+            send(res, 200, {
+              trades,
+              summary: cbTrack.summarize(trades),
+              config: cbTrack.CONFIG,
+              checkpoints: cbTrack.CHECKPOINTS,
+            }, { 'Cache-Control': NO_STORE });
+          } catch (err) { send(res, 500, { error: String(err) }); }
+          return;
+        }
+        try {
+          const body = await readJson(req).catch(() => ({}));
+          const action = String(body.action || 'tick');
+          const date = body.date ? String(body.date) : undefined;
+          if (action === 'tick') { send(res, 200, await cbTrack.tick(ctx)); return; }
+          if (action === 'poll') { send(res, 200, await cbTrack.pollOpen(ctx, { date })); return; }
+          if (action === 'settle') { send(res, 200, await cbTrack.settle(ctx, { date })); return; }
+          // Read-only "why is nothing updating?" — recorder liveness, the CB each
+          // checkpoint resolves to, a LIVE probe of the current one with its raw
+          // status, and per-row tick counts. Records nothing.
+          if (action === 'diagnose') { send(res, 200, await cbTrack.diagnose(ctx, { date })); return; }
+          if (action === 'checkpoint') {
+            const checkpoint = String(body.checkpoint || '');
+            const d = date || cbTrack.etParts().date;
+            send(res, 200, await cbTrack.runCheckpoint(ctx, { date: d, checkpoint }));
+            return;
+          }
+          send(res, 400, { error: 'unknown action' });
+        } catch (err) { send(res, 500, { error: String(err) }); }
       },
     });
   }

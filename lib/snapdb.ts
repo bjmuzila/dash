@@ -412,8 +412,22 @@ function _dedupeCandles(url: string): Promise<EsCandleRecord[]> {
   const hit = _candleCache.get(url);
   if (hit && Date.now() - hit.at < _CANDLE_TTL) return hit.p;
   const p = fetch(url)
-    .then((res) => res.json())
-    .then(_expandCandles)
+    .then((res) => {
+      if (!res.ok) throw new Error(`candles HTTP ${res.status} for ${url}`);
+      return res.json();
+    })
+    .then((json) => {
+      const out = _expandCandles(json);
+      // A non-empty body that decodes to nothing means the payload shape and the
+      // decoder disagree — silent zero rows here is what starves the ES/SPX basis
+      // anchor, so make the mismatch say so instead of looking like "no data yet".
+      if (!out.length && Array.isArray(json?.rows) && json.rows.length) {
+        console.warn("[candles] decoded 0 rows from a non-empty response", {
+          url, lite: json?.lite, cols: json?.cols, sample: json.rows[0],
+        });
+      }
+      return out;
+    })
     .catch((e) => { _candleCache.delete(url); throw e; });
   _candleCache.set(url, { at: Date.now(), p });
   return p;

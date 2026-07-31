@@ -1,16 +1,28 @@
 "use client";
 
-import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-// Calendar is the DEFAULT tab, so it stays static — lazying it would only add a
-// chunk round trip to the one panel that is always on screen.
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
+import FlowNetPremPanel from "@/components/dashboard/FlowNetPremPanel";
+import WhaleOrdersPanel from "@/components/dashboard/WhaleOrdersPanel";
+import GreeksHomePanel from "@/components/dashboard/GreeksHomePanel";
+import GexPulsePanel from "@/components/dashboard/GexPulsePanel";
+import VolGexFlowPanel from "@/components/dashboard/VolGexFlowPanel";
+import IbStatsTab from "@/components/scanner/IbStatsTab";
+// The GEX card's "ES Candles" view reuses the exact standalone /es-candles page
+// (same pattern as the Chain tab reusing /options-chain below) rather than the
+// trimmed EsCandlesFullPanel embed — that panel has no dock, and no bubbles /
+// TPO / profile / VSA, which is precisely what the toolbar is for.
+import EsCandlesPage from "@/app/es-candles/page";
 import HomeGaugeRail from "@/components/dashboard/HomeGaugeRail";
 import { useIbDirection } from "@/hooks/useIbDirection";
-import { subscribeGex, sendGex } from "@/lib/gexSocket";
 import EconCalendarDiscordBtn, { EconCalendarTemplateCopyBtn } from "@/components/shared/EconCalendarDiscordBtn";
 import GexChart from "@/components/dashboard/GexChart";
 import GexToolbar from "@/components/dashboard/GexToolbar";
+// Reuse the exact standalone /options-chain component for the heatmap panel's
+// "Chain" tab. expirySelection="key" = compact 0DTE/1DTE/weekly/monthly columns
+// (same embed the /new-home page uses); ticker hides its own ticker input.
+import OptionsChainPage from "@/app/options-chain/page";
 import FitScale from "@/components/shared/FitScale";
 import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
 import StrikeHoverCard from "@/components/dashboard/StrikeHoverCard";
@@ -21,48 +33,6 @@ import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { type ChainRow, type CalcMode, computeGEXProfile, findGEXFlip, netGEXOf } from "@/lib/calculations/calculations";
-
-// ── Code-split: every tab except the default one ─────────────────────────────
-// These were all STATIC imports, so the home entry chunk carried the ES-candles
-// page, the full options chain, the IB stats tab and all six panels — plus their
-// transitive deps (lightweight-charts alone is ~60KB over the wire) — even
-// though exactly one tab is ever on screen. Rollup now emits a chunk per panel
-// and the browser fetches it the first time you click that tab.
-//
-// NOTE: React.lazy, not next/dynamic — this component is compiled by BOTH the
-// Next app and app-vite (which only shims next/dynamic), and lazy() behaves
-// identically in both.
-const FlowNetPremPanel = lazy(() => import("@/components/dashboard/FlowNetPremPanel"));
-const WhaleOrdersPanel = lazy(() => import("@/components/dashboard/WhaleOrdersPanel"));
-const GreeksHomePanel  = lazy(() => import("@/components/dashboard/GreeksHomePanel"));
-const GexPulsePanel    = lazy(() => import("@/components/dashboard/GexPulsePanel"));
-const VolGexFlowPanel  = lazy(() => import("@/components/dashboard/VolGexFlowPanel"));
-const IbStatsTab       = lazy(() => import("@/components/scanner/IbStatsTab"));
-// The GEX card's "ES Candles" view reuses the exact standalone /es-candles page
-// (same pattern as the Chain tab reusing /options-chain below) rather than the
-// trimmed EsCandlesFullPanel embed — that panel has no dock, and no bubbles /
-// TPO / profile / VSA, which is precisely what the toolbar is for.
-const EsCandlesPage    = lazy(() => import("@/app/es-candles/page"));
-// Reuse the exact standalone /options-chain component for the heatmap panel's
-// "Chain" tab. expirySelection="key" = compact 0DTE/1DTE/weekly/monthly columns
-// (same embed the /new-home page uses); ticker hides its own ticker input.
-// Currently unreachable (the panel is heatmap-only), so this keeps a whole page
-// component out of the bundle for a branch nobody can hit today.
-const OptionsChainPage = lazy(() => import("@/app/options-chain/page"));
-
-/** Neutral placeholder while a tab's chunk downloads — matches the panel bg. */
-function PanelFallback() {
-  return (
-    <div style={{
-      width: "100%", height: "100%", display: "flex",
-      alignItems: "center", justifyContent: "center",
-      color: "rgba(255,255,255,0.35)", fontSize: 11, letterSpacing: "0.08em",
-      textTransform: "uppercase", fontWeight: 700,
-    }}>
-      Loading…
-    </div>
-  );
-}
 
 /**
  * Initial GEX snapshot read on the server from the hot feed and passed in as a
@@ -540,14 +510,12 @@ export function HomeClient({
   // is active (15-min idle timeout; owner exempt). Drives connect/disconnect.
   // Static (unpaid/delayed) viewers never connect at all — isStatic hard-gates it.
   const shouldConnect = useWsLifecycle() && !isStatic;
-  // (shouldConnectRef is gone: the old hand-rolled reconnect timer read the gate
-  // from a ref because it fired outside React's render cycle. lib/gexSocket owns
-  // reconnect now, and the subscribe effect reads `shouldConnect` directly.)
+  const shouldConnectRef = useRef(shouldConnect);
+  shouldConnectRef.current = shouldConnect;
 
   const wsRef = useRef<WebSocket | null>(null);
-  // No private /ws/gex socket any more — this page subscribes to the shared,
-  // refcounted connection in lib/gexSocket (see the WS effect below).
-  const everConnectedRef = useRef(false);
+  const gexWsRef = useRef<WebSocket | null>(null);
+  const gexWsReconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const liveDataRef = useRef<Record<string, LiveEntry>>({});
   const subscribedSymbolsRef = useRef<string[]>([]);
   const lastSpotRef = useRef(0);
@@ -702,21 +670,12 @@ export function HomeClient({
     setSelectedExpiry(expiry);
     // New expiry re-gates on the server; show the loader until it warms again.
     setChartReady(false);
-    // Queues if the shared socket isn't OPEN yet and flushes on connect, so we
-    // no longer need a socket ref here just to talk back to the server.
-    sendGex({ type: 'SET_EXPIRY', expiry });
+    if (gexWsRef.current?.readyState === WebSocket.OPEN) {
+      gexWsRef.current.send(JSON.stringify({ type: 'SET_EXPIRY', expiry }));
+    }
   }, []);
 
-  // Consume server-computed GEX state from the SHARED /ws/gex socket.
-  //
-  // This page used to hand-roll `new WebSocket('/ws/gex')` with its own reconnect
-  // loop, which meant /app/home held TWO connections to the same broadcast — one
-  // here and one opened by ToolbarTicker through lib/gexSocket — doubling the
-  // server fan-out, the bytes, and the JSON.parse work per frame. lib/gexSocket
-  // exists precisely to prevent that ("ONE socket, refcounted"); this consumer
-  // had drifted off it. Frames now arrive pre-parsed, and late mounts get the
-  // last state frame replayed, so the seed-on-connect behaviour is preserved.
-  //
+  // Connect to /ws/gex and consume server-computed GEX state.
   // Tolerates both the server-v2 envelope ({ type, data }) and the legacy
   // flat broadcaster format ({ type:'GEX_UPDATE', gexRows, ... }) so the same
   // consumer works against either stack during migration.
@@ -816,9 +775,9 @@ export function HomeClient({
       }
     };
 
-    // Pre-parsed by lib/gexSocket — one JSON.parse per frame for the whole app
-    // instead of one per consumer.
-    const handleMessage = (msg: Record<string, unknown>) => {
+    const handleMessage = (raw: string) => {
+      let msg: Record<string, unknown>;
+      try { msg = JSON.parse(raw); } catch { return; }
       const type = String(msg.type ?? "");
       // server-v2 nests under `data`; legacy puts fields on the message itself.
       const data = (msg.data && typeof msg.data === "object"
@@ -871,39 +830,61 @@ export function HomeClient({
       }
     };
 
-    const handleStatus = (connected: boolean) => {
+    const connect = () => {
       if (unmountedRef.current) return;
-      if (connected) {
-        everConnectedRef.current = true;
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const url = `${proto}//${window.location.host}/ws/gex`;
+      let ws: WebSocket;
+      try { ws = new WebSocket(url); } catch { scheduleReconnect(); return; }
+      gexWsRef.current = ws;
+
+      ws.onopen = () => {
         setStatus("LIVE");
         // Re-assert the chosen expiry on (re)connect so the server matches the UI.
         const exp = selectedExpiryRef.current;
-        if (exp) sendGex({ type: "SET_EXPIRY", expiry: exp });
-        return;
-      }
-      // subscribeGex reports current state synchronously on subscribe. Before the
-      // first successful open that's `false`, which is "still connecting", not a
-      // dropped connection — don't flash RECONNECTING on a cold load.
-      if (everConnectedRef.current) setStatus("RECONNECTING");
+        if (exp) {
+          try { ws.send(JSON.stringify({ type: "SET_EXPIRY", expiry: exp })); } catch {}
+        }
+      };
+      ws.onmessage = (evt) => handleMessage(String(evt.data));
+      ws.onerror = () => { try { ws.close(); } catch {} };
+      ws.onclose = () => {
+        setStatus("RECONNECTING");
+        scheduleReconnect();
+      };
+    };
+
+    const scheduleReconnect = () => {
+      if (unmountedRef.current) return;
+      // Don't reconnect while the lifecycle gate says we shouldn't be live
+      // (backgrounded tab, or 15-min user inactivity). The gate flip re-opens us.
+      if (!shouldConnectRef.current) return;
+      if (gexWsReconnectRef.current) clearTimeout(gexWsReconnectRef.current);
+      gexWsReconnectRef.current = setTimeout(connect, 2000);
     };
 
     // Value-driven gate: this effect re-runs whenever `shouldConnect` flips
-    // (tab background/foreground, idle timeout). When allowed, subscribe; when
-    // not, the cleanup below releases our refcount and the shared socket closes
-    // once nobody else wants it. Reconnect/backoff is owned by lib/gexSocket.
-    const release = shouldConnect
-      ? subscribeGex({
-          onMessage: (m) => handleMessage(m as Record<string, unknown>),
-          onStatus: handleStatus,
-        })
-      : null;
+    // (tab background/foreground, idle timeout). When allowed, connect; when not,
+    // the cleanup below tears the socket down. No polling, no churn.
+    if (shouldConnect) connect();
 
     return () => {
       unmountedRef.current = true;
+      if (gexWsReconnectRef.current) clearTimeout(gexWsReconnectRef.current);
       if (gexFlushTimerRef.current) { clearTimeout(gexFlushTimerRef.current); gexFlushTimerRef.current = null; }
       if (flowFlushTimerRef.current) { clearTimeout(flowFlushTimerRef.current); flowFlushTimerRef.current = null; }
       pendingGexRef.current = null;
-      release?.();
+      const ws = gexWsRef.current;
+      gexWsRef.current = null;
+      if (ws) {
+        ws.onmessage = ws.onerror = ws.onclose = null;
+        if (ws.readyState === WebSocket.CONNECTING) {
+          ws.onopen = () => { try { ws.close(); } catch {} };
+        } else {
+          ws.onopen = null;
+          try { ws.close(); } catch {}
+        }
+      }
     };
     // Re-runs only when the bandwidth gate flips. The current expiry is read from
     // selectedExpiryRef on each (re)connect, so expiry changes don't churn this.
@@ -1209,25 +1190,34 @@ export function HomeClient({
     return () => clearInterval(id);
   }, []);
 
-  // Rolling net-GEX samples for the GEX Pulse tab's 15-minute delta. A small
-  // ring of {t, v} in a ref (sampled every 30s, so 15m ≈ 30 entries); the
-  // baseline is the oldest sample that is at least 15 minutes old. Stays null
-  // until the window fills, which the panel renders as "warming up".
-  const gexSamplesRef = useRef<{ t: number; v: number }[]>([]);
-  const [netGexPrev15m, setNetGexPrev15m] = useState<number | null>(null);
-  useEffect(() => {
-    const WINDOW = 15 * 60_000;
-    const id = setInterval(() => {
-      const now = Date.now();
-      const arr = gexSamplesRef.current;
-      arr.push({ t: now, v: netGexLiveRef.current });
-      // Drop samples only while the one behind them is still old enough to
-      // serve as the baseline, so the window never under-fills.
-      while (arr.length > 1 && now - arr[1].t >= WINDOW) arr.shift();
-      setNetGexPrev15m(now - arr[0].t >= WINDOW ? arr[0].v : null);
-    }, 30_000);
-    return () => clearInterval(id);
-  }, []);
+  // Net GEX as of 15 minutes ago, for the GEX Pulse tab's Δ row.
+  //
+  // Reads the SERVER's point-in-time history — the same source the ghost bars
+  // and the heatmap Δ stamps use — rather than sampling into an in-memory ring.
+  // A ring buffer restarts empty on every page load (and on every Fast Refresh
+  // in dev), so it never fills and the row is stuck on "warming up" forever.
+  // This is correct the moment the tab opens.
+  //
+  // basis "oivol" is required: the live total is the OI+Vol composite, so a
+  // plain net_gex baseline would difference (OI+Vol) − (OI only) and report the
+  // volume component as if it were a change over time.
+  const pulseBaselines = useStrikeGexHistory(selectedExpiry, [15], 60_000, true, "oivol");
+  const netGexPrev15m = useMemo(() => {
+    if (!(chartSpot > 0) || chartRows.length === 0) return null;
+    // Sum over the SAME strikes as the live total, so scope can't skew the Δ.
+    let total = 0;
+    let hits = 0;
+    for (const r of chartRows) {
+      const past = Number(pulseBaselines?.[r.strike]?.["15"] ?? NaN);
+      if (!Number.isFinite(past)) continue;
+      total += past * 0.01 * 100;   // → $ per 1% move, matching netGexLive
+      hits++;
+    }
+    // A partial sum reads as an enormous fake move, so require most of the
+    // in-scope chain to have a baseline before trusting the total.
+    if (hits < Math.max(5, Math.floor(chartRows.length * 0.6))) return null;
+    return total / 1e9;
+  }, [pulseBaselines, chartRows, chartSpot]);
 
   // Point-in-time net GEX baselines (open / 5 / 15 / 30 min) for the popup's
   // rolling-difference boxes — and, while Δ stamps are on, for the heatmap's
@@ -1590,9 +1580,7 @@ export function HomeClient({
                   / inflated frame never renders. */}
               <div ref={gexChartRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
                 {gexView === "escandles" ? (
-                  <Suspense fallback={<PanelFallback />}>
-                    <EsCandlesPage embedded leading={gexViewSwitch} />
-                  </Suspense>
+                  <EsCandlesPage embedded leading={gexViewSwitch} />
                 ) : chartReady && chartRows.length > 0 ? (
                   <GexChart
                     chain={chartRows}
@@ -1680,54 +1668,42 @@ export function HomeClient({
                 )}
                 {activeTab === "volgex" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
-                    <Suspense fallback={<PanelFallback />}>
-                      <VolGexFlowPanel />
-                    </Suspense>
+                    <VolGexFlowPanel />
                   </div>
                 )}
                 {activeTab === "flow" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
-                    <Suspense fallback={<PanelFallback />}>
-                      <FlowNetPremPanel />
-                    </Suspense>
+                    <FlowNetPremPanel />
                   </div>
                 )}
                 {activeTab === "whale" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
-                    <Suspense fallback={<PanelFallback />}>
-                      <WhaleOrdersPanel />
-                    </Suspense>
+                    <WhaleOrdersPanel />
                   </div>
                 )}
                 {activeTab === "greeks" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
-                    <Suspense fallback={<PanelFallback />}>
-                      <GreeksHomePanel />
-                    </Suspense>
+                    <GreeksHomePanel />
                   </div>
                 )}
                 {activeTab === "pulse" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)", overflow: "auto" }}>
-                    <Suspense fallback={<PanelFallback />}>
-                      <GexPulsePanel
-                        spot={chartSpot}
-                        cb={mvcStrike}
-                        callWall={callWallOiVol ?? callWall}
-                        putWall={putWallOiVol ?? putWall}
-                        flip={flipPoint}
-                        netGex={netGex}
-                        netDex={netDex}
-                        gexPct={posGexPct}
-                        netGexPrev15m={netGexPrev15m}
-                      />
-                    </Suspense>
+                    <GexPulsePanel
+                      spot={chartSpot}
+                      cb={mvcStrike}
+                      callWall={callWallOiVol ?? callWall}
+                      putWall={putWallOiVol ?? putWall}
+                      flip={flipPoint}
+                      netGex={netGex}
+                      netDex={netDex}
+                      gexPct={posGexPct}
+                      netGexPrev15m={netGexPrev15m}
+                    />
                   </div>
                 )}
                 {activeTab === "ib" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)", overflow: "auto" }}>
-                    <Suspense fallback={<PanelFallback />}>
-                      <IbStatsTab />
-                    </Suspense>
+                    <IbStatsTab />
                   </div>
                 )}
               </div>
@@ -1864,9 +1840,7 @@ export function HomeClient({
 
               <div ref={heatmapBodyRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative", background: "#05080d" }}>
                 {heatmapView === "chain" ? (
-                  <Suspense fallback={<PanelFallback />}>
-                    <OptionsChainPage expirySelection="sequential" expiryCount={5} ticker={chainTicker} showGrandTotal={false} />
-                  </Suspense>
+                  <OptionsChainPage expirySelection="sequential" expiryCount={5} ticker={chainTicker} showGrandTotal={false} />
                 ) : (
                 <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
                 <table style={{ flex: 1, minWidth: 0, height: "100%", textAlign: "right", fontSize: 10, fontFamily: "var(--font-mono)", whiteSpace: "nowrap", borderCollapse: "collapse", tableLayout: "fixed" }}>
