@@ -5,7 +5,6 @@ import { HOME_THEME } from "../lib/theme";
 import { ThemedSelect } from "../components/ThemedSelect";
 import { ThemedMonthPicker } from "../components/ThemedMonthPicker";
 
-
 type Bank = "coastal" | "truist" | "secu";
 type BudgetProfile = { id: number; name: string; currency: string };
 type RegisterRow = {
@@ -172,10 +171,10 @@ export default function Budget() {
   const [yearLoading, setYearLoading] = useState(false);
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const [rightTab, setRightTab] = useState<"calendar" | "projection">("calendar");
   // The overview reads as a single month.
   const range: RangeMode = "monthly";
-  const cfMode = range;
+  // Cash Flow is always day-by-day across the month in the picker.
+  const cfMode: RangeMode = "daily";
   const paceRange = range;
 
   // Add-row composer
@@ -1024,13 +1023,13 @@ export default function Budget() {
           <BalanceCheckCard data={reconcile} currency={currency} />
         </div>
 
-        {/* Cash flow + calendar / projection */}
+        {/* Cash flow (daily) + cashflow calendar */}
         <div style={{ display: "grid", gridTemplateColumns: "1.55fr 1fr", gap: 12, alignItems: "stretch" }}>
           <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 14 }}>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>Cash Flow</div>
-                <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: 2 }}>{cfMode === "monthly" || cfMode === "yearly" ? String(year) : monthLabel}</div>
+                <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: 2 }}>{monthLabel}</div>
               </div>
               <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: HOME_THEME.muted, opacity: 0.75 }}>
                 <span style={{ width: 8, height: 8, borderRadius: 2, background: HOME_THEME.green }} /> In
@@ -1043,19 +1042,10 @@ export default function Budget() {
           <div style={{ ...card(), padding: 16 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 14 }}>
               <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>
-                {rightTab === "calendar" ? (range === "weekly" ? "This Week" : range === "yearly" ? `${year} Calendar` : "Cashflow Calendar") : "Balance Projection"}
+                Cashflow Calendar
               </div>
-              <Segmented
-                value={rightTab}
-                onChange={(v) => setRightTab(v as "calendar" | "projection")}
-                options={[{ value: "calendar", label: "Calendar" }, { value: "projection", label: "Projection" }]}
-              />
             </div>
-            {rightTab === "calendar" ? (
-              <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} mode={range} yearNet={yearNet} year={year} />
-            ) : (
-              <ProjectionChart series={computed.series} currency={currency} />
-            )}
+            <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} mode={range} yearNet={yearNet} year={year} />
           </div>
         </div>
 
@@ -1274,62 +1264,6 @@ function smoothPath(pts: [number, number][], t = 0.2): string {
     d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
   }
   return d;
-}
-
-// SVG line chart of the running combined balance across the month, with a
-// hover guide + tooltip showing the exact date and balance under the cursor.
-function ProjectionChart({ series, currency }: { series: { date: string; balance: number }[]; currency: string }) {
-  const [hover, setHover] = useState<number | null>(null);
-  if (series.length < 2) {
-    return <div style={{ height: 240, display: "grid", placeItems: "center", color: HOME_THEME.muted, fontSize: 14 }}>Add entries to see the projection.</div>;
-  }
-  const W = 560, H = 240, padL = 4, padR = 4, padT = 8, padB = 18;
-  const ys = series.map((p) => p.balance);
-  const maxY = Math.max(...ys, 0);
-  const minY = Math.min(...ys, 0);
-  const span = Math.max(maxY - minY, 1);
-  const x = (i: number) => padL + (i / (series.length - 1)) * (W - padL - padR);
-  const y = (v: number) => padT + (1 - (v - minY) / span) * (H - padT - padB);
-  const zeroY = y(0);
-  const path = smoothPath(series.map((p, i) => [x(i), y(p.balance)] as [number, number]), 0.22);
-  const ticks = series.filter((_, i) => i % Math.ceil(series.length / 8) === 0);
-
-  const onMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    setHover(Math.round(ratio * (series.length - 1)));
-  };
-  const hp = hover !== null ? series[hover] : null;
-  const hx = hover !== null ? (hover / (series.length - 1)) * 100 : 0;
-
-  return (
-    <div style={{ position: "relative" }} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none">
-        <defs>
-          <linearGradient id="projAreaFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={LIGHT_BLUE} stopOpacity={0.32} />
-            <stop offset="100%" stopColor={LIGHT_BLUE} stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <line x1={padL} x2={W - padR} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.18)" strokeDasharray="3 5" />
-        <path d={`${path} L ${x(series.length - 1).toFixed(1)} ${H - padB} L ${x(0).toFixed(1)} ${H - padB} Z`} fill="url(#projAreaFill)" stroke="none" />
-        {/* soft under-stroke = neon glow without an SVG filter */}
-        <path d={path} fill="none" stroke={bRgba(LIGHT_BLUE, 0.45)} strokeWidth={9} strokeLinejoin="round" strokeLinecap="round" />
-        <path d={path} fill="none" stroke={LIGHT_BLUE} strokeWidth={3} strokeLinejoin="round" strokeLinecap="round" />
-        {hp && <line x1={x(hover!)} x2={x(hover!)} y1={padT} y2={H - padB} stroke="rgba(255,255,255,0.28)" strokeWidth={1} />}
-        {hp && <circle cx={x(hover!)} cy={y(hp.balance)} r={3.5} fill={LIGHT_BLUE} stroke={INK} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
-        {ticks.map((p, i) => (
-          <text key={i} x={x(series.indexOf(p))} y={H - 4} fill={HOME_THEME.muted} fontSize={11} textAnchor="middle">{shortDate(p.date)}</text>
-        ))}
-      </svg>
-      {hp && (
-        <div style={{ position: "absolute", top: 0, left: `${hx}%`, transform: `translateX(${hx > 60 ? "-108%" : "8px"})`, pointerEvents: "none", background: "rgba(5,8,14,0.88)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: `1px solid ${bRgba(LIGHT_BLUE, 0.22)}`, borderRadius: 8, padding: "6px 10px", whiteSpace: "nowrap", boxShadow: "0 8px 20px rgba(0,0,0,0.5)" }}>
-          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.muted }}>{shortDate(hp.date)}</div>
-          <div style={{ fontSize: 17, fontWeight: 900, color: hp.balance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(hp.balance, currency)}</div>
-        </div>
-      )}
-    </div>
-  );
 }
 
 // Cashflow calendar. Three shapes behind one control:
@@ -1703,36 +1637,6 @@ function EditableDate({ value, onCommit }: { value: string; onCommit: (v: string
 }
 
 // ── Overview building blocks ─────────────────────────────────────────────────
-
-function Segmented({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
-  return (
-    <div style={{ display: "inline-flex", padding: 3, borderRadius: 10, background: "rgba(0,0,0,0.35)", border: `1px solid ${HOME_THEME.border}` }}>
-      {options.map((o) => {
-        const on = o.value === value;
-        return (
-          <button
-            key={o.value}
-            onClick={() => onChange(o.value)}
-            style={{
-              padding: "5px 12px",
-              borderRadius: 7,
-              border: "none",
-              cursor: "pointer",
-              fontSize: 12,
-              fontWeight: 800,
-              letterSpacing: "0.06em",
-              background: on ? bRgba(HOME_THEME.cyan, 0.18) : "transparent",
-              color: on ? HOME_THEME.cyan : HOME_THEME.muted,
-              opacity: on ? 1 : 0.6,
-            }}
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 /** Top-row metric tile. `hero` inverts it (the All Banks card). */
 function StatTile({ label, value, sub, valueColor, hero, delta, currency }: { label: string; value: string; sub?: string; valueColor?: string; hero?: boolean; delta?: number | null; currency?: string }) {

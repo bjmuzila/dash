@@ -112,6 +112,13 @@ export default function ContractDrawer({ order, ticker, stat, liveSpot, onClose 
       type: order.type,
       start: fillDate,
       end: tf === "today" ? fillDate : todayEt,
+      // The row's own dxFeed streamer symbol (".SPXW260731P6300"). The route
+      // serves contract history off dxLink candles now, and this is the exact
+      // string the feed published for this contract — server-side
+      // reconstruction from ticker/expiry/strike can only guess at the root
+      // (SPX monthlies stream under "SPX", weeklies under "SPXW"), so hand it
+      // the real one.
+      symbol: order.symbol ?? "",
     });
     fetch(`/proxy/option-history?${params}`)
       // The route puts the upstream Theta message in `error` on a 502 — surface

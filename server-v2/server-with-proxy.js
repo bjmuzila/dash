@@ -38,6 +38,8 @@ const { startTickerWallRecorder, getWallHistory: getTickerWallHistory } = requir
 const { buildSnapshot, createGexWsServer, getWsBandwidth } = require('./websocket-server');
 const { TastytradeProxy, probeRest, contractStats, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchUnderlyingDayOhlc, fetchDailyHistory } = require('./proxy-tastytrade');
 const { fetchOptionDailyHistoryTheta, fetchOptionIntradayTheta } = require('./proxy-thetadata');
+const { useTheta } = require('./config/data-source');
+const { etEpochMs } = require('./computation/utils');
 // Optional feature modules — loaded defensively so a missing or broken file can
 // NEVER take down the whole origin on boot. A hard `require` that throws here
 // crash-loops the container → Cloudflare 502 for the entire site. (This bit us
@@ -97,6 +99,47 @@ const DEV = process.env.NODE_ENV !== 'production';
 // non-owner request. Toggled at runtime from the owner dashboard; defaults from
 // MAINTENANCE_MODE env at boot (resets to that default on restart/redeploy).
 let maintenanceMode = process.env.MAINTENANCE_MODE === '1' || process.env.MAINTENANCE_MODE === 'true';
+
+// ---------------------------------------------------------------------------
+// Contract history helpers (/proxy/option-history)
+// ---------------------------------------------------------------------------
+//
+// The /flow tape's contract drawer used to read ONLY from ThetaData, which broke
+// the moment the box moved to DATA_SOURCE=tt: the Terminal is a sibling
+// container, THETA_BASE_URL still said 127.0.0.1, and every drawer open came
+// back a bad gateway. dxLink already streams Candle events for option symbols
+// (verified: ".SPXW260731P6300{=5m}" replays real OHLC), and the tape's rows
+// already carry the exact streamer symbol — so the drawer can be served from the
+// same feed the rest of the page runs on, with no Terminal in the path.
+
+// Display ticker -> option STREAMER root. Inverse of flow-processor's
+// ROOT_TO_TICKER: index weeklies stream under a different root than the chip
+// label (SPX -> SPXW). Equities pass through unchanged.
+const TICKER_TO_STREAMER_ROOT = { SPX: 'SPXW', NDX: 'NDXP', RUT: 'RUTW', XSP: 'XSPW' };
+
+/**
+ * Build a dxFeed option streamer symbol: ".SPXW260731P6300".
+ *
+ * Only a FALLBACK — callers that came from the tape should pass the row's own
+ * `symbol`, which is the exact string the feed published. This reconstruction
+ * can't know that e.g. SPX monthly AM-settled contracts stream under root "SPX"
+ * rather than "SPXW", so a hand-built symbol is a best guess, not gospel.
+ */
+function buildStreamerSymbol(ticker, expiry, strike, type) {
+  const root = TICKER_TO_STREAMER_ROOT[ticker] || ticker;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(expiry || ''));
+  if (!root || !m) return '';
+  const yymmdd = `${m[1].slice(2)}${m[2]}${m[3]}`;
+  // dxFeed writes the strike with no trailing zeros: 6300, 745.5 — not 6300.00.
+  const k = Number(strike);
+  if (!(k > 0)) return '';
+  const strikeStr = Number.isInteger(k) ? String(k) : String(k).replace(/0+$/, '').replace(/\.$/, '');
+  return `.${root}${yymmdd}${type === 'P' ? 'P' : 'C'}${strikeStr}`;
+}
+
+/** RTH bounds (09:30 / 16:00 ET) for a YYYY-MM-DD, as epoch ms. */
+function etSessionOpenMs(ymd) { return etEpochMs(ymd, 9, 30); }
+function etSessionCloseMs(ymd) { return etEpochMs(ymd, 16, 0); }
 
 // ---------------------------------------------------------------------------
 // REST snapshot router (/proxy/*)
@@ -2978,6 +3021,9 @@ async function main() {
         const expiry = url.searchParams.get('expiry') || '';
         const type = (url.searchParams.get('type') || 'C').toUpperCase() === 'P' ? 'P' : 'C';
         const strike = Number(url.searchParams.get('strike'));
+        // The tape row's OWN streamer symbol, when the caller has it. Preferred
+        // over reconstruction — see buildStreamerSymbol.
+        const symbolParam = (url.searchParams.get('symbol') || '').trim().toUpperCase();
         const todayEt = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
         const start = url.searchParams.get('start') || todayEt;
         const end = url.searchParams.get('end') || start;
@@ -2987,21 +3033,50 @@ async function main() {
           return;
         }
         try {
-          // Strikes are selected by `strike_range` (dollars around that day's
-          // spot), so a far-OTM strike needs a cushion wide enough to stay inside
-          // the window — a default range would simply not return the contract.
           const spot = await fetchUnderlyingQuotes([ticker])
             .then((m) => Number(m.get(ticker)?.last || m.get(ticker)?.mark) || 0)
             .catch(() => 0);
-          const cushion = spot > 0 ? Math.abs(strike - spot) + spot * 0.15 : strike * 0.25;
 
           const spanDays = Math.max(0, Math.round((Date.parse(end) - Date.parse(start)) / 86_400_000));
           const interval = spanDays <= 3 ? '5m' : spanDays <= 10 ? '15m' : spanDays <= 30 ? '1h' : '4h';
 
-          const bars = await fetchOptionIntradayTheta(
-            ticker, expiry, strike, type, start, interval, cushion, end,
-          );
-          sendJson(res, 200, { bars, start, end, interval, spot, elapsedMs: Date.now() - t0 });
+          let bars = [];
+          let source = 'dxlink';
+
+          // ── Primary: dxLink candles, the same feed the tape itself rides on.
+          const streamer = symbolParam || buildStreamerSymbol(ticker, expiry, strike, type);
+          if (streamer) {
+            const fromMs = etSessionOpenMs(start);
+            const toMs = Math.min(etSessionCloseMs(end), Date.now());
+            // cache:false is REQUIRED here: candle-history keys its cache on
+            // `symbol|interval` with no window in the key, so a cached one-session
+            // pull would be handed straight back to an "All" request spanning
+            // days (and vice versa). hardMs is raised over the default because a
+            // thin far-OTM contract dribbles its snapshot out slowly.
+            const rows = await fetchIntradayCandles(streamer, interval, fromMs, {
+              cache: false, quietMs: 900, hardMs: 9000,
+            }).catch((e) => {
+              console.warn('[OPTION-HISTORY] dxlink', streamer, '->', String(e?.message || e).slice(0, 200));
+              return [];
+            });
+            bars = (Array.isArray(rows) ? rows : []).filter((b) => b.time >= fromMs && b.time <= toMs);
+          }
+
+          // ── Fallback: ThetaData, but only when it's actually the configured
+          // provider. Calling it under DATA_SOURCE=tt is what produced the old
+          // bad-gateway drawer — the Terminal isn't necessarily even running.
+          if (!bars.length && useTheta()) {
+            // Strikes are selected by `strike_range` (dollars around that day's
+            // spot), so a far-OTM strike needs a cushion wide enough to stay
+            // inside the window — a default range would not return the contract.
+            const cushion = spot > 0 ? Math.abs(strike - spot) + spot * 0.15 : strike * 0.25;
+            bars = await fetchOptionIntradayTheta(
+              ticker, expiry, strike, type, start, interval, cushion, end,
+            );
+            source = 'theta';
+          }
+
+          sendJson(res, 200, { bars, start, end, interval, spot, source, symbol: streamer, elapsedMs: Date.now() - t0 });
         } catch (e) {
           // Log the upstream Theta message server-side — the browser only sees
           // the status, and "502" alone tells you nothing about which param the
