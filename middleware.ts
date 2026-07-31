@@ -212,10 +212,28 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // bfcache hardening: authed pages must not be restored from the browser
+  // bfcache hardening: authed PAGES must not be restored from the browser
   // back/forward cache without re-running these gates. Forces a fresh request
   // (and thus this middleware) on Back after checkout/sign-out.
-  res.headers.set("Cache-Control", "no-store, must-revalidate");
+  //
+  // Scoped to documents. This used to be unconditional, which meant every
+  // /api/* response got `no-store` stamped over whatever Cache-Control the route
+  // had computed — so lib/cacheHeaders.ts, the CACHE_30 presets and the
+  // `s-maxage=1800` on the slow-moving endpoints were all dead code behind the
+  // paywall, and the browser re-fetched /api/calendar, /api/expirations,
+  // /api/levels & co. from scratch on every single navigation. A data response
+  // was never in the bfcache to begin with; only the document is.
+  //
+  // sec-fetch-dest is sent by every browser that implements bfcache, so the
+  // fallback below only catches non-browser clients — where the header's absence
+  // plus a non-/api path still means "treat it as a document".
+  const dest = req.headers.get("sec-fetch-dest");
+  const isDocument = dest
+    ? dest === "document" || dest === "iframe" || dest === "frame"
+    : !path.startsWith("/api/");
+  if (isDocument) {
+    res.headers.set("Cache-Control", "no-store, must-revalidate");
+  }
   return res;
 }
 

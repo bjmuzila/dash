@@ -14,6 +14,8 @@
 // required props; fills its container.
 
 import { useEffect, useRef, useState } from "react";
+import { subscribeGex } from "@/lib/gexSocket";
+import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { queryGreeksToday } from "@/lib/snapdb";
 import { BehaviorDemo } from "@/components/greeks/RegimeMatrix";
 import LiveSkewBand from "@/components/greeks/LiveSkewBand";
@@ -82,11 +84,16 @@ export default function GreeksHomePanel() {
     }).catch(() => {});
   }, []);
 
-  // Live greeks over the shared /ws/gex WebSocket (same feed used across the app).
+  // Live greeks over the shared /ws/gex socket.
+  //
+  // Previously this opened its OWN WebSocket, and — unlike every other consumer
+  // — did so unconditionally, with no useWsLifecycle() gate. So a backgrounded
+  // or idle tab kept a third connection to the broadcast alive purely for a card
+  // nobody was looking at. Now it subscribes to lib/gexSocket behind the same
+  // bandwidth gate as everyone else; the shared socket's replay hands us the
+  // last snapshot immediately, so the card still fills on mount.
+  const shouldConnect = useWsLifecycle();
   useEffect(() => {
-    let unmounted = false;
-    let ws: WebSocket | null = null;
-    let reconnect: ReturnType<typeof setTimeout> | null = null;
     const state: { totals: Record<string, number> | null; spot: number | null; updatedAt: number } =
       { totals: null, spot: null, updatedAt: 0 };
 
@@ -96,9 +103,7 @@ export default function GreeksHomePanel() {
       if (snap) setLatest(snap);
     };
 
-    const handle = (raw: string) => {
-      let m: Record<string, unknown>;
-      try { m = JSON.parse(raw); } catch { return; }
+    const handle = (m: Record<string, unknown>) => {
       const type = String(m.type ?? "");
       const d = (m.data && typeof m.data === "object" ? m.data : m) as Record<string, unknown>;
       if (type === "snapshot" || type === "gex") {
@@ -114,29 +119,9 @@ export default function GreeksHomePanel() {
       }
     };
 
-    const scheduleReconnect = () => {
-      if (unmounted) return;
-      if (reconnect) clearTimeout(reconnect);
-      reconnect = setTimeout(connect, 2000);
-    };
-
-    function connect() {
-      if (unmounted) return;
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      try { ws = new WebSocket(`${proto}//${window.location.host}/ws/gex`); }
-      catch { scheduleReconnect(); return; }
-      ws.onmessage = (evt) => handle(String(evt.data));
-      ws.onerror = () => { try { ws?.close(); } catch {} };
-      ws.onclose = () => { if (!unmounted) scheduleReconnect(); };
-    }
-
-    connect();
-    return () => {
-      unmounted = true;
-      if (reconnect) clearTimeout(reconnect);
-      if (ws) { ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null; try { ws.close(); } catch {} }
-    };
-  }, []);
+    if (!shouldConnect) return;
+    return subscribeGex({ onMessage: (m) => handle(m as Record<string, unknown>) });
+  }, [shouldConnect]);
 
   // ── Behavior card is sampled every 30s (not on every WS tick) so the regime
   // label stays stable. Snapshot the live reading on the interval, plus once as

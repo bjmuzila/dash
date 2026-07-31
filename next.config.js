@@ -48,15 +48,33 @@ const nextConfig = {
     return config;
   },
   async headers() {
-    return [{
-      source: '/:path*',
-      headers: [
-        { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
-        { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), interest-cohort=()' },
-        { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
-        { key: 'Cross-Origin-Resource-Policy', value: 'same-origin' },
-      ],
-    }];
+    // Vite emits content-hashed filenames (index-DnQkMCAx.js), so the bytes at a
+    // given URL can never change — but Next serves everything under public/ with
+    // its default `public, max-age=0`, so the browser revalidated all ~12 chunks
+    // on every single load (~700ms of the /app/home waterfall). A new build
+    // writes new hashes, so `immutable` can never serve a stale bundle.
+    const IMMUTABLE = [
+      { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
+    ];
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+          { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), interest-cohort=()' },
+          { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
+          { key: 'Cross-Origin-Resource-Policy', value: 'same-origin' },
+        ],
+      },
+      // Built SPA bundles (public/app, public/home3 — see lib/serveSpaShell.ts).
+      // The index.html shells stay no-store; only /assets/* is hashed.
+      { source: '/app/assets/:path*', headers: IMMUTABLE },
+      { source: '/home3/assets/:path*', headers: IMMUTABLE },
+      // Mirrored company logos (scripts/fetch-ticker-logos.mjs). Content keyed by
+      // ticker; a logo change is a redeploy, and the earnings chips fall back to
+      // /proxy/ticker-logo on 404 anyway.
+      { source: '/logos/:path*', headers: IMMUTABLE },
+    ];
   },
   async rewrites() {
     const internalProxyBase = process.env.PROXY_URL || `http://127.0.0.1:${process.env.PORT || '3002'}`;

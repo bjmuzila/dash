@@ -16,8 +16,9 @@ import NquQuotePill from "@/components/dashboard/NquQuotePill";
  * works on every route without reading the home page's local WS state.
  */
 
-const ES_FEED_SYMBOLS = ["/ESU26", "/ESU6"];
-const NQ_FEED_SYMBOLS = ["/NQU26", "/NQ:XCME"];
+// (ES/NQ contract symbols used to be listed here for the seed fetch. They're
+// gone because the seed deliberately ignores them — ES/NQ prices arrive on the
+// /ws/gex broker feed, and mixing in a second source flashed a wrong day-change.)
 
 const UP = "#1FD98A";
 const DOWN = "#EF4444";
@@ -154,7 +155,13 @@ export default function ToolbarTicker() {
     let cancelled = false;
     (async () => {
       try {
-        const symbols = ["SPX", "VIX", ...ES_FEED_SYMBOLS, ...NQ_FEED_SYMBOLS].join(",");
+        // SPX + VIX only. This used to also request ES_FEED_SYMBOLS and
+        // NQ_FEED_SYMBOLS, but the handler below deliberately ignores both (the
+        // ESU baseline is owned by the /ws/gex broker feed, and NQ belongs to
+        // NquQuotePill), so four of the six symbols were fanned out to the
+        // upstream quote provider and then thrown away — on a request that
+        // gates the toolbar's first paint.
+        const symbols = ["SPX", "VIX"].join(",");
         const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(symbols)}`);
         if (!r.ok || cancelled) return;
         const d = await r.json();

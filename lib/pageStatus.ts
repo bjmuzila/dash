@@ -81,12 +81,29 @@ export function usePageLoadStatus({ pageKey, pageLabel, path }: PageStatusOption
       query: entry.query,
     };
 
-    void fetch("/api/page-status", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      keepalive: true,
-    }).catch(() => {});
+    // Telemetry, so it must never compete with the page's own data for
+    // connections or main-thread time. Deferred to idle (with a timeout so a
+    // busy page still reports promptly) and sent via sendBeacon where available,
+    // which the browser queues at the lowest priority and survives navigation.
+    const report = () => {
+      const body = JSON.stringify(payload);
+      if (typeof navigator !== "undefined" && navigator.sendBeacon) {
+        try {
+          navigator.sendBeacon("/api/page-status", new Blob([body], { type: "application/json" }));
+          return;
+        } catch { /* fall through to fetch */ }
+      }
+      void fetch("/api/page-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        keepalive: true,
+      }).catch(() => {});
+    };
+    const reportHandle =
+      typeof window !== "undefined" && typeof window.requestIdleCallback === "function"
+        ? window.requestIdleCallback(report, { timeout: 3000 })
+        : (setTimeout(report, 0) as unknown as number);
 
     const unload = () => {
       const unloadedAt = new Date().toISOString();
@@ -117,6 +134,9 @@ export function usePageLoadStatus({ pageKey, pageLabel, path }: PageStatusOption
     window.addEventListener("beforeunload", unload);
     return () => {
       window.removeEventListener("beforeunload", unload);
+      // A page torn down before idle fired never loaded in any meaningful sense.
+      if (typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(reportHandle);
+      else clearTimeout(reportHandle as unknown as ReturnType<typeof setTimeout>);
       unload();
     };
   }, [pageKey, pageLabel, path]);

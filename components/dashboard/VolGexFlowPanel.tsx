@@ -38,7 +38,10 @@ const POS = C.green;
 const NEG = C.red;
 
 const POLL_MS = 30_000;
-const BIN_SEC = 300;
+// 60s is the floor the endpoint enforces, and it matches the recorder's ~1/min
+// write cadence — a 30s bucket cannot surface a reading that was never written,
+// it just alternates full and empty buckets and draws a staircase.
+const BIN_SEC = 60;
 
 // Sentinel picks. Real picks are ISO expiry strings, which can never collide
 // with these because neither parses as a date.

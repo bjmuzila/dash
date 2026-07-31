@@ -1255,6 +1255,9 @@ const VOLFLOW_TTL_MS = 20_000;   // recorder writes ~1/min; 20s keeps polls chea
 async function handleGexVolFlow(req, res) {
   const { searchParams } = new URL(req.url || '/', 'http://localhost');
 
+  // Floor is 60s because the recorder writes ~1/min — a smaller bucket cannot
+  // surface a reading that does not exist, it just splits the same rows across
+  // empty buckets and draws a staircase.
   let binSec = Number(searchParams.get('bin') || 300);
   if (!Number.isFinite(binSec) || binSec <= 0) binSec = 300;
   binSec = Math.max(60, Math.min(3600, Math.round(binSec)));
@@ -1262,8 +1265,12 @@ async function handleGexVolFlow(req, res) {
 
   const scope = searchParams.get('scope') === 'all' ? 'all' : 'front';
   const expiryParam = (searchParams.get('expiry') || '').trim();
+  // session=rth (default) → 09:30–16:00 ET only. The overnight tail carries no
+  // new prints: values just persist until the chain resets, which reads on the
+  // chart as a long flat line and a phantom step. eth = the whole ET day.
+  const session = searchParams.get('session') === 'eth' ? 'eth' : 'rth';
 
-  const key = `${binMs}|${scope}|${expiryParam}`;
+  const key = `${binMs}|${scope}|${expiryParam}|${session}`;
   const hit = _volFlowCache.get(key);
   if (hit && Date.now() - hit.at < VOLFLOW_TTL_MS) return sendJson(res, 200, hit.payload, req);
 
@@ -1275,14 +1282,27 @@ async function handleGexVolFlow(req, res) {
   const DAY_START = `(extract(epoch from date_trunc('day', now() AT TIME ZONE 'America/New_York')
                       AT TIME ZONE 'America/New_York') * 1000)::bigint`;
 
-  // Every expiry with rows in today's window, for the panel's expiry chooser.
-  // Sent on every response so the picker's options can't drift from what is
-  // actually plottable — an expiry that would render an empty chart never
-  // appears in the list.
+  // RTH clamp on the ET wall clock. Half-days are not special-cased: an early
+  // close just means the 13:00–16:00 stretch has no rows, which plots as a
+  // shorter session rather than a wrong one.
+  const RTH_ONLY = session === 'rth'
+    ? `AND (to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York')::time
+             >= TIME '09:30'
+       AND (to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York')::time
+             <  TIME '16:00'`
+    : '';
+
+  // Every expiry with rows in the selected window, for the panel's expiry
+  // chooser. Sent on every response so the picker's options can't drift from
+  // what is actually plottable — an expiry that would render an empty chart
+  // never appears in the list. Session-filtered, so the row counts shown in the
+  // picker match the chart, and so the front derivation below counts only the
+  // rows the user is actually looking at.
   const { rows: expRows } = await pool.query(
     `SELECT expiry, COUNT(*)::int AS row_count, MAX(timestamp) AS last_ts
        FROM option_strike_gex_history
       WHERE timestamp >= ${DAY_START}
+        ${RTH_ONLY}
       GROUP BY expiry
       ORDER BY expiry ASC`
   );
@@ -1324,6 +1344,7 @@ async function handleGexVolFlow(req, res) {
               timestamp, expiry, strike, spot, net_gex, net_vol_gex
          FROM option_strike_gex_history
         WHERE timestamp >= ${DAY_START}
+          ${RTH_ONLY}
           AND ($2 = '' OR expiry = $2)
      ),
      latest AS (
@@ -1361,7 +1382,7 @@ async function handleGexVolFlow(req, res) {
     return p;
   });
 
-  const payload = { ok: true, scope, expiry: expiry || null, binSec, expiries, points };
+  const payload = { ok: true, scope, session, expiry: expiry || null, binSec, expiries, points };
   _volFlowCache.set(key, { at: Date.now(), payload });
   if (_volFlowCache.size > 32) {
     const cutoff = Date.now() - 10 * 60 * 1000;

@@ -1236,8 +1236,11 @@ const ChainMatrix = memo(function ChainMatrix({
             <div ref={isATM ? atmRowRef : undefined} title={emTip || undefined} style={{
               position: "sticky", left: 0, zIndex: 2,
               padding: "2px 5px", fontSize: 10, fontWeight: 400, fontFamily: "var(--font-mono)", textAlign: "right",
-              color: isATM ? "#0a0e14" : "#e4e4e7",
-              background: isATM ? "#ffb300" : HDR_BG,
+              // ATM reads like the /home GEX heatmap: no amber fill, blue strike
+              // text with a blue "ATM" tag beside it, inside the white rule.
+              color: isATM ? HT.cyan : "#e4e4e7",
+              fontWeight: isATM ? 700 : 400,
+              background: HDR_BG,
               borderRight: `1px solid ${HT.border}`,
               borderTop: isATM ? "2px solid #ffffff" : rowEmBorder,
               borderBottom: isATM ? "2px solid #ffffff" : undefined,
@@ -1247,10 +1250,11 @@ const ChainMatrix = memo(function ChainMatrix({
             }}>
               {emTag && (
                 <span style={{
-                  fontSize: 8, fontWeight: 800, letterSpacing: "0.02em",
-                  padding: "1px 3px", borderRadius: 3, marginRight: "auto",
-                  background: isATM ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.12)",
-                  color: isATM ? "#0a0e14" : "#ffffff",
+                  fontSize: 8, fontWeight: isATM ? 900 : 800, letterSpacing: isATM ? "0.06em" : "0.02em",
+                  padding: isATM ? 0 : "1px 3px", borderRadius: 3, marginRight: "auto",
+                  fontFamily: isATM ? "sans-serif" : undefined,
+                  background: isATM ? "transparent" : "rgba(255,255,255,0.12)",
+                  color: isATM ? HT.cyan : "#ffffff",
                 }}>{emTag}</span>
               )}
               {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}

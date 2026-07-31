@@ -10,7 +10,24 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
+    <!-- Loaded non-blocking: as a plain stylesheet this third-party CSS sat on
+         the critical path and delayed first paint by a full round trip to
+         Google. media="print" makes the browser fetch it at low priority
+         without blocking render; onload promotes it once it lands. The
+         system-font stack in globals.css covers the swap window. -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap"
+      rel="stylesheet"
+      media="print"
+      onload="this.media='all';this.onload=null"
+    />
+    <noscript>
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
+    </noscript>
+    <!-- The earnings chips on /app/home fall back to /proxy/ticker-logo, which
+         302s to raw.githubusercontent.com. Warming DNS+TLS here saves ~300ms on
+         the first miss. Mirrored logos in /logos/*.png are same-origin. -->
+    <link rel="dns-prefetch" href="https://raw.githubusercontent.com" />
     <title>CB Edge — App</title>
   </head>
   <body>

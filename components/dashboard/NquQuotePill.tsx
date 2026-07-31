@@ -323,9 +323,24 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
         if (Object.keys(next).length) setRecs((prev) => ({ ...prev, ...next }));
       } catch { /* ignore */ }
     };
-    load();
+    // Deferred off the critical path. These two calls (quotes-batch?spark=1 and
+    // tt-quotes, ~16 symbols each) fired synchronously on mount and competed
+    // with the page's own data for connections and main-thread time — for a
+    // toolbar pill and a dropdown that starts closed. requestIdleCallback lets
+    // first paint happen first; the 2s timeout keeps it prompt on a busy page.
+    const idle: typeof window.requestIdleCallback | undefined =
+      typeof window !== "undefined" ? window.requestIdleCallback : undefined;
+    const handle = idle
+      ? idle(() => { if (!cancelled) load(); }, { timeout: 2000 })
+      : (setTimeout(() => { if (!cancelled) load(); }, 0) as unknown as number);
+
     const id = setInterval(load, 30_000);
-    return () => { cancelled = true; clearInterval(id); };
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      if (idle && typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(handle as number);
+      else clearTimeout(handle as unknown as ReturnType<typeof setTimeout>);
+    };
   }, [quoteList]);
 
   // Close on outside click.

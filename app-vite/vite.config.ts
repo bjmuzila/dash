@@ -51,6 +51,28 @@ export default defineConfig(({ mode }) => {
         { find: /^@\//, replacement: REPO_ROOT + '/' },
       ],
     },
+    build: {
+      // Without this every component edit rewrote the single entry chunk, so the
+      // React/router/chart vendor code re-downloaded on every deploy. Pinning the
+      // rarely-changing deps into their own hashed chunks means a normal UI change
+      // invalidates ~1 chunk instead of 341KB. Pairs with the `immutable`
+      // Cache-Control on /app/assets/* in next.config.js.
+      rollupOptions: {
+        output: {
+          manualChunks(id: string) {
+            if (!id.includes('node_modules')) return
+            if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return 'vendor-react'
+            if (/[\\/]node_modules[\\/](react-router|react-router-dom|@remix-run)[\\/]/.test(id)) return 'vendor-router'
+            if (/[\\/]node_modules[\\/](lightweight-charts|fancy-canvas)[\\/]/.test(id)) return 'vendor-charts'
+            if (/[\\/]node_modules[\\/](recharts|d3-|victory)/.test(id)) return 'vendor-viz'
+            return 'vendor'
+          },
+        },
+      },
+      // A few of the tab panels sit just over the default 500KB warning; the
+      // lazy() split in HomeClient is what actually keeps them off first paint.
+      chunkSizeWarningLimit: 900,
+    },
     // Tailwind runs via app-vite/postcss.config.cjs + tailwind.config.cjs (its
     // content globs point back at ../app + ../components). Vite auto-discovers
     // that config from this dir, so the customer pages' Tailwind utility classes

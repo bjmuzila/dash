@@ -55,11 +55,25 @@ const REPLAYABLE = new Set([
   "aux",
   "esCandles",
   "es1mCandles",
+  // Added when HomeClient moved onto this socket. With its own connection it
+  // received these on every (re)connect; sharing one socket means a late mount
+  // would otherwise sit with no expiry list and an empty flow tape until the
+  // server's next push. All three are whole-state frames, so replay is exact.
+  "status",
+  "EXPIRATIONS",
+  "flow",
 ]);
 
 const subscribers = new Set<GexSubscriber>();
 /** Last frame seen per replayable type, in arrival order. */
 const lastByType = new Map<string, GexMessage>();
+/**
+ * Frames a consumer asked to send before the socket was OPEN. Flushed on open.
+ * Bounded because a consumer that spams while offline must not grow unbounded;
+ * the only real user is SET_EXPIRY, where only the newest value matters.
+ */
+const pendingSends: string[] = [];
+const MAX_PENDING_SENDS = 8;
 
 let socket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -130,6 +144,12 @@ function openSocket() {
   sock.onopen = () => {
     if (socket !== sock) return;
     attempts = 0;
+    // Flush before emitStatus so a consumer re-asserting state in its onStatus
+    // handler lands AFTER anything queued while we were down (last write wins).
+    while (pendingSends.length) {
+      const frame = pendingSends.shift()!;
+      try { sock.send(frame); } catch { /* socket died mid-flush */ }
+    }
     emitStatus(true);
   };
 
@@ -192,6 +212,34 @@ function teardown() {
       /* ignore */
     }
   }
+}
+
+/**
+ * Send a control frame upstream (currently only { type: 'SET_EXPIRY', expiry }).
+ *
+ * Queues when the socket isn't OPEN yet and flushes on connect, so callers don't
+ * have to hold their own socket ref just to talk back — which is exactly why
+ * HomeClient used to keep a private connection. Returns true if it went out on
+ * the wire immediately.
+ */
+export function sendGex(payload: unknown): boolean {
+  let frame: string;
+  try {
+    frame = JSON.stringify(payload);
+  } catch {
+    return false;
+  }
+  if (isLive()) {
+    try {
+      socket!.send(frame);
+      return true;
+    } catch {
+      /* fall through to queue */
+    }
+  }
+  pendingSends.push(frame);
+  while (pendingSends.length > MAX_PENDING_SENDS) pendingSends.shift();
+  return false;
 }
 
 /**
