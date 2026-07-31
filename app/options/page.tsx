@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import SpxHeatmap from "@/components/spx/SpxHeatmap";
+import SectorSunburst from "@/components/dashboard/SectorSunburst";
 import { TickerProvider, useTicker } from "./tickerContext";
 import TickerSelect from "./TickerSelect";
 import OptionsPlaceholder from "./OptionsPlaceholder";
@@ -20,8 +21,9 @@ import OptionsPlaceholder from "./OptionsPlaceholder";
  *   └──────────────────────────┴───────────────────────────┘
  *
  * Every card reads the selected symbol from TickerProvider, so the dropdown
- * drives the whole page. All panel bodies except the heatmap are placeholders —
- * no fetches, sockets, or chart libs yet.
+ * drives the whole page. The heatmap and the sector wheel are live; the
+ * candlestick and the two orderflow panels are still placeholders — no
+ * fetches, sockets, or chart libs behind those yet.
  */
 
 const GRID_CSS = `
@@ -64,14 +66,18 @@ export default function OptionsPage() {
           </div>
 
           <div className="opt-right">
-            <TickerCard title="S&P 500 Sunburst" subtitle="sectors → industries → members">
-              <OptionsPlaceholder
-                label="sunburst"
-                shape="radial"
-                minHeight={300}
-                note="placeholder — highlights selected ticker when wired"
-              />
-            </TickerCard>
+            {/* Same wheel the Traders Dashboard runs — it brings its own header,
+                expand/full-screen and snapshot button, and self-fetches
+                /api/spx-sunburst, so it drops into a bare Card. It shows the
+                whole index rather than the selected symbol, hence no ticker in
+                the heading. */}
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}
+            >
+              <SectorSunburst />
+            </Card>
 
             <TickerCard title="Orderflow Graph" subtitle="cumulative delta">
               <OptionsPlaceholder label="orderflow" shape="bars" minHeight={200} />
@@ -109,7 +115,11 @@ function TickerCard({
   );
 }
 
-/** Heatmap stays live — SpxHeatmap is already wired (SPX only for now). */
+/**
+ * Heatmap stays live — SpxHeatmap pulls /api/spx-heatmap and rolls forward on
+ * its own each trading day (SPX only for now). Card carries no subtitle: the
+ * grid and its tooltips are the whole story here.
+ */
 function HeatmapCard() {
   const { ticker } = useTicker();
   const isSpx = ticker === "SPX";
@@ -118,7 +128,6 @@ function HeatmapCard() {
       variant="budget"
       accent={LIGHT_BLUE}
       title={`Heatmap · ${ticker}`}
-      subtitle={isSpx ? "daily / yearly · 2-year daily close · ^GSPC" : "daily / yearly"}
       style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}
     >
       {isSpx ? (

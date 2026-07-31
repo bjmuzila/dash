@@ -1072,6 +1072,88 @@ function NetGammaByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; 
   );
 }
 
+// Net gamma by strike as PER-STRIKE BARS (not the cumulative mountain).
+//
+// The 0DTE card above draws the cumulative curve, whose zero-crossing IS the
+// gamma flip. These bars answer the other question: how much gamma$ sits at each
+// individual strike, and on which side. Used by the two multi-expiry cards,
+// where "where is the gamma concentrated across the whole board" is the point
+// and the running total is less readable across ~1500 strikes.
+//
+// Same bar mechanics as NetDeltaByStrikeChart (pan/zoom/hover), but valued on
+// glOiVolNet (netGEX + netVolGEX — the OI+Vol basis) and coloured with the gamma
+// convention: green = positive gamma$, red = negative. The flip is drawn as a
+// dashed vertical line since bars can't show it the way the curve does.
+function NetGammaBarsByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; spot: number; neutral?: number | null }) {
+  const W = 720, H = 220, padL = 56, padR = 16, padB = 26, padT = 18;
+  const { containerRef, hover, show, hide } = useChartHover();
+  const pan = useChartPan(rows, spot);
+  if (!rows.length) return <GlEmpty note="no chain rows" />;
+  const sortedAll = rows.slice().sort((a, b) => a.strike - b.strike);
+  let shown = sortedAll.filter((r) => r.strike >= pan.center - pan.winHalf && r.strike <= pan.center + pan.winHalf);
+  if (shown.length <= 4) shown = sortedAll;
+  const xlo = shown[0].strike, xhi = shown[shown.length - 1].strike;
+  const x = (k: number) => padL + ((k - xlo) / (xhi - xlo || 1)) * (W - padL - padR);
+  const pxPerStrike = (W - padL - padR) / ((xhi - xlo) || 1);
+  const vals = shown.map((r) => glOiVolNet(r));
+  let minV = Math.min(0, ...vals), maxV = Math.max(0, ...vals);
+  if (minV === maxV) { minV -= 1; maxV += 1; }
+  const y = (v: number) => padT + (1 - (v - minV) / (maxV - minV)) * (H - padT - padB);
+  const y0 = y(0);
+  const barW = Math.max(2, ((W - padL - padR) / shown.length) * 0.62);
+  const flipInView = neutral != null && neutral >= xlo && neutral <= xhi;
+
+  return (
+    <div
+      ref={mergeRefs(containerRef, pan.wheelRef)}
+      style={{ position: "relative", cursor: pan.canPan ? (pan.isDragging ? "grabbing" : "grab") : "default", userSelect: pan.isDragging ? "none" : undefined }}
+      onMouseDown={(e) => { e.preventDefault(); pan.onDragStart(e.clientX, pxPerStrike); }}
+      onMouseMove={(e) => pan.onDragMove(e.clientX)}
+      onMouseUp={pan.onDragEnd}
+      onMouseLeave={() => { pan.onDragEnd(); hide(); }}
+      onDoubleClick={pan.resetPan}
+    >
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 240 }}>
+        <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
+        {shown.map((r, i) => {
+          const v = glOiVolNet(r);
+          const top = v >= 0 ? y(v) : y0;
+          const h = Math.max(1, Math.abs(y(v) - y0));
+          return (
+            <rect
+              key={r.strike}
+              x={x(r.strike) - barW / 2}
+              y={top}
+              width={barW}
+              height={h}
+              fill={v >= 0 ? GEX_POS_GREEN : HOME_THEME.red}
+              opacity={hover?.idx === i ? 1 : 0.85}
+              style={{ cursor: "inherit" }}
+              onMouseMove={(e) => { if (!pan.draggingRef.current) show(i, e); }}
+            />
+          );
+        })}
+        {flipInView && (
+          <line x1={x(neutral as number)} x2={x(neutral as number)} y1={padT} y2={H - padB} stroke={GEX_POS_GREEN} strokeWidth={1} strokeDasharray="4 3" opacity={0.55} />
+        )}
+        <line x1={x(spot)} x2={x(spot)} y1={padT} y2={H - padB} stroke={LIGHT_BLUE} strokeWidth={1} strokeDasharray="2 3" opacity={0.75} />
+        {[minV, 0, maxV].map((v, i) => (
+          <text key={i} x={padL - 8} y={y(v) + 4} textAnchor="end" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmtBn(v)}</text>
+        ))}
+        {[xlo, (xlo + xhi) / 2, xhi].map((k, i) => (
+          <text key={i} x={x(k)} y={H - padB + 16} textAnchor="middle" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(k)}</text>
+        ))}
+      </svg>
+      {hover && !pan.isDragging && (
+        <ChartTooltip x={hover.x} y={hover.y}>
+          <div style={{ fontWeight: 800 }}>Strike {glFmt2(shown[hover.idx].strike)}</div>
+          <div>Net gamma$: {glFmtBn(glOiVolNet(shown[hover.idx]))}</div>
+        </ChartTooltip>
+      )}
+    </div>
+  );
+}
+
 // Net Delta by strike — same bar treatment as Net Gamma, using r.netDEX.
 function NetDeltaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: number }) {
   const W = 720, H = 220, padL = 50, padR = 16, padB = 26, padT = 18;
@@ -1785,8 +1867,8 @@ function NetGammaMultiPanel({
         <GlEmpty note={loading ? "sweeping the board…" : err ? "no ladder available" : "no strikes returned"} />
       ) : (
         <>
-          <NetGammaByStrikeChart rows={ladder.rows} spot={spot} neutral={ladder.gexFlip} />
-          <ChartLegend items={[{ label: "Positive gamma$", color: GEX_POS_GREEN }, { label: "Negative gamma$", color: HOME_THEME.red }, { label: "Spot", color: LIGHT_BLUE }]} />
+          <NetGammaBarsByStrikeChart rows={ladder.rows} spot={spot} neutral={ladder.gexFlip} />
+          <ChartLegend items={[{ label: "Positive gamma$", color: GEX_POS_GREEN }, { label: "Negative gamma$", color: HOME_THEME.red }, { label: "Spot", color: LIGHT_BLUE }, { label: "Flip", color: GEX_POS_GREEN }]} />
         </>
       )}
     </div>
@@ -2308,7 +2390,7 @@ function GexLevelsTab() {
                     variant="budget"
                     accent={LIGHT_BLUE}
                     title={<CardTitleRow label="Net gamma exposure by strike (all expirations)" onDragStart={rightOrder.handleDragStart("netGammaAll")} onDragEnd={rightOrder.handleDragEnd} />}
-                    subtitle="Every listed expiration combined, 0DTE included — the whole board's cumulative gamma$ profile · OI+Vol basis · refreshed once a minute"
+                    subtitle="Every listed expiration combined, 0DTE included — gamma$ per strike, green above zero / red below · OI+Vol basis · scroll to zoom, drag to pan, double-click to reset · refreshed once a minute"
                   >
                     <NetGammaMultiPanel
                       ladder={multi.data?.all ?? null}
@@ -2325,7 +2407,7 @@ function GexLevelsTab() {
                     variant="budget"
                     accent={LIGHT_BLUE}
                     title={<CardTitleRow label="Net gamma exposure by strike (ex-0DTE)" onDragStart={rightOrder.handleDragStart("netGammaEx0dte")} onDragEnd={rightOrder.handleDragEnd} />}
-                    subtitle="Same board with the 0DTE expiry removed — what's left standing after today expires · OI+Vol basis · refreshed once a minute"
+                    subtitle="Same board with the 0DTE expiry removed — gamma$ per strike, what's left standing after today expires · OI+Vol basis · scroll to zoom, drag to pan · refreshed once a minute"
                   >
                     <NetGammaMultiPanel
                       ladder={multi.data?.ex0dte ?? null}

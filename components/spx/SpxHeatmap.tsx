@@ -11,6 +11,16 @@
  *                             drawn as one solid block (full column height,
  *                             full month width) averaged across all years
  *
+ * Data: /api/spx-heatmap, which re-pulls ^GSPC's 2-year daily closes from
+ * Yahoo and caches them server-side (see that route). The grid therefore rolls
+ * forward on its own every trading day — the bundled SPX_2Y_DAILY snapshot is
+ * only the first paint and the fallback for when the route is down. Refetched
+ * hourly and whenever the tab returns to the foreground, so a dashboard left
+ * open overnight picks up the new session's cell without a reload.
+ *
+ * Chrome is deliberately minimal: the card is the map. No stat row, no legend,
+ * no provenance paragraph — just the view switcher, the grid and the tooltip.
+ *
  * Data-viz color note: the red/down and green/up cell intensities are
  * derived from HOME_THEME.red / HOME_THEME.green with alpha modulated by
  * the size of the move — this is a data encoding (not page chrome), so per
@@ -19,10 +29,14 @@
  * an arbitrary hex scale.
  */
 
-import { useMemo, useState, useCallback, useId } from "react";
+import { useMemo, useState, useCallback, useEffect, useId } from "react";
 import { createPortal } from "react-dom";
 import { HOME_THEME } from "@/components/shared/homeTheme";
-import { SPX_2Y_DAILY, SPX_2Y_AVERAGE_CLOSE, type SpxDailyClose } from "./spxHeatmapData";
+import { SPX_2Y_DAILY, type SpxDailyClose } from "./spxHeatmapData";
+
+/** The series only moves once a trading day; this just guarantees a long-lived
+ *  tab rolls over on its own. The route caches upstream, so a miss is cheap. */
+const REFRESH_MS = 60 * 60_000;
 
 const CELL = 13;
 const GAP = 3;
@@ -89,8 +103,38 @@ export default function SpxHeatmap() {
   const uid = useId().replace(/[:]/g, "");
   const [mode, setMode] = useState<Mode>("daily");
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
+  // null until the route answers — the bundled snapshot paints in the meantime
+  // and stays put if the route is unreachable, so the card is never empty.
+  const [live, setLive] = useState<SpxDailyClose[] | null>(null);
 
-  const data = SPX_2Y_DAILY;
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch("/api/spx-heatmap", { cache: "no-store" });
+        if (!r.ok) return;
+        const j = await r.json();
+        const days = Array.isArray(j?.days) ? (j.days as SpxDailyClose[]) : null;
+        // Two rows is the minimum the grid math needs (it indexes first/last).
+        if (!cancelled && days && days.length > 1) setLive(days);
+      } catch {
+        /* keep whatever is already on screen */
+      }
+    };
+    load();
+    const id = setInterval(load, REFRESH_MS);
+    // A tab parked overnight fires no interval the user waits on — refresh the
+    // moment it comes back so the newest session's cell is there immediately.
+    const onVis = () => { if (document.visibilityState === "visible") load(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
+
+  const data = live ?? SPX_2Y_DAILY;
 
   // ---- Split into one row per calendar year — a new year automatically
   // gets its own row the moment data for it starts appearing. ----
@@ -108,16 +152,6 @@ export default function SpxHeatmap() {
     });
     return map;
   }, [years]);
-
-  const stats = useMemo(() => {
-    const closes = data.map((d) => d.close);
-    const min = Math.min(...closes);
-    const max = Math.max(...closes);
-    const totalRet = ((data[data.length - 1].close - data[0].close) / data[0].close) * 100;
-    const best = data.reduce((a, b) => (b.ret > a.ret ? b : a), data[0]);
-    const worst = data.reduce((a, b) => (b.ret < a.ret ? b : a), data[0]);
-    return { min, max, totalRet, best, worst, start: data[0].close, end: data[data.length - 1].close };
-  }, [data]);
 
   // ---- Daily entries: one per trading day, unmodified. ----
   const dailyEntries = useMemo(() => {
@@ -236,20 +270,6 @@ export default function SpxHeatmap() {
         .${scrollClass}::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
         .${scrollClass}::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.28); background-clip: padding-box; }
       `}</style>
-
-      {/* Stat row */}
-      <div style={{ display: "flex", gap: 28, marginBottom: 20, flexWrap: "wrap" }}>
-        <Stat label="2-year average close" value={SPX_2Y_AVERAGE_CLOSE.toFixed(2)} />
-        <Stat label="Range" value={`${stats.min.toFixed(2)} – ${stats.max.toFixed(2)}`} />
-        <Stat label="Start → End" value={`${stats.start.toFixed(2)} → ${stats.end.toFixed(2)}`} />
-        <Stat
-          label="2-year change"
-          value={`${stats.totalRet >= 0 ? "+" : ""}${stats.totalRet.toFixed(1)}%`}
-          color={stats.totalRet >= 0 ? HOME_THEME.green : HOME_THEME.red}
-        />
-        <Stat label="Best day" value={`${stats.best.date} ${fmtPct(stats.best.ret)}`} color={HOME_THEME.green} />
-        <Stat label="Worst day" value={`${stats.worst.date} ${fmtPct(stats.worst.ret)}`} color={HOME_THEME.red} />
-      </div>
 
       {/* Mode switcher */}
       <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
@@ -378,36 +398,6 @@ export default function SpxHeatmap() {
         </div>
       </div>
 
-      {/* Legend */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 20, fontSize: 11, color: HOME_THEME.text, opacity: 0.7 }}>
-        <span>Less</span>
-        <div style={{ display: "flex", gap: 3 }}>
-          {[0.9, 0.4, 0, -0.4, -0.9].map((v, i) => (
-            <div
-              key={i}
-              style={{
-                width: CELL,
-                height: CELL,
-                borderRadius: 3,
-                border: "1px solid rgba(255,255,255,0.04)",
-                background: v === 0 ? FLAT_CELL : hexToRgba(v > 0 ? HOME_THEME.green : HOME_THEME.red, Math.abs(v)),
-              }}
-            />
-          ))}
-        </div>
-        <span>More</span>
-        <span style={{ marginLeft: 10 }}>
-          {mode === "monthly"
-            ? "(one solid block = that month's own average, e.g. Dec 2024 shown separately from Dec 2025)"
-            : "(red = down day, green = up day, intensity = magnitude)"}
-        </span>
-      </div>
-
-      {/* Provenance note */}
-      <div style={{ marginTop: 18, fontSize: 11.5, color: HOME_THEME.text, opacity: 0.6, lineHeight: 1.5, borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 14 }}>
-        Pulled live from Yahoo Finance&apos;s historical data table for ^GSPC (Jul 25, 2024 → Jul 24, 2026), read directly in-browser since Yahoo&apos;s API/CSV endpoints block automated fetches. All 501 trading days, real closes. &quot;Merge Years → 1 Day&quot; averages every occurrence of the same calendar day into one cell without changing the grid size. &quot;Merge Into Monthly Avg&quot; collapses each month into one solid block, averaged within that specific month/year only.
-      </div>
-
       {tooltip && typeof document !== "undefined" &&
         createPortal(
           <div
@@ -432,15 +422,6 @@ export default function SpxHeatmap() {
           </div>,
           document.body
         )}
-    </div>
-  );
-}
-
-function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.7 }}>
-      {label}
-      <div style={{ fontSize: 17, fontWeight: 600, color: color ?? HOME_THEME.text, opacity: 1, marginTop: 2 }}>{value}</div>
     </div>
   );
 }

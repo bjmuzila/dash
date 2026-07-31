@@ -44,7 +44,7 @@ type Shot = {
 
 const PEOPLE: { key: PersonKey; label: string; color: string }[] = [
   { key: "brandon", label: "Brandon", color: RETA_PALETTE.blue },
-  { key: "heather", label: "Heather", color: RETA_PALETTE.magenta },
+  { key: "heather", label: "Heather", color: RETA_PALETTE.rose },
 ];
 
 // Preset pills — mirror the vial sizes / water volumes actually used, with a

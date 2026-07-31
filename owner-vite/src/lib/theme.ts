@@ -31,13 +31,13 @@ export const LIGHT_BLUE = "#7dd3fc";
 
 /**
  * RETA_PALETTE — the four accents used by the /owner/reta tracker, kept here so
- * the page never hardcodes hex. Brandon = blue, Heather = magenta; peach marks
+ * the page never hardcodes hex. Brandon = blue, Heather = rose; peach marks
  * reconstitution figures (mg/mL) and green marks progress (weight lost, the
  * recon in force). `blue` is the same value as LIGHT_BLUE above.
  */
 export const RETA_PALETTE = {
   blue: LIGHT_BLUE,
-  magenta: "#E57DFC",
+  rose: "#FC7D7D",
   peach: "#FCA57D",
   green: "#94FC7D",
 } as const;
