@@ -8,6 +8,8 @@ import { useEsCandles } from "@/hooks/useEsCandles";
 import { useEtfCandles } from "@/hooks/useEtfCandles";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
+import { useGexSocket, type GexMessage } from "@/lib/gexSocket";
+import { dedupeFetch } from "@/lib/dedupeFetch";
 // The flip is computed HERE with findGEXFlip, same as the home page, so the two
 // pages agree by construction. Do NOT source it from mvc_snapshots.gexFlip: both
 // recorders (scripts/auto-snapshot-mvc.js, server-v2/mvc-auto-snapshot.js) fall
@@ -653,9 +655,9 @@ function SymbolListDropdown({ active, onSelect }: { active: ChartSymbol; onSelec
  * Both are first-render defaults only — every overlay stays toggleable.
  */
 export default function EsCandlesPage({ leading, embedded = false }: { leading?: ReactNode; embedded?: boolean } = {}) {
+  // Bandwidth gate. Reconnect/backoff moved into lib/gexSocket, so the ref
+  // mirror this used to need (read from inside the socket callbacks) is gone.
   const esShouldConnect = useWsLifecycle();
-  const esShouldConnectRef = useRef(esShouldConnect);
-  esShouldConnectRef.current = esShouldConnect;
 
   // ── Active chart symbol ────────────────────────────────────────────────────
   // Persisted, so the picker survives a reload the way the DTE/overlay choices
@@ -679,7 +681,14 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const isEsRef = useRef(isEs);
   isEsRef.current = isEs;
 
-  const { sessionCandles: liveRows, historical: esHistorical, connected: esConnected, refresh: esRefresh } = useEsCandles();
+  // historyDays = 2, not the hook's default 20. Nothing on THIS page reads back
+  // further than 2 days: the chart window below is 2 days, the heatmap/bubble
+  // backfill is capped at 2880min (option_strike_gex_history is pruned to 48h
+  // server-side), and sessionCandles is a 30h rolling window. The 20-day pull was
+  // ~114KB / 250ms on every load to feed avg5/avg14 — which this page does not
+  // even destructure — plus the VSA baseline (see the vsaMap note below).
+  // The hook DEFAULT stays 20 so RelVol / IB Logic keep their full baselines.
+  const { sessionCandles: liveRows, historical: esHistorical, connected: esConnected, refresh: esRefresh } = useEsCandles(true, 2);
   // ETF bars come over HTTP from the etf_candles recorder, not /ws/gex. Passing
   // "" when ES is active keeps the hook completely idle — no fetch, no interval.
   const { rows: etfRows, connected: etfConnected, refresh: etfRefresh } = useEtfCandles(isEs ? "" : sym.gexSymbol, 5, 5);
@@ -691,13 +700,17 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const historical = isEs ? esHistorical : etfRows;
   const connected = isEs ? esConnected : etfConnected;
 
-  // Chart candles: full 5-day rolling window so the heatmap's historical columns
-  // resolve via timeToCoordinate (which only works for timestamps on the chart's
-  // time scale). historical already holds 20 days from SQLite; merge with the
-  // live session so the most-recent bars always win on slotKey collision.
+  // Chart candles: 2-day rolling window, deliberately matched to the GEX
+  // retention. The heatmap's historical columns resolve via timeToCoordinate,
+  // which only works for timestamps ON the chart's time scale — so the window
+  // has to be at least as wide as the overlay. It does NOT need to be wider:
+  // option_strike_gex_history is pruned to 48h server-side and the backfill query
+  // caps at 2880min, so days 3-5 of the old window carried candles that could
+  // never have a GEX column behind them. Merge with the live session so the
+  // most-recent bars always win on slotKey collision.
   const rows = useMemo(() => {
-    const FIVE_DAYS_MS = 5 * 24 * 60 * 60 * 1000;
-    const cutoff = Date.now() - FIVE_DAYS_MS;
+    const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - TWO_DAYS_MS;
     const map = new Map<string, EsCandleRecord>();
     for (const c of historical) if (c.slotKey && c.timestamp >= cutoff) map.set(c.slotKey, c);
     // ETF rows have no second live stream to merge — `historical` already IS the
@@ -943,8 +956,15 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // the other `rows` memos put it in their temporal dead zone — which typechecks
   // and dev-renders fine, then dies only in the prerender as
   // "Cannot access 'aA' before initialization".
-  // Baseline comes from `historical` (20 sessions from SQLite) rather than `rows`
-  // (5 days) so the per-slot median has enough prior sessions to mean anything.
+  // Baseline comes from `historical` rather than `rows` so the per-slot median
+  // sees every session that was loaded, not just what's on screen.
+  //
+  // CAVEAT: `historical` is now a 2-day pull (see the useEsCandles call above),
+  // so this median is built from ~2 prior sessions instead of ~20. VSA still
+  // classifies, but its thin/wide-spread calls are noisier than they were. If
+  // that starts mattering, make the pull follow the toggle:
+  //     useEsCandles(true, showVsa ? 20 : 2)
+  // — VSA defaults OFF, so the deep pull would only be paid when it's actually on.
   const vsaMap = useMemo(() => {
     if (!showVsa) return new Map<string, VsaResult>();
     // The bar covering "now" has partial volume and would always read as thin.
@@ -1324,13 +1344,13 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
 
   const status = connected ? "live" : "offline";
 
-  // Listen to /ws/gex for the GEX levels + ES basis inputs.
-  useEffect(() => {
-    let ws: WebSocket | null = null;
-    let retry: ReturnType<typeof setTimeout> | null = null;
-    let dead = false;
-
-    const apply = (d: Record<string, unknown>) => {
+  // Listen to the SHARED /ws/gex socket for the GEX levels + ES basis inputs.
+  // This used to open its OWN WebSocket; combined with the toolbar ticker and
+  // useEsCandles that put THREE connections to the same broadcast on this one
+  // page. lib/gexSocket owns a single connection, parses each frame once, and
+  // replays the last snapshot to late subscribers (so this lazily-mounted route
+  // still gets full state the moment it appears, exactly as before).
+  const applyGexFrame = (d: Record<string, unknown>) => {
       const spx = Number(d.spot ?? 0);
       const esFut = Number(d.esFut ?? 0);
       // Authoritative basis from the server (esFut-spot, freshness-gated —
@@ -1425,42 +1445,18 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       }
     };
 
-    const handle = (raw: string) => {
-      let msg: Record<string, unknown>;
-      try { msg = JSON.parse(raw); } catch { return; }
-      const type = String(msg.type ?? "");
-      const d = (msg.data && typeof msg.data === "object" ? msg.data : msg) as Record<string, unknown>;
-      if (type === "snapshot" || type === "gex" || type === "GEX_UPDATE" || type === "spot" || type === "aux") apply(d);
-    };
+  // Frames arrive pre-parsed from the shared socket.
+  const onGexFrame = (msg: GexMessage) => {
+    const type = String(msg.type ?? "");
+    const d = (msg.data && typeof msg.data === "object" ? msg.data : msg) as Record<string, unknown>;
+    if (type === "snapshot" || type === "gex" || type === "GEX_UPDATE" || type === "spot" || type === "aux") {
+      applyGexFrame(d);
+    }
+  };
 
-    const connect = () => {
-      if (dead || !esShouldConnectRef.current) return;
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      try { ws = new WebSocket(`${proto}//${window.location.host}/ws/gex`); }
-      catch { schedule(); return; }
-      ws.onmessage = (e) => handle(String(e.data));
-      ws.onerror = () => { try { ws?.close(); } catch {} };
-      ws.onclose = () => { if (!dead) schedule(); };
-    };
-    const schedule = () => {
-      if (dead || !esShouldConnectRef.current) return;
-      if (retry) clearTimeout(retry);
-      retry = setTimeout(connect, 2500);
-    };
-
-    // Value-driven bandwidth gate: re-runs when esShouldConnect flips.
-    if (esShouldConnect) connect();
-    return () => {
-      dead = true;
-      if (retry) clearTimeout(retry);
-      if (ws) {
-        ws.onmessage = ws.onerror = ws.onclose = null;
-        if (ws.readyState === WebSocket.CONNECTING) ws.onopen = () => { try { ws?.close(); } catch {} };
-        else { ws.onopen = null; try { ws.close(); } catch {} }
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [esShouldConnect]);
+  // Value-driven bandwidth gate, unchanged — it now decides whether this page
+  // subscribes to the shared socket rather than whether it opens its own.
+  useGexSocket(esShouldConnect, onGexFrame);
 
   // ── ETF GEX refresh ────────────────────────────────────────────────────────
   // SPX columns arrive two ways: this HTTP backfill for history, then the
@@ -1614,7 +1610,13 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         // trading day, so ask the server to ignore the expiry filter and pull
         // by time window alone (anyExpiry=1) — otherwise backfill only ever
         // matches today. An explicit DTE pick keeps the exact expiry match.
-        const res = await fetch(
+        // dedupeFetch, not fetch: this URL was firing TWICE on page load with an
+        // identical query string (~400ms and a few hundred KB duplicated on the
+        // critical path). The fetchKey guard above only catches re-fires it can
+        // see — a remount or a second consumer slips past it. Two identical
+        // concurrent GETs can only want the same bytes, so they share one
+        // request. Not a cache: the entry is dropped as soon as it settles.
+        const res = await dedupeFetch(
           `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=${minutes}&expiry=${encodeURIComponent(queryExpiry)}${isFront ? "&anyExpiry=1" : ""}&symbol=${encodeURIComponent(sym.gexSymbol)}`,
           { cache: "no-store" }
         );

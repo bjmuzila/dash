@@ -64,6 +64,14 @@ export default defineConfig(({ mode }) => {
         '/ws': { target: WS_BACKEND, ws: true, changeOrigin: true, secure: false, configure: auth },
         '/proxy': httpTarget,
         '/api': httpTarget,
+        // Brand assets live in the Next app's /public and are same-origin at the
+        // root in prod (cbedge.net/cb-edge-logo.png). app-vite has no publicDir,
+        // so without this the ChainReplay watermark 404s in dev only.
+        '/cb-edge-logo.png': httpTarget,
+        // Same story for the icons index.html now references — same-origin in
+        // prod, but app-vite has no publicDir so they'd 404 in dev only.
+        '/favicon.png': httpTarget,
+        '/apple-touch-icon.png': httpTarget,
       },
     },
   }

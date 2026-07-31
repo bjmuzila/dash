@@ -2864,6 +2864,119 @@ if (libDb) {
     },
   });
 
+  // /api/dashboard-layout — saved card layouts ("templates") for a dashboard
+  // page's drag/resize grid, per user PER PAGE.
+  //
+  //   GET  ?page=options                     → { templates: [{ name, layout, isDefault, updatedAt }] }
+  //   POST { page, name, layout, makeDefault } → save/overwrite one template
+  //   POST { page, name, action: 'delete' }    → drop one
+  //   POST { page, name, action: 'set-default' } → pick the auto-loaded one
+  //
+  // The layout array is stored opaquely — the PAGE owns its card ids and
+  // reconciles them on load, so shipping a new card never invalidates a saved
+  // template. Server-side we only bound it (item count, key types, coordinate
+  // ranges) so a bad client can't write junk that breaks the grid for everyone
+  // on that account.
+  const LAYOUT_MAX_TEMPLATES = 12;   // per user, per page
+  const LAYOUT_MAX_ITEMS = 60;       // cards in one layout
+  const LAYOUT_MAX_COORD = 500;      // grid units; the pages use 12 cols
+
+  function cleanLayoutPage(v) {
+    const s = String(v ?? '').trim().toLowerCase();
+    return /^[a-z0-9][a-z0-9_-]{0,39}$/.test(s) ? s : null;
+  }
+  function cleanLayoutName(v) {
+    const s = String(v ?? '').trim().replace(/\s+/g, ' ').slice(0, 40);
+    return s || null;
+  }
+  function cleanLayoutItems(v) {
+    if (!Array.isArray(v)) return null;
+    const seen = new Set();
+    const out = [];
+    for (const raw of v) {
+      if (!raw || typeof raw !== 'object') continue;
+      const id = String(raw.id ?? '').trim().slice(0, 64);
+      if (!id || seen.has(id)) continue;
+      const num = (n, lo, hi) => {
+        const x = Math.round(Number(n));
+        return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : null;
+      };
+      const x = num(raw.x, 0, LAYOUT_MAX_COORD);
+      const y = num(raw.y, 0, LAYOUT_MAX_COORD);
+      const w = num(raw.w, 1, LAYOUT_MAX_COORD);
+      const h = num(raw.h, 1, LAYOUT_MAX_COORD);
+      if (x === null || y === null || w === null || h === null) continue;
+      seen.add(id);
+      const item = { id, x, y, w, h };
+      // Optional fields for user-added cards (mirrors lib/layoutStore GridItem).
+      if (raw.type === 'iframe') {
+        item.type = 'iframe';
+        if (raw.src) item.src = String(raw.src).slice(0, 500);
+        if (raw.title) item.title = String(raw.title).slice(0, 80);
+      }
+      out.push(item);
+      if (out.length >= LAYOUT_MAX_ITEMS) break;
+    }
+    return out;
+  }
+
+  register('/api/dashboard-layout', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res, ctx, access) {
+      const userId = access.userId;
+      if (!userId) return send(res, 401, { error: 'Unauthorized' });
+
+      if (req.method === 'POST') {
+        let body;
+        try { body = await readJson(req, 200_000); }
+        catch { return send(res, 400, { error: 'Bad JSON' }); }
+
+        const page = cleanLayoutPage(body?.page);
+        const name = cleanLayoutName(body?.name);
+        if (!page) return send(res, 400, { error: 'Bad page' });
+        if (!name) return send(res, 400, { error: 'Name required' });
+
+        const action = String(body?.action ?? 'save');
+        try {
+          if (action === 'delete') {
+            await libDb.deleteDashboardLayout(userId, page, name);
+            return send(res, 200, { ok: true });
+          }
+          if (action === 'set-default') {
+            const ok = await libDb.setDefaultDashboardLayout(userId, page, name);
+            return ok ? send(res, 200, { ok: true }) : send(res, 404, { error: 'No such template' });
+          }
+          const layout = cleanLayoutItems(body?.layout);
+          if (!layout) return send(res, 400, { error: 'layout must be an array' });
+          // Cap only on CREATE — overwriting an existing name is always allowed,
+          // so a user at the cap can still autosave the template they're on.
+          const existing = await libDb.getDashboardLayouts(userId, page);
+          const isNew = !existing.some((t) => t.name === name);
+          if (isNew && existing.length >= LAYOUT_MAX_TEMPLATES) {
+            return send(res, 409, { error: `Template limit reached (${LAYOUT_MAX_TEMPLATES})` });
+          }
+          // First template a user saves for a page becomes their default —
+          // otherwise saving one and reloading would silently do nothing.
+          const makeDefault = body?.makeDefault === true || existing.length === 0;
+          await libDb.upsertDashboardLayout(userId, page, name, layout, makeDefault);
+          return send(res, 200, { ok: true, name, isDefault: makeDefault });
+        } catch (err) {
+          return send(res, 500, { error: 'Save failed', detail: String(err) });
+        }
+      }
+
+      const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+      const page = cleanLayoutPage(sp.get('page'));
+      if (!page) return send(res, 400, { error: 'Bad page' });
+      try {
+        const templates = await libDb.getDashboardLayouts(userId, page);
+        send(res, 200, { templates }, { 'Cache-Control': 'private, no-store' });
+      } catch (err) {
+        send(res, 500, { error: 'Load failed', detail: String(err) });
+      }
+    },
+  });
+
   // /api/traders-dashboard — per-user schedule/tasks/links/weather-zip.
   register('/api/traders-dashboard', {
     auth: 'subscriber', methods: ['GET', 'POST'],

@@ -1,85 +1,10 @@
-// Founder thank-you welcome email for new CB Edge signups.
-//
-// A warm, personal note from Bzila sent automatically when someone joins.
-// Returns email-client-safe HTML (table layout, all styles inline, no external
-// CSS) matching the dashboard brand.
-//
-// Brand palette mirrors components/shared/homeTheme.ts:
-//   bg #05060A · panel #0D1119 · cyan #219EBC · accent text #8ECAE6
-
-import { unsubscribeUrl, UNSUB_URL_PLACEHOLDER } from "@/lib/unsubscribe";
-
-const SITE_URL = (process.env.NEXT_PUBLIC_APP_URL || "https://cbedge.net").replace(/\/$/, "");
-const LOGO_URL = `${SITE_URL}/cb-edge-logo.png`;
-const SIGN_IN_URL = `${SITE_URL}/home`;
-/** Bzila Hangout Discord — invite unlocks the CB Edge section for members. */
-const DISCORD_URL = "https://discord.gg/723HGdhRbh";
-const DOCS_URL = "https://www.cbedge.net/docs";
-
-export interface FounderThankYouOpts {
-  /** Recipient's first name, if known. Falls back to a generic greeting. */
-  firstName?: string | null;
-  /** Override the sign-in/CTA URL (defaults to the dashboard home). */
-  ctaUrl?: string;
-  /**
-   * Recipient email. When provided (webhook path), the footer renders a real
-   * tokenized unsubscribe link. When sent via /admin/emails, leave this unset —
-   * the send route appends its own per-recipient tokenized footer.
-   */
-  email?: string | null;
-}
-
-export const FOUNDER_THANKYOU_SUBJECT = "Thank you — this is a dream come true";
-
-/** Plain-text fallback for clients that don't render HTML. */
-export function founderThankYouText(opts: FounderThankYouOpts = {}): string {
-  const name = opts.firstName?.trim();
-  const hi = name ? `Hi ${name},` : "Hi there,";
-  const cta = opts.ctaUrl || SIGN_IN_URL;
-  return [
-    hi,
-    "",
-    "I wanted to thank you personally for joining CB Edge — it genuinely means the world to me.",
-    "",
-    "I built this against all the odds. There were plenty of nights it would have been easier to walk away, and plenty of reasons to. But seeing real traders sign up makes every one of those late nights worth it. This is, honestly, a dream come true.",
-    "",
-    "If you're wondering where the name comes from: CB is for my two sons, Conor and Brennan. They're the reason I kept going, and their initials are baked into everything I'm building here.",
-    "",
-    "CB Edge is a real-time options and gamma-exposure dashboard built for index traders — live GEX surfaces, call/put walls, Estimated Moves, ES candle heatmaps, net-premium flow, and a morning briefing with an AI market overview. It's all in there waiting for you.",
-    "",
-    `Jump in whenever you're ready: ${cta}`,
-    "",
-    `New here? The docs walk you through every page: ${DOCS_URL}`,
-    "",
-    "One more thing — come join us in the Bzila Hangout Discord. This invite unlocks the CB Edge chat.",
-    "",
-    `Join the Discord: ${DISCORD_URL}`,
-    "",
-    "Your feedback genuinely shapes what gets built next — there's a Feedback page right inside the app, and I read every single note.",
-    "",
-    "Thank you for being here. Let's get you an edge.",
-    "",
-    "— Bzila, founder of CB Edge",
-    "",
-    "—",
-    `Unsubscribe: ${opts.email ? unsubscribeUrl(opts.email) : UNSUB_URL_PLACEHOLDER}`,
-  ].join("\n");
-}
-
-/** Branded HTML founder thank-you email. */
-export function founderThankYouEmail(opts: FounderThankYouOpts = {}): string {
-  const name = opts.firstName?.trim();
-  const hi = name ? `Hi ${escapeHtml(name)},` : "Hi there,";
-  const cta = escapeHtml(opts.ctaUrl || SIGN_IN_URL);
-  const unsubHref = opts.email ? escapeHtml(unsubscribeUrl(opts.email)) : UNSUB_URL_PLACEHOLDER;
-
-  return `<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>${escapeHtml(FOUNDER_THANKYOU_SUBJECT)}</title>
+<title>Thank you — this is a dream come true</title>
 </head>
 <body style="margin:0;padding:0;background:#05060A;">
   <!-- preheader (hidden) -->
@@ -94,7 +19,7 @@ export function founderThankYouEmail(opts: FounderThankYouOpts = {}): string {
           <!-- logo -->
           <tr>
             <td align="center" style="padding:28px 24px 0 24px;">
-              <img src="${LOGO_URL}" alt="CB Edge" width="260" style="display:block;width:260px;max-width:88%;height:auto;border:0;">
+              <img src="https://cbedge.net/cb-edge-logo.png" alt="CB Edge" width="260" style="display:block;width:260px;max-width:88%;height:auto;border:0;">
             </td>
           </tr>
 
@@ -109,7 +34,7 @@ export function founderThankYouEmail(opts: FounderThankYouOpts = {}): string {
           <!-- body copy -->
           <tr>
             <td style="padding:20px 32px 4px 32px;">
-              <p style="margin:0 0 14px 0;font:600 15px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">${hi}</p>
+              <p style="margin:0 0 14px 0;font:600 15px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;">Hi there,</p>
               <p style="margin:0 0 14px 0;font:400 14px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;">
                 I wanted to thank you <strong style="color:#8ECAE6;">personally</strong> for joining <strong style="color:#219EBC;">CB Edge</strong>. It genuinely means the world to me.
               </p>
@@ -150,12 +75,12 @@ export function founderThankYouEmail(opts: FounderThankYouOpts = {}): string {
               <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                 <tr>
                   <td align="center" style="border-radius:10px;background:#219EBC;">
-                    <a href="${cta}" style="display:inline-block;padding:13px 30px;font:700 14px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#05060A;text-decoration:none;border-radius:10px;">Open the dashboard →</a>
+                    <a href="https://cbedge.net/home" style="display:inline-block;padding:13px 30px;font:700 14px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#05060A;text-decoration:none;border-radius:10px;">Open the dashboard →</a>
                   </td>
                 </tr>
               </table>
               <div style="font:400 13px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;margin-top:14px;">
-                New here? The <a href="${DOCS_URL}" style="color:#8ECAE6;text-decoration:underline;font-weight:600;">docs</a> walk you through every page.
+                New here? The <a href="https://www.cbedge.net/docs" style="color:#8ECAE6;text-decoration:underline;font-weight:600;">docs</a> walk you through every page.
               </div>
             </td>
           </tr>
@@ -173,7 +98,7 @@ export function founderThankYouEmail(opts: FounderThankYouOpts = {}): string {
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:16px auto 0 auto;">
                       <tr>
                         <td align="center" style="border-radius:10px;border:1px solid #219EBC;">
-                          <a href="${DISCORD_URL}" style="display:inline-block;padding:11px 26px;font:700 14px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8ECAE6;text-decoration:none;border-radius:10px;">Join the Discord →</a>
+                          <a href="https://discord.gg/723HGdhRbh" style="display:inline-block;padding:11px 26px;font:700 14px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8ECAE6;text-decoration:none;border-radius:10px;">Join the Discord →</a>
                         </td>
                       </tr>
                     </table>
@@ -201,11 +126,11 @@ export function founderThankYouEmail(opts: FounderThankYouOpts = {}): string {
             <td align="center" style="padding:18px 32px;">
               <div style="font:400 11px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;">
                 CB Edge · You're receiving this because you signed up.<br>
-                <a href="${unsubHref}" style="color:#8ECAE6;text-decoration:underline;">Unsubscribe</a>
+                <a href="#" style="color:#8ECAE6;text-decoration:underline;">Unsubscribe</a>
                 &nbsp;·&nbsp;
-                <a href="${DOCS_URL}" style="color:#6b7d8f;text-decoration:underline;">Docs</a>
+                <a href="https://www.cbedge.net/docs" style="color:#6b7d8f;text-decoration:underline;">Docs</a>
                 &nbsp;·&nbsp;
-                <a href="${SITE_URL}" style="color:#6b7d8f;text-decoration:underline;">cbedge.net</a>
+                <a href="https://cbedge.net" style="color:#6b7d8f;text-decoration:underline;">cbedge.net</a>
                 <br>
                 <span style="color:#5a6b7d;">Market analytics, not financial advice.</span>
               </div>
@@ -216,11 +141,4 @@ export function founderThankYouEmail(opts: FounderThankYouOpts = {}): string {
     </tr>
   </table>
 </body>
-</html>`;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string)
-  );
-}
+</html>

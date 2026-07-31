@@ -164,6 +164,12 @@ export default function DashGrid({
         // Fallback: take the segment after the last "$" in the toArray key.
         const rawKey = String(child.key ?? "");
         const id = propId ?? (rawKey.includes("$") ? rawKey.slice(rawKey.lastIndexOf("$") + 1) : rawKey);
+        // Opt out of the clipping box: a card whose content legitimately escapes
+        // its bounds (an open dropdown, a tooltip) sets data-grid-overflow=
+        // "visible" and also gets a raised base z-index, so the escaped menu
+        // paints over the cards below instead of being cut off by them.
+        const overflowVisible =
+          (child.props as { "data-grid-overflow"?: string })?.["data-grid-overflow"] === "visible";
         const it = byId.get(id);
         if (!it) return null;
         const box = pxBox(it);
@@ -179,13 +185,13 @@ export default function DashGrid({
               width: box.width,
               height: box.height,
               transition: isDragging ? "none" : "left .12s ease, top .12s ease, width .12s ease, height .12s ease",
-              zIndex: isDragging ? 50 : 1,
+              zIndex: isDragging ? 50 : overflowVisible ? 30 : 1,
               boxShadow: isDragging ? "0 18px 50px rgba(0,0,0,.55)" : "none",
               touchAction: locked ? undefined : "none",
             }}
           >
             {/* The panel itself fills this box. */}
-            <div style={{ width: "100%", height: "100%", overflow: "hidden", position: "relative" }}>
+            <div style={{ width: "100%", height: "100%", overflow: overflowVisible ? "visible" : "hidden", position: "relative" }}>
               {child}
               {!locked && (
                 <div

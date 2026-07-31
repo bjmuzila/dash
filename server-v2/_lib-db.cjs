@@ -16,7 +16,7 @@ var __copyProps = (to, from, except, desc) => {
 };
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// ../mnt/user-data/uploads/spx-gex-dashboard-tt-fixed/lib/db.ts
+// lib/db.ts
 var db_exports = {};
 __export(db_exports, {
   PAID_STATUSES: () => PAID_STATUSES,
@@ -28,10 +28,12 @@ __export(db_exports, {
   addWaitlistEmail: () => addWaitlistEmail,
   adoptDefaultBudgetProfile: () => adoptDefaultBudgetProfile,
   claimWelcomeEmail: () => claimWelcomeEmail,
+  clearEmCondors: () => clearEmCondors,
   clearEmTracker: () => clearEmTracker,
   clearUserDiscord: () => clearUserDiscord,
   consumePasswordReset: () => consumePasswordReset,
   countActiveSessions: () => countActiveSessions,
+  countDashboardLayouts: () => countDashboardLayouts,
   countUsers: () => countUsers,
   countWaitlist: () => countWaitlist,
   createUser: () => createUser,
@@ -39,12 +41,16 @@ __export(db_exports, {
   deleteAmazonRow: () => deleteAmazonRow,
   deleteBudgetCategory: () => deleteBudgetCategory,
   deleteBzilaAlert: () => deleteBzilaAlert,
+  deleteDashboardLayout: () => deleteDashboardLayout,
+  deleteEmCondor: () => deleteEmCondor,
   deleteEmTrackerRow: () => deleteEmTrackerRow,
   deleteExpiredSessions: () => deleteExpiredSessions,
   deletePropRow: () => deletePropRow,
   deleteRecurring: () => deleteRecurring,
   deleteRegisterByTag: () => deleteRegisterByTag,
   deleteRegisterRow: () => deleteRegisterRow,
+  deleteRetaSetup: () => deleteRetaSetup,
+  deleteRetaShot: () => deleteRetaShot,
   deleteSession: () => deleteSession,
   deleteSnapshot: () => deleteSnapshot,
   deleteTradingJournal: () => deleteTradingJournal,
@@ -66,7 +72,14 @@ __export(db_exports, {
   getDailyBalanceBefore: () => getDailyBalanceBefore,
   getDailyStrategy: () => getDailyStrategy,
   getDailyStrategyHistory: () => getDailyStrategyHistory,
+  getDashboardLayouts: () => getDashboardLayouts,
   getDb: () => getDb,
+  getEmBandsForWeek: () => getEmBandsForWeek,
+  getEmCondorMarks: () => getEmCondorMarks,
+  getEmCondorSummary: () => getEmCondorSummary,
+  getEmCondorTicks: () => getEmCondorTicks,
+  getEmCondors: () => getEmCondors,
+  getEmCondorsUnsettled: () => getEmCondorsUnsettled,
   getEmTrackerPendingForWeek: () => getEmTrackerPendingForWeek,
   getEmTrackerRows: () => getEmTrackerRows,
   getEmTrackerSummary: () => getEmTrackerSummary,
@@ -130,7 +143,6 @@ __export(db_exports, {
   getUserByEmail: () => getUserByEmail,
   getUserByGoogleSub: () => getUserByGoogleSub,
   getUserById: () => getUserById,
-  getUsersByIds: () => getUsersByIds,
   getUserBzilaReactions: () => getUserBzilaReactions,
   getWatchHistory: () => getWatchHistory,
   getWatchHistorySince: () => getWatchHistorySince,
@@ -140,6 +152,7 @@ __export(db_exports, {
   insertBzilaAlert: () => insertBzilaAlert,
   insertBzilaSnapshot: () => insertBzilaSnapshot,
   insertDailyStrategyHistory: () => insertDailyStrategyHistory,
+  insertEmCondorTicks: () => insertEmCondorTicks,
   insertFlowCalls: () => insertFlowCalls,
   insertGreeksTs: () => insertGreeksTs,
   insertHomeStaticSnapshot: () => insertHomeStaticSnapshot,
@@ -147,7 +160,6 @@ __export(db_exports, {
   insertMultGreekStaticSnapshot: () => insertMultGreekStaticSnapshot,
   insertMvcSnapshot: () => insertMvcSnapshot,
   insertOptionStrikeGexRows: () => insertOptionStrikeGexRows,
-  normGexSymbol: () => normGexSymbol,
   insertPageVisit: () => insertPageVisit,
   insertPasswordReset: () => insertPasswordReset,
   insertPlaybookFeed: () => insertPlaybookFeed,
@@ -177,6 +189,9 @@ __export(db_exports, {
   listRecentUsers: () => listRecentUsers,
   listRecurring: () => listRecurring,
   listRegister: () => listRegister,
+  listRetaSetups: () => listRetaSetups,
+  listRetaShots: () => listRetaShots,
+  listRetaWeekNotes: () => listRetaWeekNotes,
   listSalesExpenses: () => listSalesExpenses,
   listUnsubscribes: () => listUnsubscribes,
   listUsersWithLastLogin: () => listUsersWithLastLogin,
@@ -185,13 +200,17 @@ __export(db_exports, {
   persistDb: () => persistDb,
   pgQuery: () => pgQuery,
   postEsGap: () => postEsGap,
+  pruneEmCondorTicks: () => pruneEmCondorTicks,
   queryAll: () => queryAll,
   queryOne: () => queryOne,
   reactBzilaAlert: () => reactBzilaAlert,
   removeSalesExpense: () => removeSalesExpense,
   removeUnsubscribe: () => removeUnsubscribe,
+  reopenEmCondor: () => reopenEmCondor,
   savePromoCode: () => savePromoCode,
   saveSnapshot: () => saveSnapshot,
+  setDefaultDashboardLayout: () => setDefaultDashboardLayout,
+  setEmCondorSettlement: () => setEmCondorSettlement,
   setEmTrackerResult: () => setEmTrackerResult,
   setFeedbackStatus: () => setFeedbackStatus,
   setRegisterCategory: () => setRegisterCategory,
@@ -213,6 +232,9 @@ __export(db_exports, {
   upsertConfidenceLog: () => upsertConfidenceLog,
   upsertDailyBalance: () => upsertDailyBalance,
   upsertDailyStrategy: () => upsertDailyStrategy,
+  upsertDashboardLayout: () => upsertDashboardLayout,
+  upsertEmCondor: () => upsertEmCondor,
+  upsertEmCondorMarks: () => upsertEmCondorMarks,
   upsertEmTrackerRow: () => upsertEmTrackerRow,
   upsertEodGex: () => upsertEodGex,
   upsertEsCandle: () => upsertEsCandle,
@@ -225,6 +247,9 @@ __export(db_exports, {
   upsertPositioningTickers: () => upsertPositioningTickers,
   upsertPremarketSummary: () => upsertPremarketSummary,
   upsertQuoteSymbols: () => upsertQuoteSymbols,
+  upsertRetaSetup: () => upsertRetaSetup,
+  upsertRetaShot: () => upsertRetaShot,
+  upsertRetaWeekNote: () => upsertRetaWeekNote,
   upsertSubscription: () => upsertSubscription,
   upsertTdOverview: () => upsertTdOverview,
   upsertTdPrefs: () => upsertTdPrefs,
@@ -415,13 +440,6 @@ async function ensureAllTables(pool) {
     );
     -- Backfill column for pre-existing tables (Vol-only heatmap history).
     ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS net_vol_gex REAL;
-    -- Multi-underlying support. This table was SPX-only by CONVENTION (there was
-    -- no symbol column at all), so every pre-existing row is $SPX — the DEFAULT
-    -- plus the one-time UPDATE below make that explicit. Read paths that don't
-    -- pass a symbol default to '$SPX' and behave exactly as they did before.
-    -- SPY / QQQ rows are written by server-v2/etf-gex-recorder.js.
-    ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS symbol TEXT NOT NULL DEFAULT '$SPX';
-    UPDATE option_strike_gex_history SET symbol = '$SPX' WHERE symbol IS NULL OR symbol = '';
     CREATE INDEX IF NOT EXISTS idx_osgh_date ON option_strike_gex_history(date);
     CREATE INDEX IF NOT EXISTS idx_osgh_expiry ON option_strike_gex_history(expiry);
     CREATE INDEX IF NOT EXISTS idx_osgh_ts ON option_strike_gex_history(timestamp);
@@ -431,13 +449,6 @@ async function ensureAllTables(pool) {
     -- option-strike-gex-history?mode=point call took ~25s; with it, sub-second.
     CREATE INDEX IF NOT EXISTS idx_osgh_lookup
       ON option_strike_gex_history (date, expiry, strike, timestamp DESC);
-    -- Every read now filters on symbol FIRST. Without these, adding SPY+QQQ
-    -- (a row per strike per minute each) turns the heatmap window scan into a
-    -- full-table sort across three underlyings' worth of rows.
-    CREATE INDEX IF NOT EXISTS idx_osgh_symbol_ts
-      ON option_strike_gex_history (symbol, timestamp);
-    CREATE INDEX IF NOT EXISTS idx_osgh_symbol_lookup
-      ON option_strike_gex_history (symbol, date, expiry, strike, timestamp DESC);
 
     CREATE TABLE IF NOT EXISTS trades (
       id SERIAL PRIMARY KEY, timestamp TEXT NOT NULL,
@@ -479,6 +490,17 @@ async function ensureAllTables(pool) {
 
     -- One row per page load: full visit history with client IP + (optional) user.
     -- Owner-only data (IP is PII). Pruned to the newest rows on insert.
+    --
+    -- country/region/city/latitude/longitude come from Cloudflare's "Add visitor
+    -- location headers" managed transform (cf-ipcountry / cf-region / cf-ipcity /
+    -- cf-iplatitude / cf-iplongitude). They are NULL until that transform is
+    -- enabled on the zone, and NULL for any request that didn't traverse the edge
+    -- (local dev, direct-to-origin health checks), so every consumer must treat
+    -- them as optional.
+    --
+    -- latitude/longitude are CITY CENTROIDS from Cloudflare's IP database, not
+    -- device GPS. Everyone in a metro shares one coordinate pair, which is
+    -- exactly why the owner map can cluster them into bubbles.
     CREATE TABLE IF NOT EXISTS page_visits (
       id SERIAL PRIMARY KEY,
       page_key TEXT,
@@ -486,31 +508,31 @@ async function ensureAllTables(pool) {
       path TEXT,
       user_id TEXT,
       ip TEXT,
+      country TEXT,
+      region TEXT,
+      city TEXT,
+      latitude DOUBLE PRECISION,
+      longitude DOUBLE PRECISION,
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
-    -- Cloudflare geo ("Add visitor location headers" managed transform). Added
-    -- after the table shipped: existing rows keep NULL geo, which the owner
-    -- map renders as "Unknown". insertPageVisit() below writes these on every
-    -- new row now that API_ROUTER's /api/page-status handler passes them in.
+    -- Added after the table shipped: existing rows keep NULL geo (they predate
+    -- the managed transform), which the map renders as "Unknown".
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS country TEXT;
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS region TEXT;
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS city TEXT;
-    -- City-level pin location (cf-iplatitude / cf-iplongitude) — powers the
-    -- owner visitor map's per-city dots, distinct from the country choropleth.
-    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
-    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS lon DOUBLE PRECISION;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
+    ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
 
-    -- Acquisition + device, added 2026-07. Parsing lives in lib/visitorAttribution.ts
-    -- (mirrored to _lib-attribution.cjs); the write path is api-router's
-    -- /api/page-status handler.
+    -- Acquisition + device, added 2026-07. Parsing lives in lib/visitorAttribution.ts.
     --
     -- Attribution columns are populated ONLY on the first beacon of a browser
     -- session (the is_entry row). Inside the SPA, document.referrer keeps
     -- returning the original external referrer for every client-side navigation,
     -- so writing it on every row would report ONE Google visit as twenty.
-    -- COUNT(*) WHERE is_entry is therefore a session count, and grouping those
-    -- by referrer_host / utm_source / channel is real acquisition data.
-    -- Non-entry rows keep NULL here BY DESIGN — not missing data.
+    -- One entry row per session means COUNT(*) WHERE is_entry is a session count,
+    -- and grouping those by referrer_host / utm_source / channel is real
+    -- acquisition data. Non-entry rows keep NULL here BY DESIGN \u2014 that is the
+    -- intended shape, not missing data.
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS is_entry BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS referrer TEXT;
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS referrer_host TEXT;
@@ -520,8 +542,8 @@ async function ensureAllTables(pool) {
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS utm_term TEXT;
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS utm_content TEXT;
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS channel TEXT;
-    -- browser/os/device_type come from the User-Agent header, present on EVERY
-    -- request — so unlike attribution these are written on every row.
+    -- browser/os/device_type come from the User-Agent header, which is present on
+    -- EVERY request \u2014 so unlike attribution these are written on every row.
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS browser TEXT;
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS os TEXT;
     ALTER TABLE page_visits ADD COLUMN IF NOT EXISTS device_type TEXT;
@@ -680,6 +702,45 @@ async function ensureAllTables(pool) {
     -- Added after the table shipped: existing rows are all prop purchases.
     ALTER TABLE budget_prop ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'prop';
 
+    -- \u2500\u2500 Reta (retatrutide) protocol tracker \u2014 owner-only \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    -- Reconstitution changes week to week, so each recon is its own row keyed by
+    -- the Sunday it takes effect. A shot resolves the setup with the greatest
+    -- effective_from <= its own date, which is why editing this week's recon can
+    -- never rewrite the math of a week already logged.
+    CREATE TABLE IF NOT EXISTS reta_setups (
+      id SERIAL PRIMARY KEY,
+      effective_from TEXT NOT NULL UNIQUE,
+      vial_mg REAL NOT NULL DEFAULT 10,
+      bac_ml REAL NOT NULL DEFAULT 2,
+      syringe_units INTEGER NOT NULL DEFAULT 100,
+      note TEXT,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- One row per person per shot date (shot day is Sunday). dose_mg is what was
+    -- actually drawn; units/mL are DERIVED from the recon in force at render
+    -- time, never stored, so correcting a recon fixes that whole week at once.
+    CREATE TABLE IF NOT EXISTS reta_shots (
+      id SERIAL PRIMARY KEY,
+      shot_date TEXT NOT NULL,
+      person TEXT NOT NULL,
+      dose_mg REAL NOT NULL DEFAULT 0,
+      weight_lb REAL,
+      taken INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (shot_date, person)
+    );
+    CREATE INDEX IF NOT EXISTS idx_reta_shots_date ON reta_shots(shot_date);
+
+    -- One free-text note per week, shared by both people (sides, skips, refills).
+    CREATE TABLE IF NOT EXISTS reta_week_notes (
+      shot_date TEXT PRIMARY KEY,
+      note TEXT,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS waitlist (
       id SERIAL PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
@@ -817,10 +878,125 @@ async function ensureAllTables(pool) {
     CREATE UNIQUE INDEX IF NOT EXISTS uq_em_tracker_ticker_week_start
       ON em_tracker(ticker, week_start);
 
+    -- Weekly iron condor written against that week's Estimated Move band.
+    -- One row per (ticker, week_start), same key as em_tracker so the two join
+    -- 1:1 and the condor can be settled from the EM row's realized weekly OHLC.
+    --
+    --   Bull put spread  (lower): SELL put_short  / BUY put_long   (long < short)
+    --   Bear call spread (upper): SELL call_short / BUY call_long   (long > short)
+    --
+    -- Strikes are seeded Monday from the EM band (short put \u2248 ref\u2212EM, short call
+    -- \u2248 ref+EM, snapped to the ticker's strike increment) and are editable.
+    -- Credits are in strike points per 1 condor; multiplier converts to dollars.
+    -- result/outcome/pnl are filled by the evaluator once the weekly close is in.
+    CREATE TABLE IF NOT EXISTS em_condors (
+      id SERIAL PRIMARY KEY,
+      ticker TEXT NOT NULL,
+      week_label TEXT NOT NULL,
+      week_start DATE NOT NULL,
+      ref_price REAL,        -- Monday underlying reference the band was built off
+      em REAL,               -- EM used for the band (points)
+      put_long REAL,         -- bought put   (lower wing)
+      put_short REAL,        -- sold put
+      call_short REAL,       -- sold call
+      call_long REAL,        -- bought call  (upper wing)
+      put_credit REAL,       -- credit taken on the bull put spread
+      call_credit REAL,      -- credit taken on the bear call spread
+      net_credit REAL,       -- total credit for the condor (points)
+      contracts INTEGER DEFAULT 1,
+      multiplier REAL DEFAULT 100,
+      settle_price REAL,     -- price used to settle (weekly close)
+      intrinsic REAL,        -- points owed back at expiration
+      pnl REAL,              -- dollars, net of credit, \xD7 contracts \xD7 multiplier
+      result TEXT,           -- 'win' | 'loss' | NULL (not settled)
+      outcome TEXT,          -- 'max_win' | 'partial_win' | 'partial_loss' | 'max_loss'
+      breached_side TEXT,    -- 'put' | 'call' | NULL \u2014 which short expired ITM
+      touched_side TEXT,     -- 'put' | 'call' | 'both' | NULL \u2014 short tagged intraweek
+      result_source TEXT,    -- 'auto' | 'manual' | 'seed'
+      note TEXT,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_em_condors_ticker ON em_condors(ticker);
+    CREATE INDEX IF NOT EXISTS idx_em_condors_week ON em_condors(week_start);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_em_condors_ticker_week_start
+      ON em_condors(ticker, week_start);
+
+    -- Day-by-day valuation of a condor across its week. One row per
+    -- (condor, ET session). Written on demand by /api/em-condors/marks, which
+    -- rolls the hourly em_condor_ticks up into one row per session (the last
+    -- tick that priced all four legs becomes that day's close).
+    --   mark     = (put_short \u2212 put_long) + (call_short \u2212 call_long)  [debit to close]
+    --   open_pnl = (net_credit \u2212 mark) \xD7 multiplier \xD7 contracts
+    --   cushion  = underlying close \u2192 nearer SHORT strike (+ inside, \u2212 beyond)
+    -- legs_priced < 4 means the mark is NULL: a partial condor is a different
+    -- position, not an estimate of this one. Futures rows carry underlying and
+    -- cushion only (no options chain for the futures roots).
+    CREATE TABLE IF NOT EXISTS em_condor_marks (
+      id SERIAL PRIMARY KEY,
+      condor_id INTEGER NOT NULL REFERENCES em_condors(id) ON DELETE CASCADE,
+      d DATE NOT NULL,
+      underlying REAL,
+      under_high REAL,
+      under_low REAL,
+      put_long_px REAL,
+      put_short_px REAL,
+      call_short_px REAL,
+      call_long_px REAL,
+      mark REAL,
+      open_pnl REAL,
+      pct_max REAL,
+      cushion REAL,
+      legs_priced INTEGER DEFAULT 0,
+      source TEXT DEFAULT 'tt',
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_em_condor_marks_condor ON em_condor_marks(condor_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_em_condor_marks_condor_day
+      ON em_condor_marks(condor_id, d);
+
+    -- Intraday condor ticks, written at the top of each RTH hour by
+    -- server-v2/condor-mark-recorder.js. Same value columns as em_condor_marks
+    -- but priced from the LIVE TastyTrade chain NBBO mid, keyed by epoch-ms so
+    -- a week holds ~35 points instead of 5. em_condor_marks stays the
+    -- authoritative daily series and is ROLLED UP FROM THESE ROWS (last 4-leg
+    -- tick of each ET session) \u2014 TastyTrade sells no per-contract daily option
+    -- history, so a missed hour cannot be backfilled later.
+    CREATE TABLE IF NOT EXISTS em_condor_ticks (
+      id SERIAL PRIMARY KEY,
+      condor_id INTEGER NOT NULL REFERENCES em_condors(id) ON DELETE CASCADE,
+      ts BIGINT NOT NULL,
+      underlying REAL,
+      put_long_px REAL,
+      put_short_px REAL,
+      call_short_px REAL,
+      call_long_px REAL,
+      mark REAL,
+      open_pnl REAL,
+      pct_max REAL,
+      cushion REAL,
+      legs_priced INTEGER DEFAULT 0,
+      source TEXT DEFAULT 'tt',
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_em_condor_ticks_condor_ts ON em_condor_ticks(condor_id, ts);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_em_condor_ticks_condor_ts
+      ON em_condor_ticks(condor_id, ts);
+
     -- EOD GEX snapshot: one row per (date, symbol), upserted at 3:55\u20134:05 ET.
-    -- total_gex  signed net GEX (same value as the dashboard header)
-    -- spot       underlying price at compute time
+    -- total_gex   signed net GEX \u2014 MIXED BASIS across sources, kept for
+    --             back-compat only. It was originally "same as the dashboard
+    --             header", but the PM ladder, AM settled pass and header
+    --             fallback all write it on different scopes/bases. Chart
+    --             total_gex_0dte / total_gex_ex0dte instead (both OI+Vol, one
+    --             definition each) \u2014 see the COLUMN BASES block at the top of
+    --             server-v2/eod-gex-recorder.js.
+    -- spot        underlying price at compute time
     -- computed_at ISO timestamp of the actual computation
+    -- NOTE: total_flow_gex, source, total_gex_ex0dte, total_gex_0dte and the
+    -- pin_* columns are added idempotently by that recorder's ensureColumns(),
+    -- which predates this DDL \u2014 they are intentionally not repeated here.
     CREATE TABLE IF NOT EXISTS eod_gex (
       id          SERIAL PRIMARY KEY,
       date        TEXT NOT NULL,
@@ -1141,6 +1317,27 @@ async function ensureAllTables(pool) {
       tickers       JSONB NOT NULL DEFAULT '["AAPL","NVDA","TSLA","AMD"]'::jsonb,
       updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+
+    -- Saved dashboard card layouts ("templates"), per user PER PAGE. A page
+    -- (e.g. 'options') renders its cards through components/shared/DashGrid,
+    -- which emits an array of { id, x, y, w, h } grid items; that array is what
+    -- the layout column holds. Multiple named templates per page are allowed
+    -- and exactly one may be flagged is_default \u2014 that is the one the page
+    -- auto-loads. No row for a (user, page) = the page falls back to its
+    -- built-in layout, so this table is additive and never has to be seeded.
+    CREATE TABLE IF NOT EXISTS dashboard_layouts (
+      id            SERIAL PRIMARY KEY,
+      clerk_user_id TEXT NOT NULL,
+      page          TEXT NOT NULL,           -- route key, e.g. 'options'
+      name          TEXT NOT NULL,           -- user-facing template name
+      layout        JSONB NOT NULL DEFAULT '[]'::jsonb,
+      is_default    BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (clerk_user_id, page, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_dashboard_layouts_user_page
+      ON dashboard_layouts(clerk_user_id, page);
 
     -- Owner options watchlist (the /owner/watch tracker). One row per watched
     -- contract; live greeks/price/flow are captured into watch_snapshots.
@@ -1701,6 +1898,111 @@ async function upsertIctCardPrefs(clerkUserId, hiddenCards) {
     [clerkUserId, JSON.stringify(hiddenCards)]
   );
 }
+function parseLayoutJson(value) {
+  const v = typeof value === "string" ? safeJsonParse(value) : value;
+  return Array.isArray(v) ? v : [];
+}
+function safeJsonParse(s) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+async function getDashboardLayouts(clerkUserId, page) {
+  await getDb();
+  const rows = await queryAll(
+    `SELECT name, layout, is_default, updated_at
+       FROM dashboard_layouts
+      WHERE clerk_user_id = ? AND page = ?
+      ORDER BY is_default DESC, updated_at DESC NULLS LAST, name ASC`,
+    [clerkUserId, page]
+  );
+  return rows.map((r) => ({
+    name: r.name,
+    layout: parseLayoutJson(r.layout),
+    isDefault: Boolean(r.is_default),
+    updatedAt: r.updated_at ?? null
+  }));
+}
+async function upsertDashboardLayout(clerkUserId, page, name, layout, makeDefault = false) {
+  const pool = await getDb();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `INSERT INTO dashboard_layouts (clerk_user_id, page, name, layout, is_default, updated_at)
+       VALUES ($1, $2, $3, $4::jsonb, $5, CURRENT_TIMESTAMP)
+       ON CONFLICT (clerk_user_id, page, name) DO UPDATE SET
+         layout = EXCLUDED.layout,
+         is_default = dashboard_layouts.is_default OR EXCLUDED.is_default,
+         updated_at = CURRENT_TIMESTAMP`,
+      [clerkUserId, page, name, JSON.stringify(layout), makeDefault]
+    );
+    if (makeDefault) {
+      await client.query(
+        `UPDATE dashboard_layouts SET is_default = FALSE
+          WHERE clerk_user_id = $1 AND page = $2 AND name <> $3 AND is_default`,
+        [clerkUserId, page, name]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+async function setDefaultDashboardLayout(clerkUserId, page, name) {
+  const pool = await getDb();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const hit = await client.query(
+      `UPDATE dashboard_layouts SET is_default = TRUE, updated_at = CURRENT_TIMESTAMP
+        WHERE clerk_user_id = $1 AND page = $2 AND name = $3`,
+      [clerkUserId, page, name]
+    );
+    if (!hit.rowCount) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+    await client.query(
+      `UPDATE dashboard_layouts SET is_default = FALSE
+        WHERE clerk_user_id = $1 AND page = $2 AND name <> $3 AND is_default`,
+      [clerkUserId, page, name]
+    );
+    await client.query("COMMIT");
+    return true;
+  } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+async function deleteDashboardLayout(clerkUserId, page, name) {
+  await getDb();
+  await queryAll(
+    `DELETE FROM dashboard_layouts WHERE clerk_user_id = ? AND page = ? AND name = ?`,
+    [clerkUserId, page, name]
+  );
+}
+async function countDashboardLayouts(clerkUserId, page) {
+  await getDb();
+  const row = await queryOne(
+    `SELECT COUNT(*)::int AS n FROM dashboard_layouts WHERE clerk_user_id = ? AND page = ?`,
+    [clerkUserId, page]
+  );
+  return Number(row?.n ?? 0);
+}
 async function getTdPrefs(clerkUserId) {
   await getDb();
   return queryOne(`SELECT * FROM td_user_prefs WHERE clerk_user_id = ?`, [clerkUserId]);
@@ -1966,19 +2268,6 @@ async function getUserByEmail(email) {
 async function getUserById(id) {
   return queryOne(`SELECT * FROM users WHERE id = ?`, [id]);
 }
-// Batch id -> { email, discord_username } lookup. Powers the owner visitor
-// map's per-city popup (show who, not just how many) — one query for however
-// many distinct signed-in user_ids appear in a page_visits batch. Mirrors
-// lib/db.ts's getUsersByIds() — kept as a separate copy since this file is the
-// CommonJS DB layer api-router.js actually runs in production.
-async function getUsersByIds(ids) {
-  const out = new Map();
-  const clean = [...new Set((ids || []).filter(Boolean))];
-  if (!clean.length) return out;
-  const rows = await queryAll(`SELECT id, email, discord_username FROM users WHERE id = ANY(?::text[])`, [clean]);
-  for (const r of rows) out.set(r.id, { email: r.email ?? null, discord_username: r.discord_username ?? null });
-  return out;
-}
 async function getUserByGoogleSub(googleSub) {
   return queryOne(`SELECT * FROM users WHERE google_sub = ?`, [googleSub]);
 }
@@ -2223,6 +2512,331 @@ async function deleteEmTrackerRow(id) {
 async function clearEmTracker(source) {
   const pool = await getDb();
   const res = source ? await pool.query(`DELETE FROM em_tracker WHERE result_source = $1`, [source]) : await pool.query(`DELETE FROM em_tracker`);
+  return res.rowCount ?? 0;
+}
+var CONDOR_COLS = [
+  "ticker",
+  "week_label",
+  "week_start",
+  "ref_price",
+  "em",
+  "put_long",
+  "put_short",
+  "call_short",
+  "call_long",
+  "put_credit",
+  "call_credit",
+  "net_credit",
+  "contracts",
+  "multiplier",
+  "settle_price",
+  "intrinsic",
+  "pnl",
+  "result",
+  "outcome",
+  "breached_side",
+  "touched_side",
+  "result_source",
+  "note"
+];
+async function upsertEmCondor(r, clear = []) {
+  const pool = await getDb();
+  const values = [
+    r.ticker.toUpperCase(),
+    r.week_label,
+    r.week_start,
+    r.ref_price ?? null,
+    r.em ?? null,
+    r.put_long ?? null,
+    r.put_short ?? null,
+    r.call_short ?? null,
+    r.call_long ?? null,
+    r.put_credit ?? null,
+    r.call_credit ?? null,
+    r.net_credit ?? null,
+    r.contracts ?? null,
+    r.multiplier ?? null,
+    r.settle_price ?? null,
+    r.intrinsic ?? null,
+    r.pnl ?? null,
+    r.result ?? null,
+    r.outcome ?? null,
+    r.breached_side ?? null,
+    r.touched_side ?? null,
+    r.result_source ?? null,
+    r.note ?? null
+  ];
+  const placeholders = CONDOR_COLS.map((_, i) => `$${i + 1}`).join(",");
+  const updates = CONDOR_COLS.filter((c) => c !== "ticker" && c !== "week_start").map((c) => clear.includes(c) ? `${c} = EXCLUDED.${c}` : `${c} = COALESCE(EXCLUDED.${c}, em_condors.${c})`).join(",\n       ");
+  await pool.query(
+    `INSERT INTO em_condors (${CONDOR_COLS.join(", ")})
+     VALUES (${placeholders})
+     ON CONFLICT(ticker, week_start) DO UPDATE SET
+       ${updates},
+       updated_at = CURRENT_TIMESTAMP`,
+    values
+  );
+}
+async function getEmCondors(opts = {}) {
+  const where = [];
+  const params = [];
+  if (opts.ticker) {
+    params.push(opts.ticker.toUpperCase());
+    where.push(`c.ticker = $${params.length}`);
+  }
+  if (opts.week_start) {
+    params.push(opts.week_start);
+    where.push(`c.week_start = $${params.length}`);
+  }
+  const sql = `
+    SELECT c.*, e.h AS wk_high, e.l AS wk_low, e.c AS wk_close, e.result AS em_result
+      FROM em_condors c
+      LEFT JOIN em_tracker e
+        ON e.ticker = c.ticker AND e.week_start = c.week_start
+     ${where.length ? "WHERE " + where.join(" AND ") : ""}
+     ORDER BY c.week_start DESC, c.ticker ASC`;
+  const res = await pgQuery(sql, params);
+  return res.rows;
+}
+async function getEmCondorsUnsettled(week_start) {
+  const params = [];
+  let weekClause = "";
+  if (week_start) {
+    params.push(week_start);
+    weekClause = `AND c.week_start = $${params.length}`;
+  }
+  const res = await pgQuery(
+    `SELECT c.*, e.h AS wk_high, e.l AS wk_low, e.c AS wk_close, e.result AS em_result
+       FROM em_condors c
+       LEFT JOIN em_tracker e
+         ON e.ticker = c.ticker AND e.week_start = c.week_start
+      WHERE c.result IS NULL
+        AND c.put_short IS NOT NULL AND c.put_long IS NOT NULL
+        AND c.call_short IS NOT NULL AND c.call_long IS NOT NULL
+        AND e.c IS NOT NULL
+        ${weekClause}
+      ORDER BY c.week_start ASC, c.ticker ASC`,
+    params
+  );
+  return res.rows;
+}
+async function getEmBandsForWeek(week_start) {
+  return queryAll(
+    `SELECT * FROM em_tracker
+      WHERE week_start = ? AND (up IS NOT NULL OR (ref_close IS NOT NULL AND em IS NOT NULL))
+      ORDER BY ticker ASC`,
+    [week_start]
+  );
+}
+async function setEmCondorSettlement(id, s) {
+  const pool = await getDb();
+  await pool.query(
+    `UPDATE em_condors SET
+       settle_price  = COALESCE($2, settle_price),
+       intrinsic     = COALESCE($3, intrinsic),
+       pnl           = COALESCE($4, pnl),
+       result        = $5,
+       outcome       = COALESCE($6, outcome),
+       breached_side = $7,
+       touched_side  = COALESCE($8, touched_side),
+       result_source = $9,
+       updated_at    = CURRENT_TIMESTAMP
+     WHERE id = $1`,
+    [
+      id,
+      s.settle_price ?? null,
+      s.intrinsic ?? null,
+      s.pnl ?? null,
+      s.result,
+      s.outcome ?? null,
+      s.breached_side ?? null,
+      s.touched_side ?? null,
+      s.source ?? "auto"
+    ]
+  );
+}
+async function reopenEmCondor(id) {
+  const pool = await getDb();
+  await pool.query(
+    `UPDATE em_condors SET
+       result = NULL, outcome = NULL, pnl = NULL, intrinsic = NULL,
+       settle_price = NULL, breached_side = NULL, result_source = NULL,
+       updated_at = CURRENT_TIMESTAMP
+     WHERE id = $1`,
+    [id]
+  );
+}
+async function getEmCondorSummary() {
+  const res = await pgQuery(`
+    SELECT
+      ticker,
+      COUNT(*) FILTER (WHERE result = 'win')::int  AS wins,
+      COUNT(*) FILTER (WHERE result = 'loss')::int AS losses,
+      COUNT(*) FILTER (WHERE result IS NOT NULL)::int AS settled,
+      COUNT(*)::int AS total,
+      COALESCE(SUM(pnl) FILTER (WHERE result IS NOT NULL), 0) AS pnl,
+      COUNT(*) FILTER (WHERE outcome = 'max_win')::int  AS max_wins,
+      COUNT(*) FILTER (WHERE outcome = 'max_loss')::int AS max_losses
+    FROM em_condors
+    GROUP BY ticker
+    ORDER BY ticker ASC
+  `);
+  return res.rows.map((r) => {
+    const settled = Number(r.settled ?? 0);
+    const pnl = Number(r.pnl ?? 0);
+    return {
+      ticker: r.ticker,
+      wins: Number(r.wins ?? 0),
+      losses: Number(r.losses ?? 0),
+      settled,
+      total: Number(r.total ?? 0),
+      win_rate: settled > 0 ? Number(r.wins) / settled : null,
+      pnl,
+      avg_pnl: settled > 0 ? pnl / settled : null,
+      max_wins: Number(r.max_wins ?? 0),
+      max_losses: Number(r.max_losses ?? 0)
+    };
+  });
+}
+async function upsertEmCondorMarks(condor_id, marks) {
+  if (!marks.length) return 0;
+  const pool = await getDb();
+  let n = 0;
+  for (const m of marks) {
+    await pool.query(
+      `INSERT INTO em_condor_marks
+         (condor_id, d, underlying, under_high, under_low,
+          put_long_px, put_short_px, call_short_px, call_long_px,
+          mark, open_pnl, pct_max, cushion, legs_priced, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       ON CONFLICT(condor_id, d) DO UPDATE SET
+         underlying    = COALESCE(EXCLUDED.underlying,    em_condor_marks.underlying),
+         under_high    = COALESCE(EXCLUDED.under_high,    em_condor_marks.under_high),
+         under_low     = COALESCE(EXCLUDED.under_low,     em_condor_marks.under_low),
+         put_long_px   = COALESCE(EXCLUDED.put_long_px,   em_condor_marks.put_long_px),
+         put_short_px  = COALESCE(EXCLUDED.put_short_px,  em_condor_marks.put_short_px),
+         call_short_px = COALESCE(EXCLUDED.call_short_px, em_condor_marks.call_short_px),
+         call_long_px  = COALESCE(EXCLUDED.call_long_px,  em_condor_marks.call_long_px),
+         mark          = COALESCE(EXCLUDED.mark,          em_condor_marks.mark),
+         open_pnl      = COALESCE(EXCLUDED.open_pnl,      em_condor_marks.open_pnl),
+         pct_max       = COALESCE(EXCLUDED.pct_max,       em_condor_marks.pct_max),
+         cushion       = COALESCE(EXCLUDED.cushion,       em_condor_marks.cushion),
+         legs_priced   = GREATEST(EXCLUDED.legs_priced,   em_condor_marks.legs_priced),
+         source        = COALESCE(EXCLUDED.source,        em_condor_marks.source),
+         updated_at    = CURRENT_TIMESTAMP`,
+      [
+        condor_id,
+        m.d,
+        m.underlying ?? null,
+        m.under_high ?? null,
+        m.under_low ?? null,
+        m.put_long_px ?? null,
+        m.put_short_px ?? null,
+        m.call_short_px ?? null,
+        m.call_long_px ?? null,
+        m.mark ?? null,
+        m.open_pnl ?? null,
+        m.pct_max ?? null,
+        m.cushion ?? null,
+        m.legs_priced ?? 0,
+        m.source ?? "tt"
+      ]
+    );
+    n++;
+  }
+  return n;
+}
+async function getEmCondorMarks(opts = {}) {
+  const params = [];
+  const where = [];
+  if (opts.condor_id) {
+    params.push(opts.condor_id);
+    where.push(`m.condor_id = $${params.length}`);
+  }
+  if (opts.week_start) {
+    params.push(opts.week_start);
+    where.push(`c.week_start = $${params.length}`);
+  }
+  const res = await pgQuery(
+    `SELECT m.* FROM em_condor_marks m
+       JOIN em_condors c ON c.id = m.condor_id
+      ${where.length ? "WHERE " + where.join(" AND ") : ""}
+      ORDER BY m.condor_id ASC, m.d ASC`,
+    params
+  );
+  const ymd = (v) => {
+    if (typeof v === "string") return v.slice(0, 10);
+    const dt = v instanceof Date ? v : new Date(String(v));
+    if (Number.isNaN(dt.getTime())) return String(v).slice(0, 10);
+    const p = (n) => String(n).padStart(2, "0");
+    return `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())}`;
+  };
+  return res.rows.map((r) => ({ ...r, d: ymd(r.d) }));
+}
+async function insertEmCondorTicks(ticks) {
+  if (!ticks.length) return 0;
+  const pool = await getDb();
+  let n = 0;
+  for (const t of ticks) {
+    const res = await pool.query(
+      `INSERT INTO em_condor_ticks
+         (condor_id, ts, underlying, put_long_px, put_short_px, call_short_px, call_long_px,
+          mark, open_pnl, pct_max, cushion, legs_priced, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       ON CONFLICT(condor_id, ts) DO NOTHING`,
+      [
+        t.condor_id,
+        Math.round(Number(t.ts)),
+        t.underlying ?? null,
+        t.put_long_px ?? null,
+        t.put_short_px ?? null,
+        t.call_short_px ?? null,
+        t.call_long_px ?? null,
+        t.mark ?? null,
+        t.open_pnl ?? null,
+        t.pct_max ?? null,
+        t.cushion ?? null,
+        t.legs_priced ?? 0,
+        t.source ?? "tt"
+      ]
+    );
+    n += res.rowCount ?? 0;
+  }
+  return n;
+}
+async function getEmCondorTicks(opts = {}) {
+  const params = [];
+  const where = [];
+  if (opts.condor_id) {
+    params.push(opts.condor_id);
+    where.push(`t.condor_id = $${params.length}`);
+  }
+  if (opts.week_start) {
+    params.push(opts.week_start);
+    where.push(`c.week_start = $${params.length}`);
+  }
+  const res = await pgQuery(
+    `SELECT t.* FROM em_condor_ticks t
+       JOIN em_condors c ON c.id = t.condor_id
+      ${where.length ? "WHERE " + where.join(" AND ") : ""}
+      ORDER BY t.condor_id ASC, t.ts ASC`,
+    params
+  );
+  return res.rows.map((r) => ({ ...r, ts: Number(r.ts) }));
+}
+async function pruneEmCondorTicks(days = 120) {
+  const pool = await getDb();
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1e3;
+  const res = await pool.query(`DELETE FROM em_condor_ticks WHERE ts < $1`, [cutoff]);
+  return res.rowCount ?? 0;
+}
+async function deleteEmCondor(id) {
+  const pool = await getDb();
+  await pool.query(`DELETE FROM em_condors WHERE id = $1`, [id]);
+}
+async function clearEmCondors(week_start) {
+  const pool = await getDb();
+  const res = week_start ? await pool.query(`DELETE FROM em_condors WHERE week_start = $1`, [week_start]) : await pool.query(`DELETE FROM em_condors`);
   return res.rowCount ?? 0;
 }
 async function addWaitlistEmail(input) {
@@ -2721,16 +3335,12 @@ async function getPageLoadStatus(limit = 200) {
     [limit]
   );
 }
-// HARD cap on how far back any acquisition report can look: once you are past
-// PAGE_VISITS_KEEP visits the oldest entry rows are deleted and that traffic is
-// gone for good. Raise it with the PAGE_VISITS_KEEP env var rather than editing
-// code — rows are a few hundred bytes, so 100k costs tens of MB.
 var PAGE_VISITS_KEEP = Math.max(1e3, Number(process.env.PAGE_VISITS_KEEP) || 5e3);
 async function insertPageVisit(r) {
   const pool = await getDb();
   await pool.query(
     `INSERT INTO page_visits (
-       page_key, page_label, path, user_id, ip, country, region, city, lat, lon,
+       page_key, page_label, path, user_id, ip, country, region, city, latitude, longitude,
        is_entry, referrer, referrer_host,
        utm_source, utm_medium, utm_campaign, utm_term, utm_content,
        channel, browser, os, device_type, is_bot
@@ -2738,12 +3348,29 @@ async function insertPageVisit(r) {
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
              $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
     [
-      r.page_key ?? null, r.page_label ?? null, r.path ?? null, r.user_id ?? null, r.ip ?? null,
-      r.country ?? null, r.region ?? null, r.city ?? null, r.lat ?? null, r.lon ?? null,
-      r.is_entry ?? false, r.referrer ?? null, r.referrer_host ?? null,
-      r.utm_source ?? null, r.utm_medium ?? null, r.utm_campaign ?? null,
-      r.utm_term ?? null, r.utm_content ?? null,
-      r.channel ?? null, r.browser ?? null, r.os ?? null, r.device_type ?? null, r.is_bot ?? false,
+      r.page_key ?? null,
+      r.page_label ?? null,
+      r.path ?? null,
+      r.user_id ?? null,
+      r.ip ?? null,
+      r.country ?? null,
+      r.region ?? null,
+      r.city ?? null,
+      r.latitude ?? null,
+      r.longitude ?? null,
+      r.is_entry ?? false,
+      r.referrer ?? null,
+      r.referrer_host ?? null,
+      r.utm_source ?? null,
+      r.utm_medium ?? null,
+      r.utm_campaign ?? null,
+      r.utm_term ?? null,
+      r.utm_content ?? null,
+      r.channel ?? null,
+      r.browser ?? null,
+      r.os ?? null,
+      r.device_type ?? null,
+      r.is_bot ?? false
     ]
   );
   await pool.query(
@@ -3360,23 +3987,13 @@ function clampReal(v) {
   if (!Number.isFinite(v)) return 0;
   return Math.abs(v) < REAL_MIN_MAGNITUDE ? 0 : v;
 }
-// Canonical underlying key for option_strike_gex_history. Legacy rows carry no
-// symbol at all and are $SPX, so that stays the default everywhere.
-var DEFAULT_GEX_SYMBOL = "$SPX";
-function normGexSymbol(sym) {
-  const s = String(sym ?? "").trim().toUpperCase();
-  if (!s) return DEFAULT_GEX_SYMBOL;
-  // "SPX" and "$SPX" are the same underlying written two ways across the app.
-  if (s === "SPX") return DEFAULT_GEX_SYMBOL;
-  return s;
-}
 async function insertOptionStrikeGexRows(rows) {
   if (!rows.length) return;
   const pool = await getDb();
   for (const row of rows) {
     await pool.query(
-      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex, symbol)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
       [
         row.timestamp,
         row.date,
@@ -3384,8 +4001,7 @@ async function insertOptionStrikeGexRows(rows) {
         row.spot,
         row.strike,
         clampReal(row.net_gex),
-        Number.isFinite(row.net_vol_gex) ? clampReal(row.net_vol_gex) : null,
-        normGexSymbol(row.symbol)
+        Number.isFinite(row.net_vol_gex) ? clampReal(row.net_vol_gex) : null
       ]
     );
   }
@@ -3394,20 +4010,19 @@ async function insertOptionStrikeGexRows(rows) {
     [Date.now() - 2 * 24 * 60 * 60 * 1e3]
   );
 }
-async function getOptionStrikeRollingNetGex(date, expiry, sinceTimestamp, symbol) {
+async function getOptionStrikeRollingNetGex(date, expiry, sinceTimestamp) {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT strike,
             AVG(net_gex) AS rolling_net_gex,
             COUNT(*)::int AS points
        FROM option_strike_gex_history
-      WHERE symbol = $4
-        AND date = $1
+      WHERE date = $1
         AND expiry = $2
         AND timestamp >= $3
       GROUP BY strike
       ORDER BY strike ASC`,
-    [date, expiry, sinceTimestamp, normGexSymbol(symbol)]
+    [date, expiry, sinceTimestamp]
   );
   return result.rows.map((row) => ({
     strike: Number(row.strike ?? 0),
@@ -3415,7 +4030,7 @@ async function getOptionStrikeRollingNetGex(date, expiry, sinceTimestamp, symbol
     points: Number(row.points ?? 0)
   }));
 }
-async function getOptionStrikeGexSlots(date, expiry, symbol) {
+async function getOptionStrikeGexSlots(date, expiry) {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT DISTINCT ON ((FLOOR(timestamp / 60000) * 60000), strike)
@@ -3425,11 +4040,10 @@ async function getOptionStrikeGexSlots(date, expiry, symbol) {
             net_vol_gex,
             spot
        FROM option_strike_gex_history
-      WHERE symbol = $3
-        AND date = $1
+      WHERE date = $1
         AND expiry = $2
       ORDER BY (FLOOR(timestamp / 60000) * 60000) ASC, strike ASC, timestamp DESC`,
-    [date, expiry, normGexSymbol(symbol)]
+    [date, expiry]
   );
   return result.rows.map((row) => ({
     slot_ts: Number(row.slot_ts ?? 0),
@@ -3442,7 +4056,7 @@ async function getOptionStrikeGexSlots(date, expiry, symbol) {
     spot: Number(row.spot ?? 0)
   }));
 }
-async function getOptionStrikeGexSlotsWindow(sinceTs, expiry, symbol) {
+async function getOptionStrikeGexSlotsWindow(sinceTs, expiry) {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT DISTINCT ON ((FLOOR(timestamp / 60000) * 60000), strike)
@@ -3452,11 +4066,10 @@ async function getOptionStrikeGexSlotsWindow(sinceTs, expiry, symbol) {
             net_vol_gex,
             spot
        FROM option_strike_gex_history
-      WHERE symbol = $3
-        AND timestamp >= $1
+      WHERE timestamp >= $1
         AND expiry = $2
       ORDER BY (FLOOR(timestamp / 60000) * 60000) ASC, strike ASC, timestamp DESC`,
-    [sinceTs, expiry, normGexSymbol(symbol)]
+    [sinceTs, expiry]
   );
   return result.rows.map((row) => ({
     slot_ts: Number(row.slot_ts ?? 0),
@@ -3466,10 +4079,7 @@ async function getOptionStrikeGexSlotsWindow(sinceTs, expiry, symbol) {
     spot: Number(row.spot ?? 0)
   }));
 }
-// "Any expiry" = the rolling-front heatmap read. It is still scoped to ONE
-// underlying — without the symbol filter the SPY/QQQ recorders' rows would land
-// in the SPX heatmap as a second cloud of strikes two orders of magnitude away.
-async function getOptionStrikeGexSlotsWindowAny(sinceTs, symbol) {
+async function getOptionStrikeGexSlotsWindowAny(sinceTs) {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT DISTINCT ON ((FLOOR(timestamp / 60000) * 60000), strike)
@@ -3479,10 +4089,9 @@ async function getOptionStrikeGexSlotsWindowAny(sinceTs, symbol) {
             net_vol_gex,
             spot
        FROM option_strike_gex_history
-      WHERE symbol = $2
-        AND timestamp >= $1
+      WHERE timestamp >= $1
       ORDER BY (FLOOR(timestamp / 60000) * 60000) ASC, strike ASC, timestamp DESC`,
-    [sinceTs, normGexSymbol(symbol)]
+    [sinceTs]
   );
   return result.rows.map((row) => ({
     slot_ts: Number(row.slot_ts ?? 0),
@@ -3492,17 +4101,16 @@ async function getOptionStrikeGexSlotsWindowAny(sinceTs, symbol) {
     spot: Number(row.spot ?? 0)
   }));
 }
-async function getOptionStrikeNetGexAsOf(date, expiry, asOfTimestamp, symbol) {
+async function getOptionStrikeNetGexAsOf(date, expiry, asOfTimestamp) {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT DISTINCT ON (strike) strike, net_gex, net_vol_gex, timestamp
        FROM option_strike_gex_history
-      WHERE symbol = $4
-        AND date = $1
+      WHERE date = $1
         AND expiry = $2
         AND timestamp <= $3
       ORDER BY strike ASC, timestamp DESC`,
-    [date, expiry, asOfTimestamp, normGexSymbol(symbol)]
+    [date, expiry, asOfTimestamp]
   );
   return result.rows.map((row) => ({
     strike: Number(row.strike ?? 0),
@@ -3511,13 +4119,12 @@ async function getOptionStrikeNetGexAsOf(date, expiry, asOfTimestamp, symbol) {
     timestamp: Number(row.timestamp ?? 0)
   }));
 }
-async function getOptionStrikeNetGexAsOfOrNearest(date, expiry, asOfTimestamp, symbol) {
+async function getOptionStrikeNetGexAsOfOrNearest(date, expiry, asOfTimestamp) {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT DISTINCT ON (strike) strike, net_gex, net_vol_gex, timestamp
        FROM option_strike_gex_history
-      WHERE symbol = $4
-        AND date = $1
+      WHERE date = $1
         AND expiry = $2
       ORDER BY strike ASC,
                (timestamp <= $3) DESC,
@@ -3525,7 +4132,7 @@ async function getOptionStrikeNetGexAsOfOrNearest(date, expiry, asOfTimestamp, s
                     THEN $3 - timestamp
                     ELSE timestamp - $3
                END ASC`,
-    [date, expiry, asOfTimestamp, normGexSymbol(symbol)]
+    [date, expiry, asOfTimestamp]
   );
   return result.rows.map((row) => ({
     strike: Number(row.strike ?? 0),
@@ -3534,16 +4141,15 @@ async function getOptionStrikeNetGexAsOfOrNearest(date, expiry, asOfTimestamp, s
     timestamp: Number(row.timestamp ?? 0)
   }));
 }
-async function getOptionStrikeNetGexAtOpen(date, expiry, symbol) {
+async function getOptionStrikeNetGexAtOpen(date, expiry) {
   const pool = await getDb();
   const result = await pool.query(
     `SELECT DISTINCT ON (strike) strike, net_gex, net_vol_gex, timestamp
        FROM option_strike_gex_history
-      WHERE symbol = $3
-        AND date = $1
+      WHERE date = $1
         AND expiry = $2
       ORDER BY strike ASC, timestamp ASC`,
-    [date, expiry, normGexSymbol(symbol)]
+    [date, expiry]
   );
   return result.rows.map((row) => ({
     strike: Number(row.strike ?? 0),
@@ -3791,6 +4397,90 @@ async function listPropRows(profileId, fromDate, toDate) {
     [profileId, fromDate, toDate]
   );
 }
+async function listRetaSetups() {
+  return queryAll(
+    "SELECT * FROM reta_setups ORDER BY effective_from ASC"
+  );
+}
+async function upsertRetaSetup(input) {
+  const pool = await getDb();
+  const result = await pool.query(
+    `INSERT INTO reta_setups (effective_from, vial_mg, bac_ml, syringe_units, note)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (effective_from) DO UPDATE SET
+       vial_mg = EXCLUDED.vial_mg,
+       bac_ml = EXCLUDED.bac_ml,
+       syringe_units = EXCLUDED.syringe_units,
+       note = EXCLUDED.note,
+       updated_at = CURRENT_TIMESTAMP
+     RETURNING *`,
+    [
+      input.effective_from,
+      input.vial_mg,
+      input.bac_ml,
+      Math.round(input.syringe_units ?? 100) || 100,
+      input.note ?? null
+    ]
+  );
+  return result.rows[0];
+}
+async function deleteRetaSetup(id) {
+  const pool = await getDb();
+  await pool.query(`DELETE FROM reta_setups WHERE id = $1`, [id]);
+}
+async function listRetaShots() {
+  return queryAll(
+    "SELECT * FROM reta_shots ORDER BY shot_date ASC, person ASC"
+  );
+}
+async function upsertRetaShot(input) {
+  const pool = await getDb();
+  const result = await pool.query(
+    // Every param is cast explicitly: a bare `COALESCE($3, 0)` would let
+    // Postgres infer $3 as integer from the literal and reject "0.5".
+    `INSERT INTO reta_shots (shot_date, person, dose_mg, weight_lb, taken)
+     VALUES ($1,$2,COALESCE($3::real,0),$4::real,COALESCE($5::int,0))
+     ON CONFLICT (shot_date, person) DO UPDATE SET
+       dose_mg   = COALESCE($3::real, reta_shots.dose_mg),
+       weight_lb = CASE WHEN $6::boolean THEN $4::real ELSE reta_shots.weight_lb END,
+       taken     = COALESCE($5::int, reta_shots.taken),
+       updated_at = CURRENT_TIMESTAMP
+     RETURNING *`,
+    [
+      input.shot_date,
+      input.person,
+      input.dose_mg ?? null,
+      input.weight_lb ?? null,
+      input.taken ?? null,
+      // weight_lb is nullable and clearable, so "was it sent?" can't be inferred
+      // from the value — pass the intent explicitly.
+      input.weight_lb !== void 0
+    ]
+  );
+  return result.rows[0];
+}
+async function deleteRetaShot(shotDate, person) {
+  const pool = await getDb();
+  await pool.query(`DELETE FROM reta_shots WHERE shot_date = $1 AND person = $2`, [shotDate, person]);
+}
+async function listRetaWeekNotes() {
+  return queryAll(
+    "SELECT shot_date, note FROM reta_week_notes ORDER BY shot_date ASC"
+  );
+}
+async function upsertRetaWeekNote(shotDate, note) {
+  const pool = await getDb();
+  const text = note && note.trim() ? note.trim() : null;
+  if (!text) {
+    await pool.query(`DELETE FROM reta_week_notes WHERE shot_date = $1`, [shotDate]);
+    return;
+  }
+  await pool.query(
+    `INSERT INTO reta_week_notes (shot_date, note) VALUES ($1,$2)
+     ON CONFLICT (shot_date) DO UPDATE SET note = EXCLUDED.note, updated_at = CURRENT_TIMESTAMP`,
+    [shotDate, text]
+  );
+}
 async function upsertEodGex(r) {
   const pool = await getDb();
   await pool.query(
@@ -3908,10 +4598,12 @@ async function getLatestMultGreekStaticSnapshot() {
   addWaitlistEmail,
   adoptDefaultBudgetProfile,
   claimWelcomeEmail,
+  clearEmCondors,
   clearEmTracker,
   clearUserDiscord,
   consumePasswordReset,
   countActiveSessions,
+  countDashboardLayouts,
   countUsers,
   countWaitlist,
   createUser,
@@ -3919,12 +4611,16 @@ async function getLatestMultGreekStaticSnapshot() {
   deleteAmazonRow,
   deleteBudgetCategory,
   deleteBzilaAlert,
+  deleteDashboardLayout,
+  deleteEmCondor,
   deleteEmTrackerRow,
   deleteExpiredSessions,
   deletePropRow,
   deleteRecurring,
   deleteRegisterByTag,
   deleteRegisterRow,
+  deleteRetaSetup,
+  deleteRetaShot,
   deleteSession,
   deleteSnapshot,
   deleteTradingJournal,
@@ -3946,7 +4642,14 @@ async function getLatestMultGreekStaticSnapshot() {
   getDailyBalanceBefore,
   getDailyStrategy,
   getDailyStrategyHistory,
+  getDashboardLayouts,
   getDb,
+  getEmBandsForWeek,
+  getEmCondorMarks,
+  getEmCondorSummary,
+  getEmCondorTicks,
+  getEmCondors,
+  getEmCondorsUnsettled,
   getEmTrackerPendingForWeek,
   getEmTrackerRows,
   getEmTrackerSummary,
@@ -4010,7 +4713,6 @@ async function getLatestMultGreekStaticSnapshot() {
   getUserByEmail,
   getUserByGoogleSub,
   getUserById,
-  getUsersByIds,
   getUserBzilaReactions,
   getWatchHistory,
   getWatchHistorySince,
@@ -4020,6 +4722,7 @@ async function getLatestMultGreekStaticSnapshot() {
   insertBzilaAlert,
   insertBzilaSnapshot,
   insertDailyStrategyHistory,
+  insertEmCondorTicks,
   insertFlowCalls,
   insertGreeksTs,
   insertHomeStaticSnapshot,
@@ -4027,7 +4730,6 @@ async function getLatestMultGreekStaticSnapshot() {
   insertMultGreekStaticSnapshot,
   insertMvcSnapshot,
   insertOptionStrikeGexRows,
-  normGexSymbol,
   insertPageVisit,
   insertPasswordReset,
   insertPlaybookFeed,
@@ -4057,6 +4759,9 @@ async function getLatestMultGreekStaticSnapshot() {
   listRecentUsers,
   listRecurring,
   listRegister,
+  listRetaSetups,
+  listRetaShots,
+  listRetaWeekNotes,
   listSalesExpenses,
   listUnsubscribes,
   listUsersWithLastLogin,
@@ -4065,13 +4770,17 @@ async function getLatestMultGreekStaticSnapshot() {
   persistDb,
   pgQuery,
   postEsGap,
+  pruneEmCondorTicks,
   queryAll,
   queryOne,
   reactBzilaAlert,
   removeSalesExpense,
   removeUnsubscribe,
+  reopenEmCondor,
   savePromoCode,
   saveSnapshot,
+  setDefaultDashboardLayout,
+  setEmCondorSettlement,
   setEmTrackerResult,
   setFeedbackStatus,
   setRegisterCategory,
@@ -4093,6 +4802,9 @@ async function getLatestMultGreekStaticSnapshot() {
   upsertConfidenceLog,
   upsertDailyBalance,
   upsertDailyStrategy,
+  upsertDashboardLayout,
+  upsertEmCondor,
+  upsertEmCondorMarks,
   upsertEmTrackerRow,
   upsertEodGex,
   upsertEsCandle,
@@ -4105,6 +4817,9 @@ async function getLatestMultGreekStaticSnapshot() {
   upsertPositioningTickers,
   upsertPremarketSummary,
   upsertQuoteSymbols,
+  upsertRetaSetup,
+  upsertRetaShot,
+  upsertRetaWeekNote,
   upsertSubscription,
   upsertTdOverview,
   upsertTdPrefs,

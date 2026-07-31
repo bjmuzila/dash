@@ -27,6 +27,7 @@ const EconCalendar = lazy(() => import('@/app/economic-calendar/page'))
 const TestLab      = lazy(() => import('@/app/test/page'))
 const ForwardBuild = lazy(() => import('@/app/forward-build/page'))
 const StrikeHistory = lazy(() => import('@/app/strike-history/page'))
+const Replay       = lazy(() => import('@/app/replay/page'))
 
 const S = (el: ReactNode) => <Suspense fallback={null}>{el}</Suspense>
 
@@ -53,6 +54,7 @@ export default function App() {
               <Route path="/scanner" element={S(<Scanner />)} />
               <Route path="/forward-build" element={S(<ForwardBuild />)} />
               <Route path="/strike-history" element={S(<StrikeHistory />)} />
+              <Route path="/replay" element={S(<Replay />)} />
               <Route path="/ict" element={S(<Ict />)} />
               <Route path="/test" element={S(<TestLab />)} />
               <Route path="/trading" element={S(<Trading />)} />

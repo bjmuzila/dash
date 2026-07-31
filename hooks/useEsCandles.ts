@@ -14,6 +14,7 @@
 
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
+import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
 import {
   queryEsCandlesToday,
   queryEsCandlesHistorical,
@@ -102,8 +103,6 @@ export function useEsCandles(
   // Final gate = global bandwidth lifecycle AND the caller's enable flag.
   const lifecycle = useWsLifecycle();
   const shouldConnect = lifecycle && enabled;
-  const shouldConnectRef = useRef(shouldConnect);
-  shouldConnectRef.current = shouldConnect;
   // Read inside the WS handler. A ref, not a dep: the socket effect keys on
   // `shouldConnect` alone, so switching aggregation must not drop and re-open the
   // connection — the server sends both streams regardless, we just change which
@@ -119,8 +118,8 @@ export function useEsCandles(
   // today-only and feeds `candles` (IB / RelVol consumers expect today-only).
   const sessionMapRef = useRef<Map<string, EsCandleRecord>>(new Map());
   const [sessionTick, setSessionTick] = useState(0);
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // (wsRef / reconnectRef are gone — the socket and its backoff are owned by
+  // lib/gexSocket now; this hook just subscribes.)
   const unmountedRef = useRef(false);
   // ── Re-render coalescing ───────────────────────────────────────────────────
   // The /ws/gex feed pushes candle frames continuously, and EVERY frame used to
@@ -243,9 +242,9 @@ export function useEsCandles(
       }
     };
 
-    const handle = (rawMsg: string) => {
-      let msg: Record<string, unknown>;
-      try { msg = JSON.parse(rawMsg); } catch { return; }
+    // Frames arrive pre-parsed from the shared socket (lib/gexSocket parses each
+    // frame ONCE for all consumers instead of once per connection).
+    const handle = (msg: GexMessage) => {
       const type = String(msg.type ?? "");
       const data = (msg.data && typeof msg.data === "object" ? msg.data : msg) as Record<string, unknown>;
       // Take ONLY the stream matching this hook's aggregation. The server sends
@@ -264,41 +263,27 @@ export function useEsCandles(
       }
     };
 
-    const connect = () => {
-      if (unmountedRef.current || !shouldConnectRef.current) return;
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      let ws: WebSocket;
-      try { ws = new WebSocket(`${proto}//${window.location.host}/ws/gex`); }
-      catch { schedule(); return; }
-      wsRef.current = ws;
-      ws.onopen = () => setConnected(true);
-      ws.onmessage = (e) => handle(String(e.data));
-      ws.onerror = () => { try { ws.close(); } catch {} };
-      ws.onclose = () => { setConnected(false); schedule(); };
-    };
-    const schedule = () => {
-      if (unmountedRef.current || !shouldConnectRef.current) return;
-      if (reconnectRef.current) clearTimeout(reconnectRef.current);
-      reconnectRef.current = setTimeout(connect, 2500);
-    };
-
-    // Value-driven bandwidth gate: re-runs when shouldConnect flips. Connect when
-    // allowed; the cleanup tears down when not (no polling).
+    // Value-driven bandwidth gate: re-runs when shouldConnect flips. Subscribe
+    // when allowed; the cleanup unsubscribes when not (no polling). Connection
+    // ownership, reconnect and backoff now live in lib/gexSocket — this hook
+    // shares ONE socket with the toolbar ticker and the ES-candles page instead
+    // of opening a third connection to the same broadcast.
     unmountedRef.current = false;
-    if (shouldConnect) connect();
+    let unsubscribe: (() => void) | null = null;
+    if (shouldConnect) {
+      unsubscribe = subscribeGex({
+        onMessage: (msg) => { if (!unmountedRef.current) handle(msg); },
+        onStatus: (live) => { if (!unmountedRef.current) setConnected(live); },
+      });
+    }
+
     return () => {
       unmountedRef.current = true;
-      if (reconnectRef.current) clearTimeout(reconnectRef.current);
       // Pending coalesced publishes must not fire into an unmounted tree.
       if (tickTimerRef.current) { clearTimeout(tickTimerRef.current); tickTimerRef.current = null; }
       if (rowsTimerRef.current) { clearTimeout(rowsTimerRef.current); rowsTimerRef.current = null; }
-      const ws = wsRef.current;
-      wsRef.current = null;
-      if (ws) {
-        ws.onmessage = ws.onerror = ws.onclose = null;
-        if (ws.readyState === WebSocket.CONNECTING) ws.onopen = () => { try { ws.close(); } catch {} };
-        else { ws.onopen = null; try { ws.close(); } catch {} }
-      }
+      unsubscribe?.();
+      setConnected(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldConnect]);

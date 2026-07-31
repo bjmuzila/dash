@@ -61,6 +61,7 @@ type VolFlowResponse = {
   ok?: boolean;
   reason?: string;
   scope?: string;
+  session?: string;
   expiry?: string | null;
   binSec?: number;
   expiries?: ExpiryInfo[];
@@ -102,6 +103,7 @@ function shortExpiry(iso: string): string {
 
 export default function VolGexFlowPanel() {
   const [pick, setPick] = useState<string>(FRONT);
+  const [session, setSession] = useState<"rth" | "eth">("rth");
   const [points, setPoints] = useState<VolFlowPoint[]>([]);
   const [expiries, setExpiries] = useState<ExpiryInfo[]>([]);
   const [resolvedExpiry, setResolvedExpiry] = useState<string | null>(null);
@@ -114,7 +116,7 @@ export default function VolGexFlowPanel() {
     const qs =
       pick === ALL ? `scope=all` : pick === FRONT ? `scope=front` : `expiry=${encodeURIComponent(pick)}`;
     try {
-      const r = await fetch(`/proxy/gex-vol-flow?bin=${BIN_SEC}&${qs}`, { cache: "no-store" });
+      const r = await fetch(`/proxy/gex-vol-flow?bin=${BIN_SEC}&session=${session}&${qs}`, { cache: "no-store" });
       const j = (await r.json()) as VolFlowResponse;
       if (j?.ok === false) {
         setErr(j.reason === "no-db" ? "History DB unavailable" : "Feed unavailable");
@@ -131,7 +133,7 @@ export default function VolGexFlowPanel() {
     } finally {
       setLoading(false);
     }
-  }, [pick]);
+  }, [pick, session]);
 
   useEffect(() => {
     let alive = true;
@@ -296,12 +298,42 @@ export default function VolGexFlowPanel() {
           width={190}
           ariaLabel="Expiration"
         />
-        <span style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", letterSpacing: "0.06em" }}>
+        {/* Session switch. RTH is the default because the overnight stretch has
+            no new prints — values persist until the chain resets, which draws a
+            long flat line and a phantom step that read as signal but aren't. */}
+        <div style={{ display: "flex", border: `1px solid ${C.border}`, borderRadius: 7, overflow: "hidden" }}>
+          {([
+            { id: "rth", label: "RTH", title: "Regular hours — 09:30–16:00 ET" },
+            { id: "eth", label: "ETH", title: "Extended — the whole ET day, including the overnight tail" },
+          ] as const).map((s) => {
+            const on = session === s.id;
+            return (
+              <button
+                key={s.id}
+                onClick={() => setSession(s.id)}
+                title={s.title}
+                aria-pressed={on}
+                style={{
+                  fontSize: 10, fontWeight: 800, letterSpacing: "0.1em",
+                  padding: "3px 10px", cursor: "pointer", border: "none",
+                  // Off state stays full-strength white: the cyan tint + cyan
+                  // ink on the active button carries the state, so dimming the
+                  // inactive one is redundant and just costs legibility.
+                  background: on ? "rgba(33,158,188,0.18)" : "transparent",
+                  color: on ? C.cyan : C.text,
+                }}
+              >
+                {s.label}
+              </button>
+            );
+          })}
+        </div>
+        <span style={{ fontSize: 11, color: C.text, letterSpacing: "0.06em" }}>
           {BIN_SEC / 60}m buckets · today ET
         </span>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           {updatedAt && (
-            <span style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", fontFamily: "var(--font-mono)" }}>
+            <span style={{ fontSize: 11, color: C.text, fontFamily: "var(--font-mono)" }}>
               {etTime(Math.floor(updatedAt / 1000))}
             </span>
           )}
@@ -315,19 +347,19 @@ export default function VolGexFlowPanel() {
       </div>
 
       {/* Cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(112px, 1fr))", gap: 6, flexShrink: 0 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(138px, 1fr))", gap: 6, flexShrink: 0 }}>
         {(cards.length ? cards : Array.from({ length: 6 }, () => null)).map((c, i) => (
           <div
             key={c?.label ?? i}
-            style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, background: "rgba(13,17,25,0.35)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "4px 10px", minWidth: 0 }}
+            style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, background: "rgba(13,17,25,0.35)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", minWidth: 0 }}
           >
-            <span style={{ fontSize: 9.5, color: "rgba(255,255,255,0.75)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, whiteSpace: "nowrap" }}>
+            <span style={{ fontSize: 11.5, color: C.text, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, whiteSpace: "nowrap" }}>
               {c?.label ?? "—"}
             </span>
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, color: c?.color ?? C.text, whiteSpace: "nowrap" }}>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 21, fontWeight: 800, color: c?.color ?? C.text, whiteSpace: "nowrap" }}>
               {c?.value ?? "—"}
             </span>
-            <span style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", whiteSpace: "nowrap" }}>{c?.sub ?? ""}</span>
+            <span style={{ fontSize: 11, color: C.text, whiteSpace: "nowrap" }}>{c?.sub ?? ""}</span>
           </div>
         ))}
       </div>
@@ -343,7 +375,9 @@ export default function VolGexFlowPanel() {
                 ? err
                 : loading
                   ? "Loading net vol GEX history…"
-                  : "No snapshots recorded yet today"}
+                  : session === "rth"
+                    ? "No snapshots in today's RTH window — try ETH"
+                    : "No snapshots recorded yet today"}
             </span>
           </div>
         )}

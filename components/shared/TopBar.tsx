@@ -5,6 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
 import SnapButton from "./SnapButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
+import { useGexSocket, type GexMessage } from "@/lib/gexSocket";
 
 const NAV_ITEMS = [
   { label: "Overview",      href: "/" },
@@ -138,9 +139,9 @@ export default function TopBar() {
   const isOwner = ownerId ? user?.id === ownerId : !!isSignedIn;
   const navItems = NAV_ITEMS.filter((i) => !i.ownerOnly || isOwner);
   const pathname = usePathname();
+  // Bandwidth gate — passed to the shared /ws/gex subscription below. Reconnect
+  // and backoff live in lib/gexSocket now, so no ref mirror is needed.
   const shouldConnect = useWsLifecycle();
-  const shouldConnectRef = useRef(shouldConnect);
-  shouldConnectRef.current = shouldConnect;
   const [ddOpen, setDdOpen] = useState(false);
   const [ttLive, setTtLive] = useState(false);
 
@@ -304,11 +305,9 @@ export default function TopBar() {
   // The server publishes esFut/esFutPrevClose (live ES future mid + prev close),
   // vix/vixPrevClose, and spot/prevClose. Consuming these here replaces the old
   // Yahoo quotes-batch seed so the ESU % is computed against the matching close.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    let ws: WebSocket | null = null;
-    let reconnect: ReturnType<typeof setTimeout> | null = null;
-    let closed = false;
+  // Subscribes to the SHARED socket (lib/gexSocket) instead of opening its own.
+  const onGexFrame = (m: GexMessage) => {
+    const d = (m?.data ?? {}) as Record<string, unknown>;
 
     const applyAux = (a: Record<string, unknown>) => {
       const esFut = Number(a.esFut ?? 0);
@@ -327,45 +326,14 @@ export default function TopBar() {
       if (prev > 0) live.current.spxPrev = prev;
     };
 
-    const connect = () => {
-      if (closed || !shouldConnectRef.current) return;
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      try { ws = new WebSocket(`${proto}//${window.location.host}/ws/gex`); }
-      catch { schedule(); return; }
+    if (m?.type === "snapshot") { applyAux(d); applySpot(d); }
+    else if (m?.type === "aux") applyAux(d);
+    else if (m?.type === "spot") applySpot(d);
+    else return;
+    pushPrices();
+  };
 
-      ws.onmessage = (evt) => {
-        try {
-          const m = JSON.parse(String(evt.data));
-          const d = m?.data ?? {};
-          if (m?.type === "snapshot") { applyAux(d); applySpot(d); }
-          else if (m?.type === "aux") applyAux(d);
-          else if (m?.type === "spot") applySpot(d);
-          else return;
-          pushPrices();
-        } catch (_) {}
-      };
-      ws.onerror = () => { try { ws?.close(); } catch (_) {} };
-      ws.onclose = () => { if (!closed) schedule(); };
-    };
-    const schedule = () => {
-      if (closed || !shouldConnectRef.current) return;
-      if (reconnect) clearTimeout(reconnect);
-      reconnect = setTimeout(connect, 2000);
-    };
-
-    // Value-driven bandwidth gate: re-runs when shouldConnect flips.
-    if (shouldConnect) connect();
-    return () => {
-      closed = true;
-      if (reconnect) clearTimeout(reconnect);
-      if (ws) {
-        ws.onmessage = ws.onerror = ws.onclose = null;
-        if (ws.readyState === WebSocket.CONNECTING) ws.onopen = () => { try { ws?.close(); } catch (_) {} };
-        else { ws.onopen = null; try { ws.close(); } catch (_) {} }
-      }
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shouldConnect]);
+  useGexSocket(shouldConnect, onGexFrame);
 
   // ── close dropdown on outside click ──
   useEffect(() => {

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
+import { useGexSocket, type GexMessage } from "@/lib/gexSocket";
 import NquQuotePill from "@/components/dashboard/NquQuotePill";
 
 /**
@@ -118,9 +119,10 @@ export default function ToolbarTicker() {
   const nquBtnRef = useRef<HTMLButtonElement | null>(null);
   const openQuotes = () => nquBtnRef.current?.click();
 
+  // Bandwidth gate — passed straight to the shared socket subscription below.
+  // (The old shouldConnectRef mirror is gone: reconnect/backoff now lives in
+  // lib/gexSocket, so nothing here needs to read the gate from a callback.)
   const shouldConnect = useWsLifecycle();
-  const shouldConnectRef = useRef(shouldConnect);
-  shouldConnectRef.current = shouldConnect;
 
   const [es, setEs] = useState<Quote>({ price: 0, prev: 0 });
   // SPX/VIX are no longer rendered inline (they live in the quotes dropdown now),
@@ -179,12 +181,14 @@ export default function ToolbarTicker() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── live ESU / VIX / SPX from /ws/gex ──
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    let ws: WebSocket | null = null;
-    let reconnect: ReturnType<typeof setTimeout> | null = null;
-    let closed = false;
+  // ── live ESU / VIX / SPX from the SHARED /ws/gex socket ──
+  // Subscribes to lib/gexSocket rather than opening its own connection. This
+  // component, useEsCandles and the ES-candles page were each opening a separate
+  // socket to the SAME broadcast — three connections on one page load. The
+  // bandwidth gate (`shouldConnect`) is unchanged; it now decides whether this
+  // consumer subscribes, and the shared socket is open iff someone wants it.
+  const onGexFrame = (m: GexMessage) => {
+    const d = (m?.data ?? {}) as Record<string, unknown>;
 
     const applyAux = (a: Record<string, unknown>) => {
       const esFut = Number(a.esFut ?? 0);
@@ -205,44 +209,14 @@ export default function ToolbarTicker() {
       if (prev > 0) live.current.spxPrev = prev;
     };
 
-    const connect = () => {
-      if (closed || !shouldConnectRef.current) return;
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      try { ws = new WebSocket(`${proto}//${window.location.host}/ws/gex`); }
-      catch { schedule(); return; }
+    if (m?.type === "snapshot") { applyAux(d); applySpot(d); }
+    else if (m?.type === "aux") applyAux(d);
+    else if (m?.type === "spot") applySpot(d);
+    else return;
+    push();
+  };
 
-      ws.onmessage = (evt) => {
-        try {
-          const m = JSON.parse(String(evt.data));
-          const d = m?.data ?? {};
-          if (m?.type === "snapshot") { applyAux(d); applySpot(d); }
-          else if (m?.type === "aux") applyAux(d);
-          else if (m?.type === "spot") applySpot(d);
-          else return;
-          push();
-        } catch { /* ignore */ }
-      };
-      ws.onerror = () => { try { ws?.close(); } catch { /* ignore */ } };
-      ws.onclose = () => { if (!closed) schedule(); };
-    };
-    const schedule = () => {
-      if (closed || !shouldConnectRef.current) return;
-      if (reconnect) clearTimeout(reconnect);
-      reconnect = setTimeout(connect, 2000);
-    };
-
-    if (shouldConnect) connect();
-    return () => {
-      closed = true;
-      if (reconnect) clearTimeout(reconnect);
-      if (ws) {
-        ws.onmessage = ws.onerror = ws.onclose = null;
-        if (ws.readyState === WebSocket.CONNECTING) ws.onopen = () => { try { ws?.close(); } catch { /* ignore */ } };
-        else { ws.onopen = null; try { ws.close(); } catch { /* ignore */ } }
-      }
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shouldConnect]);
+  useGexSocket(shouldConnect, onGexFrame);
 
   return (
     <div ref={wrapRef} style={{ width: "100%", minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>

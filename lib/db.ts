@@ -1069,6 +1069,27 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Saved dashboard card layouts ("templates"), per user PER PAGE. A page
+    -- (e.g. 'options') renders its cards through components/shared/DashGrid,
+    -- which emits an array of { id, x, y, w, h } grid items; that array is what
+    -- the layout column holds. Multiple named templates per page are allowed
+    -- and exactly one may be flagged is_default — that is the one the page
+    -- auto-loads. No row for a (user, page) = the page falls back to its
+    -- built-in layout, so this table is additive and never has to be seeded.
+    CREATE TABLE IF NOT EXISTS dashboard_layouts (
+      id            SERIAL PRIMARY KEY,
+      clerk_user_id TEXT NOT NULL,
+      page          TEXT NOT NULL,           -- route key, e.g. 'options'
+      name          TEXT NOT NULL,           -- user-facing template name
+      layout        JSONB NOT NULL DEFAULT '[]'::jsonb,
+      is_default    BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (clerk_user_id, page, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_dashboard_layouts_user_page
+      ON dashboard_layouts(clerk_user_id, page);
+
     -- Owner options watchlist (the /owner/watch tracker). One row per watched
     -- contract; live greeks/price/flow are captured into watch_snapshots.
     CREATE TABLE IF NOT EXISTS watch_options (
@@ -1692,6 +1713,157 @@ export async function upsertIctCardPrefs(clerkUserId: string, hiddenCards: strin
        hidden_cards = EXCLUDED.hidden_cards, updated_at = CURRENT_TIMESTAMP`,
     [clerkUserId, JSON.stringify(hiddenCards)]
   );
+}
+
+// ── Dashboard card layouts (per user, per page, named templates) ────────────
+//
+// Backs the drag/resize grid on dashboard pages. `layout` is whatever DashGrid
+// emits — an array of { id, x, y, w, h } grid items (plus optional type/src/
+// title for user-added cards). Nothing here validates card ids: the page owns
+// its id list and reconciles a saved layout against it on load, so adding or
+// removing a card never invalidates someone's saved template.
+
+export interface DashboardLayoutRow {
+  id: number;
+  clerk_user_id: string;
+  page: string;
+  name: string;
+  layout: unknown;
+  is_default: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface DashboardLayoutTemplate {
+  name: string;
+  layout: unknown[];
+  isDefault: boolean;
+  updatedAt: string | null;
+}
+
+/** jsonb comes back parsed, but tolerate a text column / driver that hands back a string. */
+function parseLayoutJson(value: unknown): unknown[] {
+  const v = typeof value === "string" ? safeJsonParse(value) : value;
+  return Array.isArray(v) ? v : [];
+}
+function safeJsonParse(s: string): unknown {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
+/** Every saved template for one page, default first then most-recently-updated. */
+export async function getDashboardLayouts(
+  clerkUserId: string,
+  page: string
+): Promise<DashboardLayoutTemplate[]> {
+  await getDb();
+  const rows = await queryAll<DashboardLayoutRow>(
+    `SELECT name, layout, is_default, updated_at
+       FROM dashboard_layouts
+      WHERE clerk_user_id = ? AND page = ?
+      ORDER BY is_default DESC, updated_at DESC NULLS LAST, name ASC`,
+    [clerkUserId, page]
+  );
+  return rows.map((r) => ({
+    name: r.name,
+    layout: parseLayoutJson(r.layout),
+    isDefault: Boolean(r.is_default),
+    updatedAt: r.updated_at ?? null,
+  }));
+}
+
+/**
+ * Create or overwrite one template. `makeDefault` is applied in the same
+ * transaction that clears the previous default, so the "exactly one default per
+ * (user, page)" invariant can't be broken by two tabs saving at once.
+ */
+export async function upsertDashboardLayout(
+  clerkUserId: string,
+  page: string,
+  name: string,
+  layout: unknown[],
+  makeDefault = false
+): Promise<void> {
+  const pool = await getDb();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `INSERT INTO dashboard_layouts (clerk_user_id, page, name, layout, is_default, updated_at)
+       VALUES ($1, $2, $3, $4::jsonb, $5, CURRENT_TIMESTAMP)
+       ON CONFLICT (clerk_user_id, page, name) DO UPDATE SET
+         layout = EXCLUDED.layout,
+         is_default = dashboard_layouts.is_default OR EXCLUDED.is_default,
+         updated_at = CURRENT_TIMESTAMP`,
+      [clerkUserId, page, name, JSON.stringify(layout), makeDefault]
+    );
+    if (makeDefault) {
+      await client.query(
+        `UPDATE dashboard_layouts SET is_default = FALSE
+          WHERE clerk_user_id = $1 AND page = $2 AND name <> $3 AND is_default`,
+        [clerkUserId, page, name]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    try { await client.query("ROLLBACK"); } catch { /* connection already gone */ }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Flag one template as the one the page auto-loads; clears the others. */
+export async function setDefaultDashboardLayout(
+  clerkUserId: string,
+  page: string,
+  name: string
+): Promise<boolean> {
+  const pool = await getDb();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const hit = await client.query(
+      `UPDATE dashboard_layouts SET is_default = TRUE, updated_at = CURRENT_TIMESTAMP
+        WHERE clerk_user_id = $1 AND page = $2 AND name = $3`,
+      [clerkUserId, page, name]
+    );
+    if (!hit.rowCount) { await client.query("ROLLBACK"); return false; }
+    await client.query(
+      `UPDATE dashboard_layouts SET is_default = FALSE
+        WHERE clerk_user_id = $1 AND page = $2 AND name <> $3 AND is_default`,
+      [clerkUserId, page, name]
+    );
+    await client.query("COMMIT");
+    return true;
+  } catch (err) {
+    try { await client.query("ROLLBACK"); } catch { /* connection already gone */ }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Drop one template. Deleting the default just leaves the page with none. */
+export async function deleteDashboardLayout(
+  clerkUserId: string,
+  page: string,
+  name: string
+): Promise<void> {
+  await getDb();
+  await queryAll(
+    `DELETE FROM dashboard_layouts WHERE clerk_user_id = ? AND page = ? AND name = ?`,
+    [clerkUserId, page, name]
+  );
+}
+
+/** Template count for one page — the API uses it to cap how many a user can keep. */
+export async function countDashboardLayouts(clerkUserId: string, page: string): Promise<number> {
+  await getDb();
+  const row = await queryOne<{ n: string | number }>(
+    `SELECT COUNT(*)::int AS n FROM dashboard_layouts WHERE clerk_user_id = ? AND page = ?`,
+    [clerkUserId, page]
+  );
+  return Number(row?.n ?? 0);
 }
 
 // ── Traders Dashboard: per-user prefs ───────────────────────────────────────

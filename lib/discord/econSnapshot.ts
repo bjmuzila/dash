@@ -36,6 +36,24 @@ const HT = {
   muted: "#b8c2d6",
 } as const;
 
+/**
+ * Lane widths for the three panels, in grid fr units.
+ *
+ * Change them HERE and nowhere else: the .grid CSS and the JS truncation math
+ * (which needs each panel's pixel width, because html2canvas implements neither
+ * text-overflow:ellipsis nor line-clamp) both read these same numbers via
+ * laneW(). They used to be a hardcoded "1.3fr 3.6fr 1.4fr" in the CSS plus two
+ * open-coded 3.6/6.3 fractions further down, which is exactly the setup where a
+ * lane gets widened and the titles keep truncating to the old width.
+ */
+const LANE_PRES = 1.75;
+const LANE_ECON = 3.15;
+const LANE_ERN = 1.4;
+const LANE_TOTAL = LANE_PRES + LANE_ECON + LANE_ERN;
+// 1280 canvas - 60 snapshot padding - 36 grid gaps.
+const GRID_W = 1280 - 60 - 36;
+const laneW = (fr: number) => Math.round(GRID_W * (fr / LANE_TOTAL));
+
 function hexA(hex: string, a: number): string {
   const h = hex.replace("#", "");
   const r = parseInt(h.slice(0, 2), 16);
@@ -81,6 +99,22 @@ function todayLong() {
 
 function fmtTime(ev: CalEvent): string {
   return ev.time_formatted || ev.time || "TBD";
+}
+
+/**
+ * The White House feed writes every entry as "The President <verb>s …", so the
+ * lane repeated its own panel title once per row and spent ~14 characters of a
+ * narrow column saying nothing. Drop the subject, keep the action.
+ *
+ * NOT stripped when the subject is compound ("The President and the First Lady
+ * host …") — that would leave a dangling "and …".
+ */
+function stripPresidentSubject(title: string): string {
+  const s = (title || "").trim();
+  const m = s.match(/^(?:the\s+)?president(?:\s+trump)?\s+(?!and\b)(.+)$/i);
+  if (!m) return s;
+  const rest = m[1].trim();
+  return rest.charAt(0).toUpperCase() + rest.slice(1);
 }
 
 function includeTemplateEvent(ev: CalEvent): boolean {
@@ -225,11 +259,6 @@ function impactBadge(impact: string): { bg: string; border: string; text: string
   return { bg: "rgba(255,255,255,0.06)", border: "rgba(255,255,255,0.12)", text: HT.muted };
 }
 
-function dash(v?: string): string {
-  const s = (v || "").trim();
-  return s ? s : "–";
-}
-
 /**
  * Optical-centering correction for text inside a pill. THE rule to understand
  * before touching any pill CSS in this file:
@@ -346,21 +375,27 @@ export function buildSnapshotHTML(
   const econScale = densityScale(Math.max(economicEvents.length, 1));
   const px = (base: number, scale: number) => Math.round(base * scale);
 
+  // Presidential rows are STACKED — time on its own line, title underneath —
+  // so there is no time column any more and the title gets the full panel width.
   const presTimeSize = px(15, presScale);
   const presTitleSize = px(16, presScale);
-  const presRowPadV = px(14, presScale);
-  const presTimeCol = px(92, presScale);
-  const presTitleCol = presTimeCol;
+  // Measured from a real render: the presidential body is ~400px tall, and the
+  // rows split it evenly (each is flex:1). Stacking costs a line of height per
+  // row, so the padding has to give way on a busy day or the last row falls off
+  // the bottom of the locked 720px canvas.
+  const PRES_BODY_H = 400;
+  const presRowH = PRES_BODY_H / Math.max(presidentEvents.length, 1);
+  const presRowPadV = Math.max(5, Math.min(px(14, presScale), Math.round(presRowH * 0.12)));
+  const presTimeLine = presTimeSize + 6;
+  const presStackGap = 5;
 
-  // Header labels must fit econNumCol (58 * scale ~= 62px). Bold uppercase runs
-  // about 0.72em per glyph, so "FORECAST"/"PREVIOUS" need ~67px and collided
-  // with their neighbour — hence "Fcst"/"Prev" in the markup below. The data in
-  // those columns ("216K", "12.7") was never the problem, so the columns stay
-  // narrow and the Event column keeps the width instead.
+  // Actual / Forecast / Previous are deliberately NOT rendered on this template.
+  // The snapshot goes out before the numbers print, so all three columns read
+  // "–" while the Event title — the only thing anyone actually reads here — was
+  // squeezed into ~300px. Time / Event / Impact only; Event keeps the width.
   const econHeadSize = px(10, econScale);
   const econTimeSize = px(14, econScale);
   const econEventSize = px(16, econScale);
-  const econNumSize = px(15, econScale);
   const econRowPadV = px(12, econScale);
   const pillFontSize = px(11, econScale);
   const pillHeight = px(22, econScale);
@@ -376,7 +411,6 @@ export function buildSnapshotHTML(
   const pillPadBot = Math.max(0, 2 * pillPadV - pillPadTop);
   const econTimeCol = px(74, econScale);
   const econImpactCol = px(74, econScale);
-  const econNumCol = px(58, econScale);
   const econColGap = 6;
   const econRowPadH = 14;
 
@@ -384,12 +418,10 @@ export function buildSnapshotHTML(
   // overflow:hidden on text nodes unreliably — long titles bleed out from under
   // the Event cell and run beneath the impact pill. So truncate in JS against
   // the measured column width instead of trusting CSS to clip.
-  // 1280 canvas - 60 snapshot padding - 36 grid gaps = 1184 across 6.3fr;
-  // the econ panel is 3.6fr of that.
-  const ECON_PANEL_W = Math.round((1280 - 60 - 36) * (3.6 / 6.3));
+  const ECON_PANEL_W = laneW(LANE_ECON);
   const econEventColW = Math.max(
     120,
-    ECON_PANEL_W - econRowPadH * 2 - econTimeCol - econImpactCol - econNumCol * 3 - econColGap * 5
+    ECON_PANEL_W - econRowPadH * 2 - econTimeCol - econImpactCol - econColGap * 2
   );
   const econMaxChars = Math.max(12, Math.floor(econEventColW / (econEventSize * 0.56)));
   const clipText = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
@@ -412,9 +444,6 @@ export function buildSnapshotHTML(
       <div class="ec-time">${fmtTime(ev)}</div>
       <div class="ec-event">${clipText(ev.title, econMaxChars)}</div>
       <div class="ec-impact"><span class="impact-pill" style="background:${badge.bg};border-color:${badge.border};color:${badge.text}"><span class="pill-inner-04">${ev.impact}</span></span></div>
-      <div class="ec-num">${dash(ev.actual)}</div>
-      <div class="ec-num">${dash(ev.forecast)}</div>
-      <div class="ec-num">${dash(ev.previous)}</div>
     </div>`;
   }).join("");
 
@@ -424,11 +453,23 @@ export function buildSnapshotHTML(
   // the panel, and the last event is sliced off the bottom. Same treatment as
   // .ec-event above — clip in JS against the measured column width, because
   // html2canvas implements neither text-overflow:ellipsis nor line-clamp.
-  // 1280 canvas - 60 snapshot padding - 36 grid gaps = 1184 across 6.3fr; the
-  // presidential panel is 1.3fr of that.
-  const PRES_PANEL_W = Math.round((1280 - 60 - 36) * (1.3 / 6.3));
-  const presTitleColW = Math.max(90, PRES_PANEL_W - 14 * 2 - 6 * 2 - presTitleCol - 12);
-  const PRES_TITLE_LINES = 2;
+  const PRES_PANEL_W = laneW(LANE_PRES);
+  // Stacked rows: the title spans the whole panel, so the only things subtracted
+  // are the body padding (14px each side) and the row padding (6px each side).
+  const presTitleColW = Math.max(120, PRES_PANEL_W - 14 * 2 - 6 * 2);
+  // Line budget comes from the row's actual leftover height rather than a fixed
+  // 2. A single event owns the whole panel and should show its full title; six
+  // events get one line each. Ellipsing text there is obvious room for was the
+  // main thing wrong with the old fixed number.
+  const PRES_TITLE_LINES = Math.max(
+    1,
+    Math.min(
+      6,
+      Math.floor(
+        (presRowH - presRowPadV * 2 - presTimeLine - presStackGap - 1) / (presTitleSize * 1.3),
+      ),
+    ),
+  );
   const presMaxChars = Math.max(
     18,
     Math.floor((presTitleColW / (presTitleSize * 0.56)) * PRES_TITLE_LINES),
@@ -437,7 +478,7 @@ export function buildSnapshotHTML(
   const presRowsHTML = presidentEvents.map(ev => `
     <div class="pres-row">
       <div class="pr-time">${fmtTime(ev)}</div>
-      <div class="pr-title">${clipText(ev.title, presMaxChars)}</div>
+      <div class="pr-title">${clipText(stripPresidentSubject(ev.title), presMaxChars)}</div>
     </div>
   `).join("");
 
@@ -474,10 +515,11 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
 .today-pill{display:inline-block;line-height:1;background:${hexA(HT.cyan, 0.16)};border:1px solid ${hexA(HT.cyan, 0.4)};color:var(--cyan);border-radius:8px;padding:${12 - nudgePx(16)}px 18px ${12 + nudgePx(16)}px;font-weight:800;text-transform:uppercase;font-size: 17px;text-align:center}
 .pill-inner-06{display:inline-block;letter-spacing:0.06em;margin-right:-0.06em}
 .quote{margin:22px auto 6px;text-align:center;font-family:Georgia,"Times New Roman",serif;font-size:30px;font-style:italic;color:var(--muted);padding:0 36px;max-width:1120px;flex-shrink:0}
-/* Econ lane is widened (3.3fr -> 3.6fr) because the Event column was the
-   tightest thing on the canvas — titles like "Philly Fed Manufacturing Index"
-   had ~200px to live in. Keep the fr total at 6.3 or update ECON_PANEL_W. */
-.grid{display:grid;grid-template-columns:1.3fr 3.6fr 1.4fr;gap:18px;margin-top:20px;flex:1;min-height:0}
+/* Lane widths come from LANE_* at the top of this file — never hardcode them
+   here, or the truncation math and the rendered columns drift apart. Dropping
+   the Actual/Fcst/Prev columns is what paid for the presidential lane's extra
+   width; the econ Event column still has ~100px more than it did before. */
+.grid{display:grid;grid-template-columns:${LANE_PRES}fr ${LANE_ECON}fr ${LANE_ERN}fr;gap:18px;margin-top:20px;flex:1;min-height:0}
 /* THE card surface (classicCardAccentStyle): frosted fill, hairline edge, faint
    light-blue radial glow, 18px radius. NO per-card accent strip, NO colored
    panel titles — see PageCard.tsx. */
@@ -502,17 +544,19 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
    No clipping, and leading to spare. Tickers are <=5 chars — they fit. */
 .chip-sym{display:block;font-size: 12px;font-weight:800;color:var(--text);letter-spacing:0.02em;line-height:15px;white-space:nowrap}
 .pres-body{padding:8px 14px;flex:1;display:flex;flex-direction:column}
-.pres-row{display:grid;grid-template-columns:${presTimeCol}px 1fr;gap:12px;padding:${presRowPadV}px 6px;border-bottom:1px solid var(--border);flex:1;align-content:center;min-width:0}
+/* STACKED row: one column, two rows — time on top, title underneath. Stays a
+   grid (not display:block) because align-content:center is the one vertical
+   centring html2canvas renders correctly here, and a light day leaves each row
+   most of the panel to sit in. */
+.pres-row{display:grid;grid-template-columns:1fr;gap:${presStackGap}px;padding:${presRowPadV}px 6px;border-bottom:1px solid var(--border);flex:1;align-content:center;min-width:0}
 .pres-row:last-child{border-bottom:none}
-.pr-time{color:var(--lblue);font-weight:700;font-size:${presTimeSize}px}
+.pr-time{color:var(--lblue);font-weight:700;font-size:${presTimeSize}px;line-height:${presTimeLine}px;letter-spacing:0.02em;white-space:nowrap}
 .pr-title{font-size:${presTitleSize}px;font-weight:600;line-height:1.3;min-width:0}
 .empty-panel{flex:1;display:flex;align-items:center;justify-content:center;text-align:center;color:rgba(255,255,255,0.35);font-size:14px}
 .econ-table{display:flex;flex-direction:column;flex:1}
-.econ-row{display:grid;grid-template-columns:${econTimeCol}px 1fr ${econImpactCol}px ${econNumCol}px ${econNumCol}px ${econNumCol}px;gap:${econColGap}px;padding:${econRowPadV}px ${econRowPadH}px;align-items:center;border-bottom:1px solid var(--border);flex:1;min-width:0}
+.econ-row{display:grid;grid-template-columns:${econTimeCol}px 1fr ${econImpactCol}px;gap:${econColGap}px;padding:${econRowPadV}px ${econRowPadH}px;align-items:center;border-bottom:1px solid var(--border);flex:1;min-width:0}
 .econ-row:last-child{border-bottom:none}
-/* Tracking trimmed 0.06 -> 0.04em for the same reason econHeadSize dropped to
-   10: every 0.01em costs ~1px across "FORECAST" and pushes it into the next
-   column. nowrap so a tight fit never silently becomes two lines. */
+/* nowrap so a tight fit never silently becomes two lines. */
 .econ-row.head{background:rgba(255,255,255,0.03);font-size:${econHeadSize}px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;color:rgba(255,255,255,0.45);flex:0 0 auto;white-space:nowrap}
 /* Every cell carries an explicit line-height with leading to spare. Without it
    html2canvas draws the glyphs low inside a line box it measured as "normal"
@@ -524,7 +568,6 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
    bug. The Presidential lane has never had overflow:hidden and has never
    clipped; that is the control group. Do not add it back. */
 .ec-event{font-size:${econEventSize}px;line-height:${econEventSize + 8}px;font-weight:600;white-space:nowrap;min-width:0}
-.ec-num{font-size:${econNumSize}px;line-height:${econNumSize + 8}px;font-weight:700;text-align:right;color:var(--text);white-space:nowrap}
 .ec-impact{text-align:left;min-width:0}
 .impact-pill{display:inline-block;line-height:1;text-align:center;border:1px solid;border-radius:8px;padding:${pillPadTop}px ${pillPadH}px ${pillPadBot}px;font-size:${pillFontSize}px;font-weight:800;text-transform:uppercase;white-space:nowrap}
 .pill-inner-04{display:inline-block;letter-spacing:0.04em;margin-right:-0.04em}
@@ -556,7 +599,7 @@ body{width:1280px;height:720px;display:grid;place-items:center;padding:24px;colo
       ${economicEvents.length > 0 ? `
       <div class="econ-table">
         <div class="econ-row head">
-          <div>Time</div><div>Event</div><div>Impact</div><div style="text-align:right">Actual</div><div style="text-align:right">Fcst</div><div style="text-align:right">Prev</div>
+          <div>Time</div><div>Event</div><div>Impact</div>
         </div>
         ${econRowsHTML}
       </div>` : `<div class="empty-panel">No economic events today</div>`}

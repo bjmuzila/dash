@@ -2024,8 +2024,12 @@ async function main() {
             if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
             const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
             const date = (u.searchParams.get('date') || today).trim();
+            // front_expiry / n_expiry ride along on the same grouped scan so the
+            // replay stamp can label which expiry the frame covers (the front
+            // active one can roll intraday) without a second round-trip.
             const { rows } = await p.query(
-              `SELECT ts, strike, MAX(spot) AS spot, SUM(gex_now + gex_open) AS net
+              `SELECT ts, strike, MAX(spot) AS spot, SUM(gex_now + gex_open) AS net,
+                      MIN(expiry) AS front_expiry, COUNT(DISTINCT expiry) AS n_expiry
                FROM strike_growth
                WHERE date = $1 AND symbol = $2
                GROUP BY ts, strike
@@ -2033,13 +2037,24 @@ async function main() {
               [date, symbol]
             );
             const byTs = new Map();
+            const allExp = new Set();
             for (const r of rows) {
               const k = new Date(r.ts).toISOString();
               let f = byTs.get(k);
-              if (!f) { f = { ts: k, spot: Number(r.spot) || 0, strikes: [] }; byTs.set(k, f); }
+              if (!f) { f = { ts: k, spot: Number(r.spot) || 0, strikes: [], expiry: null, expiryCount: 0 }; byTs.set(k, f); }
               f.strikes.push({ strike: Number(r.strike), net: Number(r.net) || 0 });
+              const exp = r.front_expiry == null ? null : String(r.front_expiry);
+              if (exp) {
+                allExp.add(exp);
+                if (!f.expiry || exp < f.expiry) f.expiry = exp;
+              }
+              f.expiryCount = Math.max(f.expiryCount, Number(r.n_expiry) || 0);
             }
-            sendJson(res, 200, { ok: true, symbol, date, frames: Array.from(byTs.values()) });
+            sendJson(res, 200, {
+              ok: true, symbol, date,
+              expiries: Array.from(allExp).sort(),
+              frames: Array.from(byTs.values()),
+            });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
         return;

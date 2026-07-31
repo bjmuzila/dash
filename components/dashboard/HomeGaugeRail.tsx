@@ -9,6 +9,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { queryGreeksToday } from "@/lib/snapdb";
+import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
 import { HOME_THEME, statTileStyle } from "@/components/shared/homeTheme";
 
 // GEX heatmap palette — positive/calls blue, negative/puts red (see GexHeatmap cellBg).
@@ -198,11 +199,11 @@ export default function HomeGaugeRail({
       .catch(() => {});
   }, []);
 
-  // Permanent /ws/gex socket — always on (mirrors LiveGreeksGauges).
+  // Permanent /ws/gex subscription — always on (mirrors LiveGreeksGauges).
+  // Shares the app-wide socket (lib/gexSocket) rather than opening its own; on
+  // /home this component, LiveGreeksGauges and the toolbar ticker were three
+  // separate connections to the same broadcast.
   useEffect(() => {
-    let unmounted = false;
-    let ws: WebSocket | null = null;
-    let reconnect: ReturnType<typeof setTimeout> | null = null;
     const frame: { totals: Record<string, number> | null; updatedAt: number } = { totals: null, updatedAt: 0 };
 
     const apply = () => {
@@ -217,13 +218,8 @@ export default function HomeGaugeRail({
       });
     };
 
-    const handle = (raw: string) => {
-      let m: Record<string, unknown>;
-      try {
-        m = JSON.parse(raw);
-      } catch {
-        return;
-      }
+    // Frames arrive pre-parsed from the shared socket.
+    const handle = (m: GexMessage) => {
       const type = String(m.type ?? "");
       const d = (m.data && typeof m.data === "object" ? m.data : m) as Record<string, unknown>;
       if (type === "snapshot" || type === "gex") {
@@ -233,43 +229,7 @@ export default function HomeGaugeRail({
       }
     };
 
-    const scheduleReconnect = () => {
-      if (unmounted) return;
-      if (reconnect) clearTimeout(reconnect);
-      reconnect = setTimeout(connect, 2000);
-    };
-
-    function connect() {
-      if (unmounted) return;
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      try {
-        ws = new WebSocket(`${proto}//${window.location.host}/ws/gex`);
-      } catch {
-        scheduleReconnect();
-        return;
-      }
-      ws.onmessage = (evt) => handle(String(evt.data));
-      ws.onerror = () => {
-        try {
-          ws?.close();
-        } catch {}
-      };
-      ws.onclose = () => {
-        if (!unmounted) scheduleReconnect();
-      };
-    }
-
-    connect();
-    return () => {
-      unmounted = true;
-      if (reconnect) clearTimeout(reconnect);
-      if (ws) {
-        ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
-        try {
-          ws.close();
-        } catch {}
-      }
-    };
+    return subscribeGex({ onMessage: handle });
   }, []);
 
   const gex = latest?.gex ?? null;

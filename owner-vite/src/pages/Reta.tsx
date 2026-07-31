@@ -18,7 +18,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { HOME_THEME, RETA_PALETTE, SOFT_RED, homeInputStyle, statTileStyle } from "../lib/theme";
 import { Card, PageShell } from "../components/PageCard";
 import { ThemedDatePicker } from "../components/ThemedDatePicker";
@@ -55,6 +55,15 @@ const DOSE_PRESETS = [0.25, 0.5, 1, 2];
 const SYRINGE_PRESETS = [30, 50, 100];
 
 const U_PER_ML = 100; // U-100 insulin syringe: 100 units = 1 mL
+
+type TabKey = "tracker" | "charts";
+const TABS: { key: TabKey; label: string }[] = [
+  { key: "tracker", label: "Tracker" },
+  { key: "charts", label: "Charts" },
+];
+
+/** One Sunday's plotted values for a person. null = nothing logged that week. */
+type ChartPoint = { date: string; dose: number | null; weight: number | null; units: number | null };
 
 // ── date helpers (all dates are "YYYY-MM-DD"; shot day is always Sunday) ─────
 function isoDate(d: Date): string {
@@ -414,6 +423,7 @@ export default function RetaPage() {
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [weeksAhead, setWeeksAhead] = useState(1);
+  const [tab, setTab] = useState<TabKey>("tracker");
 
   // Calculator draft (Step 1/2/3 on the left of the card).
   const [effectiveFrom, setEffectiveFrom] = useState(thisSunday);
@@ -628,6 +638,28 @@ export default function RetaPage() {
 
   const inForce = setupFor(thisSunday);
 
+  // One aligned series per person: every Sunday in `weeks` gets a slot so both
+  // people share an x-axis and a skipped week reads as a gap, not a straight
+  // line across it.
+  const chartSeries = useMemo(() => {
+    const out = {} as Record<PersonKey, ChartPoint[]>;
+    for (const p of PEOPLE) {
+      out[p.key] = weeks.map((day) => {
+        const shot = shotMap.get(`${day}|${p.key}`);
+        const dose = shot && shot.dose_mg > 0 ? shot.dose_mg : null;
+        const setup = setupFor(day);
+        const c = setup ? concentration(setup.vial_mg, setup.bac_ml) : 0;
+        return {
+          date: day,
+          dose,
+          weight: shot?.weight_lb ?? null,
+          units: dose != null && c > 0 ? drawUnits(dose, c) : null,
+        };
+      });
+    }
+    return out;
+  }, [weeks, shotMap, setupFor]);
+
   return (
     <PageShell>
       {/* header */}
@@ -701,6 +733,44 @@ export default function RetaPage() {
         ))}
       </div>
 
+      {/* ── tabs ── */}
+      <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+        {TABS.map((t) => {
+          const on = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              style={{
+                padding: "9px 18px",
+                borderRadius: 10,
+                fontSize: 12,
+                fontWeight: 800,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                cursor: "pointer",
+                color: on ? HOME_THEME.cyan : rgba(HOME_THEME.text, 0.7),
+                border: `1px solid ${on ? rgba(HOME_THEME.cyan, 0.5) : HOME_THEME.border}`,
+                background: on ? rgba(HOME_THEME.cyan, 0.14) : "rgba(255,255,255,0.03)",
+              }}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === "charts" && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(430px, 1fr))", gap: 16, flexShrink: 0 }}>
+          {PEOPLE.map((p) => (
+            <PersonChart key={p.key} person={p} series={chartSeries[p.key]} />
+          ))}
+        </div>
+      )}
+
+      {tab === "tracker" && (
+      <>
       {/* ── calculator ── */}
       <Card variant="budget" padding={0} style={{ overflow: "hidden", flexShrink: 0 }}>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(320px, 1fr) minmax(320px, 1fr)", gap: 0 }}>
@@ -1054,7 +1124,11 @@ export default function RetaPage() {
                 </tr>
               )}
               {!loading &&
-                weeks.map((day, i) => {
+                // Newest Sunday on top. `weeks` stays chronological (the charts
+                // and the carry-forward lookups depend on it), so only the render
+                // order flips — the Wk number still counts up from week 1.
+                weeks.map((_d, idx) => weeks[weeks.length - 1 - idx]).map((day) => {
+                  const i = weeks.indexOf(day);
                   const setup = setupFor(day);
                   const c = setup ? concentration(setup.vial_mg, setup.bac_ml) : 0;
                   const isThisWeek = day === thisSunday;
@@ -1118,6 +1192,8 @@ export default function RetaPage() {
           </table>
         </div>
       </Card>
+      </>
+      )}
     </PageShell>
   );
 }
@@ -1185,6 +1261,200 @@ function PersonCells({
         />
       </td>
     </>
+  );
+}
+
+// ── charts ───────────────────────────────────────────────────────────────────
+// Hand-rolled SVG: two stacked panels per person sharing one x-axis. Dose and
+// weight are NOT overlaid on twin y-scales — a dual-axis plot lets you slide one
+// series against the other until any correlation you like appears. Stacked
+// panels keep both readable against their own scale with the dates aligned.
+const CHART_W = 640;
+const CHART_H = 344;
+const PAD_L = 48;
+const PAD_R = 16;
+const DOSE_TOP = 34, DOSE_H = 96;
+const WEIGHT_TOP = 176, WEIGHT_H = 108;
+const X_LABEL_Y = 300;
+
+/** Round a raw step up to something a human would label an axis with. */
+function niceStep(raw: number): number {
+  const steps = [0.05, 0.1, 0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 25, 50, 100, 250];
+  return steps.find((s) => s >= raw) ?? 500;
+}
+
+/** Padded, round-numbered domain + tick list for one panel. */
+function scaleFor(values: number[]): { lo: number; hi: number; ticks: number[] } | null {
+  const vals = values.filter((v) => Number.isFinite(v));
+  if (!vals.length) return null;
+  let lo = Math.min(...vals);
+  let hi = Math.max(...vals);
+  if (hi === lo) { lo -= Math.max(0.5, Math.abs(lo) * 0.05); hi += Math.max(0.5, Math.abs(hi) * 0.05); }
+  const step = niceStep((hi - lo) / 3);
+  lo = Math.floor(lo / step) * step;
+  hi = Math.ceil(hi / step) * step;
+  const ticks: number[] = [];
+  for (let v = lo; v <= hi + step / 2; v += step) ticks.push(Math.round(v * 1000) / 1000);
+  return { lo, hi, ticks };
+}
+
+/** Path string that breaks at gaps instead of drawing through missing weeks. */
+function pathFor(pts: (number | null)[], x: (i: number) => number, y: (v: number) => number): string {
+  let d = "", pen = false;
+  pts.forEach((v, i) => {
+    if (v == null) { pen = false; return; }
+    d += `${pen ? "L" : "M"}${x(i).toFixed(1)} ${y(v).toFixed(1)} `;
+    pen = true;
+  });
+  return d.trim();
+}
+
+/**
+ * Backlit line: a blurred colored copy under a solid stroke under a thin white
+ * core — the glow reads on the near-black surface without any area fill.
+ */
+function GlowLine({ d, color, id }: { d: string; color: string; id: string }) {
+  if (!d) return null;
+  return (
+    <>
+      <path d={d} stroke={color} strokeWidth={3.5} fill="none" opacity={0.75} filter={`url(#${id})`}
+        strokeLinecap="round" strokeLinejoin="round" />
+      <path d={d} stroke={color} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      <path d={d} stroke={HOME_THEME.text} strokeWidth={0.8} fill="none" opacity={0.65}
+        strokeLinecap="round" strokeLinejoin="round" />
+    </>
+  );
+}
+
+/** One person's card: dose panel over weight panel, shared dates, hover readout. */
+function PersonChart({
+  person,
+  series,
+}: {
+  person: { key: PersonKey; label: string; color: string };
+  series: ChartPoint[];
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const glowId = `reta-glow-${person.key}`;
+  const n = series.length;
+
+  const doseScale = scaleFor(series.map((p) => p.dose).filter((v): v is number => v != null));
+  const weightScale = scaleFor(series.map((p) => p.weight).filter((v): v is number => v != null));
+
+  const x = (i: number) => (n <= 1 ? PAD_L : PAD_L + (i * (CHART_W - PAD_L - PAD_R)) / (n - 1));
+  const yIn = (v: number, s: { lo: number; hi: number }, top: number, h: number) =>
+    top + h - ((v - s.lo) / (s.hi - s.lo || 1)) * h;
+
+  // Label roughly 8 dates, always including the newest.
+  const labelEvery = Math.max(1, Math.ceil(n / 8));
+  const labelIdx = series.map((_, i) => i).filter((i) => i === n - 1 || i % labelEvery === 0);
+
+  const active = hover != null ? series[hover] : [...series].reverse().find((p) => p.dose != null || p.weight != null) ?? null;
+
+  const onMove = (e: ReactMouseEvent<SVGRectElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const vx = ((e.clientX - r.left) / r.width) * CHART_W;
+    const i = Math.round(((vx - PAD_L) / (CHART_W - PAD_L - PAD_R)) * (n - 1));
+    setHover(Math.min(n - 1, Math.max(0, i)));
+  };
+
+  const panel = (
+    label: string,
+    unit: string,
+    color: string,
+    values: (number | null)[],
+    s: { lo: number; hi: number; ticks: number[] } | null,
+    top: number,
+    h: number,
+    dp: number
+  ) => (
+    <>
+      <rect x={PAD_L} y={top - 19} width={7} height={7} rx={1.5} fill={color} />
+      <text x={PAD_L + 12} y={top - 12} fill={rgba(HOME_THEME.text, 0.75)} fontSize={10} fontWeight={800} letterSpacing="0.12em">
+        {label}
+      </text>
+      {s ? (
+        <>
+          {s.ticks.map((t) => {
+            const ty = yIn(t, s, top, h);
+            return (
+              <g key={t}>
+                <line x1={PAD_L} x2={CHART_W - PAD_R} y1={ty} y2={ty} stroke={rgba(HOME_THEME.text, 0.09)} strokeDasharray="3 4" />
+                <text x={PAD_L - 8} y={ty + 3} textAnchor="end" fill={rgba(HOME_THEME.text, 0.4)} fontSize={9}>
+                  {t.toFixed(dp)}
+                </text>
+              </g>
+            );
+          })}
+          <GlowLine d={pathFor(values, x, (v) => yIn(v, s, top, h))} color={color} id={glowId} />
+          {values.map((v, i) =>
+            v == null ? null : (
+              <circle key={i} cx={x(i)} cy={yIn(v, s, top, h)} r={hover === i ? 4 : 2.4}
+                fill={HOME_THEME.text} stroke={color} strokeWidth={hover === i ? 2 : 1} />
+            )
+          )}
+          {hover != null && values[hover] != null && (
+            <text x={x(hover)} y={yIn(values[hover] as number, s, top, h) - 10} textAnchor="middle"
+              fill={rgba(HOME_THEME.text, 0.9)} fontSize={10} fontWeight={800}>
+              {(values[hover] as number).toFixed(dp)} {unit}
+            </text>
+          )}
+        </>
+      ) : (
+        <text x={CHART_W / 2} y={top + h / 2} textAnchor="middle" fill={rgba(HOME_THEME.text, 0.3)} fontSize={11}>
+          nothing logged yet
+        </text>
+      )}
+    </>
+  );
+
+  return (
+    <Card variant="classic" padding={16} style={{ flexShrink: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 4 }}>
+        <div style={{ ...LABEL, color: person.color, fontSize: 12 }}>Weekly log — {person.label}</div>
+        <div style={{ fontSize: 11, color: rgba(HOME_THEME.text, 0.6), fontVariantNumeric: "tabular-nums" }}>
+          {active
+            ? `${fmtDay(active.date)} · ${active.dose != null ? `${num(active.dose)} mg` : "— mg"}${
+                active.units != null ? ` (${num(active.units, 1)}u)` : ""
+              } · ${active.weight != null ? `${num(active.weight, 1)} lb` : "— lb"}`
+            : "no data yet"}
+        </div>
+      </div>
+      <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} style={{ width: "100%", height: "auto", display: "block" }}
+        onMouseLeave={() => setHover(null)}>
+        <defs>
+          <filter id={glowId} x="-20%" y="-60%" width="140%" height="220%">
+            <feGaussianBlur stdDeviation="4" />
+          </filter>
+        </defs>
+
+        {/* shared vertical guides + date axis */}
+        {labelIdx.map((i) => (
+          <line key={`v${i}`} x1={x(i)} x2={x(i)} y1={DOSE_TOP} y2={WEIGHT_TOP + WEIGHT_H}
+            stroke={rgba(HOME_THEME.text, 0.06)} strokeDasharray="2 6" />
+        ))}
+        {hover != null && (
+          <line x1={x(hover)} x2={x(hover)} y1={DOSE_TOP} y2={WEIGHT_TOP + WEIGHT_H}
+            stroke={rgba(person.color, 0.5)} strokeDasharray="3 3" />
+        )}
+
+        {panel("DOSE", "mg", person.color, series.map((p) => p.dose), doseScale, DOSE_TOP, DOSE_H, 2)}
+        {panel("WEIGHT", "lb", RETA_PALETTE.green, series.map((p) => p.weight), weightScale, WEIGHT_TOP, WEIGHT_H, 1)}
+
+        {labelIdx.map((i) => (
+          <text key={`x${i}`} x={x(i)} y={X_LABEL_Y} textAnchor="middle" fill={rgba(HOME_THEME.text, 0.4)} fontSize={9}>
+            {fmtDay(series[i].date)}
+          </text>
+        ))}
+        <text x={PAD_L} y={CHART_H - 8} fill={rgba(HOME_THEME.text, 0.35)} fontSize={9}>
+          mg per shot (top) and body weight (bottom) — x-axis is the Sunday of each week
+        </text>
+
+        {/* hover capture sits above everything, transparent */}
+        <rect x={PAD_L - 10} y={DOSE_TOP - 20} width={CHART_W - PAD_L - PAD_R + 20} height={WEIGHT_TOP + WEIGHT_H - DOSE_TOP + 24}
+          fill="transparent" onMouseMove={onMove} />
+      </svg>
+    </Card>
   );
 }
 

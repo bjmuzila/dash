@@ -19,7 +19,15 @@ import { HOME_THEME, homeInputStyle, LIGHT_BLUE } from "@/components/shared/home
 import { TickerListDropdown } from "@/components/shared/TickerListDropdown";
 
 type Strike = { strike: number; net: number };
-type Frame = { ts: string; spot: number; strikes: Strike[] };
+type Frame = {
+  ts: string;
+  spot: number;
+  strikes: Strike[];
+  /** Front active expiry covered by this snapshot (YYYY-MM-DD); can roll intraday. */
+  expiry?: string | null;
+  /** How many distinct expiries were summed into this frame's net. */
+  expiryCount?: number;
+};
 
 const POS = HOME_THEME.green; // #8ECAE6 — positive net GEX
 const NEG = HOME_THEME.red;   // #EF4444 — negative net GEX
@@ -28,12 +36,42 @@ const SUB = "rgba(255,255,255,0.55)";
 const SPEEDS = [0.5, 1, 2, 4, 8];
 const BASE_MS = 700; // frame interval at 1×
 
+/** Brand mark stamped into the chart so screen-grabs/recordings carry attribution. */
+const LOGO_SRC = "/cb-edge-logo.png";
+
 function fmtClock(iso: string): string {
   try {
     return new Date(iso).toLocaleTimeString("en-US", {
       timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
     });
   } catch { return iso; }
+}
+
+/** Frame clock down to the second — the stamp is what a screenshot is read off. */
+function fmtStampClock(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString("en-US", {
+      timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    });
+  } catch { return iso; }
+}
+
+/** "2026-07-31" → "Fri Jul 31". Parsed as noon UTC so no TZ off-by-one day. */
+function fmtStampDate(ymd: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd || "");
+  if (!m) return ymd || "";
+  const d = new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return ymd;
+  return d.toLocaleDateString("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" });
+}
+
+/** "2026-07-31" → "Jul 31" for the compact expiry chip. */
+function fmtExpiry(ymd: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd || "");
+  if (!m) return ymd || "";
+  const d = new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return ymd;
+  return d.toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric" });
 }
 
 function fmtGex(v: number): string {
@@ -58,6 +96,9 @@ export function ChainReplay({
   const [dates, setDates] = useState<string[]>([]);
   const [date, setDate] = useState<string>("");
   const [frames, setFrames] = useState<Frame[]>([]);
+  // Distinct expiries recorded for symbol+date — the fallback label when an
+  // individual frame carries no expiry (older server build, pre-`expiry` field).
+  const [expiries, setExpiries] = useState<string[]>([]);
   const [idx, setIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
@@ -103,10 +144,10 @@ export function ChainReplay({
     fetch(`/proxy/strike-growth/frames?symbol=${encodeURIComponent(symbol)}&date=${encodeURIComponent(date)}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((j) => {
-        if (!j?.ok) { setErr(j?.error || "No data."); setFrames([]); return; }
-        setFrames(j.frames || []); setIdx(0);
+        if (!j?.ok) { setErr(j?.error || "No data."); setFrames([]); setExpiries([]); return; }
+        setFrames(j.frames || []); setExpiries(j.expiries || []); setIdx(0);
       })
-      .catch(() => { setErr("Could not load frames."); setFrames([]); })
+      .catch(() => { setErr("Could not load frames."); setFrames([]); setExpiries([]); })
       .finally(() => setLoading(false));
   }, [symbol, date]);
 
@@ -194,6 +235,14 @@ export function ChainReplay({
   const denom = (scaleMode === "day" ? maxAbs : frameMax) || 1;
 
   const spot = animSpot.current;
+
+  // Stamp metadata. Prefer the frame's own front expiry (it can roll intraday as
+  // a new front contract takes over), and fall back to the day's first recorded
+  // expiry so the stamp still labels correctly against an older server build
+  // that doesn't send per-frame `expiry`.
+  const frameExpiry = frame?.expiry || expiries[0] || "";
+  const extraExpiries = Math.max(0, (frame?.expiryCount ?? expiries.length) - 1);
+  const isZeroDte = !!frameExpiry && frameExpiry === date;
 
   // Continuous vertical position of the spot line among the rendered strike
   // rows (interpolated between the two bracketing strikes), so the line and
@@ -322,6 +371,71 @@ export function ChainReplay({
 
       {!loading && !err && frame && (
         <div ref={rowsContainerRef} style={{ position: "relative" }}>
+          {/* ── Provenance stamp (top-left) ───────────────────────────────────
+              Ticker + expiry + the frame's own wall clock, burned into the
+              ladder itself so a screen-grab or screen-recording of the replay
+              carries what it is and when, with no surrounding chrome needed.
+              pointerEvents:none — must never intercept a scrub/click. Frosted
+              chip so it stays legible if a bar runs under it. */}
+          <div
+            style={{
+              position: "absolute", left: 64, top: 0, zIndex: 3, pointerEvents: "none",
+              display: "flex", flexDirection: "column", gap: 3,
+              padding: "6px 10px", borderRadius: 8,
+              background: "rgba(5,6,10,0.62)",
+              border: `1px solid ${HOME_THEME.border}`,
+              backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", color: HOME_THEME.cyan, fontFamily: "var(--font-mono)", lineHeight: 1 }}>
+                {symbol || "—"}
+              </span>
+              {frameExpiry && (
+                <span
+                  style={{
+                    fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", lineHeight: 1,
+                    padding: "3px 6px", borderRadius: 4,
+                    color: isZeroDte ? HOME_THEME.orange : LIGHT_BLUE,
+                    border: `1px solid ${isZeroDte ? "rgba(251,133,1,0.45)" : "rgba(125,211,252,0.35)"}`,
+                    background: isZeroDte ? "rgba(251,133,1,0.10)" : "rgba(125,211,252,0.10)",
+                  }}
+                >
+                  {isZeroDte ? "0DTE" : `EXP ${fmtExpiry(frameExpiry)}`}
+                </span>
+              )}
+              {extraExpiries > 0 && (
+                <span
+                  title={`Net summed across ${extraExpiries + 1} expiries`}
+                  style={{ fontSize: 10, fontWeight: 700, color: SUB, lineHeight: 1 }}
+                >
+                  +{extraExpiries}
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 11, color: SUB, fontVariantNumeric: "tabular-nums", lineHeight: 1.2 }}>
+              {date ? fmtStampDate(date) : ""}
+              {frame ? `${date ? " · " : ""}${fmtStampClock(frame.ts)} ET` : ""}
+            </div>
+          </div>
+
+          {/* ── Brand mark (bottom-right) ─────────────────────────────────────
+              Same reason as the stamp: the ladder travels as an image, so the
+              attribution has to live inside it. */}
+          <div
+            style={{
+              position: "absolute", right: 0, bottom: 0, zIndex: 3,
+              pointerEvents: "none", opacity: 0.92,
+            }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={LOGO_SRC}
+              alt="CB Edge"
+              style={{ height: 30, width: "auto", display: "block", filter: "drop-shadow(0 2px 6px rgba(0,0,0,0.8))" }}
+            />
+          </div>
+
           {spotTop !== null && (
             <div
               style={{
@@ -393,7 +507,7 @@ export function ChainReplay({
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 26, width: "auto", display: "block" }} />
+            <img src={LOGO_SRC} alt="CB Edge" style={{ height: 26, width: "auto", display: "block" }} />
             <button
               onClick={onClose}
               style={{
@@ -407,11 +521,9 @@ export function ChainReplay({
             </button>
           </div>
         </div>
+        {/* No trailing logo here — the mark now lives inside the ladder itself
+            (bottom-right), so it survives a crop of just the chart. */}
         {body}
-        <div style={{ marginTop: 10 }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 22, width: "auto", display: "block" }} />
-        </div>
       </div>
     </div>,
     document.body,

@@ -18,6 +18,7 @@ import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } f
 import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData } from "lightweight-charts";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
+import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
 // findGEXFlip is intentionally NOT imported: the flip is no longer recomputed
 // from live gexRows on this panel — it (and CB) come from the CB snapshot below.
 import { HOME_THEME } from "@/components/shared/homeTheme";
@@ -60,11 +61,15 @@ function gexColor(value: number, maxValue: number, intensity: number, top3: numb
 }
 
 export default function EsCandlesFullPanel() {
+  // Bandwidth gate — reconnect/backoff live in lib/gexSocket now, so the ref
+  // mirror this needed for the socket callbacks is gone.
   const esShouldConnect = useWsLifecycle();
-  const esShouldConnectRef = useRef(esShouldConnect);
-  esShouldConnectRef.current = esShouldConnect;
 
-  const { sessionCandles: rows, connected } = useEsCandles();
+  // historyDays = 2, not the hook's default 20. This panel reads ONLY
+  // `sessionCandles` — a 30h rolling window — so the other ~18 days of the
+  // default pull (~114KB / 250ms on every /home load) were fetched, held in
+  // state, and never looked at.
+  const { sessionCandles: rows, connected } = useEsCandles(true, 2);
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
@@ -251,11 +256,8 @@ export default function EsCandlesFullPanel() {
   }, [rows]);
 
   // ── /ws/gex: GEX levels (Call Wall / Put Wall / Flip) + basis + rail rows ─
+  // Subscribes to the shared socket (lib/gexSocket) instead of opening its own.
   useEffect(() => {
-    let ws: WebSocket | null = null;
-    let retry: ReturnType<typeof setTimeout> | null = null;
-    let dead = false;
-
     const apply = (d: Record<string, unknown>) => {
       const spx = Number(d.spot ?? 0);
       const esFut = Number(d.esFut ?? 0);
@@ -303,39 +305,15 @@ export default function EsCandlesFullPanel() {
       }
     };
 
-    const handle = (raw: string) => {
-      let msg: Record<string, unknown>;
-      try { msg = JSON.parse(raw); } catch { return; }
+    // Frames arrive pre-parsed from the shared socket.
+    const handle = (msg: GexMessage) => {
       const type = String(msg.type ?? "");
       const d = (msg.data && typeof msg.data === "object" ? msg.data : msg) as Record<string, unknown>;
       if (type === "snapshot" || type === "gex" || type === "GEX_UPDATE" || type === "spot" || type === "aux") apply(d);
     };
 
-    const connect = () => {
-      if (dead || !esShouldConnectRef.current) return;
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      try { ws = new WebSocket(`${proto}//${window.location.host}/ws/gex`); }
-      catch { schedule(); return; }
-      ws.onmessage = (e) => handle(String(e.data));
-      ws.onerror = () => { try { ws?.close(); } catch {} };
-      ws.onclose = () => { if (!dead) schedule(); };
-    };
-    const schedule = () => {
-      if (dead || !esShouldConnectRef.current) return;
-      if (retry) clearTimeout(retry);
-      retry = setTimeout(connect, 2500);
-    };
-
-    if (esShouldConnect) connect();
-    return () => {
-      dead = true;
-      if (retry) clearTimeout(retry);
-      if (ws) {
-        ws.onmessage = ws.onerror = ws.onclose = null;
-        if (ws.readyState === WebSocket.CONNECTING) ws.onopen = () => { try { ws?.close(); } catch {} };
-        else { ws.onopen = null; try { ws.close(); } catch {} }
-      }
-    };
+    if (!esShouldConnect) return;
+    return subscribeGex({ onMessage: handle });
   }, [esShouldConnect]);
 
   // ── Price-line values: ES-tick quantized, republished at most once a minute ──

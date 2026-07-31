@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { queryGreeksToday } from "@/lib/snapdb";
+import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
 import { statTileStyle } from "@/components/shared/homeTheme";
 
 interface GreekPoint {
@@ -152,11 +153,9 @@ export default function LiveGreeksGauges() {
     });
   }, []);
 
-  // Permanent /ws/gex connection — always on, no idle timeout, no toggle.
+  // Permanent /ws/gex subscription — always on, no idle timeout, no toggle.
+  // Shares the app-wide socket (lib/gexSocket) instead of opening its own.
   useEffect(() => {
-    let unmounted = false;
-    let ws: WebSocket | null = null;
-    let reconnect: ReturnType<typeof setTimeout> | null = null;
     const latestFrame: { totals: Record<string, number> | null; spot: number | null; updatedAt: number } = { totals: null, spot: null, updatedAt: 0 };
 
     const tryApply = () => {
@@ -165,9 +164,8 @@ export default function LiveGreeksGauges() {
       if (snap) applySnap(snap);
     };
 
-    const handle = (raw: string) => {
-      let m: Record<string, unknown>;
-      try { m = JSON.parse(raw); } catch { return; }
+    // Frames arrive pre-parsed from the shared socket.
+    const handle = (m: GexMessage) => {
       const type = String(m.type ?? "");
       const d = (m.data && typeof m.data === "object" ? m.data : m) as Record<string, unknown>;
       if (type === "snapshot" || type === "gex") {
@@ -180,28 +178,7 @@ export default function LiveGreeksGauges() {
       }
     };
 
-    const scheduleReconnect = () => {
-      if (unmounted) return;
-      if (reconnect) clearTimeout(reconnect);
-      reconnect = setTimeout(connect, 2000);
-    };
-
-    function connect() {
-      if (unmounted) return;
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      try { ws = new WebSocket(`${proto}//${window.location.host}/ws/gex`); }
-      catch { scheduleReconnect(); return; }
-      ws.onmessage = (evt) => handle(String(evt.data));
-      ws.onerror = () => { try { ws?.close(); } catch {} };
-      ws.onclose = () => { if (!unmounted) scheduleReconnect(); };
-    }
-
-    connect();
-    return () => {
-      unmounted = true;
-      if (reconnect) clearTimeout(reconnect);
-      if (ws) { ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null; try { ws.close(); } catch {} }
-    };
+    return subscribeGex({ onMessage: handle });
   }, [applySnap]);
 
   const d = latest ?? (history.length ? history[history.length - 1] : null);
