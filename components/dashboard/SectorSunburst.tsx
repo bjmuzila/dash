@@ -119,7 +119,14 @@ const textW = (s: string, fs: number) => s.length * fs * 0.6;
 
 interface Node { name: string; a0: number; a1: number; rows: Row[]; chg: number }
 
-export default function SectorSunburst() {
+export default function SectorSunburst({ maxWheel }: { maxWheel?: number } = {}) {
+  // `maxWheel` caps the inline wheel at N px so the card can be sized to match a
+  // neighbour (the Options page pairs it with the SPX heatmap). The SVG is
+  // square and width:100%, so without a cap the wheel's height is just the
+  // column width — which is what makes this card the tallest thing on a page.
+  // Unset (Traders Dashboard) behaves exactly as before. The pop-out ignores it:
+  // shrinking the inline wheel is precisely why Expand needs to stay full size.
+  const compact = maxWheel != null;
   // Capture target for this card's own snapshot button — wraps the wheel and
   // everything around it in whichever shell is live (inline card or pop-out).
   const snapRef = useRef<HTMLDivElement>(null);
@@ -366,11 +373,17 @@ export default function SectorSunburst() {
           )}
         </div>
       </div>
-      <div style={{ fontSize: 12, color: HT.muted, opacity: 0.65, marginBottom: 10 }}>
-        {focus
-          ? <>Showing <strong style={{ color: HT.text }}>{focus}</strong> — click the middle to go back.</>
-          : <>Bar length = size of move, color = direction. Click a sector to zoom.</>}
-      </div>
+      {/* The how-to-read line is the first thing to go when the card is capped:
+          at this size every pixel it costs comes straight out of the wheel. The
+          zoomed-in state keeps its line regardless — that one is a way back out,
+          not a caption, and there is no other affordance for it. */}
+      {(!compact || focus) && (
+        <div style={{ fontSize: 12, color: HT.muted, opacity: 0.65, marginBottom: 10 }}>
+          {focus
+            ? <>Showing <strong style={{ color: HT.text }}>{focus}</strong> — click the middle to go back.</>
+            : <>Bar length = size of move, color = direction. Click a sector to zoom.</>}
+        </div>
+      )}
 
       {/* body — stacked in the card, wheel-beside-movers when popped out */}
       <div style={{
@@ -387,7 +400,9 @@ export default function SectorSunburst() {
       <div style={{ flex: expanded ? "1 1 460px" : undefined, minWidth: 0, display: "flex", justifyContent: "center" }}>
       <div ref={boxRef} style={{
         position: "relative", width: "100%",
-        maxWidth: expanded ? "min(100%, calc(100vh - 200px))" : undefined,
+        maxWidth: expanded
+          ? "min(100%, calc(100vh - 200px))"
+          : compact ? maxWheel : undefined,
       }}>
         {!data && !err && (
           <div style={{ padding: "48px 12px", textAlign: "center", color: HT.muted, opacity: 0.6, fontSize: 12 }}>

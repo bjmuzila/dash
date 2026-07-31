@@ -1232,18 +1232,47 @@ async function handleGexVolFlow(req, res) {
   const DAY_START = `(extract(epoch from date_trunc('day', now() AT TIME ZONE 'America/New_York')
                       AT TIME ZONE 'America/New_York') * 1000)::bigint`;
 
-  // Front expiry = the nearest expiry present in the newest snapshot of the
-  // session. MIN() breaks a tie when one timestamp carries several expiries;
-  // ISO date strings sort chronologically, so MIN is the nearest.
+  // Every expiry with rows in today's window, for the panel's expiry chooser.
+  // Sent on every response so the picker's options can't drift from what is
+  // actually plottable — an expiry that would render an empty chart never
+  // appears in the list.
+  const { rows: expRows } = await pool.query(
+    `SELECT expiry, COUNT(*)::int AS row_count, MAX(timestamp) AS last_ts
+       FROM option_strike_gex_history
+      WHERE timestamp >= ${DAY_START}
+      GROUP BY expiry
+      ORDER BY expiry ASC`
+  );
+  const expiries = expRows.map((r) => ({
+    expiry: r.expiry,
+    rows: Number(r.row_count) || 0,
+    lastTs: Number(r.last_ts) || 0,
+  }));
+
+  // Front expiry = the expiry the SESSION actually traded, i.e. the one holding
+  // the most rows in today's window — NOT the one on the newest snapshot.
+  //
+  // The newest-snapshot rule is the obvious one and it is wrong here. The feed's
+  // front-expiry roll fires AFTER the cash close and sets the expiry to the day
+  // that just ended, so on 2026-07-31 every RTH row was written under expiry
+  // 2026-07-30 (00:00–16:14, 291k rows) and only the post-close tail carried
+  // 2026-07-31 (16:15 on, 100k rows). Deriving from the last snapshot picked the
+  // 100k tail and silently dropped the entire session — the chart opened at
+  // 4:30 PM with the day's actual flow missing.
+  //
+  // Row count survives that: the traded session always dominates the after-hours
+  // tail, and on a day where the roll behaves the two rules agree. Ties break on
+  // the nearer expiry. If the roll is ever fixed upstream this still returns the
+  // same answer, so it is safe to leave in place.
+  // Derived from the `expiries` list already fetched above rather than a second
+  // GROUP BY — same numbers, one less round trip.
   let expiry = expiryParam;
   if (!expiry && scope === 'front') {
-    const { rows: exp } = await pool.query(
-      `SELECT MIN(expiry) AS expiry
-         FROM option_strike_gex_history
-        WHERE timestamp = (SELECT MAX(timestamp) FROM option_strike_gex_history
-                            WHERE timestamp >= ${DAY_START})`
+    const best = expiries.reduce(
+      (m, e) => (m == null || e.rows > m.rows || (e.rows === m.rows && e.expiry < m.expiry) ? e : m),
+      /** @type {{expiry:string,rows:number,lastTs:number}|null} */ (null)
     );
-    expiry = exp[0]?.expiry || '';
+    expiry = best?.expiry || '';
   }
 
   const { rows } = await pool.query(
@@ -1289,7 +1318,7 @@ async function handleGexVolFlow(req, res) {
     return p;
   });
 
-  const payload = { ok: true, scope, expiry: expiry || null, binSec, points };
+  const payload = { ok: true, scope, expiry: expiry || null, binSec, expiries, points };
   _volFlowCache.set(key, { at: Date.now(), payload });
   if (_volFlowCache.size > 32) {
     const cutoff = Date.now() - 10 * 60 * 1000;

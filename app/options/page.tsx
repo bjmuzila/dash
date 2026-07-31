@@ -26,6 +26,20 @@ import OptionsPlaceholder from "./OptionsPlaceholder";
  * fetches, sockets, or chart libs behind those yet.
  */
 
+/**
+ * Wheel diameter that lands the sector-wheel card at the heatmap card's height.
+ *
+ * Both cards are pinned to their content, so their heights are just chrome +
+ * body. The heatmap's is fixed by the grid: 24 padding + 33 title + 48 mode
+ * switcher + 238 grid + 24 padding ≈ 367. The wheel card's chrome (padding,
+ * header, Top/Bottom movers, the as-of footer) runs ≈ 177 with the how-to-read
+ * line suppressed, which leaves this for the wheel itself.
+ *
+ * Re-derive it if either card's chrome changes — a stale number here shows up
+ * as the two cards disagreeing by a few pixels, not as anything breaking.
+ */
+const SUNBURST_WHEEL_PX = 190;
+
 const GRID_CSS = `
 .opt-cols { display: flex; gap: clamp(16px, 2vw, 32px); align-items: stretch; }
 .opt-cols > div { display: flex; flex-direction: column; gap: clamp(16px, 2vw, 32px); min-width: 0; }
@@ -70,13 +84,19 @@ export default function OptionsPage() {
                 expand/full-screen and snapshot button, and self-fetches
                 /api/spx-sunburst, so it drops into a bare Card. It shows the
                 whole index rather than the selected symbol, hence no ticker in
-                the heading. */}
+                the heading.
+
+                Capped and pinned to its content for the same reason the heatmap
+                is, and to the same finished height: uncapped, the wheel's SVG is
+                square at width:100%, so it renders as tall as the column is
+                wide and towers over everything else on the page. Expand still
+                opens it full size. */}
             <Card
               variant="budget"
               accent={LIGHT_BLUE}
-              style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}
+              style={{ display: "flex", flexDirection: "column", flex: "0 0 auto", minWidth: 0 }}
             >
-              <SectorSunburst />
+              <SectorSunburst maxWheel={SUNBURST_WHEEL_PX} />
             </Card>
 
             <TickerCard title="Orderflow Graph" subtitle="cumulative delta">

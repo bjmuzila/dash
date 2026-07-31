@@ -2450,7 +2450,7 @@ function GexLevelsTab() {
                     variant="budget"
                     accent={LIGHT_BLUE}
                     title={<CardTitleRow label="Net vol GEX flow (today)" onDragStart={rightOrder.handleDragStart("volFlow")} onDragEnd={rightOrder.handleDragEnd} />}
-                    subtitle="Intraday path of the volume leg, 5m buckets from option_strike_gex_history · front expiry · above zero = flow adding long gamma (dampening), below = short gamma (amplifying) · SPX spot shares the x-axis"
+                    subtitle="Intraday path of the volume leg, 5m buckets from option_strike_gex_history · pick an expiration or track the front · above zero = flow adding long gamma (dampening), below = short gamma (amplifying)"
                   >
                     <div style={{ height: 460 }}>
                       <VolGexFlowPanel />

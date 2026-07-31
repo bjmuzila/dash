@@ -8,26 +8,27 @@
 //
 // Data: GET /proxy/gex-vol-flow (server-with-proxy.js), which buckets
 // option_strike_gex_history server-side — last reading per (expiry, strike) per
-// bucket, summed. Front expiry by default, derived from the newest snapshot
-// rather than the calendar. Polled; the endpoint caches 20s and the recorder
-// only writes ~1/min, so this is cheap.
+// bucket, summed. Polled; the endpoint caches 20s and the recorder only writes
+// ~1/min, so this is cheap.
 //
 // Why a Baseline series: net vol GEX is a POLARITY measure — the sign is the
 // signal (positive = flow adding long gamma / dampening, negative = short
 // gamma / amplifying). A baseline series splits the fill at zero natively, so
 // the sign is read from color and side without a legend lookup.
 //
-// Why two charts and not one with two scales: spot and GEX are different units.
-// A dual-axis overlay implies a crossing relationship that isn't there and lets
-// the axis choice manufacture correlation. Two stacked panels sharing an x-axis
-// and a crosshair show the same alignment honestly.
+// Expiry chooser: "Front" tracks the nearest expiry in the newest snapshot
+// (re-derived server-side every poll, so it follows the roll on its own).
+// "All expiries" sums the whole window. Any specific date pins to that expiry.
+// The option list is whatever the endpoint reports as actually having rows
+// today, so a pick can never produce an empty chart.
 //
 // Theme: HOME_THEME tokens only — no ad-hoc hex.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BaselineSeries, ColorType, LineSeries, createChart } from "lightweight-charts";
+import { BaselineSeries, ColorType, createChart } from "lightweight-charts";
 import type { IChartApi, ISeriesApi, UTCTimestamp } from "lightweight-charts";
 import { HOME_THEME } from "@/components/shared/homeTheme";
+import { ThemedSelect } from "@/components/shared/ThemedSelect";
 
 const C = HOME_THEME;
 
@@ -39,6 +40,11 @@ const NEG = C.red;
 const POLL_MS = 30_000;
 const BIN_SEC = 300;
 
+// Sentinel picks. Real picks are ISO expiry strings, which can never collide
+// with these because neither parses as a date.
+const FRONT = "__front__";
+const ALL = "__all__";
+
 export type VolFlowPoint = {
   ts: number;
   spot: number;
@@ -49,12 +55,15 @@ export type VolFlowPoint = {
   strikes: number;
 };
 
+type ExpiryInfo = { expiry: string; rows: number; lastTs: number };
+
 type VolFlowResponse = {
   ok?: boolean;
   reason?: string;
   scope?: string;
   expiry?: string | null;
   binSec?: number;
+  expiries?: ExpiryInfo[];
   points?: VolFlowPoint[];
 };
 
@@ -79,29 +88,41 @@ function etTime(sec: number): string {
   });
 }
 
-export default function VolGexFlowPanel({
-  showSpot = true,
-  scope = "front",
-}: {
-  showSpot?: boolean;
-  scope?: "front" | "all";
-}) {
+// "2026-07-31" → "Jul 31". Parsed as UTC noon so the label can't slip a day in
+// a west-of-UTC timezone.
+function shortExpiry(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return iso;
+  return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], 12)).toLocaleDateString("en-US", {
+    timeZone: "UTC",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+export default function VolGexFlowPanel() {
+  const [pick, setPick] = useState<string>(FRONT);
   const [points, setPoints] = useState<VolFlowPoint[]>([]);
-  const [expiry, setExpiry] = useState<string | null>(null);
+  const [expiries, setExpiries] = useState<ExpiryInfo[]>([]);
+  const [resolvedExpiry, setResolvedExpiry] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const load = useCallback(async () => {
+    const qs =
+      pick === ALL ? `scope=all` : pick === FRONT ? `scope=front` : `expiry=${encodeURIComponent(pick)}`;
     try {
-      const r = await fetch(`/proxy/gex-vol-flow?bin=${BIN_SEC}&scope=${scope}`, { cache: "no-store" });
+      const r = await fetch(`/proxy/gex-vol-flow?bin=${BIN_SEC}&${qs}`, { cache: "no-store" });
       const j = (await r.json()) as VolFlowResponse;
       if (j?.ok === false) {
         setErr(j.reason === "no-db" ? "History DB unavailable" : "Feed unavailable");
         setPoints([]);
       } else {
         setPoints(Array.isArray(j?.points) ? j.points : []);
-        setExpiry(j?.expiry ?? null);
+        setExpiries(Array.isArray(j?.expiries) ? j.expiries : []);
+        setResolvedExpiry(j?.expiry ?? null);
         setErr(null);
       }
       setUpdatedAt(Date.now());
@@ -110,11 +131,12 @@ export default function VolGexFlowPanel({
     } finally {
       setLoading(false);
     }
-  }, [scope]);
+  }, [pick]);
 
   useEffect(() => {
     let alive = true;
     const tick = () => { if (alive) void load(); };
+    setLoading(true);
     tick();
     const id = setInterval(tick, POLL_MS);
     // Refresh immediately when the tab comes back — a backgrounded tab throttles
@@ -123,6 +145,17 @@ export default function VolGexFlowPanel({
     document.addEventListener("visibilitychange", onVis);
     return () => { alive = false; clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
   }, [load]);
+
+  const expiryOptions = useMemo(() => {
+    const opts = [
+      { value: FRONT, label: resolvedExpiry ? `Front · ${shortExpiry(resolvedExpiry)}` : "Front" },
+      { value: ALL, label: "All expiries" },
+    ];
+    for (const e of expiries) {
+      opts.push({ value: e.expiry, label: `${shortExpiry(e.expiry)} · ${e.rows.toLocaleString()} rows` });
+    }
+    return opts;
+  }, [expiries, resolvedExpiry]);
 
   // ── Derived stats for the cards ──
   const stats = useMemo(() => {
@@ -137,178 +170,100 @@ export default function VolGexFlowPanel({
     for (let i = 1; i < vals.length; i++) {
       if ((vals[i - 1] < 0 && vals[i] >= 0) || (vals[i - 1] >= 0 && vals[i] < 0)) flips++;
     }
-    const biggest = points.reduce<VolFlowPoint | null>(
-      (m, p) => (p.dVol != null && (m == null || Math.abs(p.dVol) > Math.abs(m.dVol as number)) ? p : m),
-      null
-    );
     return {
       last,
       high: { v: vals[hiIdx], at: points[hiIdx].ts },
       low: { v: vals[loIdx], at: points[loIdx].ts },
-      open: vals[0],
       flips,
-      biggest,
     };
   }, [points]);
 
-  // ── Charts ──
-  const gexBoxRef = useRef<HTMLDivElement | null>(null);
-  const spotBoxRef = useRef<HTMLDivElement | null>(null);
-  const gexChartRef = useRef<IChartApi | null>(null);
-  const spotChartRef = useRef<IChartApi | null>(null);
-  const gexSeriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
-  const spotSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
-  // The charts are built once and never rebuilt on new data (rebuilding would
-  // reset the user's zoom every poll), so the crosshair handlers must read
-  // points through a ref — a closure over the state would stay pinned to the
-  // empty array captured at mount and the sync would silently never fire.
-  const pointsRef = useRef<VolFlowPoint[]>([]);
-  useEffect(() => { pointsRef.current = points; }, [points]);
+  // ── Chart ──
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
 
   useEffect(() => {
-    const boxes: Array<{ box: HTMLDivElement | null; kind: "gex" | "spot" }> = [
-      { box: gexBoxRef.current, kind: "gex" },
-      { box: showSpot ? spotBoxRef.current : null, kind: "spot" },
-    ];
-    const made: Array<{ chart: IChartApi; ro: ResizeObserver; raf: number }> = [];
+    const box = boxRef.current;
+    if (!box) return;
+    box.innerHTML = "";
 
-    for (const { box, kind } of boxes) {
-      if (!box) continue;
-      box.innerHTML = "";
-      const chart = createChart(box, {
-        layout: {
-          background: { type: ColorType.Solid, color: "transparent" },
-          textColor: C.text,
-          fontFamily: "Inter, system-ui, sans-serif",
-          attributionLogo: false,
-        },
-        grid: {
-          vertLines: { color: "rgba(255,255,255,.05)" },
-          horzLines: { color: "rgba(255,255,255,.05)" },
-        },
-        rightPriceScale: { visible: true, borderColor: C.border },
-        leftPriceScale: { visible: false },
-        handleScale: false,
-        handleScroll: false,
-        crosshair: { mode: 0 },
-        timeScale: {
-          borderColor: C.border,
-          timeVisible: true,
-          secondsVisible: false,
-          // The spot panel sits directly under the GEX panel and shares its
-          // x-axis, so only the bottom one draws time labels.
-          visible: kind === "spot" || !showSpot,
-          tickMarkFormatter: (time: unknown) => (typeof time === "number" ? etTime(time) : ""),
-        },
-        localization: {
-          priceFormatter: (p: number) => (kind === "gex" ? fmtGex(p, 1) : p.toFixed(2)),
-          timeFormatter: (time: unknown) => (typeof time === "number" ? etTime(time) : ""),
-        },
-      });
+    const chart = createChart(box, {
+      layout: {
+        background: { type: ColorType.Solid, color: "transparent" },
+        textColor: C.text,
+        fontFamily: "Inter, system-ui, sans-serif",
+        attributionLogo: false,
+      },
+      grid: {
+        vertLines: { color: "rgba(255,255,255,.05)" },
+        horzLines: { color: "rgba(255,255,255,.05)" },
+      },
+      rightPriceScale: { visible: true, borderColor: C.border },
+      leftPriceScale: { visible: false },
+      handleScale: false,
+      handleScroll: false,
+      crosshair: { mode: 0 },
+      timeScale: {
+        borderColor: C.border,
+        timeVisible: true,
+        secondsVisible: false,
+        tickMarkFormatter: (time: unknown) => (typeof time === "number" ? etTime(time) : ""),
+      },
+      localization: {
+        priceFormatter: (p: number) => fmtGex(p, 1),
+        timeFormatter: (time: unknown) => (typeof time === "number" ? etTime(time) : ""),
+      },
+    });
 
-      if (kind === "gex") {
-        gexSeriesRef.current = chart.addSeries(BaselineSeries, {
-          baseValue: { type: "price", price: 0 },
-          topLineColor: POS,
-          topFillColor1: "rgba(142,202,230,0.32)",
-          topFillColor2: "rgba(142,202,230,0.02)",
-          bottomLineColor: NEG,
-          bottomFillColor1: "rgba(239,68,68,0.02)",
-          bottomFillColor2: "rgba(239,68,68,0.32)",
-          lineWidth: 2,
-          priceLineVisible: false,
-        });
-        // Bottom margin keeps the lowest price tick off the canvas edge, where
-        // lightweight-charts would clip the label in half.
-        chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.12, bottom: 0.14 } });
-        gexChartRef.current = chart;
-      } else {
-        spotSeriesRef.current = chart.addSeries(LineSeries, {
-          color: "rgba(255,255,255,0.72)",
-          lineWidth: 2,
-          priceLineVisible: false,
-          lastValueVisible: true,
-        });
-        chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.18, bottom: 0.14 } });
-        spotChartRef.current = chart;
+    seriesRef.current = chart.addSeries(BaselineSeries, {
+      baseValue: { type: "price", price: 0 },
+      topLineColor: POS,
+      topFillColor1: "rgba(142,202,230,0.32)",
+      topFillColor2: "rgba(142,202,230,0.02)",
+      bottomLineColor: NEG,
+      bottomFillColor1: "rgba(239,68,68,0.02)",
+      bottomFillColor2: "rgba(239,68,68,0.32)",
+      lineWidth: 2,
+      priceLineVisible: false,
+    });
+    // Bottom margin keeps the lowest price tick off the canvas edge, where
+    // lightweight-charts would clip the label in half.
+    chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.12, bottom: 0.14 } });
+    chartRef.current = chart;
+
+    let lastW = 0, lastH = 0;
+    const applySize = () => {
+      const w = box.clientWidth, h = box.clientHeight;
+      if (w > 0 && h > 0 && (w !== lastW || h !== lastH)) {
+        lastW = w; lastH = h;
+        chart.applyOptions({ width: w, height: h });
       }
-
-      let lastW = 0, lastH = 0;
-      const applySize = () => {
-        const w = box.clientWidth, h = box.clientHeight;
-        if (w > 0 && h > 0 && (w !== lastW || h !== lastH)) {
-          lastW = w; lastH = h;
-          chart.applyOptions({ width: w, height: h });
-        }
-      };
-      const ro = new ResizeObserver(applySize);
-      ro.observe(box);
-      let raf = 0, tries = 0;
-      const pump = () => {
-        applySize();
-        if ((lastW === 0 || lastH === 0) && tries++ < 120) raf = requestAnimationFrame(pump);
-      };
-      raf = requestAnimationFrame(pump);
-      made.push({ chart, ro, raf });
-    }
-
-    // Sync the two panels: logical range (so zoom/fit agree) and crosshair (so
-    // reading one panel reads the other). A guard flag stops the echo.
-    let syncing = false;
-    const a = gexChartRef.current, b = spotChartRef.current;
-    const unsubs: Array<() => void> = [];
-    if (a && b) {
-      const link = (from: IChartApi, to: IChartApi) => {
-        const onRange = (r: unknown) => {
-          if (syncing || !r) return;
-          syncing = true;
-          try { to.timeScale().setVisibleLogicalRange(r as { from: number; to: number }); } catch { /* range not ready */ }
-          syncing = false;
-        };
-        from.timeScale().subscribeVisibleLogicalRangeChange(onRange);
-        unsubs.push(() => from.timeScale().unsubscribeVisibleLogicalRangeChange(onRange));
-      };
-      link(a, b);
-      link(b, a);
-
-      const crossA = (param: { time?: unknown }) => {
-        if (!param?.time || !spotSeriesRef.current) { b.clearCrosshairPosition(); return; }
-        const pt = pointsRef.current.find((p) => Math.floor(p.ts / 1000) === param.time);
-        if (pt) b.setCrosshairPosition(pt.spot, param.time as UTCTimestamp, spotSeriesRef.current);
-      };
-      const crossB = (param: { time?: unknown }) => {
-        if (!param?.time || !gexSeriesRef.current) { a.clearCrosshairPosition(); return; }
-        const pt = pointsRef.current.find((p) => Math.floor(p.ts / 1000) === param.time);
-        if (pt) a.setCrosshairPosition(pt.volGex, param.time as UTCTimestamp, gexSeriesRef.current);
-      };
-      a.subscribeCrosshairMove(crossA);
-      b.subscribeCrosshairMove(crossB);
-      unsubs.push(() => { a.unsubscribeCrosshairMove(crossA); b.unsubscribeCrosshairMove(crossB); });
-    }
+    };
+    const ro = new ResizeObserver(applySize);
+    ro.observe(box);
+    let raf = 0, tries = 0;
+    const pump = () => {
+      applySize();
+      if ((lastW === 0 || lastH === 0) && tries++ < 120) raf = requestAnimationFrame(pump);
+    };
+    raf = requestAnimationFrame(pump);
 
     return () => {
-      for (const u of unsubs) { try { u(); } catch { /* chart already gone */ } }
-      for (const { chart, ro, raf } of made) {
-        cancelAnimationFrame(raf);
-        ro.disconnect();
-        chart.remove();
-      }
-      gexChartRef.current = null;
-      spotChartRef.current = null;
-      gexSeriesRef.current = null;
-      spotSeriesRef.current = null;
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
     };
-  }, [showSpot]);
+  }, []);
 
   useEffect(() => {
-    if (!points.length) return;
-    const t = (p: VolFlowPoint) => Math.floor(p.ts / 1000) as UTCTimestamp;
-    gexSeriesRef.current?.setData(points.map((p) => ({ time: t(p), value: p.volGex })));
-    spotSeriesRef.current?.setData(points.map((p) => ({ time: t(p), value: p.spot })));
-    try {
-      gexChartRef.current?.timeScale().fitContent();
-      spotChartRef.current?.timeScale().fitContent();
-    } catch { /* not laid out yet */ }
+    if (!seriesRef.current) return;
+    seriesRef.current.setData(
+      points.map((p) => ({ time: Math.floor(p.ts / 1000) as UTCTimestamp, value: p.volGex }))
+    );
+    try { chartRef.current?.timeScale().fitContent(); } catch { /* not laid out yet */ }
   }, [points]);
 
   // ── Cards ──
@@ -327,14 +282,20 @@ export default function VolGexFlowPanel({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, gap: 10, padding: 14 }}>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0, flexWrap: "wrap" }}>
+      {/* Header — the expiry chooser's menu portals out, but the row still needs
+          to sit above the chart canvas while it's open. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0, flexWrap: "wrap", position: "relative", zIndex: menuOpen ? 30 : 1 }}>
         <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: C.text }}>
           Net Vol GEX Flow
         </span>
-        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: C.cyan, border: `1px solid ${C.border}`, borderRadius: 6, padding: "2px 8px" }}>
-          {expiry ? `EXP ${expiry}` : scope === "all" ? "ALL EXPIRIES" : "FRONT"}
-        </span>
+        <ThemedSelect
+          value={pick}
+          options={expiryOptions}
+          onChange={setPick}
+          onOpenChange={setMenuOpen}
+          width={190}
+          ariaLabel="Expiration"
+        />
         <span style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", letterSpacing: "0.06em" }}>
           {BIN_SEC / 60}m buckets · today ET
         </span>
@@ -371,17 +332,9 @@ export default function VolGexFlowPanel({
         ))}
       </div>
 
-      {/* Charts */}
-      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 4, position: "relative" }}>
-        <div ref={gexBoxRef} style={{ flex: showSpot ? 2.2 : 1, minHeight: 0 }} />
-        {showSpot && (
-          <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, marginTop: 6 }}>
-            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(255,255,255,0.35)", paddingLeft: 2, marginBottom: 2 }}>
-              SPX Spot
-            </span>
-            <div ref={spotBoxRef} style={{ flex: 1, minHeight: 0 }} />
-          </div>
-        )}
+      {/* Chart */}
+      <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+        <div ref={boxRef} style={{ position: "absolute", inset: 0 }} />
 
         {(loading || err || (!points.length && !loading)) && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(5,6,10,0.72)", borderRadius: 10, textAlign: "center", padding: 16 }}>
