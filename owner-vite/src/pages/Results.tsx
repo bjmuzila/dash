@@ -475,7 +475,7 @@ function SetupLogModal({ kind, rows, onClose }: { kind: string; rows: SetupRow[]
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ background: HOME_THEME.panel, border: `1px solid ${C.border}`, borderTop: `3px solid ${C.cyan}`, borderRadius: 14, width: "min(960px, 96vw)", maxHeight: "86vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 64px rgba(0,0,0,0.55)" }}
+        style={{ background: HOME_THEME.panel, border: `1px solid ${C.border}`, borderRadius: 14, width: "min(960px, 96vw)", maxHeight: "86vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 64px rgba(0,0,0,0.55)" }}
       >
         <div style={{ display: "flex", alignItems: "baseline", gap: 12, padding: "16px 20px", borderBottom: `1px solid ${C.border}` }}>
           <span style={{ fontSize: 17, fontWeight: 800, color: C.label }}>{kindLabel(kind)}</span>
@@ -632,9 +632,12 @@ function CheckpointsView() {
       {/* Per-checkpoint hit-rate roll-up */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14, marginBottom: 22 }}>
         {summary.map((s) => {
+          // Bare CARD, no accent strip: the ICT cards use the frosted surface
+          // unadorned, and a coloured top border made these read as a different
+          // card family on the same page. `accent` still colours the stat text.
           const accent = wrColor(s.hitRate);
           return (
-            <div key={s.key} className="card-hover" style={{ ...CARD, borderTop: `2px solid ${rgba(accent, 0.5)}`, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
+            <div key={s.key} className="card-hover" style={{ ...CARD, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
                 <span style={{ fontSize: 17, fontWeight: 800, color: C.label }}>{s.label}</span>
                 <span style={{ fontSize: 14, fontWeight: 700, color: C.label, textTransform: "uppercase", letterSpacing: "0.1em" }}>{s.samples} days</span>
@@ -786,7 +789,14 @@ type CbConfig = {
   BUY_MIN: number; STRIKE_STEP: number; WALK_MAX_STEPS: number;
   PROBE_TICKER: string; MULTIPLIER: number; CHECKPOINT_GRACE_MIN: number;
 };
-type CbTick = { ts: number | string; mark: number | null; bid: number | null; ask: number | null; spot: number | null; dist: number | null };
+type CbTick = {
+  ts: number | string; mark: number | null; bid: number | null; ask: number | null;
+  spot: number | null; dist: number | null;
+  // Present on stream-sourced bars: the true intra-minute range. A REST-probed
+  // row has these equal to `mark`, so the band collapses to the line on its own.
+  mark_open: number | null; mark_high: number | null; mark_low: number | null;
+  src: string | null;
+};
 
 // BIGINT columns come back from node-pg as STRINGS (no type parser is
 // registered in lib/db.ts), so every timestamp has to be coerced before it goes
@@ -953,9 +963,10 @@ function TradesView() {
       {/* Per-checkpoint roll-up */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14, marginBottom: 22 }}>
         {summary.map((s) => {
+          // Bare CARD — see the note on the Confidence cards above.
           const accent = wrColor(s.winRate);
           return (
-            <div key={s.key} className="card-hover" style={{ ...CARD, borderTop: `2px solid ${rgba(accent, 0.5)}`, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
+            <div key={s.key} className="card-hover" style={{ ...CARD, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
               {/* Type scale is the dashboard's, not this card's own: 17 for the
                   title, 14 for everything else, C.label for text, mono only on
                   numbers — the same block the ICT and Confidence cards use. A
@@ -1210,11 +1221,21 @@ function CbProbeChart({
   }
 
   const spec = CB_METRICS.find((m) => m.key === metric)!;
+  // On the price view, stream-sourced bars carry the minute's true high and low.
+  // Drawing that band is the whole point of streaming: the line alone still only
+  // shows one sampled price per minute, and the peak this board leads with can
+  // live entirely inside the band.
+  const band = metric === "mark"
+    ? ticks.map((t) => ({ ts: n(t.ts), hi: n(t.mark_high), lo: n(t.mark_low) }))
+      .filter((b): b is { ts: number; hi: number; lo: number } => b.ts != null && b.hi != null && b.lo != null)
+    : [];
+  const hasRange = band.some((b) => b.hi > b.lo);
   const xs = pts.map((p) => p.ts), ys = pts.map((p) => p.v);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   // The entry line is part of the picture, not an annotation on top of it — if
   // the domain excludes it, it gets drawn off-canvas.
   const domain = [...ys];
+  if (hasRange) domain.push(...band.map((b) => b.hi), ...band.map((b) => b.lo));
   if (metric === "mark" && entry != null) domain.push(entry);
   let minY = Math.min(...domain), maxY = Math.max(...domain);
   if (minY === maxY) { minY -= 1; maxY += 1; }
@@ -1260,6 +1281,16 @@ function CbProbeChart({
       )}
 
       <path d={area} fill="url(#cbwg)" />
+
+      {/* High/low envelope from the 1-minute stream bars. */}
+      {hasRange && (
+        <path
+          d={`${band.map((b, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(b.hi).toFixed(1)}`).join(" ")} `
+            + `${band.slice().reverse().map((b, i) => `L${sx(band.length - 1 - i).toFixed(1)},${sy(b.lo).toFixed(1)}`).join(" ")} Z`}
+          fill={rgba(C.cyan, 0.16)}
+        />
+      )}
+
       <path d={path} fill="none" stroke={C.cyan} strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
 
       {peakIdx >= 0 && (
@@ -1426,9 +1457,10 @@ function CbProbeModal({
 
         <div style={{ fontSize: 14, color: MUTED, fontFamily: "var(--font-mono)", letterSpacing: "0.04em", lineHeight: 1.6 }}>
           {metric === "mark" ? "Contract mark" : metric === "spot" ? "SPX spot at each poll" : "SPX distance to the CB"}
-          {" · "}priced through <b>/proxy/probe-rest</b> (TastyTrade / dxLink), one poll a minute while the position was open —
-          the same pipeline the /owner/probe page uses. TastyTrade has no per-contract history, so this curve is the only
-          record of what the position was worth; minutes the recorder was down are simply absent.
+          {metric === "mark" ? " · shaded band is the minute's true high/low from the dxLink stream" : ""}
+          {" · "}streamed from <b>dxLink</b> while held, with <b>/proxy/probe-rest</b> as the fallback whenever the
+          subscription goes quiet — the same pipeline /owner/probe uses. TastyTrade has no per-contract history, so this
+          curve is the only record of what the position was worth; minutes the recorder was down are simply absent.
         </div>
       </div>
     </div>

@@ -216,6 +216,13 @@ function snapshotAt(rows, minute, window = SNAPSHOT_MATCH_MIN) {
 }
 
 // ── Schema ─────────────────────────────────────────────────────────────────
+// dxLink price stream. Optional by construction: if it fails to load, never
+// connects, or goes quiet, every held position simply falls back to the REST
+// probe path below and the board behaves exactly as it did before streaming.
+let cbStream = null;
+try { cbStream = require('./cb-stream'); }
+catch (e) { console.warn('[cb-trades] cb-stream not loaded — REST polling only:', e.message); }
+
 let _libDb = null;
 function db() {
   if (!_libDb) _libDb = require('./_lib-db.cjs');
@@ -293,13 +300,21 @@ function ensureTables() {
         id        SERIAL PRIMARY KEY,
         trade_id  INTEGER NOT NULL REFERENCES cb_trades(id) ON DELETE CASCADE,
         ts        BIGINT NOT NULL,
-        mark      REAL,
+        mark      REAL,                   -- the bar CLOSE; kept under the old name so existing rows read the same
+        mark_open REAL,
+        mark_high REAL,                   -- the real intra-minute high — the peak the board leads with
+        mark_low  REAL,
+        src       TEXT,                   -- 'stream' (dxLink 60s bar) | 'rest' (single probe)
         bid       REAL,
         ask       REAL,
         spot      REAL,
         dist      REAL,
         UNIQUE (trade_id, ts)
       );
+      ALTER TABLE cb_trade_ticks ADD COLUMN IF NOT EXISTS mark_open REAL;
+      ALTER TABLE cb_trade_ticks ADD COLUMN IF NOT EXISTS mark_high REAL;
+      ALTER TABLE cb_trade_ticks ADD COLUMN IF NOT EXISTS mark_low REAL;
+      ALTER TABLE cb_trade_ticks ADD COLUMN IF NOT EXISTS src TEXT;
       CREATE INDEX IF NOT EXISTS idx_cb_trade_ticks_tid ON cb_trade_ticks(trade_id, ts);
     `);
   })().catch((e) => {
@@ -522,11 +537,14 @@ async function walkForContract(ctx, { expiry, side, cbStrike, spot }) {
   return { ok: false, reason, trail, cbPrice };
 }
 
-async function recordTick(tradeId, ts, mark, bid, ask, spot, dist) {
+async function recordTick(tradeId, ts, mark, bid, ask, spot, dist, ohlc = null) {
   await q(
-    `INSERT INTO cb_trade_ticks (trade_id, ts, mark, bid, ask, spot, dist)
-     VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (trade_id, ts) DO NOTHING`,
-    [tradeId, ts, round2(mark), round2(bid), round2(ask), round2(spot), dist],
+    `INSERT INTO cb_trade_ticks (trade_id, ts, mark, mark_open, mark_high, mark_low, src, bid, ask, spot, dist)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (trade_id, ts) DO NOTHING`,
+    [tradeId, ts, round2(mark),
+      round2(ohlc?.open ?? mark), round2(ohlc?.high ?? mark), round2(ohlc?.low ?? mark),
+      ohlc ? 'stream' : 'rest',
+      round2(bid), round2(ask), round2(spot), dist],
   );
 }
 
@@ -535,12 +553,80 @@ async function recordTick(tradeId, ts, mark, bid, ask, spot, dist) {
  * so at most three calls a minute — the same order of cost as the watchlist
  * recorder that already runs on this box.
  */
+/**
+ * Fold every completed dxLink bar into its position: persist the bar, and move
+ * the high-water marks using the bar's real intra-minute HIGH and LOW rather
+ * than a single sampled price. This is the entire reason the stream exists.
+ */
+async function applyStreamBars(openRows) {
+  if (!cbStream) return { bars: 0 };
+  const byId = new Map(openRows.map((t) => [t.id, t]));
+  const bars = cbStream.drain();
+  let applied = 0;
+  for (const b of bars) {
+    const t = byId.get(b.tradeId);
+    if (!t) continue;                       // position closed while the bar formed
+    // Spot is NOT streamed here — only the contract is subscribed. The distance
+    // to the CB keeps whatever the last REST probe established; the stream's job
+    // is the contract's price, not SPX's.
+    const spot = num(t.last_spot);
+    const dist = distanceToCb(spot, num(t.cb_strike) ?? num(t.strike));
+    await recordTick(t.id, b.ts, b.close, b.bid, b.ask, spot, dist,
+      { open: b.open, high: b.high, low: b.low });
+
+    const prevBest = num(t.best_price);
+    const prevWorst = num(t.worst_price);
+    const isBest = prevBest == null || b.high > prevBest;
+    const isWorst = prevWorst == null || b.low < prevWorst;
+    const { pnl, pnlUsd } = computePnl(num(t.entry_price), b.close);
+    await q(
+      `UPDATE cb_trades SET
+         last_ts=$1, last_price=$2,
+         best_price=$3, best_ts=$4, worst_price=$5, worst_ts=$6,
+         pnl=$7, pnl_usd=$8, polls=polls+1, last_error=NULL, updated_at=$1
+       WHERE id=$9`,
+      [b.ts, round2(b.close),
+        round2(isBest ? b.high : prevBest), isBest ? b.ts : (t.best_ts ?? null),
+        round2(isWorst ? b.low : prevWorst), isWorst ? b.ts : (t.worst_ts ?? null),
+        pnl, pnlUsd, t.id],
+    );
+    // Keep the in-memory row current so a REST fallback later in the same tick
+    // does not overwrite a peak this bar just set.
+    if (isBest) { t.best_price = b.high; t.best_ts = b.ts; }
+    if (isWorst) { t.worst_price = b.low; t.worst_ts = b.ts; }
+    t.last_price = b.close;
+    applied += 1;
+  }
+  return { bars: applied };
+}
+
 async function pollOpen(ctx, { date } = {}) {
   const open = date
     ? await q(`SELECT * FROM cb_trades WHERE status = 'open' AND date = $1`, [date])
     : await q(`SELECT * FROM cb_trades WHERE status = 'open'`);
-  let polled = 0, errors = 0;
+
+  // Subscribe first, then bank whatever the stream has produced since the last
+  // tick. Both are no-ops when streaming is unavailable.
+  let streamHealth = null;
+  let streamed = { bars: 0 };
+  if (cbStream) {
+    cbStream.track(open.filter((t) => t.streamer_symbol));
+    streamed = await applyStreamBars(open);
+    streamHealth = cbStream.health();
+  }
+
+  let polled = 0, errors = 0, skippedFresh = 0;
   for (const t of open) {
+    // A symbol the stream is actively pricing needs no REST probe — that is the
+    // saving. But "connected" is never taken as "working": isFresh() requires a
+    // recent EVENT, so a subscription that silently died falls through to REST
+    // instead of leaving the row frozen and looking flat.
+    if (cbStream && t.streamer_symbol && cbStream.isFresh(t.streamer_symbol)) {
+      // SPX still has to come from somewhere, and only the contract is streamed.
+      // Re-probe roughly every 5th minute purely to refresh spot/distance.
+      const spotAge = Date.now() - (num(t.last_ts) ?? 0);
+      if (spotAge < 5 * 60_000) { skippedFresh += 1; continue; }
+    }
     const p = await probeContract(ctx, { expiry: t.expiration, side: t.side, strike: t.strike });
     if (!p.found) {
       // A `continue` here is how a dead probe becomes an invisible one: the row
@@ -561,7 +647,7 @@ async function pollOpen(ctx, { date } = {}) {
     polled += 1;
     await recordTick(t.id, now, mark, p.bid, p.ask, spot, dist);
 
-    // Peak and trough carry their TIMESTAMPS now. With no exit rule the useful
+    // Peak and trough carry their TIMESTAMPS. With no exit rule the useful
     // question stops being "what did it sell for" and becomes "what was there,
     // and when" — a $4.20 peak at 11:03 and the same peak at 15:58 are very
     // different facts about the same day.
@@ -588,7 +674,11 @@ async function pollOpen(ctx, { date } = {}) {
   }
   // `closed` stays in the shape at 0 so the recorder's log line and every
   // existing caller keep working — nothing closes here any more.
-  return { ok: true, open: open.length, polled, closed: 0, errors };
+  return {
+    ok: true, open: open.length, polled, closed: 0, errors,
+    streamBars: streamed.bars, restSkipped: skippedFresh,
+    stream: streamHealth ? { connected: streamHealth.connected, fresh: streamHealth.fresh, stale: streamHealth.stale } : null,
+  };
 }
 
 /**
@@ -614,6 +704,9 @@ async function settle(ctx, { date } = {}) {
     if (mark != null) await recordTick(t.id, now, mark, p.bid, p.ask, spot, null);
     settled += 1;
   }
+  // The session is over — drop the subscriptions rather than holding a socket
+  // open until the process restarts.
+  if (settled && cbStream) { try { cbStream.stop(); } catch { /* noop */ } }
   return { ok: true, date: d, settled };
 }
 
@@ -688,6 +781,7 @@ async function diagnose(ctx, { date } = {}) {
       ? { lastTickAt: _lastTick.at, agoSeconds: Math.round((Date.now() - _lastTick.at) / 1000), lastResult: _lastTick.result ?? null }
       : { lastTickAt: null, note: 'no tick has run in this process — the recorder is not firing, or the process restarted' },
     config: { BUY_MIN, STRIKE_STEP, WALK_MAX_STEPS, PROBE_TICKER, CHECKPOINT_GRACE_MIN },
+    stream: cbStream ? cbStream.health() : { enabled: false, note: 'cb-stream not loaded — REST polling only' },
     dueNow: dueCheckpoints(et.minutes).map((c) => c.key),
     checkpoints: [],
     rows: [],
@@ -878,6 +972,7 @@ module.exports = {
   walkCandidates,
   walkForContract,
   distanceToCb,
+  applyStreamBars,
   computePnl,
   dueCheckpoints,
   snapshotAt,
