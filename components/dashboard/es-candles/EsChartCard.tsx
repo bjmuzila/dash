@@ -44,7 +44,7 @@ import type { EsCandleRecord } from "@/lib/snapdb";
 
 import {
   toChartTime, etDayKey, fmtEtHM, isPlausibleBasis, etMinutesOfDay, BUBBLE_SCALE_CUTOFF_MIN,
-  isCashOpen, etSessionStarted, etMinutes, buildVolumeProfile, TPO_PERIOD_MS, buildTpoProfile, SLOT_MS, slotFloorMs,
+  isCashOpen, etSessionStarted, isEtWeekend, etMinutes, buildVolumeProfile, TPO_PERIOD_MS, buildTpoProfile, SLOT_MS, slotFloorMs,
   SPOT_LINE_GRAY, EM_VIOLET, parseLevelNum, DEFAULT_VIEW_BARS, DEFAULT_VIEW_RIGHT_PAD, applyDefaultView,
   deriveColumnLevels, gexColor,
   type GexCell, type GexColumn, type GexMetric, type VolumeProfile, type TpoProfile,
@@ -1485,30 +1485,47 @@ export default function EsChartCard({
         // 5-min flooring). Same rows, different bucket — the heatmap coarsens
         // them, the bubbles don't.
         const mmap = minuteColsRef.current;
-        // Bubbles are single-day: replay → the day being scrubbed, live → the
-        // most recent day the RESPONSE actually contains.
+        // ── Which day does the bubble trail show? ────────────────────────────
+        // Replay → the day being scrubbed. Otherwise: the newest day in the
+        // response that ACTUALLY TRADED and that the chart has candles for.
         //
-        // This used to anchor on etDayKey(Date.now()), and "today" is the wrong
-        // anchor whenever the market is shut. On a Saturday, a holiday, or
-        // before the open, no row in option_strike_gex_history carries today's
-        // ET day key — so every column in an otherwise perfectly good 48h
-        // response failed this equality test, mmap stayed empty, and the trail
-        // rendered as nothing at all. That is the "not showing Friday's bubbles"
-        // symptom: the heatmap (which has no day filter) kept drawing Friday
-        // while the bubbles silently dropped it on the floor.
+        // Two wrong answers came before this one, and both are worth keeping
+        // written down because they look right.
         //
-        // Anchoring on the newest day PRESENT is identical during a live session
-        // — the newest row is today's the moment the recorder writes one — and
-        // falls back to the last session that traded the rest of the time.
-        // sortedRaw is already newest-first; skip empty columns so a trailing
-        // cell-less snapshot can't name the day.
-        let newestDataTs = 0;
-        for (const col of sortedRaw) {
-          if (Array.isArray(col.cells) && col.cells.length) { newestDataTs = col.slotTs; break; }
+        //   1. etDayKey(Date.now()) — "today". Wrong the moment the market is
+        //      shut: on a Saturday nothing in the response carries today's key,
+        //      every column failed the filter, and the trail was empty.
+        //
+        //   2. "the newest day present in the response". Also wrong, because
+        //      the recorder does not stop on a weekend. proxy-tastytrade calls
+        //      writeGexSnapshot off the streamer's last cached greeks, and
+        //      gex-history-writer has no market-hours gate — so all Saturday it
+        //      writes a frozen copy of Friday's book once a minute, stamped
+        //      Saturday. "Newest day with data" is therefore SATURDAY, a day
+        //      with no candles at all, and every one of those minutes collapsed
+        //      onto the final bar (see the clamp note in barAt) into the single
+        //      stack of bubbles floating past Friday's close.
+        //
+        // Hence both tests. isEtWeekend throws out the days that only exist
+        // because the writer never sleeps; the bar-day check throws out
+        // anything the chart cannot draw a trail on anyway — which also covers
+        // holidays, where the same stale-write problem exists on a weekday.
+        // Bars may not have loaded yet on the very first backfill, so an empty
+        // bar set means "don't filter on it" rather than "reject everything".
+        const barDays = new Set<string>();
+        for (const b of rowsRef.current) barDays.add(etDayKey(b.timestamp));
+        let pickedKey = "";   // traded AND on the chart
+        let tradedKey = "";   // traded, but no candles for it — the fallback
+        for (const col of sortedRaw) { // already newest-first
+          if (!Array.isArray(col.cells) || !col.cells.length) continue;
+          if (isEtWeekend(col.slotTs)) continue;
+          const k = etDayKey(col.slotTs);
+          if (!tradedKey) tradedKey = k;
+          if (!barDays.size || barDays.has(k)) { pickedKey = k; break; }
         }
         const targetKey = replayOn && activeReplayDay
           ? activeReplayDay
-          : (newestDataTs > 0 ? etDayKey(newestDataTs) : etDayKey(Date.now()));
+          : (pickedKey || tradedKey || etDayKey(Date.now()));
         // The day the map holds just changed (rolled into a new session, or the
         // weekend fallback resolved to a different Friday) — drop the old day's
         // minutes rather than normalizing two sessions against one scale.
@@ -1543,6 +1560,17 @@ export default function EsChartCard({
         const cutoff = Date.now() - minutes * 60_000;
         for (const k of [...map.keys()]) if (k < cutoff) map.delete(k);
         for (const k of [...mmap.keys()]) if (k < cutoff) mmap.delete(k);
+        // One line, every backfill. The whole failure mode of this path is
+        // SILENCE — a 200 with rows that then get filtered to nothing leaves an
+        // empty trail that is indistinguishable from "the market is quiet", and
+        // that ambiguity has now cost two separate debugging rounds. Print what
+        // the response was and what survived the day filter, so the next "the
+        // bubbles are wrong" is one console line instead of a bisect.
+        console.info("[gex-bubbles]", {
+          minutesRequested: minutes, columnsReturned: raw.length,
+          targetKey, newestTradedDay: tradedKey || null, onChart: !!pickedKey,
+          bubbleMinutes: mmap.size, heatmapColumns: map.size,
+        });
         // Rows are in — let the derived walls/flip republish off them.
         setGexVersion((v) => v + 1);
         drawOverlayRef.current();
@@ -2597,6 +2625,20 @@ export default function EsChartCard({
       const barAt = (tMs: number): number | null => {
         const bars = rowsRef.current;
         if (!bars.length || tMs < bars[0].timestamp) return null;
+        // PAST THE END OF THE CHART IS NOT "THE LAST BAR".
+        // The binary search below returns the newest bar at or before tMs, which
+        // for anything after the final candle means it CLAMPS — silently. That
+        // is what made a bad GEX day render as a lie rather than as nothing:
+        // ~800 Saturday minutes all resolved to Friday's last bar, stacked into
+        // one column, and drew a full bar-width past the close (xAt's `frac`
+        // saturates at 1) as if they were a real print.
+        //
+        // Two bars of slack, not zero: a GEX minute can legitimately arrive
+        // before the candle feed has printed the bar it belongs to, and culling
+        // the newest column every time the candles lag is a worse bug than the
+        // one this prevents. Anything further out has no bar and gets no pixel.
+        const lastBar = bars[bars.length - 1].timestamp;
+        if (tMs >= lastBar + 2 * candleMsRef.current) return null;
         let lo = 0, hi = bars.length - 1;
         while (lo < hi) {
           const mid = (lo + hi + 1) >> 1;

@@ -26,6 +26,60 @@ function normSymbol(sym) {
   return s;
 }
 
+// ── Weekend gate ─────────────────────────────────────────────────────────────
+// The TastyTrade streamer holds its last-known greeks and quotes indefinitely,
+// so `gexRows` stays non-empty and `spot` stays > 0 long after the book has
+// stopped moving. Every guard below this is a FEED-HEALTH guard; none of them
+// can tell a live book from a frozen one. So without this gate the writer spent
+// each weekend inserting a copy of Friday's close once a minute — ~2,600
+// identical snapshots between Friday's close and Sunday's open, each stamped
+// with Saturday's or Sunday's date.
+//
+// That is not merely wasted rows. Readers pick a session by "newest day that
+// has data", so those phantom days OUTRANK Friday: the ES-Candles bubble trail
+// resolved to Saturday — a day with no candles at all — and Friday's entire
+// gamma trail disappeared from the chart. The client now double-checks this
+// (isEtWeekend in components/dashboard/es-candles/chartMath.ts), but it should
+// not have to defend itself against data that should never have been written.
+//
+// etf-gex-recorder.js has had the equivalent gate all along ("RTH only …
+// writing them would put a flat, wrong column on the heatmap for every
+// overnight minute"). This writer is the one that never got it.
+//
+// The window is deliberately WIDER than RTH: overnight ES gamma is real and the
+// chart shows it. Only the weekend gap is suppressed — closed from Friday 17:00
+// ET (futures close; SPX options are done by 16:15) until Sunday 20:00 ET.
+const WEEKEND_CLOSE_MIN = 17 * 60; // Friday 17:00 ET
+const WEEKEND_REOPEN_MIN = 20 * 60; // Sunday 20:00 ET
+
+// hourCycle h23 so midnight reads as 00, not 24 — same formatter shape as
+// etf-gex-recorder.js's isRthNowET.
+const ET_PARTS_FMT = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York', hourCycle: 'h23',
+  hour: '2-digit', minute: '2-digit', weekday: 'short',
+});
+
+function isRecordingWindow(now = Date.now()) {
+  const parts = ET_PARTS_FMT.formatToParts(new Date(now));
+  const get = (t) => parts.find((x) => x.type === t)?.value ?? '';
+  const wd = get('weekday');
+  const hh = Number(get('hour'));
+  const mm = Number(get('minute'));
+  // Unparseable clock → record. This gate exists to drop known-dead time, not
+  // to be one more way the trail can silently go empty.
+  if (!wd || !Number.isFinite(hh) || !Number.isFinite(mm)) return true;
+  const mins = hh * 60 + mm;
+  if (wd === 'Sat') return false;
+  if (wd === 'Sun') return mins >= WEEKEND_REOPEN_MIN;
+  if (wd === 'Fri') return mins < WEEKEND_CLOSE_MIN;
+  return true; // Mon–Thu, all hours
+}
+
+// Logged on TRANSITION only — twice a week, not once a minute. Without it a
+// closed window is indistinguishable from a dead writer in the logs, which is
+// the exact ambiguity that made the original bug take three passes to find.
+let lastWindowOpen = null;
+
 let pool = null;
 let pgUnavailable = false;
 // PER-(SYMBOL, EXPIRY) throttle. One shared `lastWriteAt` would let whichever
@@ -147,6 +201,15 @@ function todayYmdET() {
  */
 async function writeGexSnapshot(gexRows, spot, expiry, symbol) {
   const sym = normSymbol(symbol);
+  // Checked BEFORE the feed-health guards below, and silent: a closed weekend is
+  // not a feed fault, and routing it through the skip-warn path would print
+  // "feed not delivering" every minute from Friday evening to Sunday night.
+  const windowOpen = isRecordingWindow();
+  if (windowOpen !== lastWindowOpen) {
+    console.log(`[gex-history] recording window ${windowOpen ? 'OPEN' : 'CLOSED'} — closed Fri 17:00 ET → Sun 20:00 ET`);
+    lastWindowOpen = windowOpen;
+  }
+  if (!windowOpen) return;
   const p = getPool();
   if (!p || !Array.isArray(gexRows) || !gexRows.length || !(spot > 0) || !expiry) {
     if (!p) return; // no DB configured — not a feed problem, stay quiet

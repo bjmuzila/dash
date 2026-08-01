@@ -1063,6 +1063,13 @@ interface ChainMatrixProps {
    * would print a column of "·" that reads as missing data. See REPLAY_SCOPES.
    */
   showTotalCol: boolean;
+  /**
+   * How many expiry tracks the grid should SIZE for, independent of how many it
+   * renders. Replay passes the session's full expiry count so collapsing to a
+   * single 0DTE column leaves the cells at their normal width instead of
+   * stretching one column across the page. 0 = off (live chain).
+   */
+  layoutExpCols: number;
   changeMeta: { expiries: Set<string>; hasData: boolean };
   changeMap: Map<string, number>;
   changeScaleByExp: Map<string, { max: number; top3: number[] }>;
@@ -1091,7 +1098,7 @@ interface ChainMatrixProps {
 const ChainMatrix = memo(function ChainMatrix({
   columns, gridCols, visibleStrikes, nearestStrike, spot, greekMode, dataMode,
   intensity, colScales, volMvcByCol, mvcByCol, pinByCol, valueAt, isStandalone,
-  changeMode, sessionDate, showTotalCol, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
+  changeMode, sessionDate, showTotalCol, layoutExpCols, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
   emLevels, activeTicker, atmRowRef, oiChangeMap, onCellClick, onCellHover,
 }: ChainMatrixProps) {
   // OI is a contract count, not dollars — and on this tab every readout is a
@@ -1136,13 +1143,48 @@ const ChainMatrix = memo(function ChainMatrix({
   const totalAbs = [...rowTotals.values()].map((v) => Math.abs(v)).filter((v) => v > 0).sort((a, b) => b - a);
   const totalScale = { max: totalAbs[0] ?? 1, top3: totalAbs.slice(0, 3) };
   const grandVisibleTotal = [...rowTotals.values()].reduce((a, b) => a + b, 0);
+
+  // ── Reserved (ghost) tracks ───────────────────────────────────────────────
+  // Expiry tracks are `1fr`, so they divide the container: drop from 4 columns
+  // to 1 and that one column inflates to the full grid width, which is not a
+  // filtered view of the same chain — it's a different-looking page. Reserving
+  // the tracks the hidden columns WOULD have occupied keeps every remaining
+  // cell exactly the width it had, and the freed space simply sits empty on the
+  // right. `layoutExpCols` is the count to size for (replay passes the session's
+  // full expiry count); 0 disables the whole mechanism, which is what the live
+  // chain passes so its layout is untouched.
+  //
+  // The tracks need real (empty) elements, one per row: the grid auto-places,
+  // and rows are `display: contents` wrappers, so a row short of a cell would
+  // pull the next row's first cell up into the gap and shear the whole grid.
+  const ghostExpCols = Math.max(0, (layoutExpCols || 0) - renderIdx.length);
+  // The ⅀ Total track is reserved the same way when it's hidden — otherwise the
+  // expiry columns still grow by its share on the way into 0DTE scope.
+  const ghostTotalCols = layoutExpCols > 0 && !showTotalCol ? 1 : 0;
+  const ghostCols = ghostExpCols + ghostTotalCols;
+  const ghostTemplate =
+    (ghostExpCols > 0 ? ` repeat(${ghostExpCols}, minmax(${isOiMode ? 84 : 78}px, 1fr))` : "") +
+    (ghostTotalCols > 0 ? ` minmax(${isOiMode ? 92 : 88}px, 1.15fr)` : "");
+  /** Empty filler cells for the reserved tracks. `header` keeps them opaque so
+   *  rows scroll UNDER the header band rather than through the gap beside it. */
+  const ghostCells = (keyPrefix: string, header = false) =>
+    ghostCols === 0 ? null : Array.from({ length: ghostCols }).map((_, g) => (
+      <div
+        key={`${keyPrefix}-ghost-${g}`}
+        aria-hidden
+        style={header
+          ? { position: "sticky", top: 0, zIndex: 3, background: HDR_BG, borderBottom: `1px solid ${HT.border}` }
+          : undefined}
+      />
+    ));
+
   return (
     <div style={{
       display: "grid",
       // OI cells can carry two lines (call / put) on the ATM pivot row, but each
       // line is now a single delta figure — so they need barely more width than
       // a greek cell, not the double-width the old value+delta pair demanded.
-      gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(${isOiMode ? 84 : 78}px, 1fr))${showTotalCol ? ` minmax(${isOiMode ? 92 : 88}px, 1.15fr)` : ""}`,
+      gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(${isOiMode ? 84 : 78}px, 1fr))${showTotalCol ? ` minmax(${isOiMode ? 92 : 88}px, 1.15fr)` : ""}${ghostTemplate}`,
       borderRadius: 12,
       overflow: "clip",
       border: `1px solid ${HT.border}`,
@@ -1187,6 +1229,7 @@ const ChainMatrix = memo(function ChainMatrix({
           </div>
         </div>
       )}
+      {ghostCells("hdr", true)}
 
       {/* ── One row per shared strike ── */}
       {visibleStrikes.map((strike, rowIdx) => {
@@ -1200,6 +1243,7 @@ const ChainMatrix = memo(function ChainMatrix({
                 <div key={`pad-${rowIdx}-${i}`} style={{ padding: "2px 8px", fontSize: 12 }} />
               ))}
               {showTotalCol && <div style={{ padding: "2px 8px", fontSize: 12, borderLeft: `2px solid ${rgba(HT.cyan, 0.25)}` }} />}
+              {ghostCells(`pad-${rowIdx}`)}
             </div>
           );
         }
@@ -1389,6 +1433,7 @@ const ChainMatrix = memo(function ChainMatrix({
                 </div>
               );
             })()}
+            {ghostCells(`row-${strike}`)}
           </div>
         );
       })}
@@ -2487,6 +2532,11 @@ export default function OptionsChainPage({
   // the column is dropped rather than printed as zeros. See REPLAY_SCOPES.
   const showTotalCol = !(replayFrame && replayScope === "0dte");
 
+  // Size the rewound grid for the session's FULL expiry count in either scope,
+  // so switching 0DTE↔All changes which columns are on screen and nothing else.
+  // Live passes 0 — its column count is already fixed by `seqColumns`.
+  const layoutExpCols = replayFrame ? replayAllExpiries.length : 0;
+
   // EM bands only apply to current-week expirations. Mark which visible columns
   // qualify so the band draws across only those columns.
   const colIsCurrentWeek = useMemo(
@@ -2940,6 +2990,7 @@ export default function OptionsChainPage({
             changeMode={changeMode}
             sessionDate={replayFrame ? replayDate : ""}
             showTotalCol={showTotalCol}
+            layoutExpCols={layoutExpCols}
             changeMeta={changeMeta}
             changeMap={changeMap}
             changeScaleByExp={changeScaleByExp}
