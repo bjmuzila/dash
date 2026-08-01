@@ -223,7 +223,14 @@ const YAHOO_SYMBOL = {
 };
 function yahooSym(symbol) {
   const s = chainRoot(symbol);
-  return YAHOO_SYMBOL[s] || s;
+  if (YAHOO_SYMBOL[s]) return YAHOO_SYMBOL[s];
+  // Yahoo writes CLASS SHARES with a dash, never a dot: BRK.B -> BRK-B,
+  // BF.B -> BF-B. The roster (em-tickers.js) uses the dot form and TastyTrade a
+  // slash (BRK/B), so translate here rather than adding a map entry per class
+  // share. Without this yahooDaily 404s, catches, and returns [] — which
+  // surfaces four layers up as the misleading "No finalized weekly candle for
+  // BRK.B", leaving the ticker ungradeable in em_tracker forever.
+  return s.includes('.') ? s.replace(/\./g, '-') : s;
 }
 async function yahooDaily(symbol, startDate, endDate) {
   const ysym = yahooSym(symbol);

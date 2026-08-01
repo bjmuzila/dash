@@ -57,9 +57,20 @@ async function evalOnce(base, reason) {
   }
 }
 
+// A weekly run that scores nothing is retried, because the usual cause is
+// transient (feed not back yet, rows seeded late). But it must not retry
+// forever: a single permanently-ungradeable row — one bad symbol alias, a
+// delisting mid-week — keeps `evaluated` at 0 for every pass, so the latch below
+// never sets and the 15m tick re-runs all day, every Saturday, logging the same
+// failure ~60 times. Give up after this many zero-scored passes and latch the
+// week anyway; the failure is already in the log, once per attempt.
+const MAX_EMPTY_ATTEMPTS = 3;
+
 function startEmTrackerAutoEval(port) {
   const base = `http://localhost:${port}`;
   let lastEvaluatedWeek = null;
+  let emptyAttempts = 0;
+  let attemptsForWeek = null; // week the emptyAttempts counter belongs to
 
   console.log(`[em-eval] enabled — weekly, Sat ~${EVAL_HOUR}:${String(EVAL_MIN).padStart(2, '0')} ET`);
 
@@ -74,11 +85,21 @@ function startEmTrackerAutoEval(port) {
     const target = EVAL_HOUR * 60 + EVAL_MIN;
     const wk = completedWeekKeyET();
     if (lastEvaluatedWeek === wk) return;
+    // Reset the give-up counter when the week rolls over.
+    if (attemptsForWeek !== wk) { attemptsForWeek = wk; emptyAttempts = 0; }
     // Saturday only — no Sunday catch-up (mirrors levels-auto-publish). The
     // startup catch-up above still scores a missed week on the next boot.
     const isSatAfterTarget = dow === 6 && mins >= target;
     if (isSatAfterTarget) {
-      evalOnce(base, 'weekly').then((ok) => { if (ok) lastEvaluatedWeek = wk; });
+      evalOnce(base, 'weekly').then((ok) => {
+        if (ok) { lastEvaluatedWeek = wk; return; }
+        emptyAttempts += 1;
+        if (emptyAttempts >= MAX_EMPTY_ATTEMPTS) {
+          console.log(`[em-eval] ${wk}: ${emptyAttempts} passes scored nothing — latching the week. ` +
+            'Any rows left pending need a manual grade (see POST /proxy/em-eval-run).');
+          lastEvaluatedWeek = wk;
+        }
+      });
     }
   };
   const timer = setInterval(tick, CHECK_MS);
