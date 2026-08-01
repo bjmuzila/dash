@@ -4548,7 +4548,6 @@ if (libDb) {
           // (the SPX heatmap, the strike popup) is byte-for-byte
           // unchanged. The ES-Candles page passes SPY / QQQ here.
           const symbol = libDb.normGexSymbol(sp.get('symbol'));
-          let notesExpiry = null;
           if (!expiry) { send(res, 200, { error: 'expiry is required', rows: [] }); return; }
 
           if (mode === 'heatmap') {
@@ -7284,9 +7283,20 @@ if barstate.islast
     // restored from an older dump — will not have them, and SELECTing a missing
     // column is a hard 42703, not an empty result. Probe once, then fall back to
     // greek_snapshots for sessions recorded before the columns existed.
-    let dexColsPresent = null; // null = unprobed, true/false = known
+    //
+    // A POSITIVE result is cached forever — columns do not disappear. A NEGATIVE
+    // one is re-probed every 60s, because the columns are added by
+    // gex-history-writer.js on its FIRST WRITE, which normally happens minutes
+    // AFTER this process boots. Caching `false` permanently would pin the map to
+    // the greek_snapshots fallback until the next restart, on the very day the
+    // upgrade shipped.
+    let dexColsPresent = false;
+    let dexProbedAt = 0;
+    const DEX_PROBE_TTL_MS = 60_000;
     const hasDexCols = async () => {
-      if (dexColsPresent !== null) return dexColsPresent;
+      if (dexColsPresent) return true;
+      if (Date.now() - dexProbedAt < DEX_PROBE_TTL_MS) return false;
+      dexProbedAt = Date.now();
       try {
         const r = await libDb.queryAll(
           `SELECT column_name FROM information_schema.columns
@@ -7321,6 +7331,8 @@ if barstate.islast
           // greek_snapshots stores the bare root ('SPX'); option_strike_gex_history
           // stores the '$'-prefixed form. Same underlying, two conventions.
           const bareSymbol = symbol.replace(/^\$/, '');
+          // Request-scoped, deliberately NOT part of the cached payload.
+          let notesExpiry = null;
           const slotMin = Math.max(1, Math.min(30, Number(sp.get('slot') ?? 5)));
           const slotMs = slotMin * 60_000;
           // Strike padding around the session's spot range. The full SPX ladder
@@ -7370,14 +7382,21 @@ if barstate.islast
           }
 
           const cacheKey = `${symbol}|${date}|${expiry}|${slotMin}|${windowPts}`;
+          // notesExpiry describes what THIS caller asked for, so it is merged on
+          // the way out rather than stored. Baking it into the cached payload
+          // made the next caller — who asked for a perfectly valid expiry —
+          // read "your expiry has no rows", about somebody else's request.
+          const withNote = (pl) => (notesExpiry
+            ? { ...pl, notes: { ...pl.notes, expiry: notesExpiry } }
+            : pl);
+
           const cached = gexMapCache.get(cacheKey);
           if (cached && Date.now() - cached.at < GEX_MAP_TTL_MS) {
-            send(res, 200, cached.payload);
+            send(res, 200, withNote(cached.payload));
             return;
           }
 
           const notes = {};
-          if (notesExpiry) notes.expiry = notesExpiry;
 
           // Spot range first, so the strike filter below is anchored to where
           // price actually traded rather than to a fixed band around the last
@@ -7597,7 +7616,7 @@ if barstate.islast
             levels, sessions, expiries, notes,
           };
           gexMapCache.set(cacheKey, { at: Date.now(), payload });
-          send(res, 200, payload);
+          send(res, 200, withNote(payload));
         } catch (err) {
           console.error('[gex-map] GET failed:', req.url, err);
           send(res, 500, { error: String(err && err.message ? err.message : err) });
