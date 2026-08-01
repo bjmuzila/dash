@@ -4545,7 +4545,7 @@ if (libDb) {
           const expiry = sp.get('expiry') ?? '';
           const mode = sp.get('mode') ?? 'rolling';
           // Underlying selector. Absent → '$SPX', so every existing caller
-          // (the SPX heatmap, the strike popup, /gex-3d) is byte-for-byte
+          // (the SPX heatmap, the strike popup) is byte-for-byte
           // unchanged. The ES-Candles page passes SPY / QQQ here.
           const symbol = libDb.normGexSymbol(sp.get('symbol'));
           if (!expiry) { send(res, 200, { error: 'expiry is required', rows: [] }); return; }

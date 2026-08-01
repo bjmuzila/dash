@@ -1203,6 +1203,27 @@ const ChainMatrix = memo(function ChainMatrix({
   // Shared strike axis: ONE strike column on the left, then one
   // value-only column per expiration. Row N = same strike everywhere.
   const STRIKE_COL = 56;
+  // ── Locked row height ────────────────────────────────────────────────────
+  // EVERY cell in a strike row is pinned to this height, border-box, overflow
+  // hidden. Nothing a cell can contain is allowed to change it.
+  //
+  // Grid rows size to their tallest cell, so before this the row height was a
+  // function of the row's CONTENT — and three separate things changed it as
+  // data moved: the ATM rule (a real 2px top+bottom border on the strike cell,
+  // making that row 4px taller than the rest), the 📍 pin marker (a 17px SVG in
+  // a ~12px line box), and the ★ CB marker (no line-height, so its glyph could
+  // out-measure the text). Each time spot moved to a new strike, or the CB/pin
+  // moved, every row between the old and new position shifted a few px. Live
+  // that fires a handful of times a session and reads as a blip; under replay
+  // playback it fires every frame and reads as a permanent shimmer.
+  //
+  // 18px clears the 10px mono line box plus 2px padding plus a 2px EM border.
+  // The OI tab renders two lines per cell and gets its own height.
+  const ROW_H = 18;
+  const ROW_H_OI = 34;
+  const rowH = isOiMode ? ROW_H_OI : ROW_H;
+  /** Applied to every cell so content can never resize a row. */
+  const rowBox: React.CSSProperties = { height: rowH, boxSizing: "border-box", overflow: "hidden" };
   // Sticky header/strike column must be fully opaque — rows scroll under it.
   const HDR_BG = "#0D1119";
   // ⅀ Total column — per-strike sum across every rendered expiration EXCEPT
@@ -1286,11 +1307,11 @@ const ChainMatrix = memo(function ChainMatrix({
         if (strike == null) {
           return (
             <div key={`pad-${rowIdx}`} style={{ display: "contents" }}>
-              <div style={{ position: "sticky", left: 0, zIndex: 2, padding: "2px 8px", fontSize: 12, background: HDR_BG, borderRight: `1px solid ${HT.border}` }} />
+              <div style={{ ...rowBox, position: "sticky", left: 0, zIndex: 2, padding: "2px 8px", fontSize: 12, background: HDR_BG, borderRight: `1px solid ${HT.border}` }} />
               {renderIdx.map((i) => (
-                <div key={`pad-${rowIdx}-${i}`} style={{ padding: "2px 8px", fontSize: 12 }} />
+                <div key={`pad-${rowIdx}-${i}`} style={{ ...rowBox, padding: "2px 8px", fontSize: 12 }} />
               ))}
-              <div style={{ padding: "2px 8px", fontSize: 12, borderLeft: `2px solid ${rgba(HT.cyan, 0.25)}` }} />
+              <div style={{ ...rowBox, padding: "2px 8px", fontSize: 12, borderLeft: `2px solid ${rgba(HT.cyan, 0.25)}` }} />
             </div>
           );
         }
@@ -1320,6 +1341,7 @@ const ChainMatrix = memo(function ChainMatrix({
           <div key={strike} style={{ display: "contents" }}>
             {/* Shared strike label (sticky left) */}
             <div ref={isATM ? atmRowRef : undefined} title={emTip || undefined} style={{
+              ...rowBox,
               position: "sticky", left: 0, zIndex: 2,
               padding: "2px 5px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right",
               // ATM reads like the /home GEX heatmap: no amber fill, blue strike
@@ -1328,8 +1350,14 @@ const ChainMatrix = memo(function ChainMatrix({
               fontWeight: isATM ? 700 : 400,
               background: HDR_BG,
               borderRight: `1px solid ${HT.border}`,
-              borderTop: isATM ? "2px solid #ffffff" : rowEmBorder,
-              borderBottom: isATM ? "2px solid #ffffff" : undefined,
+              // The ATM rule is an INSET SHADOW here, not a border — same
+              // technique the value cells and the ⅀ Total cell already use, and
+              // for the same stated reason: it overlays instead of occupying
+              // layout. As a border it made this one cell 4px taller than its
+              // neighbours, and since the row sizes to its tallest cell, the
+              // whole row grew and shrank as ATM walked.
+              borderTop: rowEmBorder,
+              boxShadow: isATM ? "inset 0 2px 0 #ffffff, inset 0 -2px 0 #ffffff" : undefined,
               display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 3,
               cursor: emTag ? "help" : undefined,
               whiteSpace: "nowrap", overflow: "hidden",
@@ -1410,6 +1438,7 @@ const ChainMatrix = memo(function ChainMatrix({
                   onClick={isClickable ? (e) => onCellHover({ strike, colIdx, x: e.clientX, y: e.clientY }) : undefined}
                   title={isClickable ? "Click for volume / OI / net premium" : undefined}
                   style={{
+                    ...rowBox,
                     padding: isOiMode ? "3px 6px" : "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
                     color: value == null ? "#3a4a5e" : SOFT_WHITE,
                     background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
@@ -1427,11 +1456,17 @@ const ChainMatrix = memo(function ChainMatrix({
                       background, ATM box, EM row border — is unchanged, and the
                       background now tracks that same change through valueAt(),
                       so the tint and the number always agree. */}
-                  {isMvc && <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)" }}>★</span>}
+                  {/* lineHeight 1 on both markers: an unconstrained glyph sets
+                      its own line box, which is one of the things that used to
+                      resize the row as the CB moved strike to strike. */}
+                  {isMvc && <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", lineHeight: 1 }}>★</span>}
                   {isVolMvc && <span title="Highest volume GEX" style={{ fontSize: 10, lineHeight: 1 }}>❌</span>}
                   {isPin && (
-                    <span title="Possible pin or explosive level" style={{ cursor: "help", display: "inline-flex", verticalAlign: "middle" }}>
-                      <svg width="14" height="17" viewBox="0 0 24 24" fill="#ffffff" stroke="rgba(0,0,0,.55)" strokeWidth={1.5}>
+                    <span title="Possible pin or explosive level" style={{ cursor: "help", display: "inline-flex", alignItems: "center", verticalAlign: "middle", height: 12, lineHeight: 0 }}>
+                      {/* 12×14, down from 14×17: the old one was taller than the
+                          cell's line box, so a pin appearing in a cell grew its
+                          row. Sized to fit inside ROW_H with the padding. */}
+                      <svg width="12" height="14" viewBox="0 0 24 24" fill="#ffffff" stroke="rgba(0,0,0,.55)" strokeWidth={1.5}>
                         <path d="M12 21s7-6.5 7-12A7 7 0 0 0 5 9c0 5.5 7 12 7 12z" />
                         <circle cx="12" cy="9" r="2.3" fill="rgba(0,0,0,.55)" stroke="none" />
                       </svg>
@@ -1460,6 +1495,7 @@ const ChainMatrix = memo(function ChainMatrix({
                 : undefined;
               return (
                 <div style={{
+                  ...rowBox,
                   padding: "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 700,
                   color: tot === 0 ? "#3a4a5e" : "rgba(255,255,255,0.92)",
                   background: tot !== 0 ? metricBg(tot, totalScale.max, intensity, totalScale.top3) : "transparent",
