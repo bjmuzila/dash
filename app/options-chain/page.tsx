@@ -395,6 +395,48 @@ function fmtReplayClock(iso: string): string {
 // Number of expirations shown side-by-side across the matrix (sequential mode).
 const EXP_COLUMNS = 14;
 
+// How far spot must drift — in STRIKE STEPS, not dollars — before the strike
+// window re-centers. Without this the window re-centers the instant spot
+// crosses a strike midpoint, so the whole ladder slides a row while you're
+// reading it, and on a chippy tape it can slide back and forth across one
+// boundary indefinitely. Anchoring the centre and only moving it every N
+// strikes trades an exactly-centred ATM for a grid that holds still.
+//
+// The ATM row itself is NOT anchored: `nearestStrike` stays the true nearest
+// strike, so the ATM highlight, the OI call/put side split and the pin walls
+// all keep following real spot. Only where the window is CENTRED is sticky, so
+// the ATM row drifts up to N−1 rows off the middle between re-centres. The
+// smallest window is 11 rows (wing 5), so it can never drift out of view.
+const RECENTER_EVERY_STRIKES = 5;
+
+/**
+ * Where the strike window should be centred, given the current anchor.
+ *
+ * ONE function, called by both the render that draws the window and the effect
+ * that persists the anchor. Written as two copies of the same comparison, the
+ * anchor only caught up on the render AFTER the one that crossed the threshold
+ * — so the grid painted a stale centre for a frame every time it re-centred.
+ * Shared, they cannot disagree and there is no lag.
+ *
+ * `anchorKey` identifies the chain the anchor was taken on. Two chains can list
+ * the same strike price (SPY 500, QQQ 500), so an anchor from another ticker or
+ * another replay session is discarded rather than silently reused.
+ */
+function pickCenterStrike(
+  allStrikes: number[],
+  nearestStrike: number,
+  anchor: { key: string; strike: number },
+  anchorKey: string,
+): number {
+  if (!allStrikes.length || !nearestStrike) return nearestStrike;
+  const anchorIdx = anchor.key === anchorKey ? allStrikes.indexOf(anchor.strike) : -1;
+  const trueIdx = allStrikes.indexOf(nearestStrike);
+  // No usable anchor (first paint, new chain, or the anchored strike was
+  // delisted) → centre on true ATM and let the effect anchor there.
+  if (anchorIdx < 0 || trueIdx < 0) return nearestStrike;
+  return Math.abs(trueIdx - anchorIdx) >= RECENTER_EVERY_STRIKES ? nearestStrike : anchor.strike;
+}
+
 // "key" mode (used by the /new-home embed): instead of the next N sequential
 // expirations from the user's selected date, show exactly 0DTE / 1DTE /
 // closest weekly (nearest Friday listing) / closest monthly (nearest 3rd-
@@ -1909,12 +1951,41 @@ export default function OptionsChainPage({
     ? (replayFrames[Math.min(replayIdx, replayFrames.length - 1)] ?? null)
     : null;
 
+  // ── The replay session's fixed axes ───────────────────────────────────────
+  // Every strike and every expiry recorded in ANY frame of the loaded session,
+  // computed once per session and used for every frame in it.
+  //
+  // This is the difference between a replay you can read and one that shakes.
+  // The recorder stores the top N strikes A SIDE PER SWEEP, so the membership
+  // of that set changes as the walls move — build the axis from the current
+  // frame and rows enter and leave at both ends on every step, everything
+  // between them slides, and the auto-scroll effect (keyed on row count) yanks
+  // the viewport on top of it. Fixing the axis for the whole session turns that
+  // back into what it should be: one ladder, values changing on it over time. A
+  // strike the current frame didn't record simply renders blank in its row.
+  const replayAxis = useMemo(() => {
+    const strikes = new Set<number>();
+    const expiries = new Set<string>();
+    for (const f of replayFrames) {
+      for (const e of f.expiries) expiries.add(e);
+      f.cells.forEach((_v, key) => {
+        const strike = Number(key.slice(key.indexOf("|") + 1));
+        if (Number.isFinite(strike)) strikes.add(strike);
+      });
+    }
+    return {
+      strikes: [...strikes].sort((a, b) => a - b),
+      expiries: [...expiries].sort(),
+    };
+  }, [replayFrames]);
+
   const replayColumns = useMemo<ExpColumn[]>(() => {
     if (!replayFrame) return [];
-    // Only the expiries THIS frame carried — the answer to "hide the columns
-    // entirely". A frame recorded before an expiry existed simply has fewer
-    // columns, and the grid narrows rather than showing a column of dashes.
-    return replayFrame.expiries.map((exp) => {
+    // Columns come from the SESSION axis, not from this frame. Per-frame
+    // columns made the grid reflow horizontally every time an expiry dropped
+    // out of a sweep. Expiries never recorded in this session are still hidden
+    // entirely — the collapse is per session, not per frame.
+    return replayAxis.expiries.map((exp) => {
       const cells = new Map<number, GreekCell>();
       replayFrame.cells.forEach((v, key) => {
         const bar = key.indexOf("|");
@@ -1940,7 +2011,7 @@ export default function OptionsChainPage({
         underlying: replayFrame.spot,
       };
     });
-  }, [replayFrame, dataMode]);
+  }, [replayFrame, replayAxis, dataMode]);
 
   const columns = replayFrame ? replayColumns : liveColumns;
   // Centre the strike window on the spot AS RECORDED, not on live spot — that
@@ -1949,11 +2020,15 @@ export default function OptionsChainPage({
   const spot = replayFrame ? (replayFrame.spot > 0 ? replayFrame.spot : liveSpot) : liveSpot;
 
   // Union of every strike listed across all 7 expirations, sorted ascending.
+  // In replay this is the SESSION axis, not the current frame's strikes —
+  // deriving it from `columns` would make the row set change under playback.
+  // See replayAxis.
   const allStrikes = useMemo(() => {
+    if (replayFrame) return replayAxis.strikes;
     const set = new Set<number>();
     columns.forEach(c => c.cells.forEach((_v, k) => set.add(k)));
     return [...set].sort((a, b) => a - b);
-  }, [columns]);
+  }, [columns, replayFrame, replayAxis]);
 
   const nearestStrike = useMemo(() => {
     if (!allStrikes.length) return 0;
@@ -1963,6 +2038,31 @@ export default function OptionsChainPage({
       allStrikes[0],
     );
   }, [allStrikes, spot]);
+
+  // ── Sticky window centre ──────────────────────────────────────────────────
+  // See RECENTER_EVERY_STRIKES. Held as STATE with the chain it belongs to
+  // baked into the key, not as a ref mutated during render: a ref written in a
+  // useMemo is what the GexHeatmap centre-anchor does, and it was already
+  // flagged there as not StrictMode/concurrent-safe. Render stays pure — it
+  // only READS the anchor and falls back to true ATM when the anchor doesn't
+  // belong to the chain on screen — and the effect below does the committing.
+  const centerKey = `${activeTicker}|${replayFrame ? `replay:${replayDate}` : "live"}`;
+  const [centerAnchor, setCenterAnchor] = useState<{ key: string; strike: number }>({ key: "", strike: 0 });
+
+  const centerStrike = useMemo(
+    () => pickCenterStrike(allStrikes, nearestStrike, centerAnchor, centerKey),
+    [allStrikes, nearestStrike, centerAnchor, centerKey],
+  );
+
+  // Persist whatever the render just drew. Because both sides call
+  // pickCenterStrike, this only ever writes a value the grid is ALREADY
+  // showing — it records the anchor, it never moves the window.
+  useEffect(() => {
+    if (!centerStrike) return;
+    if (centerAnchor.key !== centerKey || centerAnchor.strike !== centerStrike) {
+      setCenterAnchor({ key: centerKey, strike: centerStrike });
+    }
+  }, [centerStrike, centerAnchor, centerKey]);
 
   const totalRows = allStrikes.length;
   const autoDisplayPercent = useMemo(() => {
@@ -1976,16 +2076,18 @@ export default function OptionsChainPage({
     return displayPercent;
   }, [displayPercent, totalRows, replayFrame]);
 
-  // The strike window shown (centered on spot), high → low. ATM is forced to the
-  // exact visual middle: we take an equal count of strikes above and below ATM
-  // (odd total so a true center row exists). If the chain runs out on one side,
-  // we pad that side with nulls so ATM stays centered no matter the window size.
+  // The strike window shown, high → low, centred on the STICKY centre (see
+  // RECENTER_EVERY_STRIKES) rather than on live ATM — that is what stops the
+  // ladder sliding a row every time spot crosses a strike. We take an equal
+  // count of strikes above and below the centre (odd total so a true middle row
+  // exists). If the chain runs out on one side, we pad that side with nulls so
+  // the centre stays put no matter the window size.
   const visibleStrikes = useMemo(() => {
     if (!allStrikes.length) return [] as (number | null)[];
     if (autoDisplayPercent >= 100) return [...allStrikes].sort((a, b) => b - a) as (number | null)[];
 
     const ascending = [...allStrikes].sort((a, b) => a - b);
-    const atmIndex = ascending.findIndex(s => s === nearestStrike);
+    const atmIndex = ascending.findIndex(s => s === centerStrike);
     if (atmIndex < 0) return [...ascending].sort((a, b) => b - a) as (number | null)[];
 
     let targetCount = Math.max(11, Math.round(ascending.length * (autoDisplayPercent / 100)));
@@ -1993,18 +2095,42 @@ export default function OptionsChainPage({
     const wing = (targetCount - 1) / 2; // strikes on each side of ATM
 
     const out: (number | null)[] = [];
-    // High → low: above ATM (descending), then ATM, then below ATM.
+    // High → low: above the centre (descending), the centre, then below it.
     for (let k = wing; k >= 1; k--) {
       const idx = atmIndex + k;
       out.push(idx < ascending.length ? ascending[idx] : null);
     }
-    out.push(nearestStrike);
+    out.push(centerStrike);
     for (let k = 1; k <= wing; k++) {
       const idx = atmIndex - k;
       out.push(idx >= 0 ? ascending[idx] : null);
     }
     return out;
-  }, [allStrikes, autoDisplayPercent, nearestStrike]);
+  }, [allStrikes, autoDisplayPercent, centerStrike]);
+
+  // ── Replay: keep the ATM row in view while PLAYING ────────────────────────
+  // The session axis is fixed (see replayAxis), which is what makes the grid
+  // hold still — but it also means the ATM row walks down a stationary ladder
+  // as the session runs, and over a full day it can walk clean off screen.
+  //
+  // Two rules keep this from becoming the jitter it just replaced. It SCROLLS,
+  // it never reflows — rows do not move relative to each other. And it only
+  // fires when the ATM row has actually left the middle 60% of the viewport,
+  // so it's a rescue every few minutes of playback, not a nudge every frame.
+  // Gated on `replayPlaying` on purpose: while paused or scrubbing the user is
+  // driving, and yanking their scroll position then would be obnoxious.
+  useEffect(() => {
+    if (!replayFrame || !replayPlaying) return;
+    const el = atmRowRef.current;
+    const container = chainScrollRef.current;
+    if (!el || !container) return;
+    const viewH = container.clientHeight;
+    if (!viewH) return;
+    const rowTop = el.offsetTop - container.scrollTop;
+    const band = viewH * 0.2; // dead zone: the middle 60%
+    if (rowTop >= band && rowTop <= viewH - band) return; // still comfortably in view
+    container.scrollTop = Math.max(0, el.offsetTop - viewH / 2 + el.clientHeight / 2);
+  }, [replayFrame, replayPlaying]);
 
   // Center the ATM row vertically in the scroll viewport on load / whenever the
   // ticker or expiry set changes (visibleStrikes always places ATM at the exact
@@ -2720,9 +2846,14 @@ export default function OptionsChainPage({
           {/* Coverage, said out loud. The grid looks like the live chain, so
               without this a missing strike reads as "no gamma there" instead of
               "the recorder never stored that strike." */}
+          {/* Coverage, said out loud — twice over. The axis is the SESSION's,
+              so a row can be blank simply because this sweep didn't record that
+              strike; without the second figure a half-empty ladder reads as "no
+              gamma there" rather than "not recorded at this moment". */}
           {replayFrame && (
             <span style={{ color: HT.muted, opacity: 0.7 }}>
-              · recorded walls only ({replayFrame.expiries.length} expir{replayFrame.expiries.length === 1 ? "y" : "ies"}, top strikes per side) · GEX only
+              · recorded walls only · {replayAxis.expiries.length} expir{replayAxis.expiries.length === 1 ? "y" : "ies"} ·{" "}
+              {replayFrame.cells.size}/{replayAxis.strikes.length * replayAxis.expiries.length} cells this frame · GEX only
             </span>
           )}
           {replayLoading && <span style={{ color: HT.cyan }}>· loading…</span>}

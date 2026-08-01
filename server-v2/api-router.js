@@ -502,7 +502,17 @@ register('/api/gex/expirations', {
   },
 });
 
-// /api/calendar-quote — deterministic daily trading quote (no deps).
+// /api/calendar-quote — quote of the day, sourced from a Google Sheet.
+//
+// The sheet has a date column and a quote column (order auto-detected); the tab
+// is taken from CALENDAR_QUOTE_SHEET_RANGE ("Quote!A:B" → tab "Quote"). Read via
+// the gviz CSV export, so it needs no service account — the sheet just has to be
+// link-shared as "anyone with the link can view".
+//
+//   CALENDAR_QUOTE_SHEET_ID      spreadsheet id from the sheet URL
+//   CALENDAR_QUOTE_SHEET_RANGE   optional, defaults to "Sheet1!A:B"
+//
+// Falls back to the built-in list below when unconfigured or unreachable.
 const CAL_QUOTES = [
   "The market can stay irrational longer than you can stay solvent. — John Maynard Keynes",
   "Risk comes from not knowing what you're doing. — Warren Buffett",
@@ -530,13 +540,189 @@ const CAL_QUOTES = [
   "Discipline is the bridge between goals and accomplishment. — Jim Rohn",
   "An investment in knowledge pays the best interest. — Benjamin Franklin",
 ];
-function pickCalQuote() {
-  const dayNum = Math.floor(Date.parse(etDateStr() + 'T00:00:00Z') / 86_400_000);
-  return CAL_QUOTES[((dayNum % CAL_QUOTES.length) + CAL_QUOTES.length) % CAL_QUOTES.length];
+
+const CAL_SHEET_ID = String(process.env.CALENDAR_QUOTE_SHEET_ID || '').trim();
+const CAL_SHEET_TAB = String(process.env.CALENDAR_QUOTE_SHEET_RANGE || 'Sheet1!A:B')
+  .split('!')[0].trim() || 'Sheet1';
+const CAL_TTL_MS = 5 * 60_000;
+// How stale a dated row may be and still show (covers weekends + holidays).
+const CAL_MAX_STALE_DAYS = 3;
+
+let _calCache = null;      // { at, rows }
+let _calLastError = null;
+
+/** Minimal RFC4180 CSV parser — handles quoted fields, commas, escaped quotes. */
+function calParseCsv(text) {
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+    else if (c !== '\r') field += c;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
 }
+
+const calPad = (n) => String(n).padStart(2, '0');
+
+/** Tolerant date parse → "YYYY-MM-DD", or null when the cell isn't a date. */
+function calDateKey(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return null;
+  let m = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/.exec(s);
+  if (m) return `${m[1]}-${calPad(m[2])}-${calPad(m[3])}`;
+  m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/.exec(s);          // US M/D/Y
+  if (m) {
+    const yr = m[3].length === 2 ? `20${m[3]}` : m[3];
+    return `${yr}-${calPad(m[1])}-${calPad(m[2])}`;
+  }
+  if (/^\d{4,6}(\.\d+)?$/.test(s)) {                               // Sheets serial
+    const n = Number(s);
+    if (n > 20_000 && n < 80_000) {
+      return new Date(Math.round((n - 25_569) * 86_400_000)).toISOString().slice(0, 10);
+    }
+  }
+  const p = Date.parse(`${s} 00:00:00 GMT`);                       // "Jul 31, 2026"
+  if (Number.isFinite(p)) return new Date(p).toISOString().slice(0, 10);
+  return null;
+}
+
+const CAL_HEADER_WORDS = /^(date|day|when|quote|quotes|text|saying|message|author|by|note)\b/i;
+
+/**
+ * The panel wraps the text in curly quotes already, so strip quote marks the
+ * sheet carries:  "Saying." — Author  →  Saying. — Author
+ */
+function calNormalizeQuote(raw) {
+  let s = String(raw == null ? '' : raw).trim();
+  const m = /^["“]([\s\S]+?)["”]\s*([—–-]\s*[\s\S]+)$/.exec(s);
+  if (m) return `${m[1].trim()} ${m[2].trim()}`;
+  if (/^["“][\s\S]*["”]$/.test(s)) s = s.slice(1, -1).trim();
+  return s;
+}
+
+/** Fetch + normalise the sheet rows. Never throws; [] means "use fallback". */
+async function calFetchRows(force) {
+  if (!CAL_SHEET_ID) return [];
+  if (!force && _calCache && Date.now() - _calCache.at < CAL_TTL_MS) return _calCache.rows;
+
+  const url = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(CAL_SHEET_ID)}`
+    + `/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(CAL_SHEET_TAB)}`;
+
+  let values;
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 8000);
+    const r = await fetch(url, { signal: ac.signal, redirect: 'follow' });
+    clearTimeout(timer);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const text = await r.text();
+    if (/^\s*</.test(text)) throw new Error('got HTML — sheet not link-shared?');
+    values = calParseCsv(text);
+  } catch (err) {
+    _calLastError = String((err && err.message) || err);
+    console.warn('[calendar-quote] sheet fetch failed:', _calLastError);
+    return _calCache ? _calCache.rows : [];      // serve stale rather than nothing
+  }
+  _calLastError = null;
+
+  // Which column holds the dates? Sample the first 20 rows.
+  let hitsA = 0, hitsB = 0;
+  for (const r of values.slice(0, 20)) {
+    if (calDateKey(r && r[0])) hitsA++;
+    if (calDateKey(r && r[1])) hitsB++;
+  }
+  const dateCol = hitsB > hitsA ? 1 : 0;
+  const quoteCol = dateCol === 0 ? 1 : 0;
+
+  const rows = [];
+  values.forEach((r, i) => {
+    const date = calDateKey(r && r[dateCol]);
+    const rawQuote = String((r && r[quoteCol]) || '').trim();
+    if (!rawQuote) return;
+    if (i === 0 && !date) {                       // header row
+      const d = String((r && r[dateCol]) || '').trim();
+      const headerish = (s) => s.length > 0 && s.length <= 30 && CAL_HEADER_WORDS.test(s);
+      if (headerish(d) || headerish(rawQuote)) return;
+    }
+    const quote = calNormalizeQuote(rawQuote);
+    if (quote) rows.push({ date, quote });
+  });
+
+  _calCache = { at: Date.now(), rows };
+  return rows;
+}
+
+const calDayNum = (key) => Math.floor(Date.parse(`${key}T00:00:00Z`) / 86_400_000);
+function calPickForDay(list, key) {
+  const n = calDayNum(key);
+  return list[((n % list.length) + list.length) % list.length];
+}
+
+function calResolve(rows, today) {
+  const exact = rows.find((r) => r.date === today);
+  if (exact) return { quote: exact.quote, source: 'sheet:date', matchedDate: exact.date };
+
+  const todayNum = calDayNum(today);
+  const past = rows.filter((r) => r.date && calDayNum(r.date) <= todayNum)
+    .sort((a, b) => calDayNum(b.date) - calDayNum(a.date));
+  if (past.length && todayNum - calDayNum(past[0].date) <= CAL_MAX_STALE_DAYS) {
+    return { quote: past[0].quote, source: 'sheet:recent', matchedDate: past[0].date };
+  }
+
+  const undated = rows.filter((r) => !r.date);
+  if (undated.length) {
+    return { quote: calPickForDay(undated, today).quote, source: 'sheet:undated', matchedDate: null };
+  }
+  if (rows.length) {
+    return { quote: calPickForDay(rows, today).quote, source: 'sheet:rotate', matchedDate: null };
+  }
+  return { quote: calPickForDay(CAL_QUOTES, today), source: 'fallback', matchedDate: null };
+}
+
 register('/api/calendar-quote', {
   auth: 'subscriber', methods: ['GET', 'POST'],
-  async handler(req, res) { send(res, 200, { quote: pickCalQuote() }); },
+  async handler(req, res) {
+    let debug = false, force = false;
+    try {
+      const q = new URL(req.url, 'http://localhost').searchParams;
+      debug = q.get('debug') === '1';
+      force = q.get('refresh') === '1';
+    } catch { /* ignore */ }
+    if (force) _calCache = null;
+
+    const today = etDateStr();
+    const rows = await calFetchRows(force);
+    const r = calResolve(rows, today);
+
+    if (debug) {
+      send(res, 200, {
+        quote: r.quote,
+        source: r.source,
+        today,
+        matchedDate: r.matchedDate,
+        sheetId: CAL_SHEET_ID ? `${CAL_SHEET_ID.slice(0, 6)}…` : null,
+        tab: CAL_SHEET_TAB,
+        configured: Boolean(CAL_SHEET_ID),
+        rowCount: rows.length,
+        datedRows: rows.filter((x) => x.date).length,
+        firstDate: (rows.find((x) => x.date) || {}).date || null,
+        lastDate: (rows.slice().reverse().find((x) => x.date) || {}).date || null,
+        lastError: _calLastError,
+        sample: rows.slice(0, 3),
+      }, { 'Cache-Control': NO_STORE });
+      return;
+    }
+    send(res, 200, { quote: r.quote }, { 'Cache-Control': NO_STORE });
+  },
 });
 
 // /api/flow — legacy static empty flow payload (unchanged behavior).
