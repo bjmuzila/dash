@@ -45,16 +45,61 @@ function completedWeekKeyET(d = new Date()) {
   return et.toISOString().slice(0, 10);
 }
 
+/**
+ * Settle the week's iron condors. /api/em-condors/evaluate reads the realized
+ * weekly close straight off the em_tracker rows the EM grader just wrote, so it
+ * MUST run after evaluateCompletedWeek — hence living here rather than in
+ * condor-mark-recorder.js, which is weekday-only and would never fire on the
+ * Saturday the closes land.
+ *
+ * Idempotent: the route only picks up condors with no settlement yet, so a
+ * restart or a repeated Saturday pass costs one cheap query.
+ */
+async function settleCondors(base, reason) {
+  const week = completedWeekKeyET();
+  try {
+    const r = await fetch(`${base}/api/em-condors/evaluate`, {
+      method: 'POST',
+      // The /api/* gate 307s unauthenticated calls to "/". fetch would follow
+      // that and hand back the landing page as a 200, which JSON.parses to {}
+      // and reads as "0 settled" — indistinguishable from an empty board.
+      redirect: 'manual',
+      headers: Object.assign(
+        { 'Content-Type': 'application/json' },
+        process.env.INTERNAL_API_TOKEN ? { 'x-internal-token': process.env.INTERNAL_API_TOKEN } : {}
+      ),
+      body: JSON.stringify({ week_start: week }),
+    });
+    const text = await r.text();
+    if (!r.ok) { console.log(`[condor-settle] ${reason}: HTTP ${r.status} — ${text.slice(0, 160)}`); return; }
+    let j; try { j = JSON.parse(text); } catch {
+      console.log(`[condor-settle] ${reason}: non-JSON response — ${text.slice(0, 120)}`); return;
+    }
+    if (!j.settled) { console.log(`[condor-settle] ${reason}: nothing to settle for ${week}`); return; }
+    console.log(`[condor-settle] ${reason}: ${j.settled} settled for ${week} — `
+      + `${j.wins}W/${j.losses}L (${j.max_wins} max-win, ${j.max_losses} max-loss), P&L ${j.pnl}`
+      + `${j.skipped ? `, ${j.skipped} skipped` : ''}`
+      + `${j.missing_credit?.length ? ` — no entry credit: ${j.missing_credit.slice(0, 8).join(', ')}` : ''}`);
+  } catch (e) {
+    console.log(`[condor-settle] ${reason} failed — ${e.message}`);
+  }
+}
+
 async function evalOnce(base, reason) {
   console.log(`[em-eval] running (${reason})…`);
+  let scored = false;
   try {
     const out = await evaluateCompletedWeek(base);
     console.log(`[em-eval] ${reason}: ${out.hits} hit / ${out.misses} miss (${out.evaluated} scored)`);
-    return out.evaluated > 0;
+    scored = out.evaluated > 0;
   } catch (e) {
     console.log(`[em-eval] failed — ${e.message}`);
-    return false;
   }
+  // Always attempt the condor settle, even when the EM grader scored nothing:
+  // the usual reason for 0 scored is that the week was already graded on an
+  // earlier pass, and the condors still need settling off those same rows.
+  await settleCondors(base, reason);
+  return scored;
 }
 
 // A weekly run that scores nothing is retried, because the usual cause is
@@ -107,4 +152,4 @@ function startEmTrackerAutoEval(port) {
   return () => clearInterval(timer);
 }
 
-module.exports = { startEmTrackerAutoEval, evalOnce };
+module.exports = { startEmTrackerAutoEval, evalOnce, settleCondors };
