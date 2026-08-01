@@ -10,6 +10,7 @@ import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/
 import { Dock, SegGroup } from "@/components/shared/DockToolbar";
 import { ChainReplay } from "@/components/shared/ChainReplay";
 import { useScannerTickers } from "@/lib/useScannerTickers";
+import { dedupeFetch } from "@/lib/dedupeFetch";
 
 // rgba helper — matches the convention used across themed pages.
 function rgba(hex: string, a: number): string {
@@ -519,6 +520,25 @@ function etDateKey(date: Date): string {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+/**
+ * Resolve a `pinnedExpiry` prop against the ticker's real listings.
+ *
+ * "0dte" means today ET — but plenty of tickers have no same-day expiry (NVDA
+ * has no Monday weeklies), and a market holiday removes even SPX's. Snapping
+ * FORWARD to the nearest listed expiry >= today is the honest answer: the
+ * nearest thing that actually trades. Falls back to the literal date when the
+ * listings haven't loaded yet, so the first fetch still has something to ask for.
+ */
+function resolvePinnedExpiry(pin: string, listings: Array<{ value: string }>): string {
+  const want = pin === "0dte" ? etDateKey(etToday()) : pin;
+  if (!listings.length) return want;
+  const forward = listings
+    .map((e) => e.value)
+    .filter((v) => v >= want)
+    .sort();
+  return forward[0] ?? want;
 }
 
 function isHoliday(date: Date): boolean {
@@ -1175,6 +1195,13 @@ interface ChainMatrixProps {
   oiChangeMap: Map<string, { callOI: number; putOI: number; callChg: number; putChg: number }>;
   onCellClick: (v: { strike: number; expiration: string }) => void;
   onCellHover: (v: { strike: number; colIdx: number; x: number; y: number } | null) => void;
+  /**
+   * Narrow-column density (the ES Candles side panel). Shrinks the strike
+   * gutter and the cell minimums, and drops the trailing sum column — under
+   * `pinnedExpiry` the only rendered expiry is 0DTE, which that column excludes
+   * by definition, so it would be a stripe of "·" taking a third of the width.
+   */
+  compact?: boolean;
 }
 
 // Split out + memoized so transient parent state (the load-progress bar, the
@@ -1185,7 +1212,7 @@ const ChainMatrix = memo(function ChainMatrix({
   columns, gridCols, visibleStrikes, nearestStrike, spot, greekMode, dataMode,
   intensity, colScales, volMvcByCol, mvcByCol, pinByCol, valueAt, isStandalone,
   changeMode, sessionDate, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
-  emLevels, activeTicker, atmRowRef, oiChangeMap, onCellClick, onCellHover,
+  emLevels, activeTicker, atmRowRef, oiChangeMap, onCellClick, onCellHover, compact = false,
 }: ChainMatrixProps) {
   // OI is a contract count, not dollars — and on this tab every readout is a
   // CHANGE in that count, so it takes the signed compact formatter (+1.2K /
@@ -1202,28 +1229,7 @@ const ChainMatrix = memo(function ChainMatrix({
     });
   // Shared strike axis: ONE strike column on the left, then one
   // value-only column per expiration. Row N = same strike everywhere.
-  const STRIKE_COL = 56;
-  // ── Locked row height ────────────────────────────────────────────────────
-  // EVERY cell in a strike row is pinned to this height, border-box, overflow
-  // hidden. Nothing a cell can contain is allowed to change it.
-  //
-  // Grid rows size to their tallest cell, so before this the row height was a
-  // function of the row's CONTENT — and three separate things changed it as
-  // data moved: the ATM rule (a real 2px top+bottom border on the strike cell,
-  // making that row 4px taller than the rest), the 📍 pin marker (a 17px SVG in
-  // a ~12px line box), and the ★ CB marker (no line-height, so its glyph could
-  // out-measure the text). Each time spot moved to a new strike, or the CB/pin
-  // moved, every row between the old and new position shifted a few px. Live
-  // that fires a handful of times a session and reads as a blip; under replay
-  // playback it fires every frame and reads as a permanent shimmer.
-  //
-  // 18px clears the 10px mono line box plus 2px padding plus a 2px EM border.
-  // The OI tab renders two lines per cell and gets its own height.
-  const ROW_H = 18;
-  const ROW_H_OI = 34;
-  const rowH = isOiMode ? ROW_H_OI : ROW_H;
-  /** Applied to every cell so content can never resize a row. */
-  const rowBox: React.CSSProperties = { height: rowH, boxSizing: "border-box", overflow: "hidden" };
+  const STRIKE_COL = compact ? 46 : 56;
   // Sticky header/strike column must be fully opaque — rows scroll under it.
   const HDR_BG = "#0D1119";
   // ⅀ Total column — per-strike sum across every rendered expiration EXCEPT
@@ -1256,7 +1262,10 @@ const ChainMatrix = memo(function ChainMatrix({
       // OI cells can carry two lines (call / put) on the ATM pivot row, but each
       // line is now a single delta figure — so they need barely more width than
       // a greek cell, not the double-width the old value+delta pair demanded.
-      gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(${isOiMode ? 84 : 78}px, 1fr)) minmax(${isOiMode ? 92 : 88}px, 1.15fr)`,
+      // The trailing track is the ⅀ Total column; compact drops it entirely.
+      gridTemplateColumns: compact
+        ? `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(58px, 1fr))`
+        : `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(${isOiMode ? 84 : 78}px, 1fr)) minmax(${isOiMode ? 92 : 88}px, 1.15fr)`,
       borderRadius: 12,
       overflow: "clip",
       border: `1px solid ${HT.border}`,
@@ -1293,12 +1302,14 @@ const ChainMatrix = memo(function ChainMatrix({
         );
       })}
       {/* ── ⅀ Total column header (sum of all expirations for each strike) ── */}
+      {!compact && (
       <div style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.24)} 0%, ${rgba(HT.cyan, 0.07)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}`, borderLeft: `2px solid ${rgba(HT.cyan, 0.45)}` }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: HT.cyan, letterSpacing: "0.04em" }}>Total</div>
         <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)", color: grandVisibleTotal >= 0 ? HT.green : HT.red }}>
           {fmtVal(grandVisibleTotal)}
         </div>
       </div>
+      )}
 
       {/* ── One row per shared strike ── */}
       {visibleStrikes.map((strike, rowIdx) => {
@@ -1307,11 +1318,11 @@ const ChainMatrix = memo(function ChainMatrix({
         if (strike == null) {
           return (
             <div key={`pad-${rowIdx}`} style={{ display: "contents" }}>
-              <div style={{ ...rowBox, position: "sticky", left: 0, zIndex: 2, padding: "2px 8px", fontSize: 12, background: HDR_BG, borderRight: `1px solid ${HT.border}` }} />
+              <div style={{ position: "sticky", left: 0, zIndex: 2, padding: "2px 8px", fontSize: 12, background: HDR_BG, borderRight: `1px solid ${HT.border}` }} />
               {renderIdx.map((i) => (
-                <div key={`pad-${rowIdx}-${i}`} style={{ ...rowBox, padding: "2px 8px", fontSize: 12 }} />
+                <div key={`pad-${rowIdx}-${i}`} style={{ padding: "2px 8px", fontSize: 12 }} />
               ))}
-              <div style={{ ...rowBox, padding: "2px 8px", fontSize: 12, borderLeft: `2px solid ${rgba(HT.cyan, 0.25)}` }} />
+              {!compact && <div style={{ padding: "2px 8px", fontSize: 12, borderLeft: `2px solid ${rgba(HT.cyan, 0.25)}` }} />}
             </div>
           );
         }
@@ -1341,7 +1352,6 @@ const ChainMatrix = memo(function ChainMatrix({
           <div key={strike} style={{ display: "contents" }}>
             {/* Shared strike label (sticky left) */}
             <div ref={isATM ? atmRowRef : undefined} title={emTip || undefined} style={{
-              ...rowBox,
               position: "sticky", left: 0, zIndex: 2,
               padding: "2px 5px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right",
               // ATM reads like the /home GEX heatmap: no amber fill, blue strike
@@ -1350,14 +1360,8 @@ const ChainMatrix = memo(function ChainMatrix({
               fontWeight: isATM ? 700 : 400,
               background: HDR_BG,
               borderRight: `1px solid ${HT.border}`,
-              // The ATM rule is an INSET SHADOW here, not a border — same
-              // technique the value cells and the ⅀ Total cell already use, and
-              // for the same stated reason: it overlays instead of occupying
-              // layout. As a border it made this one cell 4px taller than its
-              // neighbours, and since the row sizes to its tallest cell, the
-              // whole row grew and shrank as ATM walked.
-              borderTop: rowEmBorder,
-              boxShadow: isATM ? "inset 0 2px 0 #ffffff, inset 0 -2px 0 #ffffff" : undefined,
+              borderTop: isATM ? "2px solid #ffffff" : rowEmBorder,
+              borderBottom: isATM ? "2px solid #ffffff" : undefined,
               display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 3,
               cursor: emTag ? "help" : undefined,
               whiteSpace: "nowrap", overflow: "hidden",
@@ -1438,7 +1442,6 @@ const ChainMatrix = memo(function ChainMatrix({
                   onClick={isClickable ? (e) => onCellHover({ strike, colIdx, x: e.clientX, y: e.clientY }) : undefined}
                   title={isClickable ? "Click for volume / OI / net premium" : undefined}
                   style={{
-                    ...rowBox,
                     padding: isOiMode ? "3px 6px" : "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
                     color: value == null ? "#3a4a5e" : SOFT_WHITE,
                     background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
@@ -1456,17 +1459,11 @@ const ChainMatrix = memo(function ChainMatrix({
                       background, ATM box, EM row border — is unchanged, and the
                       background now tracks that same change through valueAt(),
                       so the tint and the number always agree. */}
-                  {/* lineHeight 1 on both markers: an unconstrained glyph sets
-                      its own line box, which is one of the things that used to
-                      resize the row as the CB moved strike to strike. */}
-                  {isMvc && <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)", lineHeight: 1 }}>★</span>}
+                  {isMvc && <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)" }}>★</span>}
                   {isVolMvc && <span title="Highest volume GEX" style={{ fontSize: 10, lineHeight: 1 }}>❌</span>}
                   {isPin && (
-                    <span title="Possible pin or explosive level" style={{ cursor: "help", display: "inline-flex", alignItems: "center", verticalAlign: "middle", height: 12, lineHeight: 0 }}>
-                      {/* 12×14, down from 14×17: the old one was taller than the
-                          cell's line box, so a pin appearing in a cell grew its
-                          row. Sized to fit inside ROW_H with the padding. */}
-                      <svg width="12" height="14" viewBox="0 0 24 24" fill="#ffffff" stroke="rgba(0,0,0,.55)" strokeWidth={1.5}>
+                    <span title="Possible pin or explosive level" style={{ cursor: "help", display: "inline-flex", verticalAlign: "middle" }}>
+                      <svg width="14" height="17" viewBox="0 0 24 24" fill="#ffffff" stroke="rgba(0,0,0,.55)" strokeWidth={1.5}>
                         <path d="M12 21s7-6.5 7-12A7 7 0 0 0 5 9c0 5.5 7 12 7 12z" />
                         <circle cx="12" cy="9" r="2.3" fill="rgba(0,0,0,.55)" stroke="none" />
                       </svg>
@@ -1488,14 +1485,13 @@ const ChainMatrix = memo(function ChainMatrix({
               );
             })}
             {/* ── ⅀ Total cell: this strike's sum across every expiration ── */}
-            {(() => {
+            {!compact && (() => {
               const tot = rowTotals.get(strike) ?? 0;
               const atmTotShadow = isATM
                 ? "inset 0 2px 0 #ffffff, inset 0 -2px 0 #ffffff, inset -2px 0 0 #ffffff"
                 : undefined;
               return (
                 <div style={{
-                  ...rowBox,
                   padding: "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 700,
                   color: tot === 0 ? "#3a4a5e" : "rgba(255,255,255,0.92)",
                   background: tot !== 0 ? metricBg(tot, totalScale.max, intensity, totalScale.top3) : "transparent",
@@ -1528,6 +1524,10 @@ export default function OptionsChainPage({
   expiryCount,
   ticker: externalTicker,
   showGrandTotal = true,
+  pinnedExpiry,
+  hideToolbar = false,
+  compact = false,
+  defaultPercent,
 }: {
   // "sequential" (default, standalone /options-chain route): next EXP_COLUMNS
   // expirations starting at the user's selected date. "key" (/new-home embed):
@@ -1545,6 +1545,23 @@ export default function OptionsChainPage({
   // Hide the toolbar's "Total <greek>" readout. The /home embed passes false so
   // the compact chain panel doesn't show a per-ticker grand-total GEX.
   showGrandTotal?: boolean;
+  // Lock the chain to ONE expiration. "0dte" resolves to today ET on every ET
+  // day rollover, snapped forward to the nearest real listing for tickers and
+  // holidays that have no same-day expiry. Used by the ES Candles page's side
+  // panel, which is a 230px column and wants exactly the 0DTE ladder.
+  //
+  // Overrides expirySelection's column choice entirely — with a pin there is
+  // nothing sequential to slice.
+  pinnedExpiry?: string | "0dte";
+  // Drop the page's own <Dock>. The embedding surface supplies its own chrome
+  // and the toolbar is wider than the column it would sit in.
+  hideToolbar?: boolean;
+  // Narrow-column density: smaller strike gutter, tighter cells, and the
+  // hover-card-only /proxy/strike-dod poll is skipped (nothing to hover).
+  compact?: boolean;
+  // Override the per-ticker automatic strike window. SPX's automatic 10% is
+  // ~90 strikes, which in a side panel is a scrollbar rather than a read.
+  defaultPercent?: number;
 } = {}) {
   // Number of sequential columns to render (default 14; embeds may narrow it).
   const seqColumns = Math.max(1, Math.floor(expiryCount ?? EXP_COLUMNS));
@@ -1560,6 +1577,20 @@ export default function OptionsChainPage({
   const [expiries, setExpiries] = useState<Array<{ value: string; label: string }>>(fallbackExpiries);
   const [tickerInput, setTickerInput] = useState("SPX");
   const [activeTicker, setActiveTicker] = useState("SPX");
+  // Bumps when the ET calendar day changes. The expirations effect keys off it
+  // so a `pinnedExpiry="0dte"` panel left open overnight re-pins to the new
+  // session's expiry — otherwise it only ever re-ran on a ticker change and a
+  // dashboard left up since yesterday would keep showing yesterday's 0DTE.
+  const [etDayTick, setEtDayTick] = useState(0);
+  useEffect(() => {
+    if (!pinnedExpiry) return; // nothing else depends on the rollover
+    let day = etDateKey(etToday());
+    const id = setInterval(() => {
+      const now = etDateKey(etToday());
+      if (now !== day) { day = now; setEtDayTick((n) => n + 1); }
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [pinnedExpiry]);
   // Clicking a 0DTE SPX cell opens the ContractFlowPopup (that strike's Flow
   // GEX history sparkline) — see the component above for details.
   const [contractPopup, setContractPopup] = useState<{ strike: number; expiration: string } | null>(null);
@@ -1579,25 +1610,36 @@ export default function OptionsChainPage({
   // Prefill (don't auto-load) from a deep link like /options-chain?symbol=AAPL&expiry=2026-07-31 —
   // e.g. the Scanner "Watch This" cards. User still has to click GO themselves.
   useEffect(() => {
+    // Uncontrolled (standalone route) ONLY. Embedded, the URL belongs to the
+    // HOST page — /es-candles?symbol=AAPL would otherwise reach in and hijack
+    // the side panel's ticker away from the chart it's sitting next to.
+    if (externalTicker != null) return;
     const u = new URL(window.location.href);
     const sym = u.searchParams.get("symbol")?.trim().toUpperCase();
     const exp = u.searchParams.get("expiry")?.trim();
     if (sym) setTickerInput(sym);
     if (exp) setSelectedExpiry(exp);
-  }, []);
+  }, [externalTicker]);
   const [displayPercent, setDisplayPercent] = useState<number>(10);
   // Auto strike window per ticker: SPX renders 10% (huge chain), everything
   // else 30%. Re-applies whenever the active ticker changes; the user can still
   // override via the % dropdown for the current ticker.
   useEffect(() => {
+    // defaultPercent overrides the automatic rule. SPX's automatic 10% is ~90
+    // strikes; in a 230px side panel that's a scrollbar, not a read.
+    if (defaultPercent != null) { setDisplayPercent(defaultPercent); return; }
     setDisplayPercent(activeTicker.toUpperCase() === "SPX" ? 10 : 30);
-  }, [activeTicker]);
+  }, [activeTicker, defaultPercent]);
   const [refreshSeed, setRefreshSeed] = useState(0);
   // Day-over-Day GEX movers for the active ticker (same source as the scanner's
   // DoD Movers tab: /proxy/strike-dod). Declared AFTER refreshSeed since the
   // effect depends on it — referencing refreshSeed above its declaration is a
   // temporal-dead-zone crash at render.
   useEffect(() => {
+    // Its ONLY consumer is the cursor-anchored hover card, and a 230px side
+    // panel has no room to hover. Skipping it under `compact` drops a 2000-row
+    // poll per embedded instance.
+    if (compact) { setDodRows([]); return; }
     let cancelled = false;
     const t = (activeTicker || "SPX").toUpperCase();
     (async () => {
@@ -1610,7 +1652,7 @@ export default function OptionsChainPage({
       } catch { if (!cancelled) setDodRows([]); }
     })();
     return () => { cancelled = true; };
-  }, [activeTicker, refreshSeed]);
+  }, [activeTicker, refreshSeed, compact]);
   const [intensity, setIntensity] = useState(1.75);
   // Grid colors read this deferred copy so dragging the Intensity slider stays
   // responsive — React commits the slider urgently and repaints the ~560-cell
@@ -1708,7 +1750,14 @@ export default function OptionsChainPage({
     // "sequential" mode (default): the selected expiry + the next N from the
     // listed expiries.
     let targets: Array<{ value: string; label: string }>;
-    if (expirySelection === "key") {
+    if (pinnedExpiry) {
+      // Pinned mode wins outright — with one locked column there is nothing
+      // sequential to slice and no key set to pick. resolvePinnedExpiry snaps
+      // "0dte" forward to the nearest real listing, because plenty of tickers
+      // have no same-day expiry and market holidays remove SPX's.
+      const pin = resolvePinnedExpiry(pinnedExpiry, all);
+      targets = [{ value: pin, label: pin }];
+    } else if (expirySelection === "key") {
       targets = pickKeyExpirations(all);
     } else {
       const startIdx = Math.max(0, all.findIndex(e => e.value === startExp));
@@ -1750,7 +1799,11 @@ export default function OptionsChainPage({
       // empty cells either.
       const results = await Promise.all(
         targets.map(async (t) => {
-          const res = await fetch(
+          // dedupeFetch, not fetch: three ES Candles cards can each embed this
+          // component with the same ticker + expiry, and their per-instance
+          // loadInFlightRef / LOAD_MIN_INTERVAL_MS throttles know nothing about
+          // each other. Identical concurrent GETs collapse to one request.
+          const res = await dedupeFetch(
             `/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(t.value)}&range=all${bust}`,
           );
           const json = await res.json().catch(() => null);
@@ -1874,12 +1927,20 @@ export default function OptionsChainPage({
   useEffect(() => { selectedExpiryRef.current = selectedExpiry; }, [selectedExpiry]);
   useEffect(() => { expiriesRef.current = expiries; }, [expiries]);
 
-  // Auto-load SPX on mount
+  // Auto-load on mount.
+  //
+  // This used to hardcode "SPX" even under `ticker` control, which cost every
+  // embed one wasted SPX chain fetch before the externalTicker effect above
+  // corrected it. Harmless-looking with one embed; with three ES Candles cards
+  // it's three of them, on the critical path, for data nobody asked for.
   useEffect(() => {
-    const defaultExpiry = selectedExpiry || expiries[0]?.value;
+    const defaultExpiry = pinnedExpiry
+      ? resolvePinnedExpiry(pinnedExpiry, expiries)
+      : (selectedExpiry || expiries[0]?.value);
     if (defaultExpiry) {
-      loadChain("SPX", defaultExpiry);
+      loadChain((externalTicker || "SPX").toUpperCase(), defaultExpiry);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Poll the active matrix every 60s so the 14-expiration GEX values track
@@ -1935,11 +1996,17 @@ export default function OptionsChainPage({
         setExpiries(list);
         // If the current selection isn't a real listing for this ticker, snap
         // to the nearest valid one (prefer today's 0DTE when present).
+        //
+        // Under `pinnedExpiry` that preference becomes unconditional: the whole
+        // point of the pin is that the column follows today, so a selection the
+        // user made yesterday must not survive into this session's panel.
         const today = etDateKey(etToday());
         const cur = selectedExpiryRef.current;
-        const validExpiry = list.some((e) => e.value === cur)
-          ? cur
-          : (list.find((e) => e.value === today)?.value ?? list[0].value);
+        const validExpiry = pinnedExpiry
+          ? resolvePinnedExpiry(pinnedExpiry, list)
+          : list.some((e) => e.value === cur)
+            ? cur
+            : (list.find((e) => e.value === today)?.value ?? list[0].value);
         setSelectedExpiry(validExpiry);
 
         // A ticker-change GO is waiting on a valid expiry — load the chain now.
@@ -1957,7 +2024,7 @@ export default function OptionsChainPage({
     // listing it here caused an infinite fetch loop (effect → setState →
     // render → new loadChain → effect …). selectedExpiry is read via ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTicker]);
+  }, [activeTicker, etDayTick]);
 
   const [underlyingPrice, setUnderlyingPrice] = useState(0);
 
@@ -2553,9 +2620,13 @@ export default function OptionsChainPage({
   // slots: a placeholder column is a promise that data is still loading, and in
   // a rewound grid nothing more is coming. Live keeps the fixed slot count so
   // the grid doesn't reflow while expirations resolve.
-  const gridCols = replayFrame
-    ? columns.length
-    : Math.max(columns.length, expirySelection === "key" ? 4 : seqColumns);
+  // Pinned mode is exactly one column, so no padding slots — a placeholder is a
+  // promise that more data is coming, and here there is no more.
+  const gridCols = pinnedExpiry
+    ? 1
+    : replayFrame
+      ? columns.length
+      : Math.max(columns.length, expirySelection === "key" ? 4 : seqColumns);
 
   // Snapshot/Discord caption. Declared here (not up with snapTitle) because it
   // needs replayFrame, which only exists once the recorded columns are built.
@@ -2620,11 +2691,17 @@ export default function OptionsChainPage({
     boxSizing: "border-box",
   });
 
+  // Embedded as a side panel, homeShellStyle's opaque page background paints
+  // over the host card's own surface and the panel reads as a pasted-in
+  // rectangle. Drop it and inherit.
+  const embeddedChrome = hideToolbar || compact;
+
   return (
     <div
       ref={pageRef}
       style={{
         ...homeShellStyle,
+        ...(embeddedChrome ? { background: "transparent", backgroundImage: "none" } : null),
         height: "100%",
         overflow: "hidden",
       }}
@@ -2638,7 +2715,13 @@ export default function OptionsChainPage({
       {/* Toolbar pinned at the top — ALWAYS visible (never scrolls away). The
           grid scrolls below it in its own container, keeping its expiry-date
           header row stuck to the top of that scroll area. */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 3, padding: "3px 10px 4px", flexShrink: 0, position: "sticky", top: 0, zIndex: 60, minWidth: 0, background: "#05060A", borderBottom: `1px solid ${HT.border}` }}>
+      {/* The whole sticky header collapses under `hideToolbar` — including its
+          padding and its bottom rule, which would otherwise leave a stray
+          hairline and a 7px band above nothing. */}
+      <div style={hideToolbar && !showGrandTotal
+        ? { display: "none" }
+        : { display: "flex", flexDirection: "column", gap: 3, padding: "3px 10px 4px", flexShrink: 0, position: "sticky", top: 0, zIndex: 60, minWidth: 0, background: embeddedChrome ? "transparent" : "#05060A", borderBottom: hideToolbar ? "none" : `1px solid ${HT.border}` }}>
+      {!hideToolbar && (<>
       {/* data-capture-hide drops the control dock from snapshots (ticker picker,
           strike %, GO, REPLAY, intensity, the greek tabs, the snap button
           itself). Only the Dock is tagged, not its wrapper — the wrapper also
@@ -2755,6 +2838,7 @@ export default function OptionsChainPage({
             : `📊 Options Chain — ${activeTicker} ${selectedExpiry}`}
         />
       </Dock>
+      </>)}
       {/* Row 2 — total net GEX (active greek) across the visible window. */}
       {showGrandTotal && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 2px", fontSize: 11, whiteSpace: "nowrap" }}>
@@ -2947,6 +3031,7 @@ export default function OptionsChainPage({
           padding: "0 10px 10px",
         }}>
           <ChainMatrix
+            compact={compact}
             columns={columns}
             gridCols={gridCols}
             visibleStrikes={visibleStrikes}

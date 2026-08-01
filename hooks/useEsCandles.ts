@@ -73,6 +73,35 @@ function buildSlotAverages(historical: EsCandleRecord[], today: string, nDays: n
   return out;
 }
 
+// ── Cross-instance load sharing ──────────────────────────────────────────────
+// The ES Candles page mounts up to THREE charts, each with its own copy of this
+// hook, and they all wake up within a few ms of each other asking SQLite for the
+// same two things. `dedupeFetch` can't help — these go through the snapdb layer,
+// not through fetch() — so share at this level instead.
+//
+// Deliberately a short TTL, not a cache. The "today" query's answer changes as
+// bars print, so holding it would freeze the chart; 3s is long enough to collapse
+// a mount storm (and a StrictMode double-invoke) and short enough that a manual
+// refresh a moment later still hits the database.
+const LOAD_SHARE_MS = 3_000;
+const loadShare = new Map<string, { at: number; p: Promise<PromiseSettledResult<EsCandleRecord[]>[]> }>();
+
+function sharedLoad(
+  key: string,
+  run: () => Promise<PromiseSettledResult<EsCandleRecord[]>[]>,
+): Promise<PromiseSettledResult<EsCandleRecord[]>[]> {
+  const hit = loadShare.get(key);
+  if (hit && Date.now() - hit.at < LOAD_SHARE_MS) return hit.p;
+  const p = run();
+  loadShare.set(key, { at: Date.now(), p });
+  // Drop on settle so a failure is never remembered — the next caller retries.
+  p.catch(() => {}).then(() => {
+    const cur = loadShare.get(key);
+    if (cur && cur.p === p && Date.now() - cur.at >= LOAD_SHARE_MS) loadShare.delete(key);
+  });
+  return p;
+}
+
 /**
  * @param enabled  When false, the hook does NOT load from SQLite or open the
  *   /ws/gex socket — it stays fully idle (no connection, no bandwidth). Flipping
@@ -155,13 +184,18 @@ export function useEsCandles(
     // `.catch(() => {})` — so a hiccup on the today request silently left
     // `historical` empty, which is the single input the ES/SPX basis anchor is
     // built from. That failure mode is invisible except as levels drifting ~50pt.
-    const [todayRes, histRes] = await Promise.allSettled([
-      queryEsCandlesToday(intervalMinutes),
-      // 1m history is deliberately short: dxFeed only serves ~7 days of it, and
-      // this array feeds buildSlotAverages — a 20-day request at 1m would be 5x
-      // the rows for baselines that mostly don't exist.
-      queryEsCandlesHistorical(intervalMinutes === 1 ? 2 : historyDays, intervalMinutes),
-    ]);
+    // Shared across every instance asking for the same (interval, days) — see
+    // sharedLoad. The key space is tiny: intervalMinutes is only ever 1 or 5.
+    const [todayRes, histRes] = await sharedLoad(
+      `${intervalMinutes}|${historyDays}`,
+      () => Promise.allSettled([
+        queryEsCandlesToday(intervalMinutes),
+        // 1m history is deliberately short: dxFeed only serves ~7 days of it, and
+        // this array feeds buildSlotAverages — a 20-day request at 1m would be 5x
+        // the rows for baselines that mostly don't exist.
+        queryEsCandlesHistorical(intervalMinutes === 1 ? 2 : historyDays, intervalMinutes),
+      ]),
+    );
     if (todayRes.status === "rejected") console.warn("[es-candles] today load failed:", todayRes.reason);
     if (histRes.status === "rejected") console.warn("[es-candles] history load failed:", histRes.reason);
     const today = todayRes.status === "fulfilled" ? todayRes.value : [];
