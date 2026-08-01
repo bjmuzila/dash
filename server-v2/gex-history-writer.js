@@ -8,7 +8,8 @@
  * keeps working under server-v2.
  *
  * Writes into the existing `option_strike_gex_history` table (created by
- * lib/db.ts ensureAllTables): (timestamp, date, expiry, spot, strike, net_gex).
+ * lib/db.ts ensureAllTables): (timestamp, date, expiry, spot, strike, net_gex,
+ * net_vol_gex, call_gamma, put_gamma, call_iv, put_iv, net_dex, net_vol_dex).
  *
  * No-ops cleanly when DATABASE_URL is unset, so the feed runs fine without a DB.
  */
@@ -65,6 +66,19 @@ async function ensureVolColumn(p) {
     // from anything else in this table.
     await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS call_iv REAL');
     await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS put_iv REAL');
+    // Per-strike DELTA exposure, stored on the same cadence and in the same row
+    // as gamma. computeGexSummary has emitted netDEX/volNetDEX per strike all
+    // along; it simply was never persisted, so every DEX view could only ever
+    // show "now" and nothing historical could be reconstructed. greek_snapshots
+    // is NOT a substitute: it is a different writer on a different cadence, so
+    // its rows do not line up slot-for-slot with this table and any join
+    // smears two clocks together.
+    //
+    // Two columns for the same reason gamma has two: net_dex is the OI book,
+    // net_vol_dex is the volume book, and the OI+Vol basis the dashboard reads
+    // is their sum. Storing only the sum would make the split unrecoverable.
+    await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS net_dex REAL');
+    await p.query('ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS net_vol_dex REAL');
     // Multi-underlying. Mirrors the DDL in _lib-db.cjs ensureAllTables — kept
     // here too because server-v2 boots without running that Next-side init, and
     // this writer must not INSERT a symbol column that doesn't exist yet.
@@ -125,7 +139,7 @@ function todayYmdET() {
  * Persist one GEX snapshot (one row per strike), rate-limited.
  * Fire-and-forget: never throws into the caller.
  *
- * @param {Array<{strike:number, netGEX:number}>} gexRows
+ * @param {Array<{strike:number, netGEX:number, netDEX?:number, volNetDEX?:number}>} gexRows
  * @param {number} spot
  * @param {string} expiry  YYYY-MM-DD
  * @param {string} [symbol] Underlying key. Defaults to '$SPX' so the live SPX
@@ -188,12 +202,21 @@ async function writeGexSnapshot(gexRows, spot, expiry, symbol) {
       if (!Number.isFinite(callIv) || callIv <= 0) callIv = null;
       let putIv = Number(row.putIV);
       if (!Number.isFinite(putIv) || putIv <= 0) putIv = null;
-      values.push(`($${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i})`);
-      params.push(now, date, expiry, spot, strike, netGex, netVolGex, callGamma, putGamma, sym, callIv, putIv);
+      // Delta exposure, same treatment as gamma: NULL when the feed didn't
+      // supply it (a hole must not read as a flat book), subnormals snapped to
+      // 0 because Postgres `real` cannot store them.
+      let netDex = Number(row.netDEX);
+      if (!Number.isFinite(netDex)) netDex = null;
+      else if (Math.abs(netDex) < 1e-30) netDex = 0;
+      let netVolDex = Number(row.volNetDEX);
+      if (!Number.isFinite(netVolDex)) netVolDex = null;
+      else if (Math.abs(netVolDex) < 1e-30) netVolDex = 0;
+      values.push(`($${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i}, $${++i})`);
+      params.push(now, date, expiry, spot, strike, netGex, netVolGex, callGamma, putGamma, sym, callIv, putIv, netDex, netVolDex);
     }
     if (!values.length) return;
     await p.query(
-      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex, call_gamma, put_gamma, symbol, call_iv, put_iv)
+      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex, call_gamma, put_gamma, symbol, call_iv, put_iv, net_dex, net_vol_dex)
        VALUES ${values.join(', ')}`,
       params
     );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { HOME_THEME, LIGHT_BLUE, REFRESH_GREEN, SOFT_RED, statTileStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
@@ -47,6 +47,9 @@ type MapPayload = {
   columns: MapColumn[];
   dexByStrike: { strike: number; dex: number }[];
   dexSeries: { t: number; dex: number }[];
+  /** Slot-aligned DEX ladder — present only when recorded alongside gamma. */
+  dexColumns?: { t: number; d: number[] }[];
+  dexSource?: "option_strike_gex_history" | "greek_snapshots" | "none";
   levels: {
     spot: number; flip: number | null;
     callWall: number | null; putWall: number | null; magnet: number | null;
@@ -137,6 +140,9 @@ type MapModel = {
   dexRaw: number[];
   dMax: number;
   hasDex: boolean;
+  /** True only when DEX was recorded slot-for-slot with gamma. */
+  dexSurface: boolean;
+  dexSource: string;
   dexSeries: { t: number; dex: number }[];
   dtMax: number;
   spot: number;
@@ -223,15 +229,30 @@ function buildModel(p: MapPayload | null): MapModel | null {
 
   // DEX aligned to the same ladder. Absent → hasDex false, and every DEX layer
   // renders its own empty state instead of a flat ring.
+  //
+  // When dexColumns is present the DEX ladder was written in the SAME row as
+  // gamma, so it is already index-aligned to `strikes` and scaled on the whole
+  // session — the same treatment gamma gets. dexByStrike is the fallback shape
+  // from greek_snapshots: a last-snapshot ladder keyed by strike.
+  const dexCols = p.dexColumns ?? [];
+  const dexSurface = dexCols.length === cols.length && dexCols.length > 0;
   const dexRaw = new Array(n).fill(0);
   let dMax = 0, dexCount = 0;
-  const byStrike = new Map((p.dexByStrike ?? []).map((r) => [r.strike, r.dex]));
-  for (let i = 0; i < n; i++) {
-    const v = byStrike.get(strikes[i]);
-    if (v == null) continue;
-    dexRaw[i] = v;
-    dexCount++;
-    if (Math.abs(v) > dMax) dMax = Math.abs(v);
+  if (dexSurface) {
+    // Scale on the session, not the last column, so the ring does not rescale
+    // itself every refresh as the book fills in.
+    for (const c of dexCols) for (const v of c.d) { const a = Math.abs(v); if (a > dMax) dMax = a; }
+    const lastD = dexCols[dexCols.length - 1].d;
+    for (let i = 0; i < n; i++) { dexRaw[i] = lastD[i] ?? 0; if (dexRaw[i] !== 0) dexCount++; }
+  } else {
+    const byStrike = new Map((p.dexByStrike ?? []).map((r) => [r.strike, r.dex]));
+    for (let i = 0; i < n; i++) {
+      const v = byStrike.get(strikes[i]);
+      if (v == null) continue;
+      dexRaw[i] = v;
+      dexCount++;
+      if (Math.abs(v) > dMax) dMax = Math.abs(v);
+    }
   }
   if (!(dMax > 0)) dMax = 1;
   const dex = dexRaw.map((v) => Math.max(-1, Math.min(1, v / dMax)));
@@ -246,6 +267,7 @@ function buildModel(p: MapPayload | null): MapModel | null {
     strikes, lo: strikes[0], hi: strikes[n - 1], cols,
     profile, profileRaw: lastRaw, gMax, heat, signed, path, bubbles,
     dex, dexRaw, dMax, hasDex: dexCount > 0 || dexSeries.length > 0, dexSeries, dtMax,
+    dexSurface, dexSource: p.dexSource ?? (dexCount > 0 ? "greek_snapshots" : "none"),
     spot: p.levels.spot, flip: p.levels.flip,
     callWall: p.levels.callWall, putWall: p.levels.putWall, magnet: p.levels.magnet,
     netGex: p.levels.netGex, netDex: p.levels.netDex,
@@ -257,11 +279,21 @@ const AXIS = "rgba(255,255,255,0.34)";
 const GRID = "rgba(255,255,255,0.05)";
 const FLIP_C = "#7dd3fc";
 
+// Every map is drawn in a fixed 1240-wide viewBox. In the 2×2 grid each one
+// renders at roughly half that, which would put 8px labels at ~4px — present but
+// unreadable, which is worse than absent. So type is scaled UP in compact mode
+// and the densest secondary layers are dropped entirely; expanding a card to
+// full width restores both. One context rather than threading a prop through
+// every <text> in four components.
+const FzCtx = createContext(1);
+const useFz = () => useContext(FzCtx);
+
 function Lab({ x, y, children, size = 8, fill = "rgba(255,255,255,0.34)", anchor }: {
   x: number; y: number; children: string; size?: number; fill?: string; anchor?: "start" | "middle" | "end";
 }) {
+  const fz = useFz();
   return (
-    <text x={x} y={y} fill={fill} fontSize={size} fontWeight={700} letterSpacing="0.14em" textAnchor={anchor}>
+    <text x={x} y={y} fill={fill} fontSize={size * fz} fontWeight={700} letterSpacing="0.14em" textAnchor={anchor}>
       {children}
     </text>
   );
@@ -314,17 +346,19 @@ function RegimeStrip({ m, symbol, date, asOf }: { m: MapModel; symbol: string; d
 }
 
 function NoDex({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
+  const fz = useFz();
   return (
     <g>
       <rect x={x} y={y} width={w} height={h} rx={8} fill="rgba(255,255,255,0.012)" stroke={HOME_THEME.border} strokeDasharray="4 4" />
-      <text x={x + w / 2} y={y + h / 2 + 3} fill={HOME_THEME.muted} opacity={0.45} fontSize={10} fontWeight={700}
+      <text x={x + w / 2} y={y + h / 2 + 3} fill={HOME_THEME.muted} opacity={0.45} fontSize={10 * fz} fontWeight={700}
         letterSpacing="0.14em" textAnchor="middle">NO DEX FOR THIS SESSION</text>
     </g>
   );
 }
 
 // ═════════════════════════ A · TAPE FIELD ════════════════════════════════════
-function TapeField({ m }: { m: MapModel }) {
+function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
+  const fz = useFz();
   const W = 1240, H = 470;
   const PX = 24, PW = 118;
   const FX = PX + PW + 46, FW = 742;
@@ -337,8 +371,8 @@ function TapeField({ m }: { m: MapModel }) {
   const cw = FW / Math.max(1, m.cols.length);
   const ch = FH / Math.max(1, m.strikes.length - 1);
 
-  const ticks = strikeTicks(m.lo, m.hi);
-  const timeTicks = pickTimeTicks(m.cols);
+  const ticks = strikeTicks(m.lo, m.hi, compact);
+  const timeTicks = pickTimeTicks(m.cols, compact ? 4 : 6);
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }} preserveAspectRatio="xMidYMid meet">
@@ -365,8 +399,8 @@ function TapeField({ m }: { m: MapModel }) {
       {m.flip != null && (
         <g>
           <line x1={FX} y1={yOf(m.flip)} x2={FX + FW} y2={yOf(m.flip)} stroke={FLIP_C} strokeWidth={1.2} strokeDasharray="5 4" opacity={0.75} />
-          <rect x={FX + 4} y={yOf(m.flip) - 16} width={106} height={13} rx={3} fill="rgba(5,6,10,0.82)" />
-          <text x={FX + 9} y={yOf(m.flip) - 6} fill={FLIP_C} fontSize={8} fontWeight={700} letterSpacing="0.1em">
+          <rect x={FX + 4} y={yOf(m.flip) - 6 - 12 * fz} width={106 * fz} height={13 * fz} rx={3} fill="rgba(5,6,10,0.86)" />
+          <text x={FX + 9} y={yOf(m.flip) - 8 - 2 * fz} fill={FLIP_C} fontSize={8 * fz} fontWeight={700} letterSpacing="0.1em">
             {`GAMMA FLIP ${fmtStrike(m.flip)}`}
           </text>
         </g>
@@ -392,7 +426,7 @@ function TapeField({ m }: { m: MapModel }) {
       <circle cx={xOf(m.cols.length - 1)} cy={yOf(m.path[m.path.length - 1])} r={9} fill="rgba(255,255,255,0.14)" />
       <circle cx={xOf(m.cols.length - 1)} cy={yOf(m.path[m.path.length - 1])} r={3.4} fill="#fff" />
       {timeTicks.map(({ i, label }) => (
-        <text key={`t${i}`} x={xOf(i)} y={FY + FH + 14} fill={AXIS} fontSize={8} textAnchor="middle" opacity={0.75}>{label}</text>
+        <text key={`t${i}`} x={xOf(i)} y={FY + FH + 14} fill={AXIS} fontSize={8 * fz} textAnchor="middle" opacity={0.75}>{label}</text>
       ))}
 
       {/* left profile */}
@@ -414,17 +448,19 @@ function TapeField({ m }: { m: MapModel }) {
         return <rect key={`r${k}`} x={RX + 6} y={yOf(k) - ch * 0.42} width={Math.abs(v) * 26 + 1.5} height={Math.max(1.4, ch * 0.84)} rx={1}
           fill={gamColor(v, 0.3 + 0.55 * Math.abs(v))} />;
       })}
+      {/* Tick numbers are dropped in the grid: at 1.7× type the wall badges grow
+          into the same column, and the badges already carry those strikes. */}
       {ticks.map((k) => (
         <g key={`rt${k}`}>
           <line x1={RX + 34} y1={yOf(k)} x2={RX + 40} y2={yOf(k)} stroke="rgba(255,255,255,0.18)" />
-          <text x={RX + 96} y={yOf(k) + 3} fill={AXIS} fontSize={8}>{k}</text>
+          {!compact && <text x={RX + 96} y={yOf(k) + 3} fill={AXIS} fontSize={8}>{k}</text>}
         </g>
       ))}
       {([[m.callWall, HOME_THEME.green, "CW"], [m.magnet, LIGHT_BLUE, "MG"], [m.flip, FLIP_C, "FL"], [m.putWall, HOME_THEME.orange, "PW"]] as [number | null, string, string][])
         .filter(([k]) => k != null).map(([k, col, tag]) => (
           <g key={tag}>
-            <rect x={RX + 42} y={yOf(k as number) - 7} width={50} height={14} rx={3} fill={`${col}26`} stroke={`${col}80`} />
-            <text x={RX + 46} y={yOf(k as number) + 3.5} fill={col} fontSize={7.4} fontWeight={700}>{`${tag} ${fmtStrike(k)}`}</text>
+            <rect x={RX + 42} y={yOf(k as number) - 7 * fz} width={50 * fz} height={14 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
+            <text x={RX + 46} y={yOf(k as number) + 3.5 * fz} fill={col} fontSize={7.4 * fz} fontWeight={700}>{`${tag} ${fmtStrike(k)}`}</text>
           </g>
         ))}
       {m.spot > 0 && (
@@ -470,9 +506,10 @@ function TapeField({ m }: { m: MapModel }) {
 }
 
 // ═════════════════════════ B · POLAR RETICLE ═════════════════════════════════
-function PolarReticle({ m }: { m: MapModel }) {
+function PolarReticle({ m, compact }: { m: MapModel; compact?: boolean }) {
+  const fz = useFz();
   const W = 1240, H = 660;
-  const CX = 380, CY = 336;
+  const CX = compact ? 600 : 380, CY = 336;
   const R0 = 58, R1 = 98, R2 = 176, R3 = 196;
   const RAIL = R3 + 34, TRACK = RAIL + 40, BAND = 13;
   const span = Math.max(1, m.hi - m.lo);
@@ -488,7 +525,7 @@ function PolarReticle({ m }: { m: MapModel }) {
   const step = m.strikes.length > 1 ? m.strikes[1] - m.strikes[0] : 5;
   const ringCount = Math.min(10, m.cols.length);
   const rw = (R2 - R1) / Math.max(1, ringCount);
-  const ticks = strikeTicks(m.lo, m.hi);
+  const ticks = strikeTicks(m.lo, m.hi, compact);
 
   // bearing = TIME on the outer band
   const aT = (ci: number) => ((-90 + (ci / Math.max(1, m.cols.length - 1)) * 330) * Math.PI) / 180;
@@ -496,7 +533,7 @@ function PolarReticle({ m }: { m: MapModel }) {
     if (m.flip == null || !(m.path[ci] > 0)) return TRACK;
     return TRACK + Math.max(-BAND, Math.min(BAND, ((m.path[ci] - m.flip) / 34) * BAND));
   };
-  const clockTicks = pickTimeTicks(m.cols, 6);
+  const clockTicks = pickTimeTicks(m.cols, compact ? 4 : 6);
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }} preserveAspectRatio="xMidYMid meet">
@@ -534,7 +571,7 @@ function PolarReticle({ m }: { m: MapModel }) {
         return (
           <g key={`rt${k}`}>
             <line x1={x0} y1={y0} x2={x1} y2={y1} stroke="rgba(255,255,255,0.24)" />
-            <text x={tx} y={ty + 3} fill={AXIS} fontSize={8} textAnchor="middle">{k}</text>
+            <text x={tx} y={ty + 3} fill={AXIS} fontSize={8 * fz} textAnchor="middle">{k}</text>
           </g>
         );
       })}
@@ -545,7 +582,7 @@ function PolarReticle({ m }: { m: MapModel }) {
           return (
             <g key={label}>
               <path d={arcPath(RAIL, ang((k as number) - w), ang((k as number) + w))} fill="none" stroke={col} strokeWidth={5} opacity={0.75} strokeLinecap="round" />
-              <text x={lx} y={ly + 3} fill={col} fontSize={7.6} fontWeight={700} letterSpacing="0.1em" textAnchor="middle">{label}</text>
+              <text x={lx} y={ly + 3} fill={col} fontSize={7.6 * fz} fontWeight={700} letterSpacing="0.1em" textAnchor="middle">{label}</text>
             </g>
           );
         })}
@@ -555,7 +592,7 @@ function PolarReticle({ m }: { m: MapModel }) {
         return (
           <g>
             <line x1={x0} y1={y0} x2={x1} y2={y1} stroke={FLIP_C} strokeWidth={1.3} strokeDasharray="5 4" opacity={0.85} />
-            <text x={tx} y={ty} fill={FLIP_C} fontSize={8} fontWeight={700} textAnchor="middle">{`FLIP ${fmtStrike(m.flip)}`}</text>
+            <text x={tx} y={ty} fill={FLIP_C} fontSize={8 * fz} fontWeight={700} textAnchor="middle">{`FLIP ${fmtStrike(m.flip)}`}</text>
           </g>
         );
       })()}
@@ -568,7 +605,7 @@ function PolarReticle({ m }: { m: MapModel }) {
         return (
           <g key={`ct${i}`}>
             <line x1={x0} y1={y0} x2={x1} y2={y1} stroke="rgba(255,255,255,0.10)" />
-            <text x={tx} y={ty + 3} fill={AXIS} fontSize={7.2} fontWeight={600} textAnchor="middle" opacity={0.85}>{label}</text>
+            <text x={tx} y={ty + 3} fill={AXIS} fontSize={7.2 * fz} fontWeight={600} textAnchor="middle" opacity={0.85}>{label}</text>
           </g>
         );
       })}
@@ -584,7 +621,7 @@ function PolarReticle({ m }: { m: MapModel }) {
             <circle cx={x} cy={y} r={1.4} fill={rgba(c, 0.92)} />
             {last && <>
               <circle cx={x} cy={y} r={r + 7} fill="none" stroke={rgba(c, 0.4)} strokeDasharray="2 3" />
-              <text x={x} y={y + r + 18} fill={rgba(c, 0.92)} fontSize={7.4} fontWeight={700} letterSpacing="0.1em" textAnchor="middle">SPOT NOW</text>
+              <text x={x} y={y + r + 18} fill={rgba(c, 0.92)} fontSize={7.4 * fz} fontWeight={700} letterSpacing="0.1em" textAnchor="middle">SPOT NOW</text>
             </>}
           </g>
         );
@@ -609,12 +646,12 @@ function PolarReticle({ m }: { m: MapModel }) {
 
       {/* core */}
       <circle cx={CX} cy={CY} r={R0 - 14} fill="rgba(5,6,10,0.94)" stroke="rgba(255,255,255,0.10)" />
-      <text x={CX} y={CY - 12} fill={HOME_THEME.muted} opacity={0.4} fontSize={7.6} fontWeight={700} letterSpacing="0.16em" textAnchor="middle">SPOT</text>
-      <text x={CX} y={CY + 9} fill="#fff" fontSize={20} fontWeight={800} textAnchor="middle">{fmtSpot(m.spot)}</text>
+      <text x={CX} y={CY - 12} fill={HOME_THEME.muted} opacity={0.4} fontSize={7.6 * fz} fontWeight={700} letterSpacing="0.16em" textAnchor="middle">SPOT</text>
+      <text x={CX} y={CY + 9} fill="#fff" fontSize={20 * fz} fontWeight={800} textAnchor="middle">{fmtSpot(m.spot)}</text>
 
-      {/* ring map */}
-      <Lab x={780} y={38}>RING MAP</Lab>
-      {[
+      {/* ring map — dropped in the grid, where it would render at ~5px */}
+      {!compact && <Lab x={780} y={38}>RING MAP</Lab>}
+      {!compact && [
         ["INNER RING", m.hasDex ? "DEX by strike — green = dealers short delta" : "DEX unavailable for this session"],
         ["BAND RINGS", `heatmap — ${ringCount} time slices, oldest inside`],
         ["SPOKES", "net GEX magnitude by strike"],
@@ -632,7 +669,8 @@ function PolarReticle({ m }: { m: MapModel }) {
 }
 
 // ═════════════════════════════ C · SPINE ═════════════════════════════════════
-function Spine({ m }: { m: MapModel }) {
+function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
+  const fz = useFz();
   const W = 1240, H = 560;
   const SPX = 470, SPW = 300;
   const TY = 26, TH = 470;
@@ -643,12 +681,12 @@ function Spine({ m }: { m: MapModel }) {
   const cw = SPW / nb;
   const LW = SPX - 62, LWW = 300;
   const RW = SPX + SPW + 62, RWW = 300;
-  const ticks = strikeTicks(m.lo, m.hi);
+  const ticks = strikeTicks(m.lo, m.hi, compact);
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }} preserveAspectRatio="xMidYMid meet">
       {/* spine heat */}
-      <Lab x={SPX} y={TY - 8}>{`SPINE · STRIKE × TIME HEAT (LAST ${nb} SLOTS)`}</Lab>
+      <Lab x={SPX} y={TY - 8}>{compact ? `HEAT · LAST ${nb}` : `SPINE · STRIKE × TIME HEAT (LAST ${nb} SLOTS)`}</Lab>
       <rect x={SPX} y={TY} width={SPW} height={TH} rx={10} fill="rgba(0,0,0,0.30)" stroke="rgba(255,255,255,0.07)" />
       {Array.from({ length: nb }, (_, t) => {
         const ci = c0 + t;
@@ -670,7 +708,7 @@ function Spine({ m }: { m: MapModel }) {
           <g key={label}>
             <rect x={SPX} y={yOf(k as number) - 5} width={SPW} height={10} fill={col} opacity={0.13} />
             <line x1={SPX} y1={yOf(k as number)} x2={SPX + SPW} y2={yOf(k as number)} stroke={col} opacity={0.55} />
-            <text x={SPX + 8} y={yOf(k as number) - 8} fill={col} fontSize={7.6} fontWeight={700} letterSpacing="0.12em">
+            <text x={SPX + 8} y={yOf(k as number) - 8} fill={col} fontSize={7.6 * fz} fontWeight={700} letterSpacing="0.12em">
               {`${label} · ${fmtStrike(k)}`}
             </text>
           </g>
@@ -678,7 +716,7 @@ function Spine({ m }: { m: MapModel }) {
       {m.flip != null && (
         <g>
           <line x1={SPX} y1={yOf(m.flip)} x2={SPX + SPW} y2={yOf(m.flip)} stroke={FLIP_C} strokeDasharray="5 4" strokeWidth={1.2} />
-          <text x={SPX + SPW - 8} y={yOf(m.flip) + 13} fill={FLIP_C} fontSize={7.8} fontWeight={700} letterSpacing="0.12em" textAnchor="end">
+          <text x={SPX + SPW - 8} y={yOf(m.flip) + 13} fill={FLIP_C} fontSize={7.8 * fz} fontWeight={700} letterSpacing="0.12em" textAnchor="end">
             {`FLIP ${fmtStrike(m.flip)}`}
           </text>
         </g>
@@ -702,8 +740,8 @@ function Spine({ m }: { m: MapModel }) {
       {m.spot > 0 && (
         <g>
           <line x1={LW - LWW} y1={yOf(m.spot)} x2={RW + RWW} y2={yOf(m.spot)} stroke="#fff" opacity={0.3} strokeDasharray="2 3" />
-          <rect x={SPX + SPW / 2 - 42} y={yOf(m.spot) - 11} width={84} height={22} rx={5} fill="rgba(5,6,10,0.9)" stroke="rgba(255,255,255,0.45)" />
-          <text x={SPX + SPW / 2} y={yOf(m.spot) + 4.5} fill="#fff" fontSize={11} fontWeight={700} textAnchor="middle">{fmtSpot(m.spot)}</text>
+          <rect x={SPX + SPW / 2 - 42 * fz} y={yOf(m.spot) - 11 * fz} width={84 * fz} height={22 * fz} rx={5} fill="rgba(5,6,10,0.9)" stroke="rgba(255,255,255,0.45)" />
+          <text x={SPX + SPW / 2} y={yOf(m.spot) + 4.5 * fz} fill="#fff" fontSize={11 * fz} fontWeight={700} textAnchor="middle">{fmtSpot(m.spot)}</text>
         </g>
       )}
 
@@ -717,10 +755,12 @@ function Spine({ m }: { m: MapModel }) {
         return <rect key={`lw${k}`} x={LW - w} y={yOf(k) - rowH * 0.4} width={w} height={Math.max(1.4, rowH * 0.8)} rx={1.5}
           fill={rgba(v >= 0 ? CYAN_RGB : ORAN_RGB, 0.26 + 0.55 * Math.abs(v))} />;
       })}
-      {ticks.map((k) => <text key={`lt${k}`} x={SPX - 14} y={yOf(k) + 3} fill={AXIS} fontSize={8.4} textAnchor="end">{k}</text>)}
-      <text x={LW - LWW} y={TY + TH + 20} fill="rgba(255,255,255,0.34)" fontSize={9}>
-        bar length = |GEX| · blue = long gamma (dealers dampen) · orange = short gamma (dealers amplify)
-      </text>
+      {ticks.map((k) => <text key={`lt${k}`} x={SPX - 14} y={yOf(k) + 3} fill={AXIS} fontSize={8.4 * fz} textAnchor="end">{k}</text>)}
+      {!compact && (
+        <text x={LW - LWW} y={TY + TH + 20} fill="rgba(255,255,255,0.34)" fontSize={9}>
+          bar length = |GEX| · blue = long gamma (dealers dampen) · orange = short gamma (dealers amplify)
+        </text>
+      )}
 
       {/* right wing — DEX */}
       <Lab x={RW} y={TY - 8}>NET DEX ►</Lab>
@@ -734,10 +774,12 @@ function Spine({ m }: { m: MapModel }) {
             return <rect key={`rw${k}`} x={RW} y={yOf(k) - rowH * 0.4} width={w} height={Math.max(1.4, rowH * 0.8)} rx={1.5}
               fill={dexColor(v, 0.24 + 0.55 * Math.abs(v))} />;
           })}
-          {ticks.map((k) => <text key={`rt${k}`} x={SPX + SPW + 14} y={yOf(k) + 3} fill={AXIS} fontSize={8.4}>{k}</text>)}
-          <text x={RW} y={TY + TH + 20} fill="rgba(255,255,255,0.34)" fontSize={9}>
-            bar length = |DEX| · green = dealers short delta · rose = dealers long delta
-          </text>
+          {ticks.map((k) => <text key={`rt${k}`} x={SPX + SPW + 14} y={yOf(k) + 3} fill={AXIS} fontSize={8.4 * fz}>{k}</text>)}
+          {!compact && (
+            <text x={RW} y={TY + TH + 20} fill="rgba(255,255,255,0.34)" fontSize={9}>
+              bar length = |DEX| · green = dealers short delta · rose = dealers long delta
+            </text>
+          )}
         </g>
       ) : <NoDex x={RW} y={TY} w={RWW} h={TH} />}
     </svg>
@@ -745,7 +787,8 @@ function Spine({ m }: { m: MapModel }) {
 }
 
 // ═════════════════════════ D · GAMMA TERRAIN ═════════════════════════════════
-function GammaTerrain({ m }: { m: MapModel }) {
+function GammaTerrain({ m, compact }: { m: MapModel; compact?: boolean }) {
+  const fz = useFz();
   const W = 1240, H = 520;
   const L = 34, R = W - 210, TP = 26, BT = H - 52;
   const FWD = R - L, FHT = BT - TP;
@@ -753,8 +796,8 @@ function GammaTerrain({ m }: { m: MapModel }) {
 
   const yOf = (k: number) => TP + FHT - ((k - m.lo) / Math.max(1, m.hi - m.lo)) * FHT;
   const xOf = (i: number) => L + (i / Math.max(1, m.cols.length - 1)) * FWD;
-  const ticks = strikeTicks(m.lo, m.hi);
-  const timeTicks = pickTimeTicks(m.cols);
+  const ticks = strikeTicks(m.lo, m.hi, compact);
+  const timeTicks = pickTimeTicks(m.cols, compact ? 4 : 6);
   const rowH = FHT / Math.max(1, m.strikes.length - 1);
 
   // Terrain fill + iso-GEX contours. Canvas rather than SVG: this is a per-pixel
@@ -905,14 +948,14 @@ function GammaTerrain({ m }: { m: MapModel }) {
         })}
         {m.flip != null && (
           <g>
-            <rect x={L + 6} y={yOf(m.flip) + 5} width={186} height={14} rx={3} fill="rgba(5,6,10,0.8)" />
-            <text x={L + 11} y={yOf(m.flip) + 15} fill={FLIP_C} fontSize={8} fontWeight={700} letterSpacing="0.1em">
-              {`GAMMA FLIP  ${fmtStrike(m.flip)}  ·  COASTLINE`}
+            <rect x={L + 6} y={yOf(m.flip) + 5} width={(compact ? 118 : 186) * fz} height={14 * fz} rx={3} fill="rgba(5,6,10,0.84)" />
+            <text x={L + 11} y={yOf(m.flip) + 5 + 10 * fz} fill={FLIP_C} fontSize={8 * fz} fontWeight={700} letterSpacing="0.1em">
+              {compact ? `FLIP ${fmtStrike(m.flip)}` : `GAMMA FLIP  ${fmtStrike(m.flip)}  ·  COASTLINE`}
             </text>
           </g>
         )}
         {timeTicks.map(({ i, label }) => (
-          <text key={`tt${i}`} x={xOf(i)} y={BT + 16} fill={AXIS} fontSize={8} textAnchor="middle" opacity={0.75}>{label}</text>
+          <text key={`tt${i}`} x={xOf(i)} y={BT + 16} fill={AXIS} fontSize={8 * fz} textAnchor="middle" opacity={0.75}>{label}</text>
         ))}
 
         {/* ridge rail */}
@@ -923,20 +966,22 @@ function GammaTerrain({ m }: { m: MapModel }) {
           return <rect key={`rr${k}`} x={R + 22} y={yOf(k) - rowH * 0.42} width={Math.abs(v) * 34 + 1.5} height={Math.max(1.2, rowH * 0.84)} rx={1}
             fill={gamColor(v, 0.3 + 0.55 * Math.abs(v))} />;
         })}
-        {ticks.map((k) => <text key={`rrt${k}`} x={R + 74} y={yOf(k) + 3} fill={AXIS} fontSize={8}>{k}</text>)}
+        {ticks.map((k) => <text key={`rrt${k}`} x={R + 74} y={yOf(k) + 3} fill={AXIS} fontSize={8 * fz}>{k}</text>)}
         {([[m.callWall, HOME_THEME.green, "RIDGE"], [m.magnet, LIGHT_BLUE, "PEAK"], [m.flip, FLIP_C, "COAST"], [m.putWall, HOME_THEME.orange, "TRENCH"]] as [number | null, string, string][])
           .filter(([k]) => k != null).map(([k, col, tag]) => (
             <g key={tag}>
-              <rect x={R + 106} y={yOf(k as number) - 7} width={54} height={14} rx={3} fill={`${col}26`} stroke={`${col}80`} />
-              <text x={R + 111} y={yOf(k as number) + 3.5} fill={col} fontSize={7.4} fontWeight={700} letterSpacing="0.08em">{tag}</text>
+              <rect x={R + 106} y={yOf(k as number) - 7 * fz} width={54 * fz} height={14 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
+              <text x={R + 111} y={yOf(k as number) + 3.5 * fz} fill={col} fontSize={7.4 * fz} fontWeight={700} letterSpacing="0.08em">{tag}</text>
             </g>
           ))}
         {m.spot > 0 && (
           <polygon points={`${R + 14},${yOf(m.spot)} ${R + 5},${yOf(m.spot) - 5} ${R + 5},${yOf(m.spot) + 5}`} fill="#fff" />
         )}
-        <text x={L} y={H - 12} fill="rgba(255,255,255,0.3)" fontSize={8} fontWeight={600} letterSpacing="0.14em">
-          ELEVATION = NET GAMMA · CONTOURS = ISO-GEX · DASHED COASTLINE = ZERO GAMMA
-        </text>
+        {!compact && (
+          <text x={L} y={H - 12} fill="rgba(255,255,255,0.3)" fontSize={8} fontWeight={600} letterSpacing="0.14em">
+            ELEVATION = NET GAMMA · CONTOURS = ISO-GEX · DASHED COASTLINE = ZERO GAMMA
+          </text>
+        )}
       </svg>
     </div>
   );
@@ -947,10 +992,14 @@ function pathD(pts: [number, number][]): string {
   return pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`).join("");
 }
 
-/** Round strike labels — every 20 points if the range is wide, else every 10/5. */
-function strikeTicks(lo: number, hi: number): number[] {
+/**
+ * Round strike labels — every 20 points if the range is wide, else every 10/5.
+ * `sparse` halves the density for the 2×2 grid, where the full set collides.
+ */
+function strikeTicks(lo: number, hi: number, sparse = false): number[] {
   const span = hi - lo;
-  const step = span > 400 ? 50 : span > 200 ? 20 : span > 90 ? 10 : 5;
+  const base = span > 400 ? 50 : span > 200 ? 20 : span > 90 ? 10 : 5;
+  const step = sparse ? base * 2 : base;
   const out: number[] = [];
   for (let k = Math.ceil(lo / step) * step; k <= hi; k += step) out.push(k);
   return out;
@@ -967,21 +1016,52 @@ function pickTimeTicks(cols: MapColumn[], count = 6): { i: number; label: string
 }
 
 // ── tab ──────────────────────────────────────────────────────────────────────
-const segBtn = (active: boolean): CSSProperties => ({
-  padding: "7px 14px",
-  borderRadius: 8,
-  border: `1px solid ${active ? HOME_THEME.cyan : HOME_THEME.border}`,
-  background: active ? "linear-gradient(180deg,rgba(33,158,188,.16),rgba(33,158,188,.04))" : "rgba(255,255,255,0.03)",
-  color: active ? HOME_THEME.cyan : HOME_THEME.text,
-  fontSize: 12,
-  fontWeight: 800,
-  letterSpacing: "0.06em",
-  textTransform: "uppercase",
-  cursor: "pointer",
-});
+/**
+ * One map in the 2×2 grid. Clicking the header spans it across both columns and
+ * turns compact mode off — the grid is for comparing the four at a glance, the
+ * expanded card is for reading one of them.
+ */
+function MapCard({ def, m, expanded, onToggle }: {
+  def: (typeof CONCEPTS)[number];
+  m: MapModel;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const Body = def.key === "tape" ? TapeField
+    : def.key === "reticle" ? PolarReticle
+    : def.key === "spine" ? Spine
+    : GammaTerrain;
+  return (
+    <Card variant="classic" padding={16} style={expanded ? { gridColumn: "1 / -1" } : undefined}>
+      <button
+        type="button"
+        onClick={onToggle}
+        title={expanded ? "Collapse back into the grid" : "Expand to full width"}
+        style={{
+          display: "flex", alignItems: "baseline", gap: 10, width: "100%",
+          background: "none", border: "none", padding: 0, marginBottom: 10,
+          cursor: "pointer", textAlign: "left", color: HOME_THEME.text,
+        }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" }}>
+          {def.label}
+        </span>
+        <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.45, flex: 1, minWidth: 0 }}>
+          {def.blurb}
+        </span>
+        <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.cyan, flexShrink: 0 }}>
+          {expanded ? "COLLAPSE" : "EXPAND"}
+        </span>
+      </button>
+      <FzCtx.Provider value={expanded ? 1 : 1.7}>
+        <Body m={m} compact={!expanded} />
+      </FzCtx.Provider>
+    </Card>
+  );
+}
 
 export default function GexMapTab() {
-  const [concept, setConcept] = useState<Concept>("tape");
+  const [expanded, setExpanded] = useState<Concept | null>(null);
   const [date, setDate] = useState<string>("latest");
   const [data, setData] = useState<MapPayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -1006,7 +1086,6 @@ export default function GexMapTab() {
   useEffect(() => { void load(date); }, [date, load]);
 
   const model = useMemo(() => buildModel(data), [data]);
-  const conceptDef = CONCEPTS.find((c) => c.key === concept) ?? CONCEPTS[0];
 
   const sessionOptions = useMemo(() => {
     const opts = (data?.sessions ?? []).map((s) => ({ value: s.date, label: `${s.date} · ${s.snaps} snaps` }));
@@ -1015,15 +1094,12 @@ export default function GexMapTab() {
 
   return (
     <>
+      <style>{`
+        .gexmap-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; }
+        @media (max-width: 1180px) { .gexmap-grid { grid-template-columns: minmax(0, 1fr); } }
+      `}</style>
       <Card variant="budget" padding={18}>
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {CONCEPTS.map((c) => (
-              <button key={c.key} type="button" onClick={() => setConcept(c.key)} style={segBtn(concept === c.key)}>
-                {c.label}
-              </button>
-            ))}
-          </div>
           <div style={{ minWidth: 210 }}>
             <ThemedSelect
               value={date}
@@ -1032,15 +1108,20 @@ export default function GexMapTab() {
             />
           </div>
           <button type="button" onClick={() => void load(date)} style={homeButtonStyle}>Refresh</button>
+          {expanded && (
+            <button type="button" onClick={() => setExpanded(null)} style={homeButtonStyle}>Back to 2×2</button>
+          )}
           <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.6, flex: 1, minWidth: 220 }}>
-            {conceptDef.blurb}
+            All four readouts, same session, same scales — click any card header to expand it.
           </div>
         </div>
         <div style={{ fontSize: 11.5, color: HOME_THEME.text, opacity: 0.45, marginTop: 10, lineHeight: 1.6 }}>
           0DTE only — the route pins expiry to the session date. GEX ladder from{" "}
           <code style={{ color: LIGHT_BLUE }}>option_strike_gex_history</code> (retention ~2 sessions), DEX from{" "}
-          <code style={{ color: LIGHT_BLUE }}>greek_snapshots</code>. Bubbles ride spot: one per slot, sized by |GEX| at
-          the strike price was trading on.
+          <code style={{ color: LIGHT_BLUE }}>net_dex</code> in the same row (added{" "}
+          {new Date(2026, 7, 1).toLocaleDateString("en-US", { month: "short", day: "numeric" })}; sessions before that
+          fall back to <code style={{ color: LIGHT_BLUE }}>greek_snapshots</code>, last-snapshot ladder only). Bubbles
+          ride spot: one per slot, sized by |GEX| at the strike price was trading on.
         </div>
       </Card>
 
@@ -1061,26 +1142,44 @@ export default function GexMapTab() {
         <RegimeStrip m={model} symbol={data.symbol} date={data.date} asOf={data.levels.asOf} />
       )}
 
-      <Card variant="dissolve" padding={20}>
-        {loading && !model ? (
+      {loading && !model ? (
+        <Card variant="classic" padding={20}>
           <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6, padding: 40, textAlign: "center" }}>
             Loading 0DTE map…
           </div>
-        ) : !model ? (
+        </Card>
+      ) : !model ? (
+        <Card variant="classic" padding={20}>
           <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6, padding: 40, textAlign: "center" }}>
             No strike ladder for this session — nothing to draw.
           </div>
-        ) : concept === "tape" ? <TapeField m={model} />
-          : concept === "reticle" ? <PolarReticle m={model} />
-          : concept === "spine" ? <Spine m={model} />
-          : <GammaTerrain m={model} />}
-      </Card>
+        </Card>
+      ) : (
+        // Hard 2×2. `auto-fit` was wrong here — on a wide monitor it fits three
+        // across and the layout stops being the 2×2 it is supposed to be. The
+        // only responsive behaviour wanted is a single column once two side by
+        // side are unreadable at any type scale, which needs a media query, so
+        // this carries its own <style> rather than faking it with auto-fit.
+        <div className="gexmap-grid">
+          {CONCEPTS.map((def) => (
+            <MapCard
+              key={def.key}
+              def={def}
+              m={model}
+              expanded={expanded === def.key}
+              onToggle={() => setExpanded((e) => (e === def.key ? null : def.key))}
+            />
+          ))}
+        </div>
+      )}
 
       {model && data && (
         <div style={{ fontSize: 11.5, color: HOME_THEME.text, opacity: 0.4, lineHeight: 1.7 }}>
           {data.symbol} · {data.date} 0DTE · {data.columns.length} slots @ {data.slotMin}m ·{" "}
           {data.strikes.length} strikes ({fmtStrike(model.lo)}–{fmtStrike(model.hi)}) ·{" "}
-          {model.hasDex ? `${data.dexSeries.length} DEX snapshots` : "no DEX"} · gamma scale {fmtBn(model.gMax)} per strike
+          {model.hasDex
+            ? `${data.dexSeries.length} DEX snapshots (${model.dexSurface ? "strike×time, recorded with gamma" : "last-snapshot ladder"})`
+            : "no DEX"} · gamma scale {fmtBn(model.gMax)} per strike
         </div>
       )}
     </>

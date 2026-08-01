@@ -7274,6 +7274,27 @@ if barstate.islast
     const GEX_MAP_TTL_MS = 60_000;
     const gexMapCache = new Map(); // key → { at, payload }
 
+    // net_dex / net_vol_dex are added by server-v2/gex-history-writer.js at
+    // first write. A server that has not written since the upgrade — or a DB
+    // restored from an older dump — will not have them, and SELECTing a missing
+    // column is a hard 42703, not an empty result. Probe once, then fall back to
+    // greek_snapshots for sessions recorded before the columns existed.
+    let dexColsPresent = null; // null = unprobed, true/false = known
+    const hasDexCols = async () => {
+      if (dexColsPresent !== null) return dexColsPresent;
+      try {
+        const r = await libDb.queryAll(
+          `SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'option_strike_gex_history'
+              AND column_name IN ('net_dex', 'net_vol_dex')`
+        );
+        dexColsPresent = r.length === 2;
+      } catch {
+        dexColsPresent = false;
+      }
+      return dexColsPresent;
+    };
+
     // `date` / `expiry` come back as text on this table, but a pg DATE column
     // would arrive as a JS Date. Normalize both so the cache key, the SQL
     // parameter and the JSON all agree on 'YYYY-MM-DD'.
@@ -7347,10 +7368,20 @@ if barstate.islast
           // One row per (slot, strike), taking the LAST snapshot inside each
           // slot rather than averaging: these are stock quantities, not flows,
           // and an average of two ladders is a ladder that never existed.
+          //
+          // DEX rides along in the SAME row when the columns exist. That is the
+          // whole point of persisting it next to gamma: one writer, one clock,
+          // so the DEX ladder is the ladder that was live at that exact slot
+          // rather than the nearest row from a second table on its own cadence.
+          const withDex = await hasDexCols();
+          const dexSel = withDex
+            ? ', COALESCE(net_dex, 0) AS net_dex, COALESCE(net_vol_dex, 0) AS net_vol_dex'
+            : '';
+          const dexAgg = withDex ? ', SUM(s.net_dex + s.net_vol_dex) AS d' : '';
           const cells = await libDb.queryAll(
             `WITH slotted AS (
                SELECT (timestamp / ?)::bigint AS slot, timestamp, strike,
-                      net_gex, COALESCE(net_vol_gex, 0) AS net_vol_gex, spot
+                      net_gex, COALESCE(net_vol_gex, 0) AS net_vol_gex, spot${dexSel}
                  FROM option_strike_gex_history
                 WHERE symbol = ? AND date = ? AND expiry = ?
                   AND strike BETWEEN ? AND ?
@@ -7361,7 +7392,7 @@ if barstate.islast
                  FROM slotted ORDER BY slot, timestamp DESC
              )
              SELECT s.slot, s.timestamp AS t, s.strike,
-                    SUM(s.net_gex + s.net_vol_gex) AS v, MAX(s.spot) AS spot
+                    SUM(s.net_gex + s.net_vol_gex) AS v, MAX(s.spot) AS spot${dexAgg}
                FROM slotted s
                JOIN pick p ON p.slot = s.slot AND p.timestamp = s.timestamp
               GROUP BY s.slot, s.timestamp, s.strike
@@ -7383,14 +7414,28 @@ if barstate.islast
           const idxOf = new Map(strikes.map((k, i) => [k, i]));
 
           const bySlot = new Map();
+          let dexCellCount = 0;
           for (const c of cells) {
             const slot = Number(c.slot);
             let col = bySlot.get(slot);
             if (!col) {
-              col = { t: Number(c.t), spot: 0, v: new Array(strikes.length).fill(0) };
+              col = {
+                t: Number(c.t), spot: 0,
+                v: new Array(strikes.length).fill(0),
+                d: withDex ? new Array(strikes.length).fill(0) : null,
+              };
               bySlot.set(slot, col);
             }
-            col.v[idxOf.get(Number(c.strike))] = Number(c.v ?? 0);
+            const si = idxOf.get(Number(c.strike));
+            col.v[si] = Number(c.v ?? 0);
+            if (withDex && c.d != null) {
+              const dv = Number(c.d);
+              col.d[si] = dv;
+              // Count only NON-ZERO cells. A session written before the columns
+              // existed backfills as all-zero, which is a flat book — exactly
+              // the reading this route refuses to fake.
+              if (dv !== 0) dexCellCount++;
+            }
             const spot = Number(c.spot ?? 0);
             if (spot > 0 && !(col.spot > 0)) col.spot = spot;
           }
@@ -7415,14 +7460,33 @@ if barstate.islast
             return crossings.reduce((best, c) => (Math.abs(c - spot) < Math.abs(best - spot) ? c : best));
           };
 
-          const columns = [...bySlot.entries()]
-            .sort((a, b) => a[0] - b[0])
-            .map(([, col]) => ({ t: col.t, spot: col.spot, flip: flipOf(col.v, col.spot), v: col.v }));
+          const ordered = [...bySlot.entries()].sort((a, b) => a[0] - b[0]).map(([, col]) => col);
+          const columns = ordered.map((col) => ({ t: col.t, spot: col.spot, flip: flipOf(col.v, col.spot), v: col.v }));
 
-          // ── DEX. Additive; never fatal. ──────────────────────────────────
+          // ── DEX ──────────────────────────────────────────────────────────
+          // Preferred source is the ladder recorded in the same row as gamma.
+          // greek_snapshots stays as the fallback for sessions written before
+          // net_dex existed — it is a different writer on a different cadence,
+          // so it can only ever supply a last-snapshot ladder and a net series,
+          // never a slot-aligned strike×time surface.
           let dexByStrike = [];
           let dexSeries = [];
-          try {
+          let dexColumns = [];
+          let dexSource = 'none';
+
+          if (withDex && dexCellCount > 0) {
+            dexSource = 'option_strike_gex_history';
+            dexColumns = ordered.map((col) => ({ t: col.t, d: col.d }));
+            const lastD = ordered[ordered.length - 1].d;
+            dexByStrike = strikes
+              .map((k, i) => ({ strike: k, dex: lastD[i] }))
+              .filter((r) => r.dex !== 0);
+            dexSeries = ordered.map((col) => ({
+              t: col.t, dex: col.d.reduce((a, b) => a + b, 0),
+            }));
+          }
+
+          if (dexSource === 'none') try {
             const series = await libDb.queryAll(
               `SELECT EXTRACT(EPOCH FROM ts) * 1000 AS t, SUM(delta_net) AS v
                  FROM greek_snapshots
@@ -7445,14 +7509,19 @@ if barstate.islast
               .map((r) => ({ strike: Number(r.strike), dex: Number(r.v ?? 0) }))
               .filter((r) => r.strike >= kLo && r.strike <= kHi);
 
-            if (!dexSeries.length && !dexByStrike.length) {
-              notes.dex = `no greek_snapshots rows for ${bareSymbol} ${date} 0DTE — DEX layers will render empty`;
+            if (dexSeries.length || dexByStrike.length) {
+              dexSource = 'greek_snapshots';
+              notes.dex = withDex
+                ? `session predates per-strike DEX recording — falling back to greek_snapshots (last-snapshot ladder only, no strike×time surface)`
+                : `net_dex column not present yet — falling back to greek_snapshots. It appears once server-v2 writes one GEX snapshot after the upgrade.`;
+            } else {
+              notes.dex = `no DEX for ${bareSymbol} ${date} 0DTE in either option_strike_gex_history or greek_snapshots — DEX layers will render empty`;
             }
           } catch (err) {
             // LOUD. A silently empty DEX ring is indistinguishable from a
             // genuinely flat book, which is the worst possible failure mode on
             // a positioning map.
-            console.error('[gex-map] DEX read failed:', req.url, err);
+            console.error('[gex-map] DEX fallback read failed:', req.url, err);
             notes.dex = `DEX unavailable: ${String(err && err.message ? err.message : err)}`;
           }
 
@@ -7488,7 +7557,8 @@ if barstate.islast
 
           const payload = {
             symbol, date, expiry, slotMin,
-            strikes, columns, dexByStrike, dexSeries, levels, sessions, notes,
+            strikes, columns, dexByStrike, dexSeries, dexColumns, dexSource,
+            levels, sessions, notes,
           };
           gexMapCache.set(cacheKey, { at: Date.now(), payload });
           send(res, 200, payload);
