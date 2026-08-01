@@ -1156,24 +1156,46 @@ export default function EsChartCard({
           // 1-min bucket for the bubble trail (last write in the minute wins).
           const minTs = Math.floor(Date.now() / 60_000) * 60_000;
           const mmap = minuteColsRef.current;
-          // The bubble map holds ONE session. The first live frame of a new ET
-          // day lands in a map still full of the previous one — and now that the
-          // backfill falls back to the last session that traded, that stale day
-          // can be sitting there from Friday all the way into Monday's open.
-          // Mixing them normalizes two sessions against a single radius scale.
-          // Roll it forward here instead of waiting on the next backfill, which
-          // on ES has no poll and may not re-fire for hours.
-          // Not in replay: there the map is deliberately the scrubbed day, and
-          // live frames are already hidden by the cursor clamp at draw time.
-          if (!replayOnRef.current) {
-            const liveDay = etDayKey(minTs);
-            if (liveDay !== lastBubbleDayRef.current) {
-              lastBubbleDayRef.current = liveDay;
-              mmap.clear();
-            }
+          // ── Does this live frame belong in the bubble trail? ─────────────────
+          // The bubble map holds ONE session, and the BACKFILL owns which one
+          // (lastBubbleDayRef). A live frame may only EXTEND that day — it never
+          // switches it and never clears the map.
+          //
+          // /ws/gex keeps publishing aux/spot frames when nothing is trading,
+          // each stamped with the current wall clock and carrying the last
+          // snapshot it ever saw. On a Saturday that is a frame dated Saturday
+          // holding Friday's gamma, and barAt() clamps any out-of-range time to
+          // the final bar — so it landed as a single stale column of bubbles
+          // parked one bar past Friday's close, floating above candles it had
+          // nothing to do with. Dropping it is the whole fix: the trail keeps
+          // the backfilled session, and the rail + heatmap below still get the
+          // frame exactly as before.
+          //
+          // The empty-map case is the live path's one chance to name the day, so
+          // a fresh mount mid-session paints bubbles without waiting on the
+          // ~700KB backfill. Gated on etSessionStarted so it can't name a day
+          // that never traded — on a weekend the map stays empty until the
+          // backfill fills it with Friday.
+          //
+          // Session ROLLOVER is deliberately not handled here. It looks like it
+          // belongs (Monday 09:31 arriving on a map still holding Friday), but a
+          // live path that can reassign the day fights the backfill for it: the
+          // backfill says Friday because that is the newest data, the next frame
+          // says Monday, and each wipes the other's map on every re-fire. The
+          // backfill already covers the real rollover from both sides — the
+          // wall-clock day wipe above, and the 2880→1440 window change at 09:30,
+          // either of which re-keys and refills it.
+          const liveDay = etDayKey(minTs);
+          if (!mmap.size && !lastBubbleDayRef.current && etSessionStarted(minTs)) {
+            lastBubbleDayRef.current = liveDay;
           }
-          mmap.set(minTs, { slotTs: minTs, cells, spot: spx > 0 ? spx : undefined });
-          if (mmap.size > 2000) mmap.delete(Math.min(...mmap.keys()));
+          // Replay passes through untouched: there the map is deliberately the
+          // scrubbed day, and live frames are already hidden by the cursor clamp
+          // at draw time.
+          if (replayOnRef.current || liveDay === lastBubbleDayRef.current) {
+            mmap.set(minTs, { slotTs: minTs, cells, spot: spx > 0 ? spx : undefined });
+            if (mmap.size > 2000) mmap.delete(Math.min(...mmap.keys()));
+          }
           const map = columnsRef.current;
           // Stamp the live column with the SPX spot from THIS frame so it ages
           // into history carrying its own basis, exactly like a DB-backfilled one.
