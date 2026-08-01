@@ -131,6 +131,24 @@ export interface EsChartCardProps {
   hideCapture?: boolean;
 }
 
+/**
+ * Index of the last frame at or before `ts`, on THIS card's own bar grid.
+ *
+ * The shared replay cursor travels as a timestamp, so every card has to land it
+ * on its own frames — the cards can be different symbols and a thin tape simply
+ * prints fewer bars. Snapping BACKWARDS is the point: rounding to the nearest
+ * frame would let a card reveal a bar that hasn't happened yet at the shared
+ * cursor, and a replay that leaks the future is worse than one that lags a bar.
+ * Frames are ascending, so the first frame past `ts` ends it.
+ */
+function frameIdxAtOrBefore(frames: number[], ts: number): number {
+  let idx = 0;
+  for (let i = 0; i < frames.length; i++) {
+    if (frames[i] <= ts) idx = i; else break;
+  }
+  return idx;
+}
+
 export default function EsChartCard({
   slot = 0,
   settingsSlot,
@@ -666,6 +684,15 @@ export default function EsChartCard({
   const replayTs = replayOn && replayFrames.length
     ? replayFrames[Math.min(replayIdx, replayFrames.length - 1)]
     : null;
+  // Read by the channel subscriber, which is a []-dep useCallback and so cannot
+  // close over the frames. Assigned during render, like replayGexRef below.
+  const replayFramesRef = useRef<number[]>(replayFrames);
+  replayFramesRef.current = replayFrames;
+  // Last instant the channel named, kept so a follower can re-snap to it when
+  // its OWN frames change. Without this, a card that loads its candles a beat
+  // after the owner's last broadcast sits at bar 0 — invisible during playback
+  // (the next tick corrects it) and stuck until you scrub while paused.
+  const sharedRpTsRef = useRef<number | null>(null);
   useEffect(() => { replayOnRef.current = replayOn; }, [replayOn]);
   useEffect(() => { replayTsRef.current = replayTs; }, [replayTs]);
   // Keep the cursor in range as live bars extend the session.
@@ -698,13 +725,32 @@ export default function EsChartCard({
   // Mirror the owner's replay state onto the broadcast channel. Deliberately
   // NOT persisted (broadcastSlot, not writeSlot): the cursor moves a couple of
   // times a second during playback and means nothing next session.
+  //
+  // The cursor travels as a TIMESTAMP (rpTs), not as a bar index. The cards can
+  // be different symbols, and ES / SPY / QQQ do not produce identical bar counts
+  // for a session — a thin tape prints fewer bars, and any gap or halt shifts
+  // every index after it. Sharing `replayIdx` therefore parks the three charts
+  // at three different moments while looking perfectly synchronized, which is
+  // the one thing a side-by-side replay must never do. A timestamp means the
+  // same instant on every chart by construction.
   useEffect(() => {
     if (!shared || !replayOwner) return;
     broadcastSlot(cfgSlot, {
-      rpOn: replayOn, rpPlaying: replayPlaying, rpIdx: replayIdx,
+      rpOn: replayOn, rpPlaying: replayPlaying, rpTs: replayTs,
       rpSpeed: replaySpeed, rpDay: replayDay,
     });
-  }, [shared, replayOwner, cfgSlot, replayOn, replayPlaying, replayIdx, replaySpeed, replayDay]);
+  }, [shared, replayOwner, cfgSlot, replayOn, replayPlaying, replayTs, replaySpeed, replayDay]);
+
+  // Follower re-snap. Its frames can arrive (or change day / interval) long
+  // after the owner last broadcast, and the channel only fires on the owner's
+  // state changing — so re-derive the cursor here rather than waiting for a
+  // scrub that may never come.
+  useEffect(() => {
+    if (!shared || replayOwner) return;
+    const ts = sharedRpTsRef.current;
+    if (ts == null || !replayFrames.length) return;
+    setReplayIdx(frameIdxAtOrBefore(replayFrames, ts));
+  }, [shared, replayOwner, replayFrames]);
 
   // Play loop: advance one bar per tick, stop at the last frame.
   useEffect(() => {
@@ -768,7 +814,13 @@ export default function EsChartCard({
     // see the shared-toolbar subscription below.
     if (typeof p.rpOn === "boolean") setReplayOn(p.rpOn);
     if (typeof p.rpPlaying === "boolean") setReplayPlaying(p.rpPlaying);
-    if (typeof p.rpIdx === "number") setReplayIdx(p.rpIdx);
+    // Land the shared cursor on this card's own bar grid. Remembered in a ref as
+    // well, because a card whose candles finish loading AFTER the owner's last
+    // broadcast has no frames to snap onto yet — see the re-snap effect below.
+    if (typeof p.rpTs === "number") {
+      sharedRpTsRef.current = p.rpTs;
+      setReplayIdx(frameIdxAtOrBefore(replayFramesRef.current, p.rpTs));
+    }
     if (typeof p.rpSpeed === "number") setReplaySpeed(p.rpSpeed);
     if (typeof p.rpDay === "string" || p.rpDay === null) setReplayDay(p.rpDay as string | null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3672,6 +3724,77 @@ export default function EsChartCard({
 
   // Per-card ticker bar. Replaces the dock when the toolbar is shared — the
   // one control that stays per chart, so it has to stay ON the chart.
+  // ── Replay transport ────────────────────────────────────────────────────────
+  // Extracted from the body so it can follow the DOCK rather than the card. With
+  // 2–3 charts up this used to render once per card: three day pickers, three
+  // play buttons, three scrubbers, three speed switches, stacked down the row —
+  // and worse, a follower's controls wrote only its own local state, so touching
+  // the second chart's scrubber desynced it from the other two until the owner
+  // happened to broadcast again. One transport, one owner, like the dock.
+  const replayBar = replayOn ? (
+    <div
+      className={`es-candles-replay flex flex-wrap items-center gap-3 pt-2 pb-2${dockMode === "full" ? " px-4" : ""}`}
+      style={{ borderBottom: `1px solid ${HOME_THEME.border}` }}
+    >
+      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.cyan }}>Replay</span>
+      {/* Day picker: step across the ET days in the rolling window so the
+          previous session (e.g. Friday over the weekend) can be replayed. */}
+      {(() => {
+        const di = replayDays.indexOf(activeReplayDay);
+        const fmtDay = (d: string) => {
+          if (!d) return "—";
+          const [y, m, day] = d.split("-").map(Number);
+          return new Date(y, m - 1, day, 12).toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
+        };
+        const go = (d: string) => { setReplayDay(d); setReplayPlaying(false); setReplayIdx(0); };
+        return (
+          <div className="flex items-center gap-1">
+            <DockButton onClick={() => { if (di > 0) go(replayDays[di - 1]); }} title="Previous day"><span>◀</span></DockButton>
+            <span style={{ fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)", color: HOME_THEME.cyan, minWidth: 78, textAlign: "center", whiteSpace: "nowrap" }}>{fmtDay(activeReplayDay)}</span>
+            <DockButton onClick={() => { if (di >= 0 && di < replayDays.length - 1) go(replayDays[di + 1]); }} title="Next day"><span>▶</span></DockButton>
+          </div>
+        );
+      })()}
+      {replayFrames.length === 0 ? (
+        <span style={{ fontSize: 12, color: HOME_THEME.muted }}>No bars for this day — step ◀ / ▶ to another session.</span>
+      ) : (
+        <>
+          <div className="flex items-center gap-1">
+            <DockButton onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.max(0, i - 1)); }} title="Step back one bar"><span>⏮</span></DockButton>
+            <DockButton
+              onClick={() => { if (replayIdx >= replayFrames.length - 1) { setReplayIdx(0); setReplayPlaying(true); } else { setReplayPlaying((p) => !p); } }}
+              title={replayPlaying ? "Pause" : "Play"}
+            ><span style={{ minWidth: 12, display: "inline-block", textAlign: "center" }}>{replayPlaying ? "⏸" : "▶"}</span></DockButton>
+            <DockButton onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.min(replayFrames.length - 1, i + 1)); }} title="Step forward one bar"><span>⏭</span></DockButton>
+          </div>
+          <DockSlider
+            label="bar"
+            value={Math.min(replayIdx, replayFrames.length - 1)}
+            min={0}
+            max={Math.max(0, replayFrames.length - 1)}
+            step={1}
+            width={240}
+            format={(v) => fmtEtHM(replayFrames[Math.min(Math.round(v), replayFrames.length - 1)])}
+            onChange={(v) => { setReplayPlaying(false); setReplayIdx(Math.round(v)); }}
+            title="Scrub through the session"
+          />
+          <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: HOME_THEME.muted, whiteSpace: "nowrap" }}>
+            {fmtEtHM(replayFrames[Math.min(replayIdx, replayFrames.length - 1)])} · {Math.min(replayIdx, replayFrames.length - 1) + 1}/{replayFrames.length}
+          </span>
+          <div className="flex items-center gap-2">
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: HOME_THEME.muted }}>Speed</span>
+            <SegGroup
+              options={[{ label: "1×", value: "1" }, { label: "2×", value: "2" }, { label: "4×", value: "4" }, { label: "8×", value: "8" }]}
+              active={String(replaySpeed)}
+              onChange={(v) => setReplaySpeed(Number(v))}
+            />
+          </div>
+          <DockButton onClick={() => { setReplayPlaying(false); setReplayOn(false); setReplayDay(null); }} title="Exit replay — back to live" style={{ color: HOME_THEME.cyan }}><span>● Live</span></DockButton>
+        </>
+      )}
+    </div>
+  ) : null;
+
   const tickerBar = (
     <div className="flex items-center gap-2 px-4 pt-2 pb-1" style={{ position: "relative", zIndex: 30, minWidth: 0 }}>
       {leading}
@@ -3698,73 +3821,18 @@ export default function EsChartCard({
     <div ref={captureRef} className="es-candles-root flex h-full flex-col"
          style={embedded ? { background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow } : undefined}>
       {dockMode === "full" ? dock : tickerBar}
-      {dockMode === "shared" && dockTarget ? createPortal(dock, dockTarget) : null}
+      {/* The transport rides WITH the dock — hoisted into the page's shared slot
+          alongside it when there are 2–3 charts, so the row gets one set of
+          controls above all of them instead of one per card. dockMode "symbol"
+          cards render neither; they follow the channel. */}
+      {dockMode === "shared" && dockTarget ? createPortal(<>{dock}{replayBar}</>, dockTarget) : null}
 
 
       <div className="es-candles-body flex flex-col" style={{ flex: 1, minHeight: 0 }}>
-      {replayOn && (
-        <div
-          className="es-candles-replay flex flex-wrap items-center gap-3 px-4 pt-2 pb-2"
-          style={{ borderBottom: `1px solid ${HOME_THEME.border}` }}
-        >
-          <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.cyan }}>Replay</span>
-          {/* Day picker: step across the ET days in the rolling window so the
-              previous session (e.g. Friday over the weekend) can be replayed. */}
-          {(() => {
-            const di = replayDays.indexOf(activeReplayDay);
-            const fmtDay = (d: string) => {
-              if (!d) return "—";
-              const [y, m, day] = d.split("-").map(Number);
-              return new Date(y, m - 1, day, 12).toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
-            };
-            const go = (d: string) => { setReplayDay(d); setReplayPlaying(false); setReplayIdx(0); };
-            return (
-              <div className="flex items-center gap-1">
-                <DockButton onClick={() => { if (di > 0) go(replayDays[di - 1]); }} title="Previous day"><span>◀</span></DockButton>
-                <span style={{ fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)", color: HOME_THEME.cyan, minWidth: 78, textAlign: "center", whiteSpace: "nowrap" }}>{fmtDay(activeReplayDay)}</span>
-                <DockButton onClick={() => { if (di >= 0 && di < replayDays.length - 1) go(replayDays[di + 1]); }} title="Next day"><span>▶</span></DockButton>
-              </div>
-            );
-          })()}
-          {replayFrames.length === 0 ? (
-            <span style={{ fontSize: 12, color: HOME_THEME.muted }}>No bars for this day — step ◀ / ▶ to another session.</span>
-          ) : (
-            <>
-              <div className="flex items-center gap-1">
-                <DockButton onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.max(0, i - 1)); }} title="Step back one bar"><span>⏮</span></DockButton>
-                <DockButton
-                  onClick={() => { if (replayIdx >= replayFrames.length - 1) { setReplayIdx(0); setReplayPlaying(true); } else { setReplayPlaying((p) => !p); } }}
-                  title={replayPlaying ? "Pause" : "Play"}
-                ><span style={{ minWidth: 12, display: "inline-block", textAlign: "center" }}>{replayPlaying ? "⏸" : "▶"}</span></DockButton>
-                <DockButton onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.min(replayFrames.length - 1, i + 1)); }} title="Step forward one bar"><span>⏭</span></DockButton>
-              </div>
-              <DockSlider
-                label="bar"
-                value={Math.min(replayIdx, replayFrames.length - 1)}
-                min={0}
-                max={Math.max(0, replayFrames.length - 1)}
-                step={1}
-                width={240}
-                format={(v) => fmtEtHM(replayFrames[Math.min(Math.round(v), replayFrames.length - 1)])}
-                onChange={(v) => { setReplayPlaying(false); setReplayIdx(Math.round(v)); }}
-                title="Scrub through the session"
-              />
-              <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: HOME_THEME.muted, whiteSpace: "nowrap" }}>
-                {fmtEtHM(replayFrames[Math.min(replayIdx, replayFrames.length - 1)])} · {Math.min(replayIdx, replayFrames.length - 1) + 1}/{replayFrames.length}
-              </span>
-              <div className="flex items-center gap-2">
-                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: HOME_THEME.muted }}>Speed</span>
-                <SegGroup
-                  options={[{ label: "1×", value: "1" }, { label: "2×", value: "2" }, { label: "4×", value: "4" }, { label: "8×", value: "8" }]}
-                  active={String(replaySpeed)}
-                  onChange={(v) => setReplaySpeed(Number(v))}
-                />
-              </div>
-              <DockButton onClick={() => { setReplayPlaying(false); setReplayOn(false); setReplayDay(null); }} title="Exit replay — back to live" style={{ color: HOME_THEME.cyan }}><span>● Live</span></DockButton>
-            </>
-          )}
-        </div>
-      )}
+      {/* One transport for the row lives with the dock (see the portal above).
+          In single-chart mode there is no shared dock to hoist it into, so it
+          stays here, directly above the chart, exactly as before. */}
+      {dockMode === "full" ? replayBar : null}
       <div className="es-candles-toggles flex flex-wrap items-stretch gap-2 px-4 pb-2 pt-1">
         {(() => {
           const basis = effectiveBasis();
