@@ -3637,6 +3637,7 @@ export default function EsChartCard({
             kind={sidePanel}
             width={panelW}
             chainSymbol={sym.chainSymbol}
+            intensity={intensity}
             // Source precedence: replay cursor → ETF derived column → the live
             // SPX websocket. The first two are the same derivation applied to a
             // different column; the last is the only one /ws/gex can supply.

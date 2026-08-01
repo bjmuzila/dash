@@ -11,6 +11,9 @@ import { Dock, SegGroup } from "@/components/shared/DockToolbar";
 import { ChainReplay } from "@/components/shared/ChainReplay";
 import { useScannerTickers } from "@/lib/useScannerTickers";
 import { dedupeFetch } from "@/lib/dedupeFetch";
+// Chain math (GreekCell, parseExpiration, metricBg) moved to lib/ so the ES
+// Candles page's 0DTE side panel can share it without importing this route.
+import { metricBg, parseExpiration, type GreekCell, type DataMode } from "@/lib/calculations/optionChain";
 
 // rgba helper — matches the convention used across themed pages.
 function rgba(hex: string, a: number): string {
@@ -337,7 +340,7 @@ const GREEK_MODES = ["gex", "dex", "chex", "vex", "oi"] as const;
 type GreekMode = typeof GREEK_MODES[number];
 
 const DATA_MODES = ["oi-vol", "vol-only", "flow"] as const;
-type DataMode = typeof DATA_MODES[number];
+
 const DATA_MODE_LABEL: Record<DataMode, string> = {
   "oi-vol": "OI + Vol",
   "vol-only": "Vol Only",
@@ -477,31 +480,6 @@ function pickKeyExpirations(all: Array<{ value: string; label: string }>): Array
   return out;
 }
 
-// Per-strike, per-expiration greek values.
-type GreekCell = {
-  gex: number;
-  dex: number;
-  chex: number;
-  vex: number;
-  /**
-   * Net open interest = callOI − putOI. Signed on purpose: it is what the OI
-   * tab's heat scale, per-column totals and ⅀ Total column read through
-   * valueAt(), so a call-heavy strike colors blue and a put-heavy one red,
-   * exactly like the greeks. The two-line call/put breakdown the OI cell
-   * actually displays comes from callOI/putOI below.
-   */
-  oi: number;
-  /** Pure volume-only GEX (volume-weighted gamma), independent of dataMode. */
-  volGex: number;
-  /** Raw per-side book stats for the hover card. */
-  callOI: number;
-  putOI: number;
-  callVol: number;
-  putVol: number;
-  /** Net premium traded per side = mark × volume × 100. */
-  callPrem: number;
-  putPrem: number;
-};
 
 // One expiration's column: its date + a strike→greek map.
 type ExpColumn = {
@@ -520,25 +498,6 @@ function etDateKey(date: Date): string {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
-}
-
-/**
- * Resolve a `pinnedExpiry` prop against the ticker's real listings.
- *
- * "0dte" means today ET — but plenty of tickers have no same-day expiry (NVDA
- * has no Monday weeklies), and a market holiday removes even SPX's. Snapping
- * FORWARD to the nearest listed expiry >= today is the honest answer: the
- * nearest thing that actually trades. Falls back to the literal date when the
- * listings haven't loaded yet, so the first fetch still has something to ask for.
- */
-function resolvePinnedExpiry(pin: string, listings: Array<{ value: string }>): string {
-  const want = pin === "0dte" ? etDateKey(etToday()) : pin;
-  if (!listings.length) return want;
-  const forward = listings
-    .map((e) => e.value)
-    .filter((v) => v >= want)
-    .sort();
-  return forward[0] ?? want;
 }
 
 function isHoliday(date: Date): boolean {
@@ -745,103 +704,7 @@ function nearestStrikeTo(target: number, strikes: number[]): number | null {
   return best;
 }
 
-function metricBg(value: number, maxValue: number, intensity: number, topValues: number[]) {
-  const n = value || 0;
-  const m = maxValue || 0;
-  if (m === 0 || !n) return "transparent";
-  const pos = n >= 0;
-  const rank = topValues.indexOf(Math.abs(n)) + 1;
-  if (rank === 1) return pos ? "rgba(41,182,246,0.90)" : "rgba(255,71,87,0.90)";
-  if (rank === 2) return pos ? "rgba(41,182,246,0.45)" : "rgba(255,71,87,0.45)";
-  if (rank === 3) return pos ? "rgba(41,182,246,0.25)" : "rgba(255,71,87,0.25)";
-  const ratio = Math.min(Math.abs(n) / m, 1);
-  const eased = Math.pow(ratio * Math.max(intensity || 0.1, 1), 1.4);
-  const alpha = Math.min(0.18, 0.02 + eased * 0.16);
-  return pos ? `rgba(41,182,246,${alpha.toFixed(2)})` : `rgba(255,71,87,${alpha.toFixed(2)})`;
-}
 
-// Parse one expiration's chain payload into strike→greek cells.
-// GEX/DEX/CHEX/VEX use the same formulas the single-expiry view used:
-//   contracts = OI + volume (per side); GEX = (γc·cc − γp·pc)·S²·0.01·100, etc.
-// When dataMode is "flow", the gex cell uses flowGEX from flowGexMap instead.
-function parseExpiration(items: unknown[], expDate: string, spot: number, dataMode: DataMode = "oi-vol", flowGexMap: Map<number, number> = new Map()): Map<number, GreekCell> {
-  const cells = new Map<number, GreekCell>();
-  const target = (items as { "expiration-date"?: string; strikes?: unknown[] }[]).filter(
-    i => String(i["expiration-date"] ?? "").slice(0, 10) === expDate.slice(0, 10),
-  );
-  const groups = target.length ? target : (items as { strikes?: unknown[] }[]);
-  const S = spot > 0 ? spot : 0;
-
-  groups.forEach(group => {
-    (group.strikes || []).forEach((item: unknown) => {
-      const it = item as Record<string, unknown>;
-      const strike = parseFloat(String(it["strike-price"] || 0));
-      if (!strike) return;
-
-      const c = it.call as Record<string, unknown> | undefined;
-      const p = it.put as Record<string, unknown> | undefined;
-      const num = (o: Record<string, unknown> | undefined, k: string) =>
-        o ? parseFloat(String(o[k])) || 0 : 0;
-      const cnt = (o: Record<string, unknown> | undefined) =>
-        o ? (dataMode === "vol-only" ? 0 : (parseInt(String(o["open-interest"] ?? o.openInterest ?? 0), 10) || 0)) +
-            (parseInt(String(o.volume ?? 0), 10) || 0)
-          : 0;
-
-      const cc = cnt(c);
-      const pc = cnt(p);
-      const live = cc > 0 || pc > 0;
-
-      // Volume-only GEX — always computed from raw call/put volume regardless of
-      // dataMode, so the OI+Vol view can flag the biggest pure-volume gamma peak.
-      const cVol = c ? (parseInt(String(c.volume ?? 0), 10) || 0) : 0;
-      const pVol = p ? (parseInt(String(p.volume ?? 0), 10) || 0) : 0;
-      const volGexValue = (cVol > 0 || pVol > 0)
-        ? (num(c, "gamma") * cVol - num(p, "gamma") * pVol) * S * S * 0.01 * 100
-        : 0;
-
-      // Raw per-side book stats for the hover card. OI is always the settled
-      // open interest (independent of the Vol-only toggle, which only affects
-      // the GEX basis). Mark falls back through bid/ask mid → last → close.
-      const cOI = c ? (parseInt(String(c["open-interest"] ?? c.openInterest ?? 0), 10) || 0) : 0;
-      const pOI = p ? (parseInt(String(p["open-interest"] ?? p.openInterest ?? 0), 10) || 0) : 0;
-      const markOf = (o: Record<string, unknown> | undefined) => {
-        if (!o) return 0;
-        const m = num(o, "mark") || num(o, "mark-price");
-        if (m > 0) return m;
-        const b = num(o, "bid") || num(o, "bid-price");
-        const a = num(o, "ask") || num(o, "ask-price");
-        if (b > 0 || a > 0) return (b + a) / 2;
-        return num(o, "last") || num(o, "last-price") || num(o, "close") || num(o, "price") || num(o, "mid");
-      };
-      const callPremValue = markOf(c) * cVol * 100;
-      const putPremValue = markOf(p) * pVol * 100;
-
-      let gexValue = 0;
-      if (dataMode === "flow") {
-        gexValue = flowGexMap.get(strike) ?? 0;
-      } else {
-        gexValue = live ? (num(c, "gamma") * cc - num(p, "gamma") * pc) * S * S * 0.01 * 100 : 0;
-      }
-
-      cells.set(strike, {
-        gex:  gexValue,
-        dex:  live ? (Math.abs(num(c, "delta")) * cc - Math.abs(num(p, "delta")) * pc) * S * 100 : 0,
-        chex: live ? (-num(c, "theta") * cc + num(p, "theta") * pc) * S * 100 : 0,
-        vex:  live ? (num(c, "vega") * cc - num(p, "vega") * pc) * S * 100 : 0,
-        // Net OI is always the settled book (cOI/pOI), never the Vol-only
-        // basis — the OI tab is about positioning, so the "Vol Only" toggle
-        // must not blank it out the way it zeroes the greeks' contract counts.
-        oi: cOI - pOI,
-        volGex: volGexValue,
-        callOI: cOI, putOI: pOI,
-        callVol: cVol, putVol: pVol,
-        callPrem: callPremValue, putPrem: putPremValue,
-      });
-    });
-  });
-
-  return cells;
-}
 
 // ── contract flow sparkline popup ──────────────────────────────────────────
 // Clicking a 0DTE SPX cell opens this: the same per-strike Flow GEX time
@@ -1195,13 +1058,6 @@ interface ChainMatrixProps {
   oiChangeMap: Map<string, { callOI: number; putOI: number; callChg: number; putChg: number }>;
   onCellClick: (v: { strike: number; expiration: string }) => void;
   onCellHover: (v: { strike: number; colIdx: number; x: number; y: number } | null) => void;
-  /**
-   * Narrow-column density (the ES Candles side panel). Shrinks the strike
-   * gutter and the cell minimums, and drops the trailing sum column — under
-   * `pinnedExpiry` the only rendered expiry is 0DTE, which that column excludes
-   * by definition, so it would be a stripe of "·" taking a third of the width.
-   */
-  compact?: boolean;
 }
 
 // Split out + memoized so transient parent state (the load-progress bar, the
@@ -1212,7 +1068,7 @@ const ChainMatrix = memo(function ChainMatrix({
   columns, gridCols, visibleStrikes, nearestStrike, spot, greekMode, dataMode,
   intensity, colScales, volMvcByCol, mvcByCol, pinByCol, valueAt, isStandalone,
   changeMode, sessionDate, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
-  emLevels, activeTicker, atmRowRef, oiChangeMap, onCellClick, onCellHover, compact = false,
+  emLevels, activeTicker, atmRowRef, oiChangeMap, onCellClick, onCellHover,
 }: ChainMatrixProps) {
   // OI is a contract count, not dollars — and on this tab every readout is a
   // CHANGE in that count, so it takes the signed compact formatter (+1.2K /
@@ -1229,7 +1085,7 @@ const ChainMatrix = memo(function ChainMatrix({
     });
   // Shared strike axis: ONE strike column on the left, then one
   // value-only column per expiration. Row N = same strike everywhere.
-  const STRIKE_COL = compact ? 46 : 56;
+  const STRIKE_COL = 56;
   // Sticky header/strike column must be fully opaque — rows scroll under it.
   const HDR_BG = "#0D1119";
   // ⅀ Total column — per-strike sum across every rendered expiration EXCEPT
@@ -1262,10 +1118,7 @@ const ChainMatrix = memo(function ChainMatrix({
       // OI cells can carry two lines (call / put) on the ATM pivot row, but each
       // line is now a single delta figure — so they need barely more width than
       // a greek cell, not the double-width the old value+delta pair demanded.
-      // The trailing track is the ⅀ Total column; compact drops it entirely.
-      gridTemplateColumns: compact
-        ? `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(58px, 1fr))`
-        : `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(${isOiMode ? 84 : 78}px, 1fr)) minmax(${isOiMode ? 92 : 88}px, 1.15fr)`,
+      gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(${isOiMode ? 84 : 78}px, 1fr)) minmax(${isOiMode ? 92 : 88}px, 1.15fr)`,
       borderRadius: 12,
       overflow: "clip",
       border: `1px solid ${HT.border}`,
@@ -1302,14 +1155,12 @@ const ChainMatrix = memo(function ChainMatrix({
         );
       })}
       {/* ── ⅀ Total column header (sum of all expirations for each strike) ── */}
-      {!compact && (
       <div style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.24)} 0%, ${rgba(HT.cyan, 0.07)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}`, borderLeft: `2px solid ${rgba(HT.cyan, 0.45)}` }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: HT.cyan, letterSpacing: "0.04em" }}>Total</div>
         <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)", color: grandVisibleTotal >= 0 ? HT.green : HT.red }}>
           {fmtVal(grandVisibleTotal)}
         </div>
       </div>
-      )}
 
       {/* ── One row per shared strike ── */}
       {visibleStrikes.map((strike, rowIdx) => {
@@ -1322,7 +1173,7 @@ const ChainMatrix = memo(function ChainMatrix({
               {renderIdx.map((i) => (
                 <div key={`pad-${rowIdx}-${i}`} style={{ padding: "2px 8px", fontSize: 12 }} />
               ))}
-              {!compact && <div style={{ padding: "2px 8px", fontSize: 12, borderLeft: `2px solid ${rgba(HT.cyan, 0.25)}` }} />}
+              <div style={{ padding: "2px 8px", fontSize: 12, borderLeft: `2px solid ${rgba(HT.cyan, 0.25)}` }} />
             </div>
           );
         }
@@ -1485,7 +1336,7 @@ const ChainMatrix = memo(function ChainMatrix({
               );
             })}
             {/* ── ⅀ Total cell: this strike's sum across every expiration ── */}
-            {!compact && (() => {
+            {(() => {
               const tot = rowTotals.get(strike) ?? 0;
               const atmTotShadow = isATM
                 ? "inset 0 2px 0 #ffffff, inset 0 -2px 0 #ffffff, inset -2px 0 0 #ffffff"
@@ -1524,10 +1375,6 @@ export default function OptionsChainPage({
   expiryCount,
   ticker: externalTicker,
   showGrandTotal = true,
-  pinnedExpiry,
-  hideToolbar = false,
-  compact = false,
-  defaultPercent,
 }: {
   // "sequential" (default, standalone /options-chain route): next EXP_COLUMNS
   // expirations starting at the user's selected date. "key" (/new-home embed):
@@ -1545,23 +1392,6 @@ export default function OptionsChainPage({
   // Hide the toolbar's "Total <greek>" readout. The /home embed passes false so
   // the compact chain panel doesn't show a per-ticker grand-total GEX.
   showGrandTotal?: boolean;
-  // Lock the chain to ONE expiration. "0dte" resolves to today ET on every ET
-  // day rollover, snapped forward to the nearest real listing for tickers and
-  // holidays that have no same-day expiry. Used by the ES Candles page's side
-  // panel, which is a 230px column and wants exactly the 0DTE ladder.
-  //
-  // Overrides expirySelection's column choice entirely — with a pin there is
-  // nothing sequential to slice.
-  pinnedExpiry?: string | "0dte";
-  // Drop the page's own <Dock>. The embedding surface supplies its own chrome
-  // and the toolbar is wider than the column it would sit in.
-  hideToolbar?: boolean;
-  // Narrow-column density: smaller strike gutter, tighter cells, and the
-  // hover-card-only /proxy/strike-dod poll is skipped (nothing to hover).
-  compact?: boolean;
-  // Override the per-ticker automatic strike window. SPX's automatic 10% is
-  // ~90 strikes, which in a side panel is a scrollbar rather than a read.
-  defaultPercent?: number;
 } = {}) {
   // Number of sequential columns to render (default 14; embeds may narrow it).
   const seqColumns = Math.max(1, Math.floor(expiryCount ?? EXP_COLUMNS));
@@ -1577,20 +1407,6 @@ export default function OptionsChainPage({
   const [expiries, setExpiries] = useState<Array<{ value: string; label: string }>>(fallbackExpiries);
   const [tickerInput, setTickerInput] = useState("SPX");
   const [activeTicker, setActiveTicker] = useState("SPX");
-  // Bumps when the ET calendar day changes. The expirations effect keys off it
-  // so a `pinnedExpiry="0dte"` panel left open overnight re-pins to the new
-  // session's expiry — otherwise it only ever re-ran on a ticker change and a
-  // dashboard left up since yesterday would keep showing yesterday's 0DTE.
-  const [etDayTick, setEtDayTick] = useState(0);
-  useEffect(() => {
-    if (!pinnedExpiry) return; // nothing else depends on the rollover
-    let day = etDateKey(etToday());
-    const id = setInterval(() => {
-      const now = etDateKey(etToday());
-      if (now !== day) { day = now; setEtDayTick((n) => n + 1); }
-    }, 60_000);
-    return () => clearInterval(id);
-  }, [pinnedExpiry]);
   // Clicking a 0DTE SPX cell opens the ContractFlowPopup (that strike's Flow
   // GEX history sparkline) — see the component above for details.
   const [contractPopup, setContractPopup] = useState<{ strike: number; expiration: string } | null>(null);
@@ -1611,8 +1427,8 @@ export default function OptionsChainPage({
   // e.g. the Scanner "Watch This" cards. User still has to click GO themselves.
   useEffect(() => {
     // Uncontrolled (standalone route) ONLY. Embedded, the URL belongs to the
-    // HOST page — /es-candles?symbol=AAPL would otherwise reach in and hijack
-    // the side panel's ticker away from the chart it's sitting next to.
+    // HOST page, and a query string meant for something else would reach in and
+    // move this chain's ticker out from under the component that owns it.
     if (externalTicker != null) return;
     const u = new URL(window.location.href);
     const sym = u.searchParams.get("symbol")?.trim().toUpperCase();
@@ -1625,21 +1441,14 @@ export default function OptionsChainPage({
   // else 30%. Re-applies whenever the active ticker changes; the user can still
   // override via the % dropdown for the current ticker.
   useEffect(() => {
-    // defaultPercent overrides the automatic rule. SPX's automatic 10% is ~90
-    // strikes; in a 230px side panel that's a scrollbar, not a read.
-    if (defaultPercent != null) { setDisplayPercent(defaultPercent); return; }
     setDisplayPercent(activeTicker.toUpperCase() === "SPX" ? 10 : 30);
-  }, [activeTicker, defaultPercent]);
+  }, [activeTicker]);
   const [refreshSeed, setRefreshSeed] = useState(0);
   // Day-over-Day GEX movers for the active ticker (same source as the scanner's
   // DoD Movers tab: /proxy/strike-dod). Declared AFTER refreshSeed since the
   // effect depends on it — referencing refreshSeed above its declaration is a
   // temporal-dead-zone crash at render.
   useEffect(() => {
-    // Its ONLY consumer is the cursor-anchored hover card, and a 230px side
-    // panel has no room to hover. Skipping it under `compact` drops a 2000-row
-    // poll per embedded instance.
-    if (compact) { setDodRows([]); return; }
     let cancelled = false;
     const t = (activeTicker || "SPX").toUpperCase();
     (async () => {
@@ -1652,7 +1461,7 @@ export default function OptionsChainPage({
       } catch { if (!cancelled) setDodRows([]); }
     })();
     return () => { cancelled = true; };
-  }, [activeTicker, refreshSeed, compact]);
+  }, [activeTicker, refreshSeed]);
   const [intensity, setIntensity] = useState(1.75);
   // Grid colors read this deferred copy so dragging the Intensity slider stays
   // responsive — React commits the slider urgently and repaints the ~560-cell
@@ -1750,14 +1559,7 @@ export default function OptionsChainPage({
     // "sequential" mode (default): the selected expiry + the next N from the
     // listed expiries.
     let targets: Array<{ value: string; label: string }>;
-    if (pinnedExpiry) {
-      // Pinned mode wins outright — with one locked column there is nothing
-      // sequential to slice and no key set to pick. resolvePinnedExpiry snaps
-      // "0dte" forward to the nearest real listing, because plenty of tickers
-      // have no same-day expiry and market holidays remove SPX's.
-      const pin = resolvePinnedExpiry(pinnedExpiry, all);
-      targets = [{ value: pin, label: pin }];
-    } else if (expirySelection === "key") {
+    if (expirySelection === "key") {
       targets = pickKeyExpirations(all);
     } else {
       const startIdx = Math.max(0, all.findIndex(e => e.value === startExp));
@@ -1799,10 +1601,10 @@ export default function OptionsChainPage({
       // empty cells either.
       const results = await Promise.all(
         targets.map(async (t) => {
-          // dedupeFetch, not fetch: three ES Candles cards can each embed this
-          // component with the same ticker + expiry, and their per-instance
-          // loadInFlightRef / LOAD_MIN_INTERVAL_MS throttles know nothing about
-          // each other. Identical concurrent GETs collapse to one request.
+          // dedupeFetch, not fetch: this component is embedded elsewhere (the
+          // home dashboard's chain panel), and each instance's own
+          // loadInFlightRef / LOAD_MIN_INTERVAL_MS throttle knows nothing about
+          // the others. Identical concurrent GETs collapse to one request.
           const res = await dedupeFetch(
             `/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(t.value)}&range=all${bust}`,
           );
@@ -1929,14 +1731,11 @@ export default function OptionsChainPage({
 
   // Auto-load on mount.
   //
-  // This used to hardcode "SPX" even under `ticker` control, which cost every
-  // embed one wasted SPX chain fetch before the externalTicker effect above
-  // corrected it. Harmless-looking with one embed; with three ES Candles cards
-  // it's three of them, on the critical path, for data nobody asked for.
+  // This hardcoded "SPX" even under `ticker` control, so every embed paid for
+  // one wasted SPX chain fetch before the externalTicker effect above corrected
+  // it — on the critical path, for data nobody asked for.
   useEffect(() => {
-    const defaultExpiry = pinnedExpiry
-      ? resolvePinnedExpiry(pinnedExpiry, expiries)
-      : (selectedExpiry || expiries[0]?.value);
+    const defaultExpiry = selectedExpiry || expiries[0]?.value;
     if (defaultExpiry) {
       loadChain((externalTicker || "SPX").toUpperCase(), defaultExpiry);
     }
@@ -1996,17 +1795,11 @@ export default function OptionsChainPage({
         setExpiries(list);
         // If the current selection isn't a real listing for this ticker, snap
         // to the nearest valid one (prefer today's 0DTE when present).
-        //
-        // Under `pinnedExpiry` that preference becomes unconditional: the whole
-        // point of the pin is that the column follows today, so a selection the
-        // user made yesterday must not survive into this session's panel.
         const today = etDateKey(etToday());
         const cur = selectedExpiryRef.current;
-        const validExpiry = pinnedExpiry
-          ? resolvePinnedExpiry(pinnedExpiry, list)
-          : list.some((e) => e.value === cur)
-            ? cur
-            : (list.find((e) => e.value === today)?.value ?? list[0].value);
+        const validExpiry = list.some((e) => e.value === cur)
+          ? cur
+          : (list.find((e) => e.value === today)?.value ?? list[0].value);
         setSelectedExpiry(validExpiry);
 
         // A ticker-change GO is waiting on a valid expiry — load the chain now.
@@ -2024,7 +1817,7 @@ export default function OptionsChainPage({
     // listing it here caused an infinite fetch loop (effect → setState →
     // render → new loadChain → effect …). selectedExpiry is read via ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTicker, etDayTick]);
+  }, [activeTicker]);
 
   const [underlyingPrice, setUnderlyingPrice] = useState(0);
 
@@ -2620,13 +2413,9 @@ export default function OptionsChainPage({
   // slots: a placeholder column is a promise that data is still loading, and in
   // a rewound grid nothing more is coming. Live keeps the fixed slot count so
   // the grid doesn't reflow while expirations resolve.
-  // Pinned mode is exactly one column, so no padding slots — a placeholder is a
-  // promise that more data is coming, and here there is no more.
-  const gridCols = pinnedExpiry
-    ? 1
-    : replayFrame
-      ? columns.length
-      : Math.max(columns.length, expirySelection === "key" ? 4 : seqColumns);
+  const gridCols = replayFrame
+    ? columns.length
+    : Math.max(columns.length, expirySelection === "key" ? 4 : seqColumns);
 
   // Snapshot/Discord caption. Declared here (not up with snapTitle) because it
   // needs replayFrame, which only exists once the recorded columns are built.
@@ -2691,17 +2480,11 @@ export default function OptionsChainPage({
     boxSizing: "border-box",
   });
 
-  // Embedded as a side panel, homeShellStyle's opaque page background paints
-  // over the host card's own surface and the panel reads as a pasted-in
-  // rectangle. Drop it and inherit.
-  const embeddedChrome = hideToolbar || compact;
-
   return (
     <div
       ref={pageRef}
       style={{
         ...homeShellStyle,
-        ...(embeddedChrome ? { background: "transparent", backgroundImage: "none" } : null),
         height: "100%",
         overflow: "hidden",
       }}
@@ -2715,13 +2498,7 @@ export default function OptionsChainPage({
       {/* Toolbar pinned at the top — ALWAYS visible (never scrolls away). The
           grid scrolls below it in its own container, keeping its expiry-date
           header row stuck to the top of that scroll area. */}
-      {/* The whole sticky header collapses under `hideToolbar` — including its
-          padding and its bottom rule, which would otherwise leave a stray
-          hairline and a 7px band above nothing. */}
-      <div style={hideToolbar && !showGrandTotal
-        ? { display: "none" }
-        : { display: "flex", flexDirection: "column", gap: 3, padding: "3px 10px 4px", flexShrink: 0, position: "sticky", top: 0, zIndex: 60, minWidth: 0, background: embeddedChrome ? "transparent" : "#05060A", borderBottom: hideToolbar ? "none" : `1px solid ${HT.border}` }}>
-      {!hideToolbar && (<>
+      <div style={{ display: "flex", flexDirection: "column", gap: 3, padding: "3px 10px 4px", flexShrink: 0, position: "sticky", top: 0, zIndex: 60, minWidth: 0, background: "#05060A", borderBottom: `1px solid ${HT.border}` }}>
       {/* data-capture-hide drops the control dock from snapshots (ticker picker,
           strike %, GO, REPLAY, intensity, the greek tabs, the snap button
           itself). Only the Dock is tagged, not its wrapper — the wrapper also
@@ -2838,7 +2615,6 @@ export default function OptionsChainPage({
             : `📊 Options Chain — ${activeTicker} ${selectedExpiry}`}
         />
       </Dock>
-      </>)}
       {/* Row 2 — total net GEX (active greek) across the visible window. */}
       {showGrandTotal && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 2px", fontSize: 11, whiteSpace: "nowrap" }}>
@@ -3031,7 +2807,6 @@ export default function OptionsChainPage({
           padding: "0 10px 10px",
         }}>
           <ChainMatrix
-            compact={compact}
             columns={columns}
             gridCols={gridCols}
             visibleStrikes={visibleStrikes}

@@ -12,17 +12,17 @@
  *   rail  — the vertical GEX-by-strike rail, price-aligned to the candle chart.
  *   chain — the 0DTE option chain, pinned to today's expiry.
  *
- * The chain branch REUSES app/options-chain/page.tsx rather than reimplementing
- * a ladder. That component already takes `ticker` / `expiryCount` /
- * `showGrandTotal` for the home dashboard's embed; this adds `pinnedExpiry`,
- * `hideToolbar` and `compact` so it can also be a 230px column. One
- * implementation means the greek switcher, the heat scale and the strike
- * formatting can't drift between the two places they appear.
+ * Both panels are PRICE-ALIGNED: every row sits at the chart's own y for that
+ * price, via the same `priceToY` the candle series answers with. That's the
+ * whole reason the chain branch is ChainRail and not an embedded
+ * /options-chain grid — see the note at the top of ChainRail.tsx. The chain's
+ * numbers and heat ramp still come from the chain page's own math, now shared
+ * through lib/calculations/optionChain.ts.
  */
 
-import { lazy, Suspense, type MutableRefObject } from "react";
+import { type MutableRefObject } from "react";
 import EsGexRail, { type RailRow } from "@/components/dashboard/EsGexRail";
-import { HOME_THEME } from "@/components/shared/homeTheme";
+import ChainRail from "./ChainRail";
 // Declared in slotStore (which has no React dependency) so the page-level
 // persistence and this component can't drift into two spellings of the union.
 import type { SidePanelKind } from "./slotStore";
@@ -46,13 +46,10 @@ export type { SidePanelKind };
 export const SIDE_PANEL_SPEC: Record<SidePanelKind, { w: number; minChart: number }> = {
   none:  { w: 0,   minChart: 0 },
   rail:  { w: 115, minChart: 340 },
-  chain: { w: 230, minChart: 420 },
+  // Wider than the rail because it carries a value per row (strike on the left,
+  // the greek in millions on the right) rather than a bar.
+  chain: { w: 148, minChart: 340 },
 };
-
-// Lazily loaded: the options-chain module is large, and a user who never turns
-// the chain on should never pay for it. The route itself is already code-split
-// by app-vite, so this keeps the parity.
-const OptionsChainPage = lazy(() => import("@/app/options-chain/page"));
 
 interface SidePanelProps {
   kind: SidePanelKind;
@@ -60,6 +57,8 @@ interface SidePanelProps {
   width: number;
   /** Ticker for the chain (SPX for ES, else the ETF itself). NOT gexSymbol. */
   chainSymbol: string;
+  /** The card's heatmap intensity, so the chain heat matches the chart's. */
+  intensity: number;
   railRows: RailRow[];
   callWall: number | null;
   putWall: number | null;
@@ -71,7 +70,7 @@ interface SidePanelProps {
 }
 
 export default function SidePanel({
-  kind, width, chainSymbol,
+  kind, width, chainSymbol, intensity,
   railRows, callWall, putWall, gexFlip, spot, basis, priceToY, drawRef,
 }: SidePanelProps) {
   if (kind === "none") return null;
@@ -79,27 +78,13 @@ export default function SidePanel({
   if (kind === "chain") {
     return (
       <div style={{ width, flexShrink: 0, minHeight: 320, display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <Suspense fallback={
-          <div style={{ flex: 1, display: "grid", placeItems: "center", fontSize: 11, color: HOME_THEME.muted }}>
-            Loading chain…
-          </div>
-        }>
-          {/*
-            expiryCount={1} + pinnedExpiry="0dte" = exactly one column, today's
-            expiry, re-pinned on an ET day rollover. defaultPercent={5} because
-            the chain's own auto rule gives SPX a ±10% strike window — roughly
-            ninety strikes, which in a 230px column is a scrollbar, not a read.
-          */}
-          <OptionsChainPage
-            ticker={chainSymbol}
-            pinnedExpiry="0dte"
-            expiryCount={1}
-            defaultPercent={5}
-            hideToolbar
-            compact
-            showGrandTotal={false}
-          />
-        </Suspense>
+        <ChainRail
+          symbol={chainSymbol}
+          basis={basis}
+          priceToY={priceToY}
+          drawRef={drawRef}
+          intensity={intensity}
+        />
       </div>
     );
   }

@@ -1,0 +1,1088 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
+import { HOME_THEME, LIGHT_BLUE, REFRESH_GREEN, SOFT_RED, statTileStyle, homeButtonStyle } from "@/components/shared/homeTheme";
+import { Card } from "@/components/shared/PageCard";
+import { ThemedSelect } from "@/components/shared/ThemedSelect";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test Lab → GEX Map tab.
+//
+// Four ways of fusing the same five layers — net GEX profile, strike×time
+// heatmap, the strike rail, GEX bubbles, and DEX — into ONE readout, all fed by
+// a single GET /api/gex-map payload (0DTE only; the route pins expiry = date).
+//
+//   A · Tape Field      time-forward radar. Heat is the field, profile is the
+//                       left wall, rail is the right edge, DEX is the keel.
+//   B · Polar Reticle   spot at the centre; strikes fan out by distance.
+//   C · Spine           vertical ladder, gamma on the left wing, delta on the
+//                       right, heat living inside the spine.
+//   D · Gamma Terrain   gamma as elevation, iso-GEX contours, flip as coastline.
+//
+// Three things this file is deliberately careful about:
+//
+//   1. NOTHING IS INVENTED. Every layer draws only what the payload contains.
+//      When DEX is missing for a session the DEX layers render an explicit
+//      "no data" state — they do not fall back to zero, because a flat DEX ring
+//      and an absent DEX ring mean opposite things on a positioning map.
+//   2. Bubbles ride SPOT, not fixed strikes. One bubble per sampled slot,
+//      anchored at that slot's traded price, sized by |GEX| at the strike price
+//      was actually sitting on. That is the whole point of the layer: how much
+//      gamma the tape is standing in, over time.
+//   3. Scales are computed ONCE, from the full session, and shared by all four
+//      maps. Per-map normalization would make the same book look calm in one
+//      concept and violent in the next.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── payload ──────────────────────────────────────────────────────────────────
+type MapColumn = { t: number; spot: number; flip: number | null; v: number[] };
+type MapSession = { date: string; expiry: string; snaps: number };
+type MapPayload = {
+  symbol: string;
+  date: string;
+  expiry: string;
+  slotMin: number;
+  strikes: number[];
+  columns: MapColumn[];
+  dexByStrike: { strike: number; dex: number }[];
+  dexSeries: { t: number; dex: number }[];
+  levels: {
+    spot: number; flip: number | null;
+    callWall: number | null; putWall: number | null; magnet: number | null;
+    netGex: number; netDex: number; asOf: number | null;
+  };
+  sessions: MapSession[];
+  notes: { gex?: string; dex?: string };
+  error?: string;
+};
+
+type Concept = "tape" | "reticle" | "spine" | "terrain";
+
+const CONCEPTS: { key: Concept; label: string; blurb: string }[] = [
+  { key: "tape", label: "Tape Field", blurb: "Time-forward radar — heat field, profile wall, rail, DEX keel." },
+  { key: "reticle", label: "Polar Reticle", blurb: "Spot-centred dial — strikes fan out, session clock on the rim." },
+  { key: "spine", label: "Spine", blurb: "Vertical ladder — gamma left wing, delta right wing, heat inside." },
+  { key: "terrain", label: "Gamma Terrain", blurb: "Gamma as elevation — iso-GEX contours, flip as coastline." },
+];
+
+// ── formatting ───────────────────────────────────────────────────────────────
+function fmtBn(v: number | null | undefined): string {
+  if (!Number.isFinite(v as number)) return "—";
+  const n = v as number;
+  const a = Math.abs(n);
+  const s = n < 0 ? "-" : "+";
+  if (a >= 1e8) return `${s}$${(a / 1e9).toFixed(2)}bn`;
+  if (a >= 1e5) return `${s}$${(a / 1e6).toFixed(1)}M`;
+  if (a >= 1e3) return `${s}$${(a / 1e3).toFixed(0)}K`;
+  return `${s}$${a.toFixed(0)}`;
+}
+const fmtStrike = (v: number | null | undefined) =>
+  Number.isFinite(v as number) ? String(Math.round(v as number)) : "—";
+const fmtSpot = (v: number | null | undefined) =>
+  Number.isFinite(v as number) && (v as number) > 0 ? (v as number).toFixed(2) : "—";
+function etTime(ms: number | null | undefined): string {
+  if (!Number.isFinite(ms as number)) return "—";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit",
+  }).format(new Date(ms as number));
+}
+
+// ── color ────────────────────────────────────────────────────────────────────
+const CYAN_RGB: [number, number, number] = [33, 158, 188];   // HOME_THEME.cyan
+const LBLU_RGB: [number, number, number] = [142, 202, 230];  // HOME_THEME.green (light blue)
+const ORAN_RGB: [number, number, number] = [251, 133, 1];    // HOME_THEME.orange
+const RED_RGB: [number, number, number] = [239, 68, 68];     // HOME_THEME.red
+const GRN_RGB: [number, number, number] = [31, 217, 138];    // REFRESH_GREEN
+const ROSE_RGB: [number, number, number] = [244, 148, 142];  // SOFT_RED
+
+const mix = (a: number[], b: number[], t: number): [number, number, number] => [
+  Math.round(a[0] + (b[0] - a[0]) * t),
+  Math.round(a[1] + (b[1] - a[1]) * t),
+  Math.round(a[2] + (b[2] - a[2]) * t),
+];
+const rgba = (c: number[], a: number) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+/** Signed gamma → color. v is already normalized to [-1, 1]. */
+function gamColor(v: number, alpha?: number): string {
+  const m = Math.min(1, Math.abs(v));
+  const c = v >= 0 ? mix(CYAN_RGB, LBLU_RGB, m * 0.75) : mix(ORAN_RGB, RED_RGB, m * 0.6);
+  return rgba(c, alpha === undefined ? 0.15 + 0.8 * m : alpha);
+}
+function dexColor(v: number, a?: number): string {
+  const m = Math.min(1, Math.abs(v));
+  return rgba(v >= 0 ? GRN_RGB : ROSE_RGB, a === undefined ? 0.2 + 0.75 * m : a);
+}
+
+// ── model ────────────────────────────────────────────────────────────────────
+type Bubble = { ci: number; price: number; strike: number; g: number; n: number; sign: 1 | -1 };
+
+type MapModel = {
+  ok: boolean;
+  strikes: number[];
+  lo: number;
+  hi: number;
+  cols: MapColumn[];
+  /** last column, normalized to ±1 */
+  profile: number[];
+  /** raw last column, for tooltips/labels */
+  profileRaw: number[];
+  gMax: number;
+  /** heat[colIdx][strikeIdx] in 0..1, normalized on the session max */
+  heat: number[][];
+  /** signed, normalized per cell — heat magnitude carrying the gamma sign */
+  signed: number[][];
+  path: number[];
+  bubbles: Bubble[];
+  dex: number[];
+  dexRaw: number[];
+  dMax: number;
+  hasDex: boolean;
+  dexSeries: { t: number; dex: number }[];
+  dtMax: number;
+  spot: number;
+  flip: number | null;
+  callWall: number | null;
+  putWall: number | null;
+  magnet: number | null;
+  netGex: number;
+  netDex: number;
+};
+
+function buildModel(p: MapPayload | null): MapModel | null {
+  if (!p || !Array.isArray(p.strikes) || !p.strikes.length || !p.columns?.length) return null;
+  const strikes = p.strikes;
+  const cols = p.columns;
+  const n = strikes.length;
+
+  // Session-wide gamma scale. One number for every map and every column, so the
+  // heat, the profile bars and the rail all mean the same thing.
+  let gMax = 0;
+  for (const c of cols) for (const v of c.v) { const a = Math.abs(v); if (a > gMax) gMax = a; }
+  if (!(gMax > 0)) gMax = 1;
+
+  const heat: number[][] = [];
+  const signed: number[][] = [];
+  for (const c of cols) {
+    const h = new Array(n);
+    const s = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const v = c.v[i] ?? 0;
+      const m = Math.min(1, Math.abs(v) / gMax);
+      h[i] = m;
+      s[i] = v >= 0 ? m : -m;
+    }
+    heat.push(h);
+    signed.push(s);
+  }
+
+  const lastRaw = cols[cols.length - 1].v;
+  const profile = lastRaw.map((v) => Math.max(-1, Math.min(1, v / gMax)));
+
+  // Spot path. A slot with no spot (legacy rows) inherits the previous one
+  // rather than dropping to zero and drawing a spike through the floor.
+  const path: number[] = [];
+  let lastSpot = 0;
+  for (const c of cols) {
+    if (c.spot > 0) lastSpot = c.spot;
+    path.push(lastSpot);
+  }
+  for (let i = 0; i < path.length && path[i] <= 0; i++) {
+    const firstGood = path.find((v) => v > 0) ?? 0;
+    path[i] = firstGood;
+  }
+
+  const nearestIdx = (price: number) => {
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < n; i++) { const d = Math.abs(strikes[i] - price); if (d < bd) { bd = d; best = i; } }
+    return best;
+  };
+
+  // Bubbles ride spot: one per sampled slot, at that slot's price, sized by the
+  // gamma at the strike price was sitting on.
+  const step = Math.max(1, Math.round(cols.length / 16));
+  const bubbles: Bubble[] = [];
+  for (let ci = 0; ci < cols.length; ci += step) {
+    const price = path[ci];
+    if (!(price > 0)) continue;
+    const si = nearestIdx(price);
+    const g = signed[ci][si];
+    bubbles.push({
+      ci, price, strike: strikes[si], g,
+      n: Math.min(1, 0.1 + 1.5 * Math.abs(g) + 0.3 * heat[ci][si]),
+      sign: g >= 0 ? 1 : -1,
+    });
+  }
+  if (bubbles.length && bubbles[bubbles.length - 1].ci !== cols.length - 1) {
+    const ci = cols.length - 1, price = path[ci];
+    if (price > 0) {
+      const si = nearestIdx(price);
+      const g = signed[ci][si];
+      bubbles.push({ ci, price, strike: strikes[si], g, n: Math.min(1, 0.1 + 1.5 * Math.abs(g) + 0.3 * heat[ci][si]), sign: g >= 0 ? 1 : -1 });
+    }
+  }
+
+  // DEX aligned to the same ladder. Absent → hasDex false, and every DEX layer
+  // renders its own empty state instead of a flat ring.
+  const dexRaw = new Array(n).fill(0);
+  let dMax = 0, dexCount = 0;
+  const byStrike = new Map((p.dexByStrike ?? []).map((r) => [r.strike, r.dex]));
+  for (let i = 0; i < n; i++) {
+    const v = byStrike.get(strikes[i]);
+    if (v == null) continue;
+    dexRaw[i] = v;
+    dexCount++;
+    if (Math.abs(v) > dMax) dMax = Math.abs(v);
+  }
+  if (!(dMax > 0)) dMax = 1;
+  const dex = dexRaw.map((v) => Math.max(-1, Math.min(1, v / dMax)));
+
+  const dexSeries = p.dexSeries ?? [];
+  let dtMax = 0;
+  for (const d of dexSeries) if (Math.abs(d.dex) > dtMax) dtMax = Math.abs(d.dex);
+  if (!(dtMax > 0)) dtMax = 1;
+
+  return {
+    ok: true,
+    strikes, lo: strikes[0], hi: strikes[n - 1], cols,
+    profile, profileRaw: lastRaw, gMax, heat, signed, path, bubbles,
+    dex, dexRaw, dMax, hasDex: dexCount > 0 || dexSeries.length > 0, dexSeries, dtMax,
+    spot: p.levels.spot, flip: p.levels.flip,
+    callWall: p.levels.callWall, putWall: p.levels.putWall, magnet: p.levels.magnet,
+    netGex: p.levels.netGex, netDex: p.levels.netDex,
+  };
+}
+
+// ── shared chrome ────────────────────────────────────────────────────────────
+const AXIS = "rgba(255,255,255,0.34)";
+const GRID = "rgba(255,255,255,0.05)";
+const FLIP_C = "#7dd3fc";
+
+function Lab({ x, y, children, size = 8, fill = "rgba(255,255,255,0.34)", anchor }: {
+  x: number; y: number; children: string; size?: number; fill?: string; anchor?: "start" | "middle" | "end";
+}) {
+  return (
+    <text x={x} y={y} fill={fill} fontSize={size} fontWeight={700} letterSpacing="0.14em" textAnchor={anchor}>
+      {children}
+    </text>
+  );
+}
+
+function RegimeStrip({ m, symbol, date, asOf }: { m: MapModel; symbol: string; date: string; asOf: number | null }) {
+  const cells: { label: string; value: string; tone: string; sub: string }[] = [
+    {
+      label: "Net gamma", value: fmtBn(m.netGex),
+      tone: m.netGex >= 0 ? HOME_THEME.cyan : HOME_THEME.orange,
+      sub: m.netGex >= 0 ? "long gamma · dealers dampen" : "short gamma · dealers amplify",
+    },
+    {
+      label: "Gamma flip", value: fmtStrike(m.flip), tone: FLIP_C,
+      sub: m.flip == null ? "no sign change on the ladder"
+        : m.spot > m.flip ? "spot above · vol suppressed" : "spot below · vol amplified",
+    },
+    {
+      label: "Net DEX", value: m.hasDex ? fmtBn(m.netDex) : "no data",
+      tone: !m.hasDex ? HOME_THEME.muted : m.netDex >= 0 ? REFRESH_GREEN : SOFT_RED,
+      sub: !m.hasDex ? "greek_snapshots empty for this session"
+        : m.netDex >= 0 ? "dealers short delta · buy dips" : "dealers long delta · sell rips",
+    },
+    { label: "Call wall", value: fmtStrike(m.callWall), tone: HOME_THEME.green, sub: "largest +γ above spot" },
+    { label: "Put wall", value: fmtStrike(m.putWall), tone: HOME_THEME.orange, sub: "largest −γ below spot" },
+    { label: "Magnet", value: fmtStrike(m.magnet), tone: LIGHT_BLUE, sub: "highest |GEX| node" },
+  ];
+  return (
+    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "stretch" }}>
+      <div style={{ ...statTileStyle, padding: "12px 16px", minWidth: 168, flex: "0 0 auto" }}>
+        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.5 }}>
+          {symbol.replace(/^\$/, "")} · 0DTE
+        </div>
+        <div style={{ fontSize: 26, fontWeight: 800, marginTop: 2, color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{fmtSpot(m.spot)}</div>
+        <div style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.5, marginTop: 2 }}>
+          {date} · {asOf ? `${etTime(asOf)} ET` : "—"}
+        </div>
+      </div>
+      {cells.map((c) => (
+        <div key={c.label} style={{ ...statTileStyle, padding: "12px 16px", minWidth: 150, flex: 1, borderLeft: `3px solid ${c.tone}` }}>
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.5 }}>
+            {c.label}
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 800, marginTop: 2, color: c.tone, fontVariantNumeric: "tabular-nums" }}>{c.value}</div>
+          <div style={{ fontSize: 10.5, color: HOME_THEME.text, opacity: 0.4, marginTop: 2 }}>{c.sub}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function NoDex({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
+  return (
+    <g>
+      <rect x={x} y={y} width={w} height={h} rx={8} fill="rgba(255,255,255,0.012)" stroke={HOME_THEME.border} strokeDasharray="4 4" />
+      <text x={x + w / 2} y={y + h / 2 + 3} fill={HOME_THEME.muted} opacity={0.45} fontSize={10} fontWeight={700}
+        letterSpacing="0.14em" textAnchor="middle">NO DEX FOR THIS SESSION</text>
+    </g>
+  );
+}
+
+// ═════════════════════════ A · TAPE FIELD ════════════════════════════════════
+function TapeField({ m }: { m: MapModel }) {
+  const W = 1240, H = 470;
+  const PX = 24, PW = 118;
+  const FX = PX + PW + 46, FW = 742;
+  const RX = FX + FW + 14, RW = 138;
+  const FY = 20, FH = 320;
+  const KY = FY + FH + 40, KH = 66;
+
+  const yOf = (k: number) => FY + FH - ((k - m.lo) / Math.max(1, m.hi - m.lo)) * FH;
+  const xOf = (i: number) => FX + (i / Math.max(1, m.cols.length - 1)) * FW;
+  const cw = FW / Math.max(1, m.cols.length);
+  const ch = FH / Math.max(1, m.strikes.length - 1);
+
+  const ticks = strikeTicks(m.lo, m.hi);
+  const timeTicks = pickTimeTicks(m.cols);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }} preserveAspectRatio="xMidYMid meet">
+      {/* heat field */}
+      <rect x={FX - 4} y={FY - 4} width={FW + 8} height={FH + 8} rx={10} fill="rgba(0,0,0,0.30)" />
+      {m.cols.map((c, ci) =>
+        m.strikes.map((k, si) => {
+          const h = m.heat[ci][si];
+          if (h < 0.045) return null;
+          return <rect key={`${ci}-${si}`} x={xOf(ci) - cw / 2} y={yOf(k) - ch / 2} width={cw + 0.6} height={ch + 0.6}
+            fill={gamColor(m.signed[ci][si], 0.05 + 0.72 * h)} />;
+        })
+      )}
+      {ticks.map((k) => <line key={`g${k}`} x1={FX} y1={yOf(k)} x2={FX + FW} y2={yOf(k)} stroke={GRID} />)}
+
+      {/* walls + flip */}
+      {([[m.callWall, HOME_THEME.green, "CALL WALL"], [m.magnet, LIGHT_BLUE, "MAGNET"], [m.putWall, HOME_THEME.orange, "PUT WALL"]] as [number | null, string, string][])
+        .filter(([k]) => k != null).map(([k, col, label]) => (
+          <g key={label}>
+            <rect x={FX} y={yOf(k as number) - 4} width={FW} height={8} fill={col} opacity={0.11} />
+            <line x1={FX} y1={yOf(k as number)} x2={FX + FW} y2={yOf(k as number)} stroke={col} strokeWidth={0.9} opacity={0.5} />
+          </g>
+        ))}
+      {m.flip != null && (
+        <g>
+          <line x1={FX} y1={yOf(m.flip)} x2={FX + FW} y2={yOf(m.flip)} stroke={FLIP_C} strokeWidth={1.2} strokeDasharray="5 4" opacity={0.75} />
+          <rect x={FX + 4} y={yOf(m.flip) - 16} width={106} height={13} rx={3} fill="rgba(5,6,10,0.82)" />
+          <text x={FX + 9} y={yOf(m.flip) - 6} fill={FLIP_C} fontSize={8} fontWeight={700} letterSpacing="0.1em">
+            {`GAMMA FLIP ${fmtStrike(m.flip)}`}
+          </text>
+        </g>
+      )}
+
+      {/* bubbles ride spot, drawn UNDER the path */}
+      {m.bubbles.map((b, i) => {
+        const r = 3.5 + b.n * 15;
+        const c = b.sign > 0 ? CYAN_RGB : ORAN_RGB;
+        const last = i === m.bubbles.length - 1;
+        return (
+          <g key={`b${b.ci}`}>
+            <circle cx={xOf(b.ci)} cy={yOf(b.price)} r={r} fill={rgba(c, last ? 0.24 : 0.13)}
+              stroke={rgba(c, last ? 0.95 : 0.66)} strokeWidth={last ? 1.6 : 1} />
+            <circle cx={xOf(b.ci)} cy={yOf(b.price)} r={1.5} fill={rgba(c, 0.92)} />
+          </g>
+        );
+      })}
+
+      {/* spot path */}
+      <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="rgba(255,255,255,0.30)" strokeWidth={4.5} strokeLinejoin="round" />
+      <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="#fff" strokeWidth={1.6} strokeLinejoin="round" />
+      <circle cx={xOf(m.cols.length - 1)} cy={yOf(m.path[m.path.length - 1])} r={9} fill="rgba(255,255,255,0.14)" />
+      <circle cx={xOf(m.cols.length - 1)} cy={yOf(m.path[m.path.length - 1])} r={3.4} fill="#fff" />
+      {timeTicks.map(({ i, label }) => (
+        <text key={`t${i}`} x={xOf(i)} y={FY + FH + 14} fill={AXIS} fontSize={8} textAnchor="middle" opacity={0.75}>{label}</text>
+      ))}
+
+      {/* left profile */}
+      <Lab x={PX} y={FY - 8}>NET GEX PROFILE</Lab>
+      <line x1={PX + PW} y1={FY} x2={PX + PW} y2={FY + FH} stroke="rgba(255,255,255,0.22)" />
+      {m.strikes.map((k, i) => {
+        const v = m.profile[i];
+        const w = Math.abs(v) * (PW - 4);
+        if (w < 0.4) return null;
+        return <rect key={`p${k}`} x={PX + PW - w} y={yOf(k) - ch * 0.42} width={w} height={Math.max(1.4, ch * 0.84)} rx={1}
+          fill={rgba(v >= 0 ? CYAN_RGB : ORAN_RGB, 0.26 + 0.52 * Math.abs(v))} />;
+      })}
+
+      {/* right rail */}
+      <Lab x={RX} y={FY - 8}>GEX RAIL</Lab>
+      <rect x={RX} y={FY} width={RW} height={FH} rx={8} fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.07)" />
+      {m.strikes.map((k, i) => {
+        const v = m.profile[i];
+        return <rect key={`r${k}`} x={RX + 6} y={yOf(k) - ch * 0.42} width={Math.abs(v) * 26 + 1.5} height={Math.max(1.4, ch * 0.84)} rx={1}
+          fill={gamColor(v, 0.3 + 0.55 * Math.abs(v))} />;
+      })}
+      {ticks.map((k) => (
+        <g key={`rt${k}`}>
+          <line x1={RX + 34} y1={yOf(k)} x2={RX + 40} y2={yOf(k)} stroke="rgba(255,255,255,0.18)" />
+          <text x={RX + 96} y={yOf(k) + 3} fill={AXIS} fontSize={8}>{k}</text>
+        </g>
+      ))}
+      {([[m.callWall, HOME_THEME.green, "CW"], [m.magnet, LIGHT_BLUE, "MG"], [m.flip, FLIP_C, "FL"], [m.putWall, HOME_THEME.orange, "PW"]] as [number | null, string, string][])
+        .filter(([k]) => k != null).map(([k, col, tag]) => (
+          <g key={tag}>
+            <rect x={RX + 42} y={yOf(k as number) - 7} width={50} height={14} rx={3} fill={`${col}26`} stroke={`${col}80`} />
+            <text x={RX + 46} y={yOf(k as number) + 3.5} fill={col} fontSize={7.4} fontWeight={700}>{`${tag} ${fmtStrike(k)}`}</text>
+          </g>
+        ))}
+      {m.spot > 0 && (
+        <g>
+          <polygon points={`${RX - 2},${yOf(m.spot)} ${RX - 11},${yOf(m.spot) - 5} ${RX - 11},${yOf(m.spot) + 5}`} fill="#fff" />
+          <line x1={RX} y1={yOf(m.spot)} x2={RX + RW} y2={yOf(m.spot)} stroke="#fff" opacity={0.5} />
+        </g>
+      )}
+
+      {/* DEX keel */}
+      <Lab x={FX} y={KY - 8}>NET DEX PRESSURE · SESSION</Lab>
+      {m.hasDex && m.dexSeries.length > 1 ? (
+        <g>
+          <rect x={FX - 4} y={KY} width={FW + 8} height={KH} rx={10} fill="rgba(255,255,255,0.018)" stroke="rgba(255,255,255,0.07)" />
+          <line x1={FX} y1={KY + KH / 2} x2={FX + FW} y2={KY + KH / 2} stroke="rgba(255,255,255,0.16)" />
+          {m.dexSeries.map((d, i) => {
+            const x = FX + (i / Math.max(1, m.dexSeries.length - 1)) * FW;
+            const y = KY + KH / 2 - (d.dex / m.dtMax) * (KH / 2 - 7);
+            const bw = Math.max(1.2, FW / m.dexSeries.length - 0.6);
+            return <rect key={`k${i}`} x={x - bw / 2} y={Math.min(KY + KH / 2, y)} width={bw}
+              height={Math.abs(KY + KH / 2 - y)} fill={dexColor(d.dex / m.dtMax, 0.3 + 0.5 * Math.min(1, Math.abs(d.dex) / m.dtMax))} />;
+          })}
+        </g>
+      ) : <NoDex x={FX - 4} y={KY} w={FW + 8} h={KH} />}
+
+      <Lab x={RX} y={KY - 8}>DEX BY STRIKE</Lab>
+      {m.hasDex ? (
+        <g>
+          <rect x={RX} y={KY} width={RW} height={KH} rx={8} fill="rgba(255,255,255,0.018)" stroke="rgba(255,255,255,0.07)" />
+          <line x1={RX + RW / 2} y1={KY + 5} x2={RX + RW / 2} y2={KY + KH - 5} stroke="rgba(255,255,255,0.14)" />
+          {m.strikes.map((k, i) => {
+            const v = m.dex[i];
+            if (Math.abs(v) < 0.02) return null;
+            const dh = (KH - 12) / m.strikes.length;
+            const half = RW / 2 - 8;
+            return <rect key={`dk${k}`} x={v >= 0 ? RX + RW / 2 : RX + RW / 2 + v * half} y={KY + 6 + i * dh}
+              width={Math.abs(v) * half} height={Math.max(0.8, dh - 0.4)} fill={dexColor(v, 0.35 + 0.5 * Math.abs(v))} />;
+          })}
+        </g>
+      ) : <NoDex x={RX} y={KY} w={RW} h={KH} />}
+    </svg>
+  );
+}
+
+// ═════════════════════════ B · POLAR RETICLE ═════════════════════════════════
+function PolarReticle({ m }: { m: MapModel }) {
+  const W = 1240, H = 660;
+  const CX = 380, CY = 336;
+  const R0 = 58, R1 = 98, R2 = 176, R3 = 196;
+  const RAIL = R3 + 34, TRACK = RAIL + 40, BAND = 13;
+  const span = Math.max(1, m.hi - m.lo);
+
+  // bearing = strike, spot at the top, 300° of sweep
+  const ang = (k: number) => ((-90 + ((k - m.spot) / span) * 300) * Math.PI) / 180;
+  const P = (r: number, a: number): [number, number] => [CX + Math.cos(a) * r, CY + Math.sin(a) * r];
+  const arcPath = (r: number, a0: number, a1: number) => {
+    const [x0, y0] = P(r, a0), [x1, y1] = P(r, a1);
+    return `M${x0} ${y0}A${r} ${r} 0 0 1 ${x1} ${y1}`;
+  };
+
+  const step = m.strikes.length > 1 ? m.strikes[1] - m.strikes[0] : 5;
+  const ringCount = Math.min(10, m.cols.length);
+  const rw = (R2 - R1) / Math.max(1, ringCount);
+  const ticks = strikeTicks(m.lo, m.hi);
+
+  // bearing = TIME on the outer band
+  const aT = (ci: number) => ((-90 + (ci / Math.max(1, m.cols.length - 1)) * 330) * Math.PI) / 180;
+  const rT = (ci: number) => {
+    if (m.flip == null || !(m.path[ci] > 0)) return TRACK;
+    return TRACK + Math.max(-BAND, Math.min(BAND, ((m.path[ci] - m.flip) / 34) * BAND));
+  };
+  const clockTicks = pickTimeTicks(m.cols, 6);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }} preserveAspectRatio="xMidYMid meet">
+      {/* heat rings — inner = open, outer = now */}
+      {Array.from({ length: ringCount }, (_, r) => {
+        const ci = Math.round((r / Math.max(1, ringCount - 1)) * (m.cols.length - 1));
+        const ri = R1 + r * rw;
+        return m.strikes.map((k, si) => {
+          const h = m.heat[ci][si];
+          if (h < 0.06) return null;
+          const a0 = ang(k - step / 2), a1 = ang(k + step / 2);
+          const [x0, y0] = P(ri, a0), [x1, y1] = P(ri + rw - 0.7, a0);
+          const [x2, y2] = P(ri + rw - 0.7, a1), [x3, y3] = P(ri, a1);
+          return <path key={`h${r}-${si}`}
+            d={`M${x0} ${y0}L${x1} ${y1}A${ri + rw} ${ri + rw} 0 0 1 ${x2} ${y2}L${x3} ${y3}A${ri} ${ri} 0 0 0 ${x0} ${y0}Z`}
+            fill={gamColor(m.signed[ci][si], 0.05 + 0.62 * h)} />;
+        });
+      })}
+
+      {/* spokes = net GEX */}
+      {m.strikes.map((k, i) => {
+        const v = m.profile[i];
+        if (Math.abs(v) < 0.02) return null;
+        const a = ang(k);
+        const [x0, y0] = P(R2 + 3, a), [x1, y1] = P(R2 + 3 + Math.abs(v) * 30, a);
+        return <line key={`s${k}`} x1={x0} y1={y0} x2={x1} y2={y1}
+          stroke={rgba(v >= 0 ? CYAN_RGB : ORAN_RGB, 0.32 + 0.55 * Math.abs(v))} strokeWidth={3.2} strokeLinecap="round" />;
+      })}
+
+      {/* rail ring */}
+      <circle cx={CX} cy={CY} r={RAIL} fill="none" stroke="rgba(255,255,255,0.09)" />
+      {ticks.map((k) => {
+        const a = ang(k);
+        const [x0, y0] = P(RAIL, a), [x1, y1] = P(RAIL + 7, a), [tx, ty] = P(RAIL + 18, a);
+        return (
+          <g key={`rt${k}`}>
+            <line x1={x0} y1={y0} x2={x1} y2={y1} stroke="rgba(255,255,255,0.24)" />
+            <text x={tx} y={ty + 3} fill={AXIS} fontSize={8} textAnchor="middle">{k}</text>
+          </g>
+        );
+      })}
+      {([[m.callWall, HOME_THEME.green, "CALL WALL"], [m.magnet, LIGHT_BLUE, "MAGNET"], [m.putWall, HOME_THEME.orange, "PUT WALL"]] as [number | null, string, string][])
+        .filter(([k]) => k != null).map(([k, col, label]) => {
+          const w = span * 0.04;
+          const [lx, ly] = P(RAIL + 92, ang(k as number));
+          return (
+            <g key={label}>
+              <path d={arcPath(RAIL, ang((k as number) - w), ang((k as number) + w))} fill="none" stroke={col} strokeWidth={5} opacity={0.75} strokeLinecap="round" />
+              <text x={lx} y={ly + 3} fill={col} fontSize={7.6} fontWeight={700} letterSpacing="0.1em" textAnchor="middle">{label}</text>
+            </g>
+          );
+        })}
+      {m.flip != null && (() => {
+        const a = ang(m.flip);
+        const [x0, y0] = P(R1 - 8, a), [x1, y1] = P(RAIL + 12, a), [tx, ty] = P(RAIL + 84, a);
+        return (
+          <g>
+            <line x1={x0} y1={y0} x2={x1} y2={y1} stroke={FLIP_C} strokeWidth={1.3} strokeDasharray="5 4" opacity={0.85} />
+            <text x={tx} y={ty} fill={FLIP_C} fontSize={8} fontWeight={700} textAnchor="middle">{`FLIP ${fmtStrike(m.flip)}`}</text>
+          </g>
+        );
+      })()}
+
+      {/* session clock — bearing is TIME here, not strike */}
+      <circle cx={CX} cy={CY} r={TRACK} fill="none" stroke="rgba(125,211,252,0.30)" strokeDasharray="4 5" />
+      {clockTicks.map(({ i, label }) => {
+        const a = aT(i);
+        const [x0, y0] = P(TRACK - BAND - 6, a), [x1, y1] = P(TRACK + BAND + 6, a), [tx, ty] = P(TRACK + BAND + 22, a);
+        return (
+          <g key={`ct${i}`}>
+            <line x1={x0} y1={y0} x2={x1} y2={y1} stroke="rgba(255,255,255,0.10)" />
+            <text x={tx} y={ty + 3} fill={AXIS} fontSize={7.2} fontWeight={600} textAnchor="middle" opacity={0.85}>{label}</text>
+          </g>
+        );
+      })}
+      <path d={pathD(m.cols.map((_, ci) => P(rT(ci), aT(ci))))} fill="none" stroke="rgba(255,255,255,0.30)" strokeWidth={1.2} />
+      {m.bubbles.map((b, i) => {
+        const [x, y] = P(rT(b.ci), aT(b.ci));
+        const c = b.sign > 0 ? CYAN_RGB : ORAN_RGB;
+        const last = i === m.bubbles.length - 1;
+        const r = 3 + b.n * 11;
+        return (
+          <g key={`cb${b.ci}`}>
+            <circle cx={x} cy={y} r={r} fill={rgba(c, last ? 0.28 : 0.15)} stroke={rgba(c, last ? 0.95 : 0.66)} strokeWidth={last ? 1.6 : 1} />
+            <circle cx={x} cy={y} r={1.4} fill={rgba(c, 0.92)} />
+            {last && <>
+              <circle cx={x} cy={y} r={r + 7} fill="none" stroke={rgba(c, 0.4)} strokeDasharray="2 3" />
+              <text x={x} y={y + r + 18} fill={rgba(c, 0.92)} fontSize={7.4} fontWeight={700} letterSpacing="0.1em" textAnchor="middle">SPOT NOW</text>
+            </>}
+          </g>
+        );
+      })}
+
+      {/* inner DEX ring */}
+      {m.hasDex ? (
+        <g>
+          <circle cx={CX} cy={CY} r={(R0 + R1) / 2} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={R1 - R0 - 14} />
+          {m.strikes.map((k, i) => {
+            const v = m.dex[i];
+            if (Math.abs(v) < 0.03) return null;
+            const dr = (R0 + R1) / 2, dw = R1 - R0 - 14;
+            return <path key={`dx${k}`} d={arcPath(dr, ang(k - step / 2), ang(k + step / 2))} fill="none"
+              stroke={dexColor(v, 0.22 + 0.62 * Math.abs(v))} strokeWidth={dw * Math.min(1, 0.35 + 0.65 * Math.abs(v))} />;
+          })}
+        </g>
+      ) : (
+        <circle cx={CX} cy={CY} r={(R0 + R1) / 2} fill="none" stroke="rgba(255,255,255,0.07)"
+          strokeWidth={R1 - R0 - 14} strokeDasharray="3 5" />
+      )}
+
+      {/* core */}
+      <circle cx={CX} cy={CY} r={R0 - 14} fill="rgba(5,6,10,0.94)" stroke="rgba(255,255,255,0.10)" />
+      <text x={CX} y={CY - 12} fill={HOME_THEME.muted} opacity={0.4} fontSize={7.6} fontWeight={700} letterSpacing="0.16em" textAnchor="middle">SPOT</text>
+      <text x={CX} y={CY + 9} fill="#fff" fontSize={20} fontWeight={800} textAnchor="middle">{fmtSpot(m.spot)}</text>
+
+      {/* ring map */}
+      <Lab x={780} y={38}>RING MAP</Lab>
+      {[
+        ["INNER RING", m.hasDex ? "DEX by strike — green = dealers short delta" : "DEX unavailable for this session"],
+        ["BAND RINGS", `heatmap — ${ringCount} time slices, oldest inside`],
+        ["SPOKES", "net GEX magnitude by strike"],
+        ["RAIL", "strike ticks, wall arcs, flip gate"],
+        ["OUTER BAND", "SESSION CLOCK — bearing is TIME, not strike"],
+        ["· dashed ring", "the gamma flip. outside it = spot above flip"],
+        ["· bubbles", "GEX at spot — size = |GEX| the tape is standing in"],
+      ].map(([a, b], i) => (
+        <text key={a} x={780} y={60 + i * 17} fill="rgba(255,255,255,0.4)" fontSize={9.5}>
+          {`· ${a}  —  ${b}`}
+        </text>
+      ))}
+    </svg>
+  );
+}
+
+// ═════════════════════════════ C · SPINE ═════════════════════════════════════
+function Spine({ m }: { m: MapModel }) {
+  const W = 1240, H = 560;
+  const SPX = 470, SPW = 300;
+  const TY = 26, TH = 470;
+  const yOf = (k: number) => TY + TH - ((k - m.lo) / Math.max(1, m.hi - m.lo)) * TH;
+  const rowH = TH / Math.max(1, m.strikes.length - 1);
+  const nb = Math.min(m.cols.length, 24);
+  const c0 = m.cols.length - nb;
+  const cw = SPW / nb;
+  const LW = SPX - 62, LWW = 300;
+  const RW = SPX + SPW + 62, RWW = 300;
+  const ticks = strikeTicks(m.lo, m.hi);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }} preserveAspectRatio="xMidYMid meet">
+      {/* spine heat */}
+      <Lab x={SPX} y={TY - 8}>{`SPINE · STRIKE × TIME HEAT (LAST ${nb} SLOTS)`}</Lab>
+      <rect x={SPX} y={TY} width={SPW} height={TH} rx={10} fill="rgba(0,0,0,0.30)" stroke="rgba(255,255,255,0.07)" />
+      {Array.from({ length: nb }, (_, t) => {
+        const ci = c0 + t;
+        return m.strikes.map((k, si) => {
+          const h = m.heat[ci][si];
+          if (h < 0.05) return null;
+          return <rect key={`sh${t}-${si}`} x={SPX + t * cw} y={yOf(k) - rowH / 2} width={cw + 0.5} height={rowH + 0.5}
+            fill={gamColor(m.signed[ci][si], 0.04 + 0.7 * h)} />;
+        });
+      })}
+      <path d={pathD(Array.from({ length: nb }, (_, t) => [SPX + t * cw + cw / 2, yOf(m.path[c0 + t])]))}
+        fill="none" stroke="rgba(255,255,255,0.28)" strokeWidth={4} />
+      <path d={pathD(Array.from({ length: nb }, (_, t) => [SPX + t * cw + cw / 2, yOf(m.path[c0 + t])]))}
+        fill="none" stroke="#fff" strokeWidth={1.4} />
+
+      {/* walls + flip across the spine */}
+      {([[m.callWall, HOME_THEME.green, "CALL WALL"], [m.magnet, LIGHT_BLUE, "MAGNET"], [m.putWall, HOME_THEME.orange, "PUT WALL"]] as [number | null, string, string][])
+        .filter(([k]) => k != null).map(([k, col, label]) => (
+          <g key={label}>
+            <rect x={SPX} y={yOf(k as number) - 5} width={SPW} height={10} fill={col} opacity={0.13} />
+            <line x1={SPX} y1={yOf(k as number)} x2={SPX + SPW} y2={yOf(k as number)} stroke={col} opacity={0.55} />
+            <text x={SPX + 8} y={yOf(k as number) - 8} fill={col} fontSize={7.6} fontWeight={700} letterSpacing="0.12em">
+              {`${label} · ${fmtStrike(k)}`}
+            </text>
+          </g>
+        ))}
+      {m.flip != null && (
+        <g>
+          <line x1={SPX} y1={yOf(m.flip)} x2={SPX + SPW} y2={yOf(m.flip)} stroke={FLIP_C} strokeDasharray="5 4" strokeWidth={1.2} />
+          <text x={SPX + SPW - 8} y={yOf(m.flip) + 13} fill={FLIP_C} fontSize={7.8} fontWeight={700} letterSpacing="0.12em" textAnchor="end">
+            {`FLIP ${fmtStrike(m.flip)}`}
+          </text>
+        </g>
+      )}
+
+      {/* bubbles pinned to the path inside the spine */}
+      {m.bubbles.filter((b) => b.ci >= c0).map((b, i, arr) => {
+        const bx = SPX + (b.ci - c0 + 0.5) * cw;
+        const c = b.sign > 0 ? CYAN_RGB : ORAN_RGB;
+        const last = i === arr.length - 1;
+        const r = 3 + b.n * 13;
+        return (
+          <g key={`sb${b.ci}`}>
+            <circle cx={bx} cy={yOf(b.price)} r={r} fill={rgba(c, last ? 0.26 : 0.13)} stroke={rgba(c, last ? 0.95 : 0.66)} strokeWidth={last ? 1.5 : 1} />
+            <circle cx={bx} cy={yOf(b.price)} r={1.5} fill={rgba(c, 0.9)} />
+          </g>
+        );
+      })}
+
+      {/* spot cursor */}
+      {m.spot > 0 && (
+        <g>
+          <line x1={LW - LWW} y1={yOf(m.spot)} x2={RW + RWW} y2={yOf(m.spot)} stroke="#fff" opacity={0.3} strokeDasharray="2 3" />
+          <rect x={SPX + SPW / 2 - 42} y={yOf(m.spot) - 11} width={84} height={22} rx={5} fill="rgba(5,6,10,0.9)" stroke="rgba(255,255,255,0.45)" />
+          <text x={SPX + SPW / 2} y={yOf(m.spot) + 4.5} fill="#fff" fontSize={11} fontWeight={700} textAnchor="middle">{fmtSpot(m.spot)}</text>
+        </g>
+      )}
+
+      {/* left wing — GEX */}
+      <Lab x={LW - LWW} y={TY - 8}>◄ NET GEX</Lab>
+      <line x1={LW} y1={TY} x2={LW} y2={TY + TH} stroke="rgba(255,255,255,0.14)" />
+      {m.strikes.map((k, i) => {
+        const v = m.profile[i];
+        const w = Math.abs(v) * LWW;
+        if (w < 0.4) return null;
+        return <rect key={`lw${k}`} x={LW - w} y={yOf(k) - rowH * 0.4} width={w} height={Math.max(1.4, rowH * 0.8)} rx={1.5}
+          fill={rgba(v >= 0 ? CYAN_RGB : ORAN_RGB, 0.26 + 0.55 * Math.abs(v))} />;
+      })}
+      {ticks.map((k) => <text key={`lt${k}`} x={SPX - 14} y={yOf(k) + 3} fill={AXIS} fontSize={8.4} textAnchor="end">{k}</text>)}
+      <text x={LW - LWW} y={TY + TH + 20} fill="rgba(255,255,255,0.34)" fontSize={9}>
+        bar length = |GEX| · blue = long gamma (dealers dampen) · orange = short gamma (dealers amplify)
+      </text>
+
+      {/* right wing — DEX */}
+      <Lab x={RW} y={TY - 8}>NET DEX ►</Lab>
+      {m.hasDex ? (
+        <g>
+          <line x1={RW} y1={TY} x2={RW} y2={TY + TH} stroke="rgba(255,255,255,0.14)" />
+          {m.strikes.map((k, i) => {
+            const v = m.dex[i];
+            const w = Math.abs(v) * RWW;
+            if (w < 0.4) return null;
+            return <rect key={`rw${k}`} x={RW} y={yOf(k) - rowH * 0.4} width={w} height={Math.max(1.4, rowH * 0.8)} rx={1.5}
+              fill={dexColor(v, 0.24 + 0.55 * Math.abs(v))} />;
+          })}
+          {ticks.map((k) => <text key={`rt${k}`} x={SPX + SPW + 14} y={yOf(k) + 3} fill={AXIS} fontSize={8.4}>{k}</text>)}
+          <text x={RW} y={TY + TH + 20} fill="rgba(255,255,255,0.34)" fontSize={9}>
+            bar length = |DEX| · green = dealers short delta · rose = dealers long delta
+          </text>
+        </g>
+      ) : <NoDex x={RW} y={TY} w={RWW} h={TH} />}
+    </svg>
+  );
+}
+
+// ═════════════════════════ D · GAMMA TERRAIN ═════════════════════════════════
+function GammaTerrain({ m }: { m: MapModel }) {
+  const W = 1240, H = 520;
+  const L = 34, R = W - 210, TP = 26, BT = H - 52;
+  const FWD = R - L, FHT = BT - TP;
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  const yOf = (k: number) => TP + FHT - ((k - m.lo) / Math.max(1, m.hi - m.lo)) * FHT;
+  const xOf = (i: number) => L + (i / Math.max(1, m.cols.length - 1)) * FWD;
+  const ticks = strikeTicks(m.lo, m.hi);
+  const timeTicks = pickTimeTicks(m.cols);
+  const rowH = FHT / Math.max(1, m.strikes.length - 1);
+
+  // Terrain fill + iso-GEX contours. Canvas rather than SVG: this is a per-pixel
+  // field, and 200×140 <rect>s per frame is not a chart, it is a memory leak.
+  useEffect(() => {
+    const cv = canvasRef.current;
+    if (!cv) return;
+    const DPR = 2;
+    cv.width = Math.round(FWD * DPR);
+    cv.height = Math.round(FHT * DPR);
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    const NX = Math.min(220, Math.max(40, m.cols.length * 4));
+    const NY = Math.min(180, Math.max(40, m.strikes.length * 2));
+
+    // Resample the (slot × strike) grid onto a smooth field. Bilinear in time,
+    // gaussian in strike — the strike axis is the coarse one (5-point ladder),
+    // and nearest-neighbour there produces stair-stepped contours.
+    const F: number[][] = [];
+    const sig = Math.max(1.2, (m.hi - m.lo) / Math.max(1, m.strikes.length) * 1.4);
+    for (let j = 0; j < NY; j++) {
+      const k = m.hi - ((m.hi - m.lo) * j) / (NY - 1);
+      const row: number[] = [];
+      for (let i = 0; i < NX; i++) {
+        const ct = (i / (NX - 1)) * (m.cols.length - 1);
+        const c0 = Math.floor(ct), c1 = Math.min(m.cols.length - 1, c0 + 1), fr = ct - c0;
+        let acc = 0, wsum = 0;
+        for (let s = 0; s < m.strikes.length; s++) {
+          const d = m.strikes[s] - k;
+          const w = Math.exp(-(d * d) / (2 * sig * sig));
+          if (w < 0.02) continue;
+          acc += (m.signed[c0][s] * (1 - fr) + m.signed[c1][s] * fr) * w;
+          wsum += w;
+        }
+        row.push(wsum > 0 ? acc / wsum : 0);
+      }
+      F.push(row);
+    }
+    let fmax = 0;
+    for (const r of F) for (const v of r) fmax = Math.max(fmax, Math.abs(v));
+    if (fmax > 0) for (const r of F) for (let i = 0; i < r.length; i++) r[i] /= fmax;
+
+    const img = ctx.createImageData(cv.width, cv.height);
+    for (let y = 0; y < cv.height; y++) {
+      for (let x = 0; x < cv.width; x++) {
+        const fx = (x / (cv.width - 1)) * (NX - 1), fy = (y / (cv.height - 1)) * (NY - 1);
+        const x0 = Math.floor(fx), y0 = Math.floor(fy);
+        const x1 = Math.min(NX - 1, x0 + 1), y1 = Math.min(NY - 1, y0 + 1);
+        const ax = fx - x0, ay = fy - y0;
+        const v = F[y0][x0] * (1 - ax) * (1 - ay) + F[y0][x1] * ax * (1 - ay) + F[y1][x0] * (1 - ax) * ay + F[y1][x1] * ax * ay;
+        // Hypsometric banding: quantized elevation reads as a contour map,
+        // a continuous ramp reads as a blurry heatmap.
+        const mag = Math.min(1, Math.floor(Math.min(1, Math.abs(v)) * 9) / 9 + 0.055);
+        const t2 = Math.pow(mag, 1.15);
+        const c = v >= 0
+          ? mix([6, 13, 20], mix(CYAN_RGB, LBLU_RGB, Math.min(1, mag * 0.9)), t2)
+          : mix([20, 9, 5], mix(ORAN_RGB, RED_RGB, Math.min(1, mag * 0.6)), t2);
+        const o = (y * cv.width + x) * 4;
+        img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+
+    // Marching squares for the iso-GEX lines, including the zero contour, which
+    // IS the gamma flip drawn as a coastline rather than a straight line.
+    const sx = (i: number) => (i / (NX - 1)) * cv.width;
+    const sy = (j: number) => (j / (NY - 1)) * cv.height;
+    const contour = (level: number, stroke: string, wid: number, dash: number[]) => {
+      ctx.beginPath();
+      for (let j = 0; j < NY - 1; j++) {
+        for (let i = 0; i < NX - 1; i++) {
+          const a = F[j][i], b = F[j][i + 1], c = F[j + 1][i + 1], d = F[j + 1][i];
+          const idx = (a > level ? 8 : 0) | (b > level ? 4 : 0) | (c > level ? 2 : 0) | (d > level ? 1 : 0);
+          if (idx === 0 || idx === 15) continue;
+          const ip = (v1: number, v2: number, X1: number, Y1: number, X2: number, Y2: number): [number, number] => {
+            const t = (level - v1) / ((v2 - v1) || 1e-6);
+            return [X1 + (X2 - X1) * t, Y1 + (Y2 - Y1) * t];
+          };
+          const T = ip(a, b, sx(i), sy(j), sx(i + 1), sy(j));
+          const Rr = ip(b, c, sx(i + 1), sy(j), sx(i + 1), sy(j + 1));
+          const B = ip(d, c, sx(i), sy(j + 1), sx(i + 1), sy(j + 1));
+          const Lf = ip(a, d, sx(i), sy(j), sx(i), sy(j + 1));
+          const seg: Record<number, [[number, number], [number, number]]> = {
+            1: [Lf, B], 2: [B, Rr], 3: [Lf, Rr], 4: [T, Rr], 5: [T, Lf], 6: [T, B], 7: [T, Lf],
+            8: [T, Lf], 9: [T, B], 10: [T, Rr], 11: [T, Rr], 12: [Lf, Rr], 13: [B, Rr], 14: [Lf, B],
+          };
+          const s = seg[idx];
+          if (!s) continue;
+          ctx.moveTo(s[0][0], s[0][1]); ctx.lineTo(s[1][0], s[1][1]);
+        }
+      }
+      ctx.strokeStyle = stroke; ctx.lineWidth = wid; ctx.setLineDash(dash); ctx.stroke(); ctx.setLineDash([]);
+    };
+    for (const lv of [-0.75, -0.55, -0.38, -0.24, -0.13, -0.06, 0.06, 0.13, 0.24, 0.38, 0.55, 0.75, 0.9]) {
+      contour(lv, lv > 0
+        ? `rgba(180,225,240,${0.10 + 0.24 * Math.abs(lv)})`
+        : `rgba(255,190,140,${0.10 + 0.24 * Math.abs(lv)})`, 1.6, []);
+    }
+    contour(0, "rgba(125,211,252,0.95)", 3.2, [12, 8]);
+  }, [m, FWD, FHT]);
+
+  return (
+    <div style={{ position: "relative", width: "100%" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }} preserveAspectRatio="xMidYMid meet">
+        <foreignObject x={L} y={TP} width={FWD} height={FHT}>
+          <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block", borderRadius: 6 }} />
+        </foreignObject>
+        <rect x={L} y={TP} width={FWD} height={FHT} fill="none" stroke="rgba(255,255,255,0.10)" />
+
+        {/* DEX current — direction and force of dealer hedging, by strike band */}
+        {m.hasDex && Array.from({ length: 9 }, (_, j) => {
+          const k = m.lo + ((m.hi - m.lo) * (j + 0.5)) / 9;
+          let bi = 0, bd = Infinity;
+          m.strikes.forEach((s, i) => { const d = Math.abs(s - k); if (d < bd) { bd = d; bi = i; } });
+          const v = m.dex[bi];
+          if (Math.abs(v) < 0.03) return null;
+          return Array.from({ length: 7 }, (_, i) => {
+            const x = L + 40 + ((FWD - 80) * i) / 6, y = yOf(k);
+            const len = 14 + Math.abs(v) * 32, dir = v >= 0 ? 1 : -1;
+            const col = dexColor(v, 0.2 + 0.42 * Math.abs(v));
+            const tip = dir > 0 ? x + len / 2 : x - len / 2;
+            return (
+              <g key={`fa${j}-${i}`}>
+                <line x1={x - len / 2} y1={y} x2={x + len / 2} y2={y} stroke={col} strokeWidth={1.5} strokeLinecap="round" />
+                <polygon points={`${tip},${y} ${tip - dir * 5.5},${y - 3.2} ${tip - dir * 5.5},${y + 3.2}`} fill={col} />
+              </g>
+            );
+          });
+        })}
+        <Lab x={L + 4} y={TP - 8}>
+          {m.hasDex ? "DEALER DELTA CURRENT · arrow = direction of hedging flow" : "DEALER DELTA CURRENT · no DEX for this session"}
+        </Lab>
+
+        {/* spot path */}
+        <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="rgba(0,0,0,0.45)" strokeWidth={5.5} />
+        <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth={3.4} />
+        <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="#fff" strokeWidth={1.5} />
+        {m.bubbles.map((b, i) => {
+          const c = b.sign > 0 ? LBLU_RGB : ORAN_RGB;
+          const last = i === m.bubbles.length - 1;
+          const r = 3.5 + b.n * 14;
+          return (
+            <g key={`tb${b.ci}`}>
+              <circle cx={xOf(b.ci)} cy={yOf(b.price)} r={r} fill={rgba(c, last ? 0.22 : 0.1)} stroke={rgba(c, last ? 0.95 : 0.72)} strokeWidth={last ? 1.6 : 1.1} />
+              <circle cx={xOf(b.ci)} cy={yOf(b.price)} r={1.6} fill={rgba(c, 0.95)} />
+            </g>
+          );
+        })}
+        {m.flip != null && (
+          <g>
+            <rect x={L + 6} y={yOf(m.flip) + 5} width={186} height={14} rx={3} fill="rgba(5,6,10,0.8)" />
+            <text x={L + 11} y={yOf(m.flip) + 15} fill={FLIP_C} fontSize={8} fontWeight={700} letterSpacing="0.1em">
+              {`GAMMA FLIP  ${fmtStrike(m.flip)}  ·  COASTLINE`}
+            </text>
+          </g>
+        )}
+        {timeTicks.map(({ i, label }) => (
+          <text key={`tt${i}`} x={xOf(i)} y={BT + 16} fill={AXIS} fontSize={8} textAnchor="middle" opacity={0.75}>{label}</text>
+        ))}
+
+        {/* ridge rail */}
+        <Lab x={R + 16} y={TP - 8}>RIDGE RAIL</Lab>
+        <rect x={R + 16} y={TP} width={150} height={FHT} rx={8} fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.07)" />
+        {m.strikes.map((k, i) => {
+          const v = m.profile[i];
+          return <rect key={`rr${k}`} x={R + 22} y={yOf(k) - rowH * 0.42} width={Math.abs(v) * 34 + 1.5} height={Math.max(1.2, rowH * 0.84)} rx={1}
+            fill={gamColor(v, 0.3 + 0.55 * Math.abs(v))} />;
+        })}
+        {ticks.map((k) => <text key={`rrt${k}`} x={R + 74} y={yOf(k) + 3} fill={AXIS} fontSize={8}>{k}</text>)}
+        {([[m.callWall, HOME_THEME.green, "RIDGE"], [m.magnet, LIGHT_BLUE, "PEAK"], [m.flip, FLIP_C, "COAST"], [m.putWall, HOME_THEME.orange, "TRENCH"]] as [number | null, string, string][])
+          .filter(([k]) => k != null).map(([k, col, tag]) => (
+            <g key={tag}>
+              <rect x={R + 106} y={yOf(k as number) - 7} width={54} height={14} rx={3} fill={`${col}26`} stroke={`${col}80`} />
+              <text x={R + 111} y={yOf(k as number) + 3.5} fill={col} fontSize={7.4} fontWeight={700} letterSpacing="0.08em">{tag}</text>
+            </g>
+          ))}
+        {m.spot > 0 && (
+          <polygon points={`${R + 14},${yOf(m.spot)} ${R + 5},${yOf(m.spot) - 5} ${R + 5},${yOf(m.spot) + 5}`} fill="#fff" />
+        )}
+        <text x={L} y={H - 12} fill="rgba(255,255,255,0.3)" fontSize={8} fontWeight={600} letterSpacing="0.14em">
+          ELEVATION = NET GAMMA · CONTOURS = ISO-GEX · DASHED COASTLINE = ZERO GAMMA
+        </text>
+      </svg>
+    </div>
+  );
+}
+
+// ── geometry helpers ─────────────────────────────────────────────────────────
+function pathD(pts: [number, number][]): string {
+  return pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`).join("");
+}
+
+/** Round strike labels — every 20 points if the range is wide, else every 10/5. */
+function strikeTicks(lo: number, hi: number): number[] {
+  const span = hi - lo;
+  const step = span > 400 ? 50 : span > 200 ? 20 : span > 90 ? 10 : 5;
+  const out: number[] = [];
+  for (let k = Math.ceil(lo / step) * step; k <= hi; k += step) out.push(k);
+  return out;
+}
+
+function pickTimeTicks(cols: MapColumn[], count = 6): { i: number; label: string }[] {
+  if (!cols.length) return [];
+  const out: { i: number; label: string }[] = [];
+  for (let n = 0; n < count; n++) {
+    const i = Math.round((n / (count - 1)) * (cols.length - 1));
+    out.push({ i, label: etTime(cols[i].t) });
+  }
+  return out;
+}
+
+// ── tab ──────────────────────────────────────────────────────────────────────
+const segBtn = (active: boolean): CSSProperties => ({
+  padding: "7px 14px",
+  borderRadius: 8,
+  border: `1px solid ${active ? HOME_THEME.cyan : HOME_THEME.border}`,
+  background: active ? "linear-gradient(180deg,rgba(33,158,188,.16),rgba(33,158,188,.04))" : "rgba(255,255,255,0.03)",
+  color: active ? HOME_THEME.cyan : HOME_THEME.text,
+  fontSize: 12,
+  fontWeight: 800,
+  letterSpacing: "0.06em",
+  textTransform: "uppercase",
+  cursor: "pointer",
+});
+
+export default function GexMapTab() {
+  const [concept, setConcept] = useState<Concept>("tape");
+  const [date, setDate] = useState<string>("latest");
+  const [data, setData] = useState<MapPayload | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async (d: string) => {
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/gex-map?symbol=$SPX&date=${encodeURIComponent(d)}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(`gex-map ${r.status}`);
+      const j = (await r.json()) as MapPayload;
+      if (j.error) throw new Error(j.error);
+      setData(j);
+      setErr(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(date); }, [date, load]);
+
+  const model = useMemo(() => buildModel(data), [data]);
+  const conceptDef = CONCEPTS.find((c) => c.key === concept) ?? CONCEPTS[0];
+
+  const sessionOptions = useMemo(() => {
+    const opts = (data?.sessions ?? []).map((s) => ({ value: s.date, label: `${s.date} · ${s.snaps} snaps` }));
+    return [{ value: "latest", label: "Latest session" }, ...opts];
+  }, [data]);
+
+  return (
+    <>
+      <Card variant="budget" padding={18}>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {CONCEPTS.map((c) => (
+              <button key={c.key} type="button" onClick={() => setConcept(c.key)} style={segBtn(concept === c.key)}>
+                {c.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ minWidth: 210 }}>
+            <ThemedSelect
+              value={date}
+              onChange={(v: string) => setDate(v)}
+              options={sessionOptions}
+            />
+          </div>
+          <button type="button" onClick={() => void load(date)} style={homeButtonStyle}>Refresh</button>
+          <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.6, flex: 1, minWidth: 220 }}>
+            {conceptDef.blurb}
+          </div>
+        </div>
+        <div style={{ fontSize: 11.5, color: HOME_THEME.text, opacity: 0.45, marginTop: 10, lineHeight: 1.6 }}>
+          0DTE only — the route pins expiry to the session date. GEX ladder from{" "}
+          <code style={{ color: LIGHT_BLUE }}>option_strike_gex_history</code> (retention ~2 sessions), DEX from{" "}
+          <code style={{ color: LIGHT_BLUE }}>greek_snapshots</code>. Bubbles ride spot: one per slot, sized by |GEX| at
+          the strike price was trading on.
+        </div>
+      </Card>
+
+      {err && (
+        <Card variant="classic" padding={16}>
+          <div style={{ fontSize: 14, color: HOME_THEME.red }}>GEX map error: {err}</div>
+        </Card>
+      )}
+
+      {(data?.notes?.gex || data?.notes?.dex) && (
+        <Card variant="classic" padding={14}>
+          {data?.notes?.gex && <div style={{ fontSize: 12.5, color: HOME_THEME.orange }}>GEX: {data.notes.gex}</div>}
+          {data?.notes?.dex && <div style={{ fontSize: 12.5, color: HOME_THEME.orange, marginTop: 4 }}>DEX: {data.notes.dex}</div>}
+        </Card>
+      )}
+
+      {model && data && (
+        <RegimeStrip m={model} symbol={data.symbol} date={data.date} asOf={data.levels.asOf} />
+      )}
+
+      <Card variant="dissolve" padding={20}>
+        {loading && !model ? (
+          <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6, padding: 40, textAlign: "center" }}>
+            Loading 0DTE map…
+          </div>
+        ) : !model ? (
+          <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6, padding: 40, textAlign: "center" }}>
+            No strike ladder for this session — nothing to draw.
+          </div>
+        ) : concept === "tape" ? <TapeField m={model} />
+          : concept === "reticle" ? <PolarReticle m={model} />
+          : concept === "spine" ? <Spine m={model} />
+          : <GammaTerrain m={model} />}
+      </Card>
+
+      {model && data && (
+        <div style={{ fontSize: 11.5, color: HOME_THEME.text, opacity: 0.4, lineHeight: 1.7 }}>
+          {data.symbol} · {data.date} 0DTE · {data.columns.length} slots @ {data.slotMin}m ·{" "}
+          {data.strikes.length} strikes ({fmtStrike(model.lo)}–{fmtStrike(model.hi)}) ·{" "}
+          {model.hasDex ? `${data.dexSeries.length} DEX snapshots` : "no DEX"} · gamma scale {fmtBn(model.gMax)} per strike
+        </div>
+      )}
+    </>
+  );
+}

@@ -155,6 +155,19 @@ export function readSidePanel(): SidePanelKind {
     return isSidePanel(v) ? v : "rail";
   } catch { return "rail"; }
 }
+// Which greek the 0DTE chain panel shows. Page-level like the panel itself —
+// typed loosely here so slotStore stays React-free and ChainRail owns the union
+// (importing it back would be a cycle).
+const CHAIN_GREEK_KEY = "es-candles-chain-greek-v1";
+export function readChainGreek(): string | null {
+  if (typeof window === "undefined") return null;
+  try { return window.localStorage.getItem(CHAIN_GREEK_KEY); } catch { return null; }
+}
+export function writeChainGreek(v: string): void {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(CHAIN_GREEK_KEY, v); } catch { /* ignore */ }
+}
+
 export function writeSidePanel(v: SidePanelKind): void {
   if (typeof window === "undefined") return;
   try { window.localStorage.setItem(SIDE_PANEL_KEY, v); } catch { /* ignore */ }

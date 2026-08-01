@@ -7232,6 +7232,273 @@ if barstate.islast
       } catch (err) { send(res, 500, { error: String(err) }); }
     },
   });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // /api/gex-map — ONE payload for the Test Lab "GEX Map" tab (the four unified
+  // GEX/DEX map readouts: Tape Field, Polar Reticle, Spine, Gamma Terrain).
+  //
+  // 0DTE ONLY, and that is enforced here rather than left to the caller:
+  // `expiry` is always the session date. Every layer on those maps — the walls,
+  // the flip, the bubbles riding spot — is defined on a SINGLE ladder, and
+  // blending two expiries into one ladder invents walls that exist on neither.
+  // A caller may choose which session to draw; it may not choose a different
+  // expiry.
+  //
+  // What ships:
+  //   strikes[]     the union ladder, sorted — every column's `v` is aligned to
+  //                 THIS array, so the client never index-matches by strike
+  //   columns[]     one per time slot: { t, spot, flip, v[] } of net GEX on the
+  //                 OI+Vol basis (net_gex + net_vol_gex, the same basis
+  //                 /gex2 and the Squeeze board use)
+  //   dexByStrike[] net DEX ladder at the session's last snapshot
+  //   dexSeries[]   net DEX summed across strikes, per snapshot
+  //   levels        call wall / put wall / magnet / flip / spot / net gamma /
+  //                 net dex, all read off the LAST column
+  //   sessions[]    which sessions still have rows, newest first
+  //
+  // Two deliberate shapes:
+  //
+  //   1. Retention on option_strike_gex_history prunes to ~2 sessions, so
+  //      `sessions` is short BY DESIGN. It is a "what can still be drawn" list,
+  //      not a history picker. Asking for a date that has aged out returns
+  //      empty columns plus an explicit note in `notes.gex` — never a silently
+  //      blank chart, which is exactly how the heatmap backfill hid a broken
+  //      query for days.
+  //
+  //   2. greek_snapshots is queried inside its own try/catch. The DEX layers
+  //      are additive to these maps; if that table is missing, renamed, or has
+  //      no rows for the session, the gamma side must still draw. A failure
+  //      there degrades to `dex: []` + `notes.dex`, it does not 500 the tab.
+  // ───────────────────────────────────────────────────────────────────────────
+  if (libDb) {
+    const GEX_MAP_TTL_MS = 60_000;
+    const gexMapCache = new Map(); // key → { at, payload }
+
+    // `date` / `expiry` come back as text on this table, but a pg DATE column
+    // would arrive as a JS Date. Normalize both so the cache key, the SQL
+    // parameter and the JSON all agree on 'YYYY-MM-DD'.
+    const dstr = (v) => {
+      if (v == null) return '';
+      if (v instanceof Date) {
+        const y = v.getUTCFullYear(), m = String(v.getUTCMonth() + 1).padStart(2, '0');
+        return `${y}-${m}-${String(v.getUTCDate()).padStart(2, '0')}`;
+      }
+      return String(v).slice(0, 10);
+    };
+
+    register('/api/gex-map', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const symbol = libDb.normGexSymbol(sp.get('symbol'));
+          // greek_snapshots stores the bare root ('SPX'); option_strike_gex_history
+          // stores the '$'-prefixed form. Same underlying, two conventions.
+          const bareSymbol = symbol.replace(/^\$/, '');
+          const slotMin = Math.max(1, Math.min(30, Number(sp.get('slot') ?? 5)));
+          const slotMs = slotMin * 60_000;
+          // Strike padding around the session's spot range. The full SPX ladder
+          // is ~330 strikes and the far wings are pure noise on a map; ±window
+          // points keeps the payload honest without cropping the walls.
+          const windowPts = Math.max(20, Math.min(600, Number(sp.get('window') ?? 130)));
+
+          // Which sessions can still be drawn. expiry = date is the 0DTE filter.
+          const sessionRows = await libDb.queryAll(
+            `SELECT date, expiry, COUNT(DISTINCT timestamp)::int AS snaps
+               FROM option_strike_gex_history
+              WHERE symbol = ? AND expiry = date
+              GROUP BY date, expiry
+              ORDER BY date DESC
+              LIMIT 20`,
+            [symbol]
+          );
+          const sessions = sessionRows.map((r) => ({
+            date: dstr(r.date), expiry: dstr(r.expiry), snaps: Number(r.snaps ?? 0),
+          }));
+
+          const asked = sp.get('date');
+          const date = asked && asked !== 'latest' ? dstr(asked) : (sessions[0]?.date ?? todayET());
+          const expiry = date; // 0DTE, non-negotiable — see the header note.
+
+          const cacheKey = `${symbol}|${date}|${slotMin}|${windowPts}`;
+          const cached = gexMapCache.get(cacheKey);
+          if (cached && Date.now() - cached.at < GEX_MAP_TTL_MS) {
+            send(res, 200, cached.payload);
+            return;
+          }
+
+          const notes = {};
+
+          // Spot range first, so the strike filter below is anchored to where
+          // price actually traded rather than to a fixed band around the last
+          // print. A session that trended 60 points would lose one end of its
+          // own ladder otherwise.
+          const spotRow = (await libDb.queryAll(
+            `SELECT MIN(spot) AS lo, MAX(spot) AS hi
+               FROM option_strike_gex_history
+              WHERE symbol = ? AND date = ? AND expiry = ? AND spot > 0`,
+            [symbol, date, expiry]
+          ))[0];
+          const spotLo = Number(spotRow?.lo ?? 0);
+          const spotHi = Number(spotRow?.hi ?? 0);
+          const kLo = spotLo > 0 ? spotLo - windowPts : 0;
+          const kHi = spotHi > 0 ? spotHi + windowPts : 1e9;
+
+          // One row per (slot, strike), taking the LAST snapshot inside each
+          // slot rather than averaging: these are stock quantities, not flows,
+          // and an average of two ladders is a ladder that never existed.
+          const cells = await libDb.queryAll(
+            `WITH slotted AS (
+               SELECT (timestamp / ?)::bigint AS slot, timestamp, strike,
+                      net_gex, COALESCE(net_vol_gex, 0) AS net_vol_gex, spot
+                 FROM option_strike_gex_history
+                WHERE symbol = ? AND date = ? AND expiry = ?
+                  AND strike BETWEEN ? AND ?
+                  AND net_gex IS NOT NULL
+             ),
+             pick AS (
+               SELECT DISTINCT ON (slot) slot, timestamp
+                 FROM slotted ORDER BY slot, timestamp DESC
+             )
+             SELECT s.slot, s.timestamp AS t, s.strike,
+                    SUM(s.net_gex + s.net_vol_gex) AS v, MAX(s.spot) AS spot
+               FROM slotted s
+               JOIN pick p ON p.slot = s.slot AND p.timestamp = s.timestamp
+              GROUP BY s.slot, s.timestamp, s.strike
+              ORDER BY s.slot ASC, s.strike ASC`,
+            [slotMs, symbol, date, expiry, kLo, kHi]
+          );
+
+          if (!cells.length) {
+            notes.gex = sessions.some((s) => s.date === date)
+              ? `no rows for ${symbol} ${date} inside the spot window`
+              : `${date} has aged out of option_strike_gex_history (retention ~2 sessions) — pick one of: ${sessions.map((s) => s.date).join(', ') || 'none'}`;
+          }
+
+          // Union ladder. Every column aligns to this, so the client can treat
+          // a column as a plain number[] instead of a Map lookup per cell.
+          const strikeSet = new Set();
+          for (const c of cells) strikeSet.add(Number(c.strike));
+          const strikes = [...strikeSet].sort((a, b) => a - b);
+          const idxOf = new Map(strikes.map((k, i) => [k, i]));
+
+          const bySlot = new Map();
+          for (const c of cells) {
+            const slot = Number(c.slot);
+            let col = bySlot.get(slot);
+            if (!col) {
+              col = { t: Number(c.t), spot: 0, v: new Array(strikes.length).fill(0) };
+              bySlot.set(slot, col);
+            }
+            col.v[idxOf.get(Number(c.strike))] = Number(c.v ?? 0);
+            const spot = Number(c.spot ?? 0);
+            if (spot > 0 && !(col.spot > 0)) col.spot = spot;
+          }
+
+          // Gamma flip per column: interpolate every sign change on the ladder,
+          // then take the crossing NEAREST that column's spot. Same rule the
+          // heatmap route uses — kept byte-identical on purpose so the two
+          // features can never disagree about where the flip was.
+          const flipOf = (v, spot) => {
+            const crossings = [];
+            for (let i = 0; i < strikes.length - 1; i++) {
+              const a = v[i], b = v[i + 1];
+              if (a === 0) { crossings.push(strikes[i]); continue; }
+              if (b === 0) { crossings.push(strikes[i + 1]); continue; }
+              if ((a > 0 && b < 0) || (a < 0 && b > 0)) {
+                const z = strikes[i] + (strikes[i + 1] - strikes[i]) * (Math.abs(a) / (Math.abs(a) + Math.abs(b)));
+                if (Number.isFinite(z)) crossings.push(Math.round(z * 10) / 10);
+              }
+            }
+            if (!crossings.length) return null;
+            if (!(spot > 0)) return crossings[0];
+            return crossings.reduce((best, c) => (Math.abs(c - spot) < Math.abs(best - spot) ? c : best));
+          };
+
+          const columns = [...bySlot.entries()]
+            .sort((a, b) => a[0] - b[0])
+            .map(([, col]) => ({ t: col.t, spot: col.spot, flip: flipOf(col.v, col.spot), v: col.v }));
+
+          // ── DEX. Additive; never fatal. ──────────────────────────────────
+          let dexByStrike = [];
+          let dexSeries = [];
+          try {
+            const series = await libDb.queryAll(
+              `SELECT EXTRACT(EPOCH FROM ts) * 1000 AS t, SUM(delta_net) AS v
+                 FROM greek_snapshots
+                WHERE symbol = ? AND date = ? AND expiry = ? AND delta_net IS NOT NULL
+                GROUP BY ts ORDER BY ts ASC`,
+              [bareSymbol, date, expiry]
+            );
+            dexSeries = series.map((r) => ({ t: Number(r.t), dex: Number(r.v ?? 0) }));
+
+            const ladder = await libDb.queryAll(
+              `SELECT strike, SUM(delta_net) AS v
+                 FROM greek_snapshots
+                WHERE symbol = ? AND date = ? AND expiry = ? AND delta_net IS NOT NULL
+                  AND ts = (SELECT MAX(ts) FROM greek_snapshots
+                             WHERE symbol = ? AND date = ? AND expiry = ? AND delta_net IS NOT NULL)
+                GROUP BY strike ORDER BY strike ASC`,
+              [bareSymbol, date, expiry, bareSymbol, date, expiry]
+            );
+            dexByStrike = ladder
+              .map((r) => ({ strike: Number(r.strike), dex: Number(r.v ?? 0) }))
+              .filter((r) => r.strike >= kLo && r.strike <= kHi);
+
+            if (!dexSeries.length && !dexByStrike.length) {
+              notes.dex = `no greek_snapshots rows for ${bareSymbol} ${date} 0DTE — DEX layers will render empty`;
+            }
+          } catch (err) {
+            // LOUD. A silently empty DEX ring is indistinguishable from a
+            // genuinely flat book, which is the worst possible failure mode on
+            // a positioning map.
+            console.error('[gex-map] DEX read failed:', req.url, err);
+            notes.dex = `DEX unavailable: ${String(err && err.message ? err.message : err)}`;
+          }
+
+          // ── Levels, read off the LAST column ─────────────────────────────
+          const last = columns[columns.length - 1] ?? null;
+          const levels = {
+            spot: last?.spot ?? 0,
+            flip: last?.flip ?? null,
+            callWall: null, putWall: null, magnet: null,
+            netGex: 0, netDex: 0,
+            asOf: last?.t ?? null,
+          };
+          if (last) {
+            let bestCall = -Infinity, bestPut = Infinity, bestAbs = -1;
+            for (let i = 0; i < strikes.length; i++) {
+              const k = strikes[i], v = last.v[i];
+              levels.netGex += v;
+              // Walls are the extreme gamma nodes on the correct SIDE of spot.
+              // Taking "max positive anywhere" would hand back a call wall
+              // below spot on a put-heavy morning, which reads as support.
+              if (last.spot > 0 ? k >= last.spot : true) {
+                if (v > bestCall) { bestCall = v; levels.callWall = k; }
+              }
+              if (last.spot > 0 ? k <= last.spot : true) {
+                if (v < bestPut) { bestPut = v; levels.putWall = k; }
+              }
+              if (Math.abs(v) > bestAbs) { bestAbs = Math.abs(v); levels.magnet = k; }
+            }
+            if (!(bestCall > 0)) levels.callWall = null;
+            if (!(bestPut < 0)) levels.putWall = null;
+          }
+          levels.netDex = dexSeries.length ? dexSeries[dexSeries.length - 1].dex : 0;
+
+          const payload = {
+            symbol, date, expiry, slotMin,
+            strikes, columns, dexByStrike, dexSeries, levels, sessions, notes,
+          };
+          gexMapCache.set(cacheKey, { at: Date.now(), payload });
+          send(res, 200, payload);
+        } catch (err) {
+          console.error('[gex-map] GET failed:', req.url, err);
+          send(res, 500, { error: String(err && err.message ? err.message : err) });
+        }
+      },
+    });
+  }
 }
 
 module.exports = { handleApiRoute, register, _routes: ROUTES };

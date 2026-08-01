@@ -9,6 +9,7 @@ import { useRefreshButton } from "@/hooks/useRefreshButton";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { SqueezeBoard } from "@/app/squeeze/page";
 import DealerGammaTab from "./DealerGammaTab";
+import GexMapTab from "./GexMapTab";
 import VolGexFlowPanel from "@/components/dashboard/VolGexFlowPanel";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2539,6 +2540,19 @@ const OVERVIEW_CARDS: OverviewCardDef[] = [
     ],
   },
   {
+    key: "gexmap",
+    label: "GEX Map",
+    accent: LIGHT_BLUE,
+    blurb: "Four unified 0DTE map readouts — GEX profile, heatmap, rail, bubbles and DEX fused into one picture.",
+    points: [
+      "Tape Field — time-forward radar: heat field, profile wall, strike rail, DEX keel",
+      "Polar Reticle — spot-centred dial, strikes by bearing, session clock on the rim",
+      "Spine — vertical ladder with gamma on the left wing and delta on the right",
+      "Gamma Terrain — gamma as elevation with iso-GEX contours and the flip as a coastline",
+      "GEX bubbles ride spot: one per slot, sized by the gamma the tape is standing in",
+    ],
+  },
+  {
     key: "flow",
     label: "Flow Inventory",
     accent: HOME_THEME.orange,
@@ -2635,7 +2649,7 @@ function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
   );
 }
 
-type TestTab = "overview" | "flow" | "gexlevels" | "squeeze" | "dealergamma";
+type TestTab = "overview" | "flow" | "gexlevels" | "squeeze" | "dealergamma" | "gexmap";
 
 function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: TestTab) => void }) {
   const tabs: { key: TestTab; label: string }[] = [
@@ -2643,6 +2657,7 @@ function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: Tes
     { key: "squeeze", label: "Squeeze" },
     { key: "gexlevels", label: "GEX Levels" },
     { key: "dealergamma", label: "Dealer Gamma" },
+    { key: "gexmap", label: "GEX Map" },
     { key: "flow", label: "Flow Inventory" },
   ];
   return (
@@ -2744,6 +2759,8 @@ export default function TestPage() {
         <GexLevelsTab />
       ) : tab === "dealergamma" ? (
         <DealerGammaTab />
+      ) : tab === "gexmap" ? (
+        <GexMapTab />
       ) : (
         <FlowInventoryTab />
       )}
