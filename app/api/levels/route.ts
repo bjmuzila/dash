@@ -7,10 +7,21 @@ import { getDb } from "@/lib/db";
 
 let _tableEnsured = false;
 
-// Most-recent Saturday 09:00 ET boundary. The weekly em is "frozen" once it has
+// Most-recent Friday 16:00 ET boundary. The weekly em is "frozen" once it has
 // been written on/after this instant; an untrusted (browser) push must not move
 // an em that is already frozen for the current week.
-function lastSaturday9amET(now = new Date()): Date {
+//
+// This was Saturday 09:00 ET, matching the ORIGINAL publish time. When the
+// publisher moved to Friday 16:15 (server-v2/levels-auto-publish.js —
+// PUBLISH_DOW=5, PUBLISH_HOUR=16) the boundary was left behind, which inverted
+// the freeze: a Friday publish lands ~17h BEFORE the Saturday boundary, so from
+// Saturday 09:00 onward every row tested as "not frozen this week" and an
+// untrusted push could overwrite it for the remaining ~6.3 days. Anchoring the
+// boundary just BEFORE the publish restores write-once-per-week.
+//
+// Keep in sync with lastFriday4pmET in owner-vite/src/components/
+// LevelsPublish.tsx, which drives the "STALE EM" banner off the same rule.
+function lastFriday4pmET(now = new Date()): Date {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
@@ -20,10 +31,10 @@ function lastSaturday9amET(now = new Date()): Date {
   const dow = dowMap[get("weekday") || "Sun"];
   const hour = Number(get("hour"));
   const minute = Number(get("minute"));
-  // minutes since this week's Saturday 09:00 (negative until Sat reaches 9am)
-  const minsSinceSat9 = ((dow - 6) * 24 * 60) + hour * 60 + minute - 9 * 60;
-  // if we haven't reached Saturday 9am yet this week, roll back to last week's
-  const offsetMin = minsSinceSat9 >= 0 ? minsSinceSat9 : minsSinceSat9 + 7 * 24 * 60;
+  // minutes since this week's Friday 16:00 (negative until Fri reaches 4pm)
+  const minsSinceFri16 = ((dow - 5) * 24 * 60) + hour * 60 + minute - 16 * 60;
+  // if we haven't reached Friday 4pm yet this week, roll back to last week's
+  const offsetMin = minsSinceFri16 >= 0 ? minsSinceFri16 : minsSinceFri16 + 7 * 24 * 60;
   return new Date(now.getTime() - offsetMin * 60 * 1000);
 }
 
@@ -98,15 +109,15 @@ export async function POST(req: NextRequest) {
     const pool = await getDb();
     await ensureTable(pool);
 
-    // The weekly em is FROZEN at the Saturday-9am-ET publish and must hold until
-    // the next Saturday run. Only the trusted publisher (internal token) may
+    // The weekly em is FROZEN at the Friday-16:15-ET publish and must hold until
+    // the next Friday run. Only the trusted publisher (internal token) may
     // (re)write em. An untrusted caller — the backend Estimated Moves dashboard
     // recomputing live — may still seed em for a ticker that has NO frozen value
     // this week, but can never overwrite an em already frozen for the week.
     // Zones / pivot / labels are unaffected and can refresh anytime.
     const token = req.headers.get("x-internal-token") || "";
     const trusted = !!process.env.INTERNAL_API_TOKEN && token === process.env.INTERNAL_API_TOKEN;
-    const weekStart = lastSaturday9amET();
+    const weekStart = lastFriday4pmET();
 
     await pool.query(
       `INSERT INTO ticker_levels
@@ -125,7 +136,7 @@ export async function POST(req: NextRequest) {
          -- em (and the close/up/down it implies) is write-once per week. It only
          -- changes when the supplied em is non-null AND the caller is either the
          -- trusted publisher ($13) OR the row has no em frozen since this week's
-         -- Saturday-9am boundary ($14). Otherwise the frozen value is kept.
+         -- Friday-16:00 boundary ($14). Otherwise the frozen value is kept.
          em = CASE WHEN EXCLUDED.em IS NOT NULL
                      AND ($13 OR ticker_levels.em IS NULL OR ticker_levels.em_updated_at IS NULL OR ticker_levels.em_updated_at < $14::timestamptz)
                    THEN EXCLUDED.em ELSE ticker_levels.em END,
@@ -156,7 +167,7 @@ export async function POST(req: NextRequest) {
         body.pivot ?? null,
         body.exp_label ?? null,
         trusted,        // $13 — trusted publisher may always (re)write em
-        weekStart,      // $14 — this week's Saturday-9am ET freeze boundary
+        weekStart,      // $14 — this week's Friday-16:00 ET freeze boundary
       ]
     );
     return NextResponse.json({ ok: true, ticker });

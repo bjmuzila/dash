@@ -28,14 +28,35 @@ const fs = require('fs');
 const { execFile } = require('child_process');
 
 // Persist the last-published week key across restarts so a server-v2 restart
-// doesn't wipe the in-memory guard and re-publish (overwriting the good
-// Saturday-9am snapshot with worse mid-week/weekend numbers).
-const PUB_STATE_FILE = path.join(__dirname, '.levels-last-week');
+// doesn't wipe the in-memory guard and re-publish (overwriting the good Friday
+// 16:15 snapshot with worse evening/mid-week numbers).
+//
+// This MUST live under /app/state — the only path docker-compose bind-mounts
+// (`- ./state:/app/state`). It used to sit next to this file in /app/server-v2,
+// which is baked into the image: every `docker compose up -d --build` reset it
+// to the committed value, the once-per-week guard released, and if the recreate
+// happened on a Friday after 16:15 the very next 5-minute tick republished the
+// whole roster. That is exactly what happened on 2026-07-31, when a Friday
+// evening redeploy re-priced all 234 tickers at 22:04 ET off after-hours marks.
+const PUB_STATE_DIR = path.join(__dirname, '..', 'state');
+const PUB_STATE_FILE = path.join(PUB_STATE_DIR, '.levels-last-week');
+// Pre-move location. Read as a fallback so the first boot after this change
+// still remembers the current week instead of looking un-published.
+const PUB_STATE_LEGACY = path.join(__dirname, '.levels-last-week');
 function readPublishedWeek() {
-  try { return fs.readFileSync(PUB_STATE_FILE, 'utf8').trim() || null; } catch { return null; }
+  for (const f of [PUB_STATE_FILE, PUB_STATE_LEGACY]) {
+    try {
+      const v = fs.readFileSync(f, 'utf8').trim();
+      if (v) return v;
+    } catch { /* try the next candidate */ }
+  }
+  return null;
 }
 function writePublishedWeek(wk) {
-  try { fs.writeFileSync(PUB_STATE_FILE, String(wk), 'utf8'); } catch (e) { console.log('[levels-pub] could not persist week key:', e.message); }
+  try {
+    fs.mkdirSync(PUB_STATE_DIR, { recursive: true });
+    fs.writeFileSync(PUB_STATE_FILE, String(wk), 'utf8');
+  } catch (e) { console.log('[levels-pub] could not persist week key:', e.message); }
 }
 const { computeAllLevels, seedUpcomingWeek, SYMBOLS } = require('./levels-engine');
 const { DISPLAY_LABEL } = (() => {

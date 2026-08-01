@@ -33,12 +33,18 @@ function levelsAreStale(iso: string | null): boolean {
 }
 
 /**
- * Most-recent Saturday 09:00 ET boundary — the exact instant the weekly em is
- * frozen server-side (mirrors app/api/levels/route.ts lastSaturday9amET, which
+ * Most-recent Friday 16:00 ET boundary — the exact instant the weekly em is
+ * frozen server-side (mirrors app/api/levels/route.ts lastFriday4pmET, which
  * gates whether a POST may (re)write em). Used so the client's "stale" test lines
  * up with the DB's freeze window instead of guessing from wall-clock gaps.
+ *
+ * Was Saturday 09:00 ET, left over from the original publish time. The publisher
+ * now runs Friday 16:15 (levels-auto-publish.js PUBLISH_DOW=5/PUBLISH_HOUR=16),
+ * which lands ~17h BEFORE a Saturday boundary — so every ticker flipped to
+ * "stale" at 09:00 each Saturday and stayed lit until the next Friday, flagging
+ * a perfectly fresh roster. Anchoring just before the publish fixes it.
  */
-function lastSaturday9amET(now = new Date()): number {
+function lastFriday4pmET(now = new Date()): number {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
@@ -48,14 +54,14 @@ function lastSaturday9amET(now = new Date()): number {
   const dow = dowMap[get("weekday") || "Sun"];
   const hour = Number(get("hour"));
   const minute = Number(get("minute"));
-  const minsSinceSat9 = ((dow - 6) * 24 * 60) + hour * 60 + minute - 9 * 60;
-  const offsetMin = minsSinceSat9 >= 0 ? minsSinceSat9 : minsSinceSat9 + 7 * 24 * 60;
+  const minsSinceFri16 = ((dow - 5) * 24 * 60) + hour * 60 + minute - 16 * 60;
+  const offsetMin = minsSinceFri16 >= 0 ? minsSinceFri16 : minsSinceFri16 + 7 * 24 * 60;
   return now.getTime() - offsetMin * 60 * 1000;
 }
 
 /**
  * A ticker's EM is STALE only if it was NOT (re)published during the current
- * frozen week — i.e. em_updated_at predates this week's Saturday-9am ET freeze
+ * frozen week — i.e. em_updated_at predates this week's Friday-16:00 ET freeze
  * (or is missing). em is write-once per week by design, so its timestamp
  * legitimately stays put all week while `updated_at` moves on every zone/label
  * refresh; comparing the two (the old 10-min rule) falsely flagged a valid frozen
@@ -66,7 +72,7 @@ function emIsStale(_updatedAt: string | null, emUpdatedAt: string | null): boole
   if (!emUpdatedAt) return true;
   const em = new Date(emUpdatedAt).getTime();
   if (isNaN(em)) return true;
-  return em < lastSaturday9amET();
+  return em < lastFriday4pmET();
 }
 
 function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
@@ -315,7 +321,7 @@ export default function LevelsPublish() {
         </div>
         <div style={{ display: "flex", flexDirection: "column" }}>
           <span style={{ fontSize: 10, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: "0.12em" }}>Schedule</span>
-          <span style={{ fontSize: 12, fontWeight: 600, color: "#fff", fontFamily: "var(--font-mono)" }}>Sat ~09:00 ET</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#fff", fontFamily: "var(--font-mono)" }}>Fri ~16:15 ET</span>
         </div>
         <button
           onClick={triggerPublish}
