@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode, PointerEvent as ReactPointerEvent } from "react";
 import { HOME_THEME, LIGHT_BLUE, REFRESH_GREEN, SOFT_RED, statTileStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
@@ -352,6 +352,174 @@ function buildModel(p: MapPayload | null): MapModel | null {
   };
 }
 
+// ── pan / zoom ───────────────────────────────────────────────────────────────
+// One wrapper for all four maps. Everything is drawn in viewBox units, so a
+// single <g transform> is the whole implementation — no per-map math, and the
+// SVG stays crisp at any magnification.
+//
+// Three things worth knowing:
+//   · Wheel is bound with { passive: false } through addEventListener rather
+//     than React's onWheel. React attaches wheel listeners passively, so
+//     preventDefault() there is ignored and the page scrolls out from under you
+//     while you zoom.
+//   · Pan is clamped so the content always covers the frame, and 1× hard-resets
+//     the offset. Free panning at 1× lets a card be dragged blank, and "my chart
+//     disappeared" is not a state worth supporting.
+//   · The zoom level is published on a context because the Gamma Terrain canvas
+//     is a bitmap: it re-rasterises at a higher DPR when you zoom past 1.5×
+//     instead of being smeared by the transform.
+const ZoomCtx = createContext(1);
+const useZoom = () => useContext(ZoomCtx);
+
+const MIN_K = 1;
+const MAX_K = 12;
+
+function ZoomSvg({ w, h, children }: { w: number; h: number; children: ReactNode }) {
+  const [t, setT] = useState({ k: 1, x: 0, y: 0 });
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const drag = useRef<{ id: number; sx: number; sy: number; ox: number; oy: number } | null>(null);
+  const pts = useRef(new Map<number, { x: number; y: number }>());
+  const pinchD = useRef<number | null>(null);
+  const [grabbing, setGrabbing] = useState(false);
+
+  const clamp = useCallback((k: number, x: number, y: number) => {
+    const kk = Math.min(MAX_K, Math.max(MIN_K, k));
+    if (kk <= 1) return { k: 1, x: 0, y: 0 };
+    return {
+      k: kk,
+      x: Math.min(0, Math.max(w * (1 - kk), x)),
+      y: Math.min(0, Math.max(h * (1 - kk), y)),
+    };
+  }, [w, h]);
+
+  /** client px → viewBox units */
+  const toSvg = useCallback((cx: number, cy: number): [number, number] => {
+    const el = svgRef.current;
+    if (!el) return [0, 0];
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return [0, 0];
+    return [((cx - r.left) / r.width) * w, ((cy - r.top) / r.height) * h];
+  }, [w, h]);
+
+  const zoomAt = useCallback((cx: number, cy: number, factor: number) => {
+    setT((p) => {
+      const [sx, sy] = toSvg(cx, cy);
+      const k2 = Math.min(MAX_K, Math.max(MIN_K, p.k * factor));
+      // Keep the point under the cursor pinned: solve for the offset that leaves
+      // its world coordinate unchanged.
+      const wx = (sx - p.x) / p.k;
+      const wy = (sy - p.y) / p.k;
+      return clamp(k2, sx - wx * k2, sy - wy * k2);
+    });
+  }, [toSvg, clamp]);
+
+  const zoomCentre = useCallback((factor: number) => {
+    const el = svgRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    zoomAt(r.left + r.width / 2, r.top + r.height / 2, factor);
+  }, [zoomAt]);
+
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.18 : 1 / 1.18);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [zoomAt]);
+
+  const onPointerDown = (e: ReactPointerEvent<SVGSVGElement>) => {
+    (e.currentTarget as SVGSVGElement).setPointerCapture?.(e.pointerId);
+    pts.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.current.size === 1) {
+      drag.current = { id: e.pointerId, sx: e.clientX, sy: e.clientY, ox: t.x, oy: t.y };
+      setGrabbing(true);
+    } else {
+      drag.current = null;
+      pinchD.current = null;
+    }
+  };
+
+  const onPointerMove = (e: ReactPointerEvent<SVGSVGElement>) => {
+    if (!pts.current.has(e.pointerId)) return;
+    pts.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pts.current.size >= 2) {
+      const [a, b] = [...pts.current.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinchD.current != null && pinchD.current > 0 && d > 0) {
+        zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / pinchD.current);
+      }
+      pinchD.current = d;
+      return;
+    }
+
+    const dg = drag.current;
+    if (!dg || dg.id !== e.pointerId) return;
+    const el = svgRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const dx = ((e.clientX - dg.sx) / r.width) * w;
+    const dy = ((e.clientY - dg.sy) / r.height) * h;
+    setT((p) => clamp(p.k, dg.ox + dx, dg.oy + dy));
+  };
+
+  const endPointer = (e: ReactPointerEvent<SVGSVGElement>) => {
+    pts.current.delete(e.pointerId);
+    if (pts.current.size < 2) pinchD.current = null;
+    if (pts.current.size === 0) { drag.current = null; setGrabbing(false); }
+  };
+
+  const reset = () => setT({ k: 1, x: 0, y: 0 });
+  const zoomed = t.k > 1.001;
+
+  const btn: CSSProperties = {
+    width: 24, height: 22, display: "grid", placeItems: "center",
+    border: `1px solid ${HOME_THEME.border}`, borderRadius: 5,
+    background: "rgba(0,0,0,0.45)", color: HOME_THEME.text,
+    fontSize: 12, fontWeight: 800, lineHeight: 1, cursor: "pointer", padding: 0,
+  };
+
+  return (
+    <div style={{ position: "relative", width: "100%" }}>
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${w} ${h}`}
+        preserveAspectRatio="xMidYMid meet"
+        style={{ width: "100%", display: "block", cursor: grabbing ? "grabbing" : "grab", touchAction: "none" }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endPointer}
+        onPointerCancel={endPointer}
+        onPointerLeave={endPointer}
+        onDoubleClick={reset}
+      >
+        <g transform={`translate(${t.x} ${t.y}) scale(${t.k})`}>
+          <ZoomCtx.Provider value={t.k}>{children}</ZoomCtx.Provider>
+        </g>
+      </svg>
+      <div style={{
+        position: "absolute", right: 6, bottom: 6, display: "flex", alignItems: "center", gap: 4,
+        padding: 4, borderRadius: 7, background: "rgba(5,6,10,0.55)",
+        border: `1px solid ${HOME_THEME.border}`, backdropFilter: "blur(6px)",
+      }}>
+        <span style={{
+          fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", padding: "0 4px",
+          color: zoomed ? HOME_THEME.cyan : HOME_THEME.muted, opacity: zoomed ? 1 : 0.5,
+          fontVariantNumeric: "tabular-nums",
+        }}>{t.k.toFixed(1)}×</span>
+        <button type="button" title="Zoom out" style={btn} onClick={() => zoomCentre(1 / 1.4)}>−</button>
+        <button type="button" title="Zoom in" style={btn} onClick={() => zoomCentre(1.4)}>+</button>
+        <button type="button" title="Reset (or double-click the chart)" style={{ ...btn, width: 26, fontSize: 11 }}
+          onClick={reset} disabled={!zoomed}>⟲</button>
+      </div>
+    </div>
+  );
+}
+
 // ── shared chrome ────────────────────────────────────────────────────────────
 const AXIS = "rgba(255,255,255,0.34)";
 const GRID = "rgba(255,255,255,0.05)";
@@ -456,7 +624,7 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
   const timeTicks = pickTimeTicks(m.cols, compact ? 4 : 6);
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }} preserveAspectRatio="xMidYMid meet">
+    <ZoomSvg w={W} h={H}>
       {/* heat field */}
       <rect x={FX - 4} y={FY - 4} width={FW + 8} height={FH + 8} rx={10} fill="rgba(0,0,0,0.30)" />
       {m.cols.map((c, ci) =>
@@ -598,7 +766,7 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
             fontWeight={700} letterSpacing="0.14em" textAnchor="middle">NOT ENOUGH HISTORY</text>
         </g>
       )}
-    </svg>
+    </ZoomSvg>
   );
 }
 
@@ -633,7 +801,7 @@ function PolarReticle({ m, compact }: { m: MapModel; compact?: boolean }) {
   const clockTicks = pickTimeTicks(m.cols, compact ? 4 : 6);
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }} preserveAspectRatio="xMidYMid meet">
+    <ZoomSvg w={W} h={H}>
       {/* heat rings — inner = open, outer = now */}
       {Array.from({ length: ringCount }, (_, r) => {
         const ci = Math.round((r / Math.max(1, ringCount - 1)) * (m.cols.length - 1));
@@ -761,7 +929,7 @@ function PolarReticle({ m, compact }: { m: MapModel; compact?: boolean }) {
           {`· ${a}  —  ${b}`}
         </text>
       ))}
-    </svg>
+    </ZoomSvg>
   );
 }
 
@@ -785,7 +953,7 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
   const ticks = strikeTicks(m.lo, m.hi, compact);
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }} preserveAspectRatio="xMidYMid meet">
+    <ZoomSvg w={W} h={H}>
       {/* spine heat */}
       <Lab x={SPX} y={TY - 8}>{compact ? `HEAT · LAST ${nb}` : `SPINE · STRIKE × TIME HEAT (LAST ${nb} SLOTS)`}</Lab>
       <rect x={SPX} y={TY} width={SPW} height={TH} rx={10} fill="rgba(0,0,0,0.30)" stroke="rgba(255,255,255,0.07)" />
@@ -887,30 +1055,33 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
           bar length = |GEX| · blue = long gamma (dealers dampen) · red = short gamma (dealers amplify)
         </text>
       )}
-    </svg>
+    </ZoomSvg>
   );
 }
 
 // ═════════════════════════ D · GAMMA TERRAIN ═════════════════════════════════
-function GammaTerrain({ m, compact }: { m: MapModel; compact?: boolean }) {
-  const fz = useFz();
-  const W = 1240, H = 520;
-  const L = 34, R = W - 210, TP = 26, BT = H - 52;
-  const FWD = R - L, FHT = BT - TP;
+/**
+ * The terrain field itself. Split out of GammaTerrain for one reason: it has to
+ * read the live zoom level, and the zoom context is provided BY <ZoomSvg>. A
+ * hook called in GammaTerrain sits above that provider and would silently read
+ * the default of 1 forever — which is exactly the bug this shape prevents.
+ */
+function TerrainField({ m, L, TP, FWD, FHT }: {
+  m: MapModel; L: number; TP: number; FWD: number; FHT: number;
+}) {
+  const zoom = useZoom();
+  // The field is a bitmap inside a transformed <g>, so zooming would just
+  // magnify pixels. Re-rasterise at a higher device ratio instead — stepped, not
+  // continuous, so a pinch triggers one redraw rather than sixty.
+  const dprStep = Math.min(2, Math.max(1, Math.round(zoom)));
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  const yOf = (k: number) => TP + FHT - ((k - m.lo) / Math.max(1, m.hi - m.lo)) * FHT;
-  const xOf = (i: number) => L + (i / Math.max(1, m.cols.length - 1)) * FWD;
-  const ticks = strikeTicks(m.lo, m.hi, compact);
-  const timeTicks = pickTimeTicks(m.cols, compact ? 4 : 6);
-  const rowH = FHT / Math.max(1, m.strikes.length - 1);
 
   // Terrain fill + iso-GEX contours. Canvas rather than SVG: this is a per-pixel
   // field, and 200×140 <rect>s per frame is not a chart, it is a memory leak.
   useEffect(() => {
     const cv = canvasRef.current;
     if (!cv) return;
-    const DPR = 2;
+    const DPR = 2 * dprStep;
     cv.width = Math.round(FWD * DPR);
     cv.height = Math.round(FHT * DPR);
     const ctx = cv.getContext("2d");
@@ -1002,93 +1173,109 @@ function GammaTerrain({ m, compact }: { m: MapModel; compact?: boolean }) {
         : `rgba(255,183,190,${0.10 + 0.24 * Math.abs(lv)})`, 1.6, []);
     }
     contour(0, "rgba(125,211,252,0.95)", 3.2, [12, 8]);
-  }, [m, FWD, FHT]);
+  }, [m, FWD, FHT, dprStep]);
 
   return (
-    <div style={{ position: "relative", width: "100%" }}>
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }} preserveAspectRatio="xMidYMid meet">
-        <foreignObject x={L} y={TP} width={FWD} height={FHT}>
-          <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block", borderRadius: 6 }} />
-        </foreignObject>
-        <rect x={L} y={TP} width={FWD} height={FHT} fill="none" stroke="rgba(255,255,255,0.10)" />
+    <foreignObject x={L} y={TP} width={FWD} height={FHT}>
+      <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block", borderRadius: 6 }} />
+    </foreignObject>
+  );
+}
 
-        {/* DEX current — direction and force of dealer hedging, by strike band */}
-        {m.hasDex && Array.from({ length: 9 }, (_, j) => {
-          const k = m.lo + ((m.hi - m.lo) * (j + 0.5)) / 9;
-          let bi = 0, bd = Infinity;
-          m.strikes.forEach((s, i) => { const d = Math.abs(s - k); if (d < bd) { bd = d; bi = i; } });
-          const v = m.dex[bi];
-          if (Math.abs(v) < 0.03) return null;
-          return Array.from({ length: 7 }, (_, i) => {
-            const x = L + 40 + ((FWD - 80) * i) / 6, y = yOf(k);
-            const len = 14 + Math.abs(v) * 32, dir = v >= 0 ? 1 : -1;
-            const col = dexColor(v, 0.2 + 0.42 * Math.abs(v));
-            const tip = dir > 0 ? x + len / 2 : x - len / 2;
-            return (
-              <g key={`fa${j}-${i}`}>
-                <line x1={x - len / 2} y1={y} x2={x + len / 2} y2={y} stroke={col} strokeWidth={1.5} strokeLinecap="round" />
-                <polygon points={`${tip},${y} ${tip - dir * 5.5},${y - 3.2} ${tip - dir * 5.5},${y + 3.2}`} fill={col} />
-              </g>
-            );
-          });
-        })}
-        <Lab x={L + 4} y={TP - 8}>
-          {m.hasDex ? "DEALER DELTA CURRENT · arrow = direction of hedging flow" : "DEALER DELTA CURRENT · no DEX for this session"}
-        </Lab>
+function GammaTerrain({ m, compact }: { m: MapModel; compact?: boolean }) {
+  const fz = useFz();
+  const W = 1240, H = 520;
+  const L = 34, R = W - 210, TP = 26, BT = H - 52;
+  const FWD = R - L, FHT = BT - TP;
 
-        {/* spot path */}
-        <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="rgba(0,0,0,0.45)" strokeWidth={5.5} />
-        <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth={3.4} />
-        <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="#fff" strokeWidth={1.5} />
-        {m.bubbles.map((b, i) => {
-          const c = b.sign > 0 ? GEX_POS : GEX_NEG;
-          const last = i === m.bubbles.length - 1;
-          const r = 3.5 + b.n * 14;
+  const yOf = (k: number) => TP + FHT - ((k - m.lo) / Math.max(1, m.hi - m.lo)) * FHT;
+  const xOf = (i: number) => L + (i / Math.max(1, m.cols.length - 1)) * FWD;
+  const ticks = strikeTicks(m.lo, m.hi, compact);
+  const timeTicks = pickTimeTicks(m.cols, compact ? 4 : 6);
+  const rowH = FHT / Math.max(1, m.strikes.length - 1);
+
+
+  return (
+    <ZoomSvg w={W} h={H}>
+      <TerrainField m={m} L={L} TP={TP} FWD={FWD} FHT={FHT} />
+      <rect x={L} y={TP} width={FWD} height={FHT} fill="none" stroke="rgba(255,255,255,0.10)" />
+
+      {/* DEX current — direction and force of dealer hedging, by strike band */}
+      {m.hasDex && Array.from({ length: 9 }, (_, j) => {
+        const k = m.lo + ((m.hi - m.lo) * (j + 0.5)) / 9;
+        let bi = 0, bd = Infinity;
+        m.strikes.forEach((s, i) => { const d = Math.abs(s - k); if (d < bd) { bd = d; bi = i; } });
+        const v = m.dex[bi];
+        if (Math.abs(v) < 0.03) return null;
+        return Array.from({ length: 7 }, (_, i) => {
+          const x = L + 40 + ((FWD - 80) * i) / 6, y = yOf(k);
+          const len = 14 + Math.abs(v) * 32, dir = v >= 0 ? 1 : -1;
+          const col = dexColor(v, 0.2 + 0.42 * Math.abs(v));
+          const tip = dir > 0 ? x + len / 2 : x - len / 2;
           return (
-            <g key={`tb${b.ci}`}>
-              <circle cx={xOf(b.ci)} cy={yOf(b.price)} r={r} fill={rgba(c, last ? 0.22 : 0.1)} stroke={rgba(c, last ? 0.95 : 0.72)} strokeWidth={last ? 1.6 : 1.1} />
-              <circle cx={xOf(b.ci)} cy={yOf(b.price)} r={1.6} fill={rgba(c, 0.95)} />
+            <g key={`fa${j}-${i}`}>
+              <line x1={x - len / 2} y1={y} x2={x + len / 2} y2={y} stroke={col} strokeWidth={1.5} strokeLinecap="round" />
+              <polygon points={`${tip},${y} ${tip - dir * 5.5},${y - 3.2} ${tip - dir * 5.5},${y + 3.2}`} fill={col} />
             </g>
           );
-        })}
-        {m.flip != null && (
-          <g>
-            <rect x={L + 6} y={yOf(m.flip) + 5} width={(compact ? 118 : 186) * fz} height={14 * fz} rx={3} fill="rgba(5,6,10,0.84)" />
-            <text x={L + 11} y={yOf(m.flip) + 5 + 10 * fz} fill={FLIP_C} fontSize={8 * fz} fontWeight={700} letterSpacing="0.1em">
-              {compact ? `FLIP ${fmtStrike(m.flip)}` : `GAMMA FLIP  ${fmtStrike(m.flip)}  ·  COASTLINE`}
-            </text>
-          </g>
-        )}
-        {timeTicks.map(({ i, label }) => (
-          <text key={`tt${i}`} x={xOf(i)} y={BT + 16} fill={AXIS} fontSize={8 * fz} textAnchor="middle" opacity={0.75}>{label}</text>
-        ))}
+        });
+      })}
+      <Lab x={L + 4} y={TP - 8}>
+        {m.hasDex ? "DEALER DELTA CURRENT · arrow = direction of hedging flow" : "DEALER DELTA CURRENT · no DEX for this session"}
+      </Lab>
 
-        {/* ridge rail */}
-        <Lab x={R + 16} y={TP - 8}>RIDGE RAIL</Lab>
-        <rect x={R + 16} y={TP} width={150} height={FHT} rx={8} fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.07)" />
-        {m.strikes.map((k, i) => {
-          const v = m.profile[i];
-          return <rect key={`rr${k}`} x={R + 22} y={yOf(k) - rowH * 0.42} width={Math.abs(v) * 34 + 1.5} height={Math.max(1.2, rowH * 0.84)} rx={1}
-            fill={gamColor(v, 0.3 + 0.55 * Math.abs(v))} />;
-        })}
-        {ticks.map((k) => <text key={`rrt${k}`} x={R + 74} y={yOf(k) + 3} fill={AXIS} fontSize={8 * fz}>{k}</text>)}
-        {([[m.callWall, GEX_POS_HEX, "RIDGE"], [m.magnet, GOLD, "PEAK"], [m.flip, FLIP_C, "COAST"], [m.putWall, GEX_NEG_HEX, "TRENCH"]] as [number | null, string, string][])
-          .filter(([k]) => k != null).map(([k, col, tag]) => (
-            <g key={tag}>
-              <rect x={R + 106} y={yOf(k as number) - 7 * fz} width={54 * fz} height={14 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
-              <text x={R + 111} y={yOf(k as number) + 3.5 * fz} fill={col} fontSize={7.4 * fz} fontWeight={700} letterSpacing="0.08em">{tag}</text>
-            </g>
-          ))}
-        {m.spot > 0 && (
-          <polygon points={`${R + 14},${yOf(m.spot)} ${R + 5},${yOf(m.spot) - 5} ${R + 5},${yOf(m.spot) + 5}`} fill="#fff" />
-        )}
-        {!compact && (
-          <text x={L} y={H - 12} fill="rgba(255,255,255,0.3)" fontSize={8} fontWeight={600} letterSpacing="0.14em">
-            ELEVATION = NET GAMMA · CONTOURS = ISO-GEX · DASHED COASTLINE = ZERO GAMMA
+      {/* spot path */}
+      <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="rgba(0,0,0,0.45)" strokeWidth={5.5} />
+      <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth={3.4} />
+      <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="#fff" strokeWidth={1.5} />
+      {m.bubbles.map((b, i) => {
+        const c = b.sign > 0 ? GEX_POS : GEX_NEG;
+        const last = i === m.bubbles.length - 1;
+        const r = 3.5 + b.n * 14;
+        return (
+          <g key={`tb${b.ci}`}>
+            <circle cx={xOf(b.ci)} cy={yOf(b.price)} r={r} fill={rgba(c, last ? 0.22 : 0.1)} stroke={rgba(c, last ? 0.95 : 0.72)} strokeWidth={last ? 1.6 : 1.1} />
+            <circle cx={xOf(b.ci)} cy={yOf(b.price)} r={1.6} fill={rgba(c, 0.95)} />
+          </g>
+        );
+      })}
+      {m.flip != null && (
+        <g>
+          <rect x={L + 6} y={yOf(m.flip) + 5} width={(compact ? 118 : 186) * fz} height={14 * fz} rx={3} fill="rgba(5,6,10,0.84)" />
+          <text x={L + 11} y={yOf(m.flip) + 5 + 10 * fz} fill={FLIP_C} fontSize={8 * fz} fontWeight={700} letterSpacing="0.1em">
+            {compact ? `FLIP ${fmtStrike(m.flip)}` : `GAMMA FLIP  ${fmtStrike(m.flip)}  ·  COASTLINE`}
           </text>
-        )}
-      </svg>
-    </div>
+        </g>
+      )}
+      {timeTicks.map(({ i, label }) => (
+        <text key={`tt${i}`} x={xOf(i)} y={BT + 16} fill={AXIS} fontSize={8 * fz} textAnchor="middle" opacity={0.75}>{label}</text>
+      ))}
+
+      {/* ridge rail */}
+      <Lab x={R + 16} y={TP - 8}>RIDGE RAIL</Lab>
+      <rect x={R + 16} y={TP} width={150} height={FHT} rx={8} fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.07)" />
+      {m.strikes.map((k, i) => {
+        const v = m.profile[i];
+        return <rect key={`rr${k}`} x={R + 22} y={yOf(k) - rowH * 0.42} width={Math.abs(v) * 34 + 1.5} height={Math.max(1.2, rowH * 0.84)} rx={1}
+          fill={gamColor(v, 0.3 + 0.55 * Math.abs(v))} />;
+      })}
+      {ticks.map((k) => <text key={`rrt${k}`} x={R + 74} y={yOf(k) + 3} fill={AXIS} fontSize={8 * fz}>{k}</text>)}
+      {([[m.callWall, GEX_POS_HEX, "RIDGE"], [m.magnet, GOLD, "PEAK"], [m.flip, FLIP_C, "COAST"], [m.putWall, GEX_NEG_HEX, "TRENCH"]] as [number | null, string, string][])
+        .filter(([k]) => k != null).map(([k, col, tag]) => (
+          <g key={tag}>
+            <rect x={R + 106} y={yOf(k as number) - 7 * fz} width={54 * fz} height={14 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
+            <text x={R + 111} y={yOf(k as number) + 3.5 * fz} fill={col} fontSize={7.4 * fz} fontWeight={700} letterSpacing="0.08em">{tag}</text>
+          </g>
+        ))}
+      {m.spot > 0 && (
+        <polygon points={`${R + 14},${yOf(m.spot)} ${R + 5},${yOf(m.spot) - 5} ${R + 5},${yOf(m.spot) + 5}`} fill="#fff" />
+      )}
+      {!compact && (
+        <text x={L} y={H - 12} fill="rgba(255,255,255,0.3)" fontSize={8} fontWeight={600} letterSpacing="0.14em">
+          ELEVATION = NET GAMMA · CONTOURS = ISO-GEX · DASHED COASTLINE = ZERO GAMMA
+        </text>
+      )}
+    </ZoomSvg>
   );
 }
 

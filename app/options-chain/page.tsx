@@ -378,6 +378,23 @@ const CHANGE_MODE_LABEL: Record<ChangeMode, string> = {
 const REPLAY_SPEEDS = [0.5, 1, 2, 4, 8] as const;
 const REPLAY_BASE_MS = 700; // frame interval at 1× — matches ChainReplay's ladder
 
+// ── Replay expiry scope ─────────────────────────────────────────────────────
+// A recorded session usually carries several expiries. Two ways to read it:
+//   "0dte" → ONE column: the expiry that expires on the session being replayed
+//            (or, for a root with no same-day listing, the front expiry that
+//            session recorded). The day's gamma, with nothing else summed in.
+//   "all"  → every recorded expiry side-by-side, plus the ⅀ Total column.
+// The ⅀ Total column keeps its live-chain meaning in BOTH cases — a sum over
+// the non-0DTE expiries — which is exactly why it is hidden in "0dte" scope:
+// with only the 0DTE column rendered there is nothing left for it to total, and
+// a column of zeros beside real numbers reads as "no gamma", not "not summed".
+const REPLAY_SCOPES = ["0dte", "all"] as const;
+type ReplayScope = typeof REPLAY_SCOPES[number];
+const REPLAY_SCOPE_LABEL: Record<ReplayScope, string> = {
+  "0dte": "0DTE",
+  all: "All exp",
+};
+
 /** One recorded sweep: the clock, the spot at that clock, and `exp|strike` → GEX. */
 type ReplayFrame = {
   ts: string;
@@ -1039,6 +1056,13 @@ interface ChainMatrixProps {
    * and is therefore excluded from the ⅀ Total column.
    */
   sessionDate: string;
+  /**
+   * Render the trailing ⅀ Total column. False only when the grid is showing a
+   * single 0DTE column (replay, "0dte" scope) — Total sums the NON-0DTE
+   * expiries, so with nothing but 0DTE on screen it has nothing to add up and
+   * would print a column of "·" that reads as missing data. See REPLAY_SCOPES.
+   */
+  showTotalCol: boolean;
   changeMeta: { expiries: Set<string>; hasData: boolean };
   changeMap: Map<string, number>;
   changeScaleByExp: Map<string, { max: number; top3: number[] }>;
@@ -1067,7 +1091,7 @@ interface ChainMatrixProps {
 const ChainMatrix = memo(function ChainMatrix({
   columns, gridCols, visibleStrikes, nearestStrike, spot, greekMode, dataMode,
   intensity, colScales, volMvcByCol, mvcByCol, pinByCol, valueAt, isStandalone,
-  changeMode, sessionDate, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
+  changeMode, sessionDate, showTotalCol, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
   emLevels, activeTicker, atmRowRef, oiChangeMap, onCellClick, onCellHover,
 }: ChainMatrixProps) {
   // OI is a contract count, not dollars — and on this tab every readout is a
@@ -1118,7 +1142,7 @@ const ChainMatrix = memo(function ChainMatrix({
       // OI cells can carry two lines (call / put) on the ATM pivot row, but each
       // line is now a single delta figure — so they need barely more width than
       // a greek cell, not the double-width the old value+delta pair demanded.
-      gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(${isOiMode ? 84 : 78}px, 1fr)) minmax(${isOiMode ? 92 : 88}px, 1.15fr)`,
+      gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(${isOiMode ? 84 : 78}px, 1fr))${showTotalCol ? ` minmax(${isOiMode ? 92 : 88}px, 1.15fr)` : ""}`,
       borderRadius: 12,
       overflow: "clip",
       border: `1px solid ${HT.border}`,
@@ -1155,12 +1179,14 @@ const ChainMatrix = memo(function ChainMatrix({
         );
       })}
       {/* ── ⅀ Total column header (sum of all expirations for each strike) ── */}
-      <div style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.24)} 0%, ${rgba(HT.cyan, 0.07)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}`, borderLeft: `2px solid ${rgba(HT.cyan, 0.45)}` }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: HT.cyan, letterSpacing: "0.04em" }}>Total</div>
-        <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)", color: grandVisibleTotal >= 0 ? HT.green : HT.red }}>
-          {fmtVal(grandVisibleTotal)}
+      {showTotalCol && (
+        <div style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.24)} 0%, ${rgba(HT.cyan, 0.07)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}`, borderLeft: `2px solid ${rgba(HT.cyan, 0.45)}` }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: HT.cyan, letterSpacing: "0.04em" }}>Total</div>
+          <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)", color: grandVisibleTotal >= 0 ? HT.green : HT.red }}>
+            {fmtVal(grandVisibleTotal)}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* ── One row per shared strike ── */}
       {visibleStrikes.map((strike, rowIdx) => {
@@ -1173,7 +1199,7 @@ const ChainMatrix = memo(function ChainMatrix({
               {renderIdx.map((i) => (
                 <div key={`pad-${rowIdx}-${i}`} style={{ padding: "2px 8px", fontSize: 12 }} />
               ))}
-              <div style={{ padding: "2px 8px", fontSize: 12, borderLeft: `2px solid ${rgba(HT.cyan, 0.25)}` }} />
+              {showTotalCol && <div style={{ padding: "2px 8px", fontSize: 12, borderLeft: `2px solid ${rgba(HT.cyan, 0.25)}` }} />}
             </div>
           );
         }
@@ -1336,7 +1362,7 @@ const ChainMatrix = memo(function ChainMatrix({
               );
             })}
             {/* ── ⅀ Total cell: this strike's sum across every expiration ── */}
-            {(() => {
+            {showTotalCol && (() => {
               const tot = rowTotals.get(strike) ?? 0;
               const atmTotShadow = isATM
                 ? "inset 0 2px 0 #ffffff, inset 0 -2px 0 #ffffff, inset -2px 0 0 #ffffff"
@@ -1492,6 +1518,10 @@ export default function OptionsChainPage({
   const [replaySpeed, setReplaySpeed] = useState<number>(1);
   const [replayLoading, setReplayLoading] = useState(false);
   const [replayErr, setReplayErr] = useState("");
+  // Which expiries the rewound grid renders — see REPLAY_SCOPES. Defaults to
+  // "all" so entering replay looks like the live chain (every expiry + Total)
+  // and the 0DTE collapse is an explicit choice rather than a surprise.
+  const [replayScope, setReplayScope] = useState<ReplayScope>("all");
   // What the greek/change tabs were before replay took them over, so leaving
   // replay puts the page back where the user left it instead of stranding them
   // on GEX/Live.
@@ -1847,9 +1877,27 @@ export default function OptionsChainPage({
     ? (replayFrames[Math.min(replayIdx, replayFrames.length - 1)] ?? null)
     : null;
 
+  // Every expiry the session recorded, ascending. The scope control picks from
+  // this; the axis below is built from whatever it picked.
+  const replayAllExpiries = useMemo(() => {
+    const expiries = new Set<string>();
+    for (const f of replayFrames) for (const e of f.expiries) expiries.add(e);
+    return [...expiries].sort();
+  }, [replayFrames]);
+
+  // The session's 0DTE expiry: the one expiring ON the replayed date. Roots
+  // without a same-day listing (most single names) never have one, so fall back
+  // to the earliest expiry the session recorded — the front contract, which is
+  // what "0DTE" means for that root on that day. Surfaced in the replay bar so
+  // a fallback is never mistaken for a true same-day expiry.
+  const replayZeroDteExp = replayAllExpiries.includes(replayDate)
+    ? replayDate
+    : (replayAllExpiries[0] ?? "");
+  const replayZeroDteIsExact = !!replayZeroDteExp && replayZeroDteExp === replayDate;
+
   // ── The replay session's fixed axes ───────────────────────────────────────
-  // Every strike and every expiry recorded in ANY frame of the loaded session,
-  // computed once per session and used for every frame in it.
+  // Every strike and every IN-SCOPE expiry recorded in ANY frame of the loaded
+  // session, computed once per session+scope and used for every frame in it.
   //
   // This is the difference between a replay you can read and one that shakes.
   // The recorder stores the top N strikes A SIDE PER SWEEP, so the membership
@@ -1860,12 +1908,20 @@ export default function OptionsChainPage({
   // back into what it should be: one ladder, values changing on it over time. A
   // strike the current frame didn't record simply renders blank in its row.
   const replayAxis = useMemo(() => {
+    // Scope first: in "0dte" the axis must cover ONLY that expiry, or every
+    // strike that was ever a wall in a LATER expiry survives as a permanently
+    // blank row and the one column on screen is lost in whitespace.
+    const keep = replayScope === "0dte" && replayZeroDteExp
+      ? new Set([replayZeroDteExp])
+      : null;
     const strikes = new Set<number>();
     const expiries = new Set<string>();
     for (const f of replayFrames) {
-      for (const e of f.expiries) expiries.add(e);
+      for (const e of f.expiries) if (!keep || keep.has(e)) expiries.add(e);
       f.cells.forEach((_v, key) => {
-        const strike = Number(key.slice(key.indexOf("|") + 1));
+        const bar = key.indexOf("|");
+        if (keep && !keep.has(key.slice(0, bar))) return;
+        const strike = Number(key.slice(bar + 1));
         if (Number.isFinite(strike)) strikes.add(strike);
       });
     }
@@ -1873,7 +1929,7 @@ export default function OptionsChainPage({
       strikes: [...strikes].sort((a, b) => a - b),
       expiries: [...expiries].sort(),
     };
-  }, [replayFrames]);
+  }, [replayFrames, replayScope, replayZeroDteExp]);
 
   const replayColumns = useMemo<ExpColumn[]>(() => {
     if (!replayFrame) return [];
@@ -1942,7 +1998,9 @@ export default function OptionsChainPage({
   // flagged there as not StrictMode/concurrent-safe. Render stays pure — it
   // only READS the anchor and falls back to true ATM when the anchor doesn't
   // belong to the chain on screen — and the effect below does the committing.
-  const centerKey = `${activeTicker}|${replayFrame ? `replay:${replayDate}` : "live"}`;
+  // Scope is part of the key: switching 0DTE↔All rebuilds the strike axis, so an
+  // anchor taken on the other axis points at a row that may no longer exist.
+  const centerKey = `${activeTicker}|${replayFrame ? `replay:${replayDate}:${replayScope}` : "live"}`;
   const [centerAnchor, setCenterAnchor] = useState<{ key: string; strike: number }>({ key: "", strike: 0 });
 
   const centerStrike = useMemo(
@@ -2419,9 +2477,15 @@ export default function OptionsChainPage({
 
   // Snapshot/Discord caption. Declared here (not up with snapTitle) because it
   // needs replayFrame, which only exists once the recorded columns are built.
+  // Scope rides in the caption: a one-column 0DTE grab and an all-expiry grab
+  // are different claims about the same session, and the image has to say which.
   const replayTitle = replayFrame
-    ? `Options Chain REPLAY — ${activeTicker}  •  ${replayDate} ${fmtReplayClock(replayFrame.ts)} ET  •  GEX  •  ${dataMode === "vol-only" ? "Vol only" : "OI+Vol"}`
+    ? `Options Chain REPLAY — ${activeTicker}  •  ${replayDate} ${fmtReplayClock(replayFrame.ts)} ET  •  ${replayScope === "0dte" ? `0DTE ${replayZeroDteExp}` : `all exp (${replayAxis.expiries.length})`}  •  GEX  •  ${dataMode === "vol-only" ? "Vol only" : "OI+Vol"}`
     : snapTitle;
+
+  // ⅀ Total sums the NON-0DTE expiries. In "0dte" scope that set is empty, so
+  // the column is dropped rather than printed as zeros. See REPLAY_SCOPES.
+  const showTotalCol = !(replayFrame && replayScope === "0dte");
 
   // EM bands only apply to current-week expirations. Mark which visible columns
   // qualify so the band draws across only those columns.
@@ -2441,10 +2505,15 @@ export default function OptionsChainPage({
   // excluded, label stays plain "Total Net {greek}"). Shown in the toolbar.
   const visibleTotal = useMemo(() => {
     // Same rule as the ⅀ Total column: 0DTE is relative to the session shown.
+    // Exception: replay's "0dte" scope renders nothing BUT 0DTE, so excluding it
+    // would leave this readout permanently 0 next to a grid full of numbers.
+    // There it totals the one column on screen — and the label says "0DTE" so
+    // the figure is never read as the usual ex-0DTE total.
+    const zeroDteOnly = !!replayFrame && replayScope === "0dte";
     const todayKey = replayFrame ? replayDate : etDateKey(etToday());
     let sum = 0;
     for (const col of columns) {
-      if (col.expiration === todayKey) continue;
+      if (!zeroDteOnly && col.expiration === todayKey) continue;
       for (const s of visibleStrikes) {
         if (s == null) continue;
         // OI tab totals the day-over-day CHANGE, matching the ⅀ Total column.
@@ -2459,7 +2528,7 @@ export default function OptionsChainPage({
       }
     }
     return sum;
-  }, [columns, visibleStrikes, greekMode, nearestStrike, oiSnapshot, replayFrame, replayDate]);
+  }, [columns, visibleStrikes, greekMode, nearestStrike, oiSnapshot, replayFrame, replayDate, replayScope]);
 
   // Toolbar button styled to match the right-side SegGroup tiles (height 34,
   // radius 8, fontSize 11–12, weight 700) so GO + Recent line up with them.
@@ -2618,8 +2687,13 @@ export default function OptionsChainPage({
       {/* Row 2 — total net GEX (active greek) across the visible window. */}
       {showGrandTotal && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 2px", fontSize: 11, whiteSpace: "nowrap" }}>
+          {/* "Total" normally means "every expiry EXCEPT 0DTE". In replay's
+              0DTE scope it means the opposite — the 0DTE column alone — so the
+              label changes with it rather than letting one word cover both. */}
           <span style={{ fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HT.muted }}>
-            {greekMode === "oi" ? "Total ΔOI" : `Total Net ${greekMode.toUpperCase()}`}
+            {replayFrame && replayScope === "0dte"
+              ? (greekMode === "oi" ? "0DTE ΔOI" : `0DTE Net ${greekMode.toUpperCase()}`)
+              : (greekMode === "oi" ? "Total ΔOI" : `Total Net ${greekMode.toUpperCase()}`)}
           </span>
           <span style={{ fontFamily: "var(--font-mono)", fontWeight: 800, fontSize: 12, color: visibleTotal >= 0 ? HT.green : HT.red }}>
             {greekMode === "oi" ? fmtChg(visibleTotal) : fmtMoney(visibleTotal)}
@@ -2672,6 +2746,35 @@ export default function OptionsChainPage({
               accentCyan={false}
             />
           )}
+
+          {/* ── Expiry scope ────────────────────────────────────────────────
+              0DTE collapses the grid to the session's front/same-day expiry;
+              All expands it back to every recorded expiry + the ⅀ Total column.
+              Frame index is untouched by the switch — the clock you are parked
+              on is the thing being examined, and losing it to change what is
+              summed would be the wrong trade. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <span style={{ fontSize: 10, color: HT.muted, fontWeight: 700 }}>Exp</span>
+            {REPLAY_SCOPES.map((sc) => (
+              <button
+                key={sc}
+                onClick={() => setReplayScope(sc)}
+                disabled={sc === "0dte" && !replayZeroDteExp}
+                style={{
+                  ...segBtnStyle(replayScope === sc),
+                  height: 24, padding: "0 9px", fontSize: 10, textTransform: "none",
+                  opacity: sc === "0dte" && !replayZeroDteExp ? 0.4 : 1,
+                }}
+                title={sc === "0dte"
+                  ? (replayZeroDteExp
+                      ? `Show only ${replayZeroDteExp}${replayZeroDteIsExact ? " (expires this session)" : " — front recorded expiry; this root had no same-day listing"}`
+                      : "No expiry recorded for this session")
+                  : `Show all ${replayAllExpiries.length} recorded expiries, with the ⅀ Total column (0DTE excluded from Total, as on the live chain)`}
+              >
+                {REPLAY_SCOPE_LABEL[sc]}
+              </button>
+            ))}
+          </div>
 
           <button
             onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.max(0, i - 1)); }}
@@ -2748,8 +2851,20 @@ export default function OptionsChainPage({
               gamma there" rather than "not recorded at this moment". */}
           {replayFrame && (
             <span style={{ color: HT.muted, opacity: 0.7 }}>
-              · recorded walls only · {replayAxis.expiries.length} expir{replayAxis.expiries.length === 1 ? "y" : "ies"} ·{" "}
-              {replayFrame.cells.size}/{replayAxis.strikes.length * replayAxis.expiries.length} cells this frame · GEX only
+              · recorded walls only ·{" "}
+              {replayScope === "0dte"
+                ? `${replayZeroDteExp}${replayZeroDteIsExact ? "" : " (front — no same-day listing)"} of ${replayAllExpiries.length} recorded`
+                : `${replayAxis.expiries.length} expir${replayAxis.expiries.length === 1 ? "y" : "ies"}`}
+              {" · "}
+              {/* Cells present / cells the SCOPED axis could hold — so the
+                  denominator shrinks with the scope instead of implying the
+                  0DTE view is missing the other expiries' cells. */}
+              {(() => {
+                const shown = replayScope === "0dte" && replayZeroDteExp
+                  ? [...replayFrame.cells.keys()].filter((k) => k.slice(0, k.indexOf("|")) === replayZeroDteExp).length
+                  : replayFrame.cells.size;
+                return `${shown}/${replayAxis.strikes.length * Math.max(1, replayAxis.expiries.length)}`;
+              })()} cells this frame · GEX only
             </span>
           )}
           {replayLoading && <span style={{ color: HT.cyan }}>· loading…</span>}
@@ -2824,6 +2939,7 @@ export default function OptionsChainPage({
             isStandalone={isStandalone}
             changeMode={changeMode}
             sessionDate={replayFrame ? replayDate : ""}
+            showTotalCol={showTotalCol}
             changeMeta={changeMeta}
             changeMap={changeMap}
             changeScaleByExp={changeScaleByExp}

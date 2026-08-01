@@ -44,7 +44,7 @@ import type { EsCandleRecord } from "@/lib/snapdb";
 
 import {
   toChartTime, etDayKey, fmtEtHM, isPlausibleBasis, etMinutesOfDay, BUBBLE_SCALE_CUTOFF_MIN,
-  isCashOpen, etMinutes, buildVolumeProfile, TPO_PERIOD_MS, buildTpoProfile, SLOT_MS, slotFloorMs,
+  isCashOpen, etSessionStarted, etMinutes, buildVolumeProfile, TPO_PERIOD_MS, buildTpoProfile, SLOT_MS, slotFloorMs,
   SPOT_LINE_GRAY, EM_VIOLET, parseLevelNum, DEFAULT_VIEW_BARS, DEFAULT_VIEW_RIGHT_PAD, applyDefaultView,
   deriveColumnLevels, gexColor,
   type GexCell, type GexColumn, type GexMetric, type VolumeProfile, type TpoProfile,
@@ -400,8 +400,9 @@ export default function EsChartCard({
   // latest slot is updated in place as fresh gex messages arrive within the
   // same minute. Spans the full heatmapDays range (1D/5D).
   const columnsRef = useRef<Map<number, GexColumn>>(new Map());
-  // Same 1-min resolution as columnsRef, but TODAY only — the bubble trail is a
-  // session view and never backfills past days.
+  // Same 1-min resolution as columnsRef, but ONE SESSION only — the bubble trail
+  // is a session view and never spans two days. Usually today; off-hours it is
+  // the last session that traded (see lastBubbleDayRef).
   const minuteColsRef = useRef<Map<number, GexColumn>>(new Map());
   // Dedupe key for the heatmap backfill fetch: front mode ignores `expiry`
   // server-side, so the rolling feedExpiry must not re-fire the ~700KB/5s call.
@@ -411,10 +412,20 @@ export default function EsChartCard({
   // columns already in memory are the wrong data and must be wiped; a change to
   // the poll counter alone is a refresh and merges.
   const lastHeatmapShapeRef = useRef<string>("");
-  // ET day the bubble map currently holds. Bubbles are single-day, so a
-  // rollover (or a replay-day switch) has to wipe minuteColsRef even when the
-  // request shape is unchanged — see the same rule.
+  // ET day the bubble map currently HOLDS — the day the data is from, which is
+  // not always today (weekends, holidays, pre-open: see the targetKey note in
+  // the backfill). Bubbles are single-day, so when the day that arrives changes,
+  // minuteColsRef has to be wiped even though the request shape didn't move, or
+  // two sessions' minutes end up sharing one radius scale.
   const lastBubbleDayRef = useRef<string>("");
+  // Wall-clock ET day as of the last backfill. Deliberately SEPARATE from
+  // lastBubbleDayRef: this one catches the midnight rollover on a tab that was
+  // left open (the live feed starts writing a new day's minutes into a map that
+  // still holds the previous session), while lastBubbleDayRef tracks what the
+  // server actually returned. Folding them into one ref would make every
+  // weekend backfill wipe and repaint — the wall clock says Saturday, the data
+  // says Friday, and they'd disagree forever.
+  const lastWallDayRef = useRef<string>("");
   const bubbleCfgRef = useRef<BubbleCfg>(BUBBLE_CFG_DEFAULT);
   const bubbleMinsRef = useRef<BubbleBucket>("bar");
   // Replay cursor, mirrored for the imperative overlay draw (null = live).
@@ -1145,6 +1156,22 @@ export default function EsChartCard({
           // 1-min bucket for the bubble trail (last write in the minute wins).
           const minTs = Math.floor(Date.now() / 60_000) * 60_000;
           const mmap = minuteColsRef.current;
+          // The bubble map holds ONE session. The first live frame of a new ET
+          // day lands in a map still full of the previous one — and now that the
+          // backfill falls back to the last session that traded, that stale day
+          // can be sitting there from Friday all the way into Monday's open.
+          // Mixing them normalizes two sessions against a single radius scale.
+          // Roll it forward here instead of waiting on the next backfill, which
+          // on ES has no poll and may not re-fire for hours.
+          // Not in replay: there the map is deliberately the scrubbed day, and
+          // live frames are already hidden by the cursor clamp at draw time.
+          if (!replayOnRef.current) {
+            const liveDay = etDayKey(minTs);
+            if (liveDay !== lastBubbleDayRef.current) {
+              lastBubbleDayRef.current = liveDay;
+              mmap.clear();
+            }
+          }
           mmap.set(minTs, { slotTs: minTs, cells, spot: spx > 0 ? spx : undefined });
           if (mmap.size > 2000) mmap.delete(Math.min(...mmap.keys()));
           const map = columnsRef.current;
@@ -1281,7 +1308,17 @@ export default function EsChartCard({
     // GEX (heatmap columns + bubble trail) is included.
     // Retention is 2 days for heatmap/bubbles (option_strike_gex_history is
     // pruned to 48h server-side), so both live and replay windows cap at 2880min.
-    const minutes = Math.min(2880, replayOn ? 2880 : heatmapDays * 1440);
+    //
+    // The 1D default is a PERFORMANCE choice, and it quietly stops making sense
+    // once the market is shut: "the last 24 hours" measured from Saturday
+    // evening lands entirely inside Saturday, and Friday's session — the last
+    // one that exists — is outside the request. The response comes back empty
+    // and the chart draws Friday's candles with no gamma on them at all.
+    // Off-session, ask for the full retention window instead; there is only one
+    // session's worth of rows inside 48h at that point, so the "5-day is slow"
+    // reasoning doesn't apply. Live hours are untouched.
+    const offSession = !replayOn && !etSessionStarted();
+    const minutes = Math.min(2880, replayOn || offSession ? 2880 : heatmapDays * 1440);
     // Front mode passes anyExpiry=1, so the server IGNORES `expiry`; the rolling
     // feedExpiry churning each publish must NOT re-fire this ~700KB/5s query.
     // Key on the request window only (an explicit DTE pick keys on expiry too).
@@ -1359,11 +1396,16 @@ export default function EsChartCard({
     // bubble map is single-day, so minutes carried over from yesterday would
     // otherwise survive and poison the session-max/top-strike scaling that all
     // the bubble radii are normalized against.
-    const dayKeyNow = replayOn && activeReplayDay ? activeReplayDay : etDayKey(Date.now());
+    //
+    // This check is on the WALL CLOCK (lastWallDayRef), not on the day the data
+    // turned out to be from (lastBubbleDayRef, wiped at merge time below). Its
+    // job is the tab left open across midnight, where the live socket starts
+    // stamping a new day's minutes into a map still holding the old session.
+    const wallDayNow = replayOn && activeReplayDay ? activeReplayDay : etDayKey(Date.now());
     const shapeChanged = shapeKey !== lastHeatmapShapeRef.current;
-    const dayChanged = dayKeyNow !== lastBubbleDayRef.current;
+    const dayChanged = wallDayNow !== lastWallDayRef.current;
     lastHeatmapShapeRef.current = shapeKey;
-    lastBubbleDayRef.current = dayKeyNow;
+    lastWallDayRef.current = wallDayNow;
     if (shapeChanged) {
       columnsRef.current.clear();
       minuteColsRef.current.clear();
@@ -1421,8 +1463,37 @@ export default function EsChartCard({
         // 5-min flooring). Same rows, different bucket — the heatmap coarsens
         // them, the bubbles don't.
         const mmap = minuteColsRef.current;
-        // Bubbles are single-day: live → today, replay → the day being scrubbed.
-        const targetKey = replayOn && activeReplayDay ? activeReplayDay : etDayKey(Date.now());
+        // Bubbles are single-day: replay → the day being scrubbed, live → the
+        // most recent day the RESPONSE actually contains.
+        //
+        // This used to anchor on etDayKey(Date.now()), and "today" is the wrong
+        // anchor whenever the market is shut. On a Saturday, a holiday, or
+        // before the open, no row in option_strike_gex_history carries today's
+        // ET day key — so every column in an otherwise perfectly good 48h
+        // response failed this equality test, mmap stayed empty, and the trail
+        // rendered as nothing at all. That is the "not showing Friday's bubbles"
+        // symptom: the heatmap (which has no day filter) kept drawing Friday
+        // while the bubbles silently dropped it on the floor.
+        //
+        // Anchoring on the newest day PRESENT is identical during a live session
+        // — the newest row is today's the moment the recorder writes one — and
+        // falls back to the last session that traded the rest of the time.
+        // sortedRaw is already newest-first; skip empty columns so a trailing
+        // cell-less snapshot can't name the day.
+        let newestDataTs = 0;
+        for (const col of sortedRaw) {
+          if (Array.isArray(col.cells) && col.cells.length) { newestDataTs = col.slotTs; break; }
+        }
+        const targetKey = replayOn && activeReplayDay
+          ? activeReplayDay
+          : (newestDataTs > 0 ? etDayKey(newestDataTs) : etDayKey(Date.now()));
+        // The day the map holds just changed (rolled into a new session, or the
+        // weekend fallback resolved to a different Friday) — drop the old day's
+        // minutes rather than normalizing two sessions against one scale.
+        if (targetKey !== lastBubbleDayRef.current) {
+          lastBubbleDayRef.current = targetKey;
+          mmap.clear();
+        }
         for (const col of sortedRaw) {
           const slotTs = slotFloorMs(col.slotTs);
           const cells: GexCell[] = col.cells

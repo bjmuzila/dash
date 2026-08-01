@@ -86,6 +86,32 @@ export function isCashOpen(ts: number = Date.now()): boolean {
   return mins >= 9 * 60 + 30 && mins < 16 * 60; // 09:30–16:00 ET
 }
 
+/**
+ * Has TODAY's cash session started (or already finished) in ET?
+ *
+ * Differs from isCashOpen in the one way the GEX backfill cares about: this
+ * stays true after 16:00, because the question is not "can I read a live basis"
+ * but "does today have any recorded GEX history to find at all". False on a
+ * weekend and before 09:30 on a weekday — exactly the windows where a 24h
+ * lookback can fail to reach the last session that actually traded (Saturday
+ * evening is already more than 24h past Friday's close), and where the caller
+ * must widen its request instead of coming back empty.
+ *
+ * Holidays read as `true` here — the ET calendar is all this knows. That is
+ * safe: the consumer only uses a `false` to ASK FOR MORE, so a holiday just
+ * behaves like today, and the day-of-data anchoring downstream still falls back
+ * to the newest session present in whatever comes back.
+ */
+export function etSessionStarted(ts: number = Date.now()): boolean {
+  const parts = ET_HM_FMT.formatToParts(new Date(ts));
+  const wd = parts.find((p) => p.type === "weekday")?.value ?? "";
+  if (wd === "Sat" || wd === "Sun") return false;
+  const hh = Number(parts.find((p) => p.type === "hour")?.value ?? -1);
+  const mm = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+  if (hh < 0) return false;
+  return hh * 60 + mm >= 9 * 60 + 30;
+}
+
 /** Minutes-since-ET-midnight for a slot timestamp. */
 export function etMinutes(ts: number): number {
   const parts = new Intl.DateTimeFormat("en-US", {

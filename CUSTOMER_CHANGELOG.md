@@ -2,6 +2,13 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Saturday 8/1/2026
+
+* Added a new **GEX Map** to the Test Lab — four different ways of looking at the same session, all on one page: a time-forward heat field, a spot-centred dial, a vertical ladder, and a contour map that treats gamma as terrain.
+* Every map can be zoomed and dragged with the mouse (or pinched on a trackpad), and any one of them can be expanded to full width.
+* Added an expiration picker to the maps, so you can look at an expiry other than 0DTE.
+* Dealer delta is now recorded alongside gamma every minute, so the delta side of these charts builds real history from here on instead of only ever showing the current moment.
+
 ## Friday 7/31/2026
 
 * The ES Candles page now loads noticeably faster — it was opening three separate live-data connections at once and downloading several times more data than it actually used. The home dashboard got the same treatment.
