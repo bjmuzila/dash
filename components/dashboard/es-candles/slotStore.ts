@@ -66,6 +66,14 @@ export type SlotBlob = Record<string, unknown>;
 /** Slot ids: 0 | 1 | 2 for the page's three cards, "embed" for the home card. */
 export type SlotId = number | string;
 
+/**
+ * The namespace every card's settings live in once there is more than one chart
+ * on screen. With a shared toolbar the controls drive all the charts at once, so
+ * they must all be reading and writing ONE blob — the per-card slots are then
+ * only used for the symbol, which stays independent.
+ */
+export const SHARED_SLOT = "shared";
+
 const SLOT_PREFIX = "es-candles-slot-v2:";
 const slotStorageKey = (slot: SlotId) => `${SLOT_PREFIX}${slot}`;
 
@@ -87,6 +95,27 @@ function readJson(key: string): Record<string, unknown> | null {
   } catch { return null; } // private mode / bad blob
 }
 
+let sharedSeeded = false;
+
+/**
+ * First time the row goes multi-chart, the shared blob doesn't exist yet — and
+ * falling back to factory defaults would silently throw away the setup the user
+ * had on their single chart. Seed it from slot 0 (minus the symbol, which stays
+ * per card) so going from one chart to three keeps everything you had and just
+ * repeats it.
+ *
+ * Self-healing like ensureMigrated, for the same reason: React flushes child
+ * effects before parent effects, so the page cannot be relied on to run first.
+ */
+function ensureSharedSeeded(): void {
+  if (typeof window === "undefined" || sharedSeeded) return;
+  sharedSeeded = true;
+  if (readJson(slotStorageKey(SHARED_SLOT))) return;
+  const seed = { ...(readJson(slotStorageKey(0)) ?? {}) };
+  delete seed.symbol;
+  try { window.localStorage.setItem(slotStorageKey(SHARED_SLOT), JSON.stringify(seed)); } catch { /* ignore */ }
+}
+
 export function readSlot(slot: SlotId): SlotBlob {
   // Self-healing rather than order-dependent. React flushes CHILD effects before
   // parent effects, so a card's restore effect runs BEFORE the page's
@@ -95,15 +124,53 @@ export function readSlot(slot: SlotId): SlotBlob {
   // the one load where it matters. ensureMigrated is idempotent and returns
   // immediately once slot 0 exists, so paying for it here costs one getItem.
   ensureMigrated();
+  if (String(slot) === SHARED_SLOT) ensureSharedSeeded();
   return readJson(slotStorageKey(slot)) ?? {};
 }
 
-/** Read-modify-write. Merges `patch` over whatever is already stored. */
+// ── Same-tab broadcast ───────────────────────────────────────────────────────
+// localStorage's `storage` event fires in OTHER tabs, never the one that wrote —
+// so it is exactly no use for keeping three cards in the same tab in sync. This
+// is the missing half: writeSlot notifies every subscriber on that slot, so the
+// shared toolbar's write lands in all three cards on the same tick.
+type SlotListener = (patch: SlotBlob) => void;
+const slotListeners = new Map<string, Set<SlotListener>>();
+
+export function subscribeSlot(slot: SlotId, cb: SlotListener): () => void {
+  const key = String(slot);
+  let set = slotListeners.get(key);
+  if (!set) { set = new Set(); slotListeners.set(key, set); }
+  set.add(cb);
+  return () => {
+    set!.delete(cb);
+    if (!set!.size) slotListeners.delete(key);
+  };
+}
+
+function notifySlot(slot: SlotId, patch: SlotBlob): void {
+  const set = slotListeners.get(String(slot));
+  if (!set) return;
+  // Copy first: a listener that unsubscribes itself mid-notify would otherwise
+  // mutate the set being iterated.
+  for (const cb of [...set]) { try { cb(patch); } catch { /* one bad listener must not stop the rest */ } }
+}
+
+/** Read-modify-write, then broadcast. Merges `patch` over whatever is stored. */
 export function writeSlot(slot: SlotId, patch: SlotBlob): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(slotStorageKey(slot), JSON.stringify({ ...readSlot(slot), ...patch }));
   } catch { /* ignore */ }
+  notifySlot(slot, patch);
+}
+
+/**
+ * Broadcast WITHOUT persisting. For state that must stay in step across the
+ * cards but has no business in localStorage — the replay cursor, which moves a
+ * couple of times a second during playback and is meaningless next session.
+ */
+export function broadcastSlot(slot: SlotId, patch: SlotBlob): void {
+  notifySlot(slot, patch);
 }
 
 export function readBubbleDefault(): Record<string, unknown> | null {

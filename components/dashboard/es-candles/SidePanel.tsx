@@ -22,7 +22,7 @@
 
 import { type MutableRefObject } from "react";
 import EsGexRail, { type RailRow } from "@/components/dashboard/EsGexRail";
-import ChainRail from "./ChainRail";
+import ChainRail, { type ChainGreek } from "./ChainRail";
 // Declared in slotStore (which has no React dependency) so the page-level
 // persistence and this component can't drift into two spellings of the union.
 import type { SidePanelKind } from "./slotStore";
@@ -44,11 +44,14 @@ export type { SidePanelKind };
  * survives and the chain steps aside.
  */
 export const SIDE_PANEL_SPEC: Record<SidePanelKind, { w: number; minChart: number }> = {
-  none:  { w: 0,   minChart: 0 },
-  rail:  { w: 115, minChart: 340 },
-  // Wider than the rail because it carries a value per row (strike on the left,
-  // the greek in millions on the right) rather than a bar.
-  chain: { w: 148, minChart: 340 },
+  none:  { w: 0,  minChart: 0 },
+  // Both roughly half what they were. The rail's bars are a shape, not a
+  // reading — length relative to its neighbours is the whole signal, and that
+  // survives the narrower box intact. The chain drops its strike labels below
+  // ~105px (see ChainRail) and keeps the value, which costs nothing now that
+  // the rows line up with the chart and the price axis is right there.
+  rail:  { w: 58, minChart: 340 },
+  chain: { w: 76, minChart: 340 },
 };
 
 interface SidePanelProps {
@@ -59,6 +62,8 @@ interface SidePanelProps {
   chainSymbol: string;
   /** The card's heatmap intensity, so the chain heat matches the chart's. */
   intensity: number;
+  /** Which greek the chain paints. Page-level — see ChainRail. */
+  chainGreek: ChainGreek;
   railRows: RailRow[];
   callWall: number | null;
   putWall: number | null;
@@ -70,7 +75,7 @@ interface SidePanelProps {
 }
 
 export default function SidePanel({
-  kind, width, chainSymbol, intensity,
+  kind, width, chainSymbol, intensity, chainGreek,
   railRows, callWall, putWall, gexFlip, spot, basis, priceToY, drawRef,
 }: SidePanelProps) {
   if (kind === "none") return null;
@@ -84,6 +89,7 @@ export default function SidePanel({
           priceToY={priceToY}
           drawRef={drawRef}
           intensity={intensity}
+          greek={chainGreek}
         />
       </div>
     );

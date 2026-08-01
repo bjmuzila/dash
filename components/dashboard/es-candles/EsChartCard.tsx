@@ -57,10 +57,12 @@ import { SymbolListDropdown, symbolDef, isChartSymbol, type ChartSymbol } from "
 import { PanelSection, PanelChip, SLIDER_LABEL_W, OVL_PANEL_W, OVL_VIEWPORT_PAD, OVL_MIN_H } from "./panelUi";
 import {
   BUBBLE_CFG_DEFAULT, BUBBLE_CFG_RANGE, bubbleCfgFrom,
-  readSlot, writeSlot, readBubbleDefault, writeBubbleDefault, isBubbleBucket,
-  type BubbleCfg, type BubbleBucket, type SlotId,
+  readSlot, writeSlot, broadcastSlot, subscribeSlot,
+  readBubbleDefault, writeBubbleDefault, isBubbleBucket,
+  type BubbleCfg, type BubbleBucket, type SlotId, type SlotBlob,
 } from "./slotStore";
 import SidePanel, { SIDE_PANEL_SPEC, type SidePanelKind } from "./SidePanel";
+import type { ChainGreek } from "./ChainRail";
 
 // Card/accent styling now sourced from the shared theme (see BUDGET_UI_STYLE.md).
 const dissolveCard = dissolveCardStyle;
@@ -103,6 +105,26 @@ export interface EsChartCardProps {
    * A first-render default only — every overlay stays toggleable.
    */
   embedded?: boolean;
+  /**
+   * Where everything EXCEPT the symbol is read from and written to. Defaults to
+   * `slot`, which is the single-chart case: one card, one blob.
+   *
+   * With 2–3 charts the page points every card at SHARED_SLOT and renders ONE
+   * toolbar, so a control there drives all of them. The symbol deliberately
+   * stays on `slot` — it's the one thing that is still per chart.
+   */
+  settingsSlot?: SlotId;
+  /**
+   * `full`   — the card owns the whole dock (single chart / the home embed).
+   * `shared` — this card's dock is portaled into `dockTarget` and becomes the
+   *            page's shared toolbar; the card keeps only its ticker.
+   * `symbol` — ticker only. The other cards in a shared-toolbar row.
+   */
+  dockMode?: "full" | "shared" | "symbol";
+  /** Where a `shared` dock renders. Owned by the page's toolbar row. */
+  dockTarget?: HTMLElement | null;
+  /** Which greek the 0DTE chain panel paints. Page-level, like the panel. */
+  chainGreek?: ChainGreek;
   /** Override the width-measured density. Mostly for the home embed and tests. */
   density?: "full" | "compact";
   /** Hide the per-card Snap/Discord buttons (the page owns one for the row). */
@@ -111,12 +133,19 @@ export interface EsChartCardProps {
 
 export default function EsChartCard({
   slot = 0,
+  settingsSlot,
   sidePanel = "rail",
+  dockMode = "full",
+  dockTarget,
+  chainGreek = "gex",
   leading,
   embedded = false,
   density: densityProp,
   hideCapture = false,
 }: EsChartCardProps = {}) {
+  // Everything but the symbol lives here. Same as `slot` for a lone chart.
+  const cfgSlot: SlotId = settingsSlot ?? slot;
+  const shared = String(cfgSlot) !== String(slot);
   // Bandwidth gate. Reconnect/backoff moved into lib/gexSocket, so the ref
   // mirror this used to need (read from inside the socket callbacks) is gone.
   const esShouldConnect = useWsLifecycle();
@@ -137,6 +166,11 @@ export default function EsChartCard({
   // cardW === 0 on the very first paint (and under SSR). Treat unknown as
   // "full": guessing compact would flash the collapsed dock on every load.
   const compact = densityProp ? densityProp === "compact" : cardW > 0 && cardW < COMPACT_CARD_WIDTH;
+  // `compact` is about how much room the CARD has. A shared dock doesn't render
+  // in the card — it's portaled into the page's full-width toolbar row — so it
+  // must not inherit the card's cramped density. The in-card chrome (the stat
+  // row) still uses `compact`.
+  const dockCompact = dockMode === "shared" ? false : compact;
 
   // ── Persisted per-slot settings ────────────────────────────────────────────
   // Read ONCE in an effect, never in a useState initializer: this component is
@@ -149,15 +183,20 @@ export default function EsChartCard({
   // would drop whatever keys this caller doesn't know about, which is exactly
   // how the old bubble-slider write used to clobber the saved bucket.
   const saveSetting = useCallback((patch: Record<string, unknown>) => {
-    writeSlot(slot, patch);
-  }, [slot]);
+    // Writing also BROADCASTS (see writeSlot). In a shared-toolbar row every
+    // card is subscribed to this slot, so one control moves all three on the
+    // same tick — no prop drilling, and no re-render of the page above them.
+    writeSlot(cfgSlot, patch);
+  }, [cfgSlot]);
 
   // ── Active chart symbol ────────────────────────────────────────────────────
   const [symbol, setSymbolState] = useState<ChartSymbol>("ES");
   const setSymbol = useCallback((s: ChartSymbol) => {
     setSymbolState(s);
-    saveSetting({ symbol: s });
-  }, [saveSetting]);
+    // `slot`, never cfgSlot — the symbol is the one setting that stays per card
+    // when the toolbar is shared. That is the whole point of three charts.
+    writeSlot(slot, { symbol: s });
+  }, [slot]);
   const sym = symbolDef(symbol);
   // The one predicate the rest of the page branches on. ES is the futures chart
   // with an SPX option overlay (basis applies); SPY/QQQ are cash instruments
@@ -638,8 +677,27 @@ export default function EsChartCard({
   })();
   const replayGexRef = useRef(replayGex);
   replayGexRef.current = replayGex;
+  // ── Replay ownership under a shared toolbar ────────────────────────────────
+  // Exactly ONE card may advance the cursor. Every card runs this component, so
+  // without the guard all three would tick independently, each broadcasting its
+  // own index, and the cursor would race. The card that renders the toolbar is
+  // the owner; the others are followers and take the index off the channel.
+  const replayOwner = dockMode !== "symbol";
+
+  // Mirror the owner's replay state onto the broadcast channel. Deliberately
+  // NOT persisted (broadcastSlot, not writeSlot): the cursor moves a couple of
+  // times a second during playback and means nothing next session.
+  useEffect(() => {
+    if (!shared || !replayOwner) return;
+    broadcastSlot(cfgSlot, {
+      rpOn: replayOn, rpPlaying: replayPlaying, rpIdx: replayIdx,
+      rpSpeed: replaySpeed, rpDay: replayDay,
+    });
+  }, [shared, replayOwner, cfgSlot, replayOn, replayPlaying, replayIdx, replaySpeed, replayDay]);
+
   // Play loop: advance one bar per tick, stop at the last frame.
   useEffect(() => {
+    if (shared && !replayOwner) return; // followers are driven by the channel
     if (!replayOn || !replayPlaying || replayFrames.length === 0) return;
     const ms = Math.max(60, Math.round(1000 / Math.max(1, replaySpeed)));
     const id = setInterval(() => {
@@ -649,7 +707,7 @@ export default function EsChartCard({
       });
     }, ms);
     return () => clearInterval(id);
-  }, [replayOn, replayPlaying, replaySpeed, replayFrames.length]);
+  }, [shared, replayOwner, replayOn, replayPlaying, replaySpeed, replayFrames.length]);
   // ── Restore this slot's settings ───────────────────────────────────────────
   // ONE effect for the whole card. Read in an effect, not in a lazy useState
   // initializer, so SSR and the first client render agree — the /es-candles
@@ -661,10 +719,12 @@ export default function EsChartCard({
   // the component, which is safe because the body runs after mount. Putting any
   // of those values in the dep array would evaluate them during render and throw
   // a TDZ ReferenceError (see the note by bubbleCfgRef).
-  useEffect(() => {
-    const p = readSlot(slot);
-
-    if (isChartSymbol(p.symbol)) setSymbolState(p.symbol);
+  //
+  // Factored out because it runs from TWO places: the mount restore below, and
+  // the shared-toolbar subscription. Both hand it the same shape — a full blob
+  // on restore, a one-key patch on broadcast — and every field is guarded
+  // individually, so a partial patch only moves what it names.
+  const applySettings = useCallback((p: SlotBlob) => {
     if (isChartInterval(p.interval)) setIntervalState(p.interval);
     if (typeof p.expiry === "string") setSelectedExpiry(p.expiry);
     if (p.metric === "vol" || p.metric === "voloi") setGexMetric(p.metric);
@@ -693,8 +753,35 @@ export default function EsChartCard({
     if (typeof p.on === "boolean") setShowGexBubbles(p.on);
     if (typeof p.cb === "boolean") setShowCb(p.cb);
 
+    // Replay rides the same channel but is BROADCAST-only, never persisted —
+    // see the shared-toolbar subscription below.
+    if (typeof p.rpOn === "boolean") setReplayOn(p.rpOn);
+    if (typeof p.rpPlaying === "boolean") setReplayPlaying(p.rpPlaying);
+    if (typeof p.rpIdx === "number") setReplayIdx(p.rpIdx);
+    if (typeof p.rpSpeed === "number") setReplaySpeed(p.rpSpeed);
+    if (typeof p.rpDay === "string" || p.rpDay === null) setReplayDay(p.rpDay as string | null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const own = readSlot(slot);
+    if (isChartSymbol(own.symbol)) setSymbolState(own.symbol);
+    applySettings(cfgSlot === slot ? own : readSlot(cfgSlot));
     setSettingsLoaded(true);
-  }, [slot]);
+  }, [slot, cfgSlot, applySettings]);
+
+  // ── Shared-toolbar sync ────────────────────────────────────────────────────
+  // Only when the settings namespace ISN'T this card's own — i.e. the page put
+  // 2–3 charts up and hoisted the dock. Every card subscribes to the shared
+  // blob, so whichever card owns the rendered toolbar can move all of them by
+  // doing nothing more exotic than saving a setting.
+  //
+  // Subscribing in the single-chart case would be harmless but pointless: the
+  // only writer would be this card, and it has already set its own state.
+  useEffect(() => {
+    if (!shared) return;
+    return subscribeSlot(cfgSlot, applySettings);
+  }, [shared, cfgSlot, applySettings]);
 
   // Patch the config with slider constraints enforced, then persist:
   //   • Highlight can't exceed Show Top Strikes (lowering N pulls X down).
@@ -751,9 +838,10 @@ export default function EsChartCard({
   // minimum, and the rail additionally narrows with the card instead of
   // collapsing outright — a 78px rail still reads.
   const panelSpec = SIDE_PANEL_SPEC[sidePanel];
-  const panelW = sidePanel === "rail"
-    ? Math.round(Math.min(panelSpec.w, Math.max(72, cardW * 0.18)))
-    : panelSpec.w;
+  // The spec widths are already narrow, so the old "shrink the rail with the
+  // card" clamp had nothing left to give — it bottomed out above the spec and
+  // never fired. Just take the spec.
+  const panelW = panelSpec.w;
   // cardW === 0 is the pre-measure first paint — assume it fits rather than
   // flashing the panel out and back in.
   const railFits = sidePanel !== "none" && (cardW === 0 || cardW - panelW >= panelSpec.minChart);
@@ -3104,31 +3192,39 @@ export default function EsChartCard({
     };
   }, []);
 
-  return (
-    <div ref={cardRef} className="es-candles-card flex h-full min-w-0 flex-col">
-    {/* The shell background + glow are painted ONCE by the page. Three cards
-        each painting their own would stack three radial glows across the row
-        and show the seams between them. The home embed keeps its own, since
-        there is no /es-candles page under it to provide one. */}
-    <div ref={captureRef} className="es-candles-root flex h-full flex-col"
-         style={embedded ? { background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow } : undefined}>
-      {/* The dock STAYS in the Snap/Discord PNG (no data-capture-hide). It used
-          to be dropped, but dropping a direct child above the chart makes
-          captureElement's hiddenShift exceed the 44px title band, so the chart
-          composited UP and the candles rendered underneath the watermark. Kept
-          in flow, the exported image reads: watermark band → toolbar → chart.
-          data-capture-hide is still applied per-control below to the pieces
-          that are meaningless in a static image (Snap/Discord buttons). */}
+  // ── Toolbar placement ──────────────────────────────────────────────────────
+  // One dock, three possible homes:
+  //   "full"   — in this card, as it has always been (single chart, home embed).
+  //   "shared" — portaled into the PAGE's toolbar row, where it drives every
+  //              chart in the row through the broadcast channel. The card keeps
+  //              only its ticker.
+  //   "symbol" — no dock at all; ticker only.
+  //
+  // A portal rather than lifting the controls into the page: they are wired to
+  // this card's live feed state (the expirations list, the replay frame count,
+  // the connection status), and re-deriving all of that a level up would mean
+  // the page owning the websocket. The dock stays where its data is and simply
+  // renders somewhere else. Its own dropdown menus already portal to
+  // document.body off a getBoundingClientRect, so they follow it correctly.
+  //
+  // The dock STAYS in the Snap/Discord PNG (no data-capture-hide). It used to be
+  // dropped, but dropping a direct child above the chart makes captureElement's
+  // hiddenShift exceed the 44px title band, so the chart composited UP and the
+  // candles rendered underneath the watermark. Kept in flow, the exported image
+  // reads: watermark band → toolbar → chart. data-capture-hide is still applied
+  // per-control below to the pieces that are meaningless in a static image
+  // (the Snap/Discord buttons themselves).
+  const dock = (
       <div className="px-4 pt-3 pb-1" style={{ position: "relative", zIndex: 30 }}>
         {/* min 0.7, not 0.2. The dock's natural width is ~1100–1300px; at a third
             of a 1440 screen a 0.2 floor renders ~3px glyphs, which is not a
             toolbar, it's a smudge. Compact density culls the dock's contents
             instead, and 0.7 is about where the remainder is still legible. */}
-        <FitScale align={embedded || compact ? "left" : "center"} min={compact ? 0.7 : 0.2}>
+        <FitScale align={embedded || dockCompact ? "left" : "center"} min={dockCompact ? 0.7 : 0.2}>
         <Dock className="dock-noscroll" noScroll style={{ minWidth: 0 }}>
           {leading}
           {leading && <DockGap />}
-          {!compact && (
+          {!dockCompact && (
           <div style={{ display: "flex", flexDirection: "column", flexShrink: 0, lineHeight: 1.2 }}>
             <span className="font-bold uppercase tracking-[0.2em]" style={{ fontSize: 14, color: LIGHT_BLUE, whiteSpace: "nowrap" }}>
               {sym.label} {INTERVAL_LABEL[interval]} Candles
@@ -3152,8 +3248,11 @@ export default function EsChartCard({
           </div>
           )}
 
-          {/* Symbol picker — ES / SPY / QQQ, favorites persisted per browser */}
-          <SymbolListDropdown active={symbol} onSelect={setSymbol} />
+          {/* Symbol picker — ES / SPY / QQQ, favorites persisted per browser.
+              Dropped from a SHARED dock: that toolbar drives every chart, and a
+              ticker is the one setting that must not. Each card grows its own
+              ticker bar instead (see tickerBar below). */}
+          {dockMode === "full" && <SymbolListDropdown active={symbol} onSelect={setSymbol} />}
 
           {/* Timeframe. 1m is its own server stream; 5m is the native feed;
               15m/30m/1h roll up from the 5m bars client-side (see interval.ts).
@@ -3166,12 +3265,12 @@ export default function EsChartCard({
           />
 
           {/* status + count badges */}
-          {!compact && (
+          {!dockCompact && (
           <span style={{ fontSize: 12, fontWeight: 700, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: status === "live" ? "#30d158" : "#94a3b8", whiteSpace: "nowrap", flexShrink: 0 }}>
             {status.toUpperCase()}
           </span>
           )}
-          {!compact && (
+          {!dockCompact && (
           <span style={{ fontSize: 12, fontWeight: 600, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: "rgba(255,255,255,.7)", whiteSpace: "nowrap", flexShrink: 0 }}>
             {`${rows.length} candles`}
           </span>
@@ -3434,6 +3533,37 @@ export default function EsChartCard({
         </Dock>
         </FitScale>
       </div>
+  );
+
+  // Per-card ticker bar. Replaces the dock when the toolbar is shared — the
+  // one control that stays per chart, so it has to stay ON the chart.
+  const tickerBar = (
+    <div className="flex items-center gap-2 px-4 pt-2 pb-1" style={{ position: "relative", zIndex: 30, minWidth: 0 }}>
+      {leading}
+      <SymbolListDropdown active={symbol} onSelect={setSymbol} />
+      <span style={{ fontSize: 11, fontWeight: 700, fontFamily: "var(--font-mono)", color: HOME_THEME.muted, opacity: 0.7, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+        {INTERVAL_LABEL[interval]}
+        {isEs ? (() => { const bs = effectiveBasis(); return bs ? ` · basis ${bs > 0 ? "+" : ""}${bs.toFixed(2)}` : ""; })() : ` · ${sym.gexSymbol} GEX`}
+      </span>
+      {panelSuppressed && (
+        <span title="Widen this card (or drop to fewer charts) to show the side panel"
+              style={{ fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 6, border: `1px solid ${HOME_THEME.border}`, color: HOME_THEME.muted, whiteSpace: "nowrap", flexShrink: 0 }}>
+          panel hidden
+        </span>
+      )}
+    </div>
+  );
+
+  return (
+    <div ref={cardRef} className="es-candles-card flex h-full min-w-0 flex-col">
+    {/* The shell background + glow are painted ONCE by the page. Three cards
+        each painting their own would stack three radial glows across the row
+        and show the seams between them. The home embed keeps its own, since
+        there is no /es-candles page under it to provide one. */}
+    <div ref={captureRef} className="es-candles-root flex h-full flex-col"
+         style={embedded ? { background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow } : undefined}>
+      {dockMode === "full" ? dock : tickerBar}
+      {dockMode === "shared" && dockTarget ? createPortal(dock, dockTarget) : null}
 
 
       <div className="es-candles-body flex flex-col" style={{ flex: 1, minHeight: 0 }}>
@@ -3638,6 +3768,7 @@ export default function EsChartCard({
             width={panelW}
             chainSymbol={sym.chainSymbol}
             intensity={intensity}
+            chainGreek={chainGreek}
             // Source precedence: replay cursor → ETF derived column → the live
             // SPX websocket. The first two are the same derivation applied to a
             // different column; the last is the only one /ws/gex can supply.

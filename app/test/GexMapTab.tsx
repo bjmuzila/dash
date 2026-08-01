@@ -45,6 +45,8 @@ type MapPayload = {
   slotMin: number;
   strikes: number[];
   columns: MapColumn[];
+  /** Volume-only GEX summed across strikes, per slot — the home page's series. */
+  volSeries?: { t: number; vol: number }[];
   dexByStrike: { strike: number; dex: number }[];
   dexSeries: { t: number; dex: number }[];
   /** Slot-aligned DEX ladder — present only when recorded alongside gamma. */
@@ -56,16 +58,17 @@ type MapPayload = {
     netGex: number; netDex: number; asOf: number | null;
   };
   sessions: MapSession[];
-  notes: { gex?: string; dex?: string };
+  expiries?: { expiry: string; snaps: number; dte: number }[];
+  notes: { gex?: string; dex?: string; expiry?: string };
   error?: string;
 };
 
 type Concept = "tape" | "reticle" | "spine" | "terrain";
 
 const CONCEPTS: { key: Concept; label: string; blurb: string }[] = [
-  { key: "tape", label: "Tape Field", blurb: "Time-forward radar — heat field, profile wall, rail, DEX keel." },
+  { key: "tape", label: "Tape Field", blurb: "Time-forward radar — DEX profile left, GEX profile right, Vol GEX keel." },
   { key: "reticle", label: "Polar Reticle", blurb: "Spot-centred dial — strikes fan out, session clock on the rim." },
-  { key: "spine", label: "Spine", blurb: "Vertical ladder — gamma left wing, delta right wing, heat inside." },
+  { key: "spine", label: "Spine", blurb: "Vertical ladder — delta left wing, gamma right wing, heat inside." },
   { key: "terrain", label: "Gamma Terrain", blurb: "Gamma as elevation — iso-GEX contours, flip as coastline." },
 ];
 
@@ -92,12 +95,38 @@ function etTime(ms: number | null | undefined): string {
 }
 
 // ── color ────────────────────────────────────────────────────────────────────
-const CYAN_RGB: [number, number, number] = [33, 158, 188];   // HOME_THEME.cyan
-const LBLU_RGB: [number, number, number] = [142, 202, 230];  // HOME_THEME.green (light blue)
-const ORAN_RGB: [number, number, number] = [251, 133, 1];    // HOME_THEME.orange
-const RED_RGB: [number, number, number] = [239, 68, 68];     // HOME_THEME.red
-const GRN_RGB: [number, number, number] = [31, 217, 138];    // REFRESH_GREEN
-const ROSE_RGB: [number, number, number] = [244, 148, 142];  // SOFT_RED
+// ── palette ──────────────────────────────────────────────────────────────────
+// NOT re-picked here. Every value below is lifted from a GEX surface this app
+// already ships, so the maps read as the same instrument as the panels beside
+// them:
+//
+//   GEX sign      GexHeatmap.cellBg() → rgba(41,182,246) positive,
+//                 rgba(255,71,87) negative. The options chain uses the same two
+//                 (#29b6f6 / #ff4757), so this is the house convention for
+//                 "gamma, signed" and the one thing that must not drift.
+//   magnitude     GexChart lightens a bar toward white in proportion to |GEX|
+//                 (`lift = 0.28 * t`). Same curve here, so a big node looks big
+//                 on the map for the same reason it does on the chart.
+//   peak / magnet GexHeatmap boxes the highest |NET GEX| strike in #ffd700.
+//   flip / accent LIGHT_BLUE + HOME_THEME.cyan out of homeTheme.
+//
+// DEX is the one place this deliberately does NOT copy the heatmap. There, DEX
+// is a separate COLUMN, so reusing the blue/red ramp is unambiguous. Here GEX
+// and DEX are layers of one picture, and painting both blue/red would make the
+// DEX ring unreadable against the gamma under it — so DEX keeps homeTheme's
+// up/down role colors (REFRESH_GREEN / SOFT_RED), which is the same pairing the
+// options chain uses for directional values.
+type RGB = [number, number, number];
+const GEX_POS: RGB = [41, 182, 246];   // #29b6f6
+const GEX_NEG: RGB = [255, 71, 87];    // #ff4757
+const WHITE: RGB = [255, 255, 255];
+const DEX_POS: RGB = [31, 217, 138];   // REFRESH_GREEN
+const DEX_NEG: RGB = [244, 148, 142];  // SOFT_RED
+
+const GEX_POS_HEX = "#29b6f6";
+const GEX_NEG_HEX = "#ff4757";
+/** GexHeatmap's peak box. Reused for the magnet (highest |GEX| node). */
+const GOLD = "#ffd700";
 
 const mix = (a: number[], b: number[], t: number): [number, number, number] => [
   Math.round(a[0] + (b[0] - a[0]) * t),
@@ -105,15 +134,29 @@ const mix = (a: number[], b: number[], t: number): [number, number, number] => [
   Math.round(a[2] + (b[2] - a[2]) * t),
 ];
 const rgba = (c: number[], a: number) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
-/** Signed gamma → color. v is already normalized to [-1, 1]. */
+/**
+ * Signed gamma → color. v is already normalized to [-1, 1]. Hue is fixed by
+ * sign (never interpolated between the two — a mid-magnitude cell must not read
+ * as a different quantity), magnitude rides the alpha plus GexChart's 28% lift
+ * toward white.
+ */
 function gamColor(v: number, alpha?: number): string {
   const m = Math.min(1, Math.abs(v));
-  const c = v >= 0 ? mix(CYAN_RGB, LBLU_RGB, m * 0.75) : mix(ORAN_RGB, RED_RGB, m * 0.6);
-  return rgba(c, alpha === undefined ? 0.15 + 0.8 * m : alpha);
+  const c = mix(v >= 0 ? GEX_POS : GEX_NEG, WHITE, m * 0.28);
+  return rgba(c, alpha === undefined ? heatAlpha(m, 0.08, 0.86) : alpha);
 }
+/**
+ * Alpha for a heat cell. GexHeatmap eases its ramp `ratio ** 1.4` before mapping
+ * to alpha; the same curve is used here so a mid-strength strike reads mid on
+ * both surfaces. It also matters more on a full-bleed field than in a table:
+ * linear alpha turns the whole below-flip half into a solid block of #ff4757,
+ * where the eased curve keeps only the real nodes hot.
+ */
+const heatAlpha = (h: number, lo: number, hi: number) => lo + hi * Math.pow(Math.min(1, Math.max(0, h)), 1.4);
+
 function dexColor(v: number, a?: number): string {
   const m = Math.min(1, Math.abs(v));
-  return rgba(v >= 0 ? GRN_RGB : ROSE_RGB, a === undefined ? 0.2 + 0.75 * m : a);
+  return rgba(v >= 0 ? DEX_POS : DEX_NEG, a === undefined ? 0.2 + 0.75 * m : a);
 }
 
 // ── model ────────────────────────────────────────────────────────────────────
@@ -145,6 +188,13 @@ type MapModel = {
   dexSource: string;
   dexSeries: { t: number; dex: number }[];
   dtMax: number;
+  /** Net Vol GEX per slot + its scale. */
+  volSeries: { t: number; vol: number }[];
+  vtMax: number;
+  /** Per-strike Δ net GEX vs ~15 min ago, normalized, + the lag actually used. */
+  chg15: number[];
+  chg15Min: number;
+  hasChg15: boolean;
   spot: number;
   flip: number | null;
   callWall: number | null;
@@ -262,11 +312,39 @@ function buildModel(p: MapPayload | null): MapModel | null {
   for (const d of dexSeries) if (Math.abs(d.dex) > dtMax) dtMax = Math.abs(d.dex);
   if (!(dtMax > 0)) dtMax = 1;
 
+  const volSeries = p.volSeries ?? [];
+  let vtMax = 0;
+  for (const v of volSeries) if (Math.abs(v.vol) > vtMax) vtMax = Math.abs(v.vol);
+  if (!(vtMax > 0)) vtMax = 1;
+
+  // Δ net GEX over ~15 minutes, per strike. The comparison column is chosen by
+  // TIMESTAMP, not by counting slots back — recording gaps are routine, and
+  // "15 slots ago" silently becomes 40 minutes ago the moment the feed stalls.
+  // If nothing sits far enough back, this reports no change rather than
+  // comparing against the open and calling it 15 minutes.
+  const lastT = cols[cols.length - 1].t;
+  const wantT = lastT - 15 * 60_000;
+  let baseIdx = -1, bestDt = Infinity;
+  for (let i = 0; i < cols.length - 1; i++) {
+    const dt = Math.abs(cols[i].t - wantT);
+    if (dt < bestDt) { bestDt = dt; baseIdx = i; }
+  }
+  const lagMin = baseIdx >= 0 ? (lastT - cols[baseIdx].t) / 60_000 : 0;
+  const hasChg15 = baseIdx >= 0 && lagMin >= 5;
+  const chg15 = new Array(n).fill(0);
+  if (hasChg15) {
+    const a = cols[baseIdx].v, b = cols[cols.length - 1].v;
+    let cMax = 0;
+    for (let i = 0; i < n; i++) { const d = (b[i] ?? 0) - (a[i] ?? 0); chg15[i] = d; if (Math.abs(d) > cMax) cMax = Math.abs(d); }
+    if (cMax > 0) for (let i = 0; i < n; i++) chg15[i] = Math.max(-1, Math.min(1, chg15[i] / cMax));
+  }
+
   return {
     ok: true,
     strikes, lo: strikes[0], hi: strikes[n - 1], cols,
     profile, profileRaw: lastRaw, gMax, heat, signed, path, bubbles,
     dex, dexRaw, dMax, hasDex: dexCount > 0 || dexSeries.length > 0, dexSeries, dtMax,
+    volSeries, vtMax, chg15, chg15Min: Math.round(lagMin), hasChg15,
     dexSurface, dexSource: p.dexSource ?? (dexCount > 0 ? "greek_snapshots" : "none"),
     spot: p.levels.spot, flip: p.levels.flip,
     callWall: p.levels.callWall, putWall: p.levels.putWall, magnet: p.levels.magnet,
@@ -277,7 +355,8 @@ function buildModel(p: MapPayload | null): MapModel | null {
 // ── shared chrome ────────────────────────────────────────────────────────────
 const AXIS = "rgba(255,255,255,0.34)";
 const GRID = "rgba(255,255,255,0.05)";
-const FLIP_C = "#7dd3fc";
+/** Gamma flip. LIGHT_BLUE out of homeTheme — not a literal, per the theme rule. */
+const FLIP_C = LIGHT_BLUE;
 
 // Every map is drawn in a fixed 1240-wide viewBox. In the 2×2 grid each one
 // renders at roughly half that, which would put 8px labels at ~4px — present but
@@ -299,11 +378,13 @@ function Lab({ x, y, children, size = 8, fill = "rgba(255,255,255,0.34)", anchor
   );
 }
 
-function RegimeStrip({ m, symbol, date, asOf }: { m: MapModel; symbol: string; date: string; asOf: number | null }) {
+function RegimeStrip({ m, symbol, date, expiryLabel, asOf }: {
+  m: MapModel; symbol: string; date: string; expiryLabel: string; asOf: number | null;
+}) {
   const cells: { label: string; value: string; tone: string; sub: string }[] = [
     {
       label: "Net gamma", value: fmtBn(m.netGex),
-      tone: m.netGex >= 0 ? HOME_THEME.cyan : HOME_THEME.orange,
+      tone: m.netGex >= 0 ? GEX_POS_HEX : GEX_NEG_HEX,
       sub: m.netGex >= 0 ? "long gamma · dealers dampen" : "short gamma · dealers amplify",
     },
     {
@@ -317,15 +398,15 @@ function RegimeStrip({ m, symbol, date, asOf }: { m: MapModel; symbol: string; d
       sub: !m.hasDex ? "greek_snapshots empty for this session"
         : m.netDex >= 0 ? "dealers short delta · buy dips" : "dealers long delta · sell rips",
     },
-    { label: "Call wall", value: fmtStrike(m.callWall), tone: HOME_THEME.green, sub: "largest +γ above spot" },
-    { label: "Put wall", value: fmtStrike(m.putWall), tone: HOME_THEME.orange, sub: "largest −γ below spot" },
-    { label: "Magnet", value: fmtStrike(m.magnet), tone: LIGHT_BLUE, sub: "highest |GEX| node" },
+    { label: "Call wall", value: fmtStrike(m.callWall), tone: GEX_POS_HEX, sub: "largest +γ above spot" },
+    { label: "Put wall", value: fmtStrike(m.putWall), tone: GEX_NEG_HEX, sub: "largest −γ below spot" },
+    { label: "Magnet", value: fmtStrike(m.magnet), tone: GOLD, sub: "highest |GEX| node" },
   ];
   return (
     <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "stretch" }}>
       <div style={{ ...statTileStyle, padding: "12px 16px", minWidth: 168, flex: "0 0 auto" }}>
         <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.5 }}>
-          {symbol.replace(/^\$/, "")} · 0DTE
+          {symbol.replace(/^\$/, "")} · {expiryLabel}
         </div>
         <div style={{ fontSize: 26, fontWeight: 800, marginTop: 2, color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{fmtSpot(m.spot)}</div>
         <div style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.5, marginTop: 2 }}>
@@ -333,7 +414,7 @@ function RegimeStrip({ m, symbol, date, asOf }: { m: MapModel; symbol: string; d
         </div>
       </div>
       {cells.map((c) => (
-        <div key={c.label} style={{ ...statTileStyle, padding: "12px 16px", minWidth: 150, flex: 1, borderLeft: `3px solid ${c.tone}` }}>
+        <div key={c.label} style={{ ...statTileStyle, padding: "12px 16px", minWidth: 150, flex: 1 }}>
           <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.5 }}>
             {c.label}
           </div>
@@ -383,13 +464,13 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
           const h = m.heat[ci][si];
           if (h < 0.045) return null;
           return <rect key={`${ci}-${si}`} x={xOf(ci) - cw / 2} y={yOf(k) - ch / 2} width={cw + 0.6} height={ch + 0.6}
-            fill={gamColor(m.signed[ci][si], 0.05 + 0.72 * h)} />;
+            fill={gamColor(m.signed[ci][si], heatAlpha(h, 0.04, 0.80))} />;
         })
       )}
       {ticks.map((k) => <line key={`g${k}`} x1={FX} y1={yOf(k)} x2={FX + FW} y2={yOf(k)} stroke={GRID} />)}
 
       {/* walls + flip */}
-      {([[m.callWall, HOME_THEME.green, "CALL WALL"], [m.magnet, LIGHT_BLUE, "MAGNET"], [m.putWall, HOME_THEME.orange, "PUT WALL"]] as [number | null, string, string][])
+      {([[m.callWall, GEX_POS_HEX, "CALL WALL"], [m.magnet, GOLD, "MAGNET"], [m.putWall, GEX_NEG_HEX, "PUT WALL"]] as [number | null, string, string][])
         .filter(([k]) => k != null).map(([k, col, label]) => (
           <g key={label}>
             <rect x={FX} y={yOf(k as number) - 4} width={FW} height={8} fill={col} opacity={0.11} />
@@ -409,7 +490,7 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
       {/* bubbles ride spot, drawn UNDER the path */}
       {m.bubbles.map((b, i) => {
         const r = 3.5 + b.n * 15;
-        const c = b.sign > 0 ? CYAN_RGB : ORAN_RGB;
+        const c = b.sign > 0 ? GEX_POS : GEX_NEG;
         const last = i === m.bubbles.length - 1;
         return (
           <g key={`b${b.ci}`}>
@@ -429,19 +510,23 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
         <text key={`t${i}`} x={xOf(i)} y={FY + FH + 14} fill={AXIS} fontSize={8 * fz} textAnchor="middle" opacity={0.75}>{label}</text>
       ))}
 
-      {/* left profile */}
-      <Lab x={PX} y={FY - 8}>NET GEX PROFILE</Lab>
-      <line x1={PX + PW} y1={FY} x2={PX + PW} y2={FY + FH} stroke="rgba(255,255,255,0.22)" />
-      {m.strikes.map((k, i) => {
-        const v = m.profile[i];
-        const w = Math.abs(v) * (PW - 4);
-        if (w < 0.4) return null;
-        return <rect key={`p${k}`} x={PX + PW - w} y={yOf(k) - ch * 0.42} width={w} height={Math.max(1.4, ch * 0.84)} rx={1}
-          fill={rgba(v >= 0 ? CYAN_RGB : ORAN_RGB, 0.26 + 0.52 * Math.abs(v))} />;
-      })}
+      {/* left gutter — DEX profile */}
+      <Lab x={PX} y={FY - 8}>NET DEX PROFILE</Lab>
+      {m.hasDex ? (
+        <g>
+          <line x1={PX + PW} y1={FY} x2={PX + PW} y2={FY + FH} stroke="rgba(255,255,255,0.22)" />
+          {m.strikes.map((k, i) => {
+            const v = m.dex[i];
+            const w = Math.abs(v) * (PW - 4);
+            if (w < 0.4) return null;
+            return <rect key={`p${k}`} x={PX + PW - w} y={yOf(k) - ch * 0.42} width={w} height={Math.max(1.4, ch * 0.84)} rx={1}
+              fill={dexColor(v, 0.26 + 0.52 * Math.abs(v))} />;
+          })}
+        </g>
+      ) : <NoDex x={PX} y={FY} w={PW} h={FH} />}
 
-      {/* right rail */}
-      <Lab x={RX} y={FY - 8}>GEX RAIL</Lab>
+      {/* right rail — GEX profile + the strike ladder */}
+      <Lab x={RX} y={FY - 8}>NET GEX PROFILE</Lab>
       <rect x={RX} y={FY} width={RW} height={FH} rx={8} fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.07)" />
       {m.strikes.map((k, i) => {
         const v = m.profile[i];
@@ -456,7 +541,7 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
           {!compact && <text x={RX + 96} y={yOf(k) + 3} fill={AXIS} fontSize={8}>{k}</text>}
         </g>
       ))}
-      {([[m.callWall, HOME_THEME.green, "CW"], [m.magnet, LIGHT_BLUE, "MG"], [m.flip, FLIP_C, "FL"], [m.putWall, HOME_THEME.orange, "PW"]] as [number | null, string, string][])
+      {([[m.callWall, GEX_POS_HEX, "CW"], [m.magnet, GOLD, "MG"], [m.flip, FLIP_C, "FL"], [m.putWall, GEX_NEG_HEX, "PW"]] as [number | null, string, string][])
         .filter(([k]) => k != null).map(([k, col, tag]) => (
           <g key={tag}>
             <rect x={RX + 42} y={yOf(k as number) - 7 * fz} width={50 * fz} height={14 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
@@ -470,37 +555,49 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
         </g>
       )}
 
-      {/* DEX keel */}
-      <Lab x={FX} y={KY - 8}>NET DEX PRESSURE · SESSION</Lab>
-      {m.hasDex && m.dexSeries.length > 1 ? (
+      {/* Net Vol GEX keel — the same series the home page's Vol GEX Flow draws,
+          read straight off net_vol_gex rather than re-derived from the OI+Vol
+          composite, so the two panels can never disagree. */}
+      <Lab x={FX} y={KY - 8}>NET VOL GEX · SESSION</Lab>
+      {m.volSeries.length > 1 ? (
         <g>
           <rect x={FX - 4} y={KY} width={FW + 8} height={KH} rx={10} fill="rgba(255,255,255,0.018)" stroke="rgba(255,255,255,0.07)" />
           <line x1={FX} y1={KY + KH / 2} x2={FX + FW} y2={KY + KH / 2} stroke="rgba(255,255,255,0.16)" />
-          {m.dexSeries.map((d, i) => {
-            const x = FX + (i / Math.max(1, m.dexSeries.length - 1)) * FW;
-            const y = KY + KH / 2 - (d.dex / m.dtMax) * (KH / 2 - 7);
-            const bw = Math.max(1.2, FW / m.dexSeries.length - 0.6);
+          {m.volSeries.map((d, i) => {
+            const x = FX + (i / Math.max(1, m.volSeries.length - 1)) * FW;
+            const r = d.vol / m.vtMax;
+            const y = KY + KH / 2 - r * (KH / 2 - 7);
+            const bw = Math.max(1.2, FW / m.volSeries.length - 0.6);
             return <rect key={`k${i}`} x={x - bw / 2} y={Math.min(KY + KH / 2, y)} width={bw}
-              height={Math.abs(KY + KH / 2 - y)} fill={dexColor(d.dex / m.dtMax, 0.3 + 0.5 * Math.min(1, Math.abs(d.dex) / m.dtMax))} />;
+              height={Math.abs(KY + KH / 2 - y)} fill={gamColor(r, 0.3 + 0.5 * Math.min(1, Math.abs(r)))} />;
           })}
         </g>
       ) : <NoDex x={FX - 4} y={KY} w={FW + 8} h={KH} />}
 
-      <Lab x={RX} y={KY - 8}>DEX BY STRIKE</Lab>
-      {m.hasDex ? (
+      {/* Δ net GEX over the last ~15 minutes, by strike — where the book moved,
+          not where it stands. Diverging off a centre line so a build and a drain
+          at the same strike are distinguishable at a glance. */}
+      <Lab x={RX} y={KY - 8}>{m.hasChg15 ? `NET GEX Δ · ${m.chg15Min}m` : "NET GEX Δ · 15m"}</Lab>
+      {m.hasChg15 ? (
         <g>
           <rect x={RX} y={KY} width={RW} height={KH} rx={8} fill="rgba(255,255,255,0.018)" stroke="rgba(255,255,255,0.07)" />
           <line x1={RX + RW / 2} y1={KY + 5} x2={RX + RW / 2} y2={KY + KH - 5} stroke="rgba(255,255,255,0.14)" />
           {m.strikes.map((k, i) => {
-            const v = m.dex[i];
+            const v = m.chg15[i];
             if (Math.abs(v) < 0.02) return null;
             const dh = (KH - 12) / m.strikes.length;
             const half = RW / 2 - 8;
-            return <rect key={`dk${k}`} x={v >= 0 ? RX + RW / 2 : RX + RW / 2 + v * half} y={KY + 6 + i * dh}
-              width={Math.abs(v) * half} height={Math.max(0.8, dh - 0.4)} fill={dexColor(v, 0.35 + 0.5 * Math.abs(v))} />;
+            return <rect key={`ck${k}`} x={v >= 0 ? RX + RW / 2 : RX + RW / 2 + v * half} y={KY + 6 + i * dh}
+              width={Math.abs(v) * half} height={Math.max(0.8, dh - 0.4)} fill={gamColor(v, 0.35 + 0.5 * Math.abs(v))} />;
           })}
         </g>
-      ) : <NoDex x={RX} y={KY} w={RW} h={KH} />}
+      ) : (
+        <g>
+          <rect x={RX} y={KY} width={RW} height={KH} rx={8} fill="rgba(255,255,255,0.012)" stroke={HOME_THEME.border} strokeDasharray="4 4" />
+          <text x={RX + RW / 2} y={KY + KH / 2 + 3} fill={HOME_THEME.muted} opacity={0.45} fontSize={10 * fz}
+            fontWeight={700} letterSpacing="0.14em" textAnchor="middle">NOT ENOUGH HISTORY</text>
+        </g>
+      )}
     </svg>
   );
 }
@@ -549,7 +646,7 @@ function PolarReticle({ m, compact }: { m: MapModel; compact?: boolean }) {
           const [x2, y2] = P(ri + rw - 0.7, a1), [x3, y3] = P(ri, a1);
           return <path key={`h${r}-${si}`}
             d={`M${x0} ${y0}L${x1} ${y1}A${ri + rw} ${ri + rw} 0 0 1 ${x2} ${y2}L${x3} ${y3}A${ri} ${ri} 0 0 0 ${x0} ${y0}Z`}
-            fill={gamColor(m.signed[ci][si], 0.05 + 0.62 * h)} />;
+            fill={gamColor(m.signed[ci][si], heatAlpha(h, 0.04, 0.72))} />;
         });
       })}
 
@@ -560,7 +657,7 @@ function PolarReticle({ m, compact }: { m: MapModel; compact?: boolean }) {
         const a = ang(k);
         const [x0, y0] = P(R2 + 3, a), [x1, y1] = P(R2 + 3 + Math.abs(v) * 30, a);
         return <line key={`s${k}`} x1={x0} y1={y0} x2={x1} y2={y1}
-          stroke={rgba(v >= 0 ? CYAN_RGB : ORAN_RGB, 0.32 + 0.55 * Math.abs(v))} strokeWidth={3.2} strokeLinecap="round" />;
+          stroke={rgba(mix(v >= 0 ? GEX_POS : GEX_NEG, WHITE, Math.abs(v) * 0.28), 0.32 + 0.55 * Math.abs(v))} strokeWidth={3.2} strokeLinecap="round" />;
       })}
 
       {/* rail ring */}
@@ -575,7 +672,7 @@ function PolarReticle({ m, compact }: { m: MapModel; compact?: boolean }) {
           </g>
         );
       })}
-      {([[m.callWall, HOME_THEME.green, "CALL WALL"], [m.magnet, LIGHT_BLUE, "MAGNET"], [m.putWall, HOME_THEME.orange, "PUT WALL"]] as [number | null, string, string][])
+      {([[m.callWall, GEX_POS_HEX, "CALL WALL"], [m.magnet, GOLD, "MAGNET"], [m.putWall, GEX_NEG_HEX, "PUT WALL"]] as [number | null, string, string][])
         .filter(([k]) => k != null).map(([k, col, label]) => {
           const w = span * 0.04;
           const [lx, ly] = P(RAIL + 92, ang(k as number));
@@ -612,7 +709,7 @@ function PolarReticle({ m, compact }: { m: MapModel; compact?: boolean }) {
       <path d={pathD(m.cols.map((_, ci) => P(rT(ci), aT(ci))))} fill="none" stroke="rgba(255,255,255,0.30)" strokeWidth={1.2} />
       {m.bubbles.map((b, i) => {
         const [x, y] = P(rT(b.ci), aT(b.ci));
-        const c = b.sign > 0 ? CYAN_RGB : ORAN_RGB;
+        const c = b.sign > 0 ? GEX_POS : GEX_NEG;
         const last = i === m.bubbles.length - 1;
         const r = 3 + b.n * 11;
         return (
@@ -672,15 +769,19 @@ function PolarReticle({ m, compact }: { m: MapModel; compact?: boolean }) {
 function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
   const fz = useFz();
   const W = 1240, H = 560;
-  const SPX = 470, SPW = 300;
+  // The spine is 2/3 of the card width; the two wings split what's left, minus a
+  // 44px gutter each side for the strike labels.
+  const SPW = Math.round((W * 2) / 3);      // 827
+  const SPX = Math.round((W - SPW) / 2);    // 206
+  const GUT = 44;
   const TY = 26, TH = 470;
   const yOf = (k: number) => TY + TH - ((k - m.lo) / Math.max(1, m.hi - m.lo)) * TH;
   const rowH = TH / Math.max(1, m.strikes.length - 1);
   const nb = Math.min(m.cols.length, 24);
   const c0 = m.cols.length - nb;
   const cw = SPW / nb;
-  const LW = SPX - 62, LWW = 300;
-  const RW = SPX + SPW + 62, RWW = 300;
+  const LW = SPX - GUT, LWW = LW - 12;              // left wing: DEX, grows leftward
+  const RW = SPX + SPW + GUT, RWW = W - RW - 12;   // right wing: GEX, grows rightward
   const ticks = strikeTicks(m.lo, m.hi, compact);
 
   return (
@@ -694,7 +795,7 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
           const h = m.heat[ci][si];
           if (h < 0.05) return null;
           return <rect key={`sh${t}-${si}`} x={SPX + t * cw} y={yOf(k) - rowH / 2} width={cw + 0.5} height={rowH + 0.5}
-            fill={gamColor(m.signed[ci][si], 0.04 + 0.7 * h)} />;
+            fill={gamColor(m.signed[ci][si], heatAlpha(h, 0.03, 0.78))} />;
         });
       })}
       <path d={pathD(Array.from({ length: nb }, (_, t) => [SPX + t * cw + cw / 2, yOf(m.path[c0 + t])]))}
@@ -703,12 +804,16 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
         fill="none" stroke="#fff" strokeWidth={1.4} />
 
       {/* walls + flip across the spine */}
-      {([[m.callWall, HOME_THEME.green, "CALL WALL"], [m.magnet, LIGHT_BLUE, "MAGNET"], [m.putWall, HOME_THEME.orange, "PUT WALL"]] as [number | null, string, string][])
+      {([[m.callWall, GEX_POS_HEX, "CALL WALL"], [m.magnet, GOLD, "MAGNET"], [m.putWall, GEX_NEG_HEX, "PUT WALL"]] as [number | null, string, string][])
         .filter(([k]) => k != null).map(([k, col, label]) => (
           <g key={label}>
             <rect x={SPX} y={yOf(k as number) - 5} width={SPW} height={10} fill={col} opacity={0.13} />
             <line x1={SPX} y1={yOf(k as number)} x2={SPX + SPW} y2={yOf(k as number)} stroke={col} opacity={0.55} />
-            <text x={SPX + 8} y={yOf(k as number) - 8} fill={col} fontSize={7.6 * fz} fontWeight={700} letterSpacing="0.12em">
+            {/* Dark pill behind the label: the wall colors ARE the heat colors,
+                so a bare put-wall label is red text on a red field. */}
+            <rect x={SPX + 5} y={yOf(k as number) - 8 - 11 * fz} width={(label.length * 5.6 + 34) * fz}
+              height={13 * fz} rx={3} fill="rgba(5,6,10,0.72)" />
+            <text x={SPX + 9} y={yOf(k as number) - 8 - 2 * fz} fill={col} fontSize={7.6 * fz} fontWeight={700} letterSpacing="0.12em">
               {`${label} · ${fmtStrike(k)}`}
             </text>
           </g>
@@ -725,7 +830,7 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
       {/* bubbles pinned to the path inside the spine */}
       {m.bubbles.filter((b) => b.ci >= c0).map((b, i, arr) => {
         const bx = SPX + (b.ci - c0 + 0.5) * cw;
-        const c = b.sign > 0 ? CYAN_RGB : ORAN_RGB;
+        const c = b.sign > 0 ? GEX_POS : GEX_NEG;
         const last = i === arr.length - 1;
         const r = 3 + b.n * 13;
         return (
@@ -745,43 +850,43 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
         </g>
       )}
 
-      {/* left wing — GEX */}
-      <Lab x={LW - LWW} y={TY - 8}>◄ NET GEX</Lab>
-      <line x1={LW} y1={TY} x2={LW} y2={TY + TH} stroke="rgba(255,255,255,0.14)" />
-      {m.strikes.map((k, i) => {
-        const v = m.profile[i];
-        const w = Math.abs(v) * LWW;
-        if (w < 0.4) return null;
-        return <rect key={`lw${k}`} x={LW - w} y={yOf(k) - rowH * 0.4} width={w} height={Math.max(1.4, rowH * 0.8)} rx={1.5}
-          fill={rgba(v >= 0 ? CYAN_RGB : ORAN_RGB, 0.26 + 0.55 * Math.abs(v))} />;
-      })}
-      {ticks.map((k) => <text key={`lt${k}`} x={SPX - 14} y={yOf(k) + 3} fill={AXIS} fontSize={8.4 * fz} textAnchor="end">{k}</text>)}
-      {!compact && (
-        <text x={LW - LWW} y={TY + TH + 20} fill="rgba(255,255,255,0.34)" fontSize={9}>
-          bar length = |GEX| · blue = long gamma (dealers dampen) · orange = short gamma (dealers amplify)
-        </text>
-      )}
-
-      {/* right wing — DEX */}
-      <Lab x={RW} y={TY - 8}>NET DEX ►</Lab>
+      {/* left wing — DEX */}
+      <Lab x={LW - LWW} y={TY - 8}>◄ NET DEX</Lab>
       {m.hasDex ? (
         <g>
-          <line x1={RW} y1={TY} x2={RW} y2={TY + TH} stroke="rgba(255,255,255,0.14)" />
+          <line x1={LW} y1={TY} x2={LW} y2={TY + TH} stroke="rgba(255,255,255,0.14)" />
           {m.strikes.map((k, i) => {
             const v = m.dex[i];
-            const w = Math.abs(v) * RWW;
+            const w = Math.abs(v) * LWW;
             if (w < 0.4) return null;
-            return <rect key={`rw${k}`} x={RW} y={yOf(k) - rowH * 0.4} width={w} height={Math.max(1.4, rowH * 0.8)} rx={1.5}
+            return <rect key={`lw${k}`} x={LW - w} y={yOf(k) - rowH * 0.4} width={w} height={Math.max(1.4, rowH * 0.8)} rx={1.5}
               fill={dexColor(v, 0.24 + 0.55 * Math.abs(v))} />;
           })}
-          {ticks.map((k) => <text key={`rt${k}`} x={SPX + SPW + 14} y={yOf(k) + 3} fill={AXIS} fontSize={8.4 * fz}>{k}</text>)}
           {!compact && (
-            <text x={RW} y={TY + TH + 20} fill="rgba(255,255,255,0.34)" fontSize={9}>
+            <text x={LW - LWW} y={TY + TH + 20} fill="rgba(255,255,255,0.34)" fontSize={9}>
               bar length = |DEX| · green = dealers short delta · rose = dealers long delta
             </text>
           )}
         </g>
-      ) : <NoDex x={RW} y={TY} w={RWW} h={TH} />}
+      ) : <NoDex x={LW - LWW} y={TY} w={LWW} h={TH} />}
+      {ticks.map((k) => <text key={`lt${k}`} x={SPX - 8} y={yOf(k) + 3} fill={AXIS} fontSize={8.4 * fz} textAnchor="end">{k}</text>)}
+
+      {/* right wing — GEX */}
+      <Lab x={RW} y={TY - 8}>NET GEX ►</Lab>
+      <line x1={RW} y1={TY} x2={RW} y2={TY + TH} stroke="rgba(255,255,255,0.14)" />
+      {m.strikes.map((k, i) => {
+        const v = m.profile[i];
+        const w = Math.abs(v) * RWW;
+        if (w < 0.4) return null;
+        return <rect key={`rw${k}`} x={RW} y={yOf(k) - rowH * 0.4} width={w} height={Math.max(1.4, rowH * 0.8)} rx={1.5}
+          fill={rgba(mix(v >= 0 ? GEX_POS : GEX_NEG, WHITE, Math.abs(v) * 0.28), 0.26 + 0.55 * Math.abs(v))} />;
+      })}
+      {ticks.map((k) => <text key={`rt${k}`} x={SPX + SPW + 8} y={yOf(k) + 3} fill={AXIS} fontSize={8.4 * fz}>{k}</text>)}
+      {!compact && (
+        <text x={RW} y={TY + TH + 20} fill="rgba(255,255,255,0.34)" fontSize={9}>
+          bar length = |GEX| · blue = long gamma (dealers dampen) · red = short gamma (dealers amplify)
+        </text>
+      )}
     </svg>
   );
 }
@@ -853,8 +958,8 @@ function GammaTerrain({ m, compact }: { m: MapModel; compact?: boolean }) {
         const mag = Math.min(1, Math.floor(Math.min(1, Math.abs(v)) * 9) / 9 + 0.055);
         const t2 = Math.pow(mag, 1.15);
         const c = v >= 0
-          ? mix([6, 13, 20], mix(CYAN_RGB, LBLU_RGB, Math.min(1, mag * 0.9)), t2)
-          : mix([20, 9, 5], mix(ORAN_RGB, RED_RGB, Math.min(1, mag * 0.6)), t2);
+          ? mix([5, 12, 20], mix(GEX_POS, WHITE, mag * 0.28), t2)
+          : mix([22, 8, 11], mix(GEX_NEG, WHITE, mag * 0.28), t2);
         const o = (y * cv.width + x) * 4;
         img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
       }
@@ -893,8 +998,8 @@ function GammaTerrain({ m, compact }: { m: MapModel; compact?: boolean }) {
     };
     for (const lv of [-0.75, -0.55, -0.38, -0.24, -0.13, -0.06, 0.06, 0.13, 0.24, 0.38, 0.55, 0.75, 0.9]) {
       contour(lv, lv > 0
-        ? `rgba(180,225,240,${0.10 + 0.24 * Math.abs(lv)})`
-        : `rgba(255,190,140,${0.10 + 0.24 * Math.abs(lv)})`, 1.6, []);
+        ? `rgba(190,232,255,${0.10 + 0.24 * Math.abs(lv)})`
+        : `rgba(255,183,190,${0.10 + 0.24 * Math.abs(lv)})`, 1.6, []);
     }
     contour(0, "rgba(125,211,252,0.95)", 3.2, [12, 8]);
   }, [m, FWD, FHT]);
@@ -936,7 +1041,7 @@ function GammaTerrain({ m, compact }: { m: MapModel; compact?: boolean }) {
         <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth={3.4} />
         <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="#fff" strokeWidth={1.5} />
         {m.bubbles.map((b, i) => {
-          const c = b.sign > 0 ? LBLU_RGB : ORAN_RGB;
+          const c = b.sign > 0 ? GEX_POS : GEX_NEG;
           const last = i === m.bubbles.length - 1;
           const r = 3.5 + b.n * 14;
           return (
@@ -967,7 +1072,7 @@ function GammaTerrain({ m, compact }: { m: MapModel; compact?: boolean }) {
             fill={gamColor(v, 0.3 + 0.55 * Math.abs(v))} />;
         })}
         {ticks.map((k) => <text key={`rrt${k}`} x={R + 74} y={yOf(k) + 3} fill={AXIS} fontSize={8 * fz}>{k}</text>)}
-        {([[m.callWall, HOME_THEME.green, "RIDGE"], [m.magnet, LIGHT_BLUE, "PEAK"], [m.flip, FLIP_C, "COAST"], [m.putWall, HOME_THEME.orange, "TRENCH"]] as [number | null, string, string][])
+        {([[m.callWall, GEX_POS_HEX, "RIDGE"], [m.magnet, GOLD, "PEAK"], [m.flip, FLIP_C, "COAST"], [m.putWall, GEX_NEG_HEX, "TRENCH"]] as [number | null, string, string][])
           .filter(([k]) => k != null).map(([k, col, tag]) => (
             <g key={tag}>
               <rect x={R + 106} y={yOf(k as number) - 7 * fz} width={54 * fz} height={14 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
@@ -1032,7 +1137,7 @@ function MapCard({ def, m, expanded, onToggle }: {
     : def.key === "spine" ? Spine
     : GammaTerrain;
   return (
-    <Card variant="classic" padding={16} style={expanded ? { gridColumn: "1 / -1" } : undefined}>
+    <Card variant="budget" padding={16} style={expanded ? { gridColumn: "1 / -1" } : undefined}>
       <button
         type="button"
         onClick={onToggle}
@@ -1063,14 +1168,21 @@ function MapCard({ def, m, expanded, onToggle }: {
 export default function GexMapTab() {
   const [expanded, setExpanded] = useState<Concept | null>(null);
   const [date, setDate] = useState<string>("latest");
+  // "front" = let the route pick (0DTE if it exists). Reset whenever the session
+  // changes, because an expiry that had rows on Thursday is meaningless on
+  // Friday and pinning it would silently blank the map.
+  const [expiry, setExpiry] = useState<string>("front");
   const [data, setData] = useState<MapPayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async (d: string) => {
+  const load = useCallback(async (d: string, x: string) => {
     setLoading(true);
     try {
-      const r = await fetch(`/api/gex-map?symbol=$SPX&date=${encodeURIComponent(d)}`, { cache: "no-store" });
+      const r = await fetch(
+        `/api/gex-map?symbol=$SPX&date=${encodeURIComponent(d)}&expiry=${encodeURIComponent(x)}`,
+        { cache: "no-store" }
+      );
       if (!r.ok) throw new Error(`gex-map ${r.status}`);
       const j = (await r.json()) as MapPayload;
       if (j.error) throw new Error(j.error);
@@ -1083,13 +1195,27 @@ export default function GexMapTab() {
     }
   }, []);
 
-  useEffect(() => { void load(date); }, [date, load]);
+  useEffect(() => { void load(date, expiry); }, [date, expiry, load]);
 
   const model = useMemo(() => buildModel(data), [data]);
 
   const sessionOptions = useMemo(() => {
-    const opts = (data?.sessions ?? []).map((s) => ({ value: s.date, label: `${s.date} · ${s.snaps} snaps` }));
+    // sessions is one row per (date, expiry) now, so collapse to distinct dates
+    // and sum the snapshots across that session's expiries.
+    const byDate = new Map<string, number>();
+    for (const s of data?.sessions ?? []) byDate.set(s.date, (byDate.get(s.date) ?? 0) + s.snaps);
+    const opts = [...byDate.entries()]
+      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+      .map(([d, snaps]) => ({ value: d, label: `${d} · ${snaps} snaps` }));
     return [{ value: "latest", label: "Latest session" }, ...opts];
+  }, [data]);
+
+  const expiryOptions = useMemo(() => {
+    const opts = (data?.expiries ?? []).map((e) => ({
+      value: e.expiry,
+      label: `${e.expiry}  ·  ${e.dte === 0 ? "0DTE" : `${e.dte > 0 ? "+" : ""}${e.dte}DTE`}  ·  ${e.snaps} snaps`,
+    }));
+    return [{ value: "front", label: "0DTE / front expiry" }, ...opts];
   }, [data]);
 
   return (
@@ -1100,14 +1226,23 @@ export default function GexMapTab() {
       `}</style>
       <Card variant="budget" padding={18}>
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
-          <div style={{ minWidth: 210 }}>
+          <div style={{ minWidth: 200 }}>
             <ThemedSelect
               value={date}
-              onChange={(v: string) => setDate(v)}
+              ariaLabel="Session"
+              onChange={(v: string) => { setDate(v); setExpiry("front"); }}
               options={sessionOptions}
             />
           </div>
-          <button type="button" onClick={() => void load(date)} style={homeButtonStyle}>Refresh</button>
+          <div style={{ minWidth: 240 }}>
+            <ThemedSelect
+              value={expiry}
+              ariaLabel="Expiration"
+              onChange={(v: string) => setExpiry(v)}
+              options={expiryOptions}
+            />
+          </div>
+          <button type="button" onClick={() => void load(date, expiry)} style={homeButtonStyle}>Refresh</button>
           {expanded && (
             <button type="button" onClick={() => setExpanded(null)} style={homeButtonStyle}>Back to 2×2</button>
           )}
@@ -1116,7 +1251,7 @@ export default function GexMapTab() {
           </div>
         </div>
         <div style={{ fontSize: 11.5, color: HOME_THEME.text, opacity: 0.45, marginTop: 10, lineHeight: 1.6 }}>
-          0DTE only — the route pins expiry to the session date. GEX ladder from{" "}
+          One expiry at a time — never a blend. Defaults to 0DTE. GEX ladder from{" "}
           <code style={{ color: LIGHT_BLUE }}>option_strike_gex_history</code> (retention ~2 sessions), DEX from{" "}
           <code style={{ color: LIGHT_BLUE }}>net_dex</code> in the same row (added{" "}
           {new Date(2026, 7, 1).toLocaleDateString("en-US", { month: "short", day: "numeric" })}; sessions before that
@@ -1126,30 +1261,37 @@ export default function GexMapTab() {
       </Card>
 
       {err && (
-        <Card variant="classic" padding={16}>
+        <Card variant="budget" padding={16}>
           <div style={{ fontSize: 14, color: HOME_THEME.red }}>GEX map error: {err}</div>
         </Card>
       )}
 
-      {(data?.notes?.gex || data?.notes?.dex) && (
-        <Card variant="classic" padding={14}>
-          {data?.notes?.gex && <div style={{ fontSize: 12.5, color: HOME_THEME.orange }}>GEX: {data.notes.gex}</div>}
+      {(data?.notes?.gex || data?.notes?.dex || data?.notes?.expiry) && (
+        <Card variant="budget" padding={14}>
+          {data?.notes?.expiry && <div style={{ fontSize: 12.5, color: HOME_THEME.orange }}>Expiry: {data.notes.expiry}</div>}
+          {data?.notes?.gex && <div style={{ fontSize: 12.5, color: HOME_THEME.orange, marginTop: 4 }}>GEX: {data.notes.gex}</div>}
           {data?.notes?.dex && <div style={{ fontSize: 12.5, color: HOME_THEME.orange, marginTop: 4 }}>DEX: {data.notes.dex}</div>}
         </Card>
       )}
 
       {model && data && (
-        <RegimeStrip m={model} symbol={data.symbol} date={data.date} asOf={data.levels.asOf} />
+        <RegimeStrip
+          m={model}
+          symbol={data.symbol}
+          date={data.date}
+          expiryLabel={data.expiry === data.date ? "0DTE" : `exp ${data.expiry}`}
+          asOf={data.levels.asOf}
+        />
       )}
 
       {loading && !model ? (
-        <Card variant="classic" padding={20}>
+        <Card variant="budget" padding={20}>
           <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6, padding: 40, textAlign: "center" }}>
             Loading 0DTE map…
           </div>
         </Card>
       ) : !model ? (
-        <Card variant="classic" padding={20}>
+        <Card variant="budget" padding={20}>
           <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6, padding: 40, textAlign: "center" }}>
             No strike ladder for this session — nothing to draw.
           </div>
@@ -1175,7 +1317,7 @@ export default function GexMapTab() {
 
       {model && data && (
         <div style={{ fontSize: 11.5, color: HOME_THEME.text, opacity: 0.4, lineHeight: 1.7 }}>
-          {data.symbol} · {data.date} 0DTE · {data.columns.length} slots @ {data.slotMin}m ·{" "}
+          {data.symbol} · {data.date} exp {data.expiry} · {data.columns.length} slots @ {data.slotMin}m ·{" "}
           {data.strikes.length} strikes ({fmtStrike(model.lo)}–{fmtStrike(model.hi)}) ·{" "}
           {model.hasDex
             ? `${data.dexSeries.length} DEX snapshots (${model.dexSurface ? "strike×time, recorded with gamma" : "last-snapshot ladder"})`

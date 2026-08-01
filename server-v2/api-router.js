@@ -4548,6 +4548,7 @@ if (libDb) {
           // (the SPX heatmap, the strike popup) is byte-for-byte
           // unchanged. The ES-Candles page passes SPY / QQQ here.
           const symbol = libDb.normGexSymbol(sp.get('symbol'));
+          let notesExpiry = null;
           if (!expiry) { send(res, 200, { error: 'expiry is required', rows: [] }); return; }
 
           if (mode === 'heatmap') {
@@ -7237,12 +7238,15 @@ if barstate.islast
   // /api/gex-map — ONE payload for the Test Lab "GEX Map" tab (the four unified
   // GEX/DEX map readouts: Tape Field, Polar Reticle, Spine, Gamma Terrain).
   //
-  // 0DTE ONLY, and that is enforced here rather than left to the caller:
-  // `expiry` is always the session date. Every layer on those maps — the walls,
-  // the flip, the bubbles riding spot — is defined on a SINGLE ladder, and
-  // blending two expiries into one ladder invents walls that exist on neither.
-  // A caller may choose which session to draw; it may not choose a different
-  // expiry.
+  // ONE expiry per response — never a blend. The caller picks which one; it
+  // cannot ask for "all". Every layer on these maps (the walls, the flip, the
+  // bubbles riding spot) is defined on a SINGLE ladder, and summing two
+  // expiries into one ladder invents walls that exist on neither, so an
+  // all-expiries mode would be a chart of a book nobody holds.
+  //
+  // Default is 0DTE (expiry = date) because that is the ladder these maps were
+  // built to read; it falls back to the nearest dated expiry that actually has
+  // rows when a session has no same-day series.
   //
   // What ships:
   //   strikes[]     the union ladder, sorted — every column's `v` is aligned to
@@ -7254,7 +7258,8 @@ if barstate.islast
   //   dexSeries[]   net DEX summed across strikes, per snapshot
   //   levels        call wall / put wall / magnet / flip / spot / net gamma /
   //                 net dex, all read off the LAST column
-  //   sessions[]    which sessions still have rows, newest first
+  //   sessions[]    which (date, expiry) pairs still have rows, newest first
+  //   expiries[]    the expiries available for the CHOSEN date, with DTE
   //
   // Two deliberate shapes:
   //
@@ -7323,25 +7328,48 @@ if barstate.islast
           // points keeps the payload honest without cropping the walls.
           const windowPts = Math.max(20, Math.min(600, Number(sp.get('window') ?? 130)));
 
-          // Which sessions can still be drawn. expiry = date is the 0DTE filter.
+          // Every (date, expiry) pair still in the window — no 0DTE filter here,
+          // or the expiry chooser would only ever be able to offer one option.
           const sessionRows = await libDb.queryAll(
             `SELECT date, expiry, COUNT(DISTINCT timestamp)::int AS snaps
                FROM option_strike_gex_history
-              WHERE symbol = ? AND expiry = date
+              WHERE symbol = ?
               GROUP BY date, expiry
-              ORDER BY date DESC
-              LIMIT 20`,
+              ORDER BY date DESC, expiry ASC
+              LIMIT 200`,
             [symbol]
           );
           const sessions = sessionRows.map((r) => ({
             date: dstr(r.date), expiry: dstr(r.expiry), snaps: Number(r.snaps ?? 0),
           }));
 
-          const asked = sp.get('date');
-          const date = asked && asked !== 'latest' ? dstr(asked) : (sessions[0]?.date ?? todayET());
-          const expiry = date; // 0DTE, non-negotiable — see the header note.
+          const askedDate = sp.get('date');
+          const dates = [...new Set(sessions.map((s) => s.date))];
+          const date = askedDate && askedDate !== 'latest' ? dstr(askedDate) : (dates[0] ?? todayET());
 
-          const cacheKey = `${symbol}|${date}|${slotMin}|${windowPts}`;
+          const dteOf = (exp) => Math.round(
+            (Date.parse(`${exp}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / 86400000
+          );
+          const expiries = sessions
+            .filter((s) => s.date === date)
+            .map((s) => ({ expiry: s.expiry, snaps: s.snaps, dte: dteOf(s.expiry) }))
+            .sort((a, b) => a.dte - b.dte);
+
+          const askedExpiry = sp.get('expiry');
+          const wantedExpiry = askedExpiry && askedExpiry !== 'front' ? dstr(askedExpiry) : null;
+          const expiry =
+            (wantedExpiry && expiries.some((e) => e.expiry === wantedExpiry) && wantedExpiry) ||
+            // 0DTE if it exists, otherwise the nearest expiry forward, otherwise
+            // whatever is closest — never a silent empty ladder.
+            (expiries.find((e) => e.dte === 0)?.expiry) ||
+            (expiries.find((e) => e.dte > 0)?.expiry) ||
+            (expiries[0]?.expiry) ||
+            date;
+          if (wantedExpiry && wantedExpiry !== expiry) {
+            notesExpiry = `expiry ${wantedExpiry} has no rows for ${date} — showing ${expiry} instead`;
+          }
+
+          const cacheKey = `${symbol}|${date}|${expiry}|${slotMin}|${windowPts}`;
           const cached = gexMapCache.get(cacheKey);
           if (cached && Date.now() - cached.at < GEX_MAP_TTL_MS) {
             send(res, 200, cached.payload);
@@ -7349,6 +7377,7 @@ if barstate.islast
           }
 
           const notes = {};
+          if (notesExpiry) notes.expiry = notesExpiry;
 
           // Spot range first, so the strike filter below is anchored to where
           // price actually traded rather than to a fixed band around the last
@@ -7392,7 +7421,9 @@ if barstate.islast
                  FROM slotted ORDER BY slot, timestamp DESC
              )
              SELECT s.slot, s.timestamp AS t, s.strike,
-                    SUM(s.net_gex + s.net_vol_gex) AS v, MAX(s.spot) AS spot${dexAgg}
+                    SUM(s.net_gex + s.net_vol_gex) AS v,
+                    SUM(s.net_vol_gex) AS vv,
+                    MAX(s.spot) AS spot${dexAgg}
                FROM slotted s
                JOIN pick p ON p.slot = s.slot AND p.timestamp = s.timestamp
               GROUP BY s.slot, s.timestamp, s.strike
@@ -7401,9 +7432,9 @@ if barstate.islast
           );
 
           if (!cells.length) {
-            notes.gex = sessions.some((s) => s.date === date)
+            notes.gex = sessions.some((s) => s.date === date && s.expiry === expiry)
               ? `no rows for ${symbol} ${date} inside the spot window`
-              : `${date} has aged out of option_strike_gex_history (retention ~2 sessions) — pick one of: ${sessions.map((s) => s.date).join(', ') || 'none'}`;
+              : `${date} / ${expiry} has aged out of option_strike_gex_history (retention ~2 sessions) — available: ${dates.join(', ') || 'none'}`;
           }
 
           // Union ladder. Every column aligns to this, so the client can treat
@@ -7420,7 +7451,7 @@ if barstate.islast
             let col = bySlot.get(slot);
             if (!col) {
               col = {
-                t: Number(c.t), spot: 0,
+                t: Number(c.t), spot: 0, vol: 0,
                 v: new Array(strikes.length).fill(0),
                 d: withDex ? new Array(strikes.length).fill(0) : null,
               };
@@ -7428,6 +7459,10 @@ if barstate.islast
             }
             const si = idxOf.get(Number(c.strike));
             col.v[si] = Number(c.v ?? 0);
+            // Volume-only GEX, kept apart from the OI+Vol composite so the map
+            // can draw the same NET VOL GEX series the home page's Vol GEX Flow
+            // panel draws, rather than a differently-derived lookalike.
+            col.vol += Number(c.vv ?? 0);
             if (withDex && c.d != null) {
               const dv = Number(c.d);
               col.d[si] = dv;
@@ -7462,6 +7497,7 @@ if barstate.islast
 
           const ordered = [...bySlot.entries()].sort((a, b) => a[0] - b[0]).map(([, col]) => col);
           const columns = ordered.map((col) => ({ t: col.t, spot: col.spot, flip: flipOf(col.v, col.spot), v: col.v }));
+          const volSeries = ordered.map((col) => ({ t: col.t, vol: col.vol }));
 
           // ── DEX ──────────────────────────────────────────────────────────
           // Preferred source is the ladder recorded in the same row as gamma.
@@ -7557,8 +7593,8 @@ if barstate.islast
 
           const payload = {
             symbol, date, expiry, slotMin,
-            strikes, columns, dexByStrike, dexSeries, dexColumns, dexSource,
-            levels, sessions, notes,
+            strikes, columns, volSeries, dexByStrike, dexSeries, dexColumns, dexSource,
+            levels, sessions, expiries, notes,
           };
           gexMapCache.set(cacheKey, { at: Date.now(), payload });
           send(res, 200, payload);

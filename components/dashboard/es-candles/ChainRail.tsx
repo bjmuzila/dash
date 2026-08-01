@@ -25,10 +25,9 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
-import { HOME_THEME, DOCK_THEME } from "@/components/shared/homeTheme";
+import { HOME_THEME } from "@/components/shared/homeTheme";
 import { dedupeFetch } from "@/lib/dedupeFetch";
 import { parseExpiration, metricBg, type GreekCell } from "@/lib/calculations/optionChain";
-import { readChainGreek, writeChainGreek } from "./slotStore";
 
 /** Greeks this panel can show. "oi" is deliberately absent — the chain page's OI
  *  tab reads a day-over-day snapshot, not the live chain, so it has no meaning
@@ -37,7 +36,8 @@ export const CHAIN_GREEKS = ["gex", "dex", "vex", "chex"] as const;
 export type ChainGreek = (typeof CHAIN_GREEKS)[number];
 export const isChainGreek = (v: unknown): v is ChainGreek =>
   typeof v === "string" && (CHAIN_GREEKS as readonly string[]).includes(v);
-const GREEK_LABEL: Record<ChainGreek, string> = { gex: "GEX", dex: "DEX", vex: "VEX", chex: "CHEX" };
+/** Labels for the page toolbar's switcher — this component only paints. */
+export const GREEK_LABEL: Record<ChainGreek, string> = { gex: "GEX", dex: "DEX", vex: "VEX", chex: "CHEX" };
 
 const CHAIN_REFRESH_MS = 60_000;
 const EXPIRY_REFRESH_MS = 30 * 60_000;
@@ -72,26 +72,20 @@ interface ChainRailProps {
   drawRef?: MutableRefObject<() => void>;
   /** Shares the card's heatmap intensity slider so the two read as one scale. */
   intensity: number;
+  /**
+   * Which greek to paint. Owned by the PAGE toolbar, not by this component:
+   * the side panel is a page-level choice, and three ladders showing three
+   * different greeks would be silently incomparable.
+   *
+   * It is also why the switcher can't live in here — see the note about height
+   * below.
+   */
+  greek: ChainGreek;
 }
 
 export default function ChainRail({
-  symbol, basis, priceToY, drawRef, intensity,
+  symbol, basis, priceToY, drawRef, intensity, greek,
 }: ChainRailProps) {
-  // The greek is a property of the PANEL, which is page-level, so it's stored
-  // globally rather than per card — flipping card 1 to DEX while cards 2 and 3
-  // stay on GEX would make the three ladders silently incomparable. Read in an
-  // effect, never in a useState initializer: this route is still server-rendered
-  // by Next, and a localStorage read during the first render is a hydration
-  // mismatch.
-  const [greek, setGreekState] = useState<ChainGreek>("gex");
-  useEffect(() => {
-    const saved = readChainGreek();
-    if (isChainGreek(saved)) setGreekState(saved);
-  }, []);
-  const onGreekChange = useCallback((g: ChainGreek) => {
-    setGreekState(g);
-    writeChainGreek(g);
-  }, []);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [expiry, setExpiry] = useState("");
@@ -239,6 +233,10 @@ export default function ChainRail({
     // dead over this panel.
     const heat = 1 + intensityRef.current * 2;
 
+    // Strike + value needs ~105px. Below that the value alone wins — see the
+    // note at the label draw for why losing the strike costs nothing.
+    const showStrikes = w >= 105;
+
     ctx.textBaseline = "middle";
     for (let i = 0; i < rows.length; i++) {
       const { strike, v } = rows[i];
@@ -253,16 +251,24 @@ export default function ChainRail({
 
       // Labels only when the band can hold them. At a zoomed-out view the rows
       // are 2px tall and text would just be a smear — the heat still reads.
+      //
+      // The strike itself is dropped on a narrow panel, and that costs nothing:
+      // the rows are aligned to the chart, and the chart's own price axis sits
+      // immediately to the left of this panel already labelling those prices.
+      // Printing them twice was only ever necessary when the ladder was free to
+      // drift out of register.
       if (bandH >= 9) {
         const mid = (top + bot) / 2;
-        ctx.font = "600 9.5px ui-monospace, SFMono-Regular, Menlo, monospace";
-        ctx.fillStyle = "rgba(255,255,255,0.55)";
-        ctx.textAlign = "left";
-        ctx.fillText(String(strike), 4, mid);
-        ctx.font = "700 9.5px ui-monospace, SFMono-Regular, Menlo, monospace";
+        if (showStrikes) {
+          ctx.font = "600 9.5px ui-monospace, SFMono-Regular, Menlo, monospace";
+          ctx.fillStyle = "rgba(255,255,255,0.55)";
+          ctx.textAlign = "left";
+          ctx.fillText(String(strike), 4, mid);
+        }
+        ctx.font = `700 ${showStrikes ? 9.5 : 9}px ui-monospace, SFMono-Regular, Menlo, monospace`;
         ctx.fillStyle = v === 0 ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.92)";
         ctx.textAlign = "right";
-        ctx.fillText(fmtM(v), w - 4, mid);
+        ctx.fillText(fmtM(v), w - 3, mid);
       }
     }
 
@@ -301,50 +307,38 @@ export default function ChainRail({
     return () => ro.disconnect();
   }, [draw]);
 
+  // ── Geometry contract ──────────────────────────────────────────────────────
+  // This box must be EXACTLY the chart container's box. `priceToY` answers in
+  // coordinates relative to the candle pane, whose origin is the top of that
+  // container, so any chrome in the flow above this canvas shifts every row
+  // down by its height and the ladder silently stops matching the chart.
+  //
+  // That is not hypothetical — it is the bug this component shipped with: a
+  // two-line header (expiry + greek chips) pushed the whole ladder ~26px low,
+  // which reads as "the strikes are a bit off". Nothing goes above the canvas.
+  // The greek switcher moved to the page toolbar, and the expiry is painted
+  // INSIDE the canvas as an overlay label that owns no layout.
+  //
+  // EsGexRail obeys the same contract, which is why the rail has always lined up.
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, minWidth: 0 }}>
-      {/* Header: which expiry is actually loaded (never just "0DTE" — on a
-          holiday or an ETF without dailies the pin snaps forward, and the panel
-          should say which day it landed on) + the greek switcher. */}
+    <div ref={wrapRef} style={{ position: "relative", height: "100%", width: "100%", minHeight: 0, minWidth: 0, overflow: "hidden" }}>
+      <canvas ref={canvasRef} style={{ position: "absolute", inset: 0 }} />
+      {/* Absolutely positioned — takes no space, so it cannot move the ladder. */}
       <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4,
-        padding: "2px 4px 3px", flexShrink: 0, minWidth: 0,
+        position: "absolute", top: 2, left: 0, right: 0, textAlign: "center",
+        fontSize: 8.5, fontWeight: 800, letterSpacing: ".04em", color: HOME_THEME.muted,
+        pointerEvents: "none", whiteSpace: "nowrap", overflow: "hidden",
+        textShadow: "0 1px 3px rgba(0,0,0,0.9)",
       }}>
-        <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: ".06em", color: HOME_THEME.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {expiry ? `${expiry.slice(5)} ${expiry === etDayKey(Date.now()) ? "0DTE" : ""}`.trim() : "…"}
-        </span>
+        {expiry ? `${expiry.slice(5)}${expiry === etDayKey(Date.now()) ? " 0DTE" : ""}` : "…"}
       </div>
-      <div style={{ display: "flex", gap: 2, padding: "0 3px 3px", flexShrink: 0 }}>
-        {CHAIN_GREEKS.map((g) => {
-          const on = g === greek;
-          return (
-            <button
-              key={g}
-              onClick={() => onGreekChange(g)}
-              title={`Show ${GREEK_LABEL[g]} for the 0DTE chain`}
-              style={{
-                flex: 1, minWidth: 0, fontSize: 8.5, fontWeight: 800, letterSpacing: ".04em",
-                padding: "2px 0", borderRadius: 5, cursor: "pointer",
-                border: on ? `1px solid ${DOCK_THEME.activeBorder}` : `1px solid ${HOME_THEME.border}`,
-                background: on ? DOCK_THEME.activeTile : "transparent",
-                color: on ? HOME_THEME.cyan : HOME_THEME.muted,
-              }}
-            >
-              {GREEK_LABEL[g]}
-            </button>
-          );
-        })}
-      </div>
-      <div ref={wrapRef} style={{ position: "relative", flex: 1, minHeight: 0, minWidth: 0 }}>
-        <canvas ref={canvasRef} style={{ position: "absolute", inset: 0 }} />
-        {status !== "ok" && (
-          <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", padding: 6, textAlign: "center", fontSize: 9.5, color: HOME_THEME.muted }}>
-            {status === "loading" ? "Loading chain…"
-              : status === "empty" ? `No ${expiry} chain for ${symbol}`
-              : "Chain unavailable"}
-          </div>
-        )}
-      </div>
+      {status !== "ok" && (
+        <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", padding: 6, textAlign: "center", fontSize: 9.5, color: HOME_THEME.muted }}>
+          {status === "loading" ? "Loading chain…"
+            : status === "empty" ? `No ${expiry} chain for ${symbol}`
+            : "Chain unavailable"}
+        </div>
+      )}
     </div>
   );
 }
