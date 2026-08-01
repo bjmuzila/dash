@@ -2086,6 +2086,72 @@ async function main() {
         })();
         return;
       }
+      // ── Replay: per-EXPIRY frames for one symbol+date ────────────────────
+      //   GET /proxy/strike-growth/frames-by-expiry?symbol=NVDA[&date=YYYY-MM-DD]
+      // Drives the Options Chain page's in-grid replay mode. The /frames route
+      // above sums every expiry into one ladder, which is right for a single
+      // ladder and wrong for a grid whose columns ARE expiries — so this one
+      // keeps them apart.
+      //
+      // Payload is deliberately positional (`cells: [expiryIdx, strike, net,
+      // vol]`) rather than an array of objects: a busy session is ~200 frames ×
+      // 3 expiries × 30 strikes, and object keys repeated 18k times is most of
+      // the response. `expiries` is the index table.
+      //   net = gex_now + gex_open (OI + volume, matches the chain's OI+Vol view)
+      //   vol = gex_now            (today's traded volume only, the Vol Only view)
+      if (pathname === '/proxy/strike-growth/frames-by-expiry' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { ensureSchema, getPool } = require('./strike-growth-recorder');
+            if (!(await ensureSchema())) { sendJson(res, 503, { ok: false, error: 'no DB' }); return; }
+            const p = getPool();
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
+            if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
+            const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+            const date = (u.searchParams.get('date') || today).trim();
+            // One row per (ts, expiry, strike) — that's the table's PK grain, so
+            // the aggregates only ever fold a single row. Kept as aggregates to
+            // stay identical in shape to /frames above if the PK ever widens.
+            const { rows } = await p.query(
+              `SELECT ts, expiry, strike, MAX(spot) AS spot,
+                      SUM(gex_now + gex_open) AS net, SUM(gex_now) AS vol
+                 FROM strike_growth
+                WHERE date = $1 AND symbol = $2
+                GROUP BY ts, expiry, strike
+                ORDER BY ts ASC, expiry ASC, strike ASC`,
+              [date, symbol]
+            );
+            const expIdx = new Map();   // expiry -> index into `expiries`
+            const expiries = [];
+            const byTs = new Map();
+            for (const r of rows) {
+              const exp = String(r.expiry ?? '');
+              if (!exp) continue;
+              let ei = expIdx.get(exp);
+              if (ei === undefined) { ei = expiries.length; expIdx.set(exp, ei); expiries.push(exp); }
+              const k = new Date(r.ts).toISOString();
+              let f = byTs.get(k);
+              if (!f) { f = { ts: k, spot: Number(r.spot) || 0, cells: [] }; byTs.set(k, f); }
+              // spot is per-sweep, so every row in a frame carries the same one;
+              // take the first non-zero rather than trusting row order.
+              if (!(f.spot > 0)) f.spot = Number(r.spot) || 0;
+              f.cells.push([ei, Number(r.strike), Number(r.net) || 0, Number(r.vol) || 0]);
+            }
+            // Expiries in date order, with the frame cells re-pointed at the
+            // sorted index — the grid renders columns left-to-right by date and
+            // should not have to sort a parallel array to do it.
+            const sorted = [...expiries].sort();
+            const remap = new Map(expiries.map((e, i) => [i, sorted.indexOf(e)]));
+            const frames = Array.from(byTs.values()).map((f) => ({
+              ts: f.ts, spot: f.spot,
+              cells: f.cells.map(([ei, k, net, vol]) => [remap.get(ei), k, net, vol]),
+            }));
+            sendJson(res, 200, { ok: true, symbol, date, expiries: sorted, frames });
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // All-expiry change map for the options-chain change-mode overlay.
       //   GET /proxy/strike-growth/by-expiry?symbol=NVDA
       // Returns latest snapshot per (expiry,strike) with chg15/30/60 (volume-GEX

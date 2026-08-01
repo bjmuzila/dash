@@ -356,6 +356,42 @@ const CHANGE_MODE_LABEL: Record<ChangeMode, string> = {
   "60": "60m Δ",
 };
 
+// ── Replay mode ─────────────────────────────────────────────────────────────
+// Rewinds the GRID ITSELF: every cell renders from a recorded strike_growth
+// snapshot instead of the live chain, and the strike window, heat scales,
+// column totals and MVC markers all follow — because replay swaps `columns` at
+// the source rather than painting an overlay on top of live data.
+//
+// What that costs, stated here because it shapes the whole UI below:
+//   • strike_growth records only the top STRIKE_GROWTH_TOP_N strikes per side
+//     per expiry per sweep (15 on prod). It is a record of the WALLS, not of
+//     the whole chain — a strike that was never a wall has no history to play.
+//   • Only GEX is recorded. DEX/CHEX/VEX/OI are live-only, so replay pins the
+//     greek tab to GEX rather than showing zeros in a tab that looks normal.
+//   • Cadence is the recorder's sweep (2 min hot lane / 5 min full roster), not
+//     per-tick, and retention is ~5 trading days.
+// Each of those is stated in the replay bar rather than left to be discovered.
+const REPLAY_SPEEDS = [0.5, 1, 2, 4, 8] as const;
+const REPLAY_BASE_MS = 700; // frame interval at 1× — matches ChainReplay's ladder
+
+/** One recorded sweep: the clock, the spot at that clock, and `exp|strike` → GEX. */
+type ReplayFrame = {
+  ts: string;
+  spot: number;
+  /** `${expiry}|${strike}` → { net: OI+Vol GEX, vol: volume-only GEX } */
+  cells: Map<string, { net: number; vol: number }>;
+  /** The expiries THIS frame carried — the front one can roll intraday. */
+  expiries: string[];
+};
+
+function fmtReplayClock(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString("en-US", {
+      timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    });
+  } catch { return iso; }
+}
+
 // Number of expirations shown side-by-side across the matrix (sequential mode).
 const EXP_COLUMNS = 14;
 
@@ -1072,6 +1108,12 @@ interface ChainMatrixProps {
   valueAt: (col: ExpColumn, strike: number) => number | null;
   isStandalone: boolean;
   changeMode: ChangeMode;
+  /**
+   * The session the grid is showing: "" when live (0DTE = today), or the
+   * replayed session's date. Only used to decide which column counts as 0DTE
+   * and is therefore excluded from the ⅀ Total column.
+   */
+  sessionDate: string;
   changeMeta: { expiries: Set<string>; hasData: boolean };
   changeMap: Map<string, number>;
   changeScaleByExp: Map<string, { max: number; top3: number[] }>;
@@ -1100,7 +1142,7 @@ interface ChainMatrixProps {
 const ChainMatrix = memo(function ChainMatrix({
   columns, gridCols, visibleStrikes, nearestStrike, spot, greekMode, dataMode,
   intensity, colScales, volMvcByCol, mvcByCol, pinByCol, valueAt, isStandalone,
-  changeMode, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
+  changeMode, sessionDate, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
   emLevels, activeTicker, atmRowRef, oiChangeMap, onCellClick, onCellHover,
 }: ChainMatrixProps) {
   // OI is a contract count, not dollars — and on this tab every readout is a
@@ -1124,7 +1166,9 @@ const ChainMatrix = memo(function ChainMatrix({
   // ⅀ Total column — per-strike sum across every rendered expiration EXCEPT
   // 0DTE (front expiry excluded on purpose; label stays plain "Total"), with
   // its own heat scale (over the visible strikes) so the biggest net totals pop.
-  const todayKey = etDateKey(etToday());
+  // "0DTE" means the expiry that equals the SESSION being shown, not literally
+  // today — replaying Tuesday must exclude Tuesday's 0DTE, not Friday's.
+  const todayKey = sessionDate || etDateKey(etToday());
   const rowTotals = new Map<number, number>();
   visibleStrikes.forEach((strike) => {
     if (strike == null) return;
@@ -1501,8 +1545,28 @@ export default function OptionsChainPage({
   // Change-mode (Live / 15 / 30 / 60). When not "live", the front-expiry column
   // shows Δ-vs-N-min-ago from strike_growth instead of the live greek.
   const [changeMode, setChangeMode] = useState<ChangeMode>("live");
-  // Replay overlay — recorded per-strike net-GEX playback for the active ticker.
+  // Replay LADDER overlay — the standalone <ChainReplay> modal. Still reachable
+  // from inside the replay bar; the toolbar button now drives in-grid replay.
   const [replayOpen, setReplayOpen] = useState(false);
+  // ── In-grid replay mode ───────────────────────────────────────────────────
+  // See the REPLAY_* block at the top of this file for what is and isn't
+  // recorded. `replayOn` is the user's intent; `replayFrame` (derived below) is
+  // whether there is actually a frame to render — the grid keys off the frame,
+  // never off the intent, so turning replay on for a symbol with no recorded
+  // history shows an explicit empty state instead of a silently blank chain.
+  const [replayOn, setReplayOn] = useState(false);
+  const [replayDates, setReplayDates] = useState<string[]>([]);
+  const [replayDate, setReplayDate] = useState("");
+  const [replayFrames, setReplayFrames] = useState<ReplayFrame[]>([]);
+  const [replayIdx, setReplayIdx] = useState(0);
+  const [replayPlaying, setReplayPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState<number>(1);
+  const [replayLoading, setReplayLoading] = useState(false);
+  const [replayErr, setReplayErr] = useState("");
+  // What the greek/change tabs were before replay took them over, so leaving
+  // replay puts the page back where the user left it instead of stranding them
+  // on GEX/Live.
+  const preReplayModes = useRef<{ greek: GreekMode; change: ChangeMode } | null>(null);
   // "expiry|strike" → chg$ map across ALL recorded expiries (from
   // /proxy/strike-growth/by-expiry). Lets every chain column show 15/30/60 Δ.
   const [changeMap, setChangeMap] = useState<Map<string, number>>(new Map());
@@ -1821,7 +1885,7 @@ export default function OptionsChainPage({
 
   // The 7 expiration columns (some may be empty placeholders) + the spot used
   // to center the strike window. Rebuilt whenever a load completes.
-  const { columns, spot } = useMemo(() => {
+  const { columns: liveColumns, spot: liveSpot } = useMemo(() => {
     const cols = expColumnsRef.current;
     if (!cols.length) return { columns: [] as ExpColumn[], spot: 0 };
     const atmStrike =
@@ -1830,6 +1894,59 @@ export default function OptionsChainPage({
         : cols.find(c => c.underlying > 0)?.underlying ?? 0;
     return { columns: cols, spot: atmStrike };
   }, [activeTicker, expiries, refreshSeed, selectedExpiry, underlyingPrice]);
+
+  // ── Replay: the frame on screen, and the columns built from it ─────────────
+  // The whole of replay mode is this swap. Everything downstream of `columns` —
+  // the strike window, per-column heat scales, MVC/pin markers, column totals,
+  // the ⅀ Total column, the hover card, the toolbar grand total — is written
+  // against ExpColumn[] and has no idea where the numbers came from. Rebuilding
+  // `columns` from a recorded frame therefore rewinds the entire grid, and
+  // costs no changes at any of those call sites. The alternative (a parallel
+  // replay map threaded through ChainMatrix, the way changeMap is) would have
+  // meant a replay branch in every one of them, each a place for live and
+  // recorded values to leak into the same view.
+  const replayFrame = (replayOn && isStandalone)
+    ? (replayFrames[Math.min(replayIdx, replayFrames.length - 1)] ?? null)
+    : null;
+
+  const replayColumns = useMemo<ExpColumn[]>(() => {
+    if (!replayFrame) return [];
+    // Only the expiries THIS frame carried — the answer to "hide the columns
+    // entirely". A frame recorded before an expiry existed simply has fewer
+    // columns, and the grid narrows rather than showing a column of dashes.
+    return replayFrame.expiries.map((exp) => {
+      const cells = new Map<number, GreekCell>();
+      replayFrame.cells.forEach((v, key) => {
+        const bar = key.indexOf("|");
+        if (key.slice(0, bar) !== exp) return;
+        const strike = Number(key.slice(bar + 1));
+        if (!Number.isFinite(strike)) return;
+        cells.set(strike, {
+          // "flow" GEX isn't recorded, so it reads as OI+Vol rather than
+          // silently rendering an empty grid on a tab that looks available.
+          gex: dataMode === "vol-only" ? v.vol : v.net,
+          volGex: v.vol,
+          // Not recorded. Zero — not a live value — because a live DEX beside a
+          // 30-minutes-ago GEX is the exact confusion replay exists to avoid.
+          // The greek tabs are pinned to GEX while replay is on regardless.
+          dex: 0, chex: 0, vex: 0, oi: 0,
+          callOI: 0, putOI: 0, callVol: 0, putVol: 0, callPrem: 0, putPrem: 0,
+        });
+      });
+      return {
+        expiration: exp,
+        label: exp,
+        cells,
+        underlying: replayFrame.spot,
+      };
+    });
+  }, [replayFrame, dataMode]);
+
+  const columns = replayFrame ? replayColumns : liveColumns;
+  // Centre the strike window on the spot AS RECORDED, not on live spot — that
+  // is the point of a rewind. Falls back to live spot only if the frame carried
+  // no usable price (a fresh root before its first quote landed).
+  const spot = replayFrame ? (replayFrame.spot > 0 ? replayFrame.spot : liveSpot) : liveSpot;
 
   // Union of every strike listed across all 7 expirations, sorted ascending.
   const allStrikes = useMemo(() => {
@@ -1849,10 +1966,15 @@ export default function OptionsChainPage({
 
   const totalRows = allStrikes.length;
   const autoDisplayPercent = useMemo(() => {
+    // Replay's strike universe is ALREADY a filtered set — the recorder stores
+    // only the top strikes a side, so `allStrikes` here is the walls and
+    // nothing else. Taking 10% of that would hide walls the whole feature
+    // exists to show, so the % control doesn't apply to a rewound grid.
+    if (replayFrame) return 100;
     const requestedCount = Math.max(1, Math.round(totalRows * (displayPercent / 100)));
     if (displayPercent === 10 && requestedCount < 10) return 20;
     return displayPercent;
-  }, [displayPercent, totalRows]);
+  }, [displayPercent, totalRows, replayFrame]);
 
   // The strike window shown (centered on spot), high → low. ATM is forced to the
   // exact visual middle: we take an equal count of strikes above and below ATM
@@ -2070,6 +2192,119 @@ export default function OptionsChainPage({
     return () => { cancelled = true; };
   }, [changeMode, activeTicker, refreshSeed]);
 
+  // ── Replay: pin the tabs replay can actually honour ───────────────────────
+  // GEX is the only greek strike_growth records, and a Δ-vs-15-min-ago column
+  // computed against a rewound grid would be comparing two different pasts. So
+  // replay takes both tabs and gives them back on exit. Deliberately NOT a
+  // silent disable: the buttons stay visible but inert with a title saying why.
+  useEffect(() => {
+    if (replayOn) {
+      if (!preReplayModes.current) preReplayModes.current = { greek: greekMode, change: changeMode };
+      if (greekMode !== "gex") setGreekMode("gex");
+      if (changeMode !== "live") setChangeMode("live");
+    } else if (preReplayModes.current) {
+      const { greek, change } = preReplayModes.current;
+      preReplayModes.current = null;
+      setGreekMode(greek);
+      setChangeMode(change);
+    }
+    // greekMode/changeMode are read, not tracked — listing them would fight the
+    // pin (set → effect → set) on every tab click while replay is on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replayOn]);
+
+  // Leaving replay (or switching ticker) drops the loaded session so the next
+  // entry doesn't flash the previous symbol's frames under the new ticker.
+  useEffect(() => {
+    setReplayFrames([]); setReplayIdx(0); setReplayPlaying(false); setReplayErr("");
+  }, [activeTicker, replayOn]);
+
+  // Which sessions are replay-able for this ticker (retention is ~5 trading
+  // days, so this list is short by design — it is not a history picker).
+  useEffect(() => {
+    if (!replayOn) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/proxy/strike-growth/replay-meta?symbol=${encodeURIComponent(activeTicker)}`, { cache: "no-store" });
+        const j = await res.json().catch(() => null);
+        if (cancelled) return;
+        const ds: string[] = Array.isArray(j?.dates) ? j.dates.map((d: unknown) => String(d).slice(0, 10)) : [];
+        setReplayDates(ds);
+        setReplayDate((cur) => (cur && ds.includes(cur) ? cur : ds[0] ?? ""));
+        if (!ds.length) setReplayErr(`No recorded sessions for ${activeTicker}.`);
+      } catch {
+        if (!cancelled) { setReplayDates([]); setReplayDate(""); setReplayErr("Could not load recorded sessions."); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [replayOn, activeTicker]);
+
+  // The frames themselves. One request per (symbol, session) — the whole day is
+  // pulled up front so scrubbing is instant and never re-hits the network mid-drag.
+  useEffect(() => {
+    if (!replayOn || !replayDate) return;
+    let cancelled = false;
+    // Drop the previous session's frames immediately. Holding them while the
+    // new day loads would render one date's grid under another date's label,
+    // which is worse than a moment of the loading state.
+    setReplayFrames([]); setReplayIdx(0);
+    setReplayLoading(true); setReplayErr(""); setReplayPlaying(false);
+    (async () => {
+      try {
+        const res = await fetch(
+          `/proxy/strike-growth/frames-by-expiry?symbol=${encodeURIComponent(activeTicker)}&date=${encodeURIComponent(replayDate)}`,
+          { cache: "no-store" },
+        );
+        const j = await res.json().catch(() => null);
+        if (cancelled) return;
+        if (!j?.ok || !Array.isArray(j.frames) || !j.frames.length) {
+          setReplayFrames([]);
+          setReplayErr(j?.error ? String(j.error) : `No recorded frames for ${activeTicker} on ${replayDate}.`);
+          return;
+        }
+        const expiries: string[] = Array.isArray(j.expiries) ? j.expiries.map(String) : [];
+        const frames: ReplayFrame[] = j.frames.map((f: any) => {
+          const cells = new Map<string, { net: number; vol: number }>();
+          const seen = new Set<string>();
+          for (const c of (f.cells ?? [])) {
+            const exp = expiries[Number(c[0])];
+            if (!exp) continue;
+            seen.add(exp);
+            cells.set(`${exp}|${Number(c[1])}`, { net: Number(c[2]) || 0, vol: Number(c[3]) || 0 });
+          }
+          return {
+            ts: String(f.ts), spot: Number(f.spot) || 0, cells,
+            expiries: expiries.filter((e) => seen.has(e)),
+          };
+        });
+        setReplayFrames(frames);
+        // Land on the LAST frame, not the first: entering replay from a live
+        // chain, the nearest thing to what was just on screen is the most
+        // recent snapshot. Scrub back from there.
+        setReplayIdx(frames.length - 1);
+      } catch {
+        if (!cancelled) { setReplayFrames([]); setReplayErr("Could not load frames."); }
+      } finally {
+        if (!cancelled) setReplayLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [replayOn, replayDate, activeTicker]);
+
+  // Playback. Stops at the last frame rather than looping — a session that
+  // silently restarts reads as live data jumping backwards.
+  useEffect(() => {
+    if (!replayPlaying || replayFrames.length === 0) return;
+    const id = setInterval(() => {
+      setReplayIdx((i) => {
+        if (i >= replayFrames.length - 1) { setReplayPlaying(false); return i; }
+        return i + 1;
+      });
+    }, REPLAY_BASE_MS / replaySpeed);
+    return () => clearInterval(id);
+  }, [replayPlaying, replaySpeed, replayFrames.length]);
+
   // ── Day-over-day ΔOI (OI tab only) ────────────────────────────────────────
   // Open interest is settled overnight by the OCC and republished pre-open; it
   // does NOT tick during the session. So there is no live "change since 9:30"
@@ -2152,7 +2387,19 @@ export default function OptionsChainPage({
   // Always render the target slot count so the grid keeps a stable width even
   // before all expirations resolve — EXP_COLUMNS (14) in sequential mode, 4 in
   // key mode (0DTE/1DTE/weekly/monthly).
-  const gridCols = Math.max(columns.length, expirySelection === "key" ? 4 : seqColumns);
+  // In replay the grid renders EXACTLY the recorded expiries and no padding
+  // slots: a placeholder column is a promise that data is still loading, and in
+  // a rewound grid nothing more is coming. Live keeps the fixed slot count so
+  // the grid doesn't reflow while expirations resolve.
+  const gridCols = replayFrame
+    ? columns.length
+    : Math.max(columns.length, expirySelection === "key" ? 4 : seqColumns);
+
+  // Snapshot/Discord caption. Declared here (not up with snapTitle) because it
+  // needs replayFrame, which only exists once the recorded columns are built.
+  const replayTitle = replayFrame
+    ? `Options Chain REPLAY — ${activeTicker}  •  ${replayDate} ${fmtReplayClock(replayFrame.ts)} ET  •  GEX  •  ${dataMode === "vol-only" ? "Vol only" : "OI+Vol"}`
+    : snapTitle;
 
   // EM bands only apply to current-week expirations. Mark which visible columns
   // qualify so the band draws across only those columns.
@@ -2171,7 +2418,8 @@ export default function OptionsChainPage({
   // non-0DTE expiration (matches the sum of the Total column — front expiry
   // excluded, label stays plain "Total Net {greek}"). Shown in the toolbar.
   const visibleTotal = useMemo(() => {
-    const todayKey = etDateKey(etToday());
+    // Same rule as the ⅀ Total column: 0DTE is relative to the session shown.
+    const todayKey = replayFrame ? replayDate : etDateKey(etToday());
     let sum = 0;
     for (const col of columns) {
       if (col.expiration === todayKey) continue;
@@ -2189,7 +2437,7 @@ export default function OptionsChainPage({
       }
     }
     return sum;
-  }, [columns, visibleStrikes, greekMode, nearestStrike, oiSnapshot]);
+  }, [columns, visibleStrikes, greekMode, nearestStrike, oiSnapshot, replayFrame, replayDate]);
 
   // Toolbar button styled to match the right-side SegGroup tiles (height 34,
   // radius 8, fontSize 11–12, weight 700) so GO + Recent line up with them.
@@ -2274,13 +2522,18 @@ export default function OptionsChainPage({
           </>
         )}
 
-        <button
-          onClick={() => setReplayOpen(true)}
-          style={segBtnStyle(replayOpen)}
-          title="Replay the recorded per-strike net-GEX profile through the session"
-        >
-          ▶ Replay
-        </button>
+        {/* Standalone only. An embedded chain (the /new-home tile) is a live
+            glance at a fixed ticker — handing it a session scrubber would let a
+            tile on a live dashboard quietly show yesterday. */}
+        {isStandalone && (
+          <button
+            onClick={() => setReplayOn((v) => !v)}
+            style={segBtnStyle(replayOn)}
+            title="Rewind the grid itself through the session's recorded net-GEX snapshots"
+          >
+            {replayOn ? "■ Exit Replay" : "▶ Replay"}
+          </button>
+        )}
 
         <div style={{ flex: 1 }} />
 
@@ -2297,6 +2550,9 @@ export default function OptionsChainPage({
 
         <span style={{ color: HT.border }}>|</span>
 
+        {/* OI+Vol / Vol Only stays live in replay — strike_growth records BOTH
+            bases (gex_now+gex_open vs gex_now), so the toggle means the same
+            thing rewound as it does live. */}
         <SegGroup
           options={DATA_MODES.filter(m => m !== "flow").map(m => ({ label: DATA_MODE_LABEL[m], value: m }))}
           active={dataMode}
@@ -2305,23 +2561,36 @@ export default function OptionsChainPage({
 
         <span style={{ color: HT.border }}>|</span>
 
-        <SegGroup
-          options={GREEK_MODES.map(m => ({ label: m.toUpperCase(), value: m }))}
-          active={greekMode}
-          onChange={(v) => setGreekMode(v as GreekMode)}
-        />
+        {/* Pinned to GEX while replaying — see the replay-pin effect. Rendered
+            inert rather than hidden so the tabs don't vanish and reappear. */}
+        <div
+          style={{ opacity: replayOn ? 0.4 : 1, pointerEvents: replayOn ? "none" : undefined }}
+          title={replayOn ? "GEX only in replay — DEX/CHEX/VEX/OI are not recorded" : undefined}
+        >
+          <SegGroup
+            options={GREEK_MODES.map(m => ({ label: m.toUpperCase(), value: m }))}
+            active={greekMode}
+            onChange={(v) => setGreekMode(v as GreekMode)}
+          />
+        </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
-          <div style={{ width: 7, height: 7, borderRadius: "50%", background: HT.green }} />
-          <span style={{ fontSize: 10, color: HT.green, fontWeight: 800, letterSpacing: "0.08em" }}>LIVE</span>
+          <div style={{ width: 7, height: 7, borderRadius: "50%", background: replayFrame ? HT.orange : HT.green }} />
+          <span style={{ fontSize: 10, color: replayFrame ? HT.orange : HT.green, fontWeight: 800, letterSpacing: "0.08em" }}>
+            {replayFrame ? "REPLAY" : "LIVE"}
+          </span>
         </div>
 
         <button onClick={trigger} style={{ ...homeButtonStyle }}>{refreshLabel}</button>
-        <BoxSnapBtn targetRef={pageRef} title={snapTitle} />
+        {/* A rewound grid shared without a timestamp is just a wrong chain, so
+            the replay clock goes in the title and the Discord message too. */}
+        <BoxSnapBtn targetRef={pageRef} title={replayTitle} />
         <BoxDiscordBtn
           targetRef={pageRef}
-          title={snapTitle}
-          message={`📊 Options Chain — ${activeTicker} ${selectedExpiry}`}
+          title={replayTitle}
+          message={replayFrame
+            ? `⏪ Options Chain REPLAY — ${activeTicker} · ${replayDate} ${fmtReplayClock(replayFrame.ts)} ET`
+            : `📊 Options Chain — ${activeTicker} ${selectedExpiry}`}
         />
       </Dock>
       {/* Row 2 — total net GEX (active greek) across the visible window. */}
@@ -2334,7 +2603,9 @@ export default function OptionsChainPage({
             {greekMode === "oi" ? fmtChg(visibleTotal) : fmtMoney(visibleTotal)}
           </span>
           <span style={{ color: HT.border }}>·</span>
-          <span style={{ color: HT.muted, opacity: 0.75 }}>{activeTicker} · {displayPercent}% strikes{autoPercentNote ? ` · ${autoPercentNote}` : ""}</span>
+          <span style={{ color: HT.muted, opacity: 0.75 }}>
+            {activeTicker} · {replayFrame ? "all recorded strikes" : `${displayPercent}% strikes${autoPercentNote ? ` · ${autoPercentNote}` : ""}`}
+          </span>
           {/* OI tab provenance. The Δ column is only meaningful once TWO daily
               snapshots exist, so say plainly which two days are being compared
               — and say so just as plainly when there is no baseline yet, rather
@@ -2353,9 +2624,138 @@ export default function OptionsChainPage({
           )}
         </div>
       )}
+
+      {/* ── Row 3 — replay transport ────────────────────────────────────────
+          Deliberately NOT inside the captureHide Dock: a screen-grab of a
+          rewound grid that doesn't say WHEN it is reads as a live chain, which
+          is the single worst way this feature can be misunderstood. The clock,
+          the session date and the recorded spot travel with the image. */}
+      {replayOn && isStandalone && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+          padding: "5px 8px", borderRadius: 8,
+          border: `1px solid ${rgba(HT.orange, 0.35)}`,
+          background: `linear-gradient(180deg,${rgba(HT.orange, 0.12)},${rgba(HT.orange, 0.03)})`,
+          fontSize: 11, whiteSpace: "nowrap",
+        }}>
+          <span style={{ fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HT.orange }}>
+            Replay
+          </span>
+
+          {replayDates.length > 0 && (
+            <CustomDropdown
+              value={replayDate}
+              options={replayDates}
+              onChange={(d) => setReplayDate(String(d))}
+              accentCyan={false}
+            />
+          )}
+
+          <button
+            onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.max(0, i - 1)); }}
+            disabled={!replayFrames.length || replayIdx <= 0}
+            style={{ ...segBtnStyle(false), height: 26, padding: "0 8px", opacity: replayIdx > 0 ? 1 : 0.4 }}
+            title="Previous snapshot"
+          >
+            ◀
+          </button>
+          <button
+            onClick={() => {
+              // Replaying from the end would show one frame and stop, which
+              // reads as broken — rewind to the start first.
+              if (replayIdx >= replayFrames.length - 1) setReplayIdx(0);
+              setReplayPlaying((p) => !p);
+            }}
+            disabled={replayFrames.length < 2}
+            style={{ ...segBtnStyle(replayPlaying), height: 26, padding: "0 12px", opacity: replayFrames.length > 1 ? 1 : 0.4 }}
+          >
+            {replayPlaying ? "❚❚" : "▶"}
+          </button>
+          <button
+            onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.min(replayFrames.length - 1, i + 1)); }}
+            disabled={!replayFrames.length || replayIdx >= replayFrames.length - 1}
+            style={{ ...segBtnStyle(false), height: 26, padding: "0 8px", opacity: replayIdx < replayFrames.length - 1 ? 1 : 0.4 }}
+            title="Next snapshot"
+          >
+            ▶
+          </button>
+
+          <input
+            type="range"
+            min={0}
+            max={Math.max(0, replayFrames.length - 1)}
+            value={Math.min(replayIdx, Math.max(0, replayFrames.length - 1))}
+            disabled={!replayFrames.length}
+            onChange={(e) => { setReplayPlaying(false); setReplayIdx(Number(e.target.value)); }}
+            style={{ flex: 1, minWidth: 160, height: 3, accentColor: HT.orange }}
+          />
+
+          <span style={{ fontSize: 10, color: HT.muted, fontWeight: 700 }}>Speed</span>
+          {REPLAY_SPEEDS.map((sp) => (
+            <button
+              key={sp}
+              onClick={() => setReplaySpeed(sp)}
+              style={{
+                ...segBtnStyle(replaySpeed === sp),
+                height: 24, padding: "0 7px", fontSize: 10, textTransform: "none",
+              }}
+            >
+              {sp}×
+            </button>
+          ))}
+
+          <span style={{ color: HT.border }}>|</span>
+
+          {/* The frame's own clock + the spot recorded at that clock. */}
+          <span style={{ fontFamily: "var(--font-mono)", fontWeight: 800, color: HT.text }}>
+            {replayFrame ? `${fmtReplayClock(replayFrame.ts)} ET` : "--:--:--"}
+          </span>
+          <span style={{ fontFamily: "var(--font-mono)", color: HT.muted }}>
+            spot {replayFrame && replayFrame.spot > 0 ? replayFrame.spot.toFixed(2) : "—"}
+          </span>
+          <span style={{ color: HT.muted, opacity: 0.75 }}>
+            {replayFrames.length ? `frame ${Math.min(replayIdx, replayFrames.length - 1) + 1} / ${replayFrames.length}` : ""}
+          </span>
+
+          {/* Coverage, said out loud. The grid looks like the live chain, so
+              without this a missing strike reads as "no gamma there" instead of
+              "the recorder never stored that strike." */}
+          {replayFrame && (
+            <span style={{ color: HT.muted, opacity: 0.7 }}>
+              · recorded walls only ({replayFrame.expiries.length} expir{replayFrame.expiries.length === 1 ? "y" : "ies"}, top strikes per side) · GEX only
+            </span>
+          )}
+          {replayLoading && <span style={{ color: HT.cyan }}>· loading…</span>}
+          {!replayLoading && replayErr && <span style={{ color: HT.red }}>· {replayErr}</span>}
+
+          <div style={{ flex: 1 }} />
+
+          <button
+            onClick={() => setReplayOpen(true)}
+            style={{ ...segBtnStyle(false), height: 26, padding: "0 10px", fontSize: 10 }}
+            title="Open the single-ladder replay view"
+          >
+            ⛶ Ladder
+          </button>
+        </div>
+      )}
       </div>
 
-      {!visibleStrikes.length ? (
+      {replayOn && isStandalone && !replayFrame ? (
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#4a6a88" }}>
+          <div style={{ textAlign: "center", maxWidth: 460 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8, color: HT.orange }}>
+              {replayLoading ? "Loading recorded session…" : `Nothing recorded to replay for ${activeTicker}`}
+            </div>
+            <div style={{ fontSize: 12, lineHeight: 1.5 }}>
+              {replayLoading
+                ? `${activeTicker} · ${replayDate}`
+                : (replayErr || "No snapshots for this ticker yet.") +
+                  " The recorder keeps roughly five trading days and only covers tickers on the scanner watchlist."}
+            </div>
+          </div>
+        </div>
+      ) : !visibleStrikes.length ? (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#4a6a88" }}>
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>
@@ -2396,6 +2796,7 @@ export default function OptionsChainPage({
             valueAt={valueAt}
             isStandalone={isStandalone}
             changeMode={changeMode}
+            sessionDate={replayFrame ? replayDate : ""}
             changeMeta={changeMeta}
             changeMap={changeMap}
             changeScaleByExp={changeScaleByExp}
