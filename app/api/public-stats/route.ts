@@ -124,7 +124,35 @@ async function emZones(): Promise<PublicStat | null> {
   };
 }
 
-/** wins / (wins+losses) across ict_setups. Chop excluded — it is neither. */
+/**
+ * wins / (wins+losses) across ict_setups. Chop excluded — it is neither.
+ *
+ * ── WHAT THIS NUMBER IS, AND WHAT IT IS NOT ────────────────────────────────
+ * The grader (app/api/ict-setups/route.ts:227-249) defines a win as
+ * `r_multiple >= 1`, where `r_multiple = peak MFE / risk` and risk is the
+ * distance from the trigger-bar close to the structural (swing-pivot) stop.
+ * So "win" means exactly one thing: price touched 1R in favour before the stop
+ * was hit. Nothing more. There is no exit rule anywhere in the codebase —
+ * `target` is written NULL on every row.
+ *
+ * The label therefore says "reached 1R", not "resolved in-direction". The old
+ * wording was vague enough that a reader could hear "made money", which this
+ * number does not say.
+ *
+ * DO NOT publish avg r_multiple as expectancy. It is UNSIGNED and floored at
+ * zero — `mfe` starts at 0 and only ratchets up, and `mae` is never subtracted.
+ * That is why losing rows carry a POSITIVE average r_multiple (~0.37 in prod):
+ * a loser that wicked 0.37R in your favour before dying at the stop still
+ * records +0.37, when its realized outcome was -1R. The mean of that column
+ * (~2.33) is average peak favourable excursion with a perfect-hindsight exit at
+ * the exact tick top and zero debit for 3,150 full-R losses. No strategy can
+ * capture it. Under the only mechanical exit the data supports — take 1R, else
+ * stop at -1R — expectancy is roughly (wins - losses)/graded ≈ +0.05R, i.e.
+ * about breakeven before costs. Publishing "averages 2.33R" would be false.
+ *
+ * Also note 52.4% and the script's "48.6% ran >= 1R" are THE SAME STATISTIC
+ * under two names, not independent confirmation — win is *defined* as r >= 1.
+ */
 async function ictSetups(): Promise<PublicStat | null> {
   const pool = await getDb();
   const { rows } = await pool.query(`
@@ -137,17 +165,19 @@ async function ictSetups(): Promise<PublicStat | null> {
   `);
   const r = rows[0];
   const n = Number(r?.graded ?? 0);
-  // Sessions — not setups — are the independent unit here. At ~171 graded
-  // setups/session, `graded` is not a sample count. Currently 21 sessions, so
-  // this returns null and ICT does NOT publish. That is correct: 53.1% is a
-  // coin flip, and win rate without an R-multiple says nothing about whether
-  // the system makes money. Publish this only once (a) sessions clear the
-  // floor and (b) expectancy justifies it — see scripts/verify-public-stats.mjs.
+  // Sessions — not setups — are the independent unit here. At ~184 graded
+  // setups/session, `graded` is not a sample count: those rows are one detector
+  // firing repeatedly over the same ES bars, sharing one price path. The honest
+  // sample is the 36 sessions, which is why that is the number in the sublabel
+  // and why the floor below tests sessions, not rows.
   if (n < MIN_N || Number(r?.sessions ?? 0) < MIN_PERIODS) return null;
   return {
     key: "ict",
-    label: "ICT setups resolved in-direction",
-    sublabel: `Auto-graded on follow-through, ${Number(r.sessions ?? 0)} sessions — chop excluded`,
+    // "Reached 1R" is the whole claim, stated in the same words the grader uses.
+    // It is deliberately narrower than the old "resolved in-direction", which
+    // was loose enough to be heard as a profit claim.
+    label: "ICT setups that reached 1R",
+    sublabel: `1R = trigger close to structural stop, touched before invalidation · ${Number(r.sessions ?? 0)} sessions, chop excluded`,
     pct: Math.round((Number(r.wins) / n) * 1000) / 10,
     n,
     since: r?.since ?? null,

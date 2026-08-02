@@ -100,9 +100,23 @@ try {
     console.log(`    Effective sample is ${ict.sessions} days, not ${ict.graded} trials.`);
   }
 
-  // ── ICT expectancy ────────────────────────────────────────────────────────
-  // Win rate alone says nothing. 53% at >1R is an edge; 53% at <1R loses money.
-  // This is the number that decides whether ICT is publishable at all.
+  // ── ICT excursion — NOT expectancy ────────────────────────────────────────
+  // This block used to be titled "ICT expectancy (the number that actually
+  // matters)" and printed "→ positive expectancy" off avg_r > 0. Both were
+  // wrong, and the wording nearly put "ICT setups average 2.33R" on the public
+  // landing page.
+  //
+  // r_multiple is UNSIGNED peak MFE / risk (app/api/ict-setups/route.ts:227-249).
+  // `mfe` starts at 0 and only ratchets up; `mae` is never subtracted. So:
+  //   - avg_r > 0 is true BY CONSTRUCTION. The old guard could never fire.
+  //   - losers carry POSITIVE r_multiple (~0.37) — that is a loser that wicked
+  //     0.37R your way before dying at the stop. Its realized outcome was -1R.
+  //   - avg_r is average peak favourable excursion assuming a perfect-hindsight
+  //     exit at the exact tick top, with zero debit for full-R losses. There is
+  //     no exit rule in the codebase at all (`target` is NULL on every row).
+  //
+  // Real expectancy under the only mechanical exit the data supports (+1R or
+  // -1R) is computed below. It is a different number by an order of magnitude.
   const r = (await pool.query(`
     SELECT
       AVG(r_multiple) FILTER (WHERE outcome IN ('win','loss','chop'))  AS avg_r,
@@ -114,18 +128,30 @@ try {
     FROM ict_setups
   `)).rows[0];
   const n2 = (v) => (v == null ? "—" : Number(v).toFixed(2));
-  console.log(`\nICT expectancy (the number that actually matters)`);
-  console.log(`  avg R (all resolved) : ${n2(r.avg_r)}`);
-  console.log(`  avg R on wins        : ${n2(r.avg_win_r)}`);
-  console.log(`  avg R on losses      : ${n2(r.avg_loss_r)}`);
+  console.log(`\nICT excursion — peak MFE/risk, NOT expectancy, NOT publishable as R`);
+  console.log(`  avg peak R (all)     : ${n2(r.avg_r)}   <- hindsight top-tick, unsigned`);
+  console.log(`  avg peak R on wins   : ${n2(r.avg_win_r)}`);
+  console.log(`  avg peak R on losses : ${n2(r.avg_loss_r)}   <- positive on LOSERS. realized was -1R.`);
   console.log(`  ran >= 1R            : ${pct(+r.hit1, +r.resolved)}%  (${r.hit1}/${r.resolved})`);
   console.log(`  ran >= 2R            : ${pct(+r.hit2, +r.resolved)}%  (${r.hit2}/${r.resolved})`);
-  if (r.avg_r != null) {
-    console.log(
-      Number(r.avg_r) > 0
-        ? `  → positive expectancy — 53% wins is fine IF avg R holds up`
-        : `  → NEGATIVE expectancy — do not publish ICT in any framing`
-    );
+  console.log(`  note: "ran >= 1R" and the ${pct(+ict.wins, +ict.graded)}% win rate are THE SAME STAT —`);
+  console.log(`        the grader DEFINES win as r_multiple >= 1. Not independent confirmation.`);
+
+  // The number that actually matters, computed the only way the data allows:
+  // assume the trade is exited at +1R or stopped at -1R. Chop (survived to the
+  // close, never reached 1R, stop never hit) is excluded from the numerator but
+  // is a real cost in practice — flagged, not silently dropped.
+  const exp = (+ict.wins - +ict.losses) / (+ict.graded || 1);
+  console.log(`\n  expectancy @ take-1R / stop-1R : ${exp >= 0 ? "+" : ""}${exp.toFixed(3)}R per setup`);
+  console.log(`    (${ict.wins}W - ${ict.losses}L) / ${ict.graded} graded · before commissions and slippage`);
+  console.log(`    ${ict.chop} chop rows excluded from this — they tie up risk and return nothing.`);
+  if (Math.abs(exp) < 0.1) {
+    console.log(`  → ESSENTIALLY BREAKEVEN. Publish the touch rate if you like, but do`);
+    console.log(`    not frame ICT as profitable, and never publish avg peak R as expectancy.`);
+  } else if (exp < 0) {
+    console.log(`  → NEGATIVE expectancy — do not publish ICT in any profit framing.`);
+  } else {
+    console.log(`  → Positive. Still check it survives costs before claiming an edge.`);
   }
 
   // ── CB reach ──────────────────────────────────────────────────────────────

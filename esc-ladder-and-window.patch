@@ -1,0 +1,58 @@
+--- a/components/dashboard/es-candles/EsChartCard.tsx
++++ b/components/dashboard/es-candles/EsChartCard.tsx
+@@ -1719,8 +1719,24 @@
+     // Off-session, ask for the full retention window instead; there is only one
+     // session's worth of rows inside 48h at that point, so the "5-day is slow"
+     // reasoning doesn't apply. Live hours are untouched.
++    //
++    // The 2880 cap was itself a bug once retention started counting SESSIONS.
++    // Two sessions can span a weekend — Friday's 09:30 open is ~78 hours behind
++    // Monday's close — so a 48-hour window cannot REACH Friday from Monday even
++    // though the rows are sitting right there. Same effect on a Sunday: 2880
++    // minutes measured from Sunday noon starts at Friday noon, which is why a
++    // replay of Friday's RTH began at 12:00 instead of 09:30.
++    //
++    // Widening this costs nothing. Retention bounds how much data EXISTS (2
++    // sessions, see pruneOptionStrikeGexHistory in server-v2/_lib-db.cjs); the
++    // window only has to be wide enough to reach it, so the response is the
++    // same size either way. Live intraday is untouched — it still asks for
++    // heatmapDays * 1440.
++    const GEX_WINDOW_MAX_MIN = 5760; // 4 days; must match the clamp in api-router.js
+     const offSession = !replayOn && !etSessionStarted();
+-    const minutes = Math.min(2880, replayOn || offSession ? 2880 : heatmapDays * 1440);
++    const minutes = replayOn || offSession
++      ? GEX_WINDOW_MAX_MIN
++      : Math.min(GEX_WINDOW_MAX_MIN, heatmapDays * 1440);
+     // Front mode passes anyExpiry=1, so the server IGNORES `expiry`; the rolling
+     // feedExpiry churning each publish must NOT re-fire this ~700KB/5s query.
+     // Key on the request window only (an explicit DTE pick keys on expiry too).
+@@ -1760,9 +1776,26 @@
+     // showFlipCross is deliberately NOT here any more: the flip now arrives
+     // per-column from the server (col.flip / col.flipVol), computed on the
+     // full ladder, so the overlay no longer needs every strike shipped to it.
+-    // Heatmap still does (it paints each strike), and replay / the ETFs still
+-    // rederive walls from the cells via deriveColumnLevels.
+-    const needsFullLadder = showHeatmap || replayOn || !isEs;
++    // Heatmap still does (it paints each strike), and replay still rederives
++    // walls from the cells via deriveColumnLevels.
++    //
++    // `!isEs` USED to be here too, on the same reasoning — SPY/QQQ have no
++    // /ws/gex stream, so etfGex rederives their walls and flip from these
++    // columns. It was costing more than it was buying: on a three-card ES/SPY/
++    // QQQ row the two ETF cards pulled 236KB and 259KB against SPX's 107KB, so
++    // ~82% of the page's bytes were the full ladder on symbols whose heatmap
++    // was switched off.
++    //
++    // Safe to drop because the SERVER already protects the one thing the gate
++    // existed for: the ?top handler in api-router.js always keeps the two
++    // strikes bracketing every net-GEX sign change, so findGEXFlip still sees
++    // the exact zero-crossing on a truncated ladder. The walls are top-N by
++    // magnitude by definition, so a top-30 response cannot miss them either.
++    //
++    // If the ETF walls or flip ever look wrong, put `|| !isEs` back FIRST and
++    // confirm before looking anywhere else — this is the only place the ETF
++    // ladder is narrowed.
++    const needsFullLadder = showHeatmap || replayOn;
+     // Request the slider's MAXIMUM, not its current value. Asking for exactly
+     // `cfg.topStrikes` made the URL move every time the slider did — and worse,
+     // the saved bubble config is restored in an effect AFTER mount, so the
