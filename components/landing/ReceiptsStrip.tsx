@@ -9,10 +9,18 @@ import { HOME_THEME as T } from "@/components/shared/homeTheme";
 // out of the same auto-graded tables the app uses internally: hits AND misses,
 // no cherry-picking, no hand-entry.
 //
-// The sample size is NOT fine print — it is rendered at readable weight next to
-// every number, deliberately. A percentage alone is a marketing claim someone
-// will (rightly) push back on; a percentage with n= is a receipt that survives
-// the question "over what?". Do not shrink, grey out, or drop the n.
+// The sample is NOT fine print, but it is no longer a bare `n=` chip fighting
+// the percentage for attention. It now lives inside each SUBLABEL, in the unit
+// that means something to a reader — "36 sessions", "402 tickers over 42 weeks",
+// "N broken sessions over N days". A percentage alone is a marketing claim
+// someone will (rightly) push back on; a percentage that says what it was
+// measured over is a receipt that survives "over what?".
+//
+// So the rule holds, it just moved: every card must still disclose its own
+// sample somewhere visible. If you add a stat, put the sample in its sublabel —
+// never ship a naked percentage, and never reintroduce the chip for one card
+// only (a lone n= on the weakest stat reads as an alibi). The API still
+// computes and gates on n; see app/api/public-stats/route.ts.
 //
 // /api/public-stats already withholds anything under its MIN_N floor, so this
 // renders whatever it's handed. If that leaves nothing, the strip renders
@@ -62,7 +70,6 @@ export default function ReceiptsStrip() {
             <div key={s.key} style={cell} className="receipts-cell">
               <div style={pctRow}>
                 <span style={pctVal}>{s.pct}%</span>
-                <span style={nVal}>n={s.n.toLocaleString()}</span>
               </div>
               <div style={labelStyle}>{s.label}</div>
               <div style={subStyle}>
@@ -74,9 +81,14 @@ export default function ReceiptsStrip() {
         })}
       </div>
 
+      {/* The old footnote promised "sample sizes shown" — that was written when
+          every card carried an n= chip. The sizes are still shown, just inside
+          each card's own line, so the promise is reworded rather than dropped.
+          Do not shorten this to only the disclaimer: the second sentence is what
+          separates this strip from every screenshot-of-a-winner on the timeline. */}
       <div style={footnote}>
-        Past results do not predict future performance. Sample sizes shown so you
-        can judge for yourself.
+        Past results do not predict future performance. Every number above is
+        auto-graded — wins and misses — over the period stated on the card.
       </div>
     </div>
   );
@@ -103,9 +115,13 @@ const heading: React.CSSProperties = {
   textAlign: "center",
 };
 
+// Fixed 2-up, not auto-fit. With four stats this is an even 2x2 block; auto-fit
+// at the left column's width was landing 3-and-1 and leaving a dead cell. If a
+// stat ever gets suppressed and only three publish, the hole comes back — that
+// is the accepted cost of not shrinking type to force a fit.
 const grid: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+  gridTemplateColumns: "repeat(2, 1fr)",
   gap: 10,
 };
 
@@ -132,13 +148,8 @@ const pctVal: React.CSSProperties = {
   lineHeight: 1,
 };
 
-// Sample size — same mono family, readable weight. Intentionally not fine print.
-const nVal: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 700,
-  color: T.muted,
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-};
+// nVal removed with the n= chip. Sample size now reads in the sublabel — see
+// the header comment. Every other font size in this file is unchanged.
 
 const labelStyle: React.CSSProperties = {
   fontSize: 12,

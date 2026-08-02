@@ -45,6 +45,18 @@ const MIN_PERIODS = 30;
 const MIN_EM_WEEKS = 4;
 const MIN_EM_TICKERS = 30;
 
+/**
+ * `n` is no longer RENDERED as a chip next to each percentage on the landing
+ * strip — it moved into each stat's sublabel, in the unit that actually means
+ * something (sessions, weeks, tickers, days). It is still COMPUTED, still gates
+ * publication here, and still ships in the JSON payload.
+ *
+ * Rule 1 at the top of this file is therefore unchanged in substance: nothing
+ * publishes without a disclosed sample. Do not read the missing n= chip as
+ * licence to relax the floors below, and do not add a stat whose sublabel
+ * doesn't state its own sample in words.
+ */
+
 export interface PublicStat {
   key: string;
   label: string;      // what the number means, in prospect language
@@ -149,8 +161,52 @@ async function cbReach(): Promise<PublicStat | null> {
   return {
     key: "cb",
     label: "CB levels reached intraday",
-    sublabel: "Called pre-close, graded on the next session's actual print",
+    // The day count is IN the sublabel because the strip no longer renders a
+    // separate n= chip. This card is the one with no other numeric anchor, so
+    // without this it would be a bare percentage — exactly what rule 1 forbids.
+    sublabel: `Called pre-close, graded on the next session's actual print — ${n.toLocaleString()} days`,
     pct: Math.round((Number(r.touched) / n) * 1000) / 10,
+    n,
+    since: r?.since ?? null,
+  };
+}
+
+/**
+ * Initial Balance extension: of sessions where the IB actually broke, how often
+ * price ran a full 1.0x IB width past the break.
+ *
+ * This is the cleanest sample on the strip. ib_daily_results is UNIQUE(date,
+ * symbol) and written once at 16:30 ET, so every row is one completed session —
+ * no detector firing 171 times inside a day, no re-scoring at read time. The
+ * only replication is ES and NQ on the same date, which do correlate hard, so
+ * the floor is on DISTINCT DATES and the sublabel discloses both numbers.
+ *
+ * Denominator is broken sessions, not all sessions, on purpose: "how far does a
+ * break run" is the question a trader is actually asking at 10:30. Mixing in
+ * contained days would answer a different question and inflate the base.
+ */
+async function ibExtension(): Promise<PublicStat | null> {
+  const pool = await getDb();
+  const { rows } = await pool.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE ext_10 = 1)::int      AS extended,
+      COUNT(*)::int                                AS broke,
+      COUNT(DISTINCT date)::int                    AS sessions,
+      COUNT(DISTINCT symbol)::int                  AS symbols,
+      MIN(date)                                    AS since
+    FROM ib_daily_results
+    WHERE break_side IS NOT NULL AND ext_10 IS NOT NULL
+  `);
+  const r = rows[0];
+  const n = Number(r?.broke ?? 0);
+  const sessions = Number(r?.sessions ?? 0);
+  // Same both-floors rule as ICT: rows alone would let ~15 days of ES+NQ pass.
+  if (n < MIN_N || sessions < MIN_PERIODS) return null;
+  return {
+    key: "ib",
+    label: "IB breaks that extended 1.0x",
+    sublabel: `ES & NQ — ${n.toLocaleString()} broken sessions over ${sessions} days, graded at the close`,
+    pct: Math.round((Number(r.extended) / n) * 1000) / 10,
     n,
     since: r?.since ?? null,
   };
@@ -159,7 +215,7 @@ async function cbReach(): Promise<PublicStat | null> {
 export async function GET() {
   try {
     // allSettled: one empty/missing table must not blank the whole strip.
-    const settled = await Promise.allSettled([emZones(), ictSetups(), cbReach()]);
+    const settled = await Promise.allSettled([emZones(), ictSetups(), cbReach(), ibExtension()]);
     const stats = settled
       .map((s) => (s.status === "fulfilled" ? s.value : null))
       .filter((s): s is PublicStat => s != null)

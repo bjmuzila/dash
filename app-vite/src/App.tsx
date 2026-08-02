@@ -4,29 +4,29 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from '@/components/auth/AuthProvider'
 import LayoutShell from '@/components/shared/LayoutShell'
 // Existing Next client pages, compiled directly via the '@' alias + next/* shims.
-import TradersDashboard from '@/app/traders-dashboard/page'
-import Analytics from '@/app/analytics/page'
+import TradersDashboard from '@/components/pages/TradersDashboard'
+import Analytics from '@/components/pages/Analytics'
 
 // Heavy chart/data pages: code-split per MIGRATION.md (lazy + Suspense).
 // /home uses a seed-swap wrapper (server /proxy/gex read → client /api fetch).
 const Home         = lazy(() => import('./routes/HomeRoute'))
-const OptionsChain = lazy(() => import('@/app/options-chain/page'))
-const Options      = lazy(() => import('@/app/options/page'))
+const OptionsChain = lazy(() => import('@/components/pages/OptionsChain'))
+const Options      = lazy(() => import('@/components/pages/Options'))
 // mult-greek/page.tsx is a server component; mount its client UI (named export).
 const MultGreek    = lazy(() => import('@/app/mult-greek/MultGreekClient').then((m) => ({ default: m.MultGreekClient })))
-const Em           = lazy(() => import('@/app/em/page'))
-const Flow         = lazy(() => import('@/app/flow/page'))
-const EsCandles    = lazy(() => import('@/app/es-candles/page'))
-const Scanner      = lazy(() => import('@/app/scanner/page'))
-const Ict          = lazy(() => import('@/app/ict/page'))
-const Trading      = lazy(() => import('@/app/trading/page'))
-const Confidence   = lazy(() => import('@/app/confidence-score/page'))
-const Fails        = lazy(() => import('@/app/fails/page'))
-const Premarket    = lazy(() => import('@/app/premarket/page'))
-const EconCalendar = lazy(() => import('@/app/economic-calendar/page'))
-const TestLab      = lazy(() => import('@/app/test/page'))
-const StrikeHistory = lazy(() => import('@/app/strike-history/page'))
-const Replay       = lazy(() => import('@/app/replay/page'))
+const Em           = lazy(() => import('@/components/pages/Em'))
+const Flow         = lazy(() => import('@/components/pages/Flow'))
+const EsCandles    = lazy(() => import('@/components/pages/EsCandles'))
+const Scanner      = lazy(() => import('@/components/pages/Scanner'))
+const Ict          = lazy(() => import('@/components/pages/Ict'))
+const Trading      = lazy(() => import('@/components/pages/Trading'))
+const Confidence   = lazy(() => import('@/components/pages/ConfidenceScore'))
+const Fails        = lazy(() => import('@/components/pages/Fails'))
+const Premarket    = lazy(() => import('@/components/pages/Premarket'))
+const EconCalendar = lazy(() => import('@/components/pages/EconomicCalendar'))
+const TestLab      = lazy(() => import('@/components/pages/TestLab'))
+const StrikeHistory = lazy(() => import('@/components/pages/StrikeHistory'))
+const Replay       = lazy(() => import('@/components/pages/Replay'))
 
 const S = (el: ReactNode) => <Suspense fallback={null}>{el}</Suspense>
 

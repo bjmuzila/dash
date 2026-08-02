@@ -14,7 +14,7 @@ import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockSlider, DockExpiry
 // the overlay is the actual chain — every column, greek and basis control — not
 // a second, drifting copy. lazy() keeps it out of this page's initial bundle:
 // nothing loads until the first double-click.
-const OptionsChainPage = lazy(() => import("@/app/options-chain/page"));
+const OptionsChainPage = lazy(() => import("@/components/pages/OptionsChain"));
 // expirations always fetched fresh — no cache import needed
 
 // ── Constants ─────────────────────────────────────────────────────────────────

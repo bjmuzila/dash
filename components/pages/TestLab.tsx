@@ -8,8 +8,8 @@ import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { SqueezeBoard } from "@/app/squeeze/page";
-import DealerGammaTab from "./DealerGammaTab";
-import GexMapTab from "./GexMapTab";
+import DealerGammaTab from "@/app/test/DealerGammaTab";
+import GexMapTab from "@/app/test/GexMapTab";
 import VolGexFlowPanel from "@/components/dashboard/VolGexFlowPanel";
 
 // ─────────────────────────────────────────────────────────────────────────────

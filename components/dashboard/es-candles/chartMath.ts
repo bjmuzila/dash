@@ -72,6 +72,13 @@ export function etMinutesOfDay(ts: number): number {
 // simply CLAMP at the pre-15:30 max instead. See the bubble draw.
 export const BUBBLE_SCALE_CUTOFF_MIN = 15 * 60 + 30;
 
+// Cash session bounds in minutes past ET midnight. Single-sourced because three
+// things now read them — isCashOpen below, etSessionStarted, and the replay
+// transport's RTH/ETH switch — and a session that started at 09:30 in one place
+// and 09:35 in another would be a genuinely miserable bug to see.
+export const RTH_OPEN_MIN = 9 * 60 + 30;   // 09:30 ET
+export const RTH_CLOSE_MIN = 16 * 60;      // 16:00 ET
+
 // Is SPX CASH open (Mon–Fri 09:30–16:00 ET)? The live basis (ES − spot) is only
 // measurable while cash trades. Out of hours `spot` is a frozen last print while ES
 // keeps moving, so their difference stops being a basis at all.
@@ -83,7 +90,21 @@ export function isCashOpen(ts: number = Date.now()): boolean {
   const mm = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
   if (hh < 0) return false;
   const mins = hh * 60 + mm;
-  return mins >= 9 * 60 + 30 && mins < 16 * 60; // 09:30–16:00 ET
+  return mins >= RTH_OPEN_MIN && mins < RTH_CLOSE_MIN;
+}
+
+/**
+ * Is this timestamp on a Saturday or Sunday in ET?
+ *
+ * Exists because "there are rows for that day" is NOT the same as "that day
+ * traded". The TastyTrade streamer keeps its last-known greeks cached, and
+ * gex-history-writer has no market-hours gate — so all weekend it writes a
+ * frozen copy of Friday's book once a minute, stamped with Saturday's date.
+ * Any "newest day with data" rule walks straight into those.
+ */
+export function isEtWeekend(ts: number): boolean {
+  const wd = ET_HM_FMT.formatToParts(new Date(ts)).find((p) => p.type === "weekday")?.value ?? "";
+  return wd === "Sat" || wd === "Sun";
 }
 
 /**
@@ -102,20 +123,6 @@ export function isCashOpen(ts: number = Date.now()): boolean {
  * behaves like today, and the day-of-data anchoring downstream still falls back
  * to the newest session present in whatever comes back.
  */
-/**
- * Is this timestamp on a Saturday or Sunday in ET?
- *
- * Exists because "there are rows for that day" is NOT the same as "that day
- * traded". The TastyTrade streamer keeps its last-known greeks cached, and
- * gex-history-writer has no market-hours gate — so all weekend it writes a
- * frozen copy of Friday's book once a minute, stamped with Saturday's date.
- * Any "newest day with data" rule walks straight into those.
- */
-export function isEtWeekend(ts: number): boolean {
-  const wd = ET_HM_FMT.formatToParts(new Date(ts)).find((p) => p.type === "weekday")?.value ?? "";
-  return wd === "Sat" || wd === "Sun";
-}
-
 export function etSessionStarted(ts: number = Date.now()): boolean {
   const parts = ET_HM_FMT.formatToParts(new Date(ts));
   const wd = parts.find((p) => p.type === "weekday")?.value ?? "";
@@ -123,7 +130,7 @@ export function etSessionStarted(ts: number = Date.now()): boolean {
   const hh = Number(parts.find((p) => p.type === "hour")?.value ?? -1);
   const mm = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
   if (hh < 0) return false;
-  return hh * 60 + mm >= 9 * 60 + 30;
+  return hh * 60 + mm >= RTH_OPEN_MIN;
 }
 
 /** Minutes-since-ET-midnight for a slot timestamp. */

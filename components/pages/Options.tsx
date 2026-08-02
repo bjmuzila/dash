@@ -11,9 +11,9 @@ import SpxHeatmap from "@/components/spx/SpxHeatmap";
 import SectorSunburst from "@/components/dashboard/SectorSunburst";
 import GexChangeTop from "@/components/scanner/GexChangeTop";
 import IbLevelCanvas from "@/components/scanner/IbLevelCanvas";
-import { TickerProvider, useTicker } from "./tickerContext";
-import TickerSelect from "./TickerSelect";
-import OptionsPlaceholder from "./OptionsPlaceholder";
+import { TickerProvider, useTicker } from "@/app/options/tickerContext";
+import TickerSelect from "@/app/options/TickerSelect";
+import OptionsPlaceholder from "@/app/options/OptionsPlaceholder";
 
 /**
  * Options dashboard.

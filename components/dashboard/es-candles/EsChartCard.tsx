@@ -28,12 +28,6 @@ import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { useGexSocket, type GexMessage } from "@/lib/gexSocket";
 import { dedupeFetch } from "@/lib/dedupeFetch";
-// cachedJson, NOT dedupeFetch, for the page-GLOBAL reads below (levels, mvc,
-// basis, eod-gex). dedupeFetch only collapses requests that overlap in time; it
-// cannot help three cards whose 60s polls land 40ms apart, or a card that mounts
-// a second after its siblings. Those are sequential, so every one of them used
-// to open its own socket. See the header of lib/sharedCache.ts.
-import { cachedJson, HttpError } from "@/lib/sharedCache";
 // The flip is computed HERE with findGEXFlip, same as the home page, so the two
 // pages agree by construction. Do NOT source it from mvc_snapshots.gexFlip: both
 // recorders (scripts/auto-snapshot-mvc.js, server-v2/mvc-auto-snapshot.js) fall
@@ -50,7 +44,7 @@ import type { EsCandleRecord } from "@/lib/snapdb";
 
 import {
   toChartTime, etDayKey, fmtEtHM, isPlausibleBasis, etMinutesOfDay, BUBBLE_SCALE_CUTOFF_MIN,
-  isCashOpen, etSessionStarted, isEtWeekend, etMinutes, buildVolumeProfile, TPO_PERIOD_MS, buildTpoProfile, SLOT_MS, slotFloorMs,
+  isCashOpen, etSessionStarted, isEtWeekend, etMinutes, RTH_OPEN_MIN, RTH_CLOSE_MIN, buildVolumeProfile, TPO_PERIOD_MS, buildTpoProfile, SLOT_MS, slotFloorMs,
   SPOT_LINE_GRAY, EM_VIOLET, parseLevelNum, DEFAULT_VIEW_BARS, DEFAULT_VIEW_RIGHT_PAD, applyDefaultView,
   deriveColumnLevels, gexColor,
   type GexCell, type GexColumn, type GexMetric, type VolumeProfile, type TpoProfile,
@@ -327,22 +321,12 @@ export default function EsChartCard({
   // i.e. esClose ± em, and SPY/QQQ natively.
   const [emWeekly, setEmWeekly] = useState<{ up: number; down: number; exp: string } | null>(null);
   useEffect(() => {
-    // Wait for the slot restore. `symbol` initialises to "ES" and only becomes
-    // this card's real ticker in the restore effect below, which sets
-    // settingsLoaded in the SAME batch — so without this guard a three-card row
-    // where cards 2 and 3 are SPY/QQQ fired /api/levels?ticker=ES three times on
-    // load and then fetched SPY and QQQ anyway. Three requests, all discarded.
-    if (!settingsLoaded) return;
     let cancelled = false;
     const load = async () => {
       try {
-        // Cached: the two /api/levels effects in THIS card plus every sibling
-        // card on the same symbol collapse to one request. 150s = half the poll
-        // below, so a real tick always crosses the TTL and refetches.
-        const j = await cachedJson<Record<string, unknown>>(
-          `/api/levels?ticker=${encodeURIComponent(sym.key)}`,
-          { ttlMs: 150_000, persist: true },
-        );
+        const r = await fetch(`/api/levels?ticker=${encodeURIComponent(sym.key)}`, { cache: "no-store" });
+        if (!r.ok) { if (!cancelled) setEmWeekly(null); return; }
+        const j = await r.json();
         if (cancelled) return;
         const up = parseLevelNum(j?.up);
         const down = parseLevelNum(j?.down);
@@ -350,18 +334,14 @@ export default function EsChartCard({
         // they were struck for has passed, so "missing" is the correct signal to
         // draw nothing rather than to fall back to a stale band.
         setEmWeekly(up != null && down != null ? { up, down, exp: String(j?.exp_label ?? "") } : null);
-      } catch (e) {
-        // An HTTP error is the old `!r.ok` branch: the ticker has no row, so
-        // clear the band. A network blip keeps the last good one.
-        if (!cancelled && e instanceof HttpError) setEmWeekly(null);
-      }
+      } catch { /* keep the last good band rather than blanking on a blip */ }
     };
     load();
     // 5 min, matching HomeClient. The band is frozen weekly, so this only exists
     // to pick up the Friday publish (and a mid-week republish) without a reload.
     const id = setInterval(load, 300_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [settingsLoaded, sym.key]);
+  }, [sym.key]);
 
   // Chart candles: 2-day rolling window, deliberately matched to the GEX
   // retention. The heatmap's historical columns resolve via timeToCoordinate,
@@ -715,6 +695,28 @@ export default function EsChartCard({
   // Which ET day to replay. null = latest available day (live default). Lets the
   // user step back to the previous session (e.g. replay Friday over the weekend).
   const [replayDay, setReplayDay] = useState<string | null>(null);
+  /**
+   * Which part of the day the cursor may travel over.
+   *
+   *   rth — 09:30–16:00 ET. What a session replay usually means: it starts at
+   *         the open and ends at the close, instead of spending most of the
+   *         scrubber on an overnight tape where nothing happened.
+   *   eth — the whole ET day, which is what this always did.
+   *
+   * Names and bounds match the `session` param the levels route already uses
+   * (rth-eth-switch.patch), so the two can't mean different things.
+   *
+   * Defaults to eth — a toggle that silently changes what Replay does the first
+   * time you open it after an update is worse than one you have to press once.
+   *
+   * This filters the FRAMES, not the reveal: at a 10:00 cursor you still see the
+   * overnight bars behind you, because "everything up to here" is what a replay
+   * is. It only decides where the cursor can start, stop and step.
+   */
+  const [replaySession, setReplaySession] = useState<"rth" | "eth">("eth");
+  // Where the cursor was when the session changed, so the switch keeps its place
+  // in TIME rather than reusing a bar index that now means a different bar.
+  const sessionSnapTsRef = useRef<number | null>(null);
   // Distinct ET days present in the rolling window, oldest→newest.
   const replayDays = useMemo(
     () => [...new Set(rows.map((r) => r.date).filter(Boolean))].sort() as string[],
@@ -724,11 +726,21 @@ export default function EsChartCard({
   const activeReplayDay = (replayDay && replayDays.includes(replayDay))
     ? replayDay
     : (replayDays.length ? replayDays[replayDays.length - 1] : "");
-  // Frames = the active ET day's bar timestamps, oldest→newest.
+  // Frames = the active ET day's bar timestamps, oldest→newest, narrowed to the
+  // chosen session. Half-days are deliberately not special-cased: an early close
+  // just yields fewer frames, which is exactly right, and there is no holiday
+  // calendar in this file to consult anyway.
   const replayFrames = useMemo(() => {
     if (!activeReplayDay) return [] as number[];
-    return rows.filter((r) => r.date === activeReplayDay).map((r) => r.timestamp);
-  }, [rows, activeReplayDay]);
+    const day = rows.filter((r) => r.date === activeReplayDay);
+    const src = replaySession === "rth"
+      ? day.filter((r) => {
+          const m = etMinutesOfDay(r.timestamp);
+          return m >= RTH_OPEN_MIN && m < RTH_CLOSE_MIN;
+        })
+      : day;
+    return src.map((r) => r.timestamp);
+  }, [rows, activeReplayDay, replaySession]);
   const replayTs = replayOn && replayFrames.length
     ? replayFrames[Math.min(replayIdx, replayFrames.length - 1)]
     : null;
@@ -747,6 +759,18 @@ export default function EsChartCard({
   useEffect(() => {
     if (replayIdx > replayFrames.length - 1) setReplayIdx(Math.max(0, replayFrames.length - 1));
   }, [replayFrames.length, replayIdx]);
+
+  // Session switch: land on the same INSTANT in the new frame set. Clamping the
+  // old index instead would jump you somewhere arbitrary — index 5 of the ETH
+  // day is deep in the overnight, index 5 of RTH is ten past the open. Snapping
+  // ETH→RTH before the open lands on the first RTH bar, which is the only
+  // sensible answer when the instant you were at no longer exists.
+  useEffect(() => {
+    const ts = sessionSnapTsRef.current;
+    if (ts == null) return;
+    sessionSnapTsRef.current = null;
+    if (replayFrames.length) setReplayIdx(frameIdxAtOrBefore(replayFrames, ts));
+  }, [replayFrames]);
   // ── Replay: reconstruct the GEX-by-strike column at the cursor ─────────────
   // The heatmap already retains full per-slot per-strike history in columnsRef,
   // so during replay we read the stored column at/nearest-below the cursor and
@@ -787,9 +811,9 @@ export default function EsChartCard({
     if (!shared || !replayOwner) return;
     broadcastSlot(cfgSlot, {
       rpOn: replayOn, rpPlaying: replayPlaying, rpTs: replayTs,
-      rpSpeed: replaySpeed, rpDay: replayDay,
+      rpSpeed: replaySpeed, rpDay: replayDay, rpSession: replaySession,
     });
-  }, [shared, replayOwner, cfgSlot, replayOn, replayPlaying, replayTs, replaySpeed, replayDay]);
+  }, [shared, replayOwner, cfgSlot, replayOn, replayPlaying, replayTs, replaySpeed, replayDay, replaySession]);
 
   // ── Page-hosted Replay button ──────────────────────────────────────────────
   // The toolbar above owns the BUTTON; this card owns the STATE, because only it
@@ -981,9 +1005,6 @@ export default function EsChartCard({
   weeklyEmRef.current = weeklyEm;
   useEffect(() => {
     if (!indicators.weeklyEm) { setWeeklyEm(null); return; }
-    // Same restore guard as the emWeekly effect above: `isEs` and `sym.gexSymbol`
-    // are both derived from `symbol`, which is "ES" until the slot restore lands.
-    if (!settingsLoaded) return;
     let cancelled = false;
     (async () => {
       try {
@@ -995,12 +1016,9 @@ export default function EsChartCard({
         // rot, and it keeps the EM band in the same coordinate system as the
         // walls, the flip and CB.
         const ticker = isEs ? "SPX" : sym.gexSymbol.replace(/^\$/, "");
-        // Shares the cache entry with the emWeekly effect above whenever the two
-        // resolve to the same ticker (always, on SPY/QQQ).
-        const json = await cachedJson<Record<string, unknown> | null>(
-          `/api/levels?ticker=${encodeURIComponent(ticker)}`,
-          { ttlMs: 150_000, persist: true },
-        );
+        const res = await fetch(`/api/levels?ticker=${encodeURIComponent(ticker)}`, { cache: "no-store" });
+        if (!res.ok) { console.warn("[weekly-em] HTTP", res.status, "— band not drawn"); return; }
+        const json = await res.json();
         if (cancelled || !json) return;
         const up = parseLevelNum(json.up);
         const down = parseLevelNum(json.down);
@@ -1013,7 +1031,7 @@ export default function EsChartCard({
       }
     })();
     return () => { cancelled = true; };
-  }, [settingsLoaded, indicators.weeklyEm, isEs, sym.gexSymbol]);
+  }, [indicators.weeklyEm, isEs, sym.gexSymbol]);
 
   // ── Restore this slot's settings ───────────────────────────────────────────
   // ONE effect for the whole card. Read in an effect, not in a lazy useState
@@ -1072,6 +1090,9 @@ export default function EsChartCard({
       setReplayIdx(frameIdxAtOrBefore(replayFramesRef.current, p.rpTs));
     }
     if (typeof p.rpSpeed === "number") setReplaySpeed(p.rpSpeed);
+    // Followers take the session too, or a chart quietly replays a different
+    // slice of the day than the one whose transport you are holding.
+    if (p.rpSession === "rth" || p.rpSession === "eth") setReplaySession(p.rpSession);
     if (typeof p.rpDay === "string" || p.rpDay === null) setReplayDay(p.rpDay as string | null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1753,9 +1774,18 @@ export default function EsChartCard({
         // see — a remount or a second consumer slips past it. Two identical
         // concurrent GETs can only want the same bytes, so they share one
         // request. Not a cache: the entry is dropped as soon as it settles.
+        // holdMs: the bare concurrency collapse only worked while the two
+        // firings happened to overlap. This effect fires once on settingsLoaded
+        // and again when selectedExpiry resolves, and once the expiry started
+        // resolving from sessionStorage instead of the network the second firing
+        // landed AFTER the first request settled — so dedupeFetch saw no overlap
+        // and all three cards fetched twice (6 requests, ~2.2MB). Holding the
+        // settled entry 20s makes the collapse independent of that timing. Safe:
+        // this is history, and /ws/gex keeps the newest column current.
         const res = await dedupeFetch(
           `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=${minutes}&expiry=${encodeURIComponent(urlExpiry)}${isFront ? "&anyExpiry=1" : ""}&symbol=${encodeURIComponent(sym.gexSymbol)}${topStrikes > 0 ? `&top=${topStrikes}` : ""}`,
-          { cache: "no-store" }
+          { cache: "no-store" },
+          20_000,
         );
         if (!res.ok) {
           console.warn("[gex-backfill] HTTP", res.status, "— heatmap/bubble history will be empty");
@@ -1903,12 +1933,6 @@ export default function EsChartCard({
   // a line ~10x off-scale. On a non-ES symbol this clears the series instead.
   useEffect(() => {
     if (!isEs) { setMvcHistory([]); return; }
-    // `isEs` is true for a freshly-mounted card REGARDLESS of its saved symbol,
-    // because `symbol` initialises to "ES". Without this guard a three-card row
-    // fetched this 11.6 kB payload three times on load — byte-identical, since
-    // mvc_snapshots is SPX-global — and two of the three cards then turned out
-    // to be SPY/QQQ and threw their copy away.
-    if (!settingsLoaded) return;
     let cancelled = false;
     const load = async () => {
       try {
@@ -1916,14 +1940,9 @@ export default function EsChartCard({
         // and the default read is a `SELECT *`, so this was ~94KB on every load
         // to draw one step line and derive the basis. This page only ever reads
         // timestamp / strikeOIVol / spxPrice / esPrice.
-        //
-        // Cached at half the 60s poll: the payload carries no per-card
-        // parameter, so two ES cards want literally the same bytes. Not
-        // persisted — this one ticks.
-        const json = await cachedJson<{ rows?: unknown; cols?: unknown; lite?: number }>(
-          `/api/snapshots/mvc?limit=1000&lite=1`,
-          { ttlMs: 30_000 },
-        );
+        const res = await fetch(`/api/snapshots/mvc?limit=1000&lite=1`, { cache: "no-store" });
+        if (!res.ok) return;
+        const json = await res.json();
         const rawRows = Array.isArray(json.rows) ? json.rows : [];
         // Expand tuples → records. Falls back to the legacy object rows when the
         // backend hasn't been deployed yet, so the client can ship independently.
@@ -1979,7 +1998,7 @@ export default function EsChartCard({
     void load();
     const id = setInterval(load, 60_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [settingsLoaded, isEs]);
+  }, [isEs]);
 
 
   // THE basis used for every SPX→ES conversion on this page (levels, rail, heatmap,
@@ -2281,21 +2300,12 @@ export default function EsChartCard({
   // deliberately short-circuiting anyway.
   useEffect(() => {
     if (!isEs) return;
-    // Restore guard, same as the mvc poll: every card is momentarily "ES", and
-    // this endpoint returns ONE number plus a day map — nothing per-card about
-    // it. It was being pulled four times on a three-card load.
-    if (!settingsLoaded) return;
     let cancelled = false;
     const pull = async () => {
       try {
-        // 5 min TTL against a 30 min poll. The basis decays about a point a day,
-        // so a 5-minute-old reading is indistinguishable from a fresh one — and
-        // persisting it means a reload draws correct levels before the network
-        // answers, instead of falling through to the unreliable live derivation.
-        const j = await cachedJson<{ basis?: unknown; days?: unknown }>(
-          "/proxy/es-spx-basis",
-          { ttlMs: 300_000, persist: true },
-        );
+        const res = await fetch("/proxy/es-spx-basis", { cache: "no-store" });
+        if (!res.ok) { console.warn(`[basis] trusted basis HTTP ${res.status}`); return; }
+        const j = await res.json();
         const b = Number(j?.basis);
         if (cancelled) return;
         if (isPlausibleBasis(b)) {
@@ -2324,7 +2334,7 @@ export default function EsChartCard({
     void pull();
     const id = setInterval(pull, 1_800_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [settingsLoaded, isEs]);
+  }, [isEs]);
 
   // Keep basisRef live for the right-axis dual ES/SPX formatter even when no
   // WS frame has arrived recently. Mirrors the server's authoritative
@@ -2371,20 +2381,9 @@ export default function EsChartCard({
       // Prior-day SPX close from eod_gex. Prefer the row matching the ES date;
       // else the most recent SPX EOD available.
       try {
-        // Prior-day closes: they change once a day at 16:00 ET, and the same 30
-        // rows serve every card. 10 min TTL + persist means this is fetched once
-        // per session rather than once per card per history reload — and after a
-        // reload the anchor is available synchronously, which matters because the
-        // fallback here is the "levels are off by ~50pt" path.
-        const json = await cachedJson<{ rows?: unknown }>(
-          `/api/eod-gex?symbol=$SPX&limit=30`,
-          { ttlMs: 600_000, persist: true },
-        ).catch((e) => {
-          if (e instanceof HttpError) console.warn(`[basis] NO ANCHOR: /api/eod-gex HTTP ${e.status}`);
-          else console.warn("[basis] NO ANCHOR: /api/eod-gex failed:", e);
-          return null;
-        });
-        if (!json) return;
+        const res = await fetch(`/api/eod-gex?symbol=$SPX&limit=30`, { cache: "no-store" });
+        if (!res.ok) { console.warn(`[basis] NO ANCHOR: /api/eod-gex HTTP ${res.status}`); return; }
+        const json = await res.json();
         const spxRows: Array<{ date: string; spot: number }> = Array.isArray(json.rows) ? json.rows : [];
         const match = spxRows.find((r) => r.date === esDate) ?? spxRows[0];
         const spxClose = Number(match?.spot ?? 0);
@@ -4155,16 +4154,35 @@ export default function EsChartCard({
           return new Date(y, m - 1, day, 12).toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
         };
         const go = (d: string) => { setReplayDay(d); setReplayPlaying(false); setReplayIdx(0); };
+        // Remember the instant BEFORE the frames change; the effect above lands
+        // it on the new grid once the memo has recomputed.
+        const goSession = (v: "rth" | "eth") => {
+          sessionSnapTsRef.current = replayTs;
+          setReplayPlaying(false);
+          setReplaySession(v);
+        };
         return (
           <div className="flex items-center gap-1">
             <DockButton onClick={() => { if (di > 0) go(replayDays[di - 1]); }} title="Previous day"><span>◀</span></DockButton>
             <span style={{ fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)", color: HOME_THEME.cyan, minWidth: 78, textAlign: "center", whiteSpace: "nowrap" }}>{fmtDay(activeReplayDay)}</span>
             <DockButton onClick={() => { if (di >= 0 && di < replayDays.length - 1) go(replayDays[di + 1]); }} title="Next day"><span>▶</span></DockButton>
+            {/* Which slice of the day the cursor travels over. Sits with the day
+                picker because it answers the same question — WHICH bars — while
+                play/scrub/speed all answer HOW you move through them. */}
+            <SegGroup
+              options={[{ label: "RTH", value: "rth" }, { label: "ETH", value: "eth" }]}
+              active={replaySession}
+              onChange={(v) => goSession(v === "rth" ? "rth" : "eth")}
+            />
           </div>
         );
       })()}
       {replayFrames.length === 0 ? (
-        <span style={{ fontSize: 12, color: HOME_THEME.muted }}>No bars for this day — step ◀ / ▶ to another session.</span>
+        <span style={{ fontSize: 12, color: HOME_THEME.muted }}>
+          {replaySession === "rth"
+            ? "No RTH bars for this day — try ETH, or step ◀ / ▶ to another session."
+            : "No bars for this day — step ◀ / ▶ to another session."}
+        </span>
       ) : (
         <>
           <div className="flex items-center gap-1">

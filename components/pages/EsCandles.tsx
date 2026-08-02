@@ -70,17 +70,45 @@ const PANEL_OPTIONS: Array<{ label: string; value: SidePanelKind }> = [
 /** Which popover is open. Exactly one at a time — two hovering panels would overlap. */
 type Popover = "charts" | "replay" | "indicators" | null;
 
+// ── Popover metrics ──────────────────────────────────────────────────────────
+// Every control in the menu is laid out against these three numbers so the boxes
+// land on ONE line across all four groups.
+//
+// The first pass let each group size itself, and the result was a staircase: a
+// captioned field is taller than a bare toggle, so "Cloud" sat 16px above the
+// LEN box beside it, and the whole STUDY group rode higher than BOLLINGER
+// because only one of them had a caption. Two rules fix it and neither can be
+// fudged per-group — a fixed row height, and bottom alignment inside the row, so
+// captions grow UPWARD into space the row already reserved instead of pushing
+// their input down past its neighbours.
+const CTRL_H = 30;   // every toggle and input
+const CAP_H = 13;    // the caption line above an input
+const CAP_GAP = 3;
+const ROW_H = CAP_H + CAP_GAP + CTRL_H;
+
 /**
  * A labelled group inside a popover. Popovers are dense by nature, so the label
- * is small, uppercase and quiet, and the control sits right under it.
+ * is small, uppercase and quiet, and the controls sit right under it.
+ *
+ * The row is a FIXED height and bottom-aligned — see the note above. A group
+ * with no captioned fields still reserves the caption line, which is what keeps
+ * EMA's toggles level with BOLLINGER's inputs.
  */
 function Group({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase", color: HOME_THEME.muted, whiteSpace: "nowrap" }}>
+      <span style={{
+        fontSize: 10, fontWeight: 800, letterSpacing: ".08em", textTransform: "uppercase",
+        color: HOME_THEME.muted, whiteSpace: "nowrap",
+        // Explicit line box: the group labels are the top edge every column is
+        // measured from, and an inherited line-height differs by font stack.
+        height: 12, lineHeight: "12px",
+      }}>
         {label}
       </span>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>{children}</div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 8, minHeight: ROW_H }}>
+        {children}
+      </div>
     </div>
   );
 }
@@ -110,7 +138,11 @@ function NumField({
       }}
       style={{
         width,
-        height: 30,
+        height: CTRL_H,
+        // border-box, or the 1px border makes these 32px tall while a control
+        // that sets box-sizing elsewhere stays 30 — a 2px stagger that is
+        // invisible in isolation and obvious in a row of eight.
+        boxSizing: "border-box",
         padding: "0 8px",
         borderRadius: 8,
         border: `1px solid ${HOME_THEME.border}`,
@@ -131,8 +163,14 @@ function NumField({
  */
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <span style={{ display: "inline-flex", flexDirection: "column", gap: 2 }}>
-      <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.75, paddingLeft: 2 }}>
+    <span style={{ display: "inline-flex", flexDirection: "column", gap: CAP_GAP }}>
+      <span style={{
+        fontSize: 9, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase",
+        color: HOME_THEME.muted, opacity: 0.75, paddingLeft: 2,
+        // Fixed, so caption + gap + control is exactly ROW_H and the box below
+        // lands on the same baseline as every uncaptioned control in the row.
+        height: CAP_H, lineHeight: `${CAP_H}px`, whiteSpace: "nowrap",
+      }}>
         {label}
       </span>
       {children}
@@ -163,7 +201,8 @@ function Toggle({
       title={title}
       aria-pressed={on}
       style={{
-        height: 30,
+        height: CTRL_H,
+        boxSizing: "border-box",
         padding: "0 10px 0 7px",
         borderRadius: 8,
         border: `1px solid ${on ? LIGHT_BLUE : HOME_THEME.border}`,
@@ -444,7 +483,11 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
             boxShadow: "0 18px 48px rgba(0,0,0,0.55)",
             display: "flex",
             alignItems: "flex-start",
-            gap: 18,
+            // Column gap wide enough to read as separate groups, row gap for the
+            // narrow-window wrap. Groups are fixed-height, so a wrapped second
+            // line stays as straight as the first.
+            columnGap: 22,
+            rowGap: 14,
             flexWrap: "wrap",
             maxHeight: "min(60vh, 520px)",
             overflowY: "auto",
@@ -496,7 +539,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                   and no way to tell which one was the switch. */}
               <Group label="EMA">
                 {indicators.emas.slice(0, MAX_EMAS).map((e, i) => (
-                  <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  <span key={i} style={{ display: "inline-flex", alignItems: "flex-end", gap: 5 }}>
                     <Toggle
                       on={e.on}
                       onClick={() => patchEma(i, { on: !e.on })}

@@ -13,7 +13,7 @@ import IbStatsTab from "@/components/scanner/IbStatsTab";
 // (same pattern as the Chain tab reusing /options-chain below) rather than the
 // trimmed EsCandlesFullPanel embed — that panel has no dock, and no bubbles /
 // TPO / profile / VSA, which is precisely what the toolbar is for.
-import EsCandlesPage from "@/app/es-candles/page";
+import EsCandlesPage from "@/components/pages/EsCandles";
 import HomeGaugeRail from "@/components/dashboard/HomeGaugeRail";
 import { useIbDirection } from "@/hooks/useIbDirection";
 import EconCalendarDiscordBtn, { EconCalendarTemplateCopyBtn } from "@/components/shared/EconCalendarDiscordBtn";
@@ -22,7 +22,7 @@ import GexToolbar from "@/components/dashboard/GexToolbar";
 // Reuse the exact standalone /options-chain component for the heatmap panel's
 // "Chain" tab. expirySelection="key" = compact 0DTE/1DTE/weekly/monthly columns
 // (same embed the /new-home page uses); ticker hides its own ticker input.
-import OptionsChainPage from "@/app/options-chain/page";
+import OptionsChainPage from "@/components/pages/OptionsChain";
 import FitScale from "@/components/shared/FitScale";
 import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
 import StrikeHoverCard from "@/components/dashboard/StrikeHoverCard";
