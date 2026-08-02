@@ -97,9 +97,10 @@ const fromLocalInput = (v: string) => { const t = new Date(v).getTime(); return 
 // HOME_THEME.red is a real red.
 const T = { green: "#22C55E", red: HT.red };
 
-// Softer secondary text — a real muted gray, not the theme's flat white, so
-// labels/captions read one step back from primary values.
-const SOFT = "rgba(255,255,255,0.55)";
+// Secondary text. Full white — hierarchy on this page is carried by SIZE and
+// WEIGHT (11px/800 caps labels vs 29px/700 values), not by dimming, so a
+// half-opacity gray just made captions hard to read on a dark panel.
+const SOFT = HT.text;
 
 /**
  * Page-local flat card. The shared Card carries a faint radial highlight + drop
@@ -1118,11 +1119,10 @@ export default function TradingPage() {
   // page; the only color in here is data encoding (green = made money, red =
   // lost money) and the verdict line. Color used as decoration makes eight
   // cards look like eight unrelated widgets.
-  const VERDICT_TONE: Record<string, { color: string; icon: string }> = {
-    bad:  { color: "#FCA5A5", icon: "⚠" },
-    warn: { color: "#FCD34D", icon: "◆" },
-    good: { color: "#86EFAC", icon: "✓" },
-    info: { color: SOFT,      icon: "›" },
+  // Tone is carried by TEXT COLOUR alone — no ⚠ / ✓ glyph. An icon on every
+  // card turns the strip into a row of alarms and stops meaning anything.
+  const VERDICT_TONE: Record<string, string> = {
+    bad: "#FCA5A5", warn: "#FCD34D", good: "#86EFAC", info: SOFT,
   };
 
   /** Section label — neutral, so cards read as one system. */
@@ -1141,21 +1141,18 @@ export default function TradingPage() {
     verdict: React.ReactNode, tone: keyof typeof VERDICT_TONE = "info",
     span?: React.CSSProperties,
   ) => {
-    const v = VERDICT_TONE[tone];
+    const color = VERDICT_TONE[tone] ?? SOFT;
     return (
       <Card padding={16} style={{ display: "flex", flexDirection: "column", minHeight: 168, ...span }}>
         <div style={insightLabelStyle}>
           <span>{label}</span>
           {right != null && <span style={{ fontWeight: 700, color: SOFT }}>{right}</span>}
         </div>
-        <div style={{ marginTop: 11 }}>{body}</div>
+        <div style={{ marginTop: 11, flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>{body}</div>
         <div style={{
           marginTop: "auto", paddingTop: 11, borderTop: `1px solid ${HT.border}`,
-          display: "flex", gap: 7, alignItems: "flex-start",
-          fontSize: 12, lineHeight: 1.5, color: v.color,
-        }}>
-          <span style={{ flex: "0 0 auto" }}>{v.icon}</span><span>{verdict}</span>
-        </div>
+          fontSize: 12, lineHeight: 1.5, color,
+        }}>{verdict}</div>
       </Card>
     );
   };
@@ -1292,14 +1289,11 @@ export default function TradingPage() {
                     {barRow("Winners", pctOf(leaks.avgWinDur, Math.max(leaks.avgWinDur, leaks.avgLossDur)), fmtDur(leaks.avgWinDur), T.green)}
                     {barRow("Losers", pctOf(leaks.avgLossDur, Math.max(leaks.avgWinDur, leaks.avgLossDur)), fmtDur(leaks.avgLossDur), T.red)}
                   </div>
-                  {pillRow([
-                    <>Held &gt;{fmtDur(leaks.longHoldThr)} {strong(fmt$(leaks.nursedPnl), T.red)}</>,
-                    <>{leaks.nursedCt} trades</>,
-                  ])}
+                  {pillRow([<>&gt;{fmtDur(leaks.longHoldThr)} {strong(fmt$(leaks.nursedPnl), T.red)}</>, <>{leaks.nursedCt} trades</>])}
                 </>,
                 leaks.holdRatio > 1.4
-                  ? <>You cut winners and nurse losers. Those {leaks.nursedCt} long-held losers cost {strong(fmt$(leaks.nursedExcess), T.red)} more than an average loss would have.</>
-                  : <>Hold times are symmetric — losers aren&apos;t being nursed. Nothing to fix here.</>,
+                  ? <>Cutting the {leaks.nursedCt} long-held losers: {strong(fmt$(leaks.nursedExcess), T.green)}</>
+                  : <>Hold times are symmetric.</>,
                 leaks.holdRatio > 1.4 ? "bad" : "good")}
 
               {/* Overtrading curve */}
@@ -1313,31 +1307,31 @@ export default function TradingPage() {
                       <>{winTxt(r.win)} · {fmt$(r.pnl)}</>,
                       r.pnl >= 0 ? T.green : T.red, r.label))}
                   </div>
-                  {pillRow([<>{leaks.pastCt} trades past the cut</>, <>{leaks.seqRows.length ? leaks.seqRows[0].ct : 0} in the first bucket</>])}
+                  {pillRow([<>{leaks.pastCt} past the cut</>])}
                 </>,
                 leaks.deadFrom && leaks.pastCtLoss < 0
-                  ? <>Your edge dies at trade #{leaks.deadFrom.lo}. A hard stop there is worth {strong(fmt$(-leaks.pastCtLoss), T.green)} on this sample.</>
+                  ? <>Hard stop at {leaks.deadFrom.lo - 1} trades: {strong(fmt$(-leaks.pastCtLoss), T.green)}</>
                   : leaks.deadFrom
-                    ? <>Trade #{leaks.deadFrom.lo} is your first losing bucket, but the tail recovers — watch it rather than cap it.</>
-                    : <>Every trade bucket is profitable — no overtrading penalty in this sample.</>,
+                    ? <>First red bucket at #{leaks.deadFrom.lo}, but the tail recovers.</>
+                    : <>Every bucket profitable.</>,
                 leaks.deadFrom && leaks.pastCtLoss < 0 ? "bad" : leaks.deadFrom ? "warn" : "good")}
 
               {/* Revenge trades */}
               {insightCard("Revenge trades", "<5 min after a loss",
                 <>
                   {bigVal(winTxt(leaks.revWinPct), leaks.revWinPct != null && leaks.revWinPct < leaks.baseWin ? T.red : T.green)}
-                  {subLine(<>win rate on {leaks.revCt} trades opened within 5 minutes of closing a red one — vs {strong(`${leaks.baseWin.toFixed(0)}%`)} baseline</>)}
+                  {subLine(<>{leaks.revCt} trades re-entered within 5 min of a loss</>)}
                   <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 12 }}>
                     {barRow("Baseline", leaks.baseWin, `${leaks.baseWin.toFixed(0)}%`, T.green)}
                     {barRow("Revenge", leaks.revWinPct ?? 0, winTxt(leaks.revWinPct), (leaks.revWinPct ?? 0) < leaks.baseWin ? T.red : T.green)}
                   </div>
-                  {pillRow([<>Net {strong(fmt$(leaks.revPnl), leaks.revPnl >= 0 ? T.green : T.red)}</>, <>{leaks.revShare.toFixed(0)}% of all trades</>])}
+                  {pillRow([<>Net {strong(fmt$(leaks.revPnl), leaks.revPnl >= 0 ? T.green : T.red)}</>, <>{leaks.revShare.toFixed(0)}% of trades</>])}
                 </>,
                 leaks.revCt === 0
-                  ? <>You never re-enter within 5 minutes of a loss. That discipline is already in place.</>
+                  ? <>No quick re-entries. Discipline already there.</>
                   : leaks.revPnl < 0
-                    ? <>A 5-minute cooling-off timer after any loser is worth {strong(fmt$(-leaks.revPnl), T.green)} here.</>
-                    : <>Re-entering quickly after a loss hasn&apos;t hurt you — {strong(fmt$(leaks.revPnl), T.green)} on {leaks.revCt} trades.</>,
+                    ? <>A 5-minute cooldown after a loss: {strong(fmt$(-leaks.revPnl), T.green)}</>
+                    : <>Quick re-entries aren&apos;t costing you.</>,
                 leaks.revCt === 0 ? "good" : leaks.revPnl < 0 ? "bad" : "info")}
 
               {/* Fee drag */}
@@ -1352,17 +1346,17 @@ export default function TradingPage() {
                   {pillRow([<>{fmt$(leaks.feePerTrade)} / trade</>, <>{leaks.n} trades</>])}
                 </>,
                 leaks.feePct == null
-                  ? <>No commission data on the imported fills yet.</>
+                  ? <>No commission data on the fills.</>
                   : leaks.feePct > 10
-                    ? <>Roughly one dollar in {Math.round(100 / leaks.feePct)} you make goes to fees. Fewer, larger trades is the lever.</>
-                    : <>Fees are {leaks.feePct.toFixed(1)}% of gross — not where your money is going.</>,
+                    ? <>One dollar in {Math.round(100 / leaks.feePct)} goes to fees.</>
+                    : <>Fees aren&apos;t the leak.</>,
                 leaks.feePct != null && leaks.feePct > 10 ? "warn" : "info")}
 
               {/* Loss-cap discipline */}
               {insightCard("Loss-cap discipline", `${leaks.worstCt} outliers`,
                 <>
                   {bigVal(fmt$(leaks.worstSum), T.red)}
-                  {subLine(<>your worst {leaks.worstCt} losses — {strong(leaks.avgLoss ? `${(leaks.worstCt ? (leaks.worstSum / leaks.worstCt) / leaks.avgLoss : 0).toFixed(1)}×` : "—")} the average loser of {fmt$(leaks.avgLoss)}</>)}
+                  {subLine(<>worst {leaks.worstCt} · {strong(leaks.avgLoss ? `${(leaks.worstCt ? (leaks.worstSum / leaks.worstCt) / leaks.avgLoss : 0).toFixed(1)}×` : "—")} the {fmt$(leaks.avgLoss)} average</>)}
                   <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 12 }}>
                     {barRow("Avg loss", pctOf(leaks.avgLoss, Math.abs(leaks.worstCt ? leaks.worstSum / leaks.worstCt : 1)), fmt$(leaks.avgLoss), LIGHT_BLUE)}
                     {barRow("Worst avg", 100, fmt$(leaks.worstCt ? leaks.worstSum / leaks.worstCt : 0), T.red)}
@@ -1373,8 +1367,8 @@ export default function TradingPage() {
                   ])}
                 </>,
                 leaks.worstShare != null && leaks.worstShare > 25
-                  ? <>Cutting those {leaks.worstCt} at your average loss instead turns {strong(fmt$(leaks.net))} into {strong(fmt$(leaks.cappedNet), T.green)} — without touching a single winner.</>
-                  : <>No outlier losses dominating — your stops are doing their job.</>,
+                  ? <>Cap those {leaks.worstCt} and net goes {strong(fmt$(leaks.cappedNet), T.green)}</>
+                  : <>No outlier losses. Stops are working.</>,
                 leaks.worstShare != null && leaks.worstShare > 25 ? "bad" : "good")}
 
               {/* Size discipline */}
@@ -1387,15 +1381,13 @@ export default function TradingPage() {
                       <>{winTxt(r.win)} · {fmt$(r.pnl)}</>,
                       r.pnl >= 0 ? T.green : T.red, r.label))}
                   </div>
-                  {subLine(leaks.sizeInverted
-                    ? "Win rate falls as size rises — you size up on the setups you're least sure of."
-                    : "Win rate holds or improves as size rises.")}
+                  {subLine(leaks.sizeInverted ? "Win rate falls as size rises." : "Win rate holds as size rises.")}
                 </>,
                 leaks.sizeRows.length < 2
-                  ? <>Every trade is the same size — nothing to compare yet.</>
+                  ? <>One size only — nothing to compare.</>
                   : leaks.sizeInverted
-                    ? <>Biggest size on your worst win rate. Either the conviction read is backwards, or you upsize to make back a loss.</>
-                    : <>Size and conviction are aligned. Your bigger bets are your better ones.</>,
+                    ? <>Biggest size, worst win rate.</>
+                    : <>Size and conviction aligned.</>,
                 leaks.sizeRows.length < 2 ? "info" : leaks.sizeInverted ? "bad" : "good")}
             </div>
 
@@ -1407,31 +1399,45 @@ export default function TradingPage() {
 
               {/* Session P&L by 30 min */}
               {insightCard("Session P&L by 30 min", `${tod.buckets.length ? tod.buckets[0].label : ""}–${tod.buckets.length ? tod.buckets[tod.buckets.length - 1].label : ""}`,
-                <div style={{ display: "flex", gap: 3, alignItems: "stretch" }}>
+                // Columns stretch to whatever height the card ends up at (the
+                // right-hand stack usually sets it), so the strip fills the
+                // card instead of floating in dead space. Bar heights are % of
+                // the flex-sized region, not fixed px, for the same reason.
+                <div style={{ flex: 1, display: "flex", gap: 3, alignItems: "stretch", minHeight: 230 }}>
                   {tod.buckets.map((b) => {
-                    const h = Math.round(pctOf(b.pnl, tod.maxAbs) * 0.58) + (b.ct ? 3 : 0);
                     const pos = b.pnl >= 0;
+                    const h = `${Math.max(b.ct ? 2 : 0, pctOf(b.pnl, tod.maxAbs))}%`;
                     return (
                       <div key={b.slot} title={`${b.label} · ${b.ct} trades · ${fmt$(b.pnl)}`}
                         style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                        <div style={{ height: 64, display: "flex", alignItems: "flex-end", width: "100%" }}>
+                        <div style={{ flex: "1 1 0", minHeight: 40, display: "flex", alignItems: "flex-end", width: "100%" }}>
                           {pos && <div style={{ width: "100%", height: h, borderRadius: "3px 3px 0 0", background: T.green }} />}
                         </div>
                         <div style={{ height: 1, width: "100%", background: HT.border }} />
-                        <div style={{ height: 40, display: "flex", alignItems: "flex-start", width: "100%" }}>
+                        <div style={{ flex: "0 0 auto", height: 58, display: "flex", alignItems: "flex-start", width: "100%" }}>
                           {!pos && <div style={{ width: "100%", height: h, borderRadius: "0 0 3px 3px", background: T.red }} />}
                         </div>
-                        <div style={{ fontSize: 9, color: SOFT, whiteSpace: "nowrap" }}>{b.label}</div>
-                        <div style={{ fontSize: 9.5, fontWeight: 700, whiteSpace: "nowrap", color: pos ? T.green : T.red, fontVariantNumeric: "tabular-nums" }}>
-                          {b.ct ? `${b.pnl >= 0 ? "+" : "-"}${Math.abs(b.pnl) >= 1000 ? `${(Math.abs(b.pnl) / 1000).toFixed(1)}k` : Math.abs(b.pnl).toFixed(0)}` : ""}
+                        <div style={{ fontSize: 9, color: SOFT, whiteSpace: "nowrap", opacity: .8 }}>{b.label}</div>
+                        <div style={{ fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", color: pos ? T.green : T.red, fontVariantNumeric: "tabular-nums" }}>
+                          {b.ct ? `${b.pnl >= 0 ? "+" : "-"}${Math.abs(b.pnl) >= 1000 ? `${(Math.abs(b.pnl) / 1000).toFixed(1)}k` : Math.abs(b.pnl).toFixed(0)}` : "·"}
+                        </div>
+                        {/* Volume + hit rate per slot: a fat green bar built on
+                            three trades is not the same finding as one built
+                            on forty, and the strip should say which it is. */}
+                        <div style={{ fontSize: 9, color: SOFT, whiteSpace: "nowrap", opacity: .7, fontVariantNumeric: "tabular-nums" }}>
+                          {b.ct ? `${b.ct}t` : ""}
+                        </div>
+                        <div style={{ fontSize: 9, fontWeight: 700, whiteSpace: "nowrap", opacity: .85, fontVariantNumeric: "tabular-nums",
+                          color: b.win == null ? SOFT : b.win >= 50 ? T.green : T.red }}>
+                          {b.win != null ? `${b.win.toFixed(0)}%` : ""}
                         </div>
                       </div>
                     );
                   })}
                 </div>,
                 tod.best && tod.dead
-                  ? <>Best half hour is {strong(tod.best.label)} at {strong(fmt$(tod.best.pnl), T.green)}; {strong(`${tod.dead.from}–${tod.dead.to}`)} has cost you {strong(fmt$(tod.dead.pnl), T.red)}.</>
-                  : <>Not enough spread across the session to call a pattern yet.</>,
+                  ? <>Best half hour {strong(tod.best.label)} at {strong(fmt$(tod.best.pnl), T.green)} · worst run {strong(`${tod.dead.from}–${tod.dead.to}`)} at {strong(fmt$(tod.dead.pnl), T.red)}</>
+                  : <>Not enough spread to call a pattern yet.</>,
                 "info")}
 
               <div style={{ display: "grid", gap: 12 }}>
