@@ -19,48 +19,32 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
+import {
+  SCANNER_TABS,
+  isScannerTabId,
+  scannerTabHref,
+  type ScannerTabId,
+  type ScannerBarActive,
+} from "./scannerNav";
 
-/** Tabs that render inline on /scanner. */
-export type ScannerTabId =
-  | "overview" | "gex" | "strike" | "watch" | "marketquality"
-  | "tpo" | "ibstats" | "statprompter" | "gexchangetop" | "gexpct";
-
-/** What the bar can mark as current: a /scanner tab, or a split-out route. */
-export type ScannerBarActive = ScannerTabId | "strikehistory" | null;
-
-type TabDef = { id: ScannerTabId; label: string; color: string };
-
-/** Bar order + per-tab accent, matching the original inline markup. */
-export const SCANNER_TABS: TabDef[] = [
-  { id: "overview",     label: "Overview",       color: HOME_THEME.cyan },
-  { id: "gex",          label: "GEX Scanner",    color: HOME_THEME.cyan },
-  { id: "strike",       label: "Strike Query",   color: HOME_THEME.cyan },
-  { id: "watch",        label: "Watch This",     color: LIGHT_BLUE },
-  { id: "marketquality",label: "Market Quality", color: HOME_THEME.orange },
-  { id: "tpo",          label: "TPO Structures", color: LIGHT_BLUE },
-  { id: "ibstats",      label: "IB Stats",       color: HOME_THEME.green },
-  { id: "statprompter", label: "Stat Prompter",  color: LIGHT_BLUE },
-  { id: "gexchangetop", label: "GEX Change Top", color: HOME_THEME.orange },
-  { id: "gexpct",       label: "GEX%",           color: LIGHT_BLUE },
-];
-
-/** Route for a tab when the bar is rendered off /scanner. */
-export const scannerTabHref = (id: ScannerTabId) => `/scanner?tab=${id}`;
-
-export function isScannerTabId(v: string | null | undefined): v is ScannerTabId {
-  return !!v && SCANNER_TABS.some((t) => t.id === v);
-}
-
-/**
- * Reads ?tab= off the current URL without next/navigation's useSearchParams,
- * which would force the whole page under a Suspense boundary at build time.
- * Call from an effect (window is undefined during SSR/prerender).
- */
-export function readTabFromUrl(): ScannerTabId | null {
-  if (typeof window === "undefined") return null;
-  const v = new URLSearchParams(window.location.search).get("tab");
-  return isScannerTabId(v) ? v : null;
-}
+// The tab list, ids and helpers moved to ./scannerNav — a plain data module with
+// no React / next imports — so the GlobalToolbar's ScannerSubStrip can share the
+// exact same list without pulling this component (and next/navigation) into
+// every page bundle. Re-exported here so all existing
+// `from "@/components/scanner/ScannerTabsBar"` imports keep working unchanged.
+export {
+  SCANNER_TABS,
+  SCANNER_ROUTES,
+  SCANNER_GROUPS,
+  SCANNER_SECTION_PATHS,
+  SCANNER_TAB_EVENT,
+  emitScannerTab,
+  isScannerSectionPath,
+  isScannerTabId,
+  scannerTabHref,
+  readTabFromUrl,
+} from "./scannerNav";
+export type { ScannerTabId, ScannerBarActive, TabDef, ScannerRouteDef } from "./scannerNav";
 
 export default function ScannerTabsBar({
   active,

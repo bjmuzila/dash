@@ -5,13 +5,16 @@
  * This module answers "is there a trade, and where are entry / stop / targets" —
  * the numbers a long/short position tool needs to be drawn on the chart.
  *
- * A play has four states:
- *   armed  — the setup is POSSIBLE but has not triggered (pool pierced but the
- *            candle hasn't closed back inside; price approaching an unmitigated
- *            OB / OTE band). Drawn dashed + faded.
- *   live   — the trigger bar has printed and the trade is working. Drawn solid.
+ * A play has three states:
+ *   live   — the trigger bar has printed and the trade is working.
  *   won    — 3R tagged, or the stop was hit after ≥1R of run.
  *   lost   — the stop was hit having never reached 1R.
+ *
+ * There is deliberately NO "armed / possible" state. It was tried and cut: the
+ * pierce test ("pool taken, waiting for the close back inside") was true for any
+ * pool price had simply left behind, so a swept-EQL long stayed marked while
+ * price ran away downward — a setup pointing the wrong way. A play appears when
+ * its detector actually fires, and not before.
  *
  * RISK MATH IS DELIBERATELY IDENTICAL TO THE RECORDER
  * (`app/api/ict-setups/route.ts` → `extractSetups`): entry = trigger-bar close,
@@ -26,11 +29,9 @@
  * counts.
  */
 
-import type {
-  Dir, IctAnalysis, IctCandle, LiquidityPool, OrderBlock,
-} from "./ictConcepts";
+import type { Dir, IctAnalysis, IctCandle } from "./ictConcepts";
 
-export type PlayState = "armed" | "live" | "won" | "lost";
+export type PlayState = "live" | "won" | "lost";
 
 /** Only the ICT *models* get a position box — the discretionary plays a trader
  *  actually takes. Structure breaks, displacement legs and every raw FVG fire far
@@ -46,8 +47,7 @@ export interface IctPlay {
   conceptId: string;        // glossary id, so the box hover reuses the concept card
   dir: Dir;
   state: PlayState;
-  armedTs: number;          // when the setup became POSSIBLE
-  triggerTs: number | null; // when it went LIVE (null while still armed)
+  triggerTs: number;        // the bar the setup fired on
   entry: number;
   stop: number;
   risk: number;             // |entry − stop| in points; the R unit
@@ -109,7 +109,6 @@ export function buildIctPlays(
 
   const last = candles[candles.length - 1];
   const now = opts.now ?? Math.max(Date.now(), last.timestamp);
-  const px = last.close;
 
   const byTs = new Map<number, IctCandle>(candles.map((c) => [c.timestamp, c]));
   const idxOf = new Map<number, number>(candles.map((c, i) => [c.timestamp, i]));
@@ -126,8 +125,6 @@ export function buildIctPlays(
     return Math.max(1, sum / n);
   })();
   const buf = Math.max(1, atr * 0.15);
-  /** "price is at the level" tolerance for the ARMED checks. */
-  const near = Math.max(1, atr * 0.6);
 
   /**
    * Structure-based stop: nearest confirmed swing pivot on the wrong side of
@@ -194,28 +191,9 @@ export function buildIctPlays(
     out.push({
       id: `${kind}:${dir}:${triggerTs}:${entry}`,
       kind, label: PLAY_META[kind].label, conceptId: PLAY_META[kind].conceptId,
-      dir, state: g.state, armedTs: triggerTs, triggerTs,
+      dir, state: g.state, triggerTs,
       entry, stop, risk: round2(risk), targets,
       hitR: g.hitR, mfeR: g.mfeR, resolvedTs: g.resolvedTs, note, zone,
-    });
-  };
-
-  /** A play that is only POSSIBLE — entry is the level price would trade at. */
-  const pushArmed = (
-    kind: PlayKind, dir: Dir, armedTs: number, entryLevel: number, note: string,
-    zone: { top: number; bottom: number } | null = null,
-  ) => {
-    const entry = round2(entryLevel);
-    const stop = round2(structuralStop(dir, entry, last.timestamp));
-    const risk = Math.abs(entry - stop);
-    if (!(risk > 0) || !Number.isFinite(entry)) return;
-    const targets = PLAY_TARGET_RS.map((r) => round2(dir === "bull" ? entry + r * risk : entry - r * risk));
-    out.push({
-      id: `armed:${kind}:${dir}:${entry}`,
-      kind, label: PLAY_META[kind].label, conceptId: PLAY_META[kind].conceptId,
-      dir, state: "armed", armedTs, triggerTs: null,
-      entry, stop, risk: round2(risk), targets,
-      hitR: 0, mfeR: 0, resolvedTs: null, note, zone,
     });
   };
 
@@ -235,11 +213,9 @@ export function buildIctPlays(
   // ── LIVE: valid order block, traded back into after confirmation ───────────
   // The trade is the RETEST, never the OB candle itself — entering at `o.ts`
   // books the pre-impulse price with hindsight.
-  const obRetest = new Map<OrderBlock, IctCandle | undefined>();
   for (const o of a.orderBlocks) {
     if (!o.valid || o.violated) continue;
     const retest = candles.find((c) => c.timestamp > o.confirmTs && c.low <= o.top && c.high >= o.bottom);
-    obRetest.set(o, retest);
     if (retest) {
       pushLive("ob", o.dir, retest.timestamp, o.dir === "bull" ? o.bottom : o.top,
         `OB ${round2(o.bottom)}–${round2(o.top)} retest`, { top: o.top, bottom: o.bottom });
@@ -254,86 +230,32 @@ export function buildIctPlays(
     if (entryBar) {
       pushLive("ote", a.range.dir, entryBar.timestamp, (lo + hi) / 2,
         `OTE ${round2(lo)}–${round2(hi)} (${a.range.dir})`, { top: hi, bottom: lo });
-    } else if (px >= lo - near && px <= hi + near) {
-      // ARMED: price is walking into the discount/premium band but hasn't tagged it.
-      pushArmed("ote", a.range.dir, last.timestamp, (lo + hi) / 2,
-        `price ${round2(Math.min(Math.abs(px - lo), Math.abs(px - hi)))} pts from OTE`, { top: hi, bottom: lo });
     }
-  }
-
-  // ── ARMED: valid OB never retested, price approaching the zone ─────────────
-  for (const o of a.orderBlocks) {
-    if (!o.valid || o.violated) continue;
-    if (obRetest.get(o)) continue;                  // already live above
-    const edge = o.dir === "bull" ? o.top : o.bottom;
-    if (Math.abs(px - edge) > near * 3) continue;   // still miles away
-    pushArmed("ob", o.dir, o.confirmTs, o.dir === "bull" ? o.bottom : o.top,
-      `OB ${round2(o.bottom)}–${round2(o.top)} awaiting retest`, { top: o.top, bottom: o.bottom });
-  }
-
-  // ── ARMED: EQ pool pierced on the live bar, no close back inside yet ───────
-  // This is the bar BEFORE a Turtle Soup confirms — the moment the trade becomes
-  // possible. If the bar closes back inside, `detectTurtleSoup` promotes it to a
-  // live play on the next analysis pass and the armed copy is dropped below.
-  const pierced = (p: LiquidityPool): boolean =>
-    p.side === "BSL" ? last.high > p.price && last.close >= p.price
-                     : last.low < p.price && last.close <= p.price;
-  for (const p of a.liquidity) {
-    if (p.count < 2) continue;                      // Turtle Soup needs equal H/L
-    if (last.timestamp <= p.confirmTs) continue;
-    if (!pierced(p)) continue;
-    pushArmed("turtleSoup", p.side === "BSL" ? "bear" : "bull", last.timestamp, p.price,
-      `EQ${p.side === "BSL" ? "H" : "L"} ${round2(p.price)} pierced — needs close back inside`);
-  }
-
-  // ── ARMED: breaker zone identified, price approaching, no retest yet ───────
-  for (const s of a.structure.slice(-8)) {
-    const ob = a.orderBlocks.filter((o) => o.ts < s.ts && o.dir !== s.dir).sort((x, y) => y.ts - x.ts)[0];
-    if (!ob) continue;
-    const retested = candles.some((c) => c.timestamp > s.ts && c.low <= ob.top && c.high >= ob.bottom);
-    if (retested) continue;                         // detectBreakers already has it
-    const edge = s.dir === "bull" ? ob.top : ob.bottom;
-    if (Math.abs(px - edge) > near * 3) continue;
-    pushArmed("breaker", s.dir, s.ts, edge,
-      `${s.kind} through OB ${round2(ob.bottom)}–${round2(ob.top)} — awaiting retest`,
-      { top: ob.top, bottom: ob.bottom });
   }
 
   // ── Prune ─────────────────────────────────────────────────────────────────
   const maxOpenMs = maxOpenBars * barMs;
   const keepResolvedMs = keepResolvedBars * barMs;
-  const fresh = out.filter((p) => {
-    if (p.state === "armed") return true;
-    if (p.resolvedTs != null) return now - p.resolvedTs <= keepResolvedMs;
-    return p.triggerTs != null && now - p.triggerTs <= maxOpenMs;
-  });
+  const fresh = out.filter((p) => (p.resolvedTs != null
+    ? now - p.resolvedTs <= keepResolvedMs
+    : now - p.triggerTs <= maxOpenMs));
 
-  // An armed play is superseded once the same concept fires in the same
-  // direction after it armed — otherwise the ghost box sits on top of the real one.
-  const superseded = (p: IctPlay) =>
-    p.state === "armed" &&
-    fresh.some((q) => q.state !== "armed" && q.kind === p.kind && q.dir === p.dir &&
-      (q.triggerTs ?? 0) >= p.armedTs - barMs);
-
-  // Same entry from two detectors → keep the one with the better R already banked.
+  // Same entry from two detectors → keep the most recent trigger.
   const seen = new Map<string, IctPlay>();
   for (const p of fresh) {
-    if (superseded(p)) continue;
     const key = `${p.kind}:${p.dir}:${Math.round(p.entry)}`;
     const prev = seen.get(key);
-    if (!prev || (p.triggerTs ?? 0) > (prev.triggerTs ?? 0)) seen.set(key, p);
+    if (!prev || p.triggerTs > prev.triggerTs) seen.set(key, p);
   }
 
-  // Fill the box budget by usefulness, not just recency: a working trade outranks
-  // a maybe, and both outrank a play that already finished. Resolved plays keep at
-  // most 2 slots so a busy detector (inducement fires often) can't crowd out the
-  // live markup.
-  const newest = (x: IctPlay, y: IctPlay) => (y.triggerTs ?? y.armedTs) - (x.triggerTs ?? x.armedTs);
+  // Fill the budget by usefulness, not just recency: a working trade outranks one
+  // that already finished. Resolved plays keep at most 1 slot so a busy detector
+  // (inducement fires often) can't crowd out the live markup.
+  const newest = (x: IctPlay, y: IctPlay) => y.triggerTs - x.triggerTs;
   const all = [...seen.values()];
   const live = all.filter((p) => p.state === "live").sort(newest);
-  const armedPlays = all.filter((p) => p.state === "armed").sort(newest);
-  const resolved = all.filter((p) => p.state === "won" || p.state === "lost").sort(newest).slice(0, 1);
-  return [...live, ...armedPlays, ...resolved].slice(0, limit);
+  const resolved = all.filter((p) => p.state !== "live").sort(newest).slice(0, 1);
+  return [...live, ...resolved].slice(0, limit);
 }
 
 /** "LONG" / "SHORT" — the position-tool wording, not the detector wording. */

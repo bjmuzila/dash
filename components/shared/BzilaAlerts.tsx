@@ -93,7 +93,32 @@ function ThumbBtn({ dir, active, count, onClick }: { dir: "up" | "down"; active:
   );
 }
 
-export default function BzilaAlerts() {
+/**
+ * What a custom trigger is handed. `canSee` is false for free / signed-out
+ * viewers — such a trigger must still render something (the CB Edge logo has to
+ * exist for everyone), it just has no alerts behind it.
+ */
+export type BzilaTriggerState = {
+  canSee: boolean;
+  /** A newer alert has landed than this browser has acknowledged. */
+  hasNew: boolean;
+  open: boolean;
+  /** How many alerts are loaded (0 when !canSee). */
+  count: number;
+  toggle: () => void;
+  ref: React.RefObject<HTMLButtonElement | null>;
+};
+
+export default function BzilaAlerts({
+  renderTrigger,
+}: {
+  /**
+   * Renders the control that opens the panel. Omit for the original standalone
+   * Bzila bell. The GlobalToolbar passes one so the CB Edge logo *is* the
+   * trigger and lights up when an alert lands.
+   */
+  renderTrigger?: (state: BzilaTriggerState) => React.ReactNode;
+} = {}) {
   const { user, isPaid, isOwnerClaim } = useAuth();
 
   // Owner detection mirrors NavMenu: prefer the build-time owner id, fall back to
@@ -181,6 +206,7 @@ export default function BzilaAlerts() {
   }, [open]);
 
   const toggle = () => {
+    if (!canSee) return;
     setOpen((o) => {
       const next = !o;
       if (next) {
@@ -265,7 +291,10 @@ export default function BzilaAlerts() {
     } catch { /* keep optimistic state */ }
   };
 
-  if (!canSee) return null;
+  // Without a custom trigger this component *is* the bell, so nothing to draw
+  // for viewers who can't see alerts. With one, the trigger still has to render
+  // (it's the CB Edge logo) — it just gets canSee:false and never opens.
+  if (!canSee && !renderTrigger) return null;
 
   const inputStyle: React.CSSProperties = {
     width: "100%",
@@ -311,6 +340,9 @@ export default function BzilaAlerts() {
         }
       `}</style>
 
+      {renderTrigger ? (
+        renderTrigger({ canSee, hasNew, open, count: alerts.length, toggle, ref: btnRef })
+      ) : (
       <button
         ref={btnRef}
         data-bzila-bell
@@ -364,8 +396,9 @@ export default function BzilaAlerts() {
           />
         )}
       </button>
+      )}
 
-      {mounted && open && createPortal(
+      {mounted && canSee && open && createPortal(
         <div
           ref={panelRef}
           className="bzila-panel"
@@ -527,6 +560,32 @@ export default function BzilaAlerts() {
               })}
             </div>
           )}
+
+          {/* The CB Edge logo used to be a plain link to /feedback. Now that the
+              logo is this panel's trigger, feedback lives here so the entry
+              point isn't lost. Native <a>, not next/link: inside the Vite SPA
+              (basename="/app") a next/link would resolve to /app/feedback. */}
+          <a
+            href="/feedback"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              padding: "9px",
+              borderRadius: 10,
+              border: `1px solid ${HOME_THEME.border}`,
+              background: "rgba(255,255,255,0.03)",
+              color: "rgba(255,255,255,0.7)",
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              textDecoration: "none",
+            }}
+          >
+            Send feedback →
+          </a>
 
           {isOwner && (
             <a

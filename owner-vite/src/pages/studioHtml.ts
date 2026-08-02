@@ -30,17 +30,52 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
   #side h3{font-size:11px;letter-spacing:1.5px;color:var(--mut);margin:20px 0 8px;text-transform:uppercase}
   #side h3:first-child{margin-top:0}
   .row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
-  button{background:rgba(255,255,255,0.04);color:var(--txt);border:1px solid var(--line);padding:8px 11px;border-radius:10px;font-size:12px;cursor:pointer;font-family:inherit;font-weight:700;letter-spacing:.02em}
-  button:hover{border-color:rgba(33,158,188,0.45);color:var(--acc)}
-  button.pri{background:linear-gradient(180deg,rgba(33,158,188,0.16),rgba(33,158,188,0.05));color:var(--acc);border-color:rgba(33,158,188,0.25);font-weight:800}
-  button.pri:hover{background:linear-gradient(180deg,rgba(33,158,188,0.26),rgba(33,158,188,0.09));color:var(--acc)}
-  button.on{border-color:rgba(33,158,188,0.30);color:var(--acc);background:rgba(33,158,188,0.10)}
-  select,input[type=text],input[type=number]{background:rgba(0,0,0,0.30);color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;width:100%;font-family:inherit}
+  /* Pill "bubble" buttons — the dock's tile language: faint white fill at rest,
+     cyan hover/active tile with the activeGlow from DOCK_THEME. */
+  button{background:rgba(255,255,255,0.04);color:var(--txt);border:1px solid var(--line);padding:8px 13px;border-radius:999px;font-size:12px;cursor:pointer;font-family:inherit;font-weight:700;letter-spacing:.02em;transition:background .14s,border-color .14s,color .14s,box-shadow .14s}
+  button:hover{border-color:rgba(33,158,188,0.30);color:var(--acc);background:rgba(33,158,188,0.10)}
+  button.pri{background:linear-gradient(180deg,rgba(33,158,188,0.16),rgba(33,158,188,0.04));color:var(--acc);border-color:rgba(33,158,188,0.30);font-weight:800;box-shadow:0 0 14px rgba(33,158,188,0.22)}
+  button.pri:hover{background:linear-gradient(180deg,rgba(33,158,188,0.26),rgba(33,158,188,0.08));color:var(--acc)}
+  button.on{border-color:rgba(33,158,188,0.30);color:var(--acc);background:linear-gradient(180deg,rgba(33,158,188,0.16),rgba(33,158,188,0.04));box-shadow:0 0 14px rgba(33,158,188,0.22)}
+  button[disabled]{box-shadow:none}
+  select,input[type=text],input[type=number]{background:rgba(0,0,0,0.40);color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:12px;width:100%;font-family:inherit;font-weight:700}
+  input[type=text]::placeholder{color:var(--dim);font-weight:600}
+  input[type=text]:focus,input[type=number]:focus{outline:none;border-color:rgba(33,158,188,0.30);box-shadow:0 0 14px rgba(33,158,188,0.22)}
   label{font-size:11px;color:var(--mut);display:block;margin:8px 0 4px}
   .f2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
   input[type=color]{width:100%;height:32px;background:none;border:1px solid var(--line);border-radius:10px;padding:2px;cursor:pointer}
   input[type=range]{width:100%;accent-color:var(--acc)}
   .empty{color:var(--dim);font-size:12px;line-height:1.6}
+
+  /* ── Themed dropdown ────────────────────────────────────────────────────────
+     Native <select> popups are drawn by the OS and ignore page CSS, so they
+     rendered as a light-grey list with a blue highlight. This is a vanilla port
+     of components/ThemedSelect.tsx: the real <select> stays in the DOM (hidden)
+     so every existing .value / .options / onchange call still works, and this
+     draws the visible trigger + a portal'd menu over it. */
+  .tsel{position:relative;width:100%}
+  .tsel select{position:absolute;opacity:0;pointer-events:none;width:0;height:0;padding:0;border:0}
+  .tselbtn{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:8px 12px;border-radius:10px;background:rgba(0,0,0,0.40);border:1px solid var(--line)}
+  .tselbtn:hover{background:rgba(0,0,0,0.40);border-color:rgba(33,158,188,0.30);color:var(--txt)}
+  .tselbtn.open{border-color:rgba(33,158,188,0.30);box-shadow:0 0 14px rgba(33,158,188,0.22)}
+  .tselbtn .lab{color:var(--acc);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700}
+  .tselbtn .car{display:flex;color:var(--mut);flex:none;transition:transform .18s}
+  .tselbtn.open .car{transform:rotate(180deg)}
+  .tselmenu{position:fixed;z-index:9999;padding:6px;display:flex;flex-direction:column;gap:2px;overflow-y:auto;
+    background:radial-gradient(circle at 50% 0%,rgba(33,158,188,0.07) 0%,transparent 55%),rgba(10,13,20,0.98);
+    backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+    border-radius:14px;border:1px solid var(--line);border-top:2px solid rgba(33,158,188,0.5);
+    box-shadow:0 1px 0 rgba(255,255,255,0.06) inset,0 20px 44px -14px rgba(0,0,0,0.75),0 6px 16px rgba(0,0,0,0.45)}
+  /* flex:none — the menu is a flex column with a max-height, so without it the
+     rows shrink and clip their own descenders. */
+  .tselmenu .opt{display:block;flex:none;width:100%;padding:8px 10px;border-radius:8px;text-align:left;font-size:12px;font-weight:600;line-height:1.45;
+    color:var(--txt);background:transparent;border:1px solid transparent;box-shadow:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tselmenu .opt:hover{background:rgba(33,158,188,0.10);color:var(--txt);border-color:transparent}
+  .tselmenu .opt.on{font-weight:800;color:var(--acc);background:linear-gradient(180deg,rgba(33,158,188,0.16),rgba(33,158,188,0.04));border-color:rgba(33,158,188,0.30)}
+  .tselmenu::-webkit-scrollbar{width:8px}
+  .tselmenu::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:8px}
+  #side::-webkit-scrollbar{width:8px}
+  #side::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.10);border-radius:8px}
 
   #main{flex:1;overflow:auto;padding:26px;display:flex;flex-direction:column;align-items:center;gap:14px}
   #bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center}
@@ -764,6 +799,7 @@ document.getElementById('tsave').onclick=function(){
   catch(e){ alert('Could not save: '+e); return; }
   refreshT();
   document.getElementById('tpl').value='custom:'+n;
+  syncSelects();
 };
 
 document.getElementById('tdel').onclick=function(){
@@ -832,7 +868,7 @@ function restore(s){
     wire(d);
     if(d.dataset.t==='image'||d.dataset.t==='logo') d.addEventListener('dblclick',function(){pick(d)});
   });
-  setSize(); fit(); select(null);
+  setSize(); fit(); select(null); syncSelects();
 }
 function presets(){ try{return JSON.parse(localStorage.getItem('cbe_posts')||'{}')}catch(e){return {}} }
 function refreshP(){
@@ -854,9 +890,69 @@ document.getElementById('pdel').onclick=function(){
   var p=presets(); delete p[n]; localStorage.setItem('cbe_posts',JSON.stringify(p)); refreshP();
 };
 
+// ── Themed dropdown ─────────────────────────────────────────────────────────
+// Wraps a native <select> without replacing it: the element stays in the DOM
+// (visually hidden) so el.value / el.options / el.onchange keep working, and a
+// MutationObserver re-labels the trigger whenever refreshT/refreshP rewrite the
+// option list. The menu is appended to <body> so the sidebar's overflow:auto
+// can't clip it, and flips above the trigger near the viewport bottom.
+function themeSelect(el){
+  var wrap=document.createElement('div'); wrap.className='tsel';
+  el.parentNode.insertBefore(wrap,el); wrap.appendChild(el);
+  var btn=document.createElement('button'); btn.type='button'; btn.className='tselbtn';
+  btn.innerHTML='<span class="lab"></span><span class="car"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>';
+  wrap.appendChild(btn);
+  var menu=null;
+
+  function label(){
+    var o=el.options[el.selectedIndex];
+    btn.querySelector('.lab').textContent=o?o.textContent:'—';
+  }
+  function close(){ if(menu){menu.remove();menu=null;} btn.classList.remove('open'); }
+  function open(){
+    close();
+    menu=document.createElement('div'); menu.className='tselmenu';
+    [].forEach.call(el.options,function(o,i){
+      var b=document.createElement('button');
+      b.type='button'; b.className='opt'+(i===el.selectedIndex?' on':'');
+      b.textContent=o.textContent;
+      b.onclick=function(ev){
+        ev.stopPropagation();
+        el.selectedIndex=i; label(); close();
+        el.dispatchEvent(new Event('change',{bubbles:true}));
+      };
+      menu.appendChild(b);
+    });
+    document.body.appendChild(menu);
+    var r=btn.getBoundingClientRect(), GAP=6, PAD=8;
+    var below=window.innerHeight-r.bottom-GAP-PAD, above=r.top-GAP-PAD;
+    var flip=below<160&&above>below;
+    menu.style.width=r.width+'px';
+    menu.style.left=Math.max(PAD,Math.min(r.left,window.innerWidth-r.width-PAD))+'px';
+    menu.style.maxHeight=Math.max(120,Math.min(340,flip?above:below))+'px';
+    if(flip) menu.style.bottom=(window.innerHeight-r.top+GAP)+'px';
+    else menu.style.top=(r.bottom+GAP)+'px';
+    btn.classList.add('open');
+  }
+  btn.onclick=function(ev){ ev.stopPropagation(); if(menu) close(); else open(); };
+  document.addEventListener('mousedown',function(ev){
+    if(menu&&!menu.contains(ev.target)&&!btn.contains(ev.target)) close();
+  });
+  document.addEventListener('keydown',function(ev){ if(ev.key==='Escape') close(); });
+  el.addEventListener('change',label);
+  new MutationObserver(label).observe(el,{childList:true,subtree:true,characterData:true});
+  el._sync=label;
+  label();
+}
+// Call after any programmatic el.value assignment — those fire no mutation.
+function syncSelects(){
+  document.querySelectorAll('.tsel select').forEach(function(s){ if(s._sync) s._sync(); });
+}
+
 stage.style.background=C.bg;
 stage.querySelector('.bar').style.background=accent();
-setSize(); refreshT(); loadTpl('levels'); fit(); refreshP();
+['tpl','size','pload'].forEach(function(id){ themeSelect(document.getElementById(id)); });
+setSize(); refreshT(); loadTpl('levels'); fit(); refreshP(); syncSelects();
 window.addEventListener('resize',fit);
 </script>
 </body>

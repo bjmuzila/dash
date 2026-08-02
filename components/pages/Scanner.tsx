@@ -24,7 +24,7 @@ import TpoForwardMap from "@/components/scanner/TpoForwardMap";
 import TpoOpenLocation from "@/components/scanner/TpoOpenLocation";
 import GexChangeTop from "@/components/scanner/GexChangeTop";
 import GexPctTab from "@/components/scanner/GexPctTab";
-import ScannerTabsBar, { readTabFromUrl } from "@/components/scanner/ScannerTabsBar";
+import ScannerTabsBar, { readTabFromUrl, SCANNER_TAB_EVENT } from "@/components/scanner/ScannerTabsBar";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
 
@@ -3008,6 +3008,19 @@ export default function ScannerPage() {
   useEffect(() => {
     const fromUrl = readTabFromUrl();
     if (fromUrl) setTab(fromUrl as MainTab);
+  }, []);
+
+  // The GlobalToolbar's Scanner sub-strip links to /scanner?tab=… . While we are
+  // already on /scanner that is a query-string-only navigation, which React
+  // Router does not remount for — the URL would change and the visible tab
+  // wouldn't. The strip fires SCANNER_TAB_EVENT on click; flip the tab here.
+  useEffect(() => {
+    const onTab = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      if (id) setTab(id as MainTab);
+    };
+    window.addEventListener(SCANNER_TAB_EVENT, onTab);
+    return () => window.removeEventListener(SCANNER_TAB_EVENT, onTab);
   }, []);
 
   return (

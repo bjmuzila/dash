@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { HOME_THEME } from "./homeTheme";
 
@@ -242,11 +241,17 @@ export default function UserMenu() {
 
           <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, margin: "6px 0" }} />
 
+          {/* Native <a>, NOT next/link — same reason as What's New above, which
+              this block had missed. These are top-level Next pages, but inside
+              the Vite SPA (basename="/app") a next/link href="/docs" resolves to
+              /app/docs; there is no such route, so the SPA catch-all swallowed
+              it and dropped the user on Traders Dash. That is why Help & Docs,
+              Disclaimer, Risk Disclosure, Terms and Privacy all looked broken.
+              A real navigation is required to reach the Next route. */}
           {INFO_LINKS.map((it) => (
-            <Link
+            <a
               key={it.href}
               href={it.href}
-              prefetch={false}
               onClick={() => setOpen(false)}
               style={{
                 display: "block",
@@ -259,7 +264,7 @@ export default function UserMenu() {
               }}
             >
               {it.label}
-            </Link>
+            </a>
           ))}
 
           <div style={{ borderTop: `1px solid ${HOME_THEME.border}`, margin: "6px 0" }} />

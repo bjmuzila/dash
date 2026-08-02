@@ -333,8 +333,8 @@ export default function IctPage() {
   const ictRef = useRef(ict); ictRef.current = ict;
 
   // Tradeable plays (entry / stop / 1R-2R-3R) derived from the SAME analysis —
-  // no second detection pass. Re-evaluated on the 30s tick so an armed setup
-  // ages out (and a live one resolves) without waiting for the next bar.
+  // no second detection pass. Re-evaluated on the 30s tick so a live play
+  // resolves / ages out without waiting for the next bar.
   const plays: IctPlay[] = useMemo(() => {
     void clockTick;
     return buildIctPlays(candles, ict, { tfMin: tf });
@@ -640,8 +640,9 @@ export default function IctPage() {
     // play's position box — a green profit zone (entry → 3R), a red stop zone
     // (entry → structural stop), the entry line between them, and dashed 1R/2R
     // rungs inside the profit zone, laid out like TradingView's Long/Short
-    // Position drawing tool. ARMED plays draw dashed + faded (the trade is only
-    // possible); a resolved play stops extending at the bar that finished it.
+    // Position drawing tool. A play appears only once its detector actually
+    // FIRES — there is no "possible / armed" state — and a resolved play stops
+    // extending at the bar that finished it.
     // Only the OPEN play draws its box — six boxes at once was unreadable.
     if (t.showPlays && candles.length) {
       // Bar pitch, so a box can be sized in BARS (like the TradingView tool)
@@ -660,7 +661,7 @@ export default function IctPage() {
       // Draw oldest → newest so the freshest play ends up on top.
       for (const p of [...playsRef.current].reverse()) {
         const isOpen = openPlayRef.current?.id === p.id;
-        const xStart = xOf(p.triggerTs ?? p.armedTs) ?? 0;
+        const xStart = xOf(p.triggerTs) ?? 0;
         const xEndRaw = p.resolvedTs != null
           ? (xOf(p.resolvedTs) ?? rightEdge) + pitch
           : (xLast ?? rightEdge) + RUNWAY * pitch;
@@ -676,15 +677,14 @@ export default function IctPage() {
         if (yE == null || yS == null || yT3 == null) continue;
         const x = Math.min(xLeft, xEnd);
         const w = Math.max(6, Math.abs(xEnd - xLeft));
-        const armed = p.state === "armed";
-        const alpha = p.state === "live" ? 1 : armed ? 0.7 : 0.34;
+        const alpha = p.state === "live" ? 1 : 0.34;
         const side = playSide(p.dir);
         const yProfTop = Math.min(yE, yT3), profH = Math.abs(yT3 - yE);
         const yStopTop = Math.min(yE, yS), stopH = Math.abs(yS - yE);
         const rr = playRR(p);
         const t3 = p.targets[p.targets.length - 1];
-        const stateTxt = armed ? "ARMED" : p.state === "live" ? "LIVE" : p.state === "won" ? `WON ${p.mfeR.toFixed(1)}R` : "STOPPED";
-        const stateCol = armed ? `rgb(${C.play})` : p.state === "live" ? "#22e08a" : p.state === "won" ? "#22e08a" : "#ff6b6b";
+        const stateTxt = p.state === "live" ? "LIVE" : p.state === "won" ? `WON ${p.mfeR.toFixed(1)}R` : "STOPPED";
+        const stateCol = p.state === "lost" ? "#ff6b6b" : "#22e08a";
 
         // The entry dot is the always-on marker; remember where it landed so the
         // click hit-test and the Plays-card rows can both find it.
@@ -697,13 +697,13 @@ export default function IctPage() {
         ctx.globalAlpha = alpha;
 
         // Profit zone (entry → 3R) and stop zone (entry → stop).
-        ctx.fillStyle = `rgba(${PLAY_C.profit},${armed ? 0.08 : 0.13})`;
+        ctx.fillStyle = `rgba(${PLAY_C.profit},0.13)`;
         ctx.fillRect(x, yProfTop, w, profH);
-        ctx.fillStyle = `rgba(${PLAY_C.loss},${armed ? 0.10 : 0.16})`;
+        ctx.fillStyle = `rgba(${PLAY_C.loss},0.16)`;
         ctx.fillRect(x, yStopTop, w, stopH);
 
         ctx.lineWidth = 1;
-        ctx.setLineDash(armed ? [5, 4] : []);
+        ctx.setLineDash([]);
         ctx.strokeStyle = `rgba(${PLAY_C.profit},0.55)`;
         ctx.strokeRect(x, yProfTop, w, profH);
         ctx.strokeStyle = `rgba(${PLAY_C.loss},0.55)`;
@@ -774,8 +774,8 @@ export default function IctPage() {
 
       // ── Entry dots ────────────────────────────────────────────────────────
       // Second pass so every dot sits above the open play's box. Green = long,
-      // red = short (direction, not outcome). Live plays get a halo ring, armed
-      // plays a dashed hollow ring, resolved plays fade back.
+      // red = short (direction, not outcome). A live play gets a halo ring; a
+      // resolved one fades back and swaps its arrow for ✓ / ✕.
       //
       // Two detectors firing the same bar at the same price (Turtle Soup → 2022
       // Model is the canonical pair) put their dots on top of each other, so the
@@ -800,8 +800,7 @@ export default function IctPage() {
         const isOpen = openPlayRef.current?.id === p.id;
         const long = p.dir === "bull";
         const rgb = long ? PLAY_C.profit : PLAY_C.loss;
-        const armed = p.state === "armed";
-        const done = p.state === "won" || p.state === "lost";
+        const done = p.state !== "live";
         const a2 = done ? 0.5 : 1;
 
         ctx.save();
@@ -811,13 +810,8 @@ export default function IctPage() {
           ctx.fillStyle = `rgba(${rgb},0.16)`; ctx.fill();
         }
         ctx.beginPath(); ctx.arc(d.x, d.y, 5.5, 0, Math.PI * 2);
-        if (armed) {                                  // hollow + dashed = possible
-          ctx.fillStyle = "rgba(8,12,18,0.9)"; ctx.fill();
-          ctx.setLineDash([3, 2]);
-        } else {
-          ctx.fillStyle = `rgb(${rgb})`; ctx.fill();
-          ctx.setLineDash([]);
-        }
+        ctx.fillStyle = `rgb(${rgb})`; ctx.fill();
+        ctx.setLineDash([]);
         ctx.lineWidth = isOpen ? 2 : 1.5;
         ctx.strokeStyle = isOpen ? "rgba(255,255,255,0.95)" : `rgba(${rgb},0.95)`;
         ctx.stroke();
@@ -825,13 +819,13 @@ export default function IctPage() {
         // Direction arrow inside a filled dot; resolved plays swap it for ✓ / ✗.
         ctx.font = "700 8px Inter, system-ui, sans-serif";
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillStyle = armed ? `rgb(${rgb})` : "#08111a";
+        ctx.fillStyle = "#08111a";
         ctx.fillText(done ? (p.state === "won" ? "✓" : "✕") : long ? "▲" : "▼", d.x, d.y + 0.5);
         ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
         ctx.restore();
 
         // Hover region for the dot → the concept card + this play's numbers.
-        const st = p.state === "armed" ? "ARMED" : p.state === "live" ? "LIVE"
+        const st = p.state === "live" ? "LIVE"
           : p.state === "won" ? `WON ${p.mfeR.toFixed(1)}R` : "STOPPED";
         addRect(d.x - 9, d.y - 9, 18, 18, p.conceptId, `${p.label} — entry`,
           `${playSide(p.dir)} ${p.entry.toFixed(2)} · SL ${p.stop.toFixed(2)} · TP ${p.targets[p.targets.length - 1].toFixed(2)} (${playRR(p).toFixed(1)}R) · ${st}${isOpen ? "" : " · click to open"}`);
@@ -1194,14 +1188,20 @@ export default function IctPage() {
               const p = openPlayData;
               const cw = chartRef.current?.clientWidth ?? 900;
               const ch = chartRef.current?.clientHeight ?? 520;
-              const CARD_W = 234, CARD_H = 196;
-              const left = openPlay.x + 18 + CARD_W > cw ? Math.max(6, openPlay.x - CARD_W - 18) : openPlay.x + 18;
-              const top = Math.max(6, Math.min(openPlay.y - 40, ch - CARD_H - 6));
               const long = p.dir === "bull";
-              const stateTxt = p.state === "armed" ? "ARMED"
-                : p.state === "live" ? "LIVE"
+              const CARD_W = 234, CARD_H = 212;
+              // Keep the card OFF the box it describes. The box always runs from
+              // the entry dot to the right edge, so the free horizontal space is
+              // to the LEFT of the dot; and it occupies the 3R side of entry, so
+              // the free vertical space is below a long / above a short. Anchoring
+              // the card next to the dot (the first cut) buried the markup.
+              const left = openPlay.x - CARD_W - 14 >= 8
+                ? openPlay.x - CARD_W - 14
+                : Math.max(8, Math.min(cw - CARD_W - 62, openPlay.x + 16));
+              const top = long ? Math.max(8, ch - CARD_H - 8) : 8;
+              const stateTxt = p.state === "live" ? "LIVE"
                 : p.state === "won" ? `WON ${p.mfeR.toFixed(1)}R` : "STOPPED";
-              const stateCol = p.state === "armed" ? `rgb(${C.play})` : p.state === "lost" ? "#ff6b6b" : "#22e08a";
+              const stateCol = p.state === "lost" ? "#ff6b6b" : "#22e08a";
               return (
                 <div
                   className="absolute z-30 rounded-lg border bg-[#0b0f15]/97 p-2.5 shadow-xl backdrop-blur"
@@ -1258,10 +1258,10 @@ export default function IctPage() {
               ▶ Plays
             </span>
             <span className="text-[11px] text-white/45">
-              live &amp; possible setups · click the ▲/▼ entry dot on the chart (or a card below) to open the position box
+live setups only · click the ▲/▼ entry dot on the chart (or a card below) to open the position box
             </span>
             <span className="ml-auto font-mono text-[11px] text-white/50">
-              {plays.filter((p) => p.state === "live").length} live · {plays.filter((p) => p.state === "armed").length} armed
+              {plays.filter((p) => p.state === "live").length} live
             </span>
           </div>
           {plays.length ? (
@@ -1269,10 +1269,8 @@ export default function IctPage() {
               {plays.map((p) => {
                 const long = p.dir === "bull";
                 const rr = playRR(p);
-                const stateCol = p.state === "armed" ? `rgb(${C.play})`
-                  : p.state === "lost" ? "#ff6b6b" : "#22e08a";
-                const stateTxt = p.state === "armed" ? "ARMED"
-                  : p.state === "live" ? "LIVE"
+                const stateCol = p.state === "lost" ? "#ff6b6b" : "#22e08a";
+                const stateTxt = p.state === "live" ? "LIVE"
                   : p.state === "won" ? `WON ${p.mfeR.toFixed(1)}R` : "STOPPED";
                 const isOpen = openPlay?.id === p.id;
                 return (
@@ -1324,8 +1322,8 @@ export default function IctPage() {
             </div>
           ) : (
             <p className="text-[11px] text-white/50">
-              No play armed or live right now. A box appears on the chart the moment a model setup
-              (Turtle Soup, Judas, CISD, 2022 Model, Breaker, Inducement, OB retest, OTE) becomes possible.
+              No play live right now. A dot appears on the chart the moment a model setup
+              (Turtle Soup, Judas, CISD, 2022 Model, Breaker, Inducement, OB retest, OTE) actually fires.
             </p>
           )}
         </div>

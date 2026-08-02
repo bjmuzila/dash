@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
 import UserMenu from "./UserMenu";
 import { HOME_THEME } from "./homeTheme";
@@ -11,6 +12,8 @@ import { useMobileNav } from "./MobileNavContext";
 import ToolbarTicker from "./ToolbarTicker";
 import NavMenu from "./NavMenu";
 import BzilaAlerts from "./BzilaAlerts";
+import ScannerSubStrip from "./ScannerSubStrip";
+import { isScannerSectionPath } from "@/components/scanner/scannerNav";
 
 /**
  * GlobalToolbar — thin app-wide toolbar mounted above page content on every
@@ -75,18 +78,121 @@ function EtClock({ compact = false }: { compact?: boolean }) {
   );
 }
 
-function LogoMenu({ compact = false }: { compact?: boolean }) {
-  return (
-    <div style={{ position: "relative", flexShrink: 0, display: "flex" }}>
+/**
+ * LogoTrigger — the CB Edge logo, which now doubles as the Bzila alerts button.
+ *
+ * The separate alerts bell is gone: when Brandon broadcasts an alert the logo
+ * itself lights up (orange glow + a pulsing Bzila avatar badge) and clicking it
+ * opens the alerts panel. Viewers who can't see alerts (signed-out / free) keep
+ * the old behaviour — a plain link to /feedback. For everyone else feedback
+ * moved to the bottom of the alerts panel.
+ *
+ * Rendered through BzilaAlerts' `renderTrigger`, which owns all the alert state
+ * (polling, seen-tracking, the panel itself).
+ */
+function LogoTrigger({
+  compact = false,
+  canSee,
+  hasNew,
+  open,
+  count,
+  toggle,
+  triggerRef,
+}: {
+  compact?: boolean;
+  canSee: boolean;
+  hasNew: boolean;
+  open: boolean;
+  count: number;
+  toggle: () => void;
+  triggerRef: React.RefObject<HTMLButtonElement | null>;
+}) {
+  const [hover, setHover] = useState(false);
+  const h = compact ? 32 : 48;
+
+  const logo = (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src="/cb-edge-logo.png"
+      alt="CB Edge"
+      style={{
+        height: h,
+        width: "auto",
+        display: "block",
+        cursor: "pointer",
+        transform: hover ? "translateY(-1px)" : "none",
+        filter: hasNew
+          ? `drop-shadow(0 0 7px ${orangeA(0.95)}) drop-shadow(0 0 18px ${orangeA(0.45)})`
+          : open || hover
+            ? `drop-shadow(0 0 7px ${cyanA(0.7)})`
+            : "none",
+        transition: "filter 0.22s, transform 0.14s",
+      }}
+    />
+  );
+
+  // No alerts for this viewer → the logo keeps its original job.
+  if (!canSee) {
+    return (
       <Link href="/feedback" prefetch={false} title="Send feedback" aria-label="Send feedback">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src="/cb-edge-logo.png"
-          alt="CB Edge"
-          style={{ height: compact ? 32 : 48, width: "auto", display: "block", cursor: "pointer" }}
-        />
+        {logo}
       </Link>
-    </div>
+    );
+  }
+
+  const title = hasNew ? "New Bzila alert" : count > 0 ? "Bzila alerts" : "Bzila alerts (none yet)";
+
+  return (
+    <button
+      ref={triggerRef}
+      data-bzila-bell
+      onClick={toggle}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title={title}
+      aria-label={title}
+      aria-haspopup="menu"
+      aria-expanded={open}
+      style={{
+        position: "relative",
+        display: "inline-flex",
+        alignItems: "center",
+        padding: 0,
+        border: "none",
+        background: "none",
+        cursor: "pointer",
+        flexShrink: 0,
+      }}
+    >
+      {logo}
+      {/* Bzila's face as the "new alert" badge — same pulse keyframes the old
+          bell used (defined in BzilaAlerts' <style>, which mounts alongside). */}
+      {hasNew && (
+        <span
+          aria-hidden
+          style={{
+            position: "absolute",
+            right: -4,
+            bottom: -1,
+            width: compact ? 15 : 19,
+            height: compact ? 15 : 19,
+            borderRadius: "50%",
+            border: `2px solid ${HOME_THEME.orange}`,
+            background: "rgba(10,13,20,0.96)",
+            overflow: "hidden",
+            boxSizing: "border-box",
+            animation: "bzila-ring 1.6s ease-in-out infinite",
+          }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/bzila-hero.png"
+            alt=""
+            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+          />
+        </span>
+      )}
+    </button>
   );
 }
 
@@ -96,13 +202,16 @@ function LogoMenu({ compact = false }: { compact?: boolean }) {
  * button when `onClick` is set. Used by GexGroupNav for the left-side nav strip.
  */
 function QuickCircle({
-  href, label, emoji, onClick, comingSoon,
+  href, label, emoji, onClick, onLinkClick, comingSoon,
   draggable, dragging, onDragStart, onDragOver, onDrop, onDragEnd,
 }: {
   href?: string;
   label: string;
   emoji: string;
   onClick?: () => void;
+  /** Runs on click in Link mode. Call preventDefault() to suppress navigation
+   *  (Scanner uses this to toggle its sub-strip when already on the page). */
+  onLinkClick?: (e: React.MouseEvent) => void;
   comingSoon?: boolean;
   draggable?: boolean;
   dragging?: boolean;
@@ -189,7 +298,7 @@ function QuickCircle({
   };
   if (href) {
     return (
-      <Link href={href} prefetch={false} title={label} aria-label={label} style={wrapStyle} onMouseEnter={hoverOn} onMouseLeave={hoverOff} {...dragProps}>
+      <Link href={href} prefetch={false} title={label} aria-label={label} style={wrapStyle} onClick={onLinkClick} onMouseEnter={hoverOn} onMouseLeave={hoverOff} {...dragProps}>
         {inner}
       </Link>
     );
@@ -204,6 +313,7 @@ function QuickCircle({
 const CYAN = HOME_THEME.cyan; // #219EBC
 function cyanA(a: number) { return `rgba(33,158,188,${a})`; }
 function blueA(a: number) { return `rgba(59,130,246,${a})`; }
+function orangeA(a: number) { return `rgba(251,133,1,${a})`; } // #FB8501 — "new alert"
 
 // Left-side nav strip contents. `href` doubles as the stable id used for the
 // saved drag order. `ownerOnly` items only render for the owner.
@@ -226,7 +336,9 @@ const NAV_ITEMS: NavItem[] = [
   // Journal is LIVE. The route is /trading (app/trading/page.tsx) — there is no
   // /journal page; that href was a placeholder while the tile was coming-soon.
   { href: "/trading",           label: "Journal",       emoji: "📓" },
-  { href: "/order-flow",        label: "Order Flow",    emoji: "🧾", comingSoon: true },
+  // Order Flow removed from the toolbar (2026-08): it was a permanently dimmed
+  // coming-soon tile taking a slot from live pages. Still listed in the
+  // hamburger (NavMenu) so the route stays discoverable when it ships.
   // Lookup was a coming-soon placeholder that never got a page; replaced by
   // /options (app/options/page.tsx), which is live and being built out.
   { href: "/options",           label: "Options",       emoji: "🎛️" },
@@ -242,7 +354,10 @@ const NAV_GAP = 6;       // px, gap between columns
 // Everything else in the pill that is NOT the nav strip: hamburger, logo, bell,
 // ticker (min), divider, clock, notes, user menu, gaps + pill padding + band
 // padding. The nav strip only gets what's left over.
-const NAV_RESERVED_PX = 700;
+// 700 → 650: the standalone Bzila bell (40px + its gap) was folded into the CB
+// Edge logo, so that width is no longer reserved and the strip can fit one more
+// circle before it starts dropping items.
+const NAV_RESERVED_PX = 650;
 
 /**
  * useNavCapacity — how many nav circles fit on screen right now.
@@ -270,7 +385,15 @@ function useNavCapacity() {
  * (NAV_ORDER_KEY) so it survives reloads. The owner-only entry is hidden for
  * non-owners but keeps its slot in the saved order.
  */
-function GexGroupNav({ isOwner }: { isOwner: boolean }) {
+function GexGroupNav({
+  isOwner,
+  onScannerClick,
+}: {
+  isOwner: boolean;
+  /** Click handler for the Scanner circle. Returns true if it handled the click
+   *  (i.e. toggled the sub-strip) and navigation should be suppressed. */
+  onScannerClick?: () => boolean;
+}) {
   // Ordered hrefs. Default = NAV_ITEMS order; hydrated from localStorage AFTER
   // mount so the server render and first client render both use the default
   // order (no hydration mismatch), then reorder to the saved arrangement.
@@ -342,6 +465,13 @@ function GexGroupNav({ isOwner }: { isOwner: boolean }) {
           href={it.comingSoon ? undefined : (it.extHref ?? it.href)}
           label={it.label}
           emoji={it.emoji}
+          // Scanner already open? Clicking it collapses/expands the sub-strip
+          // instead of re-navigating to a page you're already on.
+          onLinkClick={
+            it.href === "/scanner" && onScannerClick
+              ? (e) => { if (onScannerClick()) e.preventDefault(); }
+              : undefined
+          }
           comingSoon={it.comingSoon}
           draggable={!it.comingSoon}
           dragging={dragId === it.href}
@@ -402,12 +532,30 @@ export default function GlobalToolbar() {
 
   const menuActive = hoverMenu || menuOpen;
 
+  // ── Scanner sub-strip (the second row under the pill) ─────────────────────
+  // Open by default whenever you enter the Scanner section; the Scanner circle
+  // toggles it while you're in there. ScannerSubStrip unmounts itself on every
+  // other route, so this state is inert elsewhere.
+  const pathname = usePathname();
+  const inScanner = isScannerSectionPath(pathname);
+  const [scannerStripOpen, setScannerStripOpen] = useState(true);
+  useEffect(() => {
+    if (inScanner) setScannerStripOpen(true);
+  }, [inScanner]);
+
+  const onScannerClick = () => {
+    if (!inScanner) return false;          // not there yet → let the Link navigate
+    setScannerStripOpen((v) => !v);        // already there → just toggle the strip
+    return true;
+  };
+
   return (
     // Outer band — gives the pill breathing room so it floats over content.
     <div
       style={{
         display: "flex",
-        justifyContent: "center",
+        flexDirection: "column",
+        alignItems: "stretch",
         flexShrink: 0,
         padding: isMobile ? "6px 8px" : "8px 14px",
         paddingTop: "max(8px, env(safe-area-inset-top, 0px))",
@@ -503,14 +651,25 @@ export default function GlobalToolbar() {
             <NavMenu anchor={anchor} />
           </div>
 
-          {/* ── CB Edge logo → dropdown (Feedback, etc.) ── */}
-          <div style={{ position: "relative", zIndex: 1, display: "flex" }}>
-            <LogoMenu compact={isMobile} />
-          </div>
-
-          {/* ── Bzila alerts bell — owner broadcasts to paid subscribers; pulses
-              when a new alert lands, click for the last 5 ── */}
-          <BzilaAlerts />
+          {/* ── CB Edge logo == the Bzila alerts button ──
+              The standalone bell is gone: BzilaAlerts still owns the polling,
+              seen-tracking and panel, but renders the logo as its trigger. The
+              logo glows orange with a Bzila badge when a new alert lands, and
+              /feedback (the logo's old job) moved into the panel footer. Free /
+              signed-out viewers get a plain /feedback link, unchanged. ── */}
+          <BzilaAlerts
+            renderTrigger={(s) => (
+              <LogoTrigger
+                compact={isMobile}
+                canSee={s.canSee}
+                hasNew={s.hasNew}
+                open={s.open}
+                count={s.count}
+                toggle={s.toggle}
+                triggerRef={s.ref}
+              />
+            )}
+          />
 
           {/* ── Left-side nav — icon+label shortcuts; each navigates the whole
               page to that route (drag-to-reorder, saved per browser).
@@ -518,7 +677,7 @@ export default function GlobalToolbar() {
               phone blows the pill far past the viewport and pushes the ticker,
               clock and user menu off-screen. Every one of these routes is
               already in the hamburger (NavMenu), so nothing is lost. ── */}
-          {!isMobile && <GexGroupNav isOwner={isOwner} />}
+          {!isMobile && <GexGroupNav isOwner={isOwner} onScannerClick={onScannerClick} />}
 
           {/* flexible gap — opens the center and pushes the quotes + clock
               cluster to the right ── */}
@@ -601,6 +760,13 @@ export default function GlobalToolbar() {
           )}
         </div>
       </div>
+
+      {/* ── Scanner sub-strip — a second row hanging off the bottom of the pill,
+          holding the Scanner section's tabs + split-out routes on one line.
+          Renders only inside the Scanner section; collapsed by clicking the
+          Scanner circle above. Desktop only: on a phone the pill's nav strip is
+          already hidden, and 13 pills have nowhere to go. ── */}
+      {!isMobile && <ScannerSubStrip open={scannerStripOpen} />}
     </div>
   );
 }
