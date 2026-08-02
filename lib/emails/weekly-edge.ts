@@ -57,22 +57,25 @@ export interface WeeklyEdgeOpts {
 }
 
 const DEFAULT_INDEX_MOVES: IndexMove[] = [
-  { name: "S&amp;P 500", pct: "-0.6%" },
-  { name: "Nasdaq", pct: "-2.1%" },
-  { name: "Dow", pct: "-0.4%" },
+  { name: "S&amp;P 500", pct: "+1.1%" },
+  { name: "Nasdaq", pct: "+1.6%" },
+  { name: "Dow", pct: "+1.0%" },
 ];
 
 const DEFAULT_CALENDAR: CalendarEvent[] = [
-  { day: "WED 7/29", desc: "<strong>FOMC Decision</strong> — rate futures are split, with several officials open to a hike. The week's single biggest catalyst for gamma positioning." },
-  { day: "THU 7/30", desc: "<strong>Q2 GDP (Advance)</strong> — tracking ~1.7–2.0% vs. 2.1% prior. <strong>June PCE inflation</strong> also lands same morning — core projected around 3.3% YoY." },
-  { day: "THU/FRI", desc: "Bank of England and Bank of Japan both meet — both expected to hold." },
+  { day: "MON 8/3", desc: "<strong>ISM Manufacturing PMI</strong> — kicks off a data-heavy week centered on the labor market." },
+  { day: "TUE 8/4", desc: "<strong>JOLTS Job Openings</strong> — first real read on hiring demand since June's soft print." },
+  { day: "WED 8/5", desc: "<strong>ADP Employment</strong> and <strong>ISM Services PMI</strong> — the setup for Friday's payrolls number." },
+  { day: "THU 8/6", desc: "<strong>Jobless Claims</strong> and <strong>Q2 Productivity</strong>." },
+  { day: "FRI 8/7", desc: "<strong>Nonfarm Payrolls</strong> — the week's single biggest catalyst, following a disappointing June hiring report." },
 ];
 
 const DEFAULT_EARNINGS: EarningsDay[] = [
-  { label: "Tue 7/28", tickers: [{ symbol: "PYPL" }, { symbol: "V" }, { symbol: "BA" }, { symbol: "UPS" }] },
-  { label: "Wed 7/29 — Microsoft &amp; Meta report", tickers: [{ symbol: "MSFT" }, { symbol: "META" }, { symbol: "QCOM" }, { symbol: "ARM" }, { symbol: "SOFI" }] },
-  { label: "Thu 7/30 — Apple &amp; Amazon report", tickers: [{ symbol: "AAPL" }, { symbol: "AMZN" }, { symbol: "HOOD" }, { symbol: "RDDT" }, { symbol: "RIVN" }, { symbol: "COIN" }, { symbol: "MSTR" }, { symbol: "RBLX" }] },
-  { label: "Fri 7/31", tickers: [{ symbol: "XOM" }, { symbol: "CVX" }] },
+  { label: "Mon 8/3", tickers: [{ symbol: "MAR" }, { symbol: "TSN" }, { symbol: "PLTR" }, { symbol: "VRTX" }, { symbol: "WHR" }] },
+  { label: "Tue 8/4", tickers: [{ symbol: "CAT" }, { symbol: "CMI" }, { symbol: "MCD" }, { symbol: "PFE" }, { symbol: "AMD" }, { symbol: "AMGN" }] },
+  { label: "Wed 8/5", tickers: [{ symbol: "LLY" }, { symbol: "CVS" }, { symbol: "DIS" }, { symbol: "MCK" }, { symbol: "SNDK" }, { symbol: "WDC" }] },
+  { label: "Thu 8/6", tickers: [{ symbol: "COP" }, { symbol: "DDOG" }, { symbol: "PH" }, { symbol: "ABNB" }, { symbol: "TEAM" }, { symbol: "ROKU" }] },
+  { label: "Fri 8/7", tickers: [{ symbol: "TTWO" }] },
 ];
 
 const DEFAULT_CONF_ROWS: ConfRow[] = [
@@ -89,23 +92,23 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "coreBullseyePct" | "coreBullseyeSub" | "ictModelPct" | "ictModelSub" | "estMovePct" | "estMoveSub" |
   "confRows" | "resultsNote" | "ctaUrl">> {
   return {
-    issueLabel: opts.issueLabel || "Week of Jul 27–31",
-    recapHeadline: opts.recapHeadline || "Big tech's AI reality check dragged the Nasdaq lower",
+    issueLabel: opts.issueLabel || "Week of Aug 3–7",
+    recapHeadline: opts.recapHeadline || "A broad rally, a blowout Microsoft print, and an FOMC hold with dissent",
     recapBody: opts.recapBody || [
-      "All three major indexes closed lower as Wall Street shifted from rewarding AI spending to demanding proof of returns. <strong style=\"color:#ffffff;\">Alphabet</strong> fell 7.8% despite beating estimates, after posting negative free cash flow for the first time in two decades and hiking capex guidance to $205B. <strong style=\"color:#ffffff;\">Tesla</strong> was the week's worst performer, down nearly 18% on missed earnings and delayed projects.",
-      "Energy was the lone bright spot, up 3.8% as Middle East escalation pushed Brent above $100/bbl mid-week — lifting Treasury yields and cooling rate-cut expectations before oil eased into the weekend.",
+      "All three major indexes closed last week higher, led by Consumer Cyclical (+6.1%) while Utilities lagged (-4.2%). The Fed held rates at 3.75% at Wednesday's meeting, with three officials dissenting in favor of a hike — a reminder the committee isn't unified. <strong style=\"color:#ffffff;\">Microsoft</strong> was the standout, up 22% on Azure and Copilot strength, with <strong style=\"color:#ffffff;\">Amazon</strong> also posting a strong beat.",
+      "Q2 earnings season is running well ahead of trend: 85% of S&amp;P 500 companies have beaten estimates versus a 67% historical average, and blended Q2 earnings growth is tracking +48% YoY with FY2026 guidance pointing to +31%. Breadth confirmed the move — 75 new 52-week highs against just 9 new lows, led by names like Apple, JPMorgan and Visa.",
     ],
     indexMoves: opts.indexMoves || DEFAULT_INDEX_MOVES,
-    aheadHeadline: opts.aheadHeadline || "FOMC decision + four of the Mag 7 report",
+    aheadHeadline: opts.aheadHeadline || "A labor-market data week, capped by Friday's payrolls report",
     calendarEvents: opts.calendarEvents || DEFAULT_CALENDAR,
     earningsDays: opts.earningsDays || DEFAULT_EARNINGS,
-    aheadNote: opts.aheadNote || "MSFT, META, AAPL and AMZN alone represent roughly 17% of S&amp;P 500 market cap — expect elevated gamma and wide expected moves into and through Wednesday/Thursday.",
-    oilHeadline: opts.oilHeadline || "Hormuz-to-Red Sea disruptions keep a war premium in crude",
-    oilPrice: opts.oilPrice || "$91.03",
-    oilChangeNote: opts.oilChangeNote || "Brent, Jul 27 · -7.5% off Monday's spike, still +23% MTD",
+    aheadNote: opts.aheadNote || "This is a data-driven week rather than a mega-cap-earnings week — ISM, JOLTS, ADP and Jobless Claims all build toward Friday's Nonfarm Payrolls, which carries extra weight after June's disappointing hiring print. Expect the 8:30 CT release to be the primary driver of gap risk into the 9:45 CB window.",
+    oilHeadline: opts.oilHeadline || "Hormuz tanker attacks and Black Sea pipeline strikes keep a war premium in crude",
+    oilPrice: opts.oilPrice || "$87.93",
+    oilChangeNote: opts.oilChangeNote || "Brent, Jul 31 · +1.2% on the day, +22.9% MTD, +26.2% YoY",
     oilBody: opts.oilBody || [
-      "Brent spiked above $100 mid-week on renewed Iran-linked shipping attacks that spread from the Strait of Hormuz to the Red Sea — now a key alternate route for Saudi exports — before easing after the US and Iran paused strikes over the weekend to make room for diplomacy. Forecasters still see the risk premium sticking: consensus calls for Brent near $101 by quarter-end and above $114 within 12 months if tensions reignite.",
-      "On the Russia-Ukraine front, Trump says a resolution is \"getting closer\" after separate calls with Putin and Zelenskiy, and Secretary Rubio says the US is \"ready to help end the war\" — though he cautions there's no quick deal ahead. Watch for headline risk on both fronts to keep spilling into overnight futures and gap risk around the 9:45 CB window.",
+      "Brent climbed again last week on renewed Iran-claimed tanker attacks in the Strait of Hormuz, continued Houthi strikes in the Red Sea, and Saudi operations against Iran-backed groups — compounded by declining US crude inventories. Separately, attacks on Black Sea and Caspian Pipeline Consortium infrastructure have disrupted Kazakhstan's export flows, adding a second front to the supply squeeze. Consensus now calls for Brent near $90 by quarter-end and above $102 within 12 months if the disruptions persist.",
+      "With crude holding a sustained risk premium and the Fed split on its next move, expect overnight futures to stay headline-sensitive — watch for gap risk around the 9:45 CB window on any fresh Hormuz, Red Sea or Black Sea developments.",
     ],
     coreBullseyePct: opts.coreBullseyePct || "100%",
     coreBullseyeSub: opts.coreBullseyeSub || "10:30 &amp; 12:00 · 80% at 9:45",
@@ -114,12 +117,12 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
     estMovePct: opts.estMovePct || "82.9%",
     estMoveSub: opts.estMoveSub || "closed inside weekly EM",
     confRows: opts.confRows || DEFAULT_CONF_ROWS,
-    resultsNote: opts.resultsNote || "Five straight days of 10:30 and 12:00 Core Bullseye hits inside 1 point — the kind of precision that turns FOMC week and earnings-week chop into a plan instead of a guess.",
+    resultsNote: opts.resultsNote || "Five straight days of 10:30 and 12:00 Core Bullseye hits inside 1 point — the kind of precision that turns payrolls-week and earnings-week chop into a plan instead of a guess.",
     ctaUrl: opts.ctaUrl || PRICING_URL,
   };
 }
 
-export const WEEKLY_EDGE_SUBJECT = "The Weekly Edge — FOMC week, Mag 7 earnings, and where CB Edge called it right";
+export const WEEKLY_EDGE_SUBJECT = "The Weekly Edge — payrolls week, earnings roll on, and where CB Edge called it right";
 
 /** Plain-text fallback. */
 export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
@@ -354,7 +357,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                   <td align="center" style="padding:26px 20px;">
                     <div style="font:700 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.16em;text-transform:uppercase;color:#00E676;">Founding Access Closing Soon</div>
                     <div style="font:900 22px/1.3 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:10px;">This is a heavy week. <span style="color:#00E676;">Trade it with an edge.</span></div>
-                    <div style="font:400 13px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;margin-top:8px;max-width:460px;">FOMC, four Mag 7 earnings, and an oil market still pricing in war risk — get the live GEX levels, Core Bullseye confidence scoring, and estimated-move tracking before founding pricing ends.</div>
+                    <div style="font:400 13px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#9fb3c8;margin-top:8px;max-width:460px;">Payrolls week, a full earnings slate, and an oil market still pricing in war risk — get the live GEX levels, Core Bullseye confidence scoring, and estimated-move tracking before founding pricing ends.</div>
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;"><tr>
                       <td align="center" style="border-radius:12px;background:#00C853;">
                         <a href="${cta}" style="display:inline-block;padding:14px 34px;font:800 15px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#04140A;text-decoration:none;border-radius:12px;">Claim Your Access →</a>
