@@ -15,48 +15,55 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
 <meta charset="utf-8">
 <title>CB Edge — X Post Studio</title>
 <style>
-  :root{--ui:#0b111c;--ui2:#111b2c;--line:#22314c;--mut:#7b91b4;--grn:#00e5a0;--txt:#e8eefb}
+  /* Palette mirrors owner-vite/src/lib/theme.ts (OWNER_THEME): cyan #219EBC is
+     the single accent, surfaces use the dashboard's panel/border language.
+     The old #00e5a0 green is gone — it read as a different product. */
+  :root{
+    --bg:#05060A;--ui:#0D1119;--ui2:#16181F;--line:rgba(255,255,255,0.10);
+    --lineHard:#23272F;--mut:#8E9196;--dim:#6A6E75;
+    --acc:#219EBC;--acc2:#8ECAE6;--gold:#FFB703;--txt:#FFFFFF
+  }
   *{box-sizing:border-box}
-  body{margin:0;background:#05080e;color:var(--txt);font-family:"Segoe UI",-apple-system,Helvetica,Arial,sans-serif;display:flex;height:100vh;overflow:hidden}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:"Inter","Segoe UI",-apple-system,Helvetica,Arial,sans-serif;display:flex;height:100vh;overflow:hidden}
 
   #side{width:330px;flex:none;background:var(--ui);border-right:1px solid var(--line);overflow-y:auto;padding:16px}
   #side h3{font-size:11px;letter-spacing:1.5px;color:var(--mut);margin:20px 0 8px;text-transform:uppercase}
   #side h3:first-child{margin-top:0}
   .row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
-  button{background:var(--ui2);color:var(--txt);border:1px solid var(--line);padding:8px 11px;border-radius:7px;font-size:12px;cursor:pointer;font-family:inherit}
-  button:hover{border-color:var(--grn);color:var(--grn)}
-  button.pri{background:var(--grn);color:#05140e;border-color:var(--grn);font-weight:700}
-  button.pri:hover{filter:brightness(1.12);color:#05140e}
-  button.on{border-color:var(--grn);color:var(--grn)}
-  select,input[type=text],input[type=number]{background:var(--ui2);color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:8px;font-size:12px;width:100%;font-family:inherit}
+  button{background:rgba(255,255,255,0.04);color:var(--txt);border:1px solid var(--line);padding:8px 11px;border-radius:10px;font-size:12px;cursor:pointer;font-family:inherit;font-weight:700;letter-spacing:.02em}
+  button:hover{border-color:rgba(33,158,188,0.45);color:var(--acc)}
+  button.pri{background:linear-gradient(180deg,rgba(33,158,188,0.16),rgba(33,158,188,0.05));color:var(--acc);border-color:rgba(33,158,188,0.25);font-weight:800}
+  button.pri:hover{background:linear-gradient(180deg,rgba(33,158,188,0.26),rgba(33,158,188,0.09));color:var(--acc)}
+  button.on{border-color:rgba(33,158,188,0.30);color:var(--acc);background:rgba(33,158,188,0.10)}
+  select,input[type=text],input[type=number]{background:rgba(0,0,0,0.30);color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;width:100%;font-family:inherit}
   label{font-size:11px;color:var(--mut);display:block;margin:8px 0 4px}
   .f2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-  input[type=color]{width:100%;height:32px;background:none;border:1px solid var(--line);border-radius:7px;padding:2px;cursor:pointer}
-  input[type=range]{width:100%}
-  .empty{color:#4b5f80;font-size:12px;line-height:1.6}
+  input[type=color]{width:100%;height:32px;background:none;border:1px solid var(--line);border-radius:10px;padding:2px;cursor:pointer}
+  input[type=range]{width:100%;accent-color:var(--acc)}
+  .empty{color:var(--dim);font-size:12px;line-height:1.6}
 
   #main{flex:1;overflow:auto;padding:26px;display:flex;flex-direction:column;align-items:center;gap:14px}
   #bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center}
   #hold{position:relative}
-  #stage{position:relative;overflow:hidden;transform-origin:top left;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  #stage{position:relative;overflow:hidden;transform-origin:top left;box-shadow:0 18px 40px rgba(0,0,0,.45)}
   #stage .grid{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.045) 1px,transparent 1px);background-size:100px 100px;pointer-events:none}
   #stage .bar{position:absolute;left:0;bottom:0;width:100%;height:12px}
 
   .ly{position:absolute;cursor:move}
-  .ly.sel{outline:2px solid var(--grn);outline-offset:2px}
+  .ly.sel{outline:2px solid var(--acc);outline-offset:2px}
   .ly[data-lock="1"]{cursor:default}
-  .ly[data-lock="1"].sel{outline-color:#ffb020}
-  .ly .hnd{display:none;position:absolute;right:-6px;bottom:-6px;width:16px;height:16px;background:var(--grn);border-radius:3px;cursor:nwse-resize;z-index:9}
+  .ly[data-lock="1"].sel{outline-color:var(--gold)}
+  .ly .hnd{display:none;position:absolute;right:-6px;bottom:-6px;width:16px;height:16px;background:var(--acc);border-radius:3px;cursor:nwse-resize;z-index:9}
   .ly.sel .hnd{display:block}
   .ly[data-lock="1"].sel .hnd{display:none}
   .ly[data-t=text]{padding:0}
   .ly[data-t=text] .ed{outline:none;white-space:pre-wrap;word-break:break-word}
-  .ly .ed[contenteditable="true"]{cursor:text;box-shadow:0 0 0 1px var(--grn) inset}
-  .ly[data-t=image]{border-radius:12px;overflow:hidden;background:#101a2c;border:1px solid #2a3c5e}
+  .ly .ed[contenteditable="true"]{cursor:text;box-shadow:0 0 0 1px var(--acc) inset}
+  .ly[data-t=image]{border-radius:16px;overflow:hidden;background:#0D1119;border:1px solid var(--lineHard)}
   .ly[data-t=image] img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
-  .ly[data-t=image] .ph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#43597d;font-size:14px;font-weight:600;text-align:center;padding:10px}
+  .ly[data-t=image] .ph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:14px;font-weight:700;letter-spacing:.02em;text-align:center;padding:10px}
   .ly[data-t=logo] img{width:100%;height:100%;object-fit:contain;object-position:left center;display:block;pointer-events:none}
-  .ly[data-t=box]{border-radius:14px}
+  .ly[data-t=box]{border-radius:18px}
   .ly[data-t=list] ul{list-style:none;margin:0;padding:0}
   .ly[data-t=list] li{display:flex;align-items:center;gap:14px;margin-bottom:16px}
   .ly[data-t=list] li:last-child{margin-bottom:0}
@@ -88,8 +95,8 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
     <option value="1200x1200">Square big — 1200×1200</option>
   </select>
   <div class="f2">
-    <div><label>Background</label><input type="color" id="bg" value="#070b12"></div>
-    <div><label>Accent</label><input type="color" id="ac" value="#00e5a0"></div>
+    <div><label>Background</label><input type="color" id="bg" value="#05060A"></div>
+    <div><label>Accent</label><input type="color" id="ac" value="#219EBC"></div>
   </div>
   <div class="row" style="margin-top:8px">
     <button id="tgrid" class="on">Grid lines</button>
@@ -137,6 +144,25 @@ export const STUDIO_HTML = String.raw`<!DOCTYPE html>
 // share a data-g id and clicking one always selects all of them.
 var stage=document.getElementById('stage'), W=1600, H=900, Z=0.55, sel=null, selSet=[];
 
+// C — the one palette every template draws from, mirroring OWNER_THEME in
+// owner-vite/src/lib/theme.ts. mut/dim/body are white-at-reduced-opacity
+// flattened over the panel, which is how the dashboard renders muted text.
+// Nothing in here is green: the accent is cyan and secondaries are its family.
+var C={
+  bg:'#05060A',      // OWNER_THEME.bg
+  panel:'#0D1119',   // OWNER_THEME.panel
+  panelUp:'#16181F', // OWNER_THEME.panelHover — nested/raised tiles
+  line:'#23272F',    // border rgba(255,255,255,0.10) over panel
+  body:'#C2C7D0',    // white @ ~80%
+  mut:'#8E9196',     // white @ ~55% — labels
+  dim:'#6A6E75',     // white @ ~38% — footers, strikethroughs
+  pale:'#8ECAE6',    // OWNER_THEME.green (pale blue) — secondary highlight
+  blue:'#7dd3fc',    // OWNER_LIGHT_BLUE — the card accent
+  gold:'#FFB703',    // OWNER_THEME.gold — codes, badges
+  orange:'#FB8501',  // OWNER_THEME.orange
+  red:'#f4948e'      // SOFT_RED
+};
+
 // Every logo layer starts as the real CB Edge mark. Safe for html2canvas: the
 // srcdoc iframe inherits the site origin, so this is a same-origin image and
 // won't taint the export canvas. Double-click a logo layer to swap it.
@@ -182,7 +208,7 @@ function mkLayer(o){
     d.innerHTML='<ul>'+items.map(function(i){
       return '<li><span class="dot"></span><span class="ed" contenteditable="false">'+i+'</span></li>';
     }).join('')+'</ul>';
-    d.dataset.fs=o.fs||28; d.dataset.col=o.col||'#e8eefb';
+    d.dataset.fs=o.fs||28; d.dataset.col=o.col||C.body;
     styleList(d);
   }
   if(o.t==='image'){
@@ -195,9 +221,9 @@ function mkLayer(o){
     d.addEventListener('dblclick',function(){pick(d)});
   }
   if(o.t==='box'){
-    d.style.background=o.bgc||'#0e1626';
-    d.style.border='1px solid '+(o.bd||'#22314c');
-    d.dataset.bgc=o.bgc||'#0e1626'; d.dataset.bd=o.bd||'#22314c';
+    d.style.background=o.bgc||C.panel;
+    d.style.border='1px solid '+(o.bd||C.line);
+    d.dataset.bgc=o.bgc||C.panel; d.dataset.bd=o.bd||C.line;
   }
   if(o.data) setImg(d,o.data);
   wire(d);
@@ -510,7 +536,7 @@ var TPL={
   ]},
   hero:function(){return [
     {t:'image',x:0,y:0,w:W,h:H,label:'Full dashboard screenshot'},
-    {t:'box',x:0,y:0,w:Math.round(W*0.62),h:H,bgc:'#05090f',bd:'#05090f'},
+    {t:'box',x:0,y:0,w:Math.round(W*0.62),h:H,bgc:C.bg,bd:C.bg},
     {t:'logo',x:90,y:80,w:440,h:150},
     {t:'text',x:90,y:270,w:820,html:'The data desks pay for.<br><span style="color:'+accent()+'">Built for retail.</span>',fs:62,fw:800},
     {t:'list',x:90,y:450,w:800,fs:28,items:['Live GEX charts &amp; full greeks','400+ stock options flow','8 years of IB stats','Heatmaps, stats &amp; more']}
@@ -518,64 +544,178 @@ var TPL={
   grid:function(){return [
     {t:'logo',x:90,y:60,w:340,h:110},
     {t:'text',x:470,y:80,w:1040,html:'Everything you need to trade the tape.',fs:36,fw:800},
-    {t:'box',x:90,y:230,w:460,h:250,bgc:'#0e1626'},
+    {t:'box',x:90,y:230,w:460,h:250},
     {t:'image',x:100,y:240,w:440,h:170,label:'Shot 1'},
     {t:'text',x:110,y:420,w:420,html:'Live GEX &amp; greeks',fs:23,fw:700},
-    {t:'box',x:574,y:230,w:460,h:250,bgc:'#0e1626'},
+    {t:'box',x:574,y:230,w:460,h:250},
     {t:'image',x:584,y:240,w:440,h:170,label:'Shot 2'},
     {t:'text',x:594,y:420,w:420,html:'400+ ticker flow',fs:23,fw:700},
-    {t:'box',x:1058,y:230,w:460,h:250,bgc:'#0e1626'},
+    {t:'box',x:1058,y:230,w:460,h:250},
     {t:'image',x:1068,y:240,w:440,h:170,label:'Shot 3'},
     {t:'text',x:1078,y:420,w:420,html:'Heatmaps &amp; stats',fs:23,fw:700},
-    {t:'box',x:90,y:504,w:944,h:250,bgc:'#0e1626'},
+    {t:'box',x:90,y:504,w:944,h:250},
     {t:'text',x:130,y:545,w:860,html:'8 YEARS',fs:60,fw:800,col:accent()},
-    {t:'text',x:130,y:625,w:860,html:'of historical IB stats — backtested context on every session.',fs:26,fw:700},
-    {t:'box',x:1058,y:504,w:460,h:250,bgc:'#0e1626'},
-    {t:'text',x:1098,y:545,w:380,html:'3 YEARS',fs:60,fw:800,col:'#37b6ff'},
-    {t:'text',x:1098,y:625,w:380,html:'historical estimated move',fs:24,fw:700}
+    {t:'text',x:130,y:625,w:860,html:'of historical IB stats — backtested context on every session.',fs:26,fw:700,col:C.body},
+    {t:'box',x:1058,y:504,w:460,h:250},
+    {t:'text',x:1098,y:545,w:380,html:'3 YEARS',fs:60,fw:800,col:C.pale},
+    {t:'text',x:1098,y:625,w:380,html:'historical estimated move',fs:24,fw:700,col:C.body}
   ]},
   stat:function(){return [
     {t:'logo',x:90,y:70,w:380,h:130},
     {t:'text',x:90,y:300,w:1400,html:'400+',fs:190,fw:800,col:accent(),lh:1},
     {t:'text',x:90,y:530,w:1100,html:'tickers of live options flow — every sweep, block and split, as it prints.',fs:44,fw:700},
-    {t:'text',x:90,y:790,w:900,html:'cbedge.net',fs:26,fw:700,col:'#7b91b4'}
+    {t:'text',x:90,y:790,w:900,html:'cbedge.net',fs:26,fw:700,col:C.mut}
   ]},
   promo:function(){return [
     {t:'logo',x:90,y:70,w:400,h:140},
     {t:'text',x:90,y:260,w:900,html:'Lock in founder pricing.',fs:64,fw:800},
-    {t:'box',x:90,y:390,w:420,h:200,bgc:'#0e1626'},
-    {t:'text',x:130,y:420,w:340,html:'Monthly',fs:24,fw:700,col:'#7b91b4'},
-    {t:'text',x:130,y:465,w:340,html:'<s style="color:#5c7295">$120</s> <span style="color:'+accent()+'">$45</span>/mo',fs:46,fw:800},
-    {t:'text',x:130,y:540,w:340,html:'code MONTH',fs:20,fw:700,col:'#37b6ff'},
-    {t:'box',x:540,y:390,w:420,h:200,bgc:'#0e1626'},
-    {t:'text',x:580,y:420,w:340,html:'Yearly',fs:24,fw:700,col:'#7b91b4'},
-    {t:'text',x:580,y:465,w:340,html:'<s style="color:#5c7295">$1000</s> <span style="color:'+accent()+'">$500</span>/yr',fs:46,fw:800},
-    {t:'text',x:580,y:540,w:340,html:'code YEAR',fs:20,fw:700,col:'#37b6ff'},
+    {t:'box',x:90,y:390,w:420,h:200},
+    {t:'text',x:130,y:420,w:340,html:'Monthly',fs:24,fw:700,col:C.mut},
+    {t:'text',x:130,y:465,w:340,html:'<s style="color:'+C.dim+'">$120</s> <span style="color:'+accent()+'">$45</span>/mo',fs:46,fw:800},
+    {t:'text',x:130,y:540,w:340,html:'code MONTH',fs:20,fw:700,col:C.gold},
+    {t:'box',x:540,y:390,w:420,h:200},
+    {t:'text',x:580,y:420,w:340,html:'Yearly',fs:24,fw:700,col:C.mut},
+    {t:'text',x:580,y:465,w:340,html:'<s style="color:'+C.dim+'">$1000</s> <span style="color:'+accent()+'">$500</span>/yr',fs:46,fw:800},
+    {t:'text',x:580,y:540,w:340,html:'code YEAR',fs:20,fw:700,col:C.gold},
     {t:'list',x:90,y:640,w:880,fs:24,items:['Live GEX, greeks &amp; key levels','400+ ticker options flow','8 years of IB stats · cancel anytime']},
     {t:'image',x:1010,y:120,w:520,h:660,label:'Dashboard screenshot'}
   ]},
   quote:function(){return [
     {t:'logo',x:90,y:70,w:380,h:130},
     {t:'text',x:90,y:290,w:1420,html:'Most retail traders are flying blind.<br><span style="color:'+accent()+'">CB Edge isn\'t.</span>',fs:78,fw:800},
-    {t:'text',x:90,y:600,w:1200,html:'Real-time gamma, orderflow and key levels — the same read the desks are working with.',fs:34,fw:700,col:'#a9bcd8'},
-    {t:'text',x:90,y:790,w:900,html:'cbedge.net',fs:26,fw:700,col:'#7b91b4'}
+    {t:'text',x:90,y:600,w:1200,html:'Real-time gamma, orderflow and key levels — the same read the desks are working with.',fs:34,fw:700,col:C.body},
+    {t:'text',x:90,y:790,w:900,html:'cbedge.net',fs:26,fw:700,col:C.mut}
   ]},
   win:function(){return [
     {t:'logo',x:80,y:56,w:330,h:110},
-    {t:'text',x:80,y:186,w:900,html:'THE SCANNER FLAGGED IT.',fs:26,fw:700,col:'#7b91b4',ls:3},
+    {t:'text',x:80,y:186,w:900,html:'THE SCANNER FLAGGED IT.',fs:26,fw:700,col:C.mut,ls:3},
     {t:'text',x:80,y:232,w:920,html:'PLTR 140C <span style="color:'+accent()+'">+129.6%</span>',fs:72,fw:800},
-    {t:'box',x:80,y:350,w:900,h:150,bgc:'#0e1626'},
-    {t:'text',x:112,y:378,w:260,html:'ENTRY',fs:18,fw:700,col:'#7b91b4',ls:2},
+    {t:'box',x:80,y:350,w:900,h:150},
+    {t:'text',x:112,y:378,w:260,html:'ENTRY',fs:18,fw:700,col:C.mut,ls:2},
     {t:'text',x:112,y:410,w:260,html:'$1.35',fs:44,fw:800},
-    {t:'text',x:392,y:378,w:260,html:'NOW',fs:18,fw:700,col:'#7b91b4',ls:2},
+    {t:'text',x:392,y:378,w:260,html:'NOW',fs:18,fw:700,col:C.mut,ls:2},
     {t:'text',x:392,y:410,w:260,html:'$3.10',fs:44,fw:800,col:accent()},
-    {t:'text',x:672,y:378,w:280,html:'PER CONTRACT',fs:18,fw:700,col:'#7b91b4',ls:2},
+    {t:'text',x:672,y:378,w:280,html:'PER CONTRACT',fs:18,fw:700,col:C.mut,ls:2},
     {t:'text',x:672,y:410,w:280,html:'+$175',fs:44,fw:800,col:accent()},
     {t:'list',x:80,y:540,w:900,fs:25,items:['$3.2M sweep · 8.2% OTM · +101% vs open','Scanner score 60 — flagged “Very strong”','Jul 24 expiry · spot 129.37 at the print']},
     {t:'image',x:1010,y:56,w:520,h:400,label:'Scanner card screenshot'},
     {t:'image',x:1010,y:480,w:520,h:330,label:'Option price chart screenshot'},
-    {t:'text',x:80,y:812,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:'#5c7295'}
+    {t:'text',x:80,y:812,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:C.dim}
   ]},
+
+  // ── Post types that match what actually goes out on @BzilaTrades ──────────
+  // levels · updates · explain · earnings · recap · signal
+
+  /* Daily "here are the walls" post — the pinned-tweet format as a card. */
+  levels:function(){return [
+    {t:'logo',x:80,y:56,w:340,h:112},
+    {t:'text',x:80,y:186,w:900,html:'$SPX · KEY LEVELS · 0DTE',fs:22,fw:700,col:C.mut,ls:3},
+    {t:'text',x:80,y:228,w:920,html:'Where the dealers are <span style="color:'+accent()+'">pinned.</span>',fs:56,fw:800},
+    {t:'box',x:80,y:340,w:900,h:112},
+    {t:'text',x:116,y:366,w:340,html:'CALL WALL',fs:19,fw:700,col:C.mut,ls:2},
+    {t:'text',x:560,y:360,w:220,html:'7450',fs:44,fw:800,col:accent()},
+    {t:'text',x:800,y:376,w:160,html:'resistance',fs:20,fw:700,col:C.dim},
+    {t:'box',x:80,y:466,w:900,h:112},
+    {t:'text',x:116,y:492,w:340,html:'GAMMA FLIP',fs:19,fw:700,col:C.mut,ls:2},
+    {t:'text',x:560,y:486,w:220,html:'7405',fs:44,fw:800,col:C.gold},
+    {t:'text',x:800,y:502,w:160,html:'regime line',fs:20,fw:700,col:C.dim},
+    {t:'box',x:80,y:592,w:900,h:112},
+    {t:'text',x:116,y:618,w:340,html:'PUT WALL',fs:19,fw:700,col:C.mut,ls:2},
+    {t:'text',x:560,y:612,w:220,html:'7350',fs:44,fw:800,col:C.pale},
+    {t:'text',x:800,y:628,w:160,html:'support',fs:20,fw:700,col:C.dim},
+    {t:'text',x:80,y:736,w:900,html:'Updated live all day — not a morning screenshot.',fs:26,fw:700,col:C.body},
+    {t:'text',x:80,y:790,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:C.dim},
+    {t:'image',x:1020,y:56,w:500,h:788,label:'GEX ladder / levels screenshot'}
+  ]},
+
+  /* "Shipped this week" — changelog / newest updates post. */
+  updates:function(){return [
+    {t:'logo',x:80,y:56,w:340,h:112},
+    {t:'text',x:80,y:186,w:900,html:'WHAT&#39;S NEW',fs:22,fw:700,col:C.mut,ls:3},
+    {t:'text',x:80,y:228,w:920,html:'Shipped <span style="color:'+accent()+'">this week.</span>',fs:58,fw:800},
+    {t:'box',x:80,y:348,w:900,h:404},
+    {t:'list',x:124,y:392,w:820,fs:27,items:['New — ES/SPX ladder with live gamma walls','New — estimated-move stat cards for earnings','Faster — GEX refresh cut to under a second','Fixed — RTH/ETH toggle now holds across pages','Discord alerts fire the moment DEX crosses zero']},
+    {t:'text',x:80,y:790,w:900,html:'Full changelog at cbedge.net/whats-new',fs:22,fw:700,col:C.dim},
+    {t:'image',x:1020,y:56,w:500,h:696,label:'Screenshot of the new feature'},
+    {t:'box',x:1020,y:788,w:500,h:56,bgc:C.panelUp},
+    {t:'text',x:1052,y:802,w:440,html:'Free 2-day trial · cbedge.net',fs:22,fw:700,col:C.pale}
+  ]},
+
+  /* Big screenshot + numbered callouts — the "here's how to read it" post. */
+  explain:function(){return [
+    {t:'logo',x:80,y:52,w:300,h:100},
+    {t:'text',x:420,y:60,w:600,html:'HOW TO READ IT',fs:20,fw:700,col:C.mut,ls:3},
+    {t:'text',x:420,y:92,w:620,html:'The GEX ladder, line by line.',fs:38,fw:800},
+    {t:'image',x:80,y:186,w:940,h:620,label:'Screenshot to annotate'},
+    {t:'box',x:1060,y:186,w:460,h:190},
+    {t:'text',x:1092,y:210,w:400,html:'1',fs:32,fw:800,col:accent()},
+    {t:'text',x:1092,y:258,w:400,html:'Say what this part of the chart is showing you.',fs:23,fw:700,col:C.body},
+    {t:'box',x:1060,y:401,w:460,h:190},
+    {t:'text',x:1092,y:425,w:400,html:'2',fs:32,fw:800,col:accent()},
+    {t:'text',x:1092,y:473,w:400,html:'Then what it means for where price can go.',fs:23,fw:700,col:C.body},
+    {t:'box',x:1060,y:616,w:460,h:190},
+    {t:'text',x:1092,y:640,w:400,html:'3',fs:32,fw:800,col:accent()},
+    {t:'text',x:1092,y:688,w:400,html:'Then the trade it sets up. Keep it to one idea.',fs:23,fw:700,col:C.body},
+    {t:'text',x:80,y:836,w:900,html:'cbedge.net · not financial advice',fs:20,fw:700,col:C.dim}
+  ]},
+
+  /* Earnings estimated-move stat card — the $AMD-style post. */
+  earnings:function(){return [
+    {t:'logo',x:80,y:52,w:320,h:106},
+    {t:'text',x:1140,y:74,w:380,html:'cbedge.net',fs:22,fw:700,col:C.dim,al:'right'},
+    {t:'text',x:80,y:178,w:900,html:'EARNINGS · ESTIMATED MOVE',fs:22,fw:700,col:C.mut,ls:3},
+    {t:'text',x:80,y:216,w:900,html:'$AMD',fs:84,fw:800},
+    {t:'text',x:80,y:326,w:900,html:'Reports Tuesday after the close.',fs:30,fw:700,col:C.pale},
+    {t:'box',x:80,y:404,w:350,h:184},
+    {t:'text',x:112,y:432,w:290,html:'EXPECTED MOVE',fs:17,fw:700,col:C.mut,ls:2},
+    {t:'text',x:112,y:466,w:290,html:'±5.8%',fs:50,fw:800,col:accent()},
+    {t:'text',x:112,y:534,w:290,html:'$9.42 either side',fs:19,fw:700,col:C.dim},
+    {t:'box',x:454,y:404,w:350,h:184},
+    {t:'text',x:486,y:432,w:290,html:'UPPER',fs:17,fw:700,col:C.mut,ls:2},
+    {t:'text',x:486,y:466,w:290,html:'$172.30',fs:50,fw:800,col:C.pale},
+    {t:'text',x:486,y:534,w:290,html:'1σ to the upside',fs:19,fw:700,col:C.dim},
+    {t:'box',x:828,y:404,w:350,h:184},
+    {t:'text',x:860,y:432,w:290,html:'LOWER',fs:17,fw:700,col:C.mut,ls:2},
+    {t:'text',x:860,y:466,w:290,html:'$153.46',fs:50,fw:800,col:C.red},
+    {t:'text',x:860,y:534,w:290,html:'1σ to the downside',fs:19,fw:700,col:C.dim},
+    {t:'box',x:1202,y:404,w:350,h:184},
+    {t:'text',x:1234,y:432,w:290,html:'IV CRUSH',fs:17,fw:700,col:C.mut,ls:2},
+    {t:'text',x:1234,y:466,w:290,html:'−38%',fs:50,fw:800,col:C.gold},
+    {t:'text',x:1234,y:534,w:290,html:'front-month, post-print',fs:19,fw:700,col:C.dim},
+    {t:'image',x:80,y:624,w:1472,h:224,label:'Estimated-move stat card screenshot'}
+  ]},
+
+  /* "Called it" recap — the level on the left, what price did on the right. */
+  recap:function(){return [
+    {t:'logo',x:80,y:52,w:320,h:106},
+    {t:'text',x:80,y:176,w:1000,html:'CALLED IT.',fs:24,fw:700,col:C.mut,ls:3},
+    {t:'text',x:80,y:216,w:1300,html:'7450 retest — <span style="color:'+accent()+'">clean rejection.</span>',fs:62,fw:800},
+    {t:'box',x:80,y:344,w:720,h:412},
+    {t:'text',x:112,y:370,w:640,html:'THE LEVEL WE POSTED',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'image',x:112,y:404,w:656,h:322,label:'Levels / GEX screenshot'},
+    {t:'box',x:840,y:344,w:720,h:412},
+    {t:'text',x:872,y:370,w:640,html:'WHAT PRICE DID',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'image',x:872,y:404,w:656,h:322,label:'Chart screenshot'},
+    {t:'text',x:80,y:790,w:1000,html:'Same levels, every session — cbedge.net',fs:24,fw:700,col:C.body},
+    {t:'text',x:80,y:834,w:1000,html:'not financial advice',fs:20,fw:700,col:C.dim}
+  ]},
+
+  /* Live alert card — "DEX crossed 0", Discord signal posts. */
+  signal:function(){return [
+    {t:'logo',x:80,y:56,w:340,h:112},
+    {t:'box',x:80,y:190,w:250,h:44,bgc:C.panelUp},
+    {t:'text',x:104,y:200,w:210,html:'CB EDGE SIGNALS',fs:18,fw:800,col:accent(),ls:2},
+    {t:'text',x:80,y:262,w:1000,html:'DEX crossed <span style="color:'+accent()+'">zero.</span>',fs:66,fw:800},
+    {t:'box',x:80,y:388,w:900,h:124},
+    {t:'text',x:116,y:412,w:380,html:'FIRED',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'text',x:116,y:442,w:380,html:'9:48 AM ET',fs:38,fw:800},
+    {t:'text',x:560,y:412,w:380,html:'SPOT',fs:18,fw:700,col:C.mut,ls:2},
+    {t:'text',x:560,y:442,w:380,html:'7,412.55',fs:38,fw:800,col:accent()},
+    {t:'list',x:80,y:552,w:900,fs:26,items:['Gamma flipped positive — dealers buying dips','Call wall 7450 · put wall 7350','Pushed to Discord the second it fires']},
+    {t:'text',x:80,y:822,w:900,html:'cbedge.net · alerts in real time · not financial advice',fs:20,fw:700,col:C.dim},
+    {t:'image',x:1020,y:56,w:500,h:788,label:'Signal / alert card screenshot'}
+  ]},
+
   blank:function(){return []}
 };
 
@@ -583,7 +723,10 @@ function customTpls(){ try{return JSON.parse(localStorage.getItem('cbe_tpls')||'
 
 function refreshT(){
   var sel0=document.getElementById('tpl'), cur=sel0.value;
-  var built=[['feature','Feature list + shots'],['hero','Hero screenshot'],['grid','Feature grid'],
+  var built=[['levels','Key levels — walls &amp; flip'],['earnings','Earnings — estimated move'],
+             ['explain','Screenshot + callouts'],['recap','Called it — level vs price'],
+             ['signal','Live signal / alert'],['updates','What&#39;s new / changelog'],
+             ['feature','Feature list + shots'],['hero','Hero screenshot'],['grid','Feature grid'],
              ['stat','Big stat'],['promo','Pricing / promo'],['quote','Quote / one-liner'],
              ['win','Scanner win / trade result'],['blank','Blank canvas']];
   var c=customTpls();
@@ -711,9 +854,9 @@ document.getElementById('pdel').onclick=function(){
   var p=presets(); delete p[n]; localStorage.setItem('cbe_posts',JSON.stringify(p)); refreshP();
 };
 
-stage.style.background='#070b12';
-stage.querySelector('.bar').style.background='#00e5a0';
-setSize(); refreshT(); loadTpl('feature'); fit(); refreshP();
+stage.style.background=C.bg;
+stage.querySelector('.bar').style.background=accent();
+setSize(); refreshT(); loadTpl('levels'); fit(); refreshP();
 window.addEventListener('resize',fit);
 </script>
 </body>

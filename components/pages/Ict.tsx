@@ -15,7 +15,7 @@
  *      live signals.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import {
   CandlestickSeries, ColorType, CrosshairMode, createChart,
@@ -29,6 +29,9 @@ import {
   analyzeICT, activeWindows, ICT_WINDOWS, etMinutes,
   type IctCandle, type IctAnalysis, type TimeWindow,
 } from "@/lib/calculations/ictConcepts";
+import {
+  buildIctPlays, playSide, playRR, type IctPlay,
+} from "@/lib/calculations/ictPlays";
 // Glossary content is shared with the public /explore/ict marketing page.
 import { ICT_CONCEPTS as CONCEPTS, type IctConcept as Concept } from "@/components/explore/ictGlossary";
 
@@ -47,6 +50,15 @@ const C = {
   ob:     "48,209,88",    // Order Block → green
   liq:    "255,159,67",   // Liquidity → orange
   struct: "167,139,250",  // Structure (BOS/CHOCH/MSS) → purple
+  play:   "255,193,7",    // Play markup (position tool) → gold
+};
+
+// Long/short position-tool palette — profit zone above/below entry, stop zone the
+// other side, mirroring the TradingView drawing tool.
+const PLAY_C = {
+  profit: "48,209,88",
+  loss:   "255,91,91",
+  entry:  "255,255,255",
 };
 
 // Kill-zone band colors by kind.
@@ -248,6 +260,19 @@ export default function IctPage() {
   const [showStruct, setShowStruct] = useState(false);
   const [showKz, setShowKz] = useState(false);
   const [showPd, setShowPd] = useState(false);
+  // Play markup (the long/short position tool) is the headline layer — ON by default.
+  // The chart only shows a green/red ENTRY DOT per play; clicking a dot opens that
+  // play's position box + a detail card. Keeps six simultaneous setups readable.
+  const [showPlays, setShowPlays] = useState(true);
+  const [openPlay, setOpenPlay] = useState<{ id: string; x: number; y: number } | null>(null);
+  const openPlayRef = useRef(openPlay); openPlayRef.current = openPlay;
+  // Screen position of each play's entry dot, refreshed every draw, so a click on
+  // a row in the Plays card can anchor the same popup the dot does.
+  const dotPosRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const [overDot, setOverDot] = useState(false);
+  // Drag guard: panning the chart ends in a click, which would otherwise close
+  // the popup on every pan.
+  const pressRef = useRef<{ x: number; y: number } | null>(null);
 
   // Which glossary cards are expanded (collapsed by default → icon + title only).
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -306,8 +331,19 @@ export default function IctPage() {
 
   const ict: IctAnalysis = useMemo(() => analyzeICT(candles), [candles]);
   const ictRef = useRef(ict); ictRef.current = ict;
-  const togglesRef = useRef({ showFvg, showOb, showLiq, showStruct, showKz, showPd });
-  togglesRef.current = { showFvg, showOb, showLiq, showStruct, showKz, showPd };
+
+  // Tradeable plays (entry / stop / 1R-2R-3R) derived from the SAME analysis —
+  // no second detection pass. Re-evaluated on the 30s tick so an armed setup
+  // ages out (and a live one resolves) without waiting for the next bar.
+  const plays: IctPlay[] = useMemo(() => {
+    void clockTick;
+    return buildIctPlays(candles, ict, { tfMin: tf });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candles, ict, tf, clockTick]);
+  const playsRef = useRef(plays); playsRef.current = plays;
+
+  const togglesRef = useRef({ showFvg, showOb, showLiq, showStruct, showKz, showPd, showPlays });
+  togglesRef.current = { showFvg, showOb, showLiq, showStruct, showKz, showPd, showPlays };
 
   const liveWindows = useMemo(() => {
     void clockTick;
@@ -597,7 +633,249 @@ export default function IctPage() {
         label(ctx, x + 2, y + (s.dir === "bull" ? -3 : 11), `${s.kind} ${s.dir === "bull" ? "↑" : "↓"}`, `rgba(${C.struct},0.95)`);
       }
     }
+
+    // ── PLAY MARKUP — entry dots + the long/short position tool ──────────────
+    // Drawn LAST so plays sit on top of the zone layers. Each play marks its
+    // ENTRY with a green (long) / red (short) dot; clicking a dot opens that
+    // play's position box — a green profit zone (entry → 3R), a red stop zone
+    // (entry → structural stop), the entry line between them, and dashed 1R/2R
+    // rungs inside the profit zone, laid out like TradingView's Long/Short
+    // Position drawing tool. ARMED plays draw dashed + faded (the trade is only
+    // possible); a resolved play stops extending at the bar that finished it.
+    // Only the OPEN play draws its box — six boxes at once was unreadable.
+    if (t.showPlays && candles.length) {
+      // Bar pitch, so a box can be sized in BARS (like the TradingView tool)
+      // instead of always stretching to the right edge — overlapping plays were
+      // unreadable when every box ended at the same x.
+      const lastTs = candles[candles.length - 1].timestamp;
+      const prevTs = candles[Math.max(0, candles.length - 2)].timestamp;
+      const xLast = xOf(lastTs), xPrev = xOf(prevTs);
+      const pitch = xLast != null && xPrev != null && xLast !== xPrev ? Math.abs(xLast - xPrev) : 6;
+      const RUNWAY = 8;   // bars of room drawn to the right of the live bar
+      const MIN_BARS = 10;
+      // Pill rows already taken this frame, so headers on stacked plays don't
+      // print on top of each other.
+      const pillRows: Array<{ x: number; y: number; w: number }> = [];
+      const dots = new Map<string, { x: number; y: number }>();
+      // Draw oldest → newest so the freshest play ends up on top.
+      for (const p of [...playsRef.current].reverse()) {
+        const isOpen = openPlayRef.current?.id === p.id;
+        const xStart = xOf(p.triggerTs ?? p.armedTs) ?? 0;
+        const xEndRaw = p.resolvedTs != null
+          ? (xOf(p.resolvedTs) ?? rightEdge) + pitch
+          : (xLast ?? rightEdge) + RUNWAY * pitch;
+        const xEnd = Math.min(rightEdge, Math.max(xEndRaw, xStart + MIN_BARS * pitch));
+        // A play that triggers on the LIVE bar has no room to its right, so the
+        // box would collapse into a sliver against the price scale — exactly the
+        // play you most want to read. Give it a minimum on-screen width by
+        // letting the box hang back to the LEFT of the entry instead (the dot
+        // still marks the true entry bar; the box only has to carry the levels).
+        const MIN_W = 132;
+        const xLeft = xEnd - xStart < MIN_W ? Math.max(0, xEnd - MIN_W) : xStart;
+        const yE = yOf(p.entry), yS = yOf(p.stop), yT3 = yOf(p.targets[p.targets.length - 1]);
+        if (yE == null || yS == null || yT3 == null) continue;
+        const x = Math.min(xLeft, xEnd);
+        const w = Math.max(6, Math.abs(xEnd - xLeft));
+        const armed = p.state === "armed";
+        const alpha = p.state === "live" ? 1 : armed ? 0.7 : 0.34;
+        const side = playSide(p.dir);
+        const yProfTop = Math.min(yE, yT3), profH = Math.abs(yT3 - yE);
+        const yStopTop = Math.min(yE, yS), stopH = Math.abs(yS - yE);
+        const rr = playRR(p);
+        const t3 = p.targets[p.targets.length - 1];
+        const stateTxt = armed ? "ARMED" : p.state === "live" ? "LIVE" : p.state === "won" ? `WON ${p.mfeR.toFixed(1)}R` : "STOPPED";
+        const stateCol = armed ? `rgb(${C.play})` : p.state === "live" ? "#22e08a" : p.state === "won" ? "#22e08a" : "#ff6b6b";
+
+        // The entry dot is the always-on marker; remember where it landed so the
+        // click hit-test and the Plays-card rows can both find it.
+        dots.set(p.id, { x: xStart, y: yE });
+
+        // Everything below is the position box — only for the play you opened.
+        // (The dot's own hover region is registered in the dot pass, after
+        // collision nudging, so the hit-test matches where it actually drew.)
+        if (!isOpen) continue;
+        ctx.globalAlpha = alpha;
+
+        // Profit zone (entry → 3R) and stop zone (entry → stop).
+        ctx.fillStyle = `rgba(${PLAY_C.profit},${armed ? 0.08 : 0.13})`;
+        ctx.fillRect(x, yProfTop, w, profH);
+        ctx.fillStyle = `rgba(${PLAY_C.loss},${armed ? 0.10 : 0.16})`;
+        ctx.fillRect(x, yStopTop, w, stopH);
+
+        ctx.lineWidth = 1;
+        ctx.setLineDash(armed ? [5, 4] : []);
+        ctx.strokeStyle = `rgba(${PLAY_C.profit},0.55)`;
+        ctx.strokeRect(x, yProfTop, w, profH);
+        ctx.strokeStyle = `rgba(${PLAY_C.loss},0.55)`;
+        ctx.strokeRect(x, yStopTop, w, stopH);
+
+        // 1R / 2R rungs inside the profit zone. Rung labels hug the RIGHT edge —
+        // the left edge belongs to the entry/stop/target price tags.
+        const rungX = Math.min(x + w - 62, W - 72);
+        for (let i = 0; i < p.targets.length - 1; i++) {
+          const yT = yOf(p.targets[i]);
+          if (yT == null) continue;
+          ctx.strokeStyle = `rgba(${PLAY_C.profit},${p.hitR > i ? 0.85 : 0.35})`;
+          ctx.setLineDash([3, 4]);
+          ctx.beginPath(); ctx.moveTo(x, yT); ctx.lineTo(x + w, yT); ctx.stroke();
+          if (w > 110 && Math.abs(yT3 - yE) > 34) {
+            label(ctx, rungX, yT - 3, `${i + 1}R ${p.targets[i].toFixed(2)}${p.hitR > i ? " ✓" : ""}`,
+              `rgba(${PLAY_C.profit},${p.hitR > i ? 1 : 0.7})`);
+          }
+        }
+        ctx.setLineDash([]);
+
+        // Entry line + the left-hand handle that ties the two zones together.
+        ctx.strokeStyle = `rgba(${PLAY_C.entry},0.9)`; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(x, yE); ctx.lineTo(x + w, yE); ctx.stroke();
+        ctx.strokeStyle = `rgba(${C.play},0.8)`; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(x, Math.min(yProfTop, yStopTop)); ctx.lineTo(x, Math.max(yProfTop + profH, yStopTop + stopH)); ctx.stroke();
+        ctx.lineWidth = 1;
+
+        // Price tags, anchored to the LEFT edge of the box.
+        // A play that just triggered sits hard against the right edge with no room
+        // inside the box — flip its tags to the outside-left rather than clipping
+        // them (the freshest play is the one you most need the numbers for).
+        const TAG_W = 124;
+        const tagX = x + 6 + TAG_W > W ? Math.max(4, x - TAG_W) : x + 6;
+        // Skip a tag when its zone is too thin to hold the text — a squashed box
+        // is better read from the Plays card than from overlapping labels.
+        if (profH >= 14) {
+          label(ctx, tagX, yT3 < yE ? yProfTop + 11 : yProfTop + profH - 4,
+            `TP ${t3.toFixed(2)} · ${Math.abs(t3 - p.entry).toFixed(2)} pts`, `rgba(${PLAY_C.profit},0.95)`);
+        }
+        label(ctx, tagX, yE - 4, `ENTRY ${p.entry.toFixed(2)}`, "rgba(255,255,255,0.95)");
+        if (stopH >= 14) {
+          label(ctx, tagX, yS > yE ? yStopTop + stopH - 4 : yStopTop + 11,
+            `SL ${p.stop.toFixed(2)} · ${p.risk.toFixed(2)} pts`, `rgba(${PLAY_C.loss},0.95)`);
+        }
+
+        // Header pill: concept · side · R:R · state. Pushed down a row at a time
+        // while it would land on a pill already drawn this frame.
+        const head = `${p.label.toUpperCase()} · ${side} · ${rr.toFixed(1)}R:R`;
+        ctx.font = "700 10px Inter, system-ui, sans-serif";
+        const headW = ctx.measureText(head).width + ctx.measureText(stateTxt).width + 26;
+        let headY = Math.max(16, Math.min(yProfTop, yStopTop) - 6);
+        for (let guard = 0; guard < 8; guard++) {
+          const clash = pillRows.some((r) => Math.abs(r.y - headY) < 17 && x < r.x + r.w && x + headW > r.x);
+          if (!clash) break;
+          headY += 18;
+        }
+        pillRows.push({ x, y: headY, w: headW });
+        pill(ctx, x, headY, head, stateTxt, stateCol, alpha);
+
+        ctx.globalAlpha = 1;
+
+        // Hover: both zones map back to the concept card, with the play's numbers.
+        const detail = `${side} ${p.entry.toFixed(2)} · SL ${p.stop.toFixed(2)} · TP ${t3.toFixed(2)} (${rr.toFixed(1)}R) · ${stateTxt}`;
+        addRect(x, yProfTop, w, profH, p.conceptId, `${p.label} — profit zone`, detail);
+        addRect(x, yStopTop, w, stopH, p.conceptId, `${p.label} — stop zone`, detail);
+      }
+
+      // ── Entry dots ────────────────────────────────────────────────────────
+      // Second pass so every dot sits above the open play's box. Green = long,
+      // red = short (direction, not outcome). Live plays get a halo ring, armed
+      // plays a dashed hollow ring, resolved plays fade back.
+      //
+      // Two detectors firing the same bar at the same price (Turtle Soup → 2022
+      // Model is the canonical pair) put their dots on top of each other, so the
+      // second one is invisible AND unclickable. Nudge collisions sideways —
+      // sideways, not vertically, because the y is the entry PRICE.
+      const placed: Array<{ x: number; y: number }> = [];
+      for (const p of playsRef.current) {
+        const d0 = dots.get(p.id);
+        if (!d0) continue;
+        let dx = d0.x;
+        for (let guard = 0; guard < 6; guard++) {
+          if (!placed.some((q) => Math.hypot(dx - q.x, d0.y - q.y) < 12)) break;
+          dx += 13;
+        }
+        placed.push({ x: dx, y: d0.y });
+        dots.set(p.id, { x: dx, y: d0.y });
+      }
+      dotPosRef.current = dots;
+      for (const p of playsRef.current) {
+        const d = dots.get(p.id);
+        if (!d) continue;
+        const isOpen = openPlayRef.current?.id === p.id;
+        const long = p.dir === "bull";
+        const rgb = long ? PLAY_C.profit : PLAY_C.loss;
+        const armed = p.state === "armed";
+        const done = p.state === "won" || p.state === "lost";
+        const a2 = done ? 0.5 : 1;
+
+        ctx.save();
+        ctx.globalAlpha = a2;
+        if (p.state === "live" || isOpen) {          // halo on anything actionable
+          ctx.beginPath(); ctx.arc(d.x, d.y, 9, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(${rgb},0.16)`; ctx.fill();
+        }
+        ctx.beginPath(); ctx.arc(d.x, d.y, 5.5, 0, Math.PI * 2);
+        if (armed) {                                  // hollow + dashed = possible
+          ctx.fillStyle = "rgba(8,12,18,0.9)"; ctx.fill();
+          ctx.setLineDash([3, 2]);
+        } else {
+          ctx.fillStyle = `rgb(${rgb})`; ctx.fill();
+          ctx.setLineDash([]);
+        }
+        ctx.lineWidth = isOpen ? 2 : 1.5;
+        ctx.strokeStyle = isOpen ? "rgba(255,255,255,0.95)" : `rgba(${rgb},0.95)`;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // Direction arrow inside a filled dot; resolved plays swap it for ✓ / ✗.
+        ctx.font = "700 8px Inter, system-ui, sans-serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillStyle = armed ? `rgb(${rgb})` : "#08111a";
+        ctx.fillText(done ? (p.state === "won" ? "✓" : "✕") : long ? "▲" : "▼", d.x, d.y + 0.5);
+        ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+        ctx.restore();
+
+        // Hover region for the dot → the concept card + this play's numbers.
+        const st = p.state === "armed" ? "ARMED" : p.state === "live" ? "LIVE"
+          : p.state === "won" ? `WON ${p.mfeR.toFixed(1)}R` : "STOPPED";
+        addRect(d.x - 9, d.y - 9, 18, 18, p.conceptId, `${p.label} — entry`,
+          `${playSide(p.dir)} ${p.entry.toFixed(2)} · SL ${p.stop.toFixed(2)} · TP ${p.targets[p.targets.length - 1].toFixed(2)} (${playRR(p).toFixed(1)}R) · ${st}${isOpen ? "" : " · click to open"}`);
+      }
+    } else {
+      dotPosRef.current = new Map();
+    }
   };
+
+  /** Header chip for a play box: "<concept · side · R:R>" + a state badge. */
+  function pill(
+    ctx: CanvasRenderingContext2D, x: number, y: number,
+    text: string, badge: string, badgeColor: string, alpha: number,
+  ) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font = "700 10px Inter, system-ui, sans-serif";
+    const tw = ctx.measureText(text).width;
+    const bw = ctx.measureText(badge).width;
+    const padX = 6, gap = 8, h = 16;
+    const w = padX + tw + gap + bw + padX;
+    // Keep the chip on-canvas: a play triggering on the live bar would otherwise
+    // print its header past the right edge.
+    const cw = (ctx.canvas.width / (window.devicePixelRatio || 1));
+    const bx = Math.min(Math.max(0, x), Math.max(0, cw - w - 2));
+    const by = Math.max(0, y - h);
+    ctx.fillStyle = "rgba(8,12,18,0.88)";
+    ctx.strokeStyle = `rgba(${C.play},0.45)`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    const r = 4;
+    ctx.moveTo(bx + r, by);
+    ctx.arcTo(bx + w, by, bx + w, by + h, r);
+    ctx.arcTo(bx + w, by + h, bx, by + h, r);
+    ctx.arcTo(bx, by + h, bx, by, r);
+    ctx.arcTo(bx, by, bx + w, by, r);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.fillText(text, bx + padX, by + 11);
+    ctx.fillStyle = badgeColor;
+    ctx.fillText(badge, bx + padX + tw + gap, by + 11);
+    ctx.restore();
+  }
 
   function label(ctx: CanvasRenderingContext2D, x: number, y: number, text: string, color: string) {
     ctx.font = "600 10px Inter, system-ui, sans-serif";
@@ -606,7 +884,25 @@ export default function IctPage() {
   }
 
   // Re-draw overlay whenever analysis or toggles change.
-  useEffect(() => { drawOverlayRef.current(); }, [ict, showFvg, showOb, showLiq, showStruct, showKz, showPd]);
+  useEffect(() => { drawOverlayRef.current(); }, [ict, plays, openPlay, showFvg, showOb, showLiq, showStruct, showKz, showPd, showPlays]);
+
+  // Nearest entry dot within grab range of the cursor (chart-local px).
+  const hitDot = useCallback((mx: number, my: number) => {
+    let best: { id: string; x: number; y: number } | null = null;
+    let bestD = Infinity;
+    for (const [id, d] of dotPosRef.current) {
+      const dist = Math.hypot(mx - d.x, my - d.y);
+      if (dist <= 11 && dist < bestD) { bestD = dist; best = { id, x: d.x, y: d.y }; }
+    }
+    return best;
+  }, []);
+
+  // A play that ages off the chart takes its popup with it.
+  useEffect(() => {
+    if (openPlay && !plays.some((p) => p.id === openPlay.id)) setOpenPlay(null);
+  }, [plays, openPlay]);
+
+  const openPlayData = openPlay ? plays.find((p) => p.id === openPlay.id) ?? null : null;
 
   // Switching instrument swaps the whole candle set (different price range), so
   // force the chart to re-fit to the new feed on the next data push.
@@ -787,6 +1083,7 @@ export default function IctPage() {
             }}
           >
             {([
+              ["▶ Plays", showPlays, setShowPlays, C.play],
               ["FVG", showFvg, setShowFvg, C.fvg], ["Order Blocks", showOb, setShowOb, C.ob],
               ["Liquidity", showLiq, setShowLiq, C.liq], ["Structure", showStruct, setShowStruct, C.struct],
               ["Kill Zones", showKz, setShowKz, "41,182,246"], ["Premium/Discount", showPd, setShowPd, "255,255,255"],
@@ -830,10 +1127,28 @@ export default function IctPage() {
           </div>
           <div
             className="relative"
-            style={{ height: "68vh", minHeight: 480 }}
-            onMouseMove={(e) => {
-              if (!hoverEnabled) { if (hover) setHover(null); return; }
+            style={{ height: "68vh", minHeight: 480, cursor: overDot ? "pointer" : undefined }}
+            onMouseDown={(e) => {
               const rect = e.currentTarget.getBoundingClientRect();
+              pressRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+            }}
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+              // Panning the chart also fires a click — only treat it as one if the
+              // pointer barely moved between press and release.
+              const press = pressRef.current;
+              pressRef.current = null;
+              if (press && Math.hypot(mx - press.x, my - press.y) > 5) return;
+              const hit = hitDot(mx, my);
+              setOpenPlay((prev) => (hit ? (prev?.id === hit.id ? null : hit) : null));
+            }}
+            onMouseMove={(e) => {
+              const rect0 = e.currentTarget.getBoundingClientRect();
+              const overNow = !!hitDot(e.clientX - rect0.left, e.clientY - rect0.top);
+              if (overNow !== overDot) setOverDot(overNow);
+              if (!hoverEnabled) { if (hover) setHover(null); return; }
+              const rect = rect0;
               const mx = e.clientX - rect.left, my = e.clientY - rect.top;
               let best: HitRegion | null = null, bestArea = Infinity;
               for (const h of hitsRef.current) {
@@ -851,7 +1166,7 @@ export default function IctPage() {
               }
               setHover(null);
             }}
-            onMouseLeave={() => setHover(null)}
+            onMouseLeave={() => { setHover(null); setOverDot(false); }}
           >
             <div ref={chartRef} className="absolute inset-0" />
             <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" />
@@ -873,10 +1188,146 @@ export default function IctPage() {
                 <p className="text-[11px] leading-snug text-white/90">{hover.concept.body}</p>
               </div>
             )}
+            {/* Clicked-dot popup: the long/short position stats for that play.
+                The box itself is drawn on the canvas; this is the readable copy. */}
+            {openPlay && openPlayData && (() => {
+              const p = openPlayData;
+              const cw = chartRef.current?.clientWidth ?? 900;
+              const ch = chartRef.current?.clientHeight ?? 520;
+              const CARD_W = 234, CARD_H = 196;
+              const left = openPlay.x + 18 + CARD_W > cw ? Math.max(6, openPlay.x - CARD_W - 18) : openPlay.x + 18;
+              const top = Math.max(6, Math.min(openPlay.y - 40, ch - CARD_H - 6));
+              const long = p.dir === "bull";
+              const stateTxt = p.state === "armed" ? "ARMED"
+                : p.state === "live" ? "LIVE"
+                : p.state === "won" ? `WON ${p.mfeR.toFixed(1)}R` : "STOPPED";
+              const stateCol = p.state === "armed" ? `rgb(${C.play})` : p.state === "lost" ? "#ff6b6b" : "#22e08a";
+              return (
+                <div
+                  className="absolute z-30 rounded-lg border bg-[#0b0f15]/97 p-2.5 shadow-xl backdrop-blur"
+                  style={{ left, top, width: CARD_W, borderColor: `rgba(${long ? PLAY_C.profit : PLAY_C.loss},0.45)` }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="mb-1.5 flex items-center gap-2">
+                    <span className="text-[13px] font-bold text-white">{p.label}</span>
+                    <span className="font-mono text-[11px] font-bold" style={{ color: long ? "#30d158" : "#ff5b5b" }}>
+                      {long ? "▲ LONG" : "▼ SHORT"}
+                    </span>
+                    <button
+                      onClick={() => setOpenPlay(null)}
+                      className="ml-auto text-[13px] leading-none text-white/45 hover:text-white"
+                      aria-label="Close play"
+                    >✕</button>
+                  </div>
+                  <div className={`mb-1.5 inline-block rounded px-1.5 py-px text-[10px] font-bold uppercase tracking-wider ${p.state === "live" ? "ict-live-badge" : ""}`}
+                    style={{ color: stateCol, background: "rgba(255,255,255,.06)" }}>
+                    {stateTxt}
+                  </div>
+                  <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 font-mono text-[11px]">
+                    <span className="text-white/50">Entry</span>
+                    <span className="text-right text-white">{p.entry.toFixed(2)}</span>
+                    <span style={{ color: "#ff6b6b" }}>Stop</span>
+                    <span className="text-right" style={{ color: "#ff6b6b" }}>
+                      {p.stop.toFixed(2)} <span className="text-white/40">({p.risk.toFixed(2)} pts)</span>
+                    </span>
+                    {p.targets.map((tp, i) => (
+                      <Fragment key={i}>
+                        <span style={{ color: p.hitR > i ? "#22e08a" : "rgba(255,255,255,.5)" }}>{i + 1}R{p.hitR > i ? " ✓" : ""}</span>
+                        <span className="text-right" style={{ color: p.hitR > i ? "#22e08a" : "rgba(255,255,255,.75)" }}>{tp.toFixed(2)}</span>
+                      </Fragment>
+                    ))}
+                    <span className="text-white/50">R:R</span>
+                    <span className="text-right text-white">{playRR(p).toFixed(1)} : 1</span>
+                  </div>
+                  <p className="mt-1.5 text-[10px] leading-snug text-white/45">{p.note}</p>
+                </div>
+              );
+            })()}
             {!candles.length && (
               <div className="absolute inset-0 grid place-items-center text-sm text-white">waiting for {instLabel} candles…</div>
             )}
           </div>
+        </div>
+
+        {/* Plays — the position-tool boxes drawn on the chart, in numbers.
+            Mirrors the markup exactly: same entry / stop / 1R-2R-3R ladder. */}
+        <div className="rounded-xl border border-white/10 [background:radial-gradient(circle_at_50%_0%,rgba(255,193,7,0.07)_0%,transparent_55%),#0b0f15] border-t-2 p-3"
+          style={{ borderTopColor: `rgba(${C.play},0.45)` }}>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-bold uppercase tracking-[0.16em]" style={{ color: `rgb(${C.play})` }}>
+              ▶ Plays
+            </span>
+            <span className="text-[11px] text-white/45">
+              live &amp; possible setups · click the ▲/▼ entry dot on the chart (or a card below) to open the position box
+            </span>
+            <span className="ml-auto font-mono text-[11px] text-white/50">
+              {plays.filter((p) => p.state === "live").length} live · {plays.filter((p) => p.state === "armed").length} armed
+            </span>
+          </div>
+          {plays.length ? (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {plays.map((p) => {
+                const long = p.dir === "bull";
+                const rr = playRR(p);
+                const stateCol = p.state === "armed" ? `rgb(${C.play})`
+                  : p.state === "lost" ? "#ff6b6b" : "#22e08a";
+                const stateTxt = p.state === "armed" ? "ARMED"
+                  : p.state === "live" ? "LIVE"
+                  : p.state === "won" ? `WON ${p.mfeR.toFixed(1)}R` : "STOPPED";
+                const isOpen = openPlay?.id === p.id;
+                return (
+                  <div key={p.id}
+                    onClick={() => {
+                      // Same popup the chart dot opens, anchored to that dot.
+                      const d = dotPosRef.current.get(p.id);
+                      setOpenPlay((prev) => (prev?.id === p.id ? null : { id: p.id, x: d?.x ?? 40, y: d?.y ?? 40 }));
+                    }}
+                    className="cursor-pointer rounded-lg border p-2.5 transition hover:border-white/30"
+                    style={{
+                      borderColor: isOpen ? "rgba(255,255,255,.55)"
+                        : p.state === "live" ? "rgba(34,224,138,.35)" : `rgba(${C.play},.25)`,
+                      background: isOpen ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.02)",
+                      opacity: p.state === "won" || p.state === "lost" ? 0.68 : 1,
+                    }}>
+                    <div className="mb-1.5 flex items-center gap-2">
+                      <span className="text-[13px] font-bold text-white">{p.label}</span>
+                      <span className="font-mono text-[11px] font-bold" style={{ color: long ? "#30d158" : "#ff5b5b" }}>
+                        {long ? "↑ LONG" : "↓ SHORT"}
+                      </span>
+                      <span className={`ml-auto rounded px-1.5 py-px text-[10px] font-bold uppercase tracking-wider ${p.state === "live" ? "ict-live-badge" : ""}`}
+                        style={{ color: stateCol, background: "rgba(255,255,255,.06)" }}>
+                        {stateTxt}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 font-mono text-[11px]">
+                      <span className="text-white/50">Entry</span>
+                      <span className="text-right text-white">{p.entry.toFixed(2)}</span>
+                      <span style={{ color: "#ff6b6b" }}>Stop</span>
+                      <span className="text-right" style={{ color: "#ff6b6b" }}>{p.stop.toFixed(2)} <span className="text-white/40">({p.risk.toFixed(2)} pts)</span></span>
+                      {p.targets.map((tp, i) => (
+                        <Fragment key={i}>
+                          <span style={{ color: p.hitR > i ? "#22e08a" : "rgba(255,255,255,.5)" }}>
+                            {i + 1}R{p.hitR > i ? " ✓" : ""}
+                          </span>
+                          <span className="text-right" style={{ color: p.hitR > i ? "#22e08a" : "rgba(255,255,255,.75)" }}>
+                            {tp.toFixed(2)}
+                          </span>
+                        </Fragment>
+                      ))}
+                      <span className="text-white/50">R:R</span>
+                      <span className="text-right text-white">{rr.toFixed(1)} : 1</span>
+                    </div>
+                    <p className="mt-1.5 truncate text-[10px] text-white/45" title={p.note}>{p.note}</p>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-[11px] text-white/50">
+              No play armed or live right now. A box appears on the chart the moment a model setup
+              (Turtle Soup, Judas, CISD, 2022 Model, Breaker, Inducement, OB retest, OTE) becomes possible.
+            </p>
+          )}
         </div>
 
         {/* Live signal panel — all tiles in one full-width row below the chart */}
