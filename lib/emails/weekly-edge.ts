@@ -30,6 +30,17 @@ export interface EarningsTicker { symbol: string; logoUrl?: string; }
 export interface EarningsDay { label: string; tickers: EarningsTicker[]; }
 export interface ConfRow { date: string; s945: string; c945: string; s1030: string; c1030: string; s1200: string; c1200: string; hit945: boolean; hit1030: boolean; hit1200: boolean; }
 
+/** One "we called it" block — a scanner/GEX catch with its screenshot. */
+export interface EdgeCall {
+  tag: string;              // e.g. "Scanner · flagged Wed 7/30"
+  title: string;
+  body: string[];           // paragraphs (inline HTML allowed)
+  imageUrl?: string;
+  imageAlt?: string;
+  imageWidth?: number;      // px; defaults to the full 536 content width
+  caption?: string;
+}
+
 export interface WeeklyEdgeOpts {
   issueLabel?: string;              // e.g. "Week of Jul 27"
   recapHeadline?: string;
@@ -43,6 +54,9 @@ export interface WeeklyEdgeOpts {
   oilPrice?: string;
   oilChangeNote?: string;
   oilBody?: string[];
+  callsHeadline?: string;
+  calls?: EdgeCall[];
+  callsNote?: string;
   coreBullseyePct?: string;
   coreBullseyeSub?: string;
   ictModelPct?: string;
@@ -78,6 +92,32 @@ const DEFAULT_EARNINGS: EarningsDay[] = [
   { label: "Fri 8/7", tickers: [{ symbol: "TTWO" }] },
 ];
 
+const DEFAULT_CALLS: EdgeCall[] = [
+  {
+    tag: "Scanner · flagged Wed 7/30 · resolved Thu 7/31",
+    title: "AMD 505 calls lit up the scanner — 0.50 to 13.50",
+    body: [
+      "Wednesday at 10:00 AM ET the scanner flagged <strong style=\"color:#ffffff;\">AMD 505 calls</strong> — $4.3M in premium, 7.4% out of the money, <strong style=\"color:#00E676;\">+860% versus open</strong>, rated very strong.",
+      "Thursday they ran 0.50 to 13.50. The scanner never predicted AMD — it showed where the money was going, in size, a day early.",
+    ],
+    imageUrl: `${SITE_URL}/amd-505c-scanner-jul30.png`,
+    imageAlt: "CB Edge scanner card — AMD 505C, $4.3M premium, +860% vs open",
+    imageWidth: 370,
+    caption: "Scanner card — AMD 505C, captured Jul 30, 10:00 AM ET",
+  },
+  {
+    tag: "GEX heatmap · read Mon 7/28 · confirmed Wed 7/29",
+    title: "MSFT GEX read bullish into earnings — and it delivered",
+    body: [
+      "Monday the option-chain heatmap had <strong style=\"color:#ffffff;\">MSFT</strong> pinned at 392.50 with the entire positive-gamma shelf built above it — +$24.5M at 400, +$19.6M at 410, +$17.4M at 420, +$21.8M at 430. Everything under 385 was red.",
+      "Wednesday, post-earnings, the target was 430. It came off the top of that shelf, not a price model.",
+    ],
+    imageUrl: `${SITE_URL}/msft-gex-jul28.jpg`,
+    imageAlt: "CB Edge GEX heatmap — MSFT, spot 392.50 with positive gamma stacked to 430",
+    caption: "MSFT GEX heatmap — spot 392.50, positive shelf running to 430",
+  },
+];
+
 const DEFAULT_CONF_ROWS: ConfRow[] = [
   { date: "07-31", s945: "7500", c945: "0.9", hit945: true, s1030: "7400", c1030: "7.7", hit1030: true, s1200: "7470", c1200: "0.3", hit1200: true },
   { date: "07-30", s945: "7400", c945: "1.0", hit945: true, s1030: "7420", c1030: "0.7", hit1030: true, s1200: "7420", c1200: "0.7", hit1200: true },
@@ -89,6 +129,7 @@ const DEFAULT_CONF_ROWS: ConfRow[] = [
 function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "issueLabel" | "recapHeadline" | "recapBody" | "indexMoves" | "aheadHeadline" | "calendarEvents" |
   "earningsDays" | "aheadNote" | "oilHeadline" | "oilPrice" | "oilChangeNote" | "oilBody" |
+  "callsHeadline" | "calls" | "callsNote" |
   "coreBullseyePct" | "coreBullseyeSub" | "ictModelPct" | "ictModelSub" | "estMovePct" | "estMoveSub" |
   "confRows" | "resultsNote" | "ctaUrl">> {
   return {
@@ -110,14 +151,17 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
       "Brent climbed again last week on renewed Iran-claimed tanker attacks in the Strait of Hormuz, continued Houthi strikes in the Red Sea, and Saudi operations against Iran-backed groups — compounded by declining US crude inventories. Separately, attacks on Black Sea and Caspian Pipeline Consortium infrastructure have disrupted Kazakhstan's export flows, adding a second front to the supply squeeze. Consensus now calls for Brent near $90 by quarter-end and above $102 within 12 months if the disruptions persist.",
       "With crude holding a sustained risk premium and the Fed split on its next move, expect overnight futures to stay headline-sensitive — watch for gap risk around the 9:45 CB window on any fresh Hormuz, Red Sea or Black Sea developments.",
     ],
-    coreBullseyePct: opts.coreBullseyePct || "100%",
-    coreBullseyeSub: opts.coreBullseyeSub || "10:30 &amp; 12:00 · 80% at 9:45",
+    callsHeadline: opts.callsHeadline || "Two the chain called before the tape did",
+    calls: opts.calls || DEFAULT_CALLS,
+    callsNote: opts.callsNote || "AMD is flow spotting a <em>strike</em>. MSFT is structure spotting a <em>path</em>. Same week, two different tools, one idea — the chain tells you where before the tape does.",
+    coreBullseyePct: opts.coreBullseyePct || "93%",
+    coreBullseyeSub: opts.coreBullseyeSub || "within 10 pts · 13 of 15 inside 5",
     ictModelPct: opts.ictModelPct || "83%",
     ictModelSub: opts.ictModelSub || "win rate · 5/6 logged",
     estMovePct: opts.estMovePct || "82.9%",
     estMoveSub: opts.estMoveSub || "closed inside weekly EM",
     confRows: opts.confRows || DEFAULT_CONF_ROWS,
-    resultsNote: opts.resultsNote || "Five straight days of 10:30 and 12:00 Core Bullseye hits inside 1 point — the kind of precision that turns payrolls-week and earnings-week chop into a plan instead of a guess.",
+    resultsNote: opts.resultsNote || "The 12:00 read went five for five, median 0.1 points off the close. Monday's 9:45 was the week's only real miss at 26.3 — and the 10:30 came back at 7400 and landed 0.1 away. Later read, tighter number: that's the kind of precision that turns payrolls-week chop into a plan instead of a guess.",
     ctaUrl: opts.ctaUrl || PRICING_URL,
   };
 }
@@ -149,6 +193,11 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
     strip(o.oilHeadline),
     `${o.oilPrice} — ${o.oilChangeNote}`,
     ...o.oilBody.map(strip),
+    "",
+    "THE CALLS",
+    strip(o.callsHeadline),
+    ...o.calls.flatMap((c) => [`${strip(c.tag)} — ${strip(c.title)}`, ...c.body.map(strip), ""]),
+    strip(o.callsNote),
     "",
     "CB EDGE — THIS WEEK'S RESULTS",
     `Core Bullseye: ${o.coreBullseyePct} (${strip(o.coreBullseyeSub)})`,
@@ -215,6 +264,20 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
             <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
               ${d.tickers.map(earningsTile).join("")}
             </tr></table>`;
+
+  const callBlock = (c: EdgeCall) => `
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;border:1px solid rgba(255,255,255,0.10);border-radius:10px;background:rgba(255,255,255,0.02);">
+                <tr><td style="padding:16px 16px;">
+                  <div style="font:700 10px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:#6b7d8f;">${escapeHtml(c.tag)}</div>
+                  <div style="font:800 15px/1.35 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#38BDF8;margin-top:8px;">${c.title}</div>
+                  ${c.body.map((b) => `<div style="font:400 13px/1.65 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;margin-top:10px;">${b}</div>`).join("")}
+                  ${c.imageUrl ? `
+                  <div style="margin-top:14px;">
+                    <img src="${c.imageUrl}" alt="${escapeHtml(c.imageAlt || c.title)}" width="${c.imageWidth || 536}" style="display:block;width:100%;max-width:${c.imageWidth || 536}px;height:auto;border:1px solid rgba(255,255,255,0.10);border-radius:12px;">
+                    ${c.caption ? `<div style="font:400 11px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#8ECAE6;margin-top:8px;">${escapeHtml(c.caption)}</div>` : ""}
+                  </div>` : ""}
+                </td></tr>
+              </table>`;
 
   const confCell = (val: string, hit: boolean) => `<span style="color:${hit ? "#219EBC" : "#FF4757"};font-weight:700;">${escapeHtml(val)} ${hit ? "✓" : "✗"}</span>`;
 
@@ -330,6 +393,16 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
             </td>
           </tr>
 
+          <!-- THE CALLS -->
+          <tr>
+            <td style="padding:24px 28px 0 28px;">
+              <div style="font:800 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.14em;text-transform:uppercase;color:#38BDF8;">● The Calls</div>
+              <div style="font:800 17px/1.35 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:8px;">${o.callsHeadline}</div>
+              ${o.calls.map(callBlock).join("")}
+              <div style="font:400 13px/1.65 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;margin-top:14px;">${o.callsNote}</div>
+            </td>
+          </tr>
+
           <!-- CB EDGE RESULTS -->
           <tr>
             <td style="padding:24px 28px 0 28px;">
@@ -345,6 +418,7 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                 ${confHeaderRow}
                 ${confBodyRows}
               </table>
+              <div style="font:400 11px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#6b7d8f;margin-top:8px;">✓ = closed within 10 points of the Core Bullseye strike. 13 of the 15 reads landed inside 5.</div>
               <div style="font:400 13px/1.65 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#d4dde6;margin-top:14px;">${o.resultsNote}</div>
             </td>
           </tr>

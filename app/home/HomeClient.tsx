@@ -31,8 +31,35 @@ import { useDualTickerGex, type GexBasis, type OffsetGexMap } from "@/hooks/useD
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
+import { HOME_THEME, DOCK_THEME } from "@/components/shared/homeTheme";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { type ChainRow, type CalcMode, computeGEXProfile, findGEXFlip, netGEXOf } from "@/lib/calculations/calculations";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Top-left card views — the tab strip that sits ABOVE the card.
+//
+// BASE_CARD_VIEWS are always present and can't be removed. Everything in
+// CARD_VIEW_LIBRARY is opt-in: the "+" at the end of the tab row opens a picker
+// of the ones not yet added, the choice is persisted to localStorage, and each
+// added tab gets an × to drop it again.
+//
+// TO ADD A PAGE HERE: append one `{ id, label }` entry to CARD_VIEW_LIBRARY and
+// one matching branch to the card-body switch below (search "card view body").
+// The tab row, the picker and the persistence all read from this list — there is
+// nothing else to wire up.
+// ─────────────────────────────────────────────────────────────────────────────
+type CardView = { id: string; label: string };
+
+const BASE_CARD_VIEWS: CardView[] = [
+  { id: "gex", label: "GEX" },
+  { id: "escandles", label: "ES Candles" },
+];
+
+const CARD_VIEW_LIBRARY: CardView[] = [
+  { id: "chain", label: "Options Chain" },
+];
+
+const CARD_VIEWS_LS_KEY = "cbedge.home.cardViews.v1";
 
 /**
  * Initial GEX snapshot read on the server from the hot feed and passed in as a
@@ -634,9 +661,15 @@ export function HomeClient({
   const [heatmapView] = useState<"heatmap" | "table" | "chain">("heatmap");
   // Δ stamps on the heatmap's NET GEX column. 0 = off (today's view).
   const [deltaWindow, setDeltaWindow] = useState<0 | 5 | 15 | 30>(0);
-  // GEX chart card view: the Net GEX bar chart, or the live ES 5m candles in its
-  // place. Moved here from the bottom tab strip.
-  const [gexView, setGexView] = useState<"gex" | "escandles">("gex");
+  // GEX chart card view: which tab in the strip ABOVE the card is showing. Always
+  // one of BASE_CARD_VIEWS or an added CARD_VIEW_LIBRARY id.
+  const [gexView, setGexView] = useState<string>("gex");
+  // User-added card tabs (ids from CARD_VIEW_LIBRARY), persisted to localStorage.
+  // Hydrated in an effect rather than a lazy initializer so SSR and the first
+  // client render agree — otherwise React screams hydration mismatch.
+  const [extraCardViews, setExtraCardViews] = useState<string[]>([]);
+  const [cardViewPickerOpen, setCardViewPickerOpen] = useState(false);
+  const cardViewPickerRef = useRef<HTMLDivElement | null>(null);
   // Home option-chain ticker override. `chainTicker` drives the embed; `chainTickerInput`
   // is the raw text field. Both revert to SPX on any tab change (see effect below).
   const [chainTicker, setChainTicker] = useState("SPX");
@@ -650,6 +683,57 @@ export function HomeClient({
     setChainTicker("SPX");
     setChainTickerInput("SPX");
   }, [heatmapView, activeTab]);
+
+  // ── Card tab strip: persistence + picker plumbing ─────────────────────────
+  // Hydrate the added tabs once on mount. Unknown ids (a library entry that was
+  // renamed or removed) are dropped rather than rendering a dead tab.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(CARD_VIEWS_LS_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+      setExtraCardViews(parsed.filter((id: unknown): id is string =>
+        typeof id === "string" && CARD_VIEW_LIBRARY.some(v => v.id === id)));
+    } catch { /* private mode / corrupt value — fall back to the base tabs */ }
+  }, []);
+
+  const writeExtraCardViews = useCallback((ids: string[]) => {
+    setExtraCardViews(ids);
+    try { window.localStorage.setItem(CARD_VIEWS_LS_KEY, JSON.stringify(ids)); } catch { /* ignore */ }
+  }, []);
+
+  const addCardView = useCallback((id: string) => {
+    setCardViewPickerOpen(false);
+    setExtraCardViews(prev => {
+      if (prev.includes(id)) return prev;
+      const next = [...prev, id];
+      try { window.localStorage.setItem(CARD_VIEWS_LS_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+    setGexView(id);
+  }, []);
+
+  const removeCardView = useCallback((id: string) => {
+    writeExtraCardViews(extraCardViews.filter(v => v !== id));
+    // Don't strand the card on a tab that no longer exists.
+    setGexView(cur => (cur === id ? "gex" : cur));
+  }, [extraCardViews, writeExtraCardViews]);
+
+  // Close the "+" picker on outside click / Escape.
+  useEffect(() => {
+    if (!cardViewPickerOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!cardViewPickerRef.current?.contains(e.target as Node)) setCardViewPickerOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setCardViewPickerOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [cardViewPickerOpen]);
 
   useEffect(() => {
     quoteSnapshotsRef.current = quoteSnapshots;
@@ -1429,36 +1513,147 @@ export function HomeClient({
     red: "#EF4444",
   };
 
-  // GEX|ES Candles switch. An element, not a component — it gets handed to
-  // whichever dock is mounted (GexToolbar's or the embedded ES Candles page's)
-  // via their `leading` slot, so switching views never costs a toolbar row.
-  // Declared here, below the state it closes over and above the JSX that uses it.
-  const gexViewSwitch = (
-    <div style={{ display: "flex", gap: 2, border: "1px solid rgba(33,158,188,0.18)", borderRadius: 8, overflow: "hidden", flexShrink: 0 }}>
-      {([
-        { id: "gex", label: "GEX" },
-        { id: "escandles", label: "ES Candles" },
-      ] as const).map((v) => (
+  // Card tab strip — rides ABOVE the card, not inside a toolbar. Tabs sit on the
+  // card's top edge (bottom corners squared, bottom border erased on the active
+  // one) so the active tab reads as continuous with the panel beneath it.
+  // BASE_CARD_VIEWS are fixed; anything added from the "+" picker carries an ×.
+  const cardTabs: CardView[] = [
+    ...BASE_CARD_VIEWS,
+    ...extraCardViews
+      .map(id => CARD_VIEW_LIBRARY.find(v => v.id === id))
+      .filter((v): v is CardView => Boolean(v)),
+  ];
+  const addableCardViews = CARD_VIEW_LIBRARY.filter(v => !extraCardViews.includes(v.id));
+
+  const cardTabStrip = (
+    <div
+      ref={cardViewPickerRef}
+      style={{ position: "relative", display: "flex", alignItems: "flex-end", gap: 4, flexShrink: 0, zIndex: 5 }}
+    >
+      {cardTabs.map((v) => {
+        const active = gexView === v.id;
+        const removable = !BASE_CARD_VIEWS.some(b => b.id === v.id);
+        return (
+          <div
+            key={v.id}
+            onClick={() => setGexView(v.id)}
+            role="tab"
+            aria-selected={active}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "8px 14px",
+              borderRadius: "10px 10px 0 0",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              userSelect: "none",
+              background: active ? "rgba(13,17,25,0.85)" : "rgba(13,17,25,0.35)",
+              border: `1px solid ${HOME_THEME.border}`,
+              borderBottom: "none",
+              borderTop: active ? `2px solid ${DOCK_THEME.cyanTop}` : `1px solid ${HOME_THEME.border}`,
+              marginBottom: -1,
+              transition: "background 0.15s, color 0.15s",
+            }}
+          >
+            <span style={{
+              fontSize: 12,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              color: active ? HOME_THEME.cyan : "#5a7a98",
+            }}>
+              {v.label}
+            </span>
+            {removable && (
+              <span
+                onClick={(e) => { e.stopPropagation(); removeCardView(v.id); }}
+                title={`Remove ${v.label}`}
+                style={{ fontSize: 13, lineHeight: 1, color: "#5a7a98", cursor: "pointer", padding: "0 1px" }}
+              >
+                ×
+              </span>
+            )}
+          </div>
+        );
+      })}
+
+      {/* "+" — opens the picker of library views not already on the strip. */}
+      {addableCardViews.length > 0 && (
         <button
-          key={v.id}
-          onClick={() => setGexView(v.id)}
+          onClick={() => setCardViewPickerOpen(o => !o)}
+          title="Add a card"
+          aria-label="Add a card"
           style={{
-            padding: "7px 12px",
-            fontSize: 12,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 28,
+            height: 28,
+            marginBottom: 3,
+            marginLeft: 2,
+            borderRadius: 8,
+            border: `1px dashed ${DOCK_THEME.activeBorder}`,
+            background: cardViewPickerOpen ? DOCK_THEME.activeTile : "transparent",
+            color: HOME_THEME.cyan,
+            fontSize: 16,
             fontWeight: 700,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            whiteSpace: "nowrap",
-            cursor: "pointer",
-            border: "none",
+            lineHeight: 1,
             fontFamily: "inherit",
-            background: gexView === v.id ? "rgba(33,158,188,0.16)" : "transparent",
-            color: gexView === v.id ? C.cyan : "#5a7a98",
+            cursor: "pointer",
+            flexShrink: 0,
           }}
         >
-          {v.label}
+          +
         </button>
-      ))}
+      )}
+
+      {cardViewPickerOpen && addableCardViews.length > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            marginTop: 6,
+            minWidth: 200,
+            padding: 6,
+            borderRadius: 12,
+            borderTop: `2px solid ${DOCK_THEME.cyanTop}`,
+            background: DOCK_THEME.bg,
+            boxShadow: DOCK_THEME.shadow,
+            zIndex: 60,
+          }}
+        >
+          <div style={{ padding: "6px 10px 8px", fontSize: 10, fontWeight: 700, letterSpacing: "0.10em", textTransform: "uppercase", color: "#5a7a98" }}>
+            Add a card
+          </div>
+          {addableCardViews.map((v) => (
+            <button
+              key={v.id}
+              onClick={() => addCardView(v.id)}
+              style={{
+                display: "block",
+                width: "100%",
+                textAlign: "left",
+                padding: "8px 10px",
+                borderRadius: 8,
+                border: "none",
+                background: "transparent",
+                color: HOME_THEME.text,
+                fontSize: 12,
+                fontWeight: 600,
+                letterSpacing: "0.04em",
+                fontFamily: "inherit",
+                cursor: "pointer",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = DOCK_THEME.hoverTile; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+            >
+              {v.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 
@@ -1511,20 +1706,22 @@ export function HomeClient({
       <main className="home-no-hover" style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
         <div className="home-split" style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
           <div className="home-col home-col-left" style={{ width: "55%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%", overflow: "hidden", minHeight: 0 }}>
-            <div ref={gexContainerRef} style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: econSize === "full" ? "none" : "flex", flexDirection: "column", flex: "1.6 1 0", minHeight: 0, overflow: "hidden" }}>
+            {/* Card tabs live above the card, sitting on its top edge. Hidden
+                along with the card when the econ panel is expanded to full. */}
+            {econSize !== "full" && cardTabStrip}
+            <div ref={gexContainerRef} style={{ background: "rgba(13,17,25,0.85)", borderRadius: "0 16px 16px 16px", border: "1px solid rgba(255,255,255,0.10)", display: econSize === "full" ? "none" : "flex", flexDirection: "column", flex: "1.6 1 0", minHeight: 0, overflow: "hidden" }}>
               {/* Full-featured toolbar — scales to fit instead of scrolling.
                   min is deliberately low: at 0.6 the bar still overflowed on
                   ~1280px-wide windows and fell back to a hidden scrollbar,
                   which read as "cut off".
-                  Unmounted in ES Candles view: every control on it (gex mode,
+                  Unmounted in any non-GEX view: every control on it (gex mode,
                   data mode, OI/DEX/flip, ghosts, expiry, snap target) drives the
-                  bar chart only. The embedded ES Candles page brings its own
-                  dock, and the view switcher rides inside whichever of the two is
-                  showing — so neither view pays for an extra toolbar row. */}
+                  bar chart only. Each embedded page brings its own dock. The view
+                  switcher is no longer in this slot — it's the tab strip above
+                  the card. */}
               {gexView === "gex" && (
               <FitScale min={0.42}>
               <GexToolbar
-                leading={gexViewSwitch}
                 gexMode={gexMode}
                 dataMode={dataMode}
                 showOI={showOI}
@@ -1579,8 +1776,15 @@ export function HomeClient({
                   until the server reports OI + greeks are warm, so a half-built
                   / inflated frame never renders. */}
               <div ref={gexChartRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
+                {/* card view body — one branch per entry in BASE_CARD_VIEWS +
+                    CARD_VIEW_LIBRARY. Add a branch here when you add a library
+                    entry; the final branch is the "gex" bar chart. */}
                 {gexView === "escandles" ? (
-                  <EsCandlesPage embedded leading={gexViewSwitch} />
+                  <EsCandlesPage embedded />
+                ) : gexView === "chain" ? (
+                  <div className="tab-panel-embed" style={{ height: "100%", overflow: "auto" }}>
+                    <OptionsChainPage expirySelection="key" ticker="SPX" showGrandTotal={false} />
+                  </div>
                 ) : chartReady && chartRows.length > 0 ? (
                   <GexChart
                     chain={chartRows}

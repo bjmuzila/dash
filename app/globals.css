@@ -525,9 +525,13 @@ input.dte-range::-moz-range-track {
 
   /* ── /trading (journal): every grid is fixed-column (5 KPI / 4 charts / 1fr 2fr
      tables) and blows past a phone screen. Reflow to 1–2 columns. ── */
-  .journal-kpis  { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 8px !important; }
+  .journal-kpis  { grid-template-columns: 1fr !important; gap: 8px !important; }
   .journal-charts,
+  .journal-tod,
   .journal-tables { grid-template-columns: 1fr !important; gap: 8px !important; }
+  /* Session heat strip + weekday-hour grid: let them scroll sideways rather
+     than crush 13 half-hour columns into a phone width. */
+  .journal-tod table { font-size: 9px !important; }
   .journal-toolbar { flex-direction: column !important; align-items: stretch !important; gap: 8px !important; }
   .journal-toolbar > div { width: 100%; }
   .journal-toolbar button { flex: 1 1 auto; min-height: 34px; }
