@@ -1,0 +1,195 @@
+--- a/components/dashboard/es-candles/EsChartCard.tsx	2026-08-02 09:02:07.788554489 +0000
++++ b/components/dashboard/es-candles/EsChartCard.tsx	2026-08-02 09:02:07.790752286 +0000
+@@ -28,6 +28,12 @@
+ import { useWsLifecycle } from "@/hooks/useWsLifecycle";
+ import { useGexSocket, type GexMessage } from "@/lib/gexSocket";
+ import { dedupeFetch } from "@/lib/dedupeFetch";
++// cachedJson, NOT dedupeFetch, for the page-GLOBAL reads below (levels, mvc,
++// basis, eod-gex). dedupeFetch only collapses requests that overlap in time; it
++// cannot help three cards whose 60s polls land 40ms apart, or a card that mounts
++// a second after its siblings. Those are sequential, so every one of them used
++// to open its own socket. See the header of lib/sharedCache.ts.
++import { cachedJson, HttpError } from "@/lib/sharedCache";
+ // The flip is computed HERE with findGEXFlip, same as the home page, so the two
+ // pages agree by construction. Do NOT source it from mvc_snapshots.gexFlip: both
+ // recorders (scripts/auto-snapshot-mvc.js, server-v2/mvc-auto-snapshot.js) fall
+@@ -313,12 +319,22 @@
+   // i.e. esClose ± em, and SPY/QQQ natively.
+   const [emWeekly, setEmWeekly] = useState<{ up: number; down: number; exp: string } | null>(null);
+   useEffect(() => {
++    // Wait for the slot restore. `symbol` initialises to "ES" and only becomes
++    // this card's real ticker in the restore effect below, which sets
++    // settingsLoaded in the SAME batch — so without this guard a three-card row
++    // where cards 2 and 3 are SPY/QQQ fired /api/levels?ticker=ES three times on
++    // load and then fetched SPY and QQQ anyway. Three requests, all discarded.
++    if (!settingsLoaded) return;
+     let cancelled = false;
+     const load = async () => {
+       try {
+-        const r = await fetch(`/api/levels?ticker=${encodeURIComponent(sym.key)}`, { cache: "no-store" });
+-        if (!r.ok) { if (!cancelled) setEmWeekly(null); return; }
+-        const j = await r.json();
++        // Cached: the two /api/levels effects in THIS card plus every sibling
++        // card on the same symbol collapse to one request. 150s = half the poll
++        // below, so a real tick always crosses the TTL and refetches.
++        const j = await cachedJson<Record<string, unknown>>(
++          `/api/levels?ticker=${encodeURIComponent(sym.key)}`,
++          { ttlMs: 150_000, persist: true },
++        );
+         if (cancelled) return;
+         const up = parseLevelNum(j?.up);
+         const down = parseLevelNum(j?.down);
+@@ -326,14 +342,18 @@
+         // they were struck for has passed, so "missing" is the correct signal to
+         // draw nothing rather than to fall back to a stale band.
+         setEmWeekly(up != null && down != null ? { up, down, exp: String(j?.exp_label ?? "") } : null);
+-      } catch { /* keep the last good band rather than blanking on a blip */ }
++      } catch (e) {
++        // An HTTP error is the old `!r.ok` branch: the ticker has no row, so
++        // clear the band. A network blip keeps the last good one.
++        if (!cancelled && e instanceof HttpError) setEmWeekly(null);
++      }
+     };
+     load();
+     // 5 min, matching HomeClient. The band is frozen weekly, so this only exists
+     // to pick up the Friday publish (and a mid-week republish) without a reload.
+     const id = setInterval(load, 300_000);
+     return () => { cancelled = true; clearInterval(id); };
+-  }, [sym.key]);
++  }, [settingsLoaded, sym.key]);
+ 
+   // Chart candles: 2-day rolling window, deliberately matched to the GEX
+   // retention. The heatmap's historical columns resolve via timeToCoordinate,
+@@ -954,6 +974,9 @@
+   weeklyEmRef.current = weeklyEm;
+   useEffect(() => {
+     if (!indicators.weeklyEm) { setWeeklyEm(null); return; }
++    // Same restore guard as the emWeekly effect above: `isEs` and `sym.gexSymbol`
++    // are both derived from `symbol`, which is "ES" until the slot restore lands.
++    if (!settingsLoaded) return;
+     let cancelled = false;
+     (async () => {
+       try {
+@@ -965,9 +988,12 @@
+         // rot, and it keeps the EM band in the same coordinate system as the
+         // walls, the flip and CB.
+         const ticker = isEs ? "SPX" : sym.gexSymbol.replace(/^\$/, "");
+-        const res = await fetch(`/api/levels?ticker=${encodeURIComponent(ticker)}`, { cache: "no-store" });
+-        if (!res.ok) { console.warn("[weekly-em] HTTP", res.status, "— band not drawn"); return; }
+-        const json = await res.json();
++        // Shares the cache entry with the emWeekly effect above whenever the two
++        // resolve to the same ticker (always, on SPY/QQQ).
++        const json = await cachedJson<Record<string, unknown> | null>(
++          `/api/levels?ticker=${encodeURIComponent(ticker)}`,
++          { ttlMs: 150_000, persist: true },
++        );
+         if (cancelled || !json) return;
+         const up = parseLevelNum(json.up);
+         const down = parseLevelNum(json.down);
+@@ -980,7 +1006,7 @@
+       }
+     })();
+     return () => { cancelled = true; };
+-  }, [indicators.weeklyEm, isEs, sym.gexSymbol]);
++  }, [settingsLoaded, indicators.weeklyEm, isEs, sym.gexSymbol]);
+ 
+   // ── Restore this slot's settings ───────────────────────────────────────────
+   // ONE effect for the whole card. Read in an effect, not in a lazy useState
+@@ -1870,6 +1896,12 @@
+   // a line ~10x off-scale. On a non-ES symbol this clears the series instead.
+   useEffect(() => {
+     if (!isEs) { setMvcHistory([]); return; }
++    // `isEs` is true for a freshly-mounted card REGARDLESS of its saved symbol,
++    // because `symbol` initialises to "ES". Without this guard a three-card row
++    // fetched this 11.6 kB payload three times on load — byte-identical, since
++    // mvc_snapshots is SPX-global — and two of the three cards then turned out
++    // to be SPY/QQQ and threw their copy away.
++    if (!settingsLoaded) return;
+     let cancelled = false;
+     const load = async () => {
+       try {
+@@ -1877,9 +1909,14 @@
+         // and the default read is a `SELECT *`, so this was ~94KB on every load
+         // to draw one step line and derive the basis. This page only ever reads
+         // timestamp / strikeOIVol / spxPrice / esPrice.
+-        const res = await fetch(`/api/snapshots/mvc?limit=1000&lite=1`, { cache: "no-store" });
+-        if (!res.ok) return;
+-        const json = await res.json();
++        //
++        // Cached at half the 60s poll: the payload carries no per-card
++        // parameter, so two ES cards want literally the same bytes. Not
++        // persisted — this one ticks.
++        const json = await cachedJson<{ rows?: unknown; cols?: unknown; lite?: number }>(
++          `/api/snapshots/mvc?limit=1000&lite=1`,
++          { ttlMs: 30_000 },
++        );
+         const rawRows = Array.isArray(json.rows) ? json.rows : [];
+         // Expand tuples → records. Falls back to the legacy object rows when the
+         // backend hasn't been deployed yet, so the client can ship independently.
+@@ -1935,7 +1972,7 @@
+     void load();
+     const id = setInterval(load, 60_000);
+     return () => { cancelled = true; clearInterval(id); };
+-  }, [isEs]);
++  }, [settingsLoaded, isEs]);
+ 
+ 
+   // THE basis used for every SPX→ES conversion on this page (levels, rail, heatmap,
+@@ -2237,12 +2274,21 @@
+   // deliberately short-circuiting anyway.
+   useEffect(() => {
+     if (!isEs) return;
++    // Restore guard, same as the mvc poll: every card is momentarily "ES", and
++    // this endpoint returns ONE number plus a day map — nothing per-card about
++    // it. It was being pulled four times on a three-card load.
++    if (!settingsLoaded) return;
+     let cancelled = false;
+     const pull = async () => {
+       try {
+-        const res = await fetch("/proxy/es-spx-basis", { cache: "no-store" });
+-        if (!res.ok) { console.warn(`[basis] trusted basis HTTP ${res.status}`); return; }
+-        const j = await res.json();
++        // 5 min TTL against a 30 min poll. The basis decays about a point a day,
++        // so a 5-minute-old reading is indistinguishable from a fresh one — and
++        // persisting it means a reload draws correct levels before the network
++        // answers, instead of falling through to the unreliable live derivation.
++        const j = await cachedJson<{ basis?: unknown; days?: unknown }>(
++          "/proxy/es-spx-basis",
++          { ttlMs: 300_000, persist: true },
++        );
+         const b = Number(j?.basis);
+         if (cancelled) return;
+         if (isPlausibleBasis(b)) {
+@@ -2271,7 +2317,7 @@
+     void pull();
+     const id = setInterval(pull, 1_800_000);
+     return () => { cancelled = true; clearInterval(id); };
+-  }, [isEs]);
++  }, [settingsLoaded, isEs]);
+ 
+   // Keep basisRef live for the right-axis dual ES/SPX formatter even when no
+   // WS frame has arrived recently. Mirrors the server's authoritative
+@@ -2318,9 +2364,20 @@
+       // Prior-day SPX close from eod_gex. Prefer the row matching the ES date;
+       // else the most recent SPX EOD available.
+       try {
+-        const res = await fetch(`/api/eod-gex?symbol=$SPX&limit=30`, { cache: "no-store" });
+-        if (!res.ok) { console.warn(`[basis] NO ANCHOR: /api/eod-gex HTTP ${res.status}`); return; }
+-        const json = await res.json();
++        // Prior-day closes: they change once a day at 16:00 ET, and the same 30
++        // rows serve every card. 10 min TTL + persist means this is fetched once
++        // per session rather than once per card per history reload — and after a
++        // reload the anchor is available synchronously, which matters because the
++        // fallback here is the "levels are off by ~50pt" path.
++        const json = await cachedJson<{ rows?: unknown }>(
++          `/api/eod-gex?symbol=$SPX&limit=30`,
++          { ttlMs: 600_000, persist: true },
++        ).catch((e) => {
++          if (e instanceof HttpError) console.warn(`[basis] NO ANCHOR: /api/eod-gex HTTP ${e.status}`);
++          else console.warn("[basis] NO ANCHOR: /api/eod-gex failed:", e);
++          return null;
++        });
++        if (!json) return;
+         const spxRows: Array<{ date: string; spot: number }> = Array.isArray(json.rows) ? json.rows : [];
+         const match = spxRows.find((r) => r.date === esDate) ?? spxRows[0];
+         const spxClose = Number(match?.spot ?? 0);

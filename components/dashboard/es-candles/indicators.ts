@@ -156,3 +156,13 @@ export function fmtCountdown(msLeft: number): string {
   const pad = (v: number) => String(v).padStart(2, "0");
   return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
 }
+
+/**
+ * Line colours for the three EMAs, in slot order.
+ *
+ * Exported from here rather than defined at the draw site because the indicator
+ * MENU shows the same colours as swatches. A person with three EMAs on needs to
+ * know which row of the menu is which line on the chart, and two hardcoded lists
+ * drift apart the first time one of them is tweaked.
+ */
+export const EMA_COLORS = ["#facc15", "#f472b6", "#a78bfa"];

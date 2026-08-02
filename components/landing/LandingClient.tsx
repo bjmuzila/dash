@@ -69,7 +69,7 @@ export default function LandingClient() {
         @media (max-width: 640px) {
           .landing-card .landing-logo { max-height: 96px !important; margin: 8px 0 10px !important; }
           .landing-card .landing-intro { font-size: 14px !important; margin: 0 0 12px !important; line-height: 1.4 !important; }
-          .landing-card .landing-trial { font-size: 10px !important; padding: 5px 11px !important; margin-bottom: 10px !important; letter-spacing: 0.08em !important; }
+          .landing-card .landing-cta { font-size: 15px !important; padding: 12px 14px !important; margin-bottom: 12px !important; }
           .landing-card .landing-features { gap: 8px !important; }
           .landing-card .landing-feature { padding: 9px !important; }
           .landing-card .landing-feature-t { font-size: 12px !important; margin-bottom: 2px !important; }
@@ -138,18 +138,25 @@ export default function LandingClient() {
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/cb-edge-logo.png" alt={APP_NAME} style={logo} className="landing-logo" />
 
-              <div style={trialBadge} className="landing-trial">
-                <span style={trialDot} /> 2-DAY FREE TRIAL · NO CHARGE UP FRONT
-              </div>
-
               <p className="landing-intro" style={{ color: T.muted, fontSize: 16, margin: "0 0 16px", maxWidth: 520, lineHeight: 1.5 }}>
                 A real-time SPX gamma-exposure &amp; options-flow dashboard for serious 0DTE and index
                 traders. See dealer positioning, flow, and key levels the moment they move.
               </p>
 
-              {/* Receipts sit with the pitch and above the CTA: see it →
-                  believe it → start. With a 2-day trial there isn't room to be
-                  convinced later, so the proof has to land before the click. */}
+              {/* ONE primary action, and it sits in the first screen next to the
+                  product shot. It used to live at the very bottom of the card,
+                  below six feature tiles — anyone who didn't scroll never saw
+                  the offer. The trial badge that used to sit above the pitch is
+                  gone: the button says the same thing, better. */}
+              <Link href="/pricing?from=landing&trial=1" style={{ ...ctaBtn, textDecoration: "none" }} className="landing-cta">
+                <span>Start your 2-day free trial</span>
+                <span style={{ fontSize: 12, fontWeight: 700, opacity: 0.85, letterSpacing: "0.04em" }}>
+                  No charge up front · Cancel anytime
+                </span>
+              </Link>
+
+              {/* Proof lands right under the click, so the button is backed the
+                  moment it's read. */}
               <ReceiptsStrip />
             </div>
 
@@ -176,16 +183,6 @@ export default function LandingClient() {
                 </div>
               </Link>
             ))}
-          </div>
-
-          {/* ONE primary action. Everything above exists to earn this click. */}
-          <div style={{ marginTop: 18, display: "flex", justifyContent: "center" }}>
-            <Link href="/pricing?from=landing&trial=1" style={{ ...ctaBtn, textDecoration: "none" }}>
-              <span>Start your 2-day free trial</span>
-              <span style={{ fontSize: 12, fontWeight: 700, opacity: 0.85, letterSpacing: "0.04em" }}>
-                No charge up front · Cancel anytime
-              </span>
-            </Link>
           </div>
 
           <a
@@ -275,29 +272,9 @@ const legalDot: React.CSSProperties = {
   color: "rgba(139,148,167,0.5)",
 };
 
-const trialBadge: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 8,
-  marginBottom: 16,
-  padding: "7px 14px",
-  borderRadius: 999,
-  fontSize: 12,
-  fontWeight: 800,
-  letterSpacing: "0.12em",
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-  color: T.cyan,
-  background: "rgba(33,158,188,0.10)",
-  border: "1px solid rgba(33,158,188,0.45)",
-};
-
-const trialDot: React.CSSProperties = {
-  width: 6,
-  height: 6,
-  borderRadius: 999,
-  background: T.cyan,
-  boxShadow: `0 0 10px ${T.cyan}`,
-};
+// trialBadge / trialDot removed — the CTA moved up to where the badge was and
+// carries the same words ("2-day free trial · no charge up front"). Two of them
+// stacked was the same promise twice in three lines.
 
 const card: React.CSSProperties = {
   position: "relative",
@@ -367,7 +344,9 @@ const featureCell: React.CSSProperties = {
 // The one primary action on the page. Full-width and visually unambiguous:
 // nothing else on the landing is styled to compete with it.
 const ctaBtn: React.CSSProperties = {
-  width: "min(560px, 100%)",
+  width: "100%",
+  maxWidth: 520,
+  margin: "0 0 16px",
   padding: "14px 18px",
   borderRadius: 12,
   border: "1px solid rgba(33,158,188,0.65)",

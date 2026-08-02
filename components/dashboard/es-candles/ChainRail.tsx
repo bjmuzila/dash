@@ -27,6 +27,7 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 import { dedupeFetch } from "@/lib/dedupeFetch";
+import { cachedJson } from "@/lib/sharedCache";
 import { parseExpiration, metricBg, type GreekCell } from "@/lib/calculations/optionChain";
 
 /** Greeks this panel can show. "oi" is deliberately absent — the chain page's OI
@@ -116,9 +117,15 @@ export default function ChainRail({
     let cancelled = false;
     const resolve = async () => {
       try {
-        const j = await dedupeFetch(`/api/expirations?ticker=${encodeURIComponent(symbol)}`)
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null);
+        // cachedJson, not dedupeFetch: the expiry LIST is a once-a-day fact, so
+        // there is no reason for card 2's 30-minute tick to open a socket just
+        // because it landed a few ms after card 1's. Persisted, so a reload
+        // resolves the chain's expiry without a round trip. 15 min = half the
+        // refresh interval, so a real tick always crosses the TTL.
+        const j = await cachedJson<{ data?: { items?: Array<Record<string, unknown>> } } | null>(
+          `/api/expirations?ticker=${encodeURIComponent(symbol)}`,
+          { ttlMs: EXPIRY_REFRESH_MS / 2, persist: true },
+        ).catch(() => null);
         if (cancelled) return;
         const items: Array<Record<string, unknown>> = j?.data?.items ?? [];
         const today = etDayKey(Date.now());

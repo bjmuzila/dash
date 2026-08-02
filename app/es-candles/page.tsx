@@ -56,8 +56,9 @@ import {
   INDICATORS_DEFAULT, MAX_EMAS,
   type SidePanelKind, type IndicatorCfg,
 } from "@/components/dashboard/es-candles/slotStore";
+import { EMA_COLORS } from "@/components/dashboard/es-candles/indicators";
 import { CHAIN_GREEKS, GREEK_LABEL, isChainGreek, type ChainGreek } from "@/components/dashboard/es-candles/ChainRail";
-import { Dock, DockGap, DockButton, SegGroup } from "@/components/shared/DockToolbar";
+import { DockButton, SegGroup } from "@/components/shared/DockToolbar";
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 
 const PANEL_OPTIONS: Array<{ label: string; value: SidePanelKind }> = [
@@ -123,26 +124,81 @@ function NumField({
   );
 }
 
-/** On/off pill. Reads as a switch rather than as a button that does something. */
-function Toggle({ on, onClick, children, title }: { on: boolean; onClick: () => void; children: ReactNode; title?: string }) {
+/**
+ * Caption over a bare input. Three unlabelled number boxes in a row ("20", "2.3",
+ * "3") are three anonymous numbers; a two-word caption is the difference between
+ * reading the menu and guessing at it.
+ */
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <span style={{ display: "inline-flex", flexDirection: "column", gap: 2 }}>
+      <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.75, paddingLeft: 2 }}>
+        {label}
+      </span>
+      {children}
+    </span>
+  );
+}
+
+/**
+ * On/off control with an explicit CHECKBOX.
+ *
+ * The first cut was a pill that went from muted to blue. That is a fine state
+ * indicator once you already know it is a toggle, and useless before — with
+ * every indicator off, a row of dim pills reads as a row of buttons you press to
+ * do something, and there is nothing on screen to compare an "on" one against.
+ * A box that is either ticked or empty says which it is with nothing to compare
+ * to, which is the whole job.
+ *
+ * `swatch` draws the line's own colour next to the label, so with three EMAs
+ * running you can tell which row is which line without turning them off one at
+ * a time to find out.
+ */
+function Toggle({
+  on, onClick, children, title, swatch,
+}: { on: boolean; onClick: () => void; children: ReactNode; title?: string; swatch?: string }) {
   return (
     <button
       onClick={onClick}
       title={title}
+      aria-pressed={on}
       style={{
         height: 30,
-        padding: "0 10px",
+        padding: "0 10px 0 7px",
         borderRadius: 8,
         border: `1px solid ${on ? LIGHT_BLUE : HOME_THEME.border}`,
         background: on ? "rgba(41,182,246,0.16)" : "rgba(255,255,255,0.03)",
-        color: on ? LIGHT_BLUE : HOME_THEME.muted,
+        color: on ? HOME_THEME.text : HOME_THEME.muted,
         fontSize: 12,
         fontWeight: 800,
         cursor: "pointer",
         fontFamily: "inherit",
         whiteSpace: "nowrap",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 7,
       }}
     >
+      <span
+        aria-hidden
+        style={{
+          width: 14, height: 14, borderRadius: 4, flexShrink: 0,
+          border: `1.5px solid ${on ? LIGHT_BLUE : "rgba(255,255,255,0.28)"}`,
+          background: on ? LIGHT_BLUE : "transparent",
+          color: "#001018",
+          fontSize: 10,
+          lineHeight: "11px",
+          fontWeight: 900,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {on ? "\u2713" : ""}
+      </span>
+      {swatch && (
+        <span aria-hidden style={{ width: 14, height: 3, borderRadius: 2, background: swatch, flexShrink: 0, opacity: on ? 1 : 0.45 }} />
+      )}
       {children}
     </button>
   );
@@ -164,7 +220,12 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const [dockTarget, setDockTarget] = useState<HTMLDivElement | null>(null);
   // Where card 0 portals the replay transport. Lives inside the Replay popover.
   const [transportTarget, setTransportTarget] = useState<HTMLDivElement | null>(null);
-  const popRef = useRef<HTMLDivElement | null>(null);
+  // The button row lives inside the CARD's dock (injected as `toolbarExtras`),
+  // which on a multi-chart row is itself portaled into this page. So the popover
+  // can't be positioned relative to anything in this file's own layout — it is
+  // measured off the buttons and drawn `fixed`. A ref works across the portal.
+  const anchorRef = useRef<HTMLDivElement | null>(null);
+  const [anchorBottom, setAnchorBottom] = useState(0);
   // Is replay RUNNING, as distinct from "is its panel open". They come apart the
   // moment you open Indicators while a replay is going, and conflating them made
   // that round trip restart the replay from the open.
@@ -192,6 +253,24 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [popover]);
+
+  // Keep the panel under its buttons. Measured on open and on resize/scroll —
+  // the dock's height changes with the FitScale factor and with the compact
+  // breakpoint, so a hardcoded offset would drift the moment the window moved.
+  useEffect(() => {
+    if (!popover) return;
+    const measure = () => {
+      const r = anchorRef.current?.getBoundingClientRect();
+      if (r) setAnchorBottom(r.bottom);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, [popover, cards]);
 
   const setCardCount = useCallback((n: number) => {
     const clamped = Math.min(MAX_CARDS, Math.max(1, n));
@@ -266,175 +345,49 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
 
   const multi = cards > 1;
 
+  // The three page-level controls, rendered INTO the chart's own dock. The page
+  // still owns every piece of state behind them; only the pixels move.
+  const toolbarButtons = (
+    <div ref={anchorRef} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+      <DockButton
+        onClick={() => togglePopover("charts")}
+        title="Chart count and side panel"
+        style={popover === "charts" ? { color: LIGHT_BLUE, borderColor: LIGHT_BLUE } : undefined}
+      >
+        <span>Charts</span>
+        <span style={{ opacity: 0.5, fontSize: 10 }}>{cards}</span>
+      </DockButton>
+      <DockButton
+        onClick={toggleReplay}
+        title="Replay the session — reveal candles and gamma from the open forward"
+        style={popover === "replay" ? { color: HOME_THEME.cyan, borderColor: HOME_THEME.cyan } : undefined}
+      >
+        <span>Replay</span>
+      </DockButton>
+      <DockButton
+        onClick={() => togglePopover("indicators")}
+        title="Indicators — applied to every chart in the row"
+        style={popover === "indicators" ? { color: LIGHT_BLUE, borderColor: LIGHT_BLUE } : undefined}
+      >
+        <span>Indicators</span>
+        {/* How many are ON, so a shut menu still answers "is anything drawing?" */}
+        {(() => {
+          const n = indicators.emas.filter((e) => e.on).length
+            + [indicators.bb, indicators.weeklyEm, indicators.volume, indicators.rsi, indicators.countdown].filter(Boolean).length;
+          return n ? <span style={{ opacity: 0.5, fontSize: 10 }}>{n}</span> : null;
+        })()}
+      </DockButton>
+    </div>
+  );
+
   return (
     <div className="es-candles-page flex h-full flex-col" style={{ background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow }}>
-      {/* ── The one toolbar ───────────────────────────────────────────────── */}
-      <div className="px-4 pt-3" style={{ position: "relative", zIndex: 40 }}>
-        <Dock className="dock-noscroll" noScroll style={{ minWidth: 0 }}>
-          <span className="font-bold uppercase tracking-[0.2em]" style={{ fontSize: 13, color: LIGHT_BLUE, whiteSpace: "nowrap" }}>
-            Candles
-          </span>
-          <DockGap />
-          <DockButton
-            onClick={() => togglePopover("charts")}
-            title="Chart count and side panel"
-            style={popover === "charts" ? { color: LIGHT_BLUE, borderColor: LIGHT_BLUE } : undefined}
-          >
-            <span>Charts</span>
-            <span style={{ opacity: 0.5, fontSize: 10 }}>{cards}</span>
-          </DockButton>
-          <DockButton
-            onClick={toggleReplay}
-            title="Replay the session — reveal candles and gamma from the open forward"
-            style={popover === "replay" ? { color: HOME_THEME.cyan, borderColor: HOME_THEME.cyan } : undefined}
-          >
-            <span>Replay</span>
-          </DockButton>
-          <DockButton
-            onClick={() => togglePopover("indicators")}
-            title="Indicators — applied to every chart in the row"
-            style={popover === "indicators" ? { color: LIGHT_BLUE, borderColor: LIGHT_BLUE } : undefined}
-          >
-            <span>Indicators</span>
-            {/* Count of what's on, so a closed menu still says whether anything is. */}
-            {(() => {
-              const n = indicators.emas.filter((e) => e.on).length
-                + [indicators.bb, indicators.weeklyEm, indicators.volume, indicators.rsi, indicators.countdown].filter(Boolean).length;
-              return n ? <span style={{ opacity: 0.5, fontSize: 10 }}>{n}</span> : null;
-            })()}
-          </DockButton>
-        </Dock>
-
-        {/* ── Popover ───────────────────────────────────────────────────────
-            Absolutely positioned so opening it does NOT reflow the chart row.
-            A panel that pushes the charts down resizes them, and every resize
-            makes lightweight-charts rebuild its time scale — three charts
-            flickering every time a menu opens. */}
-        {popover && (
-          <div
-            ref={popRef}
-            className="es-candles-popover"
-            style={{
-              position: "absolute",
-              top: "100%",
-              left: 16,
-              right: 16,
-              marginTop: 6,
-              zIndex: 60,
-              padding: "12px 14px",
-              borderRadius: 14,
-              border: `1px solid ${HOME_THEME.border}`,
-              background: "rgba(10,14,20,0.97)",
-              backdropFilter: "blur(14px)",
-              boxShadow: "0 18px 48px rgba(0,0,0,0.55)",
-              display: "flex",
-              alignItems: "flex-start",
-              gap: 18,
-              flexWrap: "wrap",
-            }}
-          >
-            {popover === "charts" && (
-              <>
-                <Group label="Charts">
-                  <SegGroup
-                    options={Array.from({ length: MAX_CARDS }, (_, i) => ({ label: String(i + 1), value: String(i + 1) }))}
-                    active={String(cards)}
-                    onChange={(v) => setCardCount(Number(v))}
-                  />
-                </Group>
-                <Group label="Panel">
-                  <SegGroup
-                    options={PANEL_OPTIONS.map((o) => ({ label: o.label, value: o.value }))}
-                    active={sidePanel}
-                    onChange={(v) => setSidePanel(v as SidePanelKind)}
-                  />
-                </Group>
-                {/* The chain's greek lives up here rather than in the panel itself for
-                    a structural reason, not a cosmetic one: ChainRail's box has to be
-                    exactly the chart container's box or its rows stop matching the
-                    chart's prices, so nothing may sit above its canvas. */}
-                {sidePanel === "chain" && (
-                  <Group label="Greek">
-                    <SegGroup
-                      options={CHAIN_GREEKS.map((g) => ({ label: GREEK_LABEL[g], value: g }))}
-                      active={chainGreek}
-                      onChange={(v) => setChainGreek(v as ChainGreek)}
-                    />
-                  </Group>
-                )}
-              </>
-            )}
-
-            {/* Card 0 portals the transport in here. Always mounted while the
-                popover is open, so the ref exists before the card looks for it. */}
-            {popover === "replay" && (
-              <div ref={setTransportTarget} style={{ width: "100%", minWidth: 0 }} />
-            )}
-
-            {popover === "indicators" && (
-              <>
-                <Group label="EMA">
-                  {indicators.emas.slice(0, MAX_EMAS).map((e, i) => (
-                    <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      <Toggle on={e.on} onClick={() => patchEma(i, { on: !e.on })} title={`EMA ${e.len}`}>
-                        {e.len}
-                      </Toggle>
-                      <NumField
-                        value={e.len}
-                        min={1}
-                        max={400}
-                        width={54}
-                        title="Length in bars"
-                        onChange={(v) => patchEma(i, { len: Math.round(v) })}
-                      />
-                    </span>
-                  ))}
-                </Group>
-
-                <Group label="Bollinger">
-                  <Toggle on={indicators.bb} onClick={() => patchIndicators({ bb: !indicators.bb })}>Cloud</Toggle>
-                  <NumField value={indicators.bbPeriod} min={2} max={400} width={54} title="SMA period (basis)"
-                            onChange={(v) => patchIndicators({ bbPeriod: Math.round(v) })} />
-                  <NumField value={indicators.bbInner} min={0.1} max={10} step={0.1} width={54} title="Inner cloud edge (σ)"
-                            onChange={(v) => patchIndicators({ bbInner: v })} />
-                  <NumField value={indicators.bbOuter} min={0.1} max={10} step={0.1} width={54} title="Outer cloud edge (σ)"
-                            onChange={(v) => patchIndicators({ bbOuter: v })} />
-                </Group>
-
-                <Group label="Levels">
-                  <Toggle on={indicators.weeklyEm} onClick={() => patchIndicators({ weeklyEm: !indicators.weeklyEm })}
-                          title="This week's expected-move band from the EM tracker">
-                    Weekly EM
-                  </Toggle>
-                </Group>
-
-                <Group label="Study">
-                  <Toggle on={indicators.volume} onClick={() => patchIndicators({ volume: !indicators.volume })}
-                          title="Volume histogram along the bottom of the chart">
-                    Volume
-                  </Toggle>
-                  <Toggle on={indicators.rsi} onClick={() => patchIndicators({ rsi: !indicators.rsi })}
-                          title="RSI, shown as a number in the chart's top right">
-                    RSI
-                  </Toggle>
-                  <NumField value={indicators.rsiPeriod} min={2} max={100} width={54} title="RSI period"
-                            onChange={(v) => patchIndicators({ rsiPeriod: Math.round(v) })} />
-                  <Toggle on={indicators.countdown} onClick={() => patchIndicators({ countdown: !indicators.countdown })}
-                          title="Time left in the forming bar">
-                    Bar countdown
-                  </Toggle>
-                </Group>
-              </>
-            )}
-          </div>
-        )}
-      </div>
-
       {/* The shared chart toolbar. Card 0 portals its dock in here when there
           are 2–3 charts; at one chart the card keeps its own dock and this stays
-          empty (and unrendered, so it costs no vertical space). */}
+          empty (and unrendered, so it costs no vertical space). Either way the
+          Charts / Replay / Indicators buttons ride inside that dock. */}
       {multi && (
-        <div ref={setDockTarget} className="px-4" style={{ position: "relative", zIndex: 35, minWidth: 0 }} />
+        <div ref={setDockTarget} className="px-4 pt-3" style={{ position: "relative", zIndex: 35, minWidth: 0 }} />
       )}
 
       {/* One row. Equal columns, each free to shrink — minWidth:0 on the flex
@@ -453,6 +406,11 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
               dockTarget={dockTarget}
               transportTarget={transportTarget}
               hostedReplay
+              // Only the dock-rendering card gets the buttons. Handing them to
+              // all three would be harmless today (the ticker-only cards don't
+              // render a dock) but it is a duplicate set waiting for the first
+              // layout change that gives those cards one.
+              toolbarExtras={i === 0 ? toolbarButtons : undefined}
               sidePanel={sidePanel}
               chainGreek={chainGreek}
               indicators={indicators}
@@ -460,6 +418,153 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           </div>
         ))}
       </div>
+
+      {/* ── Popover ─────────────────────────────────────────────────────────
+          `fixed`, measured off the buttons, for two reasons. It must not reflow
+          the chart row — a panel that pushes the charts down resizes them, and
+          every resize makes lightweight-charts rebuild its time scale, so three
+          charts would flicker each time a menu opened. And its anchor lives
+          inside the card's dock, which on a multi-chart row is portaled; there
+          is nothing in this file's own layout to be absolute against. */}
+      {popover && (
+        <div
+          className="es-candles-popover"
+          style={{
+            position: "fixed",
+            top: anchorBottom + 8,
+            left: 16,
+            right: 16,
+            zIndex: 60,
+            padding: "12px 14px",
+            borderRadius: 14,
+            border: `1px solid ${HOME_THEME.border}`,
+            background: "rgba(10,14,20,0.97)",
+            backdropFilter: "blur(14px)",
+            WebkitBackdropFilter: "blur(14px)",
+            boxShadow: "0 18px 48px rgba(0,0,0,0.55)",
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 18,
+            flexWrap: "wrap",
+            maxHeight: "min(60vh, 520px)",
+            overflowY: "auto",
+          }}
+        >
+          {popover === "charts" && (
+            <>
+              <Group label="Charts">
+                <SegGroup
+                  options={Array.from({ length: MAX_CARDS }, (_, i) => ({ label: String(i + 1), value: String(i + 1) }))}
+                  active={String(cards)}
+                  onChange={(v) => setCardCount(Number(v))}
+                />
+              </Group>
+              <Group label="Panel">
+                <SegGroup
+                  options={PANEL_OPTIONS.map((o) => ({ label: o.label, value: o.value }))}
+                  active={sidePanel}
+                  onChange={(v) => setSidePanel(v as SidePanelKind)}
+                />
+              </Group>
+              {/* The chain's greek lives up here rather than in the panel itself for
+                  a structural reason, not a cosmetic one: ChainRail's box has to be
+                  exactly the chart container's box or its rows stop matching the
+                  chart's prices, so nothing may sit above its canvas. */}
+              {sidePanel === "chain" && (
+                <Group label="Greek">
+                  <SegGroup
+                    options={CHAIN_GREEKS.map((g) => ({ label: GREEK_LABEL[g], value: g }))}
+                    active={chainGreek}
+                    onChange={(v) => setChainGreek(v as ChainGreek)}
+                  />
+                </Group>
+              )}
+            </>
+          )}
+
+          {/* Card 0 portals the transport in here. Always mounted while the
+              popover is open, so the ref exists before the card looks for it. */}
+          {popover === "replay" && (
+            <div ref={setTransportTarget} style={{ width: "100%", minWidth: 0 }} />
+          )}
+
+          {popover === "indicators" && (
+            <>
+              {/* Each row is CHECKBOX + what it draws + its inputs, in that order.
+                  The first version put a pill showing the EMA's length next to a
+                  number field holding the same length — two identical numbers,
+                  and no way to tell which one was the switch. */}
+              <Group label="EMA">
+                {indicators.emas.slice(0, MAX_EMAS).map((e, i) => (
+                  <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    <Toggle
+                      on={e.on}
+                      onClick={() => patchEma(i, { on: !e.on })}
+                      swatch={EMA_COLORS[i]}
+                      title={`Show the ${e.len}-bar EMA`}
+                    >
+                      EMA
+                    </Toggle>
+                    <NumField
+                      value={e.len}
+                      min={1}
+                      max={400}
+                      width={56}
+                      title="Length, in bars"
+                      onChange={(v) => patchEma(i, { len: Math.round(v) })}
+                    />
+                  </span>
+                ))}
+              </Group>
+
+              <Group label="Bollinger">
+                <Toggle on={indicators.bb} onClick={() => patchIndicators({ bb: !indicators.bb })}
+                        title="Cloud between the inner and outer band">
+                  Cloud
+                </Toggle>
+                <Field label="len">
+                  <NumField value={indicators.bbPeriod} min={2} max={400} width={56} title="SMA period — the basis the bands are measured from"
+                            onChange={(v) => patchIndicators({ bbPeriod: Math.round(v) })} />
+                </Field>
+                <Field label="inner σ">
+                  <NumField value={indicators.bbInner} min={0.1} max={10} step={0.1} width={56} title="Inner cloud edge, in standard deviations"
+                            onChange={(v) => patchIndicators({ bbInner: v })} />
+                </Field>
+                <Field label="outer σ">
+                  <NumField value={indicators.bbOuter} min={0.1} max={10} step={0.1} width={56} title="Outer cloud edge, in standard deviations"
+                            onChange={(v) => patchIndicators({ bbOuter: v })} />
+                </Field>
+              </Group>
+
+              <Group label="Levels">
+                <Toggle on={indicators.weeklyEm} onClick={() => patchIndicators({ weeklyEm: !indicators.weeklyEm })}
+                        title="This week's published expected-move band">
+                  Weekly EM
+                </Toggle>
+              </Group>
+
+              <Group label="Study">
+                <Toggle on={indicators.volume} onClick={() => patchIndicators({ volume: !indicators.volume })}
+                        title="Volume histogram along the bottom of the chart">
+                  Volume
+                </Toggle>
+                <Toggle on={indicators.rsi} onClick={() => patchIndicators({ rsi: !indicators.rsi })}
+                        title="RSI, as a number in the chart's top right">
+                  RSI
+                </Toggle>
+                <Field label="period">
+                  <NumField value={indicators.rsiPeriod} min={2} max={100} width={56} title="RSI period"
+                            onChange={(v) => patchIndicators({ rsiPeriod: Math.round(v) })} />
+                </Field>
+                <Toggle on={indicators.countdown} onClick={() => patchIndicators({ countdown: !indicators.countdown })}
+                        title="Time left in the forming bar">
+                  Bar countdown
+                </Toggle>
+              </Group>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
