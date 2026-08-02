@@ -10,7 +10,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageShell } from "../components/PageCard";
-import { HOME_THEME, classicCardAccentStyle } from "../lib/theme";
+import { HOME_THEME, classicCardAccentStyle, homeInputStyle } from "../lib/theme";
 
 // Today's ET date as "YYYY-MM-DD" (mirrors the helper on /fails).
 function todayETStr(): string {
@@ -269,7 +269,7 @@ function Metric({ label, value, color }: { label: string; value: string; color: 
   );
 }
 
-type TabKey = "ict" | "fails" | "checkpoints" | "contracts";
+type TabKey = "ict" | "fails" | "checkpoints" | "contracts" | "walls";
 
 export default function Results() {
   const [tab, setTab] = useState<TabKey>("ict");
@@ -388,9 +388,10 @@ export default function Results() {
         <button onClick={() => setTab("fails")} style={tabBtn("fails", "Fail Rate")}>Fail Rate</button>
         <button onClick={() => setTab("checkpoints")} style={tabBtn("checkpoints", "Confidence")}>Confidence</button>
         <button onClick={() => setTab("contracts")} style={tabBtn("contracts", "Contracts")}>Contracts</button>
+        <button onClick={() => setTab("walls")} style={tabBtn("walls", "Walls")}>Walls</button>
       </div>
 
-      {tab === "contracts" ? <TradesView /> : tab === "checkpoints" ? <CheckpointsView /> : tab === "fails" ? <FailsView /> : (<>
+      {tab === "walls" ? <WallsView /> : tab === "contracts" ? <TradesView /> : tab === "checkpoints" ? <CheckpointsView /> : tab === "fails" ? <FailsView /> : (<>
       <ShareCard overall={overall} cardRef={shareCardRef} onDownload={downloadShareCard} snap={snap} />
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 4, flexWrap: "wrap" }}>
@@ -1477,4 +1478,381 @@ function etDate(ts: number) {
   const t = Number(ts);
   if (!Number.isFinite(t) || t <= 0) return "—";
   return new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" }).format(new Date(t));
+}
+
+// ── Walls tab: call wall / put wall / CB across the scanner universe ────────
+//
+// Backed by server-v2/walls-recorder.js. Levels are captured at 09:29 ET and
+// then every 15 minutes to 16:00, but only WRITTEN when they change — so the
+// day summary carries the last value forward per level type and `open` holds
+// the 09:29 baseline. A separate wall_events row is opened whenever spot trades
+// into a live level and is classified four slots later (reject / break / broke
+// and consolidated / new wall / pin). Read API: GET /proxy/walls[?date=&symbol=].
+
+type WallLevel = "call_wall" | "put_wall" | "cb";
+type WallReaction = "reject" | "break_lt5" | "break_5" | "consolidated" | "new_wall" | "pin";
+
+type WallTicker = {
+  symbol: string;
+  spot: number | null;
+  call_wall: number | null; put_wall: number | null; cb: number | null;
+  open: Partial<Record<WallLevel, number>>;
+  changes: number; hits: number;
+  last_event: string | null;
+  reaction: WallReaction | null;
+};
+type WallTotals = {
+  tickers: number; changes: number; hits: number;
+  rejects: number; breaks: number; consolidated: number; pins: number; rows: number;
+};
+type WallLogRow = {
+  slot: number; at: string; ts: string; level_type: WallLevel;
+  strike: number; prev_strike: number | null; delta: number | null;
+  spot: number; reason: "open" | "change";
+};
+type WallEventRow = {
+  hit_slot: number; at: string; hit_ts: string; level_type: WallLevel;
+  strike: number; spot_at_hit: number; reaction: WallReaction | null;
+  excursion_pts: number | null; reclaim_min: number | null;
+  note: string | null; resolved_ts: string | null;
+};
+
+const WALL_SLOTS = 27;
+const LEVEL_LABEL: Record<WallLevel, string> = { call_wall: "Call Wall", put_wall: "Put Wall", cb: "CB" };
+const LEVEL_COLOR: Record<WallLevel, string> = { call_wall: AMBER, put_wall: GREEN, cb: HOME_THEME.lightBlue };
+
+const REACTION_LABEL: Record<WallReaction, string> = {
+  reject: "Reject", break_lt5: "Break <5", break_5: "Break +5",
+  consolidated: "Broke & consolidated", new_wall: "New wall", pin: "Pinned",
+};
+const REACTION_COLOR: Record<WallReaction, string> = {
+  reject: GREEN, break_lt5: AMBER, break_5: AMBER,
+  consolidated: HOME_THEME.gold, new_wall: C.cyan, pin: HOME_THEME.lightBlue,
+};
+
+/** How each reaction is decided — mirrors classify() in walls-recorder.js. */
+const REACTION_RULE: Record<WallReaction, string> = {
+  reject: "Tagged, never got past the touch band, faded ≥ 0.15% back inside",
+  break_lt5: "Traded past the level but by less than the break threshold",
+  break_5: "Max excursion ≥ 5 pts (0.15% for sub-$1000 names) past the level",
+  consolidated: "Broke, then the last 3 samples all held outside inside a 0.10% range",
+  new_wall: "Broke, and the level itself then rolled in the break direction",
+  pin: "Sat inside the touch band for 3+ samples without resolving either way",
+};
+
+function wallBadge(rx: WallReaction | null, short = false): React.ReactNode {
+  if (!rx) return <span style={{ ...wallBadgeStyle(MUTED), opacity: 0.55 }}>Untested</span>;
+  const label = short && rx === "consolidated" ? "Consol." : REACTION_LABEL[rx];
+  return <span style={wallBadgeStyle(REACTION_COLOR[rx])}>{label}</span>;
+}
+function wallBadgeStyle(color: string): React.CSSProperties {
+  return {
+    display: "inline-block", padding: "2px 8px", borderRadius: 6, fontSize: 14, fontWeight: 800,
+    letterSpacing: "0.07em", textTransform: "uppercase", whiteSpace: "nowrap",
+    color, background: rgba(color, 0.13), border: `1px solid ${rgba(color, 0.3)}`,
+  };
+}
+
+const wallNum = (n: number | null | undefined, dp = 2) =>
+  n == null || !Number.isFinite(Number(n)) ? "—"
+    : Number(n).toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+/** Strikes print without forced decimals — 6890, not 6890.00. */
+const wallStrike = (n: number | null | undefined) =>
+  n == null || !Number.isFinite(Number(n)) ? "—"
+    : Number(n).toLocaleString("en-US", { maximumFractionDigits: 2 });
+
+function WallDelta({ now, open }: { now: number | null; open: number | undefined }) {
+  if (now == null || open == null || now === open) return null;
+  const up = now > open;
+  const c = up ? GREEN : AMBER;
+  return (
+    <span style={{ fontSize: 14, fontWeight: 800, marginLeft: 6, padding: "1px 5px", borderRadius: 4, color: c, background: rgba(c, 0.12) }}>
+      {up ? "▲" : "▼"}{wallStrike(Math.abs(now - open))}
+    </span>
+  );
+}
+
+function WallTile({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+  return (
+    <div style={{ ...CARD, padding: "14px 16px" }}>
+      <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.16em", textTransform: "uppercase", color: C.label, opacity: 0.55 }}>{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 800, marginTop: 6, fontFamily: "var(--font-mono)", color: color ?? C.label }}>{value}</div>
+      {sub ? <div style={{ fontSize: 14, color: C.label, opacity: 0.6, marginTop: 2 }}>{sub}</div> : null}
+    </div>
+  );
+}
+
+type WallFilter = "all" | "changed" | "hit" | "idle";
+
+function WallsView() {
+  const [date, setDate] = useState(todayETStr());
+  const [day, setDay] = useState<{ totals: WallTotals; tickers: WallTicker[] } | null>(null);
+  const [sel, setSel] = useState<string | null>(null);
+  const [detail, setDetail] = useState<{ symbol: string; log: WallLogRow[]; events: WallEventRow[] } | null>(null);
+  const [filter, setFilter] = useState<WallFilter>("all");
+  const [q, setQ] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  const loadDay = useCallback(async () => {
+    setErr(null); setLoaded(false);
+    try {
+      const r = await fetch(`/proxy/walls?date=${encodeURIComponent(date)}`, { cache: "no-store" });
+      const j = await r.json();
+      if (!j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setDay({ totals: j.totals, tickers: Array.isArray(j.tickers) ? j.tickers : [] });
+      setSel((prev) => prev ?? j.tickers?.[0]?.symbol ?? null);
+    } catch (e) { setErr(String(e)); setDay(null); }
+    setLoaded(true);
+  }, [date]);
+
+  useEffect(() => { void loadDay(); }, [loadDay]);
+
+  useEffect(() => {
+    if (!sel) { setDetail(null); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(`/proxy/walls?date=${encodeURIComponent(date)}&symbol=${encodeURIComponent(sel)}`, { cache: "no-store" });
+        const j = await r.json();
+        if (alive && j?.ok) setDetail({ symbol: j.symbol, log: j.log ?? [], events: j.events ?? [] });
+      } catch { if (alive) setDetail(null); }
+    })();
+    return () => { alive = false; };
+  }, [sel, date]);
+
+  const shown = useMemo(() => {
+    const rows = day?.tickers ?? [];
+    const query = q.trim().toUpperCase();
+    return rows.filter((t) => {
+      if (query && !t.symbol.includes(query)) return false;
+      if (filter === "changed") return t.changes > 0;
+      if (filter === "hit") return t.hits > 0;
+      if (filter === "idle") return t.hits === 0;
+      return true;
+    });
+  }, [day, q, filter]);
+
+  const totals = day?.totals;
+  const chipStyle = (on: boolean): React.CSSProperties => ({
+    padding: "6px 11px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
+    border: `1px solid ${on ? C.cyan : C.border}`, background: on ? rgba(C.cyan, 0.14) : "rgba(255,255,255,0.03)",
+    color: on ? C.cyan : C.label, fontSize: 14, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+  });
+  const th: React.CSSProperties = {
+    fontSize: 14, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", opacity: 0.5,
+    textAlign: "right", padding: "10px 9px", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap",
+    position: "sticky", top: 0, background: HOME_THEME.panelBgStrong,
+  };
+  const td: React.CSSProperties = {
+    padding: "8px 9px", borderBottom: `1px solid rgba(255,255,255,0.05)`, fontSize: 14,
+    textAlign: "right", whiteSpace: "nowrap", fontFamily: "var(--font-mono)",
+  };
+
+  return (
+    <>
+      {/* Control bar */}
+      <div style={{ ...CARD, padding: "14px 18px", marginBottom: 14, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 17, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Walls</span>
+        <span style={{ fontSize: 14, color: C.label, opacity: 0.7 }}>
+          Call wall · put wall · CB across the scanner universe — 09:29 open + every 15m to 16:00 ET, change-only
+        </span>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            type="date" value={date} onChange={(e) => { setDate(e.target.value); setSel(null); }}
+            style={{ ...homeInputStyle, fontSize: 14, padding: "7px 10px", fontFamily: "inherit", colorScheme: "dark" }}
+          />
+          <input
+            value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter ticker…"
+            style={{ ...homeInputStyle, fontSize: 14, padding: "7px 10px", minWidth: 140, fontFamily: "inherit" }}
+          />
+          {(["all", "changed", "hit", "idle"] as WallFilter[]).map((f) => (
+            <button key={f} onClick={() => setFilter(f)} style={chipStyle(filter === f)}>
+              {f === "idle" ? "Untested" : f}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {err ? (
+        <div style={{ ...CARD, padding: 18, marginBottom: 14, color: RED, fontSize: 14 }}>
+          Could not load /proxy/walls — {err}
+        </div>
+      ) : null}
+
+      {/* Session totals */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 16 }}>
+        <WallTile label="Tickers tracked" value={totals ? String(totals.tickers) : "—"} sub="scanner universe" />
+        <WallTile label="Level changes" value={totals ? String(totals.changes) : "—"} color={C.cyan} sub={`${WALL_SLOTS} capture slots`} />
+        <WallTile label="Levels hit" value={totals ? String(totals.hits) : "—"} color={AMBER}
+          sub={totals && totals.tickers ? `${Math.round((totals.hits / totals.tickers) * 100)}% of tracked` : undefined} />
+        <WallTile label="Rejects" value={totals ? String(totals.rejects) : "—"} color={GREEN}
+          sub={totals && totals.hits ? `${Math.round((totals.rejects / totals.hits) * 100)}% of hits` : undefined} />
+        <WallTile label="Breaks" value={totals ? String(totals.breaks) : "—"} color={AMBER}
+          sub={totals ? `${totals.consolidated} consolidated` : undefined} />
+        <WallTile label="Rows written" value={totals ? String(totals.rows) : "—"}
+          sub={totals ? `vs ${(totals.tickers * 3 * WALL_SLOTS).toLocaleString("en-US")} if unfiltered` : undefined} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.35fr) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
+        {/* Universe table */}
+        <div style={{ ...CARD, overflow: "hidden" }}>
+          <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center" }}>
+            <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.75 }}>
+              Universe — {date}
+            </span>
+            <span style={{ marginLeft: "auto", fontSize: 14, opacity: 0.5 }}>
+              {loaded ? `${shown.length} of ${day?.tickers.length ?? 0} shown` : "loading…"}
+            </span>
+          </div>
+          <div style={{ maxHeight: 720, overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, textAlign: "left" }}>Ticker</th>
+                  <th style={th}>Spot</th><th style={th}>Put Wall</th><th style={th}>CB</th><th style={th}>Call Wall</th>
+                  <th style={th}>Chg</th><th style={th}>Last event</th><th style={th}>Reaction</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((t) => (
+                  <tr
+                    key={t.symbol}
+                    onClick={() => setSel(t.symbol)}
+                    style={{
+                      cursor: "pointer",
+                      background: t.symbol === sel ? rgba(C.cyan, 0.1) : undefined,
+                      boxShadow: t.symbol === sel ? `inset 2px 0 0 ${C.cyan}` : undefined,
+                    }}
+                  >
+                    <td style={{ ...td, textAlign: "left", fontWeight: 800, letterSpacing: "0.03em" }}>{t.symbol}</td>
+                    <td style={td}>{wallNum(t.spot)}</td>
+                    <td style={{ ...td, color: LEVEL_COLOR.put_wall }}>{wallStrike(t.put_wall)}<WallDelta now={t.put_wall} open={t.open.put_wall} /></td>
+                    <td style={{ ...td, color: LEVEL_COLOR.cb }}>{wallStrike(t.cb)}<WallDelta now={t.cb} open={t.open.cb} /></td>
+                    <td style={{ ...td, color: LEVEL_COLOR.call_wall }}>{wallStrike(t.call_wall)}<WallDelta now={t.call_wall} open={t.open.call_wall} /></td>
+                    <td style={{ ...td, opacity: t.changes ? 1 : 0.35 }}>{t.changes}</td>
+                    <td style={{ ...td, opacity: 0.65 }}>{t.last_event ?? "—"}</td>
+                    <td style={{ ...td, fontFamily: "inherit" }}>{wallBadge(t.reaction, true)}</td>
+                  </tr>
+                ))}
+                {loaded && !shown.length ? (
+                  <tr><td colSpan={8} style={{ ...td, textAlign: "center", padding: "34px 0", opacity: 0.5, fontFamily: "inherit" }}>
+                    No rows for {date}. The recorder writes from 09:29 ET on trading days.
+                  </td></tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Per-ticker level log */}
+        <div style={{ ...CARD, overflow: "hidden" }}>
+          <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center" }}>
+            <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.75 }}>
+              {sel ?? "—"} — level log
+            </span>
+            <span style={{ marginLeft: "auto", fontSize: 14, opacity: 0.7, fontFamily: "var(--font-mono)" }}>
+              {wallNum(day?.tickers.find((t) => t.symbol === sel)?.spot ?? null)}
+            </span>
+          </div>
+          <WallCaptureRail log={detail?.log ?? []} events={detail?.events ?? []} />
+          <WallTimeline log={detail?.log ?? []} events={detail?.events ?? []} />
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "14px 18px", borderTop: `1px solid ${C.border}` }}>
+            {(Object.keys(REACTION_LABEL) as WallReaction[]).map((rx) => (
+              <span key={rx} title={REACTION_RULE[rx]}>{wallBadge(rx)}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** 27 squares — one per capture slot. Filled = a row was written at that slot. */
+function WallCaptureRail({ log, events }: { log: WallLogRow[]; events: WallEventRow[] }) {
+  const marks = new Array(WALL_SLOTS).fill("") as string[];
+  for (const r of log) if (r.slot >= 0 && r.slot < WALL_SLOTS) marks[r.slot] = r.reason === "open" ? "open" : "change";
+  for (const e of events) if (e.hit_slot >= 0 && e.hit_slot < WALL_SLOTS) marks[e.hit_slot] = "hit";
+  const color = (m: string) => m === "hit" ? AMBER : m === "open" ? HOME_THEME.gold : m === "change" ? C.cyan : "rgba(255,255,255,0.09)";
+  const filled = marks.filter(Boolean).length;
+  return (
+    <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap", padding: "12px 18px", borderBottom: `1px solid ${C.border}` }}>
+      <span style={{ fontSize: 14, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.45, marginRight: 8 }}>09:29</span>
+      {marks.map((m, i) => (
+        <span key={i} title={m ? `slot ${i}: ${m}` : `slot ${i}: no change`}
+          style={{ width: 9, height: 9, borderRadius: 2, background: color(m), boxShadow: m ? `0 0 6px ${rgba(color(m), 0.5)}` : undefined }} />
+      ))}
+      <span style={{ fontSize: 14, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.45, marginLeft: 8 }}>16:00</span>
+      <span style={{ marginLeft: "auto", fontSize: 14, opacity: 0.45 }}>{log.length} rows · {WALL_SLOTS - filled} slots skipped</span>
+    </div>
+  );
+}
+
+/** Chronological merge of level changes and classified hits. */
+function WallTimeline({ log, events }: { log: WallLogRow[]; events: WallEventRow[] }) {
+  type Entry = { slot: number; at: string; kind: "open" | "change" | "hit"; lt: WallLevel; body: React.ReactNode; meta?: string };
+  const entries: Entry[] = [];
+
+  for (const r of log) {
+    entries.push({
+      slot: r.slot, at: r.at, kind: r.reason, lt: r.level_type,
+      body: r.reason === "open"
+        ? <>Open baseline — <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(r.strike)}</b>. Spot <b style={{ fontFamily: "var(--font-mono)" }}>{wallNum(r.spot)}</b>.</>
+        : <>Rolled {Number(r.delta) > 0 ? "up" : "down"} <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(r.prev_strike)} → {wallStrike(r.strike)}</b>.</>,
+    });
+  }
+  for (const e of events) {
+    entries.push({
+      slot: e.hit_slot, at: e.at, kind: "hit", lt: e.level_type,
+      body: <>Tagged <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(e.strike)}</b> at <b style={{ fontFamily: "var(--font-mono)" }}>{wallNum(e.spot_at_hit)}</b>{e.note ? ` — ${e.note}.` : "."}</>,
+      meta: [
+        e.excursion_pts != null ? `excursion ${Number(e.excursion_pts) > 0 ? "+" : ""}${wallNum(e.excursion_pts)}` : null,
+        e.reclaim_min != null ? `reclaimed in ${e.reclaim_min}m` : null,
+        e.reaction == null ? "watching — resolves 4 slots after the tag" : null,
+      ].filter(Boolean).join(" · "),
+    });
+  }
+  entries.sort((a, b) => a.slot - b.slot || (a.kind === "hit" ? 1 : -1));
+
+  const evByKey = new Map(events.map((e) => [`${e.hit_slot}|${e.level_type}`, e]));
+
+  if (!entries.length) {
+    return (
+      <div style={{ padding: "34px 18px", textAlign: "center", opacity: 0.45, fontSize: 14 }}>
+        Nothing recorded for this ticker — no baseline, no level changes, no touches.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: "6px 18px 18px" }}>
+      {entries.map((e, i) => {
+        const dot = e.kind === "hit" ? AMBER : e.kind === "open" ? HOME_THEME.gold : C.cyan;
+        const ev = e.kind === "hit" ? evByKey.get(`${e.slot}|${e.lt}`) : null;
+        return (
+          <div key={`${e.slot}-${e.kind}-${e.lt}-${i}`}
+            style={{ display: "grid", gridTemplateColumns: "58px 14px 1fr", gap: 10, padding: "11px 0",
+              borderBottom: i === entries.length - 1 ? "none" : `1px solid rgba(255,255,255,0.05)` }}>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 14, opacity: 0.7, paddingTop: 2 }}>{e.at}</div>
+            <div style={{ position: "relative" }}>
+              <span style={{ position: "absolute", left: 4, top: 6, width: 7, height: 7, borderRadius: 999, background: dot, boxShadow: `0 0 10px ${rgba(dot, 0.6)}` }} />
+              {i < entries.length - 1 ? <span style={{ position: "absolute", left: 7, top: 0, bottom: -11, width: 1, background: "rgba(255,255,255,0.08)" }} /> : null}
+            </div>
+            <div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LEVEL_COLOR[e.lt], opacity: 0.85 }}>
+                  {LEVEL_LABEL[e.lt]}
+                </span>
+                {e.kind === "open" ? <span style={{ ...wallBadgeStyle(MUTED), opacity: 0.55 }}>Open baseline</span> : null}
+                {e.kind === "change" ? <span style={wallBadgeStyle(C.cyan)}>Changed</span> : null}
+                {e.kind === "hit" ? wallBadge(ev?.reaction ?? null) : null}
+              </div>
+              <div style={{ fontSize: 14, marginTop: 4, lineHeight: 1.45 }}>{e.body}</div>
+              {e.meta ? <div style={{ fontFamily: "var(--font-mono)", fontSize: 14, opacity: 0.55, marginTop: 6 }}>{e.meta}</div> : null}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }

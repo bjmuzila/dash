@@ -28,6 +28,12 @@ import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { useGexSocket, type GexMessage } from "@/lib/gexSocket";
 import { dedupeFetch } from "@/lib/dedupeFetch";
+// cachedJson, NOT dedupeFetch, for the page-GLOBAL reads below (levels, mvc,
+// basis, eod-gex). dedupeFetch only collapses requests that overlap in time; it
+// cannot help three cards whose 60s polls land 40ms apart, or a card that mounts
+// a second after its siblings. Those are sequential, so every one of them used
+// to open its own socket. See the header of lib/sharedCache.ts.
+import { cachedJson, HttpError } from "@/lib/sharedCache";
 // The flip is computed HERE with findGEXFlip, same as the home page, so the two
 // pages agree by construction. Do NOT source it from mvc_snapshots.gexFlip: both
 // recorders (scripts/auto-snapshot-mvc.js, server-v2/mvc-auto-snapshot.js) fall
@@ -36,7 +42,7 @@ import { dedupeFetch } from "@/lib/dedupeFetch";
 // (tick-quantized, 1-min cadence) — not by picking a different source.
 import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
-import { Dock, SegGroup, DockButton, DockGap, DockSlider } from "@/components/shared/DockToolbar";
+import { Dock, SegGroup, DockButton, DockGap, DockSlider, DockSpacer } from "@/components/shared/DockToolbar";
 import FitScale from "@/components/shared/FitScale";
 import { HOME_THEME, DOCK_THEME, LIGHT_BLUE, SOFT_RED, dissolveCardStyle } from "@/components/shared/homeTheme";
 import type { RailRow } from "@/components/dashboard/EsGexRail";
@@ -321,12 +327,22 @@ export default function EsChartCard({
   // i.e. esClose ± em, and SPY/QQQ natively.
   const [emWeekly, setEmWeekly] = useState<{ up: number; down: number; exp: string } | null>(null);
   useEffect(() => {
+    // Wait for the slot restore. `symbol` initialises to "ES" and only becomes
+    // this card's real ticker in the restore effect below, which sets
+    // settingsLoaded in the SAME batch — so without this guard a three-card row
+    // where cards 2 and 3 are SPY/QQQ fired /api/levels?ticker=ES three times on
+    // load and then fetched SPY and QQQ anyway. Three requests, all discarded.
+    if (!settingsLoaded) return;
     let cancelled = false;
     const load = async () => {
       try {
-        const r = await fetch(`/api/levels?ticker=${encodeURIComponent(sym.key)}`, { cache: "no-store" });
-        if (!r.ok) { if (!cancelled) setEmWeekly(null); return; }
-        const j = await r.json();
+        // Cached: the two /api/levels effects in THIS card plus every sibling
+        // card on the same symbol collapse to one request. 150s = half the poll
+        // below, so a real tick always crosses the TTL and refetches.
+        const j = await cachedJson<Record<string, unknown>>(
+          `/api/levels?ticker=${encodeURIComponent(sym.key)}`,
+          { ttlMs: 150_000, persist: true },
+        );
         if (cancelled) return;
         const up = parseLevelNum(j?.up);
         const down = parseLevelNum(j?.down);
@@ -334,14 +350,18 @@ export default function EsChartCard({
         // they were struck for has passed, so "missing" is the correct signal to
         // draw nothing rather than to fall back to a stale band.
         setEmWeekly(up != null && down != null ? { up, down, exp: String(j?.exp_label ?? "") } : null);
-      } catch { /* keep the last good band rather than blanking on a blip */ }
+      } catch (e) {
+        // An HTTP error is the old `!r.ok` branch: the ticker has no row, so
+        // clear the band. A network blip keeps the last good one.
+        if (!cancelled && e instanceof HttpError) setEmWeekly(null);
+      }
     };
     load();
     // 5 min, matching HomeClient. The band is frozen weekly, so this only exists
     // to pick up the Friday publish (and a mid-week republish) without a reload.
     const id = setInterval(load, 300_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [sym.key]);
+  }, [settingsLoaded, sym.key]);
 
   // Chart candles: 2-day rolling window, deliberately matched to the GEX
   // retention. The heatmap's historical columns resolve via timeToCoordinate,
@@ -789,6 +809,34 @@ export default function EsChartCard({
   })();
   const replayGexRef = useRef(replayGex);
   replayGexRef.current = replayGex;
+
+  /**
+   * The 0DTE panel's replay ladder.
+   *
+   * The GEX rail already scrubbed, because it reads `replayGex.railRows`. The
+   * 0DTE chain did not, because it is a different component with its own live
+   * poll of /api/chains — so under a replay cursor it kept showing the CURRENT
+   * chain, which is the "heatmap doesn't replay" symptom. It gets the same
+   * reconstructed column the rail does.
+   *
+   * Units line up exactly, which is the only reason this is safe to label:
+   * gex-calculator's netGEX is `gamma × OI × spot²`, and optionChain's gexValue
+   * is `(γc·cc − γp·pc) × S² × 0.01 × 100` — and 0.01 × 100 is 1. Same number,
+   * so ChainRail's fmtM prints replayed and live values on one scale.
+   *
+   * DEX / VEX / CHEX get `unavailable`. option_strike_gex_history records gamma
+   * exposure and the backfill route returns only net/netVol, so there is no
+   * past for the other three to replay to — and a live ladder frozen under a
+   * moving cursor would look like data.
+   */
+  const chainReplay = useMemo(() => {
+    if (!replayOn || !replayGex) return null;
+    if (chainGreek !== "gex") return { rows: [], unavailable: true };
+    return {
+      rows: replayGex.railRows.map((r) => ({ strike: r.strike, v: r.net })),
+      unavailable: false,
+    };
+  }, [replayOn, replayGex, chainGreek]);
   // ── Replay ownership under a shared toolbar ────────────────────────────────
   // Exactly ONE card may advance the cursor. Every card runs this component, so
   // without the guard all three would tick independently, each broadcasting its
@@ -1005,6 +1053,9 @@ export default function EsChartCard({
   weeklyEmRef.current = weeklyEm;
   useEffect(() => {
     if (!indicators.weeklyEm) { setWeeklyEm(null); return; }
+    // Same restore guard as the emWeekly effect above: `isEs` and `sym.gexSymbol`
+    // are both derived from `symbol`, which is "ES" until the slot restore lands.
+    if (!settingsLoaded) return;
     let cancelled = false;
     (async () => {
       try {
@@ -1016,9 +1067,12 @@ export default function EsChartCard({
         // rot, and it keeps the EM band in the same coordinate system as the
         // walls, the flip and CB.
         const ticker = isEs ? "SPX" : sym.gexSymbol.replace(/^\$/, "");
-        const res = await fetch(`/api/levels?ticker=${encodeURIComponent(ticker)}`, { cache: "no-store" });
-        if (!res.ok) { console.warn("[weekly-em] HTTP", res.status, "— band not drawn"); return; }
-        const json = await res.json();
+        // Shares the cache entry with the emWeekly effect above whenever the two
+        // resolve to the same ticker (always, on SPY/QQQ).
+        const json = await cachedJson<Record<string, unknown> | null>(
+          `/api/levels?ticker=${encodeURIComponent(ticker)}`,
+          { ttlMs: 150_000, persist: true },
+        );
         if (cancelled || !json) return;
         const up = parseLevelNum(json.up);
         const down = parseLevelNum(json.down);
@@ -1031,7 +1085,7 @@ export default function EsChartCard({
       }
     })();
     return () => { cancelled = true; };
-  }, [indicators.weeklyEm, isEs, sym.gexSymbol]);
+  }, [settingsLoaded, indicators.weeklyEm, isEs, sym.gexSymbol]);
 
   // ── Restore this slot's settings ───────────────────────────────────────────
   // ONE effect for the whole card. Read in an effect, not in a lazy useState
@@ -1933,6 +1987,12 @@ export default function EsChartCard({
   // a line ~10x off-scale. On a non-ES symbol this clears the series instead.
   useEffect(() => {
     if (!isEs) { setMvcHistory([]); return; }
+    // `isEs` is true for a freshly-mounted card REGARDLESS of its saved symbol,
+    // because `symbol` initialises to "ES". Without this guard a three-card row
+    // fetched this 11.6 kB payload three times on load — byte-identical, since
+    // mvc_snapshots is SPX-global — and two of the three cards then turned out
+    // to be SPY/QQQ and threw their copy away.
+    if (!settingsLoaded) return;
     let cancelled = false;
     const load = async () => {
       try {
@@ -1940,9 +2000,14 @@ export default function EsChartCard({
         // and the default read is a `SELECT *`, so this was ~94KB on every load
         // to draw one step line and derive the basis. This page only ever reads
         // timestamp / strikeOIVol / spxPrice / esPrice.
-        const res = await fetch(`/api/snapshots/mvc?limit=1000&lite=1`, { cache: "no-store" });
-        if (!res.ok) return;
-        const json = await res.json();
+        //
+        // Cached at half the 60s poll: the payload carries no per-card
+        // parameter, so two ES cards want literally the same bytes. Not
+        // persisted — this one ticks.
+        const json = await cachedJson<{ rows?: unknown; cols?: unknown; lite?: number }>(
+          `/api/snapshots/mvc?limit=1000&lite=1`,
+          { ttlMs: 30_000 },
+        );
         const rawRows = Array.isArray(json.rows) ? json.rows : [];
         // Expand tuples → records. Falls back to the legacy object rows when the
         // backend hasn't been deployed yet, so the client can ship independently.
@@ -1998,7 +2063,7 @@ export default function EsChartCard({
     void load();
     const id = setInterval(load, 60_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [isEs]);
+  }, [settingsLoaded, isEs]);
 
 
   // THE basis used for every SPX→ES conversion on this page (levels, rail, heatmap,
@@ -2300,12 +2365,21 @@ export default function EsChartCard({
   // deliberately short-circuiting anyway.
   useEffect(() => {
     if (!isEs) return;
+    // Restore guard, same as the mvc poll: every card is momentarily "ES", and
+    // this endpoint returns ONE number plus a day map — nothing per-card about
+    // it. It was being pulled four times on a three-card load.
+    if (!settingsLoaded) return;
     let cancelled = false;
     const pull = async () => {
       try {
-        const res = await fetch("/proxy/es-spx-basis", { cache: "no-store" });
-        if (!res.ok) { console.warn(`[basis] trusted basis HTTP ${res.status}`); return; }
-        const j = await res.json();
+        // 5 min TTL against a 30 min poll. The basis decays about a point a day,
+        // so a 5-minute-old reading is indistinguishable from a fresh one — and
+        // persisting it means a reload draws correct levels before the network
+        // answers, instead of falling through to the unreliable live derivation.
+        const j = await cachedJson<{ basis?: unknown; days?: unknown }>(
+          "/proxy/es-spx-basis",
+          { ttlMs: 300_000, persist: true },
+        );
         const b = Number(j?.basis);
         if (cancelled) return;
         if (isPlausibleBasis(b)) {
@@ -2334,7 +2408,7 @@ export default function EsChartCard({
     void pull();
     const id = setInterval(pull, 1_800_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [isEs]);
+  }, [settingsLoaded, isEs]);
 
   // Keep basisRef live for the right-axis dual ES/SPX formatter even when no
   // WS frame has arrived recently. Mirrors the server's authoritative
@@ -2381,9 +2455,20 @@ export default function EsChartCard({
       // Prior-day SPX close from eod_gex. Prefer the row matching the ES date;
       // else the most recent SPX EOD available.
       try {
-        const res = await fetch(`/api/eod-gex?symbol=$SPX&limit=30`, { cache: "no-store" });
-        if (!res.ok) { console.warn(`[basis] NO ANCHOR: /api/eod-gex HTTP ${res.status}`); return; }
-        const json = await res.json();
+        // Prior-day closes: they change once a day at 16:00 ET, and the same 30
+        // rows serve every card. 10 min TTL + persist means this is fetched once
+        // per session rather than once per card per history reload — and after a
+        // reload the anchor is available synchronously, which matters because the
+        // fallback here is the "levels are off by ~50pt" path.
+        const json = await cachedJson<{ rows?: unknown }>(
+          `/api/eod-gex?symbol=$SPX&limit=30`,
+          { ttlMs: 600_000, persist: true },
+        ).catch((e) => {
+          if (e instanceof HttpError) console.warn(`[basis] NO ANCHOR: /api/eod-gex HTTP ${e.status}`);
+          else console.warn("[basis] NO ANCHOR: /api/eod-gex failed:", e);
+          return null;
+        });
+        if (!json) return;
         const spxRows: Array<{ date: string; spot: number }> = Array.isArray(json.rows) ? json.rows : [];
         const match = spxRows.find((r) => r.date === esDate) ?? spxRows[0];
         const spxClose = Number(match?.spot ?? 0);
@@ -3792,13 +3877,17 @@ export default function EsChartCard({
   // per-control below to the pieces that are meaningless in a static image
   // (the Snap/Discord buttons themselves).
   const dock = (
-      <div className="px-4 pt-3 pb-1" style={{ position: "relative", zIndex: 30 }}>
+      // pt-2, and the page's mount point contributes NO padding of its own —
+      // the two were stacking into ~24px of empty bar above the toolbar.
+      <div className="px-4 pt-2 pb-1" style={{ position: "relative", zIndex: 30 }}>
         {/* min 0.7, not 0.2. The dock's natural width is ~1100–1300px; at a third
             of a 1440 screen a 0.2 floor renders ~3px glyphs, which is not a
             toolbar, it's a smudge. Compact density culls the dock's contents
             instead, and 0.7 is about where the remainder is still legible. */}
         <FitScale align={embedded || dockCompact ? "left" : "center"} min={dockCompact ? 0.7 : 0.2}>
-        <Dock className="dock-noscroll" noScroll style={{ minWidth: 0 }}>
+        {/* fullWidth so the trailing group can be pushed to the right edge; a
+            content-hugging dock has no right edge to push to. */}
+        <Dock className="dock-noscroll" noScroll fullWidth style={{ minWidth: 0 }}>
           {leading}
           {leading && <DockGap />}
           {!dockCompact && (
@@ -4112,6 +4201,9 @@ export default function EsChartCard({
             </DockButton>
           )}
 
+          {/* Refresh / Snap / Discord are ACTIONS, not settings — they belong at
+              the far end, away from the controls you actually tune. */}
+          <DockSpacer />
           <DockButton onClick={refreshTrigger} title="Refresh" style={{ color: refreshStyle.color as string }}>{refreshLabel}</DockButton>
           {/* The dock itself now stays in the capture, so the capture-triggering
               controls hide themselves — they'd be dead pixels in the PNG. Not
@@ -4221,14 +4313,51 @@ export default function EsChartCard({
     </div>
   ) : null;
 
+  /**
+   * Call Wall / Put Wall / Flip / CB, on one line.
+   *
+   * These used to be a grid of four tiles on their own row under the chart, and
+   * on a three-up layout that row was ~40px of chrome per card to show four
+   * numbers — 120px of the viewport's height spent on twelve digits. They now
+   * ride the ticker row, which was otherwise carrying a symbol dropdown and
+   * nothing else.
+   *
+   * The timeframe and the basis that used to sit here are gone rather than
+   * moved: the timeframe is a live control in the toolbar directly above, and
+   * the basis is printed under the toolbar title. Both were being stated twice.
+   */
+  const statsLine = (() => {
+    const basis = effectiveBasis();
+    const es = (v: number | null) => (v != null ? (v + basis).toFixed(2) : "—");
+    // Same source precedence as the rail and the price lines: on SPY/QQQ the
+    // walls come from the recorded column, because `levels` is the SPX socket.
+    // CB off ES is read straight off that column (see deriveColumnLevels).
+    const stats = [
+      { c: HOME_THEME.green, label: "Call Wall", short: "CW", v: etfGex ? etfGex.callWall : levels.callWall },
+      { c: SOFT_RED, label: "Put Wall", short: "PW", v: etfGex ? etfGex.putWall : levels.putWall },
+      { c: LIGHT_BLUE, label: "Flip", short: "Flip", v: etfGex ? etfGex.gexFlip : levels.gexFlip },
+      { c: LIGHT_BLUE, label: "CB", short: "CB", v: isEs ? levels.mvc : (etfGex ? etfGex.cb : null) },
+    ];
+    return (
+      <div style={{
+        display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+        fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)", minWidth: 0,
+      }}>
+        {stats.map((st) => (
+          <span key={st.label} style={{ whiteSpace: "nowrap" }} title={st.label}>
+            <span style={{ color: HOME_THEME.muted, opacity: 0.6, fontWeight: 700 }}>{st.short} </span>
+            <span style={{ color: st.c }}>{es(st.v)}</span>
+          </span>
+        ))}
+      </div>
+    );
+  })();
+
   const tickerBar = (
-    <div className="flex items-center gap-2 px-4 pt-2 pb-1" style={{ position: "relative", zIndex: 30, minWidth: 0 }}>
+    <div className="flex items-center gap-3 px-4 pt-1 pb-1" style={{ position: "relative", zIndex: 30, minWidth: 0 }}>
       {leading}
       <SymbolListDropdown active={symbol} onSelect={setSymbol} />
-      <span style={{ fontSize: 11, fontWeight: 700, fontFamily: "var(--font-mono)", color: HOME_THEME.muted, opacity: 0.7, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
-        {INTERVAL_LABEL[interval]}
-        {isEs ? (() => { const bs = effectiveBasis(); return bs ? ` · basis ${bs > 0 ? "+" : ""}${bs.toFixed(2)}` : ""; })() : ` · ${sym.gexSymbol} GEX`}
-      </span>
+      {statsLine}
       {panelSuppressed && (
         <span title="Widen this card (or drop to fewer charts) to show the side panel"
               style={{ fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 6, border: `1px solid ${HOME_THEME.border}`, color: HOME_THEME.muted, whiteSpace: "nowrap", flexShrink: 0 }}>
@@ -4265,72 +4394,11 @@ export default function EsChartCard({
           into. On /es-candles `transportTarget` is always supplied (null only
           while the popover is shut), so this renders nothing there. */}
       {dockMode === "full" && !hostedReplay ? replayBar : null}
-      <div className="es-candles-toggles flex flex-wrap items-stretch gap-2 px-4 pb-2 pt-1">
-        {(() => {
-          const basis = effectiveBasis();
-          const es = (v: number | null) => (v != null ? (v + basis).toFixed(2) : "—");
-          // Dissolve stat tile: borderless, faint light-blue radial, blur(20px).
-          // Value keeps its semantic color; the tile body carries only highlight.
-          const StatBox = ({ c, label, v }: { c: string; label: string; v: number | null }) => (
-            <div
-              style={{
-                flex: "1 1 130px", minWidth: 120,
-                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
-                padding: "9px 14px", borderRadius: 16,
-                border: "none",
-                background: `rgba(13,17,25,0.20)`,
-                backdropFilter: "blur(20px)",
-                WebkitBackdropFilter: "blur(20px)",
-              }}
-            >
-              <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.6, whiteSpace: "nowrap" }}>{label}</span>
-              <span style={{ fontSize: 14, fontWeight: 900, fontFamily: "var(--font-mono)", color: c, whiteSpace: "nowrap" }}>{es(v)}</span>
-            </div>
-          );
-          // Same source precedence as the rail and the price lines: on SPY/QQQ
-          // the walls come from the recorded column, because `levels` is the SPX
-          // websocket.
-          //
-          // CB used to read blank off ES, on the grounds that mvc_snapshots is
-          // SPX-only and there is no ETF recorder. True, but the recorder was
-          // never the definition — CB is just the biggest gamma concentration in
-          // the ladder, sign and all, and the ETF ladder is right there in the
-          // recorded column. deriveColumnLevels reads it off directly, and under
-          // cbAware the Call/Put Wall beside it steps down to its side's
-          // runner-up so the three tiles are three different strikes.
-          const stats = [
-            { c: HOME_THEME.green, label: "Call Wall", short: "CW", v: etfGex ? etfGex.callWall : levels.callWall },
-            { c: SOFT_RED, label: "Put Wall", short: "PW", v: etfGex ? etfGex.putWall : levels.putWall },
-            { c: LIGHT_BLUE, label: "Flip", short: "Flip", v: etfGex ? etfGex.gexFlip : levels.gexFlip },
-            { c: LIGHT_BLUE, label: "CB", short: "CB", v: isEs ? levels.mvc : (etfGex ? etfGex.cb : null) },
-          ];
-          // Four 130px-min tiles need ~560px. In a third of the screen they wrap
-          // to two rows and eat a third of the chart's height, so collapse to one
-          // line — same four numbers, a tenth of the vertical cost.
-          if (compact) {
-            return (
-              <div style={{
-                display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
-                padding: "6px 12px", borderRadius: 12,
-                background: "rgba(13,17,25,0.20)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
-                fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 800, minWidth: 0,
-              }}>
-                {stats.map((s) => (
-                  <span key={s.label} style={{ whiteSpace: "nowrap" }} title={s.label}>
-                    <span style={{ color: HOME_THEME.muted, opacity: 0.6, fontWeight: 700 }}>{s.short} </span>
-                    <span style={{ color: s.c }}>{es(s.v)}</span>
-                  </span>
-                ))}
-              </div>
-            );
-          }
-          return (
-            <>
-              {stats.map((s) => <StatBox key={s.label} c={s.c} label={s.label} v={s.v} />)}
-            </>
-          );
-        })()}
-      </div>
+      {/* Levels now ride the instrument row (see statsLine). At one chart
+          there is no ticker bar to put them in, so they get their own thin
+          strip under the dock instead of the tile grid that used to live
+          here — same four numbers, a fraction of the vertical cost. */}
+      {dockMode === "full" && <div className="px-4 pb-1 pt-0">{statsLine}</div>}
 
       <div className="es-candles-main flex flex-1 flex-row gap-2 px-4 pb-4" style={{ minHeight: 0 }}>
        <div className="es-candles-chartcol flex flex-1 flex-col gap-2" style={{ minWidth: 0 }}>
@@ -4445,6 +4513,7 @@ export default function EsChartCard({
             // Source precedence: replay cursor → ETF derived column → the live
             // SPX websocket. The first two are the same derivation applied to a
             // different column; the last is the only one /ws/gex can supply.
+            chainReplay={chainReplay}
             railRows={replayGex ? replayGex.railRows : etfGex ? etfGex.railRows : railRows}
             callWall={replayGex ? replayGex.callWall : etfGex ? etfGex.callWall : levels.callWall}
             putWall={replayGex ? replayGex.putWall : etfGex ? etfGex.putWall : levels.putWall}

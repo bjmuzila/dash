@@ -82,10 +82,25 @@ interface ChainRailProps {
    * below.
    */
   greek: ChainGreek;
+  /**
+   * Replay override. When non-null this panel paints the supplied ladder INSTEAD
+   * of its live poll, so the 0DTE column scrubs with the cursor like the GEX
+   * rail already did.
+   *
+   * `rows` are (strike, value) in the same units as the live cells — the
+   * recorder's netGEX and the chain's gexValue are the same formula, so `fmtM`
+   * labels both identically. See the note where the card builds this.
+   *
+   * `unavailable` is the honest half. option_strike_gex_history stores gamma
+   * exposure and nothing else, so DEX / VEX / CHEX have no past to replay to.
+   * Rather than freeze a live ladder under a replay cursor — which looks like
+   * data and isn't — the panel says so and draws nothing.
+   */
+  replay?: { rows: Array<{ strike: number; v: number }>; unavailable: boolean } | null;
 }
 
 export default function ChainRail({
-  symbol, basis, priceToY, drawRef, intensity, greek,
+  symbol, basis, priceToY, drawRef, intensity, greek, replay = null,
 }: ChainRailProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -103,6 +118,7 @@ export default function ChainRail({
   const greekRef = useRef(greek); greekRef.current = greek;
   const intensityRef = useRef(intensity); intensityRef.current = intensity;
   const priceToYRef = useRef(priceToY); priceToYRef.current = priceToY;
+  const replayRef = useRef(replay); replayRef.current = replay;
 
   // ── Resolve the 0DTE expiry ────────────────────────────────────────────────
   // "Today ET", snapped FORWARD to the nearest real listing: plenty of tickers
@@ -192,8 +208,13 @@ export default function ChainRail({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
+    const rp = replayRef.current;
     const cells = cellsRef.current;
-    if (!cells.size) return;
+    // Replay with no history for this greek: paint nothing but the notice. An
+    // empty panel is the correct answer; a frozen live ladder under a moving
+    // cursor is a wrong one that looks right.
+    if (rp?.unavailable) return;
+    if (!rp && !cells.size) return;
     const b = basisRef.current;
     const g = greekRef.current;
     const toY = priceToYRef.current;
@@ -203,13 +224,16 @@ export default function ChainRail({
     // where that price is. Nothing here assumes uniform strike spacing, which is
     // what a fixed-row-height grid cannot avoid assuming.
     const rows: Array<{ strike: number; y: number; v: number }> = [];
-    for (const [strike, cell] of cells) {
+    const src: Array<[number, number]> = rp
+      ? rp.rows.map((r) => [r.strike, r.v] as [number, number])
+      : [...cells].map(([strike, cell]) => [strike, Number(cell[g]) || 0] as [number, number]);
+    for (const [strike, v] of src) {
       const y = toY(strike + b);
       if (y == null || !Number.isFinite(y)) continue;
       // Cull generously rather than exactly: a row whose centre is just off the
       // pane can still own a visible band.
       if (y < -40 || y > h + 40) continue;
-      rows.push({ strike, y, v: Number(cell[g]) || 0 });
+      rows.push({ strike, y, v });
     }
     if (!rows.length) return;
     rows.sort((r1, r2) => r1.strike - r2.strike);
@@ -281,7 +305,10 @@ export default function ChainRail({
 
     // Spot marker — the chain's own underlying, converted to chart space, so you
     // can see where the money is on this ladder without cross-referencing.
-    const spotY = spotRef.current > 0 ? toY(spotRef.current + b) : null;
+    // Suppressed in replay: spotRef holds the LIVE underlying, and a live spot
+    // line across a replayed ladder is the one thing on this panel that would
+    // still be telling you about now.
+    const spotY = !rp && spotRef.current > 0 ? toY(spotRef.current + b) : null;
     if (spotY != null && spotY >= 0 && spotY <= h) {
       ctx.strokeStyle = "rgba(255,255,255,0.45)";
       ctx.lineWidth = 1;
@@ -304,7 +331,7 @@ export default function ChainRail({
 
   // Repaint on our own data / control changes too — the card's loop is a
   // backstop, not the only trigger.
-  useEffect(() => { draw(); }, [draw, dataVersion, greek, intensity, basis]);
+  useEffect(() => { draw(); }, [draw, dataVersion, greek, intensity, basis, replay]);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -337,15 +364,21 @@ export default function ChainRail({
         pointerEvents: "none", whiteSpace: "nowrap", overflow: "hidden",
         textShadow: "0 1px 3px rgba(0,0,0,0.9)",
       }}>
-        {expiry ? `${expiry.slice(5)}${expiry === etDayKey(Date.now()) ? " 0DTE" : ""}` : "…"}
+        {/* In replay the live expiry label would be a lie about which session
+            you are looking at — the transport above already names the day. */}
+        {replay ? "REPLAY" : expiry ? `${expiry.slice(5)}${expiry === etDayKey(Date.now()) ? " 0DTE" : ""}` : "…"}
       </div>
-      {status !== "ok" && (
+      {replay?.unavailable ? (
+        <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", padding: 6, textAlign: "center", fontSize: 9.5, color: HOME_THEME.muted }}>
+          {GREEK_LABEL[greek]} has no recorded history — switch to GEX to replay this panel.
+        </div>
+      ) : !replay && status !== "ok" ? (
         <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", padding: 6, textAlign: "center", fontSize: 9.5, color: HOME_THEME.muted }}>
           {status === "loading" ? "Loading chain…"
             : status === "empty" ? `No ${expiry} chain for ${symbol}`
             : "Chain unavailable"}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

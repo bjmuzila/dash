@@ -100,6 +100,10 @@ async function ensureSchema() {
       );
       CREATE INDEX IF NOT EXISTS idx_scanner_date_sym ON scanner_snapshots(date, symbol);
     `);
+    // CB = Core Bullseye: the single strike carrying the largest |net GEX| on
+    // the chain (unsided — not a wall, not the flip). Added for the Walls
+    // recorder; rows written before this column exists stay NULL.
+    await p.query('ALTER TABLE scanner_snapshots ADD COLUMN IF NOT EXISTS cb REAL');
     ensured = true;
     return true;
   } catch (e) {
@@ -162,6 +166,18 @@ function toGexRows(expiryRows) {
   }));
 }
 
+/**
+ * CB / Core Bullseye — the strike with the largest absolute OI+Vol net GEX
+ * anywhere on the chain. Same pick as mvc-auto-snapshot.js makes for SPX, just
+ * evaluated per scanner root. Unlike the walls it is not sided against spot.
+ */
+function findCoreBullseye(gexRows) {
+  if (!gexRows?.length) return null;
+  const net = (r) => Math.abs(Number(r.netGEX ?? 0) + Number(r.netVolGEX ?? 0));
+  const best = gexRows.reduce((b, r) => (net(r) > net(b) ? r : b), gexRows[0]);
+  return net(best) > 0 ? Number(best.strike) : null;
+}
+
 /** Snapshot one root: returns the aggregate summary or null if not usable. */
 async function snapshotTicker(root) {
   const chain = await thetaAdapter.fetchChainTheta(root).catch(() => null);
@@ -186,6 +202,7 @@ async function snapshotTicker(root) {
     callWall: summary.callWall,
     putWall: summary.putWall,
     gexFlip: summary.gexFlip,
+    cb: findCoreBullseye(summary.rows),
     strikes: summary.rows.length,
   };
 }
@@ -213,10 +230,10 @@ async function runSweep({ force = false } = {}) {
       if (!s) { errors.push(`${root}:thin/no-spot`); continue; }
       await p.query( // eslint-disable-line no-await-in-loop
         `INSERT INTO scanner_snapshots
-           (date, symbol, ts, spot, expiry, total_net_gex, call_wall, put_wall, gex_flip, strikes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+           (date, symbol, ts, spot, expiry, total_net_gex, call_wall, put_wall, gex_flip, cb, strikes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
          ON CONFLICT DO NOTHING`,
-        [date, root, now, s.spot, s.expiry, s.totalNetGex, s.callWall, s.putWall, s.gexFlip, s.strikes],
+        [date, root, now, s.spot, s.expiry, s.totalNetGex, s.callWall, s.putWall, s.gexFlip, s.cb, s.strikes],
       );
       written++;
     } catch (e) {
@@ -249,4 +266,4 @@ function startScannerRecorder() {
   console.log(`[scanner] recorder started — sweeping ${parseScannerTickers().join(', ')} every ${INTERVAL_MINS}m`);
 }
 
-module.exports = { startScannerRecorder, runSweep, ensureSchema, getPool, parseScannerTickers };
+module.exports = { startScannerRecorder, runSweep, ensureSchema, getPool, parseScannerTickers, findCoreBullseye };

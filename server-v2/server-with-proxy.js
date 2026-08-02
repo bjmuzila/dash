@@ -78,6 +78,7 @@ const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
 const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: greekEnsureSchema, getPool: greekGetPool } = require('./greek-scanner-recorder');
 const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, enrichOutcomesWithQuotes: farCbEnrichOutcomes, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
+const { startWallsRecorder, runSlot: runWallsSlot, getWalls } = require('./walls-recorder');
 const { startGexChangeTopRecorder, runOnce: runGexChangeTop, getHistory: getGexChangeTopHistory, getPickHistory: getGexChangeTopPickHistory, getResults: getGexChangeTopResults, runResults: runGexChangeTopResults } = require('./gex-change-top-recorder');
 const {
   startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce,
@@ -2378,6 +2379,44 @@ async function main() {
         })();
         return;
       }
+      // ── Walls (call wall / put wall / CB tracking) ────────────────────────
+      // GET /proxy/walls?date=YYYY-MM-DD          → day summary, one row/ticker
+      // GET /proxy/walls?date=…&symbol=SPX        → that ticker's level log +
+      //                                             every classified hit event
+      // Levels are stored change-only, so the day summary carries the last
+      // written value forward per level type; `open` holds the 09:29 baseline
+      // so the client can show the session delta without re-reading the log.
+      if (pathname === '/proxy/walls' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const out = await getWalls({
+              date: u.searchParams.get('date') || undefined,
+              symbol: u.searchParams.get('symbol') || undefined,
+            });
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manual slot fire: POST /proxy/walls-run  { slot?: 0-26, force?: true }
+      // force bypasses the trading-day gate; slot lets you re-run / backfill a
+      // specific capture (writes are idempotent on (date,symbol,level,slot)).
+      if (pathname === '/proxy/walls-run' && req.method === 'POST') {
+        let wallsBody = '';
+        req.on('data', (c) => { wallsBody += c; if (wallsBody.length > 1e5) req.destroy(); });
+        req.on('end', () => {
+          let opts = {};
+          try { opts = JSON.parse(wallsBody || '{}'); } catch {}
+          runWallsSlot({
+            slot: opts.slot != null ? Number(opts.slot) : null,
+            force: opts.force === true,
+          })
+            .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+            .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        });
+        return;
+      }
       // Manual sweep fire: POST /proxy/scanner-run
       if (pathname === '/proxy/scanner-run' && req.method === 'POST') {
         runScannerSweep({ force: true })
@@ -3233,8 +3272,14 @@ async function main() {
     // strike (within 30d expirations) sits unusually far OTM vs spot.
     startFarCbRecorder();
     // Multi-ticker GEX scanner: bulk-REST whole-chain snapshot per SCANNER_TICKERS
-    // root every 5m (total net GEX / walls / flip). Idle unless SCANNER_TICKERS set.
+    // root every 5m (total net GEX / walls / flip / CB). Idle unless SCANNER_TICKERS set.
     startScannerRecorder();
+    // Walls: call wall / put wall / CB tracked across the scanner universe on a
+    // fixed clock (09:29 open + every 15m to 16:00). Reads scanner_snapshots —
+    // no extra Theta load — and writes change-only rows into walls_log plus
+    // classified touch events into wall_events. Feeds /proxy/walls + the owner
+    // Results → Walls tab.
+    startWallsRecorder();
     // Hourly "very strong" GEX-change recorder: at the top of each RTH hour,
     // scores the strike_growth universe (60m window), keeps the top 5 ★ Very
     // strong strikes (|Δ| >= $500k & |% vs open| >= 30%) into gex_change_top.

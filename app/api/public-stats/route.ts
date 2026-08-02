@@ -18,10 +18,25 @@ import { getDb } from "@/lib/db";
 //      MIN_N below is the floor. Better to show three honest stats than five
 //      where two invite "that's three weeks of data" pushback.
 //
-// Cached for a day via ISR (`revalidate`) so anonymous landing traffic never
-// hits Postgres per-view. Per-instance cache; worst case each container
-// recomputes once daily, which is fine and needs no cron.
-export const revalidate = 86400;
+// CACHING — was `export const revalidate = 86400` (ISR). Replaced with an
+// explicit in-process memo, because ISR made this route lie about itself:
+// Next persists the rendered result in .next/cache, so it survived rebuilds and
+// restarts and kept serving the OLD payload after the code that produces it had
+// changed. Symptom, if you hit it again: you edit a sublabel or add a stat, ship
+// it, and the landing strip is unchanged with no error anywhere — looks
+// identical to a DB problem from the outside, but the new code never ran.
+//
+// The comment below always described a per-instance daily cache. This now
+// actually is one. Same DB load (one query set per container per day), no build
+// cache in the path, and code changes take effect on restart.
+//
+// `?fresh=1` bypasses the memo — use it after a deploy to confirm what the route
+// really computes, and when running scripts/verify-public-stats.mjs against it.
+export const dynamic = "force-dynamic";
+
+/** In-process memo TTL: recompute at most once a day per container. */
+const CACHE_MS = 86_400_000;
+let cache: { at: number; body: unknown } | null = null;
 
 /** Below this many graded samples a stat is withheld rather than published. */
 const MIN_N = 30;
@@ -172,8 +187,7 @@ async function cbReach(): Promise<PublicStat | null> {
 }
 
 /**
- * Initial Balance extension: of sessions where the IB actually broke, how often
- * price ran a full 1.0x IB width past the break.
+ * Initial Balance behaviour, measured over sessions where the IB actually broke.
  *
  * This is the cleanest sample on the strip. ib_daily_results is UNIQUE(date,
  * symbol) and written once at 16:30 ET, so every row is one completed session —
@@ -181,50 +195,119 @@ async function cbReach(): Promise<PublicStat | null> {
  * only replication is ES and NQ on the same date, which do correlate hard, so
  * the floor is on DISTINCT DATES and the sublabel discloses both numbers.
  *
- * Denominator is broken sessions, not all sessions, on purpose: "how far does a
- * break run" is the question a trader is actually asking at 10:30. Mixing in
- * contained days would answer a different question and inflate the base.
+ * Denominator is broken sessions, not all sessions, on purpose: every question
+ * worth asking here ("then what?") only exists once a break has happened.
+ *
+ * ── WHICH COLUMN, AND WHY NOT THE BIGGER ONES ──────────────────────────────
+ * Measured over the first 17 days of data (see scripts/verify-public-stats.mjs,
+ * which prints all of these):
+ *
+ *   retested the IB edge      90.6%   <- published
+ *   retested AND continued    84.4%   REJECTED — see below
+ *   break failed / re-entered 65.6%   viable alternative, different story
+ *   extended 0.5x             53.1%   coin flip, says nothing
+ *   extended 1.0x              9.4%   REJECTED — was the original guess
+ *   extended 1.5x / 2.0x       3.1%
+ *
+ * `retest_cont` (84.4%) looks like the strong one and is NOT publishable as a
+ * success rate. Read the grader (lib/ibStats.ts ~line 301): "continued" means
+ * price exceeded its pre-retest extreme by ANY amount on ANY later bar. One tick
+ * counts. Worse, it is not exclusive with failure — 65.6% of these same breaks
+ * closed back inside the IB within 6 bars. Publishing "84.4% retested and
+ * continued" while two thirds of them ultimately failed is cherry-picking the
+ * flattering half of the same population, which is the one thing this strip
+ * exists to not do.
+ *
+ * `retest` (90.6%) is a different kind of claim and survives the scrutiny. It is
+ * tightly defined — price returned to within 2 ticks of the broken level with
+ * the close still on the break side, before any failure — and it is decision-
+ * relevant in the only way that matters at 10:30: do not chase the break, you
+ * almost always get a second entry. It makes no claim about the trade working,
+ * so it cannot be read as one.
+ *
+ * To swap: change IB_METRIC. Anything here is equally honest; they answer
+ * different questions. Do not swap to retest_cont without re-reading the above.
  */
-async function ibExtension(): Promise<PublicStat | null> {
+const IB_METRIC = {
+  column: "retest",
+  label: "IB breaks that retested the edge",
+  // The definition IS the receipt. A bare "90.6% retested" invites "retested by
+  // whose definition?" — so the definition ships next to the number.
+  detail: "back to within 2 ticks with the close still outside, before any failure",
+} as const;
+
+async function ibBehaviour(): Promise<PublicStat | null> {
   const pool = await getDb();
+  // IB_METRIC.column is a compile-time literal from the const above, never user
+  // input — but keep it that way. Do not make this reachable from a query param.
   const { rows } = await pool.query(`
     SELECT
-      COUNT(*) FILTER (WHERE ext_10 = 1)::int      AS extended,
-      COUNT(*)::int                                AS broke,
-      COUNT(DISTINCT date)::int                    AS sessions,
-      COUNT(DISTINCT symbol)::int                  AS symbols,
-      MIN(date)                                    AS since
+      COUNT(*) FILTER (WHERE ${IB_METRIC.column} = 1)::int AS hits,
+      COUNT(*)::int                                        AS broke,
+      COUNT(DISTINCT date)::int                            AS sessions,
+      COUNT(DISTINCT symbol)::int                          AS symbols,
+      MIN(date)                                            AS since
     FROM ib_daily_results
-    WHERE break_side IS NOT NULL AND ext_10 IS NOT NULL
+    WHERE break_side IS NOT NULL AND ${IB_METRIC.column} IS NOT NULL
   `);
   const r = rows[0];
   const n = Number(r?.broke ?? 0);
   const sessions = Number(r?.sessions ?? 0);
-  // Same both-floors rule as ICT: rows alone would let ~15 days of ES+NQ pass.
+  // Same both-floors rule as ICT: rows alone would let ~15 days of ES+NQ pass,
+  // since both symbols write a row per date and they correlate hard.
   if (n < MIN_N || sessions < MIN_PERIODS) return null;
   return {
     key: "ib",
-    label: "IB breaks that extended 1.0x",
-    sublabel: `ES & NQ — ${n.toLocaleString()} broken sessions over ${sessions} days, graded at the close`,
-    pct: Math.round((Number(r.extended) / n) * 1000) / 10,
+    label: IB_METRIC.label,
+    sublabel: `${IB_METRIC.detail} · ES & NQ, ${sessions} sessions`,
+    pct: Math.round((Number(r.hits) / n) * 1000) / 10,
     n,
     since: r?.since ?? null,
   };
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const fresh = new URL(req.url).searchParams.has("fresh");
+  if (!fresh && cache && Date.now() - cache.at < CACHE_MS) {
+    return NextResponse.json(cache.body);
+  }
+
   try {
     // allSettled: one empty/missing table must not blank the whole strip.
-    const settled = await Promise.allSettled([emZones(), ictSetups(), cbReach(), ibExtension()]);
+    const settled = await Promise.allSettled([emZones(), ictSetups(), cbReach(), ibBehaviour()]);
+
+    // WHY a stat is absent matters when you're staring at a missing card. A
+    // rejected promise (table doesn't exist, bad column) and a null return
+    // (real data, under the floor) look identical in `stats` — so say which,
+    // out loud, in the payload. This is the difference between "the query is
+    // broken" and "come back in three weeks".
+    const keys = ["em", "ict", "cb", "ib"];
+    const suppressed = settled
+      .map((s, i) =>
+        s.status === "rejected"
+          ? { key: keys[i], reason: "query failed", detail: String(s.reason?.message ?? s.reason) }
+          : s.value == null
+            ? { key: keys[i], reason: "below floor", detail: `needs n>=${MIN_N} and enough distinct periods` }
+            : null
+      )
+      .filter(Boolean);
+
     const stats = settled
       .map((s) => (s.status === "fulfilled" ? s.value : null))
       .filter((s): s is PublicStat => s != null)
       // Strongest sample first — the sturdiest receipt leads.
       .sort((a, b) => b.n - a.n);
 
-    return NextResponse.json({ stats, computedAt: new Date().toISOString() });
-  } catch {
+    const body = { stats, suppressed, computedAt: new Date().toISOString() };
+    cache = { at: Date.now(), body };
+    return NextResponse.json(body);
+  } catch (err) {
     // Never 500 the landing page over a stats strip. Empty = strip hides.
-    return NextResponse.json({ stats: [], computedAt: new Date().toISOString() });
+    // Not cached: a transient DB blip must not pin an empty strip for 24h.
+    return NextResponse.json({
+      stats: [],
+      suppressed: [{ key: "*", reason: "route threw", detail: String((err as Error)?.message ?? err) }],
+      computedAt: new Date().toISOString(),
+    });
   }
 }

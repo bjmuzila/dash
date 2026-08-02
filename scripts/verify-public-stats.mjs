@@ -23,7 +23,8 @@ function dbUrl() {
   return line.slice("DATABASE_URL=".length).trim();
 }
 
-const MIN_N = 30; // must match app/api/public-stats/route.ts
+const MIN_N = 30;       // must match app/api/public-stats/route.ts
+const MIN_PERIODS = 30; // ditto — the distinct-days/weeks floor, usually the binding one
 
 const pool = new pg.Pool({
   connectionString: dbUrl(),
@@ -32,11 +33,17 @@ const pool = new pg.Pool({
 
 const pct = (a, b) => (b > 0 ? Math.round((a / b) * 1000) / 10 : null);
 
-function report(name, pctVal, n, extra = "") {
+// `periods` = distinct dates/weeks behind the number. Pass it whenever the route
+// gates on MIN_PERIODS too, or this prints PUBLISHES for a stat the route is
+// actually suppressing — which is exactly what it did for IB (n=32 cleared
+// MIN_N, 17 dates did not, and the verdict line said PUBLISHES anyway).
+function report(name, pctVal, n, extra = "", periods = null) {
   const verdict =
     n === 0 ? "NO DATA — strip hides"
     : n < MIN_N ? `SUPPRESSED (n<${MIN_N}) — will not publish`
-    : "PUBLISHES";
+    : periods != null && periods < MIN_PERIODS
+      ? `SUPPRESSED (${periods} periods < ${MIN_PERIODS}) — will not publish`
+      : "PUBLISHES";
   console.log(`\n${name}`);
   console.log(`  rate     : ${pctVal == null ? "—" : pctVal + "%"}`);
   console.log(`  n        : ${n}`);
@@ -135,6 +142,105 @@ try {
     +cb.graded,
     `${cb.touched} touched of ${cb.graded} graded DAYS (table is UNIQUE on date — 1 row/day)`
   );
+
+  // ── IB extension (4th card) ───────────────────────────────────────────────
+  // Of sessions where the IB actually broke, how often price ran a full 1.0x IB
+  // width past the break. This is the cleanest sample on the strip: one row per
+  // (date, symbol), written once at 16:30 ET, no re-scoring at read time.
+  //
+  // The catch is the recorder only back-fills CATCHUP_DAYS = 5 on boot, so this
+  // table has no deep history — it is exactly as old as the recorder. If the
+  // card is missing from the landing page, this block tells you whether that is
+  // "not enough days yet" or "the query found nothing".
+  const ibExists = (await pool.query(`SELECT to_regclass('public.ib_daily_results') AS t`)).rows[0].t;
+  if (!ibExists) {
+    console.log("\nIB extension (ib_daily_results)");
+    console.log("  → TABLE DOES NOT EXIST — recorder has never written. Card cannot publish.");
+  } else {
+    const ib = (await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE ext_10 = 1)::int AS extended,
+        COUNT(*)::int                           AS broke,
+        COUNT(DISTINCT date)::int               AS sessions,
+        COUNT(DISTINCT symbol)::int             AS symbols,
+        MIN(date)                               AS since,
+        MAX(date)                               AS latest
+      FROM ib_daily_results
+      WHERE break_side IS NOT NULL AND ext_10 IS NOT NULL
+    `)).rows[0];
+    const ibAll = (await pool.query(`
+      SELECT COUNT(*)::int AS rows, COUNT(DISTINCT date)::int AS days FROM ib_daily_results
+    `)).rows[0];
+    report(
+      "IB extension (ib_daily_results)",
+      pct(+ib.extended, +ib.broke),
+      +ib.broke,
+      `${ib.extended} reached 1.0x of ${ib.broke} broken sessions · ${ib.sessions} distinct dates · ` +
+      `${ib.symbols} symbols · table holds ${ibAll.rows} rows over ${ibAll.days} days (${ib.since} → ${ib.latest})`,
+      +ib.sessions
+    );
+    // The rows floor is not the binding one here — MIN_PERIODS is. ES and NQ
+    // both write a row per day and they correlate hard, so 2 rows is closer to
+    // 1 observation than 2. The route gates on COUNT(DISTINCT date) >= 30.
+    if (+ib.sessions < MIN_PERIODS) {
+      console.log(`  ⚠ only ${ib.sessions} distinct dates — route needs ${MIN_PERIODS}. THIS is why the card is missing.`);
+      console.log(`    Nothing to fix in code; the recorder needs ${MIN_PERIODS - +ib.sessions} more sessions.`);
+    }
+    if (+ib.broke > 0 && +ib.sessions > 0) {
+      console.log(`  note: ${(+ib.broke / +ib.sessions).toFixed(1)} broken rows per date (ES+NQ ⇒ expect ~2).`);
+    }
+
+    // ── Which IB metric should actually be the 4th card ─────────────────────
+    // 1.0x extension was a guess made without seeing the data, and it came back
+    // at ~9%. A 9% card on a marketing page reads as "this fails 9 times out of
+    // 10" no matter how it is captioned — a true number that sells against you
+    // is still the wrong number to lead with.
+    //
+    // So print every graded IB outcome and pick from real rates. Anything here
+    // is equally honest; they differ only in which question they answer. Look
+    // for one that is both HIGH and USEFUL — a rate near 100% is not impressive
+    // either, it just means the event was never in doubt.
+    const cand = (await pool.query(`
+      SELECT
+        COUNT(*)::int                                  AS broke,
+        COUNT(*) FILTER (WHERE ext_05 = 1)::int        AS e05,
+        COUNT(*) FILTER (WHERE ext_10 = 1)::int        AS e10,
+        COUNT(*) FILTER (WHERE ext_15 = 1)::int        AS e15,
+        COUNT(*) FILTER (WHERE ext_20 = 1)::int        AS e20,
+        COUNT(*) FILTER (WHERE failed = 1)::int        AS failed,
+        COUNT(*) FILTER (WHERE retest = 1)::int        AS retest,
+        COUNT(*) FILTER (WHERE retest_cont = 1)::int   AS retest_cont
+      FROM ib_daily_results
+      WHERE break_side IS NOT NULL
+    `)).rows[0];
+    const shape = (await pool.query(`
+      SELECT
+        COUNT(*)::int                                     AS sessions,
+        COUNT(*) FILTER (WHERE single_break = 1)::int     AS single,
+        COUNT(*) FILTER (WHERE both_broke = 1)::int       AS both,
+        COUNT(*) FILTER (WHERE neither_broke = 1)::int    AS neither,
+        COUNT(*) FILTER (WHERE contained_at2 = 1)::int    AS contained
+      FROM ib_daily_results
+    `)).rows[0];
+
+    console.log(`\nIB candidate metrics — pick the 4th card from these`);
+    const line = (label, a, b) =>
+      console.log(`  ${label.padEnd(34)}: ${String(pct(+a, +b) ?? "—").padStart(5)}%  (${a}/${b})`);
+    console.log(`  -- of BROKEN sessions (n=${cand.broke}) --`);
+    line("extended 0.5x", cand.e05, cand.broke);
+    line("extended 1.0x  <- current card", cand.e10, cand.broke);
+    line("extended 1.5x", cand.e15, cand.broke);
+    line("extended 2.0x", cand.e20, cand.broke);
+    line("break failed (re-entered IB)", cand.failed, cand.broke);
+    line("retested the IB edge", cand.retest, cand.broke);
+    line("retested AND continued", cand.retest_cont, cand.broke);
+    console.log(`  -- of ALL graded sessions (n=${shape.sessions}) --`);
+    line("broke one side only", shape.single, shape.sessions);
+    line("broke both sides", shape.both, shape.sessions);
+    line("never broke the IB", shape.neither, shape.sessions);
+    line("contained through 2nd hour", shape.contained, shape.sessions);
+    console.log(`  Every one of these still needs ${MIN_PERIODS} distinct dates before it can publish.`);
+  }
 
   console.log("\nAnything marked PUBLISHES appears on the public landing page.\n");
 } catch (err) {

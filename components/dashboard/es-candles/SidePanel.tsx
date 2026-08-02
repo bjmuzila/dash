@@ -72,11 +72,13 @@ interface SidePanelProps {
   basis: number;
   priceToY: (esPrice: number) => number | null;
   drawRef?: MutableRefObject<() => void>;
+  /** Replay ladder for the chain panel. Null = live. See ChainRail. */
+  chainReplay?: { rows: Array<{ strike: number; v: number }>; unavailable: boolean } | null;
 }
 
 export default function SidePanel({
   kind, width, chainSymbol, intensity, chainGreek,
-  railRows, callWall, putWall, gexFlip, spot, basis, priceToY, drawRef,
+  railRows, callWall, putWall, gexFlip, spot, basis, priceToY, drawRef, chainReplay = null,
 }: SidePanelProps) {
   if (kind === "none") return null;
 
@@ -90,6 +92,7 @@ export default function SidePanel({
           drawRef={drawRef}
           intensity={intensity}
           greek={chainGreek}
+          replay={chainReplay}
         />
       </div>
     );
