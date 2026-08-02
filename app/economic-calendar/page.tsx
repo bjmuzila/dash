@@ -3,6 +3,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { HOME_THEME as HT, homeShellStyle, homeButtonStyle, DOCK_THEME } from "@/components/shared/homeTheme";
+// Same chip logo the home Economic Calendar panel uses: mirrored
+// public/logos/<SYM>.png first (same-origin, immutably cached), then the live
+// /proxy/ticker-logo resolver, then a ticker-text chip. This page used to hit
+// the resolver directly, so mirrored logos never showed up here.
+import ChipLogo from "@/components/shared/ChipLogo";
 
 interface CalEvent {
   date: string;
@@ -27,12 +32,6 @@ interface EarnRow {
 
 const CHIP_W = 46;
 const CHIP_GAP = 10;
-
-// Server-side resolver: ticker-logos repo → Wikidata/Wikimedia Commons (P154).
-// Always transparent PNG; 404s when nothing found so the text chip takes over.
-function logoUrl(sym: string, name?: string) {
-  return `/proxy/ticker-logo?sym=${encodeURIComponent(sym.toUpperCase())}&name=${encodeURIComponent(name || "")}`;
-}
 
 function fmtMcap(n: number) {
   if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
@@ -547,30 +546,7 @@ function EarnRowBlock({ kind, rows }: { kind: "pre" | "after"; rows: EarnRow[] }
               title={`${e.company || e.symbol} · ${fmtMcap(e.market_cap)}${e.eps_est ? ` · est ${e.eps_est}` : ""}`}
               style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, flexShrink: 0, width: CHIP_W, textDecoration: "none" }}
             >
-              <span style={{
-                width: 34, height: 34, borderRadius: 8, overflow: "hidden",
-                background: "transparent",
-                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-              }}>
-                <img
-                  src={logoUrl(e.symbol, e.company)} alt={e.symbol} width={34} height={34}
-                  style={{ width: 34, height: 34, objectFit: "contain" }}
-                  onError={(ev) => {
-                    const t = ev.currentTarget;
-                    t.style.display = "none";
-                    const p = t.parentElement;
-                    if (p && !p.querySelector(".logo-fallback")) {
-                      p.style.background = "rgba(33,158,188,0.10)";
-                      p.style.border = `1px solid ${HT.border}`;
-                      const s = document.createElement("span");
-                      s.className = "logo-fallback";
-                      s.textContent = e.symbol.slice(0, 4);
-                      s.style.cssText = `font-size: 10px;font-weight:800;color:${HT.cyan};text-align:center;line-height:1;`;
-                      p.appendChild(s);
-                    }
-                  }}
-                />
-              </span>
+              <ChipLogo sym={e.symbol} company={e.company} size={34} radius={8} />
               <span style={{ fontSize: 10, fontWeight: 700, color: HT.text, fontFamily: "var(--font-mono)", letterSpacing: "0.02em", maxWidth: CHIP_W, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {e.symbol}
               </span>

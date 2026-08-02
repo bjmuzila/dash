@@ -368,35 +368,67 @@ export function applyDefaultView(chart: IChartApi | null, barCount: number) {
 }
 
 /**
- * Reduce one stored GEX column to the rail bars + Call/Put Wall + Flip.
+ * Reduce one stored GEX column to the rail bars + CB + Call/Put Wall + Flip.
  *
- * Walls = the strikes carrying the largest positive / negative net on the active
- * metric; flip = the zero-cross, computed with findGEXFlip so it agrees with the
- * home page by construction.
+ * Flip = the zero-cross, computed with findGEXFlip so it agrees with the home
+ * page by construction.
  *
- * Two callers, same rule: replay scrubbing (column at the cursor) and the ETF
- * symbols, whose walls have no live websocket to publish them and are therefore
- * derived from the newest recorded column instead. Extracted so those two can't
- * drift into two different definitions of "the wall".
+ * CB = the single largest gamma concentration in the column, SIGN-BLIND: the
+ * strike with the biggest |net|, whether that net is positive or negative. On
+ * SPX this number comes from mvc_snapshots instead; the ETFs have no such
+ * recorder, and this is the same quantity read straight off the ladder.
+ *
+ * ── cbAware ──────────────────────────────────────────────────────────────────
+ * Off (the default), the walls are just the largest positive / largest negative
+ * net — which means that when CB is positive, CB and the Call Wall are the SAME
+ * STRIKE printed under two labels, and the second real level goes unnamed.
+ *
+ * On, the side CB came from yields its top slot: CB positive ⇒ the Call Wall is
+ * that side's SECOND-strongest strike; CB negative ⇒ the Put Wall is. The other
+ * side is untouched either way, since CB never consumed it. Three tiles, three
+ * distinct levels.
+ *
+ * It's a flag rather than the rule because SPX must not take it: there the walls
+ * arrive from the live /ws/gex feed, which ranks them plainly, and a replay
+ * scrub that quietly re-pointed the Call Wall one strike over would disagree
+ * with the very chart it is replaying.
+ *
+ * Three callers, one rule: replay scrubbing (the column at the cursor), the ETF
+ * rail/stat derivation, and the ETF price-line publisher. Extracted so they
+ * cannot drift into three different definitions of "the wall".
  */
 export function deriveColumnLevels(
   col: GexColumn | null | undefined,
   metric: GexMetric,
-): { railRows: RailRow[]; callWall: number | null; putWall: number | null; gexFlip: number | null } | null {
+  opts?: { cbAware?: boolean },
+): { railRows: RailRow[]; cb: number | null; callWall: number | null; putWall: number | null; gexFlip: number | null } | null {
   if (!col || !col.cells.length) return null;
   const railRows: RailRow[] = col.cells.map((c) => ({
     strike: c.strike, net: metric === "vol" ? c.netVol : c.netOiVol,
   }));
-  let callWall: number | null = null, putWall: number | null = null, maxPos = 0, maxNeg = 0;
+  // CB first — the walls below are defined relative to it.
+  let cb: number | null = null, cbNet = 0, cbAbs = 0;
   for (const r of railRows) {
-    if (r.net > maxPos) { maxPos = r.net; callWall = r.strike; }
-    if (r.net < maxNeg) { maxNeg = r.net; putWall = r.strike; }
+    const a = Math.abs(r.net);
+    if (a > cbAbs) { cbAbs = a; cb = r.strike; cbNet = r.net; }
   }
+  // Rank each side independently. Sorting rather than a single max pass because
+  // cbAware needs the runner-up, not just the winner.
+  const pos = railRows.filter((r) => r.net > 0).sort((a, b) => b.net - a.net);
+  const neg = railRows.filter((r) => r.net < 0).sort((a, b) => a.net - b.net);
+  const cbAware = opts?.cbAware === true;
+  const callIdx = cbAware && cbNet > 0 ? 1 : 0;
+  const putIdx = cbAware && cbNet < 0 ? 1 : 0;
+  // Null, not a fall back to index 0: if CB is the ONLY strike on its side there
+  // is no second-strongest, and repeating CB under a wall label would read as
+  // two levels agreeing when it is one level counted twice.
+  const callWall = pos[callIdx]?.strike ?? null;
+  const putWall = neg[putIdx]?.strike ?? null;
   const gexFlip = findGEXFlip(
     col.cells.map((c) => ({ strike: c.strike, netGEX: c.netOiVol })) as ChainRow[],
     col.spot,
   );
-  return { railRows, callWall, putWall, gexFlip };
+  return { railRows, cb, callWall, putWall, gexFlip };
 }
 
 /**

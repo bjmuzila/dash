@@ -5,6 +5,10 @@ import { createPortal } from "react-dom";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
+// Local-mirror-first earnings logo (public/logos/<SYM>.png → /proxy/ticker-logo
+// → text chip). Shared with the standalone /economic-calendar page so a logo
+// dropped into public/logos shows up in both places.
+import ChipLogo from "@/components/shared/ChipLogo";
 
 interface CalEvent {
   date: string;
@@ -39,68 +43,6 @@ interface EarnRow {
 
 const CHIP_W = 40;   // chip column width
 const CHIP_GAP = 8;  // flex gap between chips
-
-// Mirrored logo, same-origin and immutably cached (scripts/fetch-ticker-logos.mjs
-// writes these; next.config.js sets the Cache-Control). Preferred because the
-// resolver path below costs TWO round trips per chip: /proxy/ticker-logo does a
-// PG lookup + a HEAD to GitHub + up to two Wikidata calls before 302-ing the
-// browser to a third-party host it has no warm connection to. That was ~2.4s of
-// tail on the home waterfall, on the default tab, on every load.
-function localLogoUrl(sym: string) {
-  return `/logos/${encodeURIComponent(sym.toUpperCase())}.png`;
-}
-
-// Fallback for symbols not yet mirrored: the live server resolver.
-function logoUrl(sym: string, name?: string) {
-  return `/proxy/ticker-logo?sym=${encodeURIComponent(sym.toUpperCase())}&name=${encodeURIComponent(name || "")}`;
-}
-
-/**
- * Earnings chip logo. Tries the mirrored file first, falls back to the resolver
- * on 404, and finally to the ticker-text chip — so a symbol nobody has mirrored
- * yet looks exactly like it did before, just one request slower.
- */
-function ChipLogo({ sym, company }: { sym: string; company?: string }) {
-  const [stage, setStage] = useState<"local" | "proxy" | "text">("local");
-
-  if (stage === "text") {
-    return (
-      <span
-        style={{
-          width: 30, height: 30, borderRadius: 7, flexShrink: 0,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          background: "rgba(33,158,188,0.10)", border: `1px solid ${HT.border}`,
-          fontSize: 10, fontWeight: 800, color: "#219EBC", textAlign: "center", lineHeight: 1,
-        }}
-      >
-        {sym.slice(0, 4)}
-      </span>
-    );
-  }
-
-  return (
-    <span style={{
-      width: 30, height: 30, borderRadius: 7, overflow: "hidden",
-      background: "transparent",
-      display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-    }}>
-      <img
-        // Remount on stage change so the browser actually re-requests.
-        key={stage}
-        src={stage === "local" ? localLogoUrl(sym) : logoUrl(sym, company)}
-        alt={sym}
-        width={30}
-        height={30}
-        // The chips sit inside a scrolling week strip — most are off-screen at
-        // first paint, so let the browser defer them instead of racing them all.
-        loading="lazy"
-        decoding="async"
-        style={{ width: 30, height: 30, objectFit: "contain" }}
-        onError={() => setStage((s) => (s === "local" ? "proxy" : "text"))}
-      />
-    </span>
-  );
-}
 
 function fmtMcap(n: number) {
   if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;

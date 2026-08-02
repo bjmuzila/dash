@@ -240,6 +240,109 @@ export function writeSidePanel(v: SidePanelKind): void {
   try { window.localStorage.setItem(SIDE_PANEL_KEY, v); } catch { /* ignore */ }
 }
 
+// ── Indicators ───────────────────────────────────────────────────────────────
+// PAGE-LEVEL, not per slot, and deliberately so: the point of two or three
+// charts side by side is comparison, and comparing ES against SPY with a 21 EMA
+// on one and a 50 on the other compares nothing. Same reasoning that put the
+// timeframe and the overlays on the shared blob when the dock was hoisted.
+//
+// Every flag defaults OFF. The chart has to look exactly as it does today until
+// someone deliberately turns something on.
+export type EmaLine = { on: boolean; len: number };
+export type IndicatorCfg = {
+  /** Up to three, each with its own length. */
+  emas: EmaLine[];
+  bb: boolean;
+  bbPeriod: number;
+  /** Inner and outer cloud edges, in standard deviations. */
+  bbInner: number;
+  bbOuter: number;
+  weeklyEm: boolean;
+  volume: boolean;
+  rsi: boolean;
+  rsiPeriod: number;
+  countdown: boolean;
+};
+
+export const MAX_EMAS = 3;
+export const INDICATORS_DEFAULT: IndicatorCfg = {
+  emas: [{ on: false, len: 9 }, { on: false, len: 21 }, { on: false, len: 50 }],
+  bb: false,
+  bbPeriod: 20,
+  bbInner: 2.3,
+  bbOuter: 3.0,
+  weeklyEm: false,
+  volume: false,
+  rsi: false,
+  rsiPeriod: 14,
+  countdown: false,
+};
+
+const INDICATORS_KEY = "es-candles-indicators-v1";
+
+/**
+ * Field-by-field, over the defaults — never a spread of the stored blob.
+ *
+ * A blob written by an older build is missing keys a newer one needs, and a
+ * blob written by a newer build carries keys this one has never heard of.
+ * Merging over the defaults survives both; spreading yields `undefined` where a
+ * number belongs and puts NaN into a moving average.
+ */
+export function readIndicators(): IndicatorCfg {
+  if (typeof window === "undefined") return INDICATORS_DEFAULT;
+  const raw = readJson(INDICATORS_KEY);
+  if (!raw) return INDICATORS_DEFAULT;
+  const num = (v: unknown, d: number, lo: number, hi: number) =>
+    (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
+  const bool = (v: unknown, d: boolean) => (typeof v === "boolean" ? v : d);
+  const emasRaw = Array.isArray(raw.emas) ? raw.emas : [];
+  const emas = INDICATORS_DEFAULT.emas.map((d, i) => {
+    const e = emasRaw[i] as Record<string, unknown> | undefined;
+    return e && typeof e === "object"
+      ? { on: bool(e.on, d.on), len: Math.round(num(e.len, d.len, 1, 400)) }
+      : { ...d };
+  });
+  return {
+    emas,
+    bb: bool(raw.bb, INDICATORS_DEFAULT.bb),
+    bbPeriod: Math.round(num(raw.bbPeriod, INDICATORS_DEFAULT.bbPeriod, 2, 400)),
+    bbInner: num(raw.bbInner, INDICATORS_DEFAULT.bbInner, 0.1, 10),
+    bbOuter: num(raw.bbOuter, INDICATORS_DEFAULT.bbOuter, 0.1, 10),
+    weeklyEm: bool(raw.weeklyEm, INDICATORS_DEFAULT.weeklyEm),
+    volume: bool(raw.volume, INDICATORS_DEFAULT.volume),
+    rsi: bool(raw.rsi, INDICATORS_DEFAULT.rsi),
+    rsiPeriod: Math.round(num(raw.rsiPeriod, INDICATORS_DEFAULT.rsiPeriod, 2, 100)),
+    countdown: bool(raw.countdown, INDICATORS_DEFAULT.countdown),
+  };
+}
+
+export function writeIndicators(v: IndicatorCfg): void {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(INDICATORS_KEY, JSON.stringify(v)); } catch { /* ignore */ }
+}
+
+// ── Replay command channel ───────────────────────────────────────────────────
+// The page's toolbar owns the Replay BUTTON; the card owns replay STATE, because
+// the frames are the card's own bars and nothing above it knows how many there
+// are. This is the one-way wire between them.
+//
+// Deliberately NOT the settings slot. In single-chart mode a card's cfgSlot is
+// its own slot, so routing a replay command through writeSlot/subscribeSlot
+// would make every card echo its own persisted writes back into its own state —
+// idempotent today, and a trap the first time a setter isn't. A separate
+// channel costs eight lines and can't do that.
+type ReplayCmd = { on: boolean };
+const replayListeners = new Set<(cmd: ReplayCmd) => void>();
+
+export function subscribeReplayCmd(cb: (cmd: ReplayCmd) => void): () => void {
+  replayListeners.add(cb);
+  return () => { replayListeners.delete(cb); };
+}
+
+export function broadcastReplayCmd(cmd: ReplayCmd): void {
+  for (const cb of [...replayListeners]) { try { cb(cmd); } catch { /* one bad listener must not stop the rest */ } }
+}
+
 // ── Migration ────────────────────────────────────────────────────────────────
 /**
  * Fold the pre-multi-card keys into slot blobs. Idempotent, and safe to call on

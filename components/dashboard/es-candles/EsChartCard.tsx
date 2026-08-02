@@ -20,8 +20,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
-import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData } from "lightweight-charts";
+import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, createChart } from "lightweight-charts";
+import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData, LineData, HistogramData } from "lightweight-charts";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useEtfCandles } from "@/hooks/useEtfCandles";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
@@ -59,8 +59,10 @@ import {
   BUBBLE_CFG_DEFAULT, BUBBLE_CFG_RANGE, bubbleCfgFrom,
   readSlot, writeSlot, broadcastSlot, subscribeSlot,
   readBubbleDefault, writeBubbleDefault, isBubbleBucket,
-  type BubbleCfg, type BubbleBucket, type SlotId, type SlotBlob,
+  subscribeReplayCmd, INDICATORS_DEFAULT,
+  type BubbleCfg, type BubbleBucket, type SlotId, type SlotBlob, type IndicatorCfg,
 } from "./slotStore";
+import { ema as emaOf, bollinger, rsi as rsiOf, fmtCountdown, type BollingerBands } from "./indicators";
 import SidePanel, { SIDE_PANEL_SPEC, type SidePanelKind } from "./SidePanel";
 import type { ChainGreek } from "./ChainRail";
 
@@ -129,6 +131,21 @@ export interface EsChartCardProps {
   density?: "full" | "compact";
   /** Hide the per-card Snap/Discord buttons (the page owns one for the row). */
   hideCapture?: boolean;
+  /**
+   * Where the replay transport renders when the PAGE owns the Replay button.
+   * null while the page's Replay popover is shut — the card keeps its replay
+   * state either way, it just has nowhere to draw the controls.
+   */
+  transportTarget?: HTMLElement | null;
+  /**
+   * The page hosts the Replay button, so the card drops its own. Separate from
+   * `transportTarget` being non-null on purpose: the target is null whenever the
+   * popover is closed, and "the popover is shut" must not read as "put the old
+   * button back".
+   */
+  hostedReplay?: boolean;
+  /** Indicator overlays. Page-level — every chart in the row draws the same set. */
+  indicators?: IndicatorCfg;
 }
 
 /**
@@ -160,6 +177,9 @@ export default function EsChartCard({
   embedded = false,
   density: densityProp,
   hideCapture = false,
+  transportTarget,
+  hostedReplay = false,
+  indicators = INDICATORS_DEFAULT,
 }: EsChartCardProps = {}) {
   // Everything but the symbol lives here. Same as `slot` for a lone chart.
   const cfgSlot: SlotId = settingsSlot ?? slot;
@@ -711,7 +731,9 @@ export default function EsChartCard({
     for (const c of columnsRef.current.values()) {
       if (c.slotTs <= replayTs && (!col || c.slotTs > col.slotTs)) col = c;
     }
-    return deriveColumnLevels(col, gexMetricRef.current);
+    // cbAware only off ES — see the flag's note in chartMath. On SPX the walls
+    // being replayed came from the live feed, which ranks them plainly.
+    return deriveColumnLevels(col, gexMetricRef.current, { cbAware: !isEs });
   })();
   const replayGexRef = useRef(replayGex);
   replayGexRef.current = replayGex;
@@ -741,6 +763,19 @@ export default function EsChartCard({
     });
   }, [shared, replayOwner, cfgSlot, replayOn, replayPlaying, replayTs, replaySpeed, replayDay]);
 
+  // ── Page-hosted Replay button ──────────────────────────────────────────────
+  // The toolbar above owns the BUTTON; this card owns the STATE, because only it
+  // knows how many bars the session has. Every card listens (not just the
+  // transport owner) so a single command turns the whole row on and off at once
+  // — the followers' own state has to flip too, or their candles never clamp.
+  useEffect(() => subscribeReplayCmd(({ on }) => {
+    setReplayOn(on);
+    setReplayPlaying(false);
+    // Entering: rewind to the open and drop any day pick from a previous
+    // session, matching what the card's own Replay button always did.
+    if (on) { setReplayIdx(0); setReplayDay(null); }
+  }), []);
+
   // Follower re-snap. Its frames can arrive (or change day / interval) long
   // after the owner last broadcast, and the channel only fires on the owner's
   // state changing — so re-derive the cursor here rather than waiting for a
@@ -765,6 +800,188 @@ export default function EsChartCard({
     }, ms);
     return () => clearInterval(id);
   }, [shared, replayOwner, replayOn, replayPlaying, replaySpeed, replayFrames.length]);
+
+  // ══ Indicators ═════════════════════════════════════════════════════════════
+  // All of these are PAGE-level (see IndicatorCfg in slotStore) and all default
+  // off, so a card with nothing enabled behaves exactly as it always has.
+  //
+  // Values are computed over the FULL row set, never the replay-clamped one.
+  // Every one of them is causal — bar i's value depends only on bars ≤ i — so
+  // clamping at DRAW time gives an identical result to recomputing per scrub
+  // tick, without recomputing a 20-period stdev over the session 4× a second.
+
+  /** Closes, the input to every study here. */
+  const closes = useMemo(() => rows.map((r) => r.close), [rows]);
+
+  // Bollinger. Kept in a ref as well as state because the cloud is painted on
+  // the imperative overlay canvas, which cannot read React state.
+  const bb = useMemo<BollingerBands | null>(
+    () => (indicators.bb && closes.length ? bollinger(closes, indicators.bbPeriod, indicators.bbInner, indicators.bbOuter) : null),
+    [indicators.bb, indicators.bbPeriod, indicators.bbInner, indicators.bbOuter, closes],
+  );
+  const bbRef = useRef<BollingerBands | null>(bb);
+  bbRef.current = bb;
+
+  // RSI at the cursor (replay) or at the last bar (live). One number, drawn as
+  // text in the corner — no pane, because a pane costs a third of the chart's
+  // height to show a value you read as "high / low / middling".
+  const rsiValue = useMemo(() => {
+    if (!indicators.rsi || closes.length <= indicators.rsiPeriod) return null;
+    const series = rsiOf(closes, indicators.rsiPeriod);
+    // Manual scan, not findLastIndex: that is ES2023 and this file has to
+    // compile against whatever lib the app's tsconfig actually sets.
+    let upto = rows.length - 1;
+    if (replayTs != null) {
+      upto = -1;
+      for (let i = 0; i < rows.length; i++) { if (rows[i].timestamp <= replayTs) upto = i; else break; }
+    }
+    return upto >= 0 ? series[upto] ?? null : null;
+  }, [indicators.rsi, indicators.rsiPeriod, closes, rows, replayTs]);
+
+  // Bar countdown. Its own 1s tick — the candle feed publishes on trades, so
+  // hanging this off `rows` would make the clock stutter in a quiet tape.
+  const [countdownNow, setCountdownNow] = useState(0);
+  useEffect(() => {
+    if (!indicators.countdown || replayOn) return; // nothing is forming in replay
+    setCountdownNow(Date.now());
+    const id = setInterval(() => setCountdownNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [indicators.countdown, replayOn]);
+  const barCountdown = useMemo(() => {
+    if (!indicators.countdown || replayOn || !rows.length || !countdownNow) return null;
+    const last = rows[rows.length - 1].timestamp;
+    // Time to the END of the bar the clock is currently inside. Derived from the
+    // last bar's open rather than from `now % candleMs`: 15m/30m/1h bars are
+    // anchored to 09:30 ET and the close forces a short bar, so an epoch-aligned
+    // modulo drifts against the actual grid by up to half a bar.
+    const elapsed = countdownNow - last;
+    if (elapsed < 0) return null;
+    const left = candleMs - (elapsed % candleMs);
+    return fmtCountdown(left);
+  }, [indicators.countdown, replayOn, rows, countdownNow, candleMs]);
+
+  // ── EMA + volume series ────────────────────────────────────────────────────
+  // Real chart series rather than canvas paint: they need the price scale's own
+  // autoscale and crosshair behaviour, and volume needs a SECOND price scale
+  // (its numbers are in millions of contracts, not points) which only the chart
+  // can give it. The overlay canvas gets the Bollinger cloud instead, where a
+  // filled band between two lines is the thing lightweight-charts can't do.
+  const emaSeriesRef = useRef<Array<ISeriesApi<"Line"> | null>>([null, null, null]);
+  const volSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const EMA_COLORS = ["#facc15", "#f472b6", "#a78bfa"];
+
+  useEffect(() => {
+    const chart = chartApiRef.current;
+    if (!chart) return;
+    const srcRows = replayTs != null ? rows.filter((r) => r.timestamp <= replayTs) : rows;
+    const wanted = indicators.emas.slice(0, 3);
+
+    for (let i = 0; i < 3; i++) {
+      const cfg = wanted[i];
+      const existing = emaSeriesRef.current[i];
+      if (!cfg?.on) {
+        // Remove rather than setData([]) — an empty series still participates in
+        // autoscale and in the crosshair's legend.
+        if (existing) { try { chart.removeSeries(existing); } catch { /* chart already torn down */ } }
+        emaSeriesRef.current[i] = null;
+        continue;
+      }
+      const series = existing ?? chart.addSeries(LineSeries, {
+        color: EMA_COLORS[i],
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      emaSeriesRef.current[i] = series;
+      const vals = emaOf(srcRows.map((r) => r.close), Math.max(1, Math.round(cfg.len)));
+      const data: LineData[] = [];
+      for (let k = 0; k < srcRows.length; k++) {
+        const v = vals[k];
+        if (v != null) data.push({ time: toChartTime(srcRows[k].timestamp), value: v });
+      }
+      series.setData(data);
+    }
+
+    if (!indicators.volume) {
+      if (volSeriesRef.current) { try { chart.removeSeries(volSeriesRef.current); } catch { /* torn down */ } }
+      volSeriesRef.current = null;
+    } else {
+      const series = volSeriesRef.current ?? chart.addSeries(HistogramSeries, {
+        priceFormat: { type: "volume" },
+        // Its OWN scale, pinned to the bottom 18% and invisible. Sharing the
+        // price scale would blow the candles up to a two-pixel band at the top,
+        // because volume is five orders of magnitude larger than an ES price.
+        priceScaleId: "es-vol",
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      volSeriesRef.current = series;
+      try {
+        chart.priceScale("es-vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 }, visible: false });
+      } catch { /* scale appears with the series; a miss here self-corrects next run */ }
+      const data: HistogramData[] = srcRows.map((r) => ({
+        time: toChartTime(r.timestamp),
+        value: r.volume || 0,
+        color: r.close >= r.open ? "rgba(38,166,154,0.45)" : "rgba(239,83,80,0.45)",
+      }));
+      series.setData(data);
+    }
+  }, [rows, replayTs, indicators.emas, indicators.volume]);
+
+  // Tear the indicator series down with the card. The chart-teardown effect
+  // calls chart.remove(), which drops every series with it — this only clears
+  // OUR refs so a remount doesn't hand a dead handle to removeSeries().
+  useEffect(() => () => {
+    emaSeriesRef.current = [null, null, null];
+    volSeriesRef.current = null;
+  }, []);
+
+  // ── Weekly EM band ─────────────────────────────────────────────────────────
+  // This week's expected-move boundaries, drawn as two flat lines.
+  //
+  // Source is /api/levels, the SAME published row the customer-facing /em page
+  // reads (components/dashboard/EmCustomer.tsx). Not /api/em-tracker: that one
+  // is the owner's hit/miss ledger and is gated `auth: 'owner'`, so a band built
+  // on it would draw for exactly one account and 403 for every subscriber.
+  // /api/levels is gated `subscriber`, which is who this chart is for.
+  //
+  // `up` / `down` come back as display TEXT ("7,529.40"), which is why they go
+  // through parseLevelNum rather than Number().
+  const [weeklyEm, setWeeklyEm] = useState<{ up: number; down: number } | null>(null);
+  // Mirrored for the imperative overlay draw, which cannot read React state.
+  const weeklyEmRef = useRef<{ up: number; down: number } | null>(null);
+  weeklyEmRef.current = weeklyEm;
+  useEffect(() => {
+    if (!indicators.weeklyEm) { setWeeklyEm(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        // ES uses SPX's band plus the basis, like every other level on this
+        // chart. The futures contract HAS its own published row (ESU), but its
+        // ticker carries the contract month, so hardcoding one would quietly go
+        // stale at the next roll and there is nothing in a missing row to
+        // distinguish "rolled" from "not published yet". SPX + basis cannot
+        // rot, and it keeps the EM band in the same coordinate system as the
+        // walls, the flip and CB.
+        const ticker = isEs ? "SPX" : sym.gexSymbol.replace(/^\$/, "");
+        const res = await fetch(`/api/levels?ticker=${encodeURIComponent(ticker)}`, { cache: "no-store" });
+        if (!res.ok) { console.warn("[weekly-em] HTTP", res.status, "— band not drawn"); return; }
+        const json = await res.json();
+        if (cancelled || !json) return;
+        const up = parseLevelNum(json.up);
+        const down = parseLevelNum(json.down);
+        // Both or neither. Half a band is worse than none — a single line with
+        // no partner reads as a level someone deliberately drew.
+        if (up != null && down != null) setWeeklyEm({ up, down });
+        else console.warn(`[weekly-em] ${ticker} has no published up/down yet — band not drawn`);
+      } catch (e) {
+        console.warn("[weekly-em] failed:", e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [indicators.weeklyEm, isEs, sym.gexSymbol]);
+
   // ── Restore this slot's settings ───────────────────────────────────────────
   // ONE effect for the whole card. Read in an effect, not in a lazy useState
   // initializer, so SSR and the first client render agree — the /es-candles
@@ -1353,7 +1570,10 @@ export default function EsChartCard({
     for (const c of columnsRef.current.values()) {
       if (!newest || c.slotTs > newest.slotTs) newest = c;
     }
-    const derived = deriveColumnLevels(newest, gexMetric);
+    // This branch is ETF-only (the isEs early-return above), so cbAware is
+    // unconditional: CB takes the top slot on its side and the wall behind it
+    // becomes that side's runner-up.
+    const derived = deriveColumnLevels(newest, gexMetric, { cbAware: true });
     return derived ? { ...derived, spot: newest?.spot ?? null } : null;
   }, [isEs, gexVersion, gexMetric]);
 
@@ -2272,8 +2492,9 @@ export default function EsChartCard({
             for (const c of columnsRef.current.values()) {
               if (!newest || c.slotTs > newest.slotTs) newest = c;
             }
-            return deriveColumnLevels(newest, gexMetricRef.current)
-              ?? { callWall: null, putWall: null, gexFlip: null };
+            // Same branch condition as etfGex — ETF only, so cbAware always.
+            return deriveColumnLevels(newest, gexMetricRef.current, { cbAware: true })
+              ?? { cb: null, callWall: null, putWall: null, gexFlip: null };
           })();
       const b = effectiveBasis();
       const es = (spxLevel: number | null) => (spxLevel != null ? toTick(spxLevel + b) : null);
@@ -2723,6 +2944,92 @@ export default function EsChartCard({
         return { left: Math.min(x0, x1), w: Math.max(1, Math.abs(x1 - x0)) };
       };
 
+      // ── 0) Bollinger cloud + weekly EM ──────────────────────────────────
+      // Painted FIRST, so everything else — heatmap band, bubbles, profile,
+      // level lines — sits on top of them. These are context, not the subject.
+      {
+        const bands = bbRef.current;
+        const bars = rowsRef.current;
+        if (bands && bars.length) {
+          const clampTs = replayTsRef.current;
+          // Screen points for one band edge, in bar order, skipping warm-up
+          // nulls and anything past the replay cursor.
+          const pts = (vals: Array<number | null>): Array<[number, number]> => {
+            const out: Array<[number, number]> = [];
+            for (let i = 0; i < bars.length && i < vals.length; i++) {
+              const v = vals[i];
+              if (v == null) continue;
+              const ts = bars[i].timestamp;
+              if (clampTs != null && ts > clampTs) break;
+              const x = xAt(ts);
+              const y = series.priceToCoordinate(v);
+              if (x == null || y == null) continue;
+              out.push([x, y]);
+            }
+            return out;
+          };
+          // One cloud = the area between the inner and outer edge on one side.
+          // Down the inner edge, back up the outer — a single closed path, so
+          // the fill can't seam where two half-transparent shapes would meet.
+          const cloud = (inner: Array<number | null>, outer: Array<number | null>) => {
+            const a = pts(inner), b = pts(outer);
+            if (a.length < 2 || b.length < 2) return;
+            ctx.beginPath();
+            ctx.moveTo(a[0][0], a[0][1]);
+            for (let i = 1; i < a.length; i++) ctx.lineTo(a[i][0], a[i][1]);
+            for (let i = b.length - 1; i >= 0; i--) ctx.lineTo(b[i][0], b[i][1]);
+            ctx.closePath();
+            ctx.fillStyle = "rgba(167,139,250,0.13)";
+            ctx.fill();
+            // Hairline on the outer edge only. Outlining both turns the cloud
+            // into a tube and competes with the candles for attention.
+            ctx.beginPath();
+            ctx.moveTo(b[0][0], b[0][1]);
+            for (let i = 1; i < b.length; i++) ctx.lineTo(b[i][0], b[i][1]);
+            ctx.strokeStyle = "rgba(167,139,250,0.34)";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          };
+          ctx.save();
+          cloud(bands.upperInner, bands.upperOuter);
+          cloud(bands.lowerInner, bands.lowerOuter);
+          // Basis (the SMA the bands are measured from).
+          const mid = pts(bands.basis);
+          if (mid.length > 1) {
+            ctx.beginPath();
+            ctx.moveTo(mid[0][0], mid[0][1]);
+            for (let i = 1; i < mid.length; i++) ctx.lineTo(mid[i][0], mid[i][1]);
+            ctx.strokeStyle = "rgba(167,139,250,0.55)";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+
+        // Weekly EM: two flat boundaries across the whole plot. Stored against
+        // the CASH underlying, so ES gets the same basis shift as every level.
+        const em = weeklyEmRef.current;
+        if (em) {
+          const b = steadyBasisRef.current || 0;
+          ctx.save();
+          ctx.setLineDash([5, 4]);
+          ctx.strokeStyle = "rgba(250,204,21,0.55)";
+          ctx.lineWidth = 1;
+          ctx.font = "700 10px var(--font-mono), monospace";
+          ctx.fillStyle = "rgba(250,204,21,0.85)";
+          for (const [label, price] of [["EM+", em.up], ["EM-", em.down]] as Array<[string, number]>) {
+            const y = series.priceToCoordinate(price + b);
+            if (y == null || y < 0 || y > h) continue;
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(w, y);
+            ctx.stroke();
+            ctx.fillText(label, 4, y - 3);
+          }
+          ctx.restore();
+        }
+      }
+
       // ── 1) GEX heatmap cells ──
       // Rendered to an offscreen buffer, then composited back through a blur so
       // adjacent strike/time cells melt into smooth bands instead of hard tiles.
@@ -2754,6 +3061,23 @@ export default function EsChartCard({
         }
         const hmPlotRight = Math.max(0, w - hmScaleWRef.current - 1);
         const lastSlotTs = cols.length ? cols[cols.length - 1].slotTs : -1;
+        // ── How far right the band may reach ────────────────────────────────
+        // Live: the price axis, so the newest column fills the gap to the last
+        // print. That stretch is a LIVE affordance and it was the whole reason
+        // "the heatmap doesn't replay" while the rail scrubbed fine. The columns
+        // were being clamped to the cursor correctly — and then the newest
+        // surviving one was smeared from the cursor all the way to the axis,
+        // repainting the entire rest of the session with the cursor's snapshot.
+        // The reveal was happening underneath a full-width cover.
+        //
+        // In replay the band stops at the right edge of the CURSOR'S BAR, which
+        // is exactly where the revealed candles stop.
+        let bandRight = hmPlotRight;
+        if (replayTsRef.current != null) {
+          const curBar = barAt(replayTsRef.current);
+          const curX = curBar != null ? xAt(curBar) : null;
+          if (curX != null) bandRight = Math.min(hmPlotRight, curX + barSpacing);
+        }
 
         // Offscreen buffer at the same CSS size (the main ctx is already DPR-
         // scaled, so we draw in CSS px here too). Allocated ONCE and reused;
@@ -2797,8 +3121,8 @@ export default function EsChartCard({
             // slots with no GEX update (the WS skip-if-unchanged throttle stops
             // re-sending unchanged frames) don't leave empty vertical gaps. The
             // last column stretches all the way to the right axis instead.
-            if (col.slotTs === lastSlotTs && hmPlotRight > sx.left) {
-              sx.w = hmPlotRight - sx.left;
+            if (col.slotTs === lastSlotTs && bandRight > sx.left) {
+              sx.w = bandRight - sx.left;
             } else if (ci + 1 < cols.length) {
               const nextX = slotX(cols[ci + 1].slotTs);
               if (nextX && nextX.left > sx.left) sx.w = nextX.left - sx.left;
@@ -2810,7 +3134,7 @@ export default function EsChartCard({
             // + a fillRect each) to paint nothing. At 5D/1-min that's ~1950 columns
             // of work per frame to show the ~40 on screen. Must come AFTER the
             // carry-forward above (that's what sets the real width).
-            if (sx.left + sx.w < -2 || sx.left > hmPlotRight + 2) continue;
+            if (sx.left + sx.w < -2 || sx.left > bandRight + 2) continue;
             // Per-column max + top-3 magnitudes for THIS metric (drives color/rank).
             const absVals = col.cells.map((c) => Math.abs(valOf(c))).filter((v) => v > 0);
             const colMax = absVals.length ? Math.max(...absVals) : 1;
@@ -3344,7 +3668,10 @@ export default function EsChartCard({
       container?.removeEventListener("pointerup", schedule);
       drawOverlayRef.current = () => {};
     };
-  }, [showHeatmap, showGexBubbles, bubbleCfg, bubbleMins, intensity, gexMetric, rows, interval, showProfile, profile, showTpo, tpoProfiles, showLevels, showFlipCross, mvcHistory, showCb]);
+    // bb / weeklyEm are here because the Bollinger cloud and the EM boundaries
+    // are painted on THIS canvas, so toggling either has to re-run the draw —
+    // there is no series for React to update on their behalf.
+  }, [showHeatmap, showGexBubbles, bubbleCfg, bubbleMins, intensity, gexMetric, rows, interval, showProfile, profile, showTpo, tpoProfiles, showLevels, showFlipCross, mvcHistory, showCb, bb, weeklyEm]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -3697,13 +4024,18 @@ export default function EsChartCard({
           {/* intensity slider */}
           <DockSlider label="intensity" value={intensity} min={0.1} max={1} step={0.05} onChange={(v) => { setIntensity(v); saveSetting({ intensity: v }); }} title="Heatmap brightness" />
 
-          <DockButton
-            onClick={() => { const nv = !replayOn; setReplayOn(nv); setReplayPlaying(false); if (nv) { setReplayIdx(0); setReplayDay(null); } }}
-            title="Replay this session — reveal candles + gamma from the open forward"
-            style={{ color: replayOn ? HOME_THEME.cyan : undefined }}
-          >
-            <span>Replay</span>
-          </DockButton>
+          {/* The page's CANDLES toolbar hosts this button when there is one, so
+              the card drops its own rather than offering two switches for one
+              piece of state. The home embed has no page toolbar and keeps it. */}
+          {!hostedReplay && (
+            <DockButton
+              onClick={() => { const nv = !replayOn; setReplayOn(nv); setReplayPlaying(false); if (nv) { setReplayIdx(0); setReplayDay(null); } }}
+              title="Replay this session — reveal candles + gamma from the open forward"
+              style={{ color: replayOn ? HOME_THEME.cyan : undefined }}
+            >
+              <span>Replay</span>
+            </DockButton>
+          )}
 
           <DockButton onClick={refreshTrigger} title="Refresh" style={{ color: refreshStyle.color as string }}>{refreshLabel}</DockButton>
           {/* The dock itself now stays in the capture, so the capture-triggering
@@ -3821,18 +4153,24 @@ export default function EsChartCard({
     <div ref={captureRef} className="es-candles-root flex h-full flex-col"
          style={embedded ? { background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow } : undefined}>
       {dockMode === "full" ? dock : tickerBar}
-      {/* The transport rides WITH the dock — hoisted into the page's shared slot
-          alongside it when there are 2–3 charts, so the row gets one set of
-          controls above all of them instead of one per card. dockMode "symbol"
-          cards render neither; they follow the channel. */}
-      {dockMode === "shared" && dockTarget ? createPortal(<>{dock}{replayBar}</>, dockTarget) : null}
+      {/* The dock hoists into the page's shared slot when there are 2–3 charts.
+          dockMode "symbol" cards render neither dock nor transport; they follow
+          the channel. */}
+      {dockMode === "shared" && dockTarget ? createPortal(dock, dockTarget) : null}
+      {/* ONE transport for the whole row, and it follows the page's Replay
+          popover rather than the dock: that is where the button that opened it
+          lives, and a transport that appears somewhere else on screen from the
+          control that summoned it reads as two features. Only the replay OWNER
+          renders it — the followers have identical state and would stack three
+          identical scrubbers into the same node. */}
+      {replayOwner && transportTarget ? createPortal(replayBar, transportTarget) : null}
 
 
       <div className="es-candles-body flex flex-col" style={{ flex: 1, minHeight: 0 }}>
-      {/* One transport for the row lives with the dock (see the portal above).
-          In single-chart mode there is no shared dock to hoist it into, so it
-          stays here, directly above the chart, exactly as before. */}
-      {dockMode === "full" ? replayBar : null}
+      {/* Fallback home: the home embed, which has no page toolbar to portal
+          into. On /es-candles `transportTarget` is always supplied (null only
+          while the popover is shut), so this renders nothing there. */}
+      {dockMode === "full" && !hostedReplay ? replayBar : null}
       <div className="es-candles-toggles flex flex-wrap items-stretch gap-2 px-4 pb-2 pt-1">
         {(() => {
           const basis = effectiveBasis();
@@ -3857,14 +4195,20 @@ export default function EsChartCard({
           );
           // Same source precedence as the rail and the price lines: on SPY/QQQ
           // the walls come from the recorded column, because `levels` is the SPX
-          // websocket. CB has no ETF equivalent — mvc_snapshots is SPX-only — so
-          // it reads blank rather than showing the last SPX value frozen under a
-          // SPY chart.
+          // websocket.
+          //
+          // CB used to read blank off ES, on the grounds that mvc_snapshots is
+          // SPX-only and there is no ETF recorder. True, but the recorder was
+          // never the definition — CB is just the biggest gamma concentration in
+          // the ladder, sign and all, and the ETF ladder is right there in the
+          // recorded column. deriveColumnLevels reads it off directly, and under
+          // cbAware the Call/Put Wall beside it steps down to its side's
+          // runner-up so the three tiles are three different strikes.
           const stats = [
             { c: HOME_THEME.green, label: "Call Wall", short: "CW", v: etfGex ? etfGex.callWall : levels.callWall },
             { c: SOFT_RED, label: "Put Wall", short: "PW", v: etfGex ? etfGex.putWall : levels.putWall },
             { c: LIGHT_BLUE, label: "Flip", short: "Flip", v: etfGex ? etfGex.gexFlip : levels.gexFlip },
-            { c: LIGHT_BLUE, label: "CB", short: "CB", v: isEs ? levels.mvc : null },
+            { c: LIGHT_BLUE, label: "CB", short: "CB", v: isEs ? levels.mvc : (etfGex ? etfGex.cb : null) },
           ];
           // Four 130px-min tiles need ~560px. In a third of the screen they wrap
           // to two rows and eat a third of the chart's height, so collapse to one
@@ -3902,7 +4246,12 @@ export default function EsChartCard({
               candlesticks always render on the top visible layer. */}
           <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" style={{ zIndex: 1 }} />
           <div ref={chartRef} className="absolute inset-0" style={{ zIndex: 2 }} />
-          {/* SPX equivalent of the live ES price, pinned at the right gutter.
+          {/* SPX equivalent of the live ES price, sitting on the spot line at the
+              LEFT edge of the plot. It used to be pinned at right:64, which put
+              it hard against the ES price label it is the counterpart to — two
+              pills, two different numbers, touching. Same line, opposite end
+              reads instantly and leaves the axis alone. (The crosshair badge
+              below stays on the right, where the cursor's own axis readout is.)
               ES-only: off ES the basis is 0, so these would just restate the
               price already on the axis under a misleading "SPX" label. */}
           {isEs && liveSpx ? (
@@ -3910,7 +4259,7 @@ export default function EsChartCard({
               className="pointer-events-none absolute z-10 rounded font-mono font-medium"
               style={{
                 top: Math.max(2, liveSpx.y - 9),
-                right: 64,
+                left: 6,
                 background: "rgba(41,182,246,.92)",
                 color: "#001018",
                 whiteSpace: "nowrap",
@@ -3929,6 +4278,33 @@ export default function EsChartCard({
               SPX {liveSpx.spx.toFixed(2)}
             </div>
           ) : null}
+          {/* RSI + bar countdown. Text in the corner rather than a pane: a pane
+              costs a third of the chart's height to show a number you read as
+              "high / low / middling", and this card already gives the bottom
+              strip to volume. Right-aligned so the two stack cleanly and neither
+              moves when the other's width changes. */}
+          {(rsiValue != null || barCountdown) && (
+            <div
+              className="pointer-events-none absolute z-10 font-mono"
+              style={{
+                top: 6, right: 70, textAlign: "right",
+                fontSize: 11, lineHeight: "14px", fontWeight: 800,
+                textShadow: "0 1px 3px rgba(0,0,0,0.8)",
+              }}
+            >
+              {rsiValue != null && (
+                <div style={{
+                  // Coloured by zone, not by value: 70/30 are the levels people
+                  // actually read, and a continuous gradient makes 68 and 72
+                  // look the same when they are the whole point.
+                  color: rsiValue >= 70 ? SOFT_RED : rsiValue <= 30 ? HOME_THEME.green : HOME_THEME.muted,
+                }}>
+                  RSI {rsiValue.toFixed(1)}
+                </div>
+              )}
+              {barCountdown && <div style={{ color: LIGHT_BLUE, opacity: 0.85 }}>{barCountdown}</div>}
+            </div>
+          )}
           {/* SPX at the crosshair, follows the cursor's y on the right gutter. */}
           {isEs && crossSpx ? (
             <div

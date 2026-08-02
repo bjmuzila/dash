@@ -76,11 +76,11 @@ const DEFAULT_EARNINGS: EarningsDay[] = [
 ];
 
 const DEFAULT_CONF_ROWS: ConfRow[] = [
-  { date: "07-24", s945: "7400", c945: "0.0", hit945: true, s1030: "7450", c1030: "0.9", hit1030: true, s1200: "7450", c1200: "0.9", hit1200: true },
-  { date: "07-23", s945: "7500", c945: "56.1", hit945: false, s1030: "7400", c1030: "0.2", hit1030: true, s1200: "7400", c1200: "0.2", hit1200: true },
-  { date: "07-22", s945: "7510", c945: "0.1", hit945: true, s1030: "7520", c1030: "0.2", hit1030: true, s1200: "7520", c1200: "0.7", hit1200: true },
-  { date: "07-21", s945: "7500", c945: "0.3", hit945: true, s1030: "7500", c1030: "0.3", hit1030: true, s1200: "7500", c1200: "0.3", hit1200: true },
-  { date: "07-20", s945: "7450", c945: "0.9", hit945: true, s1030: "7450", c1030: "0.9", hit1030: true, s1200: "7500", c1200: "4.8", hit1200: true },
+  { date: "07-31", s945: "7500", c945: "0.9", hit945: true, s1030: "7400", c1030: "7.7", hit1030: true, s1200: "7470", c1200: "0.3", hit1200: true },
+  { date: "07-30", s945: "7400", c945: "1.0", hit945: true, s1030: "7420", c1030: "0.7", hit1030: true, s1200: "7420", c1200: "0.7", hit1200: true },
+  { date: "07-29", s945: "7350", c945: "0.1", hit945: true, s1030: "7350", c1030: "0.1", hit1030: true, s1200: "7350", c1200: "0.1", hit1200: true },
+  { date: "07-28", s945: "7400", c945: "0.2", hit945: true, s1030: "7430", c1030: "0.6", hit1030: true, s1200: "7450", c1200: "0.0", hit1200: true },
+  { date: "07-27", s945: "7500", c945: "26.3", hit945: false, s1030: "7400", c1030: "0.1", hit1030: true, s1200: "7400", c1200: "0.1", hit1200: true },
 ];
 
 function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
@@ -89,7 +89,7 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "coreBullseyePct" | "coreBullseyeSub" | "ictModelPct" | "ictModelSub" | "estMovePct" | "estMoveSub" |
   "confRows" | "resultsNote" | "ctaUrl">> {
   return {
-    issueLabel: opts.issueLabel || "Week of Jul 27",
+    issueLabel: opts.issueLabel || "Week of Jul 27–31",
     recapHeadline: opts.recapHeadline || "Big tech's AI reality check dragged the Nasdaq lower",
     recapBody: opts.recapBody || [
       "All three major indexes closed lower as Wall Street shifted from rewarding AI spending to demanding proof of returns. <strong style=\"color:#ffffff;\">Alphabet</strong> fell 7.8% despite beating estimates, after posting negative free cash flow for the first time in two decades and hiking capex guidance to $205B. <strong style=\"color:#ffffff;\">Tesla</strong> was the week's worst performer, down nearly 18% on missed earnings and delayed projects.",

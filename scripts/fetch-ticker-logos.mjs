@@ -67,6 +67,12 @@ ENB CVE SU TRP CNQ IMO ETN LIN APD SHW ECL DD DOW LYB PPG NUE FCX NEM
 ABBV BIIB MRNA BNTX ILMN IQV A DXCM IDXX WST MTD ALGN PODD ZBH BAX
 `.trim().split(/\s+/).filter(Boolean);
 
+// Hand-mirrored logos: neither the GitHub set nor Wikidata resolves these, so
+// public/logos/<SYM>.png was cropped and committed by hand. Never overwrite
+// them — including under --force, which would otherwise replace a good file
+// with nothing (resolveLogo returns null) or with an unusable wide lockup.
+const MANUAL = new Set(['SPCX']);
+
 const args = process.argv.slice(2);
 const FORCE = args.includes('--force');
 const FROM_EARNINGS = args.includes('--from-earnings');
@@ -105,6 +111,7 @@ const exists = (p) => access(p).then(() => true, () => false);
 
 async function mirror(sym) {
   const file = path.join(OUT_DIR, `${sym}.png`);
+  if (MANUAL.has(sym) && (await exists(file))) return 'skip';
   if (!FORCE && (await exists(file))) return 'skip';
 
   const url = await resolveLogo(sym, '');
