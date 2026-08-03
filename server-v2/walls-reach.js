@@ -880,6 +880,16 @@ const IN_PLAY_ATR = 0.60;
 const ALERT_ATR = 0.25;
 /** How far back to look for the "is price closing on it" comparison. */
 const DRIFT_MINS = 15;
+/**
+ * The comparison sample must be at least this much older than the current one.
+ * Outside RTH — or any time the scanner stalls — the newest row is ITSELF older
+ * than DRIFT_MINS, so the lookback query returns the SAME row and the distance
+ * compares equal to itself: `closing` would read false rather than unknown, and
+ * silently suppress every alert. Unknown must stay unknown.
+ */
+const MIN_DRIFT_AGE_MINS = 3;
+/** Newest sample older than this means the feed is stalled — do not alert on it. */
+const STALE_MINS = 20;
 
 /**
  * The live watchlist: every level currently within `maxAtr` of spot, nearest
@@ -906,10 +916,14 @@ async function getWatch({ date, maxAtr = IN_PLAY_ATR } = {}) {
 
   // Spot as of DRIFT_MINS ago, to say whether price is closing or backing away.
   const { rows: before } = await p.query(
-    `SELECT DISTINCT ON (symbol) symbol, spot FROM scanner_snapshots
+    `SELECT DISTINCT ON (symbol) symbol, spot, ts FROM scanner_snapshots
       WHERE date = $1 AND spot > 0 AND ts <= NOW() - make_interval(mins => $2::int)
       ORDER BY symbol, ts DESC`, [day, DRIFT_MINS]);
-  const wasSpot = new Map(before.map((r) => [r.symbol, num(r.spot)]));
+  const wasSpot = new Map(before.map((r) => [r.symbol, { spot: num(r.spot), ts: new Date(r.ts).getTime() }]));
+
+  // How old the freshest sample in the whole sweep is. Drives the stale guard.
+  const newestTs = Math.max(...cur.map((r) => new Date(r.ts).getTime()));
+  const staleMins = (Date.now() - newestTs) / 60000;
 
   const [atrMap, cal] = await Promise.all([
     loadAtr(p, day, cur.map((r) => r.symbol)),
@@ -936,7 +950,11 @@ async function getWatch({ date, maxAtr = IN_PLAY_ATR } = {}) {
     const atr = atrMap.get(r.symbol)?.atr ?? null;
     if (!(spot > 0) || !(atr > 0)) continue;
     const gex = { call_wall: num(r.call_wall_gex), put_wall: num(r.put_wall_gex), cb: num(r.cb_gex) };
-    const prior = wasSpot.get(r.symbol) ?? null;
+    const priorRow = wasSpot.get(r.symbol) ?? null;
+    const curTs = new Date(r.ts).getTime();
+    // Only a genuinely older sample can answer "is it closing".
+    const prior = priorRow && (curTs - priorRow.ts) / 60000 >= MIN_DRIFT_AGE_MINS
+      ? priorRow.spot : null;
 
     for (const lt of LEVEL_TYPES) {
       const strike = num(r[lt]);
@@ -967,6 +985,10 @@ async function getWatch({ date, maxAtr = IN_PLAY_ATR } = {}) {
   return {
     ok: true, date: day, asof: cur[0]?.ts ?? null,
     in_play_atr: maxAtr, alert_atr: ALERT_ATR,
+    // Surfaced rather than swallowed: a stalled scanner is the one condition
+    // that makes every other number on this payload quietly wrong.
+    stale_mins: Number(staleMins.toFixed(1)),
+    stale: staleMins > STALE_MINS,
     levels: out,
   };
 }
@@ -999,6 +1021,11 @@ async function runWatchAlerts({ force = false } = {}) {
 
   const w = await getWatch({ date: day, maxAtr: ALERT_ATR });
   if (!w.ok) return { skipped: w.error };
+  // Alerting off a frozen feed pages about levels price left ages ago.
+  if (w.stale) {
+    console.warn(`[watch] scanner stale by ${w.stale_mins}m — not alerting`);
+    return { skipped: 'stale feed', stale_mins: w.stale_mins };
+  }
 
   let sent = 0;
   for (const l of w.levels) {

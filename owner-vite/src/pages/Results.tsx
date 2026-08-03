@@ -2115,6 +2115,7 @@ type WatchLevel = {
  */
 function WallWatchCard({ date, onPick, sel }: { date: string; onPick: (s: string) => void; sel: string | null }) {
   const [rows, setRows] = useState<WatchLevel[] | null>(null);
+  const [stale, setStale] = useState<{ stale: boolean; mins: number } | null>(null);
   const [alertOnly, setAlertOnly] = useState(false);
 
   const load = useCallback(async () => {
@@ -2122,7 +2123,8 @@ function WallWatchCard({ date, onPick, sel }: { date: string; onPick: (s: string
       const r = await fetch(`/proxy/walls-watch?date=${encodeURIComponent(date)}`, { cache: "no-store" });
       const j = await r.json();
       setRows(j?.ok ? (j.levels ?? []) : []);
-    } catch { setRows([]); }
+      setStale(j?.ok ? { stale: !!j.stale, mins: Number(j.stale_mins ?? 0) } : null);
+    } catch { setRows([]); setStale(null); }
   }, [date]);
 
   // 30s — the underlying scanner sweep is 5m, so this is just "never stale by
@@ -2162,6 +2164,15 @@ function WallWatchCard({ date, onPick, sel }: { date: string; onPick: (s: string
         </span>
       </div>
 
+      {/* A frozen feed makes every distance on this card wrong. Say so loudly
+          rather than rendering confident numbers off a stopped clock. */}
+      {stale?.stale ? (
+        <div style={{ padding: "9px 18px", borderBottom: `1px solid ${C.border}`, background: rgba(AMBER, 0.1),
+          color: AMBER, fontSize: 13, fontWeight: 700 }}>
+          Scanner last wrote {Math.round(stale.mins)}m ago — distances are stale and alerts are paused.
+        </div>
+      ) : null}
+
       {rows != null && !shown.length ? (
         <div style={{ padding: "26px 18px", textAlign: "center", opacity: 0.45, fontSize: 14 }}>
           Nothing within {alertOnly ? "0.25" : "0.60"}× ATR right now.
@@ -2191,6 +2202,8 @@ function WallWatchCard({ date, onPick, sel }: { date: string; onPick: (s: string
                     </span>
                     {l.live ? <span style={{ ...wallBadgeStyle(AMBER), fontSize: 12, padding: "1px 7px" }}>Live</span> : null}
                     {/* Closing vs backing away is the whole point of the row. */}
+                    {/* null = no older sample to compare against yet. Render
+                        nothing rather than implying it is backing away. */}
                     {l.closing === true ? <span style={{ fontSize: 12, color: HOME_THEME.gold, fontWeight: 800 }}>↘ closing</span>
                       : l.closing === false ? <span style={{ fontSize: 12, opacity: 0.4 }}>↗ backing off</span> : null}
                   </div>
