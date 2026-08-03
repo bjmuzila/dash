@@ -1768,7 +1768,10 @@ function ReachLadder({ rank }: { rank: WallRank | null }) {
 // past IN_PLAY_ATR is dimmed — it is below the "solid move" line for today.
 
 function RankedLevels({ rank, sel, onPick }: { rank: WallRank | null; sel: string | null; onPick: (s: string) => void }) {
-  const rows = (rank?.ranked ?? []).slice(0, 12);
+  // The server already caps at 60 (attachRank: ranked.slice(0, 60)). Slicing to
+  // 12 again here meant the card ended at row 12 with overflow:hidden, so there
+  // was nothing below to scroll to and 48 ranked levels were silently dropped.
+  const rows = rank?.ranked ?? [];
   return (
     <div style={{ ...CARD, overflow: "hidden" }}>
       <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center" }}>
@@ -1776,7 +1779,9 @@ function RankedLevels({ rank, sel, onPick }: { rank: WallRank | null; sel: strin
           Ranked levels — in play
         </span>
         <span style={{ marginLeft: "auto", fontSize: 14, opacity: 0.5, fontFamily: "var(--font-mono)" }}>
-          {rank?.in_play != null ? `${rank.in_play} inside ${IN_PLAY_ATR.toFixed(2)}×` : "—"}
+          {rank?.in_play != null
+            ? `${rows.length} ranked · ${rank.in_play} inside ${IN_PLAY_ATR.toFixed(2)}×`
+            : "—"}
         </span>
       </div>
 
@@ -1784,7 +1789,9 @@ function RankedLevels({ rank, sel, onPick }: { rank: WallRank | null; sel: strin
         <div style={{ padding: 18, fontSize: 14, opacity: 0.6 }}>
           Nothing ranked for this session yet.
         </div>
-      ) : rows.map((l, i) => {
+      ) : (
+      <div className="wall-scroll" style={{ maxHeight: 430, overflowY: "auto" }}>
+      {rows.map((l, i) => {
         const color = bucketColor(l.bucket);
         const dim = l.dist_atr >= IN_PLAY_ATR;
         return (
@@ -1825,6 +1832,8 @@ function RankedLevels({ rank, sel, onPick }: { rank: WallRank | null; sel: strin
           </div>
         );
       })}
+      </div>
+      )}
 
       {rows.length ? (
         <div style={{ borderTop: `1px solid ${C.border}`, padding: "14px 18px", fontSize: 13, opacity: 0.72, lineHeight: 1.6 }}>
