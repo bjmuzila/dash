@@ -291,7 +291,16 @@ export function DockButton({
         padding: "0 clamp(7px, 0.9vw, 11px)",
         borderRadius: 9,
         boxSizing: "border-box",
-        border: "1px solid rgba(255,255,255,0.06)",
+        // A CLOSED menu button carries no border — the caret already says it
+        // opens something, so a box around it is redundant chrome, and four of
+        // them in a row read as a segmented control rather than four separate
+        // menus. The border returns when the panel is open, which is the only
+        // state where it means anything.
+        //
+        // Scoped to `caret` on purpose: plain DockButtons (1m/5m, Vol+OI, Now,
+        // the replay transport) keep their box, because for those the border IS
+        // the affordance — nothing else marks them as pressable.
+        border: `1px solid ${caret && !open ? "transparent" : "rgba(255,255,255,0.06)"}`,
         background: "linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.02))",
         color: T.text,
         fontSize: "clamp(11px, 0.9vw, 13px)",

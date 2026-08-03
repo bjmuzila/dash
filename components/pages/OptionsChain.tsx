@@ -1095,12 +1095,6 @@ interface ChainMatrixProps {
   volMvcByCol: (number | null)[];
   mvcByCol: (number | null)[];
   /**
-   * The single biggest |net GEX| cell on the whole grid — the chain's headline
-   * level. Drawn with a triple-weight gold outline so it separates from the
-   * per-column ★ peaks, which share its colour.
-   */
-  globalMvc: { colIdx: number; strike: number } | null;
-  /**
    * Front-expiry (0DTE / nearest) 15-minute NET GEX change, strike → chip.
    * Same source and gating as the multi-chain ladder's Δ stamps: recorder
    * baselines, top-5 |GEX| strikes per side of ATM only.
@@ -1158,7 +1152,7 @@ interface ChainMatrixProps {
 // the parent's useMemo/useCallback, is exactly "when the chain data changed."
 const ChainMatrix = memo(function ChainMatrix({
   columns, gridCols, visibleStrikes, nearestStrike, spot, greekMode, dataMode,
-  intensity, colScales, volMvcByCol, mvcByCol, globalMvc, delta15, delta15Exp, valueAt, isStandalone,
+  intensity, colScales, volMvcByCol, mvcByCol, delta15, delta15Exp, valueAt, isStandalone,
   changeMode, sessionDate, showTotalCol, layoutExpCols, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
   emLevels, activeTicker, atmRowRef, oiChangeMap, onCellClick, onCellHover,
 }: ChainMatrixProps) {
@@ -1393,11 +1387,6 @@ const ChainMatrix = memo(function ChainMatrix({
                 ? (changeScaleByExp.get(col!.expiration) ?? { max: 1, top3: [] as number[] })
                 : scale;
               const isMvc = !isChangeCol && greekMode === "gex" && col != null && mvcByCol[colIdx] === strike;
-              // The chain's single biggest |net GEX| cell. Same gold as the
-              // per-column ★ outline, at triple weight — the headline level has
-              // to be findable in one look, and colour alone can't do that when
-              // every column already owns a gold box.
-              const isGlobalMvc = isMvc && globalMvc != null && globalMvc.colIdx === colIdx && globalMvc.strike === strike;
               // ✕ marks the pure-volume GEX peak — OI+Vol view + GEX mode only.
               const isVolMvc = !isChangeCol && greekMode === "gex" && dataMode === "oi-vol" && col != null && volMvcByCol[colIdx] === strike;
               // …and it is coloured by the SIGN of that volume-only GEX: green
@@ -1457,11 +1446,7 @@ const ChainMatrix = memo(function ChainMatrix({
                     whiteSpace: "nowrap", overflow: "hidden",
                     display: "flex", alignItems: isOiMode ? "center" : "baseline", justifyContent: "flex-end", gap: 5,
                     cursor: isClickable ? "pointer" : undefined,
-                    ...(isMvc
-                      ? isGlobalMvc
-                        ? { outline: "6px solid #ffb300", outlineOffset: "-6px", zIndex: 2 }
-                        : { outline: "2px solid #ffb300", outlineOffset: "-2px" }
-                      : {}),
+                    ...(isMvc ? { outline: "2px solid #ffb300", outlineOffset: "-2px" } : {}),
                   }}
                 >
                   {/* OI tab renders the day-over-day CHANGE only — one line
@@ -1472,7 +1457,7 @@ const ChainMatrix = memo(function ChainMatrix({
                       so the tint and the number always agree. */}
                   {isMvc && (
                     <span
-                      title={isGlobalMvc ? "CB - Core Bullseye — highest |net GEX| on the chain" : "CB - Core Bullseye — highest |net GEX|"}
+                      title="CB - Core Bullseye — highest |net GEX|"
                       style={{ color: "#ffd600", lineHeight: 1, ...MARKER_EDGE }}
                     >★</span>
                   )}
@@ -1651,6 +1636,10 @@ export default function OptionsChainPage({
   // Replay LADDER overlay — the standalone <ChainReplay> modal. Still reachable
   // from inside the replay bar; the toolbar button now drives in-grid replay.
   const [replayOpen, setReplayOpen] = useState(false);
+  // Front-expiry Δ15 stickers (toolbar toggle). Off by default: the mode widens
+  // the 0DTE column to fit a chip beside the value, and that layout shift should
+  // be something the user asks for, not something the page does on load.
+  const [showDelta15, setShowDelta15] = useState(false);
   // ── In-grid replay mode ───────────────────────────────────────────────────
   // See the REPLAY_* block at the top of this file for what is and isn't
   // recorded. `replayOn` is the user's intent; `replayFrame` (derived below) is
@@ -2351,22 +2340,6 @@ export default function OptionsChainPage({
     });
   }, [columns, visibleStrikes]);
 
-  // The chain's headline level: of all the per-column ★ peaks, the one with the
-  // largest |net GEX|. Only ever ONE cell, and it's always also a column peak —
-  // the grid just draws its gold box at triple weight.
-  const globalMvc = useMemo(() => {
-    let best: { colIdx: number; strike: number } | null = null;
-    let bestAbs = 0;
-    mvcByCol.forEach((s, colIdx) => {
-      if (s == null) return;
-      const g = columns[colIdx]?.cells.get(s)?.gex;
-      if (g == null) return;
-      const a = Math.abs(g);
-      if (a > bestAbs) { bestAbs = a; best = { colIdx, strike: s }; }
-    });
-    return best as { colIdx: number; strike: number } | null;
-  }, [mvcByCol, columns]);
-
   // ── Front-expiry Δ15 stickers ─────────────────────────────────────────────
   // Same source and gating as the multi-chain ladder: one bulk pull of the
   // recorder's NET GEX baselines for the FRONT (0DTE / nearest) expiry only —
@@ -2374,7 +2347,10 @@ export default function OptionsChainPage({
   const frontExp = columns[0]?.expiration ?? "";
   const [gexBaseline, setGexBaseline] = useState<Record<number, { vNow: number | null; v5: number | null; v15: number | null; v30: number | null }>>({});
   useEffect(() => {
-    if (!frontExp || !activeTicker) { setGexBaseline({}); return; }
+    // Nothing is polled while the toggle is off, and the stored baselines are
+    // dropped — a stale grid coming back on screen would stamp 15-minute moves
+    // measured from whenever the mode was last switched off.
+    if (!showDelta15 || !frontExp || !activeTicker) { setGexBaseline({}); return; }
     let cancelled = false;
     const load = async () => {
       try {
@@ -2393,7 +2369,7 @@ export default function OptionsChainPage({
     void load();
     const id = setInterval(() => { void load(); }, 20_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [activeTicker, frontExp, refreshSeed]);
+  }, [showDelta15, activeTicker, frontExp, refreshSeed]);
 
   // Δ per cell on the front column, for the top-5 |GEX| strikes per side of ATM
   // only — stamping every strike buries the movers that matter in noise. Rank
@@ -2401,7 +2377,7 @@ export default function OptionsChainPage({
   const delta15 = useMemo(() => {
     const out = new Map<number, { d: number; pct: number; rank: number }>();
     const col = columns[0];
-    if (!col || !frontExp || replayFrame) return out;
+    if (!showDelta15 || !col || !frontExp || replayFrame) return out;
     const above: { s: number; a: number }[] = [];
     const below: { s: number; a: number }[] = [];
     visibleStrikes.forEach(s => {
@@ -2433,7 +2409,7 @@ export default function OptionsChainPage({
         .forEach(([k], idx) => { const e = out.get(k); if (e) e.rank = idx + 1; });
     }
     return out;
-  }, [columns, visibleStrikes, nearestStrike, gexBaseline, frontExp, replayFrame]);
+  }, [showDelta15, columns, visibleStrikes, nearestStrike, gexBaseline, frontExp, replayFrame]);
 
   // Weekly EM for the active ticker (DB-backed via /api/levels). Refetched on
   // ticker change and on each manual refresh so the bands track intraday EM.
@@ -2871,6 +2847,28 @@ export default function OptionsChainPage({
 
         <span style={{ color: HT.border }}>|</span>
 
+        {/* Front-expiry (0DTE / nearest) 15-minute NET GEX stickers. Inert while
+            replaying and off the GEX tab — the recorder's baselines are live
+            net-GEX only, so there is nothing for it to diff there. */}
+        <button
+          onClick={() => setShowDelta15(v => !v)}
+          disabled={replayOn || greekMode !== "gex"}
+          style={{
+            ...segBtnStyle(showDelta15 && !replayOn && greekMode === "gex"),
+            opacity: replayOn || greekMode !== "gex" ? 0.4 : 1,
+            cursor: replayOn || greekMode !== "gex" ? "default" : "pointer",
+          }}
+          title={
+            replayOn ? "Δ15m stickers are live-only — not available in replay"
+            : greekMode !== "gex" ? "Δ15m stickers are GEX-only"
+            : "Stamp each front-expiry cell with its 15-minute net-GEX change (top 5 strikes per side of ATM)"
+          }
+        >
+          Δ15m
+        </button>
+
+        <span style={{ color: HT.border }}>|</span>
+
         {/* Pinned to GEX while replaying — see the replay-pin effect. Rendered
             inert rather than hidden so the tabs don't vanish and reappear. */}
         <div
@@ -3153,7 +3151,6 @@ export default function OptionsChainPage({
             colScales={colScales}
             volMvcByCol={volMvcByCol}
             mvcByCol={mvcByCol}
-            globalMvc={globalMvc}
             delta15={delta15}
             delta15Exp={frontExp}
             valueAt={valueAt}
