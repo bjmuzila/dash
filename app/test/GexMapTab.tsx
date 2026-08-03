@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode, PointerEvent as ReactPointerEvent } from "react";
-import { HOME_THEME, LIGHT_BLUE, REFRESH_GREEN, SOFT_RED, statTileStyle, homeButtonStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE, REFRESH_GREEN, SOFT_RED, statTileStyle, homeButtonStyle, homeSecondaryButtonStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 
@@ -62,6 +62,72 @@ type MapPayload = {
   error?: string;
 };
 
+// ── session scope ────────────────────────────────────────────────────────────
+// gex-history-writer.js records Mon–Thu around the clock (only the weekend gap
+// is gated off), so a session payload carries the overnight tape as well as the
+// cash session. That is real gamma and worth seeing — but on one axis it also
+// squeezes 6.5 hours of RTH into a third of the width, which is where the
+// trading actually happens. Hence a scope switch rather than a hard rule.
+//
+// The filter runs on the PAYLOAD, before buildModel, on purpose: gMax, dMax and
+// the vol scale are all session maxima, so filtering afterwards would leave the
+// RTH view normalized against an overnight print it no longer draws — every
+// cell would read cool for a reason nothing on screen explains.
+type Scope = "rth" | "all";
+
+const RTH_LO = 570;   // 09:30 ET
+const RTH_HI = 960;   // 16:00 ET
+// isRthNowET() in etf-gex-recorder.js uses `mins < 960`. This one is inclusive:
+// there it is a RECORDING gate, where excluding 16:00 avoids writing a
+// post-close duplicate; here it is a DISPLAY filter, and the closing snapshot
+// is the single most-read column of the day.
+const isRthMs = (t: number) => {
+  const m = etMinutes(t);
+  return Number.isFinite(m) && m >= RTH_LO && m <= RTH_HI;
+};
+
+/**
+ * A payload narrowed to the cash session. Returns the ORIGINAL object (not a
+ * copy) whenever the filter is a no-op or would empty the map — identity
+ * matters because buildModel is memoized on it, and a session with no RTH rows
+ * yet (pre-market) should draw the overnight tape rather than nothing at all.
+ */
+function scopePayload(p: MapPayload | null, scope: Scope): MapPayload | null {
+  if (!p || scope === "all" || !p.columns?.length) return p;
+  const columns = p.columns.filter((c) => isRthMs(c.t));
+  if (!columns.length || columns.length === p.columns.length) return p;
+
+  // dexColumns is index-aligned to columns, and buildModel only treats DEX as a
+  // surface when the two lengths match. Filtering it by the SAME kept
+  // timestamps keeps that alignment; filtering it by its own predicate would
+  // work too until one feed skipped a minute the other didn't.
+  const keep = new Set(columns.map((c) => c.t));
+  const last = columns[columns.length - 1];
+  const trimmedTail = last.t !== p.columns[p.columns.length - 1].t;
+
+  return {
+    ...p,
+    columns,
+    volSeries: p.volSeries?.filter((v) => isRthMs(v.t)),
+    dexSeries: (p.dexSeries ?? []).filter((d) => isRthMs(d.t)),
+    dexColumns: p.dexColumns?.filter((d) => keep.has(d.t)),
+    // Only spot and asOf are re-derived, and only when the tail was actually
+    // cut. The walls and the flip come out of the route's own definitions —
+    // re-deriving those from the last column would quietly answer a different
+    // question than the one the rest of the app answers, for levels that barely
+    // move after the close anyway. Spot cannot be left alone: it is drawn, as a
+    // cursor line and a price tag, against a path that now ends at 16:00.
+    levels: trimmedTail
+      ? {
+          ...p.levels,
+          spot: last.spot > 0 ? last.spot : p.levels.spot,
+          flip: last.flip ?? p.levels.flip,
+          asOf: last.t,
+        }
+      : p.levels,
+  };
+}
+
 type Concept = "tape" | "spine" | "terrain";
 
 const CONCEPTS: { key: Concept; label: string; blurb: string }[] = [
@@ -85,11 +151,24 @@ const fmtStrike = (v: number | null | undefined) =>
   Number.isFinite(v as number) ? String(Math.round(v as number)) : "—";
 const fmtSpot = (v: number | null | undefined) =>
   Number.isFinite(v as number) && (v as number) > 0 ? (v as number).toFixed(2) : "—";
+// hourCycle h23, not hour12:false. They differ at exactly one moment: with
+// hour12:false a full-ICU build prints midnight as "24:00", so an overnight
+// column landed on the axis an hour after the following 00:05. h23 is also the
+// shape both recorders use (etf-gex-recorder.js, gex-history-writer.js).
+const ET_HM = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York", hourCycle: "h23", hour: "2-digit", minute: "2-digit",
+});
 function etTime(ms: number | null | undefined): string {
   if (!Number.isFinite(ms as number)) return "—";
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit",
-  }).format(new Date(ms as number));
+  return ET_HM.format(new Date(ms as number));
+}
+/** Minutes past ET midnight, or NaN when the stamp is unusable. */
+function etMinutes(ms: number): number {
+  if (!Number.isFinite(ms)) return NaN;
+  const parts = ET_HM.formatToParts(new Date(ms));
+  const h = Number(parts.find((x) => x.type === "hour")?.value);
+  const m = Number(parts.find((x) => x.type === "minute")?.value);
+  return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : NaN;
 }
 
 // ── color ────────────────────────────────────────────────────────────────────
@@ -1399,6 +1478,10 @@ export default function GexMapTab() {
   // changes, because an expiry that had rows on Thursday is meaningless on
   // Friday and pinning it would silently blank the map.
   const [expiry, setExpiry] = useState<string>("front");
+  // RTH by default. The overnight tape is the minority of the information and
+  // the majority of the x-axis, so "all" is the deliberate choice, not the one
+  // you land in by not choosing.
+  const [scope, setScope] = useState<Scope>("rth");
   const [data, setData] = useState<MapPayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1424,7 +1507,14 @@ export default function GexMapTab() {
 
   useEffect(() => { void load(date, expiry); }, [date, expiry, load]);
 
-  const model = useMemo(() => buildModel(data), [data]);
+  // `view` is what every map, every scale and the regime strip read. `data` is
+  // kept only to report how much of the session the current scope is hiding.
+  const view = useMemo(() => scopePayload(data, scope), [data, scope]);
+  const model = useMemo(() => buildModel(view), [view]);
+  const rthSlots = useMemo(
+    () => (data?.columns ?? []).reduce((n, c) => n + (isRthMs(c.t) ? 1 : 0), 0),
+    [data]
+  );
 
   const sessionOptions = useMemo(() => {
     // sessions is one row per (date, expiry) now, so collapse to distinct dates
@@ -1468,6 +1558,31 @@ export default function GexMapTab() {
               options={expiryOptions}
             />
           </div>
+          {/* Scope switch. Built from homeButtonStyle / homeSecondaryButtonStyle
+              rather than a third button look, so "selected" here means the same
+              thing visually as it does on every other toolbar in the app. */}
+          <div role="group" aria-label="Session scope" style={{
+            display: "inline-flex", gap: 0, padding: 2, borderRadius: 8,
+            border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.03)",
+          }}>
+            {([["rth", "RTH only", "09:30–16:00 ET — cash session only"],
+               ["all", "All", "Full recorded session, overnight tape included"]] as [Scope, string, string][])
+              .map(([key, label, hint]) => (
+                <button
+                  key={key}
+                  type="button"
+                  title={hint}
+                  aria-pressed={scope === key}
+                  onClick={() => setScope(key)}
+                  style={{
+                    ...(scope === key ? homeButtonStyle : homeSecondaryButtonStyle),
+                    border: scope === key ? homeButtonStyle.border : "1px solid transparent",
+                    background: scope === key ? homeButtonStyle.background : "transparent",
+                    opacity: scope === key ? 1 : 0.65,
+                  }}
+                >{label}</button>
+              ))}
+          </div>
           <button type="button" onClick={() => void load(date, expiry)} style={homeButtonStyle}>Refresh</button>
           <div style={{ fontSize: 12, color: "#ffffff", opacity: 0.85, flex: 1, minWidth: 220 }}>
             All three readouts, same session, same scales — one per row, scroll to compare.
@@ -1501,13 +1616,13 @@ export default function GexMapTab() {
         </Card>
       )}
 
-      {model && data && (
+      {model && view && (
         <RegimeStrip
           m={model}
-          symbol={data.symbol}
-          date={data.date}
-          expiryLabel={data.expiry === data.date ? "0DTE" : `exp ${data.expiry}`}
-          asOf={data.levels.asOf}
+          symbol={view.symbol}
+          date={view.date}
+          expiryLabel={view.expiry === view.date ? "0DTE" : `exp ${view.expiry}`}
+          asOf={view.levels.asOf}
         />
       )}
 
@@ -1536,12 +1651,19 @@ export default function GexMapTab() {
         </div>
       )}
 
-      {model && data && (
+      {model && view && data && (
         <div style={{ fontSize: 11.5, color: "#ffffff", opacity: 0.8, lineHeight: 1.7 }}>
-          {data.symbol} · {data.date} exp {data.expiry} · {data.columns.length} slots @ {data.slotMin}m ·{" "}
-          {data.strikes.length} strikes ({fmtStrike(model.lo)}–{fmtStrike(model.hi)}) ·{" "}
+          {view.symbol} · {view.date} exp {view.expiry} ·{" "}
+          <span style={{ color: scope === "rth" ? HOME_THEME.cyan : "#ffffff" }}>
+            {scope === "rth"
+              ? rthSlots
+                ? `RTH 09:30–16:00 · ${view.columns.length} of ${data.columns.length} slots`
+                : `no RTH slots yet — showing all ${data.columns.length}`
+              : `full session · ${view.columns.length} slots (overnight included)`}
+          </span>{" "}
+          @ {view.slotMin}m · {view.strikes.length} strikes ({fmtStrike(model.lo)}–{fmtStrike(model.hi)}) ·{" "}
           {model.hasDex
-            ? `${data.dexSeries.length} DEX snapshots (${model.dexSurface ? "strike×time, recorded with gamma" : "last-snapshot ladder"})`
+            ? `${view.dexSeries.length} DEX snapshots (${model.dexSurface ? "strike×time, recorded with gamma" : "last-snapshot ladder"})`
             : "no DEX"} · gamma scale {fmtBn(model.gMax)} per strike
         </div>
       )}

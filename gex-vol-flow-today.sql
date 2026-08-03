@@ -12,6 +12,15 @@
 --  * Day boundary is derived from the epoch-ms `timestamp` in ET, not the
 --    `date` TEXT column, so it can't drift on format.
 
+-- Symbol scope. option_strike_gex_history is shared -- etf-gex-recorder writes
+-- SPY/QQQ 0DTE into it under the same expiry string SPX uses -- so every query
+-- below must pin `symbol` or it sums three underlyings together.
+--   override:  psql "$DATABASE_URL" -v sym=SPY -f gex-vol-flow-today.sql
+\if :{?sym}
+\else
+  \set sym '$SPX'
+\endif
+
 \pset border 2
 \pset null '-'
 
@@ -21,7 +30,8 @@ WITH src AS (
   SELECT (timestamp / 300000) * 300000 AS bucket_ms,
          timestamp, expiry, strike, spot, net_gex, net_vol_gex
     FROM option_strike_gex_history
-   WHERE to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York'
+   WHERE symbol = :'sym'
+     AND to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York'
          >= date_trunc('day', now() AT TIME ZONE 'America/New_York')
      AND net_vol_gex IS NOT NULL
      -- 0DTE only? uncomment:
@@ -62,7 +72,8 @@ WINDOW w AS (PARTITION BY expiry ORDER BY bucket_ms)
 WITH last_ts AS (
   SELECT max(timestamp) AS ts
     FROM option_strike_gex_history
-   WHERE to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York'
+   WHERE symbol = :'sym'
+     AND to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York'
          >= date_trunc('day', now() AT TIME ZONE 'America/New_York')
 )
 SELECT to_char(to_timestamp(h.timestamp / 1000.0) AT TIME ZONE 'America/New_York',
@@ -75,6 +86,7 @@ SELECT to_char(to_timestamp(h.timestamp / 1000.0) AT TIME ZONE 'America/New_York
                                                             AS combined_bn
   FROM option_strike_gex_history h, last_ts
  WHERE h.timestamp = last_ts.ts
+   AND h.symbol = :'sym'
  GROUP BY h.timestamp, h.expiry
  ORDER BY h.expiry;
 
@@ -84,7 +96,8 @@ SELECT to_char(to_timestamp(h.timestamp / 1000.0) AT TIME ZONE 'America/New_York
 WITH last_ts AS (
   SELECT max(timestamp) AS ts
     FROM option_strike_gex_history
-   WHERE to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York'
+   WHERE symbol = :'sym'
+     AND to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York'
          >= date_trunc('day', now() AT TIME ZONE 'America/New_York')
 )
 SELECT h.expiry,
@@ -94,6 +107,7 @@ SELECT h.expiry,
        round((h.net_gex     / 1e9)::numeric, 4)             AS oi_gex_bn
   FROM option_strike_gex_history h, last_ts
  WHERE h.timestamp = last_ts.ts
+   AND h.symbol = :'sym'
    AND h.net_vol_gex IS NOT NULL
  ORDER BY abs(h.net_vol_gex) DESC
  LIMIT 15;
@@ -104,7 +118,8 @@ SELECT h.expiry,
 WITH src AS (
   SELECT timestamp, net_vol_gex
     FROM option_strike_gex_history
-   WHERE to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York'
+   WHERE symbol = :'sym'
+     AND to_timestamp(timestamp / 1000.0) AT TIME ZONE 'America/New_York'
          >= date_trunc('day', now() AT TIME ZONE 'America/New_York')
      AND net_vol_gex IS NOT NULL
 ),

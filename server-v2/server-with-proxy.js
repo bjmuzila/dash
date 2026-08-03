@@ -603,6 +603,13 @@ async function ensureFlowPrintsSchema(pool) {
 async function handleGexHistory(req, res) {
   const { searchParams } = new URL(req.url || '/', 'http://localhost');
   const expiry = searchParams.get('expiry') || marketState.getState().expiry || '';
+  // option_strike_gex_history is a SHARED table: gex-history-writer stamps every
+  // row with `symbol`, and etf-gex-recorder writes SPY/QQQ 0DTE into it every
+  // minute during RTH under the SAME expiry string as SPX. Filtering on expiry
+  // alone therefore blends three underlyings into one baseline set. Default to
+  // '$SPX' (the writer's DEFAULT_SYMBOL) so existing callers get what they have
+  // always meant; an ETF caller passes ?symbol=SPY explicitly.
+  const symbol = (searchParams.get('symbol') || '$SPX').trim();
   const ages = (searchParams.get('ages') || '5,15,30')
     .split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
   // basis=vol   → per-strike VOL-ONLY baselines (net_vol_gex), for the heatmap's
@@ -645,9 +652,10 @@ async function handleGexHistory(req, res) {
     const { rows } = await pool.query(
       `SELECT DISTINCT ON (strike) strike, ${col} AS val
          FROM option_strike_gex_history
-        WHERE date = $1 AND expiry = $2 AND timestamp <= $3 AND ${nullGuard} IS NOT NULL
+        WHERE date = $1 AND expiry = $2 AND symbol = $5 AND timestamp <= $3
+          AND ${nullGuard} IS NOT NULL
         ORDER BY strike, ABS(timestamp - $4) ASC`,
-      [date, expiry, target, target]
+      [date, expiry, target, target, symbol]
     );
     for (const r of rows) {
       const strike = Number(r.strike);
@@ -1041,8 +1049,16 @@ async function handleGexVolFlow(req, res) {
   // new prints: values just persist until the chain resets, which reads on the
   // chart as a long flat line and a phantom step. eth = the whole ET day.
   const session = searchParams.get('session') === 'eth' ? 'eth' : 'rth';
+  // MUST scope by symbol. option_strike_gex_history is shared: etf-gex-recorder
+  // writes SPY and QQQ 0DTE into it every 60s during RTH, stamped with their own
+  // `symbol` but under the SAME 'YYYY-MM-DD' expiry string SPX uses. Without this
+  // filter the aggregate below summed SPX + SPY + QQQ, so every minute bucket the
+  // ETF writer's throttle skipped dropped that slice back out and the series drew
+  // a sawtooth that looked like market movement. It also skewed the expiry picker's
+  // row counts and the front-expiry derivation, which are both count-based.
+  const symbol = (searchParams.get('symbol') || '$SPX').trim();
 
-  const key = `${binMs}|${scope}|${expiryParam}|${session}`;
+  const key = `${binMs}|${scope}|${expiryParam}|${session}|${symbol}`;
   const hit = _volFlowCache.get(key);
   if (hit && Date.now() - hit.at < VOLFLOW_TTL_MS) return sendJson(res, 200, hit.payload, req);
 
@@ -1074,9 +1090,11 @@ async function handleGexVolFlow(req, res) {
     `SELECT expiry, COUNT(*)::int AS row_count, MAX(timestamp) AS last_ts
        FROM option_strike_gex_history
       WHERE timestamp >= ${DAY_START}
+        AND symbol = $1
         ${RTH_ONLY}
       GROUP BY expiry
-      ORDER BY expiry ASC`
+      ORDER BY expiry ASC`,
+    [symbol]
   );
   const expiries = expRows.map((r) => ({
     expiry: r.expiry,
@@ -1113,17 +1131,22 @@ async function handleGexVolFlow(req, res) {
   const { rows } = await pool.query(
     `WITH src AS (
        SELECT (timestamp / $1::bigint) * $1::bigint AS bucket_ms,
-              timestamp, expiry, strike, spot, net_gex, net_vol_gex
+              timestamp, symbol, expiry, strike, spot, net_gex, net_vol_gex
          FROM option_strike_gex_history
         WHERE timestamp >= ${DAY_START}
+          AND symbol = $3
           ${RTH_ONLY}
           AND ($2 = '' OR expiry = $2)
      ),
      latest AS (
-       SELECT DISTINCT ON (bucket_ms, expiry, strike)
+       -- symbol belongs in the DISTINCT ON key even with the WHERE filter above:
+       -- it keeps this correct if the filter is ever widened to several symbols.
+       -- Without it, two underlyings sharing a strike (SPY 630 / QQQ 630) silently
+       -- overwrite each other and one snapshot's row vanishes from the sum.
+       SELECT DISTINCT ON (bucket_ms, symbol, expiry, strike)
               bucket_ms, spot, net_gex, net_vol_gex
          FROM src
-        ORDER BY bucket_ms, expiry, strike, timestamp DESC
+        ORDER BY bucket_ms, symbol, expiry, strike, timestamp DESC
      )
      SELECT bucket_ms,
             MAX(spot)                     AS spot,
@@ -1133,7 +1156,7 @@ async function handleGexVolFlow(req, res) {
        FROM latest
       GROUP BY bucket_ms
       ORDER BY bucket_ms ASC`,
-    [binMs, expiry || '']
+    [binMs, expiry || '', symbol]
   );
 
   let prev = null;
@@ -1154,7 +1177,7 @@ async function handleGexVolFlow(req, res) {
     return p;
   });
 
-  const payload = { ok: true, scope, session, expiry: expiry || null, binSec, expiries, points };
+  const payload = { ok: true, scope, session, symbol, expiry: expiry || null, binSec, expiries, points };
   _volFlowCache.set(key, { at: Date.now(), payload });
   if (_volFlowCache.size > 32) {
     const cutoff = Date.now() - 10 * 60 * 1000;

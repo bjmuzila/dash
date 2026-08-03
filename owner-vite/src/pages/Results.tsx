@@ -11,6 +11,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageShell } from "../components/PageCard";
 import { HOME_THEME, classicCardAccentStyle, homeInputStyle } from "../lib/theme";
+import { useRefreshButton } from "../hooks/useRefreshButton";
 
 // Today's ET date as "YYYY-MM-DD" (mirrors the helper on /fails).
 function todayETStr(): string {
@@ -1480,7 +1481,7 @@ function etDate(ts: number) {
   return new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" }).format(new Date(t));
 }
 
-// ── Walls tab: call wall / put wall / CB across the scanner universe ────────
+// ── Walls tab: call wall / put wall / CORE across the scanner universe ──────
 //
 // Backed by server-v2/walls-recorder.js. Levels are captured at 09:29 ET and
 // then every 15 minutes to 16:00, but only WRITTEN when they change — so the
@@ -1579,10 +1580,10 @@ const atrX = (v: number | null | undefined) =>
 const pct0 = (v: number | null | undefined) =>
   v == null || !Number.isFinite(v) ? "—" : `${Math.round(v * 100)}%`;
 
-/** Short form for a level inside the ranked list: "CB 6900", "Put wall 185". */
+/** Short form for a level inside the ranked list: "CORE 6900", "Put wall 185". */
 function levelTag(l: WallRankLevel): string {
   const n = wallStrike(l.strike);
-  return l.level_type === "cb" ? `CB ${n}`
+  return l.level_type === "cb" ? `CORE ${n}`
     : l.level_type === "call_wall" ? `Call wall ${n}` : `Put wall ${n}`;
 }
 type WallTotals = {
@@ -1602,7 +1603,7 @@ type WallEventRow = {
 };
 
 const WALL_SLOTS = 27;
-const LEVEL_LABEL: Record<WallLevel, string> = { call_wall: "Call Wall", put_wall: "Put Wall", cb: "CB" };
+const LEVEL_LABEL: Record<WallLevel, string> = { call_wall: "Call Wall", put_wall: "Put Wall", cb: "CORE" };
 const LEVEL_COLOR: Record<WallLevel, string> = { call_wall: AMBER, put_wall: GREEN, cb: HOME_THEME.lightBlue };
 
 const REACTION_LABEL: Record<WallReaction, string> = {
@@ -1838,6 +1839,9 @@ function WallsView() {
   const [q, setQ] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  // Bumped by the refresh button. The day summary re-fetches through loadDay();
+  // the per-ticker detail lives in its own effect, so it needs a dep to poke.
+  const [nonce, setNonce] = useState(0);
 
   const loadDay = useCallback(async () => {
     setErr(null); setLoaded(false);
@@ -1857,6 +1861,14 @@ function WallsView() {
 
   useEffect(() => { void loadDay(); }, [loadDay]);
 
+  // Walls only move on a 15m grid, so this page goes stale quietly between
+  // slots — refresh pulls the day summary and the open ticker's log together.
+  const refreshAll = useCallback(async () => {
+    setNonce((n) => n + 1);
+    await loadDay();
+  }, [loadDay]);
+  const { trigger: refresh, label: refreshLabel, style: refreshStyle } = useRefreshButton(refreshAll);
+
   useEffect(() => {
     if (!sel) { setDetail(null); return; }
     let alive = true;
@@ -1868,7 +1880,7 @@ function WallsView() {
       } catch { if (alive) setDetail(null); }
     })();
     return () => { alive = false; };
-  }, [sel, date]);
+  }, [sel, date, nonce]);
 
   const shown = useMemo(() => {
     const rows = day?.tickers ?? [];
@@ -1927,7 +1939,7 @@ function WallsView() {
       <div style={{ ...CARD, padding: "14px 18px", marginBottom: 14, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
         <span style={{ fontSize: 17, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>Walls</span>
         <span style={{ fontSize: 14, color: C.label, opacity: 0.7 }}>
-          Call wall · put wall · CB across the scanner universe — 09:29 open + every 15m to 16:00 ET, change-only
+          Call wall · put wall · CORE across the scanner universe — 09:29 open + every 15m to 16:00 ET, change-only
         </span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <input
@@ -1943,6 +1955,9 @@ function WallsView() {
               {f === "idle" ? "Untested" : f}
             </button>
           ))}
+          <button onClick={() => { void refresh(); }} style={refreshStyle} title="Re-pull the day summary and the selected ticker's level log">
+            {refreshLabel}
+          </button>
         </div>
       </div>
 
@@ -2010,7 +2025,7 @@ function WallsView() {
                 <tr>
                   <th style={{ ...th, textAlign: "left", width: 38 }}>#</th>
                   <th style={{ ...th, textAlign: "left" }}>Ticker</th>
-                  <th style={th}>Spot</th><th style={th}>Put Wall</th><th style={th}>CB</th><th style={th}>Call Wall</th>
+                  <th style={th}>Spot</th><th style={th}>Put Wall</th><th style={th}>CORE</th><th style={th}>Call Wall</th>
                   <th style={{ ...th, color: HOME_THEME.gold, opacity: 0.85 }}>Nearest</th>
                   <th style={{ ...th, color: HOME_THEME.gold, opacity: 0.85 }}>×ATR</th>
                   <th style={{ ...th, color: HOME_THEME.gold, opacity: 0.85 }}>Reach</th>
@@ -2143,7 +2158,10 @@ function WallTimeline({ log, events }: { log: WallLogRow[]; events: WallEventRow
       ].filter(Boolean).join(" · "),
     });
   }
-  entries.sort((a, b) => a.slot - b.slot || (a.kind === "hit" ? 1 : -1));
+  // Newest first — the latest slot reads at the top. Within one slot the hit is
+  // the later event, so it leads the change that produced it.
+  const kindRank = (k: Entry["kind"]) => (k === "hit" ? 0 : 1);
+  entries.sort((a, b) => b.slot - a.slot || kindRank(a.kind) - kindRank(b.kind));
 
   const evByKey = new Map(events.map((e) => [`${e.hit_slot}|${e.level_type}`, e]));
 
