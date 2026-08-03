@@ -6134,6 +6134,22 @@ if (libDb) {
           send(res, 200, { ok: true, updated }); return;
         }
 
+        // One write for a whole editing session's worth of category changes.
+        if (action === 'setCategoriesBulk') {
+          const changes = Array.isArray(body?.changes) ? body.changes : [];
+          const ids = [];
+          const cats = [];
+          for (const c of changes) {
+            const id = Number(c?.id);
+            if (!Number.isFinite(id) || id <= 0) continue;
+            const cat = c?.categoryId == null || c.categoryId === '' ? null : Number(c.categoryId);
+            ids.push(id);
+            cats.push(Number.isFinite(cat) ? cat : null);
+          }
+          const updated = await D.setStatementCategoriesBulk(profile.id, ids, cats);
+          send(res, 200, { ok: true, updated, submitted: ids.length }); return;
+        }
+
         if (action === 'deleteTx') {
             await D.deleteStatementTx(profile.id, Number(body?.id ?? 0));
             send(res, 200, { ok: true }); return;

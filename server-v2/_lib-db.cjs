@@ -182,6 +182,7 @@ __export(db_exports, {
   listSubscriptions: () => listSubscriptions,
   getBudgetAdvice: () => getBudgetAdvice,
   upsertBudgetAdvice: () => upsertBudgetAdvice,
+  setStatementCategoriesBulk: () => setStatementCategoriesBulk,
   setStatementCategoryByMerchant: () => setStatementCategoryByMerchant,
   setStatementTxCategory: () => setStatementTxCategory,
   updateStatementTx: () => updateStatementTx,
@@ -4604,6 +4605,22 @@ async function setStatementTxCategory(profileId, id, categoryId) {
     [id, profileId, categoryId]
   );
 }
+// Apply a whole batch of category edits in ONE statement. The client holds
+// edits locally until Save, so this is the only write that path makes — a
+// partial failure can't leave half the screen re-filed and half not.
+// NULLs are allowed in the cat array: that clears a row's category.
+async function setStatementCategoriesBulk(profileId, ids, cats) {
+  if (!ids.length) return 0;
+  const pool = await getDb();
+  const r = await pool.query(
+    `UPDATE budget_statement_tx AS t
+        SET category_id = v.cat, updated_at = CURRENT_TIMESTAMP
+       FROM (SELECT * FROM unnest($2::int[], $3::int[]) AS x(id, cat)) AS v
+      WHERE t.id = v.id AND t.profile_id = $1`,
+    [profileId, ids, cats]
+  );
+  return r.rowCount ?? 0;
+}
 async function deleteStatementTx(profileId, id) {
   const pool = await getDb();
   await pool.query("DELETE FROM budget_statement_tx WHERE id = $1 AND profile_id = $2", [id, profileId]);
@@ -5124,6 +5141,7 @@ async function getLatestMultGreekStaticSnapshot() {
   listSubscriptions,
   getBudgetAdvice,
   upsertBudgetAdvice,
+  setStatementCategoriesBulk,
   setStatementCategoryByMerchant,
   setStatementTxCategory,
   updateStatementTx,

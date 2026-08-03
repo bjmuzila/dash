@@ -254,6 +254,16 @@ export default function RealMonth({
   onOpenCategories?: () => void;
 }) {
   const [tx, setTx] = useState<StoredTx[]>([]);
+  /**
+   * Category edits are held here until Save, keyed by transaction id. Nothing
+   * is written per keystroke — the earlier build fired one request per change,
+   * so a failure mid-way left the screen and the database disagreeing, which
+   * looked exactly like "it reverted on refresh".
+   *
+   * Deliberately NOT cleared when the month changes: ids are unique across
+   * months, so you can re-file July, flip to August, and still save both.
+   */
+  const [pending, setPending] = useState<Map<number, number | null>>(new Map());
   const [subs, setSubs] = useState<Subscription[]>([]);
   const [months, setMonths] = useState<MonthStat[]>([]);
   const [staged, setStaged] = useState<StagedRow[]>([]);
@@ -279,6 +289,13 @@ export default function RealMonth({
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const catById = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories]);
+
+  /** Stored rows with the unsaved edits laid over them — every rollup, the
+      donut and the ledger read this, so the page previews what Save will do. */
+  const txView = useMemo<StoredTx[]>(
+    () => (pending.size ? tx.map((r) => (pending.has(r.id) ? { ...r, category_id: pending.get(r.id) ?? null } : r)) : tx),
+    [tx, pending]
+  );
 
   // ── load ─────────────────────────────────────────────────────────────────
   const load = useCallback(async (m: string) => {
@@ -309,6 +326,14 @@ export default function RealMonth({
     setShowAllIn(new Set());
     setQ("");
   }, [month, load]);
+
+  // The browser's own guard — this is the exact thing that lost work before.
+  useEffect(() => {
+    if (!pending.size) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [pending.size]);
 
   // ── parse a dropped file into the staging table ──────────────────────────
   const handleFiles = async (files: FileList | File[] | null) => {
@@ -406,19 +431,50 @@ export default function RealMonth({
     return res.json().catch(() => null);
   };
 
-  const setTxCategory = async (id: number, categoryId: number | null) => {
-    setTx((prev) => prev.map((r) => (r.id === id ? { ...r, category_id: categoryId } : r)));
-    await post({ action: "setTxCategory", id, categoryId });
+  /** Stage one row's category. Nothing hits the database until Save. */
+  const setTxCategory = (id: number, categoryId: number | null) => {
+    setPending((prev) => {
+      const n = new Map(prev);
+      const original = tx.find((r) => r.id === id)?.category_id ?? null;
+      // Setting a row back to what it already is isn't an edit — drop it, so
+      // the unsaved count only ever reflects real changes.
+      if (original === categoryId) n.delete(id);
+      else n.set(id, categoryId);
+      return n;
+    });
   };
 
-  /** Re-file every row from one merchant in a single call. */
-  const setMerchantCategory = async (merchant: string, categoryId: number | null) => {
+  /** Stage every row from one merchant at once. */
+  const setMerchantCategory = (merchant: string, categoryId: number | null) => {
     const key = mKey(merchant);
-    setTx((prev) => prev.map((r) => (mKey(r.merchant || r.description) === key ? { ...r, category_id: categoryId } : r)));
-    const out = await post({ action: "setMerchantCategory", month, merchant, categoryId });
-    if (out?.ok) {
-      const name = categoryId == null ? "no category" : catById.get(categoryId)?.name ?? "that category";
-      setNotice(`${out.updated} ${merchant} row${out.updated === 1 ? "" : "s"} → ${name}.`);
+    setPending((prev) => {
+      const n = new Map(prev);
+      for (const r of tx) {
+        if (mKey(r.merchant || r.description) !== key) continue;
+        if ((r.category_id ?? null) === categoryId) n.delete(r.id);
+        else n.set(r.id, categoryId);
+      }
+      return n;
+    });
+  };
+
+  /** Write the whole batch in one request. */
+  const saveCategories = async () => {
+    if (!pending.size) return;
+    setSaving(true);
+    setError(null);
+    setNotice(null);
+    const changes = [...pending.entries()].map(([id, categoryId]) => ({ id, categoryId }));
+    try {
+      const out = await post({ action: "setCategoriesBulk", changes });
+      if (!out?.ok) { setError("Categories did not save — nothing was changed."); return; }
+      setPending(new Map());
+      setNotice(`Saved ${out.updated} categor${out.updated === 1 ? "y" : "ies"}.`);
+      await load(month);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Categories did not save.");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -437,7 +493,7 @@ export default function RealMonth({
   // ── merchant rollup ──────────────────────────────────────────────────────
   const allMerchants = useMemo<MerchantRow[]>(() => {
     const map = new Map<string, MerchantRow>();
-    for (const r of tx) {
+    for (const r of txView) {
       if (r.direction !== "out") continue;
       const k = mKey(r.merchant || r.description);
       const hit = map.get(k);
@@ -461,7 +517,7 @@ export default function RealMonth({
       m.categoryName = m.categoryId != null ? catById.get(m.categoryId)?.name ?? UNCATEGORIZED : UNCATEGORIZED;
     }
     return [...map.values()].sort((a, b) => b.total - a.total);
-  }, [tx, catById]);
+  }, [txView, catById]);
 
   /** Search + "needs a category" narrow the list before it is grouped. */
   const visibleMerchants = useMemo(() => {
@@ -497,7 +553,7 @@ export default function RealMonth({
   // ── category rollup vs the budgets on the Categories tab ─────────────────
   const byCategory = useMemo(() => {
     const map = new Map<string, { name: string; spent: number; count: number; budget: number; color: string | null }>();
-    for (const r of tx) {
+    for (const r of txView) {
       if (r.direction !== "out") continue;
       const cat = r.category_id != null ? catById.get(r.category_id) : undefined;
       const name = cat?.name || UNCATEGORIZED;
@@ -507,7 +563,7 @@ export default function RealMonth({
       else map.set(k, { name, spent: r.amount, count: 1, budget: cat?.amount ?? 0, color: cat?.color ?? null });
     }
     return [...map.values()].sort((a, b) => b.spent - a.spent);
-  }, [tx, catById]);
+  }, [txView, catById]);
 
   // ── subscriptions ────────────────────────────────────────────────────────
   const subRows = useMemo(() => {
@@ -556,7 +612,7 @@ export default function RealMonth({
   // ── flat ledger ──────────────────────────────────────────────────────────
   const ledgerRows = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    let base = onlyUncat ? tx.filter((r) => r.category_id == null) : tx;
+    let base = onlyUncat ? txView.filter((r) => r.category_id == null) : txView;
     if (needle) base = base.filter((r) => `${r.merchant} ${r.description}`.toLowerCase().includes(needle));
     const dir = sortDir === "asc" ? 1 : -1;
     const catName = (r: StoredTx) => (r.category_id == null ? "￿" : catById.get(r.category_id)?.name ?? "￿");
@@ -569,7 +625,7 @@ export default function RealMonth({
       if (cmp === 0 && sortKey !== "date") cmp = a.tx_date.localeCompare(b.tx_date);
       return cmp * dir;
     });
-  }, [tx, sortKey, sortDir, onlyUncat, catById, q]);
+  }, [txView, sortKey, sortDir, onlyUncat, catById, q]);
 
   const toggleSort = (k: SortKey) => {
     if (k === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -583,13 +639,13 @@ export default function RealMonth({
 
   // ── totals ───────────────────────────────────────────────────────────────
   const totals = useMemo(() => {
-    const outflow = tx.filter((r) => r.direction === "out").reduce((s, r) => s + r.amount, 0);
-    const inflow = tx.filter((r) => r.direction === "in").reduce((s, r) => s + r.amount, 0);
-    const uncategorized = tx.filter((r) => r.direction === "out" && r.category_id == null).length;
+    const outflow = txView.filter((r) => r.direction === "out").reduce((s, r) => s + r.amount, 0);
+    const inflow = txView.filter((r) => r.direction === "in").reduce((s, r) => s + r.amount, 0);
+    const uncategorized = txView.filter((r) => r.direction === "out" && r.category_id == null).length;
     const subTotal = subRows.reduce((s, m) => s + m.monthly, 0);
     const cancelSavings = subRows.filter((s) => s.status === "cancel").reduce((s, m) => s + m.monthly, 0);
     return { outflow, inflow, net: inflow - outflow, uncategorized, subTotal, cancelSavings };
-  }, [tx, subRows]);
+  }, [txView, subRows]);
 
   const potentialSavings = useMemo(
     () => (advice?.findings ?? []).reduce((s, f) => s + (f.monthlySavings || 0), 0),
@@ -810,6 +866,32 @@ export default function RealMonth({
         </div>
       )}
 
+      {/* ── Unsaved category edits ───────────────────────────────────────── */}
+      {pending.size > 0 && (
+        <div
+          style={{
+            position: "sticky", top: 8, zIndex: 40,
+            display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+            padding: "11px 16px", borderRadius: 14,
+            border: `1px solid ${rgba(WARN, 0.55)}`,
+            background: `linear-gradient(180deg, ${rgba(WARN, 0.16)}, ${rgba("#000000", 0.55)})`,
+            backdropFilter: "blur(16px)",
+            boxShadow: `0 10px 30px ${rgba("#000000", 0.45)}`,
+          }}
+        >
+          <span style={{ fontSize: TYPE.label, fontWeight: 900, letterSpacing: "0.14em", color: WARN }}>UNSAVED</span>
+          <span style={{ fontSize: TYPE.body, fontWeight: 700 }}>
+            {pending.size} transaction{pending.size === 1 ? "" : "s"} re-filed
+          </span>
+          <span style={{ fontSize: TYPE.label, ...MUTED }}>The totals above already show it — nothing is stored until you save.</span>
+          <div style={{ flex: 1 }} />
+          <button onClick={() => setPending(new Map())} disabled={saving} style={ghost()}>Discard</button>
+          <button onClick={() => void saveCategories()} disabled={saving} style={{ ...primary(), opacity: saving ? 0.5 : 1 }}>
+            {saving ? "Saving…" : `Save ${pending.size} change${pending.size === 1 ? "" : "s"}`}
+          </button>
+        </div>
+      )}
+
       {/* ── View switch ──────────────────────────────────────────────────── */}
       {hasData && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -915,7 +997,7 @@ export default function RealMonth({
                                 {/* One dropdown re-files every transaction from this vendor. */}
                                 <ThemedSelect
                                   value={m.categoryId == null || m.mixedCategory ? "" : String(m.categoryId)}
-                                  onChange={(v) => void setMerchantCategory(m.merchant, v ? Number(v) : null)}
+                                  onChange={(v) => setMerchantCategory(m.merchant, v ? Number(v) : null)}
                                   options={catOptions}
                                   placeholder={m.mixedCategory ? "mixed — set all" : "— none —"}
                                 />
@@ -936,7 +1018,7 @@ export default function RealMonth({
                                 <td style={td("left")}>
                                   <ThemedSelect
                                     value={r.category_id == null ? "" : String(r.category_id)}
-                                    onChange={(v) => void setTxCategory(r.id, v ? Number(v) : null)}
+                                    onChange={(v) => setTxCategory(r.id, v ? Number(v) : null)}
                                     options={catOptions}
                                   />
                                 </td>
@@ -983,7 +1065,7 @@ export default function RealMonth({
             currency={currency}
             periodLabel={monthLabel(month)}
             categoryCount={donut.categoryCount}
-            chargeCount={tx.filter((r) => r.direction === "out").length}
+            chargeCount={txView.filter((r) => r.direction === "out").length}
           />
         </Card>
       )}
@@ -1030,7 +1112,7 @@ export default function RealMonth({
                   <td style={td("left")}>
                     <ThemedSelect
                       value={r.category_id == null ? "" : String(r.category_id)}
-                      onChange={(v) => void setTxCategory(r.id, v ? Number(v) : null)}
+                      onChange={(v) => setTxCategory(r.id, v ? Number(v) : null)}
                       options={catOptions}
                     />
                   </td>
