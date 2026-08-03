@@ -1491,7 +1491,9 @@ function etDate(ts: number) {
 // and consolidated / new wall / pin). Read API: GET /proxy/walls[?date=&symbol=].
 
 type WallLevel = "call_wall" | "put_wall" | "cb";
-type WallReaction = "reject" | "break_lt5" | "break_5" | "consolidated" | "new_wall" | "pin";
+type WallReaction = "reject" | "break_lt5" | "break_5" | "consolidated" | "new_wall" | "pin"
+  // Approach outcomes — kind='approach' events, price never tagged the level.
+  | "rolled_over" | "reached" | "stalled";
 
 type WallTicker = {
   symbol: string;
@@ -1499,8 +1501,12 @@ type WallTicker = {
   call_wall: number | null; put_wall: number | null; cb: number | null;
   open: Partial<Record<WallLevel, number>>;
   changes: number; hits: number;
+  approaches: number; rolled_over: number;
+  attempts: Partial<Record<WallLevel, number>>;
+  by_level: Partial<Record<WallLevel, { reaction: WallReaction | null; reclaim_min: number | null; strike: number }>>;
   last_event: string | null;
   reaction: WallReaction | null;
+  reclaim_min: number | null;
   // ── Reach Rank (server-v2/walls-reach.js, attached by /proxy/walls) ───────
   atr?: number | null;
   atr_n?: number;
@@ -1594,12 +1600,17 @@ type WallLogRow = {
   slot: number; at: string; ts: string; level_type: WallLevel;
   strike: number; prev_strike: number | null; delta: number | null;
   spot: number; reason: "open" | "change";
+  level_gex: number | null;
 };
 type WallEventRow = {
   hit_slot: number; at: string; hit_ts: string; level_type: WallLevel;
   strike: number; spot_at_hit: number; reaction: WallReaction | null;
   excursion_pts: number | null; reclaim_min: number | null;
   note: string | null; resolved_ts: string | null;
+  kind: "touch" | "approach";
+  was_core: boolean | null; core_held: boolean | null;
+  gex_at_hit: number | null; gex_at_resolve: number | null;
+  attempts: number;
 };
 
 const WALL_SLOTS = 27;
@@ -1619,10 +1630,14 @@ function prettyLastEvent(s: string | null): string {
 const REACTION_LABEL: Record<WallReaction, string> = {
   reject: "Reject", break_lt5: "Break <5", break_5: "Break +5",
   consolidated: "Broke & consolidated", new_wall: "New wall", pin: "Pinned",
+  rolled_over: "Rolled over", reached: "Approached, then tagged", stalled: "Stalled near",
 };
 const REACTION_COLOR: Record<WallReaction, string> = {
   reject: GREEN, break_lt5: AMBER, break_5: AMBER,
   consolidated: HOME_THEME.gold, new_wall: C.cyan, pin: HOME_THEME.lightBlue,
+  // A roll-over is the level holding without being tagged — same read as a
+  // reject, so same colour.
+  rolled_over: GREEN, reached: MUTED, stalled: MUTED,
 };
 
 /** How each reaction is decided — mirrors classify() in walls-recorder.js. */
@@ -1633,12 +1648,50 @@ const REACTION_RULE: Record<WallReaction, string> = {
   consolidated: "Broke, then the last 3 samples all held outside inside a 0.10% range",
   new_wall: "Broke, and the level itself then rolled in the break direction",
   pin: "Sat inside the touch band for 3+ samples without resolving either way",
+  rolled_over: "Came inside 0.30% without ever tagging, then reversed away — the level held at distance",
+  reached: "Approached, then tagged the level after all",
+  stalled: "Drifted near the level and neither tagged nor left",
 };
 
-function wallBadge(rx: WallReaction | null, short = false): React.ReactNode {
+/**
+ * classify() files "broke by 8 then failed" as break_5 with reclaim_min set,
+ * NOT as reject — deliberately, so the size label stays about distance. But on
+ * the page that made a break that came straight back look identical to one that
+ * held, which are opposite reads. Given reclaim_min, say so.
+ */
+function isBreakThenReject(ev?: { reaction: WallReaction | null; reclaim_min: number | null } | null): boolean {
+  return !!ev && (ev.reaction === "break_5" || ev.reaction === "break_lt5") && ev.reclaim_min != null;
+}
+
+function wallBadge(rx: WallReaction | null, short = false, reclaimMin: number | null = null): React.ReactNode {
   if (!rx) return <span style={{ ...wallBadgeStyle(MUTED), opacity: 0.55 }}>Untested</span>;
+  if (isBreakThenReject({ reaction: rx, reclaim_min: reclaimMin })) {
+    return (
+      <span style={wallBadgeStyle(GREEN)} title={`Broke, then reclaimed after ${reclaimMin}m — failed break`}>
+        {short ? "Brk→Rej" : `Break & reject (${reclaimMin}m)`}
+      </span>
+    );
+  }
   const label = short && rx === "consolidated" ? "Consol." : REACTION_LABEL[rx];
   return <span style={wallBadgeStyle(REACTION_COLOR[rx])}>{label}</span>;
+}
+
+/** Compact signed GEX, e.g. "+1.2B" / "−340M". */
+function gexShort(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(Number(v))) return "—";
+  const n = Number(v); const a = Math.abs(n); const sign = n < 0 ? "\u2212" : "+";
+  if (a >= 1e9) return `${sign}${(a / 1e9).toFixed(2)}B`;
+  if (a >= 1e6) return `${sign}${(a / 1e6).toFixed(0)}M`;
+  if (a >= 1e3) return `${sign}${(a / 1e3).toFixed(0)}K`;
+  return `${sign}${a.toFixed(0)}`;
+}
+
+/** gex_at_hit -> gex_at_resolve as a percentage build (or bleed). */
+function gexBuildPct(from: number | null, to: number | null): number | null {
+  if (from == null || to == null) return null;
+  const a = Math.abs(Number(from));
+  if (!(a > 0)) return null;
+  return ((Math.abs(Number(to)) - a) / a) * 100;
 }
 function wallBadgeStyle(color: string): React.CSSProperties {
   return {
@@ -1773,7 +1826,7 @@ function RankedLevels({ rank, sel, onPick }: { rank: WallRank | null; sel: strin
   // was nothing below to scroll to and 48 ranked levels were silently dropped.
   const rows = rank?.ranked ?? [];
   return (
-    <div style={{ ...CARD, overflow: "hidden" }}>
+    <div style={{ ...CARD, overflow: "hidden", flexShrink: 0 }}>
       <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center" }}>
         <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.75 }}>
           Ranked levels — in play
@@ -2086,7 +2139,7 @@ function WallsView() {
                       </td>
                       <td style={{ ...td, opacity: t.changes ? 1 : 0.35 }}>{t.changes}</td>
                       <td style={{ ...td, opacity: 0.65 }}>{prettyLastEvent(t.last_event)}</td>
-                      <td style={{ ...td, fontFamily: "inherit" }}>{wallBadge(t.reaction, true)}</td>
+                      <td style={{ ...td, fontFamily: "inherit" }}>{wallBadge(t.reaction, true, t.reclaim_min)}</td>
                     </tr>
                   );
                 })}
@@ -2110,7 +2163,12 @@ function WallsView() {
         <div className="wall-scroll" style={{ display: "flex", flexDirection: "column", gap: 16, maxHeight: 760, overflow: "auto" }}>
           <RankedLevels rank={rank} sel={sel} onPick={setSel} />
 
-          <div style={{ ...CARD, overflow: "hidden" }}>
+          {/* flexShrink:0 is load-bearing. As a flex item in a column container
+              this defaults to shrink:1, so a tall log got COMPRESSED to fit the
+              760px box instead of overflowing it — and overflow:hidden then
+              clipped the entries rather than letting the parent scroll to them.
+              A busy ticker runs 27 slots x 3 levels, so it clipped most days. */}
+          <div style={{ ...CARD, overflow: "hidden", flexShrink: 0 }}>
             <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center" }}>
               <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.75 }}>
                 {sel ?? "—"} — level log
@@ -2120,7 +2178,10 @@ function WallsView() {
               </span>
             </div>
             <WallCaptureRail log={detail?.log ?? []} events={detail?.events ?? []} />
-            <WallTimeline log={detail?.log ?? []} events={detail?.events ?? []} />
+            {/* Header + capture rail stay pinned; only the entries scroll. */}
+            <div className="wall-scroll" style={{ maxHeight: 430, overflowY: "auto" }}>
+              <WallTimeline log={detail?.log ?? []} events={detail?.events ?? []} />
+            </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "14px 18px", borderTop: `1px solid ${C.border}` }}>
               {(Object.keys(REACTION_LABEL) as WallReaction[]).map((rx) => (
                 <span key={rx} title={REACTION_RULE[rx]}>{wallBadge(rx)}</span>
@@ -2164,15 +2225,25 @@ function WallTimeline({ log, events }: { log: WallLogRow[]; events: WallEventRow
       body: r.reason === "open"
         ? <>Open baseline — <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(r.strike)}</b>. Spot <b style={{ fontFamily: "var(--font-mono)" }}>{wallNum(r.spot)}</b>.</>
         : <>Rolled {Number(r.delta) > 0 ? "up" : "down"} <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(r.prev_strike)} → {wallStrike(r.strike)}</b>.</>,
+      meta: r.level_gex != null ? `GEX at level ${gexShort(r.level_gex)}` : undefined,
     });
   }
   for (const e of events) {
+    const approach = e.kind === "approach";
+    const build = gexBuildPct(e.gex_at_hit, e.gex_at_resolve);
     entries.push({
       slot: e.hit_slot, at: e.at, kind: "hit", lt: e.level_type,
-      body: <>Tagged <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(e.strike)}</b> at <b style={{ fontFamily: "var(--font-mono)" }}>{wallNum(e.spot_at_hit)}</b>{e.note ? ` — ${e.note}.` : "."}</>,
+      body: approach
+        ? <>Came within reach of <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(e.strike)}</b> from <b style={{ fontFamily: "var(--font-mono)" }}>{wallNum(e.spot_at_hit)}</b> without tagging{e.note ? ` — ${e.note}.` : "."}</>
+        : <>Tagged <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(e.strike)}</b> at <b style={{ fontFamily: "var(--font-mono)" }}>{wallNum(e.spot_at_hit)}</b>{e.note ? ` — ${e.note}.` : "."}</>,
       meta: [
-        e.excursion_pts != null ? `excursion ${Number(e.excursion_pts) > 0 ? "+" : ""}${wallNum(e.excursion_pts)}` : null,
+        !approach && e.excursion_pts != null ? `excursion ${Number(e.excursion_pts) > 0 ? "+" : ""}${wallNum(e.excursion_pts)}` : null,
         e.reclaim_min != null ? `reclaimed in ${e.reclaim_min}m` : null,
+        // Attempt count is per (level, strike) for the day — touches only.
+        !approach && e.attempts > 1 ? `attempt ${e.attempts} on this strike` : null,
+        e.was_core ? (e.core_held === false ? "was the CORE — CORE moved after" : "was the CORE") : null,
+        e.gex_at_hit != null ? `GEX at level ${gexShort(e.gex_at_hit)}` : null,
+        build != null ? `${build >= 0 ? "built" : "bled"} ${Math.abs(build).toFixed(0)}% by resolve` : null,
         e.reaction == null ? "watching — resolves 4 slots after the tag" : null,
       ].filter(Boolean).join(" · "),
     });
@@ -2213,7 +2284,7 @@ function WallTimeline({ log, events }: { log: WallLogRow[]; events: WallEventRow
                 </span>
                 {e.kind === "open" ? <span style={{ ...wallBadgeStyle(MUTED), opacity: 0.55 }}>Open baseline</span> : null}
                 {e.kind === "change" ? <span style={wallBadgeStyle(C.cyan)}>Changed</span> : null}
-                {e.kind === "hit" ? wallBadge(ev?.reaction ?? null) : null}
+                {e.kind === "hit" ? wallBadge(ev?.reaction ?? null, false, ev?.reclaim_min ?? null) : null}
               </div>
               <div style={{ fontSize: 14, marginTop: 4, lineHeight: 1.45 }}>{e.body}</div>
               {e.meta ? <div style={{ fontFamily: "var(--font-mono)", fontSize: 14, opacity: 0.55, marginTop: 6 }}>{e.meta}</div> : null}

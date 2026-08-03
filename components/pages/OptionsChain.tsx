@@ -384,7 +384,13 @@ const DISPLAY_PERCENTS = [5, 10, 15, 20, 25, 30, 50, 100] as const;
 // (heat scale, column totals, ⅀ Total). Its cells render differently though:
 // call OI and put OI on two lines, each with its day-over-day change, sourced
 // from /proxy/oi-change (see server-v2/oi-daily-recorder.js).
-const GREEK_MODES = ["gex", "dex", "chex", "vex", "oi"] as const;
+//
+// "vol" sits next to it and reads the same way — same ladder, same one count
+// per side — but is a different quantity from a different source: today's LIVE
+// traded contract count, straight off the chain, with no recorder and no
+// day-over-day diff. OI is the settled book's overnight move; VOL is what has
+// actually traded so far today.
+const GREEK_MODES = ["gex", "dex", "chex", "vex", "oi", "vol"] as const;
 type GreekMode = typeof GREEK_MODES[number];
 
 const DATA_MODES = ["oi-vol", "vol-only", "flow"] as const;
@@ -1013,7 +1019,9 @@ function Row({ k, v, strong }: { k: string; v: string; strong?: boolean }) {
 }
 
 /**
- * Which side of the book the OI tab shows at a given strike.
+ * Which side of the book the contract-count tabs (OI, VOL) show at a given
+ * strike. Shared deliberately: both tabs ladder identically, so switching
+ * between them compares the same cells instead of re-reading the grid.
  *
  * Above the ATM strike only calls are OTM; below it only puts are. Showing both
  * everywhere meant half of every cell was the deep-ITM mirror of a strike on the
@@ -1047,6 +1055,56 @@ function oiSideChange(
   const { call, put } = oiSides(strike, atm);
   if (call && put) return snap.callChg - snap.putChg;
   return call ? snap.callChg : -snap.putChg;
+}
+
+/**
+ * The signed traded VOLUME for heat/totals under the same calls-above/
+ * puts-below rule the OI tab uses: call volume above ATM (positive → blue), put
+ * volume below ATM (negative → red), and call − put at the ATM pivot.
+ *
+ * Volume itself is never negative — the sign here is purely the side, so the
+ * heat scale can say "calls" and "puts" in the same blue/red language every
+ * other tab speaks. The CELL prints the unsigned count (see VolLine); this is
+ * only what colors it and what the totals add up.
+ */
+function volSideValue(
+  cell: { callVol: number; putVol: number },
+  strike: number,
+  atm: number,
+): number {
+  const { call, put } = oiSides(strike, atm);
+  if (call && put) return cell.callVol - cell.putVol;
+  return call ? cell.callVol : -cell.putVol;
+}
+
+// One line of a VOL cell: today's traded contract count for one side, unsigned.
+// Volume is a LEVEL, not a change, so the leading +/− that ΔOI carries would be
+// noise here — every figure would wear a "+". Side is already carried by
+// position (calls above ATM, puts below), by the C/P letter on the pivot row,
+// and by the blue/red tint underneath.
+//
+// Same near-white-on-heat treatment as OiChgLine, for the same reason: the
+// number rides on a saturated tile and has to stay readable on both colors.
+// A strike that hasn't traded today prints "·" rather than "0" — flat and
+// untraded look identical at 10px, and the dot is the quieter of the two.
+function VolLine({ label, vol }: { label: string | null; vol: number | null }) {
+  const has = vol != null && vol !== 0;
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "flex-end", gap: 6, whiteSpace: "nowrap" }}>
+      {label && (
+        <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 9, fontWeight: 700, marginRight: "auto" }}>
+          {label}
+        </span>
+      )}
+      <span style={{
+        color: has ? "rgba(255,255,255,0.96)" : "#3a4a5e",
+        fontWeight: 700,
+        textShadow: has ? "0 1px 2px rgba(0,0,0,0.85)" : undefined,
+      }}>
+        {has ? fmtCount(Math.abs(vol!)) : "·"}
+      </span>
+    </div>
+  );
 }
 
 // One line of an OI cell: the day-over-day change in open interest, and nothing
@@ -1160,10 +1218,18 @@ const ChainMatrix = memo(function ChainMatrix({
   // CHANGE in that count, so it takes the signed compact formatter (+1.2K /
   // -430 / "·" for flat) rather than the dollar one.
   const isOiMode = greekMode === "oi";
-  const fmtVal = isOiMode ? fmtChg : fmtMoney;
+  // VOL is the other contract-count tab: same two-line ladder, same widths, but
+  // a live level rather than a recorded change — so it takes the UNSIGNED
+  // compact formatter (12.4K), not ΔOI's signed one.
+  const isVolMode = greekMode === "vol";
+  // Everything that is about "this tab counts contracts, not dollars" — cell
+  // padding, column widths, the white-on-heat totals, and the Δ-column lockout
+  // — is true of both tabs, so it keys off this rather than isOiMode alone.
+  const isCountMode = isOiMode || isVolMode;
+  const fmtVal = isOiMode ? fmtChg : isVolMode ? fmtCount : fmtMoney;
   // Δ15 stickers ride the GEX view only — OI mode's cells are already a change,
   // and a second, differently-sourced change beside them reads as a conflict.
-  const hasDelta15 = !isOiMode && greekMode === "gex" && !!delta15Exp && delta15.size > 0;
+  const hasDelta15 = !isCountMode && greekMode === "gex" && !!delta15Exp && delta15.size > 0;
   // Drop holiday/non-trading expirations (e.g. observed Jul 3) entirely.
   const renderIdx = Array.from({ length: gridCols })
     .map((_, i) => i)
@@ -1190,9 +1256,10 @@ const ChainMatrix = memo(function ChainMatrix({
     renderIdx.forEach((colIdx) => {
       const col = columns[colIdx];
       if (!col || col.expiration === todayKey) return;
-      // !isOiMode mirrors the per-cell guard below — the Δ columns carry
-      // volume-GEX dollars, which must never be summed into an OI total.
-      const isCh = !isOiMode && !isStandalone && changeMode !== "live" && changeMeta.hasData && changeMeta.expiries.has(col.expiration);
+      // !isCountMode mirrors the per-cell guard below — the Δ columns carry
+      // volume-GEX dollars, which must never be summed into a contract-count
+      // total (OI or VOL).
+      const isCh = !isCountMode && !isStandalone && changeMode !== "live" && changeMeta.hasData && changeMeta.expiries.has(col.expiration);
       const v = isCh ? (changeMap.get(`${col.expiration}|${strike}`) ?? null) : valueAt(col, strike);
       if (v != null) sum += v;
     });
@@ -1221,8 +1288,8 @@ const ChainMatrix = memo(function ChainMatrix({
   const ghostTotalCols = layoutExpCols > 0 && !showTotalCol ? 1 : 0;
   const ghostCols = ghostExpCols + ghostTotalCols;
   const ghostTemplate =
-    (ghostExpCols > 0 ? ` repeat(${ghostExpCols}, minmax(${isOiMode ? 84 : 78}px, 1fr))` : "") +
-    (ghostTotalCols > 0 ? ` minmax(${isOiMode ? 92 : 88}px, 1.15fr)` : "");
+    (ghostExpCols > 0 ? ` repeat(${ghostExpCols}, minmax(${isCountMode ? 84 : 78}px, 1fr))` : "") +
+    (ghostTotalCols > 0 ? ` minmax(${isCountMode ? 92 : 88}px, 1.15fr)` : "");
   /** Empty filler cells for the reserved tracks. `header` keeps them opaque so
    *  rows scroll UNDER the header band rather than through the gap beside it. */
   const ghostCells = (keyPrefix: string, header = false) =>
@@ -1249,8 +1316,8 @@ const ChainMatrix = memo(function ChainMatrix({
       gridTemplateColumns: `${STRIKE_COL}px ${renderIdx
         .map((i) => (hasDelta15 && columns[i]?.expiration === delta15Exp
           ? "minmax(152px, 1.9fr)"
-          : `minmax(${isOiMode ? 84 : 78}px, 1fr)`))
-        .join(" ")}${showTotalCol ? ` minmax(${isOiMode ? 92 : 88}px, 1.15fr)` : ""}${ghostTemplate}`,
+          : `minmax(${isCountMode ? 84 : 78}px, 1fr)`))
+        .join(" ")}${showTotalCol ? ` minmax(${isCountMode ? 92 : 88}px, 1.15fr)` : ""}${ghostTemplate}`,
       borderRadius: 12,
       overflow: "clip",
       border: `1px solid ${HT.border}`,
@@ -1267,7 +1334,7 @@ const ChainMatrix = memo(function ChainMatrix({
       </div>
       {renderIdx.map((i) => {
         const col = columns[i];
-        const isChangeCol = !isOiMode && !isStandalone && changeMode !== "live" && changeMeta.hasData && col != null &&
+        const isChangeCol = !isCountMode && !isStandalone && changeMode !== "live" && changeMeta.hasData && col != null &&
           changeMeta.expiries.has(col.expiration);
         const colTotal = col
           ? (isChangeCol
@@ -1373,11 +1440,13 @@ const ChainMatrix = memo(function ChainMatrix({
             {renderIdx.map((colIdx, posInRow) => {
               const col = columns[colIdx];
               const scale = colScales[colIdx] ?? { max: 1, top3: [] as number[] };
-              // The 15/30/60m Δ columns carry volume-GEX deltas. In OI mode
-              // they would be a second, unrelated "change" fighting the cell's
-              // own day-over-day ΔOI — so OI mode always reads live columns.
+              // The 15/30/60m Δ columns carry volume-GEX deltas — dollars. On
+              // the two contract-count tabs that is a different quantity in a
+              // different unit sitting inside the same grid: on OI it fights the
+              // cell's own day-over-day ΔOI, and on VOL it simply isn't what the
+              // tab shows. Both count tabs always read live columns.
               const isChangeCol =
-                !isOiMode && !isStandalone && changeMode !== "live" && changeMeta.hasData && col != null &&
+                !isCountMode && !isStandalone && changeMode !== "live" && changeMeta.hasData && col != null &&
                 changeMeta.expiries.has(col.expiration);
               const chKey = isChangeCol ? `${col!.expiration}|${strike}` : "";
               const value = isChangeCol
@@ -1417,8 +1486,17 @@ const ChainMatrix = memo(function ChainMatrix({
               // OI level with no delta beside it is not what this tab shows.
               const oiKey = col ? `${col.expiration}|${strike}` : "";
               const oiSnap = isOiMode && oiKey ? oiChangeMap.get(oiKey) : undefined;
-              // Calls above ATM, puts below, both at the pivot.
-              const sides = isOiMode ? oiSides(strike, nearestStrike) : { call: false, put: false };
+              // Calls above ATM, puts below, both at the pivot. Shared by both
+              // count tabs so OI and VOL ladder identically — flipping between
+              // them compares the same cells rather than re-reading the grid.
+              const sides = isCountMode ? oiSides(strike, nearestStrike) : { call: false, put: false };
+              // VOL tab: no recorder, no snapshot — today's traded counts come
+              // straight off the live chain cell, so every strike the chain
+              // carries has a number (or an honest "·" for untraded).
+              const volCell = isVolMode && col ? col.cells.get(strike) : undefined;
+              const volHasAny = isVolMode && !!volCell && (
+                (sides.call && !!volCell.callVol) || (sides.put && !!volCell.putVol)
+              );
               // Only the side(s) actually rendered count toward "is there
               // anything here" — an ITM put below a call-only strike must not
               // keep an otherwise-flat call cell from reading as "·". A strike
@@ -1438,13 +1516,13 @@ const ChainMatrix = memo(function ChainMatrix({
                   onClick={isClickable ? (e) => onCellHover({ strike, colIdx, x: e.clientX, y: e.clientY }) : undefined}
                   title={isClickable ? "Click for volume / OI / net premium" : undefined}
                   style={{
-                    padding: isOiMode ? "3px 6px" : "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
+                    padding: isCountMode ? "3px 6px" : "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
                     color: value == null ? "#3a4a5e" : SOFT_WHITE,
                     background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
                     borderTop: rowEmBorder,
                     boxShadow: atmShadow,
                     whiteSpace: "nowrap", overflow: "hidden",
-                    display: "flex", alignItems: isOiMode ? "center" : "baseline", justifyContent: "flex-end", gap: 5,
+                    display: "flex", alignItems: isCountMode ? "center" : "baseline", justifyContent: "flex-end", gap: 5,
                     cursor: isClickable ? "pointer" : undefined,
                     ...(isMvc ? { outline: "2px solid #ffb300", outlineOffset: "-2px" } : {}),
                   }}
@@ -1481,6 +1559,19 @@ const ChainMatrix = memo(function ChainMatrix({
                         {sides.put && <OiChgLine label={oiBothSides ? "P" : null} chg={oiSnap?.putChg ?? null} />}
                       </div>
                     )
+                  ) : isVolMode ? (
+                    /* VOL tab: today's traded contract count, one line per side
+                       actually shown at this strike (two only on the ATM pivot).
+                       Structurally identical to the OI cell above so the two
+                       tabs are directly comparable — only the number differs. */
+                    !volHasAny ? (
+                      <span style={{ color: "#3a4a5e" }}>·</span>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", width: "100%", lineHeight: 1.3, fontSize: 10 }}>
+                        {sides.call && <VolLine label={oiBothSides ? "C" : null} vol={volCell?.callVol ?? null} />}
+                        {sides.put && <VolLine label={oiBothSides ? "P" : null} vol={volCell?.putVol ?? null} />}
+                      </div>
+                    )
                   ) : (
                     // With a sticker in the cell the value is pushed right by
                     // margin, not by a reserved slot — so unstamped rows in the
@@ -1510,10 +1601,10 @@ const ChainMatrix = memo(function ChainMatrix({
                   whiteSpace: "nowrap", overflow: "hidden",
                   display: "flex", alignItems: "baseline", justifyContent: "flex-end",
                 }}>
-                  {/* OI mode drops SignVal's colored +/−: this cell can be a
-                      full-strength red heat tile, and a red sign on it is the
+                  {/* The count tabs drop SignVal's colored +/−: this cell can be
+                      a full-strength red heat tile, and a red sign on it is the
                       unreadable case. White figure, direction from the tint. */}
-                  {isOiMode
+                  {isCountMode
                     ? <span style={{ color: tot === 0 ? "#3a4a5e" : "rgba(255,255,255,0.96)", textShadow: tot === 0 ? undefined : "0 1px 2px rgba(0,0,0,0.85)" }}>
                         {tot === 0 ? "·" : fmtVal(tot)}
                       </span>
@@ -2285,6 +2376,11 @@ export default function OptionsChainPage({
       }
       const cell = col.cells.get(strike);
       if (!cell) return null;
+      // VOL tab: signed by SIDE, not by direction — call volume above ATM,
+      // put volume below — so the heat scale, the column totals and the ⅀ Total
+      // column all read the same number the cell draws from. Unlike OI this
+      // needs no recorder: it is live off the chain cell.
+      if (greekMode === "vol") return volSideValue(cell, strike, nearestStrike);
       return cell[greekMode];
     },
     [greekMode, nearestStrike, oiSnapshot],
@@ -2719,6 +2815,8 @@ export default function OptionsChainPage({
         }
         const cell = col.cells.get(s);
         if (!cell) continue;
+        // VOL totals the same side-signed count the grid colors by.
+        if (greekMode === "vol") { sum += volSideValue(cell, s, nearestStrike); continue; }
         sum += cell[greekMode];
       }
     }
@@ -2873,7 +2971,7 @@ export default function OptionsChainPage({
             inert rather than hidden so the tabs don't vanish and reappear. */}
         <div
           style={{ opacity: replayOn ? 0.4 : 1, pointerEvents: replayOn ? "none" : undefined }}
-          title={replayOn ? "GEX only in replay — DEX/CHEX/VEX/OI are not recorded" : undefined}
+          title={replayOn ? "GEX only in replay — DEX/CHEX/VEX/OI/VOL are not recorded" : undefined}
         >
           <SegGroup
             options={GREEK_MODES.map(m => ({ label: m.toUpperCase(), value: m }))}
@@ -2913,7 +3011,7 @@ export default function OptionsChainPage({
               : (greekMode === "oi" ? "Total ΔOI" : `Total Net ${greekMode.toUpperCase()}`)}
           </span>
           <span style={{ fontFamily: "var(--font-mono)", fontWeight: 800, fontSize: 12, color: visibleTotal >= 0 ? HT.green : HT.red }}>
-            {greekMode === "oi" ? fmtChg(visibleTotal) : fmtMoney(visibleTotal)}
+            {greekMode === "oi" ? fmtChg(visibleTotal) : greekMode === "vol" ? fmtCount(visibleTotal) : fmtMoney(visibleTotal)}
           </span>
           <span style={{ color: HT.border }}>·</span>
           <span style={{ color: HT.muted, opacity: 0.75 }}>

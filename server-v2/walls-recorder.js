@@ -54,6 +54,13 @@ const MAX_SAMPLE_AGE_MINS = 12;
 /** Touch band: spot within this fraction of the level counts as a tag. */
 const TOUCH_PCT = 0.0005; // 0.05%
 /**
+ * Approach band — six times the touch band. Price inside this but never inside
+ * TOUCH_PCT is "got close and didn't tag", which is the coil-and-roll-over case
+ * that produced no record at all before. Wide enough to catch a real approach,
+ * tight enough that it is not just "somewhere in the day's range".
+ */
+const APPROACH_PCT = 0.003; // 0.30%
+/**
  * "Broke by 5 points" generalised. Index-scale names (strike ≥ 1000) use the
  * literal 5pt floor Brandon asked for; single names scale by price so a $40
  * stock isn't required to move 5 points to count as a real break.
@@ -152,6 +159,27 @@ async function ensureSchema() {
       );
       CREATE INDEX IF NOT EXISTS wall_events_day ON wall_events (date, symbol);
       CREATE INDEX IF NOT EXISTS wall_events_open ON wall_events (date) WHERE reaction IS NULL;
+
+      -- 'touch'    — spot came inside TOUCH_PCT. The original event.
+      -- 'approach' — spot came inside APPROACH_PCT but never tagged. A level
+      --              price coiled under and rolled away from produced NO row at
+      --              all before this, so the most common non-event was invisible.
+      -- Everything that counts "hits" must filter kind = 'touch'.
+      ALTER TABLE wall_events ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'touch';
+      -- Was this strike ALSO the CORE at the moment of the hit, and was it still
+      -- CORE once the window resolved? A wall that is the CORE is a different
+      -- animal from one that merely sits near it.
+      ALTER TABLE wall_events ADD COLUMN IF NOT EXISTS was_core BOOLEAN;
+      ALTER TABLE wall_events ADD COLUMN IF NOT EXISTS core_held BOOLEAN;
+      -- Net GEX at the level's own strike when it was tagged, and at resolve.
+      -- Their ratio is "how much did GEX build as price got here".
+      ALTER TABLE wall_events ADD COLUMN IF NOT EXISTS gex_at_hit DOUBLE PRECISION;
+      ALTER TABLE wall_events ADD COLUMN IF NOT EXISTS gex_at_resolve DOUBLE PRECISION;
+      CREATE INDEX IF NOT EXISTS wall_events_kind ON wall_events (date, kind);
+
+      -- Net GEX at THIS level's strike, per slot. walls_log.gex_value is the
+      -- whole-symbol total and cannot answer "did this wall thicken".
+      ALTER TABLE walls_log ADD COLUMN IF NOT EXISTS level_gex DOUBLE PRECISION;
     `);
     _schemaReady = true;
     return true;
@@ -216,7 +244,8 @@ function dueSlot(d = new Date()) {
 async function sampleUniverse(p, date) {
   const { rows } = await p.query(
     `SELECT DISTINCT ON (symbol)
-            symbol, ts, spot, call_wall, put_wall, cb, total_net_gex
+            symbol, ts, spot, call_wall, put_wall, cb, total_net_gex,
+            call_wall_gex, put_wall_gex, cb_gex
        FROM scanner_snapshots
       WHERE date = $1
         AND ts >= NOW() - make_interval(mins => $2::int)
@@ -259,15 +288,27 @@ async function runSlot({ slot = null, force = false } = {}) {
 
   let written = 0;
   let hits = 0;
+  let approaches = 0;
 
   for (const row of samples) {
     const spot = num(row.spot);
     if (!(spot > 0)) continue;
     const levels = { call_wall: num(row.call_wall), put_wall: num(row.put_wall), cb: num(row.cb) };
 
+    // GEX at each level's OWN strike, captured by the scanner sweep.
+    const levelGex = {
+      call_wall: num(row.call_wall_gex),
+      put_wall: num(row.put_wall_gex),
+      cb: num(row.cb_gex),
+    };
+    // Is this strike also carrying the largest |net GEX| on the chain? A wall
+    // that IS the CORE behaves differently from one that merely sits near it.
+    const coreStrike = levels.cb;
+
     for (const lt of LEVEL_TYPES) {
       const strike = levels[lt];
       if (strike == null || !(strike > 0)) continue;
+      const isCore = coreStrike != null && Number(coreStrike) === Number(strike);
 
       const prev = last.get(`${row.symbol}|${lt}`);
       const isOpen = s === 0 || !prev;
@@ -279,13 +320,14 @@ async function runSlot({ slot = null, force = false } = {}) {
         try {
           await p.query( // eslint-disable-line no-await-in-loop
             `INSERT INTO walls_log
-               (date, ts, slot, symbol, level_type, strike, prev_strike, delta, spot, gex_value, reason)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+               (date, ts, slot, symbol, level_type, strike, prev_strike, delta, spot, gex_value, reason, level_gex)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
              ON CONFLICT (date, symbol, level_type, slot) DO NOTHING`,
             [date, now, s, row.symbol, lt, strike,
               isOpen ? null : Number(prev.strike),
               isOpen ? null : strike - Number(prev.strike),
-              spot, num(row.total_net_gex), isOpen ? 'open' : 'change'],
+              spot, num(row.total_net_gex), isOpen ? 'open' : 'change',
+              levelGex[lt]],
           );
           written++;
           last.set(`${row.symbol}|${lt}`, { symbol: row.symbol, level_type: lt, strike, slot: s });
@@ -294,17 +336,34 @@ async function runSlot({ slot = null, force = false } = {}) {
         }
       }
 
-      // Touch detection against the level that is live RIGHT NOW.
-      if (isTouched(lt, spot, strike)) {
+      // Touch, or merely an approach. Same de-dupe either way: one open event
+      // per (symbol, level, strike) at a time, plus a RESOLVE_SLOTS cooldown
+      // after one closes — otherwise a level price is sitting on would log a
+      // fresh event every 15 minutes. The cooldown is why the attempt count
+      // means "distinct approaches an hour apart", not "every bar that grazed".
+      const kind = isTouched(lt, spot, strike) ? 'touch'
+        : isApproaching(lt, spot, strike) ? 'approach'
+        : null;
+      if (kind) {
         try {
-          // One open event per (symbol, level, strike) at a time, plus a
-          // RESOLVE_SLOTS cooldown after one closes — otherwise a level that
-          // price is sitting on would log a fresh hit every 15 minutes.
+          // A touch supersedes an open approach on the same strike: price got
+          // there after all, so the approach is no longer the story. Without
+          // this the cooldown would suppress the touch entirely.
+          if (kind === 'touch') {
+            await p.query( // eslint-disable-line no-await-in-loop
+              `DELETE FROM wall_events
+                WHERE date = $1 AND symbol = $2 AND level_type = $3
+                  AND strike = $4 AND kind = 'approach' AND reaction IS NULL`,
+              [date, row.symbol, lt, strike],
+            );
+          }
           const r = await p.query( // eslint-disable-line no-await-in-loop
             `INSERT INTO wall_events
-               (date, hit_ts, hit_slot, symbol, level_type, strike, spot_at_hit)
+               (date, hit_ts, hit_slot, symbol, level_type, strike, spot_at_hit,
+                kind, was_core, gex_at_hit)
              SELECT $1::date, $2::timestamptz, $3::smallint, $4::text, $5::text,
-                    $6::double precision, $7::double precision
+                    $6::double precision, $7::double precision,
+                    $9::text, $10::boolean, $11::double precision
               WHERE NOT EXISTS (
                     SELECT 1 FROM wall_events
                      WHERE date = $1::date AND symbol = $4::text
@@ -312,11 +371,13 @@ async function runSlot({ slot = null, force = false } = {}) {
                        AND (reaction IS NULL OR hit_slot > $3::int - $8::int))
              ON CONFLICT DO NOTHING
              RETURNING id`,
-            [date, now, s, row.symbol, lt, strike, spot, RESOLVE_SLOTS],
+            [date, now, s, row.symbol, lt, strike, spot, RESOLVE_SLOTS,
+              kind, isCore, levelGex[lt]],
           );
-          if (r.rowCount) hits++;
+          if (r.rowCount && kind === 'touch') hits++;
+          if (r.rowCount && kind === 'approach') approaches++;
         } catch (e) {
-          console.warn(`[walls] hit ${row.symbol}/${lt}:`, e.message);
+          console.warn(`[walls] ${kind} ${row.symbol}/${lt}:`, e.message);
         }
       }
     }
@@ -326,8 +387,8 @@ async function runSlot({ slot = null, force = false } = {}) {
     console.warn('[walls] resolve error:', e.message); return 0;
   });
 
-  console.log(`[walls] slot ${s} (${slotLabel(s)}) — ${samples.length} tickers · ${written} level rows · ${hits} new hits · ${resolved} resolved`);
-  return { ok: true, date, slot: s, at: slotLabel(s), tickers: samples.length, written, hits, resolved };
+  console.log(`[walls] slot ${s} (${slotLabel(s)}) — ${samples.length} tickers · ${written} level rows · ${hits} new hits · ${approaches} approaches · ${resolved} resolved`);
+  return { ok: true, date, slot: s, at: slotLabel(s), tickers: samples.length, written, hits, approaches, resolved };
 }
 
 /**
@@ -335,11 +396,19 @@ async function runSlot({ slot = null, force = false } = {}) {
  * Walls are directional — a call wall is only "tested" from below, a put wall
  * from above. CB is a magnet and counts from either side.
  */
-function isTouched(levelType, spot, strike) {
-  const band = strike * TOUCH_PCT;
+function isWithin(levelType, spot, strike, pct) {
+  const band = strike * pct;
   if (levelType === 'call_wall') return spot >= strike - band;
   if (levelType === 'put_wall') return spot <= strike + band;
   return Math.abs(spot - strike) <= band;
+}
+function isTouched(levelType, spot, strike) {
+  return isWithin(levelType, spot, strike, TOUCH_PCT);
+}
+/** Inside the approach band but NOT yet a tag — "got close, didn't touch". */
+function isApproaching(levelType, spot, strike) {
+  return isWithin(levelType, spot, strike, APPROACH_PCT)
+    && !isWithin(levelType, spot, strike, TOUCH_PCT);
 }
 
 // ── Classification ───────────────────────────────────────────────────────────
@@ -437,13 +506,47 @@ function classify(levelType, strike, path, rolled) {
 }
 
 /**
+ * Classify an APPROACH — price came inside the approach band but never tagged.
+ *
+ * Three outcomes worth telling apart, and none of them are the touch reactions:
+ *   reached     — it did get there eventually, just outside the watch window
+ *   rolled_over — coiled near the level, then reversed away by a real margin.
+ *                 The one Brandon was after: a level that repelled price
+ *                 WITHOUT ever being tagged leaves no touch event at all.
+ *   stalled     — drifted near and neither tagged nor left. No information.
+ */
+function classifyApproach(levelType, strike, path) {
+  if (!path.length) return null;
+  const band = strike * TOUCH_PCT;
+  const closest = Math.min(...path.map((s) => Math.abs(s.spot - strike)));
+  const closestPct = closest / strike;
+
+  // Distance from the level at the end vs. at the closest point. Reversing a
+  // full approach band's width away is a roll-over, not drift.
+  const closestIdx = path.findIndex((s) => Math.abs(s.spot - strike) === closest);
+  const endDist = Math.abs(path[path.length - 1].spot - strike);
+  const backedOff = endDist - closest;
+
+  if (closest <= band) {
+    return { reaction: 'reached', excursion: Number(closestPct.toFixed(6)), reclaim_min: null,
+      note: `approached and eventually tagged ${strike}` };
+  }
+  if (backedOff >= strike * APPROACH_PCT * 0.6) {
+    return { reaction: 'rolled_over', excursion: Number((closest).toFixed(4)), reclaim_min: null,
+      note: `came within ${closest.toFixed(2)} without tagging, then rolled ${backedOff.toFixed(2)} away` };
+  }
+  return { reaction: 'stalled', excursion: Number((closest).toFixed(4)), reclaim_min: null,
+    note: `hovered near ${strike}, closest ${closest.toFixed(2)}, no resolution` };
+}
+
+/**
  * Resolve every open event whose watch window has elapsed. At the closing slot
  * everything still open is forced to a verdict — nothing carries overnight.
  */
 async function resolveOpenEvents(p, date, currentSlot) {
   const cutoff = currentSlot >= SLOT_COUNT - 1 ? SLOT_COUNT : currentSlot - RESOLVE_SLOTS;
   const { rows: open } = await p.query(
-    `SELECT id, symbol, level_type, strike, hit_ts, hit_slot
+    `SELECT id, symbol, level_type, strike, hit_ts, hit_slot, kind, gex_at_hit
        FROM wall_events
       WHERE date = $1 AND reaction IS NULL AND hit_slot <= $2`,
     [date, cutoff],
@@ -471,18 +574,32 @@ async function resolveOpenEvents(p, date, currentSlot) {
         ? (ev.level_type === 'put_wall' ? Number(moved[0].strike) < strike : Number(moved[0].strike) > strike)
         : false;
 
-      const verdict = classify(
-        ev.level_type, strike,
-        path.map((r) => ({ ts: new Date(r.ts).getTime(), spot: Number(r.spot) })),
-        rolled,
-      );
+      const pts = path.map((r) => ({ ts: new Date(r.ts).getTime(), spot: Number(r.spot) }));
+      const verdict = ev.kind === 'approach'
+        ? classifyApproach(ev.level_type, strike, pts)
+        : classify(ev.level_type, strike, pts, rolled);
       if (!verdict) continue;
+
+      // Was this strike still the CORE when the window closed, and what is the
+      // level's GEX now? gex_at_hit -> gex_at_resolve is the build/bleed.
+      const { rows: after } = await p.query( // eslint-disable-line no-await-in-loop
+        `SELECT cb, call_wall_gex, put_wall_gex, cb_gex FROM scanner_snapshots
+          WHERE date = $1 AND symbol = $2 AND spot > 0
+          ORDER BY ts DESC LIMIT 1`,
+        [date, ev.symbol],
+      );
+      const last = after[0] || {};
+      const coreHeld = last.cb == null ? null : Number(last.cb) === strike;
+      const gexNow = num(ev.level_type === 'call_wall' ? last.call_wall_gex
+        : ev.level_type === 'put_wall' ? last.put_wall_gex : last.cb_gex);
 
       await p.query( // eslint-disable-line no-await-in-loop
         `UPDATE wall_events
-            SET reaction = $2, excursion_pts = $3, reclaim_min = $4, note = $5, resolved_ts = NOW()
+            SET reaction = $2, excursion_pts = $3, reclaim_min = $4, note = $5,
+                core_held = $6, gex_at_resolve = $7, resolved_ts = NOW()
           WHERE id = $1`,
-        [ev.id, verdict.reaction, verdict.excursion, verdict.reclaim_min, verdict.note],
+        [ev.id, verdict.reaction, verdict.excursion, verdict.reclaim_min, verdict.note,
+          coreHeld, gexNow],
       );
       n++;
     } catch (e) {
@@ -508,12 +625,17 @@ async function getWalls({ date, symbol } = {}) {
     const sym = String(symbol).toUpperCase();
     const [log, events] = await Promise.all([
       p.query(
-        `SELECT slot, ts, level_type, strike, prev_strike, delta, spot, reason
+        `SELECT slot, ts, level_type, strike, prev_strike, delta, spot, reason, level_gex
            FROM walls_log WHERE date = $1 AND symbol = $2
           ORDER BY slot ASC, level_type ASC`, [day, sym]),
       p.query(
         `SELECT hit_slot, hit_ts, level_type, strike, spot_at_hit, reaction,
-                excursion_pts, reclaim_min, note, resolved_ts
+                excursion_pts, reclaim_min, note, resolved_ts,
+                kind, was_core, core_held, gex_at_hit, gex_at_resolve,
+                -- How many times this exact level has been come at today.
+                -- Touches only: an approach is not an attempt to break.
+                COUNT(*) FILTER (WHERE kind = 'touch')
+                  OVER (PARTITION BY level_type, strike) AS attempts
            FROM wall_events WHERE date = $1 AND symbol = $2
           ORDER BY hit_slot ASC`, [day, sym]),
     ]);
@@ -539,15 +661,23 @@ async function getWalls({ date, symbol } = {}) {
     `SELECT symbol, COUNT(*)::int AS n FROM walls_log
       WHERE date = $1 AND reason = 'change' GROUP BY symbol`, [day]);
   const evs = await p.query(
-    `SELECT symbol, level_type, strike, hit_slot, reaction
-       FROM wall_events WHERE date = $1 ORDER BY hit_slot ASC`, [day]);
+    `SELECT symbol, level_type, strike, hit_slot, reaction, reclaim_min, kind, was_core
+       FROM wall_events WHERE date = $1 AND kind = 'touch' ORDER BY hit_slot ASC`, [day]);
+  // Approaches are a separate story from hits — a level price respected without
+  // ever tagging is not a "hit" and must not inflate the hit column.
+  const apps = await p.query(
+    `SELECT symbol, COUNT(*)::int AS n,
+            COUNT(*) FILTER (WHERE reaction = 'rolled_over')::int AS rolled
+       FROM wall_events WHERE date = $1 AND kind = 'approach'
+      GROUP BY symbol`, [day]);
   const tot = await p.query(
     'SELECT COUNT(*)::int AS n FROM walls_log WHERE date = $1', [day]);
 
   const bySym = new Map();
   const get = (s) => {
     if (!bySym.has(s)) bySym.set(s, { symbol: s, spot: null, call_wall: null, put_wall: null, cb: null,
-      open: {}, changes: 0, hits: 0, last_event: null, reaction: null, _spotSlot: -1 });
+      open: {}, changes: 0, hits: 0, approaches: 0, rolled_over: 0, attempts: {},
+      by_level: {}, last_event: null, reaction: null, reclaim_min: null, _spotSlot: -1 });
     return bySym.get(s);
   };
   for (const r of cur.rows) {
@@ -559,11 +689,21 @@ async function getWalls({ date, symbol } = {}) {
   }
   for (const r of open.rows) get(r.symbol).open[r.level_type] = Number(r.strike);
   for (const r of chg.rows) get(r.symbol).changes = r.n;
+  for (const r of apps.rows) { const e = get(r.symbol); e.approaches = r.n; e.rolled_over = r.rolled; }
   for (const r of evs.rows) {
     const e = get(r.symbol);
     e.hits++;
+    // Attempts per level type — "this put wall has been come at 3 times today".
+    e.attempts[r.level_type] = (e.attempts[r.level_type] || 0) + 1;
     e.last_event = `${slotLabel(r.hit_slot)} ${r.level_type} ${r.strike}`;
     e.reaction = r.reaction; // ordered by slot, so the last write wins
+    // Carried so the table badge can tell a break that came back from one that
+    // held, the same way the level log does.
+    e.reclaim_min = r.reclaim_min;
+    // Per level type, because e.reaction above is the last event of ANY level —
+    // a ticker can show "consolidated" off its call wall while its put wall
+    // rejected cleanly, which is exactly the wrong read for a bounce.
+    e.by_level[r.level_type] = { reaction: r.reaction, reclaim_min: r.reclaim_min, strike: Number(r.strike) };
   }
 
   const tickers = [...bySym.values()]
@@ -576,6 +716,8 @@ async function getWalls({ date, symbol } = {}) {
       tickers: tickers.length,
       changes: chg.rows.reduce((n, r) => n + r.n, 0),
       hits: evs.rowCount,
+      approaches: apps.rows.reduce((n, r) => n + r.n, 0),
+      rolled_over: apps.rows.reduce((n, r) => n + r.rolled, 0),
       rejects: counts('reject'),
       breaks: counts('break_5') + counts('break_lt5') + counts('consolidated') + counts('new_wall'),
       consolidated: counts('consolidated'),
@@ -629,5 +771,6 @@ function startWallsRecorder() {
 module.exports = {
   startWallsRecorder, runSlot, getWalls, ensureSchema, getPool,
   // exported for tests / manual poking
-  classify, isTouched, dueSlot, slotLabel, breakThreshold, SLOT_COUNT, LEVEL_TYPES,
+  classify, classifyApproach, isTouched, isApproaching, dueSlot, slotLabel,
+  breakThreshold, SLOT_COUNT, LEVEL_TYPES, TOUCH_PCT, APPROACH_PCT,
 };

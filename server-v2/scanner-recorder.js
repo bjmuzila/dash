@@ -104,6 +104,14 @@ async function ensureSchema() {
     // the chain (unsided — not a wall, not the flip). Added for the Walls
     // recorder; rows written before this column exists stay NULL.
     await p.query('ALTER TABLE scanner_snapshots ADD COLUMN IF NOT EXISTS cb REAL');
+    // Net GEX AT each level's own strike (OI + vol), not the chain total. The
+    // sweep already has per-strike GEX in memory from computeGexSummary and was
+    // discarding everything but the summary — so this costs zero extra upstream
+    // calls and answers "did GEX build at this wall as price approached", which
+    // total_net_gex cannot. Forward-only: nothing reconstructs it for past days.
+    for (const c of ['call_wall_gex', 'put_wall_gex', 'cb_gex']) {
+      await p.query(`ALTER TABLE scanner_snapshots ADD COLUMN IF NOT EXISTS ${c} REAL`); // eslint-disable-line no-await-in-loop
+    }
     ensured = true;
     return true;
   } catch (e) {
@@ -201,6 +209,19 @@ function findCoreBullseye(gexRows) {
 }
 
 /**
+ * Signed OI+Vol net GEX sitting at one strike. Same basis findCoreBullseye ranks
+ * on, but signed — the sign is the point when watching a wall build or bleed.
+ * Returns null when the strike isn't on the chain.
+ */
+function gexAtStrike(gexRows, strike) {
+  if (!gexRows?.length || !(strike > 0)) return null;
+  const r = gexRows.find((x) => Number(x.strike) === Number(strike));
+  if (!r) return null;
+  const v = Number(r.netGEX ?? 0) + Number(r.netVolGEX ?? 0);
+  return Number.isFinite(v) ? v : null;
+}
+
+/**
  * Snapshot one root: the aggregate summary, or { err } naming why it failed.
  * The three failure modes used to collapse into one "thin/no-spot" string,
  * which made a quote outage look identical to a genuinely thin chain.
@@ -220,6 +241,7 @@ async function snapshotTicker(root) {
   if (gexRows.length < MIN_STRIKES) return { err: `thin-${gexRows.length}` };
 
   const summary = computeGexSummary(gexRows, spot);
+  const cb = findCoreBullseye(summary.rows);
   return {
     symbol: root,
     spot,
@@ -228,7 +250,10 @@ async function snapshotTicker(root) {
     callWall: summary.callWall,
     putWall: summary.putWall,
     gexFlip: summary.gexFlip,
-    cb: findCoreBullseye(summary.rows),
+    cb,
+    callWallGex: gexAtStrike(summary.rows, summary.callWall),
+    putWallGex: gexAtStrike(summary.rows, summary.putWall),
+    cbGex: gexAtStrike(summary.rows, cb),
     strikes: summary.rows.length,
   };
 }
@@ -256,10 +281,12 @@ async function runSweep({ force = false } = {}) {
       if (!s || s.err) { errors.push(`${root}:${s?.err || 'null'}`); continue; }
       await p.query( // eslint-disable-line no-await-in-loop
         `INSERT INTO scanner_snapshots
-           (date, symbol, ts, spot, expiry, total_net_gex, call_wall, put_wall, gex_flip, cb, strikes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+           (date, symbol, ts, spot, expiry, total_net_gex, call_wall, put_wall, gex_flip, cb, strikes,
+            call_wall_gex, put_wall_gex, cb_gex)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
          ON CONFLICT DO NOTHING`,
-        [date, root, now, s.spot, s.expiry, s.totalNetGex, s.callWall, s.putWall, s.gexFlip, s.cb, s.strikes],
+        [date, root, now, s.spot, s.expiry, s.totalNetGex, s.callWall, s.putWall, s.gexFlip, s.cb, s.strikes,
+          s.callWallGex, s.putWallGex, s.cbGex],
       );
       written++;
     } catch (e) {
@@ -292,4 +319,4 @@ function startScannerRecorder() {
   console.log(`[scanner] recorder started — sweeping ${parseScannerTickers().join(', ')} every ${INTERVAL_MINS}m`);
 }
 
-module.exports = { startScannerRecorder, runSweep, ensureSchema, getPool, parseScannerTickers, findCoreBullseye };
+module.exports = { startScannerRecorder, runSweep, ensureSchema, getPool, parseScannerTickers, findCoreBullseye, gexAtStrike };
