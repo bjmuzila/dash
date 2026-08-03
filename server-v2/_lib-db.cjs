@@ -73,6 +73,7 @@ __export(db_exports, {
   getDailyStrategy: () => getDailyStrategy,
   getDailyStrategyHistory: () => getDailyStrategyHistory,
   getDashboardLayouts: () => getDashboardLayouts,
+  getPagePresets: () => getPagePresets,
   getDb: () => getDb,
   getEmBandsForWeek: () => getEmBandsForWeek,
   getEmCondorMarks: () => getEmCondorMarks,
@@ -1926,6 +1927,36 @@ async function getDashboardLayouts(clerkUserId, page) {
     isDefault: Boolean(r.is_default),
     updatedAt: r.updated_at ?? null
   }));
+}
+/**
+ * Same rows as getDashboardLayouts, but for the /api/page-preset consumers,
+ * whose payload is an OBJECT rather than a GridItem[].
+ *
+ * Needed because parseLayoutJson above coerces anything non-array to [] — which
+ * is correct for the grid pages (a malformed layout must not crash a render)
+ * and silently destroys an object preset. Same column, same table, different
+ * shape contract, so it gets its own reader instead of a flag.
+ */
+async function getPagePresets(clerkUserId, page) {
+  await getDb();
+  const rows = await queryAll(
+    `SELECT name, layout, is_default, updated_at
+       FROM dashboard_layouts
+      WHERE clerk_user_id = ? AND page = ?
+      ORDER BY is_default DESC, updated_at DESC NULLS LAST, name ASC`,
+    [clerkUserId, page]
+  );
+  return rows.map((r) => {
+    const v = typeof r.layout === "string" ? safeJsonParse(r.layout) : r.layout;
+    return {
+      name: r.name,
+      // null (not {}) when the row holds a grid layout — the route filters
+      // these out rather than handing the client an empty preset to apply.
+      preset: v && typeof v === "object" && !Array.isArray(v) ? v : null,
+      isDefault: Boolean(r.is_default),
+      updatedAt: r.updated_at ?? null
+    };
+  });
 }
 async function upsertDashboardLayout(clerkUserId, page, name, layout, makeDefault = false) {
   const pool = await getDb();
@@ -4742,6 +4773,7 @@ async function getLatestMultGreekStaticSnapshot() {
   getDailyStrategy,
   getDailyStrategyHistory,
   getDashboardLayouts,
+  getPagePresets,
   getDb,
   getEmBandsForWeek,
   getEmCondorMarks,

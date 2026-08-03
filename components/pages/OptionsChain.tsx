@@ -32,6 +32,54 @@ function SignVal({ text }: { text: string }) {
   return <>{s && <span style={{ color: c }}>{s}</span>}{rest}</>;
 }
 
+// ── Cell markers ────────────────────────────────────────────────────────────
+// The ★ (CB) and ✕ (volume-GEX peak) sit on top of the heat fill, which at full
+// intensity is a saturated blue or red. Gold-on-blue and red-on-red both wash
+// out at 10px, so both glyphs are drawn with a hard black edge (paint-order:
+// stroke, so the stroke sits OUTSIDE the fill and doesn't eat the glyph) plus a
+// white halo. That pairing reads on every background the scale can produce.
+const MARKER_EDGE: React.CSSProperties = {
+  WebkitTextStrokeWidth: "1px",
+  WebkitTextStrokeColor: "#000",
+  paintOrder: "stroke fill" as unknown as React.CSSProperties["paintOrder"],
+  textShadow: "0 0 3px rgba(255,255,255,.9), 0 0 1px rgba(0,0,0,1)",
+};
+
+/** Δ chip text. `d` arrives in RAW DOLLARS — the same units as every other GEX
+ *  value on this chain — so it is scaled exactly as fmtMoney does. Always
+ *  millions, so the chip and the value beside it share one unit; a move under
+ *  $1M reports as "<$1M" rather than rounding to a meaningless "$0M". */
+function fmtDeltaChip(d: number): string {
+  if (!isFinite(d)) return "--";
+  const sign = d < 0 ? "−" : "+";
+  const m = Math.round(Math.abs(d) / 1e6);
+  if (m === 0) return `${sign}<$1M`;
+  return `${sign}$${m.toLocaleString("en-US")}M`;
+}
+
+/** Δ15 sticker — the front-expiry 15-minute NET GEX change, same chip the
+ *  multi-chain ladder stamps on its front column. Uniform dark plate so it reads
+ *  identically on a full-strength wall and on a quiet far strike; direction is
+ *  carried by the number's colour alone. */
+function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) {
+  const text = fmtDeltaChip(d);
+  return (
+    <span
+      title={`Δ15m ${text} · #${rank} mover (${Math.abs(Math.round(pct))}%)`}
+      style={{
+        flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
+        height: 14, boxSizing: "border-box",
+        fontSize: 9, fontWeight: rank === 1 ? 900 : 800,
+        fontFamily: "var(--font-mono)", lineHeight: 1,
+        padding: "0 4px", borderRadius: 4, whiteSpace: "nowrap",
+        background: "#0D1119",
+        color: d > 0 ? "#4ade80" : "#f87171",
+        border: "none",
+      }}
+    >{text}</span>
+  );
+}
+
 // ── Custom dropdown (bypasses native OS rendering) ─────────────────────────
 function CustomDropdown<T extends string | number>({
   value,
@@ -1046,7 +1094,20 @@ interface ChainMatrixProps {
   colScales: { max: number; top3: number[] }[];
   volMvcByCol: (number | null)[];
   mvcByCol: (number | null)[];
-  pinByCol: { above: number | null; below: number | null }[];
+  /**
+   * The single biggest |net GEX| cell on the whole grid — the chain's headline
+   * level. Drawn with a triple-weight gold outline so it separates from the
+   * per-column ★ peaks, which share its colour.
+   */
+  globalMvc: { colIdx: number; strike: number } | null;
+  /**
+   * Front-expiry (0DTE / nearest) 15-minute NET GEX change, strike → chip.
+   * Same source and gating as the multi-chain ladder's Δ stamps: recorder
+   * baselines, top-5 |GEX| strikes per side of ATM only.
+   */
+  delta15: Map<number, { d: number; pct: number; rank: number }>;
+  /** Expiration the Δ15 stickers belong to ("" when there are none). */
+  delta15Exp: string;
   valueAt: (col: ExpColumn, strike: number) => number | null;
   isStandalone: boolean;
   changeMode: ChangeMode;
@@ -1097,7 +1158,7 @@ interface ChainMatrixProps {
 // the parent's useMemo/useCallback, is exactly "when the chain data changed."
 const ChainMatrix = memo(function ChainMatrix({
   columns, gridCols, visibleStrikes, nearestStrike, spot, greekMode, dataMode,
-  intensity, colScales, volMvcByCol, mvcByCol, pinByCol, valueAt, isStandalone,
+  intensity, colScales, volMvcByCol, mvcByCol, globalMvc, delta15, delta15Exp, valueAt, isStandalone,
   changeMode, sessionDate, showTotalCol, layoutExpCols, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
   emLevels, activeTicker, atmRowRef, oiChangeMap, onCellClick, onCellHover,
 }: ChainMatrixProps) {
@@ -1106,6 +1167,9 @@ const ChainMatrix = memo(function ChainMatrix({
   // -430 / "·" for flat) rather than the dollar one.
   const isOiMode = greekMode === "oi";
   const fmtVal = isOiMode ? fmtChg : fmtMoney;
+  // Δ15 stickers ride the GEX view only — OI mode's cells are already a change,
+  // and a second, differently-sourced change beside them reads as a conflict.
+  const hasDelta15 = !isOiMode && greekMode === "gex" && !!delta15Exp && delta15.size > 0;
   // Drop holiday/non-trading expirations (e.g. observed Jul 3) entirely.
   const renderIdx = Array.from({ length: gridCols })
     .map((_, i) => i)
@@ -1184,7 +1248,15 @@ const ChainMatrix = memo(function ChainMatrix({
       // OI cells can carry two lines (call / put) on the ATM pivot row, but each
       // line is now a single delta figure — so they need barely more width than
       // a greek cell, not the double-width the old value+delta pair demanded.
-      gridTemplateColumns: `${STRIKE_COL}px repeat(${renderIdx.length}, minmax(${isOiMode ? 84 : 78}px, 1fr))${showTotalCol ? ` minmax(${isOiMode ? 92 : 88}px, 1.15fr)` : ""}${ghostTemplate}`,
+      // The Δ15 column carries a chip AND its value on one line — at 78px that
+      // is "−$1,694M" overlapping the number. Only that one column widens (and
+      // only while stickers are actually on screen); every other track, and the
+      // whole layout with the mode dark, is unchanged.
+      gridTemplateColumns: `${STRIKE_COL}px ${renderIdx
+        .map((i) => (hasDelta15 && columns[i]?.expiration === delta15Exp
+          ? "minmax(152px, 1.9fr)"
+          : `minmax(${isOiMode ? 84 : 78}px, 1fr)`))
+        .join(" ")}${showTotalCol ? ` minmax(${isOiMode ? 92 : 88}px, 1.15fr)` : ""}${ghostTemplate}`,
       borderRadius: 12,
       overflow: "clip",
       border: `1px solid ${HT.border}`,
@@ -1210,7 +1282,12 @@ const ChainMatrix = memo(function ChainMatrix({
           : null;
         return (
           <div key={`hdr-${col?.expiration ?? i}`} style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HDR_BG}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}` }}>
-            <div style={{ fontSize: 10, fontWeight: 500, color: isChangeCol ? HT.orange : HT.text }}>{col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}</div>
+            <div style={{ fontSize: 10, fontWeight: 500, color: isChangeCol ? HT.orange : HT.text }}>
+              {col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}
+              {!isChangeCol && hasDelta15 && col?.expiration === delta15Exp && (
+                <span style={{ color: HT.muted, fontWeight: 700 }}> ·Δ15m</span>
+              )}
+            </div>
             {/* Per-expiry total of the ACTIVE greek across the visible strike
                 window — the column-wise counterpart to the ⅀ Total column's
                 figure, so every expiry header reads like the totals cell. */}
@@ -1316,12 +1393,21 @@ const ChainMatrix = memo(function ChainMatrix({
                 ? (changeScaleByExp.get(col!.expiration) ?? { max: 1, top3: [] as number[] })
                 : scale;
               const isMvc = !isChangeCol && greekMode === "gex" && col != null && mvcByCol[colIdx] === strike;
-              // ❌ marks the pure-volume GEX peak — OI+Vol view + GEX mode only.
+              // The chain's single biggest |net GEX| cell. Same gold as the
+              // per-column ★ outline, at triple weight — the headline level has
+              // to be findable in one look, and colour alone can't do that when
+              // every column already owns a gold box.
+              const isGlobalMvc = isMvc && globalMvc != null && globalMvc.colIdx === colIdx && globalMvc.strike === strike;
+              // ✕ marks the pure-volume GEX peak — OI+Vol view + GEX mode only.
               const isVolMvc = !isChangeCol && greekMode === "gex" && dataMode === "oi-vol" && col != null && volMvcByCol[colIdx] === strike;
-              const pin = pinByCol[colIdx];
-              // Suppressed in OI mode — the pin glyph is a gamma-structure
-              // marker, and its width breaks the two-line call/put layout.
-              const isPin = !isOiMode && !isChangeCol && col != null && pin != null && (strike === pin.above || strike === pin.below);
+              // …and it is coloured by the SIGN of that volume-only GEX: green
+              // when the volume peak is positive gamma, red when it's negative.
+              // A fixed-red ❌ said "negative" on every strike it landed on.
+              const volMvcVal = isVolMvc ? (col!.cells.get(strike)?.volGex ?? null) : null;
+              const volMvcPos = (volMvcVal ?? value ?? 0) >= 0;
+              // Δ15 sticker: front (0DTE / nearest) expiry only.
+              const isDelta15Col = hasDelta15 && !isChangeCol && col != null && col.expiration === delta15Exp;
+              const dEntry = isDelta15Col ? (delta15.get(strike) ?? null) : null;
               const isFirst = posInRow === 0;
               // ATM box: use box-shadow so it overlays without shifting layout.
               // Top+bottom on every cell; left edge on first col. The right edge
@@ -1371,7 +1457,11 @@ const ChainMatrix = memo(function ChainMatrix({
                     whiteSpace: "nowrap", overflow: "hidden",
                     display: "flex", alignItems: isOiMode ? "center" : "baseline", justifyContent: "flex-end", gap: 5,
                     cursor: isClickable ? "pointer" : undefined,
-                    ...(isMvc ? { outline: "2px solid #ffb300", outlineOffset: "-2px" } : {}),
+                    ...(isMvc
+                      ? isGlobalMvc
+                        ? { outline: "6px solid #ffb300", outlineOffset: "-6px", zIndex: 2 }
+                        : { outline: "2px solid #ffb300", outlineOffset: "-2px" }
+                      : {}),
                   }}
                 >
                   {/* OI tab renders the day-over-day CHANGE only — one line
@@ -1380,16 +1470,23 @@ const ChainMatrix = memo(function ChainMatrix({
                       background, ATM box, EM row border — is unchanged, and the
                       background now tracks that same change through valueAt(),
                       so the tint and the number always agree. */}
-                  {isMvc && <span title="CB - Core Bullseye — highest |net GEX|" style={{ color: "#ffd600", textShadow: "0 0 3px rgba(0,0,0,.9)" }}>★</span>}
-                  {isVolMvc && <span title="Highest volume GEX" style={{ fontSize: 10, lineHeight: 1 }}>❌</span>}
-                  {isPin && (
-                    <span title="Possible pin or explosive level" style={{ cursor: "help", display: "inline-flex", verticalAlign: "middle" }}>
-                      <svg width="14" height="17" viewBox="0 0 24 24" fill="#ffffff" stroke="rgba(0,0,0,.55)" strokeWidth={1.5}>
-                        <path d="M12 21s7-6.5 7-12A7 7 0 0 0 5 9c0 5.5 7 12 7 12z" />
-                        <circle cx="12" cy="9" r="2.3" fill="rgba(0,0,0,.55)" stroke="none" />
-                      </svg>
-                    </span>
+                  {isMvc && (
+                    <span
+                      title={isGlobalMvc ? "CB - Core Bullseye — highest |net GEX| on the chain" : "CB - Core Bullseye — highest |net GEX|"}
+                      style={{ color: "#ffd600", lineHeight: 1, ...MARKER_EDGE }}
+                    >★</span>
                   )}
+                  {isVolMvc && (
+                    <span
+                      title={`Highest volume GEX${volMvcVal == null ? "" : ` (${fmtMoney(volMvcVal)})`} — ${volMvcPos ? "positive" : "negative"} gamma`}
+                      style={{
+                        fontSize: 11, lineHeight: 1, fontWeight: 900,
+                        color: volMvcPos ? "#22c55e" : "#ef4444",
+                        ...MARKER_EDGE,
+                      }}
+                    >✕</span>
+                  )}
+                  {dEntry && <DeltaStamp d={dEntry.d} pct={dEntry.pct} rank={dEntry.rank} />}
                   {isOiMode ? (
                     !oiHasAny ? (
                       <span style={{ color: "#3a4a5e" }}>·</span>
@@ -1400,7 +1497,13 @@ const ChainMatrix = memo(function ChainMatrix({
                       </div>
                     )
                   ) : (
-                    <span><SignVal text={value == null ? "·" : fmtMoney(value)} /></span>
+                    // With a sticker in the cell the value is pushed right by
+                    // margin, not by a reserved slot — so unstamped rows in the
+                    // same column give all their width to the number and every
+                    // value still ends on the same right edge.
+                    <span style={dEntry ? { marginLeft: "auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } : undefined}>
+                      <SignVal text={value == null ? "·" : fmtMoney(value)} />
+                    </span>
                   )}
                 </div>
               );
@@ -2214,7 +2317,7 @@ export default function OptionsChainPage({
   }, [columns, visibleStrikes, valueAt]);
 
   // Per-column volume-GEX peak: the visible strike with the highest |volGex|.
-  // Flagged with ❌ on the OI+Vol view so the pure-volume gamma peak shows up
+  // Flagged with ✕ on the OI+Vol view so the pure-volume gamma peak shows up
   // next to the ★ OI+Vol MVC.
   const volMvcByCol = useMemo(() => {
     return columns.map(col => {
@@ -2248,23 +2351,89 @@ export default function OptionsChainPage({
     });
   }, [columns, visibleStrikes]);
 
-  // Per-expiration 📍 pins: the highest |active-greek| strike on each side of spot,
-  // for every column. Keyed colIdx → { above, below }.
-  const pinByCol = useMemo(() => {
-    return columns.map(col => {
-      if (!col || !nearestStrike) return { above: null as number | null, below: null as number | null };
-      let above: number | null = null, aAbs = 0, below: number | null = null, bAbs = 0;
-      visibleStrikes.forEach(s => {
-        if (s == null) return;
-        const v = valueAt(col, s);
-        if (v == null) return;
-        const a = Math.abs(v);
-        if (s > nearestStrike && a > aAbs) { aAbs = a; above = s; }
-        else if (s < nearestStrike && a > bAbs) { bAbs = a; below = s; }
-      });
-      return { above, below };
+  // The chain's headline level: of all the per-column ★ peaks, the one with the
+  // largest |net GEX|. Only ever ONE cell, and it's always also a column peak —
+  // the grid just draws its gold box at triple weight.
+  const globalMvc = useMemo(() => {
+    let best: { colIdx: number; strike: number } | null = null;
+    let bestAbs = 0;
+    mvcByCol.forEach((s, colIdx) => {
+      if (s == null) return;
+      const g = columns[colIdx]?.cells.get(s)?.gex;
+      if (g == null) return;
+      const a = Math.abs(g);
+      if (a > bestAbs) { bestAbs = a; best = { colIdx, strike: s }; }
     });
-  }, [columns, visibleStrikes, nearestStrike, valueAt]);
+    return best as { colIdx: number; strike: number } | null;
+  }, [mvcByCol, columns]);
+
+  // ── Front-expiry Δ15 stickers ─────────────────────────────────────────────
+  // Same source and gating as the multi-chain ladder: one bulk pull of the
+  // recorder's NET GEX baselines for the FRONT (0DTE / nearest) expiry only —
+  // one request per ticker, not one per cell — refreshed on the same 20s beat.
+  const frontExp = columns[0]?.expiration ?? "";
+  const [gexBaseline, setGexBaseline] = useState<Record<number, { vNow: number | null; v5: number | null; v15: number | null; v30: number | null }>>({});
+  useEffect(() => {
+    if (!frontExp || !activeTicker) { setGexBaseline({}); return; }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch(
+          `/api/mult-greek-gex-grid?ticker=${encodeURIComponent(activeTicker)}&expiry=${encodeURIComponent(frontExp)}`,
+          { cache: "no-store" },
+        );
+        if (!r.ok) { if (!cancelled) setGexBaseline({}); return; }
+        const j = await r.json();
+        const cells = (j?.data?.cells ?? {}) as Record<string, { vNow: number | null; v5: number | null; v15: number | null; v30: number | null }>;
+        const byStrike: Record<number, { vNow: number | null; v5: number | null; v15: number | null; v30: number | null }> = {};
+        for (const [k, v] of Object.entries(cells)) byStrike[Number(k)] = v;
+        if (!cancelled) setGexBaseline(byStrike);
+      } catch { if (!cancelled) setGexBaseline({}); }
+    };
+    void load();
+    const id = setInterval(() => { void load(); }, 20_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [activeTicker, frontExp, refreshSeed]);
+
+  // Δ per cell on the front column, for the top-5 |GEX| strikes per side of ATM
+  // only — stamping every strike buries the movers that matter in noise. Rank
+  // runs 1..5 WITHIN each sign, so a quiet side still gets its own full scale.
+  const delta15 = useMemo(() => {
+    const out = new Map<number, { d: number; pct: number; rank: number }>();
+    const col = columns[0];
+    if (!col || !frontExp || replayFrame) return out;
+    const above: { s: number; a: number }[] = [];
+    const below: { s: number; a: number }[] = [];
+    visibleStrikes.forEach(s => {
+      if (s == null) return;
+      const g = col.cells.get(s)?.gex;
+      if (g == null) return;
+      (s >= nearestStrike ? above : below).push({ s, a: Math.abs(g) });
+    });
+    const ranked = new Set<number>();
+    [above, below].forEach(arr => arr.sort((x, y) => y.a - x.a).slice(0, 5).forEach(v => ranked.add(v.s)));
+    ranked.forEach(s => {
+      const live = col.cells.get(s)?.gex;
+      const past = gexBaseline[s]?.v15 ?? null;
+      if (live == null || past == null) return;
+      const d = live - past;
+      if (d === 0) return;
+      // A baseline at ~0 makes the percent meaningless (a strike coming from
+      // nothing reads as an enormous move) — skip it rather than let it set the
+      // scale and wash out every other stamp in the column.
+      if (!Number.isFinite(past) || Math.abs(past) < 1e-6) return;
+      const pct = (d / Math.abs(past)) * 100;
+      if (!Number.isFinite(pct) || Math.abs(pct) < 1) return;   // sub-1% is noise
+      out.set(s, { d, pct, rank: 5 });
+    });
+    for (const sign of [1, -1]) {
+      [...out.entries()]
+        .filter(([, v]) => (sign > 0 ? v.pct > 0 : v.pct < 0))
+        .sort((x, y) => Math.abs(y[1].pct) - Math.abs(x[1].pct))
+        .forEach(([k], idx) => { const e = out.get(k); if (e) e.rank = idx + 1; });
+    }
+    return out;
+  }, [columns, visibleStrikes, nearestStrike, gexBaseline, frontExp, replayFrame]);
 
   // Weekly EM for the active ticker (DB-backed via /api/levels). Refetched on
   // ticker change and on each manual refresh so the bands track intraday EM.
@@ -2984,7 +3153,9 @@ export default function OptionsChainPage({
             colScales={colScales}
             volMvcByCol={volMvcByCol}
             mvcByCol={mvcByCol}
-            pinByCol={pinByCol}
+            globalMvc={globalMvc}
+            delta15={delta15}
+            delta15Exp={frontExp}
             valueAt={valueAt}
             isStandalone={isStandalone}
             changeMode={changeMode}

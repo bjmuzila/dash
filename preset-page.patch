@@ -1,0 +1,19 @@
+--- a/components/pages/EsCandles.tsx
++++ b/components/pages/EsCandles.tsx
+@@ -59,6 +59,7 @@
+ import { EMA_COLORS } from "@/components/dashboard/es-candles/indicators";
+ import { CHAIN_GREEKS, GREEK_LABEL, isChainGreek, type ChainGreek } from "@/components/dashboard/es-candles/ChainRail";
+ import { DockButton, SegGroup } from "@/components/shared/DockToolbar";
++import LayoutPresetButton from "@/components/dashboard/es-candles/LayoutPresetButton";
+ import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
+ 
+ const PANEL_OPTIONS: Array<{ label: string; value: SidePanelKind }> = [
+@@ -422,6 +423,8 @@
+           return n ? <span style={{ opacity: 0.5, fontSize: 10 }}>{n}</span> : null;
+         })()}
+       </DockButton>
++      {/* Owns all of its own state — see LayoutPresetButton. */}
++      <LayoutPresetButton />
+     </div>
+   );
+ 

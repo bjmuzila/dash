@@ -3172,6 +3172,96 @@ if (libDb) {
     },
   });
 
+  // /api/page-preset — named, whole-page setting presets.
+  //
+  // Deliberately a SIBLING of /api/dashboard-layout rather than an extension of
+  // it. Same table, same per-user/per-page/per-name identity, same is_default
+  // semantics — but that route validates `layout` with cleanLayoutItems, which
+  // requires an array of {id,x,y,w,h} grid cards. /es-candles is a fixed row,
+  // not a grid; what it wants to save is an OBJECT (timeframe, overlays,
+  // expiries, tickers, indicators). Loosening cleanLayoutItems to admit both
+  // shapes would mean the grid pages silently accept malformed layouts, so the
+  // validator stays strict and this route brings its own.
+  //
+  // `page` lives in the same namespace as the grid layouts, so use a distinct
+  // key (the client sends 'es-candles-preset'). Nothing enforces that beyond
+  // convention; a collision would just mean a grid page reading an object it
+  // can't render, which useDashboardLayout already discards.
+  const PRESET_MAX = 12;              // per user, per page — matches the grid cap
+  const PRESET_MAX_BYTES = 64 * 1024; // one preset's serialized payload
+
+  function cleanPresetPayload(v) {
+    // Object, not array: an array here means a caller aimed at the wrong route.
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+    let json;
+    try { json = JSON.stringify(v); } catch { return null; }   // cycles, BigInt
+    if (!json || json.length > PRESET_MAX_BYTES) return null;
+    return v;
+  }
+
+  register('/api/page-preset', {
+    auth: 'subscriber', methods: ['GET', 'POST'],
+    async handler(req, res, ctx, access) {
+      const userId = access.userId;
+      if (!userId) return send(res, 401, { error: 'Unauthorized' });
+
+      if (req.method === 'POST') {
+        let body;
+        try { body = await readJson(req, 200_000); }
+        catch { return send(res, 400, { error: 'Bad JSON' }); }
+
+        const page = cleanLayoutPage(body?.page);
+        const name = cleanLayoutName(body?.name);
+        if (!page) return send(res, 400, { error: 'Bad page' });
+        if (!name) return send(res, 400, { error: 'Name required' });
+
+        const action = String(body?.action ?? 'save');
+        try {
+          if (action === 'delete') {
+            await libDb.deleteDashboardLayout(userId, page, name);
+            return send(res, 200, { ok: true });
+          }
+          if (action === 'set-default') {
+            const ok = await libDb.setDefaultDashboardLayout(userId, page, name);
+            return ok ? send(res, 200, { ok: true }) : send(res, 404, { error: 'No such preset' });
+          }
+          const preset = cleanPresetPayload(body?.preset);
+          if (!preset) return send(res, 400, { error: 'preset must be an object under 64KB' });
+
+          const existing = await libDb.getDashboardLayouts(userId, page);
+          const isNew = !existing.some((t) => t.name === name);
+          if (isNew && existing.length >= PRESET_MAX) {
+            return send(res, 409, { error: `Preset limit reached (${PRESET_MAX})` });
+          }
+          // First preset becomes the default, same reasoning as the grid route:
+          // saving one and reloading must not silently do nothing.
+          const makeDefault = body?.makeDefault === true || existing.length === 0;
+          await libDb.upsertDashboardLayout(userId, page, name, preset, makeDefault);
+          return send(res, 200, { ok: true, name, isDefault: makeDefault });
+        } catch (err) {
+          return send(res, 500, { error: 'Save failed', detail: String(err) });
+        }
+      }
+
+      const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+      const page = cleanLayoutPage(sp.get('page'));
+      if (!page) return send(res, 400, { error: 'Bad page' });
+      try {
+        // getPagePresets, NOT getDashboardLayouts: the latter runs the column
+        // through parseLayoutJson, which coerces a non-array to [] and would
+        // hand back an empty preset for every row.
+        const rows = await libDb.getPagePresets(userId, page);
+        // Rows holding a grid layout come back with preset:null — drop them so
+        // a page-key collision can never surface as a preset that applies
+        // nothing.
+        const presets = rows.filter((r) => r.preset);
+        send(res, 200, { presets }, { 'Cache-Control': 'private, no-store' });
+      } catch (err) {
+        send(res, 500, { error: 'Load failed', detail: String(err) });
+      }
+    },
+  });
+
   // /api/traders-dashboard — per-user schedule/tasks/links/weather-zip.
   register('/api/traders-dashboard', {
     auth: 'subscriber', methods: ['GET', 'POST'],
