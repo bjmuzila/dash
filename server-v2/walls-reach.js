@@ -10,8 +10,9 @@
  * evidence for (or against) that claim and turns it into a live ranking.
  *
  * THREE JOBS
- *   1. ATR          — per symbol, per session, a 20-day RTH ATR derived from
- *                     scanner_snapshots spot. Strictly PRIOR sessions, so the
+ *   1. ATR          — per symbol, per session, a 20-day ATR built from TRUE
+ *                     DAILY BARS via the data adapter (Yahoo on DATA_SOURCE=tt,
+ *                     Theta EOD otherwise). Strictly PRIOR sessions, so the
  *                     value is knowable at 09:29 and carries no lookahead.
  *   2. BACKFILL     — replay every session in scanner_snapshots. At each walls
  *                     slot, for each of the three levels, record how far the
@@ -34,10 +35,18 @@
  *   control reach. If it does not, the honest thing is to ship distance alone
  *   and say so on the page. `wall_calibration.delta` is that number.
  *
- * SOURCE — scanner_snapshots (date, symbol, ts, spot, call_wall, put_wall, cb),
- * written every 2-5m by scanner-recorder.js. Deliberately NOT walls_log: the
- * scanner table is change-inclusive and goes back further, so the study covers
- * sessions that predate the walls recorder entirely.
+ * SOURCES — two, and the split matters.
+ *   Levels + the intraday path come from scanner_snapshots (date, symbol, ts,
+ *   spot, call_wall, put_wall, cb), written every 2-5m by scanner-recorder.js.
+ *   Deliberately NOT walls_log: the scanner table is change-inclusive.
+ *   ATR comes from daily bars, NOT from scanner_snapshots. An earlier version
+ *   derived it from spot samples on the assumption that "the scanner table goes
+ *   back further" — it does not. It is pruned at RETENTION_SCANNER_SNAPSHOTS_DAYS
+ *   (10 by default) while ATR_MIN_SESSIONS needs 11, so wall_atr never populated
+ *   and the whole Reach Rank column read blank. Sampled range also measured only
+ *   83.4% of true range, moving 29% of live levels across a bucket edge.
+ *   Consequence: replay depth is still bounded by scanner retention, but the
+ *   ATR normalisation is not.
  *
  * Wiring:      startWallsReach() in server-with-proxy.js
  * Read API:    GET  /proxy/walls-reach[?date=&symbol=]
@@ -45,7 +54,13 @@
  * Consumed by: attachRank() decorating GET /proxy/walls
  */
 
+const { useTheta } = require('./config/data-source');
+const dailyAdapter = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
+
 const LEVEL_TYPES = ['call_wall', 'put_wall', 'cb'];
+
+/** Priced via the index EOD endpoint; everything else via the stock one. */
+const INDEX_ROOTS = new Set(['SPX', 'SPXW', 'NDX', 'NDXP', 'VIX', 'RUT', 'XSP', 'DJX']);
 
 // ── Buckets ──────────────────────────────────────────────────────────────────
 //
@@ -73,6 +88,14 @@ function bucketFor(distAtr) {
 const TOUCH_PCT = 0.0005;
 /** Sessions of true range in the ATR window. */
 const ATR_WINDOW = 20;
+/**
+ * Calendar days of daily bars pulled per symbol. Needs to cover ATR_WINDOW
+ * trading sessions plus whatever span is being replayed — 120 calendar days is
+ * ~82 sessions, cheap at one request per symbol.
+ */
+const ATR_HISTORY_DAYS = 120;
+/** Parallel daily-bar fetches. Yahoo (the TT adapter's source) has no governor. */
+const ATR_FETCH_CONCURRENCY = 4;
 /** A symbol needs at least this many prior sessions before it gets an ATR. */
 const ATR_MIN_SESSIONS = 10;
 /**
@@ -149,6 +172,13 @@ async function ensureSchema() {
         atr_n     SMALLINT,
         PRIMARY KEY (date, symbol)
       );
+      -- Which bar source produced this row: 'daily' (true OHLC from the data
+      -- provider) or 'scanner' (the legacy 5m-sampled fallback). Kept visible
+      -- because the two are NOT interchangeable — sampled range measured 83.4%
+      -- of true range on the 2026-07-24..08-03 window, which moved 29% of live
+      -- levels across a bucket edge. Mixed provenance in one calibration would
+      -- pool observations normalised on different denominators.
+      ALTER TABLE wall_atr ADD COLUMN IF NOT EXISTS src TEXT;
 
       -- One row per (session, symbol, level, slot): how far the level was, and
       -- whether price got there before the close. The ctrl_ columns ask the same
@@ -286,19 +316,59 @@ function tagged(side, strike, extremeUp, extremeDn) {
 
 // ── 1. ATR ───────────────────────────────────────────────────────────────────
 
+/** Run `fn` over `items` with bounded concurrency, preserving order. */
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let i = 0;
+  const workers = new Array(Math.min(limit, items.length)).fill(0).map(async () => {
+    for (;;) {
+      const idx = i++;
+      if (idx >= items.length) return;
+      out[idx] = await fn(items[idx], idx);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 /**
- * Rebuild wall_atr for every (date, symbol) up to `through`. Daily H/L/C come
- * from the session's spot samples; true range uses the prior session's close.
- * `atr` on a row is the mean TR of the 20 sessions BEFORE it — never including
- * itself — so it is a number you would have had at 09:29 that morning.
+ * TR series → wall_atr rows for one symbol.
+ *
+ * `bars` is ascending [{ date, hi, lo, close }]. `atr` on a row is the mean TR
+ * of the ATR_WINDOW sessions BEFORE it — never including itself — so it is a
+ * number you would have had at 09:29 that morning.
  */
-async function rebuildAtr(p, { through, symbols = null } = {}) {
+function atrRowsFor(symbol, bars, src) {
+  const trs = [];
+  const out = [];
+  for (let i = 0; i < bars.length; i++) {
+    const b = bars[i];
+    const prevClose = i > 0 ? num(bars[i - 1].close) : null;
+    const hi = num(b.hi), lo = num(b.lo);
+    if (hi == null || lo == null) { trs.push(null); continue; }
+    const tr = prevClose == null
+      ? hi - lo
+      : Math.max(hi - lo, Math.abs(hi - prevClose), Math.abs(lo - prevClose));
+
+    // Read the window BEFORE pushing today's TR — that is what makes it prior-only.
+    const win = trs.slice(-ATR_WINDOW).filter((v) => v != null && v > 0);
+    const atr = win.length >= ATR_MIN_SESSIONS
+      ? win.reduce((a, c) => a + c, 0) / win.length
+      : null;
+    trs.push(tr);
+
+    out.push({ date: b.date, symbol, hi, lo, close: num(b.close), prev_close: prevClose, tr, atr, atr_n: win.length, src });
+  }
+  return out;
+}
+
+/** Legacy source: session H/L/C reconstructed from 5m scanner spot samples. */
+async function scannerBars(p, { through, symbols }) {
   const args = [through];
   let filter = '';
   if (symbols?.length) { args.push(symbols); filter = 'AND symbol = ANY($2)'; }
-
   const { rows } = await p.query(
-    `SELECT date, symbol,
+    `SELECT date::text AS date, symbol,
             MAX(spot)::float8 AS hi,
             MIN(spot)::float8 AS lo,
             (ARRAY_AGG(spot ORDER BY ts DESC))[1]::float8 AS close
@@ -308,49 +378,91 @@ async function rebuildAtr(p, { through, symbols = null } = {}) {
       ORDER BY symbol, date`,
     args,
   );
-
   const bySym = new Map();
   for (const r of rows) {
     if (!bySym.has(r.symbol)) bySym.set(r.symbol, []);
     bySym.get(r.symbol).push(r);
   }
+  return bySym;
+}
+
+/**
+ * Rebuild wall_atr for every (date, symbol) up to `through`, from TRUE DAILY
+ * BARS.
+ *
+ * This used to derive H/L from scanner_snapshots spot samples, which broke the
+ * feature two ways. First, correctness: MAX/MIN over ~78 five-minute samples is
+ * always inside the real high/low — measured at 83.4% of true range across
+ * 2026-07-24..08-03, and since every bucket edge is denominated in ATR units, a
+ * denominator that small pushed 29% of live levels into a farther bucket than
+ * they belonged in. Second, availability: scanner_snapshots is pruned at
+ * RETENTION_SCANNER_SNAPSHOTS_DAYS (10 by default) while ATR_MIN_SESSIONS needs
+ * 11 sessions, so wall_atr could never populate at all and the whole Reach Rank
+ * column stayed empty. Daily bars fix both — they are the real range, and they
+ * go back as far as the provider will serve regardless of local retention.
+ *
+ * Symbols still come from scanner_snapshots, since those are the sessions the
+ * reach backfill can actually replay. A symbol whose bars fail to fetch falls
+ * back to the old scanner-derived rows, tagged src='scanner' so a mixed
+ * calibration is detectable rather than silent.
+ */
+async function rebuildAtr(p, { through, symbols = null } = {}) {
+  const roster = symbols?.length ? symbols : (await p.query(
+    'SELECT DISTINCT symbol FROM scanner_snapshots WHERE date <= $1 ORDER BY symbol', [through],
+  )).rows.map((r) => r.symbol);
+  if (!roster.length) return { symbols: 0, rows: 0, daily: 0, fallback: 0 };
+
+  const end = new Date(`${through}T23:59:59-05:00`);
+  const start = new Date(end.getTime() - ATR_HISTORY_DAYS * 24 * 3600 * 1000);
+  const etDay = (ms) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(ms));
+
+  const fetched = await mapLimit(roster, ATR_FETCH_CONCURRENCY, async (sym) => {
+    try {
+      const bars = INDEX_ROOTS.has(sym)
+        ? await dailyAdapter.fetchIndexDailyHistoryTheta(sym, start, end)
+        : await dailyAdapter.fetchStockDailyHistoryTheta(sym, start, end);
+      if (!bars?.length) return null;
+      return bars
+        .map((b) => ({ date: etDay(b.time), hi: num(b.high), lo: num(b.low), close: num(b.close) }))
+        .filter((b) => b.date <= through && b.hi != null && b.lo != null)
+        .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    } catch (e) {
+      console.warn('[reach] daily bars failed', sym, String(e?.message || e).slice(0, 100));
+      return null;
+    }
+  });
 
   const batch = [];
-  for (const [symbol, series] of bySym) {
-    const trs = [];
-    for (let i = 0; i < series.length; i++) {
-      const s = series[i];
-      const prevClose = i > 0 ? num(series[i - 1].close) : null;
-      const hi = num(s.hi), lo = num(s.lo);
-      if (hi == null || lo == null) { trs.push(null); continue; }
-      const tr = prevClose == null
-        ? hi - lo
-        : Math.max(hi - lo, Math.abs(hi - prevClose), Math.abs(lo - prevClose));
+  const missing = [];
+  let daily = 0;
+  roster.forEach((sym, i) => {
+    const bars = fetched[i];
+    if (!bars?.length) { missing.push(sym); return; }
+    batch.push(...atrRowsFor(sym, bars, 'daily'));
+    daily++;
+  });
 
-      // ATR from the window BEFORE this session — trs currently holds exactly
-      // the prior sessions, so read it before pushing today's.
-      const win = trs.slice(-ATR_WINDOW).filter((v) => v != null && v > 0);
-      const atr = win.length >= ATR_MIN_SESSIONS
-        ? win.reduce((a, b) => a + b, 0) / win.length
-        : null;
-      trs.push(tr);
-
-      batch.push({ date: s.date, symbol, hi, lo, close: num(s.close), prev_close: prevClose, tr, atr, atr_n: win.length });
-    }
+  // Degrade rather than drop: a symbol the provider won't serve still gets the
+  // legacy treatment, and says so in src.
+  if (missing.length) {
+    const legacy = await scannerBars(p, { through, symbols: missing });
+    for (const [sym, bars] of legacy) batch.push(...atrRowsFor(sym, bars, 'scanner'));
   }
 
   const written = await insertBatch(
     p,
-    'INSERT INTO wall_atr (date, symbol, hi, lo, close, prev_close, tr, atr, atr_n)',
-    ['date', 'symbol', 'hi', 'lo', 'close', 'prev_close', 'tr', 'atr', 'atr_n'],
+    'INSERT INTO wall_atr (date, symbol, hi, lo, close, prev_close, tr, atr, atr_n, src)',
+    ['date', 'symbol', 'hi', 'lo', 'close', 'prev_close', 'tr', 'atr', 'atr_n', 'src'],
     batch,
     `ON CONFLICT (date, symbol) DO UPDATE SET
        hi = EXCLUDED.hi, lo = EXCLUDED.lo, close = EXCLUDED.close,
        prev_close = EXCLUDED.prev_close, tr = EXCLUDED.tr,
-       atr = EXCLUDED.atr, atr_n = EXCLUDED.atr_n`,
+       atr = EXCLUDED.atr, atr_n = EXCLUDED.atr_n, src = EXCLUDED.src`,
   );
-  return { symbols: bySym.size, rows: written };
+  console.log(`[reach] atr — ${daily} symbols from daily bars, ${missing.length} fell back to scanner samples, ${written} rows`);
+  return { symbols: roster.length, rows: written, daily, fallback: missing.length };
 }
+
 
 // ── 2. Backfill ──────────────────────────────────────────────────────────────
 

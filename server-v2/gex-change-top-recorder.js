@@ -105,11 +105,23 @@ function isRTH() {
 }
 
 // ── Schema ────────────────────────────────────────────────────────────────────
+// Every read (getHistory / getResults) calls this first, and the scanner page
+// fires both at once on mount. Before the single-flight below, a cold process
+// ran the DDL twice concurrently — two ALTER TABLE / CREATE INDEX statements
+// queueing for the same ACCESS EXCLUSIVE lock on gex_change_top, on a pool that
+// had only two slots. Dedupe it: the second caller awaits the first's promise.
 let ensured = false;
+let _ensuring = null;
 async function ensureSchema() {
   const p = sg.getPool();
   if (!p) return false;
   if (ensured) return true;
+  if (_ensuring) return _ensuring;
+  _ensuring = _ensureSchemaOnce(p).finally(() => { _ensuring = null; });
+  return _ensuring;
+}
+
+async function _ensureSchemaOnce(p) {
   try {
     // If a legacy hourly table exists (columns include hour_et but NOT slot), it
     // can't satisfy the slot-keyed writes/reads. It only ever held throwaway

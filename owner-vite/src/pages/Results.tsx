@@ -1606,6 +1606,16 @@ const WALL_SLOTS = 27;
 const LEVEL_LABEL: Record<WallLevel, string> = { call_wall: "Call Wall", put_wall: "Put Wall", cb: "CORE" };
 const LEVEL_COLOR: Record<WallLevel, string> = { call_wall: AMBER, put_wall: GREEN, cb: HOME_THEME.lightBlue };
 
+/**
+ * "11:00 cb 305" → "11:00 CORE 305". getWalls() builds last_event from the raw
+ * level_type, so the column leaked DB values while the rest of the tab showed
+ * labels. Relabel on read — the stored value stays 'cb'.
+ */
+function prettyLastEvent(s: string | null): string {
+  if (!s) return "—";
+  return s.replace(/\b(call_wall|put_wall|cb)\b/, (m) => LEVEL_LABEL[m as WallLevel] ?? m);
+}
+
 const REACTION_LABEL: Record<WallReaction, string> = {
   reject: "Reject", break_lt5: "Break <5", break_5: "Break +5",
   consolidated: "Broke & consolidated", new_wall: "New wall", pin: "Pinned",
@@ -2066,7 +2076,7 @@ function WallsView() {
                         {n?.thin ? <span style={{ opacity: 0.5, fontSize: 12 }}> ·thin</span> : null}
                       </td>
                       <td style={{ ...td, opacity: t.changes ? 1 : 0.35 }}>{t.changes}</td>
-                      <td style={{ ...td, opacity: 0.65 }}>{t.last_event ?? "—"}</td>
+                      <td style={{ ...td, opacity: 0.65 }}>{prettyLastEvent(t.last_event)}</td>
                       <td style={{ ...td, fontFamily: "inherit" }}>{wallBadge(t.reaction, true)}</td>
                     </tr>
                   );

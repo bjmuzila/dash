@@ -110,10 +110,28 @@ const MARKET_HOLIDAYS = new Set([
 ]);
 
 // ── PG pool (same lazy pattern as eod-gex-recorder.js) ───────────────────────
-
+//
+// NOTE ON SIZING: this pool is NOT private to the recorder. server-with-proxy.js
+// re-requires getPool() for ~15 read routes (/proxy/strike-growth/*, walls,
+// dod, expiry totals …) and gex-change-top-recorder.js reads through it too.
+// It was max:2, which meant the scanner page — which mounts several of those
+// tabs at once — put every request after the first two into the pool's *acquire*
+// queue with no timeout. One slow read (the /proxy/strike-growth/scanner LATERAL
+// scan) therefore stalled unrelated endpoints for its full duration: three
+// different requests all returning at ~59.8s, which is what the DevTools trace
+// showed. Widen it and give both the acquire and the query a hard ceiling so a
+// single pathological query can never pin a slot indefinitely again.
 let pool = null;
 let pgUnavailable = false;
 let _schemaReady = false;
+
+/** Shared-pool sizing. Bump STRIKE_GROWTH_POOL_MAX if the DB can take more. */
+const POOL_MAX = Math.max(2, Number(process.env.STRIKE_GROWTH_POOL_MAX || 8));
+/** Server-side kill switch: no query on this pool may hold a slot past this. */
+const POOL_STATEMENT_TIMEOUT_MS = Math.max(
+  5_000,
+  Number(process.env.STRIKE_GROWTH_STATEMENT_TIMEOUT_MS || 45_000),
+);
 
 function getPool() {
   if (pgUnavailable) return null;
@@ -126,8 +144,16 @@ function getPool() {
       ssl: process.env.DATABASE_URL.includes('localhost') || process.env.DATABASE_URL.includes('127.0.0.1')
         ? undefined
         : { rejectUnauthorized: false },
-      max: 2,
+      max: POOL_MAX,
       keepAlive: true,
+      // Fail fast instead of queueing forever when every slot is busy — a 503
+      // the client can retry beats a request that hangs for a minute.
+      connectionTimeoutMillis: Number(process.env.STRIKE_GROWTH_ACQUIRE_TIMEOUT_MS || 12_000),
+      idleTimeoutMillis: 30_000,
+      // Postgres-side timeout: cancels the query AND releases the slot. A pg
+      // client-side query_timeout would give up on the response while the
+      // backend kept running, so the slot would stay pinned — not what we want.
+      statement_timeout: POOL_STATEMENT_TIMEOUT_MS,
     });
     pool.on('error', (e) => {
       console.warn('[strike-growth] pool error (will reconnect):', e.message);
@@ -135,6 +161,7 @@ function getPool() {
       pool = null;
       _schemaReady = false;
     });
+    console.log(`[strike-growth] pg pool: max=${POOL_MAX}, statement_timeout=${POOL_STATEMENT_TIMEOUT_MS}ms (shared with the /proxy read routes)`);
     return pool;
   } catch (e) {
     console.error('[strike-growth] pg unavailable:', e.message);

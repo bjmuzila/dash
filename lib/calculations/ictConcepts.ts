@@ -660,9 +660,25 @@ export function detectTurtleSoup(candles: IctCandle[], pools: LiquidityPool[], t
 // ── Judas Swing ──────────────────────────────────────────────────────────────
 /**
  * Judas Swing = the false move right after a session open that reverses. ICT
- * frames it at the London (2:00 ET) and NY (9:30 ET) opens. Heuristic: in the
- * first hour after the open, price pushes one way (sweeps the open's initial
- * extreme) then closes back through the open price → the real move is opposite.
+ * frames it at the London (2:00 ET) and NY (9:30 ET) opens. In the first hour
+ * after the open, price pushes AGAINST the eventual direction — trading BEYOND
+ * the open price — then closes back through the open → the real move is opposite.
+ *
+ * The manipulation leg must actually trade through the open. An earlier version
+ * tested only (a) which extreme printed first and (b) which side of the open the
+ * hour closed on. Both are automatically true in any hour that simply trends: in
+ * a one-directional up hour the low IS the first bar and the high IS the last, so
+ * `loTs < hiTs && last > openPx` could never fail. That fired a bull Judas on
+ * every trending open, entered at the top of the leg it had just chased, and
+ * labelled it "false low at open" while the low sat at or ABOVE the open — a
+ * false low that never traded below the open is not a false low. It also
+ * contradicted PO3: a rally into the open hour IS the manipulation leg, so the
+ * play is SHORT, but the old test read that same rally as the real move.
+ *
+ * Guards, measured as a fraction of the window's own range so they scale with
+ * volatility instead of being fixed point thresholds:
+ *   MIN_LEG  — the false move must clear the open by >= 25% of the range;
+ *   MIN_BACK — the reversal must close back through the open by >= 20% of it.
  */
 export function detectJudas(candles: IctCandle[]): IctSignal[] {
   const out: IctSignal[] = [];
@@ -684,8 +700,27 @@ export function detectJudas(candles: IctCandle[]): IctSignal[] {
       // — the session extreme — entered at the best price of the hour an hour before
       // that price was known to be the extreme. That alone produced ~8R averages.
       const ts = lastBar.timestamp;
-      if (hiTs < loTs && last < openPx) out.push({ kind: "judas", dir: "bear", price: hi, ts, note: "false high at open" });
-      else if (loTs < hiTs && last > openPx) out.push({ kind: "judas", dir: "bull", price: lo, ts, note: "false low at open" });
+
+      const range = hi - lo;
+      if (!(range > 0)) continue;
+      const MIN_LEG = 0.25;   // manipulation must clear the open by 25% of range
+      const MIN_BACK = 0.20;  // reversal must close back through it by 20%
+      const legUp = hi - openPx;    // how far the false HIGH traded above the open
+      const legDn = openPx - lo;    // how far the false LOW traded below the open
+      const backDn = openPx - last; // how far the close reversed BELOW the open
+      const backUp = last - openPx; // how far the close reversed ABOVE the open
+      const pct = (n: number) => Math.round((n / range) * 100);
+
+      // Bear: false high ABOVE the open printed first, then the hour closed back
+      // below it → the up-leg was the manipulation, the real move is down.
+      if (hiTs < loTs && legUp >= range * MIN_LEG && backDn >= range * MIN_BACK) {
+        out.push({ kind: "judas", dir: "bear", price: hi, ts, note: `false high ${pct(legUp)}% above open` });
+      }
+      // Bull: false low BELOW the open printed first, then the hour closed back
+      // above it → the down-leg was the manipulation, the real move is up.
+      else if (loTs < hiTs && legDn >= range * MIN_LEG && backUp >= range * MIN_BACK) {
+        out.push({ kind: "judas", dir: "bull", price: lo, ts, note: `false low ${pct(legDn)}% below open` });
+      }
     }
   }
   return dedupeByTs(out);

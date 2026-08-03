@@ -1032,6 +1032,22 @@ async function handleFlowPremSplit(req, res) {
 const _volFlowCache = new Map(); // key -> { at, payload }
 const VOLFLOW_TTL_MS = 20_000;   // recorder writes ~1/min; 20s keeps polls cheap
 
+// ── /proxy/strike-growth/scanner cache ──────────────────────────────────────
+// The cross-ticker scanner query runs a LATERAL lookback per row of today's
+// strike_growth inside the last 4h — by far the most expensive read on the
+// shared strike-growth pool. The scanner PAGE mounts it alongside the GEX
+// Change Top tab and then re-polls every 5 min, so an uncached run meant the
+// whole page waited on it (and, before the pool was widened, so did every other
+// tab). The underlying data only changes on a sweep (STRIKE_GROWTH_SWEEP_MINS,
+// default 5), so a 30s payload cache is strictly free accuracy-wise.
+//
+// _sgScannerInflight additionally COALESCES concurrent identical requests onto
+// one query. Without it, a cold cache + two mounts (or a poll landing on a
+// reload) issues the same 60s scan twice and eats two pool slots for it.
+const _sgScannerCache = new Map();    // key -> { at, payload }
+const _sgScannerInflight = new Map(); // key -> Promise<payload>
+const SG_SCANNER_TTL_MS = Math.max(0, Number(process.env.STRIKE_GROWTH_SCANNER_TTL_MS || 30_000));
+
 async function handleGexVolFlow(req, res) {
   const { searchParams } = new URL(req.url || '/', 'http://localhost');
 
@@ -2199,8 +2215,35 @@ async function main() {
                                                   OR (strike < spot AND latest_chg < 0))))
               ORDER BY ${orderCol} DESC NULLS LAST
               LIMIT $4`;
-            const { rows } = await p.query(sql, [today, EXCLUDE, minZ, limit, otmK, minOtm, dir]);
-            sendJson(res, 200, { ok: true, window: win, sort, rows });
+            // Cache + single-flight (see _sgScannerCache above). Key on every
+            // input that changes the SQL or its params, `today` included so the
+            // ET date roll can never serve yesterday's movers.
+            const cacheKey = [today, win, limit, sort, minZ, otmK, minOtm, dir, wAbs, wPct].join('|');
+            const hit = _sgScannerCache.get(cacheKey);
+            if (hit && Date.now() - hit.at < SG_SCANNER_TTL_MS) {
+              sendJson(res, 200, hit.payload);
+              return;
+            }
+
+            let job = _sgScannerInflight.get(cacheKey);
+            if (!job) {
+              job = p.query(sql, [today, EXCLUDE, minZ, limit, otmK, minOtm, dir])
+                .then(({ rows }) => {
+                  const payload = { ok: true, window: win, sort, rows };
+                  _sgScannerCache.set(cacheKey, { at: Date.now(), payload });
+                  // Bound the map — params are user-tunable, so it would
+                  // otherwise grow one entry per distinct slider combination.
+                  if (_sgScannerCache.size > 64) {
+                    for (const [k, v] of _sgScannerCache) {
+                      if (Date.now() - v.at >= SG_SCANNER_TTL_MS) _sgScannerCache.delete(k);
+                    }
+                  }
+                  return payload;
+                })
+                .finally(() => { _sgScannerInflight.delete(cacheKey); });
+              _sgScannerInflight.set(cacheKey, job);
+            }
+            sendJson(res, 200, await job);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
         return;
