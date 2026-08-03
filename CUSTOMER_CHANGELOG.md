@@ -10,6 +10,17 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * Net P&L, sessions, trades, win rate and per-trade now sit in the header bar, freeing the cards below for the things you can act on.
 * All of the above is calculated from the trades already in your journal — nothing new to import or set up.
 
+## Sunday 8/2/2026
+
+* The ICT page now marks trades on the chart: a green ▲ or red ▼ dot drops at the entry price the moment a setup fires.
+* Click a dot to open that trade's long/short position box — profit zone, stop zone, and 1R/2R/3R targets, with a card showing the same numbers in text. Click again to close it.
+* Added a Plays panel under the chart listing every live setup with its entry, stop, targets and reward-to-risk; clicking a card opens the same box on the chart.
+* Setups only appear once they actually trigger. An earlier “possible setup” marker could point the wrong way — flagging a long at a level price had already blown through — so it's gone.
+* Rebuilt Turtle Soup to the real ICT rules: a raid on a short-term swing high or low, inside the specific stop-hunt time windows (London open and injection, the two NY AM windows, the lunch raid, and the NY PM raid), entry on the first fair value gap of the reversal, and the stop placed beyond the raid wick.
+* The Scanner and Test Lab tab bars now live in the main toolbar, so every tab in those sections is one click away from any page — and links straight to a specific tab now open that tab instead of dropping you on the Traders Dashboard.
+* Bzila alerts moved into the CB Edge logo — it glows orange with a badge the moment an alert lands, and clicking it opens the panel. Feedback moved into that panel and the account menu.
+* Fixed the Help & Docs, Disclaimer, Risk Disclosure, Terms and Privacy links in the account menu, which were landing on the Traders Dashboard instead of the page you clicked.
+
 ## Saturday 8/1/2026
 
 * Added a new **GEX Map** to the Test Lab — four different ways of looking at the same session, all on one page: a time-forward heat field, a spot-centred dial, a vertical ladder, and a contour map that treats gamma as terrain.

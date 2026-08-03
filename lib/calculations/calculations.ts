@@ -268,45 +268,69 @@ export function computeGEXProfile(
   const lo = spot * 0.8, hi = spot * 1.2;
   const N = 60;
   const levels: number[] = Array.from({ length: N }, (_, i) => lo + (hi - lo) * (i / (N - 1)));
-  const values: number[] = [];
 
-  for (const S of levels) {
+  // Reference annualization: trading days / 262. For 0DTE, use the live RTH
+  // fraction remaining (floored to ~1 five-min bar) instead of a full day, so
+  // the gamma-flip tracks real intraday decay. Hoisted out of the inner loop —
+  // it only depends on the clock, and the refinement pass below re-evaluates
+  // the model many times.
+  const t0DTE = Math.max(rthFractionLeft(), 1 / 78) / 262;
+
+  // Net GEX ($B) at an arbitrary spot level. Factored out of the level loop so
+  // the flip refinement can re-evaluate the SAME model at off-grid prices —
+  // the curve and the flip point can never drift apart.
+  const netAt = (S: number): number => {
     let net = 0;
     for (const r of rows) {
-      // Reference annualization: trading days / 262. For 0DTE, use the live RTH
-      // fraction remaining (floored to ~1 five-min bar) instead of a full day,
-      // so the gamma-flip tracks real intraday decay.
       const dte = r.dte ?? 0;
-      const T = dte <= 0
-        ? Math.max(rthFractionLeft(), 1 / 78) / 262
-        : dte / 262;
+      const T = dte <= 0 ? t0DTE : dte / 262;
       const callG = bsGamma(S, r.strike, r.callIV!, T);
       const putG  = bsGamma(S, r.strike, r.putIV!,  T);
       // TotalGEX(P) = Σ BS_gamma(P,K,IV,T) × contracts × 100 × P²
       net += callContracts(r) * 100 * S * S * callG;
       net -= putContracts(r) * 100 * S * S * putG;
     }
-    values.push(net / 1e9);
-  }
+    return net / 1e9;
+  };
+
+  const values: number[] = levels.map(netAt);
 
   // Gamma flip: collect ALL sign changes, then take the one nearest spot.
-  //   zeroGamma = posStrike − (posStrike − negStrike) × posGamma/(posGamma − negGamma)
   // (Sharp 0DTE gamma can produce spurious far-tail crossings; the regime flip is
   //  the crossing closest to spot, matching findGEXFlip's bar-based behavior.)
   // (ChainRow carries no expiration date, so the reference's Ex-Next / Ex-Monthly
   //  series are omitted — neither is plotted; only the All-Expiries curve + flip are.)
-  const crossings: number[] = [];
+  const brackets: { lo: number; hi: number; z: number }[] = [];
   for (let i = 0; i < values.length - 1; i++) {
     const a = values[i], b = values[i + 1];
     if ((a >= 0 && b < 0) || (a < 0 && b >= 0)) {
       const z = levels[i + 1] - ((levels[i + 1] - levels[i]) * b / (b - a));
-      if (Number.isFinite(z)) crossings.push(z);
+      if (Number.isFinite(z)) brackets.push({ lo: levels[i], hi: levels[i + 1], z });
     }
   }
-  let flipPoint: number | null = crossings.length
-    ? crossings.reduce((best, c) => (Math.abs(c - spot) < Math.abs(best - spot) ? c : best))
-    : null;
-  if (flipPoint !== null) flipPoint = Math.round(flipPoint * 10) / 10;
+
+  let flipPoint: number | null = null;
+  if (brackets.length) {
+    const near = brackets.reduce((best, c) =>
+      (Math.abs(c.z - spot) < Math.abs(best.z - spot) ? c : best));
+
+    // Refinement pass. The 60-level grid spans ±20% of spot, so adjacent levels
+    // sit ~51pts apart at SPX 7500 — and the profile is curved, so straight-line
+    // interpolation inside that gap was off by tens of points (that grid error,
+    // not the model, is what put the chart's flip line ~40pts away from the
+    // bar-based FLIP tile). Bisect the bracketing interval against the real
+    // model down to <0.05pt: ~10 extra netAt() evals, negligible next to the 60
+    // already done for the curve.
+    let a = near.lo, b = near.hi;
+    let fa = netAt(a);
+    for (let i = 0; i < 24 && b - a > 0.05; i++) {
+      const mid = (a + b) / 2;
+      const fm = netAt(mid);
+      if (fm === 0) { a = b = mid; break; }
+      if ((fa < 0) === (fm < 0)) { a = mid; fa = fm; } else { b = mid; }
+    }
+    flipPoint = Math.round(((a + b) / 2) * 100) / 100;
+  }
 
   return { levels, values, flipPoint };
 }

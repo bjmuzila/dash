@@ -1,0 +1,58 @@
+--- a/server-v2/etf-candle-recorder.js
++++ b/server-v2/etf-candle-recorder.js
+@@ -3,7 +3,8 @@
+  * server-v2/state/etf-candle-recorder.js
+  *
+  * Server-side recorder for SPY / QQQ 1-minute OHLC candles. Runs on its own
+- * interval during RTH so today's session bars are persisted going forward —
++ * interval across the extended session (04:00–20:00 ET) so the day's bars are
++ * persisted going forward —
+  * building a real intraday history in Postgres instead of depending on the
+  * on-demand dxLink snapshot each browser pulls (which only covers whatever
+  * `fromTime` the client asks for, and vanishes when the tab closes).
+@@ -105,10 +106,25 @@
+   return { weekday: get('weekday'), mins: Number(get('hour')) * 60 + Number(get('minute')) };
+ }
+ 
+-function isRthNowET() {
++// Equity EXTENDED hours: 04:00–20:00 ET, weekdays.
++//
++// Was 09:30–16:00 (RTH only), which left a 17.5-hour hole every weekday night
++// in which nothing was written. That was invisible until you looked at the
++// chart pre-market: the last SPY/QQQ bar would be from 16:00 the previous day,
++// and the only reason pre-market bars ever appeared was the boot backfill
++// happening to run after 04:00 — i.e. by accident, on restart.
++//
++// The bounds are the real pre/post-market session, so this now tracks when SPY
++// and QQQ actually trade rather than when the primary session is open. Volume
++// out there is thin — single-digit shares a minute overnight — and bars only
++// print on a trade, so expect gaps. A gappy line is correct, not a stall.
++//
++// etDayStartMs() already anchors the fetch to ET midnight, so the per-minute
++// path picks up pre-market with no other change.
++function isMarketNowET() {
+   const { weekday, mins } = etWallMins();
+   if (weekday === 'Sat' || weekday === 'Sun') return false;
+-  return mins >= 570 && mins < 960; // 9:30–16:00 ET
++  return mins >= 240 && mins < 1200; // 04:00–20:00 ET
+ }
+ 
+ /** Epoch ms of today's ET midnight — session-only fetch anchor (no overnight). */
+@@ -172,7 +188,7 @@
+ async function tick() {
+   const p = getPool();
+   if (!p || !(await ensureSchema())) return;
+-  if (!isRthNowET()) return; // SPY/QQQ 1m only meaningful during RTH
++  if (!isMarketNowET()) return; // outside 04:00–20:00 ET there is nothing to record
+ 
+   for (const symbol of SYMBOLS) {
+     try {
+@@ -248,7 +264,7 @@
+     tick().catch((e) => console.warn('[etf-candle] initial tick error:', e.message));
+   }, 20_000);
+   console.log(
+-    `[etf-candle] recorder started — ${SYMBOLS.join('/')} 1m (RTH) every ${INTERVAL_MS / 1000}s` +
++    `[etf-candle] recorder started — ${SYMBOLS.join('/')} 1m (04:00-20:00 ET) every ${INTERVAL_MS / 1000}s` +
+     (BACKFILL_DAYS > 0 ? `, ${BACKFILL_DAYS}d backfill on boot` : ''),
+   );
+ }

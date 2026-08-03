@@ -1504,6 +1504,14 @@ export function HomeClient({
   }, [chartRows, chartSpot, wallCalcMode]);
   const gexProfile = useMemo(() => computeGEXProfile(chartRows, chartSpot, dataMode), [chartRows, chartSpot, dataMode]);
 
+  // Single source of truth for the gamma flip. The γ=0 spot-sweep crossing from
+  // the BS profile is what GexChart draws as the dashed "+GEX FLIP" line, so the
+  // Flip tile and the GEX Pulse panel read the same value — they used to show
+  // the per-strike bar crossing (findGEXFlip) instead, which put a ~40pt gap
+  // between the card and the line on the chart right below it. `flipPoint` stays
+  // the fallback for when the profile can't be built (too few rows with IV).
+  const gammaFlip = gexProfile?.flipPoint ?? flipPoint;
+
   const C = {
     bg: "#05060A",
     cyan: "#219EBC",
@@ -1757,7 +1765,7 @@ export function HomeClient({
                   { label: "Net GEX",   value: fmtMoneyB(netGex), color: netGex >= 0 ? C.green : C.red },
                   { label: "Call Wall", value: (callWallOiVol ?? callWall) != null ? formatStrikeValue((callWallOiVol ?? callWall)!) : "—", color: C.green },
                   { label: "Put Wall",  value: (putWallOiVol ?? putWall) != null ? formatStrikeValue((putWallOiVol ?? putWall)!) : "—", color: C.red },
-                  { label: "Flip",      value: flipPoint != null ? formatStrikeValue(flipPoint) : "—", color: C.orange },
+                  { label: "Flip",      value: gammaFlip != null ? formatStrikeValue(gammaFlip) : "—", color: C.orange },
                   { label: "CB",        value: mvcStrike != null ? formatStrikeValue(mvcStrike) : "—", color: C.purple },
                   { label: "Max Pain",  value: maxPainStrike != null ? formatStrikeValue(maxPainStrike) : "—", color: C.cyan },
                   { label: "+1σ (EM)",  value: emLevels.up != null ? formatStrikeValue(emLevels.up) : "—", color: C.green },
@@ -1897,7 +1905,7 @@ export function HomeClient({
                       cb={mvcStrike}
                       callWall={callWallOiVol ?? callWall}
                       putWall={putWallOiVol ?? putWall}
-                      flip={flipPoint}
+                      flip={gammaFlip}
                       netGex={netGex}
                       netDex={netDex}
                       gexPct={posGexPct}

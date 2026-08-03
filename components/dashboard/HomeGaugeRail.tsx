@@ -6,6 +6,11 @@
 // shared /ws/gex feed (same seed + permanent-socket pattern as
 // LiveGreeksGauges — always on, no toggle, no idle timeout). The three
 // non-greek metrics come in as props from HomeClient.
+//
+// Each tile also carries a 15-minute change line under its value. That line is
+// driven by a per-tile ring buffer of one-minute samples (see useDelta15m) —
+// NOT by value − prevValue, which would report the change since the last socket
+// frame and mislabel it as a 15-minute move.
 
 import { useEffect, useRef, useState } from "react";
 import { queryGreeksToday } from "@/lib/snapdb";
@@ -18,7 +23,95 @@ const NEG = "#FF4757"; // rgb(255,71,87)
 const CYAN = HOME_THEME.cyan; // #219EBC — fallback tint only
 const TRACK = "rgba(255,255,255,0.08)";
 
+// HOME_THEME.muted is the muted *token*; it resolves to the same value as
+// .text, so the muted role is expressed as token + this opacity rather than a
+// second hex. Matches the dimmed "--" placeholder already used for empty tiles.
+const MUTED_OPACITY = 0.45;
+
+// ── 15-minute change ─────────────────────────────────────────────────────────
+const MINUTE_MS = 60_000;
+/** Lookback for the change line. */
+const WINDOW_MS = 15 * MINUTE_MS;
+/** ~16 one-minute samples: just enough to always reach back across WINDOW_MS. */
+const RING_MINUTES = 16;
+/** A move smaller than this share of the tile's full scale reads as flat. */
+const DEADBAND_FRACTION = 0.01;
+
+/** Stable keys for the per-tile ring buffers (also the on-screen labels). */
+const LABELS = {
+  gamma: "Gamma (Net GEX)",
+  delta: "Delta (DEX)",
+  gammaPct: "Gamma % 0DTE (Vol)",
+  cpg: "CPG Ratio",
+  gexChg: "0DTE GEX Δ 15m",
+  ib: "IB Direction",
+} as const;
+
 interface Totals { ts: number; gex: number; dex: number } // gex/dex in billions
+
+type Sample = { ts: number; v: number };
+
+/**
+ * Per-tile ring buffer of ~16 one-minute samples, and the 15-minute delta drawn
+ * from it.
+ *
+ * Sampling: a 5s timer reads the latest values and appends at most one sample
+ * per wall-clock minute bucket per key, capped at RING_MINUTES entries. The
+ * timer (rather than the render cadence) is what makes the spacing one minute —
+ * socket frames arrive far faster and irregularly.
+ *
+ * Delta: current value − the newest sample at or before the 15-min mark. The
+ * half-minute tolerance covers the case where a full 16-slot ring's oldest
+ * sample sits a few seconds shy of the mark. When no sample reaches back that
+ * far — a tile that has not been on screen for 15 minutes — the delta is null
+ * and the caller renders nothing rather than a short-window change mislabelled
+ * as 15 minutes.
+ */
+function useDelta15m(values: Record<string, number | null>): Record<string, number | null> {
+  const valuesRef = useRef(values);
+  valuesRef.current = values;
+  const [rings, setRings] = useState<Record<string, Sample[]>>({});
+
+  useEffect(() => {
+    const sample = () => {
+      const now = Date.now();
+      const bucket = Math.floor(now / MINUTE_MS);
+      setRings((prev) => {
+        const next: Record<string, Sample[]> = { ...prev };
+        let changed = false;
+        for (const [k, v] of Object.entries(valuesRef.current)) {
+          if (v == null || !Number.isFinite(v)) continue;
+          const buf = prev[k] ?? [];
+          const last = buf[buf.length - 1];
+          if (last && Math.floor(last.ts / MINUTE_MS) === bucket) continue; // one per minute
+          next[k] = [...buf, { ts: now, v }].slice(-RING_MINUTES);
+          changed = true;
+        }
+        return changed ? next : prev;
+      });
+    };
+    sample();
+    const id = setInterval(sample, 5_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const now = Date.now();
+  const target = now - WINDOW_MS + MINUTE_MS / 2;
+  const out: Record<string, number | null> = {};
+  for (const [k, v] of Object.entries(values)) {
+    const buf = rings[k];
+    if (v == null || !Number.isFinite(v) || !buf?.length) {
+      out[k] = null;
+      continue;
+    }
+    const reachable = buf.filter((s) => s.ts <= target);
+    const ref = reachable.length ? reachable[reachable.length - 1] : null;
+    out[k] = ref ? v - ref.v : null;
+  }
+  return out;
+}
+
+const clamp = (x: number, a: number, b: number) => Math.max(a, Math.min(b, x));
 
 function totalsToPoint(
   t: Record<string, number> | null | undefined,
@@ -33,8 +126,6 @@ function totalsToPoint(
   else if (ts < 1e12) ts *= 1000;
   return gex || dex ? { ts, gex, dex } : null;
 }
-
-const clamp = (x: number, a: number, b: number) => Math.max(a, Math.min(b, x));
 
 // ── Segmented LED meter ──────────────────────────────────────────────────────
 // t / midT are 0..1 normalized positions. kind "signed" fills from mid outward
@@ -105,6 +196,40 @@ interface GaugeDef {
   kind: "signed" | "pct";
   color: string;
   fmt: (v: number) => string;
+  /** Full scale of the meter — the deadband is DEADBAND_FRACTION of this. */
+  scale: number;
+  /** Formats an unsigned magnitude for the change line (the arrow carries sign). */
+  fmtAbs: (v: number) => string;
+  /** Change over the last 15 min, or null when there is no history that far back. */
+  delta15m: number | null;
+}
+
+/**
+ * 15-minute change line — text only, directly under the tile value. Never
+ * touches the meter. Renders nothing until the ring buffer reaches back 15 min.
+ * Only the magnitude carries the up/down accent; "/ 15m" stays muted so the
+ * colour reads as the direction of the move, not as a label.
+ */
+function Delta15m({ g }: { g: GaugeDef }) {
+  const d = g.delta15m;
+  if (d == null || !Number.isFinite(d)) return null;
+  const flat = Math.abs(d) < g.scale * DEADBAND_FRACTION;
+  const up = d > 0;
+  return (
+    <div style={{ fontSize: 11, fontWeight: 700, marginTop: 3, whiteSpace: "nowrap" }}>
+      <span
+        style={{
+          color: flat ? HOME_THEME.muted : up ? HOME_THEME.green : HOME_THEME.red,
+          opacity: flat ? MUTED_OPACITY : 1,
+        }}
+      >
+        {flat ? "—" : `${up ? "▲" : "▼"} ${g.fmtAbs(Math.abs(d))}`}
+      </span>
+      <span style={{ color: HOME_THEME.muted, opacity: MUTED_OPACITY, fontWeight: 600 }}>
+        {" / 15m"}
+      </span>
+    </div>
+  );
 }
 
 function Cell({ g }: { g: GaugeDef }) {
@@ -137,15 +262,20 @@ function Cell({ g }: { g: GaugeDef }) {
         {g.label}
       </div>
       <SegMeter t={g.t} midT={g.midT} color={g.color} kind={g.kind} />
-      <div
-        style={{
-          fontSize: 14,
-          fontWeight: 800,
-          fontVariantNumeric: "tabular-nums",
-          color: has ? "#FFFFFF" : "rgba(255,255,255,0.45)",
-        }}
-      >
-        {has ? g.fmt(g.value as number) : "--"}
+      {/* Value + change line share a wrapper so the tile's 6px column gap sits
+          above the value and the change line hangs off it at marginTop: 3. */}
+      <div style={{ textAlign: "center", minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: 14,
+            fontWeight: 800,
+            fontVariantNumeric: "tabular-nums",
+            color: has ? "#FFFFFF" : "rgba(255,255,255,0.45)",
+          }}
+        >
+          {has ? g.fmt(g.value as number) : "--"}
+        </div>
+        <Delta15m g={g} />
       </div>
     </div>
   );
@@ -157,6 +287,11 @@ const fmtDex = (v: number) => `${v >= 0 ? "+" : "−"}$${Math.abs(v).toFixed(2)}
 const fmtPct = (v: number) => `${v.toFixed(0)}%`;
 const fmtRatio = (v: number) => `${v.toFixed(2)}x`;
 const fmtIb = (v: number) => `${v >= 50 ? "▲ " : "▼ "}${v.toFixed(0)}%`;
+
+// Unsigned magnitudes for the change line — the ▲/▼ carries the sign.
+const fmtAbsB = (v: number) => `$${v.toFixed(2)}B`;
+const fmtAbsPct = (v: number) => `${v.toFixed(0)}%`;
+const fmtAbsRatio = (v: number) => `${v.toFixed(2)}x`;
 
 export interface HomeGaugeRailProps {
   /** Vol-only 0DTE gamma as a share of total gamma, 0–100. */
@@ -260,16 +395,27 @@ export default function HomeGaugeRail({
     Math.abs(gexChg ?? 0),
   );
 
+  // One ring buffer per tile, keyed by label. Feeds the change line only — the
+  // meters keep reading `latest`/props exactly as before.
+  const delta15m = useDelta15m({
+    [LABELS.gamma]: gex,
+    [LABELS.delta]: dex,
+    [LABELS.gammaPct]: gammaPctVol,
+    [LABELS.cpg]: cpg,
+    [LABELS.gexChg]: gexChg,
+    [LABELS.ib]: ibDirection,
+  });
+
   // signed → normalized 0..1 with 0.5 = center
   const signedT = (v: number | null, scale: number) => (v == null ? null : clamp(0.5 + v / (2 * scale), 0, 1));
 
   const gauges: GaugeDef[] = [
-    { label: "Gamma (Net GEX)", value: gex, t: signedT(gex, gexScale), midT: 0.5, kind: "signed", color: gex == null ? CYAN : gex >= 0 ? POS : NEG, fmt: fmtB },
-    { label: "Delta (DEX)", value: dex, t: signedT(dex, dexScale), midT: 0.5, kind: "signed", color: dex == null ? CYAN : dex >= 0 ? POS : NEG, fmt: fmtDex },
-    { label: "Gamma % 0DTE (Vol)", value: gammaPctVol, t: gammaPctVol == null ? null : clamp(gammaPctVol / 100, 0, 1), midT: 0, kind: "pct", color: gammaPctVol == null ? CYAN : gammaPctVol >= 50 ? POS : NEG, fmt: fmtPct },
-    { label: "CPG Ratio", value: cpg, t: cpg == null ? null : clamp(cpg / 2, 0, 1), midT: 0.5, kind: "signed", color: cpg == null ? CYAN : cpg >= 1 ? POS : NEG, fmt: fmtRatio },
-    { label: "0DTE GEX Δ 15m", value: gexChg, t: signedT(gexChg, chgScale), midT: 0.5, kind: "signed", color: gexChg == null ? CYAN : gexChg >= 0 ? POS : NEG, fmt: fmtB },
-    { label: "IB Direction", value: ibDirection, t: ibDirection == null ? null : clamp(ibDirection / 100, 0, 1), midT: 0.5, kind: "signed", color: ibDirection == null ? CYAN : ibDirection >= 50 ? POS : NEG, fmt: fmtIb },
+    { label: LABELS.gamma, value: gex, t: signedT(gex, gexScale), midT: 0.5, kind: "signed", color: gex == null ? CYAN : gex >= 0 ? POS : NEG, fmt: fmtB, scale: gexScale, fmtAbs: fmtAbsB, delta15m: delta15m[LABELS.gamma] },
+    { label: LABELS.delta, value: dex, t: signedT(dex, dexScale), midT: 0.5, kind: "signed", color: dex == null ? CYAN : dex >= 0 ? POS : NEG, fmt: fmtDex, scale: dexScale, fmtAbs: fmtAbsB, delta15m: delta15m[LABELS.delta] },
+    { label: LABELS.gammaPct, value: gammaPctVol, t: gammaPctVol == null ? null : clamp(gammaPctVol / 100, 0, 1), midT: 0, kind: "pct", color: gammaPctVol == null ? CYAN : gammaPctVol >= 50 ? POS : NEG, fmt: fmtPct, scale: 100, fmtAbs: fmtAbsPct, delta15m: delta15m[LABELS.gammaPct] },
+    { label: LABELS.cpg, value: cpg, t: cpg == null ? null : clamp(cpg / 2, 0, 1), midT: 0.5, kind: "signed", color: cpg == null ? CYAN : cpg >= 1 ? POS : NEG, fmt: fmtRatio, scale: 2, fmtAbs: fmtAbsRatio, delta15m: delta15m[LABELS.cpg] },
+    { label: LABELS.gexChg, value: gexChg, t: signedT(gexChg, chgScale), midT: 0.5, kind: "signed", color: gexChg == null ? CYAN : gexChg >= 0 ? POS : NEG, fmt: fmtB, scale: chgScale, fmtAbs: fmtAbsB, delta15m: delta15m[LABELS.gexChg] },
+    { label: LABELS.ib, value: ibDirection, t: ibDirection == null ? null : clamp(ibDirection / 100, 0, 1), midT: 0.5, kind: "signed", color: ibDirection == null ? CYAN : ibDirection >= 50 ? POS : NEG, fmt: fmtIb, scale: 100, fmtAbs: fmtAbsPct, delta15m: delta15m[LABELS.ib] },
   ];
 
   return (
