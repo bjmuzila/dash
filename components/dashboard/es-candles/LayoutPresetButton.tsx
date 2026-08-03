@@ -23,6 +23,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { DockButton } from "@/components/shared/DockToolbar";
 import { HOME_THEME, LIGHT_BLUE, SOFT_RED } from "@/components/shared/homeTheme";
 import { usePagePresets } from "@/hooks/usePagePresets";
@@ -124,13 +125,22 @@ export default function LayoutPresetButton() {
         {P.presets.length ? <span style={{ opacity: 0.5, fontSize: 10 }}>{P.presets.length}</span> : null}
       </DockButton>
 
-      {open && pos && (
+      {/* PORTALED TO document.body.
+          `position: fixed` + z-index 60 was not enough on its own: this button
+          renders inside the chart card's dock, which on a multi-chart row is
+          itself portaled into a container with z-index 35, so the panel's 60 is
+          scoped INSIDE that context and loses to anything painting above it.
+          Confirmed in the browser — computed `fixed`, z-index 60, rect fully on
+          screen, still covered. The page's own Charts/Indicators panels dodge
+          this by being rendered at page root; a body portal gets us the same
+          place from inside a nested tree. */}
+      {open && pos && typeof document !== "undefined" && createPortal(
         <div
           className="es-candles-popover"
           style={{
             // Same treatment as the page's Charts / Indicators panels so the
             // three read as one control surface.
-            position: "fixed", top: pos.top, right: pos.right, zIndex: 60,
+            position: "fixed", top: pos.top, right: pos.right, zIndex: 200,
             width: PANEL_W, maxWidth: "calc(100vw - 16px)",
             padding: 12, borderRadius: 14,
             border: `1px solid ${HOME_THEME.border}`,
@@ -227,7 +237,8 @@ export default function LayoutPresetButton() {
             Saves chart count, tickers, timeframe, overlays, expiry picks and indicators.
             Loading one reloads the page.
           </span>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
