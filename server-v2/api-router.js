@@ -6094,7 +6094,18 @@ if (libDb) {
             send(res, 200, { ok: true }); return;
           }
 
-          if (action === 'deleteTx') {
+          // Bulk re-file: one merchant, every row. Scoped to the loaded month
+        // unless allMonths is set, so a fix can't silently rewrite history.
+        if (action === 'setMerchantCategory') {
+          const merchant = String(body?.merchant ?? '').trim();
+          if (!merchant) { send(res, 400, { error: 'merchant required' }); return; }
+          const catId = body?.categoryId == null || body.categoryId === '' ? null : Number(body.categoryId);
+          const scope = body?.allMonths ? null : String(body?.month ?? currentMonth()).slice(0, 7);
+          const updated = await D.setStatementCategoryByMerchant(profile.id, scope, merchantKey(merchant), catId);
+          send(res, 200, { ok: true, updated }); return;
+        }
+
+        if (action === 'deleteTx') {
             await D.deleteStatementTx(profile.id, Number(body?.id ?? 0));
             send(res, 200, { ok: true }); return;
           }

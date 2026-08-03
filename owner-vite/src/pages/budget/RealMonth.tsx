@@ -151,6 +151,7 @@ type Finding = { title: string; severity: "high" | "medium" | "low"; detail: str
 type Advice = { headline: string; findings: Finding[]; quickWins: string[] };
 
 type View = "ledger" | "where" | "subs";
+type SortKey = "date" | "merchant" | "amount" | "category";
 
 /** One burst of INSERTs into budget_register, as seen by the undo panel. */
 type RegisterBatch = {
@@ -219,6 +220,11 @@ export default function RealMonth({
   const [subs, setSubs] = useState<Subscription[]>([]);
   const [staged, setStaged] = useState<StagedRow[]>([]);
   const [view, setView] = useState<View>("ledger");
+  // Ledger sorting. Sorting by merchant puts every charge from one vendor
+  // together, which is the fast way to fix a whole merchant's categories.
+  const [sortKey, setSortKey] = useState<SortKey>("date");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [onlyUncat, setOnlyUncat] = useState(false);
   const [bank, setBank] = useState<Bank>(defaultBank);
   const [loading, setLoading] = useState(true);
   const [parsing, setParsing] = useState(false);
@@ -371,6 +377,40 @@ export default function RealMonth({
     if (out) setNotice(`Cleared ${out.removed ?? 0} rows from ${month}.`);
     await load(month);
     setSaving(false);
+  };
+
+  /** Re-file every row from one merchant at once. */
+  const setMerchantCategory = async (merchant: string, categoryId: number | null) => {
+    const key = mKey(merchant);
+    setTx((prev) => prev.map((r) => (mKey(r.merchant || r.description) === key ? { ...r, category_id: categoryId } : r)));
+    const out = await post({ action: "setMerchantCategory", month, merchant, categoryId });
+    if (out?.ok) {
+      const name = categoryId == null ? "no category" : catById.get(categoryId)?.name ?? "that category";
+      setNotice(`${out.updated} ${merchant} row${out.updated === 1 ? "" : "s"} → ${name}.`);
+    }
+  };
+
+  // Ledger rows, sorted and optionally narrowed to the ones still unfiled.
+  const ledgerRows = useMemo(() => {
+    const base = onlyUncat ? tx.filter((r) => r.category_id == null) : tx;
+    const dir = sortDir === "asc" ? 1 : -1;
+    const catName = (r: StoredTx) => (r.category_id == null ? "\uffff" : catById.get(r.category_id)?.name ?? "\uffff");
+    return [...base].sort((a2, b2) => {
+      let cmp = 0;
+      if (sortKey === "date") cmp = a2.tx_date.localeCompare(b2.tx_date);
+      else if (sortKey === "amount") cmp = a2.amount - b2.amount;
+      else if (sortKey === "merchant") cmp = mKey(a2.merchant).localeCompare(mKey(b2.merchant));
+      else cmp = catName(a2).localeCompare(catName(b2));
+      // Within a merchant or category run, keep it chronological — otherwise
+      // the grouped block reads as noise.
+      if (cmp === 0 && sortKey !== "date") cmp = a2.tx_date.localeCompare(b2.tx_date);
+      return cmp * dir;
+    });
+  }, [tx, sortKey, sortDir, onlyUncat, catById]);
+
+  const toggleSort = (k: SortKey) => {
+    if (k === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(k); setSortDir("asc"); }
   };
 
   // ── merchant rollup ──────────────────────────────────────────────────────
@@ -680,42 +720,90 @@ export default function RealMonth({
           {/* Ledger */}
           {view === "ledger" && (
             <div style={{ ...card(), overflow: "auto" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, color: HOME_THEME.muted, fontWeight: 800, letterSpacing: "0.1em" }}>SORT</span>
+                {(["date", "merchant", "amount", "category"] as const).map((k) => (
+                  <button key={k} onClick={() => toggleSort(k)} style={pill(sortKey === k)}>
+                    {k[0].toUpperCase() + k.slice(1)}{sortKey === k ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+                  </button>
+                ))}
+                <div style={{ flex: 1 }} />
+                <button onClick={() => setOnlyUncat((v) => !v)} style={{ ...pill(onlyUncat), borderColor: onlyUncat ? "rgba(251,191,36,0.75)" : HAIRLINE, color: onlyUncat ? GOLD : "rgba(255,255,255,0.82)" }}>
+                  Only uncategorized ({totals.uncategorized})
+                </button>
+              </div>
+              {sortKey === "merchant" && (
+                <div style={{ fontSize: 12, color: HOME_THEME.muted, padding: "0 14px 10px", lineHeight: 1.45 }}>
+                  Grouped by vendor — the dropdown on a group's first row re-files <em>every</em> row in that group at once.
+                </div>
+              )}
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
-                    <th style={{ ...th("left"), width: 70 }}>Date</th>
-                    <th style={th("left")}>Merchant</th>
+                    <SortTh label="Date" k="date" width={70} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                    <SortTh label="Merchant" k="merchant" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                     <th style={th("left")}>As it read</th>
-                    <th style={{ ...th("left"), width: 170 }}>Category</th>
-                    <th style={{ ...th("right"), width: 110 }}>Amount</th>
+                    <SortTh label="Category" k="category" align="left" width={200} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                    <SortTh label="Amount" k="amount" align="right" width={110} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                     <th style={{ ...th("center"), width: 50 }} />
                   </tr>
                 </thead>
                 <tbody>
-                  {tx.map((r) => (
-                    <tr key={r.id} style={{ background: r.is_recurring ? "rgba(251,191,36,0.05)" : undefined }}>
-                      <td style={{ ...td("left"), color: HOME_THEME.muted }}>{shortDate(r.tx_date)}</td>
-                      <td style={{ ...td("left"), fontWeight: 700 }}>
-                        {r.merchant}{r.is_recurring === 1 && <span style={{ marginLeft: 6, color: GOLD }}>🔁</span>}
-                      </td>
-                      <td style={{ ...td("left"), color: HOME_THEME.muted, fontSize: 12, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.description}>
-                        {r.description}
-                      </td>
-                      <td style={td("left")}>
-                        <ThemedSelect
-                          value={r.category_id == null ? "" : String(r.category_id)}
-                          onChange={(v) => void setTxCategory(r.id, v ? Number(v) : null)}
-                          options={catOptions}
-                        />
-                      </td>
-                      <td style={{ ...td("right"), fontWeight: 800, fontVariantNumeric: "tabular-nums", color: r.direction === "out" ? HOME_THEME.red : GREEN }}>
-                        {r.direction === "out" ? "−" : "+"}{fmtMoney(r.amount, currency)}
-                      </td>
-                      <td style={td("center")}>
-                        <button onClick={() => void deleteTx(r.id)} title="Remove from Real Month" style={{ ...ghost(), padding: "4px 9px", fontSize: 13, color: HOME_THEME.muted }}>×</button>
-                      </td>
-                    </tr>
-                  ))}
+                  {ledgerRows.map((r, i) => {
+                    const key = mKey(r.merchant || r.description);
+                    const prevKey = i > 0 ? mKey(ledgerRows[i - 1].merchant || ledgerRows[i - 1].description) : null;
+                    const grouped = sortKey === "merchant";
+                    const firstOfGroup = grouped && key !== prevKey;
+                    const groupSize = grouped ? ledgerRows.filter((x) => mKey(x.merchant || x.description) === key).length : 1;
+                    return (
+                      <tr
+                        key={r.id}
+                        style={{
+                          background: r.is_recurring ? "rgba(251,191,36,0.05)" : undefined,
+                          borderTop: firstOfGroup && i > 0 ? `1px solid ${HAIRLINE}` : undefined,
+                        }}
+                      >
+                        <td style={{ ...td("left"), color: HOME_THEME.muted }}>{shortDate(r.tx_date)}</td>
+                        <td style={{ ...td("left"), fontWeight: 700, opacity: grouped && !firstOfGroup ? 0.35 : 1 }}>
+                          {grouped && !firstOfGroup ? "↳" : r.merchant}
+                          {r.is_recurring === 1 && (!grouped || firstOfGroup) && <span style={{ marginLeft: 6, color: GOLD }}>🔁</span>}
+                          {firstOfGroup && groupSize > 1 && <span style={{ marginLeft: 7, fontSize: 11, color: HOME_THEME.muted }}>×{groupSize}</span>}
+                        </td>
+                        <td style={{ ...td("left"), color: HOME_THEME.muted, fontSize: 12, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.description}>
+                          {r.description}
+                        </td>
+                        <td style={td("left")}>
+                          {/* Sorted by merchant, the first row of a group drives
+                              the whole group; the rest stay individually editable. */}
+                          {firstOfGroup && groupSize > 1 ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <ThemedSelect
+                                value={r.category_id == null ? "" : String(r.category_id)}
+                                onChange={(v) => void setMerchantCategory(r.merchant || r.description, v ? Number(v) : null)}
+                                options={catOptions}
+                              />
+                              <span title={`Applies to all ${groupSize} rows`} style={{ fontSize: 10, fontWeight: 900, color: LIGHT_BLUE, letterSpacing: "0.08em", whiteSpace: "nowrap" }}>ALL {groupSize}</span>
+                            </div>
+                          ) : (
+                            <ThemedSelect
+                              value={r.category_id == null ? "" : String(r.category_id)}
+                              onChange={(v) => void setTxCategory(r.id, v ? Number(v) : null)}
+                              options={catOptions}
+                            />
+                          )}
+                        </td>
+                        <td style={{ ...td("right"), fontWeight: 800, fontVariantNumeric: "tabular-nums", color: r.direction === "out" ? HOME_THEME.red : GREEN }}>
+                          {r.direction === "out" ? "−" : "+"}{fmtMoney(r.amount, currency)}
+                        </td>
+                        <td style={td("center")}>
+                          <button onClick={() => void deleteTx(r.id)} title="Remove from Real Month" style={{ ...ghost(), padding: "4px 9px", fontSize: 13, color: HOME_THEME.muted }}>×</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {ledgerRows.length === 0 && (
+                    <tr><td colSpan={6} style={{ ...td("center"), color: HOME_THEME.muted, padding: 20 }}>Everything in {month} has a category.</td></tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -725,9 +813,9 @@ export default function RealMonth({
           {view === "where" && (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 12 }}>
               <div style={{ ...card(), overflow: "hidden" }}>
-                <SectionHead title="By merchant" sub="Like descriptors merged into one line" />
+                <SectionHead title="By merchant" sub="Like descriptors merged into one line. Setting a category here re-files every row from that merchant." />
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead><tr><th style={th("left")}>Merchant</th><th style={{ ...th("center"), width: 55 }}>×</th><th style={{ ...th("right"), width: 110 }}>Total</th><th style={{ ...th("right"), width: 100 }}>Avg</th></tr></thead>
+                  <thead><tr><th style={th("left")}>Merchant</th><th style={{ ...th("center"), width: 55 }}>×</th><th style={{ ...th("right"), width: 110 }}>Total</th><th style={{ ...th("left"), width: 160 }}>Category</th></tr></thead>
                   <tbody>
                     {merchants.map((m) => {
                       const share = totals.outflow > 0 ? (m.total / totals.outflow) * 100 : 0;
@@ -741,7 +829,14 @@ export default function RealMonth({
                           </td>
                           <td style={{ ...td("center"), color: HOME_THEME.muted }}>{m.count}</td>
                           <td style={{ ...td("right"), fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(m.total, currency)}</td>
-                          <td style={{ ...td("right"), color: HOME_THEME.muted, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(m.total / m.count, currency)}</td>
+                          {/* Set it here and every row from this merchant moves. */}
+                          <td style={td("left")}>
+                            <ThemedSelect
+                              value={m.categoryId == null ? "" : String(m.categoryId)}
+                              onChange={(v) => void setMerchantCategory(m.merchant, v ? Number(v) : null)}
+                              options={catOptions}
+                            />
+                          </td>
                         </tr>
                       );
                     })}
@@ -1034,6 +1129,23 @@ function UndoRegisterImport({ currency }: { currency: string }) {
         </div>
       )}
     </div>
+  );
+}
+
+/** A column header that sorts the ledger, with an arrow on the active key. */
+function SortTh({ label, k, sortKey, sortDir, onSort, align = "left", width }: {
+  label: string; k: SortKey; sortKey: SortKey; sortDir: "asc" | "desc";
+  onSort: (k: SortKey) => void; align?: "left" | "right" | "center"; width?: number;
+}) {
+  const active = sortKey === k;
+  return (
+    <th
+      onClick={() => onSort(k)}
+      title={`Sort by ${label.toLowerCase()}`}
+      style={{ ...th(align), width, cursor: "pointer", color: active ? LIGHT_BLUE : HOME_THEME.muted, userSelect: "none" }}
+    >
+      {label}{active ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+    </th>
   );
 }
 

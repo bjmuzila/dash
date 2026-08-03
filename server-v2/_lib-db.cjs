@@ -180,6 +180,7 @@ __export(db_exports, {
   listStatementMonths: () => listStatementMonths,
   listStatementTx: () => listStatementTx,
   listSubscriptions: () => listSubscriptions,
+  setStatementCategoryByMerchant: () => setStatementCategoryByMerchant,
   setStatementTxCategory: () => setStatementTxCategory,
   updateStatementTx: () => updateStatementTx,
   upsertSubscription: () => upsertSubscription,
@@ -4562,6 +4563,22 @@ async function updateStatementTx(profileId, id, patch) {
      patch.amount ?? null, patch.direction ?? null, patch.is_recurring ?? null]
   );
 }
+// Re-file every row from one merchant in a single UPDATE. The match is on the
+// same normalization the client uses for grouping (trim, collapse runs of
+// whitespace, lowercase), so what you see merged in the merchant rollup is
+// exactly what gets updated. month = null re-files that merchant everywhere.
+async function setStatementCategoryByMerchant(profileId, month, merchantKey, categoryId) {
+  const pool = await getDb();
+  const r = await pool.query(
+    `UPDATE budget_statement_tx
+        SET category_id = $2, updated_at = CURRENT_TIMESTAMP
+      WHERE profile_id = $1
+        AND ($3::text IS NULL OR month = $3)
+        AND lower(regexp_replace(btrim(merchant), '\s+', ' ', 'g')) = $4`,
+    [profileId, categoryId, month, merchantKey]
+  );
+  return r.rowCount ?? 0;
+}
 // Separate from updateStatementTx because COALESCE cannot express "set to NULL".
 async function setStatementTxCategory(profileId, id, categoryId) {
   const pool = await getDb();
@@ -5069,6 +5086,7 @@ async function getLatestMultGreekStaticSnapshot() {
   listStatementMonths,
   listStatementTx,
   listSubscriptions,
+  setStatementCategoryByMerchant,
   setStatementTxCategory,
   updateStatementTx,
   upsertSubscription,
