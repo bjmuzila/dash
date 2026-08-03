@@ -1094,6 +1094,7 @@ export default function Budget() {
         {tab === "real" && (
           <RealMonth
             month={month}
+            onMonth={setMonth}
             categories={categories}
             currency={currency}
             defaultBank="secu"

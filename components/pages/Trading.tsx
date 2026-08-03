@@ -16,7 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { HOME_THEME as HT, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle, LIGHT_BLUE } from "@/components/shared/homeTheme";
+import { HOME_THEME as HT, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle, LIGHT_BLUE, REFRESH_GREEN, DOCK_THEME } from "@/components/shared/homeTheme";
 import { PageShell, Card as ThemeCard } from "@/components/shared/PageCard";
 import type { ComponentProps } from "react";
 
@@ -90,19 +90,27 @@ const toLocalInput = (ts: number) => {
 /** datetime-local input value → epoch ms (local time, same as the input picker). */
 const fromLocalInput = (v: string) => { const t = new Date(v).getTime(); return Number.isFinite(t) ? t : Date.now(); };
 
-// Data-viz encodings (win/loss cells + chart series). Gain/loss is a strict
-// two-color convention on this page — NOT sourced from HOME_THEME.green, which
-// is actually a pale BLUE (#8ECAE6, shared chrome for other pages) and would
-// read as "gain = blue" here.
+// Data-viz encodings (win/loss cells + chart series). BOTH come from the
+// theme — no page-local hex.
 //
-// The pair is TEAL / ROSE, not the old signal green (#22C55E) and pure red
-// (#EF4444). At the volume this page uses them — every bar, every heat cell,
-// every calendar tile, every chart series — the saturated pair read as an
-// alarm going off in the corner of your eye. Teal sits in the same cyan family
-// as the rest of the app and rose is a desaturated red, so the encoding still
-// reads instantly without the page shouting. Change them together or not at
-// all; a bright gain against a soft loss is worse than either.
-const T = { green: "#5EEAD4", red: "#FB7185" };
+//   gain → REFRESH_GREEN (#1FD98A), homeTheme's exported "up / success" role
+//          color, already the green of every success state in the app.
+//   loss → HOME_THEME.red (#EF4444), the theme's red.
+//
+// Deliberately NOT HOME_THEME.green — that token is a pale BLUE (#8ECAE6,
+// shared chrome for other pages) and would read as "gain = blue" here. If the
+// dashboard's success green ever changes, this page follows automatically.
+const T = { green: REFRESH_GREEN, red: HT.red };
+
+/**
+ * hex → rgba. The session heat map and its legend need the SAME two colors at
+ * partial alpha; deriving them here means the palette lives in T only, instead
+ * of being re-typed as `rgba(31,217,138,…)` literals that drift.
+ */
+const rgba = (hex: string, a: number) => {
+  const h = hex.replace("#", "");
+  return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
+};
 
 // Secondary text. Full white — hierarchy on this page is carried by SIZE and
 // WEIGHT (11px/800 caps labels vs 29px/700 values), not by dimming, so a
@@ -110,12 +118,26 @@ const T = { green: "#5EEAD4", red: "#FB7185" };
 const SOFT = HT.text;
 
 /**
- * Chrome text — pane nav (inactive), card header labels, section captions.
- * NOT for values. HOME_THEME.muted is literally #FFFFFF on this theme, so a
- * label and its number came out the same weight of white and the card header
- * competed with the card content. This is the one place the page dims.
+ * Card header label — the ONE label style every band on this page uses, for
+ * findings, charts, tables and the calendar alike. Full white: hierarchy is
+ * carried by size and weight (11px/800 caps label vs 29px/700 value), not by
+ * dimming, and the band's own border already separates it from the body.
  */
-const DIM = "rgba(255,255,255,0.55)";
+const cardLabelStyle: React.CSSProperties = {
+  fontSize: 11, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: SOFT,
+};
+
+/**
+ * The BANDS. Every card on this page opens with a header strip, holds its
+ * content in a body strip, and (for findings) closes with a verdict strip.
+ * That shared skeleton is what lets a dozen cards coexist without turning into
+ * wallpaper — and it's built from HOME_THEME.border / panelBgStrong only.
+ */
+const bandHeadStyle: React.CSSProperties = {
+  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+  padding: "14px 18px", borderBottom: `1px solid ${HT.border}`, flexShrink: 0,
+};
+const bandBodyStyle: React.CSSProperties = { padding: "17px 18px" };
 
 /**
  * FOCUS PANES. The page used to stack Leaks, the Clock, eight charts, four
@@ -135,13 +157,13 @@ type PaneKey = (typeof PANES)[number]["key"];
 /**
  * Page-local card — the raised surface.
  *
- * The shared Card is a flat frosted panel, which reads as a GRID CELL: twelve
- * of them in a 12px grid look like one striped sheet, not twelve findings.
- * Every card on this page routes through here instead and gets a lighter
- * raised fill, a defined edge, a real drop shadow and (via .journal-focus) the
- * hover lift the page otherwise opts out of — so a card reads as an object you
- * can pick out. Band structure — header / body / verdict — comes from
- * insightCard() below; this is only the surface.
+ * Twelve of the shared cards in a 12px grid read as one striped sheet, not as
+ * twelve findings. Every card on this page routes through here and keeps the
+ * theme's `classic` surface — HOME_THEME.panelBg, HOME_THEME.border, radius 18
+ * — with a deeper drop shadow and (via .journal-focus) the hover lift the page
+ * otherwise opts out of, so a card reads as an object you can pick out. Band
+ * structure — header / body / verdict — comes from bandHeadStyle / insightCard
+ * below; this is only the surface.
  *
  * `.journal-focus` is also the hook globals.css uses to re-enable the lift
  * inside .no-card-lift. Modals pass their own "no-card-lift" and are excluded
@@ -154,10 +176,11 @@ function Card(props: ComponentProps<typeof ThemeCard>) {
       {...props}
       className={`journal-focus${props.className ? ` ${props.className}` : ""}`}
       style={{
-        borderRadius: 20,
-        border: "1px solid rgba(255,255,255,0.115)",
-        background: "linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.014))",
-        boxShadow: "0 26px 54px -26px rgba(0,0,0,0.85), 0 1px 0 rgba(255,255,255,0.055) inset",
+        // Fill, radius and edge all come from the theme's `classic` card —
+        // this page does NOT invent a surface. The only override is a deeper
+        // drop shadow; separation here is the shadow plus 22px gutters, not a
+        // different colour.
+        boxShadow: "0 24px 48px -20px rgba(0,0,0,0.55)",
         ...props.style,
       }}
     />
@@ -185,15 +208,18 @@ const titleStyle: React.CSSProperties = {
   fontSize: 17, fontWeight: 700, color: HT.cyan, marginBottom: 10,
 };
 /**
- * Collapsible section titles. Deliberately NOT the 17px accent title — the
- * three table cards used to be cyan, orange and purple headers sitting side by
- * side, which is three unrelated-looking widgets. They're the same kind of
- * thing, so they get the same neutral header as every finding card.
+ * Collapsible section headers. The same BAND as every finding card, pulled out
+ * to the card edges with a negative margin so it reads as a header strip
+ * rather than a line of text floating in the padding. Deliberately NOT the
+ * 17px accent title — the three table cards used to be cyan, orange and purple
+ * headers sitting side by side, which is three unrelated-looking widgets.
+ * They're the same kind of thing, so they get the same neutral band.
  */
 const collapseTitleStyle: React.CSSProperties = {
-  fontSize: 11, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase",
-  color: DIM, display: "flex", justifyContent: "space-between",
-  alignItems: "center", cursor: "pointer", marginBottom: 12,
+  ...cardLabelStyle,
+  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+  margin: "-16px -16px 16px", padding: "14px 16px",
+  borderBottom: `1px solid ${HT.border}`, cursor: "pointer",
 };
 const tableStyle: React.CSSProperties = { width: "100%", fontSize: 14, borderCollapse: "collapse" };
 
@@ -274,7 +300,136 @@ function useHoverIndex(count: number) {
   return { i, onMove, onLeave: () => setI(null) };
 }
 
-function MiniLine({ points, color, fmt = fmt$, w = CH_W, h = CH_H }: { points: Pt[]; color: string; fmt?: (v: number) => string; w?: number; h?: number }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// AXES
+//
+// These used to be sparklines: a bare series over a zero rule, with the only
+// numbers coming from the hover tooltip. That's fine at 320px in a strip of
+// eight, and useless once a chart is half a card wide and you want to read a
+// level straight off it. Every chart now carries a real Y axis (rounded ticks
+// + gridlines) and a real X axis (category labels under the plot).
+//
+// The plot keeps preserveAspectRatio="none", so anything with TEXT has to be
+// HTML rather than <text> — an SVG label would stretch horizontally with the
+// box. That constraint buys an exact trick: the viewBox height equals the
+// rendered CSS height, so the vertical scale is 1:1 and a tick's y in DATA
+// space is literally its `top` in PIXELS. Gridlines are therefore plain divs,
+// and they line up with the series to the pixel because both go through the
+// same y() the chart already used to place its marks.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Left gutter reserved for Y labels; strip under the plot for X labels. */
+const AXIS_W = 50, AXIS_H = 18;
+
+/**
+ * Rounded tick values covering [min,max] on 1 / 2 / 5 × 10ⁿ steps, so an axis
+ * reads "$0 · $2.5k · $5k" instead of "$0 · $1,833.27 · $3,666.54".
+ */
+function niceTicks(min: number, max: number, target = 5): number[] {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return [min];
+  const raw = (max - min) / Math.max(1, target);
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const n = raw / mag;
+  // 2.5 is in the ladder on purpose: without it a 0–14k range snaps straight
+  // from a 2k step to a 5k step and the axis collapses to "$0 · $5k · $10k".
+  const step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * mag;
+  const out: number[] = [];
+  for (let v = Math.ceil(min / step) * step; v <= max + step * 1e-9; v += step) {
+    out.push(Math.abs(v) < step * 1e-9 ? 0 : +v.toPrecision(12));
+  }
+  return out.length ? out : [min];
+}
+
+/** Compact money for an axis — 12500 → "$12.5k". A tick can't be 9 chars wide. */
+const fmtAxis$ = (v: number) => {
+  const a = Math.abs(v), sign = v < 0 ? "-" : "";
+  if (a >= 1000) return `${sign}$${(a / 1000).toFixed(a >= 10000 ? 0 : 1)}k`;
+  return `${sign}$${a.toFixed(0)}`;
+};
+
+/**
+ * Up to `max` evenly spaced X labels, ALWAYS including the last one — the end
+ * of the range is the tick you actually want. Sampling on a fixed stride
+ * usually stops short of the final point, so the last label is appended; if
+ * that lands within 9% of the previous tick the previous one is dropped rather
+ * than letting the two overprint each other ("Jul 11Jul 14").
+ */
+function axisX(labels: string[], w: number, at: (n: number) => number, max = 6) {
+  const n = labels.length;
+  if (!n) return [];
+  const step = Math.max(1, Math.ceil(n / max));
+  const out: { pct: number; label: string }[] = [];
+  for (let k = 0; k < n; k += step) out.push({ pct: (at(k) / w) * 100, label: labels[k] });
+  const lastPct = (at(n - 1) / w) * 100;
+  if (out.length && Math.abs(out[out.length - 1].pct - lastPct) < 9) out.pop();
+  if (!out.length || out[out.length - 1].label !== labels[n - 1]) {
+    out.push({ pct: lastPct, label: labels[n - 1] });
+  }
+  return out;
+}
+
+/**
+ * The axis furniture every chart sits in: Y labels in a fixed left gutter,
+ * horizontal gridlines behind the plot, X labels in a strip underneath.
+ * `children` is the plot itself — the <svg> plus any HTML overlays — and the
+ * hover handlers land on the plot column only, so the pointer maths stays
+ * measured against the plotting area and not the gutter.
+ */
+function ChartFrame({
+  h, ticks, y, axisFmt, xTicks, onMove, onLeave, children,
+}: {
+  h: number;
+  ticks: number[];
+  y: (v: number) => number;
+  axisFmt: (v: number) => string;
+  xTicks: { pct: number; label: string }[];
+  onMove?: (e: React.MouseEvent<HTMLDivElement>) => void;
+  onLeave?: () => void;
+  children: React.ReactNode;
+}) {
+  const tickStyle: React.CSSProperties = {
+    position: "absolute", fontSize: 9.5, color: HT.muted, whiteSpace: "nowrap",
+    fontVariantNumeric: "tabular-nums", pointerEvents: "none", opacity: 0.75,
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start" }}>
+      {/* Y AXIS — its own gutter, so a label never sits on top of the series. */}
+      <div style={{ width: AXIS_W, flexShrink: 0, position: "relative", height: h }}>
+        {ticks.map((t, n) => (
+          <div key={n} style={{ ...tickStyle, top: y(t), right: 7, transform: "translateY(-50%)" }}>
+            {axisFmt(t)}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {/* PLOT — gridlines are rendered FIRST so the series paints over them. */}
+        <div style={{ position: "relative" }} onMouseMove={onMove} onMouseLeave={onLeave}>
+          {ticks.map((t, n) => (
+            <div key={n} style={{
+              position: "absolute", left: 0, right: 0, top: y(t), height: 1,
+              background: HT.border, opacity: t === 0 ? 1 : 0.4, pointerEvents: "none",
+            }} />
+          ))}
+          {children}
+        </div>
+        {/* X AXIS — first label left-aligned and last right-aligned, so neither
+            hangs off the edge of the card. */}
+        <div style={{ position: "relative", height: AXIS_H, borderTop: `1px solid ${HT.border}` }}>
+          {xTicks.map((t, n) => (
+            <div key={n} style={{
+              ...tickStyle, left: `${t.pct}%`, top: 4,
+              transform: n === 0 ? "none"
+                : n === xTicks.length - 1 ? "translateX(-100%)" : "translateX(-50%)",
+            }}>{t.label}</div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MiniLine({ points, color, fmt = fmt$, axisFmt = fmtAxis$, w = CH_W, h = CH_H }: { points: Pt[]; color: string; fmt?: (v: number) => string; axisFmt?: (v: number) => string; w?: number; h?: number }) {
   const { i, onMove, onLeave } = useHoverIndex(points.length);
   if (points.length < 2) return emptyChart;
 
@@ -287,9 +442,17 @@ function MiniLine({ points, color, fmt = fmt$, w = CH_W, h = CH_H }: { points: P
   const hoverX = i != null ? (x(i) / w) * 100 : 0;
 
   return (
-    <div style={{ position: "relative" }} onMouseMove={onMove} onMouseLeave={onLeave}>
+    <ChartFrame
+      h={h}
+      ticks={niceTicks(min, max)}
+      y={y}
+      axisFmt={axisFmt}
+      xTicks={axisX(points.map((pt) => pt.label), w, x)}
+      onMove={onMove}
+      onLeave={onLeave}
+    >
       <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ width: "100%", height: h, display: "block", cursor: "crosshair" }}>
-        <line x1={CH_PAD} y1={y(0)} x2={w - CH_PAD} y2={y(0)} stroke={HT.border} />
+        {/* The zero rule is now a frame gridline (ticks always include 0). */}
         <path d={d} fill="none" stroke={color} strokeWidth={2} vectorEffect="non-scaling-stroke" />
         {i != null && (
           <>
@@ -299,11 +462,11 @@ function MiniLine({ points, color, fmt = fmt$, w = CH_W, h = CH_H }: { points: P
         )}
       </svg>
       {i != null && <ChartTip pt={points[i]} xPct={hoverX} fmt={fmt} />}
-    </div>
+    </ChartFrame>
   );
 }
 
-function MiniBars({ points, fmt = fmt$, w = CH_W, h = CH_H }: { points: Pt[]; fmt?: (v: number) => string; w?: number; h?: number }) {
+function MiniBars({ points, fmt = fmt$, axisFmt = fmtAxis$, w = CH_W, h = CH_H }: { points: Pt[]; fmt?: (v: number) => string; axisFmt?: (v: number) => string; w?: number; h?: number }) {
   const { i, onMove, onLeave } = useHoverIndex(points.length);
   if (!points.length) return emptyChart;
 
@@ -312,12 +475,22 @@ function MiniBars({ points, fmt = fmt$, w = CH_W, h = CH_H }: { points: Pt[]; fm
   const slot = (w - 2 * CH_PAD) / points.length;
   const bw = Math.max(2, slot - 2);
   const zero = h / 2;
-  const hoverX = i != null ? ((CH_PAD + i * slot + bw / 2) / w) * 100 : 0;
+  /** data → px. The SAME mapping the bars use, so ticks line up with them. */
+  const y = (v: number) => zero - (v / maxAbs) * (h / 2 - CH_PAD);
+  const barX = (n: number) => CH_PAD + n * slot + bw / 2;
+  const hoverX = i != null ? (barX(i) / w) * 100 : 0;
 
   return (
-    <div style={{ position: "relative" }} onMouseMove={onMove} onMouseLeave={onLeave}>
+    <ChartFrame
+      h={h}
+      ticks={niceTicks(-maxAbs, maxAbs)}
+      y={y}
+      axisFmt={axisFmt}
+      xTicks={axisX(points.map((pt) => pt.label), w, barX)}
+      onMove={onMove}
+      onLeave={onLeave}
+    >
       <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ width: "100%", height: h, display: "block", cursor: "crosshair" }}>
-        <line x1={CH_PAD} y1={zero} x2={w - CH_PAD} y2={zero} stroke={HT.border} />
         {vals.map((v, n) => {
           const bh = (Math.abs(v) / maxAbs) * (h / 2 - CH_PAD);
           return (
@@ -330,8 +503,11 @@ function MiniBars({ points, fmt = fmt$, w = CH_W, h = CH_H }: { points: Pt[]; fm
         })}
       </svg>
       {/* Value labels above each bar. Rendered as HTML (not SVG <text>) because
-          the chart uses preserveAspectRatio="none", which would stretch text. */}
-      {vals.map((v, n) => {
+          the chart uses preserveAspectRatio="none", which would stretch text.
+          Dropped past ~24 bars: at a 60-day range they overprint each other
+          into an unreadable smear, and the Y axis + hover tooltip now cover
+          the same job. */}
+      {vals.length <= 24 && vals.map((v, n) => {
         const bh = (Math.abs(v) / maxAbs) * (h / 2 - CH_PAD);
         const xPct = ((CH_PAD + n * slot + bw / 2) / w) * 100;
         const tipPct = ((v >= 0 ? zero - bh : zero + bh) / h) * 100;
@@ -348,51 +524,52 @@ function MiniBars({ points, fmt = fmt$, w = CH_W, h = CH_H }: { points: Pt[]; fm
         );
       })}
       {i != null && <ChartTip pt={points[i]} xPct={hoverX} fmt={fmt} />}
-    </div>
+    </ChartFrame>
   );
 }
 
 /** Bar chart with an always-visible category label under each bar (day-of-week,
- * $ bucket, …) instead of hover-only tooltips — matches how these read best. */
-function MiniLabeledBars({ data, w = CH_W, h = CH_H, barColor }: {
+ * $ bucket, …) instead of hover-only tooltips — matches how these read best.
+ * The label row IS the X axis now, so it lives in ChartFrame rather than being
+ * absolutely positioned inside the plot and stealing 14px off the bar height. */
+function MiniLabeledBars({ data, w = CH_W, h = CH_H, barColor, axisFmt = fmtAxis$ }: {
   data: { label: string; value: number }[]; fmt?: (v: number) => string; w?: number; h?: number;
-  barColor?: (v: number, i: number) => string;
+  barColor?: (v: number, i: number) => string; axisFmt?: (v: number) => string;
 }) {
   if (!data.length) return emptyChart;
   const vals = data.map((d) => d.value);
-  const maxAbs = Math.max(...vals.map(Math.abs), 1);
+  const min = Math.min(...vals, 0), max = Math.max(...vals, 0);
+  const range = max - min || 1;
   const slot = (w - 2 * CH_PAD) / data.length;
   const bw = Math.max(3, slot - Math.max(4, slot * 0.25));
-  const zero = h - CH_PAD - 14; // leave room for the label row
+  // Bars are drawn from y(0) to y(v) rather than from a hardcoded baseline, so
+  // an all-negative series (e.g. a losing weekday set) still sits under the
+  // zero line instead of being flipped above it.
+  const y = (v: number) => CH_PAD + (h - 2 * CH_PAD) * (1 - (v - min) / range);
+  const zero = y(0);
+  const cx = (n: number) => CH_PAD + n * slot + slot / 2;
   const color = barColor ?? ((v: number) => (v >= 0 ? T.green : T.red));
 
   return (
-    <div style={{ position: "relative" }}>
+    <ChartFrame
+      h={h}
+      ticks={niceTicks(min, max)}
+      y={y}
+      axisFmt={axisFmt}
+      xTicks={data.map((d, n) => ({ pct: (cx(n) / w) * 100, label: d.label }))}
+    >
       <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ width: "100%", height: h, display: "block" }}>
-        <line x1={CH_PAD} y1={zero} x2={w - CH_PAD} y2={zero} stroke={HT.border} />
         {vals.map((v, n) => {
-          const bh = (Math.abs(v) / maxAbs) * (zero - CH_PAD);
-          const cx = CH_PAD + n * slot + slot / 2;
+          const top = Math.min(y(v), zero), bot = Math.max(y(v), zero);
           return (
             <rect key={n}
-              x={cx - bw / 2} y={v >= 0 ? zero - bh : zero}
-              width={bw} height={Math.max(bh, 1)}
+              x={cx(n) - bw / 2} y={top}
+              width={bw} height={Math.max(bot - top, 1)}
               fill={color(v, n)} opacity={0.9} rx={1.5} />
           );
         })}
       </svg>
-      {data.map((d, n) => {
-        const xPct = ((CH_PAD + n * slot + slot / 2) / w) * 100;
-        return (
-          <div key={n} style={{
-            position: "absolute", left: `${xPct}%`, bottom: 0,
-            transform: "translateX(-50%)", fontSize: 10, color: HT.muted, whiteSpace: "nowrap",
-          }}>
-            {d.label}
-          </div>
-        );
-      })}
-    </div>
+    </ChartFrame>
   );
 }
 
@@ -1109,7 +1286,7 @@ export default function TradingPage() {
     pf: {
       title: "Profit Factor", accent: HT.cyan,
       value: <span style={{ color: HT.text }}>{k.profitFactor != null ? k.profitFactor.toFixed(2) : "—"}</span>,
-      render: (w, h) => <MiniLine points={k.pfSeries} color={HT.cyan} fmt={(v) => (v ? v.toFixed(2) : "—")} w={w} h={h} />,
+      render: (w, h) => <MiniLine points={k.pfSeries} color={HT.cyan} fmt={(v) => (v ? v.toFixed(2) : "—")} axisFmt={(v) => v.toFixed(1)} w={w} h={h} />,
     },
     cum: {
       title: "Cumulative PnL", accent: T.green,
@@ -1128,7 +1305,7 @@ export default function TradingPage() {
     winloss: {
       title: "Win/Loss", accent: T.green,
       value: <span style={{ color: HT.text }}>{k.winPct != null ? `${k.winPct.toFixed(0)}%` : "—"}</span>,
-      render: (w, h) => <MiniLine points={k.winRateSeries} color={T.green} fmt={(v) => `${v.toFixed(0)}%`} w={w} h={h} />,
+      render: (w, h) => <MiniLine points={k.winRateSeries} color={T.green} fmt={(v) => `${v.toFixed(0)}%`} axisFmt={(v) => `${v.toFixed(0)}%`} w={w} h={h} />,
     },
     expectancy: {
       title: "Expectancy", accent: HT.purple,
@@ -1154,13 +1331,12 @@ export default function TradingPage() {
 
   const chartCard = (key: string, big = false) => {
     const def = chartDefs[key];
-    const w = big ? 720 : CH_W, h = big ? 340 : CH_H;
+    // The strip used to be 4-across at CH_H (120px); at 2-across the card is
+    // roughly twice as wide, and a 120px plot under a real axis reads flat.
+    const w = big ? 720 : CH_W, h = big ? 340 : 170;
     return (
       <Card key={key} padding={0} style={big ? { width: "100%" } : undefined}>
-        <div style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
-          padding: "14px 18px", borderBottom: `1px solid ${HT.border}`,
-        }}>
+        <div style={bandHeadStyle}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
             {/* One neutral header, not eight per-chart accent colors. The
                 series inside is already colored; coloring the title too made
@@ -1172,11 +1348,11 @@ export default function TradingPage() {
             <button
               onClick={() => setExpandedChart(key)}
               title="Expand"
-              style={{ background: "none", border: "none", color: DIM, cursor: "pointer", fontSize: 15, padding: "2px 4px", lineHeight: 1 }}
+              style={{ background: "none", border: "none", color: HT.muted, cursor: "pointer", fontSize: 15, padding: "2px 4px", lineHeight: 1 }}
             >⤢</button>
           )}
         </div>
-        <div style={{ padding: 18 }}>{def.render(w, h)}</div>
+        <div style={bandBodyStyle}>{def.render(w, h)}</div>
       </Card>
     );
   };
@@ -1189,15 +1365,14 @@ export default function TradingPage() {
   // cards look like eight unrelated widgets.
   // Tone is carried by TEXT COLOUR alone — no ⚠ / ✓ glyph. An icon on every
   // card turns the strip into a row of alarms and stops meaning anything.
+  // Straight off the theme: red = HOME_THEME.red, warn = HOME_THEME.orange,
+  // good = the same success green the gain bars use. No page-local pastels.
   const VERDICT_TONE: Record<string, string> = {
-    bad: "#FCA5A5", warn: "#FCD34D", good: "#86EFAC", info: SOFT,
+    bad: HT.red, warn: HT.orange, good: T.green, info: SOFT,
   };
 
-  /** Card header label — neutral, so cards read as one system. */
-  const insightLabelStyle: React.CSSProperties = {
-    fontSize: 11, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase",
-    color: DIM,
-  };
+  /** Alias — the shared band label, so every card header is literally one style. */
+  const insightLabelStyle = cardLabelStyle;
 
   /**
    * A finding, in three BANDS: header (label + qualifier), body (the numbers),
@@ -1220,17 +1395,14 @@ export default function TradingPage() {
     const color = VERDICT_TONE[tone] ?? SOFT;
     return (
       <Card padding={0} style={{ display: "flex", flexDirection: "column", minHeight: 200, ...span }}>
-        <div style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
-          padding: "14px 18px", borderBottom: `1px solid ${HT.border}`, flexShrink: 0,
-        }}>
-          <span style={insightLabelStyle}>{label}</span>
-          {right != null && <span style={{ ...insightLabelStyle, color, letterSpacing: ".1em", whiteSpace: "nowrap" }}>{right}</span>}
+        <div style={bandHeadStyle}>
+          <span style={cardLabelStyle}>{label}</span>
+          {right != null && <span style={{ ...cardLabelStyle, color, letterSpacing: ".1em", whiteSpace: "nowrap" }}>{right}</span>}
         </div>
-        <div style={{ padding: "17px 18px", flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>{body}</div>
+        <div style={{ ...bandBodyStyle, flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>{body}</div>
         <div style={{
           padding: "12px 18px", borderTop: `1px solid ${HT.border}`,
-          background: "rgba(0,0,0,0.20)", borderRadius: "0 0 19px 19px",
+          background: HT.panelBgStrong, borderRadius: "0 0 17px 17px",
           fontSize: 12.5, lineHeight: 1.55, color, flexShrink: 0,
         }}>{verdict}</div>
       </Card>
@@ -1341,9 +1513,12 @@ export default function TradingPage() {
             One section on screen at a time. Nothing is hidden — every pane
             is one click away and the header totals stay pinned above, so
             you never lose the figure you were comparing against. */}
+        {/* Chrome is DOCK_THEME — the same frosted-tile language as the
+            toolbar menus and NavMenu, so the pane switcher looks like part of
+            the app rather than a control invented for this page. */}
         <div className="journal-nav" style={{
-          display: "flex", gap: 4, padding: 5, borderRadius: 13,
-          border: `1px solid ${HT.border}`, background: "rgba(0,0,0,0.35)",
+          display: "flex", gap: 4, padding: 5, borderRadius: 12,
+          border: `1px solid ${HT.border}`, background: HT.panelBgStrong,
           width: "fit-content",
         }}>
           {PANES.map((p) => {
@@ -1354,11 +1529,12 @@ export default function TradingPage() {
                 onClick={() => setPane(p.key)}
                 aria-pressed={on}
                 style={{
-                  padding: "8px 17px", borderRadius: 9, border: "none", cursor: "pointer",
+                  padding: "8px 17px", borderRadius: 8, cursor: "pointer",
                   fontSize: 12.5, fontWeight: 700, transition: "all .15s", whiteSpace: "nowrap",
-                  background: on ? `${T.green}21` : "transparent",
-                  boxShadow: on ? `inset 0 0 0 1px ${T.green}42` : "none",
-                  color: on ? T.green : DIM,
+                  border: `1px solid ${on ? DOCK_THEME.activeBorder : "transparent"}`,
+                  background: on ? DOCK_THEME.activeTile : "transparent",
+                  boxShadow: on ? DOCK_THEME.activeGlow : "none",
+                  color: on ? HT.cyan : HT.muted,
                 }}
               >{p.label}</button>
             );
@@ -1599,8 +1775,8 @@ export default function TradingPage() {
                           {r.cells.map((c) => {
                             const a = Math.min(Math.abs(c.pnl) / tod.gridMax, 1);
                             const bg = !c.ct ? "rgba(255,255,255,0.03)"
-                              : c.pnl >= 0 ? `rgba(94,234,212,${(0.12 + a * 0.6).toFixed(2)})`
-                              : `rgba(251,113,133,${(0.12 + a * 0.6).toFixed(2)})`;
+                              : c.pnl >= 0 ? rgba(T.green, +(0.12 + a * 0.6).toFixed(2))
+                              : rgba(T.red, +(0.12 + a * 0.6).toFixed(2));
                             return (
                               <td key={c.hour} title={`${r.label} ${c.hour}:00 · ${c.ct} trades · ${fmt$(c.pnl)}`}
                                 style={{ height: 24, borderRadius: 4, background: bg, textAlign: "center", fontSize: 10, fontWeight: 700, color: c.ct ? "rgba(255,255,255,0.85)" : SOFT, fontVariantNumeric: "tabular-nums" }}>
@@ -1613,9 +1789,9 @@ export default function TradingPage() {
                     </tbody>
                   </table>
                   <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 10, color: SOFT, marginTop: 9 }}>
-                    <span style={{ width: 15, height: 9, borderRadius: 2, background: "rgba(251,113,133,.7)" }} />loss
+                    <span style={{ width: 15, height: 9, borderRadius: 2, background: rgba(T.red, 0.7) }} />loss
                     <span style={{ width: 15, height: 9, borderRadius: 2, background: "rgba(255,255,255,.1)" }} />flat
-                    <span style={{ width: 15, height: 9, borderRadius: 2, background: "rgba(94,234,212,.7)" }} />gain
+                    <span style={{ width: 15, height: 9, borderRadius: 2, background: rgba(T.green, 0.7) }} />gain
                   </div>
                 </>,
                 <>Read down a column, not across a row — a hole that repeats every weekday is structural; one red cell is a single bad session.</>,
@@ -1834,9 +2010,9 @@ export default function TradingPage() {
 
             {/* Calendar */}
             <Card padding={16}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                <div style={insightLabelStyle}>Session Calendar</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 16, color: DIM, fontSize: 14 }}>
+              <div style={{ ...collapseTitleStyle, cursor: "default" }}>
+                <span>Session Calendar</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 16, color: SOFT, fontSize: 14 }}>
                   <span style={{ cursor: "pointer" }} onClick={() => setCalMonth((c) => ({ y: c.m === 0 ? c.y - 1 : c.y, m: c.m === 0 ? 11 : c.m - 1 }))}>&lt;</span>
                   <strong style={{ color: HT.text }}>{monthLabel}</strong>
                   <span style={{ cursor: "pointer" }} onClick={() => setCalMonth((c) => ({ y: c.m === 11 ? c.y + 1 : c.y, m: c.m === 11 ? 0 : c.m + 1 }))}>&gt;</span>

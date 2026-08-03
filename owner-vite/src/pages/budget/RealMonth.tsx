@@ -1,6 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { HOME_THEME } from "../../lib/theme";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  HOME_THEME,
+  RETA_PALETTE,
+  TYPE,
+  rgba,
+  homeInputStyle,
+  homeButtonStyle,
+  homeSecondaryButtonStyle,
+} from "../../lib/theme";
+import { Card } from "../../components/PageCard";
 import { ThemedSelect } from "../../components/ThemedSelect";
+import { MoneyFlowSankey, type FlowNode, type FlowLink } from "./MoneyFlowSankey";
 
 /**
  * Budget → Real Month.
@@ -12,171 +22,155 @@ import { ThemedSelect } from "../../components/ThemedSelect";
  * payments plus recurring rules projected forward. This is the TRUTH: what the
  * bank says left the account. Writing statement rows into the register would
  * double-count every dollar that appears in both, so nothing here flows into
- * the plan automatically.
+ * the plan automatically. The one bridge is per-subscription: → Payments adds
+ * ONE monthly recurring rule. There is no bulk commit, by design.
  *
- * The one bridge is per-subscription: the → Payments button on a single
- * detected subscription creates one monthly recurring rule in the register.
- * One item, one deliberate click. There is no bulk commit, by design.
+ * Order on the page is deliberate — "What to fix" is the conclusion and sits at
+ * the very top; the raw data that produced it lives underneath.
  *
  * Views:
- *   Ledger      — every stored transaction, category editable inline.
- *   Where it went — merchant rollup + category rollup against your budgets.
- *   Subscriptions — repeat charges, each tagged Keep / Cancel / Watch.
+ *   Merchants  — one row per vendor, grouped under its category, expandable.
+ *                One dropdown re-files every transaction from that vendor.
+ *   Flow       — Sankey: money in → categories → merchants.
+ *   Ledger     — flat, sortable, every transaction.
+ *   Categories — real spend against the budgets on the Categories tab.
+ *   Subscriptions — repeat charges, tagged Keep / Cancel / Watch.
  *
- * Style note: this file re-declares the page-local surface tokens from
- * Budget.tsx rather than importing them (they are module-private there). Keep
- * the two in sync if the palette moves.
+ * Theme: every chrome colour resolves from src/lib/theme.ts (HOME_THEME + the
+ * rgba() helper), and panels use the shared <Card> primitive. The one page-local
+ * colour decision is the money pair below, explained where it is declared.
  */
 
-// ── page-local surface tokens (mirrors Budget.tsx) ──────────────────────────
-const PANEL = "#0B101B";
-const HAIRLINE = "rgba(255,255,255,0.16)";
-const EDGE_LIGHT = "inset 0 1px 0 rgba(255,255,255,0.12)";
-const CARD_SHADOW = `${EDGE_LIGHT}, 0 2px 4px rgba(0,0,0,0.6), 0 24px 60px -16px rgba(0,0,0,0.75)`;
-const LIGHT_BLUE = "#7dd3fc";
-const GREEN = "#34D399";
-const GOLD = "#FBBF24";
+// The theme's `green` token is #8ECAE6 — a light blue that reads as the same
+// colour as `lightBlue`, which makes a red/green money column unreadable.
+// RETA_PALETTE.green is the theme's only true green, so positives use it. Both
+// still come from the theme file; no hex is hardcoded here.
+const MONEY_IN = RETA_PALETTE.green;
+const MONEY_OUT = HOME_THEME.red;
+const ACCENT = HOME_THEME.lightBlue;
+const WARN = HOME_THEME.gold;
 
-function card(): React.CSSProperties {
-  return {
-    background: `linear-gradient(180deg, rgba(255,255,255,0.04) 0%, transparent 34%), ${PANEL}`,
-    borderRadius: 16,
-    border: `1px solid ${HAIRLINE}`,
-    boxShadow: CARD_SHADOW,
-  };
-}
+/** Category swatch ramp — theme tokens only, cycled for the flow diagram. */
+const RAMP = [HOME_THEME.cyan, ACCENT, WARN, HOME_THEME.orange, RETA_PALETTE.rose, RETA_PALETTE.peach, HOME_THEME.green, RETA_PALETTE.green];
+
+// ── control styles, all derived from theme tokens ───────────────────────────
 function field(): React.CSSProperties {
   return {
-    padding: "10px 12px", borderRadius: 10, border: `1px solid ${HAIRLINE}`,
-    background: "rgba(0,0,0,0.45)", boxShadow: "inset 0 1px 3px rgba(0,0,0,0.45)",
-    color: HOME_THEME.text, outline: "none", width: "100%", fontSize: 14,
-    colorScheme: "dark", accentColor: HOME_THEME.cyan,
-    appearance: "none", WebkitAppearance: "none", MozAppearance: "textfield" as const,
+    ...homeInputStyle,
+    width: "100%",
+    boxShadow: `inset 0 1px 3px ${rgba("#000000", 0.45)}`,
+    colorScheme: "dark",
+    accentColor: HOME_THEME.cyan,
+    appearance: "none",
+    WebkitAppearance: "none",
+    MozAppearance: "textfield" as const,
   };
 }
 function labelCap(): React.CSSProperties {
-  return { fontSize: 14, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: HOME_THEME.muted, marginBottom: 6 };
+  return { fontSize: TYPE.label, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: HOME_THEME.muted, opacity: 0.7, marginBottom: 6 };
 }
 function primary(): React.CSSProperties {
   return {
-    padding: "10px 14px", borderRadius: 10, border: "1px solid rgba(33,158,188,0.60)",
-    background: "linear-gradient(180deg, rgba(33,158,188,0.30), rgba(33,158,188,0.08))",
-    boxShadow: "0 0 24px rgba(33,158,188,0.40), inset 0 1px 0 rgba(255,255,255,0.12)",
-    color: LIGHT_BLUE, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.08em",
-    cursor: "pointer", whiteSpace: "nowrap",
+    ...homeButtonStyle,
+    border: `1px solid ${rgba(HOME_THEME.cyan, 0.6)}`,
+    background: `linear-gradient(180deg, ${rgba(HOME_THEME.cyan, 0.3)}, ${rgba(HOME_THEME.cyan, 0.08)})`,
+    boxShadow: `0 0 24px ${rgba(HOME_THEME.cyan, 0.4)}, inset 0 1px 0 ${rgba("#ffffff", 0.12)}`,
+    color: ACCENT, fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap",
   };
 }
 function ghost(): React.CSSProperties {
-  return {
-    padding: "10px 14px", borderRadius: 10, border: `1px solid ${HAIRLINE}`,
-    background: "rgba(255,255,255,0.03)", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
-    color: HOME_THEME.text, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap",
-  };
+  return { ...homeSecondaryButtonStyle, fontWeight: 800, whiteSpace: "nowrap" };
 }
 function pill(active: boolean): React.CSSProperties {
   return {
     padding: "7px 14px", borderRadius: 999,
-    border: active ? "1px solid rgba(33,158,188,0.75)" : `1px solid ${HAIRLINE}`,
-    background: active ? "linear-gradient(180deg, rgba(33,158,188,0.30), rgba(33,158,188,0.10))" : "rgba(255,255,255,0.03)",
-    boxShadow: active ? "0 0 22px rgba(33,158,188,0.50), inset 0 1px 0 rgba(255,255,255,0.10)" : "none",
-    color: active ? HOME_THEME.cyan : "rgba(255,255,255,0.82)",
+    border: `1px solid ${active ? rgba(HOME_THEME.cyan, 0.75) : HOME_THEME.border}`,
+    background: active ? `linear-gradient(180deg, ${rgba(HOME_THEME.cyan, 0.3)}, ${rgba(HOME_THEME.cyan, 0.1)})` : rgba("#ffffff", 0.03),
+    boxShadow: active ? `0 0 22px ${rgba(HOME_THEME.cyan, 0.5)}, inset 0 1px 0 ${rgba("#ffffff", 0.1)}` : "none",
+    color: active ? HOME_THEME.cyan : HOME_THEME.text,
+    opacity: active ? 1 : 0.82,
     fontSize: 13, fontWeight: 800, cursor: "pointer",
   };
 }
-/** Small tri-state chip used by the Keep / Cancel / Watch selector. */
 function chip(active: boolean, color: string): React.CSSProperties {
   return {
     padding: "4px 10px", borderRadius: 999, fontSize: 11, fontWeight: 900, letterSpacing: "0.08em",
-    border: `1px solid ${active ? color : HAIRLINE}`,
-    background: active ? `${color}22` : "rgba(255,255,255,0.02)",
-    color: active ? color : "rgba(255,255,255,0.5)",
+    border: `1px solid ${active ? color : HOME_THEME.border}`,
+    background: active ? rgba(color, 0.13) : rgba("#ffffff", 0.02),
+    color: active ? color : HOME_THEME.text,
+    opacity: active ? 1 : 0.5,
     cursor: "pointer", textTransform: "uppercase",
   };
 }
 function th(align: "left" | "right" | "center"): React.CSSProperties {
   return {
-    textAlign: align, padding: "10px 14px", color: HOME_THEME.muted, fontWeight: 800,
-    fontSize: 12, textTransform: "uppercase", letterSpacing: "0.12em",
+    textAlign: align, padding: "10px 14px", color: HOME_THEME.muted, opacity: 0.65, fontWeight: 800,
+    fontSize: TYPE.label, textTransform: "uppercase", letterSpacing: "0.12em",
     borderBottom: `1px solid ${HOME_THEME.border}`, whiteSpace: "nowrap",
   };
 }
 function td(align: "left" | "right" | "center"): React.CSSProperties {
-  return { textAlign: align, padding: "8px 14px", fontSize: 14, borderBottom: "1px solid rgba(255,255,255,0.05)" };
+  return { textAlign: align, padding: "8px 14px", fontSize: TYPE.body, borderBottom: `1px solid ${rgba("#ffffff", 0.05)}` };
 }
+const MUTED: React.CSSProperties = { color: HOME_THEME.muted, opacity: 0.62 };
 
 // ── types ───────────────────────────────────────────────────────────────────
 type Bank = "coastal" | "truist" | "secu";
 type Category = { id: number; name: string; amount: number; color?: string | null };
 type SubStatus = "keep" | "cancel" | "watch";
 
-/** A transaction parsed from a statement but not yet saved. */
 type StagedRow = {
-  key: string;
-  date: string;
-  description: string;
-  merchant: string;
-  amount: number;
-  direction: "in" | "out";
-  categoryId: number | null;
-  categoryGuess: string;
-  recurring: boolean;
-  include: boolean;
+  key: string; date: string; description: string; merchant: string;
+  amount: number; direction: "in" | "out"; categoryId: number | null;
+  categoryGuess: string; recurring: boolean; include: boolean;
 };
 
-/** A transaction as it lives in budget_statement_tx. */
 type StoredTx = {
-  id: number;
-  month: string;
-  tx_date: string;
-  description: string;
-  merchant: string;
-  amount: number;
-  direction: "in" | "out";
-  category_id: number | null;
-  is_recurring: number;
-  bank: Bank;
-  source: string | null;
+  id: number; month: string; tx_date: string; description: string; merchant: string;
+  amount: number; direction: "in" | "out"; category_id: number | null;
+  is_recurring: number; bank: Bank; source: string | null;
 };
 
 type Subscription = {
-  id: number;
-  merchant_key: string;
-  merchant: string;
-  status: SubStatus;
-  note: string | null;
-  pushed_recurring_id: number | null;
+  id: number; merchant_key: string; merchant: string;
+  status: SubStatus; note: string | null; pushed_recurring_id: number | null;
 };
+
+type MonthStat = { month: string; n: number };
 
 type Finding = { title: string; severity: "high" | "medium" | "low"; detail: string; monthlySavings: number; evidence: string };
 type Advice = { headline: string; findings: Finding[]; quickWins: string[] };
 
-type View = "ledger" | "where" | "subs";
+type View = "merchants" | "flow" | "ledger" | "categories" | "subs";
 type SortKey = "date" | "merchant" | "amount" | "category";
 
-/** One burst of INSERTs into budget_register, as seen by the undo panel. */
 type RegisterBatch = {
-  bucket: string;
-  first_at: string;
-  last_at: string;
-  n: number;
-  total: number;
-  from_date: string;
-  to_date: string;
-  labels: string[];
+  bucket: string; first_at: string; last_at: string; n: number;
+  total: number; from_date: string; to_date: string; labels: string[];
+};
+
+/** One vendor, with every transaction behind it. */
+type MerchantRow = {
+  key: string; merchant: string; total: number; count: number;
+  categoryId: number | null; categoryName: string; mixedCategory: boolean;
+  amounts: number[]; flagged: boolean; rows: StoredTx[];
 };
 
 const BANKS: Bank[] = ["coastal", "truist", "secu"];
 const BANK_LABEL: Record<Bank, string> = { coastal: "COASTAL", truist: "TRUIST", secu: "SECU" };
+const UNCATEGORIZED = "Uncategorized";
+/** Merchants shown per category before the "+n more" link. */
+const PER_CAT_LIMIT = 6;
 
 const SEVERITY_UI: Record<Finding["severity"], { color: string; label: string }> = {
   high: { color: HOME_THEME.red, label: "HIGH" },
-  medium: { color: GOLD, label: "MEDIUM" },
-  low: { color: LIGHT_BLUE, label: "LOW" },
+  medium: { color: WARN, label: "MEDIUM" },
+  low: { color: ACCENT, label: "LOW" },
 };
 const STATUS_UI: Record<SubStatus, { color: string; label: string }> = {
-  keep: { color: GREEN, label: "Keep" },
+  keep: { color: MONEY_IN, label: "Keep" },
   cancel: { color: HOME_THEME.red, label: "Cancel" },
-  watch: { color: GOLD, label: "Watch" },
+  watch: { color: WARN, label: "Watch" },
 };
 
 function fmtMoney(amount: number, currency = "USD") {
@@ -185,6 +179,11 @@ function fmtMoney(amount: number, currency = "USD") {
 function shortDate(iso: string): string {
   const [, m, d] = String(iso).split("-").map(Number);
   return Number.isFinite(m) && Number.isFinite(d) ? `${m}/${d}` : String(iso);
+}
+function monthLabel(m: string): string {
+  const [y, mo] = m.split("-").map(Number);
+  if (!y || !mo) return m;
+  return `${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][mo - 1]} ’${String(y).slice(2)}`;
 }
 function mKey(v: string): string {
   return String(v || "").trim().toLowerCase().replace(/\s+/g, " ").slice(0, 60);
@@ -204,6 +203,7 @@ function fileToBase64(file: File): Promise<string> {
 
 export default function RealMonth({
   month,
+  onMonth,
   categories,
   currency,
   defaultBank = "secu",
@@ -211,6 +211,8 @@ export default function RealMonth({
 }: {
   /** YYYY-MM, driven by the month picker at the top of the Budget page. */
   month: string;
+  /** Lets the month chips drive the page's picker. */
+  onMonth?: (m: string) => void;
   categories: Category[];
   currency: string;
   defaultBank?: Bank;
@@ -218,10 +220,13 @@ export default function RealMonth({
 }) {
   const [tx, setTx] = useState<StoredTx[]>([]);
   const [subs, setSubs] = useState<Subscription[]>([]);
+  const [months, setMonths] = useState<MonthStat[]>([]);
   const [staged, setStaged] = useState<StagedRow[]>([]);
-  const [view, setView] = useState<View>("ledger");
-  // Ledger sorting. Sorting by merchant puts every charge from one vendor
-  // together, which is the fast way to fix a whole merchant's categories.
+  const [view, setView] = useState<View>("merchants");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set());
+  const [showAllIn, setShowAllIn] = useState<Set<string>>(new Set());
+  const [q, setQ] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [onlyUncat, setOnlyUncat] = useState(false);
@@ -248,6 +253,7 @@ export default function RealMonth({
       const data = await res.json();
       setTx((data.tx || []).map((r: StoredTx) => ({ ...r, amount: Number(r.amount) })));
       setSubs(data.subscriptions || []);
+      setMonths((data.months || []).map((x: MonthStat) => ({ month: x.month, n: Number(x.n) })));
     } catch {
       setError("Could not load this month's statement data.");
     } finally {
@@ -259,6 +265,9 @@ export default function RealMonth({
     void load(month);
     setAdvice(null);
     setStaged([]);
+    setExpanded(new Set());
+    setShowAllIn(new Set());
+    setQ("");
   }, [month, load]);
 
   // ── parse a dropped file into the staging table ──────────────────────────
@@ -282,8 +291,7 @@ export default function RealMonth({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            kind: isPdf ? "pdf" : "image",
-            data,
+            kind: isPdf ? "pdf" : "image", data,
             mediaType: file.type || (isPdf ? "application/pdf" : "image/png"),
             categories: categories.map((c) => ({ id: c.id, name: c.name })),
           }),
@@ -328,12 +336,9 @@ export default function RealMonth({
     setError(null);
     try {
       const res = await fetch("/api/budget/real", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: "import",
-          month,
-          source: sourceName,
+          action: "import", month, source: sourceName,
           rows: rows.map((r) => ({
             date: r.date, description: r.description, merchant: r.merchant,
             amount: r.amount, direction: r.direction, categoryId: r.categoryId,
@@ -343,9 +348,7 @@ export default function RealMonth({
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json?.ok) { setError(json?.error || "Save failed."); return; }
-      setNotice(
-        `Saved ${json.inserted} to Real Month${json.skipped ? ` · ${json.skipped} already there (skipped)` : ""}. Payments and Overview are untouched.`
-      );
+      setNotice(`Saved ${json.inserted} to Real Month${json.skipped ? ` · ${json.skipped} already there (skipped)` : ""}. Payments and Overview are untouched.`);
       setStaged([]);
       await load(month);
     } catch (e) {
@@ -367,6 +370,18 @@ export default function RealMonth({
     setTx((prev) => prev.map((r) => (r.id === id ? { ...r, category_id: categoryId } : r)));
     await post({ action: "setTxCategory", id, categoryId });
   };
+
+  /** Re-file every row from one merchant in a single call. */
+  const setMerchantCategory = async (merchant: string, categoryId: number | null) => {
+    const key = mKey(merchant);
+    setTx((prev) => prev.map((r) => (mKey(r.merchant || r.description) === key ? { ...r, category_id: categoryId } : r)));
+    const out = await post({ action: "setMerchantCategory", month, merchant, categoryId });
+    if (out?.ok) {
+      const name = categoryId == null ? "no category" : catById.get(categoryId)?.name ?? "that category";
+      setNotice(`${out.updated} ${merchant} row${out.updated === 1 ? "" : "s"} → ${name}.`);
+    }
+  };
+
   const deleteTx = async (id: number) => {
     setTx((prev) => prev.filter((r) => r.id !== id));
     await post({ action: "deleteTx", id });
@@ -379,43 +394,9 @@ export default function RealMonth({
     setSaving(false);
   };
 
-  /** Re-file every row from one merchant at once. */
-  const setMerchantCategory = async (merchant: string, categoryId: number | null) => {
-    const key = mKey(merchant);
-    setTx((prev) => prev.map((r) => (mKey(r.merchant || r.description) === key ? { ...r, category_id: categoryId } : r)));
-    const out = await post({ action: "setMerchantCategory", month, merchant, categoryId });
-    if (out?.ok) {
-      const name = categoryId == null ? "no category" : catById.get(categoryId)?.name ?? "that category";
-      setNotice(`${out.updated} ${merchant} row${out.updated === 1 ? "" : "s"} → ${name}.`);
-    }
-  };
-
-  // Ledger rows, sorted and optionally narrowed to the ones still unfiled.
-  const ledgerRows = useMemo(() => {
-    const base = onlyUncat ? tx.filter((r) => r.category_id == null) : tx;
-    const dir = sortDir === "asc" ? 1 : -1;
-    const catName = (r: StoredTx) => (r.category_id == null ? "\uffff" : catById.get(r.category_id)?.name ?? "\uffff");
-    return [...base].sort((a2, b2) => {
-      let cmp = 0;
-      if (sortKey === "date") cmp = a2.tx_date.localeCompare(b2.tx_date);
-      else if (sortKey === "amount") cmp = a2.amount - b2.amount;
-      else if (sortKey === "merchant") cmp = mKey(a2.merchant).localeCompare(mKey(b2.merchant));
-      else cmp = catName(a2).localeCompare(catName(b2));
-      // Within a merchant or category run, keep it chronological — otherwise
-      // the grouped block reads as noise.
-      if (cmp === 0 && sortKey !== "date") cmp = a2.tx_date.localeCompare(b2.tx_date);
-      return cmp * dir;
-    });
-  }, [tx, sortKey, sortDir, onlyUncat, catById]);
-
-  const toggleSort = (k: SortKey) => {
-    if (k === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else { setSortKey(k); setSortDir("asc"); }
-  };
-
   // ── merchant rollup ──────────────────────────────────────────────────────
-  const merchants = useMemo(() => {
-    const map = new Map<string, { merchant: string; total: number; count: number; categoryId: number | null; amounts: number[]; flagged: boolean }>();
+  const allMerchants = useMemo<MerchantRow[]>(() => {
+    const map = new Map<string, MerchantRow>();
     for (const r of tx) {
       if (r.direction !== "out") continue;
       const k = mKey(r.merchant || r.description);
@@ -424,14 +405,54 @@ export default function RealMonth({
         hit.total += r.amount;
         hit.count += 1;
         hit.amounts.push(r.amount);
+        hit.rows.push(r);
         hit.flagged = hit.flagged || r.is_recurring === 1;
+        if (hit.categoryId !== r.category_id) hit.mixedCategory = true;
         if (hit.categoryId == null) hit.categoryId = r.category_id;
       } else {
-        map.set(k, { merchant: r.merchant || r.description, total: r.amount, count: 1, categoryId: r.category_id, amounts: [r.amount], flagged: r.is_recurring === 1 });
+        map.set(k, {
+          key: k, merchant: r.merchant || r.description, total: r.amount, count: 1,
+          categoryId: r.category_id, categoryName: "", mixedCategory: false,
+          amounts: [r.amount], flagged: r.is_recurring === 1, rows: [r],
+        });
       }
     }
+    for (const m of map.values()) {
+      m.categoryName = m.categoryId != null ? catById.get(m.categoryId)?.name ?? UNCATEGORIZED : UNCATEGORIZED;
+    }
     return [...map.values()].sort((a, b) => b.total - a.total);
-  }, [tx]);
+  }, [tx, catById]);
+
+  /** Search + "needs a category" narrow the list before it is grouped. */
+  const visibleMerchants = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return allMerchants.filter((m) => {
+      if (onlyUncat && m.categoryId != null && !m.mixedCategory) return false;
+      if (!needle) return true;
+      return m.merchant.toLowerCase().includes(needle) || m.categoryName.toLowerCase().includes(needle);
+    });
+  }, [allMerchants, q, onlyUncat]);
+
+  /**
+   * The flat merchant list gets long fast (a month of card activity is easily
+   * 60+ vendors), so it is grouped under its category, biggest category first,
+   * and each group is capped until you ask for the rest.
+   */
+  const merchantGroups = useMemo(() => {
+    const map = new Map<string, { name: string; color: string; total: number; rows: MerchantRow[] }>();
+    for (const m of visibleMerchants) {
+      const name = m.categoryName;
+      const hit = map.get(name);
+      if (hit) { hit.total += m.total; hit.rows.push(m); }
+      else map.set(name, { name, color: HOME_THEME.cyan, total: m.total, rows: [m] });
+    }
+    const out = [...map.values()].sort((a, b) => b.total - a.total);
+    out.forEach((g, i) => {
+      const cat = categories.find((c) => c.name === g.name);
+      g.color = cat?.color || (g.name === UNCATEGORIZED ? HOME_THEME.muted : RAMP[i % RAMP.length]);
+    });
+    return out;
+  }, [visibleMerchants, categories]);
 
   // ── category rollup vs the budgets on the Categories tab ─────────────────
   const byCategory = useMemo(() => {
@@ -439,7 +460,7 @@ export default function RealMonth({
     for (const r of tx) {
       if (r.direction !== "out") continue;
       const cat = r.category_id != null ? catById.get(r.category_id) : undefined;
-      const name = cat?.name || "Uncategorized";
+      const name = cat?.name || UNCATEGORIZED;
       const k = name.toLowerCase();
       const hit = map.get(k);
       if (hit) { hit.spent += r.amount; hit.count += 1; }
@@ -449,29 +470,20 @@ export default function RealMonth({
   }, [tx, catById]);
 
   // ── subscriptions ────────────────────────────────────────────────────────
-  // A merchant is recurring when Claude flagged it during the parse, or it hit
-  // 2+ times this month at within 5% of the same amount. The saved verdict
-  // (keep/cancel/watch) is joined in by merchant key so it survives re-imports.
   const subRows = useMemo(() => {
     const byKey = new Map(subs.map((s) => [s.merchant_key, s]));
-    return merchants
+    return allMerchants
       .map((m) => {
         const sorted = [...m.amounts].sort((a, b) => a - b);
         const median = sorted[Math.floor(sorted.length / 2)] || 0;
         const tight = median > 0 && m.amounts.every((a) => Math.abs(a - median) <= median * 0.05);
         const repeats = m.count >= 2 && tight;
         if (!repeats && !m.flagged) return null;
-        const saved = byKey.get(mKey(m.merchant));
-        // A repeat charge bills at the median; a once-a-month flagged charge is
-        // just its own amount.
-        const monthly = repeats ? median : m.total;
+        const saved = byKey.get(m.key);
         return {
-          merchant: m.merchant,
-          key: mKey(m.merchant),
-          count: m.count,
-          each: repeats ? median : m.total,
-          total: m.total,
-          monthly,
+          merchant: m.merchant, key: m.key, count: m.count,
+          each: repeats ? median : m.total, total: m.total,
+          monthly: repeats ? median : m.total,
           categoryId: m.categoryId,
           status: (saved?.status ?? "watch") as SubStatus,
           pushedId: saved?.pushed_recurring_id ?? null,
@@ -479,7 +491,7 @@ export default function RealMonth({
       })
       .filter((x): x is NonNullable<typeof x> => x !== null)
       .sort((a, b) => b.monthly - a.monthly);
-  }, [merchants, subs]);
+  }, [allMerchants, subs]);
 
   const setSubStatus = async (merchant: string, status: SubStatus) => {
     const key = mKey(merchant);
@@ -493,14 +505,40 @@ export default function RealMonth({
     await post({ action: "setSubscription", merchant, status });
   };
 
-  /** The single bridge into the plan — one subscription, one recurring rule. */
   const pushToPayments = async (merchant: string, amount: number) => {
-    const anchor = `${month}-01`;
-    const out = await post({ action: "pushSubscription", merchant, amount, bank, anchorDate: anchor, status: "keep" });
+    const out = await post({ action: "pushSubscription", merchant, amount, bank, anchorDate: `${month}-01`, status: "keep" });
     if (!out?.ok) return;
     setNotice(`${merchant} added to Payments as a monthly recurring rule (${fmtMoney(amount, currency)}). Nothing else was copied over.`);
     const res = await fetch(`/api/budget/real?month=${month}`, { cache: "no-store" });
     if (res.ok) { const d = await res.json(); setSubs(d.subscriptions || []); }
+  };
+
+  // ── flat ledger ──────────────────────────────────────────────────────────
+  const ledgerRows = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    let base = onlyUncat ? tx.filter((r) => r.category_id == null) : tx;
+    if (needle) base = base.filter((r) => `${r.merchant} ${r.description}`.toLowerCase().includes(needle));
+    const dir = sortDir === "asc" ? 1 : -1;
+    const catName = (r: StoredTx) => (r.category_id == null ? "￿" : catById.get(r.category_id)?.name ?? "￿");
+    return [...base].sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === "date") cmp = a.tx_date.localeCompare(b.tx_date);
+      else if (sortKey === "amount") cmp = a.amount - b.amount;
+      else if (sortKey === "merchant") cmp = mKey(a.merchant).localeCompare(mKey(b.merchant));
+      else cmp = catName(a).localeCompare(catName(b));
+      if (cmp === 0 && sortKey !== "date") cmp = a.tx_date.localeCompare(b.tx_date);
+      return cmp * dir;
+    });
+  }, [tx, sortKey, sortDir, onlyUncat, catById, q]);
+
+  const toggleSort = (k: SortKey) => {
+    if (k === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(k); setSortDir("asc"); }
+  };
+  const toggleIn = (set: Set<string>, setter: (s: Set<string>) => void, k: string) => {
+    const n = new Set(set);
+    if (n.has(k)) n.delete(k); else n.add(k);
+    setter(n);
   };
 
   // ── totals ───────────────────────────────────────────────────────────────
@@ -513,6 +551,52 @@ export default function RealMonth({
     return { outflow, inflow, net: inflow - outflow, uncategorized, subTotal, cancelSavings };
   }, [tx, subRows]);
 
+  const potentialSavings = useMemo(
+    () => (advice?.findings ?? []).reduce((s, f) => s + (f.monthlySavings || 0), 0),
+    [advice]
+  );
+
+  // ── Sankey: money in → category → merchant ───────────────────────────────
+  // Merchants below the per-category cut are folded into one "Other" band so
+  // the diagram stays readable at 60+ vendors.
+  const flow = useMemo(() => {
+    const nodes: FlowNode[] = [];
+    const links: FlowLink[] = [];
+    const cats = byCategory.filter((c) => c.spent > 0);
+    if (!cats.length) return { nodes, links };
+
+    const inflowValue = totals.inflow > 0 ? totals.inflow : totals.outflow;
+    nodes.push({ id: "in", label: totals.inflow > 0 ? "Money in" : "Spending", value: inflowValue, color: MONEY_IN, col: 0 });
+
+    cats.forEach((c, i) => {
+      const color = c.color || (c.name === UNCATEGORIZED ? HOME_THEME.muted : RAMP[i % RAMP.length]);
+      const id = `cat:${c.name}`;
+      nodes.push({ id, label: c.name, value: c.spent, color, col: 1 });
+      links.push({ source: "in", target: id, value: c.spent });
+
+      const inCat = allMerchants.filter((m) => m.categoryName === c.name).sort((a, b) => b.total - a.total);
+      const top = inCat.slice(0, 5);
+      const rest = inCat.slice(5);
+      for (const m of top) {
+        const mid = `m:${c.name}:${m.merchant}`;
+        nodes.push({ id: mid, label: m.merchant, value: m.total, color, col: 2 });
+        links.push({ source: id, target: mid, value: m.total });
+      }
+      const restTotal = rest.reduce((s, m) => s + m.total, 0);
+      if (restTotal > 0) {
+        const mid = `m:${c.name}:other`;
+        nodes.push({ id: mid, label: `Other (${rest.length})`, value: restTotal, color: rgba(color, 0.5), col: 2 });
+        links.push({ source: id, target: mid, value: restTotal });
+      }
+    });
+
+    if (totals.inflow > totals.outflow) {
+      nodes.push({ id: "cat:__left", label: "Left over", value: totals.inflow - totals.outflow, color: MONEY_IN, col: 1 });
+      links.push({ source: "in", target: "cat:__left", value: totals.inflow - totals.outflow });
+    }
+    return { nodes, links };
+  }, [byCategory, allMerchants, totals]);
+
   // ── what to fix ──────────────────────────────────────────────────────────
   const runAdvice = async () => {
     if (!tx.length) return;
@@ -520,14 +604,12 @@ export default function RealMonth({
     setError(null);
     try {
       const res = await fetch("/api/budget/advise", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          period: month,
-          currency,
+          period: month, currency,
           totals: { inflow: totals.inflow, outflow: totals.outflow, net: totals.net, transactions: tx.length },
           categories: byCategory.map((c) => ({ name: c.name, spent: Number(c.spent.toFixed(2)), budget: c.budget, count: c.count })),
-          merchants: merchants.slice(0, 40).map((m) => ({ merchant: m.merchant, total: Number(m.total.toFixed(2)), count: m.count })),
+          merchants: allMerchants.slice(0, 40).map((m) => ({ merchant: m.merchant, total: Number(m.total.toFixed(2)), count: m.count })),
           subscriptions: subRows.map((s) => ({ merchant: s.merchant, monthly: Number(s.monthly.toFixed(2)), count: s.count, status: s.status })),
         }),
       });
@@ -546,67 +628,523 @@ export default function RealMonth({
     [categories]
   );
   const stagedIncluded = staged.filter((r) => r.include);
+  const hasData = tx.length > 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {/* ── Dropzone ─────────────────────────────────────────────────────── */}
-      <div
-        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={(e) => { e.preventDefault(); setDragging(false); void handleFiles(e.dataTransfer.files); }}
-        style={{
-          ...card(), padding: 20, borderStyle: "dashed",
-          borderColor: dragging ? "rgba(33,158,188,0.85)" : HAIRLINE,
-          boxShadow: dragging ? "0 0 40px rgba(33,158,188,0.35), inset 0 1px 0 rgba(255,255,255,0.12)" : CARD_SHADOW,
-          transition: "border-color .15s ease, box-shadow .15s ease",
-        }}
-      >
-        <div style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 320px", minWidth: 260 }}>
-            <div style={{ fontSize: 18, fontWeight: 900, letterSpacing: "0.06em" }}>
-              {parsing ? "Reading statement…" : "Drop a statement PDF or screenshot"}
-            </div>
-            <div style={{ color: HOME_THEME.muted, fontSize: 13, marginTop: 6, lineHeight: 1.5 }}>
-              Lands in Real Month only — <span style={{ color: LIGHT_BLUE }}>Payments and Overview never see it</span>, so nothing double-counts.
-              Re-importing an overlapping statement skips rows already stored.
-              {sourceName && !parsing ? <> Last read: <span style={{ color: LIGHT_BLUE }}>{sourceName}</span>.</> : null}
-            </div>
-          </div>
-          <div style={{ width: 150 }}>
-            <div style={labelCap()}>Bank</div>
-            <ThemedSelect value={bank} onChange={(v) => setBank(v as Bank)} options={BANKS.map((b) => ({ value: b, label: BANK_LABEL[b] }))} />
-          </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "flex-end", paddingBottom: 1 }}>
-            <input
-              ref={fileRef} type="file" accept="application/pdf,image/png,image/jpeg,image/webp" multiple
-              onChange={(e) => void handleFiles(e.target.files)} style={{ display: "none" }}
-            />
-            <button onClick={() => fileRef.current?.click()} disabled={parsing} style={{ ...primary(), opacity: parsing ? 0.5 : 1 }}>
-              {parsing ? "Parsing…" : "Choose file"}
-            </button>
-          </div>
-        </div>
-        {!categories.length && (
-          <div style={{ marginTop: 12, fontSize: 13, color: GOLD }}>
-            No categories defined yet — rows will import uncategorized.{" "}
-            {onOpenCategories && (
-              <span onClick={onOpenCategories} style={{ color: LIGHT_BLUE, cursor: "pointer", textDecoration: "underline" }}>Add some first →</span>
+      {/* ── Months that actually hold data ───────────────────────────────── */}
+      {months.length > 0 && (
+        <Card variant="classic" padding="10px 14px">
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: TYPE.label, fontWeight: 800, letterSpacing: "0.14em", ...MUTED }}>STORED MONTHS</span>
+            {months.map((m) => (
+              <button
+                key={m.month}
+                onClick={() => onMonth?.(m.month)}
+                title={`${m.n} transaction${m.n === 1 ? "" : "s"}`}
+                style={{ ...pill(m.month === month), display: "inline-flex", alignItems: "center", gap: 6 }}
+              >
+                {monthLabel(m.month)}
+                <span style={{ fontSize: TYPE.micro, fontWeight: 900, opacity: 0.65 }}>{m.n}</span>
+              </button>
+            ))}
+            {!months.some((m) => m.month === month) && (
+              <span style={{ fontSize: TYPE.label, color: WARN }}>{monthLabel(month)} — nothing stored</span>
             )}
           </div>
-        )}
-        {error && <div style={{ marginTop: 12, fontSize: 13, color: HOME_THEME.red, fontWeight: 700 }}>{error}</div>}
-        {notice && <div style={{ marginTop: 12, fontSize: 13, color: GREEN, fontWeight: 700 }}>{notice}</div>}
-      </div>
+        </Card>
+      )}
+
+      {/* ── WHAT TO FIX — first, because the conclusion is the point ──────── */}
+      {hasData && (
+        <Card variant="classic" padding={18} style={{ borderColor: rgba(WARN, 0.3) }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: TYPE.label, fontWeight: 900, letterSpacing: "0.18em", color: WARN }}>WHAT TO FIX</span>
+            <span style={{ fontSize: TYPE.label, ...MUTED }}>{monthLabel(month)}</span>
+            {potentialSavings > 0 && (
+              <span style={{ fontSize: TYPE.label, fontWeight: 900, color: MONEY_IN, fontVariantNumeric: "tabular-nums" }}>
+                {fmtMoney(potentialSavings, currency)}/mo identified
+              </span>
+            )}
+            <div style={{ flex: 1 }} />
+            <button
+              onClick={() => void runAdvice()}
+              disabled={advising}
+              style={{ ...ghost(), padding: "6px 12px", fontSize: TYPE.label, opacity: advising ? 0.5 : 1, borderColor: rgba(WARN, 0.5), color: WARN }}
+            >
+              {advising ? "Thinking…" : advice ? "Re-run" : "✦ Analyze this month"}
+            </button>
+          </div>
+
+          {!advice && !advising && (
+            <div style={{ fontSize: TYPE.body, ...MUTED, marginTop: 10, lineHeight: 1.5 }}>
+              Reads the merchant totals, category totals and recurring charges below, then ranks what's actually costing you.
+              Individual transactions are never sent.
+            </div>
+          )}
+          {advice?.headline && <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.35, marginTop: 12 }}>{advice.headline}</div>}
+
+          {advice && (
+            <>
+              <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
+                {advice.findings.map((f, i) => {
+                  const ui = SEVERITY_UI[f.severity];
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        border: `1px solid ${HOME_THEME.border}`,
+                        borderLeft: `3px solid ${ui.color}`,
+                        borderRadius: 12,
+                        padding: "12px 14px",
+                        background: `linear-gradient(90deg, ${rgba(ui.color, 0.07)} 0%, ${rgba("#ffffff", 0.02)} 45%)`,
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: TYPE.micro, fontWeight: 900, letterSpacing: "0.14em", color: ui.color, border: `1px solid ${rgba(ui.color, 0.4)}`, background: rgba(ui.color, 0.1), borderRadius: 999, padding: "2px 8px" }}>{ui.label}</span>
+                        <span style={{ fontSize: TYPE.subhead, fontWeight: 800 }}>{f.title}</span>
+                        <div style={{ flex: 1 }} />
+                        {f.monthlySavings > 0 && (
+                          <span style={{ fontSize: TYPE.body, fontWeight: 900, color: MONEY_IN, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(f.monthlySavings, currency)}/mo</span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: TYPE.body, color: HOME_THEME.text, opacity: 0.82, lineHeight: 1.55, marginTop: 8 }}>{f.detail}</div>
+                      {f.evidence && <div style={{ fontSize: TYPE.label, ...MUTED, marginTop: 6, fontVariantNumeric: "tabular-nums" }}>{f.evidence}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {advice.quickWins.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <div style={labelCap()}>Quick wins</div>
+                  <ul style={{ margin: 0, paddingLeft: 20, display: "grid", gap: 6 }}>
+                    {advice.quickWins.map((qw, i) => <li key={i} style={{ fontSize: TYPE.body, color: HOME_THEME.text, opacity: 0.82, lineHeight: 1.5 }}>{qw}</li>)}
+                  </ul>
+                </div>
+              )}
+              <div style={{ fontSize: 11, ...MUTED, marginTop: 14, opacity: 0.55 }}>
+                Built from the aggregates below — merchant totals, category totals, recurring hits.
+              </div>
+            </>
+          )}
+        </Card>
+      )}
+
+      {/* ── Stat strip ───────────────────────────────────────────────────── */}
+      {hasData && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
+          <Tile label="Transactions" value={String(tx.length)} sub={monthLabel(month)} />
+          <Tile label="Money out" value={fmtMoney(totals.outflow, currency)} sub={`${allMerchants.length} merchants`} valueColor={MONEY_OUT} />
+          <Tile label="Money in" value={fmtMoney(totals.inflow, currency)} valueColor={MONEY_IN} />
+          <Tile label="Net" value={fmtMoney(totals.net, currency)} valueColor={totals.net >= 0 ? MONEY_IN : MONEY_OUT} />
+          <Tile label="Subscriptions" value={fmtMoney(totals.subTotal, currency)} sub={`${subRows.length} recurring · ${fmtMoney(totals.subTotal * 12, currency)}/yr`} valueColor={WARN} />
+          <Tile label="If you cancel" value={fmtMoney(totals.cancelSavings, currency)} sub={totals.cancelSavings > 0 ? `${fmtMoney(totals.cancelSavings * 12, currency)}/yr back` : "nothing tagged cancel"} valueColor={totals.cancelSavings > 0 ? MONEY_IN : HOME_THEME.muted} />
+        </div>
+      )}
+
+      {/* ── View switch ──────────────────────────────────────────────────── */}
+      {hasData && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {([["merchants", `Merchants (${allMerchants.length})`], ["flow", "Flow"], ["ledger", `Ledger (${tx.length})`], ["categories", "Categories"], ["subs", `Subscriptions (${subRows.length})`]] as const).map(([k, l]) => (
+            <button key={k} onClick={() => setView(k)} style={pill(view === k)}>{l}</button>
+          ))}
+          <div style={{ flex: 1 }} />
+          <button onClick={() => void clearMonth()} disabled={saving} style={{ ...ghost(), color: HOME_THEME.red, borderColor: rgba(HOME_THEME.red, 0.35) }}>
+            Clear {monthLabel(month)}
+          </button>
+        </div>
+      )}
+
+      {/* ── MERCHANTS — grouped under category, capped, searchable ───────── */}
+      {hasData && view === "merchants" && (
+        <Card variant="classic" padding={0} style={{ overflow: "hidden" }}>
+          <div style={{ padding: "14px 16px 10px" }}>
+            <div style={{ fontSize: TYPE.label, fontWeight: 900, letterSpacing: "0.16em", textTransform: "uppercase", color: ACCENT }}>By merchant</div>
+            <div style={{ fontSize: TYPE.label, ...MUTED, marginTop: 3, lineHeight: 1.45 }}>
+              Every charge from one vendor merged into a single line, grouped under its category. One dropdown re-files the whole vendor.
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Filter merchants…"
+                style={{ ...field(), width: 240, padding: "7px 10px", fontSize: 13 }}
+              />
+              <button
+                onClick={() => setOnlyUncat((v) => !v)}
+                style={{ ...pill(onlyUncat), borderColor: onlyUncat ? rgba(WARN, 0.75) : HOME_THEME.border, color: onlyUncat ? WARN : HOME_THEME.text }}
+              >
+                Needs a category ({totals.uncategorized})
+              </button>
+              <button
+                onClick={() => setCollapsedCats(collapsedCats.size ? new Set() : new Set(merchantGroups.map((g) => g.name)))}
+                style={ghost()}
+              >
+                {collapsedCats.size ? "Expand all" : "Collapse all"}
+              </button>
+              <span style={{ fontSize: TYPE.label, ...MUTED }}>
+                {visibleMerchants.length} of {allMerchants.length} merchants · {merchantGroups.length} categories
+              </span>
+            </div>
+          </div>
+
+          {merchantGroups.length === 0 && (
+            <div style={{ padding: 20, ...MUTED, fontSize: TYPE.body }}>Nothing matches that filter.</div>
+          )}
+
+          {merchantGroups.map((g) => {
+            const closed = collapsedCats.has(g.name);
+            const showAll = showAllIn.has(g.name);
+            const rows = showAll ? g.rows : g.rows.slice(0, PER_CAT_LIMIT);
+            const hidden = g.rows.length - rows.length;
+            return (
+              <div key={g.name}>
+                {/* Category band — click to fold the whole group away. */}
+                <div
+                  onClick={() => toggleIn(collapsedCats, setCollapsedCats, g.name)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10, cursor: "pointer",
+                    padding: "9px 16px",
+                    background: `linear-gradient(90deg, ${rgba(g.color, 0.14)} 0%, ${rgba("#ffffff", 0.02)} 60%)`,
+                    borderTop: `1px solid ${HOME_THEME.border}`,
+                    borderBottom: `1px solid ${rgba("#ffffff", 0.05)}`,
+                  }}
+                >
+                  <span style={{ ...MUTED, fontSize: TYPE.label }}>{closed ? "▸" : "▾"}</span>
+                  <span style={{ width: 9, height: 9, borderRadius: 3, background: g.color, flex: "none" }} />
+                  <span style={{ fontWeight: 800, fontSize: TYPE.body }}>{g.name}</span>
+                  <span style={{ fontSize: TYPE.label, ...MUTED }}>{g.rows.length} merchant{g.rows.length === 1 ? "" : "s"}</span>
+                  <div style={{ flex: 1 }} />
+                  <span style={{ fontWeight: 900, fontVariantNumeric: "tabular-nums", fontSize: TYPE.body }}>{fmtMoney(g.total, currency)}</span>
+                </div>
+
+                {!closed && (
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <tbody>
+                      {rows.map((m) => {
+                        const share = totals.outflow > 0 ? (m.total / totals.outflow) * 100 : 0;
+                        const open = expanded.has(m.key);
+                        return (
+                          <Fragment key={m.key}>
+                            <tr style={{ background: m.flagged ? rgba(WARN, 0.05) : undefined }}>
+                              <td style={{ ...td("center"), width: 34, cursor: "pointer", ...MUTED }} onClick={() => toggleIn(expanded, setExpanded, m.key)}>
+                                {open ? "▾" : "▸"}
+                              </td>
+                              <td style={{ ...td("left"), cursor: "pointer" }} onClick={() => toggleIn(expanded, setExpanded, m.key)}>
+                                <div style={{ fontWeight: 700 }}>
+                                  {m.merchant}
+                                  {m.flagged && <span style={{ marginLeft: 6, color: WARN }}>🔁</span>}
+                                  {m.mixedCategory && <span title="Rows in this vendor have different categories" style={{ marginLeft: 7, fontSize: TYPE.micro, fontWeight: 900, color: WARN, letterSpacing: "0.08em" }}>MIXED</span>}
+                                </div>
+                                <div style={{ height: 3, borderRadius: 99, background: rgba("#ffffff", 0.06), marginTop: 5, maxWidth: 240 }}>
+                                  <div style={{ width: `${share}%`, height: 3, borderRadius: 99, background: g.color }} />
+                                </div>
+                              </td>
+                              <td style={{ ...td("center"), width: 55, ...MUTED }}>{m.count}</td>
+                              <td style={{ ...td("right"), width: 115, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(m.total, currency)}</td>
+                              <td style={{ ...td("right"), width: 95, ...MUTED, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(m.total / m.count, currency)}</td>
+                              <td style={{ ...td("left"), width: 190 }}>
+                                {/* One dropdown re-files every transaction from this vendor. */}
+                                <ThemedSelect
+                                  value={m.categoryId == null || m.mixedCategory ? "" : String(m.categoryId)}
+                                  onChange={(v) => void setMerchantCategory(m.merchant, v ? Number(v) : null)}
+                                  options={catOptions}
+                                  placeholder={m.mixedCategory ? "mixed — set all" : "— none —"}
+                                />
+                              </td>
+                            </tr>
+                            {open && m.rows.map((r) => (
+                              <tr key={`${m.key}-${r.id}`} style={{ background: rgba("#000000", 0.28) }}>
+                                <td style={td("center")} />
+                                <td style={{ ...td("left"), paddingLeft: 26, ...MUTED, fontSize: TYPE.label }} title={r.description}>
+                                  <span style={{ marginRight: 8 }}>{shortDate(r.tx_date)}</span>
+                                  {r.description}
+                                </td>
+                                <td style={td("center")} />
+                                <td style={{ ...td("right"), fontVariantNumeric: "tabular-nums", ...MUTED }}>{fmtMoney(r.amount, currency)}</td>
+                                <td style={td("center")}>
+                                  <button onClick={() => void deleteTx(r.id)} title="Remove from Real Month" style={{ ...ghost(), padding: "3px 8px", fontSize: TYPE.label, ...MUTED }}>×</button>
+                                </td>
+                                <td style={td("left")}>
+                                  <ThemedSelect
+                                    value={r.category_id == null ? "" : String(r.category_id)}
+                                    onChange={(v) => void setTxCategory(r.id, v ? Number(v) : null)}
+                                    options={catOptions}
+                                  />
+                                </td>
+                              </tr>
+                            ))}
+                          </Fragment>
+                        );
+                      })}
+                      {hidden > 0 && (
+                        <tr>
+                          <td colSpan={6} style={{ ...td("left"), paddingLeft: 34 }}>
+                            <button onClick={() => toggleIn(showAllIn, setShowAllIn, g.name)} style={{ ...ghost(), padding: "5px 11px", fontSize: TYPE.label, color: ACCENT, borderColor: rgba(ACCENT, 0.35) }}>
+                              + {hidden} smaller merchant{hidden === 1 ? "" : "s"} ({fmtMoney(g.rows.slice(PER_CAT_LIMIT).reduce((s, m) => s + m.total, 0), currency)})
+                            </button>
+                          </td>
+                        </tr>
+                      )}
+                      {showAll && g.rows.length > PER_CAT_LIMIT && (
+                        <tr>
+                          <td colSpan={6} style={{ ...td("left"), paddingLeft: 34 }}>
+                            <button onClick={() => toggleIn(showAllIn, setShowAllIn, g.name)} style={{ ...ghost(), padding: "5px 11px", fontSize: TYPE.label, ...MUTED }}>Show fewer</button>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            );
+          })}
+        </Card>
+      )}
+
+      {/* ── FLOW ─────────────────────────────────────────────────────────── */}
+      {hasData && view === "flow" && (
+        <Card variant="classic" padding={0} style={{ overflow: "hidden" }}>
+          <SectionHead
+            title="Money flow"
+            sub="Left to right: what came in, which categories absorbed it, and the vendors inside each one."
+          />
+          <MoneyFlowSankey
+            nodes={flow.nodes}
+            links={flow.links}
+            currency={currency}
+            height={Math.max(340, Math.min(900, flow.nodes.filter((n) => n.col === 2).length * 26 + 80))}
+          />
+        </Card>
+      )}
+
+      {/* ── LEDGER — flat and sortable ───────────────────────────────────── */}
+      {hasData && view === "ledger" && (
+        <Card variant="classic" padding={0} style={{ overflow: "auto" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", flexWrap: "wrap" }}>
+            <span style={{ fontSize: TYPE.label, ...MUTED, fontWeight: 800, letterSpacing: "0.1em" }}>SORT</span>
+            {(["date", "merchant", "amount", "category"] as const).map((k) => (
+              <button key={k} onClick={() => toggleSort(k)} style={pill(sortKey === k)}>
+                {k[0].toUpperCase() + k.slice(1)}{sortKey === k ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+              </button>
+            ))}
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter…" style={{ ...field(), width: 200, padding: "7px 10px", fontSize: 13 }} />
+            <button
+              onClick={() => setOnlyUncat((v) => !v)}
+              style={{ ...pill(onlyUncat), borderColor: onlyUncat ? rgba(WARN, 0.75) : HOME_THEME.border, color: onlyUncat ? WARN : HOME_THEME.text }}
+            >
+              Needs a category ({totals.uncategorized})
+            </button>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <SortTh label="Date" k="date" width={70} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Merchant" k="merchant" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <th style={th("left")}>As it read</th>
+                <SortTh label="Category" k="category" width={190} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortTh label="Amount" k="amount" align="right" width={110} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <th style={{ ...th("center"), width: 50 }} />
+              </tr>
+            </thead>
+            <tbody>
+              {ledgerRows.map((r) => (
+                <tr key={r.id} style={{ background: r.is_recurring ? rgba(WARN, 0.05) : undefined }}>
+                  <td style={{ ...td("left"), ...MUTED }}>{shortDate(r.tx_date)}</td>
+                  <td style={{ ...td("left"), fontWeight: 700 }}>
+                    {r.merchant}{r.is_recurring === 1 && <span style={{ marginLeft: 6, color: WARN }}>🔁</span>}
+                  </td>
+                  <td style={{ ...td("left"), ...MUTED, fontSize: TYPE.label, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.description}>
+                    {r.description}
+                  </td>
+                  <td style={td("left")}>
+                    <ThemedSelect
+                      value={r.category_id == null ? "" : String(r.category_id)}
+                      onChange={(v) => void setTxCategory(r.id, v ? Number(v) : null)}
+                      options={catOptions}
+                    />
+                  </td>
+                  <td style={{ ...td("right"), fontWeight: 800, fontVariantNumeric: "tabular-nums", color: r.direction === "out" ? MONEY_OUT : MONEY_IN }}>
+                    {r.direction === "out" ? "−" : "+"}{fmtMoney(r.amount, currency)}
+                  </td>
+                  <td style={td("center")}>
+                    <button onClick={() => void deleteTx(r.id)} title="Remove from Real Month" style={{ ...ghost(), padding: "4px 9px", fontSize: 13, ...MUTED }}>×</button>
+                  </td>
+                </tr>
+              ))}
+              {ledgerRows.length === 0 && (
+                <tr><td colSpan={6} style={{ ...td("center"), ...MUTED, padding: 20 }}>Nothing matches.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
+      {/* ── CATEGORIES ───────────────────────────────────────────────────── */}
+      {hasData && view === "categories" && (
+        <Card variant="classic" padding={0} style={{ overflow: "hidden" }}>
+          <SectionHead title="By category" sub="Real spend against the budgets on the Categories tab." />
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={th("left")}>Category</th>
+                <th style={{ ...th("center"), width: 55 }}>×</th>
+                <th style={{ ...th("right"), width: 120 }}>Spent</th>
+                <th style={{ ...th("right"), width: 120 }}>Budget</th>
+                <th style={{ ...th("right"), width: 130 }}>vs budget</th>
+              </tr>
+            </thead>
+            <tbody>
+              {byCategory.map((c) => {
+                const delta = c.budget > 0 ? c.spent - c.budget : null;
+                const pct = c.budget > 0 ? Math.min(100, (c.spent / c.budget) * 100) : 0;
+                return (
+                  <tr key={c.name}>
+                    <td style={{ ...td("left"), fontWeight: 700 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                        <span style={{ width: 9, height: 9, borderRadius: 3, background: c.color || HOME_THEME.cyan, flex: "none" }} />
+                        {c.name}
+                      </div>
+                      {c.budget > 0 && (
+                        <div style={{ height: 3, borderRadius: 99, background: rgba("#ffffff", 0.06), marginTop: 5, maxWidth: 220 }}>
+                          <div style={{ width: `${pct}%`, height: 3, borderRadius: 99, background: (delta ?? 0) > 0 ? MONEY_OUT : MONEY_IN }} />
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ ...td("center"), ...MUTED }}>{c.count}</td>
+                    <td style={{ ...td("right"), fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(c.spent, currency)}</td>
+                    <td style={{ ...td("right"), ...MUTED, fontVariantNumeric: "tabular-nums" }}>{c.budget > 0 ? fmtMoney(c.budget, currency) : "—"}</td>
+                    <td style={{ ...td("right"), fontVariantNumeric: "tabular-nums", fontWeight: 700, color: delta == null ? HOME_THEME.muted : delta > 0 ? MONEY_OUT : MONEY_IN }}>
+                      {delta == null ? "—" : `${delta > 0 ? "+" : ""}${fmtMoney(delta, currency)}`}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
+      {/* ── SUBSCRIPTIONS ────────────────────────────────────────────────── */}
+      {hasData && view === "subs" && (
+        <Card variant="classic" padding={0} style={{ overflow: "hidden" }}>
+          <SectionHead
+            title="Recurring charges"
+            sub="Tag each one. → Payments adds THAT subscription to the register as a monthly recurring rule — the only thing that ever crosses over."
+          />
+          {subRows.length === 0 ? (
+            <div style={{ padding: 20, ...MUTED, fontSize: TYPE.body }}>Nothing in {monthLabel(month)} repeats at a steady amount.</div>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={th("left")}>Merchant</th>
+                  <th style={{ ...th("center"), width: 55 }}>Hits</th>
+                  <th style={{ ...th("right"), width: 105 }}>Each</th>
+                  <th style={{ ...th("right"), width: 120 }}>Per year</th>
+                  <th style={{ ...th("center"), width: 210 }}>Verdict</th>
+                  <th style={{ ...th("center"), width: 140 }}>Plan</th>
+                </tr>
+              </thead>
+              <tbody>
+                {subRows.map((s) => (
+                  <tr key={s.key} style={{ opacity: s.status === "cancel" ? 0.75 : 1 }}>
+                    <td style={{ ...td("left"), fontWeight: 700, textDecoration: s.status === "cancel" ? "line-through" : undefined }}>
+                      🔁 {s.merchant}
+                      {s.categoryId != null && <span style={{ marginLeft: 8, fontSize: 11, ...MUTED }}>{catById.get(s.categoryId)?.name}</span>}
+                    </td>
+                    <td style={{ ...td("center"), ...MUTED }}>{s.count}</td>
+                    <td style={{ ...td("right"), fontVariantNumeric: "tabular-nums" }}>{fmtMoney(s.each, currency)}</td>
+                    <td style={{ ...td("right"), fontWeight: 800, color: WARN, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(s.monthly * 12, currency)}</td>
+                    <td style={td("center")}>
+                      <div style={{ display: "flex", gap: 5, justifyContent: "center" }}>
+                        {(["keep", "watch", "cancel"] as const).map((st) => (
+                          <button key={st} onClick={() => void setSubStatus(s.merchant, st)} style={chip(s.status === st, STATUS_UI[st].color)}>
+                            {STATUS_UI[st].label}
+                          </button>
+                        ))}
+                      </div>
+                    </td>
+                    <td style={td("center")}>
+                      {s.pushedId ? (
+                        <span style={{ fontSize: TYPE.label, color: MONEY_IN, fontWeight: 800 }}>✓ In Payments</span>
+                      ) : (
+                        <button
+                          onClick={() => void pushToPayments(s.merchant, s.each)}
+                          title={`Add ${s.merchant} to Payments as a ${fmtMoney(s.each, currency)}/mo recurring rule`}
+                          style={{ ...ghost(), padding: "6px 11px", fontSize: TYPE.label, color: ACCENT, borderColor: rgba(ACCENT, 0.4) }}
+                        >
+                          → Payments
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      )}
+
+      {loading && !hasData && <Card variant="classic" padding={20} style={MUTED}>Loading {monthLabel(month)}…</Card>}
+
+      {/* ── Import ───────────────────────────────────────────────────────── */}
+      <Card
+        variant="classic"
+        padding={20}
+        style={{
+          borderStyle: "dashed",
+          borderColor: dragging ? rgba(HOME_THEME.cyan, 0.85) : HOME_THEME.border,
+          transition: "border-color .15s ease, box-shadow .15s ease",
+          boxShadow: dragging ? `0 0 40px ${rgba(HOME_THEME.cyan, 0.35)}` : undefined,
+        }}
+      >
+        <div
+          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => { e.preventDefault(); setDragging(false); void handleFiles(e.dataTransfer.files); }}
+        >
+          <div style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ flex: "1 1 320px", minWidth: 260 }}>
+              <div style={{ fontSize: TYPE.title, fontWeight: 900, letterSpacing: "0.06em" }}>
+                {parsing ? "Reading statement…" : hasData ? "Add another statement" : "Drop a statement PDF or screenshot"}
+              </div>
+              <div style={{ ...MUTED, fontSize: 13, marginTop: 6, lineHeight: 1.5 }}>
+                Lands in Real Month only — <span style={{ color: ACCENT }}>Payments and Overview never see it</span>, so nothing double-counts.
+                Re-importing an overlapping statement skips rows already stored.
+                {sourceName && !parsing ? <> Last read: <span style={{ color: ACCENT }}>{sourceName}</span>.</> : null}
+              </div>
+            </div>
+            <div style={{ width: 150 }}>
+              <div style={labelCap()}>Bank</div>
+              <ThemedSelect value={bank} onChange={(v) => setBank(v as Bank)} options={BANKS.map((b) => ({ value: b, label: BANK_LABEL[b] }))} />
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "flex-end", paddingBottom: 1 }}>
+              <input ref={fileRef} type="file" accept="application/pdf,image/png,image/jpeg,image/webp" multiple onChange={(e) => void handleFiles(e.target.files)} style={{ display: "none" }} />
+              <button onClick={() => fileRef.current?.click()} disabled={parsing} style={{ ...primary(), opacity: parsing ? 0.5 : 1 }}>
+                {parsing ? "Parsing…" : "Choose file"}
+              </button>
+            </div>
+          </div>
+          {!categories.length && (
+            <div style={{ marginTop: 12, fontSize: 13, color: WARN }}>
+              No categories defined yet — rows will import uncategorized.{" "}
+              {onOpenCategories && <span onClick={onOpenCategories} style={{ color: ACCENT, cursor: "pointer", textDecoration: "underline" }}>Add some first →</span>}
+            </div>
+          )}
+          {error && <div style={{ marginTop: 12, fontSize: 13, color: HOME_THEME.red, fontWeight: 700 }}>{error}</div>}
+          {notice && <div style={{ marginTop: 12, fontSize: 13, color: MONEY_IN, fontWeight: 700 }}>{notice}</div>}
+        </div>
+      </Card>
 
       {/* ── Staging: parsed but not yet saved ─────────────────────────────── */}
       {staged.length > 0 && (
-        <div style={{ ...card(), overflow: "hidden", borderColor: "rgba(251,191,36,0.45)" }}>
+        <Card variant="classic" padding={0} style={{ overflow: "hidden", borderColor: rgba(WARN, 0.45) }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", flexWrap: "wrap" }}>
             <div>
-              <div style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.16em", color: GOLD }}>NOT SAVED YET</div>
-              <div style={{ fontSize: 13, color: HOME_THEME.muted, marginTop: 3 }}>
-                {stagedIncluded.length} of {staged.length} selected. Fix anything wrong, then save.
-              </div>
+              <div style={{ fontSize: TYPE.label, fontWeight: 900, letterSpacing: "0.16em", color: WARN }}>NOT SAVED YET</div>
+              <div style={{ fontSize: 13, ...MUTED, marginTop: 3 }}>{stagedIncluded.length} of {staged.length} selected. Fix anything wrong, then save.</div>
             </div>
             <div style={{ flex: 1 }} />
             <button onClick={() => setStaged([])} style={ghost()}>Discard</button>
@@ -618,11 +1156,7 @@ export default function RealMonth({
             <thead>
               <tr>
                 <th style={{ ...th("center"), width: 44 }}>
-                  <input
-                    type="checkbox" checked={stagedIncluded.length === staged.length}
-                    onChange={(e) => setStaged((prev) => prev.map((r) => ({ ...r, include: e.target.checked })))}
-                    style={{ accentColor: HOME_THEME.cyan, cursor: "pointer" }}
-                  />
+                  <input type="checkbox" checked={stagedIncluded.length === staged.length} onChange={(e) => setStaged((prev) => prev.map((r) => ({ ...r, include: e.target.checked })))} style={{ accentColor: HOME_THEME.cyan, cursor: "pointer" }} />
                 </th>
                 <th style={{ ...th("left"), width: 130 }}>Date</th>
                 <th style={th("left")}>Merchant</th>
@@ -634,34 +1168,23 @@ export default function RealMonth({
             </thead>
             <tbody>
               {staged.map((r) => (
-                <tr key={r.key} style={{ opacity: r.include ? 1 : 0.4, background: r.recurring ? "rgba(251,191,36,0.05)" : undefined }}>
+                <tr key={r.key} style={{ opacity: r.include ? 1 : 0.4, background: r.recurring ? rgba(WARN, 0.05) : undefined }}>
                   <td style={td("center")}>
                     <input type="checkbox" checked={r.include} onChange={(e) => patchStaged(r.key, { include: e.target.checked })} style={{ accentColor: HOME_THEME.cyan, cursor: "pointer" }} />
                   </td>
-                  <td style={td("left")}>
-                    <input type="date" value={r.date} onChange={(e) => patchStaged(r.key, { date: e.target.value })} style={{ ...field(), padding: "5px 7px", fontSize: 13 }} />
+                  <td style={td("left")}><input type="date" value={r.date} onChange={(e) => patchStaged(r.key, { date: e.target.value })} style={{ ...field(), padding: "5px 7px", fontSize: 13 }} /></td>
+                  <td style={td("left")}><input value={r.merchant} onChange={(e) => patchStaged(r.key, { merchant: e.target.value })} style={{ ...field(), padding: "5px 8px", fontSize: 13, fontWeight: 700 }} /></td>
+                  <td style={{ ...td("left"), ...MUTED, fontSize: TYPE.label, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.description}>
+                    {r.description}{r.recurring && <span style={{ marginLeft: 6, color: WARN, fontWeight: 800 }}>🔁</span>}
                   </td>
                   <td style={td("left")}>
-                    <input value={r.merchant} onChange={(e) => patchStaged(r.key, { merchant: e.target.value })} style={{ ...field(), padding: "5px 8px", fontSize: 13, fontWeight: 700 }} />
+                    <ThemedSelect value={r.categoryId == null ? "" : String(r.categoryId)} onChange={(v) => patchStaged(r.key, { categoryId: v ? Number(v) : null })} options={catOptions} placeholder={r.categoryGuess || "— none —"} />
                   </td>
-                  <td style={{ ...td("left"), color: HOME_THEME.muted, fontSize: 12, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.description}>
-                    {r.description}{r.recurring && <span style={{ marginLeft: 6, color: GOLD, fontWeight: 800 }}>🔁</span>}
-                  </td>
-                  <td style={td("left")}>
-                    <ThemedSelect
-                      value={r.categoryId == null ? "" : String(r.categoryId)}
-                      onChange={(v) => patchStaged(r.key, { categoryId: v ? Number(v) : null })}
-                      options={catOptions}
-                      placeholder={r.categoryGuess || "— none —"}
-                    />
-                  </td>
-                  <td style={td("right")}>
-                    <input type="number" value={r.amount} onChange={(e) => patchStaged(r.key, { amount: Math.abs(Number(e.target.value) || 0) })} style={{ ...field(), padding: "5px 8px", fontSize: 13, textAlign: "right" }} />
-                  </td>
+                  <td style={td("right")}><input type="number" value={r.amount} onChange={(e) => patchStaged(r.key, { amount: Math.abs(Number(e.target.value) || 0) })} style={{ ...field(), padding: "5px 8px", fontSize: 13, textAlign: "right" }} /></td>
                   <td style={td("center")}>
                     <button
                       onClick={() => patchStaged(r.key, { direction: r.direction === "out" ? "in" : "out" })} title="Toggle in / out"
-                      style={{ ...ghost(), padding: "5px 10px", fontSize: 12, color: r.direction === "out" ? HOME_THEME.red : GREEN, borderColor: r.direction === "out" ? "rgba(239,68,68,0.4)" : "rgba(52,211,153,0.4)" }}
+                      style={{ ...ghost(), padding: "5px 10px", fontSize: TYPE.label, color: r.direction === "out" ? MONEY_OUT : MONEY_IN, borderColor: rgba(r.direction === "out" ? MONEY_OUT : MONEY_IN, 0.4) }}
                     >
                       {r.direction === "out" ? "− out" : "+ in"}
                     </button>
@@ -670,321 +1193,16 @@ export default function RealMonth({
               ))}
             </tbody>
           </table>
-        </div>
+        </Card>
       )}
 
-      {/* ── Stored month ─────────────────────────────────────────────────── */}
-      {loading ? (
-        <div style={{ ...card(), padding: 20, color: HOME_THEME.muted, fontSize: 14 }}>Loading {month}…</div>
-      ) : tx.length === 0 ? (
-        <div style={{ ...card(), padding: 28, textAlign: "center" }}>
-          <div style={{ fontSize: 16, fontWeight: 800 }}>Nothing stored for {month} yet</div>
-          <div style={{ fontSize: 13, color: HOME_THEME.muted, marginTop: 6 }}>
-            Drop this month's statement above. Use the month picker at the top of the page to look at another month.
+      {!loading && !hasData && staged.length === 0 && (
+        <Card variant="classic" padding={28} style={{ textAlign: "center" }}>
+          <div style={{ fontSize: TYPE.subhead, fontWeight: 800 }}>Nothing stored for {monthLabel(month)} yet</div>
+          <div style={{ fontSize: 13, ...MUTED, marginTop: 6 }}>
+            Drop that month's statement above, or pick a month that already has data from the chips at the top.
           </div>
-        </div>
-      ) : (
-        <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
-            <Tile label="Transactions" value={String(tx.length)} sub={month} />
-            <Tile label="Money out" value={fmtMoney(totals.outflow, currency)} sub={`${merchants.length} merchants`} valueColor={HOME_THEME.red} />
-            <Tile label="Money in" value={fmtMoney(totals.inflow, currency)} valueColor={GREEN} />
-            <Tile label="Net" value={fmtMoney(totals.net, currency)} valueColor={totals.net >= 0 ? GREEN : HOME_THEME.red} />
-            <Tile label="Subscriptions" value={fmtMoney(totals.subTotal, currency)} sub={`${subRows.length} recurring · ${fmtMoney(totals.subTotal * 12, currency)}/yr`} valueColor={GOLD} />
-            <Tile
-              label="If you cancel"
-              value={fmtMoney(totals.cancelSavings, currency)}
-              sub={totals.cancelSavings > 0 ? `${fmtMoney(totals.cancelSavings * 12, currency)}/yr back` : "nothing tagged cancel"}
-              valueColor={totals.cancelSavings > 0 ? GREEN : HOME_THEME.muted}
-            />
-          </div>
-
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            {(["ledger", "where", "subs"] as const).map((v) => (
-              <button key={v} onClick={() => setView(v)} style={pill(view === v)}>
-                {v === "ledger" ? `Ledger (${tx.length})` : v === "where" ? "Where it went" : `Subscriptions (${subRows.length})`}
-              </button>
-            ))}
-            {totals.uncategorized > 0 && (
-              <span style={{ fontSize: 12, color: GOLD, fontWeight: 700, marginLeft: 4 }}>{totals.uncategorized} uncategorized</span>
-            )}
-            <div style={{ flex: 1 }} />
-            <button onClick={() => void runAdvice()} disabled={advising} style={{ ...ghost(), opacity: advising ? 0.5 : 1, borderColor: "rgba(251,191,36,0.5)", color: GOLD }}>
-              {advising ? "Thinking…" : "✦ What to fix"}
-            </button>
-            <button onClick={() => void clearMonth()} disabled={saving} style={{ ...ghost(), color: HOME_THEME.red, borderColor: "rgba(239,68,68,0.35)" }}>
-              Clear {month}
-            </button>
-          </div>
-
-          {/* Ledger */}
-          {view === "ledger" && (
-            <div style={{ ...card(), overflow: "auto" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", flexWrap: "wrap" }}>
-                <span style={{ fontSize: 12, color: HOME_THEME.muted, fontWeight: 800, letterSpacing: "0.1em" }}>SORT</span>
-                {(["date", "merchant", "amount", "category"] as const).map((k) => (
-                  <button key={k} onClick={() => toggleSort(k)} style={pill(sortKey === k)}>
-                    {k[0].toUpperCase() + k.slice(1)}{sortKey === k ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
-                  </button>
-                ))}
-                <div style={{ flex: 1 }} />
-                <button onClick={() => setOnlyUncat((v) => !v)} style={{ ...pill(onlyUncat), borderColor: onlyUncat ? "rgba(251,191,36,0.75)" : HAIRLINE, color: onlyUncat ? GOLD : "rgba(255,255,255,0.82)" }}>
-                  Only uncategorized ({totals.uncategorized})
-                </button>
-              </div>
-              {sortKey === "merchant" && (
-                <div style={{ fontSize: 12, color: HOME_THEME.muted, padding: "0 14px 10px", lineHeight: 1.45 }}>
-                  Grouped by vendor — the dropdown on a group's first row re-files <em>every</em> row in that group at once.
-                </div>
-              )}
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <SortTh label="Date" k="date" width={70} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                    <SortTh label="Merchant" k="merchant" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                    <th style={th("left")}>As it read</th>
-                    <SortTh label="Category" k="category" align="left" width={200} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                    <SortTh label="Amount" k="amount" align="right" width={110} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                    <th style={{ ...th("center"), width: 50 }} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {ledgerRows.map((r, i) => {
-                    const key = mKey(r.merchant || r.description);
-                    const prevKey = i > 0 ? mKey(ledgerRows[i - 1].merchant || ledgerRows[i - 1].description) : null;
-                    const grouped = sortKey === "merchant";
-                    const firstOfGroup = grouped && key !== prevKey;
-                    const groupSize = grouped ? ledgerRows.filter((x) => mKey(x.merchant || x.description) === key).length : 1;
-                    return (
-                      <tr
-                        key={r.id}
-                        style={{
-                          background: r.is_recurring ? "rgba(251,191,36,0.05)" : undefined,
-                          borderTop: firstOfGroup && i > 0 ? `1px solid ${HAIRLINE}` : undefined,
-                        }}
-                      >
-                        <td style={{ ...td("left"), color: HOME_THEME.muted }}>{shortDate(r.tx_date)}</td>
-                        <td style={{ ...td("left"), fontWeight: 700, opacity: grouped && !firstOfGroup ? 0.35 : 1 }}>
-                          {grouped && !firstOfGroup ? "↳" : r.merchant}
-                          {r.is_recurring === 1 && (!grouped || firstOfGroup) && <span style={{ marginLeft: 6, color: GOLD }}>🔁</span>}
-                          {firstOfGroup && groupSize > 1 && <span style={{ marginLeft: 7, fontSize: 11, color: HOME_THEME.muted }}>×{groupSize}</span>}
-                        </td>
-                        <td style={{ ...td("left"), color: HOME_THEME.muted, fontSize: 12, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.description}>
-                          {r.description}
-                        </td>
-                        <td style={td("left")}>
-                          {/* Sorted by merchant, the first row of a group drives
-                              the whole group; the rest stay individually editable. */}
-                          {firstOfGroup && groupSize > 1 ? (
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                              <ThemedSelect
-                                value={r.category_id == null ? "" : String(r.category_id)}
-                                onChange={(v) => void setMerchantCategory(r.merchant || r.description, v ? Number(v) : null)}
-                                options={catOptions}
-                              />
-                              <span title={`Applies to all ${groupSize} rows`} style={{ fontSize: 10, fontWeight: 900, color: LIGHT_BLUE, letterSpacing: "0.08em", whiteSpace: "nowrap" }}>ALL {groupSize}</span>
-                            </div>
-                          ) : (
-                            <ThemedSelect
-                              value={r.category_id == null ? "" : String(r.category_id)}
-                              onChange={(v) => void setTxCategory(r.id, v ? Number(v) : null)}
-                              options={catOptions}
-                            />
-                          )}
-                        </td>
-                        <td style={{ ...td("right"), fontWeight: 800, fontVariantNumeric: "tabular-nums", color: r.direction === "out" ? HOME_THEME.red : GREEN }}>
-                          {r.direction === "out" ? "−" : "+"}{fmtMoney(r.amount, currency)}
-                        </td>
-                        <td style={td("center")}>
-                          <button onClick={() => void deleteTx(r.id)} title="Remove from Real Month" style={{ ...ghost(), padding: "4px 9px", fontSize: 13, color: HOME_THEME.muted }}>×</button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {ledgerRows.length === 0 && (
-                    <tr><td colSpan={6} style={{ ...td("center"), color: HOME_THEME.muted, padding: 20 }}>Everything in {month} has a category.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* Where it went */}
-          {view === "where" && (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 12 }}>
-              <div style={{ ...card(), overflow: "hidden" }}>
-                <SectionHead title="By merchant" sub="Like descriptors merged into one line. Setting a category here re-files every row from that merchant." />
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead><tr><th style={th("left")}>Merchant</th><th style={{ ...th("center"), width: 55 }}>×</th><th style={{ ...th("right"), width: 110 }}>Total</th><th style={{ ...th("left"), width: 160 }}>Category</th></tr></thead>
-                  <tbody>
-                    {merchants.map((m) => {
-                      const share = totals.outflow > 0 ? (m.total / totals.outflow) * 100 : 0;
-                      return (
-                        <tr key={m.merchant}>
-                          <td style={{ ...td("left"), fontWeight: 700 }}>
-                            <div>{m.merchant}</div>
-                            <div style={{ height: 3, borderRadius: 99, background: "rgba(255,255,255,0.06)", marginTop: 5, maxWidth: 220 }}>
-                              <div style={{ width: `${share}%`, height: 3, borderRadius: 99, background: LIGHT_BLUE }} />
-                            </div>
-                          </td>
-                          <td style={{ ...td("center"), color: HOME_THEME.muted }}>{m.count}</td>
-                          <td style={{ ...td("right"), fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(m.total, currency)}</td>
-                          {/* Set it here and every row from this merchant moves. */}
-                          <td style={td("left")}>
-                            <ThemedSelect
-                              value={m.categoryId == null ? "" : String(m.categoryId)}
-                              onChange={(v) => void setMerchantCategory(m.merchant, v ? Number(v) : null)}
-                              options={catOptions}
-                            />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              <div style={{ ...card(), overflow: "hidden" }}>
-                <SectionHead title="By category" sub="Real spend against the budgets on the Categories tab" />
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead><tr><th style={th("left")}>Category</th><th style={{ ...th("center"), width: 55 }}>×</th><th style={{ ...th("right"), width: 110 }}>Spent</th><th style={{ ...th("right"), width: 120 }}>vs budget</th></tr></thead>
-                  <tbody>
-                    {byCategory.map((c) => {
-                      const delta = c.budget > 0 ? c.spent - c.budget : null;
-                      const pct = c.budget > 0 ? Math.min(100, (c.spent / c.budget) * 100) : 0;
-                      return (
-                        <tr key={c.name}>
-                          <td style={{ ...td("left"), fontWeight: 700 }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                              <span style={{ width: 9, height: 9, borderRadius: 3, background: c.color || HOME_THEME.cyan, flex: "none" }} />
-                              {c.name}
-                            </div>
-                            {c.budget > 0 && (
-                              <div style={{ height: 3, borderRadius: 99, background: "rgba(255,255,255,0.06)", marginTop: 5, maxWidth: 200 }}>
-                                <div style={{ width: `${pct}%`, height: 3, borderRadius: 99, background: (delta ?? 0) > 0 ? HOME_THEME.red : GREEN }} />
-                              </div>
-                            )}
-                          </td>
-                          <td style={{ ...td("center"), color: HOME_THEME.muted }}>{c.count}</td>
-                          <td style={{ ...td("right"), fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(c.spent, currency)}</td>
-                          <td style={{ ...td("right"), fontVariantNumeric: "tabular-nums", fontWeight: 700, color: delta == null ? HOME_THEME.muted : delta > 0 ? HOME_THEME.red : GREEN }}>
-                            {delta == null ? "—" : `${delta > 0 ? "+" : ""}${fmtMoney(delta, currency)}`}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Subscriptions */}
-          {view === "subs" && (
-            <div style={{ ...card(), overflow: "hidden" }}>
-              <SectionHead
-                title="Recurring charges"
-                sub="Tag each one. → Payments adds THAT subscription to the register as a monthly recurring rule — the only thing that ever crosses over."
-              />
-              {subRows.length === 0 ? (
-                <div style={{ padding: 20, color: HOME_THEME.muted, fontSize: 14 }}>Nothing in {month} repeats at a steady amount.</div>
-              ) : (
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr>
-                      <th style={th("left")}>Merchant</th>
-                      <th style={{ ...th("center"), width: 55 }}>Hits</th>
-                      <th style={{ ...th("right"), width: 105 }}>Each</th>
-                      <th style={{ ...th("right"), width: 120 }}>Per year</th>
-                      <th style={{ ...th("center"), width: 210 }}>Verdict</th>
-                      <th style={{ ...th("center"), width: 140 }}>Plan</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {subRows.map((s) => (
-                      <tr key={s.key} style={{ opacity: s.status === "cancel" ? 0.75 : 1 }}>
-                        <td style={{ ...td("left"), fontWeight: 700, textDecoration: s.status === "cancel" ? "line-through" : undefined }}>
-                          🔁 {s.merchant}
-                          {s.categoryId != null && <span style={{ marginLeft: 8, fontSize: 11, color: HOME_THEME.muted }}>{catById.get(s.categoryId)?.name}</span>}
-                        </td>
-                        <td style={{ ...td("center"), color: HOME_THEME.muted }}>{s.count}</td>
-                        <td style={{ ...td("right"), fontVariantNumeric: "tabular-nums" }}>{fmtMoney(s.each, currency)}</td>
-                        <td style={{ ...td("right"), fontWeight: 800, color: GOLD, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(s.monthly * 12, currency)}</td>
-                        <td style={td("center")}>
-                          <div style={{ display: "flex", gap: 5, justifyContent: "center" }}>
-                            {(["keep", "watch", "cancel"] as const).map((st) => (
-                              <button key={st} onClick={() => void setSubStatus(s.merchant, st)} style={chip(s.status === st, STATUS_UI[st].color)}>
-                                {STATUS_UI[st].label}
-                              </button>
-                            ))}
-                          </div>
-                        </td>
-                        <td style={td("center")}>
-                          {s.pushedId ? (
-                            <span style={{ fontSize: 12, color: GREEN, fontWeight: 800 }}>✓ In Payments</span>
-                          ) : (
-                            <button
-                              onClick={() => void pushToPayments(s.merchant, s.each)}
-                              title={`Add ${s.merchant} to Payments as a ${fmtMoney(s.each, currency)}/mo recurring rule`}
-                              style={{ ...ghost(), padding: "6px 11px", fontSize: 12, color: LIGHT_BLUE, borderColor: "rgba(125,211,252,0.4)" }}
-                            >
-                              → Payments
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          )}
-
-          {/* What to fix */}
-          {advice && (
-            <div style={{ ...card(), padding: 18 }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-                <div style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.18em", color: GOLD }}>WHAT TO FIX</div>
-                <div style={{ fontSize: 12, color: HOME_THEME.muted }}>{month}</div>
-                <div style={{ flex: 1 }} />
-                <button onClick={() => void runAdvice()} disabled={advising} style={{ ...ghost(), padding: "6px 12px", fontSize: 12 }}>{advising ? "…" : "Re-run"}</button>
-              </div>
-              {advice.headline && <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.35, marginTop: 10 }}>{advice.headline}</div>}
-
-              <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
-                {advice.findings.map((f, i) => {
-                  const ui = SEVERITY_UI[f.severity];
-                  return (
-                    <div key={i} style={{ border: `1px solid ${HAIRLINE}`, borderLeft: `3px solid ${ui.color}`, borderRadius: 10, padding: "12px 14px", background: "rgba(255,255,255,0.02)" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                        <span style={{ fontSize: 10, fontWeight: 900, letterSpacing: "0.14em", color: ui.color, border: `1px solid ${ui.color}55`, borderRadius: 999, padding: "2px 8px" }}>{ui.label}</span>
-                        <span style={{ fontSize: 15, fontWeight: 800 }}>{f.title}</span>
-                        <div style={{ flex: 1 }} />
-                        {f.monthlySavings > 0 && (
-                          <span style={{ fontSize: 14, fontWeight: 900, color: GREEN, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(f.monthlySavings, currency)}/mo</span>
-                        )}
-                      </div>
-                      <div style={{ fontSize: 14, color: "rgba(255,255,255,0.82)", lineHeight: 1.55, marginTop: 8 }}>{f.detail}</div>
-                      {f.evidence && <div style={{ fontSize: 12, color: HOME_THEME.muted, marginTop: 6, fontVariantNumeric: "tabular-nums" }}>{f.evidence}</div>}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {advice.quickWins.length > 0 && (
-                <div style={{ marginTop: 16 }}>
-                  <div style={labelCap()}>Quick wins</div>
-                  <ul style={{ margin: 0, paddingLeft: 20, display: "grid", gap: 6 }}>
-                    {advice.quickWins.map((q, i) => <li key={i} style={{ fontSize: 14, color: "rgba(255,255,255,0.82)", lineHeight: 1.5 }}>{q}</li>)}
-                  </ul>
-                </div>
-              )}
-              <div style={{ fontSize: 11, color: HOME_THEME.muted, marginTop: 14, opacity: 0.7 }}>
-                Built from the aggregates above — merchant totals, category totals, recurring hits. Individual transactions are never sent.
-              </div>
-            </div>
-          )}
-        </>
+        </Card>
       )}
 
       {/* An earlier build of this tab committed parsed rows into Payments,
@@ -999,8 +1217,7 @@ export default function RealMonth({
  *
  * Rows are grouped by the minute they were INSERTed — a bulk import arrives as
  * one burst, a hand-typed row as its own 1-row group. Nothing deletes on the
- * first click: the button arms, showing exactly how many rows and what they
- * sum to, and only the second click removes them.
+ * first click: the button arms, showing how many rows and what they sum to.
  */
 function UndoRegisterImport({ currency }: { currency: string }) {
   const [open, setOpen] = useState(false);
@@ -1033,8 +1250,7 @@ function UndoRegisterImport({ currency }: { currency: string }) {
     setMsg(null);
     try {
       const res = await fetch("/api/budget/register-imports", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "delete", from: b.first_at, to: b.last_at }),
       });
       const json = await res.json().catch(() => ({}));
@@ -1050,15 +1266,12 @@ function UndoRegisterImport({ currency }: { currency: string }) {
   };
 
   return (
-    <div style={{ ...card(), padding: 0, overflow: "hidden" }}>
-      <button
-        onClick={() => setOpen((v) => !v)}
-        style={{ width: "100%", textAlign: "left", background: "none", border: "none", padding: "14px 16px", cursor: "pointer", color: HOME_THEME.text }}
-      >
-        <span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.16em", textTransform: "uppercase", color: HOME_THEME.muted }}>
+    <Card variant="classic" padding={0} style={{ overflow: "hidden" }}>
+      <button onClick={() => setOpen((v) => !v)} style={{ width: "100%", textAlign: "left", background: "none", border: "none", padding: "14px 16px", cursor: "pointer", color: HOME_THEME.text }}>
+        <span style={{ fontSize: TYPE.label, fontWeight: 900, letterSpacing: "0.16em", textTransform: "uppercase", ...MUTED }}>
           {open ? "▾" : "▸"} Undo a Payments import
         </span>
-        <div style={{ fontSize: 12, color: HOME_THEME.muted, marginTop: 3 }}>
+        <div style={{ fontSize: TYPE.label, ...MUTED, marginTop: 3 }}>
           Remove rows that were bulk-written into the Payments register — grouped by when they landed.
         </div>
       </button>
@@ -1066,11 +1279,9 @@ function UndoRegisterImport({ currency }: { currency: string }) {
       {open && (
         <div style={{ padding: "0 16px 16px" }}>
           {err && <div style={{ fontSize: 13, color: HOME_THEME.red, fontWeight: 700, marginBottom: 10 }}>{err}</div>}
-          {msg && <div style={{ fontSize: 13, color: GREEN, fontWeight: 700, marginBottom: 10 }}>{msg}</div>}
-          {busy && !batches && <div style={{ fontSize: 13, color: HOME_THEME.muted }}>Reading write history…</div>}
-          {batches && batches.length === 0 && (
-            <div style={{ fontSize: 13, color: HOME_THEME.muted }}>No register rows written in the last 90 days.</div>
-          )}
+          {msg && <div style={{ fontSize: 13, color: MONEY_IN, fontWeight: 700, marginBottom: 10 }}>{msg}</div>}
+          {busy && !batches && <div style={{ fontSize: 13, ...MUTED }}>Reading write history…</div>}
+          {batches && batches.length === 0 && <div style={{ fontSize: 13, ...MUTED }}>No register rows written in the last 90 days.</div>}
           {batches && batches.length > 0 && (
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
@@ -1087,33 +1298,29 @@ function UndoRegisterImport({ currency }: { currency: string }) {
                   const isArmed = armed === b.bucket;
                   const bulk = b.n > 3;
                   return (
-                    <tr key={b.bucket} style={{ background: i === 0 && bulk ? "rgba(251,191,36,0.06)" : undefined }}>
+                    <tr key={b.bucket} style={{ background: i === 0 && bulk ? rgba(WARN, 0.06) : undefined }}>
                       <td style={{ ...td("left"), fontVariantNumeric: "tabular-nums" }}>
                         {b.bucket.replace("T", " ").slice(0, 16)}
-                        {i === 0 && bulk && <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 900, color: GOLD, letterSpacing: "0.1em" }}>MOST RECENT</span>}
+                        {i === 0 && bulk && <span style={{ marginLeft: 8, fontSize: TYPE.micro, fontWeight: 900, color: WARN, letterSpacing: "0.1em" }}>MOST RECENT</span>}
                       </td>
-                      <td style={{ ...td("center"), fontWeight: 800, color: bulk ? GOLD : HOME_THEME.muted }}>{b.n}</td>
-                      <td style={{ ...td("right"), fontWeight: 800, fontVariantNumeric: "tabular-nums", color: b.total < 0 ? HOME_THEME.red : GREEN }}>
-                        {fmtMoney(b.total, currency)}
-                      </td>
-                      <td style={{ ...td("left"), fontSize: 12, color: HOME_THEME.muted }}>
+                      <td style={{ ...td("center"), fontWeight: 800, color: bulk ? WARN : HOME_THEME.muted, opacity: bulk ? 1 : 0.62 }}>{b.n}</td>
+                      <td style={{ ...td("right"), fontWeight: 800, fontVariantNumeric: "tabular-nums", color: b.total < 0 ? MONEY_OUT : MONEY_IN }}>{fmtMoney(b.total, currency)}</td>
+                      <td style={{ ...td("left"), fontSize: TYPE.label, ...MUTED }}>
                         <div>{b.from_date} → {b.to_date}</div>
                         <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 300, opacity: 0.8 }}>
                           {b.labels.join(", ")}{b.n > b.labels.length ? " …" : ""}
                         </div>
                       </td>
-                      <td style={{ ...td("right") }}>
+                      <td style={td("right")}>
                         {isArmed ? (
                           <span style={{ display: "inline-flex", gap: 6 }}>
-                            <button onClick={() => void remove(b)} disabled={busy} style={{ ...ghost(), padding: "6px 11px", fontSize: 12, color: HOME_THEME.red, borderColor: "rgba(239,68,68,0.6)", background: "rgba(239,68,68,0.12)" }}>
+                            <button onClick={() => void remove(b)} disabled={busy} style={{ ...ghost(), padding: "6px 11px", fontSize: TYPE.label, color: HOME_THEME.red, borderColor: rgba(HOME_THEME.red, 0.6), background: rgba(HOME_THEME.red, 0.12) }}>
                               {busy ? "…" : `Yes, delete ${b.n}`}
                             </button>
-                            <button onClick={() => setArmed(null)} style={{ ...ghost(), padding: "6px 11px", fontSize: 12 }}>Cancel</button>
+                            <button onClick={() => setArmed(null)} style={{ ...ghost(), padding: "6px 11px", fontSize: TYPE.label }}>Cancel</button>
                           </span>
                         ) : (
-                          <button onClick={() => { setArmed(b.bucket); setMsg(null); }} style={{ ...ghost(), padding: "6px 11px", fontSize: 12, color: HOME_THEME.muted }}>
-                            Remove
-                          </button>
+                          <button onClick={() => { setArmed(b.bucket); setMsg(null); }} style={{ ...ghost(), padding: "6px 11px", fontSize: TYPE.label, ...MUTED }}>Remove</button>
                         )}
                       </td>
                     </tr>
@@ -1122,13 +1329,13 @@ function UndoRegisterImport({ currency }: { currency: string }) {
               </tbody>
             </table>
           )}
-          <div style={{ fontSize: 11, color: HOME_THEME.muted, marginTop: 12, opacity: 0.75, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 11, ...MUTED, marginTop: 12, opacity: 0.6, lineHeight: 1.5 }}>
             Grouped by the minute each row was written, so one bulk import is one line and a hand-typed row is its own 1-row line.
             Beginning-balance rows are never listed and never deleted. Recurring rules aren't rows, so they're untouched.
           </div>
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -1142,7 +1349,7 @@ function SortTh({ label, k, sortKey, sortDir, onSort, align = "left", width }: {
     <th
       onClick={() => onSort(k)}
       title={`Sort by ${label.toLowerCase()}`}
-      style={{ ...th(align), width, cursor: "pointer", color: active ? LIGHT_BLUE : HOME_THEME.muted, userSelect: "none" }}
+      style={{ ...th(align), width, cursor: "pointer", color: active ? ACCENT : HOME_THEME.muted, opacity: active ? 1 : 0.65, userSelect: "none" }}
     >
       {label}{active ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
     </th>
@@ -1151,19 +1358,19 @@ function SortTh({ label, k, sortKey, sortDir, onSort, align = "left", width }: {
 
 function Tile({ label, value, sub, valueColor }: { label: string; value: string; sub?: string; valueColor?: string }) {
   return (
-    <div style={{ ...card(), padding: "12px 14px" }}>
-      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted }}>{label}</div>
+    <Card variant="classic" padding="12px 14px">
+      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", ...MUTED }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 900, marginTop: 4, color: valueColor || HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{value}</div>
-      {sub && <div style={{ fontSize: 12, color: HOME_THEME.muted, marginTop: 2 }}>{sub}</div>}
-    </div>
+      {sub && <div style={{ fontSize: TYPE.label, ...MUTED, marginTop: 2 }}>{sub}</div>}
+    </Card>
   );
 }
 
 function SectionHead({ title, sub }: { title: string; sub?: string }) {
   return (
     <div style={{ padding: "14px 16px 10px" }}>
-      <div style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.16em", textTransform: "uppercase", color: LIGHT_BLUE }}>{title}</div>
-      {sub && <div style={{ fontSize: 12, color: HOME_THEME.muted, marginTop: 3, lineHeight: 1.45 }}>{sub}</div>}
+      <div style={{ fontSize: TYPE.label, fontWeight: 900, letterSpacing: "0.16em", textTransform: "uppercase", color: ACCENT }}>{title}</div>
+      {sub && <div style={{ fontSize: TYPE.label, ...MUTED, marginTop: 3, lineHeight: 1.45 }}>{sub}</div>}
     </div>
   );
 }
