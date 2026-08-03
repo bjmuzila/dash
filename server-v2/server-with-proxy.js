@@ -79,6 +79,7 @@ const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: 
 const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, enrichOutcomesWithQuotes: farCbEnrichOutcomes, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
 const { startWallsRecorder, runSlot: runWallsSlot, getWalls } = require('./walls-recorder');
+const { startWallsReach, runReachBackfill, runCalibration, getReach, attachRank } = require('./walls-reach');
 const { startGexChangeTopRecorder, runOnce: runGexChangeTop, getHistory: getGexChangeTopHistory, getPickHistory: getGexChangeTopPickHistory, getResults: getGexChangeTopResults, runResults: runGexChangeTopResults } = require('./gex-change-top-recorder');
 const {
   startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce,
@@ -2386,17 +2387,67 @@ async function main() {
       // Levels are stored change-only, so the day summary carries the last
       // written value forward per level type; `open` holds the 09:29 baseline
       // so the client can show the session delta without re-reading the log.
+      //
+      // The day summary is then decorated by walls-reach.attachRank(), which
+      // adds ATR distance / bucket / out-of-sample reach score per level plus
+      // the `rank` block the page's ladder and ranked list draw from. It never
+      // throws: if the calibration snapshot is missing the walls still render.
       if (pathname === '/proxy/walls' && req.method === 'GET') {
         (async () => {
           try {
             const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = u.searchParams.get('symbol') || undefined;
             const out = await getWalls({
+              date: u.searchParams.get('date') || undefined,
+              symbol,
+            });
+            // Only the universe view carries a ranking — the per-symbol view is
+            // a log, not a leaderboard.
+            const body = (!symbol && out?.ok) ? await attachRank(out) : out;
+            sendJson(res, body.ok ? 200 : 503, body);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // ── Reach study behind the ranking ────────────────────────────────────
+      // GET /proxy/walls-reach?date=…            → global ladder + per-symbol grid
+      // GET /proxy/walls-reach?date=…&symbol=SPX → that symbol's curve vs global
+      if (pathname === '/proxy/walls-reach' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const out = await getReach({
               date: u.searchParams.get('date') || undefined,
               symbol: u.searchParams.get('symbol') || undefined,
             });
             sendJson(res, out.ok ? 200 : 503, out);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
+        return;
+      }
+      // Manual backfill / recalibration:
+      //   POST /proxy/walls-reach-run { from?, to?, symbols?, rebuild?, calibrateOnly?, asOf? }
+      // A full history replay is long-running — this responds when it finishes,
+      // so drive it from the VPS rather than a browser tab.
+      if (pathname === '/proxy/walls-reach-run' && req.method === 'POST') {
+        let reachBody = '';
+        req.on('data', (c) => { reachBody += c; if (reachBody.length > 1e5) req.destroy(); });
+        req.on('end', () => {
+          let opts = {};
+          try { opts = JSON.parse(reachBody || '{}'); } catch {}
+          (async () => {
+            const backfill = opts.calibrateOnly === true ? null : await runReachBackfill({
+              from: opts.from || null,
+              to: opts.to || null,
+              symbols: Array.isArray(opts.symbols) && opts.symbols.length ? opts.symbols : null,
+              rebuild: opts.rebuild === true,
+            });
+            const calibration = await runCalibration({ asOf: opts.asOf || null });
+            return { backfill, calibration };
+          })()
+            .then((r) => sendJson(res, 200, { ok: true, result: r }))
+            .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        });
         return;
       }
       // Manual slot fire: POST /proxy/walls-run  { slot?: 0-26, force?: true }
@@ -3280,6 +3331,13 @@ async function main() {
     // classified touch events into wall_events. Feeds /proxy/walls + the owner
     // Results → Walls tab.
     startWallsRecorder();
+    // Reach Rank: the distance model layered on top of Walls. Nightly at 16:45
+    // ET it replays the session into wall_reach (how far each level sat in ATR
+    // units, and whether price got there) and re-snapshots wall_calibration
+    // as_of TOMORROW — so tomorrow's live ranking scores every level against a
+    // curve fitted only on sessions it has never seen. Feeds /proxy/walls-reach
+    // and decorates /proxy/walls.
+    startWallsReach();
     // Hourly "very strong" GEX-change recorder: at the top of each RTH hour,
     // scores the strike_growth universe (60m window), keeps the top 5 ★ Very
     // strong strikes (|Δ| >= $500k & |% vs open| >= 30%) into gex_change_top.

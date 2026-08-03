@@ -35,7 +35,10 @@ const SANS = "var(--font-sans)";
 const MONO = "var(--font-mono)";
 
 export interface GexPulsePanelProps extends Omit<GexPulseInput, "prevScore"> {
-  /** Header stamp, e.g. "14:45 ET · Fri Jul 31". Defaults to live clock. */
+  /**
+   * @deprecated No longer rendered — the header (title + spot + clock) was
+   * removed. Kept so existing callers still typecheck.
+   */
   timeLabel?: string;
 }
 
@@ -49,29 +52,6 @@ export default function GexPulsePanel(props: GexPulsePanelProps) {
     return () => clearInterval(id);
   }, []);
 
-  const [clock, setClock] = useState("");
-  useEffect(() => {
-    const tick = () =>
-      setClock(
-        new Date().toLocaleString("en-US", {
-          timeZone: "America/New_York",
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false,
-        }) +
-          " ET · " +
-          new Date().toLocaleDateString("en-US", {
-            timeZone: "America/New_York",
-            weekday: "short",
-            month: "short",
-            day: "numeric",
-          }),
-      );
-    tick();
-    const id = setInterval(tick, 15_000);
-    return () => clearInterval(id);
-  }, []);
-
   const p = computeGexPulse({ ...props, prevScore });
   liveScoreRef.current = p.score;
   const col = toneColor[p.tone];
@@ -80,31 +60,41 @@ export default function GexPulsePanel(props: GexPulsePanelProps) {
   const fillPct = (Math.min(Math.abs(p.score), 100) / 100) * 50;
   const delta = p.prevScore == null ? null : p.score - p.prevScore;
 
+  /**
+   * Rows render two-line inside a half-width column: name + value on the top
+   * line, the read underneath. The old single-line layout used fixed 120/104px
+   * gutters, which clipped the note once Levels and Flow sat side by side.
+   */
   const Row = ({ r }: { r: PulseRow }) => {
     const c = r.p > 0 ? UP : r.p < 0 ? DN : NEU;
     return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          padding: "9px 0",
-          borderBottom: "1px solid rgba(255,255,255,0.06)",
-        }}
-      >
-        <div style={{ width: 120, fontSize: 13, fontWeight: 700 }}>{r.n}</div>
-        <div style={{ width: 104, fontFamily: MONO, fontSize: 15, fontWeight: 600, textAlign: "right" }}>
-          {r.v}
+      <div style={{ padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap" }}>{r.n}</span>
+          <span
+            style={{
+              marginLeft: "auto",
+              fontFamily: MONO,
+              fontSize: 14,
+              fontWeight: 600,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {r.v}
+          </span>
         </div>
         {/* Per-signal point contribution still drives the row color, but the
             number itself is deliberately not rendered — the card shows the
             read, not the arithmetic. */}
-        <div style={{ flex: 1, paddingLeft: 20, fontFamily: MONO, fontSize: 12, color: c }}>{r.note}</div>
+        <div style={{ fontFamily: MONO, fontSize: 11, lineHeight: 1.35, marginTop: 3, color: c }}>
+          {r.note}
+        </div>
       </div>
     );
   };
 
   const Section = ({ title }: { title: string }) => (
-    <div style={{ margin: "17px 24px 0", display: "flex", alignItems: "center", gap: 10 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
       <span style={{ ...LABEL, letterSpacing: "0.14em", color: LIGHT_BLUE }}>{title}</span>
       <span style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)" }} />
     </div>
@@ -136,27 +126,12 @@ export default function GexPulsePanel(props: GexPulsePanelProps) {
         overflow: "auto",
         color: HOME_THEME.text,
         fontFamily: SANS,
-        padding: "4px 0 20px",
+        padding: "16px 0 20px",
       }}
     >
-      {/* header */}
-      <div style={{ display: "flex", alignItems: "center", padding: "20px 24px 16px" }}>
-        <div>
-          <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.4px" }}>SPX</div>
-          <div style={{ ...LABEL, letterSpacing: "0.14em", color: HOME_THEME.cyan, marginTop: 3 }}>
-            GEX · 15-Minute Pulse
-          </div>
-        </div>
-        <div style={{ marginLeft: "auto", textAlign: "right" }}>
-          <div style={LABEL}>Spot</div>
-          <div style={{ fontFamily: MONO, fontSize: 26, fontWeight: 700, letterSpacing: "-0.8px", marginTop: 3 }}>
-            {props.spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-          </div>
-          <div style={{ fontFamily: MONO, fontSize: 11, marginTop: 3, opacity: 0.75 }}>
-            {props.timeLabel ?? clock}
-          </div>
-        </div>
-      </div>
+      {/* No header: the "SPX · GEX 15-Minute Pulse" title and the Spot/clock
+          block were removed — the tab strip above the panel already names it,
+          and spot is on the chart. Card now opens on the verdict strip. */}
 
       {/* verdict strip */}
       <div
@@ -244,11 +219,26 @@ export default function GexPulsePanel(props: GexPulsePanelProps) {
         <span>−100</span><span>−50</span><span>0</span><span>+50</span><span>+100</span>
       </div>
 
-      <Section title="Levels" />
-      <div style={{ margin: "4px 24px 0" }}>{p.levels.map((r) => <Row key={r.n} r={r} />)}</div>
-
-      <Section title="Flow" />
-      <div style={{ margin: "4px 24px 0" }}>{p.flow.map((r) => <Row key={r.n} r={r} />)}</div>
+      {/* Levels and Flow side by side — 2 columns × 4 rows. auto-fit keeps it
+          from crushing: below ~2×240px the columns stack instead of clipping. */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+          columnGap: 24,
+          rowGap: 4,
+          margin: "17px 24px 0",
+        }}
+      >
+        <div>
+          <Section title="Levels" />
+          <div style={{ marginTop: 4 }}>{p.levels.map((r) => <Row key={r.n} r={r} />)}</div>
+        </div>
+        <div>
+          <Section title="Flow" />
+          <div style={{ marginTop: 4 }}>{p.flow.map((r) => <Row key={r.n} r={r} />)}</div>
+        </div>
+      </div>
 
       <div
         style={{

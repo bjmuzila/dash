@@ -1,6 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
-import { forwardGet } from "@/lib/proxyForward";
-import { cacheHeaders, CACHE_TTL } from "@/lib/cacheHeaders";
+import { NextRequest } from "next/server";
+import { forwardGet, withCacheHeaders } from "@/lib/proxyForward";
+import { CACHE_TTL } from "@/lib/cacheHeaders";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -19,11 +19,7 @@ export async function GET(req: NextRequest) {
   const path = `/proxy/api/tt/chains/${encodeURIComponent(ticker)}${qs ? `?${qs}` : ""}`;
   const res = await forwardGet(path);
 
-  // Add cache headers for Cloudflare
-  const headers = new Headers(res.headers);
-  Object.entries(cacheHeaders(CACHE_TTL.chains)).forEach(([key, value]) => {
-    headers.set(key, value);
-  });
-
-  return new NextResponse(res.body, { ...res, headers });
+  // Cache headers for Cloudflare — withCacheHeaders preserves the upstream
+  // status and drops to no-store on a non-2xx (see lib/proxyForward.ts).
+  return withCacheHeaders(res, CACHE_TTL.chains);
 }

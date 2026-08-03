@@ -4054,8 +4054,9 @@ async function insertOptionStrikeGexRows(rows) {
   const pool = await getDb();
   for (const row of rows) {
     await pool.query(
-      `INSERT INTO option_strike_gex_history (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex, symbol)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      `INSERT INTO option_strike_gex_history
+         (timestamp, date, expiry, spot, strike, net_gex, net_vol_gex, symbol, net_dex, net_vol_dex)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
       [
         row.timestamp,
         row.date,
@@ -4066,7 +4067,14 @@ async function insertOptionStrikeGexRows(rows) {
         Number.isFinite(row.net_vol_gex) ? clampReal(row.net_vol_gex) : null,
         // Without this every POSTed row fell to the column DEFAULT ('$SPX'), so
         // SPY/QQQ history was being written into the SPX series.
-        normGexSymbol(row.symbol)
+        normGexSymbol(row.symbol),
+        // DEX. Omitted from this INSERT until now, so every row that came in
+        // through POST /api/snapshots/option-strike-gex-history landed with
+        // net_dex NULL — which the GEX map reads as a flat book and reports as
+        // "no DEX for this session". NULL stays NULL: a missing reading and a
+        // zero reading are not the same thing on a positioning map.
+        Number.isFinite(row.net_dex) ? clampReal(row.net_dex) : null,
+        Number.isFinite(row.net_vol_dex) ? clampReal(row.net_vol_dex) : null
       ]
     );
   }

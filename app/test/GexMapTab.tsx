@@ -9,16 +9,15 @@ import { ThemedSelect } from "@/components/shared/ThemedSelect";
 // ─────────────────────────────────────────────────────────────────────────────
 // Test Lab → GEX Map tab.
 //
-// Four ways of fusing the same five layers — net GEX profile, strike×time
+// Three ways of fusing the same five layers — net GEX profile, strike×time
 // heatmap, the strike rail, GEX bubbles, and DEX — into ONE readout, all fed by
 // a single GET /api/gex-map payload (0DTE only; the route pins expiry = date).
 //
 //   A · Tape Field      time-forward radar. Heat is the field, profile is the
 //                       left wall, rail is the right edge, DEX is the keel.
-//   B · Polar Reticle   spot at the centre; strikes fan out by distance.
-//   C · Spine           vertical ladder, gamma on the left wing, delta on the
+//   B · Spine           vertical ladder, gamma on the left wing, delta on the
 //                       right, heat living inside the spine.
-//   D · Gamma Terrain   gamma as elevation, iso-GEX contours, flip as coastline.
+//   C · Gamma Terrain   gamma as elevation, iso-GEX contours, flip as coastline.
 //
 // Three things this file is deliberately careful about:
 //
@@ -63,11 +62,10 @@ type MapPayload = {
   error?: string;
 };
 
-type Concept = "tape" | "reticle" | "spine" | "terrain";
+type Concept = "tape" | "spine" | "terrain";
 
 const CONCEPTS: { key: Concept; label: string; blurb: string }[] = [
   { key: "tape", label: "Tape Field", blurb: "Time-forward radar — DEX profile left, GEX profile right, Vol GEX keel." },
-  { key: "reticle", label: "Polar Reticle", blurb: "Spot-centred dial — strikes fan out, session clock on the rim." },
   { key: "spine", label: "Spine", blurb: "Vertical ladder — delta left wing, gamma right wing, heat inside." },
   { key: "terrain", label: "Gamma Terrain", blurb: "Gamma as elevation — iso-GEX contours, flip as coastline." },
 ];
@@ -420,10 +418,16 @@ function ZoomSvg({ w, h, children }: { w: number; h: number; children: ReactNode
     zoomAt(r.left + r.width / 2, r.top + r.height / 2, factor);
   }, [zoomAt]);
 
+  // Wheel zooms ONLY with a modifier held. Plain wheel used to preventDefault()
+  // unconditionally, so every one of these cards was a scroll trap — the page
+  // stopped moving the moment the pointer crossed a chart, and with the maps
+  // stacked one per row that is most of the page. Ctrl/⌘ + wheel is also what a
+  // trackpad pinch sends (ctrlKey: true), so pinch-to-zoom still works.
   useEffect(() => {
     const el = svgRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;   // let the page scroll
       e.preventDefault();
       zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.18 : 1 / 1.18);
     };
@@ -432,6 +436,11 @@ function ZoomSvg({ w, h, children }: { w: number; h: number; children: ReactNode
   }, [zoomAt]);
 
   const onPointerDown = (e: ReactPointerEvent<SVGSVGElement>) => {
+    // Panning only makes sense once there is something off-screen to pan to,
+    // and grabbing at 1× swallowed touch-drags that were meant to scroll the
+    // page. A second finger still gets through, so pinch-to-zoom can start
+    // from the resting state.
+    if (t.k <= 1.001 && e.pointerType !== "mouse" && pts.current.size === 0) return;
     (e.currentTarget as SVGSVGElement).setPointerCapture?.(e.pointerId);
     pts.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pts.current.size === 1) {
@@ -489,7 +498,14 @@ function ZoomSvg({ w, h, children }: { w: number; h: number; children: ReactNode
         ref={svgRef}
         viewBox={`0 0 ${w} ${h}`}
         preserveAspectRatio="xMidYMid meet"
-        style={{ width: "100%", display: "block", cursor: grabbing ? "grabbing" : "grab", touchAction: "none" }}
+        // touchAction "pan-y" at rest so a finger drag scrolls the page; only
+        // once zoomed does the chart take the gesture for panning. "none"
+        // everywhere meant the maps ate vertical swipes on touch.
+        style={{
+          width: "100%", display: "block",
+          cursor: zoomed ? (grabbing ? "grabbing" : "grab") : "default",
+          touchAction: zoomed ? "none" : "pan-y",
+        }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endPointer}
@@ -506,9 +522,9 @@ function ZoomSvg({ w, h, children }: { w: number; h: number; children: ReactNode
         padding: 4, borderRadius: 7, background: "rgba(5,6,10,0.55)",
         border: `1px solid ${HOME_THEME.border}`, backdropFilter: "blur(6px)",
       }}>
-        <span style={{
+        <span title="Ctrl / ⌘ + scroll to zoom — plain scroll moves the page" style={{
           fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", padding: "0 4px",
-          color: zoomed ? HOME_THEME.cyan : HOME_THEME.muted, opacity: zoomed ? 1 : 0.5,
+          color: zoomed ? HOME_THEME.cyan : "#ffffff", opacity: zoomed ? 1 : 0.85,
           fontVariantNumeric: "tabular-nums",
         }}>{t.k.toFixed(1)}×</span>
         <button type="button" title="Zoom out" style={btn} onClick={() => zoomCentre(1 / 1.4)}>−</button>
@@ -521,7 +537,7 @@ function ZoomSvg({ w, h, children }: { w: number; h: number; children: ReactNode
 }
 
 // ── shared chrome ────────────────────────────────────────────────────────────
-const AXIS = "rgba(255,255,255,0.34)";
+const AXIS = "#ffffff";
 const GRID = "rgba(255,255,255,0.05)";
 /** Gamma flip. LIGHT_BLUE out of homeTheme — not a literal, per the theme rule. */
 const FLIP_C = LIGHT_BLUE;
@@ -535,7 +551,7 @@ const FLIP_C = LIGHT_BLUE;
 const FzCtx = createContext(1);
 const useFz = () => useContext(FzCtx);
 
-function Lab({ x, y, children, size = 8, fill = "rgba(255,255,255,0.34)", anchor }: {
+function Lab({ x, y, children, size = 8, fill = "#ffffff", anchor }: {
   x: number; y: number; children: string; size?: number; fill?: string; anchor?: "start" | "middle" | "end";
 }) {
   const fz = useFz();
@@ -573,34 +589,74 @@ function RegimeStrip({ m, symbol, date, expiryLabel, asOf }: {
   return (
     <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "stretch" }}>
       <div style={{ ...statTileStyle, padding: "12px 16px", minWidth: 168, flex: "0 0 auto" }}>
-        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.5 }}>
+        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: "#ffffff", opacity: 0.85 }}>
           {symbol.replace(/^\$/, "")} · {expiryLabel}
         </div>
         <div style={{ fontSize: 26, fontWeight: 800, marginTop: 2, color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{fmtSpot(m.spot)}</div>
-        <div style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.5, marginTop: 2 }}>
+        <div style={{ fontSize: 11, color: "#ffffff", opacity: 0.85, marginTop: 2 }}>
           {date} · {asOf ? `${etTime(asOf)} ET` : "—"}
         </div>
       </div>
       {cells.map((c) => (
         <div key={c.label} style={{ ...statTileStyle, padding: "12px 16px", minWidth: 150, flex: 1 }}>
-          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.muted, opacity: 0.5 }}>
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: "#ffffff", opacity: 0.85 }}>
             {c.label}
           </div>
           <div style={{ fontSize: 22, fontWeight: 800, marginTop: 2, color: c.tone, fontVariantNumeric: "tabular-nums" }}>{c.value}</div>
-          <div style={{ fontSize: 10.5, color: HOME_THEME.text, opacity: 0.4, marginTop: 2 }}>{c.sub}</div>
+          <div style={{ fontSize: 10.5, color: "#ffffff", opacity: 0.8, marginTop: 2 }}>{c.sub}</div>
         </div>
       ))}
     </div>
   );
 }
 
+/**
+ * Vertical de-collision for label stacks.
+ *
+ * The walls, the magnet and the flip are independent readings that regularly
+ * land within a few points of each other — on a quiet tape the magnet IS the
+ * call wall, and the flip sits a handful of strikes off the put wall. Drawn at
+ * their true y they overprint into an unreadable smear. This pushes the LABELS
+ * apart to a minimum gap while leaving the true y untouched, so each badge can
+ * still draw a leader back to the strike it describes.
+ */
+function spreadLabels<T extends { y: number }>(items: T[], gap: number, lo: number, hi: number): (T & { ly: number })[] {
+  const out = items.map((it) => ({ ...it, ly: it.y })).sort((a, b) => a.y - b.y);
+  for (let i = 1; i < out.length; i++) {
+    if (out[i].ly - out[i - 1].ly < gap) out[i].ly = out[i - 1].ly + gap;
+  }
+  // The forward pass can run the last label past the bottom of the box; pin it
+  // and walk back up. Both ends are then clamped, which is only lossy if the
+  // box cannot hold the stack at all — four labels in a 320+ unit rail can.
+  const last = out.length - 1;
+  if (last >= 0 && out[last].ly > hi) {
+    out[last].ly = hi;
+    for (let i = last - 1; i >= 0; i--) {
+      if (out[i + 1].ly - out[i].ly < gap) out[i].ly = out[i + 1].ly - gap;
+    }
+  }
+  if (last >= 0 && out[0].ly < lo) out[0].ly = lo;
+  return out;
+}
+
+/** Width of a letter-spaced uppercase label, in viewBox units. */
+const labWidth = (chars: number, size: number, tracking = 0.14) => chars * (0.62 + tracking) * size;
+
 function NoDex({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
   const fz = useFz();
+  // Two lines, sized to FIT. One line of "NO DEX FOR THIS SESSION" is ~17.5×
+  // the font size, which overflows every gutter this is drawn in — in the spine
+  // it ran clean off the left edge of the card.
+  const lines = ["NO DEX FOR", "THIS SESSION"];
+  const longest = Math.max(...lines.map((l) => l.length));
+  const size = Math.max(5, Math.min(10 * fz, (w - 14) / (longest * 0.76)));
   return (
     <g>
       <rect x={x} y={y} width={w} height={h} rx={8} fill="rgba(255,255,255,0.012)" stroke={HOME_THEME.border} strokeDasharray="4 4" />
-      <text x={x + w / 2} y={y + h / 2 + 3} fill={HOME_THEME.muted} opacity={0.45} fontSize={10 * fz} fontWeight={700}
-        letterSpacing="0.14em" textAnchor="middle">NO DEX FOR THIS SESSION</text>
+      {lines.map((l, i) => (
+        <text key={l} x={x + w / 2} y={y + h / 2 + 3 + (i - 0.5) * size * 1.45} fill="#ffffff" fontSize={size}
+          fontWeight={700} letterSpacing="0.14em" textAnchor="middle">{l}</text>
+      ))}
     </g>
   );
 }
@@ -632,6 +688,13 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
 
   const ticks = strikeTicks(m.lo, m.hi, compact);
   const timeTicks = pickTimeTicks(m.cols, compact ? 4 : 6);
+
+  const railBadges = spreadLabels(
+    ([[m.callWall, GEX_POS_HEX, "CW"], [m.magnet, GOLD, "MG"], [m.flip, FLIP_C, "FL"], [m.putWall, GEX_NEG_HEX, "PW"]] as [number | null, string, string][])
+      .filter((w): w is [number, string, string] => w[0] != null)
+      .map(([k, col, tag]) => ({ k, col, tag, y: yOf(k) })),
+    16 * fz, FY + 9 * fz, FY + FH - 9 * fz
+  );
 
   return (
     <ZoomSvg w={W} h={H}>
@@ -685,7 +748,7 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
       <circle cx={xOf(m.cols.length - 1)} cy={yOf(m.path[m.path.length - 1])} r={9} fill="rgba(255,255,255,0.14)" />
       <circle cx={xOf(m.cols.length - 1)} cy={yOf(m.path[m.path.length - 1])} r={3.4} fill="#fff" />
       {timeTicks.map(({ i, label }) => (
-        <text key={`t${i}`} x={xOf(i)} y={FY + FH + 14} fill={AXIS} fontSize={8 * fz} textAnchor="middle" opacity={0.75}>{label}</text>
+        <text key={`t${i}`} x={xOf(i)} y={FY + FH + 14} fill={AXIS} fontSize={8 * fz} textAnchor="middle">{label}</text>
       ))}
 
       {/* left gutter — DEX profile */}
@@ -711,17 +774,26 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
         return <rect key={`r${k}`} x={RX + 8} y={yOf(k) - ch * 0.42} width={Math.abs(v) * 46 + 1.5} height={Math.max(1.4, ch * 0.84)} rx={1}
           fill={gamColor(v, 0.3 + 0.55 * Math.abs(v))} />;
       })}
-      {ticks.map((k) => (
-        <g key={`rt${k}`}>
-          <line x1={RX + 56} y1={yOf(k)} x2={RX + 62} y2={yOf(k)} stroke="rgba(255,255,255,0.18)" />
-          <text x={RX + 66} y={yOf(k) + 3} fill={AXIS} fontSize={8 * fz}>{k}</text>
+      {/* Badges first: they own their rows, and a plain tick at the same height
+          is the same strike printed twice on top of itself. */}
+      {railBadges.map(({ k, col, tag, y, ly }) => (
+        <g key={tag}>
+          {Math.abs(ly - y) > 0.5 && (
+            <path d={`M${RX + 112} ${y}L${RX + 116} ${ly}`} stroke={col} strokeWidth={0.9} opacity={0.7} fill="none" />
+          )}
+          <rect x={RX + 118} y={ly - 7.5 * fz} width={64 * fz} height={15 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
+          <text x={RX + 123} y={ly + 3.6 * fz} fill={col} fontSize={7.4 * fz} fontWeight={800}>{`${tag} ${fmtStrike(k)}`}</text>
         </g>
       ))}
-      {([[m.callWall, GEX_POS_HEX, "CW"], [m.magnet, GOLD, "MG"], [m.flip, FLIP_C, "FL"], [m.putWall, GEX_NEG_HEX, "PW"]] as [number | null, string, string][])
-        .filter(([k]) => k != null).map(([k, col, tag]) => (
-          <g key={tag}>
-            <rect x={RX + 118} y={yOf(k as number) - 7 * fz} width={62 * fz} height={14 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
-            <text x={RX + 123} y={yOf(k as number) + 3.5 * fz} fill={col} fontSize={7.4 * fz} fontWeight={700}>{`${tag} ${fmtStrike(k)}`}</text>
+      {/* Ticks that land ON the rail's top or bottom edge render half outside
+          the box; drop them rather than print a sliced number. */}
+      {ticks
+        .filter((k) => yOf(k) > FY + 7 * fz && yOf(k) < FY + FH - 4 * fz)
+        .filter((k) => !railBadges.some((bg) => Math.abs(yOf(k) - bg.ly) < 9 * fz))
+        .map((k) => (
+          <g key={`rt${k}`}>
+            <line x1={RX + 56} y1={yOf(k)} x2={RX + 62} y2={yOf(k)} stroke="rgba(255,255,255,0.30)" />
+            <text x={RX + 66} y={yOf(k) + 3} fill={AXIS} fontSize={8 * fz}>{k}</text>
           </g>
         ))}
       {m.spot > 0 && (
@@ -770,7 +842,7 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
       ) : (
         <g>
           <rect x={RX} y={KY} width={RW} height={KH} rx={8} fill="rgba(255,255,255,0.012)" stroke={HOME_THEME.border} strokeDasharray="4 4" />
-          <text x={RX + RW / 2} y={KY + KH / 2 + 3} fill={HOME_THEME.muted} opacity={0.45} fontSize={10 * fz}
+          <text x={RX + RW / 2} y={KY + KH / 2 + 3} fill="#ffffff" fontSize={10 * fz}
             fontWeight={700} letterSpacing="0.14em" textAnchor="middle">NOT ENOUGH HISTORY</text>
         </g>
       )}
@@ -778,180 +850,17 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
   );
 }
 
-// ═════════════════════════ B · POLAR RETICLE ═════════════════════════════════
-function PolarReticle({ m, compact }: { m: MapModel; compact?: boolean }) {
-  const fz = useFz();
-  const W = 1240, H = 660;
-  const CX = compact ? 600 : 380, CY = 336;
-  const R0 = 58, R1 = 98, R2 = 176, R3 = 196;
-  const RAIL = R3 + 34, TRACK = RAIL + 40, BAND = 13;
-  const span = Math.max(1, m.hi - m.lo);
-
-  // bearing = strike, spot at the top, 300° of sweep
-  const ang = (k: number) => ((-90 + ((k - m.spot) / span) * 300) * Math.PI) / 180;
-  const P = (r: number, a: number): [number, number] => [CX + Math.cos(a) * r, CY + Math.sin(a) * r];
-  const arcPath = (r: number, a0: number, a1: number) => {
-    const [x0, y0] = P(r, a0), [x1, y1] = P(r, a1);
-    return `M${x0} ${y0}A${r} ${r} 0 0 1 ${x1} ${y1}`;
-  };
-
-  const step = m.strikes.length > 1 ? m.strikes[1] - m.strikes[0] : 5;
-  const ringCount = Math.min(10, m.cols.length);
-  const rw = (R2 - R1) / Math.max(1, ringCount);
-  const ticks = strikeTicks(m.lo, m.hi, compact);
-
-  // bearing = TIME on the outer band
-  const aT = (ci: number) => ((-90 + (ci / Math.max(1, m.cols.length - 1)) * 330) * Math.PI) / 180;
-  const rT = (ci: number) => {
-    if (m.flip == null || !(m.path[ci] > 0)) return TRACK;
-    return TRACK + Math.max(-BAND, Math.min(BAND, ((m.path[ci] - m.flip) / 34) * BAND));
-  };
-  const clockTicks = pickTimeTicks(m.cols, compact ? 4 : 6);
-
-  return (
-    <ZoomSvg w={W} h={H}>
-      {/* heat rings — inner = open, outer = now */}
-      {Array.from({ length: ringCount }, (_, r) => {
-        const ci = Math.round((r / Math.max(1, ringCount - 1)) * (m.cols.length - 1));
-        const ri = R1 + r * rw;
-        return m.strikes.map((k, si) => {
-          const h = m.heat[ci][si];
-          if (h < 0.06) return null;
-          const a0 = ang(k - step / 2), a1 = ang(k + step / 2);
-          const [x0, y0] = P(ri, a0), [x1, y1] = P(ri + rw - 0.7, a0);
-          const [x2, y2] = P(ri + rw - 0.7, a1), [x3, y3] = P(ri, a1);
-          return <path key={`h${r}-${si}`}
-            d={`M${x0} ${y0}L${x1} ${y1}A${ri + rw} ${ri + rw} 0 0 1 ${x2} ${y2}L${x3} ${y3}A${ri} ${ri} 0 0 0 ${x0} ${y0}Z`}
-            fill={gamColor(m.signed[ci][si], heatAlpha(h, 0.04, 0.72))} />;
-        });
-      })}
-
-      {/* spokes = net GEX */}
-      {m.strikes.map((k, i) => {
-        const v = m.profile[i];
-        if (Math.abs(v) < 0.02) return null;
-        const a = ang(k);
-        const [x0, y0] = P(R2 + 3, a), [x1, y1] = P(R2 + 3 + Math.abs(v) * 30, a);
-        return <line key={`s${k}`} x1={x0} y1={y0} x2={x1} y2={y1}
-          stroke={rgba(mix(v >= 0 ? GEX_POS : GEX_NEG, WHITE, Math.abs(v) * 0.28), 0.32 + 0.55 * Math.abs(v))} strokeWidth={3.2} strokeLinecap="round" />;
-      })}
-
-      {/* rail ring */}
-      <circle cx={CX} cy={CY} r={RAIL} fill="none" stroke="rgba(255,255,255,0.09)" />
-      {ticks.map((k) => {
-        const a = ang(k);
-        const [x0, y0] = P(RAIL, a), [x1, y1] = P(RAIL + 7, a), [tx, ty] = P(RAIL + 18, a);
-        return (
-          <g key={`rt${k}`}>
-            <line x1={x0} y1={y0} x2={x1} y2={y1} stroke="rgba(255,255,255,0.24)" />
-            <text x={tx} y={ty + 3} fill={AXIS} fontSize={8 * fz} textAnchor="middle">{k}</text>
-          </g>
-        );
-      })}
-      {([[m.callWall, GEX_POS_HEX, "CALL WALL"], [m.magnet, GOLD, "MAGNET"], [m.putWall, GEX_NEG_HEX, "PUT WALL"]] as [number | null, string, string][])
-        .filter(([k]) => k != null).map(([k, col, label]) => {
-          const w = span * 0.04;
-          const [lx, ly] = P(RAIL + 92, ang(k as number));
-          return (
-            <g key={label}>
-              <path d={arcPath(RAIL, ang((k as number) - w), ang((k as number) + w))} fill="none" stroke={col} strokeWidth={5} opacity={0.75} strokeLinecap="round" />
-              <text x={lx} y={ly + 3} fill={col} fontSize={7.6 * fz} fontWeight={700} letterSpacing="0.1em" textAnchor="middle">{label}</text>
-            </g>
-          );
-        })}
-      {m.flip != null && (() => {
-        const a = ang(m.flip);
-        const [x0, y0] = P(R1 - 8, a), [x1, y1] = P(RAIL + 12, a), [tx, ty] = P(RAIL + 84, a);
-        return (
-          <g>
-            <line x1={x0} y1={y0} x2={x1} y2={y1} stroke={FLIP_C} strokeWidth={1.3} strokeDasharray="5 4" opacity={0.85} />
-            <text x={tx} y={ty} fill={FLIP_C} fontSize={8 * fz} fontWeight={700} textAnchor="middle">{`FLIP ${fmtStrike(m.flip)}`}</text>
-          </g>
-        );
-      })()}
-
-      {/* session clock — bearing is TIME here, not strike */}
-      <circle cx={CX} cy={CY} r={TRACK} fill="none" stroke="rgba(125,211,252,0.30)" strokeDasharray="4 5" />
-      {clockTicks.map(({ i, label }) => {
-        const a = aT(i);
-        const [x0, y0] = P(TRACK - BAND - 6, a), [x1, y1] = P(TRACK + BAND + 6, a), [tx, ty] = P(TRACK + BAND + 22, a);
-        return (
-          <g key={`ct${i}`}>
-            <line x1={x0} y1={y0} x2={x1} y2={y1} stroke="rgba(255,255,255,0.10)" />
-            <text x={tx} y={ty + 3} fill={AXIS} fontSize={7.2 * fz} fontWeight={600} textAnchor="middle" opacity={0.85}>{label}</text>
-          </g>
-        );
-      })}
-      <path d={pathD(m.cols.map((_, ci) => P(rT(ci), aT(ci))))} fill="none" stroke="rgba(255,255,255,0.30)" strokeWidth={1.2} />
-      {m.bubbles.map((b, i) => {
-        const [x, y] = P(rT(b.ci), aT(b.ci));
-        const c = b.sign > 0 ? GEX_POS : GEX_NEG;
-        const last = i === m.bubbles.length - 1;
-        const r = 3 + b.n * 11;
-        return (
-          <g key={`cb${b.ci}`}>
-            <circle cx={x} cy={y} r={r} fill={rgba(c, last ? 0.28 : 0.15)} stroke={rgba(c, last ? 0.95 : 0.66)} strokeWidth={last ? 1.6 : 1} />
-            <circle cx={x} cy={y} r={1.4} fill={rgba(c, 0.92)} />
-            {last && <>
-              <circle cx={x} cy={y} r={r + 7} fill="none" stroke={rgba(c, 0.4)} strokeDasharray="2 3" />
-              <text x={x} y={y + r + 18} fill={rgba(c, 0.92)} fontSize={7.4 * fz} fontWeight={700} letterSpacing="0.1em" textAnchor="middle">SPOT NOW</text>
-            </>}
-          </g>
-        );
-      })}
-
-      {/* inner DEX ring */}
-      {m.hasDex ? (
-        <g>
-          <circle cx={CX} cy={CY} r={(R0 + R1) / 2} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={R1 - R0 - 14} />
-          {m.strikes.map((k, i) => {
-            const v = m.dex[i];
-            if (Math.abs(v) < 0.03) return null;
-            const dr = (R0 + R1) / 2, dw = R1 - R0 - 14;
-            return <path key={`dx${k}`} d={arcPath(dr, ang(k - step / 2), ang(k + step / 2))} fill="none"
-              stroke={dexColor(v, 0.22 + 0.62 * Math.abs(v))} strokeWidth={dw * Math.min(1, 0.35 + 0.65 * Math.abs(v))} />;
-          })}
-        </g>
-      ) : (
-        <circle cx={CX} cy={CY} r={(R0 + R1) / 2} fill="none" stroke="rgba(255,255,255,0.07)"
-          strokeWidth={R1 - R0 - 14} strokeDasharray="3 5" />
-      )}
-
-      {/* core */}
-      <circle cx={CX} cy={CY} r={R0 - 14} fill="rgba(5,6,10,0.94)" stroke="rgba(255,255,255,0.10)" />
-      <text x={CX} y={CY - 12} fill={HOME_THEME.muted} opacity={0.4} fontSize={7.6 * fz} fontWeight={700} letterSpacing="0.16em" textAnchor="middle">SPOT</text>
-      <text x={CX} y={CY + 9} fill="#fff" fontSize={20 * fz} fontWeight={800} textAnchor="middle">{fmtSpot(m.spot)}</text>
-
-      {/* ring map — dropped in the grid, where it would render at ~5px */}
-      {!compact && <Lab x={780} y={38}>RING MAP</Lab>}
-      {!compact && [
-        ["INNER RING", m.hasDex ? "DEX by strike — green = dealers short delta" : "DEX unavailable for this session"],
-        ["BAND RINGS", `heatmap — ${ringCount} time slices, oldest inside`],
-        ["SPOKES", "net GEX magnitude by strike"],
-        ["RAIL", "strike ticks, wall arcs, flip gate"],
-        ["OUTER BAND", "SESSION CLOCK — bearing is TIME, not strike"],
-        ["· dashed ring", "the gamma flip. outside it = spot above flip"],
-        ["· bubbles", "GEX at spot — size = |GEX| the tape is standing in"],
-      ].map(([a, b], i) => (
-        <text key={a} x={780} y={60 + i * 17} fill="rgba(255,255,255,0.4)" fontSize={9.5}>
-          {`· ${a}  —  ${b}`}
-        </text>
-      ))}
-    </ZoomSvg>
-  );
-}
-
-// ═════════════════════════════ C · SPINE ═════════════════════════════════════
+// ═════════════════════════════ B · SPINE ═════════════════════════════════════
 function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
   const fz = useFz();
   const W = 1240, H = 560;
   // The spine is centred; the two wings split what's left. The gutter each side
-  // is 96 rather than 44 because the wall badges now live in the strike axis
+  // is 110 rather than 44 because the wall badges now live in the strike axis
   // (see below) instead of floating over the heat, and "CALL WALL · 7530" needs
   // room to sit beside the tick column.
-  const SPW = 800;
-  const SPX = Math.round((W - SPW) / 2);    // 220
-  const GUT = 96;
+  const SPW = 780;
+  const SPX = Math.round((W - SPW) / 2);    // 230
+  const GUT = 110;
   const TY = 26, TH = 470;
   const yOf = (k: number) => TY + TH - ((k - m.lo) / Math.max(1, m.hi - m.lo)) * TH;
   const rowH = TH / Math.max(1, m.strikes.length - 1);
@@ -969,9 +878,18 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
     .filter((w): w is [number, string, string] => w[0] != null);
   // A plain tick sitting at the same height as a wall badge is the same number
   // twice, overlapping — drop it and let the badge carry the strike.
-  const namedRows = [...walls.map(([k]) => k), ...(m.flip != null ? [m.flip] : [])];
+  // Walls + flip share one de-collided stack. They collide constantly — on a
+  // pinned tape the magnet and the call wall are the SAME strike, and the two
+  // badges printed on top of each other were unreadable.
+  const axisBadges = spreadLabels(
+    [
+      ...walls.map(([k, col, label]) => ({ k, col, label, dashed: false, y: yOf(k) })),
+      ...(m.flip != null ? [{ k: m.flip, col: FLIP_C, label: "FLIP", dashed: true, y: yOf(m.flip) }] : []),
+    ],
+    17 * fz, TY + 10 * fz, TY + TH - 10 * fz
+  );
   const ticks = strikeTicks(m.lo, m.hi, compact)
-    .filter((k) => !namedRows.some((nk) => Math.abs(yOf(k) - yOf(nk)) < 13 * fz));
+    .filter((k) => !axisBadges.some((b) => Math.abs(yOf(k) - b.ly) < 13 * fz));
 
   return (
     <ZoomSvg w={W} h={H}>
@@ -1044,7 +962,7 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
               fill={dexColor(v, 0.24 + 0.55 * Math.abs(v))} />;
           })}
           {!compact && (
-            <text x={LW - LWW} y={TY + TH + 20} fill="rgba(255,255,255,0.34)" fontSize={9}>
+            <text x={LW - LWW} y={TY + TH + 20} fill="#ffffff" fontSize={9}>
               bar length = |DEX| · green = dealers short delta · rose = dealers long delta
             </text>
           )}
@@ -1052,28 +970,22 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
       ) : <NoDex x={LW - LWW} y={TY} w={LWW} h={TH} />}
 
       {/* left strike axis — plain ticks, plus the named wall rows */}
-      {ticks.map((k) => <text key={`lt${k}`} x={SPX - 8} y={yOf(k) + 3} fill={AXIS} fontSize={8.4 * fz} textAnchor="end">{k}</text>)}
-      {walls.map(([k, col, label]) => {
-        const bw = (label.length * 4.9 + 44) * fz;
+      {ticks.map((k) => <text key={`lt${k}`} x={SPX - 10} y={yOf(k) + 3} fill={AXIS} fontSize={8.4 * fz} textAnchor="end">{k}</text>)}
+      {axisBadges.map(({ k, col, label, dashed, y, ly }) => {
+        const bw = labWidth(label.length + 7, 7.2 * fz, 0.08) + 14;
         return (
           <g key={`ax${label}`}>
-            <rect x={SPX - 8 - bw} y={yOf(k) - 7.5 * fz} width={bw} height={15 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
-            <text x={SPX - 14} y={yOf(k) + 3.6 * fz} fill={col} fontSize={7.2 * fz} fontWeight={800} letterSpacing="0.08em" textAnchor="end">
+            {/* leader from the badge back to the strike it actually sits on */}
+            <path d={`M${SPX - 8} ${ly}L${SPX - 4} ${y}L${SPX} ${y}`} stroke={col} strokeWidth={0.9} opacity={0.8} fill="none" />
+            <rect x={SPX - 10 - bw} y={ly - 7.5 * fz} width={bw} height={15 * fz} rx={3} fill="rgba(5,6,10,0.92)" />
+            <rect x={SPX - 10 - bw} y={ly - 7.5 * fz} width={bw} height={15 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`}
+              strokeDasharray={dashed ? "3 2" : undefined} />
+            <text x={SPX - 16} y={ly + 3.6 * fz} fill={col} fontSize={7.2 * fz} fontWeight={800} letterSpacing="0.08em" textAnchor="end">
               {`${label} · ${fmtStrike(k)}`}
             </text>
-            <line x1={SPX - 6} y1={yOf(k)} x2={SPX} y2={yOf(k)} stroke={col} opacity={0.7} />
           </g>
         );
       })}
-      {m.flip != null && (
-        <g>
-          <rect x={SPX - 8 - 62 * fz} y={yOf(m.flip) - 7.5 * fz} width={62 * fz} height={15 * fz} rx={3}
-            fill={`${FLIP_C}26`} stroke={`${FLIP_C}80`} strokeDasharray="3 2" />
-          <text x={SPX - 14} y={yOf(m.flip) + 3.6 * fz} fill={FLIP_C} fontSize={7.2 * fz} fontWeight={800} letterSpacing="0.08em" textAnchor="end">
-            {`FLIP · ${fmtStrike(m.flip)}`}
-          </text>
-        </g>
-      )}
 
       {/* right wing — GEX */}
       <Lab x={RW} y={TY - 8}>NET GEX ►</Lab>
@@ -1089,7 +1001,7 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
       {/* Anchored to the right margin, not to the wing's left edge — from RW the
           caption ran straight off the 1240 viewBox and lost its last few words. */}
       {!compact && (
-        <text x={W - 12} y={TY + TH + 20} fill="rgba(255,255,255,0.34)" fontSize={9} textAnchor="end">
+        <text x={W - 12} y={TY + TH + 20} fill="#ffffff" fontSize={9} textAnchor="end">
           bar length = |GEX| · blue = long gamma (dealers dampen) · red = short gamma (dealers amplify)
         </text>
       )}
@@ -1097,7 +1009,7 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
   );
 }
 
-// ═════════════════════════ D · GAMMA TERRAIN ═════════════════════════════════
+// ═════════════════════════ C · GAMMA TERRAIN ═════════════════════════════════
 /**
  * The terrain field itself. Split out of GammaTerrain for one reason: it has to
  * read the live zoom level, and the zoom context is provided BY <ZoomSvg>. A
@@ -1239,35 +1151,24 @@ function GammaTerrain({ m, compact }: { m: MapModel; compact?: boolean }) {
   const timeTicks = pickTimeTicks(m.cols, compact ? 4 : 6);
   const rowH = FHT / Math.max(1, m.strikes.length - 1);
 
+  const railBadges = spreadLabels(
+    ([[m.callWall, GEX_POS_HEX, "RIDGE"], [m.magnet, GOLD, "PEAK"], [m.flip, FLIP_C, "COAST"], [m.putWall, GEX_NEG_HEX, "TRENCH"]] as [number | null, string, string][])
+      .filter((w): w is [number, string, string] => w[0] != null)
+      .map(([k, col, tag]) => ({ k, col, tag, y: yOf(k) })),
+    17 * fz, TP + 10 * fz, TP + FHT - 10 * fz
+  );
 
   return (
     <ZoomSvg w={W} h={H}>
       <TerrainField m={m} L={L} TP={TP} FWD={FWD} FHT={FHT} />
       <rect x={L} y={TP} width={FWD} height={FHT} fill="none" stroke="rgba(255,255,255,0.10)" />
 
-      {/* DEX current — direction and force of dealer hedging, by strike band */}
-      {m.hasDex && Array.from({ length: 9 }, (_, j) => {
-        const k = m.lo + ((m.hi - m.lo) * (j + 0.5)) / 9;
-        let bi = 0, bd = Infinity;
-        m.strikes.forEach((s, i) => { const d = Math.abs(s - k); if (d < bd) { bd = d; bi = i; } });
-        const v = m.dex[bi];
-        if (Math.abs(v) < 0.03) return null;
-        return Array.from({ length: 7 }, (_, i) => {
-          const x = L + 40 + ((FWD - 80) * i) / 6, y = yOf(k);
-          const len = 14 + Math.abs(v) * 32, dir = v >= 0 ? 1 : -1;
-          const col = dexColor(v, 0.2 + 0.42 * Math.abs(v));
-          const tip = dir > 0 ? x + len / 2 : x - len / 2;
-          return (
-            <g key={`fa${j}-${i}`}>
-              <line x1={x - len / 2} y1={y} x2={x + len / 2} y2={y} stroke={col} strokeWidth={1.5} strokeLinecap="round" />
-              <polygon points={`${tip},${y} ${tip - dir * 5.5},${y - 3.2} ${tip - dir * 5.5},${y + 3.2}`} fill={col} />
-            </g>
-          );
-        });
-      })}
-      <Lab x={L + 4} y={TP - 8}>
-        {m.hasDex ? "DEALER DELTA CURRENT · arrow = direction of hedging flow" : "DEALER DELTA CURRENT · no DEX for this session"}
-      </Lab>
+      {/* The dealer-delta arrow field used to live here — 63 arrows in a 9×7
+          lattice across the terrain. Removed: it painted over the contours and
+          the spot path, which are what this map is actually for. DEX is still
+          read on the Tape Field's left gutter and the Spine's left wing.
+          Its "DEALER DELTA CURRENT" caption went with it — the card header
+          already names the map and the footer already carries the legend. */}
 
       {/* spot path */}
       <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="rgba(0,0,0,0.45)" strokeWidth={5.5} />
@@ -1293,30 +1194,40 @@ function GammaTerrain({ m, compact }: { m: MapModel; compact?: boolean }) {
         </g>
       )}
       {timeTicks.map(({ i, label }) => (
-        <text key={`tt${i}`} x={xOf(i)} y={BT + 16} fill={AXIS} fontSize={8 * fz} textAnchor="middle" opacity={0.75}>{label}</text>
+        <text key={`tt${i}`} x={xOf(i)} y={BT + 16} fill={AXIS} fontSize={8 * fz} textAnchor="middle">{label}</text>
       ))}
 
-      {/* ridge rail — bars | strike ticks | badges, all inside RRX..RRX+RRW */}
+      {/* Ridge rail — bars | strike ticks | badges. The whole group is CLIPPED
+          to the rail box, so nothing it draws can escape above or below the
+          card no matter what the ladder or the type scale does. */}
       <Lab x={RRX} y={TP - 8}>RIDGE RAIL</Lab>
+      <clipPath id="gt-rail-clip"><rect x={RRX} y={TP} width={RRW} height={FHT} rx={8} /></clipPath>
       <rect x={RRX} y={TP} width={RRW} height={FHT} rx={8} fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.07)" />
-      {m.strikes.map((k, i) => {
-        const v = m.profile[i];
-        return <rect key={`rr${k}`} x={RRX + 8} y={yOf(k) - rowH * 0.42} width={Math.abs(v) * 44 + 1.5} height={Math.max(1.2, rowH * 0.84)} rx={1}
-          fill={gamColor(v, 0.3 + 0.55 * Math.abs(v))} />;
-      })}
-      {ticks.map((k) => <text key={`rrt${k}`} x={RRX + 58} y={yOf(k) + 3} fill={AXIS} fontSize={8 * fz}>{k}</text>)}
-      {([[m.callWall, GEX_POS_HEX, "RIDGE"], [m.magnet, GOLD, "PEAK"], [m.flip, FLIP_C, "COAST"], [m.putWall, GEX_NEG_HEX, "TRENCH"]] as [number | null, string, string][])
-        .filter(([k]) => k != null).map(([k, col, tag]) => (
+      <g clipPath="url(#gt-rail-clip)">
+        {m.strikes.map((k, i) => {
+          const v = m.profile[i];
+          return <rect key={`rr${k}`} x={RRX + 8} y={yOf(k) - rowH * 0.42} width={Math.abs(v) * 44 + 1.5} height={Math.max(1.2, rowH * 0.84)} rx={1}
+            fill={gamColor(v, 0.3 + 0.55 * Math.abs(v))} />;
+        })}
+        {railBadges.map(({ col, tag, y, ly }) => (
           <g key={tag}>
-            <rect x={RRX + 116} y={yOf(k as number) - 7 * fz} width={Math.min(76, RRW - 124) * fz} height={14 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
-            <text x={RRX + 122} y={yOf(k as number) + 3.5 * fz} fill={col} fontSize={7.4 * fz} fontWeight={700} letterSpacing="0.08em">{tag}</text>
+            {Math.abs(ly - y) > 0.5 && (
+              <path d={`M${RRX + 108} ${y}L${RRX + 114} ${ly}`} stroke={col} strokeWidth={0.9} opacity={0.7} fill="none" />
+            )}
+            <rect x={RRX + 116} y={ly - 7.5 * fz} width={78 * fz} height={15 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
+            <text x={RRX + 122} y={ly + 3.6 * fz} fill={col} fontSize={7.4 * fz} fontWeight={800} letterSpacing="0.08em">{tag}</text>
           </g>
         ))}
+        {ticks
+          .filter((k) => yOf(k) > TP + 7 * fz && yOf(k) < TP + FHT - 4 * fz)
+          .filter((k) => !railBadges.some((bg) => Math.abs(yOf(k) - bg.ly) < 9 * fz))
+          .map((k) => <text key={`rrt${k}`} x={RRX + 58} y={yOf(k) + 3} fill={AXIS} fontSize={8 * fz}>{k}</text>)}
+      </g>
       {m.spot > 0 && (
         <polygon points={`${RRX - 2},${yOf(m.spot)} ${RRX - 11},${yOf(m.spot) - 5} ${RRX - 11},${yOf(m.spot) + 5}`} fill="#fff" />
       )}
       {!compact && (
-        <text x={L} y={H - 12} fill="rgba(255,255,255,0.3)" fontSize={8} fontWeight={600} letterSpacing="0.14em">
+        <text x={L} y={H - 12} fill="#ffffff" fontSize={8} fontWeight={600} letterSpacing="0.14em">
           ELEVATION = NET GAMMA · CONTOURS = ISO-GEX · DASHED COASTLINE = ZERO GAMMA
         </text>
       )}
@@ -1383,17 +1294,14 @@ function MapCard({ def, m }: {
   def: (typeof CONCEPTS)[number];
   m: MapModel;
 }) {
-  const Body = def.key === "tape" ? TapeField
-    : def.key === "reticle" ? PolarReticle
-    : def.key === "spine" ? Spine
-    : GammaTerrain;
+  const Body = def.key === "tape" ? TapeField : def.key === "spine" ? Spine : GammaTerrain;
   return (
     <Card variant="budget" padding={16}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, width: "100%", marginBottom: 10, color: HOME_THEME.text }}>
         <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" }}>
           {def.label}
         </span>
-        <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.45, flex: 1, minWidth: 0 }}>
+        <span style={{ fontSize: 11, color: "#ffffff", opacity: 0.85, flex: 1, minWidth: 0 }}>
           {def.blurb}
         </span>
       </div>
@@ -1480,15 +1388,19 @@ export default function GexMapTab() {
             />
           </div>
           <button type="button" onClick={() => void load(date, expiry)} style={homeButtonStyle}>Refresh</button>
-          <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.6, flex: 1, minWidth: 220 }}>
-            All four readouts, same session, same scales — one per row, scroll to compare.
+          <div style={{ fontSize: 12, color: "#ffffff", opacity: 0.85, flex: 1, minWidth: 220 }}>
+            All three readouts, same session, same scales — one per row, scroll to compare.
           </div>
         </div>
-        <div style={{ fontSize: 11.5, color: HOME_THEME.text, opacity: 0.45, marginTop: 10, lineHeight: 1.6 }}>
+        <div style={{ fontSize: 11.5, color: "#ffffff", opacity: 0.8, marginTop: 10, lineHeight: 1.6 }}>
           One expiry at a time — never a blend. Defaults to 0DTE. GEX ladder from{" "}
           <code style={{ color: LIGHT_BLUE }}>option_strike_gex_history</code> (retention ~2 sessions), DEX from{" "}
-          <code style={{ color: LIGHT_BLUE }}>net_dex</code> in the same row (added{" "}
-          {new Date(2026, 7, 1).toLocaleDateString("en-US", { month: "short", day: "numeric" })}; sessions before that
+          {/* Literal, not `new Date(...).toLocaleDateString()`. This is a fixed
+              historical date, and formatting it at runtime made the string
+              depend on the renderer's ICU build — Node's small-icu and the
+              browser's full ICU can disagree, which is a hydration mismatch
+              (React #418) for a value that was never going to change. */}
+          <code style={{ color: LIGHT_BLUE }}>net_dex</code> in the same row (added Aug 1; sessions before that
           fall back to <code style={{ color: LIGHT_BLUE }}>greek_snapshots</code>, last-snapshot ladder only). Bubbles
           ride spot: one per slot, sized by |GEX| at the strike price was trading on.
         </div>
@@ -1520,13 +1432,13 @@ export default function GexMapTab() {
 
       {loading && !model ? (
         <Card variant="budget" padding={20}>
-          <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6, padding: 40, textAlign: "center" }}>
+          <div style={{ fontSize: 14, color: "#ffffff", opacity: 0.9, padding: 40, textAlign: "center" }}>
             Loading 0DTE map…
           </div>
         </Card>
       ) : !model ? (
         <Card variant="budget" padding={20}>
-          <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6, padding: 40, textAlign: "center" }}>
+          <div style={{ fontSize: 14, color: "#ffffff", opacity: 0.9, padding: 40, textAlign: "center" }}>
             No strike ladder for this session — nothing to draw.
           </div>
         </Card>
@@ -1544,7 +1456,7 @@ export default function GexMapTab() {
       )}
 
       {model && data && (
-        <div style={{ fontSize: 11.5, color: HOME_THEME.text, opacity: 0.4, lineHeight: 1.7 }}>
+        <div style={{ fontSize: 11.5, color: "#ffffff", opacity: 0.8, lineHeight: 1.7 }}>
           {data.symbol} · {data.date} exp {data.expiry} · {data.columns.length} slots @ {data.slotMin}m ·{" "}
           {data.strikes.length} strikes ({fmtStrike(model.lo)}–{fmtStrike(model.hi)}) ·{" "}
           {model.hasDex

@@ -50,3 +50,41 @@ export async function forwardGet(proxyPath: string): Promise<NextResponse> {
     );
   }
 }
+
+/**
+ * Re-emit a forwarded response with CDN cache headers, PRESERVING the upstream
+ * status.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * /api/expirations, /api/chains and /api/tt-quotes each ended with:
+ *
+ *     return new NextResponse(res.body, { ...res, headers });
+ *
+ * `res` is a NextResponse, and Response exposes `status` as a PROTOTYPE getter.
+ * Object spread copies only own enumerable properties, so `{ ...res }` is `{}`
+ * — the init carried no status and every forward collapsed to `200 OK`. A 502
+ * from forwardGet reached the browser as a 200 whose body was
+ * `{"error":"..."}`, so client code that branches on `res.ok` happily parsed
+ * the error envelope as data. Worse, the `public, max-age=N` header applied on
+ * the line above then let Cloudflare cache that failure as a good response for
+ * the full TTL.
+ *
+ * This helper keeps the status and refuses to put a non-2xx in any cache.
+ */
+export function withCacheHeaders(res: Response, maxAgeSeconds: number): NextResponse {
+  const headers = new Headers(res.headers);
+
+  if (res.ok) {
+    headers.set("Cache-Control", `public, max-age=${maxAgeSeconds}`);
+  } else {
+    // Never let an upstream failure sit in the edge cache.
+    headers.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  }
+
+  return new NextResponse(res.body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers,
+  });
+}

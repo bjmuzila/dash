@@ -189,8 +189,16 @@ async function ensureAllTables(pool: Pool): Promise<void> {
       expiry TEXT NOT NULL, spot REAL, strike REAL NOT NULL, net_gex REAL NOT NULL,
       net_vol_gex REAL
     );
-    -- Backfill column for pre-existing tables (Vol-only heatmap history).
+    -- Backfill columns for pre-existing tables (Vol-only heatmap history, DEX).
     ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS net_vol_gex REAL;
+    -- net_dex / net_vol_dex used to be created ONLY as a side effect of
+    -- gex-history-writer.js's lazy ensureVolColumn(), which returns early
+    -- outside the recording window — so on a fresh DB, or after a restart that
+    -- landed while the market was closed, the columns simply did not exist and
+    -- the GEX map reported "no DEX for this session" forever. Declare them here
+    -- with the rest of the schema instead.
+    ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS net_dex REAL;
+    ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS net_vol_dex REAL;
     CREATE INDEX IF NOT EXISTS idx_osgh_date ON option_strike_gex_history(date);
     CREATE INDEX IF NOT EXISTS idx_osgh_expiry ON option_strike_gex_history(expiry);
     CREATE INDEX IF NOT EXISTS idx_osgh_ts ON option_strike_gex_history(timestamp);

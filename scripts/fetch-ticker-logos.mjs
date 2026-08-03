@@ -65,13 +65,18 @@ NEE CL EOG SLB MPC PSX VLO OXY KMI WMB HAL DVN FANG HES APA MRO
 T TMUS CHTR WBD PARA FOX NWSA OMC IPG DISH LYV EA TTWO RBLX U SNAP PINS
 ENB CVE SU TRP CNQ IMO ETN LIN APD SHW ECL DD DOW LYB PPG NUE FCX NEM
 ABBV BIIB MRNA BNTX ILMN IQV A DXCM IDXX WST MTD ALGN PODD ZBH BAX
+PLTR APP HWM WDC SNDK PBR PBR.A
 `.trim().split(/\s+/).filter(Boolean);
 
 // Hand-mirrored logos: neither the GitHub set nor Wikidata resolves these, so
 // public/logos/<SYM>.png was cropped and committed by hand. Never overwrite
 // them — including under --force, which would otherwise replace a good file
 // with nothing (resolveLogo returns null) or with an unusable wide lockup.
-const MANUAL = new Set(['SPCX']);
+// PBR.A is Petrobras' preferred-share line. resolveLogo has nothing for the
+// dotted class suffix (GitHub keys on the plain root symbol, and Wikidata
+// searches the company, not the share class), so public/logos/PBR.A.png is a
+// copy of PBR.png. Same treatment as SPCX: keep it, never re-resolve it.
+const MANUAL = new Set(['SPCX', 'PBR.A']);
 
 const args = process.argv.slice(2);
 const FORCE = args.includes('--force');

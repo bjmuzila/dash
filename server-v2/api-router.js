@@ -4615,6 +4615,11 @@ if (libDb) {
               strike: Number(row.strike ?? 0),
               net_gex: Number(row.net_gex ?? 0),
               net_vol_gex: row.net_vol_gex == null ? undefined : Number(row.net_vol_gex),
+              // DEX rides in the same row as gamma or it is useless — a ladder
+              // stitched from a second table on a different cadence is not the
+              // book that was live at that slot.
+              net_dex: row.net_dex == null ? undefined : Number(row.net_dex),
+              net_vol_dex: row.net_vol_dex == null ? undefined : Number(row.net_vol_dex),
               // Underlying. Omitted → '$SPX', which is what every row written
               // before this column existed is.
               symbol: libDb.normGexSymbol(row.symbol ?? body?.symbol),
@@ -7390,21 +7395,38 @@ if barstate.islast
     let dexColsPresent = false;
     let dexProbedAt = 0;
     const DEX_PROBE_TTL_MS = 60_000;
+    // In-flight probe, shared. The old version stamped dexProbedAt BEFORE
+    // awaiting, so a second request arriving while the first probe was still
+    // running fell through to `return false`, built a DEX-less payload, and
+    // cached it for the full GEX_MAP_TTL_MS. One lost race pinned "no DEX" on
+    // the map for a minute — and a page that mounts twice loses that race every
+    // cold start.
+    let dexProbe = null;
     const hasDexCols = async () => {
       if (dexColsPresent) return true;
+      if (dexProbe) return dexProbe;
       if (Date.now() - dexProbedAt < DEX_PROBE_TTL_MS) return false;
       dexProbedAt = Date.now();
-      try {
-        const r = await libDb.queryAll(
-          `SELECT column_name FROM information_schema.columns
-            WHERE table_name = 'option_strike_gex_history'
-              AND column_name IN ('net_dex', 'net_vol_dex')`
-        );
-        dexColsPresent = r.length === 2;
-      } catch {
-        dexColsPresent = false;
-      }
-      return dexColsPresent;
+      dexProbe = (async () => {
+        try {
+          const r = await libDb.queryAll(
+            // table_schema matters: information_schema spans every schema the
+            // role can see, so an identically-named table in a second schema
+            // returned 4 rows and `=== 2` was false forever.
+            `SELECT DISTINCT column_name FROM information_schema.columns
+              WHERE table_name = 'option_strike_gex_history'
+                AND table_schema = ANY(current_schemas(false))
+                AND column_name IN ('net_dex', 'net_vol_dex')`
+          );
+          dexColsPresent = r.length >= 2;
+        } catch {
+          dexColsPresent = false;
+        } finally {
+          dexProbe = null;
+        }
+        return dexColsPresent;
+      })();
+      return dexProbe;
     };
 
     // `date` / `expiry` come back as text on this table, but a pg DATE column
@@ -7667,7 +7689,13 @@ if barstate.islast
                 ? `session predates per-strike DEX recording — falling back to greek_snapshots (last-snapshot ladder only, no strike×time surface)`
                 : `net_dex column not present yet — falling back to greek_snapshots. It appears once server-v2 writes one GEX snapshot after the upgrade.`;
             } else {
-              notes.dex = `no DEX for ${bareSymbol} ${date} 0DTE in either option_strike_gex_history or greek_snapshots — DEX layers will render empty`;
+              // Say WHY, and do not claim a DTE this branch never checked.
+              // greek_snapshots is written by the greek scanner, which only runs
+              // Mon-Fri 09:30-16:00 ET — so for any evening, overnight or
+              // weekend tape the fallback is empty by construction, not broken.
+              notes.dex = withDex
+                ? `no net_dex recorded for ${bareSymbol} ${date} exp ${expiry}, and greek_snapshots only records Mon-Fri 09:30-16:00 ET — DEX layers will render empty`
+                : `option_strike_gex_history has no net_dex/net_vol_dex columns yet (run the migration), and greek_snapshots only records Mon-Fri 09:30-16:00 ET — DEX layers will render empty`;
             }
           } catch (err) {
             // LOUD. A silently empty DEX ring is indistinguishable from a
@@ -7712,7 +7740,10 @@ if barstate.islast
             strikes, columns, volSeries, dexByStrike, dexSeries, dexColumns, dexSource,
             levels, sessions, expiries, notes,
           };
-          gexMapCache.set(cacheKey, { at: Date.now(), payload });
+          // A payload built while the DEX column probe had not yet succeeded is
+          // a "don't know yet", not a result. Caching it froze an empty DEX map
+          // in place for a full TTL after the columns appeared.
+          if (withDex || dexSource !== 'none') gexMapCache.set(cacheKey, { at: Date.now(), payload });
           send(res, 200, withNote(payload));
         } catch (err) {
           console.error('[gex-map] GET failed:', req.url, err);

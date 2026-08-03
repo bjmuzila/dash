@@ -589,7 +589,10 @@ export default function BzilaAlerts({
 
           {isOwner && (
             <a
-              href="https://owners.cbedge.net/owner/dev/bzila-alerts"
+              // owner.cbedge.net — singular. It was "owners." here, which does
+              // not resolve (DNS_PROBE_FINISHED_NXDOMAIN); the Owner link in
+              // UserMenu has always used the singular host.
+              href="https://owner.cbedge.net/owner/dev/bzila-alerts"
               target="_blank"
               rel="noopener noreferrer"
               style={{

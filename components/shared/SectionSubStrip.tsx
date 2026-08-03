@@ -35,8 +35,17 @@ import {
 const CYAN = HOME_THEME.cyan;
 function cyanA(a: number) { return `rgba(33,158,188,${a})`; }
 
-/** Pixel height of the open strip's content row (pills + vertical padding). */
-const STRIP_H = 58;
+/**
+ * Max height of the open strip. Only a cap for the expand/collapse transition —
+ * actual height comes from the content — so it is set generously above the real
+ * row height. It was previously tight enough that a pill's 1px accent border,
+ * plus the 1px lift on hover, got shaved by the container's overflow:hidden.
+ */
+const STRIP_H = 76;
+
+/** Vertical padding inside the strip. Must leave room for the hover lift. */
+const PAD_TOP = 12;
+const PAD_BOTTOM = 13;
 
 type PillProps = {
   href: string;
@@ -149,7 +158,14 @@ export default function SectionSubStrip({ open }: { open: boolean }) {
       pills[i].dataset.mini = "1";
     }
     // Still too wide even all-icon (phone): scroll rather than clip a pill.
-    row.style.overflowX = over() ? "auto" : "hidden";
+    // Note overflow-x:auto forces overflow-y off "visible", so pin it to hidden
+    // in that case to avoid a phantom vertical scrollbar.
+    if (over()) {
+      row.style.overflowX = "auto";
+      row.style.overflowY = "hidden";
+    } else {
+      row.style.overflow = "visible";
+    }
   }, []);
 
   // Re-measure after every render (the pill set changes with the section), on
@@ -184,7 +200,7 @@ export default function SectionSubStrip({ open }: { open: boolean }) {
         overflow: "hidden",
         maxHeight: open ? STRIP_H : 0,
         opacity: open ? 1 : 0,
-        padding: open ? "9px 14px 10px" : "0 14px",
+        padding: open ? `${PAD_TOP}px 14px ${PAD_BOTTOM}px` : "0 14px",
         border: `1px solid ${open ? HOME_THEME.border : "transparent"}`,
         borderTop: "none",
         borderRadius: "0 0 16px 16px",
@@ -194,7 +210,12 @@ export default function SectionSubStrip({ open }: { open: boolean }) {
         boxSizing: "border-box",
         transition: "max-height 0.28s cubic-bezier(0.4,0,0.2,1), opacity 0.2s, padding 0.28s",
         position: "relative",
-        zIndex: 49,
+        // Below the pill's own contents, which sit at z-index 1 in this same
+        // stacking context (the toolbar band). Anything higher here paints over
+        // the dropdowns that hang out of the pill — the user/account menu, which
+        // is absolutely positioned inside a z-index:1 wrapper. The strip still
+        // covers page content because the whole band is z-index 50.
+        zIndex: 0,
       }}
     >
       <style>{`
@@ -219,8 +240,11 @@ export default function SectionSubStrip({ open }: { open: boolean }) {
           gap: 7,
           flexWrap: "nowrap",
           minWidth: 0,
-          overflowX: "hidden",
-          overflowY: "hidden",
+          // Vertically visible so a pill's border / hover lift is never shaved;
+          // the fit pass flips overflowX to "auto" only when the row genuinely
+          // can't fit, and restores "visible" otherwise.
+          overflow: "visible",
+          paddingBottom: 1,
         }}
       >
         {section.groups.map((g, gi) => (

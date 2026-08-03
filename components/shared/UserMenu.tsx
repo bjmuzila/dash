@@ -4,8 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { HOME_THEME } from "./homeTheme";
 
-// Legal / help pages surfaced at the bottom of the account menu.
+// Support / legal pages surfaced at the bottom of the account menu.
+// Feedback leads: the CB Edge logo used to be the /feedback link, but the logo
+// is the Bzila alerts trigger now and the in-panel feedback link that replaced
+// it only shows for viewers who can see alerts. This entry is the one every
+// signed-in user gets.
 const INFO_LINKS: { href: string; label: string }[] = [
+  { href: "/feedback", label: "Send feedback" },
   { href: "/docs", label: "Help & Docs" },
   { href: "/disclaimer", label: "Disclaimer" },
   { href: "/risk-disclosure", label: "Risk Disclosure" },

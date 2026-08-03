@@ -42,6 +42,7 @@ export default function LayoutPresetButton() {
   const [name, setName] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
 
   // Escape closes, matching the page's other popovers. Outside-click does not,
   // for the same reason they don't: the charts are what you reach for next.
@@ -50,6 +51,43 @@ export default function LayoutPresetButton() {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setOpen(false); setConfirmDelete(null); } };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  // FIXED, not absolute — measured off the button each time it opens.
+  //
+  // `position: absolute` looked right and rendered UNDER the symbol row of the
+  // card below. This button lives inside the chart card's dock, which on a
+  // multi-chart row is PORTALED into the page (see dockMode in EsChartCard), so
+  // an absolutely-positioned child is laid out against whatever stacking
+  // context that dock happens to sit in — and a z-index of 60 inside a context
+  // the cards paint over is worth nothing. The page's own Charts/Indicators
+  // popovers hit this first and solved it the same way; see the comment above
+  // their render in components/pages/EsCandles.tsx.
+  //
+  // Re-measured on resize and scroll (capture phase, so it catches scrolls in
+  // any ancestor) because the dock's height moves with the FitScale factor and
+  // the compact breakpoint — a fixed offset would drift the moment the window
+  // changed size.
+  useEffect(() => {
+    if (!open) return;
+    const measure = () => {
+      const r = wrapRef.current?.getBoundingClientRect();
+      if (!r) return;
+      setPos({
+        top: r.bottom + 6,
+        // Right-aligned to the button, but never past the viewport edge: at the
+        // compact breakpoint this button sits close enough to the right that a
+        // naive offset would push the panel off-screen.
+        right: Math.max(8, Math.round(window.innerWidth - r.right)),
+      });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
   }, [open]);
 
   const doSave = useCallback(async () => {
@@ -86,14 +124,20 @@ export default function LayoutPresetButton() {
         {P.presets.length ? <span style={{ opacity: 0.5, fontSize: 10 }}>{P.presets.length}</span> : null}
       </DockButton>
 
-      {open && (
+      {open && pos && (
         <div
+          className="es-candles-popover"
           style={{
-            position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 60,
-            width: PANEL_W, padding: 10, borderRadius: 10,
+            // Same treatment as the page's Charts / Indicators panels so the
+            // three read as one control surface.
+            position: "fixed", top: pos.top, right: pos.right, zIndex: 60,
+            width: PANEL_W, maxWidth: "calc(100vw - 16px)",
+            padding: 12, borderRadius: 14,
             border: `1px solid ${HOME_THEME.border}`,
-            background: HOME_THEME.panel,
-            boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+            background: "rgba(10,14,20,0.97)",
+            backdropFilter: "blur(14px)",
+            WebkitBackdropFilter: "blur(14px)",
+            boxShadow: "0 18px 48px rgba(0,0,0,0.55)",
             display: "flex", flexDirection: "column", gap: 8,
           }}
         >

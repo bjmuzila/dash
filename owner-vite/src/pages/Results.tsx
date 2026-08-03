@@ -1500,7 +1500,91 @@ type WallTicker = {
   changes: number; hits: number;
   last_event: string | null;
   reaction: WallReaction | null;
+  // ── Reach Rank (server-v2/walls-reach.js, attached by /proxy/walls) ───────
+  atr?: number | null;
+  atr_n?: number;
+  levels?: WallRankLevel[];
+  nearest?: WallRankLevel | null;
+  rank?: number | null;
 };
+
+// ── Reach Rank ───────────────────────────────────────────────────────────────
+//
+// Distance to a level, measured in that symbol's own 20-day ATR, is the only
+// thing the ranking scores. `score` is the symbol's out-of-sample reach rate
+// for the bucket the level currently sits in, shrunk toward the global rate by
+// how many sessions of its own history that symbol has (`score_weight`).
+
+type WallBucket = 'on_price' | 'short_walk' | 'solid_move' | 'across_map' | 'off_distance';
+
+type WallRankLevel = {
+  symbol: string;
+  level_type: WallLevel;
+  strike: number;
+  side: 1 | -1;
+  dist_pts: number;
+  dist_atr: number;
+  bucket: WallBucket;
+  score: number | null;        // percent, already ×100
+  score_scope: 'symbol' | 'global' | null;
+  score_days: number;
+  score_weight: number | null; // 0..1 — how much of the score is the symbol's own history
+  thin: boolean;
+  rank?: number;
+};
+
+type WallLadderRow = {
+  key: WallBucket; label: string; lo: number; hi: number | null;
+  rate: number | null;         // 0..1
+  ctrl_rate: number | null;    // 0..1 — same bucket, synthetic level, no wall
+  delta: number | null;        // rate - ctrl_rate
+  n_obs: number; n_days: number;
+};
+
+type WallRank = {
+  ok: boolean;
+  reason?: string;
+  as_of?: string;
+  ladder?: WallLadderRow[];
+  ranked?: WallRankLevel[];
+  in_play?: number;
+  median_dist_atr?: number | null;
+};
+
+/** Bucket presentation. Order here is the ladder's order, nearest first. */
+const BUCKET_META: { key: WallBucket; label: string; color: string }[] = [
+  { key: 'on_price', label: "Sitting on price", color: GREEN },
+  { key: 'short_walk', label: "A short walk", color: HOME_THEME.lightBlue },
+  { key: 'solid_move', label: "A solid move", color: C.cyan },
+  { key: 'across_map', label: "Across the map", color: HOME_THEME.gold },
+  { key: 'off_distance', label: "Off in the distance", color: MUTED },
+];
+const BUCKET_BY_KEY = new Map(BUCKET_META.map((b) => [b.key, b]));
+const bucketColor = (b: WallBucket | null | undefined) =>
+  (b && BUCKET_BY_KEY.get(b)?.color) || MUTED;
+const bucketLabel = (b: WallBucket | null | undefined) =>
+  (b && BUCKET_BY_KEY.get(b)?.label) || "—";
+
+/**
+ * Anything past this is not a trade idea for today's session — it's greyed in
+ * the table and dropped from the ranked list. Mirrors the 0.60x "solid move"
+ * edge in walls-reach.js.
+ */
+const IN_PLAY_ATR = 0.60;
+/** Past this the level is noise for the session and the row dims out. */
+const NOISE_ATR = 1.80;
+
+const atrX = (v: number | null | undefined) =>
+  v == null || !Number.isFinite(v) ? "—" : `${v.toFixed(2)}×`;
+const pct0 = (v: number | null | undefined) =>
+  v == null || !Number.isFinite(v) ? "—" : `${Math.round(v * 100)}%`;
+
+/** Short form for a level inside the ranked list: "CB 6900", "Put wall 185". */
+function levelTag(l: WallRankLevel): string {
+  const n = wallStrike(l.strike);
+  return l.level_type === "cb" ? `CB ${n}`
+    : l.level_type === "call_wall" ? `Call wall ${n}` : `Put wall ${n}`;
+}
 type WallTotals = {
   tickers: number; changes: number; hits: number;
   rejects: number; breaks: number; consolidated: number; pins: number; rows: number;
@@ -1582,14 +1666,175 @@ function WallTile({ label, value, sub, color }: { label: string; value: string; 
   );
 }
 
+// ── Reach ladder ─────────────────────────────────────────────────────────────
+//
+// The five distance buckets with their real out-of-sample reach rates, and —
+// the column that matters — the same rate for a synthetic level drawn from the
+// same bucket with no wall behind it. If `delta` is ~0 across the ladder, the
+// wall is not what makes price come; the distance is. The page says so rather
+// than quietly scoring walls as if they were special.
+
+function ReachLadder({ rank }: { rank: WallRank | null }) {
+  const rows = rank?.ladder ?? [];
+  const cov = rows.reduce((n, r) => n + (r.n_obs || 0), 0);
+  const maxAbsDelta = rows.reduce((m, r) => Math.max(m, Math.abs(r.delta ?? 0)), 0);
+
+  return (
+    <div style={{ ...CARD, marginBottom: 16, overflow: "hidden" }}>
+      <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.75 }}>
+          Reach ladder — how often price actually gets there
+        </span>
+        <span style={{ marginLeft: "auto", fontSize: 14, opacity: 0.5, fontFamily: "var(--font-mono)" }}>
+          {rank?.as_of ? `out-of-sample · fitted through ${rank.as_of} · n ${cov.toLocaleString("en-US")}` : "no calibration yet"}
+        </span>
+      </div>
+
+      {!rows.length ? (
+        <div style={{ padding: 18, fontSize: 14, opacity: 0.6 }}>
+          {rank?.reason ?? "No calibration snapshot yet."} Run{" "}
+          <code style={{ fontFamily: "var(--font-mono)", color: C.cyan }}>POST /proxy/walls-reach-run</code>{" "}
+          to build wall_reach and fit the ladder.
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${rows.length}, minmax(0, 1fr))` }}>
+          {rows.map((r, i) => {
+            const meta = BUCKET_BY_KEY.get(r.key);
+            const color = meta?.color ?? MUTED;
+            const pctW = r.rate != null ? Math.max(1, Math.round(r.rate * 100)) : 0;
+            return (
+              <div key={r.key} style={{ padding: "16px 18px", borderRight: i < rows.length - 1 ? `1px solid ${C.border}` : undefined }}>
+                <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color }}>
+                  {meta?.label ?? r.label}
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.45, fontFamily: "var(--font-mono)", marginTop: 3 }}>
+                  {r.hi == null ? `> ${r.lo.toFixed(2)}× ATR` : `${r.lo.toFixed(2)} – ${r.hi.toFixed(2)}× ATR`}
+                </div>
+                <div style={{ fontSize: 30, fontWeight: 800, fontFamily: "var(--font-mono)", marginTop: 10, lineHeight: 1, color }}>
+                  {pct0(r.rate)}
+                </div>
+                <div style={{ height: 6, borderRadius: 99, background: "rgba(255,255,255,0.07)", marginTop: 10, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${pctW}%`, borderRadius: 99, background: color, boxShadow: `0 0 10px ${rgba(color, 0.45)}` }} />
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.5, marginTop: 8, fontFamily: "var(--font-mono)" }}>
+                  n {r.n_obs.toLocaleString("en-US")} · rand {pct0(r.ctrl_rate)} · Δ{" "}
+                  <span style={{ color: Math.abs(r.delta ?? 0) > 0.03 ? HOME_THEME.gold : "inherit" }}>
+                    {r.delta == null ? "—" : `${r.delta >= 0 ? "+" : ""}${Math.round(r.delta * 100)}`}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {rows.length ? (
+        <div style={{ borderTop: `1px solid ${C.border}`, padding: "14px 18px", fontSize: 13, opacity: 0.72, lineHeight: 1.6 }}>
+          <b>rand</b> = a synthetic level drawn from the same bucket, same side, same session — same travel
+          requirement, no dealer positioning behind it.{" "}
+          {maxAbsDelta <= 0.03 ? (
+            <>
+              Across every bucket the real wall and the synthetic level reach at the same rate (max Δ{" "}
+              {Math.round(maxAbsDelta * 100)}pts).{" "}
+              <b style={{ color: HOME_THEME.gold }}>The wall is not what holds — the distance is.</b>{" "}
+              Reach Rank therefore scores distance only; the level type is shown for context and never weighted.
+            </>
+          ) : (
+            <>
+              Largest gap between a real wall and its synthetic control is{" "}
+              <b style={{ color: HOME_THEME.gold }}>{Math.round(maxAbsDelta * 100)} points</b> — big enough to be worth
+              a second look before concluding distance is the whole story.
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ── Ranked levels ────────────────────────────────────────────────────────────
+// Every level in the universe, flattened and sorted by reach score. Anything
+// past IN_PLAY_ATR is dimmed — it is below the "solid move" line for today.
+
+function RankedLevels({ rank, sel, onPick }: { rank: WallRank | null; sel: string | null; onPick: (s: string) => void }) {
+  const rows = (rank?.ranked ?? []).slice(0, 12);
+  return (
+    <div style={{ ...CARD, overflow: "hidden" }}>
+      <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center" }}>
+        <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.75 }}>
+          Ranked levels — in play
+        </span>
+        <span style={{ marginLeft: "auto", fontSize: 14, opacity: 0.5, fontFamily: "var(--font-mono)" }}>
+          {rank?.in_play != null ? `${rank.in_play} inside ${IN_PLAY_ATR.toFixed(2)}×` : "—"}
+        </span>
+      </div>
+
+      {!rows.length ? (
+        <div style={{ padding: 18, fontSize: 14, opacity: 0.6 }}>
+          Nothing ranked for this session yet.
+        </div>
+      ) : rows.map((l, i) => {
+        const color = bucketColor(l.bucket);
+        const dim = l.dist_atr >= IN_PLAY_ATR;
+        return (
+          <div
+            key={`${l.symbol}-${l.level_type}`}
+            onClick={() => onPick(l.symbol)}
+            title={l.score_scope === "symbol"
+              ? `${l.symbol} has ${l.score_days} sessions of its own in this bucket — ${Math.round((l.score_weight ?? 0) * 100)}% of the score is its own history`
+              : "Not enough of this symbol's own history yet — scored off the global bucket rate"}
+            style={{
+              display: "grid", gridTemplateColumns: "34px 1fr auto", gap: 10, alignItems: "center",
+              padding: "10px 18px", borderBottom: `1px solid rgba(255,255,255,0.05)`, cursor: "pointer",
+              opacity: dim ? 0.5 : 1,
+              background: l.symbol === sel ? rgba(C.cyan, 0.08) : undefined,
+              boxShadow: l.symbol === sel ? `inset 2px 0 0 ${C.cyan}` : undefined,
+            }}
+          >
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 800, opacity: 0.4, textAlign: "right" }}>{i + 1}</div>
+            <div style={{ minWidth: 0 }}>
+              <div>
+                <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.03em" }}>{l.symbol}</span>
+                <span style={{ ...wallBadgeStyle(LEVEL_COLOR[l.level_type]), fontSize: 12, padding: "1px 7px", marginLeft: 8 }}>
+                  {levelTag(l)}
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
+                <span style={{ ...wallBadgeStyle(color), fontSize: 12, padding: "1px 7px" }}>{bucketLabel(l.bucket)}</span>
+                <span style={{ fontSize: 12, opacity: 0.55, fontFamily: "var(--font-mono)" }}>
+                  {l.side > 0 ? "+" : "−"}{wallStrike(l.dist_pts)} pts · {atrX(l.dist_atr)} ATR
+                  {l.thin ? " · thin" : ""}
+                </span>
+              </div>
+            </div>
+            <div style={{ textAlign: "right", fontFamily: "var(--font-mono)" }}>
+              <div style={{ fontSize: 19, fontWeight: 800, color }}>{l.score == null ? "—" : Math.round(l.score)}</div>
+              <div style={{ fontSize: 11, opacity: 0.45, letterSpacing: "0.1em", textTransform: "uppercase", fontFamily: "inherit" }}>reach</div>
+            </div>
+          </div>
+        );
+      })}
+
+      {rows.length ? (
+        <div style={{ borderTop: `1px solid ${C.border}`, padding: "14px 18px", fontSize: 13, opacity: 0.72, lineHeight: 1.6 }}>
+          Score is this symbol&rsquo;s own reach rate for the bucket, shrunk toward the global rate until it has
+          enough sessions of its own. Distance is measured on the <b>underlying</b>, never the option.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 type WallFilter = "all" | "changed" | "hit" | "idle";
+type WallSort = "reach" | "distance" | "symbol";
 
 function WallsView() {
   const [date, setDate] = useState(todayETStr());
-  const [day, setDay] = useState<{ totals: WallTotals; tickers: WallTicker[] } | null>(null);
+  const [day, setDay] = useState<{ totals: WallTotals; tickers: WallTicker[]; rank: WallRank | null } | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const [detail, setDetail] = useState<{ symbol: string; log: WallLogRow[]; events: WallEventRow[] } | null>(null);
   const [filter, setFilter] = useState<WallFilter>("all");
+  const [sort, setSort] = useState<WallSort>("reach");
   const [q, setQ] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -1600,7 +1845,11 @@ function WallsView() {
       const r = await fetch(`/proxy/walls?date=${encodeURIComponent(date)}`, { cache: "no-store" });
       const j = await r.json();
       if (!j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setDay({ totals: j.totals, tickers: Array.isArray(j.tickers) ? j.tickers : [] });
+      setDay({
+        totals: j.totals,
+        tickers: Array.isArray(j.tickers) ? j.tickers : [],
+        rank: j.rank ?? null,
+      });
       setSel((prev) => prev ?? j.tickers?.[0]?.symbol ?? null);
     } catch (e) { setErr(String(e)); setDay(null); }
     setLoaded(true);
@@ -1624,14 +1873,37 @@ function WallsView() {
   const shown = useMemo(() => {
     const rows = day?.tickers ?? [];
     const query = q.trim().toUpperCase();
-    return rows.filter((t) => {
+    const filtered = rows.filter((t) => {
       if (query && !t.symbol.includes(query)) return false;
       if (filter === "changed") return t.changes > 0;
       if (filter === "hit") return t.hits > 0;
       if (filter === "idle") return t.hits === 0;
       return true;
     });
-  }, [day, q, filter]);
+
+    // Sorting is a view concern — the server hands back the ranking, the page
+    // decides which axis to read it on. Unranked rows always sink to the
+    // bottom rather than sorting as if they scored zero.
+    const nearest = (t: WallTicker) => t.nearest ?? null;
+    const byReach = (a: WallTicker, b: WallTicker) => {
+      const ra = a.rank ?? Number.MAX_SAFE_INTEGER;
+      const rb = b.rank ?? Number.MAX_SAFE_INTEGER;
+      return ra - rb || a.symbol.localeCompare(b.symbol);
+    };
+    const byDistance = (a: WallTicker, b: WallTicker) => {
+      const da = nearest(a)?.dist_atr ?? Infinity;
+      const db = nearest(b)?.dist_atr ?? Infinity;
+      return da - db || a.symbol.localeCompare(b.symbol);
+    };
+    const bySymbol = (a: WallTicker, b: WallTicker) => a.symbol.localeCompare(b.symbol);
+
+    return [...filtered].sort(
+      sort === "reach" ? byReach : sort === "distance" ? byDistance : bySymbol,
+    );
+  }, [day, q, filter, sort]);
+
+  const rank = day?.rank ?? null;
+  const ranked = rank?.ok === true;
 
   const totals = day?.totals;
   const chipStyle = (on: boolean): React.CSSProperties => ({
@@ -1674,6 +1946,27 @@ function WallsView() {
         </div>
       </div>
 
+      {/* Reach Rank control — sorts the universe by how likely each level is to
+          actually get tagged, given how far away it currently sits. */}
+      <div style={{ ...CARD, padding: "14px 18px", marginBottom: 14, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HOME_THEME.gold }}>
+          Reach Rank
+        </span>
+        <span style={{ fontSize: 14, color: C.label, opacity: 0.7 }}>
+          {ranked
+            ? <>Levels sorted by distance from spot in ATR units × that symbol&rsquo;s out-of-sample reach rate for the bucket</>
+            : <>Not ranked — {rank?.reason ?? "no calibration snapshot for this date"}</>}
+        </span>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, opacity: 0.5, letterSpacing: "0.1em", textTransform: "uppercase" }}>Sort</span>
+          {(["reach", "distance", "symbol"] as WallSort[]).map((s) => (
+            <button key={s} onClick={() => setSort(s)} style={chipStyle(sort === s)} disabled={!ranked && s !== "symbol"}>
+              {s === "reach" ? "Reach score" : s}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {err ? (
         <div style={{ ...CARD, padding: 18, marginBottom: 14, color: RED, fontSize: 14 }}>
           Could not load /proxy/walls — {err}
@@ -1692,7 +1985,13 @@ function WallsView() {
           sub={totals ? `${totals.consolidated} consolidated` : undefined} />
         <WallTile label="Rows written" value={totals ? String(totals.rows) : "—"}
           sub={totals ? `vs ${(totals.tickers * 3 * WALL_SLOTS).toLocaleString("en-US")} if unfiltered` : undefined} />
+        <WallTile label="In play now" value={ranked && rank?.in_play != null ? String(rank.in_play) : "—"}
+          color={HOME_THEME.gold} sub={`levels inside ${IN_PLAY_ATR.toFixed(2)}× ATR`} />
+        <WallTile label="Median dist" value={ranked ? atrX(rank?.median_dist_atr) : "—"}
+          color={HOME_THEME.gold} sub="ATR to nearest level" />
       </div>
+
+      <ReachLadder rank={rank} />
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.35fr) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
         {/* Universe table */}
@@ -1705,62 +2004,94 @@ function WallsView() {
               {loaded ? `${shown.length} of ${day?.tickers.length ?? 0} shown` : "loading…"}
             </span>
           </div>
-          <div style={{ maxHeight: 720, overflow: "auto" }}>
+          <div className="wall-scroll" style={{ maxHeight: 760, overflow: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
+                  <th style={{ ...th, textAlign: "left", width: 38 }}>#</th>
                   <th style={{ ...th, textAlign: "left" }}>Ticker</th>
                   <th style={th}>Spot</th><th style={th}>Put Wall</th><th style={th}>CB</th><th style={th}>Call Wall</th>
+                  <th style={{ ...th, color: HOME_THEME.gold, opacity: 0.85 }}>Nearest</th>
+                  <th style={{ ...th, color: HOME_THEME.gold, opacity: 0.85 }}>×ATR</th>
+                  <th style={{ ...th, color: HOME_THEME.gold, opacity: 0.85 }}>Reach</th>
                   <th style={th}>Chg</th><th style={th}>Last event</th><th style={th}>Reaction</th>
                 </tr>
               </thead>
               <tbody>
-                {shown.map((t) => (
-                  <tr
-                    key={t.symbol}
-                    onClick={() => setSel(t.symbol)}
-                    style={{
-                      cursor: "pointer",
-                      background: t.symbol === sel ? rgba(C.cyan, 0.1) : undefined,
-                      boxShadow: t.symbol === sel ? `inset 2px 0 0 ${C.cyan}` : undefined,
-                    }}
-                  >
-                    <td style={{ ...td, textAlign: "left", fontWeight: 800, letterSpacing: "0.03em" }}>{t.symbol}</td>
-                    <td style={td}>{wallNum(t.spot)}</td>
-                    <td style={{ ...td, color: LEVEL_COLOR.put_wall }}>{wallStrike(t.put_wall)}<WallDelta now={t.put_wall} open={t.open.put_wall} /></td>
-                    <td style={{ ...td, color: LEVEL_COLOR.cb }}>{wallStrike(t.cb)}<WallDelta now={t.cb} open={t.open.cb} /></td>
-                    <td style={{ ...td, color: LEVEL_COLOR.call_wall }}>{wallStrike(t.call_wall)}<WallDelta now={t.call_wall} open={t.open.call_wall} /></td>
-                    <td style={{ ...td, opacity: t.changes ? 1 : 0.35 }}>{t.changes}</td>
-                    <td style={{ ...td, opacity: 0.65 }}>{t.last_event ?? "—"}</td>
-                    <td style={{ ...td, fontFamily: "inherit" }}>{wallBadge(t.reaction, true)}</td>
-                  </tr>
-                ))}
+                {shown.map((t) => {
+                  const n = t.nearest ?? null;
+                  const nc = bucketColor(n?.bucket);
+                  // Past the noise edge the level cannot realistically be
+                  // tagged today — dim the whole row rather than pretend.
+                  const noise = n != null && n.dist_atr >= NOISE_ATR;
+                  return (
+                    <tr
+                      key={t.symbol}
+                      onClick={() => setSel(t.symbol)}
+                      style={{
+                        cursor: "pointer",
+                        opacity: noise ? 0.55 : 1,
+                        background: t.symbol === sel ? rgba(C.cyan, 0.1) : undefined,
+                        boxShadow: t.symbol === sel ? `inset 2px 0 0 ${C.cyan}` : undefined,
+                      }}
+                    >
+                      <td style={{ ...td, textAlign: "left", opacity: 0.4 }}>{t.rank ?? "—"}</td>
+                      <td style={{ ...td, textAlign: "left", fontWeight: 800, letterSpacing: "0.03em" }}>{t.symbol}</td>
+                      <td style={td}>{wallNum(t.spot)}</td>
+                      <td style={{ ...td, color: LEVEL_COLOR.put_wall }}>{wallStrike(t.put_wall)}<WallDelta now={t.put_wall} open={t.open.put_wall} /></td>
+                      <td style={{ ...td, color: LEVEL_COLOR.cb }}>{wallStrike(t.cb)}<WallDelta now={t.cb} open={t.open.cb} /></td>
+                      <td style={{ ...td, color: LEVEL_COLOR.call_wall }}>{wallStrike(t.call_wall)}<WallDelta now={t.call_wall} open={t.open.call_wall} /></td>
+                      <td style={{ ...td, color: n ? LEVEL_COLOR[n.level_type] : undefined, opacity: n ? 1 : 0.35 }}>
+                        {n ? levelTag(n) : "—"}
+                      </td>
+                      <td style={{ ...td, color: nc, fontWeight: 800 }}>{atrX(n?.dist_atr)}</td>
+                      <td style={{ ...td, color: nc, fontWeight: 800 }}
+                        title={n?.score_scope === "global" ? "Scored off the global bucket rate — not enough of this symbol's own history yet" : undefined}>
+                        {n?.score == null ? "—" : `${Math.round(n.score)}%`}
+                        {n?.thin ? <span style={{ opacity: 0.5, fontSize: 12 }}> ·thin</span> : null}
+                      </td>
+                      <td style={{ ...td, opacity: t.changes ? 1 : 0.35 }}>{t.changes}</td>
+                      <td style={{ ...td, opacity: 0.65 }}>{t.last_event ?? "—"}</td>
+                      <td style={{ ...td, fontFamily: "inherit" }}>{wallBadge(t.reaction, true)}</td>
+                    </tr>
+                  );
+                })}
                 {loaded && !shown.length ? (
-                  <tr><td colSpan={8} style={{ ...td, textAlign: "center", padding: "34px 0", opacity: 0.5, fontFamily: "inherit" }}>
+                  <tr><td colSpan={12} style={{ ...td, textAlign: "center", padding: "34px 0", opacity: 0.5, fontFamily: "inherit" }}>
                     No rows for {date}. The recorder writes from 09:29 ET on trading days.
                   </td></tr>
                 ) : null}
               </tbody>
             </table>
           </div>
+          {ranked ? (
+            <div style={{ borderTop: `1px solid ${C.border}`, padding: "14px 18px", fontSize: 13, opacity: 0.72, lineHeight: 1.6 }}>
+              Rows inside <b>{IN_PLAY_ATR.toFixed(2)}× ATR</b> are the session&rsquo;s live levels. Rows past{" "}
+              <b>{NOISE_ATR.toFixed(2)}× ATR</b> are dimmed — noise for today, and excluded from alerts.
+            </div>
+          ) : null}
         </div>
 
-        {/* Per-ticker level log */}
-        <div style={{ ...CARD, overflow: "hidden" }}>
-          <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center" }}>
-            <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.75 }}>
-              {sel ?? "—"} — level log
-            </span>
-            <span style={{ marginLeft: "auto", fontSize: 14, opacity: 0.7, fontFamily: "var(--font-mono)" }}>
-              {wallNum(day?.tickers.find((t) => t.symbol === sel)?.spot ?? null)}
-            </span>
-          </div>
-          <WallCaptureRail log={detail?.log ?? []} events={detail?.events ?? []} />
-          <WallTimeline log={detail?.log ?? []} events={detail?.events ?? []} />
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "14px 18px", borderTop: `1px solid ${C.border}` }}>
-            {(Object.keys(REACTION_LABEL) as WallReaction[]).map((rx) => (
-              <span key={rx} title={REACTION_RULE[rx]}>{wallBadge(rx)}</span>
-            ))}
+        {/* Ranked levels + the selected ticker's log */}
+        <div className="wall-scroll" style={{ display: "flex", flexDirection: "column", gap: 16, maxHeight: 760, overflow: "auto" }}>
+          <RankedLevels rank={rank} sel={sel} onPick={setSel} />
+
+          <div style={{ ...CARD, overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center" }}>
+              <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.75 }}>
+                {sel ?? "—"} — level log
+              </span>
+              <span style={{ marginLeft: "auto", fontSize: 14, opacity: 0.7, fontFamily: "var(--font-mono)" }}>
+                {wallNum(day?.tickers.find((t) => t.symbol === sel)?.spot ?? null)}
+              </span>
+            </div>
+            <WallCaptureRail log={detail?.log ?? []} events={detail?.events ?? []} />
+            <WallTimeline log={detail?.log ?? []} events={detail?.events ?? []} />
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "14px 18px", borderTop: `1px solid ${C.border}` }}>
+              {(Object.keys(REACTION_LABEL) as WallReaction[]).map((rx) => (
+                <span key={rx} title={REACTION_RULE[rx]}>{wallBadge(rx)}</span>
+              ))}
+            </div>
           </div>
         </div>
       </div>
