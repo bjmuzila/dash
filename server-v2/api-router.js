@@ -5996,6 +5996,216 @@ if (libDb) {
     });
   }
 
+
+  // /api/budget/real — owner-only "Real Month" store: transactions read off an
+  // actual bank/card statement, kept in budget_statement_tx.
+  //
+  // This is deliberately NOT the register. budget_register is the plan (expected
+  // payments + recurring rules projected forward); this table is what actually
+  // cleared. Overview and Payments never read it, so importing a statement can
+  // never double-count against the plan. The one bridge between the two is the
+  // 'pushSubscription' action, which promotes ONE detected subscription into the
+  // register as a recurring rule — an explicit, per-item decision.
+  //
+  // GET  ?month=YYYY-MM  → { month, tx, subscriptions, categories, months }
+  // POST { action: import | updateTx | setTxCategory | deleteTx | clearMonth
+  //                | setSubscription | pushSubscription }
+  {
+    const BUDGET_PROFILE_KEY = 'owner';
+    const currentMonth = () => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`; };
+    const normBank = (v) => (v === 'coastal' || v === 'truist' ? v : 'secu');
+    const normStatus = (v) => (v === 'keep' || v === 'cancel' ? v : 'watch');
+    // Stable identity for a merchant across imports and spelling drift.
+    const merchantKey = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 60);
+    // Two imports covering the same week must not produce two copies of a row.
+    const dedupeKey = (r) => `${r.tx_date}|${Number(r.amount).toFixed(2)}|${r.direction}|${String(r.description || '').trim().toLowerCase().slice(0, 60)}`;
+
+    register('/api/budget/real', {
+      auth: 'owner', methods: ['GET', 'POST'],
+      async handler(req, res) {
+        try {
+          const D = libDb;
+          await D.adoptDefaultBudgetProfile(BUDGET_PROFILE_KEY);
+          const profile = await D.getOrCreateBudgetProfile(BUDGET_PROFILE_KEY);
+
+          if (req.method === 'GET') {
+            const month = new URL(req.url || '/', 'http://localhost').searchParams.get('month') || currentMonth();
+            const [tx, subscriptions, categories, months] = await Promise.all([
+              D.listStatementTx(profile.id, month),
+              D.listSubscriptions(profile.id),
+              D.listBudgetCategories(profile.id),
+              D.listStatementMonths(profile.id),
+            ]);
+            send(res, 200, { profile, month, tx, subscriptions, categories, months });
+            return;
+          }
+
+          const body = await readJson(req, 8_000_000);
+          const action = String(body?.action ?? '');
+
+          if (action === 'import') {
+            const month = String(body?.month ?? currentMonth()).slice(0, 7);
+            const source = body?.source ? String(body.source).slice(0, 120) : null;
+            const rows = Array.isArray(body?.rows) ? body.rows : [];
+            let inserted = 0, skipped = 0;
+            for (const r of rows) {
+              const tx_date = String(r?.date ?? '').slice(0, 10);
+              const amount = Math.abs(Number(r?.amount ?? 0));
+              const description = String(r?.description ?? '').slice(0, 200);
+              if (!/^\d{4}-\d{2}-\d{2}$/.test(tx_date) || !Number.isFinite(amount) || amount <= 0) { skipped++; continue; }
+              const rec = {
+                profile_id: profile.id,
+                // File the row under the month it actually fell in, not the month
+                // the import was started from — a statement can straddle two.
+                month: tx_date.slice(0, 7),
+                tx_date,
+                description,
+                merchant: String(r?.merchant ?? description).slice(0, 80),
+                amount,
+                direction: r?.direction === 'in' ? 'in' : 'out',
+                category_id: r?.categoryId == null ? null : Number(r.categoryId),
+                is_recurring: r?.recurring ? 1 : 0,
+                bank: normBank(r?.bank),
+                source,
+              };
+              rec.dedupe_key = dedupeKey(rec);
+              const out = await D.insertStatementTx(rec);
+              if (out) inserted++; else skipped++;
+            }
+            send(res, 200, { ok: true, inserted, skipped, month });
+            return;
+          }
+
+          if (action === 'updateTx') {
+            await D.updateStatementTx(profile.id, Number(body?.id ?? 0), {
+              tx_date: body?.date != null ? String(body.date) : undefined,
+              description: body?.description != null ? String(body.description) : undefined,
+              merchant: body?.merchant != null ? String(body.merchant) : undefined,
+              amount: body?.amount != null ? Math.abs(Number(body.amount)) : undefined,
+              direction: body?.direction != null ? (body.direction === 'in' ? 'in' : 'out') : undefined,
+              is_recurring: body?.recurring != null ? (body.recurring ? 1 : 0) : undefined,
+            });
+            send(res, 200, { ok: true }); return;
+          }
+
+          if (action === 'setTxCategory') {
+            const catId = body?.categoryId == null || body.categoryId === '' ? null : Number(body.categoryId);
+            await D.setStatementTxCategory(profile.id, Number(body?.id ?? 0), catId);
+            send(res, 200, { ok: true }); return;
+          }
+
+          if (action === 'deleteTx') {
+            await D.deleteStatementTx(profile.id, Number(body?.id ?? 0));
+            send(res, 200, { ok: true }); return;
+          }
+
+          if (action === 'clearMonth') {
+            const removed = await D.clearStatementMonth(profile.id, String(body?.month ?? '').slice(0, 7));
+            send(res, 200, { ok: true, removed }); return;
+          }
+
+          if (action === 'setSubscription') {
+            const merchant = String(body?.merchant ?? '').trim().slice(0, 80);
+            if (!merchant) { send(res, 400, { error: 'merchant required' }); return; }
+            const row = await D.upsertSubscription({
+              profile_id: profile.id,
+              merchant_key: merchantKey(merchant),
+              merchant,
+              status: normStatus(body?.status),
+              note: body?.note != null ? String(body.note).slice(0, 300) : null,
+            });
+            send(res, 200, { ok: true, subscription: row }); return;
+          }
+
+          // The one bridge into the plan: promote a single subscription into the
+          // Payments register as a monthly recurring rule. Deliberately per-item —
+          // a bulk push is what would double-count the statement against the plan.
+          if (action === 'pushSubscription') {
+            const merchant = String(body?.merchant ?? '').trim().slice(0, 60);
+            const amount = Math.abs(Number(body?.amount ?? 0));
+            if (!merchant || !Number.isFinite(amount) || amount <= 0) { send(res, 400, { error: 'merchant and amount required' }); return; }
+            const anchor = /^\d{4}-\d{2}-\d{2}$/.test(String(body?.anchorDate ?? '')) ? String(body.anchorDate) : `${currentMonth()}-01`;
+            const rule = await D.insertRecurring({
+              profile_id: profile.id,
+              label: merchant.toUpperCase(),
+              bank: normBank(body?.bank),
+              // The register stores signed amounts; a subscription is money out.
+              amount: -amount,
+              frequency: 'monthly',
+              anchor_date: anchor,
+            });
+            const sub = await D.upsertSubscription({
+              profile_id: profile.id,
+              merchant_key: merchantKey(merchant),
+              merchant,
+              status: normStatus(body?.status ?? 'keep'),
+              pushed_recurring_id: rule?.id ?? null,
+            });
+            send(res, 200, { ok: true, rule, subscription: sub }); return;
+          }
+
+          send(res, 400, { error: 'Unknown action' });
+        } catch (err) {
+          send(res, 500, { error: req.method === 'GET' ? 'Real Month load failed' : 'Real Month save failed', detail: String(err?.message || err) });
+        }
+      },
+    });
+  }
+
+  // /api/budget/register-imports — undo a bulk write into the Payments
+  // register. An earlier version of the statement importer committed parsed
+  // rows straight into budget_register, which double-counts anything that is
+  // also in the plan. This lists rows grouped by the minute they were INSERTed
+  // (a bulk import is one burst) and deletes a chosen burst.
+  //
+  // Deliberately preview-first: a manual single-row add looks like a 1-row
+  // batch, so the client shows count, total and sample labels before anything
+  // is removed. Beginning-balance rows are excluded at the query level.
+  //
+  // GET                     → { batches: [...] }
+  // POST { action: 'preview' | 'delete', from, to }
+  {
+    const BUDGET_PROFILE_KEY = 'owner';
+    register('/api/budget/register-imports', {
+      auth: 'owner', methods: ['GET', 'POST'],
+      async handler(req, res) {
+        try {
+          const D = libDb;
+          await D.adoptDefaultBudgetProfile(BUDGET_PROFILE_KEY);
+          const profile = await D.getOrCreateBudgetProfile(BUDGET_PROFILE_KEY);
+
+          if (req.method === 'GET') {
+            const days = Number(new URL(req.url || '/', 'http://localhost').searchParams.get('days') || 90);
+            const batches = await D.listRegisterInsertBatches(profile.id, Number.isFinite(days) ? Math.min(365, Math.max(1, days)) : 90);
+            send(res, 200, { batches });
+            return;
+          }
+
+          const body = await readJson(req);
+          const action = String(body?.action ?? '');
+          const from = String(body?.from ?? '');
+          const to = String(body?.to ?? '');
+          if (!from || !to) { send(res, 400, { error: 'from and to required' }); return; }
+
+          if (action === 'preview') {
+            const rows = await D.listRegisterRowsInWindow(profile.id, from, to);
+            send(res, 200, { rows });
+            return;
+          }
+          if (action === 'delete') {
+            const rows = await D.listRegisterRowsInWindow(profile.id, from, to);
+            const removed = await D.deleteRegisterRowsInWindow(profile.id, from, to);
+            send(res, 200, { ok: true, removed, rows });
+            return;
+          }
+          send(res, 400, { error: 'Unknown action' });
+        } catch (err) {
+          send(res, 500, { error: 'Register import undo failed', detail: String(err?.message || err) });
+        }
+      },
+    });
+  }
+
   // /api/watch — owner options-watchlist tracker. GET (list / ?history=id /
   // ?quote=...) + POST {action: add|remove|refresh}. Live data via in-process
   // /proxy/probe-rest. Ported verbatim from app/api/watch/route.ts. Owner-only.

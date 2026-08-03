@@ -91,16 +91,31 @@ const toLocalInput = (ts: number) => {
 const fromLocalInput = (v: string) => { const t = new Date(v).getTime(); return Number.isFinite(t) ? t : Date.now(); };
 
 // Data-viz encodings (win/loss cells + chart series). Gain/loss is a strict
-// green-or-red convention on this page — NOT sourced from HOME_THEME.green,
+// gain-or-loss convention on this page — NOT sourced from HOME_THEME.green,
 // which is actually a pale BLUE (#8ECAE6, shared chrome for other pages) and
 // would read as "gain = blue" here. red still comes from the theme since
 // HOME_THEME.red is a real red.
-const T = { green: "#22C55E", red: HT.red };
+//
+// `green` is MINT (#2DD4A7), not the old signal green (#22C55E). At the volume
+// this page uses it — every bar, cell, calendar tile, chart series — the pure
+// green read as an alarm going off in the corner of your eye. Mint sits in the
+// same cyan family as the rest of the app, so gains stop shouting and the page
+// reads as one surface. Keep the pair together: mint gains, theme red losses.
+const T = { green: "#2DD4A7", red: HT.red };
 
 // Secondary text. Full white — hierarchy on this page is carried by SIZE and
 // WEIGHT (11px/800 caps labels vs 29px/700 values), not by dimming, so a
 // half-opacity gray just made captions hard to read on a dark panel.
 const SOFT = HT.text;
+
+/**
+ * Digest chrome text. The collapsed rows put a LOT of sentences on screen at
+ * once, and at that density full white is the thing that reads as "words in
+ * your face". DIM is for row summaries, axis ticks and captions ONLY — every
+ * value, label and verdict still uses SOFT/HT.text, so hierarchy is unchanged
+ * where it matters. Do not swap SOFT for this wholesale.
+ */
+const DIM = "rgba(255,255,255,0.62)";
 
 /**
  * Page-local flat card. The shared Card carries a faint radial highlight + drop
@@ -347,7 +362,15 @@ export default function TradingPage() {
   const [modalErr, setModalErr] = useState("");
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; });
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  /** Tables start CLOSED. The digest rows above already carry the findings;
+   *  four expanded tables underneath is the wall this layout exists to kill. */
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({
+    accounts: true, targets: true, log: true, trades: true,
+  });
+  /** The one open digest row (null = everything collapsed). One at a time. */
+  const [openRow, setOpenRow] = useState<string | null>(null);
+  /** Which chart the single picker card is showing. */
+  const [chartKey, setChartKey] = useState("cum");
 
   // CSV import
   const fileRef = useRef<HTMLInputElement>(null);
@@ -1091,27 +1114,9 @@ export default function TradingPage() {
   };
   const chartOrder = ["pf", "cum", "dd", "pnl", "winloss", "expectancy", "dist", "weekday"];
 
-  const chartCard = (key: string, big = false) => {
-    const def = chartDefs[key];
-    const w = big ? 720 : CH_W, h = big ? 340 : CH_H;
-    return (
-      <Card key={key} padding={16} style={big ? { width: "100%" } : undefined}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ ...titleStyle, color: def.accent, marginBottom: 0 }}>
-            {def.title} {def.value}
-          </div>
-          {!big && (
-            <button
-              onClick={() => setExpandedChart(key)}
-              title="Expand"
-              style={{ background: "none", border: "none", color: HT.muted, cursor: "pointer", fontSize: 15, padding: "2px 4px", lineHeight: 1 }}
-            >⤢</button>
-          )}
-        </div>
-        <div style={{ marginTop: 10 }}>{def.render(w, h)}</div>
-      </Card>
-    );
-  };
+  // chartCard() is gone — the eight-across strip it rendered was replaced by
+  // a single picker card (see the Charts section below). Pop-out still lives in
+  // the expandedChart modal, which reads chartDefs directly.
 
   // ── Insight-card primitives ────────────────────────────────────────────────
   // Deliberately UNTINTED: no accent background, no colored rail, no gradient.
@@ -1136,26 +1141,82 @@ export default function TradingPage() {
    * sentence that says what the numbers mean. A card without a verdict is the
    * thing we were trying to get away from.
    */
-  const insightCard = (
-    label: string, right: React.ReactNode, body: React.ReactNode,
-    verdict: React.ReactNode, tone: keyof typeof VERDICT_TONE = "info",
-    span?: React.CSSProperties,
+  /** Row label — neutral, so every row reads as one system. */
+  const digestLabelStyle: React.CSSProperties = {
+    fontSize: 11, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: DIM,
+  };
+
+  /**
+   * DIGEST ROW — the collapsed form of a finding, and the whole point of this
+   * layout. At rest a finding is ONE LINE: tone dot · name · headline metric ·
+   * the verdict in a short sentence. Click and the full body (bars, pills,
+   * comparison) unfolds in place, with the long-form verdict beside it.
+   *
+   * Only ONE row is open at a time — that invariant is what stops the page
+   * drifting back into a wall of simultaneous cards. Color at rest is a 7px
+   * dot and the metric; nothing else is tinted until you open it.
+   *
+   * `wide` puts the body full-width with the verdict beneath, for the two
+   * findings whose body is a chart strip / heat map rather than a bar stack.
+   */
+  const digestRow = (
+    key: string, label: string, metric: React.ReactNode, say: React.ReactNode,
+    tone: keyof typeof VERDICT_TONE, body: React.ReactNode, verdict: React.ReactNode,
+    wide = false,
   ) => {
-    const color = VERDICT_TONE[tone] ?? SOFT;
+    const color = VERDICT_TONE[tone] ?? DIM;
+    const open = openRow === key;
     return (
-      <Card padding={16} style={{ display: "flex", flexDirection: "column", minHeight: 168, ...span }}>
-        <div style={insightLabelStyle}>
-          <span>{label}</span>
-          {right != null && <span style={{ fontWeight: 700, color: SOFT }}>{right}</span>}
+      <div key={key}>
+        <div
+          className="journal-digest-row"
+          onClick={() => setOpenRow(open ? null : key)}
+          style={{
+            display: "grid", gridTemplateColumns: "9px minmax(150px, 200px) 128px 1fr 18px",
+            gap: 14, alignItems: "center", padding: "14px 18px", cursor: "pointer",
+            background: open ? "rgba(255,255,255,0.045)" : "transparent",
+            transition: "background .15s",
+          }}
+        >
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: color, display: "block" }} />
+          <span style={{ fontSize: 14, fontWeight: 650, color: HT.text }}>{label}</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{metric}</span>
+          <span style={{ fontSize: 12.5, color: DIM, lineHeight: 1.45 }}>{say}</span>
+          <span style={{
+            fontSize: 13, color: DIM, textAlign: "right", display: "inline-block",
+            transition: "transform .2s", transform: open ? "rotate(90deg)" : "none",
+          }}>›</span>
         </div>
-        <div style={{ marginTop: 11, flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>{body}</div>
-        <div style={{
-          marginTop: "auto", paddingTop: 11, borderTop: `1px solid ${HT.border}`,
-          fontSize: 12, lineHeight: 1.5, color,
-        }}>{verdict}</div>
-      </Card>
+        {open && (
+          <div className="journal-digest-open" style={{ padding: "16px 18px 20px 41px", borderTop: `1px solid ${HT.border}`, background: "rgba(0,0,0,0.22)" }}>
+            {wide ? (
+              <>
+                {body}
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${HT.border}`, fontSize: 13, lineHeight: 1.6, color }}>{verdict}</div>
+              </>
+            ) : (
+              <div className="journal-digest-body" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 26 }}>
+                <div>{body}</div>
+                <div style={{ borderLeft: `1px solid ${HT.border}`, paddingLeft: 24 }}>
+                  <div style={digestLabelStyle}>What it means</div>
+                  <div style={{ fontSize: 13, lineHeight: 1.6, color, marginTop: 9 }}>{verdict}</div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     );
   };
+
+  /** The surface the rows live on — ONE bordered card, not six. */
+  const digestList = (rows: React.ReactNode[]) => (
+    <Card padding={0} style={{ overflow: "hidden" }}>
+      {rows.map((r, i) => (
+        <div key={i} style={{ borderBottom: i < rows.length - 1 ? `1px solid ${HT.border}` : "none" }}>{r}</div>
+      ))}
+    </Card>
+  );
 
   /** Label · proportional track · value. The comparison IS the card. */
   const barRow = (label: string, pct: number, value: React.ReactNode, color: string, key?: string) => (
@@ -1258,11 +1319,11 @@ export default function TradingPage() {
         )}
 
         {/* ── FINDINGS, not figures ──────────────────────────────────
-            Replaces the old nine-bare-number KPI strip. Every card below
+            Replaces the old nine-bare-number KPI strip. Every finding below
             compares two slices of the same trades and closes with a verdict
-            sentence. Card surfaces are intentionally untinted — see
-            insightCard(). Sourced from per-trade fills, so it only appears
-            once a broker CSV has been imported. */}
+            sentence — and at rest each one is a single line, not a card. See
+            digestRow(). Sourced from per-trade fills, so it only appears once
+            a broker CSV has been imported. */}
         {leaks.n === 0 ? (
           <Card padding={16}>
             <div style={insightLabelStyle}><span>Findings</span></div>
@@ -1275,16 +1336,18 @@ export default function TradingPage() {
         ) : (
           <>
             {/* ── 1 · LEAK FINDERS ─────────────────────────────────────── */}
-            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase", color: SOFT, marginTop: 4 }}>
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase", color: DIM, marginTop: 4 }}>
               Leaks — where the money goes
             </div>
-            <div className="journal-kpis" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
+            {digestList([
 
-              {/* Hold-time asymmetry */}
-              {insightCard("Hold-time asymmetry",
-                leaks.holdRatio ? `${leaks.holdRatio.toFixed(1)}×` : null,
+              /* Hold-time asymmetry */
+              digestRow("holdtime", "Hold-time asymmetry",
+                leaks.holdRatio ? `${leaks.holdRatio.toFixed(1)}×` : "—",
+                <>Avg loser {fmtDur(leaks.avgLossDur)} vs winner {fmtDur(leaks.avgWinDur)}.</>,
+                leaks.holdRatio > 1.4 ? "bad" : "good",
                 <>
-                  {bigVal(<>{fmtDur(leaks.avgLossDur)} <span style={{ fontSize: ".45em", color: SOFT, fontWeight: 600 }}>avg loser</span></>)}
+                  {bigVal(<>{fmtDur(leaks.avgLossDur)} <span style={{ fontSize: ".45em", color: DIM, fontWeight: 600 }}>avg loser</span></>)}
                   <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 12 }}>
                     {barRow("Winners", pctOf(leaks.avgWinDur, Math.max(leaks.avgWinDur, leaks.avgLossDur)), fmtDur(leaks.avgWinDur), T.green)}
                     {barRow("Losers", pctOf(leaks.avgLossDur, Math.max(leaks.avgWinDur, leaks.avgLossDur)), fmtDur(leaks.avgLossDur), T.red)}
@@ -1293,12 +1356,15 @@ export default function TradingPage() {
                 </>,
                 leaks.holdRatio > 1.4
                   ? <>Cutting the {leaks.nursedCt} long-held losers: {strong(fmt$(leaks.nursedExcess), T.green)}</>
-                  : <>Hold times are symmetric.</>,
-                leaks.holdRatio > 1.4 ? "bad" : "good")}
+                  : <>Hold times are symmetric.</>),
 
-              {/* Overtrading curve */}
-              {insightCard("Overtrading curve",
-                leaks.deadFrom ? `edge dies at #${leaks.deadFrom.lo}` : "holds up",
+              /* Overtrading curve */
+              digestRow("overtrading", "Overtrading curve",
+                leaks.deadFrom ? `dies at #${leaks.deadFrom.lo}` : "holds up",
+                leaks.deadFrom
+                  ? <>{leaks.pastCt} trades taken past the cut.</>
+                  : <>Every trade bucket is profitable.</>,
+                leaks.deadFrom && leaks.pastCtLoss < 0 ? "bad" : leaks.deadFrom ? "warn" : "good",
                 <>
                   <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                     {leaks.seqRows.map((r) => barRow(
@@ -1313,47 +1379,13 @@ export default function TradingPage() {
                   ? <>Hard stop at {leaks.deadFrom.lo - 1} trades: {strong(fmt$(-leaks.pastCtLoss), T.green)}</>
                   : leaks.deadFrom
                     ? <>First red bucket at #{leaks.deadFrom.lo}, but the tail recovers.</>
-                    : <>Every bucket profitable.</>,
-                leaks.deadFrom && leaks.pastCtLoss < 0 ? "bad" : leaks.deadFrom ? "warn" : "good")}
+                    : <>Every bucket profitable.</>),
 
-              {/* Revenge trades */}
-              {insightCard("Revenge trades", "<5 min after a loss",
-                <>
-                  {bigVal(winTxt(leaks.revWinPct), leaks.revWinPct != null && leaks.revWinPct < leaks.baseWin ? T.red : T.green)}
-                  {subLine(<>{leaks.revCt} trades re-entered within 5 min of a loss</>)}
-                  <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 12 }}>
-                    {barRow("Baseline", leaks.baseWin, `${leaks.baseWin.toFixed(0)}%`, T.green)}
-                    {barRow("Revenge", leaks.revWinPct ?? 0, winTxt(leaks.revWinPct), (leaks.revWinPct ?? 0) < leaks.baseWin ? T.red : T.green)}
-                  </div>
-                  {pillRow([<>Net {strong(fmt$(leaks.revPnl), leaks.revPnl >= 0 ? T.green : T.red)}</>, <>{leaks.revShare.toFixed(0)}% of trades</>])}
-                </>,
-                leaks.revCt === 0
-                  ? <>No quick re-entries. Discipline already there.</>
-                  : leaks.revPnl < 0
-                    ? <>A 5-minute cooldown after a loss: {strong(fmt$(-leaks.revPnl), T.green)}</>
-                    : <>Quick re-entries aren&apos;t costing you.</>,
-                leaks.revCt === 0 ? "good" : leaks.revPnl < 0 ? "bad" : "info")}
-
-              {/* Fee drag */}
-              {insightCard("Fee drag",
-                leaks.feePct != null ? `${leaks.feePct.toFixed(1)}% of gross` : null,
-                <>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                    {barRow("Gross", 100, fmt$(leaks.gross), LIGHT_BLUE)}
-                    {barRow("Fees", pctOf(leaks.fees, Math.max(leaks.gross, 1)), fmt$(-leaks.fees), HT.orange)}
-                    {barRow("Net", pctOf(leaks.net, Math.max(leaks.gross, 1)), fmt$(leaks.net), leaks.net >= 0 ? T.green : T.red)}
-                  </div>
-                  {pillRow([<>{fmt$(leaks.feePerTrade)} / trade</>, <>{leaks.n} trades</>])}
-                </>,
-                leaks.feePct == null
-                  ? <>No commission data on the fills.</>
-                  : leaks.feePct > 10
-                    ? <>One dollar in {Math.round(100 / leaks.feePct)} goes to fees.</>
-                    : <>Fees aren&apos;t the leak.</>,
-                leaks.feePct != null && leaks.feePct > 10 ? "warn" : "info")}
-
-              {/* Loss-cap discipline */}
-              {insightCard("Loss-cap discipline", `${leaks.worstCt} outliers`,
+              /* Loss-cap discipline */
+              digestRow("losscap", "Loss-cap discipline",
+                `${leaks.worstCt} outliers`,
+                <>Worst {leaks.worstCt} total {fmt$(leaks.worstSum)}{leaks.worstShare != null ? ` — ${leaks.worstShare.toFixed(0)}% of gross losses` : ""}.</>,
+                leaks.worstShare != null && leaks.worstShare > 25 ? "bad" : "good",
                 <>
                   {bigVal(fmt$(leaks.worstSum), T.red)}
                   {subLine(<>worst {leaks.worstCt} · {strong(leaks.avgLoss ? `${(leaks.worstCt ? (leaks.worstSum / leaks.worstCt) / leaks.avgLoss : 0).toFixed(1)}×` : "—")} the {fmt$(leaks.avgLoss)} average</>)}
@@ -1368,11 +1400,56 @@ export default function TradingPage() {
                 </>,
                 leaks.worstShare != null && leaks.worstShare > 25
                   ? <>Cap those {leaks.worstCt} and net goes {strong(fmt$(leaks.cappedNet), T.green)}</>
-                  : <>No outlier losses. Stops are working.</>,
-                leaks.worstShare != null && leaks.worstShare > 25 ? "bad" : "good")}
+                  : <>No outlier losses. Stops are working.</>),
 
-              {/* Size discipline */}
-              {insightCard("Size discipline", leaks.sizeInverted ? "inverted" : "aligned",
+              /* Revenge trades */
+              digestRow("revenge", "Revenge trades",
+                winTxt(leaks.revWinPct),
+                <>{leaks.revCt} re-entries within 5 min of a loss · {leaks.baseWin.toFixed(0)}% baseline.</>,
+                leaks.revCt === 0 ? "good" : leaks.revPnl < 0 ? "bad" : "info",
+                <>
+                  {bigVal(winTxt(leaks.revWinPct), leaks.revWinPct != null && leaks.revWinPct < leaks.baseWin ? T.red : T.green)}
+                  {subLine(<>{leaks.revCt} trades re-entered within 5 min of a loss</>)}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 12 }}>
+                    {barRow("Baseline", leaks.baseWin, `${leaks.baseWin.toFixed(0)}%`, T.green)}
+                    {barRow("Revenge", leaks.revWinPct ?? 0, winTxt(leaks.revWinPct), (leaks.revWinPct ?? 0) < leaks.baseWin ? T.red : T.green)}
+                  </div>
+                  {pillRow([<>Net {strong(fmt$(leaks.revPnl), leaks.revPnl >= 0 ? T.green : T.red)}</>, <>{leaks.revShare.toFixed(0)}% of trades</>])}
+                </>,
+                leaks.revCt === 0
+                  ? <>No quick re-entries. Discipline already there.</>
+                  : leaks.revPnl < 0
+                    ? <>A 5-minute cooldown after a loss: {strong(fmt$(-leaks.revPnl), T.green)}</>
+                    : <>Quick re-entries aren&apos;t costing you.</>),
+
+              /* Fee drag */
+              digestRow("fees", "Fee drag",
+                leaks.feePct != null ? `${leaks.feePct.toFixed(1)}%` : "—",
+                <>{fmt$(leaks.fees)} across {leaks.n} trades · {fmt$(leaks.feePerTrade)} each.</>,
+                leaks.feePct != null && leaks.feePct > 10 ? "warn" : "info",
+                <>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                    {barRow("Gross", 100, fmt$(leaks.gross), LIGHT_BLUE)}
+                    {barRow("Fees", pctOf(leaks.fees, Math.max(leaks.gross, 1)), fmt$(-leaks.fees), HT.orange)}
+                    {barRow("Net", pctOf(leaks.net, Math.max(leaks.gross, 1)), fmt$(leaks.net), leaks.net >= 0 ? T.green : T.red)}
+                  </div>
+                  {pillRow([<>{fmt$(leaks.feePerTrade)} / trade</>, <>{leaks.n} trades</>])}
+                </>,
+                leaks.feePct == null
+                  ? <>No commission data on the fills.</>
+                  : leaks.feePct > 10
+                    ? <>One dollar in {Math.round(100 / leaks.feePct)} goes to fees.</>
+                    : <>Fees aren&apos;t the leak.</>),
+
+              /* Size discipline */
+              digestRow("size", "Size discipline",
+                leaks.sizeInverted ? "inverted" : "aligned",
+                leaks.sizeRows.length < 2
+                  ? <>One size only — nothing to compare.</>
+                  : leaks.sizeInverted
+                    ? <>Win rate falls as size rises.</>
+                    : <>Win rate holds as size rises.</>,
+                leaks.sizeRows.length < 2 ? "info" : leaks.sizeInverted ? "bad" : "good",
                 <>
                   <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                     {leaks.sizeRows.map((r) => barRow(
@@ -1387,23 +1464,23 @@ export default function TradingPage() {
                   ? <>One size only — nothing to compare.</>
                   : leaks.sizeInverted
                     ? <>Biggest size, worst win rate.</>
-                    : <>Size and conviction aligned.</>,
-                leaks.sizeRows.length < 2 ? "info" : leaks.sizeInverted ? "bad" : "good")}
-            </div>
+                    : <>Size and conviction aligned.</>),
+            ])}
 
             {/* ── 2 · WHEN YOU ACTUALLY WIN ────────────────────────────── */}
-            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase", color: SOFT, marginTop: 4 }}>
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".14em", textTransform: "uppercase", color: DIM, marginTop: 4 }}>
               The clock — when the money is made
             </div>
-            <div className="journal-tod" style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
+            {digestList([
 
-              {/* Session P&L by 30 min */}
-              {insightCard("Session P&L by 30 min", `${tod.buckets.length ? tod.buckets[0].label : ""}–${tod.buckets.length ? tod.buckets[tod.buckets.length - 1].label : ""}`,
-                // Columns stretch to whatever height the card ends up at (the
-                // right-hand stack usually sets it), so the strip fills the
-                // card instead of floating in dead space. Bar heights are % of
-                // the flex-sized region, not fixed px, for the same reason.
-                <div style={{ flex: 1, display: "flex", gap: 3, alignItems: "stretch", minHeight: 230 }}>
+              /* Session P&L by 30 min */
+              digestRow("session", "Session P&L by 30 min",
+                `${tod.buckets.length ? tod.buckets[0].label : ""}–${tod.buckets.length ? tod.buckets[tod.buckets.length - 1].label : ""}`,
+                tod.best && tod.dead
+                  ? <>Best {tod.best.label} · worst run {tod.dead.from}–{tod.dead.to}.</>
+                  : <>Not enough spread to call a pattern yet.</>,
+                "info",
+                <div style={{ display: "flex", gap: 3, alignItems: "stretch", height: 260 }}>
                   {tod.buckets.map((b) => {
                     const pos = b.pnl >= 0;
                     const h = `${Math.max(b.ct ? 2 : 0, pctOf(b.pnl, tod.maxAbs))}%`;
@@ -1417,18 +1494,18 @@ export default function TradingPage() {
                         <div style={{ flex: "0 0 auto", height: 58, display: "flex", alignItems: "flex-start", width: "100%" }}>
                           {!pos && <div style={{ width: "100%", height: h, borderRadius: "0 0 3px 3px", background: T.red }} />}
                         </div>
-                        <div style={{ fontSize: 9, color: SOFT, whiteSpace: "nowrap", opacity: .8 }}>{b.label}</div>
+                        <div style={{ fontSize: 9, color: DIM, whiteSpace: "nowrap" }}>{b.label}</div>
                         <div style={{ fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", color: pos ? T.green : T.red, fontVariantNumeric: "tabular-nums" }}>
                           {b.ct ? `${b.pnl >= 0 ? "+" : "-"}${Math.abs(b.pnl) >= 1000 ? `${(Math.abs(b.pnl) / 1000).toFixed(1)}k` : Math.abs(b.pnl).toFixed(0)}` : "·"}
                         </div>
                         {/* Volume + hit rate per slot: a fat green bar built on
                             three trades is not the same finding as one built
                             on forty, and the strip should say which it is. */}
-                        <div style={{ fontSize: 9, color: SOFT, whiteSpace: "nowrap", opacity: .7, fontVariantNumeric: "tabular-nums" }}>
+                        <div style={{ fontSize: 9, color: DIM, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
                           {b.ct ? `${b.ct}t` : ""}
                         </div>
-                        <div style={{ fontSize: 9, fontWeight: 700, whiteSpace: "nowrap", opacity: .85, fontVariantNumeric: "tabular-nums",
-                          color: b.win == null ? SOFT : b.win >= 50 ? T.green : T.red }}>
+                        <div style={{ fontSize: 9, fontWeight: 700, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums",
+                          color: b.win == null ? DIM : b.win >= 50 ? T.green : T.red }}>
                           {b.win != null ? `${b.win.toFixed(0)}%` : ""}
                         </div>
                       </div>
@@ -1438,47 +1515,56 @@ export default function TradingPage() {
                 tod.best && tod.dead
                   ? <>Best half hour {strong(tod.best.label)} at {strong(fmt$(tod.best.pnl), T.green)} · worst run {strong(`${tod.dead.from}–${tod.dead.to}`)} at {strong(fmt$(tod.dead.pnl), T.red)}</>
                   : <>Not enough spread to call a pattern yet.</>,
-                "info")}
+                true),
 
-              <div style={{ display: "grid", gap: 12 }}>
-                {/* Best window */}
-                {insightCard("Best window", tod.best ? tod.best.label : null,
-                  <>
-                    {bigVal(tod.best ? fmt$(tod.best.pnl) : "—", tod.best && tod.best.pnl >= 0 ? T.green : T.red)}
-                    {subLine(tod.best
-                      ? <>{tod.net > 0 ? `${((tod.best.pnl / tod.net) * 100).toFixed(0)}% of net P&L in 30 minutes · ` : ""}{tod.best.ct} trades · {winTxt(tod.best.win)} win</>
-                      : "No trades yet")}
-                  </>,
-                  tod.best && tod.best.ct
-                    ? <>Per-trade in this window is {strong(fmt$(tod.best.pnl / tod.best.ct), T.green)} vs {strong(fmt$(leaks.n ? leaks.net / leaks.n : 0))} all-day.</>
-                    : <>—</>,
-                  "good")}
+              /* Best window */
+              digestRow("best", "Best window",
+                tod.best ? tod.best.label : "—",
+                tod.best
+                  ? <>{fmt$(tod.best.pnl)} in 30 minutes · {tod.best.ct} trades · {winTxt(tod.best.win)} win.</>
+                  : <>No trades yet.</>,
+                "good",
+                <>
+                  {bigVal(tod.best ? fmt$(tod.best.pnl) : "—", tod.best && tod.best.pnl >= 0 ? T.green : T.red)}
+                  {subLine(tod.best
+                    ? <>{tod.net > 0 ? `${((tod.best.pnl / tod.net) * 100).toFixed(0)}% of net P&L in 30 minutes · ` : ""}{tod.best.ct} trades · {winTxt(tod.best.win)} win</>
+                    : "No trades yet")}
+                </>,
+                tod.best && tod.best.ct
+                  ? <>Per-trade in this window is {strong(fmt$(tod.best.pnl / tod.best.ct), T.green)} vs {strong(fmt$(leaks.n ? leaks.net / leaks.n : 0))} all-day.</>
+                  : <>—</>),
 
-                {/* Dead zone */}
-                {insightCard("Dead zone", tod.dead ? `${tod.dead.from}–${tod.dead.to}` : null,
-                  <>
-                    {bigVal(tod.dead ? fmt$(tod.dead.pnl) : "—", T.red)}
-                    {subLine(tod.dead
-                      ? <>{tod.dead.ct} trades · {tod.dead.w + tod.dead.l ? `${((tod.dead.w / (tod.dead.w + tod.dead.l)) * 100).toFixed(0)}%` : "—"} win · {leaks.n ? ((tod.dead.ct / leaks.n) * 100).toFixed(0) : 0}% of all trades taken, for negative P&L</>
-                      : "No losing window")}
-                  </>,
-                  tod.dead
-                    ? <>{leaks.n && tod.dead.ct / leaks.n > 0.15
-                        ? <>{((tod.dead.ct / leaks.n) * 100).toFixed(0)}% of your trades happen in the only window that loses money. Blocking it is free money.</>
-                        : <>A small, contained hole — worth avoiding but it isn&apos;t the main leak.</>}</>
-                    : <>No contiguous losing window — your P&L is spread evenly across the session.</>,
-                  tod.dead ? "bad" : "good")}
-              </div>
+              /* Dead zone */
+              digestRow("dead", "Dead zone",
+                tod.dead ? `${tod.dead.from}–${tod.dead.to}` : "none",
+                tod.dead
+                  ? <>{fmt$(tod.dead.pnl)} across {tod.dead.ct} trades in the only losing window.</>
+                  : <>No contiguous losing window.</>,
+                tod.dead ? "bad" : "good",
+                <>
+                  {bigVal(tod.dead ? fmt$(tod.dead.pnl) : "—", T.red)}
+                  {subLine(tod.dead
+                    ? <>{tod.dead.ct} trades · {tod.dead.w + tod.dead.l ? `${((tod.dead.w / (tod.dead.w + tod.dead.l)) * 100).toFixed(0)}%` : "—"} win · {leaks.n ? ((tod.dead.ct / leaks.n) * 100).toFixed(0) : 0}% of all trades taken, for negative P&L</>
+                    : "No losing window")}
+                </>,
+                tod.dead
+                  ? <>{leaks.n && tod.dead.ct / leaks.n > 0.15
+                      ? <>{((tod.dead.ct / leaks.n) * 100).toFixed(0)}% of your trades happen in the only window that loses money. Blocking it is free money.</>
+                      : <>A small, contained hole — worth avoiding but it isn&apos;t the main leak.</>}</>
+                  : <>No contiguous losing window — your P&L is spread evenly across the session.</>),
 
-              {/* Weekday x hour */}
-              {insightCard("Weekday × hour", "net $ per cell",
+              /* Weekday x hour */
+              digestRow("grid", "Weekday × hour",
+                "net $ / cell",
+                <>Read down a column, not across a row.</>,
+                "info",
                 <>
                   <table style={{ borderCollapse: "separate", borderSpacing: 3, width: "100%" }}>
                     <thead>
                       <tr>
                         <th />
                         {tod.hoursUsed.map((h) => (
-                          <th key={h} style={{ fontSize: 10, color: SOFT, fontWeight: 700, letterSpacing: ".06em", paddingBottom: 3 }}>
+                          <th key={h} style={{ fontSize: 10, color: DIM, fontWeight: 700, letterSpacing: ".06em", paddingBottom: 3 }}>
                             {h}:00
                           </th>
                         ))}
@@ -1487,15 +1573,15 @@ export default function TradingPage() {
                     <tbody>
                       {tod.grid.map((r) => (
                         <tr key={r.dow}>
-                          <td style={{ fontSize: 10, color: SOFT, fontWeight: 700, textAlign: "right", paddingRight: 6, width: 34 }}>{r.label}</td>
+                          <td style={{ fontSize: 10, color: DIM, fontWeight: 700, textAlign: "right", paddingRight: 6, width: 34 }}>{r.label}</td>
                           {r.cells.map((c) => {
                             const a = Math.min(Math.abs(c.pnl) / tod.gridMax, 1);
                             const bg = !c.ct ? "rgba(255,255,255,0.03)"
-                              : c.pnl >= 0 ? `rgba(34,197,94,${(0.12 + a * 0.6).toFixed(2)})`
+                              : c.pnl >= 0 ? `rgba(45,212,167,${(0.12 + a * 0.6).toFixed(2)})`
                               : `rgba(239,68,68,${(0.12 + a * 0.6).toFixed(2)})`;
                             return (
                               <td key={c.hour} title={`${r.label} ${c.hour}:00 · ${c.ct} trades · ${fmt$(c.pnl)}`}
-                                style={{ height: 24, borderRadius: 4, background: bg, textAlign: "center", fontSize: 10, fontWeight: 700, color: c.ct ? "rgba(255,255,255,0.85)" : SOFT, fontVariantNumeric: "tabular-nums" }}>
+                                style={{ height: 24, borderRadius: 4, background: bg, textAlign: "center", fontSize: 10, fontWeight: 700, color: c.ct ? "rgba(255,255,255,0.85)" : DIM, fontVariantNumeric: "tabular-nums" }}>
                                 {c.ct ? Math.round(c.pnl) : ""}
                               </td>
                             );
@@ -1504,18 +1590,22 @@ export default function TradingPage() {
                       ))}
                     </tbody>
                   </table>
-                  <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 10, color: SOFT, marginTop: 9 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 10, color: DIM, marginTop: 9 }}>
                     <span style={{ width: 15, height: 9, borderRadius: 2, background: "rgba(239,68,68,.7)" }} />loss
                     <span style={{ width: 15, height: 9, borderRadius: 2, background: "rgba(255,255,255,.1)" }} />flat
-                    <span style={{ width: 15, height: 9, borderRadius: 2, background: "rgba(34,197,94,.7)" }} />gain
+                    <span style={{ width: 15, height: 9, borderRadius: 2, background: "rgba(45,212,167,.7)" }} />gain
                   </div>
                 </>,
                 <>Read down a column, not across a row — a hole that repeats every weekday is structural; one red cell is a single bad session.</>,
-                "info")}
+                true),
 
-              {/* Session blocks */}
-              {insightCard("Where the day pays",
-                tod.topTwoShare != null ? `top 2 = ${tod.topTwoShare.toFixed(0)}%` : null,
+              /* Session blocks */
+              digestRow("blocks", "Where the day pays",
+                tod.topTwoShare != null ? `top 2 = ${tod.topTwoShare.toFixed(0)}%` : "—",
+                tod.topTwoShare != null && tod.topTwo.length === 2
+                  ? <>{tod.topTwoShare.toFixed(0)}% of net lands in {tod.topTwo[0].label} and {tod.topTwo[1].label}.</>
+                  : <>Not enough session spread to call it yet.</>,
+                "good",
                 <>
                   <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                     {tod.blocks.map((b) => barRow(
@@ -1527,22 +1617,47 @@ export default function TradingPage() {
                 </>,
                 tod.topTwoShare != null && tod.topTwo.length === 2
                   ? <>{tod.topTwoShare.toFixed(0)}% of your net lands in {strong(tod.topTwo[0].label)} and {strong(tod.topTwo[1].label)}. You could trade those two blocks and keep most of the money.</>
-                  : <>Not enough session spread to call it yet.</>,
-                "good")}
-            </div>
+                  : <>Not enough session spread to call it yet.</>),
+            ])}
           </>
         )}
 
-            {/* Charts strip — click ⤢ on any card to pop it out bigger */}
-            {/* Fixed 4-across — NOT auto-fit. Auto-fit reflows the column count
-                with viewport width, which is what left "Median PnL vs Day of
-                Week" stranded alone on its own row at narrower widths. A fixed
-                4 columns keeps every row (and the last, partial one) the same
-                card width regardless of window size; overflow is handled by
-                each card shrinking, not by the grid adding/dropping columns. */}
-            <div className="journal-charts" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-              {chartOrder.map((key) => chartCard(key))}
-            </div>
+            {/* Charts — ONE card with a picker, not eight minis side by side.
+                Eight small charts is eight things to read at once; one chart at
+                full width is one thing, at a size you can actually read. The ⤢
+                still pops it out bigger. */}
+            <Card padding={16}>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+                {chartOrder.map((key) => {
+                  const on = chartKey === key;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setChartKey(key)}
+                      style={{
+                        fontSize: 11, fontWeight: 700, padding: "6px 11px", borderRadius: 7,
+                        cursor: "pointer", whiteSpace: "nowrap", transition: "all .15s",
+                        border: `1px solid ${on ? `${T.green}55` : "transparent"}`,
+                        background: on ? `${T.green}1F` : "rgba(255,255,255,0.03)",
+                        color: on ? T.green : DIM,
+                      }}
+                    >{chartDefs[key].title}</button>
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
+                  <span style={digestLabelStyle}>{chartDefs[chartKey].title}</span>
+                  <span style={{ fontSize: 24, fontWeight: 700, letterSpacing: "-.025em" }}>{chartDefs[chartKey].value}</span>
+                </div>
+                <button
+                  onClick={() => setExpandedChart(chartKey)}
+                  title="Expand"
+                  style={{ background: "none", border: "none", color: DIM, cursor: "pointer", fontSize: 15, padding: "2px 4px", lineHeight: 1 }}
+                >⤢</button>
+              </div>
+              {chartDefs[chartKey].render(1000, 300)}
+            </Card>
 
             {/* Tables */}
             <div className="journal-tables" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: 12 }}>

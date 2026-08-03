@@ -171,6 +171,18 @@ __export(db_exports, {
   insertPropRow: () => insertPropRow,
   insertRecurring: () => insertRecurring,
   insertRegisterRow: () => insertRegisterRow,
+  deleteRegisterRowsInWindow: () => deleteRegisterRowsInWindow,
+  listRegisterInsertBatches: () => listRegisterInsertBatches,
+  listRegisterRowsInWindow: () => listRegisterRowsInWindow,
+  clearStatementMonth: () => clearStatementMonth,
+  deleteStatementTx: () => deleteStatementTx,
+  insertStatementTx: () => insertStatementTx,
+  listStatementMonths: () => listStatementMonths,
+  listStatementTx: () => listStatementTx,
+  listSubscriptions: () => listSubscriptions,
+  setStatementTxCategory: () => setStatementTxCategory,
+  updateStatementTx: () => updateStatementTx,
+  upsertSubscription: () => upsertSubscription,
   insertSession: () => insertSession,
   insertTickerEvent: () => insertTickerEvent,
   insertTradingFills: () => insertTradingFills,
@@ -704,6 +716,50 @@ async function ensureAllTables(pool) {
     CREATE INDEX IF NOT EXISTS idx_budget_prop_profile ON budget_prop(profile_id);
     -- Added after the table shipped: existing rows are all prop purchases.
     ALTER TABLE budget_prop ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'prop';
+
+    -- Real Month: transactions read off an ACTUAL bank/card statement.
+    -- Deliberately separate from budget_register. The register is the PLAN
+    -- (what you expect to pay, plus recurring rules projected forward); this is
+    -- what actually cleared. Writing statement rows into the register would
+    -- double-count every dollar that appears in both, so the two never mix and
+    -- Overview/Payments never read this table.
+    -- dedupe_key makes a re-import of an overlapping statement a no-op.
+    CREATE TABLE IF NOT EXISTS budget_statement_tx (
+      id SERIAL PRIMARY KEY,
+      profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
+      month TEXT NOT NULL,
+      tx_date TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      merchant TEXT NOT NULL DEFAULT '',
+      amount REAL NOT NULL DEFAULT 0,
+      direction TEXT NOT NULL DEFAULT 'out',
+      category_id INTEGER REFERENCES budget_categories(id) ON DELETE SET NULL,
+      is_recurring INTEGER NOT NULL DEFAULT 0,
+      bank TEXT NOT NULL DEFAULT 'secu',
+      source TEXT,
+      dedupe_key TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(profile_id, dedupe_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_budget_statement_tx_month ON budget_statement_tx(profile_id, month);
+
+    -- One verdict per merchant, kept across imports: keep / cancel / watch.
+    -- 'cancel' rows roll up into the "if you killed these" savings number.
+    -- pushed_recurring_id records that this subscription was pushed into the
+    -- Payments register as a recurring rule, so the button can't fire twice.
+    CREATE TABLE IF NOT EXISTS budget_subscription (
+      id SERIAL PRIMARY KEY,
+      profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
+      merchant_key TEXT NOT NULL,
+      merchant TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'watch',
+      note TEXT,
+      pushed_recurring_id INTEGER,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(profile_id, merchant_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_budget_subscription_profile ON budget_subscription(profile_id);
 
     -- \u2500\u2500 Reta (retatrutide) protocol tracker \u2014 owner-only \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     -- Reconstitution changes week to week, so each recon is its own row keyed by
@@ -4416,6 +4472,132 @@ async function listRegister(profileId, fromDate, toDate) {
     [profileId, fromDate, toDate]
   );
 }
+
+// ── Undo a bulk import into the register ────────────────────────────────────
+// A bulk statement import lands as one burst of INSERTs, so rows inserted in
+// the same clock minute are the batch. Manual single-row adds show up as their
+// own 1-row "batch", which is why the UI shows the count and sample labels
+// before anything is deleted. Beginning-balance rows are never included.
+async function listRegisterInsertBatches(profileId, days = 90) {
+  return queryAll(
+    `SELECT to_char(date_trunc('minute', created_at), 'YYYY-MM-DD"T"HH24:MI:SS') AS bucket,
+            to_char(MIN(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS first_at,
+            to_char(MAX(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS last_at,
+            COUNT(*)::int AS n,
+            SUM(amount) AS total,
+            MIN(entry_date) AS from_date,
+            MAX(entry_date) AS to_date,
+            (array_agg(label ORDER BY id))[1:6] AS labels
+       FROM budget_register
+      WHERE profile_id = ?
+        AND is_beginning = 0
+        AND created_at > now() - (? || ' days')::interval
+      GROUP BY 1
+      ORDER BY 1 DESC
+      LIMIT 40`,
+    [profileId, String(days)]
+  );
+}
+async function listRegisterRowsInWindow(profileId, fromIso, toIso) {
+  return queryAll(
+    `SELECT * FROM budget_register
+      WHERE profile_id = ? AND is_beginning = 0 AND created_at >= ?::timestamptz AND created_at <= ?::timestamptz
+      ORDER BY id ASC`,
+    [profileId, fromIso, toIso]
+  );
+}
+async function deleteRegisterRowsInWindow(profileId, fromIso, toIso) {
+  const pool = await getDb();
+  const r = await pool.query(
+    `DELETE FROM budget_register
+      WHERE profile_id = $1 AND is_beginning = 0 AND created_at >= $2::timestamptz AND created_at <= $3::timestamptz`,
+    [profileId, fromIso, toIso]
+  );
+  return r.rowCount ?? 0;
+}
+
+// ── Real Month (statement truth) ────────────────────────────────────────────
+// These never touch budget_register. See the table comment in ensureAllTables.
+async function insertStatementTx(input) {
+  const pool = await getDb();
+  const result = await pool.query(
+    `INSERT INTO budget_statement_tx
+       (profile_id, month, tx_date, description, merchant, amount, direction, category_id, is_recurring, bank, source, dedupe_key)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     ON CONFLICT(profile_id, dedupe_key) DO NOTHING
+     RETURNING *`,
+    [
+      input.profile_id, input.month, input.tx_date, input.description, input.merchant,
+      input.amount, input.direction, input.category_id ?? null, input.is_recurring ?? 0,
+      input.bank ?? "secu", input.source ?? null, input.dedupe_key,
+    ]
+  );
+  return result.rows[0] ?? null;
+}
+async function listStatementTx(profileId, month) {
+  return queryAll(
+    "SELECT * FROM budget_statement_tx WHERE profile_id = ? AND month = ? ORDER BY tx_date ASC, id ASC",
+    [profileId, month]
+  );
+}
+async function listStatementMonths(profileId) {
+  return queryAll(
+    "SELECT month, COUNT(*)::int AS n FROM budget_statement_tx WHERE profile_id = ? GROUP BY month ORDER BY month DESC",
+    [profileId]
+  );
+}
+async function updateStatementTx(profileId, id, patch) {
+  const pool = await getDb();
+  await pool.query(
+    `UPDATE budget_statement_tx
+       SET tx_date      = COALESCE($3, tx_date),
+           description  = COALESCE($4, description),
+           merchant     = COALESCE($5, merchant),
+           amount       = COALESCE($6, amount),
+           direction    = COALESCE($7, direction),
+           is_recurring = COALESCE($8, is_recurring),
+           updated_at   = CURRENT_TIMESTAMP
+     WHERE id = $1 AND profile_id = $2`,
+    [id, profileId, patch.tx_date ?? null, patch.description ?? null, patch.merchant ?? null,
+     patch.amount ?? null, patch.direction ?? null, patch.is_recurring ?? null]
+  );
+}
+// Separate from updateStatementTx because COALESCE cannot express "set to NULL".
+async function setStatementTxCategory(profileId, id, categoryId) {
+  const pool = await getDb();
+  await pool.query(
+    "UPDATE budget_statement_tx SET category_id = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND profile_id = $2",
+    [id, profileId, categoryId]
+  );
+}
+async function deleteStatementTx(profileId, id) {
+  const pool = await getDb();
+  await pool.query("DELETE FROM budget_statement_tx WHERE id = $1 AND profile_id = $2", [id, profileId]);
+}
+async function clearStatementMonth(profileId, month) {
+  const pool = await getDb();
+  const r = await pool.query("DELETE FROM budget_statement_tx WHERE profile_id = $1 AND month = $2", [profileId, month]);
+  return r.rowCount ?? 0;
+}
+async function listSubscriptions(profileId) {
+  return queryAll("SELECT * FROM budget_subscription WHERE profile_id = ? ORDER BY merchant ASC", [profileId]);
+}
+async function upsertSubscription(input) {
+  const pool = await getDb();
+  const result = await pool.query(
+    `INSERT INTO budget_subscription (profile_id, merchant_key, merchant, status, note, pushed_recurring_id)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT(profile_id, merchant_key) DO UPDATE SET
+       merchant = EXCLUDED.merchant,
+       status = EXCLUDED.status,
+       note = COALESCE(EXCLUDED.note, budget_subscription.note),
+       pushed_recurring_id = COALESCE(EXCLUDED.pushed_recurring_id, budget_subscription.pushed_recurring_id),
+       updated_at = CURRENT_TIMESTAMP
+     RETURNING *`,
+    [input.profile_id, input.merchant_key, input.merchant, input.status ?? "watch", input.note ?? null, input.pushed_recurring_id ?? null]
+  );
+  return result.rows[0];
+}
 async function insertRecurring(input) {
   const pool = await getDb();
   const result = await pool.query(
@@ -4878,6 +5060,18 @@ async function getLatestMultGreekStaticSnapshot() {
   insertPropRow,
   insertRecurring,
   insertRegisterRow,
+  deleteRegisterRowsInWindow,
+  listRegisterInsertBatches,
+  listRegisterRowsInWindow,
+  clearStatementMonth,
+  deleteStatementTx,
+  insertStatementTx,
+  listStatementMonths,
+  listStatementTx,
+  listSubscriptions,
+  setStatementTxCategory,
+  updateStatementTx,
+  upsertSubscription,
   insertSession,
   insertTickerEvent,
   insertTradingFills,

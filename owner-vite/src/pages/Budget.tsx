@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { HOME_THEME } from "../lib/theme";
 import { ThemedSelect } from "../components/ThemedSelect";
 import { ThemedMonthPicker } from "../components/ThemedMonthPicker";
-import StatementImport from "./budget/StatementImport";
+import RealMonth from "./budget/RealMonth";
 
 type Bank = "coastal" | "truist" | "secu";
 type BudgetProfile = { id: number; name: string; currency: string };
@@ -166,7 +166,7 @@ export default function Budget() {
   const [prevDailyBalance, setPrevDailyBalance] = useState<DailyBalance | null>(null);
   const [weekAgoBalance, setWeekAgoBalance] = useState<DailyBalance | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"overview" | "register" | "import" | "categories" | "amazon" | "bzila" | "yearly">("overview");
+  const [tab, setTab] = useState<"overview" | "register" | "real" | "categories" | "amazon" | "bzila" | "yearly">("overview");
   const [year, setYear] = useState<number>(() => new Date().getFullYear());
   const [yearRows, setYearRows] = useState<RegisterRow[]>([]);
   const [yearLoading, setYearLoading] = useState(false);
@@ -974,7 +974,7 @@ export default function Budget() {
 
         {/* Tabs (top-level nav) */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {([["overview", "Overview"], ["register", "Payments"], ["import", "Import"], ["categories", "Categories"], ["amazon", "Amazon"], ["bzila", "Bzila"], ["yearly", "Yearly"]] as const).map(([k, l]) => (
+          {([["overview", "Overview"], ["register", "Payments"], ["real", "Real Month"], ["categories", "Categories"], ["amazon", "Amazon"], ["bzila", "Bzila"], ["yearly", "Yearly"]] as const).map(([k, l]) => (
             <button key={k} onClick={() => setTab(k)} style={pill(tab === k)}>{l}</button>
           ))}
           {tab === "register" && (
@@ -1086,15 +1086,17 @@ export default function Budget() {
             />
           </div>
         )}
-        {/* ── IMPORT ───────────────────────────────────────────────────────
-            Statement PDF / screenshot → Claude extract → staged review →
-            merchant + category merge → commit into the register above. */}
-        {tab === "import" && (
-          <StatementImport
+        {/* ── REAL MONTH ───────────────────────────────────────────────────
+            What actually cleared, read off a statement into budget_statement_tx.
+            Its own store — Overview and Payments never read it, so nothing
+            double-counts. The only crossover is the per-subscription
+            "→ Payments" button, which adds ONE monthly recurring rule. */}
+        {tab === "real" && (
+          <RealMonth
+            month={month}
             categories={categories}
             currency={currency}
             defaultBank="secu"
-            onCommitted={() => refresh(month)}
             onOpenCategories={() => setTab("categories")}
           />
         )}
@@ -2535,7 +2537,7 @@ function CategoriesPanel({
           onClick={() => setOpenCat(null)}
           style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
         >
-          <div onClick={(e) => e.stopPropagation()} style={{ ...card(), width: 520, maxWidth: "100%", maxHeight: "80vh", overflow: "auto", padding: 0, background: HOME_THEME.panel }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ ...card(), width: 660, maxWidth: "100%", maxHeight: "80vh", overflow: "auto", padding: 0, background: HOME_THEME.panel }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${HOME_THEME.border}`, position: "sticky", top: 0, background: HOME_THEME.panel, zIndex: 1 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                 <span style={{ width: 12, height: 12, borderRadius: 3, background: openCat.color || HOME_THEME.cyan, flex: "none" }} />
@@ -2549,9 +2551,17 @@ function CategoriesPanel({
                 <div style={{ padding: "24px 12px", textAlign: "center", color: HOME_THEME.muted, fontSize: 14 }}>No transactions in this category yet.</div>
               ) : (
                 (byCategory[openCat.id] || []).map((r) => (
-                  <div key={r.id} style={{ display: "grid", gridTemplateColumns: "70px 1fr auto auto", gap: 10, alignItems: "center", padding: "8px 6px", borderBottom: `1px solid rgba(255,255,255,0.05)` }}>
+                  <div key={r.id} style={{ display: "grid", gridTemplateColumns: "60px 1fr 150px auto auto", gap: 8, alignItems: "center", padding: "8px 6px", borderBottom: `1px solid rgba(255,255,255,0.05)` }}>
                     <span style={{ fontSize: 14, color: HOME_THEME.muted }}>{shortDate(r.entry_date)}</span>
-                    <span style={{ fontSize: 14, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
+                    <span style={{ fontSize: 14, color: HOME_THEME.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.label}>{r.label}</span>
+                    {/* Re-file a row that already has a category — pick another
+                        one, or "Unsorted" to send it back to the brain dump. */}
+                    <ThemedSelect
+                      value={String(openCat.id)}
+                      onChange={(v) => onAssign(r.id, v ? Number(v) : null)}
+                      options={catOptions}
+                      ariaLabel="Move to category"
+                    />
                     <span style={{ fontSize: 14, fontWeight: 800, color: SOFT_RED, textAlign: "right", minWidth: 90 }}>{fmtMoney(r.amount, currency)}</span>
                     <DeleteButton onClick={() => onDeleteRow(r.id)} />
                   </div>
