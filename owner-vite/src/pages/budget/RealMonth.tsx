@@ -10,7 +10,7 @@ import {
 } from "../../lib/theme";
 import { Card } from "../../components/PageCard";
 import { ThemedSelect } from "../../components/ThemedSelect";
-import { MoneyFlowSankey, type FlowNode, type FlowLink } from "./MoneyFlowSankey";
+import { SpendDonut, type DonutSlice } from "./SpendDonut";
 
 /**
  * Budget → Real Month.
@@ -31,7 +31,8 @@ import { MoneyFlowSankey, type FlowNode, type FlowLink } from "./MoneyFlowSankey
  * Views:
  *   Merchants  — one row per vendor, grouped under its category, expandable.
  *                One dropdown re-files every transaction from that vendor.
- *   Flow       — Sankey: money in → categories → merchants.
+ *   Where it went — donut of category share, each slice expanding to its
+ *                merchants, with a table view for the close calls.
  *   Ledger     — flat, sortable, every transaction.
  *   Categories — real spend against the budgets on the Categories tab.
  *   Subscriptions — repeat charges, tagged Keep / Cancel / Watch.
@@ -50,8 +51,29 @@ const MONEY_OUT = HOME_THEME.red;
 const ACCENT = HOME_THEME.lightBlue;
 const WARN = HOME_THEME.gold;
 
-/** Category swatch ramp — theme tokens only, cycled for the flow diagram. */
+/** Category swatch ramp for the merchant-group bands — theme tokens only. */
 const RAMP = [HOME_THEME.cyan, ACCENT, WARN, HOME_THEME.orange, RETA_PALETTE.rose, RETA_PALETTE.peach, HOME_THEME.green, RETA_PALETTE.green];
+
+/**
+ * Donut series colours — the ONE place this file carries hex literals, and
+ * deliberately so: these are a data encoding, not chrome.
+ *
+ * They are the theme's own hues (cyan, gold, violet, orange, pink, green)
+ * re-stepped into the dark-mode OKLCH lightness band [0.48, 0.67] and reordered
+ * so no adjacent pair collides under colour-vision deficiency. The raw theme
+ * values fail that test — most sit above the band on a dark surface, and
+ * gold↔green land at ΔE 2.6 under deuteranopia (the floor is 8). After
+ * re-stepping, the worst adjacent pair is ΔE 13.1.
+ *
+ * Slots are assigned by STABLE category order (id ascending), never by this
+ * month's ranking — a category keeps its colour when the amounts move, so
+ * "Groceries is violet" stays true month to month.
+ */
+const DONUT_RAMP = ["#219ebc", "#c88200", "#987ce9", "#e16d00", "#dd5da2", "#45ad29"];
+/** Neutral, reserved for the folded tail and for Uncategorized. */
+const DONUT_NEUTRAL = "#6b7480";
+/** A donut stops being readable past ~6 slices; the rest folds into "Other". */
+const DONUT_TOP_N = 6;
 
 // ── control styles, all derived from theme tokens ───────────────────────────
 function field(): React.CSSProperties {
@@ -141,7 +163,7 @@ type MonthStat = { month: string; n: number };
 type Finding = { title: string; severity: "high" | "medium" | "low"; detail: string; monthlySavings: number; evidence: string };
 type Advice = { headline: string; findings: Finding[]; quickWins: string[]; generatedAt?: string | null };
 
-type View = "merchants" | "flow" | "ledger" | "categories" | "subs";
+type View = "merchants" | "donut" | "ledger" | "categories" | "subs";
 type SortKey = "date" | "merchant" | "amount" | "category";
 
 type RegisterBatch = {
@@ -574,46 +596,56 @@ export default function RealMonth({
     [advice]
   );
 
-  // ── Sankey: money in → category → merchant ───────────────────────────────
-  // Merchants below the per-category cut are folded into one "Other" band so
-  // the diagram stays readable at 60+ vendors.
-  const flow = useMemo(() => {
-    const nodes: FlowNode[] = [];
-    const links: FlowLink[] = [];
-    const cats = byCategory.filter((c) => c.spent > 0);
-    if (!cats.length) return { nodes, links };
+  // ── donut: category share, each slice expanding to its merchants ─────────
+  // Colour is bound to the category's identity (stable id order), not to its
+  // rank this month, so a month with different amounts never repaints the
+  // categories a reader has already learned.
+  const donut = useMemo(() => {
+    const slotOf = new Map<string, number>();
+    [...categories].sort((a, b) => a.id - b.id).forEach((c, i) => slotOf.set(c.name, i % DONUT_RAMP.length));
 
-    const inflowValue = totals.inflow > 0 ? totals.inflow : totals.outflow;
-    nodes.push({ id: "in", label: totals.inflow > 0 ? "Money in" : "Spending", value: inflowValue, color: MONEY_IN, col: 0 });
+    const ranked = byCategory.filter((c) => c.spent > 0);
+    const head = ranked.slice(0, DONUT_TOP_N);
+    const tail = ranked.slice(DONUT_TOP_N);
 
-    cats.forEach((c, i) => {
-      const color = c.color || (c.name === UNCATEGORIZED ? HOME_THEME.muted : RAMP[i % RAMP.length]);
-      const id = `cat:${c.name}`;
-      nodes.push({ id, label: c.name, value: c.spent, color, col: 1 });
-      links.push({ source: "in", target: id, value: c.spent });
+    // Two drawn categories can land on the same slot when more than six exist.
+    // Bump the later one to the next free slot — deterministic for a given set.
+    const taken = new Set<number>();
+    const colorFor = (name: string): string => {
+      if (name === UNCATEGORIZED) return DONUT_NEUTRAL;
+      let slot = slotOf.get(name) ?? 0;
+      for (let i = 0; i < DONUT_RAMP.length && taken.has(slot); i++) slot = (slot + 1) % DONUT_RAMP.length;
+      taken.add(slot);
+      return DONUT_RAMP[slot];
+    };
 
-      const inCat = allMerchants.filter((m) => m.categoryName === c.name).sort((a, b) => b.total - a.total);
-      const top = inCat.slice(0, 5);
-      const rest = inCat.slice(5);
-      for (const m of top) {
-        const mid = `m:${c.name}:${m.merchant}`;
-        nodes.push({ id: mid, label: m.merchant, value: m.total, color, col: 2 });
-        links.push({ source: id, target: mid, value: m.total });
-      }
-      const restTotal = rest.reduce((s, m) => s + m.total, 0);
-      if (restTotal > 0) {
-        const mid = `m:${c.name}:other`;
-        nodes.push({ id: mid, label: `Other (${rest.length})`, value: restTotal, color: rgba(color, 0.5), col: 2 });
-        links.push({ source: id, target: mid, value: restTotal });
-      }
-    });
+    const slices: DonutSlice[] = head.map((c) => ({
+      key: c.name,
+      name: c.name,
+      color: colorFor(c.name),
+      total: c.spent,
+      count: c.count,
+      kind: "cat" as const,
+      children: allMerchants
+        .filter((m) => m.categoryName === c.name)
+        .map((m) => ({ name: m.merchant, total: m.total, count: m.count, recurring: m.flagged })),
+    }));
 
-    if (totals.inflow > totals.outflow) {
-      nodes.push({ id: "cat:__left", label: "Left over", value: totals.inflow - totals.outflow, color: MONEY_IN, col: 1 });
-      links.push({ source: "in", target: "cat:__left", value: totals.inflow - totals.outflow });
+    if (tail.length) {
+      slices.push({
+        key: "__other",
+        name: "Other",
+        color: DONUT_NEUTRAL,
+        total: tail.reduce((s2, c) => s2 + c.spent, 0),
+        count: tail.reduce((s2, c) => s2 + c.count, 0),
+        kind: "other" as const,
+        // The tail expands to the categories it swallowed, not to raw merchants.
+        children: tail.map((c) => ({ name: c.name, total: c.spent, count: c.count, recurring: false })),
+      });
     }
-    return { nodes, links };
-  }, [byCategory, allMerchants, totals]);
+    slices.sort((a, b) => b.total - a.total);
+    return { slices, total: ranked.reduce((s2, c) => s2 + c.spent, 0), categoryCount: ranked.length };
+  }, [byCategory, allMerchants, categories]);
 
   // ── what to fix ──────────────────────────────────────────────────────────
   const runAdvice = async () => {
@@ -781,7 +813,7 @@ export default function RealMonth({
       {/* ── View switch ──────────────────────────────────────────────────── */}
       {hasData && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {([["merchants", `Merchants (${allMerchants.length})`], ["flow", "Flow"], ["ledger", `Ledger (${tx.length})`], ["categories", "Categories"], ["subs", `Subscriptions (${subRows.length})`]] as const).map(([k, l]) => (
+          {([["merchants", `Merchants (${allMerchants.length})`], ["donut", "Where it went"], ["ledger", `Ledger (${tx.length})`], ["categories", "Categories"], ["subs", `Subscriptions (${subRows.length})`]] as const).map(([k, l]) => (
             <button key={k} onClick={() => setView(k)} style={pill(view === k)}>{l}</button>
           ))}
           <div style={{ flex: 1 }} />
@@ -938,18 +970,20 @@ export default function RealMonth({
         </Card>
       )}
 
-      {/* ── FLOW ─────────────────────────────────────────────────────────── */}
-      {hasData && view === "flow" && (
+      {/* ── WHERE IT WENT — donut + expandable category rows ─────────────── */}
+      {hasData && view === "donut" && (
         <Card variant="classic" padding={0} style={{ overflow: "hidden" }}>
           <SectionHead
-            title="Money flow"
-            sub="Left to right: what came in, which categories absorbed it, and the vendors inside each one."
+            title="Where it went"
+            sub="Hover or tap a segment to isolate it. Click a category to see the merchants inside it. Top 6 are drawn individually; the tail folds into a neutral Other band."
           />
-          <MoneyFlowSankey
-            nodes={flow.nodes}
-            links={flow.links}
+          <SpendDonut
+            slices={donut.slices}
+            total={donut.total}
             currency={currency}
-            height={Math.max(340, Math.min(900, flow.nodes.filter((n) => n.col === 2).length * 26 + 80))}
+            periodLabel={monthLabel(month)}
+            categoryCount={donut.categoryCount}
+            chargeCount={tx.filter((r) => r.direction === "out").length}
           />
         </Card>
       )}

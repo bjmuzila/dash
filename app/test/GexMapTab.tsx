@@ -10,7 +10,7 @@ import { ThemedSelect } from "@/components/shared/ThemedSelect";
 // Test Lab → GEX Map tab.
 //
 // Three ways of fusing the same five layers — net GEX profile, strike×time
-// heatmap, the strike rail, GEX bubbles, and DEX — into ONE readout, all fed by
+// heatmap, the strike rail and DEX — into ONE readout, all fed by
 // a single GET /api/gex-map payload (0DTE only; the route pins expiry = date).
 //
 //   A · Tape Field      time-forward radar. Heat is the field, profile is the
@@ -19,17 +19,13 @@ import { ThemedSelect } from "@/components/shared/ThemedSelect";
 //                       right, heat living inside the spine.
 //   C · Gamma Terrain   gamma as elevation, iso-GEX contours, flip as coastline.
 //
-// Three things this file is deliberately careful about:
+// Two things this file is deliberately careful about:
 //
 //   1. NOTHING IS INVENTED. Every layer draws only what the payload contains.
 //      When DEX is missing for a session the DEX layers render an explicit
 //      "no data" state — they do not fall back to zero, because a flat DEX ring
 //      and an absent DEX ring mean opposite things on a positioning map.
-//   2. Bubbles ride SPOT, not fixed strikes. One bubble per sampled slot,
-//      anchored at that slot's traded price, sized by |GEX| at the strike price
-//      was actually sitting on. That is the whole point of the layer: how much
-//      gamma the tape is standing in, over time.
-//   3. Scales are computed ONCE, from the full session, and shared by all four
+//   2. Scales are computed ONCE, from the full session, and shared by all four
 //      maps. Per-map normalization would make the same book look calm in one
 //      concept and violent in the next.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -237,23 +233,12 @@ function dexColor(v: number, a?: number): string {
 }
 
 // ── model ────────────────────────────────────────────────────────────────────
-type Bubble = { ci: number; price: number; strike: number; g: number; n: number; sign: 1 | -1 };
-
-/** Bubble cadence — one per 5 minutes of tape, matching the ES candles rail. */
-const BUBBLE_BUCKET_MS = 5 * 60_000;
-
-/**
- * Bubble radius, capped by how much room the cadence leaves.
- *
- * A fixed 5-minute cadence packs far more bubbles onto a full session than the
- * old adaptive step did, and at full size they merge into one continuous rail —
- * the exact failure the ES card's bucket comment describes. Capping at ~62% of
- * the spacing keeps neighbours separable at any zoom, and because it only ever
- * clamps, a lone big node still draws at full size.
- */
-const bubbleR = (n: number, base: number, span: number, spacing: number) =>
-  Math.max(1.6, Math.min(base + n * span, spacing * 0.62));
-
+// The GEX bubble layer is GONE — removed, not hidden behind a toggle. It drew
+// one circle per slot on the spot path, sized by |GEX| at the strike price was
+// sitting on, and on all three maps it covered the layer underneath it: the
+// heat on the Tape Field and the Spine, the contours on the Terrain. The spot
+// path already says where price went, and the rail and profile already say how
+// much gamma is there. Nothing was lost with it.
 type MapModel = {
   ok: boolean;
   strikes: number[];
@@ -270,7 +255,6 @@ type MapModel = {
   /** signed, normalized per cell — heat magnitude carrying the gamma sign */
   signed: number[][];
   path: number[];
-  bubbles: Bubble[];
   dex: number[];
   dexRaw: number[];
   dMax: number;
@@ -339,46 +323,6 @@ function buildModel(p: MapPayload | null): MapModel | null {
     path[i] = firstGood;
   }
 
-  const nearestIdx = (price: number) => {
-    let best = 0, bd = Infinity;
-    for (let i = 0; i < n; i++) { const d = Math.abs(strikes[i] - price); if (d < bd) { bd = d; best = i; } }
-    return best;
-  };
-
-  // Bubbles ride spot: one per 5-MINUTE BUCKET, at that slot's price, sized by
-  // the gamma at the strike price was sitting on.
-  //
-  // Same rule as the ES candles bubble rail (slotStore.ts BubbleBucket): bucket
-  // by wall clock, take the newest row in each bucket — a candle's close, not a
-  // sample of the middle. The old rule was `every cols.length/16 columns`, which
-  // is a COUNT, so the cadence changed with the length of the session: 16
-  // bubbles at 09:35, 16 bubbles at 16:00, each one covering more time than the
-  // last. Nothing on the map said the spacing had shifted under you.
-  //
-  // Flooring epoch ms onto a 5-minute grid IS the 09:30-ET-anchored grid
-  // interval.ts builds by hand — ET runs at whole-hour offsets and 09:30 sits on
-  // a 5-minute boundary, so the two grids coincide exactly. No ET midnight math
-  // needed here.
-  const bubbleIdx: number[] = [];
-  let lastBucket = NaN;
-  for (let ci = 0; ci < cols.length; ci++) {
-    const bucket = Math.floor(cols[ci].t / BUBBLE_BUCKET_MS);
-    if (bucket === lastBucket) bubbleIdx[bubbleIdx.length - 1] = ci;
-    else { bubbleIdx.push(ci); lastBucket = bucket; }
-  }
-  const bubbles: Bubble[] = [];
-  for (const ci of bubbleIdx) {
-    const price = path[ci];
-    if (!(price > 0)) continue;
-    const si = nearestIdx(price);
-    const g = signed[ci][si];
-    bubbles.push({
-      ci, price, strike: strikes[si], g,
-      n: Math.min(1, 0.1 + 1.5 * Math.abs(g) + 0.3 * heat[ci][si]),
-      sign: g >= 0 ? 1 : -1,
-    });
-  }
-
   // DEX aligned to the same ladder. Absent → hasDex false, and every DEX layer
   // renders its own empty state instead of a flat ring.
   //
@@ -444,7 +388,7 @@ function buildModel(p: MapPayload | null): MapModel | null {
   return {
     ok: true,
     strikes, lo: strikes[0], hi: strikes[n - 1], cols,
-    profile, profileRaw: lastRaw, gMax, heat, signed, path, bubbles,
+    profile, profileRaw: lastRaw, gMax, heat, signed, path,
     dex, dexRaw, dMax, hasDex: dexCount > 0 || dexSeries.length > 0, dexSeries, dtMax,
     volSeries, vtMax, chg15, chg15Min: Math.round(lagMin), hasChg15,
     dexSurface, dexSource: p.dexSource ?? (dexCount > 0 ? "greek_snapshots" : "none"),
@@ -454,156 +398,256 @@ function buildModel(p: MapPayload | null): MapModel | null {
   };
 }
 
-// ── pan / zoom ───────────────────────────────────────────────────────────────
-// One wrapper for all four maps. Everything is drawn in viewBox units, so a
-// single <g transform> is the whole implementation — no per-map math, and the
-// SVG stays crisp at any magnification.
+// ── axis zoom ────────────────────────────────────────────────────────────────
+// These maps used to zoom the way an image viewer zooms: one <g transform> over
+// the whole card, dragged around with the mouse. That is not what a chart does,
+// and it showed — grabbing anywhere picked up the entire card, axes, legends,
+// rails and all, and slid them off their own frame.
 //
-// Three things worth knowing:
-//   · Wheel is bound with { passive: false } through addEventListener rather
-//     than React's onWheel. React attaches wheel listeners passively, so
-//     preventDefault() there is ignored and the page scrolls out from under you
-//     while you zoom.
-//   · Drag pans at ANY magnification, 1× included — a chart you cannot shove
-//     around reads as frozen, and the whole point of these maps is to lean into
-//     one corner of them. What is NOT supported is dragging a card blank: the
-//     offset is clamped so at least (1 - PAN_SLACK) of the frame is always
-//     covered by content, so the map can be pushed aside but never lost.
-//     Double-click — or the ⟲ button — snaps the offset back to zero.
-//   · The zoom level is published on a context because the Gamma Terrain canvas
-//     is a bitmap: it re-rasterises at a higher DPR when you zoom past 1.5×
-//     instead of being smeared by the transform.
+// This is the chart behaviour instead, the one lightweight-charts gives the ES
+// candles card:
+//
+//   drag the time axis   → stretch / squeeze TIME     (fewer or more slots)
+//   drag the strike axis → stretch / squeeze PRICE    (fewer or more strikes)
+//   drag the plot        → scroll the window across the data
+//   wheel over the plot  → zoom time, cursor-anchored
+//   wheel over an axis   → zoom that axis
+//   double-click         → back to the whole session
+//
+// NOTHING IS TRANSFORMED. The zoom is a WINDOW ON THE DATA — a range of column
+// indices and a range of strike indices — and the model is sliced to it before
+// a single line is drawn. Every map then renders its own fixed viewBox exactly
+// as it always did, which is why the axis labels, the wall badges, the rails and
+// the legends all stay put at their true size at any magnification. The card
+// itself cannot move, because nothing about it is being moved.
+type ViewWin = { i0: number; i1: number; s0: number; s1: number };
+
+/** Smallest window either axis can be squeezed to. */
+const MIN_COLS = 4;
+const MIN_STRIKES = 4;
+
+const fullWin = (m: MapModel | null): ViewWin => ({
+  i0: 0, i1: Math.max(0, (m?.cols.length ?? 1) - 1),
+  s0: 0, s1: Math.max(0, (m?.strikes.length ?? 1) - 1),
+});
+
+const isFullWin = (v: ViewWin, m: MapModel) =>
+  v.i0 === 0 && v.i1 === m.cols.length - 1 && v.s0 === 0 && v.s1 === m.strikes.length - 1;
+
+/**
+ * The model, cut down to the visible window.
+ *
+ * Two deliberate choices:
+ *
+ *   · The SCALES ARE NOT RECOMPUTED. gMax, dMax and the vol max stay at their
+ *     session values, so zooming in does not repaint a quiet corner of the book
+ *     in hot colours. A cell means the same thing at every magnification — the
+ *     property the header comment has always claimed for this file.
+ *   · Levels outside the strike window are set to null (spot to 0). They are
+ *     drawn as full-width lines and badges, and every draw site already guards
+ *     on null / spot > 0 — so nulling them here removes them from all three maps
+ *     at once, instead of leaving a call wall streaked across a band it is not
+ *     in.
+ */
+function sliceModel(m: MapModel, v: ViewWin): MapModel {
+  const sameCols = v.i0 === 0 && v.i1 === m.cols.length - 1;
+  const sameStrikes = v.s0 === 0 && v.s1 === m.strikes.length - 1;
+  if (sameCols && sameStrikes) return m;
+
+  const cutRow = <T,>(row: T[]) => (sameStrikes ? row : row.slice(v.s0, v.s1 + 1));
+  const strikes = cutRow(m.strikes);
+  const lo = strikes[0], hi = strikes[strikes.length - 1];
+  const inBand = (k: number | null) => (k != null && k >= lo && k <= hi ? k : null);
+
+  const cols = m.cols.slice(v.i0, v.i1 + 1);
+  const t0 = cols[0]?.t ?? -Infinity;
+  const t1 = cols[cols.length - 1]?.t ?? Infinity;
+  const inSpan = (t: number) => t >= t0 && t <= t1;
+
+  return {
+    ...m,
+    cols,
+    strikes, lo, hi,
+    heat: m.heat.slice(v.i0, v.i1 + 1).map(cutRow),
+    signed: m.signed.slice(v.i0, v.i1 + 1).map(cutRow),
+    path: m.path.slice(v.i0, v.i1 + 1),
+    profile: cutRow(m.profile),
+    profileRaw: cutRow(m.profileRaw),
+    dex: cutRow(m.dex),
+    dexRaw: cutRow(m.dexRaw),
+    chg15: cutRow(m.chg15),
+    volSeries: m.volSeries.filter((d) => inSpan(d.t)),
+    dexSeries: m.dexSeries.filter((d) => inSpan(d.t)),
+    spot: m.spot >= lo && m.spot <= hi ? m.spot : 0,
+    flip: inBand(m.flip),
+    callWall: inBand(m.callWall),
+    putWall: inBand(m.putWall),
+    magnet: inBand(m.magnet),
+  };
+}
+
+type ViewApi = {
+  v: ViewWin;
+  set: (next: ViewWin) => void;
+  /** Full extent of the UNSLICED model, which is what the window clamps to. */
+  nCols: number;
+  nStrikes: number;
+};
+const ViewCtx = createContext<ViewApi | null>(null);
+
+/**
+ * How far the strike axis is magnified, for the Gamma Terrain canvas — it is a
+ * bitmap and re-rasterises at a higher DPR rather than being smeared. Under the
+ * old transform this was the <g> scale; now it is simply how much of the ladder
+ * is on screen.
+ */
 const ZoomCtx = createContext(1);
 const useZoom = () => useContext(ZoomCtx);
 
-const MIN_K = 1;
-const MAX_K = 12;
+const clampWin = (i0: number, i1: number, s0: number, s1: number, nC: number, nS: number): ViewWin => {
+  let a = Math.round(i0), b = Math.round(i1);
+  if (b - a + 1 < MIN_COLS) b = a + MIN_COLS - 1;
+  if (a < 0) { b -= a; a = 0; }
+  if (b > nC - 1) { a -= b - (nC - 1); b = nC - 1; }
+  if (a < 0) a = 0;
+  let c = Math.round(s0), d = Math.round(s1);
+  if (d - c + 1 < MIN_STRIKES) d = c + MIN_STRIKES - 1;
+  if (c < 0) { d -= c; c = 0; }
+  if (d > nS - 1) { c -= d - (nS - 1); d = nS - 1; }
+  if (c < 0) c = 0;
+  return { i0: a, i1: b, s0: c, s1: d };
+};
+
+type DragZone = "plot" | "xaxis" | "yaxis";
+
 /**
- * How far past the frame the content may be dragged, as a fraction of the
- * frame. 0.5 means you can always push the map half a frame off — enough to
- * park a wing out of the way — while the other half stays on screen, so there
- * is no gesture that ends in an empty card.
+ * The gesture surface + zoom chip. `plot` is the map's own field rectangle in
+ * viewBox units — each map knows where its field is, and the axis hit strips are
+ * derived from it, so the zones land exactly on the labels you are aiming at.
  */
-const PAN_SLACK = 0.5;
-
-function ZoomSvg({ w, h, children }: { w: number; h: number; children: ReactNode }) {
-  const [t, setT] = useState({ k: 1, x: 0, y: 0 });
+function ZoomSvg({ w, h, plot, children }: {
+  w: number; h: number;
+  plot: { x: number; y: number; w: number; h: number };
+  children: ReactNode;
+}) {
+  const api = useContext(ViewCtx);
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const drag = useRef<{ id: number; sx: number; sy: number; ox: number; oy: number } | null>(null);
-  const pts = useRef(new Map<number, { x: number; y: number }>());
-  const pinchD = useRef<number | null>(null);
-  const [grabbing, setGrabbing] = useState(false);
+  const drag = useRef<{ zone: DragZone; sx: number; sy: number; start: ViewWin } | null>(null);
+  const [zone, setZone] = useState<DragZone | null>(null);
+  const [dragging, setDragging] = useState(false);
 
-  // At k the content is w*k wide, so covering the frame means x ∈ [w(1-k), 0].
-  // Both ends are then relaxed by PAN_SLACK frames, which is what makes 1×
-  // (where that interval collapses to the single point 0) draggable at all.
-  const clamp = useCallback((k: number, x: number, y: number) => {
-    const kk = Math.min(MAX_K, Math.max(MIN_K, k));
-    const sx = w * PAN_SLACK, sy = h * PAN_SLACK;
-    return {
-      k: kk,
-      x: Math.min(sx, Math.max(w * (1 - kk) - sx, x)),
-      y: Math.min(sy, Math.max(h * (1 - kk) - sy, y)),
-    };
+  const v = api?.v ?? { i0: 0, i1: 0, s0: 0, s1: 0 };
+  const nC = api?.nCols ?? 1, nS = api?.nStrikes ?? 1;
+  const setWin = useCallback((i0: number, i1: number, s0: number, s1: number) => {
+    api?.set(clampWin(i0, i1, s0, s1, nC, nS));
+  }, [api, nC, nS]);
+
+  const toVb = useCallback((cx: number, cy: number) => {
+    const r = svgRef.current?.getBoundingClientRect();
+    if (!r || !r.width || !r.height) return { vx: 0, vy: 0 };
+    return { vx: ((cx - r.left) / r.width) * w, vy: ((cy - r.top) / r.height) * h };
   }, [w, h]);
 
-  /** client px → viewBox units */
-  const toSvg = useCallback((cx: number, cy: number): [number, number] => {
-    const el = svgRef.current;
-    if (!el) return [0, 0];
-    const r = el.getBoundingClientRect();
-    if (!r.width || !r.height) return [0, 0];
-    return [((cx - r.left) / r.width) * w, ((cy - r.top) / r.height) * h];
-  }, [w, h]);
+  const zoneAt = useCallback((cx: number, cy: number): DragZone | null => {
+    const { vx, vy } = toVb(cx, cy);
+    // EITHER side counts as the strike axis. The three maps do not agree on
+    // which side the strike numbers sit: the Tape Field puts them in the right
+    // rail, the Spine prints them down both edges of the heat. Rather than
+    // teach this one gesture three layouts, anything level with the field but
+    // outside it — left gutter or right rail — stretches price. Both are the
+    // price side of the picture, so both read as the price axis.
+    if ((vx < plot.x || vx > plot.x + plot.w) && vy >= plot.y - 6 && vy <= plot.y + plot.h + 6) return "yaxis";
+    if (vy > plot.y + plot.h && vy <= plot.y + plot.h + 34 && vx >= plot.x - 6 && vx <= plot.x + plot.w + 6) return "xaxis";
+    if (vx >= plot.x && vx <= plot.x + plot.w && vy >= plot.y && vy <= plot.y + plot.h) return "plot";
+    return null;
+  }, [toVb, plot.x, plot.y, plot.w, plot.h]);
 
-  const zoomAt = useCallback((cx: number, cy: number, factor: number) => {
-    setT((p) => {
-      const [sx, sy] = toSvg(cx, cy);
-      const k2 = Math.min(MAX_K, Math.max(MIN_K, p.k * factor));
-      // Keep the point under the cursor pinned: solve for the offset that leaves
-      // its world coordinate unchanged.
-      const wx = (sx - p.x) / p.k;
-      const wy = (sy - p.y) / p.k;
-      return clamp(k2, sx - wx * k2, sy - wy * k2);
-    });
-  }, [toSvg, clamp]);
+  /** Zoom one axis about a fraction of its own span. frac 0 = low end. */
+  const zoomAxis = useCallback((axis: "x" | "y", factor: number, frac: number) => {
+    if (axis === "x") {
+      const span = v.i1 - v.i0 + 1;
+      const next = Math.max(MIN_COLS, Math.min(nC, span * factor));
+      const anchor = v.i0 + frac * span;
+      setWin(anchor - frac * next, anchor - frac * next + next - 1, v.s0, v.s1);
+    } else {
+      const span = v.s1 - v.s0 + 1;
+      const next = Math.max(MIN_STRIKES, Math.min(nS, span * factor));
+      const anchor = v.s0 + frac * span;
+      setWin(v.i0, v.i1, anchor - frac * next, anchor - frac * next + next - 1);
+    }
+  }, [v, nC, nS, setWin]);
 
-  const zoomCentre = useCallback((factor: number) => {
-    const el = svgRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    zoomAt(r.left + r.width / 2, r.top + r.height / 2, factor);
-  }, [zoomAt]);
-
-  // Wheel zooms ONLY with a modifier held. Plain wheel used to preventDefault()
-  // unconditionally, so every one of these cards was a scroll trap — the page
-  // stopped moving the moment the pointer crossed a chart, and with the maps
-  // stacked one per row that is most of the page. Ctrl/⌘ + wheel is also what a
-  // trackpad pinch sends (ctrlKey: true), so pinch-to-zoom still works.
+  // Wheel is bound through addEventListener with { passive: false } — React
+  // attaches wheel handlers passively, so preventDefault() there is ignored and
+  // the page scrolls out from under the gesture.
   useEffect(() => {
     const el = svgRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return;   // let the page scroll
+      const z = zoneAt(e.clientX, e.clientY);
+      if (!z) return;
       e.preventDefault();
-      zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.18 : 1 / 1.18);
+      const factor = e.deltaY > 0 ? 1.18 : 1 / 1.18;
+      const { vx, vy } = toVb(e.clientX, e.clientY);
+      if (z === "yaxis") zoomAxis("y", factor, 1 - clamp01((vy - plot.y) / Math.max(1, plot.h)));
+      else zoomAxis("x", factor, clamp01((vx - plot.x) / Math.max(1, plot.w)));
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [zoomAt]);
+  }, [zoneAt, toVb, zoomAxis, plot.x, plot.y, plot.w, plot.h]);
 
   const onPointerDown = (e: ReactPointerEvent<SVGSVGElement>) => {
-    // A mouse always gets to drag. Touch does not, at rest: grabbing a
-    // one-finger drag at 1× swallows the swipe that was meant to scroll the
-    // page, and with these cards stacked one per row that is most of the page.
-    // A second finger still gets through, so pinch-to-zoom can start from the
-    // resting state, and once zoomed the single-finger drag pans as normal.
-    if (t.k <= 1.001 && e.pointerType !== "mouse" && pts.current.size === 0) return;
+    const z = zoneAt(e.clientX, e.clientY);
+    if (!z) return;
+    // A one-finger touch inside the plot is a page scroll, not a pan — these
+    // cards are stacked one per row, and eating the swipe strands the reader.
+    // The axis strips still take touch, since nothing else is competing there.
+    if (z === "plot" && e.pointerType !== "mouse") return;
     (e.currentTarget as SVGSVGElement).setPointerCapture?.(e.pointerId);
-    pts.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pts.current.size === 1) {
-      drag.current = { id: e.pointerId, sx: e.clientX, sy: e.clientY, ox: t.x, oy: t.y };
-      setGrabbing(true);
-    } else {
-      drag.current = null;
-      pinchD.current = null;
-    }
+    drag.current = { zone: z, sx: e.clientX, sy: e.clientY, start: v };
+    setDragging(true);
   };
 
   const onPointerMove = (e: ReactPointerEvent<SVGSVGElement>) => {
-    if (!pts.current.has(e.pointerId)) return;
-    pts.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const d = drag.current;
+    if (!d) { setZone(zoneAt(e.clientX, e.clientY)); return; }
+    const r = svgRef.current?.getBoundingClientRect();
+    if (!r || !r.width) return;
+    const s = d.start;
 
-    if (pts.current.size >= 2) {
-      const [a, b] = [...pts.current.values()];
-      const d = Math.hypot(a.x - b.x, a.y - b.y);
-      if (pinchD.current != null && pinchD.current > 0 && d > 0) {
-        zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / pinchD.current);
-      }
-      pinchD.current = d;
+    // Axis gestures are exponential in the drag distance — linear scaling is
+    // dead at one end of the range and runaway at the other.
+    if (d.zone === "xaxis") {
+      const span = s.i1 - s.i0 + 1;
+      const next = Math.max(MIN_COLS, Math.min(nC, span * Math.pow(0.994, e.clientX - d.sx)));
+      const centre = s.i0 + span / 2;
+      setWin(centre - next / 2, centre - next / 2 + next - 1, s.s0, s.s1);
       return;
     }
-
-    const dg = drag.current;
-    if (!dg || dg.id !== e.pointerId) return;
-    const el = svgRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const dx = ((e.clientX - dg.sx) / r.width) * w;
-    const dy = ((e.clientY - dg.sy) / r.height) * h;
-    setT((p) => clamp(p.k, dg.ox + dx, dg.oy + dy));
+    if (d.zone === "yaxis") {
+      const span = s.s1 - s.s0 + 1;
+      const next = Math.max(MIN_STRIKES, Math.min(nS, span * Math.pow(0.994, d.sy - e.clientY)));
+      const centre = s.s0 + span / 2;
+      setWin(s.i0, s.i1, centre - next / 2, centre - next / 2 + next - 1);
+      return;
+    }
+    // Plot drag scrolls the window through the data. Dragging left walks
+    // forward in time, the way dragging a chart does.
+    const colsPerPx = (s.i1 - s.i0 + 1) / Math.max(1, (plot.w / w) * r.width);
+    const rowsPerPx = (s.s1 - s.s0 + 1) / Math.max(1, (plot.h / h) * r.height);
+    const di = -(e.clientX - d.sx) * colsPerPx;
+    const dk = (e.clientY - d.sy) * rowsPerPx;   // drag down ⇒ window moves up the ladder
+    setWin(s.i0 + di, s.i1 + di, s.s0 + dk, s.s1 + dk);
   };
 
-  const endPointer = (e: ReactPointerEvent<SVGSVGElement>) => {
-    pts.current.delete(e.pointerId);
-    if (pts.current.size < 2) pinchD.current = null;
-    if (pts.current.size === 0) { drag.current = null; setGrabbing(false); }
-  };
+  const endPointer = () => { drag.current = null; setDragging(false); };
+  const reset = useCallback(() => api && api.set({ i0: 0, i1: nC - 1, s0: 0, s1: nS - 1 }), [api, nC, nS]);
 
-  const reset = () => setT({ k: 1, x: 0, y: 0 });
-  const zoomed = t.k > 1.001;
-  /** Zoomed OR shoved off-centre — either state is one the ⟲ button undoes. */
-  const moved = zoomed || Math.abs(t.x) > 0.5 || Math.abs(t.y) > 0.5;
+  const cols = v.i1 - v.i0 + 1, rows = v.s1 - v.s0 + 1;
+  const zoomed = cols < nC || rows < nS;
+  const cursor = dragging
+    ? (drag.current?.zone === "xaxis" ? "ew-resize" : drag.current?.zone === "yaxis" ? "ns-resize" : "grabbing")
+    : zone === "xaxis" ? "ew-resize" : zone === "yaxis" ? "ns-resize" : zone === "plot" ? "grab" : "default";
 
   const btn: CSSProperties = {
     width: 24, height: 22, display: "grid", placeItems: "center",
@@ -618,48 +662,45 @@ function ZoomSvg({ w, h, children }: { w: number; h: number; children: ReactNode
         ref={svgRef}
         viewBox={`0 0 ${w} ${h}`}
         preserveAspectRatio="xMidYMid meet"
-        // touchAction "pan-y" at rest so a finger drag scrolls the page; only
-        // once zoomed does the chart take the gesture for panning. "none"
-        // everywhere meant the maps ate vertical swipes on touch.
         style={{
-          width: "100%", display: "block",
-          // Always a grab cursor: the drag is live at every magnification now,
-          // and a default arrow over a draggable surface reads as "frozen".
-          cursor: grabbing ? "grabbing" : "grab",
-          touchAction: zoomed ? "none" : "pan-y",
-          // A drag across <text> nodes otherwise starts a native text
-          // selection, which highlights half the axis labels blue.
+          width: "100%", display: "block", cursor,
+          // Vertical swipes belong to the page; the axis strips take their own
+          // touch gestures through the pointer handlers above.
+          touchAction: "pan-y",
           userSelect: "none", WebkitUserSelect: "none",
         }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endPointer}
         onPointerCancel={endPointer}
-        onPointerLeave={endPointer}
+        onPointerLeave={() => { endPointer(); setZone(null); }}
         onDoubleClick={reset}
       >
-        <g transform={`translate(${t.x} ${t.y}) scale(${t.k})`}>
-          <ZoomCtx.Provider value={t.k}>{children}</ZoomCtx.Provider>
-        </g>
+        {children}
       </svg>
       <div style={{
         position: "absolute", right: 6, bottom: 6, display: "flex", alignItems: "center", gap: 4,
         padding: 4, borderRadius: 7, background: "rgba(5,6,10,0.55)",
         border: `1px solid ${HOME_THEME.border}`, backdropFilter: "blur(6px)",
       }}>
-        <span title="Drag to move · Ctrl / ⌘ + scroll to zoom — plain scroll moves the page · double-click to reset" style={{
+        <span title="Drag the time axis or the strike axis to stretch it · drag the field to scroll · wheel to zoom · double-click to reset" style={{
           fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", padding: "0 4px",
-          color: moved ? HOME_THEME.cyan : "#ffffff", opacity: moved ? 1 : 0.85,
+          color: zoomed ? HOME_THEME.cyan : "#ffffff", opacity: zoomed ? 1 : 0.85,
           fontVariantNumeric: "tabular-nums",
-        }}>{t.k.toFixed(1)}×</span>
-        <button type="button" title="Zoom out" style={btn} onClick={() => zoomCentre(1 / 1.4)}>−</button>
-        <button type="button" title="Zoom in" style={btn} onClick={() => zoomCentre(1.4)}>+</button>
-        <button type="button" title="Reset (or double-click the chart)" style={{ ...btn, width: 26, fontSize: 11 }}
-          onClick={reset} disabled={!moved}>⟲</button>
+        }}>{cols}×{rows}</span>
+        <button type="button" title="Show less" style={btn}
+          onClick={() => { zoomAxis("x", 1 / 1.4, 0.5); zoomAxis("y", 1 / 1.4, 0.5); }}>+</button>
+        <button type="button" title="Show more" style={btn}
+          onClick={() => { zoomAxis("x", 1.4, 0.5); zoomAxis("y", 1.4, 0.5); }}>−</button>
+        <button type="button" title="Whole session (or double-click the chart)" style={{ ...btn, width: 26, fontSize: 11 }}
+          onClick={reset} disabled={!zoomed}>⟲</button>
       </div>
     </div>
   );
 }
+
+const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+
 
 // ── shared chrome ────────────────────────────────────────────────────────────
 const AXIS = "#ffffff";
@@ -822,7 +863,7 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
   );
 
   return (
-    <ZoomSvg w={W} h={H}>
+    <ZoomSvg w={W} h={H} plot={{ x: FX, y: FY, w: FW, h: FH }}>
       {/* heat field */}
       <rect x={FX - 4} y={FY - 4} width={FW + 8} height={FH + 8} rx={10} fill="rgba(0,0,0,0.30)" />
       {m.cols.map((c, ci) =>
@@ -852,20 +893,6 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
           </text>
         </g>
       )}
-
-      {/* bubbles ride spot, drawn UNDER the path */}
-      {m.bubbles.map((b, i) => {
-        const r = bubbleR(b.n, 3.5, 15, FW / Math.max(1, m.bubbles.length));
-        const c = b.sign > 0 ? GEX_POS : GEX_NEG;
-        const last = i === m.bubbles.length - 1;
-        return (
-          <g key={`b${b.ci}`}>
-            <circle cx={xOf(b.ci)} cy={yOf(b.price)} r={r} fill={rgba(c, last ? 0.24 : 0.13)}
-              stroke={rgba(c, last ? 0.95 : 0.66)} strokeWidth={last ? 1.6 : 1} />
-            <circle cx={xOf(b.ci)} cy={yOf(b.price)} r={1.5} fill={rgba(c, 0.92)} />
-          </g>
-        );
-      })}
 
       {/* spot path */}
       <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="rgba(255,255,255,0.30)" strokeWidth={4.5} strokeLinejoin="round" />
@@ -1031,7 +1058,7 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
   const CAPY = AXY + 34;            // legends, pushed down to clear the axis
 
   return (
-    <ZoomSvg w={W} h={H}>
+    <ZoomSvg w={W} h={H} plot={{ x: SPX, y: TY, w: SPW, h: TH }}>
       {/* spine heat */}
       <Lab x={SPX} y={TY - 8}>{compact ? `HEAT · LAST ${nb}` : `SPINE · STRIKE × TIME HEAT (LAST ${nb} SLOTS)`}</Lab>
       <rect x={SPX} y={TY} width={SPW} height={TH} rx={10} fill="rgba(0,0,0,0.30)" stroke="rgba(255,255,255,0.07)" />
@@ -1065,20 +1092,6 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
       {m.flip != null && (
         <line x1={SPX} y1={yOf(m.flip)} x2={SPX + SPW} y2={yOf(m.flip)} stroke={FLIP_C} strokeDasharray="5 4" strokeWidth={1.2} />
       )}
-
-      {/* bubbles pinned to the path inside the spine */}
-      {m.bubbles.filter((b) => b.ci >= c0).map((b, i, arr) => {
-        const bx = SPX + (b.ci - c0 + 0.5) * cw;
-        const c = b.sign > 0 ? GEX_POS : GEX_NEG;
-        const last = i === arr.length - 1;
-        const r = bubbleR(b.n, 3, 13, SPW / Math.max(1, arr.length));
-        return (
-          <g key={`sb${b.ci}`}>
-            <circle cx={bx} cy={yOf(b.price)} r={r} fill={rgba(c, last ? 0.26 : 0.13)} stroke={rgba(c, last ? 0.95 : 0.66)} strokeWidth={last ? 1.5 : 1} />
-            <circle cx={bx} cy={yOf(b.price)} r={1.5} fill={rgba(c, 0.9)} />
-          </g>
-        );
-      })}
 
       {/* spot cursor. The price tag used to be a 84×22 slab parked dead centre,
           which is the busiest part of the heat — it covered the cells the
@@ -1317,7 +1330,7 @@ function GammaTerrain({ m, compact }: { m: MapModel; compact?: boolean }) {
   );
 
   return (
-    <ZoomSvg w={W} h={H}>
+    <ZoomSvg w={W} h={H} plot={{ x: L, y: TP, w: FWD, h: FHT }}>
       <TerrainField m={m} L={L} TP={TP} FWD={FWD} FHT={FHT} />
       <rect x={L} y={TP} width={FWD} height={FHT} fill="none" stroke="rgba(255,255,255,0.10)" />
 
@@ -1332,17 +1345,6 @@ function GammaTerrain({ m, compact }: { m: MapModel; compact?: boolean }) {
       <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="rgba(0,0,0,0.45)" strokeWidth={5.5} />
       <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth={3.4} />
       <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="#fff" strokeWidth={1.5} />
-      {m.bubbles.map((b, i) => {
-        const c = b.sign > 0 ? GEX_POS : GEX_NEG;
-        const last = i === m.bubbles.length - 1;
-        const r = bubbleR(b.n, 3.5, 14, FWD / Math.max(1, m.bubbles.length));
-        return (
-          <g key={`tb${b.ci}`}>
-            <circle cx={xOf(b.ci)} cy={yOf(b.price)} r={r} fill={rgba(c, last ? 0.22 : 0.1)} stroke={rgba(c, last ? 0.95 : 0.72)} strokeWidth={last ? 1.6 : 1.1} />
-            <circle cx={xOf(b.ci)} cy={yOf(b.price)} r={1.6} fill={rgba(c, 0.95)} />
-          </g>
-        );
-      })}
       {m.flip != null && (
         <g>
           <rect x={L + 6} y={yOf(m.flip) + 5} width={(compact ? 118 : 186) * fz} height={14 * fz} rx={3} fill="rgba(5,6,10,0.84)" />
@@ -1480,6 +1482,32 @@ function MapCard({ def, m }: {
   m: MapModel;
 }) {
   const Body = def.key === "tape" ? TapeField : def.key === "spine" ? Spine : GammaTerrain;
+
+  // The window lives HERE, one per card, not inside ZoomSvg — the body has to
+  // be handed an already-sliced model, and the gesture surface is inside the
+  // body. Per-card rather than shared, because the three maps are read one at a
+  // time, and yoking their zooms together would mean scrolling one to look at a
+  // detail silently re-framed the other two.
+  const [win, setWin] = useState<ViewWin>(() => fullWin(m));
+
+  // A new session, expiry or RTH/All scope is a different ladder over a
+  // different tape, and indices from the old one mean nothing against it. Keyed
+  // on the DIMENSIONS rather than on object identity, so the poll that returns
+  // the same shape every 30s does not throw the zoom away each time.
+  const dims = `${m.cols.length}x${m.strikes.length}`;
+  const lastDims = useRef(dims);
+  useEffect(() => {
+    if (lastDims.current === dims) return;
+    lastDims.current = dims;
+    setWin(fullWin(m));
+  }, [dims, m]);
+
+  const view = useMemo(() => sliceModel(m, win), [m, win]);
+  const api = useMemo<ViewApi>(() => ({
+    v: win, set: setWin, nCols: m.cols.length, nStrikes: m.strikes.length,
+  }), [win, m.cols.length, m.strikes.length]);
+  const kZoom = m.strikes.length / Math.max(1, win.s1 - win.s0 + 1);
+
   return (
     <Card variant="budget" padding={16}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, width: "100%", marginBottom: 10, color: HOME_THEME.text }}>
@@ -1489,9 +1517,21 @@ function MapCard({ def, m }: {
         <span style={{ fontSize: 11, color: "#ffffff", opacity: 0.85, flex: 1, minWidth: 0 }}>
           {def.blurb}
         </span>
+        {/* No "reset zoom" button up here. It only exists while zoomed, so it
+            appears and disappears — and a header control that changes the row's
+            height reflows the card, which reads as the chart jumping the moment
+            you touch it. The ⟲ on the chart's own chip is always present, and
+            double-click resets too. */}
+        <span style={{ fontSize: 10, color: "#ffffff", opacity: isFullWin(win, m) ? 0.45 : 0.8, flexShrink: 0 }}>
+          {isFullWin(win, m) ? "drag an axis to zoom" : "double-click to reset"}
+        </span>
       </div>
       <FzCtx.Provider value={1}>
-        <Body m={m} compact={false} />
+        <ViewCtx.Provider value={api}>
+          <ZoomCtx.Provider value={kZoom}>
+            <Body m={view} compact={false} />
+          </ZoomCtx.Provider>
+        </ViewCtx.Provider>
       </FzCtx.Provider>
     </Card>
   );
@@ -1622,8 +1662,8 @@ export default function GexMapTab() {
               browser's full ICU can disagree, which is a hydration mismatch
               (React #418) for a value that was never going to change. */}
           <code style={{ color: LIGHT_BLUE }}>net_dex</code> in the same row (added Aug 1; sessions before that
-          fall back to <code style={{ color: LIGHT_BLUE }}>greek_snapshots</code>, last-snapshot ladder only). Bubbles
-          ride spot: one per slot, sized by |GEX| at the strike price was trading on.
+          fall back to <code style={{ color: LIGHT_BLUE }}>greek_snapshots</code>, last-snapshot ladder only). The
+          white line is spot through the session; walls, flip and the magnet come from the route&apos;s own levels.
         </div>
       </Card>
 
