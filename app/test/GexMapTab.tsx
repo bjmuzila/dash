@@ -239,6 +239,21 @@ function dexColor(v: number, a?: number): string {
 // ── model ────────────────────────────────────────────────────────────────────
 type Bubble = { ci: number; price: number; strike: number; g: number; n: number; sign: 1 | -1 };
 
+/** Bubble cadence — one per 5 minutes of tape, matching the ES candles rail. */
+const BUBBLE_BUCKET_MS = 5 * 60_000;
+
+/**
+ * Bubble radius, capped by how much room the cadence leaves.
+ *
+ * A fixed 5-minute cadence packs far more bubbles onto a full session than the
+ * old adaptive step did, and at full size they merge into one continuous rail —
+ * the exact failure the ES card's bucket comment describes. Capping at ~62% of
+ * the spacing keeps neighbours separable at any zoom, and because it only ever
+ * clamps, a lone big node still draws at full size.
+ */
+const bubbleR = (n: number, base: number, span: number, spacing: number) =>
+  Math.max(1.6, Math.min(base + n * span, spacing * 0.62));
+
 type MapModel = {
   ok: boolean;
   strikes: number[];
@@ -330,11 +345,29 @@ function buildModel(p: MapPayload | null): MapModel | null {
     return best;
   };
 
-  // Bubbles ride spot: one per sampled slot, at that slot's price, sized by the
-  // gamma at the strike price was sitting on.
-  const step = Math.max(1, Math.round(cols.length / 16));
+  // Bubbles ride spot: one per 5-MINUTE BUCKET, at that slot's price, sized by
+  // the gamma at the strike price was sitting on.
+  //
+  // Same rule as the ES candles bubble rail (slotStore.ts BubbleBucket): bucket
+  // by wall clock, take the newest row in each bucket — a candle's close, not a
+  // sample of the middle. The old rule was `every cols.length/16 columns`, which
+  // is a COUNT, so the cadence changed with the length of the session: 16
+  // bubbles at 09:35, 16 bubbles at 16:00, each one covering more time than the
+  // last. Nothing on the map said the spacing had shifted under you.
+  //
+  // Flooring epoch ms onto a 5-minute grid IS the 09:30-ET-anchored grid
+  // interval.ts builds by hand — ET runs at whole-hour offsets and 09:30 sits on
+  // a 5-minute boundary, so the two grids coincide exactly. No ET midnight math
+  // needed here.
+  const bubbleIdx: number[] = [];
+  let lastBucket = NaN;
+  for (let ci = 0; ci < cols.length; ci++) {
+    const bucket = Math.floor(cols[ci].t / BUBBLE_BUCKET_MS);
+    if (bucket === lastBucket) bubbleIdx[bubbleIdx.length - 1] = ci;
+    else { bubbleIdx.push(ci); lastBucket = bucket; }
+  }
   const bubbles: Bubble[] = [];
-  for (let ci = 0; ci < cols.length; ci += step) {
+  for (const ci of bubbleIdx) {
     const price = path[ci];
     if (!(price > 0)) continue;
     const si = nearestIdx(price);
@@ -344,14 +377,6 @@ function buildModel(p: MapPayload | null): MapModel | null {
       n: Math.min(1, 0.1 + 1.5 * Math.abs(g) + 0.3 * heat[ci][si]),
       sign: g >= 0 ? 1 : -1,
     });
-  }
-  if (bubbles.length && bubbles[bubbles.length - 1].ci !== cols.length - 1) {
-    const ci = cols.length - 1, price = path[ci];
-    if (price > 0) {
-      const si = nearestIdx(price);
-      const g = signed[ci][si];
-      bubbles.push({ ci, price, strike: strikes[si], g, n: Math.min(1, 0.1 + 1.5 * Math.abs(g) + 0.3 * heat[ci][si]), sign: g >= 0 ? 1 : -1 });
-    }
   }
 
   // DEX aligned to the same ladder. Absent → hasDex false, and every DEX layer
@@ -830,7 +855,7 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
 
       {/* bubbles ride spot, drawn UNDER the path */}
       {m.bubbles.map((b, i) => {
-        const r = 3.5 + b.n * 15;
+        const r = bubbleR(b.n, 3.5, 15, FW / Math.max(1, m.bubbles.length));
         const c = b.sign > 0 ? GEX_POS : GEX_NEG;
         const last = i === m.bubbles.length - 1;
         return (
@@ -1046,7 +1071,7 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
         const bx = SPX + (b.ci - c0 + 0.5) * cw;
         const c = b.sign > 0 ? GEX_POS : GEX_NEG;
         const last = i === arr.length - 1;
-        const r = 3 + b.n * 13;
+        const r = bubbleR(b.n, 3, 13, SPW / Math.max(1, arr.length));
         return (
           <g key={`sb${b.ci}`}>
             <circle cx={bx} cy={yOf(b.price)} r={r} fill={rgba(c, last ? 0.26 : 0.13)} stroke={rgba(c, last ? 0.95 : 0.66)} strokeWidth={last ? 1.5 : 1} />
@@ -1310,7 +1335,7 @@ function GammaTerrain({ m, compact }: { m: MapModel; compact?: boolean }) {
       {m.bubbles.map((b, i) => {
         const c = b.sign > 0 ? GEX_POS : GEX_NEG;
         const last = i === m.bubbles.length - 1;
-        const r = 3.5 + b.n * 14;
+        const r = bubbleR(b.n, 3.5, 14, FWD / Math.max(1, m.bubbles.length));
         return (
           <g key={`tb${b.ci}`}>
             <circle cx={xOf(b.ci)} cy={yOf(b.price)} r={r} fill={rgba(c, last ? 0.22 : 0.1)} stroke={rgba(c, last ? 0.95 : 0.72)} strokeWidth={last ? 1.6 : 1.1} />

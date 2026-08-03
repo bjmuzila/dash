@@ -1614,6 +1614,16 @@ type WallEventRow = {
 };
 
 const WALL_SLOTS = 27;
+/**
+ * Heights for the Walls tab. WALL_COL_H caps the universe table on the left.
+ * The two cards on the right are independent — each scrolls itself, neither is
+ * wrapped in a scrolling parent — so these are absolute heights, not shares of
+ * a budget. The ranked list is a scan-and-click index; the level log is the
+ * thing you actually read, so it gets the most room.
+ */
+const WALL_COL_H = 900;
+const RANKED_LIST_H = 320;
+const LEVEL_LOG_H = 560;
 const LEVEL_LABEL: Record<WallLevel, string> = { call_wall: "Call Wall", put_wall: "Put Wall", cb: "CORE" };
 const LEVEL_COLOR: Record<WallLevel, string> = { call_wall: AMBER, put_wall: GREEN, cb: HOME_THEME.lightBlue };
 
@@ -1843,7 +1853,7 @@ function RankedLevels({ rank, sel, onPick }: { rank: WallRank | null; sel: strin
           Nothing ranked for this session yet.
         </div>
       ) : (
-      <div className="wall-scroll" style={{ maxHeight: 430, overflowY: "auto" }}>
+      <div className="wall-scroll" style={{ maxHeight: RANKED_LIST_H, overflowY: "auto" }}>
       {rows.map((l, i) => {
         const color = bucketColor(l.bucket);
         const dim = l.dist_atr >= IN_PLAY_ATR;
@@ -2091,7 +2101,7 @@ function WallsView() {
               {loaded ? `${shown.length} of ${day?.tickers.length ?? 0} shown` : "loading…"}
             </span>
           </div>
-          <div className="wall-scroll" style={{ maxHeight: 760, overflow: "auto" }}>
+          <div className="wall-scroll" style={{ maxHeight: WALL_COL_H, overflow: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
@@ -2160,7 +2170,12 @@ function WallsView() {
         </div>
 
         {/* Ranked levels + the selected ticker's log */}
-        <div className="wall-scroll" style={{ display: "flex", flexDirection: "column", gap: 16, maxHeight: 760, overflow: "auto" }}>
+        {/* No maxHeight/overflow here on purpose. Both children scroll
+            internally, so a scrolling wrapper put a SECOND scrollbar around
+            them — the outer one moved the cards while the inner one moved their
+            contents, and the two fought over the same drag. The column is now a
+            plain stack; each card owns its own scroll. */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <RankedLevels rank={rank} sel={sel} onPick={setSel} />
 
           {/* flexShrink:0 is load-bearing. As a flex item in a column container
@@ -2179,7 +2194,7 @@ function WallsView() {
             </div>
             <WallCaptureRail log={detail?.log ?? []} events={detail?.events ?? []} />
             {/* Header + capture rail stay pinned; only the entries scroll. */}
-            <div className="wall-scroll" style={{ maxHeight: 430, overflowY: "auto" }}>
+            <div className="wall-scroll" style={{ maxHeight: LEVEL_LOG_H, overflowY: "auto" }}>
               <WallTimeline log={detail?.log ?? []} events={detail?.events ?? []} />
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "14px 18px", borderTop: `1px solid ${C.border}` }}>

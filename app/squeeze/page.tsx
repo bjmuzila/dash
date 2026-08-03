@@ -73,6 +73,7 @@ const num = (v: unknown) => {
 };
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 const clampi = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+const clampf = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const fmtPx = (n: number) => (Number.isFinite(n) ? `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—");
 const fmtWall = (n: number) => (Number.isFinite(n) && n > 0 ? `$${Math.round(n).toLocaleString()}` : "—");
 const fmtInt = (n: number) => (Number.isFinite(n) ? Math.round(n).toLocaleString() : "—");
@@ -255,7 +256,36 @@ function Stat({ label, value, sub, subColor, valueColor }: { label: string; valu
   );
 }
 
-// ── per-strike gamma profile (SVG, drag=pan · scroll=zoom · dbl=recenter) ─────
+// ── per-strike gamma profile ─────────────────────────────────────────────────
+// Interaction is the chart-platform convention, because that is the muscle
+// memory anyone reading a gamma profile already has:
+//
+//   plot area   drag  → pan the strike window       wheel → zoom the strike window
+//   x axis      drag  → stretch / squeeze strikes   dbl   → back to the default span
+//   y axis      drag  → stretch / squeeze values    dbl   → back to auto-fit
+//
+// Dragging an AXIS never moves the bars, only the scale under them: x scaling is
+// anchored on the middle of the window and y scaling on the zero line, so the
+// strike you are looking at stays where it is while the picture around it opens
+// up or closes down.
+/** Strikes the "Near" view opens with, centred on spot. */
+const NEAR_STRIKES = 40;
+
+type DragMode = "pan" | "xscale" | "yscale";
+
+const MIN_YZOOM = 0.2;
+const MAX_YZOOM = 400;
+
+/** Axis label for a gamma value. 169032M ran off the left edge of the gutter. */
+function fmtAxisV(v: number): string {
+  const a = Math.abs(v);
+  if (a < 1) return "0";
+  if (a >= 1e9) return `${(v / 1e9).toFixed(a >= 1e10 ? 0 : 1)}bn`;
+  if (a >= 1e6) return `${(v / 1e6).toFixed(0)}M`;
+  if (a >= 1e3) return `${(v / 1e3).toFixed(0)}K`;
+  return v.toFixed(0);
+}
+
 function StrikeProfile({ d, near }: { d: Derived; near: boolean }) {
   const W = 900, H = 460, padL = 46, padR = 14, padT = 20, padB = 28;
   const plotW = W - padL - padR;
@@ -270,15 +300,33 @@ function StrikeProfile({ d, near }: { d: Derived; near: boolean }) {
   const spotIdx = useMemo(() => (
     data.length ? data.reduce((b, r, i) => (Math.abs(r.strike - d.spot) < Math.abs(data[b].strike - d.spot) ? i : b), 0) : 0
   ), [data, d.spot]);
+  // "Near" is 40 rows — 20 either side of spot — NOT a ±5% price band.
+  //
+  // The band rule is what made this card open flat. 5% of a 7,600 index is
+  // ±380 points, and the chain is not evenly spaced: 5-wide at the money,
+  // 25-and-50-wide out in the wings. So the band matched well over a hundred
+  // rows, and since the viewport is measured in ROWS, those extra rows dragged
+  // the right edge out past 8,500 — a handful of near-zero wing strikes
+  // stretched across the plot while the entire real profile piled into one
+  // spike at spot. The viewport counts rows, so the default has to be
+  // expressed in rows.
   const nearCount = useMemo(
-    () => Math.max(6, data.filter((r) => Math.abs(r.strike - d.spot) / d.spot <= 0.05).length),
-    [data, d.spot],
+    () => clampi(NEAR_STRIKES, 6, Math.max(6, data.length)),
+    [data.length],
   );
 
   const [vp, setVp] = useState({ start: 0, count: 0 });
+  // Manual value-axis scale. 1 = fit the tallest visible bar. Above 1 the axis
+  // top comes DOWN, which is the only way to read the wings: one at-the-money
+  // spike sets the auto scale and flattens every other strike to a hairline.
+  const [yZoom, setYZoom] = useState(1);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{ startX: number; startStart: number; pxPerStrike: number } | null>(null);
+  const dragRef = useRef<{
+    mode: DragMode; startX: number; startY: number;
+    startStart: number; startCount: number; startYZoom: number; pxPerStrike: number;
+  } | null>(null);
   const [grabbing, setGrabbing] = useState(false);
+  const [hover, setHover] = useState<DragMode>("pan");
 
   // (re)center whenever the near/all toggle flips or the chain resizes
   useEffect(() => {
@@ -286,11 +334,33 @@ function StrikeProfile({ d, near }: { d: Derived; near: boolean }) {
     const count = clampi(near ? nearCount : n, 6, n);
     const start = clampi(spotIdx - Math.floor(count / 2), 0, Math.max(0, n - count));
     setVp({ start, count });
+    setYZoom(1);
   }, [near, nearCount, data.length, spotIdx]);
 
-  // ── scroll wheel: zoom (count ×1.16 / ×0.86, cursor-anchored) ──
+  /** client px → viewBox units, so hit-testing matches what is drawn. */
+  const toVb = useCallback((cx: number, cy: number) => {
+    const r = wrapRef.current?.getBoundingClientRect();
+    if (!r || !r.width || !r.height) return { vx: W / 2, vy: H / 2 };
+    return { vx: ((cx - r.left) / r.width) * W, vy: ((cy - r.top) / r.height) * H };
+  }, []);
+
+  const zoneAt = useCallback((cx: number, cy: number): DragMode => {
+    const { vx, vy } = toVb(cx, cy);
+    if (vx < padL) return "yscale";
+    if (vy > H - padB) return "xscale";
+    return "pan";
+  }, [toVb]);
+
+  // ── scroll wheel ──
+  // Over the plot it zooms the strike window, cursor-anchored. Over the value
+  // gutter it zooms the value axis instead — the gutter is where you look when
+  // the bars are too small, so it is where the gesture should work.
   const onWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
+    if (zoneAt(e.clientX, e.clientY) === "yscale") {
+      setYZoom((z) => clampf(z * (e.deltaY > 0 ? 1 / 1.16 : 1.16), MIN_YZOOM, MAX_YZOOM));
+      return;
+    }
     const n = data.length || 1;
     setVp((v) => {
       const factor = e.deltaY > 0 ? 1.16 : 0.86;
@@ -301,7 +371,7 @@ function StrikeProfile({ d, near }: { d: Derived; near: boolean }) {
       const anchor = v.start + frac * v.count;
       return { count: next, start: clampi(Math.round(anchor - frac * next), 0, Math.max(0, n - next)) };
     });
-  }, [data.length]);
+  }, [data.length, zoneAt]);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -318,27 +388,68 @@ function StrikeProfile({ d, near }: { d: Derived; near: boolean }) {
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-    dragRef.current = { startX: e.clientX, startStart: vp.start, pxPerStrike };
+    dragRef.current = {
+      mode: zoneAt(e.clientX, e.clientY),
+      startX: e.clientX, startY: e.clientY,
+      startStart: vp.start, startCount: vp.count, startYZoom: yZoom, pxPerStrike,
+    };
     setGrabbing(true);
   };
   const onPointerMove = (e: React.PointerEvent) => {
     const dr = dragRef.current;
-    if (!dr) return;
+    if (!dr) { setHover(zoneAt(e.clientX, e.clientY)); return; }
+
+    // Both axis gestures are exponential in the drag distance: linear scaling
+    // feels dead at one end of the range and runs away at the other, and the
+    // useful span here is two orders of magnitude of yZoom.
+    if (dr.mode === "yscale") {
+      // Drag UP = taller bars. Screen y grows downward, hence the negation.
+      setYZoom(clampf(dr.startYZoom * Math.pow(1.012, dr.startY - e.clientY), MIN_YZOOM, MAX_YZOOM));
+      return;
+    }
+    if (dr.mode === "xscale") {
+      // Drag RIGHT = fewer strikes across the same width, i.e. stretch out.
+      // Anchored on the middle of the window so the strike under the centre of
+      // the plot does not move.
+      const n = data.length || 1;
+      setVp((v) => {
+        const next = clampi(Math.round(dr.startCount * Math.pow(0.994, e.clientX - dr.startX)), 6, n);
+        if (next === v.count) return v;
+        const centre = dr.startStart + dr.startCount / 2;
+        return { count: next, start: clampi(Math.round(centre - next / 2), 0, Math.max(0, n - next)) };
+      });
+      return;
+    }
     const sh = Math.round(-(e.clientX - dr.startX) / dr.pxPerStrike);
     setVp((v) => ({ ...v, start: clampi(dr.startStart + sh, 0, Math.max(0, data.length - v.count)) }));
   };
   const onPointerUp = () => { dragRef.current = null; setGrabbing(false); };
-  const onDouble = () => setVp((v) => ({ ...v, start: clampi(spotIdx - Math.floor(v.count / 2), 0, Math.max(0, data.length - v.count)) }));
+  const onDouble = (e: React.MouseEvent) => {
+    const zone = zoneAt(e.clientX, e.clientY);
+    if (zone === "yscale") { setYZoom(1); return; }
+    const n = data.length || 1;
+    if (zone === "xscale") {
+      const count = clampi(near ? nearCount : n, 6, n);
+      setVp({ count, start: clampi(spotIdx - Math.floor(count / 2), 0, Math.max(0, n - count)) });
+      return;
+    }
+    setVp((v) => ({ ...v, start: clampi(spotIdx - Math.floor(v.count / 2), 0, Math.max(0, n - v.count)) }));
+  };
 
-  const maxV = Math.max(...view.map((r) => Math.abs(oiVolNet(r))), 1);
+  const half = (H - padT - padB) / 2;
+  const autoMax = Math.max(...view.map((r) => Math.abs(oiVolNet(r))), 1);
+  // The drawn axis top. yZoom > 1 pulls it down, which is what makes the wings
+  // legible; bars past it are clipped to the frame rather than drawn over the
+  // header, so an over-zoomed axis reads as "off the top", not as a glitch.
+  const maxV = autoMax / yZoom;
   const xlo = view[0].strike, xhi = view[view.length - 1].strike;
   const x = (k: number) => padL + ((k - xlo) / (xhi - xlo || 1)) * plotW;
-  const mid = padT + (H - padT - padB) / 2;
-  const barH = (v: number) => (Math.abs(v) / maxV) * ((H - padT - padB) / 2);
+  const mid = padT + half;
+  const barH = (v: number) => Math.min(half, (Math.abs(v) / maxV) * half);
   const barW = Math.max(2, (plotW / view.length) * 0.62);
 
   const gridVals = [maxV, maxV / 2, 0, -maxV / 2, -maxV];
-  const yOf = (v: number) => mid - (v / maxV) * ((H - padT - padB) / 2);
+  const yOf = (v: number) => mid - clampf(v / maxV, -1, 1) * half;
 
   const ticks: number[] = [];
   const step = Math.max(5, Math.round((xhi - xlo) / 8 / 5) * 5);
@@ -353,17 +464,24 @@ function StrikeProfile({ d, near }: { d: Derived; near: boolean }) {
       onPointerUp={onPointerUp}
       onPointerLeave={onPointerUp}
       onDoubleClick={onDouble}
-      style={{ cursor: grabbing ? "grabbing" : "grab", touchAction: "none", userSelect: "none" }}
+      style={{
+        cursor: grabbing
+          ? (hover === "pan" ? "grabbing" : hover === "xscale" ? "ew-resize" : "ns-resize")
+          : (hover === "xscale" ? "ew-resize" : hover === "yscale" ? "ns-resize" : "grab"),
+        touchAction: "none", userSelect: "none",
+      }}
     >
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block" }}>
+        <clipPath id="sq-plot-clip"><rect x={padL} y={padT} width={plotW} height={H - padT - padB} /></clipPath>
         {gridVals.map((v, i) => (
           <g key={i}>
             <line x1={padL} x2={W - padR} y1={yOf(v)} y2={yOf(v)} stroke={HOME_THEME.border} strokeWidth={1} strokeDasharray={v === 0 ? "0" : "3 4"} opacity={v === 0 ? 0.6 : 0.4} />
             <text x={padL - 8} y={yOf(v) + 3} fill={rgba(HOME_THEME.text, 0.5)} fontSize={10} textAnchor="end">
-              {v === 0 ? "0.0M" : `${(v / 1e6).toFixed(0)}M`}
+              {fmtAxisV(v)}
             </text>
           </g>
         ))}
+        <g clipPath="url(#sq-plot-clip)">
         {view.map((r) => {
           const v = oiVolNet(r);
           const isPos = v >= 0;
@@ -377,6 +495,7 @@ function StrikeProfile({ d, near }: { d: Derived; near: boolean }) {
               stroke={isWall ? HOME_THEME.text : "none"} strokeWidth={isWall ? 1.5 : 0} rx={1} />
           );
         })}
+        </g>
         {spotIn && (
           <>
             <line x1={x(d.spot)} x2={x(d.spot)} y1={padT - 6} y2={H - padB} stroke={HOME_THEME.cyan} strokeWidth={1.5} strokeDasharray="3 3" opacity={0.9} />
@@ -386,7 +505,23 @@ function StrikeProfile({ d, near }: { d: Derived; near: boolean }) {
         {ticks.map((k) => (
           <text key={k} x={x(k)} y={H - padB + 18} fill={rgba(HOME_THEME.text, 0.5)} fontSize={11} textAnchor="middle">{Math.round(k)}</text>
         ))}
-        <text x={W - padR} y={padT + 4} fill={rgba(HOME_THEME.text, 0.35)} fontSize={10} textAnchor="end">scroll=zoom · drag=pan · dbl=recenter</text>
+        {/* Both of these sit ON the plot, and the plot's tallest bars reach the
+            top of the frame — so they get a backing plate. Unbacked, the hint
+            was white-on-cyan the moment anyone zoomed the value axis. */}
+        <rect x={W - padR - 268} y={padT - 8} width={268} height={15} rx={4} fill="rgba(5,6,10,0.72)" />
+        <text x={W - padR - 4} y={padT + 3} fill={rgba(HOME_THEME.text, 0.55)} fontSize={10} textAnchor="end">
+          drag plot=pan · drag axis=scale · wheel=zoom · dbl=reset
+        </text>
+        {/* Only shown once the value axis is off auto. A permanent "1.0×" is
+            noise; a scale you forgot you set is a misread chart. */}
+        {Math.abs(yZoom - 1) > 0.01 && (
+          <g>
+            <rect x={padL + 2} y={padT - 8} width={46} height={15} rx={4} fill="rgba(5,6,10,0.72)" />
+            <text x={padL + 8} y={padT + 3} fill={HOME_THEME.cyan} fontSize={10} fontWeight={700}>
+              y {yZoom >= 10 ? yZoom.toFixed(0) : yZoom.toFixed(1)}×
+            </text>
+          </g>
+        )}
       </svg>
     </div>
   );
@@ -502,8 +637,8 @@ export function SqueezeBoard() {
                   <span style={{ color: HOME_THEME.cyan }}>▍</span> Strike Profile
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button style={toggleBtn(!near)} onClick={() => setNear(false)}>⤢ All</button>
-                  <button style={toggleBtn(near)} onClick={() => setNear(true)}>⌖ Near</button>
+                  <button style={toggleBtn(!near)} title="Every strike in the chain" onClick={() => setNear(false)}>⤢ All</button>
+                  <button style={toggleBtn(near)} title={`${NEAR_STRIKES} strikes centred on spot`} onClick={() => setNear(true)}>⌖ Near</button>
                 </div>
               </div>
               <StrikeProfile d={d} near={near} />
