@@ -777,3 +777,18 @@ input.dte-range::-moz-range-track {
    measures the natural box width vs. the column width and applies an inline
    transform:scale() so the whole ticker shrinks as one unit and NQU never
    clips. No CSS rules needed here. */
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   App viewport height — 100dvh where the browser supports it.
+
+   The Vite SPA's root used a plain `height: 100vh`. On iOS Safari 100vh is the
+   viewport WITHOUT the collapsible URL bar, so the bottom of the app (on the
+   phone build, the tab bar) sits ~80px below the fold until the user scrolls.
+   `100dvh` tracks the URL bar as it collapses. Kept as a class rather than an
+   inline style because a React inline style cannot express the @supports
+   fallback for older WebKit.
+   ───────────────────────────────────────────────────────────────────────────── */
+.cb-app-viewport { height: 100vh; }
+@supports (height: 100dvh) {
+  .cb-app-viewport { height: 100dvh; }
+}

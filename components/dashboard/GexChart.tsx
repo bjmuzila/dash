@@ -36,6 +36,13 @@ interface GexChartProps {
    * on the opposite side of spot. Defaults on.
    */
   trackMvcTouch?: boolean;
+  /**
+   * Touch/phone mode. Suppresses the bottom-right "scroll=zoom · drag=pan ·
+   * dbl=recenter" hint, which is desktop copy: a phone has no scroll wheel and
+   * no reliable double-click, and at 390px that string runs most of the way
+   * across the plot. The pan/zoom behaviour itself is unchanged.
+   */
+  compact?: boolean;
 }
 
 /** MVC touch-tracking state (session-scoped, resets on expiry change). */
@@ -182,11 +189,17 @@ export default function GexChart({
   onStrikeClick,
   transparentBg = false,
   trackMvcTouch = true,
+  compact = false,
 }: GexChartProps) {
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   // True only while a snapshot is being taken. Live-only chrome (the
   // scroll/drag/dbl hint) is skipped in that pass — see __snapRedraw below.
   const capturingRef = useRef(false);
+  // Same suppression, permanently, for the phone build. A ref rather than a
+  // draw() dependency: `compact` never changes for the lifetime of a mount, and
+  // draw()'s dep list is already long enough to be a hazard.
+  const compactRef = useRef(compact);
+  compactRef.current = compact;
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Viewport — matches vanilla ovViewport: { count, start }
@@ -843,7 +856,7 @@ export default function GexChart({
     // Omitted from snapshots: "scroll=zoom · drag=pan · dbl=recenter" is an
     // affordance for a live chart and means nothing in a shared PNG, where it
     // just reads as stray text in the corner.
-    if (!capturingRef.current) {
+    if (!capturingRef.current && !compactRef.current) {
       ctx.fillStyle = "#1a2a38"; ctx.font = "bold 8px Arial"; ctx.textAlign = "right";
       ctx.fillText("scroll=zoom · drag=pan · dbl=recenter", W - 3, PAD_T + cH - 3);
     }

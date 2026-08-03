@@ -1719,6 +1719,191 @@ const wallStrike = (n: number | null | undefined) =>
   n == null || !Number.isFinite(Number(n)) ? "—"
     : Number(n).toLocaleString("en-US", { maximumFractionDigits: 2 });
 
+/**
+ * The level log as plain text, laid out for pasting into Discord or notes.
+ *
+ * Built from the raw rows rather than scraped out of the rendered timeline, so
+ * the copy carries the meta the eye skips — attempt counts, CORE coincidence,
+ * GEX at the level — without depending on how the JSX happens to be nested.
+ * Ordering matches the screen: newest first, and within one slot the hit leads
+ * the change that produced it.
+ */
+function buildLogText(
+  symbol: string, spot: number | null, date: string,
+  log: WallLogRow[], events: WallEventRow[],
+): string {
+  const L = (lt: WallLevel) => LEVEL_LABEL[lt];
+  const out: string[] = [];
+  out.push(`${symbol} — LEVEL LOG · ${date}${spot != null ? ` · spot ${wallNum(spot)}` : ""}`);
+
+  // Open baseline first: it is the reference every later line is relative to,
+  // so it reads top-down even though the body runs newest-first.
+  const opens = log.filter((r) => r.reason === "open");
+  if (opens.length) {
+    out.push("");
+    out.push(`OPEN ${opens[0].at}`);
+    for (const r of opens) out.push(`  ${L(r.level_type).padEnd(10)} ${wallStrike(r.strike)}`);
+  }
+
+  type Line = { slot: number; hit: boolean; text: string[] };
+  const lines: Line[] = [];
+
+  for (const r of log) {
+    if (r.reason === "open") continue;
+    const body = `${wallStrike(r.prev_strike)} → ${wallStrike(r.strike)}`;
+    const t = [`${r.at}  ${L(r.level_type).padEnd(10)} ${"CHANGED".padEnd(22)} ${body}`];
+    if (r.level_gex != null) t.push(`${" ".repeat(7)}GEX at level ${gexShort(r.level_gex)}`);
+    lines.push({ slot: r.slot, hit: false, text: t });
+  }
+
+  for (const e of events) {
+    const approach = e.kind === "approach";
+    const verdict = e.reaction == null ? "WATCHING"
+      : isBreakThenReject(e) ? `BREAK & REJECT (${e.reclaim_min}m)`
+      : REACTION_LABEL[e.reaction].toUpperCase();
+    const body = approach
+      ? `near ${wallStrike(e.strike)} from ${wallNum(e.spot_at_hit)}, no tag`
+      : `tagged ${wallStrike(e.strike)} at ${wallNum(e.spot_at_hit)}`;
+    const t = [`${e.at}  ${L(e.level_type).padEnd(10)} ${verdict.padEnd(22)} ${body}`];
+
+    const build = gexBuildPct(e.gex_at_hit, e.gex_at_resolve);
+    const meta = [
+      e.note,
+      !approach && e.attempts > 1 ? `attempt ${e.attempts} on this strike` : null,
+      e.was_core ? (e.core_held === false ? "was the CORE — CORE moved after" : "was the CORE") : null,
+      e.gex_at_hit != null ? `GEX ${gexShort(e.gex_at_hit)}` : null,
+      build != null ? `${build >= 0 ? "built" : "bled"} ${Math.abs(build).toFixed(0)}%` : null,
+    ].filter(Boolean).join(" · ");
+    if (meta) t.push(`${" ".repeat(7)}${meta}`);
+    lines.push({ slot: e.hit_slot, hit: true, text: t });
+  }
+
+  lines.sort((a, b) => b.slot - a.slot || (a.hit === b.hit ? 0 : a.hit ? -1 : 1));
+  if (lines.length) { out.push(""); for (const l of lines) out.push(...l.text); }
+  else out.push("", "No changes or touches recorded.");
+  return out.join("\n");
+}
+
+/**
+ * Render the log text to a PNG and put it on the clipboard.
+ *
+ * Deliberately does NOT capture the on-screen card. That card is a 560px
+ * scroll window, so html2canvas would grab whatever slice happens to be in
+ * view — and it carries the app's frosted/backdrop-filter styling, which
+ * html2canvas renders as a flat block. Instead the same text buildLogText()
+ * produces is drawn into a clean off-screen node, so the image is always the
+ * COMPLETE log and always looks the same regardless of scroll position.
+ *
+ * Clipboard image write is Chromium-only in practice; Firefox and any
+ * permission refusal fall back to a download rather than failing silently.
+ */
+async function copyLogPng(text: string, filename: string): Promise<"copied" | "saved"> {
+  const BG = HOME_THEME.bg;
+  const node = document.createElement("div");
+  Object.assign(node.style, {
+    position: "fixed", left: "-10000px", top: "0", zIndex: "-1",
+    display: "inline-block", padding: "26px 32px 20px", background: BG,
+    color: HOME_THEME.text, borderRadius: "14px",
+    font: "13px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    whiteSpace: "pre", letterSpacing: "0.01em",
+  } as Partial<CSSStyleDeclaration>);
+
+  const body = document.createElement("div");
+  body.textContent = text;
+  node.appendChild(body);
+
+  const mark = document.createElement("div");
+  mark.textContent = "Data provided by CBEdge.net";
+  Object.assign(mark.style, {
+    marginTop: "18px", paddingTop: "10px",
+    borderTop: `1px solid ${C.border}`,
+    fontSize: "11px", opacity: "0.45", letterSpacing: "0.08em",
+  } as Partial<CSSStyleDeclaration>);
+  node.appendChild(mark);
+
+  document.body.appendChild(node);
+  try {
+    // Dynamic import, matching downloadShareCard() above — keeps html2canvas
+    // out of the initial chunk. Static importing it here would have undone that.
+    const { default: html2canvas } = await import("html2canvas");
+    const canvas = await html2canvas(node, { backgroundColor: BG, scale: 2, useCORS: true, logging: false });
+    const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/png"));
+    if (!blob) throw new Error("toBlob returned null");
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      return "copied";
+    } catch {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+      return "saved";
+    }
+  } finally {
+    node.remove();
+  }
+}
+
+function SnapLogButton({ text, filename, disabled }: { text: string; filename: string; disabled: boolean }) {
+  const [state, setState] = useState<"idle" | "working" | "copied" | "saved" | "err">("idle");
+  const go = useCallback(async () => {
+    if (state === "working") return;
+    setState("working");
+    try { setState(await copyLogPng(text, filename)); }
+    catch (e) { console.error("[walls] snapshot", e); setState("err"); }
+    setTimeout(() => setState("idle"), 2200);
+  }, [state, text, filename]);
+  const ok = state === "copied" || state === "saved";
+  const color = ok ? GREEN : state === "err" ? RED : C.label;
+  return (
+    <button
+      onClick={() => { void go(); }}
+      disabled={disabled || state === "working"}
+      title="Copy a PNG of this log to the clipboard"
+      style={{
+        padding: "5px 10px", borderRadius: 8, fontFamily: "inherit", fontSize: 13,
+        fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase",
+        cursor: disabled || state === "working" ? "default" : "pointer",
+        opacity: disabled ? 0.3 : state === "working" ? 0.6 : 1,
+        border: `1px solid ${ok ? color : C.border}`,
+        background: ok ? rgba(color, 0.14) : "rgba(255,255,255,0.03)",
+        color,
+      }}
+    >
+      {state === "working" ? "Capturing…" : state === "copied" ? "✓ Copied"
+        : state === "saved" ? "✓ Saved" : state === "err" ? "✕ Failed" : "📸 PNG"}
+    </button>
+  );
+}
+
+function CopyLogButton({ text, disabled }: { text: string; disabled: boolean }) {
+  const [done, setDone] = useState(false);
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setDone(true);
+      setTimeout(() => setDone(false), 1600);
+    } catch { /* clipboard blocked — leave the label alone rather than lying */ }
+  }, [text]);
+  return (
+    <button
+      onClick={() => { void copy(); }}
+      disabled={disabled}
+      title="Copy this log as formatted text"
+      style={{
+        padding: "5px 10px", borderRadius: 8, cursor: disabled ? "default" : "pointer",
+        fontFamily: "inherit", fontSize: 13, fontWeight: 800, letterSpacing: "0.08em",
+        textTransform: "uppercase", opacity: disabled ? 0.3 : 1,
+        border: `1px solid ${done ? GREEN : C.border}`,
+        background: done ? rgba(GREEN, 0.14) : "rgba(255,255,255,0.03)",
+        color: done ? GREEN : C.label,
+      }}
+    >
+      {done ? "✓ Copied" : "⧉ Copy"}
+    </button>
+  );
+}
+
 function WallDelta({ now, open }: { now: number | null; open: number | undefined }) {
   if (now == null || open == null || now === open) return null;
   const up = now > open;
@@ -2191,6 +2376,20 @@ function WallsView() {
               <span style={{ marginLeft: "auto", fontSize: 14, opacity: 0.7, fontFamily: "var(--font-mono)" }}>
                 {wallNum(day?.tickers.find((t) => t.symbol === sel)?.spot ?? null)}
               </span>
+              {(() => {
+                const empty = !sel || !(detail?.log?.length || detail?.events?.length);
+                const txt = buildLogText(
+                  sel ?? "—",
+                  day?.tickers.find((t) => t.symbol === sel)?.spot ?? null,
+                  date, detail?.log ?? [], detail?.events ?? [],
+                );
+                return (
+                  <>
+                    <CopyLogButton disabled={empty} text={txt} />
+                    <SnapLogButton disabled={empty} text={txt} filename={`${sel ?? "walls"}-level-log-${date}.png`} />
+                  </>
+                );
+              })()}
             </div>
             <WallCaptureRail log={detail?.log ?? []} events={detail?.events ?? []} />
             {/* Header + capture rail stay pinned; only the entries scroll. */}

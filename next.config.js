@@ -103,6 +103,9 @@ const nextConfig = {
       'es-candles', 'options-chain', 'options', 'em', 'flow', 'scanner', 'ict',
       'trading', 'confidence-score', 'fails', 'premarket', 'economic-calendar',
       'test', 'strike-history', 'replay', 'analytics', 'traders-dashboard',
+      // Phone build (components/mobile). Bare /m/gex etc. redirect into the
+      // SPA the same way every other dashboard route does.
+      'm/gex', 'm/heatmap', 'm/es', 'm/chain', 'm/em', 'm/econ',
     ];
     return SPA_ROUTES.map((r) => ({
       source: `/${r}`,

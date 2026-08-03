@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { HOME_THEME } from "./homeTheme";
 import { useGexPanel } from "./GexPanelContext";
+import { useMobileNav } from "./MobileNavContext";
 import { useAuth } from "@/components/auth/AuthProvider";
 
 /**
@@ -48,6 +49,7 @@ const DESKTOP_MIN = 920;
 
 export default function GexDock() {
   const { open, closePanel, requestedGroup, clearRequestedGroup } = useGexPanel();
+  const { isMobile } = useMobileNav();
   const onClose = closePanel;
   const pathname = usePathname();
   const { user, isPaid, isOwnerClaim } = useAuth();
@@ -107,6 +109,14 @@ export default function GexDock() {
           display: "block",
         }
       : { width: "100%", height: "100%", border: "none", display: "block" };
+
+  // Phones never get the drawer. It is a 40vw flex sibling that pushes <main>,
+  // and it renders its target page in an iframe forced to DESKTOP_MIN logical
+  // pixels then scaled down — at 390px that is a 0.42x thumbnail of a desktop
+  // page. NotesDock takes the same exit for the same reason. The open flag is
+  // persisted in localStorage, so without this a drawer left open on a desktop
+  // session would come back open on the phone.
+  if (isMobile) return null;
 
   return (
     <aside

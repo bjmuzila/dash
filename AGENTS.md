@@ -75,6 +75,43 @@ silently falls through the SPA catch-all to `/traders-dashboard` at
 runs on every `npm run build` (local and the Docker deploy) and FAILS the build
 if a toolbar nav item has no route, or if `App.tsx` imports a deleted page.
 
+## The phone build (`/m/*`)
+
+Six phone-only pages live under **`components/mobile/`** and are routed at
+**`/app/m/<id>`**: GEX chart, GEX heatmap, ES candles, option chain, Estimated
+Moves, Economic Calendar. They are purpose-built for a 390px iPhone, not
+restyled desktop pages — the desktop layouts are inline-styled with no class
+names, so a stylesheet cannot reach them.
+
+- **Registry: `components/mobile/mobileNav.ts`** — the tab list, the
+  desktop↔mobile route map, and the phone test. Adding a tab is three edits and
+  they are listed in that file's header. Miss the third (an
+  `app/app/m/<id>/route.ts` calling `serveSpaShell`) and the tab works in-app
+  but the URL 404s on a hard refresh.
+- **Shell: `MobileShell`** — universal `GlobalToolbar` stays on top (mounted by
+  LayoutShell), bottom tab bar below, page content between. `fill` = no scroll
+  (charts own their gestures); default = scrolling list.
+- **Redirect:** `MobileRedirect`, mounted once in `app-vite/src/App.tsx`. Phones
+  on a route in `DESKTOP_TO_MOBILE` get replaced to the phone build. Desktop
+  browsers are never redirected away from `/m/*`, so the phone pages can be
+  tested on a laptop. Long-press the tab bar to opt out for the session.
+- **Data is shared, not copied.** `useMobileGex` rides the same `lib/gexSocket`
+  the desktop uses; `useMobileChain` calls the same `/api/chains` through the
+  same `parseExpiration`; `useEmLookup` and `useEconCalendar`/`lib/econCalendar`
+  were extracted from the desktop components so both surfaces read one source.
+  Do not add a mobile-only fetch for a number the desktop already computes.
+- **`gridCols()` (in `mobileTheme`) is mandatory for every grid.** `globals.css`
+  has a "GLOBAL GRID COLLAPSE" block that flattens inline
+  `grid-template-columns: repeat(N…)` on narrow screens to rescue the desktop
+  pages. It would flatten the phone grids too, so they route the value through a
+  CSS custom property to stay out of its way. The helper's comment explains it.
+- **Preview without a backend:** `node scripts/mock-mobile-preview.mjs 4310`
+  serves `app-vite/dist` with synthetic SPX data at `/app/m/*`.
+
+`app/mobile/page.tsx` is the OLD one-off phone page. It is not routed by the SPA
+and its live-data path never worked (it reads a `wsRef` that is never assigned).
+It is superseded by `/m/*`.
+
 ## Theme
 
 UI must source colors/spacing from `components/shared/homeTheme.ts` (+

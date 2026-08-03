@@ -3,6 +3,7 @@ import { lazy, Suspense, type ReactNode } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from '@/components/auth/AuthProvider'
 import LayoutShell from '@/components/shared/LayoutShell'
+import MobileRedirect from '@/components/mobile/MobileRedirect'
 // Existing Next client pages, compiled directly via the '@' alias + next/* shims.
 import TradersDashboard from '@/components/pages/TradersDashboard'
 import Analytics from '@/components/pages/Analytics'
@@ -28,6 +29,18 @@ const TestLab      = lazy(() => import('@/components/pages/TestLab'))
 const StrikeHistory = lazy(() => import('@/components/pages/StrikeHistory'))
 const Replay       = lazy(() => import('@/components/pages/Replay'))
 
+// ── Phone build (/m/*) ────────────────────────────────────────────────────────
+// Six purpose-built views for a 390px iPhone, each in its own chunk so a phone
+// never downloads the desktop page it replaces. MobileRedirect (mounted below)
+// sends phones here from the matching desktop route; see components/mobile/
+// mobileNav.ts for the tab registry and the desktop<->mobile route map.
+const MGex     = lazy(() => import('@/components/mobile/pages/MobileGex'))
+const MHeatmap = lazy(() => import('@/components/mobile/pages/MobileHeatmap'))
+const MEs      = lazy(() => import('@/components/mobile/pages/MobileEsCandles'))
+const MChain   = lazy(() => import('@/components/mobile/pages/MobileChain'))
+const MEm      = lazy(() => import('@/components/mobile/pages/MobileEm'))
+const MEcon    = lazy(() => import('@/components/mobile/pages/MobileEcon'))
+
 const S = (el: ReactNode) => <Suspense fallback={null}>{el}</Suspense>
 
 // Mirrors app/layout.tsx: AuthProvider > (body flex-column) > LayoutShell.
@@ -38,7 +51,11 @@ export default function App() {
   return (
     <BrowserRouter basename="/app">
       <AuthProvider>
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+        {/* cb-app-viewport = 100dvh where supported, 100vh otherwise. Plain
+            100vh on iOS Safari measures the viewport WITHOUT the collapsible
+            URL bar, so the bottom tab bar sat ~80px below the fold. */}
+        <div className="cb-app-viewport" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <MobileRedirect />
           <LayoutShell>
             <Routes>
               <Route path="/home" element={S(<Home />)} />
@@ -60,6 +77,16 @@ export default function App() {
               <Route path="/fails" element={S(<Fails />)} />
               <Route path="/premarket" element={S(<Premarket />)} />
               <Route path="/economic-calendar" element={S(<EconCalendar />)} />
+
+              {/* Phone build. Kept as explicit routes rather than a nested
+                  layout so each one code-splits on its own. */}
+              <Route path="/m" element={<Navigate to="/m/gex" replace />} />
+              <Route path="/m/gex" element={S(<MGex />)} />
+              <Route path="/m/heatmap" element={S(<MHeatmap />)} />
+              <Route path="/m/es" element={S(<MEs />)} />
+              <Route path="/m/chain" element={S(<MChain />)} />
+              <Route path="/m/em" element={S(<MEm />)} />
+              <Route path="/m/econ" element={S(<MEcon />)} />
               <Route path="*" element={<Navigate to="/traders-dashboard" replace />} />
             </Routes>
           </LayoutShell>
