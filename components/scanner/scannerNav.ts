@@ -14,7 +14,7 @@ import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 
 /** Tabs that render inline on /scanner. */
 export type ScannerTabId =
-  | "overview" | "gex" | "strike" | "watch" | "marketquality"
+  | "gex" | "strike" | "watch" | "marketquality"
   | "tpo" | "ibstats" | "statprompter" | "gexchangetop" | "gexpct";
 
 /** What the bar can mark as current: a /scanner tab, or a split-out route. */
@@ -33,7 +33,6 @@ export type TabDef = {
 
 /** Bar order + per-tab accent, matching the original inline markup. */
 export const SCANNER_TABS: TabDef[] = [
-  { id: "overview",     label: "Overview",       short: "Overview",   color: HOME_THEME.cyan,   icon: "🧭" },
   { id: "gex",          label: "GEX Scanner",    short: "GEX Scanner",color: HOME_THEME.cyan,   icon: "🔍" },
   { id: "strike",       label: "Strike Query",   short: "Strike",     color: HOME_THEME.cyan,   icon: "🎯" },
   { id: "watch",        label: "Watch This",     short: "Watch",      color: LIGHT_BLUE,        icon: "👁️" },
@@ -65,8 +64,11 @@ export const SCANNER_ROUTES: ScannerRouteDef[] = [
 
 /**
  * Clusters for the sub-strip, rendered left → right separated by hairline
- * dividers. "overview" is excluded — it is pinned as its own button at the far
- * left of the strip so "just take me to the page" is always the first target.
+ * dividers. Every tab appears in exactly one cluster.
+ *
+ * There is no "overview" tab any more: the sub-strip is always on screen inside
+ * the Scanner section, so a landing page whose only job was linking to the other
+ * tabs had nothing left to do. /scanner opens on GEX Scanner.
  */
 export const SCANNER_GROUPS: { key: string; tabs: ScannerTabId[]; routes?: string[] }[] = [
   { key: "gamma",     tabs: ["gex", "gexchangetop", "gexpct", "strike"] },

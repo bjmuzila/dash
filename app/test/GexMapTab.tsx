@@ -609,9 +609,19 @@ function NoDex({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
 function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
   const fz = useFz();
   const W = 1240, H = 470;
-  const PX = 24, PW = 118;
-  const FX = PX + PW + 46, FW = 742;
-  const RX = FX + FW + 14, RW = 138;
+  // Laid out from the outside in so the heat field lands on the viewBox centre.
+  // Previously the three columns were summed left-to-right and stopped at 1082
+  // of 1240, which parked 158 units of dead space on the right and pushed the
+  // field visibly left of centre. Now: fixed 24-unit margins, a fixed rail on
+  // the right, and the left gutter + field width solved so that
+  // FX + FW/2 === W/2 exactly.
+  const MG = 24;
+  const RW = 190;                       // GEX rail — was 138; bars + badges were
+  const RX = W - MG - RW;               // colliding inside it.
+  const GAP_R = 16, GAP_L = 42;
+  const FX = W - RX + GAP_R;            // ⇒ field is centred on W/2
+  const FW = RX - GAP_R - FX;
+  const PX = MG, PW = FX - GAP_L - PX;  // left gutter takes the remainder
   const FY = 20, FH = 320;
   const KY = FY + FH + 40, KH = 66;
 
@@ -698,22 +708,20 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
       <rect x={RX} y={FY} width={RW} height={FH} rx={8} fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.07)" />
       {m.strikes.map((k, i) => {
         const v = m.profile[i];
-        return <rect key={`r${k}`} x={RX + 6} y={yOf(k) - ch * 0.42} width={Math.abs(v) * 26 + 1.5} height={Math.max(1.4, ch * 0.84)} rx={1}
+        return <rect key={`r${k}`} x={RX + 8} y={yOf(k) - ch * 0.42} width={Math.abs(v) * 46 + 1.5} height={Math.max(1.4, ch * 0.84)} rx={1}
           fill={gamColor(v, 0.3 + 0.55 * Math.abs(v))} />;
       })}
-      {/* Tick numbers are dropped in the grid: at 1.7× type the wall badges grow
-          into the same column, and the badges already carry those strikes. */}
       {ticks.map((k) => (
         <g key={`rt${k}`}>
-          <line x1={RX + 34} y1={yOf(k)} x2={RX + 40} y2={yOf(k)} stroke="rgba(255,255,255,0.18)" />
-          {!compact && <text x={RX + 96} y={yOf(k) + 3} fill={AXIS} fontSize={8}>{k}</text>}
+          <line x1={RX + 56} y1={yOf(k)} x2={RX + 62} y2={yOf(k)} stroke="rgba(255,255,255,0.18)" />
+          <text x={RX + 66} y={yOf(k) + 3} fill={AXIS} fontSize={8 * fz}>{k}</text>
         </g>
       ))}
       {([[m.callWall, GEX_POS_HEX, "CW"], [m.magnet, GOLD, "MG"], [m.flip, FLIP_C, "FL"], [m.putWall, GEX_NEG_HEX, "PW"]] as [number | null, string, string][])
         .filter(([k]) => k != null).map(([k, col, tag]) => (
           <g key={tag}>
-            <rect x={RX + 42} y={yOf(k as number) - 7 * fz} width={50 * fz} height={14 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
-            <text x={RX + 46} y={yOf(k as number) + 3.5 * fz} fill={col} fontSize={7.4 * fz} fontWeight={700}>{`${tag} ${fmtStrike(k)}`}</text>
+            <rect x={RX + 118} y={yOf(k as number) - 7 * fz} width={62 * fz} height={14 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
+            <text x={RX + 123} y={yOf(k as number) + 3.5 * fz} fill={col} fontSize={7.4 * fz} fontWeight={700}>{`${tag} ${fmtStrike(k)}`}</text>
           </g>
         ))}
       {m.spot > 0 && (
@@ -937,11 +945,13 @@ function PolarReticle({ m, compact }: { m: MapModel; compact?: boolean }) {
 function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
   const fz = useFz();
   const W = 1240, H = 560;
-  // The spine is 2/3 of the card width; the two wings split what's left, minus a
-  // 44px gutter each side for the strike labels.
-  const SPW = Math.round((W * 2) / 3);      // 827
-  const SPX = Math.round((W - SPW) / 2);    // 206
-  const GUT = 44;
+  // The spine is centred; the two wings split what's left. The gutter each side
+  // is 96 rather than 44 because the wall badges now live in the strike axis
+  // (see below) instead of floating over the heat, and "CALL WALL · 7530" needs
+  // room to sit beside the tick column.
+  const SPW = 800;
+  const SPX = Math.round((W - SPW) / 2);    // 220
+  const GUT = 96;
   const TY = 26, TH = 470;
   const yOf = (k: number) => TY + TH - ((k - m.lo) / Math.max(1, m.hi - m.lo)) * TH;
   const rowH = TH / Math.max(1, m.strikes.length - 1);
@@ -950,7 +960,18 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
   const cw = SPW / nb;
   const LW = SPX - GUT, LWW = LW - 12;              // left wing: DEX, grows leftward
   const RW = SPX + SPW + GUT, RWW = W - RW - 12;   // right wing: GEX, grows rightward
-  const ticks = strikeTicks(m.lo, m.hi, compact);
+
+  // The three walls are labelled in the LEFT strike axis, not over the heat.
+  // Over the heat they sat on top of the very cells they describe, and the wall
+  // colors ARE the heat colors, so a put-wall label was red-on-red. In the axis
+  // they read as what they actually are: named rows of the strike ladder.
+  const walls = ([[m.callWall, GEX_POS_HEX, "CALL WALL"], [m.magnet, GOLD, "MAGNET"], [m.putWall, GEX_NEG_HEX, "PUT WALL"]] as [number | null, string, string][])
+    .filter((w): w is [number, string, string] => w[0] != null);
+  // A plain tick sitting at the same height as a wall badge is the same number
+  // twice, overlapping — drop it and let the badge carry the strike.
+  const namedRows = [...walls.map(([k]) => k), ...(m.flip != null ? [m.flip] : [])];
+  const ticks = strikeTicks(m.lo, m.hi, compact)
+    .filter((k) => !namedRows.some((nk) => Math.abs(yOf(k) - yOf(nk)) < 13 * fz));
 
   return (
     <ZoomSvg w={W} h={H}>
@@ -971,28 +992,15 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
       <path d={pathD(Array.from({ length: nb }, (_, t) => [SPX + t * cw + cw / 2, yOf(m.path[c0 + t])]))}
         fill="none" stroke="#fff" strokeWidth={1.4} />
 
-      {/* walls + flip across the spine */}
-      {([[m.callWall, GEX_POS_HEX, "CALL WALL"], [m.magnet, GOLD, "MAGNET"], [m.putWall, GEX_NEG_HEX, "PUT WALL"]] as [number | null, string, string][])
-        .filter(([k]) => k != null).map(([k, col, label]) => (
-          <g key={label}>
-            <rect x={SPX} y={yOf(k as number) - 5} width={SPW} height={10} fill={col} opacity={0.13} />
-            <line x1={SPX} y1={yOf(k as number)} x2={SPX + SPW} y2={yOf(k as number)} stroke={col} opacity={0.55} />
-            {/* Dark pill behind the label: the wall colors ARE the heat colors,
-                so a bare put-wall label is red text on a red field. */}
-            <rect x={SPX + 5} y={yOf(k as number) - 8 - 11 * fz} width={(label.length * 5.6 + 34) * fz}
-              height={13 * fz} rx={3} fill="rgba(5,6,10,0.72)" />
-            <text x={SPX + 9} y={yOf(k as number) - 8 - 2 * fz} fill={col} fontSize={7.6 * fz} fontWeight={700} letterSpacing="0.12em">
-              {`${label} · ${fmtStrike(k)}`}
-            </text>
-          </g>
-        ))}
-      {m.flip != null && (
-        <g>
-          <line x1={SPX} y1={yOf(m.flip)} x2={SPX + SPW} y2={yOf(m.flip)} stroke={FLIP_C} strokeDasharray="5 4" strokeWidth={1.2} />
-          <text x={SPX + SPW - 8} y={yOf(m.flip) + 13} fill={FLIP_C} fontSize={7.8 * fz} fontWeight={700} letterSpacing="0.12em" textAnchor="end">
-            {`FLIP ${fmtStrike(m.flip)}`}
-          </text>
+      {/* walls + flip across the spine — bands only; the naming lives in the axis */}
+      {walls.map(([k, col, label]) => (
+        <g key={label}>
+          <rect x={SPX} y={yOf(k) - 5} width={SPW} height={10} fill={col} opacity={0.13} />
+          <line x1={SPX} y1={yOf(k)} x2={SPX + SPW} y2={yOf(k)} stroke={col} opacity={0.55} />
         </g>
+      ))}
+      {m.flip != null && (
+        <line x1={SPX} y1={yOf(m.flip)} x2={SPX + SPW} y2={yOf(m.flip)} stroke={FLIP_C} strokeDasharray="5 4" strokeWidth={1.2} />
       )}
 
       {/* bubbles pinned to the path inside the spine */}
@@ -1009,12 +1017,17 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
         );
       })}
 
-      {/* spot cursor */}
+      {/* spot cursor. The price tag used to be a 84×22 slab parked dead centre,
+          which is the busiest part of the heat — it covered the cells the
+          cursor is there to point at. Now it is a small tag pinned to the right
+          end of the spine, where the path actually ends. */}
       {m.spot > 0 && (
         <g>
           <line x1={LW - LWW} y1={yOf(m.spot)} x2={RW + RWW} y2={yOf(m.spot)} stroke="#fff" opacity={0.3} strokeDasharray="2 3" />
-          <rect x={SPX + SPW / 2 - 42 * fz} y={yOf(m.spot) - 11 * fz} width={84 * fz} height={22 * fz} rx={5} fill="rgba(5,6,10,0.9)" stroke="rgba(255,255,255,0.45)" />
-          <text x={SPX + SPW / 2} y={yOf(m.spot) + 4.5 * fz} fill="#fff" fontSize={11 * fz} fontWeight={700} textAnchor="middle">{fmtSpot(m.spot)}</text>
+          <rect x={SPX + SPW - 62 * fz - 6} y={yOf(m.spot) - 8 * fz} width={62 * fz} height={16 * fz} rx={4}
+            fill="rgba(5,6,10,0.9)" stroke="rgba(255,255,255,0.45)" />
+          <text x={SPX + SPW - 31 * fz - 6} y={yOf(m.spot) + 3.6 * fz} fill="#fff" fontSize={9 * fz} fontWeight={700}
+            textAnchor="middle" style={{ fontVariantNumeric: "tabular-nums" }}>{fmtSpot(m.spot)}</text>
         </g>
       )}
 
@@ -1037,7 +1050,30 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
           )}
         </g>
       ) : <NoDex x={LW - LWW} y={TY} w={LWW} h={TH} />}
+
+      {/* left strike axis — plain ticks, plus the named wall rows */}
       {ticks.map((k) => <text key={`lt${k}`} x={SPX - 8} y={yOf(k) + 3} fill={AXIS} fontSize={8.4 * fz} textAnchor="end">{k}</text>)}
+      {walls.map(([k, col, label]) => {
+        const bw = (label.length * 4.9 + 44) * fz;
+        return (
+          <g key={`ax${label}`}>
+            <rect x={SPX - 8 - bw} y={yOf(k) - 7.5 * fz} width={bw} height={15 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
+            <text x={SPX - 14} y={yOf(k) + 3.6 * fz} fill={col} fontSize={7.2 * fz} fontWeight={800} letterSpacing="0.08em" textAnchor="end">
+              {`${label} · ${fmtStrike(k)}`}
+            </text>
+            <line x1={SPX - 6} y1={yOf(k)} x2={SPX} y2={yOf(k)} stroke={col} opacity={0.7} />
+          </g>
+        );
+      })}
+      {m.flip != null && (
+        <g>
+          <rect x={SPX - 8 - 62 * fz} y={yOf(m.flip) - 7.5 * fz} width={62 * fz} height={15 * fz} rx={3}
+            fill={`${FLIP_C}26`} stroke={`${FLIP_C}80`} strokeDasharray="3 2" />
+          <text x={SPX - 14} y={yOf(m.flip) + 3.6 * fz} fill={FLIP_C} fontSize={7.2 * fz} fontWeight={800} letterSpacing="0.08em" textAnchor="end">
+            {`FLIP · ${fmtStrike(m.flip)}`}
+          </text>
+        </g>
+      )}
 
       {/* right wing — GEX */}
       <Lab x={RW} y={TY - 8}>NET GEX ►</Lab>
@@ -1050,8 +1086,10 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
           fill={rgba(mix(v >= 0 ? GEX_POS : GEX_NEG, WHITE, Math.abs(v) * 0.28), 0.26 + 0.55 * Math.abs(v))} />;
       })}
       {ticks.map((k) => <text key={`rt${k}`} x={SPX + SPW + 8} y={yOf(k) + 3} fill={AXIS} fontSize={8.4 * fz}>{k}</text>)}
+      {/* Anchored to the right margin, not to the wing's left edge — from RW the
+          caption ran straight off the 1240 viewBox and lost its last few words. */}
       {!compact && (
-        <text x={RW} y={TY + TH + 20} fill="rgba(255,255,255,0.34)" fontSize={9}>
+        <text x={W - 12} y={TY + TH + 20} fill="rgba(255,255,255,0.34)" fontSize={9} textAnchor="end">
           bar length = |GEX| · blue = long gamma (dealers dampen) · red = short gamma (dealers amplify)
         </text>
       )}
@@ -1185,7 +1223,14 @@ function TerrainField({ m, L, TP, FWD, FHT }: {
 function GammaTerrain({ m, compact }: { m: MapModel; compact?: boolean }) {
   const fz = useFz();
   const W = 1240, H = 520;
-  const L = 34, R = W - 210, TP = 26, BT = H - 52;
+  // The ridge rail is measured back from the right margin instead of being
+  // hung off the field's right edge with hard-coded offsets. The old version
+  // drew the rail 150 wide but placed its badges at +106 with a width that
+  // scaled with type size, so the badges walked straight out of the rail — and
+  // off the card — as soon as the font scale went above 1.
+  const RRW = 200;                       // ridge rail
+  const RRX = W - 24 - RRW;              // 1016
+  const L = 34, R = RRX - 16, TP = 26, BT = H - 52;
   const FWD = R - L, FHT = BT - TP;
 
   const yOf = (k: number) => TP + FHT - ((k - m.lo) / Math.max(1, m.hi - m.lo)) * FHT;
@@ -1251,24 +1296,24 @@ function GammaTerrain({ m, compact }: { m: MapModel; compact?: boolean }) {
         <text key={`tt${i}`} x={xOf(i)} y={BT + 16} fill={AXIS} fontSize={8 * fz} textAnchor="middle" opacity={0.75}>{label}</text>
       ))}
 
-      {/* ridge rail */}
-      <Lab x={R + 16} y={TP - 8}>RIDGE RAIL</Lab>
-      <rect x={R + 16} y={TP} width={150} height={FHT} rx={8} fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.07)" />
+      {/* ridge rail — bars | strike ticks | badges, all inside RRX..RRX+RRW */}
+      <Lab x={RRX} y={TP - 8}>RIDGE RAIL</Lab>
+      <rect x={RRX} y={TP} width={RRW} height={FHT} rx={8} fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.07)" />
       {m.strikes.map((k, i) => {
         const v = m.profile[i];
-        return <rect key={`rr${k}`} x={R + 22} y={yOf(k) - rowH * 0.42} width={Math.abs(v) * 34 + 1.5} height={Math.max(1.2, rowH * 0.84)} rx={1}
+        return <rect key={`rr${k}`} x={RRX + 8} y={yOf(k) - rowH * 0.42} width={Math.abs(v) * 44 + 1.5} height={Math.max(1.2, rowH * 0.84)} rx={1}
           fill={gamColor(v, 0.3 + 0.55 * Math.abs(v))} />;
       })}
-      {ticks.map((k) => <text key={`rrt${k}`} x={R + 74} y={yOf(k) + 3} fill={AXIS} fontSize={8 * fz}>{k}</text>)}
+      {ticks.map((k) => <text key={`rrt${k}`} x={RRX + 58} y={yOf(k) + 3} fill={AXIS} fontSize={8 * fz}>{k}</text>)}
       {([[m.callWall, GEX_POS_HEX, "RIDGE"], [m.magnet, GOLD, "PEAK"], [m.flip, FLIP_C, "COAST"], [m.putWall, GEX_NEG_HEX, "TRENCH"]] as [number | null, string, string][])
         .filter(([k]) => k != null).map(([k, col, tag]) => (
           <g key={tag}>
-            <rect x={R + 106} y={yOf(k as number) - 7 * fz} width={54 * fz} height={14 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
-            <text x={R + 111} y={yOf(k as number) + 3.5 * fz} fill={col} fontSize={7.4 * fz} fontWeight={700} letterSpacing="0.08em">{tag}</text>
+            <rect x={RRX + 116} y={yOf(k as number) - 7 * fz} width={Math.min(76, RRW - 124) * fz} height={14 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
+            <text x={RRX + 122} y={yOf(k as number) + 3.5 * fz} fill={col} fontSize={7.4 * fz} fontWeight={700} letterSpacing="0.08em">{tag}</text>
           </g>
         ))}
       {m.spot > 0 && (
-        <polygon points={`${R + 14},${yOf(m.spot)} ${R + 5},${yOf(m.spot) - 5} ${R + 5},${yOf(m.spot) + 5}`} fill="#fff" />
+        <polygon points={`${RRX - 2},${yOf(m.spot)} ${RRX - 11},${yOf(m.spot) - 5} ${RRX - 11},${yOf(m.spot) + 5}`} fill="#fff" />
       )}
       {!compact && (
         <text x={L} y={H - 12} fill="rgba(255,255,255,0.3)" fontSize={8} fontWeight={600} letterSpacing="0.14em">
@@ -1297,63 +1342,69 @@ function strikeTicks(lo: number, hi: number, sparse = false): number[] {
   return out;
 }
 
+/**
+ * Evenly spaced time labels along the session.
+ *
+ * Deduped on BOTH the column index and the rendered label. Early in a session
+ * there may be fewer columns than requested ticks, so `Math.round` maps several
+ * n's onto the same index and the axis drew the same timestamp two or three
+ * times stacked on the same pixel. Labels can also collide with distinct
+ * indices, because the label is minute-resolution and slots can be finer — two
+ * adjacent slots inside one minute render identically. Either way, one label
+ * per position.
+ */
 function pickTimeTicks(cols: MapColumn[], count = 6): { i: number; label: string }[] {
   if (!cols.length) return [];
+  const n1 = Math.max(1, count - 1);
   const out: { i: number; label: string }[] = [];
+  const seenIdx = new Set<number>();
+  const seenLabel = new Set<string>();
   for (let n = 0; n < count; n++) {
-    const i = Math.round((n / (count - 1)) * (cols.length - 1));
-    out.push({ i, label: etTime(cols[i].t) });
+    const i = Math.round((n / n1) * (cols.length - 1));
+    if (seenIdx.has(i)) continue;
+    const label = etTime(cols[i].t);
+    if (seenLabel.has(label)) continue;
+    seenIdx.add(i);
+    seenLabel.add(label);
+    out.push({ i, label });
   }
   return out;
 }
 
 // ── tab ──────────────────────────────────────────────────────────────────────
 /**
- * One map in the 2×2 grid. Clicking the header spans it across both columns and
- * turns compact mode off — the grid is for comparing the four at a glance, the
- * expanded card is for reading one of them.
+ * One map, one row. The stack is four full-width cards rather than a 2×2 — at
+ * half width the 1240-unit viewBox put 8px labels at ~4px and every map had to
+ * run a "compact" variant with its type scaled up and its densest layers
+ * dropped. Full width means every card renders at 1× type with nothing culled,
+ * so `compact` is now permanently false and the font-scale context stays at 1.
  */
-function MapCard({ def, m, expanded, onToggle }: {
+function MapCard({ def, m }: {
   def: (typeof CONCEPTS)[number];
   m: MapModel;
-  expanded: boolean;
-  onToggle: () => void;
 }) {
   const Body = def.key === "tape" ? TapeField
     : def.key === "reticle" ? PolarReticle
     : def.key === "spine" ? Spine
     : GammaTerrain;
   return (
-    <Card variant="budget" padding={16} style={expanded ? { gridColumn: "1 / -1" } : undefined}>
-      <button
-        type="button"
-        onClick={onToggle}
-        title={expanded ? "Collapse back into the grid" : "Expand to full width"}
-        style={{
-          display: "flex", alignItems: "baseline", gap: 10, width: "100%",
-          background: "none", border: "none", padding: 0, marginBottom: 10,
-          cursor: "pointer", textAlign: "left", color: HOME_THEME.text,
-        }}
-      >
+    <Card variant="budget" padding={16}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, width: "100%", marginBottom: 10, color: HOME_THEME.text }}>
         <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" }}>
           {def.label}
         </span>
         <span style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.45, flex: 1, minWidth: 0 }}>
           {def.blurb}
         </span>
-        <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.cyan, flexShrink: 0 }}>
-          {expanded ? "COLLAPSE" : "EXPAND"}
-        </span>
-      </button>
-      <FzCtx.Provider value={expanded ? 1 : 1.7}>
-        <Body m={m} compact={!expanded} />
+      </div>
+      <FzCtx.Provider value={1}>
+        <Body m={m} compact={false} />
       </FzCtx.Provider>
     </Card>
   );
 }
 
 export default function GexMapTab() {
-  const [expanded, setExpanded] = useState<Concept | null>(null);
   const [date, setDate] = useState<string>("latest");
   // "front" = let the route pick (0DTE if it exists). Reset whenever the session
   // changes, because an expiry that had rows on Thursday is meaningless on
@@ -1408,8 +1459,7 @@ export default function GexMapTab() {
   return (
     <>
       <style>{`
-        .gexmap-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; }
-        @media (max-width: 1180px) { .gexmap-grid { grid-template-columns: minmax(0, 1fr); } }
+        .gexmap-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
       `}</style>
       <Card variant="budget" padding={18}>
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
@@ -1430,11 +1480,8 @@ export default function GexMapTab() {
             />
           </div>
           <button type="button" onClick={() => void load(date, expiry)} style={homeButtonStyle}>Refresh</button>
-          {expanded && (
-            <button type="button" onClick={() => setExpanded(null)} style={homeButtonStyle}>Back to 2×2</button>
-          )}
           <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.6, flex: 1, minWidth: 220 }}>
-            All four readouts, same session, same scales — click any card header to expand it.
+            All four readouts, same session, same scales — one per row, scroll to compare.
           </div>
         </div>
         <div style={{ fontSize: 11.5, color: HOME_THEME.text, opacity: 0.45, marginTop: 10, lineHeight: 1.6 }}>
@@ -1484,20 +1531,14 @@ export default function GexMapTab() {
           </div>
         </Card>
       ) : (
-        // Hard 2×2. `auto-fit` was wrong here — on a wide monitor it fits three
-        // across and the layout stops being the 2×2 it is supposed to be. The
-        // only responsive behaviour wanted is a single column once two side by
-        // side are unreadable at any type scale, which needs a media query, so
-        // this carries its own <style> rather than faking it with auto-fit.
+        // One column, four rows. Two side by side never actually worked: each
+        // map is drawn in a 1240-unit viewBox, so at half width everything was
+        // rendering at ~0.5× and the maps had to fight back with 1.7× type and
+        // culled layers. Full width per row is the only size at which all four
+        // are readable without a compact variant.
         <div className="gexmap-grid">
           {CONCEPTS.map((def) => (
-            <MapCard
-              key={def.key}
-              def={def}
-              m={model}
-              expanded={expanded === def.key}
-              onToggle={() => setExpanded((e) => (e === def.key ? null : def.key))}
-            />
+            <MapCard key={def.key} def={def} m={model} />
           ))}
         </div>
       )}

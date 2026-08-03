@@ -391,6 +391,8 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       <DockButton
         onClick={() => togglePopover("charts")}
         title="Chart count and side panel"
+        caret
+        open={popover === "charts"}
         style={popover === "charts" ? { color: LIGHT_BLUE, borderColor: LIGHT_BLUE } : undefined}
       >
         <span>Charts</span>
@@ -399,6 +401,8 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       <DockButton
         onClick={toggleReplay}
         title="Replay the session — reveal candles and gamma from the open forward"
+        caret
+        open={popover === "replay"}
         style={popover === "replay" ? { color: HOME_THEME.cyan, borderColor: HOME_THEME.cyan } : undefined}
       >
         <span>Replay</span>
@@ -406,6 +410,8 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       <DockButton
         onClick={() => togglePopover("indicators")}
         title="Indicators — applied to every chart in the row"
+        caret
+        open={popover === "indicators"}
         style={popover === "indicators" ? { color: LIGHT_BLUE, borderColor: LIGHT_BLUE } : undefined}
       >
         <span>Indicators</span>

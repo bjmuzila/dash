@@ -24,7 +24,7 @@ import TpoForwardMap from "@/components/scanner/TpoForwardMap";
 import TpoOpenLocation from "@/components/scanner/TpoOpenLocation";
 import GexChangeTop from "@/components/scanner/GexChangeTop";
 import GexPctTab from "@/components/scanner/GexPctTab";
-import ScannerTabsBar, { readTabFromUrl, SCANNER_TAB_EVENT } from "@/components/scanner/ScannerTabsBar";
+import { readTabFromUrl, SCANNER_TAB_EVENT } from "@/components/scanner/scannerNav";
 
 // ── shared types / helpers ────────────────────────────────────────────────────
 
@@ -61,123 +61,7 @@ const zColor = (z: number | null) =>
 
 // ── top-level tab ─────────────────────────────────────────────────────────────
 
-type MainTab = "overview" | "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "gexchangetop" | "gexpct";
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  OVERVIEW / LANDING (default tab) — cards explaining each scanner
-// ══════════════════════════════════════════════════════════════════════════════
-
-type ScanMeta = {
-  tab: Exclude<MainTab, "overview">;
-  title: string;
-  accent: string;
-  scope: string;
-  what: string;
-  tells: string;
-};
-
-const SCAN_META: ScanMeta[] = [
-  {
-    tab: "gex",
-    title: "GEX Change Scanner",
-    accent: HOME_THEME.cyan,
-    scope: "Stocks · cross-ticker",
-    what: "Ranks strikes across the whole ticker universe by how much their GEX has moved in the last 5–60 minutes, either by raw size or by z-score vs their own recent history.",
-    tells: "Where dealer hedging pressure is building fastest right now — the strikes seeing unusually large, non-routine gamma shifts.",
-  },
-  {
-    tab: "strike",
-    title: "Strike Query Scanner",
-    accent: HOME_THEME.green,
-    scope: "Any ticker · drill-down",
-    what: "Ad-hoc lookup of GEX-now and 15/30/60m change per strike, for one ticker or the whole watchlist, sortable by any column.",
-    tells: "A quick manual drill-down into exactly which strikes are gaining or losing GEX right now — the tool for \"what's happening at this specific strike.\"",
-  },
-  {
-    tab: "watch",
-    title: "Watch This — Far CB",
-    accent: LIGHT_BLUE,
-    scope: "EM watchlist · 30d expiries",
-    what: "Flags the single highest-GEX strike per ticker (≤30 DTE) when it sits unusually far OTM vs spot, then tracks whether spot ever reaches it.",
-    tells: "A structurally dominant level that's currently far from price — worth watching, with a running record of whether it ever gets touched.",
-  },
-  {
-    tab: "marketquality",
-    title: "Market Quality Terminal",
-    accent: HOME_THEME.orange,
-    scope: "Broad market · 5 pillars",
-    what: "A single 0–100 Global Market Score blending Volatility, Trend, Breadth, Momentum, and Macro (bonds/dollar) pillars from live index and sector-ETF data.",
-    tells: "Whether the overall tape is a favorable, cautious, or risk-off environment for sizing new trades — a top-down regime check before you drill into any single ticker.",
-  },
-  {
-    tab: "tpo",
-    title: "TPO Structures",
-    accent: LIGHT_BLUE,
-    scope: "ESU / NQU · Market Profile open business",
-    what: "Builds a true TPO profile (one touch per 30-min period, time not volume) for every RTH session, extracts excess/tails, poor highs+lows, thin-zone holes and naked POCs, then forward-fills each one to see whether it was ever tested or repaired.",
-    tells: "Which prior-session levels are still unfinished business — and, per structure type, how often that kind of level actually gets revisited. Excess holds; poor highs get taken out; holes get accelerated through. They are opposite trades.",
-  },
-  {
-    tab: "ibstats",
-    title: "IB Stats",
-    accent: HOME_THEME.green,
-    scope: "ES · 3 years of 5m RTH",
-    what: "Backtests every Initial Balance (09:30–10:30) rule — midpoint bias, formation order, single-break continuation, width-based day type, failed-break fades, 0.25 fib pullbacks, extension targets, break timing — over a baked-in 3-year ES dataset.",
-    tells: "Which IB rules actually have an edge and which are coin flips, with hit rates, sample sizes, average break time, and MFE/MAE sizing for each — ranked best to worst.",
-  },
-  {
-    tab: "statprompter",
-    title: "Stat Prompter",
-    accent: LIGHT_BLUE,
-    scope: "ES + NQ · paired IB sessions",
-    what: "A library of canned questions over the ES and NQ Initial Balance book — cross-index divergence (ES breaks high while NQ breaks low), confirm-vs-diverge break quality, follow-the-first-breaker, width/open-type/ORB/FVG context, break timing, and trend-day filters. Click one and it runs on the real history.",
-    tells: "The base rate for whatever shape today just printed, in one click — with n, a 95% confidence interval, a THIN badge under n=30, and a bias flag on anything above 85%.",
-  },
-  {
-    tab: "gexchangetop",
-    title: "GEX Change Top",
-    accent: HOME_THEME.orange,
-    scope: "Stocks · hourly ★ very-strong picks",
-    what: "A recorded, going-forward log of the top 5 ★ Very strong strikes by combined score — captured automatically at the top of every RTH hour off the GEX Change Scanner (60m window, |Δ| ≥ $500k AND |% vs open| ≥ 30%).",
-    tells: "Which strikes were building hardest each hour, hour by hour, without leaving a browser tab open — scroll back through the day to see how the strongest names rotated.",
-  },
-  {
-    tab: "gexpct",
-    title: "GEX%",
-    accent: LIGHT_BLUE,
-    scope: "Watchlist · front 3 expiries",
-    what: "For every recorded ticker, the positive/negative split of net GEX (carried OI gamma + today's volume gamma) at each of the front three expirations, shown as a share of that expiry's total |net GEX| with the dollar figures behind it.",
-    tells: "Whether dealers are net long or short gamma in a name — and how that flips as you walk out the expiry curve. A name that's 80% call-side on the front expiry but put-heavy by the third is carrying its risk further out than the tape suggests.",
-  },
-];
-
-function ScannerOverview({ onSelect }: { onSelect: (t: MainTab) => void }) {
-  return (
-    <div className="scanner-overview-grid" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 16 }}>
-      {SCAN_META.map((s) => (
-        <div
-          key={s.tab}
-          onClick={() => onSelect(s.tab)}
-          className="card-hover scanner-overview-card"
-          style={{ ...classicCardAccentStyle, cursor: "pointer", padding: "18px 20px" }}
-        >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-            <span style={{ fontWeight: 800, fontSize: 17, color: HOME_THEME.text }}>{s.title}</span>
-          </div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: s.accent, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 10 }}>
-            {s.scope}
-          </div>
-          <div style={{ fontSize: 14, color: "rgba(255,255,255,0.75)", lineHeight: 1.5, marginBottom: 10 }}>
-            {s.what}
-          </div>
-          <div style={{ fontSize: 14, color: HOME_THEME.text, lineHeight: 1.5, fontWeight: 600 }}>
-            <span style={{ color: s.accent, fontWeight: 800 }}>Tells you: </span>{s.tells}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
+type MainTab = "gex" | "strike" | "watch" | "marketquality" | "tpo" | "ibstats" | "statprompter" | "gexchangetop" | "gexpct";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  GEX CHANGE SCANNER (original tab)
@@ -3025,9 +2909,6 @@ export default function ScannerPage() {
 
   return (
     <PageShell>
-      <ScannerTabsBar active={tab} onSelect={(t) => setTab(t as MainTab)} />
-
-      {tab === "overview" && <ScannerOverview onSelect={setTab} />}
       {tab === "gex"    && <GexScanner />}
       {tab === "strike" && <StrikeQueryScanner />}
       {tab === "watch"  && <WatchThisScanner />}

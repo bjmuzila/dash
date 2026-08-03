@@ -16,7 +16,7 @@
  * price ran away downward — a setup pointing the wrong way. A play appears when
  * its detector actually fires, and not before.
  *
- * RISK MATH IS DELIBERATELY IDENTICAL TO THE RECORDER
+ * RISK MATH MIRRORS THE RECORDER
  * (`app/api/ict-setups/route.ts` → `extractSetups`): entry = trigger-bar close,
  * stop = nearest swing pivot on the wrong side of entry (gated on `confirmTs`,
  * never on formation — that was the lookahead bug), buffered by 0.15 × ATR(14),
@@ -24,12 +24,45 @@
  * two ever drift, the boxes on the chart stop matching the win rates on
  * /dev/results, so change them together.
  *
+ * ONE EXCEPTION: **Turtle Soup** is built here from the full ICT model (raid on a
+ * short-term swing high/low, inside a Turtle Soup raid window, entry on the first
+ * filled reversal FVG, stop beyond the raid wick) rather than from
+ * `analysis.turtleSoup`. Its entry and stop therefore do NOT match the recorder,
+ * whose `turtleSoup` rows are still the raid-close + structural-stop version — so
+ * the leaderboard's Turtle Soup win rate describes a different trade than the box
+ * on the chart until the same rules are ported into the route and rescanned.
+ *
  * Targets are the 1R / 2R / 3R ladder off that risk — the same R the grader
  * measures in, so a box tagging "2R" on the chart is the same 2R the leaderboard
  * counts.
  */
 
-import type { Dir, IctAnalysis, IctCandle } from "./ictConcepts";
+import { etMinutes, type Dir, type IctAnalysis, type IctCandle } from "./ictConcepts";
+
+/**
+ * Turtle Soup raid windows (ET), from theinnercircletraders.com's Turtle Soup
+ * write-up. These are NARROWER than `ICT_WINDOWS` in ictConcepts — that list is
+ * the general killzone/Silver-Bullet/macro set used by the chart's KZ overlay,
+ * while these are the specific windows the Turtle Soup model says a stop raid
+ * has to land in to count. Kept local to the play layer on purpose: widening
+ * ICT_WINDOWS would repaint the killzone bands and the live badges on every
+ * other concept card.
+ */
+export const TURTLE_RAID_WINDOWS: Array<{ id: string; label: string; startMin: number; endMin: number }> = [
+  { id: "londonOpen", label: "London open",        startMin: 2 * 60,        endMin: 2 * 60 + 30 },
+  { id: "londonInj",  label: "London injection",   startMin: 3 * 60 + 45,   endMin: 4 * 60 + 8 },
+  { id: "nyam1",      label: "NY AM manipulation", startMin: 8 * 60 + 14,   endMin: 8 * 60 + 38 },
+  { id: "nyam2",      label: "NY AM manipulation", startMin: 9 * 60 + 23,   endMin: 9 * 60 + 45 },
+  { id: "lunch",      label: "Lunch liquidity raid", startMin: 12 * 60 + 45, endMin: 13 * 60 + 8 },
+  { id: "nypm",       label: "NY PM raid",         startMin: 14 * 60 + 15,  endMin: 14 * 60 + 38 },
+];
+
+/** Label of the raid window a timestamp falls in, or null if it's outside them all. */
+export function turtleRaidWindow(ts: number): string | null {
+  const m = etMinutes(ts);
+  const w = TURTLE_RAID_WINDOWS.find((x) => m >= x.startMin && m < x.endMin);
+  return w ? w.label : null;
+}
 
 export type PlayState = "live" | "won" | "lost";
 
@@ -176,14 +209,25 @@ export function buildIctPlays(
 
   const out: IctPlay[] = [];
 
-  /** A play that has already triggered — entry is the trigger bar's close. */
+  /**
+   * A play that has already triggered.
+   * `level` is the concept's price; entry defaults to the trigger bar's close.
+   * `opts.entryPrice` overrides that (Turtle Soup enters at the reversal FVG, not
+   * at the raid candle) and `opts.stopPrice` overrides the structural stop.
+   */
   const pushLive = (
     kind: PlayKind, dir: Dir, triggerTs: number, level: number, note: string,
     zone: { top: number; bottom: number } | null = null,
+    opts2: { entryPrice?: number; stopPrice?: number } = {},
   ) => {
     const bar = byTs.get(triggerTs);
-    const entry = round2(bar ? bar.close : level);
-    const stop = round2(structuralStop(dir, entry, triggerTs));
+    const entry = round2(opts2.entryPrice ?? (bar ? bar.close : level));
+    const rawStop = opts2.stopPrice ?? structuralStop(dir, entry, triggerTs);
+    // Whatever the source, the stop must sit on the losing side of entry with at
+    // least one buffer of room, or R is meaningless.
+    const stop = round2(dir === "bull"
+      ? Math.min(rawStop, entry - buf)
+      : Math.max(rawStop, entry + buf));
     const risk = Math.abs(entry - stop);
     if (!(risk > 0) || !Number.isFinite(entry)) return;
     const targets = PLAY_TARGET_RS.map((r) => round2(dir === "bull" ? entry + r * risk : entry - r * risk));
@@ -197,9 +241,87 @@ export function buildIctPlays(
     });
   };
 
-  // ── LIVE: the model detectors are already point-in-time triggers ───────────
-  const signalGroups: Array<[PlayKind, typeof a.turtleSoup]> = [
-    ["turtleSoup", a.turtleSoup],
+  // ── LIVE: Turtle Soup, per the ICT model ──────────────────────────────────
+  // Built here rather than taken from `a.turtleSoup` (which only fires on EQH/EQL
+  // clusters and enters at the raid candle). The model is:
+  //   1. a raid on a SHORT-TERM SWING HIGH/LOW — any confirmed fractal pivot, not
+  //      just relative-equal levels;
+  //   2. inside one of the Turtle Soup raid windows (TURTLE_RAID_WINDOWS);
+  //   3. the raid candle closes back INSIDE the level — the breakout failed;
+  //   4. entry on the FIRST FVG created on the reversal (consequent encroachment
+  //      = the gap's midpoint), falling back to the raid close if no gap prints
+  //      within FVG_WAIT bars, so a clean raid is never left unmarked;
+  //   5. stop beyond the raid wick — the high/low the stop hunt actually printed.
+  //
+  // NOTE: steps 4–5 make Turtle Soup the ONE kind whose entry/stop differ from
+  // `app/api/ict-setups/route.ts`, so its leaderboard row is still graded from the
+  // raid-close + structural-stop version. Port the same rules there (and rescan)
+  // if the two need to agree again.
+  {
+    const tol = Math.max(0.25, atr * 0.05);
+    const RAID_WAIT = 24;   // bars a pivot stays raidable after it confirms
+    const FVG_WAIT = 6;     // bars to wait for the reversal gap
+    const seenRaid = new Set<string>();
+
+    for (const p of a.pivots) {
+      const startIdx = p.confirmIdx + 1;
+      for (let i = startIdx; i < Math.min(candles.length, startIdx + RAID_WAIT); i++) {
+        const c = candles[i];
+        const took = p.type === "high" ? c.high > p.price + tol : c.low < p.price - tol;
+        if (!took) continue;
+        // Closed back inside → failed breakout. Closed beyond → real break, and
+        // this pivot is spent either way.
+        const failed = p.type === "high" ? c.close < p.price : c.close > p.price;
+        if (!failed) break;
+        const win = turtleRaidWindow(c.timestamp);
+        if (!win) break;                       // right shape, wrong time
+        const dir: Dir = p.type === "high" ? "bear" : "bull";
+        const key = `${dir}:${c.timestamp}`;
+        if (seenRaid.has(key)) break;
+        seenRaid.add(key);
+
+        // Reversal FVGs created within FVG_WAIT bars of the raid, oldest first.
+        const gaps = a.fvgs
+          .map((f) => ({ f, activeTs: f.inverted && f.invertedTs != null ? f.invertedTs : f.ts }))
+          .filter(({ f, activeTs }) => f.activeDir === dir && activeTs > c.timestamp &&
+            activeTs - c.timestamp <= FVG_WAIT * barMs)
+          .sort((x, y) => x.activeTs - y.activeTs);
+
+        const raidStop = dir === "bull" ? c.low - buf : c.high + buf;
+        const lvl = round2(p.price);
+        const sideTxt = dir === "bull" ? "SSL" : "BSL";
+
+        // An FVG entry is a RESTING order: the gap forms away from price, and the
+        // trade only exists once price trades back into it. Stamping the trigger
+        // at gap creation would start grading from a price that never traded and
+        // hand every setup free MFE — so the play waits for the fill bar, and
+        // until then the raid close stands as the fallback entry.
+        // Take the EARLIEST gap that price actually came back to — if the first
+        // one never gets filled it was never a trade, and the next gap in the
+        // reversal is the one the entry happened at.
+        let filled: { ts: number; entry: number; zone: { top: number; bottom: number } } | null = null;
+        for (const gap of gaps) {
+          const mid = (gap.f.top + gap.f.bottom) / 2;   // consequent encroachment
+          const fillBar = candles.find((b) => b.timestamp > gap.activeTs && b.low <= mid && b.high >= mid);
+          if (fillBar) { filled = { ts: fillBar.timestamp, entry: mid, zone: { top: gap.f.top, bottom: gap.f.bottom } }; break; }
+        }
+
+        if (filled) {
+          pushLive("turtleSoup", dir, filled.ts, filled.entry,
+            `${sideTxt} raid ${lvl} · ${win} → FVG entry ${round2(filled.zone.bottom)}–${round2(filled.zone.top)}`,
+            filled.zone, { entryPrice: filled.entry, stopPrice: raidStop });
+        } else {
+          pushLive("turtleSoup", dir, c.timestamp, p.price,
+            `${sideTxt} raid ${lvl} · ${win} · ${gaps.length ? "reversal FVG unfilled — raid close" : "no reversal FVG — raid close"}`,
+            null, { stopPrice: raidStop });
+        }
+        break;                                  // one raid per pivot
+      }
+    }
+  }
+
+  // ── LIVE: the remaining model detectors are already point-in-time triggers ──
+  const signalGroups: Array<[PlayKind, typeof a.judas]> = [
     ["judas",      a.judas],
     ["cisd",       a.cisd],
     ["model2022",  a.model2022],

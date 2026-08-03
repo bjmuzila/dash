@@ -25,7 +25,6 @@ import { createPortal } from "react-dom";
 import { HOME_THEME, homeRefreshButtonStyle, homeButtonStyle, homeSecondaryButtonStyle, homeInputStyle, statTileStyle, DOCK_THEME, LIGHT_BLUE, SOFT_RED } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
-import ScannerTabsBar from "@/components/scanner/ScannerTabsBar";
 
 type DayMeta = { date: string; expiry: string; snaps: number };
 type StrikeMeta = { strike: number; snaps: number; avgNetGex: number };
@@ -674,10 +673,9 @@ export default function StrikeHistoryPage() {
     // dense charts you hover CONSTANTLY to read the crosshair — the default
     // rise-on-hover would make the whole panel twitch under the cursor.
     <PageShell className="no-card-lift">
-      {/* The scanner tab strip renders in link mode so this split-out route is
-          not a dead end. */}
-      <ScannerTabsBar active="strikehistory" />
-
+      {/* No tab strip here: the Scanner section's tabs live in the GlobalToolbar
+          sub-strip now (ScannerSubStrip), which stays on screen across every
+          route in the section — including this one. */}
       <Card
         variant="classic"
         title="Strike GEX + IV skew history"

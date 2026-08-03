@@ -246,21 +246,45 @@ export function ToggleTile({
 }
 
 /* ---------- Action button ---------- */
+/**
+ * `caret` marks a button that OPENS something. Without it there is no way to
+ * tell "Charts" (opens a panel) from "Vol" (toggles a value) — they render
+ * identically, so the only way to learn which is which is to click everything.
+ * Any button wired to a popover should pass it.
+ *
+ * `open` flips the caret and is the ONLY thing that should say "this panel is
+ * showing". Callers used to pass a style override for that, which collided with
+ * the browser's focus ring: click Replay, press Escape, and the panel closes
+ * while the ring stays — a button that looks active with nothing open. Hence
+ * the blur below.
+ */
 export function DockButton({
   children,
   onClick,
   title,
   style,
+  caret = false,
+  open = false,
 }: {
   children: ReactNode;
   onClick?: () => void;
   title?: string;
   style?: CSSProperties;
+  caret?: boolean;
+  open?: boolean;
 }) {
   return (
     <button
-      onClick={onClick}
+      onClick={(e) => {
+        // Drop focus so the UA ring can't be mistaken for state. Standard for
+        // icon/toolbar buttons; keyboard users still get the ring while
+        // tabbing, because that path never fires a click.
+        e.currentTarget.blur();
+        onClick?.();
+      }}
       title={title}
+      aria-haspopup={caret ? "menu" : undefined}
+      aria-expanded={caret ? open : undefined}
       style={{
         minWidth: 34,
         height: 34,
@@ -283,6 +307,22 @@ export function DockButton({
       }}
     >
       {children}
+      {caret && (
+        <span
+          aria-hidden
+          style={{
+            fontSize: 8,
+            lineHeight: 1,
+            marginLeft: 1,
+            display: "inline-block",
+            opacity: open ? 0.95 : 0.45,
+            transform: open ? "rotate(180deg)" : "none",
+            transition: "transform 120ms ease, opacity 120ms ease",
+          }}
+        >
+          ▼
+        </span>
+      )}
     </button>
   );
 }

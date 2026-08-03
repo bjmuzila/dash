@@ -11,6 +11,7 @@ import { SqueezeBoard } from "@/app/squeeze/page";
 import DealerGammaTab from "@/app/test/DealerGammaTab";
 import GexMapTab from "@/app/test/GexMapTab";
 import VolGexFlowPanel from "@/components/dashboard/VolGexFlowPanel";
+import { TESTLAB_SECTION, TESTLAB_TAB_EVENT, readSectionTab } from "@/components/shared/sectionNav";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test page: SPX / SPY / QQQ directional options-flow inventory, live from the
@@ -2477,235 +2478,7 @@ function GexLevelsTab() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Overview tab — landing view for the Test Lab. One card per tab explaining
-// what it does + a "these are early builds, please leave feedback" banner.
-// Purely descriptive/navigational — no live data of its own.
-// ─────────────────────────────────────────────────────────────────────────────
-
-function FlaskIcon({ color, size = 22 }: { color: string; size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9 3h6" />
-      <path d="M10 3v6.2L4.5 18a2 2 0 0 0 1.7 3h11.6a2 2 0 0 0 1.7-3L14 9.2V3" />
-      <path d="M7 15h10" />
-    </svg>
-  );
-}
-
-type OverviewCardDef = {
-  key: TestTab;
-  label: string;
-  accent: string;
-  blurb: string;
-  points: string[];
-};
-
-const OVERVIEW_CARDS: OverviewCardDef[] = [
-  {
-    key: "squeeze",
-    label: "Squeeze",
-    accent: LIGHT_BLUE,
-    blurb: "Gamma Exposure board + a dealer-positioning squeeze screener for the live 0DTE symbol.",
-    points: [
-      "Spot, Net / Call / Put / Total GEX, Call Wall, Put Wall and Zero Gamma across the top",
-      "Per-strike gamma profile on the OI+Vol net basis, with the walls outlined and an All / Near zoom",
-      "Squeeze score out of 100 — gamma regime, flip distance, wall proximity, vanna/charm, flow and DEX",
-      "Key levels with expected move and the dealer $ hedged per 1% move",
-    ],
-  },
-  {
-    key: "gexlevels",
-    label: "GEX Levels",
-    accent: LIGHT_BLUE,
-    blurb: "SqueezeMetrics-style GEX dashboard for the live 0DTE symbol.",
-    points: [
-      "Resistance / Support / Neutral levels + $Gamma and CPG gauges",
-      "SPX EOD GEX bar charts — 0DTE and ex-0DTE net GEX at the close, both on the OI+Vol basis, one bar per session (eod_gex)",
-      "Cumulative net gamma by strike at three scopes — 0DTE only, all expirations, and ex-0DTE",
-      "Open interest by expiration and by date (contract counts, real, once/day), call/put gamma and net delta charts",
-      "Daily history of level changes persisted forever in Postgres (gex_levels_history)",
-    ],
-  },
-  {
-    key: "dealergamma",
-    label: "Dealer Gamma",
-    accent: LIGHT_BLUE,
-    blurb: "End-of-day dealer gamma broken out by time to expiry, from the 15:55 ET close snapshot.",
-    points: [
-      "Net dealer gamma per 1% move, split into 0DTE / 1–7 / 8–30 / 31–90 / 90+",
-      "Ex-0DTE and All-expirations rollups — the ex-0DTE figure pairs with eod_gex.total_gex_ex0dte",
-      "Every row labelled measured or convention: position sign is only measured inside 7 DTE",
-      "Snapshot taken before the bell, so 0DTE gamma is captured instead of settling to zero",
-    ],
-  },
-  {
-    key: "gexmap",
-    label: "GEX Map",
-    accent: LIGHT_BLUE,
-    blurb: "Four unified map readouts — GEX profile, heatmap, rail, bubbles and DEX fused into one picture, with an expiry chooser.",
-    points: [
-      "Tape Field — time-forward radar: DEX profile left, GEX profile + rail right, Net Vol GEX keel",
-      "Polar Reticle — spot-centred dial, strikes by bearing, session clock on the rim",
-      "Spine — vertical ladder, 2/3 heat spine with delta on the left wing and gamma on the right",
-      "Gamma Terrain — gamma as elevation with iso-GEX contours and the flip as a coastline",
-      "GEX bubbles ride spot: one per slot, sized by the gamma the tape is standing in",
-    ],
-  },
-  {
-    key: "flow",
-    label: "Flow Inventory",
-    accent: HOME_THEME.orange,
-    blurb: "Live SPX / SPY / QQQ options-flow tape, aggregated by side and moneyness.",
-    points: [
-      "OTM puts/calls bought vs. sold, plus ITM calls sold",
-      "Bullish / bearish sentiment split from signed premium",
-      "Final-30-minutes-of-RTH prints and ATM bets breakout",
-      "Per-ticker isolation — one root's feed hiccup won't blank the others",
-    ],
-  },
-];
-
-function OverviewCard({ def, onOpen }: { def: OverviewCardDef; onOpen: (tab: TestTab) => void }) {
-  return (
-    <Card variant="classic" accent={def.accent} padding={24}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-        <FlaskIcon color={def.accent} />
-        <div style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.text }}>{def.label}</div>
-      </div>
-      <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.75, marginBottom: 14, lineHeight: 1.5 }}>
-        {def.blurb}
-      </div>
-      <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
-        {def.points.map((p) => (
-          <li key={p} style={{ display: "flex", gap: 8, fontSize: 14, color: HOME_THEME.text, opacity: 0.85, lineHeight: 1.45 }}>
-            <span style={{ color: def.accent, flexShrink: 0 }}>›</span>
-            <span>{p}</span>
-          </li>
-        ))}
-      </ul>
-      <button
-        onClick={() => onOpen(def.key)}
-        style={{
-          width: "100%",
-          padding: "10px 0",
-          borderRadius: 8,
-          border: `1px solid ${def.accent}`,
-          background: `${def.accent}1a`,
-          color: def.accent,
-          fontSize: 14,
-          fontWeight: 800,
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-          cursor: "pointer",
-        }}
-      >
-        Open {def.label} →
-      </button>
-    </Card>
-  );
-}
-
-function OverviewTab({ onOpen }: { onOpen: (tab: TestTab) => void }) {
-  return (
-    <>
-      <Card variant="budget" accent={HOME_THEME.orange} padding={20}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <FlaskIcon color={HOME_THEME.orange} size={26} />
-          <div style={{ flex: 1, minWidth: 240 }}>
-            <div style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.text }}>Welcome to the Test Lab</div>
-            <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.75, marginTop: 4, lineHeight: 1.5 }}>
-              These are the beginning stages of test pages — features being tried out before they graduate to the
-              main dashboard. Expect rough edges. Please leave feedback so we know what to fix or build out next.
-            </div>
-          </div>
-          <a
-            href="/feedback"
-            style={{
-              flexShrink: 0,
-              padding: "10px 18px",
-              borderRadius: 8,
-              border: `1px solid ${HOME_THEME.orange}`,
-              background: `${HOME_THEME.orange}1a`,
-              color: HOME_THEME.orange,
-              fontSize: 14,
-              fontWeight: 800,
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-              textDecoration: "none",
-            }}
-          >
-            Leave Feedback
-          </a>
-        </div>
-      </Card>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 20 }}>
-        {OVERVIEW_CARDS.map((def) => (
-          <OverviewCard key={def.key} def={def} onOpen={onOpen} />
-        ))}
-      </div>
-    </>
-  );
-}
-
-type TestTab = "overview" | "flow" | "gexlevels" | "squeeze" | "dealergamma" | "gexmap";
-
-function TestTabBar({ active, onChange }: { active: TestTab; onChange: (tab: TestTab) => void }) {
-  const tabs: { key: TestTab; label: string }[] = [
-    { key: "overview", label: "Overview" },
-    { key: "squeeze", label: "Squeeze" },
-    { key: "gexlevels", label: "GEX Levels" },
-    { key: "dealergamma", label: "Dealer Gamma" },
-    { key: "gexmap", label: "GEX Map" },
-    { key: "flow", label: "Flow Inventory" },
-  ];
-  return (
-    <>
-    {/* Mobile-only: dropdown instead of the oversized button row (CSS shows one). */}
-    <select
-      className="test-tab-select"
-      value={active}
-      onChange={(e) => onChange(e.target.value as TestTab)}
-      style={{
-        display: "none", width: "100%", padding: "8px 10px", borderRadius: 8,
-        fontSize: 14, fontWeight: 700,
-        border: `1px solid ${HOME_THEME.cyan}`,
-        background: "rgba(0,0,0,0.5)", color: HOME_THEME.text,
-      }}
-    >
-      {tabs.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-    </select>
-    <div className="tab-strip test-tabs" style={{ display: "flex", gap: 10 }}>
-      {tabs.map((t) => {
-        const isActive = t.key === active;
-        return (
-          <button
-            key={t.key}
-            onClick={() => onChange(t.key)}
-            style={{
-              padding: "10px 22px",
-              borderRadius: 8,
-              border: `1px solid ${isActive ? HOME_THEME.cyan : HOME_THEME.border}`,
-              background: isActive
-                ? `linear-gradient(180deg, ${HOME_THEME.cyan}33, ${HOME_THEME.cyan}0D)`
-                : "rgba(255,255,255,0.04)",
-              color: isActive ? HOME_THEME.cyan : HOME_THEME.text,
-              fontSize: 14,
-              fontWeight: 800,
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-              cursor: "pointer",
-            }}
-          >
-            {t.label}
-          </button>
-        );
-      })}
-    </div>
-    </>
-  );
-}
+type TestTab = "flow" | "gexlevels" | "squeeze" | "dealergamma" | "gexmap";
 
 function FlowInventoryTab() {
   const { dataByTicker, errors, loadedAt, reload } = useFlowInventory();
@@ -2747,13 +2520,31 @@ function FlowInventoryTab() {
 }
 
 export default function TestPage() {
-  const [tab, setTab] = useState<TestTab>("overview");
+  const [tab, setTab] = useState<TestTab>("squeeze");
+
+  // The tab bar lives in the GlobalToolbar sub-strip now (SectionSubStrip), not
+  // on this page. It navigates to /test?tab=… and fires TESTLAB_TAB_EVENT.
+  // Read the URL on mount for deep links, in an effect rather than
+  // useSearchParams so the page stays prerenderable and there's no hydration
+  // mismatch; then listen for the event, because a query-string-only navigation
+  // does not remount this component under React Router.
+  useEffect(() => {
+    const fromUrl = readSectionTab(TESTLAB_SECTION);
+    if (fromUrl) setTab(fromUrl as TestTab);
+  }, []);
+
+  useEffect(() => {
+    const onTab = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      if (id) setTab(id as TestTab);
+    };
+    window.addEventListener(TESTLAB_TAB_EVENT, onTab);
+    return () => window.removeEventListener(TESTLAB_TAB_EVENT, onTab);
+  }, []);
+
   return (
     <PageShell>
-      <TestTabBar active={tab} onChange={setTab} />
-      {tab === "overview" ? (
-        <OverviewTab onOpen={setTab} />
-      ) : tab === "squeeze" ? (
+      {tab === "squeeze" ? (
         <SqueezeBoard />
       ) : tab === "gexlevels" ? (
         <GexLevelsTab />

@@ -12,8 +12,8 @@ import { useMobileNav } from "./MobileNavContext";
 import ToolbarTicker from "./ToolbarTicker";
 import NavMenu from "./NavMenu";
 import BzilaAlerts from "./BzilaAlerts";
-import ScannerSubStrip from "./ScannerSubStrip";
-import { isScannerSectionPath } from "@/components/scanner/scannerNav";
+import SectionSubStrip from "./SectionSubStrip";
+import { sectionForHref, sectionForPath } from "./sectionNav";
 
 /**
  * GlobalToolbar — thin app-wide toolbar mounted above page content on every
@@ -387,12 +387,12 @@ function useNavCapacity() {
  */
 function GexGroupNav({
   isOwner,
-  onScannerClick,
+  onNavItemClick,
 }: {
   isOwner: boolean;
-  /** Click handler for the Scanner circle. Returns true if it handled the click
-   *  (i.e. toggled the sub-strip) and navigation should be suppressed. */
-  onScannerClick?: () => boolean;
+  /** Click handler for a nav circle. Returns true if it handled the click (i.e.
+   *  toggled that section's sub-strip) and navigation should be suppressed. */
+  onNavItemClick?: (href: string) => boolean;
 }) {
   // Ordered hrefs. Default = NAV_ITEMS order; hydrated from localStorage AFTER
   // mount so the server render and first client render both use the default
@@ -465,11 +465,11 @@ function GexGroupNav({
           href={it.comingSoon ? undefined : (it.extHref ?? it.href)}
           label={it.label}
           emoji={it.emoji}
-          // Scanner already open? Clicking it collapses/expands the sub-strip
-          // instead of re-navigating to a page you're already on.
+          // Already inside this item's section? Clicking it collapses/expands
+          // the sub-strip instead of re-navigating to the page you're on.
           onLinkClick={
-            it.href === "/scanner" && onScannerClick
-              ? (e) => { if (onScannerClick()) e.preventDefault(); }
+            onNavItemClick
+              ? (e) => { if (onNavItemClick(it.href)) e.preventDefault(); }
               : undefined
           }
           comingSoon={it.comingSoon}
@@ -532,20 +532,25 @@ export default function GlobalToolbar() {
 
   const menuActive = hoverMenu || menuOpen;
 
-  // ── Scanner sub-strip (the second row under the pill) ─────────────────────
-  // Open by default whenever you enter the Scanner section; the Scanner circle
-  // toggles it while you're in there. ScannerSubStrip unmounts itself on every
-  // other route, so this state is inert elsewhere.
+  // ── Section sub-strip (the second row under the pill) ─────────────────────
+  // Sections that own several views (Scanner, Test Lab — see sectionNav) show
+  // their tabs here instead of on the page. Open by default whenever you enter
+  // one; that section's own circle toggles it while you're inside.
+  // SectionSubStrip unmounts on every other route, so this state is inert there.
   const pathname = usePathname();
-  const inScanner = isScannerSectionPath(pathname);
-  const [scannerStripOpen, setScannerStripOpen] = useState(true);
+  const section = sectionForPath(pathname);
+  const sectionKey = section?.key ?? null;
+  const [stripOpen, setStripOpen] = useState(true);
   useEffect(() => {
-    if (inScanner) setScannerStripOpen(true);
-  }, [inScanner]);
+    if (sectionKey) setStripOpen(true);
+  }, [sectionKey]);
 
-  const onScannerClick = () => {
-    if (!inScanner) return false;          // not there yet → let the Link navigate
-    setScannerStripOpen((v) => !v);        // already there → just toggle the strip
+  // Clicking the circle of the section you are already in toggles its strip
+  // instead of re-navigating to a page you're already on. Returns true when it
+  // handled the click, so the Link's default navigation gets suppressed.
+  const onNavItemClick = (href: string) => {
+    if (!sectionKey || sectionForHref(href)?.key !== sectionKey) return false;
+    setStripOpen((v) => !v);
     return true;
   };
 
@@ -677,7 +682,7 @@ export default function GlobalToolbar() {
               phone blows the pill far past the viewport and pushes the ticker,
               clock and user menu off-screen. Every one of these routes is
               already in the hamburger (NavMenu), so nothing is lost. ── */}
-          {!isMobile && <GexGroupNav isOwner={isOwner} onScannerClick={onScannerClick} />}
+          {!isMobile && <GexGroupNav isOwner={isOwner} onNavItemClick={onNavItemClick} />}
 
           {/* flexible gap — opens the center and pushes the quotes + clock
               cluster to the right ── */}
@@ -761,12 +766,15 @@ export default function GlobalToolbar() {
         </div>
       </div>
 
-      {/* ── Scanner sub-strip — a second row hanging off the bottom of the pill,
-          holding the Scanner section's tabs + split-out routes on one line.
-          Renders only inside the Scanner section; collapsed by clicking the
-          Scanner circle above. Desktop only: on a phone the pill's nav strip is
-          already hidden, and 13 pills have nowhere to go. ── */}
-      {!isMobile && <ScannerSubStrip open={scannerStripOpen} />}
+      {/* ── Section sub-strip — a second row hanging off the bottom of the pill,
+          holding the current section's tabs (+ any split-out routes) on one
+          line. Renders only inside a section; collapsed by clicking that
+          section's circle above.
+          Rendered on mobile too: this is now those sections' ONLY tab bar, so
+          hiding it on a phone would leave every tab but the default
+          unreachable. The row collapses pills to icons and then scrolls
+          horizontally, so it fits. ── */}
+      <SectionSubStrip open={stripOpen} />
     </div>
   );
 }

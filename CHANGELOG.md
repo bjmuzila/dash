@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-08-02 (b) — ICT: Turtle Soup rebuilt to the actual model (`lib/calculations/ictPlays.ts`)
+
+Turtle Soup on the play layer was a stand-in: any EQH/EQL cluster swept with a close back inside, entered at the raid candle, stopped at the nearest structural pivot. Rebuilt against theinnercircletraders.com's write-up, per the owner's calls on each rule:
+
+- **Raid level** — any confirmed short-term swing high/low (`a.pivots`), not just relative-equal clusters. The article says "stop raids above short-term swing highs or lows"; requiring 2+ equal levels was skipping the classic single old-high raid.
+- **Time** — the raid bar must land in a **Turtle Soup raid window**: London open 02:00, London injection 03:45–04:08, NY AM manipulation 08:14–08:38 and 09:23–09:45, lunch raid 12:45–13:08, NY PM raid 14:15–14:38 (ET). New `TURTLE_RAID_WINDOWS` + `turtleRaidWindow()` live in `ictPlays.ts`, deliberately NOT merged into `ICT_WINDOWS` — that list drives the killzone bands and the live badges on every concept card, and widening it would repaint all of them.
+- **Entry** — the first FVG created on the reversal, entered at **consequent encroachment** (the gap's midpoint), with the raid close as fallback when no gap prints within 6 bars. An FVG entry is a RESTING order, so the play triggers on the **fill bar** — the bar that actually trades back to the midpoint — not at gap creation. Stamping it at creation would grade from a price that never traded and hand every setup free MFE, the same class of bug as the `confirmTs` lookahead. If the first gap never fills, the earliest gap that does is the entry.
+- **Stop** — beyond the raid wick (the high/low the stop hunt printed) + one ATR buffer, instead of the nearest structural pivot.
+- **Invalidation** — a raid candle that closes BEYOND the level is a real break, not a soup; that pivot is spent either way, and a right-shaped raid at the wrong time is dropped rather than deferred.
+
+**This is now the one kind whose entry/stop differ from the recorder** (`app/api/ict-setups/route.ts`), whose `turtleSoup` rows still grade the raid-close + structural-stop version — so the leaderboard's Turtle Soup line describes a different trade than the box on the chart until the same rules are ported into the route and the kind is rescanned. Called out in the module header too.
+
+New `test-turtle.ts` harness builds a synthetic 09:25 ET raid on a 5030 swing high with a bearish reversal FVG at 5014–5022 and asserts: raid lands in a window, exactly one play, SHORT, stop above the 5034 raid wick, entry at the 5018 gap midpoint (not the 5024 raid close), trigger on the fill bar not gap creation, window named in the note, descending targets — plus a control that shifts the identical structure to 11:00 ET and gets **zero** plays. All pass; the earlier geometry/edge-case harness still passes. Still **NOT build-verified** — `npx tsc --noEmit` + `npm run build` before push.
+
 ## 2026-08-02 — ICT: entry dots + click-to-open long/short position tool (`lib/calculations/ictPlays.ts` NEW, `components/pages/Ict.tsx`)
 
 The ICT page could name a setup but never showed the trade. A Turtle Soup printed in the Models & Signals list and that was the whole story — no entry, no stop, no target, nothing on the chart to look at. New `lib/calculations/ictPlays.ts` turns detector output into **plays** (entry / stop / 1R-2R-3R) and the chart now marks each one.
