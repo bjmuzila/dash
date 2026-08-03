@@ -216,6 +216,16 @@ async function fetchStockQuoteTheta(symbol) {
   };
 }
 
+/**
+ * Spot-only variant, mirroring proxy-thetadata's fetchStockSpotTheta so callers
+ * that just need a price are adapter-agnostic. On TT this is already the same
+ * call — the quote never depended on prevClose here — so it's a straight alias,
+ * kept explicit so swapping DATA_SOURCE can't silently change scanner behaviour.
+ */
+async function fetchStockSpotTheta(symbol) {
+  return fetchStockQuoteTheta(symbol);
+}
+
 // ── underlying DAILY history (Yahoo, interval=1d) ───────────────────────────
 // Matches Theta's fetchStock/IndexDailyHistoryTheta return: [{time(ms),open,high,low,close,volume}].
 const YAHOO_SYMBOL = {
@@ -295,6 +305,7 @@ module.exports = {
   buildExpiryRows,
   fetchIndexPriceTheta,
   fetchStockQuoteTheta,
+  fetchStockSpotTheta,
   fetchStockDailyHistoryTheta,
   fetchIndexDailyHistoryTheta,
   // benign stubs (no TT equivalent)

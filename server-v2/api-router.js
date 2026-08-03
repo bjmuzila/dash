@@ -2450,6 +2450,188 @@ Rules:
   },
 });
 
+// /api/budget/parse-statement — owner-only statement import (PDF or screenshot).
+// One Claude call does three jobs at once: OCR/extract the transaction rows,
+// normalize the noisy bank descriptor into a clean merchant name, and file each
+// row against the caller's existing budget_categories. Returns a staging list —
+// nothing is written to budget_register here. The client reviews/edits, then
+// commits via the existing POST /api/budget { action: 'registerRowsBulk' }.
+//
+// Body: { kind: 'pdf'|'image', data: <base64>, mediaType?, categories?: [{id,name}] }
+register('/api/budget/parse-statement', {
+  auth: 'owner', methods: ['POST'],
+  async handler(req, res) {
+    const MODEL = 'claude-sonnet-4-6';
+    const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+    try {
+      if (!process.env.ANTHROPIC_API_KEY) { send(res, 500, { error: "Statement import isn't configured (missing ANTHROPIC_API_KEY)." }); return; }
+      // Base64 PDFs are big — the 1MB default would reject a 3-page statement.
+      const body = await readJson(req, 40_000_000);
+      const kind = body?.kind === 'pdf' ? 'pdf' : 'image';
+      const data = String(body?.data ?? '');
+      if (!data) { send(res, 400, { error: 'No file provided.' }); return; }
+
+      const cats = Array.isArray(body?.categories)
+        ? body.categories
+          .map((c) => ({ id: Number(c?.id), name: String(c?.name ?? '').trim() }))
+          .filter((c) => Number.isFinite(c.id) && c.name)
+        : [];
+      const catList = cats.length
+        ? cats.map((c) => `- ${c.name} (id ${c.id})`).join('\n')
+        : '(none defined yet — leave categoryId null and put your best guess in categoryGuess)';
+
+      const SYSTEM = `You extract transactions from a bank or credit-card statement and file them.
+Return ONLY a JSON array. No prose, no code fences, no explanation.
+
+Each element:
+{"date":"YYYY-MM-DD","description":string,"merchant":string,"amount":number,"direction":"in"|"out","categoryId":number|null,"categoryGuess":string,"recurring":boolean}
+
+Rules:
+- amount is ALWAYS a positive number. No sign, no currency symbol, no thousands separators.
+- direction is "out" for purchases, payments, debits, withdrawals, fees, transfers sent; "in" for deposits, credits, payroll, refunds, interest, transfers received.
+- description: the row as it reads on the statement, trimmed to something human. Strip long auth/reference numbers, store numbers, and trailing card digits.
+- merchant: the NORMALIZED brand behind the descriptor, Title Case, no location, no store number, no punctuation noise. This is what gets grouped, so identical vendors MUST produce byte-identical merchant strings.
+  "AMZN MKTP US*2K4TR91Q3" -> "Amazon"
+  "SQ *BLUE BOTTLE COFFE 4471" -> "Blue Bottle Coffee"
+  "TST* THE LOCAL 88 RALEIGH NC" -> "The Local"
+  "NETFLIX.COM 866-579-7172 CA" -> "Netflix"
+  "SHELL OIL 57444120209" -> "Shell"
+  "PAYPAL *SPOTIFYUSA" -> "Spotify"
+- categoryId: pick the single best match from the caller's category list below and return its numeric id. If nothing fits, return null.
+- categoryGuess: a short 1-3 word category name you would use (e.g. "Groceries", "Dining", "Subscriptions"). Always fill this in, even when categoryId is set.
+- recurring: true when the row looks like a subscription or fixed recurring bill (streaming, software, gym, insurance, phone, rent, loan payment). Otherwise false.
+- If a row shows no year, assume ${new Date().getFullYear()}.
+- Skip running-balance columns, section headers, subtotals, and "beginning/ending balance" lines.
+- Do not invent rows. If you can read no transactions, return [].
+
+The caller's existing categories:
+${catList}`;
+
+      const filePart = kind === 'pdf'
+        ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
+        : { type: 'image', source: { type: 'base64', media_type: String(body?.mediaType || 'image/png'), data } };
+
+      let r;
+      try {
+        r = await fetch(ANTHROPIC_URL, {
+          method: 'POST',
+          headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+          body: JSON.stringify({
+            model: MODEL, max_tokens: 16000, system: SYSTEM,
+            messages: [{ role: 'user', content: [filePart, { type: 'text', text: 'Extract every transaction in this statement. Return only the JSON array.' }] }],
+          }),
+        });
+      } catch (err) { send(res, 502, { error: `anthropic request failed: ${String(err?.message || err)}` }); return; }
+      if (!r.ok) { const detail = await r.text().catch(() => ''); send(res, 502, { error: `anthropic ${r.status}`, detail: detail.slice(0, 800) }); return; }
+
+      const payload = await r.json();
+      const text = payload?.content?.map((c) => (c?.type === 'text' ? c.text : '')).join('') ?? '';
+      const start = text.indexOf('[');
+      const end = text.lastIndexOf(']');
+      let parsed = [];
+      if (start !== -1 && end > start) { try { parsed = JSON.parse(text.slice(start, end + 1)); } catch { parsed = []; } }
+      if (!Array.isArray(parsed)) parsed = [];
+
+      const validIds = new Set(cats.map((c) => c.id));
+      const rows = parsed.map((x) => {
+        const catId = Number(x?.categoryId);
+        return {
+          date: String(x?.date ?? '').slice(0, 10),
+          description: String(x?.description ?? '').slice(0, 120),
+          merchant: String(x?.merchant ?? '').slice(0, 60) || String(x?.description ?? '').slice(0, 60),
+          amount: Math.abs(Number(x?.amount ?? 0)),
+          direction: x?.direction === 'in' ? 'in' : 'out',
+          categoryId: validIds.has(catId) ? catId : null,
+          categoryGuess: String(x?.categoryGuess ?? '').slice(0, 40),
+          recurring: x?.recurring === true,
+        };
+      }).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x.date) && x.description && Number.isFinite(x.amount) && x.amount > 0);
+
+      send(res, 200, { rows, count: rows.length, model: MODEL });
+    } catch (err) {
+      const msg = String(err?.message || err);
+      if (msg.includes('body too large')) { send(res, 413, { error: 'That file is too large. Split the statement or export fewer pages.' }); return; }
+      send(res, 500, { error: 'Statement parse failed', detail: msg });
+    }
+  },
+});
+
+// /api/budget/advise — owner-only "what to fix" pass over a merged spend
+// summary. The client does the grouping (merchant rollups, category totals,
+// repeat detection) and sends the numbers; this route only reasons about them,
+// so no raw transaction dump ever leaves the box.
+register('/api/budget/advise', {
+  auth: 'owner', methods: ['POST'],
+  async handler(req, res) {
+    const MODEL = 'claude-sonnet-4-6';
+    const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+    try {
+      if (!process.env.ANTHROPIC_API_KEY) { send(res, 500, { error: "Advice isn't configured (missing ANTHROPIC_API_KEY)." }); return; }
+      const body = await readJson(req, 2_000_000);
+      const summary = {
+        period: String(body?.period ?? ''),
+        currency: String(body?.currency ?? 'USD'),
+        totals: body?.totals ?? {},
+        categories: Array.isArray(body?.categories) ? body.categories.slice(0, 60) : [],
+        merchants: Array.isArray(body?.merchants) ? body.merchants.slice(0, 60) : [],
+        subscriptions: Array.isArray(body?.subscriptions) ? body.subscriptions.slice(0, 40) : [],
+      };
+
+      const SYSTEM = `You are a blunt, numerate personal-finance analyst reviewing one period of real spending.
+Return ONLY a JSON object. No prose, no code fences.
+
+Shape:
+{"headline":string,"findings":[{"title":string,"severity":"high"|"medium"|"low","detail":string,"monthlySavings":number,"evidence":string}],"quickWins":[string]}
+
+Rules:
+- headline: one sentence, max 18 words, on the single most important thing about this period.
+- findings: 3 to 6 items, ordered most costly first. Each one must name the actual merchant or category and cite the actual number from the data. No generic advice ("make a budget", "track spending") — every finding has to be something only someone looking at THESE numbers could say.
+- severity: "high" when it is a large or fast-growing leak, "medium" for a real but bounded one, "low" for tidy-up.
+- monthlySavings: your realistic estimate of dollars per month recoverable if they act, as a plain number. Use 0 when the finding is a warning rather than a saving.
+- evidence: the specific figures you based it on, e.g. "Dining $612 over 23 charges, 41% above the $430 budget".
+- quickWins: 2 to 4 single-sentence actions, each doable in under ten minutes. Imperative voice.
+- Where a category has a budget, compare against it explicitly. Where spending is concentrated in a few merchants, say so.
+- If the data is too thin to say anything real, return few findings rather than padding with filler.
+- Never moralize, never lecture about coffee. Talk about money.`;
+
+      let r;
+      try {
+        r = await fetch(ANTHROPIC_URL, {
+          method: 'POST',
+          headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+          body: JSON.stringify({
+            model: MODEL, max_tokens: 3000, system: SYSTEM,
+            messages: [{ role: 'user', content: `Spending summary:\n${JSON.stringify(summary, null, 1)}\n\nReturn only the JSON object.` }],
+          }),
+        });
+      } catch (err) { send(res, 502, { error: `anthropic request failed: ${String(err?.message || err)}` }); return; }
+      if (!r.ok) { const detail = await r.text().catch(() => ''); send(res, 502, { error: `anthropic ${r.status}`, detail: detail.slice(0, 800) }); return; }
+
+      const payload = await r.json();
+      const text = payload?.content?.map((c) => (c?.type === 'text' ? c.text : '')).join('') ?? '';
+      const start = text.indexOf('{');
+      const end = text.lastIndexOf('}');
+      let parsed = null;
+      if (start !== -1 && end > start) { try { parsed = JSON.parse(text.slice(start, end + 1)); } catch { parsed = null; } }
+      if (!parsed || typeof parsed !== 'object') { send(res, 502, { error: 'Advice came back unreadable.' }); return; }
+
+      const SEV = new Set(['high', 'medium', 'low']);
+      send(res, 200, {
+        headline: String(parsed.headline ?? '').slice(0, 240),
+        findings: (Array.isArray(parsed.findings) ? parsed.findings : []).slice(0, 8).map((f) => ({
+          title: String(f?.title ?? '').slice(0, 120),
+          severity: SEV.has(f?.severity) ? f.severity : 'medium',
+          detail: String(f?.detail ?? '').slice(0, 900),
+          monthlySavings: Number.isFinite(Number(f?.monthlySavings)) ? Math.max(0, Number(f.monthlySavings)) : 0,
+          evidence: String(f?.evidence ?? '').slice(0, 300),
+        })).filter((f) => f.title),
+        quickWins: (Array.isArray(parsed.quickWins) ? parsed.quickWins : []).slice(0, 6).map((q) => String(q).slice(0, 220)).filter(Boolean),
+        model: MODEL,
+      });
+    } catch (err) { send(res, 500, { error: 'Advice failed', detail: String(err?.message || err) }); }
+  },
+});
+
 // /api/strike-summary — 1-2 sentence GEX blurb per strike via Anthropic (Haiku).
 // POST, subscriber. Ported verbatim from app/api/strike-summary/route.ts.
 register('/api/strike-summary', {

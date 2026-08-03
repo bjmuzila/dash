@@ -127,23 +127,45 @@ function etDateStr(d = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d);
 }
 
-function isRTH() {
+/**
+ * The sweep window opens 15m BEFORE the bell, not at it.
+ *
+ * walls-recorder.js slot 0 fires at 09:29 for the open baseline and samples the
+ * newest scanner_snapshots row per symbol, rejecting anything older than 12
+ * minutes (MAX_SAMPLE_AGE_MINS) and anything not stamped with today's ET date.
+ * With a 09:30 floor that table is empty at 09:29, so slot 0 could never be
+ * captured and the walls first appeared at 09:45. Opening at 09:15 puts 2-3
+ * sweeps on the board before slot 0 reads, all inside its freshness window.
+ */
+const SWEEP_START_MINS = 9 * 60 + 15;
+const SWEEP_END_MINS = 16 * 60;
+
+function inSweepWindow() {
   const { hour, minute, weekday } = etParts();
   if (weekday === 'Sat' || weekday === 'Sun') return false;
   if (MARKET_HOLIDAYS.has(etDateStr())) return false;
   const mins = hour * 60 + minute;
-  return mins >= 9 * 60 + 30 && mins < 16 * 60;
+  return mins >= SWEEP_START_MINS && mins < SWEEP_END_MINS;
 }
 
 // ── Spot + per-ticker snapshot ───────────────────────────────────────────────
 
+/**
+ * Spot for one root. Equities go through the adapter's SPOT-ONLY call, not
+ * fetchStockQuoteTheta: on Theta the latter returns null whenever it can't
+ * establish prevClose, which costs a second upstream request per symbol and
+ * dropped ~1/3 of the universe on the first sweep of the day. The scanner never
+ * uses prevClose — it needs a price for computeGexSummary and nothing else.
+ * Older adapters without the split still work via the fallback.
+ */
 async function resolveSpot(root) {
   try {
     if (INDEX_ROOTS.has(root)) {
       const p = await thetaAdapter.fetchIndexPriceTheta(root);
       return p > 0 ? p : 0;
     }
-    const q = await thetaAdapter.fetchStockQuoteTheta(root);
+    const getSpot = thetaAdapter.fetchStockSpotTheta || thetaAdapter.fetchStockQuoteTheta;
+    const q = await getSpot(root);
     return q && q.mark > 0 ? q.mark : (q && q.last > 0 ? q.last : 0);
   } catch {
     return 0;
@@ -178,20 +200,24 @@ function findCoreBullseye(gexRows) {
   return net(best) > 0 ? Number(best.strike) : null;
 }
 
-/** Snapshot one root: returns the aggregate summary or null if not usable. */
+/**
+ * Snapshot one root: the aggregate summary, or { err } naming why it failed.
+ * The three failure modes used to collapse into one "thin/no-spot" string,
+ * which made a quote outage look identical to a genuinely thin chain.
+ */
 async function snapshotTicker(root) {
   const chain = await thetaAdapter.fetchChainTheta(root).catch(() => null);
   const expiry = chain?.expirations?.[0];
-  if (!expiry) return null;
+  if (!expiry) return { err: 'no-chain' };
 
   const [spot, expiryRows] = await Promise.all([
     resolveSpot(root),
     thetaAdapter.buildExpiryRows(root, expiry).catch(() => []),
   ]);
-  if (!(spot > 0)) return null;
+  if (!(spot > 0)) return { err: 'no-spot' };
 
   const gexRows = toGexRows(expiryRows).filter((r) => r.oi > 0 || r.gamma !== 0);
-  if (gexRows.length < MIN_STRIKES) return null;
+  if (gexRows.length < MIN_STRIKES) return { err: `thin-${gexRows.length}` };
 
   const summary = computeGexSummary(gexRows, spot);
   return {
@@ -210,7 +236,7 @@ async function snapshotTicker(root) {
 // ── Sweep ────────────────────────────────────────────────────────────────────
 
 async function runSweep({ force = false } = {}) {
-  if (!force && !isRTH()) return { skipped: 'outside RTH' };
+  if (!force && !inSweepWindow()) return { skipped: 'outside sweep window' };
 
   const tickers = parseScannerTickers();
   if (!tickers.length) return { skipped: 'no SCANNER_TICKERS' };
@@ -227,7 +253,7 @@ async function runSweep({ force = false } = {}) {
     // Sequential — keep Theta REST load gentle across many roots.
     try {
       const s = await snapshotTicker(root); // eslint-disable-line no-await-in-loop
-      if (!s) { errors.push(`${root}:thin/no-spot`); continue; }
+      if (!s || s.err) { errors.push(`${root}:${s?.err || 'null'}`); continue; }
       await p.query( // eslint-disable-line no-await-in-loop
         `INSERT INTO scanner_snapshots
            (date, symbol, ts, spot, expiry, total_net_gex, call_wall, put_wall, gex_flip, cb, strikes)

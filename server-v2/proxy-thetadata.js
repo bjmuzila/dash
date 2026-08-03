@@ -540,13 +540,22 @@ async function fetchStockPrevCloseTheta(symbol) {
 }
 
 /**
- * Real-time stock quote snapshot (equities only — never indices/futures).
- * Snapshot supplies bid/ask/last (mark = midpoint); prev-close is backfilled
- * from EOD history because the snapshot payload doesn't include it. Returns
- * { last, mark, close, prevClose } shaped like fetchUnderlyingQuotes' assign(),
- * or null if unavailable/gated so the caller can fall back to TT.
+ * SPOT ONLY — bid/ask midpoint (or last) for an equity, with NO prev-close
+ * requirement and exactly ONE upstream call.
+ *
+ * Split out of fetchStockQuoteTheta because callers that only need a price were
+ * losing whole tickers to an unrelated failure. fetchStockQuoteTheta returns
+ * null when it can't establish prevClose, and prevClose comes from a SECOND
+ * call (/v3/stock/history/eod via fetchStockPrevCloseTheta). On the first heavy
+ * sweep of the day that cache is cold for every symbol, so ~150 extra requests
+ * queue behind a 3-wide governor; the ones that lose the 429 lottery returned 0,
+ * which nulled a perfectly good live quote. The scanner then read spot=0 and
+ * dropped the ticker as "thin/no-spot" — a change-% concern vetoing a GEX one.
+ *
+ * Returns { last, mark, close, prevCloseHint } or null if the snapshot itself is
+ * empty/gated. prevCloseHint is 0 unless the payload happened to carry one.
  */
-async function fetchStockQuoteTheta(symbol) {
+async function fetchStockSpotTheta(symbol) {
   const json = await thetaGet(
     `/v3/stock/snapshot/quote?symbol=${encodeURIComponent(String(symbol).toUpperCase())}`,
   );
@@ -558,9 +567,30 @@ async function fetchStockQuoteTheta(symbol) {
   const mark = bid > 0 && ask > 0 ? (bid + ask) / 2 : Number(r.last ?? r.price);
   const last = Number(r.last ?? r.price ?? mark);
   if (!(last > 0) && !(mark > 0)) return null;
+  return {
+    last: last > 0 ? last : mark,
+    mark: mark > 0 ? mark : last,
+    close: Number(r.close) > 0 ? Number(r.close) : 0,
+    // Honor prev_close if a payload variant ever carries it.
+    prevCloseHint: Number(r.prev_close ?? r.prevClose) || 0,
+  };
+}
 
-  // Honor prev_close if a payload variant ever carries it; otherwise backfill.
-  let prevClose = Number(r.prev_close ?? r.prevClose);
+/**
+ * Real-time stock quote snapshot (equities only — never indices/futures).
+ * Snapshot supplies bid/ask/last (mark = midpoint); prev-close is backfilled
+ * from EOD history because the snapshot payload doesn't include it. Returns
+ * { last, mark, close, prevClose } shaped like fetchUnderlyingQuotes' assign(),
+ * or null if unavailable/gated so the caller can fall back to TT.
+ *
+ * Needs prevClose to be useful (change %). Callers that only want a price must
+ * use fetchStockSpotTheta instead — this one still fails closed without it.
+ */
+async function fetchStockQuoteTheta(symbol) {
+  const spot = await fetchStockSpotTheta(symbol);
+  if (!spot) return null;
+
+  let prevClose = spot.prevCloseHint;
   if (!(prevClose > 0)) prevClose = await fetchStockPrevCloseTheta(symbol);
 
   // No baseline → report the miss so fetchUnderlyingQuotes falls back to TT
@@ -568,9 +598,9 @@ async function fetchStockQuoteTheta(symbol) {
   if (!(prevClose > 0)) return null;
 
   return {
-    last: last > 0 ? last : mark,
-    mark: mark > 0 ? mark : last,
-    close: Number(r.close) > 0 ? Number(r.close) : 0,
+    last: spot.last,
+    mark: spot.mark,
+    close: spot.close,
     prevClose,
   };
 }
@@ -1223,6 +1253,7 @@ module.exports = {
   fetchGreeksEodHistoryTheta,
   fetchIndexPriceTheta,
   fetchStockQuoteTheta,
+  fetchStockSpotTheta,
   fetchStockPrevCloseTheta,
   fetchStockDayVolumeTheta,
   fetchStockDailyVolumeSeriesTheta,

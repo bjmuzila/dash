@@ -360,9 +360,12 @@ function buildModel(p: MapPayload | null): MapModel | null {
 //     than React's onWheel. React attaches wheel listeners passively, so
 //     preventDefault() there is ignored and the page scrolls out from under you
 //     while you zoom.
-//   · Pan is clamped so the content always covers the frame, and 1× hard-resets
-//     the offset. Free panning at 1× lets a card be dragged blank, and "my chart
-//     disappeared" is not a state worth supporting.
+//   · Drag pans at ANY magnification, 1× included — a chart you cannot shove
+//     around reads as frozen, and the whole point of these maps is to lean into
+//     one corner of them. What is NOT supported is dragging a card blank: the
+//     offset is clamped so at least (1 - PAN_SLACK) of the frame is always
+//     covered by content, so the map can be pushed aside but never lost.
+//     Double-click — or the ⟲ button — snaps the offset back to zero.
 //   · The zoom level is published on a context because the Gamma Terrain canvas
 //     is a bitmap: it re-rasterises at a higher DPR when you zoom past 1.5×
 //     instead of being smeared by the transform.
@@ -371,6 +374,13 @@ const useZoom = () => useContext(ZoomCtx);
 
 const MIN_K = 1;
 const MAX_K = 12;
+/**
+ * How far past the frame the content may be dragged, as a fraction of the
+ * frame. 0.5 means you can always push the map half a frame off — enough to
+ * park a wing out of the way — while the other half stays on screen, so there
+ * is no gesture that ends in an empty card.
+ */
+const PAN_SLACK = 0.5;
 
 function ZoomSvg({ w, h, children }: { w: number; h: number; children: ReactNode }) {
   const [t, setT] = useState({ k: 1, x: 0, y: 0 });
@@ -380,13 +390,16 @@ function ZoomSvg({ w, h, children }: { w: number; h: number; children: ReactNode
   const pinchD = useRef<number | null>(null);
   const [grabbing, setGrabbing] = useState(false);
 
+  // At k the content is w*k wide, so covering the frame means x ∈ [w(1-k), 0].
+  // Both ends are then relaxed by PAN_SLACK frames, which is what makes 1×
+  // (where that interval collapses to the single point 0) draggable at all.
   const clamp = useCallback((k: number, x: number, y: number) => {
     const kk = Math.min(MAX_K, Math.max(MIN_K, k));
-    if (kk <= 1) return { k: 1, x: 0, y: 0 };
+    const sx = w * PAN_SLACK, sy = h * PAN_SLACK;
     return {
       k: kk,
-      x: Math.min(0, Math.max(w * (1 - kk), x)),
-      y: Math.min(0, Math.max(h * (1 - kk), y)),
+      x: Math.min(sx, Math.max(w * (1 - kk) - sx, x)),
+      y: Math.min(sy, Math.max(h * (1 - kk) - sy, y)),
     };
   }, [w, h]);
 
@@ -436,10 +449,11 @@ function ZoomSvg({ w, h, children }: { w: number; h: number; children: ReactNode
   }, [zoomAt]);
 
   const onPointerDown = (e: ReactPointerEvent<SVGSVGElement>) => {
-    // Panning only makes sense once there is something off-screen to pan to,
-    // and grabbing at 1× swallowed touch-drags that were meant to scroll the
-    // page. A second finger still gets through, so pinch-to-zoom can start
-    // from the resting state.
+    // A mouse always gets to drag. Touch does not, at rest: grabbing a
+    // one-finger drag at 1× swallows the swipe that was meant to scroll the
+    // page, and with these cards stacked one per row that is most of the page.
+    // A second finger still gets through, so pinch-to-zoom can start from the
+    // resting state, and once zoomed the single-finger drag pans as normal.
     if (t.k <= 1.001 && e.pointerType !== "mouse" && pts.current.size === 0) return;
     (e.currentTarget as SVGSVGElement).setPointerCapture?.(e.pointerId);
     pts.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -484,6 +498,8 @@ function ZoomSvg({ w, h, children }: { w: number; h: number; children: ReactNode
 
   const reset = () => setT({ k: 1, x: 0, y: 0 });
   const zoomed = t.k > 1.001;
+  /** Zoomed OR shoved off-centre — either state is one the ⟲ button undoes. */
+  const moved = zoomed || Math.abs(t.x) > 0.5 || Math.abs(t.y) > 0.5;
 
   const btn: CSSProperties = {
     width: 24, height: 22, display: "grid", placeItems: "center",
@@ -503,8 +519,13 @@ function ZoomSvg({ w, h, children }: { w: number; h: number; children: ReactNode
         // everywhere meant the maps ate vertical swipes on touch.
         style={{
           width: "100%", display: "block",
-          cursor: zoomed ? (grabbing ? "grabbing" : "grab") : "default",
+          // Always a grab cursor: the drag is live at every magnification now,
+          // and a default arrow over a draggable surface reads as "frozen".
+          cursor: grabbing ? "grabbing" : "grab",
           touchAction: zoomed ? "none" : "pan-y",
+          // A drag across <text> nodes otherwise starts a native text
+          // selection, which highlights half the axis labels blue.
+          userSelect: "none", WebkitUserSelect: "none",
         }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -522,15 +543,15 @@ function ZoomSvg({ w, h, children }: { w: number; h: number; children: ReactNode
         padding: 4, borderRadius: 7, background: "rgba(5,6,10,0.55)",
         border: `1px solid ${HOME_THEME.border}`, backdropFilter: "blur(6px)",
       }}>
-        <span title="Ctrl / ⌘ + scroll to zoom — plain scroll moves the page" style={{
+        <span title="Drag to move · Ctrl / ⌘ + scroll to zoom — plain scroll moves the page · double-click to reset" style={{
           fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", padding: "0 4px",
-          color: zoomed ? HOME_THEME.cyan : "#ffffff", opacity: zoomed ? 1 : 0.85,
+          color: moved ? HOME_THEME.cyan : "#ffffff", opacity: moved ? 1 : 0.85,
           fontVariantNumeric: "tabular-nums",
         }}>{t.k.toFixed(1)}×</span>
         <button type="button" title="Zoom out" style={btn} onClick={() => zoomCentre(1 / 1.4)}>−</button>
         <button type="button" title="Zoom in" style={btn} onClick={() => zoomCentre(1.4)}>+</button>
         <button type="button" title="Reset (or double-click the chart)" style={{ ...btn, width: 26, fontSize: 11 }}
-          onClick={reset} disabled={!zoomed}>⟲</button>
+          onClick={reset} disabled={!moved}>⟲</button>
       </div>
     </div>
   );
@@ -861,7 +882,10 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
   const SPW = 780;
   const SPX = Math.round((W - SPW) / 2);    // 230
   const GUT = 110;
-  const TY = 26, TH = 470;
+  // TH was 470. The time axis now lives under the heat box, so the ladder gives
+  // back 14 units to keep the wing legends on the same baseline they had — any
+  // lower and the right-hand one slides under the zoom chip in the corner.
+  const TY = 26, TH = 456;
   const yOf = (k: number) => TY + TH - ((k - m.lo) / Math.max(1, m.hi - m.lo)) * TH;
   const rowH = TH / Math.max(1, m.strikes.length - 1);
   const nb = Math.min(m.cols.length, 24);
@@ -891,6 +915,17 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
   const ticks = strikeTicks(m.lo, m.hi, compact)
     .filter((k) => !axisBadges.some((b) => Math.abs(yOf(k) - b.ly) < 13 * fz));
 
+  // Time axis for the spine. The spine only draws the LAST nb slots, so the
+  // ticks are picked from that window — labelling the full session under a
+  // window that starts two hours into it would put the wrong clock on every
+  // column. Indices come back relative to the slice, so they map straight onto
+  // the same `SPX + (t + 0.5) * cw` centre the cells and the path use.
+  const spineCols = m.cols.slice(c0);
+  const timeTicks = clockTimeTicks(spineCols, compact ? 4 : 7);
+  const tx = (i: number) => SPX + (i + 0.5) * cw;
+  const AXY = TY + TH;              // bottom of the heat box
+  const CAPY = AXY + 34;            // legends, pushed down to clear the axis
+
   return (
     <ZoomSvg w={W} h={H}>
       {/* spine heat */}
@@ -905,6 +940,12 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
             fill={gamColor(m.signed[ci][si], heatAlpha(h, 0.03, 0.78))} />;
         });
       })}
+      {/* time gridlines — drawn over the heat but under the path, at the same
+          5% white the Tape Field uses for its strike grid, so the columns stay
+          readable without the lines competing with the cells. */}
+      {timeTicks.map(({ i }) => (
+        <line key={`sg${i}`} x1={tx(i)} y1={TY} x2={tx(i)} y2={AXY} stroke={GRID} />
+      ))}
       <path d={pathD(Array.from({ length: nb }, (_, t) => [SPX + t * cw + cw / 2, yOf(m.path[c0 + t])]))}
         fill="none" stroke="rgba(255,255,255,0.28)" strokeWidth={4} />
       <path d={pathD(Array.from({ length: nb }, (_, t) => [SPX + t * cw + cw / 2, yOf(m.path[c0 + t])]))}
@@ -949,6 +990,19 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
         </g>
       )}
 
+      {/* time axis — the spine's x is time, and until now nothing said so. Sits
+          in the 30-odd units between the heat box and the wing legends, which
+          moved down to CAPY to make room. */}
+      <line x1={SPX} y1={AXY} x2={SPX + SPW} y2={AXY} stroke="rgba(255,255,255,0.14)" />
+      {timeTicks.map(({ i, label }) => (
+        <g key={`stt${i}`}>
+          <line x1={tx(i)} y1={AXY} x2={tx(i)} y2={AXY + 4} stroke="rgba(255,255,255,0.30)" />
+          <text x={tx(i)} y={AXY + 15} fill={AXIS} fontSize={8 * fz} textAnchor="middle"
+            style={{ fontVariantNumeric: "tabular-nums" }}>{label}</text>
+        </g>
+      ))}
+      <Lab x={SPX + SPW + 8} y={AXY + 15} size={7} fill="rgba(255,255,255,0.55)">TIME · ET</Lab>
+
       {/* left wing — DEX */}
       <Lab x={LW - LWW} y={TY - 8}>◄ NET DEX</Lab>
       {m.hasDex ? (
@@ -962,7 +1016,7 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
               fill={dexColor(v, 0.24 + 0.55 * Math.abs(v))} />;
           })}
           {!compact && (
-            <text x={LW - LWW} y={TY + TH + 20} fill="#ffffff" fontSize={9}>
+            <text x={LW - LWW} y={CAPY} fill="#ffffff" fontSize={9}>
               bar length = |DEX| · green = dealers short delta · rose = dealers long delta
             </text>
           )}
@@ -1001,7 +1055,7 @@ function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
       {/* Anchored to the right margin, not to the wing's left edge — from RW the
           caption ran straight off the 1240 viewBox and lost its last few words. */}
       {!compact && (
-        <text x={W - 12} y={TY + TH + 20} fill="#ffffff" fontSize={9} textAnchor="end">
+        <text x={W - 12} y={CAPY} fill="#ffffff" fontSize={9} textAnchor="end">
           bar length = |GEX| · blue = long gamma (dealers dampen) · red = short gamma (dealers amplify)
         </text>
       )}
@@ -1280,6 +1334,33 @@ function pickTimeTicks(cols: MapColumn[], count = 6): { i: number; label: string
     out.push({ i, label });
   }
   return out;
+}
+
+/**
+ * Time ticks on ROUND clock minutes rather than on evenly-spaced column
+ * indices. pickTimeTicks() divides the column count into n equal parts and
+ * rounds, which on a 24-slot window lands on 12:35 · 12:55 · 13:15 · 13:35 ·
+ * 13:50 — the gaps are unequal and none of the labels is a time anyone thinks
+ * in. This walks the columns instead and keeps the ones sitting on a multiple
+ * of `step`, so the axis reads :00 · :15 · :30 and the spacing is genuinely
+ * even. Falls back to pickTimeTicks when the slot grid is coarse enough that no
+ * step lands on a boundary (nothing guarantees slotMin divides 60).
+ */
+function clockTimeTicks(cols: MapColumn[], maxTicks = 7): { i: number; label: string }[] {
+  if (cols.length < 2) return pickTimeTicks(cols, maxTicks);
+  const mins = cols.map((c) => {
+    const [h, m] = etTime(c.t).split(":").map(Number);
+    return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : NaN;
+  });
+  const span = Math.abs(mins[mins.length - 1] - mins[0]);
+  if (!Number.isFinite(span) || span <= 0) return pickTimeTicks(cols, maxTicks);
+  const step = [5, 10, 15, 20, 30, 60, 120].find((s) => span / s <= maxTicks - 1) ?? 120;
+  const out: { i: number; label: string }[] = [];
+  for (let i = 0; i < cols.length; i++) {
+    if (!Number.isFinite(mins[i]) || mins[i] % step !== 0) continue;
+    out.push({ i, label: etTime(cols[i].t) });
+  }
+  return out.length >= 2 ? out : pickTimeTicks(cols, maxTicks);
 }
 
 // ── tab ──────────────────────────────────────────────────────────────────────

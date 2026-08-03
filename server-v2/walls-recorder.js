@@ -590,19 +590,33 @@ async function getWalls({ date, symbol } = {}) {
 
 let _timer = null;
 let _lastKey = null;
+let _inFlight = false;
 
 function startWallsRecorder() {
   const tick = async () => {
+    // runSlot walks the whole universe and can outlast CHECK_MS. _lastKey used
+    // to double as the reentrancy guard; now that it is only set on success,
+    // overlap needs its own flag.
+    if (_inFlight) return;
     try {
       const now = new Date();
       const s = dueSlot(now);
       if (s == null) return;
       const key = `${etDateStr(now)}:${s}`;
       if (_lastKey === key) return; // this slot is already done
-      _lastKey = key;
-      await runSlot({ slot: s });
+      _inFlight = true;
+      const res = await runSlot({ slot: s });
+      // Burn the slot ONLY on a real capture. A skip — no scanner samples yet,
+      // DB down — has to stay retryable for the rest of SLOT_GRACE_MINS, which
+      // is the entire reason that grace window exists. Marking the key up front
+      // meant one early failure (guaranteed at 09:29, when scanner_snapshots is
+      // still empty for the day) permanently lost the slot.
+      if (res && res.ok) _lastKey = key;
+      else console.warn(`[walls] slot ${s} (${slotLabel(s)}) not captured: ${res?.skipped || 'unknown'} — will retry within grace`);
     } catch (e) {
       console.warn('[walls] tick error:', e.message);
+    } finally {
+      _inFlight = false;
     }
   };
   _timer = setInterval(() => { void tick(); }, CHECK_MS);

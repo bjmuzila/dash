@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { HOME_THEME } from "../lib/theme";
 import { ThemedSelect } from "../components/ThemedSelect";
 import { ThemedMonthPicker } from "../components/ThemedMonthPicker";
+import StatementImport from "./budget/StatementImport";
 
 type Bank = "coastal" | "truist" | "secu";
 type BudgetProfile = { id: number; name: string; currency: string };
@@ -165,7 +166,7 @@ export default function Budget() {
   const [prevDailyBalance, setPrevDailyBalance] = useState<DailyBalance | null>(null);
   const [weekAgoBalance, setWeekAgoBalance] = useState<DailyBalance | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"overview" | "register" | "categories" | "amazon" | "bzila" | "yearly">("overview");
+  const [tab, setTab] = useState<"overview" | "register" | "import" | "categories" | "amazon" | "bzila" | "yearly">("overview");
   const [year, setYear] = useState<number>(() => new Date().getFullYear());
   const [yearRows, setYearRows] = useState<RegisterRow[]>([]);
   const [yearLoading, setYearLoading] = useState(false);
@@ -973,7 +974,7 @@ export default function Budget() {
 
         {/* Tabs (top-level nav) */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {([["overview", "Overview"], ["register", "Payments"], ["categories", "Categories"], ["amazon", "Amazon"], ["bzila", "Bzila"], ["yearly", "Yearly"]] as const).map(([k, l]) => (
+          {([["overview", "Overview"], ["register", "Payments"], ["import", "Import"], ["categories", "Categories"], ["amazon", "Amazon"], ["bzila", "Bzila"], ["yearly", "Yearly"]] as const).map(([k, l]) => (
             <button key={k} onClick={() => setTab(k)} style={pill(tab === k)}>{l}</button>
           ))}
           {tab === "register" && (
@@ -1084,6 +1085,18 @@ export default function Budget() {
               onMaterialize={materializeRecurring}
             />
           </div>
+        )}
+        {/* ── IMPORT ───────────────────────────────────────────────────────
+            Statement PDF / screenshot → Claude extract → staged review →
+            merchant + category merge → commit into the register above. */}
+        {tab === "import" && (
+          <StatementImport
+            categories={categories}
+            currency={currency}
+            defaultBank="secu"
+            onCommitted={() => refresh(month)}
+            onOpenCategories={() => setTab("categories")}
+          />
         )}
         {tab === "categories" && (
           <CategoriesPanel
