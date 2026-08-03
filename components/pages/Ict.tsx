@@ -896,7 +896,6 @@ export default function IctPage() {
     if (openPlay && !plays.some((p) => p.id === openPlay.id)) setOpenPlay(null);
   }, [plays, openPlay]);
 
-  const openPlayData = openPlay ? plays.find((p) => p.id === openPlay.id) ?? null : null;
 
   // Switching instrument swaps the whole candle set (different price range), so
   // force the chart to re-fit to the new feed on the next data push.
@@ -1055,8 +1054,10 @@ export default function IctPage() {
 
       {/* captureRef wraps the chart AND the live panels so a copyshot grabs both */}
       <div ref={captureRef} className="grid grid-cols-1 gap-4 rounded-xl bg-[#080b10] p-1">
+        {/* Chart on the left, Plays rail on the right (stacks under 1280px) */}
+        <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
         {/* Chart + overlays */}
-        <div className="self-start rounded-xl border border-white/10 [background:radial-gradient(circle_at_50%_0%,rgba(33,158,188,0.08)_0%,transparent_55%),#0b0f15] border-t-2 border-t-[#219EBC]/40 p-2">
+        <div className="min-w-0 self-start rounded-xl border border-white/10 [background:radial-gradient(circle_at_50%_0%,rgba(33,158,188,0.08)_0%,transparent_55%),#0b0f15] border-t-2 border-t-[#219EBC]/40 p-2">
           {/* Overlay toggles — toolbar-themed pill (blue→teal gradient border) */}
           <div
             className="mb-2"
@@ -1182,67 +1183,6 @@ export default function IctPage() {
                 <p className="text-[11px] leading-snug text-white/90">{hover.concept.body}</p>
               </div>
             )}
-            {/* Clicked-dot popup: the long/short position stats for that play.
-                The box itself is drawn on the canvas; this is the readable copy. */}
-            {openPlay && openPlayData && (() => {
-              const p = openPlayData;
-              const cw = chartRef.current?.clientWidth ?? 900;
-              const ch = chartRef.current?.clientHeight ?? 520;
-              const long = p.dir === "bull";
-              const CARD_W = 234, CARD_H = 212;
-              // Keep the card OFF the box it describes. The box always runs from
-              // the entry dot to the right edge, so the free horizontal space is
-              // to the LEFT of the dot; and it occupies the 3R side of entry, so
-              // the free vertical space is below a long / above a short. Anchoring
-              // the card next to the dot (the first cut) buried the markup.
-              const left = openPlay.x - CARD_W - 14 >= 8
-                ? openPlay.x - CARD_W - 14
-                : Math.max(8, Math.min(cw - CARD_W - 62, openPlay.x + 16));
-              const top = long ? Math.max(8, ch - CARD_H - 8) : 8;
-              const stateTxt = p.state === "live" ? "LIVE"
-                : p.state === "won" ? `WON ${p.mfeR.toFixed(1)}R` : "STOPPED";
-              const stateCol = p.state === "lost" ? "#ff6b6b" : "#22e08a";
-              return (
-                <div
-                  className="absolute z-30 rounded-lg border bg-[#0b0f15]/97 p-2.5 shadow-xl backdrop-blur"
-                  style={{ left, top, width: CARD_W, borderColor: `rgba(${long ? PLAY_C.profit : PLAY_C.loss},0.45)` }}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="mb-1.5 flex items-center gap-2">
-                    <span className="text-[13px] font-bold text-white">{p.label}</span>
-                    <span className="font-mono text-[11px] font-bold" style={{ color: long ? "#30d158" : "#ff5b5b" }}>
-                      {long ? "▲ LONG" : "▼ SHORT"}
-                    </span>
-                    <button
-                      onClick={() => setOpenPlay(null)}
-                      className="ml-auto text-[13px] leading-none text-white/45 hover:text-white"
-                      aria-label="Close play"
-                    >✕</button>
-                  </div>
-                  <div className={`mb-1.5 inline-block rounded px-1.5 py-px text-[10px] font-bold uppercase tracking-wider ${p.state === "live" ? "ict-live-badge" : ""}`}
-                    style={{ color: stateCol, background: "rgba(255,255,255,.06)" }}>
-                    {stateTxt}
-                  </div>
-                  <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 font-mono text-[11px]">
-                    <span className="text-white/50">Entry</span>
-                    <span className="text-right text-white">{p.entry.toFixed(2)}</span>
-                    <span style={{ color: "#ff6b6b" }}>Stop</span>
-                    <span className="text-right" style={{ color: "#ff6b6b" }}>
-                      {p.stop.toFixed(2)} <span className="text-white/40">({p.risk.toFixed(2)} pts)</span>
-                    </span>
-                    {p.targets.map((tp, i) => (
-                      <Fragment key={i}>
-                        <span style={{ color: p.hitR > i ? "#22e08a" : "rgba(255,255,255,.5)" }}>{i + 1}R{p.hitR > i ? " ✓" : ""}</span>
-                        <span className="text-right" style={{ color: p.hitR > i ? "#22e08a" : "rgba(255,255,255,.75)" }}>{tp.toFixed(2)}</span>
-                      </Fragment>
-                    ))}
-                    <span className="text-white/50">R:R</span>
-                    <span className="text-right text-white">{playRR(p).toFixed(1)} : 1</span>
-                  </div>
-                  <p className="mt-1.5 text-[10px] leading-snug text-white/45">{p.note}</p>
-                </div>
-              );
-            })()}
             {!candles.length && (
               <div className="absolute inset-0 grid place-items-center text-sm text-white">waiting for {instLabel} candles…</div>
             )}
@@ -1251,21 +1191,20 @@ export default function IctPage() {
 
         {/* Plays — the position-tool boxes drawn on the chart, in numbers.
             Mirrors the markup exactly: same entry / stop / 1R-2R-3R ladder. */}
-        <div className="rounded-xl border border-white/10 [background:radial-gradient(circle_at_50%_0%,rgba(255,193,7,0.07)_0%,transparent_55%),#0b0f15] border-t-2 p-3"
-          style={{ borderTopColor: `rgba(${C.play},0.45)` }}>
+        <div className="flex min-h-0 min-w-0 flex-col rounded-xl border border-white/10 [background:radial-gradient(circle_at_50%_0%,rgba(255,193,7,0.07)_0%,transparent_55%),#0b0f15] p-3">
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <span className="text-[11px] font-bold uppercase tracking-[0.16em]" style={{ color: `rgb(${C.play})` }}>
               ▶ Plays
             </span>
             <span className="text-[11px] text-white/45">
-live setups only · click the ▲/▼ entry dot on the chart (or a card below) to open the position box
+live setups only · click the ▲/▼ entry dot on the chart (or a card here) to open the position box
             </span>
             <span className="ml-auto font-mono text-[11px] text-white/50">
               {plays.filter((p) => p.state === "live").length} live
             </span>
           </div>
           {plays.length ? (
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid min-h-0 flex-1 grid-cols-1 content-start gap-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-1">
               {plays.map((p) => {
                 const long = p.dir === "bull";
                 const rr = playRR(p);
@@ -1326,6 +1265,8 @@ live setups only · click the ▲/▼ entry dot on the chart (or a card below) t
               (Turtle Soup, Judas, CISD, 2022 Model, Breaker, Inducement, OB retest, OTE) actually fires.
             </p>
           )}
+        </div>
+
         </div>
 
         {/* Live signal panel — all tiles in one full-width row below the chart */}
