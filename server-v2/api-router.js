@@ -2616,18 +2616,36 @@ Rules:
       if (!parsed || typeof parsed !== 'object') { send(res, 502, { error: 'Advice came back unreadable.' }); return; }
 
       const SEV = new Set(['high', 'medium', 'low']);
-      send(res, 200, {
-        headline: String(parsed.headline ?? '').slice(0, 240),
-        findings: (Array.isArray(parsed.findings) ? parsed.findings : []).slice(0, 8).map((f) => ({
-          title: String(f?.title ?? '').slice(0, 120),
-          severity: SEV.has(f?.severity) ? f.severity : 'medium',
-          detail: String(f?.detail ?? '').slice(0, 900),
-          monthlySavings: Number.isFinite(Number(f?.monthlySavings)) ? Math.max(0, Number(f.monthlySavings)) : 0,
-          evidence: String(f?.evidence ?? '').slice(0, 300),
-        })).filter((f) => f.title),
-        quickWins: (Array.isArray(parsed.quickWins) ? parsed.quickWins : []).slice(0, 6).map((q) => String(q).slice(0, 220)).filter(Boolean),
-        model: MODEL,
-      });
+      const headline = String(parsed.headline ?? '').slice(0, 240);
+      const findings = (Array.isArray(parsed.findings) ? parsed.findings : []).slice(0, 8).map((f) => ({
+        title: String(f?.title ?? '').slice(0, 120),
+        severity: SEV.has(f?.severity) ? f.severity : 'medium',
+        detail: String(f?.detail ?? '').slice(0, 900),
+        monthlySavings: Number.isFinite(Number(f?.monthlySavings)) ? Math.max(0, Number(f.monthlySavings)) : 0,
+        evidence: String(f?.evidence ?? '').slice(0, 300),
+      })).filter((f) => f.title);
+      const quickWins = (Array.isArray(parsed.quickWins) ? parsed.quickWins : []).slice(0, 6).map((q) => String(q).slice(0, 220)).filter(Boolean);
+
+      // Persist against the month so the conclusion survives a reload and a
+      // month switch. Re-running overwrites — one stored pass per month.
+      let generatedAt = null;
+      const persistMonth = /^\d{4}-\d{2}$/.test(String(body?.month ?? '')) ? String(body.month) : null;
+      if (persistMonth && libDb) {
+        try {
+          await libDb.adoptDefaultBudgetProfile('owner');
+          const profile = await libDb.getOrCreateBudgetProfile('owner');
+          const saved = await libDb.upsertBudgetAdvice({
+            profile_id: profile.id, month: persistMonth, headline,
+            findings, quick_wins: quickWins, model: MODEL,
+          });
+          generatedAt = saved?.generated_at ?? null;
+        } catch (e) {
+          // A storage failure must not lose the advice the user just paid for.
+          console.warn('[budget/advise] could not persist:', String(e?.message || e));
+        }
+      }
+
+      send(res, 200, { headline, findings, quickWins, generatedAt, model: MODEL });
     } catch (err) { send(res, 500, { error: 'Advice failed', detail: String(err?.message || err) }); }
   },
 });
@@ -6030,13 +6048,24 @@ if (libDb) {
 
           if (req.method === 'GET') {
             const month = new URL(req.url || '/', 'http://localhost').searchParams.get('month') || currentMonth();
-            const [tx, subscriptions, categories, months] = await Promise.all([
+            const [tx, subscriptions, categories, months, adviceRow] = await Promise.all([
               D.listStatementTx(profile.id, month),
               D.listSubscriptions(profile.id),
               D.listBudgetCategories(profile.id),
               D.listStatementMonths(profile.id),
+              D.getBudgetAdvice(profile.id, month),
             ]);
-            send(res, 200, { profile, month, tx, subscriptions, categories, months });
+            // The stored "what to fix" pass for this month, if one was ever run.
+            const advice = adviceRow
+              ? {
+                headline: adviceRow.headline || '',
+                findings: adviceRow.findings || [],
+                quickWins: adviceRow.quick_wins || [],
+                generatedAt: adviceRow.generated_at,
+                model: adviceRow.model,
+              }
+              : null;
+            send(res, 200, { profile, month, tx, subscriptions, categories, months, advice });
             return;
           }
 

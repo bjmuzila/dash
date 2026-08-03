@@ -180,6 +180,8 @@ __export(db_exports, {
   listStatementMonths: () => listStatementMonths,
   listStatementTx: () => listStatementTx,
   listSubscriptions: () => listSubscriptions,
+  getBudgetAdvice: () => getBudgetAdvice,
+  upsertBudgetAdvice: () => upsertBudgetAdvice,
   setStatementCategoryByMerchant: () => setStatementCategoryByMerchant,
   setStatementTxCategory: () => setStatementTxCategory,
   updateStatementTx: () => updateStatementTx,
@@ -761,6 +763,21 @@ async function ensureAllTables(pool) {
       UNIQUE(profile_id, merchant_key)
     );
     CREATE INDEX IF NOT EXISTS idx_budget_subscription_profile ON budget_subscription(profile_id);
+
+    -- The last "what to fix" pass for a month, kept so the conclusion survives
+    -- a reload and a month switch. One row per month: re-running overwrites it,
+    -- which is exactly the "stays until a new one shows up" behaviour.
+    CREATE TABLE IF NOT EXISTS budget_advice (
+      id SERIAL PRIMARY KEY,
+      profile_id INTEGER NOT NULL REFERENCES budget_profiles(id) ON DELETE CASCADE,
+      month TEXT NOT NULL,
+      headline TEXT NOT NULL DEFAULT '',
+      findings JSONB NOT NULL DEFAULT '[]'::jsonb,
+      quick_wins JSONB NOT NULL DEFAULT '[]'::jsonb,
+      model TEXT,
+      generated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(profile_id, month)
+    );
 
     -- \u2500\u2500 Reta (retatrutide) protocol tracker \u2014 owner-only \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     -- Reconstitution changes week to week, so each recon is its own row keyed by
@@ -4596,6 +4613,25 @@ async function clearStatementMonth(profileId, month) {
   const r = await pool.query("DELETE FROM budget_statement_tx WHERE profile_id = $1 AND month = $2", [profileId, month]);
   return r.rowCount ?? 0;
 }
+async function upsertBudgetAdvice(input) {
+  const pool = await getDb();
+  const result = await pool.query(
+    `INSERT INTO budget_advice (profile_id, month, headline, findings, quick_wins, model)
+     VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6)
+     ON CONFLICT(profile_id, month) DO UPDATE SET
+       headline = EXCLUDED.headline,
+       findings = EXCLUDED.findings,
+       quick_wins = EXCLUDED.quick_wins,
+       model = EXCLUDED.model,
+       generated_at = CURRENT_TIMESTAMP
+     RETURNING *`,
+    [input.profile_id, input.month, input.headline ?? '', JSON.stringify(input.findings ?? []), JSON.stringify(input.quick_wins ?? []), input.model ?? null]
+  );
+  return result.rows[0];
+}
+async function getBudgetAdvice(profileId, month) {
+  return queryOne("SELECT * FROM budget_advice WHERE profile_id = ? AND month = ?", [profileId, month]);
+}
 async function listSubscriptions(profileId) {
   return queryAll("SELECT * FROM budget_subscription WHERE profile_id = ? ORDER BY merchant ASC", [profileId]);
 }
@@ -5086,6 +5122,8 @@ async function getLatestMultGreekStaticSnapshot() {
   listStatementMonths,
   listStatementTx,
   listSubscriptions,
+  getBudgetAdvice,
+  upsertBudgetAdvice,
   setStatementCategoryByMerchant,
   setStatementTxCategory,
   updateStatementTx,

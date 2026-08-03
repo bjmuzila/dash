@@ -139,7 +139,7 @@ type Subscription = {
 type MonthStat = { month: string; n: number };
 
 type Finding = { title: string; severity: "high" | "medium" | "low"; detail: string; monthlySavings: number; evidence: string };
-type Advice = { headline: string; findings: Finding[]; quickWins: string[] };
+type Advice = { headline: string; findings: Finding[]; quickWins: string[]; generatedAt?: string | null };
 
 type View = "merchants" | "flow" | "ledger" | "categories" | "subs";
 type SortKey = "date" | "merchant" | "amount" | "category";
@@ -184,6 +184,19 @@ function monthLabel(m: string): string {
   const [y, mo] = m.split("-").map(Number);
   if (!y || !mo) return m;
   return `${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][mo - 1]} ’${String(y).slice(2)}`;
+}
+/** "3 days ago" — how stale the stored analysis is. */
+function sinceLabel(iso?: string | null): string {
+  if (!iso) return "";
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.round(hrs / 24);
+  return `${days}d ago`;
 }
 function mKey(v: string): string {
   return String(v || "").trim().toLowerCase().replace(/\s+/g, " ").slice(0, 60);
@@ -238,6 +251,7 @@ export default function RealMonth({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [advice, setAdvice] = useState<Advice | null>(null);
+  const [adviceOpen, setAdviceOpen] = useState(true);
   const [dragging, setDragging] = useState(false);
   const [sourceName, setSourceName] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -254,6 +268,9 @@ export default function RealMonth({
       setTx((data.tx || []).map((r: StoredTx) => ({ ...r, amount: Number(r.amount) })));
       setSubs(data.subscriptions || []);
       setMonths((data.months || []).map((x: MonthStat) => ({ month: x.month, n: Number(x.n) })));
+      // The stored pass for this month, if one was ever run. It stays until a
+      // re-run overwrites it, so reloading costs nothing.
+      setAdvice(data.advice ?? null);
     } catch {
       setError("Could not load this month's statement data.");
     } finally {
@@ -263,7 +280,8 @@ export default function RealMonth({
 
   useEffect(() => {
     void load(month);
-    setAdvice(null);
+    // advice is NOT cleared here — load() replaces it with whatever is stored
+    // for the new month, so switching months never throws a paid result away.
     setStaged([]);
     setExpanded(new Set());
     setShowAllIn(new Set());
@@ -606,7 +624,7 @@ export default function RealMonth({
       const res = await fetch("/api/budget/advise", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          period: month, currency,
+          period: month, month, currency,
           totals: { inflow: totals.inflow, outflow: totals.outflow, net: totals.net, transactions: tx.length },
           categories: byCategory.map((c) => ({ name: c.name, spent: Number(c.spent.toFixed(2)), budget: c.budget, count: c.count })),
           merchants: allMerchants.slice(0, 40).map((m) => ({ merchant: m.merchant, total: Number(m.total.toFixed(2)), count: m.count })),
@@ -615,7 +633,8 @@ export default function RealMonth({
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) { setError(json?.error || `Advice failed (${res.status}).`); return; }
-      setAdvice({ headline: json.headline || "", findings: json.findings || [], quickWins: json.quickWins || [] });
+      setAdvice({ headline: json.headline || "", findings: json.findings || [], quickWins: json.quickWins || [], generatedAt: json.generatedAt ?? null });
+      setAdviceOpen(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Advice failed.");
     } finally {
@@ -658,12 +677,27 @@ export default function RealMonth({
       {/* ── WHAT TO FIX — first, because the conclusion is the point ──────── */}
       {hasData && (
         <Card variant="classic" padding={18} style={{ borderColor: rgba(WARN, 0.3) }}>
+          {/* Header doubles as the collapse toggle. The savings total and the
+              age of the stored pass stay visible when collapsed, so the card
+              is still worth reading at one line tall. */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <span style={{ fontSize: TYPE.label, fontWeight: 900, letterSpacing: "0.18em", color: WARN }}>WHAT TO FIX</span>
+            <span
+              onClick={() => setAdviceOpen((v) => !v)}
+              style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none" }}
+            >
+              <span style={{ fontSize: TYPE.label, ...MUTED }}>{adviceOpen ? "▾" : "▸"}</span>
+              <span style={{ fontSize: TYPE.label, fontWeight: 900, letterSpacing: "0.18em", color: WARN }}>WHAT TO FIX</span>
+            </span>
             <span style={{ fontSize: TYPE.label, ...MUTED }}>{monthLabel(month)}</span>
+            {advice?.generatedAt && <span style={{ fontSize: TYPE.label, ...MUTED }}>· ran {sinceLabel(advice.generatedAt)}</span>}
             {potentialSavings > 0 && (
               <span style={{ fontSize: TYPE.label, fontWeight: 900, color: MONEY_IN, fontVariantNumeric: "tabular-nums" }}>
                 {fmtMoney(potentialSavings, currency)}/mo identified
+              </span>
+            )}
+            {!adviceOpen && advice && (
+              <span style={{ fontSize: TYPE.label, ...MUTED }}>
+                {advice.findings.length} finding{advice.findings.length === 1 ? "" : "s"}
               </span>
             )}
             <div style={{ flex: 1 }} />
@@ -676,15 +710,15 @@ export default function RealMonth({
             </button>
           </div>
 
-          {!advice && !advising && (
+          {adviceOpen && !advice && !advising && (
             <div style={{ fontSize: TYPE.body, ...MUTED, marginTop: 10, lineHeight: 1.5 }}>
               Reads the merchant totals, category totals and recurring charges below, then ranks what's actually costing you.
               Individual transactions are never sent.
             </div>
           )}
-          {advice?.headline && <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.35, marginTop: 12 }}>{advice.headline}</div>}
+          {adviceOpen && advice?.headline && <div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.35, marginTop: 12 }}>{advice.headline}</div>}
 
-          {advice && (
+          {adviceOpen && advice && (
             <>
               <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
                 {advice.findings.map((f, i) => {
@@ -725,6 +759,7 @@ export default function RealMonth({
               )}
               <div style={{ fontSize: 11, ...MUTED, marginTop: 14, opacity: 0.55 }}>
                 Built from the aggregates below — merchant totals, category totals, recurring hits.
+                Saved against {monthLabel(month)}; it stays until you re-run.
               </div>
             </>
           )}
