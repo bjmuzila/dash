@@ -811,3 +811,24 @@ input.dte-range::-moz-range-track {
 @supports (height: 100dvh) {
   .cb-app-viewport { height: 100dvh; }
 }
+
+/* ── /trading finding grid: step 3 → 2 before it steps to 1 ────────────────
+   The Leaks and Clock panes are a fixed 3 × 2 / 2-col grid so they fill a wide
+   monitor instead of smearing into one row. Under ~1400px three cards get too
+   narrow for a bar row plus its value, so drop to two across; the 899px block
+   above then takes it to one. grid-template-rows is cleared at the same time —
+   a hardcoded 2 rows is wrong once the column count changes. */
+@media (min-width: 900px) and (max-width: 1400px) {
+  .journal-kpis {
+    grid-template-columns: repeat(2, 1fr) !important;
+    grid-template-rows: none !important;
+  }
+  .journal-tod { grid-template-rows: none !important; }
+}
+
+/* Below 900px the single-column rule wins, but the fixed row track would still
+   force two tall rows onto a phone. Clear it there too. */
+@media (max-width: 899px) {
+  .journal-kpis,
+  .journal-tod { grid-template-rows: none !important; }
+}

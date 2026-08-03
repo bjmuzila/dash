@@ -4,6 +4,9 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Monday 8/3/2026
 
+* Added a **Volume** tab to the option chain, right next to Open Interest. It lays out exactly like the OI tab — calls above the money, puts below — but shows how many contracts have actually traded today at each strike, live off the chain.
+
+* Fixed the **Vol GEX Flow** chart on the home page. It was quietly mixing SPY and QQQ into the SPX line, which put a jagged saw-tooth into the chart that looked like real market movement but wasn't. The line now tracks SPX only — and loads faster too. The same mix-up was also affecting the heatmap's Vol GEX Speed column, which is fixed as well.
 * Added a **Hide Accounts** button to the trading journal — one click swaps every account name for "Account 1", "Account 2" and so on, so you can screen-share or stream without showing your broker account numbers. The panel stays fully usable while hidden: you can still tell accounts apart, sort them, and click one to filter.
 * Rebuilt the journal's stat cards around findings instead of totals. Instead of nine bare numbers, each card now compares two slices of your own trades and tells you what it means — how long you hold winners versus losers, which trade number of the session your edge stops working, what re-entering right after a loss costs you, how much of your gross goes to fees, and whether your biggest positions are actually your best ones.
 * Added a session clock view: a half-hour-by-half-hour breakdown of when you make and lose money, your best window, your worst stretch of the day, and a weekday-by-hour grid so you can tell a real pattern from one bad Tuesday.

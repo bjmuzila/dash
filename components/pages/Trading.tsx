@@ -124,7 +124,7 @@ const SOFT = HT.text;
  * dimming, and the band's own border already separates it from the body.
  */
 const cardLabelStyle: React.CSSProperties = {
-  fontSize: 11, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: SOFT,
+  fontSize: 11.5, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: SOFT,
 };
 
 /**
@@ -1394,16 +1394,21 @@ export default function TradingPage() {
   ) => {
     const color = VERDICT_TONE[tone] ?? SOFT;
     return (
-      <Card padding={0} style={{ display: "flex", flexDirection: "column", minHeight: 200, ...span }}>
+      <Card padding={0} style={{ display: "flex", flexDirection: "column", minHeight: 240, ...span }}>
         <div style={bandHeadStyle}>
           <span style={cardLabelStyle}>{label}</span>
           {right != null && <span style={{ ...cardLabelStyle, color, letterSpacing: ".1em", whiteSpace: "nowrap" }}>{right}</span>}
         </div>
-        <div style={{ ...bandBodyStyle, flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>{body}</div>
+        {/* justifyContent:center — the cards are now a third of a tall pane
+            each, and a four-bar stack pinned to the top left a lake of dead
+            space above the verdict. Centred, the body sits where the eye
+            already is. Cards whose body is a flex:1 chart strip are
+            unaffected: that child still eats the slack. */}
+        <div style={{ ...bandBodyStyle, flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", minHeight: 0 }}>{body}</div>
         <div style={{
-          padding: "12px 18px", borderTop: `1px solid ${HT.border}`,
+          padding: "13px 18px", borderTop: `1px solid ${HT.border}`,
           background: HT.panelBgStrong, borderRadius: "0 0 17px 17px",
-          fontSize: 12.5, lineHeight: 1.55, color, flexShrink: 0,
+          fontSize: 13.5, lineHeight: 1.55, color, flexShrink: 0,
         }}>{verdict}</div>
       </Card>
     );
@@ -1411,26 +1416,26 @@ export default function TradingPage() {
 
   /** Label · proportional track · value. The comparison IS the card. */
   const barRow = (label: string, pct: number, value: React.ReactNode, color: string, key?: string) => (
-    <div key={key ?? label} style={{ display: "grid", gridTemplateColumns: "78px 1fr auto", alignItems: "center", gap: 9, fontSize: 12 }}>
+    <div key={key ?? label} style={{ display: "grid", gridTemplateColumns: "96px 1fr auto", alignItems: "center", gap: 11, fontSize: 13 }}>
       <span style={{ color: SOFT, letterSpacing: ".02em" }}>{label}</span>
-      <span style={{ height: 9, borderRadius: 5, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
-        <span style={{ display: "block", height: "100%", width: `${Math.max(0, Math.min(100, pct))}%`, background: color, borderRadius: 5 }} />
+      <span style={{ height: 12, borderRadius: 6, background: "rgba(255,255,255,0.06)", overflow: "hidden" }}>
+        <span style={{ display: "block", height: "100%", width: `${Math.max(0, Math.min(100, pct))}%`, background: color, borderRadius: 6 }} />
       </span>
       <span style={{ textAlign: "right", fontWeight: 700, color, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{value}</span>
     </div>
   );
 
   const bigVal = (node: React.ReactNode, color?: string) => (
-    <div style={{ fontSize: 29, fontWeight: 700, lineHeight: 1.04, letterSpacing: "-.025em", color: color ?? HT.text, fontVariantNumeric: "tabular-nums" }}>{node}</div>
+    <div style={{ fontSize: 34, fontWeight: 700, lineHeight: 1.04, letterSpacing: "-.025em", color: color ?? HT.text, fontVariantNumeric: "tabular-nums" }}>{node}</div>
   );
   const subLine = (node: React.ReactNode) => (
-    <div style={{ fontSize: 11.5, color: SOFT, lineHeight: 1.5, marginTop: 5 }}>{node}</div>
+    <div style={{ fontSize: 12.5, color: SOFT, lineHeight: 1.5, marginTop: 7 }}>{node}</div>
   );
   const pillRow = (items: React.ReactNode[]) => (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+    <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginTop: 14 }}>
       {items.map((n, i) => (
         <span key={i} style={{
-          fontSize: 10.5, fontWeight: 700, padding: "3px 8px", borderRadius: 999,
+          fontSize: 11.5, fontWeight: 700, padding: "4px 10px", borderRadius: 999,
           background: "rgba(255,255,255,0.05)", border: `1px solid ${HT.border}`, color: SOFT,
         }}>{n}</span>
       ))}
@@ -1445,7 +1450,7 @@ export default function TradingPage() {
   return (
     <PageShell className="journal-root no-card-lift">
       {/* Header */}
-      <Card padding="14px 20px" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <Card padding="14px 20px" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
         <div style={{ fontSize: 17, fontWeight: 700, color: HT.cyan }}>Journaling Dashboard</div>
         {/* Core totals live INLINE in the header, not as cards. They're
             reference figures, not findings — spending four KPI cards on
@@ -1471,7 +1476,10 @@ export default function TradingPage() {
         </div>
       </Card>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* flex:1 + minHeight:0 — the pane column takes the height the shell has
+          left instead of hugging its content. Without it a 6-card pane sat in
+          the top third of a tall monitor with everything below it dead. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 16, flex: 1, minHeight: 0 }}>
         {/* Toolbar */}
         <div className="journal-toolbar" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1559,18 +1567,26 @@ export default function TradingPage() {
         ) : null}
 
         {/* ── PANE · LEAKS ─────────────────────────────────────────────
-            Gutters are 22px, not 12. At 12 the cards touched and the grid
-            read as one striped sheet; the gap is what makes each card an
-            object rather than a cell. */}
+            A fixed 3 × 2. NOT auto-fit: on a 2000px monitor auto-fit spread
+            all six findings across a single row of narrow cards and left the
+            bottom two-thirds of the screen empty. Six findings is exactly
+            3 × 2, so the grid says so — and the rows are 1fr (floor 300px) so
+            the cards grow into the height the pane has instead of floating in
+            it. Gutters are 22px, not 12: at 12 the cards touched and the grid
+            read as one striped sheet. */}
         {leaks.n > 0 && pane === "leaks" && (
-          <div className="journal-kpis" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))", gap: 22 }}>
+          <div className="journal-kpis" style={{
+            display: "grid", gridTemplateColumns: "repeat(3, 1fr)",
+            gridTemplateRows: "repeat(2, minmax(300px, 1fr))",
+            gap: 22, flex: 1, minHeight: 0,
+          }}>
 
               {/* Hold-time asymmetry */}
               {insightCard("Hold-time asymmetry",
                 leaks.holdRatio ? `${leaks.holdRatio.toFixed(1)}×` : null,
                 <>
                   {bigVal(<>{fmtDur(leaks.avgLossDur)} <span style={{ fontSize: ".45em", color: SOFT, fontWeight: 600 }}>avg loser</span></>)}
-                  <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 12 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 11, marginTop: 16 }}>
                     {barRow("Winners", pctOf(leaks.avgWinDur, Math.max(leaks.avgWinDur, leaks.avgLossDur)), fmtDur(leaks.avgWinDur), T.green)}
                     {barRow("Losers", pctOf(leaks.avgLossDur, Math.max(leaks.avgWinDur, leaks.avgLossDur)), fmtDur(leaks.avgLossDur), T.red)}
                   </div>
@@ -1585,7 +1601,7 @@ export default function TradingPage() {
               {insightCard("Overtrading curve",
                 leaks.deadFrom ? `edge dies at #${leaks.deadFrom.lo}` : "holds up",
                 <>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
                     {leaks.seqRows.map((r) => barRow(
                       r.label,
                       pctOf(r.pnl, Math.max(...leaks.seqRows.map((x) => Math.abs(x.pnl)), 1)),
@@ -1606,7 +1622,7 @@ export default function TradingPage() {
                 <>
                   {bigVal(winTxt(leaks.revWinPct), leaks.revWinPct != null && leaks.revWinPct < leaks.baseWin ? T.red : T.green)}
                   {subLine(<>{leaks.revCt} trades re-entered within 5 min of a loss</>)}
-                  <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 12 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 11, marginTop: 16 }}>
                     {barRow("Baseline", leaks.baseWin, `${leaks.baseWin.toFixed(0)}%`, T.green)}
                     {barRow("Revenge", leaks.revWinPct ?? 0, winTxt(leaks.revWinPct), (leaks.revWinPct ?? 0) < leaks.baseWin ? T.red : T.green)}
                   </div>
@@ -1623,7 +1639,7 @@ export default function TradingPage() {
               {insightCard("Fee drag",
                 leaks.feePct != null ? `${leaks.feePct.toFixed(1)}% of gross` : null,
                 <>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
                     {barRow("Gross", 100, fmt$(leaks.gross), LIGHT_BLUE)}
                     {barRow("Fees", pctOf(leaks.fees, Math.max(leaks.gross, 1)), fmt$(-leaks.fees), HT.orange)}
                     {barRow("Net", pctOf(leaks.net, Math.max(leaks.gross, 1)), fmt$(leaks.net), leaks.net >= 0 ? T.green : T.red)}
@@ -1642,7 +1658,7 @@ export default function TradingPage() {
                 <>
                   {bigVal(fmt$(leaks.worstSum), T.red)}
                   {subLine(<>worst {leaks.worstCt} · {strong(leaks.avgLoss ? `${(leaks.worstCt ? (leaks.worstSum / leaks.worstCt) / leaks.avgLoss : 0).toFixed(1)}×` : "—")} the {fmt$(leaks.avgLoss)} average</>)}
-                  <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 12 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 11, marginTop: 16 }}>
                     {barRow("Avg loss", pctOf(leaks.avgLoss, Math.abs(leaks.worstCt ? leaks.worstSum / leaks.worstCt : 1)), fmt$(leaks.avgLoss), LIGHT_BLUE)}
                     {barRow("Worst avg", 100, fmt$(leaks.worstCt ? leaks.worstSum / leaks.worstCt : 0), T.red)}
                   </div>
@@ -1659,7 +1675,7 @@ export default function TradingPage() {
               {/* Size discipline */}
               {insightCard("Size discipline", leaks.sizeInverted ? "inverted" : "aligned",
                 <>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
                     {leaks.sizeRows.map((r) => barRow(
                       r.label,
                       r.win ?? 0,
@@ -1679,7 +1695,11 @@ export default function TradingPage() {
 
         {/* ── PANE · THE CLOCK ─────────────────────────────────────── */}
         {leaks.n > 0 && pane === "clock" && (
-          <div className="journal-tod" style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 22 }}>
+          <div className="journal-tod" style={{
+            display: "grid", gridTemplateColumns: "2fr 1fr",
+            gridTemplateRows: "repeat(2, minmax(320px, 1fr))",
+            gap: 22, flex: 1, minHeight: 0,
+          }}>
 
               {/* Session P&L by 30 min */}
               {insightCard("Session P&L by 30 min", `${tod.buckets.length ? tod.buckets[0].label : ""}–${tod.buckets.length ? tod.buckets[tod.buckets.length - 1].label : ""}`,
@@ -1801,7 +1821,7 @@ export default function TradingPage() {
               {insightCard("Where the day pays",
                 tod.topTwoShare != null ? `top 2 = ${tod.topTwoShare.toFixed(0)}%` : null,
                 <>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
                     {tod.blocks.map((b) => barRow(
                       b.label,
                       pctOf(b.pnl, Math.max(...tod.blocks.map((x) => Math.abs(x.pnl)), 1)),

@@ -1624,6 +1624,7 @@ const WALL_SLOTS = 27;
 const WALL_COL_H = 900;
 const RANKED_LIST_H = 320;
 const LEVEL_LOG_H = 560;
+const WATCH_LIST_H = 300;
 const LEVEL_LABEL: Record<WallLevel, string> = { call_wall: "Call Wall", put_wall: "Put Wall", cb: "CORE" };
 const LEVEL_COLOR: Record<WallLevel, string> = { call_wall: AMBER, put_wall: GREEN, cb: HOME_THEME.lightBlue };
 
@@ -2093,6 +2094,133 @@ function RankedLevels({ rank, sel, onPick }: { rank: WallRank | null; sel: strin
   );
 }
 
+type WatchLevel = {
+  symbol: string; level_type: WallLevel; strike: number; spot: number;
+  dist_pts: number; dist_atr: number; bucket: string;
+  closing: boolean | null; side: "above" | "below";
+  reach: number | null; reach_thin: boolean; level_gex: number | null;
+  attempts: number; approaches: number; live: boolean;
+  last_reaction: WallReaction | null; reclaim_min: number | null;
+};
+
+/**
+ * IN PLAY — the live watchlist. Every level inside 0.60x ATR of spot, nearest
+ * first, re-sorted as the day burns down.
+ *
+ * What a row asserts: price is this far from this level, and it is or is not
+ * closing on it. That is a distance claim, which is the one that survived the
+ * control test in walls-reach.js. Attempts and last reaction are shown as
+ * HISTORY, not as a prediction — "the wall will hold" is the claim that tied
+ * with a random same-distance level and was deleted. Do not re-imply it here.
+ */
+function WallWatchCard({ date, onPick, sel }: { date: string; onPick: (s: string) => void; sel: string | null }) {
+  const [rows, setRows] = useState<WatchLevel[] | null>(null);
+  const [alertOnly, setAlertOnly] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch(`/proxy/walls-watch?date=${encodeURIComponent(date)}`, { cache: "no-store" });
+      const j = await r.json();
+      setRows(j?.ok ? (j.levels ?? []) : []);
+    } catch { setRows([]); }
+  }, [date]);
+
+  // 30s — the underlying scanner sweep is 5m, so this is just "never stale by
+  // more than a sweep" without hammering the endpoint.
+  useEffect(() => {
+    void load();
+    const id = setInterval(() => { void load(); }, 30_000);
+    return () => clearInterval(id);
+  }, [load]);
+
+  const shown = useMemo(
+    () => (rows ?? []).filter((l) => !alertOnly || l.dist_atr <= 0.25),
+    [rows, alertOnly],
+  );
+
+  return (
+    <div style={{ ...CARD, overflow: "hidden", flexShrink: 0 }}>
+      <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center" }}>
+        <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: HOME_THEME.gold }}>
+          In play
+        </span>
+        <button
+          onClick={() => setAlertOnly((v) => !v)}
+          title="Only levels inside 0.25x ATR — the band that fires an alert"
+          style={{
+            padding: "4px 9px", borderRadius: 7, cursor: "pointer", fontFamily: "inherit",
+            fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+            border: `1px solid ${alertOnly ? HOME_THEME.gold : C.border}`,
+            background: alertOnly ? rgba(HOME_THEME.gold, 0.14) : "rgba(255,255,255,0.03)",
+            color: alertOnly ? HOME_THEME.gold : C.label,
+          }}
+        >
+          On price only
+        </button>
+        <span style={{ marginLeft: "auto", fontSize: 14, opacity: 0.5, fontFamily: "var(--font-mono)" }}>
+          {rows == null ? "loading…" : `${shown.length} level${shown.length === 1 ? "" : "s"}`}
+        </span>
+      </div>
+
+      {rows != null && !shown.length ? (
+        <div style={{ padding: "26px 18px", textAlign: "center", opacity: 0.45, fontSize: 14 }}>
+          Nothing within {alertOnly ? "0.25" : "0.60"}× ATR right now.
+        </div>
+      ) : (
+        <div className="wall-scroll" style={{ maxHeight: WATCH_LIST_H, overflowY: "auto" }}>
+          {shown.map((l) => {
+            const color = LEVEL_COLOR[l.level_type];
+            const hot = l.dist_atr <= 0.25;
+            return (
+              <div
+                key={`${l.symbol}-${l.level_type}-${l.strike}`}
+                onClick={() => onPick(l.symbol)}
+                style={{
+                  display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center",
+                  padding: "9px 18px", cursor: "pointer",
+                  borderBottom: `1px solid rgba(255,255,255,0.05)`,
+                  background: l.symbol === sel ? rgba(C.cyan, 0.08) : undefined,
+                  boxShadow: l.symbol === sel ? `inset 2px 0 0 ${C.cyan}` : undefined,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: "flex", gap: 7, alignItems: "center", flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 15, fontWeight: 800 }}>{l.symbol}</span>
+                    <span style={{ ...wallBadgeStyle(color), fontSize: 12, padding: "1px 7px" }}>
+                      {LEVEL_LABEL[l.level_type]} {wallStrike(l.strike)}
+                    </span>
+                    {l.live ? <span style={{ ...wallBadgeStyle(AMBER), fontSize: 12, padding: "1px 7px" }}>Live</span> : null}
+                    {/* Closing vs backing away is the whole point of the row. */}
+                    {l.closing === true ? <span style={{ fontSize: 12, color: HOME_THEME.gold, fontWeight: 800 }}>↘ closing</span>
+                      : l.closing === false ? <span style={{ fontSize: 12, opacity: 0.4 }}>↗ backing off</span> : null}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 3, fontSize: 12, opacity: 0.6, fontFamily: "var(--font-mono)", flexWrap: "wrap" }}>
+                    <span>{wallStrike(l.dist_pts)} pts {l.side}</span>
+                    <span>· {atrX(l.dist_atr)} ATR</span>
+                    {l.attempts ? <span>· tested {l.attempts}×</span> : null}
+                    {l.last_reaction ? <span>· last {REACTION_LABEL[l.last_reaction].toLowerCase()}</span> : null}
+                    {l.level_gex != null ? <span>· GEX {gexShort(l.level_gex)}</span> : null}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right", fontFamily: "var(--font-mono)" }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: hot ? HOME_THEME.gold : C.label }}>
+                    {atrX(l.dist_atr)}
+                  </div>
+                  <div style={{ fontSize: 11, opacity: 0.4, letterSpacing: "0.1em", textTransform: "uppercase", fontFamily: "inherit" }}>away</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div style={{ borderTop: `1px solid ${C.border}`, padding: "12px 18px", fontSize: 12.5, opacity: 0.6, lineHeight: 1.55 }}>
+        Distance only. Alerts fire once per level when it comes inside <b>0.25× ATR while closing</b>.
+        Tests and reactions are this session&rsquo;s history — not a call on whether the level holds.
+      </div>
+    </div>
+  );
+}
+
 type WallFilter = "all" | "changed" | "hit" | "idle";
 type WallSort = "reach" | "distance" | "symbol";
 
@@ -2361,6 +2489,7 @@ function WallsView() {
             contents, and the two fought over the same drag. The column is now a
             plain stack; each card owns its own scroll. */}
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <WallWatchCard date={date} sel={sel} onPick={setSel} />
           <RankedLevels rank={rank} sel={sel} onPick={setSel} />
 
           {/* flexShrink:0 is load-bearing. As a flex item in a column container

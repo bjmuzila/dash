@@ -79,7 +79,8 @@ const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: 
 const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, enrichOutcomesWithQuotes: farCbEnrichOutcomes, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
 const { startWallsRecorder, runSlot: runWallsSlot, getWalls } = require('./walls-recorder');
-const { startWallsReach, runReachBackfill, runCalibration, getReach, attachRank } = require('./walls-reach');
+const { startWallsReach, runReachBackfill, runCalibration, getReach, attachRank,
+  getWatch, runWatchAlerts, startWallsWatch } = require('./walls-reach');
 const { startGexChangeTopRecorder, runOnce: runGexChangeTop, getHistory: getGexChangeTopHistory, getPickHistory: getGexChangeTopPickHistory, getResults: getGexChangeTopResults, runResults: runGexChangeTopResults } = require('./gex-change-top-recorder');
 const {
   startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce,
@@ -603,13 +604,6 @@ async function ensureFlowPrintsSchema(pool) {
 async function handleGexHistory(req, res) {
   const { searchParams } = new URL(req.url || '/', 'http://localhost');
   const expiry = searchParams.get('expiry') || marketState.getState().expiry || '';
-  // option_strike_gex_history is a SHARED table: gex-history-writer stamps every
-  // row with `symbol`, and etf-gex-recorder writes SPY/QQQ 0DTE into it every
-  // minute during RTH under the SAME expiry string as SPX. Filtering on expiry
-  // alone therefore blends three underlyings into one baseline set. Default to
-  // '$SPX' (the writer's DEFAULT_SYMBOL) so existing callers get what they have
-  // always meant; an ETF caller passes ?symbol=SPY explicitly.
-  const symbol = (searchParams.get('symbol') || '$SPX').trim();
   const ages = (searchParams.get('ages') || '5,15,30')
     .split(',').map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
   // basis=vol   → per-strike VOL-ONLY baselines (net_vol_gex), for the heatmap's
@@ -652,10 +646,9 @@ async function handleGexHistory(req, res) {
     const { rows } = await pool.query(
       `SELECT DISTINCT ON (strike) strike, ${col} AS val
          FROM option_strike_gex_history
-        WHERE date = $1 AND expiry = $2 AND symbol = $5 AND timestamp <= $3
-          AND ${nullGuard} IS NOT NULL
+        WHERE date = $1 AND expiry = $2 AND timestamp <= $3 AND ${nullGuard} IS NOT NULL
         ORDER BY strike, ABS(timestamp - $4) ASC`,
-      [date, expiry, target, target, symbol]
+      [date, expiry, target, target]
     );
     for (const r of rows) {
       const strike = Number(r.strike);
@@ -1032,22 +1025,6 @@ async function handleFlowPremSplit(req, res) {
 const _volFlowCache = new Map(); // key -> { at, payload }
 const VOLFLOW_TTL_MS = 20_000;   // recorder writes ~1/min; 20s keeps polls cheap
 
-// ── /proxy/strike-growth/scanner cache ──────────────────────────────────────
-// The cross-ticker scanner query runs a LATERAL lookback per row of today's
-// strike_growth inside the last 4h — by far the most expensive read on the
-// shared strike-growth pool. The scanner PAGE mounts it alongside the GEX
-// Change Top tab and then re-polls every 5 min, so an uncached run meant the
-// whole page waited on it (and, before the pool was widened, so did every other
-// tab). The underlying data only changes on a sweep (STRIKE_GROWTH_SWEEP_MINS,
-// default 5), so a 30s payload cache is strictly free accuracy-wise.
-//
-// _sgScannerInflight additionally COALESCES concurrent identical requests onto
-// one query. Without it, a cold cache + two mounts (or a poll landing on a
-// reload) issues the same 60s scan twice and eats two pool slots for it.
-const _sgScannerCache = new Map();    // key -> { at, payload }
-const _sgScannerInflight = new Map(); // key -> Promise<payload>
-const SG_SCANNER_TTL_MS = Math.max(0, Number(process.env.STRIKE_GROWTH_SCANNER_TTL_MS || 30_000));
-
 async function handleGexVolFlow(req, res) {
   const { searchParams } = new URL(req.url || '/', 'http://localhost');
 
@@ -1065,16 +1042,8 @@ async function handleGexVolFlow(req, res) {
   // new prints: values just persist until the chain resets, which reads on the
   // chart as a long flat line and a phantom step. eth = the whole ET day.
   const session = searchParams.get('session') === 'eth' ? 'eth' : 'rth';
-  // MUST scope by symbol. option_strike_gex_history is shared: etf-gex-recorder
-  // writes SPY and QQQ 0DTE into it every 60s during RTH, stamped with their own
-  // `symbol` but under the SAME 'YYYY-MM-DD' expiry string SPX uses. Without this
-  // filter the aggregate below summed SPX + SPY + QQQ, so every minute bucket the
-  // ETF writer's throttle skipped dropped that slice back out and the series drew
-  // a sawtooth that looked like market movement. It also skewed the expiry picker's
-  // row counts and the front-expiry derivation, which are both count-based.
-  const symbol = (searchParams.get('symbol') || '$SPX').trim();
 
-  const key = `${binMs}|${scope}|${expiryParam}|${session}|${symbol}`;
+  const key = `${binMs}|${scope}|${expiryParam}|${session}`;
   const hit = _volFlowCache.get(key);
   if (hit && Date.now() - hit.at < VOLFLOW_TTL_MS) return sendJson(res, 200, hit.payload, req);
 
@@ -1106,11 +1075,9 @@ async function handleGexVolFlow(req, res) {
     `SELECT expiry, COUNT(*)::int AS row_count, MAX(timestamp) AS last_ts
        FROM option_strike_gex_history
       WHERE timestamp >= ${DAY_START}
-        AND symbol = $1
         ${RTH_ONLY}
       GROUP BY expiry
-      ORDER BY expiry ASC`,
-    [symbol]
+      ORDER BY expiry ASC`
   );
   const expiries = expRows.map((r) => ({
     expiry: r.expiry,
@@ -1147,22 +1114,17 @@ async function handleGexVolFlow(req, res) {
   const { rows } = await pool.query(
     `WITH src AS (
        SELECT (timestamp / $1::bigint) * $1::bigint AS bucket_ms,
-              timestamp, symbol, expiry, strike, spot, net_gex, net_vol_gex
+              timestamp, expiry, strike, spot, net_gex, net_vol_gex
          FROM option_strike_gex_history
         WHERE timestamp >= ${DAY_START}
-          AND symbol = $3
           ${RTH_ONLY}
           AND ($2 = '' OR expiry = $2)
      ),
      latest AS (
-       -- symbol belongs in the DISTINCT ON key even with the WHERE filter above:
-       -- it keeps this correct if the filter is ever widened to several symbols.
-       -- Without it, two underlyings sharing a strike (SPY 630 / QQQ 630) silently
-       -- overwrite each other and one snapshot's row vanishes from the sum.
-       SELECT DISTINCT ON (bucket_ms, symbol, expiry, strike)
+       SELECT DISTINCT ON (bucket_ms, expiry, strike)
               bucket_ms, spot, net_gex, net_vol_gex
          FROM src
-        ORDER BY bucket_ms, symbol, expiry, strike, timestamp DESC
+        ORDER BY bucket_ms, expiry, strike, timestamp DESC
      )
      SELECT bucket_ms,
             MAX(spot)                     AS spot,
@@ -1172,7 +1134,7 @@ async function handleGexVolFlow(req, res) {
        FROM latest
       GROUP BY bucket_ms
       ORDER BY bucket_ms ASC`,
-    [binMs, expiry || '', symbol]
+    [binMs, expiry || '']
   );
 
   let prev = null;
@@ -1193,7 +1155,7 @@ async function handleGexVolFlow(req, res) {
     return p;
   });
 
-  const payload = { ok: true, scope, session, symbol, expiry: expiry || null, binSec, expiries, points };
+  const payload = { ok: true, scope, session, expiry: expiry || null, binSec, expiries, points };
   _volFlowCache.set(key, { at: Date.now(), payload });
   if (_volFlowCache.size > 32) {
     const cutoff = Date.now() - 10 * 60 * 1000;
@@ -2215,35 +2177,8 @@ async function main() {
                                                   OR (strike < spot AND latest_chg < 0))))
               ORDER BY ${orderCol} DESC NULLS LAST
               LIMIT $4`;
-            // Cache + single-flight (see _sgScannerCache above). Key on every
-            // input that changes the SQL or its params, `today` included so the
-            // ET date roll can never serve yesterday's movers.
-            const cacheKey = [today, win, limit, sort, minZ, otmK, minOtm, dir, wAbs, wPct].join('|');
-            const hit = _sgScannerCache.get(cacheKey);
-            if (hit && Date.now() - hit.at < SG_SCANNER_TTL_MS) {
-              sendJson(res, 200, hit.payload);
-              return;
-            }
-
-            let job = _sgScannerInflight.get(cacheKey);
-            if (!job) {
-              job = p.query(sql, [today, EXCLUDE, minZ, limit, otmK, minOtm, dir])
-                .then(({ rows }) => {
-                  const payload = { ok: true, window: win, sort, rows };
-                  _sgScannerCache.set(cacheKey, { at: Date.now(), payload });
-                  // Bound the map — params are user-tunable, so it would
-                  // otherwise grow one entry per distinct slider combination.
-                  if (_sgScannerCache.size > 64) {
-                    for (const [k, v] of _sgScannerCache) {
-                      if (Date.now() - v.at >= SG_SCANNER_TTL_MS) _sgScannerCache.delete(k);
-                    }
-                  }
-                  return payload;
-                })
-                .finally(() => { _sgScannerInflight.delete(cacheKey); });
-              _sgScannerInflight.set(cacheKey, job);
-            }
-            sendJson(res, 200, await job);
+            const { rows } = await p.query(sql, [today, EXCLUDE, minZ, limit, otmK, minOtm, dir]);
+            sendJson(res, 200, { ok: true, window: win, sort, rows });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
         return;
@@ -2511,6 +2446,40 @@ async function main() {
             const calibration = await runCalibration({ asOf: opts.asOf || null });
             return { backfill, calibration };
           })()
+            .then((r) => sendJson(res, 200, { ok: true, result: r }))
+            .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        });
+        return;
+      }
+      // Live watchlist: GET /proxy/walls-watch[?date=&maxAtr=]
+      //   → { levels:[...] } — every level currently within maxAtr of spot,
+      //     nearest first, with today's attempt history and whether price is
+      //     closing on it. Polled by the Walls tab; cheap enough for 30s.
+      //   Distance is the claim. Whether the level HOLDS is not — see the
+      //   control-arm note in walls-reach.js.
+      if (pathname === '/proxy/walls-watch' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const maxAtr = Number(u.searchParams.get('maxAtr'));
+            const out = await getWatch({
+              date: u.searchParams.get('date') || undefined,
+              maxAtr: Number.isFinite(maxAtr) && maxAtr > 0 ? maxAtr : undefined,
+            });
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manual alert sweep: POST /proxy/walls-watch-run { force?: true }
+      // force bypasses the RTH gate so the wiring can be tested off-hours.
+      if (pathname === '/proxy/walls-watch-run' && req.method === 'POST') {
+        let wb = '';
+        req.on('data', (c) => { wb += c; if (wb.length > 1e5) req.destroy(); });
+        req.on('end', () => {
+          let o = {};
+          try { o = JSON.parse(wb || '{}'); } catch {}
+          runWatchAlerts({ force: o.force === true })
             .then((r) => sendJson(res, 200, { ok: true, result: r }))
             .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         });
@@ -3404,6 +3373,10 @@ async function main() {
     // curve fitted only on sessions it has never seen. Feeds /proxy/walls-reach
     // and decorates /proxy/walls.
     startWallsReach();
+    // Proximity alerts: every 5m during RTH, anything that just came inside
+    // 0.25x ATR of a level WHILE CLOSING pages the owner once (email + push,
+    // rate-limited per level by state/alerts.js).
+    startWallsWatch();
     // Hourly "very strong" GEX-change recorder: at the top of each RTH hour,
     // scores the strike_growth universe (60m window), keeps the top 5 ★ Very
     // strong strikes (|Δ| >= $500k & |% vs open| >= 30%) into gex_change_top.

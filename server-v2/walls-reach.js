@@ -54,6 +54,7 @@
  * Consumed by: attachRank() decorating GET /proxy/walls
  */
 
+const { sendAlert } = require('./state/alerts');
 const { useTheta } = require('./config/data-source');
 const dailyAdapter = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
 
@@ -867,6 +868,167 @@ async function attachRank(day) {
   }
 }
 
+// ── Watch: what is in play right now ────────────────────────────────────────
+
+/**
+ * "In play" ceiling, in ATR units — the top of the short_walk bucket. Inside
+ * this a level is close enough that reaching it today is a real possibility;
+ * past it you are asking for an unusual session.
+ */
+const IN_PLAY_ATR = 0.60;
+/** Tighter band that actually fires an alert. on_price — it is happening now. */
+const ALERT_ATR = 0.25;
+/** How far back to look for the "is price closing on it" comparison. */
+const DRIFT_MINS = 15;
+
+/**
+ * The live watchlist: every level currently within `maxAtr` of spot, nearest
+ * first, with enough context to judge it without opening the ticker.
+ *
+ * IMPORTANT about what this does and does not claim. Distance and proximity
+ * survived the control test in this module; "the wall will hold" did not — see
+ * WHY A CONTROL ARM above and wall_calibration.delta. So a row here asserts
+ * price is close and closing, and reports what this level has done today as
+ * plain history. It does not predict the reaction, and must not be presented
+ * as if it does until the reliability study earns it.
+ */
+async function getWatch({ date, maxAtr = IN_PLAY_ATR } = {}) {
+  const p = getPool();
+  if (!p || !(await ensureSchema())) return { ok: false, error: 'no DB' };
+  const day = date || etDateStr();
+
+  const { rows: cur } = await p.query(
+    `SELECT DISTINCT ON (symbol) symbol, ts, spot, call_wall, put_wall, cb,
+            call_wall_gex, put_wall_gex, cb_gex
+       FROM scanner_snapshots WHERE date = $1 AND spot > 0
+      ORDER BY symbol, ts DESC`, [day]);
+  if (!cur.length) return { ok: true, date: day, asof: null, levels: [] };
+
+  // Spot as of DRIFT_MINS ago, to say whether price is closing or backing away.
+  const { rows: before } = await p.query(
+    `SELECT DISTINCT ON (symbol) symbol, spot FROM scanner_snapshots
+      WHERE date = $1 AND spot > 0 AND ts <= NOW() - make_interval(mins => $2::int)
+      ORDER BY symbol, ts DESC`, [day, DRIFT_MINS]);
+  const wasSpot = new Map(before.map((r) => [r.symbol, num(r.spot)]));
+
+  const [atrMap, cal] = await Promise.all([
+    loadAtr(p, day, cur.map((r) => r.symbol)),
+    loadCalibration(p, day),
+  ]);
+
+  // Today's events, so a row can carry "tested twice, held both times".
+  const { rows: evs } = await p.query(
+    `SELECT symbol, level_type, strike, kind, reaction, reclaim_min, hit_slot
+       FROM wall_events WHERE date = $1 ORDER BY hit_slot ASC`, [day]);
+  const hist = new Map();
+  for (const e of evs) {
+    const k = `${e.symbol}|${e.level_type}|${Number(e.strike)}`;
+    const h = hist.get(k) || { attempts: 0, approaches: 0, last: null, reclaim_min: null, live: false };
+    if (e.kind === 'touch') h.attempts++; else h.approaches++;
+    if (e.reaction == null) h.live = true;
+    else { h.last = e.reaction; h.reclaim_min = e.reclaim_min; }
+    hist.set(k, h);
+  }
+
+  const out = [];
+  for (const r of cur) {
+    const spot = num(r.spot);
+    const atr = atrMap.get(r.symbol)?.atr ?? null;
+    if (!(spot > 0) || !(atr > 0)) continue;
+    const gex = { call_wall: num(r.call_wall_gex), put_wall: num(r.put_wall_gex), cb: num(r.cb_gex) };
+    const prior = wasSpot.get(r.symbol) ?? null;
+
+    for (const lt of LEVEL_TYPES) {
+      const strike = num(r[lt]);
+      if (!(strike > 0)) continue;
+      const distAtr = Math.abs(strike - spot) / atr;
+      if (distAtr > maxAtr) continue;
+      const bucket = bucketFor(distAtr);
+      const sc = scoreFor(cal, r.symbol, bucket);
+      const h = hist.get(`${r.symbol}|${lt}|${strike}`) || { attempts: 0, approaches: 0, last: null, reclaim_min: null, live: false };
+      out.push({
+        symbol: r.symbol, level_type: lt, strike, spot,
+        dist_pts: Number(Math.abs(strike - spot).toFixed(4)),
+        dist_atr: Number(distAtr.toFixed(4)),
+        bucket,
+        // Closing = nearer than it was DRIFT_MINS ago. Null when there is no
+        // earlier sample yet (first sweeps of the session).
+        closing: prior == null ? null : Math.abs(strike - spot) < Math.abs(strike - prior),
+        side: strike >= spot ? 'above' : 'below',
+        reach: sc ? Number((sc.rate * 100).toFixed(1)) : null,
+        reach_thin: sc?.thin ?? true,
+        level_gex: gex[lt],
+        attempts: h.attempts, approaches: h.approaches,
+        live: h.live, last_reaction: h.last, reclaim_min: h.reclaim_min,
+      });
+    }
+  }
+  out.sort((a, b) => a.dist_atr - b.dist_atr || a.symbol.localeCompare(b.symbol));
+  return {
+    ok: true, date: day, asof: cur[0]?.ts ?? null,
+    in_play_atr: maxAtr, alert_atr: ALERT_ATR,
+    levels: out,
+  };
+}
+
+// ── Alerting ────────────────────────────────────────────────────────────────
+
+let _watchTimer = null;
+/** Levels already alerted this session — key -> true. Cleared on date change. */
+let _alerted = new Map();
+let _alertDay = null;
+
+/**
+ * Poll the watchlist and alert on levels that just came into range.
+ *
+ * Fires only on the TRANSITION into ALERT_ATR, not every poll, and only when
+ * price is closing — a level drifting into range because the wall rolled toward
+ * spot is not the same event. sendAlert() is additionally rate-limited 15m per
+ * key, so a level oscillating on the boundary cannot spam.
+ */
+async function runWatchAlerts({ force = false } = {}) {
+  const now = new Date();
+  const day = etDateStr(now);
+  if (_alertDay !== day) { _alerted = new Map(); _alertDay = day; }
+  if (!force) {
+    const { weekday } = etParts(now);
+    if (weekday === 'Sat' || weekday === 'Sun') return { skipped: 'weekend' };
+    const mins = etMinutes(now);
+    if (mins < 9 * 60 + 30 || mins > 16 * 60) return { skipped: 'outside RTH' };
+  }
+
+  const w = await getWatch({ date: day, maxAtr: ALERT_ATR });
+  if (!w.ok) return { skipped: w.error };
+
+  let sent = 0;
+  for (const l of w.levels) {
+    const key = `wall:${day}:${l.symbol}:${l.level_type}:${l.strike}`;
+    if (_alerted.has(key)) continue;
+    if (l.closing === false) continue; // drifting away, or the wall moved to us
+    _alerted.set(key, true);
+    const label = l.level_type === 'cb' ? 'CORE' : l.level_type === 'put_wall' ? 'Put wall' : 'Call wall';
+    const hist = l.attempts
+      ? ` Tested ${l.attempts}x today${l.last_reaction ? `, last ${l.last_reaction}` : ''}.`
+      : '';
+    await sendAlert({ // eslint-disable-line no-await-in-loop
+      key,
+      subject: `${l.symbol} ${label} ${l.strike} — ${l.dist_atr.toFixed(2)}x ATR away`,
+      message: `${l.symbol} is ${l.dist_pts} pts (${l.dist_atr.toFixed(2)}x ATR) from its ${label.toLowerCase()} at ${l.strike}. `
+        + `Spot ${l.spot}. Bucket: ${l.bucket}.${hist}\n\n`
+        + `Distance only — this is not a call on whether it holds.`,
+    }).catch(() => {});
+    sent++;
+  }
+  return { ok: true, checked: w.levels.length, sent };
+}
+
+function startWallsWatch() {
+  const tick = () => { void runWatchAlerts().catch((e) => console.warn('[watch] tick:', e.message)); };
+  _watchTimer = setInterval(tick, 5 * 60_000);
+  if (_watchTimer.unref) _watchTimer.unref();
+  console.log(`[watch] wall proximity alerts armed — fires inside ${ALERT_ATR}x ATR while closing`);
+}
+
 /**
  * GET /proxy/walls-reach — the study behind the ranking. Without `symbol`:
  * the global ladder + the per-symbol calibration grid. With `symbol`: that
@@ -969,6 +1131,7 @@ function startWallsReach() {
 
 module.exports = {
   startWallsReach, runReachBackfill, runCalibration, getReach, attachRank,
+  getWatch, runWatchAlerts, startWallsWatch, IN_PLAY_ATR, ALERT_ATR,
   ensureSchema, getPool,
   // exported for tests / manual poking
   BUCKETS, BUCKET_KEYS, bucketFor, buildSessionRows, rebuildAtr, insertBatch,

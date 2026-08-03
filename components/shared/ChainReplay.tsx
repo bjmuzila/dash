@@ -156,10 +156,17 @@ export function ChainReplay({
     if (timer.current) { clearInterval(timer.current); timer.current = null; }
     if (!playing || frames.length === 0) return;
     timer.current = setInterval(() => {
-      setIdx((i) => { if (i >= frames.length - 1) { setPlaying(false); return i; } return i + 1; });
+      setIdx((i) => (i >= frames.length - 1 ? i : i + 1));
     }, BASE_MS / speed);
     return () => { if (timer.current) clearInterval(timer.current); };
   }, [playing, speed, frames.length]);
+
+  // Stop at the last frame. Deliberately NOT inside the setIdx updater above:
+  // updaters must be pure (StrictMode invokes them twice), and setting state
+  // from inside one double-fires the pause.
+  useEffect(() => {
+    if (playing && frames.length > 0 && idx >= frames.length - 1) setPlaying(false);
+  }, [playing, idx, frames.length]);
 
   // Esc closes the modal.
   useEffect(() => {
@@ -181,8 +188,12 @@ export function ChainReplay({
   useEffect(() => {
     const target = frame?.spot || 0;
     if (!animSpotInit.current) { animSpot.current = target; animSpotInit.current = true; forceTick((x) => x + 1); return; }
+    // `start` is the PREVIOUS frame's spot exactly, not wherever a tween happened
+    // to be interrupted — the cleanup below guarantees that.
     const start = animSpot.current;
-    if (start === target) return;
+    // Same spot two frames running: nothing to animate, but still repaint, because
+    // the cleanup may have just snapped the ref forward off an interrupted tween.
+    if (start === target) { forceTick((x) => x + 1); return; }
     // Scrubbing (or any non-playback idx change) should snap instantly —
     // animating here would restart a fresh tween on every intermediate
     // frame while dragging, stacking overlapping tweens that overshoot and
@@ -199,7 +210,18 @@ export function ChainReplay({
       if (t < 1) raf = requestAnimationFrame(step);
     };
     raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      // Land exactly on this frame's spot before the next frame's tween reads
+      // animSpot.current as its `start`. Without this, an interrupted tween
+      // leaves the displayed spot SHORT of the frame it was heading for, the
+      // next tween starts from that shortfall, and the error compounds — one
+      // dropped animation frame is invisible, a few hundred of them is how the
+      // dashed line ends up dozens of strikes away from the live price after a
+      // couple of hundred playback frames. The tween is a within-frame nicety;
+      // it must never own where the line actually IS at a frame boundary.
+      animSpot.current = target;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [frame?.ts, frame?.spot, playing]);
 
@@ -244,45 +266,101 @@ export function ChainReplay({
   const extraExpiries = Math.max(0, (frame?.expiryCount ?? expiries.length) - 1);
   const isZeroDte = !!frameExpiry && frameExpiry === date;
 
-  // Continuous vertical position of the spot line among the rendered strike
-  // rows (interpolated between the two bracketing strikes), so the line and
-  // label glide smoothly instead of hopping row-to-row. Measured directly
-  // off the actual row DOM nodes — a guessed pixel-per-row constant drifts
-  // further off the further it is from the top of the list (compounding
-  // rounding error), which is why the line used to land on the wrong strike.
+  // Vertical position of the spot line among the strike rows.
+  //
+  // DERIVED DURING RENDER — deliberately not state. It used to be measured in a
+  // useLayoutEffect that called setSpotTop, which put the line's pixel position
+  // one commit BEHIND the `spot` the label was printing in the same paint. Idle
+  // that is invisible. During playback `spot` is a ref mutated on every rAF
+  // tick, so the render -> layout effect -> setSpotTop -> render loop never
+  // caught up: the dashed line sat tens of strikes below the price written on
+  // it. Scrubbing looked fine only because dragging snaps `spot` and then
+  // stops changing it, letting the loop settle. Computing it inline makes line
+  // and label the same commit by construction, so they cannot disagree.
+  //
+  // Row pitch is still measured off the real DOM (never a guessed px-per-row
+  // constant), but from first->last / (n-1), so there is no compounding
+  // rounding error, and only when the ladder itself changes size.
   const rowsContainerRef = useRef<HTMLDivElement | null>(null);
-  const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const [spotTop, setSpotTop] = useState<number | null>(null);
+  const rowsColRef = useRef<HTMLDivElement | null>(null);
+  const [rowGeom, setRowGeom] = useState<{ top0: number; pitch: number } | null>(null);
 
   useLayoutEffect(() => {
     const container = rowsContainerRef.current;
-    if (!allStrikes.length || spot <= 0 || !container) { setSpotTop(null); return; }
-    let i = 0;
-    while (i < allStrikes.length && allStrikes[i] > spot) i++;
-    const containerTop = container.getBoundingClientRect().top;
-    const midOf = (idx: number) => {
-      const el = rowRefs.current[idx];
-      if (!el) return null;
-      const r = el.getBoundingClientRect();
-      return r.top - containerTop + r.height / 2;
+    const col = rowsColRef.current;
+    const n = allStrikes.length;
+    if (!container || !col || n === 0) { setRowGeom(null); return; }
+
+    const measure = () => {
+      const first = col.firstElementChild as HTMLElement | null;
+      const last = col.lastElementChild as HTMLElement | null;
+      if (!first || !last) return;
+      const cTop = container.getBoundingClientRect().top;
+      const fr = first.getBoundingClientRect();
+      const lr = last.getBoundingClientRect();
+      const top0 = fr.top - cTop + fr.height / 2;
+      const lastMid = lr.top - cTop + lr.height / 2;
+      const pitch = n > 1 ? (lastMid - top0) / (n - 1) : fr.height;
+      // Identity-stable unless it actually moved, so a resize tick can't
+      // retrigger the whole ladder.
+      setRowGeom((prev) =>
+        prev && Math.abs(prev.top0 - top0) < 0.5 && Math.abs(prev.pitch - pitch) < 0.01
+          ? prev
+          : { top0, pitch }
+      );
     };
-    if (i === 0) {
-      const m = midOf(0);
-      setSpotTop(m === null ? null : m - 19);
-      return;
+
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(col);
+    return () => ro.disconnect();
+  }, [allStrikes]);
+
+  // Continuous row index of `spot` (interpolated between the two bracketing
+  // strikes, so uneven strike spacing still lands correctly), mapped to pixels
+  // through the measured pitch. Off either end it parks one row past the edge
+  // rather than clamping onto the edge strike.
+  const spotTop = useMemo(() => {
+    const n = allStrikes.length;
+    if (!rowGeom || n === 0 || !(spot > 0)) return null;
+    let i = 0;
+    while (i < n && allStrikes[i] > spot) i++;
+    let pos: number;
+    if (i === 0) pos = -1;
+    else if (i >= n) pos = n;
+    else {
+      const hi = allStrikes[i - 1], lo = allStrikes[i];
+      pos = (i - 1) + (hi === lo ? 0 : (hi - spot) / (hi - lo));
     }
-    if (i >= allStrikes.length) {
-      const m = midOf(allStrikes.length - 1);
-      setSpotTop(m === null ? null : m + 19);
-      return;
-    }
-    const hiMid = midOf(i - 1);
-    const loMid = midOf(i);
-    if (hiMid === null || loMid === null) { setSpotTop(null); return; }
-    const hi = allStrikes[i - 1], lo = allStrikes[i];
-    const frac = hi === lo ? 0 : (hi - spot) / (hi - lo);
-    setSpotTop(hiMid + frac * (loMid - hiMid));
-  }, [allStrikes, spot]);
+    return rowGeom.top0 + pos * rowGeom.pitch;
+  }, [rowGeom, allStrikes, spot]);
+
+  // Rows are memoised so a tween tick (which re-renders this component ~60x/s
+  // purely to move the spot line) doesn't reconcile several hundred bar rows.
+  const ladder = useMemo(
+    () =>
+      allStrikes.map((k) => {
+        const net = netByStrike.get(k) ?? 0;
+        const pct = Math.min(100, (Math.abs(net) / denom) * 100);
+        const positive = net >= 0;
+        return (
+          <div key={k} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ width: 56, textAlign: "right", fontSize: 12, color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{k}</div>
+            <div style={{ flex: 1, display: "flex", alignItems: "center", height: 16 }}>
+              <div style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
+                {!positive && <div style={{ width: `${pct}%`, height: 12, background: NEG, borderRadius: "3px 0 0 3px", opacity: 0.9 }} />}
+              </div>
+              <div style={{ width: 1, height: 16, background: HOME_THEME.border }} />
+              <div style={{ flex: 1, display: "flex", justifyContent: "flex-start" }}>
+                {positive && <div style={{ width: `${pct}%`, height: 12, background: POS, borderRadius: "0 3px 3px 0", opacity: 0.9 }} />}
+              </div>
+            </div>
+            <div style={{ width: 68, textAlign: "left", fontSize: 11, color: positive ? POS : NEG, fontVariantNumeric: "tabular-nums" }}>{fmtGex(net)}</div>
+          </div>
+        );
+      }),
+    [allStrikes, netByStrike, denom]
+  );
 
   const selStyle: React.CSSProperties = { ...homeInputStyle, padding: "6px 10px", cursor: "pointer" };
 
@@ -442,7 +520,9 @@ export function ChainReplay({
                 position: "absolute", left: 64, right: 0, top: spotTop,
                 height: 0, borderTop: `1px dashed ${HOME_THEME.text}`,
                 pointerEvents: "none", zIndex: 1,
-                transition: "top 90ms linear",
+                // No CSS transition here. The JS tween below already eases
+                // `spot`; a transition on top of it re-starts every animation
+                // frame, so the line permanently trails its own label.
               }}
             >
               <span style={{ position: "absolute", right: 0, top: -8, fontSize: 10, color: HOME_THEME.text, background: HOME_THEME.panel, padding: "0 4px" }}>
@@ -450,27 +530,8 @@ export function ChainReplay({
               </span>
             </div>
           )}
-          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-            {allStrikes.map((k, i) => {
-              const net = netByStrike.get(k) ?? 0;
-              const pct = Math.min(100, (Math.abs(net) / denom) * 100);
-              const positive = net >= 0;
-              return (
-                <div key={k} ref={(el) => { rowRefs.current[i] = el; }} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{ width: 56, textAlign: "right", fontSize: 12, color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{k}</div>
-                  <div style={{ flex: 1, display: "flex", alignItems: "center", height: 16 }}>
-                    <div style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
-                      {!positive && <div style={{ width: `${pct}%`, height: 12, background: NEG, borderRadius: "3px 0 0 3px", opacity: 0.9 }} />}
-                    </div>
-                    <div style={{ width: 1, height: 16, background: HOME_THEME.border }} />
-                    <div style={{ flex: 1, display: "flex", justifyContent: "flex-start" }}>
-                      {positive && <div style={{ width: `${pct}%`, height: 12, background: POS, borderRadius: "0 3px 3px 0", opacity: 0.9 }} />}
-                    </div>
-                  </div>
-                  <div style={{ width: 68, textAlign: "left", fontSize: 11, color: positive ? POS : NEG, fontVariantNumeric: "tabular-nums" }}>{fmtGex(net)}</div>
-                </div>
-              );
-            })}
+          <div ref={rowsColRef} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            {ladder}
           </div>
         </div>
       )}
