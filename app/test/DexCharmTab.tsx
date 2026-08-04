@@ -1,30 +1,37 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
-import { HOME_THEME, LIGHT_BLUE, statTileStyle, homeInputStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE, statTileStyle, homeInputStyle, homeButtonStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test Lab → DEX / Charm tab.
 //
-// Theoretical (not live-data) illustration of intraday delta decay for a 0DTE
-// options session — the "Charm" effect. For a fixed OTM/ATM/ITM strike, this
-// recomputes Black-Scholes call delta, N(d1), at ~27 points across the 9:30am
-// - 4:00pm ET session as time-to-expiration collapses toward the close.
+// Two sections:
 //
-// This is NOT wired to the live options chain / ThetaTerminal feed — the
-// numbers here are a pedagogical model driven by user-adjustable spot,
-// strikes, and IV, not measured dealer positioning. A real dealer DEX panel
-// (matching the Dealer Gamma tab's approach) would need per-strike OI/volume
-// from the same EOD/live sweep that feeds /api/eod-dealer-gamma, run through
-// this same delta formula per strike and net by dealer position sign. That is
-// future work; this tab is the mechanics demo the trade rests on.
+//   1. LIVE — real dealer DEX read straight from /api/gex, the same endpoint
+//      GEX Map's exposure numbers come from. netDEX per strike and the
+//      totalDeltaOiVol aggregate are computed server-side by
+//      server-v2/computation/gex-calculator.js:
+//        netDEX = callDelta × callOI × spot × 100 − putDelta × putOI × spot × 100
+//      Real chain, real OI, real Black-Scholes greeks off the live feed — not a
+//      model. This is the actual measured book (0DTE front expiry, whatever
+//      /proxy/gex is currently pinned to).
+//
+//   2. THEORETICAL MODEL — the original Charm-decay illustration: Black-Scholes
+//      delta recomputed across a synthetic 9:30-4:00 session for user-chosen
+//      spot/strikes/IV. Kept because it's the clearest way to SEE why the live
+//      numbers above move the way they do intraday (charm), even though it
+//      isn't itself measuring anything.
+//
+// Keeping both, clearly labeled, rather than replacing one with the other —
+// same "what is measured vs assumed" discipline DealerGammaTab uses.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const GOLD = "#FFB703";
 
-// ── Black-Scholes call delta ────────────────────────────────────────────────
+// ── Black-Scholes call delta (theoretical section) ─────────────────────────
 function erf(x: number): number {
   const sign = x < 0 ? -1 : 1;
   x = Math.abs(x);
@@ -71,6 +78,120 @@ function computeSeries(S: number, Kotm: number, Katm: number, Kitm: number, sigm
   return { otm, atm, itm };
 }
 
+// ── live DEX (measured section) ─────────────────────────────────────────────
+type LiveChainRow = {
+  strike: number;
+  callOI: number;
+  putOI: number;
+  callDelta: number;
+  putDelta: number;
+  netDEX: number;
+  volNetDEX?: number;
+};
+
+type LiveTotals = {
+  totalDeltaCall?: number;
+  totalDeltaPut?: number;
+  totalDeltaOiVol?: number;
+  totalDeltaVol?: number;
+} | null;
+
+type LiveGexResponse = {
+  chain: LiveChainRow[];
+  spotPrice: number;
+  expiration: string | null;
+  totals: LiveTotals;
+  updatedAt: string | null;
+  error?: string;
+};
+
+function useLiveGex() {
+  const [data, setData] = useState<LiveGexResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await fetch("/api/gex", { cache: "no-store" });
+      const json = (await res.json()) as LiveGexResponse;
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setData(json);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+    const id = setInterval(() => void load(), 30_000); // 0DTE book moves fast; refresh every 30s
+    return () => clearInterval(id);
+  }, [load]);
+
+  return { data, loading, err, reload: load };
+}
+
+function fmtDex(v: number): string {
+  const a = Math.abs(v);
+  const sign = v < 0 ? "-" : "+";
+  if (a >= 1e9) return `${sign}$${(a / 1e9).toFixed(2)}B`;
+  if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(1)}M`;
+  if (a >= 1e3) return `${sign}$${(a / 1e3).toFixed(0)}K`;
+  return `${sign}$${a.toFixed(0)}`;
+}
+const toneOf = (v: number) => (v < 0 ? HOME_THEME.red : LIGHT_BLUE);
+
+/** Diverging per-strike DEX bars around spot — same visual language as
+ * DealerGammaTab's gamma bars, just fed real netDEX instead of netGamma. */
+function LiveDexBars({ rows, spot }: { rows: LiveChainRow[]; spot: number }) {
+  const windowed = useMemo(() => {
+    if (!rows.length || !(spot > 0)) return [];
+    return [...rows]
+      .filter((r) => Math.abs(r.strike - spot) <= spot * 0.02) // ~±2% around spot
+      .sort((a, b) => a.strike - b.strike);
+  }, [rows, spot]);
+
+  const max = Math.max(1, ...windowed.map((r) => Math.abs(r.netDEX)));
+  if (!windowed.length) {
+    return <div style={{ fontSize: 13, color: HOME_THEME.muted, opacity: 0.6 }}>No strikes within ±2% of spot yet.</div>;
+  }
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      {windowed.map((r) => {
+        const half = (Math.abs(r.netDEX) / max) * 50;
+        const neg = r.netDEX < 0;
+        const isSpotStrike = Math.abs(r.strike - spot) < (windowed[1]?.strike ?? spot + 5) - (windowed[0]?.strike ?? spot);
+        return (
+          <div key={r.strike} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+            <span style={{ fontSize: 13, color: isSpotStrike ? GOLD : HOME_THEME.muted, opacity: isSpotStrike ? 1 : 0.65, width: 70, textAlign: "right", flex: "none", fontWeight: isSpotStrike ? 800 : 400, fontVariantNumeric: "tabular-nums" }}>
+              {r.strike}
+            </span>
+            <span style={{ flex: 1, height: 16, position: "relative", display: "block" }}>
+              <span style={{ position: "absolute", left: "50%", top: -2, bottom: -2, width: 1, background: "rgba(255,255,255,0.22)" }} />
+              <span
+                title={`${r.strike} · ${fmtDex(r.netDEX)} net DEX`}
+                style={{
+                  position: "absolute", top: 0, height: 16, display: "block",
+                  background: neg ? HOME_THEME.red : LIGHT_BLUE,
+                  borderRadius: neg ? "4px 0 0 4px" : "0 4px 4px 0",
+                  ...(neg ? { right: "50%", width: `${half}%` } : { left: "50%", width: `${half}%` }),
+                }}
+              />
+            </span>
+            <span style={{ fontSize: 12.5, width: 84, flex: "none", color: toneOf(r.netDEX), fontVariantNumeric: "tabular-nums" }}>
+              {fmtDex(r.netDEX)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── styles ───────────────────────────────────────────────────────────────────
 const fieldLabel: CSSProperties = {
   fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em",
@@ -107,7 +228,7 @@ function Tile({ label, value, sub, tone }: { label: string; value: string; sub: 
   );
 }
 
-// ── chart ────────────────────────────────────────────────────────────────────
+// ── theoretical chart ────────────────────────────────────────────────────────
 const W = 860, H = 340;
 const MARGIN = { top: 16, right: 20, bottom: 36, left: 40 };
 const PLOT_W = W - MARGIN.left - MARGIN.right;
@@ -151,7 +272,7 @@ function DeltaDecayChart({
           <g key={v}>
             <line
               x1={MARGIN.left} x2={W - MARGIN.right} y1={yScale(v)} y2={yScale(v)}
-              stroke={v === 0 ? HOME_THEME.border : HOME_THEME.border}
+              stroke={HOME_THEME.border}
               strokeOpacity={v === 0 ? 0.9 : 0.4}
             />
             <text x={MARGIN.left - 8} y={yScale(v) + 4} textAnchor="end" fontSize={11} fill={HOME_THEME.muted} opacity={0.6}>
@@ -221,18 +342,112 @@ function DeltaDecayChart({
 
 // ── tab ──────────────────────────────────────────────────────────────────────
 export default function DexCharmTab() {
+  const { data: live, loading: liveLoading, err: liveErr, reload: reloadLive } = useLiveGex();
+
   const [spot, setSpot] = useState(5500);
   const [otmK, setOtmK] = useState(5520);
   const [atmK, setAtmK] = useState(5500);
   const [itmK, setItmK] = useState(5480);
   const [ivPct, setIvPct] = useState(12);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const [seededFromLive, setSeededFromLive] = useState(false);
+
+  // One-time seed of the theoretical model's inputs from the live spot, so the
+  // "what if" chart starts from where the market actually is. After that the
+  // user's own edits win — this never overwrites a value they've touched.
+  useEffect(() => {
+    if (seededFromLive || !live?.spotPrice) return;
+    const s = Math.round(live.spotPrice);
+    setSpot(s);
+    setAtmK(s);
+    setOtmK(s + 20);
+    setItmK(s - 20);
+    setSeededFromLive(true);
+  }, [live, seededFromLive]);
 
   const { otm, atm, itm } = useMemo(() => computeSeries(spot, otmK, atmK, itmK, ivPct), [spot, otmK, atmK, itmK, ivPct]);
 
+  const totals = live?.totals;
+  const netDex = totals?.totalDeltaOiVol ?? (totals ? (totals.totalDeltaCall ?? 0) + (totals.totalDeltaPut ?? 0) : null);
+
   return (
     <>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 18, flexWrap: "wrap" }}>
+      {/* ── LIVE ─────────────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <button onClick={reloadLive} style={homeButtonStyle}>Refresh</button>
+        <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.7 }}>
+          {liveLoading && !live
+            ? "Loading live chain…"
+            : live
+              ? `${live.expiration ?? "front expiry"} · spot ${live.spotPrice ? live.spotPrice.toFixed(2) : "—"}${live.updatedAt ? ` · updated ${new Date(live.updatedAt).toLocaleTimeString("en-US", { timeZone: "America/New_York" })} ET` : ""}`
+              : "No live data yet"}
+        </div>
+      </div>
+
+      {liveErr && (
+        <Card variant="budget" accent={HOME_THEME.red} title="Live DEX">
+          <div style={{ fontSize: 14, color: HOME_THEME.red }}>Error: {liveErr}</div>
+        </Card>
+      )}
+
+      {!liveErr && live && live.chain?.length > 0 && (
+        <Card
+          variant="budget"
+          accent={LIGHT_BLUE}
+          title={<span style={{ fontSize: 17 }}>Live dealer DEX (measured)</span>}
+          subtitle="netDEX = callDelta × callOI × spot × 100 − putDelta × putOI × spot × 100, per strike, from the live chain — same pipeline GEX Map reads"
+          style={{ marginTop: 16 }}
+        >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
+            <Tile
+              label="net dealer DEX"
+              value={netDex != null ? fmtDex(netDex) : "—"}
+              sub="OI + Vol, all strikes"
+              tone={netDex != null ? toneOf(netDex) : undefined}
+            />
+            <Tile
+              label="call-side DEX"
+              value={totals?.totalDeltaCall != null ? fmtDex(totals.totalDeltaCall) : "—"}
+              sub="dealer long calls convention"
+              tone={LIGHT_BLUE}
+            />
+            <Tile
+              label="put-side DEX"
+              value={totals?.totalDeltaPut != null ? fmtDex(totals.totalDeltaPut) : "—"}
+              sub="dealer short puts convention"
+              tone={HOME_THEME.red}
+            />
+            <Tile
+              label="spot"
+              value={live.spotPrice ? live.spotPrice.toFixed(2) : "—"}
+              sub={live.expiration ?? "front expiry"}
+            />
+          </div>
+
+          <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE }}>
+            net DEX by strike, ±2% of spot
+          </div>
+          <LiveDexBars rows={live.chain} spot={live.spotPrice} />
+
+          <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${HOME_THEME.border}`, fontSize: 13.5, color: HOME_THEME.muted, lineHeight: 1.65, opacity: 0.88 }}>
+            <b style={{ color: GOLD }}>What is measured vs. assumed.</b>{" "}
+            OI, strikes, and Black-Scholes greeks are read live off the chain — nothing here is a model input. The
+            call+/put− position sign is the ordinary OI convention (dealer long calls, short puts), the same
+            convention GEX Map and the un-bucketed rows of Dealer Gamma use — not measured taker flow.
+          </div>
+        </Card>
+      )}
+
+      {!liveErr && !liveLoading && (!live || !live.chain?.length) && (
+        <Card variant="budget" accent={HOME_THEME.orange} title="No live chain yet">
+          <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.8 }}>
+            /api/gex returned no chain rows. The feed may be between snapshots — try Refresh.
+          </div>
+        </Card>
+      )}
+
+      {/* ── THEORETICAL MODEL ───────────────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 18, flexWrap: "wrap", marginTop: 28 }}>
         <Field label="Spot (S)" value={spot} onChange={setSpot} />
         <Field label="OTM strike" value={otmK} onChange={setOtmK} />
         <Field label="ATM strike" value={atmK} onChange={setAtmK} />
@@ -244,7 +459,7 @@ export default function DexCharmTab() {
         variant="budget"
         accent={LIGHT_BLUE}
         title={<span style={{ fontSize: 17 }}>Theoretical 0DTE call delta decay (Charm effect)</span>}
-        subtitle="Black-Scholes N(d1) recomputed across the trading session — not sourced from a live chain"
+        subtitle="Black-Scholes N(d1) recomputed across the trading session — a model, seeded from live spot once, not itself live"
         style={{ marginTop: 16 }}
       >
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
@@ -271,13 +486,8 @@ export default function DexCharmTab() {
           <b style={{ color: GOLD }}>Model.</b>{" "}
           Δ_call = N(d₁), with d₁ = [ln(S/K) + (r + σ²/2)t] / (σ√t), r = 4.5%, t = remaining fraction of
           the trading session converted to a year-fraction (÷252). Recomputed at 27 points from 9:30 AM to
-          4:00 PM ET for the OTM/ATM/ITM strikes above.
-          <br /><br />
-          <b style={{ color: GOLD }}>This is theoretical, not measured.</b>{" "}
-          Unlike the Dealer Gamma tab, this panel is not wired to a live options chain or the EOD sweep —
-          spot, strikes, and IV are whatever you set above. A real dealer DEX view would run this same
-          formula per-strike against live OI/volume the way <code>eod-dte-gamma-recorder.js</code> already
-          does for gamma, then net by measured or convention-based position sign.
+          4:00 PM ET for the OTM/ATM/ITM strikes above. Spot and strikes are seeded once from the live snapshot
+          above, then fully yours to edit — this chart does not refetch or re-seed after that.
         </div>
       </Card>
     </>

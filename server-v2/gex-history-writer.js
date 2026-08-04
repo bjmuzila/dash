@@ -91,6 +91,68 @@ let pgUnavailable = false;
 // `${symbol}|${expiry}` → epoch ms of that series' last successful write.
 const lastWriteAt = new Map();
 let columnEnsured = false;
+
+// Per-(symbol, expiry) accumulator: sums every recompute's per-strike rows
+// between writes and averages them at write time, instead of persisting
+// whichever single instant happened to land right after the throttle elapsed.
+//
+// RECOMPUTE_MS (proxy-tastytrade.js) reruns computeGexSummary every ~5s off
+// the live streaming book, but writeGexSnapshot only actually inserts once
+// every PG_WRITE_INTERVAL_MS (~60s) — so of the ~12 recomputes in that window,
+// only the ONE that happened to fire right as the throttle cleared ever got
+// persisted. Each of those 12 samples carries real tick-to-tick jitter (a
+// quote-derived IV solve wobbling gamma slightly, a stray print bumping
+// volume mid-window), and that jitter is not smoothed out anywhere — it IS
+// the value that gets charted. With a 60s recorder cadence feeding 60s chart
+// buckets 1:1, every bucket showed one random instant instead of what
+// actually happened over that minute, which is what read as a shark-tooth/
+// sawtooth on the Vol GEX Flow chart. Averaging every sample seen during the
+// window fixes that at the source, before it's ever written.
+const accum = new Map(); // `${symbol}|${expiry}` -> Map(strike -> {sum fields, n})
+
+/** Accumulate one recompute's rows into the running average for this series. */
+function accumulate(throttleKey, gexRows) {
+  let byStrike = accum.get(throttleKey);
+  if (!byStrike) { byStrike = new Map(); accum.set(throttleKey, byStrike); }
+  for (const row of gexRows) {
+    const strike = Number(row.strike);
+    if (!(strike > 0)) continue;
+    let rec = byStrike.get(strike);
+    if (!rec) { rec = { n: 0, netGEX: 0, netVolGEX: 0, callGamma: 0, putGamma: 0, callIV: 0, putIV: 0, netDEX: 0, volNetDEX: 0 }; byStrike.set(strike, rec); }
+    rec.n++;
+    rec.netGEX += Number.isFinite(row.netGEX) ? row.netGEX : 0;
+    rec.netVolGEX += Number.isFinite(row.netVolGEX) ? row.netVolGEX : 0;
+    rec.callGamma += Number.isFinite(row.callGamma) ? row.callGamma : 0;
+    rec.putGamma += Number.isFinite(row.putGamma) ? row.putGamma : 0;
+    rec.callIV += Number.isFinite(row.callIV) && row.callIV > 0 ? row.callIV : 0;
+    rec.putIV += Number.isFinite(row.putIV) && row.putIV > 0 ? row.putIV : 0;
+    rec.netDEX += Number.isFinite(row.netDEX) ? row.netDEX : 0;
+    rec.volNetDEX += Number.isFinite(row.volNetDEX) ? row.volNetDEX : 0;
+  }
+}
+
+/** Collapse the accumulated samples for this series back into per-strike averaged rows. */
+function drainAverage(throttleKey) {
+  const byStrike = accum.get(throttleKey);
+  accum.delete(throttleKey);
+  if (!byStrike || !byStrike.size) return [];
+  const rows = [];
+  for (const [strike, rec] of byStrike) {
+    if (!rec.n) continue;
+    rows.push({
+      strike,
+      netGEX: rec.netGEX / rec.n,
+      netVolGEX: rec.netVolGEX / rec.n,
+      callGamma: rec.callGamma / rec.n,
+      putGamma: rec.putGamma / rec.n,
+      callIV: rec.callIV / rec.n,
+      putIV: rec.putIV / rec.n,
+      netDEX: rec.netDEX / rec.n,
+      volNetDEX: rec.volNetDEX / rec.n,
+    });
+  }
+  return rows;
+}
 // Skip diagnostics: the write used to `return` silently when the feed handed it
 // no rows / spot<=0 / no expiry, so an afternoon feed decay (0DTE TT chain
 // thinning out, spot going stale) flatlined the bubble/heatmap trail with NOTHING
@@ -229,7 +291,16 @@ async function writeGexSnapshot(gexRows, spot, expiry, symbol) {
 
   const now = Date.now();
   const throttleKey = `${sym}|${expiry}`;
+
+  // Always feed the accumulator — this runs on every recompute (~5s), not
+  // just the one call that happens to land on the write boundary.
+  accumulate(throttleKey, gexRows);
+
   if (now - (lastWriteAt.get(throttleKey) ?? 0) < PG_WRITE_INTERVAL_MS) return;
+
+  // Average of every sample seen since the last write, not just this instant.
+  const averagedRows = drainAverage(throttleKey);
+  if (!averagedRows.length) return;
 
   await ensureVolColumn(p);
 
@@ -239,7 +310,7 @@ async function writeGexSnapshot(gexRows, spot, expiry, symbol) {
     const values = [];
     const params = [];
     let i = 0;
-    for (const row of gexRows) {
+    for (const row of averagedRows) {
       const strike = Number(row.strike);
       let netGex = Number(row.netGEX);
       if (!(strike > 0) || !Number.isFinite(netGex)) continue;
