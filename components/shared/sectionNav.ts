@@ -91,10 +91,11 @@ export const TESTLAB_SECTION: SectionNav = {
     { id: "gexlevels",   label: "GEX Levels",      short: "Levels",   color: HOME_THEME.cyan,   icon: "📏" },
     { id: "dealergamma", label: "Dealer Gamma",    short: "Dealer γ", color: LIGHT_BLUE,        icon: "🎚️" },
     { id: "gexmap",      label: "GEX Map",         short: "GEX Map",  color: LIGHT_BLUE,        icon: "🗺️" },
+    { id: "dexcharm",    label: "DEX / Charm",     short: "DEX/Charm", color: HOME_THEME.cyan,  icon: "⏳" },
     { id: "flow",        label: "Flow Inventory",  short: "Flow Inv", color: HOME_THEME.cyan,   icon: "🌊" },
   ],
   groups: [
-    { key: "gamma", tabs: ["squeeze", "gexlevels", "dealergamma", "gexmap"] },
+    { key: "gamma", tabs: ["squeeze", "gexlevels", "dealergamma", "gexmap", "dexcharm"] },
     { key: "flow",  tabs: ["flow"] },
   ],
   event: TESTLAB_TAB_EVENT,

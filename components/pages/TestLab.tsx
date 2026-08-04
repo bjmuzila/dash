@@ -10,6 +10,7 @@ import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { SqueezeBoard } from "@/app/squeeze/page";
 import DealerGammaTab from "@/app/test/DealerGammaTab";
 import GexMapTab from "@/app/test/GexMapTab";
+import DexCharmTab from "@/app/test/DexCharmTab";
 import VolGexFlowPanel from "@/components/dashboard/VolGexFlowPanel";
 import { TESTLAB_SECTION, TESTLAB_TAB_EVENT, readSectionTab } from "@/components/shared/sectionNav";
 
@@ -2478,7 +2479,7 @@ function GexLevelsTab() {
   );
 }
 
-type TestTab = "flow" | "gexlevels" | "squeeze" | "dealergamma" | "gexmap";
+type TestTab = "flow" | "gexlevels" | "squeeze" | "dealergamma" | "gexmap" | "dexcharm";
 
 function FlowInventoryTab() {
   const { dataByTicker, errors, loadedAt, reload } = useFlowInventory();
@@ -2552,6 +2553,8 @@ export default function TestPage() {
         <DealerGammaTab />
       ) : tab === "gexmap" ? (
         <GexMapTab />
+      ) : tab === "dexcharm" ? (
+        <DexCharmTab />
       ) : (
         <FlowInventoryTab />
       )}
