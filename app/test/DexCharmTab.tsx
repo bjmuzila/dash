@@ -78,6 +78,29 @@ function computeSeries(S: number, Kotm: number, Katm: number, Kitm: number, sigm
   return { otm, atm, itm };
 }
 
+/** Fraction of the 9:30–4:00 ET session elapsed right now, clamped to [0,1].
+ * Reads the wall clock in America/New_York regardless of the viewer's own
+ * timezone, so "now" always lines up with the session the chart is drawn for. */
+function nowSessionFrac(): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const minutesNow = get("hour") * 60 + get("minute") + get("second") / 60;
+  const openMin = 9 * 60 + 30;
+  const sessionMin = 6.5 * 60;
+  return Math.max(0, Math.min(1, (minutesNow - openMin) / sessionMin));
+}
+
+/** Nearest sample index in TIMES for a given session fraction. */
+function nearestTimeIdx(frac: number): number {
+  return Math.max(0, Math.min(N_POINTS - 1, Math.round(frac * (N_POINTS - 1))));
+}
+
 // ── live DEX (measured section) ─────────────────────────────────────────────
 type LiveChainRow = {
   strike: number;
@@ -144,54 +167,6 @@ function fmtDex(v: number): string {
 }
 const toneOf = (v: number) => (v < 0 ? HOME_THEME.red : LIGHT_BLUE);
 
-/** Diverging per-strike DEX bars around spot — same visual language as
- * DealerGammaTab's gamma bars, just fed real netDEX instead of netGamma. */
-function LiveDexBars({ rows, spot }: { rows: LiveChainRow[]; spot: number }) {
-  const windowed = useMemo(() => {
-    if (!rows.length || !(spot > 0)) return [];
-    return [...rows]
-      .filter((r) => Math.abs(r.strike - spot) <= spot * 0.02) // ~±2% around spot
-      .sort((a, b) => a.strike - b.strike);
-  }, [rows, spot]);
-
-  const max = Math.max(1, ...windowed.map((r) => Math.abs(r.netDEX)));
-  if (!windowed.length) {
-    return <div style={{ fontSize: 13, color: HOME_THEME.muted, opacity: 0.6 }}>No strikes within ±2% of spot yet.</div>;
-  }
-
-  return (
-    <div style={{ marginTop: 10 }}>
-      {windowed.map((r) => {
-        const half = (Math.abs(r.netDEX) / max) * 50;
-        const neg = r.netDEX < 0;
-        const isSpotStrike = Math.abs(r.strike - spot) < (windowed[1]?.strike ?? spot + 5) - (windowed[0]?.strike ?? spot);
-        return (
-          <div key={r.strike} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-            <span style={{ fontSize: 13, color: isSpotStrike ? GOLD : HOME_THEME.muted, opacity: isSpotStrike ? 1 : 0.65, width: 70, textAlign: "right", flex: "none", fontWeight: isSpotStrike ? 800 : 400, fontVariantNumeric: "tabular-nums" }}>
-              {r.strike}
-            </span>
-            <span style={{ flex: 1, height: 16, position: "relative", display: "block" }}>
-              <span style={{ position: "absolute", left: "50%", top: -2, bottom: -2, width: 1, background: "rgba(255,255,255,0.22)" }} />
-              <span
-                title={`${r.strike} · ${fmtDex(r.netDEX)} net DEX`}
-                style={{
-                  position: "absolute", top: 0, height: 16, display: "block",
-                  background: neg ? HOME_THEME.red : LIGHT_BLUE,
-                  borderRadius: neg ? "4px 0 0 4px" : "0 4px 4px 0",
-                  ...(neg ? { right: "50%", width: `${half}%` } : { left: "50%", width: `${half}%` }),
-                }}
-              />
-            </span>
-            <span style={{ fontSize: 12.5, width: 84, flex: "none", color: toneOf(r.netDEX), fontVariantNumeric: "tabular-nums" }}>
-              {fmtDex(r.netDEX)}
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 // ── styles ───────────────────────────────────────────────────────────────────
 const fieldLabel: CSSProperties = {
   fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em",
@@ -241,10 +216,11 @@ function pathFor(series: number[]): string {
 }
 
 function DeltaDecayChart({
-  otm, atm, itm, hoverIdx, onHover,
+  otm, atm, itm, hoverIdx, onHover, nowIdx,
 }: {
   otm: number[]; atm: number[]; itm: number[];
   hoverIdx: number | null; onHover: (idx: number | null) => void;
+  nowIdx: number | null;
 }) {
   const yTicks = [0, 0.25, 0.5, 0.75, 1.0];
   const xTicks = [
@@ -289,6 +265,19 @@ function DeltaDecayChart({
         <path d={pathFor(otm)} fill="none" stroke={HOME_THEME.orange} strokeWidth={2} />
         <path d={pathFor(atm)} fill="none" stroke={HOME_THEME.cyan} strokeWidth={2} strokeDasharray="5 4" />
         <path d={pathFor(itm)} fill="none" stroke={LIGHT_BLUE} strokeWidth={2} />
+
+        {nowIdx != null && (
+          <>
+            <line
+              x1={xScale(TIMES[nowIdx])} x2={xScale(TIMES[nowIdx])}
+              y1={MARGIN.top} y2={H - MARGIN.bottom}
+              stroke={GOLD} strokeWidth={1.5} strokeOpacity={0.85}
+            />
+            <text x={xScale(TIMES[nowIdx])} y={MARGIN.top - 4} textAnchor="middle" fontSize={10} fontWeight={800} fill={GOLD} letterSpacing="0.08em">
+              NOW
+            </text>
+          </>
+        )}
 
         {hx != null && hoverIdx != null && (
           <>
@@ -350,22 +339,42 @@ export default function DexCharmTab() {
   const [itmK, setItmK] = useState(5480);
   const [ivPct, setIvPct] = useState(12);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
-  const [seededFromLive, setSeededFromLive] = useState(false);
 
-  // One-time seed of the theoretical model's inputs from the live spot, so the
-  // "what if" chart starts from where the market actually is. After that the
-  // user's own edits win — this never overwrites a value they've touched.
+  // Live spot tracking: ON by default, so the model always reflects where SPX
+  // actually is right now — not a one-time seed. ATM/OTM/ITM strikes ride
+  // along with spot (fixed ±20 offsets) so the curve keeps its OTM/ATM/ITM
+  // shape as spot moves. Any manual edit to spot or a strike snaps this off,
+  // so the user's own "what if" values are never silently overwritten.
+  const [liveSpotSync, setLiveSpotSync] = useState(true);
+
   useEffect(() => {
-    if (seededFromLive || !live?.spotPrice) return;
+    if (!liveSpotSync || !live?.spotPrice) return;
     const s = Math.round(live.spotPrice);
     setSpot(s);
     setAtmK(s);
     setOtmK(s + 20);
     setItmK(s - 20);
-    setSeededFromLive(true);
-  }, [live, seededFromLive]);
+  }, [live, liveSpotSync]);
+
+  const manualField = (setter: (v: number) => void) => (v: number) => {
+    setLiveSpotSync(false);
+    setter(v);
+  };
 
   const { otm, atm, itm } = useMemo(() => computeSeries(spot, otmK, atmK, itmK, ivPct), [spot, otmK, atmK, itmK, ivPct]);
+
+  // "Now" marker: recompute the session-elapsed fraction every 30s so the
+  // gold line on the chart (and the delta tiles) track the actual ET clock,
+  // not just the moment the tab mounted.
+  const [nowFrac, setNowFrac] = useState<number | null>(null);
+  useEffect(() => {
+    const tick = () => setNowFrac(nowSessionFrac());
+    tick();
+    const id = setInterval(tick, 30_000);
+    return () => clearInterval(id);
+  }, []);
+  const nowIdx = nowFrac != null ? nearestTimeIdx(nowFrac) : null;
+  const tileIdx = nowIdx ?? otm.length - 1;
 
   const totals = live?.totals;
   const netDex = totals?.totalDeltaOiVol ?? (totals ? (totals.totalDeltaCall ?? 0) + (totals.totalDeltaPut ?? 0) : null);
@@ -424,11 +433,6 @@ export default function DexCharmTab() {
             />
           </div>
 
-          <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE }}>
-            net DEX by strike, ±2% of spot
-          </div>
-          <LiveDexBars rows={live.chain} spot={live.spotPrice} />
-
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${HOME_THEME.border}`, fontSize: 13.5, color: HOME_THEME.muted, lineHeight: 1.65, opacity: 0.88 }}>
             <b style={{ color: GOLD }}>What is measured vs. assumed.</b>{" "}
             OI, strikes, and Black-Scholes greeks are read live off the chain — nothing here is a model input. The
@@ -448,27 +452,37 @@ export default function DexCharmTab() {
 
       {/* ── THEORETICAL MODEL ───────────────────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "flex-end", gap: 18, flexWrap: "wrap", marginTop: 28 }}>
-        <Field label="Spot (S)" value={spot} onChange={setSpot} />
-        <Field label="OTM strike" value={otmK} onChange={setOtmK} />
-        <Field label="ATM strike" value={atmK} onChange={setAtmK} />
-        <Field label="ITM strike" value={itmK} onChange={setItmK} />
+        <Field label="Spot (S)" value={spot} onChange={manualField(setSpot)} />
+        <Field label="OTM strike" value={otmK} onChange={manualField(setOtmK)} />
+        <Field label="ATM strike" value={atmK} onChange={manualField(setAtmK)} />
+        <Field label="ITM strike" value={itmK} onChange={manualField(setItmK)} />
         <Field label="Implied vol (σ, %)" value={ivPct} onChange={setIvPct} step={0.5} />
+        <button
+          onClick={() => setLiveSpotSync((v) => !v)}
+          style={{ ...homeButtonStyle, ...(liveSpotSync ? {} : { color: HOME_THEME.muted, border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.04)" }) }}
+        >
+          {liveSpotSync ? "● Live spot: ON" : "○ Live spot: OFF"}
+        </button>
       </div>
 
       <Card
         variant="budget"
         accent={LIGHT_BLUE}
         title={<span style={{ fontSize: 17 }}>Theoretical 0DTE call delta decay (Charm effect)</span>}
-        subtitle="Black-Scholes N(d1) recomputed across the trading session — a model, seeded from live spot once, not itself live"
+        subtitle={
+          liveSpotSync
+            ? `Black-Scholes N(d1) recomputed across the trading session — spot and ATM/OTM/ITM strikes track live SPX (currently ${spot})`
+            : "Black-Scholes N(d1) recomputed across the trading session — live spot sync is off, values are yours"
+        }
         style={{ marginTop: 16 }}
       >
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
-          <Tile label="OTM Δ now" value={otm[otm.length - 1].toFixed(3)} sub={`K=${otmK} · decays toward 0`} tone={HOME_THEME.orange} />
-          <Tile label="ATM Δ now" value={atm[atm.length - 1].toFixed(3)} sub={`K=${atmK} · hovers near 0.50, then whips`} tone={HOME_THEME.cyan} />
-          <Tile label="ITM Δ now" value={itm[itm.length - 1].toFixed(3)} sub={`K=${itmK} · hardens toward 1`} tone={LIGHT_BLUE} />
+          <Tile label="OTM Δ now" value={otm[tileIdx].toFixed(3)} sub={`K=${otmK} · decays toward 0`} tone={HOME_THEME.orange} />
+          <Tile label="ATM Δ now" value={atm[tileIdx].toFixed(3)} sub={`K=${atmK} · hovers near 0.50, then whips`} tone={HOME_THEME.cyan} />
+          <Tile label="ITM Δ now" value={itm[tileIdx].toFixed(3)} sub={`K=${itmK} · hardens toward 1`} tone={LIGHT_BLUE} />
         </div>
 
-        <DeltaDecayChart otm={otm} atm={atm} itm={itm} hoverIdx={hoverIdx} onHover={setHoverIdx} />
+        <DeltaDecayChart otm={otm} atm={atm} itm={itm} hoverIdx={hoverIdx} onHover={setHoverIdx} nowIdx={nowIdx} />
 
         <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 14, fontSize: 12.5, color: HOME_THEME.muted }}>
           <span style={{ display: "flex", alignItems: "center", gap: 7 }}>
@@ -486,8 +500,11 @@ export default function DexCharmTab() {
           <b style={{ color: GOLD }}>Model.</b>{" "}
           Δ_call = N(d₁), with d₁ = [ln(S/K) + (r + σ²/2)t] / (σ√t), r = 4.5%, t = remaining fraction of
           the trading session converted to a year-fraction (÷252). Recomputed at 27 points from 9:30 AM to
-          4:00 PM ET for the OTM/ATM/ITM strikes above. Spot and strikes are seeded once from the live snapshot
-          above, then fully yours to edit — this chart does not refetch or re-seed after that.
+          4:00 PM ET for the OTM/ATM/ITM strikes above. With Live spot ON, spot and the ATM/OTM/ITM strikes
+          (spot ± 20) update on every refresh of the live chain above (every 30s) — the curve itself is still
+          a model, not a measurement, but it's always drawn around where SPX actually is. Edit any field to
+          switch to a fixed "what if" scenario; the gold NOW line marks the current point in the session
+          regardless.
         </div>
       </Card>
     </>
