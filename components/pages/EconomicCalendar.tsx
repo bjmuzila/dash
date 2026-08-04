@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { HOME_THEME as HT, homeShellStyle, homeButtonStyle, DOCK_THEME } from "@/components/shared/homeTheme";
 // Same chip logo the home Economic Calendar panel uses: mirrored
@@ -8,6 +8,7 @@ import { HOME_THEME as HT, homeShellStyle, homeButtonStyle, DOCK_THEME } from "@
 // /proxy/ticker-logo resolver, then a ticker-text chip. This page used to hit
 // the resolver directly, so mirrored logos never showed up here.
 import ChipLogo from "@/components/shared/ChipLogo";
+import { groupEarningsByDate } from "@/lib/econCalendar";
 
 interface CalEvent {
   date: string;
@@ -173,15 +174,13 @@ export default function EconomicCalendarPage() {
   const today = etToday();
 
   // Earnings keyed by ET date → premarket / after-hours. "Time TBD" is dropped.
-  const earnByDate = (() => {
-    const map = new Map<string, { pre: EarnRow[]; after: EarnRow[] }>();
-    for (const r of earnings) {
-      if (r.session !== "pre" && r.session !== "after") continue;
-      if (!map.has(r.date)) map.set(r.date, { pre: [], after: [] });
-      map.get(r.date)![r.session].push(r);
-    }
-    return map;
-  })();
+  // Memoised on `earnings`. This used to be a bare IIFE that rebuilt the whole
+  // Map on EVERY render — including the once-a-minute `now` tick that exists
+  // only to re-evaluate event staleness. So a page left open re-bucketed the
+  // full earnings list 60 times an hour for a result that changes when the
+  // fetch changes, which is once. Shared with the phone view via
+  // lib/econCalendar so all three surfaces bucket identically.
+  const earnByDate = useMemo(() => groupEarningsByDate(earnings), [earnings]);
 
   function toggleFilter(key: FilterKey) {
     setActiveFilters(prev => {

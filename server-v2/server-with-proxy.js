@@ -2530,7 +2530,7 @@ async function main() {
         req.on('end', () => {
           let o = {};
           try { o = JSON.parse(wb || '{}'); } catch {}
-          runWatchAlerts({ force: o.force === true })
+          runWatchAlerts({ force: o.force === true, dryRun: o.dryRun === true })
             .then((r) => sendJson(res, 200, { ok: true, result: r }))
             .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         });

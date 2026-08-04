@@ -58,22 +58,27 @@ const RAMP = [HOME_THEME.cyan, ACCENT, WARN, HOME_THEME.orange, RETA_PALETTE.ros
  * Donut series colours — the ONE place this file carries hex literals, and
  * deliberately so: these are a data encoding, not chrome.
  *
- * They are the theme's own hues (cyan, gold, violet, orange, pink, green)
- * re-stepped into the dark-mode OKLCH lightness band [0.48, 0.67] and reordered
- * so no adjacent pair collides under colour-vision deficiency. The raw theme
- * values fail that test — most sit above the band on a dark surface, and
- * gold↔green land at ΔE 2.6 under deuteranopia (the floor is 8). After
- * re-stepping, the worst adjacent pair is ΔE 13.1.
+ * Eight hues stepped evenly off the theme's cyan at a fixed chroma, with
+ * lightness alternating between two values. The alternation is what makes it
+ * work: deuteranopia flattens the red↔green axis, so neighbours that differ
+ * only in hue collapse — giving them different lightness keeps them apart.
+ * Validated against the dark panel surface: worst adjacent pair ΔE 10.7 under
+ * protanopia and 15.5 with normal vision, all eight inside the dark-mode
+ * lightness band.
+ *
+ * Two slots land a hair under 3:1 contrast on the panel. That is allowed only
+ * because identity never rests on colour here — every segment is directly
+ * labelled or named in the row list, and there is a full Table view.
  *
  * Slots are assigned by STABLE category order (id ascending), never by this
  * month's ranking — a category keeps its colour when the amounts move, so
  * "Groceries is violet" stays true month to month.
  */
-const DONUT_RAMP = ["#219ebc", "#c88200", "#987ce9", "#e16d00", "#dd5da2", "#45ad29"];
+const DONUT_RAMP = ["#006e9f", "#7583e0", "#834790", "#d06480", "#9b4803", "#a68a00", "#347426", "#00a698"];
 /** Neutral, reserved for the folded tail and for Uncategorized. */
 const DONUT_NEUTRAL = "#6b7480";
-/** A donut stops being readable past ~6 slices; the rest folds into "Other". */
-const DONUT_TOP_N = 6;
+/** Hard ceiling on drawn categories — past this the arcs stop being readable. */
+const DONUT_MAX_SLICES = 8;
 
 // ── control styles, all derived from theme tokens ───────────────────────────
 function field(): React.CSSProperties {
@@ -661,8 +666,23 @@ export default function RealMonth({
     [...categories].sort((a, b) => a.id - b.id).forEach((c, i) => slotOf.set(c.name, i % DONUT_RAMP.length));
 
     const ranked = byCategory.filter((c) => c.spent > 0);
-    const head = ranked.slice(0, DONUT_TOP_N);
-    const tail = ranked.slice(DONUT_TOP_N);
+
+    // Where to cut. A fixed top-N is wrong: it happily produced an "Other"
+    // band bigger than four of the categories it was hiding, which reads as a
+    // mystery category near the top of the chart. Instead take the SMALLEST
+    // cut whose folded tail is smaller than the smallest slice still drawn —
+    // so "Other", when it exists, is always the last segment and never
+    // outranks something real. Falls back to the ceiling if no cut qualifies.
+    const cut = (() => {
+      const max = Math.min(ranked.length, DONUT_MAX_SLICES);
+      for (let n = 1; n <= max; n++) {
+        const tailTotal = ranked.slice(n).reduce((sum, c) => sum + c.spent, 0);
+        if (tailTotal === 0 || tailTotal < ranked[n - 1].spent) return n;
+      }
+      return max;
+    })();
+    const head = ranked.slice(0, cut);
+    const tail = ranked.slice(cut);
 
     // Two drawn categories can land on the same slot when more than six exist.
     // Bump the later one to the next free slot — deterministic for a given set.
@@ -1057,7 +1077,7 @@ export default function RealMonth({
         <Card variant="classic" padding={0} style={{ overflow: "hidden" }}>
           <SectionHead
             title="Where it went"
-            sub="Hover or tap a segment to isolate it. Click a category to see the merchants inside it. Top 6 are drawn individually; the tail folds into a neutral Other band."
+            sub="Hover or tap a segment to isolate it. Click a category to see the merchants inside it. Categories are drawn individually down to the point where whatever is left over is smaller than the smallest one shown — so Other, if it appears, is always the last slice."
           />
           <SpendDonut
             slices={donut.slices}

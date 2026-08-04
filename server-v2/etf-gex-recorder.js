@@ -97,7 +97,8 @@ const int = (o, ...keys) => {
 
 /**
  * One expiration's strike ladder reduced to the writer's row shape.
- * Returns { spot, rows: [{ strike, netGEX, netVolGEX, callGamma, putGamma }] }.
+ * Returns { spot, rows: [{ strike, netGEX, netVolGEX, netDEX, volNetDEX,
+ * callGamma, putGamma, callDelta, putDelta }] }.
  */
 async function snapshotStrikes(ticker, expiry) {
   const { items, underlyingPrice } = await fetchChainFull(ticker, expiry);
@@ -120,6 +121,8 @@ async function snapshotStrikes(ticker, expiry) {
       const p = it.put;
       const cGamma = num(c, 'gamma');
       const pGamma = num(p, 'gamma');
+      const cDelta = num(c, 'delta');
+      const pDelta = num(p, 'delta');
       const cOI = int(c, 'open-interest', 'openInterest');
       const pOI = int(p, 'open-interest', 'openInterest');
       const cVol = int(c, 'volume', 'day-volume');
@@ -131,8 +134,18 @@ async function snapshotStrikes(ticker, expiry) {
         strike,
         netGEX: (cGamma * cOI - pGamma * pOI) * mult,
         netVolGEX: (cGamma * cVol - pGamma * pVol) * mult,
+        // DEX = delta × OI × spot × 100, the same convention gex-calculator.js
+        // uses for the SPX path — including subtracting the put term rather
+        // than adding it, so the two engines' numbers stay comparable.
+        // Omitted until now, which is why option_strike_gex_history had
+        // with_dex = 0 for every ETF while $SPX had it: the writer stores
+        // net_dex, but this path never supplied it.
+        netDEX: (cDelta * cOI - pDelta * pOI) * spot * 100,
+        volNetDEX: (cDelta * cVol - pDelta * pVol) * spot * 100,
         callGamma: cGamma,
         putGamma: pGamma,
+        callDelta: cDelta,
+        putDelta: pDelta,
       });
     }
   }

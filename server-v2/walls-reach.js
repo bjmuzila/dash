@@ -54,6 +54,7 @@
  * Consumed by: attachRank() decorating GET /proxy/walls
  */
 
+const { MARKET_HOLIDAYS } = require('./scanner-recorder');
 const { useTheta } = require('./config/data-source');
 const dailyAdapter = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
 
@@ -1029,12 +1030,16 @@ let _watchTimer = null;
  * same event and is not worth an alert. De-duped by the table's UNIQUE, so a
  * level oscillating on the boundary logs once and a restart cannot re-fire it.
  */
-async function runWatchAlerts({ force = false } = {}) {
+async function runWatchAlerts({ force = false, dryRun = false } = {}) {
   const now = new Date();
   const day = etDateStr(now);
   if (!force) {
+    // RTH only, 09:30-16:00 ET. No overnight, no pre-market, no holidays.
+    // The holiday case was previously covered only as a side effect of the
+    // scanner not sweeping (stale feed -> skip); make it explicit.
     const { weekday } = etParts(now);
     if (weekday === 'Sat' || weekday === 'Sun') return { skipped: 'weekend' };
+    if (MARKET_HOLIDAYS.has(day)) return { skipped: 'market holiday' };
     const mins = etMinutes(now);
     if (mins < 9 * 60 + 30 || mins > 16 * 60) return { skipped: 'outside RTH' };
   }
@@ -1051,6 +1056,10 @@ async function runWatchAlerts({ force = false } = {}) {
   let sent = 0;
   for (const l of w.levels) {
     if (l.closing === false) continue; // drifting away, or the wall moved to us
+    // dryRun exists because `force` bypasses the RTH gate for testing, and a
+    // test run should not leave real-looking alerts in the feed priced off an
+    // after-hours book. Test with { force: true, dryRun: true }.
+    if (dryRun) { sent++; continue; }
     try {
       const r = await p.query( // eslint-disable-line no-await-in-loop
         `INSERT INTO wall_alerts
@@ -1067,8 +1076,8 @@ async function runWatchAlerts({ force = false } = {}) {
       console.warn('[wall-watch] alert write', l.symbol, e.message);
     }
   }
-  if (sent) console.log(`[wall-watch] ${sent} new alert${sent === 1 ? '' : 's'}`);
-  return { ok: true, checked: w.levels.length, sent };
+  if (sent && !dryRun) console.log(`[wall-watch] ${sent} new alert${sent === 1 ? '' : 's'}`);
+  return { ok: true, checked: w.levels.length, sent, dryRun: dryRun || undefined };
 }
 
 /** The alert feed for a session, newest first. */

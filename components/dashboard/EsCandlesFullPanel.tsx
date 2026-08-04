@@ -19,6 +19,11 @@ import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData }
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
+
+// Reads gexRows off snapshot/gex, and also handles spot/aux. (This panel is
+// currently unreferenced — declared anyway so mounting it can never silently
+// drop the socket back to the unscoped firehose.)
+const ES_PANEL_TOPICS = ["gex", "spot", "aux"] as const;
 import { dedupeFetch } from "@/lib/dedupeFetch";
 
 // Spot / last-price line. Same gray as app/es-candles/page.tsx so the two
@@ -324,7 +329,7 @@ export default function EsCandlesFullPanel() {
     };
 
     if (!esShouldConnect) return;
-    return subscribeGex({ onMessage: handle });
+    return subscribeGex({ onMessage: handle, topics: ES_PANEL_TOPICS });
   }, [esShouldConnect]);
 
   // ── Price-line values: ES-tick quantized, republished at most once a minute ──

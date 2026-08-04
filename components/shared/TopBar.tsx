@@ -7,6 +7,10 @@ import SnapButton from "./SnapButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { useGexSocket, type GexMessage } from "@/lib/gexSocket";
 
+// snapshot scalars + aux + spot — same set as ToolbarTicker, which replaced
+// this component (TopBar is currently unreferenced).
+const TOPBAR_TOPICS = ["spot", "aux"] as const;
+
 const NAV_ITEMS = [
   { label: "Overview",      href: "/" },
   { label: "Premarket",     href: "/premarket" },
@@ -333,7 +337,7 @@ export default function TopBar() {
     pushPrices();
   };
 
-  useGexSocket(shouldConnect, onGexFrame);
+  useGexSocket(shouldConnect, onGexFrame, undefined, TOPBAR_TOPICS);
 
   // ── close dropdown on outside click ──
   useEffect(() => {

@@ -31,6 +31,8 @@ import { computeGEXProfile, findGEXFlip, type ChainRow, type GEXProfile } from "
  * updates costs one React render rather than one per frame.
  */
 
+const MOBILE_GEX_TOPICS = ["gex", "spot", "aux", "status"] as const;
+
 const FRAME_MS = 900;
 const FALLBACK_AFTER_MS = 6_000;
 const FALLBACK_POLL_MS = 8_000;
@@ -227,6 +229,9 @@ export function useMobileGex(dataMode: GexDataMode = "oi-vol"): MobileGexState {
       }
     };
     const off = subscribeGex({
+      // gex → gexRows/totals; spot → price; aux → esFut for the ES/SPX basis;
+      // status → the expiry + expirations list the chips render.
+      topics: MOBILE_GEX_TOPICS,
       onMessage: handle,
       onStatus: (c) => {
         setConnected(c);

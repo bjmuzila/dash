@@ -15,6 +15,10 @@
 import { useEffect, useRef, useState } from "react";
 import { queryGreeksToday } from "@/lib/snapdb";
 import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
+
+// Only branches on snapshot/gex, and reads `totals` — which the snapshot only
+// carries when "gex" is in the scope.
+const RAIL_TOPICS = ["gex"] as const;
 import { HOME_THEME, statTileStyle } from "@/components/shared/homeTheme";
 
 // GEX heatmap palette — positive/calls blue, negative/puts red (see GexHeatmap cellBg).
@@ -364,7 +368,7 @@ export default function HomeGaugeRail({
       }
     };
 
-    return subscribeGex({ onMessage: handle });
+    return subscribeGex({ onMessage: handle, topics: RAIL_TOPICS });
   }, []);
 
   const gex = latest?.gex ?? null;

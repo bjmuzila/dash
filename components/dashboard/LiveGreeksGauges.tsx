@@ -12,6 +12,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { queryGreeksToday } from "@/lib/snapdb";
 import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
+
+// snapshot/gex for `totals`, plus spot.
+const GAUGE_TOPICS = ["gex", "spot"] as const;
 import { statTileStyle } from "@/components/shared/homeTheme";
 
 interface GreekPoint {
@@ -178,7 +181,7 @@ export default function LiveGreeksGauges() {
       }
     };
 
-    return subscribeGex({ onMessage: handle });
+    return subscribeGex({ onMessage: handle, topics: GAUGE_TOPICS });
   }, [applySnap]);
 
   const d = latest ?? (history.length ? history[history.length - 1] : null);

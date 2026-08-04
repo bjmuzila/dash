@@ -23,12 +23,23 @@ import { trackTickerClick } from "@/lib/trackTicker";
  * Every enrichment call is inside Promise.allSettled, so no single failing
  * endpoint can take the page down — the core /api/levels row still renders.
  *
- * KNOWN DEAD CALL, deliberately kept: /api/confidence returns
- * `score: ConfidenceResult`, an object with no scalar `score` field, so
- * `Number(...)` is NaN and `confidenceScore` never leaves null. It is left in
- * place (rather than silently dropped) so the two surfaces stay identical and
- * whoever fixes the endpoint fixes both at once. The phone view does not render
- * a confidence tile, so it costs nothing there.
+ * REMOVED — /api/confidence. It used to be the second of four parallel
+ * enrichment calls here, and it never worked: the route returns
+ * `score: ConfidenceResult` (an object with fields hit/pivot/chop/break/…),
+ * while this code read `score.score ?? score`. The first is undefined, the
+ * second is the object, `Number(object)` is NaN, `Number.isFinite` is false —
+ * so `confidenceScore` never left null and the "CB Confidence" tile never
+ * rendered, on any surface, ever.
+ *
+ * It was also by far the most expensive request in the set: the route scans up
+ * to ANALOG_MAX = 120 prior sessions server-side (see app/api/confidence/
+ * route.ts) to build a score that was then discarded. Every EM lookup paid for
+ * it. Dropping it takes the per-lookup request count from 8 to 7 and removes
+ * that scan, with zero visible change — there was nothing to see.
+ *
+ * If the tile is wanted, fix the ROUTE to return a scalar (or fix the reader to
+ * pull a named field off ConfidenceResult), then re-add the call here — one
+ * place, both surfaces.
  */
 
 export interface TickerEmStats {
@@ -117,7 +128,6 @@ export type EmLookupState = {
   loading: boolean;
   error: string;
   emStats: TickerEmStats | null;
-  confidenceScore: number | null;
   winRate: { hits: number; evaluated: number; hit_rate: number } | null;
   recentRec: { lastResult: "hit" | "miss" | null; lastLabel: string | null; last5Hits: number; last5Total: number } | null;
   lookup: (raw: string) => Promise<void>;
@@ -139,7 +149,6 @@ export function useEmLookup(): EmLookupState {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [emStats, setEmStats] = useState<TickerEmStats | null>(null);
-  const [confidenceScore, setConfidenceScore] = useState<number | null>(null);
   const [winRate, setWinRate] = useState<{ hits: number; evaluated: number; hit_rate: number } | null>(null);
   const [recentRec, setRecentRec] = useState<{ lastResult: "hit" | "miss" | null; lastLabel: string | null; last5Hits: number; last5Total: number } | null>(null);
 
@@ -151,7 +160,6 @@ export function useEmLookup(): EmLookupState {
     setError("");
     setData(null);
     setEmStats(null);
-    setConfidenceScore(null);
     setWinRate(null);
     setRecentRec(null);
     try {
@@ -180,10 +188,10 @@ export function useEmLookup(): EmLookupState {
       // Only log a "visit" once data actually came back for this ticker (mirrors
       // the flow-ticker click tracker), so lookups that 404 don't skew counts.
       if (fetchedData) trackTickerClick(sym, "em");
-      // Fetch EM history stats, confidence, and win/loss record in parallel
-      const [statsRes, confRes, trackerRes, weeksRes] = await Promise.allSettled([
+      // EM history stats + win/loss record, in parallel. (/api/confidence used to
+      // be here — see the header note; it was removed, not forgotten.)
+      const [statsRes, trackerRes, weeksRes] = await Promise.allSettled([
         fetch(`/api/em/ticker-em-stats?ticker=${encodeURIComponent(sym)}`).then((r) => r.ok ? r.json() : null),
-        fetch("/api/confidence").then((r) => r.ok ? r.json() : null),
         Promise.all([
           fetch("/api/em-tracker").then((r) => r.ok ? r.json() : null),
           fetch("/api/em-tracker/history").then((r) => r.ok ? r.json() : null),
@@ -192,10 +200,6 @@ export function useEmLookup(): EmLookupState {
       ]);
       if (statsRes.status === "fulfilled" && statsRes.value) {
         setEmStats({ recentAvg: statsRes.value.recentAvg ?? null, midAvg: statsRes.value.midAvg ?? null, sampleSize: statsRes.value.sampleSize ?? 0 });
-      }
-      if (confRes.status === "fulfilled" && confRes.value) {
-        const s = confRes.value?.score?.score ?? confRes.value?.score ?? null;
-        if (s != null && Number.isFinite(Number(s))) setConfidenceScore(Math.round(Number(s)));
       }
       if (trackerRes.status === "fulfilled" && trackerRes.value) {
         const { summary: liveSummary, history: histData } = trackerRes.value as {
@@ -238,5 +242,5 @@ export function useEmLookup(): EmLookupState {
     }
   }, []);
 
-  return { ticker, data, loading, error, emStats, confidenceScore, winRate, recentRec, lookup };
+  return { ticker, data, loading, error, emStats, winRate, recentRec, lookup };
 }

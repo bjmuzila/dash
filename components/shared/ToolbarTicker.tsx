@@ -3,6 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { useGexSocket, type GexMessage } from "@/lib/gexSocket";
+
+// Frame types this ticker reads (snapshot scalars + the two price frames).
+// Module-level so the array identity is stable across renders.
+// NOTE: this component is mounted by GlobalToolbar on EVERY dashboard route, so
+// these two topics are permanently part of the socket's union — no page can
+// narrow below them.
+const TICKER_TOPICS = ["spot", "aux"] as const;
 import NquQuotePill from "@/components/dashboard/NquQuotePill";
 
 /**
@@ -223,7 +230,7 @@ export default function ToolbarTicker() {
     push();
   };
 
-  useGexSocket(shouldConnect, onGexFrame);
+  useGexSocket(shouldConnect, onGexFrame, undefined, TICKER_TOPICS);
 
   return (
     <div ref={wrapRef} style={{ width: "100%", minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>

@@ -15,6 +15,17 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
+
+// BOTH candle topics, always. The 1m/5m choice is read from `intervalRef`
+// inside the handler specifically so switching aggregation does NOT tear down
+// the subscription — which means the socket cannot know in advance which one
+// will be wanted, and asking for only the current one would make the toggle
+// silently dead until a remount.
+//
+// "regime-fit-updated" / "pairs-regime-updated" are deliberately absent: the
+// server pushes those through broadcastEvent(), which ignores client topics
+// entirely, so they arrive either way.
+const ES_CANDLE_TOPICS = ["esCandles", "es1mCandles"] as const;
 import {
   queryEsCandlesToday,
   queryEsCandlesHistorical,
@@ -316,6 +327,7 @@ export function useEsCandles(
     let unsubscribe: (() => void) | null = null;
     if (shouldConnect) {
       unsubscribe = subscribeGex({
+        topics: ES_CANDLE_TOPICS,
         onMessage: (msg) => { if (!unmountedRef.current) handle(msg); },
         onStatus: (live) => { if (!unmountedRef.current) setConnected(live); },
       });

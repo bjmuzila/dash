@@ -27,6 +27,13 @@ import { useEtfCandles } from "@/hooks/useEtfCandles";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { useGexSocket, type GexMessage } from "@/lib/gexSocket";
+
+// Reads gexRows off snapshot/gex, plus spot/aux for the price legs. "status"
+// is included because the expiry + expirations list rides on it — this card's
+// handler ignores that frame today, but the card DOES read `expiry` /
+// `expirations` off whatever frame it gets, so scoping it out would make that
+// path strictly worse than it already is.
+const ES_CHART_TOPICS = ["gex", "spot", "aux", "status"] as const;
 import { dedupeFetch } from "@/lib/dedupeFetch";
 // cachedJson, NOT dedupeFetch, for the page-GLOBAL reads below (levels, mvc,
 // basis, eod-gex). dedupeFetch only collapses requests that overlap in time; it
@@ -1600,7 +1607,7 @@ export default function EsChartCard({
 
   // Value-driven bandwidth gate, unchanged — it now decides whether this page
   // subscribes to the shared socket rather than whether it opens its own.
-  useGexSocket(esShouldConnect, onGexFrame);
+  useGexSocket(esShouldConnect, onGexFrame, undefined, ES_CHART_TOPICS);
 
   // ── ETF GEX refresh ────────────────────────────────────────────────────────
   // SPX columns arrive two ways: this HTTP backfill for history, then the

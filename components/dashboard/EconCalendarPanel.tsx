@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
@@ -9,6 +9,7 @@ import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/
 // → text chip). Shared with the standalone /economic-calendar page so a logo
 // dropped into public/logos shows up in both places.
 import ChipLogo from "@/components/shared/ChipLogo";
+import { groupEarningsByDate } from "@/lib/econCalendar";
 
 interface CalEvent {
   date: string;
@@ -232,15 +233,13 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
   }, []);
 
   // Earnings keyed by ET date → premarket / after-hours. "Time TBD" is dropped.
-  const earnByDate = (() => {
-    const map = new Map<string, { pre: EarnRow[]; after: EarnRow[] }>();
-    for (const r of earnings) {
-      if (r.session !== "pre" && r.session !== "after") continue;
-      if (!map.has(r.date)) map.set(r.date, { pre: [], after: [] });
-      map.get(r.date)![r.session].push(r);
-    }
-    return map;
-  })();
+  // Memoised on `earnings`. This used to be a bare IIFE that rebuilt the whole
+  // Map on EVERY render — including the once-a-minute `now` tick that exists
+  // only to re-evaluate event staleness. So a page left open re-bucketed the
+  // full earnings list 60 times an hour for a result that changes when the
+  // fetch changes, which is once. Shared with the phone view via
+  // lib/econCalendar so all three surfaces bucket identically.
+  const earnByDate = useMemo(() => groupEarningsByDate(earnings), [earnings]);
 
   const today    = etToday();
   const weekDays = etWeekDays();

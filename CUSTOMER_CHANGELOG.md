@@ -12,6 +12,10 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * Added a session clock view: a half-hour-by-half-hour breakdown of when you make and lose money, your best window, your worst stretch of the day, and a weekday-by-hour grid so you can tell a real pattern from one bad Tuesday.
 * Net P&L, sessions, trades, win rate and per-trade now sit in the header bar, freeing the cards below for the things you can act on.
 * All of the above is calculated from the trades already in your journal — nothing new to import or set up.
+* The trading journal now shows one section at a time — Leaks, The clock, Charts and Journal each have their own tab, so you are not scrolling past four screens of cards to find one thing. Your running totals stay pinned at the top whichever tab you are on.
+* Journal cards are bigger and laid out three across, two down, so they fill the screen instead of squeezing into a thin strip on a wide monitor. Each card now has a clear title, its numbers, and a closing line telling you what those numbers mean.
+* Every journal chart now has labelled value and date axes with gridlines, so you can read a level straight off the chart instead of having to hover over it.
+* Softened the journal colours so gains, losses and warnings match the rest of the dashboard instead of shouting over it.
 
 ## Sunday 8/2/2026
 

@@ -112,6 +112,45 @@ names, so a stylesheet cannot reach them.
 and its live-data path never worked (it reads a `wsRef` that is never assigned).
 It is superseded by `/m/*`.
 
+## The live feed: one socket, scoped by topic
+
+Every consumer shares ONE `/ws/gex` connection (`lib/gexSocket.ts`) — refcounted,
+parsed once, last frame of each type replayed to late subscribers.
+
+Since 2026-08 that connection is **topic-scoped**. `subscribeGex({ topics: [...] })`
+declares the frame types a consumer reads; the socket connects with `?topics=`
+set to the union across everything mounted, and the server
+(`server-v2/websocket-server.js`) drops the rest — INCLUDING the small scalar
+frames (`spot`, `aux`, `status`), so those must be listed explicitly.
+
+Three rules:
+
+1. **`topics` is opt-in, and omitting it is safe.** One subscriber without it
+   forces the whole socket back to the unscoped firehose. That is the correct
+   default for anything unaudited — never guess a topic list to "clean up" a
+   consumer you have not read.
+2. **List every type your handler branches on, and err wide.** A missing topic
+   does not throw; the frames just stop and the panel silently goes stale.
+   Extra topics cost a few hundred bytes.
+3. **Declare topics at module scope**, not as an inline array — the value keys
+   the subscription effect.
+
+`regime-fit-updated` / `pairs-regime-updated` go out via `broadcastEvent()`,
+which ignores topics entirely. Do not request them.
+
+The scope is applied by reconnecting, so `gexSocket` debounces: 250ms to open or
+widen (a route's consumers mount in a cascade and must land on ONE connection),
+1200ms to narrow. Any scope change clears the replay cache, because those frames
+were captured under the old — possibly narrower — scope.
+
+`scripts/ws-scope-check.mjs` drives a real browser against a mock server that
+mirrors the real filtering and asserts all of the above. Run it after touching
+`gexSocket` or any consumer's topic list.
+
+Note: `app/home/HomeClient.tsx`, `WhaleOrdersPanel`, `hooks/useNqCandles` and the
+separate `owner-vite` / `home3-vite` apps still open their OWN sockets and none
+of this applies to them.
+
 ## Theme
 
 UI must source colors/spacing from `components/shared/homeTheme.ts` (+

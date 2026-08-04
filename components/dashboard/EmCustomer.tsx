@@ -10,7 +10,7 @@ import { POPULAR, fmtUpdated, useEmLookup, val } from "@/hooks/useEmLookup";
 
 export default function EmCustomer() {
   const [input, setInput] = useState("");
-  const { ticker, data, loading, error, emStats, confidenceScore, winRate, recentRec, lookup } = useEmLookup();
+  const { ticker, data, loading, error, emStats, winRate, recentRec, lookup } = useEmLookup();
   const snapRef = useRef<HTMLDivElement>(null);
 
   // Allow deep-linking via ?ticker=SPX
@@ -96,16 +96,13 @@ export default function EmCustomer() {
                 <Stat label="Up" value={val(data.up)} color="#00e676" />
                 <Stat label="Down" value={val(data.down)} color="#ff5a6a" />
               </div>
-              {(confidenceScore != null || winRate != null) && (
-                <div style={{ display: "grid", gridTemplateColumns: winRate != null && confidenceScore != null ? "1fr 1fr" : "1fr", gap: 10, marginTop: 10 }}>
-                  {confidenceScore != null && (
-                    <div style={{ ...S.avgStat, border: `1px solid ${confidenceScore >= 70 ? "rgba(0,230,118,.3)" : confidenceScore >= 45 ? "rgba(255,193,7,.3)" : "rgba(239,68,68,.3)"}` }}>
-                      <div style={S.statLabel}>CB Confidence</div>
-                      <div style={{ ...S.statValue, fontSize: 20, color: confidenceScore >= 70 ? "#00e676" : confidenceScore >= 45 ? "#ffc107" : "#EF4444" }}>
-                        {confidenceScore}%
-                      </div>
-                    </div>
-                  )}
+              {/* The "CB Confidence" tile that used to sit beside this one is gone.
+                  Its value came from /api/confidence, which returns an object
+                  where the reader expected a scalar — so the tile's render
+                  condition was never true and this grid was always 1fr anyway.
+                  See hooks/useEmLookup for the full account. */}
+              {winRate != null && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10, marginTop: 10 }}>
                   {winRate != null && (() => {
                     const winPct = Math.round(winRate.hit_rate * 100);
                     const lossPct = 100 - winPct;

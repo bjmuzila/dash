@@ -15,6 +15,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { subscribeGex } from "@/lib/gexSocket";
+
+// Reads `totals` off snapshot/gex frames, plus spot. Without "gex" the snapshot
+// arrives with totals stripped and the panel never renders a value.
+const GREEKS_TOPICS = ["gex", "spot"] as const;
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { queryGreeksToday } from "@/lib/snapdb";
 import { BehaviorDemo } from "@/components/greeks/RegimeMatrix";
@@ -120,7 +124,7 @@ export default function GreeksHomePanel() {
     };
 
     if (!shouldConnect) return;
-    return subscribeGex({ onMessage: (m) => handle(m as Record<string, unknown>) });
+    return subscribeGex({ onMessage: (m) => handle(m as Record<string, unknown>), topics: GREEKS_TOPICS });
   }, [shouldConnect]);
 
   // ── Behavior card is sampled every 30s (not on every WS tick) so the regime
