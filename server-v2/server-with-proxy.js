@@ -81,6 +81,7 @@ const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEn
 const { startWallsRecorder, runSlot: runWallsSlot, getWalls } = require('./walls-recorder');
 const { startWallsReach, runReachBackfill, runCalibration, getReach, attachRank,
   getWatch, runWatchAlerts, getAlerts, startWallsWatch } = require('./walls-reach');
+const { startForwardScanner, runForwardSweep, getForward } = require('./forward-scanner-recorder');
 const { startGexChangeTopRecorder, runOnce: runGexChangeTop, getHistory: getGexChangeTopHistory, getPickHistory: getGexChangeTopPickHistory, getResults: getGexChangeTopResults, runResults: runGexChangeTopResults } = require('./gex-change-top-recorder');
 const {
   startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce,
@@ -2471,6 +2472,39 @@ async function main() {
         })();
         return;
       }
+      // Forward walls: GET /proxy/walls-forward[?date=&symbol=]
+      //   The SAME wall calculation on the next unexpired contract, from its own
+      //   table. Never mixed into scanner_snapshots — see the header note in
+      //   forward-scanner-recorder.js for why that would corrupt three readers.
+      if (pathname === '/proxy/walls-forward' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const out = await getForward({
+              date: u.searchParams.get('date') || undefined,
+              symbol: u.searchParams.get('symbol') || undefined,
+            });
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manual forward sweep: POST /proxy/walls-forward-run { force?, symbols? }
+      if (pathname === '/proxy/walls-forward-run' && req.method === 'POST') {
+        let fb = '';
+        req.on('data', (c) => { fb += c; if (fb.length > 1e5) req.destroy(); });
+        req.on('end', () => {
+          let o = {};
+          try { o = JSON.parse(fb || '{}'); } catch {}
+          runForwardSweep({
+            force: o.force === true,
+            symbols: Array.isArray(o.symbols) && o.symbols.length ? o.symbols : null,
+          })
+            .then((r) => sendJson(res, 200, { ok: true, result: r }))
+            .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        });
+        return;
+      }
       // Alert feed: GET /proxy/walls-alerts[?date=&limit=]
       //   → { alerts:[...] } newest first. Written by the 5m watch sweep when a
       //     level comes inside 0.25x ATR while closing. Rendered on the Walls
@@ -3394,6 +3428,10 @@ async function main() {
     // 0.25x ATR of a level WHILE CLOSING is written to wall_alerts and shows up
     // in the Walls tab's alert feed. No email, no push — on-page only.
     startWallsWatch();
+    // Forward walls: the next unexpired contract, swept pre-open and post-close
+    // into its own table so the 0DTE stack's one-expiry-per-session invariant
+    // is never violated.
+    startForwardScanner();
     // Hourly "very strong" GEX-change recorder: at the top of each RTH hour,
     // scores the strike_growth universe (60m window), keeps the top 5 ★ Very
     // strong strikes (|Δ| >= $500k & |% vs open| >= 30%) into gex_change_top.

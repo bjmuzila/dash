@@ -226,9 +226,12 @@ function gexAtStrike(gexRows, strike) {
  * The three failure modes used to collapse into one "thin/no-spot" string,
  * which made a quote outage look identical to a genuinely thin chain.
  */
-async function snapshotTicker(root) {
+async function snapshotTicker(root, { pick = null } = {}) {
   const chain = await thetaAdapter.fetchChainTheta(root).catch(() => null);
-  const expiry = chain?.expirations?.[0];
+  const exps = chain?.expirations ?? [];
+  // `pick` lets the forward recorder reuse this whole path for a different
+  // contract. Default stays expirations[0] — the nearest, i.e. 0DTE intraday.
+  const expiry = pick ? pick(exps) : exps[0];
   if (!expiry) return { err: 'no-chain' };
 
   const [spot, expiryRows] = await Promise.all([
@@ -319,4 +322,10 @@ function startScannerRecorder() {
   console.log(`[scanner] recorder started — sweeping ${parseScannerTickers().join(', ')} every ${INTERVAL_MINS}m`);
 }
 
-module.exports = { startScannerRecorder, runSweep, ensureSchema, getPool, parseScannerTickers, findCoreBullseye, gexAtStrike };
+module.exports = {
+  startScannerRecorder, runSweep, ensureSchema, getPool, parseScannerTickers,
+  findCoreBullseye, gexAtStrike,
+  // shared with forward-scanner-recorder.js so both sweeps compute a wall the
+  // same way — one definition of call wall / put wall / CORE, two horizons.
+  snapshotTicker, MARKET_HOLIDAYS, etDateStr, etParts,
+};
