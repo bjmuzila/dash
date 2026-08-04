@@ -14,6 +14,7 @@ import NavMenu from "./NavMenu";
 import BzilaAlerts from "./BzilaAlerts";
 import SectionSubStrip from "./SectionSubStrip";
 import { sectionForHref, sectionForPath } from "./sectionNav";
+import { isMobilePath } from "@/components/mobile/mobileNav";
 
 /**
  * GlobalToolbar — thin app-wide toolbar mounted above page content on every
@@ -538,6 +539,7 @@ export default function GlobalToolbar() {
   // one; that section's own circle toggles it while you're inside.
   // SectionSubStrip unmounts on every other route, so this state is inert there.
   const pathname = usePathname();
+  const isMobileRoute = isMobilePath(pathname);
   const section = sectionForPath(pathname);
   const sectionKey = section?.key ?? null;
   const [stripOpen, setStripOpen] = useState(true);
@@ -622,7 +624,16 @@ export default function GlobalToolbar() {
             />
           </span>
 
-          {/* ── Hamburger — opens the navigation dropdown (NavMenu) ── */}
+          {/* ── Hamburger — opens the navigation dropdown (NavMenu) ──
+              Hidden on the phone build (/m/*), where the bottom tab bar IS the
+              navigation and a second page menu in the hardest-to-reach corner
+              of the screen is just clutter.
+
+              Gated on the ROUTE, not on `isMobile`: a phone sitting on a
+              desktop-only route (Scanner, Flow, ICT…) has no bottom tab bar, so
+              hiding it by viewport width would leave that page with no way out
+              at all. ── */}
+          {!isMobileRoute && (
           <div style={{ position: "relative", zIndex: 1, display: "flex" }}>
             <button
               ref={hamburgerRef}
@@ -655,6 +666,7 @@ export default function GlobalToolbar() {
             </button>
             <NavMenu anchor={anchor} />
           </div>
+          )}
 
           {/* ── CB Edge logo == the Bzila alerts button ──
               The standalone bell is gone: BzilaAlerts still owns the polling,

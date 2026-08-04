@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
 import type {
   CandlestickData,
@@ -11,9 +11,15 @@ import type {
 } from "lightweight-charts";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useMobileGex } from "@/hooks/useMobileGex";
+import { useGexBubbleHistory } from "@/hooks/useGexBubbleHistory";
+import EsGexRail, { type RailRow } from "@/components/dashboard/EsGexRail";
+import { etDayKey } from "@/components/dashboard/es-candles/chartMath";
+import { netGEXOf } from "@/lib/calculations/calculations";
 import MobileShell from "../MobileShell";
-import { MEmpty, MSegmented, MStatusDot } from "../MobileUI";
-import { M_COLOR, MONO, RADIUS, TYPE, fmtPrice, rgba } from "../mobileTheme";
+import MobileChainRail from "../MobileChainRail";
+import ExpiryBadge from "../ExpiryBadge";
+import { MEmpty, MSegmented, MSheet, MStatusDot } from "../MobileUI";
+import { M_COLOR, MONO, RADIUS, TYPE, fmtPrice, noTapHighlight, rgba } from "../mobileTheme";
 
 /**
  * MobileEsCandles — the ES chart, phone edition.
@@ -39,6 +45,23 @@ import { M_COLOR, MONO, RADIUS, TYPE, fmtPrice, rgba } from "../mobileTheme";
  * to compute per-slot volume baselines that this chart never draws, and it is
  * ~114KB over what may be a cellular link.
  *
+ * OVERLAYS
+ * --------
+ * The desktop card's Overlays menu is a portal-positioned dropdown with seven
+ * chips and five slider sub-panels; that is not a phone control. This is a
+ * bottom sheet with the three things worth having at 390px:
+ *
+ *   - a SIDE PANEL choice (none / GEX rail / 0DTE ladder). One at a time, not
+ *     two toggles: each costs 46px of a 390px screen, and the desktop's own
+ *     geometry table treats the gutter as a single-choice slot for the same
+ *     reason.
+ *   - BUBBLES — the per-minute GEX trail.
+ *   - the γ level lines.
+ *
+ * The GEX rail is the desktop `EsGexRail` component, imported unchanged: it is
+ * already standalone, canvas-based, and every one of its props comes straight
+ * out of useMobileGex.
+ *
  * SPX LEVEL LINES
  * ---------------
  * Gamma flip and the two walls are SPX prices; this chart is ES. They are drawn
@@ -55,11 +78,128 @@ function toChartTime(ts: number): UTCTimestamp {
   return Math.floor(ts / 1000) as UTCTimestamp;
 }
 
+type SidePanel = "none" | "rail" | "chain";
+
+const SIDE_PANELS: { id: SidePanel; label: string }[] = [
+  { id: "none", label: "Off" },
+  { id: "rail", label: "GEX rail" },
+  { id: "chain", label: "0DTE" },
+];
+
+/**
+ * Gutter width. The desktop specs 58px for the rail and 76px for the chain and
+ * suppresses both below 340px of remaining chart — at 390px total those would
+ * leave 332px and 314px, i.e. the desktop would refuse to draw them. 46px keeps
+ * 344px of chart, just over that line, and both panels are readable at it
+ * because the phone versions drop their inline strike labels (the chart's own
+ * price axis is inches away).
+ */
+const GUTTER_W = 46;
+
+/** One labelled switch row in the overlays sheet. */
+function OverlayToggle({
+  label,
+  hint,
+  on,
+  onToggle,
+}: {
+  label: string;
+  hint: string;
+  on: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={on}
+      style={{
+        ...noTapHighlight,
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        width: "100%",
+        minHeight: 52,
+        padding: "8px 12px",
+        borderRadius: RADIUS.md,
+        border: `1px solid ${on ? rgba(M_COLOR.cyan, 0.4) : M_COLOR.border}`,
+        background: on ? rgba(M_COLOR.cyan, 0.1) : "rgba(255,255,255,0.03)",
+        color: "inherit",
+        cursor: "pointer",
+        textAlign: "left",
+      }}
+    >
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: "block", fontSize: TYPE.body, fontWeight: 700, color: on ? M_COLOR.cyan : M_COLOR.text }}>
+          {label}
+        </span>
+        <span style={{ display: "block", fontSize: TYPE.micro, color: M_COLOR.faint, lineHeight: 1.35, marginTop: 1 }}>
+          {hint}
+        </span>
+      </span>
+      {/* iOS-style switch — a checkbox at this size would be under the tap floor. */}
+      <span
+        aria-hidden
+        style={{
+          flexShrink: 0,
+          width: 42,
+          height: 25,
+          borderRadius: 999,
+          background: on ? rgba(M_COLOR.cyan, 0.55) : "rgba(255,255,255,0.14)",
+          position: "relative",
+          transition: "background 0.16s",
+        }}
+      >
+        <span
+          style={{
+            position: "absolute",
+            top: 2.5,
+            left: on ? 19.5 : 2.5,
+            width: 20,
+            height: 20,
+            borderRadius: "50%",
+            background: "#fff",
+            transition: "left 0.16s",
+          }}
+        />
+      </span>
+    </button>
+  );
+}
+
 export default function MobileEsCandles() {
   const [interval, setInterval] = useState<"1" | "5">("5");
   const [showLevels, setShowLevels] = useState(true);
+  const [sidePanel, setSidePanel] = useState<SidePanel>("none");
+  const [showBubbles, setShowBubbles] = useState(false);
+  const [ovlOpen, setOvlOpen] = useState(false);
   const { sessionCandles, connected } = useEsCandles(true, 2, interval === "1" ? 1 : 5);
   const g = useMobileGex("oi-vol");
+
+  // Which ET days the chart actually has bars for — the bubble history needs
+  // this to pick a day the trail can be drawn on (see the hook's header).
+  const barDayKeys = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of sessionCandles) set.add(etDayKey(r.timestamp));
+    return [...set];
+  }, [sessionCandles]);
+
+  const bubbleCols = useGexBubbleHistory({
+    enabled: showBubbles,
+    expiry: g.expiry,
+    barDayKeys,
+  });
+
+  const railRows: RailRow[] = useMemo(
+    () => g.chain.map((r) => ({ strike: r.strike, net: netGEXOf(r, "net", g.spot) })),
+    [g.chain, g.spot],
+  );
+
+  // Both gutter panels and the bubble layer are SPX-derived, so they share the
+  // level lines' policy: no trustworthy basis → don't draw rather than draw
+  // wrong. `basisOk` gates all three.
+  const basisOk = g.basis != null;
+  const panelOn = sidePanel !== "none" && basisOk;
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -195,6 +335,182 @@ export default function MobileEsCandles() {
     }
   }, [sessionCandles, interval]);
 
+  // ── the gutter panels' link to the price axis ──────────────────────────────
+  // Both EsGexRail and MobileChainRail place a strike by asking the CANDLE
+  // SERIES where that price sits, so their rows stay glued to the chart through
+  // any pan or zoom. Identical contract to the desktop's priceToY.
+  const priceToY = useCallback((esPrice: number): number | null => {
+    const s2 = seriesRef.current;
+    if (!s2) return null;
+    const y = s2.priceToCoordinate(esPrice);
+    return y == null ? null : (y as number);
+  }, []);
+
+  const railDrawRef = useRef<() => void>(() => {});
+  const chainDrawRef = useRef<() => void>(() => {});
+  const bubbleDrawRef = useRef<() => void>(() => {});
+
+  /**
+   * Repaint driver for everything canvas-based.
+   *
+   * lightweight-charts has no "the view changed" event that covers pan, pinch
+   * AND price-scale autoscale, and subscribing to the ones it does have still
+   * misses autoscale when a new bar widens the range. Rather than guess, this
+   * samples the mapping itself once per frame — where does a fixed reference
+   * price land? — and repaints only when that answer moves. Idle cost is one
+   * priceToCoordinate call per frame; it does not redraw a still chart.
+   */
+  useEffect(() => {
+    if (!panelOn && !(showBubbles && basisOk)) return;
+    let raf = 0;
+    let lastKey = "";
+    const tick = () => {
+      const s2 = seriesRef.current;
+      const chart = chartRef.current;
+      if (s2 && chart) {
+        const probe = s2.priceToCoordinate(6000);
+        const range = chart.timeScale().getVisibleLogicalRange();
+        const key = `${probe}|${range?.from ?? ""}|${range?.to ?? ""}`;
+        if (key !== lastKey) {
+          lastKey = key;
+          railDrawRef.current?.();
+          chainDrawRef.current?.();
+          bubbleDrawRef.current?.();
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [panelOn, showBubbles, basisOk]);
+
+  // ── bubbles ────────────────────────────────────────────────────────────────
+  const bubbleCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const bubbleDataRef = useRef({ cols: bubbleCols, basis: g.basis ?? 0, rows: sessionCandles });
+  bubbleDataRef.current = { cols: bubbleCols, basis: g.basis ?? 0, rows: sessionCandles };
+
+  const drawBubbles = useCallback(() => {
+    const cv = bubbleCanvasRef.current;
+    const chart = chartRef.current;
+    const series = seriesRef.current;
+    if (!cv || !chart || !series) return;
+    const host = cv.parentElement;
+    if (!host) return;
+    const w = host.clientWidth;
+    const h = host.clientHeight;
+    if (w < 4 || h < 4) return;
+    const dpr = window.devicePixelRatio || 1;
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+      cv.width = Math.round(w * dpr);
+      cv.height = Math.round(h * dpr);
+      cv.style.width = `${w}px`;
+      cv.style.height = `${h}px`;
+    }
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const { cols, basis, rows } = bubbleDataRef.current;
+    if (!cols.length || !rows.length) return;
+
+    /**
+     * x for an arbitrary ms timestamp.
+     *
+     * NOT `timeToCoordinate(t)`: that returns null for any time that is not
+     * exactly a bar, and bubble minutes almost never land on a 5-minute bar. So
+     * find the bar the minute falls in and use ITS coordinate. The desktop does
+     * the same and its comment is emphatic about not "simplifying" it back to
+     * arithmetic — bar spacing is not uniform across a session boundary.
+     */
+    const ts = chart.timeScale();
+    const barIndexAt = (t: number): number | null => {
+      if (t < rows[0].timestamp) return null;
+      let lo = 0;
+      let hi = rows.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (rows[mid].timestamp <= t) lo = mid;
+        else hi = mid - 1;
+      }
+      return lo;
+    };
+
+    /**
+     * Bucket the trail to the chart's BARS, not its raw minutes.
+     *
+     * The history is 1-minute granular. On a 5-minute chart that is five
+     * columns landing on one bar's x, and at these radii they overlap into a
+     * solid horizontal band per strike — the trail stops reading as a trail.
+     * The desktop card has the same problem and solves it with a bucket
+     * selector whose default is "Bar"; this does that, without the selector.
+     *
+     * Last column in a bar wins, so a bucket shows where the strike ENDED that
+     * bar — consistent with a candle close.
+     */
+    const byBar = new Map<string, { bar: number; strike: number; net: number }>();
+    for (const col of cols) {
+      const bar = barIndexAt(col.ts);
+      if (bar == null) continue;
+      for (const cell of col.cells) {
+        byBar.set(`${bar}|${cell.strike}`, { bar, strike: cell.strike, net: cell.net });
+      }
+    }
+    if (!byBar.size) return;
+
+    // Size by magnitude, on one scale across the whole trail so a bubble's size
+    // means the same thing at 09:31 as at 15:59.
+    let max = 0;
+    for (const b of byBar.values()) max = Math.max(max, Math.abs(b.net));
+    if (!max) return;
+
+    // Cap the radius at half the bar spacing so neighbouring buckets can touch
+    // but never merge — the band above is exactly what that prevents.
+    let spacing = 12;
+    if (rows.length > 1) {
+      const x0 = ts.timeToCoordinate(toChartTime(rows[rows.length - 2].timestamp));
+      const x1 = ts.timeToCoordinate(toChartTime(rows[rows.length - 1].timestamp));
+      if (x0 != null && x1 != null) spacing = Math.abs((x1 as number) - (x0 as number)) || 12;
+    }
+    const MIN_R = 1.4;
+    const MAX_R = Math.max(2.5, Math.min(7, spacing / 2 - 0.5));
+
+    const xCache = new Map<number, number | null>();
+    const xOfBar = (bar: number) => {
+      if (!xCache.has(bar)) {
+        const x = ts.timeToCoordinate(toChartTime(rows[bar].timestamp));
+        xCache.set(bar, x == null ? null : (x as number));
+      }
+      return xCache.get(bar) ?? null;
+    };
+
+    for (const b of byBar.values()) {
+      const x = xOfBar(b.bar);
+      if (x == null || x < -MAX_R || x > w + MAX_R) continue;
+      const y = priceToY(b.strike + basis);
+      if (y == null || y < -MAX_R || y > h + MAX_R) continue;
+      const mag = Math.abs(b.net);
+      if (!mag) continue;
+      const frac = mag / max;
+      // sqrt so AREA tracks magnitude — a linear radius makes the biggest
+      // strike look several times more dominant than it is.
+      const r = MIN_R + (MAX_R - MIN_R) * Math.sqrt(frac);
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      // Fade the weak ones too, so the eye finds the walls without reading sizes.
+      ctx.fillStyle = (b.net >= 0 ? rgba(M_COLOR.pos, 1) : rgba(M_COLOR.neg, 1)).replace(
+        /[\d.]+\)$/,
+        `${(0.22 + 0.5 * frac).toFixed(2)})`,
+      );
+      ctx.fill();
+    }
+  }, [priceToY]);
+
+  useEffect(() => {
+    bubbleDrawRef.current = drawBubbles;
+    drawBubbles();
+  }, [drawBubbles, bubbleCols, g.basis, sessionCandles]);
+
   // ── SPX level lines, converted to ES ───────────────────────────────────────
   const levels = useMemo(() => {
     if (!showLevels || g.basis == null) return [];
@@ -232,6 +548,11 @@ export default function MobileEsCandles() {
   const chg = last && first ? last.close - first.open : null;
   const chgPct = chg != null && first && first.open > 0 ? (chg / first.open) * 100 : null;
   const up = (chg ?? 0) >= 0;
+  // Badge on the Overlays button so the sheet's state is visible without
+  // opening it — the count is what's actually drawing, not what's toggled on,
+  // which is why the basis gate is part of it.
+  const overlayCount =
+    (showLevels && basisOk ? 1 : 0) + (panelOn ? 1 : 0) + (showBubbles && basisOk ? 1 : 0);
 
   return (
     <MobileShell
@@ -239,8 +560,11 @@ export default function MobileEsCandles() {
       fill
       right={<MStatusDot live={connected} label={connected ? "LIVE" : "…"} />}
       sticky={
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 7, minWidth: 0, flex: 1 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {/* Price gets its own line. Once "γ" became "Overlays" the single row
+              could no longer hold price + change + interval + button at 390px,
+              and the interval control started overlapping the change figure. */}
+          <div style={{ display: "flex", alignItems: "baseline", gap: 7, minWidth: 0 }}>
             <span style={{ fontSize: TYPE.micro, fontWeight: 800, letterSpacing: "0.1em", color: M_COLOR.faint }}>
               ES
             </span>
@@ -261,60 +585,153 @@ export default function MobileEsCandles() {
                 {Math.abs(chg ?? 0).toFixed(2)} ({Math.abs(chgPct).toFixed(2)}%)
               </span>
             )}
+            <span style={{ flex: 1 }} />
+            <ExpiryBadge expiry={g.expiry} isZeroDte={g.isZeroDte} />
           </div>
-          <div style={{ width: 118, flexShrink: 0 }}>
-            <MSegmented options={INTERVALS} value={interval} onChange={setInterval} accent={M_COLOR.blue} />
-          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ width: 130, flexShrink: 0 }}>
+              <MSegmented options={INTERVALS} value={interval} onChange={setInterval} accent={M_COLOR.blue} />
+            </div>
+            <span style={{ flex: 1 }} />
           <button
             type="button"
-            onClick={() => setShowLevels((v) => !v)}
-            aria-pressed={showLevels}
-            title="SPX gamma levels, converted to ES"
+            onClick={() => setOvlOpen(true)}
+            title="Overlays"
             style={{
+              ...noTapHighlight,
               flexShrink: 0,
               minHeight: 30,
               padding: "0 10px",
               borderRadius: RADIUS.sm,
-              border: `1px solid ${showLevels ? rgba(M_COLOR.orange, 0.5) : M_COLOR.border}`,
-              background: showLevels ? rgba(M_COLOR.orange, 0.16) : "rgba(255,255,255,0.04)",
-              color: showLevels ? M_COLOR.orange : M_COLOR.faint,
+              border: `1px solid ${overlayCount ? rgba(M_COLOR.cyan, 0.5) : M_COLOR.border}`,
+              background: overlayCount ? rgba(M_COLOR.cyan, 0.16) : "rgba(255,255,255,0.04)",
+              color: overlayCount ? M_COLOR.cyan : M_COLOR.faint,
               fontSize: TYPE.label,
               fontWeight: 800,
               cursor: "pointer",
-              WebkitTapHighlightColor: "transparent",
-              touchAction: "manipulation",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
             }}
           >
-            γ
+            Overlays
+            {overlayCount > 0 && (
+              <span
+                style={{
+                  ...MONO,
+                  fontSize: TYPE.micro - 2,
+                  fontWeight: 900,
+                  minWidth: 14,
+                  height: 14,
+                  borderRadius: 7,
+                  background: M_COLOR.cyan,
+                  color: "#04222b",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                {overlayCount}
+              </span>
+            )}
           </button>
+          </div>
         </div>
       }
     >
-      <div style={{ flex: 1, minHeight: 0, position: "relative", padding: "0 4px 4px" }}>
-        <div ref={hostRef} style={{ position: "absolute", inset: "0 4px 4px" }} />
-        {sessionCandles.length === 0 && (
-          <div style={{ position: "absolute", inset: 0, display: "flex" }}>
-            <MEmpty tall>{connected ? "Loading ES candles…" : "Connecting to the live feed…"}</MEmpty>
+      <div style={{ flex: 1, minHeight: 0, display: "flex", padding: "0 4px 4px" }}>
+        {/* Chart + the bubble layer, which shares the chart's exact box so a
+            strike's y here is a strike's y there. */}
+        <div style={{ position: "relative", flex: 1, minWidth: 0, height: "100%" }}>
+          <div ref={hostRef} style={{ position: "absolute", inset: 0 }} />
+          {showBubbles && basisOk && (
+            <canvas
+              ref={bubbleCanvasRef}
+              style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 2 }}
+            />
+          )}
+          {sessionCandles.length === 0 && (
+            <div style={{ position: "absolute", inset: 0, display: "flex" }}>
+              <MEmpty tall>{connected ? "Loading ES candles…" : "Connecting to the live feed…"}</MEmpty>
+            </div>
+          )}
+          {(showLevels || showBubbles || sidePanel !== "none") && !basisOk && sessionCandles.length > 0 && (
+            <div
+              style={{
+                position: "absolute",
+                left: 8,
+                bottom: 26,
+                fontSize: TYPE.micro,
+                color: M_COLOR.faint,
+                background: "rgba(5,8,13,0.72)",
+                padding: "2px 7px",
+                borderRadius: RADIUS.sm,
+                pointerEvents: "none",
+              }}
+            >
+              SPX overlays need a live ES/SPX pair
+            </div>
+          )}
+        </div>
+
+        {/* Right gutter. Same height as the chart box, so both panels can map a
+            price to the same y the candles use. */}
+        {panelOn && sidePanel === "rail" && (
+          <div style={{ width: GUTTER_W, flexShrink: 0, height: "100%", position: "relative" }}>
+            <EsGexRail
+              rows={railRows}
+              callWall={g.callWall}
+              putWall={g.putWall}
+              gexFlip={g.flip}
+              spot={g.spot || null}
+              basis={g.basis ?? 0}
+              priceToY={priceToY}
+              drawRef={railDrawRef}
+            />
           </div>
         )}
-        {showLevels && g.basis == null && sessionCandles.length > 0 && (
-          <div
-            style={{
-              position: "absolute",
-              left: 10,
-              bottom: 26,
-              fontSize: TYPE.micro,
-              color: M_COLOR.faint,
-              background: "rgba(5,8,13,0.72)",
-              padding: "2px 7px",
-              borderRadius: RADIUS.sm,
-              pointerEvents: "none",
-            }}
-          >
-            γ levels need a live ES/SPX pair
-          </div>
+        {panelOn && sidePanel === "chain" && (
+          <MobileChainRail
+            chain={g.chain}
+            spot={g.spot}
+            basis={g.basis ?? 0}
+            width={GUTTER_W}
+            priceToY={priceToY}
+            drawRef={chainDrawRef}
+          />
         )}
       </div>
+
+      <MSheet
+        open={ovlOpen}
+        title="Overlays"
+        subtitle={basisOk ? undefined : "SPX overlays are off — no live ES/SPX pair right now"}
+        onClose={() => setOvlOpen(false)}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <span style={{ fontSize: TYPE.micro, fontWeight: 800, letterSpacing: "0.1em", color: M_COLOR.faint }}>
+            SIDE PANEL
+          </span>
+          <MSegmented options={SIDE_PANELS} value={sidePanel} onChange={setSidePanel} />
+          <span style={{ fontSize: TYPE.micro, color: M_COLOR.faint, lineHeight: 1.4 }}>
+            One at a time — each costs {GUTTER_W}px of chart.
+          </span>
+        </div>
+
+        <OverlayToggle
+          label="Bubbles"
+          hint="Per-minute GEX trail for today, sized by magnitude."
+          on={showBubbles}
+          onToggle={() => setShowBubbles((v) => !v)}
+        />
+        <OverlayToggle
+          label="γ levels"
+          hint="Gamma flip and both walls, converted from SPX to ES."
+          on={showLevels}
+          onToggle={() => setShowLevels((v) => !v)}
+        />
+      </MSheet>
+
     </MobileShell>
   );
 }

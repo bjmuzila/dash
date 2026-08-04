@@ -37,10 +37,14 @@ interface GexChartProps {
    */
   trackMvcTouch?: boolean;
   /**
-   * Touch/phone mode. Suppresses the bottom-right "scroll=zoom · drag=pan ·
-   * dbl=recenter" hint, which is desktop copy: a phone has no scroll wheel and
-   * no reliable double-click, and at 390px that string runs most of the way
-   * across the plot. The pan/zoom behaviour itself is unchanged.
+   * Touch/phone mode. Suppresses two pieces of desktop-only chrome:
+   *   - the bottom-right "scroll=zoom · drag=pan · dbl=recenter" hint, which is
+   *     desktop copy (no scroll wheel, no reliable double-click) and at 390px
+   *     runs most of the way across the plot;
+   *   - the hover tooltip, which on iOS fires from the synthetic mouse-move a
+   *     tap generates — so it popped up under the user's thumb on any tap or
+   *     pan that ended on a bar, and stayed.
+   * The pan/zoom behaviour itself is unchanged.
    */
   compact?: boolean;
 }
@@ -1112,8 +1116,11 @@ export default function GexChart({
         );
       })()}
 
-      {/* Tooltip */}
-      {tooltip && (() => {
+      {/* Tooltip — hover only, so it is suppressed in `compact` (phone) mode.
+          iOS synthesises a mouse-move from a tap, so on a phone this did not
+          read as a hover readout at all: it appeared under your thumb on any
+          tap or pan that ended on a bar, and stayed there. */}
+      {tooltip && !compact && (() => {
         const r    = tooltip.row;
         // Shared helper (uses the chart's spotPrice, not the row's) — mirrors the bars.
         const tMode: CalcMode = dataMode === "vol-only" ? "vol" : "net";

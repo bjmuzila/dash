@@ -13,6 +13,7 @@ import { readFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { WebSocketServer } from "ws";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = path.join(ROOT, "app-vite", "dist");
@@ -252,6 +253,25 @@ const server = createServer(async (req, res) => {
   }
   if (p === "/api/chains") return json(res, ttChain(url.searchParams.get("expiration") || EXPIRIES[0]));
   if (p === "/api/snapshots/candles") return json(res, { rows: candles() });
+  if (p === "/api/snapshots/option-strike-gex-history") {
+    // Same shape the real route returns: { columns: [{ slotTs, cells, spot }] }.
+    const now = Date.now();
+    const strikes = [6100, 6120, 6140, 6150, 6160, 6180, 6200, 6050];
+    const columns = [];
+    for (let i = 150; i >= 0; i -= 1) {
+      const slotTs = now - i * 60_000;
+      columns.push({
+        slotTs,
+        spot: SPOT,
+        cells: strikes.map((strike, k) => ({
+          strike,
+          net: Math.sin(i / 20 + k) * 1.4e9 * (strike >= SPOT ? 1 : -1),
+          netVol: 0,
+        })),
+      });
+    }
+    return json(res, { columns });
+  }
   if (p === "/api/levels") return json(res, LEVELS);
   if (p === "/api/em-zones") return json(res, LEVELS);
   if (p === "/api/em/ticker-em-stats") return json(res, { recentAvg: 66.2, midAvg: 61.4, sampleSize: 12 });
@@ -295,5 +315,58 @@ const server = createServer(async (req, res) => {
   res.writeHead(404);
   res.end("not found");
 });
+
+/**
+ * A /ws/gex good enough to exercise the phone pages' live paths: honours the
+ * ?topics= scoping the shared socket now sends, and publishes an `aux` frame
+ * carrying esFut — without which `basis` stays null and every SPX-derived
+ * overlay correctly refuses to draw, which looks like a bug but isn't.
+ */
+const wss = new WebSocketServer({ server, path: "/ws/gex" });
+function parseTopics(url) {
+  const q = new URL(url || "/", "http://x").searchParams.get("topics");
+  if (!q) return null;
+  const set = new Set(q.split(",").map((x) => x.trim()).filter(Boolean));
+  return set.size ? set : null;
+}
+const wsMsg = (type, data) => JSON.stringify({ type, symbol: "$SPX", data, ts: Date.now() });
+function snapshot(topics) {
+  const snap = {
+    symbol: "$SPX", spot: SPOT, spotDisplay: SPOT, prevClose: PREV,
+    vix: 14.2, esFut: SPOT + 22, basis: 22,
+    expiry: EXPIRIES[0], expirations: EXPIRIES,
+    gexRows: CHAIN, totals: { netGex: 1.84e9 },
+    callWall: 6200, putWall: 6050, gexFlip: 6120, totalNetGex: 1.84e9,
+    esCandles: candles(), nqCandles: [], flow: { tape: [] },
+    updatedAt: Date.now(), status: { chartReady: true },
+  };
+  if (!topics) return snap;
+  const out = { ...snap };
+  if (!topics.has("gex")) { out.gexRows = undefined; out.totals = undefined; }
+  if (!topics.has("flow")) out.flow = undefined;
+  if (!topics.has("esCandles")) out.esCandles = undefined;
+  if (!topics.has("nqCandles")) out.nqCandles = undefined;
+  return out;
+}
+wss.on("connection", (ws, req) => {
+  ws.topics = parseTopics(req.url);
+  console.log("[ws] connect topics=", ws.topics ? [...ws.topics].sort().join(",") : "(all)");
+  ws.send(wsMsg("snapshot", snapshot(ws.topics)));
+});
+setInterval(() => {
+  const frames = [
+    ["gex", { gexRows: CHAIN, totals: { netGex: 1.84e9 }, callWall: 6200, putWall: 6050, gexFlip: 6120, totalNetGex: 1.84e9, expiry: EXPIRIES[0] }],
+    ["spot", { spot: SPOT, prevClose: PREV, basis: 22 }],
+    ["aux", { vix: 14.2, esFut: SPOT + 22, basis: 22, spotDisplay: SPOT }],
+    ["status", { chartReady: true, expirations: EXPIRIES, expiry: EXPIRIES[0] }],
+  ];
+  for (const c of wss.clients) {
+    if (c.readyState !== 1) continue;
+    for (const [t, d] of frames) {
+      if (c.topics && !c.topics.has(t)) continue;
+      c.send(wsMsg(t, d));
+    }
+  }
+}, 1000);
 
 server.listen(PORT, () => console.log(`mobile preview on http://localhost:${PORT}/app/m/gex`));

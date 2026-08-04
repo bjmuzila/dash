@@ -38,33 +38,19 @@ const FALLBACK_AFTER_MS = 6_000;
 const FALLBACK_POLL_MS = 8_000;
 
 /**
- * The expiry the user picked, remembered across mobile tabs.
+ * The phone build is 0DTE-only.
  *
- * Each phone page mounts its own copy of this hook, so without this, picking
- * 08/07 on the GEX chart and then tapping "Heat" would silently drop you back
- * to the front expiry — two views of the same book disagreeing about which
- * book. sessionStorage rather than localStorage on purpose: an expiry is a
- * within-session intent, and a stale one restored days later would be wrong
- * (and by then usually expired).
+ * Every mobile GEX surface shows today's SPX expiry and nothing else — there
+ * is no expiry picker. This replaced a chip row plus a sessionStorage
+ * remembered-selection: on a phone the expiry you want is essentially always
+ * 0DTE, and the picker cost a row of vertical space on the two most
+ * space-constrained pages in the app.
+ *
+ * `todayEt()` is the ET calendar date, not the device's — a trader in London
+ * must get New York's 0DTE.
  */
-const EXPIRY_KEY = "cb-mobile-expiry-v1";
-
-function readStoredExpiry(): string {
-  if (typeof window === "undefined") return "";
-  try {
-    return window.sessionStorage.getItem(EXPIRY_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function writeStoredExpiry(e: string) {
-  if (typeof window === "undefined") return;
-  try {
-    window.sessionStorage.setItem(EXPIRY_KEY, e);
-  } catch {
-    /* private mode — the choice just doesn't survive the tab switch */
-  }
+function todayEt(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
 }
 
 export type GexDataMode = "oi-vol" | "vol-only";
@@ -77,9 +63,14 @@ export type MobileGexState = {
   callWall: number | null;
   putWall: number | null;
   totalNetGex: number | null;
-  expirations: string[];
+  /** The expiry on screen. Always today's when the market lists one. */
   expiry: string;
-  setExpiry: (e: string) => void;
+  /**
+   * False when today has no listed expiry (weekend, holiday, or a symbol with
+   * no daily series) and the feed's front expiry is being shown instead — so a
+   * page can say "FRONT" rather than lying with a "0DTE" badge.
+   */
+  isZeroDte: boolean;
   /** Front ES future last, from the feed's `aux` frame. 0 when unknown. */
   esFut: number;
   /**
@@ -158,9 +149,9 @@ export function useMobileGex(dataMode: GexDataMode = "oi-vol"): MobileGexState {
     if (es > 0) setEsFut(es);
     if (Array.isArray(p.expirations)) setExpirations(p.expirations as string[]);
     if (typeof p.expiry === "string" && p.expiry) {
-      // Only adopt the server's expiry while the user hasn't chosen one, so a
-      // late snapshot replay can't yank the view back off their selection.
-      if (!wantExpiryRef.current) setExpiryState(p.expiry);
+      // The server's current expiry. Only shown when today isn't listed — the
+      // pin effect below overrides it with 0DTE whenever 0DTE exists.
+      setExpiryState((prev) => (prev && prev === todayEt() ? prev : p.expiry as string));
     }
     const ts = num(p.updatedAt);
     setUpdatedAt(ts > 0 ? ts : Date.now());
@@ -304,26 +295,29 @@ export function useMobileGex(dataMode: GexDataMode = "oi-vol"): MobileGexState {
     };
   }, [enabled, applyPayload]);
 
-  const setExpiry = useCallback((e: string) => {
-    wantExpiryRef.current = e;
-    setExpiryState(e);
-    writeStoredExpiry(e);
-    sendGex({ type: "SET_EXPIRY", expiry: e });
-  }, []);
-
-  // Re-apply the expiry chosen on another mobile tab. Read in an effect, never
-  // in a useState initializer: this route is server-rendered by Next before the
-  // SPA hydrates, and sessionStorage doesn't exist there.
+  /**
+   * Pin the feed to today's expiry as soon as the expirations list arrives.
+   *
+   * The server tracks the chosen expiry PER CONNECTION, so this re-asserts on
+   * every (re)connect too — including the reconnects the socket now performs
+   * when its topic scope changes. Without that, a re-scope would silently drop
+   * the view back to the feed's front expiry.
+   */
+  const pinnedRef = useRef("");
   useEffect(() => {
-    const saved = readStoredExpiry();
-    if (!saved) return;
-    wantExpiryRef.current = saved;
-    setExpiryState(saved);
-    sendGex({ type: "SET_EXPIRY", expiry: saved });
-  }, []);
+    if (!expirations.length) return;
+    const today = todayEt();
+    if (!expirations.includes(today)) return; // no 0DTE listed — keep the front
+    setExpiryState(today);
+    if (pinnedRef.current === today && connected) return;
+    pinnedRef.current = today;
+    sendGex({ type: "SET_EXPIRY", expiry: today });
+  }, [expirations, connected]);
 
   // findGEXFlip is a pure client computation; prefer it over the server value
-  // because it is derived from the exact rows on screen.
+  // because it is derived from the exact rows on screen. Still exposed even
+  // though the phone GEX CHART no longer draws a flip curve — the levels bar
+  // and the ES chart's γ lines both read it.
   const flip = useMemo(() => findGEXFlip(chain, spot) ?? serverFlip, [chain, spot, serverFlip]);
   const profile = useMemo(
     () => (chain.length ? computeGEXProfile(chain, spot, dataMode) : null),
@@ -348,9 +342,8 @@ export function useMobileGex(dataMode: GexDataMode = "oi-vol"): MobileGexState {
     callWall,
     putWall,
     totalNetGex,
-    expirations,
     expiry,
-    setExpiry,
+    isZeroDte: expiry === todayEt(),
     profile,
     connected,
     hasData,

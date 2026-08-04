@@ -37,6 +37,43 @@ export function sessionCookieOptions(maxAge: number) {
   };
 }
 
+/**
+ * Clear the session cookie in BOTH the host-only and parent-domain forms.
+ *
+ * A cookie can only be cleared by a Set-Cookie whose name+domain+path match how
+ * it was created — so a single clear built from the CURRENT config silently
+ * misses cookies written under a different SESSION_COOKIE_DOMAIN. That is not a
+ * hypothetical: the moment SESSION_COOKIE_DOMAIN is switched on in production,
+ * every already-signed-in user is holding a host-only cookie (e.g. for
+ * www.cbedge.net) that the new domain-scoped clear cannot touch. Both then ride
+ * every request under the SAME name, the server reads whichever the browser
+ * hands over first, and "log out" stops working for those users until they
+ * clear cookies by hand.
+ *
+ * So emit both. Clearing a cookie that does not exist is a no-op, which makes
+ * this safe to run unconditionally and safe to flip the env var behind.
+ *
+ * `headers.append` rather than `res.cookies.set` twice: ResponseCookies is a
+ * map keyed by name, so the second set would replace the first instead of
+ * producing a second Set-Cookie header.
+ */
+export function clearSessionCookie(res: { headers: Headers }): void {
+  const base = [
+    `${SESSION_COOKIE}=`,
+    "Path=/",
+    "Max-Age=0",
+    "HttpOnly",
+    "SameSite=Lax",
+    ...(process.env.NODE_ENV === "production" ? ["Secure"] : []),
+  ];
+  // Host-only (how the cookie is written when SESSION_COOKIE_DOMAIN is unset).
+  res.headers.append("Set-Cookie", base.join("; "));
+  // Parent-domain, when configured.
+  if (SESSION_COOKIE_DOMAIN) {
+    res.headers.append("Set-Cookie", [...base, `Domain=${SESSION_COOKIE_DOMAIN}`].join("; "));
+  }
+}
+
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }

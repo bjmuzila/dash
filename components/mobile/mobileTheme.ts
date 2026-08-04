@@ -48,6 +48,13 @@ export const M_COLOR = {
    *  desktop chain's metricBg ramp so the same strike reads the same color. */
   pos: "#29b6f6",
   neg: "#ff4757",
+  /**
+   * Core Bullseye gold. Same literal Multi Greek uses for its CB marker
+   * (MultGreekClient renders "#ffd600" inline in three places). Tokenised here
+   * so the phone build has one name for it; CW and PW already map onto
+   * pos/neg above, which are the same values Multi Greek uses for those two.
+   */
+  cb: "#ffd600",
 } as const;
 
 /** Tap-target geometry. */

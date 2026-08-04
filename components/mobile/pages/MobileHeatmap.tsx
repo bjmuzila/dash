@@ -5,8 +5,9 @@ import { metricBg } from "@/lib/calculations/optionChain";
 import { netGEXOf, type ChainRow } from "@/lib/calculations/calculations";
 import { useMobileGex } from "@/hooks/useMobileGex";
 import LevelsBar from "../LevelsBar";
+import ExpiryBadge from "../ExpiryBadge";
+import { deriveMobileLevels } from "../gexLevels";
 import MobileShell from "../MobileShell";
-import { expiryChips } from "../mobileNav";
 import { MChipRow, MEmpty, MRow, MSheet, MStatusDot } from "../MobileUI";
 import {
   M_COLOR,
@@ -111,6 +112,60 @@ function ValueCell({ value, bg }: { value: number; bg: string }) {
   );
 }
 
+/**
+ * The CB / CW / PW readout, mirroring Multi Greek's header pills.
+ *
+ * Same three levels, same colors, same de-duplication rule — see gexLevels.
+ * Rendered as pills rather than as a fourth/fifth column because at 390px the
+ * grid has room for three data columns and no more, and these are levels
+ * (one strike each) rather than per-strike values.
+ */
+function WallPills({
+  cb,
+  callWall,
+  putWall,
+}: {
+  cb: number | null;
+  callWall: number | null;
+  putWall: number | null;
+}) {
+  const items = [
+    { t: "CB", c: M_COLOR.cb, s: cb, title: "Core Bullseye — highest |GEX| strike" },
+    { t: "CW", c: M_COLOR.pos, s: callWall, title: "Call Wall — highest +GEX strike" },
+    { t: "PW", c: M_COLOR.neg, s: putWall, title: "Put Wall — most −GEX strike" },
+  ].filter((x) => x.s != null);
+  if (!items.length) return null;
+  return (
+    <div style={{ display: "flex", gap: 6, minWidth: 0 }}>
+      {items.map((x) => (
+        <span
+          key={x.t}
+          title={x.title}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: "inline-flex",
+            alignItems: "baseline",
+            justifyContent: "center",
+            gap: 5,
+            padding: "5px 6px",
+            borderRadius: RADIUS.sm,
+            background: rgba(x.c, 0.12),
+            border: `1px solid ${rgba(x.c, 0.4)}`,
+          }}
+        >
+          <span style={{ fontSize: TYPE.micro - 2, fontWeight: 900, color: x.c, letterSpacing: "0.05em" }}>
+            {x.t}
+          </span>
+          <span style={{ ...MONO, fontSize: TYPE.label + 1, fontWeight: 800, whiteSpace: "nowrap" }}>
+            {fmtStrike(x.s as number)}
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export default function MobileHeatmap() {
   const g = useMobileGex("oi-vol");
   const [win, setWin] = useState("20");
@@ -118,7 +173,9 @@ export default function MobileHeatmap() {
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const centeredRef = useRef(false);
 
-  const chips = useMemo(() => expiryChips(g.expirations), [g.expirations]);
+  // CB / CW / PW together, from one chain snapshot, so CB can never collide
+  // with a wall — see gexLevels for why the feed's own walls aren't used.
+  const levels = useMemo(() => deriveMobileLevels(g.chain, g.spot), [g.chain, g.spot]);
 
   const atm = useMemo(() => {
     if (!g.chain.length || g.spot <= 0) return 0;
@@ -179,7 +236,6 @@ export default function MobileHeatmap() {
       right={<MStatusDot live={g.source === "live" && g.connected} label={g.source === "rest" ? "DELAYED" : undefined} />}
       sticky={
         <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-          {chips.length > 0 && <MChipRow items={chips} activeId={g.expiry} onSelect={g.setExpiry} />}
           <LevelsBar
             spot={g.spot}
             prevClose={g.prevClose}
@@ -187,7 +243,13 @@ export default function MobileHeatmap() {
             callWall={g.callWall}
             putWall={g.putWall}
           />
-          <MChipRow items={WINDOWS} activeId={win} onSelect={setWin} />
+          <WallPills cb={levels.cb} callWall={levels.callWall} putWall={levels.putWall} />
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <MChipRow items={WINDOWS} activeId={win} onSelect={setWin} />
+            </div>
+            <ExpiryBadge expiry={g.expiry} isZeroDte={g.isZeroDte} />
+          </div>
         </div>
       }
     >
@@ -226,10 +288,19 @@ export default function MobileHeatmap() {
         ) : (
           rows.map((r) => {
             const isAtm = r.strike === atm;
-            const isCallWall = g.callWall != null && r.strike === g.callWall;
-            const isPutWall = g.putWall != null && r.strike === g.putWall;
-            const isFlip = g.flip != null && Math.abs(r.strike - g.flip) < 0.51;
-            const marker = isCallWall ? M_COLOR.pos : isPutWall ? M_COLOR.neg : isFlip ? M_COLOR.orange : null;
+            // Marker precedence matches Multi Greek's: CB wins, then the two
+            // walls. They cannot collide anyway (deriveMobileLevels is
+            // cb-aware), but the order documents the intent.
+            const markerTag =
+              levels.cb === r.strike ? "CB"
+              : levels.callWall === r.strike ? "CW"
+              : levels.putWall === r.strike ? "PW"
+              : null;
+            const marker =
+              markerTag === "CB" ? M_COLOR.cb
+              : markerTag === "CW" ? M_COLOR.pos
+              : markerTag === "PW" ? M_COLOR.neg
+              : null;
             return (
               <button
                 key={r.strike}
@@ -279,6 +350,22 @@ export default function MobileHeatmap() {
                   >
                     {fmtStrike(r.strike)}
                   </span>
+                  {markerTag && (
+                    <span
+                      style={{
+                        fontSize: TYPE.micro - 3,
+                        fontWeight: 900,
+                        letterSpacing: "0.02em",
+                        color: "#04121a",
+                        background: marker ?? "transparent",
+                        borderRadius: 2,
+                        padding: "0 2px",
+                        lineHeight: 1.3,
+                      }}
+                    >
+                      {markerTag}
+                    </span>
+                  )}
                 </div>
                 <ValueCell value={r.net} bg={metricBg(r.net, scales.net.max, 1.4, scales.net.top)} />
                 <ValueCell value={r.vol} bg={metricBg(r.vol, scales.vol.max, 1.4, scales.vol.top)} />

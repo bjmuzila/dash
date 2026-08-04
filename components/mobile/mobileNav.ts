@@ -132,21 +132,3 @@ export function setDesktopForced(on: boolean): void {
     /* private mode — the redirect just stays on for this load */
   }
 }
-
-/**
- * Expiry chips for the GEX pages. Shared so the chart and the heatmap label the
- * same date the same way — "0DTE" for today, MM/DD otherwise.
- */
-export function expiryChips(expirations: string[], max = 14): { id: string; label: string }[] {
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-  return expirations.slice(0, max).map((value) => {
-    const dt = new Date(value + "T12:00:00");
-    const label =
-      value === today
-        ? "0DTE"
-        : Number.isNaN(dt.getTime())
-          ? value
-          : `${String(dt.getMonth() + 1).padStart(2, "0")}/${String(dt.getDate()).padStart(2, "0")}`;
-    return { id: value, label };
-  });
-}

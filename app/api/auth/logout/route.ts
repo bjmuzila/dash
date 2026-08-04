@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { SESSION_COOKIE, destroySessionByToken, sessionCookieOptions } from "@/lib/auth/session";
+import { SESSION_COOKIE, clearSessionCookie, destroySessionByToken } from "@/lib/auth/session";
 
 // Replaces the client's direct supabase.auth.signOut() call (AuthProvider no
 // longer holds a Supabase client). Destroys the DB session row and clears the
@@ -17,6 +17,6 @@ export async function POST(req: NextRequest) {
     }
   }
   const res = NextResponse.json({ ok: true });
-  res.cookies.set(SESSION_COOKIE, "", sessionCookieOptions(0));
+  clearSessionCookie(res);
   return res;
 }
