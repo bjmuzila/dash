@@ -80,7 +80,7 @@ const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
 const { startWallsRecorder, runSlot: runWallsSlot, getWalls } = require('./walls-recorder');
 const { startWallsReach, runReachBackfill, runCalibration, getReach, attachRank,
-  getWatch, runWatchAlerts, startWallsWatch } = require('./walls-reach');
+  getWatch, runWatchAlerts, getAlerts, startWallsWatch } = require('./walls-reach');
 const { startGexChangeTopRecorder, runOnce: runGexChangeTop, getHistory: getGexChangeTopHistory, getPickHistory: getGexChangeTopPickHistory, getResults: getGexChangeTopResults, runResults: runGexChangeTopResults } = require('./gex-change-top-recorder');
 const {
   startSignalsEngine, getRecentSignals: getSignalRows, runOnce: runSignalsOnce,
@@ -2471,6 +2471,23 @@ async function main() {
         })();
         return;
       }
+      // Alert feed: GET /proxy/walls-alerts[?date=&limit=]
+      //   → { alerts:[...] } newest first. Written by the 5m watch sweep when a
+      //     level comes inside 0.25x ATR while closing. Rendered on the Walls
+      //     tab — there is deliberately no email/push channel for these.
+      if (pathname === '/proxy/walls-alerts' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const out = await getAlerts({
+              date: u.searchParams.get('date') || undefined,
+              limit: Number(u.searchParams.get('limit')) || undefined,
+            });
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // Manual alert sweep: POST /proxy/walls-watch-run { force?: true }
       // force bypasses the RTH gate so the wiring can be tested off-hours.
       if (pathname === '/proxy/walls-watch-run' && req.method === 'POST') {
@@ -3374,8 +3391,8 @@ async function main() {
     // and decorates /proxy/walls.
     startWallsReach();
     // Proximity alerts: every 5m during RTH, anything that just came inside
-    // 0.25x ATR of a level WHILE CLOSING pages the owner once (email + push,
-    // rate-limited per level by state/alerts.js).
+    // 0.25x ATR of a level WHILE CLOSING is written to wall_alerts and shows up
+    // in the Walls tab's alert feed. No email, no push — on-page only.
     startWallsWatch();
     // Hourly "very strong" GEX-change recorder: at the top of each RTH hour,
     // scores the strike_growth universe (60m window), keeps the top 5 ★ Very

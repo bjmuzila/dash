@@ -54,7 +54,6 @@
  * Consumed by: attachRank() decorating GET /proxy/walls
  */
 
-const { sendAlert } = require('./state/alerts');
 const { useTheta } = require('./config/data-source');
 const dailyAdapter = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
 
@@ -227,6 +226,30 @@ async function ensureSchema() {
         PRIMARY KEY (as_of, scope, symbol, bucket)
       );
       CREATE INDEX IF NOT EXISTS wall_cal_lookup ON wall_calibration (as_of DESC, scope, symbol);
+
+      -- One row the moment a level comes inside ALERT_ATR while price is
+      -- closing on it. This is the FEED the Walls tab renders — deliberately
+      -- not email/push: an alert you have to leave the page to read is an
+      -- alert you act on late. UNIQUE on the level means the entry fires once
+      -- per session and survives a restart (the old in-memory set did not).
+      CREATE TABLE IF NOT EXISTS wall_alerts (
+        id            BIGSERIAL PRIMARY KEY,
+        date          DATE NOT NULL,
+        ts            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        symbol        TEXT NOT NULL,
+        level_type    TEXT NOT NULL,
+        strike        DOUBLE PRECISION NOT NULL,
+        spot          DOUBLE PRECISION,
+        dist_pts      DOUBLE PRECISION,
+        dist_atr      DOUBLE PRECISION,
+        bucket        TEXT,
+        side          TEXT,
+        attempts      INTEGER,
+        last_reaction TEXT,
+        level_gex     DOUBLE PRECISION,
+        UNIQUE (date, symbol, level_type, strike)
+      );
+      CREATE INDEX IF NOT EXISTS wall_alerts_day ON wall_alerts (date, ts DESC);
     `);
     _schemaReady = true;
     return true;
@@ -996,22 +1019,19 @@ async function getWatch({ date, maxAtr = IN_PLAY_ATR } = {}) {
 // ── Alerting ────────────────────────────────────────────────────────────────
 
 let _watchTimer = null;
-/** Levels already alerted this session — key -> true. Cleared on date change. */
-let _alerted = new Map();
-let _alertDay = null;
 
 /**
- * Poll the watchlist and alert on levels that just came into range.
+ * Poll the watchlist and record levels that just came into range.
  *
- * Fires only on the TRANSITION into ALERT_ATR, not every poll, and only when
- * price is closing — a level drifting into range because the wall rolled toward
- * spot is not the same event. sendAlert() is additionally rate-limited 15m per
- * key, so a level oscillating on the boundary cannot spam.
+ * Writes to wall_alerts, which the Walls tab polls — no email, no push. Fires
+ * only on the TRANSITION into ALERT_ATR, and only when price is CLOSING: a
+ * level that drifted into range because the wall rolled toward spot is not the
+ * same event and is not worth an alert. De-duped by the table's UNIQUE, so a
+ * level oscillating on the boundary logs once and a restart cannot re-fire it.
  */
 async function runWatchAlerts({ force = false } = {}) {
   const now = new Date();
   const day = etDateStr(now);
-  if (_alertDay !== day) { _alerted = new Map(); _alertDay = day; }
   if (!force) {
     const { weekday } = etParts(now);
     if (weekday === 'Sat' || weekday === 'Sun') return { skipped: 'weekend' };
@@ -1023,37 +1043,54 @@ async function runWatchAlerts({ force = false } = {}) {
   if (!w.ok) return { skipped: w.error };
   // Alerting off a frozen feed pages about levels price left ages ago.
   if (w.stale) {
-    console.warn(`[watch] scanner stale by ${w.stale_mins}m — not alerting`);
+    console.warn(`[wall-watch] scanner stale by ${w.stale_mins}m — not alerting`);
     return { skipped: 'stale feed', stale_mins: w.stale_mins };
   }
 
+  const p = getPool();
   let sent = 0;
   for (const l of w.levels) {
-    const key = `wall:${day}:${l.symbol}:${l.level_type}:${l.strike}`;
-    if (_alerted.has(key)) continue;
     if (l.closing === false) continue; // drifting away, or the wall moved to us
-    _alerted.set(key, true);
-    const label = l.level_type === 'cb' ? 'CORE' : l.level_type === 'put_wall' ? 'Put wall' : 'Call wall';
-    const hist = l.attempts
-      ? ` Tested ${l.attempts}x today${l.last_reaction ? `, last ${l.last_reaction}` : ''}.`
-      : '';
-    await sendAlert({ // eslint-disable-line no-await-in-loop
-      key,
-      subject: `${l.symbol} ${label} ${l.strike} — ${l.dist_atr.toFixed(2)}x ATR away`,
-      message: `${l.symbol} is ${l.dist_pts} pts (${l.dist_atr.toFixed(2)}x ATR) from its ${label.toLowerCase()} at ${l.strike}. `
-        + `Spot ${l.spot}. Bucket: ${l.bucket}.${hist}\n\n`
-        + `Distance only — this is not a call on whether it holds.`,
-    }).catch(() => {});
-    sent++;
+    try {
+      const r = await p.query( // eslint-disable-line no-await-in-loop
+        `INSERT INTO wall_alerts
+           (date, ts, symbol, level_type, strike, spot, dist_pts, dist_atr,
+            bucket, side, attempts, last_reaction, level_gex)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         ON CONFLICT (date, symbol, level_type, strike) DO NOTHING
+         RETURNING id`,
+        [day, now, l.symbol, l.level_type, l.strike, l.spot, l.dist_pts, l.dist_atr,
+          l.bucket, l.side, l.attempts, l.last_reaction, l.level_gex],
+      );
+      if (r.rowCount) sent++;
+    } catch (e) {
+      console.warn('[wall-watch] alert write', l.symbol, e.message);
+    }
   }
+  if (sent) console.log(`[wall-watch] ${sent} new alert${sent === 1 ? '' : 's'}`);
   return { ok: true, checked: w.levels.length, sent };
 }
 
+/** The alert feed for a session, newest first. */
+async function getAlerts({ date, limit = 120 } = {}) {
+  const p = getPool();
+  if (!p || !(await ensureSchema())) return { ok: false, error: 'no DB' };
+  const day = date || etDateStr();
+  const { rows } = await p.query(
+    `SELECT ts, symbol, level_type, strike, spot, dist_pts, dist_atr,
+            bucket, side, attempts, last_reaction, level_gex
+       FROM wall_alerts WHERE date = $1
+      ORDER BY ts DESC LIMIT $2`,
+    [day, Math.min(Number(limit) || 120, 500)],
+  );
+  return { ok: true, date: day, alerts: rows };
+}
+
 function startWallsWatch() {
-  const tick = () => { void runWatchAlerts().catch((e) => console.warn('[watch] tick:', e.message)); };
+  const tick = () => { void runWatchAlerts().catch((e) => console.warn('[wall-watch] tick:', e.message)); };
   _watchTimer = setInterval(tick, 5 * 60_000);
   if (_watchTimer.unref) _watchTimer.unref();
-  console.log(`[watch] wall proximity alerts armed — fires inside ${ALERT_ATR}x ATR while closing`);
+  console.log(`[wall-watch] proximity alerts armed — fires inside ${ALERT_ATR}x ATR while closing`);
 }
 
 /**
@@ -1158,7 +1195,7 @@ function startWallsReach() {
 
 module.exports = {
   startWallsReach, runReachBackfill, runCalibration, getReach, attachRank,
-  getWatch, runWatchAlerts, startWallsWatch, IN_PLAY_ATR, ALERT_ATR,
+  getWatch, runWatchAlerts, getAlerts, startWallsWatch, IN_PLAY_ATR, ALERT_ATR,
   ensureSchema, getPool,
   // exported for tests / manual poking
   BUCKETS, BUCKET_KEYS, bucketFor, buildSessionRows, rebuildAtr, insertBatch,

@@ -1625,6 +1625,9 @@ const WALL_COL_H = 900;
 const RANKED_LIST_H = 320;
 const LEVEL_LOG_H = 560;
 const WATCH_LIST_H = 300;
+const ALERT_FEED_H = 260;
+/** Mirrors ALERT_ATR in walls-reach.js — display only. */
+const ALERT_ATR_UI = 0.25;
 const LEVEL_LABEL: Record<WallLevel, string> = { call_wall: "Call Wall", put_wall: "Put Wall", cb: "CORE" };
 const LEVEL_COLOR: Record<WallLevel, string> = { call_wall: AMBER, put_wall: GREEN, cb: HOME_THEME.lightBlue };
 
@@ -2094,6 +2097,109 @@ function RankedLevels({ rank, sel, onPick }: { rank: WallRank | null; sel: strin
   );
 }
 
+type WallAlert = {
+  ts: string; symbol: string; level_type: WallLevel; strike: number; spot: number | null;
+  dist_pts: number | null; dist_atr: number | null; bucket: string | null;
+  side: "above" | "below" | null; attempts: number | null;
+  last_reaction: WallReaction | null; level_gex: number | null;
+};
+
+/**
+ * ALERTS — levels that came inside 0.25x ATR while price was closing on them.
+ *
+ * On-page only, by design: an alert you have to leave the page to read is an
+ * alert you act on late. Written server-side by the 5m watch sweep, one row per
+ * level per session, so this feed is the same set whether you were watching or
+ * not — reload and the morning's alerts are all still here.
+ */
+function WallAlertFeed({ date, onPick, sel }: { date: string; onPick: (s: string) => void; sel: string | null }) {
+  const [rows, setRows] = useState<WallAlert[] | null>(null);
+  const seenRef = useRef<Set<string> | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch(`/proxy/walls-alerts?date=${encodeURIComponent(date)}`, { cache: "no-store" });
+      const j = await r.json();
+      const list: WallAlert[] = j?.ok ? (j.alerts ?? []) : [];
+      // First load establishes the baseline — everything already there is old
+      // news. Only rows that arrive while you are watching get the NEW flag.
+      if (seenRef.current == null) seenRef.current = new Set(list.map((a) => `${a.symbol}|${a.level_type}|${a.strike}`));
+      setRows(list);
+    } catch { setRows([]); }
+  }, [date]);
+
+  useEffect(() => {
+    seenRef.current = null;
+    void load();
+    const id = setInterval(() => { void load(); }, 30_000);
+    return () => clearInterval(id);
+  }, [load]);
+
+  const fresh = (a: WallAlert) => seenRef.current != null && !seenRef.current.has(`${a.symbol}|${a.level_type}|${a.strike}`);
+  const newCount = (rows ?? []).filter(fresh).length;
+
+  return (
+    <div style={{ ...CARD, overflow: "hidden", flexShrink: 0 }}>
+      <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 10, alignItems: "center" }}>
+        <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: AMBER }}>
+          Alerts
+        </span>
+        {newCount ? (
+          <span style={{ ...wallBadgeStyle(AMBER), fontSize: 12, padding: "1px 8px" }}>{newCount} new</span>
+        ) : null}
+        <span style={{ marginLeft: "auto", fontSize: 13, opacity: 0.45 }}>
+          inside {ALERT_ATR_UI}× ATR &amp; closing
+        </span>
+      </div>
+
+      {rows != null && !rows.length ? (
+        <div style={{ padding: "22px 18px", textAlign: "center", opacity: 0.45, fontSize: 14 }}>
+          Nothing has come into range today.
+        </div>
+      ) : (
+        <div className="wall-scroll" style={{ maxHeight: ALERT_FEED_H, overflowY: "auto" }}>
+          {(rows ?? []).map((a) => {
+            const isNew = fresh(a);
+            return (
+              <div
+                key={`${a.symbol}-${a.level_type}-${a.strike}-${a.ts}`}
+                onClick={() => onPick(a.symbol)}
+                style={{
+                  display: "grid", gridTemplateColumns: "52px 1fr auto", gap: 10, alignItems: "center",
+                  padding: "9px 18px", cursor: "pointer",
+                  borderBottom: `1px solid rgba(255,255,255,0.05)`,
+                  borderLeft: isNew ? `2px solid ${AMBER}` : "2px solid transparent",
+                  background: a.symbol === sel ? rgba(C.cyan, 0.08) : isNew ? rgba(AMBER, 0.05) : undefined,
+                }}
+              >
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, opacity: 0.6 }}>
+                  {new Date(a.ts).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/New_York" })}
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: "flex", gap: 7, alignItems: "center", flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 15, fontWeight: 800 }}>{a.symbol}</span>
+                    <span style={{ ...wallBadgeStyle(LEVEL_COLOR[a.level_type]), fontSize: 12, padding: "1px 7px" }}>
+                      {LEVEL_LABEL[a.level_type]} {wallStrike(a.strike)}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, opacity: 0.55, marginTop: 3, fontFamily: "var(--font-mono)" }}>
+                    {wallStrike(a.dist_pts)} pts {a.side} · spot {wallNum(a.spot)}
+                    {a.attempts ? ` · tested ${a.attempts}×` : ""}
+                    {a.last_reaction ? ` · last ${REACTION_LABEL[a.last_reaction].toLowerCase()}` : ""}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 16, fontWeight: 800, color: AMBER }}>
+                  {atrX(a.dist_atr)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 type WatchLevel = {
   symbol: string; level_type: WallLevel; strike: number; spot: number;
   dist_pts: number; dist_atr: number; bucket: string;
@@ -2502,6 +2608,7 @@ function WallsView() {
             contents, and the two fought over the same drag. The column is now a
             plain stack; each card owns its own scroll. */}
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <WallAlertFeed date={date} sel={sel} onPick={setSel} />
           <WallWatchCard date={date} sel={sel} onPick={setSel} />
           <RankedLevels rank={rank} sel={sel} onPick={setSel} />
 
