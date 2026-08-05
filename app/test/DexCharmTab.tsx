@@ -101,6 +101,23 @@ function nearestTimeIdx(frac: number): number {
   return Math.max(0, Math.min(N_POINTS - 1, Math.round(frac * (N_POINTS - 1))));
 }
 
+/** Same as nowSessionFrac but for an arbitrary Date, unclamped — negative
+ * before the open, >1 after the close, so callers can detect a day rollover. */
+function sessionFracForDate(d: Date): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const minutesNow = get("hour") * 60 + get("minute") + get("second") / 60;
+  const openMin = 9 * 60 + 30;
+  const sessionMin = 6.5 * 60;
+  return (minutesNow - openMin) / sessionMin;
+}
+
 // ── live DEX (measured section) ─────────────────────────────────────────────
 type LiveChainRow = {
   strike: number;
@@ -125,13 +142,27 @@ type LiveGexResponse = {
   expiration: string | null;
   totals: LiveTotals;
   updatedAt: string | null;
+  callWall: number | null;
+  putWall: number | null;
+  gexFlip: number | null;
   error?: string;
 };
+
+/** One spot-price sample, at the session fraction it was observed. */
+type SpotSample = { frac: number; spot: number };
+
+const MAX_SPOT_HISTORY = 900; // ~7.5 hours at one sample/30s — comfortably covers a session
 
 function useLiveGex() {
   const [data, setData] = useState<LiveGexResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  // Spot-over-time history, built client-side from each poll — there is no
+  // server-side intraday time series behind this endpoint, only the current
+  // snapshot. So this line only covers however long THIS TAB has been open;
+  // reloading the page starts it over. Reset automatically on a day rollover
+  // (session fraction jumping backward) so it never draws across two days.
+  const [history, setHistory] = useState<SpotSample[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -141,6 +172,15 @@ function useLiveGex() {
       const json = (await res.json()) as LiveGexResponse;
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setData(json);
+      if (json.spotPrice > 0) {
+        const frac = sessionFracForDate(new Date());
+        setHistory((prev) => {
+          const rolledOver = prev.length > 0 && frac < prev[prev.length - 1].frac - 0.5;
+          const base = rolledOver ? [] : prev;
+          const next = [...base, { frac, spot: json.spotPrice }];
+          return next.length > MAX_SPOT_HISTORY ? next.slice(next.length - MAX_SPOT_HISTORY) : next;
+        });
+      }
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -154,7 +194,7 @@ function useLiveGex() {
     return () => clearInterval(id);
   }, [load]);
 
-  return { data, loading, err, reload: load };
+  return { data, loading, err, reload: load, history };
 }
 
 function fmtDex(v: number): string {
@@ -199,6 +239,130 @@ function Tile({ label, value, sub, tone }: { label: string; value: string; sub: 
         {value}
       </div>
       <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.55, marginTop: 2 }}>{sub}</div>
+    </div>
+  );
+}
+
+// ── live SPX session chart (spot price over time) ───────────────────────────
+function SpxSessionChart({
+  history, callWall, putWall, gexFlip,
+}: {
+  history: SpotSample[]; callWall: number | null; putWall: number | null; gexFlip: number | null;
+}) {
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+
+  const pts = useMemo(() => history.filter((s) => s.frac >= -0.02 && s.frac <= 1.02), [history]);
+
+  if (pts.length < 2) {
+    return (
+      <div style={{ fontSize: 13, color: HOME_THEME.muted, opacity: 0.6, padding: "24px 0" }}>
+        Building today's spot line from live polls — check back in a minute or two. This only covers time since
+        this tab has been open; there's no server-side intraday history behind this endpoint.
+      </div>
+    );
+  }
+
+  const prices = pts.map((p) => p.spot);
+  const refLevels = [callWall, putWall, gexFlip].filter((v): v is number => v != null && v > 0);
+  const yMin = Math.min(...prices, ...refLevels) - 2;
+  const yMax = Math.max(...prices, ...refLevels) + 2;
+  const ySpan = Math.max(1, yMax - yMin);
+  const yS = (v: number) => MARGIN.top + (1 - (v - yMin) / ySpan) * PLOT_H;
+  const xS = (f: number) => MARGIN.left + Math.max(0, Math.min(1, f)) * PLOT_W;
+
+  const path = pts.map((p, i) => `${i === 0 ? "M" : "L"} ${xS(p.frac).toFixed(2)} ${yS(p.spot).toFixed(2)}`).join(" ");
+
+  const xTicks = [
+    { f: 0, label: "9:30 AM", anchor: "start" as const },
+    { f: 1.5 / 6.5, label: "11:00 AM", anchor: "middle" as const },
+    { f: 3 / 6.5, label: "12:30 PM", anchor: "middle" as const },
+    { f: 4.5 / 6.5, label: "2:00 PM", anchor: "middle" as const },
+    { f: 1, label: "4:00 PM", anchor: "end" as const },
+  ];
+
+  const handleMove = (e: React.MouseEvent<SVGRectElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mx = ((e.clientX - rect.left) / rect.width) * W;
+    const frac = (mx - MARGIN.left) / PLOT_W;
+    // Nearest actual sample to the cursor (samples aren't evenly spaced).
+    let best = 0, bestD = Infinity;
+    pts.forEach((p, i) => {
+      const d = Math.abs(p.frac - frac);
+      if (d < bestD) { bestD = d; best = i; }
+    });
+    setHoverIdx(best);
+  };
+
+  const hoverPt = hoverIdx != null ? pts[hoverIdx] : null;
+
+  return (
+    <div style={{ position: "relative" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ display: "block", width: "100%", height: "auto" }}>
+        {[yMin, (yMin + yMax) / 2, yMax].map((v, i) => (
+          <g key={i}>
+            <line x1={MARGIN.left} x2={W - MARGIN.right} y1={yS(v)} y2={yS(v)} stroke={HOME_THEME.border} strokeOpacity={0.4} />
+            <text x={MARGIN.left - 8} y={yS(v) + 4} textAnchor="end" fontSize={11} fill={HOME_THEME.muted} opacity={0.6}>
+              {v.toFixed(0)}
+            </text>
+          </g>
+        ))}
+        {xTicks.map((t) => (
+          <text key={t.label} x={xS(t.f)} y={H - MARGIN.bottom + 20} textAnchor={t.anchor} fontSize={11} fill={HOME_THEME.muted} opacity={0.6}>
+            {t.label}
+          </text>
+        ))}
+
+        {callWall != null && callWall > 0 && (
+          <>
+            <line x1={MARGIN.left} x2={W - MARGIN.right} y1={yS(callWall)} y2={yS(callWall)} stroke={HOME_THEME.orange} strokeWidth={1.5} strokeDasharray="6 4" strokeOpacity={0.8} />
+            <text x={W - MARGIN.right} y={yS(callWall) - 4} textAnchor="end" fontSize={11} fontWeight={800} fill={HOME_THEME.orange}>Call wall {callWall}</text>
+          </>
+        )}
+        {putWall != null && putWall > 0 && (
+          <>
+            <line x1={MARGIN.left} x2={W - MARGIN.right} y1={yS(putWall)} y2={yS(putWall)} stroke={HOME_THEME.red} strokeWidth={1.5} strokeDasharray="6 4" strokeOpacity={0.8} />
+            <text x={W - MARGIN.right} y={yS(putWall) - 4} textAnchor="end" fontSize={11} fontWeight={800} fill={HOME_THEME.red}>Put wall {putWall}</text>
+          </>
+        )}
+        {gexFlip != null && gexFlip > 0 && (
+          <>
+            <line x1={MARGIN.left} x2={W - MARGIN.right} y1={yS(gexFlip)} y2={yS(gexFlip)} stroke={LIGHT_BLUE} strokeWidth={1.5} strokeDasharray="2 4" strokeOpacity={0.7} />
+            <text x={MARGIN.left} y={yS(gexFlip) - 4} textAnchor="start" fontSize={11} fontWeight={800} fill={LIGHT_BLUE}>Gamma flip {gexFlip.toFixed(0)}</text>
+          </>
+        )}
+
+        <path d={path} fill="none" stroke={HOME_THEME.text} strokeWidth={2} />
+
+        {hoverPt && (
+          <>
+            <line x1={xS(hoverPt.frac)} x2={xS(hoverPt.frac)} y1={MARGIN.top} y2={H - MARGIN.bottom} stroke={HOME_THEME.muted} strokeOpacity={0.4} strokeDasharray="3 3" />
+            <circle cx={xS(hoverPt.frac)} cy={yS(hoverPt.spot)} r={4} fill={HOME_THEME.text} stroke={HOME_THEME.bg} strokeWidth={2} />
+          </>
+        )}
+
+        <rect x={MARGIN.left} y={MARGIN.top} width={PLOT_W} height={PLOT_H} fill="transparent" style={{ cursor: "crosshair" }} onMouseMove={handleMove} onMouseLeave={() => setHoverIdx(null)} />
+      </svg>
+
+      {hoverPt && (
+        <div
+          style={{
+            position: "absolute",
+            left: `${(xS(hoverPt.frac) / W) * 100}%`,
+            top: 6,
+            transform: hoverPt.frac > 0.7 ? "translateX(-100%)" : "translateX(8px)",
+            background: HOME_THEME.panelBgStrong,
+            border: `1px solid ${HOME_THEME.border}`,
+            borderRadius: 8,
+            padding: "8px 10px",
+            fontSize: 12,
+            color: HOME_THEME.text,
+            pointerEvents: "none",
+          }}
+        >
+          <div style={{ color: HOME_THEME.muted, opacity: 0.6, fontSize: 11, marginBottom: 4 }}>{fmtTimeLabel(Math.max(0, Math.min(1, hoverPt.frac)))}</div>
+          <div style={{ fontVariantNumeric: "tabular-nums", fontWeight: 800 }}>{hoverPt.spot.toFixed(2)}</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -331,7 +495,7 @@ function DeltaDecayChart({
 
 // ── tab ──────────────────────────────────────────────────────────────────────
 export default function DexCharmTab() {
-  const { data: live, loading: liveLoading, err: liveErr, reload: reloadLive } = useLiveGex();
+  const { data: live, loading: liveLoading, err: liveErr, reload: reloadLive, history: spotHistory } = useLiveGex();
 
   const [spot, setSpot] = useState(5500);
   const [otmK, setOtmK] = useState(5520);
@@ -432,6 +596,11 @@ export default function DexCharmTab() {
               sub={live.expiration ?? "front expiry"}
             />
           </div>
+
+          <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE, marginBottom: 4 }}>
+            SPX today — spot vs. call wall / put wall / gamma flip
+          </div>
+          <SpxSessionChart history={spotHistory} callWall={live.callWall} putWall={live.putWall} gexFlip={live.gexFlip} />
 
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${HOME_THEME.border}`, fontSize: 13.5, color: HOME_THEME.muted, lineHeight: 1.65, opacity: 0.88 }}>
             <b style={{ color: GOLD }}>What is measured vs. assumed.</b>{" "}
