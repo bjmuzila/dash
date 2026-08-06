@@ -1,5 +1,115 @@
 # Changelog
 
+## 2026-08-06 - budget.cbedge.net: briefing on the app's own palette, calendar dropped
+
+### `budget-vite/src/components/BudgetOverview.tsx`
+- **The briefing was still wearing the email's clothes.** `budget-email.js` is
+  standalone HTML in an inbox, so it invents its own green/amber/red and boxes
+  every table on `#111726` — both are email constraints. On a card, next to the
+  rest of the dashboard, they read as a foreign object.
+  - The three verdict tones now use the app's tokens: **cyan = fine, orange =
+    act, red = failed** — a wash of each colour over the panel with a matching
+    hairline and a 3px left rule, which is how a card carries state everywhere
+    else on cbedge.net.
+  - The five figures are hairline-separated rows on the card instead of a filled
+    table. The two running totals (Income, Left after bills) get WEIGHT rather
+    than a striped background.
+  - In the Pay-coming / Still-due lists, the status moved from inline-with-the-
+    date to under the label, so a long bill name can't push "past due" off the
+    row. Dates are mono, amounts tabular.
+- **Cashflow calendar removed.** Cash flow now runs straight into Due Within 10
+  Days. `overview.days` is still returned by the server — nothing renders it, so
+  it costs nothing, and putting the grid back is a one-line change.
+
+469 assertions still green across the 8 suites; no server change in this pass.
+
+
+## 2026-08-06 - budget.cbedge.net: briefing-first Money page, white type, Todo/Lists rework
+
+Six changes across the household app. The Money page is rebuilt on the dashboard
+card surface; the rest is the readability and flow work that came with it.
+
+### Grey type is gone — every page
+- `budget-vite/src/theme.ts`: `inkSoft`, `muted` and `faint` were 72% / 48% / 26%
+  white. Now `ink`, `inkSoft` and `muted` are all **#FFFFFF**, matching
+  `homeTheme.ts` (`muted: "#FFFFFF"`). Hierarchy comes from SIZE, CASE and
+  WEIGHT instead of dimming. `faint` keeps 55% for one job only: struck-through
+  completed rows, where fading IS the signal.
+- `budget-vite/src/index.css` was still the light "warm paper" file: cream
+  background, `#1C1917` text, `color-scheme: light`, a grey placeholder — and
+  **no font-family at all**. Anything not styled through `theme.ts` therefore
+  rendered in the browser default serif (Times). Now dark, Inter, `color-scheme:
+  dark` so native date pickers stop opening as white popovers on a black page.
+
+### Money page — rebuilt, briefing first
+- **Tab switcher removed.** One scroll: briefing → six tiles → safe-to-spend +
+  spend pace → where-it-went + balance check → cash flow → cashflow calendar →
+  due soon → categories → bills → register.
+- **Budget briefing at the top**, a verbatim port of the verdict in
+  `server-v2/budget-email.js` — same three tones, same wording, same tables. The
+  phone and the 8am email now cannot say different things about the same day.
+  The rule that matters: available counts pay STILL COMING, not just what is in
+  the bank, or every month reads as a catastrophe on the 1st.
+- **Dashboard cards** (`card()` / `tile()` in theme.ts) reproducing
+  `homePanelStyle`: cyan wash from the top edge, hairline border, 16px radius.
+- **Six tiles, 3 across x 2 down**: All banks / Income / Expenses, Net profit /
+  Amazon / Bzila — the desktop's top stat row exactly.
+- **Cash flow gains the D/W/M toggle.** Monthly buckets the YEAR's real register
+  rows, matching the desktop's `yearMonths`. Daily and weekly are this month.
+- **Cashflow calendar** shades a day orange when it is net-negative and cyan when
+  net-positive, with the net printed on any day that moved.
+- Where-it-went is interactive: tap a slice, the centre shows that category.
+
+### Why the phone's net read negative
+Not a bug in the arithmetic — a MISSING LEDGER. The desktop folds Amazon
+(pay minus gas) into both Income and Net Profit, and shows Bzila alongside.
+The household API had neither, so the phone was showing register-only figures
+against a month whose projected bills were all still outstanding.
+
+- `server-v2/_lib-household-budget.cjs` now reads `budget_amazon` and
+  `budget_prop` (streams: prop / cbedge / contracts, plus register rows in a
+  Contracts category, read-only) through `optional()` — a typeof-guarded call,
+  because a missing libDb export throws SYNCHRONOUSLY and `.catch()` on the
+  result never runs. One absent function used to 500 the whole month.
+- `overview.tiles` now carries income/expenses/netProfit computed the desktop's
+  way. The two surfaces agree on the month by construction, not by coincidence.
+
+### Today
+- Section headers are sans **17px semibold** (`sectionTitle()` in theme.ts), not
+  10px letterspaced mono. Applied to Today, Todo, Lists, Habits and the calendar
+  card from one helper.
+- The capture box is now an **add-a-todo** box, with the same red Urgent chip the
+  Todo screen has — tag it as you type, not in a second step afterwards.
+- Money strip shows **bank balance, then weekly in / weekly out**. Both
+  directions, because a quiet week and a big-in-big-out week net out the same.
+  `weekIn` / `weekOut` are derived server-side from the same seven days the Money
+  page charts.
+
+### Todo
+- **Urgent is RED**, not orange. Orange was already spoken for by overdue dates,
+  and two shades of warning next to each other read as one.
+- **Completed is a section on the same screen**, not a tab you have to remember
+  to open. `?scope=done` now returns only the last **5 days**
+  (`DONE_WINDOW_DAYS`). Nothing is deleted — the rows stay and `?scope=done-all`
+  still returns the full history — they just stop taking up room.
+
+### Lists
+- Opens on **List** (tab moved to first position). The week board and shopping
+  mode are places you go deliberately; "what's on the list" is the question being
+  asked nine times out of ten.
+- Every item shows **when it was added** ("2:14 PM", "Tue 8:41 AM", "Jul 3"), and
+  checked items show when they were checked. `created_at` was already on
+  `hh_list_items`; it just was not in `ITEM_COLS`.
+
+### Tests
+**469 assertions green across 8 suites** (budget 113, gcal-routes 79, lists 60,
+projects 58, routes 57, routines 51, gcal 32, recurrence parity 19) — 27 new,
+covering Amazon net-of-gas, the three Bzila streams, the tile arithmetic, all
+three cash-flow resolutions and every branch of the briefing verdict. Rendered at
+390px under Playwright, which is what caught the half-width card titles wrapping
+onto two lines and eating the chart underneath.
+
+
 ## 2026-08-06 - Test Lab / GEX Map: terrain kept its shape under zoom
 
 Zooming the Terrain tab out lost the older, quieter parts of the session — terrain that

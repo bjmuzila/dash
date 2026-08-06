@@ -5,7 +5,7 @@ import { useToday, useCreateTask } from '../hooks'
 import { ApiError, type Task, type TodayPayload } from '../api'
 import TaskRow from '../components/TaskRow'
 import CalendarCard from '../components/CalendarCard'
-import { T, label, body, hero, display, section, row, input, button, segment, track, fill, quote, textAction } from '../theme'
+import { T, sectionTitle, label, body, hero, display, section, row, input, button, segment, track, fill, quote, textAction, MONO } from '../theme'
 
 /**
  * Today — "The Briefing".
@@ -50,7 +50,7 @@ export default function Today() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 26 }}>
       <div>
-        <div style={label()}>In brief</div>
+        <div style={sectionTitle()}>In brief</div>
         <p style={{ ...body(15), color: T.inkSoft, marginTop: 8 }}>
           {brief.map((b, i) => (
             <span key={i} style={{ color: b!.includes('overdue') ? T.warn : T.inkSoft }}>
@@ -144,15 +144,36 @@ function MoneyStrip({ money }: { money: TodayPayload['money'] }) {
   return (
     <Link to="/budget" style={{ ...section(), textDecoration: 'none', color: 'inherit', display: 'block' }}>
       <Head left="Money" right="Open ›" />
-      <div style={{ ...hero(34), marginTop: 8, color: money.total < 0 ? T.bad : T.ink }}>
+
+      <div style={label({ marginTop: 10, letterSpacing: '0.1em' })}>Bank balance</div>
+      <div style={{ ...hero(34), marginTop: 4, color: money.total < 0 ? T.bad : T.ink }}>
         {fmt(money.total)}
       </div>
-      <div style={label({ marginTop: 6, letterSpacing: '0.08em' })}>
-        Across {Object.keys(money.balances).length} accounts
-        {money.overdue > 0 && <span style={{ color: T.warn }}> · {money.overdue} past due</span>}
+      {money.overdue > 0 && (
+        <div style={label({ marginTop: 6, letterSpacing: '0.08em', color: T.warn })}>
+          {money.overdue} past due
+        </div>
+      )}
+
+      {/* Last seven days, both directions. Two figures beat one net number —
+          a quiet week and a big-in-big-out week net out the same. */}
+      <div style={{ display: 'flex', gap: 26, marginTop: 14 }}>
+        <div>
+          <div style={label({ letterSpacing: '0.1em' })}>Weekly in</div>
+          <div style={{ ...body(18), fontWeight: 700, marginTop: 3, color: T.good }}>
+            +{fmt(money.weekIn ?? 0)}
+          </div>
+        </div>
+        <div>
+          <div style={label({ letterSpacing: '0.1em' })}>Weekly out</div>
+          <div style={{ ...body(18), fontWeight: 700, marginTop: 3, color: T.warn }}>
+            −{fmt(money.weekOut ?? 0)}
+          </div>
+        </div>
       </div>
+
       {bills.length > 0 && (
-        <div style={{ marginTop: 10 }}>
+        <div style={{ marginTop: 12 }}>
           {bills.map((b) => (
             <div key={b.tag} style={row({ padding: '9px 0' })}>
               <span style={{ ...label({ width: 36, flexShrink: 0, color: b.overdue ? T.warn : T.muted }) }}>
@@ -168,12 +189,25 @@ function MoneyStrip({ money }: { money: TodayPayload['money'] }) {
   )
 }
 
+/** The urgent toggle. Red when armed — the one place red is used for a control
+ *  rather than an error, because urgent IS the alarm. */
+function urgentChip(on: boolean): React.CSSProperties {
+  return {
+    appearance: 'none', fontFamily: MONO, fontSize: 9, fontWeight: 700, letterSpacing: '0.1em',
+    textTransform: 'uppercase', padding: '0 10px', minHeight: 44, borderRadius: 3, cursor: 'pointer',
+    background: on ? 'rgba(239,68,68,0.16)' : 'transparent',
+    color: on ? T.bad : T.ink,
+    border: `1px solid ${on ? 'rgba(239,68,68,0.55)' : T.ruleStrong}`,
+  }
+}
+
 // ── Quick add ────────────────────────────────────────────────────────────────
 
 function QuickAdd() {
   const create = useCreateTask()
   const [title, setTitle] = useState('')
   const [due, setDue] = useState('')
+  const [urgent, setUrgent] = useState(false)
   const [shared, setShared] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -186,8 +220,9 @@ function QuickAdd() {
     // and you're already typing the next one.
     setTitle(''); setError(null)
     try {
-      await create.mutateAsync({ title: t, dueDate: due || null, visibility: shared ? 'shared' : 'private' })
-      setDue('')
+      await create.mutateAsync({ title: t, dueDate: due || null, urgent,
+                                 visibility: shared ? 'shared' : 'private' })
+      setDue(''); setUrgent(false)
     } catch (err) {
       setTitle(t) // put it back rather than losing what they typed
       setError(err instanceof ApiError ? err.message : 'Could not add that.')
@@ -197,9 +232,13 @@ function QuickAdd() {
   return (
     <form onSubmit={submit}>
       <div style={{ display: 'flex', gap: 8 }}>
-        <input style={{ ...input(), flex: 1 }} placeholder="Capture a task…" value={title}
+        <input style={{ ...input(), flex: 1 }} placeholder="Add a todo…" value={title}
                onChange={(e) => setTitle(e.target.value)} onFocus={() => setExpanded(true)}
                enterKeyHint="done" />
+        {/* Same urgent chip as the Todo page: tag it as you type, not in a
+            second step after the thing is already saved. */}
+        <button type="button" onClick={() => setUrgent((v) => !v)} aria-pressed={urgent}
+                style={urgentChip(urgent)}>Urgent</button>
         <button type="submit" disabled={!title.trim() || create.isPending}
                 style={{ ...button(title.trim() ? 'primary' : 'ghost'), padding: '12px 15px' }}>
           Add
@@ -221,10 +260,18 @@ function QuickAdd() {
 
 // ── Bits ─────────────────────────────────────────────────────────────────────
 
+/**
+ * A section heading. The TITLE is sans 17px semibold — big enough to find while
+ * scrolling one-handed. The count on the right stays 10px mono, because it is
+ * metadata and promoting it too would flatten the hierarchy the size creates.
+ *
+ * Exported: Routines, Projects and Lists all render their sections through this,
+ * so changing the size here changes every page at once.
+ */
 export function Head({ left, right, accent }: { left: string; right?: string; accent?: boolean }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
-      <span style={label(accent ? { color: T.warn } : {})}>{left}</span>
+      <span style={sectionTitle(accent ? { color: T.warn } : {})}>{left}</span>
       {right && <span style={label()}>{right}</span>}
     </div>
   )

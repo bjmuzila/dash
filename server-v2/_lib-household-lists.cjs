@@ -89,8 +89,11 @@ function weekStart(iso) {
 // Read
 // ---------------------------------------------------------------------------
 
+// created_at is sent so the list can show WHEN something was added. On a shared
+// list that is the difference between "we still need milk" and "someone put
+// milk on here three weeks ago and we've bought it twice since".
 const ITEM_COLS = `id, owner_id, visibility, list, text, qty, aisle, meal_id,
-  checked_at, checked_by, sort_order`;
+  checked_at, checked_by, sort_order, created_at`;
 
 /**
  * Everything the Lists screen needs, in one round trip: the week's meals, every

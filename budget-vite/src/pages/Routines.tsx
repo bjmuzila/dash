@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useAuth } from '../auth'
 import { useRoutines, useToggleRoutine, useCreateRoutine, useArchiveRoutine, useUpdateRoutine } from '../hooks'
 import { ApiError, type Routine, type RoutineBlock } from '../api'
-import { T, label, body, hero, section, row, input, button, segment, checkbox, doneText } from '../theme'
+import { T, sectionTitle, label, body, hero, section, row, input, button, segment, checkbox, doneText } from '../theme'
 
 /**
  * Habits.
@@ -71,7 +71,7 @@ export default function Routines() {
         return (
           <div key={b} style={section()}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-              <span style={label()}>{BLOCK_LABEL[b]}</span>
+              <span style={sectionTitle()}>{BLOCK_LABEL[b]}</span>
               {items.length > 0 && (
                 <span style={label(block!.done === items.length ? { color: T.good } : {})}>
                   {block!.done}/{items.length}

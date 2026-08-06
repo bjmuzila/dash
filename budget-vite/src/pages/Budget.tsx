@@ -10,12 +10,14 @@ import BudgetOverview from '../components/BudgetOverview'
  * Reads the SAME tables as /owner/budget — one register, two views. A payment
  * entered here shows on the desktop page immediately, and vice versa.
  *
- * TWO TABS, because the two jobs are different:
- *   Overview — every card and graph from the desktop page, READ ONLY. The
- *     numbers are computed server-side (a port of the desktop's memos), never
- *     recomputed here, so the phone can't disagree with the laptop.
- *   Register — the small amount of writing that's actually worth doing on a
- *     phone: log what you just spent, tick a bill paid.
+ * ONE SCROLL, no tabs. The briefing answers "can I spend anything today"
+ * before you scroll at all; the cards below are the month; the register at the
+ * bottom is the only writable part, because logging a payment and ticking a
+ * bill paid are the two things worth doing one-handed.
+ *
+ * Every figure above the register is computed SERVER-SIDE (a port of the
+ * desktop's memos) and never recomputed here, so the phone can't disagree with
+ * the laptop.
  *
  * Recurring bills are projections, not rows: they exist as rules until someone
  * marks one paid, which materialises it. That's why a bill has "Paid" instead
@@ -43,7 +45,6 @@ const shiftMonth = (m: string, delta: number) => {
 
 export default function Budget() {
   const [month, setMonth] = useState<string | undefined>(undefined)
-  const [tab, setTab] = useState<'overview' | 'register'>('overview')
   const { data, isLoading, error, refetch } = useBudget(month)
 
   if (isLoading) return <div style={{ ...body(14), color: T.muted }}>Loading…</div>
@@ -64,46 +65,30 @@ export default function Budget() {
   const upcoming = data.bills.filter((b) => !b.overdue)
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
         <button onClick={() => setMonth(shiftMonth(data.month, -1))} style={nav} aria-label="Previous month">‹</button>
         <span style={label()}>{monthLabel(data.month)}</span>
         <button onClick={() => setMonth(shiftMonth(data.month, 1))} style={nav} aria-label="Next month">›</button>
       </div>
 
-      <div style={{ display: 'flex', gap: 6 }}>
-        <button onClick={() => setTab('overview')} style={{ ...segment(tab === 'overview'), flex: 1 }}>Overview</button>
-        <button onClick={() => setTab('register')} style={{ ...segment(tab === 'register'), flex: 1 }}>Register</button>
-      </div>
+      {/* Everything above the register is READ ONLY — the editing happens on the
+          owner dashboard. What stays writable here is the short list of things
+          worth doing one-handed: tick a bill paid, log what you just spent. */}
+      <BudgetOverview
+        o={data.overview}
+        briefing={data.briefing}
+        categories={data.categories}
+        unsortedSpend={data.unsortedSpend}
+        currency={cur}
+        month={data.month}
+      />
 
-      {tab === 'overview' ? (
-        <BudgetOverview
-          o={data.overview}
-          categories={data.categories}
-          unsortedSpend={data.unsortedSpend}
-          balances={data.balances}
-          currency={cur}
-          month={data.month}
-        />
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 26 }}>
-          <div style={label({ letterSpacing: '0.1em' })}>
-            <span style={{ color: T.good }}>{fmt(data.totals.income, cur)} in</span>
-            <span style={{ color: T.faint }}> · </span>
-            <span>{fmt(data.totals.expenses, cur)} out</span>
-            <span style={{ color: T.faint }}> · </span>
-            <span style={{ color: data.totals.net < 0 ? T.warn : T.ink }}>
-              {fmt(data.totals.net, cur)} net
-            </span>
-          </div>
+      {overdue.length > 0 && <Bills title="Past due" bills={overdue} currency={cur} accent />}
+      {upcoming.length > 0 && <Bills title="Coming up" bills={upcoming} currency={cur} />}
 
-          {overdue.length > 0 && <Bills title="Past due" bills={overdue} currency={cur} accent />}
-          {upcoming.length > 0 && <Bills title="Coming up" bills={upcoming} currency={cur} />}
-
-          <AddRow today={data.today} />
-          <Register rows={data.rows} currency={cur} />
-        </div>
-      )}
+      <AddRow today={data.today} />
+      <Register rows={data.rows} currency={cur} />
     </div>
   )
 }

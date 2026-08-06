@@ -1,6 +1,6 @@
 import { calendar as calendarApi, type CalendarDay, type CalendarEvent, type CalendarStatus } from '../api'
 import { useCalendarEvents } from '../hooks'
-import { T, label, body, section, row, MONO } from '../theme'
+import { T, sectionTitle, label, body, section, row, MONO } from '../theme'
 
 /**
  * Today's calendar block.
@@ -17,7 +17,7 @@ export default function CalendarCard({ status, date }: { status: CalendarStatus;
   return (
     <div style={section()}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
-        <span style={label()}>Calendar</span>
+        <span style={sectionTitle()}>Calendar</span>
         {typeof count === 'number' && count > 0 && (
           <span style={label()}>{count} event{count === 1 ? '' : 's'}</span>
         )}
@@ -129,7 +129,7 @@ function EventRow({ event, showDay }: { event: CalendarEvent; showDay?: boolean 
 function Upcoming({ events }: { events: CalendarEvent[] }) {
   return (
     <div style={{ marginTop: 18, paddingTop: 12, borderTop: `1px solid ${T.rule}` }}>
-      <div style={label()}>Upcoming</div>
+      <div style={sectionTitle({ marginBottom: 2 })}>Upcoming</div>
       {events.map((e) => <EventRow key={e.id} event={e} showDay />)}
     </div>
   )
@@ -174,3 +174,4 @@ const Note = ({ children }: { children: React.ReactNode }) => (
 const Warn = ({ children }: { children: React.ReactNode }) => (
   <div style={{ ...body(14), color: T.warn, marginTop: 10 }}>{children}</div>
 )
+

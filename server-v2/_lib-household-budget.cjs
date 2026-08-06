@@ -152,6 +152,16 @@ async function getMonth(profileKey, month, tz = 'America/New_York') {
     catch { prevDailyBalance = null; }
   }
 
+  // The two side ledgers the desktop overview folds in. Same typeof-guard as
+  // above and for the same reason — an older _lib-db.cjs without these exports
+  // must degrade to a zeroed tile, not a 500 on the whole month.
+  const amazonRows = await optional(libDb, 'listAmazonRows', profile.id, from, to);
+  const propRows = await optional(libDb, 'listPropRows', profile.id, from, to);
+  // Only for the cash-flow chart's Monthly mode. Real rows across the year — no
+  // recurrence expansion, matching the desktop's `yearMonths`.
+  const yr = m.slice(0, 4);
+  const yearRegister = await optional(libDb, 'listRegister', profile.id, `${yr}-01-01`, `${yr}-12-31`);
+
   // Per-bank beginning balances come from is_beginning rows.
   const bal = { coastal: 0, truist: 0, secu: 0 };
   const beginningByBank = { coastal: null, truist: null, secu: null };
@@ -236,6 +246,10 @@ async function getMonth(profileKey, month, tz = 'America/New_York') {
     else unsorted += Math.abs(ln.amount);
   }
 
+  const allBanks = bal.coastal + bal.truist + bal.secu;
+  const amazon = buildAmazon(amazonRows);
+  const bzila = buildBzila(propRows, register, categories);
+
   return {
     month: m,
     today,
@@ -258,12 +272,140 @@ async function getMonth(profileKey, month, tz = 'America/New_York') {
     })),
     unsortedSpend: unsorted,
     recurringCount: recurring.filter((r) => r.active).length,
+    amazon,
+    bzila,
+    briefing: buildBriefing({ month: m, today, register, recurring, allBanks }),
     overview: buildOverview({
       month: m, today, rows, register, recurring, categories, balances: bal,
       dailyBalance, prevDailyBalance, categorySpend: spentByCategory, unsorted,
+      amazon, bzila, yearRegister,
     }),
   };
 }
+
+/**
+ * Call an OPTIONAL libDb helper. A missing export throws SYNCHRONOUSLY at the
+ * call site, so `.catch()` on the returned promise never runs — which is how a
+ * single absent function took down a whole month request once already.
+ */
+async function optional(db, fn, ...args) {
+  if (!db || typeof db[fn] !== 'function') return [];
+  try { const v = await db[fn](...args); return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
+
+/**
+ * Amazon delivery income for the month: gross pay minus gas, per the desktop's
+ * `amazonComputed`. The desktop folds this INTO Income and Net Profit, which is
+ * why the phone's net used to read lower than the laptop's for the same month.
+ */
+function buildAmazon(rows) {
+  let pay = 0, gas = 0;
+  for (const r of rows) { pay += Number(r.pay) || 0; gas += Number(r.gas) || 0; }
+  return { days: rows.length, pay, gas, net: pay - gas };
+}
+
+/**
+ * Bzila — the business ledger, month net. Three streams live in budget_prop
+ * (`prop`, `cbedge`, `contracts`); a fourth source of contract lines is register
+ * rows sitting in a Contracts category, read-only. `cost` is money out and
+ * `payout` money in for every source.
+ *
+ * A contract entered in BOTH places double-counts — that is a data-entry rule
+ * on the desktop ("enter it here or there, not both"), not something this can
+ * detect, so it is deliberately not deduped here either.
+ */
+function buildBzila(propRows, register, categories) {
+  const contractCats = new Set(
+    categories.filter((c) => /contract/i.test(String(c.name || ''))).map((c) => c.id));
+
+  let inAmt = 0, outAmt = 0;
+  const streams = { prop: 0, cbedge: 0, contracts: 0 };
+
+  for (const r of propRows) {
+    const s = r.source === 'cbedge' ? 'cbedge' : r.source === 'contracts' ? 'contracts' : 'prop';
+    const i = Number(r.payout) || 0, o = Number(r.cost) || 0;
+    inAmt += i; outAmt += o; streams[s] += i - o;
+  }
+  for (const r of register) {
+    if (r.is_beginning) continue;
+    const isContract = (r.category_id != null && contractCats.has(r.category_id))
+      || /contract/i.test(String(r.label || ''));
+    if (!isContract) continue;
+    const amt = Number(r.amount) || 0;
+    if (amt > 0) { inAmt += amt; streams.contracts += amt; }
+    else { outAmt += -amt; streams.contracts += amt; }
+  }
+  return { inAmt, outAmt, net: inAmt - outAmt, streams };
+}
+
+/**
+ * The morning briefing — a verbatim port of the verdict in
+ * server-v2/budget-email.js, so the card at the top of the phone says exactly
+ * what the 8am email says.
+ *
+ * The rule that matters: this counts pay STILL COMING as available, not just
+ * what is in the bank. Without it any month with rent outstanding reads as a
+ * disaster on the 1st and recovers on payday, which is noise, not information.
+ */
+const SAFE_BUFFER = Number(process.env.BUDGET_SAFE_BUFFER || 200);
+
+function buildBriefing({ month, today, register, recurring, allBanks }) {
+  const paid = new Set(
+    register.filter((r) => !r.is_beginning && typeof r.recurring_tag === 'string'
+                        && r.recurring_tag.startsWith('__recur__:'))
+            .map((r) => r.recurring_tag));
+
+  const bills = [], incoming = [];
+  for (const rule of recurring) {
+    if (!rule.active) continue;
+    const amt = Number(rule.amount) || 0;
+    if (amt === 0) continue;
+    for (const date of occurrencesInMonth(rule, month)) {
+      if (paid.has(recurTag(rule.id, date))) continue;
+      if (amt < 0) bills.push({ label: rule.label, amount: Math.abs(amt), date, pastDue: date < today });
+      else incoming.push({ label: rule.label, amount: amt, date, late: date < today });
+    }
+  }
+  bills.sort((a, b) => (a.date < b.date ? -1 : 1));
+  incoming.sort((a, b) => (a.date < b.date ? -1 : 1));
+
+  const owed = bills.reduce((s, b) => s + b.amount, 0);
+  const coming = incoming.reduce((s, b) => s + b.amount, 0);
+  const available = allBanks + coming;
+  const after = available - owed;
+  const pastDue = bills.filter((b) => b.pastDue);
+
+  let tone, verdict, sub;
+  if (after < 0) {
+    tone = 'bad';
+    verdict = `Short by ${money0(Math.abs(after))} — don't spend`;
+    sub = `${money0(available)} available (${money0(allBanks)} in the bank + ${money0(coming)} pay coming) `
+        + `vs ${money0(owed)} still due this month.`;
+  } else if (after < SAFE_BUFFER) {
+    tone = 'warn';
+    verdict = `Too close — don't spend`;
+    sub = `Only ${money0(after)} left after ${money0(owed)} of bills. Cushion is ${money0(SAFE_BUFFER)}.`;
+  } else {
+    tone = 'good';
+    verdict = `Covered — ${money0(after)} spare`;
+    sub = `${money0(available)} available (${money0(allBanks)} in the bank + ${money0(coming)} pay coming) `
+        + `covers ${money0(owed)} of remaining bills.`;
+  }
+
+  return {
+    tone, verdict, sub,
+    inBank: allBanks, coming, available, owed, after,
+    pastDueCount: pastDue.length,
+    pastDueTotal: pastDue.reduce((s, b) => s + b.amount, 0),
+    payComing: incoming.slice(0, 6),
+    stillDue: bills.slice(0, 6),
+  };
+}
+
+/** "$1,860" — whole dollars, the way the briefing email writes them. */
+const money0 = (n) =>
+  `${n < 0 ? '-' : ''}$${Math.round(Math.abs(Number(n) || 0)).toLocaleString('en-US')}`;
 
 // ── Write ───────────────────────────────────────────────────────────────────
 
@@ -304,7 +446,8 @@ function isoDay(v) {
  * port rather than a fresh implementation of "roughly the same idea".
  */
 function buildOverview({ month, today, rows, register, recurring, categories, balances,
-                         dailyBalance, prevDailyBalance, categorySpend, unsorted }) {
+                         dailyBalance, prevDailyBalance, categorySpend, unsorted,
+                         amazon, bzila, yearRegister }) {
   const [iy, im] = month.split('-').map(Number);
   const daysInMonth = new Date(iy, im, 0).getDate();
   const ym = today.slice(0, 7);
@@ -423,8 +566,27 @@ function buildOverview({ month, today, rows, register, recurring, categories, ba
     }
   }
 
+  // The six tiles, matching the desktop's top stat row EXACTLY. Amazon is
+  // folded into Income and Net Profit there; leaving it out here is what made
+  // the phone's net read lower than the laptop's for the same month.
+  const az = amazon || { net: 0, days: 0 };
+  const bz = bzila || { net: 0, inAmt: 0, outAmt: 0 };
+  const incomeRaw = rows.reduce((n, r) => n + (r.amount > 0 ? r.amount : 0), 0);
+  const paymentsRaw = rows.reduce((n, r) => n + (r.amount < 0 ? r.amount : 0), 0);
+  const tiles = {
+    allBanks,
+    income: incomeRaw + az.net,
+    expenses: Math.abs(paymentsRaw),
+    netProfit: incomeRaw + paymentsRaw + az.net,
+    amazon: az.net,
+    amazonDays: az.days,
+    bzila: bz.net,
+    bzilaIn: bz.inAmt,
+    bzilaOut: bz.outAmt,
+  };
+
   return {
-    daysInMonth, todayDay, daysLeft,
+    daysInMonth, todayDay, daysLeft, tiles,
     allBanks, billsLeft, safe, safePerDay: safe / daysLeft,
     budgetTotal, paceNow, spentMtd, cum,
     week, wkOut, prevWkOut,
@@ -433,19 +595,50 @@ function buildOverview({ month, today, rows, register, recurring, categories, ba
     // projection line — both derived from the same rows as everything else.
     days: dayList.map((g) => ({ date: g.date, net: g.net, out: g.out, count: g.rows.length })),
     series: rows.map((r) => ({ date: r.entry_date, balance: r.balance })),
-    cashflow: (() => {
-      // Weekly in/out buckets: enough resolution to see a pattern on a phone,
-      // where 31 daily bars are 6px wide and unreadable.
-      const buckets = new Map();
-      for (const r of rows) {
-        const wk = Math.floor((Number(r.entry_date.split('-')[2]) - 1) / 7) + 1;
-        if (!buckets.has(wk)) buckets.set(wk, { label: `W${wk}`, inflow: 0, outflow: 0 });
-        const b = buckets.get(wk);
-        if (r.amount > 0) b.inflow += r.amount; else b.outflow += -r.amount;
-      }
-      return [...buckets.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v);
-    })(),
+    // `cashflow` is the WEEKLY series, kept at the top level because that is
+    // what the old shape was and something may still read it.
+    cashflow: weeklyFlow(dayList),
+    // All three resolutions the desktop's D/W/M toggle offers. Daily and weekly
+    // come from this month's rows; monthly buckets the YEAR's real register rows
+    // (no projections — a year of expanded recurrences is a different question).
+    flow: {
+      daily: dayList.map((g) => ({
+        label: `${Number(g.date.split('-')[1])}/${Number(g.date.split('-')[2])}`,
+        inflow: g.rows.reduce((n, r) => n + (r.amount > 0 ? r.amount : 0), 0),
+        outflow: g.out,
+      })),
+      weekly: weeklyFlow(dayList),
+      monthly: monthlyFlow(yearRegister || []),
+    },
   };
+}
+
+function weeklyFlow(dayList) {
+  const buckets = new Map();
+  for (const g of dayList) {
+    const wk = Math.floor((Number(g.date.split('-')[2]) - 1) / 7) + 1;
+    if (!buckets.has(wk)) buckets.set(wk, { label: `W${wk}`, inflow: 0, outflow: 0 });
+    const b = buckets.get(wk);
+    for (const r of g.rows) { if (r.amount > 0) b.inflow += r.amount; else b.outflow += -r.amount; }
+  }
+  return [...buckets.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v);
+}
+
+const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function monthlyFlow(yearRegister) {
+  const buckets = new Map();
+  for (const r of yearRegister) {
+    if (r.is_beginning) continue;
+    const iso = isoDay(r.entry_date);
+    if (!iso) continue;
+    const mi = Number(iso.split('-')[1]);
+    if (!buckets.has(mi)) buckets.set(mi, { label: MONTH_ABBR[mi - 1], inflow: 0, outflow: 0 });
+    const b = buckets.get(mi);
+    const amt = Number(r.amount) || 0;
+    if (amt > 0) b.inflow += amt; else b.outflow += -amt;
+  }
+  return [...buckets.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v);
 }
 
 const money = (v) => {
@@ -553,11 +746,20 @@ async function summary(profileKey, tz = 'America/New_York') {
   const upcoming = m.bills
     .slice()
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  // Last seven days, in and out. `week` carries net and out per day, so what
+  // came IN is (net + out) — derived here rather than on the phone so the
+  // Today strip and the Money page can't disagree about the same seven days.
+  const wk = m.overview?.week || [];
+  const weekIn = wk.reduce((n, d) => n + Math.max(0, d.net + d.out), 0);
+  const weekOut = m.overview?.wkOut || 0;
+
   return {
     currency: m.currency,
     balances: m.balances,
     total: m.balances.coastal + m.balances.truist + m.balances.secu,
     net: m.totals.net,
+    weekIn,
+    weekOut,
     overdue: upcoming.filter((b) => b.overdue).length,
     nextBills: upcoming.filter((b) => !b.overdue).slice(0, 3),
     overdueBills: upcoming.filter((b) => b.overdue).slice(0, 3),

@@ -212,6 +212,22 @@ export type BudgetCategory = {
  * /owner/budget. Nothing here is derived again on the client — if the phone and
  * the desktop ever disagree on a figure, exactly one place is wrong.
  */
+export type BudgetTiles = {
+  allBanks: number
+  /** Register income PLUS Amazon net — the desktop folds Amazon in here, and
+   *  leaving it out is what made the phone's net read lower than the laptop's. */
+  income: number
+  expenses: number
+  netProfit: number
+  amazon: number
+  amazonDays: number
+  bzila: number
+  bzilaIn: number
+  bzilaOut: number
+}
+
+export type FlowBucket = { label: string; inflow: number; outflow: number }
+
 export type BudgetOverview = {
   daysInMonth: number
   /** Day-of-month "now" for the month being viewed: 0 if it's in the future,
@@ -250,7 +266,30 @@ export type BudgetOverview = {
 
   days: { date: string; net: number; out: number; count: number }[]
   series: { date: string; balance: number }[]
-  cashflow: { label: string; inflow: number; outflow: number }[]
+  /** The weekly series. Kept for compatibility — `flow.weekly` is the same data. */
+  cashflow: FlowBucket[]
+  /** All three resolutions behind the D/W/M toggle. Monthly buckets the YEAR's
+   *  real register rows; daily and weekly are this month, projections included. */
+  flow: { daily: FlowBucket[]; weekly: FlowBucket[]; monthly: FlowBucket[] }
+  tiles: BudgetTiles
+}
+
+/** The morning briefing — the same verdict the 8am budget email sends. */
+export type BudgetBriefing = {
+  tone: 'good' | 'warn' | 'bad'
+  verdict: string
+  sub: string
+  inBank: number
+  /** Pay still expected this month. Counted as available, which is what stops
+   *  the 1st of the month reading as a disaster every single month. */
+  coming: number
+  available: number
+  owed: number
+  after: number
+  pastDueCount: number
+  pastDueTotal: number
+  payComing: { label: string; amount: number; date: string; late: boolean }[]
+  stillDue: { label: string; amount: number; date: string; pastDue: boolean }[]
 }
 
 export type BudgetMonth = {
@@ -265,6 +304,10 @@ export type BudgetMonth = {
   categories: BudgetCategory[]
   unsortedSpend: number
   recurringCount: number
+  amazon: { days: number; pay: number; gas: number; net: number }
+  bzila: { inAmt: number; outAmt: number; net: number
+           streams: { prop: number; cbedge: number; contracts: number } }
+  briefing: BudgetBriefing
   overview: BudgetOverview
 }
 
@@ -273,6 +316,10 @@ export type MoneySummary = {
   balances: Record<Bank, number>
   total: number
   net: number
+  /** Last seven days. Derived server-side from the same `week` array the Money
+   *  page charts, so the two surfaces cannot disagree about the same week. */
+  weekIn: number
+  weekOut: number
   overdue: number
   nextBills: BudgetBill[]
   overdueBills: BudgetBill[]
@@ -352,6 +399,9 @@ export type ListItem = {
   checked_at: string | null
   checked_by: number | null
   sort_order: number
+  /** When it went on the list. On a shared list this is what separates "we need
+   *  milk" from "that's been sitting there for three weeks". */
+  created_at: string
 }
 
 export type Meal = {

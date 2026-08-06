@@ -5,7 +5,7 @@ import {
   useClearChecked, useAddMeal, useDeleteMeal,
 } from '../hooks'
 import { ApiError, type Aisle, type ListItem, type Meal } from '../api'
-import { T, label, body, hero, section, row, input, button, segment, checkbox, doneText } from '../theme'
+import { T, sectionTitle, label, body, hero, section, row, input, button, segment, checkbox, doneText } from '../theme'
 
 /**
  * Lists — three views over the SAME two tables.
@@ -35,7 +35,10 @@ const dayLabel = (iso: string) => {
 
 export default function Lists() {
   const { user } = useAuth()
-  const [view, setView] = useState<View>('week')
+  // Opens on the plain list. The week board and shopping mode are both things
+  // you go TO deliberately; "what's on the list" is the question being asked
+  // nine times out of ten.
+  const [view, setView] = useState<View>('list')
   const [week, setWeek] = useState<string | undefined>(undefined)
   const { data, isLoading, error, refetch } = useLists(week)
   const toggle = useToggleListItem(week)
@@ -62,11 +65,13 @@ export default function Lists() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div style={{ display: 'flex', gap: 6 }}>
+        {/* List first, because it is the default and the tab order should match
+            what the screen actually opens on. */}
+        <button onClick={() => setView('list')} style={segment(view === 'list')}>List</button>
         <button onClick={() => setView('week')} style={segment(view === 'week')}>Week</button>
         <button onClick={() => setView('shop')} style={segment(view === 'shop')}>
           Shop{data.counts.open > 0 ? ` · ${data.counts.open}` : ''}
         </button>
-        <button onClick={() => setView('list')} style={segment(view === 'list')}>List</button>
       </div>
 
       {view === 'week' && <Week data={data} onToggle={(id) => toggle.mutate(id)} onShift={shift} />}
@@ -247,7 +252,7 @@ function Shop({ data, onToggle }: {
       {data.aisles.map((g) => (
         <div key={g.aisle} style={section()}>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={label()}>{AISLE_LABEL[g.aisle]}</span>
+            <span style={sectionTitle()}>{AISLE_LABEL[g.aisle]}</span>
             <span style={label()}>{g.items.length}</span>
           </div>
           {g.items.map((i) => (
@@ -266,7 +271,7 @@ function Shop({ data, onToggle }: {
       {data.checked.length > 0 && (
         <div style={section()}>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={label()}>In the cart</span>
+            <span style={sectionTitle()}>In the cart</span>
             <span style={label()}>{data.checked.length}</span>
           </div>
           {data.checked.map((i) => (
@@ -336,7 +341,7 @@ function Plain({ data, me, onToggle }: {
 
       <div style={section()}>
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span style={label()}>Grocery</span>
+          <span style={sectionTitle()}>Grocery</span>
           <span style={label()}>{data.counts.open} to get</span>
         </div>
         {all.length === 0 && <div style={{ ...body(14), color: T.muted, marginTop: 10 }}>Nothing here yet.</div>}
@@ -354,6 +359,7 @@ function Plain({ data, me, onToggle }: {
                 {AISLE_LABEL[i.aisle]}
                 {i.meal_id && <span style={{ color: T.accent }}> · from a meal</span>}
                 {i.visibility === 'private' && ' · private'}
+                {' · '}{i.checked_at ? `checked ${when(i.checked_at)}` : `added ${when(i.created_at)}`}
               </div>
             </div>
             {i.owner_id === me && (
@@ -366,6 +372,25 @@ function Plain({ data, me, onToggle }: {
       </div>
     </>
   )
+}
+
+/**
+ * "2:14 PM" today, "Tue 8:41 AM" this week, "Jul 3" beyond that.
+ *
+ * Parsed with `new Date()` on purpose — unlike a due date, created_at is a real
+ * TIMESTAMPTZ with an offset, so it converts to local time correctly. The
+ * date-only fields elsewhere in this app must NEVER be parsed this way.
+ */
+function when(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const now = new Date()
+  const sameDay = d.toDateString() === now.toDateString()
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  if (sameDay) return time
+  const days = Math.floor((now.getTime() - d.getTime()) / 86_400_000)
+  if (days < 7) return `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${time}`
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
 const textBtn: React.CSSProperties = {

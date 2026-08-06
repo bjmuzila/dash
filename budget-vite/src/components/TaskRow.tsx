@@ -45,7 +45,10 @@ export default function TaskRow({
   const done = !!task.done_at
 
   // The meta line is one mono string of · separated facts, like the reference.
-  const meta: { text: string; accent?: boolean }[] = []
+  const meta: { text: string; accent?: boolean; urgent?: boolean }[] = []
+  // Urgent leads the meta line and is RED. An overdue date next to it stays
+  // orange — two different facts, two different colours, never merged.
+  if (task.urgent && !done) meta.push({ text: 'Urgent', urgent: true })
   if (due) meta.push({ text: due.text, accent: due.overdue })
   if (task.visibility === 'shared') meta.push({ text: mine ? 'Shared' : `${ownerName ?? 'Shared'}` })
   if (task.project) meta.push({ text: task.project })
@@ -68,7 +71,8 @@ export default function TaskRow({
           {meta.length > 0 && (
             <div style={{ ...label({ marginTop: 5, letterSpacing: '0.1em' }) }}>
               {meta.map((m, i) => (
-                <span key={i} style={{ color: m.accent ? T.warn : T.muted }}>
+                <span key={i} style={{ color: m.urgent ? T.bad : m.accent ? T.warn : T.muted,
+                                       fontWeight: m.urgent ? 700 : undefined }}>
                   {i > 0 && <span style={{ color: T.faint }}> · </span>}
                   {m.text}
                 </span>

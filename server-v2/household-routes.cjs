@@ -15,7 +15,8 @@
  *   POST /api/hh/auth/change-password  household
  *   GET  /api/hh/health                public     — deploy smoke test
  *   GET  /api/hh/today                 household  — the composed Today payload
- *   GET  /api/hh/tasks                 household  — ?scope=open|done|all
+ *   GET  /api/hh/tasks                 household  — ?scope=open|done|done-all|all
+ *        'done' returns only the last 5 days; 'done-all' is the full history.
  *   POST /api/hh/tasks                 household  — action dispatch
  *   GET  /api/hh/notes                 household
  *   POST /api/hh/notes                 household  — action dispatch
@@ -199,13 +200,21 @@ function registerHouseholdRoutes({ register, send, readJson }) {
   // undated tasks to the very top and buries everything with a deadline).
   const OPEN_ORDER = `ORDER BY urgent DESC, due_date ASC NULLS LAST, starred DESC, created_at DESC`;
 
+  /** How long a completed task stays on the Todo screen before it clears. */
+  const DONE_WINDOW_DAYS = 5;
+
   async function listTasks(me, scope) {
     const p = hh.pool();
     const where =
-      scope === 'done' ? `${VISIBLE} AND done_at IS NOT NULL`
+      // 'done' is deliberately a WINDOW, not the whole history. A completed
+      // task is useful for a few days ("did I actually do that?") and then it
+      // is landfill. Nothing is deleted — the row stays and 'done-all' still
+      // returns it — it just stops occupying the screen.
+      scope === 'done' ? `${VISIBLE} AND done_at >= NOW() - INTERVAL '${DONE_WINDOW_DAYS} days'`
+      : scope === 'done-all' ? `${VISIBLE} AND done_at IS NOT NULL`
       : scope === 'all' ? VISIBLE
       : `${VISIBLE} AND done_at IS NULL`;
-    const order = scope === 'done' ? `ORDER BY done_at DESC` : OPEN_ORDER;
+    const order = scope === 'done' || scope === 'done-all' ? `ORDER BY done_at DESC` : OPEN_ORDER;
     const { rows } = await p.query(
       `SELECT ${TASK_COLS} FROM hh_tasks WHERE ${where} ${order} LIMIT 500`, [me]);
     return rows;

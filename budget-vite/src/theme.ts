@@ -35,10 +35,17 @@ export const T = {
   paperSunk: 'rgba(255,255,255,0.07)', // progress tracks, empty history squares
 
   // Foreground. Named "ink" from the light original — on dark it's near-white.
+  //
+  // ALL FOUR ARE WHITE, deliberately. The dashboard does the same thing —
+  // homeTheme.ts has `muted: "#FFFFFF"` — because grey-on-near-black is hard to
+  // read on a phone outdoors, which is where this app actually gets used.
+  // Hierarchy therefore comes from SIZE, CASE and WEIGHT, never from dimming
+  // the text. `faint` keeps a little transparency for one job only: struck-out
+  // completed rows, where fading is the whole signal.
   ink: '#FFFFFF',
-  inkSoft: 'rgba(255,255,255,0.72)',   // body text that isn't primary
-  muted: 'rgba(255,255,255,0.48)',     // labels, metadata
-  faint: 'rgba(255,255,255,0.26)',     // disabled, placeholder, empty state
+  inkSoft: '#FFFFFF',                  // body text that isn't primary
+  muted: '#FFFFFF',                    // labels, metadata
+  faint: 'rgba(255,255,255,0.55)',     // completed/struck text, placeholders
 
   // Live / interactive. CB Edge's light cyan — legible as small text on black,
   // which #219EBC is not.
@@ -103,6 +110,22 @@ export const label = (extra: CSSProperties = {}): CSSProperties => ({
   ...extra,
 })
 
+/**
+ * A SECTION TITLE. Sans, 17px, semibold — big enough to find while scrolling
+ * one-handed, which 10px letterspaced mono was not. The count or status on the
+ * right-hand side of a section stays `label()`: it is metadata, and promoting
+ * both would flatten the hierarchy the size difference creates.
+ */
+export const sectionTitle = (extra: CSSProperties = {}): CSSProperties => ({
+  fontFamily: SANS,
+  fontSize: 17,
+  fontWeight: 600,
+  letterSpacing: '-0.01em',
+  lineHeight: 1.25,
+  color: T.ink,
+  ...extra,
+})
+
 /** Body copy. */
 export const body = (size = 14): CSSProperties => ({
   fontFamily: SANS,
@@ -139,6 +162,36 @@ export const row = (extra: CSSProperties = {}): CSSProperties => ({
   gap: 12,
   padding: '12px 0',
   borderTop: `1px solid ${T.rule}`,
+  ...extra,
+})
+
+/**
+ * A dashboard CARD — the same surface `components/shared/PageCard.tsx` draws on
+ * cbedge.net: a faint cyan wash from the top edge over a translucent panel,
+ * hairline border, 16px radius.
+ *
+ * This is the container the Money page uses. Everywhere else still uses
+ * `section()` (a rule and whitespace) — the money screen is dense enough that
+ * the figures need boxing, the task screens are not.
+ */
+export const card = (extra: CSSProperties = {}): CSSProperties => ({
+  background:
+    'radial-gradient(circle at 50% 0%, rgba(33,158,188,0.07) 0%, transparent 55%), rgba(13,17,25,0.55)',
+  border: `1px solid ${T.rule}`,
+  borderRadius: 16,
+  padding: 14,
+  ...extra,
+})
+
+/** A small stat card. Lighter top edge instead of the cyan wash, so a row of
+ *  six doesn't turn the page into a wall of glow. */
+export const tile = (extra: CSSProperties = {}): CSSProperties => ({
+  background:
+    'linear-gradient(180deg, rgba(255,255,255,0.04) 0%, transparent 34%), rgba(13,17,25,0.55)',
+  border: `1px solid ${T.rule}`,
+  borderRadius: 13,
+  padding: '11px 10px',
+  minWidth: 0,
   ...extra,
 })
 

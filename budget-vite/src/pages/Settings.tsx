@@ -15,7 +15,7 @@ export default function Settings() {
         <div style={label()}>Account</div>
         <div style={{ marginTop: 10, fontSize: 15, fontWeight: 700 }}>{user?.displayName}</div>
         <div style={{ fontSize: 13, color: T.muted, marginTop: 2 }}>{user?.email}</div>
-        <div style={{ fontSize: 12, color: T.muted, opacity: 0.6, marginTop: 8 }}>
+        <div style={{ fontSize: 12, color: T.muted, marginTop: 8 }}>
           Budget profile: {user?.budgetProfileKey} · {user?.tz}
         </div>
       </section>
@@ -100,7 +100,7 @@ function GoogleCalendarCard() {
       )}
 
       {!status?.configured ? (
-        <div style={{ fontSize: 12, color: T.muted, opacity: 0.6, marginTop: 10 }}>
+        <div style={{ fontSize: 12, color: T.muted, marginTop: 10 }}>
           Not set up on the server (missing Google credentials).
         </div>
       ) : status.ownConnection ? (

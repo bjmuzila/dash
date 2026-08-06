@@ -3,7 +3,7 @@ import { useAuth } from '../auth'
 import { useTasks, useCreateTask, useToday } from '../hooks'
 import { ApiError, type Task } from '../api'
 import TaskRow from '../components/TaskRow'
-import { T, label, body, section, input, button, segment } from '../theme'
+import { T, sectionTitle, label, body, section, input, button, segment } from '../theme'
 
 /**
  * Todo — the full list, with urgent as a toggle on the input.
@@ -15,12 +15,21 @@ import { T, label, body, section, input, button, segment } from '../theme'
  * `urgent` is a separate field from `starred`. Starred means "one of my Top 3
  * on Today"; urgent means "this can't wait". One flag for both would make
  * pinning something to Today silently mark it as an emergency.
+ *
+ * Urgent is RED — the only place red means "act", not "error". Orange was
+ * already spoken for by overdue dates, and two shades of warning next to each
+ * other read as one.
+ *
+ * Ticking something off drops it into Completed, which the server trims to the
+ * last five days. Nothing is deleted; it just stops taking up room.
  */
 export default function Todo() {
   const { user } = useAuth()
   const { data: today } = useToday()
-  const [scope, setScope] = useState<'open' | 'done'>('open')
-  const { data, isLoading, error, refetch } = useTasks(scope)
+  // Two queries, not a scope toggle. Completed work belongs on the same screen
+  // as the work — a tab you have to remember to check is a tab nobody checks.
+  const { data, isLoading, error, refetch } = useTasks('open')
+  const { data: doneData } = useTasks('done')
 
   if (isLoading) return <div style={{ ...body(14), color: T.muted }}>Loading…</div>
   if (error) {
@@ -36,17 +45,18 @@ export default function Todo() {
   if (!user) return null
 
   const tasks = data?.tasks ?? []
+  const done = doneData?.tasks ?? []
   const todayIso = today?.today ?? new Date().toISOString().slice(0, 10)
   const people = today?.people ?? []
-  const urgent = tasks.filter((t) => t.urgent && !t.done_at)
-  const rest = tasks.filter((t) => !(t.urgent && !t.done_at))
+  const urgent = tasks.filter((t) => t.urgent)
+  const rest = tasks.filter((t) => !t.urgent)
 
   const rows = (list: Task[]) =>
     list.map((t) => (
       <div key={t.id} style={t.urgent && !t.done_at
         // A left rule rather than a badge: it marks the whole row without
         // adding another thing to read.
-        ? { borderLeft: `2px solid ${T.warn}`, paddingLeft: 11, marginLeft: -13 }
+        ? { borderLeft: `2px solid ${T.bad}`, paddingLeft: 11, marginLeft: -13 }
         : undefined}>
         <TaskRow task={t} today={todayIso} me={user.id} people={people} />
       </div>
@@ -56,27 +66,29 @@ export default function Todo() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
       <QuickAdd />
 
-      <div style={{ display: 'flex', gap: 6 }}>
-        <button onClick={() => setScope('open')} style={segment(scope === 'open')}>Open</button>
-        <button onClick={() => setScope('done')} style={segment(scope === 'done')}>Done</button>
-      </div>
-
-      {scope === 'open' && urgent.length > 0 && (
-        <div style={{ ...section(), borderColor: T.warn }}>
-          <Head left="Urgent" right={String(urgent.length)} warn />
+      {urgent.length > 0 && (
+        <div style={{ ...section(), borderColor: T.bad }}>
+          <Head left="Urgent" right={String(urgent.length)} urgent />
           <div>{rows(urgent)}</div>
         </div>
       )}
 
       <div style={section()}>
-        <Head left={scope === 'done' ? 'Done' : urgent.length ? 'Everything else' : 'Open'}
-              right={String(rest.length)} />
+        <Head left={urgent.length ? 'Everything else' : 'Open'} right={String(rest.length)} />
         {rest.length ? <div>{rows(rest)}</div> : (
-          <div style={{ ...body(14), color: T.muted, marginTop: 10 }}>
-            {scope === 'done' ? 'Nothing completed yet.' : 'Nothing on the list.'}
-          </div>
+          <div style={{ ...body(14), color: T.muted, marginTop: 10 }}>Nothing on the list.</div>
         )}
       </div>
+
+      {done.length > 0 && (
+        <div style={section()}>
+          {/* The server only returns the last 5 days here. Nothing is deleted —
+              older completions stay in the database, they just stop taking up
+              space on a phone screen. */}
+          <Head left="Completed" right={`${done.length} · clears after 5 days`} />
+          <div>{rows(done)}</div>
+        </div>
+      )}
     </div>
   )
 }
@@ -112,7 +124,7 @@ function QuickAdd() {
   return (
     <form onSubmit={submit}>
       <div style={{ display: 'flex', gap: 8 }}>
-        <input style={{ ...input(), flex: 1, borderColor: urgent ? T.warn : undefined }}
+        <input style={{ ...input(), flex: 1, borderColor: urgent ? T.bad : undefined }}
                placeholder="Add a todo…" value={title}
                onChange={(e) => setTitle(e.target.value)} enterKeyHint="done" />
         <button type="submit" disabled={!title.trim() || create.isPending}
@@ -123,8 +135,8 @@ function QuickAdd() {
       <div style={{ display: 'flex', gap: 6, marginTop: 9, alignItems: 'center', flexWrap: 'wrap' }}>
         <button type="button" onClick={() => setUrgent((v) => !v)}
                 style={urgent
-                  ? { ...segment(true), background: T.warn, borderColor: T.warn, color: '#1a1000' }
-                  : { ...segment(false), borderColor: T.warn, color: T.warn }}>
+                  ? { ...segment(true), background: T.bad, borderColor: T.bad, color: '#fff' }
+                  : { ...segment(false), borderColor: 'rgba(239,68,68,0.55)', color: T.bad }}>
           ! Urgent
         </button>
         <input type="date" value={due} onChange={(e) => setDue(e.target.value)}
@@ -138,11 +150,11 @@ function QuickAdd() {
   )
 }
 
-function Head({ left, right, warn }: { left: string; right?: string; warn?: boolean }) {
+function Head({ left, right, urgent }: { left: string; right?: string; urgent?: boolean }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
-      <span style={label(warn ? { color: T.warn } : {})}>{left}</span>
-      {right && <span style={label(warn ? { color: T.warn } : {})}>{right}</span>}
+      <span style={sectionTitle(urgent ? { color: T.bad } : {})}>{left}</span>
+      {right && <span style={label(urgent ? { color: T.bad } : {})}>{right}</span>}
     </div>
   )
 }
