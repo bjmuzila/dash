@@ -130,6 +130,85 @@ async function ensureSchema() {
         created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         last_surfaced_at TIMESTAMPTZ
       )`);
+    // ── Routines & habits ────────────────────────────────────────────────
+    // A routine is a recurring intention, not a task: it never "completes", it
+    // just gets done again tomorrow. So the item and the daily tick are
+    // separate tables — one row per routine, one row per (routine, day).
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hh_routines (
+        id         SERIAL PRIMARY KEY,
+        owner_id   INTEGER NOT NULL REFERENCES hh_users(id) ON DELETE CASCADE,
+        visibility TEXT NOT NULL DEFAULT 'private',
+        title      TEXT NOT NULL,
+        block      TEXT NOT NULL DEFAULT 'morning',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        active     BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
+    // PRIMARY KEY (routine_id, day) is what makes ticking idempotent: a double
+    // tap on a slow connection can't log the same day twice, and a shared
+    // routine ticked by one person is simply done for the household.
+    // `day` is a DATE in the user's timezone, resolved before it gets here —
+    // never now()::date, which would roll over at 8pm Eastern.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hh_routine_log (
+        routine_id INTEGER NOT NULL REFERENCES hh_routines(id) ON DELETE CASCADE,
+        day        DATE NOT NULL,
+        done_by    INTEGER REFERENCES hh_users(id) ON DELETE SET NULL,
+        done_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (routine_id, day)
+      )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_routine_log_day_idx ON hh_routine_log(day DESC)`);
+
+    // ── Projects ─────────────────────────────────────────────────────────
+    // A project groups work and shows how far along it is. Progress is computed
+    // from MILESTONES, not from tasks: a project with 40 small tasks and 3 real
+    // milestones reads as 80% done when you've knocked out the easy tasks, which
+    // is the exact lie a progress bar exists to prevent.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hh_projects (
+        id          SERIAL PRIMARY KEY,
+        owner_id    INTEGER NOT NULL REFERENCES hh_users(id) ON DELETE CASCADE,
+        visibility  TEXT NOT NULL DEFAULT 'private',
+        name        TEXT NOT NULL,
+        description TEXT,
+        status      TEXT NOT NULL DEFAULT 'active',
+        color       TEXT,
+        target_date DATE,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        archived_at TIMESTAMPTZ
+      )`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hh_milestones (
+        id         SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES hh_projects(id) ON DELETE CASCADE,
+        title      TEXT NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        done_at    TIMESTAMPTZ,
+        done_by    INTEGER REFERENCES hh_users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_milestones_project_idx ON hh_milestones(project_id, sort_order)`);
+    // Time logging. Stored in whole minutes — a stopwatch is more precision than
+    // anyone reviews, and minutes keep every total exact in integer arithmetic.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hh_time_log (
+        id         SERIAL PRIMARY KEY,
+        project_id INTEGER NOT NULL REFERENCES hh_projects(id) ON DELETE CASCADE,
+        user_id    INTEGER NOT NULL REFERENCES hh_users(id) ON DELETE CASCADE,
+        day        DATE NOT NULL,
+        minutes    INTEGER NOT NULL,
+        note       TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_time_log_project_idx ON hh_time_log(project_id, day DESC)`);
+    // Tasks gain a real project link. Added as an ALTER because hh_tasks already
+    // exists on the deployed box — CREATE TABLE IF NOT EXISTS would skip it.
+    // The old free-text `project` column stays for anything already using it.
+    await pool.query(`ALTER TABLE hh_tasks ADD COLUMN IF NOT EXISTS project_id INTEGER REFERENCES hh_projects(id) ON DELETE SET NULL`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_tasks_project_idx ON hh_tasks(project_id)`);
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS hh_settings (
         user_id INTEGER NOT NULL REFERENCES hh_users(id) ON DELETE CASCADE,

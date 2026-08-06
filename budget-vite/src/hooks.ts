@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { today as todayApi, tasks as tasksApi, notes as notesApi, settings as settingsApi,
-         calendar as calendarApi,
+         calendar as calendarApi, budget as budgetApi, routines as routinesApi,
+         projects as projectsApi,
+         type RoutinesPayload,
          type Task, type TodayPayload, type NewTask, type TaskPatch } from './api'
 
 /**
@@ -97,6 +99,141 @@ export function useDisconnectCalendar() {
     },
   })
 }
+
+// ── Projects ─────────────────────────────────────────────────────────────────
+
+export function useProjects(archived = false) {
+  return useQuery({ queryKey: ['projects', archived], queryFn: () => projectsApi.list(archived) })
+}
+
+export function useProject(id: number | null) {
+  return useQuery({
+    queryKey: ['project', id],
+    queryFn: () => projectsApi.get(id as number),
+    enabled: !!id,
+  })
+}
+
+/** Any project write refreshes both the list and the open detail — progress
+ *  and totals appear in both, and a stale bar is the thing you'd notice. */
+function useProjectMutation<T>(fn: (a: T) => Promise<unknown>) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['projects'] })
+      void qc.invalidateQueries({ queryKey: ['project'] })
+      void qc.invalidateQueries({ queryKey: ['tasks'] })
+      void qc.invalidateQueries({ queryKey: TODAY_KEY })
+    },
+  })
+}
+
+export const useCreateProject = () => useProjectMutation(projectsApi.create)
+export const useArchiveProject = () =>
+  useProjectMutation((a: { id: number; archived?: boolean }) => projectsApi.archive(a.id, a.archived))
+export const useUpdateProject = () =>
+  useProjectMutation((a: { id: number; patch: Parameters<typeof projectsApi.update>[1] }) =>
+    projectsApi.update(a.id, a.patch))
+export const useAddMilestone = () =>
+  useProjectMutation((a: { id: number; title: string }) => projectsApi.addMilestone(a.id, a.title))
+export const useToggleMilestone = () => useProjectMutation(projectsApi.toggleMilestone)
+export const useDeleteMilestone = () => useProjectMutation(projectsApi.deleteMilestone)
+export const useLogTime = () =>
+  useProjectMutation((a: { id: number; minutes: number; note?: string }) =>
+    projectsApi.logTime(a.id, a.minutes, a.note))
+export const useDeleteTime = () => useProjectMutation(projectsApi.deleteTime)
+
+// ── Routines ─────────────────────────────────────────────────────────────────
+
+const ROUTINES_KEY = (date?: string) => ['routines', date ?? 'today'] as const
+
+export function useRoutines(date?: string) {
+  return useQuery({ queryKey: ROUTINES_KEY(date), queryFn: () => routinesApi.get(date) })
+}
+
+/**
+ * Ticking is optimistic — including the streak.
+ *
+ * A habit tracker that pauses before the checkbox fills is the one interaction
+ * you do half-asleep at 6am, and hesitation there is what makes people stop.
+ * The streak is bumped locally too: seeing it go up is the entire point of the
+ * gesture, and a number that lags a second reads as "it didn't count".
+ */
+export function useToggleRoutine(date?: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => routinesApi.toggle(id, date),
+    onMutate: async (id) => {
+      const key = ROUTINES_KEY(date)
+      await qc.cancelQueries({ queryKey: key })
+      const prev = qc.getQueryData<RoutinesPayload>(key)
+      qc.setQueryData<RoutinesPayload>(key, (old) => {
+        if (!old) return old
+        let delta = 0
+        const blocks = old.blocks.map((b) => {
+          const items = b.items.map((it) => {
+            if (it.id !== id) return it
+            const done = !it.done
+            delta += done ? 1 : -1
+            return { ...it, done, streak: Math.max(0, it.streak + (done ? 1 : -1)) }
+          })
+          return { ...b, items, done: items.filter((i) => i.done).length }
+        })
+        return { ...old, blocks, doneToday: Math.max(0, old.doneToday + delta) }
+      })
+      return prev
+    },
+    onError: (_e, _id, prev) => { if (prev) qc.setQueryData(ROUTINES_KEY(date), prev) },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ['routines'] })
+      void qc.invalidateQueries({ queryKey: TODAY_KEY })
+    },
+  })
+}
+
+function useRoutineMutation<T>(fn: (a: T) => Promise<unknown>) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['routines'] })
+      void qc.invalidateQueries({ queryKey: TODAY_KEY })
+    },
+  })
+}
+
+export const useCreateRoutine = () => useRoutineMutation(routinesApi.create)
+export const useArchiveRoutine = () => useRoutineMutation(routinesApi.archive)
+export const useUpdateRoutine = () =>
+  useRoutineMutation((a: { id: number; patch: Parameters<typeof routinesApi.update>[1] }) =>
+    routinesApi.update(a.id, a.patch))
+
+// ── Budget ───────────────────────────────────────────────────────────────────
+
+const BUDGET_KEY = (month?: string) => ['budget', month ?? 'current'] as const
+
+export function useBudget(month?: string) {
+  return useQuery({ queryKey: BUDGET_KEY(month), queryFn: () => budgetApi.month(month) })
+}
+
+/** Every budget write invalidates the month AND Today — the money strip on
+ *  Today reads the same tables, and a stale balance there is worse than none. */
+function useBudgetMutation<TArgs>(fn: (a: TArgs) => Promise<unknown>) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['budget'] })
+      void qc.invalidateQueries({ queryKey: TODAY_KEY })
+    },
+  })
+}
+
+export const useAddBudgetRow = () => useBudgetMutation(budgetApi.addRow)
+export const useMarkBillPaid = () => useBudgetMutation(budgetApi.markPaid)
+export const useDeleteBudgetRow = () => useBudgetMutation(budgetApi.deleteRow)
+export const useSetDailyBalance = () => useBudgetMutation(budgetApi.setDailyBalance)
 
 // ── Optimistic plumbing ──────────────────────────────────────────────────────
 

@@ -8,6 +8,8 @@ import ChangePassword from './pages/ChangePassword'
 import { T, FONT } from './theme'
 
 const Today    = lazy(() => import('./pages/Today'))
+const Routines = lazy(() => import('./pages/Routines'))
+const Projects = lazy(() => import('./pages/Projects'))
 const Budget   = lazy(() => import('./pages/Budget'))
 const Settings = lazy(() => import('./pages/Settings'))
 
@@ -42,6 +44,8 @@ function Gate() {
     <Shell>
       <Routes>
         <Route path="/today" element={S(<Today />)} />
+        <Route path="/routines" element={S(<Routines />)} />
+        <Route path="/projects" element={S(<Projects />)} />
         <Route path="/budget" element={S(<Budget />)} />
         <Route path="/settings" element={S(<Settings />)} />
         <Route path="*" element={<Navigate to="/today" replace />} />

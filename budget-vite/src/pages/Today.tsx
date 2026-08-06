@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react'
 import { useAuth } from '../auth'
 import { useToday, useCreateTask } from '../hooks'
-import { ApiError, type Task } from '../api'
+import { Link } from 'react-router-dom'
+import { ApiError, type Task, type TodayPayload } from '../api'
 import TaskRow from '../components/TaskRow'
 import CalendarCard from '../components/CalendarCard'
 import { T, card, labelCap, input, button } from '../theme'
@@ -60,6 +61,33 @@ export default function Today() {
         )}
       </section>
 
+      {data.routines && data.routines.total > 0 && (
+        <Link to="/routines" style={{ textDecoration: 'none', color: 'inherit' }}>
+          <section style={card()}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <div>
+                <div style={labelCap()}>Routines</div>
+                <div style={{ fontSize: 14, color: T.muted, marginTop: 6 }}>
+                  {data.routines.done} of {data.routines.total} done
+                </div>
+              </div>
+              <div style={{
+                fontSize: 22, fontWeight: 900,
+                color: data.routines.done === data.routines.total ? T.green : T.text,
+              }}>
+                {Math.round((data.routines.done / data.routines.total) * 100)}%
+              </div>
+            </div>
+            <div style={{ height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.08)', marginTop: 10, overflow: 'hidden' }}>
+              <div style={{
+                width: `${(data.routines.done / data.routines.total) * 100}%`, height: '100%',
+                background: data.routines.done === data.routines.total ? T.green : T.cyan,
+              }} />
+            </div>
+          </section>
+        </Link>
+      )}
+
       <CalendarCard status={data.calendar} date={today} />
 
       <section style={card()}>
@@ -97,11 +125,68 @@ export default function Today() {
         </section>
       )}
 
+      <MoneyStrip money={data.money} />
+    </div>
+  )
+}
+
+// ── Money ────────────────────────────────────────────────────────────────────
+
+/**
+ * Balances plus what's about to hit, read from the same budget tables as
+ * /owner/budget. Deliberately read-only — Today is for noticing, the Budget tab
+ * is for doing.
+ */
+function MoneyStrip({ money }: { money: TodayPayload['money'] }) {
+  if (!money) {
+    return (
       <section style={card()}>
         <div style={labelCap()}>Money</div>
         <Empty>Balances and the next bills due land here.</Empty>
       </section>
-    </div>
+    )
+  }
+  const fmt = (n: number) =>
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: money.currency || 'USD', maximumFractionDigits: 0 }).format(n || 0)
+  const shortDate = (iso: string) => { const [, m, d] = iso.split('-'); return `${Number(m)}/${Number(d)}` }
+  const bills = [...money.overdueBills, ...money.nextBills].slice(0, 3)
+
+  return (
+    <section style={card()}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+        <div style={labelCap()}>Money</div>
+        <Link to="/budget" style={{ fontSize: 12, color: T.accent, textDecoration: 'none', fontWeight: 700 }}>
+          Open →
+        </Link>
+      </div>
+
+      <div style={{ fontSize: 26, fontWeight: 900, marginTop: 8, color: money.total < 0 ? T.red : T.text }}>
+        {fmt(money.total)}
+      </div>
+      <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>
+        across {Object.keys(money.balances).length} accounts
+        {money.overdue > 0 && (
+          <span style={{ color: T.red, fontWeight: 800 }}> · {money.overdue} past due</span>
+        )}
+      </div>
+
+      {bills.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          {bills.map((b) => (
+            <div key={b.tag} style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '8px 0', borderTop: `1px solid ${T.border}`, fontSize: 13,
+            }}>
+              <span style={{ width: 38, flexShrink: 0, fontWeight: 800, color: b.overdue ? T.red : T.muted }}>
+                {shortDate(b.date)}
+              </span>
+              <span style={{ flex: 1, minWidth: 0, wordBreak: 'break-word' }}>{b.label}</span>
+              <span style={{ fontWeight: 800 }}>{fmt(b.amount)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   )
 }
 

@@ -14,6 +14,8 @@ import { T, FONT, SHELL_GLOW, labelCap } from '../theme'
 
 const TABS = [
   { to: '/today', label: 'Today', icon: '◎' },
+  { to: '/routines', label: 'Routines', icon: '↻' },
+  { to: '/projects', label: 'Projects', icon: '◇' },
   { to: '/budget', label: 'Budget', icon: '▤' },
   { to: '/settings', label: 'Settings', icon: '⚙' },
 ] as const
@@ -80,9 +82,11 @@ export default function Shell({ children }: { children: ReactNode }) {
               minHeight: 54,
               textDecoration: 'none',
               color: isActive ? T.accent : T.muted,
-              fontSize: 11,
+              // 5 tabs on a 390px phone: 10px + tighter tracking keeps every
+              // label on one line. Any larger and "Routines" wraps.
+              fontSize: 10,
               fontWeight: 800,
-              letterSpacing: '0.08em',
+              letterSpacing: '0.04em',
               textTransform: 'uppercase',
             })}
           >

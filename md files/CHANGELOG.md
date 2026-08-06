@@ -1,5 +1,165 @@
 # Changelog
 
+## 2026-08-06 (i) - budget.cbedge.net phase 2: routines & habits, projects & milestones
+
+Two new modules on budget.cbedge.net. Tab bar is now Today · Routines · Projects ·
+Budget · Settings. **Nothing on cbedge.net changed** — no trading route, socket topic,
+page, proxy or existing schema was touched.
+
+### Routines & habits — `server-v2/_lib-household-routines.cjs`
+
+**Deliberately NOT tasks.** A routine is a recurring intention that never completes; a
+task is done once and gone. Mixing them leaves your to-do list permanently full of
+things you do every day, or makes habits vanish the moment you tick them. Separate
+tables, separate screen: `hh_routines` (one row per habit) + `hh_routine_log` (one row
+per routine per day).
+
+**The streak rule.** A streak counts consecutive days backwards from today — but
+**today is not counted against you until it's over**. At 7am, before you've done your
+morning routine, the walk starts from yesterday. A streak that resets at midnight and
+only recovers once you've performed is punishing and factually wrong: you haven't
+broken anything at 7am.
+
+Other decisions:
+- `PRIMARY KEY (routine_id, day)` makes ticking idempotent, and means a shared routine
+  ticked by either person is simply done for the household. `done_by` records who.
+- `day` is always resolved in the user's timezone before it reaches SQL. Never
+  `now()::date`, which rolls over at 8pm Eastern and would tick the wrong day for the
+  entire evening block.
+- **Removing archives, it doesn't delete.** The log rows would cascade away with the
+  routine, and losing a 90-day streak because you tidied your list is how people stop
+  using an app. A real delete stays available for one you never wanted.
+- Ticking is optimistic *including the streak number* — that number is the whole point
+  of the gesture, and one that lags a second reads as "it didn't count".
+- Morning / afternoon / evening blocks; new items sort to the BOTTOM of their block,
+  because a routine list is a sequence you work through, not a feed.
+
+### Projects & milestones — `server-v2/_lib-household-projects.cjs`
+
+**Progress is measured from MILESTONES, never from task counts.** A project with 40
+small chores and 3 real milestones reads as 80% complete once you've cleared the easy
+chores — precisely the lie a progress bar exists to prevent. Milestones are the few
+things that mean progress; tasks are listed and counted separately. Asserted directly
+in the tests: 7 of 8 tasks done, progress stays at 25%.
+
+A project with no milestones reports **null** progress and renders no bar at all —
+"not measured yet" is honest, and a 0% bar on a project you've barely defined reads as
+failure.
+
+Other decisions:
+- Milestones and time entries inherit permission from the PROJECT, resolved by joining
+  — never by trusting an id from the client. Tested from both sides.
+- Time is stored in whole minutes and **capped at 24h per entry**: anything larger is
+  an extra zero on "90", and one bad row silently ruins every total downstream.
+  Negative entries are allowed as corrections.
+- Only whoever logged an hour can delete it. Archive/delete of a project stay
+  owner-only even when shared, because they take milestones and logged hours with them.
+- Deleting a project cascades to its milestones and time, but a task pointing at it
+  survives (`ON DELETE SET NULL`) — losing the task would be losing unrelated work.
+- List and detail are one screen with a selected id, not two routes: on a phone you
+  bounce in and out constantly, and a route change loses scroll position every time.
+- `hh_tasks.project_id` added via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` — the
+  table already exists on the deployed box, so `CREATE TABLE IF NOT EXISTS` would have
+  skipped it silently. The old free-text `project` column is left alone.
+
+### New routes
+`GET/POST /api/hh/routines` · `GET/POST /api/hh/projects` (create, update, archive,
+delete, addMilestone, toggleMilestone, updateMilestone, deleteMilestone, logTime,
+deleteTime). Today's payload gains a `routines` progress line.
+
+### Verification — 362 assertions across 8 suites, 0 failures
+- **51 routine tests**: the streak rule in isolation (including across month, year,
+  leap-day and DST boundaries), idempotent ticking, shared ticking by either person,
+  archive-keeps-history, backfilling a past day, and both directions of the visibility
+  rule.
+- **58 project tests**: milestone-driven progress, the explicit "tasks do not move the
+  bar" case, permission-by-join from both sides, time validation and caps, cascade
+  behaviour on delete, archive round-trip.
+- 73 calendar route, 57 household, 53 budget, 32 crypto/timezone, 19 recurrence parity
+  (16,389 comparisons), 19 date-label.
+- `tsc --noEmit` clean, `vite build` clean, `node --check` on all server files.
+
+**No proxy change** — `proxy-tastytrade.js` and `proxy-thetadata.js` untouched.
+
+
+## 2026-08-06 (h) - budget.cbedge.net step 6: the budget, on the phone
+
+Phase 1 step 6 of 7. Balances, month totals, bills due, register and category spend
+on a phone — reading the SAME tables as `/owner/budget`. Both placeholders on Today
+are now live. `/owner/budget` is untouched and stays live.
+
+**There is no second budget.** No copy, no sync, no import. One register, two views:
+a payment entered on the phone appears on the desktop page immediately, and a bill
+marked paid on either cannot be paid again on the other.
+
+### How, with no migration
+The budget tables were already multi-profile — every row is scoped by `profile_id`
+and `/api/budget` has always resolved it via `getOrCreateBudgetProfile('owner')`.
+`hh_users.budget_profile_key` defaults to `'owner'`, so both household accounts land
+on the existing profile and see the existing register. Point someone at another key
+and they get a private budget instead. No `ALTER TABLE`, no backfill, nothing to undo.
+
+### New: `server-v2/_lib-household-budget.cjs`
+
+**The part that must not drift.** Recurring bills are not rows — they are rules,
+expanded into occurrences at read time. An occurrence becomes a real row only when
+someone marks it paid, "materialising" it under
+
+    __recur__:<ruleId>:<YYYY-MM-DD>
+
+`occurrencesInMonth()` and that tag are ported **verbatim** from
+`app/owner/budget/page.tsx`. If the two ever disagree, a bill paid on the phone still
+shows unpaid on the desktop and gets paid twice — or a projection sits alongside its
+own materialised row and double-counts against the balance.
+
+Monthly rules clamp the anchor's day-of-month to the month length (a rule anchored on
+the 31st fires on the 30th in April, the 28th in February, the 29th in Feb 2028).
+Weekly/biweekly walk back from the anchor to before the month, then step forward.
+
+Other decisions:
+- **The sign is decided server-side.** The phone sends a positive amount plus
+  "pay" or "income"; a fumbled minus can't turn a payment into a deposit.
+- **markBillPaid is idempotent by tag** — a double-tap on a slow connection can't pay
+  the same bill twice.
+- Projected bills carry negative ids and cannot be edited or deleted (there is no row
+  behind them). The UI says so rather than offering a button that would 400.
+- Projected bills count against the running balance but NOT against category spend —
+  they haven't been spent yet, and counting them would overstate every category.
+- Errors throw human-readable text ("Pick a date.", "Give it a name.") surfaced as
+  400s so the phone shows them verbatim.
+
+### New route: `/api/hh/budget`
+GET a month; POST `addRow | markBillPaid | updateRow | deleteRow | setDailyBalance |
+setCategory`. Scoped by the caller's `budget_profile_key`.
+
+### Today's Money card is live
+`/api/hh/today` now carries a `money` summary — total balance, per-bank split, past-due
+count and the next three bills — wrapped so a budget hiccup degrades one card instead
+of the screen. Read-only by design: Today is for noticing, the Budget tab is for doing.
+
+### `budget-vite/src/pages/Budget.tsx`
+Month switcher, balance hero with per-bank split, in/out/net, Past due and Coming up
+with one-tap Paid, add-entry form, newest-first register with running balance, and
+category bars. Dates are sliced from the `YYYY-MM-DD` string, never parsed — same
+rule as everywhere else in this app.
+
+### Verification — 253 assertions, 0 failures
+- **Parity: 16,389 comparisons** of `occurrencesInMonth` and `addDays` against the
+  desktop implementation *extracted from the shipped `page.tsx` at test time*, across
+  every day-of-month anchor x 3 frequencies x 17 months, plus 7,209 `addDays` cases
+  over DST and leap boundaries. Identical output in every case. The tag format is
+  asserted against the literal template in the desktop source.
+- **53 budget integration tests** against real PostgreSQL: running balances, projection
+  vs materialisation, the double-count trap, mark-paid idempotency, server-side sign,
+  validation, categories, month boundaries, leap February, empty profile. Includes a
+  direct assertion that the desktop's own skip rule and the phone's produce the
+  identical bill set from the same live rows.
+- 73 calendar route, 57 household integration, 32 crypto/timezone, 19 date-label.
+- `tsc --noEmit` clean, `vite build` clean, `node --check` on all server files.
+
+**No proxy change** — `proxy-tastytrade.js` and `proxy-thetadata.js` untouched.
+
+
 ## 2026-08-06 (g) - budget.cbedge.net: shared household calendar + calendar picker
 
 Follow-up to (f), fixing a design flaw found in real use: a **shared family calendar

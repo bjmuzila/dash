@@ -47,6 +47,17 @@ const hh = require('./_lib-household.cjs');
 let gcal = null;
 try { gcal = require('./_lib-google-calendar.cjs'); }
 catch (e) { console.warn('[household] google-calendar lib not loaded:', e.message); }
+// The budget, read from the SAME tables /owner/budget uses. Optional like the
+// rest: without the DB bundle the routes simply don't register.
+let hbudget = null;
+try { hbudget = require('./_lib-household-budget.cjs'); }
+catch (e) { console.warn('[household] budget lib not loaded:', e.message); }
+let hroutines = null;
+try { hroutines = require('./_lib-household-routines.cjs'); }
+catch (e) { console.warn('[household] routines lib not loaded:', e.message); }
+let hprojects = null;
+try { hprojects = require('./_lib-household-projects.cjs'); }
+catch (e) { console.warn('[household] projects lib not loaded:', e.message); }
 
 // THE access predicate. $1 is always the caller's hh_users.id.
 const VISIBLE = `(owner_id = $1 OR visibility = 'shared')`;
@@ -60,7 +71,7 @@ const VISIBLE = `(owner_id = $1 OR visibility = 'shared')`;
 // the same shape an <input type="date"> expects. Do not "simplify" this back.
 const TASK_COLS = `id, owner_id, visibility, title, notes,
   to_char(due_date, 'YYYY-MM-DD') AS due_date, starred,
-  project, done_at, created_at, updated_at, touched_at`;
+  project, project_id, done_at, created_at, updated_at, touched_at`;
 
 function registerHouseholdRoutes({ register, send, readJson }) {
   if (!hh.available()) {
@@ -213,10 +224,11 @@ function registerHouseholdRoutes({ register, send, readJson }) {
           const title = str(body?.title, 300);
           if (!title) { send(res, 400, { error: 'A task needs a title.' }, nostore); return; }
           const { rows } = await p.query(
-            `INSERT INTO hh_tasks (owner_id, visibility, title, notes, due_date, starred, project)
-             VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING ${TASK_COLS}`,
+            `INSERT INTO hh_tasks (owner_id, visibility, title, notes, due_date, starred, project, project_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${TASK_COLS}`,
             [me, vis(body?.visibility), title, str(body?.notes, 4000) || null,
-             dateOrNull(body?.dueDate), !!body?.starred, str(body?.project, 120) || null]);
+             dateOrNull(body?.dueDate), !!body?.starred, str(body?.project, 120) || null,
+             Number(body?.projectId) > 0 ? Number(body.projectId) : null]);
           send(res, 200, { ok: true, task: rows[0] }, nostore);
           return;
         }
@@ -243,6 +255,7 @@ function registerHouseholdRoutes({ register, send, readJson }) {
           if (body?.starred !== undefined) put('starred', !!body.starred);
           if (body?.project !== undefined) put('project', str(body.project, 120) || null);
           if (body?.visibility !== undefined) put('visibility', vis(body.visibility));
+          if (body?.projectId !== undefined) put('project_id', Number(body.projectId) > 0 ? Number(body.projectId) : null);
           if (!sets.length) { send(res, 400, { error: 'Nothing to update.' }, nostore); return; }
           const { rows } = await p.query(
             `UPDATE hh_tasks SET ${sets.join(', ')}, updated_at=now(), touched_at=now()
@@ -505,6 +518,219 @@ function registerHouseholdRoutes({ register, send, readJson }) {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // Projects, milestones, time
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // Progress is measured from MILESTONES, never from task counts — see the
+  // header of _lib-household-projects.cjs. Milestones and time entries inherit
+  // their permission from the PROJECT, resolved by joining rather than trusting
+  // an id from the client.
+
+  if (hprojects && hprojects.available()) {
+    add('/api/hh/projects', {
+      auth: 'household', methods: ['GET', 'POST'],
+      async handler(req, res, _ctx, access) {
+        const u = access.hhUser;
+        try {
+          if (req.method === 'GET') {
+            const q = new URL(req.url || '/', 'http://localhost').searchParams;
+            const id = Number(q.get('id') || 0);
+            if (id > 0) {
+              const p = await hprojects.getProject(u.id, id);
+              if (!p) { send(res, 404, { error: 'Not found.' }, nostore); return; }
+              send(res, 200, { project: p }, nostore); return;
+            }
+            send(res, 200, {
+              projects: await hprojects.listProjects(u.id, { includeArchived: q.get('archived') === '1' }),
+            }, nostore);
+            return;
+          }
+
+          const body = await readJson(req, 64_000);
+          const action = str(body?.action, 40);
+          const id = Number(body?.id ?? 0);
+
+          switch (action) {
+            case 'create':
+              send(res, 200, { ok: true, project: await hprojects.createProject(u.id, {
+                name: body?.name, description: body?.description, visibility: body?.visibility,
+                targetDate: body?.targetDate, color: body?.color, status: body?.status,
+              }) }, nostore);
+              return;
+            case 'update':
+              send(res, 200, { ok: true, project: await hprojects.updateProject(u.id, id, {
+                name: body?.name, description: body?.description, visibility: body?.visibility,
+                status: body?.status, color: body?.color, targetDate: body?.targetDate,
+              }) }, nostore);
+              return;
+            case 'archive':
+              send(res, 200, { ok: true, project: await hprojects.archiveProject(u.id, id, body?.archived !== false) }, nostore);
+              return;
+            case 'delete':
+              await hprojects.deleteProject(u.id, id);
+              send(res, 200, { ok: true }, nostore); return;
+            case 'addMilestone':
+              send(res, 200, { ok: true, milestone: await hprojects.addMilestone(u.id, id, body?.title) }, nostore);
+              return;
+            case 'toggleMilestone':
+              send(res, 200, { ok: true, milestone: await hprojects.toggleMilestone(u.id, Number(body?.milestoneId)) }, nostore);
+              return;
+            case 'updateMilestone':
+              send(res, 200, { ok: true, milestone: await hprojects.updateMilestone(u.id, Number(body?.milestoneId), body?.title) }, nostore);
+              return;
+            case 'deleteMilestone':
+              await hprojects.deleteMilestone(u.id, Number(body?.milestoneId));
+              send(res, 200, { ok: true }, nostore); return;
+            case 'logTime':
+              send(res, 200, { ok: true, entry: await hprojects.logTime(u.id, id, {
+                minutes: body?.minutes, day: body?.day, note: body?.note,
+              }, u.tz) }, nostore);
+              return;
+            case 'deleteTime':
+              await hprojects.deleteTime(u.id, Number(body?.entryId));
+              send(res, 200, { ok: true }, nostore); return;
+            default:
+              send(res, 400, { error: `Unknown action: ${action}` }, nostore);
+          }
+        } catch (err) {
+          send(res, 400, { error: String(err?.message || err) }, nostore);
+        }
+      },
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Routines & habits
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // Deliberately NOT part of /api/hh/tasks. A routine is a recurring intention
+  // that never completes; a task is done once and gone. Mixing them leaves your
+  // to-do list permanently full of things you do every day, or makes habits
+  // vanish the moment you tick them.
+
+  if (hroutines && hroutines.available()) {
+    add('/api/hh/routines', {
+      auth: 'household', methods: ['GET', 'POST'],
+      async handler(req, res, _ctx, access) {
+        const u = access.hhUser;
+        try {
+          if (req.method === 'GET') {
+            const d = new URL(req.url || '/', 'http://localhost').searchParams.get('date');
+            send(res, 200, await hroutines.getRoutines(u.id, u.tz, d), nostore);
+            return;
+          }
+          const body = await readJson(req, 32_000);
+          const action = str(body?.action, 40);
+
+          if (action === 'create') {
+            send(res, 200, { ok: true, routine: await hroutines.create(u.id, {
+              title: body?.title, block: body?.block, visibility: body?.visibility,
+            }) }, nostore);
+            return;
+          }
+
+          const id = Number(body?.id ?? 0);
+          if (!Number.isInteger(id) || id <= 0) { send(res, 400, { error: 'Missing id.' }, nostore); return; }
+
+          if (action === 'toggle') {
+            send(res, 200, { ok: true, ...(await hroutines.toggle(u.id, id, u.tz, body?.date)) }, nostore);
+            return;
+          }
+          if (action === 'update') {
+            send(res, 200, { ok: true, routine: await hroutines.update(u.id, id, {
+              title: body?.title, block: body?.block,
+              visibility: body?.visibility, sortOrder: body?.sortOrder,
+            }) }, nostore);
+            return;
+          }
+          if (action === 'archive') { await hroutines.archive(u.id, id); send(res, 200, { ok: true }, nostore); return; }
+          if (action === 'delete') { await hroutines.remove(u.id, id); send(res, 200, { ok: true }, nostore); return; }
+
+          send(res, 400, { error: `Unknown action: ${action}` }, nostore);
+        } catch (err) {
+          send(res, 400, { error: String(err?.message || err) }, nostore);
+        }
+      },
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Budget
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // Scoped by the signed-in user's budget_profile_key, which defaults to 'owner'
+  // — the single profile /api/budget has always used. So this reads the EXISTING
+  // register with no migration, and a payment entered here appears on
+  // /owner/budget immediately (and vice versa). There is no second budget.
+  //
+  // Recurring bills are expanded at read time from the rules, using logic ported
+  // verbatim from the desktop page. Marking one paid materialises it as a real
+  // row under `__recur__:<ruleId>:<date>`, which is exactly how the desktop
+  // records it — so neither surface can double-pay a bill the other settled.
+
+  if (hbudget && hbudget.available()) {
+    add('/api/hh/budget', {
+      auth: 'household', methods: ['GET', 'POST'],
+      async handler(req, res, _ctx, access) {
+        const u = access.hhUser;
+        const key = u.budget_profile_key || 'owner';
+        try {
+          if (req.method === 'GET') {
+            const month = new URL(req.url || '/', 'http://localhost').searchParams.get('month');
+            send(res, 200, await hbudget.getMonth(key, month, u.tz), nostore);
+            return;
+          }
+
+          const body = await readJson(req, 64_000);
+          const action = str(body?.action, 40);
+
+          if (action === 'addRow') {
+            const row = await hbudget.addRow(key, {
+              date: body?.date, label: body?.label, bank: body?.bank,
+              amount: body?.amount, kind: body?.kind,
+            });
+            send(res, 200, { ok: true, row }, nostore); return;
+          }
+          if (action === 'markBillPaid') {
+            const out = await hbudget.markBillPaid(key, {
+              tag: body?.tag, date: body?.date, label: body?.label,
+              bank: body?.bank, amount: body?.amount,
+            });
+            send(res, 200, { ok: true, ...out }, nostore); return;
+          }
+          if (action === 'updateRow') {
+            await hbudget.updateRow(key, Number(body?.id), {
+              date: body?.date, label: body?.label, bank: body?.bank, amount: body?.amount,
+            });
+            send(res, 200, { ok: true }, nostore); return;
+          }
+          if (action === 'deleteRow') {
+            await hbudget.deleteRow(key, Number(body?.id));
+            send(res, 200, { ok: true }, nostore); return;
+          }
+          if (action === 'setDailyBalance') {
+            const row = await hbudget.setDailyBalance(key, {
+              day: body?.day, coastal: body?.coastal, truist: body?.truist, secu: body?.secu,
+            });
+            send(res, 200, { ok: true, dailyBalance: row }, nostore); return;
+          }
+          if (action === 'setCategory') {
+            await hbudget.setRowCategory(key, Number(body?.id), body?.categoryId);
+            send(res, 200, { ok: true }, nostore); return;
+          }
+
+          send(res, 400, { error: `Unknown action: ${action}` }, nostore);
+        } catch (err) {
+          // These throw human-readable messages ("Pick a date.", "Give it a
+          // name.") — surfaced as 400s so the phone can show them verbatim
+          // instead of a generic failure.
+          send(res, 400, { error: String(err?.message || err) }, nostore);
+        }
+      },
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // Today — one round trip for the whole screen
   // ═══════════════════════════════════════════════════════════════════════════
   //
@@ -581,9 +807,15 @@ function registerHouseholdRoutes({ register, send, readJson }) {
           calendar: gcal
             ? await gcal.status(access.hhUser.id).catch(() => ({ configured: false, connected: false }))
             : { configured: false, connected: false },
-          // Filled in by step 6. Null so the client renders the real layout now
-          // and lights up without a shape change later.
-          money: null,
+          // Balances + what's due next, from the same budget tables. Wrapped
+          // so a budget hiccup degrades one card instead of the whole screen.
+          routines: hroutines && hroutines.available()
+            ? await hroutines.summary(access.hhUser.id, access.hhUser.tz).catch(() => null)
+            : null,
+          money: hbudget && hbudget.available()
+            ? await hbudget.summary(access.hhUser.budget_profile_key || 'owner', access.hhUser.tz)
+                .catch(() => null)
+            : null,
         }, nostore);
       } catch (err) { send(res, 500, { error: String(err?.message || err) }, nostore); }
     },
