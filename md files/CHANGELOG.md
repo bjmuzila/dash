@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-08-06 - Build fix: owner-vite Results.tsx JSX comment before the root element
+
+The v8.6.17 VPS deploy failed on the `owners` target:
+
+    /app/src/pages/Results.tsx:389:15: ERROR: Expected ")" but found "className"
+
+### `owner-vite/src/pages/Results.tsx`
+- A `{/* ... */}` comment sat between `return (` and `<PageShell className="wall-scroll">`.
+  `{...}` only means "JSX expression container" INSIDE JSX; as the first token after
+  `return (` esbuild reads it as an object literal, so the parse died on the next tag's
+  first attribute. Moved the note above the `return` as ordinary `//` lines.
+- Pre-existing — not introduced by the Level Log work in the same version. The `owners`
+  image is built before `dashboard`, so it took the whole deploy down first.
+- Swept every `.ts`/`.tsx` under `owner-vite/src` through esbuild: this was the only one.
+
+
 ## 2026-08-06 - Level Log split out of owner Results > Walls into /level-log (Scanner section)
 
 The level log lived inside the owner-only Results -> Walls tab, sharing a page with the

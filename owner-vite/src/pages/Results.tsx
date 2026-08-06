@@ -381,11 +381,18 @@ export default function Results() {
     fontFamily: "inherit",
   });
 
+  // `wall-scroll` themes the page's own scrollbar (see index.css) — PageShell's
+  // <main> is the scroll container for every tab here, and on a short monitor
+  // the Contracts table is taller than it, so that bar is now visible chrome
+  // rather than an accident.
+  //
+  // This note used to sit inside the `return (…)` as a {/* JSX comment */}. That
+  // is a syntax error, not a style nit: `{…}` only means "expression container"
+  // INSIDE JSX, and here it was the first token after `return (`, where esbuild
+  // reads it as an object literal and dies with `Expected ")" but found
+  // "className"`. It broke the owner-vite Docker build. Comments that precede
+  // the root element go above the return, as ordinary // lines.
   return (
-    {/* `wall-scroll` themes the page's own scrollbar (see index.css) — PageShell's
-        <main> is the scroll container for every tab here, and on a short monitor
-        the Contracts table is taller than it, so that bar is now visible chrome
-        rather than an accident. */}
     <PageShell className="wall-scroll">
       {/* Tab bar */}
       <div className="tab-strip" style={{ display: "flex", gap: 8, marginBottom: 18, flexShrink: 0 }}>
