@@ -17,6 +17,12 @@ type AuthState = {
   loading: boolean
   /** Set when the server was unreachable, as opposed to us being signed out. */
   offline: boolean
+  /** True only between a successful sign-in and the welcome splash clearing it.
+   *  Kept in memory, never persisted — a 30-day session means this fires a
+   *  handful of times a year, which is what keeps the splash a nice moment
+   *  rather than something you sit through every time you open the app. */
+  justSignedIn: boolean
+  clearJustSignedIn: () => void
   signIn: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
   refresh: () => Promise<void>
@@ -29,6 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<HouseholdUser | null>(null)
   const [loading, setLoading] = useState(true)
   const [offline, setOffline] = useState(false)
+  const [justSignedIn, setJustSignedIn] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -61,15 +68,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { user: u } = await authApi.login(email, password)
     setUser(u)
     setOffline(false)
+    setJustSignedIn(true)
   }, [])
+
+  const clearJustSignedIn = useCallback(() => setJustSignedIn(false), [])
 
   const signOut = useCallback(async () => {
     try { await authApi.logout() } finally { setUser(null) }
   }, [])
 
   const value = useMemo<AuthState>(
-    () => ({ user, loading, offline, signIn, signOut, refresh, setUser }),
-    [user, loading, offline, signIn, signOut, refresh],
+    () => ({ user, loading, offline, justSignedIn, clearJustSignedIn,
+             signIn, signOut, refresh, setUser }),
+    [user, loading, offline, justSignedIn, clearJustSignedIn, signIn, signOut, refresh],
   )
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

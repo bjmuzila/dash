@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-08-06 (l) - budget.cbedge.net: landing screen
+
+The pencil heart drawing as a landing screen — on sign-in, and once per app open
+before Today. Visual only; no route, endpoint, query or schema changed.
+
+### The image is the real drawing
+`budget-vite/public/heart.png` is the actual scan, not a redrawn approximation.
+Processed to sit on the dark background:
+- Inverted, then used as the ALPHA channel — white strokes on transparency, so there
+  is no paper rectangle behind it and it works on any surface.
+- `autocontrast(cutoff=(10,0))` drives the paper's warm, unevenly-lit gradient to zero
+  alpha. Without it a faint grey panel shows against near-black.
+- Gamma lift (0.72, ×1.25) on the mask: pencil is thin, and a faithful alpha ramp
+  renders as a barely-visible grey scribble at 300px on a phone.
+- Connected-component filter drops every blob under ~400px — 71 components in, 7 out.
+  That removes paper grain and a scan smudge in the bottom-right corner without
+  touching a single pencil line.
+- 816×867, 105KB, served as a static file rather than inlined so it stays out of the
+  JS bundle.
+
+### Behaviour
+- Shows on sign-in AND once per page load; **not** on navigation between tabs.
+  Tracked by a module-scope flag, because React state re-initialises on remount and a
+  ref resets with it.
+- Holds 5s, then fades. **Tapping anywhere dismisses instantly** — five seconds is a
+  long time when you opened the app to tick one thing off, so the target is the whole
+  screen rather than a small "skip" control.
+- Rendered OVER the app, not instead of it, so Today is already mounted and painted
+  behind it — dismissing early lands on a finished screen, never a spinner.
+- The fade-out and the unmount are separate timers rather than a `transitionend`
+  handler: backgrounding the tab mid-transition never fires that event, and the splash
+  would still be sitting there on return.
+- Never shown in front of the forced password change.
+- `prefers-reduced-motion` disables the rise-in and the fade.
+
+**No proxy change. No API change. No schema change.**
+
+
 ## 2026-08-06 (k) - budget.cbedge.net: CB Edge palette on the editorial layout
 
 Same editorial structure shipped in (j), now on the dashboard's dark palette. Because

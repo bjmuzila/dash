@@ -1,10 +1,11 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider, useAuth } from './auth'
 import Shell from './components/Shell'
 import Login from './pages/Login'
 import ChangePassword from './pages/ChangePassword'
+import Welcome from './pages/Welcome'
 import { T, SANS } from './theme'
 
 const Today    = lazy(() => import('./pages/Today'))
@@ -22,6 +23,13 @@ const qc = new QueryClient({
 
 const S = (el: React.ReactNode) => <Suspense fallback={null}>{el}</Suspense>
 
+/**
+ * Module scope, so it survives Gate re-rendering on every route change but
+ * resets on a real page load. React state can't do this job: Gate re-runs its
+ * initialiser whenever it remounts, and a ref would reset with it.
+ */
+let splashShownThisLoad = false
+
 /** Splash while the first /me round-trip settles — prevents a login flash. */
 function Booting() {
   return (
@@ -35,13 +43,30 @@ function Booting() {
 }
 
 function Gate() {
-  const { user, loading } = useAuth()
+  const { user, loading, justSignedIn, clearJustSignedIn } = useAuth()
+  // Re-render trigger only; splashShownThisLoad above is the real source of truth.
+  const [, bump] = useState(0)
+
   if (loading) return <Booting />
   if (!user) return <Login />
-  // A still-temporary password blocks the app entirely — not a dismissible banner.
+  // A still-temporary password blocks the app entirely — not a dismissible
+  // banner, and the landing screen must not sit in front of it.
   if (user.mustChangePassword) return <ChangePassword />
+
+  const showWelcome = justSignedIn || !splashShownThisLoad
+  const dismissWelcome = () => {
+    splashShownThisLoad = true
+    clearJustSignedIn()
+    bump((n) => n + 1)
+  }
+
   return (
-    <Shell>
+    <>
+      {/* Rendered OVER the app rather than instead of it, so Today is already
+          mounted and painted behind the landing screen — dismissing lands on a
+          finished screen instead of a spinner. */}
+      {showWelcome && <Welcome onDone={dismissWelcome} />}
+      <Shell>
       <Routes>
         <Route path="/today" element={S(<Today />)} />
         <Route path="/routines" element={S(<Routines />)} />
@@ -49,8 +74,9 @@ function Gate() {
         <Route path="/budget" element={S(<Budget />)} />
         <Route path="/settings" element={S(<Settings />)} />
         <Route path="*" element={<Navigate to="/today" replace />} />
-      </Routes>
-    </Shell>
+        </Routes>
+      </Shell>
+    </>
   )
 }
 
