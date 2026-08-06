@@ -2281,13 +2281,20 @@ class TastytradeProxy {
       ({ expirations, contracts } = await fetchChain());
     }
     marketState.setState({ symbol: SYMBOL });
-    marketState.setExpirations(expirations);
-    console.log(`[FEED] ${SYMBOL}: ${contracts.length} contracts, ${expirations.length} expirations`);
-    console.log(`[FEED] expirations: ${expirations.slice(0, 8).join(', ')}${expirations.length > 8 ? ' …' : ''}`);
+    // Publish only TODAY-FORWARD expirations. The raw chain still carries
+    // already-expired dates, and the home GEX chart labels its picker by list
+    // POSITION ("0DTE", "1DTE", …) — so a single stale leading entry shifts
+    // every label by one (Wed mislabelled 0DTE, Thu mislabelled 1DTE). The REST
+    // route fetchExpirations() has always filtered `>= today`; this keeps the WS
+    // list consistent with it instead of leaking the unfiltered array.
+    const { ymd } = todayYmd();
+    const liveExpirations = expirations.filter((e) => e >= ymd);
+    marketState.setExpirations(liveExpirations.length ? liveExpirations : expirations);
+    console.log(`[FEED] ${SYMBOL}: ${contracts.length} contracts, ${expirations.length} expirations (${liveExpirations.length} today-forward)`);
+    console.log(`[FEED] expirations: ${liveExpirations.slice(0, 8).join(', ')}${liveExpirations.length > 8 ? ' …' : ''}`);
 
     // Default expiry = nearest (0DTE if present).
-    const { ymd } = todayYmd();
-    this.expiry = expirations.find((e) => e >= ymd) || expirations[0] || '';
+    this.expiry = liveExpirations[0] || expirations[0] || '';
     marketState.setExpiry(this.expiry);
 
     // Rebuild today's dealer inventory from flow_prints (already persisted by
@@ -4224,7 +4231,15 @@ class TastytradeProxy {
     const shouldRoll = this.expiry < ymd || (this.expiry === ymd && afterClose);
     if (shouldRoll) {
       const expirations = [...new Set([...this.contracts.values()].map(c => c.expiration))].sort();
-      const next = expirations.find(e => e > ymd) || expirations.find(e => e >= ymd);
+      const live = expirations.filter((e) => e >= ymd);
+      // Re-publish the today-forward list BEFORE rolling. setExpirations() was
+      // previously only ever called once at feed startup, so after a date change
+      // the picker kept serving yesterday's array while this.expiry had already
+      // rolled — that mismatch is what made the position-based 0DTE/1DTE labels
+      // point at the wrong dates and made re-selecting the stale entry bounce
+      // straight back here on the next tick.
+      if (live.length) marketState.setExpirations(live);
+      const next = live.find(e => e > ymd) || live[0];
       if (next && next !== this.expiry) {
         console.log(`[FEED] auto-rolling expiry ${this.expiry} → ${next}`);
         this.setExpiry(next);

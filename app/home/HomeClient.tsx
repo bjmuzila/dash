@@ -256,11 +256,47 @@ function formatStrikeValue(value: number): string {
 }
 
 
+// Today in ET as yyyy-mm-dd. Matches the server's todayYmd() convention so the
+// DTE label agrees with the expiry the feed considers 0DTE regardless of where
+// the browser's clock is set.
+function etYmdToday(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const map = Object.fromEntries(
+    parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value])
+  );
+  return `${map.year}-${map.month}-${map.day}`;
+}
+
+// Calendar days between two yyyy-mm-dd strings, parsed as UTC midnight so DST
+// transitions can't round the difference to the wrong integer.
+function daysBetweenYmd(fromYmd: string, toYmd: string): number {
+  const a = Date.parse(`${fromYmd}T00:00:00Z`);
+  const b = Date.parse(`${toYmd}T00:00:00Z`);
+  if (!isFinite(a) || !isFinite(b)) return 0;
+  return Math.round((b - a) / 86400000);
+}
+
+// Label each expiry by its REAL distance from today, not by its position in the
+// array. Position-based labelling silently mislabels the whole picker whenever
+// the list carries a stale leading entry (an expired date the feed hadn't
+// pruned), which is how Wed/Thu ended up tagged 0DTE/1DTE on a Thu/Fri chain.
+// Date math is self-correcting: a stale entry now reads as negative DTE and is
+// dropped rather than shifting every label after it.
 function buildExpiryOptions(dates: string[]): ExpiryOption[] {
-  return dates.slice(0, 8).map((value, index) => ({
-    value,
-    label: `${index}DTE ${value.slice(5)}`,
-  }));
+  const today = etYmdToday();
+  return dates
+    .map((value) => ({ value, dte: daysBetweenYmd(today, value) }))
+    .filter((entry) => entry.dte >= 0)
+    .slice(0, 8)
+    .map(({ value, dte }) => ({
+      value,
+      label: `${dte}DTE ${value.slice(5)}`,
+    }));
 }
 
 function buildStrikes(expGroups: unknown[], liveData: Record<string, LiveEntry>): StrikeRow[] {

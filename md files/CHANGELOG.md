@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026-08-06 - GEX chart expiry picker: wrong DTE labels & failed switching
+
+Home GEX chart showed Wed/Thu in the expiry picker on a Thursday (should have been
+Thu/Fri = 0DTE/1DTE), the bars kept changing on their own, and switching between the
+two entries didn't stick. Server restarts didn't help. Other heatmaps were unaffected.
+
+### Root cause
+Two independent defects compounding:
+
+1. `server-v2/proxy-tastytrade.js:2284` published the **unfiltered** chain expiration
+   list to `marketState`, including already-expired dates. The REST route
+   `fetchExpirations()` (line ~1577) has always filtered `>= today` — which is exactly
+   why every OTHER heatmap looked right and only the WS-fed home GEX chart was wrong.
+2. `buildExpiryOptions()` in `app/home/HomeClient.tsx` labelled the picker by **array
+   position** (`${index}DTE`), not by date. So one stale leading entry shifted every
+   label by one: Wed→"0DTE", Thu→"1DTE".
+
+`setExpirations()` was also only ever called once at feed startup, so after a date
+change the picker kept serving the previous day's array while `this.expiry` had already
+auto-rolled. Selecting the stale entry was reverted by the auto-roll block on the very
+next `_recompute()` tick — that fight is what made the bars appear to change on their
+own and made switching back and forth fail.
+
+### `server-v2/proxy-tastytrade.js`
+- Feed startup now filters expirations to today-forward before `setExpirations()`;
+  falls back to the raw list if the filter empties it. Default expiry derives from the
+  filtered list.
+- Auto-roll block (`_recompute`) now re-publishes the today-forward list via
+  `setExpirations()` **before** rolling, so the picker no longer goes stale across a
+  date change. `next` is chosen from the filtered list.
+- Startup log now reports today-forward count alongside the raw count.
+
+### `app/home/HomeClient.tsx`
+- `buildExpiryOptions()` rewritten to label by **real calendar DTE** instead of array
+  index. Added `etYmdToday()` (ET via `Intl.DateTimeFormat`, matching the server's
+  `todayYmd()`) and `daysBetweenYmd()` (parses at UTC midnight so DST can't round the
+  difference wrong). Negative-DTE entries are dropped rather than shifting labels.
+- Self-correcting: even if a stale date reaches the client, labels stay right.
+
+### Notes
+- Labels are now true calendar DTE, so Monday reads `3DTE`/`4DTE` from a Thu/Fri rather
+  than `2DTE` — this matches the other heatmaps and the REST-fed pages.
+- Verified: both files compile (`node --check`, `esbuild`); label logic unit-tested
+  against the reported Wed/Thu case plus weekend-gap and DST-boundary inputs.
+- No proxy request/routing behavior changed — only which expiration dates are published.
+
 ## 2026-06-18 (session 30) - Heatmap/Snapshot UI, Vol-GEX Fix & Dev Symbol Probe
 
 ### `app/home/page.tsx`
