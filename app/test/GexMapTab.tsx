@@ -1103,8 +1103,37 @@ function TerrainField({ m, L, TP, FWD, FHT }: {
     cv.height = Math.round(FHT * DPR);
     const ctx = cv.getContext("2d");
     if (!ctx) return;
-    const NX = Math.min(220, Math.max(40, m.cols.length * 4));
-    const NY = Math.min(180, Math.max(40, m.strikes.length * 2));
+    const nC = m.cols.length;
+    // Sample grid. Raised from 220×180 — at full zoom-out a 6.5-hour tape has
+    // ~78 columns and the old cap left barely 2.8 samples per column, so a node
+    // that lasted one or two slots was averaged into its neighbours and
+    // effectively erased. It is only visible when you zoom in and the same cap
+    // suddenly buys 20 samples per column.
+    const NX = Math.min(360, Math.max(60, nC * 5));
+    const NY = Math.min(240, Math.max(60, m.strikes.length * 3));
+
+    // Canvas x → column position.
+    //
+    // The canvas is placed on exactly the first→last column span, which on the
+    // clock axis is a span of MINUTES. Spreading the columns evenly across it —
+    // what this used to do — is only correct if the recorder never missed a
+    // slot. It does miss them, and every gap then compressed the tape on both
+    // sides of itself, which is the older end of the session sliding out of
+    // place and smearing. Position by timestamp instead: a gap draws as a gap
+    // and everything either side of it stays where the heatmap puts it.
+    const ctAt = new Array<number>(NX);
+    if (m.timeAxis && nC > 1 && m.mins[nC - 1] > m.mins[0]) {
+      const t0 = m.mins[0], t1 = m.mins[nC - 1];
+      let c = 0;
+      for (let i = 0; i < NX; i++) {
+        const want = t0 + (i / (NX - 1)) * (t1 - t0);
+        while (c < nC - 2 && m.mins[c + 1] <= want) c++;
+        const a = m.mins[c], b = m.mins[c + 1];
+        ctAt[i] = c + (b > a ? clamp01((want - a) / (b - a)) : 0);
+      }
+    } else {
+      for (let i = 0; i < NX; i++) ctAt[i] = (i / (NX - 1)) * (nC - 1);
+    }
 
     // Resample the (slot × strike) grid onto a smooth field. Bilinear in time,
     // gaussian in strike — the strike axis is the coarse one (5-point ladder),
@@ -1115,8 +1144,8 @@ function TerrainField({ m, L, TP, FWD, FHT }: {
       const k = m.hi - ((m.hi - m.lo) * j) / (NY - 1);
       const row: number[] = [];
       for (let i = 0; i < NX; i++) {
-        const ct = (i / (NX - 1)) * (m.cols.length - 1);
-        const c0 = Math.floor(ct), c1 = Math.min(m.cols.length - 1, c0 + 1), fr = ct - c0;
+        const ct = ctAt[i];
+        const c0 = Math.floor(ct), c1 = Math.min(nC - 1, c0 + 1), fr = ct - c0;
         let acc = 0, wsum = 0;
         for (let s = 0; s < m.strikes.length; s++) {
           const d = m.strikes[s] - k;
@@ -1129,9 +1158,14 @@ function TerrainField({ m, L, TP, FWD, FHT }: {
       }
       F.push(row);
     }
-    let fmax = 0;
-    for (const r of F) for (const v of r) fmax = Math.max(fmax, Math.abs(v));
-    if (fmax > 0) for (const r of F) for (let i = 0; i < r.length; i++) r[i] /= fmax;
+    // NOTHING IS RENORMALIZED HERE. `signed` is already scaled on the SESSION
+    // max, the same number the heatmap and the rails use, and this used to
+    // divide the whole field a second time by the max of whatever happened to
+    // be on screen. That is what made the terrain change under the zoom: quiet
+    // stretches of the tape only grew elevation once you zoomed into them and
+    // the local max collapsed, and zooming back out flattened them again — the
+    // terrain you had just been reading was gone. A given gamma now paints the
+    // same colour at every magnification.
 
     const img = ctx.createImageData(cv.width, cv.height);
     for (let y = 0; y < cv.height; y++) {
@@ -1143,8 +1177,19 @@ function TerrainField({ m, L, TP, FWD, FHT }: {
         const v = F[y0][x0] * (1 - ax) * (1 - ay) + F[y0][x1] * ax * (1 - ay) + F[y1][x0] * (1 - ax) * ay + F[y1][x1] * ax * ay;
         // Hypsometric banding: quantized elevation reads as a contour map,
         // a continuous ramp reads as a blurry heatmap.
-        const mag = Math.min(1, Math.floor(Math.min(1, Math.abs(v)) * 9) / 9 + 0.055);
-        const t2 = Math.pow(mag, 1.15);
+        //
+        // The ramp is EXPANSIVE at the low end (`** 0.55`) where it used to be
+        // linear into a `** 1.15` suppression. On session-normalized data a
+        // handful of 0DTE nodes own the top of the scale, so with the old curve
+        // and 9 bands anything under ~11% of the session max fell into band 0
+        // and painted as background — that is the older, quieter terrain going
+        // missing at full extent. 18 bands over an expanded ramp puts real
+        // structure at 3–5% of max onto its own visible step while the big
+        // nodes still top out.
+        const av = Math.min(1, Math.abs(v));
+        const lift = Math.pow(av, 0.55);
+        const mag = Math.min(1, Math.floor(lift * 18) / 18 + 0.04);
+        const t2 = mag;
         const c = v >= 0
           ? mix([5, 12, 20], mix(GEX_POS, WHITE, mag * 0.28), t2)
           : mix([22, 8, 11], mix(GEX_NEG, WHITE, mag * 0.28), t2);
@@ -1184,10 +1229,15 @@ function TerrainField({ m, L, TP, FWD, FHT }: {
       }
       ctx.strokeStyle = stroke; ctx.lineWidth = wid; ctx.setLineDash(dash); ctx.stroke(); ctx.setLineDash([]);
     };
-    for (const lv of [-0.75, -0.55, -0.38, -0.24, -0.13, -0.06, 0.06, 0.13, 0.24, 0.38, 0.55, 0.75, 0.9]) {
-      contour(lv, lv > 0
-        ? `rgba(190,232,255,${0.10 + 0.24 * Math.abs(lv)})`
-        : `rgba(255,183,190,${0.10 + 0.24 * Math.abs(lv)})`, 1.6, []);
+    // Levels reach further down than they used to (0.03 instead of stopping at
+    // 0.06) and their alpha rides sqrt(|level|) rather than |level| — with the
+    // field no longer rescaled to whatever is on screen, the low contours are
+    // where most of the session's structure lives, and a linear alpha left them
+    // at 1% opacity.
+    for (const lv of [-0.85, -0.65, -0.48, -0.34, -0.23, -0.15, -0.09, -0.05, -0.03,
+                      0.03, 0.05, 0.09, 0.15, 0.23, 0.34, 0.48, 0.65, 0.85]) {
+      const a = (0.13 + 0.30 * Math.sqrt(Math.abs(lv))).toFixed(3);
+      contour(lv, lv > 0 ? `rgba(190,232,255,${a})` : `rgba(255,183,190,${a})`, 1.5, []);
     }
     contour(0, "rgba(125,211,252,0.95)", 3.2, [12, 8]);
   }, [m, FWD, FHT, dprStep]);
