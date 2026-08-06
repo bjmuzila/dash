@@ -41,7 +41,7 @@ interface PageVisit extends VisitorMapRow {
   pageKey?: string | null;
 }
 
-/** Server-side window, in days. 0 = no date floor. */
+/** Server-side window, in days. 0 = no date floor. `all` is the default on open. */
 const RANGES = [
   { key: "1", label: "Today", days: 1 },
   { key: "7", label: "7d", days: 7 },
@@ -75,7 +75,11 @@ function agoLabel(ms: number): string {
 
 export default function Visitors() {
   const [visits, setVisits] = useState<PageVisit[]>([]);
-  const [range, setRange] = useState<RangeKey>("7");
+  // Opens on All. The point of dropping the retention trim was to have the whole
+  // history — defaulting to a window would hide most of it behind a click, which
+  // is the same "there's nobody here" impression the old 5000-row cap gave. The
+  // 20k render cap and the truncation notice keep a large All range honest.
+  const [range, setRange] = useState<RangeKey>("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
@@ -329,6 +333,7 @@ export default function Visitors() {
         )}
 
         <div style={{ fontSize: 14, color: T.textSecondary, opacity: 0.55, lineHeight: 1.6 }}>
+          Opens on <b>All</b> — every load ever recorded. Narrow the range to look at a window.{" "}
           One dot per visitor, not per city — visitors sharing a location are fanned out around it,
           so zoom in to separate them. A solid gold dot is a signed-in account (click it for the
           email, Discord, user id, member-since and last login); a hollow slate dot is an anonymous

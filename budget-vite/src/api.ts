@@ -88,6 +88,26 @@ export type Note = {
 
 export type Person = { id: number; displayName: string }
 
+export type CalendarStatus = { configured: boolean; connected: boolean; email?: string | null }
+
+export type CalendarEvent = {
+  id: string
+  summary: string
+  allDay: boolean
+  /** RFC3339 with offset for timed events, 'YYYY-MM-DD' for all-day ones. */
+  start: string | null
+  end: string | null
+  location: string | null
+}
+
+export type CalendarDay = {
+  date: string
+  events: CalendarEvent[]
+  /** 'not-configured' | 'not-connected' | 'revoked' | 'google-<status>' | other.
+   *  Always a 200 — the card renders its own state from this. */
+  error?: string
+}
+
 export type TodayPayload = {
   today: string
   tz: string
@@ -98,7 +118,7 @@ export type TodayPayload = {
   counts: { open: number; overdue: number; due_today: number; done_today: number }
   resurfacing: Note | null
   people: Person[]
-  calendar: null | { events: Array<{ id: string; summary: string; start: string; end: string; allDay: boolean }> }
+  calendar: CalendarStatus
   money: null | { balances: Record<string, number>; nextBills: Array<{ label: string; amount: number; date: string }> }
 }
 
@@ -147,6 +167,16 @@ export const notes = {
 
 export const today = {
   get: () => api.get<TodayPayload>('/api/hh/today'),
+}
+
+export const calendar = {
+  status: () => api.get<CalendarStatus>('/api/hh/calendar/status'),
+  events: (date?: string) =>
+    api.get<CalendarDay>(`/api/hh/calendar/events${date ? `?date=${date}` : ''}`),
+  disconnect: () => api.post<{ ok: true }>('/api/hh/calendar/disconnect'),
+  /** A full page navigation, NOT a fetch — the browser has to follow the
+   *  redirect to Google's consent screen. */
+  connectUrl: '/api/hh/calendar/connect',
 }
 
 export const settings = {

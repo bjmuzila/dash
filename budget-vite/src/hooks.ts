@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { today as todayApi, tasks as tasksApi, notes as notesApi, settings as settingsApi,
+         calendar as calendarApi,
          type Task, type TodayPayload, type NewTask, type TaskPatch } from './api'
 
 /**
@@ -35,6 +36,40 @@ export function useNotes() {
 
 export function useSettings() {
   return useQuery({ queryKey: SETTINGS_KEY, queryFn: settingsApi.get })
+}
+
+/**
+ * Today's calendar events — a SEPARATE query from useToday() on purpose.
+ *
+ * The events come from Google, which can take half a second or be down
+ * entirely. Folding them into /api/hh/today would hold the whole screen
+ * hostage to a third party; this way Today paints from our own database
+ * immediately and the calendar card fills in on its own.
+ *
+ * `enabled` keeps it from firing at all until Today confirms the account is
+ * actually connected.
+ */
+export function useCalendarEvents(connected: boolean, date?: string) {
+  return useQuery({
+    queryKey: ['calendar', date ?? 'today'],
+    queryFn: () => calendarApi.events(date),
+    enabled: connected,
+    // The server already caches 60s per user; matching it here stops a
+    // foreground/background cycle from re-requesting on every glance.
+    staleTime: 60_000,
+    retry: 0,
+  })
+}
+
+export function useDisconnectCalendar() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: calendarApi.disconnect,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['calendar'] })
+      void qc.invalidateQueries({ queryKey: TODAY_KEY })
+    },
+  })
 }
 
 // ── Optimistic plumbing ──────────────────────────────────────────────────────

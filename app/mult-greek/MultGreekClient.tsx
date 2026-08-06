@@ -422,7 +422,7 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
       style={{
         flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
         height: 15, boxSizing: "border-box",
-        fontSize: 10, fontWeight: rank === 1 ? 900 : 800,
+        fontSize: 9, fontWeight: rank === 1 ? 900 : 800,
         fontFamily: "var(--font-mono)", lineHeight: 1,
         padding: "0 5px", borderRadius: 4, whiteSpace: "nowrap",
         background: "#0D1119",
@@ -754,7 +754,7 @@ function TickerPanel({
           const fmt = totals != null ? fmtMoney(v) : { sign: "", value: "--" };
           return (
             <div key={c.date} style={{
-              padding: "4px 4px", fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)",
+              padding: "4px 4px", fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)",
               whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
               textAlign: "center",
               color: v > 0 ? "#29b6f6" : v < 0 ? "#ff4757" : "#94a3b8",
@@ -802,7 +802,7 @@ function TickerPanel({
                 />
               )}
               <div style={{
-                padding: "4px 4px", fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)",
+                padding: "4px 4px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
                 textAlign: "center", color: strikeColor, borderRight: "1px solid rgba(255,255,255,.06)",
                 background: "transparent",
               }}>
@@ -843,7 +843,7 @@ function TickerPanel({
                         : { strike: r.strike, expiry: e, x: ev.clientX, y: ev.clientY });
                     }}
                     style={{
-                    padding: "4px 4px", fontSize: 10, fontFamily: "var(--font-mono)",
+                    padding: "4px 4px", fontSize: 9, fontFamily: "var(--font-mono)",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                     textAlign: "center", color: SOFT_WHITE, cursor: isCapturing ? "default" : "pointer",
                     ...(dMode ? { display: "flex", alignItems: "center", gap: 4, minHeight: 23 } : {}),

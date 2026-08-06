@@ -41,6 +41,12 @@
  */
 
 const hh = require('./_lib-household.cjs');
+// Optional by design: without Google config this loads fine, reports
+// configured:false, and the calendar card says "not set up" instead of
+// offering a Connect button that would dead-end at Google.
+let gcal = null;
+try { gcal = require('./_lib-google-calendar.cjs'); }
+catch (e) { console.warn('[household] google-calendar lib not loaded:', e.message); }
 
 // THE access predicate. $1 is always the caller's hh_users.id.
 const VISIBLE = `(owner_id = $1 OR visibility = 'shared')`;
@@ -372,6 +378,104 @@ function registerHouseholdRoutes({ register, send, readJson }) {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // Google Calendar (read-only)
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // /connect and /callback are BROWSER NAVIGATIONS, not fetches. They are
+  // registered auth:'public' and do their own session check, because a
+  // navigation that 401s with JSON dumps raw text on the screen — these must
+  // always end in a redirect a person can read.
+  //
+  // The hh_session cookie is SameSite=Lax, which permits top-level GET
+  // navigations, so it IS present when Google redirects back here. (It would
+  // NOT survive a POST callback — do not change the response_type to one that
+  // posts.)
+
+  const redirect = (res, to) => {
+    res.statusCode = 302;
+    res.setHeader('Location', to);
+    res.setHeader('Cache-Control', NO_STORE);
+    res.end();
+  };
+
+  if (gcal) {
+    add('/api/hh/calendar/connect', {
+      auth: 'public', methods: ['GET'],
+      async handler(req, res) {
+        const u = await hh.userFromRequest(req);
+        if (!u) { redirect(res, '/'); return; }
+        if (!gcal.configured()) { redirect(res, '/settings?calendar=unconfigured'); return; }
+        redirect(res, gcal.authUrl(u.id));
+      },
+    });
+
+    add('/api/hh/calendar/callback', {
+      auth: 'public', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const url = new URL(req.url || '/', 'http://localhost');
+          const err = url.searchParams.get('error');
+          // The user pressed Cancel on Google's consent screen. Not an error
+          // worth a scary page — just send them back.
+          if (err) { redirect(res, `/settings?calendar=${encodeURIComponent(err)}`); return; }
+
+          const u = await hh.userFromRequest(req);
+          if (!u) { redirect(res, '/'); return; }
+
+          const state = gcal.verifyState(url.searchParams.get('state'));
+          // The state is HMAC-signed by us AND must match the signed-in user.
+          // Signature alone would let someone paste their own callback URL into
+          // the other person's browser and bind THEIR calendar to that account.
+          if (!state || state.uid !== u.id) {
+            redirect(res, '/settings?calendar=bad-state'); return;
+          }
+
+          const code = url.searchParams.get('code');
+          if (!code) { redirect(res, '/settings?calendar=no-code'); return; }
+
+          await gcal.connect(u.id, code);
+          redirect(res, '/settings?calendar=connected');
+        } catch (e) {
+          console.warn('[household] calendar callback failed:', e?.message || e);
+          redirect(res, `/settings?calendar=${encodeURIComponent(String(e?.message || 'failed').slice(0, 120))}`);
+        }
+      },
+    });
+
+    add('/api/hh/calendar/status', {
+      auth: 'household', methods: ['GET'],
+      async handler(req, res, _ctx, access) {
+        send(res, 200, await gcal.status(access.hhUser.id), nostore);
+      },
+    });
+
+    add('/api/hh/calendar/disconnect', {
+      auth: 'household', methods: ['POST'],
+      async handler(req, res, _ctx, access) {
+        try { await gcal.disconnect(access.hhUser.id); send(res, 200, { ok: true }, nostore); }
+        catch (err) { send(res, 500, { error: String(err?.message || err) }, nostore); }
+      },
+    });
+
+    // Fetched by the client SEPARATELY from /api/hh/today, on purpose. A call
+    // out to Google can take half a second; folding it into Today would hold
+    // the entire screen hostage to a third party. Today paints from our own
+    // database immediately and the calendar card fills in when it fills in.
+    add('/api/hh/calendar/events', {
+      auth: 'household', methods: ['GET'],
+      async handler(req, res, _ctx, access) {
+        const u = access.hhUser;
+        const qDate = new URL(req.url || '/', 'http://localhost').searchParams.get('date');
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(String(qDate || '')) ? qDate : todayIn(u.tz);
+        // Always 200 with a shaped body. The card renders its own state from
+        // `error`; a non-200 here would just become a red screen for a calendar
+        // hiccup nobody needs to act on.
+        send(res, 200, { date, ...(await gcal.eventsForDay(u.id, u.tz, date)) }, nostore);
+      },
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // Today — one round trip for the whole screen
   // ═══════════════════════════════════════════════════════════════════════════
   //
@@ -442,9 +546,14 @@ function registerHouseholdRoutes({ register, send, readJson }) {
           counts: counts.rows[0] || { open: 0, overdue: 0, due_today: 0, done_today: 0 },
           resurfacing,
           people: people.map((u) => ({ id: u.id, displayName: u.display_name })),
-          // Filled in by steps 5 and 6. Present as nulls so the client renders
-          // the real layout now and lights up without a shape change later.
-          calendar: null,
+          // Whether to show a Connect button or fetch events. The events
+          // themselves come from /api/hh/calendar/events so a slow Google call
+          // never delays this response.
+          calendar: gcal
+            ? await gcal.status(access.hhUser.id).catch(() => ({ configured: false, connected: false }))
+            : { configured: false, connected: false },
+          // Filled in by step 6. Null so the client renders the real layout now
+          // and lights up without a shape change later.
           money: null,
         }, nostore);
       } catch (err) { send(res, 500, { error: String(err?.message || err) }, nostore); }

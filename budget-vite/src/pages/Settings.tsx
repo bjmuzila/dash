@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useAuth } from '../auth'
-import { auth as authApi, ApiError } from '../api'
-import { useSettings, useSaveSettings, useNotes, useCreateNote, useDeleteNote } from '../hooks'
+import { auth as authApi, calendar as calendarApi, ApiError } from '../api'
+import { useSettings, useSaveSettings, useNotes, useCreateNote, useDeleteNote,
+         useToday, useDisconnectCalendar } from '../hooks'
 import { T, card, button, input, labelCap } from '../theme'
 
 export default function Settings() {
@@ -22,20 +23,94 @@ export default function Settings() {
       <SavedNotes />
       <ChangePasswordCard />
 
-      <section style={card()}>
-        <div style={labelCap()}>Google Calendar</div>
-        <div style={{ fontSize: 14, color: T.muted, marginTop: 8, lineHeight: 1.45 }}>
-          Connect your own calendar so today's events show on the Today screen. Read-only —
-          nothing is ever written back.
-        </div>
-        <div style={{ fontSize: 12, color: T.muted, opacity: 0.55, marginTop: 10 }}>Not wired up yet.</div>
-      </section>
+      <GoogleCalendarCard />
 
       <button onClick={() => void signOut()}
               style={{ ...button('ghost'), width: '100%', color: T.red, borderColor: 'rgba(239,68,68,0.35)' }}>
         Sign out
       </button>
     </div>
+  )
+}
+
+// ── Google Calendar ──────────────────────────────────────────────────────────
+
+/**
+ * Connect / disconnect. Each person links their OWN Google account — the tokens
+ * are per-user, so connecting yours tells the app nothing about anyone else's
+ * calendar.
+ *
+ * The ?calendar= query param is how the OAuth callback reports back, since it
+ * returns as a page navigation rather than a fetch.
+ */
+function GoogleCalendarCard() {
+  const { data } = useToday()
+  const disconnect = useDisconnectCalendar()
+  const [flash, setFlash] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+
+  useEffect(() => {
+    const param = new URLSearchParams(window.location.search).get('calendar')
+    if (!param) return
+    setFlash(
+      param === 'connected' ? { kind: 'ok', text: 'Calendar connected.' }
+      : param === 'access_denied' ? { kind: 'err', text: 'You cancelled at Google. Nothing was connected.' }
+      : param === 'unconfigured' ? { kind: 'err', text: "Google isn't set up on the server yet." }
+      : param === 'bad-state' ? { kind: 'err', text: 'That link expired. Start the connection again.' }
+      : { kind: 'err', text: decodeURIComponent(param) },
+    )
+    // Strip the param so a refresh doesn't replay the message forever.
+    window.history.replaceState({}, '', window.location.pathname)
+  }, [])
+
+  const status = data?.calendar
+
+  return (
+    <section style={card()}>
+      <div style={labelCap()}>Google Calendar</div>
+      <div style={{ fontSize: 14, color: T.muted, marginTop: 8, lineHeight: 1.45 }}>
+        Connect your own calendar so today's events show on the Today screen. Read-only —
+        this app cannot create, change or delete an event.
+      </div>
+
+      {flash && (
+        <div style={{
+          marginTop: 12, padding: '10px 12px', borderRadius: 10, fontSize: 14, fontWeight: 600,
+          color: flash.kind === 'ok' ? T.green : T.red,
+          background: flash.kind === 'ok' ? 'rgba(142,202,230,0.10)' : 'rgba(239,68,68,0.10)',
+          border: `1px solid ${flash.kind === 'ok' ? 'rgba(142,202,230,0.35)' : 'rgba(239,68,68,0.35)'}`,
+        }}>{flash.text}</div>
+      )}
+
+      {!status?.configured ? (
+        <div style={{ fontSize: 12, color: T.muted, opacity: 0.6, marginTop: 10 }}>
+          Not set up on the server (missing Google credentials).
+        </div>
+      ) : status.connected ? (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 14, color: T.green, fontWeight: 700 }}>
+            Connected{status.email ? ` — ${status.email}` : ''}
+          </div>
+          <button
+            onClick={() => disconnect.mutate()}
+            disabled={disconnect.isPending}
+            style={{ ...button('ghost'), marginTop: 12, color: T.red, borderColor: 'rgba(239,68,68,0.35)' }}
+          >
+            {disconnect.isPending ? 'Disconnecting…' : 'Disconnect'}
+          </button>
+        </div>
+      ) : (
+        // A real link, not a button with onClick — the browser must follow the
+        // redirect out to Google and back. A fetch would just get CORS-blocked.
+        <a href={calendarApi.connectUrl} style={{
+          display: 'inline-block', marginTop: 14, textDecoration: 'none',
+          background: 'rgba(33,158,188,0.18)', border: `1px solid ${T.cyan}`,
+          color: T.text, borderRadius: 12, minHeight: 46, padding: '13px 18px',
+          fontSize: 15, fontWeight: 800, letterSpacing: '0.04em',
+        }}>
+          Connect Google Calendar
+        </a>
+      )}
+    </section>
   )
 }
 

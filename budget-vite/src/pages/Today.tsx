@@ -3,6 +3,7 @@ import { useAuth } from '../auth'
 import { useToday, useCreateTask } from '../hooks'
 import { ApiError, type Task } from '../api'
 import TaskRow from '../components/TaskRow'
+import CalendarCard from '../components/CalendarCard'
 import { T, card, labelCap, input, button } from '../theme'
 
 /**
@@ -59,10 +60,7 @@ export default function Today() {
         )}
       </section>
 
-      <section style={card()}>
-        <div style={labelCap()}>Calendar</div>
-        <Empty>Connect Google Calendar in Settings to see today's events.</Empty>
-      </section>
+      <CalendarCard status={data.calendar} date={today} />
 
       <section style={card()}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>

@@ -1,51 +1,93 @@
 # Changelog
 
-## 2026-08-06 (f) - ES Candles: Overlays dropdown moved next to Layout
+## 2026-08-06 (f) - budget.cbedge.net step 5: Google Calendar (read-only, per person)
 
-Overlays sat between the DTE picker ("Front") and the Vol+OI/Vol switch — in the
-middle of the gamma-settings half of the dock. It answers "what is drawn on this
-chart", the same question as Indicators, so it now renders immediately after the
-page's Charts / Replay / Indicators / Layout group and before the symbol picker.
+Phase 1 step 5 of 7. Each household member links their OWN Google account; today's
+events render in the Today calendar card. Read-only — the app cannot create, change
+or delete an event. Money card is the last placeholder (step 6).
 
-### `components/dashboard/es-candles/EsChartCard.tsx`
-- Overlays button + its portalled checklist relocated from after the DTE dropdown to
-  directly after `{toolbarExtras}` (the page-owned Charts / Replay / Indicators /
-  Layout cluster), so it lands beside Layout in the rendered bar.
-- Dropped the now-redundant `<DockGap />` that used to introduce the Overlays group —
-  the GEX-metric group below already brings its own, so the DTE picker would otherwise
-  have ended up with a double separator after it.
-- Left in the CARD rather than moved into the page's `toolbarExtras`: every overlay
-  toggle is per-card state persisted into that card's slot blob, so a 2- or 3-chart row
-  keeps one Overlays menu per chart. Hoisting it to the page would have collapsed all
-  of them onto one shared set.
+**Nothing on cbedge.net changed.** No trading route, socket topic, page, proxy or
+existing schema was touched.
 
-New dock order: Candles - Charts - Replay - Indicators - Layout - **Overlays** -
-symbol - timeframe - LIVE - candle count - DTE - Vol+OI/Vol - intensity - actions.
+### New: `server-v2/_lib-google-calendar.cjs`
+Four rules the implementation is built around:
 
-Verified by parsing the edited file with esbuild (tsx loader) and by diffing the
-normalised line multiset against the original: the only deltas are the removed
-`<DockGap />` and the rewritten block comment. No proxy change.
+1. **The browser never sees a Google token.** No client-side Google SDK, nothing in
+   localStorage. The SPA calls our endpoint; we call Google server-side and return
+   plain event JSON.
+2. **Refresh tokens are encrypted at rest** (AES-256-GCM, scrypt-derived key from
+   `HH_TOKEN_KEY`). A refresh token is a permanent read key to someone's calendar; it
+   does not sit in a table in plaintext. A rotated key decrypts to null → "reconnect",
+   never a 500.
+3. **Scope is `calendar.readonly`** and `prompt=consent` + `access_type=offline`, which
+   is what actually returns a refresh_token on RE-authorisation. Without
+   `prompt=consent` Google omits it every time after the first, leaving a connection
+   that works for an hour and then silently dies.
+4. **Google being slow, down, or revoked must never break Today.** Every read path
+   returns `{ events, error? }` and always 200s. The card renders its own state.
 
-## 2026-08-06 (e2) - ES Candles: x-axis showed dates instead of times
+### OAuth state is signed AND user-bound
+`state` is an HMAC-signed, 10-minute payload carrying the user id. The callback
+requires a valid signature **and** `state.uid === signed-in user`. Signature alone
+would let someone paste their own callback URL into the other person's browser and
+bind THEIR calendar to that account. Tested explicitly.
 
-(Re-filed. This entry was written earlier today and was lost when CHANGELOG.md got
-rewritten by the budget.cbedge.net work; the code fix itself is in place.)
+### `/connect` and `/callback` are `auth:'public'` on purpose
+They are browser navigations, not fetches. A navigation that 401s with JSON dumps raw
+text on the screen, so both do their own session check and always end in a redirect a
+person can read. This is safe because the hh_session cookie is `SameSite=Lax`, which
+permits top-level GET navigations — do **not** switch to a POST callback, the cookie
+would not survive it.
 
-The ES Candles time axis rendered a date at nearly every tick, so the clock only ever
-appeared on the crosshair and an intraday chart had no visible time scale.
+### Events are fetched SEPARATELY from `/api/hh/today`
+A call out to Google can take half a second. Folding it into Today would hold the
+whole screen hostage to a third party. Today reports only `calendar: {configured,
+connected}` from our own database and paints immediately; `/api/hh/calendar/events`
+fills the card in when it fills in. 60s per-user cache server-side (a phone re-checks
+on every foreground) and a matching `staleTime` client-side.
 
-### Root cause
-`EsChartCard.tsx` branched on `tickMarkType === 2 || tickMarkType === 3`, commented as
-"day/month boundary". Wrong mapping: in lightweight-charts v5 `TickMarkType` is
-`0 Year | 1 Month | 2 DayOfMonth | 3 Time | 4 TimeWithSeconds` — **3 is Time**, the type
-emitted for nearly every tick on an intraday chart. Sending 3 down the date branch
-printed `Aug 6` where `09:30` belonged.
+### Per-day timezone offset, not "now"
+The events window is built from the offset that timezone is at **on that specific
+calendar day**, not the current one. Using today's offset for a day on the other side
+of a DST change shifts the window an hour and drops the first or last event. Both
+boundaries are covered by tests.
 
-### `components/dashboard/es-candles/EsChartCard.tsx`
-- `tickMarkFormatter` now routes only the real calendar boundaries (`0`/`1`/`2`) to the
-  ET date string; `3`/`4` format as ET `HH:MM`, 24-hour. Day boundaries still show
-  `Mon D` when the visible range spans more than one session.
-- Comment replaced with the actual enum values so the off-by-one can't recur.
+Other handling: recurring events expanded via `singleEvents=true` (otherwise a weekly
+standup returns as one master row and never shows), `cancelled` filtered out, all-day
+vs timed distinguished by `date` vs `dateTime`, untitled events labelled.
+
+### `budget-vite`
+- `src/components/CalendarCard.tsx` — every failure mode gets its own honest message.
+  The one thing it must never do is render an empty list when it doesn't know:
+  "nothing on today" and "we can't reach your calendar" look identical but mean
+  opposite things, and one of them makes you miss something.
+- `src/pages/Settings.tsx` — connect/disconnect, shows the linked Google address,
+  reads the `?calendar=` result from the callback and strips it so a refresh doesn't
+  replay the message.
+- Connect is a real `<a href>`, never a fetch — the browser has to follow the redirect
+  out to Google.
+
+### New env (`.env.local` on the VPS — mounted at runtime, never baked into the image)
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `HH_TOKEN_KEY` (`openssl rand -hex 32`),
+optional `HH_BASE_URL` (default `https://budget.cbedge.net`). Missing config is not a
+crash: `configured()` returns false and the card says "not set up" instead of offering
+a Connect button that dead-ends.
+
+Authorised redirect URI in Google Cloud Console must be EXACTLY
+`https://budget.cbedge.net/api/hh/calendar/callback`.
+
+### Verification — 156 assertions total, 0 failures
+- **48/48** calendar route tests with Google stubbed at the `fetch` boundary: full
+  connect flow, CSRF (forged state, expired state, another user's valid state replayed
+  in your session), token encryption at rest, access-token refresh on expiry, key
+  rotation, revoked access, Google 503, cache hit, disconnect + revoke, and the
+  missing-refresh_token trap.
+- **32/32** crypto/state/URL/timezone unit tests, including both DST boundaries.
+- **57/57** household integration tests still green against real PostgreSQL 16.
+- **19/19** date-label tests.
+- `tsc --noEmit` clean, `vite build` clean, `node --check` on all server files.
+
+**No proxy change** — `proxy-tastytrade.js` and `proxy-thetadata.js` untouched.
 
 
 ## 2026-08-06 (e) - budget.cbedge.net step 4: tasks, Today screen, per-person sharing

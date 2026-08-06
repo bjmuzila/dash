@@ -1,12 +1,24 @@
 /**
- * Personal · Todo — checklists, kanban board, task list, analytics.
- * Restyled to match the dashboard UI (Confidence Score conventions: HOME_THEME,
- * glassmorphic panels, cyan/purple/orange accents, conf-hover lift).
- * Uses the same localStorage keys (hub_checklists / hub_pillar_titles / hub_tasks)
- * so data created in the vanilla site carries over.
+ * Personal · Todo — four checklists + one drag-and-drop Checklist Update board.
+ *
+ * ONE page, one source of truth. Every checklist item carries its own board
+ * `status`, so the three Checklist Update columns are a VIEW of the checklists
+ * rather than a second list that has to be kept in sync:
+ *
+ *   checklists  → WORK · FAMILY · IDEAS · WEEKLY GOALS
+ *   board       → All Todo · In Progress · Completed   (grouped by item.status)
+ *
+ * A new checklist item is born in "All Todo". Dragging its card between columns
+ * writes back to the item it came from, and Completed ⇔ the checkbox — tick the
+ * box and the card lands in Completed, drag it out and the box clears.
+ *
+ * Storage is v2-keyed (hub_checklists_v2 / hub_pillar_titles_v2). The old
+ * hub_checklists / hub_pillar_titles / hub_tasks keys are left untouched on
+ * purpose — the old five-pillar shape doesn't map onto these four lists, so the
+ * old data is preserved rather than half-migrated.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   OWNER_THEME as HOME_THEME_BASE,
   homeButtonStyle,
@@ -27,7 +39,7 @@ const HOME_THEME = {
   muted: "#FFFFFF",
   cyan: LIGHT_BLUE,  // single accent (light blue)
   purple: "#126783", // Ideas → deep teal
-  green: "#8ECAE6",  // light blue (Completed) — avoids orange-next-to-yellow
+  green: "#8ECAE6",  // light blue (Completed)
   orange: "#FB8501", // orange
 };
 
@@ -36,71 +48,40 @@ const budgetRadial = HOME_THEME_BASE.panelBg;
 
 // ── Types & defaults ──────────────────────────────────────────────────────────
 
-interface CheckItem { id: string; text: string; checked: boolean }
-interface Ticket {
-  id: string; subject: string; email: string;
-  category: string; priority: "LOW" | "MED" | "HIGH"; status: string;
+type Status = "All Todo" | "In Progress" | "Completed";
+
+interface CheckItem {
+  id: string;
+  text: string;
+  checked: boolean;
+  status: Status;
 }
 
 type Checklists = Record<string, CheckItem[]>;
 type PillarTitles = Record<string, string>;
 
-const DEFAULT_CHECKLISTS: Checklists = {
-  scott: [
-    { id: "c1", text: "Drink 8 glasses of water", checked: true },
-    { id: "c2", text: "10-minute morning stretch", checked: false },
-    { id: "c3", text: "Write down daily goals", checked: false },
-  ],
-  shrills: [
-    { id: "c4", text: "Review weekly workspace plan", checked: false },
-    { id: "c5", text: "Draft resume updates", checked: true },
-    { id: "c6", text: "Clear desktop inbox files", checked: false },
-  ],
-  roman: [
-    { id: "c7", text: "30-minute cardio session", checked: false },
-    { id: "c8", text: "Log daily calorie intake", checked: true },
-    { id: "c9", text: "Prepare tomorrow's meal plan", checked: false },
-  ],
-  jeremy: [
-    { id: "c10", text: "Read 15 pages of non-fiction", checked: false },
-    { id: "c11", text: "Practice new coding framework", checked: true },
-    { id: "c12", text: "Watch CSS Grid tutorial", checked: false },
-  ],
-  brandon: [
-    { id: "c13", text: "Pay electric & water bills", checked: true },
-    { id: "c14", text: "Review investment portfolio", checked: false },
-    { id: "c15", text: "Organize tax deductible files", checked: false },
-  ],
-};
+const BOXES = [
+  { key: "work", color: HOME_THEME.cyan },
+  { key: "family", color: HOME_THEME.orange },
+  { key: "ideas", color: HOME_THEME.purple },
+  { key: "weekly", color: HOME_THEME.green },
+];
 
 const DEFAULT_TITLES: PillarTitles = {
-  scott: "Daily Habits", shrills: "Career & Work", roman: "Health & Wellness",
-  jeremy: "Learning & Growth", brandon: "Life Admin & Finance",
+  work: "Work", family: "Family", ideas: "Ideas", weekly: "Weekly Goals",
 };
 
-const DEFAULT_TASKS: Ticket[] = [
-  { id: "IDEA-001", subject: "Design backyard deck extension", email: "Home Project", category: "Personal", priority: "HIGH", status: "Ideas" },
-  { id: "IDEA-002", subject: "Research itinerary for summer trip", email: "Travel Spec", category: "Learning", priority: "LOW", status: "Ideas" },
-  { id: "TASK-101", subject: "Organize and tidy garage workbench", email: "Home Improvement", category: "Personal", priority: "HIGH", status: "In Progress" },
-  { id: "TASK-102", subject: "Track monthly budget expenditures", email: "Life Audit", category: "Finances", priority: "MED", status: "In Progress" },
-  { id: "DONE-501", subject: "Book dental checkup appointment", email: "Health Task", category: "Health", priority: "HIGH", status: "Completed" },
-  { id: "DONE-502", subject: "File Q1 utility receipts", email: "Tax Preparation", category: "Finances", priority: "MED", status: "Completed" },
-];
+const DEFAULT_CHECKLISTS: Checklists = { work: [], family: [], ideas: [], weekly: [] };
 
-const BOXES = [
-  { key: "scott", color: HOME_THEME.purple },
-  { key: "shrills", color: HOME_THEME.orange },
-  { key: "roman", color: HOME_THEME.green },
-  { key: "jeremy", color: HOME_THEME.cyan },
-  { key: "brandon", color: HOME_THEME.red },
-];
-
-const STATUS_COLORS: Record<string, string> = {
-  Ideas: HOME_THEME.purple, "In Progress": HOME_THEME.orange, Completed: HOME_THEME.red,
+const STATUSES: Status[] = ["All Todo", "In Progress", "Completed"];
+const STATUS_COLORS: Record<Status, string> = {
+  "All Todo": HOME_THEME.cyan,
+  "In Progress": HOME_THEME.orange,
+  Completed: HOME_THEME.green,
 };
 
-const CATEGORIES = ["Personal", "Career", "Health", "Learning", "Finances"];
-const STATUSES = ["Ideas", "In Progress", "Completed"];
+const LS_LISTS = "hub_checklists_v2";
+const LS_TITLES = "hub_pillar_titles_v2";
 
 function rgba(hex: string, a: number) {
   const h = hex.replace("#", "");
@@ -115,6 +96,37 @@ function loadLS<T>(key: string, fallback: T): T {
   } catch { return fallback; }
 }
 
+/**
+ * Anything read back from localStorage predates the current shape by definition
+ * — items written before `status` existed, or a list key that no longer exists.
+ * Normalize on read so the board never has to defend against a missing status.
+ */
+function normalizeLists(raw: unknown): Checklists {
+  const out: Checklists = { work: [], family: [], ideas: [], weekly: [] };
+  if (!raw || typeof raw !== "object") return out;
+  for (const box of BOXES) {
+    const list = (raw as Record<string, unknown>)[box.key];
+    if (!Array.isArray(list)) continue;
+    out[box.key] = list
+      .filter((i) => i && typeof i === "object")
+      .map((i) => {
+        const it = i as Partial<CheckItem>;
+        const checked = !!it.checked;
+        const status: Status = STATUSES.includes(it.status as Status)
+          ? (it.status as Status)
+          : (checked ? "Completed" : "All Todo");
+        return {
+          id: String(it.id ?? "c_" + Math.random().toString(36).slice(2)),
+          text: String(it.text ?? ""),
+          checked: status === "Completed" ? true : checked,
+          status,
+        };
+      })
+      .filter((i) => i.text.trim().length > 0);
+  }
+  return out;
+}
+
 // ── Shared styles (HOME_THEME-based) ───────────────────────────────────────────
 
 const formLabel: React.CSSProperties = {
@@ -125,6 +137,10 @@ const formInput: React.CSSProperties = {
 };
 const formGroup: React.CSSProperties = { marginBottom: 14, display: "flex", flexDirection: "column", gap: 6 };
 
+const btnBase: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6 };
+const btnPrimary: React.CSSProperties = { ...homeButtonStyle, ...btnBase };
+const btnGhost: React.CSSProperties = { ...homeSecondaryButtonStyle, ...btnBase };
+
 function SectionTitle({ text, accent }: { text: string; accent: string }) {
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 17, fontWeight: 800, letterSpacing: ".12em", textTransform: "uppercase", color: accent }}>
@@ -134,115 +150,71 @@ function SectionTitle({ text, accent }: { text: string; accent: string }) {
   );
 }
 
-function PBadge({ p }: { p: string }) {
-  const col = p === "HIGH" ? HOME_THEME.red : p === "MED" ? HOME_THEME.orange : HOME_THEME.muted;
-  return (
-    <span style={{
-      fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4,
-      textTransform: "uppercase", letterSpacing: ".08em",
-      color: col, background: rgba(col, 0.12), border: `1px solid ${rgba(col, 0.35)}`,
-    }}>
-      {p}
-    </span>
-  );
-}
-
-const btnBase: React.CSSProperties = {
-  display: "inline-flex", alignItems: "center", gap: 6,
-};
-const btnPrimary: React.CSSProperties = { ...homeButtonStyle, ...btnBase };
-const btnGhost: React.CSSProperties = { ...homeSecondaryButtonStyle, ...btnBase };
-const btnDanger: React.CSSProperties = {
-  ...btnBase, padding: "5px 10px", borderRadius: 6, cursor: "pointer",
-  fontSize: 14, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
-  color: HOME_THEME.red, background: rgba(HOME_THEME.red, 0.12), border: `1px solid ${rgba(HOME_THEME.red, 0.35)}`,
-};
-
-// Static weekly trend from the vanilla page
-const TREND = [1, 2, 0, 3, 2, 4, 3];
-const TREND_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-function TrendChart() {
-  const w = 900, h = 340, padL = 40, padB = 30, padT = 16, padR = 16;
-  const maxV = Math.max(...TREND, 1);
-  const x = (i: number) => padL + ((w - padL - padR) * i) / (TREND.length - 1);
-  const y = (v: number) => padT + (h - padT - padB) * (1 - v / maxV);
-  const path = TREND.map((v, i) => `${i === 0 ? "M" : "L"}${x(i)},${y(v)}`).join(" ");
-  const area = `${path} L${x(TREND.length - 1)},${h - padB} L${x(0)},${h - padB} Z`;
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height: 360 }}>
-      {[0, 1, 2, 3, 4].map((g) => {
-        const gy = padT + ((h - padT - padB) * g) / 4;
-        const val = maxV - (maxV * g) / 4;
-        return (
-          <g key={g}>
-            <line x1={padL} y1={gy} x2={w - padR} y2={gy} stroke="rgba(255,255,255,0.06)" />
-            <text x={padL - 8} y={gy + 4} textAnchor="end" fontSize={11} fill={HOME_THEME.muted} fontFamily="Inter, Arial">{val.toFixed(0)}</text>
-          </g>
-        );
-      })}
-      <path d={area} fill={rgba(HOME_THEME.cyan, 0.07)} />
-      <path d={path} fill="none" stroke={HOME_THEME.cyan} strokeWidth={2} style={{ filter: `drop-shadow(0 0 5px ${rgba(HOME_THEME.cyan, 0.5)})` }} />
-      {TREND.map((v, i) => (
-        <g key={i}>
-          <circle cx={x(i)} cy={y(v)} r={4} fill={HOME_THEME.cyan} />
-          <text x={x(i)} y={h - 8} textAnchor="middle" fontSize={11} fill={HOME_THEME.muted} fontFamily="Inter, Arial">{TREND_LABELS[i]}</text>
-        </g>
-      ))}
-    </svg>
-  );
-}
-
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function Todo() {
   const [hydrated, setHydrated] = useState(false);
   const [checklists, setChecklists] = useState<Checklists>(DEFAULT_CHECKLISTS);
   const [titles, setTitles] = useState<PillarTitles>(DEFAULT_TITLES);
-  const [tickets, setTickets] = useState<Ticket[]>(DEFAULT_TASKS);
-  const [view, setView] = useState("overview");
-  const [editId, setEditId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [cTitle, setCTitle] = useState("");
+  const [cBox, setCBox] = useState("work");
 
-  // Edit modal fields
-  const [eTitle, setETitle] = useState(""); const [eDetails, setEDetails] = useState("");
-  const [eCat, setECat] = useState("Personal"); const [ePri, setEPri] = useState("LOW");
-  const [eStatus, setEStatus] = useState("Ideas");
-
-  // Create modal fields
-  const [cTitle, setCTitle] = useState(""); const [cType, setCType] = useState("checklist");
-  const [cBox, setCBox] = useState("scott"); const [cCat, setCCat] = useState("Personal");
-  const [cPri, setCPri] = useState("LOW"); const [cStatus, setCStatus] = useState("Ideas");
+  // Drag state: which item is in flight, and which column it is hovering.
+  const dragId = useRef<string | null>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [overCol, setOverCol] = useState<Status | null>(null);
 
   const inlineRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   useEffect(() => {
-    setChecklists(loadLS("hub_checklists", DEFAULT_CHECKLISTS));
-    setTitles(loadLS("hub_pillar_titles", DEFAULT_TITLES));
-    setTickets(loadLS("hub_tasks", DEFAULT_TASKS));
+    setChecklists(normalizeLists(loadLS<unknown>(LS_LISTS, null)));
+    setTitles({ ...DEFAULT_TITLES, ...loadLS<PillarTitles>(LS_TITLES, {}) });
     setHydrated(true);
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
     try {
-      localStorage.setItem("hub_checklists", JSON.stringify(checklists));
-      localStorage.setItem("hub_pillar_titles", JSON.stringify(titles));
-      localStorage.setItem("hub_tasks", JSON.stringify(tickets));
+      localStorage.setItem(LS_LISTS, JSON.stringify(checklists));
+      localStorage.setItem(LS_TITLES, JSON.stringify(titles));
     } catch { /* unavailable */ }
-  }, [hydrated, checklists, titles, tickets]);
+  }, [hydrated, checklists, titles]);
 
   // ── Mutations ──────────────────────────────────────────────────────────────
-  const toggleCheck = (key: string, id: string) =>
-    setChecklists((c) => ({ ...c, [key]: c[key].map((i) => (i.id === id ? { ...i, checked: !i.checked } : i)) }));
+  /** Apply a patch to one item wherever it lives, without knowing its list. */
+  const patchItem = (id: string, patch: (i: CheckItem) => CheckItem) =>
+    setChecklists((c) => {
+      const next: Checklists = {};
+      for (const k of Object.keys(c)) next[k] = c[k].map((i) => (i.id === id ? patch(i) : i));
+      return next;
+    });
+
+  /** Checkbox ⇔ Completed column. Unticking returns the card to All Todo. */
+  const toggleCheck = (id: string) =>
+    patchItem(id, (i) => {
+      const checked = !i.checked;
+      return { ...i, checked, status: checked ? "Completed" : "All Todo" };
+    });
+
+  /** Drop target. Landing in Completed ticks the box; leaving it clears the box. */
+  const moveItem = (id: string, status: Status) =>
+    patchItem(id, (i) => (i.status === status ? i : { ...i, status, checked: status === "Completed" }));
 
   const deleteItem = (key: string, id: string) =>
-    setChecklists((c) => ({ ...c, [key]: c[key].filter((i) => i.id !== id) }));
+    setChecklists((c) => ({ ...c, [key]: (c[key] ?? []).filter((i) => i.id !== id) }));
+
+  const deleteAnywhere = (id: string) =>
+    setChecklists((c) => {
+      const next: Checklists = {};
+      for (const k of Object.keys(c)) next[k] = c[k].filter((i) => i.id !== id);
+      return next;
+    });
 
   const renameItem = (key: string, id: string, text: string) => {
     const v = text.trim();
     if (!v) return;
-    setChecklists((c) => ({ ...c, [key]: c[key].map((i) => (i.id === id ? { ...i, text: v } : i)) }));
+    setChecklists((c) => ({ ...c, [key]: (c[key] ?? []).map((i) => (i.id === id ? { ...i, text: v } : i)) }));
   };
 
   const renamePillar = (key: string, text: string) => {
@@ -250,137 +222,54 @@ export default function Todo() {
     if (v) setTitles((t) => ({ ...t, [key]: v }));
   };
 
+  /** Every new item starts life in the first Checklist Update column. */
+  const addItem = (key: string, text: string) => {
+    const v = text.trim();
+    if (!v) return;
+    const item: CheckItem = { id: "c_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), text: v, checked: false, status: "All Todo" };
+    setChecklists((c) => ({ ...c, [key]: [...(c[key] ?? []), item] }));
+  };
+
   const inlineAdd = (key: string) => {
     const el = inlineRefs.current[key];
-    const text = el?.value.trim();
-    if (!text) return;
-    setChecklists((c) => ({ ...c, [key]: [...c[key], { id: "c_" + Date.now(), text, checked: false }] }));
+    const text = el?.value ?? "";
+    if (!text.trim()) return;
+    addItem(key, text);
     if (el) el.value = "";
-  };
-
-  const deleteTask = (id: string) => setTickets((t) => t.filter((x) => x.id !== id));
-
-  const openTicket = (id: string) => {
-    const t = tickets.find((x) => x.id === id);
-    if (!t) return;
-    setEditId(id);
-    setETitle(t.subject); setEDetails(t.email); setECat(t.category);
-    setEPri(t.priority); setEStatus(t.status);
-  };
-
-  const saveEdit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setTickets((all) => all.map((t) => t.id === editId
-      ? { ...t, subject: eTitle.trim(), email: eDetails.trim(), category: eCat, priority: ePri as Ticket["priority"], status: eStatus }
-      : t));
-    setEditId(null);
   };
 
   const createItem = (e: React.FormEvent) => {
     e.preventDefault();
-    const title = cTitle.trim();
-    if (!title) return;
-    if (cType === "checklist") {
-      setChecklists((c) => ({ ...c, [cBox]: [...c[cBox], { id: "c_" + Date.now(), text: title, checked: false }] }));
-    } else {
-      const prefix = cStatus === "Completed" ? "DONE" : cStatus === "In Progress" ? "TASK" : "IDEA";
-      const rand = Math.floor(100 + Math.random() * 900);
-      setTickets((t) => [...t, {
-        id: `${prefix}-${rand}`, subject: title, email: "Personal Goal",
-        category: cCat, priority: cPri as Ticket["priority"], status: cStatus,
-      }]);
-    }
+    if (!cTitle.trim()) return;
+    addItem(cBox, cTitle);
     setCTitle(""); setShowCreate(false);
   };
 
-  // ── Derived ──────────────────────────────────────────────────────────────────
-  const ideas = tickets.filter((t) => t.status === "Ideas").length;
-  const prog = tickets.filter((t) => t.status === "In Progress").length;
-  const done = tickets.filter((t) => t.status === "Completed").length;
-  let total = 0, checked = 0;
-  Object.values(checklists).forEach((l) => l.forEach((i) => { total++; if (i.checked) checked++; }));
+  // ── Derived ────────────────────────────────────────────────────────────────
+  /** Flat view of every item, tagged with the list it came from. */
+  const allItems = useMemo(
+    () => BOXES.flatMap((b) => (checklists[b.key] ?? []).map((i) => ({ ...i, boxKey: b.key, boxColor: b.color }))),
+    [checklists],
+  );
+  const total = allItems.length;
+  const checked = allItems.filter((i) => i.checked).length;
   const pct = total > 0 ? Math.round((checked / total) * 100) : 100;
-
-  // ── Render pieces ─────────────────────────────────────────────────────────────
-  const Board = () => (
-    <div style={{ display: "flex", gap: 16, minHeight: 400, paddingBottom: 4, flexWrap: "wrap" }}>
-      {STATUSES.map((status) => {
-        const cols = tickets.filter((t) => t.status === status);
-        const col = STATUS_COLORS[status];
-        return (
-          <div key={status} style={{
-            ...homePanelStyle, flex: 1, display: "flex", flexDirection: "column", minWidth: 260,
-            background: budgetRadial,
-          }}>
-            <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 8, borderBottom: `1px solid ${HOME_THEME.border}` }}>
-              <div style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: col, boxShadow: `0 0 8px ${rgba(col, 0.7)}` }} />
-              <span style={{ fontSize: 17, fontWeight: 800, flex: 1, textTransform: "uppercase", letterSpacing: ".1em", color: col }}>{status}</span>
-              <span style={{ fontSize: 14, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, padding: "1px 8px", borderRadius: 4, fontWeight: 700, color: HOME_THEME.text }}>{cols.length}</span>
-            </div>
-            <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
-              {cols.map((t) => (
-                <div key={t.id} onClick={() => openTicket(t.id)} className="conf-hover" style={{
-                  background: "rgba(255,255,255,0.02)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 8,
-                  padding: 12, cursor: "pointer",
-                }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 14, color: HOME_THEME.muted, fontWeight: 700, letterSpacing: ".05em", fontFamily: "var(--font-mono)" }}>{t.id}</span>
-                    <PBadge p={t.priority} />
-                  </div>
-                  <div style={{ fontSize: 14, color: HOME_THEME.text, fontWeight: 600, lineHeight: 1.4, margin: "6px 0 10px" }}>{t.subject}</div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 8 }}>
-                    <span style={{ fontSize: 14, color: HOME_THEME.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 140 }}>{t.email}</span>
-                    <span style={{ fontSize: 14, color: HOME_THEME.text, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 4, padding: "1px 8px", fontWeight: 600 }}>{t.category}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-
-  const vtab = (id: string, label: string) => (
-    <button key={id} onClick={() => setView(id)} style={{
-      padding: "4px 12px", fontSize: 14, fontWeight: 700,
-      letterSpacing: ".08em", textTransform: "uppercase", cursor: "pointer",
-      borderRadius: 6,
-      color: view === id ? HOME_THEME.cyan : HOME_THEME.text,
-      background: view === id ? rgba(HOME_THEME.cyan, 0.1) : "transparent",
-      border: `1px solid ${view === id ? rgba(HOME_THEME.cyan, 0.35) : HOME_THEME.border}`,
-    }}>
-      {label}
-    </button>
-  );
-
-  function MetricCard({ label, value, sub, color }: { label: string; value: ReactNode; sub: ReactNode; color: string }) {
-    return (
-      <div className="conf-hover" style={{
-        ...homePanelStyle, padding: "14px 18px",
-        background: budgetRadial,
-      }}>
-        <div style={{ fontSize: 14, color: HOME_THEME.muted, marginBottom: 6, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".12em" }}>{label}</div>
-        <div style={{ fontSize: 14, fontWeight: 800, color, lineHeight: 1, textShadow: `0 0 16px ${rgba(color, 0.3)}` }}>{value}</div>
-        <div style={{ fontSize: 14, color: HOME_THEME.muted, marginTop: 6 }}>{sub}</div>
-      </div>
-    );
-  }
 
   const modalOverlay: React.CSSProperties = {
     position: "fixed", inset: 0, background: "rgba(0,0,0,.7)",
     display: "flex", alignItems: "center", justifyContent: "center",
     zIndex: 1000, backdropFilter: "blur(4px)",
   };
-  const modalBox: React.CSSProperties = {
-    ...homePanelStyle, width: "100%", maxWidth: 480, padding: 24,
-  };
+  const modalBox: React.CSSProperties = { ...homePanelStyle, width: "100%", maxWidth: 480, padding: 24 };
 
   return (
     <div style={homeShellStyle}>
       <style>{`
         .conf-hover{transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease;}
         .conf-hover:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.35);border-color:${rgba(HOME_THEME.cyan, 0.35)};}
+        .cu-card{cursor:grab;}
+        .cu-card:active{cursor:grabbing;}
+        .cu-card.dragging{opacity:.4;}
       `}</style>
 
       {/* Header */}
@@ -388,14 +277,8 @@ export default function Todo() {
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <span style={{ fontSize: 17, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".12em", color: HOME_THEME.cyan }}>Personal · To-Do</span>
           <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.85, fontFamily: "var(--font-mono)" }}>
-            {checked}/{total} habits · {pct}%
+            {checked}/{total} done · {pct}%
           </span>
-          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-            {vtab("overview", "Overview")}
-            {vtab("kanban", "Board")}
-            {vtab("list", "All Tasks")}
-            {vtab("reports", "Analytics")}
-          </div>
         </div>
         <button style={btnPrimary} onClick={() => setShowCreate(true)}>
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
@@ -407,176 +290,164 @@ export default function Todo() {
 
       {/* Content */}
       <div style={{ ...homeContentStyle, overflow: "auto" }}>
-        {/* OVERVIEW */}
-        {view === "overview" && (
-          <>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 16 }}>
-              <MetricCard label="Ideas" value={ideas} sub="Pending review" color={HOME_THEME.purple} />
-              <MetricCard label="In Progress" value={prog} sub="Active tasks" color={HOME_THEME.orange} />
-              <MetricCard label="Completed" value={done} sub="Shipped" color={HOME_THEME.red} />
-              <MetricCard
-                label="Daily Progress"
-                value={<>{pct}<span style={{ fontSize: 14, color: HOME_THEME.muted }}>%</span></>}
-                sub={<span style={{ color: HOME_THEME.green }}>{checked} / {total} habits</span>}
-                color="#8ECAE6"
-              />
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <SectionTitle text="Checklists" accent={HOME_THEME.cyan} />
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 16 }}>
-                {BOXES.map((box) => {
-                  const items = checklists[box.key] ?? [];
-                  return (
-                    <div key={box.key} className="conf-hover" style={{
-                      ...homePanelStyle, padding: 16, display: "flex", flexDirection: "column",
-                      background: budgetRadial,
-                    }}>
-                      <div style={{ fontSize: 17, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", color: HOME_THEME.text, marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
-                        <div style={{ width: 8, height: 8, borderRadius: "50%", background: box.color, boxShadow: `0 0 8px ${rgba(box.color, 0.7)}` }} />
-                        <span
-                          contentEditable suppressContentEditableWarning
-                          onBlur={(e) => renamePillar(box.key, e.currentTarget.innerText)}
-                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLElement).blur(); } }}
-                          style={{ cursor: "pointer", outline: "none" }}
-                        >
-                          {titles[box.key]}
-                        </span>
-                      </div>
-                      <ul style={{ listStyle: "none", margin: "0 0 12px", padding: 0, flexGrow: 1 }}>
-                        {items.length ? items.map((item) => (
-                          <li key={item.id} style={{
-                            display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8,
-                            fontSize: 14, color: HOME_THEME.text, lineHeight: 1.4, justifyContent: "space-between",
-                          }}>
-                            <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexGrow: 1 }}>
-                              <input type="checkbox" checked={item.checked}
-                                onChange={() => toggleCheck(box.key, item.id)}
-                                style={{ marginTop: 2, flexShrink: 0, width: 13, height: 13, cursor: "pointer", accentColor: HOME_THEME.cyan }} />
-                              <span
-                                contentEditable suppressContentEditableWarning
-                                onBlur={(e) => renameItem(box.key, item.id, e.currentTarget.innerText)}
-                                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLElement).blur(); } }}
-                                style={{
-                                  outline: "none", cursor: "pointer", flexGrow: 1,
-                                  textDecoration: item.checked ? "line-through" : "none",
-                                  color: item.checked ? HOME_THEME.muted : HOME_THEME.text,
-                                }}
-                              >
-                                {item.text}
-                              </span>
-                            </div>
-                            <button onClick={() => deleteItem(box.key, item.id)} style={{
-                              background: "none", border: "none", color: HOME_THEME.muted, cursor: "pointer",
-                              fontSize: 14, lineHeight: 1, padding: "0 2px",
-                            }}>×</button>
-                          </li>
-                        )) : (
-                          <li style={{ color: HOME_THEME.muted, fontStyle: "italic", fontSize: 14 }}>No items yet</li>
-                        )}
-                      </ul>
-                      <div style={{ display: "flex", gap: 6, borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 10, marginTop: "auto" }}>
-                        <input
-                          ref={(el) => { inlineRefs.current[box.key] = el; }}
-                          type="text" placeholder="Add item..."
-                          onKeyDown={(e) => { if (e.key === "Enter") inlineAdd(box.key); }}
-                          style={{ ...homeInputStyle, flex: 1, fontSize: 14, padding: "5px 8px" }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <SectionTitle text="Active Goals Board" accent={HOME_THEME.cyan} />
-              <Board />
-            </div>
-          </>
-        )}
-
-        {/* KANBAN */}
-        {view === "kanban" && <Board />}
-
-        {/* LIST */}
-        {view === "list" && (
-          <div style={{ ...homePanelStyle, padding: 16, overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-              <thead>
-                <tr style={{ borderBottom: `2px solid ${HOME_THEME.border}` }}>
-                  {["Task / Idea", "Category", "Priority", "Status", "Actions"].map((h, i) => (
-                    <th key={h} style={{
-                      padding: "8px 12px", textAlign: i === 4 ? "right" : "left", fontSize: 14,
-                      letterSpacing: ".12em", textTransform: "uppercase", color: HOME_THEME.muted, fontWeight: 700, whiteSpace: "nowrap",
-                    }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {tickets.map((t) => (
-                  <tr key={t.id} onClick={() => openTicket(t.id)} style={{ borderBottom: `1px solid ${HOME_THEME.border}`, cursor: "pointer" }}>
-                    <td style={{ padding: "8px 12px", color: HOME_THEME.text, fontWeight: 600, whiteSpace: "nowrap" }}>{t.subject}</td>
-                    <td style={{ padding: "8px 12px", whiteSpace: "nowrap" }}>
-                      <span style={{ fontSize: 14, color: HOME_THEME.text, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 4, padding: "1px 8px", fontWeight: 600 }}>{t.category}</span>
-                    </td>
-                    <td style={{ padding: "8px 12px", whiteSpace: "nowrap" }}><PBadge p={t.priority} /></td>
-                    <td style={{ padding: "8px 12px", whiteSpace: "nowrap" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <div style={{ width: 8, height: 8, borderRadius: "50%", background: STATUS_COLORS[t.status] }} />
-                        <span style={{ color: HOME_THEME.text, fontSize: 14 }}>{t.status}</span>
-                      </div>
-                    </td>
-                    <td style={{ padding: "8px 12px", textAlign: "right", whiteSpace: "nowrap" }}>
-                      <button style={{ ...btnGhost, fontSize: 14, padding: "3px 8px" }}
-                        onClick={(e) => { e.stopPropagation(); deleteTask(t.id); }}>Delete</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* ANALYTICS */}
-        {view === "reports" && (
-          <div style={{ ...homePanelStyle, padding: 20, borderLeft: `2px solid ${rgba(HOME_THEME.cyan, 0.4)}` }}>
-            <SectionTitle text="Completed Tasks — Weekly Trend" accent={HOME_THEME.cyan} />
-            <div style={{ marginTop: 16 }}><TrendChart /></div>
-          </div>
-        )}
-      </div>
-
-      {/* EDIT MODAL */}
-      {editId && (
-        <div style={modalOverlay} onClick={() => setEditId(null)}>
-          <div style={modalBox} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, paddingBottom: 12, borderBottom: `1px solid ${HOME_THEME.border}` }}>
-              <h2 style={{ fontSize: 17, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", margin: 0, color: HOME_THEME.cyan }}>Edit Task</h2>
-              <button onClick={() => setEditId(null)} style={{ background: "none", border: "none", fontSize: 14, cursor: "pointer", color: HOME_THEME.muted, lineHeight: 1 }}>×</button>
-            </div>
-            <form onSubmit={saveEdit}>
-              <div style={formGroup}><label style={formLabel}>Title</label>
-                <input style={formInput} value={eTitle} onChange={(e) => setETitle(e.target.value)} required /></div>
-              <div style={formGroup}><label style={formLabel}>Details</label>
-                <input style={formInput} value={eDetails} onChange={(e) => setEDetails(e.target.value)} placeholder="Subtitle or notes..." /></div>
-              <div style={formGroup}><label style={formLabel}>Category</label>
-                <ThemedSelect value={eCat} onChange={setECat} options={CATEGORIES.map((c) => ({ value: c, label: c }))} /></div>
-              <div style={formGroup}><label style={formLabel}>Priority</label>
-                <ThemedSelect value={ePri} onChange={setEPri} options={[{ value: "LOW", label: "Low" }, { value: "MED", label: "Medium" }, { value: "HIGH", label: "High" }]} /></div>
-              <div style={formGroup}><label style={formLabel}>Status</label>
-                <ThemedSelect value={eStatus} onChange={setEStatus} options={STATUSES.map((s) => ({ value: s, label: s }))} /></div>
-              <div style={{ marginTop: 20, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <button type="button" style={btnDanger} onClick={() => { if (editId) deleteTask(editId); setEditId(null); }}>Delete</button>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button type="button" style={btnGhost} onClick={() => setEditId(null)}>Cancel</button>
-                  <button type="submit" style={btnPrimary}>Save</button>
+        {/* CHECKLISTS — four fixed lists */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <SectionTitle text="Checklists" accent={HOME_THEME.cyan} />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 16 }}>
+            {BOXES.map((box) => {
+              const items = checklists[box.key] ?? [];
+              return (
+                <div key={box.key} className="conf-hover" style={{
+                  ...homePanelStyle, padding: 16, display: "flex", flexDirection: "column",
+                  background: budgetRadial,
+                }}>
+                  <div style={{ fontSize: 17, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".1em", color: HOME_THEME.text, marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: box.color, boxShadow: `0 0 8px ${rgba(box.color, 0.7)}` }} />
+                    <span
+                      contentEditable suppressContentEditableWarning
+                      onBlur={(e) => renamePillar(box.key, e.currentTarget.innerText)}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLElement).blur(); } }}
+                      style={{ cursor: "pointer", outline: "none", flex: 1 }}
+                    >
+                      {titles[box.key]}
+                    </span>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: HOME_THEME.muted, opacity: 0.7 }}>{items.length}</span>
+                  </div>
+                  <ul style={{ listStyle: "none", margin: "0 0 12px", padding: 0, flexGrow: 1 }}>
+                    {items.length ? items.map((item) => (
+                      <li key={item.id} style={{
+                        display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8,
+                        fontSize: 14, color: HOME_THEME.text, lineHeight: 1.4, justifyContent: "space-between",
+                      }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexGrow: 1 }}>
+                          <input type="checkbox" checked={item.checked}
+                            onChange={() => toggleCheck(item.id)}
+                            style={{ marginTop: 2, flexShrink: 0, width: 13, height: 13, cursor: "pointer", accentColor: HOME_THEME.cyan }} />
+                          <span
+                            contentEditable suppressContentEditableWarning
+                            onBlur={(e) => renameItem(box.key, item.id, e.currentTarget.innerText)}
+                            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLElement).blur(); } }}
+                            style={{
+                              outline: "none", cursor: "pointer", flexGrow: 1,
+                              textDecoration: item.checked ? "line-through" : "none",
+                              color: item.checked ? HOME_THEME.muted : HOME_THEME.text,
+                              opacity: item.checked ? 0.6 : 1,
+                            }}
+                          >
+                            {item.text}
+                          </span>
+                        </div>
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase",
+                          whiteSpace: "nowrap", padding: "1px 6px", borderRadius: 4, marginTop: 1,
+                          color: STATUS_COLORS[item.status],
+                          background: rgba(STATUS_COLORS[item.status], 0.12),
+                          border: `1px solid ${rgba(STATUS_COLORS[item.status], 0.35)}`,
+                        }}>{item.status}</span>
+                        <button onClick={() => deleteItem(box.key, item.id)} style={{
+                          background: "none", border: "none", color: HOME_THEME.muted, cursor: "pointer",
+                          fontSize: 14, lineHeight: 1, padding: "0 2px",
+                        }}>×</button>
+                      </li>
+                    )) : (
+                      <li style={{ color: HOME_THEME.muted, fontStyle: "italic", fontSize: 14, opacity: 0.6 }}>No items yet</li>
+                    )}
+                  </ul>
+                  <div style={{ display: "flex", gap: 6, borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 10, marginTop: "auto" }}>
+                    <input
+                      ref={(el) => { inlineRefs.current[box.key] = el; }}
+                      type="text" placeholder="Add item..."
+                      onKeyDown={(e) => { if (e.key === "Enter") inlineAdd(box.key); }}
+                      style={{ ...homeInputStyle, flex: 1, fontSize: 14, padding: "5px 8px" }}
+                    />
+                  </div>
                 </div>
-              </div>
-            </form>
+              );
+            })}
           </div>
         </div>
-      )}
+
+        {/* CHECKLIST UPDATE — three drag-and-drop columns over the same items */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <SectionTitle text="Checklist Update" accent={HOME_THEME.cyan} />
+          <div style={{ display: "flex", gap: 16, minHeight: 400, paddingBottom: 4, flexWrap: "wrap" }}>
+            {STATUSES.map((status) => {
+              const cards = allItems.filter((t) => t.status === status);
+              const col = STATUS_COLORS[status];
+              const isOver = overCol === status;
+              return (
+                <div
+                  key={status}
+                  onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (overCol !== status) setOverCol(status); }}
+                  onDragLeave={(e) => { if (e.currentTarget === e.target) setOverCol(null); }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const id = e.dataTransfer.getData("text/plain") || dragId.current;
+                    if (id) moveItem(id, status);
+                    dragId.current = null; setDragging(null); setOverCol(null);
+                  }}
+                  style={{
+                    ...homePanelStyle, flex: 1, display: "flex", flexDirection: "column", minWidth: 260,
+                    background: budgetRadial,
+                    // Drop affordance rides on box-shadow, not borderColor — the panel's
+                    // `border` shorthand comes in from homePanelStyle and React warns when
+                    // a longhand is toggled against a shorthand between renders.
+                    boxShadow: isOver ? `inset 0 0 0 2px ${rgba(col, 0.55)}, 0 0 18px ${rgba(col, 0.18)}` : undefined,
+                    transition: "box-shadow .12s ease",
+                  }}
+                >
+                  <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 8, borderBottom: `1px solid ${HOME_THEME.border}` }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: col, boxShadow: `0 0 8px ${rgba(col, 0.7)}` }} />
+                    <span style={{ fontSize: 17, fontWeight: 800, flex: 1, textTransform: "uppercase", letterSpacing: ".1em", color: col }}>{status}</span>
+                    <span style={{ fontSize: 14, background: "rgba(255,255,255,0.05)", border: `1px solid ${HOME_THEME.border}`, padding: "1px 8px", borderRadius: 4, fontWeight: 700, color: HOME_THEME.text }}>{cards.length}</span>
+                  </div>
+                  <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
+                    {cards.map((t) => (
+                      <div
+                        key={t.id}
+                        draggable
+                        onDragStart={(e) => {
+                          dragId.current = t.id; setDragging(t.id);
+                          e.dataTransfer.setData("text/plain", t.id);
+                          e.dataTransfer.effectAllowed = "move";
+                        }}
+                        onDragEnd={() => { dragId.current = null; setDragging(null); setOverCol(null); }}
+                        className={`conf-hover cu-card${dragging === t.id ? " dragging" : ""}`}
+                        style={{
+                          background: "rgba(255,255,255,0.02)", border: `1px solid ${HOME_THEME.border}`, borderRadius: 8,
+                          padding: 12,
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                          <span style={{
+                            fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase",
+                            color: t.boxColor, background: rgba(t.boxColor, 0.12),
+                            border: `1px solid ${rgba(t.boxColor, 0.35)}`, borderRadius: 4, padding: "1px 8px",
+                          }}>{titles[t.boxKey]}</span>
+                          <button
+                            onClick={() => deleteAnywhere(t.id)}
+                            style={{ background: "none", border: "none", color: HOME_THEME.muted, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px" }}
+                          >×</button>
+                        </div>
+                        <div style={{
+                          fontSize: 14, color: HOME_THEME.text, fontWeight: 600, lineHeight: 1.4, margin: "8px 0 0",
+                          textDecoration: t.checked ? "line-through" : "none",
+                          opacity: t.checked ? 0.65 : 1,
+                        }}>{t.text}</div>
+                      </div>
+                    ))}
+                    {!cards.length && (
+                      <div style={{ color: HOME_THEME.muted, opacity: 0.5, fontSize: 14, fontStyle: "italic", padding: "8px 2px" }}>
+                        {status === "All Todo" ? "New checklist items land here" : "Drag a card here"}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
 
       {/* CREATE MODAL */}
       {showCreate && (
@@ -588,22 +459,12 @@ export default function Todo() {
             </div>
             <form onSubmit={createItem}>
               <div style={formGroup}><label style={formLabel}>Title</label>
-                <input style={formInput} value={cTitle} onChange={(e) => setCTitle(e.target.value)} placeholder="e.g. Review portfolio" required /></div>
-              <div style={formGroup}><label style={formLabel}>Type</label>
-                <ThemedSelect value={cType} onChange={setCType} options={[{ value: "checklist", label: "Checklist Item" }, { value: "board", label: "Board Task" }]} /></div>
-              {cType === "checklist" ? (
-                <div style={formGroup}><label style={formLabel}>Target List</label>
-                  <ThemedSelect value={cBox} onChange={setCBox} options={BOXES.map((b) => ({ value: b.key, label: titles[b.key] }))} /></div>
-              ) : (
-                <>
-                  <div style={formGroup}><label style={formLabel}>Category</label>
-                    <ThemedSelect value={cCat} onChange={setCCat} options={CATEGORIES.map((c) => ({ value: c, label: c }))} /></div>
-                  <div style={formGroup}><label style={formLabel}>Priority</label>
-                    <ThemedSelect value={cPri} onChange={setCPri} options={[{ value: "LOW", label: "Low" }, { value: "MED", label: "Medium" }, { value: "HIGH", label: "High" }]} /></div>
-                  <div style={formGroup}><label style={formLabel}>Status</label>
-                    <ThemedSelect value={cStatus} onChange={setCStatus} options={STATUSES.map((s) => ({ value: s, label: s }))} /></div>
-                </>
-              )}
+                <input style={formInput} value={cTitle} onChange={(e) => setCTitle(e.target.value)} placeholder="e.g. Review portfolio" required autoFocus /></div>
+              <div style={formGroup}><label style={formLabel}>Checklist</label>
+                <ThemedSelect value={cBox} onChange={setCBox} options={BOXES.map((b) => ({ value: b.key, label: titles[b.key] }))} /></div>
+              <div style={{ fontSize: 14, color: HOME_THEME.muted, opacity: 0.7 }}>
+                Lands in <b style={{ color: HOME_THEME.cyan }}>All Todo</b> on the Checklist Update board.
+              </div>
               <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
                 <button type="button" style={btnGhost} onClick={() => setShowCreate(false)}>Cancel</button>
                 <button type="submit" style={btnPrimary}>Add</button>
