@@ -1736,6 +1736,70 @@ register('/api/gex', {
   });
 }
 
+// /api/changelog — owner-only READ of the engineering changelogs, live off disk.
+//
+// WHY: owner.cbedge.net's Changelog page used to fetch its own
+// owner-vite/public/CHANGELOG.md — a file somebody had to hand-copy. owner-vite's
+// Docker build context is ./owner-vite, so a build step there can NEVER reach the
+// repo's real changelogs; the snapshot silently went weeks stale and the page
+// quietly showed history that stopped in July.
+//
+// The dashboard image is built from the repo root (COPY . .), so this process has
+// both files on disk, and owner-vite's nginx already proxies /api → dashboard.
+// Reading them here means the page is current the moment a changelog is committed
+// and this container redeploys — no owner-vite rebuild, no copy step, nothing to
+// remember.
+//
+// Read-only by construction: GET only, and the paths are a fixed list, never
+// anything from the query string.
+{
+  // Order matters — the page renders these top to bottom. 'md files/CHANGELOG.md'
+  // is the per-change log that actually gets written on every change, so it leads.
+  const CHANGELOG_FILES = [
+    { key: 'md-files', label: 'md files/CHANGELOG.md', rel: nodePath.join('md files', 'CHANGELOG.md') },
+    { key: 'root',     label: 'CHANGELOG.md',          rel: 'CHANGELOG.md' },
+  ];
+  // Guard rail, not a feature: the root changelog is ~350KB and grows every week.
+  // Newest entries are at the TOP of these files, so when one is over the cap we
+  // keep the HEAD and say so, rather than truncating away the part being read.
+  const MAX_BYTES = 400_000;
+
+  register('/api/changelog', {
+    auth: 'owner', methods: ['GET'],
+    async handler(req, res) {
+      try {
+        const files = await Promise.all(CHANGELOG_FILES.map(async (f) => {
+          const abs = nodePath.join(process.cwd(), f.rel);
+          try {
+            const [stat, raw] = await Promise.all([
+              fs.promises.stat(abs),
+              fs.promises.readFile(abs, 'utf8'),
+            ]);
+            // Strip the BOM and normalise CRLF — these are edited on Windows.
+            const text = raw.replace(/^﻿/, '').replace(/\r\n/g, '\n');
+            const truncated = text.length > MAX_BYTES;
+            return {
+              key: f.key,
+              label: f.label,
+              ok: true,
+              bytes: stat.size,
+              mtime: stat.mtimeMs,
+              truncated,
+              text: truncated ? text.slice(0, MAX_BYTES) : text,
+            };
+          } catch (err) {
+            // A missing file is reported, not fatal — the other one still renders.
+            return { key: f.key, label: f.label, ok: false, error: String(err && err.message || err), text: '' };
+          }
+        }));
+        send(res, 200, { ok: true, files }, { 'Cache-Control': NO_STORE });
+      } catch (err) {
+        send(res, 500, { error: 'Changelog read failed', detail: String(err) });
+      }
+    },
+  });
+}
+
 // /api/discord-share — owner-only push to the Discord webhook. Accepts JSON
 // { content } or a raw multipart body (forwarded as-is). Ported verbatim from
 // app/api/discord-share/route.ts; getServerUserId gate → 'user' + in-handler

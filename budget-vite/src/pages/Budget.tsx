@@ -1,13 +1,21 @@
 import { useState, type FormEvent } from 'react'
 import { useBudget, useAddBudgetRow, useMarkBillPaid, useDeleteBudgetRow } from '../hooks'
 import { ApiError, type Bank, type BudgetBill, type BudgetRow } from '../api'
-import { T, label, body, hero, section, row, input, button, segment } from '../theme'
+import { T, label, body, section, row, input, button, segment } from '../theme'
+import BudgetOverview from '../components/BudgetOverview'
 
 /**
  * Money, phone-first.
  *
  * Reads the SAME tables as /owner/budget — one register, two views. A payment
  * entered here shows on the desktop page immediately, and vice versa.
+ *
+ * TWO TABS, because the two jobs are different:
+ *   Overview — every card and graph from the desktop page, READ ONLY. The
+ *     numbers are computed server-side (a port of the desktop's memos), never
+ *     recomputed here, so the phone can't disagree with the laptop.
+ *   Register — the small amount of writing that's actually worth doing on a
+ *     phone: log what you just spent, tick a bill paid.
  *
  * Recurring bills are projections, not rows: they exist as rules until someone
  * marks one paid, which materialises it. That's why a bill has "Paid" instead
@@ -35,6 +43,7 @@ const shiftMonth = (m: string, delta: number) => {
 
 export default function Budget() {
   const [month, setMonth] = useState<string | undefined>(undefined)
+  const [tab, setTab] = useState<'overview' | 'register'>('overview')
   const { data, isLoading, error, refetch } = useBudget(month)
 
   if (isLoading) return <div style={{ ...body(14), color: T.muted }}>Loading…</div>
@@ -51,78 +60,48 @@ export default function Budget() {
   if (!data) return null
 
   const cur = data.currency
-  const total = BANKS.reduce((s, b) => s + (data.balances[b] || 0), 0)
   const overdue = data.bills.filter((b) => b.overdue)
   const upcoming = data.bills.filter((b) => !b.overdue)
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 26 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
         <button onClick={() => setMonth(shiftMonth(data.month, -1))} style={nav} aria-label="Previous month">‹</button>
         <span style={label()}>{monthLabel(data.month)}</span>
         <button onClick={() => setMonth(shiftMonth(data.month, 1))} style={nav} aria-label="Next month">›</button>
       </div>
 
-      {/* Hero: the one number you opened this for. */}
-      <div>
-        <div style={{ ...hero(46), color: total < 0 ? T.bad : T.ink }}>{fmt(total, cur)}</div>
-        <div style={{ display: 'flex', gap: 18, marginTop: 12, flexWrap: 'wrap' }}>
-          {BANKS.map((b) => (
-            <div key={b}>
-              <div style={label({ letterSpacing: '0.1em' })}>{BANK_LABEL[b]}</div>
-              <div style={{ ...body(14), marginTop: 3, color: (data.balances[b] || 0) < 0 ? T.bad : T.inkSoft }}>
-                {fmt(data.balances[b] || 0, cur)}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div style={label({ marginTop: 14, letterSpacing: '0.1em' })}>
-          <span style={{ color: T.good }}>{fmt(data.totals.income, cur)} in</span>
-          <span style={{ color: T.faint }}> · </span>
-          <span>{fmt(data.totals.expenses, cur)} out</span>
-          <span style={{ color: T.faint }}> · </span>
-          <span style={{ color: data.totals.net < 0 ? T.warn : T.ink }}>
-            {fmt(data.totals.net, cur)} net
-          </span>
-        </div>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button onClick={() => setTab('overview')} style={{ ...segment(tab === 'overview'), flex: 1 }}>Overview</button>
+        <button onClick={() => setTab('register')} style={{ ...segment(tab === 'register'), flex: 1 }}>Register</button>
       </div>
 
-      {overdue.length > 0 && <Bills title="Past due" bills={overdue} currency={cur} accent />}
-      {upcoming.length > 0 && <Bills title="Coming up" bills={upcoming} currency={cur} />}
-
-      <AddRow today={data.today} />
-      <Register rows={data.rows} currency={cur} />
-
-      {data.categories.length > 0 && (
-        <div style={section()}>
-          <span style={label()}>Categories</span>
-          <div style={{ marginTop: 4 }}>
-            {data.categories.map((c) => {
-              const pct = c.amount > 0 ? Math.min(100, (c.spent / c.amount) * 100) : 0
-              const over = c.amount > 0 && c.spent > c.amount
-              return (
-                <div key={c.id} style={{ padding: '11px 0', borderTop: `1px solid ${T.rule}` }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, ...body(14) }}>
-                    <span>{c.name}</span>
-                    <span style={{ color: over ? T.warn : T.inkSoft }}>
-                      {fmt(c.spent, cur)}
-                      {c.amount > 0 && <span style={{ color: T.faint }}> / {fmt(c.amount, cur)}</span>}
-                    </span>
-                  </div>
-                  {c.amount > 0 && (
-                    <div style={{ height: 2, background: T.paperSunk, marginTop: 7 }}>
-                      <div style={{ width: `${pct}%`, height: '100%', background: over ? T.warn : T.ink }} />
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-            {data.unsortedSpend > 0 && (
-              <div style={label({ marginTop: 11, letterSpacing: '0.08em' })}>
-                Uncategorised {fmt(data.unsortedSpend, cur)}
-              </div>
-            )}
+      {tab === 'overview' ? (
+        <BudgetOverview
+          o={data.overview}
+          categories={data.categories}
+          unsortedSpend={data.unsortedSpend}
+          balances={data.balances}
+          currency={cur}
+          month={data.month}
+        />
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 26 }}>
+          <div style={label({ letterSpacing: '0.1em' })}>
+            <span style={{ color: T.good }}>{fmt(data.totals.income, cur)} in</span>
+            <span style={{ color: T.faint }}> · </span>
+            <span>{fmt(data.totals.expenses, cur)} out</span>
+            <span style={{ color: T.faint }}> · </span>
+            <span style={{ color: data.totals.net < 0 ? T.warn : T.ink }}>
+              {fmt(data.totals.net, cur)} net
+            </span>
           </div>
+
+          {overdue.length > 0 && <Bills title="Past due" bills={overdue} currency={cur} accent />}
+          {upcoming.length > 0 && <Bills title="Coming up" bills={upcoming} currency={cur} />}
+
+          <AddRow today={data.today} />
+          <Register rows={data.rows} currency={cur} />
         </div>
       )}
     </div>

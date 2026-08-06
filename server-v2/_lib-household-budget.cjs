@@ -140,6 +140,17 @@ async function getMonth(profileKey, month, tz = 'America/New_York') {
     libDb.listRecurring(profile.id),
     libDb.getLatestDailyBalance(profile.id),
   ]);
+  // The anchor for the balance check. The desktop prefers a ~week-old entry and
+  // documents falling back to the immediately prior one; only the fallback is
+  // reachable through the shared helpers, so that is what this uses.
+  // typeof-checked, not just try/caught: a missing export throws SYNCHRONOUSLY
+  // at the call, so `.catch()` on the result never runs and the whole month
+  // request 500s over one optional card.
+  let prevDailyBalance = null;
+  if (dailyBalance && typeof libDb.getDailyBalanceBefore === 'function') {
+    try { prevDailyBalance = await libDb.getDailyBalanceBefore(profile.id, dailyBalance.day); }
+    catch { prevDailyBalance = null; }
+  }
 
   // Per-bank beginning balances come from is_beginning rows.
   const bal = { coastal: 0, truist: 0, secu: 0 };
@@ -247,10 +258,195 @@ async function getMonth(profileKey, month, tz = 'America/New_York') {
     })),
     unsortedSpend: unsorted,
     recurringCount: recurring.filter((r) => r.active).length,
+    overview: buildOverview({
+      month: m, today, rows, register, recurring, categories, balances: bal,
+      dailyBalance, prevDailyBalance, categorySpend: spentByCategory, unsorted,
+    }),
   };
 }
 
 // ── Write ───────────────────────────────────────────────────────────────────
+
+/** Whole days between two 'YYYY-MM-DD' strings. UTC on both ends so a DST
+ *  boundary between them can't round the result to the wrong day. */
+function daysBetween(aIso, bIso) {
+  const [ay, am, ad] = aIso.split('-').map(Number);
+  const [by, bm, bd] = bIso.split('-').map(Number);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86_400_000);
+}
+
+const CATEGORY_COLOURS = ['#8ECAE6', '#FB8501', '#7dd3fc', '#F6BD60', '#A78BFA', '#EF4444'];
+
+/**
+ * Coerce a Postgres DATE to 'YYYY-MM-DD' whichever way the driver hands it over.
+ *
+ * `pg` hydrates a DATE into a JS Date, and `String(thatDate)` is
+ * "Sat Aug 01 2026 …" — so slicing 10 characters yields "Sat Aug 01", which
+ * compares as a string against nothing. That silently emptied the balance-check
+ * window and made every figure read zero. Anything that compares a stored date
+ * has to go through here.
+ */
+function isoDay(v) {
+  if (!v) return null;
+  if (typeof v === 'string') return v.slice(0, 10);
+  if (v instanceof Date && !Number.isNaN(v.getTime())) {
+    return `${v.getUTCFullYear()}-${pad(v.getUTCMonth() + 1)}-${pad(v.getUTCDate())}`;
+  }
+  return null;
+}
+
+/**
+ * Everything the read-only overview shows, computed from rows already loaded.
+ *
+ * Every formula here is ported from the `intel` / `reconcile` / `cashflow`
+ * memos in app/owner/budget/page.tsx. The phone is a second VIEW of that page,
+ * so a number that disagrees is a bug by definition — which is why this is a
+ * port rather than a fresh implementation of "roughly the same idea".
+ */
+function buildOverview({ month, today, rows, register, recurring, categories, balances,
+                         dailyBalance, prevDailyBalance, categorySpend, unsorted }) {
+  const [iy, im] = month.split('-').map(Number);
+  const daysInMonth = new Date(iy, im, 0).getDate();
+  const ym = today.slice(0, 7);
+  // Day-of-month "now" for this month: 0 if the month is in the future, the
+  // last day if it is already past. Without that clamp a past month reports a
+  // spend pace of zero and looks like you spent nothing.
+  const todayDay = ym === month ? Number(today.split('-')[2]) : ym > month ? daysInMonth : 0;
+  const daysLeft = Math.max(1, daysInMonth - todayDay + 1);
+
+  const allBanks = BANKS.reduce((n, b) => n + (balances[b] || 0), 0);
+
+  const materialised = new Set(
+    register.filter((r) => !r.is_beginning && typeof r.recurring_tag === 'string' &&
+                           r.recurring_tag.startsWith('__recur__:')).map((r) => r.recurring_tag));
+
+  // Bills still to come this month — only NEGATIVE rules, only from today on,
+  // and only ones not already paid.
+  let billsLeft = 0;
+  const upcomingPay = [];
+  const horizon = addDays(today, 10);
+  for (const rule of recurring) {
+    if (!rule.active || rule.amount >= 0) continue;
+    for (const date of occurrencesInMonth(rule, month)) {
+      const tag = recurTag(rule.id, date);
+      if (materialised.has(tag)) continue;
+      if (date >= today) billsLeft += Math.abs(rule.amount);
+      if (date <= horizon) {
+        upcomingPay.push({
+          tag, label: rule.label, amount: Number(rule.amount), date, bank: rule.bank,
+          days: daysBetween(today, date), overdue: date < today,
+        });
+      }
+    }
+  }
+  upcomingPay.sort((a, b) => (a.date < b.date ? -1 : 1));
+
+  // Safe to spend: cash on hand minus what is already spoken for.
+  const safe = allBanks - billsLeft;
+
+  // Days grouped, for the calendar grid and the daily series.
+  const groups = new Map();
+  for (const r of rows) {
+    if (!groups.has(r.entry_date)) groups.set(r.entry_date, { date: r.entry_date, rows: [], net: 0, out: 0 });
+    const g = groups.get(r.entry_date);
+    g.rows.push(r);
+    g.net += r.amount;
+    if (r.amount < 0) g.out += -r.amount;
+  }
+  const dayList = [...groups.values()].sort((a, b) => (a.date < b.date ? -1 : 1));
+
+  // Cumulative spend by day-of-month, and the pace line to compare it against.
+  const spendByDay = new Array(daysInMonth).fill(0);
+  for (const g of dayList) {
+    const d = Number(g.date.split('-')[2]) - 1;
+    if (d >= 0 && d < daysInMonth) spendByDay[d] += g.out;
+  }
+  const cum = [];
+  let acc = 0;
+  for (let i = 0; i < daysInMonth; i++) { acc += spendByDay[i]; cum.push(Math.round(acc * 100) / 100); }
+
+  const payments = rows.reduce((n, r) => n + (r.amount < 0 ? r.amount : 0), 0);
+  // Fall back to actual spend when no budget is set, so the pace line still has
+  // something to mean — and never zero, which would divide badly.
+  const budgetTotal = categories.reduce((n, c) => n + (Number(c.amount) || 0), 0) || Math.abs(payments) || 1;
+  const paceNow = (budgetTotal * Math.min(Math.max(todayDay, 0), daysInMonth)) / daysInMonth;
+  const spentMtd = todayDay > 0 ? (cum[Math.min(todayDay, daysInMonth) - 1] ?? 0) : 0;
+
+  // Seven-day pulse against the seven before it.
+  const dayAgg = (iso) => groups.get(iso) || { net: 0, out: 0 };
+  const week = [];
+  let wkOut = 0, prevWkOut = 0;
+  for (let i = 6; i >= 0; i--) {
+    const d = addDays(today, -i);
+    const a = dayAgg(d);
+    week.push({ date: d, net: a.net, out: a.out });
+    wkOut += a.out;
+  }
+  for (let i = 13; i >= 7; i--) prevWkOut += dayAgg(addDays(today, -i)).out;
+
+  // Donut slices — categories with spend, largest first, then the unsorted bucket.
+  const slices = categories
+    .map((c, i) => ({
+      label: c.name,
+      value: categorySpend[c.id] || 0,
+      colour: c.color || CATEGORY_COLOURS[i % CATEGORY_COLOURS.length],
+    }))
+    .filter((x) => x.value > 0)
+    .sort((a, b) => b.value - a.value);
+  if (unsorted > 0) slices.push({ label: 'Unsorted', value: unsorted, colour: 'rgba(255,255,255,0.30)' });
+
+  /**
+   * Balance check. Only CLEARED money counts — real register rows. A scheduled
+   * bill hasn't left the bank yet, so counting it would show a permanent
+   * phantom shortfall. Drift below zero means money left that nobody logged.
+   */
+  let reconcile = null;
+  if (dailyBalance && prevDailyBalance) {
+    const anchorTotal = BANKS.reduce((n, b) => n + (Number(prevDailyBalance[b]) || 0), 0);
+    const from = isoDay(prevDailyBalance.day);
+    const to = isoDay(dailyBalance.day);
+    if (from && to && to > from) {
+      let moneyIn = 0, moneyOut = 0, uncleared = 0;
+      for (const g of dayList) {
+        if (g.date <= from || g.date > to) continue;
+        for (const r of g.rows) {
+          if (r.recurring) { if (r.amount < 0) uncleared += -r.amount; continue; }
+          if (r.amount > 0) moneyIn += r.amount; else moneyOut += -r.amount;
+        }
+      }
+      const expected = anchorTotal + moneyIn - moneyOut;
+      reconcile = {
+        from, to, days: daysBetween(from, to), prevBalance: anchorTotal,
+        moneyIn, moneyOut, uncleared, expected, actual: allBanks,
+        drift: Math.round((allBanks - expected) * 100) / 100,
+      };
+    }
+  }
+
+  return {
+    daysInMonth, todayDay, daysLeft,
+    allBanks, billsLeft, safe, safePerDay: safe / daysLeft,
+    budgetTotal, paceNow, spentMtd, cum,
+    week, wkOut, prevWkOut,
+    slices, upcomingPay, reconcile,
+    // Day cells for the calendar grid, and the running balance for the
+    // projection line — both derived from the same rows as everything else.
+    days: dayList.map((g) => ({ date: g.date, net: g.net, out: g.out, count: g.rows.length })),
+    series: rows.map((r) => ({ date: r.entry_date, balance: r.balance })),
+    cashflow: (() => {
+      // Weekly in/out buckets: enough resolution to see a pattern on a phone,
+      // where 31 daily bars are 6px wide and unreadable.
+      const buckets = new Map();
+      for (const r of rows) {
+        const wk = Math.floor((Number(r.entry_date.split('-')[2]) - 1) / 7) + 1;
+        if (!buckets.has(wk)) buckets.set(wk, { label: `W${wk}`, inflow: 0, outflow: 0 });
+        const b = buckets.get(wk);
+        if (r.amount > 0) b.inflow += r.amount; else b.outflow += -r.amount;
+      }
+      return [...buckets.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v);
+    })(),
+  };
+}
 
 const money = (v) => {
   const n = Number(v);
@@ -369,7 +565,7 @@ async function summary(profileKey, tz = 'America/New_York') {
 }
 
 module.exports = {
-  available, BANKS,
+  available, BANKS, buildOverview, daysBetween, isoDay,
   getMonth, summary,
   addRow, markBillPaid, updateRow, deleteRow, setDailyBalance, setRowCategory,
   // exported for the parity tests

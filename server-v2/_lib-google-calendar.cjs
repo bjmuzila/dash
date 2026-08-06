@@ -305,6 +305,12 @@ const CACHE_MS = 60_000;
  * of a DST change gets a window shifted by an hour and drops the first or last
  * event of the day.
  */
+function addDaysIso(iso, days) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + days));
+  return dt.toISOString().slice(0, 10);
+}
+
 function offsetFor(tz, dateStr) {
   try {
     const parts = new Intl.DateTimeFormat('en-US', {
@@ -375,6 +381,39 @@ async function saveSelection(userId, { calendarIds, shareWithHousehold }) {
   // so the whole cache goes, not just this user's slice.
   cache.clear();
   return rowCount > 0;
+}
+
+/**
+ * Colour per calendar, from calendarList. Cached alongside the events cache
+ * because it changes about once a year and is needed on every event read —
+ * fetching the list on every request would double the Google calls for a value
+ * that never moves.
+ */
+const colourCache = new Map();
+const COLOUR_MS = 10 * 60_000;
+
+async function calendarColours(row, accessTok) {
+  const key = row.user_id;
+  const hit = colourCache.get(key);
+  if (hit && Date.now() - hit.at < COLOUR_MS) return hit.map;
+  try {
+    const r = await fetch(`${CALENDAR_LIST_ENDPOINT}?maxResults=250&minAccessRole=reader`,
+                          { headers: { Authorization: `Bearer ${accessTok}` } });
+    if (!r.ok) return hit?.map || new Map();
+    const j = await r.json();
+    const map = new Map();
+    for (const c of j.items || []) {
+      const entry = { colour: c.backgroundColor || null, name: c.summaryOverride || c.summary || c.id };
+      map.set(c.id, entry);
+      // We read the default calendar via the literal id "primary", but
+      // calendarList returns it under the account's EMAIL. Without this alias
+      // every event on the default calendar comes back with no colour — which
+      // is the default for anyone who hasn't opened the picker.
+      if (c.primary) map.set('primary', entry);
+    }
+    colourCache.set(key, { at: Date.now(), map });
+    return map;
+  } catch { return hit?.map || new Map(); }
 }
 
 /** Which calendar ids a token row should be read from. */
@@ -451,29 +490,61 @@ async function eventsForDay(userId, tz, dateStr) {
     }
     const partialFailures = results.filter((r) => r.failed).length;
 
+    const colours = await calendarColours(resolved.row, at);
+    const shape = (e) => ({
+      // Ids repeat across calendars for the same invite, so the React key has
+      // to include the calendar or one of the copies silently disappears.
+      id: `${e._cal}:${e.id}`,
+      calendarId: e._cal,
+      summary: e.summary || '(no title)',
+      // All-day events carry `date`; timed ones carry `dateTime`.
+      allDay: !e.start?.dateTime,
+      start: e.start?.dateTime || e.start?.date || null,
+      end: e.end?.dateTime || e.end?.date || null,
+      location: e.location || null,
+      // Google's per-calendar colour, so the client can tint each event by
+      // which calendar it came from. Per-EVENT colorId is deliberately ignored:
+      // it would make two events on the same calendar look unrelated.
+      colour: colours.get(e._cal)?.colour || null,
+      calendarName: colours.get(e._cal)?.name || null,
+    });
+
     const events = results
       .flatMap((r) => r.items)
       .filter((e) => e.status !== 'cancelled')
-      .map((e) => ({
-        // Ids repeat across calendars for the same invite, so the React key has
-        // to include the calendar or one of the copies silently disappears.
-        id: `${e._cal}:${e.id}`,
-        calendarId: e._cal,
-        summary: e.summary || '(no title)',
-        // All-day events carry `date`; timed ones carry `dateTime`.
-        allDay: !e.start?.dateTime,
-        start: e.start?.dateTime || e.start?.date || null,
-        end: e.end?.dateTime || e.end?.date || null,
-        location: e.location || null,
-      }))
+      .map(shape)
       // All-day first, then chronological. Comparing the raw strings works
       // because every timed value from Google carries the same day's offset.
       .sort((a, b) => (b.allDay ? 1 : 0) - (a.allDay ? 1 : 0) ||
                       String(a.start).localeCompare(String(b.start)))
       .slice(0, 40);
 
+    // Look-ahead for the "Upcoming" list. One extra request per calendar over a
+    // 21-day window — cheap, and it lands in the same 60s cache as today's.
+    let upcoming = [];
+    try {
+      const ahead = new URLSearchParams({
+        timeMin: `${addDaysIso(dateStr, 1)}T00:00:00${off}`,
+        timeMax: `${addDaysIso(dateStr, 21)}T23:59:59${off}`,
+        singleEvents: 'true', orderBy: 'startTime', maxResults: '15', timeZone: tz,
+      });
+      const more = await Promise.all(ids.map(async (calId) => {
+        try {
+          const r = await fetch(`${eventsEndpoint(calId)}?${ahead}`, { headers: { Authorization: `Bearer ${at}` } });
+          if (!r.ok) return [];
+          const j = await r.json();
+          return (j.items || []).map((e) => ({ ...e, _cal: calId }));
+        } catch { return []; }
+      }));
+      upcoming = more.flat()
+        .filter((e) => e.status !== 'cancelled')
+        .map(shape)
+        .sort((a, b) => String(a.start).localeCompare(String(b.start)))
+        .slice(0, 5);
+    } catch { /* the look-ahead is a nicety; today's events still stand */ }
+
     const value = {
-      events, source: resolved.source, calendarCount: ids.length,
+      events, upcoming, source: resolved.source, calendarCount: ids.length,
       // >0 means some calendars are shown and some couldn't be reached, so the
       // card can say the list may be incomplete rather than implying it's whole.
       partialFailures,
@@ -489,7 +560,7 @@ async function eventsForDay(userId, tz, dateStr) {
 
 module.exports = {
   configured, missingConfig, REDIRECT_URI, BASE_URL,
-  authUrl, verifyState, connect, disconnect, status, eventsForDay,
+  authUrl, verifyState, connect, disconnect, status, eventsForDay, addDaysIso,
   listCalendars, saveSelection, resolveSource,
   // exported for tests
   _encrypt: encrypt, _decrypt: decrypt, _signState: signState, _offsetFor: offsetFor,

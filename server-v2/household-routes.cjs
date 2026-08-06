@@ -58,6 +58,9 @@ catch (e) { console.warn('[household] routines lib not loaded:', e.message); }
 let hprojects = null;
 try { hprojects = require('./_lib-household-projects.cjs'); }
 catch (e) { console.warn('[household] projects lib not loaded:', e.message); }
+let hlists = null;
+try { hlists = require('./_lib-household-lists.cjs'); }
+catch (e) { console.warn('[household] lists lib not loaded:', e.message); }
 
 // THE access predicate. $1 is always the caller's hh_users.id.
 const VISIBLE = `(owner_id = $1 OR visibility = 'shared')`;
@@ -71,7 +74,7 @@ const VISIBLE = `(owner_id = $1 OR visibility = 'shared')`;
 // the same shape an <input type="date"> expects. Do not "simplify" this back.
 const TASK_COLS = `id, owner_id, visibility, title, notes,
   to_char(due_date, 'YYYY-MM-DD') AS due_date, starred,
-  project, project_id, done_at, created_at, updated_at, touched_at`;
+  project, project_id, urgent, done_at, created_at, updated_at, touched_at`;
 
 function registerHouseholdRoutes({ register, send, readJson }) {
   if (!hh.available()) {
@@ -191,7 +194,10 @@ function registerHouseholdRoutes({ register, send, readJson }) {
   // first, undated last, newest-added breaking ties. NULLS LAST is the whole
   // trick — without it Postgres sorts undated tasks to the very top, which
   // buries everything that actually has a deadline.
-  const OPEN_ORDER = `ORDER BY due_date ASC NULLS LAST, starred DESC, created_at DESC`;
+  // Urgent first, always. Then the human reading order: overdue and due-soon
+  // before undated (NULLS LAST is the whole trick — without it Postgres sorts
+  // undated tasks to the very top and buries everything with a deadline).
+  const OPEN_ORDER = `ORDER BY urgent DESC, due_date ASC NULLS LAST, starred DESC, created_at DESC`;
 
   async function listTasks(me, scope) {
     const p = hh.pool();
@@ -224,11 +230,11 @@ function registerHouseholdRoutes({ register, send, readJson }) {
           const title = str(body?.title, 300);
           if (!title) { send(res, 400, { error: 'A task needs a title.' }, nostore); return; }
           const { rows } = await p.query(
-            `INSERT INTO hh_tasks (owner_id, visibility, title, notes, due_date, starred, project, project_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${TASK_COLS}`,
+            `INSERT INTO hh_tasks (owner_id, visibility, title, notes, due_date, starred, project, project_id, urgent)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING ${TASK_COLS}`,
             [me, vis(body?.visibility), title, str(body?.notes, 4000) || null,
              dateOrNull(body?.dueDate), !!body?.starred, str(body?.project, 120) || null,
-             Number(body?.projectId) > 0 ? Number(body.projectId) : null]);
+             Number(body?.projectId) > 0 ? Number(body.projectId) : null, !!body?.urgent]);
           send(res, 200, { ok: true, task: rows[0] }, nostore);
           return;
         }
@@ -256,6 +262,7 @@ function registerHouseholdRoutes({ register, send, readJson }) {
           if (body?.project !== undefined) put('project', str(body.project, 120) || null);
           if (body?.visibility !== undefined) put('visibility', vis(body.visibility));
           if (body?.projectId !== undefined) put('project_id', Number(body.projectId) > 0 ? Number(body.projectId) : null);
+          if (body?.urgent !== undefined) put('urgent', !!body.urgent);
           if (!sets.length) { send(res, 400, { error: 'Nothing to update.' }, nostore); return; }
           const { rows } = await p.query(
             `UPDATE hh_tasks SET ${sets.join(', ')}, updated_at=now(), touched_at=now()
@@ -270,6 +277,15 @@ function registerHouseholdRoutes({ register, send, readJson }) {
             `UPDATE hh_tasks
                 SET done_at = CASE WHEN done_at IS NULL THEN now() ELSE NULL END,
                     updated_at=now(), touched_at=now()
+              WHERE id=$2 AND ${VISIBLE} RETURNING ${TASK_COLS}`, [me, id]);
+          if (!rows[0]) { send(res, 404, { error: 'Not found.' }, nostore); return; }
+          send(res, 200, { ok: true, task: rows[0] }, nostore);
+          return;
+        }
+
+        if (action === 'toggleUrgent') {
+          const { rows } = await p.query(
+            `UPDATE hh_tasks SET urgent = NOT urgent, updated_at=now(), touched_at=now()
               WHERE id=$2 AND ${VISIBLE} RETURNING ${TASK_COLS}`, [me, id]);
           if (!rows[0]) { send(res, 404, { error: 'Not found.' }, nostore); return; }
           send(res, 200, { ok: true, task: rows[0] }, nostore);
@@ -513,6 +529,69 @@ function registerHouseholdRoutes({ register, send, readJson }) {
         // `error`; a non-200 here would just become a red screen for a calendar
         // hiccup nobody needs to act on.
         send(res, 200, { date, ...(await gcal.eventsForDay(u.id, u.tz, date)) }, nostore);
+      },
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Lists — meals by day, and the grocery list they feed
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // Week / Shop / Lists are three VIEWS over two tables, never three copies.
+  // Ticking an item in the shop marks the same row that sits under Tuesday on
+  // the week board — see the header of _lib-household-lists.cjs.
+
+  if (hlists && hlists.available()) {
+    add('/api/hh/lists', {
+      auth: 'household', methods: ['GET', 'POST'],
+      async handler(req, res, _ctx, access) {
+        const u = access.hhUser;
+        try {
+          if (req.method === 'GET') {
+            const d = new URL(req.url || '/', 'http://localhost').searchParams.get('week');
+            send(res, 200, await hlists.getWeek(u.id, u.tz, d), nostore);
+            return;
+          }
+          const body = await readJson(req, 64_000);
+          const action = str(body?.action, 40);
+          const id = Number(body?.id ?? 0);
+
+          switch (action) {
+            case 'addItem':
+              send(res, 200, { ok: true, item: await hlists.addItem(u.id, {
+                text: body?.text, qty: body?.qty, aisle: body?.aisle,
+                list: body?.list, mealId: body?.mealId, visibility: body?.visibility,
+              }) }, nostore);
+              return;
+            case 'toggleItem':
+              send(res, 200, { ok: true, item: await hlists.toggleItem(u.id, id) }, nostore); return;
+            case 'updateItem':
+              send(res, 200, { ok: true, item: await hlists.updateItem(u.id, id, {
+                text: body?.text, qty: body?.qty, aisle: body?.aisle, visibility: body?.visibility,
+              }) }, nostore);
+              return;
+            case 'deleteItem':
+              await hlists.deleteItem(u.id, id); send(res, 200, { ok: true }, nostore); return;
+            case 'clearChecked':
+              send(res, 200, { ok: true, removed: await hlists.clearChecked(u.id) }, nostore); return;
+            case 'addMeal':
+              send(res, 200, { ok: true, meal: await hlists.addMeal(u.id, {
+                day: body?.day, title: body?.title, notes: body?.notes, visibility: body?.visibility,
+              }) }, nostore);
+              return;
+            case 'updateMeal':
+              send(res, 200, { ok: true, meal: await hlists.updateMeal(u.id, id, {
+                title: body?.title, notes: body?.notes, day: body?.day,
+              }) }, nostore);
+              return;
+            case 'deleteMeal':
+              await hlists.deleteMeal(u.id, id); send(res, 200, { ok: true }, nostore); return;
+            default:
+              send(res, 400, { error: `Unknown action: ${action}` }, nostore);
+          }
+        } catch (err) {
+          send(res, 400, { error: String(err?.message || err) }, nostore);
+        }
       },
     });
   }
@@ -809,6 +888,9 @@ function registerHouseholdRoutes({ register, send, readJson }) {
             : { configured: false, connected: false },
           // Balances + what's due next, from the same budget tables. Wrapped
           // so a budget hiccup degrades one card instead of the whole screen.
+          lists: hlists && hlists.available()
+            ? await hlists.summary(access.hhUser.id, access.hhUser.tz).catch(() => null)
+            : null,
           routines: hroutines && hroutines.available()
             ? await hroutines.summary(access.hhUser.id, access.hhUser.tz).catch(() => null)
             : null,

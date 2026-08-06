@@ -17,8 +17,8 @@ import { T, label, display, MONO } from '../theme'
 
 const TABS = [
   { to: '/today', label: 'Today' },
-  { to: '/routines', label: 'Habits' },
-  { to: '/projects', label: 'Work' },
+  { to: '/todo', label: 'Todo' },
+  { to: '/lists', label: 'Lists' },
   { to: '/budget', label: 'Money' },
   { to: '/settings', label: 'More' },
 ] as const
@@ -35,7 +35,13 @@ function dateLine(): string {
 export default function Shell({ children }: { children: ReactNode }) {
   const { user } = useAuth()
   const { pathname } = useLocation()
+  // Habits and Projects still have routes but no tab, so the title falls back
+  // to a small map rather than reading "Home" on those screens.
+  const EXTRA: Record<string, string> = { '/routines': 'Habits', '/projects': 'Projects' }
   const tab = TABS.find((t) => pathname.startsWith(t.to))
+  const title = tab?.label
+    ?? Object.entries(EXTRA).find(([k]) => pathname.startsWith(k))?.[1]
+    ?? 'Home'
 
   return (
     <div style={{
@@ -51,7 +57,7 @@ export default function Shell({ children }: { children: ReactNode }) {
           <span>{dateLine()}</span>
           <span>{user?.displayName}</span>
         </div>
-        <h1 style={{ ...display(26), marginTop: 6 }}>{tab?.label ?? 'Home'}</h1>
+        <h1 style={{ ...display(26), marginTop: 6 }}>{title}</h1>
       </header>
 
       <main style={{

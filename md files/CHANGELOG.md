@@ -1,5 +1,146 @@
 # Changelog
 
+## 2026-08-06 (o) - budget.cbedge.net: read-only Budget overview ported from /owner/budget
+
+The Money tab was a register with a balance on top. It now leads with the full read-only
+overview — every card and graph from the desktop `/owner/budget` page — with the writing
+moved behind a second tab, because all the real editing happens on the owner dashboard.
+
+### `server-v2/_lib-household-budget.cjs`
+- Added **`buildOverview()`**, returned as `overview` on `GET /api/hh/budget`. Every
+  formula is a VERBATIM port of the `intel` / `categoryStats` / `billsDue` / `reconcile`
+  memos in `app/owner/budget/page.tsx`, not a re-implementation. The phone is a second
+  VIEW of that page, so a figure that disagrees is a bug by definition.
+- Returns `daysInMonth, todayDay, daysLeft, allBanks, billsLeft, safe, safePerDay,
+  budgetTotal, paceNow, spentMtd, cum, week, wkOut, prevWkOut, slices, upcomingPay,
+  reconcile, days, series, cashflow`.
+- **Bug fixed — `daily_balance.day` DATE to Date.** `pg` hydrates a Postgres `DATE` into
+  a JS `Date`, and `String(thatDate).slice(0,10)` is `"Sat Aug 01"`. The reconcile window
+  compared that as a string, matched nothing, and `moneyIn`/`moneyOut` both read **zero**
+  with no error at all. Added `isoDay()`, which normalises both shapes the driver can
+  hand over. This is the THIRD place this exact trap has bitten (`due_date`,
+  `target_date`, now `daily_balance.day`) — coerce a DATE at the boundary, always.
+- **Bug fixed — one optional card could 500 the whole month request.** A missing
+  `libDb.getDailyBalanceBefore` export throws SYNCHRONOUSLY at the call site, so a
+  `.catch()` on the returned promise never runs. Now `typeof`-guarded: the balance check
+  degrades to hidden instead of taking the page down.
+
+### `budget-vite/src/components/BudgetOverview.tsx` (new)
+Read-only, phone-first, hand-rolled SVG (no charting dependency):
+Safe-to-spend · six-stat strip · spend pace vs a straight-line budget · 7-day pulse ·
+category donut · balance check · weekly cash flow · month heat calendar · projected
+balance · bills due within 10 days · category budgets.
+- **Nothing is computed in this file.** Every figure arrives from `overview`. A chart
+  that does its own arithmetic is a second source of truth, and the two drift.
+- Dates stay STRINGS (`'2026-08-14'.split('-')`), never `new Date(iso)`.
+
+### `budget-vite/src/pages/Budget.tsx`
+- Split into **Overview** / **Register** tabs. Register keeps the only two things worth
+  doing on a phone: log what you just spent, tick a bill paid.
+
+### `budget-vite/src/api.ts`
+- Added the `BudgetOverview` type; `BudgetMonth` now carries `overview`.
+
+### Tests
+442 assertions green across 8 suites (budget 86, gcal-routes 79, lists 60, projects 58,
+routes 57, routines 51, gcal 32, recurrence parity 19). Rendered at 390px under Playwright
+against a stubbed API, which is what caught zero-value cash-flow bars reading as small
+real amounts.
+
+
+## 2026-08-06 (n) - Owner · Results · Contracts: the page scrolls again
+
+`owner-vite/src/pages/Results.tsx`.
+
+PageShell's `<main>` is a **column flexbox with `overflow: auto`** — it is the scroll
+container for every Results tab. Flex items default to `flex-shrink: 1`, so on a short
+monitor the Contracts table card was *squeezed* to fit the viewport instead of running
+past it. Its own `overflow: hidden` then clipped the rows, and because nothing
+overflowed `<main>`, no scrollbar ever appeared: the table just ended mid-list.
+
+Fix is `flexShrink: 0` on each direct child of the Contracts view (header row, Run
+now / Diagnose controls, the 9:45 / 10:30 / 12:00 roll-up grid, the table card, and the
+loading / empty / error states) plus the tab strip. Content now overflows `<main>`,
+which scrolls it.
+
+`PageShell` also gets `className="wall-scroll"` so the page's bar uses the dashboard's
+themed scrollbar (cyan thumb, inset track — `owner-vite/src/index.css`) rather than the
+neutral white default.
+
+No data, query, or layout changes — only shrink behaviour. Other tabs are untouched
+apart from the shared tab strip.
+
+## 2026-08-06 (m) - budget.cbedge.net: Todo, Lists, calendar colours + Upcoming
+
+Tab bar is now **Today · Todo · Lists · Money · More**. Habits and Projects kept their
+routes and all their data — they gave up tab slots and are reached from More.
+Nothing on cbedge.net changed.
+
+### Todo (was Habits)
+`hh_tasks.urgent` added via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
+
+**Urgent is a separate field from `starred`.** Starred means "one of my Top 3 on
+Today"; urgent means "this can't wait". One flag for both would make pinning something
+to Today silently mark it an emergency.
+
+Chosen design: urgent is a toggle on the input, decided at capture. It costs one tap,
+but it's visible and works the same for both people — unlike a typed marker, which is
+faster but is a rule somebody has to be told about. Urgent sorts to the top
+(`ORDER BY urgent DESC, …`) and carries a left rule rather than a badge, so it marks
+the row without adding another thing to read. The toggle resets after each add; the
+date doesn't — three things due Friday is common, three emergencies in a row isn't.
+
+### Lists — three views, two tables
+`hh_meals` and `hh_list_items`. Week / Shop / List are **views, not copies**: ticking
+"tortillas" in Shop marks the same row nested under Tuesday on Week. Any design that
+generates shopping rows separately ends with the two disagreeing about what you bought.
+
+- **Week** — Monday-start board, meals per day, ingredients nested. Monday not Sunday:
+  a Sunday start puts tonight's dinner at the far right every Sunday evening.
+- **Shop** — a MODE, not a screen. Aisles in **store-walk order** (produce → … →
+  other), empty aisles dropped, 26px targets and 16px rows because this is tapped
+  one-handed in a shop holding something else. Ticked items drop to "in the cart".
+- **List** — the plain list with aisle labels and where each item came from.
+
+Decisions worth keeping:
+- **Aisle is guessed** from the item name (~60 keywords) and deliberately conservative:
+  a wrong guess is worse than `other`, because a misfiled item is one you walk past.
+- **Lists default to `shared`**, unlike tasks. A private grocery list in a two-person
+  house is the wrong default — you are both shopping from it.
+- **Deleting a meal keeps its items** (`ON DELETE SET NULL`). Removing "Taco night"
+  must not silently take the tortillas off your list.
+- **"Done shopping" deletes** the bought items rather than un-ticking them — otherwise
+  next week starts with last week's shopping already crossed off. Items still attached
+  to a meal are kept so the week board doesn't lose its plan.
+- Ticking is optimistic and moves the item between sections instantly, updating the
+  week board's counts in the same pass. This is the one interaction that happens on bad
+  signal; a checkbox that waits gets tapped twice, and the second tap un-ticks it.
+
+### Today's calendar
+- **All-day events get a tinted band.** They have no time to anchor them, so without it
+  they read as a midnight event sitting above everything else.
+- **Event titles are tinted by their CALENDAR's colour** — so the family calendar
+  separates from a work one at a glance, with no legend. Per-EVENT `colorId` is
+  deliberately ignored: it would make two events on the same calendar look unrelated.
+- **Upcoming** — the next 5 events over the following three weeks, under today's list.
+  In Upcoming the leading column is the DAY, not the time: "All day" with no date tells
+  you an anniversary is coming but not when. Today's list is the opposite.
+
+One real bug fixed: colour lookup failed for the DEFAULT calendar, because we read it
+as the literal id `primary` while `calendarList` returns it under the account's email.
+Every event on the default calendar — the case for anyone who never opens the picker —
+came back colourless. `calendarList` now aliases the primary entry.
+
+### Verification — 428 assertions across 9 suites, 0 failures
+**60 new list tests** (week maths incl. Sunday belonging to the week that just ended,
+month/year/leap boundaries; aisle guessing; the same-row-two-views property; meal
+deletion keeping items; clear-checked keeping meal ingredients; both directions of
+visibility) and **6 new calendar tests** (per-event colour, calendar name, the
+look-ahead window, ordering, and that it excludes the requested day).
+
+**No proxy change.**
+
+
 ## 2026-08-06 (l) - budget.cbedge.net: landing screen
 
 The pencil heart drawing as a landing screen — on sign-in, and once per app open

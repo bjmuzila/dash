@@ -382,9 +382,13 @@ export default function Results() {
   });
 
   return (
-    <PageShell>
+    {/* `wall-scroll` themes the page's own scrollbar (see index.css) — PageShell's
+        <main> is the scroll container for every tab here, and on a short monitor
+        the Contracts table is taller than it, so that bar is now visible chrome
+        rather than an accident. */}
+    <PageShell className="wall-scroll">
       {/* Tab bar */}
-      <div className="tab-strip" style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+      <div className="tab-strip" style={{ display: "flex", gap: 8, marginBottom: 18, flexShrink: 0 }}>
         <button onClick={() => setTab("ict")} style={tabBtn("ict", "ICT Results")}>ICT Results</button>
         <button onClick={() => setTab("fails")} style={tabBtn("fails", "Fail Rate")}>Fail Rate</button>
         <button onClick={() => setTab("checkpoints")} style={tabBtn("checkpoints", "Confidence")}>Confidence</button>
@@ -925,8 +929,14 @@ function TradesView() {
   const td: React.CSSProperties = { padding: "10px 14px", fontSize: 14, whiteSpace: "nowrap", fontFamily: "var(--font-mono)" };
 
   return (
+    // Every direct child here is a flex item of PageShell's <main> (a column
+    // flexbox that scrolls). Flex items default to flex-shrink:1, so on a short
+    // monitor the table card was squeezed to fit the viewport instead of
+    // overflowing it — and its own overflow:hidden then clipped the rows, with
+    // no scrollbar anywhere. flexShrink:0 on each block lets the content run
+    // past the bottom so <main> scrolls it.
     <>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14, flexWrap: "wrap", flexShrink: 0 }}>
         <span style={{ fontSize: 17, fontWeight: 800, color: C.purple, textTransform: "uppercase", letterSpacing: "0.1em" }}>Contracts</span>
         <span style={{ fontSize: 14, color: C.label }}>
           0DTE probed on TastyTrade at 9:45 / 10:30 / 12:00 · from the CB, walk toward the money to the first strike over ${buyMin.toFixed(2)} · held and re-priced every minute to the bell · ×{mult}
@@ -954,7 +964,7 @@ function TradesView() {
           most likely to hit — the whole thing hangs off a 60s in-process poll —
           so forcing a tick and reading the diagnosis are one click, not an SSH
           session. */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
         <button onClick={() => void runNow()} disabled={busy} style={actionBtn(busy)}>
           {busy ? "Running…" : "Run now"}
         </button>
@@ -963,7 +973,7 @@ function TradesView() {
       </div>
 
       {/* Per-checkpoint roll-up */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14, marginBottom: 22 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14, marginBottom: 22, flexShrink: 0 }}>
         {summary.map((s) => {
           // Bare CARD — see the note on the Confidence cards above.
           const accent = wrColor(s.winRate);
@@ -1021,18 +1031,18 @@ function TradesView() {
         })}
       </div>
 
-      {err && <div style={{ color: RED, fontSize: 14, marginBottom: 14, fontFamily: "var(--font-mono)" }}>Couldn&apos;t load contracts: {err}</div>}
+      {err && <div style={{ color: RED, fontSize: 14, marginBottom: 14, fontFamily: "var(--font-mono)", flexShrink: 0 }}>Couldn&apos;t load contracts: {err}</div>}
 
       {!loaded ? (
-        <div style={{ color: C.label, fontSize: 14 }}>Loading contracts…</div>
+        <div style={{ color: C.label, fontSize: 14, flexShrink: 0 }}>Loading contracts…</div>
       ) : trades.length === 0 ? (
-        <div style={{ ...CARD, padding: "20px 22px", color: C.label, fontSize: 14, lineHeight: 1.6 }}>
+        <div style={{ ...CARD, padding: "20px 22px", color: C.label, fontSize: 14, lineHeight: 1.6, flexShrink: 0 }}>
           No checkpoints recorded yet. The tracker writes a row per checkpoint as each session runs —
           TastyTrade has no per-contract history, so this table fills forward from the day the recorder
           went live and cannot be backfilled. First rows appear at 9:45 ET on the next trading day.
         </div>
       ) : (
-        <div style={{ ...CARD, padding: 0, overflow: "hidden" }}>
+        <div style={{ ...CARD, padding: 0, overflow: "hidden", flexShrink: 0 }}>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>

@@ -2,6 +2,13 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+## Thursday 8/6/2026
+
+* Tickers Levels added to Analysis Page. Now just search any ticker to see the Core, Put wall and Call wall.
+* Home screen gex chart fixed. No more issues. 
+* Net Gex change per minute added to home page. 
+* Test Labs - Gex chart - consolidated all to one chart. Tab between the 2 different ways to view gex
+
 ## Monday 8/3/2026
 
 * Added a **Volume** tab to the option chain, right next to Open Interest. It lays out exactly like the OI tab — calls above the money, puts below — but shows how many contracts have actually traded today at each strike, live off the chain.

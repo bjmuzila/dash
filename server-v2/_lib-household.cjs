@@ -160,6 +160,47 @@ async function ensureSchema() {
       )`);
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_routine_log_day_idx ON hh_routine_log(day DESC)`);
 
+    // Urgent is separate from `starred`. Starred means "one of my Top 3 today";
+    // urgent means "this can't wait". Overloading one flag would make pinning
+    // something to Today silently mark it as an emergency.
+    await pool.query(`ALTER TABLE hh_tasks ADD COLUMN IF NOT EXISTS urgent BOOLEAN NOT NULL DEFAULT FALSE`);
+
+    // ── Lists: meals by day, and the grocery list they feed ──────────────
+    // A meal is planned for a DAY. Its ingredients are ordinary list items that
+    // carry meal_id, so the same row can be ticked off in the shop and still
+    // show under Tuesday on the week board — one record, two views.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hh_meals (
+        id         SERIAL PRIMARY KEY,
+        owner_id   INTEGER NOT NULL REFERENCES hh_users(id) ON DELETE CASCADE,
+        visibility TEXT NOT NULL DEFAULT 'shared',
+        day        DATE NOT NULL,
+        title      TEXT NOT NULL,
+        notes      TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_meals_day_idx ON hh_meals(day)`);
+    // ON DELETE SET NULL, not CASCADE: deleting "Taco night" must not silently
+    // remove the tortillas from your grocery list — you may still want them.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hh_list_items (
+        id         SERIAL PRIMARY KEY,
+        owner_id   INTEGER NOT NULL REFERENCES hh_users(id) ON DELETE CASCADE,
+        visibility TEXT NOT NULL DEFAULT 'shared',
+        list       TEXT NOT NULL DEFAULT 'grocery',
+        text       TEXT NOT NULL,
+        qty        TEXT,
+        aisle      TEXT NOT NULL DEFAULT 'other',
+        meal_id    INTEGER REFERENCES hh_meals(id) ON DELETE SET NULL,
+        checked_at TIMESTAMPTZ,
+        checked_by INTEGER REFERENCES hh_users(id) ON DELETE SET NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_list_items_list_idx ON hh_list_items(list, checked_at)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_list_items_meal_idx ON hh_list_items(meal_id)`);
+
     // ── Projects ─────────────────────────────────────────────────────────
     // A project groups work and shows how far along it is. Progress is computed
     // from MILESTONES, not from tasks: a project with 40 small tasks and 3 real

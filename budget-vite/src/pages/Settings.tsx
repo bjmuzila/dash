@@ -20,6 +20,17 @@ export default function Settings() {
         </div>
       </section>
 
+      <section style={section()}>
+        <div style={label()}>More</div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+          <a href="/routines" style={linkBtn}>Habits</a>
+          <a href="/projects" style={linkBtn}>Projects</a>
+        </div>
+        <div style={label({ marginTop: 10, letterSpacing: '0.06em' })}>
+          Still here — they just gave up their tab slots to Todo and Lists
+        </div>
+      </section>
+
       <SlippingSetting />
       <SavedNotes />
       <ChangePasswordCard />
@@ -32,6 +43,12 @@ export default function Settings() {
       </button>
     </div>
   )
+}
+
+const linkBtn: React.CSSProperties = {
+  ...label({ color: T.ink }),
+  textDecoration: 'none', border: `1px solid ${T.ruleStrong}`, borderRadius: 3,
+  padding: '10px 14px', minHeight: 38, display: 'inline-flex', alignItems: 'center',
 }
 
 // ── Google Calendar ──────────────────────────────────────────────────────────

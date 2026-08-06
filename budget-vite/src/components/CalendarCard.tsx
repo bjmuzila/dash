@@ -60,11 +60,14 @@ function Body({ status, data, isLoading, hadError }: {
   if (data?.error) return <Warn>Calendar is unavailable right now.</Warn>
 
   const events = data?.events ?? []
-  if (!events.length) return <Note>Nothing on the calendar today.</Note>
+  const upcoming = data?.upcoming ?? []
+  if (!events.length && !upcoming.length) return <Note>Nothing on the calendar today.</Note>
 
   return (
     <div>
+      {events.length === 0 && <Note>Nothing on today.</Note>}
       {events.map((e) => <EventRow key={e.id} event={e} />)}
+      {upcoming.length > 0 && <Upcoming events={upcoming} />}
       {/* Some calendars answered and some didn't. Saying so beats implying the
           list is complete when it isn't. */}
       {!!data?.partialFailures && (
@@ -76,23 +79,70 @@ function Body({ status, data, isLoading, hadError }: {
   )
 }
 
-function EventRow({ event }: { event: CalendarEvent }) {
+function EventRow({ event, showDay }: { event: CalendarEvent; showDay?: boolean }) {
   return (
-    <div style={row({ alignItems: 'flex-start', padding: '11px 0' })}>
+    <div style={row({
+      alignItems: 'flex-start',
+      padding: '11px 10px',
+      // All-day events get a tinted band. They have no time to anchor them, so
+      // without the band they read as an event at midnight sitting above
+      // everything else.
+      background: event.allDay ? 'rgba(255,255,255,0.05)' : 'transparent',
+      // Negative margin so the band bleeds to the section edges rather than
+      // sitting in an inset box.
+      marginLeft: -10,
+      marginRight: -10,
+      borderRadius: event.allDay ? 3 : 0,
+    })}>
       <div style={{
         flexShrink: 0, width: 52, fontFamily: MONO, fontSize: 11,
-        color: event.allDay ? T.muted : T.ink, paddingTop: 2, letterSpacing: '0.02em',
+        color: T.muted, paddingTop: 2, letterSpacing: '0.02em',
       }}>
-        {event.allDay ? 'All day' : timeOf(event.start)}
+        {/* In Upcoming the DAY is the thing you need; "All day" with no date
+            tells you an anniversary is coming but not when. Today's list is the
+            opposite — the day is implied, so the time carries the information. */}
+        {showDay ? dayOf(event.start) : event.allDay ? 'All day' : timeOf(event.start)}
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ ...body(15), wordBreak: 'break-word' }}>{event.summary}</div>
-        {event.location && (
-          <div style={label({ marginTop: 3, letterSpacing: '0.06em' })}>{event.location}</div>
+        <div style={{
+          ...body(15),
+          wordBreak: 'break-word',
+          // Tinted by which CALENDAR it came from, so a glance separates the
+          // family calendar from a work one without a legend. Falls back to the
+          // normal text colour when Google gives us nothing.
+          color: event.colour || T.ink,
+        }}>
+          {event.summary}
+        </div>
+        {(event.location || showDay) && (
+          <div style={label({ marginTop: 3, letterSpacing: '0.06em' })}>
+            {[showDay ? (event.allDay ? 'All day' : timeOf(event.start)) : null, event.location]
+              .filter(Boolean).join(' · ')}
+          </div>
         )}
       </div>
     </div>
   )
+}
+
+/** The next few events after today — the "don't forget Thursday" list. */
+function Upcoming({ events }: { events: CalendarEvent[] }) {
+  return (
+    <div style={{ marginTop: 18, paddingTop: 12, borderTop: `1px solid ${T.rule}` }}>
+      <div style={label()}>Upcoming</div>
+      {events.map((e) => <EventRow key={e.id} event={e} showDay />)}
+    </div>
+  )
+}
+
+/** "Thu 8" from an ISO instant or a bare date. */
+function dayOf(iso: string | null): string {
+  if (!iso) return ''
+  // A bare 'YYYY-MM-DD' is a calendar day: build it locally so it can't shift.
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
+  const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${d.getDate()}`
 }
 
 /**

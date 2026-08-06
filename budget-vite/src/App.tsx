@@ -9,6 +9,8 @@ import Welcome from './pages/Welcome'
 import { T, SANS } from './theme'
 
 const Today    = lazy(() => import('./pages/Today'))
+const Todo     = lazy(() => import('./pages/Todo'))
+const Lists    = lazy(() => import('./pages/Lists'))
 const Routines = lazy(() => import('./pages/Routines'))
 const Projects = lazy(() => import('./pages/Projects'))
 const Budget   = lazy(() => import('./pages/Budget'))
@@ -69,6 +71,10 @@ function Gate() {
       <Shell>
       <Routes>
         <Route path="/today" element={S(<Today />)} />
+        <Route path="/todo" element={S(<Todo />)} />
+        <Route path="/lists" element={S(<Lists />)} />
+        {/* Habits and Projects lost their tab slots to Todo and Lists, but the
+            screens and their data are untouched — reached from More. */}
         <Route path="/routines" element={S(<Routines />)} />
         <Route path="/projects" element={S(<Projects />)} />
         <Route path="/budget" element={S(<Budget />)} />

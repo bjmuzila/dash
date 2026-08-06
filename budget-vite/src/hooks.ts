@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { today as todayApi, tasks as tasksApi, notes as notesApi, settings as settingsApi,
          calendar as calendarApi, budget as budgetApi, routines as routinesApi,
-         projects as projectsApi,
+         projects as projectsApi, lists as listsApi,
          type RoutinesPayload,
-         type Task, type TodayPayload, type NewTask, type TaskPatch } from './api'
+         type Task, type TodayPayload, type NewTask, type TaskPatch,
+         type ListsPayload, type ListItem } from './api'
 
 /**
  * Data hooks.
@@ -99,6 +100,92 @@ export function useDisconnectCalendar() {
     },
   })
 }
+
+// ── Lists ────────────────────────────────────────────────────────────────────
+
+export function useLists(week?: string) {
+  return useQuery({ queryKey: ['lists', week ?? 'this'], queryFn: () => listsApi.week(week) })
+}
+
+/**
+ * Ticking an item is optimistic and moves it between sections immediately.
+ *
+ * This is the one interaction that happens standing in a shop on bad signal,
+ * one-handed, holding something. A checkbox that waits for a round trip gets
+ * tapped twice, and the second tap un-ticks it.
+ */
+export function useToggleListItem(week?: string) {
+  const qc = useQueryClient()
+  const key = ['lists', week ?? 'this'] as const
+  return useMutation({
+    mutationFn: (id: number) => listsApi.toggleItem(id),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: key })
+      const prev = qc.getQueryData<ListsPayload>(key)
+      qc.setQueryData<ListsPayload>(key, (old) => {
+        if (!old) return old
+        const now = new Date().toISOString()
+        const all = [...old.aisles.flatMap((a) => a.items), ...old.checked]
+        const target = all.find((i) => i.id === id)
+        if (!target) return old
+        const nowChecked = !target.checked_at
+        const flip = (i: ListItem) => (i.id === id ? { ...i, checked_at: nowChecked ? now : null } : i)
+
+        const aisles = old.aisles
+          .map((a) => ({ ...a, items: a.items.filter((i) => i.id !== id) }))
+          .filter((a) => a.items.length > 0)
+        const checked = old.checked.filter((i) => i.id !== id)
+        if (nowChecked) {
+          checked.unshift({ ...target, checked_at: now })
+        } else {
+          const back = { ...target, checked_at: null }
+          const g = aisles.find((a) => a.aisle === back.aisle)
+          if (g) g.items.push(back)
+          else aisles.push({ aisle: back.aisle, items: [back] })
+        }
+        return {
+          ...old,
+          aisles,
+          checked,
+          // The week board holds the SAME rows, so it has to move with them or
+          // Tuesday keeps claiming an ingredient you just put in the cart.
+          days: old.days.map((d) => {
+            const meals = d.meals.map((m) => ({ ...m, items: m.items.map(flip) }))
+            return { ...d, meals, openCount: meals.reduce((n, m) => n + m.items.filter((i) => !i.checked_at).length, 0) }
+          }),
+          counts: {
+            ...old.counts,
+            open: Math.max(0, old.counts.open + (nowChecked ? -1 : 1)),
+            checked: Math.max(0, old.counts.checked + (nowChecked ? 1 : -1)),
+          },
+        }
+      })
+      return prev
+    },
+    onError: (_e, _id, prev) => { if (prev) qc.setQueryData(key, prev) },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ['lists'] })
+      void qc.invalidateQueries({ queryKey: TODAY_KEY })
+    },
+  })
+}
+
+function useListMutation<T>(fn: (a: T) => Promise<unknown>) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['lists'] })
+      void qc.invalidateQueries({ queryKey: TODAY_KEY })
+    },
+  })
+}
+
+export const useAddListItem = () => useListMutation(listsApi.addItem)
+export const useDeleteListItem = () => useListMutation(listsApi.deleteItem)
+export const useClearChecked = () => useListMutation(listsApi.clearChecked)
+export const useAddMeal = () => useListMutation(listsApi.addMeal)
+export const useDeleteMeal = () => useListMutation(listsApi.deleteMeal)
 
 // ── Projects ─────────────────────────────────────────────────────────────────
 
@@ -291,6 +378,22 @@ export function useToggleDone() {
         old ? { ...old, counts: { ...old.counts,
           open: Math.max(0, old.counts.open - 1),
           done_today: old.counts.done_today + 1 } } : old)
+      return snap
+    },
+    onError: (_e, _id, snap) => { if (snap) restore(qc, snap) },
+    onSettled: () => settleAll(qc),
+  })
+}
+
+/** Urgent flips instantly and re-sorts on the refetch — urgent is a server-side
+ *  ordering decision, so guessing at the new position locally makes rows jump. */
+export function useToggleUrgent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => tasksApi.toggleUrgent(id),
+    onMutate: async (id) => {
+      const snap = await snapshot(qc)
+      patchToday(qc, (t) => (t.id === id ? { ...t, urgent: !t.urgent } : t))
       return snap
     },
     onError: (_e, _id, snap) => { if (snap) restore(qc, snap) },

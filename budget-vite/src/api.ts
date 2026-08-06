@@ -69,6 +69,9 @@ export type Task = {
    *  can shift it a day. Never wrap it in `new Date()` for display. */
   due_date: string | null
   starred: boolean
+  /** Separate from `starred`: starred = one of my Top 3 today, urgent = can't
+   *  wait. Overloading one flag would make pinning something mark it urgent. */
+  urgent: boolean
   project: string | null
   project_id: number | null
   done_at: string | null
@@ -123,6 +126,10 @@ export type CalendarListResponse = {
 }
 
 export type CalendarEvent = {
+  /** The CALENDAR's colour, not the event's own colorId — two events on one
+   *  calendar should look related. */
+  colour: string | null
+  calendarName: string | null
   /** Calendar-qualified ('<calendarId>:<eventId>') — the same invite can appear
    *  on two calendars, and a bare event id would collide as a React key. */
   id: string
@@ -138,6 +145,8 @@ export type CalendarEvent = {
 export type CalendarDay = {
   date: string
   events: CalendarEvent[]
+  /** The next 5 events after this day, across the following three weeks. */
+  upcoming?: CalendarEvent[]
   source?: 'own' | 'household'
   calendarCount?: number
   /** >0 means some calendars couldn't be reached, so the list may be incomplete. */
@@ -159,6 +168,7 @@ export type TodayPayload = {
   people: Person[]
   calendar: CalendarStatus
   routines: { done: number; total: number; date: string } | null
+  lists: { groceryOpen: number; tonight: string | null } | null
   money: MoneySummary | null
 }
 
@@ -196,6 +206,53 @@ export type BudgetCategory = {
   color: string | null; spent: number
 }
 
+/**
+ * The read-only overview, computed server-side in _lib-household-budget.cjs as a
+ * verbatim port of the `intel` / `reconcile` / `cashflow` memos on
+ * /owner/budget. Nothing here is derived again on the client — if the phone and
+ * the desktop ever disagree on a figure, exactly one place is wrong.
+ */
+export type BudgetOverview = {
+  daysInMonth: number
+  /** Day-of-month "now" for the month being viewed: 0 if it's in the future,
+   *  the last day if it's already past — so a past month isn't shown as
+   *  "you've spent nothing yet". */
+  todayDay: number
+  daysLeft: number
+
+  allBanks: number
+  /** Unpaid negative recurring rules from today to month end. */
+  billsLeft: number
+  safe: number
+  safePerDay: number
+
+  budgetTotal: number
+  paceNow: number
+  spentMtd: number
+  /** Cumulative spend, one entry per day of the month. */
+  cum: number[]
+
+  week: { date: string; net: number; out: number }[]
+  wkOut: number
+  prevWkOut: number
+
+  slices: { label: string; value: number; colour: string }[]
+  upcomingPay: (BudgetBill & { tag: string; days: number })[]
+
+  reconcile: {
+    from: string; to: string; days: number
+    prevBalance: number
+    moneyIn: number; moneyOut: number
+    /** Scheduled but not yet cleared — excluded from expected on purpose. */
+    uncleared: number
+    expected: number; actual: number; drift: number
+  } | null
+
+  days: { date: string; net: number; out: number; count: number }[]
+  series: { date: string; balance: number }[]
+  cashflow: { label: string; inflow: number; outflow: number }[]
+}
+
 export type BudgetMonth = {
   month: string
   today: string
@@ -208,6 +265,7 @@ export type BudgetMonth = {
   categories: BudgetCategory[]
   unsortedSpend: number
   recurringCount: number
+  overview: BudgetOverview
 }
 
 export type MoneySummary = {
@@ -280,10 +338,50 @@ export type ProjectDetail = Omit<Project, 'milestones' | 'tasks'> & {
   minutesThisWeek: number
 }
 
+export type Aisle = 'produce' | 'meat' | 'dairy' | 'bakery' | 'frozen' | 'pantry' | 'household' | 'other'
+
+export type ListItem = {
+  id: number
+  owner_id: number
+  visibility: Visibility
+  list: string
+  text: string
+  qty: string | null
+  aisle: Aisle
+  meal_id: number | null
+  checked_at: string | null
+  checked_by: number | null
+  sort_order: number
+}
+
+export type Meal = {
+  id: number
+  owner_id: number
+  visibility: Visibility
+  day: string
+  title: string
+  notes: string | null
+  sort_order: number
+  items: ListItem[]
+}
+
+export type ListsPayload = {
+  weekStart: string
+  weekEnd: string
+  today: string
+  days: { day: string; isToday: boolean; meals: Meal[]; itemCount: number; openCount: number }[]
+  aisles: { aisle: Aisle; items: ListItem[] }[]
+  checked: ListItem[]
+  other: ListItem[]
+  counts: { open: number; checked: number; total: number; meals: number }
+  aisleOptions: Aisle[]
+}
+
 export type Settings = { slippingDays: number }
 
 export type NewTask = {
   title: string
+  urgent?: boolean
   projectId?: number | null
   notes?: string
   dueDate?: string | null
@@ -313,6 +411,7 @@ export const tasks = {
     api.post<{ task: Task }>('/api/hh/tasks', { action: 'update', id, ...patch }),
   toggleDone: (id: number) => api.post<{ task: Task }>('/api/hh/tasks', { action: 'toggleDone', id }),
   toggleStar: (id: number) => api.post<{ task: Task }>('/api/hh/tasks', { action: 'toggleStar', id }),
+  toggleUrgent: (id: number) => api.post<{ task: Task }>('/api/hh/tasks', { action: 'toggleUrgent', id }),
   touch: (id: number) => api.post<{ task: Task }>('/api/hh/tasks', { action: 'touch', id }),
   remove: (id: number) => api.post<{ ok: true }>('/api/hh/tasks', { action: 'delete', id }),
 }
@@ -375,6 +474,23 @@ export const routines = {
     api.post<{ routine: Routine }>('/api/hh/routines', { action: 'update', id, ...patch }),
   archive: (id: number) => api.post<{ ok: true }>('/api/hh/routines', { action: 'archive', id }),
   remove: (id: number) => api.post<{ ok: true }>('/api/hh/routines', { action: 'delete', id }),
+}
+
+export const lists = {
+  week: (week?: string) =>
+    api.get<ListsPayload>(`/api/hh/lists${week ? `?week=${week}` : ''}`),
+  addItem: (i: { text: string; qty?: string; aisle?: Aisle; mealId?: number; visibility?: Visibility }) =>
+    api.post<{ item: ListItem }>('/api/hh/lists', { action: 'addItem', ...i }),
+  toggleItem: (id: number) => api.post<{ item: ListItem }>('/api/hh/lists', { action: 'toggleItem', id }),
+  updateItem: (id: number, patch: { text?: string; qty?: string; aisle?: Aisle }) =>
+    api.post<{ item: ListItem }>('/api/hh/lists', { action: 'updateItem', id, ...patch }),
+  deleteItem: (id: number) => api.post<{ ok: true }>('/api/hh/lists', { action: 'deleteItem', id }),
+  clearChecked: () => api.post<{ removed: number }>('/api/hh/lists', { action: 'clearChecked' }),
+  addMeal: (m: { day: string; title: string; notes?: string }) =>
+    api.post<{ meal: Meal }>('/api/hh/lists', { action: 'addMeal', ...m }),
+  updateMeal: (id: number, patch: { title?: string; notes?: string; day?: string }) =>
+    api.post<{ meal: Meal }>('/api/hh/lists', { action: 'updateMeal', id, ...patch }),
+  deleteMeal: (id: number) => api.post<{ ok: true }>('/api/hh/lists', { action: 'deleteMeal', id }),
 }
 
 export const budget = {
