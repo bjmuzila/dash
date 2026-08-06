@@ -5,7 +5,7 @@ import { AuthProvider, useAuth } from './auth'
 import Shell from './components/Shell'
 import Login from './pages/Login'
 import ChangePassword from './pages/ChangePassword'
-import { T, FONT } from './theme'
+import { T, SANS } from './theme'
 
 const Today    = lazy(() => import('./pages/Today'))
 const Routines = lazy(() => import('./pages/Routines'))
@@ -27,7 +27,7 @@ function Booting() {
   return (
     <div style={{
       height: '100dvh', display: 'grid', placeItems: 'center',
-      background: T.ink, color: T.muted, fontFamily: FONT, fontSize: 14,
+      background: T.paper, backgroundImage: T.glow, color: T.faint, fontFamily: SANS, fontSize: 14,
     }}>
       …
     </div>

@@ -1,6 +1,6 @@
 import { useCalendarList, useSaveCalendarSelection } from '../hooks'
 import type { CalendarStatus } from '../api'
-import { T, labelCap } from '../theme'
+import { T, label, body, row } from '../theme'
 
 /**
  * Which calendars appear on Today, and whether the household sees them.
@@ -27,79 +27,50 @@ export default function CalendarPicker({ status }: { status: CalendarStatus }) {
   // actually being read right now.
   const selected = data?.selected ?? calendars.filter((c) => c.primary).map((c) => c.id)
   const isOn = (id: string) => selected.includes(id)
-
-  const toggle = (id: string) => {
-    const next = isOn(id) ? selected.filter((x) => x !== id) : [...selected, id]
-    save.mutate({ calendarIds: next })
-  }
-
+  const toggle = (id: string) =>
+    save.mutate({ calendarIds: isOn(id) ? selected.filter((x) => x !== id) : [...selected, id] })
   const sharing = data?.shareWithHousehold ?? false
 
   return (
-    <div style={{ marginTop: 16 }}>
-      <div style={labelCap()}>Calendars to show</div>
-      <div style={{ fontSize: 13, color: T.muted, marginTop: 6, lineHeight: 1.45 }}>
-        A calendar you share with someone else is its own calendar here — tick it to get
-        those events on Today.
+    <div style={{ marginTop: 18 }}>
+      <div style={label()}>Calendars to show</div>
+      <div style={{ ...body(13), color: T.muted, marginTop: 6 }}>
+        A calendar shared with you is its own calendar here — tick it to get those events.
       </div>
 
-      <div style={{ marginTop: 10 }}>
+      <div style={{ marginTop: 6 }}>
         {calendars.map((c) => (
-          <label
-            key={c.id}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 11, cursor: 'pointer',
-              padding: '11px 0', borderTop: `1px solid ${T.border}`,
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={isOn(c.id)}
-              onChange={() => toggle(c.id)}
-              disabled={save.isPending}
-              style={{ width: 20, height: 20, accentColor: T.cyan, flexShrink: 0, margin: 0 }}
-            />
+          <label key={c.id} style={row({ cursor: 'pointer', padding: '11px 0' })}>
+            <input type="checkbox" checked={isOn(c.id)} onChange={() => toggle(c.id)}
+                   disabled={save.isPending}
+                   style={{ width: 18, height: 18, accentColor: T.ink, flexShrink: 0, margin: 0 }} />
             {c.color && (
-              <span style={{
-                width: 10, height: 10, borderRadius: 3, background: c.color, flexShrink: 0,
-              }} />
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: c.color, flexShrink: 0 }} />
             )}
-            <span style={{ flex: 1, minWidth: 0, fontSize: 14, wordBreak: 'break-word' }}>
+            <span style={{ ...body(14), flex: 1, minWidth: 0, wordBreak: 'break-word' }}>
               {c.name}
-              {c.primary && (
-                <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.1em', color: T.muted, marginLeft: 8 }}>
-                  YOURS
-                </span>
-              )}
+              {c.primary && <span style={label({ marginLeft: 8, letterSpacing: '0.1em' })}>yours</span>}
             </span>
           </label>
         ))}
       </div>
 
       {selected.length === 0 && (
-        <div style={{ fontSize: 13, color: T.orange, fontWeight: 600, marginTop: 10 }}>
-          Nothing ticked — Today's calendar card will be empty.
+        <div style={label({ color: T.warn, marginTop: 10, letterSpacing: '0.06em' })}>
+          Nothing ticked — the calendar card will be empty
         </div>
       )}
 
-      <label
-        style={{
-          display: 'flex', alignItems: 'flex-start', gap: 11, cursor: 'pointer',
-          marginTop: 14, paddingTop: 14, borderTop: `1px solid ${T.border}`,
-        }}
-      >
-        <input
-          type="checkbox"
-          checked={sharing}
-          onChange={(e) => save.mutate({ shareWithHousehold: e.target.checked })}
-          disabled={save.isPending}
-          style={{ width: 20, height: 20, accentColor: T.cyan, flexShrink: 0, margin: '2px 0 0' }}
-        />
-        <span style={{ fontSize: 14, lineHeight: 1.45 }}>
+      <label style={{ ...row({ alignItems: 'flex-start', marginTop: 6, cursor: 'pointer' }) }}>
+        <input type="checkbox" checked={sharing}
+               onChange={(e) => save.mutate({ shareWithHousehold: e.target.checked })}
+               disabled={save.isPending}
+               style={{ width: 18, height: 18, accentColor: T.ink, flexShrink: 0, margin: '2px 0 0' }} />
+        <span style={{ ...body(14) }}>
           Show these on the other person's Today too
-          <span style={{ display: 'block', fontSize: 12, color: T.muted, marginTop: 3 }}>
-            Only the calendars ticked above — they never see the rest of your account, and
-            they don't need to connect anything.
+          <span style={{ ...body(13), color: T.muted, display: 'block', marginTop: 3 }}>
+            Only the calendars ticked above — they never see the rest of your account,
+            and they don't need to connect anything.
           </span>
         </span>
       </label>
@@ -108,5 +79,5 @@ export default function CalendarPicker({ status }: { status: CalendarStatus }) {
 }
 
 const Muted = ({ children }: { children: React.ReactNode }) => (
-  <div style={{ fontSize: 13, color: T.muted, marginTop: 12 }}>{children}</div>
+  <div style={{ ...body(13), color: T.muted, marginTop: 12 }}>{children}</div>
 )

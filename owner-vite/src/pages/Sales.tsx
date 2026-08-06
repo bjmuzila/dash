@@ -545,7 +545,7 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
   const attention = subs.filter(s => ["past_due", "unpaid", "incomplete"].includes(displayStatus(s).key)).length;
 
   return (
-    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flex: 1, height: "100%", minHeight: 0 }}>
       <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
         <span style={{ fontSize: 17, fontWeight: 700, color: T.gold, letterSpacing: "0.01em" }}>Active Subscriptions</span>
         <span title="Subscriptions in plain active status" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}>{activeCount}</span>
@@ -569,7 +569,7 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
         <span style={CELL}>Joined</span>
         <span style={CELL}>Total Spent</span>
       </div>
-      <div style={{ flex: 1, overflowY: "auto" }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
         {subs.length === 0 ? (
           <div style={{ padding: "32px 16px", textAlign: "center", color: T.muted, fontSize: 14 }}>
             No active subscriptions found
@@ -640,6 +640,12 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
 // the wrong thing anyway. This card answers the question that was actually
 // missing: who left, when did service stop, and why.
 
+// Height note: this card and the Active Subscriptions table share one grid row
+// and must end at the same line. Both are `height: 100%` with the row list
+// carrying `flex: 1; minHeight: 0; overflowY: auto`, so whichever list is longer
+// sets the row height and the other simply has empty space below its last item.
+// The old `maxHeight: 420` on this list is gone — it capped the card well short
+// of the table next to it.
 function CancellationsPanel({ cancellations, leaving }: { cancellations: StripeSubscription[]; leaving: StripeSubscription[] }) {
   // Winding down first (still recoverable), then the ones already gone.
   const rows = [
@@ -648,7 +654,7 @@ function CancellationsPanel({ cancellations, leaving }: { cancellations: StripeS
   ];
 
   return (
-    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", height: "100%", minHeight: 0 }}>
       <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0 }}>
         <span style={{ fontSize: 17, fontWeight: 700, color: T.gold }}>Cancellations</span>
         {leaving.length > 0 && (
@@ -661,7 +667,7 @@ function CancellationsPanel({ cancellations, leaving }: { cancellations: StripeS
         </span>
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", maxHeight: 420 }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
         {rows.length === 0 ? (
           <div style={{ padding: "28px 16px", textAlign: "center", color: T.muted, fontSize: 14 }}>
             No cancellations 🎉
@@ -1148,9 +1154,13 @@ export default function Sales() {
               expensesMonthly={expensesMonthly}
             />
 
-            {/* Active Subscriptions + Cancellations — above Expenses */}
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
-              <div style={{ minHeight: 320 }}>
+            {/* Active Subscriptions + Cancellations — above Expenses.
+                `alignItems: stretch` (grid's default, stated here so it doesn't
+                get lost) plus a flex-column wrapper on the left makes both cards
+                end on the same line: the taller list sets the row height and the
+                shorter one just has empty space under its last row. */}
+            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12, alignItems: "stretch" }}>
+              <div style={{ minHeight: 320, display: "flex", flexDirection: "column", minWidth: 0 }}>
                 <SubscriptionTable subs={data.subscriptions} discordByEmail={discordByEmail} />
               </div>
               <CancellationsPanel

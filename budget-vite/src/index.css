@@ -1,31 +1,38 @@
-/* Minimal reset. This app is inline-styled like the rest of the dashboard, so
-   there is no utility framework here on purpose — nothing to keep in sync. */
+/* Minimal reset. This app is inline-styled from src/theme.ts, so there is no
+   utility framework here on purpose — nothing to keep in sync. */
 * { box-sizing: border-box; }
 
 html, body, #root {
   margin: 0;
   padding: 0;
   height: 100%;
-  background: #020308;
+  background: #F7F4ED;
 }
 
 body {
   -webkit-font-smoothing: antialiased;
-  /* Stops iOS from bumping text size when the phone rotates. */
+  /* Stops iOS bumping text size when the phone rotates. */
   -webkit-text-size-adjust: 100%;
   /* Kills the rubber-band overscroll that makes a web app feel like a webpage. */
   overscroll-behavior-y: none;
+  color: #1C1917;
 }
 
-/* Inputs don't inherit the font by default. */
 input, button, select, textarea { font: inherit; color: inherit; }
 
 /* Remove the grey tap flash on iOS. */
 * { -webkit-tap-highlight-color: transparent; }
 
-::placeholder { color: rgba(255,255,255,0.35); }
+::placeholder { color: #B8B0A5; }
 
-/* Scrollbars, dark. */
+/* Native controls default to a dark colour scheme's widgets on some browsers;
+   this keeps date pickers and checkboxes light to match the paper. */
+input[type="date"], input[type="number"], input[type="checkbox"] { color-scheme: light; }
+
+/* Scrollbars, light. */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 8px; }
+::-webkit-scrollbar-thumb { background: rgba(28,25,23,0.16); border-radius: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* The focus ring the reference implies: a thin accent underline, not a glow. */
+:focus-visible { outline: 2px solid rgba(194,65,12,0.45); outline-offset: 1px; }

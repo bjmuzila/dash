@@ -1,5 +1,101 @@
 # Changelog
 
+## 2026-08-06 (k) - budget.cbedge.net: CB Edge palette on the editorial layout
+
+Same editorial structure shipped in (j), now on the dashboard's dark palette. Because
+(j) rebuilt the styling as a token set plus helpers, this was almost entirely a swap of
+values in `budget-vite/src/theme.ts` — no page had to be restructured.
+
+**Visual layer only.** No route, endpoint, query or schema changed. Nothing on
+cbedge.net was touched.
+
+### Palette
+Values mirror `components/shared/homeTheme.ts` and the deeper surface set
+`app/owner/budget` uses locally — but the files are deliberately NOT shared, because
+budget-vite builds standalone (see its vite.config.js).
+
+- Surfaces `#05060A` / `#0D1119`, plus the dashboard's radial shell glow behind the page
+- Accent is **`#8ECAE6`**, not `#219EBC`: the darker cyan is not legible as 10px mono
+  on near-black, and nearly every label in this design is 10px mono
+- **`warn` (`#FB8501`) is a separate token from `accent`.** Overdue, slipping, past-due
+  and over-budget mean "act on this" — colouring them with the interactive accent makes
+  them read as links, and colouring links orange makes the whole page look alarmed
+
+### The naming inversion, on purpose
+Tokens keep their light-theme names: **`ink` means FOREGROUND, `paper` means
+BACKGROUND**, so on dark `ink` is white. Every helper reads correctly under the
+inversion without a branch — a completed checkbox is still "filled `ink`, tick in
+`paper`", which is now white-with-a-dark-tick instead of black-with-a-light-one. The
+alternative (renaming to fg/bg) would have touched every file for no behavioural gain.
+
+### Two adjustments the dark version needed
+- **Display weight 600 → 500.** Light-on-dark blooms optically; the weight that looked
+  right on cream reads chunky here.
+- **Disabled primary buttons became ghost outlines.** A dimmed white fill on black is a
+  grey slab that reads as enabled-but-broken. The outline reads as "not yet".
+
+### Verified by rendering, not by reading
+The real build was screenshotted at 390px against a stubbed `/api/hh/*` and inspected
+across Today, Habits, Work and Money.
+
+**No proxy change. No API change. No schema change.**
+
+
+## 2026-08-06 (j) - budget.cbedge.net: "warm paper" redesign
+
+Replaced the CB Edge dark theme on budget.cbedge.net with a light, editorial design
+modelled on the reference app Brandon supplied (jeradhill.com life-management app).
+**Visual layer only** — no route, endpoint, query or schema changed, and nothing on
+cbedge.net was touched. The trading app keeps `homeTheme.ts`; the two products no
+longer share tokens.
+
+### The system — `budget-vite/src/theme.ts`
+Rewritten from scratch as a token set plus style helpers. Four rules it enforces:
+
+1. **ONE accent colour.** Burnt orange `#C2410C`, only for things that are live —
+   links, overdue, streaks, the current tab. Nothing decorative is coloured. A second
+   accent is what turns this back into a dashboard.
+2. **Hairline rules, not cards.** Sections are a 1px top rule and whitespace. Borders,
+   fills and shadows are the exception (compose box, active segment), never the
+   default container. `card()` is gone.
+3. **Serif for VALUES, mono for LABELS.** A number you read is Newsreader and large;
+   the word describing it is 10px JetBrains Mono, uppercase, letterspaced, muted.
+   Swapping those two is what makes a layout look like generic admin.
+4. **No bold-for-emphasis.** Hierarchy comes from size, case and colour.
+
+Palette: warm cream surfaces (`#F7F4ED` / `#FBF9F5` / `#F1EDE4`), warm near-black ink
+(`#1C1917` — never pure black, too hard against cream), three muted greys.
+
+### Applied across every screen
+- **Shell** — mono date line ("Thu, Aug 6 · Week 32"), serif page title, bottom tab bar
+  marked by a 2px accent rule instead of icons or fills. Tabs renamed to fit five on a
+  390px phone: Today · Habits · Work · Money · More.
+- **Today** — opens with one plain-English brief line ("6 open · 2 overdue · 1 due
+  today") rather than a stat grid, which is how the reference does it.
+- **Habits** — hero percentage, a 30-day completion trace, per-row square-block history
+  and streak count.
+- **Money** — the balance as an oversized serif number, banks as a mono row beneath.
+- **Work** — serif project names, hairline progress rules, terse mono meta lines.
+- Checkboxes are squares (a circle reads as a radio); done = solid ink fill, paper tick,
+  strikethrough.
+
+### Two fixes found by rendering it, not by reading it
+The build was screenshotted at 390px against a stubbed API and inspected:
+- **The 30-day trace was full-height black bars** — it dominated a screen where the
+  number beside it is the point. Redrawn as a thin SVG polyline that dips on missed
+  days, matching the reference.
+- **Primary actions were full-width filled blocks.** In this language the default
+  action is TEXT — `+ New project` right-aligned in mono caps. The filled button is now
+  reserved for the single primary action on a screen (sign in, save).
+
+### Fonts
+Newsreader (serif), JetBrains Mono (labels), Inter (body), via Google Fonts in
+`index.html`. `index.css` sets `color-scheme: light` on native inputs so date pickers
+and checkboxes don't render dark against the paper.
+
+**No proxy change. No API change. No schema change.**
+
+
 ## 2026-08-06 (i) - budget.cbedge.net phase 2: routines & habits, projects & milestones
 
 Two new modules on budget.cbedge.net. Tab bar is now Today · Routines · Projects ·

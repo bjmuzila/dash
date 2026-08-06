@@ -2,16 +2,17 @@ import { useState, type FormEvent } from 'react'
 import { useAuth } from '../auth'
 import { useRoutines, useToggleRoutine, useCreateRoutine, useArchiveRoutine, useUpdateRoutine } from '../hooks'
 import { ApiError, type Routine, type RoutineBlock } from '../api'
-import { T, card, labelCap, input, button } from '../theme'
+import { T, label, body, hero, section, row, input, button, segment, checkbox, doneText } from '../theme'
 
 /**
- * Routines & habits.
+ * Habits.
  *
- * Separate from tasks on purpose: a routine never completes, it just comes back
- * tomorrow. Three time blocks, a tick per day, a streak, and 30 days of history.
+ * Separate from tasks: a routine never completes, it comes back tomorrow.
+ * The streak is the reason anyone opens this screen, so it sits on the row —
+ * not behind a tap — and updates the instant you tick.
  *
- * The streak number is the whole reason anyone opens this screen, so it sits
- * next to the item rather than behind a tap, and it updates the instant you tick.
+ * History renders as a run of small squares, one per day, the way the reference
+ * does. Binary per day, so bars would be a lie.
  */
 
 const BLOCK_LABEL: Record<RoutineBlock, string> = {
@@ -25,58 +26,64 @@ export default function Routines() {
   const toggle = useToggleRoutine()
   const [adding, setAdding] = useState<RoutineBlock | null>(null)
 
-  if (isLoading) {
-    return <div style={{ color: T.muted, fontSize: 14, padding: '30px 0', textAlign: 'center' }}>Loading…</div>
-  }
+  if (isLoading) return <div style={{ ...body(14), color: T.muted }}>Loading…</div>
   if (error) {
     return (
-      <section style={card()}>
-        <div style={{ color: T.red, fontWeight: 700, fontSize: 15 }}>
+      <div>
+        <div style={{ ...body(15), color: T.bad }}>
           {error instanceof ApiError ? error.message : 'Something went wrong.'}
         </div>
-        <button onClick={() => void refetch()} style={{ ...button('ghost'), marginTop: 12 }}>Try again</button>
-      </section>
+        <button onClick={() => void refetch()} style={{ ...button('ghost'), marginTop: 14 }}>Try again</button>
+      </div>
     )
   }
   if (!data || !user) return null
 
   const pct = data.total ? Math.round((data.doneToday / data.total) * 100) : 0
+  const bestStreak = Math.max(0, ...data.blocks.flatMap((b) => b.items.map((i) => i.streak)))
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <section style={card()}>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-          <div style={labelCap()}>Today</div>
-          <div style={{ fontSize: 13, color: T.muted }}>{data.doneToday} of {data.total}</div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 26 }}>
+      {/* The hero: one oversized serif number, a 30-day trace, a streak. */}
+      <div>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16 }}>
+          <div style={hero(46)}>
+            {pct}<span style={{ fontSize: 17, color: T.muted }}>%</span>
+          </div>
+          <div style={{ flex: 1, paddingBottom: 8 }}>
+            <DayTrace history={data.history} />
+          </div>
+          {bestStreak > 0 && (
+            <div style={{ paddingBottom: 6, textAlign: 'right' }}>
+              <div style={{ ...hero(20), color: T.accent }}>{bestStreak}</div>
+              <div style={label({ letterSpacing: '0.1em' })}>days</div>
+            </div>
+          )}
         </div>
-        <div style={{ fontSize: 32, fontWeight: 900, marginTop: 4, color: pct === 100 && data.total > 0 ? T.green : T.text }}>
-          {pct}%
+        <div style={label({ marginTop: 10, letterSpacing: '0.1em' })}>
+          {data.doneToday} of {data.total} today · last 30 days
         </div>
-        <div style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.08)', marginTop: 10, overflow: 'hidden' }}>
-          <div style={{ width: `${pct}%`, height: '100%', background: pct === 100 ? T.green : T.cyan, transition: 'width 160ms' }} />
-        </div>
-        {data.total > 0 && <History history={data.history} />}
-      </section>
+      </div>
 
       {BLOCKS.map((b) => {
         const block = data.blocks.find((x) => x.block === b)
         const items = block?.items ?? []
         return (
-          <section key={b} style={card()}>
+          <div key={b} style={section()}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-              <div style={labelCap()}>{BLOCK_LABEL[b]}</div>
+              <span style={label()}>{BLOCK_LABEL[b]}</span>
               {items.length > 0 && (
-                <div style={{ fontSize: 12, color: block!.done === items.length ? T.green : T.muted, fontWeight: 700 }}>
+                <span style={label(block!.done === items.length ? { color: T.good } : {})}>
                   {block!.done}/{items.length}
-                </div>
+                </span>
               )}
             </div>
 
             {items.length === 0 && (
-              <div style={{ fontSize: 14, color: T.muted, marginTop: 10 }}>Nothing here yet.</div>
+              <div style={{ ...body(14), color: T.muted, marginTop: 10 }}>Nothing here yet.</div>
             )}
 
-            <div style={{ marginTop: 6 }}>
+            <div>
               {items.map((r) => (
                 <RoutineRow key={r.id} routine={r} me={user.id} onToggle={() => toggle.mutate(r.id)} />
               ))}
@@ -86,11 +93,12 @@ export default function Routines() {
               <AddRoutine block={b} onDone={() => setAdding(null)} />
             ) : (
               <button onClick={() => setAdding(b)}
-                      style={{ ...button('ghost'), width: '100%', marginTop: 12, color: T.muted }}>
-                + Add to {BLOCK_LABEL[b].toLowerCase()}
+                      style={{ ...label({ color: T.accent }), background: 'none', border: 'none',
+                               padding: '12px 0', cursor: 'pointer', minHeight: 42 }}>
+                + Add routine
               </button>
             )}
-          </section>
+          </div>
         )
       })}
     </div>
@@ -106,82 +114,60 @@ function RoutineRow({ routine, me, onToggle }: { routine: Routine; me: number; o
   const mine = routine.ownerId === me
 
   return (
-    <div style={{ borderTop: `1px solid ${T.border}` }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 2px' }}>
-        <button
-          aria-label={routine.done ? 'Mark not done' : 'Mark done'}
-          onClick={onToggle}
-          style={{
-            flexShrink: 0, width: 26, height: 26, padding: 0, borderRadius: 8, cursor: 'pointer',
-            background: routine.done ? T.green : 'transparent',
-            border: `2px solid ${routine.done ? T.green : 'rgba(255,255,255,0.35)'}`,
-            display: 'grid', placeItems: 'center', color: T.ink, fontSize: 14, fontWeight: 900,
-            transition: 'background 120ms',
-          }}
-        >
+    <div>
+      <div style={row()}>
+        <button aria-label={routine.done ? 'Mark not done' : 'Mark done'} onClick={onToggle}
+                style={checkbox(routine.done)}>
           {routine.done ? '✓' : ''}
         </button>
 
         <div onClick={() => setOpen((v) => !v)} style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
-          <div style={{
-            fontSize: 15, fontWeight: 600, lineHeight: 1.35, wordBreak: 'break-word',
-            color: routine.done ? T.muted : T.text,
-          }}>
+          <div style={{ ...body(15), ...doneText(routine.done), wordBreak: 'break-word' }}>
             {routine.title}
             {routine.visibility === 'shared' && (
-              <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', color: T.cyan, marginLeft: 7 }}>
-                SHARED
-              </span>
+              <span style={{ ...label({ marginLeft: 8, letterSpacing: '0.1em' }) }}>shared</span>
             )}
           </div>
         </div>
 
-        {/* The streak is the payoff. It stays visible, not tucked behind a tap. */}
+        {/* Last 14 days inline, then the streak. Compact enough for a phone row. */}
+        <Squares history={routine.history.slice(-14)} />
         {routine.streak > 0 && (
-          <div style={{ flexShrink: 0, textAlign: 'right' }}>
-            <div style={{ fontSize: 15, fontWeight: 900, color: T.orange, lineHeight: 1 }}>
-              {routine.streak}
-            </div>
-            <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', color: T.muted, marginTop: 2 }}>
-              DAY{routine.streak === 1 ? '' : 'S'}
-            </div>
-          </div>
+          <span style={{ ...label({ color: T.accent, letterSpacing: '0.06em', minWidth: 22, textAlign: 'right' }) }}>
+            {routine.streak}
+          </span>
         )}
       </div>
 
       {open && (
-        <div style={{ padding: '0 2px 14px 38px' }}>
-          <Sparkline history={routine.history} />
-          <div style={{ fontSize: 12, color: T.muted, marginTop: 8 }}>
-            {routine.last30} of the last 30 days
-            {routine.best > 0 && ` · best run ${routine.best} day${routine.best === 1 ? '' : 's'}`}
+        <div style={{ padding: '0 0 14px 32px' }}>
+          <Squares history={routine.history} wide />
+          <div style={label({ marginTop: 9, letterSpacing: '0.08em' })}>
+            {routine.last30} of last 30
+            {routine.best > 0 && ` · best ${routine.best} day${routine.best === 1 ? '' : 's'}`}
           </div>
           <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
             <button
               onClick={() => update.mutate({ id: routine.id, patch: {
-                visibility: routine.visibility === 'shared' ? 'private' : 'shared',
-              } })}
-              style={mini(routine.visibility === 'shared')}
+                visibility: routine.visibility === 'shared' ? 'private' : 'shared' } })}
+              style={segment(routine.visibility === 'shared')}
             >
-              {routine.visibility === 'shared' ? '✓ Shared' : 'Share'}
+              {routine.visibility === 'shared' ? 'Shared' : 'Private'}
             </button>
             {BLOCKS.filter((b) => b !== routine.block).map((b) => (
-              <button key={b} onClick={() => update.mutate({ id: routine.id, patch: { block: b } })} style={mini()}>
-                → {BLOCK_LABEL[b]}
-              </button>
+              <button key={b} onClick={() => update.mutate({ id: routine.id, patch: { block: b } })}
+                      style={segment(false)}>→ {BLOCK_LABEL[b]}</button>
             ))}
             {mine && (
-              <button
-                onClick={() => archive.mutate(routine.id)}
-                style={{ ...mini(), color: T.red, borderColor: 'rgba(239,68,68,0.35)' }}
-              >
+              <button onClick={() => archive.mutate(routine.id)}
+                      style={{ ...segment(false), color: T.bad, borderColor: 'rgba(239,68,68,0.35)' }}>
                 Remove
               </button>
             )}
           </div>
           {mine && (
-            <div style={{ fontSize: 11, color: T.muted, opacity: 0.65, marginTop: 8 }}>
-              Removing hides it and keeps the history — your streak isn't lost.
+            <div style={label({ marginTop: 9, letterSpacing: '0.06em' })}>
+              Removing hides it and keeps the history — your streak isn't lost
             </div>
           )}
         </div>
@@ -198,81 +184,81 @@ function AddRoutine({ block, onDone }: { block: RoutineBlock; onDone: () => void
   const [shared, setShared] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault()
-    const t = title.trim()
-    if (!t || create.isPending) return
-    setError(null)
-    try {
-      await create.mutateAsync({ title: t, block, visibility: shared ? 'shared' : 'private' })
-      setTitle('')
-      onDone()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not add that.')
-    }
-  }
-
   return (
-    <form onSubmit={submit} style={{ marginTop: 12 }}>
+    <form
+      onSubmit={async (e: FormEvent) => {
+        e.preventDefault()
+        const t = title.trim()
+        if (!t || create.isPending) return
+        setError(null)
+        try {
+          await create.mutateAsync({ title: t, block, visibility: shared ? 'shared' : 'private' })
+          setTitle(''); onDone()
+        } catch (err) {
+          setError(err instanceof ApiError ? err.message : 'Could not add that.')
+        }
+      }}
+      style={{ marginTop: 12 }}
+    >
       <input style={input()} placeholder={`New ${BLOCK_LABEL[block].toLowerCase()} habit…`}
              value={title} onChange={(e) => setTitle(e.target.value)} autoFocus enterKeyHint="done" />
-      <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' }}>
-        <button type="button" onClick={() => setShared((v) => !v)} style={mini(shared)}>
-          {shared ? '✓ Shared' : 'Private'}
+      <div style={{ display: 'flex', gap: 8, marginTop: 9, alignItems: 'center' }}>
+        <button type="button" onClick={() => setShared((v) => !v)} style={segment(shared)}>
+          {shared ? 'Shared' : 'Private'}
         </button>
-        <button type="button" onClick={onDone} style={{ ...button('ghost'), marginLeft: 'auto' }}>Cancel</button>
+        <button type="button" onClick={onDone} style={{ ...segment(false), marginLeft: 'auto' }}>Cancel</button>
         <button type="submit" disabled={!title.trim() || create.isPending}
-                style={{ ...button('primary'), opacity: title.trim() ? 1 : 0.4 }}>Add</button>
+                style={{ ...button(title.trim() ? 'primary' : 'ghost'), minHeight: 34,
+                         padding: '7px 14px' }}>Add</button>
       </div>
-      {error && <div style={{ color: T.red, fontSize: 13, fontWeight: 600, marginTop: 8 }}>{error}</div>}
+      {error && <div style={label({ color: T.bad, marginTop: 9, letterSpacing: '0.06em' })}>{error}</div>}
     </form>
   )
 }
 
 // ── Charts ───────────────────────────────────────────────────────────────────
 
-/** 30 days of household completion. Bars, because a habit is binary per day. */
-function History({ history }: { history: { day: string; done: number; total: number }[] }) {
+/** A run of small squares, one per day. Filled = done. */
+function Squares({ history, wide }: { history: { day: string; done: boolean }[]; wide?: boolean }) {
+  const s = wide ? 9 : 5
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 34, marginTop: 14 }}>
-      {history.map((d) => {
-        const pct = d.total ? d.done / d.total : 0
-        return (
-          <div key={d.day} title={d.day} style={{ flex: 1, height: '100%', display: 'flex', alignItems: 'flex-end' }}>
-            <div style={{
-              width: '100%',
-              // A floor of 2px so a zero day reads as "nothing done", not as
-              // missing data — an absent bar looks like a gap in the record.
-              height: `${Math.max(6, pct * 100)}%`,
-              borderRadius: 2,
-              background: pct === 0 ? 'rgba(255,255,255,0.07)' : pct === 1 ? T.green : T.cyan,
-              opacity: pct === 0 ? 1 : 0.35 + pct * 0.65,
-            }} />
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-/** Per-routine 30-day dots. */
-function Sparkline({ history }: { history: { day: string; done: boolean }[] }) {
-  return (
-    <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', gap: 2, flexShrink: 0, flexWrap: wide ? 'wrap' : 'nowrap' }}>
       {history.map((d) => (
         <div key={d.day} title={d.day} style={{
-          width: 8, height: 8, borderRadius: 2,
-          background: d.done ? T.green : 'rgba(255,255,255,0.09)',
+          width: s, height: s, borderRadius: 1,
+          // An empty square, not an absent one: a gap would read as missing
+          // data rather than as a day you didn't do it.
+          background: d.done ? T.ink : T.paperSunk,
         }} />
       ))}
     </div>
   )
 }
 
-const mini = (active = false): React.CSSProperties => ({
-  appearance: 'none',
-  background: active ? 'rgba(33,158,188,0.18)' : 'transparent',
-  border: `1px solid ${active ? 'rgba(33,158,188,0.5)' : T.hairline}`,
-  color: T.text, borderRadius: 9, minHeight: 38, padding: '8px 13px',
-  fontSize: 13, fontWeight: 700, cursor: 'pointer',
-})
+/**
+ * 30 days of household completion, as a thin trace.
+ *
+ * A line, not bars. The reference draws this as a barely-there rule that dips
+ * on the days you missed — bars at full height turn a quiet background stat
+ * into the loudest thing on the screen, which is backwards: the number beside
+ * it is the point.
+ */
+function DayTrace({ history }: { history: { day: string; done: number; total: number }[] }) {
+  if (history.length < 2) return null
+  const W = 100, H = 22
+  const pts = history.map((d, i) => {
+    const pct = d.total ? d.done / d.total : 0
+    return [(i / (history.length - 1)) * W, H - 2 - pct * (H - 4)] as const
+  })
+  const path = pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(2)} ${y.toFixed(2)}`).join(' ')
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"
+         style={{ width: '100%', height: H, display: 'block', overflow: 'visible' }}>
+      {/* The 100% line, so a dip reads as a dip from somewhere. */}
+      <line x1={0} y1={2} x2={W} y2={2} stroke={T.paperSunk} strokeWidth={1}
+            vectorEffect="non-scaling-stroke" />
+      <path d={path} fill="none" stroke={T.accent} strokeWidth={1.25}
+            strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+    </svg>
+  )
+}

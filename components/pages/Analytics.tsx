@@ -1099,9 +1099,11 @@ function IbCard() {
 }
 
 // ── 8. TICKER LEVELS ──────────────────────────────────────────────────────────
-// CORE (CB) · Call Wall · Put Wall · Spot per ticker — the same four numbers the
-// owner Results → Walls tab prints, off the same tables. Two read paths, because
-// neither one alone is sufficient:
+// CORE (CB) · Call Wall · Put Wall · Spot for ONE ticker at a time — same shape
+// as the Estimated Move card above: a pill row switches the symbol, and the free
+// text box adds any other scanner name to that row. These are the same four
+// numbers the owner Results → Walls tab prints, off the same tables. Two read
+// paths, because neither one alone is sufficient:
 //
 //   /proxy/walls?date=…   → { tickers: [{ symbol, spot, call_wall, put_wall, cb }] }
 //       Sampled from scanner_snapshots onto a 15m slot grid starting 09:29 ET.
@@ -1111,16 +1113,17 @@ function IbCard() {
 //       swept every 2–5m. Fresher spot/walls than the slot grid, and the only
 //       one that answers overnight, pre-open and at weekends — but no `cb`.
 //
-// So scanner wins for spot/call/put, walls supplies CORE, and off-hours a row
-// still renders with CORE blank instead of the card going empty.
+// So scanner wins for spot/call/put and walls supplies CORE. Both are fetched
+// once for the whole universe, not per selection — switching the pill is a local
+// lookup, so it's instant and costs no extra request.
 //
 // FUTURES — scanner_snapshots covers cash indices + equities only, no ES/NQ:
 //   ESU  levels = SPX levels + the ES−SPX basis from /proxy/es-spx-basis. That
 //        module is the one basis source not poisoned by the broker's "SPX" spot
 //        (which actually tracks ES); a null basis stays null and blanks the
 //        levels, because coercing it to 0 prints SPX strikes ~50pt out of place.
-//   NQU  has no NDX→NQ basis module, so it shows live spot only — add NDX to the
-//        list for the index-scale levels.
+//   NQU  has no NDX→NQ basis module, so it shows live spot only — type NDX into
+//        the box for the index-scale levels.
 // Both futures spots come from /api/tt-quotes on the front contract.
 interface WallsTickerRow {
   symbol: string;
@@ -1155,11 +1158,12 @@ function prevSessionISO(iso: string): string {
 interface TickerLevelRow {
   symbol: string;
   spot: number | null; core: number | null; call: number | null; put: number | null;
-  note: string | null; stale: boolean; removable: boolean;
+  note: string | null; stale: boolean;
 }
 
 function TickerLevelsCard() {
   const today = etDateISO();
+  const [tk, setTk] = useState<string>("SPX");
   const [extra, setExtra] = useState<string[]>([]);
   const [input, setInput] = useState("");
 
@@ -1227,126 +1231,130 @@ function TickerLevelsCard() {
 
   const basis = esBasis && typeof esBasis.basis === "number" && isFinite(esBasis.basis) ? esBasis.basis : null;
 
-  const buildRow = (sym: string, removable: boolean): TickerLevelRow => {
+  const buildRow = (sym: string): TickerLevelRow => {
     const fut = TL_FUTURES[sym];
     if (fut) {
       const spot = quoteFor(fut.quote);
       const src = fut.index ? bySymbol.get(fut.index) : null;
       if (!src || basis == null) {
         return {
-          symbol: sym, spot, core: null, call: null, put: null, stale: false, removable,
-          note: fut.index ? "waiting on basis" : "no NQ basis — add NDX",
+          symbol: sym, spot, core: null, call: null, put: null, stale: false,
+          note: fut.index ? "waiting on ES−SPX basis" : "no NQ basis — switch to NDX",
         };
       }
       const shift = (n: number | null) => (n == null ? null : n + basis);
       return {
         symbol: sym, spot, core: shift(src.core), call: shift(src.call), put: shift(src.put),
-        stale: src.stale, removable,
-        note: `${fut.index} ${basis >= 0 ? "+" : "−"}${Math.abs(basis).toFixed(1)}`,
+        stale: src.stale,
+        note: `${fut.index} ${basis >= 0 ? "+" : "−"}${Math.abs(basis).toFixed(1)} basis`,
       };
     }
     const e = bySymbol.get(sym);
     return {
       symbol: sym, spot: e?.spot ?? null, core: e?.core ?? null, call: e?.call ?? null,
-      put: e?.put ?? null, stale: !!e?.stale, removable,
-      note: e ? null : "not in scanner universe",
+      put: e?.put ?? null, stale: !!e?.stale,
+      note: e ? null : "not in the scanner universe",
     };
   };
 
-  const rows = [
-    ...TL_DEFAULT.map((s) => buildRow(s, false)),
-    ...extra.map((s) => buildRow(s, true)),
-  ];
+  const tickers = [...TL_DEFAULT, ...extra];
+  const row = buildRow(tk);
 
   const addTicker = () => {
     const sym = input.trim().toUpperCase().replace(/[^A-Z0-9.]/g, "");
     setInput("");
-    if (!sym || TL_DEFAULT.includes(sym) || extra.includes(sym)) return;
-    persist([...extra, sym]);
+    if (!sym) return;
+    if (!tickers.includes(sym)) persist([...extra, sym]);
+    setTk(sym); // typing a ticker means you want to look at it
+  };
+  const removeTicker = (sym: string) => {
+    persist(extra.filter((s) => s !== sym));
+    if (tk === sym) setTk("SPX");
   };
 
-  const loading = (wLoading || sLoading) && bySymbol.size === 0;
-  const error = bySymbol.size === 0 ? wError ?? sError : null;
+  // Ready once the selected ticker resolved at least a spot — the walls can
+  // still be null (futures with no basis) and the card is still worth showing.
+  const loaded = bySymbol.size > 0 || row.spot != null;
+  const loading = (wLoading || sLoading) && !loaded;
+  const error = loaded ? null : wError ?? sError;
+
+  // Signed gap to the nearer wall: > 0 = not yet reached, < 0 = price through it.
+  const distCall = row.spot != null && row.call != null ? row.call - row.spot : null;
+  const distPut = row.spot != null && row.put != null ? row.spot - row.put : null;
+  const nearerCall = distCall != null && (distPut == null || distCall <= distPut);
+  const near = nearerCall ? distCall : distPut;
+  const crossed = near != null && near < 0;
+  const distCore = row.spot != null && row.core != null ? row.core - row.spot : null;
 
   const fmtLvl = (n: number | null) =>
     n == null ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: 2 });
   const fmtSpot = (n: number | null) =>
-    n == null ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-  const th: CSSProperties = {
-    fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
-    color: T.muted, opacity: 0.65, textAlign: "right", padding: "0 0 5px", whiteSpace: "nowrap",
-  };
-  const td: CSSProperties = {
-    fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, textAlign: "right",
-    padding: "5px 0", whiteSpace: "nowrap",
-  };
+    n == null ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: 2 });
 
   return (
-    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
+    <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, height: 480, overflowY: "auto" }}>
       <Row>
         <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Ticker Levels</span>
-        <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>
-          {coreStale ? `core · last session ${wallsPrev?.date ?? ""}` : "core · walls · spot"}
+        <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: row.stale ? T.orange : T.muted, opacity: 0.7 }}>
+          {row.stale ? "last sweep" : coreStale ? `core · ${wallsPrev?.date ?? "prev"}` : "core · walls"}
         </span>
       </Row>
 
+      <PillSelect value={tk} options={tickers} onChange={setTk} />
       <div style={{ display: "flex", gap: 6 }}>
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTicker(); } }}
-          placeholder="Add ticker…"
+          placeholder="Other ticker…"
           style={{ ...homeInputStyle, fontSize: 13, padding: "6px 10px", flex: 1, minWidth: 0 }}
         />
         <button onClick={addTicker} style={homeSecondaryButtonStyle}>Add</button>
+        {extra.includes(tk) ? (
+          <button onClick={() => removeTicker(tk)} style={homeSecondaryButtonStyle} title={`Remove ${tk}`}>×</button>
+        ) : null}
       </div>
 
-      {loading || error || !rows.length ? (
+      {loading || error ? (
         <CardState loading={loading} error={error} empty="No scanner rows yet." />
       ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <th style={{ ...th, textAlign: "left" }}>Ticker</th>
-              <th style={th}>Spot</th>
-              <th style={th}>Put Wall</th>
-              <th style={th}>Core</th>
-              <th style={th}>Call Wall</th>
-              <th style={{ ...th, width: 18 }} />
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.symbol} style={{ borderTop: `1px solid ${T.border}` }}>
-                <td style={{ ...td, textAlign: "left", fontFamily: "inherit", fontWeight: 800, letterSpacing: "0.03em" }}>
-                  {r.symbol}
-                  {r.note ? (
-                    <span style={{ fontSize: 9, fontWeight: 700, color: T.muted, opacity: 0.5, marginLeft: 5 }}>{r.note}</span>
-                  ) : null}
-                  {r.stale ? (
-                    <span style={{ fontSize: 9, fontWeight: 700, color: T.orange, opacity: 0.7, marginLeft: 5 }}>stale</span>
-                  ) : null}
-                </td>
-                <td style={td}>{fmtSpot(r.spot)}</td>
-                <td style={{ ...td, color: r.put == null ? T.muted : POS_GREEN, opacity: r.put == null ? 0.35 : 1 }}>{fmtLvl(r.put)}</td>
-                <td style={{ ...td, color: r.core == null ? T.muted : T.cyan, opacity: r.core == null ? 0.35 : 1 }}>{fmtLvl(r.core)}</td>
-                <td style={{ ...td, color: r.call == null ? T.muted : T.orange, opacity: r.call == null ? 0.35 : 1 }}>{fmtLvl(r.call)}</td>
-                <td style={{ ...td, padding: "5px 0 5px 6px" }}>
-                  {r.removable ? (
-                    <button
-                      onClick={() => persist(extra.filter((s) => s !== r.symbol))}
-                      title={`Remove ${r.symbol}`}
-                      style={{ background: "none", border: "none", color: T.muted, opacity: 0.45, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}
-                    >
-                      ×
-                    </button>
-                  ) : null}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, minWidth: 0 }}>
+            <Stat label="Put Wall" value={fmtLvl(row.put)} color={row.put == null ? T.muted : POS_GREEN} size={18} />
+            <Stat label="Spot" value={fmtSpot(row.spot)} size={18} />
+            <Stat label="Call Wall" value={fmtLvl(row.call)} color={row.call == null ? T.muted : T.orange} size={18} />
+          </div>
+
+          <div style={divider} />
+
+          <Row>
+            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              <Label>Core</Label>
+              <Value color={row.core == null ? T.muted : T.cyan} size={22}>{fmtLvl(row.core)}</Value>
+            </div>
+            <Value color={distCore == null ? T.muted : signColor(distCore)} size={14}>
+              {distCore == null ? "—" : `${distCore >= 0 ? "+" : ""}${distCore.toLocaleString(undefined, { maximumFractionDigits: 1 })}`}
+            </Value>
+          </Row>
+
+          <div style={divider} />
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <Label>Distance to nearer wall ({nearerCall ? "Call" : "Put"}){crossed ? " · through" : ""}</Label>
+            <Row>
+              <Value color={near == null ? T.muted : crossed ? T.red : POS_GREEN} size={18}>
+                {near == null ? "—" : `${crossed ? "-" : ""}${Math.abs(near).toLocaleString(undefined, { maximumFractionDigits: 1 })} pts`}
+              </Value>
+              <Value color={T.muted} size={14}>
+                {near == null || row.spot == null ? "—" : `${((Math.abs(near) / row.spot) * 100).toFixed(2)}%`}
+              </Value>
+            </Row>
+          </div>
+
+          {row.note ? (
+            <span style={{ fontSize: 11, color: T.muted, opacity: 0.5, fontFamily: "var(--font-mono)" }}>{row.note}</span>
+          ) : null}
+        </>
       )}
       <UpdatedStamp at={lastUpdated} />
     </Card>

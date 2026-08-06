@@ -5,7 +5,7 @@ import {
   useAddMilestone, useToggleMilestone, useDeleteMilestone, useLogTime, useDeleteTime,
 } from '../hooks'
 import { ApiError, type Project, type ProjectStatus } from '../api'
-import { T, card, labelCap, input, button } from '../theme'
+import { T, label, body, display, hero, section, input, button } from '../theme'
 
 /**
  * Projects.
@@ -47,8 +47,8 @@ export default function Projects() {
   }
   if (error) {
     return (
-      <section style={card()}>
-        <div style={{ color: T.red, fontWeight: 700, fontSize: 15 }}>
+      <section style={section()}>
+        <div style={{ color: T.bad, fontWeight: 700, fontSize: 15 }}>
           {error instanceof ApiError ? error.message : 'Something went wrong.'}
         </div>
         <button onClick={() => void refetch()} style={{ ...button('ghost'), marginTop: 12 }}>Try again</button>
@@ -61,13 +61,14 @@ export default function Projects() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       {adding ? <NewProject onDone={() => setAdding(false)} /> : (
-        <button onClick={() => setAdding(true)} style={{ ...button('primary'), width: '100%' }}>
-          + New project
-        </button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <span style={label()}>{list.length} project{list.length === 1 ? '' : 's'}</span>
+          <button onClick={() => setAdding(true)} style={textBtn}>+ New project</button>
+        </div>
       )}
 
       {list.length === 0 && (
-        <section style={card()}>
+        <section style={section()}>
           <div style={{ fontSize: 14, color: T.muted, lineHeight: 1.5 }}>
             Nothing here yet. A project is anything with more than one step —
             add milestones and the bar tracks the ones that actually matter.
@@ -78,7 +79,7 @@ export default function Projects() {
       {list.map((p) => <Card key={p.id} project={p} onOpen={() => setOpenId(p.id)} />)}
 
       <button onClick={() => setShowArchived((v) => !v)}
-              style={{ ...button('ghost'), width: '100%', color: T.muted }}>
+              style={{ ...textBtn, color: T.muted, alignSelf: 'flex-start' }}>
         {showArchived ? 'Hide archived' : 'Show archived'}
       </button>
     </div>
@@ -87,20 +88,27 @@ export default function Projects() {
 
 function Card({ project, onOpen }: { project: Project; onOpen: () => void }) {
   const p = project
+  const meta = [
+    // Kept terse: this line is mono uppercase, which is wide, and a phone at
+    // 390px wraps it to two ragged lines the moment it gets wordy.
+    p.progress !== null ? `${p.milestones.done}/${p.milestones.total} done` : null,
+    p.tasks.open > 0 ? `${p.tasks.open} open` : null,
+    p.minutes > 0 ? fmtHours(p.minutes) : null,
+    p.status !== 'active' ? p.status : null,
+  ].filter(Boolean) as string[]
+
   return (
-    <section onClick={onOpen} style={card({ cursor: 'pointer', opacity: p.archived_at ? 0.55 : 1 })}>
+    <div onClick={onOpen} style={section({ cursor: 'pointer', opacity: p.archived_at ? 0.5 : 1 })}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
-        <div style={{ fontSize: 16, fontWeight: 800, wordBreak: 'break-word' }}>
+        <div style={{ ...display(18), wordBreak: 'break-word' }}>
           {p.name}
           {p.visibility === 'shared' && (
-            <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.1em', color: T.cyan, marginLeft: 8 }}>
-              SHARED
-            </span>
+            <span style={label({ marginLeft: 9, letterSpacing: '0.1em' })}>shared</span>
           )}
         </div>
         {p.progress !== null && (
-          <div style={{ fontSize: 18, fontWeight: 900, color: p.progress === 100 ? T.green : T.text, flexShrink: 0 }}>
-            {p.progress}%
+          <div style={{ ...hero(20), flexShrink: 0, color: p.progress === 100 ? T.good : T.ink }}>
+            {p.progress}<span style={{ fontSize: 11, color: T.muted }}>%</span>
           </div>
         )}
       </div>
@@ -108,22 +116,33 @@ function Card({ project, onOpen }: { project: Project; onOpen: () => void }) {
       {/* No milestones = no bar. A 0% bar on a project you've barely defined
           reads as failure rather than as "not measured yet". */}
       {p.progress !== null ? (
-        <div style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.08)', marginTop: 10, overflow: 'hidden' }}>
-          <div style={{ width: `${p.progress}%`, height: '100%', background: p.progress === 100 ? T.green : T.cyan }} />
+        <div style={{ height: 2, background: T.paperSunk, marginTop: 10 }}>
+          <div style={{ width: `${p.progress}%`, height: '100%',
+                        background: p.progress === 100 ? T.good : T.accent }} />
         </div>
       ) : (
-        <div style={{ fontSize: 12, color: T.muted, marginTop: 8 }}>No milestones yet</div>
+        <div style={label({ marginTop: 9, letterSpacing: '0.08em' })}>No milestones yet</div>
       )}
 
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, color: T.muted, marginTop: 10 }}>
-        {p.progress !== null && <span>{p.milestones.done}/{p.milestones.total} milestones</span>}
-        {p.tasks.total > 0 && <span>{p.tasks.open} open task{p.tasks.open === 1 ? '' : 's'}</span>}
-        {p.minutes > 0 && <span>{fmtHours(p.minutes)} logged</span>}
-        {p.target_date && <span style={{ color: T.orange }}>by {shortDate(p.target_date)}</span>}
-        {p.status !== 'active' && <span style={{ textTransform: 'uppercase', letterSpacing: '0.1em' }}>{p.status}</span>}
+      <div style={label({ marginTop: 10, letterSpacing: '0.1em', lineHeight: 1.7 })}>
+        {meta.map((m, i) => (
+          <span key={i}>{i > 0 && <span style={{ color: T.faint }}> · </span>}{m}</span>
+        ))}
+        {p.target_date && (
+          <span style={{ color: T.warn }}>
+            {meta.length > 0 && <span style={{ color: T.faint }}> · </span>}
+            by {shortDate(p.target_date)}
+          </span>
+        )}
       </div>
-    </section>
+    </div>
   )
+}
+
+const textBtn: React.CSSProperties = {
+  ...label({ color: T.accent }),
+  background: 'none', border: 'none', cursor: 'pointer',
+  padding: '10px 0', minHeight: 40, textAlign: 'left',
 }
 
 // ── Detail ───────────────────────────────────────────────────────────────────
@@ -151,50 +170,48 @@ function Detail({ id, onBack }: { id: number; onBack: () => void }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <button onClick={onBack} style={{ ...button('ghost'), alignSelf: 'flex-start', color: T.muted }}>
-        ‹ All projects
-      </button>
+      <button onClick={onBack} style={{ ...textBtn, color: T.muted }}>‹ All projects</button>
 
-      <section style={card()}>
-        <div style={{ fontSize: 20, fontWeight: 900, wordBreak: 'break-word' }}>{p.name}</div>
+      <section style={section()}>
+        <div style={{ ...display(24), wordBreak: 'break-word' }}>{p.name}</div>
         {p.description && (
-          <div style={{ fontSize: 14, color: T.muted, marginTop: 8, lineHeight: 1.5 }}>{p.description}</div>
+          <div style={{ ...body(14), color: T.inkSoft, marginTop: 8 }}>{p.description}</div>
         )}
         {p.progress !== null && (
           <>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginTop: 14 }}>
-              <div style={labelCap()}>Progress</div>
-              <div style={{ fontSize: 22, fontWeight: 900, color: p.progress === 100 ? T.green : T.text }}>
-                {p.progress}%
+              <div style={label()}>Progress</div>
+              <div style={{ ...hero(26), color: p.progress === 100 ? T.good : T.ink }}>
+                {p.progress}<span style={{ fontSize: 12, color: T.muted }}>%</span>
               </div>
             </div>
-            <div style={{ height: 8, borderRadius: 4, background: 'rgba(255,255,255,0.08)', marginTop: 8, overflow: 'hidden' }}>
-              <div style={{ width: `${p.progress}%`, height: '100%', background: p.progress === 100 ? T.green : T.cyan }} />
+            <div style={{ height: 3, background: T.paperSunk, marginTop: 10 }}>
+              <div style={{ width: `${p.progress}%`, height: '100%', background: p.progress === 100 ? T.good : T.accent }} />
             </div>
           </>
         )}
-        <div style={{ display: 'flex', gap: 14, fontSize: 12, color: T.muted, marginTop: 12, flexWrap: 'wrap' }}>
+        <div style={{ ...label({ marginTop: 12, letterSpacing: '0.1em' }), display: 'flex', gap: 14, flexWrap: 'wrap' }}>
           <span>{fmtHours(p.minutes)} total</span>
           {p.minutesThisWeek > 0 && <span>{fmtHours(p.minutesThisWeek)} this week</span>}
-          {p.target_date && <span style={{ color: T.orange }}>target {shortDate(p.target_date)}</span>}
+          {p.target_date && <span style={{ color: T.accent }}>target {shortDate(p.target_date)}</span>}
         </div>
       </section>
 
-      <section style={card()}>
-        <div style={labelCap()}>Milestones</div>
+      <section style={section()}>
+        <div style={label()}>Milestones</div>
         <div style={{ fontSize: 12, color: T.muted, marginTop: 6, lineHeight: 1.4 }}>
           The few things that mean real progress — not every small task.
         </div>
         <div style={{ marginTop: 8 }}>
           {p.milestones.map((m) => (
-            <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 0', borderTop: `1px solid ${T.border}` }}>
+            <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 0', borderTop: `1px solid ${T.rule}` }}>
               <button
                 onClick={() => toggleMilestone.mutate(m.id)}
                 aria-label={m.done_at ? 'Mark not done' : 'Mark done'}
                 style={{
                   flexShrink: 0, width: 24, height: 24, padding: 0, borderRadius: 7, cursor: 'pointer',
-                  background: m.done_at ? T.green : 'transparent',
-                  border: `2px solid ${m.done_at ? T.green : 'rgba(255,255,255,0.35)'}`,
+                  background: m.done_at ? T.good : 'transparent',
+                  border: `2px solid ${m.done_at ? T.good : T.ruleStrong}`,
                   display: 'grid', placeItems: 'center', color: T.ink, fontSize: 13, fontWeight: 900,
                 }}
               >
@@ -202,7 +219,7 @@ function Detail({ id, onBack }: { id: number; onBack: () => void }) {
               </button>
               <span style={{
                 flex: 1, minWidth: 0, fontSize: 14, wordBreak: 'break-word',
-                color: m.done_at ? T.muted : T.text,
+                color: m.done_at ? T.muted : T.ink,
                 textDecoration: m.done_at ? 'line-through' : 'none',
               }}>
                 {m.title}
@@ -222,20 +239,20 @@ function Detail({ id, onBack }: { id: number; onBack: () => void }) {
           <input style={{ ...input(), flex: 1 }} placeholder="Add a milestone…"
                  value={msTitle} onChange={(e) => setMsTitle(e.target.value)} />
           <button type="submit" disabled={!msTitle.trim()}
-                  style={{ ...button('primary'), padding: '12px 16px', opacity: msTitle.trim() ? 1 : 0.4 }}>Add</button>
+                  style={{ ...button(msTitle.trim() ? 'primary' : 'ghost'), padding: '12px 16px' }}>Add</button>
         </form>
       </section>
 
       {p.tasks.length > 0 && (
-        <section style={card()}>
-          <div style={labelCap()}>Tasks</div>
+        <section style={section()}>
+          <div style={label()}>Tasks</div>
           <div style={{ marginTop: 8 }}>
             {p.tasks.map((t) => (
-              <div key={t.id} style={{ display: 'flex', gap: 10, padding: '9px 0', borderTop: `1px solid ${T.border}`, fontSize: 14 }}>
-                <span style={{ color: t.done_at ? T.green : T.muted, flexShrink: 0 }}>{t.done_at ? '✓' : '○'}</span>
+              <div key={t.id} style={{ display: 'flex', gap: 10, padding: '9px 0', borderTop: `1px solid ${T.rule}`, fontSize: 14 }}>
+                <span style={{ color: t.done_at ? T.good : T.muted, flexShrink: 0 }}>{t.done_at ? '✓' : '○'}</span>
                 <span style={{
                   flex: 1, minWidth: 0, wordBreak: 'break-word',
-                  color: t.done_at ? T.muted : T.text,
+                  color: t.done_at ? T.muted : T.ink,
                   textDecoration: t.done_at ? 'line-through' : 'none',
                 }}>{t.title}</span>
               </div>
@@ -244,8 +261,8 @@ function Detail({ id, onBack }: { id: number; onBack: () => void }) {
         </section>
       )}
 
-      <section style={card()}>
-        <div style={labelCap()}>Time</div>
+      <section style={section()}>
+        <div style={label()}>Time</div>
         <form onSubmit={(e: FormEvent) => {
           e.preventDefault()
           const n = Number(mins)
@@ -259,13 +276,13 @@ function Detail({ id, onBack }: { id: number; onBack: () => void }) {
             <input style={{ ...input(), flex: 1 }} placeholder="What on? (optional)"
                    value={note} onChange={(e) => setNote(e.target.value)} />
             <button type="submit" disabled={!mins}
-                    style={{ ...button('primary'), padding: '12px 14px', opacity: mins ? 1 : 0.4 }}>Log</button>
+                    style={{ ...button(mins ? 'primary' : 'ghost'), padding: '12px 14px' }}>Log</button>
           </div>
           <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
             {[15, 30, 60, 120].map((q) => (
               <button key={q} type="button" onClick={() => setMins(String(q))}
                       style={{ flex: 1, appearance: 'none', minHeight: 36, borderRadius: 8,
-                               border: `1px solid ${T.hairline}`, background: 'transparent',
+                               border: `1px solid ${T.ruleStrong}`, background: 'transparent',
                                color: T.muted, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
                 {q < 60 ? `${q}m` : `${q / 60}h`}
               </button>
@@ -276,10 +293,10 @@ function Detail({ id, onBack }: { id: number; onBack: () => void }) {
         {p.timeEntries.length > 0 && (
           <div style={{ marginTop: 14 }}>
             {p.timeEntries.slice(0, 10).map((e) => (
-              <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: `1px solid ${T.border}`, fontSize: 13 }}>
+              <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: `1px solid ${T.rule}`, fontSize: 13 }}>
                 <span style={{ width: 46, flexShrink: 0, color: T.muted, fontWeight: 700 }}>{shortDate(e.day)}</span>
                 <span style={{ flex: 1, minWidth: 0, color: T.muted, wordBreak: 'break-word' }}>{e.note || '—'}</span>
-                <span style={{ fontWeight: 800, color: e.minutes < 0 ? T.red : T.text }}>{fmtHours(e.minutes)}</span>
+                <span style={{ fontWeight: 800, color: e.minutes < 0 ? T.bad : T.ink }}>{fmtHours(e.minutes)}</span>
                 {e.user_id === user?.id && (
                   <button onClick={() => delTime.mutate(e.id)} aria-label="Delete entry"
                           style={{ background: 'transparent', border: 'none', cursor: 'pointer',
@@ -291,8 +308,8 @@ function Detail({ id, onBack }: { id: number; onBack: () => void }) {
         )}
       </section>
 
-      <section style={card()}>
-        <div style={labelCap()}>Project</div>
+      <section style={section()}>
+        <div style={label()}>Project</div>
         <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
           {(['active', 'someday', 'done'] as ProjectStatus[]).map((s) => (
             <button key={s} onClick={() => update.mutate({ id: p.id, patch: { status: s } })}
@@ -340,9 +357,9 @@ function NewProject({ onDone }: { onDone: () => void }) {
           setError(err instanceof ApiError ? err.message : 'Could not create that.')
         }
       }}
-      style={card({ padding: 14 })}
+      style={section({ padding: 14 })}
     >
-      <div style={labelCap({ marginBottom: 10 })}>New project</div>
+      <div style={label({ marginBottom: 10 })}>New project</div>
       <input style={{ ...input(), marginBottom: 10 }} placeholder="Project name"
              value={name} onChange={(e) => setName(e.target.value)} autoFocus />
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
@@ -352,11 +369,11 @@ function NewProject({ onDone }: { onDone: () => void }) {
           {shared ? '✓ Shared' : 'Private'}
         </button>
       </div>
-      {error && <div style={{ color: T.red, fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{error}</div>}
+      {error && <div style={{ color: T.bad, fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 8 }}>
         <button type="button" onClick={onDone} style={{ ...button('ghost'), flex: 1 }}>Cancel</button>
         <button type="submit" disabled={!name.trim() || create.isPending}
-                style={{ ...button('primary'), flex: 1, opacity: name.trim() ? 1 : 0.4 }}>Create</button>
+                style={{ ...button(name.trim() ? 'primary' : 'ghost'), flex: 1 }}>Create</button>
       </div>
     </form>
   )
@@ -364,8 +381,8 @@ function NewProject({ onDone }: { onDone: () => void }) {
 
 const mini = (active = false): React.CSSProperties => ({
   appearance: 'none',
-  background: active ? 'rgba(33,158,188,0.18)' : 'transparent',
-  border: `1px solid ${active ? 'rgba(33,158,188,0.5)' : T.hairline}`,
-  color: T.text, borderRadius: 9, minHeight: 38, padding: '8px 13px',
+  background: active ? 'transparent' : 'transparent',
+  border: `1px solid ${active ? T.ink : T.ruleStrong}`,
+  color: T.ink, borderRadius: 9, minHeight: 38, padding: '8px 13px',
   fontSize: 13, fontWeight: 700, cursor: 'pointer', textTransform: 'capitalize',
 })
