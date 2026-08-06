@@ -148,6 +148,25 @@ async function enforceAuth(level, req, ctx, identify = false) {
     try { access = await ctx.verifyWsRequest(req); } catch { /* treat as guest */ }
     return { ok: true, userId: access?.userId ?? null };
   }
+  // 'household' — budget.cbedge.net (the life-OS app). A COMPLETELY separate
+  // identity system: its own hh_users table, its own hh_session cookie, no
+  // relationship to users / OWNER_USER_ID / subscriptions. It has to be checked
+  // BEFORE verifyWsRequest below, because a household user carries no
+  // cbe_session and would otherwise be rejected as a signed-out visitor.
+  //
+  // The reverse holds too, and is the point: a signed-in CB Edge customer — or
+  // you, as owner — gets nothing here without an hh_session. There is no path
+  // from a cbedge.net session into household data.
+  if (level === 'household') {
+    let hh = null;
+    try { hh = require('./_lib-household.cjs'); }
+    catch { return { ok: false, code: 503, reason: 'household-unavailable' }; }
+    const hhUser = await hh.userFromRequest(req);
+    if (!hhUser) return { ok: false, code: 401, reason: 'no-household-session' };
+    // userId is namespaced so a household id can never be mistaken for a CB
+    // Edge users.id by anything downstream that logs or compares it.
+    return { ok: true, hhUser, userId: `hh:${hhUser.id}` };
+  }
   let access;
   try {
     access = await ctx.verifyWsRequest(req); // { ok, userId?, reason }
@@ -8249,6 +8268,24 @@ if barstate.islast
       },
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// budget.cbedge.net — household life-OS routes (/api/hh/*).
+//
+// Kept in its own module (server-v2/household-routes.cjs) rather than inline:
+// this file is already 8k lines, and the household app is a separate product
+// with a separate auth system. Loaded DEFENSIVELY, exactly like the _lib-*
+// bundles above — if it or its DB layer is missing, /api/hh/* is simply never
+// registered and nothing else in this file changes behaviour. It cannot break
+// the trading app's boot.
+// ---------------------------------------------------------------------------
+try {
+  const { registerHouseholdRoutes } = require('./household-routes.cjs');
+  const n = registerHouseholdRoutes({ register, send, readJson });
+  if (n) console.log(`[api-router] household routes registered (${n})`);
+} catch (e) {
+  console.warn('[api-router] household routes not loaded:', e.message);
 }
 
 module.exports = { handleApiRoute, register, _routes: ROUTES };

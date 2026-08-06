@@ -156,3 +156,29 @@ services:
     ports:
       # Loopback only — Cloudflare Tunnel reaches it, nothing public.
       - "127.0.0.1:8082:8082"
+
+  # budget.cbedge.net — the household life-OS SPA (budget-vite/Dockerfile: node
+  # build stage → nginx), reverse-proxying ONLY /api to the dashboard container
+  # (same compose network → dashboard:3002). Deliberately narrower than the
+  # owners service: this app never needs /ws or /proxy, so it cannot reach the
+  # market-data stack at all.
+  #
+  # Reached only via the Cloudflare Tunnel — add to /etc/cloudflared/config.yml
+  # ABOVE the catch-all 404 rule:
+  #     - hostname: budget.cbedge.net
+  #       service: http://127.0.0.1:8083
+  # then `cloudflared tunnel route dns <tunnel> budget.cbedge.net` and
+  # `systemctl restart cloudflared`.
+  #
+  # Auth is its own system (hh_users / hh_session); see server-v2/_lib-household.cjs.
+  budget:
+    build:
+      context: ./budget-vite
+    image: budget-web:latest
+    container_name: budget-web
+    restart: unless-stopped
+    depends_on:
+      - dashboard
+    ports:
+      # Loopback only — Cloudflare Tunnel reaches it, nothing public.
+      - "127.0.0.1:8083:8083"

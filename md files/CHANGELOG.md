@@ -1,5 +1,77 @@
 # Changelog
 
+## 2026-08-06 (d) - budget.cbedge.net: household life-OS subdomain (auth + shell)
+
+New standalone SPA at **budget.cbedge.net** — a personal life OS shared with one other
+person, with budget as one tab. Phase 1 steps 1-3 of 7: its own auth system and a
+deployable phone-first shell. Today/Budget screens are labelled placeholders until
+steps 4-6.
+
+**Nothing on cbedge.net changed behaviour.** `/owner/budget` is untouched and still
+owner-gated. No trading route, socket topic, page or schema was modified.
+
+### New: `budget-vite/` — the SPA
+- Vite + React + TS + TanStack Query, phone-first (390px), CB Edge dark palette.
+- Mirrors the `owner-vite/` pattern exactly: node build stage → nginx, `docker compose
+  build budget` reproduces it, no host npm.
+- **Standalone on purpose** — no `@/app/...` alias into the Next app (unlike `app-vite`).
+  It builds and deploys without the trading component tree, `GlobalToolbar` or
+  `gexSocket`. `src/theme.ts` COPIES the `homeTheme.ts` tokens rather than importing them.
+- `nginx.conf` listens on **8083** and proxies **only `/api`** — deliberately narrower
+  than owner-vite, which also forwards `/ws` and `/proxy`. This app has no reason to
+  reach the market-data stack, so it cannot.
+- Login screen names no product and exposes no signup or password-reset route.
+
+### New: `server-v2/_lib-household.cjs` — auth, separate from CB Edge
+- Tables self-bootstrap via `CREATE TABLE IF NOT EXISTS` (same pattern as `day_posts`
+  and `cb-contract-track`): `hh_users`, `hh_sessions`, `hh_login_attempts`, `hh_tasks`,
+  `hh_notes`, `hh_settings`, `hh_google_tokens`. No migration runner.
+- **A cbedge.net session grants nothing here, and vice versa.** Different cookie name
+  (`hh_session`), and the Set-Cookie carries **no `Domain=` attribute** so the browser
+  scopes it host-only to budget.cbedge.net. Never add `Domain=.cbedge.net` there.
+- scrypt via `node:crypto` — no new dependency, no native build. The DB stores only the
+  SHA-256 of the session token, so a dump yields no live sessions.
+- 5 failures per email per 15 min locks out. Unknown-email and wrong-password return the
+  same message and burn the same CPU, so neither response nor timing reveals which of the
+  two addresses is real.
+
+### New: `server-v2/household-routes.cjs` — `/api/hh/*`
+- `login`, `logout`, `me`, `change-password`, `health`. **No signup route by design.**
+- `me` is `auth:'public'` returning 401 rather than `auth:'household'`, so a signed-out
+  visitor gets clean JSON the SPA can render a form for instead of an HTML redirect.
+
+### New: `server-v2/scripts/hh-user.js`
+- `list | add | passwd | profile | sessions-clear`. Accounts are created on the box.
+
+### `server-v2/api-router.js` — two surgical edits
+- `enforceAuth()`: new `'household'` branch, placed **before** the `verifyWsRequest` call.
+  A household user carries no `cbe_session` and would otherwise be rejected as a
+  signed-out visitor. Returns `userId: 'hh:<id>'` so a household id can never be confused
+  with a `users.id` downstream.
+- Bottom of file: loads `household-routes.cjs` inside a try/catch, exactly like the
+  `_lib-*` bundles. If it or `_lib-db.cjs` is missing, `/api/hh/*` is simply never
+  registered and boot is unaffected.
+
+### `docker-compose.yml`
+- New `budget` service → `budget-web:latest`, bound to `127.0.0.1:8083` (loopback only,
+  Cloudflare Tunnel reaches it).
+
+### Budget data — no migration needed
+The budget tables were **already multi-profile**: `/api/budget` calls
+`getOrCreateBudgetProfile('owner')` and every row is scoped by `profile_id`. So
+per-person budget = per-profile. `hh_users.budget_profile_key` defaults to `'owner'`, so
+both accounts read the existing register with **zero `ALTER TABLE`, zero backfill**, and
+`/owner/budget` keeps working unchanged. The planned ownership-column migration was
+dropped as unnecessary.
+
+### Deploy
+Needs one manual step outside the repo — add to `/etc/cloudflared/config.yml` above the
+catch-all 404: `- hostname: budget.cbedge.net` / `service: http://127.0.0.1:8083`, then
+`cloudflared tunnel route dns <tunnel> budget.cbedge.net` and restart cloudflared.
+
+**No proxy change** — `proxy-tastytrade.js` and `proxy-thetadata.js` untouched.
+
+
 ## 2026-08-06 (c) - GEX sign parity: OI-only mode on Multi Greek, abs() on two recorder paths
 
 Chased a report that 0DTE QQQ 720 read strongly POSITIVE on our board while two other

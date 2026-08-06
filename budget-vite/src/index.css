@@ -1,0 +1,31 @@
+/* Minimal reset. This app is inline-styled like the rest of the dashboard, so
+   there is no utility framework here on purpose — nothing to keep in sync. */
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #020308;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  /* Stops iOS from bumping text size when the phone rotates. */
+  -webkit-text-size-adjust: 100%;
+  /* Kills the rubber-band overscroll that makes a web app feel like a webpage. */
+  overscroll-behavior-y: none;
+}
+
+/* Inputs don't inherit the font by default. */
+input, button, select, textarea { font: inherit; color: inherit; }
+
+/* Remove the grey tap flash on iOS. */
+* { -webkit-tap-highlight-color: transparent; }
+
+::placeholder { color: rgba(255,255,255,0.35); }
+
+/* Scrollbars, dark. */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
