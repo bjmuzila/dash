@@ -3,6 +3,7 @@ import { useAuth } from '../auth'
 import { auth as authApi, calendar as calendarApi, ApiError } from '../api'
 import { useSettings, useSaveSettings, useNotes, useCreateNote, useDeleteNote,
          useToday, useDisconnectCalendar } from '../hooks'
+import CalendarPicker from '../components/CalendarPicker'
 import { T, card, button, input, labelCap } from '../theme'
 
 export default function Settings() {
@@ -85,30 +86,44 @@ function GoogleCalendarCard() {
         <div style={{ fontSize: 12, color: T.muted, opacity: 0.6, marginTop: 10 }}>
           Not set up on the server (missing Google credentials).
         </div>
-      ) : status.connected ? (
+      ) : status.ownConnection ? (
         <div style={{ marginTop: 12 }}>
           <div style={{ fontSize: 14, color: T.green, fontWeight: 700 }}>
             Connected{status.email ? ` — ${status.email}` : ''}
           </div>
+          <CalendarPicker status={status} />
           <button
             onClick={() => disconnect.mutate()}
             disabled={disconnect.isPending}
-            style={{ ...button('ghost'), marginTop: 12, color: T.red, borderColor: 'rgba(239,68,68,0.35)' }}
+            style={{ ...button('ghost'), marginTop: 16, color: T.red, borderColor: 'rgba(239,68,68,0.35)' }}
           >
             {disconnect.isPending ? 'Disconnecting…' : 'Disconnect'}
           </button>
         </div>
       ) : (
-        // A real link, not a button with onClick — the browser must follow the
-        // redirect out to Google and back. A fetch would just get CORS-blocked.
-        <a href={calendarApi.connectUrl} style={{
-          display: 'inline-block', marginTop: 14, textDecoration: 'none',
-          background: 'rgba(33,158,188,0.18)', border: `1px solid ${T.cyan}`,
-          color: T.text, borderRadius: 12, minHeight: 46, padding: '13px 18px',
-          fontSize: 15, fontWeight: 800, letterSpacing: '0.04em',
-        }}>
-          Connect Google Calendar
-        </a>
+        <div style={{ marginTop: 12 }}>
+          {/* Already fed by someone else's shared connection — say so, so this
+              doesn't read as "broken, go connect something". */}
+          {status.connected && status.source === 'household' && (
+            <div style={{ fontSize: 14, color: T.green, fontWeight: 700, marginBottom: 12 }}>
+              Showing {status.sharedBy ? `${status.sharedBy}'s` : 'the'} shared calendar.
+              <span style={{ display: 'block', fontSize: 13, color: T.muted, fontWeight: 400, marginTop: 4 }}>
+                Nothing to set up. Connect your own account below only if you also want
+                your personal events on Today.
+              </span>
+            </div>
+          )}
+          {/* A real link, not a button with onClick — the browser must follow the
+              redirect out to Google and back. A fetch would just get CORS-blocked. */}
+          <a href={calendarApi.connectUrl} style={{
+            display: 'inline-block', textDecoration: 'none',
+            background: 'rgba(33,158,188,0.18)', border: `1px solid ${T.cyan}`,
+            color: T.text, borderRadius: 12, minHeight: 46, padding: '13px 18px',
+            fontSize: 15, fontWeight: 800, letterSpacing: '0.04em',
+          }}>
+            {status.connected ? 'Connect my own calendar' : 'Connect Google Calendar'}
+          </a>
+        </div>
       )}
     </section>
   )

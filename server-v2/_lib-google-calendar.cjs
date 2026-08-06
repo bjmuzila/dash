@@ -44,7 +44,9 @@ const SCOPE = 'https://www.googleapis.com/auth/calendar.readonly';
 
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
-const EVENTS_ENDPOINT = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+const CAL_BASE = 'https://www.googleapis.com/calendar/v3';
+const CALENDAR_LIST_ENDPOINT = `${CAL_BASE}/users/me/calendarList`;
+const eventsEndpoint = (calId) => `${CAL_BASE}/calendars/${encodeURIComponent(calId)}/events`;
 const USERINFO_ENDPOINT = 'https://www.googleapis.com/oauth2/v2/userinfo';
 
 /** True when this deployment can actually talk to Google. */
@@ -179,6 +181,12 @@ async function connect(userId, code) {
        access_token=EXCLUDED.access_token, expires_at=EXCLUDED.expires_at,
        scope=EXCLUDED.scope, updated_at=now()`,
     [userId, email, encrypt(tok.refresh_token), encrypt(tok.access_token), expiresAt, tok.scope || SCOPE]);
+  // A new connection shares with the household by default — one person linking
+  // the family calendar so both can see it is the common case here. It shares
+  // only the SELECTED calendars, and selection starts at primary-only until the
+  // user picks, so this never exposes a calendar they haven't chosen.
+  await libDb.getPool().query(
+    `UPDATE hh_google_tokens SET share_with_household = TRUE WHERE user_id=$1`, [userId]);
 
   cache.delete(userId);
   return { email };
@@ -199,25 +207,68 @@ async function disconnect(userId) {
   cache.delete(userId);
 }
 
+const TOKEN_COLS = `user_id, google_email, refresh_token, access_token, expires_at,
+  scope, share_with_household, selected_calendars`;
+
 async function tokenRow(userId) {
   const { rows } = await libDb.getPool().query(
-    `SELECT user_id, google_email, refresh_token, access_token, expires_at, scope
-       FROM hh_google_tokens WHERE user_id=$1`, [userId]);
+    `SELECT ${TOKEN_COLS} FROM hh_google_tokens WHERE user_id=$1`, [userId]);
   return rows[0] || null;
 }
 
-async function status(userId) {
-  if (!configured()) return { configured: false, connected: false };
-  try {
-    const row = await tokenRow(userId);
-    return { configured: true, connected: !!row, email: row?.google_email ?? null };
-  } catch { return { configured: true, connected: false }; }
+/**
+ * Which connection should serve this user's calendar?
+ *
+ * Own connection first. Failing that, any connection someone has marked
+ * share_with_household — that is the whole point of the feature: one person
+ * links the shared family calendar and the other just sees it, without ever
+ * touching Google.
+ *
+ * Only the calendars explicitly selected on that connection are exposed, so
+ * "shared" never means "everything in my Google account".
+ */
+async function resolveSource(userId) {
+  const own = await tokenRow(userId);
+  if (own) return { row: own, source: 'own' };
+  const { rows } = await libDb.getPool().query(
+    `SELECT ${TOKEN_COLS} FROM hh_google_tokens
+      WHERE share_with_household = TRUE ORDER BY user_id LIMIT 1`);
+  return rows[0] ? { row: rows[0], source: 'household' } : null;
 }
 
-/** A valid access token, refreshing 60s before expiry. null if not connected. */
-async function accessToken(userId) {
-  const row = await tokenRow(userId);
+async function status(userId) {
+  if (!configured()) return { configured: false, connected: false, source: null };
+  try {
+    const own = await tokenRow(userId);
+    const resolved = own ? { row: own, source: 'own' } : await resolveSource(userId);
+    if (!resolved) {
+      return { configured: true, connected: false, ownConnection: false, source: null };
+    }
+    let sharedByName = null;
+    if (resolved.source === 'household') {
+      const { rows } = await libDb.getPool().query(
+        `SELECT display_name FROM hh_users WHERE id=$1`, [resolved.row.user_id]);
+      sharedByName = rows[0]?.display_name ?? null;
+    }
+    return {
+      configured: true,
+      connected: true,
+      // Distinguished so Settings can show "Connect your own" even when the
+      // household connection is already feeding your Today screen.
+      ownConnection: !!own,
+      source: resolved.source,
+      sharedBy: sharedByName,
+      email: own?.google_email ?? null,
+      shareWithHousehold: own ? !!own.share_with_household : null,
+      selectedCalendars: own ? (own.selected_calendars ?? null) : null,
+    };
+  } catch { return { configured: true, connected: false, source: null }; }
+}
+
+/** A valid access token for a specific token row, refreshing 60s before expiry. */
+async function accessTokenFor(row) {
   if (!row) return null;
+  const userId = row.user_id;
 
   const stillGood = row.access_token && row.expires_at &&
     new Date(row.expires_at).getTime() - Date.now() > 60_000;
@@ -266,9 +317,81 @@ function offsetFor(tz, dateStr) {
 }
 
 /**
- * Today's events on the user's primary calendar.
- * Returns { events } or { error } — never throws, so a Google outage degrades
- * the calendar card instead of taking down the screen it sits on.
+ * Every calendar the connected account can see — personal, shared, subscribed,
+ * holidays, birthdays. This is how a shared family calendar becomes reachable:
+ * it is a SEPARATE calendar in the list, not part of `primary`, so reading only
+ * primary would never show a single one of its events.
+ */
+async function listCalendars(userId) {
+  if (!configured()) return { error: 'not-configured', calendars: [] };
+  try {
+    const row = await tokenRow(userId);
+    if (!row) return { error: 'not-connected', calendars: [] };
+    const at = await accessTokenFor(row);
+    if (!at) return { error: 'not-connected', calendars: [] };
+
+    const r = await fetch(`${CALENDAR_LIST_ENDPOINT}?maxResults=250&minAccessRole=reader`,
+                          { headers: { Authorization: `Bearer ${at}` } });
+    if (r.status === 401 || r.status === 403) return { error: 'revoked', calendars: [] };
+    if (!r.ok) return { error: `google-${r.status}`, calendars: [] };
+
+    const j = await r.json();
+    const calendars = (j.items || []).map((c) => ({
+      id: c.id,
+      name: c.summaryOverride || c.summary || c.id,
+      description: c.description || null,
+      primary: !!c.primary,
+      color: c.backgroundColor || null,
+      accessRole: c.accessRole || null,
+      // Google's own "is this hidden in the UI" flag — a good hint for which
+      // ones the user actually cares about.
+      selectedInGoogle: c.selected !== false,
+    }));
+    // Primary first, then alphabetical — matches how Google itself lists them.
+    calendars.sort((a, b) => (b.primary ? 1 : 0) - (a.primary ? 1 : 0) || a.name.localeCompare(b.name));
+
+    const selected = row.selected_calendars ?? null;
+    return { calendars, selected, shareWithHousehold: !!row.share_with_household };
+  } catch (err) {
+    return { error: String(err?.message || err), calendars: [] };
+  }
+}
+
+/** Persist which calendars to show and whether to share them with the household. */
+async function saveSelection(userId, { calendarIds, shareWithHousehold }) {
+  const sets = ['updated_at=now()'];
+  const vals = [userId];
+  if (Array.isArray(calendarIds)) {
+    vals.push(JSON.stringify(calendarIds.map(String).slice(0, 50)));
+    sets.push(`selected_calendars=$${vals.length}`);
+  }
+  if (typeof shareWithHousehold === 'boolean') {
+    vals.push(shareWithHousehold);
+    sets.push(`share_with_household=$${vals.length}`);
+  }
+  const { rowCount } = await libDb.getPool().query(
+    `UPDATE hh_google_tokens SET ${sets.join(', ')} WHERE user_id=$1`, vals);
+  // Everyone's view can change when a shared connection's selection changes,
+  // so the whole cache goes, not just this user's slice.
+  cache.clear();
+  return rowCount > 0;
+}
+
+/** Which calendar ids a token row should be read from. */
+function calendarIdsFor(row) {
+  const sel = row.selected_calendars;
+  // NULL = never chosen. Primary is the safe default: it's the account's own
+  // calendar, never a subscribed holiday feed.
+  if (!Array.isArray(sel)) return ['primary'];
+  return sel.slice(0, 50);
+}
+
+/**
+ * Today's events, merged across every selected calendar on whichever connection
+ * serves this user (their own, or the household-shared one).
+ *
+ * Returns { events, source, ... } or { error } — never throws, so a Google
+ * outage degrades this card instead of taking down the screen it sits on.
  */
 async function eventsForDay(userId, tz, dateStr) {
   if (!configured()) return { error: 'not-configured', events: [] };
@@ -278,11 +401,17 @@ async function eventsForDay(userId, tz, dateStr) {
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
 
   try {
-    const at = await accessToken(userId);
+    const resolved = await resolveSource(userId);
+    if (!resolved) return { error: 'not-connected', events: [] };
+
+    const at = await accessTokenFor(resolved.row);
     if (!at) return { error: 'not-connected', events: [] };
 
+    const ids = calendarIdsFor(resolved.row);
+    if (!ids.length) return { error: 'none-selected', events: [], source: resolved.source };
+
     const off = offsetFor(tz, dateStr);
-    const p = new URLSearchParams({
+    const qs = new URLSearchParams({
       timeMin: `${dateStr}T00:00:00${off}`,
       timeMax: `${dateStr}T23:59:59${off}`,
       // Expands recurring events into their individual instances; without it a
@@ -293,28 +422,62 @@ async function eventsForDay(userId, tz, dateStr) {
       timeZone: tz,
     });
 
-    const r = await fetch(`${EVENTS_ENDPOINT}?${p}`, { headers: { Authorization: `Bearer ${at}` } });
-    if (r.status === 401 || r.status === 403) {
-      // Access revoked from the Google side. Say so plainly so the UI can offer
-      // Reconnect rather than showing an empty day and implying nothing's on.
-      return { error: 'revoked', events: [] };
-    }
-    if (!r.ok) return { error: `google-${r.status}`, events: [] };
+    // In parallel — with several calendars selected, sequential fetches would
+    // stack their latency and the card would visibly lag the rest of the screen.
+    const results = await Promise.all(ids.map(async (calId) => {
+      try {
+        const r = await fetch(`${eventsEndpoint(calId)}?${qs}`, { headers: { Authorization: `Bearer ${at}` } });
+        if (r.status === 401 || r.status === 403) return { fatal: 'revoked', failed: true, items: [] };
+        // A single calendar that 404s (deleted, or unshared since it was
+        // picked) must not blank out the others — but it IS recorded as a
+        // failure, see the all-failed check below.
+        if (!r.ok) return { failed: true, err: `google-${r.status}`, items: [] };
+        const j = await r.json();
+        return { items: (j.items || []).map((e) => ({ ...e, _cal: calId })) };
+      } catch (e) { return { failed: true, err: String(e?.message || e), items: [] }; }
+    }));
 
-    const j = await r.json();
-    const events = (j.items || [])
+    // Revoked is account-wide, so one calendar reporting it means the whole
+    // connection is dead — say so instead of showing a misleading empty day.
+    if (results.some((r) => r.fatal === 'revoked')) return { error: 'revoked', events: [] };
+
+    // If EVERY calendar failed, this is an outage, not an empty day. Tolerating
+    // per-calendar failures (above) is right — one deleted calendar shouldn't
+    // hide the others — but silently returning [] when nothing succeeded would
+    // render as "nothing on today", which is the one lie this card must never
+    // tell. A partial failure still shows what we did get.
+    if (results.length && results.every((r) => r.failed)) {
+      return { error: results.find((r) => r.err)?.err || 'google-unavailable', events: [] };
+    }
+    const partialFailures = results.filter((r) => r.failed).length;
+
+    const events = results
+      .flatMap((r) => r.items)
       .filter((e) => e.status !== 'cancelled')
       .map((e) => ({
-        id: e.id,
+        // Ids repeat across calendars for the same invite, so the React key has
+        // to include the calendar or one of the copies silently disappears.
+        id: `${e._cal}:${e.id}`,
+        calendarId: e._cal,
         summary: e.summary || '(no title)',
         // All-day events carry `date`; timed ones carry `dateTime`.
         allDay: !e.start?.dateTime,
         start: e.start?.dateTime || e.start?.date || null,
         end: e.end?.dateTime || e.end?.date || null,
         location: e.location || null,
-      }));
+      }))
+      // All-day first, then chronological. Comparing the raw strings works
+      // because every timed value from Google carries the same day's offset.
+      .sort((a, b) => (b.allDay ? 1 : 0) - (a.allDay ? 1 : 0) ||
+                      String(a.start).localeCompare(String(b.start)))
+      .slice(0, 40);
 
-    const value = { events };
+    const value = {
+      events, source: resolved.source, calendarCount: ids.length,
+      // >0 means some calendars are shown and some couldn't be reached, so the
+      // card can say the list may be incomplete rather than implying it's whole.
+      partialFailures,
+    };
     cache.set(ck, { at: Date.now(), value });
     // Bounded so a long-running process can't grow this forever.
     if (cache.size > 200) cache.delete(cache.keys().next().value);
@@ -327,6 +490,7 @@ async function eventsForDay(userId, tz, dateStr) {
 module.exports = {
   configured, missingConfig, REDIRECT_URI, BASE_URL,
   authUrl, verifyState, connect, disconnect, status, eventsForDay,
+  listCalendars, saveSelection, resolveSource,
   // exported for tests
   _encrypt: encrypt, _decrypt: decrypt, _signState: signState, _offsetFor: offsetFor,
 };

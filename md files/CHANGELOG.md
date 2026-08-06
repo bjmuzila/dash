@@ -1,68 +1,63 @@
 # Changelog
 
-## 2026-08-06 (g) - Analytics page: Net Greeks gains QQQ/SPY, Levels & Fails replaced by Ticker Levels
+## 2026-08-06 (g) - budget.cbedge.net: shared household calendar + calendar picker
 
-`components/pages/Analytics.tsx` only — no proxy, backend, schema or route change.
+Follow-up to (f), fixing a design flaw found in real use: a **shared family calendar
+would never have appeared at all**, and the other person had to do the whole Google
+flow to see anything.
 
-### Net Greeks: SPX / QQQ / SPY pill selector
+### The bug: `primary` is not "all your calendars"
+The events read hit `/calendars/primary/events`. `primary` is only the account's own
+default calendar — a calendar shared with you is a SEPARATE entry in the calendar list,
+so not one of its events would ever have shown, for either person. Now reads
+`users/me/calendarList` and merges events across the calendars you pick.
 
-`greeks-ts-writer.js` is $SPX-only (it reads `/proxy/gex`, a single-symbol engine),
-and `/api/snapshots/greeks` has no ticker filter — so there is no stored QQQ or SPY
-series to switch to. Rather than stand up a second recorder, the two new tickers sum
-the whole chain live from `/api/chains`, the same endpoint and the same OI+Vol formula
-the Multi Greek card on this page already uses.
+### One connection can serve the whole household
+`hh_google_tokens` gains `share_with_household` and `selected_calendars`. Added as
+`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, deliberately NOT folded into the CREATE —
+the table already exists on the deployed box and `CREATE TABLE IF NOT EXISTS` would
+skip new columns silently.
 
-- SPX is unchanged: `greeks_ts` series, `now / d15m / d30m`, last-session fallback.
-- QQQ and SPY show the four net totals with the delta columns as "-" (no stored
-  history to difference against) and the header reads "live chain".
-- `computePeakGreeks` was split: the per-strike accumulation now lives in
-  `accumulateChainGreeks`, shared by the peak card and the new `computeNetGreeks`.
-  One copy of the formula, so the two cards cannot print different GEX for the same
-  ticker.
+`resolveSource(userId)` picks the user's own connection first, else any connection
+flagged `share_with_household`. So one person links the family calendar and the other
+just sees it, having touched Google never. Defaults to sharing ON for a new connection
+— it shares only the SELECTED calendars, and selection starts at primary-only, so this
+can never expose a calendar that wasn't ticked.
 
-### Removed: Levels & Fails
+### The picker IS the privacy control
+`GET /api/hh/calendar/calendars` lists everything the account can see (personal,
+shared, subscribed, holidays) with colour and access role; `POST /api/hh/calendar/select`
+saves the ticked ids and the sharing flag. `selected_calendars` distinguishes three
+states that matter: **NULL** = never chosen → primary only; **[]** = deliberately none
+→ the card says "no calendars selected" rather than showing a misleadingly empty day;
+**[ids]** = exactly those.
 
-The whole card, plus `stateLabel` and the now-unused `computeRefLevels` / `scanToday` /
-`detectTriggers` / `LevelStatus` / `Trigger` imports from `@/lib/failLevels`. `computeAmt`,
-`InitialBalance`, `AmtResult`, `useEsCandles` and `useGrace` stay — the IB card uses them.
+### A regression the tests caught
+Per-calendar failures are tolerated so one deleted calendar can't blank the others —
+but that first pass meant a TOTAL Google outage returned `events: []` with no error,
+rendering as "nothing on today". That is the exact lie the card is built never to tell.
+Now: all calendars failed → `error`; some failed → events plus a `partialFailures`
+count and a "this may not be everything" line.
 
-### Added: Ticker Levels
+### Other fixes in this pass
+- **Event ids are calendar-qualified** (`<calendarId>:<eventId>`). The same invite on
+  two selected calendars shares a bare event id, and React would silently drop one copy.
+- Events sort all-day first, then chronologically, merged across calendars.
+- Per-calendar fetches run in parallel — sequential would stack latency per calendar.
+- Cache is cleared on any selection change, not just the editing user's slice, because
+  a shared connection's selection changes what the OTHER person sees.
+- Settings distinguishes "you have your own connection" from "you're being fed by the
+  shared one", so the second case reads as working rather than as broken.
 
-CORE (CB) / Call Wall / Put Wall / Spot per ticker — the same four numbers the owner
-Results -> Walls tab prints, off the same tables. Two read paths because neither is
-sufficient alone:
+### Verification — 181 assertions, 0 failures
+Calendar route tests grew to **73**, adding: shared-connection resolution, the picker,
+merge across calendars, holidays excluded when unticked, turning sharing off cutting
+the other person off immediately, empty-selection vs never-selected, and partial
+failure. Plus 57 household integration, 32 crypto/state/timezone, 19 date-label.
+`tsc --noEmit` clean, `vite build` clean, `node --check` on all server files.
 
-- `/proxy/walls?date=...` -> the ONLY endpoint that returns `cb`. `/proxy/scanner`
-  omits the column from its SELECT even though `scanner_snapshots` has it, so CORE
-  comes from walls or not at all. Sampled onto a 15m slot grid from 09:29 ET.
-- `/proxy/scanner?any=1&limit=200` -> each symbol's most recent row regardless of
-  date, swept every 2-5m. Fresher spot/walls, and the only one that answers
-  overnight, pre-open and at weekends.
+**No proxy change** — `proxy-tastytrade.js` and `proxy-thetadata.js` untouched.
 
-So scanner wins for spot/call/put and walls supplies CORE. When today's slot grid is
-empty (pre-open, weekend) the card falls back one session for CORE via `prevSessionISO`
-and labels the header "core - last session <date>"; skipping weekends means a holiday
-Monday resolves to the Friday before it.
-
-**Futures.** `scanner_snapshots` covers cash indices and equities only — no ES/NQ.
-
-- `ESU` = SPX levels + the ES-SPX basis from `/proxy/es-spx-basis`, the one basis
-  source not poisoned by the broker's "SPX" spot. A null basis stays null and blanks
-  the levels rather than being coerced to 0 (which would print SPX strikes ~50pt out
-  of place on an ES chart — the exact bug that module exists to prevent). The row is
-  tagged `SPX +x.x` so the derivation is visible.
-- `NQU` has no NDX->NQ basis module, so it shows live spot only, tagged
-  "no NQ basis - add NDX".
-- Both futures spots come from `/api/tt-quotes` on the front contract (`/ESU26`,
-  `/NQU26`), no basis math.
-
-Defaults are ESU, NQU, SPX, SPY, QQQ. An input adds any other scanner symbol; extras
-persist in `localStorage` under `analytics.tickerLevels.extra` and carry an x to
-remove. A symbol with no scanner row is tagged "not in scanner universe" rather than
-rendering as four silent dashes.
-
-Colours follow the owner Walls tab's intent: put wall green, CORE cyan, call wall
-orange, all from `homeTheme` (no new hex).
 
 ## 2026-08-06 (f) - budget.cbedge.net step 5: Google Calendar (read-only, per person)
 

@@ -1,4 +1,4 @@
-import { calendar as calendarApi, type CalendarEvent, type CalendarStatus } from '../api'
+import { calendar as calendarApi, type CalendarDay, type CalendarEvent, type CalendarStatus } from '../api'
 import { useCalendarEvents } from '../hooks'
 import { T, card, labelCap } from '../theme'
 
@@ -23,7 +23,7 @@ export default function CalendarCard({ status, date }: { status: CalendarStatus;
 
 function Body({ status, data, isLoading, hadError }: {
   status: CalendarStatus
-  data: { events: CalendarEvent[]; error?: string } | undefined
+  data: CalendarDay | undefined
   isLoading: boolean
   hadError: boolean
 }) {
@@ -55,6 +55,11 @@ function Body({ status, data, isLoading, hadError }: {
   if (data?.error === 'not-connected') {
     return <a href={calendarApi.connectUrl} style={connectLink}>Connect Google Calendar</a>
   }
+  // Distinct from "nothing on today": every calendar was un-ticked, so this is
+  // a settings problem the user can fix, not a quiet day.
+  if (data?.error === 'none-selected') {
+    return <Note>No calendars are selected — pick some in Settings.</Note>
+  }
   if (data?.error) return <Warn>Calendar is unavailable right now.</Warn>
 
   const events = data?.events ?? []
@@ -63,6 +68,13 @@ function Body({ status, data, isLoading, hadError }: {
   return (
     <div style={{ marginTop: 6 }}>
       {events.map((e) => <EventRow key={e.id} event={e} />)}
+      {/* Some calendars answered and some didn't. Saying so beats implying the
+          list is complete when it isn't. */}
+      {!!data?.partialFailures && (
+        <div style={{ fontSize: 12, color: T.orange, marginTop: 10, fontWeight: 600 }}>
+          One of your calendars couldn't be reached — this may not be everything.
+        </div>
+      )}
     </div>
   )
 }

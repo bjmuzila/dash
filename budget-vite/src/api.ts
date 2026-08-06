@@ -88,10 +88,44 @@ export type Note = {
 
 export type Person = { id: number; displayName: string }
 
-export type CalendarStatus = { configured: boolean; connected: boolean; email?: string | null }
+export type CalendarStatus = {
+  configured: boolean
+  /** True when SOMETHING feeds your calendar — your own link or the shared one. */
+  connected: boolean
+  /** Where the events come from. 'household' = someone else's shared connection. */
+  source?: 'own' | 'household' | null
+  /** True only when YOU have linked a Google account. */
+  ownConnection?: boolean
+  /** Display name of whoever shared it, when source is 'household'. */
+  sharedBy?: string | null
+  email?: string | null
+  shareWithHousehold?: boolean | null
+  selectedCalendars?: string[] | null
+}
+
+export type GoogleCalendar = {
+  id: string
+  name: string
+  description: string | null
+  primary: boolean
+  color: string | null
+  accessRole: string | null
+  selectedInGoogle: boolean
+}
+
+export type CalendarListResponse = {
+  calendars: GoogleCalendar[]
+  /** null = never chosen (falls back to primary). [] = deliberately none. */
+  selected: string[] | null
+  shareWithHousehold?: boolean
+  error?: string
+}
 
 export type CalendarEvent = {
+  /** Calendar-qualified ('<calendarId>:<eventId>') — the same invite can appear
+   *  on two calendars, and a bare event id would collide as a React key. */
   id: string
+  calendarId: string
   summary: string
   allDay: boolean
   /** RFC3339 with offset for timed events, 'YYYY-MM-DD' for all-day ones. */
@@ -103,8 +137,12 @@ export type CalendarEvent = {
 export type CalendarDay = {
   date: string
   events: CalendarEvent[]
-  /** 'not-configured' | 'not-connected' | 'revoked' | 'google-<status>' | other.
-   *  Always a 200 — the card renders its own state from this. */
+  source?: 'own' | 'household'
+  calendarCount?: number
+  /** >0 means some calendars couldn't be reached, so the list may be incomplete. */
+  partialFailures?: number
+  /** 'not-configured' | 'not-connected' | 'none-selected' | 'revoked' |
+   *  'google-<status>' | other. Always a 200 — the card renders its own state. */
   error?: string
 }
 
@@ -173,6 +211,9 @@ export const calendar = {
   status: () => api.get<CalendarStatus>('/api/hh/calendar/status'),
   events: (date?: string) =>
     api.get<CalendarDay>(`/api/hh/calendar/events${date ? `?date=${date}` : ''}`),
+  list: () => api.get<CalendarListResponse>('/api/hh/calendar/calendars'),
+  select: (body: { calendarIds?: string[]; shareWithHousehold?: boolean }) =>
+    api.post<CalendarListResponse>('/api/hh/calendar/select', body),
   disconnect: () => api.post<{ ok: true }>('/api/hh/calendar/disconnect'),
   /** A full page navigation, NOT a fetch — the browser has to follow the
    *  redirect to Google's consent screen. */

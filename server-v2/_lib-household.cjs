@@ -148,6 +148,17 @@ async function ensureSchema() {
         scope         TEXT,
         updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
       )`);
+    // Added after the table shipped, so these are separate ALTERs rather than
+    // part of the CREATE — an existing deployment already has the table and
+    // CREATE TABLE IF NOT EXISTS would skip new columns silently.
+    //   share_with_household — one person connects, both see the events. This
+    //     is what makes a shared family calendar work without the other person
+    //     doing the Google dance at all.
+    //   selected_calendars   — JSON array of calendar ids to actually show.
+    //     NULL means "not chosen yet" and falls back to the primary calendar;
+    //     an empty array means "deliberately none".
+    await pool.query(`ALTER TABLE hh_google_tokens ADD COLUMN IF NOT EXISTS share_with_household BOOLEAN NOT NULL DEFAULT FALSE`);
+    await pool.query(`ALTER TABLE hh_google_tokens ADD COLUMN IF NOT EXISTS selected_calendars JSONB`);
     return true;
   })().catch((e) => { ready = null; throw e; });
   return ready;

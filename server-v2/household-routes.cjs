@@ -449,6 +449,35 @@ function registerHouseholdRoutes({ register, send, readJson }) {
       },
     });
 
+    // Every calendar the connected account can see. A shared family calendar is
+    // a SEPARATE calendar in this list, not part of `primary` — which is why
+    // reading only primary would never show one of its events.
+    add('/api/hh/calendar/calendars', {
+      auth: 'household', methods: ['GET'],
+      async handler(req, res, _ctx, access) {
+        send(res, 200, await gcal.listCalendars(access.hhUser.id), nostore);
+      },
+    });
+
+    // Which calendars to show, and whether the household sees them.
+    add('/api/hh/calendar/select', {
+      auth: 'household', methods: ['POST'],
+      async handler(req, res, _ctx, access) {
+        try {
+          const body = await readJson(req, 32_000);
+          const calendarIds = Array.isArray(body?.calendarIds) ? body.calendarIds : undefined;
+          const shareWithHousehold = typeof body?.shareWithHousehold === 'boolean'
+            ? body.shareWithHousehold : undefined;
+          if (calendarIds === undefined && shareWithHousehold === undefined) {
+            send(res, 400, { error: 'Nothing to update.' }, nostore); return;
+          }
+          const okUpd = await gcal.saveSelection(access.hhUser.id, { calendarIds, shareWithHousehold });
+          if (!okUpd) { send(res, 404, { error: 'No Google connection to update.' }, nostore); return; }
+          send(res, 200, await gcal.listCalendars(access.hhUser.id), nostore);
+        } catch (err) { send(res, 500, { error: String(err?.message || err) }, nostore); }
+      },
+    });
+
     add('/api/hh/calendar/disconnect', {
       auth: 'household', methods: ['POST'],
       async handler(req, res, _ctx, access) {

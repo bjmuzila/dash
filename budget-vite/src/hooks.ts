@@ -61,12 +61,38 @@ export function useCalendarEvents(connected: boolean, date?: string) {
   })
 }
 
+/** Every calendar the connected Google account can see. Only fetched when the
+ *  user has their OWN connection — there is nothing to configure otherwise. */
+export function useCalendarList(hasOwnConnection: boolean) {
+  return useQuery({
+    queryKey: ['calendar-list'],
+    queryFn: calendarApi.list,
+    enabled: hasOwnConnection,
+    staleTime: 5 * 60_000,
+  })
+}
+
+export function useSaveCalendarSelection() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: calendarApi.select,
+    onSuccess: (data) => {
+      qc.setQueryData(['calendar-list'], data)
+      // Both the events and the other person's view can change, so everything
+      // calendar-shaped is invalidated rather than just this user's slice.
+      void qc.invalidateQueries({ queryKey: ['calendar'] })
+      void qc.invalidateQueries({ queryKey: TODAY_KEY })
+    },
+  })
+}
+
 export function useDisconnectCalendar() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: calendarApi.disconnect,
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['calendar'] })
+      void qc.invalidateQueries({ queryKey: ['calendar-list'] })
       void qc.invalidateQueries({ queryKey: TODAY_KEY })
     },
   })
