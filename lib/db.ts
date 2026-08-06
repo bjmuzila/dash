@@ -955,6 +955,51 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     -- paid user. NULL = never sent. Guarantees exactly one welcome per customer.
     ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS welcome_email_sent_at TIMESTAMPTZ;
 
+    -- Churn log. One row per subscription that has ever signalled it is leaving,
+    -- written by the Stripe webhook (app/api/stripe/webhook/route.ts).
+    --
+    -- WHY THIS EXISTS: cancellation reasons used to live ONLY in Stripe. The
+    -- owner Sales page read cancellation_details live off the API on every
+    -- load, so the whole churn history was one API change / account change /
+    -- Stripe retention window away from vanishing, and none of it was
+    -- queryable next to our own users table. Stripe hands us the reason for
+    -- free on customer.subscription.updated — this keeps a copy.
+    --
+    -- reason   = Stripe's cancellation_details.reason: why the sub ended at all
+    --            ('cancellation_requested' | 'payment_failed' | 'payment_disputed').
+    --            'payment_failed' is involuntary churn — a dead card, not a
+    --            customer who chose to leave. The two need different follow-up.
+    -- feedback = what the customer picked in the portal survey (too_expensive,
+    --            missing_features, switched_service, unused, customer_service,
+    --            too_complex, low_quality, other). NULL is normal and expected:
+    --            Stripe shows that survey AFTER the cancellation is committed,
+    --            so it is always skippable.
+    -- comment  = the optional free text, only offered behind "Other reason".
+    --
+    -- reactivated_at: a customer who cancels at period end can un-cancel before
+    -- it lands. The row stays (the intent to leave is real signal) but is
+    -- stamped, so churn counts can exclude it instead of over-reporting.
+    CREATE TABLE IF NOT EXISTS subscription_cancellations (
+      stripe_subscription_id TEXT PRIMARY KEY,
+      clerk_user_id          TEXT,
+      stripe_customer_id     TEXT,
+      customer_email         TEXT,
+      status                 TEXT,
+      cancel_at_period_end   BOOLEAN NOT NULL DEFAULT FALSE,
+      reason                 TEXT,
+      feedback               TEXT,
+      comment                TEXT,
+      price_id               TEXT,
+      /* Epoch seconds, matching Stripe's own fields rather than converting. */
+      canceled_at            BIGINT,
+      ended_at               BIGINT,
+      reactivated_at         TIMESTAMPTZ,
+      first_seen_at          TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at             TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_sub_cancel_user ON subscription_cancellations(clerk_user_id);
+    CREATE INDEX IF NOT EXISTS idx_sub_cancel_seen ON subscription_cancellations(first_seen_at DESC);
+
     -- Traders Dashboard per-user preferences. One row per Clerk user. schedule and
     -- tasks are JSON arrays the page owns; zip drives the weather card.
     CREATE TABLE IF NOT EXISTS td_user_prefs (
@@ -2254,6 +2299,114 @@ export async function upsertSubscription(r: {
       r.current_period_end ?? null,
       r.cancel_at_period_end ? 1 : 0,
     ]
+  );
+}
+
+export interface SubscriptionCancellationRecord {
+  stripe_subscription_id: string;
+  clerk_user_id: string | null;
+  stripe_customer_id: string | null;
+  customer_email: string | null;
+  status: string | null;
+  cancel_at_period_end: boolean | null;
+  reason: string | null;
+  feedback: string | null;
+  comment: string | null;
+  price_id: string | null;
+  canceled_at: number | null;
+  ended_at: number | null;
+  reactivated_at: string | null;
+  first_seen_at: string | null;
+  updated_at: string | null;
+}
+
+/**
+ * Record (or refine) a churn row. Called by the Stripe webhook for any
+ * subscription showing a cancellation signal.
+ *
+ * THE COALESCE MATTERS. A single cancellation arrives as SEVERAL
+ * `customer.subscription.updated` events, and they do not all carry the same
+ * data:
+ *
+ *   1. the moment "cancel" is clicked → `reason: 'cancellation_requested'`,
+ *      `feedback: null` (the survey has not been answered yet);
+ *   2. seconds later, when the customer answers the survey → `feedback` and
+ *      possibly `comment` populated;
+ *   3. at period end, the `deleted` event → often `feedback: null` again.
+ *
+ * A plain overwrite would let event 3 erase the answer captured in event 2 —
+ * the exact data this table exists to keep. So reason/feedback/comment only
+ * ever go from NULL to a value, never back. Everything else (status, dates)
+ * is genuinely current-state and does overwrite.
+ *
+ * first_seen_at is likewise preserved: it is when they first signalled intent
+ * to leave, which is the number worth having, not when Stripe last pinged us.
+ */
+export async function recordSubscriptionCancellation(r: {
+  stripe_subscription_id: string;
+  clerk_user_id?: string | null;
+  stripe_customer_id?: string | null;
+  customer_email?: string | null;
+  status?: string | null;
+  cancel_at_period_end?: boolean | null;
+  reason?: string | null;
+  feedback?: string | null;
+  comment?: string | null;
+  price_id?: string | null;
+  canceled_at?: number | null;
+  ended_at?: number | null;
+  /** True when the sub is live again and no longer set to cancel. */
+  reactivated?: boolean;
+}): Promise<void> {
+  if (!r.stripe_subscription_id) return;
+  await pgQuery(
+    `INSERT INTO subscription_cancellations
+       (stripe_subscription_id, clerk_user_id, stripe_customer_id, customer_email,
+        status, cancel_at_period_end, reason, feedback, comment, price_id,
+        canceled_at, ended_at, reactivated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     ON CONFLICT (stripe_subscription_id) DO UPDATE SET
+       clerk_user_id        = COALESCE(EXCLUDED.clerk_user_id,      subscription_cancellations.clerk_user_id),
+       stripe_customer_id   = COALESCE(EXCLUDED.stripe_customer_id, subscription_cancellations.stripe_customer_id),
+       customer_email       = COALESCE(EXCLUDED.customer_email,     subscription_cancellations.customer_email),
+       status               = COALESCE(EXCLUDED.status,             subscription_cancellations.status),
+       cancel_at_period_end = EXCLUDED.cancel_at_period_end,
+       -- Never un-learn a reason. See the doc comment above.
+       reason               = COALESCE(EXCLUDED.reason,             subscription_cancellations.reason),
+       feedback             = COALESCE(EXCLUDED.feedback,           subscription_cancellations.feedback),
+       comment              = COALESCE(EXCLUDED.comment,            subscription_cancellations.comment),
+       price_id             = COALESCE(EXCLUDED.price_id,           subscription_cancellations.price_id),
+       canceled_at          = COALESCE(EXCLUDED.canceled_at,        subscription_cancellations.canceled_at),
+       ended_at             = COALESCE(EXCLUDED.ended_at,           subscription_cancellations.ended_at),
+       reactivated_at       = EXCLUDED.reactivated_at,
+       updated_at           = CURRENT_TIMESTAMP`,
+    [
+      r.stripe_subscription_id,
+      r.clerk_user_id ?? null,
+      r.stripe_customer_id ?? null,
+      r.customer_email ?? null,
+      r.status ?? null,
+      Boolean(r.cancel_at_period_end),
+      r.reason ?? null,
+      r.feedback ?? null,
+      r.comment ?? null,
+      r.price_id ?? null,
+      r.canceled_at ?? null,
+      r.ended_at ?? null,
+      r.reactivated ? new Date().toISOString() : null,
+    ]
+  );
+}
+
+/** Churn log, newest intent-to-leave first. */
+export async function getSubscriptionCancellations(
+  limit = 500
+): Promise<SubscriptionCancellationRecord[]> {
+  return queryAll<SubscriptionCancellationRecord>(
+    `SELECT * FROM subscription_cancellations
+      ORDER BY COALESCE(ended_at, canceled_at, 0) DESC, first_seen_at DESC
+      LIMIT ?`,
+    [limit]
   );
 }
 

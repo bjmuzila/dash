@@ -6330,7 +6330,21 @@ if (libDb) {
       const su = j.result.feeds?.Summary ?? {};
       const g = j.result.feeds?.Greeks ?? {};
       const ex = j.result.exposures ?? {};
-      const mark = num(q.mark) ?? num(q.mid);
+      // Price sanity. The upstream quote row occasionally comes back one-sided or
+      // stale, which yields a "mark" far outside the contract's own NBBO — that is
+      // a bad print, not a move, and every one of them drew a wick on the probe
+      // sparkline. With a two-sided book, trust the mid and only accept a mark
+      // that sits inside it; with no book, record nothing rather than a spike.
+      const bid = num(q.bid), ask = num(q.ask);
+      const rawMark = num(q.mark) ?? num(q.mid);
+      let mark = rawMark;
+      if (bid != null && ask != null && ask >= bid) {
+        const mid = (bid + ask) / 2;
+        const lo = bid - (ask - bid), hi = ask + (ask - bid); // one spread of slack
+        mark = rawMark != null && rawMark >= lo && rawMark <= hi ? rawMark : mid;
+      } else if (rawMark == null) {
+        mark = null;
+      }
       const volume = num(tr.volume) ?? num(ex.volume);
       const netPrem = mark != null && volume != null ? mark * volume * 100 : null;
       const watched = sideExposure(j);
@@ -6345,7 +6359,7 @@ if (libDb) {
         netGex = callGex + putGex;
       }
       return {
-        watch_id: row.id, ts: Date.now(), spot: num(ex.spot), bid: num(q.bid), ask: num(q.ask), mark,
+        watch_id: row.id, ts: Date.now(), spot: num(ex.spot), bid, ask, mark,
         last: num(tr.last), iv: num(g.bsIv) ?? num(g.iv), delta: num(g.bsDelta), gamma: num(g.bsGamma),
         theta: num(g.bsTheta), vega: num(g.bsVega), open_interest: num(su.openInterest) ?? num(ex.oi),
         volume, net_prem: netPrem, prev_close: num(su.prevClose), net_gex: netGex,

@@ -2,10 +2,16 @@
 
 // HomeGaugeRail — segmented-LED gauge row for the /home right column. Replaces
 // SignalsFeed. Six 0DTE SPX metrics as center-origin (signed) / left-origin
-// (pct) tick meters. GEX, DEX and the 15-min GEX change are wired live off the
-// shared /ws/gex feed (same seed + permanent-socket pattern as
-// LiveGreeksGauges — always on, no toggle, no idle timeout). The three
+// (pct) tick meters. GEX, DEX, the Net GEX rate and the 15-min GEX change are
+// wired live off the shared /ws/gex feed (same seed + permanent-socket pattern
+// as LiveGreeksGauges — always on, no toggle, no idle timeout). The two
 // non-greek metrics come in as props from HomeClient.
+//
+// "Net GEX Rate / min" replaced the old CPG (call/put gamma) ratio tile: the
+// ratio described the shape of the book, but not how fast it was changing.
+// The rate is $B of gamma-per-1%-move added (+) or pulled (−) per minute, and
+// it is derived here rather than passed in — the rail already keeps the GEX
+// history the calculation needs.
 //
 // Each tile also carries a 15-minute change line under its value. That line is
 // driven by a per-tile ring buffer of one-minute samples (see useDelta15m) —
@@ -46,7 +52,7 @@ const LABELS = {
   gamma: "Gamma (Net GEX)",
   delta: "Delta (DEX)",
   gammaPct: "Gamma % 0DTE (Vol)",
-  cpg: "CPG Ratio",
+  gexRate: "Net GEX Rate / min",
   gexChg: "0DTE GEX Δ 15m",
   ib: "IB Direction",
 } as const;
@@ -289,26 +295,27 @@ function Cell({ g }: { g: GaugeDef }) {
 const fmtB = (v: number) => `${v >= 0 ? "+" : "−"}$${Math.abs(v).toFixed(2)}B`;
 const fmtDex = (v: number) => `${v >= 0 ? "+" : "−"}$${Math.abs(v).toFixed(2)}B`;
 const fmtPct = (v: number) => `${v.toFixed(0)}%`;
-const fmtRatio = (v: number) => `${v.toFixed(2)}x`;
 const fmtIb = (v: number) => `${v >= 50 ? "▲ " : "▼ "}${v.toFixed(0)}%`;
+// Net GEX rate — $B of gamma-per-1% per minute. Two decimals would read as
+// noise at this magnitude, so sub-0.01B/m collapses to a flat zero rather than
+// flickering between ±0.00.
+const fmtRate = (v: number) =>
+  Math.abs(v) < 0.005 ? "0.00B/m" : `${v >= 0 ? "+" : "−"}$${Math.abs(v).toFixed(2)}B/m`;
 
 // Unsigned magnitudes for the change line — the ▲/▼ carries the sign.
 const fmtAbsB = (v: number) => `$${v.toFixed(2)}B`;
 const fmtAbsPct = (v: number) => `${v.toFixed(0)}%`;
-const fmtAbsRatio = (v: number) => `${v.toFixed(2)}x`;
+const fmtAbsRate = (v: number) => `$${v.toFixed(2)}B/m`;
 
 export interface HomeGaugeRailProps {
   /** Vol-only 0DTE gamma as a share of total gamma, 0–100. */
   gammaPctVol?: number | null;
-  /** Call/put gamma ratio (1.0 = balanced). */
-  cpg?: number | null;
   /** Initial Balance direction, 0–100 (>50 = up-day lean). */
   ibDirection?: number | null;
 }
 
 export default function HomeGaugeRail({
   gammaPctVol = null,
-  cpg = null,
   ibDirection = null,
 }: HomeGaugeRailProps) {
   const [latest, setLatest] = useState<Totals | null>(null);
@@ -386,6 +393,34 @@ export default function HomeGaugeRail({
     return gex - ref.gex;
   })();
 
+  // Net GEX RATE — how fast dealer gamma is being added or pulled, in $B of
+  // gamma-per-1%-move per MINUTE. Replaces the old CPG ratio tile.
+  //
+  // Δ is taken against the newest sample at least MIN_RATE_SPAN_MS old and no
+  // older than MAX_RATE_SPAN_MS, then normalised to a per-minute figure by the
+  // ACTUAL elapsed time. Normalising (rather than assuming the reference sample
+  // sits exactly 60s back) is what keeps the number honest: `history` is bucketed
+  // at 15s and the feed's cadence drifts, so a raw last-minus-reference would
+  // silently scale with however stale the reference happened to be. A too-short
+  // span is rejected outright — dividing a small Δ by a few seconds manufactures
+  // an enormous rate out of ordinary feed jitter.
+  const gexRate = (() => {
+    if (gex == null || history.length < 2) return null;
+    const now = latest?.ts ?? history[history.length - 1].ts;
+    const MIN_RATE_SPAN_MS = 30_000;
+    const MAX_RATE_SPAN_MS = 180_000;
+    const target = now - MINUTE_MS;
+    // Newest sample at or before the 1-min mark; fall back to the newest sample
+    // that still clears the minimum span when the ring hasn't reached back yet.
+    const eligible = history.filter((p) => now - p.ts >= MIN_RATE_SPAN_MS && now - p.ts <= MAX_RATE_SPAN_MS);
+    if (!eligible.length) return null;
+    const atOrBefore = eligible.filter((p) => p.ts <= target);
+    const ref = atOrBefore.length ? atOrBefore[atOrBefore.length - 1] : eligible[0];
+    const spanMs = now - ref.ts;
+    if (!(spanMs >= MIN_RATE_SPAN_MS)) return null;
+    return (gex - ref.gex) / (spanMs / MINUTE_MS);
+  })();
+
   // Self-scaling for the signed greek meters (today's max |value|).
   const scaleOf = (sel: (p: Totals) => number, cur: number | null) => {
     const m = Math.max(0, ...history.map((p) => Math.abs(sel(p))), Math.abs(cur ?? 0));
@@ -398,6 +433,20 @@ export default function HomeGaugeRail({
     ...history.map((p, i) => (i > 0 ? Math.abs(p.gex - history[i - 1].gex) : 0)),
     Math.abs(gexChg ?? 0),
   );
+  // Rate meter scale: today's fastest observed per-minute move, floored so a
+  // quiet tape doesn't make normal noise swing the needle end to end. Samples
+  // are 15s-bucketed, so each consecutive pair is scaled up to per-minute before
+  // being considered.
+  const rateScale = (() => {
+    let peak = 0;
+    for (let i = 1; i < history.length; i++) {
+      const spanMs = history[i].ts - history[i - 1].ts;
+      if (spanMs < 5_000) continue;
+      const perMin = Math.abs(history[i].gex - history[i - 1].gex) / (spanMs / MINUTE_MS);
+      if (Number.isFinite(perMin)) peak = Math.max(peak, perMin);
+    }
+    return Math.max(0.1, peak, Math.abs(gexRate ?? 0));
+  })();
 
   // One ring buffer per tile, keyed by label. Feeds the change line only — the
   // meters keep reading `latest`/props exactly as before.
@@ -405,7 +454,7 @@ export default function HomeGaugeRail({
     [LABELS.gamma]: gex,
     [LABELS.delta]: dex,
     [LABELS.gammaPct]: gammaPctVol,
-    [LABELS.cpg]: cpg,
+    [LABELS.gexRate]: gexRate,
     [LABELS.gexChg]: gexChg,
     [LABELS.ib]: ibDirection,
   });
@@ -417,7 +466,7 @@ export default function HomeGaugeRail({
     { label: LABELS.gamma, value: gex, t: signedT(gex, gexScale), midT: 0.5, kind: "signed", color: gex == null ? CYAN : gex >= 0 ? POS : NEG, fmt: fmtB, scale: gexScale, fmtAbs: fmtAbsB, delta15m: delta15m[LABELS.gamma] },
     { label: LABELS.delta, value: dex, t: signedT(dex, dexScale), midT: 0.5, kind: "signed", color: dex == null ? CYAN : dex >= 0 ? POS : NEG, fmt: fmtDex, scale: dexScale, fmtAbs: fmtAbsB, delta15m: delta15m[LABELS.delta] },
     { label: LABELS.gammaPct, value: gammaPctVol, t: gammaPctVol == null ? null : clamp(gammaPctVol / 100, 0, 1), midT: 0, kind: "pct", color: gammaPctVol == null ? CYAN : gammaPctVol >= 50 ? POS : NEG, fmt: fmtPct, scale: 100, fmtAbs: fmtAbsPct, delta15m: delta15m[LABELS.gammaPct] },
-    { label: LABELS.cpg, value: cpg, t: cpg == null ? null : clamp(cpg / 2, 0, 1), midT: 0.5, kind: "signed", color: cpg == null ? CYAN : cpg >= 1 ? POS : NEG, fmt: fmtRatio, scale: 2, fmtAbs: fmtAbsRatio, delta15m: delta15m[LABELS.cpg] },
+    { label: LABELS.gexRate, value: gexRate, t: signedT(gexRate, rateScale), midT: 0.5, kind: "signed", color: gexRate == null ? CYAN : gexRate >= 0 ? POS : NEG, fmt: fmtRate, scale: rateScale, fmtAbs: fmtAbsRate, delta15m: delta15m[LABELS.gexRate] },
     { label: LABELS.gexChg, value: gexChg, t: signedT(gexChg, chgScale), midT: 0.5, kind: "signed", color: gexChg == null ? CYAN : gexChg >= 0 ? POS : NEG, fmt: fmtB, scale: chgScale, fmtAbs: fmtAbsB, delta15m: delta15m[LABELS.gexChg] },
     { label: LABELS.ib, value: ibDirection, t: ibDirection == null ? null : clamp(ibDirection / 100, 0, 1), midT: 0.5, kind: "signed", color: ibDirection == null ? CYAN : ibDirection >= 50 ? POS : NEG, fmt: fmtIb, scale: 100, fmtAbs: fmtAbsPct, delta15m: delta15m[LABELS.ib] },
   ];

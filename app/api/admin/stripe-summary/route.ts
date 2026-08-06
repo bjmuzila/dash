@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getServerUserId } from "@/lib/supabase/server";
+import { getSubscriptionCancellations } from "@/lib/db";
 // Type-only: erased at build time, so the runtime stripe import below stays lazy.
 import type { Stripe as StripeNS } from "stripe";
 
@@ -130,19 +131,47 @@ function cancellationOf(sub: StripeNS.Subscription): CancelDetails {
   };
 }
 
-/** Lifecycle fields shared by both the live table and the cancellations card. */
-function lifecycleOf(sub: StripeNS.Subscription) {
+/**
+ * Lifecycle fields shared by both the live table and the cancellations card.
+ *
+ * `stored` is our own churn row for this subscription (subscription_cancellations,
+ * written by the Stripe webhook). It is a FALLBACK, not the primary source:
+ * Stripe's live object is authoritative while it exists. But the stored copy
+ * outlives it, and it also catches the case where Stripe's survey answer landed
+ * on an `updated` event we recorded and has since been dropped from the object
+ * we get back. Field-by-field COALESCE rather than all-or-nothing, so a live
+ * `reason` and a stored `feedback` can appear on the same row.
+ */
+function lifecycleOf(sub: StripeNS.Subscription, stored?: StoredCancellation) {
   const c = cancellationOf(sub);
+  const reason = c.reason ?? stored?.reason ?? null;
+  const feedback = c.feedback ?? stored?.feedback ?? null;
+  const comment = c.comment ?? stored?.comment ?? null;
   return {
     cancel_at_period_end: Boolean(sub.cancel_at_period_end),
     cancel_at: sub.cancel_at ?? null,
     canceled_at: sub.canceled_at ?? null,
     ended_at: sub.ended_at ?? null,
-    cancel_reason: c.reason,
-    cancel_feedback: c.feedback,
-    cancel_comment: c.comment,
+    cancel_reason: reason,
+    cancel_feedback: feedback,
+    cancel_comment: comment,
+    // Where the label the UI shows actually came from, so a blank reason can be
+    // read as "they skipped Stripe's survey" rather than "our capture is broken".
+    cancel_reason_source:
+      c.reason || c.feedback || c.comment ? "stripe"
+      : reason || feedback || comment ? "stored"
+      : null,
+    /** First time this subscription signalled it was leaving — ours, not Stripe's. */
+    churn_first_seen_at: stored?.first_seen_at ?? null,
   };
 }
+
+type StoredCancellation = {
+  reason: string | null;
+  feedback: string | null;
+  comment: string | null;
+  first_seen_at: string | null;
+};
 
 export async function GET() {
   const userId = await getServerUserId();
@@ -174,6 +203,24 @@ export async function GET() {
 
     const liveSubs = realSubs.filter((s) => LIVE_STATUSES.has(s.status));
     const deadSubs = realSubs.filter((s) => DEAD_STATUSES.has(s.status));
+
+    // Our own churn log — the copy of `cancellation_details` the Stripe webhook
+    // keeps (see lib/db.ts subscription_cancellations). Used only to fill gaps
+    // in what the live API returns; a failure here just means no fallback, so
+    // it must never take the whole Sales page down.
+    const storedCancellations = new Map<string, StoredCancellation>();
+    try {
+      for (const row of await getSubscriptionCancellations(1000)) {
+        storedCancellations.set(row.stripe_subscription_id, {
+          reason: row.reason ?? null,
+          feedback: row.feedback ?? null,
+          comment: row.comment ?? null,
+          first_seen_at: row.first_seen_at ?? null,
+        });
+      }
+    } catch (e) {
+      console.warn("[stripe-summary] stored cancellations unavailable:", e);
+    }
 
     // ── MRR ────────────────────────────────────────────────────────────────
     //
@@ -282,7 +329,7 @@ export async function GET() {
         created: sub.created,
         joined: customer.created, // when the customer record was created
         total_spent: totalSpent,
-        ...lifecycleOf(sub),
+        ...lifecycleOf(sub, storedCancellations.get(sub.id)),
       };
     }
 

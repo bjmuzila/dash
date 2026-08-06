@@ -27,6 +27,7 @@ import FitScale from "@/components/shared/FitScale";
 import StrikeDetailPopup, { type PopupStyle } from "@/components/dashboard/StrikeDetailPopup";
 import StrikeHoverCard from "@/components/dashboard/StrikeHoverCard";
 import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
+import { useStrikeGexRate } from "@/hooks/useStrikeGexRate";
 import { useDualTickerGex, type GexBasis, type OffsetGexMap } from "@/hooks/useDualTickerGex";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
@@ -191,8 +192,11 @@ function fmtDeltaChip(d: number): string {
   return `${sign}$${m.toLocaleString("en-US")}M`;
 }
 
-function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) {
-  const text = fmtDeltaChip(d);
+function DeltaStamp({ d, pct, rank, rate = false }: { d: number; pct: number; rank: number; rate?: boolean }) {
+  // In rate mode `d`/`pct` are already per-minute, so the chip carries a "/m"
+  // suffix and the tooltip says so — otherwise a rate reads as a cumulative move
+  // and a fast-but-small wall looks like a slow-but-large one.
+  const text = fmtDeltaChip(d) + (rate ? "/m" : "");
   const pos = d > 0;
   // Uniform plate on every chip — HOME_THEME.panel. Opaque and darker than any
   // cell metricBg() can produce, so the chip reads identically on a rank-1 wall
@@ -200,7 +204,11 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
   // the number's colour alone; nothing here encodes rank.
   return (
     <span
-      title={`Δ ${text} over the window · #${rank} mover (${Math.abs(Math.round(pct))}%)`}
+      title={
+        rate
+          ? `${d > 0 ? "Building" : "Decaying"} ${text} · #${rank} fastest mover (${Math.abs(pct).toFixed(1)}%/min)`
+          : `Δ ${text} over the window · #${rank} mover (${Math.abs(Math.round(pct))}%)`
+      }
       style={{
         flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
         height: 15, boxSizing: "border-box",
@@ -696,7 +704,11 @@ export function HomeClient({
   // the chain/table render branches stay so nothing needs a refactor.
   const [heatmapView] = useState<"heatmap" | "table" | "chain">("heatmap");
   // Δ stamps on the heatmap's NET GEX column. 0 = off (today's view).
-  const [deltaWindow, setDeltaWindow] = useState<0 | 5 | 15 | 30>(0);
+  // 1 = per-strike RATE (net GEX per minute, computed client-side from the live
+  // rows). 5/15/30 = cumulative change vs a stored baseline. They are different
+  // questions — "how fast is this wall moving" vs "how far has it moved" — so
+  // the 1m case is sourced separately below.
+  const [deltaWindow, setDeltaWindow] = useState<0 | 1 | 5 | 15 | 30>(0);
   // GEX chart card view: which tab in the strip ABOVE the card is showing. Always
   // one of BASE_CARD_VIEWS or an added CARD_VIEW_LIBRARY id.
   const [gexView, setGexView] = useState<string>("gex");
@@ -1120,22 +1132,20 @@ export function HomeClient({
   }, [gexChainRows, wsChainRows]);
 
   // Home gauge rail metrics (fed to <HomeGaugeRail/> that replaced SignalsFeed).
-  //  · cpg          = total call $-gamma / total put $-gamma (OI+Vol basis); 1.0 balanced.
   //  · gammaPctVol  = call share of VOL-ONLY gamma, 0–100; >50 = call-side gamma dominant.
-  // GEX / DEX / 0DTE GEX Δ15m are wired live inside the component off /ws/gex.
+  // GEX / DEX / Net GEX rate / 0DTE GEX Δ15m are wired live inside the component
+  // off /ws/gex. (The CPG call/put gamma ratio that used to be computed here was
+  // replaced by the Net GEX rate tile, which the rail derives from its own GEX
+  // history — so no OI+Vol dollar-gamma sums are needed on this side any more.)
   const gaugeMetrics = useMemo(() => {
-    let callDollarGamma = 0, putDollarGamma = 0; // OI+Vol basis
-    let callVolGamma = 0, putVolGamma = 0;        // vol-only basis
+    let callVolGamma = 0, putVolGamma = 0; // vol-only basis
     for (const r of chainRows) {
-      callDollarGamma += (r.callGamma ?? 0) * ((r.callOI ?? 0) + (r.callVolume ?? 0));
-      putDollarGamma  += (r.putGamma ?? 0) * ((r.putOI ?? 0) + (r.putVolume ?? 0));
       callVolGamma += (r.callGamma ?? 0) * (r.callVolume ?? 0);
       putVolGamma  += (r.putGamma ?? 0) * (r.putVolume ?? 0);
     }
-    const cpg = putDollarGamma > 0 ? callDollarGamma / putDollarGamma : null;
     const totVol = callVolGamma + putVolGamma;
     const gammaPctVol = totVol > 0 ? (callVolGamma / totVol) * 100 : null;
-    return { cpg, gammaPctVol };
+    return { gammaPctVol };
   }, [chainRows]);
 
   // Live IB direction % (pHigh — HIGH-breaks-first probability, ES≈SPX). Enabled
@@ -1345,13 +1355,19 @@ export function HomeClient({
   // basis "oivol": netGexVal is the OI+Vol composite (see toHeatmapRows), so the
   // baseline has to be the same composite. Differencing it against a plain
   // net_gex baseline measured the VOLUME COMPONENT, not a change over time.
+  // deltaWindow === 1 is served by the client-side rate hook, not by this poll —
+  // so the 1m mode alone must not keep the history endpoint warm.
   const strikeBaselines = useStrikeGexHistory(
-    (selectedStrike || deltaWindow !== 0) ? selectedExpiry : "",
+    (selectedStrike || deltaWindow > 1) ? selectedExpiry : "",
     [5, 15, 30],
     30_000,
     false,
     "oivol"
   );
+
+  // Per-strike net GEX rate ($ per 1% move, per minute) for the 1m stamp mode.
+  // Only samples while that mode is active.
+  const strikeRates = useStrikeGexRate(heatmapRows, deltaWindow === 1);
 
   // Δ per strike, RANKED strikes only (row.rank is already top-5-each-side, see
   // toHeatmapRows). Stores percent + raw dollar delta, plus the max |pct| that
@@ -1363,15 +1379,29 @@ export function HomeClient({
     const key = String(deltaWindow);
     for (const r of heatmapRows) {
       if (r.rank == null) continue;
-      const live = Number(r.netGexVal ?? NaN);
-      const past = Number(strikeBaselines?.[r.strikeNum]?.[key] ?? NaN);
-      if (!Number.isFinite(live) || !Number.isFinite(past)) continue;
-      const d = live - past;
-      // Baseline at ~0 makes the percent meaningless AND would set the scale for
-      // every other stamp — skip it rather than let it wash the others out.
-      if (d === 0 || Math.abs(past) < 1e-6) continue;
-      const pct = (d / Math.abs(past)) * 100;
-      if (!Number.isFinite(pct) || Math.abs(pct) < 1) continue;   // sub-1% is noise
+      let d: number;
+      let pct: number;
+      if (deltaWindow === 1) {
+        // RATE mode: already per-minute, already percent-per-minute.
+        const rate = strikeRates[r.strikeNum];
+        if (!rate) continue;
+        d = rate.d;
+        pct = rate.pct;
+        // A rate is a smaller number than a 5/15/30m cumulative move, so the
+        // sub-1% cut used below would silently blank most of the board here.
+        if (Math.abs(pct) < 0.25) continue;                       // sub-0.25%/min is noise
+      } else {
+        const live = Number(r.netGexVal ?? NaN);
+        const past = Number(strikeBaselines?.[r.strikeNum]?.[key] ?? NaN);
+        if (!Number.isFinite(live) || !Number.isFinite(past)) continue;
+        d = live - past;
+        // Baseline at ~0 makes the percent meaningless AND would set the scale for
+        // every other stamp — skip it rather than let it wash the others out.
+        if (d === 0 || Math.abs(past) < 1e-6) continue;
+        pct = (d / Math.abs(past)) * 100;
+        if (!Number.isFinite(pct) || Math.abs(pct) < 1) continue;   // sub-1% is noise
+      }
+      if (!Number.isFinite(d) || !Number.isFinite(pct)) continue;
       by[r.strikeNum] = { d, pct, rank: 5 };
       if (Math.abs(pct) > maxPct) maxPct = Math.abs(pct);
     }
@@ -1384,7 +1414,7 @@ export function HomeClient({
         .forEach(([k], idx) => { by[Number(k)].rank = idx + 1; });
     }
     return { by, maxPct };
-  }, [deltaWindow, heatmapRows, strikeBaselines]);
+  }, [deltaWindow, heatmapRows, strikeBaselines, strikeRates]);
 
   // Chart ghost-bar baselines — poll the full chain whenever any prior-state
   // overlay (5/15/30 min) is enabled.
@@ -1964,7 +1994,7 @@ export function HomeClient({
                 Replaced the NET GEX / CALL WALL / PUT WALL / FLIP / CB / MAX PAIN
                 readout, which still lives on the left Levels strip above the chart. */}
             <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16 }}>
-              <HomeGaugeRail gammaPctVol={gaugeMetrics.gammaPctVol} cpg={gaugeMetrics.cpg} ibDirection={ibDirection} />
+              <HomeGaugeRail gammaPctVol={gaugeMetrics.gammaPctVol} ibDirection={ibDirection} />
             </div>
 
             <div ref={heatmapContainerRef} style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
@@ -2062,11 +2092,17 @@ export function HomeClient({
                         position: "relative", zIndex: 3, isolation: "isolate",
                         background: "#0D1119", boxShadow: "0 1px 6px rgba(0,0,0,0.45)",
                       }}>
-                        {([0, 5, 15, 30] as const).map((v) => (
+                        {([0, 1, 5, 15, 30] as const).map((v) => (
                           <button
                             key={v}
                             onClick={() => setDeltaWindow(v)}
-                            title={v === 0 ? "Hide change stamps" : `Show each ranked strike's net GEX change over the last ${v} minutes`}
+                            title={
+                              v === 0
+                                ? "Hide change stamps"
+                                : v === 1
+                                ? "Show each ranked strike's net GEX RATE — how fast it is building (▲) or decaying (▼) per minute, from the live rows"
+                                : `Show each ranked strike's net GEX change over the last ${v} minutes`
+                            }
                             style={{
                               padding: "2px 8px", fontSize: 10, fontWeight: 700,
                               textTransform: "uppercase", letterSpacing: "0.08em",
@@ -2074,7 +2110,7 @@ export function HomeClient({
                               background: deltaWindow === v ? "rgba(33,158,188,0.14)" : "transparent",
                               color: deltaWindow === v ? "#219EBC" : "#5a7a98",
                             }}
-                          >{v === 0 ? "Δ off" : `${v}m`}</button>
+                          >{v === 0 ? "Δ off" : v === 1 ? "rate" : `${v}m`}</button>
                         ))}
                       </div>
                     )}
@@ -2105,9 +2141,13 @@ export function HomeClient({
                       {[
                         { label: "Strike", tip: undefined as string | undefined },
                         {
-                          label: deltaWindow !== 0 && heatmapView === "heatmap" ? `Net GEX +Δ${deltaWindow}M` : "Net GEX",
+                          label: deltaWindow === 0 || heatmapView !== "heatmap"
+                            ? "Net GEX"
+                            : deltaWindow === 1 ? "Net GEX +Δ/MIN" : `Net GEX +Δ${deltaWindow}M`,
                           tip: deltaWindow !== 0 && heatmapView === "heatmap"
-                            ? `Each ranked strike (top 5 each side) carries a stamp with its net GEX change over the last ${deltaWindow} minutes. ▲ green = building, ▼ red = unwinding. The brightest stamp is the biggest % move on the board; smaller moves fade back. Hover for the exact figure.`
+                            ? deltaWindow === 1
+                              ? `Each ranked strike (top 5 each side) carries a stamp with its net GEX RATE — how fast that wall is building (▲ green) or decaying (▼ red) per minute, measured off the live rows rather than a stored baseline. The brightest stamp is the fastest mover on the board; slower ones fade back. Hover for the exact figure.`
+                              : `Each ranked strike (top 5 each side) carries a stamp with its net GEX change over the last ${deltaWindow} minutes. ▲ green = building, ▼ red = unwinding. The brightest stamp is the biggest % move on the board; smaller moves fade back. Hover for the exact figure.`
                             : undefined,
                         },
                         { label: "Vol Only GEX", tip: undefined },
@@ -2255,6 +2295,7 @@ export function HomeClient({
                                         d={heatmapDeltas.by[row.strikeNum].d}
                                         pct={heatmapDeltas.by[row.strikeNum].pct}
                                         rank={heatmapDeltas.by[row.strikeNum].rank}
+                                        rate={deltaWindow === 1}
                                       />
                                     )}
                                   </span>

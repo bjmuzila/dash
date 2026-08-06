@@ -198,11 +198,54 @@ function opIsRth(ts: number | string | null | undefined): boolean {
   return mins >= 9 * 60 + 30 && mins < 16 * 60;
 }
 
+/**
+ * Snapshot numbers are NULLABLE — the probe writes null for any field TT's quote
+ * row didn't carry on that poll. `Number(null)` is 0, so mapping a snapshot
+ * straight through Number() planted a 0 in the series and the chart drew a wick
+ * to the floor. Every read of a snapshot field goes through this.
+ */
+function opNum(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+/** Same, but for prices — a mark of 0 or less is a missing quote, not a price. */
+function opPx(v: unknown): number | null {
+  const n = opNum(v);
+  return n != null && n > 0 ? n : null;
+}
+
+/**
+ * Drop single-sample outliers ("wicks"). Snapshots land ~every 60s and a real
+ * move in a contract persists across at least two polls, so a point that jumps
+ * far off the line and lands right back where it came from is a bad print — a
+ * one-sided book, a stale TT row, a mid computed off half a quote — not price
+ * action. Only isolated round-trips are dropped: a spike the next sample
+ * confirms (drift between the neighbours) is kept, so real gaps survive.
+ */
+function opDewick<T>(pts: T[], get: (p: T) => number): T[] {
+  if (pts.length < 3) return pts;
+  const out: T[] = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = get(pts[i - 1]), b = get(pts[i]), c = get(pts[i + 1]);
+    const base = (a + c) / 2;
+    const scale = Math.abs(base);
+    if (!(scale > 0)) { out.push(pts[i]); continue; }
+    const spike = Math.abs(b - base) / scale;   // how far this sample stands off
+    const drift = Math.abs(c - a) / scale;      // how far the line actually moved
+    if (spike > 0.45 && drift < 0.15) continue; // stands off, neighbours agree → bad print
+    out.push(pts[i]);
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+
 function ProbeChart({ history, metric }: { history: ProbeHistSnap[]; metric: ProbeMetricKey }) {
   const W = 960, H = 340, PADL = 56, PADR = 16, PADT = 16, PADB = 28;
-  const pts = history
-    .map((s) => ({ ts: s.ts, v: s[metric] as number | null }))
-    .filter((p) => p.v != null && Number.isFinite(p.v as number)) as { ts: number; v: number }[];
+  const clean = history
+    .map((s) => ({ ts: s.ts, v: (metric === "mark" ? opPx(s[metric]) : opNum(s[metric])) }))
+    .filter((p) => p.v != null) as { ts: number; v: number }[];
+  const pts = opDewick(clean, (p) => p.v);
   if (pts.length < 2) {
     return <div className="op-chartempty">Not enough history yet — snapshots accrue every refresh (and through RTH server-side).</div>;
   }
@@ -346,10 +389,14 @@ export default function Probe() {
       try {
         const res = await fetch(`/api/watch?history=${id}`, { cache: "no-store" });
         const j = await res.json();
-        const pts = (Array.isArray(j.history) ? j.history : [])
-          .map((s: { ts: number | string; mark: number | null }) => ({ ts: Number(s.ts), mark: Number(s.mark) }))
-          .filter((p: { ts: number; mark: number }) => Number.isFinite(p.ts) && Number.isFinite(p.mark))
-          .sort((a: { ts: number }, b: { ts: number }) => a.ts - b.ts);
+        // mark is null on any poll TT didn't quote — keep those out entirely
+        // rather than letting Number(null)===0 draw a wick to the floor.
+        const raw = (Array.isArray(j.history) ? j.history : [])
+          .map((s: { ts: number | string; mark: number | null; last?: number | null }) =>
+            ({ ts: opNum(s.ts), mark: opPx(s.mark) ?? opPx(s.last) }))
+          .filter((p: { ts: number | null; mark: number | null }) => p.ts != null && p.mark != null)
+          .sort((a: { ts: number }, b: { ts: number }) => a.ts - b.ts) as { ts: number; mark: number }[];
+        const pts = opDewick(raw, (p) => p.mark);
         return [id, pts] as const;
       } catch {
         return [id, [] as { ts: number; mark: number }[]] as const;
@@ -377,12 +424,12 @@ export default function Probe() {
       const snaps: ProbeHistSnap[] = (Array.isArray(j.history) ? j.history : [])
         .map((s: Record<string, unknown>) => ({
           ts: Number(s.ts),
-          mark: s.mark == null ? null : Number(s.mark),
-          net_gex: s.net_gex == null ? null : Number(s.net_gex),
-          delta: s.delta == null ? null : Number(s.delta),
-          theta: s.theta == null ? null : Number(s.theta),
-          vega: s.vega == null ? null : Number(s.vega),
-          iv: s.iv == null ? null : Number(s.iv),
+          mark: opPx(s.mark) ?? opPx(s.last),
+          net_gex: opNum(s.net_gex),
+          delta: opNum(s.delta),
+          theta: opNum(s.theta),
+          vega: opNum(s.vega),
+          iv: opPx(s.iv),
         }))
         .filter((s: ProbeHistSnap) => Number.isFinite(s.ts) && opIsRth(s.ts))
         .sort((a: ProbeHistSnap, b: ProbeHistSnap) => a.ts - b.ts);
@@ -575,14 +622,18 @@ export default function Probe() {
           ) : (
             <div className="op-grid">
               {rows.map((r) => {
-                const entry = r.added_price;
-                const mark = r.snapshot?.mark ?? r.snapshot?.last ?? null;
+                const entry = opPx(r.added_price);
+                const hist = (historyById[r.id] ?? []).filter((h) => opIsRth(h.ts));
+                // The newest snapshot can carry a null mark (TT didn't quote that
+                // poll). Fall back to last, then to the last good recorded print,
+                // so the card holds the price instead of blanking to "—".
+                const liveMark = opPx(r.snapshot?.mark) ?? opPx(r.snapshot?.last);
+                const mark = liveMark ?? (hist.length ? hist[hist.length - 1].mark : null);
                 const pct = entry != null && mark != null && entry !== 0 ? ((mark - entry) / entry) * 100 : null;
                 const dollars = entry != null && mark != null ? (mark - entry) * 100 : null;
-                const hist = (historyById[r.id] ?? []).filter((h) => opIsRth(h.ts));
                 const liveTs = Number(r.snapshot?.ts);
-                const pts = mark != null && Number.isFinite(liveTs) && opIsRth(liveTs) && (!hist.length || liveTs > hist[hist.length - 1].ts)
-                  ? [...hist, { ts: liveTs, mark }]
+                const pts = liveMark != null && Number.isFinite(liveTs) && opIsRth(liveTs) && (!hist.length || liveTs > hist[hist.length - 1].ts)
+                  ? [...hist, { ts: liveTs, mark: liveMark }]
                   : hist;
                 const isOpen = expandedId === r.id;
                 const expired = isExpired(r.expiration);

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
-import { getSubscriptionByCustomer, upsertSubscription, claimWelcomeEmail, getUserById, PAID_STATUSES } from "@/lib/db";
+import { getSubscriptionByCustomer, upsertSubscription, claimWelcomeEmail, getUserById, recordSubscriptionCancellation, PAID_STATUSES } from "@/lib/db";
 import { lookupUser, sendTransactional } from "@/lib/emails/send";
 import { founderThankYouEmail, founderThankYouText, FOUNDER_THANKYOU_SUBJECT } from "@/lib/emails/founder-thankyou";
 import { syncDiscordRoleForUser } from "@/lib/discord";
@@ -37,11 +37,95 @@ function customerIdOf(v: string | { id: string } | null | undefined): string | n
   return typeof v === "string" ? v : v.id;
 }
 
+/** Statuses that mean the subscription is over. */
+const DEAD_STATUSES = new Set(["canceled", "incomplete_expired"]);
+
+type CancellationDetails = {
+  reason?: string | null;
+  feedback?: string | null;
+  comment?: string | null;
+};
+
+/**
+ * Keep our own copy of why a customer left.
+ *
+ * Stripe attaches `cancellation_details` to the subscription object we already
+ * receive here — reason, the portal survey answer, and the optional free-text
+ * comment. Until now this handler dropped all three, so the churn history lived
+ * only in Stripe and the owner Sales page had to re-fetch it live on every load.
+ *
+ * IMPORTANT — Stripe's survey is NOT mandatory and cannot be made mandatory: the
+ * portal shows it AFTER the cancellation is already committed, so a customer who
+ * closes the tab still cancels, with `feedback: null`. A null feedback is normal
+ * data, not a bug. `reason` is far more reliable, and distinguishes voluntary
+ * churn ('cancellation_requested') from involuntary ('payment_failed' — a dead
+ * card, which needs a "new card" email, not a win-back).
+ *
+ * Best-effort by design: this is analytics, and a write failure here must never
+ * make the webhook 500 and have Stripe retry a subscription state change that
+ * already succeeded.
+ */
+async function recordChurn(
+  sub: Stripe.Subscription,
+  clerkUserId: string | null,
+  customerId: string
+): Promise<void> {
+  const details =
+    (sub as unknown as { cancellation_details?: CancellationDetails | null }).cancellation_details ?? null;
+  const isDead = DEAD_STATUSES.has(sub.status);
+  const leaving = Boolean(sub.cancel_at_period_end) || isDead || Boolean(details?.reason);
+
+  // A live, un-cancelled subscription with no cancellation history is not churn
+  // — don't write a row for every routine renewal event.
+  if (!leaving) return;
+
+  try {
+    const item = sub.items?.data?.[0];
+    // Email so the row still identifies someone after the Stripe customer or
+    // our user row is gone — the point of keeping a local copy.
+    let email: string | null = null;
+    const cust = sub.customer as string | { email?: string | null } | null;
+    if (cust && typeof cust !== "string") email = cust.email ?? null;
+    if (!email && clerkUserId) {
+      try { email = (await getUserById(clerkUserId))?.email ?? null; } catch { /* optional */ }
+    }
+
+    await recordSubscriptionCancellation({
+      stripe_subscription_id: sub.id,
+      clerk_user_id: clerkUserId,
+      stripe_customer_id: customerId,
+      customer_email: email,
+      status: sub.status,
+      cancel_at_period_end: Boolean(sub.cancel_at_period_end),
+      reason: details?.reason ?? null,
+      feedback: details?.feedback ?? null,
+      comment: details?.comment ?? null,
+      price_id: item?.price?.id ?? null,
+      canceled_at: sub.canceled_at ?? null,
+      ended_at: sub.ended_at ?? null,
+      // They changed their mind before period end — keep the row, stamp it, so
+      // churn counts can exclude it rather than counting a customer who stayed.
+      reactivated: !isDead && !sub.cancel_at_period_end,
+    });
+  } catch (err) {
+    console.error("[stripe/webhook] cancellation capture error:", err);
+  }
+}
+
 // Persist a Stripe.Subscription's state to our table.
 async function syncSubscription(sub: Stripe.Subscription): Promise<void> {
   const customerId = customerIdOf(sub.customer as string | { id: string });
   if (!customerId) return;
   const clerkUserId = await resolveClerkUserId(sub, customerId);
+
+  // Capture why they're leaving, if they are — BEFORE the no-user bail below.
+  // The churn row is keyed by stripe_subscription_id, not by user, so an
+  // unresolvable account is no reason to throw the reason away; that is exactly
+  // the orphaned case where a local copy is worth the most. Runs on every
+  // subscription event (not just `deleted`) because the survey answer arrives
+  // on an `updated` — see recordChurn. No-ops for healthy subscriptions.
+  await recordChurn(sub, clerkUserId, customerId);
+
   if (!clerkUserId) {
     console.warn("[stripe/webhook] no clerk_user_id for subscription", sub.id);
     return;

@@ -1,179 +1,53 @@
 # Changelog
 
-## 2026-08-06 (b) - Owner / Sales: three cards stop printing the same number
+## 2026-08-06 (b) - Home rail: CPG Ratio → Net GEX Rate, + per-strike GEX rate
 
-The MRR card, the "Net · period" card and the revenue chart were all the same
-measurement — every recurring subscription normalized to a monthly rate — so Net was
-just MRR minus a constant and the chart's headline was MRR again. Three widgets, one
-number. They now answer three different questions.
+Replaced the CPG (call/put gamma) ratio tile on the /home gauge rail with a Net GEX
+RATE tile, and added a matching per-strike rate mode to the heatmap. The ratio described
+the SHAPE of the book; the rate describes how fast it is being built or pulled.
 
-### `app/api/admin/stripe-summary/route.ts`
-- **`mrrMonthly` + `monthlySubscriptions` (new headline).** Only subs on a **monthly**
-  plan that are still billing and are **not** winding down. An annual plan bills once
-  and then nothing for eleven months, and a cancelling sub bills zero more times —
-  neither is a monthly recurring transaction. The old broad `mrr` is still returned for
-  the tooltip and run-rate maths, but nothing headlines it.
-- **Paid invoices are pulled once, auto-paged**, replacing the per-customer invoice call
-  (one round trip per customer, and it could only answer "lifetime spend"). That single
-  list now feeds `spendByCustomer` (the table's Total Spent) **and** a new
-  `revenueByMonth` map — `"YYYY-MM" → { revenue, invoices }` — bucketed on
-  `status_transitions.paid_at`. A $500 annual invoice lands in full in the month the cash
-  arrived, which is what "all sales that month" means.
-- `summary.lifetimeRevenue` added: every dollar ever collected.
-- `shape()` is synchronous now (no awaited invoice call inside it), so the two
-  `Promise.all` fan-outs are gone.
+### `components/dashboard/HomeGaugeRail.tsx`
+- `CPG RATIO` tile → **`NET GEX RATE / MIN`**: $B of gamma-per-1%-move added (+) or
+  pulled (−) per minute. Signed meter, self-scaling to today's fastest observed move
+  (floored at 0.1 so a quiet tape doesn't swing the needle on noise).
+- Derived inside the component from the GEX history the rail already keeps — no new
+  prop, no new socket topic, no extra fetch.
+- Δ is measured against the newest sample ≥30s old and ≤180s old, then normalised to
+  per-minute by the ACTUAL elapsed span. Samples are 15s-bucketed and feed cadence
+  drifts, so a raw last-minus-reference would silently scale with how stale the
+  reference happened to be. Spans under 30s are rejected rather than divided through —
+  dividing a small Δ by a few seconds manufactures a huge rate out of feed jitter.
+- Removed now-unused `cpg` prop, `fmtRatio` / `fmtAbsRatio`.
 
-### `owner-vite/src/pages/Sales.tsx`
-- **"Recurring Revenue" card = monthly plans only.** Reads `mrrMonthly`, sub-line shows
-  the count (`7 monthly subs · per month`). Tooltip spells out what's excluded and what
-  the old broad number would have read, so the change isn't silent.
-- **"Net · period" card replaced by "Collected · Lifetime"** — cumulative cash off paid
-  invoices, with a running-total curve. Not a rate, so the granularity tabs deliberately
-  don't rescale it.
-- **"Recurring Revenue" chart → "Profit per Month".** Bars are **all sales collected that
-  calendar month** from `revenueByMonth`, not a recomputed run-rate. Each bar is green
-  when the month cleared the expense run-rate and red when it didn't; a dashed red
-  water-line marks the expense level across the whole plot, `+n`/`−n` under each bar are
-  subs gained/lost, and the header shows the month's cash, its profit, and the change vs
-  last month. Tooltip breaks out invoice count, expenses and profit.
-- Net result: card 1 is a forward-looking monthly rate, card 4 is cash to date, the chart
-  is cash per month against costs. No two read the same value.
+### `hooks/useStrikeGexRate.ts` (new)
+- Per-strike net GEX rate ($ per 1% move, per minute) sampled client-side from the live
+  heatmap rows (15s cadence, ~2min ring), same span guards as the tile.
+- **Deliberately not another `useStrikeGexHistory` age bucket.** The stored per-strike
+  series is written by `gex-history-writer.js` on a ~60s cadence AND each row is an
+  average of the ~12 recomputes in that window, so a "1 minute ago" baseline from it is
+  0–120s old and pre-smoothed — neither 1-minute nor a rate. **No proxy/server change.**
 
-## 2026-08-06 - Owner / Sales: cancellations are visible, statuses stop lying, revenue chart shows the book
+### `app/home/HomeClient.tsx`
+- Heatmap Δ selector gained a **`rate`** option (`Δ off | rate | 5m | 15m | 30m`);
+  `deltaWindow` type widened to `0 | 1 | 5 | 15 | 30`.
+- In rate mode the NET GEX column header reads `NET GEX +Δ/MIN` and the ranked-strike
+  stamps show per-minute rate with a `/m` suffix; tooltip reads "Building/Decaying
+  …/m · #N fastest mover (X.X%/min)".
+- Noise floor is 0.25%/min in rate mode (vs 1% for the cumulative windows) — a rate is a
+  smaller number than a 5/15/30m cumulative move, so the 1% cut would have blanked most
+  of the board.
+- Rate mode is served entirely by the new hook, so it no longer keeps `/proxy/gex-history`
+  warm (`deltaWindow > 1` now gates that poll instead of `!== 0`).
+- Dropped the CPG dollar-gamma sums from `gaugeMetrics`; it now computes `gammaPctVol` only.
 
-The Sales page could only ever see `status: "active"` subscriptions, so a customer
-who cancelled simply vanished from the page with no trace and no reason, and one who
-had *clicked* cancel still read a plain green "active" until the day they disappeared.
-The amount column also overflowed onto the status pill, and "Revenue Summary" plotted
-new signups — so a month where every existing sub paid but nobody new joined drew $0.
-
-### `app/api/admin/stripe-summary/route.ts`
-- **Pulls every subscription status, not just active** (`status: "all"`, auto-paged to
-  500) and splits them: `subscriptions` = still has access (active / trialing /
-  past_due / unpaid / incomplete), `cancellations` = over, service removed
-  (canceled / incomplete_expired). The 2026-07-01 launch cutoff still applies to both.
-- **Lifecycle fields now returned on every row** — `cancel_at_period_end`, `cancel_at`,
-  `canceled_at`, `ended_at`, plus Stripe's `cancellation_details` flattened to
-  `cancel_reason` / `cancel_feedback` / `cancel_comment`. That's where "why" comes from:
-  `payment_failed` is a dead card, `cancellation_requested` is a customer who chose to go,
-  and `feedback` is what they picked on the way out.
-- **MRR keeps winding-down subs** (they still bill until the period ends) but reports
-  them separately as `cancellingSoon` + `mrrLeaving`, so revenue at risk is a number
-  rather than a surprise.
-- **`churnedThisMonth` fixed.** It filtered cancelled subs by `created` — i.e. subs
-  *signed up* this month that were also cancelled, which is almost always 0. Now it
-  counts subs that **ended** this month (`ended_at`/`canceled_at`).
-- **`recentCustomers` removed.** It read `customers.list({limit:20})` — the newest 20
-  Stripe *customer records*, not people who paid. A customer whose record predated their
-  purchase (Wayne) never showed up. Nothing reads it now.
-- New summary fields: `cancellingSoon`, `mrrLeaving`, `canceledTotal`.
-
-### `owner-vite/src/pages/Sales.tsx`
-- **Amount no longer runs over the Status button.** `SUB_TABLE_COLS` gave Amount 80px
-  while it renders `$300/yr` plus a struck-through list price. Amount is 132px, Status
-  116px, and every grid cell now carries `minWidth: 0` + `overflow: hidden` so no cell
-  can bleed into its neighbour again.
-- **Status is derived, not copied.** New `displayStatus()` collapses status +
-  `cancel_at_period_end` + `ended_at` into what's actually true:
-  - `cancelling` (gold) — cancelled in Stripe, still paid up. Sub-line: `ends Aug 24`.
-    The Renews column flips to that date too, since it doesn't renew.
-  - `cancelled` (red) — the date passed, service removed.
-  - `past due` / `unpaid` (orange) — card declined, needs a new card.
-  Header badges: active count, `N leaving`, `N needs card`.
-- **"Recent Customers" card replaced by "Cancellations".** Lists everyone winding down
-  first (still recoverable) then everyone gone, each with the amount, the exact date
-  service ends/ended, lifetime spend, and a reason chip — billing failures tinted orange
-  so a dead card is distinguishable at a glance from a customer who left. Free-text
-  cancellation comments render underneath.
-- **"Sale Summary" card deleted.** It re-plotted the same signup bars against a flat
-  expense line; the expense line moved onto the revenue chart.
-- **"Revenue Summary" → "Recurring Revenue", month over month, full width.** Each bar is
-  the recurring book at that month's end — every sub that had started and not yet ended,
-  at its actual post-discount monthly rate — for the last 12 months, with the current
-  month measured to date. A red water-line marks the expense run-rate (bar above it is
-  profit), `+n`/`−n` under each bar are subs gained/lost that month, and the header shows
-  the current MRR with the month-over-month delta.
-- **Total Customers curve** no longer depends on `recentCustomers`; it counts unique
-  paying emails off the subscriptions themselves, matching its own headline.
-
-## 2026-08-06 - Test Lab / GEX Map: one chart, real RTH clock axis, labels off the field
-
-Three cards (Tape Field, Spine, Gamma Terrain) drew the same session three times, and
-the x-axis was a column index — so at 10:05 thirty-five minutes of tape was stretched
-across the full width and read as a whole trading day.
-
-### `app/test/GexMapTab.tsx`
-- **Merged to one card, "Tape Field."** Layout is fixed (net DEX profile left gutter,
-  net GEX profile right rail, Vol GEX keel below, Δ15m panel, spot path, wall/flip
-  bands); a **Heatmap / Terrain** segmented switch in the card header changes only what
-  fills the strike × time field. The zoom window survives the switch.
-- **`Spine` removed** — component deleted, not hidden. Its wings were duplicates of the
-  Tape Field's gutter and rail. The `GammaTerrain` wrapper went too; its canvas
-  (`TerrainField`) is now the Tape Field's terrain fill. `clockTimeTicks`,
-  `spreadLabels`, `labWidth` and the `.gexmap-grid` style deleted with them (unused).
-- **RTH pins the x-axis to 09:30–16:00 ET.** New `timeAxis` / `xLo` / `xHi` / `mins` /
-  `slotMin` on `MapModel`; `xFrac()` positions a column by its ET timestamp instead of
-  its index. Cell width is one recording slot in minutes. Ticks and gridlines are round
-  clock times stepped across the domain (`axisTicks`), so 14:00 is drawn hours before a
-  14:00 column exists. `buildModel` now takes `scope`.
-  - Only ever on for **RTH** — "All" spans midnight, where ET minutes wrap and are not
-    monotonic — and only when every column really is inside 09:30–16:00, so a pre-market
-    session (where `scopePayload` returns the unfiltered payload) still draws on the old
-    index axis instead of clamping the overnight tape onto one edge.
-  - Zooming **time** narrows the clock domain to the visible columns (padded one slot);
-    zooming **strikes** leaves the clock alone.
-  - The terrain canvas is placed on the span the tape actually covers, so it grows into
-    the session rather than being stretched over hours with no data behind it.
-  - The Vol GEX keel uses the same x rule, so a spike in the keel stays under the minute
-    of heat it belongs to.
-- **Removed the on-chart labels**: the `GAMMA FLIP nnnn` caption and the `CW` / `MG` /
-  `FL` / `PW` rail badges. Every one of those numbers is already in the regime strip
-  above the chart, larger and with its meaning spelled out. The lines and bands stay —
-  that is positional information the strip can't carry. Rail strike ticks no longer need
-  badge de-collision.
-
-## 2026-08-06 - Scanner / Watch This: "Results" tab (per-date roll-up)
-
-Tracked results only had the flat status filters (All / Open / Touched / Expired), so
-there was no way to ask "what happened on a given day".
-
-### `components/pages/Scanner.tsx`
-- New **Results** pill next to Expired in the Tracked-results strip. Selecting it
-  replaces the flat table with one row per calendar date: **Date · Opened · Touched ·
-  Expired** counts, newest date first.
-- Click a date to expand it into three labelled sections (Opened / Touched / Expired),
-  each listing the contracts that landed in that bucket on that date. Rows keep the
-  existing click-through to the day-by-day detail popup.
-- A single flag can appear under up to three dates: `first_flagged` (opened),
-  `touched_date` (touched), and `expiry` when its status is `expired`.
-- Grouping is client-side (`groupOutcomesByDay`); the view fetches
-  `/proxy/far-cb-outcomes?status=all&limit=300` (300 = the endpoint's existing cap) so
-  the per-day counts are complete. **No server/proxy change.**
-
-## 2026-08-06 - ES Candles: x-axis showed dates instead of times
-
-The ES Candles time axis rendered a date at nearly every tick. The clock only ever
-appeared on the crosshair label, so an intraday chart had no visible time scale.
-
-### Root cause
-`components/dashboard/es-candles/EsChartCard.tsx` set a `tickMarkFormatter` that
-branched on `tickMarkType === 2 || tickMarkType === 3`, commented as "day/month
-boundary". That mapping is wrong. In lightweight-charts v5 the `TickMarkType` enum is
-`0 Year | 1 Month | 2 DayOfMonth | 3 Time | 4 TimeWithSeconds` — **3 is Time**, and it
-is the type emitted for nearly every tick on an intraday chart. Sending 3 down the date
-branch meant the axis printed `Aug 6` where it should have printed `09:30`.
-
-### `components/dashboard/es-candles/EsChartCard.tsx`
-- `tickMarkFormatter` now sends only the real calendar boundaries (`0`/`1`/`2`) to the
-  ET date string; everything else (`3` Time, `4` TimeWithSeconds) formats as ET `HH:MM`
-  24-hour. Day boundaries still show `Mon D` for context when the visible range spans
-  more than one session.
-- Comment replaced with the actual enum values so the next edit can't repeat the
-  off-by-one.
-
-No other file defines a `tickMarkFormatter`, and this card owns the only `createChart`
-call on the page, so the fix covers every ES Candles chart slot.
-
+### Notes
+- Sign convention is unchanged from the existing 5/15/30m stamps (`d = live − past`), so
+  on a PUT wall (negative net GEX) a shrinking wall reads positive/green. Consistent with
+  what the other windows already show rather than a second convention.
+- Verified: all three files compile (esbuild); rate math unit-tested for clean 60s span,
+  normalisation across a 90s span, the <30s jitter guard, the >180s stale guard, decay,
+  and flat. Declaration order checked — `heatmapRows` (L1187) precedes the hook call
+  (L1370), so no TDZ.
 
 ## 2026-08-06 - GEX chart expiry picker: wrong DTE labels & failed switching
 

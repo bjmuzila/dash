@@ -137,6 +137,7 @@ __export(db_exports, {
   getSnapshots: () => getSnapshots,
   getSubscription: () => getSubscription,
   getSubscriptionByCustomer: () => getSubscriptionByCustomer,
+  getSubscriptionCancellations: () => getSubscriptionCancellations,
   getTdOverview: () => getTdOverview,
   getTdPrefs: () => getTdPrefs,
   getTickerEventCounts: () => getTickerEventCounts,
@@ -224,6 +225,7 @@ __export(db_exports, {
   pruneEmCondorTicks: () => pruneEmCondorTicks,
   queryAll: () => queryAll,
   queryOne: () => queryOne,
+  recordSubscriptionCancellation: () => recordSubscriptionCancellation,
   reactBzilaAlert: () => reactBzilaAlert,
   removeSalesExpense: () => removeSalesExpense,
   removeUnsubscribe: () => removeUnsubscribe,
@@ -1276,6 +1278,51 @@ async function ensureAllTables(pool) {
     -- paid user. NULL = never sent. Guarantees exactly one welcome per customer.
     ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS welcome_email_sent_at TIMESTAMPTZ;
 
+    -- Churn log. One row per subscription that has ever signalled it is leaving,
+    -- written by the Stripe webhook (app/api/stripe/webhook/route.ts).
+    --
+    -- WHY THIS EXISTS: cancellation reasons used to live ONLY in Stripe. The
+    -- owner Sales page read cancellation_details live off the API on every
+    -- load, so the whole churn history was one API change / account change /
+    -- Stripe retention window away from vanishing, and none of it was
+    -- queryable next to our own users table. Stripe hands us the reason for
+    -- free on customer.subscription.updated \u2014 this keeps a copy.
+    --
+    -- reason   = Stripe's cancellation_details.reason: why the sub ended at all
+    --            ('cancellation_requested' | 'payment_failed' | 'payment_disputed').
+    --            'payment_failed' is involuntary churn \u2014 a dead card, not a
+    --            customer who chose to leave. The two need different follow-up.
+    -- feedback = what the customer picked in the portal survey (too_expensive,
+    --            missing_features, switched_service, unused, customer_service,
+    --            too_complex, low_quality, other). NULL is normal and expected:
+    --            Stripe shows that survey AFTER the cancellation is committed,
+    --            so it is always skippable.
+    -- comment  = the optional free text, only offered behind "Other reason".
+    --
+    -- reactivated_at: a customer who cancels at period end can un-cancel before
+    -- it lands. The row stays (the intent to leave is real signal) but is
+    -- stamped, so churn counts can exclude it instead of over-reporting.
+    CREATE TABLE IF NOT EXISTS subscription_cancellations (
+      stripe_subscription_id TEXT PRIMARY KEY,
+      clerk_user_id          TEXT,
+      stripe_customer_id     TEXT,
+      customer_email         TEXT,
+      status                 TEXT,
+      cancel_at_period_end   BOOLEAN NOT NULL DEFAULT FALSE,
+      reason                 TEXT,
+      feedback               TEXT,
+      comment                TEXT,
+      price_id               TEXT,
+      /* Epoch seconds, matching Stripe's own fields rather than converting. */
+      canceled_at            BIGINT,
+      ended_at               BIGINT,
+      reactivated_at         TIMESTAMPTZ,
+      first_seen_at          TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at             TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_sub_cancel_user ON subscription_cancellations(clerk_user_id);
+    CREATE INDEX IF NOT EXISTS idx_sub_cancel_seen ON subscription_cancellations(first_seen_at DESC);
+
     -- Traders Dashboard per-user preferences. One row per Clerk user. schedule and
     -- tasks are JSON arrays the page owns; zip drives the weather card.
     CREATE TABLE IF NOT EXISTS td_user_prefs (
@@ -2321,6 +2368,54 @@ async function getSubscriptionByCustomer(customerId) {
   return queryOne(
     "SELECT * FROM subscriptions WHERE stripe_customer_id = ?",
     [customerId]
+  );
+}
+async function recordSubscriptionCancellation(r) {
+  if (!r.stripe_subscription_id) return;
+  await pgQuery(
+    `INSERT INTO subscription_cancellations
+       (stripe_subscription_id, clerk_user_id, stripe_customer_id, customer_email,
+        status, cancel_at_period_end, reason, feedback, comment, price_id,
+        canceled_at, ended_at, reactivated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     ON CONFLICT (stripe_subscription_id) DO UPDATE SET
+       clerk_user_id        = COALESCE(EXCLUDED.clerk_user_id,      subscription_cancellations.clerk_user_id),
+       stripe_customer_id   = COALESCE(EXCLUDED.stripe_customer_id, subscription_cancellations.stripe_customer_id),
+       customer_email       = COALESCE(EXCLUDED.customer_email,     subscription_cancellations.customer_email),
+       status               = COALESCE(EXCLUDED.status,             subscription_cancellations.status),
+       cancel_at_period_end = EXCLUDED.cancel_at_period_end,
+       -- Never un-learn a reason. See the doc comment above.
+       reason               = COALESCE(EXCLUDED.reason,             subscription_cancellations.reason),
+       feedback             = COALESCE(EXCLUDED.feedback,           subscription_cancellations.feedback),
+       comment              = COALESCE(EXCLUDED.comment,            subscription_cancellations.comment),
+       price_id             = COALESCE(EXCLUDED.price_id,           subscription_cancellations.price_id),
+       canceled_at          = COALESCE(EXCLUDED.canceled_at,        subscription_cancellations.canceled_at),
+       ended_at             = COALESCE(EXCLUDED.ended_at,           subscription_cancellations.ended_at),
+       reactivated_at       = EXCLUDED.reactivated_at,
+       updated_at           = CURRENT_TIMESTAMP`,
+    [
+      r.stripe_subscription_id,
+      r.clerk_user_id ?? null,
+      r.stripe_customer_id ?? null,
+      r.customer_email ?? null,
+      r.status ?? null,
+      Boolean(r.cancel_at_period_end),
+      r.reason ?? null,
+      r.feedback ?? null,
+      r.comment ?? null,
+      r.price_id ?? null,
+      r.canceled_at ?? null,
+      r.ended_at ?? null,
+      r.reactivated ? (/* @__PURE__ */ new Date()).toISOString() : null
+    ]
+  );
+}
+async function getSubscriptionCancellations(limit = 500) {
+  return queryAll(
+    `SELECT * FROM subscription_cancellations
+      ORDER BY COALESCE(ended_at, canceled_at, 0) DESC, first_seen_at DESC
+      LIMIT ?`,
+    [limit]
   );
 }
 async function linkStripeCustomer(clerkUserId, customerId) {
@@ -5121,6 +5216,7 @@ async function getLatestMultGreekStaticSnapshot() {
   getSnapshots,
   getSubscription,
   getSubscriptionByCustomer,
+  getSubscriptionCancellations,
   getTdOverview,
   getTdPrefs,
   getTickerEventCounts,
@@ -5208,6 +5304,7 @@ async function getLatestMultGreekStaticSnapshot() {
   pruneEmCondorTicks,
   queryAll,
   queryOne,
+  recordSubscriptionCancellation,
   reactBzilaAlert,
   removeSalesExpense,
   removeUnsubscribe,
