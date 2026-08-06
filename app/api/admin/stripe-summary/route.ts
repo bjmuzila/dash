@@ -154,7 +154,7 @@ export async function GET() {
   const stripe = await getStripe();
 
   if (!stripe) {
-    return NextResponse.json({ configured: false, summary: null, subscriptions: [], cancellations: [] });
+    return NextResponse.json({ configured: false, summary: null, subscriptions: [], cancellations: [], revenueByMonth: {} });
   }
 
   try {
@@ -175,12 +175,20 @@ export async function GET() {
     const liveSubs = realSubs.filter((s) => LIVE_STATUSES.has(s.status));
     const deadSubs = realSubs.filter((s) => DEAD_STATUSES.has(s.status));
 
-    // MRR, two ways. `mrr` is what actually gets billed each month (discounts
-    // applied) and is what every card on the Sales page reads. `grossMrr` is the
-    // same book of business at list price, kept only so the UI can show the gap.
-    // Subs that are winding down (cancel_at_period_end) still bill until the
-    // period ends, so they stay in MRR — `mrrLeaving` says how much of it walks.
+    // ── MRR ────────────────────────────────────────────────────────────────
+    //
+    // `mrrMonthly` is the headline now, and it is deliberately narrow: ONLY
+    // subscriptions on a monthly plan, still billing, and NOT winding down.
+    // That is a real recurring charge that hits the card again next month —
+    // an annual plan bills once and then nothing for eleven months, and a sub
+    // that already cancelled bills zero more times, so neither belongs in a
+    // "monthly recurring transactions" number.
+    //
+    // `mrr` (every recurring sub normalized to a monthly rate, annuals ÷ 12)
+    // is kept for the tooltip and the run-rate maths, but nothing headlines it.
     let mrr = 0;
+    let mrrMonthly = 0;
+    let monthlySubscriptions = 0;
     let grossMrr = 0;
     let mrrLeaving = 0;
     let discountedSubscriptions = 0;
@@ -193,6 +201,12 @@ export async function GET() {
       grossMrr += gross;
       if (net < gross) discountedSubscriptions++;
       if (sub.cancel_at_period_end) { cancellingSoon++; mrrLeaving += net; }
+
+      const isMonthlyPlan = (sub.items.data[0]?.price?.recurring?.interval ?? "month") === "month";
+      if (isMonthlyPlan && !sub.cancel_at_period_end) {
+        mrrMonthly += net;
+        monthlySubscriptions += 1;
+      }
     }
 
     // Real paying customers — unique customers among the live subs above.
@@ -211,24 +225,48 @@ export async function GET() {
       (s) => (s.ended_at ?? s.canceled_at ?? 0) >= monthStart
     ).length;
 
-    // Total lifetime spend per customer — sum of paid invoices. Cached so a
-    // customer appearing in both the subscriptions table and the cancellations
-    // list only costs one Stripe call.
-    const spendCache = new Map<string, number>();
-    async function getCustomerSpend(customerId: string): Promise<number> {
-      if (spendCache.has(customerId)) return spendCache.get(customerId)!;
-      const invoices = await stripe!.invoices.list({ customer: customerId, status: "paid", limit: 100 });
-      const total = invoices.data.reduce((sum, inv) => sum + (inv.amount_paid ?? 0), 0);
-      spendCache.set(customerId, total);
-      return total;
+    // ── Paid invoices: the only source of "money that actually arrived" ─────
+    //
+    // One auto-paged pull instead of the old per-customer invoice call (which
+    // cost one round trip per customer and could only ever answer "lifetime
+    // spend"). The same list now feeds two things:
+    //   • `spendByCustomer` — lifetime spend for the table's Total Spent column;
+    //   • `revenueByMonth`  — every dollar collected in a calendar month, which
+    //     is what the month-over-month chart plots. A $500 annual invoice lands
+    //     entirely in the month it was paid, because that is when the cash came.
+    const paidInvoices = await stripe.invoices
+      .list({ status: "paid", limit: 100 })
+      .autoPagingToArray({ limit: 2000 });
+
+    const spendByCustomer = new Map<string, number>();
+    /** "YYYY-MM" (UTC) → { revenue, invoices } */
+    const revenueByMonth: Record<string, { revenue: number; invoices: number }> = {};
+
+    for (const inv of paidInvoices) {
+      const paid = inv.amount_paid ?? 0;
+      if (paid <= 0) continue;
+
+      const custId = typeof inv.customer === "string" ? inv.customer : inv.customer?.id;
+      if (custId) spendByCustomer.set(custId, (spendByCustomer.get(custId) ?? 0) + paid);
+
+      // Bucket on when it was actually PAID, falling back to creation.
+      const paidAt = inv.status_transitions?.paid_at ?? inv.created;
+      const d = new Date(paidAt * 1000);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const bucket = revenueByMonth[key] ?? (revenueByMonth[key] = { revenue: 0, invoices: 0 });
+      bucket.revenue += paid;
+      bucket.invoices += 1;
     }
 
-    async function shape(sub: StripeNS.Subscription) {
+    const getCustomerSpend = (customerId: string) => spendByCustomer.get(customerId) ?? 0;
+    const lifetimeRevenue = Object.values(revenueByMonth).reduce((a, m) => a + m.revenue, 0);
+
+    function shape(sub: StripeNS.Subscription) {
       const customer = sub.customer as StripeNS.Customer;
       const item = sub.items.data[0];
       const price = item?.price;
       const interval = price?.recurring?.interval ?? "month";
-      const totalSpent = await getCustomerSpend(customer.id);
+      const totalSpent = getCustomerSpend(customer.id);
       return {
         id: sub.id,
         customer_email: customer.email ?? "—",
@@ -249,19 +287,17 @@ export async function GET() {
     }
 
     // Live subscriptions (newest first) and the ones that are over.
-    const subscriptions = await Promise.all(
-      [...liveSubs].sort((a, b) => b.created - a.created).map(shape)
-    );
-    const cancellations = await Promise.all(
-      [...deadSubs]
-        .sort((a, b) => (b.ended_at ?? b.canceled_at ?? 0) - (a.ended_at ?? a.canceled_at ?? 0))
-        .map(shape)
-    );
+    const subscriptions = [...liveSubs].sort((a, b) => b.created - a.created).map(shape);
+    const cancellations = [...deadSubs]
+      .sort((a, b) => (b.ended_at ?? b.canceled_at ?? 0) - (a.ended_at ?? a.canceled_at ?? 0))
+      .map(shape);
 
     return NextResponse.json({
       configured: true,
       summary: {
-        mrr, // net of recurring discounts — the number the page should trust
+        mrrMonthly, // headline: monthly plans only, still billing, not cancelling
+        monthlySubscriptions, // how many subs that is
+        mrr, // every recurring sub normalized to /mo (annuals ÷ 12) — run-rate maths
         grossMrr, // same subs at list price, for the discount-gap tooltip
         discountedSubscriptions,
         activeSubscriptions: liveSubs.filter((s) => BILLING_STATUSES.has(s.status)).length,
@@ -270,12 +306,14 @@ export async function GET() {
         canceledTotal: deadSubs.length,
         totalCustomers: payingCustomerIds.size,
         churnedThisMonth,
+        lifetimeRevenue, // every dollar collected, ever
       },
+      revenueByMonth, // "YYYY-MM" → { revenue, invoices } — actual cash collected
       subscriptions,
       cancellations,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
-    return NextResponse.json({ configured: true, summary: null, subscriptions: [], cancellations: [], error: msg }, { status: 500 });
+    return NextResponse.json({ configured: true, summary: null, subscriptions: [], cancellations: [], revenueByMonth: {}, error: msg }, { status: 500 });
   }
 }

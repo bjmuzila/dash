@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerUserId } from "@/lib/supabase/server";
-import { getRecentPageVisits, listUsersWithLastLogin } from "@/lib/db";
+import { getPageVisitStats, getPageVisitsSince, listUsersWithLastLogin } from "@/lib/db";
 
 // Owner-only: the visit log exposes client IPs AND (since the accounts join
 // below) the email behind every signed-in visit, so gate reads to the owner.
@@ -18,16 +18,25 @@ export async function GET(req: NextRequest) {
 
   try {
     const { searchParams } = new URL(req.url);
-    const limit = Math.min(Number(searchParams.get("limit") ?? 100), 5000);
+    // Kept in step with the live route in server-v2/api-router.js — this file is
+    // only the fallback for when _lib-db.cjs fails to load, but a fallback that
+    // silently ignores ?days would quietly show the wrong window.
+    const daysRaw = searchParams.get("days");
+    const days =
+      daysRaw == null ? 7
+      : daysRaw === "all" || daysRaw === "" ? 0
+      : Math.max(0, Number(daysRaw) || 0);
+    const limit = Math.max(1, Math.min(Number(searchParams.get("limit") ?? 20000) || 20000, 200000));
     // page_visits stores only user_id, so a signed-in visit is an opaque uuid to
     // the client. Resolve it to the account here — one query for the whole users
     // table (small, and the alternative is a join inside a SELECT * hot path) —
     // so the owner map can say WHO was on the page instead of showing a bare id.
     // Failure to load accounts degrades to "everyone is an anonymous visitor"
     // rather than failing the whole request.
-    const [rows, accounts] = await Promise.all([
-      getRecentPageVisits(limit),
+    const [rows, accounts, stats] = await Promise.all([
+      getPageVisitsSince(days, limit),
       listUsersWithLastLogin().catch(() => []),
+      getPageVisitStats(days).catch(() => null),
     ]);
     const byUserId = new Map(accounts.map((a) => [String(a.id), a]));
 
@@ -76,7 +85,16 @@ export async function GET(req: NextRequest) {
         createdAt: r.created_at ?? null,
       };
     });
-    return NextResponse.json({ visits });
+    return NextResponse.json({
+      visits,
+      days,
+      limit,
+      truncated: Boolean(stats && stats.total > visits.length),
+      total: stats ? stats.total : visits.length,
+      newestAt: stats ? stats.newestAt : (visits[0]?.createdAt ?? null),
+      oldestAt: stats ? stats.oldestAt : null,
+      serverNow: new Date().toISOString(),
+    });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }

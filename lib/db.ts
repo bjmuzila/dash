@@ -3936,13 +3936,23 @@ export interface PageVisitRecord {
   created_at?: string | null;
 }
 
-// Keep the visit log bounded so it can't grow without limit.
+// RETENTION: none. The visit log is kept forever. (2026-08-06)
 //
-// NOTE: this is a HARD cap on how far back any acquisition report can look —
-// once you're past PAGE_VISITS_KEEP visits, the oldest entry rows are deleted
-// and that traffic is gone. Raise it via the env var rather than editing code;
-// the rows are narrow (a few hundred bytes), so 100k costs tens of MB.
-const PAGE_VISITS_KEEP = Math.max(1000, Number(process.env.PAGE_VISITS_KEEP) || 5000);
+// It used to self-trim to the newest PAGE_VISITS_KEEP (default 5000) rows on
+// EVERY insert. Two problems, both of which made the owner Visitors map lie:
+//
+//   1. 5000 loads is a day or two of traffic once the beacon fires on every
+//      route change. Every visitor older than that window had been deleted, so
+//      the map only ever showed the last couple of days and the acquisition
+//      reports could not look back past them.
+//   2. The prune ran as a second statement on every single beacon — a DELETE
+//      with a sort-and-scan subquery on the hot write path, for nothing.
+//
+// The rows are narrow (a few hundred bytes), so a year of real traffic is tens
+// of MB. If the table ever does need bounding, bound it by AGE in a scheduled
+// job — not by row count on the insert path.
+//
+// PAGE_VISITS_KEEP is intentionally no longer read. Setting it has no effect.
 
 export async function insertPageVisit(
   r: Pick<
@@ -3973,16 +3983,7 @@ export async function insertPageVisit(
       r.channel ?? null, r.browser ?? null, r.os ?? null, r.device_type ?? null, r.is_bot ?? false,
     ]
   );
-  // Opportunistic prune: drop anything older than the newest PAGE_VISITS_KEEP rows.
-  await pool.query(
-    `DELETE FROM page_visits
-     WHERE id < (
-       SELECT MIN(id) FROM (
-         SELECT id FROM page_visits ORDER BY id DESC LIMIT $1
-       ) keep
-     )`,
-    [PAGE_VISITS_KEEP]
-  );
+  // No prune. See the retention note above — history is kept.
 }
 
 export async function getRecentPageVisits(limit = 100): Promise<PageVisitRecord[]> {
@@ -3990,6 +3991,64 @@ export async function getRecentPageVisits(limit = 100): Promise<PageVisitRecord[
     "SELECT * FROM page_visits ORDER BY id DESC LIMIT ?",
     [limit]
   );
+}
+
+/**
+ * Visit log for a trailing window, newest first.
+ *
+ * `days = 0` (or anything <= 0) means "no date floor" — the All range. The
+ * `limit` is still applied in both cases: it is the map's render budget, not a
+ * retention policy, and the caller reports when it bit (see getPageVisitStats).
+ *
+ * created_at is timestamptz, so the window is computed in the database rather
+ * than from a client clock.
+ */
+export async function getPageVisitsSince(days: number, limit = 5000): Promise<PageVisitRecord[]> {
+  const d = Number(days);
+  if (!Number.isFinite(d) || d <= 0) {
+    return queryAll<PageVisitRecord>(
+      "SELECT * FROM page_visits ORDER BY id DESC LIMIT ?",
+      [limit]
+    );
+  }
+  return queryAll<PageVisitRecord>(
+    `SELECT * FROM page_visits
+      WHERE created_at >= now() - (? || ' days')::interval
+      ORDER BY id DESC
+      LIMIT ?`,
+    [String(Math.floor(d)), limit]
+  );
+}
+
+/**
+ * Counts for the header strip, computed in the DB over the FULL window rather
+ * than over the truncated page the map renders. Without this the page cannot
+ * tell "you have 4,000 visits" from "you have 400,000 and are seeing 5,000".
+ *
+ * newestAt is what makes a broken beacon visible: if the newest row is hours
+ * old, visits stopped being recorded, and that is a different failure from
+ * "nobody came".
+ */
+export async function getPageVisitStats(
+  days: number
+): Promise<{ total: number; newestAt: string | null; oldestAt: string | null }> {
+  const d = Number(days);
+  const windowed = Number.isFinite(d) && d > 0;
+  const rows = await queryAll<{ total: string | number; newest_at: string | null; oldest_at: string | null }>(
+    windowed
+      ? `SELECT COUNT(*) AS total, MAX(created_at) AS newest_at, MIN(created_at) AS oldest_at
+           FROM page_visits
+          WHERE created_at >= now() - (? || ' days')::interval`
+      : `SELECT COUNT(*) AS total, MAX(created_at) AS newest_at, MIN(created_at) AS oldest_at
+           FROM page_visits`,
+    windowed ? [String(Math.floor(d))] : []
+  );
+  const r = rows[0];
+  return {
+    total: Number(r?.total ?? 0),
+    newestAt: r?.newest_at ?? null,
+    oldestAt: r?.oldest_at ?? null,
+  };
 }
 
 // Per-user engagement rollup from page_visits. total_loads = every logged load;

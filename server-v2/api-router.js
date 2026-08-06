@@ -3686,12 +3686,36 @@ if (libDb) {
   });
 
   // /api/page-visits — owner-only visit log (exposes client IPs / PII).
+  //
+  // ?days=N  trailing window (0 or 'all' = no date floor). Default 7.
+  // ?limit=N render budget for the map, default 20k, ceiling 200k. This is a
+  //          CAP ON THE RESPONSE, not on what is stored — page_visits keeps
+  //          history forever since 2026-08-06 (see lib/db.ts insertPageVisit).
+  //
+  // The response also carries `stats`, computed in the DB over the whole window
+  // rather than over the truncated page. Without it the owner map cannot tell
+  // "there were 4,000 visits" from "there were 400,000 and you are seeing the
+  // newest 20,000" — which is exactly how the old hard-coded 5000 read as
+  // "no new users". stats.newestAt is the beacon health check: if the newest
+  // row is hours old, visits stopped being RECORDED, which is a different
+  // failure from nobody visiting.
   register('/api/page-visits', {
     auth: 'owner', methods: ['GET'],
     async handler(req, res, ctx) {
       try {
-        const limit = Math.min(Number(new URL(req.url || '/', 'http://localhost').searchParams.get('limit') ?? 100), 5000);
-        const rows = await libDb.getRecentPageVisits(limit);
+        const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+        const daysRaw = sp.get('days');
+        const days = daysRaw == null ? 7
+          : (daysRaw === 'all' || daysRaw === '' ? 0 : Math.max(0, Number(daysRaw) || 0));
+        const limit = Math.max(1, Math.min(Number(sp.get('limit') ?? 20000) || 20000, 200000));
+        const [rows, stats] = await Promise.all([
+          libDb.getPageVisitsSince(days, limit),
+          // Enrichment: a stats failure must not cost the caller the log itself.
+          libDb.getPageVisitStats(days).catch((e) => {
+            console.warn('[api-router] page-visits stats failed:', e?.message || e);
+            return null;
+          }),
+        ]);
         // Batch-resolve the account behind each distinct signed-in user_id in
         // this page, so the owner map can show WHO was on the page — identity
         // (email / discord), how long they've had an account, and when they
@@ -3754,7 +3778,18 @@ if (libDb) {
             createdAt: r.created_at ?? null,
           };
         });
-        send(res, 200, { visits });
+        send(res, 200, {
+          visits,
+          days,
+          limit,
+          // truncated: the window holds more rows than we returned, so the map
+          // is showing a slice. The UI says so rather than implying it is all.
+          truncated: Boolean(stats && stats.total > visits.length),
+          total: stats ? stats.total : visits.length,
+          newestAt: stats ? stats.newestAt : (visits[0]?.createdAt ?? null),
+          oldestAt: stats ? stats.oldestAt : null,
+          serverNow: new Date().toISOString(),
+        });
       } catch (err) { send(res, 500, { error: String(err) }); }
     },
   });

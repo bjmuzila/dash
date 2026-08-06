@@ -1,37 +1,100 @@
 # Changelog
 
-## 2026-08-06 - Test Lab / GEX Map: intensity slider, net GEX sparkline, chrome removed
+## 2026-08-06 (b) - Owner / Sales: three cards stop printing the same number
 
-### `app/test/GexMapTab.tsx`
-- **Gradient intensity slider on the Heatmap tab.** Canonical control from
-  `INTENSITY_SLIDER_GRADIENT_LOGIC.md` — range 0.5–3, step 0.01, 80×3, accent `#00e5ff`,
-  live `N.NNx` readout. `heatAlpha()` takes an `intensity` that multiplies the ratio
-  *before* the `^1.4` easing, exactly as `metricBg()` does, so a notch means the same
-  thing here as in Multi-Greek. The cell cull threshold scales with it too, or the
-  slider couldn't reveal what it dropped as noise at 1×.
-  - **Default 1.00, not the doc's 1.75.** That default belongs to `metricBg()`, whose
-    alpha is capped at 0.18 for table cells sitting behind text. This is an uncapped
-    full-bleed field tuned at 1× — opening at 1.75 would be a wall of colour.
-  - **Heatmap only.** Terrain is a hypsometric surface with its own quantized bands and
-    contour levels; the same multiplier flattens it to a colour block rather than
-    brightening it. The control renders before the flexing blurb so showing/hiding it
-    doesn't shove the header around.
-- **`NET GEX Δ · 15m` → `NET GEX · SESSION` sparkline.** The old panel drew a per-strike
-  diverging bar chart against a column ~15 min back: a different question from the rest
-  of the card, and blank (`NOT ENOUGH HISTORY`) for the first quarter hour of every
-  session. Now the ladder summed per slot over the **selected scope** (RTH or All), as a
-  line + area with a dashed **zero line** — above it dealers dampen, below they amplify,
-  and the crossing is visible. Same x rule as the field, so it lines up with the heat.
-  - Scaled on the session's **signed** range (`nLo`/`nHi`), not `|max|`: a day that never
-    went short gamma shows zero pinned at the bottom instead of implying it came close.
-    Zero is always inside the range, so the line is always on the panel.
-  - `netSeries` keeps its session scale through zoom, like `gMax` — narrowing time must
-    not repaint a flat stretch as a dramatic swing. `chg15` / `chg15Min` / `hasChg15`
-    removed from `MapModel`.
-- **Removed two prose blocks**: the `option_strike_gex_history` / `net_dex` /
-  `greek_snapshots` provenance paragraph under the toolbar, and the
-  `$SPX · date · N of M slots · N strikes · gamma scale …` footer line. `rthSlots` went
-  with the latter.
+The MRR card, the "Net · period" card and the revenue chart were all the same
+measurement — every recurring subscription normalized to a monthly rate — so Net was
+just MRR minus a constant and the chart's headline was MRR again. Three widgets, one
+number. They now answer three different questions.
+
+### `app/api/admin/stripe-summary/route.ts`
+- **`mrrMonthly` + `monthlySubscriptions` (new headline).** Only subs on a **monthly**
+  plan that are still billing and are **not** winding down. An annual plan bills once
+  and then nothing for eleven months, and a cancelling sub bills zero more times —
+  neither is a monthly recurring transaction. The old broad `mrr` is still returned for
+  the tooltip and run-rate maths, but nothing headlines it.
+- **Paid invoices are pulled once, auto-paged**, replacing the per-customer invoice call
+  (one round trip per customer, and it could only answer "lifetime spend"). That single
+  list now feeds `spendByCustomer` (the table's Total Spent) **and** a new
+  `revenueByMonth` map — `"YYYY-MM" → { revenue, invoices }` — bucketed on
+  `status_transitions.paid_at`. A $500 annual invoice lands in full in the month the cash
+  arrived, which is what "all sales that month" means.
+- `summary.lifetimeRevenue` added: every dollar ever collected.
+- `shape()` is synchronous now (no awaited invoice call inside it), so the two
+  `Promise.all` fan-outs are gone.
+
+### `owner-vite/src/pages/Sales.tsx`
+- **"Recurring Revenue" card = monthly plans only.** Reads `mrrMonthly`, sub-line shows
+  the count (`7 monthly subs · per month`). Tooltip spells out what's excluded and what
+  the old broad number would have read, so the change isn't silent.
+- **"Net · period" card replaced by "Collected · Lifetime"** — cumulative cash off paid
+  invoices, with a running-total curve. Not a rate, so the granularity tabs deliberately
+  don't rescale it.
+- **"Recurring Revenue" chart → "Profit per Month".** Bars are **all sales collected that
+  calendar month** from `revenueByMonth`, not a recomputed run-rate. Each bar is green
+  when the month cleared the expense run-rate and red when it didn't; a dashed red
+  water-line marks the expense level across the whole plot, `+n`/`−n` under each bar are
+  subs gained/lost, and the header shows the month's cash, its profit, and the change vs
+  last month. Tooltip breaks out invoice count, expenses and profit.
+- Net result: card 1 is a forward-looking monthly rate, card 4 is cash to date, the chart
+  is cash per month against costs. No two read the same value.
+
+## 2026-08-06 - Owner / Sales: cancellations are visible, statuses stop lying, revenue chart shows the book
+
+The Sales page could only ever see `status: "active"` subscriptions, so a customer
+who cancelled simply vanished from the page with no trace and no reason, and one who
+had *clicked* cancel still read a plain green "active" until the day they disappeared.
+The amount column also overflowed onto the status pill, and "Revenue Summary" plotted
+new signups — so a month where every existing sub paid but nobody new joined drew $0.
+
+### `app/api/admin/stripe-summary/route.ts`
+- **Pulls every subscription status, not just active** (`status: "all"`, auto-paged to
+  500) and splits them: `subscriptions` = still has access (active / trialing /
+  past_due / unpaid / incomplete), `cancellations` = over, service removed
+  (canceled / incomplete_expired). The 2026-07-01 launch cutoff still applies to both.
+- **Lifecycle fields now returned on every row** — `cancel_at_period_end`, `cancel_at`,
+  `canceled_at`, `ended_at`, plus Stripe's `cancellation_details` flattened to
+  `cancel_reason` / `cancel_feedback` / `cancel_comment`. That's where "why" comes from:
+  `payment_failed` is a dead card, `cancellation_requested` is a customer who chose to go,
+  and `feedback` is what they picked on the way out.
+- **MRR keeps winding-down subs** (they still bill until the period ends) but reports
+  them separately as `cancellingSoon` + `mrrLeaving`, so revenue at risk is a number
+  rather than a surprise.
+- **`churnedThisMonth` fixed.** It filtered cancelled subs by `created` — i.e. subs
+  *signed up* this month that were also cancelled, which is almost always 0. Now it
+  counts subs that **ended** this month (`ended_at`/`canceled_at`).
+- **`recentCustomers` removed.** It read `customers.list({limit:20})` — the newest 20
+  Stripe *customer records*, not people who paid. A customer whose record predated their
+  purchase (Wayne) never showed up. Nothing reads it now.
+- New summary fields: `cancellingSoon`, `mrrLeaving`, `canceledTotal`.
+
+### `owner-vite/src/pages/Sales.tsx`
+- **Amount no longer runs over the Status button.** `SUB_TABLE_COLS` gave Amount 80px
+  while it renders `$300/yr` plus a struck-through list price. Amount is 132px, Status
+  116px, and every grid cell now carries `minWidth: 0` + `overflow: hidden` so no cell
+  can bleed into its neighbour again.
+- **Status is derived, not copied.** New `displayStatus()` collapses status +
+  `cancel_at_period_end` + `ended_at` into what's actually true:
+  - `cancelling` (gold) — cancelled in Stripe, still paid up. Sub-line: `ends Aug 24`.
+    The Renews column flips to that date too, since it doesn't renew.
+  - `cancelled` (red) — the date passed, service removed.
+  - `past due` / `unpaid` (orange) — card declined, needs a new card.
+  Header badges: active count, `N leaving`, `N needs card`.
+- **"Recent Customers" card replaced by "Cancellations".** Lists everyone winding down
+  first (still recoverable) then everyone gone, each with the amount, the exact date
+  service ends/ended, lifetime spend, and a reason chip — billing failures tinted orange
+  so a dead card is distinguishable at a glance from a customer who left. Free-text
+  cancellation comments render underneath.
+- **"Sale Summary" card deleted.** It re-plotted the same signup bars against a flat
+  expense line; the expense line moved onto the revenue chart.
+- **"Revenue Summary" → "Recurring Revenue", month over month, full width.** Each bar is
+  the recurring book at that month's end — every sub that had started and not yet ended,
+  at its actual post-discount monthly rate — for the last 12 months, with the current
+  month measured to date. A red water-line marks the expense run-rate (bar above it is
+  profit), `+n`/`−n` under each bar are subs gained/lost that month, and the header shows
+  the current MRR with the month-over-month delta.
+- **Total Customers curve** no longer depends on `recentCustomers`; it counts unique
+  paying emails off the subscriptions themselves, matching its own headline.
 
 ## 2026-08-06 - Test Lab / GEX Map: one chart, real RTH clock axis, labels off the field
 

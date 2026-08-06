@@ -48,7 +48,15 @@ interface StripeSubscription {
 }
 
 interface StripeSummary {
-  /** Net of recurring discounts — the real monthly billing rate. */
+  /** HEADLINE recurring revenue: monthly plans only, still billing, not
+   *  cancelling. Annual plans and winding-down subs are excluded — neither
+   *  produces a charge next month. Optional for responses cached from before
+   *  this shipped; readers fall back to `mrr`. */
+  mrrMonthly?: number;
+  /** How many subscriptions make up `mrrMonthly`. */
+  monthlySubscriptions?: number;
+  /** Every recurring sub normalized to a monthly rate (annuals ÷ 12). Used for
+   *  run-rate maths and the tooltip — no longer headlined anywhere. */
   mrr: number;
   /** Same subscriptions at list price. Only used to show the discount gap. */
   grossMrr?: number;
@@ -62,6 +70,8 @@ interface StripeSummary {
   canceledTotal?: number;
   totalCustomers: number;
   churnedThisMonth: number;
+  /** Every dollar ever collected (sum of paid invoices). */
+  lifetimeRevenue?: number;
 }
 
 /** Monthly amount a subscription actually bills, with graceful fallback to the
@@ -72,9 +82,14 @@ function netMonthlyOf(s: StripeSubscription): number {
   return s.interval === "year" ? Math.round(per / 12) : per;
 }
 
+/** "YYYY-MM" → cash actually collected that calendar month. */
+type MonthRevenue = Record<string, { revenue: number; invoices: number }>;
+
 interface SalesData {
   configured: boolean;
   summary: StripeSummary | null;
+  /** Paid-invoice totals by month — the Profit per Month chart's only input. */
+  revenueByMonth?: MonthRevenue;
   /** Subscriptions that still have access (active / trialing / past_due / …). */
   subscriptions: StripeSubscription[];
   /** Subscriptions that are over — service removed. Powers the Cancellations card. */
@@ -331,145 +346,158 @@ function buildPeriods(gran: Granularity, subs: StripeSubscription[]) {
   });
 }
 
-// ─── Recurring revenue, month over month ───────────────────────────────────────
+// ─── Profit per month ──────────────────────────────────────────────────────────
 //
-// Was: "new subscriptions by signup date" — a bar for whatever got signed that
-// week, which read as $0 on any quiet week even while every existing sub kept
-// paying. Now each bar is the RECURRING BOOK at the end of that month: every
-// subscription that had started and had not yet ended, at what it actually
-// bills per month. That's the line that should be going up and to the right.
+// Three things on this page were printing the same number: the MRR card, the
+// chart's headline, and the chart's last bar — all of them "the recurring book,
+// normalized to a month." This chart now measures something the cards can't:
+// CASH ACTUALLY COLLECTED in each calendar month, straight off paid Stripe
+// invoices, minus the expense run-rate. So a $500 annual invoice shows up in
+// full in the month it was paid (because that is when the money arrived), and a
+// month with no new signups still shows every renewal that billed.
 //
-// Cancelled subs are included in the input on purpose — they have to be, or a
-// month they were still paying in would under-count. `ended_at`/`cancel_at`
-// drops them out of the months after they left.
+// The MRR card, by contrast, is a forward-looking rate on monthly plans only.
+// Different question, different number — on purpose.
 
-/** Was this subscription live and billing at `atSec`? */
-function activeAt(s: StripeSubscription, atSec: number): boolean {
-  if (s.created > atSec) return false;
-  const ended = s.ended_at ?? s.cancel_at ?? null;
-  if (ended != null && ended <= atSec) return false;
-  return true;
-}
-
-/** Last N calendar months, oldest first, each with its end-of-month instant. */
+/** Last N calendar months, oldest first, keyed to match the API's "YYYY-MM". */
 function lastMonths(count: number) {
   const now = new Date();
   return Array.from({ length: count }, (_, i) => {
     const start = new Date(now.getFullYear(), now.getMonth() - (count - 1 - i), 1);
     const end = new Date(start.getFullYear(), start.getMonth() + 1, 0, 23, 59, 59);
-    // The current month is only complete "as of now" — measure it at today.
-    const measureAt = Math.min(Math.floor(end.getTime() / 1000), Math.floor(now.getTime() / 1000));
     return {
+      key: `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}`,
       label: start.toLocaleDateString("en-US", { month: "short" }),
       year: start.getFullYear(),
       startSec: Math.floor(start.getTime() / 1000),
       endSec: Math.floor(end.getTime() / 1000),
-      measureAt,
       isCurrent: start.getFullYear() === now.getFullYear() && start.getMonth() === now.getMonth(),
     };
   });
 }
 
-function RecurringRevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; expensesMonthly: number }) {
-  const months = lastMonths(12);
-
-  const rows = months.map(m => {
-    let mrr = 0, count = 0, added = 0, lost = 0;
+/** Collected − expenses, per month, for the last 12 months. */
+function buildProfitRows(revenueByMonth: MonthRevenue, subs: StripeSubscription[], expensesMonthly: number) {
+  return lastMonths(12).map(m => {
+    const cell = revenueByMonth[m.key];
+    const revenue = cell?.revenue ?? 0;
+    const invoices = cell?.invoices ?? 0;
+    let added = 0, lost = 0;
     for (const s of subs) {
-      if (activeAt(s, m.measureAt)) {
-        mrr += netMonthlyOf(s);
-        count += 1;
-      }
       if (s.created >= m.startSec && s.created <= m.endSec) added += 1;
       const ended = s.ended_at ?? s.cancel_at ?? null;
       if (ended != null && ended >= m.startSec && ended <= m.endSec) lost += 1;
     }
-    return { ...m, mrr, count, added, lost, net: mrr - expensesMonthly };
+    return { ...m, revenue, invoices, added, lost, profit: revenue - expensesMonthly };
   });
+}
 
-  const max = Math.max(...rows.map(r => r.mrr), 1);
+function MonthlyProfitChart({ revenueByMonth, subs, expensesMonthly }: {
+  revenueByMonth: MonthRevenue;
+  subs: StripeSubscription[];
+  expensesMonthly: number;
+}) {
+  const rows = buildProfitRows(revenueByMonth, subs, expensesMonthly);
+
+  const max = Math.max(...rows.map(r => r.revenue), expensesMonthly, 1);
   const latest = rows[rows.length - 1];
   const prior = rows.length > 1 ? rows[rows.length - 2] : null;
-  const delta = prior ? latest.mrr - prior.mrr : 0;
-  const deltaPct = prior && prior.mrr > 0 ? (delta / prior.mrr) * 100 : null;
+  const delta = prior ? latest.revenue - prior.revenue : 0;
+  const deltaPct = prior && prior.revenue > 0 ? (delta / prior.revenue) * 100 : null;
   const deltaColor = delta > 0 ? T.green : delta < 0 ? T.red : T.muted;
+  const profitColor = latest.profit >= 0 ? T.green : T.red;
+
+  const PLOT_H = 150;
 
   return (
     <div style={{ ...homePanelStyle, padding: "18px 20px" }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 2, flexWrap: "wrap" }}>
         <div>
-          <div style={{ fontSize: 17, fontWeight: 700, color: T.gold, marginBottom: 3 }}>Recurring Revenue</div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: T.gold, marginBottom: 3 }}>Profit per Month</div>
           <div style={{ fontSize: 14, color: T.muted }}>
-            Active subscription book at each month end · last {rows.length} months
+            All sales collected that month, less the {fmtMoney(expensesMonthly)}/mo expense run-rate · last {rows.length} months
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <span style={{ fontSize: 22, fontWeight: 700, color: T.cyan, fontFamily: "var(--font-mono)" }}>{fmtMoney(latest.mrr)}</span>
-          <span style={{ fontSize: 14, color: T.muted }}>/mo</span>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 14, color: T.muted }}>{latest.label} collected</span>
+          <span style={{ fontSize: 22, fontWeight: 700, color: T.cyan, fontFamily: "var(--font-mono)" }}>{fmtMoney(latest.revenue)}</span>
+          <span
+            title={`Profit = ${fmtMoney(latest.revenue)} collected − ${fmtMoney(expensesMonthly)} expenses`}
+            style={{
+              fontSize: 14, fontWeight: 700, color: profitColor, padding: "2px 8px", borderRadius: 10,
+              background: `${profitColor}18`, border: `1px solid ${profitColor}44`, fontFamily: "var(--font-mono)",
+            }}
+          >
+            {latest.profit >= 0 ? "+" : "−"}{fmtMoney(Math.abs(latest.profit))} profit
+          </span>
           {prior && (
-            <span
-              title={`vs ${prior.label}: ${fmtMoney(prior.mrr)}/mo`}
-              style={{
-                fontSize: 14, fontWeight: 700, color: deltaColor, padding: "2px 8px", borderRadius: 10,
-                background: `${deltaColor}18`, border: `1px solid ${deltaColor}44`,
-              }}
-            >
-              {delta >= 0 ? "+" : "−"}{fmtMoney(Math.abs(delta))}{deltaPct !== null ? ` (${delta >= 0 ? "+" : "−"}${Math.abs(deltaPct).toFixed(0)}%)` : ""}
+            <span title={`vs ${prior.label}: ${fmtMoney(prior.revenue)} collected`} style={{ fontSize: 14, fontWeight: 700, color: deltaColor }}>
+              {delta >= 0 ? "▲" : "▼"} {fmtMoney(Math.abs(delta))}{deltaPct !== null ? ` (${Math.abs(deltaPct).toFixed(0)}%)` : ""}
             </span>
           )}
         </div>
       </div>
 
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 8, height: 180, marginTop: 16 }}>
-        {rows.map((b, i) => {
-          const barH = Math.max(3, (b.mrr / max) * 140);
-          const expenseH = Math.max(0, Math.min(barH, (expensesMonthly / max) * 140));
-          return (
-            <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, minWidth: 0 }}>
-              <span style={{ fontSize: 14, fontWeight: 700, color: b.mrr > 0 ? T.cyan : T.muted, whiteSpace: "nowrap", lineHeight: 1 }}>
-                {b.mrr > 0 ? fmtMoney(b.mrr) : "—"}
-              </span>
-              <div
-                title={
-                  `${b.label} ${b.year}: ${fmtMoney(b.mrr)}/mo recurring across ${b.count} sub${b.count !== 1 ? "s" : ""}` +
-                  ` · +${b.added} new · −${b.lost} lost` +
-                  ` · net after expenses ${fmtMoney(b.net)}/mo` +
-                  (b.isCurrent ? " · month to date" : "")
-                }
-                style={{
-                  position: "relative",
-                  width: "100%",
-                  height: barH,
-                  background: b.mrr > 0
-                    ? `linear-gradient(180deg, ${T.cyan}dd, ${T.cyan}44)`
-                    : "rgba(255,255,255,0.06)",
-                  borderRadius: "3px 3px 0 0",
-                  outline: b.isCurrent ? `1px dashed ${T.cyan}66` : "none",
-                  cursor: "default",
-                }}
-              >
-                {/* Expense water-line — anything above it is profit that month. */}
-                {expensesMonthly > 0 && b.mrr > 0 && (
-                  <div style={{ position: "absolute", left: 0, right: 0, bottom: expenseH, height: 1, background: T.red, opacity: 0.75 }} />
-                )}
+      <div style={{ position: "relative", marginTop: 16 }}>
+        {/* Expense water-line across the whole plot — bar above it is profit. */}
+        {expensesMonthly > 0 && (
+          <div
+            title={`Expense run-rate ${fmtMoney(expensesMonthly)}/mo — anything above this line is profit`}
+            style={{
+              position: "absolute", left: 0, right: 0, zIndex: 2, pointerEvents: "none",
+              bottom: 22 + (expensesMonthly / max) * PLOT_H,
+              borderTop: `1px dashed ${T.red}`, opacity: 0.8,
+            }}
+          />
+        )}
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 8, height: PLOT_H + 22 }}>
+          {rows.map((b, i) => {
+            const barH = Math.max(3, (b.revenue / max) * PLOT_H);
+            return (
+              <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, minWidth: 0, height: "100%", justifyContent: "flex-end" }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: b.revenue > 0 ? T.cyan : T.muted, whiteSpace: "nowrap", lineHeight: 1 }}>
+                  {b.revenue > 0 ? fmtMoney(b.revenue) : "—"}
+                </span>
+                <div
+                  title={
+                    `${b.label} ${b.year}: ${fmtMoney(b.revenue)} collected across ${b.invoices} paid invoice${b.invoices !== 1 ? "s" : ""}` +
+                    ` · expenses ${fmtMoney(expensesMonthly)}` +
+                    ` · profit ${fmtMoney(b.profit)}` +
+                    ` · +${b.added} new sub${b.added !== 1 ? "s" : ""} · −${b.lost} lost` +
+                    (b.isCurrent ? " · month to date" : "")
+                  }
+                  style={{
+                    width: "100%",
+                    height: barH,
+                    // Green when the month cleared its costs, red when it didn't —
+                    // the whole point of the chart readable without the tooltip.
+                    background: b.revenue <= 0
+                      ? "rgba(255,255,255,0.06)"
+                      : b.profit >= 0
+                        ? `linear-gradient(180deg, ${T.green}dd, ${T.green}33)`
+                        : `linear-gradient(180deg, ${T.red}dd, ${T.red}33)`,
+                    borderRadius: "3px 3px 0 0",
+                    outline: b.isCurrent ? `1px dashed ${T.cyan}66` : "none",
+                    cursor: "default",
+                  }}
+                />
+                <span style={{ fontSize: 10, color: b.isCurrent ? T.cyan : T.muted, whiteSpace: "nowrap" }}>{b.label}</span>
+                <span style={{ fontSize: 10, whiteSpace: "nowrap", opacity: 0.9, minHeight: 12 }}>
+                  {b.added > 0 && <span style={{ color: T.green }}>+{b.added}</span>}
+                  {b.added > 0 && b.lost > 0 && <span style={{ color: T.muted }}> </span>}
+                  {b.lost > 0 && <span style={{ color: T.red }}>−{b.lost}</span>}
+                </span>
               </div>
-              <span style={{ fontSize: 10, color: b.isCurrent ? T.cyan : T.muted, whiteSpace: "nowrap" }}>{b.label}</span>
-              <span style={{ fontSize: 10, color: T.muted, whiteSpace: "nowrap", opacity: 0.85 }}>
-                {b.added > 0 && <span style={{ color: T.green }}>+{b.added}</span>}
-                {b.added > 0 && b.lost > 0 && " "}
-                {b.lost > 0 && <span style={{ color: T.red }}>−{b.lost}</span>}
-                {b.added === 0 && b.lost === 0 && " "}
-              </span>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 14, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, fontSize: 14, color: T.muted, flexWrap: "wrap" }}>
-        <span title="Every subscription billing that month, at its actual (post-discount) monthly rate"><span style={{ color: T.cyan }}>■</span> Recurring / mo</span>
-        <span title={`Current expense run-rate, ${fmtMoney(expensesMonthly)}/mo — bar above the line is profit`}><span style={{ color: T.red }}>▬</span> Expense line</span>
-        <span title="New subscriptions started that month"><span style={{ color: T.green }}>+n</span> new</span>
-        <span title="Subscriptions that ended that month"><span style={{ color: T.red }}>−n</span> lost</span>
+        <span title="Money that actually landed that month — every paid invoice, including annual plans in full"><span style={{ color: T.green }}>■</span> Cleared costs</span>
+        <span title="Collected less than the expense run-rate that month"><span style={{ color: T.red }}>■</span> Under costs</span>
+        <span title={`Expense run-rate ${fmtMoney(expensesMonthly)}/mo`}><span style={{ color: T.red }}>┄</span> Expense line</span>
+        <span title="Subscriptions started / ended that month"><span style={{ color: T.green }}>+n</span> / <span style={{ color: T.red }}>−n</span> subs</span>
       </div>
     </div>
   );
@@ -847,6 +875,7 @@ export default function Sales() {
       setData({
         configured: false,
         summary: null,
+        revenueByMonth: {},
         subscriptions: [],
         cancellations: [],
         error: e instanceof Error ? e.message : "Failed to load",
@@ -918,6 +947,12 @@ export default function Sales() {
 
   const expensesMonthly = (expenses ?? []).reduce((a, e) => a + monthlyEquivalent(e), 0);
 
+  // Cash collected, ever. Server sends it; summing the month map is the fallback
+  // for a response cached from before that field existed.
+  const lifetimeRevenue =
+    data?.summary?.lifetimeRevenue ??
+    Object.values(data?.revenueByMonth ?? {}).reduce((a, m) => a + m.revenue, 0);
+
   // Every KPI card's curve is bucketed at the granularity picked in the header,
   // using the same buildPeriods() windows the revenue bar charts use — so the
   // cards and the charts below them always describe the same span of time.
@@ -954,7 +989,7 @@ export default function Sales() {
   // also makes the delta pill read as growth across the selected period.
   const kpiSeries = useMemo(() => {
     const sum = data?.summary;
-    if (!sum) return { mrr: [], subs: [], customers: [], net: [] };
+    if (!sum) return { mrr: [], subs: [], customers: [], revenue: [] };
 
     const anchor = (key: "mrr" | "subs" | "customers", total: number): LivePoint[] => {
       if (!periodSeries.length) return [];
@@ -963,17 +998,33 @@ export default function Sales() {
     };
     const scale = (pts: LivePoint[], f: (v: number) => number) => pts.map(p => ({ ...p, value: f(p.value) }));
 
-    // Both money curves are expressed in the same period as their headline, so
-    // the tip badge always matches the big number above it.
+    // The MRR curve is expressed in the same period as its headline, so the tip
+    // badge always matches the big number above it. It's anchored on
+    // `mrrMonthly` (monthly plans only) because that's what the card now shows.
     const f = PERIOD_FACTOR[gran];
-    const monthly = anchor("mrr", sum.mrr);
+    const headlineMrr = sum.mrrMonthly ?? sum.mrr;
+
+    // Lifetime collected: cumulative paid-invoice cash by month. Always monthly
+    // regardless of the granularity tabs — it's a running total of real money,
+    // not a rate, so rescaling it to "per week" would be meaningless.
+    const months = lastMonths(12);
+    let running = 0;
+    const priorMonths = Object.entries(data?.revenueByMonth ?? {})
+      .filter(([k]) => k < months[0].key)
+      .reduce((a, [, v]) => a + v.revenue, 0);
+    running = priorMonths;
+    const revenue: LivePoint[] = months.map(m => {
+      running += data?.revenueByMonth?.[m.key]?.revenue ?? 0;
+      return { label: m.label, value: running };
+    });
+
     return {
-      mrr: scale(monthly, v => v * f),
+      mrr: scale(anchor("mrr", headlineMrr), v => v * f),
       subs: anchor("subs", sum.activeSubscriptions),
       customers: anchor("customers", sum.totalCustomers),
-      net: scale(monthly, v => (v - expensesMonthly) * f),
+      revenue,
     };
-  }, [data?.summary, periodSeries, expensesMonthly, gran]);
+  }, [data?.summary, data?.revenueByMonth, periodSeries, gran]);
 
   return (
     <div style={homeShellStyle}>
@@ -1017,31 +1068,32 @@ export default function Sales() {
                 the crosshair readout (period + exact value); the pill top-right
                 is the change across the whole visible window. */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(272px, 1fr))", gap: 12 }}>
-              {/* Headline: what actually gets paid, annualized. Discounts applied,
-                  expenses NOT deducted — that's the "Yearly Expectation" card. */}
-              {/* The money cards re-express themselves in the selected period —
-                  pick Yearly and this IS the old "Net Pay · Yearly" card, which
-                  is why that one (and its after-expenses twin) are gone. Counts
-                  don't rescale: 18 subscriptions is 18 whatever window you pick. */}
+              {/* Recurring Revenue is now MONTHLY PLANS ONLY, still billing and
+                  not cancelling — the charge that genuinely repeats next month.
+                  Annual plans are excluded (they bill once, then nothing for
+                  eleven months) and so are subs already winding down. That is
+                  what stops this card, the Net card and the chart from all
+                  printing the same normalized run-rate. Counts don't rescale:
+                  18 subscriptions is 18 whatever window you pick. */}
               <LiveKpiCard
                 label={`${PERIOD_WORD[gran]} Recurring Revenue`}
-                value={fmtMoney(data.summary.mrr * PERIOD_FACTOR[gran])}
+                value={fmtMoney((data.summary.mrrMonthly ?? data.summary.mrr) * PERIOD_FACTOR[gran])}
                 sub={
-                  data.summary.grossMrr && data.summary.grossMrr > data.summary.mrr
-                    ? `${fmtMoney(data.summary.grossMrr * PERIOD_FACTOR[gran])} at list price`
+                  data.summary.monthlySubscriptions !== undefined
+                    ? `${data.summary.monthlySubscriptions} monthly sub${data.summary.monthlySubscriptions !== 1 ? "s" : ""} · ${PERIOD_PER[gran]}`
                     : PERIOD_PER[gran]
                 }
                 points={kpiSeries.mrr}
                 accent={T.cyan}
                 formatValue={fmtMoneyTick}
                 tooltip={
-                  `Active subscriptions as actually billed (promo codes and coupons applied), ` +
-                  `normalized to a monthly rate then scaled to the selected period ` +
-                  `(${fmtMoney(data.summary.mrr)}/mo × ${PERIOD_FACTOR[gran].toFixed(4)}).` +
-                  (data.summary.grossMrr && data.summary.grossMrr > data.summary.mrr
-                    ? ` ${data.summary.discountedSubscriptions ?? 0} discounted sub(s) account for the gap to list price.`
-                    : " No active discounts, so this matches list price.") +
-                  " Before Stripe fees and before expenses."
+                  `Subscriptions on a MONTHLY plan that are still billing and haven't cancelled, ` +
+                  `as actually charged (promo codes and coupons applied)` +
+                  (data.summary.monthlySubscriptions !== undefined ? ` — ${data.summary.monthlySubscriptions} of them` : "") +
+                  `, scaled to the selected period (${fmtMoney(data.summary.mrrMonthly ?? data.summary.mrr)}/mo × ${PERIOD_FACTOR[gran].toFixed(4)}). ` +
+                  `Annual plans and subs winding down are deliberately excluded: neither produces a charge next month. ` +
+                  `Counting every recurring sub at a normalized monthly rate instead would read ${fmtMoney(data.summary.mrr)}/mo. ` +
+                  `Before Stripe fees and before expenses — the Profit per Month chart below is the money that actually arrived.`
                 }
               />
               <LiveKpiCard
@@ -1071,22 +1123,27 @@ export default function Sales() {
                 formatValue={fmtCountTick}
                 tooltip="Unique paying customers with a subscription created on/after 2026-07-01"
               />
+              {/* Was "Net · <period>" = MRR − expenses, i.e. the MRR card minus a
+                  constant — a third card drawing the same curve. Replaced with
+                  cash that has actually landed, which nothing else on the page
+                  shows and which no granularity tab can rescale. */}
               <LiveKpiCard
-                label={`Net · ${PERIOD_WORD[gran]}`}
-                value={fmtMoney((data.summary.mrr - expensesMonthly) * PERIOD_FACTOR[gran])}
-                sub={data.summary.churnedThisMonth === 0 ? "after expenses · no churn 🎉" : `after expenses · ${data.summary.churnedThisMonth} churned this month`}
-                points={kpiSeries.net}
+                label="Collected · Lifetime"
+                value={fmtMoney(lifetimeRevenue)}
+                sub={data.summary.churnedThisMonth === 0 ? "all sales to date · no churn 🎉" : `all sales to date · ${data.summary.churnedThisMonth} churned this month`}
+                points={kpiSeries.revenue}
                 accent={T.lightBlue}
                 formatValue={fmtMoneyTick}
-                tooltip={`(Actual MRR ${fmtMoney(data.summary.mrr)} − expenses ${fmtMoney(expensesMonthly)}/mo run-rate), scaled to the selected period. At Yearly this is the old "Yearly Expectation" figure.`}
+                tooltip={`Every dollar Stripe has actually collected (sum of paid invoices), including annual plans in full. Not a rate — the granularity tabs don't rescale it. Expense run-rate is ${fmtMoney(expensesMonthly)}/mo; the chart below nets the two per month.`}
               />
             </div>
 
-            {/* Recurring revenue month over month. Full width now — the old
-                "Sale Summary" panel that shared this row is gone: it re-plotted
-                the same signup bars against a flat expense line, and the
-                expense line lives on this chart instead. */}
-            <RecurringRevenueChart
+            {/* Profit per month — real cash collected, less the expense run-rate.
+                Full width; the old "Sale Summary" panel that shared this row is
+                gone (it re-plotted the same signup bars against a flat expense
+                line, and that line lives on this chart now). */}
+            <MonthlyProfitChart
+              revenueByMonth={data.revenueByMonth ?? {}}
               subs={[...data.subscriptions, ...(data.cancellations ?? [])]}
               expensesMonthly={expensesMonthly}
             />

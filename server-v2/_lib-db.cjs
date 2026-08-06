@@ -127,6 +127,8 @@ __export(db_exports, {
   getPositioningTickers: () => getPositioningTickers,
   getPremarketSummary: () => getPremarketSummary,
   getPremiumFlow: () => getPremiumFlow,
+  getPageVisitStats: () => getPageVisitStats,
+  getPageVisitsSince: () => getPageVisitsSince,
   getPromoCode: () => getPromoCode,
   getQuoteSymbols: () => getQuoteSymbols,
   getRecentPageVisits: () => getRecentPageVisits,
@@ -3448,7 +3450,6 @@ async function getPageLoadStatus(limit = 200) {
     [limit]
   );
 }
-var PAGE_VISITS_KEEP = Math.max(1e3, Number(process.env.PAGE_VISITS_KEEP) || 5e3);
 async function insertPageVisit(r) {
   const pool = await getDb();
   await pool.query(
@@ -3486,21 +3487,45 @@ async function insertPageVisit(r) {
       r.is_bot ?? false
     ]
   );
-  await pool.query(
-    `DELETE FROM page_visits
-     WHERE id < (
-       SELECT MIN(id) FROM (
-         SELECT id FROM page_visits ORDER BY id DESC LIMIT $1
-       ) keep
-     )`,
-    [PAGE_VISITS_KEEP]
-  );
 }
 async function getRecentPageVisits(limit = 100) {
   return queryAll(
     "SELECT * FROM page_visits ORDER BY id DESC LIMIT ?",
     [limit]
   );
+}
+async function getPageVisitsSince(days, limit = 5e3) {
+  const d = Number(days);
+  if (!Number.isFinite(d) || d <= 0) {
+    return queryAll(
+      "SELECT * FROM page_visits ORDER BY id DESC LIMIT ?",
+      [limit]
+    );
+  }
+  return queryAll(
+    `SELECT * FROM page_visits
+      WHERE created_at >= now() - (? || ' days')::interval
+      ORDER BY id DESC
+      LIMIT ?`,
+    [String(Math.floor(d)), limit]
+  );
+}
+async function getPageVisitStats(days) {
+  const d = Number(days);
+  const windowed = Number.isFinite(d) && d > 0;
+  const rows = await queryAll(
+    windowed ? `SELECT COUNT(*) AS total, MAX(created_at) AS newest_at, MIN(created_at) AS oldest_at
+           FROM page_visits
+          WHERE created_at >= now() - (? || ' days')::interval` : `SELECT COUNT(*) AS total, MAX(created_at) AS newest_at, MIN(created_at) AS oldest_at
+           FROM page_visits`,
+    windowed ? [String(Math.floor(d))] : []
+  );
+  const r = rows[0];
+  return {
+    total: Number(r?.total ?? 0),
+    newestAt: r?.newest_at ?? null,
+    oldestAt: r?.oldest_at ?? null
+  };
 }
 async function getCustomerActivity() {
   const pool = await getDb();
@@ -5086,6 +5111,8 @@ async function getLatestMultGreekStaticSnapshot() {
   getPositioningTickers,
   getPremarketSummary,
   getPremiumFlow,
+  getPageVisitStats,
+  getPageVisitsSince,
   getPromoCode,
   getQuoteSymbols,
   getRecentPageVisits,
