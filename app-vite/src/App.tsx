@@ -28,6 +28,7 @@ const EconCalendar = lazy(() => import('@/components/pages/EconomicCalendar'))
 const TestLab      = lazy(() => import('@/components/pages/TestLab'))
 const StrikeHistory = lazy(() => import('@/components/pages/StrikeHistory'))
 const Replay       = lazy(() => import('@/components/pages/Replay'))
+const LevelLog     = lazy(() => import('@/components/pages/LevelLog'))
 
 // ── Phone build (/m/*) ────────────────────────────────────────────────────────
 // Six purpose-built views for a 390px iPhone, each in its own chunk so a phone
@@ -68,6 +69,7 @@ export default function App() {
               <Route path="/flow" element={S(<Flow />)} />
               <Route path="/es-candles" element={S(<EsCandles />)} />
               <Route path="/scanner" element={S(<Scanner />)} />
+              <Route path="/level-log" element={S(<LevelLog />)} />
               <Route path="/strike-history" element={S(<StrikeHistory />)} />
               <Route path="/replay" element={S(<Replay />)} />
               <Route path="/ict" element={S(<Ict />)} />

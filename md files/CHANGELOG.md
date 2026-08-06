@@ -1,5 +1,60 @@
 # Changelog
 
+## 2026-08-06 - Level Log split out of owner Results > Walls into /level-log (Scanner section)
+
+The level log lived inside the owner-only Results -> Walls tab, sharing a page with the
+universe table, reach rank and alert feed. It is now its own customer-facing page under
+Scanner, scoped by a WALLS / CORE switch, and its PNG button takes a REAL screenshot of
+the card instead of re-rendering the text.
+
+### `components/pages/LevelLog.tsx` (new)
+- Port of the level-log panel from `owner-vite/src/pages/Results.tsx` (WallsView /
+  WallCaptureRail / WallTimeline / buildLogText). Same data, same reading: `GET
+  /proxy/walls[?date=&symbol=]`, fetch-on-load + explicit refresh, no polling.
+- **WALLS / CORE tab switcher.** One `view` state filters the ticker rail columns, the
+  capture rail, the timeline, the copy text and the PNG **through the same two memos**
+  (`log` / `events`), so the pills can never disagree with what gets exported. WALLS =
+  `call_wall` + `put_wall`; CORE = `cb`.
+- Theme comes from `homeTheme` / `PageCard` only. The owner page's `gold` has no
+  counterpart in `HOME_THEME`, so it maps to `HOME_THEME.orange`; CORE keeps `LIGHT_BLUE`.
+- Main grid is written as `minmax(0, 1fr) minmax(0, 2.6fr)` **on purpose** — that exact
+  signature is what the GLOBAL GRID COLLAPSE block in `app/globals.css` matches, so the
+  two columns stack on a phone. A `340px` first track looks identical on a desktop and
+  squeezes the log to nothing on mobile.
+
+### PNG snapshot — real screenshot, not a text re-render
+- The owner version deliberately drew `buildLogText()` into a throwaway off-screen node,
+  because a naive `html2canvas()` of the card captured only the slice of the 560px scroll
+  window that happened to be in view, and flattened the frosted styling.
+- The new page calls **`captureAndCopy()` from `lib/snapshot.ts`** with `framed: true`.
+  Framed mode measures each direct child by `scrollHeight` and expands the clone past the
+  scroll container, and the shared clone pass swaps `backdrop-filter` panels for their
+  solid color — so the capture is the whole card, styled, badges and colors included.
+- Header buttons carry `data-capture-hide` so page chrome stays out of the image.
+- Going through `lib/snapshot.ts` is mandatory, not stylistic: `scripts/audit-ui.mjs
+  --strict` (the root `prebuild`) fails the build on a second `html2canvas` import.
+
+### `components/scanner/scannerNav.ts`
+- Added `/level-log` ("Level Log" / "Log") to `SCANNER_ROUTES` and to the `more` cluster
+  in `SCANNER_GROUPS`, so it shows as a pill in the Scanner sub-strip.
+
+### `app-vite/src/App.tsx`
+- `lazy()` import + `<Route path="/level-log">`. Step 2 of the two-step rule — without it
+  the page would fall through the SPA catch-all to `/traders-dashboard`.
+
+### `app/app/level-log/route.ts` (new)
+- `serveSpaShell("app")`, matching the other `/app/*` shells, so a hard refresh on
+  `/app/level-log` does not 404.
+
+### `app/globals.css`
+- Ported the `.wall-scroll` themed-scrollbar rules from `owner-vite/src/index.css` (they
+  only existed in the owner app; the class was inert in the customer bundle).
+
+### Not touched
+- The owner Results -> Walls tab is unchanged — this is a duplicate, not a move out of the
+  owner app.
+
+
 ## 2026-08-06 (o) - budget.cbedge.net: read-only Budget overview ported from /owner/budget
 
 The Money tab was a register with a balance on top. It now leads with the full read-only
