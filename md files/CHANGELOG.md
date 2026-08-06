@@ -1,5 +1,84 @@
 # Changelog
 
+## 2026-08-06 - Test Lab / GEX Map: one chart, real RTH clock axis, labels off the field
+
+Three cards (Tape Field, Spine, Gamma Terrain) drew the same session three times, and
+the x-axis was a column index — so at 10:05 thirty-five minutes of tape was stretched
+across the full width and read as a whole trading day.
+
+### `app/test/GexMapTab.tsx`
+- **Merged to one card, "Tape Field."** Layout is fixed (net DEX profile left gutter,
+  net GEX profile right rail, Vol GEX keel below, Δ15m panel, spot path, wall/flip
+  bands); a **Heatmap / Terrain** segmented switch in the card header changes only what
+  fills the strike × time field. The zoom window survives the switch.
+- **`Spine` removed** — component deleted, not hidden. Its wings were duplicates of the
+  Tape Field's gutter and rail. The `GammaTerrain` wrapper went too; its canvas
+  (`TerrainField`) is now the Tape Field's terrain fill. `clockTimeTicks`,
+  `spreadLabels`, `labWidth` and the `.gexmap-grid` style deleted with them (unused).
+- **RTH pins the x-axis to 09:30–16:00 ET.** New `timeAxis` / `xLo` / `xHi` / `mins` /
+  `slotMin` on `MapModel`; `xFrac()` positions a column by its ET timestamp instead of
+  its index. Cell width is one recording slot in minutes. Ticks and gridlines are round
+  clock times stepped across the domain (`axisTicks`), so 14:00 is drawn hours before a
+  14:00 column exists. `buildModel` now takes `scope`.
+  - Only ever on for **RTH** — "All" spans midnight, where ET minutes wrap and are not
+    monotonic — and only when every column really is inside 09:30–16:00, so a pre-market
+    session (where `scopePayload` returns the unfiltered payload) still draws on the old
+    index axis instead of clamping the overnight tape onto one edge.
+  - Zooming **time** narrows the clock domain to the visible columns (padded one slot);
+    zooming **strikes** leaves the clock alone.
+  - The terrain canvas is placed on the span the tape actually covers, so it grows into
+    the session rather than being stretched over hours with no data behind it.
+  - The Vol GEX keel uses the same x rule, so a spike in the keel stays under the minute
+    of heat it belongs to.
+- **Removed the on-chart labels**: the `GAMMA FLIP nnnn` caption and the `CW` / `MG` /
+  `FL` / `PW` rail badges. Every one of those numbers is already in the regime strip
+  above the chart, larger and with its meaning spelled out. The lines and bands stay —
+  that is positional information the strip can't carry. Rail strike ticks no longer need
+  badge de-collision.
+
+## 2026-08-06 - Scanner / Watch This: "Results" tab (per-date roll-up)
+
+Tracked results only had the flat status filters (All / Open / Touched / Expired), so
+there was no way to ask "what happened on a given day".
+
+### `components/pages/Scanner.tsx`
+- New **Results** pill next to Expired in the Tracked-results strip. Selecting it
+  replaces the flat table with one row per calendar date: **Date · Opened · Touched ·
+  Expired** counts, newest date first.
+- Click a date to expand it into three labelled sections (Opened / Touched / Expired),
+  each listing the contracts that landed in that bucket on that date. Rows keep the
+  existing click-through to the day-by-day detail popup.
+- A single flag can appear under up to three dates: `first_flagged` (opened),
+  `touched_date` (touched), and `expiry` when its status is `expired`.
+- Grouping is client-side (`groupOutcomesByDay`); the view fetches
+  `/proxy/far-cb-outcomes?status=all&limit=300` (300 = the endpoint's existing cap) so
+  the per-day counts are complete. **No server/proxy change.**
+
+## 2026-08-06 - ES Candles: x-axis showed dates instead of times
+
+The ES Candles time axis rendered a date at nearly every tick. The clock only ever
+appeared on the crosshair label, so an intraday chart had no visible time scale.
+
+### Root cause
+`components/dashboard/es-candles/EsChartCard.tsx` set a `tickMarkFormatter` that
+branched on `tickMarkType === 2 || tickMarkType === 3`, commented as "day/month
+boundary". That mapping is wrong. In lightweight-charts v5 the `TickMarkType` enum is
+`0 Year | 1 Month | 2 DayOfMonth | 3 Time | 4 TimeWithSeconds` — **3 is Time**, and it
+is the type emitted for nearly every tick on an intraday chart. Sending 3 down the date
+branch meant the axis printed `Aug 6` where it should have printed `09:30`.
+
+### `components/dashboard/es-candles/EsChartCard.tsx`
+- `tickMarkFormatter` now sends only the real calendar boundaries (`0`/`1`/`2`) to the
+  ET date string; everything else (`3` Time, `4` TimeWithSeconds) formats as ET `HH:MM`
+  24-hour. Day boundaries still show `Mon D` for context when the visible range spans
+  more than one session.
+- Comment replaced with the actual enum values so the next edit can't repeat the
+  off-by-one.
+
+No other file defines a `tickMarkFormatter`, and this card owns the only `createChart`
+call on the page, so the fix covers every ES Candles chart slot.
+
+
 ## 2026-08-06 - GEX chart expiry picker: wrong DTE labels & failed switching
 
 Home GEX chart showed Wed/Thu in the expiry picker on a Thursday (should have been

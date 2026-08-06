@@ -7,7 +7,7 @@
  *   Vol Pin             — IV-RV spread contraction + price range tightening → pin candidates
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HOME_THEME, LIGHT_BLUE, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
@@ -1295,6 +1295,52 @@ type OutcomeRow = {
   opt_pct_open?: number | null;
 };
 
+/**
+ * Tracked-results view selector. The first four are server-side status filters
+ * on the flat table; "results" is a client-side roll-up of every tracked flag
+ * grouped by calendar date (opened / touched / expired counts per day).
+ */
+type OutcomeView = "all" | "open" | "touched" | "expired" | "results";
+
+type DayBucket = {
+  date: string;
+  opened: OutcomeRow[];
+  touched: OutcomeRow[];
+  expired: OutcomeRow[];
+};
+
+/** Dates arrive as YYYY-MM-DD, but expiry can carry a time — normalise to the day. */
+const ymd = (v: string | null | undefined): string | null => {
+  if (!v) return null;
+  const s = String(v).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+};
+
+/**
+ * One flag can land in up to three different days: the day it was flagged
+ * (opened), the day spot reached the strike (touched), and the day it expired
+ * untouched. Newest day first.
+ */
+function groupOutcomesByDay(rows: OutcomeRow[]): DayBucket[] {
+  const map = new Map<string, DayBucket>();
+  const bucket = (d: string): DayBucket => {
+    let b = map.get(d);
+    if (!b) { b = { date: d, opened: [], touched: [], expired: [] }; map.set(d, b); }
+    return b;
+  };
+  for (const r of rows) {
+    const flagged = ymd(r.first_flagged);
+    if (flagged) bucket(flagged).opened.push(r);
+    const touched = ymd(r.touched_date);
+    if (touched) bucket(touched).touched.push(r);
+    if (r.status === "expired") {
+      const exp = ymd(r.expiry);
+      if (exp) bucket(exp).expired.push(r);
+    }
+  }
+  return [...map.values()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+}
+
 type OutcomeDetailDay = {
   date: string;
   spot: number;
@@ -1327,7 +1373,13 @@ function WatchThisScanner() {
   const [threshold, setThreshold] = useState<number | null>(null);
 
   const [outcomes, setOutcomes] = useState<OutcomeRow[]>([]);
-  const [outcomeStatus, setOutcomeStatus] = useState<"all" | "open" | "touched" | "expired">("all");
+  const [outcomeStatus, setOutcomeStatus] = useState<OutcomeView>("all");
+
+  // "Results" view — every tracked flag bucketed by calendar date.
+  const [resultRows, setResultRows] = useState<OutcomeRow[]>([]);
+  const [resultsLoading, setResultsLoading] = useState(false);
+  const [resultsErr, setResultsErr] = useState<string | null>(null);
+  const [openDay, setOpenDay] = useState<string | null>(null);
 
   const [detail, setDetail] = useState<OutcomeDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -1401,6 +1453,7 @@ function WatchThisScanner() {
   }, []);
 
   const loadOutcomes = useCallback(async () => {
+    if (outcomeStatus === "results") return;
     try {
       const res = await fetch(`/proxy/far-cb-outcomes?status=${outcomeStatus}&limit=100`, { cache: "no-store" });
       const j = await res.json();
@@ -1408,9 +1461,28 @@ function WatchThisScanner() {
     } catch {}
   }, [outcomeStatus]);
 
+  // Results needs every row regardless of status so the per-day counts are
+  // complete; 300 is the endpoint's ceiling.
+  const loadResults = useCallback(async () => {
+    setResultsLoading(true); setResultsErr(null);
+    try {
+      const res = await fetch("/proxy/far-cb-outcomes?status=all&limit=300", { cache: "no-store" });
+      const j = await res.json();
+      if (!j.ok) throw new Error(j.error || "load failed");
+      setResultRows(j.rows || []);
+    } catch (e: any) {
+      setResultsErr(String(e?.message || e));
+    } finally {
+      setResultsLoading(false);
+    }
+  }, []);
+
+  const dayBuckets = useMemo(() => groupOutcomesByDay(resultRows), [resultRows]);
+
   useEffect(() => { load(); }, [load]);
   useEffect(() => { const t = setInterval(() => load(), 120_000); return () => clearInterval(t); }, [load]);
   useEffect(() => { loadOutcomes(); }, [loadOutcomes]);
+  useEffect(() => { if (outcomeStatus === "results") loadResults(); }, [outcomeStatus, loadResults]);
 
   return (
     <Card variant="budget" title={<span style={{ fontSize: 17 }}>Watch This — Far CB</span>}
@@ -1520,17 +1592,29 @@ function WatchThisScanner() {
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
           <span style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.text }}>Tracked results</span>
           <div style={{ display: "flex", gap: 6 }}>
-            {(["all", "open", "touched", "expired"] as const).map((s) => (
+            {(["all", "open", "touched", "expired", "results"] as const).map((s) => (
               <button key={s} onClick={() => setOutcomeStatus(s)} style={seg(outcomeStatus === s)}>
                 {s[0].toUpperCase() + s.slice(1)}
               </button>
             ))}
           </div>
           <span style={{ fontSize: 14, color: HOME_THEME.text }}>
-            Graded daily ~16:10 ET · no win/loss — just whether spot reached the strike · Opt Price = flagged contract&apos;s NBBO mid, % since its own open (live rows only)
+            {outcomeStatus === "results"
+              ? "One row per date · how many flags opened, were touched, and expired that day · click a date to expand"
+              : "Graded daily ~16:10 ET · no win/loss — just whether spot reached the strike · Opt Price = flagged contract's NBBO mid, % since its own open (live rows only)"}
           </span>
         </div>
 
+        {outcomeStatus === "results" ? (
+          <ResultsByDay
+            days={dayBuckets}
+            loading={resultsLoading}
+            err={resultsErr}
+            openDay={openDay}
+            onToggleDay={(d) => setOpenDay((cur) => (cur === d ? null : d))}
+            onPickRow={openDetail}
+          />
+        ) : (
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
             <thead>
@@ -1597,6 +1681,7 @@ function WatchThisScanner() {
             </tbody>
           </table>
         </div>
+        )}
       </div>
 
       {(detailLoading || detail || detailErr) && (
@@ -1683,6 +1768,161 @@ function WatchThisScanner() {
         </div>
       )}
     </Card>
+  );
+}
+
+// ── Results view: one row per date, expanding into opened / touched / expired ──
+
+const RESULT_SECTIONS = [
+  { key: "opened"  as const, label: "Opened",  color: HOME_THEME.green,
+    note: "flagged for the first time on this date" },
+  { key: "touched" as const, label: "Touched", color: LIGHT_BLUE,
+    note: "spot reached the flagged strike on this date" },
+  { key: "expired" as const, label: "Expired", color: HOME_THEME.orange,
+    note: "expired on this date without ever being touched" },
+];
+
+function ResultsByDay({
+  days, loading, err, openDay, onToggleDay, onPickRow,
+}: {
+  days: DayBucket[];
+  loading: boolean;
+  err: string | null;
+  openDay: string | null;
+  onToggleDay: (date: string) => void;
+  onPickRow: (o: OutcomeRow) => void;
+}) {
+  const count = (n: number, color: string) => (
+    <span style={{ fontWeight: 800, color: n ? color : "rgba(255,255,255,0.35)" }}>{n}</span>
+  );
+
+  if (err) {
+    return <div style={{ padding: 20, textAlign: "center", color: HOME_THEME.orange }}>{err}</div>;
+  }
+  if (loading && !days.length) {
+    return <div style={{ padding: 20, textAlign: "center", color: HOME_THEME.text }}>Loading results…</div>;
+  }
+  if (!days.length) {
+    return <div style={{ padding: 20, textAlign: "center", color: HOME_THEME.text }}>No tracked flags yet.</div>;
+  }
+
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+        <thead>
+          <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 14, textTransform: "uppercase" }}>
+            <th style={{ ...th, textAlign: "left" }}>Date</th>
+            <th style={th}>Opened</th>
+            <th style={th}>Touched</th>
+            <th style={th}>Expired</th>
+            <th style={{ ...th, width: 30 }} />
+          </tr>
+        </thead>
+        <tbody>
+          {days.map((d, i) => {
+            const isOpen = openDay === d.date;
+            return (
+              <Fragment key={d.date}>
+                <tr
+                  onClick={() => onToggleDay(d.date)}
+                  title="Click to expand this date"
+                  style={{
+                    borderTop: "1px solid rgba(255,255,255,0.06)",
+                    background: isOpen ? "rgba(33,158,188,0.10)" : i % 2 ? "rgba(255,255,255,0.02)" : "transparent",
+                    cursor: "pointer",
+                  }}
+                >
+                  <td style={{ ...td, textAlign: "left", fontWeight: 700, color: isOpen ? LIGHT_BLUE : HOME_THEME.text }}>
+                    {d.date}
+                  </td>
+                  <td style={td}>{count(d.opened.length, HOME_THEME.green)}</td>
+                  <td style={td}>{count(d.touched.length, LIGHT_BLUE)}</td>
+                  <td style={td}>{count(d.expired.length, HOME_THEME.orange)}</td>
+                  <td style={{ ...td, color: "rgba(255,255,255,0.45)" }}>{isOpen ? "▾" : "▸"}</td>
+                </tr>
+
+                {isOpen && (
+                  <tr style={{ background: "rgba(0,0,0,0.20)" }}>
+                    <td colSpan={5} style={{ padding: "12px 10px 18px" }}>
+                      <div style={{ display: "grid", gap: 16 }}>
+                        {RESULT_SECTIONS.map((sec) => {
+                          const rows = d[sec.key];
+                          return (
+                            <div key={sec.key}>
+                              <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
+                                <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.05em", color: sec.color }}>
+                                  {sec.label.toUpperCase()} · {rows.length}
+                                </span>
+                                <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.65 }}>{sec.note}</span>
+                              </div>
+
+                              {!rows.length ? (
+                                <div style={{ padding: "8px 10px", fontSize: 14, color: "rgba(255,255,255,0.35)" }}>
+                                  None
+                                </div>
+                              ) : (
+                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+                                  <thead>
+                                    <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 14, textTransform: "uppercase" }}>
+                                      <th style={{ ...th, textAlign: "left" }}>Symbol</th>
+                                      <th style={th}>Strike</th>
+                                      <th style={{ ...th, textAlign: "left" }}>Expiry</th>
+                                      <th style={{ ...th, textAlign: "left" }}>Flagged</th>
+                                      <th style={th}>Flagged Spot</th>
+                                      <th style={th}>OTM at flag</th>
+                                      <th style={th}>Closest</th>
+                                      <th style={{ ...th, textAlign: "left" }}>Status</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {rows.map((o, j) => (
+                                      <tr
+                                        key={`${sec.key}-${o.symbol}-${o.expiry}-${o.strike}`}
+                                        onClick={() => onPickRow(o)}
+                                        title="Click for day-by-day detail"
+                                        style={{
+                                          borderTop: "1px solid rgba(255,255,255,0.06)",
+                                          background: j % 2 ? "rgba(255,255,255,0.02)" : "transparent",
+                                          cursor: "pointer",
+                                        }}
+                                      >
+                                        <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{o.symbol}</td>
+                                        <td style={{ ...td, fontWeight: 700, color: o.side === "above" ? HOME_THEME.green : HOME_THEME.red }}>
+                                          ${o.strike}
+                                        </td>
+                                        <td style={{ ...td, textAlign: "left" }}>{o.expiry}</td>
+                                        <td style={{ ...td, textAlign: "left" }}>{o.first_flagged}</td>
+                                        <td style={td}>${o.spot_at_flag.toFixed(2)}</td>
+                                        <td style={td}>{o.otm_pct_at_flag.toFixed(0)}%</td>
+                                        <td style={{ ...td, color: o.closest_pct != null && o.closest_pct < 1 ? LIGHT_BLUE : HOME_THEME.text }}>
+                                          {o.closest_pct != null ? `${o.closest_pct.toFixed(1)}%` : "—"}
+                                        </td>
+                                        <td style={{ ...td, textAlign: "left" }}>
+                                          <span style={{
+                                            fontSize: 14, fontWeight: 800, letterSpacing: "0.05em",
+                                            color: o.status === "touched" ? LIGHT_BLUE : o.status === "expired" ? HOME_THEME.text : HOME_THEME.green,
+                                          }}>
+                                            {o.status === "touched" ? `TOUCHED ${o.touched_date ?? ""}` : o.status.toUpperCase()}
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

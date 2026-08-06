@@ -9,25 +9,29 @@ import { ThemedSelect } from "@/components/shared/ThemedSelect";
 // ─────────────────────────────────────────────────────────────────────────────
 // Test Lab → GEX Map tab.
 //
-// Three ways of fusing the same five layers — net GEX profile, strike×time
-// heatmap, the strike rail and DEX — into ONE readout, all fed by
-// a single GET /api/gex-map payload (0DTE only; the route pins expiry = date).
+// ONE chart — the Tape Field — fusing five layers of a single GET /api/gex-map
+// payload (one expiry, 0DTE by default): the strike × time gamma field, the net
+// DEX profile down the left gutter, the net GEX profile up the right rail, the
+// Vol GEX keel beneath, and the spot path across all of it.
 //
-//   A · Tape Field      time-forward radar. Heat is the field, profile is the
-//                       left wall, rail is the right edge, DEX is the keel.
-//   B · Spine           vertical ladder, gamma on the left wing, delta on the
-//                       right, heat living inside the spine.
-//   C · Gamma Terrain   gamma as elevation, iso-GEX contours, flip as coastline.
+// The FIELD has two renderings, switched by a tab in the card header:
 //
-// Two things this file is deliberately careful about:
+//   Heatmap   one cell per (slot, strike), discrete — read individual prints.
+//   Terrain   the same gamma resampled into a continuous surface with iso-GEX
+//             contours and a zero-gamma coastline — read the shape.
+//
+// Three things this file is deliberately careful about:
 //
 //   1. NOTHING IS INVENTED. Every layer draws only what the payload contains.
 //      When DEX is missing for a session the DEX layers render an explicit
 //      "no data" state — they do not fall back to zero, because a flat DEX ring
 //      and an absent DEX ring mean opposite things on a positioning map.
-//   2. Scales are computed ONCE, from the full session, and shared by all four
-//      maps. Per-map normalization would make the same book look calm in one
-//      concept and violent in the next.
+//   2. Scales are computed ONCE, from the full session, and shared by both
+//      renderings and every zoom level. A cell means the same thing wherever
+//      and however it is drawn.
+//   3. With RTH scope the x-axis is a REAL CLOCK, pinned 09:30–16:00. Index
+//      positioning stretched whatever had been recorded across the whole width,
+//      so at 10:05 thirty-five minutes of tape claimed a full trading day.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ── payload ──────────────────────────────────────────────────────────────────
@@ -124,12 +128,20 @@ function scopePayload(p: MapPayload | null, scope: Scope): MapPayload | null {
   };
 }
 
-type Concept = "tape" | "spine" | "terrain";
+// ── one chart, two fields ────────────────────────────────────────────────────
+// There used to be three separate cards — Tape Field, Spine, Gamma Terrain —
+// stacked one per row, all drawing the SAME session against the same scales.
+// Reading them meant scrolling between three copies of one picture. They are
+// now ONE card, "Tape Field": the layout (DEX profile left, GEX rail right, Vol
+// GEX keel below, spot path, walls, flip) is fixed, and a tab switches only what
+// fills the strike × time field — the discrete heatmap, or the smoothed terrain
+// with its iso-GEX contours. Spine is gone; its wings ARE the Tape Field's left
+// gutter and right rail, and its heat is the field.
+type FieldMode = "heat" | "terrain";
 
-const CONCEPTS: { key: Concept; label: string; blurb: string }[] = [
-  { key: "tape", label: "Tape Field", blurb: "Time-forward radar — DEX profile left, GEX profile right, Vol GEX keel." },
-  { key: "spine", label: "Spine", blurb: "Vertical ladder — delta left wing, gamma right wing, heat inside." },
-  { key: "terrain", label: "Gamma Terrain", blurb: "Gamma as elevation — iso-GEX contours, flip as coastline." },
+const FIELD_MODES: { key: FieldMode; label: string; blurb: string }[] = [
+  { key: "heat", label: "Heatmap", blurb: "Strike × time gamma cells — DEX profile left, GEX profile right, Vol GEX keel." },
+  { key: "terrain", label: "Terrain", blurb: "Gamma as elevation — iso-GEX contours, zero-gamma coastline." },
 ];
 
 // ── formatting ───────────────────────────────────────────────────────────────
@@ -235,16 +247,35 @@ function dexColor(v: number, a?: number): string {
 // ── model ────────────────────────────────────────────────────────────────────
 // The GEX bubble layer is GONE — removed, not hidden behind a toggle. It drew
 // one circle per slot on the spot path, sized by |GEX| at the strike price was
-// sitting on, and on all three maps it covered the layer underneath it: the
-// heat on the Tape Field and the Spine, the contours on the Terrain. The spot
-// path already says where price went, and the rail and profile already say how
-// much gamma is there. Nothing was lost with it.
+// sitting on, and it covered the layer underneath it in both renderings — the
+// cells in Heatmap, the contours in Terrain. The spot path already says where
+// price went, and the rail and profile already say how much gamma is there.
+// Nothing was lost with it.
 type MapModel = {
   ok: boolean;
   strikes: number[];
   lo: number;
   hi: number;
   cols: MapColumn[];
+  /** ET minutes past midnight per column — the x coordinate when timeAxis. */
+  mins: number[];
+  /** Recording cadence in minutes; sets the drawn cell width on a clock axis. */
+  slotMin: number;
+  /**
+   * True when x is a REAL CLOCK AXIS rather than a column index.
+   *
+   * Index positioning stretches whatever has been recorded across the whole
+   * field, so at 10:05 the session's first 35 minutes filled all 6.5 hours of
+   * width and the map claimed a full day it did not have. With RTH scope the
+   * axis is pinned to 09:30–16:00 instead: the tape grows into it through the
+   * day and the empty right-hand side is honest about the session not being
+   * over. Only ever on for RTH — the "All" scope spans midnight, where minutes
+   * past ET midnight wrap and are not monotonic.
+   */
+  timeAxis: boolean;
+  /** x domain in ET minutes (timeAxis only). */
+  xLo: number;
+  xHi: number;
   /** last column, normalized to ±1 */
   profile: number[];
   /** raw last column, for tooltips/labels */
@@ -280,11 +311,18 @@ type MapModel = {
   netDex: number;
 };
 
-function buildModel(p: MapPayload | null): MapModel | null {
+function buildModel(p: MapPayload | null, scope: Scope): MapModel | null {
   if (!p || !Array.isArray(p.strikes) || !p.strikes.length || !p.columns?.length) return null;
   const strikes = p.strikes;
   const cols = p.columns;
   const n = strikes.length;
+
+  // Clock axis, but only when every column really is inside the cash session.
+  // scopePayload() hands back the UNFILTERED payload when a session has no RTH
+  // rows yet (pre-market), and pinning 09:30–16:00 over overnight stamps would
+  // clamp the whole tape onto one edge of the field.
+  const mins = cols.map((c) => etMinutes(c.t));
+  const timeAxis = scope === "rth" && mins.every((mm) => Number.isFinite(mm) && mm >= RTH_LO && mm <= RTH_HI);
 
   // Session-wide gamma scale. One number for every map and every column, so the
   // heat, the profile bars and the rail all mean the same thing.
@@ -388,6 +426,8 @@ function buildModel(p: MapPayload | null): MapModel | null {
   return {
     ok: true,
     strikes, lo: strikes[0], hi: strikes[n - 1], cols,
+    mins, slotMin: p.slotMin > 0 ? p.slotMin : 5,
+    timeAxis, xLo: RTH_LO, xHi: RTH_HI,
     profile, profileRaw: lastRaw, gMax, heat, signed, path,
     dex, dexRaw, dMax, hasDex: dexCount > 0 || dexSeries.length > 0, dexSeries, dtMax,
     volSeries, vtMax, chg15, chg15Min: Math.round(lagMin), hasChg15,
@@ -460,13 +500,29 @@ function sliceModel(m: MapModel, v: ViewWin): MapModel {
   const inBand = (k: number | null) => (k != null && k >= lo && k <= hi ? k : null);
 
   const cols = m.cols.slice(v.i0, v.i1 + 1);
+  const mins = m.mins.slice(v.i0, v.i1 + 1);
   const t0 = cols[0]?.t ?? -Infinity;
   const t1 = cols[cols.length - 1]?.t ?? Infinity;
   const inSpan = (t: number) => t >= t0 && t <= t1;
 
+  // Zooming time narrows the CLOCK DOMAIN to the visible columns, padded by one
+  // slot each side so the first and last cells are not sliced by the frame. At
+  // full extent the domain stays 09:30–16:00 — that is the whole point of the
+  // pinned axis — which is what the `sameCols` early exit above preserves.
+  // Note the `!sameCols` guard: zooming the STRIKE axis must not touch the time
+  // domain. Without it, stretching price on a session that opened late quietly
+  // re-framed the clock too.
+  const narrowTime = m.timeAxis && !sameCols;
+  const pad = m.slotMin;
+  const xLo = narrowTime ? Math.max(RTH_LO, (mins[0] ?? RTH_LO) - pad) : m.xLo;
+  const xHi = narrowTime
+    ? Math.min(RTH_HI, Math.max(xLo + pad, (mins[mins.length - 1] ?? RTH_HI) + pad))
+    : m.xHi;
+
   return {
     ...m,
     cols,
+    mins, xLo, xHi,
     strikes, lo, hi,
     heat: m.heat.slice(v.i0, v.i1 + 1).map(cutRow),
     signed: m.signed.slice(v.i0, v.i1 + 1).map(cutRow),
@@ -550,12 +606,10 @@ function ZoomSvg({ w, h, plot, children }: {
 
   const zoneAt = useCallback((cx: number, cy: number): DragZone | null => {
     const { vx, vy } = toVb(cx, cy);
-    // EITHER side counts as the strike axis. The three maps do not agree on
-    // which side the strike numbers sit: the Tape Field puts them in the right
-    // rail, the Spine prints them down both edges of the heat. Rather than
-    // teach this one gesture three layouts, anything level with the field but
-    // outside it — left gutter or right rail — stretches price. Both are the
-    // price side of the picture, so both read as the price axis.
+    // EITHER side counts as the strike axis. The strike numbers live in the
+    // right rail and the DEX profile in the left gutter, and both are the price
+    // side of the picture — so anything level with the field but outside it
+    // stretches price, whichever edge you grabbed.
     if ((vx < plot.x || vx > plot.x + plot.w) && vy >= plot.y - 6 && vy <= plot.y + plot.h + 6) return "yaxis";
     if (vy > plot.y + plot.h && vy <= plot.y + plot.h + 34 && vx >= plot.x - 6 && vx <= plot.x + plot.w + 6) return "xaxis";
     if (vx >= plot.x && vx <= plot.x + plot.w && vy >= plot.y && vy <= plot.y + plot.h) return "plot";
@@ -776,43 +830,10 @@ function RegimeStrip({ m, symbol, date, expiryLabel, asOf }: {
   );
 }
 
-/**
- * Vertical de-collision for label stacks.
- *
- * The walls, the magnet and the flip are independent readings that regularly
- * land within a few points of each other — on a quiet tape the magnet IS the
- * call wall, and the flip sits a handful of strikes off the put wall. Drawn at
- * their true y they overprint into an unreadable smear. This pushes the LABELS
- * apart to a minimum gap while leaving the true y untouched, so each badge can
- * still draw a leader back to the strike it describes.
- */
-function spreadLabels<T extends { y: number }>(items: T[], gap: number, lo: number, hi: number): (T & { ly: number })[] {
-  const out = items.map((it) => ({ ...it, ly: it.y })).sort((a, b) => a.y - b.y);
-  for (let i = 1; i < out.length; i++) {
-    if (out[i].ly - out[i - 1].ly < gap) out[i].ly = out[i - 1].ly + gap;
-  }
-  // The forward pass can run the last label past the bottom of the box; pin it
-  // and walk back up. Both ends are then clamped, which is only lossy if the
-  // box cannot hold the stack at all — four labels in a 320+ unit rail can.
-  const last = out.length - 1;
-  if (last >= 0 && out[last].ly > hi) {
-    out[last].ly = hi;
-    for (let i = last - 1; i >= 0; i--) {
-      if (out[i + 1].ly - out[i].ly < gap) out[i].ly = out[i + 1].ly - gap;
-    }
-  }
-  if (last >= 0 && out[0].ly < lo) out[0].ly = lo;
-  return out;
-}
-
-/** Width of a letter-spaced uppercase label, in viewBox units. */
-const labWidth = (chars: number, size: number, tracking = 0.14) => chars * (0.62 + tracking) * size;
-
 function NoDex({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
   const fz = useFz();
   // Two lines, sized to FIT. One line of "NO DEX FOR THIS SESSION" is ~17.5×
-  // the font size, which overflows every gutter this is drawn in — in the spine
-  // it ran clean off the left edge of the card.
+  // the font size, which overflows every gutter this is drawn in.
   const lines = ["NO DEX FOR", "THIS SESSION"];
   const longest = Math.max(...lines.map((l) => l.length));
   const size = Math.max(5, Math.min(10 * fz, (w - 14) / (longest * 0.76)));
@@ -827,8 +848,8 @@ function NoDex({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
   );
 }
 
-// ═════════════════════════ A · TAPE FIELD ════════════════════════════════════
-function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
+// ═════════════════════════════ TAPE FIELD ════════════════════════════════════
+function TapeField({ m, compact, field = "heat" }: { m: MapModel; compact?: boolean; field?: FieldMode }) {
   const fz = useFz();
   const W = 1240, H = 470;
   // Laid out from the outside in so the heat field lands on the viewBox centre.
@@ -848,33 +869,47 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
   const KY = FY + FH + 40, KH = 66;
 
   const yOf = (k: number) => FY + FH - ((k - m.lo) / Math.max(1, m.hi - m.lo)) * FH;
-  const xOf = (i: number) => FX + (i / Math.max(1, m.cols.length - 1)) * FW;
-  const cw = FW / Math.max(1, m.cols.length);
+  const xOf = (i: number) => FX + xFrac(m, i) * FW;
+  // On a clock axis a cell is one recording slot WIDE IN MINUTES, not one nth of
+  // however many columns exist — at 10:05 the latter drew 35 minutes of tape as
+  // 6.5 hours of fat blocks.
+  const cw = m.timeAxis
+    ? Math.max(1.2, (m.slotMin / Math.max(1, m.xHi - m.xLo)) * FW)
+    : FW / Math.max(1, m.cols.length);
   const ch = FH / Math.max(1, m.strikes.length - 1);
 
   const ticks = strikeTicks(m.lo, m.hi, compact);
-  const timeTicks = pickTimeTicks(m.cols, compact ? 4 : 6);
-
-  const railBadges = spreadLabels(
-    ([[m.callWall, GEX_POS_HEX, "CW"], [m.magnet, GOLD, "MG"], [m.flip, FLIP_C, "FL"], [m.putWall, GEX_NEG_HEX, "PW"]] as [number | null, string, string][])
-      .filter((w): w is [number, string, string] => w[0] != null)
-      .map(([k, col, tag]) => ({ k, col, tag, y: yOf(k) })),
-    16 * fz, FY + 9 * fz, FY + FH - 9 * fz
-  );
+  const timeTicks = axisTicks(m, compact ? 5 : 9);
+  // Where the recorded tape actually sits inside the field. On the pinned RTH
+  // axis this is a sub-range of it, and the terrain canvas is placed on exactly
+  // that span rather than stretched across hours with no data behind them.
+  const dx0 = xOf(0);
+  const dx1 = xOf(m.cols.length - 1);
+  const dw = Math.max(2, dx1 - dx0 + cw);
 
   return (
     <ZoomSvg w={W} h={H} plot={{ x: FX, y: FY, w: FW, h: FH }}>
-      {/* heat field */}
+      {/* field — heatmap cells, or the smoothed terrain, same frame either way */}
       <rect x={FX - 4} y={FY - 4} width={FW + 8} height={FH + 8} rx={10} fill="rgba(0,0,0,0.30)" />
-      {m.cols.map((c, ci) =>
-        m.strikes.map((k, si) => {
-          const h = m.heat[ci][si];
-          if (h < 0.045) return null;
-          return <rect key={`${ci}-${si}`} x={xOf(ci) - cw / 2} y={yOf(k) - ch / 2} width={cw + 0.6} height={ch + 0.6}
-            fill={gamColor(m.signed[ci][si], heatAlpha(h, 0.04, 0.80))} />;
-        })
+      {field === "terrain" ? (
+        <TerrainField m={m} L={dx0 - cw / 2} TP={FY} FWD={dw} FHT={FH} />
+      ) : (
+        m.cols.map((c, ci) =>
+          m.strikes.map((k, si) => {
+            const h = m.heat[ci][si];
+            if (h < 0.045) return null;
+            return <rect key={`${ci}-${si}`} x={xOf(ci) - cw / 2} y={yOf(k) - ch / 2} width={cw + 0.6} height={ch + 0.6}
+              fill={gamColor(m.signed[ci][si], heatAlpha(h, 0.04, 0.80))} />;
+          })
+        )
       )}
       {ticks.map((k) => <line key={`g${k}`} x1={FX} y1={yOf(k)} x2={FX + FW} y2={yOf(k)} stroke={GRID} />)}
+      {/* Time gridlines. They matter far more now that the axis is a fixed
+          09:30–16:00 frame the tape only partly fills — without them the empty
+          right-hand side has no scale on it at all. */}
+      {timeTicks.map(({ f, label }) => (
+        <line key={`tg${label}`} x1={FX + f * FW} y1={FY} x2={FX + f * FW} y2={FY + FH} stroke={GRID} />
+      ))}
 
       {/* walls + flip */}
       {([[m.callWall, GEX_POS_HEX, "CALL WALL"], [m.magnet, GOLD, "MAGNET"], [m.putWall, GEX_NEG_HEX, "PUT WALL"]] as [number | null, string, string][])
@@ -884,14 +919,14 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
             <line x1={FX} y1={yOf(k as number)} x2={FX + FW} y2={yOf(k as number)} stroke={col} strokeWidth={0.9} opacity={0.5} />
           </g>
         ))}
+      {/* The "GAMMA FLIP 6350" caption that used to ride this line is gone, as
+          are the CW / MG / FL / PW rail badges. Every one of those numbers is
+          already printed, larger and with its meaning spelled out, in the regime
+          strip above the chart — on the chart they were a second copy competing
+          with the field for the same pixels. The lines and bands stay: those are
+          positional information the strip cannot carry. */}
       {m.flip != null && (
-        <g>
-          <line x1={FX} y1={yOf(m.flip)} x2={FX + FW} y2={yOf(m.flip)} stroke={FLIP_C} strokeWidth={1.2} strokeDasharray="5 4" opacity={0.75} />
-          <rect x={FX + 4} y={yOf(m.flip) - 6 - 12 * fz} width={106 * fz} height={13 * fz} rx={3} fill="rgba(5,6,10,0.86)" />
-          <text x={FX + 9} y={yOf(m.flip) - 8 - 2 * fz} fill={FLIP_C} fontSize={8 * fz} fontWeight={700} letterSpacing="0.1em">
-            {`GAMMA FLIP ${fmtStrike(m.flip)}`}
-          </text>
-        </g>
+        <line x1={FX} y1={yOf(m.flip)} x2={FX + FW} y2={yOf(m.flip)} stroke={FLIP_C} strokeWidth={1.2} strokeDasharray="5 4" opacity={0.75} />
       )}
 
       {/* spot path */}
@@ -899,8 +934,13 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
       <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="#fff" strokeWidth={1.6} strokeLinejoin="round" />
       <circle cx={xOf(m.cols.length - 1)} cy={yOf(m.path[m.path.length - 1])} r={9} fill="rgba(255,255,255,0.14)" />
       <circle cx={xOf(m.cols.length - 1)} cy={yOf(m.path[m.path.length - 1])} r={3.4} fill="#fff" />
-      {timeTicks.map(({ i, label }) => (
-        <text key={`t${i}`} x={xOf(i)} y={FY + FH + 14} fill={AXIS} fontSize={8 * fz} textAnchor="middle">{label}</text>
+      <line x1={FX} y1={FY + FH} x2={FX + FW} y2={FY + FH} stroke="rgba(255,255,255,0.16)" />
+      {timeTicks.map(({ f, label }) => (
+        <g key={`t${label}`}>
+          <line x1={FX + f * FW} y1={FY + FH} x2={FX + f * FW} y2={FY + FH + 4} stroke="rgba(255,255,255,0.30)" />
+          <text x={FX + f * FW} y={FY + FH + 14} fill={AXIS} fontSize={8 * fz} textAnchor="middle"
+            style={{ fontVariantNumeric: "tabular-nums" }}>{label}</text>
+        </g>
       ))}
 
       {/* left gutter — DEX profile */}
@@ -926,22 +966,11 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
         return <rect key={`r${k}`} x={RX + 8} y={yOf(k) - ch * 0.42} width={Math.abs(v) * 46 + 1.5} height={Math.max(1.4, ch * 0.84)} rx={1}
           fill={gamColor(v, 0.3 + 0.55 * Math.abs(v))} />;
       })}
-      {/* Badges first: they own their rows, and a plain tick at the same height
-          is the same strike printed twice on top of itself. */}
-      {railBadges.map(({ k, col, tag, y, ly }) => (
-        <g key={tag}>
-          {Math.abs(ly - y) > 0.5 && (
-            <path d={`M${RX + 112} ${y}L${RX + 116} ${ly}`} stroke={col} strokeWidth={0.9} opacity={0.7} fill="none" />
-          )}
-          <rect x={RX + 118} y={ly - 7.5 * fz} width={64 * fz} height={15 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
-          <text x={RX + 123} y={ly + 3.6 * fz} fill={col} fontSize={7.4 * fz} fontWeight={800}>{`${tag} ${fmtStrike(k)}`}</text>
-        </g>
-      ))}
       {/* Ticks that land ON the rail's top or bottom edge render half outside
-          the box; drop them rather than print a sliced number. */}
+          the box; drop them rather than print a sliced number. Nothing has to be
+          de-collided against wall badges any more — there are none. */}
       {ticks
         .filter((k) => yOf(k) > FY + 7 * fz && yOf(k) < FY + FH - 4 * fz)
-        .filter((k) => !railBadges.some((bg) => Math.abs(yOf(k) - bg.ly) < 9 * fz))
         .map((k) => (
           <g key={`rt${k}`}>
             <line x1={RX + 56} y1={yOf(k)} x2={RX + 62} y2={yOf(k)} stroke="rgba(255,255,255,0.30)" />
@@ -964,10 +993,15 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
           <rect x={FX - 4} y={KY} width={FW + 8} height={KH} rx={10} fill="rgba(255,255,255,0.018)" stroke="rgba(255,255,255,0.07)" />
           <line x1={FX} y1={KY + KH / 2} x2={FX + FW} y2={KY + KH / 2} stroke="rgba(255,255,255,0.16)" />
           {m.volSeries.map((d, i) => {
-            const x = FX + (i / Math.max(1, m.volSeries.length - 1)) * FW;
+            // Same x rule as the field above it. The keel is read as a column
+            // under the tape — if the two used different x mappings, a spike in
+            // the keel would sit under the wrong minute of the heat.
+            const x = m.timeAxis
+              ? FX + clamp01((etMinutes(d.t) - m.xLo) / Math.max(1, m.xHi - m.xLo)) * FW
+              : FX + (i / Math.max(1, m.volSeries.length - 1)) * FW;
             const r = d.vol / m.vtMax;
             const y = KY + KH / 2 - r * (KH / 2 - 7);
-            const bw = Math.max(1.2, FW / m.volSeries.length - 0.6);
+            const bw = m.timeAxis ? cw : Math.max(1.2, FW / m.volSeries.length - 0.6);
             return <rect key={`k${i}`} x={x - bw / 2} y={Math.min(KY + KH / 2, y)} width={bw}
               height={Math.abs(KY + KH / 2 - y)} fill={gamColor(r, 0.3 + 0.5 * Math.min(1, Math.abs(r)))} />;
           })}
@@ -1002,190 +1036,13 @@ function TapeField({ m, compact }: { m: MapModel; compact?: boolean }) {
   );
 }
 
-// ═════════════════════════════ B · SPINE ═════════════════════════════════════
-function Spine({ m, compact }: { m: MapModel; compact?: boolean }) {
-  const fz = useFz();
-  const W = 1240, H = 560;
-  // The spine is centred; the two wings split what's left. The gutter each side
-  // is 110 rather than 44 because the wall badges now live in the strike axis
-  // (see below) instead of floating over the heat, and "CALL WALL · 7530" needs
-  // room to sit beside the tick column.
-  const SPW = 780;
-  const SPX = Math.round((W - SPW) / 2);    // 230
-  const GUT = 110;
-  // TH was 470. The time axis now lives under the heat box, so the ladder gives
-  // back 14 units to keep the wing legends on the same baseline they had — any
-  // lower and the right-hand one slides under the zoom chip in the corner.
-  const TY = 26, TH = 456;
-  const yOf = (k: number) => TY + TH - ((k - m.lo) / Math.max(1, m.hi - m.lo)) * TH;
-  const rowH = TH / Math.max(1, m.strikes.length - 1);
-  const nb = Math.min(m.cols.length, 24);
-  const c0 = m.cols.length - nb;
-  const cw = SPW / nb;
-  const LW = SPX - GUT, LWW = LW - 12;              // left wing: DEX, grows leftward
-  const RW = SPX + SPW + GUT, RWW = W - RW - 12;   // right wing: GEX, grows rightward
-
-  // The three walls are labelled in the LEFT strike axis, not over the heat.
-  // Over the heat they sat on top of the very cells they describe, and the wall
-  // colors ARE the heat colors, so a put-wall label was red-on-red. In the axis
-  // they read as what they actually are: named rows of the strike ladder.
-  const walls = ([[m.callWall, GEX_POS_HEX, "CALL WALL"], [m.magnet, GOLD, "MAGNET"], [m.putWall, GEX_NEG_HEX, "PUT WALL"]] as [number | null, string, string][])
-    .filter((w): w is [number, string, string] => w[0] != null);
-  // A plain tick sitting at the same height as a wall badge is the same number
-  // twice, overlapping — drop it and let the badge carry the strike.
-  // Walls + flip share one de-collided stack. They collide constantly — on a
-  // pinned tape the magnet and the call wall are the SAME strike, and the two
-  // badges printed on top of each other were unreadable.
-  const axisBadges = spreadLabels(
-    [
-      ...walls.map(([k, col, label]) => ({ k, col, label, dashed: false, y: yOf(k) })),
-      ...(m.flip != null ? [{ k: m.flip, col: FLIP_C, label: "FLIP", dashed: true, y: yOf(m.flip) }] : []),
-    ],
-    17 * fz, TY + 10 * fz, TY + TH - 10 * fz
-  );
-  const ticks = strikeTicks(m.lo, m.hi, compact)
-    .filter((k) => !axisBadges.some((b) => Math.abs(yOf(k) - b.ly) < 13 * fz));
-
-  // Time axis for the spine. The spine only draws the LAST nb slots, so the
-  // ticks are picked from that window — labelling the full session under a
-  // window that starts two hours into it would put the wrong clock on every
-  // column. Indices come back relative to the slice, so they map straight onto
-  // the same `SPX + (t + 0.5) * cw` centre the cells and the path use.
-  const spineCols = m.cols.slice(c0);
-  const timeTicks = clockTimeTicks(spineCols, compact ? 4 : 7);
-  const tx = (i: number) => SPX + (i + 0.5) * cw;
-  const AXY = TY + TH;              // bottom of the heat box
-  const CAPY = AXY + 34;            // legends, pushed down to clear the axis
-
-  return (
-    <ZoomSvg w={W} h={H} plot={{ x: SPX, y: TY, w: SPW, h: TH }}>
-      {/* spine heat */}
-      <Lab x={SPX} y={TY - 8}>{compact ? `HEAT · LAST ${nb}` : `SPINE · STRIKE × TIME HEAT (LAST ${nb} SLOTS)`}</Lab>
-      <rect x={SPX} y={TY} width={SPW} height={TH} rx={10} fill="rgba(0,0,0,0.30)" stroke="rgba(255,255,255,0.07)" />
-      {Array.from({ length: nb }, (_, t) => {
-        const ci = c0 + t;
-        return m.strikes.map((k, si) => {
-          const h = m.heat[ci][si];
-          if (h < 0.05) return null;
-          return <rect key={`sh${t}-${si}`} x={SPX + t * cw} y={yOf(k) - rowH / 2} width={cw + 0.5} height={rowH + 0.5}
-            fill={gamColor(m.signed[ci][si], heatAlpha(h, 0.03, 0.78))} />;
-        });
-      })}
-      {/* time gridlines — drawn over the heat but under the path, at the same
-          5% white the Tape Field uses for its strike grid, so the columns stay
-          readable without the lines competing with the cells. */}
-      {timeTicks.map(({ i }) => (
-        <line key={`sg${i}`} x1={tx(i)} y1={TY} x2={tx(i)} y2={AXY} stroke={GRID} />
-      ))}
-      <path d={pathD(Array.from({ length: nb }, (_, t) => [SPX + t * cw + cw / 2, yOf(m.path[c0 + t])]))}
-        fill="none" stroke="rgba(255,255,255,0.28)" strokeWidth={4} />
-      <path d={pathD(Array.from({ length: nb }, (_, t) => [SPX + t * cw + cw / 2, yOf(m.path[c0 + t])]))}
-        fill="none" stroke="#fff" strokeWidth={1.4} />
-
-      {/* walls + flip across the spine — bands only; the naming lives in the axis */}
-      {walls.map(([k, col, label]) => (
-        <g key={label}>
-          <rect x={SPX} y={yOf(k) - 5} width={SPW} height={10} fill={col} opacity={0.13} />
-          <line x1={SPX} y1={yOf(k)} x2={SPX + SPW} y2={yOf(k)} stroke={col} opacity={0.55} />
-        </g>
-      ))}
-      {m.flip != null && (
-        <line x1={SPX} y1={yOf(m.flip)} x2={SPX + SPW} y2={yOf(m.flip)} stroke={FLIP_C} strokeDasharray="5 4" strokeWidth={1.2} />
-      )}
-
-      {/* spot cursor. The price tag used to be a 84×22 slab parked dead centre,
-          which is the busiest part of the heat — it covered the cells the
-          cursor is there to point at. Now it is a small tag pinned to the right
-          end of the spine, where the path actually ends. */}
-      {m.spot > 0 && (
-        <g>
-          <line x1={LW - LWW} y1={yOf(m.spot)} x2={RW + RWW} y2={yOf(m.spot)} stroke="#fff" opacity={0.3} strokeDasharray="2 3" />
-          <rect x={SPX + SPW - 62 * fz - 6} y={yOf(m.spot) - 8 * fz} width={62 * fz} height={16 * fz} rx={4}
-            fill="rgba(5,6,10,0.9)" stroke="rgba(255,255,255,0.45)" />
-          <text x={SPX + SPW - 31 * fz - 6} y={yOf(m.spot) + 3.6 * fz} fill="#fff" fontSize={9 * fz} fontWeight={700}
-            textAnchor="middle" style={{ fontVariantNumeric: "tabular-nums" }}>{fmtSpot(m.spot)}</text>
-        </g>
-      )}
-
-      {/* time axis — the spine's x is time, and until now nothing said so. Sits
-          in the 30-odd units between the heat box and the wing legends, which
-          moved down to CAPY to make room. */}
-      <line x1={SPX} y1={AXY} x2={SPX + SPW} y2={AXY} stroke="rgba(255,255,255,0.14)" />
-      {timeTicks.map(({ i, label }) => (
-        <g key={`stt${i}`}>
-          <line x1={tx(i)} y1={AXY} x2={tx(i)} y2={AXY + 4} stroke="rgba(255,255,255,0.30)" />
-          <text x={tx(i)} y={AXY + 15} fill={AXIS} fontSize={8 * fz} textAnchor="middle"
-            style={{ fontVariantNumeric: "tabular-nums" }}>{label}</text>
-        </g>
-      ))}
-      <Lab x={SPX + SPW + 8} y={AXY + 15} size={7} fill="rgba(255,255,255,0.55)">TIME · ET</Lab>
-
-      {/* left wing — DEX */}
-      <Lab x={LW - LWW} y={TY - 8}>◄ NET DEX</Lab>
-      {m.hasDex ? (
-        <g>
-          <line x1={LW} y1={TY} x2={LW} y2={TY + TH} stroke="rgba(255,255,255,0.14)" />
-          {m.strikes.map((k, i) => {
-            const v = m.dex[i];
-            const w = Math.abs(v) * LWW;
-            if (w < 0.4) return null;
-            return <rect key={`lw${k}`} x={LW - w} y={yOf(k) - rowH * 0.4} width={w} height={Math.max(1.4, rowH * 0.8)} rx={1.5}
-              fill={dexColor(v, 0.24 + 0.55 * Math.abs(v))} />;
-          })}
-          {!compact && (
-            <text x={LW - LWW} y={CAPY} fill="#ffffff" fontSize={9}>
-              bar length = |DEX| · green = dealers short delta · rose = dealers long delta
-            </text>
-          )}
-        </g>
-      ) : <NoDex x={LW - LWW} y={TY} w={LWW} h={TH} />}
-
-      {/* left strike axis — plain ticks, plus the named wall rows */}
-      {ticks.map((k) => <text key={`lt${k}`} x={SPX - 10} y={yOf(k) + 3} fill={AXIS} fontSize={8.4 * fz} textAnchor="end">{k}</text>)}
-      {axisBadges.map(({ k, col, label, dashed, y, ly }) => {
-        const bw = labWidth(label.length + 7, 7.2 * fz, 0.08) + 14;
-        return (
-          <g key={`ax${label}`}>
-            {/* leader from the badge back to the strike it actually sits on */}
-            <path d={`M${SPX - 8} ${ly}L${SPX - 4} ${y}L${SPX} ${y}`} stroke={col} strokeWidth={0.9} opacity={0.8} fill="none" />
-            <rect x={SPX - 10 - bw} y={ly - 7.5 * fz} width={bw} height={15 * fz} rx={3} fill="rgba(5,6,10,0.92)" />
-            <rect x={SPX - 10 - bw} y={ly - 7.5 * fz} width={bw} height={15 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`}
-              strokeDasharray={dashed ? "3 2" : undefined} />
-            <text x={SPX - 16} y={ly + 3.6 * fz} fill={col} fontSize={7.2 * fz} fontWeight={800} letterSpacing="0.08em" textAnchor="end">
-              {`${label} · ${fmtStrike(k)}`}
-            </text>
-          </g>
-        );
-      })}
-
-      {/* right wing — GEX */}
-      <Lab x={RW} y={TY - 8}>NET GEX ►</Lab>
-      <line x1={RW} y1={TY} x2={RW} y2={TY + TH} stroke="rgba(255,255,255,0.14)" />
-      {m.strikes.map((k, i) => {
-        const v = m.profile[i];
-        const w = Math.abs(v) * RWW;
-        if (w < 0.4) return null;
-        return <rect key={`rw${k}`} x={RW} y={yOf(k) - rowH * 0.4} width={w} height={Math.max(1.4, rowH * 0.8)} rx={1.5}
-          fill={rgba(mix(v >= 0 ? GEX_POS : GEX_NEG, WHITE, Math.abs(v) * 0.28), 0.26 + 0.55 * Math.abs(v))} />;
-      })}
-      {ticks.map((k) => <text key={`rt${k}`} x={SPX + SPW + 8} y={yOf(k) + 3} fill={AXIS} fontSize={8.4 * fz}>{k}</text>)}
-      {/* Anchored to the right margin, not to the wing's left edge — from RW the
-          caption ran straight off the 1240 viewBox and lost its last few words. */}
-      {!compact && (
-        <text x={W - 12} y={CAPY} fill="#ffffff" fontSize={9} textAnchor="end">
-          bar length = |GEX| · blue = long gamma (dealers dampen) · red = short gamma (dealers amplify)
-        </text>
-      )}
-    </ZoomSvg>
-  );
-}
-
-// ═════════════════════════ C · GAMMA TERRAIN ═════════════════════════════════
+// ═════════════════════════════ TERRAIN FILL ══════════════════════════════════
 /**
- * The terrain field itself. Split out of GammaTerrain for one reason: it has to
- * read the live zoom level, and the zoom context is provided BY <ZoomSvg>. A
- * hook called in GammaTerrain sits above that provider and would silently read
- * the default of 1 forever — which is exactly the bug this shape prevents.
+ * The terrain fill for the Tape Field's "Terrain" tab: the same strike × time
+ * gamma the heatmap draws as cells, resampled into a continuous field with
+ * iso-GEX contours and a zero-gamma coastline. It is placed on exactly the span
+ * of the field the recorded tape covers, so on the pinned 09:30–16:00 axis it
+ * grows through the session rather than being stretched over hours of nothing.
  */
 function TerrainField({ m, L, TP, FWD, FHT }: {
   m: MapModel; L: number; TP: number; FWD: number; FHT: number;
@@ -1303,98 +1160,6 @@ function TerrainField({ m, L, TP, FWD, FHT }: {
   );
 }
 
-function GammaTerrain({ m, compact }: { m: MapModel; compact?: boolean }) {
-  const fz = useFz();
-  const W = 1240, H = 520;
-  // The ridge rail is measured back from the right margin instead of being
-  // hung off the field's right edge with hard-coded offsets. The old version
-  // drew the rail 150 wide but placed its badges at +106 with a width that
-  // scaled with type size, so the badges walked straight out of the rail — and
-  // off the card — as soon as the font scale went above 1.
-  const RRW = 200;                       // ridge rail
-  const RRX = W - 24 - RRW;              // 1016
-  const L = 34, R = RRX - 16, TP = 26, BT = H - 52;
-  const FWD = R - L, FHT = BT - TP;
-
-  const yOf = (k: number) => TP + FHT - ((k - m.lo) / Math.max(1, m.hi - m.lo)) * FHT;
-  const xOf = (i: number) => L + (i / Math.max(1, m.cols.length - 1)) * FWD;
-  const ticks = strikeTicks(m.lo, m.hi, compact);
-  const timeTicks = pickTimeTicks(m.cols, compact ? 4 : 6);
-  const rowH = FHT / Math.max(1, m.strikes.length - 1);
-
-  const railBadges = spreadLabels(
-    ([[m.callWall, GEX_POS_HEX, "RIDGE"], [m.magnet, GOLD, "PEAK"], [m.flip, FLIP_C, "COAST"], [m.putWall, GEX_NEG_HEX, "TRENCH"]] as [number | null, string, string][])
-      .filter((w): w is [number, string, string] => w[0] != null)
-      .map(([k, col, tag]) => ({ k, col, tag, y: yOf(k) })),
-    17 * fz, TP + 10 * fz, TP + FHT - 10 * fz
-  );
-
-  return (
-    <ZoomSvg w={W} h={H} plot={{ x: L, y: TP, w: FWD, h: FHT }}>
-      <TerrainField m={m} L={L} TP={TP} FWD={FWD} FHT={FHT} />
-      <rect x={L} y={TP} width={FWD} height={FHT} fill="none" stroke="rgba(255,255,255,0.10)" />
-
-      {/* The dealer-delta arrow field used to live here — 63 arrows in a 9×7
-          lattice across the terrain. Removed: it painted over the contours and
-          the spot path, which are what this map is actually for. DEX is still
-          read on the Tape Field's left gutter and the Spine's left wing.
-          Its "DEALER DELTA CURRENT" caption went with it — the card header
-          already names the map and the footer already carries the legend. */}
-
-      {/* spot path */}
-      <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="rgba(0,0,0,0.45)" strokeWidth={5.5} />
-      <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth={3.4} />
-      <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="#fff" strokeWidth={1.5} />
-      {m.flip != null && (
-        <g>
-          <rect x={L + 6} y={yOf(m.flip) + 5} width={(compact ? 118 : 186) * fz} height={14 * fz} rx={3} fill="rgba(5,6,10,0.84)" />
-          <text x={L + 11} y={yOf(m.flip) + 5 + 10 * fz} fill={FLIP_C} fontSize={8 * fz} fontWeight={700} letterSpacing="0.1em">
-            {compact ? `FLIP ${fmtStrike(m.flip)}` : `GAMMA FLIP  ${fmtStrike(m.flip)}  ·  COASTLINE`}
-          </text>
-        </g>
-      )}
-      {timeTicks.map(({ i, label }) => (
-        <text key={`tt${i}`} x={xOf(i)} y={BT + 16} fill={AXIS} fontSize={8 * fz} textAnchor="middle">{label}</text>
-      ))}
-
-      {/* Ridge rail — bars | strike ticks | badges. The whole group is CLIPPED
-          to the rail box, so nothing it draws can escape above or below the
-          card no matter what the ladder or the type scale does. */}
-      <Lab x={RRX} y={TP - 8}>RIDGE RAIL</Lab>
-      <clipPath id="gt-rail-clip"><rect x={RRX} y={TP} width={RRW} height={FHT} rx={8} /></clipPath>
-      <rect x={RRX} y={TP} width={RRW} height={FHT} rx={8} fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.07)" />
-      <g clipPath="url(#gt-rail-clip)">
-        {m.strikes.map((k, i) => {
-          const v = m.profile[i];
-          return <rect key={`rr${k}`} x={RRX + 8} y={yOf(k) - rowH * 0.42} width={Math.abs(v) * 44 + 1.5} height={Math.max(1.2, rowH * 0.84)} rx={1}
-            fill={gamColor(v, 0.3 + 0.55 * Math.abs(v))} />;
-        })}
-        {railBadges.map(({ col, tag, y, ly }) => (
-          <g key={tag}>
-            {Math.abs(ly - y) > 0.5 && (
-              <path d={`M${RRX + 108} ${y}L${RRX + 114} ${ly}`} stroke={col} strokeWidth={0.9} opacity={0.7} fill="none" />
-            )}
-            <rect x={RRX + 116} y={ly - 7.5 * fz} width={78 * fz} height={15 * fz} rx={3} fill={`${col}26`} stroke={`${col}80`} />
-            <text x={RRX + 122} y={ly + 3.6 * fz} fill={col} fontSize={7.4 * fz} fontWeight={800} letterSpacing="0.08em">{tag}</text>
-          </g>
-        ))}
-        {ticks
-          .filter((k) => yOf(k) > TP + 7 * fz && yOf(k) < TP + FHT - 4 * fz)
-          .filter((k) => !railBadges.some((bg) => Math.abs(yOf(k) - bg.ly) < 9 * fz))
-          .map((k) => <text key={`rrt${k}`} x={RRX + 58} y={yOf(k) + 3} fill={AXIS} fontSize={8 * fz}>{k}</text>)}
-      </g>
-      {m.spot > 0 && (
-        <polygon points={`${RRX - 2},${yOf(m.spot)} ${RRX - 11},${yOf(m.spot) - 5} ${RRX - 11},${yOf(m.spot) + 5}`} fill="#fff" />
-      )}
-      {!compact && (
-        <text x={L} y={H - 12} fill="#ffffff" fontSize={8} fontWeight={600} letterSpacing="0.14em">
-          ELEVATION = NET GAMMA · CONTOURS = ISO-GEX · DASHED COASTLINE = ZERO GAMMA
-        </text>
-      )}
-    </ZoomSvg>
-  );
-}
-
 // ── geometry helpers ─────────────────────────────────────────────────────────
 function pathD(pts: [number, number][]): string {
   return pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`).join("");
@@ -1442,52 +1207,65 @@ function pickTimeTicks(cols: MapColumn[], count = 6): { i: number; label: string
   return out;
 }
 
+/** "HH:MM" from ET minutes past midnight. */
+const hhmm = (min: number) =>
+  `${String(Math.floor(min / 60) % 24).padStart(2, "0")}:${String(Math.round(min) % 60).padStart(2, "0")}`;
+
 /**
- * Time ticks on ROUND clock minutes rather than on evenly-spaced column
- * indices. pickTimeTicks() divides the column count into n equal parts and
- * rounds, which on a 24-slot window lands on 12:35 · 12:55 · 13:15 · 13:35 ·
- * 13:50 — the gaps are unequal and none of the labels is a time anyone thinks
- * in. This walks the columns instead and keeps the ones sitting on a multiple
- * of `step`, so the axis reads :00 · :15 · :30 and the spacing is genuinely
- * even. Falls back to pickTimeTicks when the slot grid is coarse enough that no
- * step lands on a boundary (nothing guarantees slotMin divides 60).
+ * Horizontal position of column `i`, as a fraction of the field width.
+ *
+ * On a clock axis this is where the column's TIMESTAMP falls in the 09:30–16:00
+ * frame, which is the whole reason the axis exists: an hour into the session the
+ * tape occupies the first ~10% of the field and the rest is visibly still to
+ * come. Off it, the old behaviour — spread the columns evenly, whatever they
+ * are — which is the only thing that works across the midnight wrap in "All".
  */
-function clockTimeTicks(cols: MapColumn[], maxTicks = 7): { i: number; label: string }[] {
-  if (cols.length < 2) return pickTimeTicks(cols, maxTicks);
-  const mins = cols.map((c) => {
-    const [h, m] = etTime(c.t).split(":").map(Number);
-    return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : NaN;
-  });
-  const span = Math.abs(mins[mins.length - 1] - mins[0]);
-  if (!Number.isFinite(span) || span <= 0) return pickTimeTicks(cols, maxTicks);
-  const step = [5, 10, 15, 20, 30, 60, 120].find((s) => span / s <= maxTicks - 1) ?? 120;
-  const out: { i: number; label: string }[] = [];
-  for (let i = 0; i < cols.length; i++) {
-    if (!Number.isFinite(mins[i]) || mins[i] % step !== 0) continue;
-    out.push({ i, label: etTime(cols[i].t) });
+function xFrac(m: MapModel, i: number): number {
+  if (!m.timeAxis) return i / Math.max(1, m.cols.length - 1);
+  return clamp01((m.mins[i] - m.xLo) / Math.max(1, m.xHi - m.xLo));
+}
+
+/**
+ * Time labels as fractions of the field width.
+ *
+ * On a clock axis the ticks are ROUND CLOCK TIMES stepped across the domain —
+ * 09:30 · 10:00 · 10:30 … 16:00 — not the timestamps of whichever columns
+ * happen to exist. That is what lets the empty part of the axis still be read:
+ * the 14:00 gridline is drawn hours before there is a 14:00 column. Off a clock
+ * axis it falls back to the per-column picker.
+ */
+function axisTicks(m: MapModel, count = 8): { f: number; label: string }[] {
+  if (!m.timeAxis) {
+    const n1 = Math.max(1, m.cols.length - 1);
+    return pickTimeTicks(m.cols, count).map(({ i, label }) => ({ f: i / n1, label }));
   }
-  return out.length >= 2 ? out : pickTimeTicks(cols, maxTicks);
+  const span = Math.max(1, m.xHi - m.xLo);
+  const step = [5, 10, 15, 30, 60, 120].find((s) => span / s <= count) ?? 120;
+  const out: { f: number; label: string }[] = [];
+  for (let t = Math.ceil(m.xLo / step) * step; t <= m.xHi; t += step) {
+    out.push({ f: (t - m.xLo) / span, label: hhmm(t) });
+  }
+  // A short zoom window can round past both ends and leave the axis bare.
+  if (out.length < 2) return [{ f: 0, label: hhmm(m.xLo) }, { f: 1, label: hhmm(m.xHi) }];
+  return out;
 }
 
 // ── tab ──────────────────────────────────────────────────────────────────────
 /**
- * One map, one row. The stack is four full-width cards rather than a 2×2 — at
- * half width the 1240-unit viewBox put 8px labels at ~4px and every map had to
- * run a "compact" variant with its type scaled up and its densest layers
- * dropped. Full width means every card renders at 1× type with nothing culled,
- * so `compact` is now permanently false and the font-scale context stays at 1.
+ * The one chart. Full width, 1240-unit viewBox, `compact` permanently false —
+ * there is no grid to squeeze it into any more.
+ *
+ * The field mode is a TAB, not a second card: heatmap and terrain are two
+ * renderings of the same strike × time gamma on the same axes, against the same
+ * session scales, so switching between them should change the fill and nothing
+ * else. The zoom window deliberately survives the switch for the same reason.
  */
-function MapCard({ def, m }: {
-  def: (typeof CONCEPTS)[number];
-  m: MapModel;
-}) {
-  const Body = def.key === "tape" ? TapeField : def.key === "spine" ? Spine : GammaTerrain;
+function MapCard({ m }: { m: MapModel }) {
+  const [field, setField] = useState<FieldMode>("heat");
+  const def = FIELD_MODES.find((f) => f.key === field) ?? FIELD_MODES[0];
 
-  // The window lives HERE, one per card, not inside ZoomSvg — the body has to
-  // be handed an already-sliced model, and the gesture surface is inside the
-  // body. Per-card rather than shared, because the three maps are read one at a
-  // time, and yoking their zooms together would mean scrolling one to look at a
-  // detail silently re-framed the other two.
+  // The window lives HERE, not inside ZoomSvg — the body has to be handed an
+  // already-sliced model, and the gesture surface is inside the body.
   const [win, setWin] = useState<ViewWin>(() => fullWin(m));
 
   // A new session, expiry or RTH/All scope is a different ladder over a
@@ -1510,10 +1288,33 @@ function MapCard({ def, m }: {
 
   return (
     <Card variant="budget" padding={16}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, width: "100%", marginBottom: 10, color: HOME_THEME.text }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", marginBottom: 10, color: HOME_THEME.text, flexWrap: "wrap" }}>
         <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" }}>
-          {def.label}
+          Tape Field
         </span>
+        {/* Field switcher. Same segmented shape as the RTH / All scope switch in
+            the toolbar above, so "one of these two is selected" looks the same
+            everywhere on the page. */}
+        <div role="group" aria-label="Field rendering" style={{
+          display: "inline-flex", gap: 0, padding: 2, borderRadius: 8,
+          border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.03)",
+        }}>
+          {FIELD_MODES.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              title={f.blurb}
+              aria-pressed={field === f.key}
+              onClick={() => setField(f.key)}
+              style={{
+                ...(field === f.key ? homeButtonStyle : homeSecondaryButtonStyle),
+                border: field === f.key ? homeButtonStyle.border : "1px solid transparent",
+                background: field === f.key ? homeButtonStyle.background : "transparent",
+                opacity: field === f.key ? 1 : 0.65,
+              }}
+            >{f.label}</button>
+          ))}
+        </div>
         <span style={{ fontSize: 11, color: "#ffffff", opacity: 0.85, flex: 1, minWidth: 0 }}>
           {def.blurb}
         </span>
@@ -1529,7 +1330,7 @@ function MapCard({ def, m }: {
       <FzCtx.Provider value={1}>
         <ViewCtx.Provider value={api}>
           <ZoomCtx.Provider value={kZoom}>
-            <Body m={view} compact={false} />
+            <TapeField m={view} compact={false} field={field} />
           </ZoomCtx.Provider>
         </ViewCtx.Provider>
       </FzCtx.Provider>
@@ -1575,7 +1376,7 @@ export default function GexMapTab() {
   // `view` is what every map, every scale and the regime strip read. `data` is
   // kept only to report how much of the session the current scope is hiding.
   const view = useMemo(() => scopePayload(data, scope), [data, scope]);
-  const model = useMemo(() => buildModel(view), [view]);
+  const model = useMemo(() => buildModel(view, scope), [view, scope]);
   const rthSlots = useMemo(
     () => (data?.columns ?? []).reduce((n, c) => n + (isRthMs(c.t) ? 1 : 0), 0),
     [data]
@@ -1602,9 +1403,6 @@ export default function GexMapTab() {
 
   return (
     <>
-      <style>{`
-        .gexmap-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
-      `}</style>
       <Card variant="budget" padding={18}>
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
           <div style={{ minWidth: 200 }}>
@@ -1650,7 +1448,7 @@ export default function GexMapTab() {
           </div>
           <button type="button" onClick={() => void load(date, expiry)} style={homeButtonStyle}>Refresh</button>
           <div style={{ fontSize: 12, color: "#ffffff", opacity: 0.85, flex: 1, minWidth: 220 }}>
-            All three readouts, same session, same scales — one per row, scroll to compare.
+            RTH pins the x-axis to 09:30–16:00 — the tape grows into a full session, it is not stretched to fill one.
           </div>
         </div>
         <div style={{ fontSize: 11.5, color: "#ffffff", opacity: 0.8, marginTop: 10, lineHeight: 1.6 }}>
@@ -1704,16 +1502,7 @@ export default function GexMapTab() {
           </div>
         </Card>
       ) : (
-        // One column, four rows. Two side by side never actually worked: each
-        // map is drawn in a 1240-unit viewBox, so at half width everything was
-        // rendering at ~0.5× and the maps had to fight back with 1.7× type and
-        // culled layers. Full width per row is the only size at which all four
-        // are readable without a compact variant.
-        <div className="gexmap-grid">
-          {CONCEPTS.map((def) => (
-            <MapCard key={def.key} def={def} m={model} />
-          ))}
-        </div>
+        <MapCard m={model} />
       )}
 
       {model && view && data && (

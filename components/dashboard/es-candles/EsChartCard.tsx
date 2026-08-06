@@ -2183,12 +2183,20 @@ export default function EsChartCard({
           borderColor: "rgba(255,255,255,.10)",
           timeVisible: true,
           secondsVisible: false,
-          // Axis tick labels in Eastern Time. tickMarkType 2/3 = day/month
-          // boundary → show the ET date; otherwise show ET HH:MM.
+          // Axis tick labels in Eastern Time.
+          //
+          // lightweight-charts v5 TickMarkType:
+          //   0 Year | 1 Month | 2 DayOfMonth | 3 Time | 4 TimeWithSeconds
+          //
+          // This used to test `=== 2 || === 3` for "day/month boundary", but 3 is
+          // Time — the type emitted for nearly every tick on an intraday chart.
+          // So the whole axis rendered as dates and the clock only ever appeared
+          // on the crosshair. Only 0/1/2 are real calendar boundaries; 3/4 are
+          // times and must render HH:MM.
           tickMarkFormatter: (t: unknown, tickMarkType: number) => {
             if (typeof t !== "number") return "";
             const d = new Date(t * 1000);
-            if (tickMarkType === 2 || tickMarkType === 3) {
+            if (tickMarkType === 0 || tickMarkType === 1 || tickMarkType === 2) {
               return d.toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" });
             }
             return d.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false });
