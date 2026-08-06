@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, type CSSProperties } from "react";
 import {
   OWNER_THEME as T,
   homeButtonStyle,
@@ -10,15 +10,6 @@ import {
 import { LiveKpiCard, type LivePoint } from "../components/LiveKpiCard";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
-
-interface StripeCustomer {
-  id: string;
-  email: string;
-  name: string | null;
-  created: number;
-  total_spent: number;
-  subscriptions: { status: string; plan: string; amount: number }[];
-}
 
 interface StripeSubscription {
   id: string;
@@ -38,6 +29,22 @@ interface StripeSubscription {
   created: number;
   joined: number;
   total_spent: number;
+  // ── Lifecycle. All optional: a response cached from before this shipped
+  //    omits them, and every reader below treats "missing" as "not cancelling".
+  /** Customer hit cancel — still paying, access ends at `cancel_at`. */
+  cancel_at_period_end?: boolean;
+  /** When access actually ends for a winding-down subscription. */
+  cancel_at?: number | null;
+  /** When the cancellation was requested / triggered. */
+  canceled_at?: number | null;
+  /** When the subscription really ended — service removed at this point. */
+  ended_at?: number | null;
+  /** Stripe reason: cancellation_requested | payment_failed | payment_disputed */
+  cancel_reason?: string | null;
+  /** Customer-picked feedback: too_expensive | missing_features | … */
+  cancel_feedback?: string | null;
+  /** Free-text note the customer left on the way out. */
+  cancel_comment?: string | null;
 }
 
 interface StripeSummary {
@@ -47,6 +54,12 @@ interface StripeSummary {
   grossMrr?: number;
   discountedSubscriptions?: number;
   activeSubscriptions: number;
+  /** Still billing, but already asked to leave at period end. */
+  cancellingSoon?: number;
+  /** Monthly revenue attached to those. */
+  mrrLeaving?: number;
+  /** Lifetime count of subscriptions that ended. */
+  canceledTotal?: number;
   totalCustomers: number;
   churnedThisMonth: number;
 }
@@ -62,8 +75,10 @@ function netMonthlyOf(s: StripeSubscription): number {
 interface SalesData {
   configured: boolean;
   summary: StripeSummary | null;
+  /** Subscriptions that still have access (active / trialing / past_due / …). */
   subscriptions: StripeSubscription[];
-  recentCustomers: StripeCustomer[];
+  /** Subscriptions that are over — service removed. Powers the Cancellations card. */
+  cancellations?: StripeSubscription[];
   error?: string;
 }
 
@@ -95,11 +110,82 @@ function fmtDateShort(ts: number) {
 const STATUS_COLORS: Record<string, string> = {
   active: T.green,
   trialing: T.cyan,
+  cancelling: T.gold,
   past_due: T.orange,
+  cancelled: T.red,
   canceled: T.red,
   incomplete: T.muted,
+  incomplete_expired: T.muted,
   unpaid: T.red,
 };
+
+// ─── Cancellation labelling ────────────────────────────────────────────────────
+//
+// Stripe's `status` alone hides the two things that actually matter here:
+//   • a customer who clicked cancel still reads "active" right up until the paid
+//     period runs out — the old table showed them as plain active and the row
+//     never changed, which is why statuses looked stuck;
+//   • a sub Stripe killed for a dead card also reads "canceled", but it's a
+//     billing problem (new card needed), not a customer who chose to leave.
+// `displayStatus` collapses status + cancel_at_period_end + ended_at into the
+// tag the row shows, and `cancelReasonOf` turns Stripe's reason/feedback enums
+// into something readable.
+
+/** Stripe's `cancellation_details.reason` → why the subscription ended. */
+const CANCEL_REASON_LABEL: Record<string, string> = {
+  cancellation_requested: "Customer cancelled",
+  payment_failed: "Payment failed · needs new card",
+  payment_disputed: "Payment disputed",
+};
+
+/** Stripe's `cancellation_details.feedback` → what the customer said. */
+const CANCEL_FEEDBACK_LABEL: Record<string, string> = {
+  too_expensive: "Too expensive",
+  missing_features: "Missing features",
+  switched_service: "Switched to another service",
+  unused: "Wasn't using it",
+  customer_service: "Customer service",
+  too_complex: "Too hard to use",
+  low_quality: "Quality not as expected",
+  other: "Other",
+};
+
+/** Best one-line "why" for a cancelled sub, plus whether it's a card problem. */
+function cancelReasonOf(s: StripeSubscription): { label: string; isBilling: boolean } {
+  const reason = s.cancel_reason ?? null;
+  const feedback = s.cancel_feedback ?? null;
+  const isBilling = reason === "payment_failed" || reason === "payment_disputed" || s.status === "unpaid";
+  if (feedback && CANCEL_FEEDBACK_LABEL[feedback]) {
+    return { label: CANCEL_FEEDBACK_LABEL[feedback], isBilling };
+  }
+  if (reason && CANCEL_REASON_LABEL[reason]) return { label: CANCEL_REASON_LABEL[reason], isBilling };
+  if (s.status === "incomplete_expired") return { label: "Checkout never completed", isBilling: true };
+  return { label: "No reason given", isBilling };
+}
+
+/** When the customer actually loses (or lost) access. */
+function serviceEndsAt(s: StripeSubscription): number | null {
+  return s.ended_at ?? s.cancel_at ?? (s.cancel_at_period_end ? s.current_period_end : null);
+}
+
+/**
+ * The tag the table shows. "cancelling" = paid up, leaving on a known date;
+ * "cancelled" = the day has passed and service is gone.
+ */
+function displayStatus(s: StripeSubscription): { key: string; label: string; detail: string | null } {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const ends = serviceEndsAt(s);
+
+  if (s.status === "canceled" || s.status === "incomplete_expired" || (s.ended_at != null && s.ended_at <= nowSec)) {
+    return { key: "cancelled", label: "cancelled", detail: ends ? `ended ${fmtDateShort(ends)}` : null };
+  }
+  if (s.cancel_at_period_end || (ends != null && s.canceled_at != null)) {
+    return { key: "cancelling", label: "cancelling", detail: ends ? `ends ${fmtDateShort(ends)}` : null };
+  }
+  if (s.status === "past_due") return { key: "past_due", label: "past due", detail: "card declined" };
+  if (s.status === "unpaid") return { key: "unpaid", label: "unpaid", detail: "needs new card" };
+  return { key: s.status, label: s.status, detail: null };
+}
 
 // Monthly-equivalent cost of one expense row (yearly ÷ 12, "once" excluded
 // from the recurring run-rate but still counted in the lifetime total).
@@ -245,121 +331,215 @@ function buildPeriods(gran: Granularity, subs: StripeSubscription[]) {
   });
 }
 
-function RevenueChart({ subs, expensesMonthly, gran }: { subs: StripeSubscription[]; expensesMonthly: number; gran: Granularity }) {
-  const periods = buildPeriods(gran, subs);
-  const periodsPerYear = gran === "yearly" ? 1 : gran === "monthly" ? 12 : gran === "weekly" ? 52 : 365;
-  const expensePerPeriod = expensesMonthly * (12 / periodsPerYear);
+// ─── Recurring revenue, month over month ───────────────────────────────────────
+//
+// Was: "new subscriptions by signup date" — a bar for whatever got signed that
+// week, which read as $0 on any quiet week even while every existing sub kept
+// paying. Now each bar is the RECURRING BOOK at the end of that month: every
+// subscription that had started and had not yet ended, at what it actually
+// bills per month. That's the line that should be going up and to the right.
+//
+// Cancelled subs are included in the input on purpose — they have to be, or a
+// month they were still paying in would under-count. `ended_at`/`cancel_at`
+// drops them out of the months after they left.
 
-  const rows = periods.map(p => {
-    let mrrAdded = 0, count = 0;
-    for (const sub of subs) {
-      const d = new Date(sub.created * 1000);
-      if (d < p.start || d > p.end) continue;
-      // Actual billed rate, not list price — a discounted sub adds what it pays.
-      mrrAdded += netMonthlyOf(sub);
-      count += 1;
+/** Was this subscription live and billing at `atSec`? */
+function activeAt(s: StripeSubscription, atSec: number): boolean {
+  if (s.created > atSec) return false;
+  const ended = s.ended_at ?? s.cancel_at ?? null;
+  if (ended != null && ended <= atSec) return false;
+  return true;
+}
+
+/** Last N calendar months, oldest first, each with its end-of-month instant. */
+function lastMonths(count: number) {
+  const now = new Date();
+  return Array.from({ length: count }, (_, i) => {
+    const start = new Date(now.getFullYear(), now.getMonth() - (count - 1 - i), 1);
+    const end = new Date(start.getFullYear(), start.getMonth() + 1, 0, 23, 59, 59);
+    // The current month is only complete "as of now" — measure it at today.
+    const measureAt = Math.min(Math.floor(end.getTime() / 1000), Math.floor(now.getTime() / 1000));
+    return {
+      label: start.toLocaleDateString("en-US", { month: "short" }),
+      year: start.getFullYear(),
+      startSec: Math.floor(start.getTime() / 1000),
+      endSec: Math.floor(end.getTime() / 1000),
+      measureAt,
+      isCurrent: start.getFullYear() === now.getFullYear() && start.getMonth() === now.getMonth(),
+    };
+  });
+}
+
+function RecurringRevenueChart({ subs, expensesMonthly }: { subs: StripeSubscription[]; expensesMonthly: number }) {
+  const months = lastMonths(12);
+
+  const rows = months.map(m => {
+    let mrr = 0, count = 0, added = 0, lost = 0;
+    for (const s of subs) {
+      if (activeAt(s, m.measureAt)) {
+        mrr += netMonthlyOf(s);
+        count += 1;
+      }
+      if (s.created >= m.startSec && s.created <= m.endSec) added += 1;
+      const ended = s.ended_at ?? s.cancel_at ?? null;
+      if (ended != null && ended >= m.startSec && ended <= m.endSec) lost += 1;
     }
-    const expenses = Math.round(expensePerPeriod);
-    return { label: p.label, mrr: mrrAdded, count, expenses, combined: mrrAdded - expenses };
+    return { ...m, mrr, count, added, lost, net: mrr - expensesMonthly };
   });
 
-  const maxMrr = Math.max(...rows.map(r => r.mrr), 1);
-  const maxSale = Math.max(...rows.flatMap(r => [r.mrr, r.expenses, Math.abs(r.combined)]), 1);
-  const periodWord = gran === "daily" ? "day" : gran === "weekly" ? "week" : gran === "monthly" ? "month" : "year";
+  const max = Math.max(...rows.map(r => r.mrr), 1);
+  const latest = rows[rows.length - 1];
+  const prior = rows.length > 1 ? rows[rows.length - 2] : null;
+  const delta = prior ? latest.mrr - prior.mrr : 0;
+  const deltaPct = prior && prior.mrr > 0 ? (delta / prior.mrr) * 100 : null;
+  const deltaColor = delta > 0 ? T.green : delta < 0 ? T.red : T.muted;
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
-      {/* Bar chart: new subscriptions by signup period */}
-      <div style={{ ...homePanelStyle, padding: "18px 20px" }}>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 2 }}>
-          <div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: T.gold, marginBottom: 3 }}>Revenue Summary</div>
-            <div style={{ fontSize: 14, color: T.muted }}>New subscriptions by signup date · {gran === "yearly" ? "lifetime" : `last ${rows.length} ${periodWord}s`}</div>
+    <div style={{ ...homePanelStyle, padding: "18px 20px" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 2, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: T.gold, marginBottom: 3 }}>Recurring Revenue</div>
+          <div style={{ fontSize: 14, color: T.muted }}>
+            Active subscription book at each month end · last {rows.length} months
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: gran === "weekly" ? 8 : 4, height: 150, marginTop: 14 }}>
-          {rows.map((b, i) => {
-            const barH = Math.max(4, (b.mrr / maxMrr) * 128);
-            return (
-              <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                {b.count > 0 && (
-                  <span style={{ fontSize: 14, fontWeight: 700, color: T.cyan, whiteSpace: "nowrap", lineHeight: 1 }}>{b.count}</span>
-                )}
-                <div title={`${b.label}: ${b.count} sub${b.count !== 1 ? "s" : ""} · ${fmtMoney(b.mrr)} MRR added`} style={{
-                  width: "100%",
-                  height: barH,
-                  background: b.mrr > 0 ? `linear-gradient(180deg, ${T.cyan}cc, ${T.cyan}44)` : "rgba(255,255,255,0.06)",
-                  borderRadius: "3px 3px 0 0",
-                  cursor: "default",
-                }} />
-                <span style={{
-                  fontSize: 10, color: T.muted, whiteSpace: "nowrap",
-                  visibility: gran === "weekly" || gran === "yearly" || i % 2 === 0 ? "visible" : "hidden",
-                }}>
-                  {b.label}
-                </span>
-              </div>
-            );
-          })}
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+          <span style={{ fontSize: 22, fontWeight: 700, color: T.cyan, fontFamily: "var(--font-mono)" }}>{fmtMoney(latest.mrr)}</span>
+          <span style={{ fontSize: 14, color: T.muted }}>/mo</span>
+          {prior && (
+            <span
+              title={`vs ${prior.label}: ${fmtMoney(prior.mrr)}/mo`}
+              style={{
+                fontSize: 14, fontWeight: 700, color: deltaColor, padding: "2px 8px", borderRadius: 10,
+                background: `${deltaColor}18`, border: `1px solid ${deltaColor}44`,
+              }}
+            >
+              {delta >= 0 ? "+" : "−"}{fmtMoney(Math.abs(delta))}{deltaPct !== null ? ` (${delta >= 0 ? "+" : "−"}${Math.abs(deltaPct).toFixed(0)}%)` : ""}
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Sale Summary — grouped bars: Subscriptions vs Expenses vs Combined, same granularity */}
-      <div style={{ ...homePanelStyle, padding: "16px 18px", display: "flex", flexDirection: "column" }}>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 3 }}>
-          <div style={{ fontSize: 17, fontWeight: 700, color: T.gold }}>Sale Summary</div>
-        </div>
-        <div style={{ fontSize: 14, color: T.muted, marginBottom: 14 }}>Subscriptions vs expenses · {gran === "yearly" ? "lifetime" : `per ${periodWord}`}</div>
-
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 10, height: 150, flex: 1 }}>
-          {rows.map((r, i) => (
-            <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-              <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 128, width: "100%", justifyContent: "center" }}>
-                <div
-                  title={`${r.label}: Subscriptions ${fmtMoney(r.mrr)}/mo added`}
-                  style={{ width: 6, height: Math.max(2, (r.mrr / maxSale) * 128), background: T.cyan, borderRadius: "2px 2px 0 0" }}
-                />
-                <div
-                  title={`${r.label}: Expenses ${fmtMoney(r.expenses)}/mo run-rate`}
-                  style={{ width: 6, height: Math.max(2, (r.expenses / maxSale) * 128), background: T.red, borderRadius: "2px 2px 0 0" }}
-                />
-                <div
-                  title={`${r.label}: Combined (net) ${fmtMoney(r.combined)}/mo`}
-                  style={{ width: 6, height: Math.max(2, (Math.abs(r.combined) / maxSale) * 128), background: r.combined >= 0 ? T.green : T.orange, borderRadius: "2px 2px 0 0" }}
-                />
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 8, height: 180, marginTop: 16 }}>
+        {rows.map((b, i) => {
+          const barH = Math.max(3, (b.mrr / max) * 140);
+          const expenseH = Math.max(0, Math.min(barH, (expensesMonthly / max) * 140));
+          return (
+            <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, minWidth: 0 }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: b.mrr > 0 ? T.cyan : T.muted, whiteSpace: "nowrap", lineHeight: 1 }}>
+                {b.mrr > 0 ? fmtMoney(b.mrr) : "—"}
+              </span>
+              <div
+                title={
+                  `${b.label} ${b.year}: ${fmtMoney(b.mrr)}/mo recurring across ${b.count} sub${b.count !== 1 ? "s" : ""}` +
+                  ` · +${b.added} new · −${b.lost} lost` +
+                  ` · net after expenses ${fmtMoney(b.net)}/mo` +
+                  (b.isCurrent ? " · month to date" : "")
+                }
+                style={{
+                  position: "relative",
+                  width: "100%",
+                  height: barH,
+                  background: b.mrr > 0
+                    ? `linear-gradient(180deg, ${T.cyan}dd, ${T.cyan}44)`
+                    : "rgba(255,255,255,0.06)",
+                  borderRadius: "3px 3px 0 0",
+                  outline: b.isCurrent ? `1px dashed ${T.cyan}66` : "none",
+                  cursor: "default",
+                }}
+              >
+                {/* Expense water-line — anything above it is profit that month. */}
+                {expensesMonthly > 0 && b.mrr > 0 && (
+                  <div style={{ position: "absolute", left: 0, right: 0, bottom: expenseH, height: 1, background: T.red, opacity: 0.75 }} />
+                )}
               </div>
-              <span style={{ fontSize: 10, color: T.muted, whiteSpace: "nowrap" }}>{r.label}</span>
+              <span style={{ fontSize: 10, color: b.isCurrent ? T.cyan : T.muted, whiteSpace: "nowrap" }}>{b.label}</span>
+              <span style={{ fontSize: 10, color: T.muted, whiteSpace: "nowrap", opacity: 0.85 }}>
+                {b.added > 0 && <span style={{ color: T.green }}>+{b.added}</span>}
+                {b.added > 0 && b.lost > 0 && " "}
+                {b.lost > 0 && <span style={{ color: T.red }}>−{b.lost}</span>}
+                {b.added === 0 && b.lost === 0 && " "}
+              </span>
             </div>
-          ))}
-        </div>
+          );
+        })}
+      </div>
 
-        <div style={{ display: "flex", gap: 12, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, fontSize: 14, color: T.muted, flexWrap: "wrap" }}>
-          <span title={`New subscription revenue added that ${periodWord}`}><span style={{ color: T.cyan }}>■</span> Subscriptions</span>
-          <span title={`${periodWord}ly-equivalent of the current expense run-rate`}><span style={{ color: T.red }}>■</span> Expenses</span>
-          <span title="Subscriptions minus expenses"><span style={{ color: T.green }}>■</span> Combined</span>
-        </div>
+      <div style={{ display: "flex", gap: 14, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, fontSize: 14, color: T.muted, flexWrap: "wrap" }}>
+        <span title="Every subscription billing that month, at its actual (post-discount) monthly rate"><span style={{ color: T.cyan }}>■</span> Recurring / mo</span>
+        <span title={`Current expense run-rate, ${fmtMoney(expensesMonthly)}/mo — bar above the line is profit`}><span style={{ color: T.red }}>▬</span> Expense line</span>
+        <span title="New subscriptions started that month"><span style={{ color: T.green }}>+n</span> new</span>
+        <span title="Subscriptions that ended that month"><span style={{ color: T.red }}>−n</span> lost</span>
       </div>
     </div>
   );
 }
 
-const SUB_TABLE_COLS = "1fr 90px 80px 90px 90px 80px 90px";
+// Amount got 80px while it renders "$300/yr  $1.0K" (actual price plus the
+// struck-through list price) — the cell overflowed straight across the Status
+// pill. Amount is wider now, every cell is `minWidth: 0` + clipped so nothing
+// can bleed into its neighbour again, and Status is wide enough for
+// "cancelling" plus its date sub-line.
+const SUB_TABLE_COLS = "minmax(0,1fr) 90px 132px 116px 86px 78px 92px";
+
+/** Grid children default to min-content width, which is what let the amount
+ *  cell push over the status column. Every cell spreads this. */
+const CELL: CSSProperties = { minWidth: 0, overflow: "hidden" };
+
+function StatusTag({ s }: { s: StripeSubscription }) {
+  const st = displayStatus(s);
+  const color = STATUS_COLORS[st.key] || T.muted;
+  return (
+    <span style={{ ...CELL, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
+      <span style={{
+        fontSize: 14, padding: "2px 8px", borderRadius: 10, fontWeight: 700, whiteSpace: "nowrap",
+        maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis",
+        background: `${color}18`,
+        border: `1px solid ${color}44`,
+        color,
+      }}>
+        {st.label}
+      </span>
+      {st.detail && (
+        <span style={{ fontSize: 10, color: T.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>
+          {st.detail}
+        </span>
+      )}
+    </span>
+  );
+}
 
 function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[]; discordByEmail: Map<string, string> }) {
+  // "Active" is the headline count; anything winding down or behind on payment
+  // is still listed (that's the point) but doesn't inflate the badge.
+  const activeCount = subs.filter(s => displayStatus(s).key === "active").length;
+  const leaving = subs.filter(s => displayStatus(s).key === "cancelling").length;
+  const attention = subs.filter(s => ["past_due", "unpaid", "incomplete"].includes(displayStatus(s).key)).length;
+
   return (
     <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+      <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
         <span style={{ fontSize: 17, fontWeight: 700, color: T.gold, letterSpacing: "0.01em" }}>Active Subscriptions</span>
-        <span style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}>{subs.length}</span>
+        <span title="Subscriptions in plain active status" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}33`, color: T.cyan }}>{activeCount}</span>
+        {leaving > 0 && (
+          <span title="Paid up, but already cancelled — they leave at period end" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.gold}15`, border: `1px solid ${T.gold}44`, color: T.gold }}>
+            {leaving} leaving
+          </span>
+        )}
+        {attention > 0 && (
+          <span title="Payment problem — card needs updating" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.orange}15`, border: `1px solid ${T.orange}44`, color: T.orange }}>
+            {attention} needs card
+          </span>
+        )}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: SUB_TABLE_COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted, letterSpacing: "0.01em", flexShrink: 0 }}>
-        <span>Customer</span>
-        <span>Discord</span>
-        <span>Amount</span>
-        <span>Status</span>
-        <span>Renews</span>
-        <span>Joined</span>
-        <span>Total Spent</span>
+        <span style={CELL}>Customer</span>
+        <span style={CELL}>Discord</span>
+        <span style={CELL}>Amount</span>
+        <span style={CELL}>Status</span>
+        <span style={CELL}>Renews</span>
+        <span style={CELL}>Joined</span>
+        <span style={CELL}>Total Spent</span>
       </div>
       <div style={{ flex: 1, overflowY: "auto" }}>
         {subs.length === 0 ? (
@@ -372,10 +552,14 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
           const perPeriod = typeof s.net_amount === "number" ? s.net_amount : s.amount;
           const discounted = perPeriod < s.amount;
           const unit = s.interval === "year" ? "yr" : "mo";
+          const st = displayStatus(s);
+          const leavingRow = st.key === "cancelling";
+          // A sub that's leaving doesn't "renew" — it stops. Say so in that column.
+          const endsAt = serviceEndsAt(s);
           return (
           <div
             key={s.id}
-            title={`${s.customer_email} · ${discordName ? `Discord: ${discordName} · ` : ""}${fmtMoney(perPeriod)}/${unit}${discounted ? ` (list ${fmtMoney(s.amount)}/${unit})` : ""} · ${s.status} · renews ${fmtDateShort(s.current_period_end)} · joined ${fmtDate(s.joined)} · total spent ${fmtMoney(s.total_spent)}`}
+            title={`${s.customer_email} · ${discordName ? `Discord: ${discordName} · ` : ""}${fmtMoney(perPeriod)}/${unit}${discounted ? ` (list ${fmtMoney(s.amount)}/${unit})` : ""} · ${st.label}${st.detail ? ` (${st.detail})` : ""} · ${leavingRow ? "ends" : "renews"} ${fmtDateShort(leavingRow && endsAt ? endsAt : s.current_period_end)} · joined ${fmtDate(s.joined)} · total spent ${fmtMoney(s.total_spent)}`}
             style={{
               display: "grid",
               gridTemplateColumns: SUB_TABLE_COLS,
@@ -384,9 +568,10 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
               borderBottom: `1px solid rgba(255,255,255,0.04)`,
               fontSize: 14,
               alignItems: "center",
+              opacity: leavingRow ? 0.85 : 1,
             }}
           >
-            <div style={{ minWidth: 0 }}>
+            <div style={CELL}>
               <div style={{ color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.customer_email}</div>
               {s.plan_name && s.plan_name !== "—" && (
                 <div style={{ fontSize: 14, color: T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2 }}>
@@ -394,10 +579,10 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
                 </div>
               )}
             </div>
-            <span style={{ color: discordName ? T.cyan : T.muted, fontFamily: "var(--font-mono)", fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <span style={{ ...CELL, color: discordName ? T.cyan : T.muted, fontFamily: "var(--font-mono)", fontSize: 14, textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {discordName ?? "—"}
             </span>
-            <span style={{ color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 14, display: "flex", alignItems: "baseline", gap: 5 }}>
+            <span style={{ ...CELL, color: T.cyan, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 14, display: "flex", alignItems: "baseline", gap: 5, whiteSpace: "nowrap" }}>
               <span>{fmtMoney(perPeriod)}/{unit}</span>
               {discounted && (
                 <span style={{ color: T.muted, fontWeight: 500, textDecoration: "line-through", opacity: 0.7 }}>
@@ -405,19 +590,12 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
                 </span>
               )}
             </span>
-            <span>
-              <span style={{
-                fontSize: 14, padding: "2px 8px", borderRadius: 10, fontWeight: 700,
-                background: `${STATUS_COLORS[s.status] || T.muted}18`,
-                border: `1px solid ${STATUS_COLORS[s.status] || T.muted}44`,
-                color: STATUS_COLORS[s.status] || T.muted,
-              }}>
-                {s.status}
-              </span>
+            <StatusTag s={s} />
+            <span style={{ ...CELL, color: leavingRow ? T.gold : T.text, fontSize: 14, whiteSpace: "nowrap" }}>
+              {fmtDateShort(leavingRow && endsAt ? endsAt : s.current_period_end)}
             </span>
-            <span style={{ color: T.text, fontSize: 14 }}>{fmtDateShort(s.current_period_end)}</span>
-            <span style={{ color: T.text, fontSize: 14 }}>{fmtDateShort(s.joined)}</span>
-            <span style={{ color: T.green, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 14 }}>{fmtMoney(s.total_spent)}</span>
+            <span style={{ ...CELL, color: T.text, fontSize: 14, whiteSpace: "nowrap" }}>{fmtDateShort(s.joined)}</span>
+            <span style={{ ...CELL, color: T.green, fontWeight: 700, fontFamily: "var(--font-mono)", fontSize: 14, whiteSpace: "nowrap" }}>{fmtMoney(s.total_spent)}</span>
           </div>
           );
         })}
@@ -426,62 +604,99 @@ function SubscriptionTable({ subs, discordByEmail }: { subs: StripeSubscription[
   );
 }
 
-// Collapse a customer's raw Stripe subscription statuses down to the one tag
-// we show: "paid" (active) beats "trial" (trialing) beats "cancelled"
-// (canceled, no active/trialing) beats "no sub" (never subscribed / other
-// states). Mirrors PAID_STATUSES (lib/db.ts) access semantics, minus the
-// trial/paid distinction it collapses.
-function customerTag(subs: { status: string }[]): "paid" | "trial" | "cancelled" | "no sub" {
-  if (subs.some(s => s.status === "active")) return "paid";
-  if (subs.some(s => s.status === "trialing")) return "trial";
-  if (subs.some(s => s.status === "canceled")) return "cancelled";
-  return "no sub";
-}
+// ─── Cancellations ─────────────────────────────────────────────────────────────
+//
+// Replaces the old "Recent Customers" card, which read `customers.list()` —
+// newest 20 Stripe customer *records*, not people who paid. A customer created
+// earlier who subscribed today (Wayne) never appeared in it, so it was showing
+// the wrong thing anyway. This card answers the question that was actually
+// missing: who left, when did service stop, and why.
 
-// paid=green, trial=yellow, cancelled=red, no sub=white
-const TAG_COLORS: Record<string, string> = {
-  paid: T.green,
-  trial: "#e0c341",
-  cancelled: T.red,
-  "no sub": "#ffffff",
-};
+function CancellationsPanel({ cancellations, leaving }: { cancellations: StripeSubscription[]; leaving: StripeSubscription[] }) {
+  // Winding down first (still recoverable), then the ones already gone.
+  const rows = [
+    ...leaving.map(s => ({ s, pending: true })),
+    ...cancellations.map(s => ({ s, pending: false })),
+  ];
 
-function RecentCustomers({ customers }: { customers: StripeCustomer[] }) {
   return (
-    <div style={{ ...homePanelStyle, padding: "16px 18px" }}>
-      <div style={{ fontSize: 17, fontWeight: 700, color: T.gold, marginBottom: 12 }}>Recent Customers</div>
-      {customers.length === 0 ? (
-        <div style={{ padding: "24px 0", textAlign: "center", color: T.muted, fontSize: 14 }}>No customers yet</div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {customers.filter(c => c.email && c.email !== "—").map((c) => {
-            const tag = customerTag(c.subscriptions);
-            const color = TAG_COLORS[tag];
-            return (
-              <div
-                key={c.id}
-                title={`${c.email} · joined ${fmtDate(c.created)} · total spent ${fmtMoney(c.total_spent)}${c.subscriptions.length ? " · " + c.subscriptions.map(s => s.status).join(", ") : " · no subscription"}`}
-                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}
-              >
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.email}</div>
-                  <div style={{ fontSize: 14, color: T.textSecondary }}>Joined {fmtDate(c.created)} · Spent {fmtMoney(c.total_spent)}</div>
-                </div>
-                <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                  <span style={{
-                    fontSize: 10, padding: "2px 7px", borderRadius: 10, fontWeight: 700,
-                    background: `${color}18`,
-                    border: `1px solid ${color}44`,
-                    color,
-                  }}>
-                    {tag}
-                  </span>
-                </div>
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0 }}>
+        <span style={{ fontSize: 17, fontWeight: 700, color: T.gold }}>Cancellations</span>
+        {leaving.length > 0 && (
+          <span title="Cancelled in Stripe but still inside the paid period — service hasn't been removed yet" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.gold}15`, border: `1px solid ${T.gold}44`, color: T.gold }}>
+            {leaving.length} leaving
+          </span>
+        )}
+        <span title="Subscriptions that have fully ended — access removed" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.red}15`, border: `1px solid ${T.red}44`, color: T.red }}>
+          {cancellations.length} ended
+        </span>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", maxHeight: 420 }}>
+        {rows.length === 0 ? (
+          <div style={{ padding: "28px 16px", textAlign: "center", color: T.muted, fontSize: 14 }}>
+            No cancellations 🎉
+          </div>
+        ) : rows.map(({ s, pending }) => {
+          const reason = cancelReasonOf(s);
+          const ends = serviceEndsAt(s);
+          const color = pending ? T.gold : reason.isBilling ? T.orange : T.red;
+          const perPeriod = typeof s.net_amount === "number" ? s.net_amount : s.amount;
+          const unit = s.interval === "year" ? "yr" : "mo";
+          return (
+            <div
+              key={s.id}
+              title={
+                `${s.customer_email} · ${fmtMoney(perPeriod)}/${unit} · ` +
+                `${pending ? "cancelled, service ends" : "service ended"} ${ends ? fmtDate(ends) : "—"} · ` +
+                `${reason.label}` +
+                (s.cancel_comment ? ` · "${s.cancel_comment}"` : "") +
+                ` · lifetime spend ${fmtMoney(s.total_spent)}`
+              }
+              style={{ padding: "10px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, display: "flex", flexDirection: "column", gap: 4 }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <span style={{ minWidth: 0, flex: 1, fontSize: 14, fontWeight: 600, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {s.customer_email}
+                </span>
+                <span style={{
+                  flexShrink: 0, fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, whiteSpace: "nowrap",
+                  background: `${color}18`, border: `1px solid ${color}44`, color,
+                }}>
+                  {pending ? "cancelling" : "cancelled"}
+                </span>
               </div>
-            );
-          })}
-        </div>
-      )}
+
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 14, color: T.textSecondary }}>
+                <span style={{ fontFamily: "var(--font-mono)", color: T.muted }}>{fmtMoney(perPeriod)}/{unit}</span>
+                <span style={{ color: T.muted }}>·</span>
+                <span style={{ color: pending ? T.gold : T.muted }}>
+                  {pending ? `service ends ${ends ? fmtDate(ends) : "—"}` : `ended ${ends ? fmtDate(ends) : "—"}`}
+                </span>
+                <span style={{ color: T.muted }}>·</span>
+                <span style={{ color: T.muted }}>spent {fmtMoney(s.total_spent)}</span>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                <span style={{
+                  fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 6,
+                  background: reason.isBilling ? `${T.orange}15` : "rgba(255,255,255,0.05)",
+                  border: `1px solid ${reason.isBilling ? `${T.orange}44` : T.border}`,
+                  color: reason.isBilling ? T.orange : T.textSecondary,
+                }}>
+                  {reason.label}
+                </span>
+                {s.cancel_comment && (
+                  <span style={{ fontSize: 10, color: T.muted, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
+                    “{s.cancel_comment}”
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -633,7 +848,7 @@ export default function Sales() {
         configured: false,
         summary: null,
         subscriptions: [],
-        recentCustomers: [],
+        cancellations: [],
         error: e instanceof Error ? e.message : "Failed to load",
       });
     } finally {
@@ -712,8 +927,12 @@ export default function Sales() {
   // the handful added this week.
   const periodSeries = useMemo(() => {
     const subs = data?.subscriptions ?? [];
-    const customers = data?.recentCustomers ?? [];
     const periods = buildPeriods(gran, subs);
+    // The customer curve used to come from `recentCustomers` — the newest 20
+    // Stripe customer RECORDS, which missed anyone who had an account before
+    // they subscribed. Unique paying customers, keyed by email off the
+    // subscriptions themselves, is the same number the KPI headline shows.
+    const seenCustomers = new Set<string>();
     let mrrCum = 0, subsCum = 0, custCum = 0;
     return periods.map(p => {
       for (const sub of subs) {
@@ -721,10 +940,8 @@ export default function Sales() {
         if (d < p.start || d > p.end) continue;
         mrrCum += netMonthlyOf(sub);
         subsCum += 1;
-      }
-      for (const c of customers) {
-        const d = new Date(c.created * 1000);
-        if (d >= p.start && d <= p.end) custCum += 1;
+        const key = sub.customer_email.toLowerCase();
+        if (!seenCustomers.has(key)) { seenCustomers.add(key); custCum += 1; }
       }
       return { label: p.label, mrr: mrrCum, subs: subsCum, customers: custCum };
     });
@@ -830,11 +1047,20 @@ export default function Sales() {
               <LiveKpiCard
                 label="Active Subscriptions"
                 value={String(data.summary.activeSubscriptions)}
-                sub="active now"
+                sub={
+                  (data.summary.cancellingSoon ?? 0) > 0
+                    ? `${data.summary.cancellingSoon} leaving${data.summary.mrrLeaving ? ` · ${fmtMoney(data.summary.mrrLeaving)}/mo at risk` : ""}`
+                    : "active now · none leaving"
+                }
                 points={kpiSeries.subs}
                 accent={T.green}
                 formatValue={fmtCountTick}
-                tooltip="Count of subscriptions currently in 'active' status"
+                tooltip={
+                  "Subscriptions still billing (active, trialing or past_due). " +
+                  ((data.summary.cancellingSoon ?? 0) > 0
+                    ? `${data.summary.cancellingSoon} of them have already cancelled and stop at period end, taking ${fmtMoney(data.summary.mrrLeaving ?? 0)}/mo with them.`
+                    : "None have a cancellation scheduled.")
+                }
               />
               <LiveKpiCard
                 label="Total Customers"
@@ -856,15 +1082,24 @@ export default function Sales() {
               />
             </div>
 
-            {/* Revenue + sale summary charts */}
-            <RevenueChart subs={data.subscriptions} expensesMonthly={expensesMonthly} gran={gran} />
+            {/* Recurring revenue month over month. Full width now — the old
+                "Sale Summary" panel that shared this row is gone: it re-plotted
+                the same signup bars against a flat expense line, and the
+                expense line lives on this chart instead. */}
+            <RecurringRevenueChart
+              subs={[...data.subscriptions, ...(data.cancellations ?? [])]}
+              expensesMonthly={expensesMonthly}
+            />
 
-            {/* Active Subscriptions + Recent Customers — above Expenses */}
+            {/* Active Subscriptions + Cancellations — above Expenses */}
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
               <div style={{ minHeight: 320 }}>
                 <SubscriptionTable subs={data.subscriptions} discordByEmail={discordByEmail} />
               </div>
-              <RecentCustomers customers={data.recentCustomers} />
+              <CancellationsPanel
+                cancellations={data.cancellations ?? []}
+                leaving={data.subscriptions.filter(s => displayStatus(s).key === "cancelling")}
+              />
             </div>
 
             {/* Expenses — recurring + one-off costs, netted into the KPI above */}

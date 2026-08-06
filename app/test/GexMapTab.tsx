@@ -236,8 +236,19 @@ function gamColor(v: number, alpha?: number): string {
  * both surfaces. It also matters more on a full-bleed field than in a table:
  * linear alpha turns the whole below-flip half into a solid block of #ff4757,
  * where the eased curve keeps only the real nodes hot.
+ *
+ * `intensity` is the app-wide gradient slider (INTENSITY_SLIDER_GRADIENT_LOGIC.md).
+ * It multiplies the RATIO BEFORE the easing — `(ratio × intensity) ** 1.4` — which
+ * is exactly what `metricBg()` does in the Multi-Greek reference, so a notch on
+ * this slider means the same thing as a notch on that one.
+ *
+ * What is NOT copied is that function's `min(0.18, …)` cap and its fixed
+ * rank-1/2/3 alphas. Those exist to keep a TABLE's top three cells legible above
+ * their neighbours. This is a full-bleed field where the alpha ramp IS the
+ * reading, and capping it at 0.18 would flatten the entire map to near-invisible.
  */
-const heatAlpha = (h: number, lo: number, hi: number) => lo + hi * Math.pow(Math.min(1, Math.max(0, h)), 1.4);
+const heatAlpha = (h: number, lo: number, hi: number, intensity = 1) =>
+  lo + hi * Math.pow(Math.min(1, Math.max(0, h * intensity)), 1.4);
 
 function dexColor(v: number, a?: number): string {
   const m = Math.min(1, Math.abs(v));
@@ -298,10 +309,14 @@ type MapModel = {
   /** Net Vol GEX per slot + its scale. */
   volSeries: { t: number; vol: number }[];
   vtMax: number;
-  /** Per-strike Δ net GEX vs ~15 min ago, normalized, + the lag actually used. */
-  chg15: number[];
-  chg15Min: number;
-  hasChg15: boolean;
+  /**
+   * Net GEX summed across the whole ladder, per slot — the session's gamma
+   * regime as one line. Scaled SIGNED (not on |max|) so the zero crossing lands
+   * where it belongs on the panel rather than in the middle of it.
+   */
+  netSeries: { t: number; gex: number }[];
+  nLo: number;
+  nHi: number;
   spot: number;
   flip: number | null;
   callWall: number | null;
@@ -401,27 +416,21 @@ function buildModel(p: MapPayload | null, scope: Scope): MapModel | null {
   for (const v of volSeries) if (Math.abs(v.vol) > vtMax) vtMax = Math.abs(v.vol);
   if (!(vtMax > 0)) vtMax = 1;
 
-  // Δ net GEX over ~15 minutes, per strike. The comparison column is chosen by
-  // TIMESTAMP, not by counting slots back — recording gaps are routine, and
-  // "15 slots ago" silently becomes 40 minutes ago the moment the feed stalls.
-  // If nothing sits far enough back, this reports no change rather than
-  // comparing against the open and calling it 15 minutes.
-  const lastT = cols[cols.length - 1].t;
-  const wantT = lastT - 15 * 60_000;
-  let baseIdx = -1, bestDt = Infinity;
-  for (let i = 0; i < cols.length - 1; i++) {
-    const dt = Math.abs(cols[i].t - wantT);
-    if (dt < bestDt) { bestDt = dt; baseIdx = i; }
-  }
-  const lagMin = baseIdx >= 0 ? (lastT - cols[baseIdx].t) / 60_000 : 0;
-  const hasChg15 = baseIdx >= 0 && lagMin >= 5;
-  const chg15 = new Array(n).fill(0);
-  if (hasChg15) {
-    const a = cols[baseIdx].v, b = cols[cols.length - 1].v;
-    let cMax = 0;
-    for (let i = 0; i < n; i++) { const d = (b[i] ?? 0) - (a[i] ?? 0); chg15[i] = d; if (Math.abs(d) > cMax) cMax = Math.abs(d); }
-    if (cMax > 0) for (let i = 0; i < n; i++) chg15[i] = Math.max(-1, Math.min(1, chg15[i] / cMax));
-  }
+  // Net GEX per slot — the ladder summed. This replaced the old "Δ net GEX ·
+  // 15m" panel, which drew a per-strike diverging bar chart against a column
+  // chosen ~15 minutes back. That answered "which strikes moved recently",
+  // which is a different question from the one the rest of the card is about,
+  // and it went blank ("NOT ENOUGH HISTORY") for the first quarter hour of
+  // every session. A net line over the SAME scope as the field says whether the
+  // book is long or short gamma and when it crossed — which is the reading the
+  // regime strip states as a single number.
+  const netSeries = cols.map((c) => ({ t: c.t, gex: c.v.reduce((s, x) => s + (x || 0), 0) }));
+  // Signed bounds, not |max|. A session that never goes short gamma must not be
+  // drawn with its zero line halfway up the panel as if it nearly did — but zero
+  // is always inside the range, so the line is always on the panel.
+  let nLo = 0, nHi = 0;
+  for (const d of netSeries) { if (d.gex < nLo) nLo = d.gex; if (d.gex > nHi) nHi = d.gex; }
+  if (nHi - nLo <= 0) { nHi = 1; nLo = -1; }
 
   return {
     ok: true,
@@ -430,7 +439,7 @@ function buildModel(p: MapPayload | null, scope: Scope): MapModel | null {
     timeAxis, xLo: RTH_LO, xHi: RTH_HI,
     profile, profileRaw: lastRaw, gMax, heat, signed, path,
     dex, dexRaw, dMax, hasDex: dexCount > 0 || dexSeries.length > 0, dexSeries, dtMax,
-    volSeries, vtMax, chg15, chg15Min: Math.round(lagMin), hasChg15,
+    volSeries, vtMax, netSeries, nLo, nHi,
     dexSurface, dexSource: p.dexSource ?? (dexCount > 0 ? "greek_snapshots" : "none"),
     spot: p.levels.spot, flip: p.levels.flip,
     callWall: p.levels.callWall, putWall: p.levels.putWall, magnet: p.levels.magnet,
@@ -531,7 +540,10 @@ function sliceModel(m: MapModel, v: ViewWin): MapModel {
     profileRaw: cutRow(m.profileRaw),
     dex: cutRow(m.dex),
     dexRaw: cutRow(m.dexRaw),
-    chg15: cutRow(m.chg15),
+    // The net line is a SESSION reading and keeps its session scale, the same
+    // way gMax does — zooming the time axis must not repaint a flat stretch as
+    // a dramatic swing.
+    netSeries: m.netSeries.filter((d) => inSpan(d.t)),
     volSeries: m.volSeries.filter((d) => inSpan(d.t)),
     dexSeries: m.dexSeries.filter((d) => inSpan(d.t)),
     spot: m.spot >= lo && m.spot <= hi ? m.spot : 0,
@@ -849,7 +861,9 @@ function NoDex({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
 }
 
 // ═════════════════════════════ TAPE FIELD ════════════════════════════════════
-function TapeField({ m, compact, field = "heat" }: { m: MapModel; compact?: boolean; field?: FieldMode }) {
+function TapeField({ m, compact, field = "heat", intensity = 1 }: {
+  m: MapModel; compact?: boolean; field?: FieldMode; intensity?: number;
+}) {
   const fz = useFz();
   const W = 1240, H = 470;
   // Laid out from the outside in so the heat field lands on the viewBox centre.
@@ -897,9 +911,12 @@ function TapeField({ m, compact, field = "heat" }: { m: MapModel; compact?: bool
         m.cols.map((c, ci) =>
           m.strikes.map((k, si) => {
             const h = m.heat[ci][si];
-            if (h < 0.045) return null;
+            // The cull threshold rides the slider too. At 3× a cell that was
+            // dropped as noise at 1× is meant to be visible, and a fixed cutoff
+            // would leave the slider unable to reveal it.
+            if (h * intensity < 0.045) return null;
             return <rect key={`${ci}-${si}`} x={xOf(ci) - cw / 2} y={yOf(k) - ch / 2} width={cw + 0.6} height={ch + 0.6}
-              fill={gamColor(m.signed[ci][si], heatAlpha(h, 0.04, 0.80))} />;
+              fill={gamColor(m.signed[ci][si], heatAlpha(h, 0.04, 0.80, intensity))} />;
           })
         )
       )}
@@ -1008,24 +1025,46 @@ function TapeField({ m, compact, field = "heat" }: { m: MapModel; compact?: bool
         </g>
       ) : <NoDex x={FX - 4} y={KY} w={FW + 8} h={KH} />}
 
-      {/* Δ net GEX over the last ~15 minutes, by strike — where the book moved,
-          not where it stands. Diverging off a centre line so a build and a drain
-          at the same strike are distinguishable at a glance. */}
-      <Lab x={RX} y={KY - 8}>{m.hasChg15 ? `NET GEX Δ · ${m.chg15Min}m` : "NET GEX Δ · 15m"}</Lab>
-      {m.hasChg15 ? (
-        <g>
-          <rect x={RX} y={KY} width={RW} height={KH} rx={8} fill="rgba(255,255,255,0.018)" stroke="rgba(255,255,255,0.07)" />
-          <line x1={RX + RW / 2} y1={KY + 5} x2={RX + RW / 2} y2={KY + KH - 5} stroke="rgba(255,255,255,0.14)" />
-          {m.strikes.map((k, i) => {
-            const v = m.chg15[i];
-            if (Math.abs(v) < 0.02) return null;
-            const dh = (KH - 12) / m.strikes.length;
-            const half = RW / 2 - 8;
-            return <rect key={`ck${k}`} x={v >= 0 ? RX + RW / 2 : RX + RW / 2 + v * half} y={KY + 6 + i * dh}
-              width={Math.abs(v) * half} height={Math.max(0.8, dh - 0.4)} fill={gamColor(v, 0.35 + 0.5 * Math.abs(v))} />;
-          })}
-        </g>
-      ) : (
+      {/* Net GEX sparkline. The whole ladder summed, per slot, over whatever the
+          scope switch has selected — so this line and the "Net gamma" tile in
+          the regime strip are the same number, one through time and one right
+          now. The zero line is the point of it: above it dealers dampen, below
+          it they amplify, and the crossing is the moment the session changed
+          character.
+
+          It sits at its TRUE height, not centred: the panel is scaled on the
+          session's signed range, so a day that never went short gamma shows the
+          zero line pinned at the bottom rather than implying it came close. */}
+      <Lab x={RX} y={KY - 8}>NET GEX · SESSION</Lab>
+      {m.netSeries.length > 1 ? (() => {
+        const span = Math.max(1e-9, m.nHi - m.nLo);
+        const pad = 6;
+        const ny = (g: number) => KY + KH - pad - ((g - m.nLo) / span) * (KH - 2 * pad);
+        const nx = (i: number) =>
+          RX + 6 + (m.timeAxis
+            ? clamp01((etMinutes(m.netSeries[i].t) - m.xLo) / Math.max(1, m.xHi - m.xLo))
+            : i / Math.max(1, m.netSeries.length - 1)) * (RW - 12);
+        const pts: [number, number][] = m.netSeries.map((d, i) => [nx(i), ny(d.gex)]);
+        const y0 = ny(0);
+        const last = m.netSeries[m.netSeries.length - 1];
+        const lastPos = last.gex >= 0;
+        return (
+          <g>
+            <rect x={RX} y={KY} width={RW} height={KH} rx={8} fill="rgba(255,255,255,0.018)" stroke="rgba(255,255,255,0.07)" />
+            {/* Fill back to zero, not to the floor — the shaded area IS the
+                signed quantity, so it has to hang off the zero line. */}
+            <path d={`${pathD(pts)}L${pts[pts.length - 1][0].toFixed(1)} ${y0.toFixed(1)}L${pts[0][0].toFixed(1)} ${y0.toFixed(1)}Z`}
+              fill={lastPos ? `${GEX_POS_HEX}22` : `${GEX_NEG_HEX}22`} stroke="none" />
+            <line x1={RX + 6} y1={y0} x2={RX + RW - 6} y2={y0} stroke="rgba(255,255,255,0.34)" strokeDasharray="3 3" />
+            <text x={RX + 8} y={y0 - 3} fill="#ffffff" fontSize={6.6 * fz} fontWeight={700} opacity={0.7}>0</text>
+            <path d={pathD(pts)} fill="none" stroke={lastPos ? GEX_POS_HEX : GEX_NEG_HEX} strokeWidth={1.5}
+              strokeLinejoin="round" strokeLinecap="round" />
+            <circle cx={pts[pts.length - 1][0]} cy={pts[pts.length - 1][1]} r={2.4} fill={lastPos ? GEX_POS_HEX : GEX_NEG_HEX} />
+            <text x={RX + RW - 6} y={KY + 11} fill={lastPos ? GEX_POS_HEX : GEX_NEG_HEX} fontSize={8 * fz} fontWeight={800}
+              textAnchor="end" style={{ fontVariantNumeric: "tabular-nums" }}>{fmtBn(last.gex)}</text>
+          </g>
+        );
+      })() : (
         <g>
           <rect x={RX} y={KY} width={RW} height={KH} rx={8} fill="rgba(255,255,255,0.012)" stroke={HOME_THEME.border} strokeDasharray="4 4" />
           <text x={RX + RW / 2} y={KY + KH / 2 + 3} fill="#ffffff" fontSize={10 * fz}
@@ -1264,6 +1303,17 @@ function MapCard({ m }: { m: MapModel }) {
   const [field, setField] = useState<FieldMode>("heat");
   const def = FIELD_MODES.find((f) => f.key === field) ?? FIELD_MODES[0];
 
+  // Gradient intensity — the app's canonical control (range 0.5–3, step 0.01,
+  // 80×3 cyan slider) from INTENSITY_SLIDER_GRADIENT_LOGIC.md.
+  //
+  // Default is 1.00, NOT the doc's 1.75. That default belongs to `metricBg()`,
+  // whose alpha is hard-capped at 0.18 because it colours table cells that have
+  // to stay readable behind text. This field has no cap and its ramp was tuned
+  // at 1× — opening at 1.75 would show a wall of saturated colour on load.
+  // Range, step and the control's look are unchanged, so a notch here moves the
+  // gradient by the same amount it does everywhere else.
+  const [intensity, setIntensity] = useState(1);
+
   // The window lives HERE, not inside ZoomSvg — the body has to be handed an
   // already-sliced model, and the gesture surface is inside the body.
   const [win, setWin] = useState<ViewWin>(() => fullWin(m));
@@ -1315,6 +1365,26 @@ function MapCard({ m }: { m: MapModel }) {
             >{f.label}</button>
           ))}
         </div>
+        {/* Heatmap only. The terrain is a hypsometric surface with its own
+            quantized banding and contour levels — the same slider would push it
+            to a solid colour block, not a brighter map. Rendering it only for
+            the tab it applies to is also why it sits before the flexing blurb:
+            showing/hiding it must not shove the rest of the header around. */}
+        {field === "heat" && (
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+            <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>Intensity</span>
+            <input
+              type="range" min={0.5} max={3} step={0.01}
+              aria-label="Gradient intensity"
+              value={intensity}
+              onChange={(e) => setIntensity(Number(e.target.value))}
+              style={{ width: 80, height: 3, accentColor: "#00e5ff" }}
+            />
+            <span style={{ fontSize: 10, color: "#00e5ff", fontWeight: 700, minWidth: 36, fontFamily: "monospace" }}>
+              {intensity.toFixed(2)}x
+            </span>
+          </div>
+        )}
         <span style={{ fontSize: 11, color: "#ffffff", opacity: 0.85, flex: 1, minWidth: 0 }}>
           {def.blurb}
         </span>
@@ -1330,7 +1400,7 @@ function MapCard({ m }: { m: MapModel }) {
       <FzCtx.Provider value={1}>
         <ViewCtx.Provider value={api}>
           <ZoomCtx.Provider value={kZoom}>
-            <TapeField m={view} compact={false} field={field} />
+            <TapeField m={view} compact={false} field={field} intensity={intensity} />
           </ZoomCtx.Provider>
         </ViewCtx.Provider>
       </FzCtx.Provider>
@@ -1373,14 +1443,10 @@ export default function GexMapTab() {
 
   useEffect(() => { void load(date, expiry); }, [date, expiry, load]);
 
-  // `view` is what every map, every scale and the regime strip read. `data` is
-  // kept only to report how much of the session the current scope is hiding.
+  // `view` is what the chart, every scale and the regime strip read. `data` is
+  // kept for the session/expiry pickers and the route's own notes.
   const view = useMemo(() => scopePayload(data, scope), [data, scope]);
   const model = useMemo(() => buildModel(view, scope), [view, scope]);
-  const rthSlots = useMemo(
-    () => (data?.columns ?? []).reduce((n, c) => n + (isRthMs(c.t) ? 1 : 0), 0),
-    [data]
-  );
 
   const sessionOptions = useMemo(() => {
     // sessions is one row per (date, expiry) now, so collapse to distinct dates
@@ -1451,18 +1517,6 @@ export default function GexMapTab() {
             RTH pins the x-axis to 09:30–16:00 — the tape grows into a full session, it is not stretched to fill one.
           </div>
         </div>
-        <div style={{ fontSize: 11.5, color: "#ffffff", opacity: 0.8, marginTop: 10, lineHeight: 1.6 }}>
-          One expiry at a time — never a blend. Defaults to 0DTE. GEX ladder from{" "}
-          <code style={{ color: LIGHT_BLUE }}>option_strike_gex_history</code> (retention ~2 sessions), DEX from{" "}
-          {/* Literal, not `new Date(...).toLocaleDateString()`. This is a fixed
-              historical date, and formatting it at runtime made the string
-              depend on the renderer's ICU build — Node's small-icu and the
-              browser's full ICU can disagree, which is a hydration mismatch
-              (React #418) for a value that was never going to change. */}
-          <code style={{ color: LIGHT_BLUE }}>net_dex</code> in the same row (added Aug 1; sessions before that
-          fall back to <code style={{ color: LIGHT_BLUE }}>greek_snapshots</code>, last-snapshot ladder only). The
-          white line is spot through the session; walls, flip and the magnet come from the route&apos;s own levels.
-        </div>
       </Card>
 
       {err && (
@@ -1505,22 +1559,6 @@ export default function GexMapTab() {
         <MapCard m={model} />
       )}
 
-      {model && view && data && (
-        <div style={{ fontSize: 11.5, color: "#ffffff", opacity: 0.8, lineHeight: 1.7 }}>
-          {view.symbol} · {view.date} exp {view.expiry} ·{" "}
-          <span style={{ color: scope === "rth" ? HOME_THEME.cyan : "#ffffff" }}>
-            {scope === "rth"
-              ? rthSlots
-                ? `RTH 09:30–16:00 · ${view.columns.length} of ${data.columns.length} slots`
-                : `no RTH slots yet — showing all ${data.columns.length}`
-              : `full session · ${view.columns.length} slots (overnight included)`}
-          </span>{" "}
-          @ {view.slotMin}m · {view.strikes.length} strikes ({fmtStrike(model.lo)}–{fmtStrike(model.hi)}) ·{" "}
-          {model.hasDex
-            ? `${view.dexSeries.length} DEX snapshots (${model.dexSurface ? "strike×time, recorded with gamma" : "last-snapshot ladder"})`
-            : "no DEX"} · gamma scale {fmtBn(model.gMax)} per strike
-        </div>
-      )}
     </>
   );
 }

@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-08-06 - Test Lab / GEX Map: intensity slider, net GEX sparkline, chrome removed
+
+### `app/test/GexMapTab.tsx`
+- **Gradient intensity slider on the Heatmap tab.** Canonical control from
+  `INTENSITY_SLIDER_GRADIENT_LOGIC.md` — range 0.5–3, step 0.01, 80×3, accent `#00e5ff`,
+  live `N.NNx` readout. `heatAlpha()` takes an `intensity` that multiplies the ratio
+  *before* the `^1.4` easing, exactly as `metricBg()` does, so a notch means the same
+  thing here as in Multi-Greek. The cell cull threshold scales with it too, or the
+  slider couldn't reveal what it dropped as noise at 1×.
+  - **Default 1.00, not the doc's 1.75.** That default belongs to `metricBg()`, whose
+    alpha is capped at 0.18 for table cells sitting behind text. This is an uncapped
+    full-bleed field tuned at 1× — opening at 1.75 would be a wall of colour.
+  - **Heatmap only.** Terrain is a hypsometric surface with its own quantized bands and
+    contour levels; the same multiplier flattens it to a colour block rather than
+    brightening it. The control renders before the flexing blurb so showing/hiding it
+    doesn't shove the header around.
+- **`NET GEX Δ · 15m` → `NET GEX · SESSION` sparkline.** The old panel drew a per-strike
+  diverging bar chart against a column ~15 min back: a different question from the rest
+  of the card, and blank (`NOT ENOUGH HISTORY`) for the first quarter hour of every
+  session. Now the ladder summed per slot over the **selected scope** (RTH or All), as a
+  line + area with a dashed **zero line** — above it dealers dampen, below they amplify,
+  and the crossing is visible. Same x rule as the field, so it lines up with the heat.
+  - Scaled on the session's **signed** range (`nLo`/`nHi`), not `|max|`: a day that never
+    went short gamma shows zero pinned at the bottom instead of implying it came close.
+    Zero is always inside the range, so the line is always on the panel.
+  - `netSeries` keeps its session scale through zoom, like `gMax` — narrowing time must
+    not repaint a flat stretch as a dramatic swing. `chg15` / `chg15Min` / `hasChg15`
+    removed from `MapModel`.
+- **Removed two prose blocks**: the `option_strike_gex_history` / `net_dex` /
+  `greek_snapshots` provenance paragraph under the toolbar, and the
+  `$SPX · date · N of M slots · N strikes · gamma scale …` footer line. `rthSlots` went
+  with the latter.
+
 ## 2026-08-06 - Test Lab / GEX Map: one chart, real RTH clock axis, labels off the field
 
 Three cards (Tape Field, Spine, Gamma Terrain) drew the same session three times, and
