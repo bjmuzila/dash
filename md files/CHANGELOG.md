@@ -1,5 +1,119 @@
 # Changelog
 
+## 2026-08-06 (f) - ES Candles: Overlays dropdown moved next to Layout
+
+Overlays sat between the DTE picker ("Front") and the Vol+OI/Vol switch — in the
+middle of the gamma-settings half of the dock. It answers "what is drawn on this
+chart", the same question as Indicators, so it now renders immediately after the
+page's Charts / Replay / Indicators / Layout group and before the symbol picker.
+
+### `components/dashboard/es-candles/EsChartCard.tsx`
+- Overlays button + its portalled checklist relocated from after the DTE dropdown to
+  directly after `{toolbarExtras}` (the page-owned Charts / Replay / Indicators /
+  Layout cluster), so it lands beside Layout in the rendered bar.
+- Dropped the now-redundant `<DockGap />` that used to introduce the Overlays group —
+  the GEX-metric group below already brings its own, so the DTE picker would otherwise
+  have ended up with a double separator after it.
+- Left in the CARD rather than moved into the page's `toolbarExtras`: every overlay
+  toggle is per-card state persisted into that card's slot blob, so a 2- or 3-chart row
+  keeps one Overlays menu per chart. Hoisting it to the page would have collapsed all
+  of them onto one shared set.
+
+New dock order: Candles - Charts - Replay - Indicators - Layout - **Overlays** -
+symbol - timeframe - LIVE - candle count - DTE - Vol+OI/Vol - intensity - actions.
+
+Verified by parsing the edited file with esbuild (tsx loader) and by diffing the
+normalised line multiset against the original: the only deltas are the removed
+`<DockGap />` and the rewritten block comment. No proxy change.
+
+## 2026-08-06 (e2) - ES Candles: x-axis showed dates instead of times
+
+(Re-filed. This entry was written earlier today and was lost when CHANGELOG.md got
+rewritten by the budget.cbedge.net work; the code fix itself is in place.)
+
+The ES Candles time axis rendered a date at nearly every tick, so the clock only ever
+appeared on the crosshair and an intraday chart had no visible time scale.
+
+### Root cause
+`EsChartCard.tsx` branched on `tickMarkType === 2 || tickMarkType === 3`, commented as
+"day/month boundary". Wrong mapping: in lightweight-charts v5 `TickMarkType` is
+`0 Year | 1 Month | 2 DayOfMonth | 3 Time | 4 TimeWithSeconds` — **3 is Time**, the type
+emitted for nearly every tick on an intraday chart. Sending 3 down the date branch
+printed `Aug 6` where `09:30` belonged.
+
+### `components/dashboard/es-candles/EsChartCard.tsx`
+- `tickMarkFormatter` now routes only the real calendar boundaries (`0`/`1`/`2`) to the
+  ET date string; `3`/`4` format as ET `HH:MM`, 24-hour. Day boundaries still show
+  `Mon D` when the visible range spans more than one session.
+- Comment replaced with the actual enum values so the off-by-one can't recur.
+
+
+## 2026-08-06 (e) - budget.cbedge.net step 4: tasks, Today screen, per-person sharing
+
+Phase 1 step 4 of 7. The Today screen is real now — capture, Top 3, open tasks,
+Slipping, Resurfacing — backed by `hh_tasks` / `hh_notes` with the per-person
+opt-in-sharing rule enforced in SQL. Calendar and Money remain labelled placeholders
+(steps 5 and 6).
+
+**Nothing on cbedge.net changed.** No trading route, socket topic, page, proxy or
+existing schema was touched.
+
+### `server-v2/household-routes.cjs` — 4 new routes (9 total)
+- `GET/POST /api/hh/tasks` — list + create/update/toggleDone/toggleStar/touch/delete.
+- `GET/POST /api/hh/notes` — the Resurfacing pool.
+- `GET/POST /api/hh/settings` — per-user `slippingDays` (default 7, clamped 1-365).
+- `GET /api/hh/today` — the whole screen in ONE round trip (top3 + open + slipping +
+  counts + resurfacing + people). Composed server-side so the phone paints once
+  instead of in five stages over cellular.
+
+### The visibility rule, defined once
+`VISIBLE = (owner_id = $1 OR visibility = 'shared')` is a single constant reused by
+every query. Read and write both use it; **delete is deliberately stricter** — you can
+complete or edit a shared task, but only its owner can destroy it, because deletion is
+the one action with no undo. A query that forgets this clause leaks the other person's
+private rows, so it is never hand-rolled per route.
+
+### `due_date` is cast to TEXT — do not "simplify" this back
+`due_date` is a Postgres DATE (a calendar day), but `pg` hydrates it into a JS Date at
+UTC midnight, which serialises as `"2026-08-10T00:00:00.000Z"`. In Eastern that renders
+as **Aug 9** — every due date one day early, and "due today" showing as overdue.
+`to_char(due_date,'YYYY-MM-DD')` kills the class of bug at the source, and matches what
+`<input type="date">` expects. The client compares dates as STRINGS throughout
+(lexicographic on that format is chronological) and never calls `new Date()` on one.
+
+### Slipping
+Open, unstarred, `touched_at` older than the user's threshold. Starred items are excluded
+— they're already at the top of the screen, so flagging them again is noise, not a nudge.
+`touch` ("Still on it") resets the clock without pretending the task changed.
+
+### `budget-vite` — Today screen + optimistic updates
+- `src/hooks.ts` — TanStack Query. Every task mutation is optimistic with snapshot
+  rollback on failure; a checkbox that waits 400ms on cellular feels broken and gets
+  tapped twice. `patchToday()` updates a task across ALL of top3/open/slipping at once,
+  because the same task lives in several arrays and patching one leaves a row ticked in
+  the top section and unticked twenty pixels below.
+- Star is deliberately NOT re-bucketed client-side: top3 membership is a server decision
+  (starred + ordered + capped at 3), so guessing locally makes rows jump and jump back.
+- `src/components/TaskRow.tsx` — 24px complete button with its own hit area, star,
+  expandable row for due date / share toggle / still-on-it / delete.
+- `src/pages/Today.tsx` — quick-add first (thumb reach), counts, Top 3, calendar
+  placeholder, open tasks, Slipping, Resurfacing, money placeholder.
+- `src/pages/Settings.tsx` — slipping threshold, saved-notes manager, password change.
+
+### Verification
+- **56/56 integration tests** against a real PostgreSQL 16, driving the actual route
+  handlers: schema idempotency, login + lockout, session hashing + expiry, task CRUD,
+  ordering (`NULLS LAST`, so undated tasks don't bury dated ones), settings clamping,
+  Slipping, Resurfacing stability, empty-state.
+  Both directions of the visibility rule are asserted explicitly: neither person can
+  read, edit, complete or delete the other's private rows.
+- **19/19 date-label tests** including both DST boundaries, month/year rollover, leap day
+  and Feb 29 → Mar 1.
+- `tsc --noEmit` clean, `vite build` clean, `node --check` on all server files.
+
+**No proxy change** — `proxy-tastytrade.js` and `proxy-thetadata.js` untouched.
+
+
 ## 2026-08-06 (d) - budget.cbedge.net: household life-OS subdomain (auth + shell)
 
 New standalone SPA at **budget.cbedge.net** — a personal life OS shared with one other

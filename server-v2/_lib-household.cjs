@@ -421,9 +421,42 @@ async function changePassword({ userId, currentPassword, newPassword, req }) {
   return { ok: true, cookie: sessionCookie(token, SESSION_DAYS * 24 * 60 * 60) };
 }
 
+// ---------------------------------------------------------------------------
+// Settings (per user, JSONB key/value)
+// ---------------------------------------------------------------------------
+
+const DEFAULT_SETTINGS = {
+  // Days an open task can go untouched before Today flags it as "Slipping".
+  // Changeable per person without a deploy.
+  slippingDays: 7,
+};
+
+async function getSettings(userId) {
+  await ensureSchema();
+  const { rows } = await libDb.getPool().query(
+    `SELECT key, value FROM hh_settings WHERE user_id=$1`, [userId]);
+  const out = { ...DEFAULT_SETTINGS };
+  for (const r of rows) out[r.key] = r.value;
+  return out;
+}
+
+async function setSetting(userId, key, value) {
+  await ensureSchema();
+  await libDb.getPool().query(
+    `INSERT INTO hh_settings (user_id, key, value) VALUES ($1,$2,$3)
+     ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value`,
+    [userId, String(key), JSON.stringify(value)]);
+  return getSettings(userId);
+}
+
 module.exports = {
   COOKIE_NAME,
   SESSION_DAYS,
+  DEFAULT_SETTINGS,
+  getSettings,
+  setSetting,
+  /** Raw pg pool, for the route module's task/note queries. */
+  pool: () => libDb.getPool(),
   ensureSchema,
   hashPassword,
   verifyPassword,

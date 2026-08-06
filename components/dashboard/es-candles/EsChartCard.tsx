@@ -3974,81 +3974,14 @@ export default function EsChartCard({
               ticker-only cards in a shared row can't duplicate the set. */}
           {toolbarExtras}
 
-          {/* Symbol picker — ES / SPY / QQQ, favorites persisted per browser.
-              Dropped from a SHARED dock: that toolbar drives every chart, and a
-              ticker is the one setting that must not. Each card grows its own
-              ticker bar instead (see tickerBar below). */}
-          {dockMode === "full" && <SymbolListDropdown active={symbol} onSelect={setSymbol} />}
-
-          {/* Timeframe. 1m is its own server stream; 5m is the native feed;
-              15m/30m/1h roll up from the 5m bars client-side (see interval.ts).
-              This is the ONE control that never moves into the overflow menu —
-              it's the reason to have three charts in the first place. */}
-          <SegGroup
-            options={CHART_INTERVALS.map((i) => ({ label: INTERVAL_LABEL[i], value: String(i) }))}
-            active={String(interval)}
-            onChange={(v) => { const n = Number(v); if (isChartInterval(n)) setInterval_(n); }}
-          />
-
-          {/* status + count badges */}
-          {!dockCompact && (
-          <span style={{ fontSize: 12, fontWeight: 700, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: status === "live" ? "#30d158" : "#94a3b8", whiteSpace: "nowrap", flexShrink: 0 }}>
-            {status.toUpperCase()}
-          </span>
-          )}
-          {!dockCompact && (
-          <span style={{ fontSize: 12, fontWeight: 600, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: "rgba(255,255,255,.7)", whiteSpace: "nowrap", flexShrink: 0 }}>
-            {`${rows.length} candles`}
-          </span>
-          )}
-          {/* The side panel is on but the card is too narrow for it. Says so,
-              rather than letting a missing rail read as a broken one. */}
-          {panelSuppressed && (
-          <span title="Widen this card (or drop to fewer charts) to show the side panel"
-                style={{ fontSize: 11, fontWeight: 700, padding: "4px 8px", borderRadius: 8, border: `1px solid ${HOME_THEME.border}`, color: HOME_THEME.muted, whiteSpace: "nowrap", flexShrink: 0 }}>
-            panel hidden — narrow
-          </span>
-          )}
-
-          {/* DTE dropdown */}
-          <div ref={dteBoxRef} style={{ flexShrink: 0 }}>
-            <DockButton onClick={openDte} title="Heatmap expiry / DTE">
-              <span style={{ fontVariantNumeric: "tabular-nums" }}>{selectedExpiry ? dayDateOf(selectedExpiry) : "Front"}</span>
-              <span style={{ opacity: 0.5, transform: dteOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}>▾</span>
-            </DockButton>
-          </div>
-          {dteOpen && dteRect && createPortal(
-            <div
-              ref={dteMenuRef}
-              className="max-h-72 w-48 overflow-y-auto py-1"
-              style={{ position: "fixed", left: dteRect.left, top: dteRect.top, borderRadius: 14, border: `1px solid ${HOME_THEME.border}`, borderTop: `2px solid ${DOCK_THEME.cyanTop}`, background: DOCK_THEME.bg, backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)", boxShadow: DOCK_THEME.shadow, zIndex: 100000, padding: 6 }}
-            >
-              {[{ value: "", label: "Front (live)", sub: "" }, ...expirations.map((exp) => ({
-                value: exp, label: dayDateOf(exp), sub: `${dteOf(exp)}DTE`,
-              }))].map((opt) => {
-                const active = selectedExpiry === opt.value;
-                return (
-                  <button
-                    key={opt.value || "front"}
-                    onClick={() => { setSelectedExpiry(opt.value); saveSetting({ expiry: opt.value }); setDteOpen(false); }}
-                    className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-xs"
-                    style={{ borderRadius: 8, border: active ? `1px solid ${DOCK_THEME.activeBorder}` : "1px solid transparent", background: active ? DOCK_THEME.activeTile : "transparent", color: active ? HOME_THEME.cyan : HOME_THEME.text }}
-                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = DOCK_THEME.hoverTile; }}
-                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
-                  >
-                    <span className="font-mono font-semibold">{opt.label}</span>
-                    <span style={{ color: HOME_THEME.muted, opacity: 0.5 }}>{opt.sub}</span>
-                  </button>
-                );
-              })}
-            </div>,
-            document.body
-          )}
-
-          <DockGap />
-
-
-          {/* Overlays checklist dropdown (was 6 inline tiles — overflowed the dock) */}
+          {/* Overlays checklist dropdown (was 6 inline tiles — overflowed the dock).
+              Sits with the page's Charts / Replay / Indicators / Layout group, NOT
+              down by the DTE picker where it used to live: it answers "what is
+              drawn on this chart", same as Indicators, so it reads as part of that
+              cluster rather than as another gamma setting. It stays a CARD control
+              rather than moving into toolbarExtras because the page cannot own it —
+              every toggle below is per-card state persisted into this slot's blob,
+              so three cards in a row each carry their own overlay set. */}
           <div ref={ovlBoxRef} style={{ flexShrink: 0 }}>
             <DockButton onClick={openOvl} title="Chart overlays">
               <span>Overlays</span>
@@ -4223,6 +4156,78 @@ export default function EsChartCard({
             </div>,
             document.body
           )}
+
+          {/* Symbol picker — ES / SPY / QQQ, favorites persisted per browser.
+              Dropped from a SHARED dock: that toolbar drives every chart, and a
+              ticker is the one setting that must not. Each card grows its own
+              ticker bar instead (see tickerBar below). */}
+          {dockMode === "full" && <SymbolListDropdown active={symbol} onSelect={setSymbol} />}
+
+          {/* Timeframe. 1m is its own server stream; 5m is the native feed;
+              15m/30m/1h roll up from the 5m bars client-side (see interval.ts).
+              This is the ONE control that never moves into the overflow menu —
+              it's the reason to have three charts in the first place. */}
+          <SegGroup
+            options={CHART_INTERVALS.map((i) => ({ label: INTERVAL_LABEL[i], value: String(i) }))}
+            active={String(interval)}
+            onChange={(v) => { const n = Number(v); if (isChartInterval(n)) setInterval_(n); }}
+          />
+
+          {/* status + count badges */}
+          {!dockCompact && (
+          <span style={{ fontSize: 12, fontWeight: 700, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: status === "live" ? "#30d158" : "#94a3b8", whiteSpace: "nowrap", flexShrink: 0 }}>
+            {status.toUpperCase()}
+          </span>
+          )}
+          {!dockCompact && (
+          <span style={{ fontSize: 12, fontWeight: 600, padding: "5px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,.08)", color: "rgba(255,255,255,.7)", whiteSpace: "nowrap", flexShrink: 0 }}>
+            {`${rows.length} candles`}
+          </span>
+          )}
+          {/* The side panel is on but the card is too narrow for it. Says so,
+              rather than letting a missing rail read as a broken one. */}
+          {panelSuppressed && (
+          <span title="Widen this card (or drop to fewer charts) to show the side panel"
+                style={{ fontSize: 11, fontWeight: 700, padding: "4px 8px", borderRadius: 8, border: `1px solid ${HOME_THEME.border}`, color: HOME_THEME.muted, whiteSpace: "nowrap", flexShrink: 0 }}>
+            panel hidden — narrow
+          </span>
+          )}
+
+          {/* DTE dropdown */}
+          <div ref={dteBoxRef} style={{ flexShrink: 0 }}>
+            <DockButton onClick={openDte} title="Heatmap expiry / DTE">
+              <span style={{ fontVariantNumeric: "tabular-nums" }}>{selectedExpiry ? dayDateOf(selectedExpiry) : "Front"}</span>
+              <span style={{ opacity: 0.5, transform: dteOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}>▾</span>
+            </DockButton>
+          </div>
+          {dteOpen && dteRect && createPortal(
+            <div
+              ref={dteMenuRef}
+              className="max-h-72 w-48 overflow-y-auto py-1"
+              style={{ position: "fixed", left: dteRect.left, top: dteRect.top, borderRadius: 14, border: `1px solid ${HOME_THEME.border}`, borderTop: `2px solid ${DOCK_THEME.cyanTop}`, background: DOCK_THEME.bg, backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)", boxShadow: DOCK_THEME.shadow, zIndex: 100000, padding: 6 }}
+            >
+              {[{ value: "", label: "Front (live)", sub: "" }, ...expirations.map((exp) => ({
+                value: exp, label: dayDateOf(exp), sub: `${dteOf(exp)}DTE`,
+              }))].map((opt) => {
+                const active = selectedExpiry === opt.value;
+                return (
+                  <button
+                    key={opt.value || "front"}
+                    onClick={() => { setSelectedExpiry(opt.value); saveSetting({ expiry: opt.value }); setDteOpen(false); }}
+                    className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-xs"
+                    style={{ borderRadius: 8, border: active ? `1px solid ${DOCK_THEME.activeBorder}` : "1px solid transparent", background: active ? DOCK_THEME.activeTile : "transparent", color: active ? HOME_THEME.cyan : HOME_THEME.text }}
+                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = DOCK_THEME.hoverTile; }}
+                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
+                  >
+                    <span className="font-mono font-semibold">{opt.label}</span>
+                    <span style={{ color: HOME_THEME.muted, opacity: 0.5 }}>{opt.sub}</span>
+                  </button>
+                );
+              })}
+            </div>,
+            document.body
+          )}
+
 
           <DockGap />
 

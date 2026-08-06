@@ -23,13 +23,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       credentials: 'include',
       cache: 'no-store',
       ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(init.headers || {}),
-      },
+      headers: { 'Content-Type': 'application/json', ...(init.headers || {}) },
     });
   } catch {
-    // Offline, tunnel down, container restarting. Distinguish it from a real
+    // Offline, tunnel down, container restarting. Distinguished from a real
     // HTTP error so the UI can say "can't reach the server" instead of
     // implying the password was wrong.
     throw new ApiError(0, 'Could not reach the server.');
@@ -39,9 +36,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   let body: any = null;
   if (text) { try { body = JSON.parse(text); } catch { body = { error: text }; } }
 
-  if (!res.ok) {
-    throw new ApiError(res.status, body?.error || `Request failed (${res.status})`);
-  }
+  if (!res.ok) throw new ApiError(res.status, body?.error || `Request failed (${res.status})`);
   return body as T;
 }
 
@@ -54,15 +49,73 @@ export const api = {
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export type HouseholdUser = {
-  id: number;
-  email: string;
-  displayName: string;
-  budgetProfileKey: string;
-  tz: string;
-  mustChangePassword: boolean;
-};
+  id: number
+  email: string
+  displayName: string
+  budgetProfileKey: string
+  tz: string
+  mustChangePassword: boolean
+}
 
-// ── Auth ─────────────────────────────────────────────────────────────────────
+export type Visibility = 'private' | 'shared'
+
+export type Task = {
+  id: number
+  owner_id: number
+  visibility: Visibility
+  title: string
+  notes: string | null
+  /** Always 'YYYY-MM-DD' or null — the server casts it to text so no timezone
+   *  can shift it a day. Never wrap it in `new Date()` for display. */
+  due_date: string | null
+  starred: boolean
+  project: string | null
+  done_at: string | null
+  created_at: string
+  updated_at: string
+  touched_at: string
+}
+
+export type Note = {
+  id: number
+  owner_id: number
+  visibility: Visibility
+  kind: 'note' | 'quote' | 'journal'
+  body: string
+  created_at: string
+  last_surfaced_at: string | null
+}
+
+export type Person = { id: number; displayName: string }
+
+export type TodayPayload = {
+  today: string
+  tz: string
+  slippingDays: number
+  top3: Task[]
+  open: Task[]
+  slipping: Task[]
+  counts: { open: number; overdue: number; due_today: number; done_today: number }
+  resurfacing: Note | null
+  people: Person[]
+  calendar: null | { events: Array<{ id: string; summary: string; start: string; end: string; allDay: boolean }> }
+  money: null | { balances: Record<string, number>; nextBills: Array<{ label: string; amount: number; date: string }> }
+}
+
+export type Settings = { slippingDays: number }
+
+export type NewTask = {
+  title: string
+  notes?: string
+  dueDate?: string | null
+  starred?: boolean
+  visibility?: Visibility
+  project?: string
+}
+
+export type TaskPatch = Partial<Omit<NewTask, 'title'>> & { title?: string }
+
+// ── Endpoints ────────────────────────────────────────────────────────────────
 
 export const auth = {
   me: () => api.get<{ user: HouseholdUser }>('/api/hh/auth/me'),
@@ -71,4 +124,32 @@ export const auth = {
   logout: () => api.post<{ ok: true }>('/api/hh/auth/logout'),
   changePassword: (currentPassword: string, newPassword: string) =>
     api.post<{ ok: true }>('/api/hh/auth/change-password', { currentPassword, newPassword }),
-};
+}
+
+export const tasks = {
+  list: (scope: 'open' | 'done' | 'all' = 'open') =>
+    api.get<{ tasks: Task[] }>(`/api/hh/tasks?scope=${scope}`),
+  create: (t: NewTask) => api.post<{ task: Task }>('/api/hh/tasks', { action: 'create', ...t }),
+  update: (id: number, patch: TaskPatch) =>
+    api.post<{ task: Task }>('/api/hh/tasks', { action: 'update', id, ...patch }),
+  toggleDone: (id: number) => api.post<{ task: Task }>('/api/hh/tasks', { action: 'toggleDone', id }),
+  toggleStar: (id: number) => api.post<{ task: Task }>('/api/hh/tasks', { action: 'toggleStar', id }),
+  touch: (id: number) => api.post<{ task: Task }>('/api/hh/tasks', { action: 'touch', id }),
+  remove: (id: number) => api.post<{ ok: true }>('/api/hh/tasks', { action: 'delete', id }),
+}
+
+export const notes = {
+  list: () => api.get<{ notes: Note[] }>('/api/hh/notes'),
+  create: (body: string, visibility: Visibility = 'private', kind: Note['kind'] = 'note') =>
+    api.post<{ note: Note }>('/api/hh/notes', { action: 'create', body, visibility, kind }),
+  remove: (id: number) => api.post<{ ok: true }>('/api/hh/notes', { action: 'delete', id }),
+}
+
+export const today = {
+  get: () => api.get<TodayPayload>('/api/hh/today'),
+}
+
+export const settings = {
+  get: () => api.get<{ settings: Settings }>('/api/hh/settings'),
+  save: (s: Partial<Settings>) => api.post<{ settings: Settings }>('/api/hh/settings', s),
+}
