@@ -251,13 +251,32 @@ function buildStrikes(expGroups: unknown[], liveData: Record<string, LiveEntry>)
   return Object.values(map).sort((a, b) => a.strike - b.strike);
 }
 
+// Contract basis for the GEX math.
+//   "oivol" — open interest + today's volume (this page's historical default)
+//   "vol"   — today's volume only
+//   "oi"    — open interest only
+//
+// WHY "oi" EXISTS. Every other GEX platform publishes OI-ONLY net GEX. This page
+// shipped with no OI-only mode, so its numbers were not comparable to anyone
+// else's — and on 0DTE they can carry the OPPOSITE SIGN. OI on a 0DTE strike is
+// yesterday's close (often ~0 for a strike that only came into play this
+// morning) while today's volume is 10-50x larger, so "oivol" is effectively
+// pure volume GEX there. Volume GEX is signed with the OI convention (ALL call
+// volume treated as dealer-long, ALL put volume as dealer-short, with no
+// buy/sell classification of the tape), which pins any heavily-traded call
+// strike strongly positive even when the OI book at that strike is net short
+// gamma. Use "oi" when cross-checking against another vendor.
+type ContractMode = "oivol" | "vol" | "oi";
+
 // Net GEX for one strike row given its call/put live greeks.
-function strikeGex(sr: StrikeRow | undefined, liveData: Record<string, LiveEntry>, spot: number, volOnly: boolean): number {
+function strikeGex(sr: StrikeRow | undefined, liveData: Record<string, LiveEntry>, spot: number, mode: ContractMode): number {
   if (!sr) return 0;
   const cd = liveData[sr.callSym ?? ""] || {};
   const pd = liveData[sr.putSym  ?? ""] || {};
-  const cc = (volOnly ? 0 : (cd.oi ?? 0)) + (cd.vol ?? 0);
-  const pc = (volOnly ? 0 : (pd.oi ?? 0)) + (pd.vol ?? 0);
+  const useOi = mode !== "vol";
+  const useVol = mode !== "oi";
+  const cc = (useOi ? (cd.oi ?? 0) : 0) + (useVol ? (cd.vol ?? 0) : 0);
+  const pc = (useOi ? (pd.oi ?? 0) : 0) + (useVol ? (pd.vol ?? 0) : 0);
   return (Math.abs(cd.gamma ?? 0) * cc - Math.abs(pd.gamma ?? 0) * pc) * spot * spot * 0.01 * 100;
 }
 
@@ -268,9 +287,8 @@ function computeRows(
   cols: string[],
   liveData: Record<string, LiveEntry>,
   spot: number,
-  contractMode: "oivol" | "vol",
+  contractMode: ContractMode,
 ): ComputedResult {
-  const volOnly = contractMode === "vol";
 
   // Per-expiry strike lookup + union of every strike across the columns.
   const rowByExp: Record<string, Map<number, StrikeRow>> = {};
@@ -293,7 +311,7 @@ function computeRows(
 
   const out: ComputedRow[] = allStrikes.map(strike => {
     const gex: Record<string, number> = {};
-    cols.forEach(e => { gex[e] = strikeGex(rowByExp[e].get(strike), liveData, spot, volOnly); });
+    cols.forEach(e => { gex[e] = strikeGex(rowByExp[e].get(strike), liveData, spot, contractMode); });
     return { strike, isATM: strike === atmStrike, gex };
   });
 
@@ -426,7 +444,7 @@ function TickerPanel({
   cols: Expiry[];
   liveData: Record<string, LiveEntry>;
   spot: number;
-  contractMode: "oivol" | "vol";
+  contractMode: ContractMode;
   intensity: number;
   emLevels: { close: number; em: number } | null;
   showEm: boolean;
@@ -989,7 +1007,7 @@ export function MultGreekClient({
   const [expirations, setExpirations] = useState<Expiry[]>([]);
   const [activeExpiry, setActiveExpiry] = useState<string | null>(null);
   const [selectedExpiry, setSelectedExpiry] = useState("");
-  const [contractMode, setContractMode] = useState<"oivol" | "vol">("oivol");
+  const [contractMode, setContractMode] = useState<ContractMode>("oivol");
   const [intensity, setIntensity] = useState(1.75);
   const [status, setStatus] = useState<{ state: "live" | "loading" | "err" | "idle"; msg: string }>(
     isStatic ? { state: "idle", msg: "DELAYED" } : { state: "idle", msg: "READY" }
@@ -1332,7 +1350,6 @@ export function MultGreekClient({
     const now = Date.now();
     const today = todayETStr();
     const open = isMarketOpen();
-    const volOnly = contractMode === "vol";
     const RING_MS = 35 * 60_000;
     TICKERS.forEach(t => {
       const spot = spots[t] ?? 0;
@@ -1340,7 +1357,7 @@ export function MultGreekClient({
       if (!(spot > 0) || !byExp) return;
       Object.entries(byExp).forEach(([exp, rows]) => {
         rows.forEach(r => {
-          const v = strikeGex(r, liveDataRef.current, spot, volOnly);
+          const v = strikeGex(r, liveDataRef.current, spot, contractMode);
           const key = `${t}|${exp}|${r.strike}`;
           const arr = gexHistRef.current.get(key) ?? [];
           arr.push({ t: now, v });
@@ -1523,11 +1540,16 @@ export function MultGreekClient({
 
         <DockGap />
 
-        {/* Contract basis toggle */}
+        {/* Contract basis toggle. OI is the apples-to-apples basis for comparing
+            against other GEX vendors — see ContractMode's comment. */}
         <SegGroup
-          options={[{ label: "OI+VOL", value: "oivol" }, { label: "VOL", value: "vol" }]}
+          options={[
+            { label: "OI+VOL", value: "oivol" },
+            { label: "VOL", value: "vol" },
+            { label: "OI", value: "oi" },
+          ]}
           active={contractMode}
-          onChange={(v) => setContractMode(v as typeof contractMode)}
+          onChange={(v) => setContractMode(v as ContractMode)}
         />
 
         <DockGap />

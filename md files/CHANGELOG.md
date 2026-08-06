@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-08-06 (c) - GEX sign parity: OI-only mode on Multi Greek, abs() on two recorder paths
+
+Chased a report that 0DTE QQQ 720 read strongly POSITIVE on our board while two other
+platforms read negative. Not a bug in the arithmetic — a difference in what "net GEX"
+means here — plus one genuine latent sign bug found alongside it.
+
+### `app/mult-greek/MultGreekClient.tsx`
+- Added a third **`OI`** option to the contract-basis toggle (was `OI+VOL` / `VOL` only).
+  Default is unchanged (`oivol`).
+- **Why.** Every other GEX vendor publishes OI-ONLY net GEX. This page had no OI-only
+  mode, so its numbers were never comparable to theirs — and on 0DTE they can carry the
+  OPPOSITE SIGN. 0DTE open interest is yesterday's close (often ~0 at a strike that only
+  came into play this morning) while today's volume is 10-50x larger, so `OI+VOL` is
+  effectively pure VOLUME GEX at those strikes. Volume GEX is signed with the OI
+  convention — ALL call volume treated as dealer-long, ALL put volume as dealer-short,
+  with no buy/sell classification of the tape — which pins any heavily-traded call strike
+  strongly positive even when the OI book there is net short gamma. That is exactly the
+  QQQ 720 case.
+- `strikeGex()`'s 4th arg went from `volOnly: boolean` to `mode: ContractMode`
+  (`"oivol" | "vol" | "oi"`); the same value now threads through `computeRows()`, the
+  panel prop, and the delta-stamp history effect, so the 15m/30m/open change stamps are
+  computed on whichever basis is displayed rather than always on the OI+Vol one.
+
+### `server-v2/etf-gex-recorder.js` — sign bug
+- `Math.abs()` on both gammas before the netGEX / netVolGEX reduction.
+- Gamma is positive for calls AND puts; the put leg's short-gamma polarity is carried by
+  the MINUS sign in the formula, not by the greek. A signed (negative) put gamma from
+  upstream made `- pGamma * pOI` ADDITIVE, silently flipping that strike POSITIVE in the
+  recorded SPY/QQQ history. `computation/gex-calculator.js` and the client both abs their
+  gammas; these two paths were the only places in the repo that did not.
+
+### `server-v2/state/ticker-wall-recorder.js` — same sign bug
+- Same `Math.abs()` fix. Here the failure mode is a put wall being recorded as a call
+  wall.
+
+**No proxy/server-with-proxy change. No API, schema, socket-topic or route change.**
+
 ## 2026-08-06 (b) - Home rail: CPG Ratio → Net GEX Rate, + per-strike GEX rate
 
 Replaced the CPG (call/put gamma) ratio tile on the /home gauge rail with a Net GEX

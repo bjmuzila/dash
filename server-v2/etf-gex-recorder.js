@@ -119,8 +119,16 @@ async function snapshotStrikes(ticker, expiry) {
       if (!(strike > 0)) continue;
       const c = it.call;
       const p = it.put;
-      const cGamma = num(c, 'gamma');
-      const pGamma = num(p, 'gamma');
+      // ABS IS LOAD-BEARING. Gamma is positive for both calls and puts; the put
+      // leg's short-gamma polarity comes from the MINUS sign in the netGEX
+      // formula below, not from the greek. If the upstream ever delivers a
+      // signed (negative) put gamma, `- pGamma * pOI` becomes ADDITIVE and that
+      // strike silently flips POSITIVE — the recorded ETF history then
+      // disagrees in SIGN with every other vendor there. computation/
+      // gex-calculator.js and the client's strikeGex() both abs their gammas;
+      // this path did not, which is the only sign asymmetry left in the repo.
+      const cGamma = Math.abs(num(c, 'gamma'));
+      const pGamma = Math.abs(num(p, 'gamma'));
       const cDelta = num(c, 'delta');
       const pDelta = num(p, 'delta');
       const cOI = int(c, 'open-interest', 'openInterest');

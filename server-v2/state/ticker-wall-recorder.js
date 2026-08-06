@@ -150,7 +150,12 @@ async function snapshotWall(ticker) {
       const cc = oi(c);
       const pc = oi(p);
       if (!cc && !pc) continue;
-      const gex = (num(c, 'gamma') * cc - num(p, 'gamma') * pc) * spot * spot * 0.01 * 100;
+      // abs() on both gammas: gamma is positive for calls AND puts, and the put
+      // leg's short-gamma polarity is carried by the minus sign here. A signed
+      // (negative) put gamma from upstream would otherwise make the put term
+      // additive and flip the strike's sign — turning a put wall into a call
+      // wall. Matches computation/gex-calculator.js and the client.
+      const gex = (Math.abs(num(c, 'gamma')) * cc - Math.abs(num(p, 'gamma')) * pc) * spot * spot * 0.01 * 100;
       if (gex > 0 && (!callWall || gex > callWall.value)) callWall = { strike, value: gex };
       if (gex < 0 && (!putWall || gex < putWall.value)) putWall = { strike, value: gex };
     }
