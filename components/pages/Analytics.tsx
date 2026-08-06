@@ -6,7 +6,7 @@ import { HOME_THEME, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle }
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedDatePicker } from "@/components/shared/ThemedDatePicker";
 import { useEsCandles } from "@/hooks/useEsCandles";
-import { computeRefLevels, scanToday, computeAmt, detectTriggers, type LevelStatus, type Trigger, type InitialBalance, type AmtResult } from "@/lib/failLevels";
+import { computeAmt, type InitialBalance, type AmtResult } from "@/lib/failLevels";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -178,12 +178,18 @@ function CardState({ loading, error, empty = "No data yet" }: { loading: boolean
 type GreekKey = "GEX" | "DEX" | "CHEX" | "VEX";
 interface PeakGreek { strike: number; value: number }
 
-function computePeakGreeks(payload: unknown): Record<GreekKey, PeakGreek | null> {
+// Per-strike greek totals from a /api/chains payload. Extracted so the peak-strike
+// card and the net-total card share ONE definition of the OI+Vol formula — two
+// copies would inevitably drift and print two different GEX numbers for QQQ on
+// the same page.
+type ChainGreeks = { gex: number; dex: number; chex: number; vex: number };
+
+function accumulateChainGreeks(payload: unknown): Map<number, ChainGreeks> {
   type MgLeg = Record<string, unknown>;
   const data = (payload as { data?: { items?: unknown[]; underlyingPrice?: unknown } })?.data;
   const items = (data?.items as { strikes?: unknown[] }[]) ?? [];
   const S = numOr(data?.underlyingPrice) ?? 0;
-  const acc = new Map<number, { gex: number; dex: number; chex: number; vex: number }>();
+  const acc = new Map<number, ChainGreeks>();
   const n = (o: MgLeg | undefined, k: string) => {
     const v = o?.[k];
     const num = Number(v);
@@ -209,8 +215,23 @@ function computePeakGreeks(payload: unknown): Record<GreekKey, PeakGreek | null>
       acc.set(strike, e);
     }
   }
+  return acc;
+}
 
-  const peakFor = (sel: (v: { gex: number; dex: number; chex: number; vex: number }) => number): PeakGreek | null => {
+// Sum every strike → the four net totals, in RAW dollars (fmtBig-ready). Used
+// for the tickers no recorder writes a greeks_ts series for (QQQ / SPY).
+function computeNetGreeks(payload: unknown): ChainGreeks | null {
+  const acc = accumulateChainGreeks(payload);
+  if (!acc.size) return null;
+  const t: ChainGreeks = { gex: 0, dex: 0, chex: 0, vex: 0 };
+  for (const v of acc.values()) { t.gex += v.gex; t.dex += v.dex; t.chex += v.chex; t.vex += v.vex; }
+  return t;
+}
+
+function computePeakGreeks(payload: unknown): Record<GreekKey, PeakGreek | null> {
+  const acc = accumulateChainGreeks(payload);
+
+  const peakFor = (sel: (v: ChainGreeks) => number): PeakGreek | null => {
     let best: PeakGreek | null = null;
     for (const [strike, v] of acc) {
       const val = sel(v);
@@ -780,31 +801,58 @@ function rowNearestAgo(rows: GreeksTsRow[], latestTs: number, minsAgo: number, t
   return best && bestDiff <= tolMin * 60_000 ? best : null;
 }
 
+// SPX is the only ticker with a recorded series (greeks-ts-writer.js is $SPX-only
+// and reads /proxy/gex, which is a single-symbol engine). QQQ and SPY therefore
+// come from the live chain instead — same OI+Vol math, but no stored history, so
+// they get totals without the Δ15m/Δ30m columns.
+type NgTicker = "SPX" | "QQQ" | "SPY";
+const NG_TICKERS: readonly NgTicker[] = ["SPX", "QQQ", "SPY"];
+
 function GreeksCard() {
+  const [tk, setTk] = useState<NgTicker>("SPX");
+  const isSpx = tk === "SPX";
   const today = etDateISO();
   // Today's series (ascending). Empty pre-open / overnight because the writer is
   // RTH-gated — so we fall back to the most recent prior session below.
   const { data, loading, error, lastUpdated } = useLiveData<GreeksTsResp>(
-    `/api/snapshots/greeks?date=${today}&limit=5000`
+    isSpx ? `/api/snapshots/greeks?date=${today}&limit=5000` : null
   );
   // Latest-available row regardless of date — only used when today has none yet,
   // so the card shows the last session's net greeks instead of going blank.
-  const { data: latest } = useLiveData<GreeksTsResp>(`/api/snapshots/greeks?limit=1`, 60_000);
+  const { data: latest } = useLiveData<GreeksTsResp>(isSpx ? `/api/snapshots/greeks?limit=1` : null, 60_000);
+  // QQQ / SPY: sum the whole chain live. Same endpoint + formula the Multi Greek
+  // card above uses, so the two cards agree on the same ticker.
+  const { data: chain, loading: chainLoading, error: chainError, lastUpdated: chainAt } =
+    useLiveData<unknown>(isSpx ? null : `/api/chains?ticker=${tk}&range=all`, 60_000);
 
   const todayRows = data?.rows ?? [];
-  const usingFallback = todayRows.length === 0 && (latest?.rows?.length ?? 0) > 0;
+  const usingFallback = isSpx && todayRows.length === 0 && (latest?.rows?.length ?? 0) > 0;
   // Fallback endpoint returns newest-first (limit 1); today series is ascending.
   const rows = usingFallback ? (latest!.rows as GreeksTsRow[]) : todayRows;
-  const cur = usingFallback
+  const spxCur = usingFallback
     ? rows[0]
     : rows.length ? rows[rows.length - 1] : null;
-  const staleDate = usingFallback ? (cur as GreeksTsRow & { date?: string })?.date ?? null : null;
+  const staleDate = usingFallback ? (spxCur as GreeksTsRow & { date?: string })?.date ?? null : null;
+  // Intraday deltas only make sense on today's live series, not the 1-row fallback.
+  const ago15 = spxCur && !usingFallback ? rowNearestAgo(rows, spxCur.timestamp, 15) : null;
+  const ago30 = spxCur && !usingFallback ? rowNearestAgo(rows, spxCur.timestamp, 30) : null;
+
+  // Both sources normalised to RAW dollars so the tiles below never branch:
+  // greeks_ts stores $B/$M, the chain sum is already raw.
+  const cur: ChainGreeks | null = isSpx
+    ? spxCur
+      ? { gex: spxCur.gex * GREEK_SCALE.gex, dex: spxCur.dex * GREEK_SCALE.dex,
+          chex: spxCur.chex * GREEK_SCALE.chex, vex: spxCur.vex * GREEK_SCALE.vex }
+      : null
+    : chain ? computeNetGreeks(chain) : null;
+
+  const deltaFor = (k: "gex" | "dex" | "chex" | "vex", ago: GreeksTsRow | null) =>
+    isSpx && spxCur && ago ? (spxCur[k] - ago[k]) * GREEK_SCALE[k] : null;
+
   // While the today fetch is still loading we don't yet know if we'll need the
   // fallback — only spin if BOTH have no data.
-  const showLoading = loading && !cur;
-  // Intraday deltas only make sense on today's live series, not the 1-row fallback.
-  const ago15 = cur && !usingFallback ? rowNearestAgo(rows, cur.timestamp, 15) : null;
-  const ago30 = cur && !usingFallback ? rowNearestAgo(rows, cur.timestamp, 30) : null;
+  const showLoading = (isSpx ? loading : chainLoading) && !cur;
+  const showError = isSpx ? error : chainError;
 
   const keys: Array<{ g: string; k: "gex" | "dex" | "chex" | "vex" }> = [
     { g: "Net GEX", k: "gex" },
@@ -818,18 +866,18 @@ function GreeksCard() {
       <Row>
         <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Net Greeks</span>
         <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>
-          {usingFallback ? `last session · ${staleDate ?? ""}` : "now · Δ15m · Δ30m"}
+          {!isSpx ? "live chain" : usingFallback ? `last session · ${staleDate ?? ""}` : "now · Δ15m · Δ30m"}
         </span>
       </Row>
-      {showLoading || error || !cur ? (
-        <CardState loading={showLoading} error={error} empty="No greeks series yet." />
+      <PillSelect value={tk} options={NG_TICKERS} onChange={setTk} />
+      {showLoading || showError || !cur ? (
+        <CardState loading={showLoading} error={showError} empty={isSpx ? "No greeks series yet." : `No live chain for ${tk}.`} />
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           {keys.map(({ g, k }) => {
-            const scale = GREEK_SCALE[k];
-            const nowVal = cur[k] * scale;
-            const d15 = ago15 ? (cur[k] - ago15[k]) * scale : null;
-            const d30 = ago30 ? (cur[k] - ago30[k]) * scale : null;
+            const nowVal = cur[k];
+            const d15 = deltaFor(k, ago15);
+            const d30 = deltaFor(k, ago30);
             return (
               <div key={g} style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 12, display: "flex", flexDirection: "column", gap: 5 }}>
                 <Label>{g}</Label>
@@ -849,7 +897,7 @@ function GreeksCard() {
           })}
         </div>
       )}
-      <UpdatedStamp at={lastUpdated} />
+      <UpdatedStamp at={isSpx ? lastUpdated : chainAt} />
     </Card>
   );
 }
@@ -1050,161 +1098,255 @@ function IbCard() {
   );
 }
 
-// ── 8. LEVELS & FAILS ─────────────────────────────────────────────────────────
-// Map a level's live fail-scan state to a short label + color.
-function stateLabel(st: LevelStatus["state"]): { text: string; color: string } {
-  switch (st) {
-    case "testing": return { text: "testing", color: T.orange };
-    case "failed": return { text: "failed", color: T.red };
-    case "above": return { text: "above", color: POS_GREEN };
-    case "below": return { text: "below", color: T.red };
-    default: return { text: "—", color: T.muted };
-  }
+// ── 8. TICKER LEVELS ──────────────────────────────────────────────────────────
+// CORE (CB) · Call Wall · Put Wall · Spot per ticker — the same four numbers the
+// owner Results → Walls tab prints, off the same tables. Two read paths, because
+// neither one alone is sufficient:
+//
+//   /proxy/walls?date=…   → { tickers: [{ symbol, spot, call_wall, put_wall, cb }] }
+//       Sampled from scanner_snapshots onto a 15m slot grid starting 09:29 ET.
+//       The ONLY endpoint that returns `cb`, so CORE comes from here or nowhere
+//       (/proxy/scanner's SELECT omits the column even though the table has it).
+//   /proxy/scanner?any=1  → each symbol's most recent row regardless of date,
+//       swept every 2–5m. Fresher spot/walls than the slot grid, and the only
+//       one that answers overnight, pre-open and at weekends — but no `cb`.
+//
+// So scanner wins for spot/call/put, walls supplies CORE, and off-hours a row
+// still renders with CORE blank instead of the card going empty.
+//
+// FUTURES — scanner_snapshots covers cash indices + equities only, no ES/NQ:
+//   ESU  levels = SPX levels + the ES−SPX basis from /proxy/es-spx-basis. That
+//        module is the one basis source not poisoned by the broker's "SPX" spot
+//        (which actually tracks ES); a null basis stays null and blanks the
+//        levels, because coercing it to 0 prints SPX strikes ~50pt out of place.
+//   NQU  has no NDX→NQ basis module, so it shows live spot only — add NDX to the
+//        list for the index-scale levels.
+// Both futures spots come from /api/tt-quotes on the front contract.
+interface WallsTickerRow {
+  symbol: string;
+  spot: number | null; call_wall: number | null; put_wall: number | null; cb: number | null;
+}
+interface WallsResp { ok?: boolean; date?: string; tickers?: WallsTickerRow[]; error?: string }
+interface ScannerRow {
+  symbol: string; date?: string; stale?: boolean;
+  spot: number | null; call_wall: number | null; put_wall: number | null;
+}
+interface ScannerResp { ok?: boolean; rows?: ScannerRow[]; error?: string }
+interface EsBasisResp { basis: number | null; date?: string }
+
+const TL_DEFAULT: readonly string[] = ["ESU", "NQU", "SPX", "SPY", "QQQ"];
+// Derived rows: which cash index to borrow levels from (null = no basis exists,
+// spot only) and the front contract to quote spot on.
+const TL_FUTURES: Record<string, { index: string | null; quote: string }> = {
+  ESU: { index: "SPX", quote: "/ESU26" },
+  NQU: { index: null, quote: "/NQU26" },
+};
+const TL_STORE_KEY = "analytics.tickerLevels.extra";
+
+// Previous weekday (ET) as YYYY-MM-DD. Not holiday-aware — it only has to get
+// the walls fallback off a weekend/pre-open, and skipping weekends already turns
+// a holiday Monday into the Friday before it.
+function prevSessionISO(iso: string): string {
+  const d = new Date(`${iso}T12:00:00Z`);
+  do { d.setUTCDate(d.getUTCDate() - 1); } while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
+  return d.toISOString().slice(0, 10);
 }
 
-function LevelsCard() {
-  // Live + historical 5m ES candles. `candles` from the hook is TODAY-only;
-  // `historical` holds ~20 prior days from SQLite. PDH/PDL/PWH/PWL only compute
-  // when the prior-session/week RTH bars are present, so we feed the COMBINED set
-  // into computeRefLevels — otherwise only Overnight H/L (which live in today's
-  // pre-open bars) would ever appear.
-  // PD/PW levels come from the cached /api/ref-levels route (written EOD +
-  // Sunday), so we no longer pull 20 days of candles — 2 days is enough for the
-  // overnight globex block that feeds ON-H/ON-L.
-  const { candles, historical, connected } = useEsCandles(true, 2);
-  const [cachedLevels, setCachedLevels] = useState<{ pdh: number | null; pdl: number | null; pwh: number | null; pwl: number | null } | null>(null);
-  useEffect(() => {
-    let alive = true;
-    fetch("/api/ref-levels?symbol=ES", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => { if (alive && j && !j.error) setCachedLevels({ pdh: j.pdh, pdl: j.pdl, pwh: j.pwh, pwl: j.pwl }); })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, []);
-  const grace = useGrace();
+interface TickerLevelRow {
+  symbol: string;
+  spot: number | null; core: number | null; call: number | null; put: number | null;
+  note: string | null; stale: boolean; removable: boolean;
+}
+
+function TickerLevelsCard() {
   const today = etDateISO();
-  const lastUpdated = candles.length ? Number(candles[candles.length - 1].timestamp) : null;
+  const [extra, setExtra] = useState<string[]>([]);
+  const [input, setInput] = useState("");
 
-  const { spot, statuses, hasLiveSpot, setups } = (() => {
-    // De-dup historical + today by slotKey (today wins) so reference levels see
-    // both the prior sessions/week AND today's overnight block.
-    const merged = (() => {
-      const map = new Map<string, (typeof candles)[number]>();
-      for (const c of historical as unknown as typeof candles) {
-        if (c?.slotKey) map.set(c.slotKey, c);
-      }
-      for (const c of candles) if (c?.slotKey) map.set(c.slotKey, c);
-      return [...map.values()].sort((a, b) => a.timestamp - b.timestamp);
-    })();
+  // Restore the trader's own tickers in an effect rather than a useState
+  // initializer, so the server render and the first client render match.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(TL_STORE_KEY);
+      const parsed: unknown = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(parsed)) setExtra(parsed.filter((s): s is string => typeof s === "string"));
+    } catch { /* private mode / bad JSON — the defaults are fine */ }
+  }, []);
+  const persist = (next: string[]) => {
+    setExtra(next);
+    try { window.localStorage.setItem(TL_STORE_KEY, JSON.stringify(next)); } catch {}
+  };
 
-    if (!merged.length) {
-      return { spot: null as number | null, statuses: [] as LevelStatus[], hasLiveSpot: false, setups: [] as Trigger[] };
+  const { data: walls, loading: wLoading, error: wError, lastUpdated } =
+    useLiveData<WallsResp>(`/proxy/walls?date=${today}`, 120_000);
+  // The slot grid doesn't start until 09:29 ET, so today's walls are empty
+  // pre-open and all weekend — fall back one session so CORE still prints
+  // (a holiday Monday resolves to Friday, since prevSessionISO skips weekends).
+  const wallsToday = walls?.tickers ?? [];
+  const { data: wallsPrev } = useLiveData<WallsResp>(
+    walls && wallsToday.length === 0 ? `/proxy/walls?date=${prevSessionISO(today)}` : null, 300_000
+  );
+  const wallRows = wallsToday.length ? wallsToday : wallsPrev?.tickers ?? [];
+  const coreStale = wallsToday.length === 0 && wallRows.length > 0;
+  const { data: scan, loading: sLoading, error: sError } =
+    useLiveData<ScannerResp>(`/proxy/scanner?any=1&limit=200`, 120_000);
+  // Basis moves ~1pt/day and the endpoint caches for an hour — 10m is plenty.
+  const { data: esBasis } = useLiveData<EsBasisResp>(`/proxy/es-spx-basis`, 600_000);
+  const futSymbols = Object.values(TL_FUTURES).map((f) => f.quote).join(",");
+  const { data: quotes } = useLiveData<QuotesResp>(
+    `/api/tt-quotes?symbols=${encodeURIComponent(futSymbols)}`, 15_000
+  );
+
+  // scanner first (fresher spot/walls), then walls overlays CORE on top.
+  const bySymbol = (() => {
+    const m = new Map<string, { spot: number | null; call: number | null; put: number | null; core: number | null; stale: boolean }>();
+    for (const r of scan?.rows ?? []) {
+      m.set(String(r.symbol).toUpperCase(), {
+        spot: numOr(r.spot), call: numOr(r.call_wall), put: numOr(r.put_wall),
+        core: null, stale: !!r.stale,
+      });
     }
-    // Compute the levels against the most recent session date present (today when
-    // streaming; otherwise the last historical date, e.g. Friday).
-    const lastDate = merged[merged.length - 1]?.date ?? today;
-    const refDate = merged.some((c) => c.date === today) ? today : lastDate;
-    const cached = cachedLevels ?? undefined;
-    const levels = computeRefLevels(merged, refDate, cached);
-
-    const todayBars = candles.filter((c) => (c.date ?? "") === today);
-    const liveSpot = todayBars.length ? Number(todayBars[todayBars.length - 1].close) : null;
-    // Status scan needs the active session's bars; only meaningful with today's.
-    const { statuses } = scanToday(levels, todayBars.length ? todayBars : merged);
-    // Active setups (entry/stop/target triggers) — same source as the IB card,
-    // computed off the same ES feed so the Levels card surfaces them too.
-    const amt = computeAmt(todayBars.length ? todayBars : merged, refDate, cached);
-    const setups = detectTriggers(todayBars.length ? todayBars : merged, refDate, amt, cached).filter((t) => t.active);
-    // Fallback spot for distance display when closed = last available close.
-    const fallbackSpot = merged.length ? Number(merged[merged.length - 1].close) : null;
-    return { spot: liveSpot ?? fallbackSpot, statuses, hasLiveSpot: liveSpot != null, setups };
+    for (const t of wallRows) {
+      const k = String(t.symbol).toUpperCase();
+      const e = m.get(k);
+      if (e) e.core = numOr(t.cb);
+      else m.set(k, {
+        spot: numOr(t.spot), call: numOr(t.call_wall), put: numOr(t.put_wall),
+        core: numOr(t.cb), stale: false,
+      });
+    }
+    return m;
   })();
 
-  const hasLevels = statuses.length > 0;
+  const quoteFor = (sym: string): number | null => {
+    const it = quotes?.data?.items?.find((i) => String(i.symbol) === sym);
+    if (!it) return null;
+    const v = numOr(it.last) ?? numOr(it["last-price"]) ?? numOr(it.mark) ?? numOr(it.close);
+    return v != null && v > 0 ? v : null;
+  };
 
-  // Are we currently inside the RTH session (09:30–16:00 ET)? Overnight H/L are
-  // still "forming" until the cash open; after the open they go live.
-  const rthNow = (() => {
-    const p = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
-    }).formatToParts(new Date());
-    const get = (t: string) => p.find((x) => x.type === t)?.value ?? "";
-    const wd = get("weekday");
-    if (wd === "Sat" || wd === "Sun") return false;
-    const mins = Number(get("hour")) * 60 + Number(get("minute"));
-    return mins >= 9 * 60 + 30 && mins < 16 * 60;
-  })();
+  const basis = esBasis && typeof esBasis.basis === "number" && isFinite(esBasis.basis) ? esBasis.basis : null;
+
+  const buildRow = (sym: string, removable: boolean): TickerLevelRow => {
+    const fut = TL_FUTURES[sym];
+    if (fut) {
+      const spot = quoteFor(fut.quote);
+      const src = fut.index ? bySymbol.get(fut.index) : null;
+      if (!src || basis == null) {
+        return {
+          symbol: sym, spot, core: null, call: null, put: null, stale: false, removable,
+          note: fut.index ? "waiting on basis" : "no NQ basis — add NDX",
+        };
+      }
+      const shift = (n: number | null) => (n == null ? null : n + basis);
+      return {
+        symbol: sym, spot, core: shift(src.core), call: shift(src.call), put: shift(src.put),
+        stale: src.stale, removable,
+        note: `${fut.index} ${basis >= 0 ? "+" : "−"}${Math.abs(basis).toFixed(1)}`,
+      };
+    }
+    const e = bySymbol.get(sym);
+    return {
+      symbol: sym, spot: e?.spot ?? null, core: e?.core ?? null, call: e?.call ?? null,
+      put: e?.put ?? null, stale: !!e?.stale, removable,
+      note: e ? null : "not in scanner universe",
+    };
+  };
+
+  const rows = [
+    ...TL_DEFAULT.map((s) => buildRow(s, false)),
+    ...extra.map((s) => buildRow(s, true)),
+  ];
+
+  const addTicker = () => {
+    const sym = input.trim().toUpperCase().replace(/[^A-Z0-9.]/g, "");
+    setInput("");
+    if (!sym || TL_DEFAULT.includes(sym) || extra.includes(sym)) return;
+    persist([...extra, sym]);
+  };
+
+  const loading = (wLoading || sLoading) && bySymbol.size === 0;
+  const error = bySymbol.size === 0 ? wError ?? sError : null;
+
+  const fmtLvl = (n: number | null) =>
+    n == null ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  const fmtSpot = (n: number | null) =>
+    n == null ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const th: CSSProperties = {
+    fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase",
+    color: T.muted, opacity: 0.65, textAlign: "right", padding: "0 0 5px", whiteSpace: "nowrap",
+  };
+  const td: CSSProperties = {
+    fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, textAlign: "right",
+    padding: "5px 0", whiteSpace: "nowrap",
+  };
 
   return (
     <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, height: 480, overflowY: "auto" }}>
       <Row>
-        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Levels & Fails</span>
-        <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: hasLiveSpot ? POS_GREEN : T.muted, opacity: 0.7 }}>
-          {hasLiveSpot ? "live · ES" : connected ? "ES · closed" : "loading…"}
+        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Ticker Levels</span>
+        <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>
+          {coreStale ? `core · last session ${wallsPrev?.date ?? ""}` : "core · walls · spot"}
         </span>
       </Row>
-      {!hasLevels ? (
-        <CardState loading={!candles.length && grace} error={null} empty="No ES candles yet — levels populate when the feed streams." />
-      ) : (
-        <>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {[...statuses].sort((a, b) => b.level.price - a.level.price).map((s) => {
-              const dist = spot != null ? spot - s.level.price : null;
-              const above = (dist ?? 0) >= 0;
-              const inPlay = s.state === "testing" || s.state === "failed";
-              const isOn = s.level.kind === "onHigh" || s.level.kind === "onLow";
-              // ON High/Low keep building through the overnight session — show
-              // "forming" until the 9:30 ET cash open, regardless of live spot.
-              const lbl = isOn && !rthNow
-                ? { text: "forming", color: T.orange }
-                : hasLiveSpot
-                  ? stateLabel(s.state)
-                  : { text: "—", color: T.muted };
-              const showStrong = hasLiveSpot && (inPlay || s.state === "above" || s.state === "below");
-              return (
-                <Row key={s.level.kind} style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 6 }}>
-                  <span style={{ fontSize: 17, flex: 1, textAlign: "left" }}>{s.level.label}</span>
-                  <Value size={12}>{s.level.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Value>
-                  <Value size={11} color={dist == null ? T.muted : above ? POS_GREEN : T.red}>
-                    {dist == null ? "—" : `${above ? "+" : ""}${dist.toFixed(2)}`}
-                  </Value>
-                  <span style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", color: lbl.color, opacity: showStrong || (isOn && !rthNow) ? 1 : 0.4, minWidth: 56, textAlign: "right" }}>
-                    {lbl.text}
-                  </span>
-                </Row>
-              );
-            })}
-          </div>
 
-          {/* Active setups — entry/stop/target triggers off the live ES feed. */}
-          <div style={divider} />
-          <Label>Active setups</Label>
-          {setups.length === 0 ? (
-            <span style={{ fontSize: 14, color: T.muted, opacity: 0.6 }}>
-              {rthNow ? "No active setups." : "Waiting for the open."}
-            </span>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 180, overflowY: "auto" }}>
-              {setups.map((s, i) => {
-                const long = s.direction === "long";
-                const fmt = (n: number | null | undefined) => (n != null ? Math.round(n).toLocaleString() : "—");
-                return (
-                  <div key={`${s.kind}-${s.ts}-${i}`} style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: "6px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
-                    <Row>
-                      <span style={{ fontSize: 14, fontWeight: 700 }}>
-                        <span style={{ color: long ? POS_GREEN : T.red }}>{long ? "▲" : "▼"}</span> {s.title}
-                      </span>
-                      <span style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", color: T.muted }}>{s.ref}</span>
-                    </Row>
-                    <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted }}>
-                      entry {fmt(s.entry)} · stop {fmt(s.stop)} · tgt {fmt(s.target)}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </>
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTicker(); } }}
+          placeholder="Add ticker…"
+          style={{ ...homeInputStyle, fontSize: 13, padding: "6px 10px", flex: 1, minWidth: 0 }}
+        />
+        <button onClick={addTicker} style={homeSecondaryButtonStyle}>Add</button>
+      </div>
+
+      {loading || error || !rows.length ? (
+        <CardState loading={loading} error={error} empty="No scanner rows yet." />
+      ) : (
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr>
+              <th style={{ ...th, textAlign: "left" }}>Ticker</th>
+              <th style={th}>Spot</th>
+              <th style={th}>Put Wall</th>
+              <th style={th}>Core</th>
+              <th style={th}>Call Wall</th>
+              <th style={{ ...th, width: 18 }} />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.symbol} style={{ borderTop: `1px solid ${T.border}` }}>
+                <td style={{ ...td, textAlign: "left", fontFamily: "inherit", fontWeight: 800, letterSpacing: "0.03em" }}>
+                  {r.symbol}
+                  {r.note ? (
+                    <span style={{ fontSize: 9, fontWeight: 700, color: T.muted, opacity: 0.5, marginLeft: 5 }}>{r.note}</span>
+                  ) : null}
+                  {r.stale ? (
+                    <span style={{ fontSize: 9, fontWeight: 700, color: T.orange, opacity: 0.7, marginLeft: 5 }}>stale</span>
+                  ) : null}
+                </td>
+                <td style={td}>{fmtSpot(r.spot)}</td>
+                <td style={{ ...td, color: r.put == null ? T.muted : POS_GREEN, opacity: r.put == null ? 0.35 : 1 }}>{fmtLvl(r.put)}</td>
+                <td style={{ ...td, color: r.core == null ? T.muted : T.cyan, opacity: r.core == null ? 0.35 : 1 }}>{fmtLvl(r.core)}</td>
+                <td style={{ ...td, color: r.call == null ? T.muted : T.orange, opacity: r.call == null ? 0.35 : 1 }}>{fmtLvl(r.call)}</td>
+                <td style={{ ...td, padding: "5px 0 5px 6px" }}>
+                  {r.removable ? (
+                    <button
+                      onClick={() => persist(extra.filter((s) => s !== r.symbol))}
+                      title={`Remove ${r.symbol}`}
+                      style={{ background: "none", border: "none", color: T.muted, opacity: 0.45, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
       <UpdatedStamp at={lastUpdated} />
     </Card>
@@ -1669,7 +1811,7 @@ export default function AnalyticsPage() {
         <ConfidenceCard />
         <GreeksCard />
         <IbCard />
-        <LevelsCard />
+        <TickerLevelsCard />
 
         {/* Full-width AI daily strategy, synthesized from all cards above. */}
         <StrategyBuilderCard />

@@ -1,5 +1,69 @@
 # Changelog
 
+## 2026-08-06 (g) - Analytics page: Net Greeks gains QQQ/SPY, Levels & Fails replaced by Ticker Levels
+
+`components/pages/Analytics.tsx` only — no proxy, backend, schema or route change.
+
+### Net Greeks: SPX / QQQ / SPY pill selector
+
+`greeks-ts-writer.js` is $SPX-only (it reads `/proxy/gex`, a single-symbol engine),
+and `/api/snapshots/greeks` has no ticker filter — so there is no stored QQQ or SPY
+series to switch to. Rather than stand up a second recorder, the two new tickers sum
+the whole chain live from `/api/chains`, the same endpoint and the same OI+Vol formula
+the Multi Greek card on this page already uses.
+
+- SPX is unchanged: `greeks_ts` series, `now / d15m / d30m`, last-session fallback.
+- QQQ and SPY show the four net totals with the delta columns as "-" (no stored
+  history to difference against) and the header reads "live chain".
+- `computePeakGreeks` was split: the per-strike accumulation now lives in
+  `accumulateChainGreeks`, shared by the peak card and the new `computeNetGreeks`.
+  One copy of the formula, so the two cards cannot print different GEX for the same
+  ticker.
+
+### Removed: Levels & Fails
+
+The whole card, plus `stateLabel` and the now-unused `computeRefLevels` / `scanToday` /
+`detectTriggers` / `LevelStatus` / `Trigger` imports from `@/lib/failLevels`. `computeAmt`,
+`InitialBalance`, `AmtResult`, `useEsCandles` and `useGrace` stay — the IB card uses them.
+
+### Added: Ticker Levels
+
+CORE (CB) / Call Wall / Put Wall / Spot per ticker — the same four numbers the owner
+Results -> Walls tab prints, off the same tables. Two read paths because neither is
+sufficient alone:
+
+- `/proxy/walls?date=...` -> the ONLY endpoint that returns `cb`. `/proxy/scanner`
+  omits the column from its SELECT even though `scanner_snapshots` has it, so CORE
+  comes from walls or not at all. Sampled onto a 15m slot grid from 09:29 ET.
+- `/proxy/scanner?any=1&limit=200` -> each symbol's most recent row regardless of
+  date, swept every 2-5m. Fresher spot/walls, and the only one that answers
+  overnight, pre-open and at weekends.
+
+So scanner wins for spot/call/put and walls supplies CORE. When today's slot grid is
+empty (pre-open, weekend) the card falls back one session for CORE via `prevSessionISO`
+and labels the header "core - last session <date>"; skipping weekends means a holiday
+Monday resolves to the Friday before it.
+
+**Futures.** `scanner_snapshots` covers cash indices and equities only — no ES/NQ.
+
+- `ESU` = SPX levels + the ES-SPX basis from `/proxy/es-spx-basis`, the one basis
+  source not poisoned by the broker's "SPX" spot. A null basis stays null and blanks
+  the levels rather than being coerced to 0 (which would print SPX strikes ~50pt out
+  of place on an ES chart — the exact bug that module exists to prevent). The row is
+  tagged `SPX +x.x` so the derivation is visible.
+- `NQU` has no NDX->NQ basis module, so it shows live spot only, tagged
+  "no NQ basis - add NDX".
+- Both futures spots come from `/api/tt-quotes` on the front contract (`/ESU26`,
+  `/NQU26`), no basis math.
+
+Defaults are ESU, NQU, SPX, SPY, QQQ. An input adds any other scanner symbol; extras
+persist in `localStorage` under `analytics.tickerLevels.extra` and carry an x to
+remove. A symbol with no scanner row is tagged "not in scanner universe" rather than
+rendering as four silent dashes.
+
+Colours follow the owner Walls tab's intent: put wall green, CORE cyan, call wall
+orange, all from `homeTheme` (no new hex).
+
 ## 2026-08-06 (f) - budget.cbedge.net step 5: Google Calendar (read-only, per person)
 
 Phase 1 step 5 of 7. Each household member links their OWN Google account; today's
