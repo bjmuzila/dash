@@ -190,6 +190,162 @@ function ConceptLeaderboardModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+// ── Today's Plays (popout) ──────────────────────────────────────────────────
+// Same /api/ict-setups feed the leaderboard reads, but the raw rows for TODAY's
+// ET date instead of the all-time per-kind rollup: every setup the server-side
+// tracker recorded this session, newest first, with its grade so far.
+type TodayRow = {
+  id?: number;
+  setup_key?: string;
+  date: string;
+  kind: string;
+  label: string | null;
+  dir: string | null;
+  trigger_ts: number | string;
+  price: number | null;
+  note: string | null;
+  target: number | null;
+  invalidation: number | null;
+  outcome: string;
+  mfe: number | null;
+  mae: number | null;
+  r_multiple: number | null;
+  resolved_ts: number | string | null;
+  resolved_price: number | null;
+};
+
+const OUTCOME_C: Record<string, string> = {
+  win: "#22e08a", loss: "#ff6b6b", chop: "#ffb300", pending: "#9fb3c8",
+};
+const etTime = (ts: number) =>
+  new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(new Date(ts));
+
+function TodaysPlaysModal({ onClose }: { onClose: () => void }) {
+  const [rows, setRows] = useState<TodayRow[]>([]);
+  const [date, setDate] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      // No ?all / ?date → the router defaults to today's ET date.
+      fetch("/api/ict-setups", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+        .then((j) => {
+          if (!alive) return;
+          setRows(Array.isArray(j.setups) ? j.setups : []);
+          setDate(String(j.date ?? ""));
+          setErr(null);
+        })
+        .catch((e) => { if (alive) setErr(String(e)); })
+        .finally(() => { if (alive) setLoaded(true); });
+    };
+    load();
+    // The tracker scans every 5m server-side; refresh on the same cadence.
+    const id = setInterval(load, 60_000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const sorted = useMemo(
+    () => [...rows].sort((a, b) => Number(b.trigger_ts) - Number(a.trigger_ts)),
+    [rows]
+  );
+  const tally = useMemo(() => {
+    const t = { win: 0, loss: 0, chop: 0, pending: 0 };
+    for (const r of rows) if (r.outcome in t) t[r.outcome as keyof typeof t] += 1;
+    return t;
+  }, [rows]);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(3,7,12,0.72)", backdropFilter: "blur(3px)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ background: "#0b121c", border: "1px solid rgba(255,255,255,0.10)", borderTop: "3px solid #FFC107", borderRadius: 14, width: "min(980px, 96vw)", maxHeight: "86vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 64px rgba(0,0,0,0.55)" }}
+      >
+        <div style={{ display: "flex", alignItems: "baseline", gap: 12, padding: "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
+          <span style={{ fontSize: 14, fontWeight: 800, color: "#FFC107", textTransform: "uppercase", letterSpacing: "0.1em" }}>Today&apos;s Plays</span>
+          <span style={{ fontSize: 12, color: "#c9d8e8" }}>
+            ES futures · {date || "today"} · every setup recorded this session, newest first
+          </span>
+          <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", marginLeft: 8 }}>
+            <span style={{ color: OUTCOME_C.win }}>{tally.win}W</span>
+            <span style={{ color: "#c9d8e8" }}> · </span>
+            <span style={{ color: OUTCOME_C.loss }}>{tally.loss}L</span>
+            <span style={{ color: "#c9d8e8" }}> · </span>
+            <span style={{ color: OUTCOME_C.chop }}>{tally.chop} chop</span>
+            <span style={{ color: "#c9d8e8" }}> · </span>
+            <span style={{ color: OUTCOME_C.pending }}>{tally.pending} open</span>
+          </span>
+          <button
+            onClick={onClose}
+            style={{ marginLeft: "auto", fontSize: 12, fontWeight: 800, padding: "6px 14px", borderRadius: 8, cursor: "pointer", border: "1px solid rgba(255,255,255,0.10)", background: "transparent", color: "#c9d8e8", fontFamily: "inherit", textTransform: "uppercase", letterSpacing: "0.06em" }}
+          >Close ✕</button>
+        </div>
+
+        <div style={{ overflow: "auto", padding: "4px 0" }}>
+          {err ? (
+            <div style={{ padding: "22px 24px", color: "#ff6b6b", fontSize: 14 }}>Couldn&apos;t load today&apos;s plays: {err}</div>
+          ) : !loaded ? (
+            <div style={{ padding: "22px 24px", color: "#c9d8e8", fontSize: 14 }}>Loading…</div>
+          ) : sorted.length === 0 ? (
+            <div style={{ padding: "22px 24px", color: "#c9d8e8", fontSize: 14 }}>No setups recorded yet today.</div>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.10)", position: "sticky", top: 0, background: "#0b121c" }}>
+                  {(["Time", "Concept", "Dir", "Entry", "Stop", "Result", "R", "MFE", "Note"] as const).map((h, i) => (
+                    <th key={h} style={{ padding: "8px 14px", fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#c9d8e8", textAlign: i >= 3 && i <= 7 ? "right" : "left", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map((r, i) => {
+                  const oc = OUTCOME_C[r.outcome] ?? "#9fb3c8";
+                  const long = r.dir === "bull";
+                  const dirCol = r.dir === "bull" ? "#30d158" : r.dir === "bear" ? "#ff5b5b" : "#9fb3c8";
+                  return (
+                    <tr key={r.setup_key ?? `${r.kind}-${r.trigger_ts}-${i}`} style={{ borderTop: i ? "1px solid rgba(255,255,255,0.06)" : undefined }}>
+                      <td style={{ padding: "9px 14px", fontSize: 12, fontFamily: "var(--font-mono)", color: "#c9d8e8", whiteSpace: "nowrap" }}>{etTime(Number(r.trigger_ts))}</td>
+                      <td style={{ padding: "9px 14px", fontSize: 13, fontWeight: 700, color: "#fff", whiteSpace: "nowrap" }}>{r.label || lbKindLabel(r.kind)}</td>
+                      <td style={{ padding: "9px 14px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)", color: dirCol, whiteSpace: "nowrap" }}>
+                        {r.dir === "neutral" || !r.dir ? "—" : long ? "↑ LONG" : "↓ SHORT"}
+                      </td>
+                      <td style={{ padding: "9px 14px", fontSize: 12, fontFamily: "var(--font-mono)", color: "#fff", textAlign: "right" }}>{r.price != null ? Number(r.price).toFixed(2) : "—"}</td>
+                      <td style={{ padding: "9px 14px", fontSize: 12, fontFamily: "var(--font-mono)", color: "#ff6b6b", textAlign: "right" }}>{r.invalidation != null ? Number(r.invalidation).toFixed(2) : "—"}</td>
+                      <td style={{ padding: "9px 14px", textAlign: "right" }}>
+                        <span style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", color: oc, background: "rgba(255,255,255,0.06)", borderRadius: 4, padding: "2px 7px" }}>
+                          {r.outcome === "pending" ? "open" : r.outcome}
+                        </span>
+                      </td>
+                      <td style={{ padding: "9px 14px", fontSize: 13, fontWeight: 800, fontFamily: "var(--font-mono)", textAlign: "right", color: r.r_multiple == null ? "#9fb3c8" : r.r_multiple >= 1 ? "#22e08a" : "#ffb300" }}>
+                        {r.r_multiple != null ? `${r.r_multiple > 0 ? "+" : ""}${Number(r.r_multiple).toFixed(1)}R` : "—"}
+                      </td>
+                      <td style={{ padding: "9px 14px", fontSize: 12, fontFamily: "var(--font-mono)", color: "#c9d8e8", textAlign: "right" }}>{r.mfe != null ? Number(r.mfe).toFixed(2) : "—"}</td>
+                      <td style={{ padding: "9px 14px", fontSize: 11, color: "rgba(255,255,255,0.45)", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.note ?? ""}>{r.note ?? ""}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function IctPage() {
   // Instrument tab: ES (default) or NQU. Only the active feed connects — the
   // idle hook opens no socket + loads nothing, so switching tabs swaps feeds
@@ -284,6 +440,7 @@ export default function IctPage() {
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
   const [leaderboardOpen, setLeaderboardOpen] = useState(false);
+  const [todayPlaysOpen, setTodayPlaysOpen] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -1041,6 +1198,16 @@ export default function IctPage() {
           🏆 Leaderboard
         </button>
         {leaderboardOpen && <ConceptLeaderboardModal onClose={() => setLeaderboardOpen(false)} />}
+        <button onClick={() => setTodayPlaysOpen(true)}
+          className="rounded-md px-3 py-1 text-[11px] font-bold uppercase tracking-[0.08em] transition"
+          style={{
+            color: "#FFC107",
+            background: "linear-gradient(180deg, rgba(255,193,7,.16), rgba(255,193,7,.05))",
+            border: "1px solid rgba(255,193,7,.35)",
+          }}>
+          📋 Today&apos;s Plays
+        </button>
+        {todayPlaysOpen && <TodaysPlaysModal onClose={() => setTodayPlaysOpen(false)} />}
         <span className="text-[11px] uppercase tracking-[0.18em] text-white">Inner Circle Trader · live {instLabel} detection</span>
         <span className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${connected ? "text-emerald-300" : "text-white"}`}
           style={{ border: `1px solid ${connected ? "rgba(0,230,118,.4)" : "rgba(255,255,255,.18)"}`, background: connected ? "rgba(0,230,118,.08)" : "transparent" }}>
@@ -1262,7 +1429,7 @@ live setups only · click the ▲/▼ entry dot on the chart (or a card here) to
           ) : (
             <p className="text-[11px] text-white/50">
               No play live right now. A dot appears on the chart the moment a model setup
-              (Turtle Soup, Judas, CISD, 2022 Model, Breaker, Inducement, OB retest, OTE) actually fires.
+              (Turtle Soup, Judas, CISD, 2022 Model, Breaker, OB retest, OTE) actually fires.
             </p>
           )}
         </div>

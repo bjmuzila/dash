@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-08-07 - ICT: inducement no longer draws a play
+
+Inducement fires several times a session and is a *context* read — the liquidity
+the real setup is going to raid — not an entry. Every one of them was taking a
+position box and an entry dot, crowding out the models that are actually
+tradeable.
+
+### `lib/calculations/ictPlays.ts`
+- `inducement` dropped from `PlayKind`, from `PLAY_META`, and from the
+  `signalGroups` loop that turns point-in-time detectors into live plays.
+- Detection is **untouched** — `analyzeICT().inducement` still runs, still feeds
+  the glossary "fresh" dots and the `/api/ict-setups` recorder, so the concept
+  keeps accumulating a leaderboard record. It just never draws a box.
+
+### `components/pages/Ict.tsx`
+- Empty-state copy no longer lists Inducement among the setups that open a play.
+
+## 2026-08-07 - ICT: Today's Plays popout next to the Leaderboard
+
+The Concept Leaderboard answers "which concepts work"; nothing answered "what
+actually fired today". A second toolbar button opens the same modal shell with
+the raw recorded rows for the current ET session.
+
+### `components/pages/Ict.tsx`
+- **New `TodaysPlaysModal`** — same chrome, sizing, backdrop and Esc-to-close as
+  `ConceptLeaderboardModal`, amber top border instead of blue so the two read as
+  a pair without looking identical.
+- Reads **`GET /api/ict-setups` with no query string** — the router already
+  defaults `date` to today's ET date and returns the raw `setups` rows, so this
+  needs no new endpoint and no new DB call. Re-polls every 60s (the server-side
+  tracker scans on a 5m boundary).
+- One row per recorded setup, newest first: ET trigger time, concept label,
+  direction, entry, stop (`invalidation`), outcome badge, R multiple, MFE, note.
+  Header carries the W / L / chop / open tally for the day.
+- `pending` renders as **open** — "pending" reads like a bug to a subscriber
+  looking at a setup that simply hasn't resolved yet.
+- Toolbar button `📋 Today's Plays` sits immediately after `🏆 Leaderboard`.
+
 ## 2026-08-07 - Multi Greek: one-click CB/CW/PW level snapshot to the clipboard
 
 There was no way to get the four tickers' walls out of the page except a full

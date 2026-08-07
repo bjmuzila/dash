@@ -68,9 +68,13 @@ export type PlayState = "live" | "won" | "lost";
 
 /** Only the ICT *models* get a position box — the discretionary plays a trader
  *  actually takes. Structure breaks, displacement legs and every raw FVG fire far
- *  too often to draw a box for each without burying the chart. */
+ *  too often to draw a box for each without burying the chart.
+ *
+ *  Inducement is deliberately NOT here: it fires several times a session and is
+ *  a *context* read (the liquidity the real setup will raid), not an entry. It
+ *  stays in analyzeICT and the setup recorder — it just never draws a box. */
 export type PlayKind =
-  | "turtleSoup" | "judas" | "cisd" | "model2022" | "breaker" | "inducement"
+  | "turtleSoup" | "judas" | "cisd" | "model2022" | "breaker"
   | "ob" | "ote";
 
 export interface IctPlay {
@@ -100,7 +104,6 @@ const PLAY_META: Record<PlayKind, { label: string; conceptId: string }> = {
   cisd:       { label: "CISD",        conceptId: "cisd" },
   model2022:  { label: "2022 Model",  conceptId: "model2022" },
   breaker:    { label: "Breaker",     conceptId: "breaker" },
-  inducement: { label: "Inducement",  conceptId: "idm" },
   ob:         { label: "Order Block", conceptId: "ob" },
   ote:        { label: "OTE Entry",   conceptId: "ote" },
 };
@@ -326,7 +329,6 @@ export function buildIctPlays(
     ["cisd",       a.cisd],
     ["model2022",  a.model2022],
     ["breaker",    a.breakers],
-    ["inducement", a.inducement],
   ];
   for (const [kind, sigs] of signalGroups) {
     for (const s of sigs) pushLive(kind, s.dir, s.ts, s.price, s.note ?? `${PLAY_META[kind].label} ${s.dir}`);
@@ -372,7 +374,7 @@ export function buildIctPlays(
 
   // Fill the budget by usefulness, not just recency: a working trade outranks one
   // that already finished. Resolved plays keep at most 1 slot so a busy detector
-  // (inducement fires often) can't crowd out the live markup.
+  // can't crowd out the live markup.
   const newest = (x: IctPlay, y: IctPlay) => y.triggerTs - x.triggerTs;
   const all = [...seen.values()];
   const live = all.filter((p) => p.state === "live").sort(newest);
