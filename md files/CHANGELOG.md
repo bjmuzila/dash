@@ -1,5 +1,86 @@
 # Changelog
 
+## 2026-08-07 - Bubble Lab: 22 mark shapes, ribbons, and per-mark styling (`lab/bubble-lab.html`)
+
+Follow-up to the harness added earlier today. Size and opacity are only two of
+the channels a bubble can vary on — the mark's *form* is a third, and on a dense
+1-min trail it carries more signal than radius does. Section 7 of the lab is now
+a full mark library plus a connect-across-time mode.
+
+- **22 marks**, grouped in the picker:
+  - *Round* — circle (live), wide oval, tall capsule, ring (stroke only), donut
+    (hollow core), soft radial glow, half-arc (opens up for +GEX / down for −),
+    comet (tail trailing into the past).
+  - *Linear* — vertical tick, horizontal line, bar growing from the column,
+    rounded pill, heat cell (fills the bucket × strike slot — a true heatmap
+    look), wick + dot, tapered ladder rung.
+  - *Angular* — diamond, square, hexagon, triangle (points up for calls, down
+    for puts), cross, star burst, chevron.
+- **Per-mark styling** — aspect (w/h), rotation, outline width, white core-dot
+  %, x-jitter.
+- **Second shape for puts** — `shapeBySign` + a `shape2` picker, so +GEX and
+  −GEX read apart by form as well as by hue (useful when the chart is printed
+  or when the blue/red distinction is doing too much work).
+- **Ribbon mode (7b)** — connects the same strike across time into a band whose
+  half-thickness IS the bubble radius, so a wall renders as one tube that swells
+  and tapers instead of a row of dots. Modes: off / variable-width band /
+  centre line / band + line / stepped band, with opacity, thickness multiplier,
+  and a 3-tap smoothing slider. `marksOn` toggles whether the dots still draw
+  on top.
+- **On-canvas size legend** — the active mark rendered at ratios
+  0.05/0.2/0.4/0.6/0.8/1.0 with the resulting px radius under each, so the
+  compression at the top of the curve is visible directly rather than inferred
+  from the variance index.
+- **Four new presets** — Ticks, Ribbons, Heat cells, Triangles. Reference
+  variance-index scores on the synthetic session: Current (live) 0.21,
+  Heat cells 0.42, High variance 0.49, Triangles 0.48, Ticks 0.56.
+- The copied draw-block patch now emits the mark and ribbon settings alongside
+  the numeric config.
+
+Still **no app code changed** — `EsChartCard.tsx` is untouched.
+
+## 2026-08-07 - GEX Bubble Lab: standalone tuning harness for bubble variance (`lab/bubble-lab.html`)
+
+The ES Candles bubble trail reads as uniform dots — on a live session the drawn
+radii span only ~2.8-5.4px (variance index sigma/mean = 0.21), so a wall and a
+tail strike look nearly identical. The cause is stacked in the draw block:
+`sqrt(ratio)` compresses the top of the range, the expanding session-max divisor
+plus the 15%-of-sessMax floor keeps `ratio` bunched high, and the size span is
+only 3.5px wide (`minSize 0.5` -> `maxSize 4`).
+
+**No app code was changed.** This is a standalone, dependency-free HTML harness
+for finding the right numbers before touching `EsChartCard.tsx`.
+
+- **`lab/bubble-lab.html`** — single file, open it in a browser. Renders a
+  synthetic 390-minute ES session (persistent call/put walls, a migrating mid
+  cluster, a long tail) through a reimplementation of the real draw block, with
+  every axis of variation exposed as a slider:
+  - **Normalization** — expanding session max (current live), fixed session max,
+    per-column max, rolling window, percentile clip, rank-within-column,
+    z-score; plus the domain floor % and a per-column stretch toggle.
+  - **Size curve** — sqrt / linear / pow / log / exponential / smoothstep /
+    quantized steps, gamma, min+max px, size jitter.
+  - **Strike selection** — top N, highlight N, ratio cutoff, rank mode
+    (peak-so-far / per-column / whole-session).
+  - **Opacity** — brightness, opacity gamma, max opacity, age fade.
+  - **Color** — ramp toward the hot color, color gamma, saturation boost,
+    hue-by-sign toggle.
+  - **Glow** — max blur, threshold, wall boost, glow-for-all vs walls-only.
+  - **Shape** — circle / capsule / bar / diamond / ring / soft radial, aspect,
+    x-jitter, additive blending.
+  - **Data** — bucket size, wall concentration, noise, candles on/off.
+- **Variance index (sigma/mean of drawn radii)** in the status bar, so a setting
+  can be judged by a number instead of by eye. Baseline live config scores
+  ~0.21; the shipped "High variance" preset scores ~0.49.
+- **Presets** — Current (live), High variance, Extreme, Tube/rail, Sparse walls.
+- **Split view** — live config on top vs the tuned config below, same data.
+- **Copy JSON / Copy draw-block patch** — emits the tuned numbers as a comment
+  block plus a `BUBBLE_CFG_DEFAULT` line ready to paste.
+
+Findings so far, in order of effect on spread: the divisor (rolling/percentile
+beats expanding), the size curve exponent (pow gamma ~1.5 beats sqrt), then the
+px span. Opacity and color gamma add perceived variance without changing radii.
+
 ## 2026-08-07 - Options flow: prints arrived in one lump per replay, not per print
 
 `/flow` was showing an hour of tape at once — the Net Drift line sat flat from

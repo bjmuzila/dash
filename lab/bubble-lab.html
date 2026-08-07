@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>GEX Bubble Lab — ES Candles</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#0f141c; --panel2:#131a24; --line:#1e2733;
+    --txt:#dbe4ef; --dim:#7d8b9c; --accent:#29b6f6; --red:#ff4757; --amber:#f5c518;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
+    font:12px/1.45 Inter,system-ui,-apple-system,Segoe UI,sans-serif}
+  .wrap{display:flex;height:100vh;overflow:hidden}
+  .rail{width:340px;min-width:340px;height:100%;overflow-y:auto;background:var(--panel);
+    border-right:1px solid var(--line);padding:10px 12px 60px}
+  .rail::-webkit-scrollbar{width:8px}.rail::-webkit-scrollbar-thumb{background:#243040;border-radius:4px}
+  .main{flex:1;display:flex;flex-direction:column;min-width:0}
+  h1{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:2px 0 10px}
+  h2{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
+    margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--line)}
+  .row{display:flex;align-items:center;gap:8px;margin:6px 0}
+  .row label{flex:1;color:#a9b6c6}
+  .row .val{width:52px;text-align:right;font-variant-numeric:tabular-nums;color:var(--accent)}
+  input[type=range]{width:130px;accent-color:var(--accent);background:transparent}
+  select,button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+    border-radius:5px;padding:4px 7px;font:inherit;cursor:pointer}
+  select{width:150px}
+  button:hover{border-color:var(--accent)}
+  .btns{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+  .btns button{flex:1 1 auto;min-width:70px;font-size:11px}
+  .toolbar{display:flex;align-items:center;gap:10px;padding:8px 12px;
+    border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+  .toolbar .sp{flex:1}
+  .cvwrap{flex:1;position:relative;min-height:0}
+  canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+  .stats{padding:6px 12px;border-top:1px solid var(--line);background:var(--panel);
+    color:var(--dim);font-variant-numeric:tabular-nums;display:flex;gap:18px;flex-wrap:wrap}
+  .stats b{color:var(--txt);font-weight:600}
+  pre{background:#080b10;border:1px solid var(--line);border-radius:6px;padding:8px;
+    font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;color:#9fd7f5;white-space:pre-wrap;
+    max-height:220px;overflow:auto;margin:6px 0}
+  .hint{color:#6b7889;font-size:11px;margin:2px 0 8px}
+  .pill{display:inline-block;padding:1px 6px;border-radius:999px;background:#16202c;
+    border:1px solid var(--line);color:var(--dim);font-size:10px}
+  .chk{display:flex;align-items:center;gap:6px;margin:5px 0;color:#a9b6c6}
+  input[type=checkbox]{accent-color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- ───────────────────────── CONTROL RAIL ───────────────────────── -->
+<div class="rail" id="rail">
+  <h1>GEX Bubble Lab</h1>
+  <div class="hint">Every knob that can change how a bubble looks. Tune here, then port the
+  numbers into <span class="pill">BUBBLE_CFG</span> / the draw block in EsChartCard.</div>
+
+  <div class="btns">
+    <button data-preset="current">Current (live)</button>
+    <button data-preset="variance">High variance</button>
+    <button data-preset="extreme">Extreme</button>
+    <button data-preset="tube">Tube / rail</button>
+    <button data-preset="sparse">Sparse walls</button>
+    <button data-preset="ticks">Ticks</button>
+    <button data-preset="ribbonp">Ribbons</button>
+    <button data-preset="cells">Heat cells</button>
+    <button data-preset="signs">Triangles</button>
+  </div>
+
+  <h2>1 · Normalization (the biggest lever)</h2>
+  <div class="row"><label>Scale mode</label>
+    <select id="normMode">
+      <option value="expanding">Expanding session max (live now)</option>
+      <option value="session">Fixed session max</option>
+      <option value="column">Per-column max</option>
+      <option value="rolling">Rolling window max</option>
+      <option value="pctile">Percentile clip</option>
+      <option value="rank">Rank within column</option>
+      <option value="zscore">Z-score (col mean/σ)</option>
+    </select></div>
+  <div class="row"><label>Rolling window (cols)</label><input type="range" id="rollWin" min="1" max="120" step="1"><span class="val" id="v_rollWin"></span></div>
+  <div class="row"><label>Percentile clip</label><input type="range" id="pctile" min="50" max="100" step="1"><span class="val" id="v_pctile"></span></div>
+  <div class="row"><label>Domain floor (% of max)</label><input type="range" id="floorPct" min="0" max="60" step="1"><span class="val" id="v_floorPct"></span></div>
+  <div class="chk"><input type="checkbox" id="stretch"><label for="stretch">Per-column stretch (rescale min→0, max→1)</label></div>
+
+  <h2>2 · Size curve</h2>
+  <div class="row"><label>Curve</label>
+    <select id="sizeCurve">
+      <option value="sqrt">sqrt (live now)</option>
+      <option value="linear">linear</option>
+      <option value="pow">pow(γ)</option>
+      <option value="log">log</option>
+      <option value="expo">exponential</option>
+      <option value="scurve">S-curve (smoothstep)</option>
+      <option value="step">quantized steps</option>
+    </select></div>
+  <div class="row"><label>Gamma γ</label><input type="range" id="sizeGamma" min="0.15" max="4" step="0.05"><span class="val" id="v_sizeGamma"></span></div>
+  <div class="row"><label>Steps (quantize)</label><input type="range" id="sizeSteps" min="2" max="12" step="1"><span class="val" id="v_sizeSteps"></span></div>
+  <div class="row"><label>Min size px</label><input type="range" id="minSize" min="0" max="6" step="0.05"><span class="val" id="v_minSize"></span></div>
+  <div class="row"><label>Max size px</label><input type="range" id="maxSize" min="1" max="26" step="0.25"><span class="val" id="v_maxSize"></span></div>
+  <div class="row"><label>Size jitter %</label><input type="range" id="sizeJitter" min="0" max="40" step="1"><span class="val" id="v_sizeJitter"></span></div>
+
+  <h2>3 · Which strikes draw</h2>
+  <div class="row"><label>Show top strikes</label><input type="range" id="topStrikes" min="1" max="40" step="1"><span class="val" id="v_topStrikes"></span></div>
+  <div class="row"><label>Highlight top N</label><input type="range" id="highlight" min="0" max="20" step="1"><span class="val" id="v_highlight"></span></div>
+  <div class="row"><label>Cutoff (ratio &lt; x drops)</label><input type="range" id="cutoff" min="0" max="0.6" step="0.005"><span class="val" id="v_cutoff"></span></div>
+  <div class="row"><label>Rank selection</label>
+    <select id="rankMode">
+      <option value="peakSoFar">Peak so far (live now)</option>
+      <option value="column">Per column</option>
+      <option value="session">Whole session</option>
+    </select></div>
+
+  <h2>4 · Opacity</h2>
+  <div class="row"><label>Brightness</label><input type="range" id="brightness" min="0" max="100" step="1"><span class="val" id="v_brightness"></span></div>
+  <div class="row"><label>Opacity γ</label><input type="range" id="opGamma" min="0.15" max="4" step="0.05"><span class="val" id="v_opGamma"></span></div>
+  <div class="row"><label>Max opacity</label><input type="range" id="opMax" min="0.2" max="1" step="0.02"><span class="val" id="v_opMax"></span></div>
+  <div class="row"><label>Age fade (older →)</label><input type="range" id="ageFade" min="0" max="90" step="1"><span class="val" id="v_ageFade"></span></div>
+
+  <h2>5 · Color</h2>
+  <div class="row"><label>Ramp to hot color</label><input type="range" id="colorMix" min="0" max="100" step="1"><span class="val" id="v_colorMix"></span></div>
+  <div class="row"><label>Color γ</label><input type="range" id="colorGamma" min="0.15" max="4" step="0.05"><span class="val" id="v_colorGamma"></span></div>
+  <div class="row"><label>Saturation boost</label><input type="range" id="satBoost" min="-50" max="80" step="1"><span class="val" id="v_satBoost"></span></div>
+  <div class="chk"><input type="checkbox" id="colorBySign"><label for="colorBySign">Hue by sign (blue +GEX / red −GEX)</label></div>
+
+  <h2>6 · Glow</h2>
+  <div class="row"><label>Glow blur max px</label><input type="range" id="glowMax" min="0" max="40" step="1"><span class="val" id="v_glowMax"></span></div>
+  <div class="row"><label>Glow threshold</label><input type="range" id="glowThresh" min="0" max="1" step="0.02"><span class="val" id="v_glowThresh"></span></div>
+  <div class="row"><label>Wall boost ×</label><input type="range" id="hiBoost" min="1" max="3" step="0.05"><span class="val" id="v_hiBoost"></span></div>
+  <div class="chk"><input type="checkbox" id="glowAll"><label for="glowAll">Glow scales with size for ALL bubbles</label></div>
+
+  <h2>7 · Shape</h2>
+  <div class="row"><label>Mark</label>
+    <select id="shape">
+      <optgroup label="Round">
+        <option value="circle">circle (live now)</option>
+        <option value="oval">oval — wide</option>
+        <option value="capsule">capsule — tall</option>
+        <option value="ring">ring (stroke only)</option>
+        <option value="donut">donut (hollow core)</option>
+        <option value="soft">soft radial glow</option>
+        <option value="arc">half-arc (up=+ / down=−)</option>
+        <option value="comet">comet (tail into the past)</option>
+      </optgroup>
+      <optgroup label="Linear">
+        <option value="tick">tick — vertical line</option>
+        <option value="hline">hline — horizontal line</option>
+        <option value="bar">bar — grows from column</option>
+        <option value="pill">pill — rounded bar</option>
+        <option value="cell">heat cell (fills the slot)</option>
+        <option value="wick">wick + dot</option>
+        <option value="ladder">ladder rung (tapered)</option>
+      </optgroup>
+      <optgroup label="Angular">
+        <option value="diamond">diamond</option>
+        <option value="square">square</option>
+        <option value="hex">hexagon</option>
+        <option value="triangle">triangle (points w/ sign)</option>
+        <option value="cross">cross / plus</option>
+        <option value="star">star burst</option>
+        <option value="chevron">chevron</option>
+      </optgroup>
+    </select></div>
+  <div class="row"><label>Aspect (w/h)</label><input type="range" id="aspect" min="0.2" max="4" step="0.05"><span class="val" id="v_aspect"></span></div>
+  <div class="row"><label>Outline width</label><input type="range" id="outlineW" min="0" max="3" step="0.1"><span class="val" id="v_outlineW"></span></div>
+  <div class="row"><label>Core dot %</label><input type="range" id="coreDot" min="0" max="80" step="1"><span class="val" id="v_coreDot"></span></div>
+  <div class="row"><label>Rotation °</label><input type="range" id="rotate" min="0" max="90" step="1"><span class="val" id="v_rotate"></span></div>
+  <div class="row"><label>X jitter px</label><input type="range" id="xJitter" min="0" max="10" step="0.5"><span class="val" id="v_xJitter"></span></div>
+  <div class="chk"><input type="checkbox" id="shapeBySign"><label for="shapeBySign">Second shape for −GEX (puts)</label></div>
+  <div class="row"><label>Put mark</label>
+    <select id="shape2">
+      <option value="circle">circle</option><option value="oval">oval</option>
+      <option value="capsule">capsule</option><option value="ring">ring</option>
+      <option value="donut">donut</option><option value="soft">soft glow</option>
+      <option value="tick">tick</option><option value="hline">hline</option>
+      <option value="bar">bar</option><option value="pill">pill</option>
+      <option value="cell">heat cell</option><option value="diamond">diamond</option>
+      <option value="square">square</option><option value="hex">hexagon</option>
+      <option value="triangle">triangle</option><option value="cross">cross</option>
+      <option value="star">star</option><option value="chevron">chevron</option>
+    </select></div>
+  <div class="chk"><input type="checkbox" id="additive"><label for="additive">Additive blending (lighter)</label></div>
+
+  <h2>7b · Connect across time</h2>
+  <div class="row"><label>Ribbon mode</label>
+    <select id="ribbon">
+      <option value="off">off</option>
+      <option value="band">variable-width band</option>
+      <option value="line">center line</option>
+      <option value="area">band + line</option>
+      <option value="step">stepped band</option>
+    </select></div>
+  <div class="row"><label>Ribbon opacity</label><input type="range" id="ribbonOp" min="0" max="100" step="1"><span class="val" id="v_ribbonOp"></span></div>
+  <div class="row"><label>Ribbon thickness ×</label><input type="range" id="ribbonMul" min="0.2" max="3" step="0.05"><span class="val" id="v_ribbonMul"></span></div>
+  <div class="row"><label>Smoothing</label><input type="range" id="ribbonSmooth" min="0" max="100" step="1"><span class="val" id="v_ribbonSmooth"></span></div>
+  <div class="chk"><input type="checkbox" id="marksOn"><label for="marksOn">Draw the marks too</label></div>
+  <div class="chk"><input type="checkbox" id="legend"><label for="legend">Size legend on canvas</label></div>
+
+  <h2>8 · Data / view</h2>
+  <div class="row"><label>Bucket (min per col)</label><input type="range" id="bucket" min="1" max="30" step="1"><span class="val" id="v_bucket"></span></div>
+  <div class="row"><label>Concentration</label><input type="range" id="conc" min="0" max="100" step="1"><span class="val" id="v_conc"></span></div>
+  <div class="row"><label>Noise</label><input type="range" id="noise" min="0" max="100" step="1"><span class="val" id="v_noise"></span></div>
+  <div class="chk"><input type="checkbox" id="showCandles"><label for="showCandles">Show candles</label></div>
+  <div class="chk"><input type="checkbox" id="splitView"><label for="splitView">Split view — live config (top) vs tuned (bottom)</label></div>
+
+  <h2>Config out</h2>
+  <div class="btns"><button id="copyCfg">Copy JSON</button><button id="copyPatch">Copy draw-block patch</button></div>
+  <pre id="cfgOut"></pre>
+</div>
+
+<!-- ───────────────────────── CANVAS ───────────────────────── -->
+<div class="main">
+  <div class="toolbar">
+    <span class="pill">ES · synthetic session</span>
+    <button id="reseed">Reseed data</button>
+    <button id="resetAll">Reset to live</button>
+    <span class="sp"></span>
+    <span class="pill" id="modeTag"></span>
+  </div>
+  <div class="cvwrap"><canvas id="cv"></canvas></div>
+  <div class="stats" id="stats"></div>
+</div>
+</div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════════
+   CONFIG — every knob, with the CURRENT live values as the baseline.
+   ════════════════════════════════════════════════════════════════════ */
+const LIVE = {
+  normMode:'expanding', rollWin:30, pctile:95, floorPct:15, stretch:false,
+  sizeCurve:'sqrt', sizeGamma:0.5, sizeSteps:5, minSize:0.5, maxSize:4, sizeJitter:0,
+  topStrikes:10, highlight:3, cutoff:0, rankMode:'peakSoFar',
+  brightness:84, opGamma:1, opMax:1, ageFade:0,
+  colorMix:0, colorGamma:1, satBoost:0, colorBySign:true,
+  glowMax:16, glowThresh:1, hiBoost:1.35, glowAll:false,
+  shape:'circle', shape2:'circle', shapeBySign:false, aspect:1, outlineW:0, coreDot:0,
+  rotate:0, xJitter:0, additive:false,
+  ribbon:'off', ribbonOp:35, ribbonMul:1, ribbonSmooth:60, marksOn:true, legend:true,
+  bucket:5, conc:55, noise:35, showCandles:true, splitView:false,
+};
+
+const PRESETS = {
+  current: {...LIVE},
+  variance: {...LIVE, normMode:'rolling', rollWin:24, stretch:false, sizeCurve:'pow', sizeGamma:1.5,
+    minSize:0.35, maxSize:7.5, cutoff:0.05, brightness:88, opGamma:1.8, colorMix:70,
+    colorGamma:1.7, glowMax:10, glowThresh:0.75, glowAll:true, topStrikes:14, highlight:3},
+  extreme: {...LIVE, normMode:'pctile', pctile:88, stretch:true, sizeCurve:'expo',
+    sizeGamma:2.6, minSize:0.35, maxSize:18, cutoff:0.1, brightness:92, opGamma:2.4,
+    colorMix:100, colorGamma:2.2, satBoost:25, glowMax:22, glowThresh:0.6, glowAll:true,
+    hiBoost:1.6, topStrikes:16, highlight:2, additive:true},
+  tube: {...LIVE, normMode:'expanding', sizeCurve:'sqrt', sizeGamma:0.5, minSize:1.2,
+    maxSize:5, bucket:1, topStrikes:12, highlight:4, brightness:80, shape:'capsule',
+    aspect:0.55, colorMix:35},
+  sparse: {...LIVE, normMode:'session', sizeCurve:'pow', sizeGamma:2.2, minSize:0.2,
+    maxSize:14, cutoff:0.18, topStrikes:24, highlight:2, brightness:90, opGamma:2.2,
+    colorMix:60, glowMax:18, glowThresh:0.65, glowAll:true},
+  ticks: {...LIVE, shape:'tick', normMode:'rolling', rollWin:24, sizeCurve:'pow',
+    sizeGamma:1.4, minSize:0.4, maxSize:9, aspect:0.35, bucket:5, topStrikes:14,
+    highlight:3, brightness:86, opGamma:1.6, colorMix:55, glowMax:8, glowThresh:0.8,
+    glowAll:true, cutoff:0.04},
+  ribbonp: {...LIVE, ribbon:'area', ribbonOp:45, ribbonMul:1.2, marksOn:false,
+    normMode:'rolling', rollWin:24, sizeCurve:'pow', sizeGamma:1.4, minSize:0.3,
+    maxSize:9, topStrikes:12, highlight:3, colorMix:60, bucket:3},
+  cells: {...LIVE, shape:'cell', normMode:'column', sizeCurve:'linear', minSize:0,
+    maxSize:1, opGamma:1.4, brightness:70, colorMix:80, colorGamma:1.4, topStrikes:20,
+    highlight:0, bucket:5, glowMax:0, cutoff:0.03},
+  signs: {...LIVE, shape:'triangle', shapeBySign:true, shape2:'triangle',
+    normMode:'rolling', rollWin:24, sizeCurve:'pow', sizeGamma:1.5, minSize:0.5,
+    maxSize:9, topStrikes:14, highlight:3, colorMix:65, opGamma:1.7, cutoff:0.05},
+};
+
+const cfg = {...LIVE};
+const IDS = Object.keys(LIVE);
+
+/* ══════════════════════════════════════════════════════════════════════
+   SYNTHETIC SESSION — 1-min per-strike net GEX, shaped like the real feed:
+   a couple of dominant walls that persist, a mid cluster that migrates, and
+   a long tail of small strikes. Deterministic PRNG so tuning is repeatable.
+   ════════════════════════════════════════════════════════════════════ */
+let SEED = 1337;
+function rng(){ SEED = (SEED*1664525 + 1013904223) >>> 0; return SEED / 4294967296; }
+function nrand(){ return (rng()+rng()+rng()+rng()-2)/2; }
+
+let DATA = null; // { strikes:[], mins:[{ts, cells:[{strike,v}]}], candles:[] }
+
+function buildData(){
+  SEED = 1337 + (buildData.bump||0);
+  const LO = 7715, HI = 7810, STEP = 2.5;
+  const strikes = [];
+  for (let s = LO; s <= HI; s += STEP) strikes.push(+s.toFixed(2));
+
+  const conc = cfg.conc/100;          // how dominant the walls are
+  const noiseAmp = cfg.noise/100;
+
+  // Walls: call wall high, put wall low, plus a few secondary shelves.
+  const callWall = 7773.75, putWall = 7753.75, flip = 7768.5;
+  const shelves = [
+    {k:callWall, w: 1.00, sign:+1},
+    {k:putWall,  w: 0.92, sign:-1},
+    {k:7783.0,   w: 0.55, sign:+1},
+    {k:7793.0,   w: 0.42, sign:+1},
+    {k:7745.0,   w: 0.48, sign:-1},
+    {k:7760.0,   w: 0.30, sign:-1},
+    {k:7800.0,   w: 0.22, sign:+1},
+    {k:7735.0,   w: 0.18, sign:-1},
+  ];
+
+  const N = 390; // 1-min bars 09:30 → 16:00
+  const t0 = Date.UTC(2026,7,7,13,30,0); // 09:30 ET
+  const mins = [], candles = [];
+  let px = 7762;
+  for (let i = 0; i < N; i++){
+    const ts = t0 + i*60000;
+    const frac = i/N;
+    // price walks toward the flip then bleeds to the put wall late (like the shot)
+    px += nrand()*1.6 + (flip - px)*0.004 + (frac>0.6 ? -0.06 : 0.02);
+    const o = px, c = px + nrand()*1.2;
+    candles.push({ts, o, h:Math.max(o,c)+Math.abs(nrand())*1.4, l:Math.min(o,c)-Math.abs(nrand())*1.4, c});
+    px = c;
+
+    const cells = [];
+    for (const k of strikes){
+      let v = 0;
+      for (const sh of shelves){
+        const d = Math.abs(k - sh.k);
+        const sig = 3 + 6*(1-conc);
+        const amp = Math.exp(-(d*d)/(2*sig*sig)) * sh.w;
+        // walls BUILD through the day; secondaries fade
+        const grow = sh.w > 0.8 ? (0.35 + 0.65*frac) : (0.9 - 0.4*frac);
+        v += sh.sign * amp * grow;
+      }
+      // long tail so there's something to be "small"
+      v += (k > flip ? 1 : -1) * Math.abs(nrand()) * 0.05 * (1-conc*0.6);
+      v += nrand() * 0.04 * noiseAmp;
+      // spike weight — this is what makes the top wall dwarf everything
+      const mag = Math.pow(Math.abs(v), 1 + conc*1.6) * 1e6;
+      if (mag > 1) cells.push({strike:k, v: Math.sign(v)*mag});
+    }
+    mins.push({ts, cells});
+  }
+  DATA = {strikes, mins, candles, lo:LO, hi:HI};
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   BUCKETING + NORMALIZATION — mirrors the real draw block, then adds the
+   alternate scale modes so their effect on VARIANCE is directly visible.
+   ════════════════════════════════════════════════════════════════════ */
+function bucketize(){
+  const ms = cfg.bucket*60000;
+  const by = new Map();
+  for (const m of DATA.mins) by.set(Math.floor(m.ts/ms)*ms, m); // last-in-bucket wins (live behavior)
+  return [...by.entries()].map(([ts,m]) => ({ts, cells:m.cells})).sort((a,b)=>a.ts-b.ts);
+}
+
+function quantile(arr, q){
+  if (!arr.length) return 0;
+  const a = [...arr].sort((x,y)=>x-y);
+  const i = Math.min(a.length-1, Math.max(0, Math.round((a.length-1)*q)));
+  return a[i];
+}
+
+function computeScales(cols){
+  const absOf = c => Math.abs(c.v);
+  let sessMax = 0;
+  for (const col of cols) for (const c of col.cells) sessMax = Math.max(sessMax, absOf(c));
+  const floor = sessMax * (cfg.floorPct/100);
+
+  const domain = new Map();   // ts -> divisor
+  const colStats = new Map(); // ts -> {min,max,mean,sd,sorted}
+  let acc = 0;
+  cols.forEach((col, i) => {
+    const vals = col.cells.map(absOf);
+    const cmax = vals.length ? Math.max(...vals) : 0;
+    const cmin = vals.length ? Math.min(...vals) : 0;
+    const mean = vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : 0;
+    const sd = vals.length ? Math.sqrt(vals.reduce((a,b)=>a+(b-mean)*(b-mean),0)/vals.length) : 1;
+    colStats.set(col.ts, {min:cmin, max:cmax, mean, sd: sd||1, vals});
+    acc = Math.max(acc, cmax);
+
+    let d;
+    switch(cfg.normMode){
+      case 'session':  d = sessMax; break;
+      case 'column':   d = cmax; break;
+      case 'rolling': {
+        let m = 0;
+        for (let j = Math.max(0, i-cfg.rollWin+1); j <= i; j++)
+          for (const c of cols[j].cells) m = Math.max(m, absOf(c));
+        d = m; break;
+      }
+      case 'pctile': {
+        const all = [];
+        for (let j = 0; j <= i; j++) for (const c of cols[j].cells) all.push(absOf(c));
+        d = quantile(all, cfg.pctile/100); break;
+      }
+      case 'rank':
+      case 'zscore':   d = cmax; break;
+      default:         d = acc; // expanding — the live behavior
+    }
+    domain.set(col.ts, Math.max(d, floor, 1));
+  });
+  return {sessMax, domain, colStats};
+}
+
+/* ratio 0..1 for one cell under the active scale mode */
+function ratioFor(cell, col, scales){
+  const a = Math.abs(cell.v);
+  const st = scales.colStats.get(col.ts);
+  let r;
+  if (cfg.normMode === 'rank'){
+    const sorted = [...st.vals].sort((x,y)=>y-x);
+    const idx = sorted.indexOf(a);
+    r = sorted.length > 1 ? 1 - idx/(sorted.length-1) : 1;
+  } else if (cfg.normMode === 'zscore'){
+    r = Math.max(0, Math.min(1, (a - st.mean)/(3*st.sd) + 0.15));
+  } else {
+    r = a / scales.domain.get(col.ts);
+  }
+  if (cfg.stretch && cfg.normMode !== 'rank'){
+    const lo = st.min / (scales.domain.get(col.ts)||1);
+    const hi = st.max / (scales.domain.get(col.ts)||1);
+    if (hi > lo) r = (r - lo) / (hi - lo);
+  }
+  return Math.max(0, Math.min(1, r));
+}
+
+/* size curve: ratio 0..1 → shaped 0..1 */
+function shape01(r){
+  const g = cfg.sizeGamma;
+  switch(cfg.sizeCurve){
+    case 'linear': return r;
+    case 'pow':    return Math.pow(r, g);
+    case 'log':    return Math.log1p(r*(Math.E*g)) / Math.log1p(Math.E*g);
+    case 'expo':   return (Math.exp(r*g*2) - 1) / (Math.exp(g*2) - 1);
+    case 'scurve': { const x = Math.pow(r, g); return x*x*(3-2*x); }
+    case 'step':   { const n = cfg.sizeSteps; return Math.round(Math.pow(r,g)*(n-1))/(n-1); }
+    default:       return Math.pow(r, 0.5*(g/0.5)*0.5 + 0.25*0); // sqrt, γ-tilted
+  }
+}
+function shapeSqrt(r){ return Math.sqrt(r); }
+
+/* strike selection, per rank mode */
+function selection(cols){
+  const shown = new Map(), walls = new Map();
+  if (cfg.rankMode === 'session'){
+    const peak = new Map();
+    for (const col of cols) for (const c of col.cells)
+      peak.set(c.strike, Math.max(peak.get(c.strike)||0, Math.abs(c.v)));
+    const ranked = [...peak.entries()].sort((a,b)=>b[1]-a[1]).map(e=>e[0]);
+    const s = new Set(ranked.slice(0, cfg.topStrikes)), w = new Set(ranked.slice(0, cfg.highlight));
+    for (const col of cols){ shown.set(col.ts, s); walls.set(col.ts, w); }
+    return {shown, walls};
+  }
+  const peakSoFar = new Map();
+  for (const col of cols){
+    if (cfg.rankMode === 'column') peakSoFar.clear();
+    for (const c of col.cells){
+      const a = Math.abs(c.v);
+      if (a > (peakSoFar.get(c.strike)||0)) peakSoFar.set(c.strike, a);
+    }
+    const ranked = [...peakSoFar.entries()].sort((a,b)=>b[1]-a[1]).map(e=>e[0]);
+    shown.set(col.ts, new Set(ranked.slice(0, cfg.topStrikes)));
+    walls.set(col.ts, new Set(ranked.slice(0, cfg.highlight)));
+  }
+  return {shown, walls};
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   RENDER
+   ════════════════════════════════════════════════════════════════════ */
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+let W = 0, H = 0;
+
+function resize(){
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(r.width*dpr); cv.height = Math.round(r.height*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  W = r.width; H = r.height;
+  draw();
+}
+window.addEventListener('resize', resize);
+
+function drawScene(cfgUse, y0, y1, label){
+  const saved = {...cfg};
+  Object.assign(cfg, cfgUse);
+
+  const cols = bucketize();
+  const scales = computeScales(cols);
+  const sel = selection(cols);
+
+  const padL = 8, padR = 70, top = y0 + 8, bot = y1 - 8;
+  const lo = DATA.lo, hi = DATA.hi;
+  const yOf = p => bot - ((p - lo)/(hi - lo))*(bot - top);
+  const t0 = DATA.mins[0].ts, t1 = DATA.mins[DATA.mins.length-1].ts;
+  const xOf = t => padL + ((t - t0)/(t1 - t0))*(W - padL - padR);
+
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, y0, W, y1-y0); ctx.clip();
+
+  // backdrop + grid
+  ctx.fillStyle = '#0b1016'; ctx.fillRect(0, y0, W, y1-y0);
+  ctx.strokeStyle = 'rgba(255,255,255,.04)'; ctx.lineWidth = 1;
+  for (let p = Math.ceil(lo/10)*10; p <= hi; p += 10){
+    const y = yOf(p); ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W-padR,y); ctx.stroke();
+    ctx.fillStyle = 'rgba(160,175,195,.45)'; ctx.font = '10px Inter,sans-serif';
+    ctx.fillText(p.toFixed(2), W-padR+6, y+3);
+  }
+
+  // candles
+  if (cfg.showCandles){
+    const bw = Math.max(1.4, (W-padL-padR)/DATA.candles.length*0.7);
+    for (const k of DATA.candles){
+      const x = xOf(k.ts), up = k.c >= k.o;
+      ctx.strokeStyle = up ? 'rgba(38,166,154,.55)' : 'rgba(239,83,80,.55)';
+      ctx.fillStyle   = up ? 'rgba(38,166,154,.45)' : 'rgba(239,83,80,.45)';
+      ctx.beginPath(); ctx.moveTo(x, yOf(k.h)); ctx.lineTo(x, yOf(k.l)); ctx.stroke();
+      const yo = yOf(k.o), yc = yOf(k.c);
+      ctx.fillRect(x-bw/2, Math.min(yo,yc), bw, Math.max(1, Math.abs(yc-yo)));
+    }
+  }
+
+  // ── mark geometry ────────────────────────────────────────────────────
+  // Every shape is drawn from one contract: centre (x,y), a half-size r, an
+  // aspect, and the slot it lives in (colW × rowH) for the shapes that fill it.
+  const BG = '#0b1016';
+  function path(sh, x, y, r, aspect, pos, colW, rowH){
+    const rw = Math.max(0.3, r*aspect), rh = Math.max(0.3, r);
+    switch(sh){
+      case 'oval':     ctx.ellipse(x, y, rw*1.9, rh*0.62, 0, 0, Math.PI*2); break;
+      case 'capsule':  ctx.ellipse(x, y, rw*0.5, rh*1.9, 0, 0, Math.PI*2); break;
+      case 'ring':
+      case 'donut':    ctx.arc(x, y, Math.max(0.4, r), 0, Math.PI*2); break;
+      case 'arc':      ctx.arc(x, y, Math.max(0.4, r*1.3), pos?Math.PI:0, pos?0:Math.PI); ctx.closePath(); break;
+      case 'comet':
+        ctx.moveTo(x, y-rh); ctx.quadraticCurveTo(x-colW*0.9, y-rh*0.25, x-colW*1.1, y);
+        ctx.quadraticCurveTo(x-colW*0.9, y+rh*0.25, x, y+rh);
+        ctx.arc(x, y, rh, Math.PI/2, -Math.PI/2, true); break;
+      case 'tick':     ctx.rect(x - Math.max(0.35, rw*0.35), y - rh*1.9, Math.max(0.7, rw*0.7), rh*3.8); break;
+      case 'hline':    ctx.rect(x - colW*0.5, y - Math.max(0.35, rh*0.4), colW, Math.max(0.7, rh*0.8)); break;
+      case 'bar':      ctx.rect(x - rw*1.9, y - Math.max(0.4, rh*0.5), rw*3.8, Math.max(0.8, rh)); break;
+      case 'pill': {
+        const w2 = rw*2.2, h2 = Math.max(0.9, rh*0.95), rad = Math.min(h2/2, w2/2);
+        ctx.moveTo(x-w2+rad, y-h2/2);
+        ctx.arcTo(x+w2, y-h2/2, x+w2, y+h2/2, rad);
+        ctx.arcTo(x+w2, y+h2/2, x-w2, y+h2/2, rad);
+        ctx.arcTo(x-w2, y+h2/2, x-w2, y-h2/2, rad);
+        ctx.arcTo(x-w2, y-h2/2, x+w2, y-h2/2, rad);
+        ctx.closePath(); break;
+      }
+      case 'cell':     ctx.rect(x - colW*0.5, y - rowH*0.5, Math.max(1, colW), Math.max(1, rowH)); break;
+      case 'ladder': { // tapered rung: thick at the centre, feathered at the ends
+        const w2 = colW*0.55;
+        ctx.moveTo(x-w2, y); ctx.quadraticCurveTo(x, y-rh, x+w2, y);
+        ctx.quadraticCurveTo(x, y+rh, x-w2, y); break;
+      }
+      case 'wick':
+        ctx.rect(x - Math.max(0.3, rw*0.18), y - rh*2.2, Math.max(0.6, rw*0.36), rh*4.4);
+        ctx.moveTo(x+rw*0.8, y); ctx.arc(x, y, Math.max(0.4, rw*0.8), 0, Math.PI*2); break;
+      case 'diamond':
+        ctx.moveTo(x, y-rh*1.3); ctx.lineTo(x+rw*1.3, y);
+        ctx.lineTo(x, y+rh*1.3); ctx.lineTo(x-rw*1.3, y); ctx.closePath(); break;
+      case 'square':   ctx.rect(x-rw, y-rh, rw*2, rh*2); break;
+      case 'hex': {
+        for (let i=0;i<6;i++){ const a = Math.PI/6 + i*Math.PI/3;
+          const px = x + Math.cos(a)*rw*1.15, py = y + Math.sin(a)*rh*1.15;
+          i ? ctx.lineTo(px,py) : ctx.moveTo(px,py); } ctx.closePath(); break;
+      }
+      case 'triangle': {
+        const d = pos ? -1 : 1;
+        ctx.moveTo(x, y + d*rh*1.5); ctx.lineTo(x+rw*1.3, y - d*rh*0.9);
+        ctx.lineTo(x-rw*1.3, y - d*rh*0.9); ctx.closePath(); break;
+      }
+      case 'chevron': {
+        const d = pos ? -1 : 1, t = Math.max(0.6, rh*0.5);
+        ctx.moveTo(x-rw*1.4, y - d*rh*0.7); ctx.lineTo(x, y + d*rh*0.8);
+        ctx.lineTo(x+rw*1.4, y - d*rh*0.7); ctx.lineTo(x+rw*1.4, y - d*rh*0.7 + d*t);
+        ctx.lineTo(x, y + d*rh*0.8 + d*t); ctx.lineTo(x-rw*1.4, y - d*rh*0.7 + d*t);
+        ctx.closePath(); break;
+      }
+      case 'cross': {
+        const t = Math.max(0.5, r*0.34);
+        ctx.rect(x-rw*1.4, y-t/2, rw*2.8, t); ctx.rect(x-t/2, y-rh*1.4, t, rh*2.8); break;
+      }
+      case 'star': {
+        for (let i=0;i<10;i++){ const a = -Math.PI/2 + i*Math.PI/5, rr2 = i%2 ? r*0.42 : r*1.5;
+          const px = x + Math.cos(a)*rr2*aspect, py = y + Math.sin(a)*rr2;
+          i ? ctx.lineTo(px,py) : ctx.moveTo(px,py); } ctx.closePath(); break;
+      }
+      default:         ctx.ellipse(x, y, rw, rh, 0, 0, Math.PI*2);
+    }
+  }
+
+  function drawMark(sh, x, y, r, fill, base, op, pos, colW, rowH){
+    if (sh === 'soft'){
+      const g = ctx.createRadialGradient(x, y, 0, x, y, Math.max(0.5, r*1.7));
+      g.addColorStop(0, fill); g.addColorStop(0.45, fill.replace(/[\d.]+\)$/, (op*0.45)+')'));
+      g.addColorStop(1, fill.replace(/[\d.]+\)$/, '0)'));
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r*1.7, 0, Math.PI*2); ctx.fill();
+      return;
+    }
+    const rot = cfg.rotate * Math.PI/180;
+    if (rot){ ctx.save(); ctx.translate(x,y); ctx.rotate(rot); ctx.translate(-x,-y); }
+    ctx.beginPath();
+    path(sh, x, y, r, cfg.aspect, pos, colW, rowH);
+    if (sh === 'ring'){
+      ctx.lineWidth = Math.max(0.6, r*0.35); ctx.strokeStyle = fill; ctx.stroke();
+    } else {
+      ctx.fillStyle = fill; ctx.fill();
+      if (cfg.outlineW > 0){
+        ctx.lineWidth = cfg.outlineW;
+        ctx.strokeStyle = `rgba(255,255,255,${Math.min(0.9, op*0.75)})`;
+        ctx.stroke();
+      }
+    }
+    if (sh === 'donut'){
+      const keep = ctx.shadowBlur; ctx.shadowBlur = 0;
+      ctx.beginPath(); ctx.arc(x, y, Math.max(0.2, r*0.45), 0, Math.PI*2);
+      ctx.fillStyle = BG; ctx.fill(); ctx.shadowBlur = keep;
+    } else if (cfg.coreDot > 0 && r > 1){
+      const keep = ctx.shadowBlur; ctx.shadowBlur = 0;
+      ctx.beginPath(); ctx.arc(x, y, r*(cfg.coreDot/100), 0, Math.PI*2);
+      ctx.fillStyle = `rgba(255,255,255,${Math.min(1, op+0.25)})`; ctx.fill();
+      ctx.shadowBlur = keep;
+    }
+    if (rot) ctx.restore();
+  }
+
+  // ── bubbles ──
+  const sizeSpan = cfg.maxSize - cfg.minSize;
+  const b01 = Math.max(0, Math.min(1, cfg.brightness/100));
+  const minOp = Math.max(0.05, 1 - b01);
+  let drawn = 0, rMin = 1e9, rMax = 0, rSum = 0, rr = [];
+
+  const colW = Math.max(1.2, (W - padL - padR) / Math.max(1, cols.length));
+  const rowH = Math.max(1.2, Math.abs(yOf(lo) - yOf(lo + 2.5)));
+  const marks = [];
+
+  ctx.save();
+  if (cfg.additive) ctx.globalCompositeOperation = 'lighter';
+  let ji = 0;
+  cols.forEach((col, ci) => {
+    const x0 = xOf(col.ts);
+    if (x0 < -30 || x0 > W+30) return;
+    const shown = sel.shown.get(col.ts), wall = sel.walls.get(col.ts);
+    const age = 1 - ci/Math.max(1, cols.length-1); // 1 = oldest
+    for (const cell of col.cells){
+      if (!shown.has(cell.strike)) continue;
+      const r01 = ratioFor(cell, col, scales);
+      if (r01 < cfg.cutoff) continue;
+      const y = yOf(cell.strike);
+      if (y < y0-20 || y > y1+20) continue;
+      const isHi = wall.has(cell.strike);
+
+      const shaped = cfg.sizeCurve === 'sqrt' ? shapeSqrt(Math.pow(r01, cfg.sizeGamma/0.5)) : shape01(r01);
+      let r = cfg.minSize + shaped * sizeSpan;
+      if (isHi) r *= cfg.hiBoost;
+      if (cfg.sizeJitter) { ji = (ji*1103515245+12345)>>>0; r *= 1 + ((ji/4294967296)-0.5)*2*(cfg.sizeJitter/100); }
+      if (r < 0.12) continue;
+
+      let op = minOp + Math.pow(r01, cfg.opGamma) * (cfg.opMax - minOp);
+      if (isHi) op = cfg.opMax;
+      op *= 1 - (cfg.ageFade/100)*age;
+      op = Math.max(0.02, Math.min(1, op));
+
+      const pos = cell.v >= 0 || !cfg.colorBySign;
+      const base = pos ? [41,182,246] : [255,71,87];
+      const hot  = pos ? [200,245,255] : [255,205,210];
+      const mix  = Math.min(1, (cfg.colorMix/100) * Math.pow(r01, cfg.colorGamma)) ;
+      let col3 = isHi
+        ? hot
+        : base.map((b,i) => Math.round(b + (hot[i]-b)*mix));
+      if (cfg.satBoost){
+        const s = cfg.satBoost/100, mean = (col3[0]+col3[1]+col3[2])/3;
+        col3 = col3.map(c => Math.max(0, Math.min(255, Math.round(mean + (c-mean)*(1+s)))));
+      }
+
+      let x = x0;
+      if (cfg.xJitter){ ji = (ji*1103515245+12345)>>>0; x += ((ji/4294967296)-0.5)*2*cfg.xJitter; }
+
+      marks.push({x, y, r, op, col3, base, isHi, pos, strike: cell.strike, ci, r01,
+                  glow: cfg.glowAll ? (r01 >= cfg.glowThresh ? cfg.glowMax*Math.min(1,r01) : 0)
+                                    : (isHi ? cfg.glowMax : 0)});
+      drawn++; rMin = Math.min(rMin, r); rMax = Math.max(rMax, r); rSum += r; rr.push(r);
+    }
+  });
+
+  // ── ribbons: connect the same strike across time into a band whose
+  // half-thickness IS the bubble radius. Turns the dot trail into a tube that
+  // visibly swells and tapers — variance you read as shape, not as dot size.
+  if (cfg.ribbon !== 'off'){
+    const byStrike = new Map();
+    for (const m of marks){
+      if (!byStrike.has(m.strike)) byStrike.set(m.strike, []);
+      byStrike.get(m.strike).push(m);
+    }
+    const alpha = cfg.ribbonOp/100, sm = cfg.ribbonSmooth/100;
+    for (const [, pts] of byStrike){
+      if (pts.length < 2) continue;
+      pts.sort((a,b)=>a.x-b.x);
+      const t = pts.map(p => Math.max(0.25, p.r*cfg.ribbonMul));
+      const c = pts[Math.floor(pts.length/2)].col3;
+      // gentle 3-tap smoothing so the band reads as a tube, not a comb
+      const ts = t.map((v,i)=>{
+        const a = t[Math.max(0,i-1)], b = t[Math.min(t.length-1,i+1)];
+        return v*(1-sm) + ((a+v+b)/3)*sm;
+      });
+      if (cfg.ribbon === 'band' || cfg.ribbon === 'area' || cfg.ribbon === 'step'){
+        ctx.beginPath();
+        if (cfg.ribbon === 'step'){
+          pts.forEach((p,i)=>{ i ? ctx.lineTo(p.x, p.y-ts[i]) : ctx.moveTo(p.x, p.y-ts[i]);
+                               if (i<pts.length-1) ctx.lineTo(pts[i+1].x, p.y-ts[i]); });
+          for (let i=pts.length-1;i>=0;i--){ ctx.lineTo(pts[i].x, pts[i].y+ts[i]);
+                               if (i>0) ctx.lineTo(pts[i-1].x, pts[i].y+ts[i]); }
+        } else {
+          pts.forEach((p,i)=> i ? ctx.lineTo(p.x, p.y-ts[i]) : ctx.moveTo(p.x, p.y-ts[i]));
+          for (let i=pts.length-1;i>=0;i--) ctx.lineTo(pts[i].x, pts[i].y+ts[i]);
+        }
+        ctx.closePath();
+        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${alpha})`;
+        ctx.fill();
+      }
+      if (cfg.ribbon === 'line' || cfg.ribbon === 'area'){
+        ctx.beginPath();
+        pts.forEach((p,i)=> i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+        ctx.lineWidth = cfg.ribbon === 'line' ? Math.max(0.8, cfg.ribbonMul*1.6) : 1;
+        ctx.strokeStyle = `rgba(${c[0]},${c[1]},${c[2]},${Math.min(1, alpha+0.35)})`;
+        ctx.stroke();
+      }
+    }
+  }
+
+  // ── marks ──
+  if (cfg.marksOn){
+    for (const m of marks){
+      ctx.shadowBlur = m.glow;
+      ctx.shadowColor = `rgba(${m.base[0]},${m.base[1]},${m.base[2]},0.95)`;
+      const sh = (cfg.shapeBySign && !m.pos) ? cfg.shape2 : cfg.shape;
+      drawMark(sh, m.x, m.y, m.r,
+        `rgba(${m.col3[0]},${m.col3[1]},${m.col3[2]},${m.op})`, m.base, m.op, m.pos, colW, rowH);
+      ctx.shadowBlur = 0;
+    }
+  }
+  ctx.restore();
+
+  // ── size legend ──
+  if (cfg.legend && rMax > 0){
+    const ys = y1 - 22, xs = 14;
+    ctx.save();
+    ctx.fillStyle = 'rgba(8,12,18,.75)';
+    ctx.fillRect(xs-8, ys-24, 260, 34);
+    ctx.strokeStyle = 'rgba(255,255,255,.10)'; ctx.strokeRect(xs-8, ys-24, 260, 34);
+    [0.05,0.2,0.4,0.6,0.8,1].forEach((q,i)=>{
+      const shaped = cfg.sizeCurve === 'sqrt' ? shapeSqrt(Math.pow(q, cfg.sizeGamma/0.5)) : shape01(q);
+      const r = Math.max(0.3, cfg.minSize + shaped*sizeSpan);
+      const x = xs + 18 + i*40;
+      ctx.fillStyle = `rgba(41,182,246,${(minOp + Math.pow(q,cfg.opGamma)*(cfg.opMax-minOp)).toFixed(2)})`;
+      drawMark(cfg.shape, x, ys-8, r, ctx.fillStyle, [41,182,246], 1, true, 26, rowH);
+      ctx.fillStyle = 'rgba(160,175,195,.7)'; ctx.font = '9px Inter,sans-serif';
+      ctx.fillText(r.toFixed(1), x-6, ys+6);
+    });
+    ctx.fillStyle = 'rgba(160,175,195,.7)'; ctx.font = '9px Inter,sans-serif';
+    ctx.fillText('px', xs-2, ys-6);
+    ctx.restore();
+  }
+
+  // label
+  if (label){
+    ctx.fillStyle = 'rgba(255,255,255,.55)'; ctx.font = '11px Inter,sans-serif';
+    ctx.fillText(label, 10, y0 + 16);
+  }
+  ctx.restore();
+
+  Object.assign(cfg, saved);
+  const mean = drawn ? rSum/drawn : 0;
+  const sd = drawn ? Math.sqrt(rr.reduce((a,b)=>a+(b-mean)*(b-mean),0)/drawn) : 0;
+  return {drawn, rMin: drawn?rMin:0, rMax, mean, sd, cv: mean ? sd/mean : 0, cols: cols.length};
+}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  let s;
+  if (cfg.splitView){
+    const mid = Math.floor(H/2);
+    drawScene({...LIVE, bucket:cfg.bucket, conc:cfg.conc, noise:cfg.noise, showCandles:cfg.showCandles}, 0, mid, 'LIVE CONFIG');
+    ctx.strokeStyle = 'rgba(255,255,255,.12)';
+    ctx.beginPath(); ctx.moveTo(0,mid); ctx.lineTo(W,mid); ctx.stroke();
+    s = drawScene(cfg, mid, H, 'TUNED');
+  } else {
+    s = drawScene(cfg, 0, H, '');
+  }
+  document.getElementById('stats').innerHTML =
+    `columns <b>${s.cols}</b>` +
+    `<span>bubbles <b>${s.drawn}</b></span>` +
+    `<span>radius <b>${s.rMin.toFixed(2)}–${s.rMax.toFixed(2)}px</b></span>` +
+    `<span>mean <b>${s.mean.toFixed(2)}px</b></span>` +
+    `<span>σ <b>${s.sd.toFixed(2)}</b></span>` +
+    `<span>variance index (σ/mean) <b style="color:${s.cv>0.55?'#4ade80':s.cv>0.3?'#f5c518':'#ff4757'}">${s.cv.toFixed(3)}</b></span>` +
+    `<span style="color:#6b7889">higher = more size spread</span>`;
+  document.getElementById('modeTag').textContent =
+    `${cfg.normMode} · ${cfg.sizeCurve} γ${cfg.sizeGamma} · ${cfg.minSize}–${cfg.maxSize}px`;
+  document.getElementById('cfgOut').textContent = JSON.stringify(cfg, null, 2);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   WIRING
+   ════════════════════════════════════════════════════════════════════ */
+function syncUI(){
+  for (const id of IDS){
+    const el = document.getElementById(id);
+    if (!el) continue;
+    if (el.type === 'checkbox') el.checked = !!cfg[id];
+    else el.value = cfg[id];
+    const v = document.getElementById('v_'+id);
+    if (v) v.textContent = typeof cfg[id] === 'number' ? (Number.isInteger(cfg[id]) ? cfg[id] : cfg[id].toFixed(2)) : cfg[id];
+  }
+}
+for (const id of IDS){
+  const el = document.getElementById(id);
+  if (!el) continue;
+  el.addEventListener('input', () => {
+    cfg[id] = el.type === 'checkbox' ? el.checked
+            : el.tagName === 'SELECT' ? el.value
+            : parseFloat(el.value);
+    const v = document.getElementById('v_'+id);
+    if (v) v.textContent = typeof cfg[id] === 'number' ? (Number.isInteger(cfg[id]) ? cfg[id] : cfg[id].toFixed(2)) : cfg[id];
+    if (id === 'conc' || id === 'noise') buildData();
+    draw();
+  });
+}
+document.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => {
+  Object.assign(cfg, PRESETS[b.dataset.preset]); syncUI(); buildData(); draw();
+}));
+document.getElementById('reseed').onclick = () => { buildData.bump = (buildData.bump||0)+7; buildData(); draw(); };
+document.getElementById('resetAll').onclick = () => { Object.assign(cfg, LIVE); syncUI(); buildData(); draw(); };
+document.getElementById('copyCfg').onclick = () =>
+  navigator.clipboard.writeText(JSON.stringify(cfg, null, 2));
+document.getElementById('copyPatch').onclick = () => navigator.clipboard.writeText(
+`// EsChartCard.tsx — bubble draw block
+// normalization : ${cfg.normMode}${cfg.stretch ? ' + per-column stretch' : ''}${cfg.normMode==='rolling'?` (win ${cfg.rollWin})`:''}${cfg.normMode==='pctile'?` (p${cfg.pctile})`:''}
+// domain floor  : ${cfg.floorPct}% of sessMax
+// size          : ${cfg.sizeCurve}(ratio, γ=${cfg.sizeGamma}) → ${cfg.minSize}..${cfg.maxSize}px, cutoff ${cfg.cutoff}
+// opacity       : minOp = max(0.1, 1 - ${cfg.brightness}/100); op = minOp + ratio^${cfg.opGamma} * (${cfg.opMax} - minOp)
+// color         : mix ${cfg.colorMix}% toward hot, γ=${cfg.colorGamma}, sat ${cfg.satBoost>0?'+':''}${cfg.satBoost}%
+// glow          : ${cfg.glowAll?`all bubbles with ratio ≥ ${cfg.glowThresh}`:'walls only'}, blur ${cfg.glowMax}px
+// mark          : ${cfg.shape}${cfg.shapeBySign?` (puts: ${cfg.shape2})`:''}, aspect ${cfg.aspect}, rot ${cfg.rotate}°, outline ${cfg.outlineW}, core ${cfg.coreDot}%, xJitter ${cfg.xJitter}px${cfg.additive?', additive blend':''}
+// ribbon        : ${cfg.ribbon}${cfg.ribbon!=='off'?` — opacity ${cfg.ribbonOp}%, thickness ×${cfg.ribbonMul}, smoothing ${cfg.ribbonSmooth}%, marks ${cfg.marksOn?'on':'off'}`:''}
+// strikes       : top ${cfg.topStrikes}, highlight ${cfg.highlight} (${cfg.rankMode}), wall boost ${cfg.hiBoost}×
+BUBBLE_CFG_DEFAULT = { topStrikes: ${cfg.topStrikes}, highlight: ${cfg.highlight}, minSize: ${cfg.minSize}, maxSize: ${cfg.maxSize}, brightness: ${cfg.brightness} };`
+);
+
+syncUI(); buildData(); resize();
+</script>
+</body>
+</html>
