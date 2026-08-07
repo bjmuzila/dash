@@ -38,7 +38,33 @@
  */
 
 const WebSocket = require('ws');
-const { fetchChain, fetchUnderlyingQuotes, getQuoteToken } = require('../proxy-tastytrade');
+
+// Resolve proxy-tastytrade wherever this happens to be running from. A relative
+// require breaks when the script is piped in on stdin — node resolves against
+// "<cwd>/[stdin]", so "../proxy-tastytrade" becomes "/proxy-tastytrade" — and
+// stdin is exactly how you'd run this on a box that hasn't pulled the file yet.
+const PROXY_CANDIDATES = [
+  '../proxy-tastytrade',
+  '/app/server-v2/proxy-tastytrade',
+  `${process.cwd()}/server-v2/proxy-tastytrade`,
+  `${process.cwd()}/proxy-tastytrade`,
+  './proxy-tastytrade',
+];
+function loadProxy() {
+  const tried = [];
+  for (const p of PROXY_CANDIDATES) {
+    try { return require(p); } catch (e) {
+      // Only swallow "this path doesn't exist" — a throw from INSIDE the module
+      // must surface, not be mistaken for a bad path and hidden behind the next
+      // candidate.
+      if (!e || e.code !== 'MODULE_NOT_FOUND' || !String(e.message).includes(p)) throw e;
+      tried.push(p);
+    }
+  }
+  throw new Error(`could not locate proxy-tastytrade.js — tried:\n  ${tried.join('\n  ')}\nSet PROXY_PATH=<absolute path> and re-run.`);
+}
+const proxyMod = process.env.PROXY_PATH ? require(process.env.PROXY_PATH) : loadProxy();
+const { fetchChain, fetchUnderlyingQuotes, getQuoteToken } = proxyMod;
 
 const SECONDS = Number(process.env.PROBE_SECONDS || 35);
 const N_CONTRACTS = Number(process.env.PROBE_CONTRACTS || 10);

@@ -1,210 +1,152 @@
 # Changelog
 
-## 2026-08-07 - Bubble Lab: 22 mark shapes, ribbons, and per-mark styling (`lab/bubble-lab.html`)
+## 2026-08-07 - Options flow: the /flow tape was persisting ~3% of SPX 0DTE
 
-Follow-up to the harness added earlier today. Size and opacity are only two of
-the channels a bubble can vary on — the mark's *form* is a third, and on a dense
-1-min trail it carries more signal than radius does. Section 7 of the lab is now
-a full mark library plus a connect-across-time mode.
+Diagnosed from production: `flow_prints` was taking ~3 rows/min for SPX while the
+server's own `[FLOW_DEBUG]` counter showed the tape creating ~170 above-floor
+orders/min. The chart's long flat stretches and vertical cliffs were both
+downstream of that.
 
-- **22 marks**, grouped in the picker:
-  - *Round* — circle (live), wide oval, tall capsule, ring (stroke only), donut
-    (hollow core), soft radial glow, half-arc (opens up for +GEX / down for −),
-    comet (tail trailing into the past).
-  - *Linear* — vertical tick, horizontal line, bar growing from the column,
-    rounded pill, heat cell (fills the bucket × strike slot — a true heatmap
-    look), wick + dot, tapered ladder rung.
-  - *Angular* — diamond, square, hexagon, triangle (points up for calls, down
-    for puts), cross, star burst, chevron.
-- **Per-mark styling** — aspect (w/h), rotation, outline width, white core-dot
-  %, x-jitter.
-- **Second shape for puts** — `shapeBySign` + a `shape2` picker, so +GEX and
-  −GEX read apart by form as well as by hue (useful when the chart is printed
-  or when the blue/red distinction is doing too much work).
-- **Ribbon mode (7b)** — connects the same strike across time into a band whose
-  half-thickness IS the bubble radius, so a wall renders as one tube that swells
-  and tapers instead of a row of dots. Modes: off / variable-width band /
-  centre line / band + line / stepped band, with opacity, thickness multiplier,
-  and a 3-tap smoothing slider. `marksOn` toggles whether the dots still draw
-  on top.
-- **On-canvas size legend** — the active mark rendered at ratios
-  0.05/0.2/0.4/0.6/0.8/1.0 with the resulting px radius under each, so the
-  compression at the top of the curve is visible directly rather than inferred
-  from the variance index.
-- **Four new presets** — Ticks, Ribbons, Heat cells, Triangles. Reference
-  variance-index scores on the synthetic session: Current (live) 0.21,
-  Heat cells 0.42, High variance 0.49, Triangles 0.48, Ticks 0.56.
-- The copied draw-block patch now emits the mark and ribbon settings alongside
-  the numeric config.
+### The mechanism
 
-Still **no app code changed** — `EsChartCard.tsx` is untouched.
+`FlowProcessor` coalesces fills into one order for `FLOW_COALESCE_MS` (5s) and
+keeps the order's `ts` at its **first** fill. `bucket()` only exposes an order
+once its accumulated premium clears `FLOW_TAPE_FLOOR`. Ordinary SPX 0DTE orders
+open small and grow — so the writer first *sees* them seconds after their `ts`.
 
-## 2026-08-07 - GEX Bubble Lab: standalone tuning harness for bubble variance (`lab/bubble-lab.html`)
+`writeFlowTape`'s cutoff was `newest written ts − 500ms`. Every late-crossing
+order was therefore already below the cutoff the first time it was visible, and
+was silently skipped forever. Only prints big enough to clear the floor on their
+**first** fill were persisted.
 
-The ES Candles bubble trail reads as uniform dots — on a live session the drawn
-radii span only ~2.8-5.4px (variance index sigma/mean = 0.21), so a wall and a
-tail strike look nearly identical. The cause is stacked in the draw block:
-`sqrt(ratio)` compresses the top of the range, the expanding session-max divisor
-plus the 15%-of-sessMax floor keeps `ratio` bunched high, and the size span is
-only 3.5px wide (`minSize 0.5` -> `maxSize 4`).
+That is why the burst minutes looked like flow and weren't: a chain-wide dxLink
+`Trade` snapshot (one synthetic print per strike, 2600–9800 at spot 7736, ~261
+strikes sharing ~15 millisecond timestamps) is a set of single large prints, each
+born above the floor — so those sailed through while the real order flow didn't.
 
-**No app code was changed.** This is a standalone, dependency-free HTML harness
-for finding the right numbers before touching `EsChartCard.tsx`.
+Simulated against the real module over 60 ticks of a 500ms loop:
 
-- **`lab/bubble-lab.html`** — single file, open it in a browser. Renders a
-  synthetic 390-minute ES session (persistent call/put walls, a migrating mid
-  cluster, a long tail) through a reimplementation of the real draw block, with
-  every axis of variation exposed as a slider:
-  - **Normalization** — expanding session max (current live), fixed session max,
-    per-column max, rolling window, percentile clip, rank-within-column,
-    z-score; plus the domain floor % and a per-column stretch toggle.
-  - **Size curve** — sqrt / linear / pow / log / exponential / smoothstep /
-    quantized steps, gamma, min+max px, size jitter.
-  - **Strike selection** — top N, highlight N, ratio cutoff, rank mode
-    (peak-so-far / per-column / whole-session).
-  - **Opacity** — brightness, opacity gamma, max opacity, age fade.
-  - **Color** — ramp toward the hot color, color gamma, saturation boost,
-    hue-by-sign toggle.
-  - **Glow** — max blur, threshold, wall boost, glow-for-all vs walls-only.
-  - **Shape** — circle / capsule / bar / diamond / ring / soft radial, aspect,
-    x-jitter, additive blending.
-  - **Data** — bucket size, wall concentration, noise, candles on/off.
-- **Variance index (sigma/mean of drawn radii)** in the status bar, so a setting
-  can be judged by a number instead of by eye. Baseline live config scores
-  ~0.21; the shipped "High variance" preset scores ~0.49.
-- **Presets** — Current (live), High variance, Extreme, Tube/rail, Sparse walls.
-- **Split view** — live config on top vs the tuned config below, same data.
-- **Copy JSON / Copy draw-block patch** — emits the tuned numbers as a comment
-  block plus a `BUBBLE_CFG_DEFAULT` line ready to paste.
+    born-above-floor persisted : 60/60   (both versions)
+    late-crossing    persisted : 0/54    before  ->  54/54 after
 
-Findings so far, in order of effect on spread: the divisor (rolling/percentile
-beats expanding), the size curve exponent (pow gamma ~1.5 beats sqrt), then the
-px span. Opacity and color gamma add perceived variance without changing radii.
+### `server-v2/state/flow-history-writer.js`
 
-## 2026-08-07 - Options flow: prints arrived in one lump per replay, not per print
+- **Flush cursor keys off `lastFillAt`, not `ts`.** New field on each tape entry,
+  stamped from the local clock on create and on every coalesced fill, so it is
+  monotonic in ARRIVAL order regardless of what the print timestamps do.
+- **Look-back widened from 500ms to a full coalescing window** (`FLOW_COALESCE_MS`
+  + 1s margin), so an order still merging fills is re-upserted until it settles.
+- **The INSERT is chunked at 500 rows.** Postgres rejects any query over 65535
+  bind parameters; at 16 params/row a single statement caps out at 4095 rows.
+  Above-floor tape entries are never evicted while under `FLOW_TAPE_CAP`, so any
+  flush from a cold cursor — first tick after a restart, or any tick after a
+  failed write left the cursor un-advanced — hands in the whole session. Verified
+  against the deployed file, which fails outright:
 
-`/flow` was showing an hour of tape at once — the Net Drift line sat flat from
-~10:10, then moved vertically in a single bar at 11:00 (SPX calls +$28M →
-−$808.9K in one 1-minute bin), and the volume histogram had a matching hole.
-Three separate faults, stacked.
+      [flow-history] write failed (will retry next tick): bind message supplies
+      144000 parameters, but prepared statement requires 65535
 
-### 1. The print's exchange timestamp was thrown away — `server-v2/proxy-tastytrade.js`
-
-`FEED_SETUP` has always asked dxLink for `TimeAndSale.time`, and
-`_handleFeedData` parsed it into `ev.time` — but the `TimeAndSale` branch of
-`_onEvent` never passed it to `addPrint`, which then defaulted to `Date.now()`.
-Fine while prints trickle in live; wrong the moment dxFeed hands over a batch
-(it replays a contract's recent tape whenever a subscription is established).
-Every print in the batch got the same *ingest* stamp, so an hour of flow
-collapsed into one 1-minute bin. That is the flat-then-vertical chart exactly.
-
-- **New `stampFlowTime(evTime, now)`** — returns the exchange time when it is
-  finite, positive, no more than `FLOW_TS_MAX_SKEW_MS` (60s) ahead of us, and no
-  older than `FLOW_TS_MAX_AGE_MS` (24h); otherwise falls back to the ingest
-  clock. The age bound is deliberately a whole trading day: legitimately old
-  replays *do* arrive and must be kept — it exists only to stop an epoch-0 or
-  garbage value from stretching the chart axis back to 1970.
-- Both `addPrint` calls in the `TimeAndSale` branch (SPX and the TT-multiflow
-  root path) now pass `time`.
-- `Trade`-fed prints are unchanged — that event carries no `time` field.
-
-### 2. Non-SPX flow could be dead for a whole session — `server-v2/proxy-tastytrade.js`
-
-`DxLinkClient.subscribeTimeSales()` returned silently when `channelOpen` was
-false, unlike `subscribe()`, which queues into `this.pending`. `start()` fires
-`_startTtMultiFlow()` immediately after `client.connect()` — well before the
-SETUP → AUTH → CHANNEL_REQUEST → CHANNEL_OPENED handshake finishes — and
-`_subscribeTtFlowRoot()` wrote every symbol into `ttFlowContracts` regardless.
-So the request was dropped, the map still said "subscribed", and the 5-minute
-refresh found nothing `fresh` and never retried. Those roots streamed **zero**
-prints for the life of the process. SPX escaped it only because
-`_syncTimeSaleWindow` re-runs on the 2s recompute loop.
-
-- `subscribeTimeSales()` / `unsubscribeTimeSales()` now **queue** into
-  `this.pending` (marked `__ts`) and **return a boolean**: true = it reached the
-  wire, false = queued. `CHANNEL_OPENED` flushes them as `TimeAndSale`, kept
-  distinct from the regular Quote/Greeks/Summary/Trade fan-out and from
-  `__candle`. A queued unsubscribe cancels the matching queued add rather than
-  pairing with it.
-- **`ttFlowContracts` is written after the subscribe, and only for symbols that
-  actually went out.** Anything queued stays out of the map and is retried.
-- `_subscribeTtFlowRoot()` bails while `channelOpen` is false, and
-  `_startTtMultiFlow()` `await`s the new **`_awaitChannelOpen()`** (250ms poll,
-  30s cap) first. This matters more than it looks: a symbol subscribed via the
-  queue but missing from `ttFlowContracts` would fall through to the SPX branch
-  of `_onEvent` and be tagged with **SPX's spot**, corrupting `isOtm` for that
-  whole root. Better to wait and subscribe once, correctly.
-- `_syncTimeSaleWindow()` only records `_tsSubs` when the call returns true, so
-  the bookkeeping no longer depends on a `channelOpen` check made elsewhere.
-
-### 3. Replayed rows never reached Postgres — `server-v2/state/flow-history-writer.js`
-
-This one had to move with fix 1 or fix 1 would have made things *worse*. The
-flush cursor keyed off the tape entry's `ts` and skipped anything below
-`lastFlushedTs − 500ms`. Once `ts` became exchange time, a replayed batch was by
-definition below that cutoff — the prints would show in the live WS tape and
-never be persisted, so the chart (which reads `flow_prints`) would stay flat
-permanently.
-
-- Cursor now keys off **`lastFillAt`** — a new field on each tape entry
-  (`server-v2/computation/flow-processor.js`), stamped from the local clock on
-  create and on every coalesced fill. Monotonic in *arrival* order whatever the
-  exchange times do. Entries predating this change fall back to `ts`.
-- Look-back widened from 500ms to one full coalescing window
-  (`FLOW_COALESCE_MS`, default 5000, + 1s margin). This **also fixes a
-  pre-existing silent undercount**: an order that kept merging fills for seconds
-  held its original `ts`, drifted below the old cutoff on a busy tape, and its
-  accumulated size/premium were never re-upserted.
+  The catch swallows it as "will retry next tick", the cursor never advances, and
+  every later tick rebuilds the same oversized statement. Permanent, silent.
+  Production `bucketTape` was 4153 when this was found — already past the line.
+  `backfillFlowRows()` directly below has always chunked at 500.
 
 ### `server-v2/computation/flow-processor.js`
 
 - New `lastFillAt` on every tape entry (see above).
-- Coalescing window is now `Math.abs(time - anchorTs) <= coalesceMs`. With
-  exchange timestamps a replayed batch can hand us a print marginally *older*
-  than the open order's anchor; the old `time - anchorTs` went negative and
-  passed the test by accident. `abs()` is what "fills within coalesceMs of each
-  other" always meant.
+- `@param time` is now the print's exchange timestamp when the feed supplies one.
+- Coalescing window is `Math.abs(time - anchorTs) <= coalesceMs`. With exchange
+  timestamps a replayed batch can hand us a print marginally older than the open
+  order's anchor; the old `time - anchorTs` went negative and passed the test by
+  accident.
 
-### Late-arriving bins are actually re-read — `server-v2/server-with-proxy.js` + `components/pages/Flow.tsx`
+### `server-v2/proxy-tastytrade.js` — prints carry their exchange time
 
-`/proxy/flow-netprem`'s incremental refresh re-scanned 3 bins back **from the
-last populated bin**. Replayed prints land minutes behind that, and the bin
-cache is otherwise append-only, so they'd stay invisible until the entry was
-evicted — the chart would keep drawing a gap the table had already filled.
+`FEED_SETUP` has always requested `TimeAndSale.time` and `_handleFeedData` parsed
+it into `ev.time`, but the handler dropped it and let `addPrint` default to
+`Date.now()`. Fine for live prints; wrong for a replayed batch, where every print
+gets the same ingest stamp and an hour of tape collapses into one 1-minute bin —
+the vertical cliffs on the Net Drift chart. Production confirms it: the first
+minute of each burst held 265 rows across just **15** distinct `ts`.
+
+- **New `stampFlowTime()`** — takes the exchange time when it is finite, positive,
+  ≤ `FLOW_TS_MAX_SKEW_MS` (60s) ahead and ≤ `FLOW_TS_MAX_AGE_MS` (24h) old; falls
+  back to the ingest clock otherwise. The age bound is a full trading day on
+  purpose: genuinely old replays must be kept, the bound only stops an epoch-0 or
+  garbage value stretching the chart axis back to 1970.
+- Both `addPrint` calls in the `TimeAndSale` branch pass `time`. `Trade`-fed
+  prints are unchanged — that event carries no `time` field.
+
+### `server-v2/proxy-tastytrade.js` — TimeAndSale subs survive the pre-open window
+
+`DxLinkClient.subscribeTimeSales()` returned silently when `channelOpen` was
+false, unlike `subscribe()`, which queues. `start()` fires `_startTtMultiFlow()`
+right after `client.connect()`, and `_subscribeTtFlowRoot()` recorded symbols in
+`ttFlowContracts` regardless — so the request was dropped, the map claimed
+"subscribed", and the 5-minute refresh found nothing fresh and never retried.
+Those roots streamed nothing for the life of the process.
+
+- `subscribeTimeSales()` / `unsubscribeTimeSales()` queue into `this.pending`
+  (marked `__ts`) and return a boolean: true = sent, false = queued.
+  `CHANNEL_OPENED` flushes them as `TimeAndSale`, kept distinct from the regular
+  Quote/Greeks/Summary/Trade fan-out and from `__candle`. A queued unsubscribe
+  cancels its matching queued add rather than pairing with it.
+- `ttFlowContracts` is written **after** the subscribe, only for symbols that
+  went out. Queued ones stay out of the map and are retried.
+- `_subscribeTtFlowRoot()` bails while the channel is closed and
+  `_startTtMultiFlow()` awaits the new **`_awaitChannelOpen()`** (250ms poll, 30s
+  cap). A symbol subscribed via the queue but missing from `ttFlowContracts`
+  would fall through to the SPX branch of `_onEvent` and be tagged with SPX's
+  spot, corrupting `isOtm` for the whole root.
+- `_syncTimeSaleWindow()` only records `_tsSubs` when the call returns true.
+
+### Late bins are actually re-read — `server-v2/server-with-proxy.js` + `components/pages/Flow.tsx`
+
+`/proxy/flow-netprem`'s incremental refresh re-scanned 3 bins back from the last
+populated bin. Late rows land minutes behind that and the bin cache is otherwise
+append-only, so they stayed invisible until eviction.
 
 - New `NETPREM_LATE_MS` (default 15 min, env-overridable); `sinceMs` is now
   `min(3-bin overlap, now − NETPREM_LATE_MS)`. Still an index-only scan on
-  `flow_prints_netprem_covering_idx`, not a full-session GROUP BY.
-- `Flow.tsx` gains the matching `NET_LATE_SEC = 15 * 60` on its own `?since=`.
-  Required, not cosmetic: the endpoint filters its response to `sec >= since`,
-  so a narrow client `since` would discard exactly the bins the server just went
-  and re-read. The two constants must be kept in step.
+  `flow_prints_netprem_covering_idx`.
+- `Flow.tsx` gains a matching `NET_LATE_SEC = 15 * 60` on its own `?since=`.
+  Required, not cosmetic: the endpoint filters its response to `sec >= since`, so
+  a narrow client `since` discards exactly the bins the server just re-read. Keep
+  the two constants in step.
 
 ### Verification — `server-v2/flow-print-time.selftest.js` (NEW)
 
-`node server-v2/flow-print-time.selftest.js` — 29 assertions, no network and no
-database (the writer runs against a stub `pg`; `DxLinkClient` is lifted out of
-`proxy-tastytrade.js` and driven with a fake socket, since requiring that module
-outright dials out). Every one of these was confirmed **failing** against the
-pre-change files first:
+`node server-v2/flow-print-time.selftest.js` — 32 assertions, no network and no
+database (the writer runs against a stub `pg`; `DxLinkClient` and
+`stampFlowTime` are lifted out of `proxy-tastytrade.js` by name and driven with a
+fake socket, since requiring that module dials out). Each was confirmed
+**failing** against the deployed files first:
 
-- `stampFlowTime` bounds: 45-min-old exchange time kept; undefined / 0 / NaN /
-  negative / far-future / pre-1970 all fall back; 30s skew tolerated.
-- `FlowProcessor`: 60 prints delivered in one burst with exchange times a minute
-  apart land in **60 distinct minutes** (pre-change: 1 — the reported bug).
-  Coalescing, out-of-order merge, window boundary and `lastFillAt` all covered.
-- `flow-history-writer`: an hour-old replayed batch is written (pre-change:
-  dropped); a still-merging order is re-upserted (pre-change: dropped); a
-  long-settled row is *not* re-written every tick; an entry with no
-  `lastFillAt` falls back to `ts`; independent cursors stay independent.
-- `DxLinkClient` driven with a fake socket: pre-open subs queue and flush on
-  `CHANNEL_OPENED` as `TimeAndSale` only (pre-change: silently discarded);
-  regular/candle/TS queues stay separated; queued unsubscribe cancels its add;
-  500-symbol chunking intact.
+- Floor-crossing simulation over 60 ticks — 0/54 before, 54/54 after.
+- 9000-row cold flush is chunked, not rejected at 65535 params.
+- 60 prints delivered in one burst with exchange times a minute apart land in 60
+  distinct minutes (before: 1 — the reported bug).
+- `stampFlowTime` bounds; coalescing, out-of-order merge, window boundary,
+  `lastFillAt`.
+- An hour-old replayed batch is written; a still-merging order is re-upserted; a
+  settled row is not re-written every tick; cursors stay independent.
+- Pre-open TimeAndSale subs queue and flush on `CHANNEL_OPENED`; queues stay
+  separated; 500-symbol chunking intact.
 
-The suite reads `stampFlowTime` and `DxLinkClient` out of the source text by
-name, so renaming or inlining either one fails the test loudly rather than
-quietly checking a stale copy.
+Reading `stampFlowTime` and `DxLinkClient` out of the source by name means
+renaming or inlining either fails the test loudly rather than checking a stale
+copy.
+
+### Still open
+
+- **Chain-wide `Trade` snapshots are ingested as flow prints.** Every strike from
+  2600 to 9800 lands in the tape as a "print" whenever the chain is subscribed.
+  These are last-trade snapshots, not trades, and they inflate the tape and the
+  premium split. The `Trade` branch of `_onEvent` needs to ignore snapshot events
+  (or the flow tape needs to be TimeAndSale-only).
+- **`sessionCallPremium` / `sessionPutPremium` are permanently 0** on
+  `DATA_SOURCE=tt`. They are only incremented inside the Theta `onTrade` handler,
+  so whatever card reads them is dead in the current mode.
 
 
 ## 2026-08-07 - ICT: inducement no longer draws a play

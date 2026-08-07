@@ -159,54 +159,70 @@ async function writeFlowTape(tape, cursor = 'spx') {
 
     const date = todayYmdET();
     const cols = 16;
-    const values = [];
-    const params = [];
-    let i = 0;
+    // CHUNKED — Postgres refuses any query with more than 65535 bind parameters,
+    // so at 16 params per row a single INSERT tops out at 4095 rows. This used to
+    // build ONE statement for the whole batch, and the batch is not always small:
+    // the tape holds every above-floor order of the session (they're never
+    // evicted while under FLOW_TAPE_CAP), so any flush that starts from a cold
+    // cursor — first tick after a restart, or any tick after a failed write left
+    // the cursor un-advanced — hands the full set straight in. Past ~4095 orders
+    // that throws `bind message supplies N parameters`, the catch below logs it
+    // as "will retry next tick", the cursor never advances, and every subsequent
+    // tick rebuilds the same oversized statement and fails identically. Silent,
+    // permanent, and it only starts once the session is busy enough to matter.
+    // backfillFlowRows() below has always chunked at 500 for this exact reason.
+    const CHUNK = 500; // 500 * 16 = 8000 params, well clear of the ceiling
     let maxFillAt = lastFlushedAt;
-    for (const o of fresh) {
-      const ts = Number(o.ts);
-      if (!Number.isFinite(ts)) continue;
-      const fillAt = fillAtOf(o);
-      if (Number.isFinite(fillAt) && fillAt > maxFillAt) maxFillAt = fillAt;
-      const ph = [];
-      for (let c = 0; c < cols; c++) ph.push(`$${++i}`);
-      values.push(`(${ph.join(',')})`);
-      params.push(
-        ts,
-        date,
-        String(o.symbol ?? ''),
-        o.underlying ?? null,
-        o.expiration ?? null,
-        Number.isFinite(Number(o.strike)) ? Number(o.strike) : null,
-        o.type ?? null,
-        String(o.side ?? ''),
-        o.action ?? null,
-        o.bucket ?? null,
-        Number.isFinite(Number(o.price)) ? Number(o.price) : null,
-        Number.isFinite(Number(o.size)) ? Math.round(Number(o.size)) : null,
-        Number.isFinite(Number(o.premium)) ? Number(o.premium) : null,
-        typeof o.isOtm === 'boolean' ? o.isOtm : null,
-        o.underlying != null ? String(o.underlying).toUpperCase() : null,
-        Number.isFinite(Number(o.spot)) && Number(o.spot) > 0 ? Number(o.spot) : null,
+    for (let start = 0; start < fresh.length; start += CHUNK) {
+      const slice = fresh.slice(start, start + CHUNK);
+      const values = [];
+      const params = [];
+      let i = 0;
+      for (const o of slice) {
+        const ts = Number(o.ts);
+        if (!Number.isFinite(ts)) continue;
+        const fillAt = fillAtOf(o);
+        if (Number.isFinite(fillAt) && fillAt > maxFillAt) maxFillAt = fillAt;
+        const ph = [];
+        for (let c = 0; c < cols; c++) ph.push(`$${++i}`);
+        values.push(`(${ph.join(',')})`);
+        params.push(
+          ts,
+          date,
+          String(o.symbol ?? ''),
+          o.underlying ?? null,
+          o.expiration ?? null,
+          Number.isFinite(Number(o.strike)) ? Number(o.strike) : null,
+          o.type ?? null,
+          String(o.side ?? ''),
+          o.action ?? null,
+          o.bucket ?? null,
+          Number.isFinite(Number(o.price)) ? Number(o.price) : null,
+          Number.isFinite(Number(o.size)) ? Math.round(Number(o.size)) : null,
+          Number.isFinite(Number(o.premium)) ? Number(o.premium) : null,
+          typeof o.isOtm === 'boolean' ? o.isOtm : null,
+          o.underlying != null ? String(o.underlying).toUpperCase() : null,
+          Number.isFinite(Number(o.spot)) && Number(o.spot) > 0 ? Number(o.spot) : null,
+        );
+      }
+      if (!values.length) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await p.query(
+        `INSERT INTO flow_prints
+           (ts, date, symbol, underlying, expiration, strike, type, side, action, bucket, price, size, premium, is_otm, underlying_norm, spot)
+         VALUES ${values.join(', ')}
+         ON CONFLICT (ts, symbol, side) DO UPDATE SET
+           size = EXCLUDED.size,
+           price = EXCLUDED.price,
+           premium = EXCLUDED.premium,
+           action = EXCLUDED.action,
+           bucket = EXCLUDED.bucket,
+           is_otm = EXCLUDED.is_otm,
+           underlying_norm = EXCLUDED.underlying_norm,
+           spot = COALESCE(EXCLUDED.spot, flow_prints.spot)`,
+        params
       );
     }
-    if (!values.length) return;
-
-    await p.query(
-      `INSERT INTO flow_prints
-         (ts, date, symbol, underlying, expiration, strike, type, side, action, bucket, price, size, premium, is_otm, underlying_norm, spot)
-       VALUES ${values.join(', ')}
-       ON CONFLICT (ts, symbol, side) DO UPDATE SET
-         size = EXCLUDED.size,
-         price = EXCLUDED.price,
-         premium = EXCLUDED.premium,
-         action = EXCLUDED.action,
-         bucket = EXCLUDED.bucket,
-         is_otm = EXCLUDED.is_otm,
-         underlying_norm = EXCLUDED.underlying_norm,
-         spot = COALESCE(EXCLUDED.spot, flow_prints.spot)`,
-      params
-    );
     lastFlushedByCursor.set(cursor, maxFillAt);
   } catch (e) {
     console.warn('[flow-history] write failed (will retry next tick):', e.message);
