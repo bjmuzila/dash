@@ -5,10 +5,26 @@
  * Runs as app-vite's `prebuild`, so `npm run build` (local AND the Docker
  * deploy) fails LOUDLY when:
  *   1) app-vite/src/App.tsx imports a page file that doesn't exist (a deleted
- *      page like /greeks — this is what broke the last deploy), or
+ *      page like /greeks — this is what broke a deploy), or
  *   2) a customer toolbar nav item (GlobalToolbar NAV_ITEMS) points at an
  *      in-app route that has no matching <Route> in App.tsx — i.e. it would
- *      redirect to /traders-dashboard.
+ *      redirect to /traders-dashboard, or
+ *   3) ANY module reachable from App.tsx imports a local file that isn't there.
+ *
+ * WHY 3 EXISTS. Check 1 only looks at App.tsx's OWN imports, one level deep.
+ * Deleting app/test/DexCharmTab.tsx sailed past this guard and then failed the
+ * Docker build two minutes later, because the dangling import lived in
+ * components/pages/TestLab.tsx — four hops down the graph. Rollup catches
+ * these, but only after npm install and a full Next build have already run on
+ * the VPS. Check 3 is the same check, statically, in a fraction of a second.
+ *
+ * Run `node app-vite/scripts/check-routes.mjs --dry` to see the walk without
+ * failing anything.
+ *
+ * One deliberate difference from Rollup: `import type { X } from './gone'` is
+ * checked here even though esbuild erases it and the bundle would build. The
+ * file still doesn't exist, tsc still fails on it, and `next build` runs with
+ * type validation skipped — so it would otherwise ship silently.
  *
  * The repo is a Next.js app with a Vite SPA sub-build (app-vite/) serving the
  * customer dashboard at /app/*. A new dashboard page needs BOTH a client
@@ -74,6 +90,109 @@ for (const { href, block } of navItems) {
   if (!routePaths.has(href)) errors.push('Toolbar nav item "' + href + '" has no <Route path="' + href + '"> in app-vite/src/App.tsx — it will redirect to /traders-dashboard. Add the route (client-component page) or remove the item.');
 }
 
+// ---- (3) the WHOLE graph reachable from App.tsx must resolve ----
+//
+// Deliberately NOT a parser. A regex over import/export-from specifiers answers
+// "does this path exist", which is the entire question. The cost of a FALSE
+// POSITIVE here is a build that fails for no reason, so two things guard
+// against it: comments are stripped first (a commented-out `import('./Old')`
+// used to be the obvious trap), and only specs that are unambiguously local —
+// '@/…' or './…' — are ever reported. Bare specifiers are node_modules or the
+// three next/* shims aliased in vite.config.ts, and are skipped untouched.
+const SOURCE_EXT = /\.(tsx?|jsx?|mjs)$/;
+
+/**
+ * Blank out comments so a commented-out import can't be mistaken for a real
+ * one. Replaces them with spaces rather than deleting, so nothing on either
+ * side of a comment can be glued into a new token. Quote-aware, because
+ * `const s = "// not a comment"` and a URL's `https://…` both otherwise eat the
+ * rest of the line.
+ */
+function stripComments(src) {
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i], d = src[i + 1];
+    if (c === '/' && d === '/') {
+      while (i < n && src[i] !== '\n') { out += ' '; i++; }
+      continue;
+    }
+    if (c === '/' && d === '*') {
+      while (i < n && !(src[i] === '*' && src[i + 1] === '/')) { out += src[i] === '\n' ? '\n' : ' '; i++; }
+      out += '  '; i += 2;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') {
+      const quote = c;
+      out += c; i++;
+      while (i < n) {
+        if (src[i] === '\\') { out += src[i] + (src[i + 1] ?? ''); i += 2; continue; }
+        out += src[i];
+        if (src[i] === quote) { i++; break; }
+        i++;
+      }
+      continue;
+    }
+    out += c; i++;
+  }
+  return out;
+}
+
+function specsIn(raw) {
+  const src = stripComments(raw);
+  const out = new Set();
+  //  import x from 'y' · import 'y' · import type {a} from 'y'
+  for (const m of src.matchAll(/^\s*import\s+(?:[\s\S]*?\s+from\s+)?['"]([^'"]+)['"]/gm)) out.add(m[1]);
+  //  export {a} from 'y' · export * from 'y'
+  for (const m of src.matchAll(/^\s*export\s+[\s\S]*?\s+from\s+['"]([^'"]+)['"]/gm)) out.add(m[1]);
+  //  await import('y') · lazy(() => import('y')).  Template literals are NOT
+  //  matched — a computed path isn't statically checkable and guessing is worse
+  //  than skipping.
+  for (const m of src.matchAll(/\bimport\(\s*['"]([^'"]+)['"]\s*\)/g)) out.add(m[1]);
+  return out;
+}
+
+/** Resolve a local spec the way Vite would. Returns a path, or null. */
+function resolveLocal(spec, fromDir) {
+  const base = spec.startsWith('@/') ? join(ROOT, spec.slice(2)) : join(fromDir, spec);
+  // An explicit extension ('./x.css', './x.json') resolves as written.
+  if (/\.[a-z0-9]+$/i.test(base) && existsSync(base)) return base;
+  for (const ext of ['.tsx', '.ts', '.jsx', '.js', '.mjs',
+                     '/index.tsx', '/index.ts', '/index.jsx', '/index.js']) {
+    if (existsSync(base + ext)) return base + ext;
+  }
+  return existsSync(base) ? base : null;
+}
+
+const seen = new Set();
+const queue = [appTsxPath];
+const dangling = [];
+while (queue.length) {
+  const file = queue.pop();
+  if (seen.has(file)) continue;
+  seen.add(file);
+  let raw;
+  try { raw = readFileSync(file, 'utf8'); } catch { continue; }
+  const dir = dirname(file);
+  for (const spec of specsIn(raw)) {
+    if (!spec.startsWith('@/') && !spec.startsWith('.')) continue;
+    const hit = resolveLocal(spec, dir);
+    if (!hit) { dangling.push({ from: file.slice(ROOT.length + 1), spec }); continue; }
+    // Follow source only. A resolved .css / .json / image is a leaf.
+    if (SOURCE_EXT.test(hit)) queue.push(hit);
+  }
+}
+
+if (DRY) {
+  console.log('  walked ' + seen.size + ' modules from App.tsx; ' + dangling.length + ' dangling import(s)');
+  for (const d of dangling) console.log('    MISSING ' + d.spec + '  (from ' + d.from + ')');
+}
+for (const d of dangling) {
+  errors.push(d.from + ' imports "' + d.spec + '" but that file does not exist. '
+    + 'Remove the import and whatever used it, or restore the file.');
+}
+
 if (DRY) process.exit(0);
 if (errors.length) {
   console.error('');
@@ -84,4 +203,5 @@ if (errors.length) {
   console.error('');
   process.exit(1);
 }
-console.log('OK Vite route check passed — every toolbar item has a route and every App.tsx page import resolves.');
+console.log('OK Vite route check passed — every toolbar item has a route, and all '
+  + seen.size + ' modules reachable from App.tsx resolve every local import.');

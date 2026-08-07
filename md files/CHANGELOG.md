@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-08-07 - Build fix: TestLab still imported the deleted DexCharmTab (v8.6.23 / v8.7.1 deploys)
+
+Both deploys died at the same step, after the full Next build had already run:
+
+    [vite:load-fallback] Could not load /app/app/test/DexCharmTab
+      (imported by ../components/pages/TestLab.tsx)
+
+`app/test/DexCharmTab.tsx` was `git rm`'d, and its tab entry was removed from
+`app/test/page.tsx` — but `components/pages/TestLab.tsx` is a SECOND host for the same
+tabs, and it still imported and rendered it.
+
+### `components/pages/TestLab.tsx`
+- Dropped the `DexCharmTab` import and its render branch.
+- Removed `"dexcharm"` from the `TestTab` union. This matters as much as the branch:
+  `setTab(id as TestTab)` casts a string straight out of a `TESTLAB_TAB_EVENT`, so a
+  stale `#dex-charm` link would otherwise still select a tab that renders nothing.
+- Checked the other two files deleted in v8.6.23 — `components/pages/Premarket.tsx` and
+  `app/app/premarket/route.ts`. No references remain in `app-vite/src/App.tsx`,
+  `components/scanner/scannerNav.ts` or `TestLab.tsx`.
+
+### Why the guard didn't catch it — `app-vite/scripts/check-routes.mjs`
+
+The route check passed ("OK Vite route check passed") on both failed deploys, because
+check 1 only looked at `App.tsx`'s OWN imports, one level deep. The dangling import was
+four hops down the graph. So a 2-minute Docker build was the first thing to notice.
+
+Added **check 3: every module reachable from `App.tsx` must resolve every local import.**
+
+- BFS from `App.tsx` following static imports, `export … from`, and string-literal
+  dynamic `import()`. Resolves `@/…` against the repo root and `./…` relatively, trying
+  the same extensions Vite does. Non-source leaves (`.css`, `.json`, images) resolve and
+  stop.
+- Only unambiguously local specs (`@/…`, `./…`) are ever reported — bare specifiers are
+  node_modules or the three `next/*` shims aliased in `vite.config.ts`.
+- **Comments are stripped first**, quote-aware, so a commented-out
+  `// lazy(() => import('./Old'))`, a JSDoc block quoting an import, a `"https://…"`
+  string and a `"// import Fake"` literal can't produce a phantom failure. Template-literal
+  dynamic imports are skipped — a computed path isn't statically checkable and guessing is
+  worse than not looking.
+- One deliberate difference from Rollup: `import type { X } from './gone'` IS flagged,
+  even though esbuild erases it. The file still doesn't exist, and `next build` runs with
+  type validation skipped, so it would otherwise ship silently.
+- `node app-vite/scripts/check-routes.mjs --dry` prints the walk and the module count
+  without failing anything.
+
+Validated against a fixture reproducing the repo's real import shapes: it passes clean
+code (JSDoc-quoted imports, commented-out lazy routes, `//` inside strings, css, type-only
+imports, `export … from`, extensionless `@/` specs) and fails on the actual DexCharmTab
+import, on a deletion four hops down, and on a toolbar item with no route.
+
 ## 2026-08-07 - budget.cbedge.net Money page: the bottom cards collapse
 
 Everything from "Due within 10 days" down was reference material — bills you already know
