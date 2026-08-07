@@ -301,7 +301,13 @@ export type BudgetBriefing = {
   tone: 'good' | 'warn' | 'bad'
   verdict: string
   sub: string
+  /** Cash on hand — the last logged bank balance. NOT the month's projected
+   *  ending balance; `coming` and `owed` are applied ON TOP of this, so if it
+   *  ever became a projection every figure here would double-count. */
   inBank: number
+  /** ISO day the bank balance was logged. Null = nothing logged, so this fell
+   *  back to the month's beginning balances. */
+  bankAsOf: string | null
   /** Pay still expected this month. Counted as available, which is what stops
    *  the 1st of the month reading as a disaster every single month. */
   coming: number
@@ -318,7 +324,16 @@ export type BudgetMonth = {
   month: string
   today: string
   currency: string
+  /** The register's per-bank RUNNING total after every line in the month,
+   *  projected occurrences included. This is where the month ends up, not what
+   *  is in the bank — for that use `bankNow` / `inBank`. */
   balances: Record<Bank, number>
+  /** Cash on hand, per bank: the last logged daily balance, falling back to the
+   *  month's beginning balances. */
+  bankNow: Record<Bank, number>
+  inBank: number
+  /** ISO day `bankNow` was logged; null when it fell back to beginning. */
+  bankAsOf: string | null
   beginning: Record<Bank, number | null> | null
   totals: { income: number; expenses: number; net: number; endingBalance: number }
   rows: BudgetRow[]
@@ -335,8 +350,17 @@ export type BudgetMonth = {
 
 export type MoneySummary = {
   currency: string
+  /** Cash on hand per bank — NOT the month's projection. */
   balances: Record<Bank, number>
+  /** Cash on hand, combined. This is the "Bank balance" figure on Today. */
   total: number
+  /** ISO day that figure was logged; null = falling back to the month's
+   *  beginning balances, which is worth saying out loud on the strip. */
+  asOf: string | null
+  /** Where the month ends up once every scheduled bill and paycheque lands.
+   *  Deliberately a separate field — Today used to show this as "Bank
+   *  balance". */
+  projectedEom: number
   net: number
   /** Last seven days. Derived server-side from the same `week` array the Money
    *  page charts, so the two surfaces cannot disagree about the same week. */

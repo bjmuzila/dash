@@ -9,9 +9,14 @@
 //
 // "Net GEX Rate / min" replaced the old CPG (call/put gamma) ratio tile: the
 // ratio described the shape of the book, but not how fast it was changing.
-// The rate is $B of gamma-per-1%-move added (+) or pulled (−) per minute, and
+// The rate is $M of gamma-per-1%-move added (+) or pulled (−) per minute, and
 // it is derived here rather than passed in — the rail already keeps the GEX
 // history the calculation needs.
+//
+// Note the unit split across the rail: the GEX/DEX level tiles are billions,
+// this one is millions. A per-minute slice of the book is far smaller than the
+// book itself, so sharing the billions unit would round almost every reading to
+// zero. Its meter is percentile-scaled for the same reason — see rateScale.
 //
 // Each tile also carries a 15-minute change line under its value. That line is
 // driven by a per-tile ring buffer of one-minute samples (see useDelta15m) —
@@ -296,16 +301,19 @@ const fmtB = (v: number) => `${v >= 0 ? "+" : "−"}$${Math.abs(v).toFixed(2)}B`
 const fmtDex = (v: number) => `${v >= 0 ? "+" : "−"}$${Math.abs(v).toFixed(2)}B`;
 const fmtPct = (v: number) => `${v.toFixed(0)}%`;
 const fmtIb = (v: number) => `${v >= 50 ? "▲ " : "▼ "}${v.toFixed(0)}%`;
-// Net GEX rate — $B of gamma-per-1% per minute. Two decimals would read as
-// noise at this magnitude, so sub-0.01B/m collapses to a flat zero rather than
-// flickering between ±0.00.
-const fmtRate = (v: number) =>
-  Math.abs(v) < 0.005 ? "0.00B/m" : `${v >= 0 ? "+" : "−"}$${Math.abs(v).toFixed(2)}B/m`;
+// Net GEX rate — $M of gamma-per-1% per minute. Whole millions: the sub-million
+// digit is feed jitter, and a fixed unit keeps the tile width from twitching as
+// the value ticks.
+const fmtRate = (v: number) => {
+  const m = Math.round(Math.abs(v));
+  if (m === 0) return "0M/m";
+  return `${v >= 0 ? "+" : "−"}$${m.toLocaleString("en-US")}M/m`;
+};
 
 // Unsigned magnitudes for the change line — the ▲/▼ carries the sign.
 const fmtAbsB = (v: number) => `$${v.toFixed(2)}B`;
 const fmtAbsPct = (v: number) => `${v.toFixed(0)}%`;
-const fmtAbsRate = (v: number) => `$${v.toFixed(2)}B/m`;
+const fmtAbsRate = (v: number) => `$${Math.round(v).toLocaleString("en-US")}M/m`;
 
 export interface HomeGaugeRailProps {
   /** Vol-only 0DTE gamma as a share of total gamma, 0–100. */
@@ -393,8 +401,13 @@ export default function HomeGaugeRail({
     return gex - ref.gex;
   })();
 
-  // Net GEX RATE — how fast dealer gamma is being added or pulled, in $B of
+  // Net GEX RATE — how fast dealer gamma is being added or pulled, in $M of
   // gamma-per-1%-move per MINUTE. Replaces the old CPG ratio tile.
+  //
+  // MILLIONS, not billions: a per-minute slice of Net GEX is ~2-3 orders of
+  // magnitude smaller than the Net GEX level beside it. In billions a normal
+  // minute reads "+$0.02B/m" — two decimals of resolution for the whole tile,
+  // so ordinary activity rounds to 0.00 and the number looks dead.
   //
   // Δ is taken against the newest sample at least MIN_RATE_SPAN_MS old and no
   // older than MAX_RATE_SPAN_MS, then normalised to a per-minute figure by the
@@ -418,7 +431,8 @@ export default function HomeGaugeRail({
     const ref = atOrBefore.length ? atOrBefore[atOrBefore.length - 1] : eligible[0];
     const spanMs = now - ref.ts;
     if (!(spanMs >= MIN_RATE_SPAN_MS)) return null;
-    return (gex - ref.gex) / (spanMs / MINUTE_MS);
+    // history carries gex in BILLIONS; ×1000 emits the rate in millions/min.
+    return ((gex - ref.gex) / (spanMs / MINUTE_MS)) * 1000;
   })();
 
   // Self-scaling for the signed greek meters (today's max |value|).
@@ -433,19 +447,46 @@ export default function HomeGaugeRail({
     ...history.map((p, i) => (i > 0 ? Math.abs(p.gex - history[i - 1].gex) : 0)),
     Math.abs(gexChg ?? 0),
   );
-  // Rate meter scale: today's fastest observed per-minute move, floored so a
-  // quiet tape doesn't make normal noise swing the needle end to end. Samples
-  // are 15s-bucketed, so each consecutive pair is scaled up to per-minute before
-  // being considered.
+  // Rate meter scale, in millions/min — the value that pegs the meter.
+  //
+  // p99 of today's per-minute moves rather than the raw max, so one absurd print
+  // can't define the whole scale, floored so a dead tape doesn't turn feed noise
+  // into a full-scale swing.
   const rateScale = (() => {
-    let peak = 0;
+    const moves: number[] = [];
     for (let i = 1; i < history.length; i++) {
       const spanMs = history[i].ts - history[i - 1].ts;
       if (spanMs < 5_000) continue;
-      const perMin = Math.abs(history[i].gex - history[i - 1].gex) / (spanMs / MINUTE_MS);
-      if (Number.isFinite(perMin)) peak = Math.max(peak, perMin);
+      const perMin = (Math.abs(history[i].gex - history[i - 1].gex) / (spanMs / MINUTE_MS)) * 1000;
+      // Drop exact zeros — long flat stretches (pre-open, lunch) would otherwise
+      // drag the percentile down and make the meter peg on any tick at all.
+      if (Number.isFinite(perMin) && perMin > 0) moves.push(perMin);
     }
-    return Math.max(0.1, peak, Math.abs(gexRate ?? 0));
+    let p99 = 0;
+    if (moves.length) {
+      moves.sort((a, b) => a - b);
+      p99 = moves[Math.min(moves.length - 1, Math.floor(moves.length * 0.99))];
+    }
+    return Math.max(50, p99, Math.abs(gexRate ?? 0));
+  })();
+
+  // Rate meter position — SQUARE-ROOT compressed, unlike every other tile here.
+  //
+  // This is the fix for "only one bar either side was ever lit". Per-minute GEX
+  // moves are heavily tailed: a calm minute and an open/headline burst differ by
+  // two orders of magnitude. Under the linear mapping the other tiles use, ANY
+  // scale large enough to show the burst leaves every ordinary minute inside the
+  // first segment — which is exactly what the meter did all day.
+  //
+  // sqrt spreads that range over the meter: 1% of scale still lights a segment,
+  // 25% reaches halfway, and only a genuine full-scale burst pegs it. The level
+  // tiles (GEX/DEX) stay linear — their values don't span decades, so linear is
+  // both truthful and readable there.
+  const rateT = (() => {
+    if (gexRate == null || !Number.isFinite(gexRate) || !(rateScale > 0)) return null;
+    const frac = clamp(Math.abs(gexRate) / rateScale, 0, 1);
+    const mag = Math.sqrt(frac) / 2;
+    return clamp(0.5 + (gexRate >= 0 ? mag : -mag), 0, 1);
   })();
 
   // One ring buffer per tile, keyed by label. Feeds the change line only — the
@@ -466,7 +507,7 @@ export default function HomeGaugeRail({
     { label: LABELS.gamma, value: gex, t: signedT(gex, gexScale), midT: 0.5, kind: "signed", color: gex == null ? CYAN : gex >= 0 ? POS : NEG, fmt: fmtB, scale: gexScale, fmtAbs: fmtAbsB, delta15m: delta15m[LABELS.gamma] },
     { label: LABELS.delta, value: dex, t: signedT(dex, dexScale), midT: 0.5, kind: "signed", color: dex == null ? CYAN : dex >= 0 ? POS : NEG, fmt: fmtDex, scale: dexScale, fmtAbs: fmtAbsB, delta15m: delta15m[LABELS.delta] },
     { label: LABELS.gammaPct, value: gammaPctVol, t: gammaPctVol == null ? null : clamp(gammaPctVol / 100, 0, 1), midT: 0, kind: "pct", color: gammaPctVol == null ? CYAN : gammaPctVol >= 50 ? POS : NEG, fmt: fmtPct, scale: 100, fmtAbs: fmtAbsPct, delta15m: delta15m[LABELS.gammaPct] },
-    { label: LABELS.gexRate, value: gexRate, t: signedT(gexRate, rateScale), midT: 0.5, kind: "signed", color: gexRate == null ? CYAN : gexRate >= 0 ? POS : NEG, fmt: fmtRate, scale: rateScale, fmtAbs: fmtAbsRate, delta15m: delta15m[LABELS.gexRate] },
+    { label: LABELS.gexRate, value: gexRate, t: rateT, midT: 0.5, kind: "signed", color: gexRate == null ? CYAN : gexRate >= 0 ? POS : NEG, fmt: fmtRate, scale: rateScale, fmtAbs: fmtAbsRate, delta15m: delta15m[LABELS.gexRate] },
     { label: LABELS.gexChg, value: gexChg, t: signedT(gexChg, chgScale), midT: 0.5, kind: "signed", color: gexChg == null ? CYAN : gexChg >= 0 ? POS : NEG, fmt: fmtB, scale: chgScale, fmtAbs: fmtAbsB, delta15m: delta15m[LABELS.gexChg] },
     { label: LABELS.ib, value: ibDirection, t: ibDirection == null ? null : clamp(ibDirection / 100, 0, 1), midT: 0.5, kind: "signed", color: ibDirection == null ? CYAN : ibDirection >= 50 ? POS : NEG, fmt: fmtIb, scale: 100, fmtAbs: fmtAbsPct, delta15m: delta15m[LABELS.ib] },
   ];

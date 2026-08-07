@@ -3,6 +3,7 @@ import type {
   BudgetOverview as Overview, BudgetBriefing, BudgetCategory, FlowBucket,
 } from '../api'
 import { T, label, body, section, card, tile, MONO } from '../theme'
+import Collapsible from './Collapsible'
 
 /**
  * The Money page — every card and graph from /owner/budget, re-laid-out for a
@@ -178,7 +179,13 @@ function Briefing({ b }: { b: BudgetBriefing }) {
       {/* The five figures. Hairline-separated rows on the card itself — the
           email's boxed table is an email constraint, not a design decision. */}
       <div style={{ marginTop: 12 }}>
-        <Line k="In the bank" v={fmt0(b.inBank)} />
+        {/* Cash on hand, and WHEN it was last confirmed. Every figure under it
+            is derived from this one, so a three-week-old balance quietly makes
+            the whole card wrong — and `bankAsOf: null` means no balance has
+            ever been logged and this is the month's opening number. */}
+        <Line k="In the bank" v={fmt0(b.inBank)}
+              sub={b.bankAsOf ? `as of ${shortDay(b.bankAsOf)}` : 'not logged — month opening'}
+              subTone={b.bankAsOf ? undefined : T.warn} />
         <Line k="Pay coming" v={`+${fmt0(b.coming)}`} tone={GOOD} />
         <Line k="Income" v={fmt0(b.available)} hi />
         <Line k="Still due" v={fmt0(b.owed)} tone={SOFT_RED} />
@@ -206,17 +213,37 @@ function Briefing({ b }: { b: BudgetBriefing }) {
  * bills) — it gets the weight, not a background fill, because a striped table
  * is an email pattern and this is a card.
  */
-function Line({ k, v, tone, hi }: { k: string; v: string; tone?: string; hi?: boolean }) {
+function Line({ k, v, tone, hi, sub, subTone }: {
+  k: string; v: string; tone?: string; hi?: boolean; sub?: string; subTone?: string
+}) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
                   padding: '9px 0', borderTop: `1px solid ${T.rule}` }}>
       <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: hi ? 700 : 500,
-                     letterSpacing: '0.12em', textTransform: 'uppercase', color: T.ink }}>{k}</span>
+                     letterSpacing: '0.12em', textTransform: 'uppercase', color: T.ink }}>
+        {k}
+        {/* A qualifier on the KEY, not the value — "as of the 5th" is a fact
+            about what the label means, and putting it next to the figure would
+            make it read as part of the number. */}
+        {sub && (
+          <span style={{ display: 'block', fontSize: 9, fontWeight: 500, letterSpacing: '0.08em',
+                         textTransform: 'none', marginTop: 3, color: subTone || T.faint }}>
+            {sub}
+          </span>
+        )}
+      </span>
       <span style={{ ...body(hi ? 17 : 15), fontWeight: hi ? 800 : 600,
                      fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.01em',
                      color: tone || T.ink }}>{v}</span>
     </div>
   )
+}
+
+/** "5 Aug" from "2026-08-05". Split, never `new Date(iso)` — a bare date string
+ *  parses as UTC midnight and reads a day early west of Greenwich. */
+function shortDay(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
 function MiniTable({ title, rows }: {
@@ -262,6 +289,8 @@ function Tiles({ o, currency }: { o: Overview; currency: string }) {
   const t = o.tiles
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 9 }}>
+      {/* Cash on hand — the same figure /owner/budget shows, from the last
+          logged daily balance. Not the month's projected ending balance. */}
       <Tile k="All banks" v={fmt0(t.allBanks, currency)} sub="Coastal · Truist · SECU"
             tone={t.allBanks < 0 ? SOFT_RED : T.ink} />
       <Tile k="Income" v={fmtK(t.income, currency)} sub="incl. Amazon" tone={GOOD} />
@@ -552,9 +581,16 @@ function CashFlow({ o, currency, month }: { o: Overview; currency: string; month
 function UpcomingPay({ o, currency }: { o: Overview; currency: string }) {
   if (!o.upcomingPay.length) return null
   const total = o.upcomingPay.reduce((n, b) => n + Math.abs(b.amount), 0)
+  const overdue = o.upcomingPay.filter((b) => b.overdue).length
   return (
-    <div style={card()}>
-      <Head title="Due within 10 days" right={fmt0(total, currency)} />
+    // Closed by default. The header keeps the count and the total, which is the
+    // part you scroll to this card FOR — and the past-due count in red, because
+    // that is the one thing here you might need to act on today.
+    <Collapsible
+      title="Due within 10 days"
+      right={`${o.upcomingPay.length} · ${fmt0(total, currency)}${overdue ? ` · ${overdue} late` : ''}`}
+      accent={overdue ? SOFT_RED : undefined}
+    >
       {o.upcomingPay.map((b) => (
         <div key={b.tag} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 0',
                                   borderTop: `1px solid ${T.rule}` }}>
@@ -572,7 +608,7 @@ function UpcomingPay({ o, currency }: { o: Overview; currency: string }) {
           </span>
         </div>
       ))}
-    </div>
+    </Collapsible>
   )
 }
 
@@ -582,9 +618,19 @@ function CategoryBudgets({ categories, unsortedSpend, currency }: {
   categories: BudgetCategory[]; unsortedSpend: number; currency: string
 }) {
   if (!categories.length) return null
+  const budgeted = categories.reduce((n, c) => n + (c.amount || 0), 0)
+  const spent = categories.reduce((n, c) => n + (c.spent || 0), 0) + unsortedSpend
+  // Named overCount, not over — there is a per-category `over` inside the map
+  // below and shadowing it here would be a genuinely nasty read.
+  const overCount = categories.filter((c) => c.amount > 0 && c.spent > c.amount).length
   return (
-    <div style={card()}>
-      <Head title="Categories" />
+    // Closed by default, with spend-against-budget on the header — the summary
+    // figure is the reason you'd open it, so it belongs outside.
+    <Collapsible
+      title="Categories"
+      right={`${fmt0(spent, currency)} of ${fmt0(budgeted, currency)}${overCount ? ` · ${overCount} over` : ''}`}
+      accent={overCount ? SOFT_RED : undefined}
+    >
       {categories.map((c) => {
         const pct = c.amount > 0 ? Math.min(100, (c.spent / c.amount) * 100) : 0
         const over = c.amount > 0 && c.spent > c.amount
@@ -613,6 +659,6 @@ function CategoryBudgets({ categories, unsortedSpend, currency }: {
           Uncategorised {fmt(unsortedSpend, currency)}
         </div>
       )}
-    </div>
+    </Collapsible>
   )
 }

@@ -3,6 +3,7 @@ import { useBudget, useAddBudgetRow, useMarkBillPaid, useDeleteBudgetRow } from 
 import { ApiError, type Bank, type BudgetBill, type BudgetRow } from '../api'
 import { T, label, body, section, row, input, button, segment } from '../theme'
 import BudgetOverview from '../components/BudgetOverview'
+import Collapsible from '../components/Collapsible'
 
 /**
  * Money, phone-first.
@@ -14,6 +15,12 @@ import BudgetOverview from '../components/BudgetOverview'
  * before you scroll at all; the cards below are the month; the register at the
  * bottom is the only writable part, because logging a payment and ticking a
  * bill paid are the two things worth doing one-handed.
+ *
+ * From "Due within 10 days" downward every card is COLLAPSED on load. Those are
+ * reference material — bills you already know about, category budgets, the
+ * month's register — and expanded they buried the two things you came to do
+ * under six screens of scrolling. Each closed header still carries its count
+ * and total, so nothing is hidden, only the detail. See components/Collapsible.
  *
  * Every figure above the register is computed SERVER-SIDE (a port of the
  * desktop's memos) and never recomputed here, so the phone can't disagree with
@@ -100,13 +107,18 @@ function Bills({ title, bills, currency, accent }: {
 }) {
   const mark = useMarkBillPaid()
   const [busy, setBusy] = useState<string | null>(null)
+  const total = bills.reduce((n, b) => n + Math.abs(b.amount), 0)
 
   return (
-    <div style={section()}>
-      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <span style={label(accent ? { color: T.warn } : {})}>{title}</span>
-        <span style={label()}>{bills.length}</span>
-      </div>
+    // Closed by default. The header keeps the count AND the total — for Past
+    // due especially, that pair is the whole message; the list is just how you
+    // act on it.
+    <Collapsible
+      variant="section"
+      title={title}
+      right={`${bills.length} · ${fmt(total, currency)}`}
+      accent={accent ? T.warn : undefined}
+    >
       <div>
         {bills.map((b) => (
           <div key={b.tag} style={row()}>
@@ -128,7 +140,7 @@ function Bills({ title, bills, currency, accent }: {
           </div>
         ))}
       </div>
-    </div>
+    </Collapsible>
   )
 }
 
@@ -210,13 +222,19 @@ function Register({ rows, currency }: { rows: BudgetRow[]; currency: string }) {
   // Newest first — on a phone you're checking what just happened, not reading
   // the month from the top.
   const list = rows.slice().reverse()
+  // The month in one line, for the closed header: what came in, what went out.
+  const inAmt = rows.reduce((n, r) => n + (r.amount > 0 ? r.amount : 0), 0)
+  const outAmt = rows.reduce((n, r) => n + (r.amount < 0 ? -r.amount : 0), 0)
 
   return (
-    <div style={section()}>
-      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <span style={label()}>Register</span>
-        <span style={label()}>{list.length}</span>
-      </div>
+    // Closed by default — this is the longest thing on the page by a wide
+    // margin, and it is a thing you go looking for, not something you need in
+    // your way on the route to "can I spend anything today".
+    <Collapsible
+      variant="section"
+      title="Register"
+      right={`${list.length} · +${fmt(inAmt, currency)} / −${fmt(outAmt, currency)}`}
+    >
       {!list.length && <div style={{ ...body(14), color: T.muted, marginTop: 10 }}>Nothing this month yet.</div>}
       <div>
         {list.map((r) => (
@@ -258,7 +276,7 @@ function Register({ rows, currency }: { rows: BudgetRow[]; currency: string }) {
           </div>
         ))}
       </div>
-    </div>
+    </Collapsible>
   )
 }
 

@@ -127,6 +127,22 @@ function MoneyStrip({ money }: { money: TodayPayload['money'] }) {
       <div style={{ ...hero(34), marginTop: 4, color: money.total < 0 ? T.bad : T.ink }}>
         {fmt(money.total)}
       </div>
+      {/* WHEN, always. This figure is a hand-logged bank balance, so a stale
+          one is indistinguishable from a current one without saying so — and
+          `asOf: null` means nobody has logged one at all and this is the
+          month's opening figure, which is a different number entirely. */}
+      <div style={label({ marginTop: 5, letterSpacing: '0.08em',
+                          color: money.asOf ? T.muted : T.warn })}>
+        {money.asOf ? `as of ${shortDate(money.asOf)}` : 'no balance logged — showing month opening'}
+      </div>
+      {/* Where the month lands once everything scheduled has hit. Shown NEXT to
+          the balance rather than instead of it: Today used to print this one as
+          "Bank balance", which read as an overdraft any month rent was still
+          outstanding. */}
+      <div style={label({ marginTop: 8, letterSpacing: '0.08em',
+                          color: money.projectedEom < 0 ? T.warn : T.muted })}>
+        {fmt(money.projectedEom)} projected end of month
+      </div>
       {money.overdue > 0 && (
         <div style={label({ marginTop: 6, letterSpacing: '0.08em', color: T.warn })}>
           {money.overdue} past due

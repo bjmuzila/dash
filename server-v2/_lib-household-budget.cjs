@@ -206,6 +206,50 @@ async function getMonth(profileKey, month, tz = 'America/New_York') {
                       : a.entry_date > b.entry_date ? 1
                       : a.sort_order - b.sort_order));
 
+  /**
+   * ── WHAT IS ACTUALLY IN THE BANK ─────────────────────────────────────────
+   * VERBATIM PORT of `bankNow` in app/owner/budget/page.tsx: the latest
+   * hand-entered daily balance, falling back to the month's beginning balances
+   * when none has been logged.
+   *
+   * This is NOT `bal` below. `bal` is the register's RUNNING total — beginning
+   * balance plus every line in the month, including synthetic occurrences for
+   * bills that have not been paid and pay that has not landed. It is the
+   * PROJECTED end-of-month figure, and it is identical to
+   * `totals.endingBalance`.
+   *
+   * Handing `bal` to the briefing (which is what used to happen) broke it three
+   * ways at once, and all three compounded:
+   *   - "In the bank" showed end-of-month, not today — a month with rent still
+   *     outstanding read as a negative bank balance on the 1st;
+   *   - `available = inBank + coming` double-counted every unlanded paycheque,
+   *     because those occurrences were already added into `bal`;
+   *   - `after = available - owed` double-SUBTRACTED every unpaid bill, for the
+   *     same reason.
+   *   - and in buildOverview, `safe = allBanks - billsLeft` subtracted the
+   *     remaining bills a second time on top of that.
+   *
+   * The month's projection is still available, correctly labelled, as
+   * `totals.endingBalance`. These two numbers answer different questions and
+   * must never be swapped again.
+   */
+  const bankNow = dailyBalance
+    ? {
+        coastal: Number(dailyBalance.coastal) || 0,
+        truist: Number(dailyBalance.truist) || 0,
+        secu: Number(dailyBalance.secu) || 0,
+      }
+    : {
+        coastal: beginningByBank.coastal ?? 0,
+        truist: beginningByBank.truist ?? 0,
+        secu: beginningByBank.secu ?? 0,
+      };
+  const inBank = bankNow.coastal + bankNow.truist + bankNow.secu;
+  // When the figure was last confirmed, so the phone can say so. Null means it
+  // fell back to the month's beginning balances — i.e. nobody has logged a bank
+  // balance, and every figure derived from it is only as good as the 1st.
+  const bankAsOf = dailyBalance ? isoDay(dailyBalance.day) : null;
+
   const beginCombined = (beginningByBank.coastal ?? 0) + (beginningByBank.truist ?? 0) + (beginningByBank.secu ?? 0);
   let running = beginCombined;
   let income = 0;
@@ -246,7 +290,6 @@ async function getMonth(profileKey, month, tz = 'America/New_York') {
     else unsorted += Math.abs(ln.amount);
   }
 
-  const allBanks = bal.coastal + bal.truist + bal.secu;
   const amazon = buildAmazon(amazonRows);
   const bzila = buildBzila(propRows, register, categories);
 
@@ -254,7 +297,13 @@ async function getMonth(profileKey, month, tz = 'America/New_York') {
     month: m,
     today,
     currency: profile.currency || 'USD',
+    // The register's per-bank running total after every line in the month —
+    // i.e. PROJECTED, not what is in the bank. `bankNow` / `inBank` is the
+    // bank. See the block above; do not swap them.
     balances: { ...bal },
+    bankNow,
+    inBank,
+    bankAsOf,
     beginning: anyBeginning ? beginningByBank : null,
     dailyBalance: dailyBalance || null,
     totals: {
@@ -274,9 +323,9 @@ async function getMonth(profileKey, month, tz = 'America/New_York') {
     recurringCount: recurring.filter((r) => r.active).length,
     amazon,
     bzila,
-    briefing: buildBriefing({ month: m, today, register, recurring, allBanks }),
+    briefing: buildBriefing({ month: m, today, register, recurring, allBanks: inBank, bankAsOf }),
     overview: buildOverview({
-      month: m, today, rows, register, recurring, categories, balances: bal,
+      month: m, today, rows, register, recurring, categories, bankNow,
       dailyBalance, prevDailyBalance, categorySpend: spentByCategory, unsorted,
       amazon, bzila, yearRegister,
     }),
@@ -350,7 +399,7 @@ function buildBzila(propRows, register, categories) {
  */
 const SAFE_BUFFER = Number(process.env.BUDGET_SAFE_BUFFER || 200);
 
-function buildBriefing({ month, today, register, recurring, allBanks }) {
+function buildBriefing({ month, today, register, recurring, allBanks, bankAsOf = null }) {
   const paid = new Set(
     register.filter((r) => !r.is_beginning && typeof r.recurring_tag === 'string'
                         && r.recurring_tag.startsWith('__recur__:'))
@@ -395,7 +444,12 @@ function buildBriefing({ month, today, register, recurring, allBanks }) {
 
   return {
     tone, verdict, sub,
-    inBank: allBanks, coming, available, owed, after,
+    // Cash on hand — the last logged bank balance. NOT the month's projected
+    // ending balance; `coming` and `owed` are applied to it here, so if this
+    // ever became a projection every figure below would count them twice.
+    inBank: allBanks,
+    bankAsOf,
+    coming, available, owed, after,
     pastDueCount: pastDue.length,
     pastDueTotal: pastDue.reduce((s, b) => s + b.amount, 0),
     payComing: incoming.slice(0, 6),
@@ -445,7 +499,7 @@ function isoDay(v) {
  * so a number that disagrees is a bug by definition — which is why this is a
  * port rather than a fresh implementation of "roughly the same idea".
  */
-function buildOverview({ month, today, rows, register, recurring, categories, balances,
+function buildOverview({ month, today, rows, register, recurring, categories, bankNow,
                          dailyBalance, prevDailyBalance, categorySpend, unsorted,
                          amazon, bzila, yearRegister }) {
   const [iy, im] = month.split('-').map(Number);
@@ -457,7 +511,12 @@ function buildOverview({ month, today, rows, register, recurring, categories, ba
   const todayDay = ym === month ? Number(today.split('-')[2]) : ym > month ? daysInMonth : 0;
   const daysLeft = Math.max(1, daysInMonth - todayDay + 1);
 
-  const allBanks = BANKS.reduce((n, b) => n + (balances[b] || 0), 0);
+  // `bankNow`, NOT the register's running total — see the block in getMonth.
+  // `safe` and `reconcile.actual` below both depend on this being cash on hand:
+  // safe subtracts the remaining bills, and reconcile compares against what the
+  // cleared rows say should be there. Feed either one a projected balance and
+  // it silently double-counts every unpaid bill in the month.
+  const allBanks = BANKS.reduce((n, b) => n + (bankNow[b] || 0), 0);
 
   const materialised = new Set(
     register.filter((r) => !r.is_beginning && typeof r.recurring_tag === 'string' &&
@@ -755,8 +814,15 @@ async function summary(profileKey, tz = 'America/New_York') {
 
   return {
     currency: m.currency,
-    balances: m.balances,
-    total: m.balances.coastal + m.balances.truist + m.balances.secu,
+    // Cash on hand, per-bank and combined. This used to send the register's
+    // running total, which is the PROJECTED end-of-month balance — so Today's
+    // "Bank balance" read as whatever was left after every unpaid bill in the
+    // month had already been deducted. The projection is still here as
+    // `projectedEom`, labelled honestly.
+    balances: m.bankNow,
+    total: m.inBank,
+    asOf: m.bankAsOf,
+    projectedEom: m.totals.endingBalance,
     net: m.totals.net,
     weekIn,
     weekOut,

@@ -1,5 +1,105 @@
 # Changelog
 
+## 2026-08-07 - budget.cbedge.net Money page: the bottom cards collapse
+
+Everything from "Due within 10 days" down was reference material — bills you already know
+about, category budgets, the month's register — and expanded it turned one screen of "can
+I spend anything today" into six screens of scrolling to reach the two things the page is
+actually writable for.
+
+### `budget-vite/src/components/Collapsible.tsx` (new)
+
+A card whose header is the control. Two rules it follows:
+
+- **A closed card still carries its number.** The header keeps a summary on the right —
+  `Past due · 2 · $640` — so nothing is hidden, only the detail. A collapsed header with
+  just a title would be strictly worse than the list it replaced. The summary shrinks and
+  ellipsises before the title does, so a long one can't wrap the header or push the
+  chevron off the card.
+- **Closed on every page LOAD, not remembered.** The default is the briefing; a card left
+  open three weeks ago shouldn't quietly become the default forever. Within a session the
+  state *does* survive month navigation, since `<Budget>` keeps it mounted — paging
+  Jul→Aug with the Register open leaves it open, which is what you want while comparing.
+
+Children aren't rendered while closed, so the register's full month costs nothing until
+it's asked for. `variant` picks the card surface or the hairline-rule section, matching
+whichever container the card already used. Chevron rotates; `aria-expanded` /
+`aria-controls` are set.
+
+### Collapsed by default, with these headers
+
+| card | closed header shows |
+|---|---|
+| Due within 10 days | count · total · *N* late (red when any are) |
+| Categories | spent of budgeted · *N* over |
+| Past due | count · total, in orange |
+| Coming up | count · total |
+| Register | count · +in / −out for the month |
+
+Everything above — the briefing, the six tiles, safe-to-spend, spend pace, the category
+donut, the balance check and the cash-flow chart — is unchanged and still open. "+ Add
+entry" was already collapsed and is left alone.
+
+- `budget-vite/src/components/BudgetOverview.tsx` — `UpcomingPay` and `CategoryBudgets`
+  wrapped. The outer over-budget count is named `overCount` so it can't shadow the
+  per-category `over` inside the map.
+- `budget-vite/src/pages/Budget.tsx` — `Bills` (Past due / Coming up) and `Register`
+  wrapped, each now computing the totals its closed header needs.
+
+## 2026-08-07 - budget.cbedge.net: "Bank balance" was the month's PROJECTION, not the bank
+
+Today's Money strip read −$1,500 with money actually in the account, and the briefing
+called a covered month short.
+
+### The bug
+
+Two different figures had been quietly swapped in `_lib-household-budget.cjs`:
+
+| figure | what it is |
+|---|---|
+| cash on hand | the last hand-logged daily balance (the desktop's `bankNow`), falling back to the month's beginning balances |
+| `totals.endingBalance` | the register's running total after EVERY line in the month — including synthetic occurrences for bills not yet paid and pay not yet landed |
+
+`getMonth()` was passing the second one everywhere the first was meant. The desktop
+(`app/owner/budget/page.tsx`, `bankNow` at line 534) and the 8am email
+(`budget-email.js`, `allBanks` from `d.dailyBalance`) both use the balance snapshot — this
+file claims to be a verbatim port of both and wasn't.
+
+It compounded four ways, all in the same direction:
+
+- **"Bank balance" on Today** showed where the month ENDS UP. Any month with rent still
+  outstanding read as an overdraft on the 1st and recovered on payday.
+- **`available = inBank + coming`** double-counted every unlanded paycheque — those
+  occurrences were already summed into the projection.
+- **`after = available − owed`** double-SUBTRACTED every unpaid bill, for the same reason.
+- **`overview.safe = allBanks − billsLeft`** subtracted the remaining bills a third time.
+
+On the test month the old code reported "Short by $180" for a month that is actually
+covered with $1,300 spare.
+
+### The fix
+
+- `server-v2/_lib-household-budget.cjs` — `getMonth()` now computes `bankNow` / `inBank` /
+  `bankAsOf` exactly as `/owner/budget` does, and feeds THAT to `buildBriefing()` and
+  `buildOverview()`. `buildOverview` takes `bankNow` instead of the register's `balances`,
+  so `tiles.allBanks`, `safe` and `reconcile.actual` are all cash on hand.
+- The projection is not lost — it is still `totals.endingBalance`, and `summary()` now
+  returns it as `projectedEom` alongside `total`. The two answer different questions and
+  are now named that way.
+- `summary()` — `total` is cash on hand, `balances` is per-bank cash, plus `asOf`.
+
+### Guardrails, because this is invisible when it's wrong
+
+- `server-v2/_lib-household-budget.selftest.js` (new) — 11 checks over a stubbed DB, no
+  database needed: `node server-v2/_lib-household-budget.selftest.js`. Covers the
+  projection-vs-bank split, no double-counting of `coming`/`owed`, safe-to-spend
+  subtracting bills exactly once, the beginning-balance fallback, a materialised bill
+  leaving `owed` without appearing twice, and reconcile drift ignoring unpaid bills.
+- The bank figure now always says WHEN. Today's strip shows `as of 8/5` under the balance
+  and `… projected end of month` beneath it; the briefing's "In the bank" row carries the
+  same. When nothing has been logged, both say so in orange — a hand-entered balance
+  nobody has updated in three weeks is otherwise indistinguishable from a current one.
+
 ## 2026-08-07 - budget.cbedge.net Lists: real timestamps, and meals named on the grocery list
 
 ### Every list row says the day AND the time
