@@ -59,7 +59,6 @@ export type ScannerRouteDef = {
 export const SCANNER_ROUTES: ScannerRouteDef[] = [
   { href: "/level-log",      label: "Level Log",      short: "Log",     color: HOME_THEME.orange, icon: "🧾" },
   { href: "/strike-history", label: "Strike History", short: "History", color: LIGHT_BLUE,        icon: "🕘" },
-  { href: "/premarket",      label: "Premarket",      short: "Premkt",  color: HOME_THEME.orange, icon: "🌅" },
   { href: "/replay",         label: "Replay",         short: "Replay",  color: HOME_THEME.cyan,   icon: "⏪" },
 ];
 
@@ -74,7 +73,7 @@ export const SCANNER_ROUTES: ScannerRouteDef[] = [
 export const SCANNER_GROUPS: { key: string; tabs: ScannerTabId[]; routes?: string[] }[] = [
   { key: "gamma",     tabs: ["gex", "gexchangetop", "gexpct", "strike"] },
   { key: "structure", tabs: ["tpo", "ibstats", "marketquality", "statprompter"] },
-  { key: "more",      tabs: ["watch"], routes: ["/level-log", "/strike-history", "/premarket", "/replay"] },
+  { key: "more",      tabs: ["watch"], routes: ["/level-log", "/strike-history", "/replay"] },
 ];
 
 /** Every route the Scanner section owns — used to decide whether to show the strip. */

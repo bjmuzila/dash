@@ -593,7 +593,12 @@ export default function LevelLog() {
             <WallTimeline log={log} events={events} view={view} />
           </div>
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "14px 18px", borderTop: `1px solid ${C.border}` }}>
+          {/* Reaction legend — a hover-to-learn key for the badges above, not
+              part of the log. `data-capture-hide` keeps it out of the PNG for
+              two reasons: it is page chrome, and framed mode expands the scroll
+              body WITHOUT reflowing the siblings below it, so the legend
+              rendered on top of the timeline entries in the capture. */}
+          <div data-capture-hide style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "14px 18px", borderTop: `1px solid ${C.border}` }}>
             {(Object.keys(REACTION_LABEL) as WallReaction[]).map((rx) => (
               <span key={rx} title={REACTION_RULE[rx]}>{wallBadge(rx)}</span>
             ))}

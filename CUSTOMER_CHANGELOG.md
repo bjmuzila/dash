@@ -8,6 +8,7 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 * Home screen gex chart fixed. No more issues. 
 * Net Gex change per minute added to home page. 
 * Test Labs - Gex chart - consolidated all to one chart. Tab between the 2 different ways to view gex
+* Stock call wall / put wall / core levels scanner now available
 
 ## Monday 8/3/2026
 

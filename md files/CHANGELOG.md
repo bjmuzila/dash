@@ -1,264 +1,914 @@
 # Changelog
 
-## 2026-08-06 - budget.cbedge.net: briefing on the app's own palette, calendar dropped
+## 2026-08-07 - Nav cleanup: Premarket off the Scanner strip, DEX/Charm off Test Lab
 
-### `budget-vite/src/components/BudgetOverview.tsx`
-- **The briefing was still wearing the email's clothes.** `budget-email.js` is
-  standalone HTML in an inbox, so it invents its own green/amber/red and boxes
-  every table on `#111726` — both are email constraints. On a card, next to the
-  rest of the dashboard, they read as a foreign object.
-  - The three verdict tones now use the app's tokens: **cyan = fine, orange =
-    act, red = failed** — a wash of each colour over the panel with a matching
-    hairline and a 3px left rule, which is how a card carries state everywhere
-    else on cbedge.net.
-  - The five figures are hairline-separated rows on the card instead of a filled
-    table. The two running totals (Income, Left after bills) get WEIGHT rather
-    than a striped background.
-  - In the Pay-coming / Still-due lists, the status moved from inline-with-the-
-    date to under the label, so a long bill name can't push "past due" off the
-    row. Dates are mono, amounts tabular.
-- **Cashflow calendar removed.** Cash flow now runs straight into Due Within 10
-  Days. `overview.days` is still returned by the server — nothing renders it, so
-  it costs nothing, and putting the grid back is a one-line change.
+### `components/scanner/scannerNav.ts`
+- Removed the `/premarket` entry from `SCANNER_ROUTES` and from the `more` cluster in
+  `SCANNER_GROUPS`, so it no longer appears in the Scanner sub-strip.
+- The `/premarket` route itself is untouched (still lazy-loaded in `app-vite/src/App.tsx`)
+  — this only removes it from the Scanner section's navigation.
 
-469 assertions still green across the 8 suites; no server change in this pass.
+### `app/test/page.tsx`
+- Removed the "DEX / Charm" tab: dropped the `DexCharmTab` import, the `dexcharm` member of
+  the `TestTab` union, its `TABS` entry (`#dex-charm`), and its render branch.
+- Test Lab now shows GEX Map / Dealer Gamma / Squeeze.
+- `app/test/DexCharmTab.tsx` is left on disk but is no longer imported by anything.
 
 
-## 2026-08-06 - budget.cbedge.net: briefing-first Money page, white type, Todo/Lists rework
+## 2026-08-06 - /level-log PNG: keep the reaction legend out of the capture
 
-Six changes across the household app. The Money page is rebuilt on the dashboard
-card surface; the rest is the readability and flow work that came with it.
+The snapshot came back with the REJECT / BREAK / PINNED / STALLED NEAR legend row printed
+ON TOP of the 12:00 timeline entry.
 
-### Grey type is gone — every page
-- `budget-vite/src/theme.ts`: `inkSoft`, `muted` and `faint` were 72% / 48% / 26%
-  white. Now `ink`, `inkSoft` and `muted` are all **#FFFFFF**, matching
-  `homeTheme.ts` (`muted: "#FFFFFF"`). Hierarchy comes from SIZE, CASE and
-  WEIGHT instead of dimming. `faint` keeps 55% for one job only: struck-through
-  completed rows, where fading IS the signal.
-- `budget-vite/src/index.css` was still the light "warm paper" file: cream
-  background, `#1C1917` text, `color-scheme: light`, a grey placeholder — and
-  **no font-family at all**. Anything not styled through `theme.ts` therefore
-  rendered in the browser default serif (Times). Now dark, Inter, `color-scheme:
-  dark` so native date pickers stop opening as white popovers on a black page.
+### `components/pages/LevelLog.tsx`
+- Added `data-capture-hide` to the reaction-legend footer.
+- Not just cosmetic de-cluttering: framed mode in `lib/snapshot.ts` measures the scroll
+  body by `scrollHeight` and expands it, but the siblings BELOW it are not reflowed, so a
+  footer keeps its live-page Y and lands in the middle of the now-taller log. Anything
+  rendered after the scroll body in that card has to be hidden from the capture or moved
+  above it.
+- The legend is a hover-to-learn key for the badges anyway — the badges themselves are in
+  the image, so nothing is lost.
 
-### Money page — rebuilt, briefing first
-- **Tab switcher removed.** One scroll: briefing → six tiles → safe-to-spend +
-  spend pace → where-it-went + balance check → cash flow → cashflow calendar →
-  due soon → categories → bills → register.
-- **Budget briefing at the top**, a verbatim port of the verdict in
-  `server-v2/budget-email.js` — same three tones, same wording, same tables. The
-  phone and the 8am email now cannot say different things about the same day.
-  The rule that matters: available counts pay STILL COMING, not just what is in
-  the bank, or every month reads as a catastrophe on the 1st.
-- **Dashboard cards** (`card()` / `tile()` in theme.ts) reproducing
-  `homePanelStyle`: cyan wash from the top edge, hairline border, 16px radius.
-- **Six tiles, 3 across x 2 down**: All banks / Income / Expenses, Net profit /
-  Amazon / Bzila — the desktop's top stat row exactly.
-- **Cash flow gains the D/W/M toggle.** Monthly buckets the YEAR's real register
-  rows, matching the desktop's `yearMonths`. Daily and weekly are this month.
-- **Cashflow calendar** shades a day orange when it is net-negative and cyan when
-  net-positive, with the net printed on any day that moved.
-- Where-it-went is interactive: tap a slice, the centre shows that category.
 
-### Why the phone's net read negative
-Not a bug in the arithmetic — a MISSING LEDGER. The desktop folds Amazon
-(pay minus gas) into both Income and Net Profit, and shows Bzila alongside.
-The household API had neither, so the phone was showing register-only figures
-against a month whose projected bills were all still outstanding.
+## 2026-08-06 - Build fix: owner-vite Results.tsx JSX comment before the root element
 
-- `server-v2/_lib-household-budget.cjs` now reads `budget_amazon` and
-  `budget_prop` (streams: prop / cbedge / contracts, plus register rows in a
-  Contracts category, read-only) through `optional()` — a typeof-guarded call,
-  because a missing libDb export throws SYNCHRONOUSLY and `.catch()` on the
-  result never runs. One absent function used to 500 the whole month.
-- `overview.tiles` now carries income/expenses/netProfit computed the desktop's
-  way. The two surfaces agree on the month by construction, not by coincidence.
+The v8.6.17 VPS deploy failed on the `owners` target:
 
-### Today
-- Section headers are sans **17px semibold** (`sectionTitle()` in theme.ts), not
-  10px letterspaced mono. Applied to Today, Todo, Lists, Habits and the calendar
-  card from one helper.
-- The capture box is now an **add-a-todo** box, with the same red Urgent chip the
-  Todo screen has — tag it as you type, not in a second step afterwards.
-- Money strip shows **bank balance, then weekly in / weekly out**. Both
-  directions, because a quiet week and a big-in-big-out week net out the same.
-  `weekIn` / `weekOut` are derived server-side from the same seven days the Money
-  page charts.
+    /app/src/pages/Results.tsx:389:15: ERROR: Expected ")" but found "className"
 
-### Todo
-- **Urgent is RED**, not orange. Orange was already spoken for by overdue dates,
-  and two shades of warning next to each other read as one.
-- **Completed is a section on the same screen**, not a tab you have to remember
-  to open. `?scope=done` now returns only the last **5 days**
-  (`DONE_WINDOW_DAYS`). Nothing is deleted — the rows stay and `?scope=done-all`
-  still returns the full history — they just stop taking up room.
+### `owner-vite/src/pages/Results.tsx`
+- A `{/* ... */}` comment sat between `return (` and `<PageShell className="wall-scroll">`.
+  `{...}` only means "JSX expression container" INSIDE JSX; as the first token after
+  `return (` esbuild reads it as an object literal, so the parse died on the next tag's
+  first attribute. Moved the note above the `return` as ordinary `//` lines.
+- Pre-existing — not introduced by the Level Log work in the same version. The `owners`
+  image is built before `dashboard`, so it took the whole deploy down first.
+- Swept every `.ts`/`.tsx` under `owner-vite/src` through esbuild: this was the only one.
 
-### Lists
-- Opens on **List** (tab moved to first position). The week board and shopping
-  mode are places you go deliberately; "what's on the list" is the question being
-  asked nine times out of ten.
-- Every item shows **when it was added** ("2:14 PM", "Tue 8:41 AM", "Jul 3"), and
-  checked items show when they were checked. `created_at` was already on
-  `hh_list_items`; it just was not in `ITEM_COLS`.
+
+## 2026-08-06 - Level Log split out of owner Results > Walls into /level-log (Scanner section)
+
+The level log lived inside the owner-only Results -> Walls tab, sharing a page with the
+universe table, reach rank and alert feed. It is now its own customer-facing page under
+Scanner, scoped by a WALLS / CORE switch, and its PNG button takes a REAL screenshot of
+the card instead of re-rendering the text.
+
+### `components/pages/LevelLog.tsx` (new)
+- Port of the level-log panel from `owner-vite/src/pages/Results.tsx` (WallsView /
+  WallCaptureRail / WallTimeline / buildLogText). Same data, same reading: `GET
+  /proxy/walls[?date=&symbol=]`, fetch-on-load + explicit refresh, no polling.
+- **WALLS / CORE tab switcher.** One `view` state filters the ticker rail columns, the
+  capture rail, the timeline, the copy text and the PNG **through the same two memos**
+  (`log` / `events`), so the pills can never disagree with what gets exported. WALLS =
+  `call_wall` + `put_wall`; CORE = `cb`.
+- Theme comes from `homeTheme` / `PageCard` only. The owner page's `gold` has no
+  counterpart in `HOME_THEME`, so it maps to `HOME_THEME.orange`; CORE keeps `LIGHT_BLUE`.
+- Main grid is written as `minmax(0, 1fr) minmax(0, 2.6fr)` **on purpose** — that exact
+  signature is what the GLOBAL GRID COLLAPSE block in `app/globals.css` matches, so the
+  two columns stack on a phone. A `340px` first track looks identical on a desktop and
+  squeezes the log to nothing on mobile.
+
+### PNG snapshot — real screenshot, not a text re-render
+- The owner version deliberately drew `buildLogText()` into a throwaway off-screen node,
+  because a naive `html2canvas()` of the card captured only the slice of the 560px scroll
+  window that happened to be in view, and flattened the frosted styling.
+- The new page calls **`captureAndCopy()` from `lib/snapshot.ts`** with `framed: true`.
+  Framed mode measures each direct child by `scrollHeight` and expands the clone past the
+  scroll container, and the shared clone pass swaps `backdrop-filter` panels for their
+  solid color — so the capture is the whole card, styled, badges and colors included.
+- Header buttons carry `data-capture-hide` so page chrome stays out of the image.
+- Going through `lib/snapshot.ts` is mandatory, not stylistic: `scripts/audit-ui.mjs
+  --strict` (the root `prebuild`) fails the build on a second `html2canvas` import.
+
+### `components/scanner/scannerNav.ts`
+- Added `/level-log` ("Level Log" / "Log") to `SCANNER_ROUTES` and to the `more` cluster
+  in `SCANNER_GROUPS`, so it shows as a pill in the Scanner sub-strip.
+
+### `app-vite/src/App.tsx`
+- `lazy()` import + `<Route path="/level-log">`. Step 2 of the two-step rule — without it
+  the page would fall through the SPA catch-all to `/traders-dashboard`.
+
+### `app/app/level-log/route.ts` (new)
+- `serveSpaShell("app")`, matching the other `/app/*` shells, so a hard refresh on
+  `/app/level-log` does not 404.
+
+### `app/globals.css`
+- Ported the `.wall-scroll` themed-scrollbar rules from `owner-vite/src/index.css` (they
+  only existed in the owner app; the class was inert in the customer bundle).
+
+### Not touched
+- The owner Results -> Walls tab is unchanged — this is a duplicate, not a move out of the
+  owner app.
+
+
+## 2026-08-06 (o) - budget.cbedge.net: read-only Budget overview ported from /owner/budget
+
+The Money tab was a register with a balance on top. It now leads with the full read-only
+overview — every card and graph from the desktop `/owner/budget` page — with the writing
+moved behind a second tab, because all the real editing happens on the owner dashboard.
+
+### `server-v2/_lib-household-budget.cjs`
+- Added **`buildOverview()`**, returned as `overview` on `GET /api/hh/budget`. Every
+  formula is a VERBATIM port of the `intel` / `categoryStats` / `billsDue` / `reconcile`
+  memos in `app/owner/budget/page.tsx`, not a re-implementation. The phone is a second
+  VIEW of that page, so a figure that disagrees is a bug by definition.
+- Returns `daysInMonth, todayDay, daysLeft, allBanks, billsLeft, safe, safePerDay,
+  budgetTotal, paceNow, spentMtd, cum, week, wkOut, prevWkOut, slices, upcomingPay,
+  reconcile, days, series, cashflow`.
+- **Bug fixed — `daily_balance.day` DATE to Date.** `pg` hydrates a Postgres `DATE` into
+  a JS `Date`, and `String(thatDate).slice(0,10)` is `"Sat Aug 01"`. The reconcile window
+  compared that as a string, matched nothing, and `moneyIn`/`moneyOut` both read **zero**
+  with no error at all. Added `isoDay()`, which normalises both shapes the driver can
+  hand over. This is the THIRD place this exact trap has bitten (`due_date`,
+  `target_date`, now `daily_balance.day`) — coerce a DATE at the boundary, always.
+- **Bug fixed — one optional card could 500 the whole month request.** A missing
+  `libDb.getDailyBalanceBefore` export throws SYNCHRONOUSLY at the call site, so a
+  `.catch()` on the returned promise never runs. Now `typeof`-guarded: the balance check
+  degrades to hidden instead of taking the page down.
+
+### `budget-vite/src/components/BudgetOverview.tsx` (new)
+Read-only, phone-first, hand-rolled SVG (no charting dependency):
+Safe-to-spend · six-stat strip · spend pace vs a straight-line budget · 7-day pulse ·
+category donut · balance check · weekly cash flow · month heat calendar · projected
+balance · bills due within 10 days · category budgets.
+- **Nothing is computed in this file.** Every figure arrives from `overview`. A chart
+  that does its own arithmetic is a second source of truth, and the two drift.
+- Dates stay STRINGS (`'2026-08-14'.split('-')`), never `new Date(iso)`.
+
+### `budget-vite/src/pages/Budget.tsx`
+- Split into **Overview** / **Register** tabs. Register keeps the only two things worth
+  doing on a phone: log what you just spent, tick a bill paid.
+
+### `budget-vite/src/api.ts`
+- Added the `BudgetOverview` type; `BudgetMonth` now carries `overview`.
 
 ### Tests
-**469 assertions green across 8 suites** (budget 113, gcal-routes 79, lists 60,
-projects 58, routes 57, routines 51, gcal 32, recurrence parity 19) — 27 new,
-covering Amazon net-of-gas, the three Bzila streams, the tile arithmetic, all
-three cash-flow resolutions and every branch of the briefing verdict. Rendered at
-390px under Playwright, which is what caught the half-width card titles wrapping
-onto two lines and eating the chart underneath.
+442 assertions green across 8 suites (budget 86, gcal-routes 79, lists 60, projects 58,
+routes 57, routines 51, gcal 32, recurrence parity 19). Rendered at 390px under Playwright
+against a stubbed API, which is what caught zero-value cash-flow bars reading as small
+real amounts.
 
 
-## 2026-08-06 - Test Lab / GEX Map: terrain kept its shape under zoom
+## 2026-08-06 (n) - Owner · Results · Contracts: the page scrolls again
 
-Zooming the Terrain tab out lost the older, quieter parts of the session — terrain that
-had been perfectly readable a moment earlier flattened into background.
+`owner-vite/src/pages/Results.tsx`.
 
-### Root cause — three of them, all in `TerrainField`
-1. **The field was normalized twice.** `signed` is already scaled on the session max;
-   the resample then divided the whole field *again* by the max of whatever was on
-   screen. So a quiet stretch only grew elevation once you zoomed into it and the local
-   max collapsed — and zooming back out flattened it. A cell's colour depended on the
-   window, not on the gamma.
-2. **The colour ramp buried the low end.** 9 bands over a linear magnitude, then a
-   `** 1.15` suppression. On session-normalized data a handful of 0DTE nodes own the top
-   of the scale, so everything under ~11% of session max fell into band 0 and painted as
-   background.
-3. **Time was spread evenly, not by clock.** The canvas covers the first→last column
-   span, but samples were placed at `i/(NX-1) × (nCols-1)`. Any missed recording slot
-   compressed the tape on both sides of the gap — the older end sliding out of
-   registration with the heatmap.
+PageShell's `<main>` is a **column flexbox with `overflow: auto`** — it is the scroll
+container for every Results tab. Flex items default to `flex-shrink: 1`, so on a short
+monitor the Contracts table card was *squeezed* to fit the viewport instead of running
+past it. Its own `overflow: hidden` then clipped the rows, and because nothing
+overflowed `<main>`, no scrollbar ever appeared: the table just ended mid-list.
 
-### `app/test/GexMapTab.tsx`
-- Removed the per-render `fmax` renormalization. The terrain now shares the session
-  scale with the heatmap and the rails, so a given gamma paints the same colour at every
-  magnification.
-- Ramp is expansive at the low end: `|v| ** 0.55` over **18 bands** (was linear over 9
-  then `** 1.15`). Structure at 3–5% of session max gets its own visible step; the big
-  nodes still top out identically. Monotonic, verified across the range.
-- Sample positions come from `m.mins` when the clock axis is on, so a recording gap
-  draws as a gap and everything either side stays registered with the heat cells.
-- Grid raised **220×180 → 360×240** (`nCols × 5`, `nStrikes × 3`). At full zoom-out a
-  6.5-hour tape has ~78 columns; the old cap left ~2.8 samples per column, so a one- or
-  two-slot node was averaged into its neighbours and erased — and only reappeared when
-  zooming in bought the same cap 20 samples per column.
-- Contour levels extended down to ±0.03 (were ±0.06) and their alpha rides
-  `sqrt(|level|)` rather than `|level|` — with the field no longer rescaled to the
-  window, the low contours carry most of the session's structure and a linear alpha left
-  them at ~1% opacity.
+Fix is `flexShrink: 0` on each direct child of the Contracts view (header row, Run
+now / Diagnose controls, the 9:45 / 10:30 / 12:00 roll-up grid, the table card, and the
+loading / empty / error states) plus the tab strip. Content now overflows `<main>`,
+which scrolls it.
 
-## 2026-08-06 - Test Lab / GEX Map: intensity slider, net GEX sparkline, chrome removed
+`PageShell` also gets `className="wall-scroll"` so the page's bar uses the dashboard's
+themed scrollbar (cyan thumb, inset track — `owner-vite/src/index.css`) rather than the
+neutral white default.
 
-### `app/test/GexMapTab.tsx`
-- **Gradient intensity slider on the Heatmap tab.** Canonical control from
-  `INTENSITY_SLIDER_GRADIENT_LOGIC.md` — range 0.5–3, step 0.01, 80×3, accent `#00e5ff`,
-  live `N.NNx` readout. `heatAlpha()` takes an `intensity` that multiplies the ratio
-  *before* the `^1.4` easing, exactly as `metricBg()` does, so a notch means the same
-  thing here as in Multi-Greek. The cell cull threshold scales with it too, or the
-  slider couldn't reveal what it dropped as noise at 1×.
-  - **Default 1.00, not the doc's 1.75.** That default belongs to `metricBg()`, whose
-    alpha is capped at 0.18 for table cells sitting behind text. This is an uncapped
-    full-bleed field tuned at 1× — opening at 1.75 would be a wall of colour.
-  - **Heatmap only.** Terrain is a hypsometric surface with its own quantized bands and
-    contour levels; the same multiplier flattens it to a colour block rather than
-    brightening it. The control renders before the flexing blurb so showing/hiding it
-    doesn't shove the header around.
-- **`NET GEX Δ · 15m` → `NET GEX · SESSION` sparkline.** The old panel drew a per-strike
-  diverging bar chart against a column ~15 min back: a different question from the rest
-  of the card, and blank (`NOT ENOUGH HISTORY`) for the first quarter hour of every
-  session. Now the ladder summed per slot over the **selected scope** (RTH or All), as a
-  line + area with a dashed **zero line** — above it dealers dampen, below they amplify,
-  and the crossing is visible. Same x rule as the field, so it lines up with the heat.
-  - Scaled on the session's **signed** range (`nLo`/`nHi`), not `|max|`: a day that never
-    went short gamma shows zero pinned at the bottom instead of implying it came close.
-    Zero is always inside the range, so the line is always on the panel.
-  - `netSeries` keeps its session scale through zoom, like `gMax` — narrowing time must
-    not repaint a flat stretch as a dramatic swing. `chg15` / `chg15Min` / `hasChg15`
-    removed from `MapModel`.
-- **Removed two prose blocks**: the `option_strike_gex_history` / `net_dex` /
-  `greek_snapshots` provenance paragraph under the toolbar, and the
-  `$SPX · date · N of M slots · N strikes · gamma scale …` footer line. `rthSlots` went
-  with the latter.
+No data, query, or layout changes — only shrink behaviour. Other tabs are untouched
+apart from the shared tab strip.
 
-## 2026-08-06 - Test Lab / GEX Map: one chart, real RTH clock axis, labels off the field
+## 2026-08-06 (m) - budget.cbedge.net: Todo, Lists, calendar colours + Upcoming
 
-Three cards (Tape Field, Spine, Gamma Terrain) drew the same session three times, and
-the x-axis was a column index — so at 10:05 thirty-five minutes of tape was stretched
-across the full width and read as a whole trading day.
+Tab bar is now **Today · Todo · Lists · Money · More**. Habits and Projects kept their
+routes and all their data — they gave up tab slots and are reached from More.
+Nothing on cbedge.net changed.
 
-### `app/test/GexMapTab.tsx`
-- **Merged to one card, "Tape Field."** Layout is fixed (net DEX profile left gutter,
-  net GEX profile right rail, Vol GEX keel below, Δ15m panel, spot path, wall/flip
-  bands); a **Heatmap / Terrain** segmented switch in the card header changes only what
-  fills the strike × time field. The zoom window survives the switch.
-- **`Spine` removed** — component deleted, not hidden. Its wings were duplicates of the
-  Tape Field's gutter and rail. The `GammaTerrain` wrapper went too; its canvas
-  (`TerrainField`) is now the Tape Field's terrain fill. `clockTimeTicks`,
-  `spreadLabels`, `labWidth` and the `.gexmap-grid` style deleted with them (unused).
-- **RTH pins the x-axis to 09:30–16:00 ET.** New `timeAxis` / `xLo` / `xHi` / `mins` /
-  `slotMin` on `MapModel`; `xFrac()` positions a column by its ET timestamp instead of
-  its index. Cell width is one recording slot in minutes. Ticks and gridlines are round
-  clock times stepped across the domain (`axisTicks`), so 14:00 is drawn hours before a
-  14:00 column exists. `buildModel` now takes `scope`.
-  - Only ever on for **RTH** — "All" spans midnight, where ET minutes wrap and are not
-    monotonic — and only when every column really is inside 09:30–16:00, so a pre-market
-    session (where `scopePayload` returns the unfiltered payload) still draws on the old
-    index axis instead of clamping the overnight tape onto one edge.
-  - Zooming **time** narrows the clock domain to the visible columns (padded one slot);
-    zooming **strikes** leaves the clock alone.
-  - The terrain canvas is placed on the span the tape actually covers, so it grows into
-    the session rather than being stretched over hours with no data behind it.
-  - The Vol GEX keel uses the same x rule, so a spike in the keel stays under the minute
-    of heat it belongs to.
-- **Removed the on-chart labels**: the `GAMMA FLIP nnnn` caption and the `CW` / `MG` /
-  `FL` / `PW` rail badges. Every one of those numbers is already in the regime strip
-  above the chart, larger and with its meaning spelled out. The lines and bands stay —
-  that is positional information the strip can't carry. Rail strike ticks no longer need
-  badge de-collision.
+### Todo (was Habits)
+`hh_tasks.urgent` added via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
 
-## 2026-08-06 - Scanner / Watch This: "Results" tab (per-date roll-up)
+**Urgent is a separate field from `starred`.** Starred means "one of my Top 3 on
+Today"; urgent means "this can't wait". One flag for both would make pinning something
+to Today silently mark it an emergency.
 
-Tracked results only had the flat status filters (All / Open / Touched / Expired), so
-there was no way to ask "what happened on a given day".
+Chosen design: urgent is a toggle on the input, decided at capture. It costs one tap,
+but it's visible and works the same for both people — unlike a typed marker, which is
+faster but is a rule somebody has to be told about. Urgent sorts to the top
+(`ORDER BY urgent DESC, …`) and carries a left rule rather than a badge, so it marks
+the row without adding another thing to read. The toggle resets after each add; the
+date doesn't — three things due Friday is common, three emergencies in a row isn't.
 
-### `components/pages/Scanner.tsx`
-- New **Results** pill next to Expired in the Tracked-results strip. Selecting it
-  replaces the flat table with one row per calendar date: **Date · Opened · Touched ·
-  Expired** counts, newest date first.
-- Click a date to expand it into three labelled sections (Opened / Touched / Expired),
-  each listing the contracts that landed in that bucket on that date. Rows keep the
-  existing click-through to the day-by-day detail popup.
-- A single flag can appear under up to three dates: `first_flagged` (opened),
-  `touched_date` (touched), and `expiry` when its status is `expired`.
-- Grouping is client-side (`groupOutcomesByDay`); the view fetches
-  `/proxy/far-cb-outcomes?status=all&limit=300` (300 = the endpoint's existing cap) so
-  the per-day counts are complete. **No server/proxy change.**
+### Lists — three views, two tables
+`hh_meals` and `hh_list_items`. Week / Shop / List are **views, not copies**: ticking
+"tortillas" in Shop marks the same row nested under Tuesday on Week. Any design that
+generates shopping rows separately ends with the two disagreeing about what you bought.
 
-## 2026-08-06 - ES Candles: x-axis showed dates instead of times
+- **Week** — Monday-start board, meals per day, ingredients nested. Monday not Sunday:
+  a Sunday start puts tonight's dinner at the far right every Sunday evening.
+- **Shop** — a MODE, not a screen. Aisles in **store-walk order** (produce → … →
+  other), empty aisles dropped, 26px targets and 16px rows because this is tapped
+  one-handed in a shop holding something else. Ticked items drop to "in the cart".
+- **List** — the plain list with aisle labels and where each item came from.
 
-The ES Candles time axis rendered a date at nearly every tick. The clock only ever
-appeared on the crosshair label, so an intraday chart had no visible time scale.
+Decisions worth keeping:
+- **Aisle is guessed** from the item name (~60 keywords) and deliberately conservative:
+  a wrong guess is worse than `other`, because a misfiled item is one you walk past.
+- **Lists default to `shared`**, unlike tasks. A private grocery list in a two-person
+  house is the wrong default — you are both shopping from it.
+- **Deleting a meal keeps its items** (`ON DELETE SET NULL`). Removing "Taco night"
+  must not silently take the tortillas off your list.
+- **"Done shopping" deletes** the bought items rather than un-ticking them — otherwise
+  next week starts with last week's shopping already crossed off. Items still attached
+  to a meal are kept so the week board doesn't lose its plan.
+- Ticking is optimistic and moves the item between sections instantly, updating the
+  week board's counts in the same pass. This is the one interaction that happens on bad
+  signal; a checkbox that waits gets tapped twice, and the second tap un-ticks it.
 
-### Root cause
-`components/dashboard/es-candles/EsChartCard.tsx` set a `tickMarkFormatter` that
-branched on `tickMarkType === 2 || tickMarkType === 3`, commented as "day/month
-boundary". That mapping is wrong. In lightweight-charts v5 the `TickMarkType` enum is
-`0 Year | 1 Month | 2 DayOfMonth | 3 Time | 4 TimeWithSeconds` — **3 is Time**, and it
-is the type emitted for nearly every tick on an intraday chart. Sending 3 down the date
-branch meant the axis printed `Aug 6` where it should have printed `09:30`.
+### Today's calendar
+- **All-day events get a tinted band.** They have no time to anchor them, so without it
+  they read as a midnight event sitting above everything else.
+- **Event titles are tinted by their CALENDAR's colour** — so the family calendar
+  separates from a work one at a glance, with no legend. Per-EVENT `colorId` is
+  deliberately ignored: it would make two events on the same calendar look unrelated.
+- **Upcoming** — the next 5 events over the following three weeks, under today's list.
+  In Upcoming the leading column is the DAY, not the time: "All day" with no date tells
+  you an anniversary is coming but not when. Today's list is the opposite.
 
-### `components/dashboard/es-candles/EsChartCard.tsx`
-- `tickMarkFormatter` now sends only the real calendar boundaries (`0`/`1`/`2`) to the
-  ET date string; everything else (`3` Time, `4` TimeWithSeconds) formats as ET `HH:MM`
-  24-hour. Day boundaries still show `Mon D` for context when the visible range spans
-  more than one session.
-- Comment replaced with the actual enum values so the next edit can't repeat the
-  off-by-one.
+One real bug fixed: colour lookup failed for the DEFAULT calendar, because we read it
+as the literal id `primary` while `calendarList` returns it under the account's email.
+Every event on the default calendar — the case for anyone who never opens the picker —
+came back colourless. `calendarList` now aliases the primary entry.
 
-No other file defines a `tickMarkFormatter`, and this card owns the only `createChart`
-call on the page, so the fix covers every ES Candles chart slot.
+### Verification — 428 assertions across 9 suites, 0 failures
+**60 new list tests** (week maths incl. Sunday belonging to the week that just ended,
+month/year/leap boundaries; aisle guessing; the same-row-two-views property; meal
+deletion keeping items; clear-checked keeping meal ingredients; both directions of
+visibility) and **6 new calendar tests** (per-event colour, calendar name, the
+look-ahead window, ordering, and that it excludes the requested day).
 
+**No proxy change.**
+
+
+## 2026-08-06 (l) - budget.cbedge.net: landing screen
+
+The pencil heart drawing as a landing screen — on sign-in, and once per app open
+before Today. Visual only; no route, endpoint, query or schema changed.
+
+### The image is the real drawing
+`budget-vite/public/heart.png` is the actual scan, not a redrawn approximation.
+Processed to sit on the dark background:
+- Inverted, then used as the ALPHA channel — white strokes on transparency, so there
+  is no paper rectangle behind it and it works on any surface.
+- `autocontrast(cutoff=(10,0))` drives the paper's warm, unevenly-lit gradient to zero
+  alpha. Without it a faint grey panel shows against near-black.
+- Gamma lift (0.72, ×1.25) on the mask: pencil is thin, and a faithful alpha ramp
+  renders as a barely-visible grey scribble at 300px on a phone.
+- Connected-component filter drops every blob under ~400px — 71 components in, 7 out.
+  That removes paper grain and a scan smudge in the bottom-right corner without
+  touching a single pencil line.
+- 816×867, 105KB, served as a static file rather than inlined so it stays out of the
+  JS bundle.
+
+### Behaviour
+- Shows on sign-in AND once per page load; **not** on navigation between tabs.
+  Tracked by a module-scope flag, because React state re-initialises on remount and a
+  ref resets with it.
+- Holds 5s, then fades. **Tapping anywhere dismisses instantly** — five seconds is a
+  long time when you opened the app to tick one thing off, so the target is the whole
+  screen rather than a small "skip" control.
+- Rendered OVER the app, not instead of it, so Today is already mounted and painted
+  behind it — dismissing early lands on a finished screen, never a spinner.
+- The fade-out and the unmount are separate timers rather than a `transitionend`
+  handler: backgrounding the tab mid-transition never fires that event, and the splash
+  would still be sitting there on return.
+- Never shown in front of the forced password change.
+- `prefers-reduced-motion` disables the rise-in and the fade.
+
+**No proxy change. No API change. No schema change.**
+
+
+## 2026-08-06 (k) - budget.cbedge.net: CB Edge palette on the editorial layout
+
+Same editorial structure shipped in (j), now on the dashboard's dark palette. Because
+(j) rebuilt the styling as a token set plus helpers, this was almost entirely a swap of
+values in `budget-vite/src/theme.ts` — no page had to be restructured.
+
+**Visual layer only.** No route, endpoint, query or schema changed. Nothing on
+cbedge.net was touched.
+
+### Palette
+Values mirror `components/shared/homeTheme.ts` and the deeper surface set
+`app/owner/budget` uses locally — but the files are deliberately NOT shared, because
+budget-vite builds standalone (see its vite.config.js).
+
+- Surfaces `#05060A` / `#0D1119`, plus the dashboard's radial shell glow behind the page
+- Accent is **`#8ECAE6`**, not `#219EBC`: the darker cyan is not legible as 10px mono
+  on near-black, and nearly every label in this design is 10px mono
+- **`warn` (`#FB8501`) is a separate token from `accent`.** Overdue, slipping, past-due
+  and over-budget mean "act on this" — colouring them with the interactive accent makes
+  them read as links, and colouring links orange makes the whole page look alarmed
+
+### The naming inversion, on purpose
+Tokens keep their light-theme names: **`ink` means FOREGROUND, `paper` means
+BACKGROUND**, so on dark `ink` is white. Every helper reads correctly under the
+inversion without a branch — a completed checkbox is still "filled `ink`, tick in
+`paper`", which is now white-with-a-dark-tick instead of black-with-a-light-one. The
+alternative (renaming to fg/bg) would have touched every file for no behavioural gain.
+
+### Two adjustments the dark version needed
+- **Display weight 600 → 500.** Light-on-dark blooms optically; the weight that looked
+  right on cream reads chunky here.
+- **Disabled primary buttons became ghost outlines.** A dimmed white fill on black is a
+  grey slab that reads as enabled-but-broken. The outline reads as "not yet".
+
+### Verified by rendering, not by reading
+The real build was screenshotted at 390px against a stubbed `/api/hh/*` and inspected
+across Today, Habits, Work and Money.
+
+**No proxy change. No API change. No schema change.**
+
+
+## 2026-08-06 (j) - budget.cbedge.net: "warm paper" redesign
+
+Replaced the CB Edge dark theme on budget.cbedge.net with a light, editorial design
+modelled on the reference app Brandon supplied (jeradhill.com life-management app).
+**Visual layer only** — no route, endpoint, query or schema changed, and nothing on
+cbedge.net was touched. The trading app keeps `homeTheme.ts`; the two products no
+longer share tokens.
+
+### The system — `budget-vite/src/theme.ts`
+Rewritten from scratch as a token set plus style helpers. Four rules it enforces:
+
+1. **ONE accent colour.** Burnt orange `#C2410C`, only for things that are live —
+   links, overdue, streaks, the current tab. Nothing decorative is coloured. A second
+   accent is what turns this back into a dashboard.
+2. **Hairline rules, not cards.** Sections are a 1px top rule and whitespace. Borders,
+   fills and shadows are the exception (compose box, active segment), never the
+   default container. `card()` is gone.
+3. **Serif for VALUES, mono for LABELS.** A number you read is Newsreader and large;
+   the word describing it is 10px JetBrains Mono, uppercase, letterspaced, muted.
+   Swapping those two is what makes a layout look like generic admin.
+4. **No bold-for-emphasis.** Hierarchy comes from size, case and colour.
+
+Palette: warm cream surfaces (`#F7F4ED` / `#FBF9F5` / `#F1EDE4`), warm near-black ink
+(`#1C1917` — never pure black, too hard against cream), three muted greys.
+
+### Applied across every screen
+- **Shell** — mono date line ("Thu, Aug 6 · Week 32"), serif page title, bottom tab bar
+  marked by a 2px accent rule instead of icons or fills. Tabs renamed to fit five on a
+  390px phone: Today · Habits · Work · Money · More.
+- **Today** — opens with one plain-English brief line ("6 open · 2 overdue · 1 due
+  today") rather than a stat grid, which is how the reference does it.
+- **Habits** — hero percentage, a 30-day completion trace, per-row square-block history
+  and streak count.
+- **Money** — the balance as an oversized serif number, banks as a mono row beneath.
+- **Work** — serif project names, hairline progress rules, terse mono meta lines.
+- Checkboxes are squares (a circle reads as a radio); done = solid ink fill, paper tick,
+  strikethrough.
+
+### Two fixes found by rendering it, not by reading it
+The build was screenshotted at 390px against a stubbed API and inspected:
+- **The 30-day trace was full-height black bars** — it dominated a screen where the
+  number beside it is the point. Redrawn as a thin SVG polyline that dips on missed
+  days, matching the reference.
+- **Primary actions were full-width filled blocks.** In this language the default
+  action is TEXT — `+ New project` right-aligned in mono caps. The filled button is now
+  reserved for the single primary action on a screen (sign in, save).
+
+### Fonts
+Newsreader (serif), JetBrains Mono (labels), Inter (body), via Google Fonts in
+`index.html`. `index.css` sets `color-scheme: light` on native inputs so date pickers
+and checkboxes don't render dark against the paper.
+
+**No proxy change. No API change. No schema change.**
+
+
+## 2026-08-06 (i) - budget.cbedge.net phase 2: routines & habits, projects & milestones
+
+Two new modules on budget.cbedge.net. Tab bar is now Today · Routines · Projects ·
+Budget · Settings. **Nothing on cbedge.net changed** — no trading route, socket topic,
+page, proxy or existing schema was touched.
+
+### Routines & habits — `server-v2/_lib-household-routines.cjs`
+
+**Deliberately NOT tasks.** A routine is a recurring intention that never completes; a
+task is done once and gone. Mixing them leaves your to-do list permanently full of
+things you do every day, or makes habits vanish the moment you tick them. Separate
+tables, separate screen: `hh_routines` (one row per habit) + `hh_routine_log` (one row
+per routine per day).
+
+**The streak rule.** A streak counts consecutive days backwards from today — but
+**today is not counted against you until it's over**. At 7am, before you've done your
+morning routine, the walk starts from yesterday. A streak that resets at midnight and
+only recovers once you've performed is punishing and factually wrong: you haven't
+broken anything at 7am.
+
+Other decisions:
+- `PRIMARY KEY (routine_id, day)` makes ticking idempotent, and means a shared routine
+  ticked by either person is simply done for the household. `done_by` records who.
+- `day` is always resolved in the user's timezone before it reaches SQL. Never
+  `now()::date`, which rolls over at 8pm Eastern and would tick the wrong day for the
+  entire evening block.
+- **Removing archives, it doesn't delete.** The log rows would cascade away with the
+  routine, and losing a 90-day streak because you tidied your list is how people stop
+  using an app. A real delete stays available for one you never wanted.
+- Ticking is optimistic *including the streak number* — that number is the whole point
+  of the gesture, and one that lags a second reads as "it didn't count".
+- Morning / afternoon / evening blocks; new items sort to the BOTTOM of their block,
+  because a routine list is a sequence you work through, not a feed.
+
+### Projects & milestones — `server-v2/_lib-household-projects.cjs`
+
+**Progress is measured from MILESTONES, never from task counts.** A project with 40
+small chores and 3 real milestones reads as 80% complete once you've cleared the easy
+chores — precisely the lie a progress bar exists to prevent. Milestones are the few
+things that mean progress; tasks are listed and counted separately. Asserted directly
+in the tests: 7 of 8 tasks done, progress stays at 25%.
+
+A project with no milestones reports **null** progress and renders no bar at all —
+"not measured yet" is honest, and a 0% bar on a project you've barely defined reads as
+failure.
+
+Other decisions:
+- Milestones and time entries inherit permission from the PROJECT, resolved by joining
+  — never by trusting an id from the client. Tested from both sides.
+- Time is stored in whole minutes and **capped at 24h per entry**: anything larger is
+  an extra zero on "90", and one bad row silently ruins every total downstream.
+  Negative entries are allowed as corrections.
+- Only whoever logged an hour can delete it. Archive/delete of a project stay
+  owner-only even when shared, because they take milestones and logged hours with them.
+- Deleting a project cascades to its milestones and time, but a task pointing at it
+  survives (`ON DELETE SET NULL`) — losing the task would be losing unrelated work.
+- List and detail are one screen with a selected id, not two routes: on a phone you
+  bounce in and out constantly, and a route change loses scroll position every time.
+- `hh_tasks.project_id` added via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` — the
+  table already exists on the deployed box, so `CREATE TABLE IF NOT EXISTS` would have
+  skipped it silently. The old free-text `project` column is left alone.
+
+### New routes
+`GET/POST /api/hh/routines` · `GET/POST /api/hh/projects` (create, update, archive,
+delete, addMilestone, toggleMilestone, updateMilestone, deleteMilestone, logTime,
+deleteTime). Today's payload gains a `routines` progress line.
+
+### Verification — 362 assertions across 8 suites, 0 failures
+- **51 routine tests**: the streak rule in isolation (including across month, year,
+  leap-day and DST boundaries), idempotent ticking, shared ticking by either person,
+  archive-keeps-history, backfilling a past day, and both directions of the visibility
+  rule.
+- **58 project tests**: milestone-driven progress, the explicit "tasks do not move the
+  bar" case, permission-by-join from both sides, time validation and caps, cascade
+  behaviour on delete, archive round-trip.
+- 73 calendar route, 57 household, 53 budget, 32 crypto/timezone, 19 recurrence parity
+  (16,389 comparisons), 19 date-label.
+- `tsc --noEmit` clean, `vite build` clean, `node --check` on all server files.
+
+**No proxy change** — `proxy-tastytrade.js` and `proxy-thetadata.js` untouched.
+
+
+## 2026-08-06 (h) - budget.cbedge.net step 6: the budget, on the phone
+
+Phase 1 step 6 of 7. Balances, month totals, bills due, register and category spend
+on a phone — reading the SAME tables as `/owner/budget`. Both placeholders on Today
+are now live. `/owner/budget` is untouched and stays live.
+
+**There is no second budget.** No copy, no sync, no import. One register, two views:
+a payment entered on the phone appears on the desktop page immediately, and a bill
+marked paid on either cannot be paid again on the other.
+
+### How, with no migration
+The budget tables were already multi-profile — every row is scoped by `profile_id`
+and `/api/budget` has always resolved it via `getOrCreateBudgetProfile('owner')`.
+`hh_users.budget_profile_key` defaults to `'owner'`, so both household accounts land
+on the existing profile and see the existing register. Point someone at another key
+and they get a private budget instead. No `ALTER TABLE`, no backfill, nothing to undo.
+
+### New: `server-v2/_lib-household-budget.cjs`
+
+**The part that must not drift.** Recurring bills are not rows — they are rules,
+expanded into occurrences at read time. An occurrence becomes a real row only when
+someone marks it paid, "materialising" it under
+
+    __recur__:<ruleId>:<YYYY-MM-DD>
+
+`occurrencesInMonth()` and that tag are ported **verbatim** from
+`app/owner/budget/page.tsx`. If the two ever disagree, a bill paid on the phone still
+shows unpaid on the desktop and gets paid twice — or a projection sits alongside its
+own materialised row and double-counts against the balance.
+
+Monthly rules clamp the anchor's day-of-month to the month length (a rule anchored on
+the 31st fires on the 30th in April, the 28th in February, the 29th in Feb 2028).
+Weekly/biweekly walk back from the anchor to before the month, then step forward.
+
+Other decisions:
+- **The sign is decided server-side.** The phone sends a positive amount plus
+  "pay" or "income"; a fumbled minus can't turn a payment into a deposit.
+- **markBillPaid is idempotent by tag** — a double-tap on a slow connection can't pay
+  the same bill twice.
+- Projected bills carry negative ids and cannot be edited or deleted (there is no row
+  behind them). The UI says so rather than offering a button that would 400.
+- Projected bills count against the running balance but NOT against category spend —
+  they haven't been spent yet, and counting them would overstate every category.
+- Errors throw human-readable text ("Pick a date.", "Give it a name.") surfaced as
+  400s so the phone shows them verbatim.
+
+### New route: `/api/hh/budget`
+GET a month; POST `addRow | markBillPaid | updateRow | deleteRow | setDailyBalance |
+setCategory`. Scoped by the caller's `budget_profile_key`.
+
+### Today's Money card is live
+`/api/hh/today` now carries a `money` summary — total balance, per-bank split, past-due
+count and the next three bills — wrapped so a budget hiccup degrades one card instead
+of the screen. Read-only by design: Today is for noticing, the Budget tab is for doing.
+
+### `budget-vite/src/pages/Budget.tsx`
+Month switcher, balance hero with per-bank split, in/out/net, Past due and Coming up
+with one-tap Paid, add-entry form, newest-first register with running balance, and
+category bars. Dates are sliced from the `YYYY-MM-DD` string, never parsed — same
+rule as everywhere else in this app.
+
+### Verification — 253 assertions, 0 failures
+- **Parity: 16,389 comparisons** of `occurrencesInMonth` and `addDays` against the
+  desktop implementation *extracted from the shipped `page.tsx` at test time*, across
+  every day-of-month anchor x 3 frequencies x 17 months, plus 7,209 `addDays` cases
+  over DST and leap boundaries. Identical output in every case. The tag format is
+  asserted against the literal template in the desktop source.
+- **53 budget integration tests** against real PostgreSQL: running balances, projection
+  vs materialisation, the double-count trap, mark-paid idempotency, server-side sign,
+  validation, categories, month boundaries, leap February, empty profile. Includes a
+  direct assertion that the desktop's own skip rule and the phone's produce the
+  identical bill set from the same live rows.
+- 73 calendar route, 57 household integration, 32 crypto/timezone, 19 date-label.
+- `tsc --noEmit` clean, `vite build` clean, `node --check` on all server files.
+
+**No proxy change** — `proxy-tastytrade.js` and `proxy-thetadata.js` untouched.
+
+
+## 2026-08-06 (g) - budget.cbedge.net: shared household calendar + calendar picker
+
+Follow-up to (f), fixing a design flaw found in real use: a **shared family calendar
+would never have appeared at all**, and the other person had to do the whole Google
+flow to see anything.
+
+### The bug: `primary` is not "all your calendars"
+The events read hit `/calendars/primary/events`. `primary` is only the account's own
+default calendar — a calendar shared with you is a SEPARATE entry in the calendar list,
+so not one of its events would ever have shown, for either person. Now reads
+`users/me/calendarList` and merges events across the calendars you pick.
+
+### One connection can serve the whole household
+`hh_google_tokens` gains `share_with_household` and `selected_calendars`. Added as
+`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, deliberately NOT folded into the CREATE —
+the table already exists on the deployed box and `CREATE TABLE IF NOT EXISTS` would
+skip new columns silently.
+
+`resolveSource(userId)` picks the user's own connection first, else any connection
+flagged `share_with_household`. So one person links the family calendar and the other
+just sees it, having touched Google never. Defaults to sharing ON for a new connection
+— it shares only the SELECTED calendars, and selection starts at primary-only, so this
+can never expose a calendar that wasn't ticked.
+
+### The picker IS the privacy control
+`GET /api/hh/calendar/calendars` lists everything the account can see (personal,
+shared, subscribed, holidays) with colour and access role; `POST /api/hh/calendar/select`
+saves the ticked ids and the sharing flag. `selected_calendars` distinguishes three
+states that matter: **NULL** = never chosen → primary only; **[]** = deliberately none
+→ the card says "no calendars selected" rather than showing a misleadingly empty day;
+**[ids]** = exactly those.
+
+### A regression the tests caught
+Per-calendar failures are tolerated so one deleted calendar can't blank the others —
+but that first pass meant a TOTAL Google outage returned `events: []` with no error,
+rendering as "nothing on today". That is the exact lie the card is built never to tell.
+Now: all calendars failed → `error`; some failed → events plus a `partialFailures`
+count and a "this may not be everything" line.
+
+### Other fixes in this pass
+- **Event ids are calendar-qualified** (`<calendarId>:<eventId>`). The same invite on
+  two selected calendars shares a bare event id, and React would silently drop one copy.
+- Events sort all-day first, then chronologically, merged across calendars.
+- Per-calendar fetches run in parallel — sequential would stack latency per calendar.
+- Cache is cleared on any selection change, not just the editing user's slice, because
+  a shared connection's selection changes what the OTHER person sees.
+- Settings distinguishes "you have your own connection" from "you're being fed by the
+  shared one", so the second case reads as working rather than as broken.
+
+### Verification — 181 assertions, 0 failures
+Calendar route tests grew to **73**, adding: shared-connection resolution, the picker,
+merge across calendars, holidays excluded when unticked, turning sharing off cutting
+the other person off immediately, empty-selection vs never-selected, and partial
+failure. Plus 57 household integration, 32 crypto/state/timezone, 19 date-label.
+`tsc --noEmit` clean, `vite build` clean, `node --check` on all server files.
+
+**No proxy change** — `proxy-tastytrade.js` and `proxy-thetadata.js` untouched.
+
+
+## 2026-08-06 (f) - budget.cbedge.net step 5: Google Calendar (read-only, per person)
+
+Phase 1 step 5 of 7. Each household member links their OWN Google account; today's
+events render in the Today calendar card. Read-only — the app cannot create, change
+or delete an event. Money card is the last placeholder (step 6).
+
+**Nothing on cbedge.net changed.** No trading route, socket topic, page, proxy or
+existing schema was touched.
+
+### New: `server-v2/_lib-google-calendar.cjs`
+Four rules the implementation is built around:
+
+1. **The browser never sees a Google token.** No client-side Google SDK, nothing in
+   localStorage. The SPA calls our endpoint; we call Google server-side and return
+   plain event JSON.
+2. **Refresh tokens are encrypted at rest** (AES-256-GCM, scrypt-derived key from
+   `HH_TOKEN_KEY`). A refresh token is a permanent read key to someone's calendar; it
+   does not sit in a table in plaintext. A rotated key decrypts to null → "reconnect",
+   never a 500.
+3. **Scope is `calendar.readonly`** and `prompt=consent` + `access_type=offline`, which
+   is what actually returns a refresh_token on RE-authorisation. Without
+   `prompt=consent` Google omits it every time after the first, leaving a connection
+   that works for an hour and then silently dies.
+4. **Google being slow, down, or revoked must never break Today.** Every read path
+   returns `{ events, error? }` and always 200s. The card renders its own state.
+
+### OAuth state is signed AND user-bound
+`state` is an HMAC-signed, 10-minute payload carrying the user id. The callback
+requires a valid signature **and** `state.uid === signed-in user`. Signature alone
+would let someone paste their own callback URL into the other person's browser and
+bind THEIR calendar to that account. Tested explicitly.
+
+### `/connect` and `/callback` are `auth:'public'` on purpose
+They are browser navigations, not fetches. A navigation that 401s with JSON dumps raw
+text on the screen, so both do their own session check and always end in a redirect a
+person can read. This is safe because the hh_session cookie is `SameSite=Lax`, which
+permits top-level GET navigations — do **not** switch to a POST callback, the cookie
+would not survive it.
+
+### Events are fetched SEPARATELY from `/api/hh/today`
+A call out to Google can take half a second. Folding it into Today would hold the
+whole screen hostage to a third party. Today reports only `calendar: {configured,
+connected}` from our own database and paints immediately; `/api/hh/calendar/events`
+fills the card in when it fills in. 60s per-user cache server-side (a phone re-checks
+on every foreground) and a matching `staleTime` client-side.
+
+### Per-day timezone offset, not "now"
+The events window is built from the offset that timezone is at **on that specific
+calendar day**, not the current one. Using today's offset for a day on the other side
+of a DST change shifts the window an hour and drops the first or last event. Both
+boundaries are covered by tests.
+
+Other handling: recurring events expanded via `singleEvents=true` (otherwise a weekly
+standup returns as one master row and never shows), `cancelled` filtered out, all-day
+vs timed distinguished by `date` vs `dateTime`, untitled events labelled.
+
+### `budget-vite`
+- `src/components/CalendarCard.tsx` — every failure mode gets its own honest message.
+  The one thing it must never do is render an empty list when it doesn't know:
+  "nothing on today" and "we can't reach your calendar" look identical but mean
+  opposite things, and one of them makes you miss something.
+- `src/pages/Settings.tsx` — connect/disconnect, shows the linked Google address,
+  reads the `?calendar=` result from the callback and strips it so a refresh doesn't
+  replay the message.
+- Connect is a real `<a href>`, never a fetch — the browser has to follow the redirect
+  out to Google.
+
+### New env (`.env.local` on the VPS — mounted at runtime, never baked into the image)
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `HH_TOKEN_KEY` (`openssl rand -hex 32`),
+optional `HH_BASE_URL` (default `https://budget.cbedge.net`). Missing config is not a
+crash: `configured()` returns false and the card says "not set up" instead of offering
+a Connect button that dead-ends.
+
+Authorised redirect URI in Google Cloud Console must be EXACTLY
+`https://budget.cbedge.net/api/hh/calendar/callback`.
+
+### Verification — 156 assertions total, 0 failures
+- **48/48** calendar route tests with Google stubbed at the `fetch` boundary: full
+  connect flow, CSRF (forged state, expired state, another user's valid state replayed
+  in your session), token encryption at rest, access-token refresh on expiry, key
+  rotation, revoked access, Google 503, cache hit, disconnect + revoke, and the
+  missing-refresh_token trap.
+- **32/32** crypto/state/URL/timezone unit tests, including both DST boundaries.
+- **57/57** household integration tests still green against real PostgreSQL 16.
+- **19/19** date-label tests.
+- `tsc --noEmit` clean, `vite build` clean, `node --check` on all server files.
+
+**No proxy change** — `proxy-tastytrade.js` and `proxy-thetadata.js` untouched.
+
+
+## 2026-08-06 (e) - budget.cbedge.net step 4: tasks, Today screen, per-person sharing
+
+Phase 1 step 4 of 7. The Today screen is real now — capture, Top 3, open tasks,
+Slipping, Resurfacing — backed by `hh_tasks` / `hh_notes` with the per-person
+opt-in-sharing rule enforced in SQL. Calendar and Money remain labelled placeholders
+(steps 5 and 6).
+
+**Nothing on cbedge.net changed.** No trading route, socket topic, page, proxy or
+existing schema was touched.
+
+### `server-v2/household-routes.cjs` — 4 new routes (9 total)
+- `GET/POST /api/hh/tasks` — list + create/update/toggleDone/toggleStar/touch/delete.
+- `GET/POST /api/hh/notes` — the Resurfacing pool.
+- `GET/POST /api/hh/settings` — per-user `slippingDays` (default 7, clamped 1-365).
+- `GET /api/hh/today` — the whole screen in ONE round trip (top3 + open + slipping +
+  counts + resurfacing + people). Composed server-side so the phone paints once
+  instead of in five stages over cellular.
+
+### The visibility rule, defined once
+`VISIBLE = (owner_id = $1 OR visibility = 'shared')` is a single constant reused by
+every query. Read and write both use it; **delete is deliberately stricter** — you can
+complete or edit a shared task, but only its owner can destroy it, because deletion is
+the one action with no undo. A query that forgets this clause leaks the other person's
+private rows, so it is never hand-rolled per route.
+
+### `due_date` is cast to TEXT — do not "simplify" this back
+`due_date` is a Postgres DATE (a calendar day), but `pg` hydrates it into a JS Date at
+UTC midnight, which serialises as `"2026-08-10T00:00:00.000Z"`. In Eastern that renders
+as **Aug 9** — every due date one day early, and "due today" showing as overdue.
+`to_char(due_date,'YYYY-MM-DD')` kills the class of bug at the source, and matches what
+`<input type="date">` expects. The client compares dates as STRINGS throughout
+(lexicographic on that format is chronological) and never calls `new Date()` on one.
+
+### Slipping
+Open, unstarred, `touched_at` older than the user's threshold. Starred items are excluded
+— they're already at the top of the screen, so flagging them again is noise, not a nudge.
+`touch` ("Still on it") resets the clock without pretending the task changed.
+
+### `budget-vite` — Today screen + optimistic updates
+- `src/hooks.ts` — TanStack Query. Every task mutation is optimistic with snapshot
+  rollback on failure; a checkbox that waits 400ms on cellular feels broken and gets
+  tapped twice. `patchToday()` updates a task across ALL of top3/open/slipping at once,
+  because the same task lives in several arrays and patching one leaves a row ticked in
+  the top section and unticked twenty pixels below.
+- Star is deliberately NOT re-bucketed client-side: top3 membership is a server decision
+  (starred + ordered + capped at 3), so guessing locally makes rows jump and jump back.
+- `src/components/TaskRow.tsx` — 24px complete button with its own hit area, star,
+  expandable row for due date / share toggle / still-on-it / delete.
+- `src/pages/Today.tsx` — quick-add first (thumb reach), counts, Top 3, calendar
+  placeholder, open tasks, Slipping, Resurfacing, money placeholder.
+- `src/pages/Settings.tsx` — slipping threshold, saved-notes manager, password change.
+
+### Verification
+- **56/56 integration tests** against a real PostgreSQL 16, driving the actual route
+  handlers: schema idempotency, login + lockout, session hashing + expiry, task CRUD,
+  ordering (`NULLS LAST`, so undated tasks don't bury dated ones), settings clamping,
+  Slipping, Resurfacing stability, empty-state.
+  Both directions of the visibility rule are asserted explicitly: neither person can
+  read, edit, complete or delete the other's private rows.
+- **19/19 date-label tests** including both DST boundaries, month/year rollover, leap day
+  and Feb 29 → Mar 1.
+- `tsc --noEmit` clean, `vite build` clean, `node --check` on all server files.
+
+**No proxy change** — `proxy-tastytrade.js` and `proxy-thetadata.js` untouched.
+
+
+## 2026-08-06 (d) - budget.cbedge.net: household life-OS subdomain (auth + shell)
+
+New standalone SPA at **budget.cbedge.net** — a personal life OS shared with one other
+person, with budget as one tab. Phase 1 steps 1-3 of 7: its own auth system and a
+deployable phone-first shell. Today/Budget screens are labelled placeholders until
+steps 4-6.
+
+**Nothing on cbedge.net changed behaviour.** `/owner/budget` is untouched and still
+owner-gated. No trading route, socket topic, page or schema was modified.
+
+### New: `budget-vite/` — the SPA
+- Vite + React + TS + TanStack Query, phone-first (390px), CB Edge dark palette.
+- Mirrors the `owner-vite/` pattern exactly: node build stage → nginx, `docker compose
+  build budget` reproduces it, no host npm.
+- **Standalone on purpose** — no `@/app/...` alias into the Next app (unlike `app-vite`).
+  It builds and deploys without the trading component tree, `GlobalToolbar` or
+  `gexSocket`. `src/theme.ts` COPIES the `homeTheme.ts` tokens rather than importing them.
+- `nginx.conf` listens on **8083** and proxies **only `/api`** — deliberately narrower
+  than owner-vite, which also forwards `/ws` and `/proxy`. This app has no reason to
+  reach the market-data stack, so it cannot.
+- Login screen names no product and exposes no signup or password-reset route.
+
+### New: `server-v2/_lib-household.cjs` — auth, separate from CB Edge
+- Tables self-bootstrap via `CREATE TABLE IF NOT EXISTS` (same pattern as `day_posts`
+  and `cb-contract-track`): `hh_users`, `hh_sessions`, `hh_login_attempts`, `hh_tasks`,
+  `hh_notes`, `hh_settings`, `hh_google_tokens`. No migration runner.
+- **A cbedge.net session grants nothing here, and vice versa.** Different cookie name
+  (`hh_session`), and the Set-Cookie carries **no `Domain=` attribute** so the browser
+  scopes it host-only to budget.cbedge.net. Never add `Domain=.cbedge.net` there.
+- scrypt via `node:crypto` — no new dependency, no native build. The DB stores only the
+  SHA-256 of the session token, so a dump yields no live sessions.
+- 5 failures per email per 15 min locks out. Unknown-email and wrong-password return the
+  same message and burn the same CPU, so neither response nor timing reveals which of the
+  two addresses is real.
+
+### New: `server-v2/household-routes.cjs` — `/api/hh/*`
+- `login`, `logout`, `me`, `change-password`, `health`. **No signup route by design.**
+- `me` is `auth:'public'` returning 401 rather than `auth:'household'`, so a signed-out
+  visitor gets clean JSON the SPA can render a form for instead of an HTML redirect.
+
+### New: `server-v2/scripts/hh-user.js`
+- `list | add | passwd | profile | sessions-clear`. Accounts are created on the box.
+
+### `server-v2/api-router.js` — two surgical edits
+- `enforceAuth()`: new `'household'` branch, placed **before** the `verifyWsRequest` call.
+  A household user carries no `cbe_session` and would otherwise be rejected as a
+  signed-out visitor. Returns `userId: 'hh:<id>'` so a household id can never be confused
+  with a `users.id` downstream.
+- Bottom of file: loads `household-routes.cjs` inside a try/catch, exactly like the
+  `_lib-*` bundles. If it or `_lib-db.cjs` is missing, `/api/hh/*` is simply never
+  registered and boot is unaffected.
+
+### `docker-compose.yml`
+- New `budget` service → `budget-web:latest`, bound to `127.0.0.1:8083` (loopback only,
+  Cloudflare Tunnel reaches it).
+
+### Budget data — no migration needed
+The budget tables were **already multi-profile**: `/api/budget` calls
+`getOrCreateBudgetProfile('owner')` and every row is scoped by `profile_id`. So
+per-person budget = per-profile. `hh_users.budget_profile_key` defaults to `'owner'`, so
+both accounts read the existing register with **zero `ALTER TABLE`, zero backfill**, and
+`/owner/budget` keeps working unchanged. The planned ownership-column migration was
+dropped as unnecessary.
+
+### Deploy
+Needs one manual step outside the repo — add to `/etc/cloudflared/config.yml` above the
+catch-all 404: `- hostname: budget.cbedge.net` / `service: http://127.0.0.1:8083`, then
+`cloudflared tunnel route dns <tunnel> budget.cbedge.net` and restart cloudflared.
+
+**No proxy change** — `proxy-tastytrade.js` and `proxy-thetadata.js` untouched.
+
+
+## 2026-08-06 (c) - GEX sign parity: OI-only mode on Multi Greek, abs() on two recorder paths
+
+Chased a report that 0DTE QQQ 720 read strongly POSITIVE on our board while two other
+platforms read negative. Not a bug in the arithmetic — a difference in what "net GEX"
+means here — plus one genuine latent sign bug found alongside it.
+
+### `app/mult-greek/MultGreekClient.tsx`
+- Added a third **`OI`** option to the contract-basis toggle (was `OI+VOL` / `VOL` only).
+  Default is unchanged (`oivol`).
+- **Why.** Every other GEX vendor publishes OI-ONLY net GEX. This page had no OI-only
+  mode, so its numbers were never comparable to theirs — and on 0DTE they can carry the
+  OPPOSITE SIGN. 0DTE open interest is yesterday's close (often ~0 at a strike that only
+  came into play this morning) while today's volume is 10-50x larger, so `OI+VOL` is
+  effectively pure VOLUME GEX at those strikes. Volume GEX is signed with the OI
+  convention — ALL call volume treated as dealer-long, ALL put volume as dealer-short,
+  with no buy/sell classification of the tape — which pins any heavily-traded call strike
+  strongly positive even when the OI book there is net short gamma. That is exactly the
+  QQQ 720 case.
+- `strikeGex()`'s 4th arg went from `volOnly: boolean` to `mode: ContractMode`
+  (`"oivol" | "vol" | "oi"`); the same value now threads through `computeRows()`, the
+  panel prop, and the delta-stamp history effect, so the 15m/30m/open change stamps are
+  computed on whichever basis is displayed rather than always on the OI+Vol one.
+
+### `server-v2/etf-gex-recorder.js` — sign bug
+- `Math.abs()` on both gammas before the netGEX / netVolGEX reduction.
+- Gamma is positive for calls AND puts; the put leg's short-gamma polarity is carried by
+  the MINUS sign in the formula, not by the greek. A signed (negative) put gamma from
+  upstream made `- pGamma * pOI` ADDITIVE, silently flipping that strike POSITIVE in the
+  recorded SPY/QQQ history. `computation/gex-calculator.js` and the client both abs their
+  gammas; these two paths were the only places in the repo that did not.
+
+### `server-v2/state/ticker-wall-recorder.js` — same sign bug
+- Same `Math.abs()` fix. Here the failure mode is a put wall being recorded as a call
+  wall.
+
+**No proxy/server-with-proxy change. No API, schema, socket-topic or route change.**
+
+## 2026-08-06 (b) - Home rail: CPG Ratio → Net GEX Rate, + per-strike GEX rate
+
+Replaced the CPG (call/put gamma) ratio tile on the /home gauge rail with a Net GEX
+RATE tile, and added a matching per-strike rate mode to the heatmap. The ratio described
+the SHAPE of the book; the rate describes how fast it is being built or pulled.
+
+### `components/dashboard/HomeGaugeRail.tsx`
+- `CPG RATIO` tile → **`NET GEX RATE / MIN`**: $B of gamma-per-1%-move added (+) or
+  pulled (−) per minute. Signed meter, self-scaling to today's fastest observed move
+  (floored at 0.1 so a quiet tape doesn't swing the needle on noise).
+- Derived inside the component from the GEX history the rail already keeps — no new
+  prop, no new socket topic, no extra fetch.
+- Δ is measured against the newest sample ≥30s old and ≤180s old, then normalised to
+  per-minute by the ACTUAL elapsed span. Samples are 15s-bucketed and feed cadence
+  drifts, so a raw last-minus-reference would silently scale with how stale the
+  reference happened to be. Spans under 30s are rejected rather than divided through —
+  dividing a small Δ by a few seconds manufactures a huge rate out of feed jitter.
+- Removed now-unused `cpg` prop, `fmtRatio` / `fmtAbsRatio`.
+
+### `hooks/useStrikeGexRate.ts` (new)
+- Per-strike net GEX rate ($ per 1% move, per minute) sampled client-side from the live
+  heatmap rows (15s cadence, ~2min ring), same span guards as the tile.
+- **Deliberately not another `useStrikeGexHistory` age bucket.** The stored per-strike
+  series is written by `gex-history-writer.js` on a ~60s cadence AND each row is an
+  average of the ~12 recomputes in that window, so a "1 minute ago" baseline from it is
+  0–120s old and pre-smoothed — neither 1-minute nor a rate. **No proxy/server change.**
+
+### `app/home/HomeClient.tsx`
+- Heatmap Δ selector gained a **`rate`** option (`Δ off | rate | 5m | 15m | 30m`);
+  `deltaWindow` type widened to `0 | 1 | 5 | 15 | 30`.
+- In rate mode the NET GEX column header reads `NET GEX +Δ/MIN` and the ranked-strike
+  stamps show per-minute rate with a `/m` suffix; tooltip reads "Building/Decaying
+  …/m · #N fastest mover (X.X%/min)".
+- Noise floor is 0.25%/min in rate mode (vs 1% for the cumulative windows) — a rate is a
+  smaller number than a 5/15/30m cumulative move, so the 1% cut would have blanked most
+  of the board.
+- Rate mode is served entirely by the new hook, so it no longer keeps `/proxy/gex-history`
+  warm (`deltaWindow > 1` now gates that poll instead of `!== 0`).
+- Dropped the CPG dollar-gamma sums from `gaugeMetrics`; it now computes `gammaPctVol` only.
+
+### Notes
+- Sign convention is unchanged from the existing 5/15/30m stamps (`d = live − past`), so
+  on a PUT wall (negative net GEX) a shrinking wall reads positive/green. Consistent with
+  what the other windows already show rather than a second convention.
+- Verified: all three files compile (esbuild); rate math unit-tested for clean 60s span,
+  normalisation across a 90s span, the <30s jitter guard, the >180s stale guard, decay,
+  and flat. Declaration order checked — `heatmapRows` (L1187) precedes the hook call
+  (L1370), so no TDZ.
 
 ## 2026-08-06 - GEX chart expiry picker: wrong DTE labels & failed switching
 

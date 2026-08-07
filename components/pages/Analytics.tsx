@@ -1131,7 +1131,7 @@ interface WallsTickerRow {
 }
 interface WallsResp { ok?: boolean; date?: string; tickers?: WallsTickerRow[]; error?: string }
 interface ScannerRow {
-  symbol: string; date?: string; stale?: boolean;
+  symbol: string; date?: string; stale?: boolean; expiry?: string | null;
   spot: number | null; call_wall: number | null; put_wall: number | null;
 }
 interface ScannerResp { ok?: boolean; rows?: ScannerRow[]; error?: string }
@@ -1155,10 +1155,23 @@ function prevSessionISO(iso: string): string {
   return d.toISOString().slice(0, 10);
 }
 
+// "Aug 6 · 0DTE" for the expiry the levels were computed on. The scanner always
+// takes expirations[0] — the nearest — so this reads 0DTE intraday and rolls to
+// the next contract after the close. Which expiry produced a wall is not
+// cosmetic: a call wall from tomorrow's chain is a different level from today's.
+function expiryLabel(exp: string | null, todayISO: string): string {
+  if (!exp) return "exp —";
+  const d = new Date(`${exp}T00:00:00Z`);
+  if (isNaN(d.getTime())) return `exp ${exp}`;
+  const pretty = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" }).format(d);
+  const dte = Math.round((d.getTime() - new Date(`${todayISO}T00:00:00Z`).getTime()) / 86_400_000);
+  return dte >= 0 ? `${pretty} · ${dte}DTE` : pretty;
+}
+
 interface TickerLevelRow {
   symbol: string;
   spot: number | null; core: number | null; call: number | null; put: number | null;
-  note: string | null; stale: boolean;
+  expiry: string | null; note: string | null; stale: boolean;
 }
 
 function TickerLevelsCard() {
@@ -1203,20 +1216,22 @@ function TickerLevelsCard() {
 
   // scanner first (fresher spot/walls), then walls overlays CORE on top.
   const bySymbol = (() => {
-    const m = new Map<string, { spot: number | null; call: number | null; put: number | null; core: number | null; stale: boolean }>();
+    const m = new Map<string, { spot: number | null; call: number | null; put: number | null; core: number | null; expiry: string | null; stale: boolean }>();
     for (const r of scan?.rows ?? []) {
       m.set(String(r.symbol).toUpperCase(), {
         spot: numOr(r.spot), call: numOr(r.call_wall), put: numOr(r.put_wall),
-        core: null, stale: !!r.stale,
+        core: null, expiry: r.expiry || null, stale: !!r.stale,
       });
     }
+    // /proxy/walls' day summary carries no expiry column, but it samples the very
+    // same scanner_snapshots rows — so the scanner's expiry describes CORE too.
     for (const t of wallRows) {
       const k = String(t.symbol).toUpperCase();
       const e = m.get(k);
       if (e) e.core = numOr(t.cb);
       else m.set(k, {
         spot: numOr(t.spot), call: numOr(t.call_wall), put: numOr(t.put_wall),
-        core: numOr(t.cb), stale: false,
+        core: numOr(t.cb), expiry: null, stale: false,
       });
     }
     return m;
@@ -1238,21 +1253,22 @@ function TickerLevelsCard() {
       const src = fut.index ? bySymbol.get(fut.index) : null;
       if (!src || basis == null) {
         return {
-          symbol: sym, spot, core: null, call: null, put: null, stale: false,
+          symbol: sym, spot, core: null, call: null, put: null, expiry: null, stale: false,
           note: fut.index ? "waiting on ES−SPX basis" : "no NQ basis — switch to NDX",
         };
       }
       const shift = (n: number | null) => (n == null ? null : n + basis);
       return {
         symbol: sym, spot, core: shift(src.core), call: shift(src.call), put: shift(src.put),
-        stale: src.stale,
+        // The expiry is the INDEX's — ES borrows SPX's chain, it has none of its own.
+        expiry: src.expiry, stale: src.stale,
         note: `${fut.index} ${basis >= 0 ? "+" : "−"}${Math.abs(basis).toFixed(1)} basis`,
       };
     }
     const e = bySymbol.get(sym);
     return {
       symbol: sym, spot: e?.spot ?? null, core: e?.core ?? null, call: e?.call ?? null,
-      put: e?.put ?? null, stale: !!e?.stale,
+      put: e?.put ?? null, expiry: e?.expiry ?? null, stale: !!e?.stale,
       note: e ? null : "not in the scanner universe",
     };
   };
@@ -1291,12 +1307,23 @@ function TickerLevelsCard() {
   const fmtSpot = (n: number | null) =>
     n == null ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: 2 });
 
+  // Footnote: how the row was derived, plus anything about it that isn't live.
+  // The expiry itself lives in the header, where it reads before the numbers do.
+  const notes = [
+    row.note,
+    row.stale ? "walls from the last scanner sweep" : null,
+    coreStale ? `core from ${wallsPrev?.date ?? "the prior session"}` : null,
+  ].filter(Boolean) as string[];
+
   return (
     <Card variant="budget" padding={16} style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, height: 480, overflowY: "auto" }}>
       <Row>
         <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Ticker Levels</span>
-        <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: row.stale ? T.orange : T.muted, opacity: 0.7 }}>
-          {row.stale ? "last sweep" : coreStale ? `core · ${wallsPrev?.date ?? "prev"}` : "core · walls"}
+        <span
+          style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.7 }}
+          title={row.expiry ? `Levels computed on the ${row.expiry} chain` : "No expiry recorded for this symbol"}
+        >
+          {expiryLabel(row.expiry, today)}
         </span>
       </Row>
 
@@ -1351,8 +1378,10 @@ function TickerLevelsCard() {
             </Row>
           </div>
 
-          {row.note ? (
-            <span style={{ fontSize: 11, color: T.muted, opacity: 0.5, fontFamily: "var(--font-mono)" }}>{row.note}</span>
+          {notes.length ? (
+            <span style={{ fontSize: 11, color: row.stale || coreStale ? T.orange : T.muted, opacity: row.stale || coreStale ? 0.75 : 0.5, fontFamily: "var(--font-mono)" }}>
+              {notes.join(" · ")}
+            </span>
           ) : null}
         </>
       )}
