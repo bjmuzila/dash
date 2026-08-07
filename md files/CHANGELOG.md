@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-08-07 - budget.cbedge.net Lists: real timestamps, and meals named on the grocery list
+
+### Every list row says the day AND the time
+
+`when()` printed a bare "2:14 PM" for today and a bare "Jul 3" for anything over a week
+old — so the two things you actually want to know ("how long has this been sitting here",
+"was that before or after the last shop") were each missing exactly when they mattered.
+
+- `budget-vite/src/pages/Lists.tsx` — `when()` now always returns a day and a time:
+  `Today 2:14 PM` · `Yesterday 11:41 PM` · `Tue 8:41 AM` · `Jul 3, 4:20 PM` ·
+  `Dec 24, 2025, 9:05 AM` (the year appears only when it isn't this one).
+- Today/Yesterday are compared as CALENDAR days, not as a 24-hour difference — something
+  added at 11pm last night reads "Yesterday", not "9 hours ago".
+- The full unabbreviated timestamp is on the row's `title`, for when the short form isn't
+  enough.
+
+### "from a meal" now names the meal and its day, and links to it
+
+- `server-v2/_lib-household-lists.cjs` — `getWeek()` returns a new `mealRefs` index
+  (`{id, day, title}`) covering every meal any visible item points at, **including meals
+  outside the week on screen**. The existing `days[].meals` only spans the seven days
+  being viewed, so an ingredient for next Tuesday's dinner had nothing to name it with.
+- `budget-vite/src/api.ts` — new `MealRef` type; `ListsPayload.mealRefs`.
+- `budget-vite/src/pages/Lists.tsx` — the plain list's meta line now reads
+  `Produce · Taco night · Tue Aug 12 › · added Today 2:14 PM`. Tapping the meal moves the
+  week board to that meal's week, expands it, and switches to the Week view.
+  - `openMeal` was lifted out of `<Week>` into `<Lists>` so the plain list can say which
+    meal to expand — the board would otherwise mount fully collapsed.
+  - `MealBlock` scrolls itself into view on open, but ONLY when it is actually off-screen,
+    so expanding one by hand doesn't yank the page around.
+  - A deleted meal (its items deliberately survive — `ON DELETE SET NULL`) falls back to a
+    plain, unlinked "from a meal" rather than linking nowhere.
+
 ## 2026-08-07 - budget.cbedge.net: everything is shared, calendar last-synced, Today trimmed
 
 ### Everything is shared — the private/shared switch is gone

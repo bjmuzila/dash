@@ -23,7 +23,6 @@ const Ict          = lazy(() => import('@/components/pages/Ict'))
 const Trading      = lazy(() => import('@/components/pages/Trading'))
 const Confidence   = lazy(() => import('@/components/pages/ConfidenceScore'))
 const Fails        = lazy(() => import('@/components/pages/Fails'))
-const Premarket    = lazy(() => import('@/components/pages/Premarket'))
 const EconCalendar = lazy(() => import('@/components/pages/EconomicCalendar'))
 const TestLab      = lazy(() => import('@/components/pages/TestLab'))
 const StrikeHistory = lazy(() => import('@/components/pages/StrikeHistory'))
@@ -77,7 +76,6 @@ export default function App() {
               <Route path="/trading" element={S(<Trading />)} />
               <Route path="/confidence-score" element={S(<Confidence />)} />
               <Route path="/fails" element={S(<Fails />)} />
-              <Route path="/premarket" element={S(<Premarket />)} />
               <Route path="/economic-calendar" element={S(<EconCalendar />)} />
 
               {/* Phone build. Kept as explicit routes rather than a nested

@@ -1,10 +1,10 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useAuth } from '../auth'
 import {
   useLists, useToggleListItem, useAddListItem, useDeleteListItem,
   useClearChecked, useAddMeal, useDeleteMeal,
 } from '../hooks'
-import { ApiError, type Aisle, type ListItem, type Meal } from '../api'
+import { ApiError, type Aisle, type ListItem, type Meal, type MealRef } from '../api'
 import { T, sectionTitle, label, body, hero, section, row, input, button, segment, checkbox, doneText } from '../theme'
 
 /**
@@ -26,11 +26,21 @@ const AISLE_LABEL: Record<Aisle, string> = {
   frozen: 'Frozen', pantry: 'Pantry', household: 'Household', other: 'Other',
 }
 
-/** "Mon 4" from "2026-08-04" — sliced, never parsed. */
+/** "Mon 4" from "2026-08-04" — split into numbers, never `new Date(iso)`.
+ *  Parsing the bare string would land on UTC midnight and read a day early
+ *  anywhere west of Greenwich. */
 const dayLabel = (iso: string) => {
   const [y, m, d] = iso.split('-').map(Number)
   const dt = new Date(y, m - 1, d)
   return `${dt.toLocaleDateString('en-US', { weekday: 'short' })} ${d}`
+}
+
+/** "Tue Aug 12" — the same date with its month, for when the meal is in a
+ *  different week and "Tue 12" would be ambiguous. */
+const dayLabelLong = (iso: string) => {
+  const [y, m, d] = iso.split('-').map(Number)
+  const dt = new Date(y, m - 1, d)
+  return dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
 }
 
 export default function Lists() {
@@ -40,6 +50,10 @@ export default function Lists() {
   // nine times out of ten.
   const [view, setView] = useState<View>('list')
   const [week, setWeek] = useState<string | undefined>(undefined)
+  // Which meal is expanded on the week board. Lifted out of <Week> so tapping a
+  // meal name on the plain list can open it — the board would otherwise mount
+  // with everything collapsed and no way to say which one you meant.
+  const [openMeal, setOpenMeal] = useState<number | null>(null)
   const { data, isLoading, error, refetch } = useLists(week)
   const toggle = useToggleListItem(week)
 
@@ -74,22 +88,34 @@ export default function Lists() {
         </button>
       </div>
 
-      {view === 'week' && <Week data={data} onToggle={(id) => toggle.mutate(id)} onShift={shift} />}
+      {view === 'week' && (
+        <Week data={data} onToggle={(id) => toggle.mutate(id)} onShift={shift}
+              openMeal={openMeal} setOpenMeal={setOpenMeal} />
+      )}
       {view === 'shop' && <Shop data={data} onToggle={(id) => toggle.mutate(id)} />}
-      {view === 'list' && <Plain data={data} me={user.id} onToggle={(id) => toggle.mutate(id)} />}
+      {view === 'list' && (
+        <Plain
+          data={data} me={user.id} onToggle={(id) => toggle.mutate(id)}
+          // Jump to the meal an ingredient came from: move the board to that
+          // meal's week, expand it, and switch views. `week` is any date IN the
+          // week — the server snaps it to the Monday.
+          onGoToMeal={(m) => { setWeek(m.day); setOpenMeal(m.id); setView('week') }}
+        />
+      )}
     </div>
   )
 }
 
 // ── Week board ───────────────────────────────────────────────────────────────
 
-function Week({ data, onToggle, onShift }: {
+function Week({ data, onToggle, onShift, openMeal, setOpenMeal }: {
   data: NonNullable<ReturnType<typeof useLists>['data']>
   onToggle: (id: number) => void
   onShift: (n: number) => void
+  openMeal: number | null
+  setOpenMeal: (id: number | null) => void
 }) {
   const [addingTo, setAddingTo] = useState<string | null>(null)
-  const [openMeal, setOpenMeal] = useState<number | null>(null)
 
   return (
     <>
@@ -139,9 +165,23 @@ function MealBlock({ meal, open, onOpen, onToggle }: {
   const addItem = useAddListItem()
   const delMeal = useDeleteMeal()
   const [text, setText] = useState('')
+  const ref = useRef<HTMLDivElement | null>(null)
+
+  // Arriving from "from Taco night" on the plain list lands on the week board
+  // with this meal already expanded — useless if it's four days down a
+  // scrolling page. Only scrolls when the row is actually off-screen, so
+  // expanding one by hand doesn't yank the page around under your thumb.
+  useEffect(() => {
+    if (!open) return
+    const el = ref.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    const offscreen = r.top < 0 || r.bottom > window.innerHeight
+    if (offscreen) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [open])
 
   return (
-    <div>
+    <div ref={ref}>
       <div onClick={onOpen} style={row({ cursor: 'pointer' })}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ ...body(15), wordBreak: 'break-word' }}>{meal.title}</div>
@@ -295,10 +335,11 @@ function Shop({ data, onToggle }: {
 
 // ── Plain list ───────────────────────────────────────────────────────────────
 
-function Plain({ data, me, onToggle }: {
+function Plain({ data, me, onToggle, onGoToMeal }: {
   data: NonNullable<ReturnType<typeof useLists>['data']>
   me: number
   onToggle: (id: number) => void
+  onGoToMeal: (meal: MealRef) => void
 }) {
   const add = useAddListItem()
   const del = useDeleteListItem()
@@ -316,6 +357,9 @@ function Plain({ data, me, onToggle }: {
   }
 
   const all: ListItem[] = [...data.aisles.flatMap((g) => g.items), ...data.checked]
+  // Covers meals outside the week on screen too — see mealRefs in
+  // _lib-household-lists.cjs.
+  const mealById = new Map((data.mealRefs ?? []).map((m) => [m.id, m]))
 
   return (
     <>
@@ -357,8 +401,33 @@ function Plain({ data, me, onToggle }: {
               </div>
               <div style={label({ marginTop: 3, letterSpacing: '0.1em' })}>
                 {AISLE_LABEL[i.aisle]}
-                {i.meal_id && <span style={{ color: T.accent }}> · from a meal</span>}
-                {' · '}{i.checked_at ? `checked ${when(i.checked_at)}` : `added ${when(i.created_at)}`}
+                {/* Which meal, and when it's on — not just "from a meal". If
+                    the ingredient is on the list because of Thursday's curry,
+                    that IS the useful fact, and tapping it goes there. */}
+                {i.meal_id && (() => {
+                  const m = mealById.get(i.meal_id!)
+                  if (!m) {
+                    // The meal was deleted; its items deliberately stay (ON
+                    // DELETE SET NULL is pending on the next read). Say the
+                    // honest thing rather than linking nowhere.
+                    return <span style={{ color: T.faint }}> · from a meal</span>
+                  }
+                  return (
+                    <>
+                      {' · '}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onGoToMeal(m) }}
+                        style={mealLink}
+                      >
+                        {m.title} · {dayLabelLong(m.day)} ›
+                      </button>
+                    </>
+                  )
+                })()}
+                {' · '}
+                <span title={full(i.checked_at ?? i.created_at)}>
+                  {i.checked_at ? `checked ${when(i.checked_at)}` : `added ${when(i.created_at)}`}
+                </span>
               </div>
             </div>
             {i.owner_id === me && (
@@ -374,22 +443,53 @@ function Plain({ data, me, onToggle }: {
 }
 
 /**
- * "2:14 PM" today, "Tue 8:41 AM" this week, "Jul 3" beyond that.
+ * When something went on the list — ALWAYS a day and a time.
  *
- * Parsed with `new Date()` on purpose — unlike a due date, created_at is a real
+ *   Today 2:14 PM · Yesterday 8:41 AM · Tue 8:41 AM · Aug 3, 4:20 PM
+ *
+ * It used to print a bare "2:14 PM" for today and a bare "Jul 3" for anything
+ * over a week old, which meant the two things you actually want to know — how
+ * long has this been sitting here, and was it before or after the last shop —
+ * were each missing exactly when they mattered. The day names carry the recent
+ * end; the explicit date carries the rest; the time is on all of them.
+ *
+ * Parsed with `new Date()` on purpose: unlike a due date, created_at is a real
  * TIMESTAMPTZ with an offset, so it converts to local time correctly. The
- * date-only fields elsewhere in this app must NEVER be parsed this way.
+ * date-ONLY fields elsewhere in this app must never be parsed this way — see
+ * dayLabel above.
  */
 function when(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
   const now = new Date()
-  const sameDay = d.toDateString() === now.toDateString()
   const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-  if (sameDay) return time
-  const days = Math.floor((now.getTime() - d.getTime()) / 86_400_000)
-  if (days < 7) return `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${time}`
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+
+  // Compared as calendar days, not as a 24-hour difference: something added at
+  // 11pm last night is "Yesterday", not "today, 9 hours ago".
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const days = Math.round((startOf(now) - startOf(d)) / 86_400_000)
+
+  if (days === 0) return `Today ${time}`
+  if (days === 1) return `Yesterday ${time}`
+  if (days > 1 && days < 7) return `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${time}`
+  const sameYear = d.getFullYear() === now.getFullYear()
+  const date = d.toLocaleDateString('en-US',
+    sameYear ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' })
+  return `${date}, ${time}`
+}
+
+/** The unabbreviated timestamp, for the hover title. */
+function full(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString()
+}
+
+/** The meal link on a list row. A button, not an <a> — it changes view state,
+ *  it does not navigate, and a fake href would break middle-click. */
+const mealLink: React.CSSProperties = {
+  ...label({ color: T.accent, letterSpacing: '0.1em' }),
+  background: 'none', border: 'none', padding: 0, margin: 0,
+  cursor: 'pointer', textAlign: 'left',
 }
 
 const textBtn: React.CSSProperties = {

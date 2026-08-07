@@ -156,6 +156,20 @@ async function getWeek(userId, tz = 'America/New_York', dateStr) {
 
   const other = items.filter((i) => i.list !== 'grocery');
 
+  // An item can belong to a meal in ANY week — the `meals` query above only
+  // covers the seven days on screen. So look up every meal actually referenced
+  // by a visible item and send a flat index of them. Without this, an
+  // ingredient for next Tuesday's dinner shows on the plain list as a bare
+  // "from a meal" with no way to find out which one.
+  const refIds = [...new Set(items.map((i) => i.meal_id).filter(Boolean))];
+  let mealRefs = [];
+  if (refIds.length) {
+    const { rows } = await pool.query(
+      `SELECT id, to_char(day,'YYYY-MM-DD') AS day, title
+         FROM hh_meals WHERE id = ANY($2::int[]) AND ${VISIBLE}`, [userId, refIds]);
+    mealRefs = rows;
+  }
+
   return {
     weekStart: start,
     weekEnd: end,
@@ -164,6 +178,9 @@ async function getWeek(userId, tz = 'America/New_York', dateStr) {
     aisles,
     checked,
     other,
+    /** id → { day, title } for every meal any visible item points at, in or
+     *  out of this week. The plain list names the meal from this. */
+    mealRefs,
     counts: {
       open: open.length,
       checked: checked.length,

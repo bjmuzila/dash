@@ -437,11 +437,16 @@ export type Meal = {
   items: ListItem[]
 }
 
+/** Just enough to name a meal an item came from, and to jump to it. Covers
+ *  meals OUTSIDE the week on screen, which `days` by definition does not. */
+export type MealRef = { id: number; day: string; title: string }
+
 export type ListsPayload = {
   weekStart: string
   weekEnd: string
   today: string
   days: { day: string; isToday: boolean; meals: Meal[]; itemCount: number; openCount: number }[]
+  mealRefs: MealRef[]
   aisles: { aisle: Aisle; items: ListItem[] }[]
   checked: ListItem[]
   other: ListItem[]
