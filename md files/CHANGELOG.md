@@ -1,5 +1,89 @@
 # Changelog
 
+## 2026-08-07 - Multi Greek: one-click CB/CW/PW level snapshot to the clipboard
+
+There was no way to get the four tickers' walls out of the page except a full
+screenshot of the whole dashboard. The toolbar now has a **TABLE / LADDERS**
+toggle and a snapshot button that renders just the levels — ticker, spot,
+expiration, DTE, CB, CW, PW — and puts the PNG on the clipboard.
+
+### `components/dashboard/MultiGreekLevelSnapshot.tsx` — NEW
+- **Two renders, picked by the toolbar toggle** and remembered per browser
+  (`mg_snapshot_view` in localStorage):
+  - `TABLE` (820×300) — one row per ticker. Dense; lines up against a previous
+    snapshot for diffing, and a 5th/6th ticker is just another row.
+  - `LADDERS` (1240×426) — per ticker, the three walls positioned by value with
+    a spot marker between them and a `spot vs CB` delta in the tile footer.
+    Carries the positioning a number list loses.
+- **Drawn to `<canvas>`, not rasterized from the DOM.** html2canvas is
+  unreliable on these inline-styled panels — the same failure mode that forced
+  the EM badges to become inline SVG bitmaps (see `emBadgeDataUri`). A canvas
+  render is deterministic, fixed at 2x, and free of the surrounding page.
+- **Spot's value plate is centred in the ladder track.** The tags own the left
+  edge and the wall values own the right, so a spot sitting cents off a wall —
+  SPY 771.42 under a 772 call wall, QQQ pinned to its CW — was landing its label
+  on top of that wall's number. Centring gives it a horizontal band of its own
+  that cannot collide whatever the prices do.
+- **The font stack is read off `<body>` at draw time.** `next/font` emits a
+  hashed family behind `--font-inter`; a literal `"Inter"` in the canvas font
+  string silently falls through to Arial. Also awaits `document.fonts.ready`, so
+  the first click on a cold page doesn't measure against the fallback.
+- Clipboard write needs a secure context — on plain http it throws, so the
+  button **falls back to a download** (`multigreek-<view>-<YYYYMMDD-HHMM>.png`)
+  rather than being a silent no-op. Button flashes ✓ green for 1.4s either way.
+
+### `components/shared/homeTheme.ts`
+- **New `LEVEL_COLORS` export** — `cb` / `cw` / `pw`, their faint cell `tint`s,
+  and `onSolid` (the ink for a solid fill of those colours). These three hexes
+  were hardcoded in three separate places inside `MultGreekClient.tsx`; the page
+  and the snapshot renderer now read one source and cannot drift apart.
+
+### `app/mult-greek/MultGreekClient.tsx`
+- Toolbar gains `<MultiGreekSnapshotBtn>` next to the existing 📷 / Discord
+  buttons. Unrelated to `BoxSnapBtn`, which rasterizes the whole page.
+- **New `getSnapshotRows()`** — front-expiry walls for every ticker, derived at
+  *click* time through the same `computeRows` → `computeWalls` path the panels
+  use, from the untrimmed rows. So the image can never disagree with what the
+  page is showing, and screenshot mode's `captureWindow` (which trims what is
+  drawn, not what is computed) has no effect on it.
+- All three hardcoded `#ffd600` / `#29b6f6` / `#ff4757` sites — the header
+  readout, the front-column badges, the toolbar toggles — now read
+  `LEVEL_COLORS`.
+- **Greyed-out text is white.** The header readout's level values (`#e2e8f0`),
+  the spot row (`#94a3b8`), the no-spot `--` (`#475569`) and the inactive
+  CB/CW/PW toggle labels (`HT.muted` at 0.65 opacity) all move to `HT.text`;
+  the inactive toggles sit at 0.8 opacity instead of 0.65.
+
+## 2026-08-07 - Analysis · Ticker Levels renders today's recorder output only
+
+The card printed yesterday's CORE pre-open. At 9:26 AM ET the walls slot grid
+(first slot 09:29) had nothing for today, so the card fell back a session and
+showed `core 7,700 · core from 2026-08-06` under a live-looking 9:26:47 AM
+stamp. A prior-session level dressed as a current one is worse than no level.
+
+### `components/pages/Analytics.tsx` — `TickerLevelsCard`
+- **Removed the prior-session walls fallback** — `prevSessionISO()`, the second
+  `/proxy/walls?date=<prev>` fetch, `wallsPrev` and `coreStale` are all gone.
+  `wallRows` is now today's `/proxy/walls` response or empty.
+- **Stale scanner rows are dropped, not displayed.** `/proxy/scanner?any=1`
+  returns each symbol's most recent row regardless of date and flags carried-over
+  rows `stale`; `bySymbol` now `continue`s past them. The map therefore holds
+  today's rows only, so an empty map with both fetches settled means the sweep
+  genuinely hasn't landed — which is what the card now says.
+- `TickerLevelRow.stale` and the "walls from the last scanner sweep" note were
+  removed with it — nothing stale reaches the row anymore.
+- **New `corePending` / `coreWaiting`:** when today's walls are empty, CORE shows
+  `—` with the orange footnote `core pending — first walls run 9:29 AM ET`,
+  instead of a number from another day.
+- **New `knownSymbols` set** (built from raw scan + wall rows, stale included) so
+  the empty-row note still distinguishes `not in the scanner universe` from
+  `waiting on today's scanner sweep`. Same split for futures: ESU with no SPX row
+  yet reads `waiting on today's SPX sweep`, distinct from `waiting on ES−SPX basis`.
+- Empty state reworded to `Waiting on today's first recorder run.`
+
+Futures spot still comes live from `/api/tt-quotes`, so ESU/NQU keep showing a
+price pre-open — only the recorded levels wait.
+
 ## 2026-08-07 - Owner budget: category colours are editable after creation
 
 The colour was pick-once — set it in the add-category composer or live with it.

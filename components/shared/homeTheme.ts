@@ -90,6 +90,32 @@ export const LIGHT_BLUE = "#7dd3fc";
 export const SOFT_RED = "#f4948e";
 
 /**
+ * LEVEL_COLORS — the CB / CW / PW wall colors used on Multi Greek (the toolbar
+ * toggles, the header readout, the front-column marks) and by the level
+ * snapshot renderer. These were hardcoded in MultGreekClient.tsx; they live
+ * here so the page and any surface that re-renders those levels read ONE
+ * source and cannot drift apart.
+ *
+ *   cb — Core Bullseye, highest |GEX| strike
+ *   cw — Call Wall,     highest +GEX strike
+ *   pw — Put Wall,      most −GEX strike
+ *
+ * `tint` is the faint cell wash for each level; `onSolid` is the ink to use on
+ * top of a solid fill of that color (the toolbar's active-toggle state).
+ */
+export const LEVEL_COLORS = {
+  cb: "#ffd600",
+  cw: "#29b6f6",
+  pw: "#ff4757",
+  tint: {
+    cb: "rgba(255,214,0,0.05)",
+    cw: "rgba(41,182,246,0.05)",
+    pw: "rgba(255,71,87,0.05)",
+  },
+  onSolid: "#04121a",
+} as const;
+
+/**
  * RETA_PALETTE — the four accents used by the /owner/reta tracker, kept here so
  * the page never hardcodes hex. Brandon = blue, Heather = rose; peach marks
  * reconstitution figures (mg/mL) and green marks progress (weight lost, the

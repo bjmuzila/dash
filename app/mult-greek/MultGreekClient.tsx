@@ -5,9 +5,10 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
-import { HOME_THEME as HT, homeShellStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME as HT, homeShellStyle, LEVEL_COLORS } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockSlider, DockExpiryPicker } from "@/components/shared/DockToolbar";
+import { MultiGreekSnapshotBtn, type SnapshotRow } from "@/components/dashboard/MultiGreekLevelSnapshot";
 
 // Double-clicking a panel header blows that ticker's chain up full screen. The
 // real /options-chain page is reused (same trick the home GEX card uses), so
@@ -707,26 +708,26 @@ function TickerPanel({
           {/* Header readout always shows the CB/CW/PW levels — the toolbar
               toggles only control the cell markers, per user. */}
           {([
-            { t: "CB", c: "#ffd600", s: walls?.cb ?? null, title: "Core Bullseye — highest |GEX| level" },
-            { t: "CW", c: "#29b6f6", s: walls?.cw ?? null, title: "Call Wall — highest +GEX level" },
-            { t: "PW", c: "#ff4757", s: walls?.pw ?? null, title: "Put Wall — most −GEX level" },
+            { t: "CB", c: LEVEL_COLORS.cb, s: walls?.cb ?? null, title: "Core Bullseye — highest |GEX| level" },
+            { t: "CW", c: LEVEL_COLORS.cw, s: walls?.cw ?? null, title: "Call Wall — highest +GEX level" },
+            { t: "PW", c: LEVEL_COLORS.pw, s: walls?.pw ?? null, title: "Put Wall — most −GEX level" },
           ] as const).filter(x => x.s != null).map(x => (
             <span key={x.t} title={x.title} style={{
               display: "inline-flex", alignItems: "baseline", gap: 3, whiteSpace: "nowrap",
               padding: "2px 6px", borderRadius: 5, background: `${x.c}1f`, border: `1px solid ${x.c}66`,
             }}>
               <span style={{ fontSize: 9, fontWeight: 900, color: x.c, letterSpacing: "0.04em" }}>{x.t}</span>
-              <span style={{ fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)", color: "#e2e8f0" }}>
+              <span style={{ fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)", color: HT.text }}>
                 {Number.isInteger(x.s as number) ? x.s : (x.s as number).toFixed(2)}
               </span>
             </span>
           ))}
         </div>
-        <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 17, fontFamily: "var(--font-mono)", color: "#94a3b8", flexShrink: 0 }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 17, fontFamily: "var(--font-mono)", color: HT.text, flexShrink: 0 }}>
           {spot > 0 && (
             <span style={{ color: HT.cyan, fontWeight: 700 }}>{spot.toFixed(2)}</span>
           )}
-          {spot === 0 && <span style={{ color: "#475569" }}>--</span>}
+          {spot === 0 && <span style={{ color: HT.text, opacity: 0.5 }}>--</span>}
         </div>
       </div>
 
@@ -820,9 +821,9 @@ function TickerPanel({
                 // (CB = max |GEX|, CW = top +GEX, PW = most −GEX; all distinct).
                 const isFront = ci === 0;
                 const lvl = isFront && walls
-                  ? (walls.cb === r.strike && showCB ? { t: "CB", c: "#ffd600", title: "CB — highest |GEX| level" }
-                    : walls.cw === r.strike && showCW ? { t: "CW", c: "#29b6f6", title: "CW — highest +GEX level" }
-                    : walls.pw === r.strike && showPW ? { t: "PW", c: "#ff4757", title: "PW — most −GEX level" }
+                  ? (walls.cb === r.strike && showCB ? { t: "CB", c: LEVEL_COLORS.cb, title: "CB — highest |GEX| level" }
+                    : walls.cw === r.strike && showCW ? { t: "CW", c: LEVEL_COLORS.cw, title: "CW — highest +GEX level" }
+                    : walls.pw === r.strike && showPW ? { t: "PW", c: LEVEL_COLORS.pw, title: "PW — most −GEX level" }
                     : null)
                   : null;
                 const isCB = lvl?.t === "CB";
@@ -1088,6 +1089,33 @@ export function MultGreekClient({
     });
     return out;
   }, [expByTicker, expirations, activeExpiry, selectedExpiry, TICKERS]);
+
+  // ── Level snapshot ─────────────────────────────────────────────────────────
+  // Front-expiry CB / CW / PW for every ticker, for the toolbar snapshot button.
+  //
+  // Derived at CLICK time, through the SAME computeRows → computeWalls path the
+  // panels use, from the untrimmed rows. Two consequences worth stating: the
+  // image can never disagree with the levels the page is showing, and screenshot
+  // mode's captureWindow (which trims what's DRAWN, not what's computed) has no
+  // effect on it.
+  const getSnapshotRows = useCallback((): SnapshotRow[] => {
+    const out: SnapshotRow[] = [];
+    TICKERS.forEach((ticker) => {
+      const cols = colsByTicker[ticker] ?? [];
+      const byExp = strikes[ticker] ?? {};
+      const spot = spots[ticker] ?? 0;
+      const front = cols[0]?.date ?? "";
+      if (!front) return;
+      const computed = computeRows(byExp, cols.map(c => c.date), liveDataRef.current, spot, contractMode);
+      if (!computed.cols.length) {
+        out.push({ ticker, spot, expiration: front, cb: null, cw: null, pw: null });
+        return;
+      }
+      const w = computeWalls(computed.rows, computed.cols[0]);
+      out.push({ ticker, spot, expiration: computed.cols[0], cb: w.cb, cw: w.cw, pw: w.pw });
+    });
+    return out;
+  }, [TICKERS, colsByTicker, strikes, spots, contractMode]);
 
   // Fetch weekly EM for each ticker.
   useEffect(() => {
@@ -1579,9 +1607,9 @@ export function MultGreekClient({
 
         {/* CB / CW / PW top-|GEX| level badges (front expiry). Click to toggle. */}
         {[
-          { key: "CB", on: showCB, set: setShowCB, color: "#ffd600", title: "Core Bullseye — highest |GEX| level" },
-          { key: "CW", on: showCW, set: setShowCW, color: "#29b6f6", title: "Call Wall — highest +GEX level" },
-          { key: "PW", on: showPW, set: setShowPW, color: "#ff4757", title: "Put Wall — most −GEX level" },
+          { key: "CB", on: showCB, set: setShowCB, color: LEVEL_COLORS.cb, title: "Core Bullseye — highest |GEX| level" },
+          { key: "CW", on: showCW, set: setShowCW, color: LEVEL_COLORS.cw, title: "Call Wall — highest +GEX level" },
+          { key: "PW", on: showPW, set: setShowPW, color: LEVEL_COLORS.pw, title: "Put Wall — most −GEX level" },
         ].map(b => (
           <button
             key={b.key}
@@ -1590,10 +1618,10 @@ export function MultGreekClient({
             style={{
               padding: "3px 7px", fontSize: 10, fontWeight: 900, letterSpacing: "0.04em",
               borderRadius: 5, cursor: "pointer", whiteSpace: "nowrap",
-              color: b.on ? "#04121a" : HT.muted,
+              color: b.on ? LEVEL_COLORS.onSolid : HT.text,
               background: b.on ? b.color : "transparent",
               border: `1px solid ${b.on ? b.color : HT.border}`,
-              opacity: b.on ? 1 : 0.65,
+              opacity: b.on ? 1 : 0.8,
             }}
           >{b.key}</button>
         ))}
@@ -1632,6 +1660,10 @@ export function MultGreekClient({
         {!isStatic && (
           <DockButton onClick={trigger} title="Refresh" style={{ color: btnStyle.color as string }}>{btnLabel}</DockButton>
         )}
+        {/* Level snapshot — TABLE / LADDERS toggle + copy-to-clipboard. Renders
+            the four tickers' CB/CW/PW to a canvas; unrelated to BoxSnapBtn,
+            which rasterizes the whole page. */}
+        <MultiGreekSnapshotBtn getRows={getSnapshotRows} />
         <BoxSnapBtn targetRef={pageRef} label="📷" fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} />
         <BoxDiscordBtn targetRef={pageRef} fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} message={`📊 Multi-Greek GEX by Expiry — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
       </Dock>

@@ -1110,12 +1110,18 @@ function IbCard() {
 //       The ONLY endpoint that returns `cb`, so CORE comes from here or nowhere
 //       (/proxy/scanner's SELECT omits the column even though the table has it).
 //   /proxy/scanner?any=1  → each symbol's most recent row regardless of date,
-//       swept every 2–5m. Fresher spot/walls than the slot grid, and the only
-//       one that answers overnight, pre-open and at weekends — but no `cb`.
+//       swept every 2–5m. Fresher spot/walls than the slot grid — but no `cb`,
+//       and rows it carries over from a previous session are flagged `stale`.
 //
 // So scanner wins for spot/call/put and walls supplies CORE. Both are fetched
 // once for the whole universe, not per selection — switching the pill is a local
 // lookup, so it's instant and costs no extra request.
+//
+// TODAY ONLY — nothing on this card is allowed to come from a previous session.
+// `stale` scanner rows are dropped rather than shown, and there is no
+// prior-session walls fallback: before the recorders have written today (the
+// scanner's first sweep, then the 09:29 ET walls slot for CORE) the card says so
+// instead of printing yesterday's numbers under a live-looking timestamp.
 //
 // FUTURES — scanner_snapshots covers cash indices + equities only, no ES/NQ:
 //   ESU  levels = SPX levels + the ES−SPX basis from /proxy/es-spx-basis. That
@@ -1146,15 +1152,6 @@ const TL_FUTURES: Record<string, { index: string | null; quote: string }> = {
 };
 const TL_STORE_KEY = "analytics.tickerLevels.extra";
 
-// Previous weekday (ET) as YYYY-MM-DD. Not holiday-aware — it only has to get
-// the walls fallback off a weekend/pre-open, and skipping weekends already turns
-// a holiday Monday into the Friday before it.
-function prevSessionISO(iso: string): string {
-  const d = new Date(`${iso}T12:00:00Z`);
-  do { d.setUTCDate(d.getUTCDate() - 1); } while (d.getUTCDay() === 0 || d.getUTCDay() === 6);
-  return d.toISOString().slice(0, 10);
-}
-
 // "Aug 6 · 0DTE" for the expiry the levels were computed on. The scanner always
 // takes expirations[0] — the nearest — so this reads 0DTE intraday and rolls to
 // the next contract after the close. Which expiry produced a wall is not
@@ -1171,7 +1168,7 @@ function expiryLabel(exp: string | null, todayISO: string): string {
 interface TickerLevelRow {
   symbol: string;
   spot: number | null; core: number | null; call: number | null; put: number | null;
-  expiry: string | null; note: string | null; stale: boolean;
+  expiry: string | null; note: string | null;
 }
 
 function TickerLevelsCard() {
@@ -1196,15 +1193,11 @@ function TickerLevelsCard() {
 
   const { data: walls, loading: wLoading, error: wError, lastUpdated } =
     useLiveData<WallsResp>(`/proxy/walls?date=${today}`, 120_000);
-  // The slot grid doesn't start until 09:29 ET, so today's walls are empty
-  // pre-open and all weekend — fall back one session so CORE still prints
-  // (a holiday Monday resolves to Friday, since prevSessionISO skips weekends).
-  const wallsToday = walls?.tickers ?? [];
-  const { data: wallsPrev } = useLiveData<WallsResp>(
-    walls && wallsToday.length === 0 ? `/proxy/walls?date=${prevSessionISO(today)}` : null, 300_000
-  );
-  const wallRows = wallsToday.length ? wallsToday : wallsPrev?.tickers ?? [];
-  const coreStale = wallsToday.length === 0 && wallRows.length > 0;
+  // Today's slot grid or nothing. It doesn't start until 09:29 ET, so CORE is
+  // simply absent pre-open, overnight and at weekends — that is the honest
+  // reading. Falling back a session put a stale number where a live one goes.
+  const wallRows = walls?.tickers ?? [];
+  const corePending = !!walls && wallRows.length === 0;
   const { data: scan, loading: sLoading, error: sError } =
     useLiveData<ScannerResp>(`/proxy/scanner?any=1&limit=200`, 120_000);
   // Basis moves ~1pt/day and the endpoint caches for an hour — 10m is plenty.
@@ -1215,12 +1208,16 @@ function TickerLevelsCard() {
   );
 
   // scanner first (fresher spot/walls), then walls overlays CORE on top.
+  // `stale` rows are the recorder's own flag for "this is a carried-over row
+  // from an earlier date" — they are skipped, not displayed, so an empty map
+  // means today's sweep genuinely hasn't landed yet.
   const bySymbol = (() => {
-    const m = new Map<string, { spot: number | null; call: number | null; put: number | null; core: number | null; expiry: string | null; stale: boolean }>();
+    const m = new Map<string, { spot: number | null; call: number | null; put: number | null; core: number | null; expiry: string | null }>();
     for (const r of scan?.rows ?? []) {
+      if (r.stale) continue;
       m.set(String(r.symbol).toUpperCase(), {
         spot: numOr(r.spot), call: numOr(r.call_wall), put: numOr(r.put_wall),
-        core: null, expiry: r.expiry || null, stale: !!r.stale,
+        core: null, expiry: r.expiry || null,
       });
     }
     // /proxy/walls' day summary carries no expiry column, but it samples the very
@@ -1231,11 +1228,18 @@ function TickerLevelsCard() {
       if (e) e.core = numOr(t.cb);
       else m.set(k, {
         spot: numOr(t.spot), call: numOr(t.call_wall), put: numOr(t.put_wall),
-        core: numOr(t.cb), expiry: null, stale: false,
+        core: numOr(t.cb), expiry: null,
       });
     }
     return m;
   })();
+
+  // Every symbol the recorder knows about, stale rows included — the difference
+  // between "we don't scan that name" and "today's sweep hasn't reached it yet".
+  const knownSymbols = new Set(
+    [...(scan?.rows ?? []).map((r) => String(r.symbol).toUpperCase()),
+     ...wallRows.map((t) => String(t.symbol).toUpperCase())]
+  );
 
   const quoteFor = (sym: string): number | null => {
     const it = quotes?.data?.items?.find((i) => String(i.symbol) === sym);
@@ -1253,23 +1257,27 @@ function TickerLevelsCard() {
       const src = fut.index ? bySymbol.get(fut.index) : null;
       if (!src || basis == null) {
         return {
-          symbol: sym, spot, core: null, call: null, put: null, expiry: null, stale: false,
-          note: fut.index ? "waiting on ES−SPX basis" : "no NQ basis — switch to NDX",
+          symbol: sym, spot, core: null, call: null, put: null, expiry: null,
+          note: !fut.index ? "no NQ basis — switch to NDX"
+            : basis == null ? "waiting on ES−SPX basis"
+            : `waiting on today's ${fut.index} sweep`,
         };
       }
       const shift = (n: number | null) => (n == null ? null : n + basis);
       return {
         symbol: sym, spot, core: shift(src.core), call: shift(src.call), put: shift(src.put),
         // The expiry is the INDEX's — ES borrows SPX's chain, it has none of its own.
-        expiry: src.expiry, stale: src.stale,
+        expiry: src.expiry,
         note: `${fut.index} ${basis >= 0 ? "+" : "−"}${Math.abs(basis).toFixed(1)} basis`,
       };
     }
     const e = bySymbol.get(sym);
     return {
       symbol: sym, spot: e?.spot ?? null, core: e?.core ?? null, call: e?.call ?? null,
-      put: e?.put ?? null, expiry: e?.expiry ?? null, stale: !!e?.stale,
-      note: e ? null : "not in the scanner universe",
+      put: e?.put ?? null, expiry: e?.expiry ?? null,
+      note: e ? null
+        : knownSymbols.has(sym) ? "waiting on today's scanner sweep"
+        : "not in the scanner universe",
     };
   };
 
@@ -1290,6 +1298,8 @@ function TickerLevelsCard() {
 
   // Ready once the selected ticker resolved at least a spot — the walls can
   // still be null (futures with no basis) and the card is still worth showing.
+  // bySymbol only ever holds today's rows now, so an empty map with the fetches
+  // settled is the pre-recorder state, not a failure.
   const loaded = bySymbol.size > 0 || row.spot != null;
   const loading = (wLoading || sLoading) && !loaded;
   const error = loaded ? null : wError ?? sError;
@@ -1309,10 +1319,12 @@ function TickerLevelsCard() {
 
   // Footnote: how the row was derived, plus anything about it that isn't live.
   // The expiry itself lives in the header, where it reads before the numbers do.
+  // Core is blank until today's 09:29 ET walls slot has run — say which, so a
+  // dash reads as "not recorded yet" rather than "this symbol has no core".
+  const coreWaiting = row.core == null && corePending;
   const notes = [
     row.note,
-    row.stale ? "walls from the last scanner sweep" : null,
-    coreStale ? `core from ${wallsPrev?.date ?? "the prior session"}` : null,
+    coreWaiting ? "core pending — first walls run 9:29 AM ET" : null,
   ].filter(Boolean) as string[];
 
   return (
@@ -1343,7 +1355,7 @@ function TickerLevelsCard() {
       </div>
 
       {loading || error ? (
-        <CardState loading={loading} error={error} empty="No scanner rows yet." />
+        <CardState loading={loading} error={error} empty="Waiting on today's first recorder run." />
       ) : (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, minWidth: 0 }}>
@@ -1379,7 +1391,7 @@ function TickerLevelsCard() {
           </div>
 
           {notes.length ? (
-            <span style={{ fontSize: 11, color: row.stale || coreStale ? T.orange : T.muted, opacity: row.stale || coreStale ? 0.75 : 0.5, fontFamily: "var(--font-mono)" }}>
+            <span style={{ fontSize: 11, color: coreWaiting ? T.orange : T.muted, opacity: coreWaiting ? 0.75 : 0.5, fontFamily: "var(--font-mono)" }}>
               {notes.join(" · ")}
             </span>
           ) : null}
