@@ -26,6 +26,11 @@ const available = () => !!libDb;
 
 const VISIBLE = `(owner_id = $1 OR visibility = 'shared')`;
 
+// Everything in this app is shared — see the migration in _lib-household.cjs.
+// The incoming `visibility` argument is accepted and ignored rather than
+// removed from the signatures, so reverting the policy is one constant.
+const SHARED = 'shared';
+
 /**
  * Aisle order is store order, not alphabetical — the whole point is walking the
  * shop once. 'other' is last because unknowns belong at the end, not the middle.
@@ -194,7 +199,7 @@ async function addItem(userId, { text, qty, aisle, list, mealId, visibility }) {
   const { rows } = await pool.query(
     `INSERT INTO hh_list_items (owner_id, visibility, list, text, qty, aisle, meal_id, sort_order)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${ITEM_COLS}`,
-    [userId, visibility === 'private' ? 'private' : 'shared', str(list, 30) || 'grocery',
+    [userId, SHARED, str(list, 30) || 'grocery',
      t, str(qty, 40) || null, aisle ? normAisle(aisle) : guessAisle(t), meal, Number(max.m) + 10]);
   return rows[0];
 }
@@ -225,7 +230,7 @@ async function updateItem(userId, id, patch) {
   }
   if (patch.qty !== undefined) put('qty', str(patch.qty, 40) || null);
   if (patch.aisle !== undefined) put('aisle', normAisle(patch.aisle));
-  if (patch.visibility !== undefined) put('visibility', patch.visibility === 'private' ? 'private' : 'shared');
+  if (patch.visibility !== undefined) put('visibility', SHARED);
   if (!sets.length) throw new Error('Nothing to update.');
   const { rows } = await libDb.getPool().query(
     `UPDATE hh_list_items SET ${sets.join(', ')} WHERE id=$2 AND ${VISIBLE} RETURNING ${ITEM_COLS}`, vals);
@@ -270,7 +275,7 @@ async function addMeal(userId, { day, title, notes, visibility }) {
     `INSERT INTO hh_meals (owner_id, visibility, day, title, notes, sort_order)
      VALUES ($1,$2,$3::date,$4,$5,$6)
      RETURNING id, owner_id, visibility, to_char(day,'YYYY-MM-DD') AS day, title, notes, sort_order`,
-    [userId, visibility === 'private' ? 'private' : 'shared', day, t,
+    [userId, SHARED, day, t,
      str(notes, 2000) || null, Number(max.m) + 10]);
   return { ...rows[0], items: [] };
 }

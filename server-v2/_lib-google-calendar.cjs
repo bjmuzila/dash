@@ -208,7 +208,25 @@ async function disconnect(userId) {
 }
 
 const TOKEN_COLS = `user_id, google_email, refresh_token, access_token, expires_at,
-  scope, share_with_household, selected_calendars`;
+  scope, share_with_household, selected_calendars, last_synced_at`;
+
+/**
+ * Stamp "Google answered" on a connection.
+ *
+ * Deliberately NOT `updated_at`, which moves on every silent access-token
+ * refresh and so tells you nothing about whether the EVENTS you are looking at
+ * are current. This moves only when a real events fetch came back — which is
+ * the question "last synced" is actually asking.
+ *
+ * Fire-and-forget: a failed write here must never turn a good calendar read
+ * into an error, and the events are already in hand by the time it runs. At
+ * most one write per minute per connection, because eventsForDay caches.
+ */
+function touchSync(tokenUserId) {
+  libDb.getPool()
+    .query(`UPDATE hh_google_tokens SET last_synced_at = now() WHERE user_id=$1`, [tokenUserId])
+    .catch(() => { /* the timestamp is a nicety; the events are not */ });
+}
 
 async function tokenRow(userId) {
   const { rows } = await libDb.getPool().query(
@@ -261,6 +279,11 @@ async function status(userId) {
       email: own?.google_email ?? null,
       shareWithHousehold: own ? !!own.share_with_household : null,
       selectedCalendars: own ? (own.selected_calendars ?? null) : null,
+      // From the connection that actually SERVES this user, so on a shared
+      // household calendar you see when the other person's link last pulled —
+      // which is the feed you are reading — not your own null.
+      lastSyncedAt: resolved.row.last_synced_at
+        ? new Date(resolved.row.last_synced_at).toISOString() : null,
     };
   } catch { return { configured: true, connected: false, source: null }; }
 }
@@ -543,11 +566,16 @@ async function eventsForDay(userId, tz, dateStr) {
         .slice(0, 5);
     } catch { /* the look-ahead is a nicety; today's events still stand */ }
 
+    // Google answered. Stamped before the cache write so the timestamp reflects
+    // the fetch, not the next cache miss a minute later.
+    touchSync(resolved.row.user_id);
+
     const value = {
       events, upcoming, source: resolved.source, calendarCount: ids.length,
       // >0 means some calendars are shown and some couldn't be reached, so the
       // card can say the list may be incomplete rather than implying it's whole.
       partialFailures,
+      syncedAt: new Date().toISOString(),
     };
     cache.set(ck, { at: Date.now(), value });
     // Bounded so a long-running process can't grow this forever.

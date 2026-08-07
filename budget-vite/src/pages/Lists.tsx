@@ -358,7 +358,6 @@ function Plain({ data, me, onToggle }: {
               <div style={label({ marginTop: 3, letterSpacing: '0.1em' })}>
                 {AISLE_LABEL[i.aisle]}
                 {i.meal_id && <span style={{ color: T.accent }}> · from a meal</span>}
-                {i.visibility === 'private' && ' · private'}
                 {' · '}{i.checked_at ? `checked ${when(i.checked_at)}` : `added ${when(i.created_at)}`}
               </div>
             </div>

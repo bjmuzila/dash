@@ -24,6 +24,9 @@ type AuthState = {
   justSignedIn: boolean
   clearJustSignedIn: () => void
   signIn: (email: string, password: string) => Promise<void>
+  /** Quick sign-in. Only works in a browser that has been armed — the PIN is
+   *  half the credential, the HttpOnly hh_device cookie is the other half. */
+  signInWithPin: (pin: string) => Promise<void>
   signOut: () => Promise<void>
   refresh: () => Promise<void>
   setUser: (u: HouseholdUser) => void
@@ -71,16 +74,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setJustSignedIn(true)
   }, [])
 
+  const signInWithPin = useCallback(async (pin: string) => {
+    const { user: u } = await authApi.pinLogin(pin)
+    setUser(u)
+    setOffline(false)
+    setJustSignedIn(true)
+  }, [])
+
   const clearJustSignedIn = useCallback(() => setJustSignedIn(false), [])
 
+  // NOTE signing out deliberately leaves the hh_device cookie alone. Quick
+  // sign-in exists to make coming back fast; forgetting the device is a
+  // separate, explicit choice in Settings.
   const signOut = useCallback(async () => {
     try { await authApi.logout() } finally { setUser(null) }
   }, [])
 
   const value = useMemo<AuthState>(
     () => ({ user, loading, offline, justSignedIn, clearJustSignedIn,
-             signIn, signOut, refresh, setUser }),
-    [user, loading, offline, justSignedIn, clearJustSignedIn, signIn, signOut, refresh],
+             signIn, signInWithPin, signOut, refresh, setUser }),
+    [user, loading, offline, justSignedIn, clearJustSignedIn, signIn, signInWithPin,
+     signOut, refresh],
   )
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

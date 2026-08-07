@@ -34,6 +34,9 @@ const normBlock = (v) => (BLOCKS.includes(v) ? v : 'morning');
 // Same predicate as everywhere else in this app: yours, or shared with you.
 const VISIBLE = `(owner_id = $1 OR visibility = 'shared')`;
 
+// Everything in this app is shared — see the migration in _lib-household.cjs.
+const SHARED = 'shared';
+
 const HISTORY_DAYS = 30;   // the bar chart
 const STREAK_LOOKBACK = 400; // enough for a year-long streak plus slack
 
@@ -198,7 +201,7 @@ async function create(userId, { title, block, visibility }) {
     `INSERT INTO hh_routines (owner_id, visibility, title, block, sort_order)
      VALUES ($1,$2,$3,$4,$5)
      RETURNING id, owner_id, visibility, title, block, sort_order, active`,
-    [userId, visibility === 'shared' ? 'shared' : 'private', text, b, Number(max.m) + 10]);
+    [userId, SHARED, text, b, Number(max.m) + 10]);
   return rows[0];
 }
 
@@ -213,7 +216,7 @@ async function update(userId, id, patch) {
     put('title', t);
   }
   if (patch.block !== undefined) put('block', normBlock(patch.block));
-  if (patch.visibility !== undefined) put('visibility', patch.visibility === 'shared' ? 'shared' : 'private');
+  if (patch.visibility !== undefined) put('visibility', SHARED);
   if (patch.sortOrder !== undefined) put('sort_order', Number(patch.sortOrder) || 0);
   if (!sets.length) throw new Error('Nothing to update.');
   const { rows } = await pool.query(

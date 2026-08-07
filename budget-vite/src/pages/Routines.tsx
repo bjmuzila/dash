@@ -124,9 +124,6 @@ function RoutineRow({ routine, me, onToggle }: { routine: Routine; me: number; o
         <div onClick={() => setOpen((v) => !v)} style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
           <div style={{ ...body(15), ...doneText(routine.done), wordBreak: 'break-word' }}>
             {routine.title}
-            {routine.visibility === 'shared' && (
-              <span style={{ ...label({ marginLeft: 8, letterSpacing: '0.1em' }) }}>shared</span>
-            )}
           </div>
         </div>
 
@@ -147,13 +144,8 @@ function RoutineRow({ routine, me, onToggle }: { routine: Routine; me: number; o
             {routine.best > 0 && ` · best ${routine.best} day${routine.best === 1 ? '' : 's'}`}
           </div>
           <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-            <button
-              onClick={() => update.mutate({ id: routine.id, patch: {
-                visibility: routine.visibility === 'shared' ? 'private' : 'shared' } })}
-              style={segment(routine.visibility === 'shared')}
-            >
-              {routine.visibility === 'shared' ? 'Shared' : 'Private'}
-            </button>
+            {/* No Shared/Private switch — everything in this app is shared.
+                See server-v2/household-routes.cjs. */}
             {BLOCKS.filter((b) => b !== routine.block).map((b) => (
               <button key={b} onClick={() => update.mutate({ id: routine.id, patch: { block: b } })}
                       style={segment(false)}>→ {BLOCK_LABEL[b]}</button>
@@ -181,7 +173,6 @@ function RoutineRow({ routine, me, onToggle }: { routine: Routine; me: number; o
 function AddRoutine({ block, onDone }: { block: RoutineBlock; onDone: () => void }) {
   const create = useCreateRoutine()
   const [title, setTitle] = useState('')
-  const [shared, setShared] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   return (
@@ -192,7 +183,7 @@ function AddRoutine({ block, onDone }: { block: RoutineBlock; onDone: () => void
         if (!t || create.isPending) return
         setError(null)
         try {
-          await create.mutateAsync({ title: t, block, visibility: shared ? 'shared' : 'private' })
+          await create.mutateAsync({ title: t, block })
           setTitle(''); onDone()
         } catch (err) {
           setError(err instanceof ApiError ? err.message : 'Could not add that.')
@@ -203,9 +194,6 @@ function AddRoutine({ block, onDone }: { block: RoutineBlock; onDone: () => void
       <input style={input()} placeholder={`New ${BLOCK_LABEL[block].toLowerCase()} habit…`}
              value={title} onChange={(e) => setTitle(e.target.value)} autoFocus enterKeyHint="done" />
       <div style={{ display: 'flex', gap: 8, marginTop: 9, alignItems: 'center' }}>
-        <button type="button" onClick={() => setShared((v) => !v)} style={segment(shared)}>
-          {shared ? 'Shared' : 'Private'}
-        </button>
         <button type="button" onClick={onDone} style={{ ...segment(false), marginLeft: 'auto' }}>Cancel</button>
         <button type="submit" disabled={!title.trim() || create.isPending}
                 style={{ ...button(title.trim() ? 'primary' : 'ghost'), minHeight: 34,

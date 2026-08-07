@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './auth'
 import Shell from './components/Shell'
 import Login from './pages/Login'
 import ChangePassword from './pages/ChangePassword'
+import SetPin from './pages/SetPin'
 import Welcome from './pages/Welcome'
 import { T, SANS } from './theme'
 
@@ -31,6 +32,23 @@ const S = (el: React.ReactNode) => <Suspense fallback={null}>{el}</Suspense>
  * initialiser whenever it remounts, and a ref would reset with it.
  */
 let splashShownThisLoad = false
+
+/**
+ * "Not now" on the PIN offer. Remembered FOREVER, not per session — a prompt
+ * that comes back is a prompt you learn to dismiss without reading, and the
+ * PIN card in Settings is always there for anyone who changes their mind.
+ *
+ * localStorage is fine for this and only this: it is a UI preference, not a
+ * credential. Nothing about auth is stored client-side — the session and the
+ * device token are both HttpOnly cookies.
+ */
+const PIN_SKIP_KEY = 'hh:pin-offer-declined'
+const pinOfferDeclined = () => {
+  try { return localStorage.getItem(PIN_SKIP_KEY) === '1' } catch { return true }
+}
+const declinePinOffer = () => {
+  try { localStorage.setItem(PIN_SKIP_KEY, '1') } catch { /* private mode — just don't nag this load */ }
+}
 
 /** Splash while the first /me round-trip settles — prevents a login flash. */
 function Booting() {
@@ -62,12 +80,25 @@ function Gate() {
     bump((n) => n + 1)
   }
 
+  // Offered AFTER the welcome splash, never in front of it, and never to a
+  // device that already has one. pinOnThisDevice comes from the hh_device
+  // cookie via /me, so a second phone gets asked even though the account is
+  // the same one.
+  const offerPin = !showWelcome && !user.pinOnThisDevice && !pinOfferDeclined()
+  const closePinOffer = (remember: boolean) => {
+    if (remember) declinePinOffer()
+    bump((n) => n + 1)
+  }
+
   return (
     <>
       {/* Rendered OVER the app rather than instead of it, so Today is already
           mounted and painted behind the landing screen — dismissing lands on a
           finished screen instead of a spinner. */}
       {showWelcome && <Welcome onDone={dismissWelcome} />}
+      {offerPin && (
+        <SetPin onDone={() => closePinOffer(false)} onSkip={() => closePinOffer(true)} />
+      )}
       <Shell>
       <Routes>
         <Route path="/today" element={S(<Today />)} />

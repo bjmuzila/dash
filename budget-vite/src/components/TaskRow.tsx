@@ -50,7 +50,10 @@ export default function TaskRow({
   // orange — two different facts, two different colours, never merged.
   if (task.urgent && !done) meta.push({ text: 'Urgent', urgent: true })
   if (due) meta.push({ text: due.text, accent: due.overdue })
-  if (task.visibility === 'shared') meta.push({ text: mine ? 'Shared' : `${ownerName ?? 'Shared'}` })
+  // No "Shared" chip: everything is shared, so the word carries no information
+  // and printed on every row it is pure noise. WHO added it still does — but
+  // only when it wasn't you.
+  if (!mine && ownerName) meta.push({ text: ownerName })
   if (task.project) meta.push({ text: task.project })
 
   return (
@@ -110,15 +113,8 @@ export default function TaskRow({
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <button
-              onClick={() => update.mutate({
-                id: task.id,
-                patch: { visibility: task.visibility === 'shared' ? 'private' : 'shared' },
-              })}
-              style={segment(task.visibility === 'shared')}
-            >
-              {task.visibility === 'shared' ? 'Shared' : 'Private'}
-            </button>
+            {/* The Shared/Private switch lived here. Everything is shared now —
+                see server-v2/household-routes.cjs. */}
             <button onClick={() => touch.mutate(task.id)} style={segment(false)}>Still on it</button>
             {mine && (
               <button onClick={() => remove.mutate(task.id)}

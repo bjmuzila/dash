@@ -1,5 +1,145 @@
 # Changelog
 
+## 2026-08-07 - budget.cbedge.net: everything is shared, calendar last-synced, Today trimmed
+
+### Everything is shared — the private/shared switch is gone
+
+Two people who live together were being asked, at capture time, whether a grocery item
+was private. Nobody wants to make that decision while standing in a kitchen, and the
+failure mode is the one the app exists to prevent: a task only one of you can see.
+
+- `server-v2/_lib-household.cjs` — `ensureSchema()` now flips `visibility` DEFAULT to
+  `'shared'` on `hh_tasks`, `hh_notes`, `hh_routines`, `hh_meals`, `hh_list_items`,
+  `hh_projects`, and converts every existing private row ONCE. Idempotent, wrapped
+  per-table so a missing table can't take the boot down.
+- `server-v2/household-routes.cjs` — `vis()` is now `() => 'shared'`. Kept as a function,
+  not deleted, so reverting the policy is one line.
+- `_lib-household-lists.cjs` / `-projects.cjs` / `-routines.cjs` — same, via a `SHARED`
+  constant. The incoming `visibility` argument is accepted and ignored rather than removed
+  from the signatures.
+- The `VISIBLE` predicate `(owner_id = $1 OR visibility = 'shared')` STAYS in every query.
+  It is now always true, but it is the safety net if a row ever ends up private again.
+- Client: removed the Shared/Private toggle from Today's quick-add, Todo's quick-add,
+  the TaskRow expanded actions, Routines (row badge, row toggle, add form), Projects (card
+  badge, detail toggle, new-project form), Settings > Saved notes (toggle + SHARED badge),
+  and the `· private` suffix on Lists items.
+- `TaskRow` meta line: the "Shared" chip is gone — the word carries no information when
+  everything is shared. Another person's NAME still shows, because who added it does.
+
+### Google Calendar: last synced
+
+`hh_google_tokens.updated_at` moves on every silent access-token refresh, so it would read
+"synced 30 seconds ago" for a calendar that has been failing all day. A separate stamp
+tracks the thing actually being asked about.
+
+- `server-v2/_lib-household.cjs` — `ALTER TABLE hh_google_tokens ADD COLUMN IF NOT EXISTS
+  last_synced_at TIMESTAMPTZ`.
+- `server-v2/_lib-google-calendar.cjs` — `touchSync()` stamps it on a successful
+  `eventsForDay()` fetch (fire-and-forget; a failed write must not break a good read, and
+  the 60s events cache caps it at one write per minute per connection). `status()` returns
+  `lastSyncedAt` from the connection that actually SERVES this user, so on a shared
+  household calendar you see the other person's pull — the feed you are reading — not your
+  own null. `eventsForDay` also returns `syncedAt`.
+- `budget-vite/src/pages/Settings.tsx` — new `LastSynced` component under Google Calendar
+  in the More tab. Relative ("Last synced 4 minutes ago"), absolute time in the tooltip,
+  orange past 24h, and "Not synced yet" before the first fetch.
+
+### Urgent: one alarm, not three
+
+- `budget-vite/src/pages/Todo.tsx` — dropped `borderColor: T.bad` from the Urgent
+  section's `section()`. That tinted the section's top hairline, drawing a full-width red
+  bar above the word "Urgent" on top of the red heading and the red left rule on each row.
+  The per-row left bar (the useful one) is untouched.
+
+### Today: Habits and Resurfacing off the home page
+
+- `budget-vite/src/pages/Today.tsx` — removed the Habits progress block and the
+  Resurfacing quote block. Both screens are still live and unchanged — Habits at
+  `/routines` via More, notes in More > Saved notes — they were just pushing the open task
+  list below the fold. Today is what you have to DO; a habit ring and a rotating quote are
+  things you look at.
+
+## 2026-08-07 - budget.cbedge.net: 4-digit PIN quick sign-in
+
+Signing in on the phone meant typing a 10+ character password into a screen you reach
+several times a day. Quick sign-in adds a 4-digit PIN as a shortcut back into an account
+you have ALREADY proved with a password.
+
+A 4-digit secret is only 10,000 guesses, so it is never the whole credential. Two secrets
+are required, and the weak one is useless without the strong one:
+
+  1. `hh_device` — 32 random bytes in a second HttpOnly, host-only cookie (400 days),
+     issued when the PIN is set. The same PIN typed on any other device authenticates
+     nothing.
+  2. The PIN itself, scrypt-hashed against that device's row.
+
+Five wrong PINs DELETES the device row outright — not a timed lockout, which with only
+10,000 possibilities is an invitation. The device drops back to email + password, which
+is also the only way to re-arm it. An attacker holding an unlocked phone gets five guesses
+out of 10,000, once, ever.
+
+### `server-v2/_lib-household.cjs`
+- New table `hh_device_pins` (device_hash PK, user_id, pin_hash, fails, user_agent,
+  timestamps), created by the same `CREATE TABLE IF NOT EXISTS` bootstrap as the rest —
+  nothing to run on deploy. The PK is the SHA-256 of the device token, never the token,
+  same reasoning as `hh_sessions`.
+- `pinProblem()` — exactly 4 digits; rejects 1111-style repeats and 1234-style runs, and
+  nothing else.
+- `deviceCookie()` / `clearDeviceCookie()` / `deviceToken()` — same flags as the session
+  cookie (HttpOnly, Secure, SameSite=Lax, and deliberately NO `Domain`, so it can never
+  reach cbedge.net).
+- `setPin()` (requires a live session), `pinLogin()`, `pinStatus()`, `removePin()`,
+  `deviceHasPin()`, `countPinDevices()`.
+- On a shared browser already claimed by the other household user, `setPin` mints a fresh
+  device token rather than overwriting their quick sign-in.
+- Sign-out leaves `hh_device` alone on purpose — signing out is the thing quick sign-in
+  exists to recover from. Only "forget this device" or five bad guesses clear it.
+
+### `server-v2/household-routes.cjs`
+- `GET  /api/hh/auth/pin-status` (public) — should the login screen draw the pad? Answered
+  from the device cookie, so a stranger with no cookie gets `{ hasPin:false }` and learns
+  nothing about who uses the app.
+- `POST /api/hh/auth/pin-login` (public) — `{ pin }` → sets `hh_session`. A response with
+  `forget:true` also clears `hh_device`.
+- `GET/POST /api/hh/auth/pin` (household) — read arm state / set a PIN.
+- `POST /api/hh/auth/pin/remove` (household) — `{ allDevices? }`.
+- `authHeaders()` now accepts an array, so PIN sign-in can set `hh_session` and re-issue
+  `hh_device` in one response.
+- `/me` and `/login` now return `user.pinOnThisDevice`, so the SPA knows on first paint
+  whether to offer setup. No extra round-trip.
+- No change to `api-router.js` — these register through the existing
+  `registerHouseholdRoutes` hook.
+
+### `budget-vite/src/components/PinPad.tsx` (new)
+- On-screen 3x4 keypad with dots, shake-on-wrong, and physical-keyboard support. Not an
+  `<input inputMode="numeric">`: that pulls up the full iOS keyboard, shoves the layout,
+  and offers to autofill a password into a 4-digit field. Nothing is ever in a form field,
+  so no password manager and no autocomplete history for a device-scoped secret.
+- Auto-submits on the fourth digit — a confirm tap for a fixed-length secret is ceremony.
+
+### `budget-vite/src/pages/Login.tsx`
+- Split into `PinSignIn` and `PasswordSignIn` behind one frame. Which one renders is
+  decided by the SERVER via `/api/hh/auth/pin-status`, not by anything in localStorage.
+- Renders nothing for the one local round-trip rather than flashing the password form and
+  swapping it for a keypad.
+- "Use password instead" / "Use PIN instead" both ways. Five bad guesses shows why, then
+  falls through to the password form.
+
+### `budget-vite/src/pages/SetPin.tsx` (new)
+- Choose-then-confirm, offered once per device after the welcome splash. An offer, not a
+  gate: "Not now" is remembered permanently (`localStorage` UI flag only — no credential
+  is ever stored client-side) and Settings always has the card.
+
+### `budget-vite/src/pages/Settings.tsx`
+- New "Quick sign-in" section: set / change PIN, "Forget this device", and "Forget
+  everywhere" when other devices are armed.
+
+### `budget-vite/src/App.tsx` / `auth.tsx` / `api.ts`
+- `signInWithPin()` on the auth context; `HouseholdUser.pinOnThisDevice`; `ApiError` now
+  carries the parsed body so the PIN screen can read `forget` / `attemptsLeft`.
+- Gate offers `SetPin` after the welcome splash, never in front of it, and never on a
+  device that already has one.
+
 ## 2026-08-07 - Nav cleanup: Premarket off the Scanner strip, DEX/Charm off Test Lab
 
 ### `components/scanner/scannerNav.ts`

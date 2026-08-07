@@ -102,9 +102,6 @@ function Card({ project, onOpen }: { project: Project; onOpen: () => void }) {
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
         <div style={{ ...display(18), wordBreak: 'break-word' }}>
           {p.name}
-          {p.visibility === 'shared' && (
-            <span style={label({ marginLeft: 9, letterSpacing: '0.1em' })}>shared</span>
-          )}
         </div>
         {p.progress !== null && (
           <div style={{ ...hero(20), flexShrink: 0, color: p.progress === 100 ? T.good : T.ink }}>
@@ -315,11 +312,8 @@ function Detail({ id, onBack }: { id: number; onBack: () => void }) {
             <button key={s} onClick={() => update.mutate({ id: p.id, patch: { status: s } })}
                     style={mini(p.status === s)}>{s}</button>
           ))}
-          <button onClick={() => update.mutate({ id: p.id, patch: {
-            visibility: p.visibility === 'shared' ? 'private' : 'shared',
-          } })} style={mini(p.visibility === 'shared')}>
-            {p.visibility === 'shared' ? '✓ Shared' : 'Share'}
-          </button>
+          {/* No Share toggle — every project is shared. See
+              server-v2/household-routes.cjs. */}
         </div>
         {mine && (
           <button onClick={() => { archive.mutate({ id: p.id, archived: !p.archived_at }); onBack() }}
@@ -338,7 +332,6 @@ function NewProject({ onDone }: { onDone: () => void }) {
   const create = useCreateProject()
   const [name, setName] = useState('')
   const [target, setTarget] = useState('')
-  const [shared, setShared] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   return (
@@ -348,10 +341,7 @@ function NewProject({ onDone }: { onDone: () => void }) {
         if (!name.trim() || create.isPending) return
         setError(null)
         try {
-          await create.mutateAsync({
-            name: name.trim(), targetDate: target || null,
-            visibility: shared ? 'shared' : 'private',
-          })
+          await create.mutateAsync({ name: name.trim(), targetDate: target || null })
           onDone()
         } catch (err) {
           setError(err instanceof ApiError ? err.message : 'Could not create that.')
@@ -365,9 +355,6 @@ function NewProject({ onDone }: { onDone: () => void }) {
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
         <input style={{ ...input(), flex: 1 }} type="date" value={target}
                onChange={(e) => setTarget(e.target.value)} />
-        <button type="button" onClick={() => setShared((v) => !v)} style={mini(shared)}>
-          {shared ? '✓ Shared' : 'Private'}
-        </button>
       </div>
       {error && <div style={{ color: T.bad, fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{error}</div>}
       <div style={{ display: 'flex', gap: 8 }}>

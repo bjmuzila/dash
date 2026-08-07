@@ -23,6 +23,9 @@ catch (e) { console.warn('[hh-projects] _lib-db.cjs not loaded:', e.message); }
 const available = () => !!libDb;
 
 const VISIBLE = `(owner_id = $1 OR visibility = 'shared')`;
+
+// Everything in this app is shared — see the migration in _lib-household.cjs.
+const SHARED = 'shared';
 const STATUSES = ['active', 'someday', 'done'];
 const normStatus = (v) => (STATUSES.includes(v) ? v : 'active');
 
@@ -146,7 +149,7 @@ async function createProject(userId, { name, description, visibility, targetDate
   const { rows } = await libDb.getPool().query(
     `INSERT INTO hh_projects (owner_id, visibility, name, description, status, color, target_date)
      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING ${PROJECT_COLS}`,
-    [userId, visibility === 'shared' ? 'shared' : 'private', n,
+    [userId, SHARED, n,
      str(description, 4000) || null, normStatus(status), str(color, 20) || null,
      isDate(targetDate) ? targetDate : null]);
   return rows[0];
@@ -162,7 +165,7 @@ async function updateProject(userId, id, patch) {
     put('name', n);
   }
   if (patch.description !== undefined) put('description', str(patch.description, 4000) || null);
-  if (patch.visibility !== undefined) put('visibility', patch.visibility === 'shared' ? 'shared' : 'private');
+  if (patch.visibility !== undefined) put('visibility', SHARED);
   if (patch.status !== undefined) put('status', normStatus(patch.status));
   if (patch.color !== undefined) put('color', str(patch.color, 20) || null);
   if (patch.targetDate !== undefined) put('target_date', isDate(patch.targetDate) ? patch.targetDate : null);

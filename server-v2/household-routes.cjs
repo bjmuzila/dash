@@ -13,6 +13,14 @@
  *   POST /api/hh/auth/logout           public     — clears it
  *   GET  /api/hh/auth/me               public     — 200 {user} or 401, no redirect
  *   POST /api/hh/auth/change-password  household
+ *   GET  /api/hh/auth/pin-status       public     — should the login screen draw
+ *        the PIN pad? Answered from the hh_device cookie, so a stranger with no
+ *        cookie always gets { hasPin:false } and the plain password form.
+ *   POST /api/hh/auth/pin-login        public     — { pin } → sets hh_session
+ *   GET  /api/hh/auth/pin              household  — is this browser armed, and
+ *                                                   how many others are
+ *   POST /api/hh/auth/pin              household  — { pin } → sets hh_device
+ *   POST /api/hh/auth/pin/remove       household  — { allDevices? } → forget
  *   GET  /api/hh/health                public     — deploy smoke test
  *   GET  /api/hh/today                 household  — the composed Today payload
  *   GET  /api/hh/tasks                 household  — ?scope=open|done|done-all|all
@@ -27,18 +35,18 @@
  * server-v2/scripts/hh-user.js. Two people, forever.
  *
  * ── THE VISIBILITY RULE ────────────────────────────────────────────────────
- * Every household row carries owner_id + visibility ('private' | 'shared').
+ * Every household row carries owner_id + visibility, and since 2026-08 every
+ * row is 'shared' — see the migration in _lib-household.cjs. Both people can
+ * see AND edit everything; a shared list only one person can change is useless,
+ * and a private one nobody remembered to share is worse.
  *
  *   read : owner_id = :me OR visibility = 'shared'
  *   write: owner_id = :me OR visibility = 'shared'
  *
- * Shared means both people can see AND edit — a shared list only one person can
- * change is useless. Private means only its owner, full stop.
- *
- * This predicate is defined ONCE below as VISIBLE and reused by every query. Do
- * not hand-roll it per route: a single query that forgets the visibility clause
- * leaks the other person's private rows, and that is the one bug this app must
- * never have.
+ * That predicate is now always true, but it is defined ONCE below as VISIBLE
+ * and still reused by every query. Do not hand-roll it per route and do not
+ * delete it: it is the safety net if a row ever ends up private again, and it
+ * is what makes reverting the policy a one-line change.
  */
 
 const hh = require('./_lib-household.cjs');
@@ -88,15 +96,26 @@ function registerHouseholdRoutes({ register, send, readJson }) {
   let n = 0;
   const add = (path, def) => { register(path, def); n++; };
 
-  const authHeaders = (cookie) => (cookie ? { ...nostore, 'Set-Cookie': cookie } : nostore);
+  // Accepts one cookie or several — PIN sign-in sets hh_session AND re-issues
+  // hh_device in the same response. Node's setHeader takes an array for that.
+  const authHeaders = (cookie) => {
+    const list = (Array.isArray(cookie) ? cookie : [cookie]).filter(Boolean);
+    if (!list.length) return nostore;
+    return { ...nostore, 'Set-Cookie': list.length === 1 ? list[0] : list };
+  };
 
-  const publicUser = (u) => ({
+  const publicUser = (u, extra = {}) => ({
     id: u.id,
     email: u.email,
     displayName: u.display_name,
     budgetProfileKey: u.budget_profile_key,
     tz: u.tz,
     mustChangePassword: !!u.must_change_password,
+    // Whether THIS browser is armed for quick sign-in. On the user object
+    // rather than a separate call because the SPA needs it on every load to
+    // decide whether to offer PIN setup, and /me is already that round-trip.
+    pinOnThisDevice: false,
+    ...extra,
   });
 
   // Dates are compared in the user's timezone, not UTC. Without this a task due
@@ -111,7 +130,13 @@ function registerHouseholdRoutes({ register, send, readJson }) {
   };
 
   const str = (v, max = 2000) => String(v ?? '').trim().slice(0, max);
-  const vis = (v) => (v === 'shared' ? 'shared' : 'private');
+  // EVERYTHING IS SHARED. This app has two users who live together; a task only
+  // one of them can see is the failure mode it exists to prevent, and the
+  // private/shared switch was a decision nobody wanted to make at capture time.
+  // Kept as a function rather than deleted so the callers below still read as
+  // "whatever visibility this row gets" — and so flipping the policy back is
+  // one line, not a sweep. See the migration in _lib-household.cjs.
+  const vis = () => 'shared';
   // A date input arrives as 'YYYY-MM-DD' or empty. Anything else is dropped
   // rather than passed to Postgres, so a malformed value can't throw a 500.
   const dateOrNull = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v ?? '')) ? String(v) : null);
@@ -127,7 +152,9 @@ function registerHouseholdRoutes({ register, send, readJson }) {
         const body = await readJson(req, 8192);
         const result = await hh.login({ email: body?.email, password: body?.password, req });
         if (!result.ok) { send(res, result.code, { error: result.error }, nostore); return; }
-        send(res, 200, { ok: true, user: publicUser(result.user) }, authHeaders(result.cookie));
+        const pinOnThisDevice = await hh.deviceHasPin(req, result.user.id);
+        send(res, 200, { ok: true, user: publicUser(result.user, { pinOnThisDevice }) },
+             authHeaders(result.cookie));
       } catch (err) { send(res, 500, { error: String(err?.message || err) }, nostore); }
     },
   });
@@ -156,7 +183,8 @@ function registerHouseholdRoutes({ register, send, readJson }) {
           if (r) cookie = hh.sessionCookie(r.token, hh.SESSION_DAYS * 24 * 60 * 60);
         } catch { /* keep the existing cookie */ }
       }
-      send(res, 200, { user: publicUser(u) }, authHeaders(cookie));
+      const pinOnThisDevice = await hh.deviceHasPin(req, u.id);
+      send(res, 200, { user: publicUser(u, { pinOnThisDevice }) }, authHeaders(cookie));
     },
   });
 
@@ -172,6 +200,77 @@ function registerHouseholdRoutes({ register, send, readJson }) {
           req,
         });
         if (!result.ok) { send(res, result.code, { error: result.error }, nostore); return; }
+        send(res, 200, { ok: true }, authHeaders(result.cookie));
+      } catch (err) { send(res, 500, { error: String(err?.message || err) }, nostore); }
+    },
+  });
+
+  // ── Quick sign-in ──────────────────────────────────────────────────────
+  // See the PIN section of _lib-household.cjs for why a 4-digit secret is safe
+  // here: it only works alongside the hh_device cookie, and five wrong guesses
+  // forget the device outright.
+
+  // Public: the whole point is answering this while signed OUT. With no
+  // hh_device cookie it returns { hasPin:false } and the SPA draws the ordinary
+  // password form — a stranger learns nothing about who uses this app.
+  add('/api/hh/auth/pin-status', {
+    auth: 'public', methods: ['GET'],
+    async handler(req, res) {
+      try { send(res, 200, await hh.pinStatus(req), nostore); }
+      catch { send(res, 200, { hasPin: false }, nostore); }
+    },
+  });
+
+  add('/api/hh/auth/pin-login', {
+    auth: 'public', methods: ['POST'],
+    async handler(req, res) {
+      try {
+        const body = await readJson(req, 4096);
+        const result = await hh.pinLogin({ pin: body?.pin, req });
+        if (!result.ok) {
+          // `forget` means the device row is gone. Clear the cookie with it, so
+          // the next load asks for a password instead of a PIN that can no
+          // longer be right.
+          send(res, result.code,
+               { error: result.error, forget: !!result.forget, attemptsLeft: result.attemptsLeft ?? null },
+               result.forget ? authHeaders(hh.clearDeviceCookie()) : nostore);
+          return;
+        }
+        send(res, 200, { ok: true, user: publicUser(result.user, { pinOnThisDevice: true }) },
+             authHeaders([result.cookie, result.deviceCookie]));
+      } catch (err) { send(res, 500, { error: String(err?.message || err) }, nostore); }
+    },
+  });
+
+  // Arming a PIN requires a live session — a PIN is a shortcut back to access
+  // you already proved with a password, never a way to create it.
+  add('/api/hh/auth/pin', {
+    auth: 'household', methods: ['GET', 'POST'],
+    async handler(req, res, _ctx, access) {
+      try {
+        if (req.method === 'GET') {
+          send(res, 200, {
+            hasPinOnThisDevice: await hh.deviceHasPin(req, access.hhUser.id),
+            devices: await hh.countPinDevices(access.hhUser.id),
+          }, nostore);
+          return;
+        }
+        const body = await readJson(req, 4096);
+        const result = await hh.setPin({ userId: access.hhUser.id, pin: body?.pin, req });
+        if (!result.ok) { send(res, result.code, { error: result.error }, nostore); return; }
+        send(res, 200, { ok: true }, authHeaders(result.cookie));
+      } catch (err) { send(res, 500, { error: String(err?.message || err) }, nostore); }
+    },
+  });
+
+  add('/api/hh/auth/pin/remove', {
+    auth: 'household', methods: ['POST'],
+    async handler(req, res, _ctx, access) {
+      try {
+        const body = await readJson(req, 4096);
+        const result = await hh.removePin({
+          userId: access.hhUser.id, req, allDevices: !!body?.allDevices,
+        });
         send(res, 200, { ok: true }, authHeaders(result.cookie));
       } catch (err) { send(res, 500, { error: String(err?.message || err) }, nostore); }
     },

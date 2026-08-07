@@ -34,6 +34,25 @@
  * SESSIONS
  *   The cookie holds a 32-byte random token. The DB stores only its SHA-256, so
  *   a database dump does not hand anyone a live session.
+ *
+ * QUICK SIGN-IN (4-DIGIT PIN)
+ *   A 4-digit PIN is 10,000 guesses — worthless on its own. It is safe here
+ *   because it is only ever HALF of the credential:
+ *
+ *     secret 1  the DEVICE TOKEN — 32 random bytes in a second HttpOnly cookie
+ *               (hh_device, host-only, 400 days) issued when the PIN is set. It
+ *               never leaves the browser it was issued to, so the same PIN
+ *               typed anywhere else authenticates nothing at all.
+ *     secret 2  the PIN, stored scrypt-hashed against that device's row.
+ *
+ *   Five wrong PINs DELETES the device row — not a timed lockout. The phone
+ *   falls back to email + password, which is the strong credential and the only
+ *   way to re-arm quick sign-in. An attacker holding an unlocked phone therefore
+ *   gets five guesses out of 10,000, once, ever.
+ *
+ *   The device cookie deliberately outlives the session and SURVIVES SIGN-OUT —
+ *   signing out is the thing quick sign-in exists to recover from. Only "forget
+ *   this device" or five bad guesses clear it.
  */
 
 const crypto = require('crypto');
@@ -51,6 +70,14 @@ const SLIDE_AFTER_MS = 24 * 60 * 60 * 1000;
 
 const MAX_FAILS = 5;
 const LOCKOUT_MS = 15 * 60 * 1000;
+
+// Quick sign-in. 400 days because that is the hard ceiling Chrome clamps any
+// cookie to — asking for more just gets silently truncated.
+const DEVICE_COOKIE = 'hh_device';
+const DEVICE_DAYS = 400;
+// Wrong PINs before the device is forgotten entirely. Not a timed lockout: with
+// only 10,000 possible PINs, "try again in 15 minutes" is an invitation.
+const MAX_PIN_FAILS = 5;
 
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
 
@@ -96,6 +123,25 @@ async function ensureSchema() {
         at    TIMESTAMPTZ NOT NULL DEFAULT now()
       )`);
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_login_attempts_email_at_idx ON hh_login_attempts(email, at DESC)`);
+
+    // ── Quick sign-in ────────────────────────────────────────────────────
+    // One row per (browser, person). The PRIMARY KEY is the SHA-256 of the
+    // device token, never the token itself — same reasoning as hh_sessions: a
+    // database dump must not hand anyone half of a working credential.
+    //
+    // `fails` is per-DEVICE, not per-account, and it is never reset by time —
+    // only by a correct PIN. Deleting the row at MAX_PIN_FAILS is the lockout.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hh_device_pins (
+        device_hash  TEXT PRIMARY KEY,
+        user_id      INTEGER NOT NULL REFERENCES hh_users(id) ON DELETE CASCADE,
+        pin_hash     TEXT NOT NULL,
+        fails        INTEGER NOT NULL DEFAULT 0,
+        user_agent   TEXT,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        last_used_at TIMESTAMPTZ
+      )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_device_pins_user_idx ON hh_device_pins(user_id)`);
 
     // ── Life-OS tables (phase 1 uses tasks + notes; created now so step 4 is
     //    routes and UI only) ─────────────────────────────────────────────────
@@ -279,6 +325,38 @@ async function ensureSchema() {
     //     an empty array means "deliberately none".
     await pool.query(`ALTER TABLE hh_google_tokens ADD COLUMN IF NOT EXISTS share_with_household BOOLEAN NOT NULL DEFAULT FALSE`);
     await pool.query(`ALTER TABLE hh_google_tokens ADD COLUMN IF NOT EXISTS selected_calendars JSONB`);
+    //   last_synced_at — when Google last actually answered for this
+    //     connection. Distinct from updated_at, which moves on every silent
+    //     access-token refresh and so says nothing about whether the EVENTS are
+    //     current. Written by _lib-google-calendar.cjs on a successful fetch.
+    await pool.query(`ALTER TABLE hh_google_tokens ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMPTZ`);
+
+    // ── EVERYTHING IS SHARED ─────────────────────────────────────────────
+    // This is a two-person household app. Per-row private/shared was a switch
+    // nobody wanted to think about at capture time, and a task only one of you
+    // can see is the failure mode the app exists to prevent. The column stays
+    // — dropping it would mean rewriting every query's VISIBLE predicate for no
+    // gain — but from here it is always 'shared':
+    //
+    //   * the DEFAULT is flipped, so anything inserted without a visibility is
+    //     shared rather than private;
+    //   * every existing private row is converted, ONCE, below.
+    //
+    // The UPDATE is idempotent and runs on the first schema touch per process.
+    // These tables hold hundreds of rows, not millions — this is cheaper than
+    // the migration runner we deliberately don't have. If a row somehow ends up
+    // private again, `(owner_id = $1 OR visibility = 'shared')` in the route
+    // modules still does the right thing rather than leaking it.
+    for (const t of ['hh_tasks', 'hh_notes', 'hh_routines', 'hh_meals', 'hh_list_items', 'hh_projects']) {
+      try {
+        await pool.query(`ALTER TABLE ${t} ALTER COLUMN visibility SET DEFAULT 'shared'`);
+        await pool.query(`UPDATE ${t} SET visibility='shared' WHERE visibility <> 'shared'`);
+      } catch (e) {
+        // A table that doesn't exist yet on some older deployment must not take
+        // the whole schema bootstrap — and the app down — with it.
+        console.warn(`[household] visibility migration skipped for ${t}:`, e.message);
+      }
+    }
     return true;
   })().catch((e) => { ready = null; throw e; });
   return ready;
@@ -314,6 +392,26 @@ function passwordProblem(plain) {
   const s = String(plain || '');
   if (s.length < 10) return 'Password must be at least 10 characters.';
   if (s.length > 200) return 'Password is too long.';
+  return null;
+}
+
+/**
+ * A PIN is exactly four digits — no more, no less, so the pad can auto-submit
+ * on the fourth tap without a confirm button.
+ *
+ * The two rejections below are the only ones worth making. 1111-style repeats
+ * and 1234-style runs are the first guesses anyone makes and together they are
+ * a meaningful slice of PINs people actually choose. Banning more than that
+ * (birth years, "0000 is taken") buys nothing measurable and just makes setup
+ * feel like it is arguing with you.
+ */
+function pinProblem(pin) {
+  const s = String(pin ?? '');
+  if (!/^\d{4}$/.test(s)) return 'Your PIN must be exactly 4 digits.';
+  if (/^(\d)\1{3}$/.test(s)) return 'Pick a PIN that isn’t the same digit four times.';
+  if ('0123456789'.includes(s) || '9876543210'.includes(s)) {
+    return 'Pick a PIN that isn’t four digits in a row.';
+  }
   return null;
 }
 
@@ -411,6 +509,24 @@ function sessionCookie(token, maxAgeSec) {
 }
 
 const clearCookie = () => `${COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+
+// The quick-sign-in device token. Same flags as the session cookie for the same
+// reasons — HttpOnly so no script can read it, and NO Domain so it can never be
+// sent to cbedge.net. It just lives far longer and is not a session.
+function deviceCookie(token) {
+  return [
+    `${DEVICE_COOKIE}=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    'Secure',
+    'SameSite=Lax',
+    `Max-Age=${DEVICE_DAYS * 24 * 60 * 60}`,
+  ].join('; ');
+}
+
+const clearDeviceCookie = () => `${DEVICE_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+
+const deviceToken = (req) => parseCookies(req)[DEVICE_COOKIE] || null;
 
 async function createSession(userId, req) {
   const token = crypto.randomBytes(32).toString('base64url');
@@ -553,6 +669,189 @@ async function changePassword({ userId, currentPassword, newPassword, req }) {
 }
 
 // ---------------------------------------------------------------------------
+// Quick sign-in (4-digit PIN, bound to one device)
+// ---------------------------------------------------------------------------
+
+const uaOf = (req) => String(req?.headers?.['user-agent'] || '').slice(0, 300) || null;
+
+/**
+ * Arm (or re-arm) quick sign-in for the browser making this request.
+ *
+ * Requires an ALREADY-AUTHENTICATED caller — a PIN is never a way to create
+ * access, only a shortcut back to access you have already proven with a
+ * password. Re-issues the device cookie every time so an active phone's 400
+ * days keep sliding forward.
+ */
+async function setPin({ userId, pin, req }) {
+  await ensureSchema();
+  const problem = pinProblem(pin);
+  if (problem) return { ok: false, code: 400, error: problem };
+
+  const pool = libDb.getPool();
+  let token = deviceToken(req);
+
+  // A shared laptop: if this browser's token is already claimed by the OTHER
+  // person, mint a fresh one rather than overwriting their quick sign-in.
+  if (token) {
+    const { rows } = await pool.query(
+      `SELECT user_id FROM hh_device_pins WHERE device_hash=$1`, [sha256(token)]);
+    if (rows[0] && rows[0].user_id !== userId) token = null;
+  }
+  if (!token) token = crypto.randomBytes(32).toString('base64url');
+
+  await pool.query(
+    `INSERT INTO hh_device_pins (device_hash, user_id, pin_hash, fails, user_agent, last_used_at)
+     VALUES ($1,$2,$3,0,$4,now())
+     ON CONFLICT (device_hash) DO UPDATE
+        SET user_id = EXCLUDED.user_id, pin_hash = EXCLUDED.pin_hash, fails = 0,
+            user_agent = EXCLUDED.user_agent, last_used_at = now()`,
+    [sha256(token), userId, hashPassword(pin), uaOf(req)]);
+
+  return { ok: true, cookie: deviceCookie(token) };
+}
+
+/** Does the browser making this request have a PIN for this user? Never throws. */
+async function deviceHasPin(req, userId) {
+  if (!libDb) return false;
+  try {
+    const token = deviceToken(req);
+    if (!token) return false;
+    await ensureSchema();
+    const { rows } = await libDb.getPool().query(
+      `SELECT 1 FROM hh_device_pins WHERE device_hash=$1 AND user_id=$2`,
+      [sha256(token), userId]);
+    return !!rows[0];
+  } catch { return false; }
+}
+
+/** How many browsers this user has armed. For the "forget everywhere" control. */
+async function countPinDevices(userId) {
+  try {
+    await ensureSchema();
+    const { rows } = await libDb.getPool().query(
+      `SELECT COUNT(*)::int AS n FROM hh_device_pins WHERE user_id=$1`, [userId]);
+    return rows[0]?.n ?? 0;
+  } catch { return 0; }
+}
+
+/**
+ * What the SIGNED-OUT login screen asks before it decides which form to draw.
+ *
+ * Returns the display name so the PIN screen can say "Welcome back, Heather" —
+ * which is safe precisely because it takes the device cookie to get it. A
+ * stranger loading budget.cbedge.net cold still learns nothing.
+ */
+async function pinStatus(req) {
+  if (!libDb) return { hasPin: false };
+  try {
+    const token = deviceToken(req);
+    if (!token) return { hasPin: false };
+    await ensureSchema();
+    const { rows } = await libDb.getPool().query(
+      `SELECT d.fails, u.display_name, u.active
+         FROM hh_device_pins d JOIN hh_users u ON u.id = d.user_id
+        WHERE d.device_hash = $1`, [sha256(token)]);
+    const r = rows[0];
+    if (!r || !r.active) return { hasPin: false };
+    return {
+      hasPin: true,
+      displayName: r.display_name,
+      attemptsLeft: Math.max(0, MAX_PIN_FAILS - r.fails),
+    };
+  } catch { return { hasPin: false }; }
+}
+
+/**
+ * Sign in with the PIN. Returns the same shape as login().
+ *
+ * `forget: true` on a failure means the device row is gone — the client should
+ * drop to the password form and not offer the PIN pad again.
+ */
+async function pinLogin({ pin, req }) {
+  await ensureSchema();
+  const pool = libDb.getPool();
+  const token = deviceToken(req);
+  const gone = {
+    ok: false, code: 401, forget: true,
+    error: 'Quick sign-in isn’t set up on this device. Use your password.',
+  };
+  if (!token) return gone;
+
+  const dh = sha256(token);
+  const { rows } = await pool.query(
+    `SELECT d.pin_hash, d.fails, u.id, u.email, u.display_name, u.budget_profile_key,
+            u.tz, u.must_change_password, u.active
+       FROM hh_device_pins d JOIN hh_users u ON u.id = d.user_id
+      WHERE d.device_hash = $1`, [dh]);
+  const r = rows[0];
+
+  if (!r || !r.active) {
+    await pool.query(`DELETE FROM hh_device_pins WHERE device_hash=$1`, [dh]);
+    return gone;
+  }
+
+  const burn = async () => {
+    await pool.query(`DELETE FROM hh_device_pins WHERE device_hash=$1`, [dh]);
+    return {
+      ok: false, code: 429, forget: true,
+      error: 'Too many wrong PINs. Sign in with your password.',
+    };
+  };
+
+  if (r.fails >= MAX_PIN_FAILS) return burn();
+  if (!/^\d{4}$/.test(String(pin ?? ''))) {
+    return { ok: false, code: 400, error: 'Enter your 4-digit PIN.' };
+  }
+
+  if (!verifyPassword(pin, r.pin_hash)) {
+    const { rows: f } = await pool.query(
+      `UPDATE hh_device_pins SET fails = fails + 1 WHERE device_hash=$1 RETURNING fails`, [dh]);
+    await logAttempt(r.email, clientIp(req), false);
+    const left = Math.max(0, MAX_PIN_FAILS - (f[0]?.fails ?? MAX_PIN_FAILS));
+    if (left <= 0) return burn();
+    return {
+      ok: false, code: 401, attemptsLeft: left,
+      error: `Wrong PIN. ${left} ${left === 1 ? 'try' : 'tries'} left.`,
+    };
+  }
+
+  await pool.query(
+    `UPDATE hh_device_pins SET fails = 0, last_used_at = now() WHERE device_hash=$1`, [dh]);
+  await logAttempt(r.email, clientIp(req), true);
+  void pruneSessions();
+  const { token: sessionToken } = await createSession(r.id, req);
+  await pool.query(`UPDATE hh_users SET last_login_at = now() WHERE id=$1`, [r.id]);
+
+  delete r.pin_hash;
+  delete r.fails;
+  return {
+    ok: true,
+    user: r,
+    cookie: sessionCookie(sessionToken, SESSION_DAYS * 24 * 60 * 60),
+    // Re-issued so daily use keeps pushing the 400 days out.
+    deviceCookie: deviceCookie(token),
+  };
+}
+
+/** Forget quick sign-in — this browser, or every browser this user armed. */
+async function removePin({ userId, req, allDevices = false }) {
+  await ensureSchema();
+  const pool = libDb.getPool();
+  if (allDevices) {
+    await pool.query(`DELETE FROM hh_device_pins WHERE user_id=$1`, [userId]);
+  } else {
+    const token = deviceToken(req);
+    if (token) {
+      await pool.query(`DELETE FROM hh_device_pins WHERE device_hash=$1 AND user_id=$2`,
+        [sha256(token), userId]);
+    }
+  }
+  // The cookie goes too. Leaving it would make the next "set a PIN" reuse a
+  // token the user just asked to be rid of.
+  return { ok: true, cookie: clearDeviceCookie() };
+}
+
+// ---------------------------------------------------------------------------
 // Settings (per user, JSONB key/value)
 // ---------------------------------------------------------------------------
 
@@ -582,7 +881,9 @@ async function setSetting(userId, key, value) {
 
 module.exports = {
   COOKIE_NAME,
+  DEVICE_COOKIE,
   SESSION_DAYS,
+  MAX_PIN_FAILS,
   DEFAULT_SETTINGS,
   getSettings,
   setSetting,
@@ -592,11 +893,18 @@ module.exports = {
   hashPassword,
   verifyPassword,
   passwordProblem,
+  pinProblem,
   createUser,
   listUsers,
   setPassword,
   login,
   changePassword,
+  setPin,
+  pinLogin,
+  pinStatus,
+  removePin,
+  deviceHasPin,
+  countPinDevices,
   userFromRequest,
   shouldSlide,
   refreshSession,
@@ -604,6 +912,8 @@ module.exports = {
   destroyAllSessions,
   sessionCookie,
   clearCookie,
+  deviceCookie,
+  clearDeviceCookie,
   clientIp,
   available: () => !!libDb,
 };

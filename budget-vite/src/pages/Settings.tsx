@@ -1,6 +1,7 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useAuth } from '../auth'
 import { auth as authApi, calendar as calendarApi, ApiError } from '../api'
+import PinPad from '../components/PinPad'
 import { useSettings, useSaveSettings, useNotes, useCreateNote, useDeleteNote,
          useToday, useDisconnectCalendar } from '../hooks'
 import CalendarPicker from '../components/CalendarPicker'
@@ -33,6 +34,7 @@ export default function Settings() {
 
       <SlippingSetting />
       <SavedNotes />
+      <QuickPinCard />
       <ChangePasswordCard />
 
       <GoogleCalendarCard />
@@ -108,6 +110,7 @@ function GoogleCalendarCard() {
           <div style={{ fontSize: 14, color: T.good, fontWeight: 700 }}>
             Connected{status.email ? ` — ${status.email}` : ''}
           </div>
+          <LastSynced at={status.lastSyncedAt ?? null} />
           <CalendarPicker status={status} />
           <button
             onClick={() => disconnect.mutate()}
@@ -128,6 +131,7 @@ function GoogleCalendarCard() {
                 Nothing to set up. Connect your own account below only if you also want
                 your personal events on Today.
               </span>
+              <LastSynced at={status.lastSyncedAt ?? null} />
             </div>
           )}
           {/* A real link, not a button with onClick — the browser must follow the
@@ -143,6 +147,45 @@ function GoogleCalendarCard() {
         </div>
       )}
     </section>
+  )
+}
+
+/**
+ * "Last synced 4 minutes ago" — when Google last actually answered for the
+ * connection feeding this account.
+ *
+ * Read from `last_synced_at`, which the server stamps on a successful events
+ * fetch — NOT from the token's `updated_at`, which moves on every silent
+ * access-token refresh and would happily read "synced 30 seconds ago" for a
+ * calendar that has been failing all day.
+ *
+ * Relative, not a timestamp: the only question anyone asks here is "is this
+ * current?", and "4 minutes ago" answers it without arithmetic. The absolute
+ * time is in the title attribute for when it isn't.
+ */
+function LastSynced({ at }: { at: string | null }) {
+  if (!at) {
+    return (
+      <div style={{ ...label({ letterSpacing: '0.06em', color: T.faint }), marginTop: 8 }}>
+        Not synced yet — open Today to pull your events
+      </div>
+    )
+  }
+  const then = new Date(at)
+  const mins = Math.max(0, Math.round((Date.now() - then.getTime()) / 60_000))
+  const ago =
+      mins < 1    ? 'just now'
+    : mins < 60   ? `${mins} minute${mins === 1 ? '' : 's'} ago`
+    : mins < 1440 ? `${Math.round(mins / 60)} hour${Math.round(mins / 60) === 1 ? '' : 's'} ago`
+    :               `${Math.round(mins / 1440)} day${Math.round(mins / 1440) === 1 ? '' : 's'} ago`
+  // A calendar that hasn't answered in over a day is stale enough to flag, but
+  // it is not an error — Google may simply not have been asked.
+  const stale = mins > 1440
+  return (
+    <div title={then.toLocaleString()}
+         style={{ ...label({ letterSpacing: '0.06em', color: stale ? T.warn : T.muted }), marginTop: 8 }}>
+      Last synced {ago}
+    </div>
   )
 }
 
@@ -202,14 +245,15 @@ function SavedNotes() {
   const create = useCreateNote()
   const del = useDeleteNote()
   const [body, setBody] = useState('')
-  const [shared, setShared] = useState(false)
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     const t = body.trim()
     if (!t || create.isPending) return
     setBody('')
-    try { await create.mutateAsync({ body: t, visibility: shared ? 'shared' : 'private' }) }
+    // No visibility choice — everything in this app is shared. See
+    // server-v2/household-routes.cjs.
+    try { await create.mutateAsync({ body: t }) }
     catch { setBody(t) }
   }
 
@@ -230,17 +274,6 @@ function SavedNotes() {
           style={{ ...input(), resize: 'vertical', minHeight: 72, lineHeight: 1.45 }}
         />
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
-          <button
-            type="button" onClick={() => setShared((v) => !v)}
-            style={{
-              appearance: 'none', minHeight: 38, padding: '8px 13px', borderRadius: 9,
-              fontSize: 13, fontWeight: 700, cursor: 'pointer', color: T.ink,
-              background: shared ? 'transparent' : 'transparent',
-              border: `1px solid ${shared ? T.ink : T.ruleStrong}`,
-            }}
-          >
-            {shared ? '✓ Shared' : 'Private'}
-          </button>
           <button type="submit" disabled={!body.trim() || create.isPending}
                   style={{ ...button('primary'), marginLeft: 'auto', opacity: body.trim() ? 1 : 0.4 }}>
             Save
@@ -257,11 +290,6 @@ function SavedNotes() {
             }}>
               <div style={{ flex: 1, minWidth: 0, fontSize: 14, lineHeight: 1.45, wordBreak: 'break-word' }}>
                 {nt.body}
-                {nt.visibility === 'shared' && (
-                  <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.1em', color: T.accent, marginLeft: 8 }}>
-                    SHARED
-                  </span>
-                )}
               </div>
               {nt.owner_id === user?.id && (
                 <button onClick={() => del.mutate(nt.id)} aria-label="Delete note"
@@ -272,6 +300,145 @@ function SavedNotes() {
               )}
             </div>
           ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+// ── Quick sign-in (4-digit PIN) ──────────────────────────────────────────────
+
+/**
+ * Arm, change or forget the PIN for THIS browser.
+ *
+ * Everything here is device-scoped: `hasPinOnThisDevice` comes from the
+ * HttpOnly hh_device cookie, so this card reads differently on your phone than
+ * on the laptop even though it is the same account. `devices` is the only
+ * account-wide number, and it exists for one reason — "forget everywhere",
+ * which is what you press when a phone goes missing.
+ */
+function QuickPinCard() {
+  const { refresh } = useAuth()
+  const [info, setInfo] = useState<{ hasPinOnThisDevice: boolean; devices: number } | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [first, setFirst] = useState<string | null>(null)
+  const [pin, setPin] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  const sending = useRef(false)
+
+  const load = () => { authApi.pinInfo().then(setInfo).catch(() => setInfo(null)) }
+  useEffect(load, [])
+
+  const reset = () => { setFirst(null); setPin(''); setEditing(false) }
+
+  useEffect(() => {
+    if (!editing || pin.length !== 4 || sending.current) return
+
+    if (first === null) {
+      const weak = /^(\d)\1{3}$/.test(pin) ? 'Not the same digit four times.'
+        : ('0123456789'.includes(pin) || '9876543210'.includes(pin))
+          ? 'Not four digits in a row.' : null
+      if (weak) { setMsg({ kind: 'err', text: weak }); setPin(''); return }
+      setFirst(pin); setPin(''); setMsg(null)
+      return
+    }
+    if (pin !== first) {
+      setMsg({ kind: 'err', text: 'Those didn’t match. Start again.' })
+      setFirst(null); setPin('')
+      return
+    }
+
+    sending.current = true
+    setBusy(true)
+    void (async () => {
+      try {
+        await authApi.setPin(pin)
+        await refresh()
+        load()
+        reset()
+        setMsg({ kind: 'ok', text: 'PIN saved for this device.' })
+      } catch (err) {
+        setMsg({ kind: 'err', text: err instanceof ApiError ? err.message : 'Could not save your PIN.' })
+        setFirst(null); setPin('')
+      } finally { sending.current = false; setBusy(false) }
+    })()
+  }, [pin, editing, first, refresh])
+
+  const forget = async (allDevices: boolean) => {
+    setBusy(true); setMsg(null)
+    try {
+      await authApi.removePin(allDevices)
+      await refresh()
+      load()
+      reset()
+      setMsg({ kind: 'ok', text: allDevices ? 'Quick sign-in removed everywhere.' : 'This device will ask for your password.' })
+    } catch (err) {
+      setMsg({ kind: 'err', text: err instanceof ApiError ? err.message : 'Something went wrong.' })
+    } finally { setBusy(false) }
+  }
+
+  const has = !!info?.hasPinOnThisDevice
+  const others = Math.max(0, (info?.devices ?? 0) - (has ? 1 : 0))
+
+  return (
+    <section style={section()}>
+      <div style={label()}>Quick sign-in</div>
+      <div style={{ fontSize: 14, color: T.muted, marginTop: 8, lineHeight: 1.45 }}>
+        A 4-digit PIN gets you back in without typing your password. It is tied to this
+        device alone — the PIN by itself is useless anywhere else, and five wrong
+        entries make this device ask for the password again.
+      </div>
+
+      {msg && (
+        <div style={{
+          marginTop: 12, padding: '10px 12px', borderRadius: 10, fontSize: 14, fontWeight: 600,
+          color: msg.kind === 'ok' ? T.good : T.bad,
+          background: msg.kind === 'ok' ? 'rgba(142,202,230,0.10)' : 'rgba(239,68,68,0.10)',
+          border: `1px solid ${msg.kind === 'ok' ? 'rgba(142,202,230,0.35)' : 'rgba(239,68,68,0.35)'}`,
+        }}>{msg.text}</div>
+      )}
+
+      {editing ? (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ ...label({ letterSpacing: '0.08em' }), textAlign: 'center', marginBottom: 16 }}>
+            {first === null ? 'Choose a PIN' : 'Enter it again'}
+          </div>
+          <PinPad value={pin} onChange={(v) => { setMsg(null); setPin(v) }} disabled={busy} />
+          <button type="button" onClick={reset}
+                  style={{ ...button('ghost'), width: '100%', marginTop: 16 }}>
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: has ? T.good : T.muted }}>
+            {info === null ? '—' : has ? 'On for this device' : 'Off for this device'}
+            {others > 0 && (
+              <span style={{ display: 'block', fontSize: 13, color: T.muted, fontWeight: 400, marginTop: 4 }}>
+                Also set up on {others} other {others === 1 ? 'device' : 'devices'}.
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+            <button type="button" disabled={busy}
+                    onClick={() => { setMsg(null); setFirst(null); setPin(''); setEditing(true) }}
+                    style={{ ...button('primary') }}>
+              {has ? 'Change PIN' : 'Set a PIN'}
+            </button>
+            {has && (
+              <button type="button" disabled={busy} onClick={() => void forget(false)}
+                      style={{ ...button('ghost'), color: T.bad, borderColor: 'rgba(239,68,68,0.35)' }}>
+                Forget this device
+              </button>
+            )}
+            {others > 0 && (
+              <button type="button" disabled={busy} onClick={() => void forget(true)}
+                      style={{ ...button('ghost'), color: T.bad, borderColor: 'rgba(239,68,68,0.35)' }}>
+                Forget everywhere
+              </button>
+            )}
+          </div>
         </div>
       )}
     </section>

@@ -9,9 +9,13 @@
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** The parsed error body, when there was one. Most callers only need
+   *  `message`; PIN sign-in also reads `forget` / `attemptsLeft` off this. */
+  body: any;
+  constructor(status: number, message: string, body: any = null) {
     super(message);
     this.status = status;
+    this.body = body;
     this.name = 'ApiError';
   }
 }
@@ -36,7 +40,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   let body: any = null;
   if (text) { try { body = JSON.parse(text); } catch { body = { error: text }; } }
 
-  if (!res.ok) throw new ApiError(res.status, body?.error || `Request failed (${res.status})`);
+  if (!res.ok) throw new ApiError(res.status, body?.error || `Request failed (${res.status})`, body);
   return body as T;
 }
 
@@ -55,7 +59,20 @@ export type HouseholdUser = {
   budgetProfileKey: string
   tz: string
   mustChangePassword: boolean
+  /** True when THIS browser is armed for quick (PIN) sign-in. Comes from the
+   *  hh_device cookie, so it is per-device and not a property of the account. */
+  pinOnThisDevice: boolean
 }
+
+/** What the signed-out login screen asks before choosing which form to draw. */
+export type PinStatus = {
+  hasPin: boolean
+  /** Only present when hasPin — it takes the device cookie to learn this. */
+  displayName?: string
+  attemptsLeft?: number
+}
+
+export type PinInfo = { hasPinOnThisDevice: boolean; devices: number }
 
 export type Visibility = 'private' | 'shared'
 
@@ -105,6 +122,11 @@ export type CalendarStatus = {
   email?: string | null
   shareWithHousehold?: boolean | null
   selectedCalendars?: string[] | null
+  /** ISO time Google last actually answered for the connection feeding YOU —
+   *  your own, or the household's shared one. Null until the first successful
+   *  fetch. NOT the token-refresh time; see `touchSync` in
+   *  server-v2/_lib-google-calendar.cjs. */
+  lastSyncedAt?: string | null
 }
 
 export type GoogleCalendar = {
@@ -451,6 +473,18 @@ export const auth = {
   logout: () => api.post<{ ok: true }>('/api/hh/auth/logout'),
   changePassword: (currentPassword: string, newPassword: string) =>
     api.post<{ ok: true }>('/api/hh/auth/change-password', { currentPassword, newPassword }),
+
+  // ── Quick sign-in ──────────────────────────────────────────────────────
+  // No token is ever handed to JS: arming a PIN sets a second HttpOnly cookie
+  // (hh_device) and the PIN is only half the credential. See the PIN section of
+  // server-v2/_lib-household.cjs.
+  pinStatus: () => api.get<PinStatus>('/api/hh/auth/pin-status'),
+  pinLogin: (pin: string) =>
+    api.post<{ ok: true; user: HouseholdUser }>('/api/hh/auth/pin-login', { pin }),
+  pinInfo: () => api.get<PinInfo>('/api/hh/auth/pin'),
+  setPin: (pin: string) => api.post<{ ok: true }>('/api/hh/auth/pin', { pin }),
+  removePin: (allDevices = false) =>
+    api.post<{ ok: true }>('/api/hh/auth/pin/remove', { allDevices }),
 }
 
 export const tasks = {

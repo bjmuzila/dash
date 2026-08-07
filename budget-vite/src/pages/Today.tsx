@@ -5,7 +5,7 @@ import { useToday, useCreateTask } from '../hooks'
 import { ApiError, type Task, type TodayPayload } from '../api'
 import TaskRow from '../components/TaskRow'
 import CalendarCard from '../components/CalendarCard'
-import { T, sectionTitle, label, body, hero, display, section, row, input, button, segment, track, fill, quote, textAction, MONO } from '../theme'
+import { T, sectionTitle, label, body, hero, display, section, row, input, button, textAction, MONO } from '../theme'
 
 /**
  * Today — "The Briefing".
@@ -31,7 +31,7 @@ export default function Today() {
   }
   if (!data || !user) return null
 
-  const { today, top3, open, slipping, counts, resurfacing, people } = data
+  const { today, top3, open, slipping, counts, people } = data
   const me = user.id
   // Top 3 already appears above; repeating it in the full list is just noise.
   const topIds = new Set(top3.map((t) => t.id))
@@ -71,21 +71,11 @@ export default function Today() {
 
       <CalendarCard status={data.calendar} date={today} />
 
-      {data.routines && data.routines.total > 0 && (
-        <Link to="/routines" style={{ ...section(), textDecoration: 'none', color: 'inherit', display: 'block' }}>
-          <Head left="Habits" right={`${data.routines.done} of ${data.routines.total}`} />
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginTop: 6 }}>
-            <div style={hero(34)}>
-              {Math.round((data.routines.done / data.routines.total) * 100)}
-              <span style={{ fontSize: 16, color: T.muted }}>%</span>
-            </div>
-            <div style={{ ...track(), flex: 1 }}>
-              <div style={fill((data.routines.done / data.routines.total) * 100,
-                               data.routines.done === data.routines.total ? T.good : T.accent)} />
-            </div>
-          </div>
-        </Link>
-      )}
+      {/* Habits and Resurfacing used to sit here. Both are still live screens —
+          Habits at /routines (reached from More), notes in More > Saved notes —
+          they are just off the home page. Today is what you have to DO now; a
+          habit ring and a rotating quote are things you look at, and they were
+          pushing the open list below the fold. */}
 
       <div style={section()}>
         <Head left="Open tasks" right={rest.length ? String(rest.length) : undefined} />
@@ -100,18 +90,6 @@ export default function Today() {
             Untouched a while. Tap one and hit "Still on it" to reset the clock.
           </div>
           <div>{rows(slipping)}</div>
-        </div>
-      )}
-
-      {resurfacing && (
-        <div style={section()}>
-          <Head left="Resurfacing" />
-          <p style={{ ...quote(), marginTop: 12 }}>“{resurfacing.body}”</p>
-          <div style={label({ marginTop: 10, letterSpacing: '0.08em' })}>
-            {new Date(resurfacing.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-            {resurfacing.owner_id !== me &&
-              ` · ${people.find((p) => p.id === resurfacing.owner_id)?.displayName ?? ''}`}
-          </div>
         </div>
       )}
 
@@ -208,7 +186,6 @@ function QuickAdd() {
   const [title, setTitle] = useState('')
   const [due, setDue] = useState('')
   const [urgent, setUrgent] = useState(false)
-  const [shared, setShared] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -220,8 +197,9 @@ function QuickAdd() {
     // and you're already typing the next one.
     setTitle(''); setError(null)
     try {
-      await create.mutateAsync({ title: t, dueDate: due || null, urgent,
-                                 visibility: shared ? 'shared' : 'private' })
+      // No visibility choice: everything in this app is shared. See the note
+      // in server-v2/household-routes.cjs.
+      await create.mutateAsync({ title: t, dueDate: due || null, urgent })
       setDue(''); setUrgent(false)
     } catch (err) {
       setTitle(t) // put it back rather than losing what they typed
@@ -248,9 +226,6 @@ function QuickAdd() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 9, flexWrap: 'wrap' }}>
           <input type="date" value={due} onChange={(e) => setDue(e.target.value)}
                  style={{ ...input(), width: 'auto', flex: 'none', minHeight: 34, padding: '6px 9px', fontSize: 14 }} />
-          <button type="button" onClick={() => setShared((v) => !v)} style={segment(shared)}>
-            {shared ? 'Shared' : 'Private'}
-          </button>
         </div>
       )}
       {error && <div style={label({ color: T.bad, marginTop: 9, letterSpacing: '0.06em' })}>{error}</div>}

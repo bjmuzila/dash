@@ -67,7 +67,11 @@ export default function Todo() {
       <QuickAdd />
 
       {urgent.length > 0 && (
-        <div style={{ ...section(), borderColor: T.bad }}>
+        // Plain section rule, NOT a red one. Urgent already reads as urgent
+        // from the red left bar on each row and the red heading; a red bar
+        // spanning the whole width on top of that was a third alarm for the
+        // same fact, and it made the divider look like an error state.
+        <div style={section()}>
           <Head left="Urgent" right={String(urgent.length)} urgent />
           <div>{rows(urgent)}</div>
         </div>
@@ -98,7 +102,6 @@ function QuickAdd() {
   const [title, setTitle] = useState('')
   const [urgent, setUrgent] = useState(false)
   const [due, setDue] = useState('')
-  const [shared, setShared] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const submit = async (e: FormEvent) => {
@@ -109,9 +112,9 @@ function QuickAdd() {
     // already typing the next one.
     setTitle(''); setError(null)
     try {
-      await create.mutateAsync({
-        title: t, urgent, dueDate: due || null, visibility: shared ? 'shared' : 'private',
-      })
+      // No visibility choice: everything in this app is shared. See the note in
+      // server-v2/household-routes.cjs.
+      await create.mutateAsync({ title: t, urgent, dueDate: due || null })
       // Urgent resets, the date doesn't: adding three things due Friday is
       // common, adding three emergencies in a row is not.
       setUrgent(false)
@@ -141,9 +144,6 @@ function QuickAdd() {
         </button>
         <input type="date" value={due} onChange={(e) => setDue(e.target.value)}
                style={{ ...input(), width: 'auto', flex: 'none', minHeight: 34, padding: '6px 9px', fontSize: 14 }} />
-        <button type="button" onClick={() => setShared((v) => !v)} style={segment(shared)}>
-          {shared ? 'Shared' : 'Private'}
-        </button>
       </div>
       {error && <div style={label({ color: T.bad, marginTop: 9, letterSpacing: '0.06em' })}>{error}</div>}
     </form>
