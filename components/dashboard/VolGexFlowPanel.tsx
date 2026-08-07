@@ -8,8 +8,8 @@
 //
 // Data: GET /proxy/gex-vol-flow (server-with-proxy.js), which buckets
 // option_strike_gex_history server-side — last reading per (expiry, strike) per
-// bucket, summed. Polled; the endpoint caches 20s and the recorder only writes
-// ~1/min, so this is cheap.
+// bucket, summed. Polled; the endpoint caches 15s and the recorder writes every
+// 30s, so this is cheap.
 //
 // Why a Baseline series: net vol GEX is a POLARITY measure — the sign is the
 // signal (positive = flow adding long gamma / dampening, negative = short
@@ -37,11 +37,21 @@ const C = HOME_THEME;
 const POS = C.green;
 const NEG = C.red;
 
-const POLL_MS = 30_000;
-// 60s is the floor the endpoint enforces, and it matches the recorder's ~1/min
-// write cadence — a 30s bucket cannot surface a reading that was never written,
-// it just alternates full and empty buckets and draws a staircase.
-const BIN_SEC = 60;
+// Half the bucket width, so a newly written bucket is on screen within one
+// poll rather than up to a full bucket late.
+const POLL_MS = 15_000;
+
+// 30s is the floor the endpoint enforces, and it matches the recorder's 30s
+// write cadence (gex-history-writer.js). Going 1:1 with the recorder is only
+// safe because that recorder writes on a fixed 30s grid slot — the same grid
+// the endpoint buckets on — so every bucket holds exactly one row. Under the
+// older drifting throttle this 1:1 pairing is what produced the shark tooth:
+// buckets that caught two writes threw one away, and the neighbours that
+// caught none dropped a point entirely.
+const BIN_SEC = 30;
+
+// Buckets are now sub-minute, so `BIN_SEC / 60` would render "0.5m".
+const BIN_LABEL = BIN_SEC < 60 ? `${BIN_SEC}s` : `${BIN_SEC / 60}m`;
 
 // Sentinel picks. Real picks are ISO expiry strings, which can never collide
 // with these because neither parses as a date.
@@ -277,7 +287,7 @@ export default function VolGexFlowPanel() {
     const last = stats.last;
     return [
       { label: "Net Vol GEX", value: fmtGex(last.volGex), sub: etTime(Math.floor(last.ts / 1000)), color: last.volGex >= 0 ? POS : NEG },
-      { label: "Δ Last Bucket", value: last.dVol == null ? "—" : `${last.dVol > 0 ? "+" : ""}${fmtGex(last.dVol)}`, sub: `${BIN_SEC / 60}m`, color: (last.dVol ?? 0) >= 0 ? POS : NEG },
+      { label: "Δ Last Bucket", value: last.dVol == null ? "—" : `${last.dVol > 0 ? "+" : ""}${fmtGex(last.dVol)}`, sub: BIN_LABEL, color: (last.dVol ?? 0) >= 0 ? POS : NEG },
       { label: "Session High", value: fmtGex(stats.high.v), sub: etTime(Math.floor(stats.high.at / 1000)), color: POS },
       { label: "Session Low", value: fmtGex(stats.low.v), sub: etTime(Math.floor(stats.low.at / 1000)), color: stats.low.v < 0 ? NEG : C.text },
       { label: "Sign Flips", value: String(stats.flips), sub: stats.flips === 0 ? "one regime" : "regime changes", color: stats.flips > 0 ? C.orange : C.cyan },
@@ -332,7 +342,7 @@ export default function VolGexFlowPanel() {
           })}
         </div>
         <span style={{ fontSize: 11, color: C.text, letterSpacing: "0.06em" }}>
-          {BIN_SEC / 60}m buckets · today ET
+          {BIN_LABEL} buckets · today ET
         </span>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           {updatedAt && (

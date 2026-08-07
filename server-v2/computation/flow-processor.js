@@ -128,7 +128,9 @@ class FlowProcessor {
    * @param {string} args.streamerSymbol
    * @param {number} args.price
    * @param {number} args.size
-   * @param {number} [args.time] epoch ms
+   * @param {number} [args.time] EXCHANGE epoch ms for the print when the feed
+   *   supplies one (dxLink TimeAndSale.time); falls back to the ingest clock.
+   *   Callers must validate it — see stampFlowTime() in proxy-tastytrade.js.
    * @param {object|null} [args.quote] prevailing quote {bid,ask} for side inference
    * @param {number} [args.spot] underlying spot at print time (for isOtm/bucket)
    */
@@ -186,7 +188,14 @@ class FlowProcessor {
       last.symbol === streamerSymbol &&
       last.side === tapeSide &&
       last.action === action &&
-      time - last.anchorTs <= this.coalesceMs
+      // ABS: `time` is now the EXCHANGE timestamp of the print (see the
+      // TimeAndSale branch in proxy-tastytrade.js), not the ingest clock, so a
+      // batch the feed replays out of order can hand us a print marginally
+      // OLDER than the open order's anchor. A plain `time - anchorTs` goes
+      // negative there and passes the test by accident; abs() makes the window
+      // symmetric, which is what "fills within coalesceMs of each other" meant
+      // all along.
+      Math.abs(time - last.anchorTs) <= this.coalesceMs
     ) {
       const newSize = last.size + size;
       // Size-weighted average fill price across the aggregated prints.
@@ -194,6 +203,14 @@ class FlowProcessor {
       last.size = newSize;
       last.premium += premium;
       last.fills = (last.fills || 1) + 1; // how many prints rolled into this order
+      // Ingest wall-clock of the most recent fill — NOT the print's exchange
+      // time. state/flow-history-writer.js keys its flush cursor off this
+      // instead of `ts`, because `ts` is now exchange time and can move
+      // backwards on a replayed batch (a ts-keyed cursor would skip those rows
+      // and they'd never reach flow_prints at all). It also fixes a
+      // pre-existing undercount: an order that kept coalescing for seconds fell
+      // behind the ts-based cutoff, so its later fills were never re-upserted.
+      last.lastFillAt = Date.now();
       if (spot > 0) last.spot = spot; // keep the freshest underlying spot as fills accumulate
       // Contract-level Greeks/Summary arrive on their own events; keep the
       // freshest non-null value as fills accumulate so a late Greeks tick fills in.
@@ -207,8 +224,9 @@ class FlowProcessor {
       // (premium accumulates). The noise floor is applied at read time in
       // bucket(), so a sweep that starts small can still grow into a real block.
       this.tape.push({
-        ts: time, // order start = first fill time
+        ts: time, // order start = first fill time (EXCHANGE time when the feed supplies one)
         anchorTs: time, // rolling-window anchor (first fill)
+        lastFillAt: Date.now(), // ingest wall-clock of the latest fill — flush cursor, see above
         fills: 1,
         symbol: streamerSymbol,
         underlying: displayUnderlying(parsed.root),

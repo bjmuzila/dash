@@ -777,6 +777,18 @@ const NETPREM_TTL_MS = 4000;
 // Re-scan this many trailing bins on an incremental refresh: the flow writer
 // flushes in batches, so a print can land in the DB a minute+ after its ts.
 const NETPREM_OVERLAP_BINS = 3;
+// …and re-scan at least this far back in wall-clock terms, regardless of where
+// the last populated bin sits.
+//
+// Prints now carry their EXCHANGE timestamp (see stampFlowTime in
+// proxy-tastytrade.js), so a batch the feed replays lands in bins MINUTES older
+// than the newest bin already cached. An overlap anchored only to the last
+// populated bin cannot see those rows, and because the cache is otherwise
+// append-only they'd stay invisible until the entry was evicted — the chart
+// would keep showing a flat stretch that the raw table had already filled in.
+// Fifteen minutes covers a realistic replay while keeping the incremental query
+// on the covering index instead of a full-session scan.
+const NETPREM_LATE_MS = Number(process.env.NETPREM_LATE_MS || 15 * 60_000);
 
 /**
  * Shared tape-filter WHERE builder for flow_prints — used by /proxy/flow-netprem
@@ -919,9 +931,12 @@ async function getNetPremBins(f, binMs) {
   await ensureFlowPrintsSchema(pool);
 
   if (hit && isToday && hit.bins.length) {
-    // Incremental refresh: re-scan only the trailing overlap window.
+    // Incremental refresh: re-scan the trailing overlap window, widened to at
+    // least NETPREM_LATE_MS of wall clock so replayed prints stamped with older
+    // exchange times are picked up (see the constant's comment).
     const lastSec = hit.bins[hit.bins.length - 1].sec;
-    const sinceMs = (lastSec - (NETPREM_OVERLAP_BINS - 1) * Math.floor(binMs / 1000)) * 1000;
+    const overlapMs = (lastSec - (NETPREM_OVERLAP_BINS - 1) * Math.floor(binMs / 1000)) * 1000;
+    const sinceMs = Math.min(overlapMs, now - NETPREM_LATE_MS);
     const fresh = await queryNetPremBins(pool, f, binMs, sinceMs);
     const sinceSec = Math.floor(sinceMs / 1000);
     const bins = hit.bins.filter((b) => b.sec < sinceSec).concat(fresh);

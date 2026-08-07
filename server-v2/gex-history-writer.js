@@ -14,7 +14,10 @@
  * No-ops cleanly when DATABASE_URL is unset, so the feed runs fine without a DB.
  */
 
-const PG_WRITE_INTERVAL_MS = Number(process.env.GEX_PG_WRITE_INTERVAL_MS || 60_000);
+// 30s (was 60s). The Vol GEX Flow chart buckets on the SAME 30s grid, so this
+// is deliberately 1:1 with `binSec`'s floor in server-with-proxy.js — see the
+// grid-slot throttle below for why 1:1 is safe here when it was not before.
+const PG_WRITE_INTERVAL_MS = Number(process.env.GEX_PG_WRITE_INTERVAL_MS || 30_000);
 
 // Underlying this writer defaults to. option_strike_gex_history was SPX-only by
 // CONVENTION before the symbol column existed, so every legacy row is '$SPX' and
@@ -98,16 +101,17 @@ let columnEnsured = false;
 //
 // RECOMPUTE_MS (proxy-tastytrade.js) reruns computeGexSummary every ~5s off
 // the live streaming book, but writeGexSnapshot only actually inserts once
-// every PG_WRITE_INTERVAL_MS (~60s) — so of the ~12 recomputes in that window,
-// only the ONE that happened to fire right as the throttle cleared ever got
-// persisted. Each of those 12 samples carries real tick-to-tick jitter (a
+// every PG_WRITE_INTERVAL_MS — so of the ~6 recomputes in that window, only
+// the ONE that happened to fire right as the throttle cleared ever got
+// persisted. Each of those samples carries real tick-to-tick jitter (a
 // quote-derived IV solve wobbling gamma slightly, a stray print bumping
 // volume mid-window), and that jitter is not smoothed out anywhere — it IS
-// the value that gets charted. With a 60s recorder cadence feeding 60s chart
-// buckets 1:1, every bucket showed one random instant instead of what
-// actually happened over that minute, which is what read as a shark-tooth/
-// sawtooth on the Vol GEX Flow chart. Averaging every sample seen during the
-// window fixes that at the source, before it's ever written.
+// the value that gets charted, so every bucket showed one random instant
+// instead of what actually happened over that window. Averaging every sample
+// seen during the window fixes that at the source, before it's ever written.
+// At 30s that window holds ~6 recomputes rather than ~12, so this smooths
+// somewhat less than the old 60s cadence did — the grid-slot throttle below
+// is what makes the net result cleaner anyway.
 const accum = new Map(); // `${symbol}|${expiry}` -> Map(strike -> {sum fields, n})
 
 /** Accumulate one recompute's rows into the running average for this series. */
@@ -296,7 +300,28 @@ async function writeGexSnapshot(gexRows, spot, expiry, symbol) {
   // just the one call that happens to land on the write boundary.
   accumulate(throttleKey, gexRows);
 
-  if (now - (lastWriteAt.get(throttleKey) ?? 0) < PG_WRITE_INTERVAL_MS) return;
+  // GRID-SLOT throttle, not an elapsed-time throttle. This is the shark-tooth
+  // fix, and it is the reason a 30s recorder can safely feed 30s chart buckets.
+  //
+  // The old rule was `now - lastWriteAt >= PG_WRITE_INTERVAL_MS`, evaluated on
+  // the ~5s recompute loop. That does not produce a write every 30s — it
+  // produces one every 30–35s, because the check can only clear on a recompute
+  // tick, and each write re-anchors the next deadline to that late instant. The
+  // spacing DRIFTS forward. /proxy/gex-vol-flow buckets on a FIXED grid
+  // (`(timestamp / binMs) * binMs`) and takes the LAST row per bucket, so a
+  // drifting writer periodically lands twice inside one bucket — where the
+  // earlier averaged row is silently discarded — and then not at all in the
+  // next, which renders as a missing point. Drop a point, then double-step to
+  // catch up: that alternation IS the shark tooth. It was never the smoothing
+  // (there is none on the client — VolGexFlowPanel plots raw points).
+  //
+  // Anchoring to the same grid the reader buckets on removes the failure mode
+  // instead of papering over it: the FIRST recompute inside each grid slot
+  // writes, every later recompute in that slot no-ops. Exactly one row per
+  // bucket, every bucket, with no drift to accumulate.
+  const slot = Math.floor(now / PG_WRITE_INTERVAL_MS);
+  const lastSlot = Math.floor((lastWriteAt.get(throttleKey) ?? 0) / PG_WRITE_INTERVAL_MS);
+  if (lastWriteAt.has(throttleKey) && slot === lastSlot) return;
 
   // Average of every sample seen since the last write, not just this instant.
   const averagedRows = drainAverage(throttleKey);

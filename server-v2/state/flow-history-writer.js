@@ -92,14 +92,33 @@ function todayYmdET() {
   }).format(new Date());
 }
 
-// Track the newest ts we've already flushed, so each tick only writes the tail.
-// Coalescing mutates the latest slot in place, so we re-write any entry whose ts
-// is >= (lastFlushedTs − one slot) to capture the slot's final accumulated size.
+// Track the newest INGEST time (tape entry `lastFillAt`) we've already flushed,
+// so each tick only writes the tail.
+//
+// This cursor used to key off the entry's `ts`. That breaks the moment `ts`
+// becomes the print's EXCHANGE timestamp (see the TimeAndSale branch in
+// proxy-tastytrade.js): a batch the feed replays carries exchange times OLDER
+// than rows already flushed, so every one of those rows would fall below the
+// cutoff and never reach flow_prints — the live tape would show them and the
+// chart never would. `lastFillAt` is stamped off the local clock on create and
+// on every coalesced fill, so it is monotonic in ARRIVAL order no matter what
+// the exchange times do.
+//
+// It also closes a pre-existing hole: an order still coalescing seconds after it
+// opened kept its original `ts`, drifted below the old 500ms cutoff on a busy
+// tape, and its accumulated size/premium were never re-upserted. The look-back
+// is now one full coalescing window, so a still-merging order is re-upserted on
+// every tick until it goes quiet.
+//
 // Keyed by cursor so INDEPENDENT tape streams (SPX engine vs. the multi-ticker
 // recorder) each keep their own flush position — sharing one global cursor let
 // whichever stream flushed last advance the tail past the other's unflushed rows.
 const lastFlushedByCursor = new Map();
-const SLOT_MS = 500;
+// Must match FlowProcessor's coalesceMs (same env var, same default).
+const COALESCE_MS = Number(process.env.FLOW_COALESCE_MS || 5000);
+// One coalescing window plus a margin, so an order whose final fill landed right
+// on the boundary still gets one more upsert.
+const FLUSH_LOOKBACK_MS = COALESCE_MS + 1000;
 
 /**
  * Persist new/updated tape entries. Fire-and-forget; never throws into caller.
@@ -114,16 +133,25 @@ async function writeFlowTape(tape, cursor = 'spx') {
   try {
     await ensureTable(p);
 
-    // Only the tail can have changed: anything at or after the last-flushed slot.
-    const lastFlushedTs = lastFlushedByCursor.get(cursor) || 0;
-    const cutoff = lastFlushedTs - SLOT_MS;
+    // Only the tail can have changed: anything ingested at or after the last
+    // flush, minus one coalescing window for orders still merging fills.
+    // NOTE this compares `lastFillAt` (ingest clock), never `ts` (exchange
+    // clock) — see the cursor comment above. Entries written before this change
+    // shipped have no lastFillAt; fall back to `ts` for those so a tape held
+    // across a hot reload still flushes instead of being silently skipped.
+    const lastFlushedAt = lastFlushedByCursor.get(cursor) || 0;
+    const cutoff = lastFlushedAt - FLUSH_LOOKBACK_MS;
+    const fillAtOf = (o) => {
+      const v = Number(o.lastFillAt);
+      return Number.isFinite(v) ? v : Number(o.ts);
+    };
     // Dedupe within the batch by the PK (ts|symbol|side): the tape can hold more
     // than one entry sharing that key (e.g. different action in the same slot),
     // and Postgres rejects a single ON CONFLICT touching the same row twice.
     // Last occurrence wins — it carries the slot's most-accumulated values.
     const byKey = new Map();
     for (const o of tape) {
-      if (Number(o.ts) < cutoff) continue;
+      if (fillAtOf(o) < cutoff) continue;
       byKey.set(`${o.ts}|${o.symbol}|${o.side}`, o);
     }
     const fresh = [...byKey.values()];
@@ -134,11 +162,12 @@ async function writeFlowTape(tape, cursor = 'spx') {
     const values = [];
     const params = [];
     let i = 0;
-    let maxTs = lastFlushedTs;
+    let maxFillAt = lastFlushedAt;
     for (const o of fresh) {
       const ts = Number(o.ts);
       if (!Number.isFinite(ts)) continue;
-      if (ts > maxTs) maxTs = ts;
+      const fillAt = fillAtOf(o);
+      if (Number.isFinite(fillAt) && fillAt > maxFillAt) maxFillAt = fillAt;
       const ph = [];
       for (let c = 0; c < cols; c++) ph.push(`$${++i}`);
       values.push(`(${ph.join(',')})`);
@@ -178,7 +207,7 @@ async function writeFlowTape(tape, cursor = 'spx') {
          spot = COALESCE(EXCLUDED.spot, flow_prints.spot)`,
       params
     );
-    lastFlushedByCursor.set(cursor, maxTs);
+    lastFlushedByCursor.set(cursor, maxFillAt);
   } catch (e) {
     console.warn('[flow-history] write failed (will retry next tick):', e.message);
     const msg = String(e?.message || '');

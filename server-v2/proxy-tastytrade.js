@@ -1825,11 +1825,18 @@ class DxLinkClient {
           if (this.pending.length) {
             const queued = this.pending.splice(0);
             const candleSubs = queued.filter((q) => q && q.__candle);
-            const regular = queued.filter((q) => !(q && q.__candle));
+            // TimeAndSale subs queued before the channel opened (see
+            // subscribeTimeSales). These must be replayed as TimeAndSale, NOT
+            // folded into the regular Quote/Greeks/Summary/Trade fan-out.
+            const tsAdd = queued.filter((q) => q && q.__ts && !q.__remove).map((q) => q.symbol);
+            const tsRemove = queued.filter((q) => q && q.__ts && q.__remove).map((q) => q.symbol);
+            const regular = queued.filter((q) => !(q && (q.__candle || q.__ts)));
             if (regular.length) this.subscribe(regular);
             for (const c of candleSubs) {
               this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, add: [c.sub] });
             }
+            if (tsAdd.length) this.subscribeTimeSales(tsAdd);
+            if (tsRemove.length) this.unsubscribeTimeSales(tsRemove);
           }
         }
         break;
@@ -1945,26 +1952,55 @@ class DxLinkClient {
    * Subscribe TimeAndSale (true tick-by-tick, real per-print size + exchange
    * aggressorSide) for a set of streamer symbols. Separate from subscribe() so
    * the heavy per-print stream can be scoped to a near-spot option window while
-   * Quote/Greeks/Summary/Trade stay on the full chain. No-ops until the channel
-   * is open — the proxy's _syncTimeSaleWindow re-runs on the recompute loop and
-   * catches up once CHANNEL_OPENED lands.
+   * Quote/Greeks/Summary/Trade stay on the full chain.
+   *
+   * QUEUES (into `this.pending`, marked `__ts`) when the channel isn't open yet,
+   * exactly like subscribe() does — it used to return silently and throw the
+   * request away. That silent drop is why the non-SPX flow chips could be dead
+   * for a whole session: start() calls _startTtMultiFlow() immediately after
+   * client.connect(), well before CHANNEL_OPENED lands, and
+   * _subscribeTtFlowRoot() recorded those symbols in ttFlowContracts anyway — so
+   * the 5-minute refresh saw nothing "fresh" and never retried. Unlike SPX
+   * (whose _syncTimeSaleWindow re-runs on the 2s recompute loop and does catch
+   * up), nothing ever re-armed them.
+   *
+   * @returns {boolean} true if the request went out on the wire now, false if it
+   *   was queued for CHANNEL_OPENED. Callers that track "already subscribed"
+   *   state must not record a symbol until this returns true.
    */
   subscribeTimeSales(symbols) {
-    if (!this.channelOpen || !symbols || !symbols.length) return;
-    const add = symbols.map((s) => ({ type: 'TimeAndSale', symbol: typeof s === 'string' ? s : s.symbol }));
+    if (!symbols || !symbols.length) return false;
+    const syms = symbols.map((s) => (typeof s === 'string' ? s : s.symbol)).filter(Boolean);
+    if (!syms.length) return false;
+    if (!this.channelOpen) {
+      for (const symbol of syms) this.pending.push({ __ts: true, symbol });
+      return false;
+    }
+    const add = syms.map((symbol) => ({ type: 'TimeAndSale', symbol }));
     const CHUNK = 500;
     for (let i = 0; i < add.length; i += CHUNK) {
       this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, add: add.slice(i, i + CHUNK) });
     }
+    return true;
   }
 
   unsubscribeTimeSales(symbols) {
-    if (!this.channelOpen || !symbols || !symbols.length) return;
-    const remove = symbols.map((s) => ({ type: 'TimeAndSale', symbol: typeof s === 'string' ? s : s.symbol }));
+    if (!symbols || !symbols.length) return false;
+    const syms = symbols.map((s) => (typeof s === 'string' ? s : s.symbol)).filter(Boolean);
+    if (!syms.length) return false;
+    if (!this.channelOpen) {
+      // Drop any queued ADD for the same symbol rather than queueing an
+      // add-then-remove pair that cancels itself out on CHANNEL_OPENED.
+      const drop = new Set(syms);
+      this.pending = this.pending.filter((q) => !(q && q.__ts && !q.__remove && drop.has(q.symbol)));
+      return false;
+    }
+    const remove = syms.map((symbol) => ({ type: 'TimeAndSale', symbol }));
     const CHUNK = 500;
     for (let i = 0; i < remove.length; i += CHUNK) {
       this._send({ type: 'FEED_SUBSCRIPTION', channel: this.channel, remove: remove.slice(i, i + CHUNK) });
     }
+    return true;
   }
 
   _startKeepalive() {
@@ -2011,6 +2047,42 @@ const COMPACT_FIELDS = {
 const FLOW_TIMESALES = process.env.FLOW_TIMESALES !== '0'; // default ON
 const FLOW_TS_WINDOW_PCT = Number(process.env.FLOW_TS_WINDOW_PCT || 0.02); // ±2% of spot
 const FLOW_TS_MAX = Number(process.env.FLOW_TS_MAX || 120); // hard cap on TS-subscribed contracts
+
+// How far back a TimeAndSale `time` may be and still be believed (ms). dxFeed
+// can replay a contract's recent tape when a subscription is (re)established, so
+// legitimately old exchange times DO arrive — but a garbage/epoch-0 value must
+// not stretch the chart axis back to 1970. One trading day is generous enough
+// for any replay while still rejecting nonsense.
+const FLOW_TS_MAX_AGE_MS = Number(process.env.FLOW_TS_MAX_AGE_MS || 24 * 60 * 60 * 1000);
+// Tolerated clock skew ahead of us. Anything further in the future is rejected —
+// a print stamped ahead of `now` would sit in a bin the chart renders as
+// whitespace and would drag the netprem cursor past every later real print.
+const FLOW_TS_MAX_SKEW_MS = Number(process.env.FLOW_TS_MAX_SKEW_MS || 60 * 1000);
+
+/**
+ * Exchange timestamp for a flow print, or the ingest clock when the feed gives
+ * us nothing usable.
+ *
+ * dxLink TimeAndSale carries `time` (epoch ms) and FEED_SETUP has always asked
+ * for it — but the handler dropped it on the floor and let FlowProcessor default
+ * to Date.now(). That is fine while prints arrive one at a time in real time,
+ * and wrong the moment the feed hands over a batch: every print in it gets the
+ * same ingest timestamp, so an hour of tape collapses into a single 1-minute
+ * bin. On /flow that reads as a net-drift line that sits flat for the whole gap
+ * and then moves vertically in one bar — and as "all the prints landed at once"
+ * in the tape.
+ *
+ * @param {number|string|undefined} evTime raw TimeAndSale.time off the wire
+ * @param {number} [now] injected for tests
+ * @returns {number} epoch ms
+ */
+function stampFlowTime(evTime, now = Date.now()) {
+  const t = Number(evTime);
+  if (!Number.isFinite(t) || t <= 0) return now;
+  if (t > now + FLOW_TS_MAX_SKEW_MS) return now;
+  if (t < now - FLOW_TS_MAX_AGE_MS) return now;
+  return t;
+}
 
 // ---------------------------------------------------------------------------
 // Feed orchestrator
@@ -2935,6 +3007,22 @@ class TastytradeProxy {
     return out;
   }
 
+  /**
+   * Resolve once the dxLink FEED channel is open, or after `timeoutMs`.
+   * The handshake is several round-trips deep (SETUP → AUTH → CHANNEL_REQUEST →
+   * CHANNEL_OPENED) and start() kicks off the flow bring-ups right after
+   * connect(), so anything that must not queue has to wait here first.
+   * @returns {Promise<boolean>} true if the channel opened in time
+   */
+  async _awaitChannelOpen(timeoutMs = 30_000, pollMs = 250) {
+    const deadline = Date.now() + timeoutMs;
+    while (this.client && !this.client.channelOpen && Date.now() < deadline) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+    return !!(this.client && this.client.channelOpen);
+  }
+
   _resubscribe() {
     if (!this.client) return;
     // A reconnect opens a brand-new dxLink channel with zero subscriptions, so
@@ -2982,8 +3070,17 @@ class TastytradeProxy {
       for (const s of desired) if (!this._tsSubs.has(s)) toAdd.push(s);
       const toRemove = [];
       for (const s of this._tsSubs) if (!desired.has(s)) toRemove.push(s);
-      if (toAdd.length) { this.client.subscribeTimeSales(toAdd); for (const s of toAdd) this._tsSubs.add(s); }
-      if (toRemove.length) { this.client.unsubscribeTimeSales(toRemove); for (const s of toRemove) this._tsSubs.delete(s); }
+      // Only record a symbol as subscribed once the request actually went out —
+      // a queued (channel not open) request must be retried by the next tick,
+      // not remembered as done. The channelOpen guard above already prevents
+      // that here, but the bookkeeping should not depend on a check made
+      // somewhere else.
+      if (toAdd.length && this.client.subscribeTimeSales(toAdd)) {
+        for (const s of toAdd) this._tsSubs.add(s);
+      }
+      if (toRemove.length && this.client.unsubscribeTimeSales(toRemove)) {
+        for (const s of toRemove) this._tsSubs.delete(s);
+      }
     } catch (e) {
       console.warn('[FLOW_TS] window sync failed:', String(e?.message || e).slice(0, 120));
     }
@@ -3077,6 +3174,14 @@ class TastytradeProxy {
   // TimeAndSale branch of _onEvent, which checks this.ttFlowContracts).
   async _startTtMultiFlow() {
     if (!this.client || !TT_FLOW_ENABLED) return;
+    // start() calls this immediately after client.connect(), so the dxLink
+    // handshake (SETUP → AUTH → CHANNEL_REQUEST → CHANNEL_OPENED) is still in
+    // flight. Wait for it: _subscribeTtFlowRoot bails while the channel is
+    // closed, and without this the whole first pass was a no-op that then
+    // marked every contract "already subscribed" and never retried.
+    if (!(await this._awaitChannelOpen())) {
+      console.warn('[TT-MULTIFLOW] dxLink channel never opened — deferring to the refresh tick');
+    }
     this.ttFlowTickers = TT_FLOW_TICKERS;
     // Rebuild routing on every bring-up: a reconnect opens a brand-new dxLink
     // channel with none of the prior subs, so a stale "already subscribed"
@@ -3106,6 +3211,14 @@ class TastytradeProxy {
    *  next day and spot drift both stay covered. */
   async _subscribeTtFlowRoot(root) {
     if (!this.client) return;
+    // Never subscribe this root's contracts before the dxLink channel is open.
+    // subscribeTimeSales() would queue them (and CHANNEL_OPENED would send them
+    // for real), but ttFlowContracts would not yet know about them — and a
+    // TimeAndSale for a symbol missing from that map falls through to the SPX
+    // branch of _onEvent and gets tagged with SPX's spot, which corrupts isOtm
+    // for the whole root. Bail instead; the caller waits for the channel and
+    // the TT_FLOW_REFRESH_MS tick retries regardless.
+    if (!this.client.channelOpen) return;
     // Underlying spot streamer symbol — subscribe once so isOtm/spot stay live.
     if (![...this.ttFlowSpotSym.values()].includes(root)) {
       try {
@@ -3135,7 +3248,6 @@ class TastytradeProxy {
     const fresh = [];
     for (const c of legs) {
       if (c.streamerSymbol && !this.ttFlowContracts.has(c.streamerSymbol)) {
-        this.ttFlowContracts.set(c.streamerSymbol, root);
         fresh.push(c.streamerSymbol);
       }
     }
@@ -3145,10 +3257,24 @@ class TastytradeProxy {
     // ceiling). subscribeTimeSales() further chunks each batch into 500-symbol
     // dxLink FEED_SUBSCRIPTION messages internally, so this is a second,
     // coarser safety layer on top of that.
+    //
+    // ttFlowContracts is written AFTER the subscribe, and only for the symbols
+    // whose request actually reached the wire. It used to be written first,
+    // unconditionally: start() fires this before CHANNEL_OPENED lands, the old
+    // subscribeTimeSales() silently dropped the request, and the map still said
+    // "subscribed" — so `fresh` was empty on every 5-minute refresh from then
+    // on and the root never streamed a single print for the life of the
+    // process. Queued symbols now simply stay out of the map and are retried on
+    // the next refresh (and the queue itself flushes on CHANNEL_OPENED).
+    let sent = 0;
     for (let i = 0; i < fresh.length; i += TT_FLOW_SUB_BATCH) {
-      this.client.subscribeTimeSales(fresh.slice(i, i + TT_FLOW_SUB_BATCH));
+      const batch = fresh.slice(i, i + TT_FLOW_SUB_BATCH);
+      if (!this.client.subscribeTimeSales(batch)) continue;
+      for (const s of batch) this.ttFlowContracts.set(s, root);
+      sent += batch.length;
     }
-    console.log(`[TT-MULTIFLOW] ${root}: +${fresh.length} contracts (total ${legs.length} in window), spot=${spot}`);
+    if (!sent) return; // channel closed mid-flight; the refresh tick retries
+    console.log(`[TT-MULTIFLOW] ${root}: +${sent} contracts (total ${legs.length} in window), spot=${spot}`);
   }
 
   /** Near-the-money OTM legs spanning every expiry from 0DTE out to
@@ -4109,6 +4235,10 @@ class TastytradeProxy {
       if (!(price > 0) || !(size > 0)) return;
       const agg = String(ev.aggressorSide || '').toLowerCase();
       const side = agg === 'buy' ? 'buy' : agg === 'sell' ? 'sell' : undefined;
+      // EXCHANGE time of the print, not the moment it reached this process. See
+      // stampFlowTime() — without it a replayed batch piles an hour of prints
+      // into one bin and the /flow net-drift line goes flat-then-vertical.
+      const time = stampFlowTime(ev.time);
       // TT multi-flow (TT_FLOW_TICKERS_LIST): extra-root option prints route into the
       // SAME this.flow tape as SPX (see _startTtMultiFlow), just tagged with
       // that root's own tracked spot for correct isOtm classification. These
@@ -4121,6 +4251,7 @@ class TastytradeProxy {
           streamerSymbol: sym,
           price,
           size,
+          time,
           side,
           quote: null,
           spot: this.ttFlowSpot.get(ttRoot) || 0,
@@ -4134,6 +4265,7 @@ class TastytradeProxy {
         streamerSymbol: sym,
         price,
         size,
+        time, // exchange time — see stampFlowTime()
         side, // exchange-true side; addPrint falls back to inferSide when undefined
         quote: this.quotes.get(sym) || null,
         spot: this.spot || marketState.getSpot(),

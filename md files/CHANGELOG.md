@@ -1,5 +1,131 @@
 # Changelog
 
+## 2026-08-07 - Options flow: prints arrived in one lump per replay, not per print
+
+`/flow` was showing an hour of tape at once — the Net Drift line sat flat from
+~10:10, then moved vertically in a single bar at 11:00 (SPX calls +$28M →
+−$808.9K in one 1-minute bin), and the volume histogram had a matching hole.
+Three separate faults, stacked.
+
+### 1. The print's exchange timestamp was thrown away — `server-v2/proxy-tastytrade.js`
+
+`FEED_SETUP` has always asked dxLink for `TimeAndSale.time`, and
+`_handleFeedData` parsed it into `ev.time` — but the `TimeAndSale` branch of
+`_onEvent` never passed it to `addPrint`, which then defaulted to `Date.now()`.
+Fine while prints trickle in live; wrong the moment dxFeed hands over a batch
+(it replays a contract's recent tape whenever a subscription is established).
+Every print in the batch got the same *ingest* stamp, so an hour of flow
+collapsed into one 1-minute bin. That is the flat-then-vertical chart exactly.
+
+- **New `stampFlowTime(evTime, now)`** — returns the exchange time when it is
+  finite, positive, no more than `FLOW_TS_MAX_SKEW_MS` (60s) ahead of us, and no
+  older than `FLOW_TS_MAX_AGE_MS` (24h); otherwise falls back to the ingest
+  clock. The age bound is deliberately a whole trading day: legitimately old
+  replays *do* arrive and must be kept — it exists only to stop an epoch-0 or
+  garbage value from stretching the chart axis back to 1970.
+- Both `addPrint` calls in the `TimeAndSale` branch (SPX and the TT-multiflow
+  root path) now pass `time`.
+- `Trade`-fed prints are unchanged — that event carries no `time` field.
+
+### 2. Non-SPX flow could be dead for a whole session — `server-v2/proxy-tastytrade.js`
+
+`DxLinkClient.subscribeTimeSales()` returned silently when `channelOpen` was
+false, unlike `subscribe()`, which queues into `this.pending`. `start()` fires
+`_startTtMultiFlow()` immediately after `client.connect()` — well before the
+SETUP → AUTH → CHANNEL_REQUEST → CHANNEL_OPENED handshake finishes — and
+`_subscribeTtFlowRoot()` wrote every symbol into `ttFlowContracts` regardless.
+So the request was dropped, the map still said "subscribed", and the 5-minute
+refresh found nothing `fresh` and never retried. Those roots streamed **zero**
+prints for the life of the process. SPX escaped it only because
+`_syncTimeSaleWindow` re-runs on the 2s recompute loop.
+
+- `subscribeTimeSales()` / `unsubscribeTimeSales()` now **queue** into
+  `this.pending` (marked `__ts`) and **return a boolean**: true = it reached the
+  wire, false = queued. `CHANNEL_OPENED` flushes them as `TimeAndSale`, kept
+  distinct from the regular Quote/Greeks/Summary/Trade fan-out and from
+  `__candle`. A queued unsubscribe cancels the matching queued add rather than
+  pairing with it.
+- **`ttFlowContracts` is written after the subscribe, and only for symbols that
+  actually went out.** Anything queued stays out of the map and is retried.
+- `_subscribeTtFlowRoot()` bails while `channelOpen` is false, and
+  `_startTtMultiFlow()` `await`s the new **`_awaitChannelOpen()`** (250ms poll,
+  30s cap) first. This matters more than it looks: a symbol subscribed via the
+  queue but missing from `ttFlowContracts` would fall through to the SPX branch
+  of `_onEvent` and be tagged with **SPX's spot**, corrupting `isOtm` for that
+  whole root. Better to wait and subscribe once, correctly.
+- `_syncTimeSaleWindow()` only records `_tsSubs` when the call returns true, so
+  the bookkeeping no longer depends on a `channelOpen` check made elsewhere.
+
+### 3. Replayed rows never reached Postgres — `server-v2/state/flow-history-writer.js`
+
+This one had to move with fix 1 or fix 1 would have made things *worse*. The
+flush cursor keyed off the tape entry's `ts` and skipped anything below
+`lastFlushedTs − 500ms`. Once `ts` became exchange time, a replayed batch was by
+definition below that cutoff — the prints would show in the live WS tape and
+never be persisted, so the chart (which reads `flow_prints`) would stay flat
+permanently.
+
+- Cursor now keys off **`lastFillAt`** — a new field on each tape entry
+  (`server-v2/computation/flow-processor.js`), stamped from the local clock on
+  create and on every coalesced fill. Monotonic in *arrival* order whatever the
+  exchange times do. Entries predating this change fall back to `ts`.
+- Look-back widened from 500ms to one full coalescing window
+  (`FLOW_COALESCE_MS`, default 5000, + 1s margin). This **also fixes a
+  pre-existing silent undercount**: an order that kept merging fills for seconds
+  held its original `ts`, drifted below the old cutoff on a busy tape, and its
+  accumulated size/premium were never re-upserted.
+
+### `server-v2/computation/flow-processor.js`
+
+- New `lastFillAt` on every tape entry (see above).
+- Coalescing window is now `Math.abs(time - anchorTs) <= coalesceMs`. With
+  exchange timestamps a replayed batch can hand us a print marginally *older*
+  than the open order's anchor; the old `time - anchorTs` went negative and
+  passed the test by accident. `abs()` is what "fills within coalesceMs of each
+  other" always meant.
+
+### Late-arriving bins are actually re-read — `server-v2/server-with-proxy.js` + `components/pages/Flow.tsx`
+
+`/proxy/flow-netprem`'s incremental refresh re-scanned 3 bins back **from the
+last populated bin**. Replayed prints land minutes behind that, and the bin
+cache is otherwise append-only, so they'd stay invisible until the entry was
+evicted — the chart would keep drawing a gap the table had already filled.
+
+- New `NETPREM_LATE_MS` (default 15 min, env-overridable); `sinceMs` is now
+  `min(3-bin overlap, now − NETPREM_LATE_MS)`. Still an index-only scan on
+  `flow_prints_netprem_covering_idx`, not a full-session GROUP BY.
+- `Flow.tsx` gains the matching `NET_LATE_SEC = 15 * 60` on its own `?since=`.
+  Required, not cosmetic: the endpoint filters its response to `sec >= since`,
+  so a narrow client `since` would discard exactly the bins the server just went
+  and re-read. The two constants must be kept in step.
+
+### Verification — `server-v2/flow-print-time.selftest.js` (NEW)
+
+`node server-v2/flow-print-time.selftest.js` — 29 assertions, no network and no
+database (the writer runs against a stub `pg`; `DxLinkClient` is lifted out of
+`proxy-tastytrade.js` and driven with a fake socket, since requiring that module
+outright dials out). Every one of these was confirmed **failing** against the
+pre-change files first:
+
+- `stampFlowTime` bounds: 45-min-old exchange time kept; undefined / 0 / NaN /
+  negative / far-future / pre-1970 all fall back; 30s skew tolerated.
+- `FlowProcessor`: 60 prints delivered in one burst with exchange times a minute
+  apart land in **60 distinct minutes** (pre-change: 1 — the reported bug).
+  Coalescing, out-of-order merge, window boundary and `lastFillAt` all covered.
+- `flow-history-writer`: an hour-old replayed batch is written (pre-change:
+  dropped); a still-merging order is re-upserted (pre-change: dropped); a
+  long-settled row is *not* re-written every tick; an entry with no
+  `lastFillAt` falls back to `ts`; independent cursors stay independent.
+- `DxLinkClient` driven with a fake socket: pre-open subs queue and flush on
+  `CHANNEL_OPENED` as `TimeAndSale` only (pre-change: silently discarded);
+  regular/candle/TS queues stay separated; queued unsubscribe cancels its add;
+  500-symbol chunking intact.
+
+The suite reads `stampFlowTime` and `DxLinkClient` out of the source text by
+name, so renaming or inlining either one fails the test loudly rather than
+quietly checking a stale copy.
+
+
 ## 2026-08-07 - ICT: inducement no longer draws a play
 
 Inducement fires several times a session and is a *context* read — the liquidity

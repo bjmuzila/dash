@@ -179,6 +179,14 @@ const CHART_MIN_PREMIUM = 1_000;
 // give a proportional, hardcoded 9:30–4:00 x-axis and a smooth line.
 const BIN_SEC = 60;
 
+// How far back the incremental ?since poll always re-asks for, in seconds.
+// Mirrors NETPREM_LATE_MS in server-v2/server-with-proxy.js — the server
+// re-scans that window for prints that arrived late (replayed batches carry
+// older exchange timestamps), and then filters its response to `sec >= since`,
+// so this value has to be at least as wide or the client discards exactly the
+// bins the server just went and fetched. Keep the two in step.
+const NET_LATE_SEC = 15 * 60;
+
 // Per-bin aggregate, computed client-side from the filtered tape so the chart
 // reacts to every filter (side/type/premium/size/expiry/dte/otm), not just
 // ticker + date.
@@ -416,8 +424,18 @@ export default function FlowPage() {
       // Incremental poll: once this key has bins, only pull from a 3-bin
       // overlap before the last known bin (late-flushed prints can land in a
       // bin after it was first served). First load pulls the whole session.
+      //
+      // The overlap is widened to at least NET_LATE_SEC of wall clock, matching
+      // the server's NETPREM_LATE_MS. Prints carry their EXCHANGE timestamp now,
+      // so a batch the feed replays lands in bins minutes behind the newest one
+      // we hold — and the server filters its response to `>= since`, so a narrow
+      // `since` here would throw those bins away no matter how far back the
+      // server just re-scanned. Costs ~15 extra bins per poll.
       const prev = netKeyRef.current === key ? netBinsRef.current : [];
-      const since = isToday && prev.length > 0 ? prev[prev.length - 1].sec - 2 * BIN_SEC : null;
+      const nowSecNow = Math.floor(Date.now() / 1000);
+      const since = isToday && prev.length > 0
+        ? Math.min(prev[prev.length - 1].sec - 2 * BIN_SEC, nowSecNow - NET_LATE_SEC)
+        : null;
       fetch(`/proxy/flow-netprem?${key}${since != null ? `&since=${since}` : ""}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((j) => {
