@@ -918,6 +918,12 @@ export default function Budget() {
   // Categories.
   const addCategory = async (name: string, amount: number, color: string) =>
     post({ action: "category", name: name.trim(), amount, period: "monthly", color });
+  // Recolour an existing category. `action: "category"` upserts on
+  // UNIQUE(profile_id, name), so re-posting the same name with a new colour
+  // updates the row in place — no new action needed server-side. The current
+  // budget amount is passed straight back through so it isn't wiped.
+  const updateCategoryColor = async (cat: Category, color: string) =>
+    post({ action: "category", name: cat.name, amount: cat.amount || 0, period: "monthly", color });
   const deleteCategory = async (id: number) => post({ action: "categoryDelete", id });
   const assignCategory = async (rowId: number, categoryId: number | null) => post({ action: "assignCategory", id: rowId, categoryId });
   // Log an upcoming recurring bill as paid (materialize this occurrence).
@@ -1111,6 +1117,7 @@ export default function Budget() {
             currency={currency}
             onAdd={addCategory}
             onDelete={deleteCategory}
+            onColor={updateCategoryColor}
             onAssign={assignCategory}
             onDeleteRow={deleteRow}
           />
@@ -2412,6 +2419,85 @@ function CategorySpendCard({
   );
 }
 
+// The colour dot on a category tile, doubling as its editor. Closed it is just
+// the dot; open it drops a small popover with the six house swatches plus a
+// native picker for anything else. Kept local to this file because nothing else
+// needs it — the dot IS the button, so the tile gains no extra chrome.
+function ColorEditor({
+  value,
+  open,
+  onClose,
+  onPick,
+}: {
+  value: string;
+  open: boolean;
+  onClose: () => void;
+  onPick: (color: string) => void;
+}) {
+  // Native <input type="color"> only speaks 6-digit hex; anything else (an
+  // rgba() from the theme, a short hex) would make it fall back to black, so
+  // seed it with a safe default instead of a value it can't parse.
+  const hex = /^#[0-9a-fA-F]{6}$/.test(value) ? value : "#7dd3fc";
+
+  return (
+    <span style={{ position: "relative", display: "inline-flex" }}>
+      <span
+        role="button"
+        title="Change colour"
+        aria-label="Change category colour"
+        style={{
+          width: 12, height: 12, borderRadius: 3, background: value, flex: "none", cursor: "pointer",
+          boxShadow: open ? `0 0 0 2px ${HOME_THEME.text}` : `0 0 0 1px rgba(255,255,255,0.18)`,
+        }}
+      />
+      {open && (
+        <>
+          {/* Click-away catcher. Sits under the popover, over everything else. */}
+          <span
+            onClick={(e) => { e.stopPropagation(); onClose(); }}
+            style={{ position: "fixed", inset: 0, zIndex: 40 }}
+          />
+          <span
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute", top: 20, left: -6, zIndex: 41,
+              display: "flex", alignItems: "center", gap: 6, padding: 8,
+              borderRadius: 10, background: HOME_THEME.panel,
+              border: `1px solid ${HOME_THEME.border}`,
+              boxShadow: "0 12px 30px -8px rgba(0,0,0,0.8)",
+            }}
+          >
+            {CATEGORY_COLORS.map((cc) => (
+              <button
+                key={cc}
+                onClick={(e) => { e.stopPropagation(); onPick(cc); }}
+                aria-label={`Use ${cc}`}
+                style={{
+                  width: 20, height: 20, borderRadius: 6, background: cc, cursor: "pointer",
+                  border: value.toLowerCase() === cc.toLowerCase() ? `2px solid ${HOME_THEME.text}` : `1px solid ${HOME_THEME.border}`,
+                }}
+              />
+            ))}
+            {/* Anything outside the six. Commits on change, same as a swatch. */}
+            <input
+              type="color"
+              value={hex}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => onPick(e.target.value)}
+              aria-label="Custom colour"
+              title="Custom colour"
+              style={{
+                width: 24, height: 22, padding: 0, cursor: "pointer",
+                background: "transparent", border: `1px solid ${HOME_THEME.border}`, borderRadius: 6,
+              }}
+            />
+          </span>
+        </>
+      )}
+    </span>
+  );
+}
+
 // Categories tab: brain-dump/unsorted assignment, per-category budget tiles, and
 // an add-category composer. Budgets live in budget_categories; spend is summed
 // from this month's assigned register rows.
@@ -2424,6 +2510,7 @@ function CategoriesPanel({
   currency,
   onAdd,
   onDelete,
+  onColor,
   onAssign,
   onDeleteRow,
 }: {
@@ -2435,6 +2522,7 @@ function CategoriesPanel({
   currency: string;
   onAdd: (name: string, amount: number, color: string) => void;
   onDelete: (id: number) => void;
+  onColor: (cat: Category, color: string) => void;
   onAssign: (rowId: number, categoryId: number | null) => void;
   onDeleteRow: (id: number) => void;
 }) {
@@ -2442,6 +2530,8 @@ function CategoriesPanel({
   const [budget, setBudget] = useState("");
   const [color, setColor] = useState(CATEGORY_COLORS[0]);
   const [openCat, setOpenCat] = useState<Category | null>(null);
+  // Which category's colour popover is open (null = none). Only one at a time.
+  const [editColorId, setEditColorId] = useState<number | null>(null);
 
   const add = () => {
     if (!name.trim()) return;
@@ -2495,10 +2585,20 @@ function CategoriesPanel({
           const dot = c.color || HOME_THEME.cyan;
           const count = (byCategory[c.id] || []).length;
           return (
-            <div key={c.id} onClick={() => setOpenCat(c)} title="View transactions in this category" style={{ ...card(), padding: 12, cursor: "pointer" }}>
+            <div key={c.id} onClick={() => setOpenCat(c)} title="View transactions in this category" style={{ ...card(), padding: 12, cursor: "pointer", position: "relative", overflow: "visible" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8 }}>
                 <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 800, minWidth: 0 }}>
-                  <span style={{ width: 10, height: 10, borderRadius: 3, background: dot, flex: "none" }} />
+                  {/* The dot is the edit affordance: click it to recolour the
+                      category. stopPropagation so it doesn't also open the
+                      transactions modal that the card click owns. */}
+                  <span onClick={(e) => { e.stopPropagation(); setEditColorId(editColorId === c.id ? null : c.id); }} style={{ display: "inline-flex", flex: "none" }}>
+                    <ColorEditor
+                      value={dot}
+                      open={editColorId === c.id}
+                      onClose={() => setEditColorId(null)}
+                      onPick={(next) => { onColor(c, next); setEditColorId(null); }}
+                    />
+                  </span>
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</span>
                   {count > 0 && <span style={{ fontSize: 14, color: HOME_THEME.muted, flex: "none" }}>· {count}</span>}
                 </span>

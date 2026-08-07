@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-08-07 - Owner budget: category colours are editable after creation
+
+The colour was pick-once — set it in the add-category composer or live with it.
+Now the dot on each category tile in the **Categories** tab is the editor.
+
+### `owner-vite/src/pages/Budget.tsx`
+- New `ColorEditor` component (file-local). Closed it renders as the same dot the
+  tile always had; clicking it opens a popover with the six `CATEGORY_COLORS`
+  swatches plus a native `<input type="color">` for anything outside the palette.
+  Picking commits immediately and closes.
+- The tile's own `onClick` opens the transactions modal, so the dot's handler
+  calls `stopPropagation()`; a fixed-inset click-away layer closes the popover.
+- `updateCategoryColor()` re-posts `action: "category"` with the category's
+  existing name and amount and the new colour. `upsertBudgetCategory` conflicts
+  on `UNIQUE(profile_id, name)` and updates in place, so **no server or schema
+  change was needed** — no new action, no migration.
+- Native `<input type="color">` only parses 6-digit hex, so the picker is seeded
+  with a fallback when the stored colour isn't in that form.
+- `CategoriesPanel` takes a new `onColor` prop; single-popover state
+  (`editColorId`) lives on the panel.
+
+
 ## 2026-08-07 - Build fix: TestLab still imported the deleted DexCharmTab (v8.6.23 / v8.7.1 deploys)
 
 Both deploys died at the same step, after the full Next build had already run:
