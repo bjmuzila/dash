@@ -859,6 +859,12 @@ const DEFAULT_SETTINGS = {
   // Days an open task can go untouched before Today flags it as "Slipping".
   // Changeable per person without a deploy.
   slippingDays: 7,
+  // US ZIP for the weather tile on Today. 27591 is Wendell — home for both
+  // people on this instance, so it is the DEFAULT rather than something each
+  // of them has to type in. Still per-user underneath: either can override it
+  // in Settings without touching the other, and clearing it to '' turns the
+  // tile off for that person only.
+  weatherZip: '27591',
 };
 
 async function getSettings(userId) {

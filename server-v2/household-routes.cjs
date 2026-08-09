@@ -509,8 +509,115 @@ function registerHouseholdRoutes({ register, send, readJson }) {
           }
           await hh.setSetting(me, 'slippingDays', Math.round(d));
         }
+        if (body?.weatherZip !== undefined) {
+          const z = str(body.weatherZip, 5);
+          // Empty clears it — that is how you turn the weather tile off, so it
+          // must not be rejected as invalid.
+          if (z !== '' && !/^\d{5}$/.test(z)) {
+            send(res, 400, { error: 'ZIP must be five digits.' }, nostore);
+            return;
+          }
+          await hh.setSetting(me, 'weatherZip', z);
+        }
         send(res, 200, { ok: true, settings: await hh.getSettings(me) }, nostore);
       } catch (err) { send(res, 500, { error: String(err?.message || err) }, nostore); }
+    },
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Weather
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // A household-scoped copy of the logic in api-router.js's /api/weather.
+  //
+  // NOT a call through to that route: it is registered auth:'subscriber' and
+  // resolves an active trading-app session, which an hh_session cookie will
+  // never satisfy — budget.cbedge.net would get a 401 forever. The upstreams
+  // are keyless and the whole thing is ~30 lines, so a second registration is
+  // cheaper than plumbing a second auth mode through the shared route.
+  //
+  // If the WMO table or the provider changes, BOTH copies need the edit.
+
+  const WMO = {
+    0: 'Clear', 1: 'Mainly Clear', 2: 'Partly Cloudy', 3: 'Overcast',
+    45: 'Fog', 48: 'Rime Fog', 51: 'Light Drizzle', 53: 'Drizzle', 55: 'Heavy Drizzle',
+    61: 'Light Rain', 63: 'Rain', 65: 'Heavy Rain', 66: 'Freezing Rain', 67: 'Freezing Rain',
+    71: 'Light Snow', 73: 'Snow', 75: 'Heavy Snow', 77: 'Snow Grains',
+    80: 'Rain Showers', 81: 'Rain Showers', 82: 'Violent Showers',
+    85: 'Snow Showers', 86: 'Snow Showers', 95: 'Thunderstorm', 96: 'Thunderstorm', 99: 'Thunderstorm',
+  };
+
+  /**
+   * ZIP → { at, payload }. The weather does not change in ten minutes, and
+   * Today mounts this on every navigation back to the home tab — without a
+   * cache a phone left open all day is a few hundred calls to somebody else's
+   * free API. Process-local, so a restart just re-warms it.
+   */
+  const wxCache = new Map();
+  const WX_TTL_MS = 10 * 60 * 1000;
+
+  add('/api/hh/weather', {
+    auth: 'household', methods: ['GET'],
+    async handler(req, res) {
+      const zip = str(new URL(req.url || '/', 'http://localhost').searchParams.get('zip'), 5);
+      if (!/^\d{5}$/.test(zip)) {
+        send(res, 400, { error: 'Valid 5-digit US ZIP required' }, nostore);
+        return;
+      }
+
+      const hit = wxCache.get(zip);
+      if (hit && Date.now() - hit.at < WX_TTL_MS) { send(res, 200, hit.payload, nostore); return; }
+
+      try {
+        // Primary geocoder: zippopotam. Nominatim is the fallback.
+        let loc = null;
+        try {
+          const geoRes = await fetch(`https://api.zippopotam.us/us/${zip}`, { cache: 'no-store' });
+          if (geoRes.ok) {
+            const geo = await geoRes.json();
+            const p = geo?.places?.[0];
+            if (p) loc = { latitude: p.latitude, longitude: p.longitude,
+                           name: p['place name'], admin1: p['state abbreviation'] };
+          }
+        } catch { /* fall through to Nominatim */ }
+
+        if (!loc) {
+          const nomRes = await fetch(
+            `https://nominatim.openstreetmap.org/search?postalcode=${zip}&country=US&format=json&addressdetails=1&limit=1`,
+            { cache: 'no-store', headers: { 'User-Agent': 'cbedge-household/1.0' } });
+          if (nomRes.ok) {
+            const arr = await nomRes.json();
+            const nm = Array.isArray(arr) ? arr[0] : null;
+            if (nm) loc = {
+              latitude: nm.lat, longitude: nm.lon,
+              name: nm.address?.town || nm.address?.city || nm.address?.village
+                    || nm.display_name?.split(',')[0] || zip,
+              admin1: nm.address?.['ISO3166-2-lvl4']?.split('-')[1] || '',
+            };
+          }
+        }
+
+        if (!loc) { send(res, 404, { error: 'ZIP not found' }, nostore); return; }
+
+        const wRes = await fetch(
+          `https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}`
+          + `&current=temperature_2m,weather_code&temperature_unit=fahrenheit&timezone=auto`,
+          { cache: 'no-store' });
+        const w = await wRes.json();
+        const cur = w?.current;
+        if (!cur) { send(res, 502, { error: 'Weather unavailable' }, nostore); return; }
+
+        const payload = {
+          tempF: Math.round(cur.temperature_2m),
+          condition: WMO[cur.weather_code] ?? '—',
+          code: cur.weather_code,
+          place: `${loc.name}${loc.admin1 ? ', ' + loc.admin1 : ''}`,
+        };
+        wxCache.set(zip, { at: Date.now(), payload });
+        send(res, 200, payload, nostore);
+      } catch (err) {
+        send(res, 500, { error: 'Weather fetch failed', detail: String(err?.message || err) }, nostore);
+      }
     },
   });
 

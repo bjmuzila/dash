@@ -32,6 +32,7 @@ export default function Settings() {
         </div>
       </section>
 
+      <WeatherSetting />
       <SlippingSetting />
       <SavedNotes />
       <QuickPinCard />
@@ -231,6 +232,59 @@ function SlippingSetting() {
       {days !== '' && !valid && (
         <div style={{ color: T.bad, fontSize: 13, fontWeight: 600, marginTop: 8 }}>
           Pick a whole number between 1 and 365.
+        </div>
+      )}
+    </section>
+  )
+}
+
+// ── Weather ──────────────────────────────────────────────────────────────────
+
+/**
+ * The ZIP behind Today's weather tile.
+ *
+ * Per person, not per household: two people who live together can still be in
+ * two places, and one shared value would be wrong for whoever travelled.
+ * Clearing it turns the tile off, so an empty field is a valid saved state and
+ * must not read as an error.
+ */
+function WeatherSetting() {
+  const { data } = useSettings()
+  const save = useSaveSettings()
+  const [zip, setZip] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (data && zip === null) setZip(data.settings.weatherZip ?? '')
+  }, [data, zip])
+
+  const value = zip ?? ''
+  const valid = value === '' || /^\d{5}$/.test(value)
+  const changed = !!data && valid && value !== (data.settings.weatherZip ?? '')
+
+  return (
+    <section style={section()}>
+      <div style={label()}>Weather</div>
+      <div style={{ fontSize: 14, color: T.muted, marginTop: 8, lineHeight: 1.45 }}>
+        US ZIP for the tile at the top of Today. Defaults to 27591 — change it if
+        you're somewhere else, or clear it to hide the tile. Yours only.
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
+        <input
+          inputMode="numeric" maxLength={5} placeholder="27591"
+          value={value} onChange={(e) => setZip(e.target.value.replace(/\D/g, '').slice(0, 5))}
+          style={{ ...input(), width: 120, flex: 'none' }}
+        />
+        <button
+          onClick={() => valid && save.mutate({ weatherZip: value })}
+          disabled={!changed || save.isPending}
+          style={{ ...button('primary'), marginLeft: 'auto', opacity: changed ? 1 : 0.4 }}
+        >
+          {save.isPending ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+      {!valid && (
+        <div style={{ color: T.bad, fontSize: 13, fontWeight: 600, marginTop: 8 }}>
+          Five digits, or empty.
         </div>
       )}
     </section>

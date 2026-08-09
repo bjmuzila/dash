@@ -19,6 +19,7 @@ const TABS = [
   { to: '/today', label: 'Today' },
   { to: '/todo', label: 'Todo' },
   { to: '/lists', label: 'Lists' },
+  { to: '/journal', label: 'Journal' },
   { to: '/budget', label: 'Money' },
   { to: '/settings', label: 'More' },
 ] as const
@@ -53,11 +54,13 @@ export default function Shell({ children }: { children: ReactNode }) {
         padding: 'max(14px, env(safe-area-inset-top)) 20px 12px',
         borderBottom: `1px solid ${T.ruleStrong}`,
       }}>
-        <div style={{ ...label(), display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-          <span>{dateLine()}</span>
-          <span>{user?.displayName}</span>
+        <div style={{ maxWidth: 1040, margin: '0 auto' }}>
+          <div style={{ ...label(), display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+            <span>{dateLine()}</span>
+            <span>{user?.displayName}</span>
+          </div>
+          <h1 style={{ ...display(26), marginTop: 6 }}>{title}</h1>
         </div>
-        <h1 style={{ ...display(26), marginTop: 6 }}>{title}</h1>
       </header>
 
       <main style={{
@@ -67,7 +70,11 @@ export default function Shell({ children }: { children: ReactNode }) {
         // from the edge of a 390px screen and squeezed the seven-day strip.
         padding: '14px 13px 26px',
       }}>
-        {children}
+        {/* Capped and centred. Today is a two-column dashboard above 860px, and
+            without a cap those columns keep widening on a monitor until a task
+            title is a single word floating in a metre of card. Below the cap
+            this div does nothing at all, so the phone layout is untouched. */}
+        <div style={{ maxWidth: 1040, margin: '0 auto' }}>{children}</div>
       </main>
 
       <nav style={{
@@ -89,9 +96,14 @@ export default function Shell({ children }: { children: ReactNode }) {
               minHeight: 52,
               textDecoration: 'none',
               fontFamily: MONO,
-              fontSize: 10,
-              letterSpacing: '0.12em',
+              // Six tabs on a 390px screen is 65px each. At 0.12em tracking
+              // "JOURNAL" is wider than that and wraps to two lines, which
+              // drags the whole bar taller. The tracking goes, not the label —
+              // the word is what makes the tab findable.
+              fontSize: 9.5,
+              letterSpacing: '0.04em',
               textTransform: 'uppercase',
+              whiteSpace: 'nowrap',
               color: isActive ? T.accent : T.muted,
               // A 2px accent rule marks the current tab — no icons, no fills.
               boxShadow: isActive ? `inset 0 2px 0 ${T.accent}` : 'none',

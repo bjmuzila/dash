@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { today as todayApi, tasks as tasksApi, notes as notesApi, settings as settingsApi,
          calendar as calendarApi, budget as budgetApi, routines as routinesApi,
-         projects as projectsApi, lists as listsApi,
+         projects as projectsApi, lists as listsApi, weather as weatherApi,
          type RoutinesPayload,
          type Task, type TodayPayload, type NewTask, type TaskPatch,
          type ListsPayload, type ListItem } from './api'
@@ -35,6 +35,27 @@ export function useTasks(scope: 'open' | 'done' | 'all' = 'open') {
 
 export function useNotes() {
   return useQuery({ queryKey: NOTES_KEY, queryFn: notesApi.list })
+}
+
+const WEATHER_KEY = (zip: string) => ['weather', zip] as const
+
+/**
+ * Current conditions for a ZIP.
+ *
+ * Disabled — not just empty — when no ZIP is set, so an unconfigured tile makes
+ * zero requests. `staleTime` is ten minutes to match the server's cache: any
+ * shorter and every remount is a round trip that can only return the same
+ * cached body. `retry: false` because the failure modes here (bad ZIP, upstream
+ * down) do not improve on a second attempt, and the tile says so instead.
+ */
+export function useWeather(zip: string | undefined) {
+  return useQuery({
+    queryKey: WEATHER_KEY(zip ?? ''),
+    queryFn: () => weatherApi.get(zip!),
+    enabled: !!zip && /^\d{5}$/.test(zip),
+    staleTime: 10 * 60 * 1000,
+    retry: false,
+  })
 }
 
 export function useSettings() {
@@ -495,8 +516,12 @@ export function useSaveSettings() {
 export function useCreateNote() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ body, visibility }: { body: string; visibility?: 'private' | 'shared' }) =>
-      notesApi.create(body, visibility),
+    // `kind` is optional and defaults to 'note', so existing callers (Settings'
+    // saved-notes box) are unchanged. Today's journal capture passes 'journal'
+    // — the column has always accepted it, nothing was writing it.
+    mutationFn: ({ body, visibility, kind }: {
+      body: string; visibility?: 'private' | 'shared'; kind?: 'note' | 'quote' | 'journal'
+    }) => notesApi.create(body, visibility, kind),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: NOTES_KEY })
       void qc.invalidateQueries({ queryKey: TODAY_KEY })

@@ -478,7 +478,13 @@ export type ListsPayload = {
   aisleOptions: Aisle[]
 }
 
-export type Settings = { slippingDays: number }
+export type Settings = {
+  slippingDays: number
+  /** US ZIP for the weather tile on Today. '' = tile stays quiet. */
+  weatherZip: string
+}
+
+export type Weather = { tempF: number; condition: string; code: number; place: string }
 
 export type NewTask = {
   title: string
@@ -620,6 +626,12 @@ export const budget = {
   deleteRow: (id: number) => api.post<{ ok: true }>('/api/hh/budget', { action: 'deleteRow', id }),
   setDailyBalance: (b: { day: string; coastal: number; truist: number; secu: number }) =>
     api.post<{ ok: true }>('/api/hh/budget', { action: 'setDailyBalance', ...b }),
+}
+
+export const weather = {
+  /** Household-scoped: /api/weather is gated on a trading-app subscription
+   *  and an hh_session will never satisfy it. See server-v2/household-routes.cjs. */
+  get: (zip: string) => api.get<Weather>(`/api/hh/weather?zip=${encodeURIComponent(zip)}`),
 }
 
 export const settings = {

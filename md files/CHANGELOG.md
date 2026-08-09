@@ -1,5 +1,190 @@
 # Changelog
 
+## 2026-08-09 - budget-vite: habits grid fits a phone, weather ZIP default
+
+### `src/pages/Today.tsx`
+
+The habits table overflowed its card at 390px. Auto table-layout sizes columns
+to their content and will not shrink below it, so one long habit title pushed
+the whole table past the card edge and the last day columns were clipped.
+
+- **`tableLayout: 'fixed'`**. Day columns get exactly the width they ask for and
+  the habit-name column takes the remainder, so it wraps instead of the table
+  growing.
+- The grid gets narrower on a phone, not the card wider: cells 30→26px and marks
+  21→18px below 860px, name column 14→13px, `overflowWrap: 'anywhere'` on the
+  title.
+- `Mark` takes a `size` and scales its radius and glyph with it, rather than
+  having a second hardcoded copy for the phone.
+
+### `server-v2/_lib-household.cjs`
+
+- `DEFAULT_SETTINGS.weatherZip` is **27591** (Wendell) instead of empty — home
+  for both people on this instance, so neither has to type it in and no DB write
+  was needed to seed it. Still per-user underneath: either can override it in
+  Settings without touching the other, and clearing it to `''` turns the tile off
+  for that person only.
+- Settings copy updated to say so.
+
+Typechecks clean; `node --check` passes on both `.cjs`.
+
+
+## 2026-08-09 - budget-vite: Today paired down, weather tile, Journal tab
+
+### Layout — `src/pages/Today.tsx`
+
+Removed: **In brief**, **Top 3**, **Goals**, **Slipping**, **Active projects**.
+What is left is five rows, each a question answered from two sides:
+
+    strip     time · weather · month pace
+    calendar  full width
+    todo      | habits     what you have to do  | what you keep doing
+    journal   | lists      what you're thinking | what the house needs
+    money     | bills      what you have        | what's leaving
+
+- The calendar is full width again. Halved, the seven-day strip was the
+  narrowest element on the screen.
+- **Todo now lists ALL open tasks.** It previously excluded the starred ones
+  because Top 3 rendered them above; with Top 3 gone that filter would have made
+  starring a task hide it. Stars still show on the row.
+- Nothing was deleted server-side. `top3`, `slipping` and `counts` are still on
+  `/api/hh/today`; Todo and Projects still render the same data on their own
+  screens. This is a home-screen edit only.
+
+### Weather — `server-v2/household-routes.cjs`, `_lib-household.cjs`
+
+- **New `GET /api/hh/weather?zip=NNNNN`** (auth `household`). This is a second
+  copy of the logic in `api-router.js`'s `/api/weather`, NOT a call through to
+  it: that route is registered `auth: 'subscriber'` and resolves an active
+  trading-app session, which an `hh_session` cookie can never satisfy — from
+  budget.cbedge.net it would 401 forever. Upstreams are keyless (zippopotam →
+  Nominatim fallback → open-meteo), so there is no secret to share and no env
+  var to set. **If the WMO table or the provider changes, both copies need it.**
+- Ten-minute in-process cache keyed by ZIP. Today mounts this on every return to
+  the home tab; without it a phone left open all day is a few hundred calls to
+  somebody else's free API.
+- `weatherZip` added to `DEFAULT_SETTINGS` and accepted by `POST
+  /api/hh/settings`. **Per person, not per household** — two people who live
+  together can still be in two places. Empty is a valid saved value: that is how
+  you turn the tile off, so it is not rejected as invalid.
+- The tile renders **nothing at all** with no ZIP set. An empty weather tile is
+  worse than no tile — a permanent hole on the home screen advertising a setting
+  you chose not to fill in. Settings is the only place that mentions it.
+- `useWeather` is `enabled`-gated on a valid ZIP (zero requests when unset),
+  `staleTime` 10min to match the server cache, and `retry: false` — a bad ZIP or
+  a down upstream does not improve on a second attempt, and the tile says so.
+
+### Journal — new tab
+
+- **`src/pages/Journal.tsx`** (new), routed at `/journal`, sixth bottom tab.
+  Entries grouped by day, newest first, with Today/Yesterday labels; the year
+  only appears once it isn't this one.
+- Grouping keys on the **local** date, not the ISO string's UTC date — an entry
+  written at 9pm ET otherwise files itself under tomorrow.
+- Defaults to `kind = 'journal'` with a toggle for the older saved-notes kinds,
+  so a years-old quote pool doesn't bury this week.
+- Delete needs a second tap. This is the one screen whose content is
+  unrecoverable — a task can be retyped, a thought from a Tuesday in March
+  cannot.
+- Today's Journal card is now capture-only and links here.
+
+### `src/components/Shell.tsx`
+
+- Six tabs. At 390px that is 65px each, and "JOURNAL" at 0.12em tracking wraps
+  and drags the bar taller — tracking drops to 0.04em and the size to 9.5px,
+  with `nowrap`. The tracking gives, not the label: the word is what makes the
+  tab findable.
+
+Client typechecks clean; both `.cjs` files pass `node --check`.
+
+
+## 2026-08-09 - budget-vite: Today rebuilt as the Life OS dashboard
+
+Reference layout: status strip, two columns, project lanes, three-across footer.
+**No new tables and no new endpoints** — every block reads something that already
+existed and was only being rendered somewhere else, or not at all:
+
+| Block   | Source                                                        |
+|---------|---------------------------------------------------------------|
+| Goals   | `projects` → `progress` (milestones done/total, server-side)   |
+| Habits  | `routines[].history` — the array the streak is already derived from |
+| Journal | `notes` with `kind: 'journal'` — the column always accepted it, nothing wrote it |
+| Money   | the `money` block already on `/api/hh/today`                   |
+| Lists   | the `lists` block already on `/api/hh/today`                   |
+
+### `src/pages/Today.tsx`
+
+- **Two columns above 860px, one below**, in the same order either way — DO on
+  the left (calendar, Top 3, Todo, Slipping), TRACK on the right (goals, habits,
+  journal). The split is a width affordance, not a second information
+  architecture, so nothing is reachable on one and hidden on the other.
+- `useWide()` uses `matchMedia`, not a CSS breakpoint: this app is inline-styled
+  from `theme.ts` and has no stylesheet to hang a media query on. Putting half a
+  layout in `index.css` would hide it where nobody looks.
+- **Status strip** — clock, next event, month pace.
+  - The clock re-arms on the top of the minute (`60000 - Date.now() % 60000`),
+    not on a blind 60s interval, which shows the wrong minute for 59 seconds if
+    it happens to mount at :59.
+  - Next-up is silent when no calendar is connected. `CalendarCard` right below
+    already explains why; two "connect Google" prompts on one screen is nagging.
+  - The pace bar is the CALENDAR month, not spend — it is the denominator you
+    read the projection against, and a spend bar beside a projection figure
+    invites reading one as the other.
+- **Habits grid** looks each day up in `routine.history` by date key rather than
+  slicing the last seven entries. The array's length and direction are the
+  server's business; a slice shifts the whole grid by a day if either changes.
+  Future days render as a dashed square, not a cross — a day that hasn't
+  happened is not a missed day, and drawing it as one makes every Monday a wall
+  of failure.
+- **Goals** skip projects with `progress: null`. Null means no milestones, i.e.
+  unknown, not zero — a 0% bar would be a claim the data does not make.
+- **Project lanes** map to the existing `status` values (`someday` / `active` /
+  `done`), read-only; the board with drag stays on `/projects`.
+- Footer split into Money / Bills / Lists. Bills were previously buried at the
+  bottom of the money block.
+
+### `src/hooks.ts`
+
+- `useCreateNote` takes an optional `kind`, defaulting to `'note'`. Settings'
+  saved-notes box is unchanged.
+
+### `src/components/Shell.tsx`
+
+- Content capped at 1040px and centred, header included. Without it the two
+  columns keep widening on a monitor until a task title floats alone in a metre
+  of card. Below the cap the wrapper does nothing, so the phone layout is byte
+  for byte what it was.
+
+**Cost:** the home screen now fetches projects and routines alongside today +
+calendar. Four queries where there were two. All are react-query cached and the
+two `useProjects()` callers on the page share one request.
+
+Typechecks clean.
+
+
+## 2026-08-09 - budget-vite: Today reordered around the calendar
+
+Follow-up to the card conversion below. Order on `/today` is now Calendar, Top 3,
+Todo, Slipping, Money.
+
+### `src/pages/Today.tsx`
+
+- **"In brief" removed.** It opened the page with one sentence counting what the
+  cards underneath already spell out — first thing read, least informative thing
+  on the screen. `counts` is untouched on the payload and still used elsewhere;
+  this is a render change only, nothing server-side.
+- **Calendar is the first card.** It is the only block on the page you cannot
+  change — the day is already committed — so it sets the frame the task lists are
+  read against.
+- **"Open tasks" renamed "Todo"**, matching the tab it mirrors.
+- **`QuickAdd` moved out of the top of the page and into the bottom of the Todo
+  card**, under a hairline. You read the list, find the thing isn't on it, and
+  the box is already at the end of it under your thumb — rather than scrolling
+  back up past the calendar to an add box that floated above everything.
+
+Typechecks clean.
+
+
 ## 2026-08-09 - budget-vite: every page container is a card
 
 The phone build was drawn entirely with hairline rules — a section was a 1px top
