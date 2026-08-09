@@ -62,11 +62,39 @@ export default function LandingClient() {
         .landing-feature:hover { border-color: rgba(33,158,188,0.45) !important; box-shadow: 0 0 18px rgba(33,158,188,0.25); transform: translateY(-2px); }
         .bzila-card { transition: border-color .18s, box-shadow .18s, transform .18s; }
         .bzila-card:hover { border-color: rgba(33,158,188,0.55); box-shadow: 0 0 18px rgba(33,158,188,0.28); transform: translateY(-2px); }
+        /* Column mechanics for the two-up block.
+           The receipts strip and the product shot have to read as ONE pair:
+           same top edge, same height, same bottom edge. That is done here in
+           CSS rather than in the two components, so ReceiptsStrip and
+           HeroVideo stay usable elsewhere at their natural sizes.
+             1. Each column is a flex column.
+             2. The header row (trial CTA / Bzila card) is pinned to one fixed
+                height in BOTH columns — that is what puts the two cards below
+                them on the same line.
+             3. The two cards take flex:1, so they end on the same line too.
+                The hero's 16:9 spacer is collapsed to absolute here; without
+                that it would drive its own height and break the match. */
+        .landing-top .landing-col { display: flex; flex-direction: column; min-width: 0; }
+        .landing-top .landing-cta,
+        .landing-top .bzila-card { height: 78px; flex: 0 0 78px; margin: 0 0 16px !important; max-width: none !important; }
+        .landing-top .receipts { flex: 1 1 auto; display: flex; flex-direction: column; margin-top: 0 !important; }
+        .landing-top .receipts-grid { flex: 1 1 auto; }
+        .landing-top .hero-frame { flex: 1 1 auto; margin-bottom: 0 !important; }
+        .landing-top .hero-frame > div:first-child { position: absolute !important; inset: 0; padding-top: 0 !important; }
         /* Below the two-column breakpoint the card goes back to a single
            stacked column and the feature grid drops from 3-up to 2-up. */
         @media (max-width: 900px) {
           .landing-card .landing-top { grid-template-columns: 1fr !important; gap: 0 !important; }
           .landing-card .landing-features { grid-template-columns: 1fr 1fr !important; }
+          /* Stacked: nothing to match heights WITH, so everything goes back to
+             its natural size and the hero gets its aspect ratio back. */
+          .landing-top .landing-cta,
+          .landing-top .bzila-card { height: auto; flex: 0 0 auto; padding: 12px 14px !important; }
+          .landing-top .receipts,
+          .landing-top .hero-frame { flex: 0 0 auto; }
+          .landing-top .hero-frame { margin-bottom: 16px !important; }
+          .landing-top .hero-frame > div:first-child { position: relative !important; padding-top: 56.25% !important; }
+          .landing-top .landing-col + .landing-col { margin-top: 16px; }
         }
         @media (max-width: 640px) {
           .landing-card .landing-logo { max-height: 96px !important; margin: 8px 0 10px !important; }
@@ -141,13 +169,15 @@ export default function LandingClient() {
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/cb-edge-logo.png" alt={APP_NAME} style={logo} className="landing-logo" />
 
-          <div style={topGrid} className="landing-top">
-            <div>
-              <p className="landing-intro" style={{ color: T.muted, fontSize: 16, margin: "0 0 16px", maxWidth: 520, lineHeight: 1.5 }}>
-                A real-time SPX gamma-exposure &amp; options-flow dashboard for serious 0DTE and index
-                traders. See dealer positioning, flow, and key levels the moment they move.
-              </p>
+          {/* The pitch runs the full card width under the masthead instead of
+              being boxed into the left column at maxWidth 520. */}
+          <p className="landing-intro" style={intro}>
+            A real-time SPX gamma-exposure &amp; options-flow dashboard for serious 0DTE and index
+            traders. See dealer positioning, flow, and key levels the moment they move.
+          </p>
 
+          <div style={topGrid} className="landing-top">
+            <div className="landing-col">
               {/* ONE primary action, and it sits in the first screen next to the
                   product shot. It used to live at the very bottom of the card,
                   below six feature tiles — anyone who didn't scroll never saw
@@ -168,7 +198,7 @@ export default function LandingClient() {
             {/* Show the product before asking for anything. Drop /hero-loop.mp4
                 into public/ and this becomes a live capture; until then it holds
                 the frame with the existing still. */}
-            <div style={{ alignSelf: "center", minWidth: 0 }}>
+            <div className="landing-col">
               {/* Free section — sits directly above the product shot. */}
               <Link href="/bzila" style={{ ...bzilaCard, textDecoration: "none" }} className="bzila-card">
                 <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
@@ -377,12 +407,25 @@ const featureGrid: React.CSSProperties = {
   marginTop: 18,
 };
 
+// alignItems: stretch (not "start") — both columns get the same row height,
+// which is what lets the receipts strip and the product shot line up.
 const topGrid: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
   gap: 26,
-  alignItems: "start",
+  alignItems: "stretch",
   textAlign: "left",
+};
+
+// Full card width, centered under the masthead.
+const intro: React.CSSProperties = {
+  color: T.muted,
+  opacity: 0.85,
+  fontSize: 17,
+  lineHeight: 1.55,
+  textAlign: "center",
+  maxWidth: "none",
+  margin: "0 auto 22px",
 };
 
 const featureCell: React.CSSProperties = {
