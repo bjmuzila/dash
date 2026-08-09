@@ -11,9 +11,14 @@ import type { CSSProperties } from 'react'
  *      `warn` = needs attention, `bad` = failed, `good` = complete. Nothing is
  *      coloured for decoration, which is what separates this from a dashboard
  *      that colours everything.
- *   2. Hairline rules, not cards. Sections are a 1px top rule and whitespace.
- *      Borders, fills and shadows are the exception (compose box, active
- *      segment) — never the default container.
+ *   2. Cards, not hairline rules. Every section is a bounded surface: the same
+ *      faint cyan wash over a translucent panel the dashboard draws
+ *      (components/shared/PageCard.tsx), a hairline border and an 18px radius.
+ *      This replaced the original "1px top rule and whitespace" treatment in
+ *      2026-08 — on a phone the rules read as one continuous column and the eye
+ *      had nothing to stop against, so where one section ended and the next
+ *      began was guesswork. Fills INSIDE a card are still the exception
+ *      (compose box, active segment).
  *   3. Serif for VALUES, mono for LABELS. A number you read is Newsreader and
  *      large; the word describing it is 10px mono uppercase and muted. Swapping
  *      those two is what makes a layout look like generic admin.
@@ -146,12 +151,28 @@ export const quote = (): CSSProperties => ({
 // ── Structure ────────────────────────────────────────────────────────────────
 
 /**
- * A section. NOT a card — no border, no shadow, no fill. A top rule and
- * breathing room, which is what the reference uses everywhere.
+ * A section — the default container for EVERY page.
+ *
+ * This is a card: the dashboard's surface (a faint cyan wash from the top edge
+ * over a translucent panel), a hairline border, an 18px radius. Changing this
+ * one helper is what converts all of Today, Todo, Lists, Money, Projects,
+ * Routines and Settings at once — nothing else defines a page container.
+ *
+ * Radius 18 rather than `card()`'s 16: these are full-bleed containers on a
+ * 390px screen and the slightly softer corner keeps them from reading as
+ * buttons. `card()` stays 16 for the small dense surfaces inside the Money
+ * screen, which nest inside these.
+ *
+ * DO NOT nest one section() in another — a card inside a card has two borders
+ * and two washes and looks like a rendering bug. Inside a section, use `row()`,
+ * `tile()` or a plain div.
  */
 export const section = (extra: CSSProperties = {}): CSSProperties => ({
-  borderTop: `1px solid ${T.ruleStrong}`,
-  paddingTop: 14,
+  background:
+    'radial-gradient(circle at 50% 0%, rgba(33,158,188,0.07) 0%, transparent 55%), rgba(13,17,25,0.55)',
+  border: `1px solid ${T.rule}`,
+  borderRadius: 18,
+  padding: 15,
   ...extra,
 })
 

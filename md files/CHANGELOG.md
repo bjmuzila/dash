@@ -1,5 +1,71 @@
 # Changelog
 
+## 2026-08-09 - budget-vite: every page container is a card
+
+The phone build was drawn entirely with hairline rules — a section was a 1px top
+border and 26px of whitespace. On a 390px screen that reads as one continuous
+column: nothing bounds a section, so where "Top 3" ends and "Calendar" begins is
+inferred from the gap size, and the gap sizes were not consistent (Today 26,
+Todo 22, Lists 20, Budget 14). Every section is now a bounded surface.
+
+### `src/theme.ts`
+
+- **`section()` is now the card**, not a rule: the dashboard's surface (a faint
+  cyan wash from the top edge over `rgba(13,17,25,0.55)`), a hairline border, an
+  18px radius, 15px padding. This is the whole change — `section()` is the only
+  page-container helper in the app, so redefining it converted all 34 call sites
+  across Today, Todo, Lists, Money, Projects, Routines and Settings at once. No
+  page-level restyling was needed and none was done.
+- Radius 18, where `card()` stays 16: these are full-bleed containers and the
+  softer corner keeps them from reading as buttons. `card()` is unchanged and
+  still used for the small dense surfaces inside Money, which now nest inside a
+  `section()`.
+- Rule 2 in the file header rewritten — it said "hairline rules, not cards" and
+  would otherwise have contradicted the helper directly beneath it.
+- Added the constraint that follows from this: **never nest `section()` inside
+  `section()`** — two borders and two washes read as a rendering bug.
+
+### `src/components/CalendarCard.tsx`
+
+Rebuilt to the reference layout. Every existing failure-mode branch is untouched
+(not-configured, not-connected, revoked, none-selected, partial failures) — this
+is layout only.
+
+- **Serif date line** — "Saturday, *August 9*", weekday plain and date italic.
+- **Seven-day strip**, Monday-first, today filled solid `T.ink`. Read-only: it
+  orients you in the week without implying a day is tappable, which this app has
+  no screen for.
+- Both are derived from the `date` prop, **not** from the Google response, so
+  they still render when the calendar is unreachable. On a screen whose job is
+  "what is today", the date should never depend on a network call.
+- `parseDay()` builds the bare `YYYY-MM-DD` **locally**. `new Date('2026-08-09')`
+  parses as UTC and renders as the 8th anywhere west of Greenwich, which would
+  have printed the wrong weekday on the card every day.
+- Sunday walks back six days, not zero (`(getDay() + 6) % 7`) — the naive version
+  renders a week ahead every Sunday.
+- All-day event band bleeds to −15 to track the new `section()` padding.
+
+### Spacing
+
+- Column gaps normalised to 14 (Today 26, Routines 26, Todo 22, Lists 20). The
+  gap used to be the only separator; the cards do that now and the extra space
+  cost most of a screenful of scroll.
+- `Shell.tsx` main padding 20px → 13px each side. Cards carry their own 15px
+  inset, so the old value put content 35px from the edge of a 390px screen and
+  squeezed the seven-day strip.
+- Today's "In brief" block was a bare `<div>` and is now a `section()`, so it is
+  no longer the one unboxed thing on the page.
+
+### `src/components/BudgetOverview.tsx`
+
+- The "Uncategorised" footer used `section()` from **inside** a Collapsible card.
+  That is the one nested call site in the app and it would have become a
+  card-in-a-card; replaced with a plain ruled div.
+
+Typechecks clean (`tsc --noEmit`, `noUnusedLocals` on). Palette untouched — this
+is structure only, still the CB Edge dark set.
+
+
 ## 2026-08-07 - Options flow: the /flow tape was persisting ~3% of SPX 0DTE
 
 Diagnosed from production: `flow_prints` was taking ~3 rows/min for SPX while the

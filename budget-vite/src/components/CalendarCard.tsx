@@ -1,6 +1,6 @@
 import { calendar as calendarApi, type CalendarDay, type CalendarEvent, type CalendarStatus } from '../api'
 import { useCalendarEvents } from '../hooks'
-import { T, sectionTitle, label, body, section, row, MONO } from '../theme'
+import { T, sectionTitle, label, body, section, row, display, MONO } from '../theme'
 
 /**
  * Today's calendar block.
@@ -9,22 +9,97 @@ import { T, sectionTitle, label, body, section, row, MONO } from '../theme'
  * do is render an empty list when it doesn't actually know — "nothing on today"
  * and "we can't reach your calendar" look identical on screen but mean opposite
  * things, and one of them will make you miss something.
+ *
+ * The card leads with the DATE — serif, spelled out — and a seven-day strip with
+ * today filled solid. Both are drawn from `date` alone, so they render even when
+ * Google is unreachable: on a screen whose whole job is "what is today", the
+ * date is the one thing that should never depend on a network call.
  */
 export default function CalendarCard({ status, date }: { status: CalendarStatus; date: string }) {
   const { data, isLoading, error } = useCalendarEvents(status.connected, date)
   const count = data?.events?.length
+  const today = parseDay(date)
 
   return (
     <div style={section()}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
         <span style={sectionTitle()}>Calendar</span>
-        {typeof count === 'number' && count > 0 && (
-          <span style={label()}>{count} event{count === 1 ? '' : 's'}</span>
-        )}
+        <span style={label()}>
+          {typeof count === 'number' && count > 0
+            ? `${count} event${count === 1 ? '' : 's'}`
+            : today.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+        </span>
       </div>
+
+      {/* "Saturday, August 9" — the weekday plain, the date italic. The italic
+          is doing work: it separates the two halves without a second colour or
+          a bullet, in a place where both would be noise. */}
+      <div style={{ ...display(26), marginTop: 9 }}>
+        {today.toLocaleDateString('en-US', { weekday: 'long' })},{' '}
+        <em style={{ fontStyle: 'italic' }}>
+          {today.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}
+        </em>
+      </div>
+
+      <WeekStrip today={today} />
+
       <Body status={status} data={data} isLoading={isLoading} hadError={!!error} />
     </div>
   )
+}
+
+/**
+ * Mon–Sun around today, today filled solid.
+ *
+ * Read-only on purpose. It orients you inside the week — the thing you lose
+ * track of — without implying you can tap through to Tuesday, which this app
+ * has no screen for. The day it fills is the day the REST of the card is
+ * about, so it can never disagree with the list underneath it.
+ */
+function WeekStrip({ today }: { today: Date }) {
+  // Monday-first: getDay() is Sunday-0, so Sunday has to walk back six days,
+  // not zero, or the strip renders a week ahead every Sunday.
+  const offset = (today.getDay() + 6) % 7
+  const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - offset)
+  const days = Array.from({ length: 7 }, (_, i) =>
+    new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i))
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6, margin: '14px 0 2px' }}>
+      {days.map((d) => {
+        const on = d.getDate() === today.getDate() && d.getMonth() === today.getMonth()
+        return (
+          <div key={d.toISOString()} style={{
+            textAlign: 'center', padding: '8px 0 9px', borderRadius: 12,
+            border: `1px solid ${on ? T.ink : T.rule}`,
+            background: on ? T.ink
+              : 'linear-gradient(180deg, rgba(255,255,255,0.04) 0%, transparent 34%), rgba(13,17,25,0.55)',
+          }}>
+            <div style={{
+              fontFamily: MONO, fontSize: 8, letterSpacing: '0.12em', textTransform: 'uppercase',
+              color: on ? T.paper : T.faint, opacity: on ? 0.7 : 1,
+            }}>
+              {d.toLocaleDateString('en-US', { weekday: 'short' })}
+            </div>
+            <div style={{ ...display(17), marginTop: 3, color: on ? T.paper : T.ink }}>
+              {d.getDate()}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * A bare 'YYYY-MM-DD' built LOCALLY. `new Date('2026-08-09')` parses as UTC and
+ * renders as the 8th anywhere west of Greenwich — which would print the wrong
+ * weekday on the card every single day.
+ */
+function parseDay(iso: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
+  if (!m) return new Date()
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
 }
 
 function Body({ status, data, isLoading, hadError }: {
@@ -83,16 +158,17 @@ function EventRow({ event, showDay }: { event: CalendarEvent; showDay?: boolean 
   return (
     <div style={row({
       alignItems: 'flex-start',
-      padding: '11px 10px',
+      padding: '11px 15px',
       // All-day events get a tinted band. They have no time to anchor them, so
       // without the band they read as an event at midnight sitting above
       // everything else.
       background: event.allDay ? 'rgba(255,255,255,0.05)' : 'transparent',
-      // Negative margin so the band bleeds to the section edges rather than
-      // sitting in an inset box.
-      marginLeft: -10,
-      marginRight: -10,
-      borderRadius: event.allDay ? 3 : 0,
+      // Negative margin so the band bleeds to the card's edges rather than
+      // sitting in an inset box. −15 tracks section()'s padding — if that
+      // padding changes, this changes with it.
+      marginLeft: -15,
+      marginRight: -15,
+      borderRadius: event.allDay ? 9 : 0,
     })}>
       <div style={{
         flexShrink: 0, width: 52, fontFamily: MONO, fontSize: 11,

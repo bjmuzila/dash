@@ -48,8 +48,11 @@ export default function Today() {
   ].filter(Boolean)
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 26 }}>
-      <div>
+    // 14, not the old 26: the gap used to be the only thing separating one
+    // section from the next. The cards do that now, and 26 between bounded
+    // surfaces just costs a screenful of scroll.
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={section()}>
         <div style={sectionTitle()}>In brief</div>
         <p style={{ ...body(15), color: T.inkSoft, marginTop: 8 }}>
           {brief.map((b, i) => (

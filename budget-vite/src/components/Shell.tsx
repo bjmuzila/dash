@@ -62,7 +62,10 @@ export default function Shell({ children }: { children: ReactNode }) {
 
       <main style={{
         flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch',
-        padding: '18px 20px 28px',
+        // Tighter than the old 20px side padding: every section is a card now
+        // and carries its own 15px inset, so keeping 20 here put content 35px
+        // from the edge of a 390px screen and squeezed the seven-day strip.
+        padding: '14px 13px 26px',
       }}>
         {children}
       </main>

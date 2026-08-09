@@ -77,7 +77,7 @@ export default function Lists() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', gap: 6 }}>
         {/* List first, because it is the default and the tab order should match
             what the screen actually opens on. */}

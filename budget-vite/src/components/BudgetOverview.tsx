@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type {
   BudgetOverview as Overview, BudgetBriefing, BudgetCategory, FlowBucket,
 } from '../api'
-import { T, label, body, section, card, tile, MONO } from '../theme'
+import { T, label, body, card, tile, MONO } from '../theme'
 import Collapsible from './Collapsible'
 
 /**
@@ -653,9 +653,12 @@ function CategoryBudgets({ categories, unsortedSpend, currency }: {
         )
       })}
       {unsortedSpend > 0 && (
-        <div style={section({ borderTop: `1px solid ${T.rule}`, paddingTop: 10, marginTop: 2,
-                              fontFamily: MONO, fontSize: 10, letterSpacing: '0.08em',
-                              textTransform: 'uppercase', color: T.ink })}>
+        // A plain ruled footer, NOT section(). section() is a card now, and this
+        // line already sits inside the Collapsible's card — nesting them gives
+        // it a second border and a second wash.
+        <div style={{ borderTop: `1px solid ${T.rule}`, paddingTop: 10, marginTop: 2,
+                      fontFamily: MONO, fontSize: 10, letterSpacing: '0.08em',
+                      textTransform: 'uppercase', color: T.ink }}>
           Uncategorised {fmt(unsortedSpend, currency)}
         </div>
       )}

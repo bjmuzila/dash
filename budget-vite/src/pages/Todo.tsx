@@ -63,7 +63,7 @@ export default function Todo() {
     ))
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <QuickAdd />
 
       {urgent.length > 0 && (

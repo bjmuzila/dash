@@ -43,7 +43,7 @@ export default function Routines() {
   const bestStreak = Math.max(0, ...data.blocks.flatMap((b) => b.items.map((i) => i.streak)))
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 26 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       {/* The hero: one oversized serif number, a 30-day trace, a streak. */}
       <div>
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16 }}>
