@@ -7,7 +7,7 @@
 <style>
   :root{
     --bg:#0a0e14; --panel:#0f141c; --panel2:#131a24; --line:#1e2733;
-    --txt:#dbe4ef; --dim:#7d8b9c; --accent:#29b6f6; --red:#ff4757; --amber:#f5c518;
+    --txt:#ffffff; --dim:#e6ecf3; --accent:#4fc9ff; --red:#ff4757; --amber:#f5c518;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
@@ -18,10 +18,10 @@
   .rail::-webkit-scrollbar{width:8px}.rail::-webkit-scrollbar-thumb{background:#243040;border-radius:4px}
   .main{flex:1;display:flex;flex-direction:column;min-width:0}
   h1{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:2px 0 10px}
-  h2{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
+  h2{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#ffffff;
     margin:16px 0 6px;padding-bottom:4px;border-bottom:1px solid var(--line)}
   .row{display:flex;align-items:center;gap:8px;margin:6px 0}
-  .row label{flex:1;color:#a9b6c6}
+  .row label{flex:1;color:#ffffff}
   .row .val{width:52px;text-align:right;font-variant-numeric:tabular-nums;color:var(--accent)}
   input[type=range]{width:130px;accent-color:var(--accent);background:transparent}
   select,button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
@@ -36,15 +36,21 @@
   .cvwrap{flex:1;position:relative;min-height:0}
   canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
   .stats{padding:6px 12px;border-top:1px solid var(--line);background:var(--panel);
-    color:var(--dim);font-variant-numeric:tabular-nums;display:flex;gap:18px;flex-wrap:wrap}
+    color:#ffffff;font-variant-numeric:tabular-nums;display:flex;gap:18px;flex-wrap:wrap}
   .stats b{color:var(--txt);font-weight:600}
   pre{background:#080b10;border:1px solid var(--line);border-radius:6px;padding:8px;
-    font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;color:#9fd7f5;white-space:pre-wrap;
+    font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;color:#ffffff;white-space:pre-wrap;
     max-height:220px;overflow:auto;margin:6px 0}
-  .hint{color:#6b7889;font-size:11px;margin:2px 0 8px}
+  .hint{color:#e6ecf3;font-size:11px;margin:2px 0 8px}
+  .desc{color:#ffffff;font-size:10.5px;line-height:1.4;margin:-2px 0 9px 2px;
+    padding-left:7px;border-left:1px solid #1c2531}
+  .desc b{color:#ffffff;font-weight:600}
+  .desc .now{color:var(--accent)}
+  .rail.nodesc .desc{display:none}
+  .toolbar label{color:#ffffff;display:flex;align-items:center;gap:5px;cursor:pointer}
   .pill{display:inline-block;padding:1px 6px;border-radius:999px;background:#16202c;
-    border:1px solid var(--line);color:var(--dim);font-size:10px}
-  .chk{display:flex;align-items:center;gap:6px;margin:5px 0;color:#a9b6c6}
+    border:1px solid var(--line);color:#ffffff;font-size:10px}
+  .chk{display:flex;align-items:center;gap:6px;margin:5px 0;color:#ffffff}
   input[type=checkbox]{accent-color:var(--accent)}
 </style>
 </head>
@@ -63,10 +69,6 @@
     <button data-preset="extreme">Extreme</button>
     <button data-preset="tube">Tube / rail</button>
     <button data-preset="sparse">Sparse walls</button>
-    <button data-preset="ticks">Ticks</button>
-    <button data-preset="ribbonp">Ribbons</button>
-    <button data-preset="cells">Heat cells</button>
-    <button data-preset="signs">Triangles</button>
   </div>
 
   <h2>1 · Normalization (the biggest lever)</h2>
@@ -198,8 +200,23 @@
   <div class="chk"><input type="checkbox" id="marksOn"><label for="marksOn">Draw the marks too</label></div>
   <div class="chk"><input type="checkbox" id="legend"><label for="legend">Size legend on canvas</label></div>
 
-  <h2>8 · Data / view</h2>
-  <div class="row"><label>Bucket (min per col)</label><input type="range" id="bucket" min="1" max="30" step="1"><span class="val" id="v_bucket"></span></div>
+  <h2>8 · Chart / data</h2>
+  <div class="row"><label>Timeframe</label>
+    <select id="tf">
+      <option value="1">1m</option><option value="5">5m</option>
+      <option value="15">15m</option><option value="30">30m</option>
+      <option value="60">1h</option>
+    </select></div>
+  <div class="row"><label>Bubble bucket</label>
+    <select id="bucket">
+      <option value="bar">bar (live default)</option>
+      <option value="1">1 min</option>
+      <option value="5">5 min</option>
+      <option value="15">15 min</option>
+      <option value="30">30 min</option>
+    </select></div>
+  <div class="chk"><input type="checkbox" id="showLevels"><label for="showLevels">Call Wall / Flip / Put Wall lines + price tags</label></div>
+  <div class="chk"><input type="checkbox" id="showVolume"><label for="showVolume">Volume pane</label></div>
   <div class="row"><label>Concentration</label><input type="range" id="conc" min="0" max="100" step="1"><span class="val" id="v_conc"></span></div>
   <div class="row"><label>Noise</label><input type="range" id="noise" min="0" max="100" step="1"><span class="val" id="v_noise"></span></div>
   <div class="chk"><input type="checkbox" id="showCandles"><label for="showCandles">Show candles</label></div>
@@ -216,6 +233,7 @@
     <span class="pill">ES · synthetic session</span>
     <button id="reseed">Reseed data</button>
     <button id="resetAll">Reset to live</button>
+    <label><input type="checkbox" id="showDesc" checked> what each number does</label>
     <span class="sp"></span>
     <span class="pill" id="modeTag"></span>
   </div>
@@ -238,7 +256,8 @@ const LIVE = {
   shape:'circle', shape2:'circle', shapeBySign:false, aspect:1, outlineW:0, coreDot:0,
   rotate:0, xJitter:0, additive:false,
   ribbon:'off', ribbonOp:35, ribbonMul:1, ribbonSmooth:60, marksOn:true, legend:true,
-  bucket:5, conc:55, noise:35, showCandles:true, splitView:false,
+  tf:5, bucket:'bar', showLevels:true, showVolume:true,
+  conc:55, noise:35, showCandles:true, splitView:false,
 };
 
 const PRESETS = {
@@ -251,24 +270,11 @@ const PRESETS = {
     colorMix:100, colorGamma:2.2, satBoost:25, glowMax:22, glowThresh:0.6, glowAll:true,
     hiBoost:1.6, topStrikes:16, highlight:2, additive:true},
   tube: {...LIVE, normMode:'expanding', sizeCurve:'sqrt', sizeGamma:0.5, minSize:1.2,
-    maxSize:5, bucket:1, topStrikes:12, highlight:4, brightness:80, shape:'capsule',
+    maxSize:5, bucket:'1', topStrikes:12, highlight:4, brightness:80, shape:'capsule',
     aspect:0.55, colorMix:35},
   sparse: {...LIVE, normMode:'session', sizeCurve:'pow', sizeGamma:2.2, minSize:0.2,
     maxSize:14, cutoff:0.18, topStrikes:24, highlight:2, brightness:90, opGamma:2.2,
     colorMix:60, glowMax:18, glowThresh:0.65, glowAll:true},
-  ticks: {...LIVE, shape:'tick', normMode:'rolling', rollWin:24, sizeCurve:'pow',
-    sizeGamma:1.4, minSize:0.4, maxSize:9, aspect:0.35, bucket:5, topStrikes:14,
-    highlight:3, brightness:86, opGamma:1.6, colorMix:55, glowMax:8, glowThresh:0.8,
-    glowAll:true, cutoff:0.04},
-  ribbonp: {...LIVE, ribbon:'area', ribbonOp:45, ribbonMul:1.2, marksOn:false,
-    normMode:'rolling', rollWin:24, sizeCurve:'pow', sizeGamma:1.4, minSize:0.3,
-    maxSize:9, topStrikes:12, highlight:3, colorMix:60, bucket:3},
-  cells: {...LIVE, shape:'cell', normMode:'column', sizeCurve:'linear', minSize:0,
-    maxSize:1, opGamma:1.4, brightness:70, colorMix:80, colorGamma:1.4, topStrikes:20,
-    highlight:0, bucket:5, glowMax:0, cutoff:0.03},
-  signs: {...LIVE, shape:'triangle', shapeBySign:true, shape2:'triangle',
-    normMode:'rolling', rollWin:24, sizeCurve:'pow', sizeGamma:1.5, minSize:0.5,
-    maxSize:9, topStrikes:14, highlight:3, colorMix:65, opGamma:1.7, cutoff:0.05},
 };
 
 const cfg = {...LIVE};
@@ -283,74 +289,141 @@ let SEED = 1337;
 function rng(){ SEED = (SEED*1664525 + 1013904223) >>> 0; return SEED / 4294967296; }
 function nrand(){ return (rng()+rng()+rng()+rng()-2)/2; }
 
-let DATA = null; // { strikes:[], mins:[{ts, cells:[{strike,v}]}], candles:[] }
+let DATA = null;
+
+/* Exactly the geometry the live page uses ───────────────────────────────
+   • GEX arrives in SPX STRIKE space on a 5-point grid.
+   • Every strike is placed on the ES axis by ONE conversion — basisAt(t),
+     here the constant BASIS — so a bubble's y is strike + basis. That is
+     why the Call Wall prints at 7773.75, not 7775: strike 7775, basis −1.25.
+   • Candles are 1-minute ES bars aggregated to the selected timeframe,
+     anchored to 09:30 ET, so the last bar of the session is short.       */
+const BASIS = -1.25;
+const STRIKE_STEP = 5;                                 // SPX strike grid
+const SPX_CALL_WALL = 7775, SPX_PUT_WALL = 7755;
+const PRE_OPEN_UTC  = Date.UTC(2026,7,7,12,0,0);       // 08:00 ET
+const RTH_OPEN_UTC  = Date.UTC(2026,7,7,13,30,0);      // 09:30 ET
+const RTH_CLOSE_UTC = Date.UTC(2026,7,7,20,0,0);       // 16:00 ET
 
 function buildData(){
   SEED = 1337 + (buildData.bump||0);
-  const LO = 7715, HI = 7810, STEP = 2.5;
+  const conc = cfg.conc/100, noiseAmp = cfg.noise/100;
+  const flipEs = 7768.5;
+
+  // ── 1-minute ES bars, 08:00 → 16:00 ET ──
+  // Anchored path: quiet pre-market, an opening flush, the rally through the
+  // flip into the call wall, then the afternoon bleed — the shape of the
+  // reference session, so both walls sit inside the visible range.
+  const ANCH = [[0,7745],[80,7750],[90,7752],[120,7722],[150,7736],[180,7770],
+                [210,7788],[240,7779],[270,7784],[300,7773],[360,7767],
+                [420,7761],[480,7759]];
+  const anchAt = (min) => {
+    for (let i = 1; i < ANCH.length; i++){
+      if (min <= ANCH[i][0]){
+        const [m0,p0] = ANCH[i-1], [mA,p1] = ANCH[i];
+        const t = (min - m0)/(mA - m0);
+        return p0 + (p1 - p0)*(t*t*(3-2*t));
+      }
+    }
+    return ANCH[ANCH.length-1][1];
+  };
+  const N = Math.round((RTH_CLOSE_UTC - PRE_OPEN_UTC)/60000);
+  const m1 = [];
+  let px = 7745, lo = 1e9, hi = -1e9;
+  for (let i = 0; i < N; i++){
+    const ts = PRE_OPEN_UTC + i*60000;
+    const rth = ts >= RTH_OPEN_UTC;
+    const frac = (ts - RTH_OPEN_UTC)/(RTH_CLOSE_UTC - RTH_OPEN_UTC);
+    const vol  = rth ? (frac < 0.06 ? 3.2 : frac < 0.25 ? 2.1 : 1.35) : 0.6;
+    const pull = (anchAt(i) - px) * (rth ? 0.20 : 0.10);
+    const o = px, c = px + nrand()*vol + pull, wick = Math.abs(nrand())*vol*0.9;
+    const bar = { ts, o, h: Math.max(o,c)+wick, l: Math.min(o,c)-wick, c,
+      v: Math.round((rth ? (frac<0.05?9000:frac<0.3?3800:2100) : 700) * (0.5+Math.abs(nrand()))) };
+    m1.push(bar); px = c;
+    lo = Math.min(lo, bar.l); hi = Math.max(hi, bar.h);
+  }
+
+  // ── SPX strike grid, wide enough to cover the ES range ──
+  const kLo = Math.floor((lo - BASIS - 45)/STRIKE_STEP)*STRIKE_STEP;
+  const kHi = Math.ceil ((hi - BASIS + 45)/STRIKE_STEP)*STRIKE_STEP;
   const strikes = [];
-  for (let s = LO; s <= HI; s += STEP) strikes.push(+s.toFixed(2));
+  for (let k = kLo; k <= kHi; k += STRIKE_STEP) strikes.push(k);
 
-  const conc = cfg.conc/100;          // how dominant the walls are
-  const noiseAmp = cfg.noise/100;
-
-  // Walls: call wall high, put wall low, plus a few secondary shelves.
-  const callWall = 7773.75, putWall = 7753.75, flip = 7768.5;
+  // Secondary shelves are kept >=2 strikes clear of the walls so their
+  // gaussian tails can't sum into a bigger peak than the wall itself.
+  const snap = k => Math.round(k/STRIKE_STEP)*STRIKE_STEP;
   const shelves = [
-    {k:callWall, w: 1.00, sign:+1},
-    {k:putWall,  w: 0.92, sign:-1},
-    {k:7783.0,   w: 0.55, sign:+1},
-    {k:7793.0,   w: 0.42, sign:+1},
-    {k:7745.0,   w: 0.48, sign:-1},
-    {k:7760.0,   w: 0.30, sign:-1},
-    {k:7800.0,   w: 0.22, sign:+1},
-    {k:7735.0,   w: 0.18, sign:-1},
+    {k: SPX_CALL_WALL, w:1.00, sign:+1}, {k: SPX_PUT_WALL, w:0.92, sign:-1},
+    {k: snap(7790),    w:0.55, sign:+1}, {k: snap(7800),   w:0.42, sign:+1},
+    {k: snap(7740),    w:0.48, sign:-1}, {k: snap(7765),   w:0.30, sign:-1},
+    {k: snap(7810),    w:0.22, sign:+1}, {k: snap(7730),   w:0.18, sign:-1},
   ];
 
-  const N = 390; // 1-min bars 09:30 → 16:00
-  const t0 = Date.UTC(2026,7,7,13,30,0); // 09:30 ET
-  const mins = [], candles = [];
-  let px = 7762;
-  for (let i = 0; i < N; i++){
-    const ts = t0 + i*60000;
-    const frac = i/N;
-    // price walks toward the flip then bleeds to the put wall late (like the shot)
-    px += nrand()*1.6 + (flip - px)*0.004 + (frac>0.6 ? -0.06 : 0.02);
-    const o = px, c = px + nrand()*1.2;
-    candles.push({ts, o, h:Math.max(o,c)+Math.abs(nrand())*1.4, l:Math.min(o,c)-Math.abs(nrand())*1.4, c});
-    px = c;
-
+  // ── per-minute per-strike net GEX (RTH only, like the real trail) ──
+  const mins = [];
+  for (const bar of m1){
+    if (bar.ts < RTH_OPEN_UTC) continue;
+    const frac = (bar.ts - RTH_OPEN_UTC)/(RTH_CLOSE_UTC - RTH_OPEN_UTC);
     const cells = [];
     for (const k of strikes){
       let v = 0;
       for (const sh of shelves){
         const d = Math.abs(k - sh.k);
-        const sig = 3 + 6*(1-conc);
+        const sig = 2.5 + 5*(1-conc);         // SPX points — ~1 strike wide
         const amp = Math.exp(-(d*d)/(2*sig*sig)) * sh.w;
-        // walls BUILD through the day; secondaries fade
         const grow = sh.w > 0.8 ? (0.35 + 0.65*frac) : (0.9 - 0.4*frac);
         v += sh.sign * amp * grow;
       }
-      // long tail so there's something to be "small"
-      v += (k > flip ? 1 : -1) * Math.abs(nrand()) * 0.05 * (1-conc*0.6);
+      v += (k + BASIS > flipEs ? 1 : -1) * Math.abs(nrand()) * 0.05 * (1-conc*0.6);
       v += nrand() * 0.04 * noiseAmp;
-      // spike weight — this is what makes the top wall dwarf everything
       const mag = Math.pow(Math.abs(v), 1 + conc*1.6) * 1e6;
       if (mag > 1) cells.push({strike:k, v: Math.sign(v)*mag});
     }
-    mins.push({ts, cells});
+    mins.push({ts: bar.ts, cells});
   }
-  DATA = {strikes, mins, candles, lo:LO, hi:HI};
+
+  DATA = {strikes, mins, m1, lo, hi, flip: flipEs,
+          callWall: SPX_CALL_WALL + BASIS, putWall: SPX_PUT_WALL + BASIS};
+}
+
+/* 1-min bars → the selected timeframe, anchored to 09:30 ET (so the RTH
+   close forces a short final bar, exactly like the live chart). */
+function candlesFor(tfMin){
+  const ms = tfMin*60000, out = [], byBar = new Map();
+  for (const b of DATA.m1){
+    const anchor = b.ts >= RTH_OPEN_UTC ? RTH_OPEN_UTC : PRE_OPEN_UTC;
+    const start = anchor + Math.floor((b.ts - anchor)/ms)*ms;
+    let c = byBar.get(start);
+    if (!c){ c = {ts:start, o:b.o, h:b.h, l:b.l, c:b.c, v:0}; byBar.set(start, c); out.push(c); }
+    c.h = Math.max(c.h, b.h); c.l = Math.min(c.l, b.l); c.c = b.c; c.v += b.v;
+  }
+  out.sort((a,b)=>a.ts-b.ts);
+  return out;
+}
+/* The live `barAt()` — index of the candle containing ts. */
+function barIndexAt(cands, ts){
+  let a = 0, b = cands.length-1, r = -1;
+  while (a <= b){ const m = (a+b)>>1; if (cands[m].ts <= ts){ r = m; a = m+1; } else b = m-1; }
+  return r;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
    BUCKETING + NORMALIZATION — mirrors the real draw block, then adds the
    alternate scale modes so their effect on VARIANCE is directly visible.
    ════════════════════════════════════════════════════════════════════ */
-function bucketize(){
-  const ms = cfg.bucket*60000;
+function bucketize(cands){
+  // "bar" buckets by the CONTAINING CANDLE (the live default) — not by
+  // floor(ts / bucketMs), which would straddle two candles at 15m+.
   const by = new Map();
-  for (const m of DATA.mins) by.set(Math.floor(m.ts/ms)*ms, m); // last-in-bucket wins (live behavior)
+  if (cfg.bucket === 'bar'){
+    for (const m of DATA.mins){
+      const i = barIndexAt(cands, m.ts);
+      if (i >= 0) by.set(cands[i].ts, m);          // last minute in the bar wins
+    }
+  } else {
+    const ms = (+cfg.bucket)*60000;
+    for (const m of DATA.mins) by.set(Math.floor(m.ts/ms)*ms, m);
+  }
   return [...by.entries()].map(([ts,m]) => ({ts, cells:m.cells})).sort((a,b)=>a.ts-b.ts);
 }
 
@@ -485,39 +558,128 @@ function drawScene(cfgUse, y0, y1, label){
   const saved = {...cfg};
   Object.assign(cfg, cfgUse);
 
-  const cols = bucketize();
+  // ── chart frame, matched to the live ES Candles chart ────────────────
+  // Colours, axis and candle geometry copied from EsChartCard's
+  // lightweight-charts setup: up #30d158 / down #ff5b5b with same-colour
+  // borders, grid rgba(255,255,255,.06), axis text rgba(255,255,255,.70),
+  // grey last-price line (#9ca3af), Call Wall / Flip / Put Wall dashes.
+  const UP = '#30d158', DN = '#ff5b5b', SPOT_GRAY = '#9ca3af';
+  const padL = 8, padR = 74, top = y0 + 10;
+  const axisH = 20;
+  const volH  = cfg.showVolume ? Math.round((y1 - y0) * 0.16) : 0;
+  const bot   = y1 - axisH - volH - 6;             // price pane bottom
+  const plotR = W - padR;
+
+  const cands = candlesFor(+cfg.tf);
+  const cols  = bucketize(cands);
   const scales = computeScales(cols);
   const sel = selection(cols);
 
-  const padL = 8, padR = 70, top = y0 + 8, bot = y1 - 8;
-  const lo = DATA.lo, hi = DATA.hi;
+  // Price range: the session's own high/low with a little air, like autofit.
+  const pad = (DATA.hi - DATA.lo) * 0.06;
+  const lo = DATA.lo - pad, hi = DATA.hi + pad;
   const yOf = p => bot - ((p - lo)/(hi - lo))*(bot - top);
-  const t0 = DATA.mins[0].ts, t1 = DATA.mins[DATA.mins.length-1].ts;
-  const xOf = t => padL + ((t - t0)/(t1 - t0))*(W - padL - padR);
+
+  // Bar geometry: fixed barSpacing with a 3-bar right offset, same as LWC.
+  const RIGHT_BARS = 3;
+  const bs = (plotR - padL) / (cands.length + RIGHT_BARS);
+  const xOfBar = i => padL + (i + 0.5)*bs;
+  // Sub-bar timestamps land at their own offset inside the containing bar —
+  // this is the live `xAt(bucketOf(ts))`, not a linear time scale.
+  const tfMs = (+cfg.tf)*60000;
+  const xOf = t => {
+    const i = barIndexAt(cands, t);
+    if (i < 0) return null;
+    return cfg.bucket === 'bar' ? xOfBar(i)
+      : padL + (i + Math.min(0.999, (t - cands[i].ts)/tfMs))*bs + bs*0.5;
+  };
 
   ctx.save();
   ctx.beginPath(); ctx.rect(0, y0, W, y1-y0); ctx.clip();
-
-  // backdrop + grid
   ctx.fillStyle = '#0b1016'; ctx.fillRect(0, y0, W, y1-y0);
-  ctx.strokeStyle = 'rgba(255,255,255,.04)'; ctx.lineWidth = 1;
-  for (let p = Math.ceil(lo/10)*10; p <= hi; p += 10){
-    const y = yOf(p); ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W-padR,y); ctx.stroke();
-    ctx.fillStyle = 'rgba(160,175,195,.45)'; ctx.font = '10px Inter,sans-serif';
-    ctx.fillText(p.toFixed(2), W-padR+6, y+3);
+
+  // horizontal grid + right price axis (nice 2.5 / 5 / 10 steps)
+  const rawStep = (hi - lo) / Math.max(4, Math.floor((bot - top)/28));
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const step = [1,2,2.5,5,10].map(m=>m*mag).find(s=>s>=rawStep) || 10*mag;
+  ctx.font = '10px Inter, system-ui, sans-serif';
+  for (let p = Math.ceil(lo/step)*step; p <= hi; p += step){
+    const y = yOf(p);
+    ctx.strokeStyle = 'rgba(255,255,255,.06)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, y+0.5); ctx.lineTo(plotR, y+0.5); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,.70)';
+    ctx.fillText(p.toFixed(2), plotR + 7, y + 3);
+  }
+  // vertical grid every 30 minutes + the ET time axis
+  ctx.textAlign = 'center';
+  for (let i = 0; i < cands.length; i++){
+    const d = new Date(cands[i].ts);
+    const mm = d.getUTCHours()*60 + d.getUTCMinutes();
+    if (mm % 30) continue;
+    const x = xOfBar(i);
+    ctx.strokeStyle = 'rgba(255,255,255,.06)';
+    ctx.beginPath(); ctx.moveTo(x+0.5, y0); ctx.lineTo(x+0.5, y1-axisH); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,.70)';
+    ctx.fillText(d.toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit',hour12:false}), x, y1-6);
+  }
+  ctx.textAlign = 'left';
+  ctx.strokeStyle = 'rgba(255,255,255,.10)';
+  ctx.beginPath(); ctx.moveTo(plotR+0.5, y0); ctx.lineTo(plotR+0.5, y1); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, y1-axisH+0.5); ctx.lineTo(W, y1-axisH+0.5); ctx.stroke();
+
+  // volume pane
+  if (cfg.showVolume){
+    const vTop = y1 - axisH - volH, vBot = y1 - axisH - 2;
+    let vMax = 0; for (const k of cands) vMax = Math.max(vMax, k.v);
+    const bw = Math.max(1, bs*0.7);
+    for (let i = 0; i < cands.length; i++){
+      const k = cands[i], up = k.c >= k.o;
+      const h2 = (k.v/(vMax||1))*(vBot-vTop);
+      ctx.fillStyle = up ? 'rgba(48,209,88,.45)' : 'rgba(255,91,91,.45)';
+      ctx.fillRect(xOfBar(i)-bw/2, vBot-h2, bw, h2);
+    }
   }
 
-  // candles
+  // candles — bodies with same-colour 1px borders, 1px wicks, min 1px body
   if (cfg.showCandles){
-    const bw = Math.max(1.4, (W-padL-padR)/DATA.candles.length*0.7);
-    for (const k of DATA.candles){
-      const x = xOf(k.ts), up = k.c >= k.o;
-      ctx.strokeStyle = up ? 'rgba(38,166,154,.55)' : 'rgba(239,83,80,.55)';
-      ctx.fillStyle   = up ? 'rgba(38,166,154,.45)' : 'rgba(239,83,80,.45)';
-      ctx.beginPath(); ctx.moveTo(x, yOf(k.h)); ctx.lineTo(x, yOf(k.l)); ctx.stroke();
+    const bw = Math.max(1, Math.floor(bs*0.8) - (Math.floor(bs*0.8)%2===0 ? 1 : 0));
+    for (let i = 0; i < cands.length; i++){
+      const k = cands[i], up = k.c >= k.o, col = up ? UP : DN;
+      const x = Math.round(xOfBar(i)) + 0.5;
+      ctx.strokeStyle = col; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, Math.round(yOf(k.h))); ctx.lineTo(x, Math.round(yOf(k.l))); ctx.stroke();
       const yo = yOf(k.o), yc = yOf(k.c);
-      ctx.fillRect(x-bw/2, Math.min(yo,yc), bw, Math.max(1, Math.abs(yc-yo)));
+      const bTop = Math.round(Math.min(yo,yc)), bH = Math.max(1, Math.round(Math.abs(yc-yo)));
+      ctx.fillStyle = col;
+      ctx.fillRect(Math.round(x - bw/2), bTop, bw, bH);
+      if (bH > 1){ ctx.strokeStyle = col; ctx.strokeRect(Math.round(x - bw/2)+0.5, bTop+0.5, bw-1, bH-1); }
     }
+  }
+
+  // GEX level lines + right-axis tags (Call Wall / Flip / Put Wall) and spot
+  const tag = (price, color, label, textCol) => {
+    const y = yOf(price); if (y < y0 || y > bot) return;
+    ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.setLineDash([4,3]);
+    ctx.beginPath(); ctx.moveTo(0, y+0.5); ctx.lineTo(plotR, y+0.5); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = '10px Inter, system-ui, sans-serif';
+    const tw = ctx.measureText(label).width + 10;
+    ctx.fillStyle = color; ctx.fillRect(plotR - tw - 62, y-7, tw, 14);
+    ctx.fillStyle = textCol || '#001018'; ctx.fillText(label, plotR - tw - 57, y+3);
+    ctx.fillStyle = color; ctx.fillRect(plotR+1, y-7, padR-2, 14);
+    ctx.fillStyle = textCol || '#001018'; ctx.fillText(price.toFixed(2), plotR+6, y+3);
+  };
+  if (cfg.showLevels){
+    tag(DATA.callWall, UP, 'Call Wall');
+    tag(DATA.flip, '#f5c518', 'Flip');
+    tag(DATA.putWall, DN, 'Put Wall');
+    const last = cands[cands.length-1].c, y = yOf(last);
+    ctx.strokeStyle = SPOT_GRAY; ctx.setLineDash([2,2]);
+    ctx.beginPath(); ctx.moveTo(0, y+0.5); ctx.lineTo(plotR, y+0.5); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = SPOT_GRAY; ctx.fillRect(plotR+1, y-7, padR-2, 14);
+    ctx.fillStyle = '#001018'; ctx.font = '10px Inter, system-ui, sans-serif';
+    ctx.fillText(last.toFixed(2), plotR+6, y+3);
   }
 
   // ── mark geometry ────────────────────────────────────────────────────
@@ -632,8 +794,10 @@ function drawScene(cfgUse, y0, y1, label){
   const minOp = Math.max(0.05, 1 - b01);
   let drawn = 0, rMin = 1e9, rMax = 0, rSum = 0, rr = [];
 
-  const colW = Math.max(1.2, (W - padL - padR) / Math.max(1, cols.length));
-  const rowH = Math.max(1.2, Math.abs(yOf(lo) - yOf(lo + 2.5)));
+  // One bubble slot = one bucket wide × one STRIKE tall (5 SPX points), the
+  // same grid the live chart lands them on.
+  const colW = Math.max(1.2, cfg.bucket === 'bar' ? bs : bs * ((+cfg.bucket)/(+cfg.tf)));
+  const rowH = Math.max(1.2, Math.abs(yOf(lo) - yOf(lo + STRIKE_STEP)));
   const marks = [];
 
   ctx.save();
@@ -641,15 +805,16 @@ function drawScene(cfgUse, y0, y1, label){
   let ji = 0;
   cols.forEach((col, ci) => {
     const x0 = xOf(col.ts);
-    if (x0 < -30 || x0 > W+30) return;
+    if (x0 == null || x0 < -30 || x0 > W+30) return;
     const shown = sel.shown.get(col.ts), wall = sel.walls.get(col.ts);
     const age = 1 - ci/Math.max(1, cols.length-1); // 1 = oldest
     for (const cell of col.cells){
       if (!shown.has(cell.strike)) continue;
       const r01 = ratioFor(cell, col, scales);
       if (r01 < cfg.cutoff) continue;
-      const y = yOf(cell.strike);
-      if (y < y0-20 || y > y1+20) continue;
+      // SPX strike → ES price, the one conversion the live page uses.
+      const y = yOf(cell.strike + BASIS);
+      if (y < y0-20 || y > bot+20) continue;
       const isHi = wall.has(cell.strike);
 
       const shaped = cfg.sizeCurve === 'sqrt' ? shapeSqrt(Math.pow(r01, cfg.sizeGamma/0.5)) : shape01(r01);
@@ -745,7 +910,7 @@ function drawScene(cfgUse, y0, y1, label){
 
   // ── size legend ──
   if (cfg.legend && rMax > 0){
-    const ys = y1 - 22, xs = 14;
+    const ys = bot - 8, xs = 14;
     ctx.save();
     ctx.fillStyle = 'rgba(8,12,18,.75)';
     ctx.fillRect(xs-8, ys-24, 260, 34);
@@ -756,17 +921,17 @@ function drawScene(cfgUse, y0, y1, label){
       const x = xs + 18 + i*40;
       ctx.fillStyle = `rgba(41,182,246,${(minOp + Math.pow(q,cfg.opGamma)*(cfg.opMax-minOp)).toFixed(2)})`;
       drawMark(cfg.shape, x, ys-8, r, ctx.fillStyle, [41,182,246], 1, true, 26, rowH);
-      ctx.fillStyle = 'rgba(160,175,195,.7)'; ctx.font = '9px Inter,sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.font = '9px Inter,sans-serif';
       ctx.fillText(r.toFixed(1), x-6, ys+6);
     });
-    ctx.fillStyle = 'rgba(160,175,195,.7)'; ctx.font = '9px Inter,sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.font = '9px Inter,sans-serif';
     ctx.fillText('px', xs-2, ys-6);
     ctx.restore();
   }
 
   // label
   if (label){
-    ctx.fillStyle = 'rgba(255,255,255,.55)'; ctx.font = '11px Inter,sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,.95)'; ctx.font = '11px Inter,sans-serif';
     ctx.fillText(label, 10, y0 + 16);
   }
   ctx.restore();
@@ -782,7 +947,8 @@ function draw(){
   let s;
   if (cfg.splitView){
     const mid = Math.floor(H/2);
-    drawScene({...LIVE, bucket:cfg.bucket, conc:cfg.conc, noise:cfg.noise, showCandles:cfg.showCandles}, 0, mid, 'LIVE CONFIG');
+    drawScene({...LIVE, tf:cfg.tf, bucket:cfg.bucket, conc:cfg.conc, noise:cfg.noise,
+      showCandles:cfg.showCandles, showVolume:cfg.showVolume, showLevels:cfg.showLevels}, 0, mid, 'LIVE CONFIG');
     ctx.strokeStyle = 'rgba(255,255,255,.12)';
     ctx.beginPath(); ctx.moveTo(0,mid); ctx.lineTo(W,mid); ctx.stroke();
     s = drawScene(cfg, mid, H, 'TUNED');
@@ -790,16 +956,162 @@ function draw(){
     s = drawScene(cfg, 0, H, '');
   }
   document.getElementById('stats').innerHTML =
-    `columns <b>${s.cols}</b>` +
-    `<span>bubbles <b>${s.drawn}</b></span>` +
-    `<span>radius <b>${s.rMin.toFixed(2)}–${s.rMax.toFixed(2)}px</b></span>` +
-    `<span>mean <b>${s.mean.toFixed(2)}px</b></span>` +
-    `<span>σ <b>${s.sd.toFixed(2)}</b></span>` +
-    `<span>variance index (σ/mean) <b style="color:${s.cv>0.55?'#4ade80':s.cv>0.3?'#f5c518':'#ff4757'}">${s.cv.toFixed(3)}</b></span>` +
-    `<span style="color:#6b7889">higher = more size spread</span>`;
+    `<span title="Time buckets drawn. Set by the Bucket slider — fewer, wider columns leave more room for sizes to differ.">columns <b>${s.cols}</b></span>` +
+    `<span title="Total marks on screen after Show-top-strikes and Cutoff have filtered. Above ~2000 the trail reads as a solid mass no matter what the sizes are.">bubbles <b>${s.drawn}</b></span>` +
+    `<span title="Smallest and largest radius actually drawn. This is the real px budget the eye has to work with — the live config only spans about 2.8–5.4px.">radius <b>${s.rMin.toFixed(2)}–${s.rMax.toFixed(2)}px</b></span>` +
+    `<span title="Average radius. Rising mean with flat σ means everything just got bigger, not more varied.">mean <b>${s.mean.toFixed(2)}px</b></span>` +
+    `<span title="Standard deviation of the radii — the absolute spread in px.">σ <b>${s.sd.toFixed(2)}</b></span>` +
+    `<span title="σ ÷ mean. Scale-free measure of how different the bubbles are from each other. Live config ≈ 0.21 (the complaint). Above ~0.5 the walls clearly separate from the tail.">variance index (σ/mean) <b style="color:${s.cv>0.55?'#4ade80':s.cv>0.3?'#f5c518':'#ff4757'}">${s.cv.toFixed(3)}</b></span>` +
+    `<span style="color:#ffffff">higher = more size spread · hover any stat for what it means</span>`;
   document.getElementById('modeTag').textContent =
     `${cfg.normMode} · ${cfg.sizeCurve} γ${cfg.sizeGamma} · ${cfg.minSize}–${cfg.maxSize}px`;
   document.getElementById('cfgOut').textContent = JSON.stringify(cfg, null, 2);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   WHAT EACH NUMBER DOES — one line per control, injected under its row.
+   Selects also get a line for the OPTION currently chosen.
+   ════════════════════════════════════════════════════════════════════ */
+const DESC = {
+  normMode:"What each strike's |GEX| is divided by to get its <b>ratio</b> (0–1). Every size, opacity and colour downstream is driven by that ratio — so this is the single biggest lever on how much the bubbles differ.",
+  rollWin:"How many columns back the rolling max looks. <b>Small (10–20)</b> = each bubble only competes with recent history, so a fading wall shrinks and a fresh one swells → lots of movement. <b>Large</b> = behaves like the session max.",
+  pctile:"Which percentile of all |GEX| seen so far counts as full size. <b>Lower (85)</b> = more bubbles clamp at max, so the top of the range flattens but the tail spreads out. <b>100</b> = the single biggest print sets the scale.",
+  floorPct:"The divisor can never fall below this % of the session max. Stops the first few columns of the day — when the running max is tiny — from all printing at max size. <b>Raise it</b> and the morning bubbles start smaller.",
+  stretch:"Rescales every column against its own min and max, so the weakest strike in that column is 0 and the strongest is 1. Maximum contrast <i>within</i> a column, but you can no longer compare 10:00 to 15:00.",
+
+  sizeCurve:"How the 0–1 ratio is bent before it becomes a radius. This is where 'everything looks the same size' is usually decided.",
+  sizeGamma:"Exponent applied to the ratio. <b>&lt;1</b> inflates weak strikes so everything looks big and uniform (sqrt is effectively 0.5 — the current problem). <b>1</b> is linear. <b>&gt;1</b> crushes weak strikes so only real walls get size. <b>The main variance dial.</b>",
+  sizeSteps:"Only used by the <i>quantized</i> curve: how many discrete radii exist. <b>3–4</b> gives clean poster-like tiers (tiny / medium / wall) with no in-between mush.",
+  minSize:"Radius of the weakest bubble that still draws. Every bubble is min + curve×(max−min), so <b>raising this flattens variance</b> — it lifts the floor under everything. Lower it to make the tail nearly invisible.",
+  maxSize:"Radius of a full-ratio bubble. <b>max − min is the entire px budget for variance</b>: at 0.5→4 the whole session lives in 3.5px, which is why walls and tail look alike. Widen it before anything else.",
+  sizeJitter:"Random ±% wobble on each radius. Purely cosmetic — breaks up the mechanical grid so the trail looks organic. Adds no information, and too much makes sizes untrustworthy.",
+
+  topStrikes:"How many strike rows draw per column, ranked strongest first. <b>More</b> = denser trail with a long tail of small dots; <b>fewer</b> = only the meaningful levels, which reads cleaner but hides context.",
+  highlight:"How many of those rows count as <b>walls</b> — they get the hot colour, full opacity, the radius boost and the glow. Keep it at 2–4; more and nothing stands out.",
+  cutoff:"Bubbles whose ratio is below this are not drawn at all. <b>The cheapest variance win</b>: clearing the haze of near-identical small dots makes the remaining spread obvious.",
+  rankMode:"Which strikes qualify as 'top N' in each column.",
+
+  brightness:"Sets the opacity floor: weakest bubble = 1 − brightness/100. At <b>84</b> the faintest sits at 0.16 alpha. Higher = a bigger brightness gap between tail and walls, which reads as variance even at identical sizes.",
+  opGamma:"Exponent on the ratio before opacity. <b>&gt;1</b> means only the strongest stay bright and the middle of the pack drops back — a second variance channel that costs no pixels.",
+  opMax:"Alpha of the strongest bubble. Pull it under 1 to let the candles and grid show through a heavy trail.",
+  ageFade:"Fades older columns toward transparent. <b>0</b> = the whole session reads equally. <b>High</b> = the last hour dominates and the morning is a ghost.",
+
+  colorMix:"How far a strong bubble travels from its base hue toward the hot near-white one. Size isn't the only way to show magnitude — heat carries it without costing space.",
+  colorGamma:"Exponent on the ratio before the colour ramp. <b>Higher</b> = only the very top goes white-hot and everything else stays flat blue/red.",
+  satBoost:"Pushes colours away from grey (positive) or toward grey (negative). Desaturating the tail is another way to make walls pop.",
+  colorBySign:"Blue for +GEX (call gamma), red for −GEX (put gamma). Off = one palette for everything, so the only signal is magnitude.",
+
+  glowMax:"Maximum shadow blur in px. Glow makes a big bubble occupy far more visual space than its radius does — often more effective than raising max size.",
+  glowThresh:"When 'glow scales with size' is on, the minimum ratio that earns any glow. Raise it so only the top few percent bloom.",
+  hiBoost:"Radius multiplier applied to the highlighted walls only. A cheap way to separate walls from the pack without touching the main size curve.",
+  glowAll:"Off = only the highlighted walls glow. On = every bubble above the threshold glows, scaled by its ratio, so the whole trail has depth.",
+
+  shape:"The mark drawn at each strike/time slot. Form is a third variance channel alongside size and colour — and on a dense trail it often reads faster than radius.",
+  shape2:"Used for −GEX strikes when the toggle above is on.",
+  shapeBySign:"Give puts a different mark from calls, so the two read apart by <b>form</b> as well as by hue — useful in print or when colour is already doing too much work.",
+  aspect:"Width ÷ height of the mark. <b>&lt;1</b> = tall and narrow, so adjacent columns stay separate; <b>&gt;1</b> = wide, which merges columns into rails.",
+  outlineW:"White stroke around every mark. Its real job is separating overlapping bubbles in a dense cluster so you can still count them.",
+  coreDot:"White dot at the centre, sized as a % of the radius. Gives large bubbles a bright nucleus so the eye finds the peak instantly.",
+  rotate:"Rotates the angular marks (square, diamond, cross, star). Mostly taste — 45° turns squares into diamonds.",
+  xJitter:"Random horizontal offset in px. Softens the hard column grid; too much and bubbles drift off their own bar.",
+  additive:"Overlapping marks add their light instead of covering each other, so clusters bloom bright. Looks great on sparse data, turns dense data into a white smear.",
+
+  ribbon:"Connects the same strike across time into a continuous shape whose half-thickness is the bubble radius — a wall becomes one tube that swells and tapers instead of a row of dots.",
+  ribbonOp:"Alpha of the band. Keep it low (30–45) if the marks are still drawing on top, high if the ribbon is the only thing showing.",
+  ribbonMul:"Multiplies the ribbon's thickness relative to the bubble radius. <b>&gt;1</b> exaggerates the swell/taper so the gamma build is readable from across the room.",
+  ribbonSmooth:"Blends each column's thickness with its neighbours. <b>0</b> = a jagged comb that shows every tick; <b>100</b> = a smooth tube that shows the trend.",
+  marksOn:"Keep drawing the individual bubbles on top of the ribbon. Off = ribbon only, which is much cleaner but loses the per-minute detail.",
+  legend:"Shows the active mark at ratios 0.05 → 1.0 with the resulting px radius under each, so you can see the curve's compression directly instead of inferring it.",
+
+  tf:"Candle size, same switcher as the live page. GEX storage is always 1-minute; this only changes the bars — and, when the bucket below is set to <b>bar</b>, how many bubble columns there are.",
+  bucket:"How the 1-minute GEX store is collapsed into columns at draw time. <b>bar</b> — one column per candle, the live default, and the only setting that holds when you change timeframe. A fixed 1/5/15/30 puts several columns inside one candle at higher timeframes, which merges them back into the solid rail the bucket exists to prevent.",
+  showLevels:"Draws the Call Wall, Flip and Put Wall dashes with right-axis tags, plus the grey last-price line — the same levels and colours the live chart puts on the candle series.",
+  showVolume:"The volume histogram under the price pane, coloured by bar direction like the live page.",
+  conc:"Synthetic-data knob: how dominant the walls are versus the tail. <b>High</b> = two huge strikes and nothing else, which is the worst case for variance — tune against it.",
+  noise:"Synthetic-data knob: random wobble in the generated GEX. Raise it to check a setting still reads when the feed is messy.",
+  showCandles:"Draw the price candles behind the trail. Turn off to judge the bubbles on their own.",
+  splitView:"Splits the canvas: the current live config on top, your tuned config below, same data and same scale. The honest before/after.",
+};
+
+const OPT = {
+  'normMode:expanding':"Divides by the largest |GEX| seen from the open up to that column, so a printed bubble can never shrink later. Safe and stable, but the divisor only grows — by the afternoon almost everything is small and similar.",
+  'normMode:session':"Divides everything by the day's single largest value. One consistent scale, but the whole morning is measured against a close that hadn't happened yet.",
+  'normMode:column':"Each column is scaled to its own biggest strike. Maximum spread inside every column — but every column now has a full-size bubble, so you lose 'the whole day was quiet'.",
+  'normMode:rolling':"Divides by the max over the last N columns. Local contrast that still respects time — usually the best balance of variance and honesty.",
+  'normMode:pctile':"Divides by the Nth percentile instead of the max, so a single freak print can't compress everything else. Values above it clamp at full size.",
+  'normMode:rank':"Ignores magnitude entirely — size comes from the strike's rank within the column. Perfectly even spread, but a 10× wall looks only one step bigger than #2.",
+  'normMode:zscore':"Size from how many standard deviations above the column mean a strike sits. Highlights the genuinely unusual rather than the merely large.",
+
+  'sizeCurve:sqrt':"√ratio — what ships today. Bubble AREA tracks |GEX|, which is technically correct but visually flattens the top: 0.5 of the max already draws at 71% of full size.",
+  'sizeCurve:linear':"Radius tracks the ratio one-for-one. More spread than sqrt, and easier to reason about.",
+  'sizeCurve:pow':"ratio^γ, with γ from the slider below. The most controllable option — γ≈1.5 is the usual sweet spot for visible variance.",
+  'sizeCurve:log':"Compresses the top hard so mid-range strikes get most of the travel. Use when a couple of walls dwarf everything.",
+  'sizeCurve:expo':"Explodes the top of the range: only near-max strikes get any real size. Dramatic, and it hides the mid-field.",
+  'sizeCurve:scurve':"Smoothstep — flat at both ends, steep through the middle. Pushes strikes decisively into 'small' or 'big' with little in between.",
+  'sizeCurve:step':"Quantizes into N discrete radii. Nothing looks 'almost the same size' because only a few sizes exist.",
+
+  'rankMode:peakSoFar':"Ranks by each strike's peak up to that column — what ships today. A strike that was top-N at 10:00 keeps its trail all day, so the tubes stay unbroken.",
+  'rankMode:column':"Re-ranks from scratch every column. The trail flickers as strikes drop in and out, but it always shows what matters right now.",
+  'rankMode:session':"Ranks once over the whole day. The cleanest tubes, but it's hindsight — the 09:35 column shows strikes that only mattered at 15:50.",
+
+  'shape:circle':"The current mark. Neutral and dense-packing; all the variance has to come from radius.",
+  'shape:oval':"Wider than tall — merges horizontally into rails, so the level reads before the individual minute does.",
+  'shape:capsule':"Taller than wide — columns stay separate at tight bucket sizes, good for 1m data.",
+  'shape:ring':"Outline only. Overlapping rings stay countable where filled circles turn into a blob.",
+  'shape:donut':"Filled with a punched-out core. Reads bright without flooding the area behind it.",
+  'shape:soft':"A radial falloff with no hard edge. Small values almost vanish and walls bloom — big perceived variance from unchanged radii.",
+  'shape:arc':"Half-disc opening up for +GEX and down for −GEX, so sign is legible with no colour at all.",
+  'shape:comet':"A head with a tail into the past — direction of travel built into the mark.",
+  'shape:tick':"A vertical line. Length carries magnitude, and the thin width keeps columns apart even on 1m data.",
+  'shape:hline':"A horizontal line spanning the bucket. Emphasises the level as a price, not as an event.",
+  'shape:bar':"Grows sideways from the column. Closest to a per-minute bar chart laid over price.",
+  'shape:pill':"A rounded bar — softer than a rect, still level-oriented.",
+  'shape:cell':"Fills the whole bucket × strike slot, so only opacity and colour vary. A true heatmap: no size channel at all.",
+  'shape:wick':"A thin stem with a dot at the strike — marks the level precisely while keeping a visible centre.",
+  'shape:ladder':"A tapered rung, thick at the strike and feathered at the ends. Reads as a level without a hard box.",
+  'shape:diamond':"Angular, and visually distinct from candles and grid lines.",
+  'shape:square':"Even visual weight; packs into a lattice at high density.",
+  'shape:hex':"Rounder than a square at the same area, and tiles cleanly.",
+  'shape:triangle':"Points up for +GEX and down for −GEX. Sign is readable in greyscale.",
+  'shape:cross':"Marks a precise intersection of time and strike; stays legible at tiny sizes where a dot disappears.",
+  'shape:star':"Spiky and loud. Reserve it for a walls-only layer.",
+  'shape:chevron':"A directional arrow — useful when pairing gamma with a bias read.",
+
+  'ribbon:off':"No connection between columns; only the individual marks draw.",
+  'ribbon:band':"A filled band per strike whose half-thickness is the bubble radius — the swell and taper of gamma over the session, in one shape.",
+  'ribbon:line':"A centre line only, no thickness. Traces which strikes persisted without adding ink.",
+  'ribbon:area':"Band plus a centre line, so the level stays precise while the thickness carries magnitude.",
+  'ribbon:step':"A squared-off band that changes only at column boundaries — honest about the fact that the data is bucketed.",
+};
+
+function pretty(id){
+  const el = document.getElementById(id);
+  if (!el) return '';
+  if (el.tagName === 'SELECT'){
+    const o = el.selectedOptions[0];
+    return o ? o.textContent : '';
+  }
+  return '';
+}
+function injectDesc(){
+  for (const id of Object.keys(DESC)){
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const row = el.closest('.row') || el.closest('.chk');
+    if (!row || row.nextElementSibling?.classList?.contains('desc')) continue;
+    const d = document.createElement('div');
+    d.className = 'desc'; d.id = 'd_' + id;
+    row.after(d);
+  }
+  refreshDesc();
+}
+function refreshDesc(){
+  for (const id of Object.keys(DESC)){
+    const d = document.getElementById('d_' + id);
+    if (!d) continue;
+    const opt = OPT[id + ':' + cfg[id]];
+    d.innerHTML = DESC[id] + (opt ? `<br><span class="now">${pretty(id)} —</span> ${opt}` : '');
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -824,15 +1136,19 @@ for (const id of IDS){
             : parseFloat(el.value);
     const v = document.getElementById('v_'+id);
     if (v) v.textContent = typeof cfg[id] === 'number' ? (Number.isInteger(cfg[id]) ? cfg[id] : cfg[id].toFixed(2)) : cfg[id];
+    if (el.tagName === 'SELECT') refreshDesc();
     if (id === 'conc' || id === 'noise') buildData();
     draw();
   });
 }
 document.querySelectorAll('[data-preset]').forEach(b => b.addEventListener('click', () => {
-  Object.assign(cfg, PRESETS[b.dataset.preset]); syncUI(); buildData(); draw();
+  Object.assign(cfg, PRESETS[b.dataset.preset]); syncUI(); refreshDesc(); buildData(); draw();
 }));
+document.getElementById('showDesc').addEventListener('change', e => {
+  document.getElementById('rail').classList.toggle('nodesc', !e.target.checked);
+});
 document.getElementById('reseed').onclick = () => { buildData.bump = (buildData.bump||0)+7; buildData(); draw(); };
-document.getElementById('resetAll').onclick = () => { Object.assign(cfg, LIVE); syncUI(); buildData(); draw(); };
+document.getElementById('resetAll').onclick = () => { Object.assign(cfg, LIVE); syncUI(); refreshDesc(); buildData(); draw(); };
 document.getElementById('copyCfg').onclick = () =>
   navigator.clipboard.writeText(JSON.stringify(cfg, null, 2));
 document.getElementById('copyPatch').onclick = () => navigator.clipboard.writeText(
@@ -849,7 +1165,7 @@ document.getElementById('copyPatch').onclick = () => navigator.clipboard.writeTe
 BUBBLE_CFG_DEFAULT = { topStrikes: ${cfg.topStrikes}, highlight: ${cfg.highlight}, minSize: ${cfg.minSize}, maxSize: ${cfg.maxSize}, brightness: ${cfg.brightness} };`
 );
 
-syncUI(); buildData(); resize();
+syncUI(); injectDesc(); buildData(); resize();
 </script>
 </body>
 </html>

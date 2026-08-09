@@ -60,6 +60,8 @@ export default function LandingClient() {
         @media (prefers-reduced-motion: reduce) { .fw { animation: none !important; opacity: 1; } }
         .landing-feature { transition: border-color .18s, box-shadow .18s, transform .18s; cursor: pointer; }
         .landing-feature:hover { border-color: rgba(33,158,188,0.45) !important; box-shadow: 0 0 18px rgba(33,158,188,0.25); transform: translateY(-2px); }
+        .bzila-card { transition: border-color .18s, box-shadow .18s, transform .18s; }
+        .bzila-card:hover { border-color: rgba(33,158,188,0.55); box-shadow: 0 0 18px rgba(33,158,188,0.28); transform: translateY(-2px); }
         /* Below the two-column breakpoint the card goes back to a single
            stacked column and the feature grid drops from 3-up to 2-up. */
         @media (max-width: 900px) {
@@ -133,11 +135,14 @@ export default function LandingClient() {
           {/* Two columns on desktop: pitch + proof on the left, product shot on
               the right. Stacking all of it vertically pushed the card well past
               the viewport; side by side it lands in one screen with no scroll. */}
+          {/* Logo is the masthead now: full card width, centered, above BOTH
+              columns. It used to sit inside the left column, capped at half the
+              card width. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/cb-edge-logo.png" alt={APP_NAME} style={logo} className="landing-logo" />
+
           <div style={topGrid} className="landing-top">
             <div>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/cb-edge-logo.png" alt={APP_NAME} style={logo} className="landing-logo" />
-
               <p className="landing-intro" style={{ color: T.muted, fontSize: 16, margin: "0 0 16px", maxWidth: 520, lineHeight: 1.5 }}>
                 A real-time SPX gamma-exposure &amp; options-flow dashboard for serious 0DTE and index
                 traders. See dealer positioning, flow, and key levels the moment they move.
@@ -164,6 +169,24 @@ export default function LandingClient() {
                 into public/ and this becomes a live capture; until then it holds
                 the frame with the existing still. */}
             <div style={{ alignSelf: "center", minWidth: 0 }}>
+              {/* Free section — sits directly above the product shot. */}
+              <Link href="/bzila" style={{ ...bzilaCard, textDecoration: "none" }} className="bzila-card">
+                <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                  <span style={bzilaTag}>Free</span>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 800, fontSize: 16, letterSpacing: "0.02em", color: T.text }}>
+                      Bzila
+                    </div>
+                    <div style={{ color: T.muted, opacity: 0.7, fontSize: 12, lineHeight: 1.35 }}>
+                      Free posts, ideas and levels — no account needed.
+                    </div>
+                  </div>
+                </div>
+                <span style={{ fontSize: 13, fontWeight: 800, color: T.cyan, whiteSpace: "nowrap" }}>
+                  Open →
+                </span>
+              </Link>
+
               <HeroVideo />
             </div>
           </div>
@@ -303,15 +326,46 @@ const cardGlow: React.CSSProperties = {
   filter: "blur(10px)",
 };
 
+// Masthead: centered across the whole card, sized off the card width rather
+// than the old half-width column, so it reads as the page's title.
 const logo: React.CSSProperties = {
   display: "block",
-  width: "100%",
+  width: "min(620px, 100%)",
   maxWidth: "100%",
   height: "auto",
-  maxHeight: 132,
+  maxHeight: 210,
   objectFit: "contain",
-  margin: "0 0 14px",
+  margin: "0 auto 20px",
   filter: "drop-shadow(0 6px 20px rgba(33,158,188,0.25))",
+};
+
+// Free "Bzila" entry point. Styled like a feature cell but wider and with the
+// accent pulled forward — it is a second destination, not a second CTA, so it
+// stays quieter than the trial button.
+const bzilaCard: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12,
+  marginBottom: 14,
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(33,158,188,0.22)",
+  background: "linear-gradient(180deg, rgba(33,158,188,0.10), rgba(255,255,255,0.02))",
+  color: "inherit",
+};
+
+const bzilaTag: React.CSSProperties = {
+  flexShrink: 0,
+  padding: "3px 8px",
+  borderRadius: 999,
+  border: "1px solid rgba(33,158,188,0.45)",
+  background: "rgba(33,158,188,0.16)",
+  color: T.cyan,
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
 };
 
 // Three across on purpose: six features in two rows instead of three keeps the

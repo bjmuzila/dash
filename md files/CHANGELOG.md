@@ -1,498 +1,267 @@
 # Changelog
 
-## 2026-08-09 - budget-vite: home-screen icon was blurry
-
-Assets only — no markup change. The first version dilated the stroke AFTER
-downscaling to 180, which does not draw a thicker line, it smears a 1px line
-into a 3px grey band. That is what read as blur on the home screen.
-
-Rebuilt pipeline, in `budget-vite/public/`:
-
-- **Autocontrast the alpha first.** `heart.png`'s line peaks at 255 but averages
-  11 — most of its width is partial coverage. Fine at 816px, a grey wash once it
-  is one pixel wide.
-- **Thicken at 1024, then downsample once.** The stroke is ~5px at source, i.e.
-  ~1.1px at 180 — too thin to survive. Dilating at the master resolution and
-  resampling once gives a solid line instead of a soft one. `MaxFilter(5)`:
-  enough to read, not enough to close the counters in the script lettering
-  (7 starts filling in "Brandon").
-- **Unsharp after the resample**, which is where the softness actually comes
-  from.
-- The 32px favicon gets a much heavier dilation (11) and no corner glow — the
-  names are illegible at that size regardless, so it is weighted to read as a
-  heart mark rather than a smudge.
-
-180 is the exact tile size on a 3x iPhone, so no size change was needed —
-nothing was being upscaled, the source was just soft.
-
-**iOS caches home-screen icons hard.** Remove the tile and re-add it after
-deploying, or it will keep showing the old one.
-
-
-## 2026-08-09 - budget-vite: status strip is two tiles, side by side
-
-### `src/pages/Today.tsx`
-
-- **"Month elapsed" removed** — from both layouts, not just the phone. It was a
-  progress bar for the passage of time, a fact the date line above it already
-  states, and on a phone it pushed the calendar a third of a screen down.
-- The one figure it carried that isn't derivable — **projected end of month** —
-  moved onto the Money card, directly under the balance. That is the only number
-  it means anything against, and it was on the status strip a full screen away
-  from it. Shown alongside the balance, never instead of it.
-- **Time and weather now sit side by side at every width**, phone included.
-  Stacked, those two tiles were ~200px of chrome above the first thing you came
-  to read.
-- Half a phone width is ~160px, so the tiles shed what doesn't fit rather than
-  wrapping: clock 38→30px, the timezone city drops off the date line, and the
-  place name moves from beside the word "Weather" to under the temperature,
-  where there is room for it.
-- The strip collapses to ONE column when no ZIP is set. A half-width tile with
-  dead space beside it reads as something having failed to load. `StatStrip`
-  now owns that decision and only mounts `WeatherTile` when there is a ZIP, so
-  the tile no longer has to render-nothing on its own.
-
-Typechecks clean.
-
-
-## 2026-08-09 - budget-vite: home-screen icon
-
-Adding budget.cbedge.net to a home screen produced a screenshot of the page,
-because `index.html` declared no icon and no manifest at all.
-
-### New files in `budget-vite/public/`
-
-- `apple-touch-icon.png` (180), `icon-192.png`, `icon-512.png`,
-  `icon-maskable-512.png`, `favicon-32.png`, `manifest.json`.
-- All generated from the existing `public/heart.png` — the same Brandon+Heather
-  line-art already on the Welcome screen — composited over `#05060A` with the
-  app's own cyan corner wash, so the icon and the first screen are visibly the
-  same product.
-- **Opaque, not transparent.** `heart.png` is white strokes on alpha; installed
-  as-is iOS composites it onto black-on-black and you get a blank tile.
-- The stroke is dilated before the downscale. It is a fine pencil line at 816px
-  and straight resampling to 180 leaves a grey whisper.
-- The maskable variant is inset to the middle ~62%. Android crops icons to a
-  circle and would have taken the top of the heart off.
-
-### `budget-vite/index.html`
-
-- `apple-touch-icon`, `icon` and `manifest` links added. iOS ignores manifest
-  icons entirely and uses the apple-touch-icon, which is why both exist.
-- **`theme-color` corrected from `#F7F4ED` to `#05060A`.** It was still the
-  cream value from before the app went dark, so the installed app flashed white
-  on every cold start.
-- `apple-mobile-web-app-status-bar-style` `default` → `black-translucent`. The
-  shell already pads with `env(safe-area-inset-top)` and the viewport is
-  `viewport-fit=cover`, so the page now runs under the status bar instead of
-  leaving a white band above it.
-- Manifest is `.json`, not `.webmanifest`: nginx:alpine's bundled `mime.types`
-  has no entry for that extension and would serve it as
-  `application/octet-stream`. `application/json` is accepted for a manifest and
-  needs no nginx change.
-
-Icons are static assets in `public/` — Vite copies them to the dist root and
-nginx's `try_files` already serves them. No build or config change.
-
-
-## 2026-08-09 - budget-vite: habits grid fits a phone, weather ZIP default
-
-### `src/pages/Today.tsx`
-
-The habits table overflowed its card at 390px. Auto table-layout sizes columns
-to their content and will not shrink below it, so one long habit title pushed
-the whole table past the card edge and the last day columns were clipped.
-
-- **`tableLayout: 'fixed'`**. Day columns get exactly the width they ask for and
-  the habit-name column takes the remainder, so it wraps instead of the table
-  growing.
-- The grid gets narrower on a phone, not the card wider: cells 30→26px and marks
-  21→18px below 860px, name column 14→13px, `overflowWrap: 'anywhere'` on the
-  title.
-- `Mark` takes a `size` and scales its radius and glyph with it, rather than
-  having a second hardcoded copy for the phone.
-
-### `server-v2/_lib-household.cjs`
-
-- `DEFAULT_SETTINGS.weatherZip` is **27591** (Wendell) instead of empty — home
-  for both people on this instance, so neither has to type it in and no DB write
-  was needed to seed it. Still per-user underneath: either can override it in
-  Settings without touching the other, and clearing it to `''` turns the tile off
-  for that person only.
-- Settings copy updated to say so.
-
-Typechecks clean; `node --check` passes on both `.cjs`.
-
-
-## 2026-08-09 - budget-vite: Today paired down, weather tile, Journal tab
-
-### Layout — `src/pages/Today.tsx`
-
-Removed: **In brief**, **Top 3**, **Goals**, **Slipping**, **Active projects**.
-What is left is five rows, each a question answered from two sides:
-
-    strip     time · weather · month pace
-    calendar  full width
-    todo      | habits     what you have to do  | what you keep doing
-    journal   | lists      what you're thinking | what the house needs
-    money     | bills      what you have        | what's leaving
-
-- The calendar is full width again. Halved, the seven-day strip was the
-  narrowest element on the screen.
-- **Todo now lists ALL open tasks.** It previously excluded the starred ones
-  because Top 3 rendered them above; with Top 3 gone that filter would have made
-  starring a task hide it. Stars still show on the row.
-- Nothing was deleted server-side. `top3`, `slipping` and `counts` are still on
-  `/api/hh/today`; Todo and Projects still render the same data on their own
-  screens. This is a home-screen edit only.
-
-### Weather — `server-v2/household-routes.cjs`, `_lib-household.cjs`
-
-- **New `GET /api/hh/weather?zip=NNNNN`** (auth `household`). This is a second
-  copy of the logic in `api-router.js`'s `/api/weather`, NOT a call through to
-  it: that route is registered `auth: 'subscriber'` and resolves an active
-  trading-app session, which an `hh_session` cookie can never satisfy — from
-  budget.cbedge.net it would 401 forever. Upstreams are keyless (zippopotam →
-  Nominatim fallback → open-meteo), so there is no secret to share and no env
-  var to set. **If the WMO table or the provider changes, both copies need it.**
-- Ten-minute in-process cache keyed by ZIP. Today mounts this on every return to
-  the home tab; without it a phone left open all day is a few hundred calls to
-  somebody else's free API.
-- `weatherZip` added to `DEFAULT_SETTINGS` and accepted by `POST
-  /api/hh/settings`. **Per person, not per household** — two people who live
-  together can still be in two places. Empty is a valid saved value: that is how
-  you turn the tile off, so it is not rejected as invalid.
-- The tile renders **nothing at all** with no ZIP set. An empty weather tile is
-  worse than no tile — a permanent hole on the home screen advertising a setting
-  you chose not to fill in. Settings is the only place that mentions it.
-- `useWeather` is `enabled`-gated on a valid ZIP (zero requests when unset),
-  `staleTime` 10min to match the server cache, and `retry: false` — a bad ZIP or
-  a down upstream does not improve on a second attempt, and the tile says so.
-
-### Journal — new tab
-
-- **`src/pages/Journal.tsx`** (new), routed at `/journal`, sixth bottom tab.
-  Entries grouped by day, newest first, with Today/Yesterday labels; the year
-  only appears once it isn't this one.
-- Grouping keys on the **local** date, not the ISO string's UTC date — an entry
-  written at 9pm ET otherwise files itself under tomorrow.
-- Defaults to `kind = 'journal'` with a toggle for the older saved-notes kinds,
-  so a years-old quote pool doesn't bury this week.
-- Delete needs a second tap. This is the one screen whose content is
-  unrecoverable — a task can be retyped, a thought from a Tuesday in March
-  cannot.
-- Today's Journal card is now capture-only and links here.
-
-### `src/components/Shell.tsx`
-
-- Six tabs. At 390px that is 65px each, and "JOURNAL" at 0.12em tracking wraps
-  and drags the bar taller — tracking drops to 0.04em and the size to 9.5px,
-  with `nowrap`. The tracking gives, not the label: the word is what makes the
-  tab findable.
-
-Client typechecks clean; both `.cjs` files pass `node --check`.
-
-
-## 2026-08-09 - budget-vite: Today rebuilt as the Life OS dashboard
-
-Reference layout: status strip, two columns, project lanes, three-across footer.
-**No new tables and no new endpoints** — every block reads something that already
-existed and was only being rendered somewhere else, or not at all:
-
-| Block   | Source                                                        |
-|---------|---------------------------------------------------------------|
-| Goals   | `projects` → `progress` (milestones done/total, server-side)   |
-| Habits  | `routines[].history` — the array the streak is already derived from |
-| Journal | `notes` with `kind: 'journal'` — the column always accepted it, nothing wrote it |
-| Money   | the `money` block already on `/api/hh/today`                   |
-| Lists   | the `lists` block already on `/api/hh/today`                   |
-
-### `src/pages/Today.tsx`
-
-- **Two columns above 860px, one below**, in the same order either way — DO on
-  the left (calendar, Top 3, Todo, Slipping), TRACK on the right (goals, habits,
-  journal). The split is a width affordance, not a second information
-  architecture, so nothing is reachable on one and hidden on the other.
-- `useWide()` uses `matchMedia`, not a CSS breakpoint: this app is inline-styled
-  from `theme.ts` and has no stylesheet to hang a media query on. Putting half a
-  layout in `index.css` would hide it where nobody looks.
-- **Status strip** — clock, next event, month pace.
-  - The clock re-arms on the top of the minute (`60000 - Date.now() % 60000`),
-    not on a blind 60s interval, which shows the wrong minute for 59 seconds if
-    it happens to mount at :59.
-  - Next-up is silent when no calendar is connected. `CalendarCard` right below
-    already explains why; two "connect Google" prompts on one screen is nagging.
-  - The pace bar is the CALENDAR month, not spend — it is the denominator you
-    read the projection against, and a spend bar beside a projection figure
-    invites reading one as the other.
-- **Habits grid** looks each day up in `routine.history` by date key rather than
-  slicing the last seven entries. The array's length and direction are the
-  server's business; a slice shifts the whole grid by a day if either changes.
-  Future days render as a dashed square, not a cross — a day that hasn't
-  happened is not a missed day, and drawing it as one makes every Monday a wall
-  of failure.
-- **Goals** skip projects with `progress: null`. Null means no milestones, i.e.
-  unknown, not zero — a 0% bar would be a claim the data does not make.
-- **Project lanes** map to the existing `status` values (`someday` / `active` /
-  `done`), read-only; the board with drag stays on `/projects`.
-- Footer split into Money / Bills / Lists. Bills were previously buried at the
-  bottom of the money block.
-
-### `src/hooks.ts`
-
-- `useCreateNote` takes an optional `kind`, defaulting to `'note'`. Settings'
-  saved-notes box is unchanged.
-
-### `src/components/Shell.tsx`
-
-- Content capped at 1040px and centred, header included. Without it the two
-  columns keep widening on a monitor until a task title floats alone in a metre
-  of card. Below the cap the wrapper does nothing, so the phone layout is byte
-  for byte what it was.
-
-**Cost:** the home screen now fetches projects and routines alongside today +
-calendar. Four queries where there were two. All are react-query cached and the
-two `useProjects()` callers on the page share one request.
-
-Typechecks clean.
-
-
-## 2026-08-09 - budget-vite: Today reordered around the calendar
-
-Follow-up to the card conversion below. Order on `/today` is now Calendar, Top 3,
-Todo, Slipping, Money.
-
-### `src/pages/Today.tsx`
-
-- **"In brief" removed.** It opened the page with one sentence counting what the
-  cards underneath already spell out — first thing read, least informative thing
-  on the screen. `counts` is untouched on the payload and still used elsewhere;
-  this is a render change only, nothing server-side.
-- **Calendar is the first card.** It is the only block on the page you cannot
-  change — the day is already committed — so it sets the frame the task lists are
-  read against.
-- **"Open tasks" renamed "Todo"**, matching the tab it mirrors.
-- **`QuickAdd` moved out of the top of the page and into the bottom of the Todo
-  card**, under a hairline. You read the list, find the thing isn't on it, and
-  the box is already at the end of it under your thumb — rather than scrolling
-  back up past the calendar to an add box that floated above everything.
-
-Typechecks clean.
-
-
-## 2026-08-09 - budget-vite: every page container is a card
-
-The phone build was drawn entirely with hairline rules — a section was a 1px top
-border and 26px of whitespace. On a 390px screen that reads as one continuous
-column: nothing bounds a section, so where "Top 3" ends and "Calendar" begins is
-inferred from the gap size, and the gap sizes were not consistent (Today 26,
-Todo 22, Lists 20, Budget 14). Every section is now a bounded surface.
-
-### `src/theme.ts`
-
-- **`section()` is now the card**, not a rule: the dashboard's surface (a faint
-  cyan wash from the top edge over `rgba(13,17,25,0.55)`), a hairline border, an
-  18px radius, 15px padding. This is the whole change — `section()` is the only
-  page-container helper in the app, so redefining it converted all 34 call sites
-  across Today, Todo, Lists, Money, Projects, Routines and Settings at once. No
-  page-level restyling was needed and none was done.
-- Radius 18, where `card()` stays 16: these are full-bleed containers and the
-  softer corner keeps them from reading as buttons. `card()` is unchanged and
-  still used for the small dense surfaces inside Money, which now nest inside a
-  `section()`.
-- Rule 2 in the file header rewritten — it said "hairline rules, not cards" and
-  would otherwise have contradicted the helper directly beneath it.
-- Added the constraint that follows from this: **never nest `section()` inside
-  `section()`** — two borders and two washes read as a rendering bug.
-
-### `src/components/CalendarCard.tsx`
-
-Rebuilt to the reference layout. Every existing failure-mode branch is untouched
-(not-configured, not-connected, revoked, none-selected, partial failures) — this
-is layout only.
-
-- **Serif date line** — "Saturday, *August 9*", weekday plain and date italic.
-- **Seven-day strip**, Monday-first, today filled solid `T.ink`. Read-only: it
-  orients you in the week without implying a day is tappable, which this app has
-  no screen for.
-- Both are derived from the `date` prop, **not** from the Google response, so
-  they still render when the calendar is unreachable. On a screen whose job is
-  "what is today", the date should never depend on a network call.
-- `parseDay()` builds the bare `YYYY-MM-DD` **locally**. `new Date('2026-08-09')`
-  parses as UTC and renders as the 8th anywhere west of Greenwich, which would
-  have printed the wrong weekday on the card every day.
-- Sunday walks back six days, not zero (`(getDay() + 6) % 7`) — the naive version
-  renders a week ahead every Sunday.
-- All-day event band bleeds to −15 to track the new `section()` padding.
-
-### Spacing
-
-- Column gaps normalised to 14 (Today 26, Routines 26, Todo 22, Lists 20). The
-  gap used to be the only separator; the cards do that now and the extra space
-  cost most of a screenful of scroll.
-- `Shell.tsx` main padding 20px → 13px each side. Cards carry their own 15px
-  inset, so the old value put content 35px from the edge of a 390px screen and
-  squeezed the seven-day strip.
-- Today's "In brief" block was a bare `<div>` and is now a `section()`, so it is
-  no longer the one unboxed thing on the page.
-
-### `src/components/BudgetOverview.tsx`
-
-- The "Uncategorised" footer used `section()` from **inside** a Collapsible card.
-  That is the one nested call site in the app and it would have become a
-  card-in-a-card; replaced with a plain ruled div.
-
-Typechecks clean (`tsc --noEmit`, `noUnusedLocals` on). Palette untouched — this
-is structure only, still the CB Edge dark set.
-
-
-## 2026-08-07 - Options flow: the /flow tape was persisting ~3% of SPX 0DTE
-
-Diagnosed from production: `flow_prints` was taking ~3 rows/min for SPX while the
-server's own `[FLOW_DEBUG]` counter showed the tape creating ~170 above-floor
-orders/min. The chart's long flat stretches and vertical cliffs were both
-downstream of that.
-
-### The mechanism
-
-`FlowProcessor` coalesces fills into one order for `FLOW_COALESCE_MS` (5s) and
-keeps the order's `ts` at its **first** fill. `bucket()` only exposes an order
-once its accumulated premium clears `FLOW_TAPE_FLOOR`. Ordinary SPX 0DTE orders
-open small and grow — so the writer first *sees* them seconds after their `ts`.
-
-`writeFlowTape`'s cutoff was `newest written ts − 500ms`. Every late-crossing
-order was therefore already below the cutoff the first time it was visible, and
-was silently skipped forever. Only prints big enough to clear the floor on their
-**first** fill were persisted.
-
-That is why the burst minutes looked like flow and weren't: a chain-wide dxLink
-`Trade` snapshot (one synthetic print per strike, 2600–9800 at spot 7736, ~261
-strikes sharing ~15 millisecond timestamps) is a set of single large prints, each
-born above the floor — so those sailed through while the real order flow didn't.
-
-Simulated against the real module over 60 ticks of a 500ms loop:
-
-    born-above-floor persisted : 60/60   (both versions)
-    late-crossing    persisted : 0/54    before  ->  54/54 after
-
-### `server-v2/state/flow-history-writer.js`
-
-- **Flush cursor keys off `lastFillAt`, not `ts`.** New field on each tape entry,
-  stamped from the local clock on create and on every coalesced fill, so it is
-  monotonic in ARRIVAL order regardless of what the print timestamps do.
-- **Look-back widened from 500ms to a full coalescing window** (`FLOW_COALESCE_MS`
-  + 1s margin), so an order still merging fills is re-upserted until it settles.
-- **The INSERT is chunked at 500 rows.** Postgres rejects any query over 65535
-  bind parameters; at 16 params/row a single statement caps out at 4095 rows.
-  Above-floor tape entries are never evicted while under `FLOW_TAPE_CAP`, so any
-  flush from a cold cursor — first tick after a restart, or any tick after a
-  failed write left the cursor un-advanced — hands in the whole session. Verified
-  against the deployed file, which fails outright:
-
-      [flow-history] write failed (will retry next tick): bind message supplies
-      144000 parameters, but prepared statement requires 65535
-
-  The catch swallows it as "will retry next tick", the cursor never advances, and
-  every later tick rebuilds the same oversized statement. Permanent, silent.
-  Production `bucketTape` was 4153 when this was found — already past the line.
-  `backfillFlowRows()` directly below has always chunked at 500.
+## 2026-08-07 - Bubble Lab: strike grid, basis and candles now match the live ES Candles chart
+
+The harness was drawing a fake 2.5-point price grid and a toy candle series, so
+sizes tuned in it did not land the same way on the real chart. It now reproduces
+the live geometry.
+
+- **SPX strike grid + basis.** GEX lives on a 5-point SPX strike grid and every
+  strike is placed on the ES axis by the single `basisAt()` conversion — here a
+  constant `BASIS = -1.25`. That is why the Call Wall prints at 7773.75 and not
+  7775, and it means a bubble row now sits exactly on the Call Wall / Put Wall
+  dash instead of near it. Bubble `y` is `strike + basis`, same as the draw
+  block; the bubble slot is one bucket wide by one strike tall.
+- **Real candle geometry.** 1-minute ES bars 08:00-16:00 ET aggregated to a
+  timeframe picker (1m / 5m / 15m / 30m / 1h), anchored to 09:30 ET so the RTH
+  close forces a short final bar. Fixed bar spacing with a 3-bar right offset,
+  bodies with same-colour 1px borders, 1px wicks, 1px minimum body.
+- **Live colours and chrome** copied from `EsChartCard`'s lightweight-charts
+  setup: up `#30d158`, down `#ff5b5b`, grid `rgba(255,255,255,.06)`, axis text
+  `rgba(255,255,255,.70)`, grey `#9ca3af` last-price line and tag, dashed Call
+  Wall / Flip / Put Wall with right-axis price tags, ET `HH:MM` time axis, and
+  the volume pane.
+- **Bubble bucket is now the live control** — `bar` (one column per candle, the
+  default) or a fixed 1 / 5 / 15 / 30 min. `bar` buckets by the *containing
+  candle* via `barAt()`, not `floor(ts / bucketMs)`, so at 15m+ a column can no
+  longer straddle two candles.
+- **Session shape** follows an anchored path — quiet pre-market, opening flush,
+  rally through the flip into the call wall, afternoon bleed — so both walls sit
+  inside the visible range and the wall strike is genuinely the session's peak
+  (secondary shelves moved >=2 strikes clear, gaussian narrowed to ~1 strike so
+  their tails can't sum into a bigger peak than the wall).
+
+Baseline variance index on the corrected geometry: **0.36** for the live config.
+
+Still no app code changed.
+
+## 2026-08-07 - Bubble Lab: inline docs for every control; four shape presets removed
+
+- **Removed** the Ticks / Ribbons / Heat cells / Triangles preset buttons and
+  their config objects. The underlying marks and ribbon modes are still in the
+  pickers — only the one-click presets are gone. Remaining presets: Current
+  (live), High variance, Extreme, Tube/rail, Sparse walls.
+- **Every slider, select and checkbox now carries a description** rendered
+  directly under it: what the number actually changes, which direction does
+  what, and where the useful range sits. 47 controls documented.
+- **Selects also describe the chosen option.** Picking a scale mode, size curve,
+  rank mode, mark or ribbon mode appends a second line explaining that specific
+  choice and its trade-off — e.g. per-column max gives maximum in-column spread
+  but loses "the whole morning was quiet"; sqrt draws 0.5 of the max at 71% of
+  full size, which is the flattening being complained about.
+- **"what each number does" toggle** in the top toolbar collapses all of it for
+  a compact rail once the meanings are known.
+- **Stat bar tooltips** — hover any figure for what it measures, including the
+  variance index (sigma/mean, live config ~0.21, above ~0.5 the walls separate
+  from the tail).
+
+Still no app code changed.
+
+## 2026-08-07 - Bubble Lab: 22 mark shapes, ribbons, and per-mark styling (`lab/bubble-lab.html`)
+
+Follow-up to the harness added earlier today. Size and opacity are only two of
+the channels a bubble can vary on — the mark's *form* is a third, and on a dense
+1-min trail it carries more signal than radius does. Section 7 of the lab is now
+a full mark library plus a connect-across-time mode.
+
+- **22 marks**, grouped in the picker:
+  - *Round* — circle (live), wide oval, tall capsule, ring (stroke only), donut
+    (hollow core), soft radial glow, half-arc (opens up for +GEX / down for −),
+    comet (tail trailing into the past).
+  - *Linear* — vertical tick, horizontal line, bar growing from the column,
+    rounded pill, heat cell (fills the bucket × strike slot — a true heatmap
+    look), wick + dot, tapered ladder rung.
+  - *Angular* — diamond, square, hexagon, triangle (points up for calls, down
+    for puts), cross, star burst, chevron.
+- **Per-mark styling** — aspect (w/h), rotation, outline width, white core-dot
+  %, x-jitter.
+- **Second shape for puts** — `shapeBySign` + a `shape2` picker, so +GEX and
+  −GEX read apart by form as well as by hue (useful when the chart is printed
+  or when the blue/red distinction is doing too much work).
+- **Ribbon mode (7b)** — connects the same strike across time into a band whose
+  half-thickness IS the bubble radius, so a wall renders as one tube that swells
+  and tapers instead of a row of dots. Modes: off / variable-width band /
+  centre line / band + line / stepped band, with opacity, thickness multiplier,
+  and a 3-tap smoothing slider. `marksOn` toggles whether the dots still draw
+  on top.
+- **On-canvas size legend** — the active mark rendered at ratios
+  0.05/0.2/0.4/0.6/0.8/1.0 with the resulting px radius under each, so the
+  compression at the top of the curve is visible directly rather than inferred
+  from the variance index.
+- **Four new presets** — Ticks, Ribbons, Heat cells, Triangles. Reference
+  variance-index scores on the synthetic session: Current (live) 0.21,
+  Heat cells 0.42, High variance 0.49, Triangles 0.48, Ticks 0.56.
+- The copied draw-block patch now emits the mark and ribbon settings alongside
+  the numeric config.
+
+Still **no app code changed** — `EsChartCard.tsx` is untouched.
+
+## 2026-08-07 - GEX Bubble Lab: standalone tuning harness for bubble variance (`lab/bubble-lab.html`)
+
+The ES Candles bubble trail reads as uniform dots — on a live session the drawn
+radii span only ~2.8-5.4px (variance index sigma/mean = 0.21), so a wall and a
+tail strike look nearly identical. The cause is stacked in the draw block:
+`sqrt(ratio)` compresses the top of the range, the expanding session-max divisor
+plus the 15%-of-sessMax floor keeps `ratio` bunched high, and the size span is
+only 3.5px wide (`minSize 0.5` -> `maxSize 4`).
+
+**No app code was changed.** This is a standalone, dependency-free HTML harness
+for finding the right numbers before touching `EsChartCard.tsx`.
+
+- **`lab/bubble-lab.html`** — single file, open it in a browser. Renders a
+  synthetic 390-minute ES session (persistent call/put walls, a migrating mid
+  cluster, a long tail) through a reimplementation of the real draw block, with
+  every axis of variation exposed as a slider:
+  - **Normalization** — expanding session max (current live), fixed session max,
+    per-column max, rolling window, percentile clip, rank-within-column,
+    z-score; plus the domain floor % and a per-column stretch toggle.
+  - **Size curve** — sqrt / linear / pow / log / exponential / smoothstep /
+    quantized steps, gamma, min+max px, size jitter.
+  - **Strike selection** — top N, highlight N, ratio cutoff, rank mode
+    (peak-so-far / per-column / whole-session).
+  - **Opacity** — brightness, opacity gamma, max opacity, age fade.
+  - **Color** — ramp toward the hot color, color gamma, saturation boost,
+    hue-by-sign toggle.
+  - **Glow** — max blur, threshold, wall boost, glow-for-all vs walls-only.
+  - **Shape** — circle / capsule / bar / diamond / ring / soft radial, aspect,
+    x-jitter, additive blending.
+  - **Data** — bucket size, wall concentration, noise, candles on/off.
+- **Variance index (sigma/mean of drawn radii)** in the status bar, so a setting
+  can be judged by a number instead of by eye. Baseline live config scores
+  ~0.21; the shipped "High variance" preset scores ~0.49.
+- **Presets** — Current (live), High variance, Extreme, Tube/rail, Sparse walls.
+- **Split view** — live config on top vs the tuned config below, same data.
+- **Copy JSON / Copy draw-block patch** — emits the tuned numbers as a comment
+  block plus a `BUBBLE_CFG_DEFAULT` line ready to paste.
+
+Findings so far, in order of effect on spread: the divisor (rolling/percentile
+beats expanding), the size curve exponent (pow gamma ~1.5 beats sqrt), then the
+px span. Opacity and color gamma add perceived variance without changing radii.
+
+## 2026-08-07 - Options flow: prints arrived in one lump per replay, not per print
+
+`/flow` was showing an hour of tape at once — the Net Drift line sat flat from
+~10:10, then moved vertically in a single bar at 11:00 (SPX calls +$28M →
+−$808.9K in one 1-minute bin), and the volume histogram had a matching hole.
+Three separate faults, stacked.
+
+### 1. The print's exchange timestamp was thrown away — `server-v2/proxy-tastytrade.js`
+
+`FEED_SETUP` has always asked dxLink for `TimeAndSale.time`, and
+`_handleFeedData` parsed it into `ev.time` — but the `TimeAndSale` branch of
+`_onEvent` never passed it to `addPrint`, which then defaulted to `Date.now()`.
+Fine while prints trickle in live; wrong the moment dxFeed hands over a batch
+(it replays a contract's recent tape whenever a subscription is established).
+Every print in the batch got the same *ingest* stamp, so an hour of flow
+collapsed into one 1-minute bin. That is the flat-then-vertical chart exactly.
+
+- **New `stampFlowTime(evTime, now)`** — returns the exchange time when it is
+  finite, positive, no more than `FLOW_TS_MAX_SKEW_MS` (60s) ahead of us, and no
+  older than `FLOW_TS_MAX_AGE_MS` (24h); otherwise falls back to the ingest
+  clock. The age bound is deliberately a whole trading day: legitimately old
+  replays *do* arrive and must be kept — it exists only to stop an epoch-0 or
+  garbage value from stretching the chart axis back to 1970.
+- Both `addPrint` calls in the `TimeAndSale` branch (SPX and the TT-multiflow
+  root path) now pass `time`.
+- `Trade`-fed prints are unchanged — that event carries no `time` field.
+
+### 2. Non-SPX flow could be dead for a whole session — `server-v2/proxy-tastytrade.js`
+
+`DxLinkClient.subscribeTimeSales()` returned silently when `channelOpen` was
+false, unlike `subscribe()`, which queues into `this.pending`. `start()` fires
+`_startTtMultiFlow()` immediately after `client.connect()` — well before the
+SETUP → AUTH → CHANNEL_REQUEST → CHANNEL_OPENED handshake finishes — and
+`_subscribeTtFlowRoot()` wrote every symbol into `ttFlowContracts` regardless.
+So the request was dropped, the map still said "subscribed", and the 5-minute
+refresh found nothing `fresh` and never retried. Those roots streamed **zero**
+prints for the life of the process. SPX escaped it only because
+`_syncTimeSaleWindow` re-runs on the 2s recompute loop.
+
+- `subscribeTimeSales()` / `unsubscribeTimeSales()` now **queue** into
+  `this.pending` (marked `__ts`) and **return a boolean**: true = it reached the
+  wire, false = queued. `CHANNEL_OPENED` flushes them as `TimeAndSale`, kept
+  distinct from the regular Quote/Greeks/Summary/Trade fan-out and from
+  `__candle`. A queued unsubscribe cancels the matching queued add rather than
+  pairing with it.
+- **`ttFlowContracts` is written after the subscribe, and only for symbols that
+  actually went out.** Anything queued stays out of the map and is retried.
+- `_subscribeTtFlowRoot()` bails while `channelOpen` is false, and
+  `_startTtMultiFlow()` `await`s the new **`_awaitChannelOpen()`** (250ms poll,
+  30s cap) first. This matters more than it looks: a symbol subscribed via the
+  queue but missing from `ttFlowContracts` would fall through to the SPX branch
+  of `_onEvent` and be tagged with **SPX's spot**, corrupting `isOtm` for that
+  whole root. Better to wait and subscribe once, correctly.
+- `_syncTimeSaleWindow()` only records `_tsSubs` when the call returns true, so
+  the bookkeeping no longer depends on a `channelOpen` check made elsewhere.
+
+### 3. Replayed rows never reached Postgres — `server-v2/state/flow-history-writer.js`
+
+This one had to move with fix 1 or fix 1 would have made things *worse*. The
+flush cursor keyed off the tape entry's `ts` and skipped anything below
+`lastFlushedTs − 500ms`. Once `ts` became exchange time, a replayed batch was by
+definition below that cutoff — the prints would show in the live WS tape and
+never be persisted, so the chart (which reads `flow_prints`) would stay flat
+permanently.
+
+- Cursor now keys off **`lastFillAt`** — a new field on each tape entry
+  (`server-v2/computation/flow-processor.js`), stamped from the local clock on
+  create and on every coalesced fill. Monotonic in *arrival* order whatever the
+  exchange times do. Entries predating this change fall back to `ts`.
+- Look-back widened from 500ms to one full coalescing window
+  (`FLOW_COALESCE_MS`, default 5000, + 1s margin). This **also fixes a
+  pre-existing silent undercount**: an order that kept merging fills for seconds
+  held its original `ts`, drifted below the old cutoff on a busy tape, and its
+  accumulated size/premium were never re-upserted.
 
 ### `server-v2/computation/flow-processor.js`
 
 - New `lastFillAt` on every tape entry (see above).
-- `@param time` is now the print's exchange timestamp when the feed supplies one.
-- Coalescing window is `Math.abs(time - anchorTs) <= coalesceMs`. With exchange
-  timestamps a replayed batch can hand us a print marginally older than the open
-  order's anchor; the old `time - anchorTs` went negative and passed the test by
-  accident.
+- Coalescing window is now `Math.abs(time - anchorTs) <= coalesceMs`. With
+  exchange timestamps a replayed batch can hand us a print marginally *older*
+  than the open order's anchor; the old `time - anchorTs` went negative and
+  passed the test by accident. `abs()` is what "fills within coalesceMs of each
+  other" always meant.
 
-### `server-v2/proxy-tastytrade.js` — prints carry their exchange time
+### Late-arriving bins are actually re-read — `server-v2/server-with-proxy.js` + `components/pages/Flow.tsx`
 
-`FEED_SETUP` has always requested `TimeAndSale.time` and `_handleFeedData` parsed
-it into `ev.time`, but the handler dropped it and let `addPrint` default to
-`Date.now()`. Fine for live prints; wrong for a replayed batch, where every print
-gets the same ingest stamp and an hour of tape collapses into one 1-minute bin —
-the vertical cliffs on the Net Drift chart. Production confirms it: the first
-minute of each burst held 265 rows across just **15** distinct `ts`.
-
-- **New `stampFlowTime()`** — takes the exchange time when it is finite, positive,
-  ≤ `FLOW_TS_MAX_SKEW_MS` (60s) ahead and ≤ `FLOW_TS_MAX_AGE_MS` (24h) old; falls
-  back to the ingest clock otherwise. The age bound is a full trading day on
-  purpose: genuinely old replays must be kept, the bound only stops an epoch-0 or
-  garbage value stretching the chart axis back to 1970.
-- Both `addPrint` calls in the `TimeAndSale` branch pass `time`. `Trade`-fed
-  prints are unchanged — that event carries no `time` field.
-
-### `server-v2/proxy-tastytrade.js` — TimeAndSale subs survive the pre-open window
-
-`DxLinkClient.subscribeTimeSales()` returned silently when `channelOpen` was
-false, unlike `subscribe()`, which queues. `start()` fires `_startTtMultiFlow()`
-right after `client.connect()`, and `_subscribeTtFlowRoot()` recorded symbols in
-`ttFlowContracts` regardless — so the request was dropped, the map claimed
-"subscribed", and the 5-minute refresh found nothing fresh and never retried.
-Those roots streamed nothing for the life of the process.
-
-- `subscribeTimeSales()` / `unsubscribeTimeSales()` queue into `this.pending`
-  (marked `__ts`) and return a boolean: true = sent, false = queued.
-  `CHANNEL_OPENED` flushes them as `TimeAndSale`, kept distinct from the regular
-  Quote/Greeks/Summary/Trade fan-out and from `__candle`. A queued unsubscribe
-  cancels its matching queued add rather than pairing with it.
-- `ttFlowContracts` is written **after** the subscribe, only for symbols that
-  went out. Queued ones stay out of the map and are retried.
-- `_subscribeTtFlowRoot()` bails while the channel is closed and
-  `_startTtMultiFlow()` awaits the new **`_awaitChannelOpen()`** (250ms poll, 30s
-  cap). A symbol subscribed via the queue but missing from `ttFlowContracts`
-  would fall through to the SPX branch of `_onEvent` and be tagged with SPX's
-  spot, corrupting `isOtm` for the whole root.
-- `_syncTimeSaleWindow()` only records `_tsSubs` when the call returns true.
-
-### Late bins are actually re-read — `server-v2/server-with-proxy.js` + `components/pages/Flow.tsx`
-
-`/proxy/flow-netprem`'s incremental refresh re-scanned 3 bins back from the last
-populated bin. Late rows land minutes behind that and the bin cache is otherwise
-append-only, so they stayed invisible until eviction.
+`/proxy/flow-netprem`'s incremental refresh re-scanned 3 bins back **from the
+last populated bin**. Replayed prints land minutes behind that, and the bin
+cache is otherwise append-only, so they'd stay invisible until the entry was
+evicted — the chart would keep drawing a gap the table had already filled.
 
 - New `NETPREM_LATE_MS` (default 15 min, env-overridable); `sinceMs` is now
   `min(3-bin overlap, now − NETPREM_LATE_MS)`. Still an index-only scan on
-  `flow_prints_netprem_covering_idx`.
-- `Flow.tsx` gains a matching `NET_LATE_SEC = 15 * 60` on its own `?since=`.
-  Required, not cosmetic: the endpoint filters its response to `sec >= since`, so
-  a narrow client `since` discards exactly the bins the server just re-read. Keep
-  the two constants in step.
+  `flow_prints_netprem_covering_idx`, not a full-session GROUP BY.
+- `Flow.tsx` gains the matching `NET_LATE_SEC = 15 * 60` on its own `?since=`.
+  Required, not cosmetic: the endpoint filters its response to `sec >= since`,
+  so a narrow client `since` would discard exactly the bins the server just went
+  and re-read. The two constants must be kept in step.
 
 ### Verification — `server-v2/flow-print-time.selftest.js` (NEW)
 
-`node server-v2/flow-print-time.selftest.js` — 32 assertions, no network and no
-database (the writer runs against a stub `pg`; `DxLinkClient` and
-`stampFlowTime` are lifted out of `proxy-tastytrade.js` by name and driven with a
-fake socket, since requiring that module dials out). Each was confirmed
-**failing** against the deployed files first:
+`node server-v2/flow-print-time.selftest.js` — 29 assertions, no network and no
+database (the writer runs against a stub `pg`; `DxLinkClient` is lifted out of
+`proxy-tastytrade.js` and driven with a fake socket, since requiring that module
+outright dials out). Every one of these was confirmed **failing** against the
+pre-change files first:
 
-- Floor-crossing simulation over 60 ticks — 0/54 before, 54/54 after.
-- 9000-row cold flush is chunked, not rejected at 65535 params.
-- 60 prints delivered in one burst with exchange times a minute apart land in 60
-  distinct minutes (before: 1 — the reported bug).
-- `stampFlowTime` bounds; coalescing, out-of-order merge, window boundary,
-  `lastFillAt`.
-- An hour-old replayed batch is written; a still-merging order is re-upserted; a
-  settled row is not re-written every tick; cursors stay independent.
-- Pre-open TimeAndSale subs queue and flush on `CHANNEL_OPENED`; queues stay
-  separated; 500-symbol chunking intact.
+- `stampFlowTime` bounds: 45-min-old exchange time kept; undefined / 0 / NaN /
+  negative / far-future / pre-1970 all fall back; 30s skew tolerated.
+- `FlowProcessor`: 60 prints delivered in one burst with exchange times a minute
+  apart land in **60 distinct minutes** (pre-change: 1 — the reported bug).
+  Coalescing, out-of-order merge, window boundary and `lastFillAt` all covered.
+- `flow-history-writer`: an hour-old replayed batch is written (pre-change:
+  dropped); a still-merging order is re-upserted (pre-change: dropped); a
+  long-settled row is *not* re-written every tick; an entry with no
+  `lastFillAt` falls back to `ts`; independent cursors stay independent.
+- `DxLinkClient` driven with a fake socket: pre-open subs queue and flush on
+  `CHANNEL_OPENED` as `TimeAndSale` only (pre-change: silently discarded);
+  regular/candle/TS queues stay separated; queued unsubscribe cancels its add;
+  500-symbol chunking intact.
 
-Reading `stampFlowTime` and `DxLinkClient` out of the source by name means
-renaming or inlining either fails the test loudly rather than checking a stale
-copy.
-
-### Still open
-
-- **Chain-wide `Trade` snapshots are ingested as flow prints.** Every strike from
-  2600 to 9800 lands in the tape as a "print" whenever the chain is subscribed.
-  These are last-trade snapshots, not trades, and they inflate the tape and the
-  premium split. The `Trade` branch of `_onEvent` needs to ignore snapshot events
-  (or the flow tape needs to be TimeAndSale-only).
-- **`sessionCallPremium` / `sessionPutPremium` are permanently 0** on
-  `DATA_SOURCE=tt`. They are only incremented inside the Theta `onTrade` handler,
-  so whatever card reads them is dead in the current mode.
+The suite reads `stampFlowTime` and `DxLinkClient` out of the source text by
+name, so renaming or inlining either one fails the test loudly rather than
+quietly checking a stale copy.
 
 
 ## 2026-08-07 - ICT: inducement no longer draws a play
