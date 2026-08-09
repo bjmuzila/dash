@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-08-09 - chain + multi-greek: EM tag beside the strike, no EM row lines
+
+`components/pages/OptionsChain.tsx`, `app/mult-greek/MultGreekClient.tsx`.
+
+- **The EM marker lines are gone.** Options Chain drew a dotted `borderTop`
+  across the whole row (strike cell, every expiry cell, and the ⅀ Total cell)
+  for the 1x/2x band strikes; Multi Greek drew a solid/dashed `borderTop` on the
+  row. Both removed - the row now reads like any other.
+- **EM now labels the strike.** Options Chain tags the band rows `EM +1s` /
+  `EM -1s` / `EM +2s` / `EM -2s` in the existing tag slot next to the strike
+  (was bare `+1s`/`-1s`). Multi Greek's `EM` / `2x EM` badge moved out of its
+  absolute top-left corner position and now sits inline, immediately left of the
+  strike number in the strike cell.
+- **CLOSE marker removed** from Options Chain - the band-center row no longer
+  gets a line, a `CLOSE` tag, or a tooltip. The `emStrikes.close` value is still
+  computed (it anchors the band math) but nothing renders from it.
+- ATM styling on both pages is unchanged.
+
 ## 2026-08-09 - landing: full-width pitch + receipts/hero locked to one pair
 
 `components/landing/LandingClient.tsx` (CSS only for the two child components —

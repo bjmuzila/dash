@@ -784,30 +784,28 @@ function TickerPanel({
             : { borderBottom: "1px solid rgba(30,48,80,.35)" };
           const is1x = emStrikes != null && (r.strike === emStrikes.d1 || r.strike === emStrikes.u1);
           const is2x = emStrikes != null && (r.strike === emStrikes.d2 || r.strike === emStrikes.u2);
-          const emBorder = is1x
-            ? { borderTop: "2px solid rgba(255,255,255,.92)" }
-            : is2x
-            ? { borderTop: "2px dashed rgba(255,255,255,.85)" }
-            : null;
+          // EM is no longer drawn as a row line — the badge sits beside the strike.
           return (
             <div
               key={r.strike}
               data-strike={r.strike}
-              style={{ display: "grid", gridTemplateColumns: gridCols, background: rowBg, position: "relative", ...atmOutline, ...(emBorder ?? {}) }}
+              style={{ display: "grid", gridTemplateColumns: gridCols, background: rowBg, position: "relative", ...atmOutline }}
             >
-              {(is1x || is2x) && (
-                <img
-                  src={emBadgeDataUri(is1x ? "EM" : "2× EM")}
-                  alt={is1x ? "EM" : "2× EM"}
-                  style={{ position: "absolute", top: 2, left: 3, zIndex: 3, display: "block", pointerEvents: "none" }}
-                />
-              )}
               <div style={{
                 padding: "4px 4px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
                 textAlign: "center", color: strikeColor, borderRight: "1px solid rgba(255,255,255,.06)",
                 background: "transparent",
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 3,
+                whiteSpace: "nowrap", overflow: "hidden",
               }}>
-                {Number.isInteger(r.strike) ? r.strike : r.strike.toFixed(2)}
+                {(is1x || is2x) && (
+                  <img
+                    src={emBadgeDataUri(is1x ? "EM" : "2× EM")}
+                    alt={is1x ? "EM" : "2× EM"}
+                    style={{ display: "block", flex: "0 0 auto", pointerEvents: "none" }}
+                  />
+                )}
+                <span>{Number.isInteger(r.strike) ? r.strike : r.strike.toFixed(2)}</span>
               </div>
               {computed.cols.map((e, ci) => {
                 const val = r.gex[e];

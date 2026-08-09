@@ -1273,26 +1273,21 @@ const ChainMatrix = memo(function ChainMatrix({
           );
         }
         const isATM = strike === nearestStrike;
-        const isClose = anyCurrentWeek && emStrikes != null && strike === emStrikes.close;
         const is1x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d1 || strike === emStrikes.u1);
         const is2x = anyCurrentWeek && emStrikes != null && (strike === emStrikes.d2 || strike === emStrikes.u2);
-        // All marker lines are DOTTED now. Close = brighter, EM bands dimmer.
-        const rowEmBorder = isClose ? "2px dotted rgba(255,255,255,.95)"
-          : is1x ? "2px dotted rgba(255,255,255,.85)"
-          : is2x ? "2px dotted rgba(255,255,255,.7)"
-          : undefined;
+        // EM rows no longer draw a marker line — the tag beside the strike is
+        // the whole signal. The CLOSE (band-center) marker is gone entirely.
         // Small label + hover tooltip for the marked rows.
         let emTag: string | null = null, emTip = "";
         if (isATM) { emTag = "ATM"; emTip = `At-the-money — nearest strike to spot (${spot ? spot.toFixed(2) : "—"})`; }
-        else if (isClose) { emTag = "CLOSE"; emTip = `Last week's close${emLevels ? ` (${emLevels.close})` : ""} — the EM band center`; }
         else if (is1x) {
           const up = emStrikes != null && strike === emStrikes.u1;
-          emTag = up ? "+1σ" : "−1σ";
-          emTip = `1× weekly expected move ${up ? "up" : "down"}${emLevels ? ` (close ${emLevels.close} ± ${emLevels.em})` : ""}`;
+          emTag = up ? "EM +1σ" : "EM −1σ";
+          emTip = `1× weekly expected move ${up ? "up" : "down"}${emLevels ? ` (${emLevels.close} ± ${emLevels.em})` : ""}`;
         } else if (is2x) {
           const up = emStrikes != null && strike === emStrikes.u2;
-          emTag = up ? "+2σ" : "−2σ";
-          emTip = `2× weekly expected move ${up ? "up" : "down"}${emLevels ? ` (close ${emLevels.close} ± ${2 * emLevels.em})` : ""}`;
+          emTag = up ? "EM +2σ" : "EM −2σ";
+          emTip = `2× weekly expected move ${up ? "up" : "down"}${emLevels ? ` (${emLevels.close} ± ${2 * emLevels.em})` : ""}`;
         }
         return (
           <div key={strike} style={{ display: "contents" }}>
@@ -1306,7 +1301,7 @@ const ChainMatrix = memo(function ChainMatrix({
               fontWeight: isATM ? 700 : 400,
               background: HDR_BG,
               borderRight: `1px solid ${HT.border}`,
-              borderTop: isATM ? "2px solid #ffffff" : rowEmBorder,
+              borderTop: isATM ? "2px solid #ffffff" : undefined,
               borderBottom: isATM ? "2px solid #ffffff" : undefined,
               display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 3,
               cursor: emTag ? "help" : undefined,
@@ -1406,7 +1401,6 @@ const ChainMatrix = memo(function ChainMatrix({
                     padding: isCountMode ? "3px 6px" : "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
                     color: value == null ? "#3a4a5e" : SOFT_WHITE,
                     background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
-                    borderTop: rowEmBorder,
                     boxShadow: atmShadow,
                     whiteSpace: "nowrap", overflow: "hidden",
                     display: "flex", alignItems: isCountMode ? "center" : "baseline", justifyContent: "flex-end", gap: 5,
@@ -1483,7 +1477,6 @@ const ChainMatrix = memo(function ChainMatrix({
                   color: tot === 0 ? "#3a4a5e" : "rgba(255,255,255,0.92)",
                   background: tot !== 0 ? metricBg(tot, totalScale.max, intensity, totalScale.top3) : "transparent",
                   borderLeft: `2px solid ${rgba(HT.cyan, 0.35)}`,
-                  borderTop: rowEmBorder,
                   boxShadow: atmTotShadow,
                   whiteSpace: "nowrap", overflow: "hidden",
                   display: "flex", alignItems: "baseline", justifyContent: "flex-end",
