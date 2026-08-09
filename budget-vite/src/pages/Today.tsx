@@ -16,7 +16,7 @@ import {
  *
  * Reading order, and it is deliberate:
  *
- *   strip     what time is it, what's it like out, how far into the month
+ *   strip     what time is it, what's it like out
  *   calendar  the day, full width — the part you cannot change
  *   todo      | habits    what you have to do  | what you keep doing
  *   journal   | lists     what you're thinking | what the house needs
@@ -68,7 +68,7 @@ export default function Today() {
   return (
     <div style={stack}>
 
-      <StatStrip data={data} wide={wide} />
+      <StatStrip tz={data.tz} compact={!wide} />
 
       {/* Full width. The calendar is the frame the rest of the page is read
           against, and halving it to sit beside something else made the
@@ -128,22 +128,36 @@ function useWide(query = '(min-width: 860px)') {
 
 // ── Status strip ─────────────────────────────────────────────────────────────
 
-/** Clock, weather, month pace. The glance you take before reading anything. */
-function StatStrip({ data, wide }: { data: TodayPayload; wide: boolean }) {
+/**
+ * Time and weather, side by side at every width.
+ *
+ * Two tiles, not three. "Month elapsed" was a progress bar for the passage of
+ * time — a fact the date already states — and on a phone it pushed the calendar
+ * a third of a screen down. The projected end-of-month figure it carried lives
+ * on the Money card, next to the balance it should be read against.
+ *
+ * Side by side on a 390px phone too: stacked, these two were 200px of chrome
+ * above the first thing you actually came to read.
+ */
+function StatStrip({ tz, compact }: { tz: string; compact: boolean }) {
+  const { data: settings } = useSettings()
+  const zip = settings?.settings.weatherZip || ''
+
   return (
     <div style={{
       display: 'grid',
-      gridTemplateColumns: wide ? 'repeat(3, 1fr)' : '1fr',
-      gap: 14,
+      // One column when there is no weather to put beside the clock — a half
+      // width tile with dead space next to it looks like something failed.
+      gridTemplateColumns: zip ? '1fr 1fr' : '1fr',
+      gap: compact ? 10 : 14,
     }}>
-      <ClockTile tz={data.tz} />
-      <WeatherTile />
-      <PaceTile money={data.money} today={data.today} />
+      <ClockTile tz={tz} compact={compact} />
+      {zip && <WeatherTile zip={zip} compact={compact} />}
     </div>
   )
 }
 
-function ClockTile({ tz }: { tz: string }) {
+function ClockTile({ tz, compact }: { tz: string; compact: boolean }) {
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
     // Aligned to the top of the minute, not a blind 60s interval — otherwise a
@@ -160,14 +174,18 @@ function ClockTile({ tz }: { tz: string }) {
   const [clock, meridiem] = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).split(' ')
 
   return (
-    <div style={tile({ padding: '15px 16px' })}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        <span style={hero(38)}>{clock}</span>
+    <div style={tile({ padding: compact ? '13px 13px' : '15px 16px', minWidth: 0 })}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+        {/* 30px, not 38, once these are half a phone wide: "10:30" plus the
+            meridiem overruns a 160px tile at the larger size and wraps. */}
+        <span style={hero(compact ? 30 : 38)}>{clock}</span>
         {meridiem && <span style={label()}>{meridiem}</span>}
       </div>
-      <div style={label({ marginTop: 9 })}>
+      <div style={label({ marginTop: 8, letterSpacing: compact ? '0.06em' : '0.14em' })}>
         {now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-        {tz ? ` · ${tz.split('/').pop()!.replace('_', ' ')}` : ''}
+        {/* The city is the first thing to go when the tile is half width — the
+            time is the point, and the timezone is implied by the phone. */}
+        {!compact && tz ? ` · ${tz.split('/').pop()!.replace('_', ' ')}` : ''}
       </div>
     </div>
   )
@@ -176,23 +194,22 @@ function ClockTile({ tz }: { tz: string }) {
 /**
  * Current conditions for the ZIP saved in Settings.
  *
- * Renders NOTHING when no ZIP is set. An empty weather tile is worse than no
- * tile — it is a permanent hole on the home screen advertising a setting you
- * chose not to fill in. Settings is where you turn it on, and that is the only
- * place that should mention it.
+ * Only mounted when a ZIP exists — StatStrip decides that, so an unset ZIP
+ * collapses the whole strip to one column rather than leaving a hole. An empty
+ * weather tile is worse than no tile: a permanent gap on the home screen
+ * advertising a setting you chose not to fill in.
  */
-function WeatherTile() {
-  const { data: settings } = useSettings()
-  const zip = settings?.settings.weatherZip || ''
+function WeatherTile({ zip, compact }: { zip: string; compact: boolean }) {
   const { data, error, isLoading } = useWeather(zip)
 
-  if (!zip) return null
-
   return (
-    <div style={tile({ padding: '15px 16px' })}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+    <div style={tile({ padding: compact ? '13px 13px' : '15px 16px', minWidth: 0 })}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
         <span style={label()}>Weather</span>
-        {data && <span style={label()}>{data.place}</span>}
+        {/* "Wendell, NC" does not fit beside the word Weather at half a phone
+            width, and it is the same place every day — it moves under the
+            temperature there. */}
+        {data && !compact && <span style={label()}>{data.place}</span>}
       </div>
       {isLoading && <div style={{ ...body(13), color: T.faint, marginTop: 9 }}>Loading…</div>}
       {/* Named, not swallowed. A tile that silently shows nothing is
@@ -204,47 +221,15 @@ function WeatherTile() {
       )}
       {data && (
         <>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 7 }}>
-            <span style={hero(34)}>{data.tempF}°</span>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 7 }}>
+            <span style={hero(compact ? 30 : 34)}>{data.tempF}°</span>
             <span style={label()}>F</span>
           </div>
-          <div style={{ ...body(13), marginTop: 6 }}>{data.condition}</div>
+          <div style={{ ...body(compact ? 12 : 13), marginTop: 6, wordBreak: 'break-word' }}>
+            {compact ? `${data.condition} · ${data.place}` : data.condition}
+          </div>
         </>
       )}
-    </div>
-  )
-}
-
-/**
- * How far into the month you are, against where the money lands.
- *
- * The bar is the CALENDAR month, not spend — it is the denominator you compare
- * the projection against, and a spend bar next to a projection figure invites
- * reading one as the other.
- */
-function PaceTile({ money, today }: { money: TodayPayload['money']; today: string }) {
-  const [y, m, d] = today.split('-').map(Number)
-  const days = new Date(y, m, 0).getDate()
-  const pct = Math.round((d / days) * 100)
-  const fmt = (n: number) => fmtMoney(n, money?.currency)
-
-  return (
-    <div style={tile({ padding: '15px 16px' })}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
-        <span style={label()}>Month elapsed</span>
-        <span style={label()}>{new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'short' })}</span>
-      </div>
-      <div style={{ height: 5, background: T.paperSunk, borderRadius: 3, overflow: 'hidden', marginTop: 10 }}>
-        <div style={{ width: `${pct}%`, height: '100%', background: T.accent }} />
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 8 }}>
-        <span style={label()}>{pct}%</span>
-        {money && (
-          <span style={label({ color: money.projectedEom < 0 ? T.warn : T.muted })}>
-            {fmt(money.projectedEom)} projected
-          </span>
-        )}
-      </div>
     </div>
   )
 }
@@ -450,6 +435,15 @@ function MoneyCard({ money }: { money: TodayPayload['money'] }) {
           opening balance, a different number entirely. */}
       <div style={label({ marginTop: 5, letterSpacing: '0.08em', color: money.asOf ? T.muted : T.warn })}>
         {money.asOf ? `as of ${shortDate(money.asOf)}` : 'no balance logged — showing month opening'}
+      </div>
+      {/* Where the month lands once everything scheduled has hit. It used to
+          ride the status strip; it belongs NEXT to the balance, which is the
+          only number it means anything against. Shown alongside, never instead
+          of — Today once printed this one as "Bank balance" and it read as an
+          overdraft every month rent was still outstanding. */}
+      <div style={label({ marginTop: 8, letterSpacing: '0.08em',
+                          color: money.projectedEom < 0 ? T.warn : T.muted })}>
+        {fmt(money.projectedEom)} projected end of month
       </div>
 
       {/* Two figures, not one net number — a quiet week and a big-in-big-out

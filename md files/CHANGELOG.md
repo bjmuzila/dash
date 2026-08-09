@@ -1,5 +1,71 @@
 # Changelog
 
+## 2026-08-09 - budget-vite: status strip is two tiles, side by side
+
+### `src/pages/Today.tsx`
+
+- **"Month elapsed" removed** — from both layouts, not just the phone. It was a
+  progress bar for the passage of time, a fact the date line above it already
+  states, and on a phone it pushed the calendar a third of a screen down.
+- The one figure it carried that isn't derivable — **projected end of month** —
+  moved onto the Money card, directly under the balance. That is the only number
+  it means anything against, and it was on the status strip a full screen away
+  from it. Shown alongside the balance, never instead of it.
+- **Time and weather now sit side by side at every width**, phone included.
+  Stacked, those two tiles were ~200px of chrome above the first thing you came
+  to read.
+- Half a phone width is ~160px, so the tiles shed what doesn't fit rather than
+  wrapping: clock 38→30px, the timezone city drops off the date line, and the
+  place name moves from beside the word "Weather" to under the temperature,
+  where there is room for it.
+- The strip collapses to ONE column when no ZIP is set. A half-width tile with
+  dead space beside it reads as something having failed to load. `StatStrip`
+  now owns that decision and only mounts `WeatherTile` when there is a ZIP, so
+  the tile no longer has to render-nothing on its own.
+
+Typechecks clean.
+
+
+## 2026-08-09 - budget-vite: home-screen icon
+
+Adding budget.cbedge.net to a home screen produced a screenshot of the page,
+because `index.html` declared no icon and no manifest at all.
+
+### New files in `budget-vite/public/`
+
+- `apple-touch-icon.png` (180), `icon-192.png`, `icon-512.png`,
+  `icon-maskable-512.png`, `favicon-32.png`, `manifest.json`.
+- All generated from the existing `public/heart.png` — the same Brandon+Heather
+  line-art already on the Welcome screen — composited over `#05060A` with the
+  app's own cyan corner wash, so the icon and the first screen are visibly the
+  same product.
+- **Opaque, not transparent.** `heart.png` is white strokes on alpha; installed
+  as-is iOS composites it onto black-on-black and you get a blank tile.
+- The stroke is dilated before the downscale. It is a fine pencil line at 816px
+  and straight resampling to 180 leaves a grey whisper.
+- The maskable variant is inset to the middle ~62%. Android crops icons to a
+  circle and would have taken the top of the heart off.
+
+### `budget-vite/index.html`
+
+- `apple-touch-icon`, `icon` and `manifest` links added. iOS ignores manifest
+  icons entirely and uses the apple-touch-icon, which is why both exist.
+- **`theme-color` corrected from `#F7F4ED` to `#05060A`.** It was still the
+  cream value from before the app went dark, so the installed app flashed white
+  on every cold start.
+- `apple-mobile-web-app-status-bar-style` `default` → `black-translucent`. The
+  shell already pads with `env(safe-area-inset-top)` and the viewport is
+  `viewport-fit=cover`, so the page now runs under the status bar instead of
+  leaving a white band above it.
+- Manifest is `.json`, not `.webmanifest`: nginx:alpine's bundled `mime.types`
+  has no entry for that extension and would serve it as
+  `application/octet-stream`. `application/json` is accepted for a manifest and
+  needs no nginx change.
+
+Icons are static assets in `public/` — Vite copies them to the dist root and
+nginx's `try_files` already serves them. No build or config change.
+
+
 ## 2026-08-09 - budget-vite: habits grid fits a phone, weather ZIP default
 
 ### `src/pages/Today.tsx`

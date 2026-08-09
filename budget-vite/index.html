@@ -4,11 +4,32 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="robots" content="noindex, nofollow" />
-    <meta name="theme-color" content="#F7F4ED" />
-    <!-- Installs to the home screen as a standalone app on iOS. -->
+    <!-- #05060A, not the old cream. This paints the browser chrome and the
+         splash behind the installed app; left on the light value the app
+         flashed white every cold start. -->
+    <meta name="theme-color" content="#05060A" />
+
+    <!-- Installs to the home screen as a standalone app on iOS.
+         black-translucent, not default: the shell already pads with
+         env(safe-area-inset-top) and the viewport is viewport-fit=cover, so the
+         page runs under the status bar instead of leaving a white band. -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Home" />
+
+    <!-- The home-screen icon. iOS ignores the manifest icons and uses THIS one,
+         which is why it exists separately — and why it is opaque: a PNG with
+         transparency gets composited on black by iOS, and public/heart.png is
+         white line art, so the bare asset would install as a blank tile.
+         Generated from public/heart.png over the app's own background. -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <!-- .json, not .webmanifest: nginx:alpine's bundled mime.types has no
+         entry for the .webmanifest extension, so it would go out as
+         application/octet-stream. application/json is accepted for a
+         manifest and needs no nginx change. -->
+    <link rel="manifest" href="/manifest.json" />
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <!-- Newsreader: the serif for headlines and hero numbers.
