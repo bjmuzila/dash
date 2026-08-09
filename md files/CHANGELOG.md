@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-08-09 - budget-vite: home-screen icon was blurry
+
+Assets only — no markup change. The first version dilated the stroke AFTER
+downscaling to 180, which does not draw a thicker line, it smears a 1px line
+into a 3px grey band. That is what read as blur on the home screen.
+
+Rebuilt pipeline, in `budget-vite/public/`:
+
+- **Autocontrast the alpha first.** `heart.png`'s line peaks at 255 but averages
+  11 — most of its width is partial coverage. Fine at 816px, a grey wash once it
+  is one pixel wide.
+- **Thicken at 1024, then downsample once.** The stroke is ~5px at source, i.e.
+  ~1.1px at 180 — too thin to survive. Dilating at the master resolution and
+  resampling once gives a solid line instead of a soft one. `MaxFilter(5)`:
+  enough to read, not enough to close the counters in the script lettering
+  (7 starts filling in "Brandon").
+- **Unsharp after the resample**, which is where the softness actually comes
+  from.
+- The 32px favicon gets a much heavier dilation (11) and no corner glow — the
+  names are illegible at that size regardless, so it is weighted to read as a
+  heart mark rather than a smudge.
+
+180 is the exact tile size on a 3x iPhone, so no size change was needed —
+nothing was being upscaled, the source was just soft.
+
+**iOS caches home-screen icons hard.** Remove the tile and re-add it after
+deploying, or it will keep showing the old one.
+
+
 ## 2026-08-09 - budget-vite: status strip is two tiles, side by side
 
 ### `src/pages/Today.tsx`
