@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-08-10 - edge-check: the discriminating test (does the tilt beat "we just went down"?)
+
+`server-v2/atm-prem-edge-check.js`.
+
+- **Why it was needed.** The ±5% and ±2% runs both showed the `1 < z ≤ 2` bucket
+  (moderate put-premium dominance) beating baseline in every symbol at every
+  horizon - 32 of 32 cells across both bands. That survived the adjacent-band
+  check, so the next question is not "is it consistent" but "is it the tilt at
+  all". Tilt correlates about -0.5 with the SAME day's return, so a put-heavy
+  session is largely a proxy for a session that just fell - and in a year the
+  index rose, "buy after a down day" makes money on its own.
+- **PARTIAL CORRELATION** of forward return with tilt, holding the trailing
+  3-session return fixed. If the raw correlation is 0.13 and the partial is 0.02,
+  the tilt was riding the recent move and adds nothing of its own.
+- **DOUBLE SORT**: prior-3d-move tercile x tilt tercile, mean forward return per
+  cell. Read ACROSS a row - the tilt earns its keep only if put-tilt beats
+  call-tilt INSIDE a recent-move row. If the whole effect is the "fell most" row
+  sitting high, that is dip-buying in a costume.
+- Both are printed for h=3 and h=5, above the bucket tables, because the bucket
+  tables cannot answer this and reading them first is how you talk yourself into
+  a signal.
+- Note on the bucket tables generally: the middle bucket holds ~47% of sessions,
+  so "middle underperforms" and "both tails outperform" are ONE fact, not two -
+  the weighted average is forced to equal the baseline. The put-side-vs-call-side
+  comparison is the informative one.
+
 ## 2026-08-10 - prem diff: edge-check script (does a premium spike lead price, or follow it?)
 
 New: `server-v2/atm-prem-edge-check.js`. Read-only, SELECTs on `atm_prem_diff`

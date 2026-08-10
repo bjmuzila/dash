@@ -167,6 +167,69 @@ const BUCKETS = [
   { key: 'z > 2',       test: (z) => z > 2 },
 ];
 
+/** Trailing `k`-session return INTO the session (t-k → t). */
+function trailingReturn(series, k) {
+  return series.map((r, i) => (i >= k ? r.close / series[i - k].close - 1 : null));
+}
+
+/** Tercile edges of a numeric array. */
+function terciles(a) {
+  const s = [...a].sort((x, y) => x - y);
+  return [s[Math.floor(s.length / 3)], s[Math.floor((2 * s.length) / 3)]];
+}
+
+/**
+ * THE DISCRIMINATING TEST — is the tilt anything more than "we just went down"?
+ *
+ * Premium tilt correlates about −0.5 with the SAME day's return, so a
+ * put-heavy session is very largely a proxy for a session that fell. In a year
+ * where the index rose, "buy after a down day" makes money on its own. Any
+ * apparent edge in the tilt buckets therefore has to be checked against that
+ * null before it means anything.
+ *
+ * Two ways of asking it, printed together because they fail differently:
+ *
+ *  1. PARTIAL CORRELATION of forward return with tilt, holding the trailing
+ *     3-session return fixed. If the raw correlation is 0.13 and the partial is
+ *     0.02, the tilt was riding the recent move and adds nothing.
+ *  2. A DOUBLE SORT — recent-move tercile × tilt tercile. If the tilt has
+ *     independent information, the top tilt tercile beats the bottom WITHIN each
+ *     recent-move row. If instead the whole effect sits in the "recently fell"
+ *     row and vanishes across tilt inside it, it is dip-buying wearing a costume.
+ *
+ * The double sort is the honest one to look at even though its cells are small
+ * (~25 sessions each) — it shows WHERE the effect lives rather than averaging it
+ * away.
+ */
+function controlForRecentMove(series, zTilt, h) {
+  const fwd = forwardReturns(series, h);
+  const prior = trailingReturn(series, 3);
+  const idx = series.map((_, i) => i)
+    .filter((i) => zTilt[i] != null && fwd[i] != null && prior[i] != null);
+  if (idx.length < 40) return null;
+
+  const y = idx.map((i) => fwd[i]);
+  const x2 = idx.map((i) => zTilt[i]);
+  const x1 = idx.map((i) => prior[i]);
+
+  const rY2 = corr(y, x2);
+  const rY1 = corr(y, x1);
+  const r12 = corr(x1, x2);
+  const denom = Math.sqrt((1 - rY1 ** 2) * (1 - r12 ** 2));
+  const partial = denom > 0 ? (rY2 - rY1 * r12) / denom : 0;
+
+  const [pLo, pHi] = terciles(x1);
+  const [tLo, tHi] = terciles(x2);
+  const band = (v, lo, hi) => (v <= lo ? 0 : v <= hi ? 1 : 2);
+
+  const cells = [[], [], []].map(() => [[], [], []]);
+  idx.forEach((i, k) => {
+    cells[band(x1[k], pLo, pHi)][band(x2[k], tLo, tHi)].push(y[k]);
+  });
+
+  return { n: idx.length, rY2, rY1, r12, partial, cells };
+}
+
 function analyse(symbol, series, opts) {
   const { lookback, top } = opts;
   console.log(`\n${'='.repeat(78)}`);
@@ -198,6 +261,30 @@ function analyse(symbol, series, opts) {
     const idx = series.map((_, i) => i).filter((i) => zRatio[i] != null && fwd[i] != null);
     const c = corr(idx.map((i) => zRatio[i]), idx.map((i) => fwd[i]));
     console.log(`  h=${padL(h, 2)}  corr = ${c >= 0 ? ' ' : ''}${c.toFixed(3)}   (n=${idx.length})`);
+  }
+
+  // ── The discriminating test ────────────────────────────────────────────────
+  for (const h of [3, 5]) {
+    const c = controlForRecentMove(series, zRatio, h);
+    if (!c) continue;
+    console.log(`\nDOES THE TILT ADD ANYTHING TO "WE JUST WENT DOWN"?  (forward ${h}d, n=${c.n})`);
+    console.log(`  corr(fwd, tilt)            = ${c.rY2 >= 0 ? ' ' : ''}${c.rY2.toFixed(3)}`);
+    console.log(`  corr(fwd, prior 3d return) = ${c.rY1 >= 0 ? ' ' : ''}${c.rY1.toFixed(3)}   ← the null: dip-buying`);
+    console.log(`  corr(tilt, prior 3d)       = ${c.r12 >= 0 ? ' ' : ''}${c.r12.toFixed(3)}   ← how much they overlap`);
+    console.log(`  PARTIAL corr(fwd, tilt | prior 3d) = ${c.partial >= 0 ? ' ' : ''}${c.partial.toFixed(3)}`);
+    console.log('   If the partial collapses toward 0, the tilt was riding the recent move.');
+    console.log(`\n  Double sort — mean forward ${h}d return, rows = prior 3d move, cols = tilt tercile`);
+    console.log(`  ${pad('', 14)} ${padL('call-tilt', 11)} ${padL('middle', 11)} ${padL('put-tilt', 11)}`);
+    const rowLabel = ['fell most', 'flat', 'rose most'];
+    for (let r = 0; r < 3; r++) {
+      const cellTxt = c.cells[r].map((vals) => (vals.length
+        ? `${pct(mean(vals))} (${vals.length})`
+        : '—'));
+      console.log(`  ${pad(rowLabel[r], 14)} ${padL(cellTxt[0], 11)} ${padL(cellTxt[1], 11)} ${padL(cellTxt[2], 11)}`);
+    }
+    console.log('   Read ACROSS each row. Tilt earns its keep only if put-tilt beats call-tilt');
+    console.log('   INSIDE a row. If the whole effect is the "fell most" row being high, that');
+    console.log('   is dip-buying and the tilt is a costume.');
   }
 
   // ── Buckets ────────────────────────────────────────────────────────────────
@@ -284,4 +371,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('fatal:', e); process.exit(1); });
 }
 
-module.exports = { loadSeries, trailingZ, forwardReturns, analyse };
+module.exports = { loadSeries, trailingZ, forwardReturns, trailingReturn, controlForRecentMove, analyse };
