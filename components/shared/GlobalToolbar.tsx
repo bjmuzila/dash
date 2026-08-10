@@ -571,7 +571,16 @@ export default function GlobalToolbar() {
         zIndex: 50,
       }}
     >
-      {/* Gradient-border frame (blue → teal) */}
+      {/* Gradient-border frame (blue → teal)
+          position/zIndex are load-bearing, not cosmetic. The pill inside sets
+          `backdrop-filter`, which CREATES A STACKING CONTEXT — so every dropdown
+          that hangs out of the pill (user menu at z-index 100, NavMenu, the
+          ticker list) is trapped inside it and can only paint as high as the
+          pill itself does. The pill's own level is 0 (z-index:auto), and
+          SectionSubStrip below is also level 0 but comes LATER in the DOM, so it
+          won the tie and painted over the open user menu on Scanner / Test Lab —
+          the only two routes where the strip exists. Lifting this frame to 2
+          puts the whole pill, and everything hanging off it, above the strip. */}
       <div
         style={{
           width: "100%",
@@ -579,6 +588,8 @@ export default function GlobalToolbar() {
           padding: 1.5,
           background: `linear-gradient(110deg, ${cyanA(0.55)}, ${blueA(0.4)} 35%, ${cyanA(0.15)} 60%, ${cyanA(0.55)})`,
           boxShadow: `0 14px 34px -14px rgba(0,0,0,0.8), 0 0 18px -6px ${cyanA(0.4)}`,
+          position: "relative",
+          zIndex: 2,
         }}
       >
         <div

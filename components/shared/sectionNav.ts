@@ -91,11 +91,16 @@ export const TESTLAB_SECTION: SectionNav = {
     { id: "gexlevels",   label: "GEX Levels",      short: "Levels",   color: HOME_THEME.cyan,   icon: "📏" },
     { id: "dealergamma", label: "Dealer Gamma",    short: "Dealer γ", color: LIGHT_BLUE,        icon: "🎚️" },
     { id: "gexmap",      label: "GEX Map",         short: "GEX Map",  color: LIGHT_BLUE,        icon: "🗺️" },
-    { id: "dexcharm",    label: "DEX / Charm",     short: "DEX/Charm", color: HOME_THEME.cyan,  icon: "⏳" },
+    // No "dexcharm" pill. app/test/DexCharmTab.tsx was deleted and TestLab's
+    // TestTab union dropped the id with it, so the pill navigated to
+    // /test?tab=dexcharm and rendered the fallback tab — a button that opened
+    // nothing. It has to come out of BOTH lists here: a stale key in `groups`
+    // alone is harmless (renderItem returns null for an unknown id), but a
+    // stale entry in `tabs` alone still draws the pill.
     { id: "flow",        label: "Flow Inventory",  short: "Flow Inv", color: HOME_THEME.cyan,   icon: "🌊" },
   ],
   groups: [
-    { key: "gamma", tabs: ["squeeze", "gexlevels", "dealergamma", "gexmap", "dexcharm"] },
+    { key: "gamma", tabs: ["squeeze", "gexlevels", "dealergamma", "gexmap"] },
     { key: "flow",  tabs: ["flow"] },
   ],
   event: TESTLAB_TAB_EVENT,

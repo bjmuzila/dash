@@ -1,5 +1,97 @@
 # Changelog
 
+## 2026-08-10 - options chain: TOTAL row is now a stat bar + click-to-focus grid
+
+`components/pages/OptionsChain.tsx`.
+
+**Row 2 (the old one-line "Total Net GEX ...") is now a stat bar.** Five tiles,
+all of them recomputed against the focus selection below:
+
+- **Spot** + day %. The % baseline is the prior-session close, fetched once per
+  ticker from `/api/quotes-batch` (`prev-close`) - the same field TopBar seeds
+  from. No baseline, no % (nothing is faked).
+- **Total Net {greek}** - every rendered expiration, 0DTE INCLUDED. This is new;
+  the old readout only ever showed the ex-0DTE figure.
+- **{greek} ex-0DTE** - the number the sigma-Total column actually sums. Hidden in
+  replay's 0DTE scope, where "ex-0DTE" describes an empty set.
+- **Weekly EM** - the move, with the down / up levels under it. The band-center
+  close is no longer printed (2 numbers, not 3).
+- **CB - 1st 3 exp** - the Core Bullseye (largest |value|) of each of the first
+  three expiration columns, each expiry date directly under its own strike.
+
+**Click-to-focus, multi-select.** Clicking an expiry header or a strike toggles
+it into a selection; shift-click selects only that one. Everything unselected
+fades (cells to 13%, strike/header to ~30%) and a FOCUS chip in the stat bar
+shows the counts and clears it. The selection resets on ticker / expiry /
+replay-date / replay-scope change.
+
+- **The sigma Total column re-sums over the selected expiries** (0DTE included - an
+  explicit pick outranks the column's default exclusion) and its header flips
+  from `Total` to `Sel N`. With a strike selection it dims per row, but it never
+  dims for an expiry pick - it answers that by re-summing.
+- Selection accents are cyan (`HT.cyan`), not gold - gold stays the CB marker.
+
+Grid math, heat scales, ATM box, EM tags and the hover/contract popups are
+unchanged. No new routes, so `check-routes.mjs` is unaffected.
+
+## 2026-08-10 - analytics: Contract Lookup removed, Ticker Lookup GEX card added
+
+`components/pages/Analytics.tsx`.
+
+- **Contract Lookup card deleted.** The saved-contract grid (the `/api/watch`
+  Owner-Watch clone: add ticker/expiry/strike/side, click a card for greeks)
+  and every helper that existed only for it - `WatchSnapshot`, `WatchRow`,
+  `wFmt`/`wFmtInt`/`wFmtMoney`/`wDayChgPct`/`wTimeAgo`, `WATCH_REFRESH_MS` -
+  are gone. The now-unused `ThemedDatePicker` import went with them. `/api/watch`
+  itself is untouched; nothing on this page calls it any more.
+- **New full-width Ticker Lookup card at the bottom of the grid.** Type any
+  optionable symbol (or hit a quick pill: SPX / SPY / QQQ / NVDA / TSLA, plus
+  the last 8 looked up, persisted in `localStorage` under
+  `analytics.tickerLookup.recent`) and the card renders that name's live GEX
+  ladder: a centered bar rail with +GEX right and -GEX left, the 15 strikes
+  nearest spot, the spot row outlined and tagged, and Call wall / Put wall /
+  Core marks inline on their strikes.
+- **Headline row** carries spot, a Positive/Negative gamma chip off the net,
+  the ATM straddle as +/- Move, Net GEX and ATM IV. Below the ladder: a plain
+  language "The read" line, then Core (CB) / Call wall / Put wall / Gamma flip
+  chips, each with its distance from spot.
+- **One GEX formula, not two.** The card reads `accumulateChainGreeks()` - the
+  same OI+Vol function the Multi Greek card at the top of the page uses, off the
+  same `/api/chains` payload. That function took an optional `expiry` argument
+  so the ladder can narrow to one expiration; a private copy of the formula is
+  how two cards on one page end up printing different numbers for the same
+  ticker.
+- **Walls and the flip are computed on the FULL ladder**, not the drawn window,
+  so cropping to 15 rows can never invent a nearer wall. Call wall = highest
+  +GEX strike, Put wall = most -GEX strike, Core = highest |GEX|, Gamma flip =
+  the interpolated zero crossing of cumulative GEX from the low strike up.
+- **Expiry pills are honest about scope.** `/api/chains` with no `?expiration`
+  returns the front THREE expirations, so "All" says `3 front expirations`
+  rather than implying the whole board; each pill shows its date + DTE.
+- No proxy, server or API change - this is a client page edit only.
+
+## 2026-08-09 - test lab: DEX/Charm pill removed + toolbar dropdowns above the sub-strip
+
+`components/shared/sectionNav.ts`, `components/shared/GlobalToolbar.tsx`,
+`components/shared/SectionSubStrip.tsx`.
+
+- **DEX / Charm pill deleted from the Test Lab strip.** `app/test/DexCharmTab.tsx`
+  was removed earlier and TestLab's `TestTab` union dropped `"dexcharm"` with it,
+  but the pill stayed in the `sectionNav` registry — so the button was still
+  rendered, navigated to `/test?tab=dexcharm`, and fell through to the default
+  tab. Removed from both `tabs` and the `gamma` group. A saved custom pill order
+  containing the old key is safe: `renderItem` returns null for an id the section
+  no longer declares.
+- **Toolbar dropdowns no longer paint under the sub-strip.** On Scanner and Test
+  Lab — the only two routes with a `SectionSubStrip` — opening the user/account
+  menu (or NavMenu, or the ticker list) put it *behind* the strip. Cause: the
+  toolbar pill sets `backdrop-filter`, which creates a stacking context, so those
+  dropdowns' inner `z-index: 100 / 1` are capped at the pill's own level (0), and
+  the strip — also level 0, later in the DOM — won the tie. Fix: the pill's
+  gradient-border frame is now `position: relative; z-index: 2`, above the strip's
+  0. Nothing else moves; the band stays at 50 over page content.
+
+
 ## 2026-08-09 - chain + multi-greek: EM tag beside the strike, no EM row lines
 
 `components/pages/OptionsChain.tsx`, `app/mult-greek/MultGreekClient.tsx`.

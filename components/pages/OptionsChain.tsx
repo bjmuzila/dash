@@ -1087,6 +1087,16 @@ interface ChainMatrixProps {
    * rather than falling back to a live OI level with no delta beside it.
    */
   oiChangeMap: Map<string, { callOI: number; putOI: number; callChg: number; putChg: number }>;
+  /**
+   * Focus selection. Click an expiry header or a strike to toggle it in; every
+   * unselected column/row fades to a ghost and the ⅀ Total column re-sums over
+   * ONLY the selected expiries (0DTE included — an explicit pick outranks the
+   * column's usual ex-0DTE rule). Both empty = the normal, unfiltered chain.
+   */
+  selExps: Set<string>;
+  selStrikes: Set<number>;
+  onToggleExp: (exp: string, solo: boolean) => void;
+  onToggleStrike: (strike: number, solo: boolean) => void;
   onCellClick: (v: { strike: number; expiration: string }) => void;
   onCellHover: (v: { strike: number; colIdx: number; x: number; y: number } | null) => void;
 }
@@ -1099,7 +1109,8 @@ const ChainMatrix = memo(function ChainMatrix({
   columns, gridCols, visibleStrikes, nearestStrike, spot, greekMode, dataMode,
   intensity, colScales, volMvcByCol, mvcByCol, delta15, delta15Exp, valueAt, isStandalone,
   changeMode, sessionDate, showTotalCol, layoutExpCols, changeMeta, changeMap, changeScaleByExp, emStrikes, anyCurrentWeek,
-  emLevels, activeTicker, atmRowRef, oiChangeMap, onCellClick, onCellHover,
+  emLevels, activeTicker, atmRowRef, oiChangeMap,
+  selExps, selStrikes, onToggleExp, onToggleStrike, onCellClick, onCellHover,
 }: ChainMatrixProps) {
   // OI is a contract count, not dollars — and on this tab every readout is a
   // CHANGE in that count, so it takes the signed compact formatter (+1.2K /
@@ -1136,13 +1147,17 @@ const ChainMatrix = memo(function ChainMatrix({
   // "0DTE" means the expiry that equals the SESSION being shown, not literally
   // today — replaying Tuesday must exclude Tuesday's 0DTE, not Friday's.
   const todayKey = sessionDate || etDateKey(etToday());
+  // With expiries picked, the ⅀ column sums exactly those (0DTE included — an
+  // explicit pick outranks the default exclusion) and says so in its header.
+  const selMode = selExps.size > 0;
   const rowTotals = new Map<number, number>();
   visibleStrikes.forEach((strike) => {
     if (strike == null) return;
     let sum = 0;
     renderIdx.forEach((colIdx) => {
       const col = columns[colIdx];
-      if (!col || col.expiration === todayKey) return;
+      if (!col) return;
+      if (selMode ? !selExps.has(col.expiration) : col.expiration === todayKey) return;
       // !isCountMode mirrors the per-cell guard below — the Δ columns carry
       // volume-GEX dollars, which must never be summed into a contract-count
       // total (OI or VOL).
@@ -1228,8 +1243,27 @@ const ChainMatrix = memo(function ChainMatrix({
               ? visibleStrikes.reduce((s, k) => s + (k == null ? 0 : (changeMap.get(`${col.expiration}|${k}`) ?? 0)), 0)
               : visibleStrikes.reduce((s, k) => { const v = k == null ? null : valueAt(col, k); return s + (v ?? 0); }, 0))
           : null;
+        const expSel = col != null && selExps.has(col.expiration);
+        const expDim = selMode && !expSel;
         return (
-          <div key={`hdr-${col?.expiration ?? i}`} style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: isChangeCol ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HDR_BG}` : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}` }}>
+          <div
+            key={`hdr-${col?.expiration ?? i}`}
+            onClick={col ? (e) => onToggleExp(col.expiration, e.shiftKey) : undefined}
+            title={col ? "Click to focus this expiration (shift-click = only this one)" : undefined}
+            style={{
+              position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px",
+              background: expSel
+                ? `linear-gradient(180deg, ${rgba(HT.cyan, 0.30)} 0%, ${rgba(HT.cyan, 0.07)} 100%), ${HDR_BG}`
+                : isChangeCol
+                  ? `linear-gradient(180deg, ${rgba(HT.orange, 0.18)} 0%, ${rgba(HT.orange, 0.05)} 100%), ${HDR_BG}`
+                  : `linear-gradient(180deg, ${rgba(HT.cyan, 0.14)} 0%, ${rgba(HT.cyan, 0.04)} 100%), ${HDR_BG}`,
+              borderBottom: `1px solid ${HT.border}`,
+              boxShadow: expSel ? `inset 0 -2px 0 ${HT.cyan}` : undefined,
+              cursor: col ? "pointer" : undefined,
+              opacity: expDim ? 0.3 : 1,
+              transition: "opacity .12s",
+            }}
+          >
             <div style={{ fontSize: 10, fontWeight: 500, color: isChangeCol ? HT.orange : HT.text }}>
               {col ? fmtExpHeader(col.expiration) : "—"}{isChangeCol ? ` ·Δ${changeMode}` : ""}
               {!isChangeCol && hasDelta15 && col?.expiration === delta15Exp && (
@@ -1248,7 +1282,9 @@ const ChainMatrix = memo(function ChainMatrix({
       {/* ── ⅀ Total column header (sum of all expirations for each strike) ── */}
       {showTotalCol && (
         <div style={{ position: "sticky", top: 0, zIndex: 3, textAlign: "center", padding: "5px 6px", background: `linear-gradient(180deg, ${rgba(HT.cyan, 0.24)} 0%, ${rgba(HT.cyan, 0.07)} 100%), ${HDR_BG}`, borderBottom: `1px solid ${HT.border}`, borderLeft: `2px solid ${rgba(HT.cyan, 0.45)}` }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: HT.cyan, letterSpacing: "0.04em" }}>Total</div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: HT.cyan, letterSpacing: "0.04em" }}>
+            {selMode ? `Sel ${selExps.size}` : "Total"}
+          </div>
           <div style={{ fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)", color: grandVisibleTotal >= 0 ? HT.green : HT.red }}>
             {fmtVal(grandVisibleTotal)}
           </div>
@@ -1289,22 +1325,33 @@ const ChainMatrix = memo(function ChainMatrix({
           emTag = up ? "EM +2σ" : "EM −2σ";
           emTip = `2× weekly expected move ${up ? "up" : "down"}${emLevels ? ` (${emLevels.close} ± ${2 * emLevels.em})` : ""}`;
         }
+        const strikeSel = selStrikes.has(strike);
+        const strikeDim = selStrikes.size > 0 && !strikeSel;
         return (
           <div key={strike} style={{ display: "contents" }}>
-            {/* Shared strike label (sticky left) */}
-            <div ref={isATM ? atmRowRef : undefined} title={emTip || undefined} style={{
+            {/* Shared strike label (sticky left) — also the row's focus toggle */}
+            <div
+              ref={isATM ? atmRowRef : undefined}
+              onClick={(e) => onToggleStrike(strike, e.shiftKey)}
+              title={emTip || "Click to focus this strike (shift-click = only this one)"}
+              style={{
               position: "sticky", left: 0, zIndex: 2,
               padding: "2px 5px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right",
               // ATM reads like the /home GEX heatmap: no amber fill, blue strike
               // text with a blue "ATM" tag beside it, inside the white rule.
               color: isATM ? HT.cyan : "#e4e4e7",
               fontWeight: isATM ? 700 : 400,
-              background: HDR_BG,
+              background: strikeSel
+                ? `linear-gradient(90deg, ${rgba(HT.cyan, 0.06)}, ${rgba(HT.cyan, 0.30)}), ${HDR_BG}`
+                : HDR_BG,
+              boxShadow: strikeSel ? `inset -2px 0 0 ${HT.cyan}` : undefined,
               borderRight: `1px solid ${HT.border}`,
               borderTop: isATM ? "2px solid #ffffff" : undefined,
               borderBottom: isATM ? "2px solid #ffffff" : undefined,
               display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 3,
-              cursor: emTag ? "help" : undefined,
+              cursor: "pointer",
+              opacity: strikeDim ? 0.28 : 1,
+              transition: "opacity .12s",
               whiteSpace: "nowrap", overflow: "hidden",
             }}>
               {emTag && (
@@ -1405,6 +1452,10 @@ const ChainMatrix = memo(function ChainMatrix({
                     whiteSpace: "nowrap", overflow: "hidden",
                     display: "flex", alignItems: isCountMode ? "center" : "baseline", justifyContent: "flex-end", gap: 5,
                     cursor: isClickable ? "pointer" : undefined,
+                    // Focus dimming: a cell stays lit only if BOTH its column
+                    // and its row survive the selection.
+                    opacity: (strikeDim || (selMode && !(col != null && selExps.has(col.expiration)))) ? 0.13 : 1,
+                    transition: "opacity .12s",
                     ...(isMvc ? { outline: "2px solid #ffb300", outlineOffset: "-2px" } : {}),
                   }}
                 >
@@ -1476,9 +1527,13 @@ const ChainMatrix = memo(function ChainMatrix({
                   padding: "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 700,
                   color: tot === 0 ? "#3a4a5e" : "rgba(255,255,255,0.92)",
                   background: tot !== 0 ? metricBg(tot, totalScale.max, intensity, totalScale.top3) : "transparent",
-                  borderLeft: `2px solid ${rgba(HT.cyan, 0.35)}`,
+                  borderLeft: `2px solid ${rgba(HT.cyan, selMode ? 0.8 : 0.35)}`,
                   boxShadow: atmTotShadow,
                   whiteSpace: "nowrap", overflow: "hidden",
+                  // The ⅀ column answers the expiry selection by re-summing, so
+                  // it dims for a strike pick only — never for an expiry one.
+                  opacity: strikeDim ? 0.13 : 1,
+                  transition: "opacity .12s",
                   display: "flex", alignItems: "baseline", justifyContent: "flex-end",
                 }}>
                   {/* The count tabs drop SignVal's colored +/−: this cell can be
@@ -1656,6 +1711,35 @@ export default function OptionsChainPage({
   const [chainError, setChainError] = useState<string | null>(null);
   // Weekly EM (from /api/levels, DB-backed). close ± em = 1× band, ± 2·em = 2×.
   const [emLevels, setEmLevels] = useState<{ close: number; em: number } | null>(null);
+  // Prior-session close for the ACTIVE ticker, for the stat bar's spot %.
+  // Same source TopBar seeds from (`prev-close` on the batch quote).
+  const [prevClose, setPrevClose] = useState<number>(0);
+
+  // ── Focus selection ────────────────────────────────────────────────────────
+  // Click an expiry header or a strike to toggle it into the selection; every
+  // unselected column/row fades and the ⅀ Total column re-sums over ONLY the
+  // selected expiries. Empty sets = the normal, unfiltered chain.
+  const [selExps, setSelExps] = useState<Set<string>>(() => new Set());
+  const [selStrikes, setSelStrikes] = useState<Set<number>>(() => new Set());
+  const hasSel = selExps.size > 0 || selStrikes.size > 0;
+  const clearSel = useCallback(() => { setSelExps(new Set()); setSelStrikes(new Set()); }, []);
+  /** solo = shift-click: replace the selection with just this one. */
+  const toggleExpSel = useCallback((exp: string, solo: boolean) => {
+    setSelExps(prev => {
+      if (solo) return prev.size === 1 && prev.has(exp) ? new Set() : new Set([exp]);
+      const next = new Set(prev);
+      if (next.has(exp)) next.delete(exp); else next.add(exp);
+      return next;
+    });
+  }, []);
+  const toggleStrikeSel = useCallback((strike: number, solo: boolean) => {
+    setSelStrikes(prev => {
+      if (solo) return prev.size === 1 && prev.has(strike) ? new Set() : new Set([strike]);
+      const next = new Set(prev);
+      if (next.has(strike)) next.delete(strike); else next.add(strike);
+      return next;
+    });
+  }, []);
 
   // The 7-expiration matrix. Each entry holds one expiration's strike→greek map.
   const expColumnsRef = useRef<ExpColumn[]>([]);
@@ -2403,6 +2487,34 @@ export default function OptionsChainPage({
     return () => { cancelled = true; };
   }, [activeTicker, refreshSeed]);
 
+  // Prior-session close for the active ticker — the baseline for the stat bar's
+  // spot %. One batch quote, same `prev-close` field TopBar seeds from. A miss
+  // just leaves prevClose at 0 and the % readout is omitted rather than faked.
+  useEffect(() => {
+    let cancelled = false;
+    setPrevClose(0);
+    (async () => {
+      try {
+        const r = await fetch(`/api/quotes-batch?symbols=${encodeURIComponent(activeTicker)}`);
+        if (!r.ok || cancelled) return;
+        const d = await r.json();
+        const items: Array<Record<string, unknown>> = d?.data?.items || [];
+        for (const q of items) {
+          const sym = String(q.symbol || "").split(":")[0].replace(/^\$/, "");
+          if (sym.toUpperCase() !== activeTicker.toUpperCase()) continue;
+          const prev = parseFloat(String(q["prev-close"] ?? q.prevClose ?? 0));
+          if (Number.isFinite(prev) && prev > 0 && !cancelled) setPrevClose(prev);
+          break;
+        }
+      } catch { /* no baseline → no % shown */ }
+    })();
+    return () => { cancelled = true; };
+  }, [activeTicker, refreshSeed]);
+
+  // A focus selection is about the columns/strikes currently on screen — a new
+  // ticker, a new expiry window or a jump in/out of replay invalidates it.
+  useEffect(() => { clearSel(); }, [activeTicker, selectedExpiry, replayDate, replayScope, clearSel]);
+
   // Load the strike→change map for the active ticker when a change mode is on.
   // Reuses /proxy/strike-growth which returns chg15/chg30/chg60 per (front-expiry)
   // strike. Refetched on ticker change, mode change, and each refresh.
@@ -2671,37 +2783,60 @@ export default function OptionsChainPage({
 
   const autoPercentNote = autoDisplayPercent !== displayPercent ? `Auto ${autoDisplayPercent}%` : null;
 
-  // Grand total of the active greek across the VISIBLE strike window × every
-  // non-0DTE expiration (matches the sum of the Total column — front expiry
-  // excluded, label stays plain "Total Net {greek}"). Shown in the toolbar.
-  const visibleTotal = useMemo(() => {
-    // Same rule as the ⅀ Total column: 0DTE is relative to the session shown.
-    // Exception: replay's "0dte" scope renders nothing BUT 0DTE, so excluding it
-    // would leave this readout permanently 0 next to a grid full of numbers.
-    // There it totals the one column on screen — and the label says "0DTE" so
-    // the figure is never read as the usual ex-0DTE total.
+  // ── Stat bar figures ───────────────────────────────────────────────────────
+  // Everything the TOTAL row prints, computed once over the VISIBLE strike
+  // window and honouring the focus selection (empty selection = whole chain):
+  //   total     — every rendered expiration, 0DTE included
+  //   totalEx0  — the ⅀ Total column's rule: 0DTE excluded
+  //   cb        — per-expiry Core Bullseye (largest |value|) for the first 3
+  //               columns, or the first 3 SELECTED columns
+  // "0DTE" is relative to the SESSION being shown, not literally today, so a
+  // replayed Tuesday excludes Tuesday's front expiry.
+  const chainStats = useMemo(() => {
     const zeroDteOnly = !!replayFrame && replayScope === "0dte";
     const todayKey = replayFrame ? replayDate : etDateKey(etToday());
-    let sum = 0;
-    for (const col of columns) {
-      if (!zeroDteOnly && col.expiration === todayKey) continue;
-      for (const s of visibleStrikes) {
-        if (s == null) continue;
-        // OI tab totals the day-over-day CHANGE, matching the ⅀ Total column.
-        if (greekMode === "oi") {
-          const snap = oiSnapshot.map.get(`${col.expiration}|${s}`);
-          if (snap) sum += oiSideChange(snap, s, nearestStrike);
-          continue;
-        }
-        const cell = col.cells.get(s);
-        if (!cell) continue;
-        // VOL totals the same side-signed count the grid colors by.
-        if (greekMode === "vol") { sum += volSideValue(cell, s, nearestStrike); continue; }
-        sum += cell[greekMode];
+    const valueOf = (col: ExpColumn, s: number): number | null => {
+      if (greekMode === "oi") {
+        const snap = oiSnapshot.map.get(`${col.expiration}|${s}`);
+        return snap ? oiSideChange(snap, s, nearestStrike) : null;
+      }
+      const cell = col.cells.get(s);
+      if (!cell) return null;
+      if (greekMode === "vol") return volSideValue(cell, s, nearestStrike);
+      return cell[greekMode];
+    };
+    const strikes = visibleStrikes.filter((s): s is number => s != null);
+    const rows = selStrikes.size > 0 ? strikes.filter(s => selStrikes.has(s)) : strikes;
+    const cols = selExps.size > 0 ? columns.filter(c => selExps.has(c.expiration)) : columns;
+
+    let total = 0, totalEx0 = 0;
+    for (const col of cols) {
+      // In replay's 0DTE scope the only column on screen IS 0DTE, so excluding
+      // it would leave a permanent 0 beside a grid full of numbers.
+      const isZero = !zeroDteOnly && col.expiration === todayKey;
+      for (const s of rows) {
+        const v = valueOf(col, s);
+        if (v == null) continue;
+        total += v;
+        if (!isZero) totalEx0 += v;
       }
     }
-    return sum;
-  }, [columns, visibleStrikes, greekMode, nearestStrike, oiSnapshot, replayFrame, replayDate, replayScope]);
+
+    const cb = cols.slice(0, 3).map(col => {
+      let k: number | null = null, v = 0;
+      for (const s of rows) {
+        const x = valueOf(col, s);
+        if (x == null) continue;
+        if (k == null || Math.abs(x) > Math.abs(v)) { k = s; v = x; }
+      }
+      return { expiration: col.expiration, strike: k, value: v };
+    }).filter(c => c.strike != null);
+
+    return { total, totalEx0, cb, zeroDteOnly };
+  }, [columns, visibleStrikes, greekMode, nearestStrike, oiSnapshot, replayFrame, replayDate, replayScope, selExps, selStrikes]);
+
+  // Day change against the prior session close. Null when there is no baseline.
+  const spotPct = prevClose > 0 && spot > 0 ? ((spot - prevClose) / prevClose) * 100 : null;
 
   // Toolbar button styled to match the right-side SegGroup tiles (height 34,
   // radius 8, fontSize 11–12, weight 700) so GO + Recent line up with them.
@@ -2879,42 +3014,152 @@ export default function OptionsChainPage({
             : `📊 Options Chain — ${activeTicker} ${selectedExpiry}`}
         />
       </Dock>
-      {/* Row 2 — total net GEX (active greek) across the visible window. */}
-      {showGrandTotal && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 2px", fontSize: 11, whiteSpace: "nowrap" }}>
-          {/* "Total" normally means "every expiry EXCEPT 0DTE". In replay's
-              0DTE scope it means the opposite — the 0DTE column alone — so the
-              label changes with it rather than letting one word cover both. */}
-          <span style={{ fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: HT.muted }}>
-            {replayFrame && replayScope === "0dte"
-              ? (greekMode === "oi" ? "0DTE ΔOI" : `0DTE Net ${greekMode.toUpperCase()}`)
-              : (greekMode === "oi" ? "Total ΔOI" : `Total Net ${greekMode.toUpperCase()}`)}
-          </span>
-          <span style={{ fontFamily: "var(--font-mono)", fontWeight: 800, fontSize: 12, color: visibleTotal >= 0 ? HT.green : HT.red }}>
-            {greekMode === "oi" ? fmtChg(visibleTotal) : greekMode === "vol" ? fmtCount(visibleTotal) : fmtMoney(visibleTotal)}
-          </span>
-          <span style={{ color: HT.border }}>·</span>
-          <span style={{ color: HT.muted, opacity: 0.75 }}>
-            {activeTicker} · {replayFrame ? "all recorded strikes" : `${displayPercent}% strikes${autoPercentNote ? ` · ${autoPercentNote}` : ""}`}
-          </span>
-          {/* OI tab provenance. The Δ column is only meaningful once TWO daily
-              snapshots exist, so say plainly which two days are being compared
-              — and say so just as plainly when there is no baseline yet, rather
-              than letting a column of "—" look like a bug. */}
-          {greekMode === "oi" && (
-            <>
-              <span style={{ color: HT.border }}>·</span>
-              <span style={{ color: oiSnapshot.prevDate ? HT.cyan : HT.muted, opacity: 0.9 }}>
-                {oiSnapshot.prevDate
-                  ? `ΔOI ${oiSnapshot.date} vs ${oiSnapshot.prevDate}`
-                  : oiSnapshot.date
-                    ? `OI ${oiSnapshot.date} · no prior snapshot yet`
-                    : "OI snapshot not recorded for this ticker"}
+      {/* ── Row 2 — the TOTAL row, now a stat bar ─────────────────────────────
+          Spot · Total Net {greek} · the same total ex-0DTE · the weekly EM
+          band · the Core Bullseye of each of the first three expirations.
+          Every figure honours the focus selection, so clicking expiries or
+          strikes in the grid re-reads this whole row. */}
+      {showGrandTotal && (() => {
+        const fmtTot = (v: number) =>
+          greekMode === "oi" ? fmtChg(v) : greekMode === "vol" ? fmtCount(v) : fmtMoney(v);
+        const label = greekMode === "oi" ? "ΔOI" : `Net ${greekMode.toUpperCase()}`;
+        const kStyle: React.CSSProperties = {
+          fontSize: 8.5, fontWeight: 800, letterSpacing: "0.12em",
+          textTransform: "uppercase", color: HT.text,
+        };
+        const vStyle: React.CSSProperties = {
+          fontFamily: "var(--font-mono)", fontWeight: 800, fontSize: 13, lineHeight: 1.15,
+        };
+        const subStyle: React.CSSProperties = {
+          fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 9, color: HT.text,
+        };
+        const cellStyle: React.CSSProperties = {
+          display: "flex", flexDirection: "column", justifyContent: "center", gap: 1,
+          padding: "5px 12px", whiteSpace: "nowrap", flex: "0 0 auto",
+          borderRight: "1px solid rgba(255,255,255,0.06)",
+        };
+        // EM band edges print like price levels, not money.
+        const fmtLvl = (v: number) =>
+          v.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+        return (
+          <div style={{
+            display: "flex", alignItems: "stretch", padding: "0 2px",
+            overflowX: "auto", scrollbarWidth: "none", minWidth: 0,
+          }}>
+            {/* Spot + day % */}
+            <div style={cellStyle}>
+              <span style={kStyle}>Spot</span>
+              <span style={{ ...vStyle, color: HT.cyan }}>
+                {spot > 0 ? spot.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}
+                {spotPct != null && (
+                  <span style={{ fontSize: 10, fontWeight: 700, marginLeft: 4, color: spotPct >= 0 ? HT.green : HT.red }}>
+                    {spotPct >= 0 ? "+" : ""}{spotPct.toFixed(2)}%
+                  </span>
+                )}
               </span>
-            </>
-          )}
-        </div>
-      )}
+            </div>
+
+            {/* Total (every expiration, 0DTE included) */}
+            <div style={{ ...cellStyle, background: `linear-gradient(180deg,${rgba(HT.cyan, 0.10)},${rgba(HT.cyan, 0.02)})` }}>
+              <span style={kStyle}>{`Total ${label}`}</span>
+              <span style={{ ...vStyle, color: chainStats.total >= 0 ? HT.green : HT.red }}>
+                {fmtTot(chainStats.total)}
+              </span>
+            </div>
+
+            {/* Same total with the session's 0DTE column dropped — the figure
+                the ⅀ Total column adds up. In replay's 0DTE scope there is no
+                "ex-0DTE" set to speak of, so the tile is dropped rather than
+                printing the same number twice under a contradictory label. */}
+            {!chainStats.zeroDteOnly && (
+              <div style={cellStyle}>
+                <span style={kStyle}>{`${label} ex-0DTE`}</span>
+                <span style={{ ...vStyle, color: chainStats.totalEx0 >= 0 ? HT.green : HT.red }}>
+                  {fmtTot(chainStats.totalEx0)}
+                </span>
+                <span style={subStyle}>⅀ Total column</span>
+              </div>
+            )}
+
+            {/* Weekly EM — the move, then the down / up levels it lands on. */}
+            <div style={cellStyle}>
+              <span style={kStyle}>Weekly EM</span>
+              <span style={{ ...vStyle, color: emLevels ? HT.orange : HT.muted }}>
+                {emLevels ? `±${emLevels.em.toFixed(2)}` : "—"}
+              </span>
+              {emLevels && (
+                <span style={subStyle}>
+                  {fmtLvl(emLevels.close - emLevels.em)} · {fmtLvl(emLevels.close + emLevels.em)}
+                </span>
+              )}
+            </div>
+
+            {/* Core Bullseye of each of the first three expirations, expiry
+                directly under its own strike. */}
+            {chainStats.cb.length > 0 && (
+              <div style={cellStyle}>
+                <span style={kStyle}>CB · 1st 3 exp</span>
+                <span style={{ display: "flex", alignItems: "flex-start" }}>
+                  {chainStats.cb.map((c, i) => (
+                    <span key={c.expiration} style={{ display: "flex", alignItems: "flex-start" }}>
+                      {i > 0 && <span style={{ ...vStyle, color: HT.text, margin: "0 6px" }}>·</span>}
+                      <span style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.15 }}>
+                        <span style={{ ...vStyle, color: c.value >= 0 ? HT.green : HT.red }}>
+                          {c.strike!.toLocaleString("en-US")}
+                        </span>
+                        <span style={subStyle}>{fmtExpHeader(c.expiration)}</span>
+                      </span>
+                    </span>
+                  ))}
+                </span>
+              </div>
+            )}
+
+            <span style={{ flex: "1 1 auto" }} />
+
+            {/* Focus readout — also the way out of a selection. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 10px", fontSize: 10, color: HT.text, whiteSpace: "nowrap", flex: "0 0 auto" }}>
+              {hasSel && (
+                <button
+                  onClick={clearSel}
+                  title="Clear the focus selection"
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 6, height: 20, padding: "0 8px",
+                    borderRadius: 999, cursor: "pointer",
+                    border: `1px solid ${rgba(HT.cyan, 0.5)}`, background: rgba(HT.cyan, 0.14),
+                    color: HT.cyan, fontSize: 9.5, fontWeight: 800, letterSpacing: "0.06em",
+                  }}
+                >
+                  FOCUS: {[
+                    selExps.size ? `${selExps.size} exp` : null,
+                    selStrikes.size ? `${selStrikes.size} strike${selStrikes.size > 1 ? "s" : ""}` : null,
+                  ].filter(Boolean).join(" + ")} ✕
+                </button>
+              )}
+              <span style={{ opacity: 0.75 }}>
+                {activeTicker} · {replayFrame ? "all recorded strikes" : `${displayPercent}% strikes${autoPercentNote ? ` · ${autoPercentNote}` : ""}`}
+              </span>
+              {/* OI tab provenance. The Δ column is only meaningful once TWO
+                  daily snapshots exist, so say plainly which two days are being
+                  compared — and say so just as plainly when there is no
+                  baseline yet, rather than letting a column of "—" look like a
+                  bug. */}
+              {greekMode === "oi" && (
+                <>
+                  <span style={{ color: HT.border }}>·</span>
+                  <span style={{ color: oiSnapshot.prevDate ? HT.cyan : HT.muted, opacity: 0.9 }}>
+                    {oiSnapshot.prevDate
+                      ? `ΔOI ${oiSnapshot.date} vs ${oiSnapshot.prevDate}`
+                      : oiSnapshot.date
+                        ? `OI ${oiSnapshot.date} · no prior snapshot yet`
+                        : "OI snapshot not recorded for this ticker"}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Row 3 — replay transport ────────────────────────────────────────
           Deliberately NOT inside the captureHide Dock: a screen-grab of a
@@ -3145,6 +3390,10 @@ export default function OptionsChainPage({
             emLevels={emLevels}
             activeTicker={activeTicker}
             atmRowRef={atmRowRef}
+            selExps={selExps}
+            selStrikes={selStrikes}
+            onToggleExp={toggleExpSel}
+            onToggleStrike={toggleStrikeSel}
             onCellClick={setContractPopup}
             onCellHover={onCellHover}
           />

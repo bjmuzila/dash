@@ -509,11 +509,14 @@ export default function SectionSubStrip({ open }: { open: boolean }) {
         boxSizing: "border-box",
         transition: "max-height 0.28s cubic-bezier(0.4,0,0.2,1), opacity 0.2s, padding 0.28s",
         position: "relative",
-        // Below the pill's own contents, which sit at z-index 1 in this same
-        // stacking context (the toolbar band). Anything higher here paints over
-        // the dropdowns that hang out of the pill — the user/account menu, which
-        // is absolutely positioned inside a z-index:1 wrapper. The strip still
-        // covers page content because the whole band is z-index 50.
+        // Must stay BELOW the pill above, which GlobalToolbar's gradient frame
+        // pins at z-index 2 in this same stacking context (the toolbar band).
+        // The inner z-index:1 wrappers around the user menu / NavMenu / ticker
+        // do NOT settle this on their own: the pill sets `backdrop-filter`, so
+        // it is its own stacking context and its dropdowns can never paint
+        // higher than the pill's level — this strip only has to lose to the
+        // pill, and at equal levels it would win on DOM order and cover the open
+        // user menu. The strip still covers page content: the band is z-index 50.
         zIndex: 0,
       }}
     >

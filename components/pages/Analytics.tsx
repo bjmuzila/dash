@@ -2,9 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
-import { HOME_THEME, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle, LEVEL_COLORS, REFRESH_GREEN, SOFT_RED } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
-import { ThemedDatePicker } from "@/components/shared/ThemedDatePicker";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { computeAmt, type InitialBalance, type AmtResult } from "@/lib/failLevels";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
@@ -184,10 +183,14 @@ interface PeakGreek { strike: number; value: number }
 // the same page.
 type ChainGreeks = { gex: number; dex: number; chex: number; vex: number };
 
-function accumulateChainGreeks(payload: unknown): Map<number, ChainGreeks> {
+// `expiry` (optional) narrows the accumulation to ONE expiration-date group.
+// The Ticker Lookup card at the bottom of this page needs a per-expiry ladder
+// and must not grow its own copy of this formula to get one.
+function accumulateChainGreeks(payload: unknown, expiry: string | null = null): Map<number, ChainGreeks> {
   type MgLeg = Record<string, unknown>;
   const data = (payload as { data?: { items?: unknown[]; underlyingPrice?: unknown } })?.data;
-  const items = (data?.items as { strikes?: unknown[] }[]) ?? [];
+  const all = (data?.items as { strikes?: unknown[]; "expiration-date"?: unknown }[]) ?? [];
+  const items = expiry == null ? all : all.filter((g) => String(g["expiration-date"]) === expiry);
   const S = numOr(data?.underlyingPrice) ?? 0;
   const acc = new Map<number, ChainGreeks>();
   const n = (o: MgLeg | undefined, k: string) => {
@@ -1402,229 +1405,357 @@ function TickerLevelsCard() {
   );
 }
 
-// ── 9. CONTRACT LOOKUP ────────────────────────────────────────────────────────
-// Same model as Owner · Watch: save a contract (ticker/expiry/strike/side),
-// it becomes a card, click it to see its live stats. Reuses /api/watch — the
-// exact backend the Watch page runs on (probe-rest snapshot + polling).
-interface WatchSnapshot {
-  ts: number;
-  spot: number | null; bid: number | null; ask: number | null;
-  mark: number | null; last: number | null;
-  iv: number | null; delta: number | null; gamma: number | null;
-  theta: number | null; vega: number | null;
-  open_interest: number | null; volume: number | null; net_prem: number | null;
-  prev_close: number | null;
-}
-interface WatchRow {
-  id: number; ticker: string; expiration: string; strike: number;
-  side: string; note: string | null; added_price: number | null; snapshot: WatchSnapshot | null;
-}
+// ── 9. TICKER LOOKUP (full-width) ─────────────────────────────────────────────
+// Type any optionable ticker → its live GEX ladder, walls and gamma regime.
+//
+// ONE FORMULA. The per-strike numbers come from accumulateChainGreeks() at the
+// top of this file — the exact same OI+Vol basis the Multi Greek card uses, off
+// the same /api/chains payload. This card does not define GEX a second time;
+// a private copy is how two cards on one page end up printing two different
+// numbers for the same ticker on the same day.
+//
+// WHAT "ALL" MEANS. /api/chains with no ?expiration returns the front THREE
+// expirations (see fetchChainFull in server-v2/proxy-tastytrade.js), so "All"
+// is those three, not the whole board. Walls computed across three expiries are
+// a different level from walls computed on 0DTE alone, so the expiry the ladder
+// was built on is always on screen — never implied.
+interface TlChainLeg { [k: string]: unknown }
+interface TlChainStrike { "strike-price"?: unknown; call?: TlChainLeg; put?: TlChainLeg }
+interface TlChainGroup { "expiration-date"?: unknown; strikes?: TlChainStrike[] }
+interface TlChainResp { data?: { items?: TlChainGroup[]; underlyingPrice?: unknown }; error?: string }
 
-const wFmt = (v: number | null | undefined, d = 2) => (v == null || !isFinite(v) ? "—" : v.toFixed(d));
-const wFmtInt = (v: number | null | undefined) => (v == null || !isFinite(v) ? "—" : Math.round(v).toLocaleString());
-const wFmtMoney = (v: number | null | undefined) => {
-  if (v == null || !isFinite(v)) return "—";
-  const a = Math.abs(v);
-  if (a >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
-  if (a >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
-  return `$${v.toFixed(0)}`;
-};
-const wDayChgPct = (mark?: number | null, prev?: number | null) =>
-  mark == null || prev == null || !isFinite(mark) || !isFinite(prev) || prev === 0 ? null : ((mark - prev) / prev) * 100;
-const wTimeAgo = (ts?: number | null) => {
-  if (!ts) return "—";
-  const s = Math.round((Date.now() - ts) / 1000);
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  return `${Math.round(s / 3600)}h ago`;
+const TL_LOOKUP_KEY = "analytics.tickerLookup.recent";
+const TL_QUICK: readonly string[] = ["SPX", "SPY", "QQQ", "NVDA", "TSLA"];
+// How many strikes of ladder to draw around spot. The wings carry no useful
+// gamma and a 300-row SPX ladder is unreadable; the walls live near the money.
+const TL_LADDER_ROWS = 15;
+
+const tlLeg = (o: TlChainLeg | undefined, k: string): number => {
+  const v = o?.[k];
+  const n = Number(v);
+  return v != null && v !== "" && isFinite(n) ? n : 0;
 };
 
-const WATCH_REFRESH_MS = 15_000;
+// "Aug 8 · 0DTE" for an expiry, relative to today ET.
+function tlExpiryChip(exp: string, todayISO: string): string {
+  const d = new Date(`${exp}T00:00:00Z`);
+  if (isNaN(d.getTime())) return exp;
+  const pretty = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric" }).format(d);
+  const dte = Math.round((d.getTime() - new Date(`${todayISO}T00:00:00Z`).getTime()) / 86_400_000);
+  return dte === 0 ? `${pretty} · 0DTE` : dte > 0 ? `${pretty} · ${dte}DTE` : pretty;
+}
 
-function ContractLookupCard() {
-  const [rows, setRows] = useState<WatchRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+interface TlRow { strike: number; gex: number }
+interface TlLevels {
+  callWall: number | null;   // highest +GEX strike — dealers sell into it
+  putWall: number | null;    // most −GEX strike — dealers buy under it
+  core: number | null;       // highest |GEX| strike (CB) — the magnet
+  flip: number | null;       // cumulative-GEX zero crossing — sticky above, slippery below
+  net: number;               // summed net GEX across the whole ladder
+}
 
-  const [ticker, setTicker] = useState("");
-  const [expiry, setExpiry] = useState("");
-  const [strike, setStrike] = useState("");
-  const [side, setSide] = useState<"C" | "P">("C");
-  const [note, setNote] = useState("");
-  const [adding, setAdding] = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch("/api/watch", { cache: "no-store" });
-      const j = await res.json();
-      if (j.error) throw new Error(j.error);
-      setRows(j.rows || []);
-      setErr(null);
-    } catch (e) {
-      setErr(String(e));
-    } finally {
-      setLoading(false);
+// Walls + flip off the FULL ladder (not the drawn window) — a wall two hundred
+// points out is still the wall, and cropping the ladder first would invent a
+// nearer one.
+function tlLevelsFrom(rows: TlRow[]): TlLevels {
+  let callWall: TlRow | null = null, putWall: TlRow | null = null, core: TlRow | null = null;
+  let net = 0;
+  for (const r of rows) {
+    net += r.gex;
+    if (r.gex > 0 && (callWall == null || r.gex > callWall.gex)) callWall = r;
+    if (r.gex < 0 && (putWall == null || r.gex < putWall.gex)) putWall = r;
+    if (core == null || Math.abs(r.gex) > Math.abs(core.gex)) core = r;
+  }
+  // Gamma flip: cumulate from the lowest strike up and take the first sign
+  // change, interpolated between the two strikes that straddle it.
+  let flip: number | null = null;
+  let cum = 0, prevK: number | null = null;
+  for (const r of rows) {
+    const next = cum + r.gex;
+    if (prevK != null && ((cum < 0 && next >= 0) || (cum > 0 && next <= 0))) {
+      const span = next - cum;
+      flip = span === 0 ? r.strike : r.strike - ((next / span) * (r.strike - prevK));
+      break;
     }
-  }, []);
+    cum = next; prevK = r.strike;
+  }
+  return {
+    callWall: callWall?.strike ?? null,
+    putWall: putWall?.strike ?? null,
+    core: core?.strike ?? null,
+    flip,
+    net,
+  };
+}
 
-  const refresh = useCallback(async () => {
-    try {
-      const res = await fetch("/api/watch", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "refresh" }),
-      });
-      const j = await res.json();
-      if (j.rows) setRows(j.rows);
-    } catch { /* keep prior */ }
-  }, []);
+// ATM straddle mark + ATM IV for one expiry group — the expected move the
+// options are actually priced for, not an IV-derived approximation.
+function tlAtm(group: TlChainGroup | undefined, spot: number): { move: number | null; iv: number | null } {
+  if (!group || !spot) return { move: null, iv: null };
+  let best: TlChainStrike | null = null, bestD = Infinity;
+  for (const s of group.strikes ?? []) {
+    const k = Number(s["strike-price"]);
+    if (!isFinite(k) || !k) continue;
+    const d = Math.abs(k - spot);
+    if (d < bestD) { bestD = d; best = s; }
+  }
+  if (!best) return { move: null, iv: null };
+  const cm = tlLeg(best.call, "mark"), pm = tlLeg(best.put, "mark");
+  const ci = tlLeg(best.call, "implied-volatility"), pi = tlLeg(best.put, "implied-volatility");
+  const ivs = [ci, pi].filter((v) => v > 0);
+  return {
+    move: cm > 0 || pm > 0 ? cm + pm : null,
+    iv: ivs.length ? ivs.reduce((a, b) => a + b, 0) / ivs.length : null,
+  };
+}
 
+// Compact chip for a computed level: name, price, and how far spot is from it.
+function TlLevelChip({ name, value, spot, color, note }: {
+  name: string; value: number | null; spot: number | null; color: string; note: string;
+}) {
+  const dist = value != null && spot != null ? value - spot : null;
+  return (
+    <div style={{ border: `1px solid ${T.border}`, borderRadius: 12, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
+      <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color, opacity: 0.9 }}>{name}</span>
+      <Value color={value == null ? T.muted : color} size={22}>
+        {value == null ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+      </Value>
+      <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.55 }}>
+        {dist == null ? "—" : dist === 0 ? "at price"
+          : `${Math.abs(dist).toLocaleString("en-US", { maximumFractionDigits: 2 })} ${dist > 0 ? "above" : "below"}`}
+      </span>
+      <span style={{ fontSize: 11, color: T.muted, opacity: 0.45 }}>{note}</span>
+    </div>
+  );
+}
+
+function TickerLookupCard() {
+  const today = etDateISO();
+  const [sym, setSym] = useState("SPX");
+  const [input, setInput] = useState("");
+  const [recent, setRecent] = useState<string[]>([]);
+  const [expiry, setExpiry] = useState<string>("ALL"); // "ALL" or an expiration-date
+
+  // Restore recents in an effect, not a useState initializer, so the server
+  // render and the first client render agree.
   useEffect(() => {
-    load().then(refresh);
-    const id = setInterval(refresh, WATCH_REFRESH_MS);
-    return () => clearInterval(id);
-  }, [load, refresh]);
-
-  const add = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!ticker.trim() || !expiry || !strike) return;
-    setAdding(true);
     try {
-      const res = await fetch("/api/watch", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "add", ticker, expiry, strike: Number(strike), side, note }),
-      });
-      const j = await res.json();
-      if (j.error) throw new Error(j.error);
-      setTicker(""); setStrike(""); setNote("");
-      await load();
-    } catch (e2) {
-      setErr(String(e2));
-    } finally {
-      setAdding(false);
-    }
-  }, [ticker, expiry, strike, side, note, load]);
+      const raw = window.localStorage.getItem(TL_LOOKUP_KEY);
+      const parsed: unknown = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(parsed)) setRecent(parsed.filter((s): s is string => typeof s === "string").slice(0, 8));
+    } catch { /* private mode / bad JSON — the quick row is enough */ }
+  }, []);
 
-  const remove = useCallback(async (id: number, ev: React.MouseEvent) => {
-    ev.stopPropagation();
-    setRows((r) => r.filter((x) => x.id !== id));
-    await fetch("/api/watch", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "remove", id }),
+  const lookup = useCallback((raw: string) => {
+    const s = raw.trim().toUpperCase().replace(/[^A-Z0-9.]/g, "");
+    if (!s) return;
+    setSym(s);
+    setExpiry("ALL"); // a new ticker has a different expiry board
+    setInput("");
+    setRecent((prev) => {
+      const next = [s, ...prev.filter((x) => x !== s)].slice(0, 8);
+      try { window.localStorage.setItem(TL_LOOKUP_KEY, JSON.stringify(next)); } catch {}
+      return next;
     });
   }, []);
 
+  const { data, loading, error, lastUpdated } =
+    useLiveData<TlChainResp>(`/api/chains?ticker=${encodeURIComponent(sym)}`, 60_000);
+
+  const groups = (data?.data?.items ?? []).filter((g) => typeof g["expiration-date"] === "string");
+  const expiries = groups.map((g) => String(g["expiration-date"]));
+  const spot = numOr(data?.data?.underlyingPrice);
+  // An expiry the previous ticker had may not exist on this one — fall back to
+  // the full set rather than silently rendering an empty ladder.
+  const activeExpiry = expiry !== "ALL" && expiries.includes(expiry) ? expiry : "ALL";
+  const atmGroup = activeExpiry === "ALL" ? groups[0] : groups.find((g) => String(g["expiration-date"]) === activeExpiry);
+
+  const rows: TlRow[] = [...accumulateChainGreeks(data, activeExpiry === "ALL" ? null : activeExpiry).entries()]
+    .map(([strike, g]) => ({ strike, gex: g.gex }))
+    .filter((r) => isFinite(r.gex) && r.gex !== 0)
+    .sort((a, b) => a.strike - b.strike);
+
+  const levels = tlLevelsFrom(rows);
+  const atm = tlAtm(atmGroup, spot ?? 0);
+  const positiveGamma = levels.net >= 0;
+
+  // The drawn window: the N strikes nearest spot, redrawn high→low like a DOM.
+  const ladder = (() => {
+    if (!rows.length) return [];
+    const anchor = spot ?? rows[Math.floor(rows.length / 2)].strike;
+    return [...rows]
+      .sort((a, b) => Math.abs(a.strike - anchor) - Math.abs(b.strike - anchor))
+      .slice(0, TL_LADDER_ROWS)
+      .sort((a, b) => b.strike - a.strike);
+  })();
+  const maxAbs = ladder.reduce((m, r) => Math.max(m, Math.abs(r.gex)), 0) || 1;
+
+  // The spot row: the ladder strike price is sitting on/just under.
+  const spotRow = spot == null ? null
+    : ladder.reduce<TlRow | null>((best, r) =>
+        best == null || Math.abs(r.strike - spot) < Math.abs(best.strike - spot) ? r : best, null);
+
+  const hasLadder = ladder.length > 0;
+
   return (
     <Card variant="budget" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
-      <Row>
-        <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>Contract Lookup</span>
-        <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>
-          {rows.length} saved · click a card for stats
+      <Row style={{ flexWrap: "wrap" }}>
+        <span style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
+            Ticker Lookup
+          </span>
+          <span style={{ fontSize: 22, fontWeight: 800, color: T.text }}>${sym}</span>
+          <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>GEX levels</span>
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); lookup(input); } }}
+            placeholder="Ticker…"
+            style={{ ...homeInputStyle, width: 120, color: T.cyan, fontWeight: 700, letterSpacing: "0.06em" }}
+          />
+          <button onClick={() => lookup(input)} style={homeButtonStyle}>Look up</button>
         </span>
       </Row>
 
-      <form onSubmit={add} style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <Label>Ticker</Label>
-          <input style={{ ...homeInputStyle, width: 90, color: T.cyan, fontWeight: 700 }} value={ticker} onChange={(e) => setTicker(e.target.value.toUpperCase())} placeholder="SPX" required />
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <Label>Expiration</Label>
-          <ThemedDatePicker value={expiry} onChange={setExpiry} width={150} />
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <Label>Strike</Label>
-          <input style={{ ...homeInputStyle, width: 90, color: T.cyan, fontWeight: 700 }} type="number" step="any" value={strike} onChange={(e) => setStrike(e.target.value)} placeholder="6050" required />
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <Label>Side</Label>
-          <PillSelect value={side} options={["C", "P"] as const} onChange={setSide} />
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <Label>Note</Label>
-          <input style={{ ...homeInputStyle, width: 140 }} value={note} onChange={(e) => setNote(e.target.value)} placeholder="optional" />
-        </div>
-        <button type="submit" disabled={adding} style={{ ...homeButtonStyle, padding: "8px 16px", opacity: adding ? 0.6 : 1 }}>
-          {adding ? "Saving…" : "+ Save"}
-        </button>
-      </form>
+      {/* Quick row + whatever the trader looked up last. */}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {[...TL_QUICK, ...recent.filter((r) => !TL_QUICK.includes(r))].map((s) => (
+          <button key={s} onClick={() => lookup(s)} style={s === sym ? homeButtonStyle : homeSecondaryButtonStyle}>{s}</button>
+        ))}
+      </div>
 
-      <div style={divider} />
-
-      {err && (
-        <Placeholder minHeight={40}><span style={{ color: T.red }}>{err}</span></Placeholder>
-      )}
-
-      {loading ? (
-        <Placeholder>Loading…</Placeholder>
-      ) : rows.length === 0 ? (
-        <Placeholder>No contracts saved yet — add one above.</Placeholder>
+      {loading || error || !hasLadder ? (
+        <CardState
+          loading={loading}
+          error={error ?? data?.error ?? null}
+          empty={`No live option chain for ${sym}.`}
+        />
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12 }}>
-          {rows.map((r) => {
-            const s = r.snapshot;
-            const isOpen = expandedId === r.id;
-            const chg = wDayChgPct(s?.mark, s?.prev_close);
-            const chgColor = chg == null ? T.muted : chg >= 0 ? POS_GREEN : T.red;
-            const npColor = s?.net_prem == null ? T.text : s.net_prem >= 0 ? POS_GREEN : T.red;
-            return (
-              <div
-                key={r.id}
-                onClick={() => setExpandedId((cur) => (cur === r.id ? null : r.id))}
-                style={{
-                  border: `1px solid ${isOpen ? T.cyan : T.border}`, borderRadius: 10, padding: 12, cursor: "pointer",
-                  gridColumn: isOpen ? "1 / -1" : undefined,
-                }}
-              >
-                <Row>
-                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 17, fontWeight: 800, color: T.text }}>{r.ticker}</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: r.side === "C" ? POS_GREEN : T.orange }}>
-                      {r.strike}{r.side}
-                    </span>
-                  </span>
-                  <button onClick={(e) => remove(r.id, e)} title="Remove" style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 17 }}>×</button>
-                </Row>
-                <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>
-                  {r.expiration}{r.note && <span style={{ fontStyle: "italic" }}> · {r.note}</span>}
-                </div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 8 }}>
-                  <Value color={T.cyan} size={22}>{wFmt(s?.mark)}</Value>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: chgColor, fontFamily: "var(--font-mono)" }}>
-                    {chg == null ? "—" : `${chg >= 0 ? "▲" : "▼"} ${Math.abs(chg).toFixed(2)}%`}
-                  </span>
-                  {r.added_price != null && (
-                    <span style={{ fontSize: 12, color: T.muted, fontFamily: "var(--font-mono)" }}>
-                      added @ {wFmt(r.added_price)}
-                    </span>
-                  )}
-                </div>
-                <span style={{ fontSize: 12, color: T.muted }}>Updated {wTimeAgo(s?.ts)}</span>
+        <>
+          {/* Price + regime + the three headline numbers. */}
+          <Row style={{ flexWrap: "wrap", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+              <Value color={T.text} size={26}>
+                {spot == null ? "—" : spot.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+              </Value>
+              <span style={{
+                fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase",
+                color: positiveGamma ? REFRESH_GREEN : SOFT_RED,
+                border: `1px solid ${positiveGamma ? REFRESH_GREEN : SOFT_RED}`,
+                borderRadius: 999, padding: "3px 10px",
+              }}>
+                {positiveGamma ? "Positive gamma" : "Negative gamma"}
+              </span>
+              <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>
+                {activeExpiry === "ALL" ? `${expiries.length} front expirations` : tlExpiryChip(activeExpiry, today)}
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <Stat label="± Move" value={atm.move == null ? "—" : `±${atm.move.toFixed(2)}`} size={18} />
+              <Stat label="Net GEX" value={fmtBig(levels.net)} color={positiveGamma ? REFRESH_GREEN : SOFT_RED} size={18} />
+              <Stat label="ATM IV" value={atm.iv == null ? "—" : `${(atm.iv * 100).toFixed(1)}%`} color={T.orange} size={18} />
+            </div>
+          </Row>
 
-                {isOpen && (
-                  <div
-                    onClick={(e) => e.stopPropagation()}
-                    style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: 10, cursor: "default" }}
-                  >
-                    <Stat label="Spot" value={wFmt(s?.spot)} />
-                    <Stat label="Bid" value={wFmt(s?.bid)} />
-                    <Stat label="Ask" value={wFmt(s?.ask)} />
-                    <Stat label="Delta" value={wFmt(s?.delta, 3)} color={signColor(s?.delta ?? 0)} />
-                    <Stat label="Gamma" value={wFmt(s?.gamma, 4)} color={signColor(s?.gamma ?? 0)} />
-                    <Stat label="Theta" value={wFmt(s?.theta, 3)} color={signColor(s?.theta ?? 0)} />
-                    <Stat label="Vega" value={wFmt(s?.vega, 3)} color={signColor(s?.vega ?? 0)} />
-                    <Stat label="IV" value={s?.iv == null ? "—" : `${(s.iv * 100).toFixed(1)}%`} color={T.orange} />
-                    <Stat label="OI" value={wFmtInt(s?.open_interest)} />
-                    <Stat label="Volume" value={wFmtInt(s?.volume)} />
-                    <Stat label="Net Prem" value={wFmtMoney(s?.net_prem)} color={npColor} />
-                    <Stat label="Prev Close" value={wFmt(s?.prev_close)} />
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+          {/* Expiry pills — ALL first, then each front expiration. */}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button onClick={() => setExpiry("ALL")} style={activeExpiry === "ALL" ? homeButtonStyle : homeSecondaryButtonStyle}>All</button>
+            {expiries.map((e) => (
+              <button key={e} onClick={() => setExpiry(e)} style={activeExpiry === e ? homeButtonStyle : homeSecondaryButtonStyle}>
+                {tlExpiryChip(e, today)}
+              </button>
+            ))}
+          </div>
+
+          <div style={divider} />
+
+          {/* The ladder. Bars run out from a center rail: +GEX right, −GEX left. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "128px 1fr 96px", alignItems: "center", gap: 8, paddingBottom: 4 }}>
+              <Label>Strike</Label>
+              <span style={{ textAlign: "center" }}><Label>Net GEX</Label></span>
+              <span style={{ textAlign: "right" }}><Label>Value</Label></span>
+            </div>
+            {ladder.map((r) => {
+              const pos = r.gex >= 0;
+              const pct = Math.max(2, (Math.abs(r.gex) / maxAbs) * 100);
+              const isSpot = spotRow != null && r.strike === spotRow.strike;
+              const tags: Array<{ text: string; color: string }> = [];
+              if (levels.callWall === r.strike) tags.push({ text: "Call wall", color: LEVEL_COLORS.cw });
+              if (levels.putWall === r.strike) tags.push({ text: "Put wall", color: LEVEL_COLORS.pw });
+              if (levels.core === r.strike) tags.push({ text: "Core", color: LEVEL_COLORS.cb });
+              return (
+                <div
+                  key={r.strike}
+                  style={{
+                    display: "grid", gridTemplateColumns: "128px 1fr 96px", alignItems: "center", gap: 8,
+                    padding: "2px 6px", borderRadius: 8,
+                    border: `1px solid ${isSpot ? T.cyan : "transparent"}`,
+                    background: isSpot ? "rgba(33,158,188,0.08)" : "transparent",
+                  }}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: isSpot ? 800 : 600, color: isSpot ? T.cyan : T.text }}>
+                      {r.strike.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                    </span>
+                    {isSpot && <span style={{ fontSize: 10, fontWeight: 800, color: T.cyan, letterSpacing: "0.08em" }}>◀ PRICE</span>}
+                    {tags.map((t) => (
+                      <span key={t.text} style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: t.color }}>
+                        {t.text}
+                      </span>
+                    ))}
+                  </span>
+                  <span style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+                    <span style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
+                      {!pos && <span style={{ width: `${pct}%`, height: 14, borderRadius: "4px 0 0 4px", background: SOFT_RED }} />}
+                    </span>
+                    <span style={{ width: 1, height: 18, background: T.border, flexShrink: 0 }} />
+                    <span style={{ flex: 1, display: "flex" }}>
+                      {pos && <span style={{ width: `${pct}%`, height: 14, borderRadius: "0 4px 4px 0", background: REFRESH_GREEN }} />}
+                    </span>
+                  </span>
+                  <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, color: pos ? REFRESH_GREEN : SOFT_RED }}>
+                    {fmtBig(r.gex)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={divider} />
+
+          {/* Plain-language read of the regime + the levels around price. */}
+          <div style={{
+            borderLeft: `3px solid ${positiveGamma ? REFRESH_GREEN : SOFT_RED}`,
+            borderRadius: 8, padding: "10px 12px", background: "rgba(255,255,255,0.03)",
+            fontSize: 14, lineHeight: 1.6, color: T.text,
+          }}>
+            <span style={{ fontWeight: 800, color: positiveGamma ? REFRESH_GREEN : SOFT_RED }}>The read: </span>
+            {positiveGamma
+              ? "Net positive gamma — dealers sell rallies and buy dips, so price tends to pin and mean-revert. "
+              : "Net negative gamma — dealers chase in both directions, so moves extend and volatility feeds itself. "}
+            {levels.core != null && `Core magnet ${levels.core.toLocaleString()}. `}
+            {levels.callWall != null && `Call wall ${levels.callWall.toLocaleString()}. `}
+            {levels.putWall != null && `Put wall ${levels.putWall.toLocaleString()}. `}
+            {levels.flip != null && `Gamma flip ${levels.flip.toLocaleString("en-US", { maximumFractionDigits: 2 })} — sticky above, slippery below.`}
+          </div>
+
+          {/* The computed levels, as chips. */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+            <TlLevelChip name="Core (CB)" value={levels.core} spot={spot} color={LEVEL_COLORS.cb} note="biggest magnet" />
+            <TlLevelChip name="Call wall" value={levels.callWall} spot={spot} color={LEVEL_COLORS.cw} note="ceiling" />
+            <TlLevelChip name="Put wall" value={levels.putWall} spot={spot} color={LEVEL_COLORS.pw} note="floor" />
+            <TlLevelChip name="Gamma flip" value={levels.flip} spot={spot} color={T.orange} note="sticky ↑ slippery ↓" />
+          </div>
+
+          <span style={{ fontSize: 11, color: T.muted, opacity: 0.45, fontFamily: "var(--font-mono)" }}>
+            OI+Vol basis · same formula as Multi Greek above · educational only, not investment advice
+          </span>
+        </>
       )}
+      <UpdatedStamp at={lastUpdated} />
     </Card>
   );
 }
@@ -1865,7 +1996,8 @@ export default function AnalyticsPage() {
         {/* Full-width AI daily strategy, synthesized from all cards above. */}
         <StrategyBuilderCard />
 
-        <ContractLookupCard />
+        {/* Full-width ticker lookup: any symbol → its live GEX ladder + walls. */}
+        <TickerLookupCard />
       </div>
     </PageShell>
   );
