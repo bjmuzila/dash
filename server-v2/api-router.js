@@ -5229,42 +5229,67 @@ if (libDb) {
           // Summed in JS rather than as a correlated/LATERAL join: this is ONE
           // strike on ONE expiry, so the print set is small, and a two-pointer
           // merge over two already-sorted lists beats re-scanning per snapshot.
-          const flowRoots = FLOW_TICKER_ROOTS[symbol] || [symbol];
+          // SPX/SPXW trade Cboe Global Trading Hours (~6-8pm ET through 4:15pm ET
+          // the NEXT day), and flow_prints.date is the ET CALENDAR date a print
+          // occurred on — not the session it belongs to. So a session's tape can
+          // start the evening before and carry the earlier date. Querying one day
+          // silently drops everything before midnight ET. Same two-day window
+          // state/flow-gex-history.js uses; see its dateWindow comment.
+          const prevYmd = (ymd) => {
+            const d = new Date(`${ymd}T12:00:00Z`);
+            d.setUTCDate(d.getUTCDate() - 1);
+            return d.toISOString().slice(0, 10);
+          };
+          const dateWindow = [prevYmd(date), date];
+          const datePh = dateWindow.map(() => '?').join(', ');
+          // underlying_norm is written at insert (state/flow-history-writer.js)
+          // but was added to an already-live table, so pre-backfill rows can hold
+          // NULL. Tolerate that rather than dropping them: expiration + strike
+          // already scope this to one contract, so a NULL root can't pull in
+          // another underlying's tape at the same strike AND the same expiry.
+          const rootPh = flowRoots.map(() => '?').join(', ');
+          const rootWhere = `(underlying_norm IS NULL OR underlying_norm IN (${rootPh}))`;
           let printRows = [];
           let tapeRows = 0;
+          let flowGexReason = 'ok';
           try {
-            // Does this session have a tape AT ALL for this underlying? Without
-            // it, "no prints for this strike" and "flow_prints was never written
-            // for this day" both look like a flat zero line. They are not the
-            // same thing, and a back-session must not render as "dealers did
-            // nothing" — flowGex goes null instead (see flowGexAvailable).
+            // Does this session have a tape AT ALL? Without this probe, "this
+            // strike never traded" and "flow_prints was never written for this
+            // day" both collapse to the same empty print set — and they mean
+            // opposite things. The first is a real flat zero; the second is
+            // unknown inventory and must render as null, not as a zero line.
             const tapeProbe = await libDb.queryAll(
               `SELECT 1 FROM flow_prints
-                WHERE date = ? AND underlying_norm IN (${flowRoots.map(() => '?').join(', ')})
+                WHERE date IN (${datePh}) AND ${rootWhere}
                 LIMIT 1`,
-              [date, ...flowRoots]
+              [...dateWindow, ...flowRoots]
             );
             tapeRows = tapeProbe.length;
+            if (!tapeRows) flowGexReason = 'no-tape-for-session';
             if (tapeRows) {
               printRows = await libDb.queryAll(
                 `SELECT ts, type, side, size
                    FROM flow_prints
-                  WHERE date = ?
-                    AND underlying_norm IN (${flowRoots.map(() => '?').join(', ')})
+                  WHERE date IN (${datePh})
+                    AND ${rootWhere}
                     AND expiration = ? AND strike = ?
                     AND side IN ('buy', 'sell')
                     AND type IN ('C', 'P')
                     AND (bucket IS NULL OR bucket <> 'neutral')
                   ORDER BY ts ASC`,
-                [date, ...flowRoots, expiry, strike]
+                [...dateWindow, ...flowRoots, expiry, strike]
               );
+              // Tape exists, this contract just never printed. That IS zero
+              // dealer inventory — a real reading, drawn as a flat zero line.
+              if (!printRows.length) flowGexReason = 'no-prints-for-strike';
             }
           } catch (e) {
-            // A missing/!ready flow_prints must not take the whole page down —
+            // A missing/not-ready flow_prints must not take the whole page down —
             // the other three panels don't depend on it.
             console.warn('[strike-gex-series] flow inventory unavailable:', e?.message || e);
             tapeRows = 0;
             printRows = [];
+            flowGexReason = `error: ${String(e?.message || e).slice(0, 200)}`;
           }
 
           // Cumulative dealer position at each snapshot. Both lists are already
@@ -5290,7 +5315,21 @@ if (libDb) {
             // False when this session has no tape at all, so the client can say
             // "no flow recorded" rather than drawing a flat zero that reads as
             // "dealers held nothing here."
+            //
+            // Its PRESENCE also tells the client this server build knows about
+            // Flow GEX at all: an older server-v2 omits the key entirely, which
+            // is why the client tests `'flowGexAvailable' in json` before it
+            // blames a missing tape for an empty panel. A deploy that ships the
+            // SPA without the server would otherwise read as "no tape today."
             flowGexAvailable: tapeRows > 0,
+            // 'ok' | 'no-tape-for-session' | 'no-prints-for-strike' | 'error: …'
+            flowGexReason,
+            // Small prints age out of flow_prints after ~1 day while big ones
+            // survive ~5 (state/retention-cleanup.js RETENTION.flow_prints*), so
+            // a back-session reconstructs from BIG PRINTS ONLY and understates —
+            // silently, since the line still draws. Flagged so the panel can say
+            // so instead of presenting a partial book as the whole one.
+            flowGexPartial: tapeRows > 0 && date !== todayET(),
             // ATM reference is the strike nearest spot at each snapshot; IV at
             // both K and ATM is the call/put average, so the subtraction is
             // like-for-like rather than call-IV minus a blended reference.

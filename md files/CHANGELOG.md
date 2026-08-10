@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-08-10 - /strike-history: an empty Flow GEX panel now says WHICH empty it is
+
+`server-v2/api-router.js` (`/api/strike-gex-series`), `components/pages/StrikeHistory.tsx`.
+
+Follow-up to the panel below. Four different conditions were all rendering as
+"No tape recorded for this session", including the most common one by far -
+the SPA shipped ahead of the server.
+
+- **Old server build is now named as such.** An `api-router.js` that predates
+  Flow GEX omits the keys entirely, so `r.flowGex` reads back `undefined` -
+  indistinguishable from "no tape" unless you test for the KEY. Client now
+  checks `'flowGexAvailable' in json` (`in`, not truthiness - `false` is a
+  valid value) and says "deploy server-v2" instead of blaming the tape.
+- **Two-day date window.** `flow_prints.date` is the ET CALENDAR date of a
+  print, not the session it belongs to, and SPX/SPXW trade Cboe Global Trading
+  Hours from ~6-8pm ET the evening before. Querying one date silently dropped
+  every pre-midnight print. Mirrors `state/flow-gex-history.js`'s `dateWindow`.
+- **NULL `underlying_norm` no longer excludes a row.** The column is written at
+  insert now, but it was added to an already-live table, so pre-backfill rows
+  hold NULL. `expiration` + `strike` already pin this to one contract, so
+  admitting NULL roots can't pull in another underlying.
+- **`flowGexReason` distinguishes the remaining cases**: `no-tape-for-session`
+  (inventory unknown -> null, blank panel) vs `no-prints-for-strike` (tape ran,
+  this contract never traded -> a REAL flat zero, drawn) vs `error: …`, which
+  now surfaces the message instead of silently looking like a quiet session.
+- **`flowGexPartial` warns on back-sessions.** Small prints age out of
+  flow_prints after ~1 day and big ones after ~5
+  (`state/retention-cleanup.js:38-40`), so any prior session rebuilds from
+  >=$500k prints ALONE and understates - while still drawing a confident line.
+  The panel now says so above the chart.
+
+### Known duplication
+
+`state/flow-gex-history.js` (`/proxy/flow-gex-history`) already implements this
+same reconstruction for a window of strikes. It uses each print's own spot with
+the most-recent-known gamma; this one uses the snapshot's own gamma and spot at
+that timestamp, which is more accurate on gamma. Two implementations of one
+formula - worth collapsing.
+
 ## 2026-08-10 - /strike-history: Flow GEX replaces the Spot panel
 
 `server-v2/api-router.js` (`/api/strike-gex-series` handler only),

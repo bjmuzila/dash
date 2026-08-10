@@ -552,6 +552,15 @@ export default function StrikeHistoryPage() {
   const [days, setDays] = useState<DayMeta[]>([]);
   const [strikes, setStrikes] = useState<StrikeMeta[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
+  /**
+   * Why the Flow GEX panel is (or isn't) drawable, straight from the response.
+   * `supported` false = this server build predates Flow GEX; everything else is
+   * a data condition. Defaults to supported:true so the panel doesn't flash a
+   * "deploy the server" message during the first fetch.
+   */
+  const [flowMeta, setFlowMeta] = useState<{ supported: boolean; reason: string | null; partial: boolean }>(
+    { supported: true, reason: null, partial: false }
+  );
 
   const [dayKey, setDayKey] = useState("");
   const [strike, setStrike] = useState("");
@@ -606,6 +615,17 @@ export default function StrikeHistoryPage() {
       const r = await fetch(`/api/strike-gex-series?mode=series&date=${date}&expiry=${expiry}&strike=${strike}`);
       const j = await r.json();
       if (j.error) { setErr(String(j.error)); setRefreshState("error"); return; }
+      // An older server-v2 has no idea what Flow GEX is and omits these keys
+      // entirely, so every row's flowGex reads back undefined — indistinguishable
+      // from "no tape recorded" unless we check for the KEY rather than the
+      // value. Shipping the SPA without the server is the normal way to land
+      // here, and blaming it on a missing tape sends you looking in the wrong
+      // place. `in` (not a truthiness test) because false is a valid value.
+      setFlowMeta({
+        supported: "flowGexAvailable" in (j ?? {}),
+        reason: typeof j.flowGexReason === "string" ? j.flowGexReason : null,
+        partial: j.flowGexPartial === true,
+      });
       setRows(j.rows ?? []);
       setErr(null);
       setRefreshState("success");
@@ -919,17 +939,46 @@ export default function StrikeHistoryPage() {
           >
             {flowCount === 0 ? (
               <div style={{ fontSize: 12.5, color: HOME_THEME.green, opacity: 0.75, padding: "48px 8px", textAlign: "center", lineHeight: 1.7 }}>
-                No tape recorded for this session.<br />
-                <span style={{ opacity: 0.75 }}>
-                  Flow GEX is rebuilt from flow_prints, which only holds prints from when the tape
-                  was running. A blank panel here means the inventory is unknown — not that dealers
-                  held nothing, which is why it isn&apos;t drawn as a flat zero.
-                </span>
+                {!flowMeta.supported ? (
+                  <>
+                    This server build doesn&apos;t serve Flow GEX yet.<br />
+                    <span style={{ opacity: 0.75 }}>
+                      The page is newer than the API. Deploy <code>server-v2/api-router.js</code> —
+                      the data it needs (flow_prints + the gamma columns) is already being recorded,
+                      so this fills in for today&apos;s session as soon as the server restarts.
+                    </span>
+                  </>
+                ) : flowMeta.reason?.startsWith("error") ? (
+                  <>
+                    Flow inventory query failed.<br />
+                    <span style={{ opacity: 0.75, fontFamily: "var(--font-mono)", fontSize: 11 }}>{flowMeta.reason}</span>
+                  </>
+                ) : (
+                  <>
+                    No tape recorded for this session.<br />
+                    <span style={{ opacity: 0.75 }}>
+                      Flow GEX is rebuilt from flow_prints, which only holds prints from when the tape
+                      was running. A blank panel here means the inventory is unknown — not that dealers
+                      held nothing, which is why it isn&apos;t drawn as a flat zero.
+                    </span>
+                  </>
+                )}
               </div>
             ) : (
-              <Panel rows={view} values={view.map((r) => r.flowGex)} color={HOME_THEME.green}
-                fmt={(v) => fmtM(v, 0)} hoverFmt={(v) => fmtM(v, 1)} refLine={0} refLabel="flat"
-                steps={[]} hover={hover} onHover={setHover} />
+              <>
+                {/* Small prints age out after ~1 day, big ones after ~5, so any
+                    back-session rebuilds from big prints alone. The line still
+                    draws and still looks authoritative — hence saying so. */}
+                {flowMeta.partial && (
+                  <div style={{ fontSize: 11, color: HOME_THEME.orange, opacity: 0.9, marginBottom: 6 }}>
+                    Back-session: rebuilt from ≥$500k prints only — smaller prints have aged out, so
+                    this understates.
+                  </div>
+                )}
+                <Panel rows={view} values={view.map((r) => r.flowGex)} color={HOME_THEME.green}
+                  fmt={(v) => fmtM(v, 0)} hoverFmt={(v) => fmtM(v, 1)} refLine={0} refLabel="flat"
+                  steps={[]} hover={hover} onHover={setHover} />
+              </>
             )}
           </PanelCard>
         </div>
