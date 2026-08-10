@@ -6,17 +6,37 @@
  *
  * Source : Nasdaq public calendar API
  *          https://api.nasdaq.com/api/calendar/earnings?date=YYYY-MM-DD
- * Filter : market cap >= EARNINGS_MIN_MCAP (default $100B)
+ * Filter : market cap >= EARNINGS_MIN_MCAP (default $25B)
+ *          $100B only cleared a handful of names a week, so most weeks the
+ *          strip read empty. $25B is roughly the bottom of the S&P 500 — a
+ *          normal week lands a few dozen names that actually matter.
+ *          A single sweep can override the cap without a redeploy (see
+ *          runSweep) — that is the "bump the cap down for THIS week" path.
  * Cadence: Saturday 09:00–09:30 ET → scrapes the upcoming Mon–Fri.
  *          Plus a boot backfill: if the CURRENT week has no rows, scrape it
  *          immediately (this is the "manual scrape of this week" path).
  *
  * Table  : earnings_calendar (date, symbol) PK
  * Read   : GET  /proxy/earnings-week      (today → Friday)
- * Fire   : POST /proxy/earnings-week-run  { week: 'this' | 'next' }
+ * Fire   : POST /proxy/earnings-week-run?week=this|next[&minMcap=10]
+ *          minMcap is read as $B when < 1000, else as raw dollars.
  */
 
-const MIN_MCAP = Number(process.env.EARNINGS_MIN_MCAP || 100e9);
+const MIN_MCAP = Number(process.env.EARNINGS_MIN_MCAP || 25e9);
+
+/**
+ * Accepts 10 / "10B" / 10e9 and returns dollars. Anything under 1000 is read
+ * as billions, because that is how the number gets typed by hand. Junk or a
+ * negative → null, and the caller falls back to MIN_MCAP.
+ */
+function normalizeMcap(v) {
+  if (v == null || v === '') return null;
+  const n = Number(String(v).replace(/[^0-9.eE+-]/g, ''));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n < 1000 ? n * 1e9 : n;
+}
+
+const fmtB = (n) => `$${(n / 1e9) >= 10 ? (n / 1e9).toFixed(0) : (n / 1e9).toFixed(1)}B`;
 const TICK_MINS = 15;
 
 const UA =
@@ -72,6 +92,13 @@ async function ensureSchema() {
       PRIMARY KEY (date, symbol)
     )
   `);
+  // The cap the row was captured under. Rows written before this column
+  // existed default to 0 and read as "unknown cap", which is deliberately
+  // NOT treated as stale — only a recorded cap above the current one is.
+  await p.query(`
+    ALTER TABLE earnings_calendar
+      ADD COLUMN IF NOT EXISTS min_mcap DOUBLE PRECISION NOT NULL DEFAULT 0
+  `);
   _schemaReady = true;
   return true;
 }
@@ -123,7 +150,7 @@ function parseSession(t) {
   return 'unknown';
 }
 
-async function fetchNasdaqDay(date) {
+async function fetchNasdaqDay(date, minMcap = MIN_MCAP) {
   const res = await fetch(`https://api.nasdaq.com/api/calendar/earnings?date=${date}`, {
     headers: {
       'User-Agent': UA,
@@ -143,14 +170,21 @@ async function fetchNasdaqDay(date) {
       marketCap: parseMcap(r.marketCap),
       epsEst: r.epsForecast ? String(r.epsForecast) : null,
     }))
-    .filter((r) => r.symbol && r.marketCap >= MIN_MCAP);
+    .filter((r) => r.symbol && r.marketCap >= minMcap);
 }
 
 // ── Sweep + upsert ───────────────────────────────────────────────────────────
 
-/** @param {'this'|'next'} week */
-async function runSweep(week = 'this') {
+/**
+ * @param {'this'|'next'} week
+ * @param {{minMcap?: number|string}} [opts]  per-run cap override, $B or dollars.
+ *        Omitted → MIN_MCAP. Lowering it re-scrapes the week wider; the sweep
+ *        DELETEs each day before inserting, so a lower cap widens the week and
+ *        a higher one trims it back — no stale rows either way.
+ */
+async function runSweep(week = 'this', opts = {}) {
   if (!(await ensureSchema())) return null;
+  const minMcap = normalizeMcap(opts?.minMcap) ?? MIN_MCAP;
   const today = etDateStr();
   const days = week === 'next' ? nextWeekMonFri(today) : weekMonFri(today);
   const p = getPool();
@@ -159,7 +193,7 @@ async function runSweep(week = 'this') {
   for (const date of days) {
     let rows = [];
     try {
-      rows = await fetchNasdaqDay(date);
+      rows = await fetchNasdaqDay(date, minMcap);
     } catch (e) {
       console.warn('[earnings-cal]', e.message);
       continue;
@@ -168,19 +202,20 @@ async function runSweep(week = 'this') {
     await p.query('DELETE FROM earnings_calendar WHERE date = $1', [date]);
     for (const r of rows) {
       await p.query(
-        `INSERT INTO earnings_calendar (date, symbol, company, session, market_cap, eps_est, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6, now())
+        `INSERT INTO earnings_calendar (date, symbol, company, session, market_cap, eps_est, min_mcap, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7, now())
          ON CONFLICT (date, symbol) DO UPDATE SET
            company = EXCLUDED.company, session = EXCLUDED.session,
-           market_cap = EXCLUDED.market_cap, eps_est = EXCLUDED.eps_est, updated_at = now()`,
-        [date, r.symbol, r.company, r.session, r.marketCap, r.epsEst]
+           market_cap = EXCLUDED.market_cap, eps_est = EXCLUDED.eps_est,
+           min_mcap = EXCLUDED.min_mcap, updated_at = now()`,
+        [date, r.symbol, r.company, r.session, r.marketCap, r.epsEst, minMcap]
       );
       inserted++;
     }
     await new Promise((r) => setTimeout(r, 400)); // be polite to nasdaq
   }
-  console.log(`[earnings-cal] ${week} week ${days[0]}→${days[4]} — ${inserted} names ≥ $${(MIN_MCAP / 1e9).toFixed(0)}B`);
-  return { week, days, count: inserted };
+  console.log(`[earnings-cal] ${week} week ${days[0]}→${days[4]} — ${inserted} names ≥ ${fmtB(minMcap)}`);
+  return { week, days, count: inserted, minMcap };
 }
 
 /** Rows from today (ET) through Friday of the current week. */
@@ -204,16 +239,30 @@ async function getWeekRows() {
 let _timer = null;
 let _lastRunWeek = null;
 
+/**
+ * Boot repair for the CURRENT week. Re-sweeps when the week is empty, and also
+ * when its rows were captured under a HIGHER cap than the one now configured —
+ * otherwise dropping MIN_MCAP would only take effect next Saturday and this
+ * week would keep showing the old, thinner list.
+ */
 async function backfillIfEmpty() {
   try {
     if (!(await ensureSchema())) return;
     const days = weekMonFri(etDateStr());
     const { rows } = await getPool().query(
-      'SELECT 1 FROM earnings_calendar WHERE date >= $1 AND date <= $2 LIMIT 1',
+      `SELECT COUNT(*)::int AS n, COALESCE(MAX(min_mcap), 0) AS cap
+         FROM earnings_calendar WHERE date >= $1 AND date <= $2`,
       [days[0], days[4]]
     );
-    if (rows.length) return;
-    console.log('[earnings-cal] current week empty → backfilling now');
+    const n = rows[0]?.n ?? 0;
+    const cap = Number(rows[0]?.cap ?? 0);
+    if (!n) {
+      console.log('[earnings-cal] current week empty → backfilling now');
+    } else if (cap > MIN_MCAP) {
+      console.log(`[earnings-cal] current week captured at ${fmtB(cap)} > ${fmtB(MIN_MCAP)} → re-sweeping wider`);
+    } else {
+      return;
+    }
     await runSweep('this');
   } catch (e) {
     console.warn('[earnings-cal] backfill:', e.message);
@@ -221,7 +270,7 @@ async function backfillIfEmpty() {
 }
 
 function startEarningsCalendarRecorder() {
-  console.log(`[earnings-cal] enabled — Sat 09:00 ET scrape of next Mon–Fri, mcap ≥ $${(MIN_MCAP / 1e9).toFixed(0)}B`);
+  console.log(`[earnings-cal] enabled — Sat 09:00 ET scrape of next Mon–Fri, mcap ≥ ${fmtB(MIN_MCAP)}`);
   setTimeout(() => { void backfillIfEmpty(); }, 20_000).unref?.();
 
   const tick = async () => {
@@ -246,5 +295,6 @@ module.exports = {
   getWeekRows,
   ensureSchema,
   getPool,
+  normalizeMcap,
   MIN_MCAP,
 };

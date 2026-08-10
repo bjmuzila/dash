@@ -1628,7 +1628,7 @@ async function main() {
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
-      // ── Earnings calendar (weekly, mcap ≥ $100B) ─────────────────────────
+      // ── Earnings calendar (weekly, mcap ≥ EARNINGS_MIN_MCAP, default $25B) ─
       //   GET /proxy/earnings-week  → today → Friday, one row per name
       if (pathname === '/proxy/earnings-week' && req.method === 'GET') {
         (async () => {
@@ -1656,11 +1656,14 @@ async function main() {
         })();
         return;
       }
-      // Manual fire: POST /proxy/earnings-week-run?week=this|next
+      // Manual fire: POST /proxy/earnings-week-run?week=this|next[&minMcap=10]
+      // minMcap re-scrapes that one week at a different cap without a redeploy
+      // (read as $B when < 1000, else raw dollars). Omit it to use the default.
       if (pathname === '/proxy/earnings-week-run' && req.method === 'POST') {
         const u = new URL(req.url, `http://localhost:${PORT}`);
         const week = u.searchParams.get('week') === 'next' ? 'next' : 'this';
-        require('./earnings-calendar-recorder').runSweep(week)
+        const minMcap = u.searchParams.get('minMcap');
+        require('./earnings-calendar-recorder').runSweep(week, { minMcap })
           .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;

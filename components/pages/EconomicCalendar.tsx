@@ -62,6 +62,20 @@ const FILTER_OPTS: { value: FilterKey; label: string; color: string }[] = [
   { value: "all",        label: "All",          color: HT.text },
 ];
 
+// Earnings market-cap floor for the dropdown. The recorder stores everything at
+// or above EARNINGS_MIN_MCAP (currently $25B), so this is a pure client-side
+// narrowing of rows already in hand — changing it never refetches. 0 = show
+// whatever the feed returned, which is the honest default: a hardcoded floor
+// here would silently re-hide the names the server was just widened to include.
+const MCAP_OPTS: { value: number; label: string }[] = [
+  { value: 0,     label: "All caps" },
+  { value: 25e9,  label: "≥ $25B"   },
+  { value: 50e9,  label: "≥ $50B"   },
+  { value: 100e9, label: "≥ $100B"  },
+  { value: 250e9, label: "≥ $250B"  },
+  { value: 1e12,  label: "≥ $1T"    },
+];
+
 function passes(ev: CalEvent, active: Set<FilterKey>): boolean {
   if (active.has("all")) return true;
   if (active.has("trump")      && ev.impact === "President") return true;
@@ -124,11 +138,17 @@ export default function EconomicCalendarPage() {
   const [dropOpen,      setDropOpen]      = useState(false);
   const [earnings,      setEarnings]      = useState<EarnRow[]>([]);
   const [activeTab,     setActiveTab]     = useState<"calendar" | "earnings">("calendar");
+  // Earnings market-cap floor, in dollars. 0 = no floor (see MCAP_OPTS).
+  const [mcapMin,       setMcapMin]       = useState(0);
+  const [capOpen,       setCapOpen]       = useState(false);
   const dropRef   = useRef<HTMLDivElement>(null);
+  const capRef    = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function h(e: MouseEvent) {
-      if (dropRef.current && !dropRef.current.contains(e.target as Node)) setDropOpen(false);
+      const t = e.target as Node;
+      if (dropRef.current && !dropRef.current.contains(t)) setDropOpen(false);
+      if (capRef.current  && !capRef.current.contains(t))  setCapOpen(false);
     }
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
@@ -180,7 +200,26 @@ export default function EconomicCalendarPage() {
   // full earnings list 60 times an hour for a result that changes when the
   // fetch changes, which is once. Shared with the phone view via
   // lib/econCalendar so all three surfaces bucket identically.
-  const earnByDate = useMemo(() => groupEarningsByDate(earnings), [earnings]);
+  //
+  // The market-cap floor is applied BEFORE bucketing, so a day left with no
+  // qualifying names drops out of the Map entirely and its separator stops
+  // rendering — rather than showing an empty PRE/AFTER strip.
+  const earnByDate = useMemo(
+    () => groupEarningsByDate(mcapMin > 0 ? earnings.filter(r => r.market_cap >= mcapMin) : earnings),
+    [earnings, mcapMin]
+  );
+
+  // Names actually renderable at the current floor, for the dropdown label.
+  // Counted off the bucketed Map, not `earnings`, so it matches what is on
+  // screen: rows Nasdaq marks "time not supplied" are dropped by
+  // groupEarningsByDate and were never going to show up.
+  const earnShown = useMemo(() => {
+    let n = 0;
+    for (const b of earnByDate.values()) n += b.pre.length + b.after.length;
+    return n;
+  }, [earnByDate]);
+
+  const mcapLabel = MCAP_OPTS.find(o => o.value === mcapMin)?.label ?? "All caps";
 
   function toggleFilter(key: FilterKey) {
     setActiveFilters(prev => {
@@ -325,7 +364,14 @@ export default function EconomicCalendarPage() {
 
   function renderEarningsOnly() {
     if (earningsSections.length === 0) {
-      return <div style={{ color: HT.text, fontSize: 14, padding: 20 }}>No earnings match.</div>;
+      // Name the reason. "No earnings match." reads as an empty feed, but the
+      // usual cause is a cap floor the user set two clicks ago and forgot.
+      const why = earnings.length === 0
+        ? "No earnings this week."
+        : mcapMin > 0 && earnShown === 0
+          ? `No earnings ${mcapLabel} this week — try a lower cap.`
+          : "No earnings match.";
+      return <div style={{ color: HT.text, fontSize: 14, padding: 20 }}>{why}</div>;
     }
     return earningsSections.map(({ date, pre, after }) => {
       const isTod = date === today;
@@ -440,6 +486,60 @@ export default function EconomicCalendarPage() {
             )}
           </div>
           )}
+
+          {/* Earnings market-cap floor. Shown on BOTH tabs: the calendar tab
+              weaves the same earnings rows in between events, so the floor has
+              to be reachable there too or the chips can only be thinned from a
+              tab the user is not on. Single-select. */}
+          <div ref={capRef} style={{ position: "relative" }}>
+            <button
+              onClick={() => setCapOpen(o => !o)}
+              title="Minimum market cap for earnings names"
+              style={{ ...homeButtonStyle, display: "flex", alignItems: "center", gap: 6 }}
+            >
+              <span style={{ color: HT.cyan, fontWeight: 800, letterSpacing: "0.06em" }}>MCAP</span>
+              {mcapLabel}
+              <span style={{ fontSize: 10, color: "#3a5570", fontFamily: "var(--font-mono)" }}>{earnShown}</span>
+              <span style={{ fontSize: 10 }}>▾</span>
+            </button>
+            {capOpen && (
+              <div style={{
+                position: "absolute", right: 0, top: "calc(100% + 8px)", zIndex: 200,
+                background: DOCK_THEME.bg, backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)",
+                border: `1px solid ${HT.border}`, borderTop: `2px solid ${DOCK_THEME.cyanTop}`, borderRadius: 14,
+                padding: 6, minWidth: 170, boxShadow: DOCK_THEME.shadow,
+              }}>
+                {MCAP_OPTS.map(o => {
+                  const on = o.value === mcapMin;
+                  return (
+                    <div
+                      key={o.value}
+                      onClick={() => { setMcapMin(o.value); setCapOpen(false); }}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 10,
+                        padding: "8px 12px", cursor: "pointer", borderRadius: 8,
+                        background: on ? DOCK_THEME.activeTile : "transparent",
+                        border: on ? `1px solid ${DOCK_THEME.activeBorder}` : "1px solid transparent",
+                      }}
+                      onMouseEnter={(e) => { if (!on) e.currentTarget.style.background = DOCK_THEME.hoverTile; }}
+                      onMouseLeave={(e) => { if (!on) e.currentTarget.style.background = "transparent"; }}
+                    >
+                      <span style={{
+                        width: 14, height: 14, borderRadius: "50%", flexShrink: 0,
+                        border: `2px solid ${HT.cyan}`,
+                        background: on ? HT.cyan : "transparent",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 9, color: "#05080d", fontWeight: 900,
+                      }}>{on ? "✓" : ""}</span>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: on ? HT.cyan : HT.text }}>
+                        {o.label}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
           <input
             type="text" placeholder={activeTab === "earnings" ? "Search ticker…" : "Search…"} value={search}

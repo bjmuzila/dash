@@ -102,10 +102,14 @@ export const TESTLAB_SECTION: SectionNav = {
     // Flow Inventory rather than the gamma cluster: both read the TAPE (what
     // dollars actually changed hands), not the book.
     { id: "premdiff",    label: "Prem Diff",       short: "Prem Δ",   color: HOME_THEME.orange, icon: "⚖️" },
+    // Its own cluster, not the gamma or tape ones: this reads a CALENDAR, not
+    // the book and not the tape. Nothing on it updates intraday.
+    { id: "seasonality", label: "Seasonality",     short: "Season",   color: LIGHT_BLUE,        icon: "📅" },
   ],
   groups: [
-    { key: "gamma", tabs: ["squeeze", "gexlevels", "dealergamma", "gexmap"] },
-    { key: "flow",  tabs: ["flow", "premdiff"] },
+    { key: "gamma",  tabs: ["squeeze", "gexlevels", "dealergamma", "gexmap"] },
+    { key: "flow",   tabs: ["flow", "premdiff"] },
+    { key: "season", tabs: ["seasonality"] },
   ],
   event: TESTLAB_TAB_EVENT,
 };

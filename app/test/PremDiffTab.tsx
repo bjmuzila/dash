@@ -362,10 +362,10 @@ export default function PremDiffTab() {
   }, [rows]);
 
   const backfilled = useMemo(() => rows.some((r) => r.src === "dxlink"), [rows]);
-  // The series cannot be pushed back past its first session by any amount of
-  // re-running: dxFeed drops delisted option symbols, so once a monthly expires
-  // its volume history is gone. Say that on the panel rather than leaving a
-  // short chart looking like a loading failure.
+  // A short series is usually the data's limit, not a fetch problem: dxFeed's
+  // per-contract candle retention thins out going back, so the recovered window
+  // ends where the replay ran dry. Name the first session rather than leaving a
+  // stubby chart looking like a loading failure.
   const firstDate = rows[0]?.date ?? null;
   const wantedSessions = Number(range);
   const short = firstDate != null && rows.length < wantedSessions * 0.8;
@@ -451,10 +451,9 @@ export default function PremDiffTab() {
           )}
           {short && firstDate && (
             <>
-              {" "}History starts <strong>{firstDate}</strong> and cannot be extended backwards: dxFeed drops delisted
-              option symbols, so once a monthly expires its volume history is unreachable. Only the window where a
-              still-listed monthly was already the front or back month could be recovered — the rest accumulates forward,
-              one session per day, from the EOD recorder.
+              {" "}History starts <strong>{firstDate}</strong> — that is where dxFeed&apos;s candle replay ran dry for the
+              contracts involved, not a fetch that failed. Per-contract retention thins going back, so re-running the pull
+              will not reach much further; the series grows forward from the EOD recorder, one session per day.
             </>
           )}
         </div>

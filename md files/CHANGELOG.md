@@ -1,5 +1,118 @@
 # Changelog
 
+## 2026-08-10 - test lab: new "Seasonality" tab - S&P 500 seasonal path with 2026 price overlaid
+
+New: `app/test/SeasonalityTab.tsx`, `app/test/seasonalityData.ts`.
+Wired in: `components/shared/sectionNav.ts`, `components/pages/TestLab.tsx`.
+No proxy, server, API or WebSocket file was touched - the tab is a pure client
+render over a static dataset.
+
+(Re-logged: the first two entries for this feature were lost when CHANGELOG.md
+was reverted; this one covers the whole thing including the wiring fix.)
+
+- **What it shows.** One calendar-day axis carrying two lines: the average
+  cumulative % path of the E-mini S&P 500 across 2018-2025, and 2026 so far,
+  re-based to the same 31-Dec-2025 close. The stretch of the year 2026 has not
+  reached yet is shaded.
+- **The number that matters is the spread**, not the two levels - how far ahead
+  of or behind its own seasonal script this year is running. Headline tile, in %
+  and in ES points, alongside YTD, seasonal-to-date, seasonal left in the year,
+  and the 2025 close it is all measured from.
+- **Two axes, one scale.** Left is %, right is the same axis in ES points
+  (right = 2025 close x (1 + left/100)), drawn off the same tick positions - so
+  this year's line reads as a PRICE straight off a seasonal % chart. An
+  independently auto-scaled second axis would let the lines cross wherever the
+  scaling happened to land and the crossings would mean nothing. The mode toggle
+  only swaps which unit is primary; the plotted lines do not move.
+- **Hover gives both units**: seasonal % and its ES equivalent, 2026 % and its
+  actual ES close, and the spread in % and in ES points.
+- **Where the data came from.** The ESU6 continuous 1-minute ETH export
+  (2017-04-17 -> 2026-07-20), aggregated to session daily closes on an
+  18:00 -> 17:00 ET boundary. Each of the eight full years is re-based to its
+  prior 31-Dec close, mapped to calendar day-of-year (29-Feb dropped),
+  forward-filled across weekends and holidays, then averaged. It finishes the
+  year at +10.05% against +10.4% for the published 20-year EquityClock study, so
+  amplitude and turning points both hold on the shorter sample.
+- **Known bias, stated in the data file header.** The source series is
+  back-adjusted, so older years sit at an inflated price level and their
+  percentage swings are slightly damped. It pulls the early-year contributions
+  down a touch; it does not move the turning points, which is what the chart is
+  read for.
+- **The wiring is the part that bit.** The tab was first added to the local
+  `TABS` array in `app/test/page.tsx` and did not appear on the live site: the
+  SPA routes `/test` to `components/pages/TestLab.tsx`, and the Test Lab tab
+  strip comes from `TESTLAB_SECTION` in `sectionNav.ts` (drawn by
+  `SectionSubStrip` inside the GlobalToolbar), not from the page. `app/test/
+  page.tsx` is a stale parallel copy - it still lists three tabs, without GEX
+  Levels, Flow Inventory or Prem Diff. A Test Lab tab needs BOTH halves: a pill
+  in `TESTLAB_SECTION.tabs` + `groups`, and an id in TestLab's `TestTab` union
+  plus a render branch. The union is not optional - `setTab(id as TestTab)`
+  casts a string straight off a DOM event.
+- **Pill lives in its own `season` cluster**, not the gamma or tape ones: it
+  reads a calendar, not the book and not the tape, and nothing on it updates
+  intraday. Saved pill orders are safe - `SectionSubStrip.reconcile()` appends
+  newly shipped tabs to their default cluster.
+- **URL is `/test?tab=seasonality`** (section-nav convention), not a hash.
+- **Hand-rolled SVG.** No chart dependency, no canvas. Colors from `HOME_THEME`
+  only (`green` = seasonal, `orange` = 2026), chrome from `Card`. Chart width
+  starts at 0 on server and client alike and is filled in by a `ResizeObserver`
+  after mount, so the first paint matches and there is no React #418 on hard
+  refresh.
+- **2026 series is static through 2026-07-20** (the end of the supplied export).
+  Wiring it to a live daily feed is a follow-up, not a side effect of this.
+
+## 2026-08-10 - prem diff: full-year backfill verified; one-shot retry for a dead expiry
+
+`server-v2/atm-prem-backfill.js`.
+
+- **Full-year SPY pull confirmed working.** 14 monthlies, ~4,400 contract
+  subscriptions, 2,460 returned history -> 1,371 rows over 250 sessions
+  (2025-08-11 -> 2026-08-07) in 107 seconds. Front-month leg present on 227 of
+  the 250 sessions.
+- **One expiry came back completely dead: 2026-06-19, 0 of 350 contracts**,
+  while every neighbouring monthly returned 113-241. That is the 23-session gap
+  in the front-leg count. An expiry that empty next to healthy neighbours is a
+  dropped connection or a stalled replay far more often than a real hole.
+- **So: ONE retry when an expiry returns zero.** The per-expiry pull is now a
+  local function and is re-run once if `got === 0`. The `=== 0` test is
+  load-bearing and must not be loosened to a threshold: a retry is only safe
+  because zero contracts means nothing was accumulated into `perDate` on the
+  first pass. Retrying a PARTIAL failure would add the bars that did land a
+  second time and silently double that expiry's premium.
+- **Expiries still empty after the retry are named in the summary and returned
+  as `emptyExpiries`.** The failure mode is a HOLE in the middle of the series -
+  the sessions that expiry was front month for get no bar at all - which is much
+  easier to misread as a genuinely quiet stretch than a short series is.
+
+## 2026-08-10 - prem diff: probe says expired contracts DO replay - full-year pull is back on
+
+`server-v2/atm-prem-backfill.js`, `app/test/PremDiffTab.tsx`. Reverses the
+entry below, which assumed delisted contracts were unreachable.
+
+- **Measured, not assumed.** `--probe` on the prod box returned 42 daily bars,
+  all carrying volume, for `.SPY260717C743` - a monthly that had ALREADY
+  EXPIRED. Underlying replay went back 275 sessions (2025-07-07 -> 2026-08-07).
+  So dxFeed is not dropping delisted option symbols on this token.
+- **Defaults flipped back.** `--days` 120 -> 365, and every monthly in the
+  window is attempted rather than only still-listed ones. `--listed-only` is now
+  the restrictive mode, kept for the case where the entitlement changes and dead
+  symbols start timing out. `--include-expired` still parses, as a no-op alias,
+  so the command printed in the previous entry does what it claims.
+- **The real limit is per-contract retention, and it is not announced.** That
+  July contract's bars started 2026-05-18, ~2 months before expiry; a contract
+  also only produces a bar on a session it actually traded. So the deep past
+  thins on its own. The script does not guess where the wall is - it prints the
+  recovered SPAN per symbol, and `strikes` per row shows how many strikes
+  returned data for that session, so a thin month is visible.
+- **Panel wording corrected.** The short-series footer no longer claims history
+  "cannot be extended backwards" (that was written against the wrong premise).
+  It now says the series starts where the replay ran dry and that re-running
+  will not reach much further.
+- **Note on running it at all:** `/opt/dashboard` on the VPS has the source but
+  no `node_modules` - deps live inside the image (`WORKDIR /app`). Run scripts
+  with `docker compose run --rm --no-deps dashboard node server-v2/...`, which
+  picks up `env_file: .env.local` for the quote token.
+
 ## 2026-08-10 - prem diff: backfill scoped to still-listed expiries (expired contracts return nothing)
 
 `server-v2/atm-prem-backfill.js`, `app/test/PremDiffTab.tsx`. Revises the entry

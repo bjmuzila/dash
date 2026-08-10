@@ -2,9 +2,10 @@
 /**
  * server-v2/atm-prem-backfill.js
  *
- * Recovers whatever history for atm_prem_diff (see atm-prem-recorder.js) is
- * still REACHABLE from dxLink daily candles. That is a few weeks, not a year —
- * read the ceiling below before running it.
+ * Rebuilds history for atm_prem_diff (see atm-prem-recorder.js) from dxLink
+ * DAILY CANDLES. Measured on 2026-08-10: a full-year SPY pull recovered 250
+ * sessions (2025-08-11 → 2026-08-07) from ~4,400 contract subscriptions in
+ * under two minutes.
  *
  * ── HOW IT GETS HISTORICAL OPTION VOLUME WITHOUT A HISTORY VENDOR ───────────
  *
@@ -18,26 +19,26 @@
  * works for option symbols — `.SPY260821C773{=1d}` is a valid candle symbol and
  * each replayed bar carries `close` and `volume`.
  *
- * ── THE CEILING, AND WHY IT IS WEEKS AND NOT A YEAR ─────────────────────────
+ * ── HOW FAR BACK IT REACHES ─────────────────────────────────────────────────
  *
- * EXPIRED contracts return NOTHING on this token. dxFeed drops delisted option
- * symbols, so the moment a monthly expires its entire candle history becomes
- * unreachable. That is not a bug to route around; it is the data that exists.
+ * EXPIRED contracts DO replay on this token — verified 2026-08-10 against
+ * `.SPY260717C743`, a monthly that had already expired, which returned 42 daily
+ * bars all carrying volume. So the pull is not limited to still-listed
+ * expiries and by default it attempts every monthly in the window.
  *
- * The consequence is specific and worth stating plainly. The panel's series is
- * "premium in whatever was the front month ON THAT DAY". For any session more
- * than ~a month back, that day's front month has since EXPIRED, so its bars are
- * gone. What survives is only the window where a STILL-LISTED monthly was
- * already the front (or back) month:
+ * What it is limited by is per-contract retention, which varies and is not
+ * announced: that July contract's bars started 2026-05-18, roughly two months
+ * before its expiry. A contract only produces a bar on a session it actually
+ * traded, and bars with no close are dropped, so the deep past thins out on its
+ * own. The script does not guess where the wall is — it reports the SPAN it
+ * actually recovered per symbol, and `strikes` on every row records how many
+ * strikes returned data for that session, so a thin month is visible rather
+ * than silently low.
  *
- *   · the current front month covers roughly the sessions since the previous
- *     monthly expired — about three to four weeks;
- *   · the current back month covers about twice that as the back-month leg.
- *
- * So this script fills the trailing few weeks and stops. Everything older has
- * to accumulate forward from the EOD recorder. It is written to attempt ONLY
- * expiries the root still lists — it does not waste an hour subscribing to
- * thousands of dead symbols to discover they are dead.
+ * `--listed-only` restricts the pull to expiries the root still lists. That is
+ * the safe mode if the entitlement ever changes and dead symbols start coming
+ * back empty — it avoids spending a few hundred subscriptions and a 90s
+ * hard-timeout per expiry to discover they are empty.
  *
  * ── WHAT A RECOVERED BAR IS NOT ─────────────────────────────────────────────
  *
@@ -56,17 +57,16 @@
  * ── USAGE ───────────────────────────────────────────────────────────────────
  *
  *   node server-v2/atm-prem-backfill.js --probe --symbols=SPY
- *   node server-v2/atm-prem-backfill.js --symbols=SPY --dry
- *   node server-v2/atm-prem-backfill.js --symbols=SPY,QQQ,SPX,NVDA
+ *   node server-v2/atm-prem-backfill.js --symbols=SPY --days=365 --dry
+ *   node server-v2/atm-prem-backfill.js --symbols=SPY,QQQ,SPX,NVDA --days=365
  *
  * Flags: --probe (reachability check, writes nothing) · --symbols=A,B
- *   · --days=N window to attempt (default 120 — more only costs time, since
- *     nothing older is reachable) · --dry (compute + report, no DB write)
- *   · --batch=N dxLink symbols per subscription wave (default 150)
+ *   · --days=N window to attempt (default 365) · --dry (compute + report, no DB
+ *     write) · --batch=N dxLink symbols per subscription wave (default 150)
  *   · --pad=N percent of padding beyond the widest band when synthesising
  *     strikes (default 3, i.e. ±8% for the ±5% band)
- *   · --include-expired to attempt delisted expiries anyway (off by default;
- *     it is a long, quiet way to collect zero rows)
+ *   · --listed-only to skip expiries the root no longer lists (see above;
+ *     `--include-expired` is accepted as a no-op alias for the old default)
  *
  * Requires the same env the server uses: TastyTrade credentials (for the quote
  * token) and DATABASE_URL. Reads proxy-tastytrade's exports only — it changes
@@ -82,16 +82,19 @@ const {
 // ── Args ─────────────────────────────────────────────────────────────────────
 
 function parseArgs(argv) {
-  // days defaults to 120, not 365: expired contracts return nothing, so a wider
-  // window buys no extra rows — only a longer run and a bigger pile of empty
-  // subscriptions. See the ceiling note in the header.
-  const out = { symbols: ['SPY'], days: 120, dry: false, probe: false, batch: 150, pad: 3, includeExpired: false };
+  // Expired contracts DO replay (verified — see the header), so the default is
+  // a full year and every monthly in it. --listed-only is the restrictive mode.
+  const out = { symbols: ['SPY'], days: 365, dry: false, probe: false, batch: 150, pad: 3, listedOnly: false };
   for (const a of argv.slice(2)) {
     if (a === '--dry') out.dry = true;
     else if (a === '--probe') out.probe = true;
-    else if (a === '--include-expired') out.includeExpired = true;
+    else if (a === '--listed-only') out.listedOnly = true;
+    // Accepted and ignored: this WAS the flag that opted IN to expired expiries,
+    // back when they were assumed unreachable. They are the default now, so the
+    // documented command from that era still does what it says.
+    else if (a === '--include-expired') out.listedOnly = false;
     else if (a.startsWith('--symbols=')) out.symbols = a.slice(10).split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
-    else if (a.startsWith('--days=')) out.days = Math.max(30, Math.min(1500, Number(a.slice(7)) || 120));
+    else if (a.startsWith('--days=')) out.days = Math.max(30, Math.min(1500, Number(a.slice(7)) || 365));
     else if (a.startsWith('--batch=')) out.batch = Math.max(10, Math.min(400, Number(a.slice(8)) || 150));
     else if (a.startsWith('--pad=')) out.pad = Math.max(0, Math.min(20, Number(a.slice(6)) || 3));
   }
@@ -291,7 +294,7 @@ async function listedExpiries(root) {
 }
 
 async function backfillSymbol(root, opts) {
-  const { days, batch, pad, dry, includeExpired } = opts;
+  const { days, batch, pad, dry, listedOnly } = opts;
   const fromTime = Date.now() - days * 86400_000;
 
   // 1 ── underlying dailies. Also the session calendar for everything below.
@@ -312,24 +315,22 @@ async function backfillSymbol(root, opts) {
   const widest = Math.max(...BANDS) + pad;
   const active = activeMonthlies(sessions);
 
-  // ONLY still-listed expiries. An expired contract returns no candles on this
-  // token (see the ceiling note in the header), so attempting one is a few
-  // hundred subscriptions and a 90s hard-timeout in exchange for nothing. The
-  // skipped list is printed rather than swallowed: a short recovered window is
-  // the expected outcome here, and it should be visible that it was expected.
+  // Every monthly that was front or back month in the window. Expired ones are
+  // included by default — they replay on this token — so this is normally the
+  // full list. --listed-only trims it to what the root still lists.
   const allTargets = [...active.keys()].sort()
     .filter((e) => active.get(e).front.size + active.get(e).back.size > 0);
-  const listed = includeExpired ? null : await listedExpiries(root);
+  const listed = listedOnly ? await listedExpiries(root) : null;
   const expiries = listed ? allTargets.filter((e) => listed.has(e)) : allTargets;
   const skipped = allTargets.filter((e) => !expiries.includes(e));
   if (skipped.length) {
-    console.log(`[atm-prem-backfill] ${root}: skipping ${skipped.length} expired monthly(s) — no candle history exists for delisted contracts: ${skipped.join(', ')}`);
+    console.log(`[atm-prem-backfill] ${root}: --listed-only, skipping ${skipped.length} delisted monthly(s): ${skipped.join(', ')}`);
   }
   if (!expiries.length) {
-    console.warn(`[atm-prem-backfill] ${root}: no still-listed monthly overlaps the window — nothing recoverable, the EOD recorder is the only path from here`);
+    console.warn(`[atm-prem-backfill] ${root}: no monthly overlaps the window — nothing to attempt`);
     return { root, sessions: 0, rows: 0, wrote: 0, skippedExpiries: skipped.length };
   }
-  console.log(`[atm-prem-backfill] ${root}: attempting ${expiries.length} still-listed monthly(s): ${expiries.join(', ')}`);
+  console.log(`[atm-prem-backfill] ${root}: attempting ${expiries.length} monthly(s): ${expiries.join(', ')}`);
 
   /** date → { front: acc, back: acc } where acc is per-band totals. */
   const perDate = new Map();
@@ -341,6 +342,8 @@ async function backfillSymbol(root, opts) {
 
   let totalSymbols = 0;
   let hitSymbols = 0;
+  /** Expiries that returned nothing even after a retry — reported, not swallowed. */
+  const emptyExpiries = [];
 
   for (const expiry of expiries) {
     const slots = active.get(expiry);
@@ -373,49 +376,78 @@ async function backfillSymbol(root, opts) {
     // Only sessions this expiry was active for can receive its premium.
     const expFrom = Date.parse(`${dates[0]}T00:00:00Z`) - 3 * 86400_000;
 
-    let got = 0;
-    for (let i = 0; i < symbols.length; i += batch) {
-      const wave = symbols.slice(i, i + batch);
-      // eslint-disable-next-line no-await-in-loop
-      const res = await fetchDailyCandlesBatch(wave, expFrom);
-      for (const [sym, bars] of res) {
-        if (!bars.length) continue;
-        got += 1;
-        // '.SPY260821C773{=d}' → right + strike
-        const m = /^\.([A-Z]+)\d{6}([CP])([\d.]+)\{/.exec(sym);
-        if (!m) continue;
-        const right = m[2];
-        const strike = Number(m[3]);
-        if (!(strike > 0)) continue;
+    // One full pass over this expiry's symbols. Returns how many contracts came
+    // back with bars, accumulating into perDate as it goes.
+    const pullExpiry = async () => {
+      let got = 0;
+      for (let i = 0; i < symbols.length; i += batch) {
+        const wave = symbols.slice(i, i + batch);
+        // eslint-disable-next-line no-await-in-loop
+        const res = await fetchDailyCandlesBatch(wave, expFrom);
+        for (const [sym, bars] of res) {
+          if (!bars.length) continue;
+          got += 1;
+          // '.SPY260821C773{=d}' -> right + strike
+          const m = /^\.([A-Z]+)\d{6}([CP])([\d.]+)\{/.exec(sym);
+          if (!m) continue;
+          const right = m[2];
+          const strike = Number(m[3]);
+          if (!(strike > 0)) continue;
 
-        for (const bar of bars) {
-          const d = barDate(bar.time);
-          const u = under.get(d);
-          if (!u || !(u.close > 0)) continue;
-          const isFront = slots.front.has(d);
-          const isBack = slots.back.has(d);
-          if (!isFront && !isBack) continue;
-          const vol = Number(bar.volume) || 0;
-          if (!(vol > 0)) continue;
-          const distPct = Math.abs(strike - u.close) / u.close * 100;
-          if (distPct > Math.max(...BANDS)) continue;
-          const notional = Number(bar.close) * vol * CONTRACT_MULTIPLIER;
+          for (const bar of bars) {
+            const d = barDate(bar.time);
+            const u = under.get(d);
+            if (!u || !(u.close > 0)) continue;
+            const isFront = slots.front.has(d);
+            const isBack = slots.back.has(d);
+            if (!isFront && !isBack) continue;
+            const vol = Number(bar.volume) || 0;
+            if (!(vol > 0)) continue;
+            const distPct = Math.abs(strike - u.close) / u.close * 100;
+            if (distPct > Math.max(...BANDS)) continue;
+            const notional = Number(bar.close) * vol * CONTRACT_MULTIPLIER;
 
-          if (!perDate.has(d)) perDate.set(d, { front: blankAcc(), back: blankAcc() });
-          const slotAcc = perDate.get(d)[isFront ? 'front' : 'back'];
-          for (const b of BANDS) {
-            if (distPct > b) continue;
-            const acc = slotAcc[b];
-            if (right === 'C') { acc.callPrem += notional; acc.callVol += vol; }
-            else { acc.putPrem += notional; acc.putVol += vol; }
-            acc.strikes.add(strike);
+            if (!perDate.has(d)) perDate.set(d, { front: blankAcc(), back: blankAcc() });
+            const slotAcc = perDate.get(d)[isFront ? 'front' : 'back'];
+            for (const b of BANDS) {
+              if (distPct > b) continue;
+              const acc = slotAcc[b];
+              if (right === 'C') { acc.callPrem += notional; acc.callVol += vol; }
+              else { acc.putPrem += notional; acc.putVol += vol; }
+              acc.strikes.add(strike);
+            }
           }
         }
+        process.stdout.write(`\r[atm-prem-backfill] ${root} ${expiry}: ${Math.min(i + batch, symbols.length)}/${symbols.length} symbols, ${got} with data   `);
       }
-      process.stdout.write(`\r[atm-prem-backfill] ${root} ${expiry}: ${Math.min(i + batch, symbols.length)}/${symbols.length} symbols, ${got} with data   `);
+      process.stdout.write('\n');
+      return got;
+    };
+
+    let got = await pullExpiry();
+
+    // ONE retry when an expiry comes back completely empty.
+    //
+    // Observed 2026-08-10: a full-year SPY pull returned 0-with-data for
+    // 2026-06-19 while every neighbouring monthly returned 113-241. An expiry
+    // that dead while its neighbours are fine is a dropped connection or a
+    // stalled replay far more often than it is a real hole in dxFeed, and the
+    // cost of being wrong is one wasted minute.
+    //
+    // Retrying is only safe BECAUSE got===0 means nothing was accumulated into
+    // perDate on the first pass. A partial failure must NOT be retried — the
+    // bars that did land would be added a second time and that expiry's premium
+    // would silently double. Hence the ===0 test rather than a threshold.
+    if (got === 0) {
+      console.log(`[atm-prem-backfill] ${root} ${expiry}: 0 of ${symbols.length} contracts returned data — retrying once`);
+      got = await pullExpiry();
+      if (got === 0) {
+        emptyExpiries.push(expiry);
+        console.warn(`[atm-prem-backfill] ${root} ${expiry}: still empty after retry — the sessions this expiry covered will have no leg`);
+      }
     }
+
     hitSymbols += got;
-    process.stdout.write('\n');
   }
 
   // 3 ── flatten into rows
@@ -455,13 +487,20 @@ async function backfillSymbol(root, opts) {
     const frontCovered = new Set(rows.filter((r) => r.slot === 'front').map((r) => r.date));
     console.log(`[atm-prem-backfill] ${root}: front-month leg present on ${frontCovered.size} of those sessions; everything before ${covered[0]} must accumulate forward from the EOD recorder`);
   }
+  if (emptyExpiries.length) {
+    // Named, because the effect is a HOLE in the middle of the series — the
+    // sessions that expiry was front month for get no bar at all — and a hole
+    // in the middle is much easier to mistake for a real quiet stretch than a
+    // short series is. Re-run with --days trimmed to just that period to retry.
+    console.warn(`[atm-prem-backfill] ${root}: ${emptyExpiries.length} expiry(s) returned nothing even after a retry: ${emptyExpiries.join(', ')} — the sessions they covered have no leg in the series`);
+  }
 
   if (dry) {
     const sample = rows.filter((r) => r.bandPct === 5 && r.slot === 'front').slice(-5);
     for (const r of sample) {
       console.log(`  ${r.date} front ±5%  calls $${(r.callPrem / 1e6).toFixed(1)}M  puts $${(r.putPrem / 1e6).toFixed(1)}M  diff $${((r.putPrem - r.callPrem) / 1e6).toFixed(1)}M  (${r.strikes} strikes)`);
     }
-    return { root, sessions: perDate.size, rows: rows.length, wrote: 0, span, skippedExpiries: skipped.length };
+    return { root, sessions: perDate.size, rows: rows.length, wrote: 0, span, skippedExpiries: skipped.length, emptyExpiries };
   }
 
   // 4 ── write, chunked so one failure doesn't lose the whole pull
@@ -470,7 +509,7 @@ async function backfillSymbol(root, opts) {
     // eslint-disable-next-line no-await-in-loop
     wrote += await upsertRows(rows.slice(i, i + 500));
   }
-  return { root, sessions: perDate.size, rows: rows.length, wrote, span, skippedExpiries: skipped.length };
+  return { root, sessions: perDate.size, rows: rows.length, wrote, span, skippedExpiries: skipped.length, emptyExpiries };
 }
 
 // ── Probe ────────────────────────────────────────────────────────────────────
@@ -532,9 +571,9 @@ async function probe(root) {
 
   console.log('');
   if (expiredBars > 0) {
-    console.log('[probe] VERDICT: expired-contract history IS available on this token — better than expected. Re-run the pull with --include-expired --days=365 to reach further back; without that flag it only attempts still-listed expiries.');
+    console.log(`[probe] VERDICT: expired-contract history IS available on this token (${expiredBars} bars off the delisted monthly). The full pull is on — run it with --days=365 --dry first to see the numbers, then without --dry. Per-contract retention still varies, so check the recovered SPAN the run prints rather than assuming it reached the whole year.`);
   } else if (liveBars > 0) {
-    console.log(`[probe] VERDICT: as expected — LIVE contracts replay history (${liveBars} bars), EXPIRED ones return nothing. Recoverable history is only the window where a still-listed monthly was already front or back month: roughly the last three to eight weeks. Run without --probe to collect it; everything older accumulates forward from the EOD recorder.`);
+    console.log(`[probe] VERDICT: LIVE contracts replay history (${liveBars} bars) but this EXPIRED one returned nothing. If that holds across expiries, recoverable history is only the window where a still-listed monthly was already front or back month — roughly the last three to eight weeks. Use --listed-only so the run doesn't spend a 90s timeout per dead expiry.`);
   } else {
     console.log('[probe] VERDICT: no option candle history on either contract, though the underlying works. Candle replay is not entitled for options on this token at all, so even the trailing weeks are unreachable — forward-only via the EOD recorder is the whole path.');
   }
