@@ -1,65 +1,31 @@
 # Changelog
 
-## 2026-08-10 - test lab: new "Seasonality" tab - S&P 500 seasonal path with 2026 price overlaid
+## 2026-08-10 - prem diff backfill: holiday-aware expiry resolution (the 2026-06-19 hole)
 
-New: `app/test/SeasonalityTab.tsx`, `app/test/seasonalityData.ts`.
-Wired in: `components/shared/sectionNav.ts`, `components/pages/TestLab.tsx`.
-No proxy, server, API or WebSocket file was touched - the tab is a pure client
-render over a static dataset.
+`server-v2/atm-prem-backfill.js`.
 
-(Re-logged: the first two entries for this feature were lost when CHANGELOG.md
-was reverted; this one covers the whole thing including the wiring fix.)
-
-- **What it shows.** One calendar-day axis carrying two lines: the average
-  cumulative % path of the E-mini S&P 500 across 2018-2025, and 2026 so far,
-  re-based to the same 31-Dec-2025 close. The stretch of the year 2026 has not
-  reached yet is shaded.
-- **The number that matters is the spread**, not the two levels - how far ahead
-  of or behind its own seasonal script this year is running. Headline tile, in %
-  and in ES points, alongside YTD, seasonal-to-date, seasonal left in the year,
-  and the 2025 close it is all measured from.
-- **Two axes, one scale.** Left is %, right is the same axis in ES points
-  (right = 2025 close x (1 + left/100)), drawn off the same tick positions - so
-  this year's line reads as a PRICE straight off a seasonal % chart. An
-  independently auto-scaled second axis would let the lines cross wherever the
-  scaling happened to land and the crossings would mean nothing. The mode toggle
-  only swaps which unit is primary; the plotted lines do not move.
-- **Hover gives both units**: seasonal % and its ES equivalent, 2026 % and its
-  actual ES close, and the spread in % and in ES points.
-- **Where the data came from.** The ESU6 continuous 1-minute ETH export
-  (2017-04-17 -> 2026-07-20), aggregated to session daily closes on an
-  18:00 -> 17:00 ET boundary. Each of the eight full years is re-based to its
-  prior 31-Dec close, mapped to calendar day-of-year (29-Feb dropped),
-  forward-filled across weekends and holidays, then averaged. It finishes the
-  year at +10.05% against +10.4% for the published 20-year EquityClock study, so
-  amplitude and turning points both hold on the shorter sample.
-- **Known bias, stated in the data file header.** The source series is
-  back-adjusted, so older years sit at an inflated price level and their
-  percentage swings are slightly damped. It pulls the early-year contributions
-  down a touch; it does not move the turning points, which is what the chart is
-  read for.
-- **The wiring is the part that bit.** The tab was first added to the local
-  `TABS` array in `app/test/page.tsx` and did not appear on the live site: the
-  SPA routes `/test` to `components/pages/TestLab.tsx`, and the Test Lab tab
-  strip comes from `TESTLAB_SECTION` in `sectionNav.ts` (drawn by
-  `SectionSubStrip` inside the GlobalToolbar), not from the page. `app/test/
-  page.tsx` is a stale parallel copy - it still lists three tabs, without GEX
-  Levels, Flow Inventory or Prem Diff. A Test Lab tab needs BOTH halves: a pill
-  in `TESTLAB_SECTION.tabs` + `groups`, and an id in TestLab's `TestTab` union
-  plus a render branch. The union is not optional - `setTab(id as TestTab)`
-  casts a string straight off a DOM event.
-- **Pill lives in its own `season` cluster**, not the gamma or tape ones: it
-  reads a calendar, not the book and not the tape, and nothing on it updates
-  intraday. Saved pill orders are safe - `SectionSubStrip.reconcile()` appends
-  newly shipped tabs to their default cluster.
-- **URL is `/test?tab=seasonality`** (section-nav convention), not a hash.
-- **Hand-rolled SVG.** No chart dependency, no canvas. Colors from `HOME_THEME`
-  only (`green` = seasonal, `orange` = 2026), chrome from `Card`. Chart width
-  starts at 0 on server and client alike and is filled in by a `ResizeObserver`
-  after mount, so the first paint matches and there is no React #418 on hard
-  refresh.
-- **2026 series is static through 2026-07-20** (the end of the supplied export).
-  Wiring it to a live daily feed is a follow-up, not a side effect of this.
+- **The dead expiry was not a feed failure. 2026-06-19 was Juneteenth.** It fell
+  on the third Friday, the market was shut, and the June monthly actually
+  expired THURSDAY 2026-06-18. Every one of the 350 `.SPY260619...` symbols the
+  pull asked for was fictional, which is why 0 came back while neighbouring
+  months returned 113-241 - and why ~23 sessions had no front-month leg.
+- **Fixed at the source: `makeMonthlyResolver()`.** The third-Friday target is
+  now snapped back to the previous session using the UNDERLYING'S OWN daily
+  candle dates as the calendar. A session the underlying did not trade cannot be
+  an expiry, so this covers every holiday, past and future, with no holiday
+  table to maintain or keep current. Targets outside the pulled window are
+  returned untouched - there is no calendar out there to consult, and walking
+  backwards from one would invent an expiry.
+- **`activeMonthlies()` now returns `byDate` as well as `byExpiry`,** and the
+  row-flattening step reads the resolved expiry from it instead of calling the
+  holiday-blind `monthlyTarget()` a second time. Two code paths computing the
+  same expiry independently is how the labels drift apart.
+- **The retry from the previous entry stays, with its rationale corrected.** It
+  is a backstop for a dropped connection, not for this - retrying a fictional
+  symbol just asks for the same fiction again.
+- Verified against a synthetic session list with Juneteenth removed: front month
+  for 2026-06-10 resolves to 2026-06-18, back month to 2026-07-17, and the roll
+  to July happens after the 18th rather than the 19th.
 
 ## 2026-08-10 - prem diff: full-year backfill verified; one-shot retry for a dead expiry
 

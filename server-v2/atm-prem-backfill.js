@@ -53,6 +53,10 @@
  *   · A listed monthly may still have been listed AFTER some of the sessions it
  *     was nominally front month for. Those sessions come back empty and are
  *     skipped rather than written as zero.
+ *   · Holiday expiries are resolved off the underlying's own session list, not
+ *     a holiday table — see makeMonthlyResolver(). Asking for a third Friday
+ *     the market was closed returns zero contracts and looks like a feed
+ *     failure; it is not.
  *
  * ── USAGE ───────────────────────────────────────────────────────────────────
  *
@@ -265,20 +269,82 @@ async function inferStrikeIncrement(root) {
 // ── Per-symbol backfill ──────────────────────────────────────────────────────
 
 /**
+ * A monthly-expiry resolver that knows about market holidays, without a holiday
+ * table — it uses the underlying's own session list as the calendar.
+ *
+ * THIS IS NOT COSMETIC. When the third Friday is a holiday the monthly expires
+ * the THURSDAY before, and the contract symbols carry that Thursday date. Ask
+ * dxFeed for the Friday's symbols and every single one comes back empty, which
+ * looks exactly like a feed failure.
+ *
+ * That is precisely what happened on the first full-year SPY pull: 2026-06-19
+ * is Juneteenth and fell on the third Friday, so the June monthly expired
+ * 2026-06-18. All 350 `.SPY260619…` subscriptions returned nothing while every
+ * neighbouring expiry returned 113-241, and the ~23 sessions June was front
+ * month for had no leg in the series.
+ *
+ * A session the underlying did not trade cannot be an expiry, so snapping the
+ * target back to the previous session in `sessionDates` fixes it for every
+ * holiday, past and future, with no list to maintain. Targets outside the
+ * window's range are returned untouched — there is no calendar out there to
+ * consult, and walking backwards from one would invent an expiry.
+ *
+ * (The live recorder does not need this: resolveMonthlies() snaps to what the
+ * root actually LISTS, which is only possible for unexpired months.)
+ */
+function makeMonthlyResolver(sessionDates) {
+  const sessions = new Set(sessionDates);
+  const sorted = [...sessions].sort();
+  const first = sorted[0];
+  const last = sorted[sorted.length - 1];
+
+  const snap = (ymd) => {
+    if (!sorted.length || ymd < first || ymd > last) return ymd;
+    if (sessions.has(ymd)) return ymd;
+    let t = Date.parse(`${ymd}T00:00:00Z`);
+    // 6 days is enough for any exchange holiday run; give up rather than
+    // wandering into the previous week and mislabelling the expiry.
+    for (let i = 0; i < 6; i++) {
+      t -= 86400_000;
+      const c = ymdUTC(t);
+      if (sessions.has(c)) return c;
+    }
+    return ymd;
+  };
+
+  /** The n-th monthly expiry on/after `ymd`, holiday-snapped. */
+  return (ymd, n) => {
+    let [y, m] = ymd.split('-').map(Number);
+    if (snap(thirdFriday(y, m)) < ymd) { m += 1; if (m > 12) { m = 1; y += 1; } }
+    for (let i = 0; i < n; i++) { m += 1; if (m > 12) { m = 1; y += 1; } }
+    return snap(thirdFriday(y, m));
+  };
+}
+
+/**
  * Which monthly expiries were front or back month during the window, and for
- * which sessions. Returns Map(expiry → { front: Set(date), back: Set(date) }).
+ * which sessions.
+ *
+ * Returns { byExpiry: Map(expiry -> { front: Set(date), back: Set(date) }),
+ *           byDate: Map(date -> { front: expiry, back: expiry }) }.
+ * `byDate` exists so the row-flattening step reuses the SAME resolved expiry
+ * the pull used, rather than recomputing it and risking the two disagreeing.
  */
 function activeMonthlies(sessionDates) {
-  const map = new Map();
+  const resolve = makeMonthlyResolver(sessionDates);
+  const byExpiry = new Map();
+  const byDate = new Map();
   const touch = (exp, slot, d) => {
-    if (!map.has(exp)) map.set(exp, { front: new Set(), back: new Set() });
-    map.get(exp)[slot].add(d);
+    if (!byExpiry.has(exp)) byExpiry.set(exp, { front: new Set(), back: new Set() });
+    byExpiry.get(exp)[slot].add(d);
+    if (!byDate.has(d)) byDate.set(d, { front: null, back: null });
+    byDate.get(d)[slot] = exp;
   };
   for (const d of sessionDates) {
-    touch(monthlyTarget(d, 0), 'front', d);
-    touch(monthlyTarget(d, 1), 'back', d);
+    touch(resolve(d, 0), 'front', d);
+    touch(resolve(d, 1), 'back', d);
   }
-  return map;
+  return { byExpiry, byDate, resolve };
 }
 
 /** The expiries the root still lists, as a Set of 'YYYY-MM-DD'. */
@@ -318,8 +384,8 @@ async function backfillSymbol(root, opts) {
   // Every monthly that was front or back month in the window. Expired ones are
   // included by default — they replay on this token — so this is normally the
   // full list. --listed-only trims it to what the root still lists.
-  const allTargets = [...active.keys()].sort()
-    .filter((e) => active.get(e).front.size + active.get(e).back.size > 0);
+  const allTargets = [...active.byExpiry.keys()].sort()
+    .filter((e) => active.byExpiry.get(e).front.size + active.byExpiry.get(e).back.size > 0);
   const listed = listedOnly ? await listedExpiries(root) : null;
   const expiries = listed ? allTargets.filter((e) => listed.has(e)) : allTargets;
   const skipped = allTargets.filter((e) => !expiries.includes(e));
@@ -346,7 +412,7 @@ async function backfillSymbol(root, opts) {
   const emptyExpiries = [];
 
   for (const expiry of expiries) {
-    const slots = active.get(expiry);
+    const slots = active.byExpiry.get(expiry);
     const dates = [...new Set([...slots.front, ...slots.back])].sort();
     if (!dates.length) continue;
 
@@ -426,13 +492,15 @@ async function backfillSymbol(root, opts) {
 
     let got = await pullExpiry();
 
-    // ONE retry when an expiry comes back completely empty.
+    // ONE retry when an expiry comes back completely empty — a cheap backstop
+    // for a dropped connection or a stalled replay.
     //
-    // Observed 2026-08-10: a full-year SPY pull returned 0-with-data for
-    // 2026-06-19 while every neighbouring monthly returned 113-241. An expiry
-    // that dead while its neighbours are fine is a dropped connection or a
-    // stalled replay far more often than it is a real hole in dxFeed, and the
-    // cost of being wrong is one wasted minute.
+    // Note what it is NOT for. The first all-empty expiry seen here (2026-06-19,
+    // 0 of 350 contracts) was not transient: that Friday was Juneteenth, the
+    // market was shut, and the June monthly had actually expired on the 18th —
+    // so every symbol asked for was fictional and a retry just asked for the
+    // same fiction again. That class of failure is fixed at the source in
+    // makeMonthlyResolver(); this retry only covers the genuinely flaky case.
     //
     // Retrying is only safe BECAUSE got===0 means nothing was accumulated into
     // perDate on the first pass. A partial failure must NOT be retried — the
@@ -460,7 +528,11 @@ async function backfillSymbol(root, opts) {
       // row would draw a real-looking flat bar. Skip it.
       const any = BANDS.some((b) => acc[b].strikes.size > 0);
       if (!any) continue;
-      const expiry = monthlyTarget(date, slot === 'front' ? 0 : 1);
+      // Reuse the resolved expiry from the pull, not a fresh monthlyTarget()
+      // call — the raw helper is holiday-blind and would relabel these rows
+      // with a Friday the market was closed.
+      const expiry = active.byDate.get(date)?.[slot];
+      if (!expiry) continue;
       for (const b of BANDS) {
         const a = acc[b];
         rows.push({
@@ -615,4 +687,4 @@ if (require.main === module) {
   main().catch((e) => { console.error('[atm-prem-backfill] fatal:', e); process.exit(1); });
 }
 
-module.exports = { fetchDailyCandlesBatch, optionSymbol, inferStrikeIncrement, activeMonthlies, backfillSymbol, probe };
+module.exports = { fetchDailyCandlesBatch, optionSymbol, inferStrikeIncrement, makeMonthlyResolver, activeMonthlies, backfillSymbol, probe };
