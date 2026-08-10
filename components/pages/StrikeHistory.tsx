@@ -5,7 +5,18 @@
  *
  * Pick a date + expiry + strike and get every recorded snapshot for that ONE
  * strike out of `option_strike_gex_history`: net GEX, volume-weighted net GEX,
- * spot, and IV skew vs the at-the-money strike.
+ * Flow GEX, and IV skew vs the at-the-money strike.
+ *
+ * Flow GEX is the only DEALER-SIGNED series of the four. net_gex is the OI book
+ * and net_vol_gex is the volume book; both assume every contract is dealer-long-
+ * call / short-put. Flow GEX instead reads the classified tape — γ × dealer
+ * inventory × spot², both legs +gamma because the inventory is already the
+ * dealer's own signed position. Rebuilt server-side per snapshot from
+ * flow_prints; see /api/strike-gex-series in server-v2/api-router.js.
+ *
+ * (Spot had its own panel here until Flow GEX took the slot. It was the one
+ * panel not about the selected strike, and it still shows in the "Spot range"
+ * tile and the hover strip.)
  *
  * Skew is `IV(K) − IV(ATM)`, where IV at a strike is the call/put average and
  * ATM is the strike nearest spot AT THAT SNAPSHOT (recomputed per tick, since
@@ -34,6 +45,16 @@ type Row = {
   spot: number | null;
   netGex: number;
   netVolGex: number | null;
+  /**
+   * Per-strike Flow GEX: γ × DEALER inventory × spot², reconstructed server-side
+   * from flow_prints (see /api/strike-gex-series). Null when the session has no
+   * tape at all — which is NOT the same as a flat zero, so it must not render as
+   * one. Sign is dealer polarity: + = dealer long gamma here, − = short.
+   */
+  flowGex: number | null;
+  /** Dealer's own signed contract position behind flowGex, for the hover strip. */
+  flowCallNet: number | null;
+  flowPutNet: number | null;
   callGamma: number | null;
   putGamma: number | null;
   callIv: number | null;
@@ -84,6 +105,9 @@ const fmtVp = (v: number | null | undefined, digits = 1) =>
   v == null || !Number.isFinite(v) ? "—" : (v > 0 ? "+" : "") + (v * 100).toFixed(digits);
 const fmtIv = (v: number | null | undefined) =>
   v == null || !Number.isFinite(v) ? "—" : (v * 100).toFixed(1) + "%";
+/** Signed contract count — the sign IS the reading, so + is always explicit. */
+const fmtSigned = (v: number | null | undefined) =>
+  v == null || !Number.isFinite(v) ? "—" : (v > 0 ? "+" : "") + Math.round(v).toLocaleString("en-US");
 
 /**
  * Snapshots where net GEX steps hard while per-contract gamma does NOT move are
@@ -606,8 +630,12 @@ export default function StrikeHistoryPage() {
   useEffect(() => { setHover(null); }, [session, strike, dayKey]);
 
   const steps = useMemo(() => findOiSteps(view), [view]);
-  const strikeNum = Number(strike);
+  // (strikeNum is gone with the Spot panel — it existed only to draw the
+  // selected strike as that panel's reference line.)
   const skewCount = useMemo(() => view.filter((r) => r.skew != null).length, [view]);
+  // Zero is a legitimate Flow GEX reading (a strike nobody traded), so the
+  // "is there data" test has to be null-vs-not, never truthiness.
+  const flowCount = useMemo(() => view.filter((r) => r.flowGex != null).length, [view]);
 
   const stats = useMemo(() => {
     if (!view.length) return null;
@@ -628,6 +656,11 @@ export default function StrikeHistoryPage() {
       spotHi: spots.length ? Math.max(...spots) : null,
       spotNow: spots.length ? spots[spots.length - 1] : null,
       skewNow: sk.length ? sk[sk.length - 1] : null,
+      // Latest NON-NULL flow reading, not lastRow's — the newest snapshot can
+      // land before its prints are written, and a trailing null would blank the
+      // tile on an otherwise complete session.
+      flowNow: [...view].reverse().find((r) => r.flowGex != null)?.flowGex ?? null,
+      flowCallNet: lastRow.flowCallNet, flowPutNet: lastRow.flowPutNet,
       ivK: lastRow.ivK, atmIv: lastRow.atmIv, atmStrike: lastRow.atmStrike,
       first: view[0].hhmm, last: lastRow.hhmm,
     };
@@ -779,6 +812,18 @@ export default function StrikeHistoryPage() {
               <div style={value}>{stats.spotLo?.toFixed(2) ?? "—"} – {stats.spotHi?.toFixed(2) ?? "—"}</div>
               <div style={note}>now {stats.spotNow?.toFixed(2) ?? "—"}</div>
             </div>
+            {/* Dealer-side summary. Coloured on the SIGN, not the magnitude:
+                positive/negative is the whole reading on this series. */}
+            <div style={{ ...statTileStyle, padding: "12px 14px" }}>
+              <div style={label}>Flow GEX now</div>
+              <div style={{ ...value, color: stats.flowNow == null ? HOME_THEME.text : stats.flowNow >= 0 ? LIGHT_BLUE : SOFT_RED }}>
+                {fmtM(stats.flowNow, 1)}
+              </div>
+              <div style={note}>
+                {stats.flowNow == null ? "no tape for this session"
+                  : `dealer ${fmtSigned(stats.flowCallNet)}c / ${fmtSigned(stats.flowPutNet)}p`}
+              </div>
+            </div>
           </div>
         )}
 
@@ -789,6 +834,13 @@ export default function StrikeHistoryPage() {
               {"  ·  spot "}{hoverRow.spot?.toFixed(2) ?? "—"}
               {"  ·  net GEX "}{fmtM(hoverRow.netGex)}
               {"  ·  vol GEX "}{fmtM(hoverRow.netVolGex, 1)}
+              {hoverRow.flowGex != null && <>{"  ·  flow GEX "}{fmtM(hoverRow.flowGex, 1)}</>}
+              {/* The dealer position itself, in contracts — flow GEX is that
+                  number times gamma times spot², so when the line moves this is
+                  what moved. Signed dealer-side: + = dealer long. */}
+              {hoverRow.flowCallNet != null && hoverRow.flowPutNet != null && (
+                <>{"  ·  dealer "}{fmtSigned(hoverRow.flowCallNet)}c / {fmtSigned(hoverRow.flowPutNet)}p</>
+              )}
               {"  ·  IV "}{fmtIv(hoverRow.ivK)}
               {"  ·  ATM "}{fmtIv(hoverRow.atmIv)}
               {"  ·  skew "}{fmtVp(hoverRow.skew)}{hoverRow.skew != null && " vp"}
@@ -852,14 +904,33 @@ export default function StrikeHistoryPage() {
             )}
           </PanelCard>
 
+          {/* Flow GEX replaced the Spot panel here. Spot was the one panel on
+              this page that wasn't about the strike you picked — and it's still
+              on screen twice (the "Spot range" stat tile and the hover strip),
+              so nothing was actually lost. What this shows instead is the only
+              dealer-SIGNED series of the four: net GEX is the OI book and
+              net_vol_gex is the volume book, but both assume every contract is
+              dealer-long-call / short-put. This one asks the tape who actually
+              lifted the offer. */}
           <PanelCard
-            title="Spot"
+            title="Flow GEX"
             color={HOME_THEME.green}
-            subtitle="Dashed line marks the selected strike."
+            subtitle="γ × dealer inventory × spot², from today's classified tape. Above zero = dealers long gamma at this strike; below = short."
           >
-            <Panel rows={view} values={view.map((r) => r.spot)} color={HOME_THEME.green}
-              fmt={(v) => v.toFixed(0)} hoverFmt={(v) => v.toFixed(2)} refLine={Number.isFinite(strikeNum) ? strikeNum : undefined}
-              refLabel={strike} steps={[]} hover={hover} onHover={setHover} />
+            {flowCount === 0 ? (
+              <div style={{ fontSize: 12.5, color: HOME_THEME.green, opacity: 0.75, padding: "48px 8px", textAlign: "center", lineHeight: 1.7 }}>
+                No tape recorded for this session.<br />
+                <span style={{ opacity: 0.75 }}>
+                  Flow GEX is rebuilt from flow_prints, which only holds prints from when the tape
+                  was running. A blank panel here means the inventory is unknown — not that dealers
+                  held nothing, which is why it isn&apos;t drawn as a flat zero.
+                </span>
+              </div>
+            ) : (
+              <Panel rows={view} values={view.map((r) => r.flowGex)} color={HOME_THEME.green}
+                fmt={(v) => fmtM(v, 0)} hoverFmt={(v) => fmtM(v, 1)} refLine={0} refLabel="flat"
+                steps={[]} hover={hover} onHover={setHover} />
+            )}
           </PanelCard>
         </div>
       )}

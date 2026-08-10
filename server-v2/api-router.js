@@ -5114,6 +5114,15 @@ if (libDb) {
   // option_strike_gex_history query, the TypeScript source does neither. Adding
   // a helper to the source would mean regenerating the bundle, which would drop
   // symbol support and break SPY/QQQ. Nothing here needs that regeneration.
+  //
+  // Index roots as they appear in flow_prints.underlying_norm. option_strike_gex_
+  // history stores the NORMALIZED symbol ('SPX'), but the tape records the actual
+  // traded root — SPX weeklies print as 'SPXW' — so a bare `underlying_norm = symbol`
+  // would silently drop most of the SPX tape. Mirrors FLOW_TICKER_ROOTS in
+  // server-with-proxy.js; keep the two in step.
+  const FLOW_TICKER_ROOTS = {
+    SPX: ['SPX', 'SPXW'], NDX: ['NDX', 'NDXP'], RUT: ['RUT', 'RUTW'], XSP: ['XSP', 'XSPW'],
+  };
   if (libDb) {
     register('/api/strike-gex-series', {
       auth: 'subscriber', methods: ['GET'],
@@ -5203,9 +5212,85 @@ if (libDb) {
               ORDER BY h.timestamp ASC`,
             [symbol, date, expiry, symbol, date, expiry, strike]
           );
+
+          // ── Per-strike Flow GEX, reconstructed from the tape ────────────────
+          // gex-history-writer.js stores call_gamma/put_gamma per strike per
+          // snapshot for exactly this: γ × dealer_inventory × spot² can be
+          // rebuilt for any PAST instant, instead of only ever having "now"'s
+          // value out of the in-memory FlowGexAccumulator.
+          //
+          // Inventory is a running sum over flow_prints, mirrored to the dealer:
+          // a taker SELL means the dealer BOUGHT (+), a taker BUY means the
+          // dealer SOLD (−). Same `bucket <> 'neutral'` guard the live
+          // accumulator uses (computation/flow-gex.js) — prints whose side
+          // couldn't be inferred off the bid/ask are coerced to side:'buy' for
+          // the display tape, so admitting them here would bias inventory short.
+          //
+          // Summed in JS rather than as a correlated/LATERAL join: this is ONE
+          // strike on ONE expiry, so the print set is small, and a two-pointer
+          // merge over two already-sorted lists beats re-scanning per snapshot.
+          const flowRoots = FLOW_TICKER_ROOTS[symbol] || [symbol];
+          let printRows = [];
+          let tapeRows = 0;
+          try {
+            // Does this session have a tape AT ALL for this underlying? Without
+            // it, "no prints for this strike" and "flow_prints was never written
+            // for this day" both look like a flat zero line. They are not the
+            // same thing, and a back-session must not render as "dealers did
+            // nothing" — flowGex goes null instead (see flowGexAvailable).
+            const tapeProbe = await libDb.queryAll(
+              `SELECT 1 FROM flow_prints
+                WHERE date = ? AND underlying_norm IN (${flowRoots.map(() => '?').join(', ')})
+                LIMIT 1`,
+              [date, ...flowRoots]
+            );
+            tapeRows = tapeProbe.length;
+            if (tapeRows) {
+              printRows = await libDb.queryAll(
+                `SELECT ts, type, side, size
+                   FROM flow_prints
+                  WHERE date = ?
+                    AND underlying_norm IN (${flowRoots.map(() => '?').join(', ')})
+                    AND expiration = ? AND strike = ?
+                    AND side IN ('buy', 'sell')
+                    AND type IN ('C', 'P')
+                    AND (bucket IS NULL OR bucket <> 'neutral')
+                  ORDER BY ts ASC`,
+                [date, ...flowRoots, expiry, strike]
+              );
+            }
+          } catch (e) {
+            // A missing/!ready flow_prints must not take the whole page down —
+            // the other three panels don't depend on it.
+            console.warn('[strike-gex-series] flow inventory unavailable:', e?.message || e);
+            tapeRows = 0;
+            printRows = [];
+          }
+
+          // Cumulative dealer position at each snapshot. Both lists are already
+          // ts-ascending, so one forward pass covers the whole series.
+          const flowByTs = new Map();
+          {
+            let i = 0, callNet = 0, putNet = 0;
+            for (const h of seriesRows) {
+              const t = Number(h.timestamp);
+              while (i < printRows.length && Number(printRows[i].ts) <= t) {
+                const p = printRows[i++];
+                // Dealer mirror: taker sell → dealer bought (+).
+                const qty = (p.side === 'sell' ? 1 : -1) * (Number(p.size) || 0);
+                if (p.type === 'C') callNet += qty; else putNet += qty;
+              }
+              flowByTs.set(t, { callNet, putNet });
+            }
+          }
+
           const num = (v) => (v == null ? null : Number(v));
           send(res, 200, {
             mode: 'series', symbol, date, expiry, strike,
+            // False when this session has no tape at all, so the client can say
+            // "no flow recorded" rather than drawing a flat zero that reads as
+            // "dealers held nothing here."
+            flowGexAvailable: tapeRows > 0,
             // ATM reference is the strike nearest spot at each snapshot; IV at
             // both K and ATM is the call/put average, so the subtraction is
             // like-for-like rather than call-IV minus a blended reference.
@@ -5218,13 +5303,30 @@ if (libDb) {
               // Skew is null unless BOTH legs of the subtraction exist — a
               // missing ATM reading must not silently render as "zero skew".
               const skew = ivK != null && atmIv != null ? ivK - atmIv : null;
+              // Flow GEX = γ_call·callNet·S² + γ_put·putNet·S². BOTH legs use
+              // +gamma: callNet/putNet are already the dealer's OWN signed
+              // position, so there is no put-side flip like the OI formula's.
+              // Matches computation/gex-calculator.js's flowGEX branch exactly.
+              const spotV = num(r.spot);
+              const cg = num(r.call_gamma);
+              const pg = num(r.put_gamma);
+              const inv = flowByTs.get(Number(r.timestamp));
+              const flowGex =
+                tapeRows && inv && spotV != null && spotV > 0 && (cg != null || pg != null)
+                  ? ((cg ?? 0) * inv.callNet + (pg ?? 0) * inv.putNet) * spotV * spotV
+                  : null;
               return {
                 t: Number(r.timestamp),
-                spot: num(r.spot),
+                spot: spotV,
                 netGex: Number(r.net_gex ?? 0),
                 netVolGex: num(r.net_vol_gex),
-                callGamma: num(r.call_gamma),
-                putGamma: num(r.put_gamma),
+                callGamma: cg,
+                putGamma: pg,
+                flowGex,
+                // The raw dealer position behind flowGex, so the hover readout
+                // can say WHY it moved without a second round trip.
+                flowCallNet: inv ? inv.callNet : null,
+                flowPutNet: inv ? inv.putNet : null,
                 callIv, putIv, ivK,
                 atmStrike: num(r.atm_strike),
                 atmIv,

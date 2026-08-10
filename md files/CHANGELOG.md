@@ -1,5 +1,73 @@
 # Changelog
 
+## 2026-08-10 - /strike-history: Flow GEX replaces the Spot panel
+
+`server-v2/api-router.js` (`/api/strike-gex-series` handler only),
+`components/pages/StrikeHistory.tsx`.
+
+- **The 4th panel is now per-strike Flow GEX, not Spot.** It's the only
+  dealer-SIGNED series on the page: `net_gex` is the OI book and `net_vol_gex`
+  is the volume book, and both assume every contract is dealer-long-call /
+  short-put. This one asks the tape who actually lifted the offer. Zero line as
+  the reference, `+` = dealers long gamma at that strike.
+- **Spot didn't lose anything.** It was the one panel not about the selected
+  strike, and it still reads out in the "Spot range" stat tile and the hover
+  strip. `strikeNum` went with it - it existed only to draw that panel's
+  reference line.
+- **Rebuilt server-side from `flow_prints`, no schema change.**
+  `option_strike_gex_history` already stores `call_gamma` / `put_gamma` / `spot`
+  per snapshot for precisely this (`gex-history-writer.js:177`), so the only
+  missing piece was inventory: a running sum over the tape, mirrored to the
+  dealer (taker SELL -> dealer bought `+`, taker BUY -> dealer sold `-`), with
+  the same `bucket <> 'neutral'` guard `computation/flow-gex.js:58` uses so
+  unclassifiable prints can't bias it short. Then
+  `flowGex = call_gamma*callNet*S^2 + put_gamma*putNet*S^2` - both legs
+  `+gamma`, matching `gex-calculator.js:121-123`.
+- **Summed in JS, not as a LATERAL join.** One strike on one expiry is a small
+  print set, and a two-pointer merge over two already-ts-sorted lists beats
+  re-scanning the tape once per snapshot. Covered by
+  `flow_prints_date_norm_ts_idx`; the route is fetch-on-load, so it's one query
+  per page load rather than per tick.
+- **`underlying_norm IN ('SPX','SPXW')`, not `= symbol`.** The history table
+  stores the normalized symbol but the tape records the traded root, and SPX
+  weeklies print as SPXW - a bare equality would have silently dropped most of
+  the SPX tape. A local `FLOW_TICKER_ROOTS` mirrors the one in
+  `server-with-proxy.js`; keep the two in step.
+- **A session with no tape returns null, not zero.** New `flowGexAvailable` flag
+  on the response. Zero is a legitimate reading (a strike nobody traded), so a
+  back-session with no `flow_prints` rows must not render as a flat zero that
+  reads as "dealers held nothing" - the panel says so in words instead. Note
+  `option_strike_gex_history` retention prunes to ~2 days, so lookback is short
+  either way. A `flow_prints` failure is caught and logged, not fatal: the other
+  three panels don't depend on it.
+- **Hover strip and a new "Flow GEX now" tile carry the dealer position itself**
+  (`+20c / -659p`), since flow GEX is that number times gamma times spot - when
+  the line moves, that's what moved.
+
+## 2026-08-10 - GEX chart: the hover readout shows BOTH bases, not just OI+Vol
+
+`components/dashboard/GexChart.tsx`, `lib/calculations/calculations.ts`.
+
+- **The hover tooltip disagreed with the bars in Flow GEX mode.** It computed
+  `netGEXOf(r, tMode, spotPrice)` with `tMode` branching on `"vol-only"` alone,
+  so `dataMode === "flow"` fell through to `"net"` and printed the OI+Vol net.
+  On a strike where today's tape had dealers accumulating long gamma over a
+  short-gamma resting book, the bar drew strongly POSITIVE while the readout
+  above it printed a large NEGATIVE number.
+- **Fixed by showing both legs rather than picking one.** The readout is now
+  `Strike | <active basis> | <other basis>` - active first (that's what the
+  bars are drawn on), the context leg dimmed to 0.55 opacity on both its label
+  and its value so the pair can't be misread as the primary. Labels are
+  `OI+VOL` / `VOL` / `FLOW` per the toolbar. These are two different measures -
+  standing book vs today's dealer accumulation - so the answer was never to
+  choose between them.
+- **`ChainRow.flowGEX` is now declared.** `GexChart` had been reading `r.flowGEX`
+  off a type that didn't carry the field. Documented as its own basis: both legs
+  use +gamma because `inv.callNet`/`inv.putNet` are already the dealer's own
+  signed position (no put-side flip), it's populated only server-side by
+  `computeGexRows()`, and it's absent on client-built rows and on any
+  multi-expiry merge.
+
 ## 2026-08-10 - watchlists: the ticker rosters are editable from the owner page (+ RBLX)
 
 `server-v2/roster-store.js` (new), `server-v2/scanner-tickers.js`,

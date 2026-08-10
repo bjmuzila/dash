@@ -16,6 +16,13 @@ export interface ChainRow {
   putGEX?: number;
   netGEX?: number;
   netVolGEX?: number;
+  // Flow GEX — gamma × DEALER inventory × spot², accumulated from today's
+  // classified tape (server-v2/computation/flow-gex.js). A DIFFERENT basis from
+  // netGEX/netVolGEX: both legs use +gamma, because inv.callNet / inv.putNet are
+  // already the dealer's own signed position, so there is no put-side sign flip.
+  // Populated server-side by computeGexRows(); absent on rows built client-side
+  // and on any multi-expiry merge (computeGexRowsMultiExpiry refuses inventory).
+  flowGEX?: number;
   netDEX?: number;
   volNetDEX?: number;
   // Vanna (dDelta/dIV) exposure — OI-weighted and volume-weighted

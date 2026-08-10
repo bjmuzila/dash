@@ -1122,9 +1122,26 @@ export default function GexChart({
           tap or pan that ended on a bar, and stayed there. */}
       {tooltip && !compact && (() => {
         const r    = tooltip.row;
+        // BOTH BASES, ALWAYS. This used to read only netGEXOf() with tMode
+        // branching on "vol-only" alone, so in Flow GEX mode the readout fell
+        // through to the OI+Vol net and disagreed with the bar it was labelling
+        // — a strike whose flow bar was strongly POSITIVE printed a large
+        // NEGATIVE number, because those are two different measures of two
+        // different things (standing book vs today's dealer accumulation), not
+        // two views of one. Showing both side by side is the actual answer: the
+        // active basis is what the bars draw, the other is the context.
+        //
         // Shared helper (uses the chart's spotPrice, not the row's) — mirrors the bars.
         const tMode: CalcMode = dataMode === "vol-only" ? "vol" : "net";
-        const tooltipGex = netGEXOf(r, tMode, spotPrice);
+        const chainGex = netGEXOf(r, tMode, spotPrice);
+        const flowGex  = r.flowGEX ?? 0;
+        const chainLbl = dataMode === "vol-only" ? "VOL" : "OI+VOL";
+        // Active basis first (it's the one the bars are drawn on), context second.
+        const legs: { label: string; value: number; active: boolean }[] = dataMode === "flow"
+          ? [{ label: "FLOW", value: flowGex, active: true },
+             { label: chainLbl, value: chainGex, active: false }]
+          : [{ label: chainLbl, value: chainGex, active: true },
+             { label: "FLOW", value: flowGex, active: false }];
         return (
           <div style={{
             position: "absolute", zIndex: 100, pointerEvents: "none",
@@ -1136,8 +1153,21 @@ export default function GexChart({
           }}>
             <span style={{ color: "#8B94A7" }}>Strike</span>
             <span style={{ fontWeight: 700 }}>{r.strike.toLocaleString()}</span>
-            <span style={{ color: "#8B94A7" }}>GEX</span>
-            <span style={{ fontWeight: 700, color: tooltipGex >= 0 ? "#219EBC" : "#EAB308" }}>{fmtGex(tooltipGex)}</span>
+            {legs.map((leg) => (
+              <span key={leg.label} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+                {/* The inactive basis is dimmed on BOTH its label and its value,
+                    so the pair the bars are drawn on stays the one you read
+                    first and the context leg can't be mistaken for it. */}
+                <span style={{ color: "#8B94A7", opacity: leg.active ? 1 : 0.55 }}>{leg.label}</span>
+                <span style={{
+                  fontWeight: 700,
+                  opacity: leg.active ? 1 : 0.55,
+                  color: leg.value >= 0 ? "#219EBC" : "#EAB308",
+                }}>
+                  {fmtGex(leg.value)}
+                </span>
+              </span>
+            ))}
           </div>
         );
       })()}
