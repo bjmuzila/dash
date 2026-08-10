@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-08-10 - prem diff: recorder wired into boot; real candlesticks in the ES Candles colors
+
+`server-v2/server-with-proxy.js`, `app/test/PremDiffTab.tsx`,
+`components/shared/homeTheme.ts`, `components/dashboard/es-candles/EsChartCard.tsx`.
+
+- **PROXY SERVER CHANGE (approved before applying).** `server-with-proxy.js`
+  gains a defensive `require` beside the other recorder loads and one
+  `startAtmPremRecorder()` call beside `startOiDailyRecorder()`. No proxy route,
+  feed, socket or existing behaviour is touched. This is the only thing that
+  grows the series FORWARD - the backfill can rebuild the past from dxLink
+  candles, but today's tape has to be captured today, at 16:05 ET once day
+  volume is final.
+- **The price pane is now real candlesticks**, not OHLC bars: wick from high to
+  low, body from open to close. The body floors at 1px so a doji does not round
+  to a zero-height rect and disappear. A row with no recorded open (an older row,
+  or a session whose daily bar was unavailable) is drawn flat rather than being
+  assigned a direction it does not have.
+- **`ES_CANDLE_UP` / `ES_CANDLE_DOWN` hoisted into `homeTheme.ts`.** These were
+  literals inside EsChartCard's `addSeries(CandlestickSeries, ...)` options,
+  repeated six times (fill, wick, border per direction). Both surfaces now import
+  the pair, so the Prem Diff candles match ES Candles by construction instead of
+  by a hex someone copied. EsChartCard's six literals were swapped for the
+  constants in the same pass - hoisting a value and leaving the original copy in
+  place just creates the drift the hoist was meant to prevent.
+- Deliberately NOT `HOME_THEME.green` / `HOME_THEME.red`: those are the status
+  palette (a light blue and a flat alert red). Candles want the saturated trading
+  pair, and up-bars in the same light blue the cards accent with read as
+  decoration rather than direction.
+- The histogram keeps its own palette (cyan = calls dominant below zero, red =
+  puts dominant above, purple = back month). It is not price and should not
+  borrow price's colors.
+
 ## 2026-08-10 - prem diff: AM-settled roots roll a session early (SPX's 12 missing front legs)
 
 `server-v2/atm-prem-recorder.js`, `server-v2/atm-prem-backfill.js`.

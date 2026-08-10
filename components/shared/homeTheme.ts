@@ -90,6 +90,23 @@ export const LIGHT_BLUE = "#7dd3fc";
 export const SOFT_RED = "#f4948e";
 
 /**
+ * CANDLE COLORS — the up/down pair every OHLC surface in the app draws with.
+ *
+ * These are the values the ES Candles chart has always used. They were literals
+ * inside EsChartCard's `addSeries(CandlestickSeries, …)` options, repeated six
+ * times (fill, wick and border per direction). Hoisted here the first time a
+ * SECOND surface needed to match them — which is exactly the moment two copies
+ * start drifting.
+ *
+ * Deliberately NOT HOME_THEME.green / HOME_THEME.red: those are the UI's status
+ * palette (a light blue and a flat alert red). Candles want the saturated
+ * trading pair, and a chart whose up-bars are the same light blue the cards
+ * accent with reads as decoration rather than direction.
+ */
+export const ES_CANDLE_UP = "#30d158";
+export const ES_CANDLE_DOWN = "#ff5b5b";
+
+/**
  * LEVEL_COLORS — the CB / CW / PW wall colors used on Multi Greek (the toolbar
  * toggles, the header readout, the front-column marks) and by the level
  * snapshot renderer. These were hardcoded in MultGreekClient.tsx; they live

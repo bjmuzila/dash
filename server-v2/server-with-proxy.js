@@ -67,6 +67,13 @@ const { startEodGexRecorder } = require('./eod-gex-recorder');
 let startOiDailyRecorder = () => {};
 try { ({ startOiDailyRecorder } = require('./oi-daily-recorder')); }
 catch (e) { console.warn('[oi-daily] recorder not loaded:', e.message); }
+// Daily (16:05 ET) near-the-money PREMIUM TRADED snapshot: call and put notional
+// for the front and back monthly at ±1/2/5% of spot → atm_prem_diff. Backs the
+// Test Lab "Prem Diff" tab. Same defensive load as its neighbours above — a
+// broken chain-fetch dependency must degrade one panel, not kill boot.
+let startAtmPremRecorder = () => {};
+try { ({ startAtmPremRecorder } = require('./atm-prem-recorder')); }
+catch (e) { console.warn('[atm-prem] recorder not loaded:', e.message); }
 // Backs the /mult-greek click card's 15m/30m/open NET GEX change. Optional —
 // load defensively so a missing/broken module can't crash the origin.
 let multGreekGexRecorder = null;
@@ -1628,7 +1635,7 @@ async function main() {
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
-      // ── Earnings calendar (weekly, mcap ≥ EARNINGS_MIN_MCAP, default $25B) ─
+      // ── Earnings calendar (weekly, mcap ≥ $100B) ─────────────────────────
       //   GET /proxy/earnings-week  → today → Friday, one row per name
       if (pathname === '/proxy/earnings-week' && req.method === 'GET') {
         (async () => {
@@ -1656,14 +1663,11 @@ async function main() {
         })();
         return;
       }
-      // Manual fire: POST /proxy/earnings-week-run?week=this|next[&minMcap=10]
-      // minMcap re-scrapes that one week at a different cap without a redeploy
-      // (read as $B when < 1000, else raw dollars). Omit it to use the default.
+      // Manual fire: POST /proxy/earnings-week-run?week=this|next
       if (pathname === '/proxy/earnings-week-run' && req.method === 'POST') {
         const u = new URL(req.url, `http://localhost:${PORT}`);
         const week = u.searchParams.get('week') === 'next' ? 'next' : 'this';
-        const minMcap = u.searchParams.get('minMcap');
-        require('./earnings-calendar-recorder').runSweep(week, { minMcap })
+        require('./earnings-calendar-recorder').runSweep(week)
           .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
@@ -3405,6 +3409,14 @@ async function main() {
     // OI tab diffs today's row against the previous snapshot date to show what
     // positioning was actually opened or closed overnight.
     startOiDailyRecorder();
+    // Daily near-the-money PREMIUM TRADED snapshot (16:05 ET, weekdays) →
+    // atm_prem_diff. Fires after the close because it reads the chain's DAY
+    // VOLUME, which is only final once the 16:00 print is in. One row per
+    // (symbol, front/back monthly, band); the Prem Diff panel plots put premium
+    // minus call premium from it. This is the ONLY thing that grows the series
+    // forward — atm-prem-backfill.js can rebuild the past from dxLink candles,
+    // but today's tape has to be captured today.
+    startAtmPremRecorder();
     // GEX Levels history recorder: persists the /test GEX Levels "History of
     // key level changes" row (walls/flip/$gamma/CPG/R2/S2/OI) forever in PG.
     require('./gex-levels-history-recorder').startGexLevelsHistoryRecorder(PORT);

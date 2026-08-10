@@ -2,14 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from "react";
-import { HOME_THEME, LIGHT_BLUE, SOFT_RED, homeButtonStyle, statTileStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE, ES_CANDLE_UP, ES_CANDLE_DOWN, homeButtonStyle, statTileStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /test?tab=premdiff — ATM PREMIUM DIFFERENCE, calls vs puts.
 //
-// Underlying daily bars on top, a premium histogram underneath, sharing one
+// Underlying daily CANDLES on top, a premium histogram underneath, sharing one
 // x-axis and one crosshair. Each histogram bar is
 //
 //     put premium traded  −  call premium traded
@@ -38,7 +38,9 @@ import { ThemedSelect } from "@/components/shared/ThemedSelect";
 // Bars sourced from the backfill (src='dxlink') are priced at the daily CLOSE
 // rather than the 16:05 mark; the footer says so when any are present.
 //
-// Colors and surfaces come from homeTheme / PageCard. No hardcoded hex.
+// Colors and surfaces come from homeTheme / PageCard. No hardcoded hex. The
+// candles use ES_CANDLE_UP / ES_CANDLE_DOWN — the same pair the ES Candles page
+// draws with, imported rather than re-typed so the two cannot drift apart.
 // ─────────────────────────────────────────────────────────────────────────────
 
 type Leg = {
@@ -198,21 +200,33 @@ function PremDiffChart({ rows, band, symbol }: { rows: Bar[]; band: number; symb
           </g>
         ))}
 
+        {/* Candlesticks in the ES Candles pair (ES_CANDLE_UP / ES_CANDLE_DOWN,
+            imported rather than re-typed so the two charts cannot drift). Wick
+            first, body over it. */}
         {rows.map((r, i) => {
           const hi = r.high ?? r.close ?? r.spot;
           const lo = r.low ?? r.close ?? r.spot;
-          const op = r.open;
           const cl = r.close ?? r.spot;
+          // No open recorded (an older row, or a session whose daily bar was
+          // unavailable) → treat it as flat rather than inventing a direction.
+          const op = r.open ?? cl;
           const cx = geom.x(i);
-          const up = op != null ? cl >= op : true;
-          const col = up ? LIGHT_BLUE : SOFT_RED;
+          const col = cl >= op ? ES_CANDLE_UP : ES_CANDLE_DOWN;
+          const yOpen = geom.yP(op);
+          const yClose = geom.yP(cl);
+          const bodyTop = Math.min(yOpen, yClose);
+          // A doji would round to a zero-height rect and vanish, so the body
+          // floors at 1px — the same thing every candle library does.
+          const bodyH = Math.max(1, Math.abs(yClose - yOpen));
+          const bodyW = Math.max(1, geom.barW);
           return (
             <g key={`b${r.date}`} opacity={hover == null || hover === i ? 1 : 0.55}>
-              <line x1={cx} x2={cx} y1={geom.yP(hi as number)} y2={geom.yP(lo as number)} stroke={col} strokeWidth={1.2} />
-              {op != null && (
-                <line x1={cx - geom.barW / 2} x2={cx} y1={geom.yP(op)} y2={geom.yP(op)} stroke={col} strokeWidth={1.2} />
-              )}
-              <line x1={cx} x2={cx + geom.barW / 2} y1={geom.yP(cl)} y2={geom.yP(cl)} stroke={col} strokeWidth={1.2} />
+              <line
+                x1={cx} x2={cx}
+                y1={geom.yP(hi as number)} y2={geom.yP(lo as number)}
+                stroke={col} strokeWidth={1}
+              />
+              <rect x={cx - bodyW / 2} y={bodyTop} width={bodyW} height={bodyH} fill={col} />
             </g>
           );
         })}

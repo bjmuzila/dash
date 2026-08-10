@@ -51,7 +51,7 @@ import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { Dock, SegGroup, DockButton, DockGap, DockSlider, DockSpacer } from "@/components/shared/DockToolbar";
 import FitScale from "@/components/shared/FitScale";
-import { HOME_THEME, DOCK_THEME, LIGHT_BLUE, SOFT_RED, dissolveCardStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, DOCK_THEME, LIGHT_BLUE, SOFT_RED, ES_CANDLE_UP, ES_CANDLE_DOWN, dissolveCardStyle } from "@/components/shared/homeTheme";
 import type { RailRow } from "@/components/dashboard/EsGexRail";
 import type { EsCandleRecord } from "@/lib/snapdb";
 
@@ -2221,18 +2221,20 @@ export default function EsChartCard({
       });
 
       const candleSeries = chart.addSeries(CandlestickSeries, {
-        wickUpColor: "#30d158",
-        upColor: "#30d158",
-        wickDownColor: "#ff5b5b",
-        downColor: "#ff5b5b",
+        // Colors moved to homeTheme (ES_CANDLE_UP / ES_CANDLE_DOWN) so the Prem
+        // Diff panel's candles read the same pair instead of copying the hex.
+        wickUpColor: ES_CANDLE_UP,
+        upColor: ES_CANDLE_UP,
+        wickDownColor: ES_CANDLE_DOWN,
+        downColor: ES_CANDLE_DOWN,
         // Borders ON, in the SAME color as the fills — visually identical to
         // borderVisible:false (a 1px border over a matching body is invisible).
         // Kept on so a future per-bar `color: transparent` + `borderColor` can
         // render a hollow candle; borderVisible:false would swallow the outline
         // and leave such bars as empty gaps.
         borderVisible: true,
-        borderUpColor: "#30d158",
-        borderDownColor: "#ff5b5b",
+        borderUpColor: ES_CANDLE_UP,
+        borderDownColor: ES_CANDLE_DOWN,
         // Spot / last-price line + its axis tag in NEUTRAL GRAY. Left unset it
         // inherits the candle color, so it flipped green/red with the current
         // bar — which put a saturated line right where the eye needs a stable
