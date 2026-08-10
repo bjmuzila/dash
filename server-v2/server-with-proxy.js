@@ -3552,6 +3552,13 @@ async function main() {
     // 15m/30m/open change. Guarded — never crash startup if it fails to load.
     try { multGreekGexRecorder?.startMultGreekGexRecorder?.(PORT); }
     catch (e) { console.warn('[mult-greek-gex] start failed:', e.message); }
+    // Multi Greek LADDERS snapshot → Discord, every 15m on the wall-clock
+    // boundary during RTH. Same picture the page's 🗒 LADDERS button produces
+    // (SPX/SPY/QQQ front-expiry CB/CW/PW + spot), drawn in headless Chromium and
+    // posted to MG_LADDER_DISCORD_WEBHOOK (falls back to DISCORD_WEBHOOK_URL).
+    // Guarded — never crash startup if puppeteer/chromium is missing.
+    try { require('./mg-ladder-discord').startMgLadderDiscord(PORT); }
+    catch (e) { console.warn('[mg-ladder] start failed:', e.message); }
     // Owner options watchlist: every 60s during market hours, refreshes every
     // watched contract's greeks/price/flow → /api/watch (writes watch_snapshots)
     // so the /owner/watch history keeps filling even when the page is closed.

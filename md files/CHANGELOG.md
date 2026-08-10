@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-08-10 - build fix: EconomicCalendar screenshot routed through lib/snapshot.ts
+
+`components/pages/EconomicCalendar.tsx`, `lib/snapshot.ts`. NOT part of the Prem
+Diff work - this was blocking `npm run build` for everyone.
+
+- **What broke the deploy.** `scripts/audit-ui.mjs --strict` runs as `prebuild`
+  and fails the build if any file outside `lib/snapshot.ts` reaches html2canvas.
+  The Economic Calendar's new screenshot button stood up a second engine at
+  `EconomicCalendar.tsx:197`. Nothing to do with the Prem Diff changes; the
+  build would have failed on any push.
+- **Why the rule exists, and why the port matters.** The engine owns a pile of
+  workarounds a hand-rolled call site silently does without: gradient headings
+  render INVISIBLE and have to be flattened in the clone; `backdrop-filter` is
+  unimplemented so frosted panels come out washed; live `<canvas>` bitmaps do
+  not survive the clone and are redrawn by hand; cloned `<script>` tags 404 from
+  `about:blank`. The calendar's own capture was missing all of them.
+- **`allowTaint` added to `SnapOptions`, defaulting to TRUE** so every existing
+  caller is byte-identical. The calendar passes FALSE, preserving the behaviour
+  its comment already documented: `/proxy/ticker-logo` 302s to third-party hosts,
+  and drawing one of those TAINTS the canvas, after which `toBlob()` throws
+  SecurityError and the whole screenshot dies over a 16px image. With
+  allowTaint:false html2canvas skips the unreadable image - a missing logo, not
+  a missing screenshot.
+- **`windowWidth`/`windowHeight` dropped in favour of `height`.** Those two
+  REFLOW the cloned document at a virtual viewport (gotcha 4 in the engine's
+  header) - they are for media-query fidelity, not cropping. The scroll
+  container is already expanded to its natural height before the capture, so
+  `height: el.scrollHeight` is a pure output crop that gets the full list with no
+  re-layout. **Worth eyeballing once**: this is the only behavioural change in
+  the port, and it is the bit that decides whether the whole list lands in the
+  PNG.
+- Blob handling now uses the engine's `downloadBlob` instead of a hand-built
+  object URL and anchor.
+
 ## 2026-08-10 - prem diff: 1-minute intraday mode for SPX / SPY / QQQ
 
 New: `server-v2/atm-prem-intraday-recorder.js`. Edited: `server-v2/api-router.js`

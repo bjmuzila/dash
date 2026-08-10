@@ -131,6 +131,22 @@ export type SnapOptions = {
   /** Output crop width / height in CSS px. Pure crop, no reflow. */
   width?: number;
   height?: number;
+  /**
+   * html2canvas `allowTaint`. Defaults to TRUE — that is what every existing
+   * caller has always had, so do not flip the default.
+   *
+   * Set FALSE when the subtree can contain images from a host that will not
+   * send CORS headers. `/proxy/ticker-logo` 302s to third-party hosts, and
+   * drawing one of those into the canvas TAINTS it; `canvas.toBlob()` then
+   * throws SecurityError and the whole screenshot dies over a 16px image. With
+   * allowTaint:false html2canvas SKIPS any image it cannot read, so the cost is
+   * a missing logo rather than a missing snapshot.
+   *
+   * An option rather than the default because the trade runs the other way for
+   * the chart panels: they carry no foreign images, and allowTaint:true is the
+   * more forgiving setting for anything that fails a CORS preflight.
+   */
+  allowTaint?: boolean;
 };
 
 type LtProvider = () => { canvas: HTMLCanvasElement; target: HTMLElement } | null;
@@ -449,7 +465,7 @@ async function captureToCanvasInner(
   const base = await html2canvas(el, {
     backgroundColor: bg,
     useCORS: true,
-    allowTaint: true,
+    allowTaint: opts.allowTaint ?? true,
     scale,
     logging: false,
     ...(contentW ? { width: contentW } : {}),

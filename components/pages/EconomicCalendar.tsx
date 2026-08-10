@@ -192,31 +192,33 @@ export default function EconomicCalendarPage() {
     el.style.overflow = "visible";
 
     try {
-      // Dynamic import: html2canvas is ~200KB and nobody pays for it until the
-      // first time they press the button.
-      const html2canvas = (await import("html2canvas")).default;
+      // Dynamic import: the snapshot engine pulls in a ~200KB rendering
+      // dependency, and nobody pays for it until they press the button.
+      //
+      // This goes through lib/snapshot.ts rather than calling html2canvas
+      // directly. scripts/audit-ui.mjs --strict FAILS THE BUILD on a second
+      // engine, and the reason is not tidiness: the module owns a pile of
+      // html2canvas workarounds (gradient headings render invisible,
+      // backdrop-filter is unimplemented, live <canvas> bitmaps do not survive
+      // the clone, cloned <script> tags 404 from about:blank) that a hand-rolled
+      // call site silently does without.
+      const { captureToBlob, downloadBlob } = await import("@/lib/snapshot");
       await new Promise(r => requestAnimationFrame(() => r(null)));  // let the re-layout settle
-      const canvas = await html2canvas(el, {
-        backgroundColor: HT.bg,          // else transparent, which reads black-on-black in most viewers
-        scale: Math.min(2, window.devicePixelRatio || 1),
-        useCORS: true,
+      const blob = await captureToBlob(el, {
+        background: HT.bg,     // else transparent, which reads black-on-black in most viewers
+        // See the ticker-logo note above: a 302'd third-party logo taints the
+        // canvas and toBlob then throws. The engine defaults to allowTaint:true
+        // for the chart panels, which carry no foreign images; this page does.
         allowTaint: false,
-        logging: false,
-        windowWidth: el.scrollWidth,
-        windowHeight: el.scrollHeight,
+        // The scroll container is expanded to its natural height above, so the
+        // element's own box is already the full list. `height` is a pure output
+        // crop, unlike windowWidth/windowHeight which REFLOW the cloned document
+        // at a virtual viewport and would re-run every media query mid-capture.
+        height: el.scrollHeight,
       });
-      const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, "image/png"));
-      if (!blob) throw new Error("PNG encode returned nothing");
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
       // etToday() rather than the `today` const — that is declared further down
       // and would be in its TDZ at the point this callback is created.
-      a.download = `${activeTab === "earnings" ? "earnings" : "econ-calendar"}-${etToday()}.png`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      downloadBlob(blob, `${activeTab === "earnings" ? "earnings" : "econ-calendar"}-${etToday()}.png`);
       setShot("idle");
     } catch (e) {
       console.warn("[econ-calendar] screenshot failed:", e);
