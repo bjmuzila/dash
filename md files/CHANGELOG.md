@@ -25,6 +25,13 @@ the SPA shipped ahead of the server.
   (inventory unknown -> null, blank panel) vs `no-prints-for-strike` (tape ran,
   this contract never traded -> a REAL flat zero, drawn) vs `error: …`, which
   now surfaces the message instead of silently looking like a quiet session.
+- **Hotfix in the same session: `ReferenceError: flowRoots is not defined`.** The
+  edit that introduced `rootWhere` replaced the block that declared `flowRoots`
+  and didn't carry the declaration over, so every request to this route threw.
+  `node --check` passes on an undeclared identifier - it's a runtime error, not a
+  parse error - so the route is now covered by a stub-driven smoke test that
+  actually invokes the handler and asserts the emitted SQL params and the
+  computed flowGex, instead of only checking that the file parses.
 - **`flowGexPartial` warns on back-sessions.** Small prints age out of
   flow_prints after ~1 day and big ones after ~5
   (`state/retention-cleanup.js:38-40`), so any prior session rebuilds from

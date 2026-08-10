@@ -5247,6 +5247,7 @@ if (libDb) {
           // NULL. Tolerate that rather than dropping them: expiration + strike
           // already scope this to one contract, so a NULL root can't pull in
           // another underlying's tape at the same strike AND the same expiry.
+          const flowRoots = FLOW_TICKER_ROOTS[symbol] || [symbol];
           const rootPh = flowRoots.map(() => '?').join(', ');
           const rootWhere = `(underlying_norm IS NULL OR underlying_norm IN (${rootPh}))`;
           let printRows = [];
