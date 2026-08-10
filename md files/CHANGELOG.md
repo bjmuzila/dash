@@ -1,38 +1,24 @@
 # Changelog
 
-## 2026-08-10 - options chain: TOTAL row is now a stat bar + click-to-focus grid
+## 2026-08-10 - analytics: Ticker Lookup restyled to the page theme
 
-`components/pages/OptionsChain.tsx`.
+`components/pages/Analytics.tsx`.
 
-**Row 2 (the old one-line "Total Net GEX ...") is now a stat bar.** Five tiles,
-all of them recomputed against the focus selection below:
-
-- **Spot** + day %. The % baseline is the prior-session close, fetched once per
-  ticker from `/api/quotes-batch` (`prev-close`) - the same field TopBar seeds
-  from. No baseline, no % (nothing is faked).
-- **Total Net {greek}** - every rendered expiration, 0DTE INCLUDED. This is new;
-  the old readout only ever showed the ex-0DTE figure.
-- **{greek} ex-0DTE** - the number the sigma-Total column actually sums. Hidden in
-  replay's 0DTE scope, where "ex-0DTE" describes an empty set.
-- **Weekly EM** - the move, with the down / up levels under it. The band-center
-  close is no longer printed (2 numbers, not 3).
-- **CB - 1st 3 exp** - the Core Bullseye (largest |value|) of each of the first
-  three expiration columns, each expiry date directly under its own strike.
-
-**Click-to-focus, multi-select.** Clicking an expiry header or a strike toggles
-it into a selection; shift-click selects only that one. Everything unselected
-fades (cells to 13%, strike/header to ~30%) and a FOCUS chip in the stat bar
-shows the counts and clears it. The selection resets on ticker / expiry /
-replay-date / replay-scope change.
-
-- **The sigma Total column re-sums over the selected expiries** (0DTE included - an
-  explicit pick outranks the column's default exclusion) and its header flips
-  from `Total` to `Sel N`. With a strike selection it dims per row, but it never
-  dims for an expiry pick - it answers that by re-summing.
-- Selection accents are cyan (`HT.cyan`), not gold - gold stays the CB marker.
-
-Grid math, heat scales, ATM box, EM tags and the hover/contract popups are
-unchanged. No new routes, so `check-routes.mjs` is unaffected.
+- **Colors are the page's own now.** The card was using `REFRESH_GREEN` /
+  `SOFT_RED` from homeTheme; both imports are gone. Positive/negative anywhere
+  on the card - the ladder bars, the value column, the Net GEX stat, the
+  gamma-regime chip - now use `POS_GREEN` / `HOME_THEME.red`, the same pair
+  `signColor()` uses everywhere else on this page. Level chips keep
+  `LEVEL_COLORS` (cb gold / cw blue / pw red), the app-wide wall colors.
+- **Ladder is 10 strikes above and 10 below spot** (21 rows) instead of the 15
+  nearest. Sliced off the strike INDEX, not a point distance, so a $2.50-wide
+  chain and a $5-wide chain both give ten rungs a side.
+- **Call wall / Put wall / Core words removed from the strike column.** The
+  marks are now 7px colored dots in the level color; the strike column reads as
+  a column of numbers again. The chips under the ladder still name each level.
+- **No left accent bar.** "The read" callout dropped its 3px colored
+  `borderLeft` for a plain hairline border like every other card surface, and
+  its label is now theme cyan.
 
 ## 2026-08-10 - analytics: Contract Lookup removed, Ticker Lookup GEX card added
 

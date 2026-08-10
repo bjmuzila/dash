@@ -3033,8 +3033,12 @@ export default function OptionsChainPage({
         const subStyle: React.CSSProperties = {
           fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: 9, color: HT.text,
         };
+        // Top-aligned, not centered: tiles carry different numbers of lines
+        // (some have a sub-line, some don't) and centering each one puts their
+        // titles on different rows. Aligning to the top lands every title on
+        // one line across the bar.
         const cellStyle: React.CSSProperties = {
-          display: "flex", flexDirection: "column", justifyContent: "center", gap: 1,
+          display: "flex", flexDirection: "column", justifyContent: "flex-start", gap: 1,
           padding: "5px 12px", whiteSpace: "nowrap", flex: "0 0 auto",
           borderRight: "1px solid rgba(255,255,255,0.06)",
         };

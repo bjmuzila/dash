@@ -2,6 +2,13 @@
 
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
+
+
+## Monday 8/10/2026
+
+* The **option chain's total row is now a stat bar**. Alongside the running Total Net GEX you now get spot with its day percent, the same total with 0DTE stripped out, the weekly expected move, and the Core Bullseye strike for each of the next three expirations — each expiry date sitting directly under its own strike.
+* **Click any expiration header or any strike to focus it.** Everything else on the grid fades back so you can read one column or one row cleanly. Click more than one to build a set — shift-click if you want just the one.
+
 ## Thursday 8/6/2026
 
 * Tickers Levels added to Analysis Page. Now just search any ticker to see the Core, Put wall and Call wall.

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
-import { HOME_THEME, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle, LEVEL_COLORS, REFRESH_GREEN, SOFT_RED } from "@/components/shared/homeTheme";
+import { HOME_THEME, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle, LEVEL_COLORS } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { computeAmt, type InitialBalance, type AmtResult } from "@/lib/failLevels";
@@ -1426,9 +1426,10 @@ interface TlChainResp { data?: { items?: TlChainGroup[]; underlyingPrice?: unkno
 
 const TL_LOOKUP_KEY = "analytics.tickerLookup.recent";
 const TL_QUICK: readonly string[] = ["SPX", "SPY", "QQQ", "NVDA", "TSLA"];
-// How many strikes of ladder to draw around spot. The wings carry no useful
-// gamma and a 300-row SPX ladder is unreadable; the walls live near the money.
-const TL_LADDER_ROWS = 15;
+// How deep the drawn ladder runs EACH WAY from the strike price is sitting on:
+// 10 above + the spot strike + 10 below. The wings carry no useful gamma and a
+// 300-row SPX ladder is unreadable; the walls that matter live near the money.
+const TL_LADDER_SIDE = 10;
 
 const tlLeg = (o: TlChainLeg | undefined, k: string): number => {
   const v = o?.[k];
@@ -1579,13 +1580,20 @@ function TickerLookupCard() {
   const atm = tlAtm(atmGroup, spot ?? 0);
   const positiveGamma = levels.net >= 0;
 
-  // The drawn window: the N strikes nearest spot, redrawn high→low like a DOM.
+  // The drawn window: the strike price is sitting on, plus TL_LADDER_SIDE
+  // strikes above and TL_LADDER_SIDE below it, redrawn high→low like a DOM.
+  // Sliced off the strike INDEX, not a point distance — a $2.50-wide chain and
+  // a $5-wide chain both give ten rungs a side rather than ten points.
   const ladder = (() => {
     if (!rows.length) return [];
     const anchor = spot ?? rows[Math.floor(rows.length / 2)].strike;
-    return [...rows]
-      .sort((a, b) => Math.abs(a.strike - anchor) - Math.abs(b.strike - anchor))
-      .slice(0, TL_LADDER_ROWS)
+    let ai = 0;
+    for (let i = 1; i < rows.length; i++) {
+      if (Math.abs(rows[i].strike - anchor) < Math.abs(rows[ai].strike - anchor)) ai = i;
+    }
+    return rows
+      .slice(Math.max(0, ai - TL_LADDER_SIDE), ai + TL_LADDER_SIDE + 1)
+      .slice()
       .sort((a, b) => b.strike - a.strike);
   })();
   const maxAbs = ladder.reduce((m, r) => Math.max(m, Math.abs(r.gex)), 0) || 1;
@@ -1642,8 +1650,8 @@ function TickerLookupCard() {
               </Value>
               <span style={{
                 fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase",
-                color: positiveGamma ? REFRESH_GREEN : SOFT_RED,
-                border: `1px solid ${positiveGamma ? REFRESH_GREEN : SOFT_RED}`,
+                color: positiveGamma ? POS_GREEN : T.red,
+                border: `1px solid ${positiveGamma ? POS_GREEN : T.red}`,
                 borderRadius: 999, padding: "3px 10px",
               }}>
                 {positiveGamma ? "Positive gamma" : "Negative gamma"}
@@ -1654,7 +1662,7 @@ function TickerLookupCard() {
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <Stat label="± Move" value={atm.move == null ? "—" : `±${atm.move.toFixed(2)}`} size={18} />
-              <Stat label="Net GEX" value={fmtBig(levels.net)} color={positiveGamma ? REFRESH_GREEN : SOFT_RED} size={18} />
+              <Stat label="Net GEX" value={fmtBig(levels.net)} color={positiveGamma ? POS_GREEN : T.red} size={18} />
               <Stat label="ATM IV" value={atm.iv == null ? "—" : `${(atm.iv * 100).toFixed(1)}%`} color={T.orange} size={18} />
             </div>
           </Row>
@@ -1682,10 +1690,12 @@ function TickerLookupCard() {
               const pos = r.gex >= 0;
               const pct = Math.max(2, (Math.abs(r.gex) / maxAbs) * 100);
               const isSpot = spotRow != null && r.strike === spotRow.strike;
-              const tags: Array<{ text: string; color: string }> = [];
-              if (levels.callWall === r.strike) tags.push({ text: "Call wall", color: LEVEL_COLORS.cw });
-              if (levels.putWall === r.strike) tags.push({ text: "Put wall", color: LEVEL_COLORS.pw });
-              if (levels.core === r.strike) tags.push({ text: "Core", color: LEVEL_COLORS.cb });
+              // Level marks are DOTS, not words — the strike column stays a
+              // column of numbers. The chips under the ladder name each level.
+              const marks: string[] = [];
+              if (levels.callWall === r.strike) marks.push(LEVEL_COLORS.cw);
+              if (levels.putWall === r.strike) marks.push(LEVEL_COLORS.pw);
+              if (levels.core === r.strike) marks.push(LEVEL_COLORS.cb);
               return (
                 <div
                   key={r.strike}
@@ -1701,22 +1711,20 @@ function TickerLookupCard() {
                       {r.strike.toLocaleString("en-US", { maximumFractionDigits: 2 })}
                     </span>
                     {isSpot && <span style={{ fontSize: 10, fontWeight: 800, color: T.cyan, letterSpacing: "0.08em" }}>◀ PRICE</span>}
-                    {tags.map((t) => (
-                      <span key={t.text} style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: t.color }}>
-                        {t.text}
-                      </span>
+                    {marks.map((c) => (
+                      <span key={c} style={{ width: 7, height: 7, borderRadius: 2, background: c, flexShrink: 0 }} />
                     ))}
                   </span>
                   <span style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
                     <span style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
-                      {!pos && <span style={{ width: `${pct}%`, height: 14, borderRadius: "4px 0 0 4px", background: SOFT_RED }} />}
+                      {!pos && <span style={{ width: `${pct}%`, height: 14, borderRadius: "4px 0 0 4px", background: T.red }} />}
                     </span>
                     <span style={{ width: 1, height: 18, background: T.border, flexShrink: 0 }} />
                     <span style={{ flex: 1, display: "flex" }}>
-                      {pos && <span style={{ width: `${pct}%`, height: 14, borderRadius: "0 4px 4px 0", background: REFRESH_GREEN }} />}
+                      {pos && <span style={{ width: `${pct}%`, height: 14, borderRadius: "0 4px 4px 0", background: POS_GREEN }} />}
                     </span>
                   </span>
-                  <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, color: pos ? REFRESH_GREEN : SOFT_RED }}>
+                  <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, color: pos ? POS_GREEN : T.red }}>
                     {fmtBig(r.gex)}
                   </span>
                 </div>
@@ -1728,11 +1736,11 @@ function TickerLookupCard() {
 
           {/* Plain-language read of the regime + the levels around price. */}
           <div style={{
-            borderLeft: `3px solid ${positiveGamma ? REFRESH_GREEN : SOFT_RED}`,
-            borderRadius: 8, padding: "10px 12px", background: "rgba(255,255,255,0.03)",
+            border: `1px solid ${T.border}`,
+            borderRadius: 10, padding: "10px 12px", background: "rgba(255,255,255,0.03)",
             fontSize: 14, lineHeight: 1.6, color: T.text,
           }}>
-            <span style={{ fontWeight: 800, color: positiveGamma ? REFRESH_GREEN : SOFT_RED }}>The read: </span>
+            <span style={{ fontWeight: 800, color: T.cyan }}>The read: </span>
             {positiveGamma
               ? "Net positive gamma — dealers sell rallies and buy dips, so price tends to pin and mean-revert. "
               : "Net negative gamma — dealers chase in both directions, so moves extend and volatility feeds itself. "}
