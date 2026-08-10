@@ -1405,37 +1405,66 @@ function TickerLevelsCard() {
   );
 }
 
-// ── 9. TICKER LOOKUP (full-width) ─────────────────────────────────────────────
-// Type any optionable ticker → its live GEX ladder, walls and gamma regime.
+// ── 9. TICKER LOOKUP (full-width, two panes) ─────────────────────────────────
+// Type any optionable ticker → its live GEX ladder, walls and gamma regime, on
+// ONE ticker in TWO scopes side by side:
 //
-// ONE FORMULA. The per-strike numbers come from accumulateChainGreeks() at the
-// top of this file — the exact same OI+Vol basis the Multi Greek card uses, off
-// the same /api/chains payload. This card does not define GEX a second time;
-// a private copy is how two cards on one page end up printing two different
-// numbers for the same ticker on the same day.
+//   LEFT   one expiration, picked from the front-of-board pills. Built from
+//          /api/chains + accumulateChainGreeks() — the exact same OI+Vol
+//          function the Multi Greek card at the top of this page uses, so the
+//          per-strike numbers here and up there can never drift apart.
+//   RIGHT  THE WHOLE BOARD. Every listed expiration, not the front three, off
+//          /proxy/gex-by-strike-multi — the server's full-board sweep
+//          (eod-gex-recorder.computeLiveGexRowsMulti). It returns slim rows of
+//          { strike, netGEX, netVolGEX }; netGEX + netVolGEX is the same OI+Vol
+//          basis, summed per strike ACROSS expirations rather than
+//          last-expiry-wins. One request, cached 60s per (symbol, session) on
+//          the server, so a 40-expiry chain is one sweep a minute, not forty
+//          browser fetches.
 //
-// WHAT "ALL" MEANS. /api/chains with no ?expiration returns the front THREE
-// expirations (see fetchChainFull in server-v2/proxy-tastytrade.js), so "All"
-// is those three, not the whole board. Walls computed across three expiries are
-// a different level from walls computed on 0DTE alone, so the expiry the ladder
-// was built on is always on screen — never implied.
+// The sweep needs a spot to scale gamma by, and it is not the SPX feed's spot
+// for anything but SPX — the underlying price from the /api/chains payload is
+// passed through, so the right pane is priced off the same number the left one
+// is. Until that spot exists the right pane does not fetch at all.
+//
+// FALLBACK. If the full-board sweep errors or comes back thin (no Theta cover
+// for the name, a cold cache mid-sweep), the right pane falls back to the front
+// expirations /api/chains already returned and SAYS SO in its header. It never
+// silently prints three expiries under an "all expirations" label.
 interface TlChainLeg { [k: string]: unknown }
 interface TlChainStrike { "strike-price"?: unknown; call?: TlChainLeg; put?: TlChainLeg }
 interface TlChainGroup { "expiration-date"?: unknown; strikes?: TlChainStrike[] }
 interface TlChainResp { data?: { items?: TlChainGroup[]; underlyingPrice?: unknown }; error?: string }
 
+// /proxy/gex-by-strike-multi — the whole-board ladder.
+interface TlMultiRow { strike?: unknown; netGEX?: unknown; netVolGEX?: unknown }
+interface TlMultiResp {
+  ok?: boolean;
+  error?: string;
+  expirations?: string[];
+  expiryCount?: number;
+  all?: { rows?: TlMultiRow[]; totalNetGex?: unknown; gexFlip?: unknown };
+}
+
 const TL_LOOKUP_KEY = "analytics.tickerLookup.recent";
 const TL_QUICK: readonly string[] = ["SPX", "SPY", "QQQ", "NVDA", "TSLA"];
-// How deep the drawn ladder runs EACH WAY from the strike price is sitting on:
+// How deep each drawn ladder runs EACH WAY from the strike price is sitting on:
 // 10 above + the spot strike + 10 below. The wings carry no useful gamma and a
-// 300-row SPX ladder is unreadable; the walls that matter live near the money.
+// 1500-row SPX board is unreadable; the walls that matter live near the money.
 const TL_LADDER_SIDE = 10;
+// The full-board sweep is cached 60s server-side; polling faster than that only
+// buys duplicate cache hits.
+const TL_MULTI_REFRESH_MS = 120_000;
 
 const tlLeg = (o: TlChainLeg | undefined, k: string): number => {
   const v = o?.[k];
   const n = Number(v);
   return v != null && v !== "" && isFinite(n) ? n : 0;
 };
+
+// The recorder keys SPX as '$SPX' (chainUnderlying maps it back); every other
+// name is passed through bare.
+const tlMultiSymbol = (s: string) => (s === "SPX" ? "$SPX" : s);
 
 // "Aug 8 · 0DTE" for an expiry, relative to today ET.
 function tlExpiryChip(exp: string, todayISO: string): string {
@@ -1459,13 +1488,27 @@ interface TlLevels {
 // points out is still the wall, and cropping the ladder first would invent a
 // nearer one.
 function tlLevelsFrom(rows: TlRow[]): TlLevels {
-  let callWall: TlRow | null = null, putWall: TlRow | null = null, core: TlRow | null = null;
+  // Top TWO +GEX strikes, not one — see the CB collision rule below.
+  let callWall: TlRow | null = null, callWall2: TlRow | null = null;
+  let putWall: TlRow | null = null, core: TlRow | null = null;
   let net = 0;
   for (const r of rows) {
     net += r.gex;
-    if (r.gex > 0 && (callWall == null || r.gex > callWall.gex)) callWall = r;
+    if (r.gex > 0) {
+      if (callWall == null || r.gex > callWall.gex) { callWall2 = callWall; callWall = r; }
+      else if (callWall2 == null || r.gex > callWall2.gex) callWall2 = r;
+    }
     if (r.gex < 0 && (putWall == null || r.gex < putWall.gex)) putWall = r;
     if (core == null || Math.abs(r.gex) > Math.abs(core.gex)) core = r;
+  }
+  // CB COLLISION RULE. Core is the highest |GEX| strike on the board; when that
+  // strike is call-side it IS the highest +GEX strike, so Core and Call wall
+  // land on the same number and the card prints one level twice. In that case
+  // the call wall steps down to the SECOND highest +GEX strike — the next real
+  // ceiling above the magnet. Put wall is untouched: a call-side core can never
+  // collide with it.
+  if (core != null && callWall != null && core.strike === callWall.strike) {
+    callWall = callWall2;
   }
   // Gamma flip: cumulate from the lowest strike up and take the first sign
   // change, interpolated between the two strikes that straddle it.
@@ -1510,22 +1553,101 @@ function tlAtm(group: TlChainGroup | undefined, spot: number): { move: number | 
   };
 }
 
+// The drawn window: the strike price is sitting on, plus TL_LADDER_SIDE strikes
+// above and below it, redrawn high→low like a DOM. Sliced off the strike INDEX,
+// not a point distance — a $2.50-wide chain and a $5-wide chain both give ten
+// rungs a side.
+function tlWindow(rows: TlRow[], spot: number | null): TlRow[] {
+  if (!rows.length) return [];
+  const anchor = spot ?? rows[Math.floor(rows.length / 2)].strike;
+  let ai = 0;
+  for (let i = 1; i < rows.length; i++) {
+    if (Math.abs(rows[i].strike - anchor) < Math.abs(rows[ai].strike - anchor)) ai = i;
+  }
+  return rows
+    .slice(Math.max(0, ai - TL_LADDER_SIDE), ai + TL_LADDER_SIDE + 1)
+    .slice()
+    .sort((a, b) => b.strike - a.strike);
+}
+
 // Compact chip for a computed level: name, price, and how far spot is from it.
 function TlLevelChip({ name, value, spot, color, note }: {
   name: string; value: number | null; spot: number | null; color: string; note: string;
 }) {
   const dist = value != null && spot != null ? value - spot : null;
   return (
-    <div style={{ border: `1px solid ${T.border}`, borderRadius: 12, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
-      <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color, opacity: 0.9 }}>{name}</span>
-      <Value color={value == null ? T.muted : color} size={22}>
+    <div style={{ border: `1px solid ${T.border}`, borderRadius: 12, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color }}>{name}</span>
+      <Value color={value == null ? T.muted : color} size={19}>
         {value == null ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 2 })}
       </Value>
-      <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.55 }}>
+      <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.text }}>
         {dist == null ? "—" : dist === 0 ? "at price"
           : `${Math.abs(dist).toLocaleString("en-US", { maximumFractionDigits: 2 })} ${dist > 0 ? "above" : "below"}`}
       </span>
-      <span style={{ fontSize: 11, color: T.muted, opacity: 0.45 }}>{note}</span>
+      <span style={{ fontSize: 11, color: T.text }}>{note}</span>
+    </div>
+  );
+}
+
+// One pane's ladder. Bars run out from a center rail: +GEX right, −GEX left.
+// Level marks are DOTS, not words — the strike column stays a column of
+// numbers, and the chips under the ladder name each level.
+function TlLadder({ rows, spot, levels }: { rows: TlRow[]; spot: number | null; levels: TlLevels }) {
+  const maxAbs = rows.reduce((m, r) => Math.max(m, Math.abs(r.gex)), 0) || 1;
+  const spotRow = spot == null ? null
+    : rows.reduce<TlRow | null>((best, r) =>
+        best == null || Math.abs(r.strike - spot) < Math.abs(best.strike - spot) ? r : best, null);
+  const cols = "88px 1fr 68px";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <div style={{ display: "grid", gridTemplateColumns: cols, alignItems: "center", gap: 8, paddingBottom: 4 }}>
+        <Label>Strike</Label>
+        <span style={{ textAlign: "center" }}><Label>Net GEX</Label></span>
+        <span style={{ textAlign: "right" }}><Label>Value</Label></span>
+      </div>
+      {rows.map((r) => {
+        const pos = r.gex >= 0;
+        const pct = Math.max(2, (Math.abs(r.gex) / maxAbs) * 100);
+        const isSpot = spotRow != null && r.strike === spotRow.strike;
+        const marks: string[] = [];
+        if (levels.callWall === r.strike) marks.push(LEVEL_COLORS.cw);
+        if (levels.putWall === r.strike) marks.push(LEVEL_COLORS.pw);
+        if (levels.core === r.strike) marks.push(LEVEL_COLORS.cb);
+        return (
+          <div
+            key={r.strike}
+            style={{
+              display: "grid", gridTemplateColumns: cols, alignItems: "center", gap: 8,
+              padding: "2px 6px", borderRadius: 8,
+              border: `1px solid ${isSpot ? T.cyan : "transparent"}`,
+              background: isSpot ? "rgba(33,158,188,0.08)" : "transparent",
+            }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0, flexWrap: "wrap" }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: isSpot ? 800 : 600, color: isSpot ? T.cyan : T.text }}>
+                {r.strike.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+              </span>
+              {isSpot && <span style={{ fontSize: 9, fontWeight: 800, color: T.cyan, letterSpacing: "0.08em" }}>◀</span>}
+              {marks.map((c) => (
+                <span key={c} style={{ width: 7, height: 7, borderRadius: 2, background: c, flexShrink: 0 }} />
+              ))}
+            </span>
+            <span style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+              <span style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
+                {!pos && <span style={{ width: `${pct}%`, height: 14, borderRadius: "4px 0 0 4px", background: T.red }} />}
+              </span>
+              <span style={{ width: 1, height: 18, background: T.border, flexShrink: 0 }} />
+              <span style={{ flex: 1, display: "flex" }}>
+                {pos && <span style={{ width: `${pct}%`, height: 14, borderRadius: "0 4px 4px 0", background: POS_GREEN }} />}
+              </span>
+            </span>
+            <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, color: pos ? POS_GREEN : T.red }}>
+              {fmtBig(r.gex)}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1535,7 +1657,7 @@ function TickerLookupCard() {
   const [sym, setSym] = useState("SPX");
   const [input, setInput] = useState("");
   const [recent, setRecent] = useState<string[]>([]);
-  const [expiry, setExpiry] = useState<string>("ALL"); // "ALL" or an expiration-date
+  const [expiry, setExpiry] = useState<string | null>(null); // left pane's picked expiration
 
   // Restore recents in an effect, not a useState initializer, so the server
   // render and the first client render agree.
@@ -1551,7 +1673,7 @@ function TickerLookupCard() {
     const s = raw.trim().toUpperCase().replace(/[^A-Z0-9.]/g, "");
     if (!s) return;
     setSym(s);
-    setExpiry("ALL"); // a new ticker has a different expiry board
+    setExpiry(null); // a new ticker has a different expiry board
     setInput("");
     setRecent((prev) => {
       const next = [s, ...prev.filter((x) => x !== s)].slice(0, 8);
@@ -1560,6 +1682,7 @@ function TickerLookupCard() {
     });
   }, []);
 
+  // ── left pane feed: front-of-board chains, per expiry ──────────────────────
   const { data, loading, error, lastUpdated } =
     useLiveData<TlChainResp>(`/api/chains?ticker=${encodeURIComponent(sym)}`, 60_000);
 
@@ -1567,43 +1690,55 @@ function TickerLookupCard() {
   const expiries = groups.map((g) => String(g["expiration-date"]));
   const spot = numOr(data?.data?.underlyingPrice);
   // An expiry the previous ticker had may not exist on this one — fall back to
-  // the full set rather than silently rendering an empty ladder.
-  const activeExpiry = expiry !== "ALL" && expiries.includes(expiry) ? expiry : "ALL";
-  const atmGroup = activeExpiry === "ALL" ? groups[0] : groups.find((g) => String(g["expiration-date"]) === activeExpiry);
+  // the nearest rather than silently rendering an empty ladder.
+  const activeExpiry = expiry != null && expiries.includes(expiry) ? expiry : (expiries[0] ?? null);
+  const atmGroup = groups.find((g) => String(g["expiration-date"]) === activeExpiry);
 
-  const rows: TlRow[] = [...accumulateChainGreeks(data, activeExpiry === "ALL" ? null : activeExpiry).entries()]
+  const leftRows: TlRow[] = [...accumulateChainGreeks(data, activeExpiry).entries()]
     .map(([strike, g]) => ({ strike, gex: g.gex }))
     .filter((r) => isFinite(r.gex) && r.gex !== 0)
     .sort((a, b) => a.strike - b.strike);
 
-  const levels = tlLevelsFrom(rows);
+  // ── right pane feed: the WHOLE board ──────────────────────────────────────
+  // Held until spot exists — the sweep scales gamma by spot², and the endpoint's
+  // own default is the SPX feed's price, which is wrong for every other name.
+  const { data: multi, loading: mLoading, error: mError } = useLiveData<TlMultiResp>(
+    spot != null && spot > 0
+      ? `/proxy/gex-by-strike-multi?symbol=${encodeURIComponent(tlMultiSymbol(sym))}&spot=${spot.toFixed(2)}&date=${today}`
+      : null,
+    TL_MULTI_REFRESH_MS
+  );
+
+  const boardRows: TlRow[] = (multi?.all?.rows ?? [])
+    .map((r) => ({ strike: Number(r.strike), gex: Number(r.netGEX ?? 0) + Number(r.netVolGEX ?? 0) }))
+    .filter((r) => isFinite(r.strike) && r.strike > 0 && isFinite(r.gex) && r.gex !== 0)
+    .sort((a, b) => a.strike - b.strike);
+
+  // Fallback: the front expirations /api/chains already gave us. Labelled as
+  // such — this pane never prints three expiries under an "all" header.
+  const boardIsFull = boardRows.length > 0;
+  const frontRows: TlRow[] = [...accumulateChainGreeks(data, null).entries()]
+    .map(([strike, g]) => ({ strike, gex: g.gex }))
+    .filter((r) => isFinite(r.gex) && r.gex !== 0)
+    .sort((a, b) => a.strike - b.strike);
+  const rightRows = boardIsFull ? boardRows : frontRows;
+
+  const leftLevels = tlLevelsFrom(leftRows);
+  const rightLevels = tlLevelsFrom(rightRows);
   const atm = tlAtm(atmGroup, spot ?? 0);
-  const positiveGamma = levels.net >= 0;
+  const positiveGamma = rightLevels.net >= 0;
 
-  // The drawn window: the strike price is sitting on, plus TL_LADDER_SIDE
-  // strikes above and TL_LADDER_SIDE below it, redrawn high→low like a DOM.
-  // Sliced off the strike INDEX, not a point distance — a $2.50-wide chain and
-  // a $5-wide chain both give ten rungs a side rather than ten points.
-  const ladder = (() => {
-    if (!rows.length) return [];
-    const anchor = spot ?? rows[Math.floor(rows.length / 2)].strike;
-    let ai = 0;
-    for (let i = 1; i < rows.length; i++) {
-      if (Math.abs(rows[i].strike - anchor) < Math.abs(rows[ai].strike - anchor)) ai = i;
-    }
-    return rows
-      .slice(Math.max(0, ai - TL_LADDER_SIDE), ai + TL_LADDER_SIDE + 1)
-      .slice()
-      .sort((a, b) => b.strike - a.strike);
-  })();
-  const maxAbs = ladder.reduce((m, r) => Math.max(m, Math.abs(r.gex)), 0) || 1;
+  const leftLadder = tlWindow(leftRows, spot);
+  const rightLadder = tlWindow(rightRows, spot);
+  const hasAny = leftLadder.length > 0 || rightLadder.length > 0;
 
-  // The spot row: the ladder strike price is sitting on/just under.
-  const spotRow = spot == null ? null
-    : ladder.reduce<TlRow | null>((best, r) =>
-        best == null || Math.abs(r.strike - spot) < Math.abs(best.strike - spot) ? r : best, null);
-
-  const hasLadder = ladder.length > 0;
+  // How many expirations the right pane actually covers. The sweep reports its
+  // own count; fall back to the length of the expirations list it echoed back.
+  const boardExpiryCount = Number(multi?.expiryCount ?? multi?.expirations?.length ?? 0);
+  const boardLabel = boardIsFull
+    ? (boardExpiryCount > 0 ? `${boardExpiryCount} expirations · whole board` : "whole board")
+    : mLoading ? "sweeping the whole board…"
+    : `${expiries.length} front expirations · full board unavailable`;
 
   return (
     <Card variant="budget" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1613,7 +1748,7 @@ function TickerLookupCard() {
             Ticker Lookup
           </span>
           <span style={{ fontSize: 22, fontWeight: 800, color: T.text }}>${sym}</span>
-          <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>GEX levels</span>
+          <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.text, opacity: 0.6 }}>GEX levels</span>
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <input
@@ -1634,7 +1769,7 @@ function TickerLookupCard() {
         ))}
       </div>
 
-      {loading || error || !hasLadder ? (
+      {loading || error || !hasAny ? (
         <CardState
           loading={loading}
           error={error ?? data?.error ?? null}
@@ -1642,7 +1777,7 @@ function TickerLookupCard() {
         />
       ) : (
         <>
-          {/* Price + regime + the three headline numbers. */}
+          {/* One ticker, one spot — both panes are priced off this number. */}
           <Row style={{ flexWrap: "wrap", gap: 12 }}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
               <Value color={T.text} size={26}>
@@ -1656,85 +1791,73 @@ function TickerLookupCard() {
               }}>
                 {positiveGamma ? "Positive gamma" : "Negative gamma"}
               </span>
-              <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.muted, opacity: 0.6 }}>
-                {activeExpiry === "ALL" ? `${expiries.length} front expirations` : tlExpiryChip(activeExpiry, today)}
-              </span>
             </div>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
               <Stat label="± Move" value={atm.move == null ? "—" : `±${atm.move.toFixed(2)}`} size={18} />
-              <Stat label="Net GEX" value={fmtBig(levels.net)} color={positiveGamma ? POS_GREEN : T.red} size={18} />
               <Stat label="ATM IV" value={atm.iv == null ? "—" : `${(atm.iv * 100).toFixed(1)}%`} color={T.orange} size={18} />
             </div>
           </Row>
 
-          {/* Expiry pills — ALL first, then each front expiration. */}
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            <button onClick={() => setExpiry("ALL")} style={activeExpiry === "ALL" ? homeButtonStyle : homeSecondaryButtonStyle}>All</button>
-            {expiries.map((e) => (
-              <button key={e} onClick={() => setExpiry(e)} style={activeExpiry === e ? homeButtonStyle : homeSecondaryButtonStyle}>
-                {tlExpiryChip(e, today)}
-              </button>
-            ))}
-          </div>
-
           <div style={divider} />
 
-          {/* The ladder. Bars run out from a center rail: +GEX right, −GEX left. */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "128px 1fr 96px", alignItems: "center", gap: 8, paddingBottom: 4 }}>
-              <Label>Strike</Label>
-              <span style={{ textAlign: "center" }}><Label>Net GEX</Label></span>
-              <span style={{ textAlign: "right" }}><Label>Value</Label></span>
+          {/* The split: picked expiry | whole board. */}
+          <div className="tl-split" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "start" }}>
+
+            {/* LEFT — one expiration */}
+            <div style={{ border: `1px solid ${T.border}`, borderRadius: 14, padding: 12, display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
+              <Row style={{ flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: T.cyan }}>
+                  By expiration
+                </span>
+                <Stat label="Net GEX" value={fmtBig(leftLevels.net)} color={leftLevels.net >= 0 ? POS_GREEN : T.red} size={16} />
+              </Row>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {expiries.map((e) => (
+                  <button key={e} onClick={() => setExpiry(e)} style={activeExpiry === e ? homeButtonStyle : homeSecondaryButtonStyle}>
+                    {tlExpiryChip(e, today)}
+                  </button>
+                ))}
+              </div>
+              {leftLadder.length === 0 ? (
+                <Placeholder>No populated strikes on this expiry.</Placeholder>
+              ) : (
+                <TlLadder rows={leftLadder} spot={spot} levels={leftLevels} />
+              )}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
+                <TlLevelChip name="Core (CB)" value={leftLevels.core} spot={spot} color={LEVEL_COLORS.cb} note="biggest magnet" />
+                <TlLevelChip name="Call wall" value={leftLevels.callWall} spot={spot} color={LEVEL_COLORS.cw} note="ceiling" />
+                <TlLevelChip name="Put wall" value={leftLevels.putWall} spot={spot} color={LEVEL_COLORS.pw} note="floor" />
+                <TlLevelChip name="Gamma flip" value={leftLevels.flip} spot={spot} color={T.orange} note="sticky ↑ slippery ↓" />
+              </div>
             </div>
-            {ladder.map((r) => {
-              const pos = r.gex >= 0;
-              const pct = Math.max(2, (Math.abs(r.gex) / maxAbs) * 100);
-              const isSpot = spotRow != null && r.strike === spotRow.strike;
-              // Level marks are DOTS, not words — the strike column stays a
-              // column of numbers. The chips under the ladder name each level.
-              const marks: string[] = [];
-              if (levels.callWall === r.strike) marks.push(LEVEL_COLORS.cw);
-              if (levels.putWall === r.strike) marks.push(LEVEL_COLORS.pw);
-              if (levels.core === r.strike) marks.push(LEVEL_COLORS.cb);
-              return (
-                <div
-                  key={r.strike}
-                  style={{
-                    display: "grid", gridTemplateColumns: "128px 1fr 96px", alignItems: "center", gap: 8,
-                    padding: "2px 6px", borderRadius: 8,
-                    border: `1px solid ${isSpot ? T.cyan : "transparent"}`,
-                    background: isSpot ? "rgba(33,158,188,0.08)" : "transparent",
-                  }}
-                >
-                  <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
-                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: isSpot ? 800 : 600, color: isSpot ? T.cyan : T.text }}>
-                      {r.strike.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-                    </span>
-                    {isSpot && <span style={{ fontSize: 10, fontWeight: 800, color: T.cyan, letterSpacing: "0.08em" }}>◀ PRICE</span>}
-                    {marks.map((c) => (
-                      <span key={c} style={{ width: 7, height: 7, borderRadius: 2, background: c, flexShrink: 0 }} />
-                    ))}
-                  </span>
-                  <span style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
-                    <span style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
-                      {!pos && <span style={{ width: `${pct}%`, height: 14, borderRadius: "4px 0 0 4px", background: T.red }} />}
-                    </span>
-                    <span style={{ width: 1, height: 18, background: T.border, flexShrink: 0 }} />
-                    <span style={{ flex: 1, display: "flex" }}>
-                      {pos && <span style={{ width: `${pct}%`, height: 14, borderRadius: "0 4px 4px 0", background: POS_GREEN }} />}
-                    </span>
-                  </span>
-                  <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, color: pos ? POS_GREEN : T.red }}>
-                    {fmtBig(r.gex)}
-                  </span>
-                </div>
-              );
-            })}
+
+            {/* RIGHT — every listed expiration */}
+            <div style={{ border: `1px solid ${T.border}`, borderRadius: 14, padding: 12, display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
+              <Row style={{ flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: T.cyan }}>
+                  All expirations
+                </span>
+                <Stat label="Net GEX" value={fmtBig(rightLevels.net)} color={rightLevels.net >= 0 ? POS_GREEN : T.red} size={16} />
+              </Row>
+              <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: boardIsFull ? T.text : T.orange, opacity: boardIsFull ? 0.6 : 0.85 }}>
+                {boardLabel}
+              </span>
+              {rightLadder.length === 0 ? (
+                <CardState loading={mLoading} error={mError ?? multi?.error ?? null} empty="No board-wide ladder yet." />
+              ) : (
+                <TlLadder rows={rightLadder} spot={spot} levels={rightLevels} />
+              )}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
+                <TlLevelChip name="Core (CB)" value={rightLevels.core} spot={spot} color={LEVEL_COLORS.cb} note="biggest magnet" />
+                <TlLevelChip name="Call wall" value={rightLevels.callWall} spot={spot} color={LEVEL_COLORS.cw} note="ceiling" />
+                <TlLevelChip name="Put wall" value={rightLevels.putWall} spot={spot} color={LEVEL_COLORS.pw} note="floor" />
+                <TlLevelChip name="Gamma flip" value={rightLevels.flip} spot={spot} color={T.orange} note="sticky ↑ slippery ↓" />
+              </div>
+            </div>
           </div>
 
-          <div style={divider} />
-
-          {/* Plain-language read of the regime + the levels around price. */}
+          {/* Plain-language read — the whole board, which is the regime that
+              actually governs how dealers hedge. */}
           <div style={{
             border: `1px solid ${T.border}`,
             borderRadius: 10, padding: "10px 12px", background: "rgba(255,255,255,0.03)",
@@ -1742,24 +1865,16 @@ function TickerLookupCard() {
           }}>
             <span style={{ fontWeight: 800, color: T.cyan }}>The read: </span>
             {positiveGamma
-              ? "Net positive gamma — dealers sell rallies and buy dips, so price tends to pin and mean-revert. "
-              : "Net negative gamma — dealers chase in both directions, so moves extend and volatility feeds itself. "}
-            {levels.core != null && `Core magnet ${levels.core.toLocaleString()}. `}
-            {levels.callWall != null && `Call wall ${levels.callWall.toLocaleString()}. `}
-            {levels.putWall != null && `Put wall ${levels.putWall.toLocaleString()}. `}
-            {levels.flip != null && `Gamma flip ${levels.flip.toLocaleString("en-US", { maximumFractionDigits: 2 })} — sticky above, slippery below.`}
+              ? "Net positive gamma across the board — dealers sell rallies and buy dips, so price tends to pin and mean-revert. "
+              : "Net negative gamma across the board — dealers chase in both directions, so moves extend and volatility feeds itself. "}
+            {rightLevels.core != null && `Core magnet ${rightLevels.core.toLocaleString()}. `}
+            {rightLevels.callWall != null && `Call wall ${rightLevels.callWall.toLocaleString()}. `}
+            {rightLevels.putWall != null && `Put wall ${rightLevels.putWall.toLocaleString()}. `}
+            {rightLevels.flip != null && `Gamma flip ${rightLevels.flip.toLocaleString("en-US", { maximumFractionDigits: 2 })} — sticky above, slippery below.`}
           </div>
 
-          {/* The computed levels, as chips. */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
-            <TlLevelChip name="Core (CB)" value={levels.core} spot={spot} color={LEVEL_COLORS.cb} note="biggest magnet" />
-            <TlLevelChip name="Call wall" value={levels.callWall} spot={spot} color={LEVEL_COLORS.cw} note="ceiling" />
-            <TlLevelChip name="Put wall" value={levels.putWall} spot={spot} color={LEVEL_COLORS.pw} note="floor" />
-            <TlLevelChip name="Gamma flip" value={levels.flip} spot={spot} color={T.orange} note="sticky ↑ slippery ↓" />
-          </div>
-
-          <span style={{ fontSize: 11, color: T.muted, opacity: 0.45, fontFamily: "var(--font-mono)" }}>
-            OI+Vol basis · same formula as Multi Greek above · educational only, not investment advice
+          <span style={{ fontSize: 11, color: T.text, opacity: 0.45, fontFamily: "var(--font-mono)" }}>
+            OI+Vol basis · left pane shares Multi Greek&apos;s formula · right pane is the server full-board sweep · educational only, not investment advice
           </span>
         </>
       )}

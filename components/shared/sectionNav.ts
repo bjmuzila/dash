@@ -98,10 +98,14 @@ export const TESTLAB_SECTION: SectionNav = {
     // alone is harmless (renderItem returns null for an unknown id), but a
     // stale entry in `tabs` alone still draws the pill.
     { id: "flow",        label: "Flow Inventory",  short: "Flow Inv", color: HOME_THEME.cyan,   icon: "🌊" },
+    // ATM premium traded, calls vs puts, front + back monthly. Grouped with
+    // Flow Inventory rather than the gamma cluster: both read the TAPE (what
+    // dollars actually changed hands), not the book.
+    { id: "premdiff",    label: "Prem Diff",       short: "Prem Δ",   color: HOME_THEME.orange, icon: "⚖️" },
   ],
   groups: [
     { key: "gamma", tabs: ["squeeze", "gexlevels", "dealergamma", "gexmap"] },
-    { key: "flow",  tabs: ["flow"] },
+    { key: "flow",  tabs: ["flow", "premdiff"] },
   ],
   event: TESTLAB_TAB_EVENT,
 };

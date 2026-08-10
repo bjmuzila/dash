@@ -6,6 +6,7 @@ import { PageShell } from "@/components/shared/PageCard";
 import { SqueezeBoard } from "@/app/squeeze/page";
 import DealerGammaTab from "./DealerGammaTab";
 import GexMapTab from "./GexMapTab";
+import SeasonalityTab from "./SeasonalityTab";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /test — Test Lab.
@@ -31,12 +32,13 @@ import GexMapTab from "./GexMapTab";
 // deep links still work and the first paint is identical on both sides.
 // ─────────────────────────────────────────────────────────────────────────────
 
-type TestTab = "gexmap" | "dealergamma" | "squeeze";
+type TestTab = "gexmap" | "dealergamma" | "squeeze" | "seasonality";
 
 const TABS: { key: TestTab; label: string; hash: string }[] = [
   { key: "gexmap", label: "GEX Map", hash: "gex-map" },
   { key: "dealergamma", label: "Dealer Gamma", hash: "dealer-gamma" },
   { key: "squeeze", label: "Squeeze", hash: "squeeze" },
+  { key: "seasonality", label: "Seasonality", hash: "seasonality" },
 ];
 
 const tabForHash = (h: string): TestTab | null =>
@@ -125,6 +127,8 @@ export default function TestPage() {
         <GexMapTab />
       ) : tab === "dealergamma" ? (
         <DealerGammaTab />
+      ) : tab === "seasonality" ? (
+        <SeasonalityTab />
       ) : (
         <SqueezeBoard />
       )}

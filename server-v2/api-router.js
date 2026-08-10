@@ -8021,6 +8021,35 @@ if barstate.islast
       return String(v).slice(0, 10);
     };
 
+    // ── /api/atm-prem-diff ───────────────────────────────────────────────────
+    // Near-the-money premium TRADED (price × day volume × 100) for the front and
+    // back MONTHLY expiry, one bar per session, calls and puts kept separate.
+    // Backs the Test Lab "Prem Diff" tab. Written daily by
+    // server-v2/atm-prem-recorder.js (src='live') and, for history, by
+    // atm-prem-backfill.js (src='dxlink').
+    //
+    // Read-only and cheap: one indexed scan of atm_prem_diff. The band (±1/2/5%
+    // of spot) is a STORED dimension, not a computed one, so switching it in the
+    // UI is another row of the same scan rather than a recompute upstream.
+    register('/api/atm-prem-diff', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const symbol = String(sp.get('symbol') || 'SPY').trim().toUpperCase().slice(0, 12);
+          const bandPct = Number(sp.get('band') ?? 5);
+          const days = Number(sp.get('days') ?? 260);
+          // Required lazily: the recorder pulls in `pg` and proxy-tastytrade, and
+          // a problem there must fail THIS endpoint, not the whole router import.
+          const { getSeries } = require('./atm-prem-recorder');
+          const data = await getSeries({ symbol, bandPct, days });
+          return send(res, 200, data, { 'Cache-Control': 'public, max-age=60' });
+        } catch (e) {
+          return send(res, 500, { error: e.message, rows: [] }, { 'Cache-Control': 'no-store' });
+        }
+      },
+    });
+
     register('/api/gex-map', {
       auth: 'subscriber', methods: ['GET'],
       async handler(req, res) {

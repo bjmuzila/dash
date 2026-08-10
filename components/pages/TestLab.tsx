@@ -10,6 +10,7 @@ import type { FlowOrder } from "@/hooks/useSpxFlow";
 import { SqueezeBoard } from "@/app/squeeze/page";
 import DealerGammaTab from "@/app/test/DealerGammaTab";
 import GexMapTab from "@/app/test/GexMapTab";
+import PremDiffTab from "@/app/test/PremDiffTab";
 import VolGexFlowPanel from "@/components/dashboard/VolGexFlowPanel";
 import { TESTLAB_SECTION, TESTLAB_TAB_EVENT, readSectionTab } from "@/components/shared/sectionNav";
 
@@ -2482,7 +2483,7 @@ function GexLevelsTab() {
 // the UNION as well as the render branch: `setTab(id as TestTab)` below casts a
 // string straight out of a DOM event, so a stale "#dex-charm" link would
 // otherwise still select a tab that renders nothing.
-type TestTab = "flow" | "gexlevels" | "squeeze" | "dealergamma" | "gexmap";
+type TestTab = "flow" | "gexlevels" | "squeeze" | "dealergamma" | "gexmap" | "premdiff";
 
 function FlowInventoryTab() {
   const { dataByTicker, errors, loadedAt, reload } = useFlowInventory();
@@ -2556,6 +2557,8 @@ export default function TestPage() {
         <DealerGammaTab />
       ) : tab === "gexmap" ? (
         <GexMapTab />
+      ) : tab === "premdiff" ? (
+        <PremDiffTab />
       ) : (
         <FlowInventoryTab />
       )}

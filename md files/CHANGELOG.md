@@ -1,5 +1,149 @@
 # Changelog
 
+## 2026-08-10 - prem diff: backfill scoped to still-listed expiries (expired contracts return nothing)
+
+`server-v2/atm-prem-backfill.js`, `app/test/PremDiffTab.tsx`. Revises the entry
+below - the 1-year backfill it describes is not achievable and the script no
+longer pretends otherwise.
+
+- **The ceiling.** dxFeed drops delisted option symbols on this quote token, so
+  an EXPIRED contract returns zero candles. The panel's series is "premium in
+  whatever was the front month ON THAT DAY", and for any session more than about
+  a month back that day's front month has since expired. Its bars are gone and
+  no amount of re-running brings them back.
+- **What is actually recoverable** is the window where a STILL-LISTED monthly
+  was already front or back month: the current front month covers roughly the
+  sessions since the previous monthly expired (~3-4 weeks), the current back
+  month about twice that. So the pull fills the trailing few weeks and stops.
+- **The script now attempts only listed expiries.** `listedExpiries()` reads
+  `fetchExpirations` and intersects it with the monthly targets in the window.
+  Expired targets are named in the log and skipped, rather than costing a few
+  hundred subscriptions and a 90s hard-timeout each to discover they are empty.
+  `--include-expired` forces the old behaviour if the entitlement ever changes.
+- **`--days` default dropped 365 -> 120.** A wider window buys no extra rows
+  now, only a longer run.
+- **It reports the recovered SPAN, not just a row count.** "412 rows" reads like
+  success; "18 sessions, 2026-07-21 -> 2026-08-08" is the number that says how
+  much of the chart is real and where the EOD recorder takes over.
+- **`--probe` verdicts rewritten** around the known answer: the live-contract
+  control is what confirms candle replay works at all, and the expected verdict
+  now describes the 3-8 week ceiling instead of promising a full pull.
+- **The panel says so too.** When the returned series is materially shorter than
+  the selected lookback, the footer names the first available session and
+  explains that it cannot be extended backwards - so a short chart reads as the
+  data's limit, not a loading failure.
+
+## 2026-08-10 - test lab: new "Prem Diff" tab - ATM premium traded, calls vs puts
+
+New: `server-v2/atm-prem-recorder.js`, `server-v2/atm-prem-backfill.js`,
+`app/test/PremDiffTab.tsx`. Edited: `server-v2/api-router.js` (one new read-only
+route), `components/shared/sectionNav.ts`, `components/pages/TestLab.tsx`.
+NO proxy file was changed - both new server modules only *require* exports that
+already existed in `proxy-tastytrade.js`.
+
+- **What it plots.** Underlying daily bars on top; underneath, a histogram of
+  `put premium traded - call premium traded`, where premium is
+  `price x day volume x 100` summed across the strikes within +/-band% of that
+  session's close. Front monthly is the solid bar (blue below zero = call
+  premium dominated, red above = put premium dominated); back monthly is the
+  wide purple bar behind it. Live at `/app/test?tab=premdiff`.
+- **Why a recorder and not a query.** Nothing in the database stored option
+  VOLUME or PRICE. `oi_daily` is settled open interest,
+  `option_strike_gex_history` is gammas and the GEX products, `eod_dte_gamma` is
+  bucketed OI + net gamma. Premium traded cannot be reconstructed from any of
+  them - the price leg is simply not there. Hence a new table.
+- **New table `atm_prem_diff`**, PK `(date, symbol, slot, band_pct)`, upsert, so
+  a re-run overwrites a day cleanly. `slot` is `'front'`/`'back'`, `src` is
+  `'live'` (EOD recorder) or `'dxlink'` (backfill).
+- **Front month = the third Friday, computed, not read off the chain.**
+  TastyTrade tags SPY's third Friday as "Weekly" - every SPY expiry in the
+  current listing comes back "Weekly" - so filtering on `expiration-type`
+  returns everything or nothing depending on the root. `thirdFriday()` computes
+  it, and `resolveMonthlies()` snaps to the closest LISTED expiry within 2 days
+  so a holiday shift to Thursday still resolves.
+- **Three bands written every sweep (+/-1%, +/-2%, +/-5%).** "ATM" is the single
+  knob that most changes what the histogram looks like, so it is a STORED
+  dimension rather than a baked-in constant - the UI switches band with another
+  row of the same index scan, no upstream recompute.
+- **EOD recorder fires 16:05 ET, weekdays.** Day volume on the chain is final by
+  then and the 16:00 print is in. Sourced from `fetchExpirations` /
+  `fetchChainFull`, the same REST pair `oi-daily-recorder.js` already uses.
+  Disable with `ATM_PREM_RECORDER=0`.
+- **Prices at the MARK, not last.** A strike whose only print of the day was a
+  stale 09:31 fill would otherwise price the whole day's volume off it.
+- **Backfill via dxLink daily candles.** TastyTrade REST has no historical
+  option endpoint at all, but a dxLink `Candle` subscription with `fromTime`
+  replays a bar snapshot, and that works for option symbols
+  (`.SPY260821C773{=1d}`). `atm-prem-backfill.js` synthesises the contract
+  symbols per expiry, batches them over ONE throwaway connection (its own, like
+  `candle-history.js` - it cannot disturb the live feed) and sums the replayed
+  bars. Strike range is computed per expiry from the underlying's travel while
+  that expiry was in play, which is what keeps the symbol count in the low
+  thousands instead of tens of thousands.
+- **RUN `--probe` FIRST.** (Superseded by the entry above: expired contracts
+  return nothing on this token.) dxFeed retention for delisted option
+  contracts is an entitlement question, not a code question. `node server-v2/atm-prem-backfill.js
+  --probe` asks for one expired ATM contract and one live one and prints a
+  verdict in ~10s: if expired contracts come back empty, the backfill is not
+  possible on this token and the forward-only recorder is the available path.
+  Then `--dry` to see the numbers before writing.
+- **Backfilled bars are labelled.** They are priced at the daily CLOSE, not the
+  16:05 mark, so wing strikes sit at last trade rather than mid. The panel
+  footer says so whenever any `src='dxlink'` rows are in the window.
+- **Honest about what it is not.** Premium traded is flow, not position; it is
+  unsigned (nothing here knows which side lifted); it is not gamma-weighted. The
+  panel says all three, and the sigma tile is there because a single bar only
+  means something against the series' own history.
+- **Still to wire:** `startAtmPremRecorder()` in `server-with-proxy.js` (2 lines,
+  held back pending confirmation since that is the proxy server file).
+
+## 2026-08-10 - analytics: Ticker Lookup split into two panes, right = whole board
+
+`components/pages/Analytics.tsx` (client only - no proxy, server or API file was
+edited; the right pane calls an endpoint that already existed).
+
+- **The card is now two panes on one ticker.** LEFT = one expiration, picked
+  from the front-of-board pills. RIGHT = every listed expiration. Same symbol,
+  same spot, same ladder shape, so the two read side by side.
+- **The right pane is the WHOLE board, not the front 3.** It reads
+  `/proxy/gex-by-strike-multi?symbol=&spot=&date=` - the server's existing
+  full-board sweep (`eod-gex-recorder.computeLiveGexRowsMulti`), which returns
+  slim `{ strike, netGEX, netVolGEX }` rows summed per strike ACROSS every
+  expiration. `netGEX + netVolGEX` is the same OI+Vol basis the left pane uses.
+  One request; the server caches it 60s per (symbol, session), so a 40-expiry
+  chain is one sweep a minute instead of forty browser fetches. Polled at 120s.
+- **Spot is passed through, not defaulted.** That endpoint's own default spot is
+  the SPX live feed, which is wrong for every other name, so the right pane
+  holds its fetch until `/api/chains` has given us the ticker's underlying
+  price, then passes it. Both panes are priced off that one number.
+- **Honest fallback.** If the sweep errors or returns nothing (no Theta cover
+  for the name, cold cache), the right pane falls back to the front expirations
+  chains already returned and its subheader says `N front expirations - full
+  board unavailable` in orange. It never prints three expiries under an "all
+  expirations" label.
+- **The regime chip, "The read" line and the shared +/- Move / ATM IV** now come
+  off the whole board (regime) and the picked expiry (ATM), which is the pairing
+  that actually matches how each number is defined.
+- Ladder rendering and the level chips were extracted into `TlLadder` /
+  `TlLevelChip` so both panes render from one component - two copies would
+  drift. The CB/Call-wall collision rule and the 10-above/10-below window apply
+  per pane, off that pane's own full ladder.
+
+## 2026-08-10 - analytics: CB/Call-wall collision rule + white chip ink
+
+`components/pages/Analytics.tsx`.
+
+- **Call wall steps down when Core owns the strike.** Core (CB) is the highest
+  |GEX| strike on the board, so whenever that strike is call-side it is ALSO
+  the highest +GEX strike - Core and Call wall printed the same number and the
+  card showed one level twice. `tlLevelsFrom()` now tracks the top TWO +GEX
+  strikes and, when Core and Call wall collide, promotes the second-highest
+  +GEX strike to Call wall: the next real ceiling above the magnet. Put wall is
+  untouched - a call-side core can never collide with it.
+- **Level chip text is white.** The distance line and the note line under each
+  chip were `HOME_THEME.muted` at 0.55 / 0.45 opacity, which rendered gray. Both
+  are now `HOME_THEME.text` at full opacity.
+
 ## 2026-08-10 - analytics: Ticker Lookup restyled to the page theme
 
 `components/pages/Analytics.tsx`.
