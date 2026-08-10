@@ -8,13 +8,18 @@
 // the pickers kept offering tickers that were no longer being swept — you'd pick
 // one and silently get an empty chart. Everything client-side now imports here.
 //
-// THE REAL SOURCE OF TRUTH IS THE SERVER: server-v2/scanner-tickers.js, exposed
-// at GET /proxy/scanner-tickers. Prefer useScannerTickers() so the UI follows the
-// server without a redeploy. The static arrays below are a BUILD-TIME FALLBACK
-// for SSR and for the endpoint being unreachable — they will go stale, and that
-// is fine, because they are only ever a first paint.
+// THE REAL SOURCE OF TRUTH IS THE SERVER: server-v2/scanner-tickers.js as the
+// baseline, PLUS the runtime `roster_overrides` layer in
+// server-v2/roster-store.js (edited from the owner Watchlists page). Both are
+// resolved behind GET /proxy/scanner-tickers. Prefer useScannerTickers() so the
+// UI follows the server without a redeploy — a ticker added on the owner page
+// appears in every picker on the next load, and never lands in these arrays.
 //
-// Mirrors server-v2/scanner-tickers.js @ 2026-07-28 (168 tickers).
+// The static arrays below are a BUILD-TIME FALLBACK for SSR and for the endpoint
+// being unreachable — they will go stale, and that is fine, because they are
+// only ever a first paint.
+//
+// Mirrors the server-v2/scanner-tickers.js BASELINE @ 2026-08-10 (169 tickers).
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // NOTE: this module is intentionally FREE of React and of any "use client"
@@ -30,8 +35,8 @@ export const SCANNER_MAIN: string[] = [
 
 export const SCANNER_SHARES: string[] = [
   "ASTS", "AVGO", "COIN", "ETHA", "FIG", "GME", "HOOD", "IBIT", "NFLX", "NOK",
-  "PLTR", "QBTS", "QUBT", "RGTI", "RIVN", "SLV", "SMCI", "SOFI", "SOUN", "SOXL",
-  "TQQQ", "TSLL",
+  "PLTR", "QBTS", "QUBT", "RBLX", "RGTI", "RIVN", "SLV", "SMCI", "SOFI", "SOUN",
+  "SOXL", "TQQQ", "TSLL",
 ];
 
 export const SCANNER_SPREADS: string[] = [
@@ -69,7 +74,7 @@ export const ETF_SYMBOLS: string[] = [
   "ARKK", "IGV", "SOXX", "DIA", "XLC", "XLY", "XLV", "SKHY",
 ];
 
-/** Static fallback universe (168). Prefer useScannerTickers() at runtime. */
+/** Static fallback universe (169). Prefer useScannerTickers() at runtime. */
 export const SCANNER_TICKERS: string[] = [
   ...new Set([...SCANNER_MAIN, ...SCANNER_SHARES, ...SCANNER_SPREADS, ...SCANNER_OPTVOL]),
 ].map((t) => t.trim().toUpperCase()).filter(Boolean);

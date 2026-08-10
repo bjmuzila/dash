@@ -1,5 +1,161 @@
 # Changelog
 
+## 2026-08-10 - watchlists: the ticker rosters are editable from the owner page (+ RBLX)
+
+`server-v2/roster-store.js` (new), `server-v2/scanner-tickers.js`,
+`server-v2/em-tickers.js`, `server-v2/far-cb-tickers.js`,
+`server-v2/scanner-recorder.js`, `server-v2/oi-daily-recorder.js`,
+`server-v2/strike-growth-recorder.js`, `server-v2/multi-flow.js`,
+`server-v2/server-with-proxy.js`, `owner-vite/src/pages/Watchlists.tsx`,
+`owner-vite/src/pages/watchlists/data.ts`, `lib/scannerTickers.ts`.
+
+- **RBLX is back in the scanner universe, SHARES bucket.** It was in the
+  2026-07-28 illiquid prune; this reverses that one name. Baseline 168 -> 169.
+- **`/owner/watchlists` is now the home of the CB Edge rosters, not a snapshot
+  of them.** Scanner, EM and Far-CB render live from `GET /proxy/rosters` and
+  can be edited in place: add a ticker per bucket, click a chip to move it to
+  another bucket or remove it, and one button to reset a list back to the file.
+- **New `roster_overrides` table is the mechanism.** One row per
+  `(list, symbol)`: `add` (with a target bucket, which doubles as MOVE) or
+  `remove`. The files in `server-v2/` stay the BASELINE - the thing you get with
+  an empty DB, and still the right place for a permanent reviewed change - and
+  the table is a thin diff on top. Adding clears a prior remove and vice versa,
+  so the table can never hold a contradiction.
+- **Edits land on the next sweep, not the next deploy.** Every consumer used to
+  destructure `SCANNER_TICKERS` at module load, which froze the roster for the
+  life of the process. `scanner-recorder` and `oi-daily-recorder` now resolve
+  per sweep; `strike-growth-recorder`'s watchlist reconcile moved out of
+  `ensureSchema()` into `reconcileWatchlist()`, fired on the store's `change`
+  event (coalesced 1s) plus a 10-minute safety pass; `multi-flow` re-syncs its
+  roots on the same event and on its window-refresh tick, subscribing adds and
+  dropping removals from the firehose keep-list.
+- **This closes a silent UI/backend split.** `/proxy/scanner-tickers` re-read
+  `process.env` per request while the recorders did not, so a runtime
+  `SCANNER_TICKERS` made the ticker dropdowns advertise roots nothing was
+  actually sweeping - pick one and get an empty chart. Both sides now resolve
+  through the same store.
+- **Fail-soft everywhere.** No `DATABASE_URL`, dead pool or bad query and every
+  path falls back to the static file; the page shows `● BASELINE (no DB)` and
+  disables editing rather than rendering an empty roster. Writes are OWNER-only
+  (existing `proxy-auth` gate on every non-GET `/proxy/*`), and symbols are
+  validated against a ticker-root pattern before they reach SQL.
+- **Precedence, unchanged where it mattered:** an explicit `SCANNER_TICKERS` /
+  `OI_DAILY_SYMBOLS` env still wins over both the DB and the file, so an
+  ops-level "sweep only these three" keeps working. `far_cb_custom_tickers`
+  (customer adds) still stacks on top of the far-CB roster and is not editable
+  from this page.
+- **Routes added:** `GET /proxy/rosters[?list=]`, `POST /proxy/roster`
+  `{list, action, symbol, bucket?}`, `POST /proxy/roster-reset` `{list, symbol?}`.
+  The tastytrade tabs are untouched - still a static export snapshot.
+
+## 2026-08-10 - es candles: GEX bubbles size exponentially, new Curve slider
+
+`components/dashboard/es-candles/EsChartCard.tsx`,
+`components/dashboard/es-candles/slotStore.ts`.
+
+- **Bubble radius is no longer `√ratio`.** The draw now uses
+  `r = min + ratio^curve * (max - min)`, with `curve` a new persisted
+  `BubbleCfg` key. `√` (curve 0.5) lifted every mid-sized strike close to the
+  top wall - a strike at 25% of the session max drew at HALF the biggest
+  bubble's radius, so the ladder read flat and the real walls never stood out.
+- **Default curve 2.2.** That same 25% strike now lands at ~3% of the size span,
+  so only the top-of-session GEX levels approach max and everything else
+  collapses toward min. Set curve to 0.5 to get the old √ behavior back exactly.
+- **New "curve" slider** under Bubble size (range 0.5-5, step 0.1) next to
+  min/max/bright, so the response can be tuned live.
+- **Default `maxSize` 4 -> 9, slider ceiling 7 -> 20.** With an exponent above 1
+  only a handful of bubbles ever REACH max, so the extra headroom is what makes
+  the top walls read as dominant instead of just making everything bigger.
+  Saved presets keep their own maxSize; raise it there to see the effect.
+- **Missing-key guard.** A slot blob saved before this change has no `curve`;
+  the draw falls back to the default rather than letting `Math.pow(r, undefined)`
+  turn every radius into NaN and silently blank the whole bubble layer.
+
+## 2026-08-10 - gex change top: screenshots stopped double-exposing, plus Flip all
+
+`components/scanner/GexChangeTop.tsx`, `lib/snapshot.ts`.
+
+- **The "both sides on one image" bug is fixed in the shared capture engine.**
+  html2canvas has no 3D pipeline: it ignores `transform-style: preserve-3d` and
+  `backface-visibility: hidden`, but it DOES keep the 2D part of the matrix. So
+  the back face parked at `rotateY(180deg)` was painted as a horizontal MIRROR
+  image stacked on top of the front face - front text and reversed back text in
+  the same PNG. It hit any card whose back had ever been mounted, flipped or not.
+- **Opt-in contract: `data-flip3d="front" | "back"` on the rotating element and
+  `data-face="front" | "back"` on each face.** `applyUniversalCloneFixes()` in
+  `lib/snapshot.ts` now switches the hidden face off, flattens the visible one,
+  drops the rotation and kills the tile's `perspective`. The DOM alone cannot say
+  which face is showing (the rotation lives on the parent and may be
+  mid-transition), so the component declares it.
+- **Style-only, as that function requires.** The hidden face is `display:none`,
+  never removed - the live-to-clone `<canvas>` pairing downstream matches by
+  index and any structural edit there desyncs it.
+- **Any page can opt in.** The fix lives in the shared engine, not in the scanner,
+  so the next flip card gets it for free by adding the two attributes.
+- **The page screenshot no longer slams every card face-up first.** `capture()`
+  used to `setFlipped(null)` purely to dodge this bug; the PNG now matches what is
+  on screen, flipped cards included.
+- **New "Flip all" toolbar button** turns every auto-probed card over at once and
+  back again. Flip state moved from a single card id to a SET, so single-card
+  clicks still toggle only their own card.
+- **The histories are fetched in waves of 6, de-duped by watch id, and only for
+  ids with nothing cached** - not a ~65-request burst. A second Flip all after a
+  flip-back costs zero requests.
+- **Auto-refresh backs off above 8 open cards.** Re-polling ~65 charts a minute
+  for panels nobody is reading is not worth it; the hand-opened case (a handful)
+  still refreshes on the 60s tick, and Refresh always re-pulls.
+- **The back face got its own camera button** next to the close X. With the whole
+  board face-down the front-face camera is unreachable, so the chart side needed
+  one; it saves as `<SYM>-<strike>-<slot>-chart.png`.
+
+## 2026-08-10 - gex map: screenshot button on the Tape Field card
+
+`app/test/GexMapTab.tsx`.
+
+- **`CopySnapButton` in the Tape Field header** copies a PNG of the whole card
+  to the clipboard, with a file download as the fallback when the clipboard is
+  unavailable. Reuses `components/shared/CopySnapButton.tsx` -> `lib/snapshot.ts`,
+  which is the repo's single `html2canvas()` call site; `scripts/audit-ui.mjs
+  --strict` fails the build on a second one, so no new capture path was added.
+- **The ref sits on a wrapper OUTSIDE `<Card>`**, so the PNG keeps the card's own
+  border and background instead of a chart floating on a transparent edge.
+- **`[data-capture-hide]` on the button and the zoom hint** - live-page chrome
+  that should not photograph itself. The field switcher and intensity slider stay
+  in the shot: they say which rendering the picture is of.
+- Placed last in the header row, so nothing existing moved.
+- What is on screen is what lands in the PNG - heatmap or terrain, zoomed or
+  full - because the capture reads the live DOM.
+
+## 2026-08-10 - prem diff: scroll-to-zoom / drag-to-pan on both charts
+
+`app/test/PremDiffTab.tsx`.
+
+- **`useZoomPan()`** gives both the daily and the intraday chart the ES Candles
+  controls: wheel zooms about the cursor, drag pans, double-click resets. A
+  "showing a zoomed range - reset" link appears next to the hint whenever the
+  view is not full.
+- **The window is an INDEX RANGE, not a pixel transform.** Scaling a transform
+  would blow up the candle bodies and the axis text along with the data; here
+  only the index-to-x mapping changes, so bars keep their width and labels stay
+  legible at every zoom level.
+- **The wheel listener is attached manually with `{ passive: false }`.** React
+  registers `onWheel` passively and a passive listener cannot `preventDefault()`,
+  so the page would scroll underneath the chart on every notch. This is the one
+  place a raw `addEventListener` is the right tool.
+- **Both scales follow the visible window.** Zooming into a quiet fortnight has
+  to open that fortnight up; with a fixed scale you would just magnify the x-axis
+  and leave every bar a hairline against the year's biggest day. Same for the
+  intraday panel against an 11:29 spike.
+- **Marks are clipped, not filtered.** Everything renders and a `clipPath` over
+  the plot rect cuts what falls outside - simpler than slicing arrays in four
+  places, and it keeps the absolute index available for hover and keys.
+- **Intraday gridlines step down 30 -> 15 -> 5 -> 1 minute as the window
+  tightens**, so a zoomed chart gains axis detail instead of showing two labels.
+- Panning suppresses the crosshair for the duration - a drag that also moved the
+  hover readout fought itself.
+- The window auto-resets when the underlying series shrinks (symbol or lookback
+  change), so a stale range cannot leave the chart scrolled past the end.
+
 ## 2026-08-10 - prem diff: SPX removed (its monthly is 1.4% of near-money SPX volume)
 
 `app/test/PremDiffTab.tsx`, `server-v2/atm-prem-recorder.js`,

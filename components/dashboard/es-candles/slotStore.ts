@@ -29,22 +29,28 @@
 // Sizing/filtering is pure taste, so it shouldn't reset every visit.
 //   topStrikes  — Show Top Strikes: draw only the N strongest strikes per column
 //   highlight   — Highlight Top N Walls: top X of the shown set render dominant (X ≤ N)
-//   minSize/maxSize — d3.scaleSqrt radius range in px (area ∝ |GEX|)
+//   minSize/maxSize — radius range in px
+//   curve       — size-response exponent: r = min + ratio^curve * (max-min).
+//                 0.5 = the old √ (area ∝ |GEX|, small strikes stay fat);
+//                 1 = linear; >1 = exponential — small strikes collapse toward
+//                 min and only the top walls approach max. Default 2.2.
 //   brightness  — 0..100 opacity gradient steepness for smaller strikes
-export type BubbleCfg = { topStrikes: number; highlight: number; minSize: number; maxSize: number; brightness: number };
-export const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 10, highlight: 3, minSize: 0.5, maxSize: 4, brightness: 84 };
-export const BUBBLE_CFG_KEYS: Array<keyof BubbleCfg> = ["topStrikes", "highlight", "minSize", "maxSize", "brightness"];
+export type BubbleCfg = { topStrikes: number; highlight: number; minSize: number; maxSize: number; curve: number; brightness: number };
+export const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 10, highlight: 3, minSize: 0.5, maxSize: 9, curve: 2.2, brightness: 84 };
+export const BUBBLE_CFG_KEYS: Array<keyof BubbleCfg> = ["topStrikes", "highlight", "minSize", "maxSize", "curve", "brightness"];
 
 // Slider bounds, single-sourced so the UI and the restore clamp can't drift.
 // The size ranges are deliberately CENTERED on the defaults (min 0.5 sits mid
-// of 0..1, max 4.0 sits mid of 1..7): the useful sizes are all small, so a
-// 0..20 / 1..40 range wasted 90% of the travel and made fine tuning at the low
-// end impossible. Half a slider of headroom above the default is plenty.
+// of 0..1): the useful sizes are all small, so a 0..20 / 1..40 range wasted 90%
+// of the travel and made fine tuning at the low end impossible.
+// maxSize runs to 20 because with curve > 1 only a handful of bubbles ever
+// REACH max — that headroom is what makes the top walls read as dominant.
 export const BUBBLE_CFG_RANGE: Record<keyof BubbleCfg, { min: number; max: number }> = {
   topStrikes: { min: 1, max: 30 },
   highlight: { min: 0, max: 30 },
   minSize: { min: 0, max: 1 },
-  maxSize: { min: 1, max: 7 },
+  maxSize: { min: 1, max: 20 },
+  curve: { min: 0.5, max: 5 },
   brightness: { min: 0, max: 100 },
 };
 export const clampBubbleVal = (k: keyof BubbleCfg, v: number) =>

@@ -40,13 +40,44 @@ const MARKET_HOLIDAYS = new Set([
 ]);
 
 const { SCANNER_TICKERS: DEFAULT_SCANNER_TICKERS } = require('./scanner-tickers');
+const rosterStore = require('./roster-store');
 
-function parseScannerTickers() {
+/** Explicit env override, if any. Wins over both the file and the DB overrides
+ * so an ops-level "sweep only these three" still works. */
+function envTickers() {
   const env = String(process.env.SCANNER_TICKERS || '').trim();
-  // Default to the curated scanner universe; env override still wins if set.
-  if (!env) return [...DEFAULT_SCANNER_TICKERS];
-  if (env.toUpperCase() === 'SCANNER') return [...DEFAULT_SCANNER_TICKERS];
+  if (!env || env.toUpperCase() === 'SCANNER') return null;
   return env.split(/[,\s]+/).map((s) => s.trim().toUpperCase()).filter(Boolean);
+}
+
+/**
+ * SYNCHRONOUS universe. Kept for the boot-time "is the recorder idle?" check
+ * and for GET /proxy/scanner-tickers' fallback path. Reads roster-store's warm
+ * cache, so it reflects owner edits once primeRosters() has run — but prefer
+ * resolveScannerTickers() anywhere an await is possible.
+ */
+function parseScannerTickers() {
+  const env = envTickers();
+  if (env) return env;
+  const live = rosterStore.getSymbolsSync('scanner');
+  return live.length ? live : [...DEFAULT_SCANNER_TICKERS];
+}
+
+/**
+ * The universe to actually sweep: file baseline + roster_overrides, resolved
+ * fresh (15s cache in roster-store). This is what makes an add/remove from the
+ * owner Watchlists page land on the NEXT sweep instead of the next deploy.
+ */
+async function resolveScannerTickers() {
+  const env = envTickers();
+  if (env) return env;
+  try {
+    const live = await rosterStore.getSymbols('scanner');
+    if (live.length) return live;
+  } catch (e) {
+    console.warn('[scanner] roster resolve failed, using baseline:', e.message);
+  }
+  return [...DEFAULT_SCANNER_TICKERS];
 }
 
 // ── PG pool ──────────────────────────────────────────────────────────────────
@@ -266,7 +297,8 @@ async function snapshotTicker(root, { pick = null } = {}) {
 async function runSweep({ force = false } = {}) {
   if (!force && !inSweepWindow()) return { skipped: 'outside sweep window' };
 
-  const tickers = parseScannerTickers();
+  // Re-resolved every sweep so an owner edit lands here, not on the next deploy.
+  const tickers = await resolveScannerTickers();
   if (!tickers.length) return { skipped: 'no SCANNER_TICKERS' };
 
   const p = getPool();
@@ -319,11 +351,13 @@ function startScannerRecorder() {
   setTimeout(() => {
     runSweep().catch((e) => console.warn('[scanner] initial error:', e.message));
   }, 12_000);
-  console.log(`[scanner] recorder started — sweeping ${parseScannerTickers().join(', ')} every ${INTERVAL_MINS}m`);
+  // The roster is re-resolved per sweep, so this line is a snapshot of the
+  // universe at boot, not a fixed roster for the process lifetime.
+  console.log(`[scanner] recorder started — ${parseScannerTickers().length} roots every ${INTERVAL_MINS}m (roster re-resolved each sweep)`);
 }
 
 module.exports = {
-  startScannerRecorder, runSweep, ensureSchema, getPool, parseScannerTickers,
+  startScannerRecorder, runSweep, ensureSchema, getPool, parseScannerTickers, resolveScannerTickers,
   findCoreBullseye, gexAtStrike,
   // shared with forward-scanner-recorder.js so both sweeps compute a wall the
   // same way — one definition of call wall / put wall / CORE, two horizons.

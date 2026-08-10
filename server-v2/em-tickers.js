@@ -106,4 +106,23 @@ const SYMBOLS = Array.from(new Set(
 // zones on demand (cheap: one weekly candle + arithmetic). Edit freely.
 const ZONE_SYMBOLS = ['ESM', 'NQM', 'SPX', 'NDX', 'SPY', 'QQQ', 'IWM'];
 
-module.exports = { SYMBOLS, SPECIAL_TICKERS, EQUITY_TICKERS, ZONE_SYMBOLS };
+/**
+ * Resolved publish roster: the arrays above PLUS the runtime overrides written
+ * by the owner Watchlists page (server-v2/roster-store.js, list 'em'). Prefer
+ * this over the static SYMBOLS export anywhere an await is possible — SYMBOLS
+ * is frozen at require time and will not see an edit.
+ *
+ * roster-store requires this module for its baseline, so the require is lazy to
+ * avoid a cycle. Falls back to SYMBOLS on any failure.
+ */
+async function getActiveSymbols() {
+  try {
+    const live = await require('./roster-store').getSymbols('em');
+    if (live.length) return live;
+  } catch (e) {
+    console.warn('[em-tickers] roster overrides unavailable, using file roster:', e.message);
+  }
+  return [...SYMBOLS];
+}
+
+module.exports = { SYMBOLS, SPECIAL_TICKERS, EQUITY_TICKERS, ZONE_SYMBOLS, getActiveSymbols };

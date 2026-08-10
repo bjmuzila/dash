@@ -64,21 +64,46 @@ function getPool() {
   }
 }
 
-/** CORE_TICKERS ∪ active customer-added tickers. Safe if DB is unavailable
- * (falls back to CORE_TICKERS only). */
-async function getActiveRoster() {
+/** Active customer-added tickers only (far_cb_custom_tickers). */
+async function getCustomTickers() {
   const p = getPool();
-  if (!p) return [...CORE_TICKERS];
+  if (!p) return [];
   try {
     const { rows } = await p.query(
       `SELECT symbol FROM far_cb_custom_tickers WHERE active = TRUE`
     );
-    const custom = rows.map((r) => String(r.symbol).toUpperCase());
-    return [...new Set([...CORE_TICKERS, ...custom])];
+    return rows.map((r) => String(r.symbol).toUpperCase());
   } catch (e) {
     console.warn('[far-cb-tickers] custom ticker fetch failed, using CORE only:', e.message);
-    return [...CORE_TICKERS];
+    return [];
   }
 }
 
-module.exports = { CORE_TICKERS, getActiveRoster };
+/**
+ * CORE_TICKERS ∪ owner roster overrides ∪ active customer-added tickers.
+ *
+ * Three layers, in precedence order:
+ *   1. CORE_TICKERS above          — the file baseline, edited + redeployed.
+ *   2. roster_overrides('farcb')   — the owner Watchlists page. Adds AND removes:
+ *                                    a remove here strips a CORE name from the
+ *                                    sweep without touching this file.
+ *   3. far_cb_custom_tickers       — any signed-in customer, add-only.
+ *
+ * Safe if the DB is unavailable (falls back to CORE_TICKERS).
+ *
+ * roster-store is required lazily: it requires THIS module for the baseline, so
+ * a top-level require would be a cycle.
+ */
+async function getActiveRoster() {
+  let core = [...CORE_TICKERS];
+  try {
+    const resolved = await require('./roster-store').getSymbols('farcb');
+    if (resolved.length) core = resolved;
+  } catch (e) {
+    console.warn('[far-cb-tickers] roster overrides unavailable, using CORE:', e.message);
+  }
+  const custom = await getCustomTickers();
+  return [...new Set([...core, ...custom])];
+}
+
+module.exports = { CORE_TICKERS, getActiveRoster, getCustomTickers };

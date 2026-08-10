@@ -3459,6 +3459,12 @@ export default function EsChartCard({
                 }
               }
               const sizeSpan = cfg.maxSize - cfg.minSize;
+              // Size-response exponent (Curve slider). Guarded against an older
+              // blob that predates the key — an undefined here would make every
+              // radius NaN and silently blank the whole bubble layer.
+              const curveExp = Number.isFinite(cfg.curve) && cfg.curve > 0
+                ? cfg.curve
+                : BUBBLE_CFG_DEFAULT.curve;
               // Brightness gradient: intensity 0..1 → the SMALLEST strike's opacity
               // = max(0.1, 1 - intensity). 0% ⇒ min 1.0 (flat, no gradient); 90% ⇒
               // small strikes ~0.1 so the big walls dominate by contrast.
@@ -3511,9 +3517,18 @@ export default function EsChartCard({
                   if (y == null || y < -20 || y > h + 20) continue;
                   const ratio = Math.min(Math.abs(v) / domainMax, 1);
                   const isHi = wallStrikes.has(cell.strike);
-                  // Size tracks THIS bubble's own |GEX| (√-scaled), so each tube
-                  // tapers as gamma builds/bleeds; walls sit near maxSize + a boost.
-                  let r = cfg.minSize + Math.sqrt(ratio) * sizeSpan;
+                  // Size tracks THIS bubble's own |GEX|, shaped by the Curve
+                  // exponent, so each tube tapers as gamma builds/bleeds; walls
+                  // sit near maxSize + a boost.
+                  //
+                  // curve 0.5 reproduces the old √ (area ∝ |GEX|). The default is
+                  // >1 — EXPONENTIAL — because √ was the wrong direction for this
+                  // read: it lifts every mid-sized strike close to the top wall,
+                  // so a strike at 25% of the session max drew at half the radius
+                  // of the biggest one and the ladder looked flat. With curve 2.2
+                  // that same strike lands at ~3% of the span, and only the true
+                  // top-of-session walls get near maxSize.
+                  let r = cfg.minSize + Math.pow(ratio, curveExp) * sizeSpan;
                   if (isHi) r *= HIGHLIGHT_BOOST;
                   // Cull only degenerate radii. This used to be < 0.5, which
                   // silently dropped every bubble once the Min-size slider went
@@ -4083,7 +4098,13 @@ export default function EsChartCard({
                       label="max" labelWidth={SLIDER_LABEL_W} width="auto"
                       value={bubbleCfg.maxSize} min={BUBBLE_CFG_RANGE.maxSize.min} max={BUBBLE_CFG_RANGE.maxSize.max} step={0.1}
                       format={(v) => v.toFixed(1)} onChange={(v) => updateBubbleCfg({ maxSize: v })}
-                      title="Max bubble radius (px) — the size of the largest wall (√-scaled so area ∝ |GEX|)"
+                      title="Max bubble radius (px) — the size of the largest wall. With Curve above 1 only the top-of-session walls ever reach it"
+                    />
+                    <DockSlider
+                      label="curve" labelWidth={SLIDER_LABEL_W} width="auto"
+                      value={bubbleCfg.curve} min={BUBBLE_CFG_RANGE.curve.min} max={BUBBLE_CFG_RANGE.curve.max} step={0.1}
+                      format={(v) => v.toFixed(1)} onChange={(v) => updateBubbleCfg({ curve: v })}
+                      title="Size curve — exponent on |GEX|. 0.5 = √ (flat, every mid strike stays fat); 1 = linear; higher = exponential, so only the biggest GEX levels grow and everything else collapses to Min"
                     />
                     <DockSlider
                       label="bright" labelWidth={SLIDER_LABEL_W} width="auto"

@@ -14,6 +14,8 @@
 // watch id rides along on the row. Clicking a card flips it over to that
 // contract's recorded option price / net GEX for the session — Price and Net GEX
 // only, single-day lookback, which is all the small tile has room to say.
+// "Flip all" in the toolbar turns every probed card over at once (and back), so
+// the flip state is a SET of card ids, not a single one.
 //
 // Reads GET /proxy/gex-change-top?date=YYYY-MM-DD (defaults to today) and, per
 // flipped card, GET /proxy/gex-change-top-history?id=<watch_id>&date=<date>.
@@ -331,7 +333,11 @@ export default function GexChangeTop() {
   // ── Card flip → the pick's own price/net-GEX line ───────────────────────────
   // Lazy: nothing is fetched until a card is turned over. Keyed by watch_id, so
   // the same contract appearing in several slots shares one fetch.
-  const [flipped, setFlipped] = useState<string | null>(null);
+  //
+  // A SET, not a single id: "Flip all" turns every probed card over at once, so
+  // more than one card can be face-down at a time. Single-card clicks still
+  // toggle just their own card.
+  const [flipped, setFlipped] = useState<Record<string, true>>({});
   const [metric, setMetric] = useState<Metric>("mark");
   const [hist, setHist] = useState<Record<number, PickHist>>({});
   const [histLoading, setHistLoading] = useState<Record<number, boolean>>({});
@@ -372,32 +378,75 @@ export default function GexChangeTop() {
     }
   }, []);
 
-  // The currently open card's watch id — used for the while-open refresh below.
-  const openWatchId = useMemo(() => {
-    if (!flipped) return null;
+  // Every card on the page that CAN be flipped (i.e. was auto-probed), as
+  // [cid, watch_id]. Drives "Flip all" and the while-open refresh below.
+  const flippable = useMemo(() => {
+    const out: { cid: string; wid: number }[] = [];
     for (const hb of slots) {
       for (const r of hb.rows) {
-        if (`${r.symbol}-${r.strike}-${hb.slot}` === flipped) return r.watch_id;
+        if (r.watch_id != null) out.push({ cid: `${r.symbol}-${r.strike}-${hb.slot}`, wid: r.watch_id });
       }
     }
-    return null;
-  }, [flipped, slots]);
+    return out;
+  }, [slots]);
+
+  // Watch ids currently face-down. De-duped: the same contract can appear in
+  // several hourly slots and they share one fetch.
+  const openWatchIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const f of flippable) if (flipped[f.cid]) ids.add(f.wid);
+    return [...ids];
+  }, [flipped, flippable]);
+  // Stable key so the interval below doesn't reset on every render.
+  const openKey = openWatchIds.join(",");
 
   useEffect(() => {
-    if (openWatchId == null) return;
-    const t = setInterval(() => void loadPick(openWatchId, date), 60_000);
+    if (!openWatchIds.length) return;
+    // After a "Flip all" there can be ~65 open cards; re-polling all of them
+    // every minute would be 65 requests/min against the proxy for charts nobody
+    // is reading. Only the hand-opened case (a handful of cards) auto-refreshes;
+    // beyond that the data loaded on open still stands, and Refresh re-pulls it.
+    if (openWatchIds.length > 8) return;
+    const t = setInterval(() => { for (const id of openWatchIds) void loadPick(id, date); }, 60_000);
     return () => clearInterval(t);
-  }, [openWatchId, date, loadPick]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openKey, date, loadPick]);
 
   const toggleFlip = useCallback((cid: string, watchId: number | null) => {
     if (watchId == null) return; // recorded before auto-probe existed — nothing to chart
     setOpened((s) => (s[cid] ? s : { ...s, [cid]: true }));
     setFlipped((cur) => {
-      if (cur === cid) return null;
+      if (cur[cid]) { const n = { ...cur }; delete n[cid]; return n; }
       void loadPick(watchId, date);
-      return cid;
+      return { ...cur, [cid]: true as const };
     });
   }, [date, loadPick]);
+
+  // ── Flip all / flip back ────────────────────────────────────────────────────
+  // Turns every probed card over in one go. The fetches are throttled in small
+  // waves rather than fired as one ~65-request burst: the histories are already
+  // de-duped per watch id, and only ids with nothing cached are requested, so a
+  // second "Flip all" after a flip-back costs nothing.
+  const allFlipped = flippable.length > 0 && flippable.every((f) => flipped[f.cid]);
+  const flipAll = useCallback(() => {
+    if (!flippable.length) return;
+    if (allFlipped) { setFlipped({}); return; }
+    const next: Record<string, true> = {};
+    const opens: Record<string, true> = {};
+    for (const f of flippable) { next[f.cid] = true; opens[f.cid] = true; }
+    setOpened((s) => ({ ...s, ...opens }));
+    setFlipped(next);
+
+    const need = [...new Set(flippable.map((f) => f.wid))].filter((id) => !hist[id]);
+    let i = 0;
+    const wave = () => {
+      const batch = need.slice(i, i + 6);
+      if (!batch.length) return;
+      i += 6;
+      void Promise.all(batch.map((id) => loadPick(id, date))).then(() => { if (i < need.length) wave(); });
+    };
+    wave();
+  }, [flippable, allFlipped, hist, date, loadPick]);
 
   // ── Screenshot the card ─────────────────────────────────────────────────────
   // Capture mechanics live in lib/snapshot.ts. Controls inside a card are marked
@@ -410,7 +459,13 @@ export default function GexChangeTop() {
   const capture = useCallback(async (mode: "download" | "copy") => {
     if (!cardRef.current || shooting) return;
     setShooting(mode);
-    setFlipped(null); // a mid-flip card rasterizes as both faces at once
+    // Flipped cards are NOT reset here any more. html2canvas ignores
+    // backface-visibility, so a face-down card used to rasterize as both faces
+    // stacked (the back face mirrored, because its rotateY(180deg) survives as a
+    // 2D flip) — which is why this used to slam every card face-up before a
+    // shot. lib/snapshot.ts now resolves [data-flip3d] in the clone: the hidden
+    // face is dropped and the visible one is flattened. So the image matches
+    // what is on screen, flipped cards included.
     const fname = `gex-change-top-${date || "today"}.png`;
     try {
       const blob = await captureToBlob(cardRef.current);
@@ -509,7 +564,7 @@ export default function GexChangeTop() {
           type="date"
           value={date}
           onChange={(e) => {
-            setDate(e.target.value); setFlipped(null); setOpened({});
+            setDate(e.target.value); setFlipped({}); setOpened({});
             load(e.target.value || undefined); loadResults(e.target.value || undefined);
           }}
           style={{ ...homeButtonStyle, padding: "6px 10px", fontSize: 13, colorScheme: "dark" as CSSProperties["colorScheme"] }}
@@ -519,6 +574,21 @@ export default function GexChangeTop() {
           style={{ ...homeButtonStyle, padding: "6px 12px", fontSize: 13 }}
         >
           Refresh
+        </button>
+        <button
+          onClick={flipAll}
+          disabled={!flippable.length}
+          title={allFlipped ? "Turn every card back to the pick" : "Turn every probed card over to its price line"}
+          style={{
+            ...homeButtonStyle, padding: "6px 12px", fontSize: 13,
+            opacity: flippable.length ? 1 : 0.5,
+            cursor: flippable.length ? "pointer" : "default",
+            borderColor: allFlipped ? tint(HOME_THEME.cyan, 0.5) : HOME_THEME.border,
+            color: allFlipped ? HOME_THEME.cyan : HOME_THEME.text,
+            background: allFlipped ? tint(HOME_THEME.cyan, 0.12) : homeButtonStyle.background,
+          }}
+        >
+          {allFlipped ? "⟲ Flip back" : `⟳ Flip all${flippable.length ? ` (${flippable.length})` : ""}`}
         </button>
         <span style={{ fontSize: 12, color: HOME_THEME.text }}>click a card for its option price line</span>
         <div style={{ flex: 1 }} />
@@ -659,7 +729,7 @@ export default function GexChangeTop() {
               const cid = `${r.symbol}-${r.strike}-${hb.slot}`;
               const st = cardState[cid];
               const wid = r.watch_id;
-              const isFlipped = flipped === cid;
+              const isFlipped = !!flipped[cid];
               const hasBack = isFlipped || !!opened[cid]; // see `opened` above
               const h = wid != null ? hist[wid] : undefined;
               const pts = h?.points ?? [];
@@ -690,6 +760,13 @@ export default function GexChangeTop() {
                   }}
                 >
                   <div
+                    // Read by lib/snapshot.ts: html2canvas has no 3D pipeline and
+                    // ignores backface-visibility, so without this the capture
+                    // paints BOTH faces on top of each other (the back one
+                    // mirrored). The attribute tells the snapshot clone which
+                    // face is actually showing so it can drop the other one and
+                    // flatten the rotation.
+                    data-flip3d={isFlipped ? "back" : "front"}
                     style={{
                       // MUST be absolute+inset: both faces are absolutely
                       // positioned against THIS box, so if it is left in normal
@@ -707,7 +784,7 @@ export default function GexChangeTop() {
                     }}
                   >
                     {/* ── Front: the recorded pick ─────────────────────────── */}
-                    <div style={faceStyle}>
+                    <div data-face="front" style={faceStyle}>
                       <button
                         data-noshot="1"
                         onClick={(e) => {
@@ -763,24 +840,45 @@ export default function GexChangeTop() {
 
                     {/* ── Back: the auto-probed contract's session line ─────── */}
                     {hasBack && (
-                    <div style={{ ...faceStyle, transform: "rotateY(180deg)", padding: "10px 12px" }}>
+                    <div data-face="back" style={{ ...faceStyle, transform: "rotateY(180deg)", padding: "10px 12px" }}>
                       {/* Header — .op-tcard-h: ticker, strike+side badge, close. */}
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                         <div style={{ minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}>
                           <span style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text }}>{r.symbol}</span>
                           <span style={badgeStyle(side)}>{fmtStrike(r.strike)}{side}</span>
                         </div>
-                        <button
-                          data-noshot="1"
-                          onClick={(e) => { e.stopPropagation(); toggleFlip(cid, wid); }}
-                          title="Back to the pick"
-                          style={{
-                            background: "none", border: "none", cursor: "pointer", padding: "0 2px",
-                            fontSize: 15, lineHeight: 1, color: HOME_THEME.text,
-                          }}
-                        >
-                          ×
-                        </button>
+                        <div style={{ display: "flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
+                          {/* Same capture as the front face — with "Flip all" the
+                              whole board can be face-down, so the 📷 has to be
+                              reachable from this side too. */}
+                          <button
+                            data-noshot="1"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              shotCard((e.currentTarget as HTMLElement).closest("[data-card]") as HTMLElement, cid, `${r.symbol}-${r.strike}-${hb.slot.replace(":", "")}-chart`);
+                            }}
+                            disabled={st === "busy"}
+                            title="Screenshot / copy this card"
+                            style={{
+                              background: "none", border: "none", cursor: st === "busy" ? "default" : "pointer",
+                              padding: "0 2px", fontSize: 12, lineHeight: 1, fontWeight: 700,
+                              color: st && st !== "busy" ? HOME_THEME.green : HOME_THEME.text,
+                            }}
+                          >
+                            {st === "busy" ? "…" : st === "copied" ? "✓" : st === "saved" ? "✓" : "📷"}
+                          </button>
+                          <button
+                            data-noshot="1"
+                            onClick={(e) => { e.stopPropagation(); toggleFlip(cid, wid); }}
+                            title="Back to the pick"
+                            style={{
+                              background: "none", border: "none", cursor: "pointer", padding: "0 2px",
+                              fontSize: 15, lineHeight: 1, color: HOME_THEME.text,
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
                       </div>
                       {/* .op-rowsub — expiry + when this contract was flagged. */}
                       <div style={{ fontFamily: MONO, fontSize: 10, color: HOME_THEME.text, marginTop: 2 }}>

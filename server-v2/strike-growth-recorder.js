@@ -41,6 +41,7 @@
 
 const { computeGexRows } = require('./computation/gex-calculator');
 const { SCANNER_TICKERS, SCANNER_HOT } = require('./scanner-tickers');
+const rosterStore = require('./roster-store');
 
 // Set once by startStrikeGrowthRecorder(port, proxy) — the live TastytradeProxy
 // instance whose shared dxLink connection this recorder reads from.
@@ -308,30 +309,78 @@ async function ensureSchema() {
   // a fresh DB/redeploy records the entire EM list from the start — the roster is
   // bounded (SPECIAL_TICKERS + EQUITY_TICKERS, well under MAX_ACTIVE). Pacing
   // (TICKER_DELAY_MS) + theta-terminal heap are the load levers, not the count.
-  // RECONCILE the watchlist to the curated scanner universe on every boot. This
-  // is the source of truth: to change the scanner/flow universe, edit
-  // scanner-tickers.js and redeploy. MAIN = hot (fast lane); everything else in
-  // the list = active on the 5-min sweep; anything NOT in the list is deactivated
-  // (kept as a row so history survives, but no longer swept).
-  const roster = [...new Set(SCANNER_TICKERS)].map((s) => String(s).toUpperCase());
-  const hotSet = new Set(SCANNER_HOT.map((s) => String(s).toUpperCase()));
+  await reconcileWatchlist(p);
+  _schemaReady = true;
+  watchRosterChanges();
+  return true;
+}
+
+/**
+ * RECONCILE strike_growth_watchlist to the resolved scanner universe.
+ *
+ * Source of truth = server-v2/scanner-tickers.js (the baseline) PLUS the
+ * roster_overrides layer in roster-store.js, which the owner Watchlists page
+ * writes. MAIN = hot (fast lane); everything else in the list = active on the
+ * 5-min sweep; anything NOT in the list is deactivated (the row is kept so its
+ * history survives, but it is no longer swept).
+ *
+ * This used to run only inside ensureSchema(), i.e. once per boot, so an edit
+ * needed a redeploy to reach the sweep. It is now ALSO called on roster-store's
+ * `change` event and on a slow safety timer, so an add/remove lands within one
+ * cycle. Idempotent and cheap — it is an upsert per symbol plus one UPDATE.
+ */
+async function reconcileWatchlist(poolArg = null) {
+  const p = poolArg || getPool();
+  if (!p) return null;
+
+  let roster;
+  let hotSet;
+  try {
+    const r = await rosterStore.getRoster('scanner');
+    roster = r.symbols.length ? r.symbols : [...new Set(SCANNER_TICKERS)].map((s) => String(s).toUpperCase());
+    hotSet = new Set((r.hot.length ? r.hot : SCANNER_HOT).map((s) => String(s).toUpperCase()));
+  } catch (e) {
+    console.warn('[strike-growth] roster resolve failed, reconciling to file baseline:', e.message);
+    roster = [...new Set(SCANNER_TICKERS)].map((s) => String(s).toUpperCase());
+    hotSet = new Set(SCANNER_HOT.map((s) => String(s).toUpperCase()));
+  }
+
   let idx = 0;
   for (const sym of roster) {
-    await p.query(
+    await p.query( // eslint-disable-line no-await-in-loop
       `INSERT INTO strike_growth_watchlist (symbol, active, hot, sort_idx)
        VALUES ($1, TRUE, $2, $3)
        ON CONFLICT (symbol) DO UPDATE SET active = TRUE, hot = EXCLUDED.hot, sort_idx = EXCLUDED.sort_idx`,
       [sym, hotSet.has(sym), idx++]
     );
   }
-  // Deactivate everything not in the curated list (replace-universe semantics).
+  // Deactivate everything not in the resolved list (replace-universe semantics).
   const off = await p.query(
     `UPDATE strike_growth_watchlist SET active = FALSE, hot = FALSE WHERE symbol <> ALL($1)`,
     [roster]
   );
-  _schemaReady = true;
-  console.log(`[strike-growth] schema ready — universe reconciled to scanner list (${roster.length} active, ${hotSet.size} hot, ${off.rowCount} deactivated)`);
-  return true;
+  console.log(`[strike-growth] universe reconciled (${roster.length} active, ${hotSet.size} hot, ${off.rowCount} deactivated)`);
+  return { active: roster.length, hot: hotSet.size, deactivated: off.rowCount };
+}
+
+// React to owner edits immediately, and re-check on a slow timer in case a
+// `change` event was emitted while the DB was briefly unreachable.
+let _reconcileTimer = null;
+let _reconcileQueued = false;
+function watchRosterChanges() {
+  if (_reconcileTimer) return;
+  const run = () => {
+    if (_reconcileQueued) return;
+    _reconcileQueued = true;
+    setTimeout(() => {
+      _reconcileQueued = false;
+      if (!_schemaReady) return;              // ensureSchema will do it anyway
+      reconcileWatchlist().catch((e) => console.warn('[strike-growth] reconcile failed:', e.message));
+    }, 1000); // coalesce a burst of edits from the owner page into one pass
+  };
+  rosterStore.events.on('change', ({ list }) => { if (list === 'scanner') run(); });
+  _reconcileTimer = setInterval(run, 10 * 60 * 1000);
+  if (_reconcileTimer.unref) _reconcileTimer.unref();
 }
 
 // ── Time helpers (ported from eod-gex-recorder) ──────────────────────────────
@@ -712,4 +761,5 @@ module.exports = {
   getPool,
   snapshotTicker,
   rollupDayOverDay,
+  reconcileWatchlist,
 };

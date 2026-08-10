@@ -95,6 +95,11 @@ const {
   ALERT_CATALOG: SIGNAL_ALERT_CATALOG, listAlertSettings: listSignalAlertSettings,
   setAlertEnabled: setSignalAlertEnabled,
 } = require('./signals-engine');
+// Runtime-editable layer over the CB Edge ticker rosters (scanner / em / far-cb).
+// Baselines still live in scanner-tickers.js, em-tickers.js and far-cb-tickers.js;
+// this adds a roster_overrides table on top so the owner Watchlists page can add,
+// remove and move tickers without a redeploy. Serves /proxy/rosters + /proxy/roster.
+const rosterStore = require('./roster-store');
 const { checkProxyAccess } = require('./proxy-auth');
 const { verifyWsRequest } = require('./ws-auth');
 // In-process replacement for app/api/* Next routes. Handles only routes it has
@@ -246,6 +251,20 @@ function sendJson(res, code, obj, req, opts) {
   if (vary.length) headers['Vary'] = vary.join(', ');
   res.writeHead(code, headers);
   res.end(body);
+}
+
+/**
+ * Read + JSON.parse a request body. Resolves `{}` on an empty or malformed
+ * body so a caller can treat "no body" and "bad body" the same way; the 100KB
+ * ceiling matches the ad-hoc readers elsewhere in this file.
+ */
+function readJsonBody(req, limit = 1e5) {
+  return new Promise((resolve) => {
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > limit) req.destroy(); });
+    req.on('end', () => { try { resolve(JSON.parse(body || '{}')); } catch { resolve({}); } });
+    req.on('error', () => resolve({}));
+  });
 }
 
 // Cache-Control for a session-scoped payload: past ET sessions are immutable,
@@ -2646,10 +2665,82 @@ async function main() {
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;
       }
-      // GET /proxy/scanner-tickers — the configured ticker universe (SCANNER_TICKERS),
-      // used to populate the Options Positioning ticker picker on the client.
+      // GET /proxy/scanner-tickers — the configured ticker universe, used to
+      // populate the Options Positioning ticker picker on the client.
+      //
+      // Resolved through roster-store: scanner-tickers.js baseline + the
+      // roster_overrides rows written from the owner Watchlists page. Same
+      // { ok, tickers } shape as before. An explicit SCANNER_TICKERS env still
+      // wins, and a dead Postgres degrades to the file — parseScannerTickers()
+      // handles both, so this can never answer with an empty list.
       if (pathname === '/proxy/scanner-tickers' && req.method === 'GET') {
-        sendJson(res, 200, { ok: true, tickers: parseScannerTickers() });
+        (async () => {
+          try {
+            const { resolveScannerTickers } = require('./scanner-recorder');
+            sendJson(res, 200, { ok: true, tickers: await resolveScannerTickers() });
+          } catch (e) {
+            console.warn('[roster] scanner-tickers resolve failed, serving baseline:', e?.message || e);
+            sendJson(res, 200, { ok: true, tickers: parseScannerTickers(), stale: true });
+          }
+        })();
+        return;
+      }
+
+      // ── Editable rosters (owner Watchlists page) ─────────────────────────
+      //
+      // The CB Edge ticker lists — scanner / em / far-cb — as
+      // "file baseline + roster_overrides", so a ticker can be added, removed
+      // or moved between buckets without a redeploy. See roster-store.js for
+      // the resolution rules and the fail-soft behaviour.
+      //
+      //   GET  /proxy/rosters                → every list, resolved
+      //   GET  /proxy/rosters?list=scanner   → one list
+      //   POST /proxy/roster                 → { list, action, symbol, bucket? }
+      //   POST /proxy/roster-reset           → { list, symbol? }  (revert to file)
+      //
+      // Writes are OWNER-only: proxy-auth gates every non-GET on /proxy/*.
+      if (pathname === '/proxy/rosters' && req.method === 'GET') {
+        (async () => {
+          try {
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const one = (u.searchParams.get('list') || '').trim().toLowerCase();
+            if (one) {
+              sendJson(res, 200, { ok: true, roster: await rosterStore.getRoster(one) });
+              return;
+            }
+            const all = await rosterStore.getAllRosters();
+            sendJson(res, 200, { ok: true, lists: rosterStore.LIST_IDS, rosters: all });
+          } catch (e) { sendJson(res, 400, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      if (pathname === '/proxy/roster' && req.method === 'POST') {
+        (async () => {
+          try {
+            const body = await readJsonBody(req);
+            const out = await rosterStore.applyEdit({
+              list: String(body?.list || '').trim().toLowerCase(),
+              action: String(body?.action || '').trim().toLowerCase(),
+              symbol: body?.symbol,
+              bucket: body?.bucket,
+              note: body?.note,
+            });
+            sendJson(res, out.ok ? 200 : 400, out);
+          } catch (e) { sendJson(res, 400, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      if (pathname === '/proxy/roster-reset' && req.method === 'POST') {
+        (async () => {
+          try {
+            const body = await readJsonBody(req);
+            const out = await rosterStore.resetOverrides({
+              list: String(body?.list || '').trim().toLowerCase(),
+              symbol: body?.symbol || null,
+            });
+            sendJson(res, out.ok ? 200 : 400, out);
+          } catch (e) { sendJson(res, 400, { ok: false, error: String(e?.message || e) }); }
+        })();
         return;
       }
 
@@ -3390,6 +3481,12 @@ async function main() {
 
   server.listen(PORT, () => {
     console.log(`[SERVER-V2] listening on http://localhost:${PORT}  (ws ${PORT}/ws/gex, rest /proxy/*)`);
+    // Resolve the editable rosters BEFORE the recorders take their first pass,
+    // so the synchronous accessors (multi-flow's constructor, the oi-daily idle
+    // check) see baseline+overrides rather than the bare file. Fire-and-forget:
+    // every consumer falls back to its file baseline until this lands, so a slow
+    // or missing DB delays nothing.
+    rosterStore.primeRosters().catch(() => {});
     // In-process MVC auto-collector: writes a snapshot every 5m during RTH.
     require('./mvc-auto-snapshot').startMvcAutoSnapshot(PORT);
     // EOD GEX recorder: upserts one row per ($SPX/SPY/QQQ) at 3:55–4:05 ET.

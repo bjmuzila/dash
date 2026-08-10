@@ -44,6 +44,20 @@
  * hot lane or the full sweep starts lagging, trim OPTVOL first (MAIN is the
  * only group on the fast cadence).
  * ---------------------------------------------------------------------------
+ * 2026-08-10 — RBLX re-added to SHARES. It was in the 2026-07-28 illiquid prune
+ * above; this reverses that one name deliberately. Net: 168 → 169.
+ *
+ * THIS FILE IS NOW THE BASELINE, NOT THE WHOLE ANSWER. server-v2/roster-store.js
+ * layers a `roster_overrides` table on top so tickers can be added, removed or
+ * moved between buckets from the owner Watchlists page (owner.cbedge.net/owner/
+ * watchlists) without a redeploy. Consumers should call
+ * rosterStore.getSymbols('scanner') per sweep rather than destructuring
+ * SCANNER_TICKERS at module load — a const binding here never sees an edit.
+ *
+ * Edit this file for a permanent, reviewed change; use the page for anything you
+ * want live in the next sweep. `Reset to file` on the page drops the overrides
+ * and hands control back here.
+ * ---------------------------------------------------------------------------
  */
 
 // Fast/hot lane — swept every HOT_MINS (2m) for near-live data.
@@ -54,8 +68,8 @@ const MAIN = [
 
 const SHARES = [
   'ASTS', 'AVGO', 'COIN', 'ETHA', 'FIG', 'GME', 'HOOD', 'IBIT', 'NFLX', 'NOK',
-  'PLTR', 'QBTS', 'QUBT', 'RGTI', 'RIVN', 'SLV', 'SMCI', 'SOFI', 'SOUN', 'SOXL',
-  'TQQQ', 'TSLL',
+  'PLTR', 'QBTS', 'QUBT', 'RBLX', 'RGTI', 'RIVN', 'SLV', 'SMCI', 'SOFI', 'SOUN',
+  'SOXL', 'TQQQ', 'TSLL',
 ];
 
 const SPREADS = [

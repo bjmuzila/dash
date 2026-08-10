@@ -5,6 +5,7 @@ import type { CSSProperties, ReactNode, PointerEvent as ReactPointerEvent } from
 import { HOME_THEME, LIGHT_BLUE, REFRESH_GREEN, SOFT_RED, statTileStyle, homeButtonStyle, homeSecondaryButtonStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
+import CopySnapButton from "@/components/shared/CopySnapButton";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test Lab → GEX Map tab.
@@ -1386,7 +1387,15 @@ function MapCard({ m }: { m: MapModel }) {
   }), [win, m.cols.length, m.strikes.length]);
   const kZoom = m.strikes.length / Math.max(1, win.s1 - win.s0 + 1);
 
+  // Screenshot target. The ref sits on a wrapper OUTSIDE <Card> so the PNG keeps
+  // the card's own border/background — capturing the card's children alone would
+  // give a chart floating on a transparent edge. Capture mechanics all live in
+  // lib/snapshot.ts (the single html2canvas call site in the repo); this is only
+  // the button.
+  const snapRef = useRef<HTMLDivElement | null>(null);
+
   return (
+    <div ref={snapRef}>
     <Card variant="budget" padding={16}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", marginBottom: 10, color: HOME_THEME.text, flexWrap: "wrap" }}>
         <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" }}>
@@ -1443,8 +1452,20 @@ function MapCard({ m }: { m: MapModel }) {
             height reflows the card, which reads as the chart jumping the moment
             you touch it. The ⟲ on the chart's own chip is always present, and
             double-click resets too. */}
-        <span style={{ fontSize: 10, color: "#ffffff", opacity: isFullWin(win, m) ? 0.45 : 0.8, flexShrink: 0 }}>
+        <span data-capture-hide style={{ fontSize: 10, color: "#ffffff", opacity: isFullWin(win, m) ? 0.45 : 0.8, flexShrink: 0 }}>
           {isFullWin(win, m) ? "drag an axis to zoom" : "double-click to reset"}
+        </span>
+        {/* Screenshot. [data-capture-hide] so the button does not photograph
+            itself, and it sits last in the header so adding it does not move a
+            single existing control. Whatever is on screen — heatmap or terrain,
+            zoomed or full — is what lands in the PNG, because the capture reads
+            the live DOM. */}
+        <span data-capture-hide style={{ flexShrink: 0 }}>
+          <CopySnapButton
+            targetRef={snapRef}
+            filename="gex-map.png"
+            title="Copy a PNG of the Tape Field to the clipboard"
+          />
         </span>
       </div>
       <FzCtx.Provider value={1}>
@@ -1455,6 +1476,7 @@ function MapCard({ m }: { m: MapModel }) {
         </ViewCtx.Provider>
       </FzCtx.Provider>
     </Card>
+    </div>
   );
 }
 

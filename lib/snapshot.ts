@@ -263,6 +263,49 @@ function applyUniversalCloneFixes(root: HTMLElement) {
       else if (!n.style.lineHeight) n.style.lineHeight = "1.35";
     });
 
+  // ── Gotcha 9: 3D card flips rasterize as BOTH faces at once ───────────────
+  // html2canvas has no 3D pipeline. It ignores `transform-style: preserve-3d`
+  // and `backface-visibility: hidden` outright, but it DOES keep the 2D part of
+  // the matrix — so a back face parked at `rotateY(180deg)` is painted as a
+  // horizontal MIRROR image, stacked on top of the front face. That is the
+  // "screenshot took both sides and put them on one" bug on the scanner's GEX
+  // Change cards: front text and back text overlaid, the back one reversed.
+  //
+  // The DOM alone can't say which face is showing (the rotation lives on the
+  // parent and may be mid-transition), so a flip container opts in by declaring
+  // it: `data-flip3d="front" | "back"` on the rotating element, `data-face` on
+  // each face. Here the hidden face is switched off, the visible one is
+  // flattened, and the rotation is dropped — the capture ends up as a plain 2D
+  // stack of one face, matching what is on screen.
+  //
+  // Style-only, per this function's contract: `display:none` KEEPS the node, so
+  // the live↔clone canvas pairing by index downstream is untouched.
+  root.querySelectorAll<HTMLElement>("[data-flip3d]").forEach((flipper) => {
+    const showBack = flipper.getAttribute("data-flip3d") === "back";
+    flipper.style.transform = "none";
+    flipper.style.transition = "none";
+    flipper.style.transformStyle = "flat";
+    flipper.style.willChange = "auto";
+    flipper.querySelectorAll<HTMLElement>("[data-face]").forEach((face) => {
+      // Only this flipper's own faces — never a nested card's.
+      if (face.closest("[data-flip3d]") !== flipper) return;
+      const isBack = face.getAttribute("data-face") === "back";
+      if (isBack === showBack) {
+        face.style.transform = "none";
+        face.style.backfaceVisibility = "visible";
+        face.style.setProperty("-webkit-backface-visibility", "visible");
+      } else {
+        face.style.display = "none";
+      }
+    });
+  });
+  // `perspective` on the tile is meaningless once the rotation is gone, and
+  // html2canvas mis-handles it on some paths.
+  root.querySelectorAll<HTMLElement>('[style*="perspective"]').forEach((n) => {
+    if (n.style.perspective) n.style.perspective = "none";
+  });
+  if (root.style.perspective) root.style.perspective = "none";
+
   // ── Gotcha 7: backdrop-filter is a no-op in html2canvas ───────────────────
   // A frosted panel is a low-alpha fill that only reads correctly because of the
   // blur behind it. With no blur it looks washed out, so promote the fill to the

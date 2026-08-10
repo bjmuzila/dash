@@ -25,6 +25,7 @@
 const thetaAdapter = require('./proxy-thetadata');
 const { SYMBOLS: EM_SYMBOLS } = require('./em-tickers');
 const { SCANNER_TICKERS } = require('./scanner-tickers');
+const rosterStore = require('./roster-store');
 
 // Indices priced via /index snapshot; everything else via /stock snapshot.
 const INDEX_ROOTS = new Set(['SPX', 'SPXW', 'NDX', 'NDXP', 'VIX', 'RUT', 'XSP', 'DJX']);
@@ -51,6 +52,13 @@ const FLOW_FROM_EM = process.env.FLOW_FROM_EM === '1'
 const FLOW_FROM_SCANNER = String(process.env.FLOW_TICKERS || '').trim().toUpperCase() === 'SCANNER';
 const EM_FLOW_EXCLUDE = new Set(['ESM', 'NQM', 'ESU', 'NQU']);
 
+/** Whether the flow roots follow one of the editable rosters (and which). */
+function flowRosterList() {
+  if (FLOW_FROM_SCANNER) return 'scanner';
+  if (FLOW_FROM_EM) return 'em';
+  return null;
+}
+
 function parseFlowTickers() {
   if (FLOW_FROM_SCANNER) {
     // ~100 roots — per-contract subscribing that many is a JVM sub meltdown, so
@@ -59,7 +67,11 @@ function parseFlowTickers() {
       console.error('[MULTIFLOW] FLOW_TICKERS=SCANNER set but FLOW_BULK_STREAM!=1 — refusing to per-contract-subscribe ~100 roots. Set FLOW_BULK_STREAM=1. Staying SPX-only.');
       return [];
     }
-    return SCANNER_TICKERS.filter((t) => !EM_FLOW_EXCLUDE.has(t));
+    // Baseline + owner overrides. getSymbolsSync falls back to the file until
+    // roster-store's first async resolve lands (primeRosters() at boot), so the
+    // constructor is never blocked and never gets an empty list.
+    const live = rosterStore.getSymbolsSync('scanner');
+    return (live.length ? live : SCANNER_TICKERS).filter((t) => !EM_FLOW_EXCLUDE.has(t));
   }
   if (FLOW_FROM_EM) {
     // The EM roster is ~200 roots. Per-contract subscribing that many would be
@@ -69,7 +81,8 @@ function parseFlowTickers() {
       console.error('[MULTIFLOW] FLOW_FROM_EM set but FLOW_BULK_STREAM!=1 — refusing to per-contract-subscribe the full EM roster. Set FLOW_BULK_STREAM=1. Staying SPX-only.');
       return [];
     }
-    return EM_SYMBOLS.filter((t) => !EM_FLOW_EXCLUDE.has(t));
+    const live = rosterStore.getSymbolsSync('em');
+    return (live.length ? live : EM_SYMBOLS).filter((t) => !EM_FLOW_EXCLUDE.has(t));
   }
   return String(process.env.FLOW_TICKERS || '')
     .split(/[,\s]+/)
@@ -190,10 +203,59 @@ class MultiFlowManager {
     }
     this.refreshTimer = setInterval(() => this._refresh(), FLOW_WINDOW_REFRESH_MS);
     if (this.refreshTimer.unref) this.refreshTimer.unref();
+
+    // Owner edits shouldn't wait out FLOW_WINDOW_REFRESH_MS (5m by default) —
+    // subscribe the new roots as soon as the roster changes.
+    const list = flowRosterList();
+    if (list) {
+      this._rosterListener = (evt) => {
+        if (evt?.list !== list) return;
+        const { added } = this._syncRoots();
+        for (const root of added) {
+          this._subscribeRoot(root).catch((e) => console.warn(`[MULTIFLOW] late subscribe ${root} failed: ${e?.message || e}`));
+        }
+      };
+      rosterStore.events.on('change', this._rosterListener);
+    }
+  }
+
+  /**
+   * Pull the root list again when the flow tape follows an editable roster
+   * (FLOW_TICKERS=SCANNER or =EM). Adds start streaming on this pass; removals
+   * are dropped from the refresh loop and, in bulk mode, from the firehose
+   * keep-list if the stream client supports it.
+   *
+   * An explicit FLOW_TICKERS=A,B,C list is left alone — that is an ops override
+   * and the owner page has no business rewriting it.
+   */
+  _syncRoots() {
+    const list = flowRosterList();
+    if (!list) return { added: [], removed: [] };
+    const want = new Set(parseFlowTickers().filter((t) => t !== 'SPX' && t !== 'SPXW'));
+    if (!want.size) return { added: [], removed: [] };   // never empty the tape on a bad read
+    const have = new Set(this.tickers);
+    const added = [...want].filter((t) => !have.has(t));
+    const removed = [...have].filter((t) => !want.has(t));
+    if (!added.length && !removed.length) return { added, removed };
+
+    for (const root of removed) {
+      this.state.delete(root);
+      try {
+        const thetaR = thetaAdapter.thetaRoot(root);
+        if (FLOW_BULK_STREAM && typeof this.thetaStream?.removeBulkRoot === 'function') {
+          this.thetaStream.removeBulkRoot(thetaR);
+        }
+        this.thetaStream?.rootSpot?.delete?.(thetaR);
+      } catch { /* best effort — dropping it from this.tickers is what matters */ }
+    }
+    this.tickers = [...want];
+    console.log(`[MULTIFLOW] roster ${list} changed — +${added.length} (${added.join(', ') || '—'}) / -${removed.length} (${removed.join(', ') || '—'})`);
+    return { added, removed };
   }
 
   /** Re-pick each root's window so the tape tracks spot as it drifts. */
   async _refresh() {
+    this._syncRoots();
     for (const root of this.tickers) {
       await this._subscribeRoot(root).catch(() => {}); // eslint-disable-line no-await-in-loop
     }
@@ -201,8 +263,12 @@ class MultiFlowManager {
 
   stop() {
     if (this.refreshTimer) { clearInterval(this.refreshTimer); this.refreshTimer = null; }
+    if (this._rosterListener) {
+      rosterStore.events.off('change', this._rosterListener);
+      this._rosterListener = null;
+    }
     this.started = false;
   }
 }
 
-module.exports = { MultiFlowManager, parseFlowTickers };
+module.exports = { MultiFlowManager, parseFlowTickers, flowRosterList };

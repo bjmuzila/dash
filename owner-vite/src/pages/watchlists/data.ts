@@ -1,13 +1,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // owner-vite/src/pages/watchlists/data.ts
 //
-// STATIC REFERENCE SNAPSHOT — deliberately not wired to any API.
-// Captured 2026-07-28. These are copies for eyeballing, not a source of truth.
+// STATIC REFERENCE SNAPSHOT. Captured 2026-07-28 (scanner refreshed 2026-08-10).
 //
-//   owner: "mine"       -> mirrors a file in server-v2/. If that file changes,
-//                          this page goes stale and nothing will warn you.
+//   owner: "mine"       -> mirrors a file in server-v2/. As of 2026-08-10 these
+//                          three lists are served LIVE from GET /proxy/rosters
+//                          (file baseline + roster_overrides) and are editable
+//                          on the page. The copies here are only the OFFLINE
+//                          FALLBACK, rendered read-only when that endpoint is
+//                          unreachable — they will drift, and that is fine.
+//                          They also drive the tab labels and ordering.
 //   owner: "tastytrade" -> exported from the tastytrade platform. Tastytrade
-//                          rebuilds several of these daily.
+//                          rebuilds several of these daily. Still fully static:
+//                          nothing on our side owns or can edit them.
 //
 // Two lists were transcribed from screenshots rather than a CSV export and are
 // marked partial: the row list was cut off at the bottom of the capture. Export
@@ -56,8 +61,8 @@ export const WATCHLISTS: WatchList[] = [
         note: "Single-name shares bucket",
         symbols: [
           "ASTS", "AVGO", "COIN", "ETHA", "FIG", "GME", "HOOD", "IBIT", "NFLX", "NOK",
-          "PLTR", "QBTS", "QUBT", "RGTI", "RIVN", "SLV", "SMCI", "SOFI", "SOUN", "SOXL",
-          "TQQQ", "TSLL",
+          "PLTR", "QBTS", "QUBT", "RBLX", "RGTI", "RIVN", "SLV", "SMCI", "SOFI", "SOUN",
+          "SOXL", "TQQQ", "TSLL",
         ],
       },
       {

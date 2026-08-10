@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { HOME_THEME, LIGHT_BLUE, ES_CANDLE_UP, ES_CANDLE_DOWN, homeButtonStyle, statTileStyle } from "@/components/shared/homeTheme";
 import { Card } from "@/components/shared/PageCard";
@@ -128,6 +128,130 @@ const fmtDate = (ymd: string) => {
 
 // ── Chart ────────────────────────────────────────────────────────────────────
 
+
+// ── Zoom / pan ───────────────────────────────────────────────────────────────
+
+/** Never zoom tighter than this many buckets — past it there is nothing to read. */
+const MIN_SPAN = 8;
+/** One wheel notch. 1.15 is roughly lightweight-charts' feel. */
+const ZOOM_STEP = 1.15;
+
+/**
+ * Scroll-to-zoom / drag-to-pan over an index window, matching the ES Candles
+ * chart's controls: wheel zooms about the cursor, drag pans, double-click
+ * resets to the full range.
+ *
+ * The window is an index range, not a pixel transform. Zooming a transform would
+ * scale the candle bodies and the axis text along with the data; here only the
+ * mapping from index to x changes, so bars keep their width and the labels stay
+ * legible at every zoom level.
+ *
+ * The wheel listener is attached MANUALLY with { passive: false }. React's
+ * onWheel is registered passively, and a passive listener cannot
+ * preventDefault() — so the page would scroll underneath the chart on every
+ * notch. This is the one place a raw addEventListener is the correct tool.
+ */
+function useZoomPan(total: number) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [win, setWin] = useState<{ from: number; to: number } | null>(null);
+  const winRef = useRef<{ from: number; to: number } | null>(null);
+  useEffect(() => { winRef.current = win; }, [win]);
+
+  const from = win ? win.from : 0;
+  const to = win ? win.to : total;
+
+  // Clamp back to the full range when the underlying series shrinks (symbol or
+  // lookback change) — a stale window would leave the chart scrolled off the end.
+  useEffect(() => {
+    setWin((prev) => (prev && prev.to <= total ? prev : null));
+  }, [total]);
+
+  const fracOf = useCallback((clientX: number) => {
+    const el = svgRef.current;
+    if (!el) return 0.5;
+    const box = el.getBoundingClientRect();
+    const plotW = Math.max(1, box.width - PAD_L - PAD_R);
+    return Math.min(1, Math.max(0, (clientX - box.left - PAD_L) / plotW));
+  }, []);
+
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const frac = fracOf(e.clientX);
+      setWin((prev) => {
+        const cur = prev ?? { from: 0, to: total };
+        const curSpan = cur.to - cur.from;
+        const next = Math.max(MIN_SPAN, Math.min(total,
+          Math.round(curSpan * (e.deltaY > 0 ? ZOOM_STEP : 1 / ZOOM_STEP))));
+        if (next === curSpan) return prev;
+        if (next >= total) return null;
+        // Keep the bucket under the cursor pinned — zooming toward the pointer
+        // is the whole reason to zoom rather than re-select a lookback.
+        const anchor = cur.from + frac * curSpan;
+        const f = Math.max(0, Math.min(total - next, Math.round(anchor - frac * next)));
+        return { from: f, to: f + next };
+      });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [total, fracOf]);
+
+  const drag = useRef<{ x: number; from: number; to: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  const onMouseDown = useCallback((e: ReactMouseEvent<SVGSVGElement>) => {
+    const cur = winRef.current ?? { from: 0, to: total };
+    drag.current = { x: e.clientX, from: cur.from, to: cur.to };
+    setDragging(true);
+  }, [total]);
+
+  /** Returns true when the move was consumed as a pan. */
+  const onDragMove = useCallback((e: ReactMouseEvent<SVGSVGElement>) => {
+    const d = drag.current;
+    const el = svgRef.current;
+    if (!d || !el) return false;
+    const box = el.getBoundingClientRect();
+    const plotW = Math.max(1, box.width - PAD_L - PAD_R);
+    const span = d.to - d.from;
+    if (span >= total) return true;
+    const shift = Math.round(-((e.clientX - d.x) / plotW) * span);
+    const f = Math.max(0, Math.min(total - span, d.from + shift));
+    setWin({ from: f, to: f + span });
+    return true;
+  }, [total]);
+
+  const endDrag = useCallback(() => { drag.current = null; setDragging(false); }, []);
+  const reset = useCallback(() => setWin(null), []);
+
+  return { svgRef, from, to, onMouseDown, onDragMove, endDrag, reset, dragging, zoomed: win != null };
+}
+
+/** The hint strip under a chart, matching the ES Candles wording. */
+function ZoomHint({ zoomed, onReset }: { zoomed: boolean; onReset: () => void }) {
+  return (
+    <span style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.4 }}>
+      scroll = zoom · drag = pan · dbl-click = reset
+      {zoomed && (
+        <>
+          {" · "}
+          <button
+            type="button"
+            onClick={onReset}
+            style={{
+              background: "none", border: "none", padding: 0,
+              color: HOME_THEME.orange, fontSize: 12, cursor: "pointer", fontWeight: 700,
+            }}
+          >
+            showing a zoomed range — reset
+          </button>
+        </>
+      )}
+    </span>
+  );
+}
+
 const PRICE_H = 300;
 const HIST_H = 190;
 const PAD_L = 8;
@@ -138,6 +262,8 @@ function PremDiffChart({ rows, band, symbol }: { rows: Bar[]; band: number; symb
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(1100);
   const [hover, setHover] = useState<number | null>(null);
+  const zp = useZoomPan(rows.length);
+  const clipId = useId();
 
   // Width from the container, not a fixed viewBox: the card is fluid and a
   // stretched viewBox would smear the 1px hairlines.
@@ -152,15 +278,21 @@ function PremDiffChart({ rows, band, symbol }: { rows: Bar[]; band: number; symb
     return () => ro.disconnect();
   }, []);
 
+  // Both scales are computed over the VISIBLE window, not the whole series.
+  // Zooming into a quiet fortnight should open that fortnight up, which it only
+  // does if the axes follow — a fixed scale would just magnify the x-axis and
+  // leave every bar a hairline against the year's biggest day.
   const geom = useMemo(() => {
-    const n = rows.length;
+    const { from, to } = zp;
+    const n = Math.max(1, to - from);
     const innerW = Math.max(120, width - PAD_L - PAD_R);
-    const step = n > 0 ? innerW / n : 1;
+    const step = innerW / n;
     const barW = Math.max(1, Math.min(9, step * 0.62));
+    const visible = rows.slice(from, to);
 
     let pHi = -Infinity;
     let pLo = Infinity;
-    for (const r of rows) {
+    for (const r of visible) {
       const hi = r.high ?? r.close ?? r.spot;
       const lo = r.low ?? r.close ?? r.spot;
       if (Number.isFinite(hi)) pHi = Math.max(pHi, hi as number);
@@ -171,27 +303,30 @@ function PremDiffChart({ rows, band, symbol }: { rows: Bar[]; band: number; symb
     pHi += padP; pLo -= padP;
 
     let mag = 0;
-    for (const r of rows) {
+    for (const r of visible) {
       mag = Math.max(mag, Math.abs(r.front?.diff ?? 0), Math.abs(r.back?.diff ?? 0));
     }
     if (!(mag > 0)) mag = 1;
 
-    const x = (i: number) => PAD_L + i * step + step / 2;
+    // `i` is the ABSOLUTE row index; marks outside the window land off-plot and
+    // are cut by the clip rect rather than being filtered out of the render.
+    const x = (i: number) => PAD_L + (i - from) * step + step / 2;
     const yP = (v: number) => ((pHi - v) / (pHi - pLo)) * PRICE_H;
     const zero = PRICE_H + GAP + HIST_H / 2;
     const yH = (v: number) => zero - (v / mag) * (HIST_H / 2 - 6);
 
-    return { step, barW, pHi, pLo, mag, x, yP, yH, zero, innerW };
-  }, [rows, width]);
+    return { step, barW, pHi, pLo, mag, x, yP, yH, zero, innerW, from, to };
+  }, [rows, width, zp.from, zp.to]);
 
   const totalH = PRICE_H + GAP + HIST_H + 22;
 
   const onMove = useCallback((e: ReactMouseEvent<SVGSVGElement>) => {
+    if (zp.onDragMove(e)) return;   // panning: the crosshair would fight the drag
     const box = e.currentTarget.getBoundingClientRect();
     const px = e.clientX - box.left;
-    const i = Math.floor((px - PAD_L) / geom.step);
-    setHover(i >= 0 && i < rows.length ? i : null);
-  }, [geom.step, rows.length]);
+    const i = geom.from + Math.floor((px - PAD_L) / geom.step);
+    setHover(i >= geom.from && i < geom.to && i < rows.length ? i : null);
+  }, [geom.step, geom.from, geom.to, rows.length, zp]);
 
   if (!rows.length) {
     return (
@@ -210,17 +345,27 @@ function PremDiffChart({ rows, band, symbol }: { rows: Bar[]; band: number; symb
   const histTicks = [geom.mag, geom.mag / 2, 0, -geom.mag / 2, -geom.mag];
 
   // x labels: about one per 90px, snapped to actual sessions.
-  const labelEvery = Math.max(1, Math.round(rows.length / Math.max(2, Math.floor(geom.innerW / 90))));
+  const visibleCount = geom.to - geom.from;
+  const labelEvery = Math.max(1, Math.round(visibleCount / Math.max(2, Math.floor(geom.innerW / 90))));
 
   return (
     <div ref={wrapRef} style={{ width: "100%" }}>
       <svg
+        ref={zp.svgRef}
         width={width}
         height={totalH}
         onMouseMove={onMove}
-        onMouseLeave={() => setHover(null)}
-        style={{ display: "block", cursor: "crosshair" }}
+        onMouseDown={zp.onMouseDown}
+        onMouseUp={zp.endDrag}
+        onDoubleClick={zp.reset}
+        onMouseLeave={() => { zp.endDrag(); setHover(null); }}
+        style={{ display: "block", cursor: zp.dragging ? "grabbing" : "crosshair", userSelect: "none" }}
       >
+        <defs>
+          <clipPath id={clipId}>
+            <rect x={PAD_L} y={0} width={Math.max(0, width - PAD_L - PAD_R)} height={PRICE_H + GAP + HIST_H} />
+          </clipPath>
+        </defs>
         {/* ── price pane ── */}
         {priceTicks.map((v, i) => (
           <g key={`pt${i}`}>
@@ -233,7 +378,9 @@ function PremDiffChart({ rows, band, symbol }: { rows: Bar[]; band: number; symb
 
         {/* Candlesticks in the ES Candles pair (ES_CANDLE_UP / ES_CANDLE_DOWN,
             imported rather than re-typed so the two charts cannot drift). Wick
-            first, body over it. */}
+            first, body over it. Clipped so a zoomed window does not draw over
+            the price axis. */}
+        <g clipPath={`url(#${clipId})`}>
         {rows.map((r, i) => {
           const hi = r.high ?? r.close ?? r.spot;
           const lo = r.low ?? r.close ?? r.spot;
@@ -261,6 +408,7 @@ function PremDiffChart({ rows, band, symbol }: { rows: Bar[]; band: number; symb
             </g>
           );
         })}
+        </g>
 
         {/* ── histogram pane ── */}
         {histTicks.map((v, i) => (
@@ -276,6 +424,7 @@ function PremDiffChart({ rows, band, symbol }: { rows: Bar[]; band: number; symb
           </g>
         ))}
 
+        <g clipPath={`url(#${clipId})`}>
         {rows.map((r, i) => {
           const cx = geom.x(i);
           const dim = hover == null || hover === i ? 1 : 0.5;
@@ -308,9 +457,10 @@ function PremDiffChart({ rows, band, symbol }: { rows: Bar[]; band: number; symb
           }
           return <g key={`h${r.date}`}>{bars}</g>;
         })}
+        </g>
 
         {/* ── x labels ── */}
-        {rows.map((r, i) => (i % labelEvery === 0 ? (
+        {rows.map((r, i) => (i >= geom.from && i < geom.to && (i - geom.from) % labelEvery === 0 ? (
           <text
             key={`x${r.date}`} x={geom.x(i)} y={totalH - 5}
             fill={HOME_THEME.text} opacity={0.45} fontSize={11} textAnchor="middle"
@@ -328,7 +478,10 @@ function PremDiffChart({ rows, band, symbol }: { rows: Bar[]; band: number; symb
         )}
       </svg>
 
-      <HoverReadout bar={hovered} band={band} symbol={symbol} />
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap", alignItems: "baseline" }}>
+        <HoverReadout bar={hovered} band={band} symbol={symbol} />
+        <ZoomHint zoomed={zp.zoomed} onReset={zp.reset} />
+      </div>
     </div>
   );
 }
@@ -438,6 +591,8 @@ function IntradayChart({
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(1100);
   const [hover, setHover] = useState<number | null>(null);
+  const zp = useZoomPan(RTH_MINUTES);
+  const clipId = useId();
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -489,13 +644,19 @@ function IntradayChart({
     };
   }), [start, rowAt, candleAt, view]);
 
+  // Scales follow the visible window, same as the daily chart: zooming into the
+  // last twenty minutes should open those twenty minutes up rather than leaving
+  // every bar a hairline against the 11:29 spike.
   const geom = useMemo(() => {
+    const { from, to } = zp;
+    const n = Math.max(1, to - from);
     const innerW = Math.max(120, width - PAD_L - PAD_R);
-    const step = innerW / RTH_MINUTES;
-    const barW = Math.max(1, Math.min(6, step * 0.7));
+    const step = innerW / n;
+    const barW = Math.max(1, Math.min(9, step * 0.7));
+    const visible = slots.slice(from, to);
 
     let pHi = -Infinity; let pLo = Infinity;
-    for (const p of slots) {
+    for (const p of visible) {
       if (p.high != null && p.high > 0) pHi = Math.max(pHi, p.high);
       if (p.low != null && p.low > 0) pLo = Math.min(pLo, p.low);
     }
@@ -504,26 +665,27 @@ function IntradayChart({
     pHi += padP; pLo -= padP;
 
     let mag = 0;
-    for (const p of slots) {
+    for (const p of visible) {
       if (p.value != null) mag = Math.max(mag, Math.abs(p.value));
       if (p.backValue != null) mag = Math.max(mag, Math.abs(p.backValue));
     }
     if (!(mag > 0)) mag = 1;
 
-    const x = (i: number) => PAD_L + i * step + step / 2;
+    const x = (i: number) => PAD_L + (i - from) * step + step / 2;
     const yP = (v: number) => ((pHi - v) / (pHi - pLo)) * PRICE_H;
     const zero = PRICE_H + GAP + HIST_H / 2;
     const yH = (v: number) => zero - (v / mag) * (HIST_H / 2 - 6);
-    return { step, barW, pHi, pLo, mag, x, yP, yH, zero, innerW };
-  }, [slots, width]);
+    return { step, barW, pHi, pLo, mag, x, yP, yH, zero, innerW, from, to };
+  }, [slots, width, zp.from, zp.to]);
 
   const totalH = PRICE_H + GAP + HIST_H + 22;
 
   const onMove = useCallback((e: ReactMouseEvent<SVGSVGElement>) => {
+    if (zp.onDragMove(e)) return;
     const box = e.currentTarget.getBoundingClientRect();
-    const i = Math.floor((e.clientX - box.left - PAD_L) / geom.step);
-    setHover(i >= 0 && i < RTH_MINUTES ? i : null);
-  }, [geom.step]);
+    const i = geom.from + Math.floor((e.clientX - box.left - PAD_L) / geom.step);
+    setHover(i >= geom.from && i < geom.to ? i : null);
+  }, [geom.step, geom.from, geom.to, zp]);
 
   if (!Number.isFinite(start)) {
     return (
@@ -540,10 +702,14 @@ function IntradayChart({
   // Half-hourly gridlines and labels — a fixed session axis should read like a
   // clock, not like "every Nth sample", so the ticks are on the half hour rather
   // than spaced to fit whatever the data length happens to be.
-  const tickEvery = geom.step * 30 < 34 ? 60 : 30;
+  // Step down through 30 / 15 / 5 / 1-minute gridlines as the window tightens,
+  // so a zoomed chart gains detail on the axis instead of showing two labels.
+  const tickEvery = geom.step * 5 > 46 ? 5
+    : geom.step * 15 > 46 ? 15
+      : geom.step * 30 > 34 ? 30 : 60;
   const ticks: number[] = [];
-  for (let i = 0; i <= RTH_MINUTES; i += tickEvery) ticks.push(i);
-  if (ticks[ticks.length - 1] !== RTH_MINUTES) ticks.push(RTH_MINUTES);
+  const firstTick = Math.ceil(geom.from / tickEvery) * tickEvery;
+  for (let i = firstTick; i <= Math.min(RTH_MINUTES, geom.to); i += tickEvery) ticks.push(i);
 
   // The cumulative line stops at the last minute that has data. Carrying it flat
   // to 16:00 would draw a session that finished quiet when really it has not
@@ -561,10 +727,20 @@ function IntradayChart({
   return (
     <div ref={wrapRef} style={{ width: "100%" }}>
       <svg
+        ref={zp.svgRef}
         width={width} height={totalH}
-        onMouseMove={onMove} onMouseLeave={() => setHover(null)}
-        style={{ display: "block", cursor: "crosshair" }}
+        onMouseMove={onMove}
+        onMouseDown={zp.onMouseDown}
+        onMouseUp={zp.endDrag}
+        onDoubleClick={zp.reset}
+        onMouseLeave={() => { zp.endDrag(); setHover(null); }}
+        style={{ display: "block", cursor: zp.dragging ? "grabbing" : "crosshair", userSelect: "none" }}
       >
+        <defs>
+          <clipPath id={clipId}>
+            <rect x={PAD_L} y={0} width={Math.max(0, width - PAD_L - PAD_R)} height={PRICE_H + GAP + HIST_H} />
+          </clipPath>
+        </defs>
         {priceTicks.map((v, i) => (
           <g key={`ipt${i}`}>
             <line x1={PAD_L} x2={width - PAD_R} y1={geom.yP(v)} y2={geom.yP(v)} stroke={HOME_THEME.border} strokeWidth={1} />
@@ -585,6 +761,7 @@ function IntradayChart({
           />
         ))}
 
+        <g clipPath={`url(#${clipId})`}>
         {slots.map((p, i) => {
           if (p.close == null || p.open == null || p.high == null || p.low == null) return null;
           const cx = geom.x(i);
@@ -602,6 +779,7 @@ function IntradayChart({
             </g>
           );
         })}
+        </g>
 
         {histTicks.map((v, i) => (
           <g key={`iht${i}`}>
@@ -615,6 +793,7 @@ function IntradayChart({
           </g>
         ))}
 
+        <g clipPath={`url(#${clipId})`}>
         {view === "cumulative" ? (
           drawn.length > 1 ? (
             <>
@@ -655,6 +834,7 @@ function IntradayChart({
             );
           })
         )}
+        </g>
 
         {ticks.map((i) => (
           <text
@@ -700,6 +880,9 @@ function IntradayChart({
             Hover a minute for the {symbol} ±{band}% breakdown. Axis is the full 09:30–16:00 session.
           </span>
         )}
+        <span style={{ marginLeft: "auto" }}>
+          <ZoomHint zoomed={zp.zoomed} onReset={zp.reset} />
+        </span>
       </div>
     </div>
   );

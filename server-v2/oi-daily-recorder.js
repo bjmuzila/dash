@@ -49,6 +49,7 @@
 
 const { fetchExpirations, fetchChainFull } = require('./proxy-tastytrade');
 const { SCANNER_TICKERS } = require('./scanner-tickers');
+const rosterStore = require('./roster-store');
 
 // ── Tunables (env-overridable) ───────────────────────────────────────────────
 
@@ -66,10 +67,32 @@ const TICKER_DELAY_MS = Number(process.env.OI_DAILY_DELAY_MS || 250);
 // lets a future "OI trend" view read history without a schema change.
 const RETAIN_DAYS = Math.max(2, Number(process.env.OI_DAILY_RETAIN_DAYS || 45));
 // Roster. Defaults to the full scanner watchlist; override with a CSV to narrow.
-const SYMBOLS = (process.env.OI_DAILY_SYMBOLS
-  ? String(process.env.OI_DAILY_SYMBOLS).split(',')
-  : SCANNER_TICKERS
-).map((s) => String(s).trim().toUpperCase()).filter(Boolean);
+//
+// This USED to be a module-load const, which froze the roster for the life of
+// the process — a ticker added on the owner Watchlists page would show up in the
+// chain picker and then have no ΔOI, because this sweep never knew about it.
+// Resolve per sweep instead (roster-store caches, so this is not 180 queries).
+const ENV_SYMBOLS = process.env.OI_DAILY_SYMBOLS
+  ? String(process.env.OI_DAILY_SYMBOLS).split(',').map((s) => String(s).trim().toUpperCase()).filter(Boolean)
+  : null;
+
+async function resolveSymbols() {
+  if (ENV_SYMBOLS && ENV_SYMBOLS.length) return ENV_SYMBOLS;
+  try {
+    const live = await rosterStore.getSymbols('scanner');
+    if (live.length) return live;
+  } catch (e) {
+    console.warn('[oi-daily] roster resolve failed, using baseline:', e.message);
+  }
+  return SCANNER_TICKERS.map((s) => String(s).trim().toUpperCase()).filter(Boolean);
+}
+
+/** Synchronous best-effort view, for log lines and the idle check only. */
+function symbolsSync() {
+  if (ENV_SYMBOLS && ENV_SYMBOLS.length) return ENV_SYMBOLS;
+  const live = rosterStore.getSymbolsSync('scanner');
+  return live.length ? live : SCANNER_TICKERS.map((s) => String(s).trim().toUpperCase()).filter(Boolean);
+}
 
 // ── Time helpers ─────────────────────────────────────────────────────────────
 
@@ -276,7 +299,7 @@ let _lastRunDate = null;
  * Full watchlist sweep. Returns a summary so the manual-fire route can echo it.
  * `symbols` narrows the roster (used by the manual route's ?symbol= param).
  */
-async function runSweep({ symbols = SYMBOLS, date = null } = {}) {
+async function runSweep({ symbols = null, date = null } = {}) {
   // Claim BEFORE the first await. ensureSchema() does a real round trip on
   // first call (and again after a pool error resets _schemaReady), so a
   // check-then-await-then-set guard leaves a window where a double-clicked
@@ -285,6 +308,9 @@ async function runSweep({ symbols = SYMBOLS, date = null } = {}) {
   if (_running) return { ok: false, error: 'sweep already running' };
   _running = true;
   if (!(await ensureSchema())) { _running = false; return { ok: false, error: 'no DB' }; }
+  // null = "the whole roster", resolved now (baseline + owner overrides). An
+  // explicit array from the manual route still narrows it.
+  const roster = (symbols && symbols.length) ? symbols : await resolveSymbols();
   const day = date || todayYmdET();
   const started = Date.now();
   let tickersOk = 0;
@@ -293,7 +319,7 @@ async function runSweep({ symbols = SYMBOLS, date = null } = {}) {
   const failures = [];
 
   try {
-    for (const symbol of symbols) {
+    for (const symbol of roster) {
       let wroteAny = false;
       try {
         // eslint-disable-next-line no-await-in-loop
@@ -454,7 +480,7 @@ function startOiDailyRecorder() {
     console.log('[oi-daily] recorder disabled (OI_DAILY_RECORDER=0)');
     return;
   }
-  if (!SYMBOLS.length) return;
+  if (!symbolsSync().length) return;
 
   const check = () => {
     try {
@@ -497,8 +523,8 @@ function startOiDailyRecorder() {
   const hh = String(Math.floor(RUN_AT_MIN / 60)).padStart(2, '0');
   const mm = String(RUN_AT_MIN % 60).padStart(2, '0');
   console.log(
-    `[oi-daily] recorder started — ${SYMBOLS.length} symbols × ${EXPIRY_DEPTH} expiries, ` +
-    `once daily at ${hh}:${mm} ET, ${RETAIN_DAYS}d retention`,
+    `[oi-daily] recorder started — ${symbolsSync().length} symbols × ${EXPIRY_DEPTH} expiries, ` +
+    `once daily at ${hh}:${mm} ET, ${RETAIN_DAYS}d retention (roster re-resolved each sweep)`,
   );
 }
 
