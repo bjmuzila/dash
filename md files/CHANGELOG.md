@@ -1,5 +1,56 @@
 # Changelog
 
+## 2026-08-10 - SPX flow: TimeAndSale now covers the whole active expiry, and a stall degrades instead of blacking out
+
+`server-v2/proxy-tastytrade.js`.
+
+The SPX option tape had long dead stretches on every flow-driven surface
+(/flow Net Drift sat flat for half-hours; per-strike Flow GEX was a step
+function). Two causes in the dxLink TimeAndSale path.
+
+- **The tape was narrowed TWICE, and the two guards fought each other.**
+  `_syncTimeSaleWindow` applied `FLOW_TS_WINDOW_PCT` (±2%) INSIDE
+  `_activeContracts()`'s own `STRIKE_WINDOW_PCT` (±8%) window. At SPX 7752 that
+  inner band is ±155pts ≈ 62 strikes ≈ **124 contracts against a 120 cap**, so
+  `.slice()` clipped the edge and strikes flapped in and out of the
+  subscription as spot drifted. Every flap is a hole in the tape.
+  Measured, same spot: **old = 120 contracts, 7605-7900. New = 498 contracts,
+  7130-8370.**
+- **The band is now opt-in** (`FLOW_TS_WINDOW_PCT` defaults to 0 = "no band
+  beyond `_activeContracts()`"), and `FLOW_TS_MAX` goes 120 -> 600 as a runaway
+  guard rather than the everyday limiter. It now logs when it bites instead of
+  silently clipping. Set `FLOW_TS_WINDOW_PCT=0.02` to restore the old behavior
+  live, no deploy.
+- **Widening is cheap**, contrary to the "1-vCPU" note that comment carried:
+  dxLink ALREADY streams Quote/Greeks/Summary/Trade for every contract in the
+  ±8% band, so this adds an event type to symbols already on the wire, not a
+  new tier of symbols. A subscription only costs CPU when the strike PRINTS,
+  and far-OTM 0DTE strikes barely trade.
+- **A TimeAndSale stall no longer silences the fallback too.** The Trade branch
+  suppressed the conflated event for anything in `_tsSubs` - but that set means
+  "a SUBSCRIBE went out", not "prints are arriving". dxLink's worst failure mode
+  is the socket staying open while the feed goes quiet (no close/error, so no
+  reconnect), and that combination produced ZERO prints from either path for the
+  near-spot strikes. New `_tsLastPrintAt` map gates the suppression on actual
+  delivery within `FLOW_TS_HEALTHY_MS` (60s); seeded at subscribe time for a
+  grace period, cleared on `_resubscribe()` with `_tsSubs`. Deliberate tradeoff:
+  when TimeAndSale resumes, one print can land on both paths and be
+  double-counted - bounded at one per symbol per stall, versus an unbounded
+  silent undercount.
+
+### Not fixed - needs a decision (see FLOW_TAPE_FLOOR below)
+
+`bucket()` returns `tape: this.tape.filter(o => o.premium >= tapeFloorPremium)`
+with `FLOW_TAPE_FLOOR` defaulting to **$5,000**, and BOTH
+`flowGexAccumulator.ingestTape(bucket.tape)` and `writeFlowTape(bucket.tape)`
+read that filtered tape. So every Flow GEX number - live bars and reconstructed
+history - is built from >=$5k-premium coalesced orders ONLY. On 0DTE SPX at
+$0.50-$2.00 that is 25-100 contracts inside a 5s window; a large share of real
+flow never counts. This is the likeliest cause of the step-function shape on the
+per-strike panel, and of the standing "[flow] reads as ~0" note at the debug
+tick. Left at $5,000 pending a call on disk (flow_prints was 3.6GB in the 2026-07
+exhaustion incident).
+
 ## 2026-08-10 - Flow GEX panel now uses the EXISTING endpoint; my api-router change is reverted
 
 `components/pages/StrikeHistory.tsx`. **`server-v2/api-router.js` is back to its

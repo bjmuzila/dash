@@ -2035,18 +2035,44 @@ const COMPACT_FIELDS = {
 };
 
 // ---------------------------------------------------------------------------
-// Options flow via TimeAndSale (tick-by-tick), scoped to a near-spot window.
+// Options flow via TimeAndSale (tick-by-tick), across the WHOLE active expiry.
 // The conflated `Trade` event under-reports 0DTE SPX (one aggregated update per
 // symbol per aggregation period, and its `size` is not a true per-print size),
 // which starves the flow tape to a few orders/min. TimeAndSale gives real
 // per-print size + exchange aggressorSide — the same stream ES footprint uses.
 // Off = the legacy `Trade`-fed path (set FLOW_TIMESALES=0 to revert live).
-// The window is kept tight to bound per-print load on a 1-vCPU host; strikes
-// outside it still flow off `Trade` so nothing is dropped.
+//
+// THE ±2% BAND IS GONE (2026-08). It used to sit INSIDE _activeContracts()'s own
+// ±STRIKE_WINDOW_PCT (8%) window, so the tape was narrowed twice — and at SPX
+// 7750 the two guards actively fought: ±2% ≈ ±155pts ≈ 62 strikes ≈ 124
+// contracts against a 120 cap, so `.slice()` clipped the edge and strikes
+// flapped in and out of the subscription as spot drifted. Every flap is a hole
+// in the tape, which is what put long flat plateaus in the per-strike Flow GEX
+// series and left /flow's Net Drift with whole quiet half-hours.
+//
+// Widening is cheap, contrary to the "1-vCPU" note this comment used to carry:
+// dxLink ALREADY streams Quote/Greeks/Summary/Trade for every contract in the
+// ±8% band, so this adds an event type to symbols on the wire, not a new tier
+// of symbols. And a subscription only costs CPU when the strike actually
+// PRINTS — far-OTM 0DTE strikes barely trade, so the print load stays
+// concentrated near spot, where it already was.
+//
+// FLOW_TS_WINDOW_PCT is now OPT-IN: unset/0 means "no extra band, use the
+// _activeContracts() window". Set FLOW_TS_WINDOW_PCT=0.02 to restore the old
+// behavior live, without a deploy.
 // ---------------------------------------------------------------------------
 const FLOW_TIMESALES = process.env.FLOW_TIMESALES !== '0'; // default ON
-const FLOW_TS_WINDOW_PCT = Number(process.env.FLOW_TS_WINDOW_PCT || 0.02); // ±2% of spot
-const FLOW_TS_MAX = Number(process.env.FLOW_TS_MAX || 120); // hard cap on TS-subscribed contracts
+// 0 / unset = no band beyond _activeContracts()'s ±STRIKE_WINDOW_PCT.
+const FLOW_TS_WINDOW_PCT = Number(process.env.FLOW_TS_WINDOW_PCT || 0);
+// Runaway guard, NOT the everyday limiter. _activeContracts() at ±8% of SPX
+// 7750 is ~500 contracts; 600 leaves headroom without letting a bad expiry or a
+// mis-set STRIKE_WINDOW_PCT subscribe the entire board.
+const FLOW_TS_MAX = Number(process.env.FLOW_TS_MAX || 600);
+// How long a TimeAndSale-subscribed symbol may go without delivering a print
+// before the conflated `Trade` event is allowed through for it again. See the
+// suppression in _onEvent's Trade branch — without this, a TimeAndSale stall
+// silences BOTH paths and the strike goes to zero rather than to coarse.
+const FLOW_TS_HEALTHY_MS = Number(process.env.FLOW_TS_HEALTHY_MS || 60_000);
 
 // How far back a TimeAndSale `time` may be and still be believed (ms). dxFeed
 // can replay a contract's recent tape when a subscription is (re)established, so
@@ -2136,7 +2162,16 @@ class TastytradeProxy {
     this.strikeGrowthTimer = null;          // window-refresh interval
     this.flowGexAccumulator = new FlowGexAccumulator(); // tracks dealer inventory for flow GEX
     this.contracts = new Map(); // streamerSymbol -> contract meta
-    this._tsSubs = new Set(); // streamerSymbols currently TimeAndSale-subscribed (near-spot window)
+    this._tsSubs = new Set(); // streamerSymbols currently TimeAndSale-subscribed (active-expiry window)
+    /**
+     * streamerSymbol -> epoch ms of its last TimeAndSale print (or of its
+     * subscription, as a grace seed). Read ONLY by the Trade-suppression check
+     * in _onEvent: "is TimeAndSale actually delivering for this symbol?", which
+     * `_tsSubs` alone cannot answer — that set records that a SUBSCRIBE went out
+     * on the wire, not that anything came back.
+     * @type {Map<string, number>}
+     */
+    this._tsLastPrintAt = new Map();
     this.quotes = new Map(); // streamerSymbol -> { bid, ask, mid }
     this.summaries = new Map(); // streamerSymbol -> { oi, prevClose }
     this.greeks = new Map(); // streamerSymbol -> { iv, delta, gamma, theta, vega } (raw broker greeks)
@@ -3028,6 +3063,10 @@ class TastytradeProxy {
     // A reconnect opens a brand-new dxLink channel with zero subscriptions, so
     // the TimeAndSale window must be considered empty and re-synced from scratch.
     this._tsSubs.clear();
+    // Health stamps belong to the old channel; keeping them would let a symbol
+    // look "recently delivering" on a channel that isn't subscribed to it yet,
+    // suppressing the Trade fallback during the re-sync gap.
+    this._tsLastPrintAt.clear();
     const syms = new Set([this.spotSymbol]);
     if (this.vixSymbol) syms.add(this.vixSymbol);
     if (this.esSymbol) syms.add(this.esSymbol);
@@ -3055,13 +3094,22 @@ class TastytradeProxy {
       const spot = (this._effectiveSpot ? this._effectiveSpot() : this.spot) || marketState.getSpot() || 0;
       const desired = new Set();
       if (spot > 0 && this.expiry) {
-        const band = spot * FLOW_TS_WINDOW_PCT;
+        // No extra band by default — _activeContracts() has already scoped this
+        // to the active expiry inside ±STRIKE_WINDOW_PCT of spot. FLOW_TS_WINDOW_PCT
+        // re-narrows only if it's explicitly set (live revert lever).
+        const band = FLOW_TS_WINDOW_PCT > 0 ? spot * FLOW_TS_WINDOW_PCT : Infinity;
         const near = [];
         for (const c of this._activeContracts()) {
           if (c.expiration !== this.expiry) continue;
           if (Math.abs(c.strike - spot) <= band) near.push(c);
         }
+        // Still nearest-first: if FLOW_TS_MAX ever does bite, it must drop the
+        // FAR strikes, never the ATM ones the tape is actually about.
         near.sort((a, b) => Math.abs(a.strike - spot) - Math.abs(b.strike - spot));
+        if (near.length > FLOW_TS_MAX) {
+          console.warn(`[FLOW_TS] ${near.length} contracts in window, capped at ${FLOW_TS_MAX} `
+            + '— raise FLOW_TS_MAX or lower STRIKE_WINDOW_PCT; far strikes are being dropped');
+        }
         for (const c of near.slice(0, FLOW_TS_MAX)) {
           if (c.streamerSymbol) desired.add(c.streamerSymbol);
         }
@@ -3076,10 +3124,21 @@ class TastytradeProxy {
       // that here, but the bookkeeping should not depend on a check made
       // somewhere else.
       if (toAdd.length && this.client.subscribeTimeSales(toAdd)) {
-        for (const s of toAdd) this._tsSubs.add(s);
+        const now = Date.now();
+        for (const s of toAdd) {
+          this._tsSubs.add(s);
+          // Seed the health clock at subscribe time, so a freshly-added symbol
+          // gets one FLOW_TS_HEALTHY_MS grace period to produce its first print
+          // before the Trade fallback opens up for it. Without the seed every
+          // new subscription would look stalled from birth.
+          this._tsLastPrintAt.set(s, now);
+        }
       }
       if (toRemove.length && this.client.unsubscribeTimeSales(toRemove)) {
-        for (const s of toRemove) this._tsSubs.delete(s);
+        for (const s of toRemove) {
+          this._tsSubs.delete(s);
+          this._tsLastPrintAt.delete(s);
+        }
       }
     } catch (e) {
       console.warn('[FLOW_TS] window sync failed:', String(e?.message || e).slice(0, 120));
@@ -4201,11 +4260,28 @@ class TastytradeProxy {
         });
         return;
       }
-      // Near-spot contracts stream tick-by-tick TimeAndSale (handled below with
-      // real per-print size + aggressorSide) — don't ALSO feed the conflated
-      // Trade for them or every print doubles. Far-OTM strikes outside the TS
-      // window aren't TS-subscribed, so they still flow off Trade here.
-      if (FLOW_TIMESALES && this._tsSubs.has(sym)) return;
+      // TimeAndSale-subscribed contracts stream tick-by-tick below (real
+      // per-print size + aggressorSide) — don't ALSO feed the conflated Trade
+      // for them or every print doubles. Strikes outside the TS window aren't
+      // TS-subscribed, so they still flow off Trade here.
+      //
+      // But suppress only while TimeAndSale is actually DELIVERING. `_tsSubs`
+      // means "a SUBSCRIBE went out", not "prints are arriving" — and dxLink's
+      // nastiest failure mode is the socket staying open while the feed goes
+      // quiet, with no close/error to trigger a reconnect. When that happened,
+      // this line silenced the fallback too and the near-spot strikes — the
+      // ones that matter most — produced ZERO prints from either path for the
+      // rest of the session. Degrade to the coarse Trade feed instead of to
+      // nothing.
+      //
+      // Tradeoff, deliberate: when TimeAndSale resumes after a quiet spell, one
+      // print can land on BOTH paths before the map is re-stamped, double-
+      // counting it. That is bounded at one print per symbol per stall episode,
+      // and a rare small overcount beats an unbounded silent undercount.
+      if (FLOW_TIMESALES && this._tsSubs.has(sym)) {
+        const lastTs = this._tsLastPrintAt.get(sym) ?? 0;
+        if (Date.now() - lastTs <= FLOW_TS_HEALTHY_MS) return;
+      }
       this.flow.addPrint({
         streamerSymbol: sym,
         price: Number(ev.price),
@@ -4233,6 +4309,9 @@ class TastytradeProxy {
       const price = Number(ev.price);
       const size = Number(ev.size);
       if (!(price > 0) || !(size > 0)) return;
+      // Proof of delivery for this symbol — the Trade branch above reads this to
+      // decide whether TimeAndSale is healthy enough to suppress the fallback.
+      this._tsLastPrintAt.set(sym, Date.now());
       const agg = String(ev.aggressorSide || '').toLowerCase();
       const side = agg === 'buy' ? 'buy' : agg === 'sell' ? 'sell' : undefined;
       // EXCHANGE time of the print, not the moment it reached this process. See
