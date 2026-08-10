@@ -3555,7 +3555,8 @@ async function main() {
     // Multi Greek LADDERS snapshot → Discord, every 15m on the wall-clock
     // boundary during RTH. Same picture the page's 🗒 LADDERS button produces
     // (SPX/SPY/QQQ front-expiry CB/CW/PW + spot), drawn in headless Chromium and
-    // posted to MG_LADDER_DISCORD_WEBHOOK (falls back to DISCORD_WEBHOOK_URL).
+    // posted to the CB Edge Signals channel (HOME_SIGNALS_DISCORD_WEBHOOK /
+    // SIGNALS_DISCORD_WEBHOOK), overridable via MG_LADDER_DISCORD_WEBHOOK.
     // Guarded — never crash startup if puppeteer/chromium is missing.
     try { require('./mg-ladder-discord').startMgLadderDiscord(PORT); }
     catch (e) { console.warn('[mg-ladder] start failed:', e.message); }

@@ -26,10 +26,18 @@
  * — i.e. strikeGex() + computeWalls() from MultGreekClient.tsx, over the FULL
  * chain (no ±N strike window; the page's walls are untrimmed).
  *
+ * Channel: the CB Edge Signals channel — the same one discord-relay.js and
+ * signals-engine.js post to. Resolution order is HOME_SIGNALS_DISCORD_WEBHOOK →
+ * SIGNALS_DISCORD_WEBHOOK (whichever of the two is set; they normally point at
+ * the same channel) and only then DISCORD_WEBHOOK_URL, which is the in-app
+ * button's webhook and a DIFFERENT channel. Set MG_LADDER_DISCORD_WEBHOOK to
+ * override all of it.
+ *
  * Env:
- *   MG_LADDER_DISCORD_WEBHOOK  webhook URL (falls back to DISCORD_WEBHOOK_URL,
- *                              the same webhook the in-app Discord buttons use
- *                              via app/api/discord-share)
+ *   MG_LADDER_DISCORD_WEBHOOK  explicit override; skips the resolution below
+ *   HOME_SIGNALS_DISCORD_WEBHOOK / SIGNALS_DISCORD_WEBHOOK
+ *                              the CB Edge Signals channel (default target)
+ *   DISCORD_WEBHOOK_URL        last-resort fallback (in-app share webhook)
  *   MG_LADDER_DISABLED=1       hard-disable
  *   MG_LADDER_TICKERS          default "SPX,SPY,QQQ"
  *   MG_LADDER_INTERVAL_MIN     default 15
@@ -45,7 +53,15 @@
 const TICKERS = (process.env.MG_LADDER_TICKERS || 'SPX,SPY,QQQ')
   .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
 const INTERVAL_MIN = Math.max(1, Number(process.env.MG_LADDER_INTERVAL_MIN || 15));
-const WEBHOOK = (process.env.MG_LADDER_DISCORD_WEBHOOK || process.env.DISCORD_WEBHOOK_URL || '').trim();
+// Ordered so the DEFAULT target is the CB Edge Signals channel. DISCORD_WEBHOOK_URL
+// is deliberately last: it is the in-app share button's webhook and points at a
+// different channel, so it must never win over a signals webhook that is set.
+const WEBHOOK = [
+  process.env.MG_LADDER_DISCORD_WEBHOOK,
+  process.env.HOME_SIGNALS_DISCORD_WEBHOOK,
+  process.env.SIGNALS_DISCORD_WEBHOOK,
+  process.env.DISCORD_WEBHOOK_URL,
+].map((v) => (v || '').trim()).find(Boolean) || '';
 const CHROME_PATH = (process.env.PUPPETEER_EXECUTABLE_PATH || '').trim();
 
 // Shared identity with discord-relay.js / signals-engine.js so everything the
@@ -536,7 +552,7 @@ function startMgLadderDiscord(port) {
     return () => {};
   }
   if (!WEBHOOK) {
-    console.log('[mg-ladder] off — MG_LADDER_DISCORD_WEBHOOK / DISCORD_WEBHOOK_URL not set');
+    console.log('[mg-ladder] off — no webhook (MG_LADDER_DISCORD_WEBHOOK / HOME_SIGNALS_DISCORD_WEBHOOK / SIGNALS_DISCORD_WEBHOOK / DISCORD_WEBHOOK_URL all unset)');
     return () => {};
   }
 
