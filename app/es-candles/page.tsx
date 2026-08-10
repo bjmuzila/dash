@@ -29,6 +29,12 @@
  * overlays is a comparison; three charts each with their own everything is
  * three pages in a trenchcoat.
  *
+ * At two or three the columns also get a real CARD each — the same frosted
+ * panel Multi Greek gives SPX / SPY / QQQ. Three charts on one unbroken dark
+ * field read as one very wide chart with gaps in it; the card's edge is what
+ * says where ES stops and SPY starts. At one chart there is nothing to separate
+ * from, so the column stays bare.
+ *
  * Mechanically the shared dock is still card 0's dock, portaled into the target
  * below (see EsChartCard's `dockMode`). It stays wired to card 0's live feed
  * state — the expirations list, the replay frames, the connection status — and
@@ -59,6 +65,7 @@ import {
 import { EMA_COLORS } from "@/components/dashboard/es-candles/indicators";
 import { CHAIN_GREEKS, GREEK_LABEL, isChainGreek, type ChainGreek } from "@/components/dashboard/es-candles/ChainRail";
 import { DockButton, SegGroup } from "@/components/shared/DockToolbar";
+import { Card } from "@/components/shared/PageCard";
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 
 const PANEL_OPTIONS: Array<{ label: string; value: SidePanelKind }> = [
@@ -240,6 +247,44 @@ function Toggle({
       )}
       {children}
     </button>
+  );
+}
+
+/**
+ * One column of the chart row.
+ *
+ * At ONE chart the column is a bare flex box: the chart's own dissolve surface
+ * is the only edge on screen and a frame around the whole viewport would just
+ * be a box drawn around a box.
+ *
+ * At two or three it becomes a Card — same `variant="budget"` panel Multi Greek
+ * uses per ticker, at the same 16px radius, so the two multi-panel pages read as
+ * the same product. padding={0} because the chart card brings its own px-4/pb-4;
+ * a second layer of padding here would eat ~48px of chart width per column at
+ * exactly the sizes where width is scarcest.
+ */
+function CardSlot({ carded, children }: { carded: boolean; children: ReactNode }) {
+  if (!carded) {
+    return <div className="flex flex-1 flex-col" style={{ minWidth: 0, minHeight: 0 }}>{children}</div>;
+  }
+  return (
+    <Card
+      variant="budget"
+      padding={0}
+      style={{
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        minWidth: 0,
+        minHeight: 0,
+        // The chart's own surface is round-cornered and feathered; without this
+        // its corners paint over the card's border radius.
+        overflow: "hidden",
+        borderRadius: 16,
+      }}
+    >
+      {children}
+    </Card>
   );
 }
 
@@ -433,10 +478,23 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
 
       {/* One row. Equal columns, each free to shrink — minWidth:0 on the flex
           items, or a card's own dock would set a min-content floor and the row
-          would overflow the viewport instead of the cards getting narrower. */}
-      <div className="es-candles-row flex flex-1 flex-row gap-2 px-2 pb-2" style={{ minHeight: 0 }}>
+          would overflow the viewport instead of the cards getting narrower.
+
+          At 2–3 charts each column is wrapped in a real Card, the same frosted
+          panel Multi Greek gives each ticker. Without it the charts share one
+          unbroken dark field and the row reads as one very wide chart with
+          gaps in it — there is no edge saying where ES stops and SPY starts.
+          The card's hairline border is that edge.
+
+          `no-card-lift` because the dashboard-wide rule lifts any 16px-radius
+          panel on hover, and a chart that jumps 2px when the cursor enters it
+          drags the crosshair off the bar you were reading. */}
+      <div
+        className={`es-candles-row no-card-lift flex flex-1 flex-row px-2 pb-2 ${multi ? "gap-3" : "gap-2"}`}
+        style={{ minHeight: 0 }}
+      >
         {Array.from({ length: cards }, (_, i) => (
-          <div key={i} className="flex flex-1 flex-col" style={{ minWidth: 0, minHeight: 0 }}>
+          <CardSlot key={i} carded={multi}>
             <EsChartCard
               slot={i}
               // Multi-chart: everything but the ticker moves to one shared blob,
@@ -456,7 +514,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
               chainGreek={chainGreek}
               indicators={indicators}
             />
-          </div>
+          </CardSlot>
         ))}
       </div>
 

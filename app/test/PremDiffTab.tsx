@@ -67,7 +67,30 @@ type Bar = {
 
 type Payload = { symbol: string; bandPct: number; bands: number[]; rows: Bar[]; error?: string };
 
+type IntradayLeg = Leg & { cumDiff: number; cumCallPrem: number; cumPutPrem: number };
+type IntradayBucket = {
+  minute: string;
+  spot: number;
+  baseline: boolean;
+  front: IntradayLeg | null;
+  back: IntradayLeg | null;
+};
+type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
+type IntradayPayload = {
+  symbol: string;
+  bandPct: number;
+  date: string;
+  rows: IntradayBucket[];
+  candles: Candle[];
+  error?: string;
+};
+
 const SYMBOLS = ["SPY", "QQQ", "SPX", "NVDA"];
+// Intraday is recorded for the three index products only — the 1-minute
+// recorder polls two chains per symbol per minute, and widening it is a cost
+// decision rather than a UI one. Keep the two lists separate so the picker
+// cannot offer a symbol with no intraday rows behind it.
+const INTRADAY_SYMBOLS = ["SPX", "SPY", "QQQ"];
 const BAND_OPTIONS = [
   { value: "1", label: "±1% of spot" },
   { value: "2", label: "±2% of spot" },
@@ -331,36 +354,328 @@ function HoverReadout({ bar, band, symbol }: { bar: Bar | null; band: number; sy
   );
 }
 
+// ── Intraday chart ───────────────────────────────────────────────────────────
+
+const ET_TIME = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
+
+/**
+ * Minute buckets for one session. Two readings of the same data:
+ *
+ *   "bars"       — premium traded IN that minute. The direct intraday analog of
+ *                  the daily panel; answers "when did it happen".
+ *   "cumulative" — the running total from the session's first bucket. Answers
+ *                  "when was the day's tilt established", which a row of bars
+ *                  makes you integrate by eye.
+ *
+ * Price is the underlying's own 1-minute candles, not the stored per-minute
+ * spot: one sample a minute has open=high=low=close and renders as dashes.
+ */
+function IntradayChart({
+  rows, candles, band, symbol, view,
+}: {
+  rows: IntradayBucket[];
+  candles: Candle[];
+  band: number;
+  symbol: string;
+  view: "bars" | "cumulative";
+}) {
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState(1100);
+  const [hover, setHover] = useState<number | null>(null);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect?.width;
+      if (w && w > 200) setWidth(Math.floor(w));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Candles keyed by minute so they line up with the buckets rather than being
+  // drawn on their own index — the two series can differ in length whenever a
+  // minute produced a candle but no chain snapshot (or the reverse).
+  const candleAt = useMemo(() => {
+    const m = new Map<number, Candle>();
+    for (const c of candles) m.set(Math.floor(c.time / 60_000) * 60_000, c);
+    return m;
+  }, [candles]);
+
+  const pts = useMemo(() => rows.map((r) => {
+    const t = Math.floor(Date.parse(r.minute) / 60_000) * 60_000;
+    const c = candleAt.get(t);
+    return {
+      row: r,
+      t,
+      open: c?.open ?? r.spot,
+      high: c?.high ?? r.spot,
+      low: c?.low ?? r.spot,
+      close: c?.close ?? r.spot,
+      value: view === "bars" ? (r.front?.diff ?? 0) : (r.front?.cumDiff ?? 0),
+      backValue: view === "bars" ? (r.back?.diff ?? 0) : (r.back?.cumDiff ?? 0),
+    };
+  }), [rows, candleAt, view]);
+
+  const geom = useMemo(() => {
+    const n = pts.length;
+    const innerW = Math.max(120, width - PAD_L - PAD_R);
+    const step = n > 0 ? innerW / n : 1;
+    const barW = Math.max(1, Math.min(7, step * 0.7));
+
+    let pHi = -Infinity; let pLo = Infinity;
+    for (const p of pts) {
+      if (p.high > 0) pHi = Math.max(pHi, p.high);
+      if (p.low > 0) pLo = Math.min(pLo, p.low);
+    }
+    if (!Number.isFinite(pHi) || !Number.isFinite(pLo)) { pHi = 1; pLo = 0; }
+    const padP = (pHi - pLo) * 0.08 || 1;
+    pHi += padP; pLo -= padP;
+
+    let mag = 0;
+    for (const p of pts) mag = Math.max(mag, Math.abs(p.value), Math.abs(p.backValue));
+    if (!(mag > 0)) mag = 1;
+
+    const x = (i: number) => PAD_L + i * step + step / 2;
+    const yP = (v: number) => ((pHi - v) / (pHi - pLo)) * PRICE_H;
+    const zero = PRICE_H + GAP + HIST_H / 2;
+    const yH = (v: number) => zero - (v / mag) * (HIST_H / 2 - 6);
+    return { step, barW, pHi, pLo, mag, x, yP, yH, zero, innerW };
+  }, [pts, width]);
+
+  const totalH = PRICE_H + GAP + HIST_H + 22;
+
+  const onMove = useCallback((e: ReactMouseEvent<SVGSVGElement>) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    const i = Math.floor((e.clientX - box.left - PAD_L) / geom.step);
+    setHover(i >= 0 && i < pts.length ? i : null);
+  }, [geom.step, pts.length]);
+
+  if (!pts.length) {
+    return (
+      <div style={{ padding: 40, textAlign: "center", color: HOME_THEME.text, opacity: 0.55, fontSize: 14 }}>
+        No intraday buckets recorded for {symbol} at ±{band}% yet. The 1-minute recorder writes during RTH only.
+      </div>
+    );
+  }
+
+  const priceTicks = Array.from({ length: 5 }, (_, i) => geom.pLo + ((geom.pHi - geom.pLo) * i) / 4);
+  const histTicks = [geom.mag, geom.mag / 2, 0, -geom.mag / 2, -geom.mag];
+  const labelEvery = Math.max(1, Math.round(pts.length / Math.max(2, Math.floor(geom.innerW / 80))));
+  const hovered = hover != null ? pts[hover] : null;
+
+  return (
+    <div ref={wrapRef} style={{ width: "100%" }}>
+      <svg
+        width={width} height={totalH}
+        onMouseMove={onMove} onMouseLeave={() => setHover(null)}
+        style={{ display: "block", cursor: "crosshair" }}
+      >
+        {priceTicks.map((v, i) => (
+          <g key={`ipt${i}`}>
+            <line x1={PAD_L} x2={width - PAD_R} y1={geom.yP(v)} y2={geom.yP(v)} stroke={HOME_THEME.border} strokeWidth={1} />
+            <text x={width - PAD_R + 6} y={geom.yP(v) + 4} fill={HOME_THEME.text} opacity={0.5} fontSize={11}>
+              {v.toFixed(v >= 1000 ? 0 : 2)}
+            </text>
+          </g>
+        ))}
+
+        {pts.map((p, i) => {
+          const cx = geom.x(i);
+          const col = p.close >= p.open ? ES_CANDLE_UP : ES_CANDLE_DOWN;
+          const yO = geom.yP(p.open);
+          const yC = geom.yP(p.close);
+          const bodyW = Math.max(1, geom.barW);
+          return (
+            <g key={`ic${p.t}`} opacity={hover == null || hover === i ? 1 : 0.55}>
+              <line x1={cx} x2={cx} y1={geom.yP(p.high)} y2={geom.yP(p.low)} stroke={col} strokeWidth={1} />
+              <rect
+                x={cx - bodyW / 2} y={Math.min(yO, yC)}
+                width={bodyW} height={Math.max(1, Math.abs(yC - yO))} fill={col}
+              />
+            </g>
+          );
+        })}
+
+        {histTicks.map((v, i) => (
+          <g key={`iht${i}`}>
+            <line
+              x1={PAD_L} x2={width - PAD_R} y1={geom.yH(v)} y2={geom.yH(v)}
+              stroke={HOME_THEME.border} strokeWidth={v === 0 ? 1.4 : 1} opacity={v === 0 ? 1 : 0.7}
+            />
+            <text x={width - PAD_R + 6} y={geom.yH(v) + 4} fill={HOME_THEME.text} opacity={0.5} fontSize={11}>
+              {v === 0 ? "0" : fmtUsd(v)}
+            </text>
+          </g>
+        ))}
+
+        {/* Cumulative is a filled path, not bars: it is one continuous quantity
+            and drawing 390 abutting rects makes a solid block. */}
+        {view === "cumulative" ? (
+          <>
+            <path
+              d={`M ${geom.x(0)} ${geom.zero} ${pts.map((p, i) => `L ${geom.x(i)} ${geom.yH(p.backValue)}`).join(" ")} L ${geom.x(pts.length - 1)} ${geom.zero} Z`}
+              fill={HOME_THEME.purple} opacity={0.28}
+            />
+            <path
+              d={pts.map((p, i) => `${i ? "L" : "M"} ${geom.x(i)} ${geom.yH(p.value)}`).join(" ")}
+              fill="none" stroke={HOME_THEME.orange} strokeWidth={1.8}
+            />
+          </>
+        ) : (
+          pts.map((p, i) => {
+            const cx = geom.x(i);
+            const dim = hover == null || hover === i ? 1 : 0.5;
+            const y = geom.yH(p.value);
+            const yb = geom.yH(p.backValue);
+            return (
+              <g key={`ih${p.t}`}>
+                <rect
+                  x={cx - (geom.barW * 1.5) / 2} width={geom.barW * 1.5}
+                  y={Math.min(yb, geom.zero)} height={Math.max(1, Math.abs(geom.zero - yb))}
+                  fill={HOME_THEME.purple} opacity={0.5 * dim}
+                />
+                <rect
+                  x={cx - geom.barW / 2} width={geom.barW}
+                  y={Math.min(y, geom.zero)} height={Math.max(1, Math.abs(geom.zero - y))}
+                  fill={p.value >= 0 ? HOME_THEME.red : HOME_THEME.cyan} opacity={dim}
+                />
+              </g>
+            );
+          })
+        )}
+
+        {pts.map((p, i) => (i % labelEvery === 0 ? (
+          <text
+            key={`ix${p.t}`} x={geom.x(i)} y={totalH - 5}
+            fill={HOME_THEME.text} opacity={0.45} fontSize={11} textAnchor="middle"
+          >
+            {ET_TIME.format(new Date(p.t))}
+          </text>
+        ) : null))}
+
+        {hover != null && (
+          <line
+            x1={geom.x(hover)} x2={geom.x(hover)} y1={0} y2={PRICE_H + GAP + HIST_H}
+            stroke={HOME_THEME.orange} strokeWidth={1} strokeDasharray="3 3" opacity={0.8}
+          />
+        )}
+      </svg>
+
+      <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 8, minHeight: 22, alignItems: "baseline", fontSize: 13 }}>
+        {hovered ? (
+          <>
+            <span style={{ fontWeight: 800, color: HOME_THEME.text }}>{ET_TIME.format(new Date(hovered.t))} ET</span>
+            <span style={{ color: HOME_THEME.text, opacity: 0.85 }}>px {hovered.close.toFixed(2)}</span>
+            {hovered.row.front && (
+              <>
+                <span style={{ color: HOME_THEME.cyan }}>calls {fmtUsd(hovered.row.front.callPrem)}</span>
+                <span style={{ color: HOME_THEME.red }}>puts {fmtUsd(hovered.row.front.putPrem)}</span>
+                <span style={{ fontWeight: 800, color: HOME_THEME.text }}>
+                  {view === "bars" ? "minute" : "session"} diff {fmtUsd(hovered.value)}
+                </span>
+              </>
+            )}
+            {hovered.row.baseline && (
+              <span style={{ color: HOME_THEME.orange }}>baseline bucket — no interval flow</span>
+            )}
+          </>
+        ) : (
+          <span style={{ color: HOME_THEME.text, opacity: 0.45 }}>
+            Hover a minute for the {symbol} ±{band}% breakdown.
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Small segmented switch, styled off the theme (no hardcoded hex). */
+function Seg<T extends string>({
+  value, options, onChange,
+}: { value: T; options: { value: T; label: string }[]; onChange: (v: T) => void }) {
+  return (
+    <div style={{ display: "inline-flex", border: `1px solid ${HOME_THEME.border}`, borderRadius: 8, overflow: "hidden" }}>
+      {options.map((o) => {
+        const active = o.value === value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            onClick={() => onChange(o.value)}
+            aria-pressed={active}
+            style={{
+              padding: "8px 16px",
+              border: "none",
+              background: active ? `linear-gradient(180deg, ${HOME_THEME.cyan}33, ${HOME_THEME.cyan}0D)` : "transparent",
+              color: active ? HOME_THEME.cyan : HOME_THEME.text,
+              fontSize: 13,
+              fontWeight: 800,
+              letterSpacing: "0.05em",
+              textTransform: "uppercase",
+              cursor: "pointer",
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Tab ──────────────────────────────────────────────────────────────────────
 
 export default function PremDiffTab() {
+  const [mode, setMode] = useState<"daily" | "intraday">("daily");
+  const [view, setView] = useState<"bars" | "cumulative">("bars");
   const [symbol, setSymbol] = useState("SPY");
   const [band, setBand] = useState("5");
   const [range, setRange] = useState("260");
   const [data, setData] = useState<Payload | null>(null);
+  const [intra, setIntra] = useState<IntradayPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+
+  // Switching to intraday with a symbol that has no intraday recorder behind it
+  // would show an empty chart that looks broken. Snap to SPY instead.
+  useEffect(() => {
+    if (mode === "intraday" && !INTRADAY_SYMBOLS.includes(symbol)) setSymbol("SPY");
+  }, [mode, symbol]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setErr(null);
     try {
-      const r = await fetch(`/api/atm-prem-diff?symbol=${encodeURIComponent(symbol)}&band=${band}&days=${range}`, {
-        credentials: "include",
-      });
-      const j = (await r.json()) as Payload;
+      const url = mode === "intraday"
+        ? `/api/atm-prem-intraday?symbol=${encodeURIComponent(symbol)}&band=${band}`
+        : `/api/atm-prem-diff?symbol=${encodeURIComponent(symbol)}&band=${band}&days=${range}`;
+      const r = await fetch(url, { credentials: "include" });
+      const j = await r.json();
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-      setData(j);
+      if (mode === "intraday") { setIntra(j as IntradayPayload); } else { setData(j as Payload); }
       if (j.error) setErr(j.error);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
-      setData(null);
+      if (mode === "intraday") setIntra(null); else setData(null);
     } finally {
       setLoading(false);
     }
-  }, [symbol, band, range]);
+  }, [mode, symbol, band, range]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Intraday refreshes on its own — the recorder writes a bucket a minute and a
+  // panel you have to hit Refresh on to see the current session is a panel you
+  // stop trusting. Daily changes once a day and is left manual.
+  useEffect(() => {
+    if (mode !== "intraday") return;
+    const id = setInterval(() => { void load(); }, 60_000);
+    return () => clearInterval(id);
+  }, [mode, load]);
 
   const rows = data?.rows ?? [];
 
@@ -387,24 +702,44 @@ export default function PremDiffTab() {
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <Seg
+          value={mode}
+          onChange={setMode}
+          options={[{ value: "daily" as const, label: "Daily" }, { value: "intraday" as const, label: "Intraday" }]}
+        />
+        {mode === "intraday" && (
+          <Seg
+            value={view}
+            onChange={setView}
+            options={[{ value: "bars" as const, label: "Per minute" }, { value: "cumulative" as const, label: "Cumulative" }]}
+          />
+        )}
         {/* Explicit widths: ThemedSelect defaults to width:"100%", which in a
             flex row makes each control fight for the whole strip. */}
         <ThemedSelect
           value={symbol}
           onChange={setSymbol}
-          options={SYMBOLS.map((s) => ({ value: s, label: s }))}
+          options={(mode === "intraday" ? INTRADAY_SYMBOLS : SYMBOLS).map((s) => ({ value: s, label: s }))}
           ariaLabel="Symbol"
           width={110}
         />
         <ThemedSelect value={band} onChange={setBand} options={BAND_OPTIONS} ariaLabel="ATM band" width={160} />
-        <ThemedSelect value={range} onChange={setRange} options={RANGE_OPTIONS} ariaLabel="Lookback" width={150} />
+        {mode === "daily" && (
+          <ThemedSelect value={range} onChange={setRange} options={RANGE_OPTIONS} ariaLabel="Lookback" width={150} />
+        )}
         <button type="button" onClick={() => void load()} style={homeButtonStyle}>Refresh</button>
         <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.6 }}>
-          {loading ? "Loading…" : `${rows.length} sessions`}
+          {loading
+            ? "Loading…"
+            : mode === "intraday"
+              ? `${intra?.rows.length ?? 0} minutes · ${intra?.date ?? "—"} · auto-refresh 60s`
+              : `${rows.length} sessions`}
         </div>
         {err && <div style={{ fontSize: 13, color: HOME_THEME.red }}>{err}</div>}
       </div>
 
+      {mode === "daily" ? (
+        <>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
         <div style={statTileStyle}>
           <div style={{ fontSize: 12, opacity: 0.6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Latest front diff</div>
@@ -472,6 +807,95 @@ export default function PremDiffTab() {
           )}
         </div>
       </Card>
+        </>
+      ) : (
+        (() => {
+        const irows = intra?.rows ?? [];
+        const lastWith = [...irows].reverse().find((r) => r.front);
+        const sessionDiff = lastWith?.front?.cumDiff ?? 0;
+        const biggest = irows.reduce((best, r) => (
+          Math.abs(r.front?.diff ?? 0) > Math.abs(best?.front?.diff ?? 0) ? r : best
+        ), irows[0]);
+        const totalPrem = (lastWith?.front?.cumCallPrem ?? 0) + (lastWith?.front?.cumPutPrem ?? 0);
+        const hasBaseline = irows.some((r) => r.baseline);
+        return (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
+              <div style={statTileStyle}>
+                <div style={{ fontSize: 12, opacity: 0.6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Session tilt so far</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: sessionDiff >= 0 ? HOME_THEME.red : HOME_THEME.cyan }}>
+                  {lastWith ? fmtUsd(sessionDiff) : "\u2014"}
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.55 }}>puts minus calls, cumulative</div>
+              </div>
+              <div style={statTileStyle}>
+                <div style={{ fontSize: 12, opacity: 0.6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Total premium</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: HOME_THEME.text }}>
+                  {totalPrem > 0 ? fmtUsd(totalPrem) : "\u2014"}
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.55 }}>both sides, front month</div>
+              </div>
+              <div style={statTileStyle}>
+                <div style={{ fontSize: 12, opacity: 0.6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Biggest minute</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: (biggest?.front?.diff ?? 0) >= 0 ? HOME_THEME.red : HOME_THEME.cyan }}>
+                  {biggest?.front ? fmtUsd(biggest.front.diff) : "\u2014"}
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.55 }}>
+                  {biggest ? `${ET_TIME.format(new Date(biggest.minute))} ET` : ""}
+                </div>
+              </div>
+              <div style={statTileStyle}>
+                <div style={{ fontSize: 12, opacity: 0.6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Front expiry</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: HOME_THEME.orange }}>
+                  {lastWith?.front?.expiry ?? "\u2014"}
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.55 }}>third Friday, \u00b1{band}% of spot</div>
+              </div>
+            </div>
+
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={`${symbol} \u2014 intraday ATM premium traded, puts minus calls`}
+              subtitle={
+                view === "bars"
+                  ? `Each bar is the premium that traded in that MINUTE \u2014 the change in each strike's day volume since the previous snapshot, priced at that minute's mark, summed within \u00b1${band}% of spot. Blue below zero = calls dominated the minute, red above = puts did.`
+                  : `The session's running total from the first bucket. The line is the front month, the purple fill the back month. Where it climbs is where the day's tilt was actually established \u2014 which a row of bars makes you integrate by eye.`
+              }
+            >
+              <IntradayChart
+                rows={irows}
+                candles={intra?.candles ?? []}
+                band={Number(band)}
+                symbol={symbol}
+                view={view}
+              />
+
+              <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 14, fontSize: 13 }}>
+                <LegendDot color={HOME_THEME.cyan} label="Calls dominant" />
+                <LegendDot color={HOME_THEME.red} label="Puts dominant" />
+                <LegendDot color={HOME_THEME.purple} label="Back month" />
+                {view === "cumulative" && <LegendDot color={HOME_THEME.orange} label="Front month, cumulative" />}
+              </div>
+
+              <div style={{ fontSize: 12, color: HOME_THEME.text, opacity: 0.55, marginTop: 12, lineHeight: 1.65 }}>
+                Minute premium is the <strong>difference</strong> between consecutive chain snapshots, taken per strike and
+                then summed \u2014 the chain reports cumulative day volume, so multiplying it directly would re-count the whole
+                session every minute. Band membership is recomputed each minute against that minute&apos;s spot, so a strike
+                can enter or leave the window intraday. Recorded during RTH only.
+                {hasBaseline && (
+                  <>
+                    {" "}This session contains a <strong>baseline</strong> bucket \u2014 the recorder started or restarted, so it
+                    had nothing to difference against. Volume traded during that gap is attributed to no minute rather than
+                    landing as one false spike, and the cumulative line starts from the restart, not from the open.
+                  </>
+                )}
+              </div>
+            </Card>
+          </>
+        );
+        })()
+      )}
     </>
   );
 }

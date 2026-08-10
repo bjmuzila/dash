@@ -4455,10 +4455,19 @@ export default function EsChartCard({
           here — same four numbers, a fraction of the vertical cost. */}
       {dockMode === "full" && <div className="px-4 pb-1 pt-0">{statsLine}</div>}
 
-      <div className="es-candles-main flex flex-1 flex-row gap-2 px-4 pb-4" style={{ minHeight: 0 }}>
-       <div className="es-candles-chartcol flex flex-1 flex-col gap-2" style={{ minWidth: 0 }}>
+      <div className="es-candles-main flex flex-1 flex-row px-4 pb-4" style={{ minHeight: 0 }}>
+       {/* ONE surface for the candles AND the panel beside them.
+           They used to be two boxes with a gap between them: the chart carried
+           the dissolve card, the rail sat outside it on the page background.
+           But the rail is not a second widget — every one of its rows is drawn
+           at the chart's own y for that price, so it is the chart's right
+           margin, and a seam down the middle of one instrument reads as two
+           panels that happen to line up. The surface moved out here and the gap
+           went with it; the chart is now a transparent pane inside it. */}
+       <div className="es-candles-surface flex flex-1 flex-row overflow-hidden" style={{ ...dissolveCard, minWidth: 0, minHeight: 0 }}>
+       <div className="es-candles-chartcol flex flex-1 flex-col" style={{ minWidth: 0 }}>
         {/* Price chart + price-aligned overlay (heatmap, volume profile, VA lines) */}
-        <div className="es-candles-chart relative flex-1 overflow-hidden" style={{ ...dissolveCard, minHeight: 320 }}>
+        <div className="es-candles-chart relative flex-1 overflow-hidden" style={{ minHeight: 320 }}>
           {/* Overlay (heatmap/profile/levels) sits BEHIND the chart so the
               candlesticks always render on the top visible layer. */}
           <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" style={{ zIndex: 1 }} />
@@ -4584,6 +4593,7 @@ export default function EsChartCard({
             drawRef={railDrawRef}
           />
         ) : null}
+       </div>
 
       </div>
       </div>

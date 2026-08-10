@@ -8050,6 +8050,43 @@ if barstate.islast
       },
     });
 
+    // ── /api/atm-prem-intraday ───────────────────────────────────────────────
+    // One session of MINUTE buckets for the Prem Diff panel's intraday mode:
+    // per-minute premium traded (the delta between consecutive chain snapshots,
+    // priced per strike) plus the recorder's running cumulative, front and back
+    // monthly. Written by server-v2/atm-prem-intraday-recorder.js.
+    //
+    // `candles` carries the underlying's own 1m bars for the price pane. They
+    // come from candle-history (its own throwaway dxLink connection, cached
+    // ~60s) rather than from the stored per-minute spot: one sample a minute
+    // gives open=high=low=close, which draws a row of dashes instead of candles.
+    // A candle failure degrades to spot-only, it does not fail the request.
+    register('/api/atm-prem-intraday', {
+      auth: 'subscriber', methods: ['GET'],
+      async handler(req, res) {
+        try {
+          const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+          const symbol = String(sp.get('symbol') || 'SPY').trim().toUpperCase().slice(0, 12);
+          const bandPct = Number(sp.get('band') ?? 5);
+          const date = String(sp.get('date') || 'latest').slice(0, 10);
+          const { getIntraday } = require('./atm-prem-intraday-recorder');
+          const data = await getIntraday({ symbol, bandPct, date });
+
+          let candles = [];
+          if (data.rows?.length) {
+            try {
+              const { fetchIntradayCandles } = require('./candle-history');
+              const first = Date.parse(data.rows[0].minute);
+              candles = await fetchIntradayCandles(symbol, '1m', first - 5 * 60_000);
+            } catch { /* price pane falls back to the stored spot */ }
+          }
+          return send(res, 200, { ...data, candles }, { 'Cache-Control': 'public, max-age=20' });
+        } catch (e) {
+          return send(res, 500, { error: e.message, rows: [] }, { 'Cache-Control': 'no-store' });
+        }
+      },
+    });
+
     register('/api/gex-map', {
       auth: 'subscriber', methods: ['GET'],
       async handler(req, res) {

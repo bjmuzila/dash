@@ -101,6 +101,9 @@ export default function SidePanel({
   return (
     <div style={{ width, flexShrink: 0, minHeight: 320 }}>
       <EsGexRail
+        // The card paints ONE dissolve surface behind the chart and this panel
+        // together, so the rail must not paint a second one on top of it.
+        bare
         rows={railRows}
         callWall={callWall}
         putWall={putWall}

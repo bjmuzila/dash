@@ -583,6 +583,18 @@ function startAtmPremRecorder() {
   if (_timer.unref) _timer.unref();
   setTimeout(check, 45_000);
 
+  // The intraday (1-minute) recorder is started from here rather than getting
+  // its own hook in server-with-proxy.js. One boot call owns "ATM premium
+  // capture" — daily and intraday are the same measurement at two resolutions,
+  // and splitting the wiring means a future change touches the proxy server
+  // file again for no reason. Loaded defensively for the same reason its
+  // neighbours are: a failure here must cost one panel, not boot.
+  try {
+    require('./atm-prem-intraday-recorder').startAtmPremIntradayRecorder();
+  } catch (e) {
+    console.warn('[atm-prem-intraday] recorder not started:', e.message);
+  }
+
   const hh = String(Math.floor(RUN_AT_MIN / 60)).padStart(2, '0');
   const mm = String(RUN_AT_MIN % 60).padStart(2, '0');
   console.log(

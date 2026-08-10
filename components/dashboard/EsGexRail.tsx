@@ -25,6 +25,17 @@ interface EsGexRailProps {
   priceToY: (esPrice: number) => number | null;
   /** Assigned the rail's imperative draw fn so the parent can repaint it on scroll/zoom. */
   drawRef?: MutableRefObject<() => void>;
+  /**
+   * Draw the bars only — no card of the rail's own.
+   *
+   * Set by any host that already paints a surface UNDER both the chart and the
+   * rail (that's the ES Candles card). Two dissolve cards stacked is not just a
+   * doubled blur: each one feathers its own edges, so the shared boundary gets
+   * darker where the two masks meet and the rail reads as a separate object
+   * pushed up against the chart, which is the exact seam the shared surface
+   * exists to remove.
+   */
+  bare?: boolean;
 }
 
 // GEX bar color — matches the home GexChart / heatmap convention.
@@ -38,7 +49,7 @@ const NEG = "255,71,87";   // negative GEX = red
  * from a left baseline, cyan for +GEX / red for −GEX. Notable levels get pinned
  * labels with vertical de-overlap.
  */
-export default function EsGexRail({ rows, callWall, putWall, gexFlip, spot, basis, priceToY, drawRef }: EsGexRailProps) {
+export default function EsGexRail({ rows, callWall, putWall, gexFlip, spot, basis, priceToY, drawRef, bare = false }: EsGexRailProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   // Latest props mirrored so the imperative draw (called by the parent on every
@@ -155,15 +166,18 @@ export default function EsGexRail({ rows, callWall, putWall, gexFlip, spot, basi
         height: "100%",
         overflow: "hidden",
         // Dissolve card (BUDGET_UI_STYLE.md): borderless, edge-feathered glass.
-        borderRadius: 28,
-        border: "none",
-        background:
-          "radial-gradient(120% 130% at 50% 0%, rgba(13,17,25,0.34) 0%, rgba(13,17,25,0.22) 45%, rgba(13,17,25,0.06) 80%, transparent 100%)",
-        backdropFilter: "blur(44px) saturate(1.15)",
-        WebkitBackdropFilter: "blur(44px) saturate(1.15)",
-        boxShadow: "0 40px 100px -40px rgba(0,0,0,0.45)",
-        maskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
-        WebkitMaskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
+        // Skipped entirely when the host owns the surface — see `bare`.
+        ...(bare ? null : {
+          borderRadius: 28,
+          border: "none",
+          background:
+            "radial-gradient(120% 130% at 50% 0%, rgba(13,17,25,0.34) 0%, rgba(13,17,25,0.22) 45%, rgba(13,17,25,0.06) 80%, transparent 100%)",
+          backdropFilter: "blur(44px) saturate(1.15)",
+          WebkitBackdropFilter: "blur(44px) saturate(1.15)",
+          boxShadow: "0 40px 100px -40px rgba(0,0,0,0.45)",
+          maskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
+          WebkitMaskImage: "radial-gradient(130% 140% at 50% 40%, #000 60%, transparent 100%)",
+        }),
       }}
     >
       <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />

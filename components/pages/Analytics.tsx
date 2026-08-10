@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
+import { useScannerTickers } from "@/lib/useScannerTickers";
 import { HOME_THEME, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle, LEVEL_COLORS } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { useEsCandles } from "@/hooks/useEsCandles";
@@ -1102,11 +1104,13 @@ function IbCard() {
 }
 
 // ── 8. TICKER LEVELS ──────────────────────────────────────────────────────────
-// CORE (CB) · Call Wall · Put Wall · Spot for ONE ticker at a time — same shape
-// as the Estimated Move card above: a pill row switches the symbol, and the free
-// text box adds any other scanner name to that row. These are the same four
-// numbers the owner Results → Walls tab prints, off the same tables. Two read
-// paths, because neither one alone is sufficient:
+// Spot · Call Wall · Put Wall · CORE (CB) for ONE ticker at a time. The symbol is
+// picked from a searchable dropdown over the whole scanner universe — the same
+// picker language as the Options Chain page's ticker menu (frosted panel, cyan
+// top accent, star-to-favorite, search-to-filter), so a name that isn't in the
+// universe can still be typed in and added. These are the same four numbers the
+// owner Results → Walls tab prints, off the same tables. Two read paths, because
+// neither one alone is sufficient:
 //
 //   /proxy/walls?date=…   → { tickers: [{ symbol, spot, call_wall, put_wall, cb }] }
 //       Sampled from scanner_snapshots onto a 15m slot grid starting 09:29 ET.
@@ -1126,14 +1130,10 @@ function IbCard() {
 // scanner's first sweep, then the 09:29 ET walls slot for CORE) the card says so
 // instead of printing yesterday's numbers under a live-looking timestamp.
 //
-// FUTURES — scanner_snapshots covers cash indices + equities only, no ES/NQ:
-//   ESU  levels = SPX levels + the ES−SPX basis from /proxy/es-spx-basis. That
-//        module is the one basis source not poisoned by the broker's "SPX" spot
-//        (which actually tracks ES); a null basis stays null and blanks the
-//        levels, because coercing it to 0 prints SPX strikes ~50pt out of place.
-//   NQU  has no NDX→NQ basis module, so it shows live spot only — type NDX into
-//        the box for the index-scale levels.
-// Both futures spots come from /api/tt-quotes on the front contract.
+// NO FUTURES — scanner_snapshots covers cash indices + equities only, so ESU/NQU
+// were derived rows (SPX + the ES−SPX basis, and spot-only for NQ). They are
+// gone: the futures traders read the index levels off the ES chart, and the
+// basis-shifted row was one more number to keep honest for no extra signal.
 interface WallsTickerRow {
   symbol: string;
   spot: number | null; call_wall: number | null; put_wall: number | null; cb: number | null;
@@ -1144,16 +1144,221 @@ interface ScannerRow {
   spot: number | null; call_wall: number | null; put_wall: number | null;
 }
 interface ScannerResp { ok?: boolean; rows?: ScannerRow[]; error?: string }
-interface EsBasisResp { basis: number | null; date?: string }
 
-const TL_DEFAULT: readonly string[] = ["ESU", "NQU", "SPX", "SPY", "QQQ"];
-// Derived rows: which cash index to borrow levels from (null = no basis exists,
-// spot only) and the front contract to quote spot on.
-const TL_FUTURES: Record<string, { index: string | null; quote: string }> = {
-  ESU: { index: "SPX", quote: "/ESU26" },
-  NQU: { index: null, quote: "/NQU26" },
-};
+const TL_DEFAULT: readonly string[] = ["SPX", "SPY", "QQQ"];
 const TL_STORE_KEY = "analytics.tickerLevels.extra";
+const TL_FAV_KEY = "analytics.tickerLevels.favs";
+
+function tlLoadList(key: string): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(key);
+    const arr: unknown = raw ? JSON.parse(raw) : null;
+    return Array.isArray(arr) ? arr.filter((s): s is string => typeof s === "string") : [];
+  } catch { return []; /* private mode / bad JSON — the defaults are fine */ }
+}
+function tlSaveList(key: string, list: string[]): void {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(key, JSON.stringify(list)); } catch { /* ignore */ }
+}
+
+// Searchable symbol picker over the scanner universe, deliberately the same
+// component shape and visual language as the Options Chain page's ticker menu:
+// a bordered trigger, a portal'd frosted panel with a 2px cyan top accent, a
+// search field, star-to-favorite with favorites floated to the top, and
+// click-outside / Esc to close. Portal'd because the card clips its overflow.
+//
+// One thing it does that the chain's picker does not: a query that matches no
+// listed symbol offers to ADD it. The scanner universe is not everything the
+// walls tables know about (NDX, for instance), so a free-text path has to exist
+// — this folds it into the search box rather than a second input under the card.
+function TickerLevelsPicker({
+  value, options, custom, onSelect, onAdd, onRemove,
+}: {
+  value: string;
+  options: readonly string[];
+  custom: readonly string[];
+  onSelect: (t: string) => void;
+  onAdd: (t: string) => void;
+  onRemove: (t: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [favs, setFavs] = useState<string[]>([]);
+  const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [rect, setRect] = useState<{ left: number; top: number; width: number } | null>(null);
+
+  useEffect(() => { setFavs(tlLoadList(TL_FAV_KEY)); }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (r) setRect({ left: r.left, top: r.bottom + 3, width: r.width });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    function onDown(e: MouseEvent) {
+      const t = e.target as Node;
+      if (ref.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") setOpen(false); }
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
+  const toggleFav = (t: string) =>
+    setFavs((prev) => {
+      const next = prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t];
+      tlSaveList(TL_FAV_KEY, next);
+      return next;
+    });
+
+  const favSet = new Set(favs);
+  const customSet = new Set(custom);
+  const q = query.trim().toUpperCase().replace(/[^A-Z0-9.]/g, "");
+  const matches = options.filter((t) => !q || t.includes(q));
+  const favList = matches.filter((t) => favSet.has(t)).sort();
+  const rest = matches.filter((t) => !favSet.has(t)).sort();
+  const exact = options.some((t) => t === q);
+  const rows: Array<{ t: string; fav: boolean; divider?: boolean }> = [
+    ...favList.map((t) => ({ t, fav: true })),
+    ...(favList.length && rest.length ? [{ t: "__divider__", fav: false, divider: true }] : []),
+    ...rest.map((t) => ({ t, fav: false })),
+  ];
+
+  const choose = (t: string) => { onSelect(t); setQuery(""); setOpen(false); };
+  const add = () => { if (q && !exact) { onAdd(q); setQuery(""); setOpen(false); } };
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        ref={btnRef}
+        onClick={() => setOpen((o) => !o)}
+        aria-label="Select ticker"
+        style={{
+          width: "100%", fontSize: 13, fontWeight: 800, padding: "7px 11px",
+          border: `1px solid ${T.border}`, borderRadius: 6,
+          background: "rgba(255,255,255,0.04)", color: T.cyan,
+          cursor: "pointer", outline: "none",
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6,
+          whiteSpace: "nowrap", letterSpacing: "0.08em", textTransform: "uppercase",
+        }}
+      >
+        <span>{value}</span>
+        <span style={{ fontSize: 10, opacity: 0.7, color: T.muted }}>▾</span>
+      </button>
+      {open && rect && createPortal(
+        <div ref={menuRef} style={{
+          position: "fixed", left: rect.left, top: rect.top, zIndex: 9999,
+          width: Math.max(rect.width, 200),
+          background: "rgba(13,17,25,0.97)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+          border: `1px solid ${T.border}`, borderTop: `2px solid ${T.cyan}`, borderRadius: 6,
+          boxShadow: "0 8px 32px rgba(0,0,0,0.7)", overflow: "hidden",
+        }}>
+          <div style={{ padding: 6, borderBottom: `1px solid ${T.border}` }}>
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value.toUpperCase())}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                if (exact) choose(q);
+                else if (rows.length && !rows[0].divider) choose(rows[0].t);
+                else add();
+              }}
+              placeholder="Search or add…"
+              spellCheck={false}
+              autoComplete="off"
+              style={{
+                width: "100%", boxSizing: "border-box", fontSize: 11, fontWeight: 700,
+                padding: "5px 8px", border: `1px solid ${T.border}`, borderRadius: 5,
+                background: "rgba(255,255,255,0.04)", color: T.text, outline: "none",
+                letterSpacing: "0.06em",
+              }}
+            />
+          </div>
+          <div style={{ maxHeight: 300, overflowY: "auto", padding: "3px 0" }}>
+            {q && !exact ? (
+              <div
+                onClick={add}
+                style={{
+                  padding: "6px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer",
+                  color: T.cyan, letterSpacing: "0.04em",
+                  borderBottom: rows.length ? `1px solid ${T.border}` : undefined,
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                + Add “{q}”
+              </div>
+            ) : null}
+            {rows.length === 0 && !q ? (
+              <div style={{ padding: "8px 12px", fontSize: 10, color: T.muted }}>No tickers</div>
+            ) : null}
+            {rows.map((row) => {
+              if (row.divider) {
+                return <div key="div" style={{ height: 1, background: T.border, margin: "3px 8px" }} />;
+              }
+              const active = row.t === value.toUpperCase();
+              return (
+                <div
+                  key={row.t}
+                  onClick={() => choose(row.t)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 6,
+                    padding: "5px 10px", fontSize: 11, fontWeight: active ? 800 : 600,
+                    cursor: "pointer", whiteSpace: "nowrap",
+                    color: active ? T.cyan : T.text,
+                    background: active ? "rgba(33,158,188,0.10)" : "transparent",
+                    letterSpacing: "0.04em",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = active ? "rgba(33,158,188,0.15)" : "rgba(255,255,255,0.05)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = active ? "rgba(33,158,188,0.10)" : "transparent")}
+                >
+                  <span
+                    onClick={(e) => { e.stopPropagation(); toggleFav(row.t); }}
+                    title={row.fav ? "Unfavorite" : "Favorite"}
+                    style={{ cursor: "pointer", fontSize: 12, lineHeight: 1, color: row.fav ? "#ffd600" : "rgba(255,255,255,0.28)" }}
+                  >
+                    {row.fav ? "★" : "☆"}
+                  </span>
+                  <span style={{ flex: 1, minWidth: 0 }}>{row.t}</span>
+                  {customSet.has(row.t) ? (
+                    <span
+                      onClick={(e) => { e.stopPropagation(); onRemove(row.t); }}
+                      title={`Remove ${row.t}`}
+                      style={{ cursor: "pointer", fontSize: 12, lineHeight: 1, color: T.muted, opacity: 0.7 }}
+                    >
+                      ×
+                    </span>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
 
 // "Aug 6 · 0DTE" for the expiry the levels were computed on. The scanner always
 // takes expirations[0] — the nearest — so this reads 0DTE intraday and rolls to
@@ -1178,20 +1383,13 @@ function TickerLevelsCard() {
   const today = etDateISO();
   const [tk, setTk] = useState<string>("SPX");
   const [extra, setExtra] = useState<string[]>([]);
-  const [input, setInput] = useState("");
 
   // Restore the trader's own tickers in an effect rather than a useState
   // initializer, so the server render and the first client render match.
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(TL_STORE_KEY);
-      const parsed: unknown = raw ? JSON.parse(raw) : null;
-      if (Array.isArray(parsed)) setExtra(parsed.filter((s): s is string => typeof s === "string"));
-    } catch { /* private mode / bad JSON — the defaults are fine */ }
-  }, []);
+  useEffect(() => { setExtra(tlLoadList(TL_STORE_KEY)); }, []);
   const persist = (next: string[]) => {
     setExtra(next);
-    try { window.localStorage.setItem(TL_STORE_KEY, JSON.stringify(next)); } catch {}
+    tlSaveList(TL_STORE_KEY, next);
   };
 
   const { data: walls, loading: wLoading, error: wError, lastUpdated } =
@@ -1203,12 +1401,10 @@ function TickerLevelsCard() {
   const corePending = !!walls && wallRows.length === 0;
   const { data: scan, loading: sLoading, error: sError } =
     useLiveData<ScannerResp>(`/proxy/scanner?any=1&limit=200`, 120_000);
-  // Basis moves ~1pt/day and the endpoint caches for an hour — 10m is plenty.
-  const { data: esBasis } = useLiveData<EsBasisResp>(`/proxy/es-spx-basis`, 600_000);
-  const futSymbols = Object.values(TL_FUTURES).map((f) => f.quote).join(",");
-  const { data: quotes } = useLiveData<QuotesResp>(
-    `/api/tt-quotes?symbols=${encodeURIComponent(futSymbols)}`, 15_000
-  );
+  // The dropdown's universe: the scanner's own list (live via /proxy/scanner-
+  // tickers with a static fallback) — the same source the Options Chain picker
+  // reads, so the two menus can't drift apart.
+  const { tickers: scannerTickers } = useScannerTickers();
 
   // scanner first (fresher spot/walls), then walls overlays CORE on top.
   // `stale` rows are the recorder's own flag for "this is a carried-over row
@@ -1244,36 +1440,7 @@ function TickerLevelsCard() {
      ...wallRows.map((t) => String(t.symbol).toUpperCase())]
   );
 
-  const quoteFor = (sym: string): number | null => {
-    const it = quotes?.data?.items?.find((i) => String(i.symbol) === sym);
-    if (!it) return null;
-    const v = numOr(it.last) ?? numOr(it["last-price"]) ?? numOr(it.mark) ?? numOr(it.close);
-    return v != null && v > 0 ? v : null;
-  };
-
-  const basis = esBasis && typeof esBasis.basis === "number" && isFinite(esBasis.basis) ? esBasis.basis : null;
-
   const buildRow = (sym: string): TickerLevelRow => {
-    const fut = TL_FUTURES[sym];
-    if (fut) {
-      const spot = quoteFor(fut.quote);
-      const src = fut.index ? bySymbol.get(fut.index) : null;
-      if (!src || basis == null) {
-        return {
-          symbol: sym, spot, core: null, call: null, put: null, expiry: null,
-          note: !fut.index ? "no NQ basis — switch to NDX"
-            : basis == null ? "waiting on ES−SPX basis"
-            : `waiting on today's ${fut.index} sweep`,
-        };
-      }
-      const shift = (n: number | null) => (n == null ? null : n + basis);
-      return {
-        symbol: sym, spot, core: shift(src.core), call: shift(src.call), put: shift(src.put),
-        // The expiry is the INDEX's — ES borrows SPX's chain, it has none of its own.
-        expiry: src.expiry,
-        note: `${fut.index} ${basis >= 0 ? "+" : "−"}${Math.abs(basis).toFixed(1)} basis`,
-      };
-    }
     const e = bySymbol.get(sym);
     return {
       symbol: sym, spot: e?.spot ?? null, core: e?.core ?? null, call: e?.call ?? null,
@@ -1284,12 +1451,14 @@ function TickerLevelsCard() {
     };
   };
 
-  const tickers = [...TL_DEFAULT, ...extra];
+  // Menu contents: the three anchors, whatever the trader added, the whole
+  // scanner universe, and the current selection (so a symbol restored from an
+  // older save never renders as a trigger with no matching row). De-duped.
+  const tickers = Array.from(new Set([...TL_DEFAULT, ...extra, ...scannerTickers, tk.toUpperCase()]));
   const row = buildRow(tk);
 
-  const addTicker = () => {
-    const sym = input.trim().toUpperCase().replace(/[^A-Z0-9.]/g, "");
-    setInput("");
+  const addTicker = (raw: string) => {
+    const sym = raw.trim().toUpperCase().replace(/[^A-Z0-9.]/g, "");
     if (!sym) return;
     if (!tickers.includes(sym)) persist([...extra, sym]);
     setTk(sym); // typing a ticker means you want to look at it
@@ -1342,29 +1511,23 @@ function TickerLevelsCard() {
         </span>
       </Row>
 
-      <PillSelect value={tk} options={tickers} onChange={setTk} />
-      <div style={{ display: "flex", gap: 6 }}>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTicker(); } }}
-          placeholder="Other ticker…"
-          style={{ ...homeInputStyle, fontSize: 13, padding: "6px 10px", flex: 1, minWidth: 0 }}
-        />
-        <button onClick={addTicker} style={homeSecondaryButtonStyle}>Add</button>
-        {extra.includes(tk) ? (
-          <button onClick={() => removeTicker(tk)} style={homeSecondaryButtonStyle} title={`Remove ${tk}`}>×</button>
-        ) : null}
-      </div>
+      <TickerLevelsPicker
+        value={tk}
+        options={tickers}
+        custom={extra}
+        onSelect={setTk}
+        onAdd={addTicker}
+        onRemove={removeTicker}
+      />
 
       {loading || error ? (
         <CardState loading={loading} error={error} empty="Waiting on today's first recorder run." />
       ) : (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, minWidth: 0 }}>
-            <Stat label="Put Wall" value={fmtLvl(row.put)} color={row.put == null ? T.muted : POS_GREEN} size={18} />
             <Stat label="Spot" value={fmtSpot(row.spot)} size={18} />
             <Stat label="Call Wall" value={fmtLvl(row.call)} color={row.call == null ? T.muted : T.orange} size={18} />
+            <Stat label="Put Wall" value={fmtLvl(row.put)} color={row.put == null ? T.muted : POS_GREEN} size={18} />
           </div>
 
           <div style={divider} />
@@ -1487,7 +1650,7 @@ interface TlLevels {
 // Walls + flip off the FULL ladder (not the drawn window) — a wall two hundred
 // points out is still the wall, and cropping the ladder first would invent a
 // nearer one.
-function tlLevelsFrom(rows: TlRow[]): TlLevels {
+function tlLevelsFrom(rows: TlRow[], spot: number | null): TlLevels {
   // Top TWO +GEX strikes, not one — see the CB collision rule below.
   let callWall: TlRow | null = null, callWall2: TlRow | null = null;
   let putWall: TlRow | null = null, core: TlRow | null = null;
@@ -1510,18 +1673,31 @@ function tlLevelsFrom(rows: TlRow[]): TlLevels {
   if (core != null && callWall != null && core.strike === callWall.strike) {
     callWall = callWall2;
   }
-  // Gamma flip: cumulate from the lowest strike up and take the first sign
-  // change, interpolated between the two strikes that straddle it.
+  // Gamma flip — PORT OF server-v2/computation/gex-calculator.js findGexFlip(),
+  // which is what /proxy/gex, the EOD recorder and every other GEX surface in
+  // this app mean by "flip". Two things it does that a naive sign-change scan
+  // does not, and both matter:
+  //
+  //   1. ONLY the negative→positive crossing counts. Cumulating from the lowest
+  //      strike up, dealer gamma starts short (put wing) and turns long; that
+  //      one turn is the flip. A later positive→negative dip in the call wing —
+  //      one fat short-gamma strike out in the wings — is NOT a flip, and
+  //      catching it printed a level hundreds of points above spot.
+  //   2. It needs a spot. No spot, no flip, rather than a number computed off
+  //      an unpriced ladder.
   let flip: number | null = null;
-  let cum = 0, prevK: number | null = null;
-  for (const r of rows) {
-    const next = cum + r.gex;
-    if (prevK != null && ((cum < 0 && next >= 0) || (cum > 0 && next <= 0))) {
-      const span = next - cum;
-      flip = span === 0 ? r.strike : r.strike - ((next / span) * (r.strike - prevK));
-      break;
+  if (spot != null && spot > 0) {
+    let cum = 0, prevCum = 0, prevK: number | null = null;
+    for (const r of rows) {
+      prevCum = cum;
+      cum += r.gex;
+      if (prevK != null && prevCum < 0 && cum >= 0) {
+        const range = cum - prevCum;
+        flip = Math.abs(range) > 0 ? prevK + (r.strike - prevK) * (-prevCum / range) : r.strike;
+        break;
+      }
+      prevK = r.strike;
     }
-    cum = next; prevK = r.strike;
   }
   return {
     callWall: callWall?.strike ?? null,
@@ -1723,8 +1899,14 @@ function TickerLookupCard() {
     .sort((a, b) => a.strike - b.strike);
   const rightRows = boardIsFull ? boardRows : frontRows;
 
-  const leftLevels = tlLevelsFrom(leftRows);
-  const rightLevels = tlLevelsFrom(rightRows);
+  const leftLevels = tlLevelsFrom(leftRows, spot);
+  // The full-board sweep already ran findGexFlip() server-side on the same rows
+  // — take its answer when it has one rather than recomputing a second opinion.
+  const serverFlip = numOr(multi?.all?.gexFlip);
+  const rightBase = tlLevelsFrom(rightRows, spot);
+  const rightLevels: TlLevels = boardIsFull && serverFlip != null
+    ? { ...rightBase, flip: serverFlip }
+    : rightBase;
   const atm = tlAtm(atmGroup, spot ?? 0);
   const positiveGamma = rightLevels.net >= 0;
 

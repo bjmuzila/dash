@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026-08-10 - prem diff: 1-minute intraday mode for SPX / SPY / QQQ
+
+New: `server-v2/atm-prem-intraday-recorder.js`. Edited: `server-v2/api-router.js`
+(one new read-only route), `server-v2/atm-prem-recorder.js` (starts the intraday
+recorder), `app/test/PremDiffTab.tsx` (Daily/Intraday + Per-minute/Cumulative
+toggles). NO proxy file was touched.
+
+- **Per-minute premium is a DIFFERENCE, not a product.** The chain reports
+  cumulative day volume, so reading it once a minute and multiplying by the mark
+  would re-count the whole session every minute. Each bucket is
+  `(volume_now - volume_prev) x mark_now x 100`, and the delta is taken PER
+  STRIKE before summing - aggregating volume to the band first and differencing
+  that would price every contract at one blended number, which on a chain where
+  a 2-delta wing and the ATM straddle differ by two orders of magnitude is a
+  different quantity, not an approximation.
+- **Side effect worth knowing:** summing the minute buckets gives a BETTER day
+  total than the EOD recorder's single snapshot, which prices the whole session's
+  volume at the 16:05 mark. They will not agree; the EOD number is the cruder
+  one. Stored in separate tables, neither overwrites the other.
+- **Restarts are recorded, not smoothed over.** The per-strike previous-volume
+  map is in memory, so the first tick after a restart has nothing to difference
+  against. It writes a BASELINE row (zero interval premium) instead of dumping
+  the whole gap into one enormous fake bar. The panel says so when a session
+  contains one, including that the cumulative line then starts from the restart
+  rather than the open.
+- **Band membership is recomputed every minute** against that minute's spot. A
+  fixed strike list chosen at the open would be measuring something else by
+  lunch. New strikes contribute nothing on the minute they first appear - their
+  cumulative volume is history, not that minute's flow.
+- **9:29 start, not 9:30.** The pre-bell tick establishes the day's baseline off
+  pre-open volume, so the 09:30 bucket is the opening minute's flow rather than
+  the opening minute plus everything that printed pre-market.
+- **New table `atm_prem_intraday`**, PK
+  `(date, symbol, slot, band_pct, minute)`, 45-day retention, ~7k rows/session at
+  3 symbols x 2 slots x 3 bands x 390 minutes.
+- **Started from `startAtmPremRecorder()`**, not a second hook in
+  `server-with-proxy.js`. One boot call owns ATM premium capture at both
+  resolutions; splitting the wiring means touching the proxy server file again
+  for no reason.
+- **Price pane uses real 1m candles** from candle-history, not the stored
+  per-minute spot - one sample a minute gives open=high=low=close and renders as
+  a row of dashes. A candle failure degrades to spot, it does not fail the
+  request.
+- Intraday auto-refreshes every 60s; the symbol picker narrows to SPX/SPY/QQQ so
+  it cannot offer a name with no recorder behind it.
+
 ## 2026-08-10 - edge-check: the discriminating test (does the tilt beat "we just went down"?)
 
 `server-v2/atm-prem-edge-check.js`.

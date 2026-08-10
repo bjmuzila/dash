@@ -141,8 +141,12 @@ export default function EconomicCalendarPage() {
   // Earnings market-cap floor, in dollars. 0 = no floor (see MCAP_OPTS).
   const [mcapMin,       setMcapMin]       = useState(0);
   const [capOpen,       setCapOpen]       = useState(false);
+  // "idle" | "working" | "failed" — drives the screenshot button's label only.
+  const [shot,          setShot]          = useState<"idle" | "working" | "failed">("idle");
   const dropRef   = useRef<HTMLDivElement>(null);
   const capRef    = useRef<HTMLDivElement>(null);
+  const shotRef   = useRef<HTMLDivElement>(null);   // whole page, incl. toolbar
+  const scrollRef = useRef<HTMLDivElement>(null);   // the clipping scroll box
 
   useEffect(() => {
     function h(e: MouseEvent) {
@@ -153,6 +157,77 @@ export default function EconomicCalendarPage() {
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, []);
+
+  /**
+   * PNG of the whole page — toolbar, day separators and every row, not just the
+   * part currently on screen.
+   *
+   * Two things make this less trivial than handing the node to html2canvas:
+   *
+   * 1. The list lives in a `flex:1; overflow-y:auto` box, and html2canvas clips
+   *    to the element's box. A week that runs past the fold would be cut off at
+   *    exactly the fold. So the scroll box (and the 100%-height shell around it)
+   *    are expanded to their natural height for the capture and restored in
+   *    `finally` — including on the error path, or the page would be left with a
+   *    broken layout after a failed screenshot.
+   * 2. Ticker logos that fall through to /proxy/ticker-logo end up 302'd to a
+   *    third-party host. Drawing one of those into the canvas TAINTS it and
+   *    toBlob then throws SecurityError, killing the whole screenshot over a
+   *    16px image. `useCORS` + `allowTaint:false` makes html2canvas skip any
+   *    image it cannot read instead: a missing logo, not a missing screenshot.
+   *    Locally-mirrored logos in public/logos are same-origin and always draw.
+   */
+  const takeShot = useCallback(async () => {
+    const el = shotRef.current;
+    if (!el || shot === "working") return;
+    setDropOpen(false);
+    setCapOpen(false);
+    setShot("working");
+
+    const sc = scrollRef.current;
+    const prevSc = sc ? { overflowY: sc.style.overflowY, height: sc.style.height, flex: sc.style.flex } : null;
+    const prevEl = { height: el.style.height, overflow: el.style.overflow };
+    if (sc) { sc.style.overflowY = "visible"; sc.style.height = "auto"; sc.style.flex = "none"; }
+    el.style.height = "auto";
+    el.style.overflow = "visible";
+
+    try {
+      // Dynamic import: html2canvas is ~200KB and nobody pays for it until the
+      // first time they press the button.
+      const html2canvas = (await import("html2canvas")).default;
+      await new Promise(r => requestAnimationFrame(() => r(null)));  // let the re-layout settle
+      const canvas = await html2canvas(el, {
+        backgroundColor: HT.bg,          // else transparent, which reads black-on-black in most viewers
+        scale: Math.min(2, window.devicePixelRatio || 1),
+        useCORS: true,
+        allowTaint: false,
+        logging: false,
+        windowWidth: el.scrollWidth,
+        windowHeight: el.scrollHeight,
+      });
+      const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, "image/png"));
+      if (!blob) throw new Error("PNG encode returned nothing");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      // etToday() rather than the `today` const — that is declared further down
+      // and would be in its TDZ at the point this callback is created.
+      a.download = `${activeTab === "earnings" ? "earnings" : "econ-calendar"}-${etToday()}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      setShot("idle");
+    } catch (e) {
+      console.warn("[econ-calendar] screenshot failed:", e);
+      setShot("failed");
+      setTimeout(() => setShot("idle"), 2500);
+    } finally {
+      if (sc && prevSc) { sc.style.overflowY = prevSc.overflowY; sc.style.height = prevSc.height; sc.style.flex = prevSc.flex; }
+      el.style.height = prevEl.height;
+      el.style.overflow = prevEl.overflow;
+    }
+  }, [shot, activeTab]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -316,7 +391,10 @@ export default function EconomicCalendarPage() {
             display: "flex", alignItems: "center", gap: 8,
           }}
         >
-          <span style={{ fontSize: 12, fontWeight: 800, color: isTod ? HT.cyan : "#3a5570", letterSpacing: "0.1em" }}>
+          {/* Day label is white on every day, today included — the cyan TODAY
+              pill and the tinted row already mark today, and the old #3a5570
+              made every other date read as disabled. */}
+          <span style={{ fontSize: 12, fontWeight: 800, color: HT.text, letterSpacing: "0.1em" }}>
             {fullDayLabel(date, today)}
           </span>
           {isTod && (
@@ -409,7 +487,7 @@ export default function EconomicCalendarPage() {
   }
 
   return (
-    <div style={{ ...homeShellStyle, height: "100%" }}>
+    <div ref={shotRef} style={{ ...homeShellStyle, height: "100%" }}>
 
       {/* Top bar */}
       <div style={{
@@ -553,6 +631,18 @@ export default function EconomicCalendarPage() {
             onChange={e => setSearch(e.target.value)}
             style={{ fontSize: 12, padding: "4px 10px", background: "rgba(0,0,0,0.4)", border: `1px solid ${HT.border}`, color: HT.text, outline: "none", borderRadius: 3, width: 140 }}
           />
+          <button
+            onClick={takeShot}
+            disabled={shot === "working"}
+            title="Save the full calendar as a PNG"
+            style={{
+              ...homeButtonStyle,
+              color: shot === "failed" ? HT.red : undefined,
+              borderColor: shot === "failed" ? HT.red : undefined,
+            }}
+          >
+            {shot === "working" ? "…" : shot === "failed" ? "✕ failed" : "⧉ Shot"}
+          </button>
           <button onClick={load} disabled={loading} style={{ ...homeButtonStyle }}>
             {loading ? "…" : "↻ Now"}
           </button>
@@ -579,7 +669,7 @@ export default function EconomicCalendarPage() {
       )}
 
       {/* Event / earnings list */}
-      <div style={{ flex: 1, overflowY: "auto" }}>
+      <div ref={scrollRef} style={{ flex: 1, overflowY: "auto" }}>
         {activeTab === "earnings" ? (
           loading && earnings.length === 0 ? (
             <div style={{ color: HT.text, fontSize: 14, textAlign: "center", marginTop: 60 }}>Loading…</div>
