@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-08-10 - Flow GEX panel now uses the EXISTING endpoint; my api-router change is reverted
+
+`components/pages/StrikeHistory.tsx`. **`server-v2/api-router.js` is back to its
+original content** - the `/api/strike-gex-series` handler is untouched again.
+
+The two entries below describe a per-strike Flow GEX reconstruction I added to
+`/api/strike-gex-series`, then patched twice when the panel came up empty. That
+was the wrong call from the start: `state/flow-gex-history.js` already does this
+exact reconstruction, is already wired up at `/proxy/flow-gex-history`, and is
+already proven in prod by the contract-flow popup - including a `strike=` single
+-strike fast path added precisely because the full window query was too slow.
+I wrote a second implementation of the same formula and then debugged the copy.
+
+- **The panel now fetches `/proxy/flow-gex-history?strike=&expiration=&date=`**
+  in parallel with the existing series call, and merges client-side. Everything
+  the reverted server code was trying to get right - the overnight two-day date
+  window, the SPX/SPXW root split, NULL `underlying_norm`, the `bucket <>
+  'neutral'` guard - that module already handled.
+- **Step-aligned, not joined.** Flow points are per-MINUTE with `ts` in SECONDS;
+  GEX snapshots are a 30s grid with `t` in MILLISECONDS. Each snapshot takes the
+  most recent flow point at or before it (that is what "inventory as of now"
+  means); snapshots before the first print stay null. An equality join would
+  have matched almost nothing - and would have looked like "no data" again.
+- **Empty state now points at the endpoint** with the exact URL to try, since a
+  blank panel here is now a routing/server question rather than a data one.
+
+Net effect: one implementation of γ × dealer inventory × spot², not two.
+
 ## 2026-08-10 - /strike-history: an empty Flow GEX panel now says WHICH empty it is
 
 `server-v2/api-router.js` (`/api/strike-gex-series`), `components/pages/StrikeHistory.tsx`.

@@ -105,6 +105,9 @@ const fmtVp = (v: number | null | undefined, digits = 1) =>
   v == null || !Number.isFinite(v) ? "—" : (v > 0 ? "+" : "") + (v * 100).toFixed(digits);
 const fmtIv = (v: number | null | undefined) =>
   v == null || !Number.isFinite(v) ? "—" : (v * 100).toFixed(1) + "%";
+/** Today's ET calendar date, for the "is this a back-session" retention check. */
+const todayEtYmd = (): string =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: ET, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 /** Signed contract count — the sign IS the reading, so + is always explicit. */
 const fmtSigned = (v: number | null | undefined) =>
   v == null || !Number.isFinite(v) ? "—" : (v > 0 ? "+" : "") + Math.round(v).toLocaleString("en-US");
@@ -612,21 +615,58 @@ export default function StrikeHistoryPage() {
     if (!date || !expiry || !strike) { setRows([]); return; }
     setRefreshState("refreshing");
     try {
-      const r = await fetch(`/api/strike-gex-series?mode=series&date=${date}&expiry=${expiry}&strike=${strike}`);
+      // Flow GEX comes from the EXISTING /proxy/flow-gex-history endpoint
+      // (server-v2/state/flow-gex-history.js), not from a second reconstruction
+      // bolted onto /api/strike-gex-series. That module already replays the
+      // flow_prints tape into a running dealer position and applies
+      // γ·net·spot², it already handles the overnight date window and the
+      // SPX/SPXW root split, and it is already proven in prod by the
+      // contract-flow popup — which uses the same `strike=` fast path this does.
+      // Two implementations of one formula is how they drift.
+      const [r, fr] = await Promise.all([
+        fetch(`/api/strike-gex-series?mode=series&date=${date}&expiry=${expiry}&strike=${strike}`),
+        fetch(`/proxy/flow-gex-history?strike=${strike}&expiration=${expiry}&date=${date}`).catch(() => null),
+      ]);
       const j = await r.json();
       if (j.error) { setErr(String(j.error)); setRefreshState("error"); return; }
-      // An older server-v2 has no idea what Flow GEX is and omits these keys
-      // entirely, so every row's flowGex reads back undefined — indistinguishable
-      // from "no tape recorded" unless we check for the KEY rather than the
-      // value. Shipping the SPA without the server is the normal way to land
-      // here, and blaming it on a missing tape sends you looking in the wrong
-      // place. `in` (not a truthiness test) because false is a valid value.
+
+      // Flow points are PER-MINUTE with ts in SECONDS; the GEX snapshots are on
+      // a 30s grid with t in MILLISECONDS. Step-align rather than join: each
+      // snapshot takes the most recent flow point at or before it, which is what
+      // "dealer inventory as of this moment" means. A plain equality join would
+      // have matched almost nothing.
+      let flowPts: { ts: number; flowGex: number | null; callNet: number; putNet: number }[] = [];
+      let flowOk = false;
+      try {
+        const fj = fr ? await fr.json() : null;
+        if (fj && fj.seriesByStrike) {
+          flowOk = true;
+          const series = fj.seriesByStrike[String(Number(strike))] ?? fj.seriesByStrike[strike] ?? [];
+          flowPts = (Array.isArray(series) ? series : []).map((p: { ts: number; flowGex: number | null; callNet: number; putNet: number }) => ({
+            ts: Number(p.ts) * 1000, flowGex: p.flowGex, callNet: Number(p.callNet), putNet: Number(p.putNet),
+          })).sort((a, b) => a.ts - b.ts);
+        }
+      } catch { /* endpoint unreachable or not JSON — treated as unsupported */ }
+
       setFlowMeta({
-        supported: "flowGexAvailable" in (j ?? {}),
-        reason: typeof j.flowGexReason === "string" ? j.flowGexReason : null,
-        partial: j.flowGexPartial === true,
+        supported: flowOk,
+        reason: !flowOk ? "unreachable" : flowPts.length ? "ok" : "no-tape-for-session",
+        // Small prints age out of flow_prints after ~1 day, big ones after ~5
+        // (state/retention-cleanup.js), so any prior session rebuilds from big
+        // prints ALONE and understates while still drawing a confident line.
+        partial: flowOk && flowPts.length > 0 && date !== todayEtYmd(),
       });
-      setRows(j.rows ?? []);
+
+      const base: Row[] = j.rows ?? [];
+      let i = 0;
+      let cur: (typeof flowPts)[number] | null = null;
+      const merged: Row[] = base.map((row) => {
+        while (i < flowPts.length && flowPts[i].ts <= row.t) cur = flowPts[i++];
+        return cur
+          ? { ...row, flowGex: cur.flowGex, flowCallNet: cur.callNet, flowPutNet: cur.putNet }
+          : { ...row, flowGex: null, flowCallNet: null, flowPutNet: null };
+      });
+      setRows(merged);
       setErr(null);
       setRefreshState("success");
       setTimeout(() => setRefreshState("idle"), 1200);
@@ -941,17 +981,13 @@ export default function StrikeHistoryPage() {
               <div style={{ fontSize: 12.5, color: HOME_THEME.green, opacity: 0.75, padding: "48px 8px", textAlign: "center", lineHeight: 1.7 }}>
                 {!flowMeta.supported ? (
                   <>
-                    This server build doesn&apos;t serve Flow GEX yet.<br />
+                    <code>/proxy/flow-gex-history</code> didn&apos;t answer.<br />
                     <span style={{ opacity: 0.75 }}>
-                      The page is newer than the API. Deploy <code>server-v2/api-router.js</code> —
-                      the data it needs (flow_prints + the gamma columns) is already being recorded,
-                      so this fills in for today&apos;s session as soon as the server restarts.
+                      That endpoint lives in the proxy server, not Next — so this is a routing or
+                      server-down problem, not missing data. Check it directly:
+                      <br />
+                      <code style={{ fontSize: 11 }}>/proxy/flow-gex-history?strike={strike}&amp;expiration={expiry}&amp;date={date}</code>
                     </span>
-                  </>
-                ) : flowMeta.reason?.startsWith("error") ? (
-                  <>
-                    Flow inventory query failed.<br />
-                    <span style={{ opacity: 0.75, fontFamily: "var(--font-mono)", fontSize: 11 }}>{flowMeta.reason}</span>
                   </>
                 ) : (
                   <>
