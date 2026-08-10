@@ -80,7 +80,7 @@
 
 const { DxLinkClient, getQuoteToken, fetchExpirations, fetchChainFull } = require('./proxy-tastytrade');
 const {
-  ensureSchema, upsertRows, monthlyTarget, thirdFriday, BANDS, CONTRACT_MULTIPLIER,
+  ensureSchema, upsertRows, monthlyTarget, thirdFriday, AM_SETTLED_ROOTS, BANDS, CONTRACT_MULTIPLIER,
 } = require('./atm-prem-recorder');
 
 // ── Args ─────────────────────────────────────────────────────────────────────
@@ -292,7 +292,7 @@ async function inferStrikeIncrement(root) {
  * (The live recorder does not need this: resolveMonthlies() snaps to what the
  * root actually LISTS, which is only possible for unexpired months.)
  */
-function makeMonthlyResolver(sessionDates) {
+function makeMonthlyResolver(sessionDates, { amSettled = false } = {}) {
   const sessions = new Set(sessionDates);
   const sorted = [...sessions].sort();
   const first = sorted[0];
@@ -315,7 +315,13 @@ function makeMonthlyResolver(sessionDates) {
   /** The n-th monthly expiry on/after `ymd`, holiday-snapped. */
   return (ymd, n) => {
     let [y, m] = ymd.split('-').map(Number);
-    if (snap(thirdFriday(y, m)) < ymd) { m += 1; if (m > 12) { m = 1; y += 1; } }
+    // AM-settled roots roll a session early: the expiration date itself has no
+    // tape in the expiring contract, so it belongs to the next month. Mirrors
+    // monthlyTarget()'s `spent` test in atm-prem-recorder.js — the two must
+    // agree or a live row and a backfilled row for the same date would carry
+    // different expiries.
+    const spent = (tf) => (amSettled ? tf <= ymd : tf < ymd);
+    if (spent(snap(thirdFriday(y, m)))) { m += 1; if (m > 12) { m = 1; y += 1; } }
     for (let i = 0; i < n; i++) { m += 1; if (m > 12) { m = 1; y += 1; } }
     return snap(thirdFriday(y, m));
   };
@@ -330,8 +336,8 @@ function makeMonthlyResolver(sessionDates) {
  * `byDate` exists so the row-flattening step reuses the SAME resolved expiry
  * the pull used, rather than recomputing it and risking the two disagreeing.
  */
-function activeMonthlies(sessionDates) {
-  const resolve = makeMonthlyResolver(sessionDates);
+function activeMonthlies(sessionDates, opts = {}) {
+  const resolve = makeMonthlyResolver(sessionDates, opts);
   const byExpiry = new Map();
   const byDate = new Map();
   const touch = (exp, slot, d) => {
@@ -379,7 +385,8 @@ async function backfillSymbol(root, opts) {
 
   const inc = await inferStrikeIncrement(root);
   const widest = Math.max(...BANDS) + pad;
-  const active = activeMonthlies(sessions);
+  const amSettled = AM_SETTLED_ROOTS.has(root.toUpperCase().replace(/^\$/, ''));
+  const active = activeMonthlies(sessions, { amSettled });
 
   // Every monthly that was front or back month in the window. Expired ones are
   // included by default — they replay on this token — so this is normally the

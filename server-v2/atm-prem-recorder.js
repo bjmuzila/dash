@@ -127,11 +127,36 @@ function thirdFriday(year, month /* 1-12 */) {
   return `${year}-${mm}-${dd}`;
 }
 
-/** The n-th monthly expiry target on/after `ymd` (n=0 → front, n=1 → back). */
-function monthlyTarget(ymd, n) {
+/**
+ * Roots whose standard monthly is AM-SETTLED, where the last trading day is the
+ * session BEFORE the expiration date.
+ *
+ * This is not trivia — it decides whether expiration day belongs to the expiring
+ * month or the next one. SPY/QQQ/NVDA monthlies are PM-settled and trade all the
+ * way through the expiration Friday's close, so that Friday's tape belongs to
+ * the expiring contract. SPX's does not trade at all that day; the settlement
+ * print is struck from the open. Treating it as still-front leaves the series
+ * with an empty front leg on every monthly expiration.
+ *
+ * Measured: the first four-symbol backfill produced a front leg on 250 of 250
+ * sessions for SPY, QQQ and NVDA, but 238 of 250 for SPX — and the 12 missing
+ * days were exactly the 12 monthly expirations in the window.
+ */
+const AM_SETTLED_ROOTS = new Set(['SPX', 'XSP', 'NDX', 'RUT', 'VIX', 'DJX']);
+
+/**
+ * The n-th monthly expiry target on/after `ymd` (n=0 → front, n=1 → back).
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.amSettled] roll one day early — see AM_SETTLED_ROOTS.
+ */
+function monthlyTarget(ymd, n, { amSettled = false } = {}) {
   let [y, m] = ymd.split('-').map(Number);
-  // If this month's third Friday has already passed, the front month is next.
-  if (thirdFriday(y, m) < ymd) { m += 1; if (m > 12) { m = 1; y += 1; } }
+  // Has this month's monthly stopped being tradeable? For a PM-settled root
+  // that is "the third Friday is behind us"; for an AM-settled one the
+  // expiration day itself already has no tape, so it rolls a session earlier.
+  const spent = (tf) => (amSettled ? tf <= ymd : tf < ymd);
+  if (spent(thirdFriday(y, m))) { m += 1; if (m > 12) { m = 1; y += 1; } }
   for (let i = 0; i < n; i++) { m += 1; if (m > 12) { m = 1; y += 1; } }
   return thirdFriday(y, m);
 }
@@ -161,7 +186,11 @@ async function resolveMonthlies(ticker, ymd, listed = null) {
       .sort((a, b) => daysBetween(a, target) - daysBetween(b, target));
     return near[0] ?? null;
   };
-  return { front: snap(monthlyTarget(ymd, 0)), back: snap(monthlyTarget(ymd, 1)) };
+  const am = AM_SETTLED_ROOTS.has(String(ticker || '').toUpperCase().replace(/^\$/, ''));
+  return {
+    front: snap(monthlyTarget(ymd, 0, { amSettled: am })),
+    back: snap(monthlyTarget(ymd, 1, { amSettled: am })),
+  };
 }
 
 // ── PG pool (same lazy pattern as oi-daily-recorder.js) ──────────────────────
@@ -573,6 +602,7 @@ module.exports = {
   resolveMonthlies,
   thirdFriday,
   monthlyTarget,
+  AM_SETTLED_ROOTS,
   BANDS,
   CONTRACT_MULTIPLIER,
 };

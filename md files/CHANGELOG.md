@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-08-10 - prem diff: AM-settled roots roll a session early (SPX's 12 missing front legs)
+
+`server-v2/atm-prem-recorder.js`, `server-v2/atm-prem-backfill.js`.
+
+- **Holiday fix confirmed.** The re-run resolved June to `2026-06-18` and got
+  193 of 350 contracts back. SPY front-month leg: 250 of 250 sessions, up from
+  227. QQQ and NVDA also 250 of 250.
+- **SPX came back 238 of 250** while the three ETF-style roots were perfect, and
+  the 12 missing days were exactly the 12 monthly expirations in the window.
+  That is not a data gap - **SPX's standard monthly is AM-SETTLED.** The
+  settlement value is struck from Friday's open and the contract does not trade
+  that day at all, so asking for its tape returns nothing. SPY/QQQ/NVDA
+  monthlies are PM-settled and trade through the Friday close, which is why only
+  SPX showed it.
+- **`AM_SETTLED_ROOTS`** (`SPX`, `XSP`, `NDX`, `RUT`, `VIX`, `DJX`) now drives a
+  `spent` test in `monthlyTarget()`: PM-settled rolls when the third Friday is
+  BEHIND the session, AM-settled rolls when it is behind OR EQUAL. So on an
+  AM-settled expiration day the front month is already next month, which is what
+  the tape actually shows.
+- **Both paths changed together, deliberately.** `makeMonthlyResolver()` in the
+  backfill mirrors the same `spent` test. If only one moved, a live row and a
+  backfilled row for the same date would carry different expiries and the series
+  would quietly disagree with itself at the seam.
+- Verified on a synthetic calendar: for 2026-05-15 (May expiration Friday) the
+  PM resolver still says front = 2026-05-15 while the AM resolver says
+  2026-06-18; the holiday-shifted 2026-06-18 behaves the same way.
+- **Re-run SPX to pick this up** - upsert is on `(date, symbol, slot, band_pct)`,
+  so it overwrites those 12 sessions in place. SPY/QQQ/NVDA are unaffected.
+
 ## 2026-08-10 - prem diff backfill: holiday-aware expiry resolution (the 2026-06-19 hole)
 
 `server-v2/atm-prem-backfill.js`.
