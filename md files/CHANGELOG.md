@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-08-10 - prem diff: intraday session backfill from 1-minute option candles
+
+New: `server-v2/atm-prem-intraday-backfill.js`. Edited:
+`server-v2/atm-prem-intraday-recorder.js` (adds `src`), `app/test/PremDiffTab.tsx`.
+
+- **Simpler arithmetic than the live path.** The recorder has to DIFFERENCE a
+  cumulative counter because the chain only reports volume-so-far. A 1-minute
+  candle already carries the volume traded IN that minute, so a backfilled bucket
+  is just `close x volume x 100` - no previous-snapshot state, no clamping of
+  negative deltas, no baseline row.
+- **A backfilled session is internally consistent** in a way a restarted live one
+  cannot be: one pricing basis throughout and a cumulative that genuinely starts
+  at the open.
+- **Where it is worse:** priced at each bar's CLOSE (last trade in that minute),
+  not the mark, so an illiquid wing can sit at bid or ask rather than between.
+  Rows carry `src='dxlink'` and the panel says so.
+- **Retention is the real limit.** 1-minute history is much shorter than daily
+  and is not announced - candle-history's own header notes ~7 days for the ES 1m
+  stream regardless of what fromTime asks for. Expect today plus a handful of
+  sessions. The run prints the span it actually recovered rather than implying
+  more.
+- **Overwrites the whole session by default.** Mixing mark-priced live minutes
+  with close-priced backfilled ones puts a seam in the cumulative line, and half
+  a session of each is worse than either. `--keep-live` fills only the holes for
+  the case where the recorder covered most of the day.
+- **The resolver is seeded with the underlying's DAILY sessions, not just the one
+  date.** One extra subscription, and it is what makes the holiday snap work: a
+  resolver that only knows about `day` has no calendar to check the third Friday
+  against, so a Juneteenth-style month would resolve to a Friday the market was
+  shut and every symbol would return empty - the exact failure the daily backfill
+  already hit once.
+- **Every RTH minute gets a row**, even when nothing traded near the money, so
+  the cumulative line stays continuous and a quiet stretch reads as flat rather
+  than as a gap.
+- `atm_prem_intraday` gains `src` (CREATE + idempotent ALTER, so a deployment
+  that already created the table does not need a hand-run migration).
+
 ## 2026-08-10 - build fix: EconomicCalendar screenshot routed through lib/snapshot.ts
 
 `components/pages/EconomicCalendar.tsx`, `lib/snapshot.ts`. NOT part of the Prem

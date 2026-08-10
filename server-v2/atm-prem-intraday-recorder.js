@@ -136,6 +136,7 @@ async function ensureIntradaySchema() {
       cum_put_prem  DOUBLE PRECISION NOT NULL DEFAULT 0,
       strikes       INTEGER          NOT NULL DEFAULT 0,
       is_baseline   BOOLEAN          NOT NULL DEFAULT FALSE,
+      src           TEXT             NOT NULL DEFAULT 'live',
       ts            TIMESTAMPTZ      NOT NULL DEFAULT now(),
       PRIMARY KEY (date, symbol, slot, band_pct, minute)
     );
@@ -144,6 +145,10 @@ async function ensureIntradaySchema() {
   // order" — which this index serves as a single ordered scan.
   await p.query(`CREATE INDEX IF NOT EXISTS idx_atm_prem_intraday_lookup
                  ON atm_prem_intraday (symbol, band_pct, date, minute);`);
+  // Added after the table shipped — a deployment that created it without `src`
+  // must not need a hand-run migration to accept backfilled rows.
+  await p.query(`ALTER TABLE atm_prem_intraday
+                 ADD COLUMN IF NOT EXISTS src TEXT NOT NULL DEFAULT 'live';`);
   _schemaReady = true;
   return true;
 }
@@ -341,17 +346,18 @@ async function upsertIntraday(rows) {
         `INSERT INTO atm_prem_intraday
            (date, symbol, slot, band_pct, minute, expiry, spot,
             call_prem, put_prem, call_vol, put_vol,
-            cum_call_prem, cum_put_prem, strikes, is_baseline, ts)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
+            cum_call_prem, cum_put_prem, strikes, is_baseline, src, ts)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, now())
          ON CONFLICT (date, symbol, slot, band_pct, minute) DO UPDATE SET
            expiry = EXCLUDED.expiry, spot = EXCLUDED.spot,
            call_prem = EXCLUDED.call_prem, put_prem = EXCLUDED.put_prem,
            call_vol = EXCLUDED.call_vol, put_vol = EXCLUDED.put_vol,
            cum_call_prem = EXCLUDED.cum_call_prem, cum_put_prem = EXCLUDED.cum_put_prem,
-           strikes = EXCLUDED.strikes, is_baseline = EXCLUDED.is_baseline, ts = now()`,
+           strikes = EXCLUDED.strikes, is_baseline = EXCLUDED.is_baseline,
+           src = EXCLUDED.src, ts = now()`,
         [r.date, r.symbol, r.slot, r.bandPct, r.minute, r.expiry, r.spot,
          r.callPrem, r.putPrem, r.callVol, r.putVol,
-         r.cumCallPrem, r.cumPutPrem, r.strikes, r.isBaseline],
+         r.cumCallPrem, r.cumPutPrem, r.strikes, r.isBaseline, r.src || 'live'],
       );
     }
     await client.query('COMMIT');
@@ -393,7 +399,7 @@ async function getIntraday({ symbol, bandPct = 5, date = 'latest' } = {}) {
 
   const { rows } = await p.query(
     `SELECT minute, slot, expiry, spot, call_prem, put_prem, call_vol, put_vol,
-            cum_call_prem, cum_put_prem, strikes, is_baseline
+            cum_call_prem, cum_put_prem, strikes, is_baseline, src
        FROM atm_prem_intraday
       WHERE symbol = $1 AND band_pct = $2 AND date = $3
       ORDER BY minute ASC, slot ASC`,
@@ -404,7 +410,7 @@ async function getIntraday({ symbol, bandPct = 5, date = 'latest' } = {}) {
   for (const r of rows) {
     const key = new Date(r.minute).toISOString();
     if (!byMinute.has(key)) {
-      byMinute.set(key, { minute: key, spot: Number(r.spot) || 0, baseline: false, front: null, back: null });
+      byMinute.set(key, { minute: key, spot: Number(r.spot) || 0, baseline: false, src: r.src || 'live', front: null, back: null });
     }
     const bucket = byMinute.get(key);
     if (r.is_baseline) bucket.baseline = true;
@@ -477,6 +483,8 @@ module.exports = {
   startAtmPremIntradayRecorder,
   getIntraday,
   ensureIntradaySchema,
+  upsertIntraday,
+  isRthNowET,
   tick,
   snapshotChain,
   prune,

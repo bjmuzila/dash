@@ -72,6 +72,7 @@ type IntradayBucket = {
   minute: string;
   spot: number;
   baseline: boolean;
+  src?: string;
   front: IntradayLeg | null;
   back: IntradayLeg | null;
 };
@@ -818,6 +819,7 @@ export default function PremDiffTab() {
         ), irows[0]);
         const totalPrem = (lastWith?.front?.cumCallPrem ?? 0) + (lastWith?.front?.cumPutPrem ?? 0);
         const hasBaseline = irows.some((r) => r.baseline);
+        const isBackfilled = irows.some((r) => r.src === "dxlink");
         return (
           <>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
@@ -883,6 +885,13 @@ export default function PremDiffTab() {
                 then summed \u2014 the chain reports cumulative day volume, so multiplying it directly would re-count the whole
                 session every minute. Band membership is recomputed each minute against that minute&apos;s spot, so a strike
                 can enter or leave the window intraday. Recorded during RTH only.
+                {isBackfilled && (
+                  <>
+                    {" "}This session was <strong>reconstructed</strong> from 1-minute option candles rather than recorded
+                    live, so each minute is priced at that bar&apos;s close instead of the mark. The upside is that it has no
+                    restart seam: one pricing basis throughout and a cumulative that genuinely starts at the open.
+                  </>
+                )}
                 {hasBaseline && (
                   <>
                     {" "}This session contains a <strong>baseline</strong> bucket \u2014 the recorder started or restarted, so it
