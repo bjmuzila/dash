@@ -40,11 +40,11 @@
  *
  * ── USAGE ───────────────────────────────────────────────────────────────────
  *
- *   node server-v2/atm-prem-intraday-backfill.js --symbols=SPX,SPY,QQQ
+ *   node server-v2/atm-prem-intraday-backfill.js --symbols=SPY,QQQ
  *   node server-v2/atm-prem-intraday-backfill.js --date=2026-08-07 --dry
  *   node server-v2/atm-prem-intraday-backfill.js --symbols=SPY --keep-live
  *
- * Flags: --symbols=A,B (default SPX,SPY,QQQ) · --date=YYYY-MM-DD (default
+ * Flags: --symbols=A,B (default SPY,QQQ) · --date=YYYY-MM-DD (default
  *   today ET) · --dry (compute + report, no DB write) · --keep-live · --batch=N
  *   dxLink symbols per wave (default 120 — 1m bars are ~390 per contract, so
  *   waves carry more events than the daily pull's) · --pad=N percent beyond the
@@ -65,7 +65,7 @@ const { ensureIntradaySchema, upsertIntraday } = require('./atm-prem-intraday-re
 
 function parseArgs(argv) {
   const out = {
-    symbols: ['SPX', 'SPY', 'QQQ'], date: null, dry: false, keepLive: false, batch: 120, pad: 3,
+    symbols: ['SPY', 'QQQ'], date: null, dry: false, keepLive: false, batch: 120, pad: 3,
   };
   for (const a of argv.slice(2)) {
     if (a === '--dry') out.dry = true;

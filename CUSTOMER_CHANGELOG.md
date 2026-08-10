@@ -6,8 +6,15 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Monday 8/10/2026
 
+* **New Ticker Lookup card at the bottom of the Analytics page.** Type any optionable ticker — or tap SPX, SPY, QQQ, NVDA, TSLA, or the last few names you looked at — and you get that name's live gamma ladder: every strike around price drawn as a bar, positive gamma to the right, negative to the left, with the dollar value beside it. Price sits highlighted in the middle, ten strikes above it and ten below.
+* **The card reads two scopes side by side.** The left panel is one expiration, picked from the pills with its DTE. The right panel is the **whole board** — every listed expiration summed strike by strike, not just the front few. Same ticker, same price, so you can tell at a glance whether a level is a today thing or one the entire chain is holding.
+* **Each panel names its own levels:** Core (CB), Call Wall, Put Wall and Gamma Flip, each with how far price is from it, plus colored dots on the ladder rows so you can spot them without reading labels. Underneath, a plain-English read of the regime — whether dealers are pinning price or chasing it — and where the magnet and the walls sit.
+* **Spot, expected move and ATM IV** run across the top, with a positive/negative gamma badge for the full board.
+* The old **Contract Lookup** card has been removed from the Analytics page.
+* **The Multi Greek ladders now post to Discord on their own, every 15 minutes.** Through the whole session — 9:30 to 4:00, weekdays — the signals channel gets the same ladder image you'd get from the snapshot button on the Multi Greek page: SPX, SPY and QQQ side by side, each showing its Core Bullseye, Call Wall and Put Wall for the front expiration, with a marker for where price is sitting between them and how far spot is from the Core. Nothing to click, and no need to have the page open — if you're watching Discord you're watching the levels move.
 * The **option chain's total row is now a stat bar**. Alongside the running Total Net GEX you now get spot with its day percent, the same total with 0DTE stripped out, the weekly expected move, and the Core Bullseye strike for each of the next three expirations — each expiry date sitting directly under its own strike.
 * **Click any expiration header or any strike to focus it.** Everything else on the grid fades back so you can read one column or one row cleanly. Click more than one to build a set — shift-click if you want just the one.
+* **Ticker Levels on the Analytics page now uses a searchable dropdown** — the same ticker menu as the option chain. Search any name in the scanner list, star the ones you watch so they sit at the top, and type anything else in to add it. Spot now reads first, then the Call Wall and the Put Wall.
 
 ## Thursday 8/6/2026
 

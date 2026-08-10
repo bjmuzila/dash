@@ -61,7 +61,10 @@ const { fetchExpirations, fetchChainFull } = require('./proxy-tastytrade');
 
 // ── Tunables (env-overridable) ───────────────────────────────────────────────
 
-const SYMBOLS = String(process.env.ATM_PREM_SYMBOLS || 'SPY,QQQ,SPX,NVDA')
+// SPX is NOT here. Its front monthly (root SPX, AM-settled) carries ~1.4% of
+// near-money SPX volume — the rest is SPXW dailies — so a front/back MONTHLY
+// panel charts a contract almost nobody trades. See the note in PremDiffTab.
+const SYMBOLS = String(process.env.ATM_PREM_SYMBOLS || 'SPY,QQQ,NVDA')
   .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
 
 /** Minute-of-day ET to fire. 965 = 16:05. */

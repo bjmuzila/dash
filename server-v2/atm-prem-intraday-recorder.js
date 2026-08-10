@@ -4,7 +4,7 @@
  *
  * The intraday half of the Prem Diff panel: near-the-money premium TRADED,
  * calls vs puts, front and back monthly, in ONE-MINUTE buckets through RTH —
- * for SPX, SPY and QQQ.
+ * for SPY and QQQ.
  *
  * ── HOW IT GETS PER-MINUTE PREMIUM OUT OF A CUMULATIVE FEED ─────────────────
  *
@@ -65,7 +65,9 @@ const {
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
 
-const SYMBOLS = String(process.env.ATM_PREM_INTRADAY_SYMBOLS || 'SPX,SPY,QQQ')
+// SPX dropped for the same reason as the daily recorder — its monthly is a
+// rounding error next to SPXW. Also halves this recorder's chain-fetch load.
+const SYMBOLS = String(process.env.ATM_PREM_INTRADAY_SYMBOLS || 'SPY,QQQ')
   .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
 
 const INTERVAL_MS = Number(process.env.ATM_PREM_INTRADAY_INTERVAL_MS || 60_000);

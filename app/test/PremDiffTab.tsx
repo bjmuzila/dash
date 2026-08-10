@@ -86,12 +86,19 @@ type IntradayPayload = {
   error?: string;
 };
 
-const SYMBOLS = ["SPY", "QQQ", "SPX", "NVDA"];
+// SPX is deliberately absent. Its front MONTHLY is root "SPX" and AM-settled,
+// and measured 2026-08-10 it carried 6,025 call + 1,749 put contracts within ±2%
+// of spot against 564,751 + 499,020 in that day's SPXW 0DTE — about 1.4% of
+// near-money SPX volume. The panel is built on front/back MONTHLY, so for SPX it
+// was faithfully charting a contract almost nobody trades. Adding it back means
+// first deciding what "front month" should mean for a root whose liquidity lives
+// in dailies, not re-adding the string.
+const SYMBOLS = ["SPY", "QQQ", "NVDA"];
 // Intraday is recorded for the three index products only — the 1-minute
 // recorder polls two chains per symbol per minute, and widening it is a cost
 // decision rather than a UI one. Keep the two lists separate so the picker
 // cannot offer a symbol with no intraday rows behind it.
-const INTRADAY_SYMBOLS = ["SPX", "SPY", "QQQ"];
+const INTRADAY_SYMBOLS = ["SPY", "QQQ"];
 const BAND_OPTIONS = [
   { value: "1", label: "±1% of spot" },
   { value: "2", label: "±2% of spot" },
@@ -373,14 +380,60 @@ const ET_TIME = new Intl.DateTimeFormat("en-US", {
  * Price is the underlying's own 1-minute candles, not the stored per-minute
  * spot: one sample a minute has open=high=low=close and renders as dashes.
  */
+/** Minutes in a regular session: 09:30 through 15:59 inclusive. */
+const RTH_MINUTES = 390;
+
+/**
+ * Epoch ms of 09:30 ET on `dateYmd`.
+ *
+ * Done by probing the zone rather than hardcoding -4/-5, because the offset
+ * changes twice a year and a chart that silently shifts an hour every March is
+ * worse than one that never worked. 12:00 UTC is safe to probe with: US DST
+ * transitions happen at 02:00 local (06/07 UTC), so noon UTC is always on the
+ * same side of the switch as 09:30 ET that day.
+ */
+function sessionStartMs(dateYmd: string): number {
+  const probe = Date.parse(`${dateYmd}T12:00:00Z`);
+  if (!Number.isFinite(probe)) return NaN;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hourCycle: "h23", hour: "2-digit", minute: "2-digit",
+  }).formatToParts(new Date(probe));
+  const get = (t: string) => Number(parts.find((x) => x.type === t)?.value ?? "0");
+  const offsetMin = 12 * 60 - (get("hour") * 60 + get("minute"));
+  return Date.parse(`${dateYmd}T09:30:00Z`) + offsetMin * 60_000;
+}
+
+/**
+ * Minute buckets for one session, on a FIXED 09:30–16:00 axis.
+ *
+ * The axis is always the whole session, whether it is 09:35 or after the close.
+ * A chart that stretches 20 minutes of data across the full width and then
+ * re-scales every 60 seconds gives no sense of where you are in the day, and
+ * makes a quiet open look like a full session of nothing happening. Minutes
+ * with no data are simply not drawn — the space is left empty, which is the
+ * honest rendering of "the day has not got there yet".
+ *
+ * Two readings of the same data:
+ *
+ *   "bars"       — premium traded IN that minute. The direct intraday analog of
+ *                  the daily panel; answers "when did it happen".
+ *   "cumulative" — the running total from the session's first bucket. Answers
+ *                  "when was the day's tilt established", which a row of bars
+ *                  makes you integrate by eye. The line stops at the last minute
+ *                  that has data rather than being dragged flat to 16:00.
+ *
+ * Price is the underlying's own 1-minute candles, not the stored per-minute
+ * spot: one sample a minute has open=high=low=close and renders as dashes.
+ */
 function IntradayChart({
-  rows, candles, band, symbol, view,
+  rows, candles, band, symbol, view, date,
 }: {
   rows: IntradayBucket[];
   candles: Candle[];
   band: number;
   symbol: string;
   view: "bars" | "cumulative";
+  date: string;
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(1100);
@@ -397,47 +450,64 @@ function IntradayChart({
     return () => ro.disconnect();
   }, []);
 
-  // Candles keyed by minute so they line up with the buckets rather than being
-  // drawn on their own index — the two series can differ in length whenever a
-  // minute produced a candle but no chain snapshot (or the reverse).
   const candleAt = useMemo(() => {
     const m = new Map<number, Candle>();
     for (const c of candles) m.set(Math.floor(c.time / 60_000) * 60_000, c);
     return m;
   }, [candles]);
 
-  const pts = useMemo(() => rows.map((r) => {
-    const t = Math.floor(Date.parse(r.minute) / 60_000) * 60_000;
-    const c = candleAt.get(t);
+  const rowAt = useMemo(() => {
+    const m = new Map<number, IntradayBucket>();
+    for (const r of rows) m.set(Math.floor(Date.parse(r.minute) / 60_000) * 60_000, r);
+    return m;
+  }, [rows]);
+
+  // The fixed axis. Anchored to the session date when we have one; otherwise to
+  // the first bucket we were given, so the chart still draws for a session whose
+  // date the API could not name.
+  const start = useMemo(() => {
+    const fromDate = sessionStartMs(date);
+    if (Number.isFinite(fromDate)) return fromDate;
+    const first = rows[0] ? Date.parse(rows[0].minute) : NaN;
+    return Number.isFinite(first) ? Math.floor(first / 60_000) * 60_000 : NaN;
+  }, [date, rows]);
+
+  const slots = useMemo(() => Array.from({ length: RTH_MINUTES }, (_, i) => {
+    const t = start + i * 60_000;
+    const row = rowAt.get(t) ?? null;
+    const c = candleAt.get(t) ?? null;
+    const close = c?.close ?? row?.spot ?? null;
     return {
-      row: r,
       t,
-      open: c?.open ?? r.spot,
-      high: c?.high ?? r.spot,
-      low: c?.low ?? r.spot,
-      close: c?.close ?? r.spot,
-      value: view === "bars" ? (r.front?.diff ?? 0) : (r.front?.cumDiff ?? 0),
-      backValue: view === "bars" ? (r.back?.diff ?? 0) : (r.back?.cumDiff ?? 0),
+      row,
+      open: c?.open ?? close,
+      high: c?.high ?? close,
+      low: c?.low ?? close,
+      close,
+      value: row ? (view === "bars" ? (row.front?.diff ?? 0) : (row.front?.cumDiff ?? 0)) : null,
+      backValue: row ? (view === "bars" ? (row.back?.diff ?? 0) : (row.back?.cumDiff ?? 0)) : null,
     };
-  }), [rows, candleAt, view]);
+  }), [start, rowAt, candleAt, view]);
 
   const geom = useMemo(() => {
-    const n = pts.length;
     const innerW = Math.max(120, width - PAD_L - PAD_R);
-    const step = n > 0 ? innerW / n : 1;
-    const barW = Math.max(1, Math.min(7, step * 0.7));
+    const step = innerW / RTH_MINUTES;
+    const barW = Math.max(1, Math.min(6, step * 0.7));
 
     let pHi = -Infinity; let pLo = Infinity;
-    for (const p of pts) {
-      if (p.high > 0) pHi = Math.max(pHi, p.high);
-      if (p.low > 0) pLo = Math.min(pLo, p.low);
+    for (const p of slots) {
+      if (p.high != null && p.high > 0) pHi = Math.max(pHi, p.high);
+      if (p.low != null && p.low > 0) pLo = Math.min(pLo, p.low);
     }
     if (!Number.isFinite(pHi) || !Number.isFinite(pLo)) { pHi = 1; pLo = 0; }
     const padP = (pHi - pLo) * 0.08 || 1;
     pHi += padP; pLo -= padP;
 
     let mag = 0;
-    for (const p of pts) mag = Math.max(mag, Math.abs(p.value), Math.abs(p.backValue));
+    for (const p of slots) {
+      if (p.value != null) mag = Math.max(mag, Math.abs(p.value));
+      if (p.backValue != null) mag = Math.max(mag, Math.abs(p.backValue));
+    }
     if (!(mag > 0)) mag = 1;
 
     const x = (i: number) => PAD_L + i * step + step / 2;
@@ -445,17 +515,17 @@ function IntradayChart({
     const zero = PRICE_H + GAP + HIST_H / 2;
     const yH = (v: number) => zero - (v / mag) * (HIST_H / 2 - 6);
     return { step, barW, pHi, pLo, mag, x, yP, yH, zero, innerW };
-  }, [pts, width]);
+  }, [slots, width]);
 
   const totalH = PRICE_H + GAP + HIST_H + 22;
 
   const onMove = useCallback((e: ReactMouseEvent<SVGSVGElement>) => {
     const box = e.currentTarget.getBoundingClientRect();
     const i = Math.floor((e.clientX - box.left - PAD_L) / geom.step);
-    setHover(i >= 0 && i < pts.length ? i : null);
-  }, [geom.step, pts.length]);
+    setHover(i >= 0 && i < RTH_MINUTES ? i : null);
+  }, [geom.step]);
 
-  if (!pts.length) {
+  if (!Number.isFinite(start)) {
     return (
       <div style={{ padding: 40, textAlign: "center", color: HOME_THEME.text, opacity: 0.55, fontSize: 14 }}>
         No intraday buckets recorded for {symbol} at ±{band}% yet. The 1-minute recorder writes during RTH only.
@@ -465,8 +535,28 @@ function IntradayChart({
 
   const priceTicks = Array.from({ length: 5 }, (_, i) => geom.pLo + ((geom.pHi - geom.pLo) * i) / 4);
   const histTicks = [geom.mag, geom.mag / 2, 0, -geom.mag / 2, -geom.mag];
-  const labelEvery = Math.max(1, Math.round(pts.length / Math.max(2, Math.floor(geom.innerW / 80))));
-  const hovered = hover != null ? pts[hover] : null;
+  const hovered = hover != null ? slots[hover] : null;
+
+  // Half-hourly gridlines and labels — a fixed session axis should read like a
+  // clock, not like "every Nth sample", so the ticks are on the half hour rather
+  // than spaced to fit whatever the data length happens to be.
+  const tickEvery = geom.step * 30 < 34 ? 60 : 30;
+  const ticks: number[] = [];
+  for (let i = 0; i <= RTH_MINUTES; i += tickEvery) ticks.push(i);
+  if (ticks[ticks.length - 1] !== RTH_MINUTES) ticks.push(RTH_MINUTES);
+
+  // The cumulative line stops at the last minute that has data. Carrying it flat
+  // to 16:00 would draw a session that finished quiet when really it has not
+  // happened yet.
+  const lastIdx = (() => {
+    for (let i = slots.length - 1; i >= 0; i--) if (slots[i].row) return i;
+    return -1;
+  })();
+  // Carry the index alongside: the path builders need x(i), and looking each
+  // point back up with indexOf would be a quadratic scan per render.
+  const drawn = lastIdx >= 0
+    ? slots.slice(0, lastIdx + 1).map((p, i) => ({ p, i })).filter((e) => e.p.value != null)
+    : [];
 
   return (
     <div ref={wrapRef} style={{ width: "100%" }}>
@@ -484,7 +574,19 @@ function IntradayChart({
           </g>
         ))}
 
-        {pts.map((p, i) => {
+        {/* Half-hour rules, spanning both panes so the eye can carry a time
+            across from price to premium. */}
+        {ticks.map((i) => (
+          <line
+            key={`ivr${i}`}
+            x1={PAD_L + i * geom.step} x2={PAD_L + i * geom.step}
+            y1={0} y2={PRICE_H + GAP + HIST_H}
+            stroke={HOME_THEME.border} strokeWidth={1} opacity={0.5}
+          />
+        ))}
+
+        {slots.map((p, i) => {
+          if (p.close == null || p.open == null || p.high == null || p.low == null) return null;
           const cx = geom.x(i);
           const col = p.close >= p.open ? ES_CANDLE_UP : ES_CANDLE_DOWN;
           const yO = geom.yP(p.open);
@@ -513,50 +615,55 @@ function IntradayChart({
           </g>
         ))}
 
-        {/* Cumulative is a filled path, not bars: it is one continuous quantity
-            and drawing 390 abutting rects makes a solid block. */}
         {view === "cumulative" ? (
-          <>
-            <path
-              d={`M ${geom.x(0)} ${geom.zero} ${pts.map((p, i) => `L ${geom.x(i)} ${geom.yH(p.backValue)}`).join(" ")} L ${geom.x(pts.length - 1)} ${geom.zero} Z`}
-              fill={HOME_THEME.purple} opacity={0.28}
-            />
-            <path
-              d={pts.map((p, i) => `${i ? "L" : "M"} ${geom.x(i)} ${geom.yH(p.value)}`).join(" ")}
-              fill="none" stroke={HOME_THEME.orange} strokeWidth={1.8}
-            />
-          </>
+          drawn.length > 1 ? (
+            <>
+              <path
+                d={`M ${geom.x(drawn[0].i)} ${geom.zero} ${drawn.map((e) => `L ${geom.x(e.i)} ${geom.yH(e.p.backValue ?? 0)}`).join(" ")} L ${geom.x(drawn[drawn.length - 1].i)} ${geom.zero} Z`}
+                fill={HOME_THEME.purple} opacity={0.28}
+              />
+              <path
+                d={drawn.map((e, k) => `${k ? "L" : "M"} ${geom.x(e.i)} ${geom.yH(e.p.value ?? 0)}`).join(" ")}
+                fill="none" stroke={HOME_THEME.orange} strokeWidth={1.8}
+              />
+            </>
+          ) : null
         ) : (
-          pts.map((p, i) => {
+          slots.map((p, i) => {
+            if (p.value == null && p.backValue == null) return null;
             const cx = geom.x(i);
             const dim = hover == null || hover === i ? 1 : 0.5;
-            const y = geom.yH(p.value);
-            const yb = geom.yH(p.backValue);
+            const y = geom.yH(p.value ?? 0);
+            const yb = geom.yH(p.backValue ?? 0);
             return (
               <g key={`ih${p.t}`}>
-                <rect
-                  x={cx - (geom.barW * 1.5) / 2} width={geom.barW * 1.5}
-                  y={Math.min(yb, geom.zero)} height={Math.max(1, Math.abs(geom.zero - yb))}
-                  fill={HOME_THEME.purple} opacity={0.5 * dim}
-                />
-                <rect
-                  x={cx - geom.barW / 2} width={geom.barW}
-                  y={Math.min(y, geom.zero)} height={Math.max(1, Math.abs(geom.zero - y))}
-                  fill={p.value >= 0 ? HOME_THEME.red : HOME_THEME.cyan} opacity={dim}
-                />
+                {p.backValue != null && (
+                  <rect
+                    x={cx - (geom.barW * 1.5) / 2} width={geom.barW * 1.5}
+                    y={Math.min(yb, geom.zero)} height={Math.max(1, Math.abs(geom.zero - yb))}
+                    fill={HOME_THEME.purple} opacity={0.5 * dim}
+                  />
+                )}
+                {p.value != null && (
+                  <rect
+                    x={cx - geom.barW / 2} width={geom.barW}
+                    y={Math.min(y, geom.zero)} height={Math.max(1, Math.abs(geom.zero - y))}
+                    fill={p.value >= 0 ? HOME_THEME.red : HOME_THEME.cyan} opacity={dim}
+                  />
+                )}
               </g>
             );
           })
         )}
 
-        {pts.map((p, i) => (i % labelEvery === 0 ? (
+        {ticks.map((i) => (
           <text
-            key={`ix${p.t}`} x={geom.x(i)} y={totalH - 5}
+            key={`ix${i}`} x={PAD_L + i * geom.step} y={totalH - 5}
             fill={HOME_THEME.text} opacity={0.45} fontSize={11} textAnchor="middle"
           >
-            {ET_TIME.format(new Date(p.t))}
+            {ET_TIME.format(new Date(start + i * 60_000))}
           </text>
-        ) : null))}
+        ))}
 
         {hover != null && (
           <line
@@ -570,23 +677,27 @@ function IntradayChart({
         {hovered ? (
           <>
             <span style={{ fontWeight: 800, color: HOME_THEME.text }}>{ET_TIME.format(new Date(hovered.t))} ET</span>
-            <span style={{ color: HOME_THEME.text, opacity: 0.85 }}>px {hovered.close.toFixed(2)}</span>
-            {hovered.row.front && (
+            {hovered.close != null && (
+              <span style={{ color: HOME_THEME.text, opacity: 0.85 }}>px {hovered.close.toFixed(2)}</span>
+            )}
+            {hovered.row?.front ? (
               <>
                 <span style={{ color: HOME_THEME.cyan }}>calls {fmtUsd(hovered.row.front.callPrem)}</span>
                 <span style={{ color: HOME_THEME.red }}>puts {fmtUsd(hovered.row.front.putPrem)}</span>
                 <span style={{ fontWeight: 800, color: HOME_THEME.text }}>
-                  {view === "bars" ? "minute" : "session"} diff {fmtUsd(hovered.value)}
+                  {view === "bars" ? "minute" : "session"} diff {fmtUsd(hovered.value ?? 0)}
                 </span>
               </>
+            ) : (
+              <span style={{ color: HOME_THEME.text, opacity: 0.45 }}>no bucket recorded</span>
             )}
-            {hovered.row.baseline && (
+            {hovered.row?.baseline && (
               <span style={{ color: HOME_THEME.orange }}>baseline bucket — no interval flow</span>
             )}
           </>
         ) : (
           <span style={{ color: HOME_THEME.text, opacity: 0.45 }}>
-            Hover a minute for the {symbol} ±{band}% breakdown.
+            Hover a minute for the {symbol} ±{band}% breakdown. Axis is the full 09:30–16:00 session.
           </span>
         )}
       </div>
@@ -871,6 +982,7 @@ export default function PremDiffTab() {
                 band={Number(band)}
                 symbol={symbol}
                 view={view}
+                date={intra?.date ?? ""}
               />
 
               <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 14, fontSize: 13 }}>

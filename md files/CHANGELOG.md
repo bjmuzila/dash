@@ -1,50 +1,137 @@
 # Changelog
 
-## 2026-08-10 - Multi Greek ladders auto-post to Discord every 15m (SPX/SPY/QQQ)
+## 2026-08-10 - prem diff: SPX removed (its monthly is 1.4% of near-money SPX volume)
 
-New: `server-v2/mg-ladder-discord.js`. Edited: `server-v2/server-with-proxy.js`
-(one guarded start call). NO proxy file was touched.
+`app/test/PremDiffTab.tsx`, `server-v2/atm-prem-recorder.js`,
+`server-v2/atm-prem-intraday-recorder.js`,
+`server-v2/atm-prem-intraday-backfill.js`.
 
-- **The scheduled twin of the page's LADDERS button.** Every 15 minutes on the
-  wall-clock boundary (:00/:15/:30/:45) during RTH, weekdays only, the SPX / SPY
-  / QQQ front-expiry CB / CW / PW ladders go to Discord as a PNG - the same image
-  `MultiGreekLevelSnapshot.tsx` draws when the owner clicks the toolbar button,
-  limited to the three base tickers (the 4th custom slot is a per-browser
-  preference and has no meaning server-side).
-- **The renderer is a PORT, not a re-implementation.** `DRAW_SRC` in the new file
-  is `drawLadders`/`drawLadderTile` copied line-for-line, so the scheduled image
-  and the clicked one are the same picture. If the ladder render changes in the
-  component, change it here too - that string is the only other copy.
-- **Headless Chromium, but not a screenshot.** Nothing loads `/mult-greek` and
-  nothing authenticates. The ladder renderer is pure Canvas2D and Chromium is
-  the only canvas already in the image (`/usr/bin/chromium`, shipped for
-  `budget-email.js`), so rendering inside it costs ZERO new dependencies - no
-  node-canvas, no native build on the deploy box. The browser navigates to the
-  public landing route for one reason: so
-  `getComputedStyle(document.body).fontFamily` resolves next/font's hashed Inter
-  exactly as it does for the in-app button. Font priming failing is not fatal.
-- **Levels come from the same math as the page**, not from a stored table:
-  `net = (|Gc|(OI+VOL) - |Gp|(OI+VOL)) x spot^2 x 0.01 x 100` per strike, then
-  CB = highest |net|, CW = highest +net excluding CB, PW = lowest -net excluding
-  CB. Computed over the FULL chain with no strike window - `mult-greek-gex-
-  recorder`'s +/-60 window is right for its ring table and WRONG for walls, which
-  the page derives untrimmed.
-- **Front expiry is SPX-anchored, per-ticker resolved.** SPX picks 0DTE if it has
-  one, else its nearest; SPY and QQQ each take their OWN first expiry at or after
-  that date. On a day SPX has a 0DTE the ETFs don't, the tiles legitimately show
-  different dates - that is what the page shows too.
-- **Lands in the CB Edge Signals channel.** Webhook resolution is
-  `MG_LADDER_DISCORD_WEBHOOK` (explicit override) ->
-  `HOME_SIGNALS_DISCORD_WEBHOOK` -> `SIGNALS_DISCORD_WEBHOOK` ->
-  `DISCORD_WEBHOOK_URL`. That order matters: `DISCORD_WEBHOOK_URL` is the in-app
-  share button's webhook and points at a DIFFERENT channel, so it is last and
-  can never beat a signals webhook that is set. Posts under the same
-  `CB Edge Signals` username/avatar as `discord-relay.js` and
-  `signals-engine.js`, so the channel still reads as one bot.
-- **Env:** `MG_LADDER_DISABLED=1` to hard-disable, `MG_LADDER_TICKERS` (default
-  `SPX,SPY,QQQ`), `MG_LADDER_INTERVAL_MIN` (default 15). Off with a log line if
-  no webhook is set; a failed tick logs and waits for the next one rather than
-  throwing out of the scheduler.
+- **Measured, not assumed.** Live chain, 2026-08-10, within ±2% of spot:
+
+  | expiry | root | call vol | put vol | premium |
+  |---|---|---|---|---|
+  | 2026-08-21 (front monthly) | SPX | 6,025 | 1,749 | ~$43M |
+  | 2026-08-14 (this Friday) | SPXW | 15,763 | 10,651 | ~$62M |
+  | 2026-08-10 (0DTE) | SPXW | 564,751 | 499,020 | ~$434M |
+
+  The front monthly is about 1.4% of near-money SPX volume. The 0DTE weekly
+  carries ~137x its contract count.
+- **The panel was not broken - its definition does not fit SPX.** Prem Diff is
+  built on the front and back MONTHLY, which is the right frame for SPY, QQQ and
+  NVDA, where monthlies genuinely carry hedging and overwriting flow. SPX's
+  liquidity lives in SPXW dailies, so the panel was faithfully charting a
+  contract almost nobody trades - a few $M a minute against the ~$434M/day going
+  through 0DTE.
+- **SPX removed from both symbol lists and both recorder defaults** rather than
+  papered over. Halves the intraday recorder's chain-fetch load as a side effect
+  (4 requests a minute instead of 6).
+- The removal is commented at each site with the measurement, because "add SPX
+  back" is a decision about what "front month" should mean for a root whose
+  liquidity is in dailies - not a matter of re-adding a string.
+- `AM_SETTLED_ROOTS` stays. It is correct, it still covers XSP/NDX/RUT, and it
+  applies again the moment SPX returns under a different slot definition.
+- Existing `atm_prem_diff` / `atm_prem_intraday` rows for SPX are left in place;
+  they are simply no longer read. Delete with
+  `DELETE FROM atm_prem_diff WHERE symbol='SPX'` if you want the space back.
+
+## 2026-08-10 - prem diff intraday: fixed 09:30-16:00 axis
+
+`app/test/PremDiffTab.tsx`.
+
+- **The intraday x-axis is now always the whole session**, 390 minutes, whether
+  it is 09:35 or after the close. Previously it spanned only the minutes that had
+  data, so at 10:00 twenty minutes were stretched across the full width and the
+  whole chart re-scaled every 60 seconds - no sense of where you were in the day,
+  and a quiet open looked like a full session of nothing happening.
+- **Minutes with no data are simply not drawn.** Empty space is the honest
+  rendering of "the day has not got there yet"; a zero bar would claim the
+  recorder measured a minute of no flow.
+- **The cumulative line stops at the last minute that has data** rather than
+  being carried flat to 16:00, which would draw a session that finished quiet
+  when it has not finished at all.
+- **Gridlines and labels are on the half hour**, not every Nth sample. A fixed
+  session axis should read like a clock; they fall back to hourly when the panel
+  is too narrow for 14 labels. The rules span both panes so a time can be carried
+  from price down to premium by eye.
+- **Session start is computed by PROBING the zone, not by hardcoding -4/-5.**
+  `sessionStartMs()` formats 12:00 UTC on the session date in America/New_York
+  and derives the offset from what comes back. US DST transitions happen at 02:00
+  local, so noon UTC is always on the same side of the switch as that day's
+  09:30 ET. A chart that silently shifts an hour every March is worse than one
+  that never worked.
+- Falls back to anchoring on the first bucket when the API could not name a
+  session date, so the chart still draws.
+
+## 2026-08-10 - prem diff: intraday session backfill from 1-minute option candles
+
+New: `server-v2/atm-prem-intraday-backfill.js`. Edited:
+`server-v2/atm-prem-intraday-recorder.js` (adds `src`), `app/test/PremDiffTab.tsx`.
+
+- **Simpler arithmetic than the live path.** The recorder has to DIFFERENCE a
+  cumulative counter because the chain only reports volume-so-far. A 1-minute
+  candle already carries the volume traded IN that minute, so a backfilled bucket
+  is just `close x volume x 100` - no previous-snapshot state, no clamping of
+  negative deltas, no baseline row.
+- **A backfilled session is internally consistent** in a way a restarted live one
+  cannot be: one pricing basis throughout and a cumulative that genuinely starts
+  at the open.
+- **Where it is worse:** priced at each bar's CLOSE (last trade in that minute),
+  not the mark, so an illiquid wing can sit at bid or ask rather than between.
+  Rows carry `src='dxlink'` and the panel says so.
+- **Retention is the real limit.** 1-minute history is much shorter than daily
+  and is not announced - candle-history's own header notes ~7 days for the ES 1m
+  stream regardless of what fromTime asks for. Expect today plus a handful of
+  sessions. The run prints the span it actually recovered rather than implying
+  more.
+- **Overwrites the whole session by default.** Mixing mark-priced live minutes
+  with close-priced backfilled ones puts a seam in the cumulative line, and half
+  a session of each is worse than either. `--keep-live` fills only the holes for
+  the case where the recorder covered most of the day.
+- **The resolver is seeded with the underlying's DAILY sessions, not just the one
+  date.** One extra subscription, and it is what makes the holiday snap work: a
+  resolver that only knows about `day` has no calendar to check the third Friday
+  against, so a Juneteenth-style month would resolve to a Friday the market was
+  shut and every symbol would return empty - the exact failure the daily backfill
+  already hit once.
+- **Every RTH minute gets a row**, even when nothing traded near the money, so
+  the cumulative line stays continuous and a quiet stretch reads as flat rather
+  than as a gap.
+- `atm_prem_intraday` gains `src` (CREATE + idempotent ALTER, so a deployment
+  that already created the table does not need a hand-run migration).
+
+## 2026-08-10 - build fix: EconomicCalendar screenshot routed through lib/snapshot.ts
+
+`components/pages/EconomicCalendar.tsx`, `lib/snapshot.ts`. NOT part of the Prem
+Diff work - this was blocking `npm run build` for everyone.
+
+- **What broke the deploy.** `scripts/audit-ui.mjs --strict` runs as `prebuild`
+  and fails the build if any file outside `lib/snapshot.ts` reaches html2canvas.
+  The Economic Calendar's new screenshot button stood up a second engine at
+  `EconomicCalendar.tsx:197`. Nothing to do with the Prem Diff changes; the
+  build would have failed on any push.
+- **Why the rule exists, and why the port matters.** The engine owns a pile of
+  workarounds a hand-rolled call site silently does without: gradient headings
+  render INVISIBLE and have to be flattened in the clone; `backdrop-filter` is
+  unimplemented so frosted panels come out washed; live `<canvas>` bitmaps do
+  not survive the clone and are redrawn by hand; cloned `<script>` tags 404 from
+  `about:blank`. The calendar's own capture was missing all of them.
+- **`allowTaint` added to `SnapOptions`, defaulting to TRUE** so every existing
+  caller is byte-identical. The calendar passes FALSE, preserving the behaviour
+  its comment already documented: `/proxy/ticker-logo` 302s to third-party hosts,
+  and drawing one of those TAINTS the canvas, after which `toBlob()` throws
+  SecurityError and the whole screenshot dies over a 16px image. With
+  allowTaint:false html2canvas skips the unreadable image - a missing logo, not
+  a missing screenshot.
+- **`windowWidth`/`windowHeight` dropped in favour of `height`.** Those two
+  REFLOW the cloned document at a virtual viewport (gotcha 4 in the engine's
+  header) - they are for media-query fidelity, not cropping. The scroll
+  container is already expanded to its natural height before the capture, so
+  `height: el.scrollHeight` is a pure output crop that gets the full list with no
+  re-layout. **Worth eyeballing once**: this is the only behavioural change in
+  the port, and it is the bit that decides whether the whole list lands in the
+  PNG.
+- Blob handling now uses the engine's `downloadBlob` instead of a hand-built
+  object URL and anchor.
 
 ## 2026-08-10 - prem diff: 1-minute intraday mode for SPX / SPY / QQQ
 
