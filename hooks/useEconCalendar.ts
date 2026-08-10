@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { groupEarningsByDate, type CalEvent, type EarnRow } from "@/lib/econCalendar";
+import { groupEarningsByDate, type CalEvent, type EarnBucket, type EarnRow } from "@/lib/econCalendar";
 
 /**
  * useEconCalendar — the calendar feed, fetched once and shaped for rendering.
@@ -29,7 +29,8 @@ const CLOCK_MS = 60_000;
 export type EconCalendarState = {
   events: CalEvent[];
   earnings: EarnRow[];
-  earnByDate: Map<string, { pre: EarnRow[]; after: EarnRow[] }>;
+  /** pre / after / tbd — see EarnBucket. `tbd` is the unconfirmed-time bucket. */
+  earnByDate: Map<string, EarnBucket>;
   quote: string | null;
   /** Where /api/calendar got its data. "unavailable" means the feed is down. */
   source: string | null;

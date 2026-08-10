@@ -402,6 +402,13 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
       if (bucket?.after.length && afterIdx < 0) {
         result.push(<EarnRowBlock key={`aft-${date}`} kind="after" rows={bucket.after} />);
       }
+      // Unconfirmed-time names last — they have no place in the day's sequence,
+      // so anchoring them anywhere earlier would imply one. Before this bucket
+      // existed they were dropped outright, which is most of what "lots of
+      // names missing" was.
+      if (bucket?.tbd.length) {
+        result.push(<EarnRowBlock key={`tbd-${date}`} kind="tbd" rows={bucket.tbd} />);
+      }
     }
     return result;
   }
@@ -557,33 +564,44 @@ export default function EconCalendarPanel({ todayOnly = false, hideToolbar = fal
 // One earnings row inside the calendar table — same grid as an event row.
 const EARN_COLOR = "#219EBC";
 
-function EarnRowBlock({ kind, rows }: { kind: "pre" | "after"; rows: EarnRow[] }) {
+// "tbd" is the unconfirmed-time bucket (Nasdaq "time-not-supplied"), rendered
+// desaturated so it never reads as a confirmed session at a glance.
+type EarnKind = "pre" | "after" | "tbd";
+
+const EARN_KIND: Record<EarnKind, { top: string; sub: string; title: string; color: string }> = {
+  pre:   { top: "PRE",   sub: "MKT", title: "Premarket earnings",   color: EARN_COLOR },
+  after: { top: "AFTER", sub: "HRS", title: "After-hours earnings", color: EARN_COLOR },
+  tbd:   { top: "TIME",  sub: "TBD", title: "Time unconfirmed",     color: "#8a9ab8"  },
+};
+
+function EarnRowBlock({ kind, rows }: { kind: EarnKind; rows: EarnRow[] }) {
+  const k = EARN_KIND[kind];
   return (
     <div style={{
       display: "grid",
       gridTemplateColumns: "62px 1fr",
       borderTop: `1px solid ${HT.border}`,
-      borderLeft: `3px solid ${EARN_COLOR}`,
-      background: `linear-gradient(90deg, ${EARN_COLOR}12 0%, transparent 40%), ${HT.bg}`,
+      borderLeft: `3px solid ${k.color}`,
+      background: `linear-gradient(90deg, ${k.color}12 0%, transparent 40%), ${HT.bg}`,
       minHeight: 48,
     }}>
       <div style={{
         display: "flex", flexDirection: "column", justifyContent: "center",
         padding: "6px 8px",
         borderRight: `1px solid ${HT.border}`,
-        boxShadow: `inset -1px 0 8px ${EARN_COLOR}18`,
+        boxShadow: `inset -1px 0 8px ${k.color}18`,
       }}>
-        <span style={{ fontSize: 10, color: EARN_COLOR, fontFamily: "var(--font-mono)", fontWeight: 800, lineHeight: 1.25 }}>
-          {kind === "pre" ? "PRE" : "AFTER"}
+        <span style={{ fontSize: 10, color: k.color, fontFamily: "var(--font-mono)", fontWeight: 800, lineHeight: 1.25 }}>
+          {k.top}
         </span>
         <span style={{ fontSize: 10, color: "#3a5570", fontFamily: "var(--font-mono)" }}>
-          {kind === "pre" ? "MKT" : "HRS"}
+          {k.sub}
         </span>
       </div>
 
       <div style={{ padding: "6px 8px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 4 }}>
-        <span style={{ fontSize: 10, fontWeight: 800, color: EARN_COLOR, textTransform: "uppercase", letterSpacing: "0.1em" }}>
-          {kind === "pre" ? "Premarket earnings" : "After-hours earnings"}
+        <span style={{ fontSize: 10, fontWeight: 800, color: k.color, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+          {k.title}
         </span>
         <div style={{ display: "flex", flexWrap: "wrap", gap: CHIP_GAP }}>
           {rows.map((e) => (

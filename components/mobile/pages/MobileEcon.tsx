@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import ChipLogo from "@/components/shared/ChipLogo";
 import { useEconCalendar } from "@/hooks/useEconCalendar";
 import {
+  bucketCount,
   etToday,
   etWeekDays,
   fmtMcap,
@@ -136,8 +137,14 @@ function EventRow({ ev, stale }: { ev: CalEvent; stale: boolean }) {
   );
 }
 
-function EarningsBlock({ kind, rows }: { kind: "pre" | "after"; rows: EarnRow[] }) {
+// "tbd" is the unconfirmed-time bucket (Nasdaq "time-not-supplied"). Same block,
+// desaturated, so it never reads as a confirmed session at a glance.
+type EarnKind = "pre" | "after" | "tbd";
+
+function EarningsBlock({ kind, rows }: { kind: EarnKind; rows: EarnRow[] }) {
   if (!rows.length) return null;
+  const label = kind === "pre" ? "PRE" : kind === "after" ? "AFTER" : "TBD";
+  const accent = kind === "tbd" ? M_COLOR.faint : M_COLOR.cyan;
   return (
     <div
       style={{
@@ -148,7 +155,7 @@ function EarningsBlock({ kind, rows }: { kind: "pre" | "after"; rows: EarnRow[] 
         marginBottom: 4,
         borderRadius: RADIUS.md,
         background: "rgba(255,255,255,0.02)",
-        borderLeft: `2px solid ${rgba(M_COLOR.cyan, 0.5)}`,
+        borderLeft: `2px solid ${rgba(accent, 0.5)}`,
       }}
     >
       <div
@@ -156,11 +163,11 @@ function EarningsBlock({ kind, rows }: { kind: "pre" | "after"; rows: EarnRow[] 
           fontSize: TYPE.micro - 1,
           fontWeight: 800,
           letterSpacing: "0.07em",
-          color: M_COLOR.cyan,
+          color: accent,
           paddingTop: 3,
         }}
       >
-        {kind === "pre" ? "PRE" : "AFTER"}
+        {label}
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
         {rows.map((r) => (
@@ -228,8 +235,7 @@ export default function MobileEcon() {
     for (const d of days) {
       if ((byDay.get(d) ?? []).length) return true;
       if (showEarnings) {
-        const e = cal.earnByDate.get(d);
-        if (e && (e.pre.length || e.after.length)) return true;
+        if (bucketCount(cal.earnByDate.get(d))) return true;
       }
     }
     return false;
@@ -303,7 +309,7 @@ export default function MobileEcon() {
         days.map((d) => {
           const evs = byDay.get(d) ?? [];
           const earn = showEarnings ? cal.earnByDate.get(d) : undefined;
-          const hasEarn = !!earn && (earn.pre.length > 0 || earn.after.length > 0);
+          const hasEarn = bucketCount(earn) > 0;
           if (!evs.length && !hasEarn) return null;
           return (
             <section key={d}>
@@ -339,6 +345,8 @@ export default function MobileEcon() {
               ))}
               {earn && <EarningsBlock kind="pre" rows={earn.pre} />}
               {earn && <EarningsBlock kind="after" rows={earn.after} />}
+              {/* Unconfirmed time last — no place in the day's sequence. */}
+              {earn && <EarningsBlock kind="tbd" rows={earn.tbd} />}
             </section>
           );
         })

@@ -92,9 +92,10 @@ async function ensureSchema() {
       PRIMARY KEY (date, symbol)
     )
   `);
-  // The cap the row was captured under. Rows written before this column
-  // existed default to 0 and read as "unknown cap", which is deliberately
-  // NOT treated as stale — only a recorded cap above the current one is.
+  // The cap the row was captured under. Rows written before this column existed
+  // default to 0, which reads as "captured under an unknown, almost certainly
+  // stricter cap" — those weeks get re-swept once (see backfillIfEmpty). Every
+  // row written from here on carries a real cap, so that is a one-time cost.
   await p.query(`
     ALTER TABLE earnings_calendar
       ADD COLUMN IF NOT EXISTS min_mcap DOUBLE PRECISION NOT NULL DEFAULT 0
@@ -240,26 +241,36 @@ let _timer = null;
 let _lastRunWeek = null;
 
 /**
- * Boot repair for the CURRENT week. Re-sweeps when the week is empty, and also
- * when its rows were captured under a HIGHER cap than the one now configured —
- * otherwise dropping MIN_MCAP would only take effect next Saturday and this
- * week would keep showing the old, thinner list.
+ * Boot repair for the CURRENT week. Re-sweeps when:
+ *   - the week is empty, or
+ *   - its rows were captured under a HIGHER cap than the one now configured, or
+ *   - any row predates the min_mcap column (cap 0 = unknown, so assume stricter).
+ *
+ * Without this, lowering MIN_MCAP would only take effect on the next Saturday
+ * scrape and the CURRENT week would keep serving the old, thinner list — which
+ * is exactly the week anyone is looking at. The legacy-row case fires at most
+ * once per week's data: every row written from here on carries its real cap.
  */
 async function backfillIfEmpty() {
   try {
     if (!(await ensureSchema())) return;
     const days = weekMonFri(etDateStr());
     const { rows } = await getPool().query(
-      `SELECT COUNT(*)::int AS n, COALESCE(MAX(min_mcap), 0) AS cap
+      `SELECT COUNT(*)::int AS n,
+              COALESCE(MIN(min_mcap), 0) AS lo,
+              COALESCE(MAX(min_mcap), 0) AS hi
          FROM earnings_calendar WHERE date >= $1 AND date <= $2`,
       [days[0], days[4]]
     );
     const n = rows[0]?.n ?? 0;
-    const cap = Number(rows[0]?.cap ?? 0);
+    const lo = Number(rows[0]?.lo ?? 0);
+    const hi = Number(rows[0]?.hi ?? 0);
     if (!n) {
       console.log('[earnings-cal] current week empty → backfilling now');
-    } else if (cap > MIN_MCAP) {
-      console.log(`[earnings-cal] current week captured at ${fmtB(cap)} > ${fmtB(MIN_MCAP)} → re-sweeping wider`);
+    } else if (lo === 0) {
+      console.log(`[earnings-cal] current week predates cap tracking → re-sweeping at ${fmtB(MIN_MCAP)}`);
+    } else if (hi > MIN_MCAP) {
+      console.log(`[earnings-cal] current week captured at ${fmtB(hi)} > ${fmtB(MIN_MCAP)} → re-sweeping wider`);
     } else {
       return;
     }

@@ -8,7 +8,7 @@ import { HOME_THEME as HT, homeShellStyle, homeButtonStyle, DOCK_THEME } from "@
 // /proxy/ticker-logo resolver, then a ticker-text chip. This page used to hit
 // the resolver directly, so mirrored logos never showed up here.
 import ChipLogo from "@/components/shared/ChipLogo";
-import { groupEarningsByDate } from "@/lib/econCalendar";
+import { groupEarningsByDate, bucketCount } from "@/lib/econCalendar";
 
 interface CalEvent {
   date: string;
@@ -215,7 +215,7 @@ export default function EconomicCalendarPage() {
   // groupEarningsByDate and were never going to show up.
   const earnShown = useMemo(() => {
     let n = 0;
-    for (const b of earnByDate.values()) n += b.pre.length + b.after.length;
+    for (const b of earnByDate.values()) n += bucketCount(b);
     return n;
   }, [earnByDate]);
 
@@ -341,6 +341,11 @@ export default function EconomicCalendarPage() {
       if (bucket?.after.length && afterIdx < 0) {
         result.push(<EarnRowBlock key={`aft-${date}`} kind="after" rows={bucket.after} />);
       }
+      // Unconfirmed-time names last — they have no position in the day's
+      // sequence, so anchoring them anywhere earlier would imply one.
+      if (bucket?.tbd.length) {
+        result.push(<EarnRowBlock key={`tbd-${date}`} kind="tbd" rows={bucket.tbd} />);
+      }
     }
     return result;
   }
@@ -358,9 +363,10 @@ export default function EconomicCalendarPage() {
       const bucket = earnByDate.get(date)!;
       const pre = bucket.pre.filter(matchesQ);
       const after = bucket.after.filter(matchesQ);
-      return { date, pre, after };
+      const tbd = bucket.tbd.filter(matchesQ);
+      return { date, pre, after, tbd };
     })
-    .filter(s => s.pre.length > 0 || s.after.length > 0);
+    .filter(s => s.pre.length > 0 || s.after.length > 0 || s.tbd.length > 0);
 
   function renderEarningsOnly() {
     if (earningsSections.length === 0) {
@@ -373,7 +379,7 @@ export default function EconomicCalendarPage() {
           : "No earnings match.";
       return <div style={{ color: HT.text, fontSize: 14, padding: 20 }}>{why}</div>;
     }
-    return earningsSections.map(({ date, pre, after }) => {
+    return earningsSections.map(({ date, pre, after, tbd }) => {
       const isTod = date === today;
       return (
         <div key={`earn-sec-${date}`}>
@@ -396,6 +402,7 @@ export default function EconomicCalendarPage() {
           </div>
           {pre.length > 0 && <EarnRowBlock kind="pre" rows={pre} />}
           {after.length > 0 && <EarnRowBlock kind="after" rows={after} />}
+          {tbd.length > 0 && <EarnRowBlock kind="tbd" rows={tbd} />}
         </div>
       );
     });
@@ -607,33 +614,44 @@ export default function EconomicCalendarPage() {
 }
 
 // One earnings row woven into the calendar table — same grid as an event row.
-function EarnRowBlock({ kind, rows }: { kind: "pre" | "after"; rows: EarnRow[] }) {
+// "tbd" is the unconfirmed-time bucket: same layout, deliberately desaturated
+// so it never reads as a confirmed premarket/after-hours slot at a glance.
+type EarnKind = "pre" | "after" | "tbd";
+
+const EARN_KIND: Record<EarnKind, { top: string; sub: string; title: string; color: string }> = {
+  pre:   { top: "PRE",   sub: "MARKET", title: "Premarket earnings",      color: HT.cyan },
+  after: { top: "AFTER", sub: "HOURS",  title: "After-hours earnings",    color: HT.cyan },
+  tbd:   { top: "TIME",  sub: "TBD",    title: "Time unconfirmed",        color: "#8a9ab8" },
+};
+
+function EarnRowBlock({ kind, rows }: { kind: EarnKind; rows: EarnRow[] }) {
+  const k = EARN_KIND[kind];
   return (
     <div style={{
       display: "grid",
       gridTemplateColumns: "80px 1fr",
       borderTop: `1px solid ${HT.border}`,
-      borderLeft: `3px solid ${HT.cyan}`,
-      background: `linear-gradient(90deg, ${HT.cyan}12 0%, transparent 40%), ${HT.bg}`,
+      borderLeft: `3px solid ${k.color}`,
+      background: `linear-gradient(90deg, ${k.color}12 0%, transparent 40%), ${HT.bg}`,
       minHeight: 52,
     }}>
       <div style={{
         display: "flex", flexDirection: "column", justifyContent: "center",
         padding: "8px 12px",
         borderRight: `1px solid ${HT.border}`,
-        boxShadow: `inset -1px 0 8px ${HT.cyan}18`,
+        boxShadow: `inset -1px 0 8px ${k.color}18`,
       }}>
-        <span style={{ fontSize: 12, color: HT.cyan, fontFamily: "var(--font-mono)", fontWeight: 800, lineHeight: 1.25 }}>
-          {kind === "pre" ? "PRE" : "AFTER"}
+        <span style={{ fontSize: 12, color: k.color, fontFamily: "var(--font-mono)", fontWeight: 800, lineHeight: 1.25 }}>
+          {k.top}
         </span>
         <span style={{ fontSize: 10, color: "#3a5570", fontFamily: "var(--font-mono)" }}>
-          {kind === "pre" ? "MARKET" : "HOURS"}
+          {k.sub}
         </span>
       </div>
 
       <div style={{ padding: "8px 14px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 6 }}>
-        <span style={{ fontSize: 10, fontWeight: 800, color: HT.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>
-          {kind === "pre" ? "Premarket earnings" : "After-hours earnings"}
+        <span style={{ fontSize: 10, fontWeight: 800, color: k.color, textTransform: "uppercase", letterSpacing: "0.1em" }}>
+          {k.title}
         </span>
         <div style={{ display: "flex", flexWrap: "wrap", gap: CHIP_GAP }}>
           {rows.map((e) => (

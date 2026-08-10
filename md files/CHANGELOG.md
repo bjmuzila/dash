@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-08-10 - prem diff: edge-check script (does a premium spike lead price, or follow it?)
+
+New: `server-v2/atm-prem-edge-check.js`. Read-only, SELECTs on `atm_prem_diff`
+and writes nothing.
+
+- **Conditions forward returns on the premium tilt** and reports 1/3/5/10-session
+  close-to-close returns bucketed by z-score, against an all-sessions baseline.
+- **Scores the RATIO, not the dollars.** `(put-call)/(put+call)` is comparable
+  across vol regimes and price levels; a $200M tilt in a quiet month and in a
+  panic month are not the same event, but the share is. Dollars are still shown
+  alongside for reference.
+- **Trailing z-score, not full-sample.** A full-sample mean and sd use the whole
+  year to score a bar from month two - the number could not have existed on the
+  day it is being used to trade. That one detail is the difference between a
+  backtest and a story.
+- **The control that usually kills it: same-day correlation.** Premium follows
+  price mechanically - a hard down day prints put volume because people trade
+  puts on down days. If same-day correlation is strong and forward correlation is
+  ~0, the panel is an accurate rear-view mirror and not a signal. That line
+  prints ABOVE the bucket tables on purpose.
+- **Prints its own caveats.** ~250 sessions means a |z|>2 bucket holds 5-12 days;
+  forward windows overlap so the t column is inflated and is an ordering device,
+  not a p-value; 4 symbols x 3 bands x 4 horizons is 48 tests, where two or three
+  "significant" cells is what noise looks like. The footer says so every run.
+- Also lists the top-N tilt extremes with their forward returns, because a table
+  of means hides whether one September afternoon is carrying the whole result.
+
 ## 2026-08-10 - prem diff: recorder wired into boot; real candlesticks in the ES Candles colors
 
 `server-v2/server-with-proxy.js`, `app/test/PremDiffTab.tsx`,

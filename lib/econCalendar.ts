@@ -150,13 +150,40 @@ export function passes(ev: CalEvent, active: Set<FilterKey>): boolean {
   return false;
 }
 
-/** date → { pre, after } earnings buckets. "unknown" sessions are dropped. */
-export function groupEarningsByDate(rows: EarnRow[]): Map<string, { pre: EarnRow[]; after: EarnRow[] }> {
-  const map = new Map<string, { pre: EarnRow[]; after: EarnRow[] }>();
+export interface EarnBucket {
+  pre: EarnRow[];
+  after: EarnRow[];
+  tbd: EarnRow[];
+}
+
+/**
+ * date → { pre, after, tbd } earnings buckets.
+ *
+ * `tbd` did not used to exist: any row whose session was neither "pre" nor
+ * "after" was DROPPED here and never rendered on any surface. That is not a
+ * rare edge — Nasdaq marks the large majority of its calendar
+ * "time-not-supplied" (on a typical day ~380 of ~490 rows), and that includes
+ * real large caps. While the recorder's floor was $100B only a handful of names
+ * survived the cap at all so the loss was invisible; at $25B it is the reason
+ * the calendar reads half-empty.
+ *
+ * The bucket is kept SEPARATE rather than folded into pre/after on purpose:
+ * guessing a session would put names on the wrong side of the close, which is
+ * worse than saying the time is unconfirmed.
+ */
+export function groupEarningsByDate(rows: EarnRow[]): Map<string, EarnBucket> {
+  const map = new Map<string, EarnBucket>();
   for (const r of rows) {
-    if (r.session !== "pre" && r.session !== "after") continue;
-    if (!map.has(r.date)) map.set(r.date, { pre: [], after: [] });
-    map.get(r.date)![r.session].push(r);
+    if (!map.has(r.date)) map.set(r.date, { pre: [], after: [], tbd: [] });
+    const b = map.get(r.date)!;
+    if (r.session === "pre") b.pre.push(r);
+    else if (r.session === "after") b.after.push(r);
+    else b.tbd.push(r);
   }
   return map;
+}
+
+/** Total names in a bucket, across all three sessions. */
+export function bucketCount(b: EarnBucket | undefined | null): number {
+  return b ? b.pre.length + b.after.length + b.tbd.length : 0;
 }
