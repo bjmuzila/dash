@@ -83,7 +83,7 @@ const { getEsSpxBasis } = require('./es-spx-basis');
 const { startGreeksTsWriter } = require('./greeks-ts-writer');
 const { startStrikeGrowthRecorder } = require('./strike-growth-recorder');
 const { startGreekScannerRecorder, runSnapshot: runGreekSnapshot, ensureSchema: greekEnsureSchema, getPool: greekGetPool } = require('./greek-scanner-recorder');
-const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, enrichOutcomesWithQuotes: farCbEnrichOutcomes, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
+const { startFarCbRecorder, runSweep: runFarCbSweep, runGrading: runFarCbGrading, runContractBackfill: runFarCbBackfill, ensureSchema: farCbEnsureSchema, getPool: farCbGetPool, computeOutcomeDetail: farCbOutcomeDetail, enrichOutcomesWithQuotes: farCbEnrichOutcomes, toYmd: farCbToYmd, OTM_THRESHOLD_PCT: FAR_CB_OTM_PCT } = require('./far-cb-recorder');
 const { startScannerRecorder, runSweep: runScannerSweep, ensureSchema: scannerEnsureSchema, getPool: scannerGetPool, parseScannerTickers } = require('./scanner-recorder');
 const { startWallsRecorder, runSlot: runWallsSlot, getWalls } = require('./walls-recorder');
 const { startWallsReach, runReachBackfill, runCalibration, getReach, attachRank,
@@ -2847,6 +2847,19 @@ async function main() {
       // Manual grade fire: POST /proxy/far-cb-grade-run
       if (pathname === '/proxy/far-cb-grade-run' && req.method === 'POST') {
         runFarCbGrading()
+          .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
+          .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
+        return;
+      }
+      // Manual premium backfill: POST /proxy/far-cb-backfill-run[?force=1]
+      // Pulls each tracked flag's daily bars from dxLink into
+      // far_cb_contract_daily. Runs itself at boot and after the close; this is
+      // the on-demand handle. force=1 re-pulls contracts already marked covered.
+      // Sequential and several seconds per contract — the response can take a
+      // while on a large roster, which is why the recorder logs progress.
+      if (pathname === '/proxy/far-cb-backfill-run' && req.method === 'POST') {
+        const force = /[?&]force=1\b/.test(req.url || '');
+        runFarCbBackfill({ force })
           .then((r) => sendJson(res, 200, { ok: true, result: r ?? null }))
           .catch((e) => sendJson(res, 502, { ok: false, error: String(e?.message || e) }));
         return;

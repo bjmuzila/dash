@@ -1717,11 +1717,11 @@ function WatchThisScanner() {
                         {detail.status === "touched" ? `TOUCHED ${detail.touchedDate ?? ""}` : detail.status.toUpperCase()}
                       </span>
                     </div>
-                    {/* The contract column is our own recorded premium, sampled
-                        every 15m during RTH — days before this flag started
-                        being probed have no premium to show and stay "—". */}
+                    {/* Past sessions are the contract's own daily bars; today is
+                        our 15-minute probe. A day the contract never traded has
+                        no bar, so it stays "—" until the probe covers it. */}
                     <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.55, marginTop: 2 }}>
-                      Contract premium recorded every 15m during RTH · days before tracking began show —
+                      Daily bars from the contract&apos;s own tape · today sampled every 15m · no-trade days show —
                     </div>
                   </>
                 )}

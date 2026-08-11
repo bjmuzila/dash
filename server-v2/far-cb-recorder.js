@@ -23,13 +23,17 @@
  *     that stops qualifying is deleted on its next sweep). Old dates pruned.
  *   far_cb_outcomes (symbol, strike, expiry) — the tracked flag itself.
  *   far_cb_contract_daily (symbol, strike, expiry, opt_type, date) — the daily
- *     PRICE PROBE for each tracked contract. Written by runContractProbe() on a
- *     FAR_CB_PROBE_MINS cadence during RTH plus one final pass after the close,
- *     so the premium history exists even when no per-contract EOD feed does.
+ *     PREMIUM for each tracked contract, from two writers:
+ *       runContractProbe()    — NBBO mid on a FAR_CB_PROBE_MINS cadence during
+ *                               RTH plus one pass after the close. Owns TODAY.
+ *       runContractBackfill() — dxLink daily candles for past sessions (true
+ *                               OHLC, so it outranks the probe's samples).
+ *     Between them the premium history exists with no per-contract EOD feed.
  *
  * Wiring: startFarCbRecorder(PORT) from server-with-proxy.js.
  * Read:   GET  /proxy/far-cb-watch
- * Manual: POST /proxy/far-cb-watch-run   (force = bypass RTH gate)
+ * Manual: POST /proxy/far-cb-watch-run      (force = bypass RTH gate)
+ *         POST /proxy/far-cb-backfill-run   (?force=1 = ignore the covered marker)
  */
 
 const { computeGexRows } = require('./computation/gex-calculator');
@@ -77,6 +81,15 @@ async function fetchContractDailyBars(symbol, expiry, strike, type, fromDate, to
   }
 }
 
+// dxLink IS entitled for option Candle history on this account — verified
+// 2026-08-11 against .FBL260821C23 and .SPY260821C640, both of which replayed a
+// month of daily bars with real OHLC + volume. That makes dxLink the premium
+// backfill source, and a better one than a vendor EOD close: these are the
+// contract's own session bars, so a day carries a high and low, not one number.
+// Read-only use of proxy-tastytrade + candle-history — neither file is modified.
+const _candleHist = require('./candle-history');
+const _tt = require('./proxy-tastytrade');
+
 const INDEX_SYMBOLS = new Set(['SPX', 'NDX', 'VIX', 'RUT', 'XSP']);
 const keyOf = (exp, strike, type) => `${exp}|${Number(strike)}|${type}`;
 const oiVolNet = (r) => Number(r.netGEX ?? 0) + Number(r.netVolGEX ?? 0);
@@ -104,6 +117,13 @@ const RETENTION_DAYS   = Number(process.env.FAR_CB_RETENTION_DAYS || 7);
 // far_cb_contract_daily during RTH. Each probe is one greeks snapshot per
 // (symbol, expiry) that still has a live tracked flag — a handful of calls.
 const PROBE_MINS       = Number(process.env.FAR_CB_PROBE_MINS || 15);
+// How far back the dxLink premium backfill asks for daily bars. Also bounds
+// which tracked flags are worth attempting — a flag older than this window has
+// no candles left to fetch.
+const BACKFILL_DAYS    = Number(process.env.FAR_CB_BACKFILL_DAYS || 60);
+// Max contracts one backfill pass will walk. Each is its own short-lived dxLink
+// connection taking a few seconds, so the pass is deliberately sequential.
+const BACKFILL_LIMIT   = Number(process.env.FAR_CB_BACKFILL_LIMIT || 200);
 
 const RTH_OPEN_MINS  = 9 * 60 + 30;
 const RTH_CLOSE_MINS = 16 * 60;
@@ -196,6 +216,10 @@ async function ensureSchema() {
     );
   `);
   await p.query(`CREATE INDEX IF NOT EXISTS idx_far_cb_outcomes_status ON far_cb_outcomes (status, expiry);`);
+  // When this flag's premium was last pulled from dxLink. Lets the backfill pass
+  // skip contracts it has already covered — an expired one for good, a live one
+  // until the next session adds a bar.
+  await p.query(`ALTER TABLE far_cb_outcomes ADD COLUMN IF NOT EXISTS premium_backfilled_at TIMESTAMPTZ;`);
 
   // Daily premium probe for each tracked contract. This is OUR OWN recording of
   // the contract's price — not a vendor EOD series — so the row popup has a
@@ -497,6 +521,149 @@ async function runGrading() {
   return { graded: ok, failed: failed.length };
 }
 
+// ── dxLink premium history (the backfill source) ──────────────────────────────
+
+/**
+ * dxFeed writes option strikes with no padding and no trailing zeros —
+ * `.SPY260821C640`, `.SPY260821C22.5`. Format to match.
+ */
+function dxStrike(strike) {
+  const n = Number(strike);
+  if (!Number.isFinite(n) || !(n > 0)) return null;
+  return String(Math.round(n * 1000) / 1000);
+}
+
+/**
+ * The dxLink streamer symbol for one contract.
+ *
+ * Preferred path is TastyTrade's own chain, which carries `streamerSymbol` per
+ * strike — authoritative, and already cached ~10 min inside proxy-tastytrade.
+ * An EXPIRED contract has left the chain, so fall back to constructing dxFeed's
+ * form. That reconstruction is only safe for plain equity roots: index options
+ * pick a different root per settlement (SPX vs SPXW, NDX vs NDXP) and guessing
+ * wrong yields a symbol that quietly returns nothing.
+ */
+async function resolveStreamerSymbol(symbol, expiry, strike, type) {
+  const up = String(symbol).toUpperCase();
+  try {
+    const { contracts } = await _tt.fetchChain(up);
+    const hit = (contracts || []).find(
+      (c) => c.expiration === expiry
+        && Math.abs(Number(c.strike) - Number(strike)) < 0.01
+        && c.type === type
+    );
+    if (hit?.streamerSymbol) return hit.streamerSymbol;
+  } catch (e) {
+    console.warn(`[far-cb] chain lookup failed for ${up}: ${e.message}`);
+  }
+  if (INDEX_SYMBOLS.has(up)) return null;
+  const ymd = String(expiry).slice(2).replace(/-/g, ''); // 2026-08-21 -> 260821
+  const k = dxStrike(strike);
+  if (!/^\d{6}$/.test(ymd) || !k) return null;
+  return `.${up}${ymd}${type}${k}`;
+}
+
+/**
+ * Daily bars for one contract off dxLink. `[]` on any failure — a contract that
+ * never traded has no candles, which is indistinguishable from an unentitled
+ * symbol and is handled the same way either side.
+ */
+async function fetchContractDailyBarsDx(symbol, expiry, strike, type, opts = {}) {
+  const streamer = await resolveStreamerSymbol(symbol, expiry, strike, type);
+  if (!streamer) return { streamer: null, bars: [] };
+  const days = Number(opts.days) > 0 ? Number(opts.days) : BACKFILL_DAYS;
+  try {
+    const bars = await _candleHist.fetchIntradayCandles(
+      streamer, '1d', Date.now() - days * 86400_000,
+      {
+        // cache:false is mandatory — candle-history keys its cache on
+        // symbol|interval with no fromTime, so a cached single-session response
+        // would be handed back for this multi-week pull (and worse, this pull
+        // would poison the entry the live price line reads).
+        cache: false,
+        quietMs: Number(opts.quietMs) > 0 ? Number(opts.quietMs) : 2500,
+        hardMs: Number(opts.hardMs) > 0 ? Number(opts.hardMs) : 25_000,
+      }
+    );
+    return { streamer, bars: Array.isArray(bars) ? bars : [] };
+  } catch (e) {
+    console.warn(`[far-cb] dxLink candles failed ${streamer}: ${e.message}`);
+    return { streamer, bars: [] };
+  }
+}
+
+/**
+ * Pull one tracked flag's premium history from dxLink into
+ * far_cb_contract_daily. Bars before the flag date are dropped — the popup's
+ * window starts at first_flagged, and the contract's life before anyone was
+ * watching it is not what the row is about.
+ */
+async function backfillContractPremium(row, opts = {}) {
+  const type = optTypeOf(row);
+  const { streamer, bars } = await fetchContractDailyBarsDx(
+    row.symbol, row.expiry, row.strike, type, opts
+  );
+  if (!bars.length) return { streamer, bars: [], written: 0 };
+  const flagged = toYmd(row.first_flagged);
+  const kept = flagged
+    ? bars.filter((b) => new Date(b.time).toISOString().slice(0, 10) >= flagged)
+    : bars;
+  const written = await persistContractBars(row.symbol, row.strike, row.expiry, type, kept, 'dxlink');
+  return { streamer, bars: kept, written };
+}
+
+/**
+ * One-shot pass over every tracked flag whose premium history dxLink can still
+ * serve. Sequential by design: each contract opens its own short-lived dxLink
+ * connection, and firing dozens at once would be a self-inflicted rate limit.
+ *
+ * Re-running is cheap — `premium_backfilled_at` skips contracts already covered
+ * (an expired one permanently, a live one until the next session). `force`
+ * ignores the marker.
+ */
+async function runContractBackfill(opts = {}) {
+  if (!(await ensureSchema())) return { skipped: 'no DB' };
+  const p = getPool();
+  if (!p) return { skipped: 'no DB' };
+
+  const today = etDateStr();
+  const limit = Number(opts.limit) > 0 ? Number(opts.limit) : BACKFILL_LIMIT;
+  const force = !!opts.force;
+
+  const { rows } = await p.query(
+    `SELECT symbol, strike, expiry, first_flagged, gex_value_at_flag, spot_at_flag
+       FROM far_cb_outcomes
+      WHERE first_flagged >= CURRENT_DATE - ($1::int * INTERVAL '1 day')
+        AND ($2::bool
+             OR premium_backfilled_at IS NULL
+             OR (expiry >= $3 AND premium_backfilled_at < CURRENT_DATE))
+      ORDER BY first_flagged DESC
+      LIMIT $4`,
+    [BACKFILL_DAYS, force, today, limit]
+  );
+
+  if (!rows.length) return { candidates: 0, filled: 0, written: 0, empty: 0 };
+  console.log(`[far-cb] premium backfill — ${rows.length} contract(s) to try (dxLink daily bars)`);
+
+  let filled = 0, written = 0, empty = 0;
+  for (const row of rows) {
+    try {
+      const r = await backfillContractPremium(row, opts);
+      if (r.written > 0) { filled += 1; written += r.written; } else { empty += 1; }
+      await p.query(
+        `UPDATE far_cb_outcomes SET premium_backfilled_at = now()
+          WHERE symbol = $1 AND strike = $2 AND expiry = $3`,
+        [row.symbol, Number(row.strike), row.expiry]
+      );
+    } catch (e) {
+      console.warn(`[far-cb] backfill failed ${row.symbol} ${row.strike} ${row.expiry}: ${e.message}`);
+    }
+    await sleep(250);
+  }
+  console.log(`[far-cb] premium backfill done — ${filled} filled (${written} bars), ${empty} with nothing to serve`);
+  return { candidates: rows.length, filled, written, empty };
+}
+
 // ── daily contract price probe ────────────────────────────────────────────────
 
 /**
@@ -571,12 +738,13 @@ async function runContractProbe(opts = {}) {
 }
 
 /**
- * Fold a Theta per-contract EOD series into far_cb_contract_daily so the history
- * survives the Terminal going away (and the contract expiring). Only sessions
- * BEFORE today are written: today's row belongs to the live probe, whose close
- * is an NBBO mid rather than a half-formed session bar.
+ * Fold a per-contract daily series (dxLink candles, or Theta EOD if the Terminal
+ * ever answers) into far_cb_contract_daily, so the history survives the vendor
+ * going away and the contract expiring. Only sessions BEFORE today are written:
+ * today's row belongs to the live probe, whose close is a current NBBO mid
+ * rather than a half-formed session bar.
  */
-async function persistContractBars(symbol, strike, expiry, type, bars) {
+async function persistContractBars(symbol, strike, expiry, type, bars, source = 'eod') {
   const p = getPool();
   if (!p || !bars?.length) return 0;
   const today = etDateStr();
@@ -591,17 +759,19 @@ async function persistContractBars(symbol, strike, expiry, type, bars) {
     const low  = Number.isFinite(Number(b.low))  ? Number(b.low)  : close;
     try {
       await p.query(
+        // A real session bar outranks the probe samples for that day — it has
+        // the true high and low, which 15-minute sampling can only approximate.
         `INSERT INTO far_cb_contract_daily
            (symbol, strike, expiry, opt_type, date, open, high, low, close, probes, source, ts)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,1,'eod',now())
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,now())
          ON CONFLICT (symbol, strike, expiry, opt_type, date) DO UPDATE SET
            open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
-           close = EXCLUDED.close, source = 'eod', ts = now()`,
-        [symbol, Number(strike), expiry, type, date, open, high, low, close]
+           close = EXCLUDED.close, source = EXCLUDED.source, ts = now()`,
+        [symbol, Number(strike), expiry, type, date, open, high, low, close, source]
       );
       written += 1;
     } catch (e) {
-      console.warn(`[far-cb] EOD backfill write failed ${symbol} ${strike}${type} ${date}: ${e.message}`);
+      console.warn(`[far-cb] ${source} backfill write failed ${symbol} ${strike}${type} ${date}: ${e.message}`);
       break;
     }
   }
@@ -658,7 +828,9 @@ async function computeOutcomeDetail(symbol, strike, expiry) {
   //      the Terminal is up (and never under the tt-snapshot stub).
   //   2. far_cb_contract_daily — our own probe, written every PROBE_MINS. Always
   //      present going forward, and it keeps working after the contract expires.
-  const [underlyingBars, contractBars, probeRows] = await Promise.all([
+  // probeRows is reassignable: an unbacked contract triggers an on-demand
+  // dxLink pull below and the fetched bars stand in for it.
+  let [underlyingBars, contractBars, probeRows] = await Promise.all([
     (INDEX_SYMBOLS.has(symbol.toUpperCase())
       ? fetchIndexDailyHistoryTheta(symbol, fromDate, toDate)
       : fetchStockDailyHistoryTheta(symbol, fromDate, toDate)
@@ -676,8 +848,32 @@ async function computeOutcomeDetail(symbol, strike, expiry) {
   // Terminal is paused or the contract stops quoting. Fire-and-forget: the
   // popup must not wait on a backfill write.
   if (contractBars.length) {
-    persistContractBars(symbol, strike, expiry, type, contractBars)
+    persistContractBars(symbol, strike, expiry, type, contractBars, 'eod')
       .catch((e) => console.warn('[far-cb] EOD backfill failed:', e.message));
+  }
+
+  // Nothing recorded for this contract yet — a flag opened before the probe
+  // existed, or one the scheduled backfill has not reached. Pull it from dxLink
+  // NOW rather than showing a wall of dashes and filling it in on the second
+  // open. Tighter windows than the batch pass: someone is watching a spinner.
+  if (!contractBars.length && !probeRows.length) {
+    try {
+      const r = await backfillContractPremium(
+        { symbol, strike, expiry, first_flagged: row.first_flagged, gex_value_at_flag: row.gex_value_at_flag },
+        { quietMs: 1500, hardMs: 9000 }
+      );
+      if (r.bars.length) probeRows = r.bars.map((b) => ({
+        date: new Date(b.time).toISOString().slice(0, 10),
+        open: b.open, high: b.high, low: b.low, close: b.close,
+      }));
+      await p.query(
+        `UPDATE far_cb_outcomes SET premium_backfilled_at = now()
+          WHERE symbol = $1 AND strike = $2 AND expiry = $3`,
+        [symbol, Number(strike), expiry]
+      ).catch(() => {});
+    } catch (e) {
+      console.warn('[far-cb] on-demand backfill failed:', e.message);
+    }
   }
 
   const contractByDay = new Map(
@@ -861,6 +1057,8 @@ let _lastKey = null;
 let _lastProbeKey = null;
 let _lastGradeDate = null;
 let _lastCloseProbeDate = null;
+let _backfilling = false;
+let _lastBackfillDate = null;
 
 // Grade once daily inside this ET window (minutes-since-midnight) — well after
 // the close so the day's final OHLC bar is posted, but same-day so it doesn't
@@ -876,6 +1074,13 @@ function startFarCbRecorder() {
     runContractProbe()
       .catch((e) => console.warn(`[far-cb] ${why} probe error:`, e.message))
       .finally(() => { _probing = false; });
+  };
+  const backfill = (why) => {
+    if (_backfilling) return;
+    _backfilling = true;
+    runContractBackfill()
+      .catch((e) => console.warn(`[far-cb] ${why} backfill error:`, e.message))
+      .finally(() => { _backfilling = false; });
   };
 
   const tick = async () => {
@@ -917,6 +1122,13 @@ function startFarCbRecorder() {
         _lastCloseProbeDate = gKey;
         probe('close');
       }
+      // After the close, pull the day's real session bars for every live flag —
+      // dxLink's OHLC replaces that day's probe samples with the true high/low,
+      // and picks up any flag opened since the last pass.
+      if (gKey !== _lastBackfillDate) {
+        _lastBackfillDate = gKey;
+        setTimeout(() => backfill('daily'), 60_000);
+      }
     }
   };
   _timer = setInterval(() => { void tick(); }, 60_000);
@@ -926,6 +1138,10 @@ function startFarCbRecorder() {
       .catch((e) => console.warn('[far-cb] initial sweep error:', e.message))
       .finally(() => probe('startup'));
   }, 30_000);
+  // Startup backfill, well clear of the sweep so the two don't contend. This is
+  // what fills in flags that predate the probe — it runs once per boot and then
+  // skips whatever premium_backfilled_at says is already covered.
+  setTimeout(() => backfill('startup'), 150_000);
   return () => { if (_timer) clearInterval(_timer); };
 }
 
@@ -934,6 +1150,7 @@ module.exports = {
   runSweep,
   runGrading,
   runContractProbe,
+  runContractBackfill,
   ensureSchema,
   getPool,
   scanTicker,

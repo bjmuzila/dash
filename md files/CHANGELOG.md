@@ -1,5 +1,71 @@
 # Changelog
 
+## 2026-08-11 - Watch This: premium history backfilled from dxLink option candles
+
+`server-v2/far-cb-recorder.js`, `server-v2/server-with-proxy.js`,
+`components/pages/Scanner.tsx`. Follows the probe entry below.
+
+### What changed the answer
+
+The probe records premium forward from today, which left every flag opened
+before it existed showing "—" for its earlier days. Theta was the obvious
+backfill and was ruled out (no subscription). TastyTrade REST has no
+per-contract history at all.
+
+dxLink does. Verified 2026-08-11 on the box: `.FBL260821C23` and
+`.SPY260821C640` each replayed 16 daily bars with real OHLC + volume through a
+throwaway dxLink connection. That is a BETTER source than a vendor EOD close —
+these are the contract's own session bars, so each day carries a true high and
+low instead of one number.
+
+Nothing new had to be built to reach it: `candle-history.js` already opens an
+isolated dxLink connection and replays `Candle` events from a `fromTime`, and
+`fetchChain()` already returns a `streamerSymbol` per strike. Both are used
+read-only; neither file is modified.
+
+### The backfill
+
+`runContractBackfill()` walks tracked flags, pulls `{=1d}` candles for each
+contract, drops bars from before `first_flagged`, and writes them to
+`far_cb_contract_daily` with `source='dxlink'`. A real session bar overwrites
+that day's probe samples — the probe can only approximate a high and low by
+sampling. TODAY is never overwritten; that day belongs to the live probe.
+
+Runs at boot (150s in, clear of the initial sweep), once after the close (so the
+day's true OHLC replaces the samples), and on demand via
+`POST /proxy/far-cb-backfill-run[?force=1]`. Sequential by design — each
+contract is its own short-lived dxLink connection.
+
+`far_cb_outcomes.premium_backfilled_at` marks what is covered, so re-running is
+cheap: an expired contract is skipped for good, a live one until the next
+session adds a bar. `force=1` ignores it.
+
+Opening a row popup for a contract with NO recorded history triggers the pull
+inline (1.5s quiet / 9s hard, vs 2.5s/25s for the batch) so the first open shows
+data instead of dashes and a "try again".
+
+### Streamer symbols
+
+Resolved off TastyTrade's chain, which is authoritative and already cached ~10
+minutes. An EXPIRED contract has left the chain, so the dxFeed form is
+reconstructed instead (`.FBL260821C23` — no padding, no trailing zeros). That
+reconstruction is limited to plain equity roots: index options pick a different
+root per settlement (SPX vs SPXW, NDX vs NDXP) and a wrong guess returns nothing
+silently, so those fall back to chain-only.
+
+### Still shows "—"
+
+A day the contract never traded has no candle — the FBL 16C in the same window
+had zero volume against a live 2.35/3.50 market. Bars come from prints, so quiet
+days stay blank until the probe covers them going forward. No vendor sells
+historical option QUOTES here.
+
+### Env
+
+- `FAR_CB_BACKFILL_DAYS` (default 60) — candle lookback, and the age cutoff for
+  which flags are worth attempting.
+- `FAR_CB_BACKFILL_LIMIT` (default 200) — max contracts per pass.
+
 ## 2026-08-11 - Watch This: contract premium is now recorded daily, and the sweep runs the scanner universe
 
 `server-v2/far-cb-recorder.js`, `server-v2/far-cb-tickers.js`,
