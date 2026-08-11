@@ -1,5 +1,89 @@
 # Changelog
 
+## 2026-08-11 - GEX Change Top: the $0.50 entry floor now governs the cards too
+
+`components/scanner/GexChangeTop.tsx`.
+
+### The problem
+
+The scorecard looked like it was losing rows. It wasn't — it was applying a
+filter the cards above it ignored:
+
+```js
+const filteredResults = results.filter((r) => r.entry != null && r.entry > 0.5);
+```
+
+That floor is correct on its own terms. A contract entered at $0.05 that ticks
+to $0.20 is "+300%", which is tick size, not a result, and it would own both the
+ranking and the average peak. But the hourly cards had no such floor, so a pick
+you could see at the top of the page had no row underneath it, with nothing on
+screen explaining the gap.
+
+Two surfaces, two answers to "which picks exist today".
+
+### The fix
+
+`ENTRY_FLOOR` (0.5) is now a module constant driving BOTH. Cards carry no price
+— only `watch_id` — so the floor is read off the scorecard payload, which is
+already loaded for the same date, and matched by id:
+
+- `cheapIds` — every `watch_id` whose entry mark is at or under the floor.
+- `visibleSlots` — `slots` with those cards removed, dropping any hour left
+  empty. Every render path uses it, including `flippable`, so "Flip all" no
+  longer fetches price lines for cards that aren't on the page.
+
+A pick that was never auto-probed has no entry mark to judge, so it stays
+visible — that is a separate gap (those can't be scored at all) and is left
+alone here.
+
+### Nothing hidden silently
+
+That was the actual bug, so the floor now announces itself. A `show ≤ $0.50 (N)`
+button sits in the toolbar whenever the floor is taking something, and flipping
+it reveals those picks in the cards AND the scorecard at once — the two cannot
+disagree again. The scorecard header reads `(all entries)` instead of
+`(entry > $0.50)` while it's on.
+
+Both empty states were lying and now don't: a date where every pick was under
+the floor said "No very-strong picks recorded yet for this date" as if the
+recorder had missed them.
+
+## 2026-08-11 - Watch This: the detail popup opens in the viewport, not two screens down
+
+`components/pages/Scanner.tsx`.
+
+### The problem
+
+The tracked-row detail modal rendered far down the page — you had to scroll to
+find it. Its styles looked correct: `position: fixed; inset: 0` with a flex
+centre, which should be dead centre of the screen.
+
+`position: fixed` resolves against the viewport ONLY while no ancestor has a
+transform, filter, backdrop-filter, perspective, will-change or contain. Any of
+those makes THAT ancestor the containing block instead. The modal lives inside a
+`<Card>`, and every card surface in `homeTheme.ts` sets
+`backdropFilter: blur(16px)` (globals.css's `.card-hover` adds a `transform` on
+hover for good measure). So `inset: 0` covered the CARD.
+
+It really was centred — on a card sitting a couple of screens down. No amount of
+tweaking the overlay's own CSS could have fixed it; the cause is in the ancestor
+chain.
+
+### The fix
+
+New `ModalPortal` in Scanner.tsx portals its children to `document.body`, which
+is outside every card, so fixed means fixed again. It renders null until mounted
+because `document` does not exist during Next's prerender (the same component
+also runs inside the Vite SPA).
+
+The overlay's own markup is unchanged — same backdrop, same click-outside close,
+same `min(720px, 100%)` panel. Only its position in the DOM moved. `maxHeight:
+80vh` now means 80% of the SCREEN rather than 80% of a card.
+
+Any future dialog on this page should use `ModalPortal`. Cards on other pages
+carry the same frosted surface, so a modal nested in one will land in the same
+trap.
+
 ## 2026-08-11 - Watch This: premium history backfilled from dxLink option candles
 
 `server-v2/far-cb-recorder.js`, `server-v2/server-with-proxy.js`,

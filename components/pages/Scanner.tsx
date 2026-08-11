@@ -7,7 +7,8 @@
  *   Vol Pin             — IV-RV spread contraction + price range tightening → pin candidates
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { HOME_THEME, LIGHT_BLUE, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
@@ -1256,9 +1257,33 @@ function StrikeQueryScanner() {
   );
 }
 
+/**
+ * A modal must escape its Card, or it is not a modal.
+ *
+ * `position: fixed` resolves against the viewport ONLY while no ancestor has a
+ * transform, filter, backdrop-filter, perspective, will-change or contain — any
+ * of those makes that ancestor the containing block instead. Every PageCard
+ * surface in homeTheme sets `backdropFilter: blur(16px)`, and `.card-hover` adds
+ * a `transform` on hover, so an overlay rendered inside a Card had `inset: 0`
+ * cover THE CARD. It looked centered because it was — centered on a card sitting
+ * a couple of screens down, which is exactly the scroll-to-find-it symptom.
+ *
+ * Portaling to <body> puts the overlay outside every card, so fixed means fixed.
+ * Use this for any dialog added to this page; styling it differently will not
+ * help, because the bug is in the ancestor chain rather than the overlay.
+ */
+function ModalPortal({ children }: { children: ReactNode }) {
+  const [host, setHost] = useState<HTMLElement | null>(null);
+  // document only exists after mount — this page is prerendered by Next as well
+  // as run in the Vite SPA, and SSR must render nothing rather than throw.
+  useEffect(() => { setHost(document.body); }, []);
+  if (!host) return null;
+  return createPortal(children, host);
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  WATCH THIS (new tab) — farther-out CB level: highest GEX strike within 30d
-//  expirations sitting unusually far OTM vs spot, EM watchlist
+//  expirations sitting unusually far OTM vs spot, scanner universe
 // ══════════════════════════════════════════════════════════════════════════════
 
 type WatchRow = {
@@ -1685,6 +1710,7 @@ function WatchThisScanner() {
       </div>
 
       {(detailLoading || detail || detailErr) && (
+        <ModalPortal>
         <div
           onClick={closeDetail}
           style={{
@@ -1774,6 +1800,7 @@ function WatchThisScanner() {
             )}
           </div>
         </div>
+        </ModalPortal>
       )}
     </Card>
   );

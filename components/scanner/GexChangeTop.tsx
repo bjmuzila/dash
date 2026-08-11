@@ -41,6 +41,14 @@ type PickContract = { ticker: string; expiration: string; strike: number; side: 
 type PickHist = { points: PickPoint[]; contract: PickContract | null; error?: string };
 type Metric = "mark" | "net_gex";
 
+/**
+ * Entry-mark floor for a pick to count. Below this a contract's % moves are an
+ * artifact of tick size, not a tradable result — $0.05 to $0.20 is "+300%".
+ * Applied to the hourly cards AND the scorecard so the two never disagree about
+ * which picks exist.
+ */
+const ENTRY_FLOOR = 0.5;
+
 /** One row of the EOD scorecard — /proxy/gex-change-top-results. */
 type ResultRow = {
   watch_id: number; symbol: string; expiry: string; strike: number; side: string | null;
@@ -320,6 +328,40 @@ export default function GexChangeTop() {
       .catch((e) => setResErr(String(e?.message || e)));
   }, []);
 
+  // ── the entry-size floor, applied to BOTH surfaces ──────────────────────────
+  // The scorecard has always dropped picks whose entry mark was <= $0.50 — a
+  // nickel contract that ticks to $0.20 is +300% and would own both the table
+  // and the average. The CARDS did not drop them, so the page contradicted
+  // itself: a pick visible above had no row below, which reads as the scorecard
+  // silently losing rows. One floor now governs both, and `showCheap` reveals
+  // them everywhere at once rather than hiding them everywhere silently.
+  //
+  // Cards carry no price — only watch_id — so the floor is read off the
+  // scorecard payload (same date, already loaded) and matched by id. A pick that
+  // was never auto-probed has no entry to judge, so it is left visible.
+  const [showCheap, setShowCheap] = useState(false);
+
+  const cheapIds = useMemo(() => {
+    const s = new Set<number>();
+    for (const r of results) if (r.entry != null && r.entry <= ENTRY_FLOOR) s.add(r.watch_id);
+    return s;
+  }, [results]);
+
+  const visibleSlots = useMemo(() => {
+    if (showCheap || cheapIds.size === 0) return slots;
+    return slots
+      .map((hb) => ({ ...hb, rows: hb.rows.filter((r) => r.watch_id == null || !cheapIds.has(r.watch_id)) }))
+      .filter((hb) => hb.rows.length > 0);
+  }, [slots, cheapIds, showCheap]);
+
+  /** How many CARDS the floor removes — the same contract can sit in several slots. */
+  const hiddenCards = useMemo(() => {
+    if (cheapIds.size === 0) return 0;
+    let n = 0;
+    for (const hb of slots) for (const r of hb.rows) if (r.watch_id != null && cheapIds.has(r.watch_id)) n += 1;
+    return n;
+  }, [slots, cheapIds]);
+
   useEffect(() => { load(); }, [load]);
   useEffect(() => { loadResults(date || undefined); }, [loadResults, date]);
   useEffect(() => {
@@ -382,13 +424,15 @@ export default function GexChangeTop() {
   // [cid, watch_id]. Drives "Flip all" and the while-open refresh below.
   const flippable = useMemo(() => {
     const out: { cid: string; wid: number }[] = [];
-    for (const hb of slots) {
+    // visibleSlots, not slots — "Flip all" must not fetch price lines for cards
+    // the floor has removed from the page.
+    for (const hb of visibleSlots) {
       for (const r of hb.rows) {
         if (r.watch_id != null) out.push({ cid: `${r.symbol}-${r.strike}-${hb.slot}`, wid: r.watch_id });
       }
     }
     return out;
-  }, [slots]);
+  }, [visibleSlots]);
 
   // Watch ids currently face-down. De-duped: the same contract can appear in
   // several hourly slots and they share one fetch.
@@ -545,8 +589,9 @@ export default function GexChangeTop() {
     color: HOME_THEME.text, borderBottom: `1px solid ${tint(HOME_THEME.text, 0.05)}`, whiteSpace: "nowrap",
   };
 
-  // Scorecard summary — filter to entry > 0.5 to remove noise, then count picks that offered real exits.
-  const filteredResults = results.filter((r) => r.entry != null && r.entry > 0.5);
+  // Scorecard summary — same floor as the cards above, then count picks that
+  // offered real exits.
+  const filteredResults = results.filter((r) => r.entry != null && (showCheap || r.entry > ENTRY_FLOOR));
   const withPeak = filteredResults.filter((r) => r.max_pct != null);
   const hit = (n: number) => withPeak.filter((r) => (r.max_pct as number) >= n).length;
   const avgPeak = withPeak.length ? withPeak.reduce((a, r) => a + (r.max_pct as number), 0) / withPeak.length : null;
@@ -590,6 +635,23 @@ export default function GexChangeTop() {
         >
           {allFlipped ? "⟲ Flip back" : `⟳ Flip all${flippable.length ? ` (${flippable.length})` : ""}`}
         </button>
+        {/* Never hide picks silently: the floor always says how many it took,
+            and one click puts them back on the cards AND in the scorecard. */}
+        {(hiddenCards > 0 || showCheap) && (
+          <button
+            data-noshot="1"
+            onClick={() => setShowCheap((s) => !s)}
+            title={`Picks whose entry mark was $${ENTRY_FLOOR.toFixed(2)} or less. Their % moves are tick-size artifacts, so they are hidden from the cards and the scorecard alike.`}
+            style={{
+              ...homeButtonStyle, padding: "6px 12px", fontSize: 13,
+              borderColor: showCheap ? tint(HOME_THEME.orange, 0.5) : HOME_THEME.border,
+              color: showCheap ? HOME_THEME.orange : HOME_THEME.text,
+              background: showCheap ? tint(HOME_THEME.orange, 0.12) : homeButtonStyle.background,
+            }}
+          >
+            {showCheap ? `hide ≤ $${ENTRY_FLOOR.toFixed(2)}` : `show ≤ $${ENTRY_FLOOR.toFixed(2)} (${hiddenCards})`}
+          </button>
+        )}
         <span style={{ fontSize: 12, color: HOME_THEME.text }}>click a card for its option price line</span>
         <div style={{ flex: 1 }} />
         <button
@@ -620,7 +682,8 @@ export default function GexChangeTop() {
           </span>
           {filteredResults.length > 0 && (
             <span style={{ fontSize: 12, color: HOME_THEME.text }}>
-              {filteredResults.length} pick{filteredResults.length === 1 ? "" : "s"} (entry &gt; $0.50) · avg peak{" "}
+              {filteredResults.length} pick{filteredResults.length === 1 ? "" : "s"}{" "}
+              ({showCheap ? "all entries" : `entry > $${ENTRY_FLOOR.toFixed(2)}`}) · avg peak{" "}
               <b style={{ color: avgPeak != null && avgPeak >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{fmtPct(avgPeak)}</b>
               {" · "}≥+25% <b style={{ color: HOME_THEME.text }}>{hit(25)}</b>
               {" · "}≥+50% <b style={{ color: HOME_THEME.text }}>{hit(50)}</b>
@@ -643,7 +706,9 @@ export default function GexChangeTop() {
         {showResults && !resErr && (
           filteredResults.length === 0 ? (
             <div style={{ color: HOME_THEME.text, fontSize: 13, padding: "8px 4px" }}>
-              {results.length === 0 ? "No scored picks for this date yet — rows appear once picks have been auto-probed and snapshots start landing." : "No picks with entry > $0.50 for this date (all entries < $0.50 filtered out as noise)."}
+              {results.length === 0
+                ? "No scored picks for this date yet — rows appear once picks have been auto-probed and snapshots start landing."
+                : `No picks above the $${ENTRY_FLOOR.toFixed(2)} entry floor for this date — use “show ≤ $${ENTRY_FLOOR.toFixed(2)}” above to include them.`}
             </div>
           ) : (
             <div style={{ overflowX: "auto" }}>
@@ -709,13 +774,18 @@ export default function GexChangeTop() {
 
       {err && <div style={{ color: HOME_THEME.red, fontSize: 13, padding: "8px 0" }}>Error: {err}</div>}
 
-      {!err && slots.length === 0 && (
+      {!err && visibleSlots.length === 0 && (
         <div style={{ color: HOME_THEME.text, fontSize: 14, padding: "16px 4px" }}>
-          {loading ? "Loading…" : "No very-strong picks recorded yet for this date. The recorder captures the top 5 every 30 min during RTH going forward."}
+          {loading ? "Loading…"
+            : slots.length > 0
+              // Everything this date had was under the floor — say so, rather
+              // than claiming nothing was recorded.
+              ? `Every pick this date entered at $${ENTRY_FLOOR.toFixed(2)} or less. Use “show ≤ $${ENTRY_FLOOR.toFixed(2)}” above to see them.`
+              : "No very-strong picks recorded yet for this date. The recorder captures the top 5 every 30 min during RTH going forward."}
         </div>
       )}
 
-      {slots.map((hb) => (
+      {visibleSlots.map((hb) => (
         <div key={hb.slot} style={{ marginBottom: 22 }}>
           <div data-noshot="1" style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
             <span style={{ color: HOME_THEME.orange, fontWeight: 800, fontSize: 15 }}>{slotLabel(hb.slot)}</span>
