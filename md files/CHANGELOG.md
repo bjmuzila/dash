@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-08-11 - Fix: restore buildTpoProfile, which the Vite build died on
+
+`components/dashboard/es-candles/chartMath.ts`.
+
+The Docker deploy failed at `app-vite` build:
+
+    "buildTpoProfile" is not exported by "components/dashboard/es-candles/chartMath.ts",
+    imported by "components/dashboard/es-candles/EsChartCard.tsx"
+
+The function had gone missing from chartMath.ts while its `TPO_PERIOD_MS`,
+`TpoBin` and `TpoProfile` declarations and its whole section comment stayed
+behind - so `tsc` and `check-routes.mjs` both passed (the module path resolves;
+only the NAMED export was gone) and Rollup was the first thing to notice.
+
+- **Restored `buildTpoProfile(candles, binSize, periodMs = TPO_PERIOD_MS)`** to
+  the signature and return shape `EsChartCard` already calls it with: bins a
+  price ladder of TPO touch counts, `maxCount`, `poc`, `vah`/`val`, `mid`, and
+  `startTs`/`endTs` left null for the caller to anchor per session.
+- A bin counts ONCE per period that traded there regardless of how many candles
+  inside that period touched it (deduped by a `Set` per period) - that is what
+  makes it a TIME profile rather than a second volume profile.
+- Value area is the same contiguous-70%-around-the-POC expansion
+  `buildVolumeProfile` uses, fed touch counts, so VAH/VAL mean the same thing on
+  both profiles. `mid` is the session RANGE midpoint, not the POC.
+- Verified every one of the 30 names `EsChartCard` imports from `chartMath` (and
+  its `slotStore` imports) now resolves, so this was the only hole.
+
 ## 2026-08-11 - Analytics Ticker Lookup: the ex-0DTE board now comes from the CHAIN, plus a refresh button and the Options Chain ticker menu
 
 `components/pages/Analytics.tsx` only. No proxy or server change.

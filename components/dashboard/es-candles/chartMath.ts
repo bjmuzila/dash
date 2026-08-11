@@ -248,6 +248,87 @@ export type TpoProfile = {
   endTs: number | null;   // chart x-anchor: where the profile's box-width ends
 };
 
+/**
+ * Build a TPO profile from candles.
+ *
+ * `periodMs` is the TPO period — classically 30 minutes (TPO_PERIOD_MS), but the
+ * caller raises it to the bar size on higher timeframes, because a period
+ * smaller than a bar gives every candle its own period and the "profile" just
+ * restates the candles.
+ *
+ * A bin is counted ONCE per period that traded there, no matter how many candles
+ * inside that period touched it — that is what makes this a time profile rather
+ * than a second volume profile. Each candle marks every bin its [low, high]
+ * spans, deduped per period by a Set of bin prices.
+ *
+ * Value area is the same contiguous-70%-around-the-POC expansion buildVolumeProfile
+ * uses, fed touch counts instead of volume, so VAH/VAL mean the same thing on
+ * both profiles. `mid` is the session RANGE midpoint (high+low)/2 — a different
+ * level from the POC and drawn separately.
+ *
+ * startTs/endTs are left null: only the caller knows which session window these
+ * candles were sliced from, and it assigns both right after this returns.
+ */
+export function buildTpoProfile(
+  candles: Array<{ timestamp: number; high: number; low: number }>,
+  binSize: number,
+  periodMs: number = TPO_PERIOD_MS
+): TpoProfile {
+  const empty: TpoProfile = {
+    bins: [], maxCount: 0, poc: null, vah: null, val: null, mid: null, startTs: null, endTs: null,
+  };
+  if (!candles.length || !(binSize > 0) || !(periodMs > 0)) return empty;
+
+  const floorBin = (p: number) => Math.floor(p / binSize) * binSize;
+  // period start -> the set of bins that period traded at.
+  const periods = new Map<number, Set<number>>();
+  let lo = Infinity, hi = -Infinity;
+  for (const c of candles) {
+    if (!isFinite(c.high) || !isFinite(c.low) || !(c.high >= c.low)) continue;
+    if (c.low < lo) lo = c.low;
+    if (c.high > hi) hi = c.high;
+    const p = Math.floor(c.timestamp / periodMs) * periodMs;
+    let set = periods.get(p);
+    if (!set) { set = new Set<number>(); periods.set(p, set); }
+    const b0 = floorBin(c.low), b1 = floorBin(c.high);
+    for (let b = b0; b <= b1 + 1e-9; b += binSize) set.add(b);
+  }
+  if (!periods.size || !(hi >= lo)) return empty;
+
+  const counts = new Map<number, number>();
+  for (const set of periods.values()) {
+    for (const b of set) counts.set(b, (counts.get(b) ?? 0) + 1);
+  }
+  const bins: TpoBin[] = [...counts.entries()]
+    .map(([price, count]) => ({ price, count }))
+    .sort((a, b) => a.price - b.price);
+  if (!bins.length) return empty;
+
+  let pocIdx = 0;
+  for (let i = 1; i < bins.length; i++) if (bins[i].count > bins[pocIdx].count) pocIdx = i;
+  const total = bins.reduce((s, b) => s + b.count, 0);
+  const target = total * 0.7;
+
+  let loI = pocIdx, hiI = pocIdx, acc = bins[pocIdx].count;
+  while (acc < target && (loI > 0 || hiI < bins.length - 1)) {
+    const below = loI > 0 ? bins[loI - 1].count : -1;
+    const above = hiI < bins.length - 1 ? bins[hiI + 1].count : -1;
+    if (above >= below) { hiI++; acc += Math.max(0, above); }
+    else { loI--; acc += Math.max(0, below); }
+  }
+
+  return {
+    bins,
+    maxCount: bins[pocIdx].count,
+    poc: bins[pocIdx].price,
+    vah: bins[hiI].price,
+    val: bins[loI].price,
+    mid: (hi + lo) / 2,
+    startTs: null,
+    endTs: null,
+  };
+}
+
 // ── GEX column slotting ──────────────────────────────────────────────────────
 // Heatmap column bucket. 1-min: snapshots arrive every ~30s, so each column is
 // the latest snapshot in that minute. Columns are carried forward to the next
