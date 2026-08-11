@@ -2,17 +2,31 @@
 /**
  * server-v2/far-cb-tickers.js
  *
- * Ticker universe for the "Watch This" (far-CB) scanner. Deliberately NOT the
- * full ~380-name EM watchlist — this is a curated core list (Brandon's actual
- * TradingView "In positions" set, futures/crypto/macro-index rows stripped
- * since they're not optionable single names Theta can chain), plus any
- * customer-added tickers on top.
+ * Ticker universe for the "Watch This" (far-CB) scanner.
  *
- * CORE_TICKERS = static, edited here + redeployed.
+ * 2026-08-11: the sweep universe is now the SCANNER universe — the same list the
+ * /scanner GEX + Strike Query tabs and the flow tape run on
+ * (server-v2/scanner-tickers.js, resolved through rosterStore.getSymbols
+ * ('scanner') so the owner Watchlists page still applies). Watch This is a
+ * scanner tab; running it off its own private roster meant a name added to the
+ * scanner universe never appeared here.
+ *
+ * CORE_TICKERS below is kept as the historical curated list. It is NO LONGER the
+ * sweep baseline — it stays exported because roster-store.js still surfaces it
+ * as the 'farcb' list on the owner Watchlists page, and because it documents the
+ * original "in positions" set. Editing it no longer changes what gets swept;
+ * edit scanner-tickers.js (or the Watchlists page's Scanner list) instead.
+ *
  * Custom tickers = far_cb_custom_tickers table (Postgres, same DB as the
  * Next.js app's lib/db.ts) — any signed-in customer can add one via
  * POST /api/far-cb-tickers; getActiveRoster() reads them live, no redeploy.
+ * They still stack on top of the scanner universe.
  */
+
+// scanner-tickers.js is a plain array module that requires nothing, so a
+// top-level require is safe. roster-store (which requires THIS file) still has
+// to be pulled in lazily inside getActiveRoster to avoid the cycle.
+const scannerBase = require('./scanner-tickers');
 
 const CORE_TICKERS = [
   // Indices / broad ETFs
@@ -80,30 +94,34 @@ async function getCustomTickers() {
 }
 
 /**
- * CORE_TICKERS ∪ owner roster overrides ∪ active customer-added tickers.
+ * Scanner universe ∪ active customer-added tickers.
  *
- * Three layers, in precedence order:
- *   1. CORE_TICKERS above          — the file baseline, edited + redeployed.
- *   2. roster_overrides('farcb')   — the owner Watchlists page. Adds AND removes:
- *                                    a remove here strips a CORE name from the
- *                                    sweep without touching this file.
- *   3. far_cb_custom_tickers       — any signed-in customer, add-only.
+ * Two layers, in precedence order:
+ *   1. roster_overrides('scanner') — the owner Watchlists page's Scanner list,
+ *                                    which itself falls back to the
+ *                                    scanner-tickers.js buckets when the DB has
+ *                                    no overrides. Adds AND removes.
+ *   2. far_cb_custom_tickers       — any signed-in customer, add-only.
  *
- * Safe if the DB is unavailable (falls back to CORE_TICKERS).
+ * Safe if the DB is unavailable (falls back to the scanner-tickers.js file
+ * baseline).
  *
- * roster-store is required lazily: it requires THIS module for the baseline, so
- * a top-level require would be a cycle.
+ * roster-store is required lazily: it requires THIS module for the 'farcb'
+ * baseline, so a top-level require would be a cycle.
  */
 async function getActiveRoster() {
-  let core = [...CORE_TICKERS];
+  let core = [...scannerBase.SCANNER_TICKERS];
   try {
-    const resolved = await require('./roster-store').getSymbols('farcb');
+    const resolved = await require('./roster-store').getSymbols('scanner');
     if (resolved.length) core = resolved;
   } catch (e) {
-    console.warn('[far-cb-tickers] roster overrides unavailable, using CORE:', e.message);
+    console.warn('[far-cb-tickers] scanner roster unavailable, using the file baseline:', e.message);
   }
   const custom = await getCustomTickers();
-  return [...new Set([...core, ...custom])];
+  return [...new Set([
+    ...core.map((s) => String(s).trim().toUpperCase()).filter(Boolean),
+    ...custom,
+  ])];
 }
 
 module.exports = { CORE_TICKERS, getActiveRoster, getCustomTickers };

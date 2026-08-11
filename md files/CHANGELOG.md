@@ -1,5 +1,70 @@
 # Changelog
 
+## 2026-08-11 - Watch This: contract premium is now recorded daily, and the sweep runs the scanner universe
+
+`server-v2/far-cb-recorder.js`, `server-v2/far-cb-tickers.js`,
+`components/pages/Scanner.tsx`.
+
+### The problem
+
+Every CONTRACT / CONTRACT Δ$ / CONTRACT Δ% cell in the tracked-row popup showed
+"—", on every row, forever. SPOT and SPOT Δ% filled in fine right beside them.
+
+The popup asks `fetchOptionDailyHistoryTheta` for the contract's daily closes.
+That name is resolved off `DATA_SOURCE`: with `DATA_SOURCE=tt` (what .env.local
+runs) the recorder imports `tt-snapshot.js`, where per-contract EOD history is a
+warn-once STUB that returns `[]` — there is no TastyTrade equivalent. The call
+sites all wrap it in `.catch(() => [])`, so the empty array looked exactly like
+"no bars for this contract" and nothing ever surfaced as an error. Underlying
+history is Yahoo daily in the same module, which is why only the SPOT columns
+worked. Same stub blanked the `Opt Price` % column, which needs the day's open.
+
+### The fix: probe and record the premium ourselves
+
+New table `far_cb_contract_daily (symbol, strike, expiry, opt_type, date)` with
+open / high / low / close / probes / source. `runContractProbe()` prices every
+tracked contract that has not expired — one greeks snapshot per (symbol, expiry)
+group, NBBO mid — and upserts today's row: first probe of the session sets
+`open`, each later one moves `close` and widens high/low.
+
+Cadence, from the recorder's own 60s tick: every `FAR_CB_PROBE_MINS` (15) during
+RTH, once more inside the 16:10 ET grading window so the last write of the day is
+the settling mark, and once at startup after the initial sweep. Rows are never
+pruned by expiry, so a contract that has stopped quoting keeps the history it
+built while it was live.
+
+The popup now merges two sources per day: Theta's per-contract EOD series when
+the Terminal answers, otherwise the recorded probe. Theta is asked DIRECTLY
+(`require('./proxy-thetadata')`) instead of through the `DATA_SOURCE` swap — the
+Terminal is a sibling container that runs either way, and `server-with-proxy.js`
+already imports it ungated for the flow drawer. A failure trips a 10-minute
+breaker rather than burning its retry budget once per tracked row per poll.
+Whatever Theta does return for past sessions is folded into
+`far_cb_contract_daily` (`source='eod'`, today excluded) so history survives the
+Terminal being paused.
+
+`Opt Price`'s % column falls back to the first probe of the session when there is
+no vendor open. A probe-only day (underlying bar not posted yet) carries the last
+spot forward but reports no spot change — a fabricated 0.00% would be worse.
+
+Note: this builds history going FORWARD. Flags opened before today show "—" for
+their earlier days unless the Theta Terminal can backfill them.
+
+### Universe: scanner, not the private far-CB list
+
+`getActiveRoster()` now resolves `rosterStore.getSymbols('scanner')` — the same
+universe as the /scanner GEX + Strike Query tabs and the flow tape — with the
+`scanner-tickers.js` buckets as the offline baseline. Watch This is a scanner
+tab; running it off its own roster meant a name added to the scanner never
+appeared here. Customer-added tickers (`far_cb_custom_tickers`) still stack on
+top. `CORE_TICKERS` stays exported for the owner Watchlists page's 'farcb' list
+but is no longer what gets swept — edit `scanner-tickers.js` instead. Roster goes
+from ~130 curated names to the ~169-name scanner universe, on a 30m sweep.
+
+### Env
+
+- `FAR_CB_PROBE_MINS` (default 15) — contract probe cadence during RTH.
+
 ## 2026-08-11 - Test Lab -> GEX Map: spot path drawn every minute, not every slot
 
 `app/test/GexMapTab.tsx`, `server-v2/api-router.js`.

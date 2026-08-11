@@ -1486,7 +1486,7 @@ function WatchThisScanner() {
 
   return (
     <Card variant="budget" title={<span style={{ fontSize: 17 }}>Watch This — Far CB</span>}
-      subtitle={`Highest GEX strike within 30d expirations, far OTM vs spot · EM watchlist${threshold != null ? ` · >${threshold}% OTM` : ""}${loading ? " · refreshing…" : ""}`}>
+      subtitle={`Highest GEX strike within 30d expirations, far OTM vs spot · scanner universe${threshold != null ? ` · >${threshold}% OTM` : ""}${loading ? " · refreshing…" : ""}`}>
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
         <button onClick={() => load()} style={seg(false)}>↻ Refresh</button>
@@ -1710,12 +1710,20 @@ function WatchThisScanner() {
                   {detail ? `${detail.symbol} · $${detail.strike} ${detail.type === "C" ? "Call" : "Put"} · ${detail.expiry}` : "Loading…"}
                 </div>
                 {detail && (
-                  <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.75, marginTop: 2 }}>
-                    Flagged {detail.firstFlagged} at spot ${detail.spotAtFlag.toFixed(2)} ({detail.otmPctAtFlag.toFixed(0)}% OTM) ·{" "}
-                    <span style={{ color: detail.status === "touched" ? LIGHT_BLUE : detail.status === "expired" ? HOME_THEME.text : HOME_THEME.green, fontWeight: 700 }}>
-                      {detail.status === "touched" ? `TOUCHED ${detail.touchedDate ?? ""}` : detail.status.toUpperCase()}
-                    </span>
-                  </div>
+                  <>
+                    <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.75, marginTop: 2 }}>
+                      Flagged {detail.firstFlagged} at spot ${detail.spotAtFlag.toFixed(2)} ({detail.otmPctAtFlag.toFixed(0)}% OTM) ·{" "}
+                      <span style={{ color: detail.status === "touched" ? LIGHT_BLUE : detail.status === "expired" ? HOME_THEME.text : HOME_THEME.green, fontWeight: 700 }}>
+                        {detail.status === "touched" ? `TOUCHED ${detail.touchedDate ?? ""}` : detail.status.toUpperCase()}
+                      </span>
+                    </div>
+                    {/* The contract column is our own recorded premium, sampled
+                        every 15m during RTH — days before this flag started
+                        being probed have no premium to show and stay "—". */}
+                    <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.55, marginTop: 2 }}>
+                      Contract premium recorded every 15m during RTH · days before tracking began show —
+                    </div>
+                  </>
                 )}
               </div>
               <button onClick={closeDetail} style={{ ...seg(false), padding: "4px 10px" }}>✕</button>
