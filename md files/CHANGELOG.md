@@ -1,132 +1,39 @@
 # Changelog
 
-## 2026-08-11 - /level-log: direction of approach, and one type scale for the card
+## 2026-08-11 - Analytics Ticker Lookup: the ex-0DTE board now comes from the CHAIN, plus a refresh button and the Options Chain ticker menu
 
-`components/pages/LevelLog.tsx`, `server-v2/walls-recorder.js`.
+`components/pages/Analytics.tsx` only. No proxy or server change.
 
-### The bug: "7775 was never broken"
-
-The 10:45 CORE row read **BROKE & CONSOLIDATED - broke by 18.77**. Price tagged
-7775 from *underneath* at 7772.97 and then fell ~18.8 points. It never traded
-above the level.
-
-`classify()` picks a break direction for CORE (walls have a fixed side; CORE
-does not). It was taking **the direction of the largest excursion anywhere in
-the watch window** - so a hard move DOWN away from a level approached from below
-scored as a break THROUGH it. Direction has to come from where price came from,
-never from where it ended up.
-
-### Fix (recorder)
-
-- New `approachDir(strike, prior, atHit)` - reads the last snapshot *strictly
-  before* the hit (the touch band is only 0.05% wide, so spot at the tag is
-  basically on the level; `spot_at_hit` is the fallback). `resolveOpenEvents`
-  now selects `spot_at_hit` and queries that prior sample.
-- `classify()` / `classifyApproach()` take a `dirHint`. CORE uses the approach
-  side; the old largest-excursion guess survives only when the side is unknown.
-- Every note now names the direction: `broke above by X`, `pushed X down through
-  the level`, `tagged from below and faded X back`, `hovered below 7775`.
-  Verified against the real case: was `consolidated / +18.77`, now
-  `reject / -2.03 - "tagged from below and faded 16.74 back"`. A genuine break up
-  through 7775 still scores `consolidated / broke above by 16.40`.
-- New export `reclassifyDay(date, symbol?)` - clears the verdict columns for a
-  date and re-runs the resolver over the same stored spot path, so days recorded
-  before this fix can be re-scored without inventing data.
-
-### Fix (page)
-
-- Every hit/approach row states the side up front: a green `up from below` /
-  red `down from above` chip beside the badge, plus "Tagged **7775** from below
-  at **7772.97**" in the sentence and in the copied text. Excursion reads
-  `pushed 18.77 up through` or `stayed 18.77 short of it` instead of a bare
-  signed number that meant nothing without the direction.
-- Badge text is centered: fixed `height` + matching `line-height` + border-box
-  (was `padding: 2px`, which let the label ride high), and `text-indent` equal to
-  the letter-spacing to cancel the trailing letter-space that uppercase tracking
-  adds after the last glyph - that trailing space is why every pill read shifted
-  left inside its own box.
-- Timeline dots line up with the text: the time cell, the dot and the badge row
-  all lock to a shared `ROW_LEAD_H` (20px) instead of each finding its own
-  baseline off whatever line-height its font used. The dot centers on that line;
-  the connector starts below the dot and still runs to the next row.
-- One type scale for the card - `FS_LABEL` 12 / `FS_BODY` 13 / `FS_META` 12 and a
-  single `0.12em` label tracking, replacing the four sizes and three
-  letter-spacings that were fighting each other inside one row.
-- Capture-rail endpoints and the row counter moved to the mono meta size so the
-  rail matches the rows.
-
-## 2026-08-11 - GEX Levels: fix "Cannot read properties of undefined (reading 'strike')" page crash
-
-`components/pages/TestLab.tsx` (the LIVE Test Lab / GEX Levels page - the SPA
-routes `/test` here, not to `app/test/page.tsx`).
-
-### The bug
-
-Every chart on the page shares `useChartHover`, which stores the hovered bar as
-a bare **index** (`hover.idx`) into the visible slice. Nothing invalidates that
-index. Scroll-wheel zoom, drag-pan, and the live GEX refresh all rebuild `shown`
-with a different (usually shorter) array while `hover` still holds the old
-index, so the tooltip evaluated `shown[hover.idx].strike` on `undefined` and
-threw **during render** - which React escalates to unmounting the whole page,
-not just the tooltip. Hovering a bar and then zooming out reproduced it.
-
-### Fix
-
-- Each chart now resolves the hovered row ONCE before render
-  (`const hp = hover ? shown[hover.idx] : null`) and the tooltip is gated on
-  `hover && hp`. A stale index renders no tooltip instead of crashing.
-  Applied to all six: Net Gamma (cumulative curve), Net Gamma bars, Net Delta,
-  Call/Put Gamma, OI by date, OI by expiration, and EOD GEX.
-- `deriveGexLevels` filters `r && Number.isFinite(r.strike)` - a null/hole in a
-  `gexRows` socket frame hit the same message from the other direction.
-
-No behavior change when the hover index is valid.
-
-## 2026-08-11 - /es-candles: a real card per chart, + single prints / excess
-
-`components/pages/EsCandles.tsx` (the LIVE page - the SPA routes /es-candles
-here, not to `app/es-candles/page.tsx`; both were updated),
-`components/dashboard/es-candles/EsChartCard.tsx`,
-`components/dashboard/es-candles/chartMath.ts`,
-`components/dashboard/es-candles/slotStore.ts`.
-
-### Cards
-
-- **2-3 charts now get a Card each** - `variant="budget"`, `padding={0}`, 16px
-  radius: the same panel Multi Greek gives SPX / SPY / QQQ. Three charts on one
-  unbroken dark field read as a single very wide chart with gaps in it; the
-  card's hairline edge is what says where ES stops and SPY starts.
-- **The ticker row became the card header** in that mode - tinted fill and a
-  hairline under it, like the Multi Greek panel header. Without it the card is
-  an outline with a chart loose inside it.
-- Inside a card the chart surface goes **flat** (no dissolve radius / feather /
-  shadow) and the gutter drops 16px -> 8px. A feathered 28px pane floating
-  inside a 16px hairline box is two panels again, one fading out just short of
-  the other's edge - and the doubled gutter cost ~48px of chart width per column.
-- The row carries **`no-card-lift`**: the dashboard-wide rule lifts any
-  16px-radius panel 2px on hover, and a chart that jumps when the cursor enters
-  it drags the crosshair off the bar you were reading.
-- At ONE chart nothing changes - there is nothing to separate it from.
-
-### Single prints + excess (new indicators, Indicators > TPO - RTH)
-
-- `tpoStructures()` in `chartMath.ts` reads the existing TPO profile and finds
-  the runs of bins touched by exactly **one** 30-minute period:
-  - a run at the top or bottom of the profile, **2+ rows**, is **excess** - a
-    rejected extreme (red off the high = sellers rejected it, green off the low
-    = buyers did). One lone single print at the high is just the last period
-    poking out, so the minimum is real.
-  - every other run is a **single print** - price ran through and built no
-    value there, which is why it tends to get revisited.
-- **RTH only, by definition.** `TpoProfile` gained an `rth` flag and the
-  indicators use only the 9:30-16:00 profiles. Overnight trades a handful of
-  periods, so nearly every ETH row is touched once and "everything is a single
-  print" is not a level.
-- Drawn as bands from their session's open **to the right edge of the chart** -
-  a print made at 10:15 matters at 14:40, not while it is being made.
-- Deliberately **independent of Overlays > TPO**: same profile, so they can
-  never disagree with the boxes, but you should not have to accept a wall of
-  gray boxes to see one level.
+- **The right pane no longer reads `/proxy/gex-by-strike-multi`.** Its numbers
+  did not match the Options Chain page. That sweep is ThetaData-sourced
+  (`fetchGreeksTheta` / `fetchOpenInterestTheta` in `eod-gex-recorder`); for SPX
+  it is fine, for single names it comes back sparse. NVDA at 217.99 spot printed
+  three-figure GEX at the money, every near-spot bar red, Core 335, call wall
+  340, gamma flip 59.77 - while the Options Chain's Total column for the same
+  name and session was strongly positive. Two surfaces, one label, two answers.
+- **It now builds the board the way the Options Chain builds its columns:**
+  the real listing from `/api/expirations`, then ONE `/api/chains?...&range=all`
+  call per expiration, each run through the SAME `accumulateChainGreeks()` the
+  left pane uses and summed per strike across expiries. Same TastyTrade chain
+  the rest of the app prices off, so the two pages now agree by construction.
+  Gamma flip is computed by `tlLevelsFrom` for both panes (the server flip went
+  with the sweep), so the flip can't describe a different ladder than the rows.
+- **Bounded and honest about it.** `TL_BOARD_MAX_EXPS` = 24 nearest expiries,
+  `TL_BOARD_CONCURRENCY` = 4, 120s poll. The header prints the number of
+  expiries whose chain ACTUALLY came back, and appends "of M listed (nearest
+  first)" whenever the cap or a failed fetch trimmed the board. A ticker switch
+  mid-sweep is fenced by a monotonic token, so the old symbol's chains can never
+  land in the new symbol's ladder.
+- **Refresh button** (`useRefreshButton`, the shared idle/refreshing/refreshed
+  control) re-fetches the base chain, the listing and the board sweep together.
+- **Ticker dropdown** replaces the free-text input + Look up button: the card
+  now uses `TickerLevelsPicker`, the same searchable star-to-favorite menu the
+  Ticker Levels card uses and the one modelled on the Options Chain page's
+  TICKERS dropdown. Universe = live scanner list + the quick row + recents, so a
+  name the scanner doesn't carry stays reachable; free text is the menu's own
+  search box ("+ Add"), and recents can be removed from it.
+- Still ALWAYS ex-0DTE, at every hour (yesterday's change); 0DTE remains one
+  click away on the left pane's expiry pills.
 
 ## 2026-08-11 - Analytics Ticker Lookup: the "All expirations" pane is now always ex-0DTE
 

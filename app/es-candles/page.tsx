@@ -457,8 +457,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         {/* How many are ON, so a shut menu still answers "is anything drawing?" */}
         {(() => {
           const n = indicators.emas.filter((e) => e.on).length
-            + [indicators.bb, indicators.weeklyEm, indicators.volume, indicators.rsi, indicators.countdown,
-               indicators.singlePrint, indicators.excess].filter(Boolean).length;
+            + [indicators.bb, indicators.weeklyEm, indicators.volume, indicators.rsi, indicators.countdown].filter(Boolean).length;
           return n ? <span style={{ opacity: 0.5, fontSize: 10 }}>{n}</span> : null;
         })()}
       </DockButton>
@@ -644,26 +643,6 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 <Toggle on={indicators.weeklyEm} onClick={() => patchIndicators({ weeklyEm: !indicators.weeklyEm })}
                         title="This week's published expected-move band">
                   Weekly EM
-                </Toggle>
-              </Group>
-
-              {/* Both read the TPO profile the Overlays > TPO box chart is built
-                  from, so they can never disagree with it — but neither needs
-                  that overlay switched on. The label says RTH because these two
-                  are computed from the 9:30-16:00 profile ONLY: overnight
-                  trades a handful of 30-minute periods, so nearly every price
-                  is touched once and "everything is a single print" is not a
-                  level. Bands run from their session's open to the right edge,
-                  which is the only way a print made at 10:15 is any use at
-                  14:40. */}
-              <Group label="TPO · RTH">
-                <Toggle on={indicators.singlePrint} onClick={() => patchIndicators({ singlePrint: !indicators.singlePrint })}
-                        title="Single prints — price bands the RTH profile touched in exactly one 30-minute period, away from the extremes. Ran through, built no value, tends to get revisited.">
-                  Single prints
-                </Toggle>
-                <Toggle on={indicators.excess} onClick={() => patchIndicators({ excess: !indicators.excess })}
-                        title="Excess — a tail of two or more single prints running off the RTH high (red, sellers rejected it) or the low (green, buyers did). A rejected extreme, as opposed to one that simply stopped.">
-                  Excess
                 </Toggle>
               </Group>
 

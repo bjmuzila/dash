@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback, useRef, type CSSProperties, type Reac
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useScannerTickers } from "@/lib/useScannerTickers";
-import { HOME_THEME, homeInputStyle, homeButtonStyle, homeSecondaryButtonStyle, LEVEL_COLORS } from "@/components/shared/homeTheme";
+import { HOME_THEME, homeButtonStyle, homeSecondaryButtonStyle, LEVEL_COLORS } from "@/components/shared/homeTheme";
+import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { computeAmt, type InitialBalance, type AmtResult } from "@/lib/failLevels";
@@ -1577,51 +1578,52 @@ function TickerLevelsCard() {
 //          function the Multi Greek card at the top of this page uses, so the
 //          per-strike numbers here and up there can never drift apart.
 //   RIGHT  THE WHOLE BOARD, MINUS 0DTE. Every listed expiration EXCEPT today's,
-//          off /proxy/gex-by-strike-multi — the server's full-board sweep
-//          (eod-gex-recorder.computeLiveGexRowsMulti). That sweep already
-//          returns the ladder twice, `all` and `ex0dte` (split on
-//          expiration !== sessionDate), so this pane just reads the `ex0dte`
-//          half — no server/proxy change is involved. Slim rows of
-//          { strike, netGEX, netVolGEX }; netGEX + netVolGEX is the same OI+Vol
-//          basis, summed per strike ACROSS expirations rather than
-//          last-expiry-wins. One request, cached 60s per (symbol, session) on
-//          the server, so a 40-expiry chain is one sweep a minute, not forty
-//          browser fetches.
+//          fetched the way the Options Chain page fetches its columns: the real
+//          listing from /api/expirations, then ONE /api/chains call per expiry
+//          (`&range=all`), run through the SAME accumulateChainGreeks() as the
+//          left pane and summed per strike across expiries.
 //
-//          WHY EX-0DTE, ALWAYS: same-day gamma dwarfs the rest of the board and
-//          decays to nothing by the close, so a board that included it printed
-//          walls that were really just today's pin. This pane is the STRUCTURAL
-//          board; the 0DTE view is one click away on the left pane's pills.
+// WHY NOT /proxy/gex-by-strike-multi, WHICH RETURNS EXACTLY THIS LADDER:
+// because its numbers did not match the chain. That sweep is ThetaData-sourced
+// (fetchGreeksTheta / fetchOpenInterestTheta in eod-gex-recorder). For SPX it is
+// fine; for single names it comes back sparse — most near-spot strikes carried
+// no OI, so the ladder printed three-figure GEX at the money and its "Core"
+// landed on a far wing strike (NVDA at 218 spot: Core 335, flip 59.77, every
+// near-spot bar red, while the Options Chain page's ⅀ Total column for the same
+// name and session was strongly positive). Two surfaces, same label, different
+// answers. This pane now reads the same TastyTrade chain the rest of the app
+// prices off, so Ticker Lookup and the Options Chain agree by construction.
+//
+// COST: one request per expiration instead of one per board, so the board is
+// capped at TL_BOARD_MAX_EXPS nearest expiries and refreshes on a slow timer
+// plus the manual ↻ button. The header always says how many expiries the ladder
+// actually covers — including when the cap bites.
+//
+// WHY EX-0DTE, ALWAYS: same-day gamma dwarfs the rest of the board and decays to
+// nothing by the close, so a board that included it printed walls that were
+// really just today's pin. This pane is the STRUCTURAL board; the 0DTE view is
+// one click away on the left pane's expiry pills.
 //
 // The sweep needs a spot to scale gamma by, and it is not the SPX feed's spot
 // for anything but SPX — the underlying price from the /api/chains payload is
 // passed through, so the right pane is priced off the same number the left one
 // is. Until that spot exists the right pane does not fetch at all.
 //
-// FALLBACK. If the full-board sweep errors or comes back thin (no Theta cover
-// for the name, a cold cache mid-sweep), the right pane falls back to the front
-// expirations /api/chains already returned — MINUS today's, so the fallback
-// honours the same ex-0DTE rule — and SAYS SO in its header. It never silently
-// prints three expiries under an "all expirations" label.
+// FALLBACK. If the expirations listing or every per-expiry chain call fails, the
+// right pane falls back to the front expirations the base /api/chains payload
+// already returned — MINUS today's, so the fallback honours the same ex-0DTE
+// rule — and SAYS SO in its header. It never silently prints three expiries
+// under an "all expirations" label.
 interface TlChainLeg { [k: string]: unknown }
 interface TlChainStrike { "strike-price"?: unknown; call?: TlChainLeg; put?: TlChainLeg }
 interface TlChainGroup { "expiration-date"?: unknown; strikes?: TlChainStrike[] }
 interface TlChainResp { data?: { items?: TlChainGroup[]; underlyingPrice?: unknown }; error?: string }
 
-// /proxy/gex-by-strike-multi — the whole-board ladder, returned twice.
-// `all` = every listed expiration. `ex0dte` = the same board with today's
-// expiration dropped. The right pane reads `ex0dte`; `all` is kept in the type
-// only so the shape of the payload stays documented here.
-interface TlMultiRow { strike?: unknown; netGEX?: unknown; netVolGEX?: unknown }
-interface TlMultiLadder { rows?: TlMultiRow[]; totalNetGex?: unknown; gexFlip?: unknown }
-interface TlMultiResp {
-  ok?: boolean;
-  error?: string;
-  expirations?: string[];
-  expiryCount?: number;
-  all?: TlMultiLadder;
-  ex0dte?: TlMultiLadder;
-}
+// /api/expirations?ticker=X — the symbol's REAL listed expirations. Same shape
+// the Options Chain page reads, so the two pages can't disagree about what a
+// ticker trades (NVDA has no Monday weeklies; a fabricated calendar invents
+// dates that come back empty).
+interface TlExpResp { data?: { items?: Array<{ "expiration-date"?: unknown }> }; error?: string }
 
 const TL_LOOKUP_KEY = "analytics.tickerLookup.recent";
 const TL_QUICK: readonly string[] = ["SPX", "SPY", "QQQ", "NVDA", "TSLA"];
@@ -1629,19 +1631,24 @@ const TL_QUICK: readonly string[] = ["SPX", "SPY", "QQQ", "NVDA", "TSLA"];
 // 10 above + the spot strike + 10 below. The wings carry no useful gamma and a
 // 1500-row SPX board is unreadable; the walls that matter live near the money.
 const TL_LADDER_SIDE = 10;
-// The full-board sweep is cached 60s server-side; polling faster than that only
-// buys duplicate cache hits.
-const TL_MULTI_REFRESH_MS = 120_000;
+// The board is one /api/chains call per expiration (server-cached 30s), so it
+// polls slowly and is otherwise driven by the ↻ button next to the ticker.
+const TL_BOARD_REFRESH_MS = 120_000;
+// Nearest-first cap on how many expiries the board sweeps. SPX lists 40+; every
+// one is a full-strike chain fetch, and the far quarterlies move the walls by
+// nothing. When the cap bites the header SAYS "N of M" rather than quietly
+// printing a partial board under an "all expirations" label.
+const TL_BOARD_MAX_EXPS = 24;
+// Parallel chain fetches. Matches the server-side sweep's own EXP_CONCURRENCY —
+// enough to keep a 24-expiry board under a couple of seconds, not so many that
+// a ticker switch floods the proxy.
+const TL_BOARD_CONCURRENCY = 4;
 
 const tlLeg = (o: TlChainLeg | undefined, k: string): number => {
   const v = o?.[k];
   const n = Number(v);
   return v != null && v !== "" && isFinite(n) ? n : 0;
 };
-
-// The recorder keys SPX as '$SPX' (chainUnderlying maps it back); every other
-// name is passed through bare.
-const tlMultiSymbol = (s: string) => (s === "SPX" ? "$SPX" : s);
 
 // "Aug 8 · 0DTE" for an expiry, relative to today ET.
 function tlExpiryChip(exp: string, todayISO: string): string {
@@ -1845,7 +1852,6 @@ function TlLadder({ rows, spot, levels }: { rows: TlRow[]; spot: number | null; 
 function TickerLookupCard() {
   const today = etDateISO();
   const [sym, setSym] = useState("SPX");
-  const [input, setInput] = useState("");
   const [recent, setRecent] = useState<string[]>([]);
   const [expiry, setExpiry] = useState<string | null>(null); // left pane's picked expiration
 
@@ -1864,7 +1870,6 @@ function TickerLookupCard() {
     if (!s) return;
     setSym(s);
     setExpiry(null); // a new ticker has a different expiry board
-    setInput("");
     setRecent((prev) => {
       const next = [s, ...prev.filter((x) => x !== s)].slice(0, 8);
       try { window.localStorage.setItem(TL_LOOKUP_KEY, JSON.stringify(next)); } catch {}
@@ -1872,8 +1877,25 @@ function TickerLookupCard() {
     });
   }, []);
 
+  // Drop a symbol from the recents the picker offers (its × affordance). The
+  // scanner universe is not editable from here — only what this card added.
+  const forget = useCallback((raw: string) => {
+    const s = raw.trim().toUpperCase();
+    setRecent((prev) => {
+      const next = prev.filter((x) => x !== s);
+      try { window.localStorage.setItem(TL_LOOKUP_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+
+  // The picker's universe: the live scanner list (same source as the Options
+  // Chain menu) plus the quick row and anything typed in here before, so a
+  // symbol the scanner doesn't carry — NDX, a one-off name — stays reachable.
+  const { tickers: scannerTickers } = useScannerTickers();
+  const pickerOptions = [...new Set([...scannerTickers, ...TL_QUICK, ...recent, sym])];
+
   // ── left pane feed: front-of-board chains, per expiry ──────────────────────
-  const { data, loading, error, lastUpdated } =
+  const { data, loading, error, lastUpdated, reload: reloadChain } =
     useLiveData<TlChainResp>(`/api/chains?ticker=${encodeURIComponent(sym)}`, 60_000);
 
   const groups = (data?.data?.items ?? []).filter((g) => typeof g["expiration-date"] === "string");
@@ -1890,27 +1912,97 @@ function TickerLookupCard() {
     .sort((a, b) => a.strike - b.strike);
 
   // ── right pane feed: the WHOLE board, ex-0DTE ─────────────────────────────
-  // Held until spot exists — the sweep scales gamma by spot², and the endpoint's
-  // own default is the SPX feed's price, which is wrong for every other name.
-  const { data: multi, loading: mLoading, error: mError } = useLiveData<TlMultiResp>(
-    spot != null && spot > 0
-      ? `/proxy/gex-by-strike-multi?symbol=${encodeURIComponent(tlMultiSymbol(sym))}&spot=${spot.toFixed(2)}&date=${today}`
-      : null,
-    TL_MULTI_REFRESH_MS
-  );
+  // The symbol's real listing. Slow poll — a listing changes on the day a new
+  // weekly is added, not minute to minute.
+  const { data: expResp, reload: reloadExps } =
+    useLiveData<TlExpResp>(`/api/expirations?ticker=${encodeURIComponent(sym)}`, 900_000);
 
-  // ALWAYS the ex-0DTE half of the sweep. The server splits on
-  // `expiration !== sessionDate`, and `date=` above is today ET, so this is the
-  // whole board with today's expiration dropped — no 0DTE, at any hour.
-  const boardRows: TlRow[] = (multi?.ex0dte?.rows ?? [])
-    .map((r) => ({ strike: Number(r.strike), gex: Number(r.netGEX ?? 0) + Number(r.netVolGEX ?? 0) }))
-    .filter((r) => isFinite(r.strike) && r.strike > 0 && isFinite(r.gex) && r.gex !== 0)
-    .sort((a, b) => a.strike - b.strike);
+  // Every listed expiry STRICTLY AFTER today, nearest first. ISO dates compare
+  // correctly as strings, so `> today` drops both 0DTE and anything stale the
+  // listing still carries.
+  const listed = [...new Set((expResp?.data?.items ?? [])
+    .map((it) => String(it["expiration-date"] ?? ""))
+    .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && d > today))].sort();
+  const boardExpiries = listed.slice(0, TL_BOARD_MAX_EXPS);
+  // Joined, not the array — an array identity changes every render and would
+  // restart the sweep on a loop.
+  const boardKey = boardExpiries.join(",");
 
-  // Fallback: the front expirations /api/chains already gave us, today's
-  // dropped so the fallback obeys the same ex-0DTE rule as the sweep. Summed
-  // per strike ACROSS those expiries — accumulateChainGreeks takes one expiry at
-  // a time, so the maps are merged here rather than growing a second formula.
+  const [board, setBoard] = useState<{ rows: TlRow[]; exps: number; sym: string }>({ rows: [], exps: 0, sym: "" });
+  const [bLoading, setBLoading] = useState(false);
+  const [bError, setBError] = useState<string | null>(null);
+  // Monotonic token: a ticker switch mid-sweep must not let the old symbol's
+  // chains land in the new symbol's ladder.
+  const sweepRef = useRef(0);
+
+  const loadBoard = useCallback(async () => {
+    const exps = boardKey ? boardKey.split(",") : [];
+    const mine = ++sweepRef.current;
+    if (!exps.length) {
+      setBoard({ rows: [], exps: 0, sym });
+      setBError(null);
+      return;
+    }
+    setBLoading(true);
+    const acc = new Map<number, number>();
+    let ok = 0;
+    let lastErr: string | null = null;
+    const queue = [...exps];
+    const worker = async () => {
+      while (queue.length) {
+        const exp = queue.shift();
+        if (!exp || sweepRef.current !== mine) return;
+        try {
+          // Same call the Options Chain page makes for each of its columns —
+          // `range=all` so the ladder isn't cropped to a near-spot window.
+          const res = await fetch(
+            `/api/chains?ticker=${encodeURIComponent(sym)}&expiration=${encodeURIComponent(exp)}&range=all`,
+            { cache: "no-store" },
+          );
+          const json = await res.json();
+          if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+          // One expiry at a time through the SAME formula the left pane uses.
+          for (const [strike, g] of accumulateChainGreeks(json).entries()) {
+            acc.set(strike, (acc.get(strike) ?? 0) + g.gex);
+          }
+          ok++;
+        } catch (e) {
+          // One dead expiry must not blank the board — count it out and say so.
+          lastErr = String(e);
+        }
+      }
+    };
+    try {
+      await Promise.all(
+        Array.from({ length: Math.min(TL_BOARD_CONCURRENCY, exps.length) }, worker),
+      );
+    } finally {
+      if (sweepRef.current === mine) {
+        const rows: TlRow[] = [...acc.entries()]
+          .map(([strike, gex]) => ({ strike, gex }))
+          .filter((r) => isFinite(r.strike) && r.strike > 0 && isFinite(r.gex) && r.gex !== 0)
+          .sort((a, b) => a.strike - b.strike);
+        setBoard({ rows, exps: ok, sym });
+        setBError(ok === 0 ? lastErr : null);
+        setBLoading(false);
+      }
+    }
+  }, [sym, boardKey]);
+
+  useEffect(() => {
+    loadBoard();
+    const id = setInterval(loadBoard, TL_BOARD_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [loadBoard]);
+
+  // A ladder from a previous ticker is worse than none — gate on the symbol the
+  // sweep actually ran for.
+  const boardRows: TlRow[] = board.sym === sym ? board.rows : [];
+
+  // Fallback: the front expirations the base /api/chains payload already gave
+  // us, today's dropped so the fallback obeys the same ex-0DTE rule. Summed per
+  // strike ACROSS those expiries — accumulateChainGreeks takes one expiry at a
+  // time, so the maps are merged here rather than growing a second formula.
   const boardIsFull = boardRows.length > 0;
   const frontExpiries = expiries.filter((e) => e !== today);
   const frontAcc = new Map<number, number>();
@@ -1926,13 +2018,9 @@ function TickerLookupCard() {
   const rightRows = boardIsFull ? boardRows : frontRows;
 
   const leftLevels = tlLevelsFrom(leftRows, spot);
-  // The full-board sweep already ran findGexFlip() server-side on the same rows
-  // — take its answer when it has one rather than recomputing a second opinion.
-  const serverFlip = numOr(multi?.ex0dte?.gexFlip);
-  const rightBase = tlLevelsFrom(rightRows, spot);
-  const rightLevels: TlLevels = boardIsFull && serverFlip != null
-    ? { ...rightBase, flip: serverFlip }
-    : rightBase;
+  // Both panes now compute their levels the same way, off ladders built by the
+  // same function — no second opinion from a second data source to reconcile.
+  const rightLevels = tlLevelsFrom(rightRows, spot);
   const atm = tlAtm(atmGroup, spot ?? 0);
   const positiveGamma = rightLevels.net >= 0;
 
@@ -1940,16 +2028,21 @@ function TickerLookupCard() {
   const rightLadder = tlWindow(rightRows, spot);
   const hasAny = leftLadder.length > 0 || rightLadder.length > 0;
 
-  // How many expirations the right pane actually covers. The sweep echoes back
-  // the FULL expiration list (its `expiryCount` counts 0DTE), so today's is
-  // subtracted here — the header must not claim an expiry this ladder excludes.
-  const sweptExpiries = (multi?.expirations ?? []).filter((e) => e !== today);
-  const boardExpiryCount = sweptExpiries.length ||
-    Math.max(0, Number(multi?.expiryCount ?? 0) - (multi?.expirations?.includes(today) ? 1 : 0));
+  // What the right pane ACTUALLY covers — the count of expiries whose chain
+  // came back, not the count requested. When the cap or a failed fetch trims
+  // the board, the header says so instead of implying a complete sweep.
   const boardLabel = boardIsFull
-    ? (boardExpiryCount > 0 ? `${boardExpiryCount} expirations · whole board, excl. 0DTE` : "whole board · excl. 0DTE")
-    : mLoading ? "sweeping the whole board…"
+    ? [
+        `${board.exps} expiration${board.exps === 1 ? "" : "s"} · excl. 0DTE`,
+        listed.length > board.exps ? `of ${listed.length} listed (nearest first)` : "whole board",
+      ].join(" · ")
+    : bLoading ? "sweeping the board…"
     : `${frontExpiries.length} front expirations · excl. 0DTE · full board unavailable`;
+
+  // One button, whole card: the base chain, the listing, and the board sweep.
+  const refresh = useRefreshButton(useCallback(async () => {
+    await Promise.all([reloadChain(), reloadExps(), loadBoard()]);
+  }, [reloadChain, reloadExps, loadBoard]));
 
   return (
     <Card variant="budget" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1961,15 +2054,26 @@ function TickerLookupCard() {
           <span style={{ fontSize: 22, fontWeight: 800, color: T.text }}>${sym}</span>
           <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.text, opacity: 0.6 }}>GEX levels</span>
         </span>
+        {/* Ticker menu + one refresh for the whole card. The picker is the same
+            component the Ticker Levels card uses — the searchable, star-to-
+            favorite menu modelled on the Options Chain page's TICKERS dropdown —
+            so this page has ONE ticker menu, not two that drift. Free text is
+            handled by its own search box ("+ Add"), which is why the separate
+            input and Look up button are gone. */}
         <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); lookup(input); } }}
-            placeholder="Ticker…"
-            style={{ ...homeInputStyle, width: 120, color: T.cyan, fontWeight: 700, letterSpacing: "0.06em" }}
-          />
-          <button onClick={() => lookup(input)} style={homeButtonStyle}>Look up</button>
+          <div style={{ minWidth: 132 }}>
+            <TickerLevelsPicker
+              value={sym}
+              options={pickerOptions}
+              custom={recent}
+              onSelect={lookup}
+              onAdd={lookup}
+              onRemove={forget}
+            />
+          </div>
+          <button onClick={refresh.trigger} style={refresh.style} title="Re-fetch the chain, the listing and the whole-board sweep">
+            {refresh.label}
+          </button>
         </span>
       </Row>
 
@@ -2054,7 +2158,7 @@ function TickerLookupCard() {
                 {boardLabel}
               </span>
               {rightLadder.length === 0 ? (
-                <CardState loading={mLoading} error={mError ?? multi?.error ?? null} empty="No board-wide ladder yet (nothing listed past 0DTE)." />
+                <CardState loading={bLoading} error={bError} empty="No board-wide ladder yet (nothing listed past 0DTE)." />
               ) : (
                 <TlLadder rows={rightLadder} spot={spot} levels={rightLevels} />
               )}

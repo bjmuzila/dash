@@ -54,6 +54,22 @@ const MAX_SAMPLE_AGE_MINS = 12;
 /** Touch band: spot within this fraction of the level counts as a tag. */
 const TOUCH_PCT = 0.0005; // 0.05%
 /**
+ * CORE gets a hard 5-POINT floor on index-scale names: spot coming within 5
+ * points of the CORE is an event, full stop. The percentage band alone cannot
+ * say that — at SPX 6400, 0.05% is 3.2pt, so price stopping 4 points short of
+ * the CORE logged nothing. Walls keep the plain percentage (they are
+ * directional and already fire on the much wider approach band), and so do
+ * single names — 5pt on a $40 stock is not a near-miss. Same `strike >= 1000`
+ * index-scale convention breakThreshold() below already uses.
+ */
+const CORE_TOUCH_PTS = 5;
+/** Effective touch band, in POINTS, for one level. */
+function touchBand(levelType, strike) {
+  const k = Math.abs(Number(strike) || 0);
+  const pct = k * TOUCH_PCT;
+  return levelType === 'cb' && k >= 1000 ? Math.max(CORE_TOUCH_PTS, pct) : pct;
+}
+/**
  * Approach band — six times the touch band. Price inside this but never inside
  * TOUCH_PCT is "got close and didn't tag", which is the coil-and-roll-over case
  * that produced no record at all before. Wide enough to catch a real approach,
@@ -160,7 +176,8 @@ async function ensureSchema() {
       CREATE INDEX IF NOT EXISTS wall_events_day ON wall_events (date, symbol);
       CREATE INDEX IF NOT EXISTS wall_events_open ON wall_events (date) WHERE reaction IS NULL;
 
-      -- 'touch'    — spot came inside TOUCH_PCT. The original event.
+      -- 'touch'    — spot came inside the touch band (TOUCH_PCT, or 5pt for an
+      --              index-scale CORE — see touchBand()). The original event.
       -- 'approach' — spot came inside APPROACH_PCT but never tagged. A level
       --              price coiled under and rolled away from produced NO row at
       --              all before this, so the most common non-event was invisible.
@@ -396,19 +413,22 @@ async function runSlot({ slot = null, force = false } = {}) {
  * Walls are directional — a call wall is only "tested" from below, a put wall
  * from above. CB is a magnet and counts from either side.
  */
-function isWithin(levelType, spot, strike, pct) {
-  const band = strike * pct;
+function isWithinBand(levelType, spot, strike, band) {
   if (levelType === 'call_wall') return spot >= strike - band;
   if (levelType === 'put_wall') return spot <= strike + band;
   return Math.abs(spot - strike) <= band;
 }
+function isWithin(levelType, spot, strike, pct) {
+  return isWithinBand(levelType, spot, strike, strike * pct);
+}
 function isTouched(levelType, spot, strike) {
-  return isWithin(levelType, spot, strike, TOUCH_PCT);
+  // touchBand(), not TOUCH_PCT — CORE carries the 5pt floor.
+  return isWithinBand(levelType, spot, strike, touchBand(levelType, strike));
 }
 /** Inside the approach band but NOT yet a tag — "got close, didn't touch". */
 function isApproaching(levelType, spot, strike) {
   return isWithin(levelType, spot, strike, APPROACH_PCT)
-    && !isWithin(levelType, spot, strike, TOUCH_PCT);
+    && !isTouched(levelType, spot, strike);
 }
 
 // ── Classification ───────────────────────────────────────────────────────────
@@ -469,7 +489,10 @@ function sideWord(levelType, cbDir) {
 function classify(levelType, strike, path, rolled, dirHint = 0) {
   if (!path.length) return null;
   const thresh = breakThreshold(strike);
-  const band = strike * TOUCH_PCT;
+  // Same band the tag fired on, so a CORE event resolves against the 5pt rule
+  // it was opened under — otherwise every CORE tag between 3.2pt and 5pt would
+  // immediately classify as break_lt5 ("pierced") on the tighter band.
+  const band = touchBand(levelType, strike);
 
   // CB has no natural side. Take it from the side price APPROACHED on — a
   // break is price continuing THROUGH the level, so it must be measured away
@@ -566,7 +589,7 @@ function classify(levelType, strike, path, rolled, dirHint = 0) {
  */
 function classifyApproach(levelType, strike, path, dirHint = 0) {
   if (!path.length) return null;
-  const band = strike * TOUCH_PCT;
+  const band = touchBand(levelType, strike); // CORE: 5pt floor — see touchBand()
   const closest = Math.min(...path.map((s) => Math.abs(s.spot - strike)));
   const closestPct = closest / strike;
   // Which side price was working the level from. Walls are fixed; CB takes the
@@ -863,5 +886,5 @@ module.exports = {
   startWallsRecorder, runSlot, getWalls, ensureSchema, getPool, reclassifyDay,
   // exported for tests / manual poking
   classify, classifyApproach, approachDir, isTouched, isApproaching, dueSlot, slotLabel,
-  breakThreshold, SLOT_COUNT, LEVEL_TYPES, TOUCH_PCT, APPROACH_PCT,
+  breakThreshold, touchBand, SLOT_COUNT, LEVEL_TYPES, TOUCH_PCT, APPROACH_PCT, CORE_TOUCH_PTS,
 };

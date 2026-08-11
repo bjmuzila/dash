@@ -634,24 +634,181 @@ export default function LevelLog() {
   );
 }
 
-/** 27 squares — one per capture slot. Filled = a row was written at that slot. */
+/**
+ * The session rail. Replaced the old 27-square dot matrix, which spent equal
+ * width on every slot whether or not anything happened: the empty squares
+ * dominated, and reading WHEN something happened meant counting boxes.
+ *
+ * Two halves, same data:
+ *   RAIL  — a continuous track with real hour ticks. Every mark sits at its
+ *           TIME, not its slot index, and its shape carries the kind (small dot
+ *           = the level moved, filled disc = open, ringed = tag, hollow ring =
+ *           came inside the band without tagging). The fill runs to the last
+ *           slot captured, so how much session is left is visible at a glance.
+ *   CHIPS — the same events written out in order with their clock time, so the
+ *           rail never has to be decoded. Quiet stretches collapse to one
+ *           "— 45m quiet —" label instead of a run of grey boxes.
+ */
+type RailMark = {
+  slot: number;
+  at: string;
+  kind: "open" | "change" | "touch" | "approach";
+  lt: WallLevel;
+  note: string;
+};
+
+/** Slot → hour tick. Slot 0 = 09:29, slot 1 = 09:45, then every 15m to 16:00. */
+const RAIL_HOURS: { slot: number; label: string }[] = [
+  { slot: 2, label: "10" }, { slot: 6, label: "11" }, { slot: 10, label: "12" },
+  { slot: 14, label: "13" }, { slot: 18, label: "14" }, { slot: 22, label: "15" },
+];
+const railPct = (slot: number) => (slot / (WALL_SLOTS - 1)) * 100;
+
+const RAIL_KIND_LABEL: Record<RailMark["kind"], string> = {
+  open: "OPEN", change: "MOVE", touch: "TAG", approach: "NEAR",
+};
+
 function WallCaptureRail({ log, events }: { log: WallLogRow[]; events: WallEventRow[] }) {
-  const marks = new Array(WALL_SLOTS).fill("") as string[];
-  for (const r of log) if (r.slot >= 0 && r.slot < WALL_SLOTS) marks[r.slot] = r.reason === "open" ? "open" : "change";
-  for (const e of events) if (e.hit_slot >= 0 && e.hit_slot < WALL_SLOTS) marks[e.hit_slot] = "hit";
-  const color = (m: string) => m === "hit" ? AMBER : m === "open" ? HOME_THEME.orange : m === "change" ? C.cyan : "rgba(255,255,255,0.09)";
-  const filled = marks.filter(Boolean).length;
+  // One mark per (slot, level). An event outranks a log row at the same slot —
+  // "price tagged it" is the story, "the level also moved" is the footnote.
+  const byKey = new Map<string, RailMark>();
+  const put = (m: RailMark, strong: boolean) => {
+    const k = `${m.slot}|${m.lt}`;
+    if (!strong && byKey.has(k)) return;
+    byKey.set(k, m);
+  };
+  for (const r of log) {
+    if (r.slot < 0 || r.slot >= WALL_SLOTS) continue;
+    put({
+      slot: r.slot, at: r.at, lt: r.level_type,
+      kind: r.reason === "open" ? "open" : "change",
+      note: r.reason === "open"
+        ? `${LEVEL_LABEL[r.level_type]} baseline ${wallStrike(r.strike)}`
+        : `${LEVEL_LABEL[r.level_type]} → ${wallStrike(r.strike)}${r.delta != null ? ` (${r.delta > 0 ? "+" : ""}${wallNum(r.delta)})` : ""}`,
+    }, false);
+  }
+  for (const e of events) {
+    if (e.hit_slot < 0 || e.hit_slot >= WALL_SLOTS) continue;
+    put({
+      slot: e.hit_slot, at: e.at, lt: e.level_type, kind: e.kind === "touch" ? "touch" : "approach",
+      note: `${LEVEL_LABEL[e.level_type]} ${e.kind === "touch" ? "tagged" : "approached"} ${wallStrike(e.strike)} · spot ${wallNum(e.spot_at_hit)}`
+        + (e.reaction ? ` · ${REACTION_LABEL[e.reaction]}` : ""),
+    }, true);
+  }
+
+  const marks = [...byKey.values()].sort((a, b) => a.slot - b.slot);
+  const slotsUsed = new Set(marks.map((m) => m.slot));
+  const lastSlot = marks.length ? marks[marks.length - 1].slot : 0;
+
+  // Colour = the LEVEL (same key the table and timeline use), so a mark on the
+  // rail and its row below are obviously the same thing. Kind is carried by the
+  // mark's shape instead — colour was already spoken for.
+  const dot = (m: RailMark): CSSProperties => {
+    const c = LEVEL_COLOR[m.lt];
+    const base: CSSProperties = {
+      position: "absolute", left: `${railPct(m.slot)}%`, top: "50%",
+      transform: "translate(-50%,-50%)", borderRadius: "50%", pointerEvents: "auto",
+    };
+    if (m.kind === "approach") {
+      return { ...base, width: 9, height: 9, background: "transparent", border: `1.5px solid ${c}`, boxShadow: `0 0 8px ${rgba(c, 0.4)}` };
+    }
+    if (m.kind === "touch") {
+      return { ...base, width: 11, height: 11, background: c, border: `2px solid ${HOME_THEME.bg}`, boxShadow: `0 0 0 2px ${rgba(c, 0.3)}, 0 0 12px ${rgba(c, 0.55)}` };
+    }
+    if (m.kind === "open") {
+      return { ...base, width: 9, height: 9, background: c, boxShadow: `0 0 9px ${rgba(c, 0.5)}` };
+    }
+    return { ...base, width: 7, height: 7, background: c, boxShadow: `0 0 8px ${rgba(c, 0.5)}` };
+  };
+
   return (
-    <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap", padding: "12px 18px", borderBottom: `1px solid ${C.border}` }}>
-      <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, opacity: 0.45, marginRight: 8 }}>09:29</span>
-      {marks.map((m, i) => (
-        <span key={i} title={m ? `slot ${i}: ${m}` : `slot ${i}: no change`}
-          style={{ display: "block", flex: "0 0 auto", width: 9, height: 9, borderRadius: 2, background: color(m), boxShadow: m ? `0 0 6px ${rgba(HOME_THEME.cyan, 0.35)}` : undefined }} />
-      ))}
-      <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, opacity: 0.45, marginLeft: 8 }}>16:00</span>
-      <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: FS_META, opacity: 0.45 }}>{log.length} rows · {WALL_SLOTS - filled} slots skipped</span>
+    <div style={{ padding: "14px 18px 12px", borderBottom: `1px solid ${C.border}` }}>
+      {/* ── the rail ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, opacity: 0.42, flex: "0 0 auto" }}>09:29</span>
+        <div style={{ position: "relative", flex: "1 1 auto", height: 6, borderRadius: 3, background: "rgba(255,255,255,0.055)" }}>
+          <div style={{
+            position: "absolute", left: 0, top: 0, bottom: 0, width: `${railPct(lastSlot)}%`, borderRadius: 3,
+            background: `linear-gradient(90deg, ${rgba(C.cyan, 0.3)}, ${rgba(C.cyan, 0.09)})`,
+          }} />
+          {RAIL_HOURS.map((h) => (
+            <span key={h.slot} aria-hidden style={{
+              position: "absolute", left: `${railPct(h.slot)}%`, top: -4, width: 1, height: 14,
+              background: "rgba(255,255,255,0.13)",
+            }} />
+          ))}
+          {marks.map((m) => (
+            <span key={`${m.slot}|${m.lt}`} title={`${m.at} · ${m.note}`} style={dot(m)} />
+          ))}
+        </div>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, opacity: 0.42, flex: "0 0 auto" }}>16:00</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, opacity: 0.42, flex: "0 0 auto" }}>
+          {log.length} rows · {WALL_SLOTS - slotsUsed.size} slots skipped
+        </span>
+      </div>
+      {/* Hour labels ride under the track, inset by the 09:29 gutter so they
+          line up with their ticks rather than with the flex row. */}
+      <div style={{ position: "relative", height: 12, margin: "3px 62px 0 52px" }} aria-hidden>
+        {RAIL_HOURS.map((h) => (
+          <span key={h.slot} style={{
+            position: "absolute", left: `${railPct(h.slot)}%`, transform: "translateX(-50%)",
+            fontFamily: "var(--font-mono)", fontSize: 10, opacity: 0.3,
+          }}>{h.label}</span>
+        ))}
+      </div>
+
+      {/* ── the same events, spelled out ── */}
+      <WallRailChips marks={marks} />
     </div>
   );
+}
+
+/** Idea D: the rail's marks as time-stamped chips, quiet stretches collapsed. */
+function WallRailChips({ marks }: { marks: RailMark[] }) {
+  if (!marks.length) return null;
+  const out: ReactNode[] = [];
+  let prev = -1;
+  for (const m of marks) {
+    const gap = m.slot - prev - 1;
+    // 3 empty slots = 45 minutes. Below that the label is longer than the run.
+    if (prev >= 0 && gap >= 3) {
+      out.push(
+        <span key={`q${m.slot}`} style={{ fontFamily: "var(--font-mono)", fontSize: 11, opacity: 0.26, padding: "0 2px" }}>
+          — {gap * 15}m quiet —
+        </span>,
+      );
+    }
+    const c = LEVEL_COLOR[m.lt];
+    out.push(
+      <span key={`${m.slot}|${m.lt}`} title={m.note} style={{
+        display: "inline-flex", alignItems: "center", gap: 7, padding: "4px 9px 4px 7px",
+        borderRadius: 7, border: `1px solid ${C.border}`, background: "rgba(255,255,255,0.028)",
+        fontFamily: "var(--font-mono)", fontSize: 11.5, whiteSpace: "nowrap",
+      }}>
+        <span style={{
+          width: 6, height: 6, borderRadius: "50%", flex: "0 0 auto",
+          background: m.kind === "approach" ? "transparent" : c,
+          border: m.kind === "approach" ? `1.5px solid ${c}` : undefined,
+          boxShadow: m.kind === "approach" ? undefined : `0 0 7px ${rgba(c, 0.55)}`,
+        }} />
+        <span style={{ opacity: 0.42 }}>{m.at}</span>
+        <b style={{ fontWeight: 700, opacity: 0.85 }}>{RAIL_KIND_LABEL[m.kind]}</b>
+        <span style={{ fontSize: 10, letterSpacing: LS_LABEL, textTransform: "uppercase", opacity: 0.6, color: c }}>
+          {LEVEL_LABEL[m.lt]}
+        </span>
+      </span>,
+    );
+    prev = m.slot;
+  }
+  const toClose = WALL_SLOTS - 1 - prev;
+  if (toClose >= 3) {
+    out.push(
+      <span key="qend" style={{ fontFamily: "var(--font-mono)", fontSize: 11, opacity: 0.26, padding: "0 2px" }}>
+        — {toClose * 15}m to close —
+      </span>,
+    );
+  }
+  return <div style={{ display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center", marginTop: 12 }}>{out}</div>;
 }
 
 /**
