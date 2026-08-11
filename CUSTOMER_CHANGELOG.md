@@ -4,6 +4,12 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 
 
+## Tuesday 8/11/2026
+
+* **Ticker Lookup is now one click away on the Multi Greek page.** Every panel header — SPX, SPY, QQQ and your 4th slot — has a small magnifying glass next to the ticker. Click it and the full **Ticker Lookup** card from the Analytics page opens right over the ladders, already loaded on that panel's name. No page switch, no retyping the symbol.
+* **It's the same card, not a copy.** You get both scopes side by side — one expiration on the left, the whole board on the right — with Core (CB), Call Wall, Put Wall and Gamma Flip, spot, expected move, ATM IV, and the plain-English read of the regime. The numbers are the same ones the Analytics page shows, so the two pages can never disagree about where a wall is.
+* **You can keep looking around once it's open.** Switch to any other ticker from inside the card without leaving Multi Greek. Press **Esc**, hit the close button, or click the dimmed background to drop back to your four ladders.
+
 ## Monday 8/10/2026
 
 * **New Ticker Lookup card at the bottom of the Analytics page.** Type any optionable ticker — or tap SPX, SPY, QQQ, NVDA, TSLA, or the last few names you looked at — and you get that name's live gamma ladder: every strike around price drawn as a bar, positive gamma to the right, negative to the left, with the dollar value beside it. Price sits highlighted in the middle, ten strikes above it and ten below.

@@ -16,6 +16,12 @@ import { MultiGreekSnapshotBtn, type SnapshotRow } from "@/components/dashboard/
 // a second, drifting copy. lazy() keeps it out of this page's initial bundle:
 // nothing loads until the first double-click.
 const OptionsChainPage = lazy(() => import("@/components/pages/OptionsChain"));
+// The 🔍 in each panel header opens the /analytics Ticker Lookup card — the SAME
+// component that page mounts, seeded with that panel's ticker. Imported, never
+// copied: a second ladder here would be a second opinion about the same walls.
+const TickerLookupCard = lazy(() =>
+  import("@/components/pages/Analytics").then((m) => ({ default: m.TickerLookupCard })),
+);
 // expirations always fetched fresh — no cache import needed
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -436,7 +442,7 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
 
 function TickerPanel({
   ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
-  showCB, showCW, showPW, getGexChange, deltaWindow, onExpandChain,
+  showCB, showCW, showPW, getGexChange, deltaWindow, onExpandChain, onLookup,
 }: {
   ticker: Ticker;
   /** Per-expiry strike rows for this ticker. */
@@ -463,6 +469,8 @@ function TickerPanel({
   deltaWindow: DeltaWindow;
   /** Double-click on the panel header → open this ticker's full-screen chain. */
   onExpandChain: (ticker: Ticker) => void;
+  /** Header 🔍 → open the /analytics Ticker Lookup card on THIS ticker. */
+  onLookup: (ticker: Ticker) => void;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
@@ -703,7 +711,25 @@ function TickerPanel({
         title={`Double-click for the full-screen ${ticker} option chain`}
         style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0, cursor: "zoom-in", userSelect: "none" }}
       >
-        <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em", flexShrink: 0 }}>{ticker}</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em" }}>{ticker}</span>
+          {/* Ticker Lookup. onMouseDown/onDoubleClick are stopped as well as the
+              click: the header's own double-click handler would otherwise fire
+              the full-screen chain on a quick second press of this button. */}
+          <button
+            onClick={(e) => { e.stopPropagation(); onLookup(ticker); }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+            title={`${ticker} Ticker Lookup — GEX ladder, walls and gamma regime`}
+            aria-label={`Open ${ticker} ticker lookup`}
+            style={{
+              flexShrink: 0, cursor: "pointer", lineHeight: 1,
+              padding: "2px 6px", borderRadius: 6, fontSize: 11,
+              border: `1px solid ${HT.border}`, background: "rgba(33,158,188,0.10)",
+              color: HT.cyan,
+            }}
+          >🔍</button>
+        </span>
         <div style={{ display: "flex", gap: 5, alignItems: "center", overflow: "hidden", flex: 1, justifyContent: "flex-end" }}>
           {/* Header readout always shows the CB/CW/PW levels — the toolbar
               toggles only control the cell markers, per user. */}
@@ -1496,6 +1522,21 @@ export function MultGreekClient({
   // A screenshot capture must never bake the overlay into the shot.
   useEffect(() => { if (isCapturing) setChainTicker(null); }, [isCapturing]);
 
+  // ── Ticker Lookup overlay (header 🔍) ──────────────────────────────────────
+  // Rendered through a portal to document.body, not inside the panels row: the
+  // chain overlay above can pin itself to that row because it is meant to cover
+  // exactly the four cards, but the lookup card is a tall document and the row
+  // is overflow:hidden, so it would be clipped.
+  const [lookupTicker, setLookupTicker] = useState<string | null>(null);
+  const closeLookup = useCallback(() => setLookupTicker(null), []);
+  useEffect(() => {
+    if (!lookupTicker) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setLookupTicker(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lookupTicker]);
+  useEffect(() => { if (isCapturing) setLookupTicker(null); }, [isCapturing]);
+
   return (
     <div ref={pageRef} style={{ ...homeShellStyle, display: isCapturing ? "block" : "flex", height: isCapturing ? "auto" : "100%", width: isCapturing ? "fit-content" : "100%", minWidth: isCapturing ? "min-content" : undefined, overflow: isCapturing ? "visible" : "hidden" }}>
 
@@ -1697,6 +1738,7 @@ export function MultGreekClient({
             getGexChange={getGexChange}
             deltaWindow={deltaWindow}
             onExpandChain={setChainTicker}
+            onLookup={setLookupTicker}
           />
         ))}
 
@@ -1748,6 +1790,62 @@ export function MultGreekClient({
           </div>
         )}
       </div>
+
+      {/* ── Ticker Lookup overlay ────────────────────────────────────────────
+          Scrim + centered card, portalled to <body> so nothing on this page can
+          clip or stack over it. `key` is the ticker: reopening on a different
+          panel remounts the card so it seeds on the new symbol rather than
+          keeping the last one (the card is uncontrolled after mount). */}
+      {lookupTicker && typeof document !== "undefined" && createPortal(
+        <div
+          onClick={closeLookup}
+          style={{
+            position: "fixed", inset: 0, zIndex: 9998,
+            background: "rgba(2,4,8,0.72)", backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)",
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(1180px, 96vw)", maxHeight: "90vh", overflow: "auto",
+              background: HT.bg, borderRadius: 16,
+              border: `1px solid ${HT.cyan}55`, boxShadow: "0 18px 60px rgba(0,0,0,0.75)",
+            }}
+          >
+            <div style={{
+              position: "sticky", top: 0, zIndex: 2,
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+              padding: "8px 12px", background: "rgba(10,13,20,0.98)", borderBottom: `1px solid ${HT.border}`,
+            }}>
+              <span style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
+                <span style={{ fontSize: 18, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em" }}>{lookupTicker}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.55)", letterSpacing: "0.08em", textTransform: "uppercase" }}>Ticker Lookup</span>
+              </span>
+              <button
+                onClick={closeLookup}
+                title="Close (Esc)"
+                style={{
+                  flexShrink: 0, cursor: "pointer",
+                  padding: "3px 12px", borderRadius: 8,
+                  border: `1px solid ${HT.cyan}55`, background: "rgba(33,158,188,0.10)",
+                  color: HT.cyan, fontSize: 13, fontWeight: 800, letterSpacing: "0.06em",
+                }}
+              >ESC ✕</button>
+            </div>
+            <div style={{ padding: 12 }}>
+              <Suspense fallback={
+                <div style={{ padding: 40, textAlign: "center", color: "rgba(255,255,255,0.55)", fontSize: 13, letterSpacing: "0.08em" }}>
+                  LOADING LOOKUP…
+                </div>
+              }>
+                <TickerLookupCard key={lookupTicker} initialSymbol={lookupTicker} embedded />
+              </Suspense>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

@@ -1848,9 +1848,20 @@ function TlLadder({ rows, spot, levels }: { rows: TlRow[]; spot: number | null; 
   );
 }
 
-function TickerLookupCard() {
+// Exported so OTHER surfaces mount this exact card instead of growing a second
+// copy of it. Multi Greek's per-panel 🔍 opens it in an overlay seeded with that
+// panel's ticker — one component, two pages, numbers that cannot drift.
+//   initialSymbol  what the card opens on (default SPX, this page's case). The
+//                  card is uncontrolled after mount, so the trader can switch
+//                  symbols inside it without the host yanking it back.
+//   embedded       drops the full-width grid span, which is meaningless outside
+//                  this page's card grid.
+export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
+  initialSymbol?: string;
+  embedded?: boolean;
+} = {}) {
   const today = etDateISO();
-  const [sym, setSym] = useState("SPX");
+  const [sym, setSym] = useState(() => (initialSymbol || "SPX").trim().toUpperCase() || "SPX");
   const [recent, setRecent] = useState<string[]>([]);
   const [expiry, setExpiry] = useState<string | null>(null); // left pane's picked expiration
 
@@ -2044,7 +2055,7 @@ function TickerLookupCard() {
   }, [reloadChain, reloadExps, loadBoard]));
 
   return (
-    <Card variant="budget" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
+    <Card variant="budget" padding={16} style={{ gridColumn: embedded ? undefined : "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
       <Row style={{ flexWrap: "wrap" }}>
         <span style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
           <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>

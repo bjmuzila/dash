@@ -1,5 +1,73 @@
 # Changelog
 
+## 2026-08-11 - Multi Greek: per-panel magnifying glass opens the Ticker Lookup card
+
+`app/mult-greek/MultGreekClient.tsx`, `components/pages/Analytics.tsx`.
+
+### What
+
+Each of the four Multi Greek panel headers now carries a small magnifying glass
+next to the ticker. Clicking it opens the /analytics **Ticker Lookup** card in a
+full-screen overlay, seeded with THAT panel's ticker - SPX, SPY, QQQ, or the 4th
+slot. Esc, the ESC/x button, or a click on the scrim closes it.
+
+### How
+
+The card is IMPORTED, not copied. `TickerLookupCard` in `Analytics.tsx` is now
+exported and takes two optional props:
+
+- `initialSymbol` - what it opens on (default `SPX`, unchanged for /analytics).
+  The card stays uncontrolled after mount, so the trader can switch symbols
+  inside the overlay without the host yanking it back.
+- `embedded` - drops the `gridColumn: 1 / -1` full-width span, which is
+  meaningless outside the analytics card grid.
+
+Multi Greek pulls it in with `lazy()` (same pattern as the full-screen option
+chain), so nothing loads until the first click. The overlay is portalled to
+`document.body` rather than pinned to the panels row like the chain overlay -
+that row is `overflow:hidden` and would clip a tall card. `key={lookupTicker}`
+remounts the card when a different panel is opened, so it re-seeds instead of
+keeping the previous symbol.
+
+The header button stops `click`, `mousedown` and `dblclick` from bubbling, so a
+quick double press does not also fire the header's double-click-for-chain
+gesture. A screenshot capture clears the overlay, same as the chain.
+
+### Why one component
+
+A second GEX ladder built here would be a second opinion about the same walls.
+Ticker Lookup already prices off the same TastyTrade chain and the same
+`accumulateChainGreeks()` formula Multi Greek uses, so mounting the real card
+means the two surfaces cannot print different CB/CW/PW for the same symbol.
+
+
+## 2026-08-11 - ES Candles: CB (MVC) line is RTH-only, no overnight bridge
+
+`components/dashboard/es-candles/EsChartCard.tsx`.
+
+### Why
+
+The white CB step line ran unbroken across the whole overnight session. The runs
+are grouped by VALUE, not by session: when the previous day's 16:00 CB and the
+current day's 09:30 CB land on the same strike, they collapse into one run and
+draw as a single flat line straight through the night - a level advertised for
+hours where no central band was ever computed.
+
+### Fix
+
+Two fences inside the CB draw block:
+
+- **RTH window.** Any snapshot outside 09:30-16:00 ET (`etMinutes` vs
+  `RTH_OPEN_MIN`/`RTH_CLOSE_MIN`) closes the open run and is skipped. The writer
+  is RTH-only today, but a stray backfill or late auction row would otherwise
+  anchor a run in the dark.
+- **Session boundary.** An `etDayKey` change closes the run at the previous
+  day's last point and starts a fresh one at the new open, so a run can never
+  bridge two sessions even at an identical strike.
+
+Result: one flat segment per RTH session, nothing drawn overnight.
+
+
 ## 2026-08-11 - Test Lab -> GEX Map: SPX spot ticks live, once a minute
 
 `app/test/GexMapTab.tsx`.

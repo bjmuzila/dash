@@ -3669,6 +3669,7 @@ export default function EsChartCard({
         let runStartX: number | null = null;
         let runY: number | null = null;
         let prevX: number | null = null;
+        let prevKey: string | null = null;
         const flush = (endX: number | null) => {
           if (runStartX != null && runY != null && endX != null && endX > runStartX) {
             ctx.beginPath(); ctx.moveTo(runStartX, runY); ctx.lineTo(endX, runY); ctx.stroke();
@@ -3676,6 +3677,32 @@ export default function EsChartCard({
         };
         for (let i = 0; i < mvcHistory.length; i++) {
           const p = mvcHistory[i];
+          // ── RTH ONLY ────────────────────────────────────────────────────
+          // The CB is a cash-session read; there is no central band overnight.
+          // Two separate things have to be fenced off, and doing only one of
+          // them still leaves a white line stretched across the night:
+          //
+          //   1. Drop any snapshot stamped outside 09:30–16:00 ET. The writer
+          //      is RTH-only today, but a stray row (a late auction print, a
+          //      backfill) would otherwise anchor a run in the dark.
+          //   2. A run may never BRIDGE two sessions. Runs are grouped by
+          //      VALUE, so yesterday's 16:00 CB and today's 09:30 CB sitting
+          //      on the same strike were one continuous run — drawn as a
+          //      single flat line straight through the overnight, where no CB
+          //      exists at all. An ET day change closes the run at yesterday's
+          //      last point and starts a fresh one at today's open.
+          const mins = etMinutes(p.ts);
+          if (mins < RTH_OPEN_MIN || mins >= RTH_CLOSE_MIN) {
+            flush(prevX);
+            runStartX = null; runY = null; prevX = null; prevKey = null;
+            continue;
+          }
+          const dayKey = etDayKey(p.ts);
+          if (prevKey != null && dayKey !== prevKey) {
+            flush(prevX);
+            runStartX = null; runY = null; prevX = null;
+          }
+          prevKey = dayKey;
           const x = xOf(p.ts);
           // Convert the SPX CB level → ES with the basis THAT SNAPSHOT was taken
           // at: the row's own (esPrice − spxPrice), a simultaneous pair recorded
