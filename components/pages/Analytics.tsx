@@ -1594,10 +1594,13 @@ function TickerLevelsCard() {
 // answers. This pane now reads the same TastyTrade chain the rest of the app
 // prices off, so Ticker Lookup and the Options Chain agree by construction.
 //
-// COST: one request per expiration instead of one per board, so the board is
-// capped at TL_BOARD_MAX_EXPS nearest expiries and refreshes on a slow timer
-// plus the manual ↻ button. The header always says how many expiries the ladder
-// actually covers — including when the cap bites.
+// COST: one request per expiration instead of one per board. EVERY listed
+// expiration is swept — no cap, because "All expirations" has to mean all of
+// them; a quarterly 300 days out is exactly the kind of strike that parks a
+// wall the front weeklies never show. The cost is paid by refreshing slowly
+// (TL_BOARD_REFRESH_MS) and on the manual ↻ button instead of by dropping
+// expiries. The header always says how many the ladder actually covers, so a
+// chain call that failed shows up as a smaller number rather than silently.
 //
 // WHY EX-0DTE, ALWAYS: same-day gamma dwarfs the rest of the board and decays to
 // nothing by the close, so a board that included it printed walls that were
@@ -1634,15 +1637,11 @@ const TL_LADDER_SIDE = 10;
 // The board is one /api/chains call per expiration (server-cached 30s), so it
 // polls slowly and is otherwise driven by the ↻ button next to the ticker.
 const TL_BOARD_REFRESH_MS = 120_000;
-// Nearest-first cap on how many expiries the board sweeps. SPX lists 40+; every
-// one is a full-strike chain fetch, and the far quarterlies move the walls by
-// nothing. When the cap bites the header SAYS "N of M" rather than quietly
-// printing a partial board under an "all expirations" label.
-const TL_BOARD_MAX_EXPS = 24;
-// Parallel chain fetches. Matches the server-side sweep's own EXP_CONCURRENCY —
-// enough to keep a 24-expiry board under a couple of seconds, not so many that
-// a ticker switch floods the proxy.
-const TL_BOARD_CONCURRENCY = 4;
+// Parallel chain fetches. The board is uncapped — SPX lists 40+ expirations and
+// every one of them is fetched — so this is the only throttle: 6 in flight keeps
+// a full board inside a few seconds without a ticker switch flooding the proxy.
+// (The server-side sweep uses 4; this runs from one browser, not the VPS.)
+const TL_BOARD_CONCURRENCY = 6;
 
 const tlLeg = (o: TlChainLeg | undefined, k: string): number => {
   const v = o?.[k];
@@ -1917,13 +1916,12 @@ function TickerLookupCard() {
   const { data: expResp, reload: reloadExps } =
     useLiveData<TlExpResp>(`/api/expirations?ticker=${encodeURIComponent(sym)}`, 900_000);
 
-  // Every listed expiry STRICTLY AFTER today, nearest first. ISO dates compare
-  // correctly as strings, so `> today` drops both 0DTE and anything stale the
-  // listing still carries.
-  const listed = [...new Set((expResp?.data?.items ?? [])
+  // EVERY listed expiry strictly after today, nearest first — no slice, no cap.
+  // ISO dates compare correctly as strings, so `> today` drops both 0DTE and
+  // anything stale the listing still carries.
+  const boardExpiries = [...new Set((expResp?.data?.items ?? [])
     .map((it) => String(it["expiration-date"] ?? ""))
     .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && d > today))].sort();
-  const boardExpiries = listed.slice(0, TL_BOARD_MAX_EXPS);
   // Joined, not the array — an array identity changes every render and would
   // restart the sweep on a loop.
   const boardKey = boardExpiries.join(",");
@@ -2028,13 +2026,14 @@ function TickerLookupCard() {
   const rightLadder = tlWindow(rightRows, spot);
   const hasAny = leftLadder.length > 0 || rightLadder.length > 0;
 
-  // What the right pane ACTUALLY covers — the count of expiries whose chain
-  // came back, not the count requested. When the cap or a failed fetch trims
-  // the board, the header says so instead of implying a complete sweep.
+  // What the right pane ACTUALLY covers — the count of expiries whose chain came
+  // back, not the count requested. Nothing is capped, so a number below the
+  // listing means a chain call failed, and the header says which it is rather
+  // than implying a complete sweep.
   const boardLabel = boardIsFull
     ? [
         `${board.exps} expiration${board.exps === 1 ? "" : "s"} · excl. 0DTE`,
-        listed.length > board.exps ? `of ${listed.length} listed (nearest first)` : "whole board",
+        boardExpiries.length > board.exps ? `of ${boardExpiries.length} listed — ${boardExpiries.length - board.exps} chain call(s) failed` : "whole board",
       ].join(" · ")
     : bLoading ? "sweeping the board…"
     : `${frontExpiries.length} front expirations · excl. 0DTE · full board unavailable`;

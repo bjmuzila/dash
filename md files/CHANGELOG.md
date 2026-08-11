@@ -18,12 +18,16 @@
   the rest of the app prices off, so the two pages now agree by construction.
   Gamma flip is computed by `tlLevelsFrom` for both panes (the server flip went
   with the sweep), so the flip can't describe a different ladder than the rows.
-- **Bounded and honest about it.** `TL_BOARD_MAX_EXPS` = 24 nearest expiries,
-  `TL_BOARD_CONCURRENCY` = 4, 120s poll. The header prints the number of
-  expiries whose chain ACTUALLY came back, and appends "of M listed (nearest
-  first)" whenever the cap or a failed fetch trimmed the board. A ticker switch
-  mid-sweep is fenced by a monotonic token, so the old symbol's chains can never
-  land in the new symbol's ladder.
+- **No cap - ALL expirations.** "All expirations" has to mean all of them; a
+  quarterly 300 days out is exactly where a wall the front weeklies never show
+  can park. SPX lists 40+ and all 40+ are fetched. The cost is paid by a slow
+  poll (120s) plus the manual button, not by dropping expiries;
+  `TL_BOARD_CONCURRENCY` = 6 is the only throttle. The header prints the number
+  of expiries whose chain ACTUALLY came back, and when that is short of the
+  listing it names the reason ("of M listed - N chain call(s) failed") instead
+  of implying a complete sweep. A ticker switch mid-sweep is fenced by a
+  monotonic token, so the old symbol's chains can never land in the new
+  symbol's ladder.
 - **Refresh button** (`useRefreshButton`, the shared idle/refreshing/refreshed
   control) re-fetches the base chain, the listing and the board sweep together.
 - **Ticker dropdown** replaces the free-text input + Look up button: the card
