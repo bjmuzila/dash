@@ -6,6 +6,8 @@ import { HOME_THEME, LIGHT_BLUE, REFRESH_GREEN, SOFT_RED, statTileStyle, homeBut
 import { Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import CopySnapButton from "@/components/shared/CopySnapButton";
+import { useGexSocket, type GexMessage } from "@/lib/gexSocket";
+import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test Lab → GEX Map tab.
@@ -795,8 +797,10 @@ function Lab({ x, y, children, size = 8, fill = "#ffffff", anchor }: {
   );
 }
 
-function RegimeStrip({ m, symbol, date, expiryLabel, asOf }: {
+function RegimeStrip({ m, symbol, date, expiryLabel, asOf, liveSpot = false }: {
   m: MapModel; symbol: string; date: string; expiryLabel: string; asOf: number | null;
+  /** Price is coming off /ws/gex, not out of the tape's last snapshot. */
+  liveSpot?: boolean;
 }) {
   const cells: { label: string; value: string; tone: string; sub: string }[] = [
     {
@@ -826,8 +830,14 @@ function RegimeStrip({ m, symbol, date, expiryLabel, asOf }: {
           {symbol.replace(/^\$/, "")} · {expiryLabel}
         </div>
         <div style={{ fontSize: 26, fontWeight: 800, marginTop: 2, color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>{fmtSpot(m.spot)}</div>
+        {/* The timestamp belongs to the TAPE, not to the price above it. When
+            the price is live they are two different moments, so say so rather
+            than letting a 5-minute-old slot time label a 1-minute-old quote. */}
         <div style={{ fontSize: 11, color: "#ffffff", opacity: 0.85, marginTop: 2 }}>
           {date} · {asOf ? `${etTime(asOf)} ET` : "—"}
+          {liveSpot && (
+            <span style={{ color: REFRESH_GREEN, fontWeight: 700 }}> · live 1m</span>
+          )}
         </div>
       </div>
       {cells.map((c) => (
@@ -1480,6 +1490,71 @@ function MapCard({ m }: { m: MapModel }) {
   );
 }
 
+// ── live spot ────────────────────────────────────────────────────────────────
+// The map is a RECORDED tape: /api/gex-map is fetched once per session/expiry
+// pick, so `levels.spot` freezes at whatever the last written snapshot held —
+// up to a full 5-minute slot old, and older still once the fetch itself is a
+// few minutes back. The price is the one number on this card that reads as
+// "now", so it rides the shared /ws/gex feed instead.
+//
+// Frame types are declared at module scope because lib/gexSocket joins them into
+// the subscription key — an inline array would resubscribe (and rescope the
+// wire) every render. "spot" is already a permanent member of the socket's
+// union: GlobalToolbar mounts ToolbarTicker on every dashboard route and it asks
+// for ["spot","aux"]. Subscribing here therefore widens nothing, opens no second
+// connection, and adds no traffic.
+const SPOT_TOPICS = ["spot"] as const;
+
+/** How often the live price is allowed to move on screen. */
+const LIVE_SPOT_MS = 60_000;
+
+/**
+ * How stale the tape's last snapshot may be before the live price is dropped
+ * back to the recorded one. A past session — or the RTH scope after the close,
+ * whose tail is pinned at 16:00 — must not show a live SPX print beside a
+ * finished map: that is a different moment's number in the same tile.
+ */
+const LIVE_SPOT_MAX_AGE_MS = 20 * 60_000;
+
+/**
+ * SPX spot off /ws/gex, published to React once a minute.
+ *
+ * The broker pushes `spot` several times a second. Feeding that straight into
+ * state would rebuild the whole model — and re-slice it through the zoom
+ * window — on every tick, for a value rendered to two decimals in one tile. The
+ * frames land in a ref; the 60s interval is the only thing that calls setState.
+ */
+function useLiveSpot(enabled: boolean): number | null {
+  const [spot, setSpot] = useState<number | null>(null);
+  const latest = useRef(0);
+  const wsOn = useWsLifecycle();
+
+  useGexSocket(
+    enabled && wsOn,
+    (m: GexMessage) => {
+      if (m?.type !== "spot" && m?.type !== "snapshot") return;
+      const d = (m.data ?? {}) as Record<string, unknown>;
+      const v = Number(d.spot ?? 0);
+      if (v > 0) latest.current = v;
+    },
+    undefined,
+    SPOT_TOPICS
+  );
+
+  useEffect(() => {
+    if (!enabled) { latest.current = 0; setSpot(null); return; }
+    // subscribeGex replays the last `spot` frame synchronously, and the
+    // subscription effect above is declared first, so by the time this runs a
+    // value is usually already in the ref — no blank first minute on mount.
+    const commit = () => { if (latest.current > 0) setSpot(latest.current); };
+    commit();
+    const t = setInterval(commit, LIVE_SPOT_MS);
+    return () => clearInterval(t);
+  }, [enabled]);
+
+  return spot;
+}
+
 export default function GexMapTab() {
   const [date, setDate] = useState<string>("latest");
   // "front" = let the route pick (0DTE if it exists). Reset whenever the session
@@ -1518,7 +1593,21 @@ export default function GexMapTab() {
   // `view` is what the chart, every scale and the regime strip read. `data` is
   // kept for the session/expiry pickers and the route's own notes.
   const view = useMemo(() => scopePayload(data, scope), [data, scope]);
-  const model = useMemo(() => buildModel(view, scope), [view, scope]);
+
+  // Live price, but only while this card is showing the LIVE tape — the latest
+  // session, still recording. Everything else keeps the recorded spot.
+  const tapeAsOf = view?.levels?.asOf ?? null;
+  const isLiveSession =
+    date === "latest" && tapeAsOf != null && Date.now() - tapeAsOf < LIVE_SPOT_MAX_AGE_MS;
+  const liveSpot = useLiveSpot(isLiveSession);
+
+  // Overridden on the MODEL, not just in the tile, so the white spot marker and
+  // its price tag on the right rail track the same number the tile shows.
+  const model = useMemo(() => {
+    const base = buildModel(view, scope);
+    if (!base || !(liveSpot != null && liveSpot > 0)) return base;
+    return { ...base, spot: liveSpot };
+  }, [view, scope, liveSpot]);
 
   const sessionOptions = useMemo(() => {
     // sessions is one row per (date, expiry) now, so collapse to distinct dates
@@ -1612,6 +1701,7 @@ export default function GexMapTab() {
           date={view.date}
           expiryLabel={view.expiry === view.date ? "0DTE" : `exp ${view.expiry}`}
           asOf={view.levels.asOf}
+          liveSpot={liveSpot != null && liveSpot > 0}
         />
       )}
 

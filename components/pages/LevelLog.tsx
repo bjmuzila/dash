@@ -187,17 +187,24 @@ function wallBadgeStyle(color: string): CSSProperties {
   };
 }
 
+/**
+ * `data-cap-center` on every pill. The live page centers the label with a fixed
+ * height + matching line-height; html2canvas ignores the line box and draws from
+ * the text rect's top using the ascent of whatever font it resolved in its
+ * about:blank clone, which put the text high in the PNG. snapshot.ts (gotcha 10)
+ * rewrites the opted-in pills to padding-based centering for the capture only.
+ */
 function wallBadge(rx: WallReaction | null, short = false, reclaimMin: number | null = null): ReactNode {
-  if (!rx) return <span style={{ ...wallBadgeStyle(MUTED), opacity: 0.55 }}>Untested</span>;
+  if (!rx) return <span data-cap-center style={wallBadgeStyle(MUTED)}>Untested</span>;
   if (isBreakThenReject({ reaction: rx, reclaim_min: reclaimMin })) {
     return (
-      <span style={wallBadgeStyle(GREEN)} title={`Broke, then reclaimed after ${reclaimMin}m — failed break`}>
+      <span data-cap-center style={wallBadgeStyle(GREEN)} title={`Broke, then reclaimed after ${reclaimMin}m — failed break`}>
         {short ? "Brk→Rej" : `Break & reject (${reclaimMin}m)`}
       </span>
     );
   }
   const label = short && rx === "consolidated" ? "Consol." : REACTION_LABEL[rx];
-  return <span style={wallBadgeStyle(REACTION_COLOR[rx])}>{label}</span>;
+  return <span data-cap-center style={wallBadgeStyle(REACTION_COLOR[rx])}>{label}</span>;
 }
 
 /** Compact signed GEX, e.g. "+1.2B" / "−340M". */
@@ -477,7 +484,7 @@ export default function LevelLog() {
   });
 
   const th: CSSProperties = {
-    fontSize: 12, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", opacity: 0.5,
+    fontSize: 12, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase",
     textAlign: "right", padding: "10px 9px", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap",
     position: "sticky", top: 0, background: HOME_THEME.panelBgStrong,
   };
@@ -495,7 +502,7 @@ export default function LevelLog() {
         <span style={{ fontSize: 17, fontWeight: 800, color: C.cyan, textTransform: "uppercase", letterSpacing: "0.1em" }}>
           Level Log
         </span>
-        <span style={{ fontSize: 13, color: C.label, opacity: 0.7 }}>
+        <span style={{ fontSize: 13, color: C.label }}>
           {viewMeta.blurb} — 09:29 open + every 15m to 16:00 ET, change-only
         </span>
 
@@ -537,10 +544,10 @@ export default function LevelLog() {
         {/* Ticker rail — columns follow the view. */}
         <div style={{ ...CARD, overflow: "hidden" }}>
           <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center" }}>
-            <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.75 }}>
+            <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase" }}>
               Tickers — {date}
             </span>
-            <span style={{ marginLeft: "auto", fontSize: 13, opacity: 0.5 }}>
+            <span style={{ marginLeft: "auto", fontSize: 13 }}>
               {loaded ? `${shown.length}` : "…"}
             </span>
           </div>
@@ -551,11 +558,11 @@ export default function LevelLog() {
                   <th style={{ ...th, textAlign: "left" }}>Ticker</th>
                   <th style={th}>Spot</th>
                   {view === "core" ? (
-                    <th style={{ ...th, color: LEVEL_COLOR.cb, opacity: 0.85 }}>CORE</th>
+                    <th style={{ ...th, color: LEVEL_COLOR.cb }}>CORE</th>
                   ) : (
                     <>
-                      <th style={{ ...th, color: LEVEL_COLOR.put_wall, opacity: 0.85 }}>Put</th>
-                      <th style={{ ...th, color: LEVEL_COLOR.call_wall, opacity: 0.85 }}>Call</th>
+                      <th style={{ ...th, color: LEVEL_COLOR.put_wall }}>Put</th>
+                      <th style={{ ...th, color: LEVEL_COLOR.call_wall }}>Call</th>
                     </>
                   )}
                   <th style={th}>Chg</th>
@@ -582,11 +589,11 @@ export default function LevelLog() {
                         <td style={{ ...td, color: LEVEL_COLOR.call_wall }}>{wallStrike(t.call_wall)}<WallDelta now={t.call_wall} open={t.open?.call_wall} /></td>
                       </>
                     )}
-                    <td style={{ ...td, opacity: t.changes ? 1 : 0.35 }}>{t.changes}</td>
+                    <td style={td}>{t.changes}</td>
                   </tr>
                 ))}
                 {loaded && !shown.length ? (
-                  <tr><td colSpan={view === "core" ? 4 : 5} style={{ ...td, textAlign: "center", padding: "34px 0", opacity: 0.5, fontFamily: "inherit" }}>
+                  <tr><td colSpan={view === "core" ? 4 : 5} style={{ ...td, textAlign: "center", padding: "34px 0", fontFamily: "inherit" }}>
                     No rows for {date}. The recorder writes from 09:29 ET on trading days.
                   </td></tr>
                 ) : null}
@@ -598,10 +605,10 @@ export default function LevelLog() {
         {/* The level log itself — this whole card is what the PNG captures. */}
         <div ref={logCardRef} style={{ ...CARD, overflow: "hidden" }}>
           <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: FS_LABEL, fontWeight: 800, letterSpacing: LS_LABEL, textTransform: "uppercase", opacity: 0.75 }}>
+            <span style={{ fontSize: FS_LABEL, fontWeight: 800, letterSpacing: LS_LABEL, textTransform: "uppercase" }}>
               {sel ?? "—"} — {view === "core" ? "core log" : "wall log"}
             </span>
-            <span style={{ fontSize: FS_META, opacity: 0.7, fontFamily: "var(--font-mono)" }}>{wallNum(spot)}</span>
+            <span style={{ fontSize: FS_META, fontFamily: "var(--font-mono)" }}>{wallNum(spot)}</span>
             {/* data-capture-hide: live-page chrome, dropped from the screenshot. */}
             <div data-capture-hide style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
               <CopyLogButton disabled={empty} text={logText} />
@@ -697,7 +704,6 @@ function WallCaptureRail({ log, events }: { log: WallLogRow[]; events: WallEvent
   }
 
   const marks = [...byKey.values()].sort((a, b) => a.slot - b.slot);
-  const slotsUsed = new Set(marks.map((m) => m.slot));
   const lastSlot = marks.length ? marks[marks.length - 1].slot : 0;
 
   // Colour = the LEVEL (same key the table and timeline use), so a mark on the
@@ -725,7 +731,7 @@ function WallCaptureRail({ log, events }: { log: WallLogRow[]; events: WallEvent
     <div style={{ padding: "14px 18px 12px", borderBottom: `1px solid ${C.border}` }}>
       {/* ── the rail ── */}
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, opacity: 0.42, flex: "0 0 auto" }}>09:29</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, flex: "0 0 auto" }}>09:29</span>
         <div style={{ position: "relative", flex: "1 1 auto", height: 6, borderRadius: 3, background: "rgba(255,255,255,0.055)" }}>
           <div style={{
             position: "absolute", left: 0, top: 0, bottom: 0, width: `${railPct(lastSlot)}%`, borderRadius: 3,
@@ -741,10 +747,9 @@ function WallCaptureRail({ log, events }: { log: WallLogRow[]; events: WallEvent
             <span key={`${m.slot}|${m.lt}`} title={`${m.at} · ${m.note}`} style={dot(m)} />
           ))}
         </div>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, opacity: 0.42, flex: "0 0 auto" }}>16:00</span>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, opacity: 0.42, flex: "0 0 auto" }}>
-          {log.length} rows · {WALL_SLOTS - slotsUsed.size} slots skipped
-        </span>
+        {/* No "N rows · N slots skipped" counter — the rail and the chips below
+            already say what happened and when; a slot tally is bookkeeping. */}
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, flex: "0 0 auto" }}>16:00</span>
       </div>
       {/* Hour labels ride under the track, inset by the 09:29 gutter so they
           line up with their ticks rather than with the flex row. */}
@@ -752,7 +757,7 @@ function WallCaptureRail({ log, events }: { log: WallLogRow[]; events: WallEvent
         {RAIL_HOURS.map((h) => (
           <span key={h.slot} style={{
             position: "absolute", left: `${railPct(h.slot)}%`, transform: "translateX(-50%)",
-            fontFamily: "var(--font-mono)", fontSize: 10, opacity: 0.3,
+            fontFamily: "var(--font-mono)", fontSize: 10,
           }}>{h.label}</span>
         ))}
       </div>
@@ -773,7 +778,7 @@ function WallRailChips({ marks }: { marks: RailMark[] }) {
     // 3 empty slots = 45 minutes. Below that the label is longer than the run.
     if (prev >= 0 && gap >= 3) {
       out.push(
-        <span key={`q${m.slot}`} style={{ fontFamily: "var(--font-mono)", fontSize: 11, opacity: 0.26, padding: "0 2px" }}>
+        <span key={`q${m.slot}`} style={{ fontFamily: "var(--font-mono)", fontSize: 11, padding: "0 2px" }}>
           — {gap * 15}m quiet —
         </span>,
       );
@@ -791,9 +796,9 @@ function WallRailChips({ marks }: { marks: RailMark[] }) {
           border: m.kind === "approach" ? `1.5px solid ${c}` : undefined,
           boxShadow: m.kind === "approach" ? undefined : `0 0 7px ${rgba(c, 0.55)}`,
         }} />
-        <span style={{ opacity: 0.42 }}>{m.at}</span>
-        <b style={{ fontWeight: 700, opacity: 0.85 }}>{RAIL_KIND_LABEL[m.kind]}</b>
-        <span style={{ fontSize: 10, letterSpacing: LS_LABEL, textTransform: "uppercase", opacity: 0.6, color: c }}>
+        <span>{m.at}</span>
+        <b style={{ fontWeight: 700 }}>{RAIL_KIND_LABEL[m.kind]}</b>
+        <span style={{ fontSize: 10, letterSpacing: LS_LABEL, textTransform: "uppercase", color: c }}>
           {LEVEL_LABEL[m.lt]}
         </span>
       </span>,
@@ -803,7 +808,7 @@ function WallRailChips({ marks }: { marks: RailMark[] }) {
   const toClose = WALL_SLOTS - 1 - prev;
   if (toClose >= 3) {
     out.push(
-      <span key="qend" style={{ fontFamily: "var(--font-mono)", fontSize: 11, opacity: 0.26, padding: "0 2px" }}>
+      <span key="qend" style={{ fontFamily: "var(--font-mono)", fontSize: 11, padding: "0 2px" }}>
         — {toClose * 15}m to close —
       </span>,
     );
@@ -883,7 +888,7 @@ function WallTimeline({ log, events, view }: { log: WallLogRow[]; events: WallEv
 
   if (!entries.length) {
     return (
-      <div style={{ padding: "34px 18px", textAlign: "center", opacity: 0.45, fontSize: FS_BODY }}>
+      <div style={{ padding: "34px 18px", textAlign: "center", fontSize: FS_BODY }}>
         {view === "core"
           ? "Nothing recorded on the CORE for this ticker — no baseline, no level changes, no touches."
           : "Nothing recorded on the walls for this ticker — no baseline, no level changes, no touches."}
@@ -904,7 +909,7 @@ function WallTimeline({ log, events, view }: { log: WallLogRow[]; events: WallEv
             {/* Time, dot and badge row all lock to ROW_LEAD_H so the three
                 columns sit on one optical line instead of each finding its own
                 baseline off whatever line-height its font happened to use. */}
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, lineHeight: `${ROW_LEAD_H}px`, opacity: 0.7 }}>{e.at}</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, lineHeight: `${ROW_LEAD_H}px` }}>{e.at}</div>
             {/* No fixed height here — the cell stretches to the row so the
                 connector can run all the way down to the next dot. */}
             <div style={{ position: "relative" }}>
@@ -913,23 +918,23 @@ function WallTimeline({ log, events, view }: { log: WallLogRow[]; events: WallEv
             </div>
             <div>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", minHeight: ROW_LEAD_H }}>
-                <span style={{ fontSize: FS_LABEL, lineHeight: `${ROW_LEAD_H}px`, fontWeight: 800, letterSpacing: LS_LABEL, textTransform: "uppercase", color: LEVEL_COLOR[e.lt], opacity: 0.85 }}>
+                <span style={{ fontSize: FS_LABEL, lineHeight: `${ROW_LEAD_H}px`, fontWeight: 800, letterSpacing: LS_LABEL, textTransform: "uppercase", color: LEVEL_COLOR[e.lt] }}>
                   {LEVEL_LABEL[e.lt]}
                 </span>
-                {e.kind === "open" ? <span style={{ ...wallBadgeStyle(MUTED), opacity: 0.55 }}>Open baseline</span> : null}
+                {e.kind === "open" ? <span data-cap-center style={wallBadgeStyle(MUTED)}>Open baseline</span> : null}
                 {e.kind === "change" ? <span style={wallBadgeStyle(C.cyan)}>Changed</span> : null}
                 {e.kind === "hit" ? wallBadge(ev?.reaction ?? null, false, ev?.reclaim_min ?? null) : null}
                 {/* Direction of approach, stated up front rather than left to be
                     inferred from spot vs. strike further down the row. */}
                 {e.side ? (
                   <span title={e.side === "below" ? "Price came into the level from below — a break goes up" : "Price came into the level from above — a break goes down"}
-                    style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, lineHeight: `${ROW_LEAD_H}px`, opacity: 0.55, color: e.side === "below" ? GREEN : RED }}>
+                    style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, lineHeight: `${ROW_LEAD_H}px`, color: e.side === "below" ? GREEN : RED }}>
                     {e.side === "below" ? "↑ from below" : "↓ from above"}
                   </span>
                 ) : null}
               </div>
               <div style={{ fontSize: FS_BODY, marginTop: 4, lineHeight: 1.5 }}>{e.body}</div>
-              {e.meta ? <div style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, opacity: 0.55, marginTop: 6, lineHeight: 1.5 }}>{e.meta}</div> : null}
+              {e.meta ? <div style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, marginTop: 6, lineHeight: 1.5 }}>{e.meta}</div> : null}
             </div>
           </div>
         );

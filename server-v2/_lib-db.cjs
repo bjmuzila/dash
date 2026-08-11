@@ -1962,21 +1962,21 @@ async function insertWatchSnapshot(s) {
     [
       s.watch_id,
       s.ts,
-      s.spot ?? null,
-      s.bid ?? null,
-      s.ask ?? null,
-      s.mark ?? null,
-      s.last ?? null,
-      s.iv ?? null,
-      s.delta ?? null,
-      s.gamma ?? null,
-      s.theta ?? null,
-      s.vega ?? null,
-      s.open_interest ?? null,
-      s.volume ?? null,
-      s.net_prem ?? null,
-      s.prev_close ?? null,
-      s.net_gex ?? null
+      realOrNull(s.spot),
+      realOrNull(s.bid),
+      realOrNull(s.ask),
+      realOrNull(s.mark),
+      realOrNull(s.last),
+      realOrNull(s.iv),
+      realOrNull(s.delta),
+      realOrNull(s.gamma),
+      realOrNull(s.theta),
+      realOrNull(s.vega),
+      realOrNull(s.open_interest),
+      realOrNull(s.volume),
+      realOrNull(s.net_prem),
+      realOrNull(s.prev_close),
+      realOrNull(s.net_gex)
     ]
   );
 }
@@ -4216,9 +4216,24 @@ async function getCachedExpirations(ticker) {
   return typeof r.raw === "string" ? JSON.parse(r.raw) : r.raw;
 }
 var REAL_MIN_MAGNITUDE = 1e-37;
+var REAL_MAX_MAGNITUDE = 3.4028234e38;
 function clampReal(v) {
   if (!Number.isFinite(v)) return 0;
   return Math.abs(v) < REAL_MIN_MAGNITUDE ? 0 : v;
+}
+// Nullable variant of clampReal for REAL columns that accept NULL.
+// Postgres float4in REJECTS values it cannot represent — a deep-OTM gamma such
+// as 4.4e-65 comes back from the feed as a perfectly valid JS number and then
+// blows up the INSERT with `"4.414902099280869e-65" is out of range for type
+// real`. Underflow collapses to 0 (that IS the value, to float4 precision) and
+// overflow saturates at the float4 limit; null/blank/NaN stay null.
+function realOrNull(v) {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  if (Math.abs(n) < REAL_MIN_MAGNITUDE) return 0;
+  if (Math.abs(n) > REAL_MAX_MAGNITUDE) return n > 0 ? REAL_MAX_MAGNITUDE : -REAL_MAX_MAGNITUDE;
+  return n;
 }
 // ─── option_strike_gex_history: multi-underlying support ────────────────────
 // HAND-PATCHED INTO THIS BUNDLE. api-router.js calls libDb.normGexSymbol() and

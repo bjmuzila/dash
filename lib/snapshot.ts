@@ -317,6 +317,38 @@ function applyUniversalCloneFixes(root: HTMLElement) {
       n.style.background = HOME_THEME.panelBgStrong;
     }
   });
+
+  // ── Gotcha 10: pill text rides high/low in the capture ────────────────────
+  // The app centers badge text the CSS way: fixed `height` + a matching
+  // `line-height`, so the glyphs sit on the line box's optical centre. html2canvas
+  // does not use the line box. It takes the text node's bounding rect, then draws
+  // at `top + fontMetrics.ascent` for the font IT resolved — and the clone lives
+  // in an about:blank iframe where `var(--font-inter)` does not resolve, so the
+  // fallback's ascent is not the one the live box was sized for. The taller the
+  // line box relative to the font, the further that error throws the glyphs:
+  // a 12px label in a 20px pill lands visibly high.
+  //
+  // Fix: for anything opted in with `data-cap-center`, stop centering with a line
+  // box at all. Collapse `line-height` to 1 and re-express the difference as
+  // symmetric vertical padding, so the box hugs the text and there is no leading
+  // left for a wrong ascent to mis-split. Same painted height, same border, and
+  // the live page is untouched — this only ever runs on the clone.
+  root.querySelectorAll<HTMLElement>("[data-cap-center]").forEach((n) => {
+    const h = parseFloat(n.style.height || "");
+    const fs = parseFloat(n.style.fontSize || "") || 12;
+    if (!(h > 0)) { n.style.lineHeight = "1"; return; }
+    // border-box: the declared height already contains the 1px borders.
+    const bt = parseFloat(n.style.borderTopWidth || "") || (n.style.border ? 1 : 0);
+    const bb = parseFloat(n.style.borderBottomWidth || "") || (n.style.border ? 1 : 0);
+    const pad = Math.max(0, (h - bt - bb - fs) / 2);
+    n.style.height = "auto";
+    n.style.lineHeight = "1";
+    n.style.paddingTop = `${pad}px`;
+    n.style.paddingBottom = `${pad}px`;
+    // inline-flex centering is its own html2canvas hazard (it lays the child out
+    // but still draws text from the rect's top) — force the simple flow box.
+    if ((n.style.display || "").includes("flex")) n.style.display = "inline-block";
+  });
 }
 
 /**

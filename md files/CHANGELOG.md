@@ -1,5 +1,122 @@
 # Changelog
 
+## 2026-08-11 - Test Lab -> GEX Map: SPX spot ticks live, once a minute
+
+`app/test/GexMapTab.tsx`.
+
+### Why
+
+The map is a RECORDED tape. `GET /api/gex-map` is fetched once per
+session/expiry pick, so `levels.spot` - the big price on the regime tile, and
+the white spot marker + price tag on the right rail - froze at whatever the last
+written snapshot held. Slots are 5 minutes wide, so the number on screen was
+routinely 5-10 minutes stale, and staler still the longer the tab sat open.
+
+### Fix
+
+New `useLiveSpot()` in the same file. It subscribes to the SHARED `/ws/gex`
+socket (`lib/gexSocket`) with `topics: ["spot"]` and publishes to React state on
+a 60s interval.
+
+- **No new traffic.** `spot` is already a permanent member of the socket's topic
+  union - `GlobalToolbar` mounts `ToolbarTicker` on every dashboard route and it
+  subscribes with `["spot","aux"]`. This adds no connection and widens no scope.
+- **Topics declared at module scope** (`SPOT_TOPICS`), per AGENTS.md: the value
+  is joined into the subscription key, so an inline array would resubscribe on
+  every render.
+- **Frames land in a ref, not in state.** The broker pushes `spot` several times
+  a second; only the 60s `commit()` calls `setSpot`. Without that the model - and
+  the zoom-window slice under it - would rebuild on every tick for a number
+  rendered to two decimals.
+- Gated on `useWsLifecycle()` like every other consumer.
+
+### Applied to the MODEL, not just the tile
+
+`buildModel()`'s result is spread with the live spot, so the regime tile, the
+gamma-flip "spot above / below" subtitle, and the white spot arrow + price line
+on the right rail all read the same number.
+
+### Only while the tape is actually live
+
+`date === "latest"` AND the payload's `levels.asOf` is under 20 minutes old.
+A past session - or the RTH scope after the close, whose tail is pinned at
+16:00 - keeps its recorded spot. A live SPX print beside a finished map would be
+a different moment's number in the same tile.
+
+The tile's timestamp is the TAPE's, not the price's, so when the two diverge the
+tile now appends a green `· live 1m` rather than letting a 5-minute-old slot time
+label a 1-minute-old quote.
+
+
+## 2026-08-11 - /owner/probe: `"4.4e-65" is out of range for type real` on refresh
+
+`server-v2/_lib-db.cjs`.
+
+### Root cause
+
+Deep-OTM contracts come back from the feed with a gamma (and the greeks derived
+from it) on the order of `4.414902099280869e-65`. That is a perfectly ordinary
+JS number, so `num()` in the `/api/watch` probe kept it and passed it straight
+into `insertWatchSnapshot`. Every greek column in `watch_snapshots` is Postgres
+`REAL` (float4), whose smallest representable magnitude is ~1e-38 - `float4in`
+does not round tiny values down to zero, it REJECTS them:
+`"4.414902099280869e-65" is out of range for type real`. The INSERT threw, the
+refresh 500'd, and the probe page showed the raw Postgres text as its error.
+
+### Fix
+
+Added `realOrNull()` next to the existing `clampReal()` and routed all 15 REAL
+columns of `insertWatchSnapshot` through it:
+
+- magnitude `< 1e-37` collapses to `0` (that IS the value at float4 precision)
+- magnitude `> 3.4028234e38` saturates at the float4 limit instead of throwing
+- `null` / `""` / `NaN` / `Infinity` stay `NULL`
+
+`clampReal()` was left alone - it returns `0` for non-finite and is used by the
+GEX-history writer where the columns are NOT NULL.
+
+## 2026-08-11 - /level-log: white text, no slot counter, pill text centred in the PNG
+
+`components/pages/LevelLog.tsx`, `lib/snapshot.ts`.
+
+### Slot counter removed
+
+`N rows · N slots skipped` is gone from the rail. The rail and the chips already
+say what happened and when; a slot tally is bookkeeping.
+
+### Every dimmed font is now white
+
+All ~22 `opacity: 0.26-0.85` text values in the log card dropped: the eyebrows,
+the times, the hour ticks, the quiet labels, the chip time / kind / level, the
+GEX meta line, the direction arrow, the table headers, the empty states, the
+`changes` column. Level-coloured labels keep their hue - they just stop being
+faded. Nothing in the card renders below full opacity now except disabled
+buttons.
+
+### Pill text sat high in the PNG (the recurring one)
+
+Root cause, finally: the badges centre their label the CSS way - fixed `height`
+plus a matching `line-height`, so the glyphs land on the line box's optical
+centre. **html2canvas does not use the line box.** It takes the text node's
+bounding rect and draws at `top + fontMetrics.ascent` for the font IT resolved -
+and the clone runs in an about:blank iframe where `var(--font-inter)` does not
+resolve, so the fallback's ascent is not the one the live box was sized for.
+The taller the line box relative to the font, the further the error throws the
+glyphs; a 12px label in a 20px pill lands visibly high.
+
+- New **gotcha 10** in `snapshot.ts`: any element opted in with `data-cap-center`
+  gets its line-box centring rewritten for the capture only - `line-height: 1`,
+  `height: auto`, and the difference re-expressed as symmetric vertical padding.
+  Same painted height and border, but the box now hugs the text, so there is no
+  leading left for a wrong ascent to mis-split. `inline-flex` is downgraded to
+  `inline-block` (flex centring is its own html2canvas hazard - it lays the child
+  out and then still draws from the rect's top).
+- `wallBadge()` and the "Open baseline" pill carry `data-cap-center`. The live
+  page is untouched; this only ever runs on the clone.
+
+Generic on purpose - any other pill in the app that centres with height +
+line-height can opt in with the same attribute.
+
 ## 2026-08-11 - Fix: restore buildTpoProfile, which the Vite build died on
 
 `components/dashboard/es-candles/chartMath.ts`.
