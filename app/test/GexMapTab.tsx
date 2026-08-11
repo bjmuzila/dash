@@ -47,6 +47,14 @@ type MapPayload = {
   slotMin: number;
   strikes: number[];
   columns: MapColumn[];
+  /**
+   * Spot at MINUTE resolution — one point per minute of tape, independent of
+   * `slotMin`. The gamma field stays slotted (a ladder is heavy and the book
+   * does not restructure every minute); the price line does not have to be.
+   * Absent on an older server, in which case the path falls back to one vertex
+   * per column, which is what it always was.
+   */
+  spotPath?: { t: number; spot: number }[];
   /** Volume-only GEX summed across strikes, per slot — the home page's series. */
   volSeries?: { t: number; vol: number }[];
   dexByStrike: { strike: number; dex: number }[];
@@ -111,6 +119,7 @@ function scopePayload(p: MapPayload | null, scope: Scope): MapPayload | null {
   return {
     ...p,
     columns,
+    spotPath: p.spotPath?.filter((s) => isRthMs(s.t)),
     volSeries: p.volSeries?.filter((v) => isRthMs(v.t)),
     dexSeries: (p.dexSeries ?? []).filter((d) => isRthMs(d.t)),
     dexColumns: p.dexColumns?.filter((d) => keep.has(d.t)),
@@ -300,6 +309,12 @@ type MapModel = {
   /** signed, normalized per cell — heat magnitude carrying the gamma sign */
   signed: number[][];
   path: number[];
+  /**
+   * The spot line, one point per MINUTE, positioned by its own timestamp rather
+   * than by column index. `path` (one value per column) stays as the fallback
+   * for a server that does not ship `spotPath` yet, and nothing else reads this.
+   */
+  spotPath: { t: number; spot: number }[];
   dex: number[];
   dexRaw: number[];
   dMax: number;
@@ -441,6 +456,13 @@ function buildModel(p: MapPayload | null, scope: Scope): MapModel | null {
     mins, slotMin: p.slotMin > 0 ? p.slotMin : 5,
     timeAxis, xLo: RTH_LO, xHi: RTH_HI,
     profile, profileRaw: lastRaw, gMax, heat, signed, path,
+    // Clipped to the drawn tape. The minute series and the columns come out of
+    // the same table, but a spot row can exist for a minute whose ladder was
+    // filtered out by the strike window — drawing it would run the line past
+    // the end of the field.
+    spotPath: (p.spotPath ?? []).filter(
+      (s) => s.spot > 0 && s.t >= cols[0].t && s.t <= cols[cols.length - 1].t
+    ),
     dex, dexRaw, dMax, hasDex: dexCount > 0 || dexSeries.length > 0, dexSeries, dtMax,
     volSeries, vtMax, netSeries, nLo, nHi,
     dexSurface, dexSource: p.dexSource ?? (dexCount > 0 ? "greek_snapshots" : "none"),
@@ -539,6 +561,7 @@ function sliceModel(m: MapModel, v: ViewWin): MapModel {
     heat: m.heat.slice(v.i0, v.i1 + 1).map(cutRow),
     signed: m.signed.slice(v.i0, v.i1 + 1).map(cutRow),
     path: m.path.slice(v.i0, v.i1 + 1),
+    spotPath: m.spotPath.filter((s) => inSpan(s.t)),
     profile: cutRow(m.profile),
     profileRaw: cutRow(m.profileRaw),
     dex: cutRow(m.dex),
@@ -895,6 +918,13 @@ function TapeField({ m, compact, field = "heat", intensity = 1 }: {
 
   const yOf = (k: number) => FY + FH - ((k - m.lo) / Math.max(1, m.hi - m.lo)) * FH;
   const xOf = (i: number) => FX + xFrac(m, i) * FW;
+  const xOfT = (t: number) => FX + xFracT(m, t) * FW;
+  // The spot line's points, minute series preferred, per-column path as the
+  // fallback. One list so the stroke, the halo and the head dot cannot drift
+  // apart the way three separate expressions could.
+  const spotPts: [number, number][] = m.spotPath.length > 1
+    ? m.spotPath.map((s) => [xOfT(s.t), yOf(s.spot)])
+    : m.path.map((p, i) => [xOf(i), yOf(p)]);
   // On a clock axis a cell is one recording slot WIDE IN MINUTES, not one nth of
   // however many columns exist — at 10:05 the latter drew 35 minutes of tape as
   // 6.5 hours of fat blocks.
@@ -957,11 +987,20 @@ function TapeField({ m, compact, field = "heat", intensity = 1 }: {
         <line x1={FX} y1={yOf(m.flip)} x2={FX + FW} y2={yOf(m.flip)} stroke={FLIP_C} strokeWidth={1.2} strokeDasharray="5 4" opacity={0.75} />
       )}
 
-      {/* spot path */}
-      <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="rgba(255,255,255,0.30)" strokeWidth={4.5} strokeLinejoin="round" />
-      <path d={pathD(m.path.map((p, i) => [xOf(i), yOf(p)]))} fill="none" stroke="#fff" strokeWidth={1.6} strokeLinejoin="round" />
-      <circle cx={xOf(m.cols.length - 1)} cy={yOf(m.path[m.path.length - 1])} r={9} fill="rgba(255,255,255,0.14)" />
-      <circle cx={xOf(m.cols.length - 1)} cy={yOf(m.path[m.path.length - 1])} r={3.4} fill="#fff" />
+      {/* Spot path.
+          Drawn from the MINUTE series when the payload carries one, positioned
+          by timestamp — at slot resolution this line was a handful of long
+          straight segments cutting through highs and lows the tape actually
+          made. `m.path` (one vertex per column) stays as the fallback for a
+          server that predates spotPath, so the line never disappears. */}
+      {spotPts.length > 1 && (
+        <>
+          <path d={pathD(spotPts)} fill="none" stroke="rgba(255,255,255,0.30)" strokeWidth={4.5} strokeLinejoin="round" />
+          <path d={pathD(spotPts)} fill="none" stroke="#fff" strokeWidth={1.6} strokeLinejoin="round" />
+          <circle cx={spotPts[spotPts.length - 1][0]} cy={spotPts[spotPts.length - 1][1]} r={9} fill="rgba(255,255,255,0.14)" />
+          <circle cx={spotPts[spotPts.length - 1][0]} cy={spotPts[spotPts.length - 1][1]} r={3.4} fill="#fff" />
+        </>
+      )}
       <line x1={FX} y1={FY + FH} x2={FX + FW} y2={FY + FH} stroke="rgba(255,255,255,0.16)" />
       {timeTicks.map(({ f, label }) => (
         <g key={`t${label}`}>
@@ -1326,6 +1365,30 @@ function xFrac(m: MapModel, i: number): number {
 }
 
 /**
+ * The same position, for an arbitrary TIMESTAMP rather than a column index.
+ *
+ * The minute spot path has ~5× more points than there are columns, so it cannot
+ * be placed by index. On a clock axis that is the same arithmetic xFrac already
+ * does. Off one — "All" scope, where columns are spread evenly because of the
+ * midnight wrap — a timestamp is located between the two columns that straddle
+ * it and interpolated across that gap, so a minute lands proportionally inside
+ * its own slot instead of on the slot boundary.
+ */
+function xFracT(m: MapModel, t: number): number {
+  if (m.timeAxis) return clamp01((etMinutes(t) - m.xLo) / Math.max(1, m.xHi - m.xLo));
+  const n1 = Math.max(1, m.cols.length - 1);
+  if (t <= m.cols[0].t) return 0;
+  if (t >= m.cols[n1].t) return 1;
+  let lo = 0, hi = n1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (m.cols[mid].t <= t) lo = mid; else hi = mid;
+  }
+  const span = m.cols[hi].t - m.cols[lo].t;
+  return (lo + (span > 0 ? (t - m.cols[lo].t) / span : 0)) / n1;
+}
+
+/**
  * Time labels as fractions of the field width.
  *
  * On a clock axis the ticks are ROUND CLOCK TIMES stepped across the domain —
@@ -1569,8 +1632,8 @@ export default function GexMapTab() {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async (d: string, x: string) => {
-    setLoading(true);
+  const load = useCallback(async (d: string, x: string, quiet = false) => {
+    if (!quiet) setLoading(true);
     try {
       const r = await fetch(
         `/api/gex-map?symbol=$SPX&date=${encodeURIComponent(d)}&expiry=${encodeURIComponent(x)}`,
@@ -1584,7 +1647,7 @@ export default function GexMapTab() {
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }, []);
 
@@ -1600,6 +1663,18 @@ export default function GexMapTab() {
   const isLiveSession =
     date === "latest" && tapeAsOf != null && Date.now() - tapeAsOf < LIVE_SPOT_MAX_AGE_MS;
   const liveSpot = useLiveSpot(isLiveSession);
+
+  // The minute spot path is only as fresh as the last fetch, so on the live
+  // tape re-pull once a minute. `quiet` keeps the loading flag down: a poll must
+  // not flash the card back to "Loading 0DTE map…" every minute, and the zoom
+  // window survives because MapCard keys its reset on the model's DIMENSIONS,
+  // not on object identity. The route caches for 60s server-side, so this is one
+  // cheap request per minute per viewer.
+  useEffect(() => {
+    if (!isLiveSession) return;
+    const t = setInterval(() => { void load(date, expiry, true); }, LIVE_SPOT_MS);
+    return () => clearInterval(t);
+  }, [isLiveSession, date, expiry, load]);
 
   // Overridden on the MODEL, not just in the tile, so the white spot marker and
   // its price tag on the right rail track the same number the tile shows.

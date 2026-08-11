@@ -323,6 +323,28 @@ const cache = new Map();
 const CACHE_MS = 60_000;
 
 /**
+ * Floor between two FORCED syncs for one user (the Sync button in Settings).
+ *
+ * The cache above exists so idle glances don't cost a Google call; a deliberate
+ * press should always be allowed through it. But a person who taps a button and
+ * sees nothing change taps it again, and again — this keeps that from becoming
+ * a burst of calendarList + events requests against the quota. Well under the
+ * time it takes to press twice on purpose, so it is invisible in normal use.
+ */
+const FORCE_MIN_MS = 4_000;
+const lastForce = new Map();
+
+/** True if this user may force a refresh now; stamps the attempt when it does. */
+function allowForce(userId) {
+  const prev = lastForce.get(userId) || 0;
+  if (Date.now() - prev < FORCE_MIN_MS) return false;
+  lastForce.set(userId, Date.now());
+  // Bounded — same reasoning as the events cache below.
+  if (lastForce.size > 200) lastForce.delete(lastForce.keys().next().value);
+  return true;
+}
+
+/**
  * The UTC offset a timezone is at on a given calendar day, as "-04:00".
  * Computed for that specific day, not for "now" — otherwise a day either side
  * of a DST change gets a window shifted by an hour and drops the first or last
@@ -454,17 +476,27 @@ function calendarIdsFor(row) {
  *
  * Returns { events, source, ... } or { error } — never throws, so a Google
  * outage degrades this card instead of taking down the screen it sits on.
+ *
+ * `opts.force` is the Sync button: skip the 60s cache and ask Google now. It is
+ * rate-limited per user (see allowForce) and, when it does go out, also drops
+ * the colour/name cache — a calendar renamed or recoloured in Google is exactly
+ * the kind of thing someone presses Sync to pick up.
  */
-async function eventsForDay(userId, tz, dateStr) {
+async function eventsForDay(userId, tz, dateStr, opts = {}) {
   if (!configured()) return { error: 'not-configured', events: [] };
 
   const ck = `${userId}:${dateStr}`;
   const hit = cache.get(ck);
-  if (hit && Date.now() - hit.at < CACHE_MS) return hit.value;
+  // A rate-limited force falls back to the cache rather than erroring — the
+  // caller asked for the freshest thing available, and this is it.
+  const force = !!opts.force && allowForce(userId);
+  if (!force && hit && Date.now() - hit.at < CACHE_MS) return hit.value;
 
   try {
     const resolved = await resolveSource(userId);
     if (!resolved) return { error: 'not-connected', events: [] };
+
+    if (force) colourCache.delete(resolved.row.user_id);
 
     const at = await accessTokenFor(resolved.row);
     if (!at) return { error: 'not-connected', events: [] };

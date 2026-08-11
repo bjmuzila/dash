@@ -550,6 +550,11 @@ export const calendar = {
   status: () => api.get<CalendarStatus>('/api/hh/calendar/status'),
   events: (date?: string) =>
     api.get<CalendarDay>(`/api/hh/calendar/events${date ? `?date=${date}` : ''}`),
+  /** Force a pull from Google, skipping the server's 60s cache. Same body as
+   *  events() — including `error`, which stays a 200. Rate-limited server-side,
+   *  so a double-press just returns the cached day rather than failing. */
+  sync: (date?: string) =>
+    api.post<CalendarDay>(`/api/hh/calendar/sync${date ? `?date=${date}` : ''}`, {}),
   list: () => api.get<CalendarListResponse>('/api/hh/calendar/calendars'),
   select: (body: { calendarIds?: string[]; shareWithHousehold?: boolean }) =>
     api.post<CalendarListResponse>('/api/hh/calendar/select', body),

@@ -110,6 +110,30 @@ export function useSaveCalendarSelection() {
   })
 }
 
+/**
+ * Sync now — pull from Google immediately instead of waiting out the 60s
+ * server cache and the query's own staleTime.
+ *
+ * The response IS today's day payload, so it's written straight into the events
+ * query rather than triggering a second round trip to fetch what we just got
+ * back. Today is invalidated separately because "last synced" lives on that
+ * payload, and the calendar list is left alone — names and colours come back on
+ * their own schedule and a sync doesn't change which calendars are selected.
+ *
+ * `error` inside a 200 is the normal failure shape here (see api.calendar.sync),
+ * so callers read `data.error`, not a rejected mutation.
+ */
+export function useSyncCalendar() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (date?: string) => calendarApi.sync(date),
+    onSuccess: (data, date) => {
+      qc.setQueryData(['calendar', date ?? 'today'], data)
+      void qc.invalidateQueries({ queryKey: TODAY_KEY })
+    },
+  })
+}
+
 export function useDisconnectCalendar() {
   const qc = useQueryClient()
   return useMutation({

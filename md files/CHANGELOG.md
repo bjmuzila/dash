@@ -1,5 +1,134 @@
 # Changelog
 
+## 2026-08-11 - Test Lab -> GEX Map: spot path drawn every minute, not every slot
+
+`app/test/GexMapTab.tsx`, `server-v2/api-router.js`.
+
+### The problem
+
+The white spot line moved in 5-10 minute steps. It was built from
+`columns[].spot` - one vertex per GAMMA slot - so it drew a handful of long
+straight segments that cut through every high and low the tape actually made
+between slots.
+
+The rows were always there: `gex-history-writer.js` writes every 30s
+(`GEX_PG_WRITE_INTERVAL_MS`). `/api/gex-map` buckets them into 5-minute slots
+(`?slot=`, default 5) because a per-strike LADDER is heavy. Only the bucketing
+was hiding the price detail.
+
+### Server: a separate minute series
+
+`/api/gex-map` now also returns `spotPath: [{ t, spot }]` - one point per MINUTE
+of the session, `DISTINCT ON` the minute taking the last print inside it (the
+same last-wins rule the slotted ladder query uses, so a column and its minute
+agree).
+
+Deliberately its own query rather than just `slot=1`: it selects one column, no
+ladder, no strike filter, so a session is ~390 rows / a few KB. Dropping the
+FIELD to `slot=1` would have meant ~390 columns x ~260 strikes.
+
+Wrapped in its own try/catch with `notes.spot` - a failure degrades to the old
+per-column path, it does not 500 the tab.
+
+### Client: positioned by timestamp
+
+- `MapModel.spotPath` added; `path` (one value per column) stays as the fallback
+  for a server that predates this, so the line can never disappear.
+- New `xFracT(m, t)`: x position from a TIMESTAMP rather than a column index. On
+  the RTH clock axis that is the same arithmetic `xFrac` already does; off it
+  ("All" scope, index-spread because of the midnight wrap) the timestamp is
+  located between the two columns straddling it and interpolated across the gap.
+- `spotPts` is computed once in `TapeField` and used by the stroke, the halo and
+  the head dot, so the three cannot drift apart.
+- `scopePayload` filters `spotPath` by the same RTH predicate as the columns;
+  `buildModel` clips it to the drawn tape; `sliceModel` clips it to the zoom
+  window like the other time series.
+
+### The tape now advances
+
+`/api/gex-map` was fetched ONCE per session/expiry pick, so even a minute-
+resolution path stopped at page load. It re-polls every 60s while the live tape
+is showing (`isLiveSession`), with a new `quiet` flag on `load()` so the poll
+never flashes the card back to "Loading 0DTE map..." - and the zoom window
+survives because `MapCard` keys its reset on the model's DIMENSIONS, not on
+object identity. The route caches 60s server-side, so it is one cheap request
+per minute per viewer.
+
+
+## 2026-08-11 - Budget: Sync button for the connected Google Calendar (Settings)
+
+`server-v2/_lib-google-calendar.cjs`, `server-v2/household-routes.cjs`,
+`budget-vite/src/api.ts`, `budget-vite/src/hooks.ts`,
+`budget-vite/src/pages/Settings.tsx`.
+
+### What
+
+The Google Calendar card in Settings (the More tab) now has a **Sync now**
+button sitting next to "Last synced N minutes ago". It pulls from Google
+immediately instead of waiting out the 60s server cache and the query's own
+staleTime, then updates Today's events and the "last synced" line in place.
+
+Shown for a shared household connection too - the pull runs against whichever
+connection feeds you, so the non-owner of the Google link can still force fresh
+events.
+
+### How
+
+- `eventsForDay(userId, tz, dateStr, opts)` takes `opts.force`, which skips the
+  60s events cache and drops that connection's calendar colour/name cache (a
+  renamed or recoloured calendar is exactly what someone presses Sync to pick
+  up). Rate-limited per user at 4s (`FORCE_MIN_MS` / `allowForce`) so a
+  double-press can't burst Google's quota; a blocked force falls back to the
+  cached day rather than erroring.
+- New route **`POST /api/hh/calendar/sync`** (auth `household`), same shaped
+  200 body as `/api/hh/calendar/events`. POST rather than `?refresh=1` on the
+  GET so a prefetch, bfcache restore or retried GET can never replay it.
+- `api.calendar.sync(date?)`, `useSyncCalendar()` - writes the response straight
+  into the `['calendar', date]` query (no second round trip) and invalidates
+  Today, where `lastSyncedAt` lives. The calendar list is left alone; a sync
+  doesn't change which calendars are selected.
+- `SyncRow` in Settings wraps `LastSynced` + the button. A Google failure is
+  `error` inside a 200, so both `isError` and `data.error` are checked - it
+  reports "Couldn't reach Google just now - your events are unchanged."
+
+
+## 2026-08-11 - Emails: "NOPANTS" one-day promo template ($300/yr, 2 spots)
+
+`lib/emails/nopants-promo.ts` (new), `app/api/admin/email-templates/route.ts`.
+
+### What
+
+New one-click preset on the owner Emails page: **"Kids-in-school promo - $300/yr,
+2 spots (NOPANTS)"**. Same concept as the prior $300 annual promo screenshot -
+limited-spot banner, big price, invoice-style line items (list price struck out,
+discount row, total due today), and a full-width CTA - but rendered in the CB
+Edge dashboard theme (bg `#05060A`, panel `#0D1119`, cyan `#219EBC`, accent
+`#8ECAE6`) instead of the green.
+
+Copy: celebrating both kids being in school full time, `NOPANTS` code, only 2
+codes released, today only / ends at midnight, and a note that last time these
+went within minutes. Signed "- Bzila, founder of CB Edge".
+
+### How
+
+Exports `noPantsPromoEmail()`, `noPantsPromoText()`, `NOPANTS_PROMO_SUBJECT`,
+following the template conventions in `lib/emails/EMAILS_HANDOFF.md`: table
+layout, all inline styles, `{{UNSUBSCRIBE_URL}}` placeholder kept, standard
+Unsubscribe / cbedge.net / "Market analytics, not financial advice." footer.
+
+Everything variable is an option with a default, so the same template can be
+re-used for a different run without editing the HTML: `price` (300),
+`listPrice` (1000), `spots` (2), `code` ("NOPANTS"), `ctaUrl` (defaults to
+`/pricing`), `email`.
+
+Registered last in `buildTemplates()` (the picker reverses to newest-first, so it
+lands on top of the template list).
+
+### Note
+
+The `NOPANTS` coupon must exist in Stripe before this goes out - the email only
+references it.
+
 ## 2026-08-11 - Multi Greek: per-panel magnifying glass opens the Ticker Lookup card
 
 `app/mult-greek/MultGreekClient.tsx`, `components/pages/Analytics.tsx`.

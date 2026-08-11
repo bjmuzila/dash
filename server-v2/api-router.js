@@ -8283,6 +8283,49 @@ if barstate.islast
           const columns = ordered.map((col) => ({ t: col.t, spot: col.spot, flip: flipOf(col.v, col.spot), v: col.v }));
           const volSeries = ordered.map((col) => ({ t: col.t, vol: col.vol }));
 
+          // ── spot path, at MINUTE resolution ──────────────────────────────
+          // The gamma field is slotted (default 5 min) because a ladder is a
+          // heavy object and reading one every minute buys nothing — the book
+          // does not restructure that fast. The SPOT LINE drawn across it is a
+          // price, and at slot resolution it renders as a handful of long
+          // straight segments that walk through highs and lows the tape
+          // actually made. gex-history-writer.js writes every 30s, so the rows
+          // to draw a proper path are already there; only the bucketing was
+          // hiding them.
+          //
+          // This is deliberately its OWN query rather than a smaller `slot`:
+          // it selects one column, no ladder and no strike filter, so a whole
+          // session is ~390 rows / a few KB. Dropping the field itself to
+          // slot=1 would mean ~390 columns × ~260 strikes instead.
+          //
+          // DISTINCT ON takes the LAST print inside each minute, matching the
+          // rule the slotted query uses for the ladder — so the minute a
+          // column lands on agrees with that column's own spot.
+          let spotPath = [];
+          try {
+            const spotRows = await libDb.queryAll(
+              `SELECT DISTINCT ON (q.m) q.t, q.spot
+                 FROM (
+                   SELECT (timestamp / 60000)::bigint AS m,
+                          timestamp AS t,
+                          MAX(spot) AS spot
+                     FROM option_strike_gex_history
+                    WHERE symbol = ? AND date = ? AND expiry = ? AND spot > 0
+                    GROUP BY timestamp
+                 ) q
+                ORDER BY q.m ASC, q.t DESC`,
+              [symbol, date, expiry]
+            );
+            spotPath = spotRows
+              .map((r) => ({ t: Number(r.t), spot: Number(r.spot ?? 0) }))
+              .filter((r) => r.t > 0 && r.spot > 0);
+          } catch (err) {
+            // Non-fatal by design: the client falls back to the per-column
+            // path, which is what it drew before this existed.
+            console.error('[gex-map] spot path read failed:', req.url, err);
+            notes.spot = `minute spot path unavailable: ${String(err && err.message ? err.message : err)}`;
+          }
+
           // ── DEX ──────────────────────────────────────────────────────────
           // Preferred source is the ladder recorded in the same row as gamma.
           // greek_snapshots stays as the fallback for sessions written before
@@ -8383,7 +8426,7 @@ if barstate.islast
 
           const payload = {
             symbol, date, expiry, slotMin,
-            strikes, columns, volSeries, dexByStrike, dexSeries, dexColumns, dexSource,
+            strikes, columns, spotPath, volSeries, dexByStrike, dexSeries, dexColumns, dexSource,
             levels, sessions, expiries, notes,
           };
           // A payload built while the DEX column probe had not yet succeeded is

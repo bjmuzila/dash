@@ -3,7 +3,7 @@ import { useAuth } from '../auth'
 import { auth as authApi, calendar as calendarApi, ApiError } from '../api'
 import PinPad from '../components/PinPad'
 import { useSettings, useSaveSettings, useNotes, useCreateNote, useDeleteNote,
-         useToday, useDisconnectCalendar } from '../hooks'
+         useToday, useDisconnectCalendar, useSyncCalendar } from '../hooks'
 import CalendarPicker from '../components/CalendarPicker'
 import { T, label, section, button, input } from '../theme'
 
@@ -111,7 +111,7 @@ function GoogleCalendarCard() {
           <div style={{ fontSize: 14, color: T.good, fontWeight: 700 }}>
             Connected{status.email ? ` — ${status.email}` : ''}
           </div>
-          <LastSynced at={status.lastSyncedAt ?? null} />
+          <SyncRow at={status.lastSyncedAt ?? null} />
           <CalendarPicker status={status} />
           <button
             onClick={() => disconnect.mutate()}
@@ -132,7 +132,7 @@ function GoogleCalendarCard() {
                 Nothing to set up. Connect your own account below only if you also want
                 your personal events on Today.
               </span>
-              <LastSynced at={status.lastSyncedAt ?? null} />
+              <SyncRow at={status.lastSyncedAt ?? null} />
             </div>
           )}
           {/* A real link, not a button with onClick — the browser must follow the
@@ -152,6 +152,55 @@ function GoogleCalendarCard() {
 }
 
 /**
+ * "Last synced 4 minutes ago" + the on-demand Sync button.
+ *
+ * The two belong together: the timestamp is the only thing that tells you
+ * whether pressing the button did anything, and pressing the button is the only
+ * thing that moves the timestamp on demand.
+ *
+ * Sync is shown for a shared household connection too. The pull runs against
+ * whichever connection feeds you, so someone reading their partner's shared
+ * calendar can still ask for fresh events without owning the Google link.
+ *
+ * A Google failure comes back as `error` INSIDE a 200 (see api.calendar.sync),
+ * so a resolved mutation is not by itself a successful sync — both are checked.
+ */
+function SyncRow({ at }: { at: string | null }) {
+  const sync = useSyncCalendar()
+  const failed = sync.isError || !!sync.data?.error
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+        <LastSynced at={at} />
+        <button
+          onClick={() => sync.mutate(undefined)}
+          disabled={sync.isPending}
+          style={{
+            ...label({ color: T.accent }),
+            background: 'none', border: 'none', padding: '8px 0',
+            minHeight: 34, cursor: sync.isPending ? 'default' : 'pointer',
+            opacity: sync.isPending ? 0.55 : 1,
+          }}
+        >
+          {sync.isPending ? 'Syncing…' : 'Sync now'}
+        </button>
+      </div>
+      {failed && (
+        <div style={{ fontSize: 13, color: T.bad, marginTop: 2, fontWeight: 400 }}>
+          Couldn't reach Google just now — your events are unchanged. Try again in a moment.
+        </div>
+      )}
+      {!failed && sync.isSuccess && (
+        <div style={{ fontSize: 13, color: T.muted, marginTop: 2, fontWeight: 400 }}>
+          Up to date.
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
  * "Last synced 4 minutes ago" — when Google last actually answered for the
  * connection feeding this account.
  *
@@ -167,8 +216,8 @@ function GoogleCalendarCard() {
 function LastSynced({ at }: { at: string | null }) {
   if (!at) {
     return (
-      <div style={{ ...label({ letterSpacing: '0.06em', color: T.faint }), marginTop: 8 }}>
-        Not synced yet — open Today to pull your events
+      <div style={label({ letterSpacing: '0.06em', color: T.faint })}>
+        Not synced yet
       </div>
     )
   }
@@ -184,7 +233,7 @@ function LastSynced({ at }: { at: string | null }) {
   const stale = mins > 1440
   return (
     <div title={then.toLocaleString()}
-         style={{ ...label({ letterSpacing: '0.06em', color: stale ? T.warn : T.muted }), marginTop: 8 }}>
+         style={label({ letterSpacing: '0.06em', color: stale ? T.warn : T.muted })}>
       Last synced {ago}
     </div>
   )

@@ -16,6 +16,7 @@ import { reorgBetaNoticeEmail, reorgBetaNoticeText, REORG_BETA_NOTICE_SUBJECT } 
 import { weeklyEdgeEmail, weeklyEdgeText, WEEKLY_EDGE_SUBJECT } from "@/lib/emails/weekly-edge";
 import { subscriberPriceMatchEmail, subscriberPriceMatchText, SUBSCRIBER_PRICE_MATCH_SUBJECT } from "@/lib/emails/subscriber-price-match";
 import { edgeCatchAmdEmail, edgeCatchAmdText, EDGE_CATCH_AMD_SUBJECT } from "@/lib/emails/edge-catch-amd";
+import { noPantsPromoEmail, noPantsPromoText, NOPANTS_PROMO_SUBJECT } from "@/lib/emails/nopants-promo";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -139,6 +140,13 @@ function buildTemplates(): Template[] {
       subject: EDGE_CATCH_AMD_SUBJECT,
       html: edgeCatchAmdEmail(),
       text: edgeCatchAmdText(),
+    },
+    {
+      id: "nopants-promo",
+      label: "🎒 Kids-in-school promo — $300/yr, 2 spots (NOPANTS)",
+      subject: NOPANTS_PROMO_SUBJECT,
+      html: noPantsPromoEmail(),
+      text: noPantsPromoText(),
     },
   ];
 }

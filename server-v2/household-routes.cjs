@@ -746,6 +746,29 @@ function registerHouseholdRoutes({ register, send, readJson }) {
         send(res, 200, { date, ...(await gcal.eventsForDay(u.id, u.tz, date)) }, nostore);
       },
     });
+
+    // Sync on demand — the button in Settings. Same body as /events, but it
+    // skips the 60s cache and asks Google now.
+    //
+    // POST, not a `?refresh=1` on the GET above, deliberately: this is the one
+    // calendar read that must never be replayed by a browser prefetch, a
+    // back/forward restore or a retried GET. The lib rate-limits it per user,
+    // so a stuck finger costs nothing.
+    add('/api/hh/calendar/sync', {
+      auth: 'household', methods: ['POST'],
+      async handler(req, res, _ctx, access) {
+        const u = access.hhUser;
+        // Date from the query string, so this works with an empty body — which
+        // is what the client sends.
+        const qDate = new URL(req.url || '/', 'http://localhost').searchParams.get('date');
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(String(qDate || '')) ? qDate : todayIn(u.tz);
+        // Always 200 with a shaped body, same as /events — a Google hiccup is a
+        // line in the card, not a failed request the UI has to explain.
+        send(res, 200,
+             { date, ...(await gcal.eventsForDay(u.id, u.tz, date, { force: true })) },
+             nostore);
+      },
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
