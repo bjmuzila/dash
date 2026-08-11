@@ -59,6 +59,7 @@ import {
 import { EMA_COLORS } from "@/components/dashboard/es-candles/indicators";
 import { CHAIN_GREEKS, GREEK_LABEL, isChainGreek, type ChainGreek } from "@/components/dashboard/es-candles/ChainRail";
 import { DockButton, SegGroup } from "@/components/shared/DockToolbar";
+import { Card } from "@/components/shared/PageCard";
 import LayoutPresetButton from "@/components/dashboard/es-candles/LayoutPresetButton";
 import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 
@@ -244,6 +245,49 @@ function Toggle({
   );
 }
 
+/**
+ * One column of the chart row.
+ *
+ * At ONE chart the column is a bare flex box: the chart's own dissolve surface
+ * is the only edge on screen, and a frame around the whole viewport would just
+ * be a box drawn around a box.
+ *
+ * At two or three it becomes a Card - the same `variant="budget"` panel Multi
+ * Greek gives each ticker, at the same 16px radius, so the two multi-panel
+ * pages read as one product. Without it three charts share one unbroken dark
+ * field and the row reads as a single very wide chart with gaps in it; the
+ * card's hairline edge is what says where ES stops and SPY starts.
+ *
+ * padding={0} because the chart card brings its own gutter (and tightens it in
+ * this mode - see `asCardHeader` in EsChartCard); a second layer here would eat
+ * ~48px of chart width per column at exactly the sizes where width is
+ * scarcest.
+ */
+function CardSlot({ carded, children }: { carded: boolean; children: ReactNode }) {
+  if (!carded) {
+    return <div className="flex flex-1 flex-col" style={{ minWidth: 0, minHeight: 0 }}>{children}</div>;
+  }
+  return (
+    <Card
+      variant="budget"
+      padding={0}
+      style={{
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        minWidth: 0,
+        minHeight: 0,
+        // The chart surface has its own radius; without this its corners paint
+        // over the card's.
+        overflow: "hidden",
+        borderRadius: 16,
+      }}
+    >
+      {children}
+    </Card>
+  );
+}
+
 export default function EsCandlesPage({ leading, embedded = false }: { leading?: ReactNode; embedded?: boolean } = {}) {
   // Page-level choices. Read in an effect, never in a useState initializer:
   // this route is still server-rendered by Next before the Vite SPA takes over,
@@ -419,7 +463,8 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         {/* How many are ON, so a shut menu still answers "is anything drawing?" */}
         {(() => {
           const n = indicators.emas.filter((e) => e.on).length
-            + [indicators.bb, indicators.weeklyEm, indicators.volume, indicators.rsi, indicators.countdown].filter(Boolean).length;
+            + [indicators.bb, indicators.weeklyEm, indicators.volume, indicators.rsi, indicators.countdown,
+               indicators.singlePrint, indicators.excess].filter(Boolean).length;
           return n ? <span style={{ opacity: 0.5, fontSize: 10 }}>{n}</span> : null;
         })()}
       </DockButton>
@@ -441,9 +486,15 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       {/* One row. Equal columns, each free to shrink — minWidth:0 on the flex
           items, or a card's own dock would set a min-content floor and the row
           would overflow the viewport instead of the cards getting narrower. */}
-      <div className="es-candles-row flex flex-1 flex-row gap-2 px-2 pb-2" style={{ minHeight: 0 }}>
+      {/* `no-card-lift` because the dashboard-wide rule lifts any 16px-radius
+          panel 2px on hover, and a chart that jumps when the cursor enters it
+          drags the crosshair off the bar you were reading. */}
+      <div
+        className={`es-candles-row no-card-lift flex flex-1 flex-row px-2 pb-2 ${multi ? "gap-3" : "gap-2"}`}
+        style={{ minHeight: 0 }}
+      >
         {Array.from({ length: cards }, (_, i) => (
-          <div key={i} className="flex flex-1 flex-col" style={{ minWidth: 0, minHeight: 0 }}>
+          <CardSlot key={i} carded={multi}>
             <EsChartCard
               slot={i}
               // Multi-chart: everything but the ticker moves to one shared blob,
@@ -463,7 +514,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
               chainGreek={chainGreek}
               indicators={indicators}
             />
-          </div>
+          </CardSlot>
         ))}
       </div>
 
@@ -592,6 +643,26 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
                 <Toggle on={indicators.weeklyEm} onClick={() => patchIndicators({ weeklyEm: !indicators.weeklyEm })}
                         title="This week's published expected-move band">
                   Weekly EM
+                </Toggle>
+              </Group>
+
+              {/* Both read the TPO profile the Overlays > TPO box chart is built
+                  from, so they can never disagree with it - and neither needs
+                  that overlay switched on, because the useful part is the level,
+                  not the boxes. RTH because these are computed from the
+                  9:30-16:00 profile ONLY: overnight trades a handful of
+                  30-minute periods, so nearly every price is touched once and
+                  "everything is a single print" is not a level. Bands run from
+                  their session's open to the right edge, which is the only way a
+                  print made at 10:15 is any use at 14:40. */}
+              <Group label="TPO · RTH">
+                <Toggle on={indicators.singlePrint} onClick={() => patchIndicators({ singlePrint: !indicators.singlePrint })}
+                        title="Single prints - price bands the RTH profile touched in exactly one 30-minute period, away from the extremes. Price ran through, built no value, and tends to come back.">
+                  Single prints
+                </Toggle>
+                <Toggle on={indicators.excess} onClick={() => patchIndicators({ excess: !indicators.excess })}
+                        title="Excess - a tail of two or more single prints running off the RTH high (red: sellers rejected it) or the low (green: buyers did). A rejected extreme, as opposed to one that simply stopped.">
+                  Excess
                 </Toggle>
               </Group>
 

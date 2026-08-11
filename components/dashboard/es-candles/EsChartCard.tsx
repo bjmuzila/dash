@@ -59,8 +59,8 @@ import {
   toChartTime, etDayKey, fmtEtHM, isPlausibleBasis, etMinutesOfDay, BUBBLE_SCALE_CUTOFF_MIN,
   isCashOpen, etSessionStarted, isEtWeekend, etMinutes, RTH_OPEN_MIN, RTH_CLOSE_MIN, buildVolumeProfile, TPO_PERIOD_MS, buildTpoProfile, SLOT_MS, slotFloorMs,
   SPOT_LINE_GRAY, EM_VIOLET, parseLevelNum, DEFAULT_VIEW_BARS, DEFAULT_VIEW_RIGHT_PAD, applyDefaultView,
-  deriveColumnLevels, gexColor,
-  type GexCell, type GexColumn, type GexMetric, type VolumeProfile, type TpoProfile,
+  deriveColumnLevels, gexColor, tpoStructures,
+  type GexCell, type GexColumn, type GexMetric, type VolumeProfile, type TpoProfile, type TpoStructures,
 } from "./chartMath";
 import {
   CHART_INTERVALS, INTERVAL_LABEL, intervalMs, isChartInterval, nativeIntervalFor, rollupCandles,
@@ -1429,14 +1429,35 @@ export default function EsChartCard({
 
       const ethRows = rows.filter((r) => r.timestamp >= ethStart && r.timestamp < ethEnd);
       const ethProfile = ethRows.length ? buildTpoProfile(ethRows, 1, tpoPeriodMs) : null;
-      if (ethProfile) { ethProfile.startTs = ethStart; ethProfile.endTs = ethEnd; sessions.push(ethProfile); }
+      if (ethProfile) { ethProfile.startTs = ethStart; ethProfile.endTs = ethEnd; ethProfile.rth = false; sessions.push(ethProfile); }
 
       const rthRows = rows.filter((r) => r.timestamp >= rthStart && r.timestamp < rthEnd);
       const rthProfile = rthRows.length ? buildTpoProfile(rthRows, 1, tpoPeriodMs) : null;
-      if (rthProfile) { rthProfile.startTs = rthStart; rthProfile.endTs = rthEnd; sessions.push(rthProfile); }
+      // rth:true is what makes this profile eligible for single prints / excess
+      // — those two indicators ignore the ETH profiles entirely.
+      if (rthProfile) { rthProfile.startTs = rthStart; rthProfile.endTs = rthEnd; rthProfile.rth = true; sessions.push(rthProfile); }
     }
     return sessions;
   }, [rows, clockTick, candleMs]);
+
+  /**
+   * Single prints + excess, per RTH session.
+   *
+   * Derived from the SAME profiles the TPO overlay draws, so the two can never
+   * disagree about where a single print is — but gated on the indicator flags,
+   * not on showTpo: the whole point is to get the levels without the boxes.
+   *
+   * ETH profiles are dropped here rather than inside tpoStructures(): the
+   * function works on any profile, it is this page that knows overnight
+   * structure is noise (a handful of periods means nearly every row is touched
+   * once, and "everything is a single print" is not a level).
+   */
+  const tpoStructs = useMemo(() => {
+    if (!indicators.singlePrint && !indicators.excess) return [] as Array<TpoStructures & { startTs: number }>;
+    return tpoProfiles
+      .filter((tp) => tp.rth && tp.startTs != null)
+      .map((tp) => ({ ...tpoStructures(tp), startTs: tp.startTs as number }));
+  }, [tpoProfiles, indicators.singlePrint, indicators.excess]);
 
   // GEX levels from /ws/gex. callWall/putWall/gexFlip are SPX-point values; the
   // chart plots ES, so we offset by the live basis (esFut - spx) before drawing.
@@ -3655,6 +3676,60 @@ export default function EsChartCard({
         for (const tp of tpoProfiles) drawTpoProfile(tp);
       }
 
+      // ── 2c) TPO structures: single prints + excess (RTH sessions only) ─────
+      // Drawn as price BANDS that start at their session's open and run to the
+      // right edge of the chart, because that is how they are used: a single
+      // print left at 10:15 matters at 14:40, not while it is being made. They
+      // are deliberately independent of showTpo — the levels are the useful
+      // part and you should not have to accept a wall of gray boxes to see one.
+      if ((indicators.singlePrint || indicators.excess) && tpoStructs.length) {
+        // Bins are 1 ES point, so a run [lo..hi] covers lo → hi+1.
+        const band = (r: { lo: number; hi: number }, x0: number, fill: string, stroke: string, label: string) => {
+          const yTop = series.priceToCoordinate(r.hi + 1);
+          const yBot = series.priceToCoordinate(r.lo);
+          if (yTop == null || yBot == null) return;
+          const top = Math.min(yTop, yBot);
+          const bh = Math.max(1.5, Math.abs(yBot - yTop));
+          const left = Math.max(0, x0);
+          if (left >= w) return;
+          ctx.fillStyle = fill;
+          ctx.fillRect(left, top, w - left, bh);
+          ctx.strokeStyle = stroke;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([4, 3]);
+          ctx.beginPath();
+          ctx.moveTo(left, top + 0.5); ctx.lineTo(w, top + 0.5);
+          ctx.moveTo(left, top + bh - 0.5); ctx.lineTo(w, top + bh - 0.5);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = stroke;
+          ctx.font = "9px Inter, system-ui, sans-serif";
+          // Above the band when it is thin, inside it when there's room — a
+          // 2px band with the label inside is a label over a candle.
+          ctx.fillText(label, left + 4, bh >= 14 ? top + 11 : top - 2);
+        };
+
+        for (const s of tpoStructs) {
+          const xRaw = ts.timeToCoordinate((s.startTs / 1000) as UTCTimestamp);
+          // Session start scrolled off the left edge: clamp to 0 rather than
+          // dropping the band. Yesterday's single prints are the ones you most
+          // want carried forward, and they are exactly the ones off-screen.
+          const x0 = xRaw == null ? 0 : xRaw;
+          if (indicators.singlePrint) {
+            for (const r of s.singlePrints) {
+              band(r, x0, "rgba(226,232,240,0.10)", "rgba(226,232,240,0.55)", "SP");
+            }
+          }
+          if (indicators.excess) {
+            // High = selling excess (buyers rejected up there), low = buying
+            // excess. Same colours the candles use for up/down, so the band
+            // reads without a legend.
+            if (s.excessHigh) band(s.excessHigh, x0, "rgba(244,148,142,0.14)", SOFT_RED, "EXCESS");
+            if (s.excessLow) band(s.excessLow, x0, "rgba(48,209,88,0.14)", ES_CANDLE_UP, "EXCESS");
+          }
+        }
+      }
+
       // ── 3) MVC history as horizontal step segments (no vertical connectors) ──
       // Each constant-value run draws as one flat line from its first timestamp
       // to the change point; when MVC jumps we lift the pen (small gap), then
@@ -3884,7 +3959,7 @@ export default function EsChartCard({
     // bb / weeklyEm are here because the Bollinger cloud and the EM boundaries
     // are painted on THIS canvas, so toggling either has to re-run the draw —
     // there is no series for React to update on their behalf.
-  }, [showHeatmap, showGexBubbles, bubbleCfg, bubbleMins, intensity, gexMetric, rows, interval, showProfile, profile, showTpo, tpoProfiles, showLevels, showFlipCross, mvcHistory, showCb, bb, weeklyEm]);
+  }, [showHeatmap, showGexBubbles, bubbleCfg, bubbleMins, intensity, gexMetric, rows, interval, showProfile, profile, showTpo, tpoProfiles, tpoStructs, indicators.singlePrint, indicators.excess, showLevels, showFlipCross, mvcHistory, showCb, bb, weeklyEm]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -4429,8 +4504,22 @@ export default function EsChartCard({
     );
   })();
 
+  // The ticker row doubles as the CARD HEADER on a multi-chart row (the page
+  // wraps each column in a Card there). Tinted fill + a hairline under it, the
+  // same header Multi Greek gives each ticker panel — without it the card is an
+  // outline with a chart loose inside it, and the ticker reads as floating over
+  // the candles rather than titling them. At one chart there is no card, so
+  // there is nothing to be the header OF and it stays plain.
+  const asCardHeader = dockMode !== "full" && !embedded;
   const tickerBar = (
-    <div className="flex items-center gap-3 px-4 pt-1 pb-1" style={{ position: "relative", zIndex: 30, minWidth: 0 }}>
+    <div className="flex items-center gap-3 px-4 pt-1 pb-1" style={{
+      position: "relative", zIndex: 30, minWidth: 0,
+      ...(asCardHeader ? {
+        background: "rgba(33,158,188,0.04)",
+        borderBottom: `1px solid ${HOME_THEME.border}`,
+        paddingTop: 5, paddingBottom: 5,
+      } : null),
+    }}>
       {leading}
       <SymbolListDropdown active={symbol} onSelect={setSymbol} />
       {statsLine}
@@ -4476,7 +4565,11 @@ export default function EsChartCard({
           here — same four numbers, a fraction of the vertical cost. */}
       {dockMode === "full" && <div className="px-4 pb-1 pt-0">{statsLine}</div>}
 
-      <div className="es-candles-main flex flex-1 flex-row px-4 pb-4" style={{ minHeight: 0 }}>
+      {/* Tight padding inside a card, generous without one. The page's Card
+          already draws the edge and the inset; repeating a 16px gutter inside
+          it is a frame around a frame, and at three columns it is ~96px of
+          chart width spent on nothing. */}
+      <div className={`es-candles-main flex flex-1 flex-row ${asCardHeader ? "px-2 pb-2 pt-2" : "px-4 pb-4"}`} style={{ minHeight: 0 }}>
        {/* ONE surface for the candles AND the panel beside them.
            They used to be two boxes with a gap between them: the chart carried
            the dissolve card, the rail sat outside it on the page background.
@@ -4484,8 +4577,14 @@ export default function EsChartCard({
            at the chart's own y for that price, so it is the chart's right
            margin, and a seam down the middle of one instrument reads as two
            panels that happen to line up. The surface moved out here and the gap
-           went with it; the chart is now a transparent pane inside it. */}
-       <div className="es-candles-surface flex flex-1 flex-row overflow-hidden" style={{ ...dissolveCard, minWidth: 0, minHeight: 0 }}>
+           went with it; the chart is now a transparent pane inside it.
+
+           Inside a card the surface goes FLAT: the card is already the panel,
+           and a feathered 28px-radius glass pane floating inside a 16px
+           hairline box is two panels again, one of them fading out just short
+           of the other's edge. */}
+       <div className="es-candles-surface flex flex-1 flex-row overflow-hidden"
+            style={asCardHeader ? { minWidth: 0, minHeight: 0 } : { ...dissolveCard, minWidth: 0, minHeight: 0 }}>
        <div className="es-candles-chartcol flex flex-1 flex-col" style={{ minWidth: 0 }}>
         {/* Price chart + price-aligned overlay (heatmap, volume profile, VA lines) */}
         <div className="es-candles-chart relative flex-1 overflow-hidden" style={{ minHeight: 320 }}>

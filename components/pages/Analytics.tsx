@@ -1576,14 +1576,22 @@ function TickerLevelsCard() {
 //          /api/chains + accumulateChainGreeks() — the exact same OI+Vol
 //          function the Multi Greek card at the top of this page uses, so the
 //          per-strike numbers here and up there can never drift apart.
-//   RIGHT  THE WHOLE BOARD. Every listed expiration, not the front three, off
-//          /proxy/gex-by-strike-multi — the server's full-board sweep
-//          (eod-gex-recorder.computeLiveGexRowsMulti). It returns slim rows of
+//   RIGHT  THE WHOLE BOARD, MINUS 0DTE. Every listed expiration EXCEPT today's,
+//          off /proxy/gex-by-strike-multi — the server's full-board sweep
+//          (eod-gex-recorder.computeLiveGexRowsMulti). That sweep already
+//          returns the ladder twice, `all` and `ex0dte` (split on
+//          expiration !== sessionDate), so this pane just reads the `ex0dte`
+//          half — no server/proxy change is involved. Slim rows of
 //          { strike, netGEX, netVolGEX }; netGEX + netVolGEX is the same OI+Vol
 //          basis, summed per strike ACROSS expirations rather than
 //          last-expiry-wins. One request, cached 60s per (symbol, session) on
 //          the server, so a 40-expiry chain is one sweep a minute, not forty
 //          browser fetches.
+//
+//          WHY EX-0DTE, ALWAYS: same-day gamma dwarfs the rest of the board and
+//          decays to nothing by the close, so a board that included it printed
+//          walls that were really just today's pin. This pane is the STRUCTURAL
+//          board; the 0DTE view is one click away on the left pane's pills.
 //
 // The sweep needs a spot to scale gamma by, and it is not the SPX feed's spot
 // for anything but SPX — the underlying price from the /api/chains payload is
@@ -1592,21 +1600,27 @@ function TickerLevelsCard() {
 //
 // FALLBACK. If the full-board sweep errors or comes back thin (no Theta cover
 // for the name, a cold cache mid-sweep), the right pane falls back to the front
-// expirations /api/chains already returned and SAYS SO in its header. It never
-// silently prints three expiries under an "all expirations" label.
+// expirations /api/chains already returned — MINUS today's, so the fallback
+// honours the same ex-0DTE rule — and SAYS SO in its header. It never silently
+// prints three expiries under an "all expirations" label.
 interface TlChainLeg { [k: string]: unknown }
 interface TlChainStrike { "strike-price"?: unknown; call?: TlChainLeg; put?: TlChainLeg }
 interface TlChainGroup { "expiration-date"?: unknown; strikes?: TlChainStrike[] }
 interface TlChainResp { data?: { items?: TlChainGroup[]; underlyingPrice?: unknown }; error?: string }
 
-// /proxy/gex-by-strike-multi — the whole-board ladder.
+// /proxy/gex-by-strike-multi — the whole-board ladder, returned twice.
+// `all` = every listed expiration. `ex0dte` = the same board with today's
+// expiration dropped. The right pane reads `ex0dte`; `all` is kept in the type
+// only so the shape of the payload stays documented here.
 interface TlMultiRow { strike?: unknown; netGEX?: unknown; netVolGEX?: unknown }
+interface TlMultiLadder { rows?: TlMultiRow[]; totalNetGex?: unknown; gexFlip?: unknown }
 interface TlMultiResp {
   ok?: boolean;
   error?: string;
   expirations?: string[];
   expiryCount?: number;
-  all?: { rows?: TlMultiRow[]; totalNetGex?: unknown; gexFlip?: unknown };
+  all?: TlMultiLadder;
+  ex0dte?: TlMultiLadder;
 }
 
 const TL_LOOKUP_KEY = "analytics.tickerLookup.recent";
@@ -1875,7 +1889,7 @@ function TickerLookupCard() {
     .filter((r) => isFinite(r.gex) && r.gex !== 0)
     .sort((a, b) => a.strike - b.strike);
 
-  // ── right pane feed: the WHOLE board ──────────────────────────────────────
+  // ── right pane feed: the WHOLE board, ex-0DTE ─────────────────────────────
   // Held until spot exists — the sweep scales gamma by spot², and the endpoint's
   // own default is the SPX feed's price, which is wrong for every other name.
   const { data: multi, loading: mLoading, error: mError } = useLiveData<TlMultiResp>(
@@ -1885,16 +1899,28 @@ function TickerLookupCard() {
     TL_MULTI_REFRESH_MS
   );
 
-  const boardRows: TlRow[] = (multi?.all?.rows ?? [])
+  // ALWAYS the ex-0DTE half of the sweep. The server splits on
+  // `expiration !== sessionDate`, and `date=` above is today ET, so this is the
+  // whole board with today's expiration dropped — no 0DTE, at any hour.
+  const boardRows: TlRow[] = (multi?.ex0dte?.rows ?? [])
     .map((r) => ({ strike: Number(r.strike), gex: Number(r.netGEX ?? 0) + Number(r.netVolGEX ?? 0) }))
     .filter((r) => isFinite(r.strike) && r.strike > 0 && isFinite(r.gex) && r.gex !== 0)
     .sort((a, b) => a.strike - b.strike);
 
-  // Fallback: the front expirations /api/chains already gave us. Labelled as
-  // such — this pane never prints three expiries under an "all" header.
+  // Fallback: the front expirations /api/chains already gave us, today's
+  // dropped so the fallback obeys the same ex-0DTE rule as the sweep. Summed
+  // per strike ACROSS those expiries — accumulateChainGreeks takes one expiry at
+  // a time, so the maps are merged here rather than growing a second formula.
   const boardIsFull = boardRows.length > 0;
-  const frontRows: TlRow[] = [...accumulateChainGreeks(data, null).entries()]
-    .map(([strike, g]) => ({ strike, gex: g.gex }))
+  const frontExpiries = expiries.filter((e) => e !== today);
+  const frontAcc = new Map<number, number>();
+  for (const e of frontExpiries) {
+    for (const [strike, g] of accumulateChainGreeks(data, e).entries()) {
+      frontAcc.set(strike, (frontAcc.get(strike) ?? 0) + g.gex);
+    }
+  }
+  const frontRows: TlRow[] = [...frontAcc.entries()]
+    .map(([strike, gex]) => ({ strike, gex }))
     .filter((r) => isFinite(r.gex) && r.gex !== 0)
     .sort((a, b) => a.strike - b.strike);
   const rightRows = boardIsFull ? boardRows : frontRows;
@@ -1902,7 +1928,7 @@ function TickerLookupCard() {
   const leftLevels = tlLevelsFrom(leftRows, spot);
   // The full-board sweep already ran findGexFlip() server-side on the same rows
   // — take its answer when it has one rather than recomputing a second opinion.
-  const serverFlip = numOr(multi?.all?.gexFlip);
+  const serverFlip = numOr(multi?.ex0dte?.gexFlip);
   const rightBase = tlLevelsFrom(rightRows, spot);
   const rightLevels: TlLevels = boardIsFull && serverFlip != null
     ? { ...rightBase, flip: serverFlip }
@@ -1914,13 +1940,16 @@ function TickerLookupCard() {
   const rightLadder = tlWindow(rightRows, spot);
   const hasAny = leftLadder.length > 0 || rightLadder.length > 0;
 
-  // How many expirations the right pane actually covers. The sweep reports its
-  // own count; fall back to the length of the expirations list it echoed back.
-  const boardExpiryCount = Number(multi?.expiryCount ?? multi?.expirations?.length ?? 0);
+  // How many expirations the right pane actually covers. The sweep echoes back
+  // the FULL expiration list (its `expiryCount` counts 0DTE), so today's is
+  // subtracted here — the header must not claim an expiry this ladder excludes.
+  const sweptExpiries = (multi?.expirations ?? []).filter((e) => e !== today);
+  const boardExpiryCount = sweptExpiries.length ||
+    Math.max(0, Number(multi?.expiryCount ?? 0) - (multi?.expirations?.includes(today) ? 1 : 0));
   const boardLabel = boardIsFull
-    ? (boardExpiryCount > 0 ? `${boardExpiryCount} expirations · whole board` : "whole board")
+    ? (boardExpiryCount > 0 ? `${boardExpiryCount} expirations · whole board, excl. 0DTE` : "whole board · excl. 0DTE")
     : mLoading ? "sweeping the whole board…"
-    : `${expiries.length} front expirations · full board unavailable`;
+    : `${frontExpiries.length} front expirations · excl. 0DTE · full board unavailable`;
 
   return (
     <Card variant="budget" padding={16} style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
@@ -2013,11 +2042,11 @@ function TickerLookupCard() {
               </div>
             </div>
 
-            {/* RIGHT — every listed expiration */}
+            {/* RIGHT — every listed expiration except today's (never 0DTE) */}
             <div style={{ border: `1px solid ${T.border}`, borderRadius: 14, padding: 12, display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
               <Row style={{ flexWrap: "wrap" }}>
                 <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: T.cyan }}>
-                  All expirations
+                  All expirations · ex-0DTE
                 </span>
                 <Stat label="Net GEX" value={fmtBig(rightLevels.net)} color={rightLevels.net >= 0 ? POS_GREEN : T.red} size={16} />
               </Row>
@@ -2025,7 +2054,7 @@ function TickerLookupCard() {
                 {boardLabel}
               </span>
               {rightLadder.length === 0 ? (
-                <CardState loading={mLoading} error={mError ?? multi?.error ?? null} empty="No board-wide ladder yet." />
+                <CardState loading={mLoading} error={mError ?? multi?.error ?? null} empty="No board-wide ladder yet (nothing listed past 0DTE)." />
               ) : (
                 <TlLadder rows={rightLadder} spot={spot} levels={rightLevels} />
               )}

@@ -246,7 +246,87 @@ export type TpoProfile = {
   mid: number | null;   // session range midpoint
   startTs: number | null; // chart x-anchor: first candle of this session
   endTs: number | null;   // chart x-anchor: where the profile's box-width ends
+  /**
+   * Is this the 9:30–16:00 RTH profile (vs the overnight ETH one)?
+   *
+   * Set by the caller, because only the caller knows which window it sliced.
+   * Single prints and excess are RTH-ONLY structures: overnight trades a
+   * fraction of the volume on a handful of periods, so almost every ETH row is
+   * a single print and the concept stops meaning anything.
+   */
+  rth?: boolean;
 };
+
+// ── TPO structures: single prints and excess ────────────────────────────────
+// Both fall out of the same fact — a price bin touched by exactly ONE period.
+//
+//   excess       — a tail of consecutive single prints running off the TOP or
+//                  BOTTOM of the profile. Price went there, found nothing, and
+//                  left in one period: a rejected extreme. Needs a minimum
+//                  length, because one lone single print at the high is just
+//                  the last period poking out, not a rejection.
+//   single print — the same run of ones anywhere ELSE in the profile: a gap the
+//                  market ran through without building value. They tend to get
+//                  revisited, which is why they are worth drawing forward.
+//
+// The distinction is only WHERE the run sits, so one pass finds both.
+
+/** A contiguous price band of single prints. `hi` is the top bin's price. */
+export type TpoRun = { lo: number; hi: number; rows: number };
+export type TpoStructures = {
+  singlePrints: TpoRun[];
+  /** Tail off the high (selling excess) / off the low (buying excess). */
+  excessHigh: TpoRun | null;
+  excessLow: TpoRun | null;
+};
+
+/** How many consecutive single-print rows an extreme needs before it's excess. */
+export const EXCESS_MIN_ROWS = 2;
+
+export function tpoStructures(
+  tp: TpoProfile | null,
+  minExcessRows: number = EXCESS_MIN_ROWS
+): TpoStructures {
+  const out: TpoStructures = { singlePrints: [], excessHigh: null, excessLow: null };
+  const bins = tp?.bins;
+  if (!bins || bins.length < 2) return out;
+
+  // Runs of count === 1, in ascending price order.
+  const runs: Array<{ i0: number; i1: number }> = [];
+  let i = 0;
+  while (i < bins.length) {
+    if (bins[i].count !== 1) { i++; continue; }
+    let j = i;
+    while (j + 1 < bins.length && bins[j + 1].count === 1) j++;
+    runs.push({ i0: i, i1: j });
+    i = j + 1;
+  }
+  if (!runs.length) return out;
+
+  const asRun = (r: { i0: number; i1: number }): TpoRun => ({
+    lo: bins[r.i0].price,
+    hi: bins[r.i1].price,
+    rows: r.i1 - r.i0 + 1,
+  });
+
+  for (const r of runs) {
+    const atLow = r.i0 === 0;
+    const atHigh = r.i1 === bins.length - 1;
+    // A run that spans the ENTIRE profile means every bin was touched once —
+    // a profile with no structure at all (one period of data). Nothing to say.
+    if (atLow && atHigh) return out;
+    if (atLow) {
+      if (r.i1 - r.i0 + 1 >= minExcessRows) out.excessLow = asRun(r);
+      continue;
+    }
+    if (atHigh) {
+      if (r.i1 - r.i0 + 1 >= minExcessRows) out.excessHigh = asRun(r);
+      continue;
+    }
+    out.singlePrints.push(asRun(r));
+  }
+  return out;
+}
 
 export function buildTpoProfile(
   candles: Array<{ high: number; low: number; timestamp: number }>,

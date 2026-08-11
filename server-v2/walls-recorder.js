@@ -425,21 +425,65 @@ function pastBy(levelType, spot, strike, cbDir) {
 }
 
 /**
+ * Which side price was on when it came to the level. +1 = approached from
+ * BELOW (a break goes up), -1 = approached from ABOVE (a break goes down).
+ *
+ * This is the fix for the "7775 was never broken" case: CORE has no natural
+ * side, and the old code took the direction of the LARGEST excursion anywhere
+ * in the watch window. Price that tagged 7775 from underneath at 7772.97 and
+ * then fell 18.77 got scored as "broke by 18.77" — but falling away from a
+ * level you approached from below is a retreat, not a break. Direction has to
+ * come from where price CAME FROM, never from where it ended up.
+ *
+ * `prior` is the last spot strictly before the hit (best signal — the touch
+ * band is only 0.05% wide, so spot AT the hit is nearly on the level).
+ * `atHit` is the fallback.
+ */
+function approachDir(strike, prior, atHit) {
+  const k = Number(strike);
+  for (const s of [prior, atHit]) {
+    const v = Number(s);
+    if (Number.isFinite(v) && v !== k) return v < k ? 1 : -1;
+  }
+  return 0; // unknown — caller falls back to the excursion heuristic
+}
+
+/** Word for the direction a break through this level would travel. */
+function breakWord(levelType, cbDir) {
+  if (levelType === 'call_wall') return 'above';
+  if (levelType === 'put_wall') return 'below';
+  return cbDir >= 0 ? 'above' : 'below';
+}
+/** Word for the side price approached the level from. */
+function sideWord(levelType, cbDir) {
+  return breakWord(levelType, cbDir) === 'above' ? 'below' : 'above';
+}
+
+/**
  * Classify one open event from the spot path recorded after the hit.
  * `path` = ascending-by-ts [{ts, spot}] from scanner_snapshots.
  * `rolled` = did walls_log show this level_type move in the break direction?
+ * `dirHint` = +1 price approached from below / -1 from above / 0 unknown.
+ *             Only CB uses it; the walls have a fixed side.
  */
-function classify(levelType, strike, path, rolled) {
+function classify(levelType, strike, path, rolled, dirHint = 0) {
   if (!path.length) return null;
   const thresh = breakThreshold(strike);
   const band = strike * TOUCH_PCT;
 
-  // CB has no natural side — take the direction of its largest excursion.
+  // CB has no natural side. Take it from the side price APPROACHED on — a
+  // break is price continuing THROUGH the level, so it must be measured away
+  // from where price came from. Only when the approach side is unknown do we
+  // fall back to the old "largest excursion wins" guess.
   let cbDir = 1;
   if (levelType === 'cb') {
-    let up = 0, dn = 0;
-    for (const s of path) { up = Math.max(up, s.spot - strike); dn = Math.max(dn, strike - s.spot); }
-    cbDir = up >= dn ? 1 : -1;
+    if (dirHint === 1 || dirHint === -1) {
+      cbDir = dirHint;
+    } else {
+      let up = 0, dn = 0;
+      for (const s of path) { up = Math.max(up, s.spot - strike); dn = Math.max(dn, strike - s.spot); }
+      cbDir = up >= dn ? 1 : -1;
+    }
   }
 
   const past = path.map((s) => pastBy(levelType, s.spot, strike, cbDir));
@@ -476,33 +520,38 @@ function classify(levelType, strike, path, rolled) {
   // "broke by 8 then failed" doesn't get filed as a clean reject.
   const reclaim = mkReclaim();
   const back = reclaim != null ? `, reclaimed after ${reclaim}m` : ', never reclaimed';
+  // Every note says which way price was travelling — a bare "broke by 18.77"
+  // reads the same whether it went through the level or fell away from it.
+  const thru = breakWord(levelType, cbDir);   // where a break goes
+  const from = sideWord(levelType, cbDir);    // where price came from
 
   if (maxPast >= thresh && rolled) {
     return { reaction: 'new_wall', excursion, reclaim_min: reclaim,
-      note: `broke by ${excursion.toFixed(2)} and the ${levelType.replace('_', ' ')} rolled with it` };
+      note: `broke ${thru} by ${excursion.toFixed(2)} and the ${levelType.replace('_', ' ')} rolled with it` };
   }
   if (maxPast >= thresh && tailOutside && tailRange <= strike * CONSOLIDATION_RANGE_PCT) {
     return { reaction: 'consolidated', excursion, reclaim_min: reclaim,
-      note: `broke by ${excursion.toFixed(2)}, then held a ${tailRange.toFixed(2)} range outside for ${tail.length} samples` };
+      note: `broke ${thru} by ${excursion.toFixed(2)}, then held a ${tailRange.toFixed(2)} range outside for ${tail.length} samples` };
   }
   if (maxPast >= thresh) {
     return { reaction: 'break_5', excursion, reclaim_min: reclaim,
-      note: `max excursion ${excursion.toFixed(2)}${back}` };
+      note: `pushed ${excursion.toFixed(2)} ${thru} the level${back}` };
   }
   if (maxPast > band) {
     return { reaction: 'break_lt5', excursion, reclaim_min: reclaim,
-      note: `pierced by ${excursion.toFixed(2)}${back}` };
+      note: `pierced ${excursion.toFixed(2)} ${thru} the level${back}` };
   }
   if (reversal >= strike * REJECT_REVERSE_PCT && lastPast <= 0) {
     return { reaction: 'reject', excursion, reclaim_min: reclaim,
-      note: `tagged and faded ${reversal.toFixed(2)} back inside` };
+      note: `tagged from ${from} and faded ${reversal.toFixed(2)} back` };
   }
   if (bestInBand >= HOLD_SAMPLES) {
     return { reaction: 'pin', excursion, reclaim_min: null,
       note: `sat inside the band for ${bestInBand} samples` };
   }
   // Touched, went nowhere either way — call it a reject rather than leaving it open.
-  return { reaction: 'reject', excursion, reclaim_min: reclaim, note: 'tagged, no follow-through' };
+  return { reaction: 'reject', excursion, reclaim_min: reclaim,
+    note: `tagged from ${from}, never got ${thru} it` };
 }
 
 /**
@@ -515,11 +564,17 @@ function classify(levelType, strike, path, rolled) {
  *                 WITHOUT ever being tagged leaves no touch event at all.
  *   stalled     — drifted near and neither tagged nor left. No information.
  */
-function classifyApproach(levelType, strike, path) {
+function classifyApproach(levelType, strike, path, dirHint = 0) {
   if (!path.length) return null;
   const band = strike * TOUCH_PCT;
   const closest = Math.min(...path.map((s) => Math.abs(s.spot - strike)));
   const closestPct = closest / strike;
+  // Which side price was working the level from. Walls are fixed; CB takes the
+  // approach side, falling back to where the path actually sits.
+  const cbDir = (dirHint === 1 || dirHint === -1)
+    ? dirHint
+    : (path[0].spot < strike ? 1 : -1);
+  const from = sideWord(levelType, cbDir);
 
   // Distance from the level at the end vs. at the closest point. Reversing a
   // full approach band's width away is a roll-over, not drift.
@@ -529,14 +584,14 @@ function classifyApproach(levelType, strike, path) {
 
   if (closest <= band) {
     return { reaction: 'reached', excursion: Number(closestPct.toFixed(6)), reclaim_min: null,
-      note: `approached and eventually tagged ${strike}` };
+      note: `approached from ${from} and eventually tagged ${strike}` };
   }
   if (backedOff >= strike * APPROACH_PCT * 0.6) {
     return { reaction: 'rolled_over', excursion: Number((closest).toFixed(4)), reclaim_min: null,
-      note: `came within ${closest.toFixed(2)} without tagging, then rolled ${backedOff.toFixed(2)} away` };
+      note: `came within ${closest.toFixed(2)} from ${from} without tagging, then rolled ${backedOff.toFixed(2)} away` };
   }
   return { reaction: 'stalled', excursion: Number((closest).toFixed(4)), reclaim_min: null,
-    note: `hovered near ${strike}, closest ${closest.toFixed(2)}, no resolution` };
+    note: `hovered ${from} ${strike}, closest ${closest.toFixed(2)}, no resolution` };
 }
 
 /**
@@ -546,7 +601,7 @@ function classifyApproach(levelType, strike, path) {
 async function resolveOpenEvents(p, date, currentSlot) {
   const cutoff = currentSlot >= SLOT_COUNT - 1 ? SLOT_COUNT : currentSlot - RESOLVE_SLOTS;
   const { rows: open } = await p.query(
-    `SELECT id, symbol, level_type, strike, hit_ts, hit_slot, kind, gex_at_hit
+    `SELECT id, symbol, level_type, strike, hit_ts, hit_slot, kind, gex_at_hit, spot_at_hit
        FROM wall_events
       WHERE date = $1 AND reaction IS NULL AND hit_slot <= $2`,
     [date, cutoff],
@@ -574,10 +629,21 @@ async function resolveOpenEvents(p, date, currentSlot) {
         ? (ev.level_type === 'put_wall' ? Number(moved[0].strike) < strike : Number(moved[0].strike) > strike)
         : false;
 
+      // Where price came FROM. The last sample strictly before the hit is the
+      // honest read; spot_at_hit is only the fallback because the touch band is
+      // 0.05% wide, so at the tag price is basically sitting on the level.
+      const { rows: before } = await p.query( // eslint-disable-line no-await-in-loop
+        `SELECT spot FROM scanner_snapshots
+          WHERE date = $1 AND symbol = $2 AND ts < $3 AND spot > 0
+          ORDER BY ts DESC LIMIT 1`,
+        [date, ev.symbol, ev.hit_ts],
+      );
+      const dirHint = approachDir(strike, before[0]?.spot, ev.spot_at_hit);
+
       const pts = path.map((r) => ({ ts: new Date(r.ts).getTime(), spot: Number(r.spot) }));
       const verdict = ev.kind === 'approach'
-        ? classifyApproach(ev.level_type, strike, pts)
-        : classify(ev.level_type, strike, pts, rolled);
+        ? classifyApproach(ev.level_type, strike, pts, dirHint)
+        : classify(ev.level_type, strike, pts, rolled, dirHint);
       if (!verdict) continue;
 
       // Was this strike still the CORE when the window closed, and what is the
@@ -607,6 +673,31 @@ async function resolveOpenEvents(p, date, currentSlot) {
     }
   }
   return n;
+}
+
+/**
+ * Re-score a day that was already classified. Only needed after a change to
+ * classify() — days recorded before the approach-direction fix carry verdicts
+ * built from "largest excursion wins", which mislabelled a fall AWAY from a
+ * level as a break THROUGH it.
+ *
+ * Clears the verdict columns for the date and lets the normal resolver run
+ * again over the same stored spot path, so nothing is invented — the events,
+ * hit times and GEX snapshots are untouched.
+ */
+async function reclassifyDay(date, symbol = null) {
+  const p = await getPool();
+  const args = symbol ? [date, symbol] : [date];
+  const { rowCount } = await p.query(
+    `UPDATE wall_events
+        SET reaction = NULL, excursion_pts = NULL, reclaim_min = NULL,
+            note = NULL, resolved_ts = NULL
+      WHERE date = $1 ${symbol ? 'AND symbol = $2' : ''}`,
+    args,
+  );
+  const n = await resolveOpenEvents(p, date, SLOT_COUNT - 1);
+  console.log(`[walls] reclassify ${date}${symbol ? `/${symbol}` : ''} — ${rowCount} cleared, ${n} re-scored`);
+  return { ok: true, date, symbol, cleared: rowCount, resolved: n };
 }
 
 // ── Read API ─────────────────────────────────────────────────────────────────
@@ -769,8 +860,8 @@ function startWallsRecorder() {
 }
 
 module.exports = {
-  startWallsRecorder, runSlot, getWalls, ensureSchema, getPool,
+  startWallsRecorder, runSlot, getWalls, ensureSchema, getPool, reclassifyDay,
   // exported for tests / manual poking
-  classify, classifyApproach, isTouched, isApproaching, dueSlot, slotLabel,
+  classify, classifyApproach, approachDir, isTouched, isApproaching, dueSlot, slotLabel,
   breakThreshold, SLOT_COUNT, LEVEL_TYPES, TOUCH_PCT, APPROACH_PCT,
 };

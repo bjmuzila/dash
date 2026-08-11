@@ -119,6 +119,18 @@ const WALL_SLOTS = 27;
 const LEVEL_LOG_H = 620;
 const TICKER_COL_H = 620;
 
+/**
+ * One type scale for the whole log card. Before this there were several sizes
+ * and three letter-spacings fighting each other inside a single row, which is
+ * what made the card read as ragged. Everything in the card uses these three.
+ */
+const FS_LABEL = 12;   // uppercase chips + eyebrow labels
+const FS_BODY = 13;    // the sentence in each row
+const FS_META = 12;    // mono: time, GEX line, counters
+const LS_LABEL = "0.12em";
+/** Height of a row's first line — the badge box. The timeline dot centers on it. */
+const ROW_LEAD_H = 20;
+
 const LEVEL_LABEL: Record<WallLevel, string> = { call_wall: "Call Wall", put_wall: "Put Wall", cb: "CORE" };
 const LEVEL_COLOR: Record<WallLevel, string> = { call_wall: AMBER, put_wall: GREEN, cb: LIGHT_BLUE };
 
@@ -135,10 +147,10 @@ const REACTION_COLOR: Record<WallReaction, string> = {
 /** How each reaction is decided — mirrors classify() in walls-recorder.js. */
 const REACTION_RULE: Record<WallReaction, string> = {
   reject: "Tagged, never got past the touch band, faded ≥ 0.15% back inside",
-  break_lt5: "Traded past the level but by less than the break threshold",
-  break_5: "Max excursion ≥ 5 pts (0.15% for sub-$1000 names) past the level",
-  consolidated: "Broke, then the last 3 samples all held outside inside a 0.10% range",
-  new_wall: "Broke, and the level itself then rolled in the break direction",
+  break_lt5: "Pushed through to the far side of the level, but by less than the break threshold",
+  break_5: "Pushed ≥ 5 pts (0.15% for sub-$1000 names) through to the far side of the level — measured away from the side price approached on, so falling back the way it came never counts",
+  consolidated: "Broke through, then the last 3 samples all held on the far side inside a 0.10% range",
+  new_wall: "Broke through, and the level itself then rolled in the break direction",
   pin: "Sat inside the touch band for 3+ samples without resolving either way",
   rolled_over: "Came inside 0.30% without ever tagging, then reversed away — the level held at distance",
   reached: "Approached, then tagged the level after all",
@@ -155,10 +167,22 @@ function isBreakThenReject(ev?: { reaction: WallReaction | null; reclaim_min: nu
   return !!ev && (ev.reaction === "break_5" || ev.reaction === "break_lt5") && ev.reclaim_min != null;
 }
 
+/**
+ * Badge geometry, deliberately explicit:
+ *  - fixed `height` + matching `lineHeight` + border-box → the label sits on the
+ *    optical centre instead of riding high off `padding: 2px` and the font's
+ *    own leading.
+ *  - `textIndent` equal to `letterSpacing` cancels the trailing letter-space
+ *    that uppercase tracking adds after the last glyph. Without it every pill
+ *    reads shifted left inside its own box.
+ */
 function wallBadgeStyle(color: string): CSSProperties {
   return {
-    display: "inline-block", padding: "2px 8px", borderRadius: 6, fontSize: 13, fontWeight: 800,
-    letterSpacing: "0.07em", textTransform: "uppercase", whiteSpace: "nowrap",
+    display: "inline-block", boxSizing: "border-box",
+    height: ROW_LEAD_H, lineHeight: `${ROW_LEAD_H - 2}px`, padding: "0 9px",
+    borderRadius: 6, fontSize: FS_LABEL, fontWeight: 800,
+    letterSpacing: LS_LABEL, textIndent: LS_LABEL,
+    textTransform: "uppercase", whiteSpace: "nowrap", textAlign: "center",
     color, background: rgba(color, 0.13), border: `1px solid ${rgba(color, 0.3)}`,
   };
 }
@@ -240,9 +264,10 @@ function buildLogText(
     const verdict = e.reaction == null ? "WATCHING"
       : isBreakThenReject(e) ? `BREAK & REJECT (${e.reclaim_min}m)`
       : REACTION_LABEL[e.reaction].toUpperCase();
+    const side = approachSide(e);
     const body = approach
-      ? `near ${wallStrike(e.strike)} from ${wallNum(e.spot_at_hit)}, no tag`
-      : `tagged ${wallStrike(e.strike)} at ${wallNum(e.spot_at_hit)}`;
+      ? `near ${wallStrike(e.strike)} from ${side} at ${wallNum(e.spot_at_hit)}, no tag`
+      : `tagged ${wallStrike(e.strike)} from ${side} at ${wallNum(e.spot_at_hit)}`;
     const t = [`${e.at}  ${L(e.level_type).padEnd(10)} ${verdict.padEnd(22)} ${body}`];
 
     const build = gexBuildPct(e.gex_at_hit, e.gex_at_resolve);
@@ -573,10 +598,10 @@ export default function LevelLog() {
         {/* The level log itself — this whole card is what the PNG captures. */}
         <div ref={logCardRef} style={{ ...CARD, overflow: "hidden" }}>
           <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.75 }}>
+            <span style={{ fontSize: FS_LABEL, fontWeight: 800, letterSpacing: LS_LABEL, textTransform: "uppercase", opacity: 0.75 }}>
               {sel ?? "—"} — {view === "core" ? "core log" : "wall log"}
             </span>
-            <span style={{ fontSize: 13, opacity: 0.7, fontFamily: "var(--font-mono)" }}>{wallNum(spot)}</span>
+            <span style={{ fontSize: FS_META, opacity: 0.7, fontFamily: "var(--font-mono)" }}>{wallNum(spot)}</span>
             {/* data-capture-hide: live-page chrome, dropped from the screenshot. */}
             <div data-capture-hide style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
               <CopyLogButton disabled={empty} text={logText} />
@@ -618,20 +643,40 @@ function WallCaptureRail({ log, events }: { log: WallLogRow[]; events: WallEvent
   const filled = marks.filter(Boolean).length;
   return (
     <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap", padding: "12px 18px", borderBottom: `1px solid ${C.border}` }}>
-      <span style={{ fontSize: 13, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.45, marginRight: 8 }}>09:29</span>
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, opacity: 0.45, marginRight: 8 }}>09:29</span>
       {marks.map((m, i) => (
         <span key={i} title={m ? `slot ${i}: ${m}` : `slot ${i}: no change`}
-          style={{ width: 9, height: 9, borderRadius: 2, background: color(m), boxShadow: m ? `0 0 6px ${rgba(HOME_THEME.cyan, 0.35)}` : undefined }} />
+          style={{ display: "block", flex: "0 0 auto", width: 9, height: 9, borderRadius: 2, background: color(m), boxShadow: m ? `0 0 6px ${rgba(HOME_THEME.cyan, 0.35)}` : undefined }} />
       ))}
-      <span style={{ fontSize: 13, letterSpacing: "0.14em", textTransform: "uppercase", opacity: 0.45, marginLeft: 8 }}>16:00</span>
-      <span style={{ marginLeft: "auto", fontSize: 13, opacity: 0.45 }}>{log.length} rows · {WALL_SLOTS - filled} slots skipped</span>
+      <span style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, opacity: 0.45, marginLeft: 8 }}>16:00</span>
+      <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: FS_META, opacity: 0.45 }}>{log.length} rows · {WALL_SLOTS - filled} slots skipped</span>
     </div>
   );
 }
 
+/**
+ * Which side price came from. A CORE tag at 7772.97 on the 7775 level was
+ * approached from BELOW, so a break is upward — price falling away afterwards
+ * is a rejection, not a break. Reading a row without this is the "don't know
+ * which direction the stock comes from" problem: the numbers alone are
+ * ambiguous, and "broke by 18.77" against a level price never touched from
+ * above is simply the wrong story.
+ *
+ * Walls have a fixed side (a call wall is tested from below, a put wall from
+ * above). CORE has none, so it comes off spot vs. strike at the tag.
+ */
+function approachSide(e: { level_type: WallLevel; strike: number; spot_at_hit: number }): "below" | "above" {
+  if (e.level_type === "call_wall") return "below";
+  if (e.level_type === "put_wall") return "above";
+  return Number(e.spot_at_hit) <= Number(e.strike) ? "below" : "above";
+}
+
 /** Chronological merge of level changes and classified hits. */
 function WallTimeline({ log, events, view }: { log: WallLogRow[]; events: WallEventRow[]; view: LogView }) {
-  type Entry = { slot: number; at: string; kind: "open" | "change" | "hit"; lt: WallLevel; body: ReactNode; meta?: string };
+  type Entry = {
+    slot: number; at: string; kind: "open" | "change" | "hit"; lt: WallLevel;
+    body: ReactNode; meta?: string; side?: "below" | "above";
+  };
   const entries: Entry[] = [];
 
   for (const r of log) {
@@ -646,13 +691,22 @@ function WallTimeline({ log, events, view }: { log: WallLogRow[]; events: WallEv
   for (const e of events) {
     const approach = e.kind === "approach";
     const build = gexBuildPct(e.gex_at_hit, e.gex_at_resolve);
+    const side = approachSide(e);
     entries.push({
-      slot: e.hit_slot, at: e.at, kind: "hit", lt: e.level_type,
+      slot: e.hit_slot, at: e.at, kind: "hit", lt: e.level_type, side,
       body: approach
-        ? <>Came within reach of <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(e.strike)}</b> from <b style={{ fontFamily: "var(--font-mono)" }}>{wallNum(e.spot_at_hit)}</b> without tagging{e.note ? ` — ${e.note}.` : "."}</>
-        : <>Tagged <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(e.strike)}</b> at <b style={{ fontFamily: "var(--font-mono)" }}>{wallNum(e.spot_at_hit)}</b>{e.note ? ` — ${e.note}.` : "."}</>,
+        ? <>Came up {side === "below" ? "to" : "down to"} <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(e.strike)}</b> from {side} at <b style={{ fontFamily: "var(--font-mono)" }}>{wallNum(e.spot_at_hit)}</b> without tagging{e.note ? ` — ${e.note}.` : "."}</>
+        : <>Tagged <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(e.strike)}</b> from {side} at <b style={{ fontFamily: "var(--font-mono)" }}>{wallNum(e.spot_at_hit)}</b>{e.note ? ` — ${e.note}.` : "."}</>,
       meta: [
-        !approach && e.excursion_pts != null ? `excursion ${Number(e.excursion_pts) > 0 ? "+" : ""}${wallNum(e.excursion_pts)}` : null,
+        // Excursion is measured in the BREAK direction, which is the opposite
+        // side from the one price approached on. Spelling that out is the whole
+        // point — an unsigned "+18.77" beside a level price tells you nothing
+        // about whether price went through the level or fell away from it.
+        !approach && e.excursion_pts != null
+          ? (Number(e.excursion_pts) >= 0
+              ? `pushed ${wallNum(Math.abs(Number(e.excursion_pts)))} ${side === "below" ? "up through" : "down through"}`
+              : `stayed ${wallNum(Math.abs(Number(e.excursion_pts)))} short of it`)
+          : null,
         e.reclaim_min != null ? `reclaimed in ${e.reclaim_min}m` : null,
         !approach && e.attempts > 1 ? `attempt ${e.attempts} on this strike` : null,
         e.was_core ? (e.core_held === false ? "was the CORE — CORE moved after" : "was the CORE") : null,
@@ -672,7 +726,7 @@ function WallTimeline({ log, events, view }: { log: WallLogRow[]; events: WallEv
 
   if (!entries.length) {
     return (
-      <div style={{ padding: "34px 18px", textAlign: "center", opacity: 0.45, fontSize: 13 }}>
+      <div style={{ padding: "34px 18px", textAlign: "center", opacity: 0.45, fontSize: FS_BODY }}>
         {view === "core"
           ? "Nothing recorded on the CORE for this ticker — no baseline, no level changes, no touches."
           : "Nothing recorded on the walls for this ticker — no baseline, no level changes, no touches."}
@@ -685,26 +739,40 @@ function WallTimeline({ log, events, view }: { log: WallLogRow[]; events: WallEv
       {entries.map((e, i) => {
         const dot = e.kind === "hit" ? AMBER : e.kind === "open" ? HOME_THEME.orange : C.cyan;
         const ev = e.kind === "hit" ? evByKey.get(`${e.slot}|${e.lt}`) : null;
+        const last = i === entries.length - 1;
         return (
           <div key={`${e.slot}-${e.kind}-${e.lt}-${i}`}
             style={{ display: "grid", gridTemplateColumns: "58px 14px 1fr", gap: 10, padding: "11px 0",
-              borderBottom: i === entries.length - 1 ? "none" : "1px solid rgba(255,255,255,0.05)" }}>
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, opacity: 0.7, paddingTop: 2 }}>{e.at}</div>
+              borderBottom: last ? "none" : "1px solid rgba(255,255,255,0.05)" }}>
+            {/* Time, dot and badge row all lock to ROW_LEAD_H so the three
+                columns sit on one optical line instead of each finding its own
+                baseline off whatever line-height its font happened to use. */}
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, lineHeight: `${ROW_LEAD_H}px`, opacity: 0.7 }}>{e.at}</div>
+            {/* No fixed height here — the cell stretches to the row so the
+                connector can run all the way down to the next dot. */}
             <div style={{ position: "relative" }}>
-              <span style={{ position: "absolute", left: 4, top: 6, width: 7, height: 7, borderRadius: 999, background: dot, boxShadow: `0 0 10px ${rgba(HOME_THEME.cyan, 0.45)}` }} />
-              {i < entries.length - 1 ? <span style={{ position: "absolute", left: 7, top: 0, bottom: -11, width: 1, background: "rgba(255,255,255,0.08)" }} /> : null}
+              <span style={{ position: "absolute", left: 3.5, top: (ROW_LEAD_H - 7) / 2, width: 7, height: 7, borderRadius: 999, background: dot, boxShadow: `0 0 10px ${rgba(HOME_THEME.cyan, 0.45)}` }} />
+              {!last ? <span style={{ position: "absolute", left: 6.5, top: (ROW_LEAD_H + 7) / 2 + 3, bottom: -11, width: 1, background: "rgba(255,255,255,0.08)" }} /> : null}
             </div>
             <div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: LEVEL_COLOR[e.lt], opacity: 0.85 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", minHeight: ROW_LEAD_H }}>
+                <span style={{ fontSize: FS_LABEL, lineHeight: `${ROW_LEAD_H}px`, fontWeight: 800, letterSpacing: LS_LABEL, textTransform: "uppercase", color: LEVEL_COLOR[e.lt], opacity: 0.85 }}>
                   {LEVEL_LABEL[e.lt]}
                 </span>
                 {e.kind === "open" ? <span style={{ ...wallBadgeStyle(MUTED), opacity: 0.55 }}>Open baseline</span> : null}
                 {e.kind === "change" ? <span style={wallBadgeStyle(C.cyan)}>Changed</span> : null}
                 {e.kind === "hit" ? wallBadge(ev?.reaction ?? null, false, ev?.reclaim_min ?? null) : null}
+                {/* Direction of approach, stated up front rather than left to be
+                    inferred from spot vs. strike further down the row. */}
+                {e.side ? (
+                  <span title={e.side === "below" ? "Price came into the level from below — a break goes up" : "Price came into the level from above — a break goes down"}
+                    style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, lineHeight: `${ROW_LEAD_H}px`, opacity: 0.55, color: e.side === "below" ? GREEN : RED }}>
+                    {e.side === "below" ? "↑ from below" : "↓ from above"}
+                  </span>
+                ) : null}
               </div>
-              <div style={{ fontSize: 13, marginTop: 4, lineHeight: 1.45 }}>{e.body}</div>
-              {e.meta ? <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, opacity: 0.55, marginTop: 6 }}>{e.meta}</div> : null}
+              <div style={{ fontSize: FS_BODY, marginTop: 4, lineHeight: 1.5 }}>{e.body}</div>
+              {e.meta ? <div style={{ fontFamily: "var(--font-mono)", fontSize: FS_META, opacity: 0.55, marginTop: 6, lineHeight: 1.5 }}>{e.meta}</div> : null}
             </div>
           </div>
         );

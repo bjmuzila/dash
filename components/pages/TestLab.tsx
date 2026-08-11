@@ -710,7 +710,9 @@ type GexLevelsDerived = {
 
 function deriveGexLevels(s: GexLevelsSnapshot | null): GexLevelsDerived | null {
   if (!s) return null;
-  const rows = (s.gexRows ?? []).filter((r) => Number.isFinite(r.strike)).slice().sort((a, b) => a.strike - b.strike);
+  // `r &&` first: a socket frame can carry a null/hole in gexRows, and reading
+  // .strike off it threw the same "undefined (reading 'strike')" that killed the page.
+  const rows = (s.gexRows ?? []).filter((r) => r && Number.isFinite(r.strike)).slice().sort((a, b) => a.strike - b.strike);
   const spot = Number(s.spot ?? 0);
   if (!rows.length || !(spot > 0)) return null;
 
@@ -1018,6 +1020,13 @@ function NetGammaByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; 
   // positive, red where it's negative. Segments meet at the interpolated
   // zero-crossing so there's no color seam away from the flip.
   const segs = glSignSegments(shown);
+  // Stale-hover guard: `hover.idx` indexes the slice that was on screen when the
+  // pointer last moved. Zooming (wheel), panning, or a live data refresh rebuilds
+  // `shown` with FEWER points while `hover` still holds the old index, so the
+  // tooltip read `shown[idx]` === undefined and threw
+  // "Cannot read properties of undefined (reading 'strike')" mid-render — which
+  // unmounts the whole page. Resolve the row once and render nothing if it's gone.
+  const hp = hover ? shown[hover.idx] : null;
 
   return (
     <div
@@ -1065,11 +1074,11 @@ function NetGammaByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow[]; 
           <text key={i} x={x(k)} y={H - padB + 16} textAnchor="middle" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(k)}</text>
         ))}
       </svg>
-      {hover && !pan.isDragging && (
+      {hover && hp && !pan.isDragging && (
         <ChartTooltip x={hover.x} y={hover.y}>
-          <div style={{ fontWeight: 800 }}>Strike {glFmt2(shown[hover.idx].strike)}</div>
-          <div style={{ color: GL_SIGN_COLOR(shown[hover.idx].cum >= 0 ? 1 : -1), fontWeight: 700 }}>
-            Cumulative Gamma$: {glFmtBn(shown[hover.idx].cum)}
+          <div style={{ fontWeight: 800 }}>Strike {glFmt2(hp.strike)}</div>
+          <div style={{ color: GL_SIGN_COLOR(hp.cum >= 0 ? 1 : -1), fontWeight: 700 }}>
+            Cumulative Gamma$: {glFmtBn(hp.cum)}
           </div>
         </ChartTooltip>
       )}
@@ -1107,6 +1116,7 @@ function NetGammaBarsByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow
   const y0 = y(0);
   const barW = Math.max(2, ((W - padL - padR) / shown.length) * 0.62);
   const flipInView = neutral != null && neutral >= xlo && neutral <= xhi;
+  const hp = hover ? shown[hover.idx] : null; // stale-hover guard — see NetGammaByStrikeChart
 
   return (
     <div
@@ -1149,10 +1159,10 @@ function NetGammaBarsByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow
           <text key={i} x={x(k)} y={H - padB + 16} textAnchor="middle" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(k)}</text>
         ))}
       </svg>
-      {hover && !pan.isDragging && (
+      {hover && hp && !pan.isDragging && (
         <ChartTooltip x={hover.x} y={hover.y}>
-          <div style={{ fontWeight: 800 }}>Strike {glFmt2(shown[hover.idx].strike)}</div>
-          <div>Net gamma$: {glFmtBn(glOiVolNet(shown[hover.idx]))}</div>
+          <div style={{ fontWeight: 800 }}>Strike {glFmt2(hp.strike)}</div>
+          <div>Net gamma$: {glFmtBn(glOiVolNet(hp))}</div>
         </ChartTooltip>
       )}
     </div>
@@ -1177,6 +1187,7 @@ function NetDeltaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: num
   const y = (v: number) => padT + (1 - (v - minV) / (maxV - minV)) * (H - padT - padB);
   const y0 = y(0);
   const barW = Math.max(2, ((W - padL - padR) / shown.length) * 0.62);
+  const hp = hover ? shown[hover.idx] : null; // stale-hover guard — see NetGammaByStrikeChart
 
   return (
     <div
@@ -1216,10 +1227,10 @@ function NetDeltaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: num
           <text key={i} x={x(k)} y={H - padB + 16} textAnchor="middle" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(k)}</text>
         ))}
       </svg>
-      {hover && !pan.isDragging && (
+      {hover && hp && !pan.isDragging && (
         <ChartTooltip x={hover.x} y={hover.y}>
-          <div style={{ fontWeight: 800 }}>Strike {glFmt2(shown[hover.idx].strike)}</div>
-          <div>Net Delta: {glFmt0(shown[hover.idx].netDEX)}</div>
+          <div style={{ fontWeight: 800 }}>Strike {glFmt2(hp.strike)}</div>
+          <div>Net Delta: {glFmt0(hp.netDEX)}</div>
         </ChartTooltip>
       )}
     </div>
@@ -1249,6 +1260,7 @@ function CallPutGammaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot:
   const y0 = y(0);
   const slotW = (W - padL - padR) / shown.length;
   const barW = Math.max(1.5, slotW * 0.34);
+  const hp = hover ? shown[hover.idx] : null; // stale-hover guard — see NetGammaByStrikeChart
 
   return (
     <div
@@ -1285,11 +1297,11 @@ function CallPutGammaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot:
           <text key={i} x={x(k)} y={H - padB + 16} textAnchor="middle" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(k)}</text>
         ))}
       </svg>
-      {hover && !pan.isDragging && (
+      {hover && hp && !pan.isDragging && (
         <ChartTooltip x={hover.x} y={hover.y}>
-          <div style={{ fontWeight: 800 }}>Strike {glFmt2(shown[hover.idx].strike)}</div>
-          <div>CallGEX: {glFmtBn(shown[hover.idx].callGEX)}</div>
-          <div>PutGEX: {glFmtBn(shown[hover.idx].putGEX)}</div>
+          <div style={{ fontWeight: 800 }}>Strike {glFmt2(hp.strike)}</div>
+          <div>CallGEX: {glFmtBn(hp.callGEX)}</div>
+          <div>PutGEX: {glFmtBn(hp.putGEX)}</div>
         </ChartTooltip>
       )}
     </div>
@@ -1309,6 +1321,7 @@ function OiByDateChart({ rows }: { rows: GlHistoryEntry[] }) {
   const y0 = H - padB;
   const barH = (v: number) => (v / maxOi) * (y0 - padT);
   const barW = Math.max(4, ((W - padL - padR) / Math.max(n, 1)) * 0.5);
+  const hp = hover ? shown[hover.idx] : null; // stale-hover guard — see NetGammaByStrikeChart
 
   return (
     <div ref={containerRef} style={{ position: "relative" }}>
@@ -1337,10 +1350,10 @@ function OiByDateChart({ rows }: { rows: GlHistoryEntry[] }) {
         <text x={padL - 8} y={padT + 4} textAnchor="end" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>{glFmt0(maxOi)}</text>
         <text x={padL - 8} y={y0 + 4} textAnchor="end" fontSize={10} fill={HOME_THEME.text} opacity={0.55}>0</text>
       </svg>
-      {hover && (
+      {hover && hp && (
         <ChartTooltip x={hover.x} y={hover.y}>
-          <div style={{ fontWeight: 800 }}>{glFmtDate(shown[hover.idx].date)}</div>
-          <div>Total OI: {glFmt0(shown[hover.idx].openInt)}</div>
+          <div style={{ fontWeight: 800 }}>{glFmtDate(hp.date)}</div>
+          <div>Total OI: {glFmt0(hp.openInt)}</div>
         </ChartTooltip>
       )}
     </div>
@@ -1462,6 +1475,7 @@ function OiByExpiryMiniChart({ rows, valueKey, color, label }: { rows: OiByExpir
   const barW = Math.max(3, slotW * 0.55);
   const y0 = H - padB;
   const barH = (v: number) => (v / maxV) * (y0 - padT);
+  const hp = hover ? rows[hover.idx] : null; // stale-hover guard — see NetGammaByStrikeChart
 
   return (
     <div ref={containerRef} style={{ position: "relative" }}>
@@ -1495,10 +1509,10 @@ function OiByExpiryMiniChart({ rows, valueKey, color, label }: { rows: OiByExpir
         <text x={padL - 6} y={padT + 4} textAnchor="end" fontSize={9} fill={HOME_THEME.text} opacity={0.55}>{glFmtBn(maxV)}</text>
         <text x={padL - 6} y={y0 + 4} textAnchor="end" fontSize={9} fill={HOME_THEME.text} opacity={0.55}>0</text>
       </svg>
-      {hover && (
+      {hover && hp && (
         <ChartTooltip x={hover.x} y={hover.y}>
-          <div style={{ fontWeight: 800 }}>{glFmtDate(rows[hover.idx].expiry)}</div>
-          <div>{label} OI: {glFmt0(rows[hover.idx][valueKey])}</div>
+          <div style={{ fontWeight: 800 }}>{glFmtDate(hp.expiry)}</div>
+          <div>{label} OI: {glFmt0(hp[valueKey])}</div>
         </ChartTooltip>
       )}
     </div>
@@ -1655,6 +1669,7 @@ function EodGexBarChart({ rows, field = "totalGex" }: { rows: EodGexRow[]; field
   const yZero = hasNeg && hasPos ? padT + plotH / 2 : hasNeg ? padT : padT + plotH;
   const half = hasNeg && hasPos ? plotH / 2 : plotH;
   const barH = (v: number) => (Math.abs(v) / maxAbs) * half;
+  const hp = hover ? data[hover.idx] : null; // stale-hover guard — see NetGammaByStrikeChart
 
   return (
     <div ref={containerRef} style={{ position: "relative" }}>
@@ -1692,11 +1707,11 @@ function EodGexBarChart({ rows, field = "totalGex" }: { rows: EodGexRow[]; field
           <text x={padL - 6} y={padT + plotH + 4} textAnchor="end" fontSize={9} fill={HOME_THEME.text} opacity={0.55}>{glFmtBn(-maxAbs)}</text>
         )}
       </svg>
-      {hover && (
+      {hover && hp && (
         <ChartTooltip x={hover.x} y={hover.y}>
-          <div style={{ fontWeight: 800 }}>{glFmtDate(data[hover.idx].date)}</div>
-          <div>{meta.label}: {glFmtBn(val(data[hover.idx]))}</div>
-          <div>SPX close: {glFmt2(data[hover.idx].spot)}</div>
+          <div style={{ fontWeight: 800 }}>{glFmtDate(hp.date)}</div>
+          <div>{meta.label}: {glFmtBn(val(hp))}</div>
+          <div>SPX close: {glFmt2(hp.spot)}</div>
         </ChartTooltip>
       )}
     </div>

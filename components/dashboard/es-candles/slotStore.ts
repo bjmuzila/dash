@@ -268,6 +268,19 @@ export type IndicatorCfg = {
   rsi: boolean;
   rsiPeriod: number;
   countdown: boolean;
+  /**
+   * TPO structures — single prints and excess tails. Both are RTH-ONLY by
+   * definition (see tpoStructures() in chartMath: overnight trades a handful of
+   * periods, so nearly every ETH row is a single print and the concept stops
+   * meaning anything).
+   *
+   * They read the same profile the TPO overlay builds, but they are indicators
+   * rather than part of that overlay on purpose: the useful thing is the level
+   * carried forward, and you do not want a wall of gray boxes over the candles
+   * to get it.
+   */
+  singlePrint: boolean;
+  excess: boolean;
 };
 
 export const MAX_EMAS = 3;
@@ -282,6 +295,8 @@ export const INDICATORS_DEFAULT: IndicatorCfg = {
   rsi: false,
   rsiPeriod: 14,
   countdown: false,
+  singlePrint: false,
+  excess: false,
 };
 
 const INDICATORS_KEY = "es-candles-indicators-v1";
@@ -319,6 +334,8 @@ export function readIndicators(): IndicatorCfg {
     rsi: bool(raw.rsi, INDICATORS_DEFAULT.rsi),
     rsiPeriod: Math.round(num(raw.rsiPeriod, INDICATORS_DEFAULT.rsiPeriod, 2, 100)),
     countdown: bool(raw.countdown, INDICATORS_DEFAULT.countdown),
+    singlePrint: bool(raw.singlePrint, INDICATORS_DEFAULT.singlePrint),
+    excess: bool(raw.excess, INDICATORS_DEFAULT.excess),
   };
 }
 
