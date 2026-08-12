@@ -118,6 +118,9 @@ export type RecipeCard = {
   cooked_count: number
   last_cooked_at: string | null
   ingredient_count: number
+  /** Content hash of the STORED photo, or null if we never copied one. Present
+   *  on reads only — see IMG_ETAG in server-v2/_lib-household-recipes.cjs. */
+  image_etag: string | null
   created_at: string
   updated_at: string
 }
@@ -195,6 +198,24 @@ export const auth = {
     api.post<{ ok: true }>('/api/hh/auth/pin/remove', { allDevices }),
 }
 
+/**
+ * Where to actually load a recipe's photo from.
+ *
+ * Stored bytes win. `image_url` is only a fallback for the seconds between
+ * saving a recipe and the background copy finishing — and for old rows whose
+ * capture failed. It is NOT a long-term source: a TikTok or Instagram cover URL
+ * is signed and expires within a day or two, which is the whole reason the
+ * bytes get copied at all.
+ *
+ * The ?v=<etag> is load-bearing. The server sends `immutable, max-age=1 year`
+ * only when it's present, so a replaced photo changes the URL and every phone
+ * refetches instead of showing last month's picture until next year.
+ */
+export function imageSrc(r: { id: number; image_etag?: string | null; image_url?: string | null }): string | null {
+  if (r.image_etag) return `/api/hh/recipes/image?id=${r.id}&v=${r.image_etag}`
+  return r.image_url || null
+}
+
 export const recipes = {
   list: (opts: { q?: string; category?: string; favorite?: boolean } = {}) => {
     const p = new URLSearchParams()
@@ -228,4 +249,52 @@ export const recipes = {
   plan: (id: number, opts: { day: string; servings?: number; withList?: boolean }) =>
     api.post<{ meal: Meal; list: { added: number } | null }>(
       '/api/hh/recipes', { action: 'plan', id, ...opts }),
+
+  // ── Photo ────────────────────────────────────────────────────────────────
+  /** Upload a photo. `dataUrl` must already be downscaled — see downscale(). */
+  setImage: (id: number, dataUrl: string) =>
+    api.post<{ etag: string; bytes: number; mime: string }>(
+      '/api/hh/recipes/image', { id, dataUrl }),
+  /** Re-copy from a link. The repair path when the import-time capture failed. */
+  setImageFromUrl: (id: number, url: string) =>
+    api.post<{ etag: string; bytes: number; mime: string }>(
+      '/api/hh/recipes/image', { id, url }),
+  removeImage: (id: number) =>
+    api.post<{ ok: true; removed: true }>('/api/hh/recipes/image', { id, remove: true }),
+}
+
+/**
+ * Shrink a picked photo in the BROWSER before upload.
+ *
+ * A phone original is 3-5MB of 4032px JPEG; the app displays it at 390px wide
+ * on a 4:3 hero. Downscaling here rather than server-side means no native image
+ * library in the backend (sharp is a build-breaking dependency on a base-image
+ * bump) and no multi-megabyte upload over a phone connection — a 1400px q0.82
+ * JPEG lands around 200-300KB.
+ *
+ * 1400 rather than 800: this also has to look right on a desktop browser and on
+ * a 3x phone screen, and storage is not the constraint at household scale.
+ */
+export function downscale(file: File, maxDim = 1400, quality = 0.82): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height))
+      const w = Math.round(img.width * scale)
+      const h = Math.round(img.height * scale)
+      const canvas = document.createElement('canvas')
+      canvas.width = w
+      canvas.height = h
+      const ctx = canvas.getContext('2d')
+      if (!ctx) { reject(new Error('Could not read that image.')); return }
+      ctx.drawImage(img, 0, 0, w, h)
+      // Always JPEG: a photo re-encoded as PNG is several times larger for no
+      // visible gain, and every browser can encode JPEG.
+      resolve(canvas.toDataURL('image/jpeg', quality))
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read that image.')) }
+    img.src = url
+  })
 }

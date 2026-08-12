@@ -642,6 +642,23 @@ const FULL_COLS = `id, owner_id, visibility, title, description, image_url, sour
   servings, prep_minutes, cook_minutes, calories, category, skill, favorite, notes,
   ingredients, steps, cooked_count, last_cooked_at, created_at, updated_at`;
 
+/**
+ * Whether this recipe has a stored photo, and its version.
+ *
+ * A correlated subquery rather than a JOIN so it can be dropped into the
+ * existing column lists without touching every FROM clause — and so it NEVER
+ * touches the `bytes` column. Pulling an image table into a list query by
+ * accident is how a 20-row cookbook screen becomes an 8MB response.
+ *
+ * `image_etag` is a content hash. The client puts it in the img URL as ?v=,
+ * which is what makes the year-long immutable cache header safe: replace the
+ * photo, the hash changes, the URL changes, every phone refetches. Without it
+ * an "immutable" cached photo would outlive three replacements.
+ */
+const IMG_ETAG = `(SELECT i.etag FROM hh_recipe_images i WHERE i.recipe_id = hh_recipes.id) AS image_etag`;
+const CARD_SELECT = `${CARD_COLS}, ${IMG_ETAG}`;
+const FULL_SELECT = `${FULL_COLS}, ${IMG_ETAG}`;
+
 async function listRecipes(userId, { q, category, favorite } = {}) {
   const pool = libDb.getPool();
   const where = [VISIBLE];
@@ -661,7 +678,7 @@ async function listRecipes(userId, { q, category, favorite } = {}) {
   if (favorite) where.push('favorite = TRUE');
 
   const { rows } = await pool.query(
-    `SELECT ${CARD_COLS} FROM hh_recipes WHERE ${where.join(' AND ')}
+    `SELECT ${CARD_SELECT} FROM hh_recipes WHERE ${where.join(' AND ')}
       ORDER BY favorite DESC, updated_at DESC LIMIT 500`, vals);
 
   const { rows: counts } = await pool.query(
@@ -678,7 +695,7 @@ async function listRecipes(userId, { q, category, favorite } = {}) {
 
 async function getRecipe(userId, id) {
   const { rows } = await libDb.getPool().query(
-    `SELECT ${FULL_COLS} FROM hh_recipes WHERE id=$2 AND ${VISIBLE}`, [userId, Number(id)]);
+    `SELECT ${FULL_SELECT} FROM hh_recipes WHERE id=$2 AND ${VISIBLE}`, [userId, Number(id)]);
   if (!rows[0]) throw new Error('Not found.');
   return rows[0];
 }
@@ -729,6 +746,18 @@ async function createRecipe(userId, r) {
      r.category ? normCategory(r.category) : guessCategory(title),
      normSkill(r.skill), str(r.notes, 4000) || null,
      JSON.stringify(ingredients), JSON.stringify(normSteps(r.steps))]);
+
+  // Copy the photo in the BACKGROUND, deliberately not awaited. Saving a recipe
+  // must not sit on someone else's CDN for ten seconds, and the gap is already
+  // covered: image_url is still fresh at this moment, so the card and the
+  // recipe page render from the remote URL until the stored copy exists. By
+  // the time that URL expires — which is the whole reason we copy it — the
+  // bytes are here. captureImage swallows its own errors, so this cannot
+  // produce an unhandled rejection.
+  captureImage(rows[0].id, r.imageUrl)
+    .then((res) => { if (res) console.log(`[hh-recipes] cached image for #${rows[0].id} (${res.bytes}b ${res.mime})`); })
+    .catch(() => { /* already swallowed inside; belt and braces */ });
+
   return rows[0];
 }
 
@@ -766,6 +795,14 @@ async function updateRecipe(userId, id, patch) {
   const { rows } = await libDb.getPool().query(
     `UPDATE hh_recipes SET ${sets.join(', ')} WHERE id=$2 AND ${VISIBLE} RETURNING ${FULL_COLS}`, vals);
   if (!rows[0]) throw new Error('Not found.');
+
+  // Pointing the recipe at a new photo re-copies it. Same background treatment
+  // as create — and an explicit upload (setImageFromDataUrl) is untouched by
+  // this, because that path never sets image_url.
+  if (patch.imageUrl !== undefined && str(patch.imageUrl, 1000)) {
+    captureImage(rows[0].id, patch.imageUrl).catch(() => {});
+  }
+
   return rows[0];
 }
 
@@ -872,6 +909,124 @@ async function planMeal(userId, id, { day, servings, withList = true } = {}) {
   return { meal, list };
 }
 
+// ---------------------------------------------------------------------------
+// Photos
+// ---------------------------------------------------------------------------
+//
+// Stored as BYTEA in hh_recipe_images, one row per recipe, keyed by recipe_id.
+//
+// WHY WE COPY THE BYTES rather than keeping the source URL: a TikTok or
+// Instagram cover is a SIGNED CDN url with an expiry in the query string. It
+// works when you import and 403s a day later, so a cookbook built on remote
+// links quietly turns into a wall of placeholder tiles. Blogs are better
+// behaved but still rename, hotlink-block and go offline.
+//
+// WHY A SEPARATE TABLE: so `SELECT ... FROM hh_recipes` can never drag image
+// bytes into a list query by accident. The cookbook index reads twenty rows; if
+// the bytes lived on that row it would be an eight-megabyte response to render
+// a screen of 64px thumbnails.
+//
+// No resizing. That would mean sharp/canvas — a native dependency, a bigger
+// image, and a build that can break on a base-image bump — to save a couple of
+// hundred KB on an image the source already sized for the web. The phone
+// upload path downscales in the BROWSER instead, where the canvas is free.
+
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif']);
+
+const crypto = require('crypto');
+const etagOf = (buf) => crypto.createHash('sha1').update(buf).digest('hex').slice(0, 16);
+
+async function putImage(recipeId, buf, mime, sourceUrl) {
+  await libDb.getPool().query(
+    `INSERT INTO hh_recipe_images (recipe_id, mime, bytes, etag, source_url)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (recipe_id) DO UPDATE
+       SET mime=EXCLUDED.mime, bytes=EXCLUDED.bytes, etag=EXCLUDED.etag,
+           source_url=EXCLUDED.source_url, created_at=now()`,
+    [recipeId, mime, buf, etagOf(buf), sourceUrl || null]);
+  return { etag: etagOf(buf), bytes: buf.length, mime };
+}
+
+/**
+ * Fetch a remote image and store it. Called on create and whenever image_url
+ * changes.
+ *
+ * Every failure path returns null instead of throwing: a recipe that saved
+ * fine must not be rolled back because a CDN was slow. The card falls back to
+ * the remote URL, and re-running this later fixes it.
+ */
+async function captureImage(recipeId, url) {
+  const link = str(url, 2000);
+  if (!link || !/^https?:\/\//i.test(link)) return null;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 20_000);
+  try {
+    const res = await fetch(link, {
+      signal: ctl.signal,
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/*,*/*;q=0.8',
+        // Some CDNs (TikTok's included) serve a 403 to a request with no
+        // Referer. Sending the image's own origin is enough to look ordinary.
+        'Referer': new URL(link).origin + '/',
+      },
+    });
+    if (!res.ok) return null;
+    const mime = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (!IMAGE_TYPES.has(mime)) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!buf.length || buf.length > MAX_IMAGE_BYTES) return null;
+    return await putImage(recipeId, buf, mime, link);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * A browser upload, as a data URL: "data:image/jpeg;base64,…".
+ *
+ * Not multipart, deliberately — the household backend has no multipart parser
+ * and a data URL rides the existing JSON body reader. The client downscales to
+ * ~1400px before encoding, so the base64 inflation (×1.37) applies to a few
+ * hundred KB, not a 5MB phone original.
+ */
+async function setImageFromDataUrl(userId, recipeId, dataUrl) {
+  // Confirms the recipe exists AND is visible to this user before we store
+  // anything against its id.
+  await getRecipe(userId, recipeId);
+
+  const m = String(dataUrl || '').match(/^data:([a-z/+.-]+);base64,([A-Za-z0-9+/=\s]+)$/i);
+  if (!m) throw new Error("That doesn't look like an image.");
+  const mime = m[1].toLowerCase();
+  if (!IMAGE_TYPES.has(mime)) throw new Error('Use a JPEG, PNG or WebP.');
+
+  const buf = Buffer.from(m[2].replace(/\s+/g, ''), 'base64');
+  if (!buf.length) throw new Error('That image is empty.');
+  if (buf.length > MAX_IMAGE_BYTES) throw new Error('That image is too big.');
+
+  return putImage(recipeId, buf, mime, null);
+}
+
+/** The bytes, for the image route. Visibility-checked like everything else. */
+async function readImage(userId, recipeId) {
+  const { rows } = await libDb.getPool().query(
+    `SELECT i.mime, i.bytes, i.etag FROM hh_recipe_images i
+       JOIN hh_recipes r ON r.id = i.recipe_id
+      WHERE i.recipe_id = $2 AND (r.owner_id = $1 OR r.visibility = 'shared')`,
+    [userId, Number(recipeId)]);
+  return rows[0] || null;
+}
+
+async function deleteImage(userId, recipeId) {
+  await getRecipe(userId, recipeId);
+  await libDb.getPool().query(`DELETE FROM hh_recipe_images WHERE recipe_id=$1`, [Number(recipeId)]);
+  return true;
+}
+
 /** The one-line summary, for a Today card in the household app. */
 async function summary(userId) {
   const { rows } = await libDb.getPool().query(
@@ -892,4 +1047,5 @@ module.exports = {
   listRecipes, getRecipe, summary,
   createRecipe, updateRecipe, deleteRecipe, toggleFavorite, markCooked,
   addToList, planMeal,
+  captureImage, setImageFromDataUrl, readImage, deleteImage, MAX_IMAGE_BYTES, IMAGE_TYPES,
 };

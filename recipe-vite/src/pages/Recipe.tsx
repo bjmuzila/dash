@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { recipes as api, type Ingredient } from '../api'
+import { recipes as api, imageSrc, downscale, type Ingredient } from '../api'
 import { T, label, display, body, section, button, input, minutes, SANS, SERIF } from '../theme'
 
 /**
@@ -121,6 +121,26 @@ export default function Recipe() {
     },
   })
 
+  // ── Photo ────────────────────────────────────────────────────────────────
+  // A hidden file input driven by a button, because the native
+  // <input type=file> control is unstyleable and reads as a form on a screen
+  // that has none. capture is deliberately NOT set: "photo library" is the
+  // common case (a shot you already took of the finished dish), and forcing the
+  // camera would make re-picking an old photo impossible.
+  const fileRef = useRef<HTMLInputElement>(null)
+  const setImage = useMutation({
+    mutationFn: async (file: File) => {
+      const dataUrl = await downscale(file)
+      return api.setImage(rid, dataUrl)
+    },
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ['recipe', rid] })
+      qc.invalidateQueries({ queryKey: ['recipes'] })
+      setNote(`Photo updated (${Math.round(res.bytes / 1024)}KB).`)
+    },
+    onError: (e: Error) => setNote(e.message),
+  })
+
   const remove = useMutation({
     mutationFn: () => api.remove(rid),
     onSuccess: () => {
@@ -128,6 +148,8 @@ export default function Recipe() {
       nav('/cookbook', { replace: true })
     },
   })
+
+  const heroSrc = r ? imageSrc(r) : null
 
   const totalTime = useMemo(
     () => (r ? (r.prep_minutes ?? 0) + (r.cook_minutes ?? 0) : 0),
@@ -161,9 +183,24 @@ export default function Recipe() {
         background: T.paperSunk,
         overflow: 'hidden',
       }}>
-        {r.image_url && (
-          <img src={r.image_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-        )}
+        {heroSrc
+          ? <>
+              <img src={heroSrc} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              {/* Without this the photo ends on a hard horizontal edge against
+                  the near-black page and reads as a rendering seam. */}
+              <div style={{
+                position: 'absolute', left: 0, right: 0, bottom: 0, height: 90,
+                background: `linear-gradient(to bottom, transparent, ${T.paper})`,
+                pointerEvents: 'none',
+              }} />
+            </>
+          : (
+            <div style={{ display: 'grid', placeItems: 'center', height: '100%', gap: 10 }}>
+              <span style={{ fontFamily: SERIF, fontSize: 44, color: T.faint }}>
+                {r.title.slice(0, 1).toUpperCase()}
+              </span>
+            </div>
+          )}
         <div style={{
           position: 'absolute', top: 'max(12px, env(safe-area-inset-top))', left: 12, right: 12,
           display: 'flex', justifyContent: 'space-between', gap: 8,
@@ -177,11 +214,32 @@ export default function Recipe() {
             >
               {r.favorite ? '★' : '☆'}
             </button>
+            <button
+              onClick={() => fileRef.current?.click()}
+              disabled={setImage.isPending}
+              style={roundBtn}
+              aria-label="Change photo"
+            >
+              {setImage.isPending ? '…' : '⌾'}
+            </button>
             {r.source_url && (
               <a href={r.source_url} target="_blank" rel="noreferrer" style={roundBtn} aria-label="Open the original">↗</a>
             )}
           </div>
         </div>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            // Reset the input's value or picking the SAME file twice (after a
+            // failed upload) fires no change event and looks like a dead button.
+            e.target.value = ''
+            if (f) setImage.mutate(f)
+          }}
+        />
       </div>
 
       <div style={{ padding: '18px 16px 0', display: 'grid', gap: 16 }}>
@@ -374,14 +432,22 @@ export default function Recipe() {
   )
 }
 
+/**
+ * The controls floating over the hero photo.
+ *
+ * Near-black at 62% with a blur, not a white pill: the photo is the only light
+ * surface in the whole app now, so a white control on it disappears against a
+ * plate or a bowl of cream, while a dark one reads against food of any colour
+ * and matches the page it scrolls into. The hairline is white — a dark border
+ * on a dark chip over an unpredictable photo has no edge at all.
+ */
 const roundBtn: React.CSSProperties = {
   width: 38, height: 38, borderRadius: 999,
-  // Translucent white over the photo, so the control reads on a dark image and
-  // a light one without a second variant.
-  background: 'rgba(255,255,255,0.92)',
-  border: '1px solid rgba(26,23,20,0.08)',
-  boxShadow: '0 2px 10px rgba(26,23,20,0.15)',
-  color: '#1A1714',
+  background: 'rgba(5,6,10,0.62)',
+  backdropFilter: 'blur(10px)',
+  WebkitBackdropFilter: 'blur(10px)',
+  border: '1px solid rgba(255,255,255,0.22)',
+  color: T.ink,
   fontSize: 16, lineHeight: 1,
   display: 'grid', placeItems: 'center',
   cursor: 'pointer', textDecoration: 'none',

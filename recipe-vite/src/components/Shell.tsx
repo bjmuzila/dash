@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useAuth } from '../auth'
-import { T, label, display, SANS } from '../theme'
+import { T, label, display, SANS, MONO } from '../theme'
 
 /**
  * App shell — phone-first, same skeleton as budget-vite.
@@ -42,7 +42,7 @@ export default function Shell({ children }: { children: ReactNode }) {
         <header style={{
           flexShrink: 0,
           padding: 'max(14px, env(safe-area-inset-top)) 20px 12px',
-          borderBottom: `1px solid ${T.rule}`,
+          borderBottom: `1px solid ${T.ruleStrong}`,
         }}>
           <div style={{ maxWidth: 1040, margin: '0 auto' }}>
             <div style={{ ...label(), display: 'flex', justifyContent: 'space-between', gap: 12 }}>
@@ -67,8 +67,8 @@ export default function Shell({ children }: { children: ReactNode }) {
         flexShrink: 0,
         display: 'grid',
         gridTemplateColumns: `repeat(${TABS.length}, 1fr)`,
-        borderTop: `1px solid ${T.rule}`,
-        background: T.paperRaised,
+        borderTop: `1px solid ${T.ruleStrong}`,
+        background: T.paper,
         paddingBottom: 'env(safe-area-inset-bottom)',
       }}>
         {TABS.map((t) => (
@@ -80,11 +80,16 @@ export default function Shell({ children }: { children: ReactNode }) {
               placeItems: 'center',
               minHeight: 52,
               textDecoration: 'none',
-              fontFamily: SANS,
-              fontSize: 12,
-              fontWeight: 500,
+              // Mono caps, like budget's tab bar. Four tabs on a 390px screen
+              // is ~97px each, so these keep the 0.12em tracking that budget
+              // had to drop at six.
+              fontFamily: MONO,
+              fontSize: 10,
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
               whiteSpace: 'nowrap',
               color: isActive ? T.accent : T.muted,
+              // A 2px accent rule marks the current tab — no icons, no fills.
               boxShadow: isActive ? `inset 0 2px 0 ${T.accent}` : 'none',
             })}
           >

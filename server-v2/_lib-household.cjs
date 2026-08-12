@@ -298,6 +298,35 @@ async function ensureSchema() {
     await pool.query(`ALTER TABLE hh_meals ADD COLUMN IF NOT EXISTS recipe_id INTEGER REFERENCES hh_recipes(id) ON DELETE SET NULL`);
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_list_items_recipe_idx ON hh_list_items(recipe_id)`);
 
+    // Recipe photos, as bytes.
+    //
+    // We COPY the image instead of keeping the source URL because a TikTok or
+    // Instagram cover is a signed CDN link with an expiry in the query string:
+    // it works at import and 403s a day later, so a cookbook built on remote
+    // links decays into a wall of placeholder tiles.
+    //
+    // A SEPARATE TABLE, not a column on hh_recipes, and this is the important
+    // part: nothing can drag image bytes into a list query by accident. The
+    // cookbook index selects twenty rows to draw 64px thumbnails — if `bytes`
+    // sat on that row it would be a multi-megabyte response every time.
+    //
+    // PRIMARY KEY on recipe_id (not a serial) gives one photo per recipe and
+    // makes the upsert in putImage a plain ON CONFLICT. CASCADE, unlike the
+    // recipe_id backlinks above: an orphaned blob helps nobody.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hh_recipe_images (
+        recipe_id  INTEGER PRIMARY KEY REFERENCES hh_recipes(id) ON DELETE CASCADE,
+        mime       TEXT NOT NULL,
+        bytes      BYTEA NOT NULL,
+        -- Content hash. The client puts it in the img URL as ?v=, which is what
+        -- makes the year-long immutable cache header safe: replace the photo and
+        -- the URL changes, so every phone refetches instead of showing a cached
+        -- copy of the old one until next year.
+        etag       TEXT NOT NULL,
+        source_url TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
+
     // ── Projects ─────────────────────────────────────────────────────────
     // A project groups work and shows how far along it is. Progress is computed
     // from MILESTONES, not from tasks: a project with 40 small tasks and 3 real

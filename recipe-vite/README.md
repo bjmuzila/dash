@@ -3,8 +3,14 @@
 The cookbook. Paste a recipe link, get a recipe; scale it to how many you're
 feeding; send the ingredients to the grocery list you already use.
 
-Modelled on the Julienne cooking app: warm paper, serif titles, a photo-first
-recipe page and one terracotta action per screen.
+Structured like the Julienne cooking app — photo-first recipe page, serif
+titles, one filled action per screen — in the CB Edge dark theme, so it sits
+next to budget.cbedge.net as the same product rather than a visitor.
+
+`src/theme.ts` is a verbatim copy of `budget-vite/src/theme.ts` plus a
+`minutes()` helper. Copied, not imported, for the same reason the auth screens
+are — see **Deliberately standalone** below. If you retune a colour in budget,
+bring it here by hand.
 
 ## Where things live
 
@@ -57,6 +63,33 @@ container — the key never reaches the browser). Optional:
 
 Without it, link imports of sites with structured data still work and the Paste
 tab says so up front instead of failing after a 20-second wait.
+
+## Photos are copied, not linked
+
+`hh_recipe_images` — one row per recipe, `bytes BYTEA`, keyed by `recipe_id`.
+
+A TikTok or Instagram cover is a **signed CDN URL with an expiry in it**. Keep
+the link and the picture 403s a day later; a cookbook built on remote links
+decays into placeholder tiles. So `captureImage()` copies the bytes at import
+time, in the background — saving a recipe never waits on someone else's CDN, and
+`imageSrc()` falls back to the still-fresh `image_url` until the copy lands.
+
+It's a **separate table on purpose**: nothing can pull image bytes into a list
+query by accident. The index screen selects twenty rows to draw 64px thumbnails.
+
+`etag` is a content hash, and the client appends it as `?v=`. That's what makes
+the year-long `immutable` cache header safe — replace a photo, the URL changes,
+every phone refetches.
+
+Your own photos: the camera button on the recipe screen. `downscale()` shrinks
+the pick to 1400px JPEG **in the browser** and posts it as a data URL — no
+`sharp` in the backend, no multipart parser, no multi-megabyte upload.
+
+Backfill after deploying this, for recipes imported earlier:
+
+```bash
+docker compose exec -T dashboard node server-v2/scripts/backfill-recipe-images.js
+```
 
 ## Ingredients are stored three ways
 

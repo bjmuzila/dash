@@ -1088,9 +1088,100 @@ async function probeRest({ ticker, expiry, type, strike }) {
 
 const CONTRACT_STATS_TTL_MS = 20_000;
 const CONTRACT_STATS_MAX_GROUPS = 16; // guard: one request can't fan out forever
+// Per-group contract cap on the TT REST path (batched 100/call). Keeps a full
+// SPX 0DTE expiry from turning one poll into ~16 broker round-trips.
+const CONTRACT_STATS_MAX_CONTRACTS = 800;
 
 const _statsCache = new Map();    // `${root}|${expiry}` -> { at, byKey }
 const _statsInFlight = new Map(); // `${root}|${expiry}` -> Promise<byKey>
+
+// --- Theta snapshot path (DATA_SOURCE=theta) --------------------------------
+async function _statsFromTheta(root, expiry) {
+  const [oiMap, greekMap, volMap] = await Promise.all([
+    thetaAdapter.fetchOpenInterestTheta(root, expiry).catch(() => new Map()),
+    thetaAdapter.fetchGreeksTheta(root, expiry).catch(() => new Map()),
+    thetaAdapter.fetchVolumeTheta(root, expiry).catch(() => new Map()),
+  ]);
+
+  // Union the three maps' keys: a contract can have volume but no greeks yet
+  // (pre-open), or OI but no trades today. Missing legs stay null rather than
+  // 0 so the UI can render "—" instead of a misleading zero.
+  const byKey = {};
+  const keys = new Set([...oiMap.keys(), ...greekMap.keys(), ...volMap.keys()]);
+  for (const k of keys) {
+    // Theta keys are `exp|strike|type` — same shape _probeKeyOf builds.
+    const [, strike, type] = String(k).split('|');
+    const g = greekMap.get(k) || {};
+    const oi = oiMap.get(k)?.oi;
+    const vol = volMap.get(k);
+    byKey[`${strike}|${type}`] = {
+      vol: Number.isFinite(vol) ? vol : null,
+      oi: Number.isFinite(oi) ? oi : null,
+      // Theta reports IV as a decimal (0.184). Keep it decimal here; the UI
+      // owns the ×100 so the API stays unit-consistent with greeks.
+      iv: Number.isFinite(g.iv) && g.iv > 0 ? g.iv : null,
+      mark: Number.isFinite(g.mark) && g.mark > 0 ? g.mark : null,
+    };
+  }
+  return byKey;
+}
+
+// --- TastyTrade REST path (DATA_SOURCE=tt, i.e. Theta paused) ---------------
+// The Theta path above is the ONLY source this endpoint had, so with Theta
+// paused every Vol / OI / IV cell on the /flow tape rendered "—" even though
+// the same three numbers were sitting on the TT chain the rest of the app runs
+// on. Same source fetchChainFull() uses: cached chain contracts + ONE batched
+// /market-data/by-type pull, which carries OI, volume, IV and mark per OCC.
+async function _statsFromTT(root, expiry) {
+  const chain = await getChainCached(root).catch(() => ({ contracts: [] }));
+  let scoped = (chain.contracts || []).filter((c) => c.expiration === expiry && c.occSymbol);
+  if (!scoped.length) return {};
+
+  // Cost guard. A full SPX 0DTE expiry is ~1600 contracts = ~16 batched TT
+  // calls, and the tape can ask for up to CONTRACT_STATS_MAX_GROUPS of them
+  // every poll — enough to rate-limit the broker on its own. Flow prints land
+  // near the money, so keep the strikes nearest spot and drop the far tail.
+  if (scoped.length > CONTRACT_STATS_MAX_CONTRACTS) {
+    const spot = await fetchUnderlyingSpot(root).catch(() => 0);
+    if (spot > 0) {
+      scoped = scoped
+        .slice()
+        .sort((a, b) => Math.abs(Number(a.strike) - spot) - Math.abs(Number(b.strike) - spot))
+        .slice(0, CONTRACT_STATS_MAX_CONTRACTS);
+    } else {
+      scoped = scoped.slice(0, CONTRACT_STATS_MAX_CONTRACTS);
+    }
+  }
+
+  // TT prices SPX/NDX index options under equity-option[] (index-option[]
+  // returns nothing) — mirror fetchOptionMarketData's call in fetchChainFull.
+  const md = await fetchOptionMarketData(scoped.map((c) => c.occSymbol), 'equity-option');
+  // Before 9:30 ET REST `volume` still holds the PRIOR session's cumulative
+  // total. Blank it rather than show yesterday's tape as today's.
+  const preOpen = isPreOpenEt();
+
+  const byKey = {};
+  for (const c of scoped) {
+    const m = md.get(normalizeOcc(c.occSymbol));
+    if (!m) continue; // no row at all -> leave the cell "—", don't invent a 0
+    const k = `${Number(c.strike)}|${c.type}`;
+    const row = {
+      // 0 is a real answer here (an untouched strike), so it is NOT nulled.
+      vol: preOpen ? null : (Number.isFinite(m.volume) ? m.volume : null),
+      oi: Number.isFinite(m.oi) ? m.oi : null,
+      // TT delivers IV as a decimal, same unit as the Theta path.
+      iv: Number.isFinite(m.iv) && m.iv > 0 ? m.iv : null,
+      mark: Number.isFinite(m.mark) && m.mark > 0 ? m.mark : null,
+    };
+    // On monthly Fridays TT returns SPX (AM) and SPXW (PM) under ONE chain
+    // query and both fold to the same strike|type key. Keep whichever root
+    // actually traded instead of letting row order decide.
+    const prev = byKey[k];
+    if (prev && (prev.vol ?? 0) + (prev.oi ?? 0) >= (row.vol ?? 0) + (row.oi ?? 0)) continue;
+    byKey[k] = row;
+  }
+  return byKey;
+}
 
 async function _statsForGroup(root, expiry) {
   const key = `${root}|${expiry}`;
@@ -1101,33 +1192,22 @@ async function _statsForGroup(root, expiry) {
   if (inFlight) return inFlight;
 
   const p = (async () => {
-    const [oiMap, greekMap, volMap] = await Promise.all([
-      thetaAdapter.fetchOpenInterestTheta(root, expiry).catch(() => new Map()),
-      thetaAdapter.fetchGreeksTheta(root, expiry).catch(() => new Map()),
-      thetaAdapter.fetchVolumeTheta(root, expiry).catch(() => new Map()),
-    ]);
+    // Source follows DATA_SOURCE. Either way, an EMPTY result falls through to
+    // the other provider — a paused/rate-limited upstream must not silently
+    // blank the tape when the other one still has the numbers.
+    let byKey = useTheta()
+      ? await _statsFromTheta(root, expiry).catch(() => ({}))
+      : await _statsFromTT(root, expiry).catch(() => ({}));
 
-    // Union the three maps' keys: a contract can have volume but no greeks yet
-    // (pre-open), or OI but no trades today. Missing legs stay null rather than
-    // 0 so the UI can render "—" instead of a misleading zero.
-    const byKey = {};
-    const keys = new Set([...oiMap.keys(), ...greekMap.keys(), ...volMap.keys()]);
-    for (const k of keys) {
-      // Theta keys are `exp|strike|type` — same shape _probeKeyOf builds.
-      const [, strike, type] = String(k).split('|');
-      const g = greekMap.get(k) || {};
-      const oi = oiMap.get(k)?.oi;
-      const vol = volMap.get(k);
-      byKey[`${strike}|${type}`] = {
-        vol: Number.isFinite(vol) ? vol : null,
-        oi: Number.isFinite(oi) ? oi : null,
-        // Theta reports IV as a decimal (0.184). Keep it decimal here; the UI
-        // owns the ×100 so the API stays unit-consistent with greeks.
-        iv: Number.isFinite(g.iv) && g.iv > 0 ? g.iv : null,
-        mark: Number.isFinite(g.mark) && g.mark > 0 ? g.mark : null,
-      };
+    if (!Object.keys(byKey).length) {
+      byKey = useTheta()
+        ? await _statsFromTT(root, expiry).catch(() => ({}))
+        : await _statsFromTheta(root, expiry).catch(() => ({}));
     }
-    _statsCache.set(key, { at: Date.now(), byKey });
+
+    // Never cache an empty map for the full TTL — that pins "—" on the tape for
+    // 20s after a single upstream hiccup. Let the next poll retry instead.
+    if (Object.keys(byKey).length) _statsCache.set(key, { at: Date.now(), byKey });
     return byKey;
   })().finally(() => _statsInFlight.delete(key));
 

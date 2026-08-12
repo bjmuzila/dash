@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { recipes as api, type Draft, type Category, type Skill } from '../api'
-import { T, label, display, body, section, button, input, SANS } from '../theme'
+import { T, label, display, body, section, button, segment, input, SANS } from '../theme'
 
 /**
  * Add a recipe. Three ways in, one way out.
@@ -74,10 +74,12 @@ export default function Add() {
   return (
     <div style={{ display: 'grid', gap: 14 }}>
       <div style={{ display: 'flex', gap: 8 }}>
+        {/* A segmented control, not three buttons. `button('primary')` is the
+            page's one filled action and belongs on Import — spending it on a
+            mode switch leaves nothing to mark the actual verb. */}
         {(['link', 'text', 'manual'] as Mode[]).map((m) => (
           <button key={m} onClick={() => setMode(m)} style={{
-            ...button(mode === m ? 'primary' : 'ghost'),
-            flex: 1, minHeight: 40, fontSize: 13, padding: '10px 8px',
+            ...segment(mode === m), flex: 1, minHeight: 40,
           }}>
             {m === 'link' ? 'Link' : m === 'text' ? 'Paste' : 'By hand'}
           </button>

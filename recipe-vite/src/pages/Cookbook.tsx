@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { recipes as api, type Category, type RecipeCard } from '../api'
+import { recipes as api, imageSrc, type Category, type RecipeCard } from '../api'
 import { T, label, display, body, section, segment, input, minutes, SANS, SERIF } from '../theme'
 
 /**
@@ -110,6 +110,7 @@ function Card({ r }: { r: RecipeCard }) {
     time ? `${minutes(time)} cook time` : null,
     r.ingredient_count ? `${r.ingredient_count} ingredients` : null,
   ].filter(Boolean).join(' · ')
+  const src = imageSrc(r)
 
   return (
     <Link
@@ -123,11 +124,11 @@ function Card({ r }: { r: RecipeCard }) {
         width: 64, height: 64, flexShrink: 0, borderRadius: 999, overflow: 'hidden',
         background: T.paperSunk, display: 'grid', placeItems: 'center',
       }}>
-        {r.image_url
+        {src
           // Round, like the reference. loading="lazy" matters here: a cookbook
-          // of 200 rows would otherwise open 200 connections to other people's
-          // servers the moment the tab loads.
-          ? <img src={r.image_url} alt="" loading="lazy" decoding="async"
+          // of 200 rows would otherwise fire 200 image requests the moment the
+          // tab loads — at the backend now, rather than at other people's CDNs.
+          ? <img src={src} alt="" loading="lazy" decoding="async"
                  style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
           : <span style={{ fontFamily: SERIF, fontSize: 22, color: T.faint }}>
               {r.title.slice(0, 1).toUpperCase()}

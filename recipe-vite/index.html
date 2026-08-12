@@ -4,16 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="robots" content="noindex, nofollow" />
-    <!-- Must match T.paper in src/theme.ts. This paints the browser chrome and
-         the splash behind the installed app; a mismatch here is the white flash
-         on every cold start. -->
-    <meta name="theme-color" content="#FCFBF9" />
+    <!-- #05060A — must match T.paper in src/theme.ts. This paints the browser
+         chrome and the splash behind the installed app; left on a light value
+         the app flashes white on every cold start. -->
+    <meta name="theme-color" content="#05060A" />
 
     <!-- Installs to the home screen as a standalone app on iOS.
-         `default`, not black-translucent: this app has a LIGHT surface, so a
-         translucent status bar would put white system text on white paper. -->
+         black-translucent, not default: the shell already pads with
+         env(safe-area-inset-top) and the viewport is viewport-fit=cover, so the
+         page runs under the status bar instead of leaving a white band. -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Cookbook" />
 
     <!-- iOS ignores the manifest icons and uses THIS one, which is why it

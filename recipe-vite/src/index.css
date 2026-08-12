@@ -1,11 +1,11 @@
 /* Minimal reset. This app is inline-styled from src/theme.ts, so there is no
    utility framework here on purpose — nothing to keep in sync.
 
-   What belongs here is only what a React style prop can't reach: the root
+   What DOES belong here is anything a React style prop can't reach: the root
    surface, the default font, placeholder colour, native control theming and
-   scrollbars. Keep these values in step with theme.ts — an element without an
-   explicit fontFamily falls back to whatever `body` says, and if that drifts
-   you get Times in one corner of the app and never find out why. */
+   scrollbars. This file was still carrying the light "warm paper" values long
+   after the app went dark, which is why any element without an explicit
+   fontFamily rendered in Times — the browser default, not a choice. */
 
 * { box-sizing: border-box; }
 
@@ -13,14 +13,14 @@ html, body, #root {
   margin: 0;
   padding: 0;
   height: 100%;
-  /* T.paper */
-  background: #FCFBF9;
+  background: #05060A;
 }
 
 body {
+  /* The default for everything that doesn't set its own family. Mono and serif
+     are opt-in, via theme.ts. */
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
-  /* T.ink — warm near-black, not #000 */
-  color: #1A1714;
+  color: #FFFFFF;
   -webkit-font-smoothing: antialiased;
   /* Stops iOS bumping text size when the phone rotates. */
   -webkit-text-size-adjust: 100%;
@@ -33,21 +33,24 @@ input, button, select, textarea { font: inherit; color: inherit; }
 /* Remove the grey tap flash on iOS. */
 * { -webkit-tap-highlight-color: transparent; }
 
-::placeholder { color: rgba(26,23,20,0.42); }
+/* Bright enough to read on near-black. A dim placeholder on a dark input is
+   the single most common "is this field broken?" moment on a phone. */
+::placeholder { color: rgba(255,255,255,0.55); }
 
-/* Native widgets follow the page. Light here, unlike budget-vite. */
+/* Native widgets — date pickers, checkboxes, the number spinner — follow this.
+   Left on `light` they render a white popover on a black page. */
 input[type="date"], input[type="number"], input[type="checkbox"],
-select, textarea { color-scheme: light; }
+select, textarea { color-scheme: dark; }
 
+/* Scrollbars, dark. */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: rgba(26,23,20,0.16); border-radius: 8px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
-/* Horizontal chip rows (categories, ingredient cards) scroll by touch and must
-   not show a bar on desktop — the row is short and a scrollbar under it reads
-   as a broken layout. */
+/* Horizontal chip rows (categories) scroll by touch and must not show a bar on
+   desktop — the row is short and a scrollbar under it reads as a broken layout. */
 .no-bar { scrollbar-width: none; -ms-overflow-style: none; }
 .no-bar::-webkit-scrollbar { display: none; }
 
-/* A thin accent ring, not a glow. T.accent at 55%. */
-:focus-visible { outline: 2px solid rgba(226,115,74,0.55); outline-offset: 1px; }
+/* A thin accent ring, not a glow. */
+:focus-visible { outline: 2px solid rgba(142,202,230,0.55); outline-offset: 1px; }

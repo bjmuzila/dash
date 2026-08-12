@@ -1,5 +1,162 @@
 # Changelog
 
+## 2026-08-12 - Flow tape Vol / OI / IV: TastyTrade fallback (Theta is paused)
+
+`server-v2/proxy-tastytrade.js` — `_statsForGroup()` split into `_statsFromTheta()`
++ new `_statsFromTT()`. `node --check` clean. No client change.
+
+### What
+
+Every VOL / OI / IV cell on `/flow` rendered `—`. Live check:
+`/proxy/contract-stats?groups=SPX:2026-08-12` returned
+`{"stats":{"SPX|2026-08-12":{}},"groups":1}` — the group resolved, the map was
+empty. `/proxy/probe-rest` on the same contract answered fine and reported
+`"_src":"TT only (Theta paused)"`.
+
+`contractStats()` was wired Theta-ONLY (`fetchOpenInterestTheta` /
+`fetchGreeksTheta` / `fetchVolumeTheta`). Under `DATA_SOURCE=tt` all three
+return empty, each `.catch(() => new Map())` swallowed it, and the endpoint
+answered `200 {}` — so the tape had no way to tell "no data" from "no source".
+The same three numbers were sitting on the TT chain the rest of the app runs on.
+
+### How
+
+- **`_statsFromTT(root, expiry)`** — cached chain contracts for the expiry +
+  ONE batched `fetchOptionMarketData(..., 'equity-option')` pull, the same
+  source `fetchChainFull()` uses. IV stays decimal so the unit matches the
+  Theta path and the UI keeps owning the x100.
+- **Source follows `useTheta()`, and an EMPTY result falls through to the other
+  provider.** A paused or rate-limited upstream no longer blanks the tape when
+  the other one still has the numbers.
+- **Empty maps are no longer cached.** Previously one upstream hiccup pinned
+  `—` on the tape for the full 20s TTL; now the next poll retries.
+- **`CONTRACT_STATS_MAX_CONTRACTS = 800`** per group on the TT path. A full SPX
+  0DTE expiry is ~1600 contracts = ~16 broker round-trips, and the tape can ask
+  for up to 16 groups a poll. Flow prints land near the money, so the strikes
+  nearest spot are kept and the far tail is dropped.
+- Monthly Fridays return SPX (AM) and SPXW (PM) under one chain query and both
+  fold to the same `strike|type` key — the row that actually traded wins
+  instead of row order deciding.
+- `vol`/`oi` keep a real `0` (an untouched strike); `iv`/`mark` null out at 0.
+  Pre-9:30 ET, TT `volume` still holds the prior session's cumulative total, so
+  it is blanked rather than shown as today's.
+
+## 2026-08-12 - Cookbook goes dark: recipe.cbedge.net now uses the budget theme
+
+`recipe-vite/src/theme.ts` (replaced), `src/index.css`, `index.html`,
+`public/manifest.json`, the five icon PNGs, `src/components/Shell.tsx`,
+`src/pages/{Recipe,Add}.tsx`, `README.md`. `npx tsc --noEmit` and
+`npm run build` clean.
+
+### What
+
+The cookbook shipped in a warm-paper light theme, on the reasoning that a recipe
+is read in a bright kitchen and food photographs better on white. That reasoning
+holds in isolation and was wrong in context: this app shares a login, a grocery
+list and a week board with budget.cbedge.net, and sitting next to it in cream
+made one product look like two.
+
+### How
+
+- **`src/theme.ts` is now a verbatim copy of `budget-vite/src/theme.ts`**, plus
+  the `minutes()` helper at the bottom. Copied, not imported — same rule as the
+  auth screens: the apps build independently and a shared module would let a
+  budget change break this build. Every page already consumed the theme through
+  the same helper names (`T`, `section`, `button`, `segment`, `label`,
+  `display`, `body`, `input`), so nothing else had to move.
+- `index.css`, the `theme-color` meta, the manifest colours and the five icons
+  all follow to `#05060A`. iOS status bar goes back to `black-translucent`;
+  `color-scheme: dark` so native date pickers stop rendering a white popover.
+- **The hero controls flipped from a white pill to near-black at 62% with a
+  blur.** The photo is now the only light surface in the app: a white chip on it
+  disappears against a plate or a bowl of cream, a dark one reads against food
+  of any colour AND matches the page it scrolls into. Hairline stays white — a
+  dark border on a dark chip over an unpredictable photo has no edge at all.
+- **A bottom fade under the hero.** A bright rectangle butting straight into a
+  near-black page reads as a rendering seam.
+- Tab bar switched to budget's mono caps. Four tabs at ~97px each keep the
+  0.12em tracking budget had to drop at six.
+- Add's three-way mode row became a `segment()` control instead of three
+  buttons: `button('primary')` is the page's one filled action and belongs on
+  Import — spending it on a mode switch leaves nothing to mark the actual verb.
+
+### Deploy
+
+SPA only — the backend didn't change.
+
+```
+git pull && docker compose build recipes && docker compose up -d recipes
+```
+
+## 2026-08-12 - Recipe photos are copied into Postgres, and you can shoot your own
+
+New: `hh_recipe_images` table, `GET/POST /api/hh/recipes/image`,
+`server-v2/scripts/backfill-recipe-images.js`.
+Edited: `server-v2/_lib-household.cjs`, `_lib-household-recipes.cjs`,
+`household-routes.cjs`, `recipe-vite/src/{api.ts,pages/Cookbook.tsx,pages/Recipe.tsx}`,
+`recipe-vite/nginx.conf`. `npx tsc --noEmit` clean, `npm run build` clean,
+selftest 59 passed.
+
+### What
+
+The cookbook was storing the source page's `og:image` URL and rendering from it.
+That is fine for a blog and wrong for everything else: a TikTok or Instagram
+cover is a SIGNED CDN link with an expiry in the query string. It works the day
+you import and 403s a day or two later, so the cookbook would have quietly
+decayed into a wall of letter-tile placeholders — worst of all on exactly the
+imports that just started working.
+
+So the bytes get copied at import time, and there's now a photo picker on the
+recipe screen for shooting your own.
+
+### How
+
+- **`hh_recipe_images`** — `recipe_id` PRIMARY KEY (one photo per recipe, and
+  the upsert is a plain `ON CONFLICT`), `mime`, `bytes BYTEA`, `etag`,
+  `source_url`. `ON DELETE CASCADE`, unlike the `recipe_id` backlinks on
+  `hh_list_items`/`hh_meals` — an orphaned blob helps nobody, where an orphaned
+  grocery item you're standing in the shop holding does.
+- **A separate table, not a column on `hh_recipes`.** This is the load-bearing
+  part: nothing can drag image bytes into a list query by accident. The cookbook
+  index selects twenty rows to draw 64px thumbnails; with `bytes` on that row it
+  would be a multi-megabyte response every time. `CARD_SELECT`/`FULL_SELECT` add
+  only a correlated subquery for the etag, never the bytes.
+- **`etag` is a content hash and the client appends it as `?v=`.** That is what
+  makes `immutable, max-age=1 year` safe — replace a photo and the URL changes,
+  so every phone refetches instead of showing last month's picture until next
+  year. Without `v=` the route falls back to `max-age=60`. `If-None-Match` is
+  honoured, so a phone that already has the photo gets a 304.
+- **Capture runs in the BACKGROUND on create**, deliberately not awaited: saving
+  a recipe must not sit on someone else's CDN for ten seconds. The gap is
+  covered because `image_url` is still fresh at that moment and `imageSrc()`
+  falls back to it — by the time that link expires the bytes are here. Every
+  failure path in `captureImage` returns null rather than throwing, so a slow
+  CDN can never roll back a saved recipe.
+- **Referer header on the capture fetch.** TikTok's CDN 403s a request without
+  one; sending the image's own origin is enough to look ordinary.
+- **Phone upload downscales in the BROWSER** (`downscale()` in `src/api.ts`,
+  canvas → 1400px → JPEG q0.82, ~200-400KB). No `sharp` in the backend: a native
+  image dependency is a bigger image and a build that breaks on a base-image
+  bump, to save a couple hundred KB on a picture the source already sized for
+  the web. Upload rides the existing JSON reader as a data URL — the household
+  backend has no multipart parser and doesn't need one. nginx
+  `client_max_body_size` 2m → 16m so an oversized body fails the server's own
+  8MB check with a real message instead of a bare 413.
+- The file input resets `value` after each pick, or choosing the same photo
+  twice after a failure fires no change event and reads as a dead button.
+
+### Deploy
+
+```
+git pull && docker compose build dashboard && docker compose up -d dashboard
+docker compose build recipes && docker compose up -d recipes
+docker compose exec -T dashboard node server-v2/scripts/backfill-recipe-images.js
+```
+
+The backfill copies photos for recipes imported before this change. Run it
+promptly — a signed link that expired last week can't be recovered, only
+re-imported.
+
 ## 2026-08-12 - Recipe import: read the caption out of JS-rendered pages (TikTok, Instagram)
 
 `server-v2/_lib-household-recipes.cjs` — new `metaContent()`, `embeddedCaption()`,

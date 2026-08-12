@@ -32,6 +32,8 @@
  *   POST /api/hh/settings              household
  *   GET  /api/hh/recipes               household  — ?id=N one recipe, else the index
  *   POST /api/hh/recipes               household  — action dispatch (recipe.cbedge.net)
+ *   GET  /api/hh/recipes/image         household  — recipe photo bytes (?id=N&v=etag)
+ *   POST /api/hh/recipes/image         household  — replace/remove a recipe photo
  *
  * There is deliberately NO signup route. Accounts are created with
  * server-v2/scripts/hh-user.js. Two people, forever.
@@ -1169,6 +1171,90 @@ function registerHouseholdRoutes({ register, send, readJson }) {
           }
 
           send(res, 400, { error: `Unknown action: ${action}` }, nostore);
+        } catch (err) {
+          send(res, 400, { error: String(err?.message || err) }, nostore);
+        }
+      },
+    });
+  }
+
+  // ── Recipe photos ─────────────────────────────────────────────────────────
+  //
+  // GET  /api/hh/recipes/image?id=N[&v=etag]   the bytes
+  // POST /api/hh/recipes/image  {id, dataUrl}  replace it (browser upload)
+  // POST /api/hh/recipes/image  {id, remove:true}
+  //
+  // A separate route from /api/hh/recipes because this one writes BINARY, not
+  // JSON — it bypasses send() and talks to the response directly — and because
+  // an upload body is measured in megabytes where every other action here is
+  // measured in kilobytes.
+
+  if (hrecipes && hrecipes.available()) {
+    add('/api/hh/recipes/image', {
+      auth: 'household', methods: ['GET', 'POST'],
+      async handler(req, res, _ctx, access) {
+        const u = access.hhUser;
+        try {
+          if (req.method === 'GET') {
+            const p = new URL(req.url || '/', 'http://localhost').searchParams;
+            const id = Number(p.get('id') || 0);
+            if (!Number.isInteger(id) || id <= 0) { send(res, 400, { error: 'Missing id.' }, nostore); return; }
+
+            const img = await hrecipes.readImage(u.id, id);
+            if (!img) { send(res, 404, { error: 'No image.' }, nostore); return; }
+
+            const tag = `"${img.etag}"`;
+            // Conditional request — a phone that already has this photo gets 33
+            // bytes back instead of 300KB.
+            if ((req.headers['if-none-match'] || '') === tag) {
+              res.writeHead(304, { ETag: tag });
+              res.end();
+              return;
+            }
+
+            // immutable + a year is safe ONLY because the client appends ?v=etag
+            // (see IMG_ETAG in _lib-household-recipes.cjs). Replacing the photo
+            // changes the URL, so nothing serves a stale one.
+            res.writeHead(200, {
+              'Content-Type': img.mime,
+              'Content-Length': img.bytes.length,
+              'Cache-Control': p.get('v') ? 'private, max-age=31536000, immutable' : 'private, max-age=60',
+              ETag: tag,
+            });
+            res.end(img.bytes);
+            return;
+          }
+
+          // 12MB: a browser-downscaled JPEG is a few hundred KB, base64 inflates
+          // it by a third, and the lib caps the decoded bytes at 8MB anyway.
+          // This is the outer guard, not the real limit.
+          const body = await readJson(req, 12 * 1024 * 1024);
+          const id = Number(body?.id ?? 0);
+          if (!Number.isInteger(id) || id <= 0) { send(res, 400, { error: 'Missing id.' }, nostore); return; }
+
+          if (body?.remove) {
+            await hrecipes.deleteImage(u.id, id);
+            send(res, 200, { ok: true, removed: true }, nostore);
+            return;
+          }
+          if (body?.dataUrl) {
+            const out = await hrecipes.setImageFromDataUrl(u.id, id, body.dataUrl);
+            send(res, 200, { ok: true, ...out }, nostore);
+            return;
+          }
+          // Re-copy from a URL — the repair path when a capture failed at import
+          // time, and how "paste an image link" is implemented.
+          if (body?.url) {
+            // captureImage takes a bare recipe id, so the visibility check has
+            // to happen here — it is the one image path that doesn't get it for
+            // free from getRecipe. Throws 'Not found.' if this user can't see it.
+            await hrecipes.getRecipe(u.id, id);
+            const out = await hrecipes.captureImage(id, body.url);
+            if (!out) { send(res, 400, { error: "Couldn't read an image from that link." }, nostore); return; }
+            send(res, 200, { ok: true, ...out }, nostore);
+            return;
+          }
+          send(res, 400, { error: 'Nothing to store.' }, nostore);
         } catch (err) {
           send(res, 400, { error: String(err?.message || err) }, nostore);
         }
