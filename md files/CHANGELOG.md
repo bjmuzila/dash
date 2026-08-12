@@ -1,5 +1,99 @@
 # Changelog
 
+## 2026-08-12 - New app: recipe.cbedge.net — the cookbook, wired into the household grocery list
+
+New: `recipe-vite/` (SPA), `server-v2/_lib-household-recipes.cjs`,
+`server-v2/_lib-household-recipes.selftest.js`.
+Edited: `server-v2/_lib-household.cjs` (schema), `server-v2/household-routes.cjs`
+(routes), `docker-compose.yml` (the `recipes` service).
+Verified: `node server-v2/_lib-household-recipes.selftest.js` — 45 passed;
+`npx tsc --noEmit` clean; `npm run build` in `recipe-vite/` clean.
+
+### What
+
+A fourth app on the household stack, modelled on the Julienne cooking app: paste
+a recipe link, get a recipe; scale it to how many you're feeding; send the
+ingredients to the grocery list that already exists.
+
+It is NOT a standalone cookbook. It shares the household auth (`hh_users` /
+`hh_session` — one password, one PIN) and, deliberately, the household *tables*:
+
+- **"Add all"** inserts real `hh_list_items` rows, aisle-sorted, at the scaled
+  amount. They appear on budget.cbedge.net's grocery list immediately, because
+  it is the same list. No mirror, no sync step to fall out of date.
+- **"Pick a day"** inserts an `hh_meals` row, so a planned recipe lands on the
+  week board with its ingredients attached to it.
+
+Both new columns are `recipe_id ... ON DELETE SET NULL`: deleting a recipe must
+not pull tortillas off a list you're standing in the shop holding, or blank out
+Tuesday on the week board.
+
+### How
+
+**Import — structured data first, AI second.** `POST /api/hh/recipes
+{action:'import'}` fetches the page (15s cap, 3MB cap, http/https only, private
+address space refused so a pasted link can't probe the VPS's own network), then
+looks for a `schema.org/Recipe` node in any `application/ld+json` block,
+including inside `@graph`. Most food blogs publish one because Google requires
+it — that path is free, instant and exact. Only when it's missing, or the node
+has no ingredients (a roundup post), does the page get stripped to text and sent
+to Claude. Pasted text always takes the AI path; there is nothing structured in
+an Instagram caption to read.
+
+Import **never writes to the database**. It returns a draft for the review
+screen and nothing is saved until you press save there — import is the step most
+likely to get something subtly wrong, and a cookbook that quietly fills with
+half-read blog posts is worse than one you paste into by hand. The review screen
+also says which path read it, so an AI import gets a closer look.
+
+**Ingredients are stored three ways** —
+`{ raw, qty, unit, item, aisle }`. `raw` is the line as written and is what you
+read while cooking; the parsed pieces exist for two jobs only, scaling and the
+grocery hand-off. The parser is deliberately conservative: "a pinch of flaky
+salt" gets `qty: null` and passes through every scale factor untouched, because
+you cannot double a pinch and a scaled `0.375 tsp` is worse than no number.
+Aisle guessing is `_lib-household-lists.cjs`'s `guessAisle`, reused rather than
+reimplemented, so an ingredient added from a recipe files itself exactly where
+it would if you'd typed it on the list.
+
+**Schema.** `hh_recipes` holds ingredients and steps as JSONB **on the recipe
+row**, not in child tables. An ingredient has no life of its own — never
+queried, sorted or joined outside its recipe, and always written as a complete
+replacement on save. Child tables would buy ordering columns, a
+delete-and-reinsert dance per save and three round trips to render one screen,
+in exchange for nothing this app does. Search still reaches inside via
+`ingredients::text`, which is what makes "what can I make with gochujang" work.
+Created by `ensureSchema()` on the first household request after deploy — no
+migration to run.
+
+**`formatQty` exists twice**, in the server lib and in
+`recipe-vite/src/pages/Recipe.tsx`. The servings stepper re-renders on every tap
+and a round trip per tap would feel broken. The selftest is the shared contract
+— change one, change both.
+
+**The SPA** is `budget-vite`'s skeleton with a light palette: warm paper, serif
+titles, one terracotta action per screen, photo-first recipe page (Shell drops
+its header on `/r/:id` so the food is the first thing on screen). The auth
+screens are copies of budget-vite's, not imports — the two apps build and deploy
+independently and a shared module would let a budget change break this build.
+
+### Deploy notes
+
+- Service is `recipes`, nginx on `127.0.0.1:8084`, loopback only.
+  `docker compose build recipes && docker compose up -d recipes`.
+- First deploy also needs the tunnel hostname in `/etc/cloudflared/config.yml`
+  ABOVE the catch-all 404 rule:
+  `- hostname: recipe.cbedge.net` / `service: http://127.0.0.1:8084`, then
+  `cloudflared tunnel route dns <tunnel> recipe.cbedge.net` and
+  `systemctl restart cloudflared`.
+- AI fallback needs `ANTHROPIC_API_KEY` in `.env.local` (read by the DASHBOARD
+  container — the key never reaches the browser). Optional `RECIPE_AI_MODEL`,
+  default `claude-sonnet-4-5`. Without it, link imports of sites with structured
+  data still work and the Paste tab says so up front instead of failing after a
+  20-second wait.
+- nginx proxies **only** `/api` — same narrow surface as budget. This app can
+  never reach `/ws` or `/proxy`, so a bug here cannot touch the trading stack.
+
 ## 2026-08-12 - SPX flow: the strike-growth feed was eating the ATM tape (Net Drift quiet half-hours, round 3)
 
 `server-v2/proxy-tastytrade.js` — two guards in `_onEvent`. Confirmed

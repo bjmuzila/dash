@@ -247,6 +247,57 @@ async function ensureSchema() {
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_list_items_list_idx ON hh_list_items(list, checked_at)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_list_items_meal_idx ON hh_list_items(meal_id)`);
 
+    // ── Recipes ──────────────────────────────────────────────────────────
+    // The cookbook behind recipe.cbedge.net. See _lib-household-recipes.cjs.
+    //
+    // Ingredients and steps are JSONB ON THE RECIPE ROW, not child tables.
+    // That is a deliberate call: an ingredient has no life of its own — it is
+    // never queried, sorted or joined outside the recipe it belongs to, and it
+    // is always written as a complete replacement when you edit the recipe.
+    // Child tables would buy ordering columns, a delete-and-reinsert dance on
+    // every save, and three round trips to render one screen, in exchange for
+    // nothing this app does. Search still reaches inside via ingredients::text.
+    //
+    // Each ingredient is { raw, qty, unit, item, aisle }: the line as written
+    // (what you read while cooking), plus the parsed pieces (what makes
+    // "cooking for 8" and the grocery hand-off possible). See parseIngredient.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hh_recipes (
+        id            SERIAL PRIMARY KEY,
+        owner_id      INTEGER NOT NULL REFERENCES hh_users(id) ON DELETE CASCADE,
+        visibility    TEXT NOT NULL DEFAULT 'shared',
+        title         TEXT NOT NULL,
+        description   TEXT,
+        image_url     TEXT,
+        source_url    TEXT,
+        source_name   TEXT,
+        servings      INTEGER,
+        prep_minutes  INTEGER,
+        cook_minutes  INTEGER,
+        calories      INTEGER,
+        category      TEXT NOT NULL DEFAULT 'other',
+        skill         TEXT NOT NULL DEFAULT 'easy',
+        favorite      BOOLEAN NOT NULL DEFAULT FALSE,
+        notes         TEXT,
+        ingredients   JSONB NOT NULL DEFAULT '[]'::jsonb,
+        steps         JSONB NOT NULL DEFAULT '[]'::jsonb,
+        cooked_count  INTEGER NOT NULL DEFAULT 0,
+        last_cooked_at TIMESTAMPTZ,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_recipes_cat_idx ON hh_recipes(category, updated_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_recipes_fav_idx ON hh_recipes(favorite, updated_at DESC)`);
+
+    // Backlinks. ON DELETE SET NULL throughout, matching hh_list_items.meal_id:
+    // deleting a recipe must not silently pull tortillas off a grocery list you
+    // are standing in the shop holding, or blank out Tuesday on the week board.
+    // Added as ALTER on purpose — both tables predate this feature, so CREATE
+    // TABLE IF NOT EXISTS above would skip the new column on the live box.
+    await pool.query(`ALTER TABLE hh_list_items ADD COLUMN IF NOT EXISTS recipe_id INTEGER REFERENCES hh_recipes(id) ON DELETE SET NULL`);
+    await pool.query(`ALTER TABLE hh_meals ADD COLUMN IF NOT EXISTS recipe_id INTEGER REFERENCES hh_recipes(id) ON DELETE SET NULL`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_list_items_recipe_idx ON hh_list_items(recipe_id)`);
+
     // ── Projects ─────────────────────────────────────────────────────────
     // A project groups work and shows how far along it is. Progress is computed
     // from MILESTONES, not from tasks: a project with 40 small tasks and 3 real
@@ -347,7 +398,7 @@ async function ensureSchema() {
     // the migration runner we deliberately don't have. If a row somehow ends up
     // private again, `(owner_id = $1 OR visibility = 'shared')` in the route
     // modules still does the right thing rather than leaking it.
-    for (const t of ['hh_tasks', 'hh_notes', 'hh_routines', 'hh_meals', 'hh_list_items', 'hh_projects']) {
+    for (const t of ['hh_tasks', 'hh_notes', 'hh_routines', 'hh_meals', 'hh_list_items', 'hh_projects', 'hh_recipes']) {
       try {
         await pool.query(`ALTER TABLE ${t} ALTER COLUMN visibility SET DEFAULT 'shared'`);
         await pool.query(`UPDATE ${t} SET visibility='shared' WHERE visibility <> 'shared'`);

@@ -30,6 +30,8 @@
  *   POST /api/hh/notes                 household  — action dispatch
  *   GET  /api/hh/settings              household
  *   POST /api/hh/settings              household
+ *   GET  /api/hh/recipes               household  — ?id=N one recipe, else the index
+ *   POST /api/hh/recipes               household  — action dispatch (recipe.cbedge.net)
  *
  * There is deliberately NO signup route. Accounts are created with
  * server-v2/scripts/hh-user.js. Two people, forever.
@@ -77,6 +79,12 @@ catch (e) { console.warn('[household] projects lib not loaded:', e.message); }
 let hlists = null;
 try { hlists = require('./_lib-household-lists.cjs'); }
 catch (e) { console.warn('[household] lists lib not loaded:', e.message); }
+// The cookbook behind recipe.cbedge.net. Optional like the rest — without the
+// DB bundle the /api/hh/recipes routes simply don't register and the recipe SPA
+// shows its empty state instead of the dashboard failing to boot.
+let hrecipes = null;
+try { hrecipes = require('./_lib-household-recipes.cjs'); }
+catch (e) { console.warn('[household] recipes lib not loaded:', e.message); }
 
 // THE access predicate. $1 is always the caller's hh_users.id.
 const VISIBLE = `(owner_id = $1 OR visibility = 'shared')`;
@@ -1065,6 +1073,100 @@ function registerHouseholdRoutes({ register, send, readJson }) {
           }
           if (action === 'archive') { await hroutines.archive(u.id, id); send(res, 200, { ok: true }, nostore); return; }
           if (action === 'delete') { await hroutines.remove(u.id, id); send(res, 200, { ok: true }, nostore); return; }
+
+          send(res, 400, { error: `Unknown action: ${action}` }, nostore);
+        } catch (err) {
+          send(res, 400, { error: String(err?.message || err) }, nostore);
+        }
+      },
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Recipes — recipe.cbedge.net
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // GET  /api/hh/recipes?id=N            one recipe, ingredients and steps included
+  // GET  /api/hh/recipes?q=&category=    the cookbook index (no ingredients — see CARD_COLS)
+  // POST /api/hh/recipes  { action }     import | create | update | delete |
+  //                                      favorite | cooked | addToList | plan
+  //
+  // `import` is the only action that does NOT write to the database. It returns
+  // a draft for the review screen; nothing is saved until `create`. That split
+  // is what keeps a half-read blog post out of the cookbook.
+
+  if (hrecipes && hrecipes.available()) {
+    add('/api/hh/recipes', {
+      auth: 'household', methods: ['GET', 'POST'],
+      async handler(req, res, _ctx, access) {
+        const u = access.hhUser;
+        try {
+          if (req.method === 'GET') {
+            const p = new URL(req.url || '/', 'http://localhost').searchParams;
+            const id = Number(p.get('id') || 0);
+            if (Number.isInteger(id) && id > 0) {
+              send(res, 200, { recipe: await hrecipes.getRecipe(u.id, id) }, nostore);
+              return;
+            }
+            send(res, 200, await hrecipes.listRecipes(u.id, {
+              q: p.get('q'), category: p.get('category'), favorite: p.get('favorite') === '1',
+            }), nostore);
+            return;
+          }
+
+          // 250KB: an import can carry a pasted recipe (capped at 60k chars in
+          // the lib) and a create carries the whole reviewed draft back.
+          const body = await readJson(req, 250_000);
+          const action = str(body?.action, 40);
+
+          if (action === 'import') {
+            // No id, no write — just a draft for the review screen.
+            send(res, 200, { ok: true, draft: await hrecipes.importRecipe({
+              url: body?.url, text: body?.text,
+            }) }, nostore);
+            return;
+          }
+          if (action === 'create') {
+            send(res, 200, { ok: true, recipe: await hrecipes.createRecipe(u.id, body?.recipe || body) }, nostore);
+            return;
+          }
+
+          const id = Number(body?.id ?? 0);
+          if (!Number.isInteger(id) || id <= 0) { send(res, 400, { error: 'Missing id.' }, nostore); return; }
+
+          if (action === 'update') {
+            send(res, 200, { ok: true, recipe: await hrecipes.updateRecipe(u.id, id, body?.patch || body) }, nostore);
+            return;
+          }
+          if (action === 'favorite') {
+            send(res, 200, { ok: true, recipe: await hrecipes.toggleFavorite(u.id, id) }, nostore);
+            return;
+          }
+          if (action === 'cooked') {
+            send(res, 200, { ok: true, recipe: await hrecipes.markCooked(u.id, id) }, nostore);
+            return;
+          }
+          if (action === 'delete') {
+            await hrecipes.deleteRecipe(u.id, id);
+            send(res, 200, { ok: true }, nostore);
+            return;
+          }
+          // Writes real hh_list_items rows — the grocery list on
+          // budget.cbedge.net picks them up with no sync step.
+          if (action === 'addToList') {
+            send(res, 200, { ok: true, ...(await hrecipes.addToList(u.id, id, {
+              servings: body?.servings, only: body?.only,
+            })) }, nostore);
+            return;
+          }
+          // …and a real hh_meals row, so the week board shows it.
+          if (action === 'plan') {
+            send(res, 200, { ok: true, ...(await hrecipes.planMeal(u.id, id, {
+              day: dateOrNull(body?.day), servings: body?.servings,
+              withList: body?.withList !== false,
+            })) }, nostore);
+            return;
+          }
 
           send(res, 400, { error: `Unknown action: ${action}` }, nostore);
         } catch (err) {

@@ -182,3 +182,37 @@ services:
     ports:
       # Loopback only — Cloudflare Tunnel reaches it, nothing public.
       - "127.0.0.1:8083:8083"
+
+  # recipe.cbedge.net — the cookbook SPA (recipe-vite/Dockerfile: node build
+  # stage → nginx). Same narrow surface as budget: ONLY /api is reverse-proxied
+  # to the dashboard container (same compose network → dashboard:3002), so this
+  # app can never reach /ws or /proxy and the market-data stack.
+  #
+  # Shares the household auth (hh_users / hh_session) and, deliberately, the
+  # household TABLES: "add all" writes hh_list_items rows and planning a meal
+  # writes hh_meals, so a recipe imported here shows up on budget.cbedge.net's
+  # grocery list and week board with no sync step. See
+  # server-v2/_lib-household-recipes.cjs.
+  #
+  # Reached only via the Cloudflare Tunnel — add to /etc/cloudflared/config.yml
+  # ABOVE the catch-all 404 rule:
+  #     - hostname: recipe.cbedge.net
+  #       service: http://127.0.0.1:8084
+  # then `cloudflared tunnel route dns <tunnel> recipe.cbedge.net` and
+  # `systemctl restart cloudflared`.
+  #
+  # AI import needs ANTHROPIC_API_KEY in .env.local (read by the DASHBOARD
+  # container, not this one — the key never leaves the backend). Without it,
+  # link imports of sites that publish schema.org data still work; pasted text
+  # returns a clear "not set up" message instead.
+  recipes:
+    build:
+      context: ./recipe-vite
+    image: recipe-web:latest
+    container_name: recipe-web
+    restart: unless-stopped
+    depends_on:
+      - dashboard
+    ports:
+      # Loopback only — Cloudflare Tunnel reaches it, nothing public.
+      - "127.0.0.1:8084:8084"

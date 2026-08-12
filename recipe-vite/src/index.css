@@ -1,0 +1,53 @@
+/* Minimal reset. This app is inline-styled from src/theme.ts, so there is no
+   utility framework here on purpose — nothing to keep in sync.
+
+   What belongs here is only what a React style prop can't reach: the root
+   surface, the default font, placeholder colour, native control theming and
+   scrollbars. Keep these values in step with theme.ts — an element without an
+   explicit fontFamily falls back to whatever `body` says, and if that drifts
+   you get Times in one corner of the app and never find out why. */
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  /* T.paper */
+  background: #FCFBF9;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
+  /* T.ink — warm near-black, not #000 */
+  color: #1A1714;
+  -webkit-font-smoothing: antialiased;
+  /* Stops iOS bumping text size when the phone rotates. */
+  -webkit-text-size-adjust: 100%;
+  /* Kills the rubber-band overscroll that makes a web app feel like a webpage. */
+  overscroll-behavior-y: none;
+}
+
+input, button, select, textarea { font: inherit; color: inherit; }
+
+/* Remove the grey tap flash on iOS. */
+* { -webkit-tap-highlight-color: transparent; }
+
+::placeholder { color: rgba(26,23,20,0.42); }
+
+/* Native widgets follow the page. Light here, unlike budget-vite. */
+input[type="date"], input[type="number"], input[type="checkbox"],
+select, textarea { color-scheme: light; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: rgba(26,23,20,0.16); border-radius: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* Horizontal chip rows (categories, ingredient cards) scroll by touch and must
+   not show a bar on desktop — the row is short and a scrollbar under it reads
+   as a broken layout. */
+.no-bar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-bar::-webkit-scrollbar { display: none; }
+
+/* A thin accent ring, not a glow. T.accent at 55%. */
+:focus-visible { outline: 2px solid rgba(226,115,74,0.55); outline-offset: 1px; }
