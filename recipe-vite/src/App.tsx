@@ -9,6 +9,7 @@ import SetPin from './pages/SetPin'
 import { T, SANS } from './theme'
 
 const Cookbook = lazy(() => import('./pages/Cookbook'))
+const Week     = lazy(() => import('./pages/Week'))
 const Recipe   = lazy(() => import('./pages/Recipe'))
 const Add      = lazy(() => import('./pages/Add'))
 const Settings = lazy(() => import('./pages/Settings'))
@@ -68,10 +69,13 @@ function Gate() {
       <Shell>
         <Routes>
           <Route path="/cookbook" element={S(<Cookbook />)} />
-          {/* Saved is the cookbook filtered to favourites — same screen, same
-              query key shape, one prop. A second component would be a copy of
-              Cookbook that drifts. */}
-          <Route path="/saved" element={S(<Cookbook favoritesOnly />)} />
+          {/* Week replaced the old Saved tab. Saved was the cookbook filtered to
+              favourites — a whole tab for one boolean, on a screen where
+              everything is already saved by definition. ★ is a chip in the
+              Cookbook filter row now, and the slot went to the thing that had
+              nowhere to live: what you actually planned. */}
+          <Route path="/week" element={S(<Week />)} />
+          <Route path="/saved" element={<Navigate to="/cookbook" replace />} />
           <Route path="/r/:id" element={S(<Recipe />)} />
           <Route path="/add" element={S(<Add />)} />
           <Route path="/settings" element={S(<Settings />)} />

@@ -13,8 +13,9 @@ import { T, label, display, body, section, segment, input, minutes, SANS, SERIF,
  * loaded. Doing either client-side would quietly sort a page instead of a
  * cookbook.
  *
- * `favoritesOnly` is what the Saved tab passes. Same component, same query
- * shape — a second screen would be a copy of this one that drifts.
+ * ★ is a filter chip here rather than its own tab. It was the Saved tab until
+ * 2026-08-12 — a whole tab for one boolean, on a screen where everything is
+ * already saved by definition. The slot went to Week.
  */
 
 const TITLE: Record<string, string> = {
@@ -22,22 +23,23 @@ const TITLE: Record<string, string> = {
   bread: 'Bread', cocktails: 'Cocktails', sides: 'Sides', sauces: 'Sauces', other: 'Other',
 }
 
-export default function Cookbook({ favoritesOnly = false }: { favoritesOnly?: boolean }) {
+export default function Cookbook() {
   const [q, setQ] = useState('')
   const [cat, setCat] = useState<Category | 'all'>('all')
   const [main, setMain] = useState<string | null>(null)
   const [sort, setSort] = useState<SortKey>('recent')
   const [review, setReview] = useState(false)
+  const [fav, setFav] = useState(false)
   /** The sort row and the ingredient row are hidden behind one toggle. On a
    *  390px screen three stacked filter rows push the first recipe off the fold,
    *  and most visits are "open it and scroll". */
   const [tools, setTools] = useState(false)
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['recipes', q, cat, main, sort, favoritesOnly, review],
+    queryKey: ['recipes', q, cat, main, sort, fav, review],
     queryFn: () => api.list({
       q, category: cat, main: main ?? undefined, sort,
-      favorite: favoritesOnly, needsReview: review,
+      favorite: fav, needsReview: review,
     }),
   })
 
@@ -49,7 +51,7 @@ export default function Cookbook({ favoritesOnly = false }: { favoritesOnly?: bo
     return ['all', ...used] as (Category | 'all')[]
   }, [data])
 
-  const filtered = !!q || cat !== 'all' || !!main || review
+  const filtered = !!q || cat !== 'all' || !!main || review || fav
 
   return (
     <div style={{ display: 'grid', gap: 12 }}>
@@ -65,6 +67,11 @@ export default function Cookbook({ favoritesOnly = false }: { favoritesOnly?: bo
 
       {chips.length > 1 && (
         <div className="no-bar" style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 2 }}>
+          {/* ★ leads the row: it is the one filter you reach for without
+              reading the others. */}
+          <button style={{ ...segment(fav), color: fav ? T.paper : T.accent,
+                           borderColor: fav ? T.ink : T.rule }}
+                  onClick={() => setFav((v) => !v)} aria-label="Saved only">★</button>
           {chips.map((c) => (
             <button key={c} style={segment(cat === c)} onClick={() => setCat(c)}>
               {TITLE[c] ?? c}
@@ -134,14 +141,14 @@ export default function Cookbook({ favoritesOnly = false }: { favoritesOnly?: bo
       {data && data.recipes.length === 0 && (
         <div style={section({ textAlign: 'center', padding: '34px 20px' })}>
           <h2 style={display(22)}>
-            {filtered ? 'Nothing matches' : favoritesOnly ? 'Nothing saved yet' : 'Your cookbook is empty'}
+            {filtered ? 'Nothing matches' : 'Your cookbook is empty'}
           </h2>
           <p style={{ ...body(), marginTop: 10 }}>
             {filtered
               ? 'Try a different word, or clear the filters.'
               : 'Paste a recipe link on the Add tab and it lands here.'}
           </p>
-          {!filtered && !favoritesOnly && (
+          {!filtered && (
             <Link to="/add" style={{ ...body(), color: T.accent, display: 'inline-block', marginTop: 14 }}>
               Add your first recipe →
             </Link>

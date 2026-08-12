@@ -113,6 +113,24 @@ Backfill after deploying this, for recipes imported earlier:
 docker compose exec -T dashboard node server-v2/scripts/backfill-recipe-images.js
 ```
 
+## The tabs
+
+`Cookbook · Add · Week · More`.
+
+**Week** replaced a "Saved" tab that was the cookbook filtered to
+`favorite = true` — a whole tab for one boolean, on a screen where everything is
+already saved by definition. That distinction only earns a tab in an app with a
+*Discover* feed you don't own; this one has no such feed. ★ is a chip in the
+Cookbook filter row now, `/saved` redirects to `/cookbook`.
+
+The slot went to the thing that had nowhere to live: **what you actually
+planned**. Before it, "Pick a day" wrote a row you could only see by opening
+budget.cbedge.net, which made planning feel like it went nowhere.
+
+Week reads `hh_meals` — the same rows the household week board writes. A meal
+typed over there with no recipe attached (a takeaway) shows here too, greyed and
+unclickable: hiding it would make "Thursday is free" a lie.
+
 ## Sorting, and "main ingredient"
 
 The Cookbook sorts on the **server**: recently added, recently changed, name,

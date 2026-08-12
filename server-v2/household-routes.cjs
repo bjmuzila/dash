@@ -32,6 +32,8 @@
  *   POST /api/hh/settings              household
  *   GET  /api/hh/recipes               household  — ?id=N one recipe, else the index
  *   POST /api/hh/recipes               household  — action dispatch (recipe.cbedge.net)
+ *   GET  /api/hh/recipes/week          household  — what's planned, by day
+ *   POST /api/hh/recipes/week          household  — unplan / move a planned meal
  *   POST /api/hh/recipes/bulk          household  — start/cancel a bulk URL import
  *   GET  /api/hh/recipes/bulk          household  — bulk import progress
  *   GET  /api/hh/recipes/image         household  — recipe photo bytes (?id=N&v=etag)
@@ -1175,6 +1177,43 @@ function registerHouseholdRoutes({ register, send, readJson }) {
           }
 
           send(res, 400, { error: `Unknown action: ${action}` }, nostore);
+        } catch (err) {
+          send(res, 400, { error: String(err?.message || err) }, nostore);
+        }
+      },
+    });
+  }
+
+  // ── The week ──────────────────────────────────────────────────────────────
+  //
+  // GET  /api/hh/recipes/week[?date=YYYY-MM-DD]   what's planned, by day
+  // POST /api/hh/recipes/week {mealId, remove}    take it off the plan
+  // POST /api/hh/recipes/week {mealId, day}       move it to another day
+  //
+  // Reads and writes hh_meals — the SAME table budget.cbedge.net's week board
+  // uses. There is no second plan to keep in step.
+
+  if (hrecipes && hrecipes.available()) {
+    add('/api/hh/recipes/week', {
+      auth: 'household', methods: ['GET', 'POST'],
+      async handler(req, res, _ctx, access) {
+        const u = access.hhUser;
+        try {
+          if (req.method === 'GET') {
+            const d = new URL(req.url || '/', 'http://localhost').searchParams.get('date');
+            send(res, 200, await hrecipes.getPlannedWeek(u.id, u.tz, d), nostore);
+            return;
+          }
+          const body = await readJson(req, 8192);
+          const mealId = Number(body?.mealId ?? 0);
+          if (!Number.isInteger(mealId) || mealId <= 0) { send(res, 400, { error: 'Missing mealId.' }, nostore); return; }
+
+          if (body?.remove) {
+            await hrecipes.unplanMeal(u.id, mealId);
+            send(res, 200, { ok: true }, nostore);
+            return;
+          }
+          send(res, 200, { ok: true, meal: await hrecipes.moveMeal(u.id, mealId, dateOrNull(body?.day)) }, nostore);
         } catch (err) {
           send(res, 400, { error: String(err?.message || err) }, nostore);
         }

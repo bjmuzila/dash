@@ -316,6 +316,45 @@ export type ImportItem = {
   updated_at: string
 }
 
+// ── The week ─────────────────────────────────────────────────────────────────
+
+/** A row on the week board. `recipe_id` is null for a meal typed straight into
+ *  budget.cbedge.net ("chinese takeaway") — those still show, greyed, because
+ *  hiding them would make "Thursday is free" a lie. */
+export type PlannedMeal = {
+  id: number
+  day: string
+  title: string
+  notes: string | null
+  recipe_id: number | null
+  main_ingredient: string | null
+  prep_minutes: number | null
+  cook_minutes: number | null
+  servings: number | null
+  image_url: string | null
+  image_etag: string | null
+}
+
+export type WeekPayload = {
+  weekStart: string
+  weekEnd: string
+  today: string
+  days: { day: string; isToday: boolean; meals: PlannedMeal[] }[]
+  planned: number
+}
+
+export const week = {
+  /** `date` is any day inside the week you want; the server finds the Monday. */
+  get: (date?: string) =>
+    api.get<WeekPayload>(`/api/hh/recipes/week${date ? `?date=${date}` : ''}`),
+  /** Deletes the hh_meals row only — the ingredients stay on the grocery list,
+   *  because you may well still want them. */
+  unplan: (mealId: number) =>
+    api.post<{ ok: true }>('/api/hh/recipes/week', { mealId, remove: true }),
+  move: (mealId: number, day: string) =>
+    api.post<{ ok: true; meal: PlannedMeal }>('/api/hh/recipes/week', { mealId, day }),
+}
+
 export const bulk = {
   /** Starts a job and returns immediately — the imports keep running on the
    *  server. Thirty TikToks is minutes of fetching and AI calls, well past any

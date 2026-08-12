@@ -1360,6 +1360,71 @@ async function resumeImportJobs(ownerFallbackId) {
   return rows.length;
 }
 
+// ---------------------------------------------------------------------------
+// The week
+// ---------------------------------------------------------------------------
+//
+// What's planned, by day. Reads hh_meals — the SAME rows budget.cbedge.net's
+// week board writes, and the same rows planMeal() creates. There is no second
+// plan: cook something here and it shows there, move it there and it moves here.
+//
+// Deliberately leaner than _lib-household-lists.cjs's getWeek(): that one nests
+// every ingredient under every meal because the Lists screen needs to tick them
+// off. This screen needs a photo, a title and a time — pulling the items too
+// would be a few hundred KB nobody looks at.
+
+async function getPlannedWeek(userId, tz = 'America/New_York', dateStr) {
+  if (!hlists) throw new Error('Lists module unavailable.');
+  const pool = libDb.getPool();
+  const today = hlists.todayIn(tz);
+  const anchor = isDate(dateStr) ? dateStr : today;
+  const start = hlists.weekStart(anchor);
+  const end = hlists.addDays(start, 6);
+
+  // LEFT JOIN, not INNER: a meal typed straight into budget.cbedge.net ("chinese
+  // takeaway") has no recipe_id, and dropping those would make this screen
+  // quietly disagree with the week board it shares a table with.
+  const { rows } = await pool.query(
+    `SELECT m.id, to_char(m.day,'YYYY-MM-DD') AS day, m.title, m.notes, m.sort_order,
+            m.recipe_id,
+            r.main_ingredient, r.prep_minutes, r.cook_minutes, r.servings, r.image_url,
+            (SELECT i.etag FROM hh_recipe_images i WHERE i.recipe_id = r.id) AS image_etag
+       FROM hh_meals m
+       LEFT JOIN hh_recipes r ON r.id = m.recipe_id
+      WHERE (m.owner_id = $1 OR m.visibility = 'shared')
+        AND m.day BETWEEN $2::date AND $3::date
+      ORDER BY m.day, m.sort_order, m.id`, [userId, start, end]);
+
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const day = hlists.addDays(start, i);
+    days.push({ day, isToday: day === today, meals: rows.filter((m) => m.day === day) });
+  }
+  return { weekStart: start, weekEnd: end, today, days, planned: rows.length };
+}
+
+/** Take something off the plan. Deletes the hh_meals row and nothing else —
+ *  its ingredients stay on the grocery list, because ON DELETE SET NULL, and
+ *  because you may well still want the tortillas. */
+async function unplanMeal(userId, mealId) {
+  const { rowCount } = await libDb.getPool().query(
+    `DELETE FROM hh_meals WHERE id=$2 AND (owner_id = $1 OR visibility = 'shared')`,
+    [userId, Number(mealId)]);
+  if (!rowCount) throw new Error('Not found.');
+  return true;
+}
+
+/** Drag Tuesday's dinner to Thursday. */
+async function moveMeal(userId, mealId, day) {
+  if (!isDate(day)) throw new Error('Pick a day.');
+  const { rows } = await libDb.getPool().query(
+    `UPDATE hh_meals SET day=$3::date WHERE id=$2 AND (owner_id = $1 OR visibility = 'shared')
+     RETURNING id, to_char(day,'YYYY-MM-DD') AS day, title, recipe_id`,
+    [userId, Number(mealId), day]);
+  if (!rows[0]) throw new Error('Not found.');
+  return rows[0];
+}
+
 /** The one-line summary, for a Today card in the household app. */
 async function summary(userId) {
   const { rows } = await libDb.getPool().query(
@@ -1383,5 +1448,6 @@ module.exports = {
   addToList, planMeal,
   captureImage, setImageFromDataUrl, readImage, deleteImage, MAX_IMAGE_BYTES, IMAGE_TYPES,
   parseUrlList, createImportJob, getImportJob, latestImportJob, cancelImportJob, resumeImportJobs,
+  getPlannedWeek, unplanMeal, moveMeal,
   BULK_MAX_URLS,
 };

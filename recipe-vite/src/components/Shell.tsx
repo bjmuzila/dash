@@ -18,7 +18,7 @@ import { T, label, display, SANS, MONO } from '../theme'
 const TABS = [
   { to: '/cookbook', label: 'Cookbook' },
   { to: '/add', label: 'Add' },
-  { to: '/saved', label: 'Saved' },
+  { to: '/week', label: 'Week' },
   { to: '/settings', label: 'More' },
 ] as const
 

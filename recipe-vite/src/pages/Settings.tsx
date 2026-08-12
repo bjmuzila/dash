@@ -66,6 +66,10 @@ export default function Settings() {
           “Add all” writes straight into the household grocery list — same list,
           same aisles, no sync. Open it to check things off while you shop.
         </p>
+        <p style={{ ...body(13), marginTop: 8, color: T.faint }}>
+          The Week tab reads the same board, so a meal planned on either side
+          shows up on both.
+        </p>
         <a
           href="https://budget.cbedge.net/lists"
           style={{ ...button('ghost'), display: 'inline-flex', alignItems: 'center',

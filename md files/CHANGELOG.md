@@ -1,70 +1,59 @@
 # Changelog
 
-## 2026-08-12 - owner.cbedge.net sign-in loop was Cloudflare Access, not app code
+## 2026-08-12 - Cookbook: Week tab replaces Saved, ★ becomes a filter chip
 
-No repo change. Fixed in the Cloudflare Zero Trust dashboard.
+New: `recipe-vite/src/pages/Week.tsx`, `GET|POST /api/hh/recipes/week`,
+`getPlannedWeek` / `unplanMeal` / `moveMeal`.
+Edited: `_lib-household-recipes.cjs`, `household-routes.cjs`,
+`recipe-vite/src/{api.ts,App.tsx,components/Shell.tsx,pages/Cookbook.tsx,pages/Settings.tsx}`.
+Verified: household boots with **31 routes**, both new endpoints 401 without a
+session, selftest 76 passed, `tsc` + build clean.
 
-### Symptom
+### What
 
-Open owner.cbedge.net → sign in → land back on the normal cbedge.net site. Every time.
+"Saved" was the cookbook filtered to `favorite = true` — the same component with
+one prop. That is a whole tab for one boolean, on a screen where every recipe is
+already saved by definition.
 
-### Cause
+The distinction earns a tab in the reference app because it has a *Discover*
+feed of recipes you don't own, so "saved" means you pulled one out of someone
+else's stream. There is no such feed here, so the tab was carrying no weight —
+and once the filter toolbar shipped this morning it was carrying none at all,
+because ★ belongs next to category and main ingredient.
 
-Cloudflare Access was protecting `owner.cbedge.net/api/*`. `owner-vite/src/AuthGate.tsx:29`
-fetches `/api/auth/me` on mount; Access answered that XHR with a 302 to
-`dawn-mode-a754.cloudflareaccess.com/cdn-cgi/access/login/owner.cbedge.net`, which the
-browser blocks as cross-origin. An XHR cannot complete an interactive Access login — the
-redirect is unfollowable by design. `AuthGate:38` catches any thrown fetch and falls to
-`status: "signedout"`, whose button is a hardcoded `https://cbedge.net/sign-in`
-(`AuthGate.tsx:22`). Sign in there and `components/auth/AuthForm.tsx:190` hard-navigates
-to `/home` on the apex. That is the whole loop — no owner-flag or session bug involved.
+Meanwhile "Pick a day" wrote an `hh_meals` row you could only see by opening
+budget.cbedge.net. Planning a meal felt like it went nowhere.
 
-Confirmed with `curl -sI https://owner.cbedge.net/api/auth/me`:
-`HTTP/2 302` plus `www-authenticate: Cloudflare-Access`.
+### How
 
-### Fix
+- **★ moved into the Cookbook filter row**, leading it — it is the one filter you
+  reach for without reading the others. `/saved` redirects to `/cookbook` so an
+  old home-screen shortcut or a bookmark still lands somewhere sensible.
+- **Week reads `hh_meals`**, the same rows the household week board writes and
+  `planMeal()` creates. There is no second plan to keep in step: move something
+  there and it moves here.
+- **`LEFT JOIN`, not `INNER`.** A meal typed straight into budget.cbedge.net
+  ("chinese takeaway") has no `recipe_id`. Dropping those would make this screen
+  quietly disagree with the table it shares, and "Thursday is free" would be a
+  lie — so they show, greyed and unclickable, minus the photo.
+- The query is deliberately **leaner than `_lib-household-lists.cjs`'s
+  `getWeek()`**: that one nests every ingredient under every meal because the
+  Lists screen ticks them off. This screen needs a photo, a title and a time.
+- Today gets a 2px accent left edge and nothing else. Filling the card would make
+  one of seven days shout on a screen you scan.
+- Dates render from split parts, never `new Date('2026-08-14')` — that parses as
+  UTC and shows the day before for anyone west of Greenwich.
+- ✕ unplans: deletes the `hh_meals` row and nothing else. The ingredients stay on
+  the grocery list (`ON DELETE SET NULL`), because you may well still want them.
 
-Removed the Access protection covering that hostname's API path. Verified: same curl now
-returns `HTTP/2 200`.
+### Deploy
 
-Losing the edge layer costs no authorization — `AuthGate` blocks any response without
-`isOwner`, and `server-v2/api-router.js:184-188` 403s every `level: 'owner'` endpoint for
-a non-owner session.
-
-### Ruled out along the way
-
-- **`SESSION_COOKIE_DOMAIN` was already set** on the VPS (`/opt/dashboard/.env.local`,
-  three duplicate lines — harmless, last wins). Verified the cookie mints correctly:
-  `set-cookie: cbe_session=...; Domain=.cbedge.net; Secure; HttpOnly; SameSite=lax`.
-  Worth knowing it is load-bearing: without it the cookie is host-only and never reaches
-  the subdomain. It is NOT in git (`.gitignore:5`), so it lives only on the VPS.
-- **Owner gating in `middleware.ts`** — its only redirect to `/` is the `!userId` branch
-  (line 184); a signed-in non-owner goes to `/home` (line 208-213). The apex landing meant
-  the request genuinely carried no session, which pointed at transport, not authorization.
-- **The Cloudflare API is a dead end here.** `CLOUDFLARE_API_TOKEN` in `.env.local` is
-  zone-scoped: `/accounts` returns `[]` and `/accounts/{id}/access/apps` returns an empty
-  result with `success: true` — blindness, not absence. Zero Trust changes need the
-  dashboard or an account-scoped token.
-
-### Still open
-
-- `NEXT_PUBLIC_APP_URL` / `NEXT_PUBLIC_SITE_URL` remain `https://www.cbedge.net` while
-  `AuthGate.tsx:22` points at the bare apex. Harmless now that the cookie is
-  parent-domain scoped, but the two vars drive the Google OAuth `redirect_uri`
-  (`app/api/auth/google/start/route.ts:15` builds it, `app/auth/callback/route.ts:34`
-  rebuilds it for the token exchange — they must byte-match each other and the URI
-  registered in Google Cloud Console) and the Discord redirect. Flipping to the apex needs
-  those registrations plus a `www → apex` 301 FIRST.
-- `AuthGate`'s sign-in button drops you at `/home` rather than returning to owner. A
-  `?next=` handoff would close that.
-- Console 404 flood on the dashboard (`/logos/*.png` → `/proxy/ticker-logo?sym=...`) is
-  unrelated and cosmetic — missing logo assets falling through to a fallback that also 404s.
-
-### Credentials exposed during debugging
-
-The owner account password and a live 30-day session token were pasted into a shell and a
-chat transcript. All 97 rows deleted from `sessions`; password and
-`CLOUDFLARE_API_TOKEN` still need rotating.
+```
+git pull
+docker compose build household && docker compose up -d --force-recreate household
+curl -s http://127.0.0.1:3010/health          # routes: 31
+docker compose build recipes && docker compose up -d recipes
+```
 
 ## 2026-08-12 - Cookbook: sort toolbar, "main ingredient", and bulk URL import
 

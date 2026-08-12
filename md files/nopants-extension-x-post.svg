@@ -1,0 +1,111 @@
+<svg viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>CB Edge — NOPANTS extension, sold out in 30 minutes, 3 more spots</title>
+<desc>CB Edge dashboard-theme promo graphic: first 2 codes gone in 30 minutes, 3 more released at $300/yr with code NOPANTS.</desc>
+<defs>
+  <radialGradient id="glowL" cx="12%" cy="45%" r="62%">
+    <stop offset="0%" stop-color="#219EBC" stop-opacity="0.12"/>
+    <stop offset="100%" stop-color="#219EBC" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="glowR" cx="88%" cy="18%" r="62%">
+    <stop offset="0%" stop-color="#126783" stop-opacity="0.14"/>
+    <stop offset="100%" stop-color="#126783" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="cardGlow" cx="50%" cy="0%" r="85%">
+    <stop offset="0%" stop-color="#219EBC" stop-opacity="0.18"/>
+    <stop offset="65%" stop-color="#0D1119" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="ctaBtn" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#7dd3fc"/>
+    <stop offset="100%" stop-color="#219EBC"/>
+  </linearGradient>
+  <linearGradient id="accentBar" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0%" stop-color="#219EBC" stop-opacity="0"/>
+    <stop offset="50%" stop-color="#219EBC" stop-opacity="1"/>
+    <stop offset="100%" stop-color="#219EBC" stop-opacity="0"/>
+  </linearGradient>
+  <filter id="softGlow" x="-80%" y="-80%" width="260%" height="260%">
+    <feGaussianBlur stdDeviation="14"/>
+  </filter>
+  <style>
+    .brand { font-family:'Inter',Arial,sans-serif; font-weight:800; fill:#ffffff; }
+    .tag   { font-family:'Inter',Arial,sans-serif; font-weight:500; fill:#7dd3fc; }
+    .kicker{ font-family:'Inter',Arial,sans-serif; font-weight:800; fill:#219EBC; letter-spacing:3px; }
+    .price { font-family:'Inter',Arial,sans-serif; font-weight:800; fill:#ffffff; }
+    .pricec{ font-family:'Inter',Arial,sans-serif; font-weight:800; fill:#219EBC; }
+    .h     { font-family:'Inter',Arial,sans-serif; font-weight:700; fill:#ffffff; }
+    .b     { font-family:'Inter',Arial,sans-serif; font-weight:400; fill:#aab3c2; }
+    .strike{ font-family:'Inter',Arial,sans-serif; font-weight:500; fill:#6b7d8f; text-decoration:line-through; }
+    .code  { font-family:'Inter',Arial,sans-serif; font-weight:800; fill:#219EBC; letter-spacing:4px; }
+    .cta   { font-family:'Inter',Arial,sans-serif; font-weight:800; fill:#05060A; letter-spacing:1px; }
+    .fine  { font-family:'Inter',Arial,sans-serif; font-weight:500; fill:#6b7d8f; }
+    .gone  { font-family:'Inter',Arial,sans-serif; font-weight:800; fill:#6b7d8f; }
+  </style>
+</defs>
+
+<rect width="1200" height="675" fill="#05060A"/>
+<rect width="1200" height="675" fill="url(#glowL)"/>
+<rect width="1200" height="675" fill="url(#glowR)"/>
+<rect x="0" y="0" width="1200" height="4" fill="url(#accentBar)"/>
+
+<!-- header -->
+<text x="60" y="70" class="brand" font-size="38">CB Edge</text>
+<text x="60" y="100" class="tag" font-size="18">Real edge · real orderflow — live GEX, key levels &amp; options flow</text>
+<rect x="60" y="116" width="120" height="3" rx="1.5" fill="#219EBC"/>
+
+<!-- badge -->
+<rect x="820" y="34" width="324" height="72" rx="20" fill="#ffffff" filter="url(#softGlow)" opacity="0.20"/>
+<rect x="828" y="40" width="308" height="64" rx="16" fill="#0D1119"/>
+<rect x="828" y="40" width="308" height="64" rx="16" fill="url(#cardGlow)"/>
+<rect x="828" y="40" width="308" height="64" rx="16" fill="none" stroke="rgba(255,255,255,0.10)"/>
+<text x="982" y="66" class="h" font-size="19" text-anchor="middle">SOLD OUT IN 30 MIN</text>
+<text x="982" y="90" class="tag" font-size="14" text-anchor="middle" letter-spacing="1">3 MORE JUST RELEASED</text>
+
+<!-- LEFT -->
+<text x="60" y="196" class="kicker" font-size="17">EXTENDED · FINAL BATCH</text>
+<text x="60" y="252" class="h" font-size="40">3 more spots.</text>
+<text x="60" y="300" class="pricec" font-size="40">then it's done.</text>
+
+<text x="60" y="392" class="pricec" font-size="96">$300</text>
+<text x="278" y="392" class="price" font-size="36">/yr</text>
+<text x="60" y="430" class="h" font-size="22">Full annual access to cbedge.net</text>
+
+<!-- code chip -->
+<rect x="60" y="456" width="440" height="86" rx="18" fill="rgba(33,158,188,0.10)" stroke="#219EBC" stroke-width="2.5" stroke-dasharray="10 8"/>
+<text x="86" y="490" class="tag" font-size="13" letter-spacing="2">SAME CODE AT CHECKOUT</text>
+<text x="86" y="526" class="code" font-size="34">NOPANTS</text>
+
+<text x="60" y="588" class="fine" font-size="15">First 2 were claimed in 30 minutes.</text>
+<text x="60" y="614" class="fine" font-size="15">When these are gone, they're gone.</text>
+
+<!-- RIGHT: card -->
+<rect x="560" y="164" width="580" height="300" rx="22" fill="#0D1119"/>
+<rect x="560" y="164" width="580" height="300" rx="22" fill="url(#cardGlow)"/>
+<rect x="560" y="164" width="580" height="300" rx="22" fill="none" stroke="rgba(33,158,188,0.32)"/>
+
+<text x="596" y="212" class="tag" font-size="13" letter-spacing="2">SPOTS</text>
+
+<!-- spot pips -->
+<g>
+  <rect x="596" y="232" width="150" height="52" rx="12" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.10)"/>
+  <text x="671" y="265" class="gone" font-size="17" text-anchor="middle">CLAIMED</text>
+  <rect x="760" y="232" width="150" height="52" rx="12" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.10)"/>
+  <text x="835" y="265" class="gone" font-size="17" text-anchor="middle">CLAIMED</text>
+  <rect x="924" y="232" width="180" height="52" rx="12" fill="rgba(33,158,188,0.14)" stroke="#219EBC"/>
+  <text x="1014" y="265" class="h" font-size="17" text-anchor="middle">3 OPEN</text>
+</g>
+
+<rect x="596" y="312" width="508" height="1" fill="rgba(255,255,255,0.10)"/>
+
+<text x="596" y="356" class="h" font-size="19">CB Edge Access (billed annually)</text>
+<text x="1104" y="356" class="strike" font-size="19" text-anchor="end">$1,000.00</text>
+<text x="596" y="392" class="b" font-size="18">NOPANTS — $700.00 off</text>
+<text x="1104" y="392" class="pricec" font-size="19" text-anchor="end">-$700.00</text>
+<text x="596" y="436" class="h" font-size="21">Total due today</text>
+<text x="1104" y="440" class="price" font-size="34" text-anchor="end">$300.00</text>
+
+<!-- CTA -->
+<rect x="560" y="496" width="580" height="66" rx="16" fill="url(#ctaBtn)"/>
+<text x="850" y="538" class="cta" font-size="22" text-anchor="middle">CLAIM 1 OF 3 SPOTS →</text>
+<text x="560" y="600" class="h" font-size="22">cbedge.net</text>
+<text x="560" y="628" class="tag" font-size="16">CB Edge — "Your Unfair Edge in the Markets"</text>
+</svg>

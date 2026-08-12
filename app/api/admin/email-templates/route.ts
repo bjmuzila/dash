@@ -17,6 +17,7 @@ import { weeklyEdgeEmail, weeklyEdgeText, WEEKLY_EDGE_SUBJECT } from "@/lib/emai
 import { subscriberPriceMatchEmail, subscriberPriceMatchText, SUBSCRIBER_PRICE_MATCH_SUBJECT } from "@/lib/emails/subscriber-price-match";
 import { edgeCatchAmdEmail, edgeCatchAmdText, EDGE_CATCH_AMD_SUBJECT } from "@/lib/emails/edge-catch-amd";
 import { noPantsPromoEmail, noPantsPromoText, NOPANTS_PROMO_SUBJECT } from "@/lib/emails/nopants-promo";
+import { noPantsExtensionEmail, noPantsExtensionText, NOPANTS_EXTENSION_SUBJECT } from "@/lib/emails/nopants-extension";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -147,6 +148,13 @@ function buildTemplates(): Template[] {
       subject: NOPANTS_PROMO_SUBJECT,
       html: noPantsPromoEmail(),
       text: noPantsPromoText(),
+    },
+    {
+      id: "nopants-extension",
+      label: "⏳ NOPANTS extension — sold out in 30 min, 3 more at $300",
+      subject: NOPANTS_EXTENSION_SUBJECT,
+      html: noPantsExtensionEmail(),
+      text: noPantsExtensionText(),
     },
   ];
 }
