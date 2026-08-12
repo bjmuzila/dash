@@ -52,7 +52,17 @@ const WINDOWS = [
   { id: "all", label: "All" },
 ];
 
-const GRID = gridCols("56px repeat(3, minmax(0, 1fr))");
+/**
+ * Strike column width.
+ *
+ * 56px was measured against a bare 4-digit strike and forgot the CB/CW/PW tag
+ * that rides beside it: 6px pad + 3px marker rail + gaps + ~29px of strike +
+ * the tag runs past 56 and spills into NET — and because the value cells paint
+ * a tinted background, the tag ended up sitting ON the red. 70px fits the
+ * marked case, and the cell clips so nothing can leak into NET again if a
+ * strike ever carries a decimal.
+ */
+const GRID = gridCols("70px repeat(3, minmax(0, 1fr))");
 const ROW_H = 34;
 
 type Row = {
@@ -326,7 +336,19 @@ export default function MobileHeatmap() {
                   textAlign: "left",
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: 5, paddingLeft: 6, minWidth: 0 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                    paddingLeft: 6,
+                    paddingRight: 2,
+                    minWidth: 0,
+                    // Hard clip: the CB/CW/PW tag belongs to the strike cell and
+                    // must never render over the NET column's heat tint.
+                    overflow: "hidden",
+                  }}
+                >
                   {/* Wall / flip marker occupies a fixed 3px rail so strike
                       numbers stay aligned whether or not a row is marked. */}
                   <span
@@ -353,6 +375,7 @@ export default function MobileHeatmap() {
                   {markerTag && (
                     <span
                       style={{
+                        flexShrink: 0,
                         fontSize: TYPE.micro - 3,
                         fontWeight: 900,
                         letterSpacing: "0.02em",

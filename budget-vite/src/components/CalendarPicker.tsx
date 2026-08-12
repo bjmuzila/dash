@@ -11,7 +11,7 @@ import { T, label, body, row } from '../theme'
  */
 export default function CalendarPicker({ status }: { status: CalendarStatus }) {
   const hasOwn = !!status.ownConnection
-  const { data, isLoading } = useCalendarList(hasOwn)
+  const { data, isLoading, isFetching, refetch } = useCalendarList(hasOwn)
   const save = useSaveCalendarSelection()
 
   if (!hasOwn) return null
@@ -33,9 +33,32 @@ export default function CalendarPicker({ status }: { status: CalendarStatus }) {
 
   return (
     <div style={{ marginTop: 18 }}>
-      <div style={label()}>Calendars to show</div>
+      {/* The list is cached for 5 minutes, so a calendar created in Google a
+          moment ago would otherwise not be here yet. Refresh re-asks Google
+          now — the server never caches this call, so one press is enough. */}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+        <div style={{ ...label(), flex: 1 }}>
+          Calendars to show
+          <span style={label({ marginLeft: 8, color: T.faint, letterSpacing: '0.1em' })}>
+            {calendars.length} found
+          </span>
+        </div>
+        <button
+          onClick={() => void refetch()}
+          disabled={isFetching}
+          style={{
+            ...label({ color: T.accent }),
+            background: 'none', border: 'none', padding: '4px 0',
+            cursor: isFetching ? 'default' : 'pointer', opacity: isFetching ? 0.55 : 1,
+          }}
+        >
+          {isFetching ? 'Checking…' : 'Refresh list'}
+        </button>
+      </div>
       <div style={{ ...body(13), color: T.muted, marginTop: 6 }}>
-        A calendar shared with you is its own calendar here — tick it to get those events.
+        Every calendar this Google account can read is listed — your own, shared, subscribed,
+        holidays. A calendar shared with you is its own calendar here; tick it to get those
+        events. Just made one in Google? Press Refresh list.
       </div>
 
       <div style={{ marginTop: 6 }}>
@@ -50,6 +73,14 @@ export default function CalendarPicker({ status }: { status: CalendarStatus }) {
             <span style={{ ...body(14), flex: 1, minWidth: 0, wordBreak: 'break-word' }}>
               {c.name}
               {c.primary && <span style={label({ marginLeft: 8, letterSpacing: '0.1em' })}>yours</span>}
+              {/* Unticked in Google's own sidebar. It can still be shown here —
+                  this flag only explains why a calendar you never see in Google
+                  is in this list. */}
+              {!c.selectedInGoogle && !c.primary && (
+                <span style={label({ marginLeft: 8, letterSpacing: '0.1em', color: T.faint })}>
+                  hidden in google
+                </span>
+              )}
             </span>
           </label>
         ))}

@@ -284,6 +284,116 @@ export function MSegmented<T extends string>({
   );
 }
 
+// ── Slider ───────────────────────────────────────────────────────────────────
+
+/**
+ * MSlider — a labelled range control for the continuous overlay settings.
+ *
+ * A native `<input type="range">` rather than a hand-rolled drag surface: iOS
+ * gives it the right touch slop, the right momentum and VoiceOver support for
+ * free, and a custom pointer handler inside a bottom sheet spends its life
+ * fighting the sheet's own scroll. The thumb is sized up to 22px in
+ * MobileShell's `.cbm-range` block (Safari's default 16px is under the tap
+ * floor); the FILL is an inline background-image so React can move it with the
+ * value, which a pseudo-element track cannot read.
+ *
+ * Fully controlled — the parent owns `value`, so the setting survives the sheet
+ * closing and reopening.
+ */
+export function MSlider({
+  label,
+  hint,
+  value,
+  min,
+  max,
+  step,
+  format,
+  onChange,
+  onReset,
+  accent = M_COLOR.cyan,
+}: {
+  label: string;
+  hint?: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  format?: (v: number) => string;
+  onChange: (v: number) => void;
+  onReset?: () => void;
+  accent?: string;
+}) {
+  const pct = max > min ? Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100)) : 0;
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 7,
+        padding: "10px 12px 12px",
+        borderRadius: RADIUS.md,
+        border: `1px solid ${M_COLOR.border}`,
+        background: "rgba(255,255,255,0.03)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
+        <span style={{ fontSize: TYPE.body, fontWeight: 700, color: M_COLOR.text }}>{label}</span>
+        <span style={{ flex: 1 }} />
+        <span style={{ ...MONO, fontSize: TYPE.body, fontWeight: 800, color: accent }}>
+          {format ? format(value) : String(value)}
+        </span>
+        {onReset && (
+          <button
+            type="button"
+            onClick={onReset}
+            style={{
+              ...noTapHighlight,
+              border: "none",
+              background: "transparent",
+              color: M_COLOR.faint,
+              fontSize: TYPE.micro,
+              fontWeight: 800,
+              letterSpacing: "0.06em",
+              padding: "0 0 0 8px",
+              cursor: "pointer",
+            }}
+          >
+            RESET
+          </button>
+        )}
+      </div>
+      {hint && (
+        <span style={{ fontSize: TYPE.micro, color: M_COLOR.faint, lineHeight: 1.35 }}>{hint}</span>
+      )}
+      <input
+        className="cbm-range"
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        aria-label={label}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={{
+          ...noTapHighlight,
+          width: "100%",
+          height: 22,
+          margin: 0,
+          appearance: "none",
+          WebkitAppearance: "none",
+          background: "transparent",
+          backgroundImage: `linear-gradient(90deg, ${rgba(accent, 0.85)} ${pct}%, rgba(255,255,255,0.14) ${pct}%)`,
+          backgroundSize: "100% 4px",
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat",
+          borderRadius: 999,
+          cursor: "pointer",
+        }}
+      />
+    </div>
+  );
+}
+
 // ── Bottom sheet ─────────────────────────────────────────────────────────────
 
 /**

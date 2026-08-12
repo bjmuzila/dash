@@ -1,5 +1,123 @@
 # Changelog
 
+## 2026-08-11 - Mobile: tab labels centred, bubbles on by default + size variance, expiry date on the heatmap, wall tags clipped to the strike cell
+
+`components/mobile/MobileTabBar.tsx`, `components/mobile/pages/MobileEsCandles.tsx`,
+`components/mobile/pages/MobileHeatmap.tsx`, `components/mobile/ExpiryBadge.tsx`,
+`components/mobile/MobileUI.tsx`, `components/mobile/MobileShell.tsx`. Phone build only.
+
+### Tab bar: the word wasn't in the button
+
+The active pill was a fixed 46x28 box pinned over the GLYPH, so the label sat
+outside the highlight and each tab read as an icon button with a caption
+stranded beneath it. The pill now insets the whole cell (top/bottom 3, left/right
+4), so icon and label are both inside it.
+
+The label span was also inline, which made its `overflow`/`text-overflow`
+inert - those don't apply to non-replaced inline boxes - and left it aligning to
+the glyph's optical centre rather than the cell's. It's now `display: block`,
+`width: 100%`, `text-align: center`, and the icon span is centred the same way.
+
+### ES Candles: bubbles on by default, plus a size variance slider
+
+`showBubbles` starts `true`. The trail is the reason to open this page on a
+phone; candles alone are in every broker app. Nothing extra is fetched when the
+overlay is off anyway - `useGexBubbleHistory` is already gated on `enabled`.
+
+New `BUBBLE_SCALE_*` control (0.4x - 3.0x, default 1.0x) in the Overlays sheet.
+It scales the TOP of the radius range and leaves the floor at 1.4px, which makes
+it a contrast control rather than a zoom: the trail sizes each bubble against
+the session's own maximum, so a day with one dominant strike collapses the rest
+to dots and a flat day makes them all identical. Turn it up and the walls pull
+away from the crowd; turn it down and the trail flattens into an even ribbon
+that reads as a path. 1.0x is the old behaviour - half a bar's spacing, where
+neighbouring buckets touch but never merge. Past ~1.4x they overlap, which is
+the point of the control.
+
+The scale rides in `bubbleDataRef` with the rest of the draw inputs, so the rAF
+repaint driver picks it up without a new subscription.
+
+### New primitive: MSlider
+
+`MobileUI` gained a labelled range control (value readout, optional RESET, inline
+hint). Native `<input type="range">` - iOS gives it the right touch slop,
+momentum and VoiceOver behaviour, and a hand-rolled pointer handler inside a
+bottom sheet spends its life fighting the sheet's own scroll. The fill is an
+inline `background-image` gradient because a pseudo-element track can't read a
+React prop; `.cbm-range` in `MobileShell`'s style block strips the UA track and
+sizes the thumb to 22px (Safari's 16px default is under the tap floor).
+
+### ExpiryBadge: the date is always shown
+
+It read "0DTE" alone on a 0DTE session, which states the relationship to today
+but not WHICH book is on screen - no help on a phone left open across midnight,
+or a screenshot read hours later. The chip is now two parts: the DTE tag when it
+applies, and the MM/DD it resolves to, always. Shared component, so the heatmap
+and ES Candles both get it.
+
+### Heatmap: CB / CW / PW stay inside the strike cell
+
+The strike column was 70px of content in a 56px track: 6px pad + 3px marker rail
++ gaps + ~29px of strike + the tag. The tag spilled into NET, and because the
+value cells paint a heat tint it ended up sitting on the red. Column is now 70px,
+the cell clips (`overflow: hidden`), and the tag is `flexShrink: 0` so the strike
+number gives way first if a strike ever carries a decimal.
+
+
+## 2026-08-11 - GEX Change Top: five picks that all clear the $0.50 floor
+
+`server-v2/gex-change-top-recorder.js`, `components/scanner/GexChangeTop.tsx`.
+Replaces the client-only approach from the entry below.
+
+### The real fix belongs in the recorder
+
+The scorecard dropped picks entered at or under $0.50 — correctly; a nickel
+contract ticking to $0.20 is "+300%", which is tick size, and it would own both
+the ranking and the average peak. But the floor lived only in the scorecard's
+render, so a cheap pick still occupied one of the five cards and then had no
+scored row. Five cards, four results.
+
+Hiding the card instead just moves the hole: rank 6 was never recorded, so the
+hour shows four cards. The floor has to apply at CAPTURE, where there are still
+alternates to choose from.
+
+`runOnce()` now pulls `TOP_N * CANDIDATE_MULT` (5 x 4 = 20) ranked candidates and
+walks them in score order, probing in batches of exactly "how many more do we
+need":
+
+- entry above the floor → keep it
+- entry at or under → skip, and `releaseRejectedProbe()` deletes the
+  watch_options row it just created, so a skipped candidate doesn't sit in the
+  60-second snapshot loop until expiry
+- probe failed, or no mark landed → KEEP it. An unknown price is not evidence of
+  a cheap contract, and a probe outage must not empty the board.
+
+When all five clear (the normal case) this is one parallel batch of five —
+identical to the old behaviour. Each rejection costs one more round. The
+capture log reports skips, and coming up short logs a warning naming
+`GEX_CHANGE_TOP_CANDIDATE_MULT`.
+
+The reject deletion is guarded on `source = 'gex-change-top'` AND no
+`gex_change_top` row referencing it, so a contract the owner watches manually, or
+one an earlier slot recorded, is never touched.
+
+### Legacy dates keep their cards
+
+Slots captured before this cannot be repaired. Those cards stay on the page,
+dimmed with a `≤ $0.50 · unscored` badge that names the entry price — removing
+them would leave the hour showing four picks, and the pick genuinely was
+captured. The badge is what closes the loop the original report opened: a card
+with no scorecard row now says so on its face.
+
+The scorecard's own floor stays, with a `score ≤ $0.50 too (N)` toggle for those
+legacy dates. It appears only when the date has something under the floor, so it
+disappears on its own once the recorder has run a full day.
+
+### Env
+
+- `GEX_CHANGE_TOP_ENTRY_FLOOR` (default 0.5) — minimum entry mark for a pick.
+- `GEX_CHANGE_TOP_CANDIDATE_MULT` (default 4) — how deep to pull alternates.
+
 ## 2026-08-11 - GEX Change Top: the $0.50 entry floor now governs the cards too
 
 `components/scanner/GexChangeTop.tsx`.

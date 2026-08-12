@@ -9,7 +9,14 @@
  * strike_growth table with a 15-minute change window, keeps ONLY the rows that
  * qualify as "★ Very strong" (|Δ GEX| >= $500k AND |% vs open| >= 30%), ranks
  * them by the combined score (0.6·|Δ| + 0.4·|%|, normalized 0..100), and stores
- * the top 5 into gex_change_top — one time-slot bucket per row group. This builds
+ * the top 5 into gex_change_top — one time-slot bucket per row group.
+ *
+ * "Top 5" means the top 5 whose option ENTERS ABOVE $GEX_CHANGE_TOP_ENTRY_FLOOR.
+ * Candidates are pulled CANDIDATE_MULT deep and probed in score order until five
+ * clear the floor; a nickel contract is skipped and its probe released, and the
+ * next-ranked candidate takes the slot. Before this the floor lived only in the
+ * scorecard's render, so a cheap pick occupied one of the five cards and then
+ * had no scored row — five cards, four results. This builds
  * a persistent, going-forward history of the strongest strikes so you can review
  * what was building without a browser tab staying open.
  *
@@ -60,6 +67,16 @@ const MIN_PCT     = Number(process.env.GEX_CHANGE_TOP_MIN_PCT    || 30);      //
 const MIN_OTM     = Number(process.env.GEX_CHANGE_TOP_MIN_OTM    || 0.05);    // OTM-distance floor (frac)
 const DIR         = String(process.env.GEX_CHANGE_TOP_DIR        || 'build'); // all|build|pos|neg
 const TOP_N       = Number(process.env.GEX_CHANGE_TOP_N          || 5);
+// A pick whose option enters at or under this is not a tradable result — $0.05
+// ticking to $0.20 is "+300%", which is tick size. The scorecard has always
+// dropped these AFTER the fact, which is what left a slot showing fewer scored
+// picks than cards. Enforce it at CAPTURE instead: probe down the ranked list
+// and keep the first TOP_N that clear the floor, so a slot is five real picks.
+const ENTRY_FLOOR = Number(process.env.GEX_CHANGE_TOP_ENTRY_FLOOR || 0.5);
+// How many ranked candidates to pull so there are alternates when the floor
+// rejects one. 5 x 4 = 20. The extras cost nothing unless they are needed —
+// probing walks the list only as far as it must.
+const CANDIDATE_MULT = Number(process.env.GEX_CHANGE_TOP_CANDIDATE_MULT || 4);
 const W_ABS = 0.6, W_PCT = 0.4;                                              // score blend weights
 // Auto-probe every captured pick into the /api/watch pipeline (see header).
 const AUTO_PROBE  = String(process.env.GEX_CHANGE_TOP_AUTOPROBE || '1') !== '0';
@@ -274,6 +291,47 @@ async function autoProbe(pool, r) {
 }
 
 /**
+ * The mark /api/watch stamped on the contract when it created the row — the
+ * entry basis the scorecard measures peak/low/close against. null when the row
+ * predates this probe (added_price is write-once) or the REST mark failed.
+ */
+async function probedEntryPrice(pool, id) {
+  if (id == null) return null;
+  try {
+    const { rows } = await pool.query('SELECT added_price FROM watch_options WHERE id = $1', [id]);
+    const v = Number(rows[0]?.added_price);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  } catch (e) {
+    console.warn('[gex-change-top] entry price lookup failed:', e.message);
+    return null;
+  }
+}
+
+/**
+ * Undo the probe for a candidate the floor rejected. Without this, walking past
+ * a cheap candidate would leave it in watch_options being snapshotted every 60s
+ * until expiry — the exact leak pruneExpiredProbes exists to prevent, just
+ * slower.
+ *
+ * Only ever removes a row THIS recorder created (source tag) that no captured
+ * pick references — a contract the owner is also watching manually, or one an
+ * earlier slot legitimately recorded, is left alone.
+ */
+async function releaseRejectedProbe(pool, id) {
+  if (id == null || !AUTO_PROBE) return;
+  try {
+    await pool.query(
+      `DELETE FROM watch_options
+        WHERE id = $1 AND source = $2
+          AND NOT EXISTS (SELECT 1 FROM gex_change_top g WHERE g.watch_id = $1)`,
+      [id, WATCH_SOURCE],
+    );
+  } catch (e) {
+    console.warn('[gex-change-top] releasing rejected probe failed:', e.message);
+  }
+}
+
+/**
  * Drop auto-probed contracts once they expire. Without this the 60s watch
  * refresh loop would grow by ~5 contracts every slot forever. Manual probes
  * (source IS NULL) are never touched; watch_snapshots cascade on delete.
@@ -375,18 +433,55 @@ async function runOnce({ force = false } = {}) {
   const slot = etSlot();
   const now = new Date();
 
-  let rows;
+  // Pull MORE than TOP_N: the entry floor below may reject the top-ranked
+  // candidate, and the slot should then fall through to the next one rather
+  // than come up short.
+  let candidates;
   try {
-    ({ rows } = await p.query(SCAN_SQL, [date, EXCLUDE, MIN_DOLLAR, MIN_PCT, MIN_OTM, DIR, TOP_N]));
+    ({ rows: candidates } = await p.query(
+      SCAN_SQL,
+      [date, EXCLUDE, MIN_DOLLAR, MIN_PCT, MIN_OTM, DIR, Math.max(TOP_N, TOP_N * CANDIDATE_MULT)],
+    ));
   } catch (e) {
     console.warn('[gex-change-top] scan error:', e.message);
     return { skipped: 'scan error', error: e.message };
   }
 
-  // Auto-probe every pick BEFORE the write so the watch id lands on the row with
-  // it. Run in parallel (each add is two /proxy/probe-rest hops) and tolerate
-  // individual failures — a null id just means that card can't flip yet.
-  const watchIds = await Promise.all(rows.map((r) => autoProbe(p, r).catch(() => null)));
+  // Auto-probe BEFORE the write so the watch id lands on the row with it, and
+  // so the entry mark is known while the slot can still choose a different
+  // candidate. Probed in batches of exactly "how many more do we need", in
+  // score order: when every pick clears the floor (the normal case) this is one
+  // parallel batch of TOP_N, identical to the old behaviour. Each rejection
+  // costs one more round.
+  //
+  // A probe that fails, or one whose mark never landed, is ACCEPTED — an
+  // unknown price is not evidence of a cheap contract, and a probe outage must
+  // not empty the board.
+  const picks = [];
+  let scanned = 0, rejected = 0;
+  while (picks.length < TOP_N && scanned < candidates.length) {
+    const batch = candidates.slice(scanned, scanned + (TOP_N - picks.length));
+    scanned += batch.length;
+    const ids = await Promise.all(batch.map((r) => autoProbe(p, r).catch(() => null)));
+    for (let b = 0; b < batch.length; b++) {
+      const id = ids[b];
+      const entry = await probedEntryPrice(p, id);
+      if (entry != null && entry <= ENTRY_FLOOR) {
+        rejected += 1;
+        console.log(`[gex-change-top] ${batch[b].symbol} ${batch[b].strike} entered at $${entry.toFixed(2)} — under the $${ENTRY_FLOOR.toFixed(2)} floor, taking the next candidate`);
+        await releaseRejectedProbe(p, id);
+        continue;
+      }
+      picks.push({ row: batch[b], watchId: id });
+    }
+  }
+
+  if (picks.length < TOP_N) {
+    console.warn(`[gex-change-top] only ${picks.length}/${TOP_N} candidate(s) cleared the $${ENTRY_FLOOR.toFixed(2)} floor from ${candidates.length} scanned — raise GEX_CHANGE_TOP_CANDIDATE_MULT if this repeats`);
+  }
+
+  const rows = picks.map((x) => x.row);
+  const watchIds = picks.map((x) => x.watchId);
 
   // Replace this slot's bucket so a re-fire keeps exactly the latest top-N.
   const client = await p.connect();
@@ -422,8 +517,9 @@ async function runOnce({ force = false } = {}) {
   const probed = watchIds.filter((x) => x != null).length;
   await pruneExpiredProbes(p);
 
-  console.log(`[gex-change-top] ${date} ${slot}: recorded ${written} very-strong pick(s), ${probed} auto-probed @ ${now.toISOString()}`);
-  return { ok: true, date, slot, written, probed };
+  console.log(`[gex-change-top] ${date} ${slot}: recorded ${written} very-strong pick(s), ${probed} auto-probed`
+    + `${rejected ? `, ${rejected} skipped under $${ENTRY_FLOOR.toFixed(2)}` : ''} @ ${now.toISOString()}`);
+  return { ok: true, date, slot, written, probed, rejected, scanned };
 }
 
 // ── Read (feeds /proxy/gex-change-top + the viewer tab) ───────────────────────

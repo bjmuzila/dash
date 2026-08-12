@@ -18,7 +18,7 @@ import { netGEXOf } from "@/lib/calculations/calculations";
 import MobileShell from "../MobileShell";
 import MobileChainRail from "../MobileChainRail";
 import ExpiryBadge from "../ExpiryBadge";
-import { MEmpty, MSegmented, MSheet, MStatusDot } from "../MobileUI";
+import { MEmpty, MSegmented, MSheet, MSlider, MStatusDot } from "../MobileUI";
 import { M_COLOR, MONO, RADIUS, TYPE, fmtPrice, noTapHighlight, rgba } from "../mobileTheme";
 
 /**
@@ -55,7 +55,8 @@ import { M_COLOR, MONO, RADIUS, TYPE, fmtPrice, noTapHighlight, rgba } from "../
  *     two toggles: each costs 46px of a 390px screen, and the desktop's own
  *     geometry table treats the gutter as a single-choice slot for the same
  *     reason.
- *   - BUBBLES — the per-minute GEX trail.
+ *   - BUBBLES — the per-minute GEX trail. ON by default, with a size-variance
+ *     slider (see BUBBLE_SCALE_*).
  *   - the γ level lines.
  *
  * The GEX rail is the desktop `EsGexRail` component, imported unchanged: it is
@@ -95,6 +96,25 @@ const SIDE_PANELS: { id: SidePanel; label: string }[] = [
  * price axis is inches away).
  */
 const GUTTER_W = 46;
+
+/**
+ * Bubble size variance.
+ *
+ * The trail sizes each bubble by |net GEX| against the session's own maximum,
+ * so on a day where one strike dwarfs everything the rest collapse to dots, and
+ * on a flat day they all look the same. This scales the TOP of the radius range
+ * while the floor stays put — so it is a contrast control, not a zoom: turn it
+ * up and the dominant strikes pull away from the crowd, turn it down and the
+ * trail flattens into an even ribbon that is easier to follow as a path.
+ *
+ * The 1.0 baseline is "half a bar's spacing", the width at which neighbouring
+ * buckets touch but never merge. Above ~1.4 they do overlap; that is the point
+ * of the control and it is the user's call, so the cap is generous.
+ */
+const BUBBLE_SCALE_MIN = 0.4;
+const BUBBLE_SCALE_MAX = 3;
+const BUBBLE_SCALE_STEP = 0.1;
+const BUBBLE_SCALE_DEFAULT = 1;
 
 /** One labelled switch row in the overlays sheet. */
 function OverlayToggle({
@@ -171,7 +191,12 @@ export default function MobileEsCandles() {
   const [interval, setInterval] = useState<"1" | "5">("5");
   const [showLevels, setShowLevels] = useState(true);
   const [sidePanel, setSidePanel] = useState<SidePanel>("none");
-  const [showBubbles, setShowBubbles] = useState(false);
+  // Bubbles default ON. They are the reason to open this page on a phone — the
+  // candles alone are available in any broker app — and the history hook is
+  // already gated on `enabled`, so nothing is fetched when the basis check
+  // later turns them off anyway.
+  const [showBubbles, setShowBubbles] = useState(true);
+  const [bubbleScale, setBubbleScale] = useState(BUBBLE_SCALE_DEFAULT);
   const [ovlOpen, setOvlOpen] = useState(false);
   const { sessionCandles, connected } = useEsCandles(true, 2, interval === "1" ? 1 : 5);
   const g = useMobileGex("oi-vol");
@@ -386,8 +411,18 @@ export default function MobileEsCandles() {
 
   // ── bubbles ────────────────────────────────────────────────────────────────
   const bubbleCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const bubbleDataRef = useRef({ cols: bubbleCols, basis: g.basis ?? 0, rows: sessionCandles });
-  bubbleDataRef.current = { cols: bubbleCols, basis: g.basis ?? 0, rows: sessionCandles };
+  const bubbleDataRef = useRef({
+    cols: bubbleCols,
+    basis: g.basis ?? 0,
+    rows: sessionCandles,
+    scale: bubbleScale,
+  });
+  bubbleDataRef.current = {
+    cols: bubbleCols,
+    basis: g.basis ?? 0,
+    rows: sessionCandles,
+    scale: bubbleScale,
+  };
 
   const drawBubbles = useCallback(() => {
     const cv = bubbleCanvasRef.current;
@@ -411,7 +446,7 @@ export default function MobileEsCandles() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
 
-    const { cols, basis, rows } = bubbleDataRef.current;
+    const { cols, basis, rows, scale } = bubbleDataRef.current;
     if (!cols.length || !rows.length) return;
 
     /**
@@ -464,7 +499,7 @@ export default function MobileEsCandles() {
     for (const b of byBar.values()) max = Math.max(max, Math.abs(b.net));
     if (!max) return;
 
-    // Cap the radius at half the bar spacing so neighbouring buckets can touch
+    // Baseline cap is half the bar spacing, so neighbouring buckets can touch
     // but never merge — the band above is exactly what that prevents.
     let spacing = 12;
     if (rows.length > 1) {
@@ -472,8 +507,12 @@ export default function MobileEsCandles() {
       const x1 = ts.timeToCoordinate(toChartTime(rows[rows.length - 1].timestamp));
       if (x0 != null && x1 != null) spacing = Math.abs((x1 as number) - (x0 as number)) || 12;
     }
+    const fitR = Math.max(2.5, Math.min(7, spacing / 2 - 0.5));
+    // The floor does NOT scale: holding it fixed while the ceiling moves is what
+    // makes this a variance control rather than a zoom. Above ~1.4x the biggest
+    // buckets will overlap their neighbours — deliberate, and the user asked.
     const MIN_R = 1.4;
-    const MAX_R = Math.max(2.5, Math.min(7, spacing / 2 - 0.5));
+    const MAX_R = Math.max(MIN_R + 0.6, fitR * scale);
 
     const xCache = new Map<number, number | null>();
     const xOfBar = (bar: number) => {
@@ -509,7 +548,7 @@ export default function MobileEsCandles() {
   useEffect(() => {
     bubbleDrawRef.current = drawBubbles;
     drawBubbles();
-  }, [drawBubbles, bubbleCols, g.basis, sessionCandles]);
+  }, [drawBubbles, bubbleCols, g.basis, sessionCandles, bubbleScale]);
 
   // ── SPX level lines, converted to ES ───────────────────────────────────────
   const levels = useMemo(() => {
@@ -724,6 +763,23 @@ export default function MobileEsCandles() {
           on={showBubbles}
           onToggle={() => setShowBubbles((v) => !v)}
         />
+        {showBubbles && (
+          <MSlider
+            label="Bubble size variance"
+            hint="Scales the largest bubbles only — the smallest stay put. Higher pulls the dominant strikes out of the crowd; lower flattens the trail into an even path."
+            value={bubbleScale}
+            min={BUBBLE_SCALE_MIN}
+            max={BUBBLE_SCALE_MAX}
+            step={BUBBLE_SCALE_STEP}
+            format={(v) => `${v.toFixed(1)}×`}
+            onChange={setBubbleScale}
+            onReset={
+              bubbleScale === BUBBLE_SCALE_DEFAULT
+                ? undefined
+                : () => setBubbleScale(BUBBLE_SCALE_DEFAULT)
+            }
+          />
+        )}
         <OverlayToggle
           label="γ levels"
           hint="Gamma flip and both walls, converted from SPX to ES."

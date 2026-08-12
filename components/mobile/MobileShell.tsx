@@ -141,6 +141,34 @@ function MobileStyles() {
    size is reduced via padding. */
 .cbm-input { font-size: 16px; }
 
+/* Range input (MSlider). The track is painted by an inline background-image on
+   the element itself so React can move the fill with the value; these rules
+   only strip the UA track and size the thumb up to a real tap target — Safari's
+   default is 16px, which is under the floor and hard to grab one-handed. */
+.cbm-range::-webkit-slider-runnable-track { background: transparent; height: 22px; }
+.cbm-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  border: none;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.55);
+  cursor: pointer;
+}
+.cbm-range::-moz-range-track { background: transparent; height: 22px; }
+.cbm-range::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  border: none;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.55);
+  cursor: pointer;
+}
+.cbm-range:focus { outline: none; }
+
 @keyframes cbm-sheet-up {
   from { transform: translateY(14px); opacity: 0; }
   to   { transform: translateY(0);    opacity: 1; }

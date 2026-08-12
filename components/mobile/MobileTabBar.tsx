@@ -56,17 +56,20 @@ function TabButton({ tab, active }: { tab: MobileTab; active: boolean }) {
         transition: "color 0.16s ease",
       }}
     >
-      {/* Active pill sits behind the glyph — a tinted rounded rect rather than
-          the iOS dot, so the accent color is legible at a glance. */}
+      {/* Active pill.
+          It used to be a 46x28 box pinned over the GLYPH ONLY, which left the
+          label hanging outside the highlight — the tab read as an icon button
+          with a caption stranded under it rather than as one target. It now
+          insets the whole cell, so icon and label are both inside it and the
+          word is centred in the button it belongs to. */}
       <span
         aria-hidden
         style={{
           position: "absolute",
-          top: 4,
-          left: "50%",
-          transform: "translateX(-50%)",
-          width: 46,
-          height: 28,
+          top: 3,
+          bottom: 3,
+          left: 4,
+          right: 4,
           borderRadius: RADIUS.sm,
           background: active ? rgba(tab.accent, 0.16) : "transparent",
           boxShadow: active ? `inset 0 0 0 1px ${rgba(tab.accent, 0.34)}` : "none",
@@ -74,12 +77,28 @@ function TabButton({ tab, active }: { tab: MobileTab; active: boolean }) {
           pointerEvents: "none",
         }}
       />
-      <span style={{ position: "relative", display: "flex", height: 22, alignItems: "center" }}>
-        <TabIcon name={tab.icon} size={21} />
-      </span>
       <span
         style={{
           position: "relative",
+          display: "flex",
+          height: 22,
+          width: "100%",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <TabIcon name={tab.icon} size={21} />
+      </span>
+      {/* display:block + width:100% + text-align:center — as an INLINE span the
+          overflow/text-overflow below are inert (they don't apply to
+          non-replaced inline boxes) and the glyph's optical centre, not the
+          cell's, is what the word lined up against. */}
+      <span
+        style={{
+          position: "relative",
+          display: "block",
+          width: "100%",
+          textAlign: "center",
           fontSize: TYPE.micro - 1,
           fontWeight: active ? 800 : 600,
           letterSpacing: "0.02em",
@@ -87,7 +106,6 @@ function TabButton({ tab, active }: { tab: MobileTab; active: boolean }) {
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
-          maxWidth: "100%",
         }}
       >
         {tab.label}

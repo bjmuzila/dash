@@ -1,6 +1,6 @@
 "use client";
 
-import { M_COLOR, RADIUS, TYPE, rgba } from "./mobileTheme";
+import { M_COLOR, MONO, RADIUS, TYPE, rgba } from "./mobileTheme";
 
 /**
  * ExpiryBadge — the phone build's read-only expiry indicator.
@@ -12,18 +12,24 @@ import { M_COLOR, RADIUS, TYPE, rgba } from "./mobileTheme";
  *
  * It says "0DTE" only when the expiry really is today. On a weekend, a holiday,
  * or any session where no daily series is listed, the feed's front expiry is
- * shown instead and the badge says so with its date — a badge reading "0DTE"
- * over next Friday's book would be worse than no badge at all.
+ * shown instead — a badge reading "0DTE" over next Friday's book would be worse
+ * than no badge at all.
+ *
+ * THE DATE IS ALWAYS SHOWN, 0DTE or not. "0DTE" on its own states the
+ * relationship to today but not WHICH book is on screen, and that is the thing
+ * you need when the phone has been open since before midnight, or when the
+ * screenshot gets read hours later. So the chip is two parts: the DTE tag when
+ * it applies, and the MM/DD it resolves to, always.
  */
 export default function ExpiryBadge({ expiry, isZeroDte }: { expiry: string; isZeroDte: boolean }) {
   if (!expiry) return null;
   const color = isZeroDte ? M_COLOR.orange : M_COLOR.dim;
+  // Noon avoids the UTC-parse-then-render-local off-by-one that makes a bare
+  // "YYYY-MM-DD" show as the previous day west of Greenwich.
   const dt = new Date(expiry + "T12:00:00");
-  const label = isZeroDte
-    ? "0DTE"
-    : Number.isNaN(dt.getTime())
-      ? expiry
-      : `${String(dt.getMonth() + 1).padStart(2, "0")}/${String(dt.getDate()).padStart(2, "0")}`;
+  const date = Number.isNaN(dt.getTime())
+    ? expiry
+    : `${String(dt.getMonth() + 1).padStart(2, "0")}/${String(dt.getDate()).padStart(2, "0")}`;
   return (
     <span
       title={isZeroDte ? `Today's expiry — ${expiry}` : `No 0DTE listed; showing front expiry ${expiry}`}
@@ -31,6 +37,7 @@ export default function ExpiryBadge({ expiry, isZeroDte }: { expiry: string; isZ
         flexShrink: 0,
         display: "inline-flex",
         alignItems: "center",
+        gap: 5,
         height: 26,
         padding: "0 9px",
         borderRadius: RADIUS.pill,
@@ -43,7 +50,17 @@ export default function ExpiryBadge({ expiry, isZeroDte }: { expiry: string; isZ
         whiteSpace: "nowrap",
       }}
     >
-      {label}
+      {isZeroDte && <span>0DTE</span>}
+      <span
+        style={{
+          ...MONO,
+          letterSpacing: "0.02em",
+          fontWeight: isZeroDte ? 700 : 800,
+          opacity: isZeroDte ? 0.8 : 1,
+        }}
+      >
+        {date}
+      </span>
     </span>
   );
 }

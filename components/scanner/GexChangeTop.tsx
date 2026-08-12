@@ -328,18 +328,25 @@ export default function GexChangeTop() {
       .catch((e) => setResErr(String(e?.message || e)));
   }, []);
 
-  // ── the entry-size floor, applied to BOTH surfaces ──────────────────────────
-  // The scorecard has always dropped picks whose entry mark was <= $0.50 — a
-  // nickel contract that ticks to $0.20 is +300% and would own both the table
-  // and the average. The CARDS did not drop them, so the page contradicted
-  // itself: a pick visible above had no row below, which reads as the scorecard
-  // silently losing rows. One floor now governs both, and `showCheap` reveals
-  // them everywhere at once rather than hiding them everywhere silently.
+  // ── the entry-size floor ────────────────────────────────────────────────────
+  // The scorecard drops picks whose entry mark was <= $0.50 — a nickel contract
+  // ticking to $0.20 is +300% and would own both the ranking and the average.
+  // The cards did not, so the page contradicted itself: a pick visible above had
+  // no row below, with nothing on screen explaining the gap.
   //
-  // Cards carry no price — only watch_id — so the floor is read off the
-  // scorecard payload (same date, already loaded) and matched by id. A pick that
-  // was never auto-probed has no entry to judge, so it is left visible.
-  const [showCheap, setShowCheap] = useState(false);
+  // The recorder now enforces the floor at CAPTURE (gex-change-top-recorder.js
+  // probes down the ranked list and keeps the first five that clear it), so a
+  // slot from here on is five scoreable picks and nothing needs hiding.
+  //
+  // Dates captured BEFORE that cannot be repaired — rank 6 was never recorded,
+  // so dropping a cheap card would leave the hour with four. Those cards stay,
+  // marked, which keeps the historical record honest AND explains why they have
+  // no scorecard row.
+  //
+  // Cards carry no price, only watch_id, so the floor is read off the scorecard
+  // payload (same date, already loaded) and matched by id. A pick that was never
+  // auto-probed has no entry to judge and is not marked.
+  const [scoreCheap, setScoreCheap] = useState(false);
 
   const cheapIds = useMemo(() => {
     const s = new Set<number>();
@@ -347,15 +354,14 @@ export default function GexChangeTop() {
     return s;
   }, [results]);
 
-  const visibleSlots = useMemo(() => {
-    if (showCheap || cheapIds.size === 0) return slots;
-    return slots
-      .map((hb) => ({ ...hb, rows: hb.rows.filter((r) => r.watch_id == null || !cheapIds.has(r.watch_id)) }))
-      .filter((hb) => hb.rows.length > 0);
-  }, [slots, cheapIds, showCheap]);
+  const entryById = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const r of results) if (r.entry != null) m.set(r.watch_id, r.entry);
+    return m;
+  }, [results]);
 
-  /** How many CARDS the floor removes — the same contract can sit in several slots. */
-  const hiddenCards = useMemo(() => {
+  /** Cards sitting under the floor — legacy slots only, once the recorder ships. */
+  const cheapCards = useMemo(() => {
     if (cheapIds.size === 0) return 0;
     let n = 0;
     for (const hb of slots) for (const r of hb.rows) if (r.watch_id != null && cheapIds.has(r.watch_id)) n += 1;
@@ -424,15 +430,13 @@ export default function GexChangeTop() {
   // [cid, watch_id]. Drives "Flip all" and the while-open refresh below.
   const flippable = useMemo(() => {
     const out: { cid: string; wid: number }[] = [];
-    // visibleSlots, not slots — "Flip all" must not fetch price lines for cards
-    // the floor has removed from the page.
-    for (const hb of visibleSlots) {
+    for (const hb of slots) {
       for (const r of hb.rows) {
         if (r.watch_id != null) out.push({ cid: `${r.symbol}-${r.strike}-${hb.slot}`, wid: r.watch_id });
       }
     }
     return out;
-  }, [visibleSlots]);
+  }, [slots]);
 
   // Watch ids currently face-down. De-duped: the same contract can appear in
   // several hourly slots and they share one fetch.
@@ -591,7 +595,7 @@ export default function GexChangeTop() {
 
   // Scorecard summary — same floor as the cards above, then count picks that
   // offered real exits.
-  const filteredResults = results.filter((r) => r.entry != null && (showCheap || r.entry > ENTRY_FLOOR));
+  const filteredResults = results.filter((r) => r.entry != null && (scoreCheap || r.entry > ENTRY_FLOOR));
   const withPeak = filteredResults.filter((r) => r.max_pct != null);
   const hit = (n: number) => withPeak.filter((r) => (r.max_pct as number) >= n).length;
   const avgPeak = withPeak.length ? withPeak.reduce((a, r) => a + (r.max_pct as number), 0) / withPeak.length : null;
@@ -635,23 +639,6 @@ export default function GexChangeTop() {
         >
           {allFlipped ? "⟲ Flip back" : `⟳ Flip all${flippable.length ? ` (${flippable.length})` : ""}`}
         </button>
-        {/* Never hide picks silently: the floor always says how many it took,
-            and one click puts them back on the cards AND in the scorecard. */}
-        {(hiddenCards > 0 || showCheap) && (
-          <button
-            data-noshot="1"
-            onClick={() => setShowCheap((s) => !s)}
-            title={`Picks whose entry mark was $${ENTRY_FLOOR.toFixed(2)} or less. Their % moves are tick-size artifacts, so they are hidden from the cards and the scorecard alike.`}
-            style={{
-              ...homeButtonStyle, padding: "6px 12px", fontSize: 13,
-              borderColor: showCheap ? tint(HOME_THEME.orange, 0.5) : HOME_THEME.border,
-              color: showCheap ? HOME_THEME.orange : HOME_THEME.text,
-              background: showCheap ? tint(HOME_THEME.orange, 0.12) : homeButtonStyle.background,
-            }}
-          >
-            {showCheap ? `hide ≤ $${ENTRY_FLOOR.toFixed(2)}` : `show ≤ $${ENTRY_FLOOR.toFixed(2)} (${hiddenCards})`}
-          </button>
-        )}
         <span style={{ fontSize: 12, color: HOME_THEME.text }}>click a card for its option price line</span>
         <div style={{ flex: 1 }} />
         <button
@@ -683,7 +670,7 @@ export default function GexChangeTop() {
           {filteredResults.length > 0 && (
             <span style={{ fontSize: 12, color: HOME_THEME.text }}>
               {filteredResults.length} pick{filteredResults.length === 1 ? "" : "s"}{" "}
-              ({showCheap ? "all entries" : `entry > $${ENTRY_FLOOR.toFixed(2)}`}) · avg peak{" "}
+              ({scoreCheap ? "all entries" : `entry > $${ENTRY_FLOOR.toFixed(2)}`}) · avg peak{" "}
               <b style={{ color: avgPeak != null && avgPeak >= 0 ? HOME_THEME.green : HOME_THEME.red }}>{fmtPct(avgPeak)}</b>
               {" · "}≥+25% <b style={{ color: HOME_THEME.text }}>{hit(25)}</b>
               {" · "}≥+50% <b style={{ color: HOME_THEME.text }}>{hit(50)}</b>
@@ -692,6 +679,23 @@ export default function GexChangeTop() {
             </span>
           )}
           <div style={{ flex: 1 }} />
+          {/* Legacy slots only: once the recorder's capture-time floor has run
+              for a full day there is nothing under it to score. */}
+          {(cheapCards > 0 || scoreCheap) && (
+            <button
+              data-noshot="1"
+              onClick={() => setScoreCheap((s) => !s)}
+              title={`${cheapCards} card${cheapCards === 1 ? "" : "s"} on this date entered at $${ENTRY_FLOOR.toFixed(2)} or less. Their % moves are tick-size artifacts, so they are left out of the ranking and the averages by default.`}
+              style={{
+                ...homeButtonStyle, padding: "4px 10px", fontSize: 11,
+                borderColor: scoreCheap ? tint(HOME_THEME.orange, 0.5) : HOME_THEME.border,
+                color: scoreCheap ? HOME_THEME.orange : HOME_THEME.text,
+                background: scoreCheap ? tint(HOME_THEME.orange, 0.12) : homeButtonStyle.background,
+              }}
+            >
+              {scoreCheap ? `exclude ≤ $${ENTRY_FLOOR.toFixed(2)}` : `score ≤ $${ENTRY_FLOOR.toFixed(2)} too (${cheapCards})`}
+            </button>
+          )}
           <button
             data-noshot="1"
             onClick={() => setShowResults((s) => !s)}
@@ -774,18 +778,13 @@ export default function GexChangeTop() {
 
       {err && <div style={{ color: HOME_THEME.red, fontSize: 13, padding: "8px 0" }}>Error: {err}</div>}
 
-      {!err && visibleSlots.length === 0 && (
+      {!err && slots.length === 0 && (
         <div style={{ color: HOME_THEME.text, fontSize: 14, padding: "16px 4px" }}>
-          {loading ? "Loading…"
-            : slots.length > 0
-              // Everything this date had was under the floor — say so, rather
-              // than claiming nothing was recorded.
-              ? `Every pick this date entered at $${ENTRY_FLOOR.toFixed(2)} or less. Use “show ≤ $${ENTRY_FLOOR.toFixed(2)}” above to see them.`
-              : "No very-strong picks recorded yet for this date. The recorder captures the top 5 every 30 min during RTH going forward."}
+          {loading ? "Loading…" : "No very-strong picks recorded yet for this date. The recorder captures the top 5 every 30 min during RTH going forward."}
         </div>
       )}
 
-      {visibleSlots.map((hb) => (
+      {slots.map((hb) => (
         <div key={hb.slot} style={{ marginBottom: 22 }}>
           <div data-noshot="1" style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
             <span style={{ color: HOME_THEME.orange, fontWeight: 800, fontSize: 15 }}>{slotLabel(hb.slot)}</span>
@@ -811,6 +810,10 @@ export default function GexChangeTop() {
               const pnlPct = entry != null && entry !== 0 && lastMark != null ? ((lastMark - entry) / entry) * 100 : null;
               const pnlDollars = entry != null && lastMark != null ? (lastMark - entry) * 100 : null;
               const pnlColor = pnlPct == null ? HOME_THEME.text : pnlPct > 0 ? HOME_THEME.green : pnlPct < 0 ? HOME_THEME.red : HOME_THEME.text;
+              // Under the entry floor → the scorecard won't rank it. Dim it and
+              // badge it rather than removing it: the slot would otherwise show
+              // four cards, and the pick genuinely WAS captured.
+              const underFloor = wid != null && cheapIds.has(wid);
 
               return (
                 <div
@@ -827,6 +830,8 @@ export default function GexChangeTop() {
                     minHeight: 244,
                     perspective: 1200,
                     cursor: wid == null ? "default" : "pointer",
+                    // Reads as present-but-discounted, which is exactly its status.
+                    opacity: underFloor ? 0.62 : 1,
                   }}
                 >
                   <div
@@ -894,7 +899,24 @@ export default function GexChangeTop() {
                         </span>
                         <span style={{ color: HOME_THEME.cyan }}>score {r.score == null ? "—" : r.score.toFixed(0)}</span>
                       </div>
-                      <div style={{ marginTop: 6, fontSize: 14, fontWeight: 800, color: HOME_THEME.orange, paddingRight: 78 }}>★ Very strong</div>
+                      <div style={{ marginTop: 6, fontSize: 14, fontWeight: 800, color: HOME_THEME.orange, paddingRight: 78 }}>
+                        ★ Very strong
+                        {/* Legacy slots: captured before the recorder enforced the
+                            floor. The card stays (removing it would leave the hour
+                            short a pick) but says why it has no scorecard row. */}
+                        {underFloor && (
+                          <span
+                            title={`Entered at $${(entryById.get(wid as number) ?? 0).toFixed(2)} — at or under the $${ENTRY_FLOOR.toFixed(2)} floor, so it is left out of the scorecard ranking and averages.`}
+                            style={{
+                              marginLeft: 6, fontSize: 11, fontWeight: 700, padding: "1px 5px", borderRadius: 4,
+                              color: HOME_THEME.text, background: tint(HOME_THEME.text, 0.10),
+                              border: `1px solid ${tint(HOME_THEME.text, 0.25)}`,
+                            }}
+                          >
+                            ≤ ${ENTRY_FLOOR.toFixed(2)} · unscored
+                          </span>
+                        )}
+                      </div>
                       {wid != null && (
                         <div data-noshot="1" style={{ position: "absolute", left: 14, bottom: 8, fontSize: 11, color: tint(HOME_THEME.cyan, 0.75) }}>
                           ▸ price line
