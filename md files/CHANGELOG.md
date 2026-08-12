@@ -1,32 +1,81 @@
 # Changelog
 
-## 2026-08-12 - Removed the Options page (/options)
+## 2026-08-12 - Recipes: follow "full recipe" links, flag "recipe in bio", fix the day picker
 
-Removed: the "Options" toolbar tile and its `/options` SPA route.
-Edited: `app-vite/src/App.tsx`, `components/shared/GlobalToolbar.tsx`,
-`components/mobile/mobileNav.ts`.
-To delete on disk: `components/pages/Options.tsx`, `app/options/` (
-`OptionsPlaceholder.tsx`, `TickerSelect.tsx`, `tickerContext.tsx`, `tickers.ts`),
-`app/app/options/route.ts`.
+Edited: `_lib-household-recipes.cjs` (`captionLinks`, `mentionsRecipeElsewhere`,
+link-following in `importRecipe`, `planMeal` default), `_lib-household.cjs`
+(`recipe_url`, `partial`, `partial_note`),
+`recipe-vite/src/{api.ts,pages/Recipe.tsx,pages/Cookbook.tsx,pages/Week.tsx}`,
+`budget-vite/src/{components/Shell.tsx,pages/Settings.tsx}`.
+Verified: selftest 100 → **112 passed**; `tsc` + build clean for BOTH SPAs
+(budget checked against its real source, not a copy); household boots with 31
+routes.
 
-### What
+### "Full recipe in bio" — two habits, opposite handling
 
-`/options` was the tile that replaced the old Lookup placeholder — a page still
-being built out, made of `OptionsPlaceholder` boxes. It is gone.
+**Caption links the write-up → follow it.** The blog almost certainly publishes
+JSON-LD, so one extra fetch turns a summary caption into an exact recipe, for
+free and better than the AI could reconstruct.
 
-**Options Chain (`/options-chain`) is untouched.** Different page, different
-route, still in the toolbar and still the target of the `/m/chain` phone build.
+`source_url` stays the VIDEO. That is what you saved, what you'll want to watch,
+and — critically — what `source_key` is derived from: swapping in the blog URL
+would make a TikTok export list re-import every one of these on the next batch.
+The followed page lands in `recipe_url` and shows as **Full recipe ↗** beside
+**Watch**.
 
-### How
+Aggregators (`linktr.ee`, `beacons.ai`, `stan.store`, …), socials and affiliate
+shops are never followed — a bio link is a menu of buttons, and fetching one
+spends an AI call on a page with no food in it. Depth is capped at one hop: a
+link on a recipe page is a *related* recipe, not this one.
 
-- `App.tsx`: dropped the `Options` lazy import and the `<Route path="/options">`.
-- `GlobalToolbar.tsx`: dropped the `NAV_ITEMS` entry. Removing the route without
-  the nav item would fail `check-routes.mjs` on the next build, so both go in the
-  same change.
-- `mobileNav.ts`: dropped `"/options": "/m/chain"` from `DESKTOP_TO_MOBILE` — a
-  phone can no longer land on a route that does not exist.
-- Nothing else imported `@/app/options/*`; only `components/pages/Options.tsx`
-  did, and that file is being deleted with it.
+**Caption just says "recipe in bio" → import it FLAGGED.** `partial = true` and
+`partial_note` set to the creator's own phrase, quoted rather than paraphrased.
+The banner sits ABOVE the ingredients, deliberately: half a recipe you don't know
+is half is worse than none, because you find out at step four with the pan hot.
+Rows show `PART` in preference to `NEW` — incomplete is worth knowing before you
+open it, where unreviewed can wait.
+
+When the gate rejects such a caption outright, the miss reason quotes the phrase,
+so the by-hand list can tell "the recipe is in their bio" from "this is a dog
+video". One is worth chasing.
+
+### Two bugs
+
+- **The day picker closed itself a second after opening.** It submitted from
+  `onChange`, and a native date input fires that while you are still spinning the
+  wheels on iOS — so it planned whatever partial date it saw and dismissed. Now
+  the value is held in state and confirmed with a **Plan it** button.
+- **Planning no longer adds to the grocery list.** `planMeal`'s `withList` now
+  defaults to FALSE. Planning and shopping happen at different moments: you plan
+  the week on Sunday and shop on Wednesday, and a plan that silently dumps forty
+  ingredients in means the list is full of things you already own by the time you
+  get there. **Add all** is one tap on the recipe and belongs to the person
+  deciding to shop.
+
+### Cards
+
+No accent edges. Today's card on Week lost its 2px left rule — a coloured edge on
+one card in a column of seven reads as a defect, not emphasis; the day NAME in
+accent already says it. The two warning cards lost their tinted borders for the
+same reason: the colour lives in the label.
+
+### budget.cbedge.net
+
+`Journal` → **Cookbook**, linking to recipe.cbedge.net. Opens in a new tab so the
+budget app is never replaced — losing your place mid-shop to look up a recipe is
+exactly the annoyance to avoid. It renders permanently in the accent colour since
+it can never be "current": it is a destination, not a location. Journal kept its
+route and its data and moved to **More**, exactly as Habits and Projects did when
+Todo and Lists took their slots.
+
+### Deploy
+
+```
+git pull
+docker compose build household && docker compose up -d --force-recreate household
+curl -s http://127.0.0.1:3010/health          # routes: 31
+docker compose build recipes budget && docker compose up -d recipes budget
+```
 
 ## 2026-08-12 - Bulk import: a "Not imported" list you can copy or download
 

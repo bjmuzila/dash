@@ -81,8 +81,8 @@ export default function Week() {
         <div style={section({ textAlign: 'center', padding: '30px 20px' })}>
           <h2 style={display(21)}>Nothing planned</h2>
           <p style={{ ...body(), marginTop: 10, color: T.faint }}>
-            Open a recipe and hit <b>Pick a day</b>. It lands here, and its ingredients
-            land on the grocery list.
+            Open a recipe and hit <b>Pick a day</b>. It lands here; the ingredients
+            stay off the grocery list until you tap <b>Add all</b>.
           </p>
           <Link to="/cookbook" style={{ ...body(), color: T.accent, display: 'inline-block', marginTop: 14 }}>
             Browse the cookbook →
@@ -95,12 +95,10 @@ export default function Week() {
         return (
           <div
             key={d.day}
-            style={section({
-              padding: 12,
-              // Today gets the accent edge and nothing else. Filling the whole
-              // card would make one of seven days shout on a screen you scan.
-              borderLeft: d.isToday ? `2px solid ${T.accent}` : `1px solid ${T.rule}`,
-            })}
+            // No accent edge. Today is marked by its NAME being in the accent
+            // colour — a coloured rule down the side of one card in a column of
+            // seven reads as a defect rather than as emphasis.
+            style={section({ padding: 12 })}
           >
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
               <h3 style={{ fontFamily: SERIF, fontSize: 17, fontWeight: 500,

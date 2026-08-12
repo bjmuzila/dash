@@ -208,6 +208,33 @@ the gate offers **Import anyway**.
 The JSON-LD path is never gated: a page carrying `recipeIngredient` has already
 proved what it is.
 
+### "Full recipe in bio"
+
+Creators split into two habits and they need opposite handling.
+
+**The caption links the write-up** → follow it. The blog almost certainly
+publishes JSON-LD, so following turns a partial caption into an exact recipe,
+free. `source_url` stays the VIDEO — that's what you saved, what you'll want to
+watch, and what `source_key` is derived from, so swapping in the blog URL would
+make your export list re-import every one of these next batch. The followed page
+goes in `recipe_url` and shows as **Full recipe ↗** next to **Watch**.
+
+Aggregators (`linktr.ee`, `beacons.ai`, `stan.store`, …), socials and affiliate
+shops are never followed — a bio link is a menu of buttons, and fetching one
+burns an AI call on a page with no food in it. One hop only: a link on a recipe
+page is a *related* recipe, not this one.
+
+**The caption just says "recipe in bio"** → nothing to follow. It imports with
+`partial = true` and `partial_note` set to the creator's own words, and the
+recipe page carries a banner above the ingredients. Above, deliberately: finding
+out at step four, mid-cook, is the failure this exists to prevent. **I filled it
+in** clears the flag. Rows show `PART`, which beats `NEW` — incomplete is worth
+knowing before you open it.
+
+If the gate rejects such a caption entirely, the miss reason quotes the phrase,
+so the by-hand list distinguishes "the recipe is in their bio" from "this is a
+dog video".
+
 ### The by-hand pile
 
 `GET /api/hh/recipes/bulk?misses=1` returns every link that never became a

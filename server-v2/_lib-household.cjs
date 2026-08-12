@@ -312,6 +312,20 @@ async function ensureSchema() {
     // Deliberately NOT unique: a duplicate is skipped in code with a message,
     // not rejected by a constraint that would fail the whole import row.
     await pool.query(`ALTER TABLE hh_recipes ADD COLUMN IF NOT EXISTS source_key TEXT`);
+
+    // "Full recipe in bio". Two habits, opposite handling — see the block of
+    // that name in _lib-household-recipes.cjs.
+    //
+    // recipe_url: where the full write-up lives, when the caption linked it and
+    // we followed. source_url stays the VIDEO — it is what you saved, what you
+    // want to watch, and what source_key is derived from, so swapping in the
+    // blog URL would make an export list re-import every one of these.
+    await pool.query(`ALTER TABLE hh_recipes ADD COLUMN IF NOT EXISTS recipe_url TEXT`);
+    // partial: the caption said the real recipe is elsewhere and there was no
+    // link to follow. Imported anyway, but flagged — half a recipe you don't
+    // know is half is worse than none, because you find out at step four.
+    await pool.query(`ALTER TABLE hh_recipes ADD COLUMN IF NOT EXISTS partial BOOLEAN NOT NULL DEFAULT FALSE`);
+    await pool.query(`ALTER TABLE hh_recipes ADD COLUMN IF NOT EXISTS partial_note TEXT`);
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_recipes_source_key_idx ON hh_recipes(source_key)`);
 
     // ── Bulk import jobs ─────────────────────────────────────────────────

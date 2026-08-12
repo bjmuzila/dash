@@ -84,6 +84,11 @@ export default function Recipe() {
 
   const [note, setNote] = useState<string | null>(null)
   const [planning, setPlanning] = useState(false)
+  /** Held in state and confirmed with a button — NOT submitted from onChange.
+   *  A native date input fires change while you are still spinning the wheels on
+   *  iOS, so submitting there planned the wrong day and closed the picker out
+   *  from under you a second after it opened. */
+  const [day, setDay] = useState('')
 
   const addToList = useMutation({
     mutationFn: () => api.addToList(rid, {
@@ -95,12 +100,15 @@ export default function Recipe() {
   })
 
   const plan = useMutation({
-    mutationFn: (day: string) => api.plan(rid, { day, servings: servings ?? undefined }),
+    // withList:false — planning no longer touches the grocery list. You plan on
+    // Sunday and shop on Wednesday; a plan that silently dumps forty
+    // ingredients in means the list is full of things you already own.
+    mutationFn: (d: string) => api.plan(rid, { day: d, servings: servings ?? undefined, withList: false }),
     onSuccess: (res) => {
       setPlanning(false)
-      setNote(res.list
-        ? `Planned for ${res.meal.day} — ${res.list.added} ingredients on the list.`
-        : `Planned for ${res.meal.day}.`)
+      setDay('')
+      qc.invalidateQueries({ queryKey: ['week'] })
+      setNote(`Planned for ${res.meal.day}. Use “Add all” when you're ready to shop.`)
     },
     onError: (e: Error) => setNote(e.message),
   })
@@ -147,6 +155,15 @@ export default function Recipe() {
       qc.invalidateQueries({ queryKey: ['recipe', rid] })
       qc.invalidateQueries({ queryKey: ['recipes'] })
       setNote('Marked as reviewed.')
+    },
+  })
+
+  const completed = useMutation({
+    mutationFn: () => api.markComplete(rid),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['recipe', rid] })
+      qc.invalidateQueries({ queryKey: ['recipes'] })
+      setNote('Marked as complete.')
     },
   })
 
@@ -261,8 +278,19 @@ export default function Recipe() {
               {r.source_url && (
                 <a href={r.source_url} target="_blank" rel="noreferrer"
                    style={{ color: T.muted, textDecoration: 'underline' }}>
-                  See original
+                  {r.recipe_url ? 'Watch' : 'See original'}
                 </a>
+              )}
+              {/* Present only when the caption linked a write-up and we followed
+                  it — that page is the better read, so it gets the accent. */}
+              {r.recipe_url && (
+                <>
+                  {' · '}
+                  <a href={r.recipe_url} target="_blank" rel="noreferrer"
+                     style={{ color: T.accent, textDecoration: 'underline' }}>
+                    Full recipe ↗
+                  </a>
+                </>
               )}
             </div>
           )}
@@ -280,9 +308,38 @@ export default function Recipe() {
           <Stat k="Calories" v={r.calories ? String(r.calories) : '—'} />
         </div>
 
+        {/* The creator said the real recipe is elsewhere. This sits ABOVE the
+            ingredients on purpose — finding out at step four, mid-cook, is
+            exactly the failure it exists to prevent. */}
+        {r.partial && (
+          <div style={{
+            ...section({ padding: 12 }),
+            display: 'grid', gap: 8,
+          }}>
+            <div style={label({ color: T.warn })}>Only part of this is here</div>
+            <p style={{ ...body(13), color: T.faint }}>
+              The caption says “{r.partial_note}”, and there was no link to follow —
+              so what’s below is whatever the caption gave up. Check the original
+              before you shop.
+            </p>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {r.source_url && (
+                <a href={r.source_url} target="_blank" rel="noreferrer"
+                   style={{ ...button('ghost'), flex: 1, textAlign: 'center', textDecoration: 'none' }}>
+                  Open the video ↗
+                </a>
+              )}
+              <button onClick={() => completed.mutate()} disabled={completed.isPending}
+                      style={{ ...button('ghost'), flex: 1 }}>
+                I filled it in
+              </button>
+            </div>
+          </div>
+        )}
+
         {r.needs_review && (
           <div style={{
-            ...section({ padding: 12, borderColor: 'rgba(251,133,1,0.35)' }),
+            ...section({ padding: 12 }),
             display: 'flex', alignItems: 'center', gap: 10,
           }}>
             <div style={{ flex: 1 }}>
@@ -390,7 +447,8 @@ export default function Recipe() {
             <div>
               <div style={label()}>Plan it</div>
               <p style={{ ...body(13), marginTop: 6, color: T.muted }}>
-                Puts it on the week board and the ingredients on the list.
+                Puts it on the Week tab. Ingredients stay off the list until you
+                tap “Add all”.
               </p>
             </div>
             {!planning && (
@@ -401,17 +459,28 @@ export default function Recipe() {
             )}
           </div>
           {planning && (
-            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+            <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
               <input
                 type="date"
-                style={{ ...input(), flex: 1 }}
-                onChange={(e) => { if (e.target.value) plan.mutate(e.target.value) }}
+                style={input()}
+                value={day}
+                // No mutate() here on purpose — see the `day` state above.
+                onChange={(e) => setDay(e.target.value)}
                 disabled={plan.isPending}
               />
-              <button onClick={() => setPlanning(false)}
-                      style={{ ...button('ghost'), minHeight: 44, padding: '12px 15px', fontSize: 13 }}>
-                Cancel
-              </button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => { setPlanning(false); setDay('') }}
+                        style={{ ...button('ghost'), flex: 1 }}>
+                  Cancel
+                </button>
+                <button
+                  onClick={() => day && plan.mutate(day)}
+                  disabled={!day || plan.isPending}
+                  style={{ ...button('primary'), flex: 2, opacity: day ? 1 : 0.5 }}
+                >
+                  {plan.isPending ? 'Planning…' : 'Plan it'}
+                </button>
+              </div>
             </div>
           )}
         </div>

@@ -125,6 +125,16 @@ export type RecipeCard = {
   /** Set by bulk import, cleared when you review it. See the policy note in
    *  server-v2/_lib-household-recipes.cjs — bulk saves first and flags second. */
   needs_review: boolean
+  /** Where the full write-up lives, when the caption linked it and we followed.
+   *  `source_url` stays the VIDEO — that's what you saved and what dedupe is
+   *  keyed on. */
+  recipe_url: string | null
+  /** The caption said the real recipe was elsewhere and there was nothing to
+   *  follow. Imported anyway, flagged — half a recipe you don't know is half is
+   *  worse than none, because you find out at step four. */
+  partial: boolean
+  /** The creator's own words: "recipe in bio". Quoting beats paraphrasing. */
+  partial_note: string | null
   /** Content hash of the STORED photo, or null if we never copied one. Present
    *  on reads only — see IMG_ETAG in server-v2/_lib-household-recipes.cjs. */
   image_etag: string | null
@@ -157,6 +167,9 @@ export type Draft = {
   /** How we read it — 'json-ld' (free and exact) or 'ai' (the fallback). Shown
    *  on the review screen so a hand-parsed import gets a closer look. */
   via: 'json-ld' | 'ai'
+  recipeUrl?: string | null
+  partial?: boolean
+  partialNote?: string | null
 }
 
 export type SortKey = 'recent' | 'updated' | 'name' | 'main' | 'time' | 'cooked' | 'calories'
@@ -260,7 +273,7 @@ export const recipes = {
 
   create: (recipe: Partial<Draft>) =>
     api.post<{ recipe: Recipe }>('/api/hh/recipes', { action: 'create', recipe }),
-  update: (id: number, patch: Partial<Draft> & { notes?: string }) =>
+  update: (id: number, patch: Partial<Draft> & { notes?: string; partial?: boolean }) =>
     api.post<{ recipe: Recipe }>('/api/hh/recipes', { action: 'update', id, patch }),
   remove: (id: number) => api.post<{ ok: true }>('/api/hh/recipes', { action: 'delete', id }),
   favorite: (id: number) => api.post<{ recipe: RecipeCard }>('/api/hh/recipes', { action: 'favorite', id }),
@@ -272,7 +285,9 @@ export const recipes = {
     api.post<{ added: number; items: ListItem[]; scaledBy: number }>(
       '/api/hh/recipes', { action: 'addToList', id, ...opts }),
 
-  /** Puts it on the week board, and (unless withList:false) the list too. */
+  /** Puts it on the week board. `withList` defaults to FALSE on the server —
+   *  planning and shopping happen at different moments, and "Add all" is a
+   *  button on the recipe for when you're actually going. */
   plan: (id: number, opts: { day: string; servings?: number; withList?: boolean }) =>
     api.post<{ meal: Meal; list: { added: number } | null }>(
       '/api/hh/recipes', { action: 'plan', id, ...opts }),
@@ -292,6 +307,9 @@ export const recipes = {
   /** Clear the needs-review flag — "yes, I've looked at this one". */
   markReviewed: (id: number) =>
     api.post<{ recipe: Recipe }>('/api/hh/recipes', { action: 'update', id, patch: { needsReview: false } }),
+  /** "I went and got the rest" — clears the partial flag and its note. */
+  markComplete: (id: number) =>
+    api.post<{ recipe: Recipe }>('/api/hh/recipes', { action: 'update', id, patch: { partial: false } }),
 }
 
 // ── Bulk import ──────────────────────────────────────────────────────────────

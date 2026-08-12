@@ -330,6 +330,38 @@ eq(sig.heroes >= 2, true, 'counts the food words');
 eq(typeof sig.strong, 'string', 'reports WHICH strong signal fired');
 eq(r.recipeSignals('nothing here').pass, false, 'signals agree with looksLikeRecipe');
 
+// ── "Full recipe in bio" ─────────────────────────────────────────────────────
+//
+// Two creator habits, opposite handling. A caption that LINKS the write-up gets
+// followed (the blog has JSON-LD; following turns a summary into an exact
+// recipe). A caption that just says "recipe in bio" has nothing to follow, so
+// it imports flagged.
+
+eq(r.captionLinks('Full recipe: https://thesaltycooker.com/banana-cake'),
+   ['https://thesaltycooker.com/banana-cake'], 'a blog link is followable');
+eq(r.captionLinks('recipe on my site https://example.com/x. enjoy!'),
+   ['https://example.com/x'], 'trailing punctuation trimmed');
+
+// Aggregators are a MENU of links, not a recipe — following one burns a fetch
+// and an AI call on a page of buttons.
+eq(r.captionLinks('link in bio https://linktr.ee/lulu'), [], 'linktr.ee is not followed');
+eq(r.captionLinks('https://beacons.ai/x https://stan.store/y'), [], 'other aggregators too');
+// Neither is a social profile, a shop, or the app itself.
+eq(r.captionLinks('follow me https://www.instagram.com/hannahmuch'), [], 'socials are not followed');
+eq(r.captionLinks('my pan https://amzn.to/xyz'), [], 'affiliate shops are not followed');
+eq(r.captionLinks('no links at all here'), [], 'no links → empty');
+
+// The phrase is returned, not a boolean, so the recipe can quote the creator
+// rather than paraphrase them.
+eq(r.mentionsRecipeElsewhere('Full recipe in my bio 🥖'), 'Full recipe in my bio',
+   'quotes the creator\'s whole phrase, not a trimmed version of it');
+eq(r.mentionsRecipeElsewhere('link in bio for the full one'), 'link in bio', 'link in bio');
+eq(/recipe is on my blog/i.test(r.mentionsRecipeElsewhere('The written recipe is on my blog!') || ''),
+   true, 'written recipe on my blog');
+eq(r.mentionsRecipeElsewhere('comment "CAKE" for the recipe') !== null, true, 'comment-for-recipe');
+eq(r.mentionsRecipeElsewhere('500g chicken, 1 cup rice. Fry it.'), null,
+   'an ordinary recipe caption is not flagged');
+
 // ── Report ───────────────────────────────────────────────────────────────────
 
 if (fails.length) {

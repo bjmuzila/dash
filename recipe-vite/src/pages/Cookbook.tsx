@@ -215,9 +215,13 @@ function Card({ r, showMain }: { r: RecipeCard; showMain: boolean }) {
 
       {/* An unreviewed bulk import is worth flagging on the row itself — the
           filter chip tells you how many, this tells you which. */}
-      {r.needs_review && (
+      {/* PART beats NEW: "this recipe is incomplete" is worth knowing before
+          you open it, where "nobody has checked this yet" can wait. */}
+      {r.partial ? (
+        <span style={{ fontFamily: MONO, fontSize: 8, letterSpacing: '0.1em', color: T.warn }}>PART</span>
+      ) : r.needs_review ? (
         <span style={{ fontFamily: MONO, fontSize: 8, letterSpacing: '0.1em', color: T.warn }}>NEW</span>
-      )}
+      ) : null}
       {r.favorite && (
         <span aria-label="Saved" style={{ color: T.accent, fontSize: 15, fontFamily: SANS }}>●</span>
       )}

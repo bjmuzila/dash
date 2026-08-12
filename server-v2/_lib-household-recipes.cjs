@@ -550,6 +550,74 @@ async function fetchPage(url) {
 }
 
 // ---------------------------------------------------------------------------
+// "Full recipe in bio"
+// ---------------------------------------------------------------------------
+//
+// Creators split into two habits, and they need opposite handling:
+//
+//   1. The caption CONTAINS the link to the full write-up. Follow it. The blog
+//      almost certainly publishes schema.org JSON-LD, so following turns a
+//      partial caption into an exact recipe — for free, and better than the AI
+//      could reconstruct from a summary.
+//   2. The caption says "recipe in bio" / "link in bio" with no URL. There is
+//      nothing to follow: a bio link is a profile page, and an aggregator like
+//      linktr.ee is a menu of links, not a recipe. Import whatever the caption
+//      does have and MARK IT, so you know this one is incomplete before you
+//      start cooking rather than at the point you need step four.
+//
+// Getting this wrong in either direction is expensive: following a linktr.ee
+// wastes a fetch and an AI call on a page of buttons, and silently importing
+// half a recipe is worse than not importing it at all.
+
+/** Link-in-bio aggregators. A menu of links, never a recipe. */
+const AGGREGATORS = /(^|\.)((linktr\.ee)|(beacons\.ai)|(lnk\.bio)|(bio\.link)|(msha\.ke)|(stan\.store)|(komi\.io)|(linkin\.bio)|(later\.com)|(campsite\.bio)|(solo\.to)|(taplink\.cc))$/i;
+/** Not recipes either — shops, socials, the app itself. */
+const NOT_RECIPE_HOSTS = /(^|\.)((tiktok)|(tiktokv)|(instagram)|(facebook)|(youtube)|(youtu\.be)|(twitter)|(x\.com)|(threads\.net)|(pinterest)|(amazon)|(amzn\.to)|(spotify)|(apple)|(open\.spotify)|(shopmy\.us)|(ltk\.app)|(liketoknow\.it))\.?[a-z.]*$/i;
+
+/** External links in a caption that might actually be a recipe page. */
+function captionLinks(text) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of String(text || '').match(/https?:\/\/[^\s"'<>)\]]+/gi) || []) {
+    const url = raw.replace(/[.,;:!?)\]]+$/, '');
+    let host;
+    try { host = new URL(url).hostname.replace(/^www\./, '').toLowerCase(); } catch { continue; }
+    if (AGGREGATORS.test(host) || NOT_RECIPE_HOSTS.test(host)) continue;
+    if (seen.has(host + url)) continue;
+    seen.add(host + url);
+    out.push(url);
+    if (out.length >= 3) break;   // a caption with four links is a link dump
+  }
+  return out;
+}
+
+/**
+ * Does the caption say the real recipe lives somewhere else?
+ *
+ * Returns the phrase that matched, so the note on the recipe can quote the
+ * creator rather than paraphrase them — "recipe in bio" is more useful on the
+ * screen than "incomplete".
+ */
+const ELSEWHERE_PATTERNS = [
+  /\b(?:full |written |printable |detailed )?recipe (?:is )?(?:in|on|at|via) (?:my |the )?(?:bio|profile|link in bio|website|blog|linktree|link tree|newsletter|substack|patreon)\b/i,
+  /\blink in (?:my )?bio\b/i,
+  /\brecipe in (?:my )?bio\b/i,
+  /\b(?:full|written|printable) recipe (?:linked|below|here)\b/i,
+  /\bcomment ["“]?\w+["”]? (?:for|and I'?ll send) (?:the )?recipe\b/i,
+  /\bDM me (?:for )?(?:the )?recipe\b/i,
+  /\bgrab the (?:full )?recipe\b/i,
+];
+
+function mentionsRecipeElsewhere(text) {
+  const t = String(text || '');
+  for (const re of ELSEWHERE_PATTERNS) {
+    const m = t.match(re);
+    if (m) return m[0].trim().replace(/\s+/g, ' ').slice(0, 120);
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // "Is this even a recipe?"
 // ---------------------------------------------------------------------------
 //
@@ -717,7 +785,7 @@ function recipeFromAi(parsed, url, pageTitle) {
  * to get something subtly wrong, and a cookbook that fills up with half-read
  * pages is worse than one you paste into.
  */
-async function importRecipe({ url, text, force = false }) {
+async function importRecipe({ url, text, force = false, depth = 0 }) {
   const link = str(url, 2000);
   const pasted = str(text, 60_000);
   if (!link && !pasted) throw new Error('Paste a link or the recipe text.');
@@ -756,16 +824,67 @@ async function importRecipe({ url, text, force = false }) {
     throw new Error("That page didn't return any readable text — it may block automated readers. Copy the recipe and use Paste.");
   }
 
+  // ── "Full recipe in bio" ────────────────────────────────────────────────
+  //
+  // FOLLOW A LINK IF THERE IS ONE. A creator who links their blog has already
+  // done the work of publishing a complete, structured recipe; reading it beats
+  // asking an LLM to reconstruct one from a caption summary, and it is usually
+  // free because the blog carries JSON-LD.
+  //
+  // depth stops a page that links a page that links a page. One hop is the only
+  // hop worth taking: a link on a recipe page is a related recipe, not this one.
+  const elsewhere = mentionsRecipeElsewhere(caption || readable);
+  if (depth < 1) {
+    for (const found of captionLinks(caption || readable)) {
+      try {
+        const followed = await importRecipe({ url: found, depth: depth + 1 });
+        return {
+          ...followed,
+          // The ORIGINAL stays the source: it is what you saved, what you'll
+          // want to watch, and — critically — what the dedupe key is built from.
+          // Swapping in the blog URL would make your export list re-import every
+          // one of these on the next batch.
+          sourceUrl: finalUrl,
+          sourceKey: sourceKey(finalUrl),
+          // Credit the creator you followed, not the blog's byline.
+          sourceName: authorFromHtml(html) || handleFromUrl(finalUrl) || followed.sourceName,
+          // Where the full write-up actually lives, so the recipe page can
+          // offer it next to the video.
+          recipeUrl: found,
+          // A followed link produced a complete recipe — nothing partial here.
+          partial: false,
+          partialNote: null,
+        };
+      } catch {
+        // That link wasn't a recipe (a shop page, a dead domain, a paywall).
+        // Try the next one, then fall through to reading the caption.
+      }
+    }
+  }
+
   // THE GATE. Everything above this line is free; everything below costs money.
   // `force` is how a single manual import overrides a false negative.
   if (!force) {
     const sig = recipeSignals(readable);
     if (!sig.pass) {
-      throw notARecipe(`${sig.measures} amounts, ${sig.heroes} food words`);
+      // A caption with no food in it that SAYS the recipe is in the bio is a
+      // different problem from a dog video, and the by-hand list should say so
+      // — one is worth chasing, the other is not.
+      throw notARecipe(elsewhere
+        ? `the caption only says "${elsewhere}"`
+        : `${sig.measures} amounts, ${sig.heroes} food words`);
     }
   }
 
   const draft = recipeFromAi(await aiExtract(readable), finalUrl, stripTags(pageTitle));
+
+  // Enough in the caption to import, but the creator says the real one is
+  // elsewhere — so it goes in, FLAGGED. Half a recipe you don't know is half is
+  // worse than no recipe: you find out at step four, mid-cook.
+  if (elsewhere) {
+    draft.partial = true;
+    draft.partialNote = elsewhere;
+  }
   // The AI never sees images; og:image is how the card gets a photo on the
   // pages that had no JSON-LD.
   if (ogImage) draft.imageUrl = str(ogImage, 1000);
@@ -901,13 +1020,13 @@ const SORT_KEYS = Object.keys(SORTS);
 // screen, and on a phone that is the difference between instant and not.
 const CARD_COLS = `id, owner_id, visibility, title, description, image_url, source_url, source_name,
   servings, prep_minutes, cook_minutes, calories, category, skill, favorite,
-  main_ingredient, needs_review,
+  main_ingredient, needs_review, recipe_url, partial, partial_note,
   cooked_count, last_cooked_at, jsonb_array_length(ingredients) AS ingredient_count,
   created_at, updated_at`;
 
 const FULL_COLS = `id, owner_id, visibility, title, description, image_url, source_url, source_name,
   servings, prep_minutes, cook_minutes, calories, category, skill, favorite, notes,
-  main_ingredient, needs_review,
+  main_ingredient, needs_review, recipe_url, partial, partial_note,
   ingredients, steps, cooked_count, last_cooked_at, created_at, updated_at`;
 
 /**
@@ -1029,8 +1148,8 @@ async function createRecipe(userId, r) {
     `INSERT INTO hh_recipes
        (owner_id, visibility, title, description, image_url, source_url, source_name,
         servings, prep_minutes, cook_minutes, calories, category, skill, notes, ingredients, steps,
-        main_ingredient, needs_review, source_key)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17,$18,$19)
+        main_ingredient, needs_review, source_key, recipe_url, partial, partial_note)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17,$18,$19,$20,$21,$22)
      RETURNING ${FULL_COLS}`,
     [userId, SHARED, title, str(r.description, 1000) || null, str(r.imageUrl, 1000) || null,
      str(r.sourceUrl, 2000) || null, str(r.sourceName, 120) || null,
@@ -1042,7 +1161,8 @@ async function createRecipe(userId, r) {
      guessMainIngredient(title, ingredients), !!r.needsReview,
      // Falls back to deriving it from the URL for a hand-typed recipe that was
      // never imported — those still dedupe against a later paste of the link.
-     str(r.sourceKey, 200) || sourceKey(r.sourceUrl)]);
+     str(r.sourceKey, 200) || sourceKey(r.sourceUrl),
+     str(r.recipeUrl, 2000) || null, !!r.partial, str(r.partialNote, 200) || null]);
 
   // Copy the photo in the BACKGROUND, deliberately not awaited. Saving a recipe
   // must not sit on someone else's CDN for ten seconds, and the gap is already
@@ -1185,11 +1305,17 @@ async function addToList(userId, id, { servings, mealId, only } = {}) {
 }
 
 /**
- * Put a recipe on the week board for a given day, and (by default) its
- * ingredients on the list attached to that meal — which is the whole point of
- * planning something: the shop knows about it.
+ * Put a recipe on the week board for a given day.
+ *
+ * withList defaults to FALSE. It used to default true, on the theory that the
+ * shop should know about anything you plan — but planning and shopping happen at
+ * different moments. You plan the week on Sunday and shop on Wednesday, and a
+ * plan that silently dumps forty ingredients into the list means the list is
+ * full of things you already own by the time you get there. "Add all" is a
+ * button on the recipe, one tap away, and it belongs to the person deciding to
+ * shop rather than to the person deciding what to eat.
  */
-async function planMeal(userId, id, { day, servings, withList = true } = {}) {
+async function planMeal(userId, id, { day, servings, withList = false } = {}) {
   if (!isDate(day)) throw new Error('Pick a day.');
   const pool = libDb.getPool();
   const recipe = await getRecipe(userId, id);
@@ -1735,7 +1861,7 @@ module.exports = {
   // Exported for the self-test and for anything that wants the same parsing.
   parseIngredient, formatQty, scaledText, isoMinutes, stripTags,
   guessMainIngredient, tidyIngredientName, SORTS, SORT_KEYS,
-  recipeSignals, looksLikeRecipe,
+  recipeSignals, looksLikeRecipe, captionLinks, mentionsRecipeElsewhere,
   findRecipeNode, recipeFromJsonLd,
   metaContent, embeddedCaption, handleFromUrl,
   importRecipe,
