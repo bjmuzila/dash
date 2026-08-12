@@ -268,6 +268,83 @@ function stripTags(html) {
     .trim();
 }
 
+/**
+ * Pull a `<meta>` content value, whichever attribute order the site used.
+ * `property=` (OpenGraph) and `name=` (plain description, Twitter cards) are
+ * both accepted because sites are inconsistent about which one they use for
+ * which key.
+ */
+function metaContent(html, key) {
+  const k = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const patterns = [
+    new RegExp(`<meta[^>]+(?:property|name)=["']${k}["'][^>]+content=["']([^"']*)["']`, 'i'),
+    new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]+(?:property|name)=["']${k}["']`, 'i'),
+  ];
+  for (const re of patterns) {
+    const m = html.match(re);
+    if (m && m[1].trim()) return m[1].trim();
+  }
+  return null;
+}
+
+/**
+ * The caption out of a JavaScript-rendered page.
+ *
+ * TikTok, Instagram and friends render everything client-side: the <body> is an
+ * empty shell and the words you came for live in a JSON blob inside a <script>,
+ * which stripTags() correctly throws away. Without this, an import of a TikTok
+ * gets a page of nothing and Claude quite rightly says "that isn't a recipe" —
+ * even though the recipe was sitting in the HTML the whole time.
+ *
+ * So: scan the raw HTML for JSON string fields that hold prose, and take the
+ * longest one. Keys are restricted to desc/description/caption (plus
+ * Instagram's nested caption edge) — matching a bare "text" key would sweep up
+ * button labels and menu items, and the longest-wins rule would then pick some
+ * cookie-consent paragraph instead of the recipe.
+ *
+ * Length floors do the rest of the filtering: a real recipe caption is
+ * hundreds of characters, an SEO blurb is not.
+ */
+const CAPTION_KEYS = /"(?:desc|description|caption)"\s*:\s*"((?:[^"\\]|\\.){60,}?)"/g;
+const IG_CAPTION = /"edge_media_to_caption"\s*:\s*\{[\s\S]{0,2000}?"text"\s*:\s*"((?:[^"\\]|\\.){40,}?)"/;
+
+function embeddedCaption(html) {
+  const found = [];
+  const push = (raw) => {
+    if (!raw) return;
+    // The match is the INSIDE of a JSON string, so wrapping it in quotes and
+    // parsing is the correct un-escaper — it handles \n, \", \uXXXX and emoji
+    // surrogate pairs, all of which show up in real captions.
+    try { found.push(JSON.parse(`"${raw}"`)); } catch { /* not valid JSON — skip it */ }
+  };
+
+  const ig = html.match(IG_CAPTION);
+  if (ig) push(ig[1]);
+
+  let m;
+  CAPTION_KEYS.lastIndex = 0;
+  while ((m = CAPTION_KEYS.exec(html)) !== null) {
+    push(m[1]);
+    // A 400KB page of minified JSON can hold a lot of matches; the recipe is
+    // never the two-hundredth one.
+    if (found.length > 200) break;
+  }
+
+  if (!found.length) return null;
+  found.sort((a, b) => b.length - a.length);
+  return found[0].slice(0, 8000);
+}
+
+/** "@fit_foodie_lulu" out of a TikTok/Instagram URL, for the by-line. */
+function handleFromUrl(url) {
+  try {
+    const u = new URL(url);
+    if (!/(^|\.)(tiktok|instagram)\.com$/i.test(u.hostname.replace(/^www\./, ''))) return null;
+    const m = u.pathname.match(/\/@?([A-Za-z0-9._]{2,30})(?:\/|$)/);
+    return m ? `@${m[1].replace(/^@/, '')}` : null;
+  } catch { return null; }
+}
+
 function firstImage(v) {
   if (!v) return null;
   if (typeof v === 'string') return v;
@@ -521,13 +598,31 @@ async function importRecipe({ url, text }) {
 
   // No usable structured data. Fall back to reading the page.
   const pageTitle = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '';
-  const ogImage = (html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) || [])[1]
-    || (html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i) || [])[1]
-    || null;
-  const draft = recipeFromAi(await aiExtract(stripTags(html)), link, stripTags(pageTitle));
+  const ogImage = metaContent(html, 'og:image') || metaContent(html, 'twitter:image');
+  const ogDesc = metaContent(html, 'og:description') || metaContent(html, 'description');
+
+  // ORDER MATTERS. The caption goes FIRST, then the meta description, then the
+  // page body — because on a JS-rendered page (TikTok, Instagram) the body is
+  // an empty shell and the caption is the whole recipe, while on an ordinary
+  // blog the body is the recipe and the caption extractor finds nothing. One
+  // path handles both, and aiExtract's 24k cap then trims the tail of a long
+  // blog post rather than the caption we specifically went looking for.
+  const caption = embeddedCaption(html);
+  const readable = [caption, ogDesc, stripTags(html)].filter(Boolean).join('\n\n');
+  if (readable.trim().length < 40) {
+    // Nothing readable at all — a hard bot wall, or a page that is pure script.
+    // Say so plainly instead of paying for an AI call that can only fail.
+    throw new Error("That page didn't return any readable text — it may block automated readers. Copy the recipe and use Paste.");
+  }
+
+  const draft = recipeFromAi(await aiExtract(readable), link, stripTags(pageTitle));
   // The AI never sees images; og:image is how the card gets a photo on the
   // pages that had no JSON-LD.
   if (ogImage) draft.imageUrl = str(ogImage, 1000);
+  // "by @fit_foodie_lulu" reads better than "by tiktok.com" — and it's the
+  // credit the creator is actually owed.
+  const handle = handleFromUrl(link);
+  if (handle) draft.sourceName = handle;
   return draft;
 }
 
@@ -792,6 +887,7 @@ module.exports = {
   // Exported for the self-test and for anything that wants the same parsing.
   parseIngredient, formatQty, scaledText, isoMinutes, stripTags,
   findRecipeNode, recipeFromJsonLd,
+  metaContent, embeddedCaption, handleFromUrl,
   importRecipe,
   listRecipes, getRecipe, summary,
   createRecipe, updateRecipe, deleteRecipe, toggleFavorite, markCooked,

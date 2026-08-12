@@ -136,6 +136,57 @@ eq(r.recipeFromJsonLd({
   recipeInstructions: '<ol><li>Toast the bread.</li><li>Butter it.</li></ol>',
 }, null).steps, ['Toast the bread.', 'Butter it.'], 'instructions as an <li> blob');
 
+// ── JS-rendered pages (TikTok / Instagram) ───────────────────────────────────
+//
+// These sites render everything client-side: the <body> is an empty shell and
+// the caption — the entire recipe — sits in a JSON blob inside a <script>,
+// which stripTags() correctly throws away. Confirmed against a real TikTok on
+// 2026-08-12: og:description was absent, `"desc"` held the whole thing.
+
+const TIKTOK = `<html><head><title>TikTok - Make Your Day</title>
+<meta property="og:image" content="https://p16.tiktokcdn.com/thumb.jpg"/></head>
+<body><div id="app"></div>
+<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">
+{"a":{"b":{"desc":"CHEESY BUTTER CHICKEN GARLIC BREAD \\ud83e\\udd56 Creamy, cheesy and garlicky.\\nIngredients\\n1 Ciabatta loaf\\n500g chicken breast\\n1 cup mozzarella cheese\\n2 tbsp tomato paste","nickname":"lulu"},
+ "c":{"desc":"short one"},
+ "d":{"description":"Sign up to see more videos from creators you follow on the app."}}}
+</script></body></html>`;
+
+const cap = r.embeddedCaption(TIKTOK);
+eq(/^CHEESY BUTTER CHICKEN GARLIC BREAD/.test(cap || ''), true, 'caption pulled from a script JSON blob');
+eq(cap.includes('1 cup mozzarella cheese'), true, 'caption keeps its ingredient lines');
+// \n arrives escaped inside the JSON string and must come back as a real
+// newline, or the AI sees one run-on paragraph.
+eq(cap.includes('\n'), true, 'JSON escapes are decoded');
+eq(cap.includes('🥖'), true, 'surrogate-pair emoji survives');
+// Longest-wins, so the boilerplate "Sign up to see more videos" loses.
+eq(cap.includes('Sign up'), false, 'boilerplate description loses to the real caption');
+
+// stripTags is what made this necessary — proof the body alone is useless.
+eq(r.stripTags(TIKTOK).includes('mozzarella'), false, 'the caption is NOT in the page body');
+
+// Instagram nests it one level deeper.
+const IG = `<script>{"edge_media_to_caption":{"edges":[{"node":{"text":"Miso mushroom pasta. 200g pasta, 2 tbsp miso, 300g mushrooms, 1 clove garlic."}}]}}</script>`;
+eq(/^Miso mushroom pasta/.test(r.embeddedCaption(IG) || ''), true, 'Instagram caption edge');
+
+// An ordinary blog has no caption JSON — the extractor must return null rather
+// than dredging up some random short string.
+eq(r.embeddedCaption('<html><body><p>Just a normal page.</p></body></html>'), null,
+   'no caption on an ordinary page');
+
+// Meta, both attribute orders.
+eq(r.metaContent('<meta property="og:description" content="Hello there"/>', 'og:description'),
+   'Hello there', 'meta property=… content=…');
+eq(r.metaContent('<meta content="Hello there" name="description"/>', 'description'),
+   'Hello there', 'meta content=… name=… (reversed)');
+eq(r.metaContent('<html></html>', 'og:image'), null, 'missing meta is null');
+
+// The by-line credits the creator, not the domain.
+eq(r.handleFromUrl('https://www.tiktok.com/@fit_foodie_lulu/video/7672328780597267730'),
+   '@fit_foodie_lulu', 'tiktok handle');
+eq(r.handleFromUrl('https://www.instagram.com/reel/Cxyz/'), '@reel', 'instagram path first segment');
+eq(r.handleFromUrl('https://thesaltycooker.com/banana-cake'), null, 'ordinary site has no handle');
+
 // ── Report ───────────────────────────────────────────────────────────────────
 
 if (fails.length) {

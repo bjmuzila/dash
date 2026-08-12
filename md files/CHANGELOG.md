@@ -1,5 +1,59 @@
 # Changelog
 
+## 2026-08-12 - Recipe import: read the caption out of JS-rendered pages (TikTok, Instagram)
+
+`server-v2/_lib-household-recipes.cjs` — new `metaContent()`, `embeddedCaption()`,
+`handleFromUrl()`; `importRecipe()`'s fallback now builds its text from all three
+sources. Verified `node server-v2/_lib-household-recipes.selftest.js` — 59 passed
+(was 45).
+
+### What
+
+A TikTok link imported as "That doesn't look like a recipe." The pipeline was
+working perfectly — key valid, page fetched (HTTP 200, 396KB) — and Claude was
+right: what it got handed WAS not a recipe.
+
+TikTok, Instagram and every other client-rendered site ship an empty `<body>`
+and put the words in a JSON blob inside a `<script>`. `stripTags()` throws
+`<script>` away, correctly, which meant the AI received a page of nothing while
+the full recipe sat in the HTML the whole time. Confirmed on the box: no
+`og:description` at all, and the entire caption — title, macros, ingredients,
+method — in a `"desc"` field.
+
+### How
+
+- **`embeddedCaption(html)`** scans raw HTML for JSON string fields holding
+  prose and takes the longest. Keys are restricted to `desc` / `description` /
+  `caption`, plus Instagram's nested `edge_media_to_caption` → `text`. Matching
+  a bare `"text"` key was rejected: it sweeps up button labels and menu items,
+  and longest-wins would then pick a cookie-consent paragraph over the recipe.
+  A 60-char floor drops SEO blurbs; `JSON.parse('"'+m+'"')` un-escapes, so `\n`
+  comes back as real newlines (or the AI sees one run-on paragraph) and emoji
+  surrogate pairs survive.
+- **`metaContent()`** reads a `<meta>` value in either attribute order —
+  `property=`/`name=` first or `content=` first. Sites are inconsistent, and the
+  old inline `og:image` regex only handled one of the two.
+- **`importRecipe()` fallback order is caption → meta description → page body.**
+  One path covers both cases: on a JS-rendered page the body is a shell and the
+  caption is everything; on an ordinary blog the extractor finds nothing and the
+  body carries it. Order also decides what `aiExtract`'s 24k cap trims — the
+  tail of a long blog post, never the caption we went looking for.
+- **Empty-page guard.** Under 40 readable characters now throws
+  "didn't return any readable text — it may block automated readers" instead of
+  paying for an AI call that can only fail.
+- **`handleFromUrl()`** — a TikTok/Instagram import is credited `@fit_foodie_lulu`
+  rather than `tiktok.com`. That's the by-line the creator is owed, and it
+  matches how the reference app reads.
+
+### Deploy
+
+`server-v2` is baked into the dashboard image, so this needs a rebuild, not just
+a restart:
+
+```
+git pull && docker compose build dashboard && docker compose up -d dashboard
+```
+
 ## 2026-08-12 - New app: recipe.cbedge.net — the cookbook, wired into the household grocery list
 
 New: `recipe-vite/` (SPA), `server-v2/_lib-household-recipes.cjs`,

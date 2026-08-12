@@ -1663,7 +1663,7 @@ interface TlLevels {
   callWall: number | null;   // highest +GEX strike — dealers sell into it
   putWall: number | null;    // most −GEX strike — dealers buy under it
   core: number | null;       // highest |GEX| strike (CB) — the magnet
-  flip: number | null;       // cumulative-GEX zero crossing — sticky above, slippery below
+  flip: number | null;       // cumulative-GEX zero crossing — pinning above, trending below
   net: number;               // summed net GEX across the whole ladder
 }
 
@@ -2152,7 +2152,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
                 <TlLevelChip name="Core (CB)" value={leftLevels.core} spot={spot} color={LEVEL_COLORS.cb} note="biggest magnet" />
                 <TlLevelChip name="Call wall" value={leftLevels.callWall} spot={spot} color={LEVEL_COLORS.cw} note="ceiling" />
                 <TlLevelChip name="Put wall" value={leftLevels.putWall} spot={spot} color={LEVEL_COLORS.pw} note="floor" />
-                <TlLevelChip name="Gamma flip" value={leftLevels.flip} spot={spot} color={T.orange} note="sticky ↑ slippery ↓" />
+                <TlLevelChip name="Gamma flip" value={leftLevels.flip} spot={spot} color={T.orange} note="pinning ↑ trending ↓" />
               </div>
             </div>
 
@@ -2176,7 +2176,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
                 <TlLevelChip name="Core (CB)" value={rightLevels.core} spot={spot} color={LEVEL_COLORS.cb} note="biggest magnet" />
                 <TlLevelChip name="Call wall" value={rightLevels.callWall} spot={spot} color={LEVEL_COLORS.cw} note="ceiling" />
                 <TlLevelChip name="Put wall" value={rightLevels.putWall} spot={spot} color={LEVEL_COLORS.pw} note="floor" />
-                <TlLevelChip name="Gamma flip" value={rightLevels.flip} spot={spot} color={T.orange} note="sticky ↑ slippery ↓" />
+                <TlLevelChip name="Gamma flip" value={rightLevels.flip} spot={spot} color={T.orange} note="pinning ↑ trending ↓" />
               </div>
             </div>
           </div>
@@ -2195,7 +2195,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
             {rightLevels.core != null && `Core magnet ${rightLevels.core.toLocaleString()}. `}
             {rightLevels.callWall != null && `Call wall ${rightLevels.callWall.toLocaleString()}. `}
             {rightLevels.putWall != null && `Put wall ${rightLevels.putWall.toLocaleString()}. `}
-            {rightLevels.flip != null && `Gamma flip ${rightLevels.flip.toLocaleString("en-US", { maximumFractionDigits: 2 })} — sticky above, slippery below.`}
+            {rightLevels.flip != null && `Gamma flip ${rightLevels.flip.toLocaleString("en-US", { maximumFractionDigits: 2 })} — pinning above, trending below.`}
           </div>
 
           <span style={{ fontSize: 11, color: T.text, opacity: 0.45, fontFamily: "var(--font-mono)" }}>
