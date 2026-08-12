@@ -235,7 +235,7 @@ function BulkImport() {
     // The by-hand pile changes as the batch runs — a link that fails joins it,
     // a retry that works removes it.
     qc.invalidateQueries({ queryKey: ['bulk-misses'] })
-  }, [job?.ok, job?.failed, job?.notrecipe, job?.status, qc, job])
+  }, [job?.ok, job?.failed, job?.notrecipe, job?.nowritten, job?.status, qc, job])
 
   const start = useMutation({
     mutationFn: () => bulkApi.start(urls),
@@ -309,6 +309,7 @@ function BulkImport() {
           <div style={{ ...label(), marginTop: 8 }}>
             {job.ok} saved
             {job.skipped ? ` · ${job.skipped} already had` : ''}
+            {job.nowritten ? ` · ${job.nowritten} no recipe` : ''}
             {job.notrecipe ? ` · ${job.notrecipe} not food` : ''}
             {job.failed ? ` · ${job.failed} failed` : ''}
           </div>
@@ -338,14 +339,18 @@ function BulkImport() {
                 <span style={{
                   fontFamily: MONO, fontSize: 8, letterSpacing: '.1em', marginTop: 3, width: 46,
                   flexShrink: 0,
+                  // NO RECIPE gets the warn colour, not the faint one: it is
+                  // the only miss you are meant to act on.
                   color: it.status === 'saved' ? T.accent
                     : it.status === 'failed' ? T.bad
+                    : it.status === 'nowritten' ? T.warn
                     : it.status === 'skipped' || it.status === 'notrecipe' ? T.faint
                     : it.status === 'importing' ? T.warn : T.faint,
                 }}>
                   {it.status === 'saved' ? 'SAVED'
                     : it.status === 'failed' ? 'FAILED'
                     : it.status === 'skipped' ? 'HAVE IT'
+                    : it.status === 'nowritten' ? 'NO RECIPE'
                     : it.status === 'notrecipe' ? 'NOT FOOD'
                     : it.status === 'importing' ? '···' : 'QUEUED'}
                 </span>
@@ -425,7 +430,9 @@ function Misses() {
         <span style={label()}>{data.total}</span>
       </div>
       <p style={{ ...body(13), marginTop: 6, color: T.faint }}>
+        {data.nowritten ? `${data.nowritten} are food with the recipe spoken in the video · ` : ''}
         {data.failed} failed · {data.notrecipe} had no food in the caption.
+        The spoken ones are listed first — those are the ones worth typing up.
         This list clears itself as they get imported.
       </p>
 
@@ -457,9 +464,9 @@ function MissRow({ m, first }: { m: ImportMiss; first: boolean }) {
       <span style={{
         fontFamily: MONO, fontSize: 8, letterSpacing: '.1em', marginTop: 3,
         width: 46, flexShrink: 0,
-        color: m.status === 'failed' ? T.bad : T.faint,
+        color: m.status === 'failed' ? T.bad : m.status === 'nowritten' ? T.warn : T.faint,
       }}>
-        {m.status === 'failed' ? 'FAILED' : 'NOT FOOD'}
+        {m.status === 'failed' ? 'FAILED' : m.status === 'nowritten' ? 'NO RECIPE' : 'NOT FOOD'}
       </span>
       <div style={{ minWidth: 0, flex: 1 }}>
         {/* Opens the video so you can look at it before deciding. rel=noreferrer

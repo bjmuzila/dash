@@ -159,11 +159,67 @@ eq(cap.includes('1 cup mozzarella cheese'), true, 'caption keeps its ingredient 
 // newline, or the AI sees one run-on paragraph.
 eq(cap.includes('\n'), true, 'JSON escapes are decoded');
 eq(cap.includes('🥖'), true, 'surrogate-pair emoji survives');
-// Longest-wins, so the boilerplate "Sign up to see more videos" loses.
+// Several fields are kept now, so the floor is what excludes the boilerplate:
+// anything after the longest has to be 120+ characters to ride along.
 eq(cap.includes('Sign up'), false, 'boilerplate description loses to the real caption');
 
 // stripTags is what made this necessary — proof the body alone is useless.
 eq(r.stripTags(TIKTOK).includes('mozzarella'), false, 'the caption is NOT in the page body');
+
+// ── The SEO write-up sits in a SECOND field ──────────────────────────────────
+//
+// Reported 2026-08-12 against the Hawaiian rolls video. Longest-wins kept the
+// marketing caption and threw away a field holding the whole write-up —
+// ingredient notes, a numbered method, storage — so the gate was handed a blurb
+// and correctly said there was no recipe in it. Both fields must survive.
+
+const WRITEUP = 'Cinnamon Sugar Hawaiian Rolls with Cream Cheese Icing. '
+  + 'Quick ingredient notes: Hawaiian rolls as the base, cinnamon and granulated sugar '
+  + 'for the outer coating, butter to help the sugar adhere, cream cheese, powdered sugar, '
+  + 'and a splash of milk or vanilla for the icing. '
+  + 'Simple method overview. 1. Prepare rolls in a baking dish, brush with melted butter. '
+  + '2. Mix cinnamon and sugar and sprinkle onto the rolls so a thin even layer forms. '
+  + '3. Bake until the tops are golden and the edges crisp slightly. '
+  + '4. Beat cream cheese with powdered sugar and a little milk until smooth. '
+  + '5. Drizzle the icing over warm rolls so it softens and sets slightly. '
+  + 'Store cooled rolls in an airtight container at room temperature for up to 2 days.';
+
+const ROLLS_CAPTION = 'Cinnamon sugar Hawaiian rolls! Crispy on the outside, soft on the '
+  + 'inside, and topped with the best cream cheese icing. Would you try these? '
+  + '#DisneyInspired #HawaiianRolls #HomemadeDessert #EasyRecipes #Foodie';
+
+const ROLLS = `<html><body><script type="application/json">
+{"item":{"desc":${JSON.stringify(ROLLS_CAPTION)}},
+ "seo":{"contentBlock":${JSON.stringify(WRITEUP)}},
+ "nav":{"label":"Following"},
+ "cta":{"buttonText":"Log in to follow creators, like videos, and view comments."}}
+</script></body></html>`;
+
+const rolls = r.embeddedCaption(ROLLS);
+eq(rolls.includes('#Foodie'), true, 'the caption survives');
+eq(rolls.includes('Simple method overview'), true, 'the write-up under an unlisted key survives too');
+// The gate is the whole point of keeping the second field.
+eq(r.recipeSignals(ROLLS_CAPTION).pass, false, 'the caption ALONE still has no recipe in it');
+eq(r.recipeSignals(rolls).pass, true, 'caption + write-up passes the gate');
+
+// The floor-320-and-prose rule is what keeps that permissiveness safe: a long
+// unlisted string that is not prose must not get in.
+const JUNK = '<script>{"sig":"' + 'a1b2c3d4'.repeat(60) + '","href":"https://cdn.example.com/'
+  + 'x'.repeat(400) + '"}</script>';
+eq(r.embeddedCaption(JUNK), null, 'a long id and a long URL are not captions');
+
+// ── Food, but the recipe is spoken in the video ──────────────────────────────
+//
+// The third outcome. Not a failure (nothing to retry) and not "not food" (it
+// plainly is) — it is the pile worth opening the video for. Hashtags are split
+// on the case boundary first, or #EasyRecipes never matches \brecipe\b and the
+// screen says "0 food words" about a caption that is nothing but food words.
+
+const rollsSig = r.recipeSignals(ROLLS_CAPTION);
+eq(rollsSig.food >= 2, true, 'hashtags are split into words before counting');
+eq(rollsSig.foodNoRecipe, true, 'food with no method is its own outcome');
+eq(r.recipeSignals('my dog does this every morning #dogsoftiktok').foodNoRecipe, false,
+   'a dog video is not food-with-no-recipe');
 
 // Instagram nests it one level deeper.
 const IG = `<script>{"edge_media_to_caption":{"edges":[{"node":{"text":"Miso mushroom pasta. 200g pasta, 2 tbsp miso, 300g mushrooms, 1 clove garlic."}}]}}</script>`;

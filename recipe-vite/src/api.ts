@@ -69,6 +69,10 @@ export type HouseholdUser = {
 export type PinStatus = {
   hasPin: boolean
   displayName?: string
+  /** EVERYONE armed on this browser, most recently used first. A shared tablet
+   *  holds one device token and one row per person, so the pad greets both and
+   *  the PIN itself picks which account opens. */
+  names?: string[]
   attemptsLeft?: number
 }
 
@@ -326,6 +330,9 @@ export type ImportJob = {
   /** Links the caption gate rejected before any AI call — a favourites export
    *  is full of them. Also not a failure, and not retried. */
   notrecipe: number
+  /** Food, but no written recipe — the method is spoken in the video. The one
+   *  miss pile worth working through by hand. */
+  nowritten: number
   status: 'running' | 'done' | 'cancelled'
   created_at: string
   finished_at: string | null
@@ -334,7 +341,7 @@ export type ImportJob = {
 export type ImportItem = {
   id: number
   url: string
-  status: 'pending' | 'importing' | 'saved' | 'skipped' | 'notrecipe' | 'failed'
+  status: 'pending' | 'importing' | 'saved' | 'skipped' | 'notrecipe' | 'nowritten' | 'failed'
   recipe_id: number | null
   title: string | null
   error: string | null
@@ -408,9 +415,10 @@ export const bulk = {
 
 export type ImportMiss = {
   url: string
-  /** `failed` is worth retrying (a timeout, a block). `notrecipe` means the
-   *  caption gate saw no food — worth an eyeball before you bother. */
-  status: 'failed' | 'notrecipe'
+  /** `failed` is worth retrying (a timeout, a block). `nowritten` is food with
+   *  the method spoken aloud — open the video and type it. `notrecipe` saw no
+   *  food at all — worth an eyeball before you bother. */
+  status: 'failed' | 'notrecipe' | 'nowritten'
   error: string | null
   updated_at: string
   job_id: number
@@ -421,6 +429,7 @@ export type MissesPayload = {
   total: number
   failed: number
   notrecipe: number
+  nowritten: number
 }
 
 /**

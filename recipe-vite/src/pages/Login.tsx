@@ -37,7 +37,13 @@ export default function Login() {
   useEffect(() => {
     let alive = true
     authApi.pinStatus()
-      .then((s) => { if (alive && s.hasPin) setPinName(s.displayName || '') })
+      // Everyone armed on this browser, not just one. On a shared tablet the
+      // pad has to greet both people — the PIN is what picks the account.
+      .then((s) => {
+        if (!alive || !s.hasPin) return
+        const all = s.names?.length ? s.names : [s.displayName || ''].filter(Boolean)
+        setPinName(all.join(' or '))
+      })
       .catch(() => { /* unreachable server → password form, which says so */ })
       .finally(() => { if (alive) setChecked(true) })
     return () => { alive = false }
@@ -125,7 +131,9 @@ function PinSignIn({ name, onPin, onForget, onUsePassword }: {
     <div>
       <div style={{ marginBottom: 30, textAlign: 'center' }}>
         <div style={label()}>Welcome back</div>
-        <h1 style={{ ...display(32), marginTop: 8 }}>{name || 'Cookbook'}</h1>
+        {/* Two names ride on one line here — step the size down rather
+            than let "Brandon or Heather" wrap mid-name. */}
+        <h1 style={{ ...display(name.length > 14 ? 23 : 32), marginTop: 8 }}>{name || 'Cookbook'}</h1>
         <div style={label({ color: T.faint, letterSpacing: '0.08em', marginTop: 10 })}>
           Enter your PIN
         </div>

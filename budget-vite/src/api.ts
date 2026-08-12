@@ -69,6 +69,10 @@ export type PinStatus = {
   hasPin: boolean
   /** Only present when hasPin — it takes the device cookie to learn this. */
   displayName?: string
+  /** EVERYONE armed on this browser, most recently used first. A shared tablet
+   *  holds one device token and one row per person, so the pad greets both and
+   *  the PIN itself picks which account opens. */
+  names?: string[]
   attemptsLeft?: number
 }
 

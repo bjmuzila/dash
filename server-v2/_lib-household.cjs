@@ -125,23 +125,53 @@ async function ensureSchema() {
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_login_attempts_email_at_idx ON hh_login_attempts(email, at DESC)`);
 
     // ── Quick sign-in ────────────────────────────────────────────────────
-    // One row per (browser, person). The PRIMARY KEY is the SHA-256 of the
-    // device token, never the token itself — same reasoning as hh_sessions: a
-    // database dump must not hand anyone half of a working credential.
+    // One row per (browser, PERSON) — the key is COMPOSITE, and that is the
+    // whole point. It was device_hash alone, which meant a browser could hold
+    // exactly one person's quick sign-in: the second person to set a PIN on the
+    // shared iPad took the row, the first silently dropped back to typing a
+    // password, and re-arming it bounced the other one off. Two people, two
+    // PINs, both permanently signing in the long way round.
+    //
+    // The device token stays SINGULAR per browser. It is the "this is a browser
+    // I trust" half of the credential and is not a per-person secret; the PIN
+    // is what says WHICH person, which is why two people on one device must not
+    // choose the same four digits (setPin refuses).
+    //
+    // Hashed device token, never the token itself — same reasoning as
+    // hh_sessions: a database dump must not hand anyone half of a working
+    // credential.
     //
     // `fails` is per-DEVICE, not per-account, and it is never reset by time —
-    // only by a correct PIN. Deleting the row at MAX_PIN_FAILS is the lockout.
+    // only by a correct PIN. Deleting the rows at MAX_PIN_FAILS is the lockout.
     await pool.query(`
       CREATE TABLE IF NOT EXISTS hh_device_pins (
-        device_hash  TEXT PRIMARY KEY,
+        device_hash  TEXT NOT NULL,
         user_id      INTEGER NOT NULL REFERENCES hh_users(id) ON DELETE CASCADE,
         pin_hash     TEXT NOT NULL,
         fails        INTEGER NOT NULL DEFAULT 0,
         user_agent   TEXT,
         created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-        last_used_at TIMESTAMPTZ
+        last_used_at TIMESTAMPTZ,
+        PRIMARY KEY (device_hash, user_id)
       )`);
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_device_pins_user_idx ON hh_device_pins(user_id)`);
+    // Widen the key on a box that already has the one-person-per-browser table.
+    // Guarded on the column COUNT of the existing primary key so it is a no-op
+    // once applied — re-running ADD PRIMARY KEY would error, and CREATE TABLE
+    // IF NOT EXISTS above cannot fix a table that already exists.
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conrelid = 'hh_device_pins'::regclass
+             AND contype = 'p' AND array_length(conkey, 1) = 1
+        ) THEN
+          ALTER TABLE hh_device_pins DROP CONSTRAINT hh_device_pins_pkey;
+          ALTER TABLE hh_device_pins ADD CONSTRAINT hh_device_pins_pkey
+                PRIMARY KEY (device_hash, user_id);
+        END IF;
+      END $$;`);
 
     // ── Life-OS tables (phase 1 uses tasks + notes; created now so step 4 is
     //    routes and UI only) ─────────────────────────────────────────────────
@@ -346,6 +376,9 @@ async function ensureSchema() {
         -- Links the caption gate rejected before any AI call. Counted apart
         -- from failed, because it is the gate working, not the import breaking.
         notrecipe   INTEGER NOT NULL DEFAULT 0,
+        -- Food, but no written recipe — the method is spoken in the video. Its
+        -- own counter because it is the ONE pile worth working by hand.
+        nowritten   INTEGER NOT NULL DEFAULT 0,
         -- 'running' | 'done' | 'cancelled'
         status      TEXT NOT NULL DEFAULT 'running',
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -371,6 +404,7 @@ async function ensureSchema() {
     // without `skipped`, so an existing deployment needs the column added.
     await pool.query(`ALTER TABLE hh_recipe_import_jobs ADD COLUMN IF NOT EXISTS skipped INTEGER NOT NULL DEFAULT 0`);
     await pool.query(`ALTER TABLE hh_recipe_import_jobs ADD COLUMN IF NOT EXISTS notrecipe INTEGER NOT NULL DEFAULT 0`);
+    await pool.query(`ALTER TABLE hh_recipe_import_jobs ADD COLUMN IF NOT EXISTS nowritten INTEGER NOT NULL DEFAULT 0`);
 
     // Backlinks. ON DELETE SET NULL throughout, matching hh_list_items.meal_id:
     // deleting a recipe must not silently pull tortillas off a grocery list you
@@ -851,24 +885,34 @@ async function setPin({ userId, pin, req }) {
   if (problem) return { ok: false, code: 400, error: problem };
 
   const pool = libDb.getPool();
+  // KEEP the browser's existing token even when someone else has already armed
+  // this browser — that used to mint a fresh one, which quietly cut the other
+  // person's row loose and is exactly why two people with two PINs kept ending
+  // up back at the password form. A browser has one device token; the rows
+  // hanging off it are per person.
   let token = deviceToken(req);
-
-  // A shared laptop: if this browser's token is already claimed by the OTHER
-  // person, mint a fresh one rather than overwriting their quick sign-in.
-  if (token) {
-    const { rows } = await pool.query(
-      `SELECT user_id FROM hh_device_pins WHERE device_hash=$1`, [sha256(token)]);
-    if (rows[0] && rows[0].user_id !== userId) token = null;
-  }
   if (!token) token = crypto.randomBytes(32).toString('base64url');
+  const dh = sha256(token);
+
+  // Two people on one device must not pick the same four digits: sign-in
+  // identifies the person BY the PIN, so a collision would make whose account
+  // opens a matter of row order.
+  const { rows: others } = await pool.query(
+    `SELECT pin_hash FROM hh_device_pins WHERE device_hash=$1 AND user_id<>$2`, [dh, userId]);
+  if (others.some((o) => verifyPassword(pin, o.pin_hash))) {
+    return {
+      ok: false, code: 409,
+      error: 'Someone else on this device already uses that PIN. Pick a different one.',
+    };
+  }
 
   await pool.query(
     `INSERT INTO hh_device_pins (device_hash, user_id, pin_hash, fails, user_agent, last_used_at)
      VALUES ($1,$2,$3,0,$4,now())
-     ON CONFLICT (device_hash) DO UPDATE
-        SET user_id = EXCLUDED.user_id, pin_hash = EXCLUDED.pin_hash, fails = 0,
+     ON CONFLICT (device_hash, user_id) DO UPDATE
+        SET pin_hash = EXCLUDED.pin_hash, fails = 0,
             user_agent = EXCLUDED.user_agent, last_used_at = now()`,
-    [sha256(token), userId, hashPassword(pin), uaOf(req)]);
+    [dh, userId, hashPassword(pin), uaOf(req)]);
 
   return { ok: true, cookie: deviceCookie(token) };
 }
@@ -913,13 +957,22 @@ async function pinStatus(req) {
     const { rows } = await libDb.getPool().query(
       `SELECT d.fails, u.display_name, u.active
          FROM hh_device_pins d JOIN hh_users u ON u.id = d.user_id
-        WHERE d.device_hash = $1`, [sha256(token)]);
-    const r = rows[0];
-    if (!r || !r.active) return { hasPin: false };
+        WHERE d.device_hash = $1
+        ORDER BY d.last_used_at DESC NULLS LAST`, [sha256(token)]);
+    const live = rows.filter((r) => r.active);
+    if (!live.length) return { hasPin: false };
+    // Everyone armed on this browser, most recently used first. The pad shows
+    // the names because on a shared device the honest prompt is "Brandon or
+    // Heather — enter your PIN", not one name that is wrong half the time.
+    // `displayName` stays for older clients that only render one.
     return {
       hasPin: true,
-      displayName: r.display_name,
-      attemptsLeft: Math.max(0, MAX_PIN_FAILS - r.fails),
+      displayName: live[0].display_name,
+      names: live.map((r) => r.display_name),
+      // The guess budget belongs to the DEVICE, so the number shown is the
+      // smallest one on it — the point at which the next wrong entry burns
+      // quick sign-in for this browser.
+      attemptsLeft: Math.max(0, MAX_PIN_FAILS - Math.max(...live.map((r) => r.fails))),
     };
   } catch { return { hasPin: false }; }
 }
@@ -941,18 +994,26 @@ async function pinLogin({ pin, req }) {
   if (!token) return gone;
 
   const dh = sha256(token);
-  const { rows } = await pool.query(
+  // EVERY person armed on this browser, not just one. The PIN is what selects
+  // the account — which is the only reason two people can share a tablet
+  // without knocking each other back to the password form.
+  const { rows: all } = await pool.query(
     `SELECT d.pin_hash, d.fails, u.id, u.email, u.display_name, u.budget_profile_key,
             u.tz, u.must_change_password, u.active
        FROM hh_device_pins d JOIN hh_users u ON u.id = d.user_id
-      WHERE d.device_hash = $1`, [dh]);
-  const r = rows[0];
+      WHERE d.device_hash = $1
+      ORDER BY d.last_used_at DESC NULLS LAST`, [dh]);
+  const rows = all.filter((x) => x.active);
 
-  if (!r || !r.active) {
+  if (!rows.length) {
     await pool.query(`DELETE FROM hh_device_pins WHERE device_hash=$1`, [dh]);
     return gone;
   }
 
+  // The lockout is per BROWSER and takes everyone on it with it. A wrong PIN
+  // does not say whose attempt it was, so there is no honest way to charge it
+  // to one account — and five guesses at 10,000 possibilities is the budget for
+  // whoever is holding the phone, not per person on it.
   const burn = async () => {
     await pool.query(`DELETE FROM hh_device_pins WHERE device_hash=$1`, [dh]);
     return {
@@ -961,16 +1022,21 @@ async function pinLogin({ pin, req }) {
     };
   };
 
-  if (r.fails >= MAX_PIN_FAILS) return burn();
+  if (rows.some((x) => x.fails >= MAX_PIN_FAILS)) return burn();
   if (!/^\d{4}$/.test(String(pin ?? ''))) {
     return { ok: false, code: 400, error: 'Enter your 4-digit PIN.' };
   }
 
-  if (!verifyPassword(pin, r.pin_hash)) {
+  const r = rows.find((x) => verifyPassword(pin, x.pin_hash));
+
+  if (!r) {
     const { rows: f } = await pool.query(
       `UPDATE hh_device_pins SET fails = fails + 1 WHERE device_hash=$1 RETURNING fails`, [dh]);
-    await logAttempt(r.email, clientIp(req), false);
-    const left = Math.max(0, MAX_PIN_FAILS - (f[0]?.fails ?? MAX_PIN_FAILS));
+    // Logged against the most recent user on the device — nobody typed an
+    // email here, and an unattributed row would be worse than an approximate one.
+    await logAttempt(rows[0].email, clientIp(req), false);
+    const worst = f.length ? Math.max(...f.map((x) => x.fails)) : MAX_PIN_FAILS;
+    const left = Math.max(0, MAX_PIN_FAILS - worst);
     if (left <= 0) return burn();
     return {
       ok: false, code: 401, attemptsLeft: left,
@@ -978,8 +1044,12 @@ async function pinLogin({ pin, req }) {
     };
   }
 
+  // Only the row that matched is cleared: a correct PIN proves the DEVICE is in
+  // the right hands, but resetting the other person's counter as well would let
+  // one of them launder the other's failed guesses away.
   await pool.query(
-    `UPDATE hh_device_pins SET fails = 0, last_used_at = now() WHERE device_hash=$1`, [dh]);
+    `UPDATE hh_device_pins SET fails = 0, last_used_at = now()
+      WHERE device_hash=$1 AND user_id=$2`, [dh, r.id]);
   await logAttempt(r.email, clientIp(req), true);
   void pruneSessions();
   const { token: sessionToken } = await createSession(r.id, req);
@@ -1000,18 +1070,26 @@ async function pinLogin({ pin, req }) {
 async function removePin({ userId, req, allDevices = false }) {
   await ensureSchema();
   const pool = libDb.getPool();
+  const token = deviceToken(req);
+
   if (allDevices) {
     await pool.query(`DELETE FROM hh_device_pins WHERE user_id=$1`, [userId]);
-  } else {
-    const token = deviceToken(req);
-    if (token) {
-      await pool.query(`DELETE FROM hh_device_pins WHERE device_hash=$1 AND user_id=$2`,
-        [sha256(token), userId]);
-    }
+  } else if (token) {
+    await pool.query(`DELETE FROM hh_device_pins WHERE device_hash=$1 AND user_id=$2`,
+      [sha256(token), userId]);
   }
-  // The cookie goes too. Leaving it would make the next "set a PIN" reuse a
-  // token the user just asked to be rid of.
-  return { ok: true, cookie: clearDeviceCookie() };
+
+  // The cookie goes too — leaving it would make the next "set a PIN" reuse a
+  // token the user just asked to be rid of — but ONLY if nobody else is still
+  // using this browser. Clearing it out from under the other person is what
+  // turned "I turned my PIN off" into "we both have to type passwords again".
+  let stillInUse = false;
+  if (token) {
+    const { rows } = await pool.query(
+      `SELECT 1 FROM hh_device_pins WHERE device_hash=$1 LIMIT 1`, [sha256(token)]);
+    stillInUse = !!rows[0];
+  }
+  return stillInUse ? { ok: true } : { ok: true, cookie: clearDeviceCookie() };
 }
 
 // ---------------------------------------------------------------------------

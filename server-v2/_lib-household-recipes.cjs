@@ -296,17 +296,43 @@ function metaContent(html, key) {
  * gets a page of nothing and Claude quite rightly says "that isn't a recipe" —
  * even though the recipe was sitting in the HTML the whole time.
  *
- * So: scan the raw HTML for JSON string fields that hold prose, and take the
- * longest one. Keys are restricted to desc/description/caption (plus
- * Instagram's nested caption edge) — matching a bare "text" key would sweep up
- * button labels and menu items, and the longest-wins rule would then pick some
- * cookie-consent paragraph instead of the recipe.
+ * So: scan the raw HTML for JSON string fields that hold prose, and KEEP THE
+ * LONGEST FEW — not just the longest one.
  *
- * Length floors do the rest of the filtering: a real recipe caption is
- * hundreds of characters, an SEO blurb is not.
+ * Longest-one was wrong, and it cost a real import. TikTok now ships an
+ * SEO write-up alongside the caption: the caption field held
+ * "Cinnamon sugar Hawaiian rolls!🍯✨ … #Foodie" and a SEPARATE field held the
+ * whole thing — ingredient notes, a numbered method, storage. Taking one field
+ * threw the recipe away and kept the marketing blurb, and the gate then
+ * correctly said there was no recipe in what it was handed.
+ *
+ * Two tiers of key, because the risk is not symmetric:
+ *
+ *   - Named prose keys (desc/description/caption/content/summary/…) — floor 60.
+ *     These are where a caption lives and a short one is still a caption.
+ *   - ANY other key — floor 320 AND it has to read like prose (several
+ *     sentences, spaces, not a URL or a base64 blob). This is what catches the
+ *     write-up, which sits under whatever key that week's build calls it.
+ *     Matching a bare "text" key at floor 60 would sweep up button labels and
+ *     cookie-consent paragraphs; at 320-and-prose they cannot get in.
+ *
+ * Substring candidates are dropped, so the caption embedded inside the longer
+ * write-up doesn't get sent twice.
  */
-const CAPTION_KEYS = /"(?:desc|description|caption)"\s*:\s*"((?:[^"\\]|\\.){60,}?)"/g;
+const PROSE_KEYS = /^(?:desc|description|caption|content|summary|body|text|article|snippet|seo_?content|markup)$/i;
+const CAPTION_FIELD = /"([A-Za-z_][A-Za-z0-9_]{0,40})"\s*:\s*"((?:[^"\\]|\\.){60,}?)"/g;
 const IG_CAPTION = /"edge_media_to_caption"\s*:\s*\{[\s\S]{0,2000}?"text"\s*:\s*"((?:[^"\\]|\\.){40,}?)"/;
+
+/** Several sentences of words — the test a non-whitelisted key has to pass. */
+function looksLikeProse(s) {
+  if (!/\s/.test(s)) return false;              // one long token: an id, a blob
+  if (/^https?:\/\//i.test(s.trim())) return false;
+  const words = s.split(/\s+/).length;
+  const stops = (s.match(/[.!?\n]/g) || []).length;
+  return words >= 50 && stops >= 3;
+}
+
+const MAX_CAPTION = 9000;
 
 function embeddedCaption(html) {
   const found = [];
@@ -322,17 +348,51 @@ function embeddedCaption(html) {
   if (ig) push(ig[1]);
 
   let m;
-  CAPTION_KEYS.lastIndex = 0;
-  while ((m = CAPTION_KEYS.exec(html)) !== null) {
-    push(m[1]);
-    // A 400KB page of minified JSON can hold a lot of matches; the recipe is
-    // never the two-hundredth one.
-    if (found.length > 200) break;
+  let scanned = 0;
+  CAPTION_FIELD.lastIndex = 0;
+  while ((m = CAPTION_FIELD.exec(html)) !== null) {
+    // A 400KB page of minified JSON holds thousands of string fields. Bound the
+    // scan by fields LOOKED AT, not by fields kept — the old cap counted keeps
+    // and so was effectively unbounded on a page full of short descriptions.
+    if (++scanned > 4000) break;
+    const key = m[1];
+    const val = m[2];
+    if (PROSE_KEYS.test(key)) push(val);
+    else if (val.length >= 320) {
+      const before = found.length;
+      push(val);
+      // Un-escaped first, then judged: \n in the raw is two characters and the
+      // sentence count needs the real newline.
+      if (found.length > before && !looksLikeProse(found[found.length - 1])) found.pop();
+    }
   }
 
   if (!found.length) return null;
+
+  // Longest first, drop anything already contained in something kept, then take
+  // up to four. Four because a TikTok page is caption + write-up + maybe a
+  // pinned comment; past that it is other people's videos.
   found.sort((a, b) => b.length - a.length);
-  return found[0].slice(0, 8000);
+  const kept = [];
+  let budget = MAX_CAPTION;
+  for (const cand of found) {
+    if (kept.length >= 4) break;
+    if (budget < 200) break;
+    // Everything AFTER the longest has to be substantial. Sixty characters was
+    // the right floor when only one field was kept and the longest always won;
+    // keeping several, it lets "Sign up to see more videos from creators you
+    // follow on the app." ride along with the recipe.
+    if (kept.length && cand.trim().length < 120) continue;
+    // Truncate rather than skip: a write-up longer than the whole budget is
+    // exactly the thing we came for, and dropping it would leave only the
+    // marketing blurb — the bug this function was rewritten to fix.
+    const c = cand.trim().slice(0, budget);
+    if (!c) continue;
+    if (kept.some((k) => k.includes(c))) continue;
+    kept.push(c);
+    budget -= c.length + 2;
+  }
+  return kept.join('\n\n').slice(0, MAX_CAPTION) || null;
 }
 
 /**
@@ -636,6 +696,32 @@ function mentionsRecipeElsewhere(text) {
 // hand; a false positive costs about two cents. So one strong signal is enough,
 // and two weak ones will do. It is a spend filter, not a classifier.
 
+/**
+ * Captions are written for the feed, not for a parser.
+ *
+ * "#EasyRecipes" is the word "recipes" — but `\brecipe\b` never matches it,
+ * because there is no word boundary between "Easy" and "Recipes". Confirmed on
+ * a real favourite (7663155313859759390, cinnamon sugar Hawaiian rolls): the
+ * caption said Recipes, Foodie and HomemadeDessert, and the gate scored zero on
+ * all three. So the hash goes and CamelCase is split before anything is counted.
+ */
+function normaliseCaption(text) {
+  return String(text || '')
+    .replace(/#(\w+)/g, (_, w) => ' ' + w.replace(/([a-z0-9])([A-Z])/g, '$1 $2') + ' ')
+    .replace(/[_\u2019']/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Food vocabulary for the GATE only — deliberately not HEROES.
+ *
+ * HEROES answers "what is this recipe OF", so it holds things that can be a
+ * main ingredient. This list answers "is this about food at all", so it holds
+ * cinnamon, icing and dessert too. Merging them would file the Hawaiian rolls
+ * under main_ingredient = "cinnamon", which is not what the dish is.
+ */
+const RE_FOOD = /\b(recipe|recipes|food|foodie|snack|dessert|breakfast|brunch|lunch|dinner|supper|meal|dish|bake|bakery|homemade|kitchen|cook|cooking|crispy|creamy|cheesy|garlicky|savou?ry|sweet|tasty|delicious|yummy|icing|frosting|glaze|dough|batter|roll|rolls|bun|buns|loaf|cinnamon|sugar|butter|cheese|cream|chocolate|vanilla|honey|syrup|sauce|marinade|seasoning|spice|crumb|crust|filling|topping|toasted|melted|stuffed|smothered|drizzled|topped)\b/gi;
+
 /** Amounts: "500g", "2 tbsp", "1 1/2 cups", "180°C", "350F". The single most
  *  reliable tell — captions that aren't recipes rarely carry them. */
 const RE_MEASURE = /\b\d+\s*(?:g|kg|ml|l|oz|lbs?|cups?|tbsp|tsp|tablespoons?|teaspoons?|cloves?|cans?|sticks?|slices?|scoops?|°?[CF]\b)/gi;
@@ -651,12 +737,17 @@ const RE_LIST_LINES = /^\s*(?:[-•*]|\d+[.)]?\s|\d+\s*(?:g|ml|oz|cups?|tbsp|tsp
  * real numbers rather than from opinions about word lists.
  */
 function recipeSignals(text) {
-  const t = String(text || '');
+  const raw = String(text || '');
+  // Line structure has to be read BEFORE normalising — that collapses newlines,
+  // and an ingredient list is defined by its line breaks.
+  const listLines = (raw.match(RE_LIST_LINES) || []).length;
+
+  const t = normaliseCaption(raw);
   const measures = (t.match(RE_MEASURE) || []).length;
   const methods = new Set((t.match(RE_METHOD) || []).map((x) => x.toLowerCase())).size;
   const words = new Set((t.match(RE_RECIPE) || []).map((x) => x.toLowerCase())).size;
-  const listLines = (t.match(RE_LIST_LINES) || []).length;
   const heroes = new Set(HEROES.filter((h) => t.toLowerCase().includes(h))).size;
+  const food = new Set((t.match(RE_FOOD) || []).map((x) => x.toLowerCase())).size + heroes;
 
   // Any ONE of these settles it on its own.
   const strong =
@@ -669,8 +760,21 @@ function recipeSignals(text) {
   const weak = [measures >= 1, methods >= 2, heroes >= 2, listLines >= 2, words >= 1]
     .filter(Boolean).length;
 
-  return { measures, methods, words, listLines, heroes, strong, weak,
-           pass: !!strong || weak >= 2 };
+  const pass = !!strong || weak >= 2;
+
+  // THE THIRD OUTCOME, and the one that was missing.
+  //
+  // "Cinnamon sugar Hawaiian rolls! Crispy on the outside… #EasyRecipes" is
+  // unmistakably food and contains no recipe whatsoever — no amounts, no
+  // ingredients, no method. The recipe is SPOKEN in the video.
+  //
+  // Importing it would not produce a recipe; it would make the model invent one,
+  // which is the worst outcome available. But calling it "not food" and burying
+  // it with the dog videos loses a recipe you actually want. So it gets its own
+  // verdict: worth your time by hand, not worth an AI call.
+  const foodNoRecipe = !pass && food >= 2;
+
+  return { measures, methods, words, listLines, heroes, food, strong, weak, pass, foodNoRecipe };
 }
 
 const looksLikeRecipe = (text) => recipeSignals(text).pass;
@@ -681,6 +785,15 @@ const looksLikeRecipe = (text) => recipeSignals(text).pass;
 function notARecipe(detail) {
   const e = new Error(`That doesn't look like a recipe${detail ? ` (${detail})` : ''}.`);
   e.notRecipe = true;
+  return e;
+}
+
+/** Food, but the caption doesn't contain the recipe — it's in the video. Its own
+ *  error so the by-hand list can rank it above the dog videos. */
+function noWrittenRecipe(detail) {
+  const e = new Error(`Looks like food, but the caption has no written recipe${detail ? ` — ${detail}` : ''}.`);
+  e.notRecipe = true;
+  e.foodNoRecipe = true;
   return e;
 }
 
@@ -870,9 +983,11 @@ async function importRecipe({ url, text, force = false, depth = 0 }) {
       // A caption with no food in it that SAYS the recipe is in the bio is a
       // different problem from a dog video, and the by-hand list should say so
       // — one is worth chasing, the other is not.
-      throw notARecipe(elsewhere
-        ? `the caption only says "${elsewhere}"`
-        : `${sig.measures} amounts, ${sig.heroes} food words`);
+      if (elsewhere) throw notARecipe(`the caption only says "${elsewhere}"`);
+      // Food, no recipe. Worth your time by hand; not worth an AI call, because
+      // there is nothing in the text for it to extract.
+      if (sig.foodNoRecipe) throw noWrittenRecipe('the method is probably spoken in the video');
+      throw notARecipe(`${sig.measures} amounts, ${sig.food} food words`);
     }
   }
 
@@ -1611,12 +1726,19 @@ async function runJob(userId, jobId) {
         // AI call, and retrying it would fetch the same page to reach the same
         // conclusion. Its own status keeps it out of the retry queue and out of
         // a failure count that would otherwise read as "the import is broken".
-        const gated = !!err?.notRecipe;
+        //
+        // Three gated outcomes, not two. `nowritten` — food, but the method is
+        // spoken in the video — is checked FIRST because noWrittenRecipe() also
+        // sets notRecipe (it must, to stay out of the retry queue), so testing
+        // notRecipe first would bury every one of them in the not-food pile.
+        // That pile is the one you skim and discard; this pile is the one worth
+        // opening the video for.
+        const status = err?.foodNoRecipe ? 'nowritten' : err?.notRecipe ? 'notrecipe' : 'failed';
         await pool.query(
           `UPDATE hh_recipe_import_items SET status=$3, error=$2, updated_at=now() WHERE id=$1`,
-          [item.id, String(err?.message || err).slice(0, 500), gated ? 'notrecipe' : 'failed']);
+          [item.id, String(err?.message || err).slice(0, 500), status]);
         await pool.query(
-          `UPDATE hh_recipe_import_jobs SET done=done+1, ${gated ? 'notrecipe=notrecipe+1' : 'failed=failed+1'} WHERE id=$1`,
+          `UPDATE hh_recipe_import_jobs SET done=done+1, ${status}=${status}+1 WHERE id=$1`,
           [jobId]);
       }
 
@@ -1692,7 +1814,7 @@ async function listImportMisses(userId, { limit = 1000 } = {}) {
   const { rows } = await pool.query(
     `SELECT DISTINCT ON (i.url) i.url, i.status, i.error, i.updated_at, i.job_id
        FROM hh_recipe_import_items i
-      WHERE i.status IN ('failed', 'notrecipe')
+      WHERE i.status IN ('failed', 'notrecipe', 'nowritten')
         AND NOT EXISTS (
           SELECT 1 FROM hh_recipe_import_items s
            WHERE s.url = i.url AND s.status IN ('saved', 'skipped'))
@@ -1710,22 +1832,29 @@ async function listImportMisses(userId, { limit = 1000 } = {}) {
     existing.forEach((e) => have.add(e.source_key));
   }
 
+  // Ordered by how much your time is worth on each: a video that HAS a recipe
+  // you can read off the screen first, then the ones that broke, then the pile
+  // that had no food in it at all — which is mostly not worth opening.
+  const RANK = { nowritten: 0, failed: 1, notrecipe: 2 };
   const misses = rows
     .filter((r) => !have.has(sourceKey(r.url)))
-    .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+    .sort((a, b) =>
+      (RANK[a.status] ?? 9) - (RANK[b.status] ?? 9) ||
+      String(b.updated_at).localeCompare(String(a.updated_at)));
 
   return {
     misses,
     total: misses.length,
     failed: misses.filter((m) => m.status === 'failed').length,
     notrecipe: misses.filter((m) => m.status === 'notrecipe').length,
+    nowritten: misses.filter((m) => m.status === 'nowritten').length,
   };
 }
 
 async function getImportJob(userId, jobId) {
   const pool = libDb.getPool();
   const { rows: [job] } = await pool.query(
-    `SELECT id, owner_id, total, done, ok, failed, skipped, notrecipe, status, created_at, finished_at
+    `SELECT id, owner_id, total, done, ok, failed, skipped, notrecipe, nowritten, status, created_at, finished_at
        FROM hh_recipe_import_jobs WHERE id=$1 AND (owner_id=$2 OR TRUE)`, [Number(jobId), userId]);
   if (!job) throw new Error('Not found.');
   const { rows: items } = await pool.query(
@@ -1861,7 +1990,7 @@ module.exports = {
   // Exported for the self-test and for anything that wants the same parsing.
   parseIngredient, formatQty, scaledText, isoMinutes, stripTags,
   guessMainIngredient, tidyIngredientName, SORTS, SORT_KEYS,
-  recipeSignals, looksLikeRecipe, captionLinks, mentionsRecipeElsewhere,
+  recipeSignals, looksLikeRecipe, captionLinks, mentionsRecipeElsewhere, normaliseCaption,
   findRecipeNode, recipeFromJsonLd,
   metaContent, embeddedCaption, handleFromUrl,
   importRecipe,

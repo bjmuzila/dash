@@ -1,5 +1,1012 @@
 # Changelog
 
+## 2026-08-12 - Quick sign-in: two people, one browser
+
+Edited: `_lib-household.cjs` (`hh_device_pins` schema + migration, `setPin`,
+`pinStatus`, `pinLogin`, `removePin`), `recipe-vite/src/api.ts`,
+`recipe-vite/src/pages/Login.tsx`, `budget-vite/src/api.ts`,
+`budget-vite/src/pages/Login.tsx`.
+
+### What
+
+Two people with two different PINs kept getting dropped back to the password
+form. `hh_device_pins` was keyed on `device_hash` ALONE — one browser could hold
+exactly one person's quick sign-in. Whoever set a PIN second took the row, and
+`setPin` then minted a FRESH device token for them, which cut the first person's
+row loose. Re-arming it bounced the other one off again. Both of them typing
+email and password, forever.
+
+### How
+
+The key is now composite — `(device_hash, user_id)` — with a guarded migration
+that widens the primary key in place on the live box. A browser keeps ONE device
+token (the "this is a trusted browser" half of the credential); each person on
+it gets their own row hanging off it.
+
+`pinLogin` reads every row for the device and finds the one whose hash verifies
+the digits typed — so the PIN itself picks which account opens. `setPin` refuses
+a PIN another person on the same device already uses, because a collision would
+make whose account opens a matter of row order. `pinStatus` returns `names[]`
+and the pad greets "Brandon or Heather" instead of one name that is wrong half
+the time.
+
+The five-wrong-guesses lockout stays per BROWSER and takes everyone on it — a
+wrong PIN doesn't say whose attempt it was. A correct PIN clears only its own
+row's counter, so neither person can launder the other's failed guesses away.
+"Turn off my PIN" now leaves the device cookie alone if the other person is
+still armed on that browser.
+
+## 2026-08-12 - Recipes: keep the whole TikTok write-up, and a third import outcome
+
+Edited: `_lib-household-recipes.cjs` (`embeddedCaption`, `recipeSignals`,
+`runJob`, `listImportMisses`), `_lib-household.cjs` (schema),
+`recipe-vite/src/api.ts`, `recipe-vite/src/pages/Add.tsx`,
+`_lib-household-recipes.selftest.js`.
+
+### What
+
+Two imports were being rejected as "not a recipe" when they weren't.
+
+1. TikTok now ships an SEO write-up in a SEPARATE JSON field from the caption —
+   ingredient notes, a numbered method, storage. The extractor took the single
+   longest field, kept the marketing blurb and threw the write-up away, so the
+   gate was handed a paragraph with no recipe in it and said so. Confirmed on
+   the Cinnamon Sugar Hawaiian Rolls video.
+2. `#EasyRecipes` never matched `\brecipe\b` — no word boundary after "Easy" —
+   so a caption of nothing but food hashtags scored zero food words.
+
+And a third outcome, because "food, but the method is spoken in the video" is
+neither a failure nor a not-food: it is the one miss pile worth working by hand.
+
+### How
+
+`embeddedCaption` now keeps the longest FOUR prose fields instead of one, joined,
+capped at 9k. Two tiers of key: named prose keys (desc/caption/content/…) at a
+60-character floor, any other key at 320 AND it has to read like prose (50+
+words, 3+ sentence stops, not a URL or a hex blob) — that second tier is what
+catches the write-up, which sits under whatever key that week's build calls it.
+Anything after the longest needs 120+ characters, which is what keeps "Sign up
+to see more videos…" out. Substrings are dropped so the caption embedded in the
+write-up isn't sent twice.
+
+`normaliseCaption` splits hashtags on the case boundary (`#EasyRecipes` →
+"Easy Recipes") before scoring, and `recipeSignals` returns a `food` count and
+`foodNoRecipe` — food words present, no amounts and no method.
+
+New item status `nowritten` and a job counter to match, checked BEFORE
+`notRecipe` in `runJob` (the error sets both, so testing `notRecipe` first would
+bury every one of them in the not-food pile). It stays out of the retry queue —
+retrying fetches the same page to reach the same conclusion. The Not-imported
+list sorts these first and labels them `NO RECIPE` in the warn colour; failures
+and not-food follow.
+
+Selftests: 120 passing, including the real Hawaiian rolls caption and a
+long-id/long-URL page that must still return no caption.
+
+## 2026-08-12 - Recipes: follow "full recipe" links, flag "recipe in bio", fix the day picker
+
+Edited: `_lib-household-recipes.cjs` (`captionLinks`, `mentionsRecipeElsewhere`,
+link-following in `importRecipe`, `planMeal` default), `_lib-household.cjs`
+(`recipe_url`, `partial`, `partial_note`),
+`recipe-vite/src/{api.ts,pages/Recipe.tsx,pages/Cookbook.tsx,pages/Week.tsx}`,
+`budget-vite/src/{components/Shell.tsx,pages/Settings.tsx}`.
+Verified: selftest 100 → **112 passed**; `tsc` + build clean for BOTH SPAs
+(budget checked against its real source, not a copy); household boots with 31
+routes.
+
+### "Full recipe in bio" — two habits, opposite handling
+
+**Caption links the write-up → follow it.** The blog almost certainly publishes
+JSON-LD, so one extra fetch turns a summary caption into an exact recipe, for
+free and better than the AI could reconstruct.
+
+`source_url` stays the VIDEO. That is what you saved, what you'll want to watch,
+and — critically — what `source_key` is derived from: swapping in the blog URL
+would make a TikTok export list re-import every one of these on the next batch.
+The followed page lands in `recipe_url` and shows as **Full recipe ↗** beside
+**Watch**.
+
+Aggregators (`linktr.ee`, `beacons.ai`, `stan.store`, …), socials and affiliate
+shops are never followed — a bio link is a menu of buttons, and fetching one
+spends an AI call on a page with no food in it. Depth is capped at one hop: a
+link on a recipe page is a *related* recipe, not this one.
+
+**Caption just says "recipe in bio" → import it FLAGGED.** `partial = true` and
+`partial_note` set to the creator's own phrase, quoted rather than paraphrased.
+The banner sits ABOVE the ingredients, deliberately: half a recipe you don't know
+is half is worse than none, because you find out at step four with the pan hot.
+Rows show `PART` in preference to `NEW` — incomplete is worth knowing before you
+open it, where unreviewed can wait.
+
+When the gate rejects such a caption outright, the miss reason quotes the phrase,
+so the by-hand list can tell "the recipe is in their bio" from "this is a dog
+video". One is worth chasing.
+
+### Two bugs
+
+- **The day picker closed itself a second after opening.** It submitted from
+  `onChange`, and a native date input fires that while you are still spinning the
+  wheels on iOS — so it planned whatever partial date it saw and dismissed. Now
+  the value is held in state and confirmed with a **Plan it** button.
+- **Planning no longer adds to the grocery list.** `planMeal`'s `withList` now
+  defaults to FALSE. Planning and shopping happen at different moments: you plan
+  the week on Sunday and shop on Wednesday, and a plan that silently dumps forty
+  ingredients in means the list is full of things you already own by the time you
+  get there. **Add all** is one tap on the recipe and belongs to the person
+  deciding to shop.
+
+### Cards
+
+No accent edges. Today's card on Week lost its 2px left rule — a coloured edge on
+one card in a column of seven reads as a defect, not emphasis; the day NAME in
+accent already says it. The two warning cards lost their tinted borders for the
+same reason: the colour lives in the label.
+
+### budget.cbedge.net
+
+`Journal` → **Cookbook**, linking to recipe.cbedge.net. Opens in a new tab so the
+budget app is never replaced — losing your place mid-shop to look up a recipe is
+exactly the annoyance to avoid. It renders permanently in the accent colour since
+it can never be "current": it is a destination, not a location. Journal kept its
+route and its data and moved to **More**, exactly as Habits and Projects did when
+Todo and Lists took their slots.
+
+### Deploy
+
+```
+git pull
+docker compose build household && docker compose up -d --force-recreate household
+curl -s http://127.0.0.1:3010/health          # routes: 31
+docker compose build recipes budget && docker compose up -d recipes budget
+```
+
+## 2026-08-12 - Bulk import: a "Not imported" list you can copy or download
+
+New: `listImportMisses()`, `GET /api/hh/recipes/bulk?misses=1`, a Not imported
+card on the Bulk tab.
+Edited: `_lib-household-recipes.cjs`, `household-routes.cjs`,
+`recipe-vite/src/{api.ts,pages/Add.tsx}`.
+Verified: 31 routes, endpoint 401s without a session, selftest 100 passed,
+`tsc` + build clean.
+
+### What
+
+With 1,480 links going through in batches of 60, the ones that don't import are
+the ones you actually need a record of — and they were only visible inside the
+progress panel of the job that produced them. Twenty-five batches means
+twenty-five panels, and nobody opens each one to copy six URLs out of it.
+
+### How
+
+- **One list across every job**, not per-job. Status, reason and a link out to
+  the video, plus **Copy URLs** and **Download .txt**.
+- **It shrinks by itself**, which is what makes it trustworthy enough to work
+  from. Excluded: any URL that ever succeeded in ANY job — retry-failed and a
+  re-paste both leave the old failed row behind, and showing it would send you
+  chasing a recipe you already have — and any URL whose recipe now exists by
+  `source_key`, which covers importing it by hand afterwards.
+- **`DISTINCT ON (url)` ordered by `updated_at DESC`**, so a link tried three
+  times appears once, with the reason it failed LAST rather than first.
+- `failed` and `notrecipe` are returned together but tagged, because they are
+  different jobs for you: a failure is worth retrying, a not-food is worth
+  eyeballing first.
+- The `source_key` filter runs in JS, not SQL — the key is derived in JS and this
+  is a few hundred rows at most.
+- The .txt is built in the browser from data already on screen: no endpoint,
+  nothing to authenticate, works with no network once the card has loaded. Copy
+  falls back to expanding the list when the clipboard API is blocked, which it is
+  outside a secure context and in some in-app browsers.
+- The card refetches on every change to the running job's counters, so a link
+  that fails joins the pile while you watch and a successful retry leaves it.
+
+## 2026-08-12 - Bulk import: skip non-recipes before they cost an AI call
+
+Edited: `_lib-household-recipes.cjs` (`recipeSignals`, `looksLikeRecipe`, the
+gate in `importRecipe`, `notrecipe` handling + a politeness pause in `runJob`),
+`_lib-household.cjs`, `household-routes.cjs`,
+`recipe-vite/src/{api.ts,pages/Add.tsx}`.
+Verified: selftest 89 → **100 passed**, including the real garlic-bread caption
+passing and a CapCut tutorial being rejected. `tsc` + build clean, 31 routes.
+
+### What
+
+Brandon's TikTok data export arrived: **1,480 favourites**, and only Date + Link
+in it — no titles. Favourites are not a recipe list, they're everything ever
+bookmarked; his includes a "Capcut" collection.
+
+Importing all of them would have been ~$25 and ~3 hours, and most of the money
+would have gone on non-recipes: each one cost a full Claude call before coming
+back "that doesn't look like a recipe". That is paying an LLM to repeat what the
+caption already said.
+
+### How
+
+- **`recipeSignals(text)`** scores the caption on four axes: amounts (`500g`,
+  `2 tbsp`, `350F`), method verbs, recipe words (`ingredients`, `macros`,
+  `serves`) and food nouns — reusing the HEROES list the main-ingredient guess
+  already needed. **One strong signal passes, or two weak ones.**
+- It runs **after** the page fetch and the caption extraction, both free, and
+  **before** `aiExtract`, which is not. The fetch is what produces the caption,
+  so the gate can't sit any earlier and the saving is exactly the expensive half.
+  ~$25 → ~$6 on this list.
+- **Deliberately generous.** A false negative is one manual import; a false
+  positive is about two pence. It is a spend filter, not a classifier, and it is
+  tuned in that direction on purpose.
+- **The JSON-LD path is never gated.** A page that publishes `recipeIngredient`
+  has already proved what it is; running a word filter over it would be pure
+  downside.
+- A rejection is its own outcome — item status `notrecipe`, its own counter,
+  `NOT FOOD` in the progress list. Not a failure (the failure count should mean
+  "the import is broken"), and **not retried**, since retrying would re-fetch the
+  same page to reach the same conclusion.
+- Single imports get **Import anyway** when the gate rejects them — for a video
+  where the method is spoken rather than written.
+- **800ms pause between items, per worker.** 1,480 links through two workers with
+  no breather is a sustained hammering of one host and the fastest way to get the
+  whole batch 403'd. Next to a multi-second fetch it barely shows.
+
+### Running the export
+
+25 batch files of 60 were generated from the export, newest first. Suggested
+order: deploy, run **batch-01** as a pilot, read the saved / not-food / failed
+split, and tune the word lists from real numbers before doing the other 24.
+
+### Deploy
+
+```
+git pull
+docker compose build household && docker compose up -d --force-recreate household
+curl -s http://127.0.0.1:3010/health          # routes: 31
+docker compose build recipes && docker compose up -d recipes
+docker compose exec -T household node server-v2/scripts/backfill-recipe-derived.js
+```
+
+## 2026-08-12 - Bulk import: share-link handling, cross-batch dedupe, retry failed
+
+Edited: `_lib-household-recipes.cjs` (`sourceKey`, `authorFromHtml`,
+`handleFromUrl`, `fetchPage`, `runJob`, `retryImportJob`), `_lib-household.cjs`
+(`source_key`, `hh_recipe_import_jobs.skipped`), `household-routes.cjs`,
+`recipe-vite/src/{api.ts,pages/Add.tsx}`.
+Renamed: `backfill-recipe-mains.js` → `backfill-recipe-derived.js` (it now fills
+`source_key` as well — one command after a deploy beats two).
+Verified: selftest 76 → **89 passed**; `tsc` + build clean; household boots with
+31 routes.
+
+### What
+
+Prompted by a real question before importing a TikTok favourites export: what
+happens when the same video appears in two pastes?
+
+Answer, before this: two recipes. And a worse one nobody had noticed —
+**TikTok's data export does not write the pretty URL**. Favourites come out as
+`tiktokv.com/share/video/<id>`, the share sheet gives `vm.tiktok.com/<code>`, and
+only the site itself writes `tiktok.com/@handle/video/<id>`. `handleFromUrl` only
+knew the third shape, so a hundred-link export would have credited every single
+recipe to "tiktokv.com" instead of its creator.
+
+### How
+
+- **`fetchPage` now returns `{ html, finalUrl }`.** A share link redirects; the
+  by-line and the dedupe key both need where we LANDED, not what was pasted.
+- **`sourceKey(url)`** normalises the three shapes to one identity:
+  `tiktok:<id>`, `instagram:<code>`, else host + path with tracking junk and
+  trailing slashes dropped. Stored on `hh_recipes.source_key`, indexed.
+  **Not a unique constraint** — a duplicate should be skipped in code with a
+  message, not rejected by the database in a way that fails the import row.
+- **The dedupe check runs TWICE per import, deliberately.** Once before the
+  fetch, which costs one indexed lookup and catches a canonical link pasted in an
+  earlier batch. Once after, because `vm.tiktok.com/ZGxyz` carries no id at all —
+  only the resolved URL can tell you it's something you already have. The second
+  check happens after a fetch we've already paid for but before the AI call,
+  which is the expensive half.
+- A skip is `HAVE IT` in the progress list and its own counter — it is the
+  dedupe working, not a failure, and burying it in the failure count would make
+  a clean second paste look broken.
+- **`handleFromUrl` was rewritten per-platform** rather than "first path segment
+  that looks like a word". TikTok handles are always the `@`-prefixed segment;
+  scanning loosely read `/share/video/<id>` as the handle "share", and excluding
+  that word just made it grab the video id instead. Instagram only treats the
+  FIRST segment as a profile, so `/reel/CxYz` is a post and not a person — the
+  old test asserting `@reel` was encoding that bug and is gone.
+- **`authorFromHtml`** reads `"uniqueId"` out of the rehydration blob. The page
+  beats the URL because an export link has no handle in it at any point.
+- **Retry failed** requeues only `failed` rows and rewinds the counters by that
+  many rather than zeroing them — `done` must keep counting finished work or the
+  progress bar jumps backwards. Safe to press repeatedly.
+
+### Deploy
+
+```
+git pull
+docker compose build household && docker compose up -d --force-recreate household
+curl -s http://127.0.0.1:3010/health          # routes: 31
+docker compose build recipes && docker compose up -d recipes
+docker compose exec -T household node server-v2/scripts/backfill-recipe-derived.js
+```
+
+Run the backfill BEFORE pasting a big list — without `source_key` on the recipes
+you already have, the dedupe has nothing to match against and the batch re-imports
+them.
+
+## 2026-08-12 - Cookbook: Week tab replaces Saved, ★ becomes a filter chip
+
+New: `recipe-vite/src/pages/Week.tsx`, `GET|POST /api/hh/recipes/week`,
+`getPlannedWeek` / `unplanMeal` / `moveMeal`.
+Edited: `_lib-household-recipes.cjs`, `household-routes.cjs`,
+`recipe-vite/src/{api.ts,App.tsx,components/Shell.tsx,pages/Cookbook.tsx,pages/Settings.tsx}`.
+Verified: household boots with **31 routes**, both new endpoints 401 without a
+session, selftest 76 passed, `tsc` + build clean.
+
+### What
+
+"Saved" was the cookbook filtered to `favorite = true` — the same component with
+one prop. That is a whole tab for one boolean, on a screen where every recipe is
+already saved by definition.
+
+The distinction earns a tab in the reference app because it has a *Discover*
+feed of recipes you don't own, so "saved" means you pulled one out of someone
+else's stream. There is no such feed here, so the tab was carrying no weight —
+and once the filter toolbar shipped this morning it was carrying none at all,
+because ★ belongs next to category and main ingredient.
+
+Meanwhile "Pick a day" wrote an `hh_meals` row you could only see by opening
+budget.cbedge.net. Planning a meal felt like it went nowhere.
+
+### How
+
+- **★ moved into the Cookbook filter row**, leading it — it is the one filter you
+  reach for without reading the others. `/saved` redirects to `/cookbook` so an
+  old home-screen shortcut or a bookmark still lands somewhere sensible.
+- **Week reads `hh_meals`**, the same rows the household week board writes and
+  `planMeal()` creates. There is no second plan to keep in step: move something
+  there and it moves here.
+- **`LEFT JOIN`, not `INNER`.** A meal typed straight into budget.cbedge.net
+  ("chinese takeaway") has no `recipe_id`. Dropping those would make this screen
+  quietly disagree with the table it shares, and "Thursday is free" would be a
+  lie — so they show, greyed and unclickable, minus the photo.
+- The query is deliberately **leaner than `_lib-household-lists.cjs`'s
+  `getWeek()`**: that one nests every ingredient under every meal because the
+  Lists screen ticks them off. This screen needs a photo, a title and a time.
+- Today gets a 2px accent left edge and nothing else. Filling the card would make
+  one of seven days shout on a screen you scan.
+- Dates render from split parts, never `new Date('2026-08-14')` — that parses as
+  UTC and shows the day before for anyone west of Greenwich.
+- ✕ unplans: deletes the `hh_meals` row and nothing else. The ingredients stay on
+  the grocery list (`ON DELETE SET NULL`), because you may well still want them.
+
+### Deploy
+
+```
+git pull
+docker compose build household && docker compose up -d --force-recreate household
+curl -s http://127.0.0.1:3010/health          # routes: 31
+docker compose build recipes && docker compose up -d recipes
+```
+
+## 2026-08-12 - Cookbook: sort toolbar, "main ingredient", and bulk URL import
+
+New: `main_ingredient` + `needs_review` columns, `hh_recipe_import_jobs` /
+`hh_recipe_import_items`, `POST|GET /api/hh/recipes/bulk`,
+`server-v2/scripts/backfill-recipe-mains.js`, a Bulk tab on Add.
+Edited: `_lib-household-recipes.cjs`, `_lib-household.cjs`,
+`household-routes.cjs`, `household-server.js`, `deploy/household/Dockerfile`,
+`recipe-vite/src/{api.ts,pages/Cookbook.tsx,pages/Add.tsx,pages/Recipe.tsx}`.
+Verified: selftest 45 → **76 passed**; `npx tsc --noEmit` and `npm run build`
+clean; the household process boots with **30 routes** and every new endpoint
+401s without a session.
+
+### Sorting
+
+Seven orders — recently added, recently changed, name, main ingredient, cook
+time, most cooked, calories — resolved from a **whitelist** of fixed `ORDER BY`
+fragments. There is no path from a query parameter into the query text, and the
+selftest asserts every fragment is free of placeholders and statement breaks.
+
+Server-side, like search, because sorting in the client sorts the *page* rather
+than the cookbook.
+
+Favourites no longer jump the queue. They did while "recently added" was the only
+order, but a "sort by name" that silently floats four starred recipes above the
+As isn't sorted by name — it's sorted by something you didn't ask for.
+
+The toolbar is collapsed behind one line by default: three stacked filter rows on
+a 390px screen push the first recipe off the fold, and most visits are "open it
+and scroll".
+
+### Main ingredient
+
+A **stored column**, not a per-query derivation — deriving it means unpacking a
+JSONB array for every row of the index screen, and you can't `ORDER BY` it
+without doing that twice. Written on create, recomputed when the title or the
+ingredients change.
+
+The guess reads the **title first**. "Cheesy Butter Chicken Garlic Bread" has
+sixteen ingredients and exactly one of them is the point; an ingredient-first
+scan files it under *ciabatta loaf*, the line that happens to be listed first.
+Only when the title yields nothing does it fall back to the best-ranked
+ingredient aisle (meat → produce → dairy → …). Heroes are matched
+longest-first, so a thigh recipe doesn't land under plain "chicken".
+
+When neither is confident it stays **NULL and sorts last**. A recipe filed under
+a random pantry item sorts somewhere absurd — worse than sitting in the unsorted
+bucket where you can see it needs a hand.
+
+It also became a filter facet ("chicken · 7"), because a sort you can't narrow to
+is half a feature, and it took the Skill slot in the recipe stat row — a value
+you can sort by but never see is a value you distrust.
+
+### Bulk import
+
+`POST /api/hh/recipes/bulk {urls}` takes a paste of up to 60 links — newlines,
+commas, stray quotes, duplicates dropped by origin+path so the same video shared
+twice imports once.
+
+It **cannot** be one request: thirty TikToks is thirty fetches plus thirty Claude
+calls, minutes of work, past nginx's 180s and long past how long a phone screen
+stays awake. So the POST writes rows and returns a job id, two workers chew
+through the queue, and the client polls every 2s while it runs.
+
+Both tables are real rows, which buys three things: the progress list survives a
+refresh, a failed link records its error beside its URL while the other
+fifty-nine carry on, and a batch mid-flight when the process died is **resumed on
+boot** — from `household-server.js` only, never from the api-router fallback
+mount, because import work has no business in the trading process. Items are
+claimed with `FOR UPDATE SKIP LOCKED`, so a double resume finds nothing to do
+rather than importing everything twice.
+
+**The one policy decision: bulk saves without review.** Single imports still
+never touch the database until you press save. Bulk writes immediately with
+`needs_review = true`.
+
+That inconsistency is the point. A review queue you must clear before anything
+lands is a queue nobody clears at thirty items — you'd sit through twenty screens
+or abandon the batch and lose the lot. Saving first and flagging second means the
+work is never wasted: recipes are searchable and cookable at once, "N TO REVIEW"
+is a filter chip on the Cookbook, rows carry a NEW tag, and each recipe shows a
+banner with one button to clear it. A wrong amount in a saved recipe is a small
+annoyance; re-pasting thirty links is not.
+
+Cancel stops the queue but lets the in-flight item finish and save — killing a
+Claude call already paid for is pure waste.
+
+### Deploy
+
+```
+git pull
+docker compose build household && docker compose up -d household
+curl -s http://127.0.0.1:3010/health          # routes: 30
+docker compose build recipes  && docker compose up -d recipes
+docker compose exec -T household node server-v2/scripts/backfill-recipe-mains.js
+```
+
+Run the backfill or the whole existing library sits in the NULL bucket and "sort
+by main ingredient" looks broken on the one screen you'd check it on.
+
+## 2026-08-12 - Household backend runs in its own container — recipe/budget deploys no longer restart the trading app
+
+New: `server-v2/household-server.js`, `deploy/household/{Dockerfile,package.json}`,
+compose service `household`.
+Edited: `server-v2/api-router.js` (household mount now opt-in),
+`docker-compose.yml`, `budget-vite/nginx.conf`, `recipe-vite/nginx.conf`,
+`recipe-vite/README.md`.
+Verified: booted the new process against an unreachable DATABASE_URL —
+`/health` 200 with 29 routes registered, `/api/hh/recipes` 401 no-session,
+DELETE 405, unknown path 404, and `/api/gex` 404 (proving the trading routes
+genuinely are not in this binary).
+
+### What
+
+`/api/hh/*` used to be registered inside `api-router.js`, which meant the
+cookbook and the budget app ran in the same process as the TastyTrade/dxLink
+feed, the WebSocket server and every in-process recorder. Two consequences,
+both bad:
+
+1. **Deploy coupling.** `server-v2` is baked into the dashboard image, so a
+   one-line fix to a recipe parser required `docker compose build dashboard` —
+   a full `next build` — and a restart that dropped `/ws/gex` and made Theta
+   reconnect. Today's TikTok caption fix did exactly that, twice. At 10:30am it
+   would have taken the GEX feed down mid-session for a change no customer can
+   see.
+2. **Shared fate.** An unhandled rejection or a leak in household code — the
+   recipe photo path buffers image blobs in memory — degraded the process
+   recording market data. nginx already stopped these apps reaching `/ws` and
+   `/proxy` at the network level; nothing stopped them sharing a heap.
+
+### How
+
+- **`server-v2/household-server.js`** — a small http server that mounts
+  `household-routes.cjs` and nothing else. This was cheap because that module
+  was already written as a mountable router taking `{ register, send, readJson }`
+  and uses **no `ctx` at all**, so the three primitives were copied verbatim
+  from api-router.js and everything else worked unchanged. No route is
+  implemented twice.
+- **Only two auth levels exist in it** — `public` and `household`. There is no
+  code path from a cbedge.net session into household data because the code to
+  follow one isn't in the binary; a route asking for `owner` gets a 500 rather
+  than a guess.
+- **`deploy/household/Dockerfile`** — its own `package.json` with `pg` and
+  `dotenv`, because the entire household stack requires `pg` plus node builtins
+  and nothing else. No Next, no React, no puppeteer download. Files are copied
+  by EXPLICIT NAME rather than `COPY server-v2/`: the moment the image can see
+  the trading modules, someone requires one and the isolation is gone silently.
+- **Compose service `household`** on `127.0.0.1:3010`, `env_file: .env.local`,
+  with its own healthcheck. `HH_PORT`, not `PORT` — `.env.local` sets `PORT` to
+  the dashboard's 3002 and env_file is applied first, so a separate name means
+  they can never collide.
+- **budget-vite and recipe-vite nginx** now `set $up household:3010`. Their
+  `depends_on` moved to `household`.
+- **api-router.js's mount is now opt-in** behind
+  `HOUSEHOLD_ROUTES_IN_DASHBOARD=1`, left unset. That exists for one situation:
+  the household container is down or unbuilt and you want budget.cbedge.net back
+  by pointing its nginx at `dashboard:3002`. With it on, the isolation above is
+  gone — it is a fire escape, not a setting.
+
+### What did NOT change, deliberately
+
+**The database.** Same `DATABASE_URL`, same tables. "Add all" on a recipe still
+writes `hh_list_items` rows that budget.cbedge.net reads, and both apps still
+share one `hh_users` login. Splitting the data would mean building an API
+between two of your own apps plus a second password — and a clean
+household-vs-trading DB line doesn't exist anyway, since the budget screens read
+the same tables `/owner/budget` writes.
+
+### Deploy
+
+The trading app does not need to restart for this. Bring the new backend up
+first, then repoint the two SPAs:
+
+```
+git pull
+docker compose build household && docker compose up -d household
+curl -s http://127.0.0.1:3010/health        # {"ok":true,"routes":29,"db":true}
+
+docker compose build recipes budget
+docker compose up -d recipes budget
+```
+
+Confirm both apps still work (sign in, open the grocery list), then rebuild the
+dashboard whenever it next suits you — after the close — to drop the now-dormant
+in-process copy:
+
+```
+docker compose build dashboard && docker compose up -d dashboard
+```
+
+Until that rebuild the old image still registers the routes internally. Harmless:
+nothing routes to them any more.
+
+## 2026-08-12 - Cookbook goes dark: recipe.cbedge.net now uses the budget theme
+
+`recipe-vite/src/theme.ts` (replaced), `src/index.css`, `index.html`,
+`public/manifest.json`, the five icon PNGs, `src/components/Shell.tsx`,
+`src/pages/{Recipe,Add}.tsx`, `README.md`. `npx tsc --noEmit` and
+`npm run build` clean.
+
+### What
+
+The cookbook shipped in a warm-paper light theme, on the reasoning that a recipe
+is read in a bright kitchen and food photographs better on white. That reasoning
+holds in isolation and was wrong in context: this app shares a login, a grocery
+list and a week board with budget.cbedge.net, and sitting next to it in cream
+made one product look like two.
+
+### How
+
+- **`src/theme.ts` is now a verbatim copy of `budget-vite/src/theme.ts`**, plus
+  the `minutes()` helper at the bottom. Copied, not imported — same rule as the
+  auth screens: the apps build independently and a shared module would let a
+  budget change break this build. Every page already consumed the theme through
+  the same helper names (`T`, `section`, `button`, `segment`, `label`,
+  `display`, `body`, `input`), so nothing else had to move.
+- `index.css`, the `theme-color` meta, the manifest colours and the five icons
+  all follow to `#05060A`. iOS status bar goes back to `black-translucent`;
+  `color-scheme: dark` so native date pickers stop rendering a white popover.
+- **The hero controls flipped from a white pill to near-black at 62% with a
+  blur.** The photo is now the only light surface in the app: a white chip on it
+  disappears against a plate or a bowl of cream, a dark one reads against food
+  of any colour AND matches the page it scrolls into. Hairline stays white — a
+  dark border on a dark chip over an unpredictable photo has no edge at all.
+- **A bottom fade under the hero.** A bright rectangle butting straight into a
+  near-black page reads as a rendering seam.
+- Tab bar switched to budget's mono caps. Four tabs at ~97px each keep the
+  0.12em tracking budget had to drop at six.
+- Add's three-way mode row became a `segment()` control instead of three
+  buttons: `button('primary')` is the page's one filled action and belongs on
+  Import — spending it on a mode switch leaves nothing to mark the actual verb.
+
+### Deploy
+
+SPA only — the backend didn't change.
+
+```
+git pull && docker compose build recipes && docker compose up -d recipes
+```
+
+## 2026-08-12 - Recipe photos are copied into Postgres, and you can shoot your own
+
+New: `hh_recipe_images` table, `GET/POST /api/hh/recipes/image`,
+`server-v2/scripts/backfill-recipe-images.js`.
+Edited: `server-v2/_lib-household.cjs`, `_lib-household-recipes.cjs`,
+`household-routes.cjs`, `recipe-vite/src/{api.ts,pages/Cookbook.tsx,pages/Recipe.tsx}`,
+`recipe-vite/nginx.conf`. `npx tsc --noEmit` clean, `npm run build` clean,
+selftest 59 passed.
+
+### What
+
+The cookbook was storing the source page's `og:image` URL and rendering from it.
+That is fine for a blog and wrong for everything else: a TikTok or Instagram
+cover is a SIGNED CDN link with an expiry in the query string. It works the day
+you import and 403s a day or two later, so the cookbook would have quietly
+decayed into a wall of letter-tile placeholders — worst of all on exactly the
+imports that just started working.
+
+So the bytes get copied at import time, and there's now a photo picker on the
+recipe screen for shooting your own.
+
+### How
+
+- **`hh_recipe_images`** — `recipe_id` PRIMARY KEY (one photo per recipe, and
+  the upsert is a plain `ON CONFLICT`), `mime`, `bytes BYTEA`, `etag`,
+  `source_url`. `ON DELETE CASCADE`, unlike the `recipe_id` backlinks on
+  `hh_list_items`/`hh_meals` — an orphaned blob helps nobody, where an orphaned
+  grocery item you're standing in the shop holding does.
+- **A separate table, not a column on `hh_recipes`.** This is the load-bearing
+  part: nothing can drag image bytes into a list query by accident. The cookbook
+  index selects twenty rows to draw 64px thumbnails; with `bytes` on that row it
+  would be a multi-megabyte response every time. `CARD_SELECT`/`FULL_SELECT` add
+  only a correlated subquery for the etag, never the bytes.
+- **`etag` is a content hash and the client appends it as `?v=`.** That is what
+  makes `immutable, max-age=1 year` safe — replace a photo and the URL changes,
+  so every phone refetches instead of showing last month's picture until next
+  year. Without `v=` the route falls back to `max-age=60`. `If-None-Match` is
+  honoured, so a phone that already has the photo gets a 304.
+- **Capture runs in the BACKGROUND on create**, deliberately not awaited: saving
+  a recipe must not sit on someone else's CDN for ten seconds. The gap is
+  covered because `image_url` is still fresh at that moment and `imageSrc()`
+  falls back to it — by the time that link expires the bytes are here. Every
+  failure path in `captureImage` returns null rather than throwing, so a slow
+  CDN can never roll back a saved recipe.
+- **Referer header on the capture fetch.** TikTok's CDN 403s a request without
+  one; sending the image's own origin is enough to look ordinary.
+- **Phone upload downscales in the BROWSER** (`downscale()` in `src/api.ts`,
+  canvas → 1400px → JPEG q0.82, ~200-400KB). No `sharp` in the backend: a native
+  image dependency is a bigger image and a build that breaks on a base-image
+  bump, to save a couple hundred KB on a picture the source already sized for
+  the web. Upload rides the existing JSON reader as a data URL — the household
+  backend has no multipart parser and doesn't need one. nginx
+  `client_max_body_size` 2m → 16m so an oversized body fails the server's own
+  8MB check with a real message instead of a bare 413.
+- The file input resets `value` after each pick, or choosing the same photo
+  twice after a failure fires no change event and reads as a dead button.
+
+### Deploy
+
+```
+git pull && docker compose build dashboard && docker compose up -d dashboard
+docker compose build recipes && docker compose up -d recipes
+docker compose exec -T dashboard node server-v2/scripts/backfill-recipe-images.js
+```
+
+The backfill copies photos for recipes imported before this change. Run it
+promptly — a signed link that expired last week can't be recovered, only
+re-imported.
+
+## 2026-08-12 - Recipe import: read the caption out of JS-rendered pages (TikTok, Instagram)
+
+`server-v2/_lib-household-recipes.cjs` — new `metaContent()`, `embeddedCaption()`,
+`handleFromUrl()`; `importRecipe()`'s fallback now builds its text from all three
+sources. Verified `node server-v2/_lib-household-recipes.selftest.js` — 59 passed
+(was 45).
+
+### What
+
+A TikTok link imported as "That doesn't look like a recipe." The pipeline was
+working perfectly — key valid, page fetched (HTTP 200, 396KB) — and Claude was
+right: what it got handed WAS not a recipe.
+
+TikTok, Instagram and every other client-rendered site ship an empty `<body>`
+and put the words in a JSON blob inside a `<script>`. `stripTags()` throws
+`<script>` away, correctly, which meant the AI received a page of nothing while
+the full recipe sat in the HTML the whole time. Confirmed on the box: no
+`og:description` at all, and the entire caption — title, macros, ingredients,
+method — in a `"desc"` field.
+
+### How
+
+- **`embeddedCaption(html)`** scans raw HTML for JSON string fields holding
+  prose and takes the longest. Keys are restricted to `desc` / `description` /
+  `caption`, plus Instagram's nested `edge_media_to_caption` → `text`. Matching
+  a bare `"text"` key was rejected: it sweeps up button labels and menu items,
+  and longest-wins would then pick a cookie-consent paragraph over the recipe.
+  A 60-char floor drops SEO blurbs; `JSON.parse('"'+m+'"')` un-escapes, so `\n`
+  comes back as real newlines (or the AI sees one run-on paragraph) and emoji
+  surrogate pairs survive.
+- **`metaContent()`** reads a `<meta>` value in either attribute order —
+  `property=`/`name=` first or `content=` first. Sites are inconsistent, and the
+  old inline `og:image` regex only handled one of the two.
+- **`importRecipe()` fallback order is caption → meta description → page body.**
+  One path covers both cases: on a JS-rendered page the body is a shell and the
+  caption is everything; on an ordinary blog the extractor finds nothing and the
+  body carries it. Order also decides what `aiExtract`'s 24k cap trims — the
+  tail of a long blog post, never the caption we went looking for.
+- **Empty-page guard.** Under 40 readable characters now throws
+  "didn't return any readable text — it may block automated readers" instead of
+  paying for an AI call that can only fail.
+- **`handleFromUrl()`** — a TikTok/Instagram import is credited `@fit_foodie_lulu`
+  rather than `tiktok.com`. That's the by-line the creator is owed, and it
+  matches how the reference app reads.
+
+### Deploy
+
+`server-v2` is baked into the dashboard image, so this needs a rebuild, not just
+a restart:
+
+```
+git pull && docker compose build dashboard && docker compose up -d dashboard
+```
+
+## 2026-08-12 - New app: recipe.cbedge.net — the cookbook, wired into the household grocery list
+
+New: `recipe-vite/` (SPA), `server-v2/_lib-household-recipes.cjs`,
+`server-v2/_lib-household-recipes.selftest.js`.
+Edited: `server-v2/_lib-household.cjs` (schema), `server-v2/household-routes.cjs`
+(routes), `docker-compose.yml` (the `recipes` service).
+Verified: `node server-v2/_lib-household-recipes.selftest.js` — 45 passed;
+`npx tsc --noEmit` clean; `npm run build` in `recipe-vite/` clean.
+
+### What
+
+A fourth app on the household stack, modelled on the Julienne cooking app: paste
+a recipe link, get a recipe; scale it to how many you're feeding; send the
+ingredients to the grocery list that already exists.
+
+It is NOT a standalone cookbook. It shares the household auth (`hh_users` /
+`hh_session` — one password, one PIN) and, deliberately, the household *tables*:
+
+- **"Add all"** inserts real `hh_list_items` rows, aisle-sorted, at the scaled
+  amount. They appear on budget.cbedge.net's grocery list immediately, because
+  it is the same list. No mirror, no sync step to fall out of date.
+- **"Pick a day"** inserts an `hh_meals` row, so a planned recipe lands on the
+  week board with its ingredients attached to it.
+
+Both new columns are `recipe_id ... ON DELETE SET NULL`: deleting a recipe must
+not pull tortillas off a list you're standing in the shop holding, or blank out
+Tuesday on the week board.
+
+### How
+
+**Import — structured data first, AI second.** `POST /api/hh/recipes
+{action:'import'}` fetches the page (15s cap, 3MB cap, http/https only, private
+address space refused so a pasted link can't probe the VPS's own network), then
+looks for a `schema.org/Recipe` node in any `application/ld+json` block,
+including inside `@graph`. Most food blogs publish one because Google requires
+it — that path is free, instant and exact. Only when it's missing, or the node
+has no ingredients (a roundup post), does the page get stripped to text and sent
+to Claude. Pasted text always takes the AI path; there is nothing structured in
+an Instagram caption to read.
+
+Import **never writes to the database**. It returns a draft for the review
+screen and nothing is saved until you press save there — import is the step most
+likely to get something subtly wrong, and a cookbook that quietly fills with
+half-read blog posts is worse than one you paste into by hand. The review screen
+also says which path read it, so an AI import gets a closer look.
+
+**Ingredients are stored three ways** —
+`{ raw, qty, unit, item, aisle }`. `raw` is the line as written and is what you
+read while cooking; the parsed pieces exist for two jobs only, scaling and the
+grocery hand-off. The parser is deliberately conservative: "a pinch of flaky
+salt" gets `qty: null` and passes through every scale factor untouched, because
+you cannot double a pinch and a scaled `0.375 tsp` is worse than no number.
+Aisle guessing is `_lib-household-lists.cjs`'s `guessAisle`, reused rather than
+reimplemented, so an ingredient added from a recipe files itself exactly where
+it would if you'd typed it on the list.
+
+**Schema.** `hh_recipes` holds ingredients and steps as JSONB **on the recipe
+row**, not in child tables. An ingredient has no life of its own — never
+queried, sorted or joined outside its recipe, and always written as a complete
+replacement on save. Child tables would buy ordering columns, a
+delete-and-reinsert dance per save and three round trips to render one screen,
+in exchange for nothing this app does. Search still reaches inside via
+`ingredients::text`, which is what makes "what can I make with gochujang" work.
+Created by `ensureSchema()` on the first household request after deploy — no
+migration to run.
+
+**`formatQty` exists twice**, in the server lib and in
+`recipe-vite/src/pages/Recipe.tsx`. The servings stepper re-renders on every tap
+and a round trip per tap would feel broken. The selftest is the shared contract
+— change one, change both.
+
+**The SPA** is `budget-vite`'s skeleton with a light palette: warm paper, serif
+titles, one terracotta action per screen, photo-first recipe page (Shell drops
+its header on `/r/:id` so the food is the first thing on screen). The auth
+screens are copies of budget-vite's, not imports — the two apps build and deploy
+independently and a shared module would let a budget change break this build.
+
+### Deploy notes
+
+- Service is `recipes`, nginx on `127.0.0.1:8084`, loopback only.
+  `docker compose build recipes && docker compose up -d recipes`.
+- First deploy also needs the tunnel hostname in `/etc/cloudflared/config.yml`
+  ABOVE the catch-all 404 rule:
+  `- hostname: recipe.cbedge.net` / `service: http://127.0.0.1:8084`, then
+  `cloudflared tunnel route dns <tunnel> recipe.cbedge.net` and
+  `systemctl restart cloudflared`.
+- AI fallback needs `ANTHROPIC_API_KEY` in `.env.local` (read by the DASHBOARD
+  container — the key never reaches the browser). Optional `RECIPE_AI_MODEL`,
+  default `claude-sonnet-4-5`. Without it, link imports of sites with structured
+  data still work and the Paste tab says so up front instead of failing after a
+  20-second wait.
+- nginx proxies **only** `/api` — same narrow surface as budget. This app can
+  never reach `/ws` or `/proxy`, so a bug here cannot touch the trading stack.
+
+## 2026-08-12 - SPX flow: the strike-growth feed was eating the ATM tape (Net Drift quiet half-hours, round 3)
+
+`server-v2/proxy-tastytrade.js` — two guards in `_onEvent`. Confirmed
+`node server-v2/flow-print-time.selftest.js` all-pass after the edit.
+
+### What
+
+/flow's Net Drift still went "strong at the open, then a step every ~30 min"
+after the 2026-08-07 (persist rate) and 2026-08-10 (TS window flapping + stall
+fallback) fixes. Premium-split buckets summed only ~$6-8M each on a full 0DTE
+session — orders of magnitude light.
+
+Root cause: SPX is in the strike-growth watchlist (`scanner-tickers.js` MAIN,
+hot lane, 2-min sweeps). `_subscribeStrikeGrowthRoot` claims the ±20 strikes
+around spot across the front 3 expirations (±~100 SPX pts — the ATM core of the
+0DTE tape) into `strikeGrowthContracts`, additively, never unsubscribing. And
+`_onEvent` treated membership in that map as "belongs to the recorder, not the
+tape":
+
+- TimeAndSale branch: `if (strikeGrowthContracts.has(sym) || ...) return;` —
+  every tick-by-tick ATM print discarded before reaching `this.flow`.
+- Trade branch: `if (strikeGrowthContracts.has(sym)) return;` — the conflated
+  fallback discarded too.
+
+So the ATM band produced ZERO flow prints from either path. What survived:
+far-OTM strikes beyond the claimed band (the isolated vertical steps), plus a
+short burst whenever spot moved into strikes the sweep hadn't claimed yet
+(≤2 min until the next hot-lane sweep) — which is exactly the "gave up, then a
+step each time SPX made new ground" shape, and why the open looked strong
+(overnight gap = a band's worth of unclaimed strikes).
+
+### How
+
+- **TimeAndSale branch: `strikeGrowthContracts` no longer vetoes the tape.**
+  The strike-growth feed only plain-subscribes (Quote/Greeks/Summary/Trade);
+  it never calls `subscribeTimeSales`. A TimeAndSale event can therefore only
+  exist because the flow window (`_syncTimeSaleWindow`) or ttFlow asked for
+  it — routing it to the tape takes nothing away from the recorder. The
+  `flowRecordContracts` check stays. Side effect, intended: ATM prints stamp
+  `_tsLastPrintAt` again, so the Trade-fallback health suppression works as
+  designed instead of reading permanently stalled.
+- **Trade branch: the strike-growth return is now gated** on the symbol not
+  being flow-routed: `strikeGrowthContracts.has(sym) && !_tsSubs.has(sym) &&
+  !ttFlowContracts.has(sym) && !flowRecordContracts.has(sym)`. Scanner-only
+  names (AAPL & co.) still stop there — `this.flow` runs `spxOnly:false` for
+  ttFlow's sake and must not ingest them — but near-spot SPX keeps its coarse
+  fallback when TimeAndSale stalls.
+- Strike-growth itself is untouched: its dayVolume caching happens above both
+  guards, and it never consumed TimeAndSale events.
+
+## 2026-08-12 - GEX Map (Tape Field): strong levels read louder, older heat stops washing out
+
+`app/test/GexMapTab.tsx`.
+
+### What
+
+Two complaints, one root cause — the colour ramps, not the data.
+
+- **Strong levels are now obvious.** In Terrain the peaks used to flatten into
+  one saturated plateau: the `** 0.55` elevation curve spends most of its range
+  on the low end, so everything above ~a third of the session max landed in the
+  last four or five bands, separated by a couple of percent of one colour. It
+  now carries a summit term as well, and the iso-GEX rings at |0.34| and above
+  are drawn as INDEX contours — brighter, 2.4px, over a dark under-stroke — so a
+  ridge is visually distinct from the merely-elevated ground around it.
+- **Older heat no longer washes out under the closing GEX.** On a 0DTE session
+  gamma piles into the close, so `gMax` is set by the last half hour and the
+  whole morning sits at 10–25% of scale. The old `ratio ** 1.4` alpha easing
+  pushed 0.15 down to 0.07 — the morning tape rendered as a faint wash. The
+  cells were always there; the curve was hiding them.
+
+Nothing about the scales changed. Gamma is still normalized once, on the session
+max, shared by the heatmap, the terrain, the profile and the rail, at every zoom
+level — a given gamma still paints the same colour everywhere.
+
+### How
+
+- `heatAlpha()` split into two terms: base `ratio ** 0.85` (sub-linear, so real
+  mid-session nodes hold a readable alpha) plus a squared `hot` term over the top
+  45% of the scale worth up to +0.16 alpha, capped at 0.98. The second term is
+  what preserves contrast — lifting the low end alone would have flattened the
+  map. Noise is still handled by TapeField's existing cull threshold, which
+  rides the Intensity slider as before.
+- `gamColor()` white-lift reweighted from a flat `m * 0.28` to `0.10·m + 0.32·m²`:
+  weak cells keep the pure hue and read as texture, the strongest nodes burn to a
+  bright core that survives the red field around it.
+- `TerrainField` fill: `band` (the existing 18-step hypsometric quantization) is
+  now joined by `hot = clamp01((|v| - 0.35) / 0.65)`, which pushes summit terrain
+  +0.22 further up the mix and, squared, +0.45 toward white. Dark basin →
+  coloured slopes → bright ridges, instead of one plateau with lines on it.
+- Contour pass: levels ≥ |0.34| get alpha `0.42 + 0.50·|lv|` at 2.4px preceded by
+  a `rgba(0,0,0,0.34)` 4.0px under-stroke (a light line on a light summit is
+  invisible exactly where it matters most); everything below stays hairline at
+  1.4px on the old sqrt alpha. The zero coastline is unchanged.
+
+Intensity slider semantics unchanged. No proxy code touched. No API/server
+changes.
+
+## 2026-08-12 - Multi Greek: toolbar 🔍, % positive GEX in TOTAL row, ex-0DTE total column
+
+`app/mult-greek/MultGreekClient.tsx`.
+
+### What
+
+Three changes to the multi charts (/mult-greek) page:
+
+- The Ticker Lookup 🔍 moved out of the four panel headers into the page
+  toolbar, next to the Intensity slider. One page-level button — the lookup
+  card has its own symbol picker, so any ticker can be entered inside it
+  (opens seeded on SPX).
+- The TOTAL row now shows, next to each column's NET GEX total, the % of that
+  column's gross GEX that is positive (Σ pos / (Σ pos + |Σ neg|)) — green when
+  ≥50%, red below — on all tickers and all columns.
+- The 4th column no longer shows the 4th expiry on its own. It is now the
+  ex-0DTE TOTAL: the per-strike sum of NET GEX across all fetched expirations
+  excluding 0DTE (the 4th expiry's data still feeds the sum). Header reads
+  "ALL · EX-0DTE"; heat shading, top-3 ranks and the ★ peak work the same as
+  a real column. Its cells don't open the per-cell click card (there is no
+  single expiry behind them).
+
+### How
+
+- New `EX0_KEY` synthetic column + `withEx0Column()` fold the ex-0DTE sums
+  into the computed result (rows, maxAbs, top3, top5PerSide, mvcStrike) and
+  swap the last real column out of `cols`. Applied only when a full set of 4
+  columns is present — static/delayed mode (single snapshot expiry) and thin
+  calendars render unchanged. CB/CW/PW walls still come from the untouched
+  front-expiry computation.
+- `totals` now carries `{ net, posPct }` per column; the TOTAL row renders the
+  % beside the value.
+- `TickerPanel` lost its `onLookup` prop and header button; the toolbar 🔍
+  opens the same portal overlay.
+
+No proxy code touched. No API/server changes.
+
+## 2026-08-12 - Fix: Multi Greek page snapshot button hung forever, left page stuck in capture layout
+
+`lib/snapshot.ts`, `components/shared/DataBox.tsx`.
+
+### What
+
+On /mult-greek the toolbar 📸 "Copy screenshot to clipboard" button silently did
+nothing: no PNG on the clipboard, no error in the console, and the page was left
+stuck in its shrunken fit-content capture layout until a reload. Reproduced
+twice in a live audit. Root symptom: the html2canvas capture promise never
+settled, so every catch/finally downstream (including `endCapture`) was skipped.
+
+### How
+
+- **Capture watchdog** (`lib/snapshot.ts`): `captureToCanvas` now races the
+  capture against a 20s timeout (`CAPTURE_WATCHDOG_MS`, overridable per call via
+  `SnapOptions.timeoutMs`). A hang becomes a normal rejection - button shows ✕,
+  error reaches the console, restore paths run.
+- **`SnapOptions.imageTimeout`** passthrough to html2canvas; page-scale captures
+  pass 4000ms instead of html2canvas's 15s default, so one stalled image can't
+  hold the capture (and the capture-layout switch) hostage.
+- **`BoxSnapBtn` / `BoxDiscordBtn`** (`DataBox.tsx`): `onAfterCapture` now runs
+  in an inner finally the moment rasterization settles - BEFORE the clipboard
+  write / Discord upload - so the page never sits in capture layout during I/O.
+  Both pass `allowTaint:false` (a tainted logo would kill the readback; the
+  documented trade in SnapOptions) + `imageTimeout:4000`.
+- **Clipboard fallback**: BoxSnapBtn's hand-rolled `navigator.clipboard.write`
+  replaced with the shared `copyOrDownload` helper - if the write fails (e.g.
+  Chrome's ~5s transient-activation window expired during a slow capture), the
+  PNG downloads instead of vanishing.
+
+No proxy code touched.
+
 ## 2026-08-11 - Emails: "Options flow is 100%" subscriber update template
 
 `lib/emails/flow-dialed-in.ts` (new), `app/api/admin/email-templates/route.ts`.
