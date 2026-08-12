@@ -18,6 +18,7 @@ import { subscriberPriceMatchEmail, subscriberPriceMatchText, SUBSCRIBER_PRICE_M
 import { edgeCatchAmdEmail, edgeCatchAmdText, EDGE_CATCH_AMD_SUBJECT } from "@/lib/emails/edge-catch-amd";
 import { noPantsPromoEmail, noPantsPromoText, NOPANTS_PROMO_SUBJECT } from "@/lib/emails/nopants-promo";
 import { noPantsExtensionEmail, noPantsExtensionText, NOPANTS_EXTENSION_SUBJECT } from "@/lib/emails/nopants-extension";
+import { flowDialedInEmail, flowDialedInText, FLOW_DIALED_IN_SUBJECT } from "@/lib/emails/flow-dialed-in";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -155,6 +156,13 @@ function buildTemplates(): Template[] {
       subject: NOPANTS_EXTENSION_SUBJECT,
       html: noPantsExtensionEmail(),
       text: noPantsExtensionText(),
+    },
+    {
+      id: "flow-dialed-in",
+      label: "✅ Options flow is 100% — scanners/alerts next (subscriber update)",
+      subject: FLOW_DIALED_IN_SUBJECT,
+      html: flowDialedInEmail(),
+      text: flowDialedInText(),
     },
   ];
 }
