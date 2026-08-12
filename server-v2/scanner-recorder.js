@@ -12,6 +12,8 @@
  *   1. fetch chain (expirations + contracts),
  *   2. resolve spot (index snapshot vs. stock snapshot),
  *   3. buildExpiryRows() for the nearest expiry (OI + greeks in one call each),
+ *      plus fetchVolumeTheta() for that same expiry — one more whole-chain call,
+ *      because every level here is OI+VOLUME net GEX (see toGexRows),
  *   4. computeGexSummary() → total net GEX, call/put walls, gex flip,
  *   5. write ONE aggregate row into scanner_snapshots.
  *
@@ -211,13 +213,30 @@ async function resolveSpot(root) {
   }
 }
 
-/** buildExpiryRows() rows -> gex-calculator input rows ({side,oi,gamma,...}). */
-function toGexRows(expiryRows) {
+/**
+ * buildExpiryRows() rows -> gex-calculator input rows ({side,oi,gamma,...}).
+ *
+ * `volMap` is fetchVolumeTheta()'s Map, keyed `expiration|strike|type` exactly as
+ * both adapters build it. It MUST be populated: every level this recorder writes
+ * (call wall, put wall, CORE, and the per-level *_gex columns) is ranked on
+ * oiVolNet = netGEX + netVolGEX, and netVolGEX is zero without volume — so an
+ * OI-only sweep silently produced OI-only walls that disagreed with the
+ * dashboard chart / heatmap / MVC, which all read the OI+Vol basis.
+ *
+ * A missing key means "no volume reported for that contract" (pre-open, or a
+ * strike that hasn't traded), which is a true 0, not a gap to interpolate.
+ */
+function toGexRows(expiryRows, volMap = null) {
+  const volOf = (r) => {
+    if (!volMap) return 0;
+    const v = Number(volMap.get(`${r.expiration}|${Number(r.strike)}|${r.type}`) ?? 0);
+    return Number.isFinite(v) && v > 0 ? v : 0;
+  };
   return expiryRows.map((r) => ({
     strike: r.strike,
     side: r.type === 'C' ? 'call' : 'put',
     oi: Number(r.oi ?? 0),
-    volume: 0, // OI-basis scanner; volume can be layered in later if needed
+    volume: volOf(r),
     gamma: Number(r.gamma ?? 0),
     delta: Number(r.delta ?? 0),
     theta: Number(r.theta ?? 0),
@@ -265,13 +284,24 @@ async function snapshotTicker(root, { pick = null } = {}) {
   const expiry = pick ? pick(exps) : exps[0];
   if (!expiry) return { err: 'no-chain' };
 
-  const [spot, expiryRows] = await Promise.all([
+  // Volume rides alongside, not after: on the TT adapter it reads the SAME cached
+  // whole-chain payload buildExpiryRows already pulled (free); on Theta it is one
+  // extra snapshot call per root per sweep. Failure degrades to an OI-only basis
+  // for this one root rather than dropping it.
+  const [spot, expiryRows, volMap] = await Promise.all([
     resolveSpot(root),
     thetaAdapter.buildExpiryRows(root, expiry).catch(() => []),
+    typeof thetaAdapter.fetchVolumeTheta === 'function'
+      ? thetaAdapter.fetchVolumeTheta(root, expiry).catch(() => null)
+      : Promise.resolve(null),
   ]);
   if (!(spot > 0)) return { err: 'no-spot' };
+  if (!volMap?.size) console.warn(`[scanner] ${root} ${expiry}: no volume — OI-only basis this sweep`);
 
-  const gexRows = toGexRows(expiryRows).filter((r) => r.oi > 0 || r.gamma !== 0);
+  // Keep a strike that has traded today even with zero OI — it still carries
+  // netVolGEX, so dropping it would hide a wall that is being built right now.
+  const gexRows = toGexRows(expiryRows, volMap)
+    .filter((r) => r.oi > 0 || r.volume > 0 || r.gamma !== 0);
   if (gexRows.length < MIN_STRIKES) return { err: `thin-${gexRows.length}` };
 
   const summary = computeGexSummary(gexRows, spot);

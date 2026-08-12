@@ -1,5 +1,151 @@
 # Changelog
 
+## 2026-08-12 - GEX Top Change cards: entry basis is now the slot's mark, not the first-ever probe
+
+Edited: `components/scanner/GexChangeTop.tsx` (one expression, ~line 806).
+
+### What
+
+A card could report a loss the pick never took. PLTR `250814 180C`, flagged in
+the 10:30 slot, showed `IN 1.72 → NOW 0.34 · −80.2%` while its own chart never
+traded above ~1.00 all session — the dashed entry line floated above the entire
+series, and the scorecard row for the same contract read roughly flat.
+
+### Why
+
+The card read its entry from `watch_options.added_price`, which is **write-once
+at the contract's first ever probe**. `/api/watch`'s `add` upserts on
+(ticker, expiry, strike, side) and only stamps the mark when the row is NEW, so
+a strike already in the watch pipeline from an earlier day keeps that day's
+mark forever. PLTR's 1.72 came from a 3-DTE probe days earlier; the 10:30
+re-flag hit the upsert and changed nothing.
+
+`computeResults()` in `server-v2/gex-change-top-recorder.js` already handles
+this — it anchors entry to the first snapshot at/after the slot the pick was
+first flagged that day and only falls back to `added_price`. The scorecard was
+right; the card above it was not. Same contract, two bases, page contradicting
+itself.
+
+### How
+
+The component already builds `entryById` (watch_id → the scorecard's entry) for
+the floor badge. The card's entry now reads from it, with `added_price` kept as
+the fallback for a pick the scorecard has no entry for (never snapshotted, or
+results not yet loaded):
+
+```ts
+const entry =
+  (wid != null ? entryById.get(wid) : undefined) ??
+  h?.contract?.added_price ??
+  null;
+```
+
+`entry` feeds the headline `IN → NOW` row, the `$/ct`, the pnl color, the
+dashed baseline on the price chart and the `entry @` footer, so all five move
+together. No server or schema change — `added_price` stays write-once on
+purpose (it is the honest basis for the ORIGINAL probe and the scorecard still
+references it).
+
+## 2026-08-12 - Owner dashboard sign-in loop: session cookie is now parent-domain scoped
+
+Edited: `.env.local` (added `SESSION_COOKIE_DOMAIN=.cbedge.net`).
+No code change — `lib/auth/session.ts:23` already reads the var; it was set nowhere
+(not `.env`, `.env.local`, `docker-compose.yml`, or the `Dockerfile`).
+
+### What
+
+Signing in and landing on owner.cbedge.net bounced straight back to the apex.
+Two independent causes:
+
+1. **Cloudflare Access is intercepting `owner.cbedge.net/api/auth/me`.** The
+   console shows that fetch 302'ing to
+   `dawn-mode-a754.cloudflareaccess.com/cdn-cgi/access/login/owner.cbedge.net`,
+   which the browser then blocks as cross-origin. `owner-vite/src/AuthGate.tsx:38`
+   treats any thrown fetch as `status: "signedout"`, and its `SIGN_IN_URL` is a
+   hardcoded `https://cbedge.net/sign-in` — so you sign in on the apex,
+   `AuthForm` hard-navigates to `/home`, and you never return. An XHR cannot
+   satisfy an Access login redirect. **Fix lives in the Cloudflare Zero Trust
+   dashboard, not this repo:** add a Bypass policy for `owner.cbedge.net/api/*`
+   (or keep a valid CF_Authorization session for that hostname).
+2. **The session cookie could not reach the subdomain.** `SESSION_COOKIE_DOMAIN`
+   was unset, so `sessionCookieOptions()` omitted `domain` and `cbe_session` was
+   host-only. owner.cbedge.net (proxied to `dashboard:3002` via
+   `owner-vite/nginx.conf:25`) therefore sent no cookie, `/api/auth/me` returned
+   `{user:null}`, and AuthGate blocked. The same split existed between
+   `cbedge.net` and `www.cbedge.net`.
+
+Only middleware's `!userId` branch (`middleware.ts:184`) redirects to `/` — a
+signed-in non-owner goes to `/home`. That confirmed the request was arriving with
+no valid session, not with an owner-flag problem.
+
+### How
+
+`SESSION_COOKIE_DOMAIN=.cbedge.net` — one value, shared across the apex, `www`,
+and `owner`. This also removes the apex/www cookie split without touching
+`NEXT_PUBLIC_APP_URL` / `NEXT_PUBLIC_SITE_URL`, which stay on `www.cbedge.net`
+for now because those two drive the **Google OAuth `redirect_uri`**
+(`app/api/auth/google/start/route.ts:15` builds it, `app/auth/callback/route.ts:34`
+rebuilds it for the token exchange — they must byte-match each other AND the URI
+registered in Google Cloud Console) and the Discord OAuth redirect. Flipping them
+to the apex requires registering `https://cbedge.net/auth/callback` in Google
+Cloud Console and `https://cbedge.net/api/discord/callback` in the Discord portal
+FIRST, plus a Cloudflare 301 `www → apex`. Deferred deliberately.
+
+### Deploy
+
+`.env.local` is gitignored, so this does not ship through GitHub. On the VPS:
+append the line to `/opt/dashboard/.env.local`, then
+`docker compose up -d --force-recreate dashboard`. No image rebuild — the var is
+runtime-only (`.dockerignore:5` keeps `.env.local` out of the build stage, so
+Next never inlines it).
+
+Existing users hold host-only `cbe_session` cookies under the same name; both ride
+along until cleared. `clearSessionCookie()` (`lib/auth/session.ts:60-75`) already
+emits both forms, so one sign-out/sign-in clears the old one.
+
+### Unrelated, still open
+
+The 404 flood in the same console (`/logos/*.png`, then
+`/proxy/ticker-logo?sym=...`) is cosmetic — missing logo assets falling through to
+the proxy fallback, which 404s too.
+
+## 2026-08-12 - Scanner walls + CORE now computed on OI+VOLUME net GEX, not OI alone
+
+Edited: `server-v2/scanner-recorder.js`.
+
+### What
+
+Every level the scanner sweep records — `call_wall`, `put_wall`, `cb` (CORE), and
+the per-level `call_wall_gex` / `put_wall_gex` / `cb_gex` columns — is ranked by
+`oiVolNet(r) = netGEX + netVolGEX` in `computation/gex-calculator.js`. But
+`toGexRows()` in the sweep hardcoded `volume: 0`, so `netVolGEX` was always zero
+and those levels were in fact **OI-only**.
+
+That silently disagreed with the rest of the app: the dashboard GEX chart, the
+heatmap and MVC all feed real volume into the same calculator, so a wall on the
+Scanner / Level Log page (`/app/level-log` → `/proxy/walls` → `scanner_snapshots`)
+could sit at a different strike than the wall drawn on the chart for the same
+symbol and second. The `cb` column comment even claimed "largest |net GEX| (OI +
+vol)" — now true.
+
+### How
+
+- `toGexRows(expiryRows, volMap)` takes `fetchVolumeTheta()`'s Map (keyed
+  `expiration|strike|type`, identical in both adapters) and fills `volume` per
+  contract. A missing key is a true 0 (contract hasn't traded), not a gap.
+- `snapshotTicker()` fetches volume inside the existing `Promise.all` next to
+  `buildExpiryRows` / `resolveSpot`. On the TastyTrade adapter this reads the same
+  cached whole-chain payload — free. On Theta it is one extra snapshot call per
+  root per sweep. A failure degrades that root to the old OI-only basis and logs
+  it, rather than dropping the ticker.
+- Strike filter widened to `oi > 0 || volume > 0 || gamma !== 0`. A strike with
+  zero OI that is trading heavily today carries real `netVolGEX` — under the old
+  filter it was dropped, hiding a wall being built intraday.
+
+`forward-scanner-recorder.js` calls the same `snapshotTicker()` and inherits this
+(volume is thin on far-dated expiries, so its walls will barely move).
+
+
 ## 2026-08-12 - Household backend runs in its own container — recipe/budget deploys no longer restart the trading app
 
 New: `server-v2/household-server.js`, `deploy/household/{Dockerfile,package.json}`,

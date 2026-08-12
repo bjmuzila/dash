@@ -803,7 +803,31 @@ export default function GexChangeTop() {
               const h = wid != null ? hist[wid] : undefined;
               const pts = h?.points ?? [];
               const side = r.spot != null && r.spot > 0 && r.strike < r.spot ? "P" : "C";
-              const entry = h?.contract?.added_price ?? null;
+              // ENTRY BASIS — the scorecard's, not watch_options.added_price.
+              //
+              // added_price is write-once at the contract's FIRST EVER probe
+              // (/api/watch upserts on ticker+expiry+strike+side and only writes
+              // the mark when the row is new — see gex-change-top-recorder.js's
+              // auto-probe header). A strike that was already in the watch
+              // pipeline from an earlier day therefore keeps that day's mark
+              // forever, so a re-flagged pick charted today read as a huge loss
+              // it never took: PLTR 250814 180C carried a 1.72 basis from a
+              // 3-DTE probe while today's session never traded above ~1.00,
+              // printing −80% on a card whose slot stamp said 10:30 AM.
+              //
+              // computeResults() already solved this server-side — it anchors
+              // entry to the first snapshot at/after the slot the pick was first
+              // flagged that day, falling back to added_price. entryById carries
+              // exactly that value, keyed by watch_id, and was already loaded
+              // here for the floor badge. Use it so the card and the scorecard
+              // row below it can never disagree about the same contract.
+              //
+              // added_price stays as the fallback for a pick the scorecard has
+              // no entry for (never snapshotted / results not yet loaded).
+              const entry =
+                (wid != null ? entryById.get(wid) : undefined) ??
+                h?.contract?.added_price ??
+                null;
               const lastPt = [...pts].reverse().find((p) => p.mark != null) ?? null;
               const lastMark = lastPt?.mark ?? null;
               const lastTs = [...pts].reverse().find((p) => Number.isFinite(p.ts))?.ts ?? null;
