@@ -18,9 +18,31 @@ bring it here by hand.
 |---|---|
 | Backend logic (import, CRUD, hand-off) | `server-v2/_lib-household-recipes.cjs` |
 | Routes (`/api/hh/recipes`) | `server-v2/household-routes.cjs` |
-| Tables (`hh_recipes`, the two `recipe_id` columns) | `server-v2/_lib-household.cjs` → `ensureSchema()` |
+| The process that serves them | `server-v2/household-server.js` |
+| Its image | `deploy/household/Dockerfile` + `package.json` |
+| Tables (`hh_recipes`, `hh_recipe_images`, the `recipe_id` columns) | `server-v2/_lib-household.cjs` → `ensureSchema()` |
 | Parser tests (no DB, no network) | `server-v2/_lib-household-recipes.selftest.js` |
 | SPA | this folder |
+
+## It does NOT run in the trading app's process
+
+`/api/hh/*` is served by the **`household` container** (`household:3010`), not
+the dashboard. nginx here proxies `/api` straight to it.
+
+That split happened because `server-v2` is baked into the dashboard image: a
+one-line fix to a recipe parser meant `docker compose build dashboard` — a full
+`next build` — and a restart that dropped `/ws/gex` and made Theta reconnect.
+Shipping a cookbook tweak at 10:30am took the GEX feed down mid-session. It also
+meant a leak in the recipe photo path shared a heap with the feed recorders.
+
+**The database is still shared, on purpose.** Same `DATABASE_URL`, same
+`hh_users` login, same `hh_list_items` grocery list. The process boundary buys
+isolation; a data boundary would only buy work — and would cost the one feature
+that makes this app worth having.
+
+`household-routes.cjs` was already a mountable router taking
+`{ register, send, readJson }` and uses no `ctx`, so `household-server.js` is
+just a small host for it. No route is implemented twice.
 
 ## It shares the household's data on purpose
 
@@ -134,10 +156,21 @@ node server-v2/_lib-household-recipes.selftest.js
 
 ## Deploy
 
-The compose service is `recipes` (nginx on `127.0.0.1:8084`, loopback only).
+Two services. `recipes` is the SPA (nginx on `127.0.0.1:8084`); `household` is
+the backend (`127.0.0.1:3010`). Neither restart touches the trading dashboard.
 
 ```bash
+# backend change (import, routes, schema, photos)
+docker compose build household && docker compose up -d household
+
+# UI change
 docker compose build recipes && docker compose up -d recipes
+```
+
+Check it came up:
+
+```bash
+curl -s http://127.0.0.1:3010/health      # {"ok":true,"routes":29,"db":true}
 ```
 
 First deploy also needs the tunnel hostname. In `/etc/cloudflared/config.yml`,

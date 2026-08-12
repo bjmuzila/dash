@@ -1,0 +1,15 @@
+{
+  "name": "cbedge-household",
+  "private": true,
+  "version": "1.0.0",
+  "description": "budget.cbedge.net + recipe.cbedge.net backend. Deliberately tiny — the whole household stack requires only pg.",
+  "main": "server-v2/household-server.js",
+  "scripts": {
+    "start": "node server-v2/household-server.js",
+    "test": "node server-v2/_lib-household-recipes.selftest.js"
+  },
+  "dependencies": {
+    "pg": "^8.21.0",
+    "dotenv": "^17.4.2"
+  }
+}

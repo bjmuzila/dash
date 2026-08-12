@@ -157,11 +157,55 @@ services:
       # Loopback only — Cloudflare Tunnel reaches it, nothing public.
       - "127.0.0.1:8082:8082"
 
+  # The household backend — /api/hh/* for budget.cbedge.net and
+  # recipe.cbedge.net, in its own process (server-v2/household-server.js).
+  #
+  # Split out of the dashboard container on 2026-08-12. Before that these routes
+  # lived inside api-router.js, which meant a one-line recipe fix required
+  # `docker compose build dashboard` — a full `next build` — and a restart that
+  # dropped /ws/gex and made Theta reconnect. A cookbook tweak took the trading
+  # feed down mid-session. It also meant household code shared a heap with the
+  # feed recorders.
+  #
+  # SAME DATABASE, deliberately: it reads DATABASE_URL from the same .env.local,
+  # so "add all" on a recipe still writes hh_list_items rows budget reads, and
+  # both apps still share one hh_users login. The process boundary is the
+  # isolation; a data boundary would only be work.
+  #
+  # Loopback-only and not fronted by the tunnel — the two SPA nginx containers
+  # reach it over the compose network. The published port is for `curl` on the
+  # box when something looks wrong.
+  household:
+    build:
+      context: .
+      dockerfile: deploy/household/Dockerfile
+    image: cbedge-household:latest
+    container_name: household-api
+    restart: unless-stopped
+    env_file:
+      - .env.local
+    environment:
+      NODE_ENV: production
+      TZ: America/New_York
+      # NOT `PORT` — .env.local sets that to the dashboard's 3002 and env_file
+      # is applied before this block. A separate name means the two can never
+      # collide by accident.
+      HH_PORT: 3010
+    ports:
+      - "127.0.0.1:3010:3010"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3010/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
   # budget.cbedge.net — the household life-OS SPA (budget-vite/Dockerfile: node
-  # build stage → nginx), reverse-proxying ONLY /api to the dashboard container
-  # (same compose network → dashboard:3002). Deliberately narrower than the
+  # build stage → nginx), reverse-proxying ONLY /api to the household container
+  # (same compose network → household:3010). Deliberately narrower than the
   # owners service: this app never needs /ws or /proxy, so it cannot reach the
-  # market-data stack at all.
+  # market-data stack at all — and since the split it does not even share a
+  # process with it.
   #
   # Reached only via the Cloudflare Tunnel — add to /etc/cloudflared/config.yml
   # ABOVE the catch-all 404 rule:
@@ -178,15 +222,16 @@ services:
     container_name: budget-web
     restart: unless-stopped
     depends_on:
-      - dashboard
+      - household
     ports:
       # Loopback only — Cloudflare Tunnel reaches it, nothing public.
       - "127.0.0.1:8083:8083"
 
   # recipe.cbedge.net — the cookbook SPA (recipe-vite/Dockerfile: node build
-  # stage → nginx). Same narrow surface as budget: ONLY /api is reverse-proxied
-  # to the dashboard container (same compose network → dashboard:3002), so this
-  # app can never reach /ws or /proxy and the market-data stack.
+  # stage → nginx). Same narrow surface as budget: ONLY /api is reverse-proxied,
+  # and since 2026-08-12 to the `household` container (household:3010) rather
+  # than the dashboard — so this app shares neither a network path nor a process
+  # with the market-data stack.
   #
   # Shares the household auth (hh_users / hh_session) and, deliberately, the
   # household TABLES: "add all" writes hh_list_items rows and planning a meal
@@ -201,7 +246,7 @@ services:
   # then `cloudflared tunnel route dns <tunnel> recipe.cbedge.net` and
   # `systemctl restart cloudflared`.
   #
-  # AI import needs ANTHROPIC_API_KEY in .env.local (read by the DASHBOARD
+  # AI import needs ANTHROPIC_API_KEY in .env.local (read by the HOUSEHOLD
   # container, not this one — the key never leaves the backend). Without it,
   # link imports of sites that publish schema.org data still work; pasted text
   # returns a clear "not set up" message instead.
@@ -212,7 +257,7 @@ services:
     container_name: recipe-web
     restart: unless-stopped
     depends_on:
-      - dashboard
+      - household
     ports:
       # Loopback only — Cloudflare Tunnel reaches it, nothing public.
       - "127.0.0.1:8084:8084"

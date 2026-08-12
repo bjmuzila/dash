@@ -1,45 +1,97 @@
 # Changelog
 
-## 2026-08-12 - Flow tape Vol / OI / IV: TastyTrade fallback (Theta is paused)
+## 2026-08-12 - Household backend runs in its own container — recipe/budget deploys no longer restart the trading app
 
-`server-v2/proxy-tastytrade.js` — `_statsForGroup()` split into `_statsFromTheta()`
-+ new `_statsFromTT()`. `node --check` clean. No client change.
+New: `server-v2/household-server.js`, `deploy/household/{Dockerfile,package.json}`,
+compose service `household`.
+Edited: `server-v2/api-router.js` (household mount now opt-in),
+`docker-compose.yml`, `budget-vite/nginx.conf`, `recipe-vite/nginx.conf`,
+`recipe-vite/README.md`.
+Verified: booted the new process against an unreachable DATABASE_URL —
+`/health` 200 with 29 routes registered, `/api/hh/recipes` 401 no-session,
+DELETE 405, unknown path 404, and `/api/gex` 404 (proving the trading routes
+genuinely are not in this binary).
 
 ### What
 
-Every VOL / OI / IV cell on `/flow` rendered `—`. Live check:
-`/proxy/contract-stats?groups=SPX:2026-08-12` returned
-`{"stats":{"SPX|2026-08-12":{}},"groups":1}` — the group resolved, the map was
-empty. `/proxy/probe-rest` on the same contract answered fine and reported
-`"_src":"TT only (Theta paused)"`.
+`/api/hh/*` used to be registered inside `api-router.js`, which meant the
+cookbook and the budget app ran in the same process as the TastyTrade/dxLink
+feed, the WebSocket server and every in-process recorder. Two consequences,
+both bad:
 
-`contractStats()` was wired Theta-ONLY (`fetchOpenInterestTheta` /
-`fetchGreeksTheta` / `fetchVolumeTheta`). Under `DATA_SOURCE=tt` all three
-return empty, each `.catch(() => new Map())` swallowed it, and the endpoint
-answered `200 {}` — so the tape had no way to tell "no data" from "no source".
-The same three numbers were sitting on the TT chain the rest of the app runs on.
+1. **Deploy coupling.** `server-v2` is baked into the dashboard image, so a
+   one-line fix to a recipe parser required `docker compose build dashboard` —
+   a full `next build` — and a restart that dropped `/ws/gex` and made Theta
+   reconnect. Today's TikTok caption fix did exactly that, twice. At 10:30am it
+   would have taken the GEX feed down mid-session for a change no customer can
+   see.
+2. **Shared fate.** An unhandled rejection or a leak in household code — the
+   recipe photo path buffers image blobs in memory — degraded the process
+   recording market data. nginx already stopped these apps reaching `/ws` and
+   `/proxy` at the network level; nothing stopped them sharing a heap.
 
 ### How
 
-- **`_statsFromTT(root, expiry)`** — cached chain contracts for the expiry +
-  ONE batched `fetchOptionMarketData(..., 'equity-option')` pull, the same
-  source `fetchChainFull()` uses. IV stays decimal so the unit matches the
-  Theta path and the UI keeps owning the x100.
-- **Source follows `useTheta()`, and an EMPTY result falls through to the other
-  provider.** A paused or rate-limited upstream no longer blanks the tape when
-  the other one still has the numbers.
-- **Empty maps are no longer cached.** Previously one upstream hiccup pinned
-  `—` on the tape for the full 20s TTL; now the next poll retries.
-- **`CONTRACT_STATS_MAX_CONTRACTS = 800`** per group on the TT path. A full SPX
-  0DTE expiry is ~1600 contracts = ~16 broker round-trips, and the tape can ask
-  for up to 16 groups a poll. Flow prints land near the money, so the strikes
-  nearest spot are kept and the far tail is dropped.
-- Monthly Fridays return SPX (AM) and SPXW (PM) under one chain query and both
-  fold to the same `strike|type` key — the row that actually traded wins
-  instead of row order deciding.
-- `vol`/`oi` keep a real `0` (an untouched strike); `iv`/`mark` null out at 0.
-  Pre-9:30 ET, TT `volume` still holds the prior session's cumulative total, so
-  it is blanked rather than shown as today's.
+- **`server-v2/household-server.js`** — a small http server that mounts
+  `household-routes.cjs` and nothing else. This was cheap because that module
+  was already written as a mountable router taking `{ register, send, readJson }`
+  and uses **no `ctx` at all**, so the three primitives were copied verbatim
+  from api-router.js and everything else worked unchanged. No route is
+  implemented twice.
+- **Only two auth levels exist in it** — `public` and `household`. There is no
+  code path from a cbedge.net session into household data because the code to
+  follow one isn't in the binary; a route asking for `owner` gets a 500 rather
+  than a guess.
+- **`deploy/household/Dockerfile`** — its own `package.json` with `pg` and
+  `dotenv`, because the entire household stack requires `pg` plus node builtins
+  and nothing else. No Next, no React, no puppeteer download. Files are copied
+  by EXPLICIT NAME rather than `COPY server-v2/`: the moment the image can see
+  the trading modules, someone requires one and the isolation is gone silently.
+- **Compose service `household`** on `127.0.0.1:3010`, `env_file: .env.local`,
+  with its own healthcheck. `HH_PORT`, not `PORT` — `.env.local` sets `PORT` to
+  the dashboard's 3002 and env_file is applied first, so a separate name means
+  they can never collide.
+- **budget-vite and recipe-vite nginx** now `set $up household:3010`. Their
+  `depends_on` moved to `household`.
+- **api-router.js's mount is now opt-in** behind
+  `HOUSEHOLD_ROUTES_IN_DASHBOARD=1`, left unset. That exists for one situation:
+  the household container is down or unbuilt and you want budget.cbedge.net back
+  by pointing its nginx at `dashboard:3002`. With it on, the isolation above is
+  gone — it is a fire escape, not a setting.
+
+### What did NOT change, deliberately
+
+**The database.** Same `DATABASE_URL`, same tables. "Add all" on a recipe still
+writes `hh_list_items` rows that budget.cbedge.net reads, and both apps still
+share one `hh_users` login. Splitting the data would mean building an API
+between two of your own apps plus a second password — and a clean
+household-vs-trading DB line doesn't exist anyway, since the budget screens read
+the same tables `/owner/budget` writes.
+
+### Deploy
+
+The trading app does not need to restart for this. Bring the new backend up
+first, then repoint the two SPAs:
+
+```
+git pull
+docker compose build household && docker compose up -d household
+curl -s http://127.0.0.1:3010/health        # {"ok":true,"routes":29,"db":true}
+
+docker compose build recipes budget
+docker compose up -d recipes budget
+```
+
+Confirm both apps still work (sign in, open the grocery list), then rebuild the
+dashboard whenever it next suits you — after the close — to drop the now-dormant
+in-process copy:
+
+```
+docker compose build dashboard && docker compose up -d dashboard
+```
+
+Until that rebuild the old image still registers the routes internally. Harmless:
+nothing routes to them any more.
 
 ## 2026-08-12 - Cookbook goes dark: recipe.cbedge.net now uses the budget theme
 

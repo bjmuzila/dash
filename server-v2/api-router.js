@@ -8444,21 +8444,35 @@ if barstate.islast
 }
 
 // ---------------------------------------------------------------------------
-// budget.cbedge.net — household life-OS routes (/api/hh/*).
+// budget.cbedge.net + recipe.cbedge.net — household routes (/api/hh/*).
 //
-// Kept in its own module (server-v2/household-routes.cjs) rather than inline:
-// this file is already 8k lines, and the household app is a separate product
-// with a separate auth system. Loaded DEFENSIVELY, exactly like the _lib-*
-// bundles above — if it or its DB layer is missing, /api/hh/* is simply never
-// registered and nothing else in this file changes behaviour. It cannot break
-// the trading app's boot.
+// MOVED OUT, 2026-08-12. These now run in their own process and their own
+// container: server-v2/household-server.js, built from deploy/household/
+// Dockerfile, service `household` in docker-compose.yml. budget-web and
+// recipe-web nginx proxy /api straight to it and never touch this process.
+//
+// Why: server-v2 is baked into the dashboard image, so a one-line fix to a
+// recipe parser meant a full `next build` and a restart that dropped /ws/gex
+// and made Theta reconnect — taking the feed down mid-session for a change no
+// customer can see. And a leak or an unhandled rejection in household code
+// (the recipe photo path buffers image blobs) degraded the process recording
+// market data. Separate processes fix both; the DATABASE stays shared, which
+// is what keeps "add to grocery list" and one household login working.
+//
+// The escape hatch below is for one situation only: the household container is
+// down/unbuilt and you need budget.cbedge.net back by pointing its nginx at
+// dashboard:3002. Set HOUSEHOLD_ROUTES_IN_DASHBOARD=1 and redeploy. Leave it
+// unset in normal operation — with it on, household code is back in this
+// process and the isolation above is gone.
 // ---------------------------------------------------------------------------
-try {
-  const { registerHouseholdRoutes } = require('./household-routes.cjs');
-  const n = registerHouseholdRoutes({ register, send, readJson });
-  if (n) console.log(`[api-router] household routes registered (${n})`);
-} catch (e) {
-  console.warn('[api-router] household routes not loaded:', e.message);
+if (process.env.HOUSEHOLD_ROUTES_IN_DASHBOARD === '1') {
+  try {
+    const { registerHouseholdRoutes } = require('./household-routes.cjs');
+    const n = registerHouseholdRoutes({ register, send, readJson });
+    if (n) console.log(`[api-router] household routes registered IN-PROCESS (${n}) — fallback mode`);
+  } catch (e) {
+    console.warn('[api-router] household routes not loaded:', e.message);
+  }
 }
 
 module.exports = { handleApiRoute, register, _routes: ROUTES };
