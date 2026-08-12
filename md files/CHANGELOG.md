@@ -1,150 +1,169 @@
 # Changelog
 
-## 2026-08-12 - GEX Top Change cards: entry basis is now the slot's mark, not the first-ever probe
+## 2026-08-12 - owner.cbedge.net sign-in loop was Cloudflare Access, not app code
 
-Edited: `components/scanner/GexChangeTop.tsx` (one expression, ~line 806).
+No repo change. Fixed in the Cloudflare Zero Trust dashboard.
 
-### What
+### Symptom
 
-A card could report a loss the pick never took. PLTR `250814 180C`, flagged in
-the 10:30 slot, showed `IN 1.72 → NOW 0.34 · −80.2%` while its own chart never
-traded above ~1.00 all session — the dashed entry line floated above the entire
-series, and the scorecard row for the same contract read roughly flat.
+Open owner.cbedge.net → sign in → land back on the normal cbedge.net site. Every time.
 
-### Why
+### Cause
 
-The card read its entry from `watch_options.added_price`, which is **write-once
-at the contract's first ever probe**. `/api/watch`'s `add` upserts on
-(ticker, expiry, strike, side) and only stamps the mark when the row is NEW, so
-a strike already in the watch pipeline from an earlier day keeps that day's
-mark forever. PLTR's 1.72 came from a 3-DTE probe days earlier; the 10:30
-re-flag hit the upsert and changed nothing.
+Cloudflare Access was protecting `owner.cbedge.net/api/*`. `owner-vite/src/AuthGate.tsx:29`
+fetches `/api/auth/me` on mount; Access answered that XHR with a 302 to
+`dawn-mode-a754.cloudflareaccess.com/cdn-cgi/access/login/owner.cbedge.net`, which the
+browser blocks as cross-origin. An XHR cannot complete an interactive Access login — the
+redirect is unfollowable by design. `AuthGate:38` catches any thrown fetch and falls to
+`status: "signedout"`, whose button is a hardcoded `https://cbedge.net/sign-in`
+(`AuthGate.tsx:22`). Sign in there and `components/auth/AuthForm.tsx:190` hard-navigates
+to `/home` on the apex. That is the whole loop — no owner-flag or session bug involved.
 
-`computeResults()` in `server-v2/gex-change-top-recorder.js` already handles
-this — it anchors entry to the first snapshot at/after the slot the pick was
-first flagged that day and only falls back to `added_price`. The scorecard was
-right; the card above it was not. Same contract, two bases, page contradicting
-itself.
+Confirmed with `curl -sI https://owner.cbedge.net/api/auth/me`:
+`HTTP/2 302` plus `www-authenticate: Cloudflare-Access`.
 
-### How
+### Fix
 
-The component already builds `entryById` (watch_id → the scorecard's entry) for
-the floor badge. The card's entry now reads from it, with `added_price` kept as
-the fallback for a pick the scorecard has no entry for (never snapshotted, or
-results not yet loaded):
+Removed the Access protection covering that hostname's API path. Verified: same curl now
+returns `HTTP/2 200`.
 
-```ts
-const entry =
-  (wid != null ? entryById.get(wid) : undefined) ??
-  h?.contract?.added_price ??
-  null;
-```
+Losing the edge layer costs no authorization — `AuthGate` blocks any response without
+`isOwner`, and `server-v2/api-router.js:184-188` 403s every `level: 'owner'` endpoint for
+a non-owner session.
 
-`entry` feeds the headline `IN → NOW` row, the `$/ct`, the pnl color, the
-dashed baseline on the price chart and the `entry @` footer, so all five move
-together. No server or schema change — `added_price` stays write-once on
-purpose (it is the honest basis for the ORIGINAL probe and the scorecard still
-references it).
+### Ruled out along the way
 
-## 2026-08-12 - Owner dashboard sign-in loop: session cookie is now parent-domain scoped
+- **`SESSION_COOKIE_DOMAIN` was already set** on the VPS (`/opt/dashboard/.env.local`,
+  three duplicate lines — harmless, last wins). Verified the cookie mints correctly:
+  `set-cookie: cbe_session=...; Domain=.cbedge.net; Secure; HttpOnly; SameSite=lax`.
+  Worth knowing it is load-bearing: without it the cookie is host-only and never reaches
+  the subdomain. It is NOT in git (`.gitignore:5`), so it lives only on the VPS.
+- **Owner gating in `middleware.ts`** — its only redirect to `/` is the `!userId` branch
+  (line 184); a signed-in non-owner goes to `/home` (line 208-213). The apex landing meant
+  the request genuinely carried no session, which pointed at transport, not authorization.
+- **The Cloudflare API is a dead end here.** `CLOUDFLARE_API_TOKEN` in `.env.local` is
+  zone-scoped: `/accounts` returns `[]` and `/accounts/{id}/access/apps` returns an empty
+  result with `success: true` — blindness, not absence. Zero Trust changes need the
+  dashboard or an account-scoped token.
 
-Edited: `.env.local` (added `SESSION_COOKIE_DOMAIN=.cbedge.net`).
-No code change — `lib/auth/session.ts:23` already reads the var; it was set nowhere
-(not `.env`, `.env.local`, `docker-compose.yml`, or the `Dockerfile`).
+### Still open
 
-### What
+- `NEXT_PUBLIC_APP_URL` / `NEXT_PUBLIC_SITE_URL` remain `https://www.cbedge.net` while
+  `AuthGate.tsx:22` points at the bare apex. Harmless now that the cookie is
+  parent-domain scoped, but the two vars drive the Google OAuth `redirect_uri`
+  (`app/api/auth/google/start/route.ts:15` builds it, `app/auth/callback/route.ts:34`
+  rebuilds it for the token exchange — they must byte-match each other and the URI
+  registered in Google Cloud Console) and the Discord redirect. Flipping to the apex needs
+  those registrations plus a `www → apex` 301 FIRST.
+- `AuthGate`'s sign-in button drops you at `/home` rather than returning to owner. A
+  `?next=` handoff would close that.
+- Console 404 flood on the dashboard (`/logos/*.png` → `/proxy/ticker-logo?sym=...`) is
+  unrelated and cosmetic — missing logo assets falling through to a fallback that also 404s.
 
-Signing in and landing on owner.cbedge.net bounced straight back to the apex.
-Two independent causes:
+### Credentials exposed during debugging
 
-1. **Cloudflare Access is intercepting `owner.cbedge.net/api/auth/me`.** The
-   console shows that fetch 302'ing to
-   `dawn-mode-a754.cloudflareaccess.com/cdn-cgi/access/login/owner.cbedge.net`,
-   which the browser then blocks as cross-origin. `owner-vite/src/AuthGate.tsx:38`
-   treats any thrown fetch as `status: "signedout"`, and its `SIGN_IN_URL` is a
-   hardcoded `https://cbedge.net/sign-in` — so you sign in on the apex,
-   `AuthForm` hard-navigates to `/home`, and you never return. An XHR cannot
-   satisfy an Access login redirect. **Fix lives in the Cloudflare Zero Trust
-   dashboard, not this repo:** add a Bypass policy for `owner.cbedge.net/api/*`
-   (or keep a valid CF_Authorization session for that hostname).
-2. **The session cookie could not reach the subdomain.** `SESSION_COOKIE_DOMAIN`
-   was unset, so `sessionCookieOptions()` omitted `domain` and `cbe_session` was
-   host-only. owner.cbedge.net (proxied to `dashboard:3002` via
-   `owner-vite/nginx.conf:25`) therefore sent no cookie, `/api/auth/me` returned
-   `{user:null}`, and AuthGate blocked. The same split existed between
-   `cbedge.net` and `www.cbedge.net`.
+The owner account password and a live 30-day session token were pasted into a shell and a
+chat transcript. All 97 rows deleted from `sessions`; password and
+`CLOUDFLARE_API_TOKEN` still need rotating.
 
-Only middleware's `!userId` branch (`middleware.ts:184`) redirects to `/` — a
-signed-in non-owner goes to `/home`. That confirmed the request was arriving with
-no valid session, not with an owner-flag problem.
+## 2026-08-12 - Cookbook: sort toolbar, "main ingredient", and bulk URL import
 
-### How
+New: `main_ingredient` + `needs_review` columns, `hh_recipe_import_jobs` /
+`hh_recipe_import_items`, `POST|GET /api/hh/recipes/bulk`,
+`server-v2/scripts/backfill-recipe-mains.js`, a Bulk tab on Add.
+Edited: `_lib-household-recipes.cjs`, `_lib-household.cjs`,
+`household-routes.cjs`, `household-server.js`, `deploy/household/Dockerfile`,
+`recipe-vite/src/{api.ts,pages/Cookbook.tsx,pages/Add.tsx,pages/Recipe.tsx}`.
+Verified: selftest 45 → **76 passed**; `npx tsc --noEmit` and `npm run build`
+clean; the household process boots with **30 routes** and every new endpoint
+401s without a session.
 
-`SESSION_COOKIE_DOMAIN=.cbedge.net` — one value, shared across the apex, `www`,
-and `owner`. This also removes the apex/www cookie split without touching
-`NEXT_PUBLIC_APP_URL` / `NEXT_PUBLIC_SITE_URL`, which stay on `www.cbedge.net`
-for now because those two drive the **Google OAuth `redirect_uri`**
-(`app/api/auth/google/start/route.ts:15` builds it, `app/auth/callback/route.ts:34`
-rebuilds it for the token exchange — they must byte-match each other AND the URI
-registered in Google Cloud Console) and the Discord OAuth redirect. Flipping them
-to the apex requires registering `https://cbedge.net/auth/callback` in Google
-Cloud Console and `https://cbedge.net/api/discord/callback` in the Discord portal
-FIRST, plus a Cloudflare 301 `www → apex`. Deferred deliberately.
+### Sorting
+
+Seven orders — recently added, recently changed, name, main ingredient, cook
+time, most cooked, calories — resolved from a **whitelist** of fixed `ORDER BY`
+fragments. There is no path from a query parameter into the query text, and the
+selftest asserts every fragment is free of placeholders and statement breaks.
+
+Server-side, like search, because sorting in the client sorts the *page* rather
+than the cookbook.
+
+Favourites no longer jump the queue. They did while "recently added" was the only
+order, but a "sort by name" that silently floats four starred recipes above the
+As isn't sorted by name — it's sorted by something you didn't ask for.
+
+The toolbar is collapsed behind one line by default: three stacked filter rows on
+a 390px screen push the first recipe off the fold, and most visits are "open it
+and scroll".
+
+### Main ingredient
+
+A **stored column**, not a per-query derivation — deriving it means unpacking a
+JSONB array for every row of the index screen, and you can't `ORDER BY` it
+without doing that twice. Written on create, recomputed when the title or the
+ingredients change.
+
+The guess reads the **title first**. "Cheesy Butter Chicken Garlic Bread" has
+sixteen ingredients and exactly one of them is the point; an ingredient-first
+scan files it under *ciabatta loaf*, the line that happens to be listed first.
+Only when the title yields nothing does it fall back to the best-ranked
+ingredient aisle (meat → produce → dairy → …). Heroes are matched
+longest-first, so a thigh recipe doesn't land under plain "chicken".
+
+When neither is confident it stays **NULL and sorts last**. A recipe filed under
+a random pantry item sorts somewhere absurd — worse than sitting in the unsorted
+bucket where you can see it needs a hand.
+
+It also became a filter facet ("chicken · 7"), because a sort you can't narrow to
+is half a feature, and it took the Skill slot in the recipe stat row — a value
+you can sort by but never see is a value you distrust.
+
+### Bulk import
+
+`POST /api/hh/recipes/bulk {urls}` takes a paste of up to 60 links — newlines,
+commas, stray quotes, duplicates dropped by origin+path so the same video shared
+twice imports once.
+
+It **cannot** be one request: thirty TikToks is thirty fetches plus thirty Claude
+calls, minutes of work, past nginx's 180s and long past how long a phone screen
+stays awake. So the POST writes rows and returns a job id, two workers chew
+through the queue, and the client polls every 2s while it runs.
+
+Both tables are real rows, which buys three things: the progress list survives a
+refresh, a failed link records its error beside its URL while the other
+fifty-nine carry on, and a batch mid-flight when the process died is **resumed on
+boot** — from `household-server.js` only, never from the api-router fallback
+mount, because import work has no business in the trading process. Items are
+claimed with `FOR UPDATE SKIP LOCKED`, so a double resume finds nothing to do
+rather than importing everything twice.
+
+**The one policy decision: bulk saves without review.** Single imports still
+never touch the database until you press save. Bulk writes immediately with
+`needs_review = true`.
+
+That inconsistency is the point. A review queue you must clear before anything
+lands is a queue nobody clears at thirty items — you'd sit through twenty screens
+or abandon the batch and lose the lot. Saving first and flagging second means the
+work is never wasted: recipes are searchable and cookable at once, "N TO REVIEW"
+is a filter chip on the Cookbook, rows carry a NEW tag, and each recipe shows a
+banner with one button to clear it. A wrong amount in a saved recipe is a small
+annoyance; re-pasting thirty links is not.
+
+Cancel stops the queue but lets the in-flight item finish and save — killing a
+Claude call already paid for is pure waste.
 
 ### Deploy
 
-`.env.local` is gitignored, so this does not ship through GitHub. On the VPS:
-append the line to `/opt/dashboard/.env.local`, then
-`docker compose up -d --force-recreate dashboard`. No image rebuild — the var is
-runtime-only (`.dockerignore:5` keeps `.env.local` out of the build stage, so
-Next never inlines it).
+```
+git pull
+docker compose build household && docker compose up -d household
+curl -s http://127.0.0.1:3010/health          # routes: 30
+docker compose build recipes  && docker compose up -d recipes
+docker compose exec -T household node server-v2/scripts/backfill-recipe-mains.js
+```
 
-Existing users hold host-only `cbe_session` cookies under the same name; both ride
-along until cleared. `clearSessionCookie()` (`lib/auth/session.ts:60-75`) already
-emits both forms, so one sign-out/sign-in clears the old one.
-
-### Unrelated, still open
-
-The 404 flood in the same console (`/logos/*.png`, then
-`/proxy/ticker-logo?sym=...`) is cosmetic — missing logo assets falling through to
-the proxy fallback, which 404s too.
-
-## 2026-08-12 - Scanner walls + CORE now computed on OI+VOLUME net GEX, not OI alone
-
-Edited: `server-v2/scanner-recorder.js`.
-
-### What
-
-Every level the scanner sweep records — `call_wall`, `put_wall`, `cb` (CORE), and
-the per-level `call_wall_gex` / `put_wall_gex` / `cb_gex` columns — is ranked by
-`oiVolNet(r) = netGEX + netVolGEX` in `computation/gex-calculator.js`. But
-`toGexRows()` in the sweep hardcoded `volume: 0`, so `netVolGEX` was always zero
-and those levels were in fact **OI-only**.
-
-That silently disagreed with the rest of the app: the dashboard GEX chart, the
-heatmap and MVC all feed real volume into the same calculator, so a wall on the
-Scanner / Level Log page (`/app/level-log` → `/proxy/walls` → `scanner_snapshots`)
-could sit at a different strike than the wall drawn on the chart for the same
-symbol and second. The `cb` column comment even claimed "largest |net GEX| (OI +
-vol)" — now true.
-
-### How
-
-- `toGexRows(expiryRows, volMap)` takes `fetchVolumeTheta()`'s Map (keyed
-  `expiration|strike|type`, identical in both adapters) and fills `volume` per
-  contract. A missing key is a true 0 (contract hasn't traded), not a gap.
-- `snapshotTicker()` fetches volume inside the existing `Promise.all` next to
-  `buildExpiryRows` / `resolveSpot`. On the TastyTrade adapter this reads the same
-  cached whole-chain payload — free. On Theta it is one extra snapshot call per
-  root per sweep. A failure degrades that root to the old OI-only basis and logs
-  it, rather than dropping the ticker.
-- Strike filter widened to `oi > 0 || volume > 0 || gamma !== 0`. A strike with
-  zero OI that is trading heavily today carries real `netVolGEX` — under the old
-  filter it was dropped, hiding a wall being built intraday.
-
-`forward-scanner-recorder.js` calls the same `snapshotTicker()` and inherits this
-(volume is thin on far-dated expiries, so its walls will barely move).
-
+Run the backfill or the whole existing library sits in the NULL bucket and "sort
+by main ingredient" looks broken on the one screen you'd check it on.
 
 ## 2026-08-12 - Household backend runs in its own container — recipe/budget deploys no longer restart the trading app
 

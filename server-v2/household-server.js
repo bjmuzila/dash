@@ -203,4 +203,23 @@ process.on('uncaughtException', (e) => { console.error('[household] uncaughtExce
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[household] listening on ${PORT} — ${registered} routes, db ${hh ? 'up' : 'MISSING'}`);
   if (!process.env.DATABASE_URL) console.warn('[household] WARNING: DATABASE_URL is not set');
+
+  // Pick up any bulk recipe import that was mid-flight when this process last
+  // died. Deliberately HERE and not in the module: the api-router fallback mount
+  // shares a process with the trading feed, and import work — page fetches, AI
+  // calls, image buffers — has no business running there.
+  //
+  // Delayed a moment so the first /health lands before a batch starts competing
+  // for the connection pool, and swallowed on failure: a resume that can't run
+  // must not stop the server that just came up.
+  setTimeout(() => {
+    try {
+      const recipes = require('./_lib-household-recipes.cjs');
+      if (recipes.available && recipes.available()) {
+        recipes.resumeImportJobs()
+          .then((n) => { if (n) console.log(`[household] resumed ${n} import job(s)`); })
+          .catch((e) => console.warn('[household] resume failed:', e?.message || e));
+      }
+    } catch (e) { console.warn('[household] recipes lib unavailable for resume:', e?.message || e); }
+  }, 3000).unref();
 });

@@ -627,6 +627,110 @@ async function importRecipe({ url, text }) {
 }
 
 // ---------------------------------------------------------------------------
+// Main ingredient
+// ---------------------------------------------------------------------------
+//
+// "What's this recipe actually OF" — the thing you sort by when you're standing
+// in front of the fridge with chicken to use up. Stored as a column rather than
+// derived per query, because deriving it means unpacking a JSONB array for every
+// row of the index screen and you cannot ORDER BY it without doing that twice.
+//
+// TITLE FIRST, ingredients second. "Cheesy Butter Chicken Garlic Bread" has
+// sixteen ingredients and only one of them is the point; the title already tells
+// you which. Scanning the list first would file that recipe under "ciabatta
+// loaf" because that's the line that happens to come first.
+
+const HEROES = [
+  // Proteins, most specific first — 'chicken thigh' must beat 'chicken', and
+  // 'ground beef' must not be filed under 'bread' because of "b".
+  'guanciale', 'pancetta', 'prosciutto', 'chorizo', 'bacon', 'sausage', 'meatball',
+  'short rib', 'brisket', 'steak', 'ground beef', 'beef', 'lamb', 'pork belly', 'pork',
+  'chicken thigh', 'chicken breast', 'chicken', 'turkey', 'duck',
+  'salmon', 'tuna', 'cod', 'haddock', 'tilapia', 'prawn', 'shrimp', 'scallop', 'crab',
+  'halloumi', 'paneer', 'tofu', 'tempeh', 'egg',
+  // Vegetable and carb heroes — a recipe genuinely OF one thing.
+  'mushroom', 'aubergine', 'eggplant', 'courgette', 'zucchini', 'cauliflower',
+  'broccoli', 'sweet potato', 'potato', 'squash', 'pumpkin', 'chickpea', 'lentil',
+  'black bean', 'bean', 'corn', 'tomato', 'spinach', 'kale', 'cabbage', 'leek',
+  'pasta', 'gnocchi', 'rice', 'noodle', 'ramen', 'orzo', 'couscous', 'quinoa',
+  'bread', 'dough', 'tortilla',
+  // Sweet.
+  'banana', 'apple', 'berry', 'strawberry', 'blueberry', 'raspberry', 'peach',
+  'lemon', 'lime', 'orange', 'chocolate', 'caramel', 'cheesecake', 'custard',
+];
+
+/** Aisle preference when the title gives nothing away. Meat is almost always
+ *  the answer; household/other never is. */
+const AISLE_RANK = { meat: 0, produce: 1, dairy: 2, bakery: 3, frozen: 4, pantry: 5, other: 9, household: 9 };
+
+/** "boneless skinless chicken thighs, trimmed" → "chicken thigh". */
+function tidyIngredientName(text) {
+  let t = String(text || '').toLowerCase()
+    .split(',')[0]                                   // drop "…, finely diced"
+    .replace(/\([^)]*\)/g, ' ')                       // drop parentheticals
+    .replace(/\b(fresh|freshly|large|small|medium|boneless|skinless|ripe|raw|cooked|frozen|canned|tinned|chopped|diced|sliced|minced|grated|shredded|ground|extra|virgin|unsalted|salted|light|low[- ]fat|plain|whole|good|quality|optional|to taste|of)\b/g, ' ')
+    .replace(/[^a-z\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // Singularise the last word only — "chicken thighs" → "chicken thigh", but
+  // never "hummus" → "hummu".
+  const w = t.split(' ');
+  if (w.length) {
+    const last = w[w.length - 1];
+    if (/(?<![su])s$/.test(last) && last.length > 3) w[w.length - 1] = last.slice(0, -1);
+  }
+  return w.slice(0, 3).join(' ').trim() || null;
+}
+
+function guessMainIngredient(title, ingredients) {
+  const hay = String(title || '').toLowerCase();
+  for (const h of HEROES) if (hay.includes(h)) return h;
+
+  // Nothing in the title. Fall back to the best-ranked ingredient, and within a
+  // rank the first one listed — recipe writers put the star first.
+  const list = Array.isArray(ingredients) ? ingredients : [];
+  let best = null;
+  let bestRank = 99;
+  for (const ing of list) {
+    const rank = AISLE_RANK[ing?.aisle] ?? 9;
+    if (rank < bestRank) { bestRank = rank; best = ing; }
+    if (bestRank === 0) break;
+  }
+  // Rank 9 means everything was 'other'/'household' — a guess from that is worse
+  // than admitting we don't know, because it would sort under something absurd.
+  if (!best || bestRank >= 9) {
+    for (const ing of list) {
+      const t = tidyIngredientName(ing?.item);
+      for (const h of HEROES) if (t && t.includes(h)) return h;
+    }
+    return null;
+  }
+  return tidyIngredientName(best.item);
+}
+
+// ---------------------------------------------------------------------------
+// Sort
+// ---------------------------------------------------------------------------
+//
+// A whitelist, not a string spliced into SQL. Every key maps to a fixed ORDER BY
+// fragment; anything unrecognised falls back to 'recent'. There is no path from
+// a query parameter into the query text.
+//
+// NULLS LAST everywhere it matters: a recipe with no cook time recorded should
+// not lead a list sorted by cook time, and one with no main ingredient should
+// not sit above every named one.
+const SORTS = {
+  recent:    { label: 'Recently added', sql: 'created_at DESC, id DESC' },
+  updated:   { label: 'Recently changed', sql: 'updated_at DESC, id DESC' },
+  name:      { label: 'Name', sql: 'lower(title) ASC' },
+  main:      { label: 'Main ingredient', sql: 'main_ingredient ASC NULLS LAST, lower(title) ASC' },
+  time:      { label: 'Cook time', sql: 'COALESCE(prep_minutes,0) + COALESCE(cook_minutes,0) ASC NULLS LAST, lower(title) ASC' },
+  cooked:    { label: 'Most cooked', sql: 'cooked_count DESC, last_cooked_at DESC NULLS LAST' },
+  calories:  { label: 'Calories', sql: 'calories ASC NULLS LAST, lower(title) ASC' },
+};
+const SORT_KEYS = Object.keys(SORTS);
+
+// ---------------------------------------------------------------------------
 // Read
 // ---------------------------------------------------------------------------
 
@@ -635,11 +739,13 @@ async function importRecipe({ url, text }) {
 // screen, and on a phone that is the difference between instant and not.
 const CARD_COLS = `id, owner_id, visibility, title, description, image_url, source_url, source_name,
   servings, prep_minutes, cook_minutes, calories, category, skill, favorite,
+  main_ingredient, needs_review,
   cooked_count, last_cooked_at, jsonb_array_length(ingredients) AS ingredient_count,
   created_at, updated_at`;
 
 const FULL_COLS = `id, owner_id, visibility, title, description, image_url, source_url, source_name,
   servings, prep_minutes, cook_minutes, calories, category, skill, favorite, notes,
+  main_ingredient, needs_review,
   ingredients, steps, cooked_count, last_cooked_at, created_at, updated_at`;
 
 /**
@@ -659,7 +765,7 @@ const IMG_ETAG = `(SELECT i.etag FROM hh_recipe_images i WHERE i.recipe_id = hh_
 const CARD_SELECT = `${CARD_COLS}, ${IMG_ETAG}`;
 const FULL_SELECT = `${FULL_COLS}, ${IMG_ETAG}`;
 
-async function listRecipes(userId, { q, category, favorite } = {}) {
+async function listRecipes(userId, { q, category, main: mainFilter, favorite, sort, needsReview } = {}) {
   const pool = libDb.getPool();
   const where = [VISIBLE];
   const vals = [userId];
@@ -675,20 +781,44 @@ async function listRecipes(userId, { q, category, favorite } = {}) {
     vals.push(normCategory(category));
     where.push(`category = $${vals.length}`);
   }
+  const main = str(mainFilter, 60);
+  if (main) {
+    vals.push(main.toLowerCase());
+    where.push(`main_ingredient = $${vals.length}`);
+  }
   if (favorite) where.push('favorite = TRUE');
+  if (needsReview) where.push('needs_review = TRUE');
+
+  // Favourites no longer jump the queue. They did while 'recently added' was the
+  // only order, but "sort by name" that silently puts four starred recipes above
+  // the As isn't sorted by name — it's sorted by something you didn't ask for.
+  const order = SORTS[String(sort || '')] ? SORTS[sort].sql : SORTS.recent.sql;
 
   const { rows } = await pool.query(
     `SELECT ${CARD_SELECT} FROM hh_recipes WHERE ${where.join(' AND ')}
-      ORDER BY favorite DESC, updated_at DESC LIMIT 500`, vals);
+      ORDER BY ${order} LIMIT 500`, vals);
 
-  const { rows: counts } = await pool.query(
-    `SELECT category, COUNT(*)::int AS n FROM hh_recipes WHERE ${VISIBLE} GROUP BY category`, [userId]);
+  const [{ rows: counts }, { rows: mains }, { rows: flags }] = await Promise.all([
+    pool.query(`SELECT category, COUNT(*)::int AS n FROM hh_recipes WHERE ${VISIBLE} GROUP BY category`, [userId]),
+    // The main-ingredient facet, so the UI can offer "chicken (7)" as a filter
+    // rather than making you search for a word you have to already know is there.
+    pool.query(`SELECT main_ingredient AS m, COUNT(*)::int AS n FROM hh_recipes
+                 WHERE ${VISIBLE} AND main_ingredient IS NOT NULL
+                 GROUP BY main_ingredient ORDER BY n DESC, m ASC LIMIT 40`, [userId]),
+    pool.query(`SELECT COUNT(*) FILTER (WHERE needs_review)::int AS review,
+                       COUNT(*)::int AS total FROM hh_recipes WHERE ${VISIBLE}`, [userId]),
+  ]);
 
   return {
     recipes: rows,
     categories: CATEGORIES,
     counts: Object.fromEntries(counts.map((c) => [c.category, c.n])),
+    mains: mains.map((r) => ({ name: r.m, n: r.n })),
+    sorts: SORT_KEYS.map((k) => ({ key: k, label: SORTS[k].label })),
+    sort: SORTS[String(sort || '')] ? sort : 'recent',
+    needsReview: flags[0]?.review ?? 0,
     total: rows.length,
+    libraryTotal: flags[0]?.total ?? 0,
     aiConfigured: aiConfigured(),
   };
 }
@@ -736,8 +866,9 @@ async function createRecipe(userId, r) {
   const { rows } = await libDb.getPool().query(
     `INSERT INTO hh_recipes
        (owner_id, visibility, title, description, image_url, source_url, source_name,
-        servings, prep_minutes, cook_minutes, calories, category, skill, notes, ingredients, steps)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb)
+        servings, prep_minutes, cook_minutes, calories, category, skill, notes, ingredients, steps,
+        main_ingredient, needs_review)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17,$18)
      RETURNING ${FULL_COLS}`,
     [userId, SHARED, title, str(r.description, 1000) || null, str(r.imageUrl, 1000) || null,
      str(r.sourceUrl, 2000) || null, str(r.sourceName, 120) || null,
@@ -745,7 +876,8 @@ async function createRecipe(userId, r) {
      posInt(r.calories, 20000),
      r.category ? normCategory(r.category) : guessCategory(title),
      normSkill(r.skill), str(r.notes, 4000) || null,
-     JSON.stringify(ingredients), JSON.stringify(normSteps(r.steps))]);
+     JSON.stringify(ingredients), JSON.stringify(normSteps(r.steps)),
+     guessMainIngredient(title, ingredients), !!r.needsReview]);
 
   // Copy the photo in the BACKGROUND, deliberately not awaited. Saving a recipe
   // must not sit on someone else's CDN for ten seconds, and the gap is already
@@ -795,6 +927,12 @@ async function updateRecipe(userId, id, patch) {
   const { rows } = await libDb.getPool().query(
     `UPDATE hh_recipes SET ${sets.join(', ')} WHERE id=$2 AND ${VISIBLE} RETURNING ${FULL_COLS}`, vals);
   if (!rows[0]) throw new Error('Not found.');
+
+  if (patch.title !== undefined || patch.ingredients !== undefined) {
+    const main = guessMainIngredient(rows[0].title, rows[0].ingredients);
+    await libDb.getPool().query(`UPDATE hh_recipes SET main_ingredient=$2 WHERE id=$1`, [rows[0].id, main]);
+    rows[0].main_ingredient = main;
+  }
 
   // Pointing the recipe at a new photo re-copies it. Same background treatment
   // as create — and an explicit upload (setImageFromDataUrl) is untouched by
@@ -1027,6 +1165,201 @@ async function deleteImage(userId, recipeId) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Bulk import
+// ---------------------------------------------------------------------------
+//
+// Thirty TikTok links is thirty page fetches and — because TikTok publishes no
+// structured data — thirty Claude calls. At five to twenty seconds each that is
+// minutes of work, so it CANNOT be one HTTP request: nginx gives up at 180s and
+// the phone screen locks long before that.
+//
+// So it's a job. POST returns a job id immediately, the work happens in this
+// process, and the client polls. Both tables are real rows, which means the
+// progress list survives a container restart and a half-finished batch can be
+// picked up again instead of silently vanishing.
+//
+// ── THE ONE POLICY DECISION ────────────────────────────────────────────────
+// Single imports never write to the database until you press save on the review
+// screen. Bulk imports DO save, immediately, flagged needs_review = true.
+//
+// That inconsistency is deliberate. A review queue you must clear before
+// anything lands is a queue nobody clears at 30 items — you'd sit through
+// twenty screens or abandon the batch and lose the lot. Saving first and
+// flagging second means the work is never wasted: the recipes are searchable and
+// cookable straight away, and "Needs review" is a filter you work through when
+// you feel like it. A wrong ingredient in a saved recipe is a small annoyance;
+// re-pasting thirty links is not.
+
+/** Sequential-ish. Two at a time is polite to the sites and keeps AI spend
+ *  legible; twenty parallel fetches of one domain is how you get rate-limited
+ *  into a batch of failures. */
+const BULK_CONCURRENCY = 2;
+
+/** Guard against a paste that was never a list of links. */
+const BULK_MAX_URLS = 60;
+
+/** Accepts a textarea paste: newlines, commas, or whitespace between links, with
+ *  or without stray quotes and trailing punctuation. */
+function parseUrlList(input) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of String(input || '').split(/[\s,]+/)) {
+    const t = raw.trim().replace(/^["'<(]+|["'>).,;]+$/g, '');
+    if (!/^https?:\/\//i.test(t)) continue;
+    let key;
+    try {
+      const u = new URL(t);
+      // Strip tracking junk so the same video pasted from two shares doesn't
+      // import twice. Everything TikTok needs is in the path.
+      key = u.origin + u.pathname.replace(/\/$/, '');
+    } catch { continue; }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+    if (out.length >= BULK_MAX_URLS) break;
+  }
+  return out;
+}
+
+async function createImportJob(userId, urls) {
+  const list = parseUrlList(urls);
+  if (!list.length) throw new Error('No links found in that.');
+
+  const pool = libDb.getPool();
+  const { rows: [job] } = await pool.query(
+    `INSERT INTO hh_recipe_import_jobs (owner_id, total, status)
+     VALUES ($1,$2,'running') RETURNING id, total, status, created_at`,
+    [userId, list.length]);
+
+  // One INSERT for the lot — thirty round trips to record thirty URLs is thirty
+  // chances for the request to die half-recorded.
+  const values = list.map((_, i) => `($1, $${i + 2}, 'pending')`).join(',');
+  await pool.query(
+    `INSERT INTO hh_recipe_import_items (job_id, url, status) VALUES ${values}`,
+    [job.id, ...list]);
+
+  // Not awaited: the caller gets its job id now and polls. runJob owns its own
+  // errors, so nothing here can produce an unhandled rejection.
+  runJob(userId, job.id).catch((e) => console.error('[hh-recipes] job', job.id, 'died:', e?.message || e));
+  return { ...job, urls: list.length };
+}
+
+/**
+ * Work one job to completion. Safe to call twice for the same job — items are
+ * claimed with a conditional UPDATE, so a second runner finds nothing to do
+ * rather than importing everything a second time.
+ */
+async function runJob(userId, jobId) {
+  const pool = libDb.getPool();
+
+  const claim = async () => {
+    const { rows } = await pool.query(
+      `UPDATE hh_recipe_import_items SET status='importing', updated_at=now()
+        WHERE id = (SELECT id FROM hh_recipe_import_items
+                     WHERE job_id=$1 AND status='pending'
+                     ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)
+        RETURNING id, url`, [jobId]);
+    return rows[0] || null;
+  };
+
+  const worker = async () => {
+    for (;;) {
+      // A cancel between items stops the batch without killing what's done.
+      const { rows: [j] } = await pool.query(
+        `SELECT status FROM hh_recipe_import_jobs WHERE id=$1`, [jobId]);
+      if (!j || j.status !== 'running') return;
+
+      const item = await claim();
+      if (!item) return;
+
+      try {
+        const draft = await importRecipe({ url: item.url });
+        const recipe = await createRecipe(userId, { ...draft, needsReview: true });
+        await pool.query(
+          `UPDATE hh_recipe_import_items
+              SET status='saved', recipe_id=$2, title=$3, via=$4, error=NULL, updated_at=now()
+            WHERE id=$1`, [item.id, recipe.id, recipe.title, draft.via]);
+        await pool.query(`UPDATE hh_recipe_import_jobs SET done=done+1, ok=ok+1 WHERE id=$1`, [jobId]);
+      } catch (err) {
+        // A dead link must not stop the other twenty-nine. The message is kept
+        // per row so the progress list can say WHY, next to the URL.
+        await pool.query(
+          `UPDATE hh_recipe_import_items SET status='failed', error=$2, updated_at=now() WHERE id=$1`,
+          [item.id, String(err?.message || err).slice(0, 500)]);
+        await pool.query(`UPDATE hh_recipe_import_jobs SET done=done+1, failed=failed+1 WHERE id=$1`, [jobId]);
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: BULK_CONCURRENCY }, worker));
+
+  await pool.query(
+    `UPDATE hh_recipe_import_jobs
+        SET status = CASE WHEN status='running' THEN 'done' ELSE status END,
+            finished_at = now()
+      WHERE id=$1`, [jobId]);
+}
+
+async function getImportJob(userId, jobId) {
+  const pool = libDb.getPool();
+  const { rows: [job] } = await pool.query(
+    `SELECT id, owner_id, total, done, ok, failed, status, created_at, finished_at
+       FROM hh_recipe_import_jobs WHERE id=$1 AND (owner_id=$2 OR TRUE)`, [Number(jobId), userId]);
+  if (!job) throw new Error('Not found.');
+  const { rows: items } = await pool.query(
+    `SELECT id, url, status, recipe_id, title, error, via, updated_at
+       FROM hh_recipe_import_items WHERE job_id=$1 ORDER BY id`, [job.id]);
+  return { job, items };
+}
+
+/** The most recent job, so reopening the Add screen shows a batch still running
+ *  instead of an empty form and no way back to it. */
+async function latestImportJob(userId) {
+  const { rows } = await libDb.getPool().query(
+    `SELECT id FROM hh_recipe_import_jobs ORDER BY id DESC LIMIT 1`);
+  if (!rows[0]) return null;
+  return getImportJob(userId, rows[0].id);
+}
+
+async function cancelImportJob(userId, jobId) {
+  const pool = libDb.getPool();
+  await pool.query(
+    `UPDATE hh_recipe_import_jobs SET status='cancelled', finished_at=now()
+      WHERE id=$1 AND status='running'`, [Number(jobId)]);
+  // Anything still queued is dropped; anything mid-flight finishes and saves,
+  // because killing a Claude call we have already paid for is pure waste.
+  await pool.query(
+    `UPDATE hh_recipe_import_items SET status='failed', error='Cancelled', updated_at=now()
+      WHERE job_id=$1 AND status='pending'`, [Number(jobId)]);
+  return getImportJob(userId, jobId);
+}
+
+/**
+ * Restart any job that was mid-flight when the process died.
+ *
+ * Called once on boot by household-server.js — NOT by the api-router fallback
+ * mount, because import work has no business running inside the trading process.
+ * Items left 'importing' are reset to 'pending': that item's fetch is gone, and
+ * re-running one page is cheaper than leaving a batch permanently half-done.
+ */
+async function resumeImportJobs(ownerFallbackId) {
+  if (!libDb) return 0;
+  const pool = libDb.getPool();
+  const { rows } = await pool.query(
+    `SELECT id, owner_id FROM hh_recipe_import_jobs WHERE status='running' ORDER BY id`);
+  if (!rows.length) return 0;
+  await pool.query(
+    `UPDATE hh_recipe_import_items SET status='pending', updated_at=now()
+      WHERE status='importing' AND job_id = ANY($1::int[])`, [rows.map((r) => r.id)]);
+  for (const j of rows) {
+    console.log(`[hh-recipes] resuming import job ${j.id}`);
+    runJob(j.owner_id || ownerFallbackId, j.id)
+      .catch((e) => console.error('[hh-recipes] resume', j.id, 'failed:', e?.message || e));
+  }
+  return rows.length;
+}
+
 /** The one-line summary, for a Today card in the household app. */
 async function summary(userId) {
   const { rows } = await libDb.getPool().query(
@@ -1041,6 +1374,7 @@ module.exports = {
   aiConfigured,
   // Exported for the self-test and for anything that wants the same parsing.
   parseIngredient, formatQty, scaledText, isoMinutes, stripTags,
+  guessMainIngredient, tidyIngredientName, SORTS, SORT_KEYS,
   findRecipeNode, recipeFromJsonLd,
   metaContent, embeddedCaption, handleFromUrl,
   importRecipe,
@@ -1048,4 +1382,6 @@ module.exports = {
   createRecipe, updateRecipe, deleteRecipe, toggleFavorite, markCooked,
   addToList, planMeal,
   captureImage, setImageFromDataUrl, readImage, deleteImage, MAX_IMAGE_BYTES, IMAGE_TYPES,
+  parseUrlList, createImportJob, getImportJob, latestImportJob, cancelImportJob, resumeImportJobs,
+  BULK_MAX_URLS,
 };

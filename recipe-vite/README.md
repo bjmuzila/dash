@@ -113,6 +113,58 @@ Backfill after deploying this, for recipes imported earlier:
 docker compose exec -T dashboard node server-v2/scripts/backfill-recipe-images.js
 ```
 
+## Sorting, and "main ingredient"
+
+The Cookbook sorts on the **server**: recently added, recently changed, name,
+main ingredient, cook time, most cooked, calories. Every key maps to a fixed
+`ORDER BY` fragment in a whitelist — there is no path from a query parameter into
+the query text, and the selftest asserts that.
+
+Sorting client-side would have sorted the *page*, not the cookbook. Same reason
+search is server-side: it covers ingredients, which the index rows don't carry.
+
+`main_ingredient` is a **stored column**, written at import and recomputed when
+the title or the ingredients change. Deriving it per query means unpacking a
+JSONB array for every row of the index screen, twice, to ORDER BY it.
+
+The guess reads the **title first**: "Cheesy Butter Chicken Garlic Bread" has
+sixteen ingredients and one of them is the point — an ingredient-first scan files
+it under *ciabatta loaf*, the line that happens to be listed first. Only when the
+title says nothing does it fall back to the best-ranked ingredient aisle (meat →
+produce → dairy → …). When neither is confident it stays **null** and sorts last:
+a recipe filed under a random pantry item sorts somewhere absurd, which is worse
+than sitting where you can see it needs a hand.
+
+Backfill after deploying, or your whole existing library sits in the NULL bucket:
+
+```bash
+docker compose exec -T household node server-v2/scripts/backfill-recipe-mains.js
+# after editing the HEROES list:
+docker compose exec -T household node server-v2/scripts/backfill-recipe-mains.js --force
+```
+
+## Bulk import
+
+Paste up to 60 links, walk away. `hh_recipe_import_jobs` + `_items` — real rows,
+so progress survives a container restart and a batch that was mid-flight when
+the process died is **resumed on boot** (`resumeImportJobs`, called from
+`household-server.js` only — import work has no business in the trading process).
+
+Thirty TikToks is thirty page fetches and thirty Claude calls: minutes. So the
+POST returns a job id immediately and the client polls; two at a time, which is
+polite to the sites and keeps the AI spend legible.
+
+**Bulk saves without review, and that's deliberate.** Single imports never write
+until you press save; bulk writes immediately with `needs_review = true`. A
+review queue you must clear before anything lands is a queue nobody clears at
+thirty items — you'd sit through twenty screens or abandon the batch and lose the
+lot. Saving first and flagging second means the work is never wasted: the
+recipes are searchable and cookable at once, and "to review" is a filter on the
+Cookbook plus a banner on each recipe with one button to clear it.
+
+Failures are per-row: a dead link records its error next to its URL and the other
+fifty-nine carry on.
+
 ## Ingredients are stored three ways
 
 ```

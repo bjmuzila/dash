@@ -187,6 +187,70 @@ eq(r.handleFromUrl('https://www.tiktok.com/@fit_foodie_lulu/video/76723287805972
 eq(r.handleFromUrl('https://www.instagram.com/reel/Cxyz/'), '@reel', 'instagram path first segment');
 eq(r.handleFromUrl('https://thesaltycooker.com/banana-cake'), null, 'ordinary site has no handle');
 
+// ── Main ingredient ──────────────────────────────────────────────────────────
+//
+// TITLE FIRST, and this is the case that proves why: sixteen ingredients, and
+// the one that matters is the only one named in the title. An ingredient-first
+// scan files this under "ciabatta loaf" — the line that happens to be listed
+// first.
+const gbIngredients = [
+  '1 Ciabatta loaf sliced in half lengthways',
+  '500g chicken breast or tenders',
+  '1 cup mozzarella cheese',
+].map(r.parseIngredient);
+
+eq(r.guessMainIngredient('Cheesy Butter Chicken Garlic Bread', gbIngredients), 'chicken',
+   'title beats ingredient order');
+// Most specific hero wins, so a thigh recipe is not filed under plain chicken.
+eq(r.guessMainIngredient('Crispy chicken thighs with lemon', []), 'chicken thigh',
+   'longer hero match wins');
+eq(r.guessMainIngredient('Miso, Mushroom & Guanciale Pasta', []), 'guanciale',
+   'first hero in the list order wins, not first in the string');
+eq(r.guessMainIngredient('Fajita Steak Loaded Sweet Potato Nachos', []), 'steak', 'steak over sweet potato');
+
+// No hero in the title → best-ranked aisle, meat first.
+eq(r.guessMainIngredient('Tuesday tray bake', [
+  r.parseIngredient('2 tbsp olive oil'),
+  r.parseIngredient('500 g pork shoulder'),
+  r.parseIngredient('3 carrots'),
+]), 'pork shoulder', 'falls back to the meat-aisle ingredient');
+
+// Everything unrecognisable → NULL, not a wrong guess. A recipe filed under a
+// random pantry item sorts somewhere absurd.
+eq(r.guessMainIngredient('Mystery dish', [r.parseIngredient('a splash of something')]), null,
+   'no confident guess returns null');
+
+eq(r.tidyIngredientName('boneless skinless chicken thighs, trimmed'), 'chicken thigh',
+   'descriptors stripped, last word singularised');
+eq(r.tidyIngredientName('2 large ripe bananas'), 'banana', 'adjectives dropped');
+eq(r.tidyIngredientName('hummus'), 'hummus', "words ending in 'us' are not butchered");
+
+// ── Sort whitelist ───────────────────────────────────────────────────────────
+// There must be no path from a query parameter into SQL.
+eq(r.SORT_KEYS.includes('main') && r.SORT_KEYS.includes('name'), true, 'sort keys exposed');
+eq(Object.values(r.SORTS).every((s) => typeof s.sql === 'string' && !/\$|;/.test(s.sql)), true,
+   'every sort is a fixed fragment with no placeholders or statement breaks');
+
+// ── Bulk URL parsing ─────────────────────────────────────────────────────────
+const pasted = `
+https://www.tiktok.com/@a/video/111
+  https://www.tiktok.com/@b/video/222?is_from_webapp=1&sender_device=pc
+"https://www.tiktok.com/@c/video/333",
+https://www.tiktok.com/@a/video/111/
+not-a-link
+mailto:someone@example.com
+`;
+const urls = r.parseUrlList(pasted);
+eq(urls.length, 3, 'three unique links out of that paste');
+eq(urls[0], 'https://www.tiktok.com/@a/video/111', 'plain link kept verbatim');
+// Query junk is ignored for DEDUPE but kept on the URL we actually fetch —
+// stripping params could break a link that needs them.
+eq(urls[1].includes('is_from_webapp'), true, 'tracking params are not stripped from the fetch URL');
+eq(urls[2], 'https://www.tiktok.com/@c/video/333', 'quotes and trailing comma trimmed');
+eq(r.parseUrlList('nothing here at all').length, 0, 'no links → empty, and the route turns that into an error');
+eq(r.parseUrlList(Array.from({ length: 200 }, (_, i) => `https://x.com/v/${i}`).join('\n')).length,
+   r.BULK_MAX_URLS, 'capped at BULK_MAX_URLS');
+
 // ── Report ───────────────────────────────────────────────────────────────────
 
 if (fails.length) {

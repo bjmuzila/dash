@@ -32,6 +32,8 @@
  *   POST /api/hh/settings              household
  *   GET  /api/hh/recipes               household  — ?id=N one recipe, else the index
  *   POST /api/hh/recipes               household  — action dispatch (recipe.cbedge.net)
+ *   POST /api/hh/recipes/bulk          household  — start/cancel a bulk URL import
+ *   GET  /api/hh/recipes/bulk          household  — bulk import progress
  *   GET  /api/hh/recipes/image         household  — recipe photo bytes (?id=N&v=etag)
  *   POST /api/hh/recipes/image         household  — replace/remove a recipe photo
  *
@@ -1111,7 +1113,9 @@ function registerHouseholdRoutes({ register, send, readJson }) {
               return;
             }
             send(res, 200, await hrecipes.listRecipes(u.id, {
-              q: p.get('q'), category: p.get('category'), favorite: p.get('favorite') === '1',
+              q: p.get('q'), category: p.get('category'), main: p.get('main'),
+              sort: p.get('sort'), favorite: p.get('favorite') === '1',
+              needsReview: p.get('review') === '1',
             }), nostore);
             return;
           }
@@ -1171,6 +1175,51 @@ function registerHouseholdRoutes({ register, send, readJson }) {
           }
 
           send(res, 400, { error: `Unknown action: ${action}` }, nostore);
+        } catch (err) {
+          send(res, 400, { error: String(err?.message || err) }, nostore);
+        }
+      },
+    });
+  }
+
+  // ── Bulk import ───────────────────────────────────────────────────────────
+  //
+  // POST /api/hh/recipes/bulk  {urls}        start a job → {job:{id,...}}
+  // POST /api/hh/recipes/bulk  {id, cancel}  stop it
+  // GET  /api/hh/recipes/bulk[?id=N]         progress; no id = the latest job
+  //
+  // The POST returns as soon as the rows are written and does NOT wait for the
+  // imports. Thirty TikToks is minutes of fetching and AI calls — well past
+  // nginx's 180s and far past how long a phone screen stays awake — so the work
+  // runs in this process and the client polls this route.
+
+  if (hrecipes && hrecipes.available()) {
+    add('/api/hh/recipes/bulk', {
+      auth: 'household', methods: ['GET', 'POST'],
+      async handler(req, res, _ctx, access) {
+        const u = access.hhUser;
+        try {
+          if (req.method === 'GET') {
+            const idParam = new URL(req.url || '/', 'http://localhost').searchParams.get('id');
+            const id = Number(idParam || 0);
+            const out = Number.isInteger(id) && id > 0
+              ? await hrecipes.getImportJob(u.id, id)
+              : await hrecipes.latestImportJob(u.id);
+            send(res, 200, out || { job: null, items: [] }, nostore);
+            return;
+          }
+
+          // 100KB: sixty URLs is a few KB. This is a paste box, not an upload.
+          const body = await readJson(req, 100_000);
+
+          if (body?.cancel) {
+            const id = Number(body?.id ?? 0);
+            if (!Number.isInteger(id) || id <= 0) { send(res, 400, { error: 'Missing id.' }, nostore); return; }
+            send(res, 200, await hrecipes.cancelImportJob(u.id, id), nostore);
+            return;
+          }
+
+          send(res, 200, { ok: true, ...(await hrecipes.createImportJob(u.id, body?.urls)) }, nostore);
         } catch (err) {
           send(res, 400, { error: String(err?.message || err) }, nostore);
         }

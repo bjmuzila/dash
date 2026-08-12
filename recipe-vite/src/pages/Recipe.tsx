@@ -141,6 +141,15 @@ export default function Recipe() {
     onError: (e: Error) => setNote(e.message),
   })
 
+  const reviewed = useMutation({
+    mutationFn: () => api.markReviewed(rid),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['recipe', rid] })
+      qc.invalidateQueries({ queryKey: ['recipes'] })
+      setNote('Marked as reviewed.')
+    },
+  })
+
   const remove = useMutation({
     mutationFn: () => api.remove(rid),
     onSuccess: () => {
@@ -265,11 +274,29 @@ export default function Recipe() {
           display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10,
           paddingTop: 14, borderTop: `1px solid ${T.rule}`,
         }}>
-          <Stat k="Skill" v={r.skill === 'easy' ? 'Easy' : r.skill === 'hard' ? 'Hard' : 'Medium'} />
+          <Stat k="Main" v={r.main_ingredient ?? '—'} />
           <Stat k="Time" v={minutes(totalTime)} />
           <Stat k="Ingredients" v={String(r.ingredients.length)} />
           <Stat k="Calories" v={r.calories ? String(r.calories) : '—'} />
         </div>
+
+        {r.needs_review && (
+          <div style={{
+            ...section({ padding: 12, borderColor: 'rgba(251,133,1,0.35)' }),
+            display: 'flex', alignItems: 'center', gap: 10,
+          }}>
+            <div style={{ flex: 1 }}>
+              <div style={label({ color: T.warn })}>Imported in a batch</div>
+              <p style={{ ...body(13), marginTop: 6, color: T.faint }}>
+                Nobody has checked this one yet — worth a glance at the amounts.
+              </p>
+            </div>
+            <button onClick={() => reviewed.mutate()} disabled={reviewed.isPending}
+                    style={{ ...button('ghost'), minHeight: 38, padding: '9px 14px', fontSize: 13 }}>
+              Looks right
+            </button>
+          </div>
+        )}
 
         {note && (
           <div style={{

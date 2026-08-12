@@ -115,6 +115,17 @@ const VIEW_META: { id: LogView; label: string; color: string; blurb: string }[] 
 ];
 const inView = (v: LogView, lt: WallLevel) => VIEW_LEVELS[v].includes(lt);
 
+/**
+ * Quick-select rail in the control bar. The ticker list runs ~150 roots deep and
+ * is ordered by rank, not alphabetically, so reaching the three that get opened
+ * first meant scrolling the rail or typing into the filter on every visit.
+ *
+ * A pill whose symbol has no row for the selected date is DISABLED rather than
+ * hidden: a missing sweep should read as "nothing recorded", not as a button that
+ * moved. All three are in scanner-tickers.js MAIN (the 2m hot lane).
+ */
+const QUICK_TICKERS = ["SPX", "SPY", "QQQ"] as const;
+
 const WALL_SLOTS = 27;
 const LEVEL_LOG_H = 620;
 const TICKER_COL_H = 620;
@@ -464,6 +475,23 @@ export default function LevelLog() {
     });
   }, [tickers, q]);
 
+  // Which quick pills actually have a row today. Built off the unfiltered list,
+  // not `shown` — the filter box must not be able to grey out a pill.
+  const haveSymbols = useMemo(() => new Set(tickers.map((t) => t.symbol)), [tickers]);
+
+  /**
+   * Select a symbol from the quick rail. Also clears the filter box when the
+   * current query would hide the row being selected — otherwise the click looks
+   * like a no-op: the log switches but the rail shows nothing highlighted.
+   */
+  const pickTicker = useCallback((sym: string) => {
+    setSel(sym);
+    setQ((prev) => {
+      const query = prev.trim().toUpperCase();
+      return query && !sym.includes(query) ? "" : prev;
+    });
+  }, []);
+
   const selRow = useMemo(() => tickers.find((t) => t.symbol === sel) ?? null, [tickers, sel]);
   const spot = selRow?.spot ?? null;
 
@@ -513,6 +541,29 @@ export default function LevelLog() {
               {v.label}
             </button>
           ))}
+        </div>
+
+        {/* Quick ticker jump. Sits beside the view pills, not in the rail header,
+            so it stays put when the rail scrolls. */}
+        <div style={{ display: "flex", gap: 6, alignItems: "center", paddingLeft: 12, borderLeft: `1px solid ${C.border}` }}>
+          {QUICK_TICKERS.map((sym) => {
+            const missing = loaded && !haveSymbols.has(sym);
+            return (
+              <button
+                key={sym}
+                onClick={() => pickTicker(sym)}
+                disabled={missing}
+                style={{
+                  ...chipStyle(sel === sym),
+                  padding: "6px 10px", fontSize: FS_LABEL, letterSpacing: "0.06em",
+                  ...(missing ? { opacity: 0.4, cursor: "not-allowed" } : null),
+                }}
+                title={missing ? `No ${sym} row recorded for ${date}` : `Jump to ${sym}`}
+              >
+                {sym}
+              </button>
+            );
+          })}
         </div>
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>

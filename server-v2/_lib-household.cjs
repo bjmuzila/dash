@@ -289,6 +289,58 @@ async function ensureSchema() {
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_recipes_cat_idx ON hh_recipes(category, updated_at DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_recipes_fav_idx ON hh_recipes(favorite, updated_at DESC)`);
 
+    // Sorting and filtering columns. ALTER rather than part of CREATE TABLE
+    // above, because hh_recipes already exists on the live box and
+    // CREATE TABLE IF NOT EXISTS would skip a new column silently.
+    //
+    // main_ingredient is STORED, not derived per query: deriving it means
+    // unpacking a JSONB array for every row of the index screen, and you cannot
+    // ORDER BY it without doing that twice. Written on create and recomputed on
+    // any edit to the title or the ingredients — see guessMainIngredient.
+    await pool.query(`ALTER TABLE hh_recipes ADD COLUMN IF NOT EXISTS main_ingredient TEXT`);
+    // Set by bulk import, cleared when you review the recipe. Bulk saves first
+    // and flags second on purpose — see the policy note in the recipes lib.
+    await pool.query(`ALTER TABLE hh_recipes ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT FALSE`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_recipes_main_idx ON hh_recipes(main_ingredient)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_recipes_review_idx ON hh_recipes(needs_review) WHERE needs_review`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_recipes_title_idx ON hh_recipes(lower(title))`);
+
+    // ── Bulk import jobs ─────────────────────────────────────────────────
+    // Thirty TikTok links is thirty page fetches and thirty Claude calls —
+    // minutes of work, which cannot be one HTTP request. So it is a job, and it
+    // lives in REAL ROWS rather than in memory: the progress list then survives
+    // a container restart, and a batch that was mid-flight when the process died
+    // can be resumed instead of silently vanishing.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hh_recipe_import_jobs (
+        id          SERIAL PRIMARY KEY,
+        owner_id    INTEGER NOT NULL REFERENCES hh_users(id) ON DELETE CASCADE,
+        total       INTEGER NOT NULL DEFAULT 0,
+        done        INTEGER NOT NULL DEFAULT 0,
+        ok          INTEGER NOT NULL DEFAULT 0,
+        failed      INTEGER NOT NULL DEFAULT 0,
+        -- 'running' | 'done' | 'cancelled'
+        status      TEXT NOT NULL DEFAULT 'running',
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        finished_at TIMESTAMPTZ
+      )`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hh_recipe_import_items (
+        id         SERIAL PRIMARY KEY,
+        job_id     INTEGER NOT NULL REFERENCES hh_recipe_import_jobs(id) ON DELETE CASCADE,
+        url        TEXT NOT NULL,
+        -- 'pending' | 'importing' | 'saved' | 'failed'
+        status     TEXT NOT NULL DEFAULT 'pending',
+        -- SET NULL, not CASCADE: deleting a bad import must not rewrite the
+        -- history of the batch it came from.
+        recipe_id  INTEGER REFERENCES hh_recipes(id) ON DELETE SET NULL,
+        title      TEXT,
+        via        TEXT,
+        error      TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_recipe_import_items_job_idx ON hh_recipe_import_items(job_id, status)`);
+
     // Backlinks. ON DELETE SET NULL throughout, matching hh_list_items.meal_id:
     // deleting a recipe must not silently pull tortillas off a grocery list you
     // are standing in the shop holding, or blank out Tuesday on the week board.

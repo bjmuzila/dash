@@ -118,6 +118,13 @@ export type RecipeCard = {
   cooked_count: number
   last_cooked_at: string | null
   ingredient_count: number
+  /** What the recipe is OF — derived at import from the title first, the
+   *  ingredient aisles second, and left null when neither is confident. Stored
+   *  rather than computed so it can be sorted and filtered on. */
+  main_ingredient: string | null
+  /** Set by bulk import, cleared when you review it. See the policy note in
+   *  server-v2/_lib-household-recipes.cjs — bulk saves first and flags second. */
+  needs_review: boolean
   /** Content hash of the STORED photo, or null if we never copied one. Present
    *  on reads only — see IMG_ETAG in server-v2/_lib-household-recipes.cjs. */
   image_etag: string | null
@@ -152,10 +159,22 @@ export type Draft = {
   via: 'json-ld' | 'ai'
 }
 
+export type SortKey = 'recent' | 'updated' | 'name' | 'main' | 'time' | 'cooked' | 'calories'
+
 export type CookbookPayload = {
   recipes: RecipeCard[]
   categories: Category[]
   counts: Partial<Record<Category, number>>
+  /** Main-ingredient facet, most common first — so the UI can offer
+   *  "chicken (7)" instead of making you search for a word you'd have to
+   *  already know is in there. */
+  mains: { name: string; n: number }[]
+  sorts: { key: SortKey; label: string }[]
+  sort: SortKey
+  /** How many recipes are flagged needs_review across the whole library (not
+   *  just this filtered page) — drives the badge on the Review chip. */
+  needsReview: number
+  libraryTotal: number
   total: number
   /** False when ANTHROPIC_API_KEY isn't set on the server — the Add screen
    *  says so up front rather than failing after a 20-second fetch. */
@@ -217,11 +236,17 @@ export function imageSrc(r: { id: number; image_etag?: string | null; image_url?
 }
 
 export const recipes = {
-  list: (opts: { q?: string; category?: string; favorite?: boolean } = {}) => {
+  list: (opts: {
+    q?: string; category?: string; main?: string; sort?: SortKey
+    favorite?: boolean; needsReview?: boolean
+  } = {}) => {
     const p = new URLSearchParams()
     if (opts.q) p.set('q', opts.q)
     if (opts.category && opts.category !== 'all') p.set('category', opts.category)
+    if (opts.main) p.set('main', opts.main)
+    if (opts.sort) p.set('sort', opts.sort)
     if (opts.favorite) p.set('favorite', '1')
+    if (opts.needsReview) p.set('review', '1')
     const qs = p.toString()
     return api.get<CookbookPayload>(`/api/hh/recipes${qs ? `?${qs}` : ''}`)
   },
@@ -261,6 +286,50 @@ export const recipes = {
       '/api/hh/recipes/image', { id, url }),
   removeImage: (id: number) =>
     api.post<{ ok: true; removed: true }>('/api/hh/recipes/image', { id, remove: true }),
+
+  /** Clear the needs-review flag — "yes, I've looked at this one". */
+  markReviewed: (id: number) =>
+    api.post<{ recipe: Recipe }>('/api/hh/recipes', { action: 'update', id, patch: { needsReview: false } }),
+}
+
+// ── Bulk import ──────────────────────────────────────────────────────────────
+
+export type ImportJob = {
+  id: number
+  total: number
+  done: number
+  ok: number
+  failed: number
+  status: 'running' | 'done' | 'cancelled'
+  created_at: string
+  finished_at: string | null
+}
+
+export type ImportItem = {
+  id: number
+  url: string
+  status: 'pending' | 'importing' | 'saved' | 'failed'
+  recipe_id: number | null
+  title: string | null
+  error: string | null
+  via: 'json-ld' | 'ai' | null
+  updated_at: string
+}
+
+export const bulk = {
+  /** Starts a job and returns immediately — the imports keep running on the
+   *  server. Thirty TikToks is minutes of fetching and AI calls, well past any
+   *  request timeout, so this is polled rather than awaited. */
+  start: (urls: string) =>
+    api.post<{ ok: true; id: number; total: number; status: string; urls: number }>(
+      '/api/hh/recipes/bulk', { urls }),
+  /** No id = the most recent job, so reopening Add finds a batch still running
+   *  instead of an empty form with no way back to it. */
+  get: (id?: number) =>
+    api.get<{ job: ImportJob | null; items: ImportItem[] }>(
+      `/api/hh/recipes/bulk${id ? `?id=${id}` : ''}`),
+  cancel: (id: number) =>
+    api.post<{ job: ImportJob; items: ImportItem[] }>('/api/hh/recipes/bulk', { id, cancel: true }),
 }
 
 /**
