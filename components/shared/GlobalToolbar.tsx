@@ -340,9 +340,9 @@ const NAV_ITEMS: NavItem[] = [
   // Order Flow removed from the toolbar (2026-08): it was a permanently dimmed
   // coming-soon tile taking a slot from live pages. Still listed in the
   // hamburger (NavMenu) so the route stays discoverable when it ships.
-  // Lookup was a coming-soon placeholder that never got a page; replaced by
-  // /options (app/options/page.tsx), which is live and being built out.
-  { href: "/options",           label: "Options",       emoji: "🎛️" },
+  // Options (/options) removed 2026-08-12 — the page, its SPA route and its
+  // app/options/* helpers are gone. Options Chain (/options-chain) is a
+  // different page and stays above.
 ];
 
 // Customer-side saved arrangement of the left-side nav emojis (drag-to-reorder).

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ownerOrInternal, gateDenied } from "@/lib/auth/ownerApiGate";
 import { getDb, getEmCondorsUnsettled, setEmCondorSettlement } from "@/lib/db";
 import { settle, touchedShort, mondayOf } from "@/lib/em-condor/compute";
 
@@ -21,6 +22,11 @@ export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   try {
+    // Owner-only. Automated callers (condor-mark-recorder, em-tracker-auto-eval)
+    // pass on x-internal-token; see lib/auth/ownerApiGate.ts.
+    const gate = await ownerOrInternal(req);
+    if (!gate.ok) return gateDenied(gate);
+
     let body: Record<string, unknown> = {};
     try { body = await req.json(); } catch { /* no body */ }
     await getDb();

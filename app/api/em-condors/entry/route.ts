@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ownerOrInternal, gateDenied } from "@/lib/auth/ownerApiGate";
 import path from "node:path";
 import { getDb, getEmCondors, upsertEmCondor, type EmCondorRow } from "@/lib/db";
 import { mondayOf, weekLabel } from "@/lib/em-condor/compute";
@@ -131,6 +132,11 @@ async function compute(week_start: string, opts: { overwrite?: boolean; tickers?
 
 export async function GET(req: NextRequest) {
   try {
+    // Owner-only. Automated callers (condor-mark-recorder, em-tracker-auto-eval)
+    // pass on x-internal-token; see lib/auth/ownerApiGate.ts.
+    const gate = await ownerOrInternal(req);
+    if (!gate.ok) return gateDenied(gate);
+
     await getDb();
     const p = req.nextUrl.searchParams;
     const week_start = mondayOf(p.get("week_start") || new Date().toISOString().slice(0, 10));
@@ -153,6 +159,11 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    // Owner-only. Automated callers (condor-mark-recorder, em-tracker-auto-eval)
+    // pass on x-internal-token; see lib/auth/ownerApiGate.ts.
+    const gate = await ownerOrInternal(req);
+    if (!gate.ok) return gateDenied(gate);
+
     let body: Record<string, unknown> = {};
     try { body = await req.json(); } catch { /* empty body = this week */ }
     await getDb();

@@ -305,6 +305,15 @@ async function ensureSchema() {
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_recipes_review_idx ON hh_recipes(needs_review) WHERE needs_review`);
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_recipes_title_idx ON hh_recipes(lower(title))`);
 
+    // "Is this the same video?" — NOT the raw source_url. TikTok's data export
+    // writes tiktokv.com/share/video/<id>, the share sheet writes a vm.tiktok.com
+    // code, and the site itself writes tiktok.com/@handle/video/<id>. All three
+    // are one recipe, so the key normalises to `tiktok:<id>`. See sourceKey().
+    // Deliberately NOT unique: a duplicate is skipped in code with a message,
+    // not rejected by a constraint that would fail the whole import row.
+    await pool.query(`ALTER TABLE hh_recipes ADD COLUMN IF NOT EXISTS source_key TEXT`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS hh_recipes_source_key_idx ON hh_recipes(source_key)`);
+
     // ── Bulk import jobs ─────────────────────────────────────────────────
     // Thirty TikTok links is thirty page fetches and thirty Claude calls —
     // minutes of work, which cannot be one HTTP request. So it is a job, and it
@@ -319,6 +328,10 @@ async function ensureSchema() {
         done        INTEGER NOT NULL DEFAULT 0,
         ok          INTEGER NOT NULL DEFAULT 0,
         failed      INTEGER NOT NULL DEFAULT 0,
+        skipped     INTEGER NOT NULL DEFAULT 0,
+        -- Links the caption gate rejected before any AI call. Counted apart
+        -- from failed, because it is the gate working, not the import breaking.
+        notrecipe   INTEGER NOT NULL DEFAULT 0,
         -- 'running' | 'done' | 'cancelled'
         status      TEXT NOT NULL DEFAULT 'running',
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -340,6 +353,10 @@ async function ensureSchema() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )`);
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_recipe_import_items_job_idx ON hh_recipe_import_items(job_id, status)`);
+    // ALTER as well as the CREATE above: the jobs table shipped this morning
+    // without `skipped`, so an existing deployment needs the column added.
+    await pool.query(`ALTER TABLE hh_recipe_import_jobs ADD COLUMN IF NOT EXISTS skipped INTEGER NOT NULL DEFAULT 0`);
+    await pool.query(`ALTER TABLE hh_recipe_import_jobs ADD COLUMN IF NOT EXISTS notrecipe INTEGER NOT NULL DEFAULT 0`);
 
     // Backlinks. ON DELETE SET NULL throughout, matching hh_list_items.meal_id:
     // deleting a recipe must not silently pull tortillas off a grocery list you

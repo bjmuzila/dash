@@ -5352,17 +5352,37 @@ if (libDb) {
       levelsEnsured = true;
     };
     register('/api/levels', {
+      // READ stays 'subscriber' — every customer's /em page and the Pine script
+      // read levels from here. The WRITE below is owner-only, enforced in the
+      // handler rather than by promoting `auth` to 'owner', because one route
+      // serves both verbs. Same shape as /api/bzila-alerts.
       auth: 'subscriber', methods: ['GET', 'POST'],
-      async handler(req, res, ctx) {
+      async handler(req, res, ctx, access) {
         try {
           const pool = await libDb.getDb();
           await ensureLevels(pool);
           if (req.method === 'POST') {
+            // Owner-only WRITE. This upsert publishes the levels the ENTIRE
+            // customer base sees on /em and through /api/pinescript, so a
+            // subscriber session must not reach it — it was reachable by any
+            // paying account until now.
+            //
+            // Internal first, mirroring enforceAuth: the levels auto-publisher
+            // (server-v2/levels-engine.js) calls this over loopback with the
+            // shared secret and no session, and must keep working. enforceAuth
+            // already returns who:'internal' for it; the header is re-checked
+            // here so the gate is correct even if this handler is ever called
+            // through a different path.
+            const token = req.headers['x-internal-token'] || '';
+            const trusted = !!ctx.internalToken && token === ctx.internalToken;
+            const isOwner = trusted
+              || access?.who === 'internal'
+              || (!!ctx.ownerUserId && access?.userId === ctx.ownerUserId);
+            if (!isOwner) { send(res, 403, { error: 'owner-only' }); return; }
+
             const body = await readJson(req);
             const ticker = String(body.ticker || '').trim().toUpperCase();
             if (!ticker) { send(res, 400, { error: 'Missing ticker' }); return; }
-            const token = req.headers['x-internal-token'] || '';
-            const trusted = !!ctx.internalToken && token === ctx.internalToken;
             const weekStart = publishWindowStartET();
             await pool.query(
               `INSERT INTO ticker_levels

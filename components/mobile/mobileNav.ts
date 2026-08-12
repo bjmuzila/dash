@@ -64,7 +64,6 @@ export const DESKTOP_TO_MOBILE: Record<string, string> = {
   "/gex": "/m/gex",
   "/es-candles": "/m/es",
   "/options-chain": "/m/chain",
-  "/options": "/m/chain",
   "/em": "/m/em",
   "/economic-calendar": "/m/econ",
 };

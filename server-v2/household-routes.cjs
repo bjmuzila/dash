@@ -1129,8 +1129,10 @@ function registerHouseholdRoutes({ register, send, readJson }) {
 
           if (action === 'import') {
             // No id, no write — just a draft for the review screen.
+            // `force` skips the "is this even a recipe" gate — offered on the
+            // Add screen when the gate rejects something you know is food.
             send(res, 200, { ok: true, draft: await hrecipes.importRecipe({
-              url: body?.url, text: body?.text,
+              url: body?.url, text: body?.text, force: !!body?.force,
             }) }, nostore);
             return;
           }
@@ -1225,7 +1227,9 @@ function registerHouseholdRoutes({ register, send, readJson }) {
   //
   // POST /api/hh/recipes/bulk  {urls}        start a job → {job:{id,...}}
   // POST /api/hh/recipes/bulk  {id, cancel}  stop it
+  // POST /api/hh/recipes/bulk  {id, retry}   requeue just the failures
   // GET  /api/hh/recipes/bulk[?id=N]         progress; no id = the latest job
+  // GET  /api/hh/recipes/bulk?misses=1        every link never imported, all jobs
   //
   // The POST returns as soon as the rows are written and does NOT wait for the
   // imports. Thirty TikToks is minutes of fetching and AI calls — well past
@@ -1239,8 +1243,15 @@ function registerHouseholdRoutes({ register, send, readJson }) {
         const u = access.hhUser;
         try {
           if (req.method === 'GET') {
-            const idParam = new URL(req.url || '/', 'http://localhost').searchParams.get('id');
-            const id = Number(idParam || 0);
+            const p = new URL(req.url || '/', 'http://localhost').searchParams;
+            // ?misses=1 — everything never imported, across EVERY job. The
+            // by-hand pile, and the reason it isn't per-job: twenty-five
+            // batches is twenty-five panels nobody will open one at a time.
+            if (p.get('misses') === '1') {
+              send(res, 200, await hrecipes.listImportMisses(u.id), nostore);
+              return;
+            }
+            const id = Number(p.get('id') || 0);
             const out = Number.isInteger(id) && id > 0
               ? await hrecipes.getImportJob(u.id, id)
               : await hrecipes.latestImportJob(u.id);
@@ -1250,6 +1261,13 @@ function registerHouseholdRoutes({ register, send, readJson }) {
 
           // 100KB: sixty URLs is a few KB. This is a paste box, not an upload.
           const body = await readJson(req, 100_000);
+
+          if (body?.retry) {
+            const id = Number(body?.id ?? 0);
+            if (!Number.isInteger(id) || id <= 0) { send(res, 400, { error: 'Missing id.' }, nostore); return; }
+            send(res, 200, await hrecipes.retryImportJob(u.id, id), nostore);
+            return;
+          }
 
           if (body?.cancel) {
             const id = Number(body?.id ?? 0);

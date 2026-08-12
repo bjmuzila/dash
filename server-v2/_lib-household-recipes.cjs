@@ -335,13 +335,83 @@ function embeddedCaption(html) {
   return found[0].slice(0, 8000);
 }
 
-/** "@fit_foodie_lulu" out of a TikTok/Instagram URL, for the by-line. */
+/**
+ * "@fit_foodie_lulu" out of a TikTok/Instagram URL, for the by-line.
+ *
+ * TikTok's DATA EXPORT does not write the pretty URL. Favourites come out as
+ * `tiktokv.com/share/video/<id>` — no handle in the path at all — and the app's
+ * share sheet gives `vm.tiktok.com/<code>`. Both redirect to the canonical page,
+ * which is why importRecipe passes the RESOLVED url here rather than the one you
+ * pasted. `share`/`video` are excluded explicitly so a share link that somehow
+ * reaches this function is credited to nobody instead of to "@share".
+ */
+const SOCIAL_HOSTS = /(^|\.)(tiktok|tiktokv|instagram)\.com$/i;
+const NOT_HANDLES = new Set(['share', 'video', 'reel', 'reels', 'p', 't', 'v', 'embed', 'explore', 'tag']);
+
 function handleFromUrl(url) {
   try {
     const u = new URL(url);
-    if (!/(^|\.)(tiktok|instagram)\.com$/i.test(u.hostname.replace(/^www\./, ''))) return null;
-    const m = u.pathname.match(/\/@?([A-Za-z0-9._]{2,30})(?:\/|$)/);
-    return m ? `@${m[1].replace(/^@/, '')}` : null;
+    const host = u.hostname.replace(/^www\./, '').toLowerCase();
+    if (!SOCIAL_HOSTS.test(host)) return null;
+    const segs = u.pathname.split('/').filter(Boolean);
+
+    // TikTok: a handle is ALWAYS the @-prefixed segment. Scanning for
+    // "first thing that looks like a word" instead would read
+    // /share/video/<id> as the handle "share", and once 'share' is excluded it
+    // would happily take the video id.
+    if (/(^|\.)(tiktok|tiktokv)\.com$/.test(host)) {
+      const at = segs.find((x) => x.startsWith('@'));
+      const t = at ? at.slice(1) : '';
+      return /^[A-Za-z0-9._]{2,30}$/.test(t) ? `@${t}` : null;
+    }
+
+    // Instagram: only the FIRST segment can be a profile
+    // (instagram.com/hannahmuch). /reel/<code> and /p/<code> are posts, and the
+    // code after them is emphatically not a person.
+    const first = (segs[0] || '').replace(/^@/, '');
+    if (!first || NOT_HANDLES.has(first.toLowerCase())) return null;
+    return /^[A-Za-z0-9._]{2,30}$/.test(first) ? `@${first}` : null;
+  } catch { return null; }
+}
+
+/**
+ * The creator, read out of the page itself.
+ *
+ * More reliable than the URL and the only option for a share link that redirects
+ * to something without a handle in it. TikTok's rehydration blob carries
+ * `"uniqueId":"fit_foodie_lulu"`; Instagram uses the same key shape.
+ */
+function authorFromHtml(html) {
+  const m = String(html || '').match(/"uniqueId"\s*:\s*"([A-Za-z0-9._]{2,30})"/);
+  return m ? `@${m[1]}` : null;
+}
+
+/**
+ * A stable identity for "this is the same video/page", used to skip something
+ * already in the cookbook.
+ *
+ * Not the raw URL: TikTok's export writes `tiktokv.com/share/video/7669…`, the
+ * share sheet writes `vm.tiktok.com/ZGxyz`, and the site itself writes
+ * `tiktok.com/@handle/video/7669…`. All three are one recipe. The numeric id is
+ * the only part that is constant, so for those hosts the key is `tiktok:<id>`
+ * and everything else falls back to origin + path with tracking junk dropped.
+ *
+ * A short `vm.tiktok.com` code has no id in it — those only get a key once the
+ * fetch resolves, which is exactly why the dedupe check runs twice per import.
+ */
+function sourceKey(url) {
+  try {
+    const u = new URL(String(url));
+    const host = u.hostname.replace(/^www\./, '').toLowerCase();
+    if (/(^|\.)(tiktok|tiktokv)\.com$/.test(host)) {
+      const id = u.pathname.match(/(\d{6,})/);
+      if (id) return `tiktok:${id[1]}`;
+    }
+    if (/(^|\.)instagram\.com$/.test(host)) {
+      const code = u.pathname.match(/\/(?:p|reel|reels)\/([A-Za-z0-9_-]{5,})/i);
+      if (code) return `instagram:${code[1]}`;
+    }
+    return `${host}${u.pathname.replace(/\/+$/, '').toLowerCase()}`;
   } catch { return null; }
 }
 
@@ -467,13 +537,83 @@ async function fetchPage(url) {
     if (!res.ok) throw new Error(`The site returned ${res.status}.`);
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length > MAX_PAGE_BYTES) throw new Error('That page is too large to read.');
-    return buf.toString('utf8');
+    // finalUrl, not the one we asked for: a TikTok export link is
+    // tiktokv.com/share/video/<id> and redirects to the canonical page. The
+    // by-line and the dedupe key both need where we LANDED.
+    return { html: buf.toString('utf8'), finalUrl: res.url || u.toString() };
   } catch (e) {
     if (e.name === 'AbortError') throw new Error('That site took too long to answer.');
     throw e;
   } finally {
     clearTimeout(timer);
   }
+}
+
+// ---------------------------------------------------------------------------
+// "Is this even a recipe?"
+// ---------------------------------------------------------------------------
+//
+// A TikTok favourites export is not a recipe list. It is everything you ever
+// tapped the bookmark on — editing tutorials, dog videos, a song you liked. Of
+// 1,480 favourites maybe a few hundred are food.
+//
+// Every non-recipe still cost a full Claude call before coming back "that
+// doesn't look like a recipe", which is paying an LLM to tell you something the
+// caption already says. This gate reads the caption FIRST and skips the API
+// entirely when there is no food in it. The page fetch still happens — it is
+// free and it is what produced the caption — so the saving is precisely the
+// expensive half.
+//
+// Deliberately GENEROUS. A false negative is a recipe you have to import by
+// hand; a false positive costs about two cents. So one strong signal is enough,
+// and two weak ones will do. It is a spend filter, not a classifier.
+
+/** Amounts: "500g", "2 tbsp", "1 1/2 cups", "180°C", "350F". The single most
+ *  reliable tell — captions that aren't recipes rarely carry them. */
+const RE_MEASURE = /\b\d+\s*(?:g|kg|ml|l|oz|lbs?|cups?|tbsp|tsp|tablespoons?|teaspoons?|cloves?|cans?|sticks?|slices?|scoops?|°?[CF]\b)/gi;
+/** Method verbs — what you DO to food. */
+const RE_METHOD = /\b(preheat|bake|baked|baking|roast|roasted|fry|fried|air ?fry|saut[ée]|simmer|boil|whisk|knead|marinate|marinade|season|stir|blend|blitz|drizzle|garnish|serve|serves|serving|chill|refrigerate|oven|skillet|pan|pot|grill|griddle|sear)\b/gi;
+/** Words that only appear around recipes. */
+const RE_RECIPE = /\b(recipe|ingredients?|instructions?|method|directions|meal prep|macros?|protein|calories|kcal|high[- ]protein|leftovers|batch|prep time|cook time)\b/gi;
+/** A caption laid out as a list — "1 ciabatta loaf\n500g chicken\n1 cup…" */
+const RE_LIST_LINES = /^\s*(?:[-•*]|\d+[.)]?\s|\d+\s*(?:g|ml|oz|cups?|tbsp|tsp)\b)/gim;
+
+/**
+ * Score a caption. Returns the hit counts too, so a bulk run can be tuned from
+ * real numbers rather than from opinions about word lists.
+ */
+function recipeSignals(text) {
+  const t = String(text || '');
+  const measures = (t.match(RE_MEASURE) || []).length;
+  const methods = new Set((t.match(RE_METHOD) || []).map((x) => x.toLowerCase())).size;
+  const words = new Set((t.match(RE_RECIPE) || []).map((x) => x.toLowerCase())).size;
+  const listLines = (t.match(RE_LIST_LINES) || []).length;
+  const heroes = new Set(HEROES.filter((h) => t.toLowerCase().includes(h))).size;
+
+  // Any ONE of these settles it on its own.
+  const strong =
+    words > 0 && (measures >= 1 || listLines >= 2) ? 'recipe-word + amounts'
+    : measures >= 3 ? 'three or more amounts'
+    : listLines >= 4 && heroes >= 2 ? 'ingredient list + food'
+    : null;
+
+  // Otherwise two weak ones will do.
+  const weak = [measures >= 1, methods >= 2, heroes >= 2, listLines >= 2, words >= 1]
+    .filter(Boolean).length;
+
+  return { measures, methods, words, listLines, heroes, strong, weak,
+           pass: !!strong || weak >= 2 };
+}
+
+const looksLikeRecipe = (text) => recipeSignals(text).pass;
+
+/** Thrown when the gate says no. Flagged so a bulk run can record it as its own
+ *  outcome — it is not a failure, and retrying it would fetch the same page to
+ *  reach the same conclusion. */
+function notARecipe(detail) {
+  const e = new Error(`That doesn't look like a recipe${detail ? ` (${detail})` : ''}.`);
+  e.notRecipe = true;
+  return e;
 }
 
 // ---------------------------------------------------------------------------
@@ -577,7 +717,7 @@ function recipeFromAi(parsed, url, pageTitle) {
  * to get something subtly wrong, and a cookbook that fills up with half-read
  * pages is worse than one you paste into.
  */
-async function importRecipe({ url, text }) {
+async function importRecipe({ url, text, force = false }) {
   const link = str(url, 2000);
   const pasted = str(text, 60_000);
   if (!link && !pasted) throw new Error('Paste a link or the recipe text.');
@@ -585,15 +725,16 @@ async function importRecipe({ url, text }) {
   if (!link) {
     // Pasted text — an Instagram caption, a screenshot transcription, a note.
     // There is no structured data to try first, so this always goes to the AI.
+    // No gate here: you typed it in, so you have already decided it's a recipe.
     return recipeFromAi(await aiExtract(pasted), null, pasted.split('\n')[0]);
   }
 
-  const html = await fetchPage(link);
+  const { html, finalUrl } = await fetchPage(link);
 
   const node = findRecipeNode(html);
   if (node) {
-    const fromLd = recipeFromJsonLd(node, link);
-    if (fromLd) return fromLd;
+    const fromLd = recipeFromJsonLd(node, finalUrl);
+    if (fromLd) return { ...fromLd, sourceKey: sourceKey(finalUrl) };
   }
 
   // No usable structured data. Fall back to reading the page.
@@ -615,15 +756,36 @@ async function importRecipe({ url, text }) {
     throw new Error("That page didn't return any readable text — it may block automated readers. Copy the recipe and use Paste.");
   }
 
-  const draft = recipeFromAi(await aiExtract(readable), link, stripTags(pageTitle));
+  // THE GATE. Everything above this line is free; everything below costs money.
+  // `force` is how a single manual import overrides a false negative.
+  if (!force) {
+    const sig = recipeSignals(readable);
+    if (!sig.pass) {
+      throw notARecipe(`${sig.measures} amounts, ${sig.heroes} food words`);
+    }
+  }
+
+  const draft = recipeFromAi(await aiExtract(readable), finalUrl, stripTags(pageTitle));
   // The AI never sees images; og:image is how the card gets a photo on the
   // pages that had no JSON-LD.
   if (ogImage) draft.imageUrl = str(ogImage, 1000);
-  // "by @fit_foodie_lulu" reads better than "by tiktok.com" — and it's the
-  // credit the creator is actually owed.
-  const handle = handleFromUrl(link);
+  // "by @fit_foodie_lulu" reads better than "by tiktokv.com" — and it's the
+  // credit the creator is actually owed. The PAGE wins over the URL: an export
+  // link has no handle in it at all, and the redirect target may not either.
+  const handle = authorFromHtml(html) || handleFromUrl(finalUrl) || handleFromUrl(link);
   if (handle) draft.sourceName = handle;
+  draft.sourceKey = sourceKey(finalUrl);
   return draft;
+}
+
+/** Already in the cookbook? Matched on the normalised key, so a share link and
+ *  the canonical page count as the same recipe. */
+async function findBySourceKey(userId, key) {
+  if (!key) return null;
+  const { rows } = await libDb.getPool().query(
+    `SELECT id, title FROM hh_recipes WHERE source_key = $2 AND ${VISIBLE} LIMIT 1`,
+    [userId, String(key)]);
+  return rows[0] || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -867,8 +1029,8 @@ async function createRecipe(userId, r) {
     `INSERT INTO hh_recipes
        (owner_id, visibility, title, description, image_url, source_url, source_name,
         servings, prep_minutes, cook_minutes, calories, category, skill, notes, ingredients, steps,
-        main_ingredient, needs_review)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17,$18)
+        main_ingredient, needs_review, source_key)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17,$18,$19)
      RETURNING ${FULL_COLS}`,
     [userId, SHARED, title, str(r.description, 1000) || null, str(r.imageUrl, 1000) || null,
      str(r.sourceUrl, 2000) || null, str(r.sourceName, 120) || null,
@@ -877,7 +1039,10 @@ async function createRecipe(userId, r) {
      r.category ? normCategory(r.category) : guessCategory(title),
      normSkill(r.skill), str(r.notes, 4000) || null,
      JSON.stringify(ingredients), JSON.stringify(normSteps(r.steps)),
-     guessMainIngredient(title, ingredients), !!r.needsReview]);
+     guessMainIngredient(title, ingredients), !!r.needsReview,
+     // Falls back to deriving it from the URL for a hand-typed recipe that was
+     // never imported — those still dedupe against a later paste of the link.
+     str(r.sourceKey, 200) || sourceKey(r.sourceUrl)]);
 
   // Copy the photo in the BACKGROUND, deliberately not awaited. Saving a recipe
   // must not sit on someone else's CDN for ten seconds, and the gap is already
@@ -1199,6 +1364,9 @@ const BULK_CONCURRENCY = 2;
 /** Guard against a paste that was never a list of links. */
 const BULK_MAX_URLS = 60;
 
+/** Breather between items, per worker. See the note where it's used. */
+const BULK_PAUSE_MS = 800;
+
 /** Accepts a textarea paste: newlines, commas, or whitespace between links, with
  *  or without stray quotes and trailing punctuation. */
 function parseUrlList(input) {
@@ -1274,7 +1442,35 @@ async function runJob(userId, jobId) {
       if (!item) return;
 
       try {
+        // CHECK ONE, before spending anything. Catches a link pasted in an
+        // earlier batch in its canonical form, and costs a single indexed
+        // lookup instead of a page fetch and an AI call.
+        const pre = await findBySourceKey(userId, sourceKey(item.url));
+        if (pre) {
+          await pool.query(
+            `UPDATE hh_recipe_import_items
+                SET status='skipped', recipe_id=$2, title=$3, error=NULL, updated_at=now()
+              WHERE id=$1`, [item.id, pre.id, pre.title]);
+          await pool.query(`UPDATE hh_recipe_import_jobs SET done=done+1, skipped=skipped+1 WHERE id=$1`, [jobId]);
+          continue;
+        }
+
         const draft = await importRecipe({ url: item.url });
+
+        // CHECK TWO, after the redirect resolved. A tiktokv.com/share link and
+        // a vm.tiktok.com code carry no video id, so check one cannot see they
+        // are the same video you already have — only the landed URL can. The
+        // fetch is already paid for here; the AI call is what this saves.
+        const post = await findBySourceKey(userId, draft.sourceKey);
+        if (post) {
+          await pool.query(
+            `UPDATE hh_recipe_import_items
+                SET status='skipped', recipe_id=$2, title=$3, error=NULL, updated_at=now()
+              WHERE id=$1`, [item.id, post.id, post.title]);
+          await pool.query(`UPDATE hh_recipe_import_jobs SET done=done+1, skipped=skipped+1 WHERE id=$1`, [jobId]);
+          continue;
+        }
+
         const recipe = await createRecipe(userId, { ...draft, needsReview: true });
         await pool.query(
           `UPDATE hh_recipe_import_items
@@ -1284,11 +1480,24 @@ async function runJob(userId, jobId) {
       } catch (err) {
         // A dead link must not stop the other twenty-nine. The message is kept
         // per row so the progress list can say WHY, next to the URL.
+        //
+        // notRecipe is NOT a failure — it is the gate doing its job, it cost no
+        // AI call, and retrying it would fetch the same page to reach the same
+        // conclusion. Its own status keeps it out of the retry queue and out of
+        // a failure count that would otherwise read as "the import is broken".
+        const gated = !!err?.notRecipe;
         await pool.query(
-          `UPDATE hh_recipe_import_items SET status='failed', error=$2, updated_at=now() WHERE id=$1`,
-          [item.id, String(err?.message || err).slice(0, 500)]);
-        await pool.query(`UPDATE hh_recipe_import_jobs SET done=done+1, failed=failed+1 WHERE id=$1`, [jobId]);
+          `UPDATE hh_recipe_import_items SET status=$3, error=$2, updated_at=now() WHERE id=$1`,
+          [item.id, String(err?.message || err).slice(0, 500), gated ? 'notrecipe' : 'failed']);
+        await pool.query(
+          `UPDATE hh_recipe_import_jobs SET done=done+1, ${gated ? 'notrecipe=notrecipe+1' : 'failed=failed+1'} WHERE id=$1`,
+          [jobId]);
       }
+
+      // Be a good citizen. 1,480 links through two workers with no pause is a
+      // sustained hammering of one host and the fastest way to get the whole
+      // batch 403'd. The fetch itself already takes seconds; this barely shows.
+      if (BULK_PAUSE_MS) await new Promise((r) => setTimeout(r, BULK_PAUSE_MS));
     }
   };
 
@@ -1301,10 +1510,96 @@ async function runJob(userId, jobId) {
       WHERE id=$1`, [jobId]);
 }
 
+/**
+ * Put the failures back in the queue.
+ *
+ * A batch of a hundred will always throw off a handful of timeouts and blocked
+ * fetches, and re-pasting the whole list to catch six of them would re-check a
+ * hundred URLs and re-import nothing. Only 'failed' rows are reset; 'saved' and
+ * 'skipped' stay exactly as they are, so this is safe to press repeatedly.
+ *
+ * The job's counters are rewound by the number of retries rather than zeroed —
+ * `done` must keep counting the work already finished or the progress bar jumps
+ * backwards.
+ */
+async function retryImportJob(userId, jobId) {
+  const pool = libDb.getPool();
+  const { rows } = await pool.query(
+    `UPDATE hh_recipe_import_items SET status='pending', error=NULL, updated_at=now()
+      WHERE job_id=$1 AND status='failed' RETURNING id`, [Number(jobId)]);
+  if (!rows.length) return getImportJob(userId, jobId);
+
+  await pool.query(
+    `UPDATE hh_recipe_import_jobs
+        SET status='running', finished_at=NULL,
+            done = GREATEST(done - $2, 0), failed = GREATEST(failed - $2, 0)
+      WHERE id=$1`, [Number(jobId), rows.length]);
+
+  runJob(userId, Number(jobId))
+    .catch((e) => console.error('[hh-recipes] retry', jobId, 'died:', e?.message || e));
+  return getImportJob(userId, jobId);
+}
+
+/**
+ * Everything a bulk run did NOT import, across EVERY job — the by-hand pile.
+ *
+ * Deliberately not per-job: twenty-five batches means twenty-five progress
+ * panels, and nobody is going to open each one to copy six URLs out of it. This
+ * is the one list you work through afterwards.
+ *
+ * Three things are filtered out, and each matters:
+ *
+ *   1. A URL that succeeded in ANY job. Retry-failed and a later re-paste both
+ *      leave the old failed row behind; showing it would send you chasing a
+ *      recipe you already have.
+ *   2. A URL whose recipe now exists by source_key — covers importing it by
+ *      hand, or the same video arriving under its canonical link.
+ *   3. Duplicates. DISTINCT ON keeps the most recent attempt, so the reason you
+ *      see is the reason it failed LAST, not the first time you tried.
+ *
+ * `notrecipe` and `failed` are returned together but tagged, because they are
+ * different jobs for you: a failure is worth retrying, a not-food is worth
+ * eyeballing before you bother.
+ */
+async function listImportMisses(userId, { limit = 1000 } = {}) {
+  const pool = libDb.getPool();
+  const { rows } = await pool.query(
+    `SELECT DISTINCT ON (i.url) i.url, i.status, i.error, i.updated_at, i.job_id
+       FROM hh_recipe_import_items i
+      WHERE i.status IN ('failed', 'notrecipe')
+        AND NOT EXISTS (
+          SELECT 1 FROM hh_recipe_import_items s
+           WHERE s.url = i.url AND s.status IN ('saved', 'skipped'))
+      ORDER BY i.url, i.updated_at DESC
+      LIMIT $1`, [Math.min(Number(limit) || 1000, 5000)]);
+
+  // The source_key check can't be done in that query — the key is derived in JS
+  // — so it happens here, on a few hundred rows at most.
+  const keys = rows.map((r) => sourceKey(r.url)).filter(Boolean);
+  const have = new Set();
+  if (keys.length) {
+    const { rows: existing } = await pool.query(
+      `SELECT source_key FROM hh_recipes WHERE source_key = ANY($2::text[]) AND ${VISIBLE}`,
+      [userId, keys]);
+    existing.forEach((e) => have.add(e.source_key));
+  }
+
+  const misses = rows
+    .filter((r) => !have.has(sourceKey(r.url)))
+    .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+
+  return {
+    misses,
+    total: misses.length,
+    failed: misses.filter((m) => m.status === 'failed').length,
+    notrecipe: misses.filter((m) => m.status === 'notrecipe').length,
+  };
+}
+
 async function getImportJob(userId, jobId) {
   const pool = libDb.getPool();
   const { rows: [job] } = await pool.query(
-    `SELECT id, owner_id, total, done, ok, failed, status, created_at, finished_at
+    `SELECT id, owner_id, total, done, ok, failed, skipped, notrecipe, status, created_at, finished_at
        FROM hh_recipe_import_jobs WHERE id=$1 AND (owner_id=$2 OR TRUE)`, [Number(jobId), userId]);
   if (!job) throw new Error('Not found.');
   const { rows: items } = await pool.query(
@@ -1440,6 +1735,7 @@ module.exports = {
   // Exported for the self-test and for anything that wants the same parsing.
   parseIngredient, formatQty, scaledText, isoMinutes, stripTags,
   guessMainIngredient, tidyIngredientName, SORTS, SORT_KEYS,
+  recipeSignals, looksLikeRecipe,
   findRecipeNode, recipeFromJsonLd,
   metaContent, embeddedCaption, handleFromUrl,
   importRecipe,
@@ -1448,6 +1744,7 @@ module.exports = {
   addToList, planMeal,
   captureImage, setImageFromDataUrl, readImage, deleteImage, MAX_IMAGE_BYTES, IMAGE_TYPES,
   parseUrlList, createImportJob, getImportJob, latestImportJob, cancelImportJob, resumeImportJobs,
+  retryImportJob, sourceKey, authorFromHtml, findBySourceKey, listImportMisses,
   getPlannedWeek, unplanMeal, moveMeal,
   BULK_MAX_URLS,
 };

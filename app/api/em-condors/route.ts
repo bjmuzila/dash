@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ownerOrInternal, gateDenied } from "@/lib/auth/ownerApiGate";
 import {
   getDb,
   getEmCondors,
@@ -32,6 +33,11 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   try {
+    // Owner-only. Automated callers (condor-mark-recorder, em-tracker-auto-eval)
+    // pass on x-internal-token; see lib/auth/ownerApiGate.ts.
+    const gate = await ownerOrInternal(req);
+    if (!gate.ok) return gateDenied(gate);
+
     await getDb();
     const p = req.nextUrl.searchParams;
     const view = p.get("view");
@@ -59,6 +65,11 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    // Owner-only. Automated callers (condor-mark-recorder, em-tracker-auto-eval)
+    // pass on x-internal-token; see lib/auth/ownerApiGate.ts.
+    const gate = await ownerOrInternal(req);
+    if (!gate.ok) return gateDenied(gate);
+
     const body = await req.json();
     await getDb();
 
@@ -142,6 +153,11 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
+    // Owner-only. Automated callers (condor-mark-recorder, em-tracker-auto-eval)
+    // pass on x-internal-token; see lib/auth/ownerApiGate.ts.
+    const gate = await ownerOrInternal(req);
+    if (!gate.ok) return gateDenied(gate);
+
     await getDb();
     const p = req.nextUrl.searchParams;
     const all = p.get("all");

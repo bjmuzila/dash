@@ -12,7 +12,8 @@ import Analytics from '@/components/pages/Analytics'
 // /home uses a seed-swap wrapper (server /proxy/gex read → client /api fetch).
 const Home         = lazy(() => import('./routes/HomeRoute'))
 const OptionsChain = lazy(() => import('@/components/pages/OptionsChain'))
-const Options      = lazy(() => import('@/components/pages/Options'))
+// /options (the "Options" toolbar tile) was removed 2026-08-12. Options Chain
+// (/options-chain, above) is a different page and is unaffected.
 // mult-greek/page.tsx is a server component; mount its client UI (named export).
 const MultGreek    = lazy(() => import('@/app/mult-greek/MultGreekClient').then((m) => ({ default: m.MultGreekClient })))
 const Em           = lazy(() => import('@/components/pages/Em'))
@@ -62,7 +63,6 @@ export default function App() {
               <Route path="/traders-dashboard" element={<TradersDashboard />} />
               <Route path="/analytics" element={<Analytics />} />
               <Route path="/options-chain" element={S(<OptionsChain />)} />
-              <Route path="/options" element={S(<Options />)} />
               <Route path="/mult-greek" element={S(<MultGreek />)} />
               <Route path="/em" element={S(<Em />)} />
               <Route path="/flow" element={S(<Flow />)} />

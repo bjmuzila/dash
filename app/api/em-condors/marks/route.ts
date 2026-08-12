@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ownerOrInternal, gateDenied } from "@/lib/auth/ownerApiGate";
 import path from "node:path";
 import {
   getDb,
@@ -40,6 +41,11 @@ interface PricedResult { condor_id: number; ticker: string; rows: PricedRow[] }
 
 export async function GET(req: NextRequest) {
   try {
+    // Owner-only. Automated callers (condor-mark-recorder, em-tracker-auto-eval)
+    // pass on x-internal-token; see lib/auth/ownerApiGate.ts.
+    const gate = await ownerOrInternal(req);
+    if (!gate.ok) return gateDenied(gate);
+
     await getDb();
     const p = req.nextUrl.searchParams;
     const week_start = (p.get("week_start") || "").trim();
@@ -60,6 +66,11 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    // Owner-only. Automated callers (condor-mark-recorder, em-tracker-auto-eval)
+    // pass on x-internal-token; see lib/auth/ownerApiGate.ts.
+    const gate = await ownerOrInternal(req);
+    if (!gate.ok) return gateDenied(gate);
+
     let body: Record<string, unknown> = {};
     try { body = await req.json(); } catch { /* default to this week */ }
     await getDb();

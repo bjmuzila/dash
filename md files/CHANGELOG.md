@@ -1,5 +1,201 @@
 # Changelog
 
+## 2026-08-12 - Removed the Options page (/options)
+
+Removed: the "Options" toolbar tile and its `/options` SPA route.
+Edited: `app-vite/src/App.tsx`, `components/shared/GlobalToolbar.tsx`,
+`components/mobile/mobileNav.ts`.
+To delete on disk: `components/pages/Options.tsx`, `app/options/` (
+`OptionsPlaceholder.tsx`, `TickerSelect.tsx`, `tickerContext.tsx`, `tickers.ts`),
+`app/app/options/route.ts`.
+
+### What
+
+`/options` was the tile that replaced the old Lookup placeholder — a page still
+being built out, made of `OptionsPlaceholder` boxes. It is gone.
+
+**Options Chain (`/options-chain`) is untouched.** Different page, different
+route, still in the toolbar and still the target of the `/m/chain` phone build.
+
+### How
+
+- `App.tsx`: dropped the `Options` lazy import and the `<Route path="/options">`.
+- `GlobalToolbar.tsx`: dropped the `NAV_ITEMS` entry. Removing the route without
+  the nav item would fail `check-routes.mjs` on the next build, so both go in the
+  same change.
+- `mobileNav.ts`: dropped `"/options": "/m/chain"` from `DESKTOP_TO_MOBILE` — a
+  phone can no longer land on a route that does not exist.
+- Nothing else imported `@/app/options/*`; only `components/pages/Options.tsx`
+  did, and that file is being deleted with it.
+
+## 2026-08-12 - Bulk import: a "Not imported" list you can copy or download
+
+New: `listImportMisses()`, `GET /api/hh/recipes/bulk?misses=1`, a Not imported
+card on the Bulk tab.
+Edited: `_lib-household-recipes.cjs`, `household-routes.cjs`,
+`recipe-vite/src/{api.ts,pages/Add.tsx}`.
+Verified: 31 routes, endpoint 401s without a session, selftest 100 passed,
+`tsc` + build clean.
+
+### What
+
+With 1,480 links going through in batches of 60, the ones that don't import are
+the ones you actually need a record of — and they were only visible inside the
+progress panel of the job that produced them. Twenty-five batches means
+twenty-five panels, and nobody opens each one to copy six URLs out of it.
+
+### How
+
+- **One list across every job**, not per-job. Status, reason and a link out to
+  the video, plus **Copy URLs** and **Download .txt**.
+- **It shrinks by itself**, which is what makes it trustworthy enough to work
+  from. Excluded: any URL that ever succeeded in ANY job — retry-failed and a
+  re-paste both leave the old failed row behind, and showing it would send you
+  chasing a recipe you already have — and any URL whose recipe now exists by
+  `source_key`, which covers importing it by hand afterwards.
+- **`DISTINCT ON (url)` ordered by `updated_at DESC`**, so a link tried three
+  times appears once, with the reason it failed LAST rather than first.
+- `failed` and `notrecipe` are returned together but tagged, because they are
+  different jobs for you: a failure is worth retrying, a not-food is worth
+  eyeballing first.
+- The `source_key` filter runs in JS, not SQL — the key is derived in JS and this
+  is a few hundred rows at most.
+- The .txt is built in the browser from data already on screen: no endpoint,
+  nothing to authenticate, works with no network once the card has loaded. Copy
+  falls back to expanding the list when the clipboard API is blocked, which it is
+  outside a secure context and in some in-app browsers.
+- The card refetches on every change to the running job's counters, so a link
+  that fails joins the pile while you watch and a successful retry leaves it.
+
+## 2026-08-12 - Bulk import: skip non-recipes before they cost an AI call
+
+Edited: `_lib-household-recipes.cjs` (`recipeSignals`, `looksLikeRecipe`, the
+gate in `importRecipe`, `notrecipe` handling + a politeness pause in `runJob`),
+`_lib-household.cjs`, `household-routes.cjs`,
+`recipe-vite/src/{api.ts,pages/Add.tsx}`.
+Verified: selftest 89 → **100 passed**, including the real garlic-bread caption
+passing and a CapCut tutorial being rejected. `tsc` + build clean, 31 routes.
+
+### What
+
+Brandon's TikTok data export arrived: **1,480 favourites**, and only Date + Link
+in it — no titles. Favourites are not a recipe list, they're everything ever
+bookmarked; his includes a "Capcut" collection.
+
+Importing all of them would have been ~$25 and ~3 hours, and most of the money
+would have gone on non-recipes: each one cost a full Claude call before coming
+back "that doesn't look like a recipe". That is paying an LLM to repeat what the
+caption already said.
+
+### How
+
+- **`recipeSignals(text)`** scores the caption on four axes: amounts (`500g`,
+  `2 tbsp`, `350F`), method verbs, recipe words (`ingredients`, `macros`,
+  `serves`) and food nouns — reusing the HEROES list the main-ingredient guess
+  already needed. **One strong signal passes, or two weak ones.**
+- It runs **after** the page fetch and the caption extraction, both free, and
+  **before** `aiExtract`, which is not. The fetch is what produces the caption,
+  so the gate can't sit any earlier and the saving is exactly the expensive half.
+  ~$25 → ~$6 on this list.
+- **Deliberately generous.** A false negative is one manual import; a false
+  positive is about two pence. It is a spend filter, not a classifier, and it is
+  tuned in that direction on purpose.
+- **The JSON-LD path is never gated.** A page that publishes `recipeIngredient`
+  has already proved what it is; running a word filter over it would be pure
+  downside.
+- A rejection is its own outcome — item status `notrecipe`, its own counter,
+  `NOT FOOD` in the progress list. Not a failure (the failure count should mean
+  "the import is broken"), and **not retried**, since retrying would re-fetch the
+  same page to reach the same conclusion.
+- Single imports get **Import anyway** when the gate rejects them — for a video
+  where the method is spoken rather than written.
+- **800ms pause between items, per worker.** 1,480 links through two workers with
+  no breather is a sustained hammering of one host and the fastest way to get the
+  whole batch 403'd. Next to a multi-second fetch it barely shows.
+
+### Running the export
+
+25 batch files of 60 were generated from the export, newest first. Suggested
+order: deploy, run **batch-01** as a pilot, read the saved / not-food / failed
+split, and tune the word lists from real numbers before doing the other 24.
+
+### Deploy
+
+```
+git pull
+docker compose build household && docker compose up -d --force-recreate household
+curl -s http://127.0.0.1:3010/health          # routes: 31
+docker compose build recipes && docker compose up -d recipes
+docker compose exec -T household node server-v2/scripts/backfill-recipe-derived.js
+```
+
+## 2026-08-12 - Bulk import: share-link handling, cross-batch dedupe, retry failed
+
+Edited: `_lib-household-recipes.cjs` (`sourceKey`, `authorFromHtml`,
+`handleFromUrl`, `fetchPage`, `runJob`, `retryImportJob`), `_lib-household.cjs`
+(`source_key`, `hh_recipe_import_jobs.skipped`), `household-routes.cjs`,
+`recipe-vite/src/{api.ts,pages/Add.tsx}`.
+Renamed: `backfill-recipe-mains.js` → `backfill-recipe-derived.js` (it now fills
+`source_key` as well — one command after a deploy beats two).
+Verified: selftest 76 → **89 passed**; `tsc` + build clean; household boots with
+31 routes.
+
+### What
+
+Prompted by a real question before importing a TikTok favourites export: what
+happens when the same video appears in two pastes?
+
+Answer, before this: two recipes. And a worse one nobody had noticed —
+**TikTok's data export does not write the pretty URL**. Favourites come out as
+`tiktokv.com/share/video/<id>`, the share sheet gives `vm.tiktok.com/<code>`, and
+only the site itself writes `tiktok.com/@handle/video/<id>`. `handleFromUrl` only
+knew the third shape, so a hundred-link export would have credited every single
+recipe to "tiktokv.com" instead of its creator.
+
+### How
+
+- **`fetchPage` now returns `{ html, finalUrl }`.** A share link redirects; the
+  by-line and the dedupe key both need where we LANDED, not what was pasted.
+- **`sourceKey(url)`** normalises the three shapes to one identity:
+  `tiktok:<id>`, `instagram:<code>`, else host + path with tracking junk and
+  trailing slashes dropped. Stored on `hh_recipes.source_key`, indexed.
+  **Not a unique constraint** — a duplicate should be skipped in code with a
+  message, not rejected by the database in a way that fails the import row.
+- **The dedupe check runs TWICE per import, deliberately.** Once before the
+  fetch, which costs one indexed lookup and catches a canonical link pasted in an
+  earlier batch. Once after, because `vm.tiktok.com/ZGxyz` carries no id at all —
+  only the resolved URL can tell you it's something you already have. The second
+  check happens after a fetch we've already paid for but before the AI call,
+  which is the expensive half.
+- A skip is `HAVE IT` in the progress list and its own counter — it is the
+  dedupe working, not a failure, and burying it in the failure count would make
+  a clean second paste look broken.
+- **`handleFromUrl` was rewritten per-platform** rather than "first path segment
+  that looks like a word". TikTok handles are always the `@`-prefixed segment;
+  scanning loosely read `/share/video/<id>` as the handle "share", and excluding
+  that word just made it grab the video id instead. Instagram only treats the
+  FIRST segment as a profile, so `/reel/CxYz` is a post and not a person — the
+  old test asserting `@reel` was encoding that bug and is gone.
+- **`authorFromHtml`** reads `"uniqueId"` out of the rehydration blob. The page
+  beats the URL because an export link has no handle in it at any point.
+- **Retry failed** requeues only `failed` rows and rewinds the counters by that
+  many rather than zeroing them — `done` must keep counting finished work or the
+  progress bar jumps backwards. Safe to press repeatedly.
+
+### Deploy
+
+```
+git pull
+docker compose build household && docker compose up -d --force-recreate household
+curl -s http://127.0.0.1:3010/health          # routes: 31
+docker compose build recipes && docker compose up -d recipes
+docker compose exec -T household node server-v2/scripts/backfill-recipe-derived.js
+```
+
+Run the backfill BEFORE pasting a big list — without `source_key` on the recipes
+you already have, the dedupe has nothing to match against and the batch re-imports
+them.
+
 ## 2026-08-12 - Cookbook: Week tab replaces Saved, ★ becomes a filter chip
 
 New: `recipe-vite/src/pages/Week.tsx`, `GET|POST /api/hh/recipes/week`,

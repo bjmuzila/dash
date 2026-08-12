@@ -253,7 +253,9 @@ export const recipes = {
   get: (id: number) => api.get<{ recipe: Recipe }>(`/api/hh/recipes?id=${id}`),
 
   /** Reads a link (or pasted text) and returns a DRAFT. Nothing is saved. */
-  import: (src: { url?: string; text?: string }) =>
+  /** `force` skips the "is this even a recipe" caption gate — offered when the
+   *  gate rejects something you know perfectly well is food. */
+  import: (src: { url?: string; text?: string; force?: boolean }) =>
     api.post<{ draft: Draft }>('/api/hh/recipes', { action: 'import', ...src }),
 
   create: (recipe: Partial<Draft>) =>
@@ -300,6 +302,12 @@ export type ImportJob = {
   done: number
   ok: number
   failed: number
+  /** Links that resolved to a recipe already in the cookbook. Counted apart
+   *  from failures because it isn't one — it's the dedupe working. */
+  skipped: number
+  /** Links the caption gate rejected before any AI call — a favourites export
+   *  is full of them. Also not a failure, and not retried. */
+  notrecipe: number
   status: 'running' | 'done' | 'cancelled'
   created_at: string
   finished_at: string | null
@@ -308,7 +316,7 @@ export type ImportJob = {
 export type ImportItem = {
   id: number
   url: string
-  status: 'pending' | 'importing' | 'saved' | 'failed'
+  status: 'pending' | 'importing' | 'saved' | 'skipped' | 'notrecipe' | 'failed'
   recipe_id: number | null
   title: string | null
   error: string | null
@@ -369,6 +377,32 @@ export const bulk = {
       `/api/hh/recipes/bulk${id ? `?id=${id}` : ''}`),
   cancel: (id: number) =>
     api.post<{ job: ImportJob; items: ImportItem[] }>('/api/hh/recipes/bulk', { id, cancel: true }),
+  /** Requeue only the failed rows. Saved and skipped ones are left alone, so
+   *  this is safe to press repeatedly on a big batch. */
+  retry: (id: number) =>
+    api.post<{ job: ImportJob; items: ImportItem[] }>('/api/hh/recipes/bulk', { id, retry: true }),
+
+  /** The by-hand pile: every link never imported, across EVERY job. Anything
+   *  that later succeeded — by retry, re-paste, or typed in by hand — drops off
+   *  by itself, so this list only ever shrinks. */
+  misses: () => api.get<MissesPayload>('/api/hh/recipes/bulk?misses=1'),
+}
+
+export type ImportMiss = {
+  url: string
+  /** `failed` is worth retrying (a timeout, a block). `notrecipe` means the
+   *  caption gate saw no food — worth an eyeball before you bother. */
+  status: 'failed' | 'notrecipe'
+  error: string | null
+  updated_at: string
+  job_id: number
+}
+
+export type MissesPayload = {
+  misses: ImportMiss[]
+  total: number
+  failed: number
+  notrecipe: number
 }
 
 /**

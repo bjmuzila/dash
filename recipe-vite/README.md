@@ -156,9 +156,9 @@ than sitting where you can see it needs a hand.
 Backfill after deploying, or your whole existing library sits in the NULL bucket:
 
 ```bash
-docker compose exec -T household node server-v2/scripts/backfill-recipe-mains.js
+docker compose exec -T household node server-v2/scripts/backfill-recipe-derived.js
 # after editing the HEROES list:
-docker compose exec -T household node server-v2/scripts/backfill-recipe-mains.js --force
+docker compose exec -T household node server-v2/scripts/backfill-recipe-derived.js --force
 ```
 
 ## Bulk import
@@ -181,7 +181,64 @@ recipes are searchable and cookable at once, and "to review" is a filter on the
 Cookbook plus a banner on each recipe with one button to clear it.
 
 Failures are per-row: a dead link records its error next to its URL and the other
-fifty-nine carry on.
+fifty-nine carry on. **Retry failed** requeues only those rows — a batch of a
+hundred always throws off a few timeouts, and re-pasting the list to catch six of
+them would re-check a hundred URLs.
+
+### The "is this even a recipe" gate
+
+A TikTok favourites export is **not** a recipe list — it's everything you ever
+bookmarked. Brandon's is 1,480 items and includes CapCut tutorials.
+
+Every non-recipe used to cost a full Claude call before returning "that doesn't
+look like a recipe", which is paying an LLM to repeat what the caption already
+said. `recipeSignals()` reads the caption first and skips the API when there's no
+food in it — the page fetch still happens (free, and it's what produced the
+caption), so the saving is precisely the expensive half. On 1,480 links that's
+roughly $25 → $6.
+
+It scores amounts (`500g`, `2 tbsp`, `350F`), method verbs, recipe words
+(`ingredients`, `macros`, `serves`) and food nouns from the same HEROES list the
+main-ingredient guess uses. **One strong signal passes, or two weak ones** — it
+is deliberately generous, because a false negative is one manual import and a
+false positive is about two pence. Rejections are `NOT FOOD` in the progress
+list, counted apart from failures, and not retried. A single link rejected by
+the gate offers **Import anyway**.
+
+The JSON-LD path is never gated: a page carrying `recipeIngredient` has already
+proved what it is.
+
+### The by-hand pile
+
+`GET /api/hh/recipes/bulk?misses=1` returns every link that never became a
+recipe, **across every job** — with its status, its reason and a link out to the
+video. The Bulk tab shows it as a "Not imported" card with **Copy URLs** and
+**Download .txt**.
+
+Not per-job on purpose: twenty-five batches is twenty-five progress panels, and
+nobody opens each one to copy six URLs out of it.
+
+The list **shrinks by itself**. It excludes any URL that ever succeeded in any
+job (retry and re-paste both leave the old failed row behind) and any URL whose
+recipe now exists by `source_key` (covers importing it by hand). `DISTINCT ON`
+keeps the most recent attempt, so the reason shown is why it failed *last*.
+
+### Duplicates, and why the check runs twice
+
+TikTok's **data export does not write the pretty URL**. Favourites come out as
+`tiktokv.com/share/video/<id>`, the app's share sheet gives `vm.tiktok.com/<code>`,
+and the site itself writes `tiktok.com/@handle/video/<id>`. All three are one
+video, so `sourceKey()` normalises to `tiktok:<id>` (`instagram:<code>`, else
+host + path) and that is the column bulk import matches on.
+
+The check runs **before** the fetch — one indexed lookup, no page and no AI call
+— and **again after**, because a short share code carries no id and only the
+resolved URL can tell you it's something you already have. A skip is reported as
+`HAVE IT`, not as a failure, and counted separately.
+
+Same reason `sourceName` reads the page (`"uniqueId"` in TikTok's rehydration
+blob) before the URL: an export link has no handle in it at all, so URL-only
+credit would file a hundred imports under "tiktokv.com".
 
 ## Ingredients are stored three ways
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { recipes as api, bulk as bulkApi, type Draft, type Category, type Skill } from '../api'
+import { recipes as api, bulk as bulkApi, type Draft, type Category, type Skill, type ImportMiss } from '../api'
 import { T, label, display, body, section, button, segment, input, track, fill, SANS, MONO } from '../theme'
 
 /**
@@ -46,9 +46,13 @@ export default function Add() {
   const { data: cookbook } = useQuery({ queryKey: ['recipes', '', 'all', false], queryFn: () => api.list() })
 
   const doImport = useMutation({
-    mutationFn: () => api.import(mode === 'link' ? { url } : { text }),
+    mutationFn: (force?: boolean) => api.import(mode === 'link' ? { url, force } : { text }),
     onSuccess: (res) => setDraft(res.draft),
   })
+  /** The gate is tuned to be generous, but it will occasionally reject a caption
+   *  that is genuinely a recipe — a video with the method spoken rather than
+   *  written, say. One tap overrides it rather than sending you to Paste. */
+  const gateRejected = /doesn.t look like a recipe/i.test((doImport.error as Error)?.message ?? '')
 
   const save = useMutation({
     mutationFn: (d: Draft) => api.create(d),
@@ -102,10 +106,10 @@ export default function Add() {
             inputMode="url"
             autoCapitalize="off"
             autoCorrect="off"
-            onKeyDown={(e) => { if (e.key === 'Enter' && url.trim()) doImport.mutate() }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && url.trim()) doImport.mutate(undefined) }}
           />
           <button
-            onClick={() => doImport.mutate()}
+            onClick={() => doImport.mutate(undefined)}
             disabled={!url.trim() || doImport.isPending}
             style={{ ...button('primary'), width: '100%', marginTop: 10, opacity: url.trim() ? 1 : 0.5 }}
           >
@@ -137,7 +141,7 @@ export default function Add() {
             placeholder={'Sticky banana bread pudding cake\n\n4 ripe bananas\n2 tsp vanilla…'}
           />
           <button
-            onClick={() => doImport.mutate()}
+            onClick={() => doImport.mutate(undefined)}
             disabled={!text.trim() || doImport.isPending}
             style={{ ...button('primary'), width: '100%', marginTop: 10, opacity: text.trim() ? 1 : 0.5 }}
           >
@@ -165,10 +169,24 @@ export default function Add() {
         <div style={section()}>
           <div style={label({ color: T.bad })}>Import failed</div>
           <p style={{ ...body(14), marginTop: 8 }}>{(doImport.error as Error).message}</p>
-          <p style={{ ...body(13), marginTop: 8, color: T.muted }}>
-            Some sites block automated readers. Copy the recipe text and use the Paste tab,
-            or start a blank one.
-          </p>
+          {gateRejected ? (
+            <>
+              <p style={{ ...body(13), marginTop: 8, color: T.muted }}>
+                The caption had no amounts and no food words, so it was skipped before
+                spending an AI call. If the method is spoken rather than written, import
+                it anyway.
+              </p>
+              <button onClick={() => doImport.mutate(true)} disabled={doImport.isPending}
+                      style={{ ...button('ghost'), width: '100%', marginTop: 10 }}>
+                {doImport.isPending ? 'Reading it…' : 'Import anyway'}
+              </button>
+            </>
+          ) : (
+            <p style={{ ...body(13), marginTop: 8, color: T.muted }}>
+              Some sites block automated readers. Copy the recipe text and use the Paste tab,
+              or start a blank one.
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -212,8 +230,12 @@ function BulkImport() {
   // Each save invalidates the cookbook so the new rows appear behind you rather
   // than after a manual refresh.
   useEffect(() => {
-    if (job) qc.invalidateQueries({ queryKey: ['recipes'] })
-  }, [job?.ok, job?.status, qc, job])
+    if (!job) return
+    qc.invalidateQueries({ queryKey: ['recipes'] })
+    // The by-hand pile changes as the batch runs — a link that fails joins it,
+    // a retry that works removes it.
+    qc.invalidateQueries({ queryKey: ['bulk-misses'] })
+  }, [job?.ok, job?.failed, job?.notrecipe, job?.status, qc, job])
 
   const start = useMutation({
     mutationFn: () => bulkApi.start(urls),
@@ -221,6 +243,10 @@ function BulkImport() {
   })
   const cancel = useMutation({
     mutationFn: () => bulkApi.cancel(job!.id),
+    onSuccess: (res) => qc.setQueryData(['bulk', jobId], res),
+  })
+  const retry = useMutation({
+    mutationFn: () => bulkApi.retry(job!.id),
     onSuccess: (res) => qc.setQueryData(['bulk', jobId], res),
   })
 
@@ -231,8 +257,9 @@ function BulkImport() {
       <div style={section()}>
         <h2 style={{ ...display(21), margin: 0 }}>Paste a list of links</h2>
         <p style={{ ...body(14), marginTop: 8 }}>
-          One per line, or just paste the lot — commas and stray quotes are fine, and
-          duplicates are dropped. Up to 60 at a time.
+          One per line, or just paste the lot — commas, quotes and JSON are fine.
+          Links you already have are skipped, and anything whose caption isn’t food
+          is dropped before it costs an AI call. Up to 60 at a time.
         </p>
         <div style={{
           ...body(13), marginTop: 10, padding: '10px 12px', borderRadius: 10,
@@ -265,6 +292,8 @@ function BulkImport() {
         )}
       </div>
 
+      <Misses />
+
       {job && (
         <div style={section()}>
           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
@@ -278,13 +307,25 @@ function BulkImport() {
             <div style={fill(job.total ? (job.done / job.total) * 100 : 0)} />
           </div>
           <div style={{ ...label(), marginTop: 8 }}>
-            {job.ok} saved{job.failed ? ` · ${job.failed} failed` : ''}
+            {job.ok} saved
+            {job.skipped ? ` · ${job.skipped} already had` : ''}
+            {job.notrecipe ? ` · ${job.notrecipe} not food` : ''}
+            {job.failed ? ` · ${job.failed} failed` : ''}
           </div>
 
           {running && (
             <button onClick={() => cancel.mutate()} disabled={cancel.isPending}
                     style={{ ...button('ghost'), width: '100%', marginTop: 10 }}>
               Stop after the current one
+            </button>
+          )}
+
+          {/* A hundred-link batch always throws off a few timeouts. Re-pasting
+              the list to catch six of them would re-check a hundred URLs. */}
+          {!running && !!job.failed && (
+            <button onClick={() => retry.mutate()} disabled={retry.isPending}
+                    style={{ ...button('primary'), width: '100%', marginTop: 10 }}>
+              {retry.isPending ? 'Requeuing…' : `Retry ${job.failed} failed`}
             </button>
           )}
 
@@ -299,10 +340,13 @@ function BulkImport() {
                   flexShrink: 0,
                   color: it.status === 'saved' ? T.accent
                     : it.status === 'failed' ? T.bad
+                    : it.status === 'skipped' || it.status === 'notrecipe' ? T.faint
                     : it.status === 'importing' ? T.warn : T.faint,
                 }}>
                   {it.status === 'saved' ? 'SAVED'
                     : it.status === 'failed' ? 'FAILED'
+                    : it.status === 'skipped' ? 'HAVE IT'
+                    : it.status === 'notrecipe' ? 'NOT FOOD'
                     : it.status === 'importing' ? '···' : 'QUEUED'}
                 </span>
                 <div style={{ minWidth: 0, flex: 1 }}>
@@ -330,6 +374,106 @@ function BulkImport() {
         </div>
       )}
     </>
+  )
+}
+
+/**
+ * The by-hand pile — every link that never became a recipe, across every batch.
+ *
+ * Not part of the job panel above it, deliberately. Twenty-five batches means
+ * twenty-five panels, and nobody is going to open each one to copy six URLs out.
+ * This is one list that spans all of them, and it SHRINKS BY ITSELF: anything
+ * later imported — by retry, by a re-paste, or typed in by hand — drops off,
+ * because the query excludes any URL that ever succeeded and any URL whose
+ * recipe now exists.
+ */
+function Misses() {
+  const [open, setOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const { data } = useQuery({ queryKey: ['bulk-misses'], queryFn: () => bulkApi.misses() })
+  if (!data?.total) return null
+
+  const text = data.misses.map((m) => m.url).join('\n')
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard is blocked outside a secure context and on some in-app
+      // browsers. Opening the list is the fallback — you can still select it.
+      setOpen(true)
+    }
+  }
+
+  const download = () => {
+    // Built in the browser from data already fetched: no endpoint, nothing to
+    // authenticate, and it works offline once the list is on screen.
+    const url = URL.createObjectURL(new Blob([text + '\n'], { type: 'text/plain' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `recipes-not-imported-${new Date().toISOString().slice(0, 10)}.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div style={section()}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
+        <h3 style={{ ...display(19), margin: 0 }}>Not imported</h3>
+        <span style={label()}>{data.total}</span>
+      </div>
+      <p style={{ ...body(13), marginTop: 6, color: T.faint }}>
+        {data.failed} failed · {data.notrecipe} had no food in the caption.
+        This list clears itself as they get imported.
+      </p>
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+        <button onClick={copy} style={{ ...button('ghost'), flex: 1 }}>
+          {copied ? 'Copied' : 'Copy URLs'}
+        </button>
+        <button onClick={download} style={{ ...button('ghost'), flex: 1 }}>Download .txt</button>
+        <button onClick={() => setOpen((v) => !v)} style={{ ...button('ghost'), flex: 1 }}>
+          {open ? 'Hide' : 'Show'}
+        </button>
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 4, maxHeight: 320, overflowY: 'auto' }}>
+          {data.misses.map((m, i) => <MissRow key={m.url} m={m} first={i === 0} />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MissRow({ m, first }: { m: ImportMiss; first: boolean }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 10,
+      padding: '9px 0', borderTop: first ? 'none' : `1px solid ${T.rule}`,
+    }}>
+      <span style={{
+        fontFamily: MONO, fontSize: 8, letterSpacing: '.1em', marginTop: 3,
+        width: 46, flexShrink: 0,
+        color: m.status === 'failed' ? T.bad : T.faint,
+      }}>
+        {m.status === 'failed' ? 'FAILED' : 'NOT FOOD'}
+      </span>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        {/* Opens the video so you can look at it before deciding. rel=noreferrer
+            because there is no reason to tell TikTok where the click came from. */}
+        <a href={m.url} target="_blank" rel="noreferrer" style={{
+          ...body(12), color: T.accent, textDecoration: 'none',
+          // Truncated from the LEFT: the tail is the video id, which is the part
+          // that identifies it. The prefix is identical on all of them.
+          display: 'block', direction: 'rtl', textAlign: 'left',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{m.url}</a>
+        {m.error && <div style={{ ...body(11.5), color: T.faint, marginTop: 3 }}>{m.error}</div>}
+      </div>
+    </div>
   )
 }
 

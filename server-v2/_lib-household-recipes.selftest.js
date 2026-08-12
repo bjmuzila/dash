@@ -184,7 +184,6 @@ eq(r.metaContent('<html></html>', 'og:image'), null, 'missing meta is null');
 // The by-line credits the creator, not the domain.
 eq(r.handleFromUrl('https://www.tiktok.com/@fit_foodie_lulu/video/7672328780597267730'),
    '@fit_foodie_lulu', 'tiktok handle');
-eq(r.handleFromUrl('https://www.instagram.com/reel/Cxyz/'), '@reel', 'instagram path first segment');
 eq(r.handleFromUrl('https://thesaltycooker.com/banana-cake'), null, 'ordinary site has no handle');
 
 // ── Main ingredient ──────────────────────────────────────────────────────────
@@ -250,6 +249,86 @@ eq(urls[2], 'https://www.tiktok.com/@c/video/333', 'quotes and trailing comma tr
 eq(r.parseUrlList('nothing here at all').length, 0, 'no links → empty, and the route turns that into an error');
 eq(r.parseUrlList(Array.from({ length: 200 }, (_, i) => `https://x.com/v/${i}`).join('\n')).length,
    r.BULK_MAX_URLS, 'capped at BULK_MAX_URLS');
+
+// ── Share links and dedupe keys ──────────────────────────────────────────────
+//
+// TikTok's DATA EXPORT does not write the pretty URL. Favourites come out as
+// tiktokv.com/share/video/<id>, the app's share sheet gives vm.tiktok.com/<code>,
+// and the site itself writes tiktok.com/@handle/video/<id>. All three are ONE
+// video, and a hundred-link paste will contain more than one shape of them.
+
+eq(r.sourceKey('https://www.tiktok.com/@fit_foodie_lulu/video/7672328780597267730'),
+   'tiktok:7672328780597267730', 'canonical tiktok link → id key');
+eq(r.sourceKey('https://www.tiktokv.com/share/video/7672328780597267730/'),
+   'tiktok:7672328780597267730', 'export share link → the SAME key');
+eq(r.sourceKey('https://www.tiktok.com/@x/video/7672328780597267730?is_from_webapp=1'),
+   'tiktok:7672328780597267730', 'tracking params ignored');
+eq(r.sourceKey('https://www.instagram.com/reel/CxYz123abc/'), 'instagram:CxYz123abc', 'instagram reel key');
+eq(r.sourceKey('https://thesaltycooker.com/Banana-Cake/'), 'thesaltycooker.com/banana-cake',
+   'ordinary site → host + path, case-folded, no trailing slash');
+// A short share code carries no id, so it can only be keyed AFTER the redirect
+// resolves — which is why the importer checks for a duplicate twice.
+eq(r.sourceKey('https://vm.tiktok.com/ZGeAbCdEf/'), 'vm.tiktok.com/zgeabcdef',
+   'short share code has no id to key on yet');
+eq(r.sourceKey('not a url'), null, 'garbage → null');
+
+// ── By-line ──────────────────────────────────────────────────────────────────
+
+eq(r.handleFromUrl('https://www.tiktok.com/@fit_foodie_lulu/video/7672328780597267730'),
+   '@fit_foodie_lulu', 'handle from a canonical link');
+// The export link has no handle in it at all — crediting it "@share" would be
+// worse than crediting nobody.
+eq(r.handleFromUrl('https://www.tiktokv.com/share/video/7672328780597267730/'), null,
+   'share/video path segments are not handles');
+eq(r.handleFromUrl('https://www.instagram.com/reel/CxYz123abc/'), null, 'reel is not a handle');
+eq(r.handleFromUrl('https://www.instagram.com/hannahmuch/'), '@hannahmuch', 'instagram profile handle');
+eq(r.handleFromUrl('https://thesaltycooker.com/banana-cake'), null, 'ordinary site has no handle');
+
+// The PAGE beats the URL, and is the only source for an export link.
+eq(r.authorFromHtml('{"author":{"id":"123","uniqueId":"fit_foodie_lulu","nickname":"Lulu"}}'),
+   '@fit_foodie_lulu', 'handle read out of the rehydration blob');
+eq(r.authorFromHtml('<html>nothing here</html>'), null, 'no uniqueId → null');
+
+// ── The "is this even a recipe" gate ─────────────────────────────────────────
+//
+// A TikTok favourites export is not a recipe list — it is everything ever
+// bookmarked. Every non-recipe used to cost a full Claude call before coming
+// back "that doesn't look like a recipe", which is paying an LLM to repeat what
+// the caption already said. The gate is a SPEND FILTER and is deliberately
+// generous: a false negative is one manual import, a false positive is 2p.
+
+// The real caption, from the TikTok imported on 2026-08-12.
+const GARLIC_BREAD = `CHEESY BUTTER CHICKEN GARLIC BREAD 🥖 Creamy, cheesy, garlicky and packed with those dreamy butter chicken flavours.
+Macros (serves 5) • 570kcal • 42g P
+Ingredients
+1 Ciabatta loaf sliced in half lengthways
+500g chicken breast or tenders
+1 cup mozzarella cheese
+2 tsp ground cumin`;
+eq(r.looksLikeRecipe(GARLIC_BREAD), true, 'the real garlic bread caption passes');
+
+// A terse one — no "ingredients" header, no macros, just amounts and food.
+eq(r.looksLikeRecipe('smash burger tacos 🌮 500g beef mince, 6 tortillas, 2 tbsp butter. Fry hard both sides.'),
+   true, 'a terse caption with amounts still passes');
+eq(r.looksLikeRecipe('Roast the sweet potato at 425F, sear the steak 2 mins a side, then layer it up. Serves 4.'),
+   true, 'method + temperature + serves, no ingredient list');
+
+// The things that fill up a favourites list.
+eq(r.looksLikeRecipe('CapCut tutorial — how I edit my transitions ✨ template in bio #capcut #editing'),
+   false, 'an editing tutorial is rejected');
+eq(r.looksLikeRecipe('my dog does this every single morning and I cannot cope 😭 #dogsoftiktok'),
+   false, 'a dog video is rejected');
+eq(r.looksLikeRecipe('POV: it is Monday and you have not slept. follow for more'),
+   false, 'generic caption is rejected');
+eq(r.looksLikeRecipe(''), false, 'empty caption is rejected');
+
+// The counts are exported so a real batch can be tuned from numbers rather than
+// from opinions about word lists.
+const sig = r.recipeSignals(GARLIC_BREAD);
+eq(sig.measures >= 3, true, 'counts the amounts');
+eq(sig.heroes >= 2, true, 'counts the food words');
+eq(typeof sig.strong, 'string', 'reports WHICH strong signal fired');
+eq(r.recipeSignals('nothing here').pass, false, 'signals agree with looksLikeRecipe');
 
 // ── Report ───────────────────────────────────────────────────────────────────
 
