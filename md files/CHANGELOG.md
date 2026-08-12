@@ -1,392 +1,288 @@
 # Changelog
 
-## 2026-08-11 - Mobile: tab labels centred, bubbles on by default + size variance, expiry date on the heatmap, wall tags clipped to the strike cell
-
-`components/mobile/MobileTabBar.tsx`, `components/mobile/pages/MobileEsCandles.tsx`,
-`components/mobile/pages/MobileHeatmap.tsx`, `components/mobile/ExpiryBadge.tsx`,
-`components/mobile/MobileUI.tsx`, `components/mobile/MobileShell.tsx`. Phone build only.
-
-### Tab bar: the word wasn't in the button
-
-The active pill was a fixed 46x28 box pinned over the GLYPH, so the label sat
-outside the highlight and each tab read as an icon button with a caption
-stranded beneath it. The pill now insets the whole cell (top/bottom 3, left/right
-4), so icon and label are both inside it.
-
-The label span was also inline, which made its `overflow`/`text-overflow`
-inert - those don't apply to non-replaced inline boxes - and left it aligning to
-the glyph's optical centre rather than the cell's. It's now `display: block`,
-`width: 100%`, `text-align: center`, and the icon span is centred the same way.
-
-### ES Candles: bubbles on by default, plus a size variance slider
-
-`showBubbles` starts `true`. The trail is the reason to open this page on a
-phone; candles alone are in every broker app. Nothing extra is fetched when the
-overlay is off anyway - `useGexBubbleHistory` is already gated on `enabled`.
-
-New `BUBBLE_SCALE_*` control (0.4x - 3.0x, default 1.0x) in the Overlays sheet.
-It scales the TOP of the radius range and leaves the floor at 1.4px, which makes
-it a contrast control rather than a zoom: the trail sizes each bubble against
-the session's own maximum, so a day with one dominant strike collapses the rest
-to dots and a flat day makes them all identical. Turn it up and the walls pull
-away from the crowd; turn it down and the trail flattens into an even ribbon
-that reads as a path. 1.0x is the old behaviour - half a bar's spacing, where
-neighbouring buckets touch but never merge. Past ~1.4x they overlap, which is
-the point of the control.
-
-The scale rides in `bubbleDataRef` with the rest of the draw inputs, so the rAF
-repaint driver picks it up without a new subscription.
-
-### New primitive: MSlider
-
-`MobileUI` gained a labelled range control (value readout, optional RESET, inline
-hint). Native `<input type="range">` - iOS gives it the right touch slop,
-momentum and VoiceOver behaviour, and a hand-rolled pointer handler inside a
-bottom sheet spends its life fighting the sheet's own scroll. The fill is an
-inline `background-image` gradient because a pseudo-element track can't read a
-React prop; `.cbm-range` in `MobileShell`'s style block strips the UA track and
-sizes the thumb to 22px (Safari's 16px default is under the tap floor).
-
-### ExpiryBadge: the date is always shown
-
-It read "0DTE" alone on a 0DTE session, which states the relationship to today
-but not WHICH book is on screen - no help on a phone left open across midnight,
-or a screenshot read hours later. The chip is now two parts: the DTE tag when it
-applies, and the MM/DD it resolves to, always. Shared component, so the heatmap
-and ES Candles both get it.
-
-### Heatmap: CB / CW / PW stay inside the strike cell
-
-The strike column was 70px of content in a 56px track: 6px pad + 3px marker rail
-+ gaps + ~29px of strike + the tag. The tag spilled into NET, and because the
-value cells paint a heat tint it ended up sitting on the red. Column is now 70px,
-the cell clips (`overflow: hidden`), and the tag is `flexShrink: 0` so the strike
-number gives way first if a strike ever carries a decimal.
-
-
-## 2026-08-11 - GEX Change Top: five picks that all clear the $0.50 floor
-
-`server-v2/gex-change-top-recorder.js`, `components/scanner/GexChangeTop.tsx`.
-Replaces the client-only approach from the entry below.
-
-### The real fix belongs in the recorder
-
-The scorecard dropped picks entered at or under $0.50 — correctly; a nickel
-contract ticking to $0.20 is "+300%", which is tick size, and it would own both
-the ranking and the average peak. But the floor lived only in the scorecard's
-render, so a cheap pick still occupied one of the five cards and then had no
-scored row. Five cards, four results.
-
-Hiding the card instead just moves the hole: rank 6 was never recorded, so the
-hour shows four cards. The floor has to apply at CAPTURE, where there are still
-alternates to choose from.
-
-`runOnce()` now pulls `TOP_N * CANDIDATE_MULT` (5 x 4 = 20) ranked candidates and
-walks them in score order, probing in batches of exactly "how many more do we
-need":
-
-- entry above the floor → keep it
-- entry at or under → skip, and `releaseRejectedProbe()` deletes the
-  watch_options row it just created, so a skipped candidate doesn't sit in the
-  60-second snapshot loop until expiry
-- probe failed, or no mark landed → KEEP it. An unknown price is not evidence of
-  a cheap contract, and a probe outage must not empty the board.
-
-When all five clear (the normal case) this is one parallel batch of five —
-identical to the old behaviour. Each rejection costs one more round. The
-capture log reports skips, and coming up short logs a warning naming
-`GEX_CHANGE_TOP_CANDIDATE_MULT`.
-
-The reject deletion is guarded on `source = 'gex-change-top'` AND no
-`gex_change_top` row referencing it, so a contract the owner watches manually, or
-one an earlier slot recorded, is never touched.
-
-### Legacy dates keep their cards
-
-Slots captured before this cannot be repaired. Those cards stay on the page,
-dimmed with a `≤ $0.50 · unscored` badge that names the entry price — removing
-them would leave the hour showing four picks, and the pick genuinely was
-captured. The badge is what closes the loop the original report opened: a card
-with no scorecard row now says so on its face.
-
-The scorecard's own floor stays, with a `score ≤ $0.50 too (N)` toggle for those
-legacy dates. It appears only when the date has something under the floor, so it
-disappears on its own once the recorder has run a full day.
-
-### Env
-
-- `GEX_CHANGE_TOP_ENTRY_FLOOR` (default 0.5) — minimum entry mark for a pick.
-- `GEX_CHANGE_TOP_CANDIDATE_MULT` (default 4) — how deep to pull alternates.
-
-## 2026-08-11 - GEX Change Top: the $0.50 entry floor now governs the cards too
-
-`components/scanner/GexChangeTop.tsx`.
-
-### The problem
-
-The scorecard looked like it was losing rows. It wasn't — it was applying a
-filter the cards above it ignored:
-
-```js
-const filteredResults = results.filter((r) => r.entry != null && r.entry > 0.5);
-```
-
-That floor is correct on its own terms. A contract entered at $0.05 that ticks
-to $0.20 is "+300%", which is tick size, not a result, and it would own both the
-ranking and the average peak. But the hourly cards had no such floor, so a pick
-you could see at the top of the page had no row underneath it, with nothing on
-screen explaining the gap.
-
-Two surfaces, two answers to "which picks exist today".
-
-### The fix
-
-`ENTRY_FLOOR` (0.5) is now a module constant driving BOTH. Cards carry no price
-— only `watch_id` — so the floor is read off the scorecard payload, which is
-already loaded for the same date, and matched by id:
-
-- `cheapIds` — every `watch_id` whose entry mark is at or under the floor.
-- `visibleSlots` — `slots` with those cards removed, dropping any hour left
-  empty. Every render path uses it, including `flippable`, so "Flip all" no
-  longer fetches price lines for cards that aren't on the page.
-
-A pick that was never auto-probed has no entry mark to judge, so it stays
-visible — that is a separate gap (those can't be scored at all) and is left
-alone here.
-
-### Nothing hidden silently
-
-That was the actual bug, so the floor now announces itself. A `show ≤ $0.50 (N)`
-button sits in the toolbar whenever the floor is taking something, and flipping
-it reveals those picks in the cards AND the scorecard at once — the two cannot
-disagree again. The scorecard header reads `(all entries)` instead of
-`(entry > $0.50)` while it's on.
-
-Both empty states were lying and now don't: a date where every pick was under
-the floor said "No very-strong picks recorded yet for this date" as if the
-recorder had missed them.
-
-## 2026-08-11 - Watch This: the detail popup opens in the viewport, not two screens down
-
-`components/pages/Scanner.tsx`.
-
-### The problem
-
-The tracked-row detail modal rendered far down the page — you had to scroll to
-find it. Its styles looked correct: `position: fixed; inset: 0` with a flex
-centre, which should be dead centre of the screen.
-
-`position: fixed` resolves against the viewport ONLY while no ancestor has a
-transform, filter, backdrop-filter, perspective, will-change or contain. Any of
-those makes THAT ancestor the containing block instead. The modal lives inside a
-`<Card>`, and every card surface in `homeTheme.ts` sets
-`backdropFilter: blur(16px)` (globals.css's `.card-hover` adds a `transform` on
-hover for good measure). So `inset: 0` covered the CARD.
-
-It really was centred — on a card sitting a couple of screens down. No amount of
-tweaking the overlay's own CSS could have fixed it; the cause is in the ancestor
-chain.
-
-### The fix
-
-New `ModalPortal` in Scanner.tsx portals its children to `document.body`, which
-is outside every card, so fixed means fixed again. It renders null until mounted
-because `document` does not exist during Next's prerender (the same component
-also runs inside the Vite SPA).
-
-The overlay's own markup is unchanged — same backdrop, same click-outside close,
-same `min(720px, 100%)` panel. Only its position in the DOM moved. `maxHeight:
-80vh` now means 80% of the SCREEN rather than 80% of a card.
-
-Any future dialog on this page should use `ModalPortal`. Cards on other pages
-carry the same frosted surface, so a modal nested in one will land in the same
-trap.
-
-## 2026-08-11 - Watch This: premium history backfilled from dxLink option candles
-
-`server-v2/far-cb-recorder.js`, `server-v2/server-with-proxy.js`,
-`components/pages/Scanner.tsx`. Follows the probe entry below.
-
-### What changed the answer
-
-The probe records premium forward from today, which left every flag opened
-before it existed showing "—" for its earlier days. Theta was the obvious
-backfill and was ruled out (no subscription). TastyTrade REST has no
-per-contract history at all.
-
-dxLink does. Verified 2026-08-11 on the box: `.FBL260821C23` and
-`.SPY260821C640` each replayed 16 daily bars with real OHLC + volume through a
-throwaway dxLink connection. That is a BETTER source than a vendor EOD close —
-these are the contract's own session bars, so each day carries a true high and
-low instead of one number.
-
-Nothing new had to be built to reach it: `candle-history.js` already opens an
-isolated dxLink connection and replays `Candle` events from a `fromTime`, and
-`fetchChain()` already returns a `streamerSymbol` per strike. Both are used
-read-only; neither file is modified.
-
-### The backfill
-
-`runContractBackfill()` walks tracked flags, pulls `{=1d}` candles for each
-contract, drops bars from before `first_flagged`, and writes them to
-`far_cb_contract_daily` with `source='dxlink'`. A real session bar overwrites
-that day's probe samples — the probe can only approximate a high and low by
-sampling. TODAY is never overwritten; that day belongs to the live probe.
-
-Runs at boot (150s in, clear of the initial sweep), once after the close (so the
-day's true OHLC replaces the samples), and on demand via
-`POST /proxy/far-cb-backfill-run[?force=1]`. Sequential by design — each
-contract is its own short-lived dxLink connection.
-
-`far_cb_outcomes.premium_backfilled_at` marks what is covered, so re-running is
-cheap: an expired contract is skipped for good, a live one until the next
-session adds a bar. `force=1` ignores it.
-
-Opening a row popup for a contract with NO recorded history triggers the pull
-inline (1.5s quiet / 9s hard, vs 2.5s/25s for the batch) so the first open shows
-data instead of dashes and a "try again".
-
-### Streamer symbols
-
-Resolved off TastyTrade's chain, which is authoritative and already cached ~10
-minutes. An EXPIRED contract has left the chain, so the dxFeed form is
-reconstructed instead (`.FBL260821C23` — no padding, no trailing zeros). That
-reconstruction is limited to plain equity roots: index options pick a different
-root per settlement (SPX vs SPXW, NDX vs NDXP) and a wrong guess returns nothing
-silently, so those fall back to chain-only.
-
-### Still shows "—"
-
-A day the contract never traded has no candle — the FBL 16C in the same window
-had zero volume against a live 2.35/3.50 market. Bars come from prints, so quiet
-days stay blank until the probe covers them going forward. No vendor sells
-historical option QUOTES here.
-
-### Env
-
-- `FAR_CB_BACKFILL_DAYS` (default 60) — candle lookback, and the age cutoff for
-  which flags are worth attempting.
-- `FAR_CB_BACKFILL_LIMIT` (default 200) — max contracts per pass.
-
-## 2026-08-11 - Watch This: contract premium is now recorded daily, and the sweep runs the scanner universe
-
-`server-v2/far-cb-recorder.js`, `server-v2/far-cb-tickers.js`,
-`components/pages/Scanner.tsx`.
-
-### The problem
-
-Every CONTRACT / CONTRACT Δ$ / CONTRACT Δ% cell in the tracked-row popup showed
-"—", on every row, forever. SPOT and SPOT Δ% filled in fine right beside them.
-
-The popup asks `fetchOptionDailyHistoryTheta` for the contract's daily closes.
-That name is resolved off `DATA_SOURCE`: with `DATA_SOURCE=tt` (what .env.local
-runs) the recorder imports `tt-snapshot.js`, where per-contract EOD history is a
-warn-once STUB that returns `[]` — there is no TastyTrade equivalent. The call
-sites all wrap it in `.catch(() => [])`, so the empty array looked exactly like
-"no bars for this contract" and nothing ever surfaced as an error. Underlying
-history is Yahoo daily in the same module, which is why only the SPOT columns
-worked. Same stub blanked the `Opt Price` % column, which needs the day's open.
-
-### The fix: probe and record the premium ourselves
-
-New table `far_cb_contract_daily (symbol, strike, expiry, opt_type, date)` with
-open / high / low / close / probes / source. `runContractProbe()` prices every
-tracked contract that has not expired — one greeks snapshot per (symbol, expiry)
-group, NBBO mid — and upserts today's row: first probe of the session sets
-`open`, each later one moves `close` and widens high/low.
-
-Cadence, from the recorder's own 60s tick: every `FAR_CB_PROBE_MINS` (15) during
-RTH, once more inside the 16:10 ET grading window so the last write of the day is
-the settling mark, and once at startup after the initial sweep. Rows are never
-pruned by expiry, so a contract that has stopped quoting keeps the history it
-built while it was live.
-
-The popup now merges two sources per day: Theta's per-contract EOD series when
-the Terminal answers, otherwise the recorded probe. Theta is asked DIRECTLY
-(`require('./proxy-thetadata')`) instead of through the `DATA_SOURCE` swap — the
-Terminal is a sibling container that runs either way, and `server-with-proxy.js`
-already imports it ungated for the flow drawer. A failure trips a 10-minute
-breaker rather than burning its retry budget once per tracked row per poll.
-Whatever Theta does return for past sessions is folded into
-`far_cb_contract_daily` (`source='eod'`, today excluded) so history survives the
-Terminal being paused.
-
-`Opt Price`'s % column falls back to the first probe of the session when there is
-no vendor open. A probe-only day (underlying bar not posted yet) carries the last
-spot forward but reports no spot change — a fabricated 0.00% would be worse.
-
-Note: this builds history going FORWARD. Flags opened before today show "—" for
-their earlier days unless the Theta Terminal can backfill them.
-
-### Universe: scanner, not the private far-CB list
-
-`getActiveRoster()` now resolves `rosterStore.getSymbols('scanner')` — the same
-universe as the /scanner GEX + Strike Query tabs and the flow tape — with the
-`scanner-tickers.js` buckets as the offline baseline. Watch This is a scanner
-tab; running it off its own roster meant a name added to the scanner never
-appeared here. Customer-added tickers (`far_cb_custom_tickers`) still stack on
-top. `CORE_TICKERS` stays exported for the owner Watchlists page's 'farcb' list
-but is no longer what gets swept — edit `scanner-tickers.js` instead. Roster goes
-from ~130 curated names to the ~169-name scanner universe, on a 30m sweep.
-
-### Env
-
-- `FAR_CB_PROBE_MINS` (default 15) — contract probe cadence during RTH.
-
-## 2026-08-11 - Test Lab -> GEX Map: spot path drawn every minute, not every slot
-
-`app/test/GexMapTab.tsx`, `server-v2/api-router.js`.
-
-### The problem
-
-The white spot line moved in 5-10 minute steps. It was built from
-`columns[].spot` - one vertex per GAMMA slot - so it drew a handful of long
-straight segments that cut through every high and low the tape actually made
-between slots.
-
-The rows were always there: `gex-history-writer.js` writes every 30s
-(`GEX_PG_WRITE_INTERVAL_MS`). `/api/gex-map` buckets them into 5-minute slots
-(`?slot=`, default 5) because a per-strike LADDER is heavy. Only the bucketing
-was hiding the price detail.
-
-### Server: a separate minute series
-
-`/api/gex-map` now also returns `spotPath: [{ t, spot }]` - one point per MINUTE
-of the session, `DISTINCT ON` the minute taking the last print inside it (the
-same last-wins rule the slotted ladder query uses, so a column and its minute
-agree).
-
-Deliberately its own query rather than just `slot=1`: it selects one column, no
-ladder, no strike filter, so a session is ~390 rows / a few KB. Dropping the
-FIELD to `slot=1` would have meant ~390 columns x ~260 strikes.
-
-Wrapped in its own try/catch with `notes.spot` - a failure degrades to the old
-per-column path, it does not 500 the tab.
-
-### Client: positioned by timestamp
-
-- `MapModel.spotPath` added; `path` (one value per column) stays as the fallback
-  for a server that predates this, so the line can never disappear.
-- New `xFracT(m, t)`: x position from a TIMESTAMP rather than a column index. On
-  the RTH clock axis that is the same arithmetic `xFrac` already does; off it
-  ("All" scope, index-spread because of the midnight wrap) the timestamp is
-  located between the two columns straddling it and interpolated across the gap.
-- `spotPts` is computed once in `TapeField` and used by the stroke, the halo and
-  the head dot, so the three cannot drift apart.
-- `scopePayload` filters `spotPath` by the same RTH predicate as the columns;
-  `buildModel` clips it to the drawn tape; `sliceModel` clips it to the zoom
-  window like the other time series.
-
-### The tape now advances
-
-`/api/gex-map` was fetched ONCE per session/expiry pick, so even a minute-
-resolution path stopped at page load. It re-polls every 60s while the live tape
-is showing (`isLiveSession`), with a new `quiet` flag on `load()` so the poll
-never flashes the card back to "Loading 0DTE map..." - and the zoom window
-survives because `MapCard` keys its reset on the model's DIMENSIONS, not on
-object identity. The route caches 60s server-side, so it is one cheap request
-per minute per viewer.
-
+## 2026-08-12 - SPX flow: the strike-growth feed was eating the ATM tape (Net Drift quiet half-hours, round 3)
+
+`server-v2/proxy-tastytrade.js` — two guards in `_onEvent`. Confirmed
+`node server-v2/flow-print-time.selftest.js` all-pass after the edit.
+
+### What
+
+/flow's Net Drift still went "strong at the open, then a step every ~30 min"
+after the 2026-08-07 (persist rate) and 2026-08-10 (TS window flapping + stall
+fallback) fixes. Premium-split buckets summed only ~$6-8M each on a full 0DTE
+session — orders of magnitude light.
+
+Root cause: SPX is in the strike-growth watchlist (`scanner-tickers.js` MAIN,
+hot lane, 2-min sweeps). `_subscribeStrikeGrowthRoot` claims the ±20 strikes
+around spot across the front 3 expirations (±~100 SPX pts — the ATM core of the
+0DTE tape) into `strikeGrowthContracts`, additively, never unsubscribing. And
+`_onEvent` treated membership in that map as "belongs to the recorder, not the
+tape":
+
+- TimeAndSale branch: `if (strikeGrowthContracts.has(sym) || ...) return;` —
+  every tick-by-tick ATM print discarded before reaching `this.flow`.
+- Trade branch: `if (strikeGrowthContracts.has(sym)) return;` — the conflated
+  fallback discarded too.
+
+So the ATM band produced ZERO flow prints from either path. What survived:
+far-OTM strikes beyond the claimed band (the isolated vertical steps), plus a
+short burst whenever spot moved into strikes the sweep hadn't claimed yet
+(≤2 min until the next hot-lane sweep) — which is exactly the "gave up, then a
+step each time SPX made new ground" shape, and why the open looked strong
+(overnight gap = a band's worth of unclaimed strikes).
+
+### How
+
+- **TimeAndSale branch: `strikeGrowthContracts` no longer vetoes the tape.**
+  The strike-growth feed only plain-subscribes (Quote/Greeks/Summary/Trade);
+  it never calls `subscribeTimeSales`. A TimeAndSale event can therefore only
+  exist because the flow window (`_syncTimeSaleWindow`) or ttFlow asked for
+  it — routing it to the tape takes nothing away from the recorder. The
+  `flowRecordContracts` check stays. Side effect, intended: ATM prints stamp
+  `_tsLastPrintAt` again, so the Trade-fallback health suppression works as
+  designed instead of reading permanently stalled.
+- **Trade branch: the strike-growth return is now gated** on the symbol not
+  being flow-routed: `strikeGrowthContracts.has(sym) && !_tsSubs.has(sym) &&
+  !ttFlowContracts.has(sym) && !flowRecordContracts.has(sym)`. Scanner-only
+  names (AAPL & co.) still stop there — `this.flow` runs `spxOnly:false` for
+  ttFlow's sake and must not ingest them — but near-spot SPX keeps its coarse
+  fallback when TimeAndSale stalls.
+- Strike-growth itself is untouched: its dayVolume caching happens above both
+  guards, and it never consumed TimeAndSale events.
+
+## 2026-08-12 - GEX Map (Tape Field): strong levels read louder, older heat stops washing out
+
+`app/test/GexMapTab.tsx`.
+
+### What
+
+Two complaints, one root cause — the colour ramps, not the data.
+
+- **Strong levels are now obvious.** In Terrain the peaks used to flatten into
+  one saturated plateau: the `** 0.55` elevation curve spends most of its range
+  on the low end, so everything above ~a third of the session max landed in the
+  last four or five bands, separated by a couple of percent of one colour. It
+  now carries a summit term as well, and the iso-GEX rings at |0.34| and above
+  are drawn as INDEX contours — brighter, 2.4px, over a dark under-stroke — so a
+  ridge is visually distinct from the merely-elevated ground around it.
+- **Older heat no longer washes out under the closing GEX.** On a 0DTE session
+  gamma piles into the close, so `gMax` is set by the last half hour and the
+  whole morning sits at 10–25% of scale. The old `ratio ** 1.4` alpha easing
+  pushed 0.15 down to 0.07 — the morning tape rendered as a faint wash. The
+  cells were always there; the curve was hiding them.
+
+Nothing about the scales changed. Gamma is still normalized once, on the session
+max, shared by the heatmap, the terrain, the profile and the rail, at every zoom
+level — a given gamma still paints the same colour everywhere.
+
+### How
+
+- `heatAlpha()` split into two terms: base `ratio ** 0.85` (sub-linear, so real
+  mid-session nodes hold a readable alpha) plus a squared `hot` term over the top
+  45% of the scale worth up to +0.16 alpha, capped at 0.98. The second term is
+  what preserves contrast — lifting the low end alone would have flattened the
+  map. Noise is still handled by TapeField's existing cull threshold, which
+  rides the Intensity slider as before.
+- `gamColor()` white-lift reweighted from a flat `m * 0.28` to `0.10·m + 0.32·m²`:
+  weak cells keep the pure hue and read as texture, the strongest nodes burn to a
+  bright core that survives the red field around it.
+- `TerrainField` fill: `band` (the existing 18-step hypsometric quantization) is
+  now joined by `hot = clamp01((|v| - 0.35) / 0.65)`, which pushes summit terrain
+  +0.22 further up the mix and, squared, +0.45 toward white. Dark basin →
+  coloured slopes → bright ridges, instead of one plateau with lines on it.
+- Contour pass: levels ≥ |0.34| get alpha `0.42 + 0.50·|lv|` at 2.4px preceded by
+  a `rgba(0,0,0,0.34)` 4.0px under-stroke (a light line on a light summit is
+  invisible exactly where it matters most); everything below stays hairline at
+  1.4px on the old sqrt alpha. The zero coastline is unchanged.
+
+Intensity slider semantics unchanged. No proxy code touched. No API/server
+changes.
+
+## 2026-08-12 - Multi Greek: toolbar 🔍, % positive GEX in TOTAL row, ex-0DTE total column
+
+`app/mult-greek/MultGreekClient.tsx`.
+
+### What
+
+Three changes to the multi charts (/mult-greek) page:
+
+- The Ticker Lookup 🔍 moved out of the four panel headers into the page
+  toolbar, next to the Intensity slider. One page-level button — the lookup
+  card has its own symbol picker, so any ticker can be entered inside it
+  (opens seeded on SPX).
+- The TOTAL row now shows, next to each column's NET GEX total, the % of that
+  column's gross GEX that is positive (Σ pos / (Σ pos + |Σ neg|)) — green when
+  ≥50%, red below — on all tickers and all columns.
+- The 4th column no longer shows the 4th expiry on its own. It is now the
+  ex-0DTE TOTAL: the per-strike sum of NET GEX across all fetched expirations
+  excluding 0DTE (the 4th expiry's data still feeds the sum). Header reads
+  "ALL · EX-0DTE"; heat shading, top-3 ranks and the ★ peak work the same as
+  a real column. Its cells don't open the per-cell click card (there is no
+  single expiry behind them).
+
+### How
+
+- New `EX0_KEY` synthetic column + `withEx0Column()` fold the ex-0DTE sums
+  into the computed result (rows, maxAbs, top3, top5PerSide, mvcStrike) and
+  swap the last real column out of `cols`. Applied only when a full set of 4
+  columns is present — static/delayed mode (single snapshot expiry) and thin
+  calendars render unchanged. CB/CW/PW walls still come from the untouched
+  front-expiry computation.
+- `totals` now carries `{ net, posPct }` per column; the TOTAL row renders the
+  % beside the value.
+- `TickerPanel` lost its `onLookup` prop and header button; the toolbar 🔍
+  opens the same portal overlay.
+
+No proxy code touched. No API/server changes.
+
+## 2026-08-12 - Fix: Multi Greek page snapshot button hung forever, left page stuck in capture layout
+
+`lib/snapshot.ts`, `components/shared/DataBox.tsx`.
+
+### What
+
+On /mult-greek the toolbar 📸 "Copy screenshot to clipboard" button silently did
+nothing: no PNG on the clipboard, no error in the console, and the page was left
+stuck in its shrunken fit-content capture layout until a reload. Reproduced
+twice in a live audit. Root symptom: the html2canvas capture promise never
+settled, so every catch/finally downstream (including `endCapture`) was skipped.
+
+### How
+
+- **Capture watchdog** (`lib/snapshot.ts`): `captureToCanvas` now races the
+  capture against a 20s timeout (`CAPTURE_WATCHDOG_MS`, overridable per call via
+  `SnapOptions.timeoutMs`). A hang becomes a normal rejection - button shows ✕,
+  error reaches the console, restore paths run.
+- **`SnapOptions.imageTimeout`** passthrough to html2canvas; page-scale captures
+  pass 4000ms instead of html2canvas's 15s default, so one stalled image can't
+  hold the capture (and the capture-layout switch) hostage.
+- **`BoxSnapBtn` / `BoxDiscordBtn`** (`DataBox.tsx`): `onAfterCapture` now runs
+  in an inner finally the moment rasterization settles - BEFORE the clipboard
+  write / Discord upload - so the page never sits in capture layout during I/O.
+  Both pass `allowTaint:false` (a tainted logo would kill the readback; the
+  documented trade in SnapOptions) + `imageTimeout:4000`.
+- **Clipboard fallback**: BoxSnapBtn's hand-rolled `navigator.clipboard.write`
+  replaced with the shared `copyOrDownload` helper - if the write fails (e.g.
+  Chrome's ~5s transient-activation window expired during a slow capture), the
+  PNG downloads instead of vanishing.
+
+No proxy code touched.
+
+## 2026-08-11 - Budget: subscribed ICS / webcal feeds (read directly, not via Google)
+
+`server-v2/_lib-ics-feeds.cjs` (new), `server-v2/household-routes.cjs`,
+`budget-vite/src/api.ts`, `budget-vite/src/hooks.ts`,
+`budget-vite/src/pages/Settings.tsx`.
+
+### What
+
+New **Subscribed feeds** section in Settings: paste a team/school `.ics` or
+`webcal://` link and its events appear on Today alongside the Google ones. Each
+feed shows its event count, when it was last read, and any error; it can be
+shared to the other person's Today, and removed (with a confirm step).
+
+The reason it exists: subscribing the same link inside Google works, but Google
+polls a From-URL calendar on its own schedule - hours, sometimes a day - so the
+TeamReach practice added this morning was still missing tonight. Read directly,
+a feed is never more than 30 minutes stale, and **Sync now** forces every feed
+to re-read immediately. It also covers feeds that only ever reached Apple
+Calendar, which Google cannot see at all.
+
+### How
+
+`_lib-ics-feeds.cjs` - table `hh_ics_feeds` (created by the lib's own memoized
+`ensureTable`, unique per user+url), plus:
+
+- **SSRF guard.** `safeUrl()` normalises `webcal://` -> `https://` **on the
+  string** (assigning `u.protocol` is a no-op for a non-special scheme, so the
+  URL stays webcal and fetch refuses it), resolves the host, and rejects
+  loopback / RFC1918 / link-local / CGNAT / unique-local, including
+  `::ffff:`-mapped v4. Redirects are re-checked after the fetch.
+- **Bounded fetch** - 12s timeout, 4MB cap, must contain `BEGIN:VCALENDAR`; the
+  body is cached in the row, and a failed read KEEPS the previous copy (a feed
+  that 500s for an hour still shows last night's practices) while recording
+  `last_error`.
+- **Hand-rolled parser** (no new npm dep): line unfolding, `VALUE=DATE` vs
+  `TZID=` vs floating vs `Z` times, `wallToUtc` with a second offset pass so the
+  hours either side of a DST change don't shift, EXDATE, cancelled-event skip,
+  and a bounded RRULE expansion (DAILY/WEEKLY/MONTHLY/YEARLY + INTERVAL / COUNT
+  / UNTIL / BYDAY, capped at 750 instances). Anything more exotic falls back to
+  the single starting instance rather than inventing dates.
+- **All-day events are compared as DATES, not instants** - a UTC-midnight all-day
+  event otherwise renders on the evening before, every time, west of Greenwich.
+- Events come out shape-identical to the Google ones (same keys, RFC3339
+  starts with the user's offset), so `calendarDay()` in household-routes just
+  concatenates and sorts once - by instant, never by string, since the two
+  sources format offsets differently.
+- A Google error is now DROPPED when feed events exist: the card isn't broken if
+  half its sources answered.
+
+Routes: `GET/POST /api/hh/calendar/feeds` (add / remove / update / refresh).
+`add` is the one calendar call that returns a real 400 - a link that isn't a
+calendar is a form error, not a state to render inside a card - and the feed is
+fetched BEFORE the row is inserted so a bad URL never becomes a broken row.
+
+### Deploy note
+
+`budget-vite` is its own compose service (`budget-web`), so this needs the full
+`docker compose build` on the VPS, not just the dashboard image.
+
+## 2026-08-11 - Budget: calendar picker was silently hiding calendars (showHidden)
+
+`server-v2/_lib-google-calendar.cjs`.
+
+### What
+
+Calendars unticked in Google's own sidebar never appeared in "Calendars to
+show". On the live account that was most of them - the picker listed 7 of ~20
+(cleaning, Excalibur, Family, the team/college feeds, Birthdays and others were
+all missing), with no error to explain the gap. That, not caching, was the real
+reason a calendar "wouldn't come up".
+
+### How
+
+`calendarList.list` defaults `showHidden` to **false**, and Google's "hidden"
+means only "unticked in the google.com sidebar" - which is precisely the state a
+calendar is in when someone hides it there and then goes looking for it here.
+Both calendarList fetches now pass `showHidden=true`:
+
+- `listCalendars()` - the picker.
+- `calendarColours()` - a hidden calendar can still be TICKED, and without this
+  its events came back with no colour and no calendar name.
+
+The `hidden in google` tag added to the picker rows earlier today now does the
+job it was written for: it labels rows that only exist because of this flag.
+
+### Also (manual, no code)
+
+The TeamReach feed `api.teamreach.net/api/events/teams/978495/ical` was
+subscribed into the Google account via Settings -> Add calendar -> From URL and
+renamed to its own `X-WR-CALNAME`, **9-10 (10U) FallBall 2026** (Google names a
+From-URL calendar after the raw URL). It now appears in the picker like the
+existing `7-8 Benson Landscaping` import, so it inherits colour, sharing and the
+60s cache with no new code. Feeds subscribed only in Apple/iCloud are invisible
+to this app - they have to reach Google to be readable.
+
+## 2026-08-11 - Budget: calendar picker shows every calendar, with a Refresh
+
+`budget-vite/src/components/CalendarPicker.tsx`, `budget-vite/src/hooks.ts`.
+
+### What
+
+"Calendars to show" in Settings now has a **Refresh list** control and an
+`N found` count beside the heading, so a calendar created in Google minutes ago
+can be pulled in without waiting or reloading. Calendars unticked in Google's
+own sidebar are tagged `hidden in google` - they were always listed, but there
+was nothing explaining why an invisible-in-Google calendar appeared here.
+
+### How
+
+The server's `/api/hh/calendar/calendars` already returns everything the account
+can read (`minAccessRole=reader`, up to 250, no server-side cache) - the missing
+calendar was purely the client's 5-minute `staleTime` on the `['calendar-list']`
+query. Refresh calls that query's `refetch()` and shows `isFetching` as
+"Checking...". **Sync now** (from the previous change) now invalidates
+`['calendar-list']` too, since "sync" reads as "go look at Google again".
 
 ## 2026-08-11 - Budget: Sync button for the connected Google Calendar (Settings)
 

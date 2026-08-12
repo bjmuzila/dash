@@ -164,6 +164,29 @@ export type CalendarEvent = {
   location: string | null
 }
 
+/** A subscribed ICS/webcal feed, read by our server rather than by Google. */
+export type IcsFeed = {
+  id: number
+  url: string
+  name: string | null
+  colour: string | null
+  enabled: boolean
+  shareWithHousehold: boolean
+  /** When our server last got a response — success OR failure. */
+  fetchedAt: string | null
+  /** Set when the last read failed. The previously cached events still show. */
+  lastError: string | null
+  eventCount: number | null
+  /** False for a feed the other person subscribed and shared: read-only here. */
+  mine: boolean
+  sharedBy?: string | null
+}
+
+export type IcsFeedsResponse = {
+  feeds: IcsFeed[]
+  shared: IcsFeed[]
+}
+
 export type CalendarDay = {
   date: string
   events: CalendarEvent[]
@@ -171,6 +194,8 @@ export type CalendarDay = {
   upcoming?: CalendarEvent[]
   source?: 'own' | 'household'
   calendarCount?: number
+  /** How many subscribed ICS feeds contributed to this day. */
+  feedCount?: number
   /** >0 means some calendars couldn't be reached, so the list may be incomplete. */
   partialFailures?: number
   /** 'not-configured' | 'not-connected' | 'none-selected' | 'revoked' |
@@ -562,6 +587,27 @@ export const calendar = {
   /** A full page navigation, NOT a fetch — the browser has to follow the
    *  redirect to Google's consent screen. */
   connectUrl: '/api/hh/calendar/connect',
+}
+
+/**
+ * Subscribed ICS / webcal feeds.
+ *
+ * Every mutating call answers with the WHOLE list, so the client never has to
+ * reconcile a patch against what it already had.
+ *
+ * Unlike the events endpoints, `add` genuinely fails with a 4xx — a URL that
+ * isn't a calendar is a form error the person has to fix, not a transient
+ * condition to render inside a card.
+ */
+export const icsFeeds = {
+  list: () => api.get<IcsFeedsResponse>('/api/hh/calendar/feeds'),
+  add: (url: string, opts: { name?: string; colour?: string; shareWithHousehold?: boolean } = {}) =>
+    api.post<IcsFeedsResponse>('/api/hh/calendar/feeds', { action: 'add', url, ...opts }),
+  remove: (id: number) =>
+    api.post<IcsFeedsResponse>('/api/hh/calendar/feeds', { action: 'remove', id }),
+  update: (id: number, patch: Partial<Pick<IcsFeed, 'name' | 'colour' | 'enabled' | 'shareWithHousehold'>>) =>
+    api.post<IcsFeedsResponse>('/api/hh/calendar/feeds', { action: 'update', id, ...patch }),
+  refresh: () => api.post<IcsFeedsResponse>('/api/hh/calendar/feeds', { action: 'refresh' }),
 }
 
 export const projects = {

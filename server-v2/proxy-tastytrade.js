@@ -4230,8 +4230,18 @@ class TastytradeProxy {
       if (Number.isFinite(dv)) this.volumes.set(sym, dv);
       // Strike-growth recorder's option contracts: volume is already cached
       // above (that's all this feed needs) — stop here so these prints never
-      // fall through into the SPX card's flow tape below.
-      if (this.strikeGrowthContracts.has(sym)) return;
+      // fall through into the SPX card's flow tape below. GATED: only swallow
+      // symbols no flow path has claimed. SPX (and any ttFlow root) is ALSO in
+      // the strike-growth watchlist, and an unconditional return here silenced
+      // the conflated-Trade FALLBACK for exactly the near-spot strikes the
+      // _tsLastPrintAt health check is meant to rescue — a TimeAndSale stall
+      // degraded to nothing instead of to coarse. Scanner-only names (AAPL &
+      // co.) still stop here so they never leak into the tape (this.flow runs
+      // spxOnly:false for ttFlow's sake and would otherwise accept them).
+      if (this.strikeGrowthContracts.has(sym)
+          && !this._tsSubs.has(sym)
+          && !this.ttFlowContracts.has(sym)
+          && !this.flowRecordContracts.has(sym)) return;
       // In Theta mode the FPSS Trade stream owns option flow — don't double-feed
       // FlowProcessor from the dxLink option Trade events too. (Volume capture
       // above is still fine; it's keyed per-symbol and idempotent.)
@@ -4305,7 +4315,17 @@ class TastytradeProxy {
       // trickle. Options only — ES/NQ/index TimeAndSale is not routed here.
       if (useTheta()) return;
       if (sym === this.esSymbol || sym === this.nqSymbol || sym === this.spotSymbol || sym === this.vixSymbol) return;
-      if (this.strikeGrowthContracts.has(sym) || this.flowRecordContracts.get(sym)) return;
+      // NOTE: strikeGrowthContracts membership must NOT veto TimeAndSale. The
+      // strike-growth feed only ever plain-subscribes (Quote/Greeks/Summary/
+      // Trade) — it never calls subscribeTimeSales — so a TimeAndSale event can
+      // only be here because the FLOW window (_syncTimeSaleWindow) or ttFlow
+      // asked for it. SPX is in the strike-growth watchlist (scanner-tickers
+      // MAIN), so its ±20-strike band across the front 3 expirations — the ATM
+      // core of the 0DTE tape — was being claimed into strikeGrowthContracts
+      // and every tick-by-tick print for it discarded right here: /flow's Net
+      // Drift went quiet except for far-OTM strikes and a short burst whenever
+      // spot moved into strikes the sweep hadn't claimed yet (≤2min, hot lane).
+      if (this.flowRecordContracts.get(sym)) return;
       const price = Number(ev.price);
       const size = Number(ev.size);
       if (!(price > 0) || !(size > 0)) return;

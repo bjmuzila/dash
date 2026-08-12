@@ -56,6 +56,13 @@ const hh = require('./_lib-household.cjs');
 let gcal = null;
 try { gcal = require('./_lib-google-calendar.cjs'); }
 catch (e) { console.warn('[household] google-calendar lib not loaded:', e.message); }
+// Subscribed ICS/webcal feeds. A separate source from Google on purpose: a team
+// or school feed read directly is current within 30 minutes, where the same
+// feed subscribed inside Google updates on Google's schedule, which can be a
+// day. Also optional — without it the calendar is simply Google-only.
+let icsFeeds = null;
+try { icsFeeds = require('./_lib-ics-feeds.cjs'); }
+catch (e) { console.warn('[household] ics-feeds lib not loaded:', e.message); }
 // The budget, read from the SAME tables /owner/budget uses. Optional like the
 // rest: without the DB bundle the routes simply don't register.
 let hbudget = null;
@@ -642,6 +649,102 @@ function registerHouseholdRoutes({ register, send, readJson }) {
     res.end();
   };
 
+  // ── One day, two sources ───────────────────────────────────────────────────
+  //
+  // Google and the subscribed ICS feeds are merged HERE rather than inside
+  // either lib, so neither has to know the other exists. The feed events are
+  // shaped identically (same keys, same RFC3339-with-offset starts), so the
+  // client cannot tell which list an event came from — and shouldn't: on a
+  // screen answering "what is today", provenance is not the question.
+
+  /** All-day first, then chronological. By instant, never by string: the two
+   *  sources format their offsets differently and a string sort interleaves
+   *  them wrongly around midnight. */
+  const startMs = (e) => (e.allDay
+    ? Date.parse(`${String(e.start).slice(0, 10)}T00:00:00Z`)
+    : Date.parse(e.start));
+  const byDayOrder = (a, b) => (b.allDay ? 1 : 0) - (a.allDay ? 1 : 0) || startMs(a) - startMs(b);
+
+  async function calendarDay(u, date, { force = false } = {}) {
+    const g = gcal
+      ? await gcal.eventsForDay(u.id, u.tz, date, { force })
+      : { events: [], error: 'not-configured' };
+
+    let f = null;
+    if (icsFeeds && icsFeeds.available()) {
+      try {
+        if (force) await icsFeeds.refreshAll(u.id);
+        f = await icsFeeds.eventsForDay(u.id, u.tz, date);
+      } catch { f = null; }
+    }
+    // No feeds subscribed → the Google answer verbatim, error and all.
+    if (!f || !f.feedCount) return { date, ...g };
+
+    const events = [...(g.events || []), ...f.events].sort(byDayOrder).slice(0, 60);
+    const upcoming = [...(g.upcoming || []), ...f.upcoming]
+      .sort((a, b) => startMs(a) - startMs(b)).slice(0, 5);
+
+    const out = {
+      date,
+      events,
+      upcoming,
+      source: g.source,
+      calendarCount: (g.calendarCount || 0) + f.feedCount,
+      feedCount: f.feedCount,
+      partialFailures: (g.partialFailures || 0) + f.partialFailures,
+      syncedAt: new Date().toISOString(),
+    };
+    // A Google error that would blank a card which DOES have feed events is
+    // worse than no message at all — the feeds are answering, so the card is
+    // not broken. Kept only when there is genuinely nothing to show.
+    if (g.error && !events.length && !upcoming.length) out.error = g.error;
+    return out;
+  }
+
+  // ── Subscribed ICS feeds ───────────────────────────────────────────────────
+
+  if (icsFeeds && icsFeeds.available()) {
+    add('/api/hh/calendar/feeds', {
+      auth: 'household', methods: ['GET', 'POST'],
+      async handler(req, res, _ctx, access) {
+        const uid = access.hhUser.id;
+        try {
+          if ((req.method || 'GET').toUpperCase() === 'GET') {
+            send(res, 200, await icsFeeds.list(uid), nostore); return;
+          }
+          const body = await readJson(req, 8_000);
+          const action = String(body?.action || '');
+
+          if (action === 'add') {
+            const r = await icsFeeds.add(uid, body.url, {
+              name: body.name, colour: body.colour,
+              shareWithHousehold: body.shareWithHousehold,
+            });
+            // 400 with a readable message: this one IS a form error, unlike the
+            // events endpoints where a failure is a shaped 200.
+            if (r.error) { send(res, 400, { error: r.error }, nostore); return; }
+            send(res, 200, await icsFeeds.list(uid), nostore); return;
+          }
+          if (action === 'remove') {
+            const ok = await icsFeeds.remove(uid, body.id);
+            if (!ok) { send(res, 404, { error: 'No such feed.' }, nostore); return; }
+            send(res, 200, await icsFeeds.list(uid), nostore); return;
+          }
+          if (action === 'update') {
+            const r = await icsFeeds.update(uid, body.id, body);
+            if (r.error) { send(res, 400, { error: r.error }, nostore); return; }
+            send(res, 200, await icsFeeds.list(uid), nostore); return;
+          }
+          if (action === 'refresh') {
+            await icsFeeds.refreshAll(uid);
+            send(res, 200, await icsFeeds.list(uid), nostore); return;
+          }
+          send(res, 400, { error: 'Unknown action.' }, nostore);
+        } catch (err) { send(res, 500, { error: String(err?.message || err) }, nostore); }
+      },
+    });
+  }
+
   if (gcal) {
     add('/api/hh/calendar/connect', {
       auth: 'public', methods: ['GET'],
@@ -743,7 +846,7 @@ function registerHouseholdRoutes({ register, send, readJson }) {
         // Always 200 with a shaped body. The card renders its own state from
         // `error`; a non-200 here would just become a red screen for a calendar
         // hiccup nobody needs to act on.
-        send(res, 200, { date, ...(await gcal.eventsForDay(u.id, u.tz, date)) }, nostore);
+        send(res, 200, await calendarDay(u, date), nostore);
       },
     });
 
@@ -763,10 +866,10 @@ function registerHouseholdRoutes({ register, send, readJson }) {
         const qDate = new URL(req.url || '/', 'http://localhost').searchParams.get('date');
         const date = /^\d{4}-\d{2}-\d{2}$/.test(String(qDate || '')) ? qDate : todayIn(u.tz);
         // Always 200 with a shaped body, same as /events — a Google hiccup is a
-        // line in the card, not a failed request the UI has to explain.
-        send(res, 200,
-             { date, ...(await gcal.eventsForDay(u.id, u.tz, date, { force: true })) },
-             nostore);
+        // line in the card, not a failed request the UI has to explain. Sync
+        // forces the subscribed feeds to re-read too; "sync" to a person means
+        // everything on this screen, not just the Google half.
+        send(res, 200, await calendarDay(u, date, { force: true }), nostore);
       },
     });
   }

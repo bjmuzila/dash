@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, type ReactNode, type CSSProperties, type RefObject } from "react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { shareToDiscord } from "@/lib/discord/share";
-import { captureToDataUrl } from "@/lib/snapshot";
+import { captureToBlob, captureToDataUrl, copyOrDownload } from "@/lib/snapshot";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type BtnState = "idle" | "busy" | "ok" | "err";
@@ -88,15 +88,32 @@ export function BoxSnapBtn({ targetRef, title, onBeforeCapture, onAfterCapture, 
     set("busy");
     try {
       await onBeforeCapture?.();
-      const img = await captureToDataUrl(targetRef.current, { framed: true, title, fitContent });
-      // Convert base64 data URL → Blob → ClipboardItem
-      const base64 = img.replace(/^data:image\/\w+;base64,/, "");
-      const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-      const blob = new Blob([bytes], { type: "image/png" });
-      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      let blob: Blob;
+      try {
+        // allowTaint:false — this PNG is READ back (clipboard write), so one
+        // tainted logo would kill the whole snapshot; skipping the image is
+        // the documented trade (see SnapOptions.allowTaint in lib/snapshot).
+        // imageTimeout:4000 — don't let a stalled image hold the capture (and
+        // the onBeforeCapture layout switch) hostage for html2canvas's 15s
+        // default. The engine's own watchdog bounds the whole capture.
+        blob = await captureToBlob(targetRef.current, {
+          framed: true, title, fitContent,
+          allowTaint: false, imageTimeout: 4000,
+        });
+      } finally {
+        // Restore the live layout the moment rasterization settles — success
+        // OR failure — and BEFORE the clipboard write. Chrome's transient user
+        // activation expires ~5s after the click, so a slow capture can make
+        // the write throw; the page must never sit in capture layout (e.g.
+        // mult-greek's fit-content mode) while that plays out.
+        onAfterCapture?.();
+      }
+      // Shared helper: clipboard first, silent fall back to a download — the
+      // snapshot always lands somewhere even if the activation window expired.
+      await copyOrDownload(blob, "snapshot.png");
       set("ok");
     } catch (e) { console.error("[snap] capture failed:", e); set("err"); }
-    finally { onAfterCapture?.(); setTimeout(() => set("idle"), 1800); }
+    finally { setTimeout(() => set("idle"), 1800); }
   }, [s, targetRef, title, onBeforeCapture, onAfterCapture, fitContent]);
 
   const color = s === "ok" ? "#00e676" : s === "err" ? "#ef4444" : "#a78bfa";
@@ -140,13 +157,27 @@ export function BoxDiscordBtn({
     set("busy");
     try {
       await onBeforeCapture?.();
-      const img = await captureToDataUrl(targetRef.current, { framed: true, title, fitContent });
+      let img: string;
+      try {
+        // Same capture policy as BoxSnapBtn above: the PNG is read back, so
+        // skip unreadable images rather than tainting, and don't wait 15s on a
+        // stalled one.
+        img = await captureToDataUrl(targetRef.current, {
+          framed: true, title, fitContent,
+          allowTaint: false, imageTimeout: 4000,
+        });
+      } finally {
+        // Restore the live layout as soon as rasterization settles — the
+        // Discord upload that follows can take seconds and must not keep the
+        // page in capture layout.
+        onAfterCapture?.();
+      }
       const now = new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false });
       const content = message ?? `📸 **${label || "Panel"}** — ${now} ET`;
       await postToDiscord(img, content);
       set("ok");
-    } catch { set("err"); }
-    finally { onAfterCapture?.(); setTimeout(() => set("idle"), 1800); }
+    } catch (e) { console.error("[snap→discord] failed:", e); set("err"); }
+    finally { setTimeout(() => set("idle"), 1800); }
   }, [s, targetRef, label, message, title, onBeforeCapture, onAfterCapture, fitContent]);
 
   // Discord share is owner-only (cosmetic gate).

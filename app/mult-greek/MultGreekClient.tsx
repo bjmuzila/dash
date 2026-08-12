@@ -16,9 +16,10 @@ import { MultiGreekSnapshotBtn, type SnapshotRow } from "@/components/dashboard/
 // a second, drifting copy. lazy() keeps it out of this page's initial bundle:
 // nothing loads until the first double-click.
 const OptionsChainPage = lazy(() => import("@/components/pages/OptionsChain"));
-// The 🔍 in each panel header opens the /analytics Ticker Lookup card — the SAME
-// component that page mounts, seeded with that panel's ticker. Imported, never
-// copied: a second ladder here would be a second opinion about the same walls.
+// The toolbar 🔍 opens the /analytics Ticker Lookup card — the SAME component
+// that page mounts. One page-level button (the card has its own symbol picker,
+// so any ticker can be entered inside it). Imported, never copied: a second
+// ladder here would be a second opinion about the same walls.
 const TickerLookupCard = lazy(() =>
   import("@/components/pages/Analytics").then((m) => ({ default: m.TickerLookupCard })),
 );
@@ -32,7 +33,9 @@ type Ticker = string;
 const CUSTOM_TICKER_KEY = "mg_custom_ticker";
 
 // Columns are now the N closest expirations (all NET GEX) instead of the four
-// greeks. Front expiry (from the picker) + the next 3 = 4 closest.
+// greeks. Front expiry (from the picker) + the next 3 = 4 closest. The 4th
+// SHOWN column is not the 4th expiry itself — it's the synthetic ex-0DTE TOTAL
+// (see EX0_KEY / withEx0Column) that the 4th expiry's data feeds into.
 const MAX_EXP_COLS = 4;
 
 // EM/2xEM row badge, rasterized as an inline SVG data URI rather than live DOM
@@ -380,6 +383,48 @@ function computeWalls(rows: ComputedRow[], expiry: string): Walls {
   };
 }
 
+// ── Ex-0DTE total column ──────────────────────────────────────────────────────
+
+// Key for the synthetic 4th column: the per-strike SUM of NET GEX across every
+// fetched expiration EXCEPT 0DTE. It replaces the 4th individual expiry column
+// — that expiry still contributes to the sum, it just isn't shown on its own.
+const EX0_KEY = "ALL_EX_0DTE";
+
+// Fold the synthetic ex-0DTE total column into a computed result: per-row sum
+// across `sumDates`, plus the same shading maxima / top-3 / top-5-per-side /
+// peak bookkeeping every real column gets, with the LAST real column swapped
+// out of `cols` so the panel renders front + next 2 + the total.
+function withEx0Column(res: ComputedResult, sumDates: string[]): ComputedResult {
+  const rows = res.rows.map(r => ({
+    ...r,
+    gex: { ...r.gex, [EX0_KEY]: sumDates.reduce((s, d) => s + (r.gex[d] || 0), 0) },
+  }));
+  let mx = 1;
+  rows.forEach(r => { const a = Math.abs(r.gex[EX0_KEY]); if (a > mx) mx = a; });
+  const ranks: Record<number, number> = {};
+  [...rows].sort((a, b) => Math.abs(b.gex[EX0_KEY]) - Math.abs(a.gex[EX0_KEY]))
+    .slice(0, 3)
+    .forEach((row, idx) => { ranks[row.strike] = idx + 1; });
+  const side: Record<number, number> = {};
+  [...rows].filter(r => r.gex[EX0_KEY] > 0)
+    .sort((a, b) => Math.abs(b.gex[EX0_KEY]) - Math.abs(a.gex[EX0_KEY])).slice(0, 5)
+    .forEach((row, idx) => { side[row.strike] = idx + 1; });
+  [...rows].filter(r => r.gex[EX0_KEY] < 0)
+    .sort((a, b) => Math.abs(b.gex[EX0_KEY]) - Math.abs(a.gex[EX0_KEY])).slice(0, 5)
+    .forEach((row, idx) => { if (side[row.strike] == null) side[row.strike] = idx + 1; });
+  let peak: number | null = null, peakAbs = 0;
+  rows.forEach(r => { const a = Math.abs(r.gex[EX0_KEY]); if (a > peakAbs) { peakAbs = a; peak = r.strike; } });
+  return {
+    ...res,
+    rows,
+    cols: [...res.cols.slice(0, res.cols.length - 1), EX0_KEY],
+    maxAbs: { ...res.maxAbs, [EX0_KEY]: mx },
+    top3: { ...res.top3, [EX0_KEY]: ranks },
+    top5PerSide: { ...res.top5PerSide, [EX0_KEY]: side },
+    mvcStrike: { ...res.mvcStrike, [EX0_KEY]: peak },
+  };
+}
+
 // ── Ticker Panel ──────────────────────────────────────────────────────────────
 
 interface GexChange { now: number; d15: number | null; d30: number | null; dOpen: number | null; spanMs: number; }
@@ -442,7 +487,7 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
 
 function TickerPanel({
   ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
-  showCB, showCW, showPW, getGexChange, deltaWindow, onExpandChain, onLookup,
+  showCB, showCW, showPW, getGexChange, deltaWindow, onExpandChain,
 }: {
   ticker: Ticker;
   /** Per-expiry strike rows for this ticker. */
@@ -469,8 +514,6 @@ function TickerPanel({
   deltaWindow: DeltaWindow;
   /** Double-click on the panel header → open this ticker's full-screen chain. */
   onExpandChain: (ticker: Ticker) => void;
-  /** Header 🔍 → open the /analytics Ticker Lookup card on THIS ticker. */
-  onLookup: (ticker: Ticker) => void;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
@@ -529,6 +572,23 @@ function TickerPanel({
     ? computeRows(strikesByExp, colDates, liveData, spot, contractMode)
     : null;
 
+  // Swap the 4th expiry column for the synthetic ex-0DTE TOTAL when a full set
+  // of columns is present. Every fetched expiration except 0DTE feeds the sum
+  // — the 4th expiry still contributes, it just no longer gets its own column.
+  // Fewer than 4 columns (static mode's single snapshot expiry, thin
+  // calendars) render unchanged.
+  const showEx0 = cols.length === MAX_EXP_COLS;
+  const computedAug = (computedFull && showEx0)
+    ? withEx0Column(computedFull, cols.filter(c => c.daysTo !== 0).map(c => c.date))
+    : computedFull;
+
+  // Header/totals column descriptors — the real expiries with the 4th swapped
+  // for the ex-0DTE TOTAL, mirroring computed.cols when data is present.
+  const displayCols: { date: string; label: { dte: string; md: string } }[] =
+    (showEx0 ? cols.slice(0, MAX_EXP_COLS - 1) : cols)
+      .map(c => ({ date: c.date, label: colLabel(c.date) }))
+      .concat(showEx0 ? [{ date: EX0_KEY, label: { dte: "ALL", md: "EX-0DTE" } }] : []);
+
   // CB / CW / PW levels for the FRONT expiry — shown in the header and marked in
   // the front column. Computed from the full (untrimmed) rows so the capture
   // window doesn't change which strikes are the walls.
@@ -539,13 +599,13 @@ function TickerPanel({
   // Screenshot mode: trim rows to ±captureWindow around the ATM strike so the
   // capture shows a focused window (ATM in the middle) rather than every strike.
   const computed = (() => {
-    if (!computedFull || captureWindow == null) return computedFull;
-    const rows = computedFull.rows;
+    if (!computedAug || captureWindow == null) return computedAug;
+    const rows = computedAug.rows;
     const atmIdx = rows.findIndex(r => r.isATM);
-    if (atmIdx < 0) return computedFull;
+    if (atmIdx < 0) return computedAug;
     const start = Math.max(0, atmIdx - captureWindow);
     const end = Math.min(rows.length, atmIdx + captureWindow + 1);
-    return { ...computedFull, rows: rows.slice(start, end) };
+    return { ...computedAug, rows: rows.slice(start, end) };
   })();
 
   // ---- Δ stamps -----------------------------------------------------------
@@ -650,9 +710,15 @@ function TickerPanel({
       })()
     : null;
 
-  // Per-column NET GEX totals.
+  // Per-column NET GEX totals + the positive share of gross GEX in that column
+  // (Σ positive / (Σ positive + |Σ negative|)) for the TOTAL row's % readout.
   const totals = computed
-    ? Object.fromEntries(computed.cols.map(e => [e, computed.rows.reduce((s, r) => s + (r.gex[e] || 0), 0)]))
+    ? Object.fromEntries(computed.cols.map(e => {
+        let pos = 0, neg = 0;
+        computed.rows.forEach(r => { const v = r.gex[e] || 0; if (v > 0) pos += v; else neg += -v; });
+        const gross = pos + neg;
+        return [e, { net: pos - neg, posPct: gross > 0 ? (pos / gross) * 100 : null }] as const;
+      }))
     : null;
 
   // Auto-scroll to ATM
@@ -711,25 +777,9 @@ function TickerPanel({
         title={`Double-click for the full-screen ${ticker} option chain`}
         style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", background: "rgba(33,158,188,0.04)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0, cursor: "zoom-in", userSelect: "none" }}
       >
-        <span style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-          <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em" }}>{ticker}</span>
-          {/* Ticker Lookup. onMouseDown/onDoubleClick are stopped as well as the
-              click: the header's own double-click handler would otherwise fire
-              the full-screen chain on a quick second press of this button. */}
-          <button
-            onClick={(e) => { e.stopPropagation(); onLookup(ticker); }}
-            onMouseDown={(e) => e.stopPropagation()}
-            onDoubleClick={(e) => e.stopPropagation()}
-            title={`${ticker} Ticker Lookup — GEX ladder, walls and gamma regime`}
-            aria-label={`Open ${ticker} ticker lookup`}
-            style={{
-              flexShrink: 0, cursor: "pointer", lineHeight: 1,
-              padding: "2px 6px", borderRadius: 6, fontSize: 11,
-              border: `1px solid ${HT.border}`, background: "rgba(33,158,188,0.10)",
-              color: HT.cyan,
-            }}
-          >🔍</button>
-        </span>
+        {/* Ticker Lookup 🔍 moved to the page toolbar — one button for the
+            whole page instead of one per panel. */}
+        <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em", flexShrink: 0 }}>{ticker}</span>
         <div style={{ display: "flex", gap: 5, alignItems: "center", overflow: "hidden", flex: 1, justifyContent: "flex-end" }}>
           {/* Header readout always shows the CB/CW/PW levels — the toolbar
               toggles only control the cell markers, per user. */}
@@ -760,10 +810,14 @@ function TickerPanel({
       {/* Column headers — STRIKE + one NET GEX column per expiry */}
       <div style={{ display: "grid", gridTemplateColumns: gridCols, background: HT.panelBgStrong, borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
         <div style={{ padding: "5px 4px", textAlign: "center", color: HT.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", alignSelf: "center" }}>STRIKE</div>
-        {cols.map((c, ci) => {
-          const lbl = colLabel(c.date);
+        {displayCols.map((c, ci) => {
+          const lbl = c.label;
           return (
-            <div key={c.date} style={{ padding: "3px 4px", textAlign: "center", lineHeight: 1.15 }}>
+            <div
+              key={c.date}
+              title={c.date === EX0_KEY ? "Total NET GEX per strike across all expirations excluding 0DTE" : undefined}
+              style={{ padding: "3px 4px", textAlign: "center", lineHeight: 1.15 }}
+            >
               <div style={{ color: HT.cyan, fontSize: 10, fontWeight: 800, letterSpacing: "0.04em" }}>{lbl.dte}</div>
               <div style={{ color: HT.muted, fontSize: 8, fontWeight: 700 }}>
                 {deltaWindow !== 0 && ci === 0 ? `GEX +Δ${deltaWindow}M` : "GEX"} · {lbl.md}
@@ -776,17 +830,25 @@ function TickerPanel({
       {/* Totals row */}
       <div style={{ display: "grid", gridTemplateColumns: gridCols, background: "rgba(33,158,188,0.02)", borderBottom: `1px solid ${HT.border}`, flexShrink: 0 }}>
         <div style={{ padding: "4px 4px", fontSize: 10, fontWeight: 800, textAlign: "center", color: HT.muted, letterSpacing: "0.06em" }}>TOTAL</div>
-        {cols.map(c => {
-          const v = totals?.[c.date] ?? 0;
-          const fmt = totals != null ? fmtMoney(v) : { sign: "", value: "--" };
+        {displayCols.map(c => {
+          const t = totals?.[c.date] ?? null;
+          const v = t?.net ?? 0;
+          const fmt = t != null ? fmtMoney(v) : { sign: "", value: "--" };
           return (
-            <div key={c.date} style={{
+            <div key={c.date} title="Column NET GEX total · % of gross GEX that is positive" style={{
               padding: "4px 4px", fontSize: 9, fontWeight: 800, fontFamily: "var(--font-mono)",
               whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
               textAlign: "center",
               color: v > 0 ? "#29b6f6" : v < 0 ? "#ff4757" : "#94a3b8",
             }}>
               <span style={{ color: v > 0 ? "#22c55e" : v < 0 ? "#ef4444" : SOFT_WHITE }}>{fmt.sign}</span>{fmt.value}
+              {/* % of positive GEX — share of the column's gross |GEX| that is
+                  positive. Green when positive GEX dominates, red otherwise. */}
+              {t?.posPct != null && (
+                <span style={{ marginLeft: 3, fontSize: 8, fontWeight: 800, opacity: 0.9, color: t.posPct >= 50 ? "#22c55e" : "#ef4444" }}>
+                  {Math.round(t.posPct)}%
+                </span>
+              )}
             </div>
           );
         })}
@@ -859,9 +921,12 @@ function TickerPanel({
                 const dMode = deltaWindow !== 0;
                 const dEntry = dMode ? (deltas.by[e]?.[r.strike] ?? null) : null;
                 const dMaxPct = deltas.maxPct[e] ?? 0;
+                // The synthetic ex-0DTE total column has no single expiry
+                // behind it, so its cells can't open the per-cell click card.
+                const isEx0Col = e === EX0_KEY;
                 return (
                   <div key={e} data-gexcell="1" className={isCB ? "mvc-peak-cell" : undefined}
-                    onClick={isCapturing ? undefined : (ev) => {
+                    onClick={(isCapturing || isEx0Col) ? undefined : (ev) => {
                       ev.stopPropagation();
                       setClickCell(prev => (prev && prev.strike === r.strike && prev.expiry === e)
                         ? null
@@ -870,7 +935,7 @@ function TickerPanel({
                     style={{
                     padding: "4px 4px", fontSize: 9, fontFamily: "var(--font-mono)",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                    textAlign: "center", color: SOFT_WHITE, cursor: isCapturing ? "default" : "pointer",
+                    textAlign: "center", color: SOFT_WHITE, cursor: (isCapturing || isEx0Col) ? "default" : "pointer",
                     ...(dMode ? { display: "flex", alignItems: "center", gap: 4, minHeight: 23 } : {}),
                     background: val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity),
                     fontWeight: weight,
@@ -1522,7 +1587,7 @@ export function MultGreekClient({
   // A screenshot capture must never bake the overlay into the shot.
   useEffect(() => { if (isCapturing) setChainTicker(null); }, [isCapturing]);
 
-  // ── Ticker Lookup overlay (header 🔍) ──────────────────────────────────────
+  // ── Ticker Lookup overlay (toolbar 🔍) ─────────────────────────────────────
   // Rendered through a portal to document.body, not inside the panels row: the
   // chain overlay above can pin itself to that row because it is meant to cover
   // exactly the four cards, but the lookup card is a tall document and the row
@@ -1694,6 +1759,15 @@ export function MultGreekClient({
         {/* Intensity slider */}
         <DockSlider label="Intensity" value={intensity} min={0.5} max={3} step={0.01} onChange={setIntensity} width={80} format={(v) => `${v.toFixed(2)}x`} />
 
+        {/* Ticker Lookup — ONE page-level 🔍 (moved out of the panel headers).
+            The lookup card has its own symbol picker, so it opens on SPX and
+            any ticker can be entered inside it. */}
+        <DockButton
+          onClick={() => setLookupTicker("SPX")}
+          title="Ticker Lookup — enter any ticker for its GEX ladder, walls and gamma regime"
+          style={{ color: HT.cyan }}
+        >🔍</DockButton>
+
         {/* Refresh / Snap / Discord */}
         <DockSpacer />
         {!isStatic && (
@@ -1738,7 +1812,6 @@ export function MultGreekClient({
             getGexChange={getGexChange}
             deltaWindow={deltaWindow}
             onExpandChain={setChainTicker}
-            onLookup={setLookupTicker}
           />
         ))}
 
@@ -1793,9 +1866,8 @@ export function MultGreekClient({
 
       {/* ── Ticker Lookup overlay ────────────────────────────────────────────
           Scrim + centered card, portalled to <body> so nothing on this page can
-          clip or stack over it. `key` is the ticker: reopening on a different
-          panel remounts the card so it seeds on the new symbol rather than
-          keeping the last one (the card is uncontrolled after mount). */}
+          clip or stack over it. Opened from the toolbar 🔍; the card is
+          uncontrolled after mount, so any ticker can be entered inside it. */}
       {lookupTicker && typeof document !== "undefined" && createPortal(
         <div
           onClick={closeLookup}

@@ -147,7 +147,31 @@ export type SnapOptions = {
    * more forgiving setting for anything that fails a CORS preflight.
    */
   allowTaint?: boolean;
+  /**
+   * html2canvas `imageTimeout` (ms) — how long the clone waits on any one image
+   * before giving up on it. html2canvas's own default is 15000ms, long enough
+   * that a single stalled image holds the whole capture (and any
+   * onBeforeCapture layout switch, like mult-greek's fit-content mode) hostage
+   * for 15 seconds. Page-scale captures pass a short value: a skipped image
+   * costs a logo, not the snapshot.
+   */
+  imageTimeout?: number;
+  /**
+   * Watchdog for the WHOLE capture, in ms. Defaults to CAPTURE_WATCHDOG_MS.
+   *
+   * html2canvas can stall indefinitely — observed on /mult-greek, where the
+   * capture promise never settled: no error was ever logged, the clipboard
+   * never got its PNG, the button sat on "…", and the page was left stuck in
+   * its fit-content capture layout until a reload. A promise that never
+   * settles skips every catch/finally downstream, so nothing could recover.
+   * The watchdog turns that silent hang into a rejection: the button shows ✕,
+   * the error reaches the console, and onAfterCapture/restore paths run.
+   */
+  timeoutMs?: number;
 };
+
+/** Default whole-capture watchdog. Generous — real captures finish in <5s. */
+export const CAPTURE_WATCHDOG_MS = 20000;
 
 type LtProvider = () => { canvas: HTMLCanvasElement; target: HTMLElement } | null;
 type SnapRedraw = (capturing: boolean) => void;
@@ -360,7 +384,26 @@ export async function captureToCanvas(
 ): Promise<HTMLCanvasElement> {
   setCanvasCaptureMode(el, true);
   try {
-    return await captureToCanvasInner(el, opts);
+    // Watchdog: html2canvas's promise is not guaranteed to settle (see the
+    // timeoutMs doc above — /mult-greek hung forever with zero symptoms). Race
+    // it so a stall becomes a normal, catchable failure. If the stalled
+    // capture does resolve later its canvas is simply discarded.
+    const ms = opts.timeoutMs ?? CAPTURE_WATCHDOG_MS;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      watchdog = setTimeout(
+        () => reject(new Error(
+          `[snapshot] capture timed out after ${ms}ms — html2canvas never settled ` +
+          `(stalled image or resource in the clone?)`,
+        )),
+        ms,
+      );
+    });
+    try {
+      return await Promise.race([captureToCanvasInner(el, opts), timeout]);
+    } finally {
+      if (watchdog !== undefined) clearTimeout(watchdog);
+    }
   } finally {
     // Always restore, including on failure — otherwise the live chart silently
     // loses its interaction hint until the next unrelated redraw.
@@ -543,6 +586,7 @@ async function captureToCanvasInner(
     allowTaint: opts.allowTaint ?? true,
     scale,
     logging: false,
+    ...(opts.imageTimeout != null ? { imageTimeout: opts.imageTimeout } : {}),
     ...(contentW ? { width: contentW } : {}),
     ...(captureH ? { height: captureH } : {}),
     // Only ever set deliberately — see gotcha 4.

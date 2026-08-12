@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { today as todayApi, tasks as tasksApi, notes as notesApi, settings as settingsApi,
-         calendar as calendarApi, budget as budgetApi, routines as routinesApi,
+         calendar as calendarApi, icsFeeds as icsFeedsApi, budget as budgetApi, routines as routinesApi,
          projects as projectsApi, lists as listsApi, weather as weatherApi,
          type RoutinesPayload,
          type Task, type TodayPayload, type NewTask, type TaskPatch,
@@ -134,8 +134,56 @@ export function useSyncCalendar() {
       // Google again", and a calendar created there five minutes ago would
       // otherwise sit behind this query's 5-minute staleTime.
       void qc.invalidateQueries({ queryKey: ['calendar-list'] })
+      // Sync also re-reads the subscribed feeds server-side, so their
+      // "last read" and error state have moved.
+      void qc.invalidateQueries({ queryKey: ['ics-feeds'] })
     },
   })
+}
+
+// ── Subscribed ICS feeds ─────────────────────────────────────────────────────
+
+const FEEDS_KEY = ['ics-feeds']
+
+/**
+ * The feeds themselves. Cheap (it reads our own table, not the feeds), so this
+ * is a plain query with no staleTime games.
+ */
+export function useIcsFeeds() {
+  return useQuery({ queryKey: FEEDS_KEY, queryFn: icsFeedsApi.list })
+}
+
+/**
+ * One mutation for every feed action, because they all answer with the whole
+ * list and all invalidate the same things: the list itself, today's events (a
+ * feed's events appear or vanish immediately) and Today.
+ *
+ * Adding is the one that can fail loudly — a URL that isn't a calendar comes
+ * back 400 with a message meant for the person, so callers read `error`.
+ */
+function useFeedMutation<TVars>(fn: (v: TVars) => Promise<unknown>) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: (data) => {
+      qc.setQueryData(FEEDS_KEY, data)
+      void qc.invalidateQueries({ queryKey: ['calendar'] })
+      void qc.invalidateQueries({ queryKey: TODAY_KEY })
+    },
+  })
+}
+
+export function useAddIcsFeed() {
+  return useFeedMutation((url: string) => icsFeedsApi.add(url))
+}
+
+export function useRemoveIcsFeed() {
+  return useFeedMutation((id: number) => icsFeedsApi.remove(id))
+}
+
+export function useUpdateIcsFeed() {
+  return useFeedMutation((v: { id: number; patch: Parameters<typeof icsFeedsApi.update>[1] }) =>
+    icsFeedsApi.update(v.id, v.patch))
 }
 
 export function useDisconnectCalendar() {

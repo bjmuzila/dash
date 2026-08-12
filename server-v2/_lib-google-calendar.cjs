@@ -372,6 +372,12 @@ function offsetFor(tz, dateStr) {
  * holidays, birthdays. This is how a shared family calendar becomes reachable:
  * it is a SEPARATE calendar in the list, not part of `primary`, so reading only
  * primary would never show a single one of its events.
+ *
+ * `showHidden=true` is load-bearing and easy to lose. Google DEFAULTS it to
+ * false, and "hidden" there means only "unticked in Google's own sidebar" — a
+ * calendar someone hid because they didn't want it cluttering google.com is
+ * exactly the one they then can't find in this picker. Without it the list
+ * silently comes back short with no error to explain the gap.
  */
 async function listCalendars(userId) {
   if (!configured()) return { error: 'not-configured', calendars: [] };
@@ -381,7 +387,7 @@ async function listCalendars(userId) {
     const at = await accessTokenFor(row);
     if (!at) return { error: 'not-connected', calendars: [] };
 
-    const r = await fetch(`${CALENDAR_LIST_ENDPOINT}?maxResults=250&minAccessRole=reader`,
+    const r = await fetch(`${CALENDAR_LIST_ENDPOINT}?maxResults=250&minAccessRole=reader&showHidden=true`,
                           { headers: { Authorization: `Bearer ${at}` } });
     if (r.status === 401 || r.status === 403) return { error: 'revoked', calendars: [] };
     if (!r.ok) return { error: `google-${r.status}`, calendars: [] };
@@ -433,6 +439,10 @@ async function saveSelection(userId, { calendarIds, shareWithHousehold }) {
  * because it changes about once a year and is needed on every event read —
  * fetching the list on every request would double the Google calls for a value
  * that never moves.
+ *
+ * Same `showHidden=true` as listCalendars, and for a sharper reason: a hidden
+ * calendar can still be TICKED here, so leaving it off would return its events
+ * with no colour and no name at all.
  */
 const colourCache = new Map();
 const COLOUR_MS = 10 * 60_000;
@@ -442,7 +452,7 @@ async function calendarColours(row, accessTok) {
   const hit = colourCache.get(key);
   if (hit && Date.now() - hit.at < COLOUR_MS) return hit.map;
   try {
-    const r = await fetch(`${CALENDAR_LIST_ENDPOINT}?maxResults=250&minAccessRole=reader`,
+    const r = await fetch(`${CALENDAR_LIST_ENDPOINT}?maxResults=250&minAccessRole=reader&showHidden=true`,
                           { headers: { Authorization: `Bearer ${accessTok}` } });
     if (!r.ok) return hit?.map || new Map();
     const j = await r.json();

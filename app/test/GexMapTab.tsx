@@ -239,28 +239,55 @@ const rgba = (c: number[], a: number) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
  */
 function gamColor(v: number, alpha?: number): string {
   const m = Math.min(1, Math.abs(v));
-  const c = mix(v >= 0 ? GEX_POS : GEX_NEG, WHITE, m * 0.28);
+  // The lift toward white used to be flat `m * 0.28`, which is a straight line
+  // through the whole scale — a 30% cell and a 90% cell differed by hue-lightness
+  // about as much as they differed by alpha, so nothing about a wall SHOUTED.
+  // It is now weighted toward the top (`0.10·m + 0.32·m²`): weak cells keep the
+  // pure hue and read as background texture, while the strongest nodes burn out
+  // to a bright core that is obvious at a glance and survives the red field
+  // around it.
+  const c = mix(v >= 0 ? GEX_POS : GEX_NEG, WHITE, 0.10 * m + 0.32 * m * m);
   return rgba(c, alpha === undefined ? heatAlpha(m, 0.08, 0.86) : alpha);
 }
 /**
- * Alpha for a heat cell. GexHeatmap eases its ramp `ratio ** 1.4` before mapping
- * to alpha; the same curve is used here so a mid-strength strike reads mid on
- * both surfaces. It also matters more on a full-bleed field than in a table:
- * linear alpha turns the whole below-flip half into a solid block of #ff4757,
- * where the eased curve keeps only the real nodes hot.
+ * Alpha for a heat cell.
+ *
+ * This used to ease the ramp `ratio ** 1.4`, copied from GexHeatmap. On a TABLE
+ * that curve is right. On a session-normalized FIELD it is not, and the reason is
+ * the shape of a 0DTE day: gamma piles into the close, so `gMax` is set by the
+ * last half hour and the whole morning sits at 10–25% of the scale. `** 1.4` then
+ * pushes 0.15 down to 0.07 — the morning tape rendered as a wash and the map
+ * looked like nothing happened before 15:00. That is the "older heat fades out
+ * under the closing GEX" complaint, and it was a CURVE problem, not a data one:
+ * the cells were always there.
+ *
+ * The ramp is now two terms, so one curve does not have to do both jobs:
+ *
+ *   base  `ratio ** 0.85` — sub-linear, so a real mid-session node holds a
+ *         readable alpha instead of decaying into the background. The noise floor
+ *         is still handled, but by the cull threshold in TapeField rather than by
+ *         crushing everything beneath it.
+ *   hot   a squared term over the top 45% of the scale, worth up to +0.16 alpha.
+ *         This is what keeps STRONG levels obviously strong now that the weak ones
+ *         are visible: a wall lands near opaque, a busy-but-ordinary strike near
+ *         half. Without it, lifting the low end would flatten the very contrast
+ *         the map is read for.
  *
  * `intensity` is the app-wide gradient slider (INTENSITY_SLIDER_GRADIENT_LOGIC.md).
- * It multiplies the RATIO BEFORE the easing — `(ratio × intensity) ** 1.4` — which
- * is exactly what `metricBg()` does in the Multi-Greek reference, so a notch on
- * this slider means the same thing as a notch on that one.
+ * It multiplies the RATIO BEFORE the curve, exactly as `metricBg()` does in the
+ * Multi-Greek reference, so a notch on this slider means the same thing as a notch
+ * on that one.
  *
- * What is NOT copied is that function's `min(0.18, …)` cap and its fixed
- * rank-1/2/3 alphas. Those exist to keep a TABLE's top three cells legible above
- * their neighbours. This is a full-bleed field where the alpha ramp IS the
- * reading, and capping it at 0.18 would flatten the entire map to near-invisible.
+ * What is NOT copied from that function is its `min(0.18, …)` cap and its fixed
+ * rank-1/2/3 alphas. Those keep a TABLE's top three cells legible above their
+ * neighbours. This is a full-bleed field where the alpha ramp IS the reading, and
+ * capping it at 0.18 would flatten the entire map to near-invisible.
  */
-const heatAlpha = (h: number, lo: number, hi: number, intensity = 1) =>
-  lo + hi * Math.pow(Math.min(1, Math.max(0, h * intensity)), 1.4);
+const heatAlpha = (h: number, lo: number, hi: number, intensity = 1) => {
+  const r = Math.min(1, Math.max(0, h * intensity));
+  const hot = Math.max(0, (r - 0.55) / 0.45);
+  return Math.min(0.98, lo + hi * Math.pow(r, 0.85) + 0.16 * hot * hot);
+};
 
 function dexColor(v: number, a?: number): string {
   const m = Math.min(1, Math.abs(v));
@@ -1236,13 +1263,28 @@ function TerrainField({ m, L, TP, FWD, FHT }: {
         // missing at full extent. 18 bands over an expanded ramp puts real
         // structure at 3–5% of max onto its own visible step while the big
         // nodes still top out.
+        //
+        // The banding alone made every elevation above roughly a third of the
+        // session max look the same: `** 0.55` spends most of its range on the
+        // low end (which is the point — that is where the older, quieter tape
+        // lives), and what is left at the top is four or five bands separated by
+        // a few percent of one colour. The peaks were there and unreadable.
+        //
+        // So the ramp now carries a SUMMIT term as well as the low-end
+        // expansion. `hot` is zero below 35% of the scale and reaches 1 at the
+        // session max; it pushes the strongest terrain further up the mix (+0.22)
+        // and, squared, burns it toward white (+0.45). The result is a proper
+        // hypsometric tint — dark basin, coloured slopes, bright ridges — instead
+        // of one saturated plateau with contour lines drawn on it.
         const av = Math.min(1, Math.abs(v));
         const lift = Math.pow(av, 0.55);
-        const mag = Math.min(1, Math.floor(lift * 18) / 18 + 0.04);
-        const t2 = mag;
+        const band = Math.min(1, Math.floor(lift * 18) / 18 + 0.04);
+        const hot = clamp01((av - 0.35) / 0.65);
+        const t2 = Math.min(1, band + 0.22 * hot);
+        const white = band * 0.18 + hot * hot * 0.45;
         const c = v >= 0
-          ? mix([5, 12, 20], mix(GEX_POS, WHITE, mag * 0.28), t2)
-          : mix([22, 8, 11], mix(GEX_NEG, WHITE, mag * 0.28), t2);
+          ? mix([5, 12, 20], mix(GEX_POS, WHITE, white), t2)
+          : mix([22, 8, 11], mix(GEX_NEG, WHITE, white), t2);
         const o = (y * cv.width + x) * 4;
         img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
       }
@@ -1284,10 +1326,29 @@ function TerrainField({ m, L, TP, FWD, FHT }: {
     // field no longer rescaled to whatever is on screen, the low contours are
     // where most of the session's structure lives, and a linear alpha left them
     // at 1% opacity.
+    //
+    // MINOR vs MAJOR. sqrt() is generous at the bottom and stingy at the top: it
+    // topped the 0.85 ring out at 0.41 alpha and 1.5px, the same weight as the
+    // 0.15 ring, so the map had no index contours — nothing said "this ridge is
+    // the one". Levels at or above a third of the session max are now drawn as
+    // index lines: brighter, 2.4px, and passed twice so they stand off the fill
+    // the way the zero coastline does. Everything below stays hairline, which is
+    // what keeps the quiet terrain legible without it competing with the walls.
+    const MAJOR = 0.34;
     for (const lv of [-0.85, -0.65, -0.48, -0.34, -0.23, -0.15, -0.09, -0.05, -0.03,
                       0.03, 0.05, 0.09, 0.15, 0.23, 0.34, 0.48, 0.65, 0.85]) {
-      const a = (0.13 + 0.30 * Math.sqrt(Math.abs(lv))).toFixed(3);
-      contour(lv, lv > 0 ? `rgba(190,232,255,${a})` : `rgba(255,183,190,${a})`, 1.5, []);
+      const mag = Math.abs(lv);
+      const major = mag >= MAJOR;
+      const a = (major ? 0.42 + 0.50 * mag : 0.13 + 0.30 * Math.sqrt(mag)).toFixed(3);
+      const col = lv > 0 ? `rgba(190,232,255,${a})` : `rgba(255,183,190,${a})`;
+      if (major) {
+        // A dark under-stroke first: on a bright summit a light line on light
+        // fill disappears, and this is exactly where it must not.
+        contour(lv, "rgba(0,0,0,0.34)", 4.0, []);
+        contour(lv, col, 2.4, []);
+      } else {
+        contour(lv, col, 1.4, []);
+      }
     }
     contour(0, "rgba(125,211,252,0.95)", 3.2, [12, 8]);
   }, [m, FWD, FHT, dprStep]);

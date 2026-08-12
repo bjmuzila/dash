@@ -3,7 +3,9 @@ import { useAuth } from '../auth'
 import { auth as authApi, calendar as calendarApi, ApiError } from '../api'
 import PinPad from '../components/PinPad'
 import { useSettings, useSaveSettings, useNotes, useCreateNote, useDeleteNote,
-         useToday, useDisconnectCalendar, useSyncCalendar } from '../hooks'
+         useToday, useDisconnectCalendar, useSyncCalendar,
+         useIcsFeeds, useAddIcsFeed, useRemoveIcsFeed, useUpdateIcsFeed } from '../hooks'
+import type { IcsFeed } from '../api'
 import CalendarPicker from '../components/CalendarPicker'
 import { T, label, section, button, input } from '../theme'
 
@@ -39,6 +41,7 @@ export default function Settings() {
       <ChangePasswordCard />
 
       <GoogleCalendarCard />
+      <IcsFeedsCard />
 
       <button onClick={() => void signOut()}
               style={{ ...button('ghost'), width: '100%', color: T.bad, borderColor: 'rgba(239,68,68,0.35)' }}>
@@ -237,6 +240,164 @@ function LastSynced({ at }: { at: string | null }) {
       Last synced {ago}
     </div>
   )
+}
+
+// ── Subscribed feeds (ICS / webcal) ──────────────────────────────────────────
+
+/**
+ * Paste a team or school .ics link and its events land on Today.
+ *
+ * This exists because subscribing the same link inside Google works but updates
+ * on Google's schedule — a practice added this morning can be missing tonight.
+ * Read directly, a feed is never more than 30 minutes behind.
+ *
+ * Read-only in both directions: nothing here can change the publisher's
+ * calendar, and removing a feed removes only our copy.
+ */
+function IcsFeedsCard() {
+  const { data, isLoading } = useIcsFeeds()
+  const addFeed = useAddIcsFeed()
+  const [url, setUrl] = useState('')
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    const v = url.trim()
+    if (!v || addFeed.isPending) return
+    addFeed.mutate(v, { onSuccess: () => setUrl('') })
+  }
+
+  const mine = data?.feeds ?? []
+  const shared = data?.shared ?? []
+
+  return (
+    <section style={section()}>
+      <div style={label()}>
+        Subscribed feeds
+        {mine.length > 0 && (
+          <span style={label({ marginLeft: 8, color: T.faint, letterSpacing: '0.1em' })}>
+            {mine.length}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 14, color: T.muted, marginTop: 8, lineHeight: 1.45 }}>
+        A team or school calendar link (.ics or webcal). Its events show on Today next to
+        your Google ones, and it's re-read every half hour — faster than Google picks up
+        the same link. Read-only.
+      </div>
+
+      <form onSubmit={submit} style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://…/calendar.ics"
+          inputMode="url"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          style={{ ...input(), flex: 1, minWidth: 0 }}
+        />
+        <button type="submit" disabled={!url.trim() || addFeed.isPending}
+                style={{ ...button('ghost'), flexShrink: 0 }}>
+          {addFeed.isPending ? 'Adding…' : 'Add'}
+        </button>
+      </form>
+
+      {/* The server's message, verbatim — "That link didn't return a calendar"
+          tells you what to do; a generic failure doesn't. */}
+      {addFeed.isError && (
+        <div style={{ fontSize: 13, color: T.bad, marginTop: 8 }}>
+          {(addFeed.error as ApiError)?.message || 'Could not add that feed.'}
+        </div>
+      )}
+
+      {isLoading && <div style={{ ...label({ color: T.faint }), marginTop: 12 }}>Loading…</div>}
+
+      {mine.map((f) => <FeedRow key={f.id} feed={f} />)}
+
+      {shared.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div style={label({ color: T.faint, letterSpacing: '0.06em' })}>
+            Shared with you
+          </div>
+          {shared.map((f) => <FeedRow key={f.id} feed={f} />)}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function FeedRow({ feed }: { feed: IcsFeed }) {
+  const removeFeed = useRemoveIcsFeed()
+  const updateFeed = useUpdateIcsFeed()
+  const [confirming, setConfirming] = useState(false)
+
+  return (
+    <div style={{ borderTop: `1px solid ${T.rule}`, padding: '12px 0' }}>
+      <div style={{ fontSize: 14, color: T.ink, wordBreak: 'break-word', fontWeight: 600 }}>
+        {feed.name || feed.url}
+      </div>
+      <div style={label({ marginTop: 4, letterSpacing: '0.06em', color: T.faint })}>
+        {[
+          feed.sharedBy ? `from ${feed.sharedBy}` : null,
+          typeof feed.eventCount === 'number' ? `${feed.eventCount} events` : null,
+          feed.fetchedAt ? `read ${agoOf(feed.fetchedAt)}` : 'not read yet',
+        ].filter(Boolean).join(' · ')}
+      </div>
+      {/* An error here is not fatal — the last good copy is still being shown,
+          which is the whole reason the body is cached. Say both halves. */}
+      {feed.lastError && (
+        <div style={{ fontSize: 13, color: T.warn, marginTop: 4 }}>
+          Last read failed ({feed.lastError}) — still showing the previous copy.
+        </div>
+      )}
+
+      {feed.mine && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 8, flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={feed.shareWithHousehold}
+              onChange={(e) => updateFeed.mutate({ id: feed.id, patch: { shareWithHousehold: e.target.checked } })}
+              disabled={updateFeed.isPending}
+              style={{ width: 18, height: 18, accentColor: T.ink, margin: 0 }}
+            />
+            <span style={{ fontSize: 13, color: T.muted }}>Show on the other person's Today</span>
+          </label>
+
+          {confirming ? (
+            <span style={{ display: 'inline-flex', gap: 14, alignItems: 'center' }}>
+              <button onClick={() => removeFeed.mutate(feed.id)} disabled={removeFeed.isPending}
+                      style={{ ...label({ color: T.bad }), background: 'none', border: 'none', padding: '6px 0', cursor: 'pointer' }}>
+                {removeFeed.isPending ? 'Removing…' : 'Really remove'}
+              </button>
+              <button onClick={() => setConfirming(false)}
+                      style={{ ...label({ color: T.muted }), background: 'none', border: 'none', padding: '6px 0', cursor: 'pointer' }}>
+                Cancel
+              </button>
+            </span>
+          ) : (
+            <button onClick={() => setConfirming(true)}
+                    style={{ ...label({ color: T.muted }), background: 'none', border: 'none', padding: '6px 0', cursor: 'pointer' }}>
+              Remove
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** "4 minutes ago" — same shape as LastSynced, without the stale warning. */
+function agoOf(iso: string): string {
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000))
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ago`
+  if (mins < 1440) {
+    const h = Math.round(mins / 60)
+    return `${h} hour${h === 1 ? '' : 's'} ago`
+  }
+  const d = Math.round(mins / 1440)
+  return `${d} day${d === 1 ? '' : 's'} ago`
 }
 
 // ── Slipping threshold ───────────────────────────────────────────────────────
