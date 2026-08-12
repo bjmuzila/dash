@@ -1,5 +1,109 @@
 # Changelog
 
+## 2026-08-12 - GEX Map: the morning is back, and Terrain survives the snapshot
+
+Edited: `app/test/GexMapTab.tsx` (`buildModel`, `TerrainField`),
+`components/shared/CopySnapButton.tsx` (`settle`).
+
+### What
+
+Two things, both of them "it is there, you just cannot see it".
+
+09:30–10:30 was rendering as an empty field. Open interest builds through a 0DTE
+day, so the last hour's gamma is routinely 5–10× the first hour's; dividing
+every cell by the session max put the morning at 10–15% of the scale, under the
+cull threshold for most of the ladder. The tape appeared to start around lunch.
+
+And the Terrain tab was MISSING from every PNG. html2canvas renders an `<svg>`
+by serializing it to XML — a `<canvas>` serializes as an empty element, and the
+terrain lives in a canvas inside a `<foreignObject>`. Everything else in the
+frame is pure SVG and photographed fine, which is why it read as "the snapshot
+doesn't even show the map".
+
+### How
+
+Each column is now divided by a geometric blend of the session max and its own:
+`denom = gMax^0.4 · cMax^0.6`. w=0 is the old absolute scale; w=1 would be
+per-column normalization, which is wrong on its own — a dead minute and the
+closing bell would both render at full brightness and the map loses the one
+thing it is read for. At 0.6 a morning column peaking at 12% of the session
+lands near 42%: legible, still visibly weaker than the close, and continuous, so
+no column ever steps between scales. The ratio only — `profile`, the rail and
+every printed number stay absolute.
+
+`TerrainField` takes `snap`. In capture mode it repaints the canvas at the
+capture layout's width FIRST, then inlines that bitmap as an SVG `<image>` with
+a data URL, which serialization does carry. Two-step on purpose: inlining the
+pre-widening bitmap and stretching it would have put a smeared terrain in the
+PNG. `CopySnapButton`'s wait grew a `settle()` — two frames for React's commit
+and the browser's re-layout, then ~80ms for the repaint, then one more frame.
+Leaving capture mode drops the bitmap and the paint effect refills the live
+canvas.
+
+
+## 2026-08-12 - GEX Map snapshot: the tape only
+
+Edited: `app/test/GexMapTab.tsx` (`TapeField`, `TapeFieldCard`),
+`components/shared/CopySnapButton.tsx`.
+
+### What
+
+The Tape Field snapshot photographed the whole card — the net DEX profile in
+the left gutter and the net GEX profile rail and net GEX · session sparkline on
+the right came along with it. Three side panels around a field that had been
+squeezed into the middle third of the frame. The PNG is meant to be the gamma
+tape: the heat/terrain field and the Net Vol GEX keel under it.
+
+### How
+
+`TapeField` takes a `snap` prop. It re-solves the SAME three-column layout with
+two of the columns at zero — no left gutter, and a right column only wide
+enough for the strike labels — so the field and the keel stretch across
+everything that frees up. The viewBox is unchanged, so the PNG keeps its shape.
+The strike ladder stays: it is the y-axis, not a panel, and a gamma map with no
+price scale is unreadable. The removed pieces are removed from the tree, not
+hidden, so nothing leaves a hole where it used to sit.
+
+`CopySnapButton` gained optional `onBeforeCapture` / `onAfterCapture`. The
+button flips capture mode on, waits two animation frames so React has committed
+and the browser has laid the new geometry out (html2canvas reads the LIVE
+element — a capture in the same tick photographs the old one), captures, and
+flips it back in a `finally`, so a failed capture cannot strand the card in
+print layout. Both props are optional; every existing caller is untouched.
+
+
+## 2026-08-12 - Import photos: try every cover the page offers, not just one
+
+Edited: `_lib-household-recipes.cjs` (`imageCandidates`, `captureImage`,
+`importRecipe`, `createRecipe`), `recipe-vite/src/api.ts`,
+`_lib-household-recipes.selftest.js`.
+
+### What
+
+Recipes were landing with letter-tile placeholders instead of photos. The
+importer took exactly one image URL — `og:image` — and a TikTok `og:image` is
+SIGNED and rate-limited: enough of them 403 during a bulk run to leave a
+scattering of blanks, and by the time you notice, the URL has expired and there
+is nothing left to retry. The same page carries two or three unsigned cover
+fields in its rehydration blob the whole time.
+
+### How
+
+`imageCandidates(html, first)` returns up to six URLs, best first: og:image /
+twitter:image, then `cover`, then `originCover` (always present, but sometimes a
+black frame or a title card), then `reflowCover`, with the animated
+`dynamicCover` last — a moving photo still beats a letter tile. Deduped on
+origin+path, so the same frame under four signatures is one fetch, not four
+identical 403s.
+
+`captureImage` takes the list and works down it until one stores; a bare string
+still works for the manual re-capture route. The list rides the draft through
+the review screen, and is capped at six server-side because that makes it client
+input. On the JSON-LD path the recipe's own image leads — a food blog's
+og:image is occasionally a logo, and the LD image never is.
+
+Selftests: 127 passing.
+
 ## 2026-08-12 - Quick sign-in: two people, one browser
 
 Edited: `_lib-household.cjs` (`hh_device_pins` schema + migration, `setPin`,

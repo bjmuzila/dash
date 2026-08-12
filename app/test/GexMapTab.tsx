@@ -390,14 +390,47 @@ function buildModel(p: MapPayload | null, scope: Scope): MapModel | null {
   for (const c of cols) for (const v of c.v) { const a = Math.abs(v); if (a > gMax) gMax = a; }
   if (!(gMax > 0)) gMax = 1;
 
+  // Column scaling — why the field is NOT purely session-normalized.
+  //
+  // Open interest builds through a 0DTE day, so the last hour's gamma is
+  // routinely 5–10× the first hour's. Dividing every cell by the session max
+  // therefore put 09:30–10:30 at 10–15% of the scale, under the cull threshold
+  // for most of the ladder, and the morning simply was not on the map: the tape
+  // appeared to start somewhere around lunch. Fixing that in the alpha curve was
+  // already tried (see heatAlpha) and it can only go so far — the RATIO going in
+  // was the problem.
+  //
+  // Each column is now divided by a geometric blend of the session max and its
+  // OWN max:
+  //
+  //     denom = gMax^(1-w) · cMax^w        (w = COL_BLEND)
+  //
+  // w=0 is the old absolute scale, w=1 is per-column normalization — which would
+  // be wrong on its own, because then a dead minute and the closing bell both
+  // render at full brightness and the map loses the one thing it is read for.
+  // At w=0.6 a morning column whose peak is 12% of the session lands at ~42% of
+  // the scale: its structure is legible, and it is still visibly weaker than the
+  // close. The blend is continuous, so there is no step where a column suddenly
+  // rescales.
+  //
+  // Applies to the ratio only. `profile`, the rail and every printed number stay
+  // on the absolute session scale.
+  const COL_BLEND = 0.6;
   const heat: number[][] = [];
   const signed: number[][] = [];
   for (const c of cols) {
+    let cMax = 0;
+    for (const v of c.v) { const a = Math.abs(v); if (a > cMax) cMax = a; }
+    // An empty column has nothing to scale; keep the session denominator so the
+    // row stays at zero rather than dividing by ~0 and blowing up.
+    const denom = cMax > 0
+      ? Math.pow(gMax, 1 - COL_BLEND) * Math.pow(cMax, COL_BLEND)
+      : gMax;
     const h = new Array(n);
     const s = new Array(n);
     for (let i = 0; i < n; i++) {
       const v = c.v[i] ?? 0;
-      const m = Math.min(1, Math.abs(v) / gMax);
+      const m = Math.min(1, Math.abs(v) / denom);
       h[i] = m;
       s[i] = v >= 0 ? m : -m;
     }
@@ -922,8 +955,21 @@ function NoDex({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
 }
 
 // ═════════════════════════════ TAPE FIELD ════════════════════════════════════
-function TapeField({ m, compact, field = "heat", intensity = 1 }: {
+function TapeField({ m, compact, field = "heat", intensity = 1, snap = false }: {
   m: MapModel; compact?: boolean; field?: FieldMode; intensity?: number;
+  /**
+   * Capture layout. The shared PNG is meant to be the TAPE and nothing else, so
+   * snap mode drops the three side panels — the net DEX profile in the left
+   * gutter, the net GEX profile rail on the right, and the net GEX · session
+   * sparkline — and keeps only the heat/terrain field and the Net Vol GEX keel
+   * under it. The strike ladder stays: it is the y-axis, not a panel, and a
+   * gamma map with no price scale is unreadable.
+   *
+   * Everything that goes is REMOVED, not hidden, and the field is re-solved
+   * across the space that frees up — otherwise the PNG would be a third of a
+   * frame with two blank margins.
+   */
+  snap?: boolean;
 }) {
   const fz = useFz();
   const W = 1240, H = 470;
@@ -933,13 +979,21 @@ function TapeField({ m, compact, field = "heat", intensity = 1 }: {
   // field visibly left of centre. Now: fixed 24-unit margins, a fixed rail on
   // the right, and the left gutter + field width solved so that
   // FX + FW/2 === W/2 exactly.
+  //
+  // Snap mode solves the SAME three columns with two of them at zero: no left
+  // gutter, and a right column just wide enough for the strike labels. The
+  // field and the keel below it then stretch across everything that is left,
+  // and the viewBox is unchanged so the PNG keeps its aspect ratio.
   const MG = 24;
-  const RW = 190;                       // GEX rail — was 138; bars + badges were
+  const RW = snap ? 46 : 190;           // GEX rail — was 138; bars + badges were
   const RX = W - MG - RW;               // colliding inside it.
   const GAP_R = 16, GAP_L = 42;
-  const FX = W - RX + GAP_R;            // ⇒ field is centred on W/2
+  const FX = snap ? MG : W - RX + GAP_R; // ⇒ field is centred on W/2 (live)
   const FW = RX - GAP_R - FX;
   const PX = MG, PW = FX - GAP_L - PX;  // left gutter takes the remainder
+  // Strike ticks hang off the rail's inner edge live, where 56 units of bars sit
+  // in front of them. With the bars gone they move flush to the field.
+  const TKX = snap ? RX + 2 : RX + 56;
   const FY = 20, FH = 320;
   const KY = FY + FH + 40, KH = 66;
 
@@ -974,7 +1028,7 @@ function TapeField({ m, compact, field = "heat", intensity = 1 }: {
       {/* field — heatmap cells, or the smoothed terrain, same frame either way */}
       <rect x={FX - 4} y={FY - 4} width={FW + 8} height={FH + 8} rx={10} fill="rgba(0,0,0,0.30)" />
       {field === "terrain" ? (
-        <TerrainField m={m} L={dx0 - cw / 2} TP={FY} FWD={dw} FHT={FH} />
+        <TerrainField m={m} L={dx0 - cw / 2} TP={FY} FWD={dw} FHT={FH} snap={snap} />
       ) : (
         m.cols.map((c, ci) =>
           m.strikes.map((k, si) => {
@@ -1037,29 +1091,35 @@ function TapeField({ m, compact, field = "heat", intensity = 1 }: {
         </g>
       ))}
 
-      {/* left gutter — DEX profile */}
-      <Lab x={PX} y={FY - 8}>NET DEX PROFILE</Lab>
-      {m.hasDex ? (
-        <g>
-          <line x1={PX + PW} y1={FY} x2={PX + PW} y2={FY + FH} stroke="rgba(255,255,255,0.22)" />
-          {m.strikes.map((k, i) => {
-            const v = m.dex[i];
-            const w = Math.abs(v) * (PW - 4);
-            if (w < 0.4) return null;
-            return <rect key={`p${k}`} x={PX + PW - w} y={yOf(k) - ch * 0.42} width={w} height={Math.max(1.4, ch * 0.84)} rx={1}
-              fill={dexColor(v, 0.26 + 0.52 * Math.abs(v))} />;
-          })}
-        </g>
-      ) : <NoDex x={PX} y={FY} w={PW} h={FH} />}
+      {/* left gutter — DEX profile. Dropped from the capture: the PNG is the
+          gamma tape, and DEX is a different book read on a different scale. */}
+      {!snap && (<>
+        <Lab x={PX} y={FY - 8}>NET DEX PROFILE</Lab>
+        {m.hasDex ? (
+          <g>
+            <line x1={PX + PW} y1={FY} x2={PX + PW} y2={FY + FH} stroke="rgba(255,255,255,0.22)" />
+            {m.strikes.map((k, i) => {
+              const v = m.dex[i];
+              const w = Math.abs(v) * (PW - 4);
+              if (w < 0.4) return null;
+              return <rect key={`p${k}`} x={PX + PW - w} y={yOf(k) - ch * 0.42} width={w} height={Math.max(1.4, ch * 0.84)} rx={1}
+                fill={dexColor(v, 0.26 + 0.52 * Math.abs(v))} />;
+            })}
+          </g>
+        ) : <NoDex x={PX} y={FY} w={PW} h={FH} />}
+      </>)}
 
-      {/* right rail — GEX profile + the strike ladder */}
-      <Lab x={RX} y={FY - 8}>NET GEX PROFILE</Lab>
-      <rect x={RX} y={FY} width={RW} height={FH} rx={8} fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.07)" />
-      {m.strikes.map((k, i) => {
-        const v = m.profile[i];
-        return <rect key={`r${k}`} x={RX + 8} y={yOf(k) - ch * 0.42} width={Math.abs(v) * 46 + 1.5} height={Math.max(1.4, ch * 0.84)} rx={1}
-          fill={gamColor(v, 0.3 + 0.55 * Math.abs(v))} />;
-      })}
+      {/* right rail — GEX profile + the strike ladder. In snap mode the profile
+          (label, box and bars) goes and the ladder stays: it is the y-axis. */}
+      {!snap && (<>
+        <Lab x={RX} y={FY - 8}>NET GEX PROFILE</Lab>
+        <rect x={RX} y={FY} width={RW} height={FH} rx={8} fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.07)" />
+        {m.strikes.map((k, i) => {
+          const v = m.profile[i];
+          return <rect key={`r${k}`} x={RX + 8} y={yOf(k) - ch * 0.42} width={Math.abs(v) * 46 + 1.5} height={Math.max(1.4, ch * 0.84)} rx={1}
+            fill={gamColor(v, 0.3 + 0.55 * Math.abs(v))} />;
+        })}
+      </>)}
       {/* Ticks that land ON the rail's top or bottom edge render half outside
           the box; drop them rather than print a sliced number. Nothing has to be
           de-collided against wall badges any more — there are none. */}
@@ -1067,8 +1127,8 @@ function TapeField({ m, compact, field = "heat", intensity = 1 }: {
         .filter((k) => yOf(k) > FY + 7 * fz && yOf(k) < FY + FH - 4 * fz)
         .map((k) => (
           <g key={`rt${k}`}>
-            <line x1={RX + 56} y1={yOf(k)} x2={RX + 62} y2={yOf(k)} stroke="rgba(255,255,255,0.30)" />
-            <text x={RX + 66} y={yOf(k) + 3} fill={AXIS} fontSize={8 * fz}>{k}</text>
+            <line x1={TKX} y1={yOf(k)} x2={TKX + 6} y2={yOf(k)} stroke="rgba(255,255,255,0.30)" />
+            <text x={TKX + 10} y={yOf(k) + 3} fill={AXIS} fontSize={8 * fz}>{k}</text>
           </g>
         ))}
       {m.spot > 0 && (
@@ -1111,7 +1171,11 @@ function TapeField({ m, compact, field = "heat", intensity = 1 }: {
 
           It sits at its TRUE height, not centred: the panel is scaled on the
           session's signed range, so a day that never went short gamma shows the
-          zero line pinned at the bottom rather than implying it came close. */}
+          zero line pinned at the bottom rather than implying it came close.
+
+          Dropped from the capture along with the two profiles — it is a summary
+          of the field, and the field itself is already in the frame. */}
+      {!snap && (<>
       <Lab x={RX} y={KY - 8}>NET GEX · SESSION</Lab>
       {m.netSeries.length > 1 ? (() => {
         const span = Math.max(1e-9, m.nHi - m.nLo);
@@ -1148,6 +1212,7 @@ function TapeField({ m, compact, field = "heat", intensity = 1 }: {
             fontWeight={700} letterSpacing="0.14em" textAnchor="middle">NOT ENOUGH HISTORY</text>
         </g>
       )}
+      </>)}
     </ZoomSvg>
   );
 }
@@ -1160,10 +1225,27 @@ function TapeField({ m, compact, field = "heat", intensity = 1 }: {
  * of the field the recorded tape covers, so on the pinned 09:30–16:00 axis it
  * grows through the session rather than being stretched over hours of nothing.
  */
-function TerrainField({ m, L, TP, FWD, FHT }: {
+function TerrainField({ m, L, TP, FWD, FHT, snap = false }: {
   m: MapModel; L: number; TP: number; FWD: number; FHT: number;
+  /**
+   * Capture mode — and the reason the Terrain tab was MISSING from every PNG.
+   *
+   * html2canvas renders an <svg> by serializing it to XML and drawing that as an
+   * image. A <canvas> serializes as an empty element: its bitmap is not part of
+   * the markup, so the terrain came out blank while everything else in the frame
+   * (pure SVG) photographed fine.
+   *
+   * In snap mode the painted bitmap is inlined as an SVG <image> with a data
+   * URL, which serialization does carry. It is a two-step handoff on purpose:
+   * the capture layout widens the field, so the canvas is repainted at the NEW
+   * width FIRST and only then read — inlining the old bitmap and stretching it
+   * would put a horizontally smeared terrain in the PNG. CopySnapButton's settle
+   * wait covers both frames.
+   */
+  snap?: boolean;
 }) {
   const zoom = useZoom();
+  const [bmp, setBmp] = useState<string | null>(null);
   // The field is a bitmap inside a transformed <g>, so zooming would just
   // magnify pixels. Re-rasterise at a higher device ratio instead — stepped, not
   // continuous, so a pinch triggers one redraw rather than sixty.
@@ -1351,9 +1433,22 @@ function TerrainField({ m, L, TP, FWD, FHT }: {
       }
     }
     contour(0, "rgba(125,211,252,0.95)", 3.2, [12, 8]);
-  }, [m, FWD, FHT, dprStep]);
 
-  return (
+    // Hand the finished bitmap to the capture. This runs at the END of the paint,
+    // so what is read is the terrain at the capture layout's width. Setting bmp
+    // re-runs this effect once with the canvas unmounted, which returns above —
+    // it does not loop.
+    if (snap) setBmp(cv.toDataURL("image/png"));
+  }, [m, FWD, FHT, dprStep, snap, bmp]);
+
+  // Back to the live canvas the moment capture mode ends. Dropping the bitmap
+  // remounts the canvas, and the paint effect above re-runs (it depends on
+  // `snap`) to fill it.
+  useEffect(() => { if (!snap) setBmp(null); }, [snap]);
+
+  return snap && bmp ? (
+    <image x={L} y={TP} width={FWD} height={FHT} href={bmp} preserveAspectRatio="none" />
+  ) : (
     <foreignObject x={L} y={TP} width={FWD} height={FHT}>
       <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block", borderRadius: 6 }} />
     </foreignObject>
@@ -1528,6 +1623,17 @@ function MapCard({ m }: { m: MapModel }) {
   // the button.
   const snapRef = useRef<HTMLDivElement | null>(null);
 
+  // Capture layout, on only for the frames html2canvas is reading. The PNG is
+  // meant to be the tape: the heat/terrain field and the Net Vol GEX keel, with
+  // the DEX profile, the net GEX profile rail and the net GEX · session
+  // sparkline removed and the field widened over the space they leave. See the
+  // `snap` prop on TapeField. CopySnapButton flips it on, waits for the browser
+  // to lay the new geometry out, captures, and flips it back in a finally — so
+  // a failed capture cannot strand the card in print layout.
+  const [snap, setSnap] = useState(false);
+  const beginSnap = useCallback(() => setSnap(true), []);
+  const endSnap = useCallback(() => setSnap(false), []);
+
   return (
     <div ref={snapRef}>
     <Card variant="budget" padding={16}>
@@ -1598,14 +1704,16 @@ function MapCard({ m }: { m: MapModel }) {
           <CopySnapButton
             targetRef={snapRef}
             filename="gex-map.png"
-            title="Copy a PNG of the Tape Field to the clipboard"
+            title="Copy a PNG of the gamma field + Net Vol GEX to the clipboard"
+            onBeforeCapture={beginSnap}
+            onAfterCapture={endSnap}
           />
         </span>
       </div>
       <FzCtx.Provider value={1}>
         <ViewCtx.Provider value={api}>
           <ZoomCtx.Provider value={kZoom}>
-            <TapeField m={view} compact={false} field={field} intensity={intensity} />
+            <TapeField m={view} compact={false} field={field} intensity={intensity} snap={snap} />
           </ZoomCtx.Provider>
         </ViewCtx.Provider>
       </FzCtx.Provider>

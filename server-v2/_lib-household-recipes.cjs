@@ -396,6 +396,72 @@ function embeddedCaption(html) {
 }
 
 /**
+ * Every photo this page might give us, best first.
+ *
+ * One URL was not enough. A TikTok `og:image` is SIGNED and rate-limited: it
+ * 403s often enough during a bulk run that a batch of sixty lands with a
+ * scattering of letter-tile placeholders, and by the time you notice, the URL
+ * has expired and there is nothing left to retry. The same page also carries
+ * two or three unsigned cover fields in its rehydration blob. Trying them in
+ * order costs one extra request only when the first one fails.
+ *
+ * Ranking, and why:
+ *   og:image / twitter:image  the share image — what the creator chose.
+ *   cover                     TikTok's picked thumbnail, usually the same frame.
+ *   originCover               the FIRST frame. Always present, sometimes a
+ *                             black frame or a title card, so it ranks below.
+ *   reflowCover / thumbnail   whatever is left.
+ *   dynamicCover              animated WebP. Last: it plays in the card, which
+ *                             is not what a cookbook wants, but a moving photo
+ *                             beats a letter tile.
+ */
+const IMAGE_FIELD =
+  /"(cover|originCover|reflowCover|dynamicCover|thumbnail|thumbnailUrl|displayUrl|imageUrl)"\s*:\s*"(https?:(?:[^"\\]|\\.){10,800}?)"/g;
+const IMAGE_RANK = ['cover', 'thumbnail', 'thumbnailUrl', 'displayUrl', 'imageUrl',
+                    'originCover', 'reflowCover', 'dynamicCover'];
+
+function imageCandidates(html, first = null) {
+  const out = [];
+  const seen = new Set();
+  const add = (u) => {
+    const s = str(u, 1000);
+    if (!s || !/^https?:\/\//i.test(s)) return;
+    // Dedupe on the path, not the whole URL: the same TikTok frame arrives
+    // under several signatures and query strings, and trying it four times is
+    // four ways to get the same 403.
+    let k = s;
+    try { const p = new URL(s); k = p.origin + p.pathname; } catch { /* keep the raw string */ }
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push(s);
+  };
+
+  add(first);
+  add(metaContent(html, 'og:image'));
+  add(metaContent(html, 'twitter:image'));
+  const linkRel = html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i);
+  if (linkRel) add(linkRel[1]);
+
+  const byKey = new Map();
+  let m;
+  let scanned = 0;
+  IMAGE_FIELD.lastIndex = 0;
+  while ((m = IMAGE_FIELD.exec(html)) !== null) {
+    if (++scanned > 3000) break;
+    // The value is the inside of a JSON string: / is how every one of
+    // these URLs arrives, so it has to be un-escaped before it can be fetched.
+    let url;
+    try { url = JSON.parse(`"${m[2]}"`); } catch { continue; }
+    if (!byKey.has(m[1])) byKey.set(m[1], url);
+  }
+  for (const key of IMAGE_RANK) if (byKey.has(key)) add(byKey.get(key));
+
+  // Six is well past the point of diminishing returns and bounds the worst
+  // case: six failed fetches on a page that has no usable photo at all.
+  return out.slice(0, 6);
+}
+
+/**
  * "@fit_foodie_lulu" out of a TikTok/Instagram URL, for the by-line.
  *
  * TikTok's DATA EXPORT does not write the pretty URL. Favourites come out as
@@ -915,7 +981,17 @@ async function importRecipe({ url, text, force = false, depth = 0 }) {
   const node = findRecipeNode(html);
   if (node) {
     const fromLd = recipeFromJsonLd(node, finalUrl);
-    if (fromLd) return { ...fromLd, sourceKey: sourceKey(finalUrl) };
+    if (fromLd) {
+      // The recipe's own image first, then the page's — a food blog's og:image
+      // is occasionally a logo, and the LD image never is.
+      const cands = imageCandidates(html, fromLd.imageUrl);
+      return {
+        ...fromLd,
+        imageUrl: cands[0] || fromLd.imageUrl,
+        imageCandidates: cands,
+        sourceKey: sourceKey(finalUrl),
+      };
+    }
   }
 
   // No usable structured data. Fall back to reading the page.
@@ -1000,9 +1076,12 @@ async function importRecipe({ url, text, force = false, depth = 0 }) {
     draft.partial = true;
     draft.partialNote = elsewhere;
   }
-  // The AI never sees images; og:image is how the card gets a photo on the
-  // pages that had no JSON-LD.
-  if (ogImage) draft.imageUrl = str(ogImage, 1000);
+  // The AI never sees images; the page's own covers are how the card gets a
+  // photo on the pages that had no JSON-LD. imageUrl stays the FIRST candidate
+  // — it is what renders until the copied bytes land — and the rest are the
+  // fallbacks captureImage works down when a signed CDN link 403s.
+  draft.imageCandidates = imageCandidates(html, ogImage);
+  if (draft.imageCandidates.length) draft.imageUrl = draft.imageCandidates[0];
   // "by @fit_foodie_lulu" reads better than "by tiktokv.com" — and it's the
   // credit the creator is actually owed. The PAGE wins over the URL: an export
   // link has no handle in it at all, and the redirect target may not either.
@@ -1286,7 +1365,7 @@ async function createRecipe(userId, r) {
   // the time that URL expires — which is the whole reason we copy it — the
   // bytes are here. captureImage swallows its own errors, so this cannot
   // produce an unhandled rejection.
-  captureImage(rows[0].id, r.imageUrl)
+  captureImage(rows[0].id, r.imageCandidates?.length ? r.imageCandidates : r.imageUrl)
     .then((res) => { if (res) console.log(`[hh-recipes] cached image for #${rows[0].id} (${res.bytes}b ${res.mime})`); })
     .catch(() => { /* already swallowed inside; belt and braces */ });
 
@@ -1501,6 +1580,22 @@ async function putImage(recipeId, buf, mime, sourceUrl) {
  * the remote URL, and re-running this later fixes it.
  */
 async function captureImage(recipeId, url) {
+  // A LIST is the normal case now — the first candidate is the share image and
+  // the rest are the page's own cover fields, tried in order only if it fails.
+  // A bare string still works: hand-edited recipes and the manual re-capture
+  // route both pass one.
+  // Capped here rather than only where the list is built: this value can arrive
+  // from the review screen, so it is client input, and six outbound fetches is
+  // the ceiling regardless of what gets posted.
+  const list = (Array.isArray(url) ? url : [url]).filter(Boolean).slice(0, 6);
+  for (const one of list) {
+    const got = await captureOneImage(recipeId, one);
+    if (got) return got;
+  }
+  return null;
+}
+
+async function captureOneImage(recipeId, url) {
   const link = str(url, 2000);
   if (!link || !/^https?:\/\//i.test(link)) return null;
   const ctl = new AbortController();
@@ -1992,7 +2087,7 @@ module.exports = {
   guessMainIngredient, tidyIngredientName, SORTS, SORT_KEYS,
   recipeSignals, looksLikeRecipe, captionLinks, mentionsRecipeElsewhere, normaliseCaption,
   findRecipeNode, recipeFromJsonLd,
-  metaContent, embeddedCaption, handleFromUrl,
+  metaContent, embeddedCaption, imageCandidates, handleFromUrl,
   importRecipe,
   listRecipes, getRecipe, summary,
   createRecipe, updateRecipe, deleteRecipe, toggleFavorite, markCooked,

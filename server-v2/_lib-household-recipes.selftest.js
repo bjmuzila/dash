@@ -221,6 +221,38 @@ eq(rollsSig.foodNoRecipe, true, 'food with no method is its own outcome');
 eq(r.recipeSignals('my dog does this every morning #dogsoftiktok').foodNoRecipe, false,
    'a dog video is not food-with-no-recipe');
 
+// ── Photos: every candidate the page offers, best first ──────────────────────
+//
+// One URL was not enough. A TikTok og:image is signed and 403s often enough
+// during a bulk run to leave a scattering of letter tiles, and by the time you
+// notice it has expired. The covers in the rehydration blob are the fallbacks.
+
+const PHOTOS = `<html><head>
+<meta property="og:image" content="https://p16.tiktokcdn.com/share.jpg?sig=abc"/>
+</head><body><script type="application/json">
+{"video":{"cover":"https:\\u002F\\u002Fp16.tiktokcdn.com\\u002Fcover.jpg",
+ "originCover":"https:\\u002F\\u002Fp16.tiktokcdn.com\\u002Forigin.jpg",
+ "dynamicCover":"https:\\u002F\\u002Fp16.tiktokcdn.com\\u002Fdyn.webp"}}
+</script></body></html>`;
+
+const shots = r.imageCandidates(PHOTOS);
+eq(shots[0], 'https://p16.tiktokcdn.com/share.jpg?sig=abc', 'the share image is tried first');
+eq(shots.includes('https://p16.tiktokcdn.com/cover.jpg'), true, 'the cover is a fallback');
+// Ranked, not page order: the first frame is often a title card, and an
+// animated WebP is a last resort rather than a thumbnail.
+eq(shots.indexOf('https://p16.tiktokcdn.com/cover.jpg')
+   < shots.indexOf('https://p16.tiktokcdn.com/origin.jpg'), true, 'cover outranks originCover');
+eq(shots[shots.length - 1], 'https://p16.tiktokcdn.com/dyn.webp', 'the animated cover ranks last');
+eq(shots.length <= 6, true, 'the list is bounded');
+
+// Same frame, two signatures — one fetch, not two, because both 403 the same way.
+const DUPE = `<meta property="og:image" content="https://cdn.x/a.jpg?sig=1"/>
+<script>{"cover":"https://cdn.x/a.jpg?sig=2"}</script>`;
+eq(r.imageCandidates(DUPE).length, 1, 'deduped on path, ignoring the signature');
+
+// A page with no photo at all must produce an empty list, not [null].
+eq(r.imageCandidates('<html><body>nothing</body></html>').length, 0, 'no photo, no candidates');
+
 // Instagram nests it one level deeper.
 const IG = `<script>{"edge_media_to_caption":{"edges":[{"node":{"text":"Miso mushroom pasta. 200g pasta, 2 tbsp miso, 300g mushrooms, 1 clove garlic."}}]}}</script>`;
 eq(/^Miso mushroom pasta/.test(r.embeddedCaption(IG) || ''), true, 'Instagram caption edge');

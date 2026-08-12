@@ -15,17 +15,48 @@ import { captureAndCopy } from "@/lib/snapshot";
 
 type State = "idle" | "working" | "copied" | "saved" | "err";
 
+/**
+ * Wait for a capture-layout switch to be fully on screen.
+ *
+ * html2canvas reads the LIVE element, so a capture fired in the same tick as the
+ * switch photographs the old geometry. Two frames cover React's commit and the
+ * browser's re-layout; the timeout after them covers a passive effect that has
+ * to repaint something at the new size (the GEX map's terrain canvas does
+ * exactly this, and its bitmap is what ends up in the PNG). ~110ms, once, on a
+ * click that already takes a second or two.
+ */
+function settle(): Promise<void> {
+  const frame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+  return frame()
+    .then(frame)
+    .then(() => new Promise<void>((r) => setTimeout(r, 80)))
+    .then(frame);
+}
+
 export default function CopySnapButton({
   targetRef,
   filename = "snapshot.png",
   label = "Snapshot",
   title = "Copy a PNG of this page to the clipboard",
+  onBeforeCapture,
+  onAfterCapture,
 }: {
   /** Element to capture. Falls back to <body> if the ref isn't attached yet. */
   targetRef: RefObject<HTMLElement | null>;
   filename?: string;
   label?: string;
   title?: string;
+  /**
+   * Optional capture-layout switch. Called BEFORE html2canvas reads the DOM, so
+   * a panel can render a print-only variant of itself (drop live-only chrome,
+   * widen a chart into the space that frees up). The button waits two animation
+   * frames afterwards so React has committed and the browser has laid the new
+   * tree out — html2canvas reads the LIVE element, and a capture fired in the
+   * same tick would photograph the old geometry.
+   */
+  onBeforeCapture?: () => void;
+  /** Restore the live layout. Always runs, including when the capture throws. */
+  onAfterCapture?: () => void;
 }) {
   const [state, setState] = useState<State>("idle");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -40,13 +71,19 @@ export default function CopySnapButton({
     if (state === "working") return;
     setState("working");
     try {
+      if (onBeforeCapture) {
+        onBeforeCapture();
+        await settle();
+      }
       const el = targetRef.current ?? document.body;
       flash(await captureAndCopy(el, filename));
     } catch (e) {
       console.error("[CopySnapButton]", e);
       flash("err");
+    } finally {
+      onAfterCapture?.();
     }
-  }, [state, targetRef, filename, flash]);
+  }, [state, targetRef, filename, flash, onBeforeCapture, onAfterCapture]);
 
   const text =
     state === "working" ? "Capturing…" :

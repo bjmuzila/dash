@@ -171,6 +171,10 @@ export type Draft = {
   /** How we read it — 'json-ld' (free and exact) or 'ai' (the fallback). Shown
    *  on the review screen so a hand-parsed import gets a closer look. */
   via: 'json-ld' | 'ai'
+  /** Every photo the page offered, best first. Round-tripped untouched so the
+   *  server can work down the list when the first URL 403s — a signed TikTok
+   *  thumbnail often does, and by the time you notice it has expired. */
+  imageCandidates?: string[]
   recipeUrl?: string | null
   partial?: boolean
   partialNote?: string | null
