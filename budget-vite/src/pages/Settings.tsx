@@ -28,9 +28,10 @@ export default function Settings() {
         <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
           <a href="/routines" style={linkBtn}>Habits</a>
           <a href="/projects" style={linkBtn}>Projects</a>
+          <a href="/journal" style={linkBtn}>Journal</a>
         </div>
         <div style={label({ marginTop: 10, letterSpacing: '0.06em' })}>
-          Still here — they just gave up their tab slots to Todo and Lists
+          Still here — they just gave up their tab slots to Todo, Lists and Cookbook
         </div>
       </section>
 

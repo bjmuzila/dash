@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { T, label, display, MONO } from '../theme'
@@ -15,11 +15,22 @@ import { T, label, display, MONO } from '../theme'
  * collapsible URL bar, which parks the tab bar ~80px below the fold.
  */
 
+/**
+ * `href` instead of `to` makes a tab an EXTERNAL link.
+ *
+ * Cookbook took Journal's slot: recipe.cbedge.net is a separate app on a
+ * separate subdomain, but it shares this login, this grocery list and this week
+ * board, so from the phone it should feel like one more tab rather than
+ * something you go and find in a browser.
+ *
+ * Journal kept its route and its data — it moved to More, exactly like Habits
+ * and Projects did when Todo and Lists took their slots.
+ */
 const TABS = [
   { to: '/today', label: 'Today' },
   { to: '/todo', label: 'Todo' },
   { to: '/lists', label: 'Lists' },
-  { to: '/journal', label: 'Journal' },
+  { href: 'https://recipe.cbedge.net/', label: 'Cookbook' },
   { to: '/budget', label: 'Money' },
   { to: '/settings', label: 'More' },
 ] as const
@@ -38,8 +49,11 @@ export default function Shell({ children }: { children: ReactNode }) {
   const { pathname } = useLocation()
   // Habits and Projects still have routes but no tab, so the title falls back
   // to a small map rather than reading "Home" on those screens.
-  const EXTRA: Record<string, string> = { '/routines': 'Habits', '/projects': 'Projects' }
-  const tab = TABS.find((t) => pathname.startsWith(t.to))
+  const EXTRA: Record<string, string> = {
+    '/routines': 'Habits', '/projects': 'Projects', '/journal': 'Journal',
+  }
+  // Only the internal tabs can match a pathname — the external one has no `to`.
+  const tab = TABS.find((t) => 'to' in t && pathname.startsWith(t.to))
   const title = tab?.label
     ?? Object.entries(EXTRA).find(([k]) => pathname.startsWith(k))?.[1]
     ?? 'Home'
@@ -85,33 +99,51 @@ export default function Shell({ children }: { children: ReactNode }) {
         background: T.paper,
         paddingBottom: 'env(safe-area-inset-bottom)',
       }}>
-        {TABS.map((t) => (
-          <NavLink
-            key={t.to}
-            to={t.to}
-            style={({ isActive }) => ({
-              display: 'grid',
-              placeItems: 'center',
-              // 52px keeps the whole tab a comfortable thumb target.
-              minHeight: 52,
-              textDecoration: 'none',
-              fontFamily: MONO,
-              // Six tabs on a 390px screen is 65px each. At 0.12em tracking
-              // "JOURNAL" is wider than that and wraps to two lines, which
-              // drags the whole bar taller. The tracking goes, not the label —
-              // the word is what makes the tab findable.
-              fontSize: 9.5,
-              letterSpacing: '0.04em',
-              textTransform: 'uppercase',
-              whiteSpace: 'nowrap',
-              color: isActive ? T.accent : T.muted,
-              // A 2px accent rule marks the current tab — no icons, no fills.
-              boxShadow: isActive ? `inset 0 2px 0 ${T.accent}` : 'none',
-            })}
-          >
-            {t.label}
-          </NavLink>
-        ))}
+        {TABS.map((t) => {
+          // Six tabs on a 390px screen is 65px each. At 0.12em tracking a long
+          // word wraps to two lines and drags the whole bar taller, so the
+          // tracking goes, not the label — the word is what makes a tab findable.
+          const base: CSSProperties = {
+            display: 'grid',
+            placeItems: 'center',
+            // 52px keeps the whole tab a comfortable thumb target.
+            minHeight: 52,
+            textDecoration: 'none',
+            fontFamily: MONO,
+            fontSize: 9.5,
+            letterSpacing: '0.04em',
+            textTransform: 'uppercase',
+            whiteSpace: 'nowrap',
+          }
+
+          // The external tab. target=_blank so this app is never replaced —
+          // from the home screen that would mean losing your place in the
+          // budget to look up a recipe. It can never be "active", so it renders
+          // in the accent colour: it is a destination, not a location.
+          if ('href' in t) {
+            return (
+              <a key={t.href} href={t.href} target="_blank" rel="noreferrer"
+                 style={{ ...base, color: T.accent }}>
+                {t.label}
+              </a>
+            )
+          }
+
+          return (
+            <NavLink
+              key={t.to}
+              to={t.to}
+              style={({ isActive }) => ({
+                ...base,
+                color: isActive ? T.accent : T.muted,
+                // A 2px accent rule marks the current tab — no icons, no fills.
+                boxShadow: isActive ? `inset 0 2px 0 ${T.accent}` : 'none',
+              })}
+            >
+              {t.label}
+            </NavLink>
+          )
+        })}
       </nav>
     </div>
   )

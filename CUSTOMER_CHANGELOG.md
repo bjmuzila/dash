@@ -4,6 +4,10 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 
 
+## Wednesday 8/12/2026
+
+* **The Options tile is gone from the toolbar.** It was an unfinished placeholder page; **Options Chain** is unchanged and still where the full chain lives.
+
 ## Tuesday 8/11/2026
 
 * **The mobile site got a round of fixes.** The labels in the bottom tab bar now sit centered inside their buttons instead of hanging below them; the ES Candles page opens with the GEX bubbles already on and adds a size-variance slider under Overlays so you can dial how far the dominant strikes stand out from the rest; the heatmap's expiry chip now shows the actual expiration date alongside 0DTE, so you always know which book you're reading; and the CB, CW and PW tags stay inside the strike column instead of spilling over the Net cell.
