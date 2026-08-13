@@ -31,4 +31,5 @@ export const PAGES: Record<string, LazyExoticComponent<ComponentType>> = {
   Todo: lazy(() => import("./Todo")),
   ChartsUI: lazy(() => import("./ChartsUI")),
   Watchlists: lazy(() => import("./Watchlists")),
+  GexGrowth: lazy(() => import("./GexGrowth")),
 };

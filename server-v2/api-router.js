@@ -526,6 +526,21 @@ register('/api/eod-strike-gex-change', {
   },
 });
 
+// /api/eod-strike-gex-board?top=5 → /proxy/eod-strike-gex-board
+// Whole-board ΔGEX ranking for the owner console page. OWNER-ONLY: it returns
+// the entire watchlist's positioning in one payload, which is a different thing
+// from the single-symbol route above that any subscriber can read for a ticker
+// they already looked up.
+register('/api/eod-strike-gex-board', {
+  auth: 'owner', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const qs = new URL(req.url || '/', 'http://localhost').searchParams.toString();
+    const r = await ctx.internalFetch(
+      `/proxy/eod-strike-gex-board${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
+    send(res, r.status, await r.text(), { 'Cache-Control': NO_STORE });
+  },
+});
+
 // /api/gex/expirations → /proxy/expirations, reshaped to { expiry, expirations }
 register('/api/gex/expirations', {
   auth: 'subscriber', methods: ['GET'],

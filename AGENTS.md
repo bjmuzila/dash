@@ -38,9 +38,39 @@ find the React page instead.
   prototype (`overview.html`, `overview.js`, `chain.js`, `estimated-moves.*`, the
   root `*.html` mockups, …) is being moved here.
 - **`server/`** (the OLD backend — the live one is `server-v2/`), `testui/`,
-  `home3-vite/`, `owner-vite*` — legacy / experiments, also not the live app.
+  `home3-vite/` — legacy / experiments, also not the live app.
 - Rule of thumb: **if it's a `.html` file or a top-level `.js` UI file, it is
   almost certainly dead.** The live UI is React `.tsx` under `app/`.
+
+## `owner-vite/` IS LIVE — it is the internal console (corrected 2026-08-13)
+
+This line used to say `owner-vite*` was legacy. It is not. `docker-compose.yml`
+builds it as the `owners` service behind a Cloudflare Tunnel at
+**owner.cbedge.net**, and `components/shared/UserMenu.tsx` makes that URL the
+owner's only entry point. `app/owner/reta/page.tsx` says so itself: the Next
+copy is "the Next fallback copy; the live owner-vite page is
+`owner-vite/src/pages/Reta.tsx`."
+
+Two owner surfaces exist, and they are not equals:
+
+- **`owner-vite/` → owner.cbedge.net — the real one.** 20+ pages. Its own
+  `AuthGate` (fail-closed on `/api/auth/me` → `isOwner`), its own theme port
+  (`owner-vite/src/lib/theme.ts`), its own `PageShell`/`Card`
+  (`owner-vite/src/components/PageCard.tsx`). `/api/*` and `/proxy/*` are
+  proxied through to server-v2, so pages fetch them as relative paths.
+- **`app/owner/*` (Next) — three pages left**: `budget`, `reta`, `tpo-extract`.
+  Gated by `app/owner/layout.tsx` → `OwnerGuard` (404s, not redirects).
+
+**Adding an owner page = 3 files, no route wiring:**
+
+1. `owner-vite/src/pages/<Name>.tsx`
+2. one link in `owner-vite/src/lib/nav.ts` — the rail AND the route both derive
+   from `OWNER_SIDEBAR_GROUPS`
+3. one `lazy()` line in `owner-vite/src/pages/registry.ts`, keyed by the `key`
+   you used in step 2
+
+Do NOT add owner pages to `app-vite/src/App.tsx` — that SPA has zero owner
+routes and `check-routes.mjs` only inspects the customer `NAV_ITEMS`.
 
 ## Editing a dashboard page
 

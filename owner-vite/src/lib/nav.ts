@@ -42,6 +42,7 @@ export const OWNER_SIDEBAR_GROUPS: OwnerGroup[] = [
       { label: "Post Studio", href: "/owner/post-studio", glyph: "✎", key: "PostStudio" },
       { label: "Chart Types", href: "/owner/charts-ui", glyph: "▦", key: "ChartsUI" },
       { label: "Watchlists", href: "/owner/watchlists", glyph: "☰", key: "Watchlists" },
+      { label: "ΔGEX Board", href: "/owner/gex-growth", glyph: "Δ", key: "GexGrowth" },
     ],
   },
   {

@@ -583,6 +583,109 @@ async function getStrikeGexChange(symbol) {
   };
 }
 
+/**
+ * WHOLE-BOARD ranking — every symbol, its net ΔGEX, and its top N strikes by
+ * |Δ|, in ONE query.
+ *
+ * WHY THIS EXISTS: the owner board renders ~169 names at once. Calling
+ * getStrikeGexChange() per symbol would be 169 round trips to render one page,
+ * each returning 81 rows the rail does not draw. This returns the ranking the
+ * rail actually needs — the drill-in still uses the per-symbol route, because
+ * that is one request for the one name you clicked.
+ *
+ * Each symbol is diffed against ITS OWN two most recent snapshot dates, not a
+ * board-wide "today and yesterday". A ticker added to the roster last week, or
+ * one whose chain failed at 16:05, has a different pair of dates than the rest
+ * — anchoring the whole board on one date pair would silently show those names
+ * as flat (or as an enormous fake change against nothing).
+ *
+ * Returns { ok, top, symbols: [{ symbol, date, prevDate, spot, net, absTot,
+ * strikes: [{ strike, chg }] }] } sorted by |absTot| desc — the rail's order.
+ * Symbols with only ONE snapshot are returned with net/absTot 0 and no strikes,
+ * so the rail can show them as "awaiting baseline" instead of dropping them.
+ */
+async function getStrikeGexBoard(topN = 5) {
+  if (!(await ensureSchema())) return { ok: false, error: 'no DB' };
+  const p = getPool();
+  const top = Math.max(1, Math.min(40, Number(topN) || 5));
+
+  // ONE pass. `d` ranks each symbol's own dates; `cur`/`prv` pick its latest
+  // two; `j` FULL JOINs them (full, not left — a strike that fell out of the
+  // window entirely is the biggest negative change there is); `agg` and
+  // `ranked` are computed off that same CTE so the net total and the top-N
+  // list can never disagree about what the diff was.
+  const sql = `
+    WITH d AS (
+      SELECT symbol, date,
+             dense_rank() OVER (PARTITION BY symbol ORDER BY date DESC) AS rk
+        FROM (SELECT DISTINCT symbol, date FROM eod_strike_gex) s
+    ),
+    cur AS (SELECT symbol, date FROM d WHERE rk = 1),
+    prv AS (SELECT symbol, date FROM d WHERE rk = 2),
+    c AS (SELECT e.* FROM eod_strike_gex e JOIN cur ON cur.symbol = e.symbol AND cur.date = e.date),
+    p AS (SELECT e.* FROM eod_strike_gex e JOIN prv ON prv.symbol = e.symbol AND prv.date = e.date),
+    j AS (
+      SELECT COALESCE(c.symbol, p.symbol)                        AS symbol,
+             COALESCE(c.strike, p.strike)                        AS strike,
+             COALESCE(c.net_gex, 0) - COALESCE(p.net_gex, 0)     AS chg,
+             c.spot                                              AS spot
+        FROM c FULL JOIN p ON p.symbol = c.symbol AND p.strike = c.strike
+    ),
+    agg AS (
+      SELECT symbol,
+             SUM(chg)                                            AS net,
+             SUM(ABS(chg))                                       AS abs_tot,
+             MAX(spot)                                           AS spot
+        FROM j GROUP BY symbol
+    ),
+    ranked AS (
+      SELECT symbol, strike, chg,
+             row_number() OVER (PARTITION BY symbol ORDER BY ABS(chg) DESC, strike) AS rn
+        FROM j WHERE chg <> 0
+    )
+    SELECT a.symbol,
+           a.net, a.abs_tot, a.spot,
+           to_char(cur.date, 'YYYY-MM-DD')                       AS cur_date,
+           to_char(prv.date, 'YYYY-MM-DD')                       AS prev_date,
+           r.strike, r.chg, r.rn
+      FROM agg a
+      LEFT JOIN cur ON cur.symbol = a.symbol
+      LEFT JOIN prv ON prv.symbol = a.symbol
+      LEFT JOIN ranked r ON r.symbol = a.symbol AND r.rn <= $1
+     ORDER BY ABS(a.abs_tot) DESC, a.symbol, r.rn`;
+
+  const { rows } = await p.query(sql, [top]);
+
+  const bySym = new Map();
+  for (const r of rows) {
+    let e = bySym.get(r.symbol);
+    if (!e) {
+      // prevDate null = the symbol has exactly one snapshot. Its net/absTot are
+      // then a diff against nothing, so they are forced to 0 here rather than
+      // reported as a day-one landslide.
+      const hasBaseline = r.prev_date != null;
+      e = {
+        symbol: r.symbol,
+        date: r.cur_date,
+        prevDate: r.prev_date ?? null,
+        spot: Number(r.spot) || null,
+        net: hasBaseline ? Number(r.net) || 0 : 0,
+        absTot: hasBaseline ? Number(r.abs_tot) || 0 : 0,
+        strikes: [],
+      };
+      bySym.set(r.symbol, e);
+    }
+    // LEFT JOIN on `ranked` — a symbol whose strikes all came back unchanged
+    // (or which has no baseline) yields one row with a null strike.
+    if (e.prevDate && r.strike != null) {
+      e.strikes.push({ strike: Number(r.strike), chg: Number(r.chg) || 0 });
+    }
+  }
+
+  const symbols = [...bySym.values()].sort((a, b) => Math.abs(b.absTot) - Math.abs(a.absTot));
+  return { ok: true, top, symbols };
+}
+
 // ── Scheduler ────────────────────────────────────────────────────────────────
 
 let _timer = null;
@@ -650,6 +753,7 @@ module.exports = {
   startEodStrikeGexRecorder,
   runSweep,
   getStrikeGexChange,
+  getStrikeGexBoard,
   ensureSchema,
   getPool,
   gexRowsForSymbol,

@@ -1768,6 +1768,25 @@ async function main() {
         })();
         return;
       }
+      // Whole-board ranking for the owner ΔGEX page: every symbol, its net Δ
+      // and its top N strikes by |Δ|, in ONE query.
+      //   GET /proxy/eod-strike-gex-board?top=5
+      // Returns { ok, top, symbols:[{symbol,date,prevDate,spot,net,absTot,
+      // strikes:[{strike,chg}]}] } sorted by |absTot| desc. Each symbol is
+      // diffed against ITS OWN two latest snapshot dates — a name added to the
+      // roster last week, or one whose chain failed at 16:05, has a different
+      // pair than the rest, and a board-wide date would show it as flat.
+      if (pathname === '/proxy/eod-strike-gex-board' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { getStrikeGexBoard } = require('./eod-strike-gex-recorder');
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const out = await getStrikeGexBoard(Number(u.searchParams.get('top') || 5));
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // Manual fire of the EOD per-strike GEX sweep (normally automatic at
       // 16:05 ET). Safe to re-run: the day's rows for each symbol are cleared
       // and rewritten, so a re-fire replaces the window rather than unioning
@@ -2837,16 +2856,9 @@ async function main() {
         return;
       }
 
-      // GET /proxy/far-cb-outcomes?status=all|open|touched|expired&limit=100[&quotes=0]
+      // GET /proxy/far-cb-outcomes?status=all|open|touched|expired&limit=100
       // The tracked result of every far-CB flag ever logged — not win/loss,
       // just whether spot ever reached the strike and how close it got.
-      //
-      // quotes=0 skips the live-contract enrichment entirely (opt_price /
-      // opt_open / opt_pct_open come back null). The Scanner's Watch tab uses
-      // it: that tab renders the flag cards, never the premium columns, and the
-      // enrichment is the only slow leg here. With quotes on, the enrichment is
-      // now background + budget-bounded (see far-cb-recorder.js) so this route
-      // returns in well under a second either way.
       if (pathname === '/proxy/far-cb-outcomes' && req.method === 'GET') {
         (async () => {
           try {
@@ -2876,10 +2888,7 @@ async function main() {
             }));
             // Attach the flagged contract's live price + % since today's open so
             // the Tracked-results table shows it without opening the row popup.
-            const wantQuotes = u.searchParams.get('quotes') !== '0';
-            const quoted = wantQuotes
-              ? await farCbEnrichOutcomes(fmtRows)
-              : fmtRows.map((r) => ({ ...r, opt_price: null, opt_open: null, opt_pct_open: null }));
+            const quoted = await farCbEnrichOutcomes(fmtRows);
             sendJson(res, 200, { ok: true, rows: quoted, asOf: new Date().toISOString() });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();

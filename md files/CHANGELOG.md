@@ -1,221 +1,117 @@
 # Changelog
 
-## 2026-08-13 - Cookbook: taller cards
+## 2026-08-13 - Owner ΔGEX Board (master–detail) + whole-board ranking route
 
-Edited: `recipe-vite/src/pages/Cookbook.tsx` (`shotHeight`).
-
-### What / How
-
-Card photo heights go from 132-204 to 170-258. These are frames from portrait
-video, so at the old heights a card showed a letterbox slice of a 9:16 shot with
-the dish squeezed into the middle third. The five-step spread is kept, so the
-wall keeps its rhythm.
-
-## 2026-08-13 - Cookbook cards: the name is on the photo
-
-Edited: `recipe-vite/src/pages/Cookbook.tsx`.
+New: `owner-vite/src/pages/GexGrowth.tsx`.
+Edited: `owner-vite/src/lib/nav.ts` (+1 link), `owner-vite/src/pages/registry.ts`
+(+1 lazy), `server-v2/eod-strike-gex-recorder.js` (+`getStrikeGexBoard`),
+`server-v2/server-with-proxy.js` (+`GET /proxy/eod-strike-gex-board`),
+`server-v2/api-router.js` (+`/api/eod-strike-gex-board`, owner-only),
+`AGENTS.md` (owner-vite correction, below).
 
 ### What
 
-The recipe name was in a row UNDER each photo. It rendered correctly — the DOM
-proved it, the shipped bundle contained it — but on a wall of eighty pictures
-the eye reads the photos and skips the text row, and any stale render made it
-look like the name simply wasn't there.
+`owner.cbedge.net/owner/gex-growth` — which strikes had dealer gamma built or
+taken off at yesterday's close, across the whole scanner watchlist.
+
+Master–detail: a ranked rail on the left (symbol, magnitude bar, net Δ), a
+permanent full-size diverging ladder on the right. ↑/↓ walks the rail and
+repaints the ladder, so a pass over 169 names is arrowing rather than 169
+navigations. Filter box + three orderings (biggest move / most built / most
+pulled). Header names the baseline date per symbol.
 
 ### How
 
-The title and the metadata line now sit ON the bottom of the photo, under a
-tall soft gradient scrim dark enough to survive a bright food shot. Two lines
-then ellipsis, so a long title can't push the picture out of a card that is
-mostly picture.
+**One call for the rail, one per name you open.** New `getStrikeGexBoard(topN)`
+does the whole board in a single query: `dense_rank()` per symbol picks ITS OWN
+two latest snapshot dates, a FULL JOIN diffs them, and `row_number()` takes the
+top N by |Δ|. Net total and top-N list are computed off the same CTE so they
+cannot disagree. A symbol with one snapshot comes back `prevDate: null`, net
+forced to 0, no strikes — the rail shows it greyed as "awaiting baseline"
+instead of dropping it or printing a day-one landslide.
 
-That also puts the name in the same layer as the NEW and cook-time pills, which
-is the layer that is unmistakably visible. Knock-ons: the cook time moved off
-its bottom-left pill (that is where the title now is) into the metadata line,
-the saved dot renders after the scrim so it sits on top rather than under, and
-the loading skeleton lost its text bars — the card is one block now, so a
-skeleton with a row underneath would make the wall jump as real cards land.
+Per-symbol dates matter: a ticker added last week, or one whose chain failed at
+16:05, has a different pair than the rest. A board-wide "today vs yesterday"
+would show those as flat.
 
-## 2026-08-13 - recipe.cbedge.net was serving a stale app (index.html cached)
+Verified against a real PG 16 instance: per-symbol date pairs, dropped-strike
+unwinds surfacing through the FULL JOIN, top-N cap, no-baseline zeroing, and
+`absTot` ordering. Page verified in a headless browser: arrow-key walk
+(SPX→AVGO→META→AVGO), sort flip reorders without re-diffing, no-baseline branch.
 
-Edited: `recipe-vite/nginx.conf`.
+Auth: the board route is `auth: 'owner'` — it returns the entire watchlist's
+positioning in one payload. The per-symbol drill-in reuses the existing
+`subscriber` route (owner passes that gate).
+
+Colour: green/red alone fails deuteranope separation (ΔE 7.4, measured), so
+sign is ALSO carried by side-of-rail and an explicit +/− on every value. Do not
+reduce these to colour-only bars.
+
+### AGENTS.md correction
+
+`AGENTS.md:41` listed `owner-vite*` as legacy/never-edit. It is live —
+`docker-compose.yml` builds it as the `owners` service at owner.cbedge.net and
+`UserMenu.tsx` makes it the owner's only entry point. Replaced that line with a
+section documenting both owner surfaces and the 3-file recipe for adding a page.
+
+
+## 2026-08-13 - Ticker Lookup: record end-of-day per-strike GEX, show Δ 1D
+
+New: `server-v2/eod-strike-gex-recorder.js`, `app/api/eod-strike-gex-change/route.ts`.
+Edited: `server-v2/server-with-proxy.js` (defensive require + `startEodStrikeGexRecorder()`
++ two new `/proxy/*` routes), `server-v2/api-router.js` (one `register()`),
+`components/pages/Analytics.tsx` (`TlLadder` Δ column, `TickerLookupCard` feed).
 
 ### What
 
-Deploys were landing and the site looked unchanged — recipe cards with no
-title, old card layout, fixes that were plainly in the source. The code was
-fine every time; the browser was still running the previous build.
+The Ticker Lookup right pane could say where the structural gamma IS, never
+what CHANGED. Nothing stored yesterday's board for anything but $SPX/SPY/QQQ.
+Now a 16:05 ET job snapshots per-strike net GEX for the whole board minus 0DTE
+across the full scanner watchlist (~169 symbols, roster re-resolved each sweep
+so a ticker added on the Watchlists page starts recording that evening), and the
+right pane grows a **Δ 1D** column plus a `Δ 1D vs close YYYY-MM-DD` baseline
+line under the board label.
 
-`index.html` is the ONE unhashed file in a Vite build, and it is what names the
-fingerprinted bundles. It was served with no cache headers at all, so browsers
-applied heuristic caching and kept loading the old `index-XXXX.js` no matter how
-many times the container was rebuilt.
+40 strikes above and 40 below the closing spot per symbol — sliced off the
+strike INDEX like `tlWindow()`, so a $2.50 chain and a $50 chain both give 40
+rungs a side. ~81 rows × 169 symbols/day. 400-day retention.
 
 ### How
 
-`location = /index.html` now sends `Cache-Control: no-cache, must-revalidate`.
-`/assets/` keeps its one-year immutable cache, which is safe precisely because
-those filenames are fingerprinted.
+**Same formula as the card, on purpose.** `/proxy/gex-by-strike-multi` already
+returns this exact ladder and is deliberately NOT used — it is ThetaData-sourced
+and sparse on single names, which is the documented reason the card stopped
+reading it. The recorder re-implements the client's `accumulateChainGreeks()`
+gex term against the same `fetchChainFull`: OI+Vol basis, same
+`S² · 0.01 · 100`. Verified numerically — stubbed chain through both paths gives
+byte-identical values. `Math.abs()` on each gamma is a no-op on TT data and a
+guard against a signed put gamma silently flipping strikes positive.
 
-One hard refresh (Ctrl+Shift+R) is still needed to shift the copy already in
-the browser; after that this cannot happen again.
+**16:05 ET, once**, because the OI+Vol basis is half day-volume and that is only
+final after the 16:00 print. Minute-poll + `_lastRunDate` claim (claimed before
+the await, released if the sweep lands nothing) — same idiom as `oi-daily`.
+Window stays open to 22:00 ET so an evening restart still captures the session.
 
-## 2026-08-13 - Recipe photos: nothing cropped, nothing moving
+**Δ is computed in Postgres, not the browser.** `getStrikeGexChange()` FULL JOINs
+the two most recent snapshot DATES for the symbol — not calendar today/yesterday,
+so a holiday or missed run degrades to "vs the last session we have". FULL, not
+LEFT: the window follows spot, so a wall that came OFF has a prev row and no cur
+row, and anchoring on cur would discard exactly the largest negative changes.
+Verified against a real PG 16 instance: unwinds surface, new strikes read full
+value, single-snapshot returns `prevDate: null`.
 
-Edited: `_lib-household-recipes.cjs` (`IMAGE_FIELD`/`IMAGE_RANK`, `isAnimated`,
-`fetchImage`), `recipe-vite/src/pages/Recipe.tsx`,
-`_lib-household-recipes.selftest.js`.
+Re-fire clears the day's rows per symbol before writing — the window MOVES, so a
+bare upsert would leave a day holding the union of two windows.
 
-### What
+Client shows `—` (not 0) for a strike with no snapshot, and keeps the column off
+entirely until a second session exists, so a column of zeros never gets read as
+"the board didn't move".
 
-Two complaints, both about the hero photo.
+**Proxy changes were additive only** — no existing route touched;
+`proxy-tastytrade.js` is read-only (imported, not edited).
 
-The picture was cut off: the hero was a fixed 4:3 window and a TikTok frame is
-9:16, so a quarter of every photo sat above the window and a quarter below —
-cropping the dish out of a shot whose entire subject is the dish.
-
-And some of them moved. `dynamicCover` is an animated WebP, and it was in the
-candidate list as a last resort.
-
-### How
-
-The hero window is now sized to the photo, measured on load, clamped to
-0.74–1.6 so a very tall frame can't push the title off the screen and a
-panorama can't leave a letterbox slot. Inside it the photo is CONTAINED, with a
-blurred, blown-up copy of itself behind to fill the sides — no crop, and no
-black bars, because the filler is the same picture.
-
-`dynamicCover` is out of the candidate list entirely. Belt and braces, the
-fetcher now sniffs the bytes and rejects anything animated — a RIFF with an
-ANIM/ANMF chunk, or a GIF with the NETSCAPE2.0 loop extension — because the key
-name is not a reliable tell: a plain `cover` URL can serve an animated WebP.
-
-Recipes that already stored a moving cover need `backfill-recipe-photos.js
---force` to be re-picked.
-
-## 2026-08-13 - Recipe photos: pick the frame that actually has food in it
-
-Edited: `_lib-household.cjs` (`image_candidates` column),
-`_lib-household-recipes.cjs` (`pickFoodShot`, `fetchImage`, `captureImage`,
-`candidatesForUrl`, `createRecipe`), `recipe-vite/src/api.ts`,
-`recipe-vite/src/pages/Recipe.tsx`, `deploy/household/Dockerfile`,
-new `server-v2/scripts/backfill-recipe-photos.js`.
-
-### What
-
-Half the cookbook wall was faces, hands and fridge doors. A TikTok "photo" is a
-frame of the VIDEO, and the frame the site publishes is the creator's hook shot
-— which for a lot of these accounts is them talking to camera. Nothing in the
-page metadata distinguishes "plated dish" from "man holding a phone", so no
-amount of picking a better FIELD fixes it.
-
-### How
-
-Two halves, because neither is enough alone.
-
-AUTOMATIC: when a page yields more than one candidate, `captureImage` downloads
-the first few and asks Claude which one shows the finished food, preferring a
-plated dish, then the food cooking, then anything — and explicitly rejecting a
-person or an empty kitchen unless that is all there is. It stores THOSE BYTES,
-so the vision pass costs one API call and no second download. Undecided,
-unconfigured (`RECIPE_VISION=off`) or a failed call all fall back to
-first-that-downloads, which is the old behaviour exactly. Model via
-`RECIPE_VISION_MODEL`.
-
-MANUAL: the candidate list is now kept on the recipe row (`image_candidates`),
-so the recipe page shows the other frames as a tappable strip under the hero.
-One tap re-copies that frame. Kept on the row rather than rebuilt on demand
-because by the time you look, the source page may be gone.
-
-`backfill-recipe-photos.js` re-reads the source page for recipes imported
-before any of this, stores their candidate list and re-picks. `--dry` first —
-it costs a vision call per recipe.
-
-Caveat worth keeping in mind: this picks the best frame the video offered, and
-some videos never show the finished plate. For those, the phone upload on the
-recipe page is still the honest answer.
-
-## 2026-08-13 - `generated/` — a real home for Claude-created images
-
-Edited: `.gitignore`, new `generated/README.md`.
-
-### What
-
-Images created during a Cowork session had nowhere to land. They lived in the
-session's ephemeral cloud workspace and were surfaced as a chat download card,
-so the only durable copy was inside that one conversation — finding an asset
-later meant searching every chat. Nothing was ever written to disk.
-
-`generated/` at the repo root is now the standing drop folder for them, and it
-is git-ignored so it never reaches the VPS or the Docker build.
-
-### Why here
-
-The device bridge can only write inside a connected folder, and the repo root is
-the one that's connected. A separate `Desktop\claude-images` would have needed
-re-connecting each session.
-
-### Not affected
-
-Runtime image paths are unchanged: `/tmp/shots/<page>.png`
-(`scripts/shoot-mobile.mjs`), a temp dir that self-deletes
-(`scripts/snapshot-fixtures.mjs`), an in-memory PNG buffer POSTed to the webhook
-(`server-v2/mg-ladder-discord.js`), and `public/logos/<SYM>.png`
-(`scripts/fetch-ticker-logos.mjs`, still committed by hand). Committed art stays
-in `public/`.
-
-Known stray: `discord-bot.js` writes `_discord_snap_<page>_<ts>.png` into the
-repo root cwd and those are not git-ignored. Left as-is for now.
-
-
-## 2026-08-13 - Cookbook: the index is a photo wall, not a list
-
-Edited: `recipe-vite/src/pages/Cookbook.tsx` (whole screen), `recipe-vite/README.md`.
-
-### What
-
-The cookbook index was a stack of rows: a 64px circle crop, the title, one line
-of metadata. It read like a database table of food. It is now a masonry wall of
-photo cards under an invitation — "What are you in the mood for?", one large
-search box, the filter chips, and a result bar carrying the sorts.
-
-Nothing was invented to get there. The chips are still the server's category
-facet with its live counts, the sorts are still the server's seven keys, ★ and
-the "N to review" chip still sit in the same row, and search/sort/filter still
-run server-side. No mood taxonomy was added: a mood row that is really
-"dinner" wearing a costume is a second name for a thing that already has one.
-
-### How
-
-Three decisions worth keeping:
-
-**The wall is JS-distributed flex columns — not `columns:`, not a grid.** CSS
-multi-column fills top-to-bottom per column, so on a phone recipe #2 would sit
-halfway down the screen. Items are dealt round-robin across N lanes instead, so
-reading order stays left-to-right while cards keep unequal heights. A
-`ResizeObserver` picks N from the container width (~210px per card: two lanes on
-a 390px phone, five on a laptop).
-
-**Card image heights come from a hash of the recipe id** (132–204px). That is
-what gives the wall its rhythm, and hashing keeps it stable across re-renders
-and refetches so nothing jumps when a query settles.
-
-**The container is `gridTemplateColumns: minmax(0, 1fr)`.** The chip and sort
-rows scroll sideways; with the implicit `auto` track the grid sized itself to
-their full content and pushed the entire page off a 390px screen.
-
-Smaller things: the cook time and the source (TIKTOK / REELS / WEB) moved onto
-the photo as scrim badges, with NEW / PART keeping priority over the source in
-the top-left corner. The card carries ONE metadata line — "Never made" when it
-applies, the ingredient count otherwise — because a 170px card is about 26
-characters of 9px mono and anything more wraps ragged on half the wall. ⌘K
-focuses search and Escape clears it; the ⌘K hint only renders on a fine pointer,
-since on a phone it is a lie. The main-ingredient facet stays behind a toggle in
-the result bar. Empty, error and loading states are all still there, the last
-one now as skeleton cards in the wall.
-
-Verified with `tsc --noEmit` and a Vite build against a stubbed `/api/hh/recipes`,
-screenshotted at 390px and 1180px.
+Manual fire: `POST /proxy/eod-strike-gex-run[?symbol=NVDA][&date=YYYY-MM-DD]`.
+Kill switch: `EOD_STRIKE_GEX_RECORDER=0`.
 
 
 ## 2026-08-13 - Ticker Lookup: level chips are one uniform height
