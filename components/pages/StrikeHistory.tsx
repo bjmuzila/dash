@@ -251,7 +251,7 @@ function Panel({
 
       {refLine != null && (
         <>
-          <line x1={M.l} x2={VB_W - M.r} y1={yAt(refLine)} y2={yAt(refLine)} stroke={HOME_THEME.text} strokeOpacity={0.45} strokeWidth={1.5} strokeDasharray="5 4" />
+          <line x1={M.l} x2={VB_W - M.r} y1={yAt(refLine)} y2={yAt(refLine)} stroke={HOME_THEME.text} strokeOpacity={0.45} strokeWidth={1} strokeDasharray="5 4" />
           {refLabel && (
             <text x={VB_W - M.r + 6} y={yAt(refLine) + 3.5} fontSize={10} fontWeight={700} fill={HOME_THEME.text} opacity={0.55}>{refLabel}</text>
           )}
@@ -262,11 +262,11 @@ function Panel({
         <line key={`s${i}`} x1={xAt(i)} x2={xAt(i)} y1={M.t} y2={VB_H - M.b} stroke={HOME_THEME.red} strokeWidth={1.5} strokeDasharray="4 3" strokeOpacity={0.8} />
       ))}
 
-      <path d={path} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+      <path d={path} fill="none" stroke={color} strokeWidth={1.25} strokeLinejoin="round" strokeLinecap="round" />
 
       {last && (
         <>
-          <circle cx={xAt(last.i)} cy={yAt(last.v)} r={4} fill={color} stroke={HOME_THEME.bg} strokeWidth={2} />
+          <circle cx={xAt(last.i)} cy={yAt(last.v)} r={3.25} fill={color} stroke={HOME_THEME.bg} strokeWidth={1.25} />
           <text x={xAt(last.i) + 7} y={yAt(last.v) + 3.5} fontSize={10} fontWeight={700} fill={HOME_THEME.text} opacity={0.8}>
             {fmt(last.v)}
           </text>
@@ -293,7 +293,7 @@ function Panel({
         return (
           <>
             <line x1={hx} x2={hx} y1={M.t} y2={VB_H - M.b} stroke={HOME_THEME.text} strokeOpacity={0.35} strokeWidth={1} strokeDasharray="3 3" />
-            <circle cx={hx} cy={hy} r={4.5} fill={color} stroke={HOME_THEME.bg} strokeWidth={2} />
+            <circle cx={hx} cy={hy} r={3.75} fill={color} stroke={HOME_THEME.bg} strokeWidth={1.25} />
 
             {/* value at the cursor, pinned to the dot */}
             <rect x={vX} y={hy - 9} width={vW} height={18} rx={4}
@@ -929,10 +929,10 @@ export default function StrikeHistoryPage() {
           <PanelCard
             title={`Net GEX at ${strike}`}
             color={HOME_THEME.cyan}
-            subtitle="Stored net_gex. Dashed red = GEX stepped while gamma held flat — an OI refresh, not flow."
+            subtitle="Stored net_gex — read from the recorded column, not recomputed."
           >
             <Panel rows={view} values={view.map((r) => r.netGex)} color={HOME_THEME.cyan}
-              fmt={(v) => fmtM(v, 0)} hoverFmt={(v) => fmtM(v, 1)} steps={steps} hover={hover} onHover={setHover} />
+              fmt={(v) => fmtM(v, 0)} hoverFmt={(v) => fmtM(v, 1)} steps={[]} hover={hover} onHover={setHover} />
           </PanelCard>
 
           <PanelCard

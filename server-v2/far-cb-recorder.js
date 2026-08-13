@@ -968,61 +968,130 @@ async function computeOutcomeDetail(symbol, strike, expiry) {
 const QUOTE_TTL_MS = 60_000;
 const _quoteCache = new Map(); // `${symbol}|${expiry}|${strike}|${type}` -> { ts, price, open }
 
+// The enrichment used to run INLINE and SEQUENTIALLY inside the request: one
+// Theta option-history call plus a hard 120ms sleep per tracked row. With 100
+// rows that is minutes of wall clock — /proxy/far-cb-outcomes was timing out
+// (524) and, because the browser caps a host at 6 connections, the stalled
+// request starved every other fetch on the scanner page.
+//
+// It now runs as a background single-flight pass and the request only WAITS on
+// it for a small budget. Whatever the cache holds when the budget expires is
+// what ships; the rest lands in the cache and the next poll picks it up.
+const QUOTE_WAIT_MS    = Number(process.env.FAR_CB_QUOTE_WAIT_MS || 2500);
+const QUOTE_CONCURRENCY = Number(process.env.FAR_CB_QUOTE_CONCURRENCY || 5);
+// Cap how many stale contracts one pass refreshes so a big backlog fills over
+// successive polls instead of pinning Theta for a minute in one go.
+const QUOTE_MAX_PER_PASS = Number(process.env.FAR_CB_QUOTE_MAX_PER_PASS || 60);
+
+let _quoteFill = null; // in-flight background pass, shared by every open tab
+
+const quoteKey = (r, type) => `${r.symbol}|${r.expiry}|${Number(r.strike)}|${type}`;
+
+/** Snapshot of the cache for these rows — never fetches. */
+function cachedQuotes(rows) {
+  const out = new Map();
+  for (const r of rows) {
+    const ck = quoteKey(r, optTypeOf(r));
+    const hit = _quoteCache.get(ck);
+    // Serve a stale entry too: a slightly old mark beats a blank column, and
+    // the background pass is already refreshing it.
+    if (hit) out.set(ck, hit);
+  }
+  return out;
+}
+
+/** Resolve one contract's { price, open } and write it into the cache. */
+async function refreshQuote(r, today, probesToday, greekMapFor) {
+  const greekMap = await greekMapFor(r.symbol, r.expiry);
+  const mark = Number(greekMap.get(keyOf(r.expiry, Number(r.strike), r.type))?.mark ?? 0);
+  let open = null;
+  // strike_range must be wide enough to keep a far-OTM strike inside Theta's
+  // ±range window around today's spot — reuse the flag distance.
+  const bars = await fetchContractDailyBars(
+    r.symbol, r.expiry, Number(r.strike), r.type, today, today,
+    strikeWindow(r.strike, r.spot_at_flag)
+  ).catch(() => []);
+  const o = Number(bars?.[0]?.open);
+  if (Number.isFinite(o) && o > 0) open = o;
+  if (open == null) {
+    // No vendor bar (stubbed source, pre-open, or no trade) — use the first
+    // probe we recorded for this contract today.
+    const po = Number(probesToday.get(r.ck)?.open);
+    if (Number.isFinite(po) && po > 0) open = po;
+  }
+  const entry = { ts: Date.now(), price: mark > 0 ? mark : null, open };
+  _quoteCache.set(r.ck, entry);
+  return entry;
+}
+
+/**
+ * Background pass: refresh every contract whose cache entry is missing or older
+ * than the TTL. Bounded concurrency, one greeks snapshot per (symbol, expiry)
+ * shared across its rows, no per-row sleep.
+ */
+async function runQuoteFill(stale) {
+  const today = etDateStr();
+  const probesToday = await fetchProbeRowsForDate(today).catch(() => new Map());
+
+  // One greeks snapshot per (symbol, expiry), de-duped across parallel workers.
+  const greekCache = new Map();
+  const greekMapFor = (symbol, expiry) => {
+    const gk = `${symbol}|${expiry}`;
+    if (!greekCache.has(gk)) {
+      greekCache.set(gk, fetchGreeksTheta(symbol, expiry).catch(() => new Map()));
+    }
+    return greekCache.get(gk);
+  };
+
+  // Group-major ordering so workers running side by side tend to share a
+  // snapshot rather than each opening a different (symbol, expiry).
+  const queue = [...stale].sort((a, b) =>
+    `${a.symbol}|${a.expiry}`.localeCompare(`${b.symbol}|${b.expiry}`)
+  ).slice(0, QUOTE_MAX_PER_PASS);
+
+  let i = 0;
+  const worker = async () => {
+    while (i < queue.length) {
+      const r = queue[i++];
+      try { await refreshQuote(r, today, probesToday, greekMapFor); }
+      catch (e) {
+        // Cache the miss so a dead vendor doesn't get re-asked on every poll.
+        _quoteCache.set(r.ck, { ts: Date.now(), price: null, open: null });
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(QUOTE_CONCURRENCY, queue.length)) }, worker)
+  );
+}
+
 async function computeOutcomeQuotes(rows) {
   const today = etDateStr();
   const live = rows.filter((r) => r.expiry >= today);
   if (!live.length) return new Map();
 
-  const out = new Map();
   const now = Date.now();
   const stale = [];
   for (const r of live) {
     const type = optTypeOf(r);
-    const ck = `${r.symbol}|${r.expiry}|${Number(r.strike)}|${type}`;
+    const ck = quoteKey(r, type);
     const hit = _quoteCache.get(ck);
-    if (hit && now - hit.ts < QUOTE_TTL_MS) out.set(ck, hit);
-    else stale.push({ ...r, type, ck });
-  }
-  if (!stale.length) return out;
-
-  // One greeks snapshot per (symbol, expiry) covers every stale row in it.
-  const groups = new Map();
-  for (const r of stale) {
-    const gk = `${r.symbol}|${r.expiry}`;
-    if (!groups.has(gk)) groups.set(gk, []);
-    groups.get(gk).push(r);
+    if (!hit || now - hit.ts >= QUOTE_TTL_MS) stale.push({ ...r, type, ck });
   }
 
-  // Today's probe rows, read once — the `open` fallback for every stale row.
-  const probesToday = await fetchProbeRowsForDate(today);
-
-  for (const [gk, groupRows] of groups) {
-    const [symbol, expiry] = gk.split('|');
-    const greekMap = await fetchGreeksTheta(symbol, expiry).catch(() => new Map());
-    for (const r of groupRows) {
-      const mark = Number(greekMap.get(keyOf(expiry, Number(r.strike), r.type))?.mark ?? 0);
-      let open = null;
-      // strike_range must be wide enough to keep a far-OTM strike inside
-      // Theta's ±range window around today's spot — reuse the flag distance.
-      const bars = await fetchContractDailyBars(
-        symbol, expiry, Number(r.strike), r.type, today, today,
-        strikeWindow(r.strike, r.spot_at_flag)
-      );
-      const o = Number(bars?.[0]?.open);
-      if (Number.isFinite(o) && o > 0) open = o;
-      if (open == null) {
-        // No vendor bar (stubbed source, pre-open, or no trade) — use the first
-        // probe we recorded for this contract today.
-        const po = Number(probesToday.get(r.ck)?.open);
-        if (Number.isFinite(po) && po > 0) open = po;
-      }
-      const entry = { ts: Date.now(), price: mark > 0 ? mark : null, open };
-      _quoteCache.set(r.ck, entry);
-      out.set(r.ck, entry);
-      await sleep(120);
-    }
+  if (stale.length && !_quoteFill) {
+    _quoteFill = runQuoteFill(stale)
+      .catch((e) => { console.warn('[far-cb] quote fill failed:', e.message); })
+      .finally(() => { _quoteFill = null; });
   }
-  return out;
+
+  // Wait only for the budget. Whatever is cached by then is what we return —
+  // the pass keeps running and the next poll sees the rest.
+  if (_quoteFill) {
+    await Promise.race([_quoteFill, sleep(QUOTE_WAIT_MS)]);
+  }
+
+  return cachedQuotes(live);
 }
 
 /** Attach opt_price / opt_open / opt_pct_open to outcome rows in place. */

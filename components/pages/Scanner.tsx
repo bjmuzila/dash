@@ -1487,11 +1487,13 @@ function WatchThisScanner() {
   }, [outcomeStatus]);
 
   // Results needs every row regardless of status so the per-day counts are
-  // complete; 300 is the endpoint's ceiling.
+  // complete; 300 is the endpoint's ceiling. quotes=0 because ResultsByDay only
+  // renders per-day counts and the flag fields — it never touches opt_price, so
+  // there is no reason to make the server price 300 contracts for it.
   const loadResults = useCallback(async () => {
     setResultsLoading(true); setResultsErr(null);
     try {
-      const res = await fetch("/proxy/far-cb-outcomes?status=all&limit=300", { cache: "no-store" });
+      const res = await fetch("/proxy/far-cb-outcomes?status=all&limit=300&quotes=0", { cache: "no-store" });
       const j = await res.json();
       if (!j.ok) throw new Error(j.error || "load failed");
       setResultRows(j.rows || []);
@@ -1507,6 +1509,18 @@ function WatchThisScanner() {
   useEffect(() => { load(); }, [load]);
   useEffect(() => { const t = setInterval(() => load(), 120_000); return () => clearInterval(t); }, [load]);
   useEffect(() => { loadOutcomes(); }, [loadOutcomes]);
+  // The server now answers /far-cb-outcomes from a quote cache it fills in the
+  // background, so the first response can carry blank premium columns for
+  // contracts it hadn't priced yet. Re-poll while the tab is visible to pick
+  // them up; hidden tabs skip it so a backgrounded window costs nothing.
+  useEffect(() => {
+    if (outcomeStatus === "results") return;
+    const t = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      loadOutcomes();
+    }, 60_000);
+    return () => clearInterval(t);
+  }, [outcomeStatus, loadOutcomes]);
   useEffect(() => { if (outcomeStatus === "results") loadResults(); }, [outcomeStatus, loadResults]);
 
   return (

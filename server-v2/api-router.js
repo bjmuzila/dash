@@ -512,6 +512,20 @@ register('/api/mult-greek-gex-change', {
   },
 });
 
+// /api/eod-strike-gex-change?symbol=NVDA → /proxy/eod-strike-gex-change
+// Day-over-day per-strike ΔGEX for the whole board ex-0DTE, joined in Postgres
+// by eod-strike-gex-recorder.js. Pass-through, no-store: the client never holds
+// yesterday's ladder, it renders the chg the server already computed.
+register('/api/eod-strike-gex-change', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const qs = new URL(req.url || '/', 'http://localhost').searchParams.toString();
+    const r = await ctx.internalFetch(
+      `/proxy/eod-strike-gex-change${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
+    send(res, r.status, await r.text(), { 'Cache-Control': NO_STORE });
+  },
+});
+
 // /api/gex/expirations → /proxy/expirations, reshaped to { expiry, expirations }
 register('/api/gex/expirations', {
   auth: 'subscriber', methods: ['GET'],

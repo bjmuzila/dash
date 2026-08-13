@@ -41,10 +41,17 @@ const TITLE: Record<string, string> = {
   bread: 'Bread', cocktails: 'Cocktails', sides: 'Sides', sauces: 'Sauces', other: 'Other',
 }
 
-/** Card image height, stable per recipe. See note 2 above. */
+/**
+ * Card image height, stable per recipe. See note 2 above.
+ *
+ * Raised from 132-204 on 2026-08-13. These are frames from portrait video, and
+ * at the old heights a card cropped to a letterbox slice of a 9:16 shot — the
+ * dish squeezed into the middle third. Taller cards give the food room and the
+ * five-step spread keeps the wall's rhythm.
+ */
 function shotHeight(id: number): number {
   const h = Math.abs(Math.imul(id, 2654435761)) % 5
-  return 132 + h * 18 // 132 – 204
+  return 170 + h * 22 // 170 – 258
 }
 
 /** How wide a card wants to be. Two columns on a 390px phone, five on a laptop. */

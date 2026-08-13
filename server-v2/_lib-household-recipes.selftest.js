@@ -242,7 +242,9 @@ eq(shots.includes('https://p16.tiktokcdn.com/cover.jpg'), true, 'the cover is a 
 // animated WebP is a last resort rather than a thumbnail.
 eq(shots.indexOf('https://p16.tiktokcdn.com/cover.jpg')
    < shots.indexOf('https://p16.tiktokcdn.com/origin.jpg'), true, 'cover outranks originCover');
-eq(shots[shots.length - 1], 'https://p16.tiktokcdn.com/dyn.webp', 'the animated cover ranks last');
+// The animated cover is not a candidate at all: a wall of eighty looping
+// thumbnails is a slot machine, not a cookbook.
+eq(shots.some((u) => u.endsWith('dyn.webp')), false, 'the animated cover is excluded');
 eq(shots.length <= 6, true, 'the list is bounded');
 
 // Same frame, two signatures — one fetch, not two, because both 403 the same way.

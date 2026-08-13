@@ -67,6 +67,16 @@ const { startEodGexRecorder } = require('./eod-gex-recorder');
 let startOiDailyRecorder = () => {};
 try { ({ startOiDailyRecorder } = require('./oi-daily-recorder')); }
 catch (e) { console.warn('[oi-daily] recorder not loaded:', e.message); }
+// Once-a-day (16:05 ET) per-strike NET GEX snapshot of the whole board minus
+// 0DTE, across the scanner watchlist → eod_strike_gex. Backs the Ticker Lookup
+// card's day-over-day ΔGEX column. Uses the SAME TastyTrade chain + OI+Vol
+// formula the card itself reads, so the Δ and the level beside it are the same
+// definition of GEX — see the header of eod-strike-gex-recorder.js. Same
+// defensive load as its neighbours: a broken chain-fetch dependency degrades
+// one column, it does not kill boot.
+let startEodStrikeGexRecorder = () => {};
+try { ({ startEodStrikeGexRecorder } = require('./eod-strike-gex-recorder')); }
+catch (e) { console.warn('[eod-strike-gex] recorder not loaded:', e.message); }
 // Daily (16:05 ET) near-the-money PREMIUM TRADED snapshot: call and put notional
 // for the front and back monthly at ±1/2/5% of spot → atm_prem_diff. Backs the
 // Test Lab "Prem Diff" tab. Same defensive load as its neighbours above — a
@@ -1734,6 +1744,48 @@ async function main() {
         })();
         return;
       }
+      // ── End-of-day per-strike GEX snapshot ───────────────────────────────
+      // Day-over-day ΔGEX per strike for one symbol, whole board ex-0DTE.
+      // Backs the Ticker Lookup card's Δ column.
+      //   GET /proxy/eod-strike-gex-change?symbol=NVDA
+      // Returns { ok, symbol, date, prevDate, spot, prevSpot, rows:[{strike,
+      // netGex, prevNetGex, chg, hadPrev}] }. date/prevDate are the two most
+      // recent snapshot DATES that exist for the symbol — not calendar
+      // today/yesterday — so a holiday, a long weekend or a missed 16:05 run
+      // degrades to "compare against the last session we actually have"
+      // instead of returning nothing. Before the second snapshot ever lands,
+      // prevDate is null and every chg reads 0.
+      if (pathname === '/proxy/eod-strike-gex-change' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { getStrikeGexChange } = require('./eod-strike-gex-recorder');
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
+            if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
+            const out = await getStrikeGexChange(symbol);
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manual fire of the EOD per-strike GEX sweep (normally automatic at
+      // 16:05 ET). Safe to re-run: the day's rows for each symbol are cleared
+      // and rewritten, so a re-fire replaces the window rather than unioning
+      // two of them.
+      //   POST /proxy/eod-strike-gex-run[?symbol=NVDA][&date=YYYY-MM-DD]
+      if (pathname === '/proxy/eod-strike-gex-run' && req.method === 'POST') {
+        (async () => {
+          try {
+            const { runSweep } = require('./eod-strike-gex-recorder');
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const one = (u.searchParams.get('symbol') || '').toUpperCase().trim();
+            const date = (u.searchParams.get('date') || '').trim() || null;
+            const out = await runSweep({ ...(one ? { symbols: [one] } : {}), date });
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // ── Strike-growth tracker ────────────────────────────────────────────
       // Ranked latest snapshot: which strikes grew most vs today's open.
       //   GET /proxy/strike-growth?min=0&type=all&symbol=NVDA&limit=200
@@ -2785,9 +2837,16 @@ async function main() {
         return;
       }
 
-      // GET /proxy/far-cb-outcomes?status=all|open|touched|expired&limit=100
+      // GET /proxy/far-cb-outcomes?status=all|open|touched|expired&limit=100[&quotes=0]
       // The tracked result of every far-CB flag ever logged — not win/loss,
       // just whether spot ever reached the strike and how close it got.
+      //
+      // quotes=0 skips the live-contract enrichment entirely (opt_price /
+      // opt_open / opt_pct_open come back null). The Scanner's Watch tab uses
+      // it: that tab renders the flag cards, never the premium columns, and the
+      // enrichment is the only slow leg here. With quotes on, the enrichment is
+      // now background + budget-bounded (see far-cb-recorder.js) so this route
+      // returns in well under a second either way.
       if (pathname === '/proxy/far-cb-outcomes' && req.method === 'GET') {
         (async () => {
           try {
@@ -2817,7 +2876,10 @@ async function main() {
             }));
             // Attach the flagged contract's live price + % since today's open so
             // the Tracked-results table shows it without opening the row popup.
-            const quoted = await farCbEnrichOutcomes(fmtRows);
+            const wantQuotes = u.searchParams.get('quotes') !== '0';
+            const quoted = wantQuotes
+              ? await farCbEnrichOutcomes(fmtRows)
+              : fmtRows.map((r) => ({ ...r, opt_price: null, opt_open: null, opt_pct_open: null }));
             sendJson(res, 200, { ok: true, rows: quoted, asOf: new Date().toISOString() });
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
@@ -3519,6 +3581,13 @@ async function main() {
     // OI tab diffs today's row against the previous snapshot date to show what
     // positioning was actually opened or closed overnight.
     startOiDailyRecorder();
+    // Daily per-strike NET GEX snapshot (16:05 ET, weekdays) of the whole
+    // board minus 0DTE, across the scanner watchlist → eod_strike_gex. Fires
+    // after the close because the OI+Vol basis is half day-volume, which is
+    // only final once the 16:00 print is in. ±40 strikes around the closing
+    // spot per symbol; the Ticker Lookup Δ column diffs today's row against
+    // the previous snapshot date to show which walls were built or taken off.
+    startEodStrikeGexRecorder();
     // Daily near-the-money PREMIUM TRADED snapshot (16:05 ET, weekdays) →
     // atm_prem_diff. Fires after the close because it reads the chain's DAY
     // VOLUME, which is only final once the 16:00 print is in. One row per

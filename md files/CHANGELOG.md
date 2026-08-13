@@ -1,5 +1,98 @@
 # Changelog
 
+## 2026-08-13 - Cookbook: taller cards
+
+Edited: `recipe-vite/src/pages/Cookbook.tsx` (`shotHeight`).
+
+### What / How
+
+Card photo heights go from 132-204 to 170-258. These are frames from portrait
+video, so at the old heights a card showed a letterbox slice of a 9:16 shot with
+the dish squeezed into the middle third. The five-step spread is kept, so the
+wall keeps its rhythm.
+
+## 2026-08-13 - Cookbook cards: the name is on the photo
+
+Edited: `recipe-vite/src/pages/Cookbook.tsx`.
+
+### What
+
+The recipe name was in a row UNDER each photo. It rendered correctly — the DOM
+proved it, the shipped bundle contained it — but on a wall of eighty pictures
+the eye reads the photos and skips the text row, and any stale render made it
+look like the name simply wasn't there.
+
+### How
+
+The title and the metadata line now sit ON the bottom of the photo, under a
+tall soft gradient scrim dark enough to survive a bright food shot. Two lines
+then ellipsis, so a long title can't push the picture out of a card that is
+mostly picture.
+
+That also puts the name in the same layer as the NEW and cook-time pills, which
+is the layer that is unmistakably visible. Knock-ons: the cook time moved off
+its bottom-left pill (that is where the title now is) into the metadata line,
+the saved dot renders after the scrim so it sits on top rather than under, and
+the loading skeleton lost its text bars — the card is one block now, so a
+skeleton with a row underneath would make the wall jump as real cards land.
+
+## 2026-08-13 - recipe.cbedge.net was serving a stale app (index.html cached)
+
+Edited: `recipe-vite/nginx.conf`.
+
+### What
+
+Deploys were landing and the site looked unchanged — recipe cards with no
+title, old card layout, fixes that were plainly in the source. The code was
+fine every time; the browser was still running the previous build.
+
+`index.html` is the ONE unhashed file in a Vite build, and it is what names the
+fingerprinted bundles. It was served with no cache headers at all, so browsers
+applied heuristic caching and kept loading the old `index-XXXX.js` no matter how
+many times the container was rebuilt.
+
+### How
+
+`location = /index.html` now sends `Cache-Control: no-cache, must-revalidate`.
+`/assets/` keeps its one-year immutable cache, which is safe precisely because
+those filenames are fingerprinted.
+
+One hard refresh (Ctrl+Shift+R) is still needed to shift the copy already in
+the browser; after that this cannot happen again.
+
+## 2026-08-13 - Recipe photos: nothing cropped, nothing moving
+
+Edited: `_lib-household-recipes.cjs` (`IMAGE_FIELD`/`IMAGE_RANK`, `isAnimated`,
+`fetchImage`), `recipe-vite/src/pages/Recipe.tsx`,
+`_lib-household-recipes.selftest.js`.
+
+### What
+
+Two complaints, both about the hero photo.
+
+The picture was cut off: the hero was a fixed 4:3 window and a TikTok frame is
+9:16, so a quarter of every photo sat above the window and a quarter below —
+cropping the dish out of a shot whose entire subject is the dish.
+
+And some of them moved. `dynamicCover` is an animated WebP, and it was in the
+candidate list as a last resort.
+
+### How
+
+The hero window is now sized to the photo, measured on load, clamped to
+0.74–1.6 so a very tall frame can't push the title off the screen and a
+panorama can't leave a letterbox slot. Inside it the photo is CONTAINED, with a
+blurred, blown-up copy of itself behind to fill the sides — no crop, and no
+black bars, because the filler is the same picture.
+
+`dynamicCover` is out of the candidate list entirely. Belt and braces, the
+fetcher now sniffs the bytes and rejects anything animated — a RIFF with an
+ANIM/ANMF chunk, or a GIF with the NETSCAPE2.0 loop extension — because the key
+name is not a reliable tell: a plain `cover` URL can serve an animated WebP.
+
+Recipes that already stored a moving cover need `backfill-recipe-photos.js
+--force` to be re-picked.
+
 ## 2026-08-13 - Recipe photos: pick the frame that actually has food in it
 
 Edited: `_lib-household.cjs` (`image_candidates` column),

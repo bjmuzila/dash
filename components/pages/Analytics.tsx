@@ -1628,6 +1628,31 @@ interface TlChainResp { data?: { items?: TlChainGroup[]; underlyingPrice?: unkno
 // dates that come back empty).
 interface TlExpResp { data?: { items?: Array<{ "expiration-date"?: unknown }> }; error?: string }
 
+// /api/eod-strike-gex-change?symbol=X — the day-over-day ΔGEX series written by
+// server-v2/eod-strike-gex-recorder.js (16:05 ET, whole board ex-0DTE, ±40
+// strikes around the closing spot, full scanner watchlist).
+//
+// THE DIFF IS COMPUTED ON THE BACKEND, not here. The browser never fetches
+// yesterday's board — that would be a second full sweep per ticker switch. The
+// recorder stores one row per (date, symbol, strike) and the read route FULL
+// JOINs the two most recent snapshot DATES in Postgres, so this payload already
+// carries `chg` per strike.
+//
+// `prevDate` is the actual previous snapshot date, not calendar yesterday, so a
+// holiday or a missed run degrades to "vs the last session we have" instead of
+// silently comparing against nothing. Until a second session lands it is null
+// and every chg is 0 — the ladder says "no baseline yet" rather than drawing a
+// column of zeros that looks like a board that didn't move.
+interface TlChangeRow { strike?: unknown; netGex?: unknown; prevNetGex?: unknown; chg?: unknown; hadPrev?: unknown }
+interface TlChangeResp {
+  ok?: boolean;
+  symbol?: string;
+  date?: string | null;
+  prevDate?: string | null;
+  rows?: TlChangeRow[];
+  error?: string;
+}
+
 const TL_LOOKUP_KEY = "analytics.tickerLookup.recent";
 const TL_QUICK: readonly string[] = ["SPX", "SPY", "QQQ", "NVDA", "TSLA"];
 // How deep each drawn ladder runs EACH WAY from the strike price is sitting on:
@@ -1816,18 +1841,28 @@ function TlLevelChip({ name, value, spot, color, note }: {
 // One pane's ladder. Bars run out from a center rail: +GEX right, −GEX left.
 // Level marks are DOTS, not words — the strike column stays a column of
 // numbers, and the chips under the ladder name each level.
-function TlLadder({ rows, spot, levels }: { rows: TlRow[]; spot: number | null; levels: TlLevels }) {
+// `changes` (optional) turns on the day-over-day Δ column: strike → ΔGEX vs the
+// previous end-of-day snapshot, already differenced by the backend. Only the
+// right pane passes it — the recorder snapshots the BOARD, so hanging a
+// board-level Δ off the left pane's single-expiry ladder would print a change
+// that doesn't belong to the number beside it.
+function TlLadder({ rows, spot, levels, changes = null }: {
+  rows: TlRow[]; spot: number | null; levels: TlLevels;
+  changes?: Map<number, number> | null;
+}) {
   const maxAbs = rows.reduce((m, r) => Math.max(m, Math.abs(r.gex)), 0) || 1;
   const spotRow = spot == null ? null
     : rows.reduce<TlRow | null>((best, r) =>
         best == null || Math.abs(r.strike - spot) < Math.abs(best.strike - spot) ? r : best, null);
-  const cols = "88px 1fr 68px";
+  const withChg = changes != null;
+  const cols = withChg ? "88px 1fr 68px 66px" : "88px 1fr 68px";
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       <div style={{ display: "grid", gridTemplateColumns: cols, alignItems: "center", gap: 8, paddingBottom: 4 }}>
         <Label>Strike</Label>
         <span style={{ textAlign: "center" }}><Label>Net GEX</Label></span>
         <span style={{ textAlign: "right" }}><Label>Value</Label></span>
+        {withChg && <span style={{ textAlign: "right" }}><Label>Δ 1D</Label></span>}
       </div>
       {rows.map((r) => {
         const pos = r.gex >= 0;
@@ -1868,6 +1903,27 @@ function TlLadder({ rows, spot, levels }: { rows: TlRow[]; spot: number | null; 
             <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, color: pos ? POS_GREEN : T.red }}>
               {fmtBig(r.gex)}
             </span>
+            {withChg && (() => {
+              const chg = changes?.get(r.strike);
+              // undefined = this strike is outside the recorded ±40 window, or
+              // no snapshot exists for it yet. Print an em dash, not 0 — "no
+              // reading" and "did not move" are different answers and a 0 here
+              // would be a lie about a wall that may have moved a long way.
+              const has = chg != null && isFinite(chg) && chg !== 0;
+              return (
+                <span
+                  title={chg == null ? "no end-of-day snapshot for this strike" : `${chg > 0 ? "+" : ""}${fmtBig(chg)} vs prior session close`}
+                  style={{
+                    textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 700,
+                    color: chg == null ? T.muted : has ? (chg > 0 ? POS_GREEN : T.red) : T.text,
+                    opacity: chg == null ? 0.5 : 1,
+                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                  }}
+                >
+                  {chg == null ? "—" : `${chg > 0 ? "+" : chg < 0 ? "−" : ""}${fmtBig(Math.abs(chg))}`}
+                </span>
+              );
+            })()}
           </div>
         );
       })}
@@ -2035,6 +2091,36 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
   // sweep actually ran for.
   const boardRows: TlRow[] = board.sym === sym ? board.rows : [];
 
+  // ── right pane Δ column: the recorded end-of-day series ───────────────────
+  // One cheap call per ticker. It is a DAILY series — the recorder writes once
+  // at 16:05 ET — so it polls on the hour rather than with the board, and the
+  // card's ↻ button doesn't bother refetching it either. The backend has
+  // already differenced the two most recent snapshot dates; nothing here does
+  // arithmetic on GEX.
+  const { data: chgResp } = useLiveData<TlChangeResp>(
+    `/api/eod-strike-gex-change?symbol=${encodeURIComponent(sym)}`, 3_600_000,
+  );
+  // Gate on the symbol the payload came back for. A ticker switch leaves the
+  // previous name's Δ in state for a beat, and a stale Δ hung off a fresh
+  // ladder is worse than no Δ at all — the strikes overlap often enough
+  // (SPY 600 / QQQ 600) that it would silently render as real.
+  const chgOk = chgResp?.ok === true
+    && String(chgResp.symbol ?? "").toUpperCase() === sym
+    && (chgResp.rows?.length ?? 0) > 0;
+  const chgMap: Map<number, number> | null = chgOk
+    ? new Map((chgResp?.rows ?? []).flatMap((r) => {
+        const k = Number(r.strike);
+        const v = Number(r.chg);
+        return isFinite(k) && k > 0 && isFinite(v) ? [[k, v] as [number, number]] : [];
+      }))
+    : null;
+  // Null until a SECOND session lands. With one snapshot every chg is 0 by
+  // construction, and a column of zeros reads as "the board didn't move"
+  // rather than "we don't know yet" — so the column stays off until it can
+  // say something true.
+  const chgBaseline = chgOk ? (chgResp?.prevDate ?? null) : null;
+  const rightChanges = chgBaseline ? chgMap : null;
+
   // Fallback: the front expirations the base /api/chains payload already gave
   // us, today's dropped so the fallback obeys the same ex-0DTE rule. Summed per
   // strike ACROSS those expiries — accumulateChainGreeks takes one expiry at a
@@ -2194,10 +2280,21 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
               <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: boardIsFull ? T.text : T.orange, opacity: boardIsFull ? 0.6 : 0.85 }}>
                 {boardLabel}
               </span>
+              {/* What the Δ column is measured against, said out loud. The
+                  baseline is the previous SNAPSHOT date, which after a holiday
+                  or a missed run is not calendar yesterday — printing it is the
+                  difference between a trustworthy column and a mystery one. */}
+              <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.text, opacity: 0.6 }}>
+                {chgBaseline
+                  ? `Δ 1D vs close ${chgBaseline}`
+                  : chgOk
+                    ? "Δ 1D — first snapshot recorded, baseline lands next session"
+                    : "Δ 1D — no end-of-day history yet"}
+              </span>
               {rightLadder.length === 0 ? (
                 <CardState loading={bLoading} error={bError} empty="No board-wide ladder yet (nothing listed past 0DTE)." />
               ) : (
-                <TlLadder rows={rightLadder} spot={spot} levels={rightLevels} />
+                <TlLadder rows={rightLadder} spot={spot} levels={rightLevels} changes={rightChanges} />
               )}
               <div style={TL_CHIP_ROW}>
                 <TlLevelChip name="Core (CB)" value={rightLevels.core} spot={spot} color={LEVEL_COLORS.cb} note="biggest magnet" />

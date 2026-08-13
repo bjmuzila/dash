@@ -411,14 +411,14 @@ function embeddedCaption(html) {
  *   originCover               the FIRST frame. Always present, sometimes a
  *                             black frame or a title card, so it ranks below.
  *   reflowCover / thumbnail   whatever is left.
- *   dynamicCover              animated WebP. Last: it plays in the card, which
- *                             is not what a cookbook wants, but a moving photo
- *                             beats a letter tile.
+ *
+ * `dynamicCover` is deliberately NOT in this list. It is an animated WebP, and
+ * a wall of eighty looping thumbnails is a slot machine, not a cookbook.
  */
 const IMAGE_FIELD =
-  /"(cover|originCover|reflowCover|dynamicCover|thumbnail|thumbnailUrl|displayUrl|imageUrl)"\s*:\s*"(https?:(?:[^"\\]|\\.){10,800}?)"/g;
+  /"(cover|originCover|reflowCover|thumbnail|thumbnailUrl|displayUrl|imageUrl)"\s*:\s*"(https?:(?:[^"\\]|\\.){10,800}?)"/g;
 const IMAGE_RANK = ['cover', 'thumbnail', 'thumbnailUrl', 'displayUrl', 'imageUrl',
-                    'originCover', 'reflowCover', 'dynamicCover'];
+                    'originCover', 'reflowCover'];
 
 function imageCandidates(html, first = null) {
   const out = [];
@@ -1733,6 +1733,21 @@ async function captureOneImage(recipeId, url) {
   return got ? putImage(recipeId, got.buf, got.mime, str(url, 2000)) : null;
 }
 
+/**
+ * Does this file move?
+ *
+ * Cheap container sniffing rather than a decode: an animated WebP is a RIFF
+ * with an ANIM chunk in its header, and a looping GIF carries the NETSCAPE2.0
+ * application extension. Both markers sit within the first few hundred bytes,
+ * so this reads a slice, not the file.
+ */
+function isAnimated(buf, mime) {
+  const head = buf.subarray(0, 1024).toString('latin1');
+  if (mime === 'image/webp') return head.includes('ANIM') || head.includes('ANMF');
+  if (mime === 'image/gif') return head.includes('NETSCAPE2.0');
+  return false;
+}
+
 /** The bytes and the type, or null. Split out from the store step so the vision
  *  pass can look at several candidates and store only the winner — one download
  *  each, not two. */
@@ -1758,6 +1773,10 @@ async function fetchImage(url) {
     if (!IMAGE_TYPES.has(mime)) return null;
     const buf = Buffer.from(await res.arrayBuffer());
     if (!buf.length || buf.length > MAX_IMAGE_BYTES) return null;
+    // A still, or nothing. A recipe card that plays a two-second loop is a
+    // distraction on a screen you are meant to read, and the key name is not a
+    // reliable tell — a plain `cover` URL can serve an animated WebP.
+    if (isAnimated(buf, mime)) return null;
     return { buf, mime };
   } catch {
     return null;
