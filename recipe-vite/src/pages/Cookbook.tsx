@@ -356,6 +356,10 @@ function Card({ r, showMain }: { r: RecipeCard; showMain: boolean }) {
   // still only appears while you are sorting or filtering by it.
   const meta = [
     showMain && r.main_ingredient ? r.main_ingredient.toUpperCase() : null,
+    // The cook time used to be a pill in the bottom-left of the photo, which is
+    // where the title now sits. It reads better here anyway — next to the other
+    // fact rather than floating over the food.
+    time ? minutes(time) : null,
     r.cooked_count
       ? (r.ingredient_count ? `${r.ingredient_count} ingredients` : null)
       : 'Never made',
@@ -385,8 +389,6 @@ function Card({ r, showMain }: { r: RecipeCard; showMain: boolean }) {
               {r.title.slice(0, 1).toUpperCase()}
             </span>}
 
-        {!!time && <Pill style={{ left: 7, bottom: 7 }}>{minutes(time)}</Pill>}
-
         {/* PART beats NEW: "this recipe is incomplete" is worth knowing before
             you open it, where "nobody has checked this yet" can wait. */}
         {r.partial ? (
@@ -397,22 +399,50 @@ function Card({ r, showMain }: { r: RecipeCard; showMain: boolean }) {
           <Pill style={{ right: 7, top: 7 }}>{r.source_name}</Pill>
         ) : null}
 
+        {/* THE NAME LIVES ON THE PHOTO, not in a row beneath it.
+            A row under the picture is the obvious layout and it was the first
+            one built — but on a wall of eighty photos it makes every card two
+            things stacked, and the eye reads the pictures and skips the text.
+            Laid over the bottom of the shot, under a scrim dark enough to
+            survive a bright food photo, the name reads as part of the card.
+            It also puts the title in the same layer as the NEW and cook-time
+            pills, which is the layer that is unmistakably visible. */}
+        <div style={{
+          position: 'absolute', left: 0, right: 0, bottom: 0,
+          padding: '26px 10px 9px',
+          // Tall soft gradient rather than a bar: a hard-edged panel across the
+          // bottom of a photo looks like a caption box pasted on top of it.
+          background: 'linear-gradient(to top, rgba(3,4,8,0.92) 0%, rgba(3,4,8,0.78) 45%, transparent 100%)',
+          pointerEvents: 'none',
+        }}>
+          <div style={{
+            fontFamily: SERIF, fontSize: 14.5, fontWeight: 500, lineHeight: 1.22, color: '#FFFFFF',
+            // Two lines, then ellipsis. Three-line titles push the picture out
+            // of a card that is mostly picture.
+            display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+            textShadow: '0 1px 8px rgba(0,0,0,0.85)',
+          }}>
+            {r.title}
+          </div>
+          {meta && (
+            <div style={{
+              ...label(), marginTop: 4, fontSize: 8.5, letterSpacing: '0.05em',
+              color: 'rgba(255,255,255,0.72)', textShadow: '0 1px 6px rgba(0,0,0,0.9)',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              paddingRight: r.favorite ? 14 : 0,
+            }}>
+              {meta}
+            </div>
+          )}
+        </div>
+
+        {/* After the scrim, so it sits on top of it rather than under. */}
         {r.favorite && (
           <span aria-label="Saved" style={{
-            position: 'absolute', right: 8, bottom: 7, color: T.accent,
+            position: 'absolute', right: 8, bottom: 8, color: T.accent,
             fontSize: 13, fontFamily: SANS, textShadow: '0 1px 6px rgba(0,0,0,0.9)',
           }}>●</span>
-        )}
-      </div>
-
-      <div style={{ padding: '10px 11px 12px' }}>
-        <div style={{ fontFamily: SERIF, fontSize: 15, fontWeight: 500, lineHeight: 1.25, color: T.ink }}>
-          {r.title}
-        </div>
-        {meta && (
-          <div style={{ ...label(), marginTop: 6, fontSize: 9, letterSpacing: '0.05em', color: T.faint }}>
-            {meta}
-          </div>
         )}
       </div>
     </Link>
@@ -444,11 +474,10 @@ function Skeleton({ n }: { n: number }) {
       border: `1px solid ${T.rule}`, borderRadius: 16, overflow: 'hidden',
       background: 'rgba(13,17,25,0.55)',
     }}>
+      {/* One block, because the card is now one block: the title lives ON the
+          photo, so a separate text row below would make the wall jump the
+          moment the real cards replace these. */}
       <div style={{ height: shotHeight(n), background: T.paperSunk }} />
-      <div style={{ padding: '10px 11px 12px' }}>
-        <div style={{ height: 11, width: '74%', background: T.paperSunk, borderRadius: 3 }} />
-        <div style={{ height: 8, width: '46%', background: T.paperSunk, borderRadius: 3, marginTop: 8 }} />
-      </div>
     </div>
   )
 }
