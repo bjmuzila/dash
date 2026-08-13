@@ -150,6 +150,12 @@ export type Recipe = Omit<RecipeCard, 'ingredient_count'> & {
   notes: string | null
   ingredients: Ingredient[]
   steps: string[]
+  /** Every photo the source page offered, best first — kept so the frame can be
+   *  re-picked later without re-fetching a page that may be gone. A TikTok
+   *  "photo" is a video frame, so the one the site chose is often the creator's
+   *  face; this is what the strip under the hero offers instead. Detail reads
+   *  only, never on the cookbook list — that query stays light. */
+  image_candidates: string[] | null
 }
 
 /** What `import` returns. Not saved yet — the review screen posts it to

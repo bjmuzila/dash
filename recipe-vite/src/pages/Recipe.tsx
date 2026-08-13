@@ -149,6 +149,19 @@ export default function Recipe() {
     onError: (e: Error) => setNote(e.message),
   })
 
+  // Swap the hero to a different frame from the source page. The URL is one of
+  // the candidates the importer already stored, so this is a re-copy, not an
+  // upload — the bytes land in Postgres exactly as they did at import.
+  const pickShot = useMutation({
+    mutationFn: (url: string) => api.setImageFromUrl(rid, url),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['recipe', rid] })
+      qc.invalidateQueries({ queryKey: ['recipes'] })
+      setNote('Photo changed.')
+    },
+    onError: (e: Error) => setNote(e.message),
+  })
+
   const reviewed = useMutation({
     mutationFn: () => api.markReviewed(rid),
     onSuccess: () => {
@@ -267,6 +280,45 @@ export default function Recipe() {
           }}
         />
       </div>
+
+      {/* ── Other frames ─────────────────────────────────────────────────
+          A TikTok cover is a frame of a VIDEO, and the frame the site picked is
+          the creator's hook shot — their face, a hand in a pan, the fridge. The
+          importer looks at the first few and keeps the food one, but it is
+          picking the best of what the video offered, which is sometimes not
+          much. These are the others; one tap swaps the hero. Hidden entirely
+          when there is nothing to choose between. */}
+      {(r.image_candidates?.length ?? 0) > 1 && (
+        <div style={{ padding: '12px 16px 0' }}>
+          <div style={label({ color: T.faint })}>Other frames from the video</div>
+          <div style={{
+            display: 'flex', gap: 8, marginTop: 8, overflowX: 'auto',
+            paddingBottom: 4, WebkitOverflowScrolling: 'touch',
+          }}>
+            {r.image_candidates!.map((u) => (
+              <button
+                key={u}
+                onClick={() => pickShot.mutate(u)}
+                disabled={pickShot.isPending}
+                aria-label="Use this frame"
+                style={{
+                  width: 74, height: 74, flexShrink: 0, padding: 0, cursor: 'pointer',
+                  borderRadius: 10, overflow: 'hidden', background: T.paperSunk,
+                  border: `1px solid ${T.rule}`,
+                  opacity: pickShot.isPending ? 0.5 : 1,
+                }}
+              >
+                {/* Straight from the source CDN, not through our image route —
+                    these are candidates, so there are no stored bytes to serve.
+                    An expired signature just renders an empty tile, which is
+                    the honest thing for a frame we can no longer fetch. */}
+                <img src={u} alt="" loading="lazy" decoding="async"
+                     style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ padding: '18px 16px 0', display: 'grid', gap: 16 }}>
         <div>
