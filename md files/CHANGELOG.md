@@ -1,5 +1,76 @@
 # Changelog
 
+## 2026-08-13 - Owner Sales page: trial -> paid conversion tracking
+
+Edited: `app/api/admin/stripe-summary/route.ts`,
+`owner-vite/src/pages/Sales.tsx`.
+
+### No new table
+
+Stripe keeps `trial_start` / `trial_end` on a subscription permanently — they
+survive the conversion to `active` and the eventual cancellation. The
+`subscriptions.list({ status: "all" })` pull that already feeds this route
+therefore knows the full trial history on its own. No new DB table, no webhook
+change, nothing to backfill.
+
+### Conversion is measured on money, not status
+
+A trial counts as **converted** when it has at least one paid invoice with
+`amount_paid > 0`. Rejected the simpler "status is active after `trial_end`"
+test: it marks someone converted before cash arrives, and a card that fails the
+instant the trial ends reads `past_due` and then `canceled` — neither of which
+answers "did they pay". The money test also survives the customer leaving three
+months later; they still converted.
+
+The $0 invoices Stripe raises during a trial can't self-convert anyone: the
+existing `amount_paid <= 0` guard in the invoice loop skips them before the
+rollup sees them.
+
+New in the route:
+
+- `paidBySubscription` — subscription id -> `{ amount, invoices, firstPaidAt }`,
+  built in the same pass over `paidInvoices` that already computes
+  `spendByCustomer` and `revenueByMonth`. No extra Stripe calls.
+- `invoiceSubscriptionId(inv)` — reads BOTH `invoice.subscription` and
+  `invoice.parent.subscription_details.subscription`. Stripe moved that field
+  in the newer API versions; this route pins `2024-06-20` while the installed
+  SDK's *types* track the package version, so reading both shapes stops a
+  Stripe minor bump from silently zeroing the conversion numbers.
+- `trialOf(sub, paid)` — spread into the existing `shape()`, so every
+  subscription row (live table AND cancellations card) now carries `had_trial`,
+  `trial_start`, `trial_end`, `trial_converted`, `trial_converted_at`,
+  `trial_paid_total`.
+- `trials` summary + `trialSubscriptions[]` on the response.
+
+**The rate excludes still-trialing subs.** `conversionRate = converted /
+settled` where `settled = started - stillTrialing`. Someone three hours into a
+2-day trial is not a failed conversion, and counting them as one would drop the
+headline number every time a new trial starts. `conversionRate` is `null`
+(not `0`) when nothing has settled, so the UI can print "—" instead of a
+confident 0%.
+
+### The panel
+
+`TrialConversionPanel`, full width between the subscription tables and
+Expenses. Header carries the percentage (green >= 50%, gold below, red at zero,
+muted when there is no verdict yet) plus pills for started / paid / in trial /
+lapsed / dollars-from-trials. Body is one row per trial: email, trial window,
+outcome badge, amount paid. Sticky header, capped at 340px with its own scroll.
+
+Full width rather than sharing the `2fr 1fr` row with Cancellations — the row
+content is short but the emails are long, and the 1fr column clipped them.
+
+Every new field on `StripeSubscription` and the whole `trials` block are
+optional on the client, so a response cached from before this shipped renders
+as "no trials yet" instead of throwing.
+
+### Expect zeros at first
+
+Nothing has ever reached `trialing` in this Stripe account — the 2-day trial
+only started being sent to Checkout in the change earlier today. The panel will
+read `0 started / —` until the first post-deploy monthly signup. Yearly has no
+trial, so it will never appear here.
+
 ## 2026-08-13 - /pricing: footprint ETA moved off a hard date
 
 Edited: `app/pricing/page.tsx` (`PLATFORM_UPCOMING`).

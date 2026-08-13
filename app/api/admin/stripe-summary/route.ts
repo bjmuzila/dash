@@ -173,6 +173,74 @@ type StoredCancellation = {
   first_seen_at: string | null;
 };
 
+// ── Trial conversion ─────────────────────────────────────────────────────────
+//
+// "Did this trial member go on to pay?" No new table is needed for this:
+// Stripe keeps `trial_start` / `trial_end` on the subscription FOREVER, long
+// after it has converted to `active`, so the same `subscriptions.list` pull
+// that feeds the rest of this route already knows who trialled.
+//
+// Conversion is measured on MONEY, not on status. A trial counts as converted
+// the moment it has at least one paid invoice with `amount_paid > 0`. That
+// definition survives the customer cancelling three months later (they still
+// converted), and it refuses to count someone whose card failed the instant
+// the trial ended — status alone would call that one "past_due" and, a few
+// days on, "canceled", neither of which tells you whether cash arrived.
+//
+// The $0 invoices Stripe raises during the trial itself are skipped by the
+// `amount_paid <= 0` guard in the invoice loop, so they can't self-convert a
+// trial on day one.
+
+/** Paid-invoice rollup for one subscription. */
+type PaidRollup = { amount: number; invoices: number; firstPaidAt: number | null };
+
+/**
+ * The subscription id an invoice belongs to.
+ *
+ * Defensive on purpose: Stripe moved this from `invoice.subscription` to
+ * `invoice.parent.subscription_details.subscription` in the newer API
+ * versions, and this route pins `2024-06-20` while the installed SDK's TYPES
+ * track whatever version the package is on. Reading both shapes means a Stripe
+ * minor bump can't silently zero the conversion numbers.
+ */
+function invoiceSubscriptionId(inv: StripeNS.Invoice): string | null {
+  const anyInv = inv as unknown as {
+    subscription?: string | { id?: string } | null;
+    parent?: { subscription_details?: { subscription?: string | { id?: string } | null } | null } | null;
+  };
+  const direct = anyInv.subscription;
+  if (typeof direct === "string") return direct;
+  if (direct && typeof direct === "object" && direct.id) return direct.id;
+  const nested = anyInv.parent?.subscription_details?.subscription;
+  if (typeof nested === "string") return nested;
+  if (nested && typeof nested === "object" && nested.id) return nested.id;
+  return null;
+}
+
+/** Trial fields for one subscription, given its paid-invoice rollup. */
+function trialOf(sub: StripeNS.Subscription, paid: PaidRollup | undefined) {
+  const trialStart = sub.trial_start ?? null;
+  if (!trialStart) {
+    return {
+      had_trial: false,
+      trial_start: null,
+      trial_end: null,
+      trial_converted: false,
+      trial_converted_at: null,
+      trial_paid_total: 0,
+    };
+  }
+  const converted = (paid?.amount ?? 0) > 0;
+  return {
+    had_trial: true,
+    trial_start: trialStart,
+    trial_end: sub.trial_end ?? null,
+    trial_converted: converted,
+    trial_converted_at: converted ? paid?.firstPaidAt ?? null : null,
+    trial_paid_total: paid?.amount ?? 0,
+  };
+}
+
 export async function GET() {
   const userId = await getServerUserId();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -183,7 +251,7 @@ export async function GET() {
   const stripe = await getStripe();
 
   if (!stripe) {
-    return NextResponse.json({ configured: false, summary: null, subscriptions: [], cancellations: [], revenueByMonth: {} });
+    return NextResponse.json({ configured: false, summary: null, trials: null, trialSubscriptions: [], subscriptions: [], cancellations: [], revenueByMonth: {} });
   }
 
   try {
@@ -288,6 +356,8 @@ export async function GET() {
     const spendByCustomer = new Map<string, number>();
     /** "YYYY-MM" (UTC) → { revenue, invoices } */
     const revenueByMonth: Record<string, { revenue: number; invoices: number }> = {};
+    /** subscription id → paid-invoice rollup. Drives trial conversion. */
+    const paidBySubscription = new Map<string, PaidRollup>();
 
     for (const inv of paidInvoices) {
       const paid = inv.amount_paid ?? 0;
@@ -295,6 +365,16 @@ export async function GET() {
 
       const custId = typeof inv.customer === "string" ? inv.customer : inv.customer?.id;
       if (custId) spendByCustomer.set(custId, (spendByCustomer.get(custId) ?? 0) + paid);
+
+      const subId = invoiceSubscriptionId(inv);
+      if (subId) {
+        const at = inv.status_transitions?.paid_at ?? inv.created;
+        const roll = paidBySubscription.get(subId) ?? { amount: 0, invoices: 0, firstPaidAt: null };
+        roll.amount += paid;
+        roll.invoices += 1;
+        roll.firstPaidAt = roll.firstPaidAt === null ? at : Math.min(roll.firstPaidAt, at);
+        paidBySubscription.set(subId, roll);
+      }
 
       // Bucket on when it was actually PAID, falling back to creation.
       const paidAt = inv.status_transitions?.paid_at ?? inv.created;
@@ -330,8 +410,37 @@ export async function GET() {
         joined: customer.created, // when the customer record was created
         total_spent: totalSpent,
         ...lifecycleOf(sub, storedCancellations.get(sub.id)),
+        ...trialOf(sub, paidBySubscription.get(sub.id)),
       };
     }
+
+    // ── Trial conversion ───────────────────────────────────────────────────
+    //
+    // Every sub that ever had a trial, live or dead, newest first. Buckets:
+    //   converted    — real money has landed (see trialOf)
+    //   stillTrialing— inside the trial, hasn't been asked to pay yet
+    //   lapsed       — trial is over and nothing was ever collected
+    //
+    // The rate deliberately excludes the still-trialing group: they haven't
+    // had the chance to convert, and counting them as failures drags the
+    // number down every time a new trial starts. `settled` is the honest
+    // denominator. Null (not 0) when nothing has settled yet, so the UI can
+    // say "no data" instead of showing a confident 0%.
+    const trialSubs = realSubs
+      .filter((s) => s.trial_start != null)
+      .sort((a, b) => (b.trial_start ?? 0) - (a.trial_start ?? 0));
+
+    const trialsStarted = trialSubs.length;
+    const trialsConverted = trialSubs.filter(
+      (s) => (paidBySubscription.get(s.id)?.amount ?? 0) > 0
+    ).length;
+    const trialsActive = trialSubs.filter((s) => s.status === "trialing").length;
+    const trialsSettled = trialsStarted - trialsActive;
+    const trialsLapsed = trialsSettled - trialsConverted;
+    const trialRevenue = trialSubs.reduce(
+      (a, s) => a + (paidBySubscription.get(s.id)?.amount ?? 0),
+      0
+    );
 
     // Live subscriptions (newest first) and the ones that are over.
     const subscriptions = [...liveSubs].sort((a, b) => b.created - a.created).map(shape);
@@ -355,12 +464,22 @@ export async function GET() {
         churnedThisMonth,
         lifetimeRevenue, // every dollar collected, ever
       },
+      trials: {
+        started: trialsStarted,
+        converted: trialsConverted,
+        stillTrialing: trialsActive,
+        lapsed: trialsLapsed,
+        settled: trialsSettled, // started minus still-trialing = the real denominator
+        conversionRate: trialsSettled > 0 ? trialsConverted / trialsSettled : null,
+        revenue: trialRevenue, // cents collected from people who came in on a trial
+      },
+      trialSubscriptions: trialSubs.map(shape),
       revenueByMonth, // "YYYY-MM" → { revenue, invoices } — actual cash collected
       subscriptions,
       cancellations,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
-    return NextResponse.json({ configured: true, summary: null, subscriptions: [], cancellations: [], revenueByMonth: {}, error: msg }, { status: 500 });
+    return NextResponse.json({ configured: true, summary: null, trials: null, trialSubscriptions: [], subscriptions: [], cancellations: [], revenueByMonth: {}, error: msg }, { status: 500 });
   }
 }

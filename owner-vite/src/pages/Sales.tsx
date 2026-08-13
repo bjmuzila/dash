@@ -45,6 +45,36 @@ interface StripeSubscription {
   cancel_feedback?: string | null;
   /** Free-text note the customer left on the way out. */
   cancel_comment?: string | null;
+  // ── Trial. Also optional: a response cached from before trial tracking
+  //    shipped omits them, and `had_trial` missing reads as "never trialled".
+  /** This subscription started life as a free trial. */
+  had_trial?: boolean;
+  trial_start?: number | null;
+  trial_end?: number | null;
+  /** At least one paid invoice > $0 has landed — they went on to pay. */
+  trial_converted?: boolean;
+  /** When that first real payment cleared. */
+  trial_converted_at?: number | null;
+  /** Cents collected from this subscription since the trial. */
+  trial_paid_total?: number;
+}
+
+/** Trial → paid funnel, computed server-side from Stripe. */
+interface TrialSummary {
+  /** Subscriptions that ever had a trial. */
+  started: number;
+  /** …of those, how many produced a real payment. */
+  converted: number;
+  /** Still inside the trial — no verdict yet. */
+  stillTrialing: number;
+  /** Trial is over and nothing was ever collected. */
+  lapsed: number;
+  /** started − stillTrialing. The denominator for the rate. */
+  settled: number;
+  /** converted / settled, or null when nothing has settled yet. */
+  conversionRate: number | null;
+  /** Cents collected from people who came in through a trial. */
+  revenue: number;
 }
 
 interface StripeSummary {
@@ -94,6 +124,10 @@ interface SalesData {
   subscriptions: StripeSubscription[];
   /** Subscriptions that are over — service removed. Powers the Cancellations card. */
   cancellations?: StripeSubscription[];
+  /** Trial funnel totals. Null when Stripe errored; absent on old cached responses. */
+  trials?: TrialSummary | null;
+  /** Every subscription that ever had a trial, live or dead, newest first. */
+  trialSubscriptions?: StripeSubscription[];
   error?: string;
 }
 
@@ -509,6 +543,7 @@ function MonthlyProfitChart({ revenueByMonth, subs, expensesMonthly }: {
 // can bleed into its neighbour again, and Status is wide enough for
 // "cancelling" plus its date sub-line.
 const SUB_TABLE_COLS = "minmax(0,1fr) 90px 132px 116px 86px 78px 92px";
+const TRIAL_TABLE_COLS = "1.7fr 1fr 1fr 110px 90px";
 
 /** Grid children default to min-content width, which is what let the amount
  *  cell push over the status column. Every cell spreads this. */
@@ -731,6 +766,125 @@ function CancellationsPanel({ cancellations, leaving }: { cancellations: StripeS
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ─── Trial conversion ──────────────────────────────────────────────────────────
+// "Trial members that go on to pay." Derived entirely from Stripe in
+// /api/admin/stripe-summary — Stripe keeps trial_start/trial_end on the
+// subscription forever, so no local table has to remember who trialled.
+//
+// A trial is CONVERTED when real money has landed (a paid invoice > $0), not
+// when its status flips to active. Someone whose card fails the moment the
+// trial ends never converted, however briefly Stripe called them active.
+// Still-trialing subs are excluded from the rate — they haven't been asked to
+// pay yet, and counting them as failures would drag the number down every time
+// a new trial starts.
+
+/** How one trial row should read. */
+function trialOutcome(s: StripeSubscription): { key: "converted" | "trialing" | "lapsed"; label: string; color: string } {
+  if (s.trial_converted) return { key: "converted", label: "converted", color: T.green };
+  if (s.status === "trialing") return { key: "trialing", label: "in trial", color: T.cyan };
+  return { key: "lapsed", label: "lapsed", color: T.red };
+}
+
+function TrialConversionPanel({ trials, subs }: { trials: TrialSummary | null | undefined; subs: StripeSubscription[] }) {
+  const started = trials?.started ?? subs.length;
+  const rate = trials?.conversionRate ?? null;
+  const ratePct = rate === null ? "—" : `${Math.round(rate * 100)}%`;
+  // Green once more than half of the settled trials paid, gold below that, and
+  // neutral while there is nothing to judge.
+  const rateColor = rate === null ? T.muted : rate >= 0.5 ? T.green : rate > 0 ? T.gold : T.red;
+
+  return (
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 17, fontWeight: 700, color: T.lightBlue }}>Trial conversion</span>
+
+        <span
+          title="Converted ÷ settled trials. Still-trialing subs are excluded — they haven't had the chance to pay yet."
+          style={{ fontSize: 20, fontWeight: 700, fontFamily: "var(--font-mono)", color: rateColor, marginLeft: 2 }}
+        >
+          {ratePct}
+        </span>
+
+        <span style={{ flex: 1 }} />
+
+        <span title="Subscriptions that ever started a free trial" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: "rgba(255,255,255,0.05)", border: `1px solid ${T.border}`, color: T.textSecondary }}>
+          {started} started
+        </span>
+        <span title="Trials where a real payment (> $0) has since cleared" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.green}15`, border: `1px solid ${T.green}44`, color: T.green }}>
+          {trials?.converted ?? 0} paid
+        </span>
+        {(trials?.stillTrialing ?? 0) > 0 && (
+          <span title="Inside the trial window — no verdict yet, and excluded from the rate" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.cyan}15`, border: `1px solid ${T.cyan}44`, color: T.cyan }}>
+            {trials?.stillTrialing} in trial
+          </span>
+        )}
+        {(trials?.lapsed ?? 0) > 0 && (
+          <span title="Trial ended and nothing was ever collected" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.red}15`, border: `1px solid ${T.red}44`, color: T.red }}>
+            {trials?.lapsed} lapsed
+          </span>
+        )}
+        {(trials?.revenue ?? 0) > 0 && (
+          <span title="Every dollar collected from customers who arrived through a trial" style={{ fontSize: 14, padding: "2px 8px", borderRadius: 4, background: `${T.gold}15`, border: `1px solid ${T.gold}44`, color: T.gold }}>
+            {fmtMoney(trials?.revenue ?? 0)} from trials
+          </span>
+        )}
+      </div>
+
+      {subs.length === 0 ? (
+        <div style={{ padding: "28px 16px", textAlign: "center", color: T.muted, fontSize: 14, lineHeight: 1.6 }}>
+          No trials yet.<br />
+          <span style={{ fontSize: 13 }}>
+            Trials start counting from the first checkout after the 2-day trial went live on the monthly plan.
+          </span>
+        </div>
+      ) : (
+        <div style={{ maxHeight: 340, overflowY: "auto" }}>
+          <div style={{ display: "grid", gridTemplateColumns: TRIAL_TABLE_COLS, gap: 8, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.muted, position: "sticky", top: 0, background: T.panel, zIndex: 1 }}>
+            <span>Customer</span>
+            <span>Trial started</span>
+            <span>Trial ended</span>
+            <span>Outcome</span>
+            <span style={{ textAlign: "right" }}>Paid</span>
+          </div>
+
+          {subs.map((s) => {
+            const outcome = trialOutcome(s);
+            return (
+              <div
+                key={s.id}
+                title={
+                  `${s.customer_email} · trial ${s.trial_start ? fmtDate(s.trial_start) : "—"} → ${s.trial_end ? fmtDate(s.trial_end) : "—"} · ` +
+                  (s.trial_converted
+                    ? `converted ${s.trial_converted_at ? fmtDate(s.trial_converted_at) : ""} · paid ${fmtMoney(s.trial_paid_total ?? 0)}`
+                    : s.status === "trialing" ? "still inside the trial" : "trial ended without a payment")
+                }
+                style={{ display: "grid", gridTemplateColumns: TRIAL_TABLE_COLS, gap: 8, padding: "9px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 14, alignItems: "center" }}
+              >
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: T.text, fontWeight: 600 }}>
+                  {s.customer_email}
+                </span>
+                <span style={{ color: T.textSecondary }}>{s.trial_start ? fmtDateShort(s.trial_start) : "—"}</span>
+                <span style={{ color: T.textSecondary }}>{s.trial_end ? fmtDateShort(s.trial_end) : "—"}</span>
+                <span>
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, whiteSpace: "nowrap",
+                    background: `${outcome.color}18`, border: `1px solid ${outcome.color}44`, color: outcome.color,
+                  }}>
+                    {outcome.label}
+                  </span>
+                </span>
+                <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", color: (s.trial_paid_total ?? 0) > 0 ? T.green : T.muted }}>
+                  {fmtMoney(s.trial_paid_total ?? 0)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1168,6 +1322,15 @@ export default function Sales() {
                 leaving={data.subscriptions.filter(s => displayStatus(s).key === "cancelling")}
               />
             </div>
+
+            {/* Trial → paid funnel. Full width under the subscription tables:
+                the row list is short (one line per trial) but the emails are
+                long, and squeezing it into the 1fr column next to the
+                subscriptions table clipped them. */}
+            <TrialConversionPanel
+              trials={data.trials}
+              subs={data.trialSubscriptions ?? []}
+            />
 
             {/* Expenses — recurring + one-off costs, netted into the KPI above */}
             <ExpensesPanel
