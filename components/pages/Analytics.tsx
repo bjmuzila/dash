@@ -1766,22 +1766,49 @@ function tlWindow(rows: TlRow[], spot: number | null): TlRow[] {
     .sort((a, b) => b.strike - a.strike);
 }
 
+// Fixed chip height: 14 (label) + 24 (value) + 15 (dist) + 15 (note)
+// + 6 (three 2px gaps) + 16 (padding) + 2 (border) = 92.
+const TL_CHIP_MIN_H = 92;
+
+// Row of level chips. `stretch` keeps every chip the same height, and the
+// auto top margin pins the row to the bottom of its pane so the left and
+// right panes' rows line up even when their ladders differ in length.
+const TL_CHIP_ROW: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+  gap: 8,
+  alignItems: "stretch",
+  marginTop: "auto",
+};
+
 // Compact chip for a computed level: name, price, and how far spot is from it.
 function TlLevelChip({ name, value, spot, color, note }: {
   name: string; value: number | null; spot: number | null; color: string; note: string;
 }) {
   const dist = value != null && spot != null ? value - spot : null;
+  // Every row is pinned to a fixed line box and clipped to ONE line, so all
+  // four chips are the same height no matter how long the note or the
+  // distance string is — and the left pane's row matches the right pane's.
+  const oneLine: CSSProperties = {
+    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0,
+  };
   return (
-    <div style={{ border: `1px solid ${T.border}`, borderRadius: 12, padding: "8px 10px", display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color }}>{name}</span>
-      <Value color={value == null ? T.muted : color} size={19}>
-        {value == null ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-      </Value>
-      <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.text }}>
+    <div style={{
+      border: `1px solid ${T.border}`, borderRadius: 12, padding: "8px 10px",
+      display: "flex", flexDirection: "column", gap: 2, minWidth: 0,
+      minHeight: TL_CHIP_MIN_H, boxSizing: "border-box",
+    }}>
+      <span style={{ ...oneLine, fontSize: 10, lineHeight: "14px", fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color }} title={name}>{name}</span>
+      <span style={{ ...oneLine, display: "block", lineHeight: "24px" }}>
+        <Value color={value == null ? T.muted : color} size={19}>
+          {value == null ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+        </Value>
+      </span>
+      <span style={{ ...oneLine, fontSize: 11, lineHeight: "15px", fontFamily: "var(--font-mono)", color: T.text }}>
         {dist == null ? "—" : dist === 0 ? "at price"
           : `${Math.abs(dist).toLocaleString("en-US", { maximumFractionDigits: 2 })} ${dist > 0 ? "above" : "below"}`}
       </span>
-      <span style={{ fontSize: 11, color: T.text }}>{note}</span>
+      <span style={{ ...oneLine, fontSize: 11, lineHeight: "15px", color: T.text }} title={note}>{note}</span>
     </div>
   );
 }
@@ -2126,7 +2153,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
           <div style={divider} />
 
           {/* The split: picked expiry | whole board. */}
-          <div className="tl-split" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "start" }}>
+          <div className="tl-split" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "stretch" }}>
 
             {/* LEFT — one expiration */}
             <div style={{ border: `1px solid ${T.border}`, borderRadius: 14, padding: 12, display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
@@ -2148,7 +2175,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
               ) : (
                 <TlLadder rows={leftLadder} spot={spot} levels={leftLevels} />
               )}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
+              <div style={TL_CHIP_ROW}>
                 <TlLevelChip name="Core (CB)" value={leftLevels.core} spot={spot} color={LEVEL_COLORS.cb} note="biggest magnet" />
                 <TlLevelChip name="Call wall" value={leftLevels.callWall} spot={spot} color={LEVEL_COLORS.cw} note="ceiling" />
                 <TlLevelChip name="Put wall" value={leftLevels.putWall} spot={spot} color={LEVEL_COLORS.pw} note="floor" />
@@ -2172,7 +2199,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
               ) : (
                 <TlLadder rows={rightLadder} spot={spot} levels={rightLevels} />
               )}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8 }}>
+              <div style={TL_CHIP_ROW}>
                 <TlLevelChip name="Core (CB)" value={rightLevels.core} spot={spot} color={LEVEL_COLORS.cb} note="biggest magnet" />
                 <TlLevelChip name="Call wall" value={rightLevels.callWall} spot={spot} color={LEVEL_COLORS.cw} note="ceiling" />
                 <TlLevelChip name="Put wall" value={rightLevels.putWall} spot={spot} color={LEVEL_COLORS.pw} note="floor" />

@@ -38,6 +38,7 @@ COPY server-v2/_lib-ics-feeds.cjs         ./server-v2/
 COPY server-v2/_lib-household-recipes.selftest.js ./server-v2/
 COPY server-v2/scripts/backfill-recipe-images.js  ./server-v2/scripts/
 COPY server-v2/scripts/backfill-recipe-derived.js   ./server-v2/scripts/
+COPY server-v2/scripts/backfill-recipe-photos.js    ./server-v2/scripts/
 
 EXPOSE 3010
 CMD ["node", "server-v2/household-server.js"]

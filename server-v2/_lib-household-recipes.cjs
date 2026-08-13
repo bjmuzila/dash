@@ -1091,6 +1091,28 @@ async function importRecipe({ url, text, force = false, depth = 0 }) {
   return draft;
 }
 
+/**
+ * The photo candidates for a page, without importing anything.
+ *
+ * The backfill's entry point: recipes saved before the importer could see kept
+ * ONE url — the og:image, which on TikTok is the creator's hook frame. This
+ * re-reads the page for the rest. Returns [] rather than throwing on a dead
+ * link, because a backfill over eighty recipes must not stop at the first one
+ * whose video was taken down.
+ */
+async function candidatesForUrl(url) {
+  try {
+    const { html } = await fetchPage(url);
+    // The JSON-LD image first when the page has one: on a food blog the
+    // og:image is occasionally the site logo, and the LD image never is.
+    const node = findRecipeNode(html);
+    const fromLd = node ? recipeFromJsonLd(node, url) : null;
+    return imageCandidates(html, fromLd?.imageUrl || null);
+  } catch {
+    return [];
+  }
+}
+
 /** Already in the cookbook? Matched on the normalised key, so a share link and
  *  the canonical page count as the same recipe. */
 async function findBySourceKey(userId, key) {
@@ -1220,7 +1242,7 @@ const CARD_COLS = `id, owner_id, visibility, title, description, image_url, sour
 
 const FULL_COLS = `id, owner_id, visibility, title, description, image_url, source_url, source_name,
   servings, prep_minutes, cook_minutes, calories, category, skill, favorite, notes,
-  main_ingredient, needs_review, recipe_url, partial, partial_note,
+  main_ingredient, needs_review, recipe_url, partial, partial_note, image_candidates,
   ingredients, steps, cooked_count, last_cooked_at, created_at, updated_at`;
 
 /**
@@ -1342,8 +1364,10 @@ async function createRecipe(userId, r) {
     `INSERT INTO hh_recipes
        (owner_id, visibility, title, description, image_url, source_url, source_name,
         servings, prep_minutes, cook_minutes, calories, category, skill, notes, ingredients, steps,
-        main_ingredient, needs_review, source_key, recipe_url, partial, partial_note)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17,$18,$19,$20,$21,$22)
+        main_ingredient, needs_review, source_key, recipe_url, partial, partial_note,
+        image_candidates)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17,$18,$19,$20,$21,$22,
+             $23::jsonb)
      RETURNING ${FULL_COLS}`,
     [userId, SHARED, title, str(r.description, 1000) || null, str(r.imageUrl, 1000) || null,
      str(r.sourceUrl, 2000) || null, str(r.sourceName, 120) || null,
@@ -1356,7 +1380,12 @@ async function createRecipe(userId, r) {
      // Falls back to deriving it from the URL for a hand-typed recipe that was
      // never imported — those still dedupe against a later paste of the link.
      str(r.sourceKey, 200) || sourceKey(r.sourceUrl),
-     str(r.recipeUrl, 2000) || null, !!r.partial, str(r.partialNote, 200) || null]);
+     str(r.recipeUrl, 2000) || null, !!r.partial, str(r.partialNote, 200) || null,
+     // The list the photo was chosen FROM, kept so it can be re-chosen later
+     // without re-fetching a page that may be gone by then.
+     Array.isArray(r.imageCandidates) && r.imageCandidates.length
+       ? JSON.stringify(r.imageCandidates.slice(0, 6).map((u) => str(u, 1000)).filter(Boolean))
+       : null]);
 
   // Copy the photo in the BACKGROUND, deliberately not awaited. Saving a recipe
   // must not sit on someone else's CDN for ten seconds, and the gap is already
@@ -1588,6 +1617,33 @@ async function captureImage(recipeId, url) {
   // from the review screen, so it is client input, and six outbound fetches is
   // the ceiling regardless of what gets posted.
   const list = (Array.isArray(url) ? url : [url]).filter(Boolean).slice(0, 6);
+
+  // MORE THAN ONE CANDIDATE: look at them before choosing.
+  //
+  // A TikTok cover is a frame of a video, and the frame the site picked is the
+  // creator's hook shot — which is very often their face, a hand reaching into
+  // a pan, or the fridge door. Nothing in the page's metadata distinguishes
+  // "plate of food" from "man holding a phone", so the only honest way to pick
+  // is to look. This fetches the first few, asks Claude which one is the food,
+  // and stores THOSE BYTES — no second download, so the vision pass costs one
+  // API call and nothing else.
+  //
+  // Falls back to first-that-downloads if vision is off or undecided, which is
+  // exactly the old behaviour.
+  if (list.length > 1 && visionConfigured()) {
+    const shots = [];
+    for (const one of list) {
+      if (shots.length >= VISION_MAX_SHOTS) break;
+      const got = await fetchImage(one);
+      if (got) shots.push({ ...got, url: one });
+    }
+    if (!shots.length) return null;
+    if (shots.length === 1) return putImage(recipeId, shots[0].buf, shots[0].mime, shots[0].url);
+    const pick = await pickFoodShot(shots);
+    const chosen = shots[pick] || shots[0];
+    return putImage(recipeId, chosen.buf, chosen.mime, chosen.url);
+  }
+
   for (const one of list) {
     const got = await captureOneImage(recipeId, one);
     if (got) return got;
@@ -1595,7 +1651,92 @@ async function captureImage(recipeId, url) {
   return null;
 }
 
+// ── Which frame is the food? ─────────────────────────────────────────────────
+
+const VISION_MODEL = process.env.RECIPE_VISION_MODEL || AI_MODEL;
+const visionConfigured = () => aiConfigured() && process.env.RECIPE_VISION !== 'off';
+// Four is where this stops paying for itself: the good frame is in the first
+// few or it isn't in the list at all, and each extra image is another download
+// and another few thousand tokens.
+const VISION_MAX_SHOTS = 4;
+// Claude's vision endpoint accepts these; AVIF and GIF do not go in the prompt
+// (they can still be STORED — this only limits what gets looked at).
+const VISION_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+const VISION_PROMPT = `These are candidate thumbnails for a recipe. They are frames from a cooking video, so some show the cook, their kitchen, a phone, or a title card rather than the dish.
+
+Reply with ONLY a single digit: the 0-based index of the image that best shows the finished food — a plated dish, a pan or tray of the food, the food close up.
+
+Prefer, in order:
+1. The finished dish, plated or served.
+2. The food cooking, or its ingredients laid out.
+3. Anything else.
+
+Never prefer an image whose main subject is a person, a face, or an empty kitchen, unless every image is like that. If none show food at all, reply 0.`;
+
+/**
+ * Ask Claude which of the fetched frames is actually the food.
+ *
+ * Returns an index into `shots`, or 0 when it can't tell — never throws. A
+ * photo is a nicety; failing an import over one would be absurd.
+ */
+async function pickFoodShot(shots) {
+  const usable = shots
+    .map((s, i) => ({ ...s, i }))
+    .filter((s) => VISION_TYPES.has(s.mime) && s.buf.length <= 4 * 1024 * 1024);
+  if (usable.length < 2) return usable[0]?.i ?? 0;
+
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 60_000);
+  try {
+    const content = [];
+    usable.forEach((s, n) => {
+      content.push({ type: 'text', text: `Image ${n}:` });
+      content.push({
+        type: 'image',
+        source: { type: 'base64', media_type: s.mime, data: s.buf.toString('base64') },
+      });
+    });
+    content.push({ type: 'text', text: VISION_PROMPT });
+
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      signal: ctl.signal,
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: VISION_MODEL,
+        max_tokens: 8,
+        messages: [{ role: 'user', content }],
+      }),
+    });
+    if (!res.ok) return usable[0].i;
+    const body = await res.json().catch(() => null);
+    const said = (body?.content || []).map((c) => c?.text || '').join('').trim();
+    const n = Number((said.match(/\d+/) || [])[0]);
+    // Index into the FILTERED list, mapped back to the caller's list — they
+    // differ the moment one candidate is an AVIF.
+    if (Number.isInteger(n) && n >= 0 && n < usable.length) return usable[n].i;
+    return usable[0].i;
+  } catch {
+    return usable[0].i;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function captureOneImage(recipeId, url) {
+  const got = await fetchImage(url);
+  return got ? putImage(recipeId, got.buf, got.mime, str(url, 2000)) : null;
+}
+
+/** The bytes and the type, or null. Split out from the store step so the vision
+ *  pass can look at several candidates and store only the winner — one download
+ *  each, not two. */
+async function fetchImage(url) {
   const link = str(url, 2000);
   if (!link || !/^https?:\/\//i.test(link)) return null;
   const ctl = new AbortController();
@@ -1617,7 +1758,7 @@ async function captureOneImage(recipeId, url) {
     if (!IMAGE_TYPES.has(mime)) return null;
     const buf = Buffer.from(await res.arrayBuffer());
     if (!buf.length || buf.length > MAX_IMAGE_BYTES) return null;
-    return await putImage(recipeId, buf, mime, link);
+    return { buf, mime };
   } catch {
     return null;
   } finally {
@@ -2087,7 +2228,7 @@ module.exports = {
   guessMainIngredient, tidyIngredientName, SORTS, SORT_KEYS,
   recipeSignals, looksLikeRecipe, captionLinks, mentionsRecipeElsewhere, normaliseCaption,
   findRecipeNode, recipeFromJsonLd,
-  metaContent, embeddedCaption, imageCandidates, handleFromUrl,
+  metaContent, embeddedCaption, imageCandidates, candidatesForUrl, handleFromUrl,
   importRecipe,
   listRecipes, getRecipe, summary,
   createRecipe, updateRecipe, deleteRecipe, toggleFavorite, markCooked,

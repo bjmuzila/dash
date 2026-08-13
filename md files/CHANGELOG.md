@@ -1,5 +1,160 @@
 # Changelog
 
+## 2026-08-13 - Recipe photos: pick the frame that actually has food in it
+
+Edited: `_lib-household.cjs` (`image_candidates` column),
+`_lib-household-recipes.cjs` (`pickFoodShot`, `fetchImage`, `captureImage`,
+`candidatesForUrl`, `createRecipe`), `recipe-vite/src/api.ts`,
+`recipe-vite/src/pages/Recipe.tsx`, `deploy/household/Dockerfile`,
+new `server-v2/scripts/backfill-recipe-photos.js`.
+
+### What
+
+Half the cookbook wall was faces, hands and fridge doors. A TikTok "photo" is a
+frame of the VIDEO, and the frame the site publishes is the creator's hook shot
+— which for a lot of these accounts is them talking to camera. Nothing in the
+page metadata distinguishes "plated dish" from "man holding a phone", so no
+amount of picking a better FIELD fixes it.
+
+### How
+
+Two halves, because neither is enough alone.
+
+AUTOMATIC: when a page yields more than one candidate, `captureImage` downloads
+the first few and asks Claude which one shows the finished food, preferring a
+plated dish, then the food cooking, then anything — and explicitly rejecting a
+person or an empty kitchen unless that is all there is. It stores THOSE BYTES,
+so the vision pass costs one API call and no second download. Undecided,
+unconfigured (`RECIPE_VISION=off`) or a failed call all fall back to
+first-that-downloads, which is the old behaviour exactly. Model via
+`RECIPE_VISION_MODEL`.
+
+MANUAL: the candidate list is now kept on the recipe row (`image_candidates`),
+so the recipe page shows the other frames as a tappable strip under the hero.
+One tap re-copies that frame. Kept on the row rather than rebuilt on demand
+because by the time you look, the source page may be gone.
+
+`backfill-recipe-photos.js` re-reads the source page for recipes imported
+before any of this, stores their candidate list and re-picks. `--dry` first —
+it costs a vision call per recipe.
+
+Caveat worth keeping in mind: this picks the best frame the video offered, and
+some videos never show the finished plate. For those, the phone upload on the
+recipe page is still the honest answer.
+
+## 2026-08-13 - `generated/` — a real home for Claude-created images
+
+Edited: `.gitignore`, new `generated/README.md`.
+
+### What
+
+Images created during a Cowork session had nowhere to land. They lived in the
+session's ephemeral cloud workspace and were surfaced as a chat download card,
+so the only durable copy was inside that one conversation — finding an asset
+later meant searching every chat. Nothing was ever written to disk.
+
+`generated/` at the repo root is now the standing drop folder for them, and it
+is git-ignored so it never reaches the VPS or the Docker build.
+
+### Why here
+
+The device bridge can only write inside a connected folder, and the repo root is
+the one that's connected. A separate `Desktop\claude-images` would have needed
+re-connecting each session.
+
+### Not affected
+
+Runtime image paths are unchanged: `/tmp/shots/<page>.png`
+(`scripts/shoot-mobile.mjs`), a temp dir that self-deletes
+(`scripts/snapshot-fixtures.mjs`), an in-memory PNG buffer POSTed to the webhook
+(`server-v2/mg-ladder-discord.js`), and `public/logos/<SYM>.png`
+(`scripts/fetch-ticker-logos.mjs`, still committed by hand). Committed art stays
+in `public/`.
+
+Known stray: `discord-bot.js` writes `_discord_snap_<page>_<ts>.png` into the
+repo root cwd and those are not git-ignored. Left as-is for now.
+
+
+## 2026-08-13 - Cookbook: the index is a photo wall, not a list
+
+Edited: `recipe-vite/src/pages/Cookbook.tsx` (whole screen), `recipe-vite/README.md`.
+
+### What
+
+The cookbook index was a stack of rows: a 64px circle crop, the title, one line
+of metadata. It read like a database table of food. It is now a masonry wall of
+photo cards under an invitation — "What are you in the mood for?", one large
+search box, the filter chips, and a result bar carrying the sorts.
+
+Nothing was invented to get there. The chips are still the server's category
+facet with its live counts, the sorts are still the server's seven keys, ★ and
+the "N to review" chip still sit in the same row, and search/sort/filter still
+run server-side. No mood taxonomy was added: a mood row that is really
+"dinner" wearing a costume is a second name for a thing that already has one.
+
+### How
+
+Three decisions worth keeping:
+
+**The wall is JS-distributed flex columns — not `columns:`, not a grid.** CSS
+multi-column fills top-to-bottom per column, so on a phone recipe #2 would sit
+halfway down the screen. Items are dealt round-robin across N lanes instead, so
+reading order stays left-to-right while cards keep unequal heights. A
+`ResizeObserver` picks N from the container width (~210px per card: two lanes on
+a 390px phone, five on a laptop).
+
+**Card image heights come from a hash of the recipe id** (132–204px). That is
+what gives the wall its rhythm, and hashing keeps it stable across re-renders
+and refetches so nothing jumps when a query settles.
+
+**The container is `gridTemplateColumns: minmax(0, 1fr)`.** The chip and sort
+rows scroll sideways; with the implicit `auto` track the grid sized itself to
+their full content and pushed the entire page off a 390px screen.
+
+Smaller things: the cook time and the source (TIKTOK / REELS / WEB) moved onto
+the photo as scrim badges, with NEW / PART keeping priority over the source in
+the top-left corner. The card carries ONE metadata line — "Never made" when it
+applies, the ingredient count otherwise — because a 170px card is about 26
+characters of 9px mono and anything more wraps ragged on half the wall. ⌘K
+focuses search and Escape clears it; the ⌘K hint only renders on a fine pointer,
+since on a phone it is a lie. The main-ingredient facet stays behind a toggle in
+the result bar. Empty, error and loading states are all still there, the last
+one now as skeleton cards in the wall.
+
+Verified with `tsc --noEmit` and a Vite build against a stubbed `/api/hh/recipes`,
+screenshotted at 390px and 1180px.
+
+
+## 2026-08-13 - Ticker Lookup: level chips are one uniform height
+
+Edited: `components/pages/Analytics.tsx` (`TlLevelChip`, new `TL_CHIP_MIN_H` /
+`TL_CHIP_ROW`, the `.tl-split` container and both chip rows).
+
+### What
+
+In the ticker-lookup popup off the Multi Greek chart, the four level cards —
+CORE (CB) / CALL WALL / PUT WALL / GAMMA FLIP — were ragged. Cards grew when
+their note or distance string wrapped, and the left pane's row sat at a
+different height from the right pane's because the two ladders above them are
+different lengths.
+
+### How
+
+Each chip row is now a fixed line box: the label, value, distance and note
+lines carry explicit `lineHeight` values (14 / 24 / 15 / 15) and are clipped to
+ONE line with `nowrap` + ellipsis, with the full string on `title` for hover.
+The chip carries `minHeight: TL_CHIP_MIN_H` (92 = 14+24+15+15 + 6 gaps + 16
+padding + 2 border) and `boxSizing: border-box`, so nothing can grow it.
+
+The two rows now share one `TL_CHIP_ROW` style with `alignItems: "stretch"`
+and `marginTop: "auto"`, and the `.tl-split` grid moved from
+`alignItems: "start"` to `"stretch"` — so both panes are the same height and
+both chip rows are pinned to the bottom, lining up across the split.
+
+Affects the Analytics page's own `<TickerLookupCard />` too, which is the same
+component.
+
+
 ## 2026-08-12 - GEX Map: a third field — gamma sign × delta sign
 
 Edited: `app/test/GexMapTab.tsx` (`FIELD_MODES`, `buildModel`, `sliceModel`,

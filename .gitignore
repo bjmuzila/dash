@@ -43,3 +43,6 @@ server-v2/.cash-basis.json
 
 # runtime state (bind-mounted into the container; see docker-compose volumes)
 state/
+
+# generated images/assets from Claude sessions (local only, never deployed)
+generated/

@@ -356,6 +356,13 @@ async function ensureSchema() {
     // know is half is worse than none, because you find out at step four.
     await pool.query(`ALTER TABLE hh_recipes ADD COLUMN IF NOT EXISTS partial BOOLEAN NOT NULL DEFAULT FALSE`);
     await pool.query(`ALTER TABLE hh_recipes ADD COLUMN IF NOT EXISTS partial_note TEXT`);
+    // Every photo the source page offered, best first. Kept rather than thrown
+    // away after the first successful copy, for two reasons: a TikTok "photo"
+    // is a VIDEO FRAME, so the one the site picked is often the creator's face
+    // or a hand rather than the food — and the fix for that is offering you the
+    // other frames to tap. It is also what lets the photo be re-picked later
+    // without re-fetching the source page, which by then may be gone.
+    await pool.query(`ALTER TABLE hh_recipes ADD COLUMN IF NOT EXISTS image_candidates JSONB`);
     await pool.query(`CREATE INDEX IF NOT EXISTS hh_recipes_source_key_idx ON hh_recipes(source_key)`);
 
     // ── Bulk import jobs ─────────────────────────────────────────────────
