@@ -27,7 +27,7 @@ const PLATFORM_RECAP = [
 
 // Features not yet live — shown with an "expected" tag so members know what's coming.
 const PLATFORM_UPCOMING = [
-  { text: "Footprint & order-flow automated strategies", eta: "Expected Aug 2026" },
+  { text: "Footprint & order-flow automated strategies", eta: "Expected later this year" },
 ];
 
 export default async function PricingPage({

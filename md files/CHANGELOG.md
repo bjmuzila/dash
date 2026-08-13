@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-08-13 - /pricing: footprint ETA moved off a hard date
+
+Edited: `app/pricing/page.tsx` (`PLATFORM_UPCOMING`).
+
+"Footprint & order-flow automated strategies" was tagged `Expected Aug 2026`,
+which renders as `EXPECTED AUG 2026` on the buy page — a date that is now this
+month and about to go stale in front of paying visitors. Changed to
+`Expected later this year`. Single-line copy change; the tag styling and the
+rest of the list are untouched.
+
 ## 2026-08-13 - The 2-day free trial was advertised but never applied
 
 Edited: `app/api/stripe/checkout/route.ts` (added `subscription_data.trial_period_days`).
