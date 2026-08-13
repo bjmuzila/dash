@@ -17,6 +17,10 @@ const OptionsChain = lazy(() => import('@/components/pages/OptionsChain'))
 // mult-greek/page.tsx is a server component; mount its client UI (named export).
 const MultGreek    = lazy(() => import('@/app/mult-greek/MultGreekClient').then((m) => ({ default: m.MultGreekClient })))
 const Em           = lazy(() => import('@/components/pages/Em'))
+// /levels — universe-wide CB/CW/PW board. Client component under app/, so it
+// is imported straight from '@/app' like MultGreekClient rather than through a
+// components/pages wrapper.
+const Levels       = lazy(() => import('@/app/levels/page'))
 const Flow         = lazy(() => import('@/components/pages/Flow'))
 const EsCandles    = lazy(() => import('@/components/pages/EsCandles'))
 const Scanner      = lazy(() => import('@/components/pages/Scanner'))
@@ -64,6 +68,7 @@ export default function App() {
               <Route path="/analytics" element={<Analytics />} />
               <Route path="/options-chain" element={S(<OptionsChain />)} />
               <Route path="/mult-greek" element={S(<MultGreek />)} />
+              <Route path="/levels" element={S(<Levels />)} />
               <Route path="/em" element={S(<Em />)} />
               <Route path="/flow" element={S(<Flow />)} />
               <Route path="/es-candles" element={S(<EsCandles />)} />

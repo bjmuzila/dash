@@ -3842,12 +3842,20 @@ if (libDb) {
           try {
             const accounts = await libDb.queryAll(
               `SELECT u.id, u.email, u.discord_username, u.created_at, u.is_owner,
-                      s.last_login_at
+                      s.last_login_at,
+                      sub.status AS sub_status,
+                      sub.cancel_at_period_end,
+                      sub.current_period_end
                  FROM users u
                  LEFT JOIN (
                    SELECT user_id, MAX(created_at) AS last_login_at
                      FROM sessions GROUP BY user_id
                  ) s ON s.user_id = u.id
+                 -- Subscription is what makes a dot GOLD on the owner map, so it
+                 -- travels with identity rather than being a second round trip.
+                 -- Same LEFT JOIN as listAllUsersForBroadcast(); a user with no
+                 -- row here has simply never subscribed.
+                 LEFT JOIN subscriptions sub ON sub.clerk_user_id = u.id
                 WHERE u.id = ANY(?::text[])`,
               [ids]
             );
@@ -3866,6 +3874,16 @@ if (libDb) {
             userEmail: u?.email ?? null, userName: u?.discord_username ?? null,
             userCreatedAt: u?.created_at ?? null,
             userLastLoginAt: u?.last_login_at ?? null,
+            // PAYING, not merely signed in. 'active' | 'trialing' per
+            // libDb.PAID_STATUSES — the same test the rest of the app gates on,
+            // so the map can never call someone a customer that /pricing would
+            // still be selling to. subStatus is passed through raw as well, so a
+            // 'past_due' or 'canceled' account reads as itself in the detail
+            // card instead of collapsing into "not a subscriber".
+            isSubscriber: Boolean(u?.sub_status && libDb.PAID_STATUSES.has(u.sub_status)),
+            subStatus: u?.sub_status ?? null,
+            subCancelAtPeriodEnd: Boolean(u?.cancel_at_period_end),
+            subCurrentPeriodEnd: u?.current_period_end ?? null,
             isOwner: Boolean(u?.is_owner) || Boolean(ctx?.ownerUserId && r.user_id === ctx.ownerUserId),
             // Cloudflare geo. Null on rows logged before the managed transform was
             // enabled, and on anything that reached the origin without crossing the edge.

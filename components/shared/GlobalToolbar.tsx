@@ -322,6 +322,10 @@ type NavItem = { href: string; label: string; emoji: string; ownerOnly?: boolean
 const NAV_ITEMS: NavItem[] = [
   { href: "/home",              label: "Home",          emoji: "🏠" },
   { href: "/mult-greek",        label: "Multi Greek",   emoji: "🧮" },
+  // Levels — the whole scanner universe's CB / call wall / put wall on one
+  // page. Sits next to Multi Greek because it is the same three numbers,
+  // read across 169 tickers instead of four.
+  { href: "/levels",            label: "Levels",        emoji: "🧱" },
   { href: "/traders-dashboard", label: "Traders Dash",  emoji: "📊" },
   { href: "/options-chain",     label: "Options Chain", emoji: "⛓️" },
   { href: "/em",                label: "Est. Moves",    emoji: "↔️" },

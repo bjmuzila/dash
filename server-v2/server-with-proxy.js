@@ -2459,6 +2459,14 @@ async function main() {
       //   (market closed / weekend — last available snapshot, e.g. Friday's
       //   close, instead of an empty result). Response marks each row `stale`
       //   (its `date` !== today) so the client can flag it.
+      //
+      //   `cb` / `cb_gex` (Core Bullseye — the highest |GEX| strike) are in the
+      //   SELECT as of 2026-08-13. scanner-recorder.js has always WRITTEN them;
+      //   the read just never returned them, so every consumer of this endpoint
+      //   got the two walls and no core. /levels draws all three, and reading
+      //   CB from /proxy/walls instead would have meant a second request at
+      //   15-minute slot granularity for a number already sitting in this row.
+      //   Purely additive — existing callers see two extra fields.
       if (pathname === '/proxy/scanner' && req.method === 'GET') {
         (async () => {
           try {
@@ -2471,11 +2479,13 @@ async function main() {
             const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
             const sql = any
               ? `SELECT DISTINCT ON (symbol)
-                        symbol, date, ts, spot, expiry, total_net_gex, call_wall, put_wall, gex_flip, strikes
+                        symbol, date, ts, spot, expiry, total_net_gex, call_wall, put_wall, gex_flip,
+                        cb, cb_gex, strikes
                  FROM scanner_snapshots
                  ORDER BY symbol, ts DESC`
               : `SELECT DISTINCT ON (symbol)
-                        symbol, date, ts, spot, expiry, total_net_gex, call_wall, put_wall, gex_flip, strikes
+                        symbol, date, ts, spot, expiry, total_net_gex, call_wall, put_wall, gex_flip,
+                        cb, cb_gex, strikes
                  FROM scanner_snapshots
                  WHERE date = $1
                  ORDER BY symbol, ts DESC`;

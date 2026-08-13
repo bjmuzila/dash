@@ -41,6 +41,7 @@ type NavItem = { label: string; href: string };
 const GEX_ITEMS: NavItem[] = [
   { label: "Home", href: "/home" },
   { label: "Multi Greek", href: "/mult-greek" },
+  { label: "Levels", href: "/levels" },
   { label: "Traders Dashboard", href: "/traders-dashboard" },
   { label: "Options Chain", href: "/options-chain" },
   { label: "Estimated Moves", href: "/em" },
@@ -74,6 +75,7 @@ const ROUTE_SYMBOL: Record<string, string> = {
   "/traders-dashboard": "⊞",
   "/docs": "☰",
   "/mult-greek": "∇",
+  "/levels": "≡",
   "/options-chain": "⛓",
   "/em": "↔",
   "/analytics": "▦",

@@ -61,6 +61,13 @@ export interface VisitorMapRow {
   userName?: string | null;
   userCreatedAt?: string | null;
   userLastLoginAt?: string | null;
+  /** PAYING, not merely signed in — 'active' or 'trialing' on the subscriptions
+   *  row, resolved server-side in /api/page-visits against libDb.PAID_STATUSES.
+   *  This is what makes a dot gold. */
+  isSubscriber?: boolean | null;
+  /** The raw Stripe status behind `isSubscriber`, so a lapsed account reads as
+   *  'past_due' / 'canceled' in the detail card instead of a flat "no". */
+  subStatus?: string | null;
   isOwner?: boolean | null;
 }
 
@@ -120,9 +127,15 @@ interface VisitorDot {
   /** What the map calls this person: their email if they were signed in,
    *  otherwise the honest "Visitor". */
   visitorLabel: string;
-  /** True when at least one of this dot's rows carried a session. Drives both
-   *  the label and the filled-vs-hollow dot styling. */
+  /** True when at least one of this dot's rows carried a session. */
   signedIn: boolean;
+  /** True when the account behind this dot is PAYING (active or trialing).
+   *  This — not `signedIn` — is what fills a dot gold. A free registered
+   *  account is a gold RING: identified, but not a customer, and the map has to
+   *  be able to answer "where are the people actually paying" at a glance. */
+  isSubscriber: boolean;
+  /** Raw Stripe status, for the detail card. */
+  subStatus: string | null;
   country: string | null;
   ip: string | null;
   /** Every IP this person was seen on at this location. */
@@ -144,6 +157,9 @@ interface Aggregate {
   dots: VisitorDot[];
   /** How many of those dots are identified accounts rather than anonymous. */
   signedInDots: number;
+  /** …and how many of THOSE are paying. The three counts the legend prints are
+   *  subscriberDots / (signedInDots − subscriberDots) / (dots − signedInDots). */
+  subscriberDots: number;
   placeCount: number;
   visitsWithCoords: number;
   totalVisits: number;
@@ -205,7 +221,8 @@ function aggregate(
   const dotAcc = new Map<string, {
     lat: number; lon: number; placeKey: string; placeLabel: string;
     approx: boolean; spreadDeg: number;
-    signedIn: boolean; country: string | null; ips: Set<string>;
+    signedIn: boolean; isSubscriber: boolean; subStatus: string | null;
+    country: string | null; ips: Set<string>;
     userId: string | null; email: string | null; discord: string | null;
     accountCreatedAt: string | null; lastLoginAt: string | null; isOwner: boolean;
     visits: number; sample: VisitorMapRow[];
@@ -314,6 +331,8 @@ function aggregate(
           approx: place.approx,
           spreadDeg: place.spreadDeg,
           signedIn: Boolean(r.userEmail || r.userId),
+          isSubscriber: Boolean(r.isSubscriber),
+          subStatus: r.subStatus ?? null,
           country: realCountry,
           ips: new Set<string>(),
           userId: r.userId ?? null,
@@ -339,6 +358,11 @@ function aggregate(
       if (!dot.lastLoginAt && r.userLastLoginAt) dot.lastLoginAt = r.userLastLoginAt;
       if (r.isOwner) dot.isOwner = true;
       if (r.userEmail || r.userId) dot.signedIn = true;
+      // Subscription is resolved per-ROW from a single live join, so every row
+      // for one account agrees. Taking the true one anyway keeps the dot right
+      // if a visit predates the account's identity being resolvable at all.
+      if (r.isSubscriber) dot.isSubscriber = true;
+      if (!dot.subStatus && r.subStatus) dot.subStatus = r.subStatus;
       if (dot.sample.length < SAMPLE_CAP) dot.sample.push(r);
     }
 
@@ -391,6 +415,8 @@ function aggregate(
         // reads as the id rather than being demoted to "Visitor".
         visitorLabel: d.email || d.discord || (d.userId ? `${d.userId.slice(0, 12)}…` : "Visitor"),
         signedIn: d.signedIn,
+        isSubscriber: d.isSubscriber,
+        subStatus: d.subStatus,
         country: d.country,
         ip: ips[0] ?? null,
         ips,
@@ -404,13 +430,17 @@ function aggregate(
         sample: d.sample,
       };
     })
-    .sort((a, b) => a.visits - b.visits);
+    // Paying subscribers sort LAST so they draw on top of the fan and win the
+    // click when a customer shares a city with twenty anonymous visitors. Within
+    // each tier the busiest still sorts last, as before.
+    .sort((a, b) => (a.isSubscriber ? 1 : 0) - (b.isSubscriber ? 1 : 0) || a.visits - b.visits);
 
   return {
     byCode,
     ranked,
     dots,
     signedInDots: dots.reduce((n, d) => n + (d.signedIn ? 1 : 0), 0),
+    subscriberDots: dots.reduce((n, d) => n + (d.isSubscriber ? 1 : 0), 0),
     // Real places only — a country centroid is not a location the visitor was at.
     placeCount: [...placeSizes.keys()].filter((k) => !k.startsWith("cc:")).length,
     visitsWithCoords,
@@ -472,15 +502,18 @@ function intensity(value: number, max: number): number {
 // person, and the only thing it varies by is how many pages that person loaded.
 const BUBBLE_MIN_R = 3.2;
 const BUBBLE_MAX_R = 7;
-// Hue says "a person"; FILL says "we know who". A signed-in account is a solid
-// gold dot, an anonymous visitor is a dark disc with a gold ring — one channel,
-// readable at 3px, and it survives colour-blindness in a way two warm hues would
-// not.
+// THREE states, on two independent channels — hue and fill:
 //
-// Colour separates the two: a signed-in account is GOLD (warm, the identified
-// person you can act on), an anonymous visitor is SLATE (neutral, context).
-// Fill reinforces it — solid vs hollow — so the pair survives colour-blindness
-// and 3px rendering without relying on hue alone.
+//   solid GOLD   paying subscriber (active or trialing)
+//   hollow GOLD  signed-in account that is NOT paying
+//   hollow SLATE anonymous visitor, known only by IP
+//
+// Gold used to mean "signed in", which put a free registration and a paying
+// customer in the same colour and made the map useless for the one question it
+// is best placed to answer: where is the revenue. Hue now means "has an
+// account", fill means "is paying" — two channels, so the distinction survives
+// colour-blindness and 3px rendering, and the busiest reading (solid gold) is
+// the rarest and most valuable state.
 //
 // Each mark pairs its colour with the SURFACE colour, and that is what keeps it
 // visible over every country shade, because the two are contrast-complementary
@@ -495,8 +528,13 @@ const BUBBLE_MAX_R = 7;
 // dots legible, which matters here because co-located visitors are a tight fan.
 const BUBBLE_FILL = "rgba(13,17,25,0.85)";      // surface, so it reads hollow
 const BUBBLE_STROKE = "rgba(138,147,166,0.95)"; // #8A93A6 slate — anonymous
-const MEMBER_FILL = "#FFB703";                  // OWNER_THEME.gold — identified
+const MEMBER_FILL = "#FFB703";                  // OWNER_THEME.gold — PAYING
 const MEMBER_STROKE = SURFACE;
+/** Free registered account: the gold hue, but hollow — the same dark disc the
+ *  anonymous dot uses, ringed in gold instead of slate. Reads as "we know who
+ *  this is" at a glance and "not a customer" on a second look. */
+const FREE_FILL = BUBBLE_FILL;
+const FREE_STROKE = MEMBER_FILL;
 // A country-centroid dot is a real person at a position we are guessing, so it
 // keeps its identity colour (you can still see who is signed in) but loses
 // solidity: dashed ring, half opacity. Precision is a visual property here, not
@@ -619,6 +657,7 @@ interface HoverState {
   name: string;
   sub?: string | null;
   signedIn?: boolean;
+  isSubscriber?: boolean;
   unique: number;
   visits: number;
   x: number;
@@ -726,9 +765,15 @@ function PlaceCard({ place, onClose }: { place: SelectedPlace; onClose: () => vo
               ? "Country"
               : acct?.isOwner
                 ? "Signed in · owner (you)"
-                : acct?.signedIn
-                  ? "Signed-in account"
-                  : "Visitor · not signed in"}
+                : acct?.isSubscriber
+                  ? `Subscriber${acct.subStatus === "trialing" ? " · trialing" : ""}`
+                  : acct?.signedIn
+                    // A lapsed customer is NOT the same as someone who never
+                    // paid, and the difference is the whole point of the card.
+                    ? acct.subStatus
+                      ? `Free account · ${acct.subStatus}`
+                      : "Free account"
+                    : "Visitor · not signed in"}
           </div>
           {place.sub && (
             <div style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.55, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -766,6 +811,17 @@ function PlaceCard({ place, onClose }: { place: SelectedPlace; onClose: () => vo
                 <Row
                   label="Last login"
                   value={acct.lastLoginAt ? fmtDateTime(acct.lastLoginAt) : "never (no session row)"}
+                />
+                {/* Spelled out rather than left to the dot's colour: "no
+                    subscription" and "canceled last week" look identical on the
+                    map and could not be less alike in what you'd do about it. */}
+                <Row
+                  label="Subscription"
+                  value={
+                    acct.isSubscriber
+                      ? acct.subStatus === "trialing" ? "trialing" : "active"
+                      : acct.subStatus || "none"
+                  }
                 />
               </>
             ) : (
@@ -1004,9 +1060,15 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
       cx={b.cx}
       cy={b.cy}
       r={b.r / sizeK}
-      fill={b.approx ? "none" : b.signedIn ? MEMBER_FILL : BUBBLE_FILL}
-      stroke={b.approx ? (b.signedIn ? MEMBER_FILL : BUBBLE_STROKE) : b.signedIn ? MEMBER_STROKE : BUBBLE_STROKE}
-      strokeWidth={b.signedIn ? 1.8 : 1.5}
+      // Solid gold ONLY for a paying subscriber. A free account is the same
+      // hollow disc as an anonymous visitor, ringed gold instead of slate.
+      fill={b.approx ? "none" : b.isSubscriber ? MEMBER_FILL : b.signedIn ? FREE_FILL : BUBBLE_FILL}
+      stroke={
+        b.isSubscriber
+          ? (b.approx ? MEMBER_FILL : MEMBER_STROKE)
+          : b.signedIn ? FREE_STROKE : BUBBLE_STROKE
+      }
+      strokeWidth={b.isSubscriber ? 1.8 : 1.5}
       strokeDasharray={b.approx ? APPROX_DASH : undefined}
       opacity={b.approx ? APPROX_OPACITY : undefined}
       vectorEffect="non-scaling-stroke"
@@ -1017,7 +1079,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
         if (!box) return;
         setHover({
           kind: "visitor", code: b.key, name: b.visitorLabel, sub: b.placeLabel,
-          signedIn: b.signedIn, unique: 1, visits: b.visits,
+          signedIn: b.signedIn, isSubscriber: b.isSubscriber, unique: 1, visits: b.visits,
           x: e.clientX - box.left, y: e.clientY - box.top,
         });
         pending.current = {
@@ -1333,7 +1395,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
                   {hover.sub || "located by IP"}
                 </div>
                 <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: hover.signedIn ? HOME_THEME.gold : VISITOR_INK, opacity: 0.9, marginTop: 2 }}>
-                  {hover.signedIn ? "signed-in account" : "not signed in"}
+                  {hover.isSubscriber ? "subscriber" : hover.signedIn ? "free account" : "not signed in"}
                 </div>
               </>
             )}
@@ -1382,7 +1444,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
             title={
               stats.dots.length === 0
                 ? "No geolocated rows yet — enable Cloudflare's visitor location headers"
-                : `${stats.dots.length} visitors · ${stats.cityDots} on a city coordinate across ${stats.placeCount} locations, ${stats.approxDots} dashed on a country centroid (no coordinate on the row) · gold = signed-in account, slate = anonymous, size ∝ their page loads · zoom in to separate visitors sharing a place`
+                : `${stats.dots.length} visitors · ${stats.subscriberDots} paying (solid gold), ${stats.signedInDots - stats.subscriberDots} free accounts (gold ring), ${stats.dots.length - stats.signedInDots} anonymous (slate ring) · ${stats.cityDots} on a city coordinate across ${stats.placeCount} locations, ${stats.approxDots} dashed on a country centroid · size ∝ their page loads · zoom in to separate visitors sharing a place`
             }
             style={{
               marginLeft: 6,
@@ -1400,13 +1462,23 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
             }}
           >
             <span
-              title="Signed-in account"
+              title="Paying subscriber (active or trialing)"
               style={{
                 width: 10,
                 height: 10,
                 borderRadius: 999,
                 background: MEMBER_FILL,
                 border: `1.5px solid ${MEMBER_STROKE}`,
+              }}
+            />
+            <span
+              title="Signed-in account, not paying"
+              style={{
+                width: 10,
+                height: 10,
+                borderRadius: 999,
+                background: FREE_FILL,
+                border: `1.5px solid ${FREE_STROKE}`,
               }}
             />
             <span
@@ -1423,13 +1495,18 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
           </button>
 
           {/* Solid vs hollow is the whole legend for identity, so spell the split
-              out in numbers too — a glance at the map can't count them. */}
+              out in numbers too — a glance at the map can't count them, and
+              "paying" is the number worth being able to read without counting. */}
           {stats.dots.length > 0 && (
             <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6 }}>
               <span style={{ fontFamily: "var(--font-mono)", color: HOME_THEME.gold }}>
-                {stats.signedInDots.toLocaleString()}
+                {stats.subscriberDots.toLocaleString()}
               </span>{" "}
-              signed in ·{" "}
+              paying ·{" "}
+              <span style={{ fontFamily: "var(--font-mono)", color: HOME_THEME.gold, opacity: 0.7 }}>
+                {(stats.signedInDots - stats.subscriberDots).toLocaleString()}
+              </span>{" "}
+              free ·{" "}
               <span style={{ fontFamily: "var(--font-mono)", color: VISITOR_INK }}>
                 {(stats.dots.length - stats.signedInDots).toLocaleString()}
               </span>{" "}

@@ -1,5 +1,104 @@
 # Changelog
 
+## 2026-08-13 - /levels: the whole scanner universe's CB/CW/PW on one page
+
+New: `app/levels/page.tsx`, `app/app/levels/route.ts`.
+Edited: `server-v2/server-with-proxy.js` (GET /proxy/scanner SELECT),
+`app-vite/src/App.tsx` (lazy route), `components/shared/GlobalToolbar.tsx`
+(nav item), `components/shared/NavMenu.tsx` (hamburger entry + glyph).
+
+### What
+
+Multi Greek draws CB / call wall / put wall for four tickers. /levels draws the
+same three levels for all 169 tickers in the scanner roster, five cards across,
+each one a price-scaled mini ladder with a live spot marker — the Multi Greek
+snapshot card, repeated across the universe.
+
+### How
+
+Multi Greek's data path could not be reused: it pulls a full option chain per
+ticker in the browser, and 169 chains is hundreds of requests. The numbers were
+already being computed server-side — `scanner-recorder.js` sweeps every roster
+ticker every 5 minutes and writes spot / expiry / cb / call_wall / put_wall /
+gex_flip / total_net_gex into `scanner_snapshots`. One `GET /proxy/scanner?any=1`
+paints the entire page.
+
+`any=1` (rather than today-only) means a weekend or pre-market load shows the
+last available sweep instead of an empty grid; those rows come back flagged
+`stale` and the tile says so in place of the expiry.
+
+**Proxy change, additive:** `/proxy/scanner`'s two SELECTs did not include `cb`
+or `cb_gex`, even though the recorder has always written them — so every caller
+got the two walls and no core. Both columns are now in the SELECT. Existing
+callers see two extra fields and nothing else changes. The alternative was a
+second request to `/proxy/walls` for a number already sitting in the row, at
+15-minute slot granularity instead of 5.
+
+**Live spot.** Levels step on the 5-minute sweep; the marker does not have to.
+A second poll (`/api/tt-quotes`, every 5s, chunked 40 symbols per request,
+paused when the tab is hidden) overlays a live last price per symbol, so the
+spot pill and the SPOT-VS-CB readout move continuously between sweeps while the
+rails hold still. A 0/0 last/mark pair is ignored rather than overwriting the
+sweep's spot with zero.
+
+Controls (saved to `localStorage` under `cb-levels-prefs-v1`): density 4/5/6/8
+across, sort by distance-to-CB / |net GEX| / A–Z, per-level toggles including
+the gamma flip (off by default), a ticker filter, and "Majors first" which pins
+`SCANNER_MAIN` to the top of whatever sort is active.
+
+The universe comes from `useScannerTickers()`, so a ticker added or removed on
+the owner Watchlists page changes this page on the next load with no redeploy.
+
+### Wiring
+
+Toolbar gets a 🧱 **Levels** item next to Multi Greek. Both halves of a new
+dashboard page are in place — the `"use client"` page under `app/` and the
+`lazy()` route in `app-vite/src/App.tsx` — plus `app/app/levels/route.ts` so a
+hard refresh on `/app/levels` serves the SPA shell instead of 404ing.
+
+## 2026-08-13 - Visitor map: gold means PAYING
+
+Edited: `server-v2/api-router.js` (`/api/page-visits` account join),
+`owner-vite/src/components/VisitorMap.tsx` (dot styling, legend, detail card),
+`owner-vite/src/pages/Visitors.tsx` (header stat, footnote).
+
+### What
+
+Gold meant "signed in", which put a free registration and a paying customer in
+the same colour — 39 gold dots for what is a much smaller number of actual
+subscribers. That made the map unable to answer the one question it is best
+placed to answer: where is the revenue.
+
+### How
+
+`/api/page-visits` now LEFT JOINs `subscriptions` alongside the existing user
+join — one query, no extra round trip — and returns `isSubscriber` (true for
+`active` / `trialing`, via the same `libDb.PAID_STATUSES` the rest of the app
+gates on, so the map can never call someone a customer that `/pricing` would
+still be selling to) plus the raw `subStatus`.
+
+Three dot states on two independent channels, hue and fill:
+
+| mark | meaning |
+|------|---------|
+| solid gold | paying subscriber |
+| gold ring, dark fill | signed-in account, not paying |
+| slate ring, dark fill | anonymous visitor |
+
+Hue now means "has an account", fill means "is paying". Two channels, so the
+distinction survives colour-blindness and 3px rendering — and the heaviest mark
+on the map is the rarest and most valuable state, which is the right way round.
+
+Paying dots also sort LAST, so they draw on top of the fan and win the click
+when a customer shares a city with twenty anonymous visitors.
+
+The footer legend counts all three (`N paying · N free · N anonymous`), the
+header gains a `subscribers` stat, and the detail card gets a **Subscription**
+row showing the raw status. That last one matters: "no subscription" and
+"canceled last week" are identical on the map and could not be less alike in
+what you would do about them, so a lapsed account reads `Free account ·
+canceled` rather than collapsing into a plain "no".
+
 ## 2026-08-13 - Visitor map: the cities were there the whole time
 
 Edited: `server-v2/api-router.js` (`clientGeoTrim`, new `decodeHeaderText`),

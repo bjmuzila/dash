@@ -93,11 +93,31 @@ const _tt = require('./proxy-tastytrade');
 const INDEX_SYMBOLS = new Set(['SPX', 'NDX', 'VIX', 'RUT', 'XSP']);
 const keyOf = (exp, strike, type) => `${exp}|${Number(strike)}|${type}`;
 const oiVolNet = (r) => Number(r.netGEX ?? 0) + Number(r.netVolGEX ?? 0);
-// Contract side isn't stored on far_cb_outcomes — it's inferred from the sign of
-// the GEX at the flag, the same convention the Watch-This cards use ("Call-side"
-// when gex_value >= 0). One helper so the probe, the popup and the live quote
-// enrichment can never disagree about which contract they mean.
-const optTypeOf = (row) => (Number(row.gex_value_at_flag) >= 0 ? 'C' : 'P');
+// Which contract a flag means: the OTM one at the strike. Strike ABOVE spot at
+// the flag is an OTM CALL, strike BELOW spot is an OTM PUT — that is what "far
+// OTM" meant when the row was written, and `side` already stores it.
+//
+// This used to key off the SIGN of gex_value_at_flag ("Call-side when >= 0"),
+// which is a statement about dealer gamma at the strike, not about which
+// contract is out of the money. A strike sitting well above spot with heavy put
+// OI carries negative net GEX, so the tracker was quoting and charting an ITM
+// put (e.g. IONQ $55P with spot at $46.52) instead of the $55 call the flag was
+// about. Spot vs strike decides the type; the GEX sign is only a last-resort
+// fallback for a row missing both `side` and `spot_at_flag`.
+//
+// One helper so the probe, the popup and the live quote enrichment can never
+// disagree about which contract they mean.
+const optTypeOf = (row) => {
+  const side = row?.side;
+  if (side === 'above') return 'C';
+  if (side === 'below') return 'P';
+  const strike = Number(row?.strike);
+  const spot = Number(row?.spot_at_flag);
+  if (Number.isFinite(strike) && Number.isFinite(spot) && spot > 0) {
+    return strike >= spot ? 'C' : 'P';
+  }
+  return Number(row?.gex_value_at_flag) >= 0 ? 'C' : 'P';
+};
 // Theta's option-history routes select strikes by dollars-around-spot, so a
 // far-OTM strike falls outside a default window — always pass the flag distance
 // plus a cushion.
@@ -246,6 +266,40 @@ async function ensureSchema() {
   `);
   await p.query(`CREATE INDEX IF NOT EXISTS idx_far_cb_contract_daily_lookup
                  ON far_cb_contract_daily (symbol, expiry, strike, opt_type, date);`);
+
+  // ── one-time repair: contracts recorded under the wrong opt_type ───────────
+  // Rows written while the type was inferred from the GEX sign point at the
+  // opposite contract (an ITM put where the flag meant an OTM call, and the
+  // mirror case). Drop those bars and clear premium_backfilled_at so the next
+  // backfill pass refills the correct contract from dxLink.
+  //
+  // Self-limiting: once the wrong-typed bars are gone both statements match
+  // nothing, so this is a no-op on every later boot.
+  const CORRECT_TYPE_SQL = `CASE WHEN o.side = 'above' THEN 'C'
+                                 WHEN o.side = 'below' THEN 'P'
+                                 WHEN o.strike >= o.spot_at_flag THEN 'C'
+                                 ELSE 'P' END`;
+  try {
+    const fixed = await p.query(`
+      UPDATE far_cb_outcomes o
+         SET premium_backfilled_at = NULL
+       WHERE EXISTS (
+         SELECT 1 FROM far_cb_contract_daily d
+          WHERE d.symbol = o.symbol AND d.strike = o.strike AND d.expiry = o.expiry
+            AND d.opt_type <> (${CORRECT_TYPE_SQL})
+       )`);
+    const dropped = await p.query(`
+      DELETE FROM far_cb_contract_daily d
+       USING far_cb_outcomes o
+       WHERE d.symbol = o.symbol AND d.strike = o.strike AND d.expiry = o.expiry
+         AND d.opt_type <> (${CORRECT_TYPE_SQL})`);
+    if (fixed.rowCount || dropped.rowCount) {
+      console.log(`[far-cb] opt_type repair — ${fixed.rowCount} flag(s) requeued, ${dropped.rowCount} wrong-side bar(s) dropped`);
+    }
+  } catch (e) {
+    console.warn('[far-cb] opt_type repair skipped:', e.message);
+  }
+
   _schemaReady = true;
   console.log(`[far-cb] schema ready — OTM threshold ${OTM_THRESHOLD_PCT}%, ${MAX_DTE_DAYS}d window`);
   return true;
@@ -631,7 +685,7 @@ async function runContractBackfill(opts = {}) {
   const force = !!opts.force;
 
   const { rows } = await p.query(
-    `SELECT symbol, strike, expiry, first_flagged, gex_value_at_flag, spot_at_flag
+    `SELECT symbol, strike, expiry, first_flagged, gex_value_at_flag, spot_at_flag, side
        FROM far_cb_outcomes
       WHERE first_flagged >= CURRENT_DATE - ($1::int * INTERVAL '1 day')
         AND ($2::bool
@@ -687,7 +741,7 @@ async function runContractProbe(opts = {}) {
 
   const today = etDateStr();
   const { rows } = await p.query(
-    `SELECT symbol, strike, expiry, spot_at_flag, gex_value_at_flag
+    `SELECT symbol, strike, expiry, spot_at_flag, gex_value_at_flag, side
        FROM far_cb_outcomes
       WHERE expiry >= $1`,
     [today]
@@ -802,9 +856,8 @@ async function fetchProbeRowsForDate(date) {
  * underlying close + day/day % change, alongside the watched contract's own
  * close + day/day $ and % change, from first_flagged through today.
  *
- * Contract type isn't stored directly — inferred from gex_value_at_flag's
- * sign, same convention the Watch-This cards already use ("Call-side" when
- * gex_value >= 0, else "Put-side").
+ * Contract type isn't stored directly — derived from the flag's side (strike
+ * above spot at the flag = the OTM call, below = the OTM put) by optTypeOf.
  */
 async function computeOutcomeDetail(symbol, strike, expiry) {
   if (!(await ensureSchema())) return { ok: false, error: 'no DB' };
@@ -960,7 +1013,7 @@ async function computeOutcomeDetail(symbol, strike, expiry) {
  *          where the option-history call is a stub.
  * Rows whose expiry has already passed have no live contract → both null.
  *
- * Type convention matches computeOutcomeDetail: gex_value_at_flag >= 0 → call.
+ * Type convention matches computeOutcomeDetail: strike above spot at flag → call.
  *
  * Cached 60s per contract — /proxy/far-cb-outcomes is polled by every open
  * scanner tab and Theta must not eat one call per row per poll.

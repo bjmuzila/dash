@@ -1936,22 +1936,39 @@ export default function GexMapTab() {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // One in-flight request at a time, and only the newest one is allowed to
+  // land. Without this: switching expiry twice quickly fires two overlapping
+  // fetches whose order of return is not the order they were sent, so the FIRST
+  // expiry's payload could overwrite the second's and leave the picker showing
+  // one session while the map draws another. Aborting also releases the server
+  // build immediately when you tab away mid-load, instead of paying for a
+  // response nothing will ever read.
+  const reqRef = useRef<AbortController | null>(null);
+  useEffect(() => () => reqRef.current?.abort(), []);
+
   const load = useCallback(async (d: string, x: string, quiet = false) => {
+    reqRef.current?.abort();
+    const ac = new AbortController();
+    reqRef.current = ac;
     if (!quiet) setLoading(true);
     try {
       const r = await fetch(
         `/api/gex-map?symbol=$SPX&date=${encodeURIComponent(d)}&expiry=${encodeURIComponent(x)}`,
-        { cache: "no-store" }
+        { cache: "no-store", signal: ac.signal }
       );
       if (!r.ok) throw new Error(`gex-map ${r.status}`);
       const j = (await r.json()) as MapPayload;
       if (j.error) throw new Error(j.error);
+      if (ac.signal.aborted) return;
       setData(j);
       setErr(null);
     } catch (e) {
+      // An abort is this component superseding itself, not a failure — showing
+      // "The user aborted a request" in the error card would be a lie.
+      if (ac.signal.aborted) return;
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
-      if (!quiet) setLoading(false);
+      if (!quiet && !ac.signal.aborted) setLoading(false);
     }
   }, []);
 

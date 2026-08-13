@@ -205,6 +205,30 @@ async function ensureVolColumn(p) {
     await p.query(`ALTER TABLE option_strike_gex_history ADD COLUMN IF NOT EXISTS symbol TEXT NOT NULL DEFAULT '${DEFAULT_SYMBOL}'`);
     await p.query('CREATE INDEX IF NOT EXISTS idx_osgh_symbol_ts ON option_strike_gex_history (symbol, timestamp)');
     await p.query('CREATE INDEX IF NOT EXISTS idx_osgh_symbol_lookup ON option_strike_gex_history (symbol, date, expiry, strike, timestamp DESC)');
+    // Snapshot-shaped index for the reads that do NOT care about strike.
+    //
+    // /api/gex-map's session catalog (COUNT(DISTINCT timestamp) GROUP BY date,
+    // expiry) and its minute spot path both walk a whole (symbol, date, expiry)
+    // partition — ~390 snapshots × ~260 strikes ≈ 100k rows for one SPX
+    // session. idx_osgh_symbol_lookup puts `strike` ahead of `timestamp`, so
+    // neither read could be satisfied in index order, and the spot path had to
+    // touch the heap for every one of those rows just to read one float.
+    //
+    // timestamp before strike, with spot INCLUDEd as a non-key payload, makes
+    // both index-only. INCLUDE needs PG 11+, and it gets its OWN try/catch so a
+    // server too old for it falls back to the plain 4-column index instead of
+    // aborting ensureVolColumn — which would leave columnEnsured false and
+    // re-run every ALTER on every single write.
+    try {
+      await p.query('CREATE INDEX IF NOT EXISTS idx_osgh_symbol_snap ON option_strike_gex_history (symbol, date, expiry, timestamp) INCLUDE (spot)');
+    } catch (e) {
+      console.warn('[gex-history] covering index unavailable, falling back:', e.message);
+      try {
+        await p.query('CREATE INDEX IF NOT EXISTS idx_osgh_symbol_snap ON option_strike_gex_history (symbol, date, expiry, timestamp)');
+      } catch (e2) {
+        console.warn('[gex-history] snapshot index create failed:', e2.message);
+      }
+    }
     columnEnsured = true;
   } catch (e) {
     console.warn('[gex-history] ensure net_vol_gex column failed:', e.message);

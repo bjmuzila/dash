@@ -167,11 +167,14 @@ export default function Visitors() {
   // reaching into the map's internal aggregate, and deliberately counted the same
   // way the map does — one dot per visitor per location — so the header and the
   // map can't disagree.
-  const { countries, plotted, locations, accounts, geoCoded } = useMemo(() => {
+  const { countries, plotted, locations, accounts, subscribers, geoCoded } = useMemo(() => {
     const c = new Set<string>();
     const places = new Set<string>();
     const dots = new Set<string>();
     const signedIn = new Set<string>();
+    // Paying, not merely registered — the same distinction the map's gold dots
+    // make. Counted over VISITORS, so one customer with 500 loads is one.
+    const paying = new Set<string>();
     let geo = 0;
     let anon = 0;
     for (const v of visits) {
@@ -187,6 +190,7 @@ export default function Visitors() {
             ? `ip:${v.ip}`
             : `anon:${++anon}`;
       if (v.userEmail || v.userId) signedIn.add(vid);
+      if (v.isSubscriber) paying.add(vid);
       if (typeof v.lat === "number" && typeof v.lon === "number") {
         geo++;
         const pk = `${v.lat.toFixed(2)},${v.lon.toFixed(2)}`;
@@ -194,7 +198,10 @@ export default function Visitors() {
         dots.add(`${pk}|${vid}`);
       }
     }
-    return { countries: c.size, plotted: dots.size, locations: places.size, accounts: signedIn.size, geoCoded: geo };
+    return {
+      countries: c.size, plotted: dots.size, locations: places.size,
+      accounts: signedIn.size, subscribers: paying.size, geoCoded: geo,
+    };
   }, [visits]);
 
   // The map ALSO plots everyone whose row has a country but no coordinate, on
@@ -272,6 +279,7 @@ export default function Visitors() {
           <Stat label="visitors plotted" value={(plotted + countryLevel).toLocaleString()} />
           <Stat label="locations" value={locations.toLocaleString()} />
           {countryLevel > 0 && <Stat label="country-level" value={countryLevel.toLocaleString()} />}
+          <Stat label="subscribers" value={subscribers.toLocaleString()} />
           <Stat label="signed in" value={accounts.toLocaleString()} />
 
           {/* Range picker — server-side window, so a wider range costs a query,
@@ -363,9 +371,10 @@ export default function Visitors() {
         <div style={{ fontSize: 14, color: T.textSecondary, opacity: 0.55, lineHeight: 1.6 }}>
           Opens on <b>All</b> — every load ever recorded. Narrow the range to look at a window.{" "}
           One dot per visitor, not per city — visitors sharing a location are fanned out around it,
-          so zoom in to separate them. A solid gold dot is a signed-in account (click it for the
-          email, Discord, user id, member-since and last login); a hollow slate dot is an anonymous
-          visitor, known only by IP. A <b>dashed, dimmed</b> dot has no city on its row at all and is
+          so zoom in to separate them. A solid gold dot is a PAYING subscriber (active or
+          trialing); a gold ring is a signed-in account that is not paying; a slate ring is an
+          anonymous visitor, known only by IP. Click any dot for the email, Discord, user id,
+          member-since, last login and subscription status. A <b>dashed, dimmed</b> dot has no city on its row at all and is
           fanned out around the middle of its country — a real visitor at a position we are guessing.
           Rows before 13 Aug 2026 lost their coordinates on the way into the database, but kept their
           city name, so <code>backfill-visit-geo.js</code> geocodes them back to a real place; only
