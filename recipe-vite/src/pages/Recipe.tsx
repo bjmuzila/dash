@@ -190,6 +190,17 @@ export default function Recipe() {
 
   const heroSrc = r ? imageSrc(r) : null
 
+  /**
+   * The hero window is sized to the PHOTO, once it loads.
+   *
+   * A fixed 4:3 window was cropping the dish out of every TikTok frame — those
+   * are 9:16, so a quarter of the picture was above the window and a quarter
+   * below. Clamped at both ends: a very tall frame would otherwise push the
+   * title off the screen, and a panorama would leave a letterbox slot.
+   */
+  const [shot, setShot] = useState<number | null>(null)
+  const heroRatio = shot ? Math.min(Math.max(shot, 0.74), 1.6) : 4 / 3
+
   const totalTime = useMemo(
     () => (r ? (r.prep_minutes ?? 0) + (r.cook_minutes ?? 0) : 0),
     [r],
@@ -215,16 +226,38 @@ export default function Recipe() {
       {/* ── Hero ─────────────────────────────────────────────────────────── */}
       <div style={{
         position: 'relative',
-        // 4:3 rather than a fixed height: a fixed height crops portrait food
-        // photos through the middle of the plate on a narrow phone.
-        aspectRatio: '4 / 3',
-        maxHeight: 420,
+        // Matched to the photo (see heroRatio) rather than fixed: a fixed
+        // window crops portrait food photos through the middle of the plate.
+        aspectRatio: String(heroRatio),
+        maxHeight: 520,
         background: T.paperSunk,
         overflow: 'hidden',
       }}>
         {heroSrc
           ? <>
-              <img src={heroSrc} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              {/* A TikTok frame is 9:16 and this window is 4:3, so `cover` ate
+                  the top and bottom of every one of them — the dish cropped out
+                  of a shot whose whole point is the dish. The photo is now
+                  CONTAINED, with a blurred blown-up copy of itself behind it to
+                  fill the sides. Nothing is cut off, and there are no black
+                  bars: the filler is always the right colour because it is the
+                  same picture. */}
+              <img src={heroSrc} alt="" aria-hidden="true" style={{
+                position: 'absolute', inset: 0, width: '100%', height: '100%',
+                objectFit: 'cover', filter: 'blur(26px) saturate(1.15) brightness(0.55)',
+                // Scaled past the edges so the blur's soft border doesn't show
+                // as a pale seam against the frame.
+                transform: 'scale(1.18)',
+              }} />
+              <img
+                src={heroSrc}
+                alt=""
+                onLoad={(e) => {
+                  const el = e.currentTarget
+                  if (el.naturalWidth && el.naturalHeight) setShot(el.naturalWidth / el.naturalHeight)
+                }}
+                style={{ position: 'relative', width: '100%', height: '100%', objectFit: 'contain' }}
+              />
               {/* Without this the photo ends on a hard horizontal edge against
                   the near-black page and reads as a rendering seam. */}
               <div style={{
