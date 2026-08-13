@@ -100,7 +100,19 @@ function scoreCandidate(c, city, region) {
   const a1 = String(c.admin1 || '').toLowerCase();
   const wantRegion = String(region || '').toLowerCase().replace(/\s+(region|province|d\.c\.)$/, '').trim();
   if (name === city.toLowerCase()) score += 100;
-  if (wantRegion && a1 && (a1.includes(wantRegion) || wantRegion.includes(a1))) score += 60;
+  if (wantRegion && a1) {
+    // PREFIX, not substring. `includes` matched "Virginia" inside "West
+    // Virginia" and sent Washington, VA to Washington, WV. The real mismatch
+    // between the two vocabularies is always a SUFFIX Open-Meteo adds
+    // ("Île-de-France Region", "Beijing Municipality", "Brittany Region"), so a
+    // prefix test keeps every one of those and drops the false positive.
+    if (a1.startsWith(wantRegion) || wantRegion.startsWith(a1)) score += 60;
+    // And an outright disagreement is evidence AGAINST this candidate, not
+    // merely the absence of evidence for it — otherwise a bigger town in the
+    // wrong state wins on population alone. A penalty only reorders candidates;
+    // the best-scoring one is still taken even if every score goes negative.
+    else score -= 40;
+  }
   // Population is the tiebreak of last resort: between two same-named towns in
   // the right country, the one people actually live in is the better guess.
   score += Math.min(20, Math.log10((c.population || 0) + 1) * 3);
@@ -193,16 +205,24 @@ async function geocode(city, region, country) {
   const failed = [];
 
   for (const p of targets) {
-    const hit = await geocode(p.city, p.region, p.country);
+    // Geocode the REPAIRED name, not the stored one. On a real run pass 1 has
+    // already written it, but on a --dry run the table still holds `BogotÃ¡` —
+    // and a dry run whose failure list is ten places that would actually
+    // succeed is worse than no dry run at all. Decoding here makes the two
+    // modes agree, and keeps --no-repair working on a table nobody has fixed.
+    const city = undoMojibake(p.city);
+    const region = undoMojibake(p.region);
+    const shown = city === p.city ? city : `${city} (was ${p.city})`;
+    const hit = await geocode(city, region, p.country);
     await sleep(PAUSE_MS);
     if (hit.error) {
-      failed.push({ ...p, why: hit.error });
-      console.log(`${label}  ✗ ${p.city}, ${p.region || '—'}, ${p.country} (${p.rows} rows) — ${hit.error}`);
+      failed.push({ ...p, city, region, why: hit.error });
+      console.log(`${label}  ✗ ${shown}, ${region || '—'}, ${p.country} (${p.rows} rows) — ${hit.error}`);
       continue;
     }
     ok++;
     if (DRY) {
-      console.log(`${label}  ✓ ${p.city}, ${p.region || '—'}, ${p.country} (${p.rows} rows) → ${hit.lat}, ${hit.lon}  [${hit.matched}]`);
+      console.log(`${label}  ✓ ${shown}, ${region || '—'}, ${p.country} (${p.rows} rows) → ${hit.lat}, ${hit.lon}  [${hit.matched}]`);
       continue;
     }
     const res = await pool.query(

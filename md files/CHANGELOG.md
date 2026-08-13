@@ -47,6 +47,25 @@ Run it:
     docker compose exec -T dashboard node server-v2/scripts/backfill-visit-geo.js --dry
     docker compose exec -T dashboard node server-v2/scripts/backfill-visit-geo.js
 
+### Dry-run findings, folded back in
+
+The first `--dry` on prod surfaced two flaws in this script, both fixed here:
+
+- **The dry run lied about 10 places.** Pass 2 re-reads city names from the
+  table, and on a dry run pass 1 has written nothing — so it geocoded
+  `BogotÃ¡` and reported "no results" for the exact ten places the real run
+  would have got right. Pass 2 now decodes the name itself before geocoding, so
+  `--dry` predicts the real outcome and `--no-repair` works on an unrepaired
+  table. 135/145 → 145/145.
+- **Washington, Virginia landed in West Virginia.** The region tiebreak used
+  `includes`, and "West Virginia" contains "Virginia", so the bigger town won a
+  60-point bonus it had not earned. It is a `startsWith` test now — every real
+  mismatch between Cloudflare's vocabulary and the geocoder's is a SUFFIX the
+  geocoder adds ("Île-de-France Region", "Beijing Municipality") — plus a
+  −40 penalty when the two regions genuinely disagree, so a bigger town in the
+  wrong state can no longer win on population alone. The penalty only reorders
+  candidates; the best one is still taken even when every score goes negative.
+
 ### Notes
 
 The dashed country-level dots stay in the map for what genuinely has no city —
