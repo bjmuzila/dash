@@ -1,60 +1,134 @@
 # Changelog
 
-## 2026-08-13 - /levels: the whole scanner universe's CB/CW/PW on one page
+## 2026-08-13 - The 2-day free trial was advertised but never applied
 
-New: `app/levels/page.tsx`, `app/app/levels/route.ts`.
-Edited: `server-v2/server-with-proxy.js` (GET /proxy/scanner SELECT),
-`app-vite/src/App.tsx` (lazy route), `components/shared/GlobalToolbar.tsx`
-(nav item), `components/shared/NavMenu.tsx` (hamburger entry + glyph).
+Edited: `app/api/stripe/checkout/route.ts` (added `subscription_data.trial_period_days`).
 
-### What
+The landing page has said "Start your 2-day free trial · No charge up front"
+(and the nav "START FREE TRIAL") since launch. Nothing behind it ever granted a
+trial — every signup was charged the full amount at checkout. Verified in
+Stripe: **zero** subscriptions have ever reached `trialing` status.
 
-Multi Greek draws CB / call wall / put wall for four tickers. /levels draws the
-same three levels for all 169 tickers in the scanner roster, five cards across,
-each one a price-scaled mini ladder with a live spot marker — the Multi Greek
-snapshot card, repeated across the universe.
+Three separate reasons it was dead:
 
-### How
+1. `checkout/route.ts` deliberately omitted `trial_period_days`, with a comment
+   saying the trial "is configured in Stripe on the Price." It is not —
+   `recurring.trial_period_days` is `—` (unset) on both the monthly
+   (`price_1Tm0gv…`) and yearly (`price_1Tmv80…`) prices. Stripe also now
+   flags that field **Legacy**.
+2. The **Trial Offer** objects that DO exist on the CB Edge Access product
+   ("trial2" and "2 Day Free Trial") are Stripe's new preview-API trials.
+   Per Stripe's docs they are "only supported when creating subscriptions
+   directly using the Subscriptions API" — Checkout, Payment Links and
+   Elements ignore them outright. They also require API version
+   `2026-03-25.preview` and `billing_mode: flexible`, neither of which this
+   integration sets. Both are configured as **1 month**, not 2 days, and
+   transition to $120/mo rather than the advertised $45.
+3. The CTA links to `/pricing?from=landing&trial=1`, but nothing in
+   `app/pricing/page.tsx` reads `trial` — it is dead attribution.
 
-Multi Greek's data path could not be reused: it pulls a full option chain per
-ticker in the browser, and 169 chains is hundreds of requests. The numbers were
-already being computed server-side — `scanner-recorder.js` sweeps every roster
-ticker every 5 minutes and writes spot / expiry / cb / call_wall / put_wall /
-gex_flip / total_net_gex into `scanner_snapshots`. One `GET /proxy/scanner?any=1`
-paints the entire page.
+Fix: set the trial on the Checkout Session, which is the one mechanism Checkout
+honours.
 
-`any=1` (rather than today-only) means a weekend or pre-market load shows the
-last available sweep instead of an empty grid; those rows come back flagged
-`stale` and the tile says so in place of the expiry.
+```js
+subscription_data: {
+  metadata: { clerk_user_id: userId },
+  ...(plan === "monthly" ? { trial_period_days: 2 } : {}),
+},
+```
 
-**Proxy change, additive:** `/proxy/scanner`'s two SELECTs did not include `cb`
-or `cb_gex`, even though the recorder has always written them — so every caller
-got the two walls and no core. Both columns are now in the SELECT. Existing
-callers see two extra fields and nothing else changes. The alternative was a
-second request to `/proxy/walls` for a number already sitting in the row, at
-15-minute slot granularity instead of 5.
+**Monthly only** — yearly is unchanged and still bills immediately.
+`payment_method_collection: "always"` is kept, so the card is captured up front
+and the subscription converts on its own at trial end. No app-side gating
+changes were needed: `PAID_STATUSES` in `lib/db.ts` is already
+`{"active","trialing"}`, the Supabase paid-claim hook checks
+`status in ('active','trialing')`, and the webhook syncs on
+`customer.subscription.created/updated`. Stripe routes were never ported into
+`server-v2/api-router.js`, so the Next route is the live path.
 
-**Live spot.** Levels step on the 5-minute sweep; the marker does not have to.
-A second poll (`/api/tt-quotes`, every 5s, chunked 40 symbols per request,
-paused when the tab is hidden) overlays a live last price per symbol, so the
-spot pill and the SPOT-VS-CB readout move continuously between sweeps while the
-rails hold still. A 0/0 last/mark pair is ignored rather than overwriting the
-sweep's spot with zero.
+Still open, not touched here: the two Trial Offer objects on the product are
+inert but **cannot be removed** — the preview Trial Offer API exposes only
+create / retrieve / list (no update, no delete, no archive), which is why the
+dashboard's overflow menu offers nothing but "Copy trial ID". They sit there
+permanently; they attach to nothing, so the cost is confusion only. Do not go
+looking for them as the source of a trial. The product also carries five
+prices including a stray $0.00/mo. Separately, Google sign-in is
+returning `redirect_uri_mismatch` for `https://www.cbedge.net/auth/callback` —
+that URI is not registered on the Google Cloud OAuth client.
 
-Controls (saved to `localStorage` under `cb-levels-prefs-v1`): density 4/5/6/8
-across, sort by distance-to-CB / |net GEX| / A–Z, per-level toggles including
-the gamma flip (off by default), a ticker filter, and "Majors first" which pins
-`SCANNER_MAIN` to the top of whatever sort is active.
+## 2026-08-13 - /levels: collapsible tiles, and CB stops eating the walls
 
-The universe comes from `useScannerTickers()`, so a ticker added or removed on
-the owner Watchlists page changes this page on the next load with no redeploy.
+Edited: `app/levels/page.tsx` (rebuilt), `server-v2/computation/gex-calculator.js`
+(`findCallWall` / `findPutWall` take an optional `exclude`),
+`server-v2/scanner-recorder.js` (re-picks both walls with the CB excluded).
 
-### Wiring
+### CB was eating a wall
 
-Toolbar gets a 🧱 **Levels** item next to Multi Greek. Both halves of a new
-dashboard page are in place — the `"use client"` page under `app/` and the
-`lazy()` route in `app-vite/src/App.tsx` — plus `app/app/levels/route.ts` so a
-hard refresh on `/app/levels` serves the SPA shell instead of 404ing.
+`findCoreBullseye()` takes the largest |net GEX| strike anywhere on the chain;
+`findCallWall()` takes the largest +GEX strike above spot. Nothing stopped them
+landing on the same strike — and the biggest node on a board very often IS the
+biggest positive node above spot — so a row went into `scanner_snapshots` whose
+core and call wall were one number. /levels drew one line where there should
+have been two, and the wall price actually has to trade through AFTER the core
+was never recorded at all. Same collision below spot with the put wall (AAL:
+CB 15 sitting exactly on PW 15).
+
+`findCallWall` / `findPutWall` now accept `{ exclude }` — a strike taken out of
+the running before the pick — and `scanner-recorder.js` computes the CB first,
+then re-picks both walls with it excluded. When they were already different this
+is a no-op (the CB was not going to win that reduce anyway); when they collided
+the wall falls back to the next strike out: 2nd-highest +GEX above spot,
+2nd-most-negative below it.
+
+Deliberately **opt-in**. Callers that want the plain definition — the SPX live
+feed, the GEX chart, Multi Greek — pass nothing and are untouched. Rows already
+in the DB keep what they were recorded with; the page renders a coincident pair
+as one line badged `CB·CW` rather than two stacked badges.
+
+### The page
+
+Tiles are **collapsed by default**. The header band carries ticker + CB + CW +
+PW + a DTE chip on one ~34px line, so the whole roster fits in about a screen and
+a half and you open only what you want to look at. Expand all / Collapse all in
+the toolbar; a live filter opens whatever matched rather than making you click
+each one.
+
+**Nothing in the band can be clipped.** The first cut sized it as a flex row with
+fixed-width ticker and expiry and three values sharing the remainder — so a tile
+with wide numbers (`ASML 1,830 / 1,900 / 1,820`, `SPX 7,820`) overflowed and the
+card's `overflow:hidden` sliced it. Every element is now `flex:0 0 auto` +
+`white-space:nowrap` with a flexible spacer eating the slack, and pieces are
+REMOVED at thresholds rather than squeezed:
+
+| card width | what goes |
+|-----------|-----------|
+| ≤268px | expiry / DTE chip |
+| ≤232px | put wall |
+| ≤196px | call wall |
+| ≤168px | the CB/CW/PW letters (colour still names them) |
+
+Ticker, CB and the state chip never leave. The thresholds are `@container`
+queries measured against the CARD, not the window, so the same ladder fires
+whether the tile got narrow because the browser did, because 8-across was picked,
+or because a dock opened. That — plus `:hover` on the band — is why this page
+ships a `<style>` block; every colour in it is interpolated from `homeTheme` /
+`LEVEL_COLORS`, and there are no colour literals in the file.
+
+Cards read as separate objects now: near-opaque gradient fill, a 16% hairline, a
+real drop shadow, 14px gutters. **No left edge accent** — where spot sits is
+carried by a chip beside the ticker (`CORE` / `CW` / `PW`) and a faint wash on
+the band itself.
+
+169 tiles get landmarks from the roster's own lanes — Main / Shares / Spreads /
+Option volume, plus Other for anything added on the owner Watchlists page that
+predates the fallback lists. Lane headers are sticky and collapsible; Main opens
+by default, the rest stay shut, and the choice is saved. "Majors first" is gone,
+replaced by the lane grouping.
+
+Everything else is unchanged: one `/proxy/scanner?any=1` for the levels (60s),
+`/api/tt-quotes` chunked 40-at-a-time for live spot (5s, paused when hidden),
+density 4/5/6/8, sort by distance-to-CB / |net GEX| / A–Z, per-level toggles
+including the gamma flip. Prefs key bumped to `cb-levels-prefs-v2`.
 
 ## 2026-08-13 - Visitor map: gold means PAYING
 

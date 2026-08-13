@@ -26,7 +26,7 @@
 
 const { useTheta } = require('./config/data-source');
 const thetaAdapter = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
-const { computeGexSummary } = require('./computation/gex-calculator');
+const { computeGexSummary, findCallWall, findPutWall } = require('./computation/gex-calculator');
 
 const INTERVAL_MINS = Number(process.env.SCANNER_INTERVAL_MINS || 5);
 const MIN_STRIKES = 10; // guard: skip a ticker whose chain came back too thin
@@ -306,17 +306,27 @@ async function snapshotTicker(root, { pick = null } = {}) {
 
   const summary = computeGexSummary(gexRows, spot);
   const cb = findCoreBullseye(summary.rows);
+  // THREE DISTINCT LEVELS. summary.callWall / summary.putWall are picked without
+  // knowing what the CB is, and the CB is very often the same strike as one of
+  // them (the biggest node on the chain is usually the biggest positive node
+  // above spot). That wrote a row whose call wall and core were one number, so a
+  // levels view drew a single line and the wall price has to trade through AFTER
+  // the core was never recorded at all. Re-pick both walls with the CB excluded:
+  // when they were already different this is a no-op, and when they collided the
+  // wall falls back to the next strike out.
+  const callWall = findCallWall(summary.rows, spot, { exclude: cb });
+  const putWall = findPutWall(summary.rows, spot, { exclude: cb });
   return {
     symbol: root,
     spot,
     expiry,
     totalNetGex: summary.totalNetGex,
-    callWall: summary.callWall,
-    putWall: summary.putWall,
+    callWall,
+    putWall,
     gexFlip: summary.gexFlip,
     cb,
-    callWallGex: gexAtStrike(summary.rows, summary.callWall),
-    putWallGex: gexAtStrike(summary.rows, summary.putWall),
+    callWallGex: gexAtStrike(summary.rows, callWall),
+    putWallGex: gexAtStrike(summary.rows, putWall),
     cbGex: gexAtStrike(summary.rows, cb),
     strikes: summary.rows.length,
   };

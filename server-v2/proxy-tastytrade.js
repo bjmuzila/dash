@@ -70,6 +70,21 @@ const RECOMPUTE_MS_OFFHOURS = Number(process.env.RECOMPUTE_MS_OFFHOURS || 15000)
 // depend on dxFeed reliably pushing the reset (it does so only sometimes).
 const SESSION_ROLL_HOUR_ET = Number(process.env.SESSION_ROLL_HOUR_ET || 18);
 const SESSION_ROLL_CHECK_MS = Number(process.env.SESSION_ROLL_CHECK_MS || 60000);
+// ── Expiry lock ──────────────────────────────────────────────────────────────
+// `this.expiry` is ONE value for the whole process: it selects what dxLink is
+// subscribed to, what every connected browser is shown, AND what
+// gex-history-writer stamps on the per-strike rows it persists. There is no
+// per-client expiry. So any client that changes it silently redirects the
+// recorder, and the 0DTE readers (/api/gex-map's Tape Field, the ES-Candles
+// gamma trail) draw a hole for every minute it was pointed elsewhere — which is
+// exactly what happened on 2026-08-13.
+//
+// With the lock on, only the feed itself may move the expiry (startup, the
+// auto-roll, a reconnect). Client requests are logged and dropped. Set
+// GEX_EXPIRY_LOCK=0 to restore the old free-for-all without a code change —
+// this is a customer-visible restriction (the DTE picker stops taking effect),
+// so it needs an off switch that does not require a rebuild.
+const EXPIRY_LOCK = process.env.GEX_EXPIRY_LOCK !== '0';
 // Idle mode persisted across restarts/reconnects so a page reload reflects it.
 const IDLE_STATE_FILE = path.join(__dirname, '.idle-state.json');
 // Last RTH cash-basis (broker spot − esFut), persisted so an overnight restart
@@ -2480,8 +2495,16 @@ class TastytradeProxy {
     console.log(`[FEED] ${SYMBOL}: ${contracts.length} contracts, ${expirations.length} expirations (${liveExpirations.length} today-forward)`);
     console.log(`[FEED] expirations: ${liveExpirations.slice(0, 8).join(', ')}${liveExpirations.length > 8 ? ' …' : ''}`);
 
-    // Default expiry = nearest (0DTE if present).
-    this.expiry = liveExpirations[0] || expirations[0] || '';
+    // Default expiry = nearest (0DTE if present). Assigned directly rather than
+    // through setExpiry() because the subscription is built from scratch right
+    // after this — there is nothing to re-gate or re-subscribe yet. Logged with
+    // the same `[FEED] expiry … (source)` shape so a reconnect that quietly
+    // moves the expiry back to 0DTE is greppable alongside every other change.
+    const bootExpiry = liveExpirations[0] || expirations[0] || '';
+    if (bootExpiry !== this.expiry) {
+      console.log(`[FEED] expiry ${this.expiry || '(none)'} → ${bootExpiry} (feed-bootstrap)`);
+    }
+    this.expiry = bootExpiry;
     marketState.setExpiry(this.expiry);
 
     // Rebuild today's dealer inventory from flow_prints (already persisted by
@@ -3761,8 +3784,37 @@ class TastytradeProxy {
     return { spot, spotAgeMs: this.getStrikeGrowthSpotAgeMs(up), expiries };
   }
 
-  setExpiry(expiry) {
+  /**
+   * Change the process-wide active expiry.
+   *
+   * @param {string} expiry YYYY-MM-DD
+   * @param {string} [source] WHO asked. 'auto-roll' | 'startup' | 'reconnect'
+   *   for the feed's own moves; anything starting with 'client' for a request
+   *   that arrived from a browser (WS SET_EXPIRY / POST /proxy/expirations).
+   *
+   * The source is not decoration. Before it existed, an expiry change left no
+   * trace at all in the logs, so a session that had been silently steered off
+   * 0DTE was indistinguishable from a feed outage and could only be diagnosed
+   * by querying option_strike_gex_history after the fact.
+   */
+  setExpiry(expiry, source = 'unknown') {
     if (!expiry || expiry === this.expiry) return;
+    // Client-sourced changes are refused while the lock is on — see EXPIRY_LOCK.
+    // Throttled to one line a minute per source: a reconnecting client that has
+    // 1DTE persisted in its UI re-sends this on every reconnect, and that loop
+    // must not be able to fill the log.
+    if (EXPIRY_LOCK && String(source).startsWith('client')) {
+      const now = Date.now();
+      if (now - (this._expiryDenyLoggedAt ?? 0) > 60_000) {
+        this._expiryDenyLoggedAt = now;
+        console.warn(
+          `[FEED] expiry change DENIED ${this.expiry} → ${expiry} (${source}) — `
+          + 'feed is locked to the recorder\'s expiry; set GEX_EXPIRY_LOCK=0 to allow'
+        );
+      }
+      return;
+    }
+    console.log(`[FEED] expiry ${this.expiry || '(none)'} → ${expiry} (${source})`);
     this.expiry = expiry;
     marketState.setExpiry(expiry);
     // If we've already warmed this expiry once, its OI/greeks are cached on the
@@ -4539,7 +4591,13 @@ class TastytradeProxy {
     const { ymd } = todayYmd();
     const nowEt = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
     const afterClose = nowEt.getHours() > 16 || (nowEt.getHours() === 16 && nowEt.getMinutes() >= 15);
-    const shouldRoll = this.expiry < ymd || (this.expiry === ymd && afterClose);
+    // TWO different rolls, and they do NOT want the same target expiry:
+    //   stale  — this.expiry is yesterday or older (the overnight date change).
+    //            The correct landing spot is TODAY's 0DTE.
+    //   expired — this.expiry IS today and 4:15pm ET has passed, so today's
+    //            contracts are dead. Only then do we want the NEXT session.
+    const staleRoll = this.expiry < ymd;
+    const shouldRoll = staleRoll || (this.expiry === ymd && afterClose);
     if (shouldRoll) {
       const expirations = [...new Set([...this.contracts.values()].map(c => c.expiration))].sort();
       const live = expirations.filter((e) => e >= ymd);
@@ -4550,10 +4608,24 @@ class TastytradeProxy {
       // point at the wrong dates and made re-selecting the stale entry bounce
       // straight back here on the next tick.
       if (live.length) marketState.setExpirations(live);
-      const next = live.find(e => e > ymd) || live[0];
+      // `live` is sorted and filtered to >= ymd, so live[0] IS today's 0DTE
+      // whenever today has contracts (and the nearest forward expiry when it
+      // does not — an early roll on a holiday still lands somewhere real).
+      //
+      // This used to be `live.find(e => e > ymd) || live[0]` for BOTH cases,
+      // which skips today entirely on a stale roll: at 00:22 ET on 2026-08-13
+      // it rolled 2026-08-12 → 2026-08-14, so the whole session's per-strike
+      // history was stamped with tomorrow's expiry and every 0DTE reader
+      // (/api/gex-map's Tape Field, the ES-Candles gamma trail) drew holes
+      // where the recorder had in fact been writing at full cadence the entire
+      // time. `find(e => e > ymd)` is correct ONLY for the afterClose roll,
+      // which is the one case where today is genuinely done.
+      const next = staleRoll
+        ? (live[0] || live.find((e) => e > ymd))
+        : (live.find((e) => e > ymd) || live[0]);
       if (next && next !== this.expiry) {
-        console.log(`[FEED] auto-rolling expiry ${this.expiry} → ${next}`);
-        this.setExpiry(next);
+        // setExpiry logs the transition itself now, with the source tag.
+        this.setExpiry(next, 'auto-roll');
         return; // recompute next tick with new expiry
       }
     }

@@ -351,13 +351,31 @@ async function handleProxyRest(req, res) {
     case '/proxy/expirations':
       if (req.method === 'POST') {
         // POST { expiry: 'YYYY-MM-DD' } to manually switch the active expiry.
+        //
+        // Same caveat as the WS SET_EXPIRY path above: one process-wide value
+        // that also steers the history recorder. Tagged 'client-http' so
+        // setExpiry() drops it while GEX_EXPIRY_LOCK is on, and reports the
+        // refusal rather than answering ok:true for a switch that did not
+        // happen — a silent 200 here is how a caller ends up believing the feed
+        // moved when it did not.
         let body = '';
         req.on('data', (d) => { body += d; });
         req.on('end', () => {
           try {
             const { expiry } = JSON.parse(body);
-            if (expiry && proxy) { proxy.setExpiry(expiry); sendJson(res, 200, { ok: true, expiry }); }
-            else sendJson(res, 400, { error: 'missing expiry or proxy not ready' });
+            if (!expiry || !proxy) {
+              sendJson(res, 400, { error: 'missing expiry or proxy not ready' });
+              return;
+            }
+            proxy.setExpiry(expiry, 'client-http');
+            const active = proxy.expiry;
+            if (active === expiry) sendJson(res, 200, { ok: true, expiry: active });
+            else sendJson(res, 409, {
+              ok: false,
+              expiry: active,
+              requested: expiry,
+              error: 'expiry is locked to the feed/recorder — set GEX_EXPIRY_LOCK=0 to allow client switching',
+            });
           } catch { sendJson(res, 400, { error: 'invalid JSON' }); }
         });
         return true;
@@ -3563,10 +3581,16 @@ async function main() {
 
   // Route client commands (e.g. expiry switch) to the live proxy.
   // Dashboard sends { type:'SET_EXPIRY', expiry }; also accept 'setExpiry'.
+  //
+  // The expiry is process-wide, not per-connection, and it also selects what
+  // gex-history-writer stamps on the rows it persists — so this message lets any
+  // one browser redirect the recorder for everybody. It is tagged 'client-ws' and
+  // dropped by setExpiry() while GEX_EXPIRY_LOCK is on (the default); see the
+  // EXPIRY_LOCK block in proxy-tastytrade.js.
   wss.on('client-message', ({ parsed }) => {
     const t = parsed?.type;
     if ((t === 'SET_EXPIRY' || t === 'setExpiry') && proxy) {
-      proxy.setExpiry(parsed.expiry);
+      proxy.setExpiry(parsed.expiry, 'client-ws');
     }
     if ((t === 'SET_IDLE' || t === 'setIdle') && proxy) {
       proxy.setIdle(!!parsed.idle);

@@ -56,10 +56,17 @@ export async function POST(req: NextRequest) {
       // clerk_user_id on the session is the webhook's fallback mapping if the
       // customer lookup ever misses.
       metadata: { clerk_user_id: userId },
-      // No trial_period_days here on purpose: the free trial is configured in
-      // Stripe on the Price. Checkout applies it automatically. Setting it here
-      // would override the dashboard value.
-      subscription_data: { metadata: { clerk_user_id: userId } },
+      // 2-day free trial, MONTHLY ONLY — the landing CTA promises "2-day free
+      // trial · no charge up front". It has to be set HERE: Checkout ignores
+      // the product-level Trial Offer objects configured in the Stripe
+      // dashboard (those are Subscriptions-API only), and the legacy
+      // price-level trial field is unset on both prices.
+      // payment_method_collection stays "always" so the card is still captured
+      // up front and the sub converts automatically when the trial ends.
+      subscription_data: {
+        metadata: { clerk_user_id: userId },
+        ...(plan === "monthly" ? { trial_period_days: 2 } : {}),
+      },
       payment_method_collection: "always",
       allow_promotion_codes: true,
       success_url: `${origin}/checkout/success`,

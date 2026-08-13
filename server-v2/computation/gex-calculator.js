@@ -188,16 +188,40 @@ function oiVolNet(r) {
   return Number(r.netGEX ?? 0) + Number(r.netVolGEX ?? 0);
 }
 
+/**
+ * `exclude` — a strike to take OUT of the running before picking a wall.
+ *
+ * WHY. The Core Bullseye (largest |net GEX| ANYWHERE on the chain, computed
+ * separately — see scanner-recorder.findCoreBullseye) is very often the same
+ * strike as the call wall: the biggest node on the board is frequently the
+ * biggest positive node above spot. Nothing stopped the two from landing on one
+ * another, so a levels view drew CB and CW as one line and the second-biggest
+ * wall — the level price actually has to get through after the core — was never
+ * shown at all. Same story below spot with the put wall.
+ *
+ * Passing the CB in as `exclude` makes the wall fall back to the NEXT strike:
+ * the 2nd-highest +GEX above spot, or the 2nd-most-negative below it. When CB
+ * is not the wall (the usual case) excluding it changes nothing, because it was
+ * not going to win the reduce anyway.
+ *
+ * Opt-in on purpose. Callers that want the plain definition — the SPX live feed,
+ * the GEX chart, Multi Greek — pass nothing and are completely unaffected.
+ */
+function excluding(gexRows, exclude) {
+  if (exclude == null || !(Number(exclude) > 0)) return gexRows;
+  return gexRows.filter((r) => Number(r.strike) !== Number(exclude));
+}
+
 /** Strike with highest positive OI+Vol net GEX above spot. */
-function findCallWall(gexRows, spot) {
-  const above = gexRows.filter((r) => r.strike > spot && oiVolNet(r) > 0);
+function findCallWall(gexRows, spot, { exclude = null } = {}) {
+  const above = excluding(gexRows, exclude).filter((r) => r.strike > spot && oiVolNet(r) > 0);
   if (!above.length) return null;
   return above.reduce((best, r) => (oiVolNet(r) > oiVolNet(best) ? r : best)).strike;
 }
 
 /** Strike with most negative OI+Vol net GEX below spot. */
-function findPutWall(gexRows, spot) {
-  const below = gexRows.filter((r) => r.strike < spot && oiVolNet(r) < 0);
+function findPutWall(gexRows, spot, { exclude = null } = {}) {
+  const below = excluding(gexRows, exclude).filter((r) => r.strike < spot && oiVolNet(r) < 0);
   if (!below.length) return null;
   return below.reduce((best, r) => (oiVolNet(r) < oiVolNet(best) ? r : best)).strike;
 }

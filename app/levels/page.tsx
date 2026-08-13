@@ -20,16 +20,37 @@
 // LIVE SPOT. The levels step every 5 minutes, but the marker does not have to.
 // A second poll (/api/tt-quotes, 5s, chunked) overlays a live last price per
 // symbol, so the spot pill and the SPOT-VS-CB readout move continuously between
-// sweeps while the rails hold still. Chart-free by design: 169 sparklines would
-// cost more than the page is worth.
+// sweeps while the rails hold still.
 //
-// Every colour comes from components/shared/homeTheme (LEVEL_COLORS is the same
-// CB/CW/PW palette Multi Greek's ladder draws with) — nothing is hardcoded here.
+// COLLAPSED BY DEFAULT. A tile's header band carries ticker + CB + CW + PW + DTE
+// on one ~34px line; clicking it opens the price-scaled ladder underneath. The
+// whole roster therefore fits in about a screen and a half, and you open only
+// what you want to look at.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// WHY THIS PAGE SHIPS A <style> BLOCK INSTEAD OF PURE INLINE STYLE
+//
+// Two things inline styles cannot express, both of which this layout needs:
+//
+//   1. `@container` — the band drops its pieces (expiry → put wall → call wall →
+//      the CB/CW/PW letters) as the CARD gets narrow, not the window. Same
+//      ladder whether the tile shrank because the browser did, because you chose
+//      8 across, or because a dock opened. One rule, every cause.
+//   2. `:hover` on the band.
+//
+// Nothing in the band is allowed to SHRINK — every element is `flex:0 0 auto`
+// with `white-space:nowrap` and a flexible spacer eats the slack — so a value is
+// either fully drawn or removed by the ladder above. Half-drawn numbers (the
+// clipped "CB 3" / "CW:" state) are impossible by construction.
+//
+// Every colour in that CSS is interpolated from homeTheme / LEVEL_COLORS. There
+// are no colour literals in this file; `alpha()` derives its rgba from a theme
+// token and nothing else.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   HOME_THEME,
   LEVEL_COLORS,
@@ -44,7 +65,9 @@ import {
 } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { useScannerTickers } from "@/lib/useScannerTickers";
-import { SCANNER_MAIN } from "@/lib/scannerTickers";
+import {
+  SCANNER_MAIN, SCANNER_SHARES, SCANNER_SPREADS, SCANNER_OPTVOL,
+} from "@/lib/scannerTickers";
 import { usePageLoadStatus } from "@/lib/pageStatus";
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
@@ -55,12 +78,17 @@ const LEVELS_POLL_MS = 60_000;
 const QUOTES_POLL_MS = 5_000;
 /** Symbols per /api/tt-quotes call — keeps the query string sane. */
 const QUOTE_CHUNK = 40;
-/** Rail height in px. The tile is ~150px tall with header + footer. */
+/** Rail height in px on an open tile. */
 const RAIL_H = 104;
-const PREFS_KEY = "cb-levels-prefs-v1";
+/** Spot within this fraction of the CB counts as sitting ON the core. */
+const AT_CORE_PCT = 0.0035;
+/** Spot within this fraction of a wall counts as in reach of it. */
+const NEAR_WALL_PCT = 0.006;
+const PREFS_KEY = "cb-levels-prefs-v2";
 
 type SortId = "core" | "gex" | "az";
 type LevelKey = "cb" | "cw" | "pw" | "flip";
+type Zone = "cb" | "cw" | "pw" | "mid";
 
 type ScannerRow = {
   symbol: string;
@@ -76,6 +104,20 @@ type ScannerRow = {
   strikes: number | null;
   stale?: boolean;
 };
+
+// ── Roster lanes ─────────────────────────────────────────────────────────────
+// The four groups already declared in lib/scannerTickers. Used as section
+// headers so 169 tiles have landmarks; a roster ticker in none of them (added
+// on the owner Watchlists page after this file's fallback lists were written)
+// lands in "Other" rather than disappearing.
+const LANES: { key: string; label: string; set: Set<string> }[] = [
+  { key: "main", label: "Main · indices + mega caps", set: new Set(SCANNER_MAIN) },
+  { key: "shares", label: "Shares", set: new Set(SCANNER_SHARES) },
+  { key: "spreads", label: "Spreads", set: new Set(SCANNER_SPREADS) },
+  { key: "optvol", label: "Option volume", set: new Set(SCANNER_OPTVOL) },
+];
+const OTHER_LANE = { key: "other", label: "Other", set: new Set<string>() };
+const laneOf = (sym: string) => LANES.find((l) => l.set.has(sym))?.key ?? OTHER_LANE.key;
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 
@@ -104,15 +146,13 @@ const fmtGex = (n: number) => {
 const etToday = () =>
   new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
 
-/** "2026-08-14" → "08-14 · 1DTE". Calendar days, which is how the desk says it. */
-function expiryLabel(expiry: string | null): string {
-  if (!expiry) return "—";
-  const md = expiry.slice(5);
+/** Calendar days to expiry, which is how the desk says it. */
+function dteOf(expiry: string | null): number | null {
+  if (!expiry) return null;
   const a = Date.parse(`${expiry}T00:00:00Z`);
   const b = Date.parse(`${etToday()}T00:00:00Z`);
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return md;
-  const dte = Math.max(0, Math.round((a - b) / 86_400_000));
-  return `${md} · ${dte}DTE`;
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return Math.max(0, Math.round((a - b) / 86_400_000));
 }
 
 function fmtClock(ts: string | null): string {
@@ -124,22 +164,128 @@ function fmtClock(ts: string | null): string {
   }).format(d);
 }
 
+/**
+ * rgba from a THEME token. The palette still lives in homeTheme — this only
+ * varies the alpha, so there is no colour literal anywhere in this file.
+ */
+function alpha(hex: string, a: number): string {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+// ── The stylesheet (see the header note for why this exists) ─────────────────
+
+const ZONE_COLOR: Record<Zone, string> = {
+  cb: LEVEL_COLORS.cb,
+  cw: LEVEL_COLORS.cw,
+  pw: LEVEL_COLORS.pw,
+  mid: HOME_THEME.text,
+};
+
+const CSS = `
+.cblv-grid{display:grid;grid-template-columns:repeat(var(--cblv-cols,5),minmax(0,1fr));gap:14px;align-items:start}
+@media (max-width:900px){.cblv-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){.cblv-grid{grid-template-columns:1fr}}
+
+.cblv-card{container-type:inline-size;min-width:0;border-radius:14px;overflow:hidden;
+  background:linear-gradient(180deg,${alpha(HOME_THEME.panel, 0.98)},${alpha(HOME_THEME.bg, 0.92)});
+  border:1px solid ${alpha(HOME_THEME.text, 0.16)};
+  box-shadow:0 14px 28px -12px ${alpha(HOME_THEME.bg, 0.9)},inset 0 1px 0 ${alpha(HOME_THEME.text, 0.07)}}
+
+.cblv-band{display:flex;align-items:center;gap:7px;padding:8px 10px;cursor:pointer;user-select:none;
+  background:linear-gradient(180deg,${alpha(LIGHT_BLUE, 0.13)},${alpha(LIGHT_BLUE, 0.02)});
+  transition:background .12s}
+.cblv-band:hover{background:linear-gradient(180deg,${alpha(LIGHT_BLUE, 0.2)},${alpha(LIGHT_BLUE, 0.05)})}
+.cblv-card[data-zone="cb"] .cblv-band{background:linear-gradient(180deg,${alpha(LEVEL_COLORS.cb, 0.14)},${alpha(LEVEL_COLORS.cb, 0.02)})}
+.cblv-card[data-zone="cw"] .cblv-band{background:linear-gradient(180deg,${alpha(LEVEL_COLORS.cw, 0.14)},${alpha(LEVEL_COLORS.cw, 0.02)})}
+.cblv-card[data-zone="pw"] .cblv-band{background:linear-gradient(180deg,${alpha(LEVEL_COLORS.pw, 0.14)},${alpha(LEVEL_COLORS.pw, 0.02)})}
+.cblv-card.cblv-open .cblv-band{border-bottom:1px solid ${HOME_THEME.border}}
+
+.cblv-caret{flex:0 0 9px;font-size:9px;line-height:1;color:${alpha(HOME_THEME.text, 0.35)};transition:transform .12s}
+.cblv-card.cblv-open .cblv-caret{transform:rotate(90deg)}
+.cblv-tk,.cblv-v,.cblv-dte{flex:0 0 auto;white-space:nowrap}
+.cblv-sp{flex:1 1 auto;min-width:4px}
+
+/* DROP LADDER — measured against the CARD. Ticker + CB never leave. */
+@container (max-width:268px){.cblv-dte{display:none}}
+@container (max-width:232px){.cblv-v-pw{display:none}}
+@container (max-width:196px){.cblv-v-cw{display:none}}
+@container (max-width:168px){.cblv-lb{display:none}}
+
+.cblv-lane{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:10px;
+  margin:6px 0 2px;padding:8px 2px;cursor:pointer;user-select:none;
+  background:${alpha(HOME_THEME.bg, 0.92)};backdrop-filter:blur(8px)}
+.cblv-lane-rule{flex:1;height:1px;background:linear-gradient(90deg,${alpha(LIGHT_BLUE, 0.35)},transparent)}
+`;
+
 // ── One ticker tile ──────────────────────────────────────────────────────────
 
 function LevelTile({
-  row, spot, show,
+  row, spot, show, open, onToggle,
 }: {
   row: ScannerRow;
   /** Live last price when the quote poll has one, else the sweep's spot. */
   spot: number | null;
   show: Record<LevelKey, boolean>;
+  open: boolean;
+  onToggle: (symbol: string) => void;
 }) {
   const cb = row.cb, cw = row.call_wall, pw = row.put_wall, flip = row.gex_flip;
+  const dte = dteOf(row.expiry);
 
-  // Domain = every level actually drawn, plus spot, padded so the outermost
-  // line never sits flush against the edge of the rail.
-  const pts = [spot, show.cb ? cb : null, show.cw ? cw : null, show.pw ? pw : null, show.flip ? flip : null]
-    .filter((v): v is number => v != null);
+  // Where is spot, in one word. Drives the band tint + the chip beside the
+  // ticker — the two things that make a name findable while collapsed.
+  const zone: Zone = (() => {
+    if (spot == null) return "mid";
+    const rel = (v: number | null) => (v ? Math.abs((spot - v) / v) : Number.POSITIVE_INFINITY);
+    if (rel(cb) < AT_CORE_PCT) return "cb";
+    if (rel(cw) < NEAR_WALL_PCT) return "cw";
+    if (rel(pw) < NEAR_WALL_PCT) return "pw";
+    return "mid";
+  })();
+  const zoneLabel = zone === "cb" ? "CORE" : zone === "cw" ? "CW" : zone === "pw" ? "PW" : null;
+
+  const dCb = spot != null && cb != null ? spot - cb : null;
+  const dCbPct = dCb != null && cb ? (dCb / cb) * 100 : null;
+
+  // Rows written before the CB/wall exclusion landed can still carry a wall on
+  // the same strike as the core. Draw ONE line badged "CB·CW" rather than two
+  // stacked badges, and drop the duplicate number from the band.
+  const cwIsCb = cw != null && cb != null && cw === cb;
+  const pwIsCb = pw != null && cb != null && pw === cb;
+
+  const title = [
+    `${row.symbol} — sweep ${fmtClock(row.ts)} ET${row.stale ? ` (stale, ${row.date})` : ""}`,
+    row.expiry ? `expiry ${row.expiry}${dte != null ? ` (${dte}DTE)` : ""}` : null,
+    cb != null ? `CB ${fmtLevel(cb)}` : null,
+    cw != null ? `CW ${fmtLevel(cw)}` : null,
+    pw != null ? `PW ${fmtLevel(pw)}` : null,
+    flip != null ? `gamma flip ${fmtLevel(flip)}` : null,
+    row.total_net_gex != null ? `net GEX ${fmtGex(row.total_net_gex)}` : null,
+    dCbPct != null ? `spot vs CB ${fmtSigned(dCbPct)}%` : null,
+  ].filter(Boolean).join("\n");
+
+  // ── the rail (open only) ──
+  const marks = (() => {
+    const wanted = [
+      show.cb && cb != null ? { k: "CB", v: cb, c: LEVEL_COLORS.cb } : null,
+      show.cw && cw != null ? { k: "CW", v: cw, c: LEVEL_COLORS.cw } : null,
+      show.pw && pw != null ? { k: "PW", v: pw, c: LEVEL_COLORS.pw } : null,
+      show.flip && flip != null ? { k: "FLIP", v: flip, c: HOME_THEME.purple } : null,
+    ].filter((x): x is { k: string; v: number; c: string } => x != null);
+    const byValue = new Map<number, { labels: string[]; color: string; v: number }>();
+    for (const m of wanted) {
+      const hit = byValue.get(m.v);
+      if (hit) hit.labels.push(m.k);
+      else byValue.set(m.v, { labels: [m.k], color: m.c, v: m.v });
+    }
+    return [...byValue.values()];
+  })();
+
+  const pts = [...marks.map((m) => m.v), ...(spot != null ? [spot] : [])];
   const rawHi = pts.length ? Math.max(...pts) : 1;
   const rawLo = pts.length ? Math.min(...pts) : 0;
   // A ticker whose levels all landed on one strike would divide by zero.
@@ -148,114 +294,131 @@ function LevelTile({
   const lo = rawLo - span * 0.14;
   const y = (v: number) => ((hi - v) / (hi - lo)) * RAIL_H;
 
-  const dCb = spot != null && cb != null ? spot - cb : null;
-  const dCbPct = dCb != null && cb ? (dCb / cb) * 100 : null;
-
-  const line = (key: LevelKey, label: string, value: number | null, color: string) => {
-    if (!show[key] || value == null) return null;
-    return (
-      <div
-        key={key}
-        style={{
-          position: "absolute", left: 0, right: 0, top: y(value),
-          transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: 5,
-        }}
-      >
-        <span
-          style={{
-            fontSize: 8, fontWeight: 800, letterSpacing: "0.06em", padding: "1px 4px",
-            borderRadius: 3, color, border: `1px solid ${color}`, opacity: 0.85, flexShrink: 0,
-          }}
-        >
-          {label}
-        </span>
-        <span style={{ flex: 1, height: 1, background: color, opacity: 0.7 }} />
-        <span style={{ fontSize: 10, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>
-          {fmtLevel(value)}
-        </span>
-      </div>
-    );
-  };
+  const bandValue = (key: LevelKey, label: string, value: number, color: string) => (
+    <span className={`cblv-v cblv-v-${key}`} style={{ fontSize: 11, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>
+      <span className="cblv-lb" style={{ fontSize: 7, fontWeight: 800, letterSpacing: "0.05em", opacity: 0.7, marginRight: 2 }}>
+        {label}
+      </span>
+      {fmtLevel(value)}
+    </span>
+  );
 
   return (
-    <Card
-      variant="classic"
-      padding="10px 11px 8px"
-      style={{ position: "relative", overflow: "hidden" }}
-    >
+    <div className={`cblv-card${open ? " cblv-open" : ""}`} data-zone={zone}>
+      {/* ── band: the whole tile when collapsed ── */}
       <div
-        title={[
-          `${row.symbol} — sweep ${fmtClock(row.ts)} ET${row.stale ? ` (stale, ${row.date})` : ""}`,
-          row.total_net_gex != null ? `net GEX ${fmtGex(row.total_net_gex)}` : null,
-          flip != null ? `gamma flip ${fmtLevel(flip)}` : null,
-          row.strikes != null ? `${row.strikes} strikes` : null,
-          dCbPct != null ? `spot vs CB ${fmtSigned(dCbPct)}%` : null,
-        ].filter(Boolean).join("\n")}
+        className="cblv-band"
+        title={title}
+        role="button"
+        tabIndex={0}
+        onClick={() => onToggle(row.symbol)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(row.symbol); } }}
       >
-        {/* header */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
-          <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.04em", color: LIGHT_BLUE }}>
-            {row.symbol}
-          </span>
-          <span
-            style={{
-              fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
-              color: row.stale ? HOME_THEME.orange : HOME_THEME.text, opacity: row.stale ? 0.9 : 0.38,
-            }}
-          >
-            {row.stale ? `STALE ${row.date.slice(5)}` : expiryLabel(row.expiry)}
-          </span>
-        </div>
-
-        {/* rail */}
-        <div style={{ position: "relative", height: RAIL_H, margin: "2px 0 6px" }}>
-          {line("cw", "CW", cw, LEVEL_COLORS.cw)}
-          {line("cb", "CB", cb, LEVEL_COLORS.cb)}
-          {line("flip", "FLIP", flip, HOME_THEME.purple)}
-          {line("pw", "PW", pw, LEVEL_COLORS.pw)}
-          {spot != null && (
-            <div
+        <span className="cblv-caret">▶</span>
+        <span className="cblv-tk" style={{ fontSize: 13, fontWeight: 800, color: LIGHT_BLUE, letterSpacing: "0.03em" }}>
+          {row.symbol}
+          {zoneLabel && (
+            <span
               style={{
-                position: "absolute", left: 0, right: 0, top: y(spot),
-                transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: 4,
+                fontSize: 7, fontWeight: 800, letterSpacing: "0.06em", padding: "1px 4px",
+                borderRadius: 999, marginLeft: 4, verticalAlign: "middle",
+                color: ZONE_COLOR[zone], background: alpha(ZONE_COLOR[zone], 0.16),
               }}
             >
-              <span style={{ flex: 1, borderTop: `1px dashed ${HOME_THEME.text}`, opacity: 0.45 }} />
-              <span
-                style={{
-                  fontSize: 10, fontWeight: 800, padding: "1px 6px", borderRadius: 6,
-                  background: HOME_THEME.panelBgStrong, border: `1px solid ${HOME_THEME.border}`,
-                  color: HOME_THEME.text, fontVariantNumeric: "tabular-nums", flexShrink: 0,
-                }}
-              >
-                {fmtSpot(spot)}
-              </span>
-              <span style={{ flex: 1, borderTop: `1px dashed ${HOME_THEME.text}`, opacity: 0.45 }} />
-            </div>
+              {zoneLabel}
+            </span>
           )}
-        </div>
-
-        {/* footer */}
-        <div
+        </span>
+        <span className="cblv-sp" />
+        {show.cb && cb != null && bandValue("cb", "CB", cb, LEVEL_COLORS.cb)}
+        {show.cw && cw != null && !cwIsCb && bandValue("cw", "CW", cw, LEVEL_COLORS.cw)}
+        {show.pw && pw != null && !pwIsCb && bandValue("pw", "PW", pw, LEVEL_COLORS.pw)}
+        <span
+          className="cblv-dte"
           style={{
-            display: "flex", justifyContent: "space-between", alignItems: "baseline",
-            borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 5,
-            fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
+            fontSize: 8, fontWeight: 800, letterSpacing: "0.04em", padding: "1px 4px", borderRadius: 4,
+            color: row.stale ? HOME_THEME.orange : alpha(HOME_THEME.text, 0.42),
+            background: row.stale ? alpha(HOME_THEME.orange, 0.14) : alpha(HOME_THEME.text, 0.06),
           }}
         >
-          <span style={{ color: HOME_THEME.text, opacity: 0.4 }}>SPOT VS CB</span>
-          <span
+          {row.stale ? `STALE ${row.date.slice(5)}` : dte != null ? `${dte}D` : "—"}
+        </span>
+      </div>
+
+      {/* ── body: price-scaled ladder ── */}
+      {open && (
+        <div style={{ padding: "8px 10px" }}>
+          <div style={{ position: "relative", height: RAIL_H, margin: "2px 0 6px" }}>
+            {marks.map((m) => (
+              <div
+                key={m.labels.join("-")}
+                style={{
+                  position: "absolute", left: 0, right: 0, top: y(m.v),
+                  transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: 5,
+                }}
+              >
+                <span
+                  style={{
+                    flex: "0 0 auto", fontSize: 8, fontWeight: 800, letterSpacing: "0.06em",
+                    padding: "1px 4px", borderRadius: 3, color: m.color,
+                    border: `1px solid ${m.color}`, opacity: 0.75,
+                  }}
+                >
+                  {m.labels.join("·")}
+                </span>
+                <span style={{ flex: "1 1 auto", minWidth: 6, height: 1, background: m.color, opacity: 0.4 }} />
+                <span
+                  style={{
+                    flex: "0 0 auto", fontSize: 10, fontWeight: 700, color: m.color,
+                    fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
+                  }}
+                >
+                  {fmtLevel(m.v)}
+                </span>
+              </div>
+            ))}
+            {spot != null && (
+              <div
+                style={{
+                  position: "absolute", left: 0, right: 0, top: y(spot),
+                  transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: 4,
+                }}
+              >
+                <span style={{ flex: "1 1 auto", minWidth: 4, borderTop: `1px dashed ${alpha(HOME_THEME.text, 0.5)}` }} />
+                <span
+                  style={{
+                    flex: "0 0 auto", fontSize: 10, fontWeight: 800, padding: "1px 6px", borderRadius: 6,
+                    background: HOME_THEME.panelBgStrong, border: `1px solid ${alpha(HOME_THEME.text, 0.22)}`,
+                    color: HOME_THEME.text, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
+                  }}
+                >
+                  {fmtSpot(spot)}
+                </span>
+                <span style={{ flex: "1 1 auto", minWidth: 4, borderTop: `1px dashed ${alpha(HOME_THEME.text, 0.5)}` }} />
+              </div>
+            )}
+          </div>
+
+          <div
             style={{
-              fontSize: 11, fontVariantNumeric: "tabular-nums",
-              color: dCb == null ? HOME_THEME.text : dCb >= 0 ? ES_CANDLE_UP : ES_CANDLE_DOWN,
-              opacity: dCb == null ? 0.4 : 1,
+              display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 6,
+              borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 5,
+              fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
             }}
           >
-            {dCb == null ? "—" : fmtSigned(dCb)}
-          </span>
+            <span style={{ color: alpha(HOME_THEME.text, 0.4), whiteSpace: "nowrap" }}>SPOT VS CB</span>
+            <span
+              style={{
+                fontSize: 11, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums",
+                color: dCb == null ? alpha(HOME_THEME.text, 0.4) : dCb >= 0 ? ES_CANDLE_UP : ES_CANDLE_DOWN,
+              }}
+            >
+              {dCb == null ? "—" : fmtSigned(dCb)}
+            </span>
+          </div>
         </div>
-      </div>
-    </Card>
+      )}
+    </div>
   );
 }
 
@@ -274,8 +437,10 @@ export default function LevelsPage() {
   const [cols, setCols] = useState(5);
   const [sort, setSort] = useState<SortId>("core");
   const [query, setQuery] = useState("");
-  const [majorsFirst, setMajorsFirst] = useState(true);
+  const [grouped, setGrouped] = useState(true);
   const [show, setShow] = useState<Record<LevelKey, boolean>>({ cb: true, cw: true, pw: true, flip: false });
+  const [openTiles, setOpenTiles] = useState<Record<string, boolean>>({});
+  const [openLanes, setOpenLanes] = useState<Record<string, boolean>>({ main: true });
 
   // Saved view. Read AFTER mount so the server-rendered first paint and the
   // client's agree (a localStorage read in useState would not).
@@ -283,19 +448,24 @@ export default function LevelsPage() {
     try {
       const raw = window.localStorage.getItem(PREFS_KEY);
       if (!raw) return;
-      const p = JSON.parse(raw) as Partial<{ cols: number; sort: SortId; majorsFirst: boolean; show: Record<LevelKey, boolean> }>;
+      const p = JSON.parse(raw) as Partial<{
+        cols: number; sort: SortId; grouped: boolean;
+        show: Record<LevelKey, boolean>; openLanes: Record<string, boolean>;
+      }>;
       if (p.cols) setCols(p.cols);
       if (p.sort) setSort(p.sort);
-      if (typeof p.majorsFirst === "boolean") setMajorsFirst(p.majorsFirst);
+      if (typeof p.grouped === "boolean") setGrouped(p.grouped);
       const savedShow = p.show;
       if (savedShow) setShow((s) => ({ ...s, ...savedShow }));
+      const savedLanes = p.openLanes;
+      if (savedLanes) setOpenLanes(savedLanes);
     } catch { /* corrupt or blocked storage — defaults are fine */ }
   }, []);
   useEffect(() => {
     try {
-      window.localStorage.setItem(PREFS_KEY, JSON.stringify({ cols, sort, majorsFirst, show }));
+      window.localStorage.setItem(PREFS_KEY, JSON.stringify({ cols, sort, grouped, show, openLanes }));
     } catch { /* non-fatal */ }
-  }, [cols, sort, majorsFirst, show]);
+  }, [cols, sort, grouped, show, openLanes]);
 
   // ── Levels: one request for the whole universe ─────────────────────────────
   const loadLevels = useCallback(async (manual = false) => {
@@ -372,7 +542,6 @@ export default function LevelsPage() {
   }, []);
 
   // ── The visible list ──────────────────────────────────────────────────────
-  const majors = useMemo(() => new Set(SCANNER_MAIN), []);
   const view = useMemo(() => {
     const uni = new Set(tickers);
     const q = query.trim().toUpperCase();
@@ -388,19 +557,46 @@ export default function LevelsPage() {
       gex: (a, b) => Math.abs(b.total_net_gex ?? 0) - Math.abs(a.total_net_gex ?? 0),
       az: (a, b) => a.symbol.localeCompare(b.symbol),
     };
-    list = [...list].sort(cmp[sort]);
-    if (majorsFirst) {
-      list = [...list.filter((r) => majors.has(r.symbol)), ...list.filter((r) => !majors.has(r.symbol))];
+    return [...list].sort(cmp[sort]);
+  }, [rows, tickers, query, sort, live]);
+
+  /** Lanes in declared order, empty ones dropped. */
+  const lanes = useMemo(() => {
+    if (!grouped) return [{ key: "all", label: "", rows: view }];
+    const bucket = new Map<string, ScannerRow[]>();
+    for (const r of view) {
+      const k = laneOf(r.symbol);
+      const cur = bucket.get(k);
+      if (cur) cur.push(r); else bucket.set(k, [r]);
     }
-    return list;
-  }, [rows, tickers, query, sort, live, majorsFirst, majors]);
+    return [...LANES, OTHER_LANE]
+      .map((l) => ({ key: l.key, label: l.label, rows: bucket.get(l.key) ?? [] }))
+      .filter((l) => l.rows.length > 0);
+  }, [view, grouped]);
+
+  // A filter is an intent to look at what matched, so matches open themselves
+  // rather than making you click every one of them.
+  const filtering = query.trim().length > 0;
+  const isOpen = (sym: string) => filtering || !!openTiles[sym];
+  const toggleTile = useCallback((sym: string) => {
+    setOpenTiles((o) => ({ ...o, [sym]: !o[sym] }));
+  }, []);
+  const setAllTiles = (open: boolean) => {
+    if (!open) { setOpenTiles({}); return; }
+    const next: Record<string, boolean> = {};
+    for (const r of view) next[r.symbol] = true;
+    setOpenTiles(next);
+  };
 
   const liveCount = Object.keys(live).length;
-  const label = { fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.text, opacity: 0.4 } as const;
+  const label: CSSProperties = { fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: alpha(HOME_THEME.text, 0.4) };
   const seg = (active: boolean) => (active ? homeButtonStyle : homeSecondaryButtonStyle);
+  const gridStyle = { "--cblv-cols": String(cols) } as unknown as CSSProperties;
 
   return (
     <PageShell>
+      <style dangerouslySetInnerHTML={{ __html: CSS }} />
+
       {/* ── controls ── */}
       <Card variant="budget" padding={14}>
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14 }}>
@@ -408,7 +604,7 @@ export default function LevelsPage() {
             <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" }}>
               Levels
             </div>
-            <div style={{ fontSize: 11, color: HOME_THEME.text, opacity: 0.45 }}>
+            <div style={{ fontSize: 11, color: alpha(HOME_THEME.text, 0.45) }}>
               {view.length} tickers · sweep {fmtClock(sweptAt)} ET · spot live{liveCount ? ` (${liveCount})` : ""}
               {error ? ` · ${error}` : ""}
             </div>
@@ -422,6 +618,12 @@ export default function LevelsPage() {
           />
 
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={label}>TILES</span>
+            <button style={homeButtonStyle} onClick={() => setAllTiles(true)}>Expand all ({view.length})</button>
+            <button style={homeSecondaryButtonStyle} onClick={() => setAllTiles(false)}>Collapse all</button>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={label}>SORT</span>
             {([["core", "Near CB"], ["gex", "Net GEX"], ["az", "A–Z"]] as [SortId, string][]).map(([id, txt]) => (
               <button key={id} style={seg(sort === id)} onClick={() => setSort(id)}>{txt}</button>
@@ -430,14 +632,19 @@ export default function LevelsPage() {
 
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={label}>SHOW</span>
-            {([["cb", "CB", LEVEL_COLORS.cb], ["cw", "CW", LEVEL_COLORS.cw], ["pw", "PW", LEVEL_COLORS.pw], ["flip", "Flip", HOME_THEME.purple]] as [LevelKey, string, string][]).map(([id, txt, color]) => (
+            {([
+              ["cb", "CB", LEVEL_COLORS.cb],
+              ["cw", "CW", LEVEL_COLORS.cw],
+              ["pw", "PW", LEVEL_COLORS.pw],
+              ["flip", "Flip", HOME_THEME.purple],
+            ] as [LevelKey, string, string][]).map(([id, txt, color]) => (
               <button
                 key={id}
                 onClick={() => setShow((s) => ({ ...s, [id]: !s[id] }))}
                 style={{
                   ...homeSecondaryButtonStyle,
                   color: show[id] ? LEVEL_COLORS.onSolid : color,
-                  background: show[id] ? color : "transparent",
+                  background: show[id] ? color : alpha(HOME_THEME.text, 0.04),
                   border: `1px solid ${color}`,
                 }}
               >
@@ -453,9 +660,13 @@ export default function LevelsPage() {
             ))}
           </div>
 
-          <button style={seg(majorsFirst)} onClick={() => setMajorsFirst((v) => !v)}>Majors first</button>
+          <button style={seg(grouped)} onClick={() => setGrouped((v) => !v)}>Lanes</button>
 
-          <button style={homeRefreshButtonStyle(refresh)} onClick={() => void loadLevels(true)} disabled={refresh === "refreshing"}>
+          <button
+            style={homeRefreshButtonStyle(refresh)}
+            onClick={() => void loadLevels(true)}
+            disabled={refresh === "refreshing"}
+          >
             {refresh === "refreshing" ? "…" : "Refresh"}
           </button>
         </div>
@@ -464,21 +675,61 @@ export default function LevelsPage() {
       {/* ── the board ── */}
       {view.length === 0 ? (
         <Card variant="budget" padding={20}>
-          <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.6 }}>
-            {error ? `Could not load levels: ${error}` : "No scanner snapshots yet — the recorder writes one row per ticker every 5 minutes."}
+          <div style={{ fontSize: 13, color: alpha(HOME_THEME.text, 0.6) }}>
+            {error
+              ? `Could not load levels: ${error}`
+              : "No scanner snapshots yet — the recorder writes one row per ticker every 5 minutes."}
           </div>
         </Card>
       ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-            gap: 10,
-          }}
-        >
-          {view.map((r) => (
-            <LevelTile key={r.symbol} row={r} spot={live[r.symbol] ?? r.spot} show={show} />
-          ))}
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {lanes.map((lane) => {
+            // Ungrouped renders one nameless lane and no header, so the toggle
+            // can't hide the only section on the page.
+            const headed = grouped && !!lane.label;
+            // Default: Main open, the rest closed. A saved choice wins. A live
+            // filter forces every lane open (see the tile rule above) without
+            // overwriting what the user last chose.
+            const laneStored = openLanes[lane.key] ?? lane.key === "main";
+            const laneOpen = !headed || filtering || laneStored;
+            const toggleLane = () => setOpenLanes((o) => ({ ...o, [lane.key]: !laneStored }));
+            return (
+              <div key={lane.key}>
+                {headed && (
+                  <div
+                    className="cblv-lane"
+                    role="button"
+                    tabIndex={0}
+                    onClick={toggleLane}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleLane(); }
+                    }}
+                  >
+                    <span style={{ fontSize: 9, color: alpha(HOME_THEME.text, 0.35) }}>{laneOpen ? "▼" : "▶"}</span>
+                    <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE }}>
+                      {lane.label}
+                    </span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: alpha(HOME_THEME.text, 0.32) }}>{lane.rows.length}</span>
+                    <span className="cblv-lane-rule" />
+                  </div>
+                )}
+                {laneOpen && (
+                  <div className="cblv-grid" style={gridStyle}>
+                    {lane.rows.map((r) => (
+                      <LevelTile
+                        key={r.symbol}
+                        row={r}
+                        spot={live[r.symbol] ?? r.spot}
+                        show={show}
+                        open={isOpen(r.symbol)}
+                        onToggle={toggleTile}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </PageShell>
