@@ -131,6 +131,40 @@ Week reads `hh_meals` — the same rows the household week board writes. A meal
 typed over there with no recipe attached (a takeaway) shows here too, greyed and
 unclickable: hiding it would make "Thursday is free" a lie.
 
+## The Cookbook wall
+
+The index is a masonry wall of photo cards under one large search box, not a
+list of rows. Photos are what you actually recognise a saved recipe by; a 64px
+circle crop and a title read like a database table of food.
+
+Three things about it are load-bearing:
+
+**It is JS-distributed flex columns — not `columns:`, not a grid.** CSS
+multi-column fills top-to-bottom PER COLUMN, so on a phone recipe #2 lands
+halfway down the screen. Cards are dealt round-robin across N lanes instead, so
+reading order stays left-to-right while the cards keep unequal heights. A
+`ResizeObserver` picks N from the container width — roughly 210px per card, so
+two lanes on a 390px phone and five on a laptop.
+
+**Card image heights are hashed from the recipe id** (132–204px). That is the
+wall's rhythm, and hashing keeps it stable: a height that changed on re-render
+would make the whole page jump every time a query settled.
+
+**The page grid is `minmax(0, 1fr)`.** The chip and sort rows scroll sideways,
+and an implicit `auto` track sizes itself to their FULL content — which pushes
+the entire page off a 390px screen. This one is easy to reintroduce.
+
+The chips are the category facet with the server's counts; there is no mood
+taxonomy, because a mood row that is really "dinner" wearing a costume is a
+second name for something that already has one. Cook time and source
+(TIKTOK / REELS / WEB) ride the photo as scrim badges, with NEW / PART taking
+the corner ahead of the source. The card gets ONE metadata line — "Never made"
+when it applies, the ingredient count otherwise: 170px is about 26 characters of
+9px mono and anything longer wraps ragged on half the wall.
+
+⌘K focuses search, Escape clears it, and the ⌘K hint renders only on a fine
+pointer — on a phone there is no keyboard to press it on.
+
 ## Sorting, and "main ingredient"
 
 The Cookbook sorts on the **server**: recently added, recently changed, name,
