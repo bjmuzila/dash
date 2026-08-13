@@ -149,11 +149,12 @@ function scopePayload(p: MapPayload | null, scope: Scope): MapPayload | null {
 // fills the strike × time field — the discrete heatmap, or the smoothed terrain
 // with its iso-GEX contours. Spine is gone; its wings ARE the Tape Field's left
 // gutter and right rail, and its heat is the field.
-type FieldMode = "heat" | "terrain";
+type FieldMode = "heat" | "terrain" | "quad";
 
 const FIELD_MODES: { key: FieldMode; label: string; blurb: string }[] = [
   { key: "heat", label: "Heatmap", blurb: "Strike × time gamma cells — DEX profile left, GEX profile right, Vol GEX keel." },
   { key: "terrain", label: "Terrain", blurb: "Gamma as elevation — iso-GEX contours, zero-gamma coastline." },
+  { key: "quad", label: "GEX × DEX", blurb: "One cell, four states — gamma sign picks the family, delta sign picks which of the two." },
 ];
 
 // ── formatting ───────────────────────────────────────────────────────────────
@@ -294,6 +295,62 @@ function dexColor(v: number, a?: number): string {
   return rgba(v >= 0 ? DEX_POS : DEX_NEG, a === undefined ? 0.2 + 0.75 * m : a);
 }
 
+// ── the four-state palette (GEX × DEX field) ─────────────────────────────────
+//
+// The "GEX × DEX" tab does not draw a second layer over the gamma — the cell
+// COLOUR is the pair. Gamma sign picks the family, delta sign picks which of the
+// two inside it:
+//
+//     green family  = positive gamma, dealers dampen
+//     rose family   = negative gamma, dealers amplify
+//     deep          = DEX positive (dealers short delta · buy dips)
+//     light         = DEX negative (dealers long delta · sell rips)
+//
+// Two families of two, so the dampening-vs-amplifying reading — the one the map
+// is opened for — still lands from across the room, before you look at delta at
+// all. Chosen against live tape in the picker mock; do not shuffle one of the
+// four without checking it against its own family, because the pairing IS the
+// legend.
+const Q_PP: RGB = [16, 185, 129];    // #10b981  dampening · buy dips
+const Q_PN: RGB = [110, 231, 183];   // #6ee7b7  dampening · sell rips
+const Q_NP: RGB = [253, 164, 175];   // #fda4af  amplifying · buy dips
+const Q_NN: RGB = [225, 29, 72];     // #e11d48  amplifying · sell rips
+const quadRgb = (g: number, d: number): RGB =>
+  g >= 0 ? (d >= 0 ? Q_PP : Q_PN) : (d >= 0 ? Q_NP : Q_NN);
+
+/** How fast |DEX| pulls the hue off the plain gamma colour. */
+const DEX_COMMIT = 1.6;
+/** |DEX|'s share of the cell's brightness. */
+const DEX_WEIGHT = 0.75;
+/** Scales the burn-toward-white on strong cells. Four hues need less than two. */
+const WHITE_LIFT = 0.52;
+
+/**
+ * Combined magnitude for a GEX × DEX cell — and the reason the tab is worth
+ * having. `max(|GEX|, 0.75·|DEX|)` means a strike carrying delta but little
+ * gamma still appears, which is exactly the cell the plain heatmap culls.
+ */
+const quadMag = (g: number, d: number) =>
+  Math.max(Math.min(1, Math.abs(g)), DEX_WEIGHT * Math.min(1, Math.abs(d)));
+
+/**
+ * Signed gamma + signed delta → cell colour.
+ *
+ * The hue only COMMITS as |DEX| grows: at zero delta the cell is the plain gamma
+ * colour of its family, and it slides to the corner as delta arrives. Without
+ * that, every cell on the board is forced into one of four buckets by the sign
+ * of a number that is essentially noise, and the field turns into a two-tone
+ * flag drawn by rounding error.
+ */
+function quadColor(g: number, d: number, intensity = 1): string {
+  const md = Math.min(1, Math.abs(d));
+  const m = quadMag(g, d);
+  const base = g >= 0 ? Q_PP : Q_NN;
+  const hue = mix(base, quadRgb(g, d), Math.min(1, md * DEX_COMMIT));
+  const c = mix(hue, WHITE, (0.10 * m + 0.32 * m * m) * WHITE_LIFT);
+  return rgba(c, heatAlpha(m, 0.05, 0.84, intensity));
+}
+
 // ── model ────────────────────────────────────────────────────────────────────
 // The GEX bubble layer is GONE — removed, not hidden behind a toggle. It drew
 // one circle per slot on the spot path, sized by |GEX| at the strike price was
@@ -335,6 +392,13 @@ type MapModel = {
   heat: number[][];
   /** signed, normalized per cell — heat magnitude carrying the gamma sign */
   signed: number[][];
+  /**
+   * Signed DEX per cell, on the same [-1,1] scale and the same column blend as
+   * `signed`. EMPTY unless `dexSurface` — the fallback DEX shape is one ladder
+   * for the whole session, and stretching that across every column would draw a
+   * delta surface the recorder never wrote. Only the GEX × DEX field reads it.
+   */
+  dexHeat: number[][];
   path: number[];
   /**
    * The spot line, one point per MINUTE, positioned by its own timestamp rather
@@ -484,6 +548,27 @@ function buildModel(p: MapPayload | null, scope: Scope): MapModel | null {
   if (!(dMax > 0)) dMax = 1;
   const dex = dexRaw.map((v) => Math.max(-1, Math.min(1, v / dMax)));
 
+  // The DEX surface, for the GEX × DEX field. Same geometric column blend as the
+  // gamma above — delta builds through the day for the same reason gamma does,
+  // and scaling it on the session max alone would bury the morning exactly the
+  // way it buried the heat.
+  const dexHeat: number[][] = [];
+  if (dexSurface) {
+    for (const c of dexCols) {
+      let cMax = 0;
+      for (const v of c.d) { const a = Math.abs(v); if (a > cMax) cMax = a; }
+      const den = cMax > 0
+        ? Math.pow(dMax, 1 - COL_BLEND) * Math.pow(cMax, COL_BLEND)
+        : dMax;
+      const row = new Array(n);
+      for (let i = 0; i < n; i++) {
+        const v = c.d[i] ?? 0;
+        row[i] = Math.max(-1, Math.min(1, v / den));
+      }
+      dexHeat.push(row);
+    }
+  }
+
   const dexSeries = p.dexSeries ?? [];
   let dtMax = 0;
   for (const d of dexSeries) if (Math.abs(d.dex) > dtMax) dtMax = Math.abs(d.dex);
@@ -515,7 +600,7 @@ function buildModel(p: MapPayload | null, scope: Scope): MapModel | null {
     strikes, lo: strikes[0], hi: strikes[n - 1], cols,
     mins, slotMin: p.slotMin > 0 ? p.slotMin : 5,
     timeAxis, xLo: RTH_LO, xHi: RTH_HI,
-    profile, profileRaw: lastRaw, gMax, heat, signed, path,
+    profile, profileRaw: lastRaw, gMax, heat, signed, dexHeat, path,
     // Clipped to the drawn tape. The minute series and the columns come out of
     // the same table, but a spot row can exist for a minute whose ladder was
     // filtered out by the strike window — drawing it would run the line past
@@ -620,6 +705,7 @@ function sliceModel(m: MapModel, v: ViewWin): MapModel {
     strikes, lo, hi,
     heat: m.heat.slice(v.i0, v.i1 + 1).map(cutRow),
     signed: m.signed.slice(v.i0, v.i1 + 1).map(cutRow),
+    dexHeat: m.dexHeat.slice(v.i0, v.i1 + 1).map(cutRow),
     path: m.path.slice(v.i0, v.i1 + 1),
     spotPath: m.spotPath.filter((s) => inSpan(s.t)),
     profile: cutRow(m.profile),
@@ -1013,6 +1099,10 @@ function TapeField({ m, compact, field = "heat", intensity = 1, snap = false }: 
     ? Math.max(1.2, (m.slotMin / Math.max(1, m.xHi - m.xLo)) * FW)
     : FW / Math.max(1, m.cols.length);
   const ch = FH / Math.max(1, m.strikes.length - 1);
+  // The four-state field needs DEX written slot-for-slot with gamma. Without it
+  // there is no second quantity to colour by, and the tab falls back to the
+  // plain gamma cells rather than inventing one.
+  const hasQuad = m.dexSurface && m.dexHeat.length === m.cols.length;
 
   const ticks = strikeTicks(m.lo, m.hi, compact);
   const timeTicks = axisTicks(m, compact ? 5 : 9);
@@ -1029,6 +1119,18 @@ function TapeField({ m, compact, field = "heat", intensity = 1, snap = false }: 
       <rect x={FX - 4} y={FY - 4} width={FW + 8} height={FH + 8} rx={10} fill="rgba(0,0,0,0.30)" />
       {field === "terrain" ? (
         <TerrainField m={m} L={dx0 - cw / 2} TP={FY} FWD={dw} FHT={FH} snap={snap} />
+      ) : field === "quad" && hasQuad ? (
+        // GEX × DEX. Same cells, same geometry — only the fill differs, and the
+        // cull is on the COMBINED magnitude so a delta-carrying strike with thin
+        // gamma is not dropped as noise. That cell is the one this tab exists for.
+        m.cols.map((c, ci) =>
+          m.strikes.map((k, si) => {
+            const g = m.signed[ci][si], d = m.dexHeat[ci][si] ?? 0;
+            if (quadMag(g, d) * intensity < 0.045) return null;
+            return <rect key={`q${ci}-${si}`} x={xOf(ci) - cw / 2} y={yOf(k) - ch / 2} width={cw + 0.6} height={ch + 0.6}
+              fill={quadColor(g, d, intensity)} />;
+          })
+        )
       ) : (
         m.cols.map((c, ci) =>
           m.strikes.map((k, si) => {
@@ -1041,6 +1143,14 @@ function TapeField({ m, compact, field = "heat", intensity = 1, snap = false }: 
               fill={gamColor(m.signed[ci][si], heatAlpha(h, 0.04, 0.80, intensity))} />;
           })
         )
+      )}
+      {/* The GEX × DEX tab with no slot-aligned DEX behind it. The gamma still
+          draws — blanking the field would be a worse answer than showing the
+          half that exists — but it says so, because a green/rose map silently
+          rendered in blue/red is a map you would misread. */}
+      {field === "quad" && !hasQuad && (
+        <text x={FX + 8} y={FY + 14} fill={HOME_THEME.orange} fontSize={9 * fz} fontWeight={800}
+          letterSpacing="0.10em">NO SLOT-ALIGNED DEX FOR THIS SESSION · SHOWING GAMMA ONLY</text>
       )}
       {ticks.map((k) => <line key={`g${k}`} x1={FX} y1={yOf(k)} x2={FX + FW} y2={yOf(k)} stroke={GRID} />)}
       {/* Time gridlines. They matter far more now that the axis is a fixed
@@ -1664,12 +1774,12 @@ function MapCard({ m }: { m: MapModel }) {
             >{f.label}</button>
           ))}
         </div>
-        {/* Heatmap only. The terrain is a hypsometric surface with its own
+        {/* Cell fields only. The terrain is a hypsometric surface with its own
             quantized banding and contour levels — the same slider would push it
             to a solid colour block, not a brighter map. Rendering it only for
-            the tab it applies to is also why it sits before the flexing blurb:
+            the tabs it applies to is also why it sits before the flexing blurb:
             showing/hiding it must not shove the rest of the header around. */}
-        {field === "heat" && (
+        {field !== "terrain" && (
           <div style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
             <span style={{ fontSize: 9, color: "#94a3b8", fontWeight: 700 }}>Intensity</span>
             <input
@@ -1710,6 +1820,31 @@ function MapCard({ m }: { m: MapModel }) {
           />
         </span>
       </div>
+      {/* The four-state key. Only on the tab that needs it, and NOT tagged
+          [data-capture-hide] — a green/rose field is unreadable without it, so
+          the shared PNG has to carry it. */}
+      {field === "quad" && (
+        <div style={{
+          display: "flex", flexWrap: "wrap", gap: 14, alignItems: "center",
+          marginBottom: 10, padding: "7px 10px", borderRadius: 8,
+          border: `1px solid ${HOME_THEME.border}`, background: "rgba(255,255,255,0.02)",
+        }}>
+          {([
+            [Q_PP, "GEX + / DEX +", "dampening · buy dips"],
+            [Q_PN, "GEX + / DEX −", "dampening · sell rips"],
+            [Q_NP, "GEX − / DEX +", "amplifying · buy dips"],
+            [Q_NN, "GEX − / DEX −", "amplifying · sell rips"],
+          ] as [RGB, string, string][]).map(([c, label, note]) => (
+            <span key={label} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+              <i style={{ width: 13, height: 13, borderRadius: 3, background: rgba(c, 0.92), flexShrink: 0 }} />
+              <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", color: HOME_THEME.text }}>
+                {label}
+              </span>
+              <span style={{ fontSize: 10, color: HOME_THEME.muted }}>{note}</span>
+            </span>
+          ))}
+        </div>
+      )}
       <FzCtx.Provider value={1}>
         <ViewCtx.Provider value={api}>
           <ZoomCtx.Provider value={kZoom}>

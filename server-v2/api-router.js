@@ -336,12 +336,21 @@ function clientGeoFloat(v) {
 }
 function clientGeo(req) {
   const country = clientGeoTrim(req.headers['cf-ipcountry'], 2);
+  // Keys are `latitude`/`longitude` because that is what libDb.insertPageVisit()
+  // reads (r.latitude / r.longitude). Naming them lat/lon wrote NULL coordinates
+  // on every visit, which emptied the dot layer of the owner visitor map while
+  // the country choropleth (which uses `country`) kept looking fine. Same names
+  // as the Next fallback in app/api/page-status/route.ts — keep the two in sync.
+  const latitude = clientGeoFloat(req.headers['cf-iplatitude']);
+  const longitude = clientGeoFloat(req.headers['cf-iplongitude']);
+  // 0,0 is Cloudflare's "no fix" answer, not a location in the Gulf of Guinea.
+  const usable = latitude != null && longitude != null && !(latitude === 0 && longitude === 0);
   return {
     country: country ? country.toUpperCase() : null,
     region: clientGeoTrim(req.headers['cf-region'], 80),
     city: clientGeoTrim(req.headers['cf-ipcity'], 80),
-    lat: clientGeoFloat(req.headers['cf-iplatitude']),
-    lon: clientGeoFloat(req.headers['cf-iplongitude']),
+    latitude: usable ? latitude : null,
+    longitude: usable ? longitude : null,
   };
 }
 
@@ -3840,7 +3849,9 @@ if (libDb) {
             // Cloudflare geo. Null on rows logged before the managed transform was
             // enabled, and on anything that reached the origin without crossing the edge.
             country: r.country ?? null, region: r.region ?? null, city: r.city ?? null,
-            lat: r.lat ?? null, lon: r.lon ?? null,
+            // page_visits stores these as latitude/longitude — reading r.lat/r.lon
+            // returned undefined for every row and blanked the map's dot layer.
+            lat: r.latitude ?? null, lon: r.longitude ?? null,
             // Acquisition. Non-null only on entry rows (the first beacon of a
             // browser session) — see lib/visitorAttribution.ts. Count sessions
             // with isEntry, then group those by channel / referrerHost / utmSource.
@@ -3942,8 +3953,8 @@ if (libDb) {
                 country: geo.country,
                 region: geo.region,
                 city: geo.city,
-                lat: geo.lat,
-                lon: geo.lon,
+                latitude: geo.latitude,
+                longitude: geo.longitude,
                 // Referrer / UTM (entry rows only) + browser/OS/device (every row).
                 ...visitAttribution(req, body),
               });

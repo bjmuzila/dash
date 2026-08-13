@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026-08-12 - GEX Map: a third field — gamma sign × delta sign
+
+Edited: `app/test/GexMapTab.tsx` (`FIELD_MODES`, `buildModel`, `sliceModel`,
+`TapeField`, `MapCard`, new `quadColor`).
+
+### What
+
+DEX per strike is now on the map, as a third tab beside HEATMAP and TERRAIN
+rather than a layer painted over one of them. Four rounds of mockups all said
+the same thing: anything drawn ON TOP of the gamma — rings, bars, hatching,
+ribbons — either covers the field or is too faint to read. So the cell colour
+IS the pair.
+
+    green family  = positive gamma, dealers dampen
+    rose family   = negative gamma, dealers amplify
+    deep          = DEX positive  (dealers short delta · buy dips)
+    light         = DEX negative  (dealers long delta · sell rips)
+
+Two families of two, so the dampening-vs-amplifying read still lands from
+across the room before you look at delta at all.
+
+### How
+
+`quadColor(g, d, intensity)`. The hue only COMMITS as |DEX| grows — at zero
+delta a cell is the plain gamma colour of its family and slides to the corner as
+delta arrives. Forcing every cell into one of four buckets by the sign of a
+number that is mostly noise turns the field into a two-tone flag drawn by
+rounding error. Brightness is `max(|GEX|, 0.75·|DEX|)`, and the cull runs on
+that same combined magnitude: a strike carrying delta with thin gamma now
+appears, which is the cell the plain heatmap drops and the whole reason the tab
+is worth having. Colours were picked against live tape in a throwaway picker
+mock; `WHITE_LIFT` is 0.52 because four hues need less burn-to-white than two.
+
+The model gained `dexHeat` — signed DEX per cell, on the same geometric column
+blend as the gamma, so the morning is legible in delta for the same reason it is
+now legible in gamma. It is EMPTY unless `dexSurface`: the fallback DEX shape is
+one ladder for the whole session, and stretching that across every column would
+draw a surface the recorder never wrote. On a session without slot-aligned DEX
+the tab draws the gamma and says so on the field rather than blanking or
+pretending.
+
+The four-state key renders above the chart on that tab only, and is deliberately
+NOT `[data-capture-hide]` — a green/rose field is unreadable without it, so the
+shared PNG has to carry it. The intensity slider now covers both cell fields.
+
+
 ## 2026-08-12 - GEX Map: the morning is back, and Terrain survives the snapshot
 
 Edited: `app/test/GexMapTab.tsx` (`buildModel`, `TerrainField`),
