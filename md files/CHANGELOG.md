@@ -1,59 +1,114 @@
 # Changelog
 
-## 2026-08-13 - Owner ΔGEX Board (master–detail) + whole-board ranking route
+## 2026-08-13 - Scanner Watch tab: tracked-results table is sortable, Touched gets its own column
 
-New: `owner-vite/src/pages/GexGrowth.tsx`.
-Edited: `owner-vite/src/lib/nav.ts` (+1 link), `owner-vite/src/pages/registry.ts`
-(+1 lazy), `server-v2/eod-strike-gex-recorder.js` (+`getStrikeGexBoard`),
-`server-v2/server-with-proxy.js` (+`GET /proxy/eod-strike-gex-board`),
-`server-v2/api-router.js` (+`/api/eod-strike-gex-board`, owner-only),
-`AGENTS.md` (owner-vite correction, below).
+Edited: `components/pages/Scanner.tsx` (`WatchThisScanner` + new `OutcomeTh`,
+`sortOutcomes`, `defaultOutcomeSort`). Client-side only — no endpoint change.
 
 ### What
 
-`owner.cbedge.net/owner/gex-growth` — which strikes had dealer gamma built or
-taken off at yesterday's close, across the whole scanner watchlist.
-
-Master–detail: a ranked rail on the left (symbol, magnitude bar, net Δ), a
-permanent full-size diverging ladder on the right. ↑/↓ walks the rail and
-repaints the ladder, so a pass over 169 names is arrowing rather than 169
-navigations. Filter box + three orderings (biggest move / most built / most
-pulled). Header names the baseline date per symbol.
+The tracked-results table under the Watch cards was fixed in the server's order
+(`first_flagged DESC`) with no way to re-order it. On the **Touched** tab that
+is the wrong axis entirely: you want the most recent touch first, and the touch
+date was not even a column — it was concatenated onto the status label
+(`TOUCHED 2026-08-11`), so it could not be sorted or scanned down.
 
 ### How
 
-**One call for the rail, one per name you open.** New `getStrikeGexBoard(topN)`
-does the whole board in a single query: `dense_rank()` per symbol picks ITS OWN
-two latest snapshot dates, a FULL JOIN diffs them, and `row_number()` takes the
-top N by |Δ|. Net total and top-N list are computed off the same CTE so they
-cannot disagree. A symbol with one snapshot comes back `prevDate: null`, net
-forced to 0, no strikes — the rail shows it greyed as "awaiting baseline"
-instead of dropping it or printing a day-one landslide.
+**Every header is now clickable.** `OutcomeTh` renders the label plus a
+direction caret (dim `▾` when inactive, `▲`/`▼` when it is the active key), and
+clicking the active column flips direction. First click on a new column opens
+**descending** for dates and numbers (newest / biggest first) and **ascending**
+for Symbol. Named `OutcomeTh` rather than `SortTh` because the Pin table further
+up the file already owns that name with a different key type.
 
-Per-symbol dates matter: a ticker added last week, or one whose chain failed at
-16:05, has a different pair than the rest. A board-wide "today vs yesterday"
-would show those as flat.
+**Touched is its own column**, between Closest and Status, and the status cell
+is back to the bare word. Both are sortable.
 
-Verified against a real PG 16 instance: per-symbol date pairs, dropped-strike
-unwinds surfacing through the FULL JOIN, top-N cap, no-baseline zeroing, and
-`absTot` ordering. Page verified in a headless browser: arrow-key walk
-(SPX→AVGO→META→AVGO), sort flip reorders without re-diffing, no-baseline branch.
+**Sort resets per view.** `defaultOutcomeSort()`: Touched → `touched_date` desc,
+Expired → `expiry` desc, everything else → `first_flagged` desc (the server's
+own order, so All/Open look unchanged until you click).
 
-Auth: the board route is `auth: 'owner'` — it returns the entire watchlist's
-positioning in one payload. The per-symbol drill-in reuses the existing
-`subscriber` route (owner passes that gate).
+**Nulls sink in both directions.** An untouched row has no touch date; letting
+those float to the top of a descending sort would bury exactly the rows the
+sort was asked for.
 
-Colour: green/red alone fails deuteranope separation (ΔE 7.4, measured), so
-sign is ALSO carried by side-of-rail and an explicit +/− on every value. Do not
-reduce these to colour-only bars.
+**Status sorts by lifecycle, not alphabet** — `open → touched → expired` via
+`STATUS_RANK`, rather than the A–Z order that would read `expired, open,
+touched`.
 
-### AGENTS.md correction
+Sorting is client-side over the page the endpoint already returned (the `limit`
+is applied server-side), so it re-orders the fetched rows and does not re-query.
 
-`AGENTS.md:41` listed `owner-vite*` as legacy/never-edit. It is live —
-`docker-compose.yml` builds it as the `owners` service at owner.cbedge.net and
-`UserMenu.tsx` makes it the owner's only entry point. Replaced that line with a
-section documenting both owner surfaces and the 3-file recipe for adding a page.
+## 2026-08-13 - Scanner Watch tab: /proxy/far-cb-outcomes no longer blocks the page
 
+Edited: `server-v2/far-cb-recorder.js` (quote enrichment rewritten as a
+background single-flight pass), `server-v2/server-with-proxy.js`
+(`/proxy/far-cb-outcomes` gains `quotes=0`), `components/pages/Scanner.tsx`
+(`WatchThisScanner`: Results view opts out of quotes, outcomes re-poll).
+
+### What
+
+Opening `/app/scanner?tab=watch` took minutes. In the network waterfall
+`far-cb-outcomes?status=all&limit=100` sat pending for **2.1 minutes** and then
+returned **524**, and `status=touched&limit=100` took **39.9s** — while every
+other fetch on the page (`quotes-batch`, `tt-quotes`, `bzila-alerts`) queued
+behind them, because a browser allows only 6 connections per host and the two
+stalled requests were holding two of them.
+
+### Why it was slow
+
+`enrichOutcomesWithQuotes()` ran **inline inside the request, one row at a
+time**: per tracked contract, a `fetchContractDailyBars()` call to Theta plus a
+hardcoded `await sleep(120)`. At 100 rows that is 100 sequential vendor calls
+and 12s of pure sleep before the first byte; at the Results view's 300-row
+ceiling it is three times that. The 60s per-contract cache only helped once a
+pass had already finished — and no pass ever finished before the proxy timed
+out, so the cache stayed empty and every poll paid full price again.
+
+### How it is fixed
+
+**The request no longer does the work.** `computeOutcomeQuotes()` now starts (or
+joins) a single background fill and `Promise.race`s it against a budget —
+`FAR_CB_QUOTE_WAIT_MS`, default **2500ms**. Whatever is in the cache when the
+budget expires is what ships; the pass keeps running and the next poll picks up
+the rest. Cached entries are served even past their TTL: a slightly old mark
+beats a blank column when a refresh is already in flight.
+
+**The fill itself is parallel.** `FAR_CB_QUOTE_CONCURRENCY` (default 5) workers,
+no per-row sleep, capped at `FAR_CB_QUOTE_MAX_PER_PASS` (default 60) contracts
+per pass so a backlog fills over successive polls instead of pinning Theta.
+The greeks snapshot is memoised per `(symbol, expiry)` and the queue is sorted
+group-major, so parallel workers share a snapshot rather than each opening a
+different one. A failed contract caches a null entry so a dead vendor is not
+re-asked on every poll.
+
+**`_quoteFill` is single-flight**, so N open scanner tabs share one pass rather
+than each starting its own — previously the concurrent polls multiplied the
+vendor load.
+
+**`quotes=0`** skips enrichment entirely. `ResultsByDay` only renders per-day
+counts and flag fields — it never reads `opt_price` — so the 300-row Results
+fetch now sends `quotes=0` and is a straight DB read. The Tracked-results table
+does show premium, so it keeps quotes on.
+
+**Outcomes re-poll every 60s** while the tab is visible (`document.hidden`
+skips it), so the contracts the background pass fills after the first response
+appear without a manual refresh.
+
+### Result
+
+`/proxy/far-cb-outcomes` returns in <2.5s worst case and near-instantly once
+warm, instead of 40s–2min-then-524. The connection-pool starvation that made
+the whole Watch tab feel slow goes away with it.
+
+### Tunables
+
+| Env | Default | Meaning |
+|-----|---------|---------|
+| `FAR_CB_QUOTE_WAIT_MS` | 2500 | Max ms a request waits on the background fill |
+| `FAR_CB_QUOTE_CONCURRENCY` | 5 | Parallel contract refreshes |
+| `FAR_CB_QUOTE_MAX_PER_PASS` | 60 | Contracts refreshed per pass |
 
 ## 2026-08-13 - Ticker Lookup: record end-of-day per-strike GEX, show Δ 1D
 

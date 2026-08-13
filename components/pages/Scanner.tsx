@@ -889,18 +889,18 @@ function VolPinScanner() {
           <thead>
             <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 14, textTransform: "uppercase" }}>
               <th style={{ ...th, textAlign: "left" }}>#</th>
-              <SortTh label="Symbol" col="symbol" align="left" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <SortTh label="Spot" col="spot" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <OutcomeTh label="Symbol" col="symbol" align="left" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <OutcomeTh label="Spot" col="spot" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
               <th style={th}>Pin Strike</th>
-              <SortTh label="Dist" col="dist" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <SortTh label="Pin OI" col="pinOi" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <SortTh label="ATM IV" col="atmIv" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <SortTh label="RV" col="rv" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <SortTh label="IV−RV%" col="ivRv" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <SortTh label="Spread Trend" col="spreadTrend" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <SortTh label="Range" col="range" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <SortTh label="Range Trend" col="rangeTrend" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <SortTh label="Status" col="status" align="center" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <OutcomeTh label="Dist" col="dist" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <OutcomeTh label="Pin OI" col="pinOi" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <OutcomeTh label="ATM IV" col="atmIv" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <OutcomeTh label="RV" col="rv" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <OutcomeTh label="IV−RV%" col="ivRv" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <OutcomeTh label="Spread Trend" col="spreadTrend" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <OutcomeTh label="Range" col="range" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <OutcomeTh label="Range Trend" col="rangeTrend" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <OutcomeTh label="Status" col="status" align="center" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
             </tr>
           </thead>
           <tbody>
@@ -1327,6 +1327,98 @@ type OutcomeRow = {
  */
 type OutcomeView = "all" | "open" | "touched" | "expired" | "results";
 
+// ── tracked-results table sorting ────────────────────────────────────────────
+// Every column header is clickable. Sorting is client-side over the rows the
+// endpoint already returned — the server orders by first_flagged DESC and the
+// limit is applied there, so this re-orders the fetched page, it does not go
+// back for more rows.
+type OutcomeSortKey =
+  | "symbol" | "strike" | "expiry" | "first_flagged" | "opt_price" | "opt_pct_open"
+  | "spot_at_flag" | "otm_pct_at_flag" | "closest_pct" | "touched_date" | "status";
+
+type OutcomeSort = { key: OutcomeSortKey; dir: "asc" | "desc" };
+
+/** open → touched → expired, so a status sort reads as a lifecycle, not A–Z. */
+const STATUS_RANK: Record<OutcomeRow["status"], number> = { open: 0, touched: 1, expired: 2 };
+
+const OUTCOME_SORT_VALUE: Record<OutcomeSortKey, (r: OutcomeRow) => string | number | null> = {
+  symbol:          (r) => r.symbol,
+  strike:          (r) => Number(r.strike),
+  expiry:          (r) => ymd(r.expiry) ?? r.expiry ?? null,
+  first_flagged:   (r) => ymd(r.first_flagged) ?? null,
+  opt_price:       (r) => r.opt_price ?? null,
+  opt_pct_open:    (r) => r.opt_pct_open ?? null,
+  spot_at_flag:    (r) => Number(r.spot_at_flag),
+  otm_pct_at_flag: (r) => Number(r.otm_pct_at_flag),
+  closest_pct:     (r) => r.closest_pct ?? null,
+  touched_date:    (r) => ymd(r.touched_date),
+  status:          (r) => STATUS_RANK[r.status] ?? 99,
+};
+
+/**
+ * Nulls always sink to the bottom, in BOTH directions — an untouched row has no
+ * touched date, and floating those to the top of a descending sort would bury
+ * the rows the sort was asked for.
+ */
+function sortOutcomes(rows: OutcomeRow[], sort: OutcomeSort): OutcomeRow[] {
+  const pick = OUTCOME_SORT_VALUE[sort.key];
+  const mul = sort.dir === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const av = pick(a);
+    const bv = pick(b);
+    const aNull = av == null || av === "";
+    const bNull = bv == null || bv === "";
+    if (aNull && bNull) return 0;
+    if (aNull) return 1;
+    if (bNull) return -1;
+    if (typeof av === "number" && typeof bv === "number") return (av - bv) * mul;
+    return String(av).localeCompare(String(bv)) * mul;
+  });
+}
+
+/** The sort a view lands on before the user clicks anything. */
+const defaultOutcomeSort = (view: OutcomeView): OutcomeSort =>
+  view === "touched"
+    ? { key: "touched_date", dir: "desc" }   // newest touch first
+    : view === "expired"
+      ? { key: "expiry", dir: "desc" }
+      : { key: "first_flagged", dir: "desc" }; // matches the server's own order
+
+/**
+ * Clickable column header for the tracked-results table. Named apart from the
+ * Pin table's own `SortTh` above — different sort-key type, different table.
+ */
+function OutcomeTh({
+  label, sortKey, sort, onSort, align = "right",
+}: {
+  label: string;
+  sortKey: OutcomeSortKey;
+  sort: OutcomeSort;
+  onSort: (k: OutcomeSortKey) => void;
+  align?: "left" | "right";
+}) {
+  const active = sort.key === sortKey;
+  return (
+    <th
+      onClick={() => onSort(sortKey)}
+      title={`Sort by ${label}`}
+      style={{
+        ...th,
+        textAlign: align,
+        cursor: "pointer",
+        userSelect: "none",
+        whiteSpace: "nowrap",
+        color: active ? LIGHT_BLUE : undefined,
+      }}
+    >
+      {label}
+      <span style={{ opacity: active ? 1 : 0.25, marginLeft: 4 }}>
+        {active ? (sort.dir === "asc" ? "▲" : "▼") : "▾"}
+      </span>
+    </th>
+  );
+}
+
 type DayBucket = {
   date: string;
   opened: OutcomeRow[];
@@ -1399,6 +1491,23 @@ function WatchThisScanner() {
 
   const [outcomes, setOutcomes] = useState<OutcomeRow[]>([]);
   const [outcomeStatus, setOutcomeStatus] = useState<OutcomeView>("all");
+  const [sort, setSort] = useState<OutcomeSort>(() => defaultOutcomeSort("all"));
+
+  // Switching view resets the sort to that view's default — the Touched tab
+  // wants newest-touch-first, which is not what the All tab wants.
+  useEffect(() => { setSort(defaultOutcomeSort(outcomeStatus)); }, [outcomeStatus]);
+
+  const onSort = useCallback((key: OutcomeSortKey) => {
+    setSort((cur) =>
+      cur.key === key
+        ? { key, dir: cur.dir === "asc" ? "desc" : "asc" }
+        // First click on a new column: dates and numbers open descending
+        // (newest / biggest first), symbol opens A–Z.
+        : { key, dir: key === "symbol" ? "asc" : "desc" }
+    );
+  }, []);
+
+  const sortedOutcomes = useMemo(() => sortOutcomes(outcomes, sort), [outcomes, sort]);
 
   // "Results" view — every tracked flag bucketed by calendar date.
   const [resultRows, setResultRows] = useState<OutcomeRow[]>([]);
@@ -1640,7 +1749,7 @@ function WatchThisScanner() {
           <span style={{ fontSize: 14, color: HOME_THEME.text }}>
             {outcomeStatus === "results"
               ? "One row per date · how many flags opened, were touched, and expired that day · click a date to expand"
-              : "Graded daily ~16:10 ET · no win/loss — just whether spot reached the strike · Opt Price = flagged contract's NBBO mid, % since its own open (live rows only)"}
+              : "Graded daily ~16:10 ET · no win/loss — just whether spot reached the strike · Opt Price = flagged contract's NBBO mid, % since its own open (live rows only) · click any column to sort"}
           </span>
         </div>
 
@@ -1658,20 +1767,21 @@ function WatchThisScanner() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
             <thead>
               <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 14, textTransform: "uppercase" }}>
-                <th style={{ ...th, textAlign: "left" }}>Symbol</th>
-                <th style={th}>Strike</th>
-                <th style={{ ...th, textAlign: "left" }}>Expiry</th>
-                <th style={{ ...th, textAlign: "left" }}>Flagged</th>
-                <th style={th}>Opt Price</th>
-                <th style={th}>% Since Open</th>
-                <th style={th}>Flagged Spot</th>
-                <th style={th}>OTM at flag</th>
-                <th style={th}>Closest</th>
-                <th style={{ ...th, textAlign: "left" }}>Status</th>
+                <OutcomeTh label="Symbol"       sortKey="symbol"          sort={sort} onSort={onSort} align="left" />
+                <OutcomeTh label="Strike"       sortKey="strike"          sort={sort} onSort={onSort} />
+                <OutcomeTh label="Expiry"       sortKey="expiry"          sort={sort} onSort={onSort} align="left" />
+                <OutcomeTh label="Flagged"      sortKey="first_flagged"   sort={sort} onSort={onSort} align="left" />
+                <OutcomeTh label="Opt Price"    sortKey="opt_price"       sort={sort} onSort={onSort} />
+                <OutcomeTh label="% Since Open" sortKey="opt_pct_open"    sort={sort} onSort={onSort} />
+                <OutcomeTh label="Flagged Spot" sortKey="spot_at_flag"    sort={sort} onSort={onSort} />
+                <OutcomeTh label="OTM at flag"  sortKey="otm_pct_at_flag" sort={sort} onSort={onSort} />
+                <OutcomeTh label="Closest"      sortKey="closest_pct"     sort={sort} onSort={onSort} />
+                <OutcomeTh label="Touched"      sortKey="touched_date"    sort={sort} onSort={onSort} align="left" />
+                <OutcomeTh label="Status"       sortKey="status"          sort={sort} onSort={onSort} align="left" />
               </tr>
             </thead>
             <tbody>
-              {outcomes.map((o, i) => (
+              {sortedOutcomes.map((o, i) => (
                 <tr key={`${o.symbol}-${o.expiry}-${o.strike}`}
                   onClick={() => openDetail(o)}
                   title="Click for day-by-day detail"
@@ -1702,18 +1812,23 @@ function WatchThisScanner() {
                   <td style={{ ...td, color: o.closest_pct != null && o.closest_pct < 1 ? LIGHT_BLUE : HOME_THEME.text }}>
                     {o.closest_pct != null ? `${o.closest_pct.toFixed(1)}%` : "—"}
                   </td>
+                  {/* Touched date is its own column now so it can be sorted on
+                      — it used to be glued onto the status label. */}
+                  <td style={{ ...td, textAlign: "left", color: o.touched_date ? LIGHT_BLUE : HOME_THEME.text, whiteSpace: "nowrap" }}>
+                    {ymd(o.touched_date) ?? "—"}
+                  </td>
                   <td style={{ ...td, textAlign: "left" }}>
                     <span style={{
                       fontSize: 14, fontWeight: 800, letterSpacing: "0.05em",
                       color: o.status === "touched" ? LIGHT_BLUE : o.status === "expired" ? HOME_THEME.text : HOME_THEME.green,
                     }}>
-                      {o.status === "touched" ? `TOUCHED ${o.touched_date ?? ""}` : o.status.toUpperCase()}
+                      {o.status.toUpperCase()}
                     </span>
                   </td>
                 </tr>
               ))}
               {!outcomes.length && (
-                <tr><td colSpan={10} style={{ padding: 20, textAlign: "center", color: HOME_THEME.text }}>
+                <tr><td colSpan={11} style={{ padding: 20, textAlign: "center", color: HOME_THEME.text }}>
                   No tracked flags yet.
                 </td></tr>
               )}

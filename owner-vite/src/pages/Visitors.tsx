@@ -197,6 +197,33 @@ export default function Visitors() {
     return { countries: c.size, plotted: dots.size, locations: places.size, accounts: signedIn.size, geoCoded: geo };
   }, [visits]);
 
+  // The map ALSO plots everyone whose row has a country but no coordinate, on
+  // that country's centroid. Those dots are the bulk of the history (nothing
+  // before 2026-08-13 has coordinates), so the header would read as a near-empty
+  // map without them. Counted here as "one visitor per country" to match how the
+  // map merges them.
+  const countryLevel = useMemo(() => {
+    const located = new Set<string>();
+    const seen = new Set<string>();
+    let anon = 0;
+    for (const v of visits) {
+      const code = (v.country || "").toUpperCase();
+      if (!code || code === "XX" || code === "T1") continue;
+      const id = v.userEmail
+        ? `e:${v.userEmail.trim().toLowerCase()}`
+        : v.userId ? `u:${v.userId}` : v.ip ? `ip:${v.ip}` : null;
+      if (typeof v.lat === "number" && typeof v.lon === "number") {
+        if (id) located.add(`${id}|${code}`);
+        continue;
+      }
+      seen.add(id ? `${id}|${code}` : `anon:${++anon}|${code}`);
+    }
+    // A visitor already plotted on a city in that country isn't a second dot.
+    let n = 0;
+    for (const k of seen) if (!located.has(k)) n++;
+    return n;
+  }, [visits]);
+
   const newestMs = meta?.newestAt ? Date.parse(meta.newestAt) : NaN;
   const newestAge = Number.isFinite(newestMs) ? now - newestMs : null;
   const beaconStale = newestAge != null && newestAge > STALE_AFTER_MS;
@@ -242,8 +269,9 @@ export default function Visitors() {
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
           <Stat label="loads" value={(meta?.total ?? visits.length).toLocaleString()} />
           <Stat label="countries" value={countries.toLocaleString()} />
-          <Stat label="visitors plotted" value={plotted.toLocaleString()} />
+          <Stat label="visitors plotted" value={(plotted + countryLevel).toLocaleString()} />
           <Stat label="locations" value={locations.toLocaleString()} />
+          {countryLevel > 0 && <Stat label="country-level" value={countryLevel.toLocaleString()} />}
           <Stat label="signed in" value={accounts.toLocaleString()} />
 
           {/* Range picker — server-side window, so a wider range costs a query,
@@ -337,9 +365,13 @@ export default function Visitors() {
           One dot per visitor, not per city — visitors sharing a location are fanned out around it,
           so zoom in to separate them. A solid gold dot is a signed-in account (click it for the
           email, Discord, user id, member-since and last login); a hollow slate dot is an anonymous
-          visitor, known only by IP. Click a country or a dot to pin its detail card. Scroll to
-          zoom, drag to pan, double-click to zoom in. Positions are Cloudflare metro centroids from
-          the visitor's IP, not device locations.
+          visitor, known only by IP. A <b>dashed, dimmed</b> dot is a visitor whose row carried a
+          country but no coordinate — they are fanned out around the middle of that country, not
+          located. Every row before 13 Aug 2026 is one of those: the coordinate columns were being
+          read from Cloudflare and then dropped on the way into the database, so that history cannot
+          be recovered. Click a country or a dot to pin its detail card. Scroll to zoom, drag to pan,
+          double-click to zoom in. Solid positions are Cloudflare metro centroids from the visitor's
+          IP, not device locations.
           {meta?.oldestAt && (
             <> History goes back to {new Date(meta.oldestAt).toLocaleDateString()}; the log is no longer
             trimmed, so this range grows on its own. Auto-refreshes hourly while this tab is visible.</>

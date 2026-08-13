@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { geoNaturalEarth1, geoPath } from "d3-geo";
+import { geoNaturalEarth1, geoPath, geoArea, geoBounds, geoCentroid } from "d3-geo";
 import { feature } from "topojson-client";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import { OWNER_THEME as HOME_THEME, ownerRgba } from "../lib/theme";
@@ -18,6 +18,15 @@ import { ALPHA2_NAME, FEATURE_ID_TO_ALPHA2 } from "../lib/countryMaps";
  * reads it back through /api/page-visits. Rows logged before that transform was
  * switched on carry a null country and land in the "Unknown" bucket, which is
  * reported honestly in the footer rather than silently dropped.
+ *
+ * Precision is per-row, and the map says which it has. `latitude`/`longitude`
+ * were being read from Cloudflare and then dropped on the way into the database
+ * until 2026-08-13 (a key-name mismatch — see that day's changelog), so every
+ * row before then has a country and nothing finer. Rather than plot 3% of the
+ * traffic and leave the map looking dead, those visitors are fanned out around
+ * their COUNTRY's centroid and drawn dashed and dimmed. A solid dot is a place
+ * we measured; a dashed one is a country we know and a position we invented.
+ * The two are counted separately everywhere they are counted at all.
  *
  * The world geometry is vendored at public/countries-110m.json (world-atlas@2,
  * 110m resolution ≈ 105 KB) and fetched at runtime, so it never enters the JS
@@ -94,6 +103,16 @@ interface VisitorDot {
   placeKey: string;
   slot: number;
   slotCount: number;
+  /** True when this dot has no city coordinate and is parked on its COUNTRY's
+   *  centroid instead — a real visitor at an approximate position. Drawn
+   *  dimmer and dashed so it never passes for a located one. Every row logged
+   *  before the coordinate columns started being written (see the changelog for
+   *  2026-08-12) is one of these, which is most of the history. */
+  approx: boolean;
+  /** Degrees of latitude this dot's cluster may fan across. A city cluster is
+   *  ~1°; a country cluster is sized from the country's own bounding box so a
+   *  US blob doesn't spill into Canada. */
+  spreadDeg: number;
   /** "Denver, Colorado, United States" */
   placeLabel: string;
   /** What the map calls this person: their email if they were signed in,
@@ -130,6 +149,21 @@ interface Aggregate {
   unknownVisits: number;
   maxUnique: number;
   maxDotVisits: number;
+  /** Dots placed on a real city coordinate, and dots parked on a country
+   *  centroid because the row has no coordinate. `cityDots + approxDots ===
+   *  dots.length`. Shown separately in the footer — a map that silently mixes
+   *  measured and approximated positions is a map you can't trust. */
+  cityDots: number;
+  approxDots: number;
+  /** How many countries the approximate dots are spread across. */
+  approxCountries: number;
+}
+
+/** Where a country's approximate dots go, and how wide they may fan. */
+export interface CountryAnchor {
+  lat: number;
+  lon: number;
+  spreadDeg: number;
 }
 
 /** One identity per visitor, best effort: the account wins (email first, then
@@ -143,18 +177,32 @@ interface Aggregate {
  *  purpose: we know a session was attached to one and not the other, and
  *  quietly merging them would claim an identification the log doesn't support. */
 function visitorKey(r: VisitorMapRow, fallback: number): string {
+  const stable = stableVisitorKey(r);
+  return stable ?? `anon:${fallback}`;
+}
+
+/** The identity half of `visitorKey`, without the per-row synthetic fallback.
+ *  Null when the row carries nothing that could match another row — which is
+ *  exactly when it must NOT be merged with anything. */
+function stableVisitorKey(r: VisitorMapRow): string | null {
   if (r.userEmail) return `e:${r.userEmail.trim().toLowerCase()}`;
   if (r.userId) return `u:${r.userId}`;
   if (r.ip) return `ip:${r.ip}`;
-  return `anon:${fallback}`;
+  return null;
 }
 
-function aggregate(rows: VisitorMapRow[]): Aggregate {
+function aggregate(
+  rows: VisitorMapRow[],
+  /** Country centroids, once the world geometry has loaded. Null before that,
+   *  which simply means no approximate dots are produced yet. */
+  anchors: Map<string, CountryAnchor> | null,
+): Aggregate {
   const acc = new Map<string, { visits: number; ips: Set<string>; sample: VisitorMapRow[] }>();
   const globalVisitors = new Set<string>();
   // One entry per (coordinate cluster × visitor) — the dot layer's unit of work.
   const dotAcc = new Map<string, {
     lat: number; lon: number; placeKey: string; placeLabel: string;
+    approx: boolean; spreadDeg: number;
     signedIn: boolean; country: string | null; ips: Set<string>;
     userId: string | null; email: string | null; discord: string | null;
     accountCreatedAt: string | null; lastLoginAt: string | null; isOwner: boolean;
@@ -167,6 +215,32 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
   let visitsWithCoords = 0;
   let anonSeq = 0;
 
+  // Someone seen today (with a city coordinate) and last week (without one) is
+  // ONE person — they must not appear as a dot in their city PLUS a second dot
+  // on the country centroid. So remember where each visitor is known to be,
+  // per country, and let their coordinate-less rows join that dot instead of
+  // falling back to the country. Rows arrive newest-first, so the first hit is
+  // their most recent known location.
+  const knownPlace = new Map<string, { key: string; lat: number; lon: number; label: string }>();
+  for (const r of rows) {
+    if (typeof r.lat !== "number" || typeof r.lon !== "number") continue;
+    if (!Number.isFinite(r.lat) || !Number.isFinite(r.lon)) continue;
+    const cc = (r.country || "").toUpperCase();
+    if (!cc || NON_COUNTRY.has(cc)) continue;
+    const id = stableVisitorKey(r);
+    if (!id) continue;
+    const k = `${id}|${cc}`;
+    if (knownPlace.has(k)) continue;
+    knownPlace.set(k, {
+      key: `${r.lat.toFixed(2)},${r.lon.toFixed(2)}`,
+      lat: r.lat,
+      lon: r.lon,
+      label:
+        [r.city, r.region, ALPHA2_NAME[cc] || cc].filter(Boolean).join(", ") ||
+        `${r.lat.toFixed(2)}, ${r.lon.toFixed(2)}`,
+    });
+  }
+
   for (const r of rows) {
     const code = (r.country || "").toUpperCase();
     totalVisits++;
@@ -175,26 +249,70 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
 
     // Dot layer is independent of the choropleth: a row can have coords even
     // if its country code is a sentinel, and vice versa.
-    if (typeof r.lat === "number" && typeof r.lon === "number" && Number.isFinite(r.lat) && Number.isFinite(r.lon)) {
-      visitsWithCoords++;
-      // 2dp ≈ 1 km — tight enough to keep distinct cities apart, loose enough
-      // that one city's rows share one centroid to fan out from.
-      const pk = `${r.lat.toFixed(2)},${r.lon.toFixed(2)}`;
+    const realCountry = code && !NON_COUNTRY.has(code) ? code : null;
+    const hasCoords =
+      typeof r.lat === "number" && typeof r.lon === "number" &&
+      Number.isFinite(r.lat) && Number.isFinite(r.lon);
+    // Where this row's dot goes, in order of how much we actually know:
+    //   1. this row's own city coordinate,
+    //   2. a city we've seen THIS visitor at in this country (so one person is
+    //      one dot, not a city dot plus a country dot),
+    //   3. the country's centroid, flagged approximate,
+    //   4. nothing — no coordinate and no usable country code.
+    const stableId = !hasCoords ? stableVisitorKey(r) : null;
+    const known = stableId && realCountry ? knownPlace.get(`${stableId}|${realCountry}`) ?? null : null;
+    const anchor = !hasCoords && !known && realCountry ? anchors?.get(realCountry) ?? null : null;
+    const place = hasCoords
+      ? {
+          // 2dp ≈ 1 km — tight enough to keep distinct cities apart, loose
+          // enough that one city's rows share one centroid to fan out from.
+          key: `${(r.lat as number).toFixed(2)},${(r.lon as number).toFixed(2)}`,
+          lat: r.lat as number,
+          lon: r.lon as number,
+          approx: false,
+          spreadDeg: SPREAD_MAX_DEG,
+          label:
+            [r.city, r.region, realCountry ? ALPHA2_NAME[realCountry] || realCountry : null]
+              .filter(Boolean)
+              .join(", ") || `${(r.lat as number).toFixed(2)}, ${(r.lon as number).toFixed(2)}`,
+        }
+      : known
+        ? {
+            key: known.key,
+            lat: known.lat,
+            lon: known.lon,
+            approx: false,
+            spreadDeg: SPREAD_MAX_DEG,
+            label: known.label,
+          }
+        : anchor
+          ? {
+              key: `cc:${realCountry}`,
+              lat: anchor.lat,
+              lon: anchor.lon,
+              approx: true,
+              spreadDeg: anchor.spreadDeg,
+              label: `${ALPHA2_NAME[realCountry!] || realCountry} · country only`,
+            }
+          : null;
+
+    if (hasCoords) visitsWithCoords++;
+
+    if (place) {
       // Keyed per (location × visitor): the same person seen in two cities is
       // two dots, because each dot answers "who was here", not "who exists".
-      const dk = `${pk}|${vid}`;
+      const dk = `${place.key}|${vid}`;
       let dot = dotAcc.get(dk);
       if (!dot) {
-        const label = [r.city, r.region, code && !NON_COUNTRY.has(code) ? (ALPHA2_NAME[code] || code) : null]
-          .filter(Boolean)
-          .join(", ");
         dot = {
-          lat: r.lat,
-          lon: r.lon,
-          placeKey: pk,
-          placeLabel: label || `${r.lat.toFixed(2)}, ${r.lon.toFixed(2)}`,
+          lat: place.lat,
+          lon: place.lon,
+          placeKey: place.key,
+          placeLabel: place.label,
+          approx: place.approx,
+          spreadDeg: place.spreadDeg,
           signedIn: Boolean(r.userEmail || r.userId),
-          country: code && !NON_COUNTRY.has(code) ? code : null,
+          country: realCountry,
           ips: new Set<string>(),
           userId: r.userId ?? null,
           email: r.userEmail ?? null,
@@ -206,7 +324,7 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
           sample: [],
         };
         dotAcc.set(dk, dot);
-        placeSizes.set(pk, (placeSizes.get(pk) ?? 0) + 1);
+        placeSizes.set(place.key, (placeSizes.get(place.key) ?? 0) + 1);
       }
       dot.visits++;
       if (r.ip) dot.ips.add(r.ip);
@@ -265,6 +383,8 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
         slot,
         slotCount: placeSizes.get(d.placeKey) ?? 1,
         placeLabel: d.placeLabel,
+        approx: d.approx,
+        spreadDeg: d.spreadDeg,
         // An account without a resolvable email still isn't anonymous, so it
         // reads as the id rather than being demoted to "Visitor".
         visitorLabel: d.email || d.discord || (d.userId ? `${d.userId.slice(0, 12)}…` : "Visitor"),
@@ -289,13 +409,17 @@ function aggregate(rows: VisitorMapRow[]): Aggregate {
     ranked,
     dots,
     signedInDots: dots.reduce((n, d) => n + (d.signedIn ? 1 : 0), 0),
-    placeCount: placeSizes.size,
+    // Real places only — a country centroid is not a location the visitor was at.
+    placeCount: [...placeSizes.keys()].filter((k) => !k.startsWith("cc:")).length,
     visitsWithCoords,
     totalVisits,
     totalUnique: globalVisitors.size,
     unknownVisits,
     maxUnique: ranked.length ? ranked[0].unique : 0,
     maxDotVisits: dots.length ? dots[dots.length - 1].visits : 0,
+    cityDots: dots.reduce((n, d) => n + (d.approx ? 0 : 1), 0),
+    approxDots: dots.reduce((n, d) => n + (d.approx ? 1 : 0), 0),
+    approxCountries: new Set(dots.filter((d) => d.approx).map((d) => d.placeKey)).size,
   };
 }
 
@@ -371,6 +495,12 @@ const BUBBLE_FILL = "rgba(13,17,25,0.85)";      // surface, so it reads hollow
 const BUBBLE_STROKE = "rgba(138,147,166,0.95)"; // #8A93A6 slate — anonymous
 const MEMBER_FILL = "#FFB703";                  // OWNER_THEME.gold — identified
 const MEMBER_STROKE = SURFACE;
+// A country-centroid dot is a real person at a position we are guessing, so it
+// keeps its identity colour (you can still see who is signed in) but loses
+// solidity: dashed ring, half opacity. Precision is a visual property here, not
+// a footnote — nobody reads the footnote while pointing at a dot.
+const APPROX_OPACITY = 0.5;
+const APPROX_DASH = "2.5 2.5";
 /** Text/badge colour for anonymous visitors, matching their dot. */
 const VISITOR_INK = "#8A93A6";
 
@@ -401,14 +531,42 @@ const SPREAD_MAX_DEG = 0.9;
  * doesn't jump between renders. Longitude is divided by cos(lat) so the fan
  * stays circular on screen instead of stretching near the poles.
  */
-function spreadOffset(lat: number, lon: number, slot: number, count: number): [number, number] {
+function spreadOffset(
+  lat: number,
+  lon: number,
+  slot: number,
+  count: number,
+  maxDeg: number = SPREAD_MAX_DEG,
+): [number, number] {
   if (count <= 1) return [lat, lon];
-  const spread = Math.min(SPREAD_MAX_DEG, 0.12 * Math.sqrt(count));
+  // Density is what sets the fan's size, capped by how much room the cluster
+  // has: a city gets SPREAD_MAX_DEG, a country gets a slice of its own bounding
+  // box. The 0.12°/visitor growth is kept for cities; a country cluster holds
+  // hundreds of people, so it scales off its cap instead of creeping there.
+  const spread = maxDeg <= SPREAD_MAX_DEG
+    ? Math.min(maxDeg, 0.12 * Math.sqrt(count))
+    : maxDeg * Math.min(1, Math.sqrt(count) / 12);
   const radius = spread * Math.sqrt((slot + 0.5) / count);
   const angle = (slot + 1) * GOLDEN_ANGLE;
   const dLat = radius * Math.sin(angle);
   const dLon = (radius * Math.cos(angle)) / Math.max(0.2, Math.cos((lat * Math.PI) / 180));
   return [lat + dLat, lon + dLon];
+}
+
+/** The biggest landmass of a country feature, by solid angle. Used for the
+ *  country centroid and its bounding box — see `countryAnchors`. */
+function mainlandOf(f: Feature<Geometry, { name?: string }>): Feature<Geometry, { name?: string }> {
+  const g = f.geometry as Geometry & { type: string; coordinates?: unknown };
+  if (!g || g.type !== "MultiPolygon") return f;
+  const parts = (g as unknown as { coordinates: number[][][][] }).coordinates;
+  let best: Geometry | null = null;
+  let bestArea = -1;
+  for (const coordinates of parts) {
+    const poly = { type: "Polygon", coordinates } as unknown as Geometry;
+    const area = geoArea(poly as never);
+    if (area > bestArea) { bestArea = area; best = poly; }
+  }
+  return best ? { type: "Feature", properties: f.properties, geometry: best } : f;
 }
 
 // ── Sizing ───────────────────────────────────────────────────────────────────
@@ -721,7 +879,33 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
     return () => { cancelled = true; };
   }, []);
 
-  const stats = useMemo(() => aggregate(rows), [rows]);
+  // Country centroids, derived from the same geometry the choropleth draws, so
+  // an approximate dot always lands inside the country it belongs to and no
+  // second data file has to be vendored or kept in sync.
+  //
+  // A country's centroid is taken from its LARGEST polygon, not the whole
+  // MultiPolygon: France's overseas départements would otherwise drag its
+  // centre into the Atlantic, and the USA's would sit somewhere near Alaska.
+  const countryAnchors = useMemo(() => {
+    if (!features) return null;
+    const m = new Map<string, CountryAnchor>();
+    for (const f of features) {
+      const code =
+        FEATURE_ID_TO_ALPHA2[String(f.id)] ?? NAME_TO_ALPHA2[f.properties?.name ?? ""] ?? null;
+      if (!code || m.has(code)) continue;
+      const main = mainlandOf(f);
+      const [lon, lat] = geoCentroid(main);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      const [[w, s], [e, n]] = geoBounds(main);
+      // Fan across a third of the country's SHORTER side, so the blob stays
+      // inside the border rather than bleeding into the neighbours.
+      const span = Math.min(Math.abs(n - s), Math.abs(e - w));
+      m.set(code, { lat, lon, spreadDeg: Math.max(1.2, Math.min(9, span * 0.33)) });
+    }
+    return m;
+  }, [features]);
+
+  const stats = useMemo(() => aggregate(rows, countryAnchors), [rows, countryAnchors]);
 
   const height = Math.max(MIN_HEIGHT, Math.round((width || 900) / ASPECT));
 
@@ -763,7 +947,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
     if (!projection) return [];
     const out: Array<VisitorDot & { cx: number; cy: number; r: number }> = [];
     for (const d of stats.dots) {
-      const [lat, lon] = spreadOffset(d.lat, d.lon, d.slot, d.slotCount);
+      const [lat, lon] = spreadOffset(d.lat, d.lon, d.slot, d.slotCount, d.spreadDeg);
       const xy = projection([lon, lat]);
       if (!xy || !Number.isFinite(xy[0]) || !Number.isFinite(xy[1])) continue;
       out.push({ ...d, cx: xy[0], cy: xy[1], r: bubbleRadius(d.visits, stats.maxDotVisits) });
@@ -818,9 +1002,11 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
       cx={b.cx}
       cy={b.cy}
       r={b.r / sizeK}
-      fill={b.signedIn ? MEMBER_FILL : BUBBLE_FILL}
-      stroke={b.signedIn ? MEMBER_STROKE : BUBBLE_STROKE}
+      fill={b.approx ? "none" : b.signedIn ? MEMBER_FILL : BUBBLE_FILL}
+      stroke={b.approx ? (b.signedIn ? MEMBER_FILL : BUBBLE_STROKE) : b.signedIn ? MEMBER_STROKE : BUBBLE_STROKE}
       strokeWidth={b.signedIn ? 1.8 : 1.5}
+      strokeDasharray={b.approx ? APPROX_DASH : undefined}
+      opacity={b.approx ? APPROX_OPACITY : undefined}
       vectorEffect="non-scaling-stroke"
       style={{ cursor: "pointer" }}
       onMouseMove={(e) => {
@@ -932,8 +1118,11 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
     ? (active.kind === "visitor" ? `${active.sub} · ` : "") +
       `${active.visits.toLocaleString()} load${active.visits === 1 ? "" : "s"}`
     : `${stats.ranked.length} countr${stats.ranked.length === 1 ? "y" : "ies"}` +
-      (stats.dots.length
-        ? ` · ${stats.dots.length.toLocaleString()} plotted from ${stats.placeCount.toLocaleString()} location${stats.placeCount === 1 ? "" : "s"}`
+      (stats.cityDots
+        ? ` · ${stats.cityDots.toLocaleString()} at ${stats.placeCount.toLocaleString()} location${stats.placeCount === 1 ? "" : "s"}`
+        : "") +
+      (stats.approxDots
+        ? ` · ${stats.approxDots.toLocaleString()} country-level`
         : "");
 
   const cardStyle: CSSProperties = {
@@ -1190,8 +1379,8 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
             disabled={stats.dots.length === 0}
             title={
               stats.dots.length === 0
-                ? "No coordinates logged yet — enable Cloudflare's visitor location headers"
-                : `${stats.dots.length} visitors across ${stats.placeCount} locations · one dot per visitor (gold = signed-in account, slate = anonymous), size ∝ their page loads · zoom in to separate visitors sharing a city`
+                ? "No geolocated rows yet — enable Cloudflare's visitor location headers"
+                : `${stats.dots.length} visitors · ${stats.cityDots} on a city coordinate across ${stats.placeCount} locations, ${stats.approxDots} dashed on a country centroid (no coordinate on the row) · gold = signed-in account, slate = anonymous, size ∝ their page loads · zoom in to separate visitors sharing a place`
             }
             style={{
               marginLeft: 6,
@@ -1243,6 +1432,32 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
                 {(stats.dots.length - stats.signedInDots).toLocaleString()}
               </span>{" "}
               anonymous
+            </span>
+          )}
+
+          {/* Precision, spelled out. A dashed dot is a real visitor whose
+              position we are guessing from their country — say how many. */}
+          {stats.approxDots > 0 && (
+            <span
+              style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.45 }}
+              title={`These rows carry a country but no coordinate, so each visitor is fanned out around their country's centre instead of a city. Rows logged before 2026-08-13 have no coordinates at all — that column was never being written.`}
+            >
+              <span
+                style={{
+                  display: "inline-block",
+                  width: 10,
+                  height: 10,
+                  borderRadius: 999,
+                  border: `1.5px dashed ${BUBBLE_STROKE}`,
+                  opacity: APPROX_OPACITY,
+                  marginRight: 5,
+                  verticalAlign: -1,
+                }}
+              />
+              <span style={{ fontFamily: "var(--font-mono)" }}>
+                {stats.approxDots.toLocaleString()}
+              </span>{" "}
+              country-level
             </span>
           )}
         </div>
