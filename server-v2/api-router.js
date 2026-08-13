@@ -324,9 +324,30 @@ function clientIp(req) {
 // file instead), so this in-process copy is what actually needs the geo read.
 // Everything here stays null until the transform is on, and for anything that
 // never crossed the Cloudflare edge (local dev, health checks) — best-effort.
+// Cloudflare sends `cf-ipcity: Bogotá` as UTF-8 BYTES, and Node hands raw
+// header bytes back as latin1 — so String(v) is `BogotÃ¡` and that is what went
+// into the database for every non-ASCII city and region we have ever logged.
+// Re-decode before trimming (the trim would otherwise cut a multi-byte
+// character in half). Plain-ASCII names and anything that isn't valid UTF-8 are
+// returned untouched, so a name that was already correct can never be corrupted
+// by "repairing" it. server-v2/scripts/backfill-visit-geo.js fixes the backlog.
+function decodeHeaderText(s) {
+  if (!/[^\x00-\x7F]/.test(s)) return s;
+  const bytes = [];
+  for (const ch of s) {
+    const cp = ch.codePointAt(0);
+    if (cp > 0xFF) return s;
+    bytes.push(cp);
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes));
+  } catch {
+    return s;
+  }
+}
 function clientGeoTrim(v, max) {
   if (!v) return null;
-  const s = String(v).trim().slice(0, max);
+  const s = decodeHeaderText(String(v)).trim().slice(0, max);
   return s.length ? s : null;
 }
 function clientGeoFloat(v) {
@@ -508,35 +529,6 @@ register('/api/mult-greek-gex-change', {
     const qs = new URL(req.url || '/', 'http://localhost').searchParams.toString();
     const r = await ctx.internalFetch(
       `/proxy/mult-greek-gex-change${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
-    send(res, r.status, await r.text(), { 'Cache-Control': NO_STORE });
-  },
-});
-
-// /api/eod-strike-gex-change?symbol=NVDA → /proxy/eod-strike-gex-change
-// Day-over-day per-strike ΔGEX for the whole board ex-0DTE, joined in Postgres
-// by eod-strike-gex-recorder.js. Pass-through, no-store: the client never holds
-// yesterday's ladder, it renders the chg the server already computed.
-register('/api/eod-strike-gex-change', {
-  auth: 'subscriber', methods: ['GET'],
-  async handler(req, res, ctx) {
-    const qs = new URL(req.url || '/', 'http://localhost').searchParams.toString();
-    const r = await ctx.internalFetch(
-      `/proxy/eod-strike-gex-change${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
-    send(res, r.status, await r.text(), { 'Cache-Control': NO_STORE });
-  },
-});
-
-// /api/eod-strike-gex-board?top=5 → /proxy/eod-strike-gex-board
-// Whole-board ΔGEX ranking for the owner console page. OWNER-ONLY: it returns
-// the entire watchlist's positioning in one payload, which is a different thing
-// from the single-symbol route above that any subscriber can read for a ticker
-// they already looked up.
-register('/api/eod-strike-gex-board', {
-  auth: 'owner', methods: ['GET'],
-  async handler(req, res, ctx) {
-    const qs = new URL(req.url || '/', 'http://localhost').searchParams.toString();
-    const r = await ctx.internalFetch(
-      `/proxy/eod-strike-gex-board${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
     send(res, r.status, await r.text(), { 'Cache-Control': NO_STORE });
   },
 });

@@ -1,249 +1,153 @@
 # Changelog
 
-## 2026-08-13 - Scanner Watch tab: tracked-results table is sortable, Touched gets its own column
+## 2026-08-13 - Visitor map: the cities were there the whole time
 
-Edited: `components/pages/Scanner.tsx` (`WatchThisScanner` + new `OutcomeTh`,
-`sortOutcomes`, `defaultOutcomeSort`). Client-side only — no endpoint change.
+Edited: `server-v2/api-router.js` (`clientGeoTrim`, new `decodeHeaderText`),
+`owner-vite/src/components/VisitorMap.tsx` + `owner-vite/src/pages/Visitors.tsx`
+(doc copy only). Added: `server-v2/scripts/backfill-visit-geo.js`.
 
 ### What
 
-The tracked-results table under the Watch cards was fixed in the server's order
-(`first_flagged DESC`) with no way to re-order it. On the **Touched** tab that
-is the wrong axis entirely: you want the most recent touch first, and the touch
-date was not even a column — it was concatenated onto the status label
-(`TOUCHED 2026-08-11`), so it could not be sorted or scanned down.
+The country-centroid fallback shipped an hour ago put 329 visitors in a blob
+over Kansas. Correct, and the wrong answer — because `page_visits.city` was
+never broken. Only `latitude`/`longitude` were dropped on write. 6,047 of the
+6,180 coordinate-less rows carry a city name, across just **145 distinct
+places**. That is 145 geocoder lookups to put six thousand rows on their real
+city.
+
+Found on the way in: a third bug in the same four lines. Cloudflare sends
+`cf-ipcity: Bogotá` as UTF-8 bytes; Node hands raw header bytes back as latin1;
+so what we have been storing is `BogotÃ¡`, `Ãle-de-France`, `OÅ›wiÄ™cim`.
+Every non-ASCII city and region we have ever logged is mangled — and mangled
+names do not geocode, so this had to be fixed first.
 
 ### How
 
-**Every header is now clickable.** `OutcomeTh` renders the label plus a
-direction caret (dim `▾` when inactive, `▲`/`▼` when it is the active key), and
-clicking the active column flips direction. First click on a new column opens
-**descending** for dates and numbers (newest / biggest first) and **ascending**
-for Symbol. Named `OutcomeTh` rather than `SortTh` because the Pin table further
-up the file already owns that name with a different key type.
+**Write path** — `clientGeoTrim` now re-decodes the header before trimming
+(decode first: trimming to 80 chars can cut a multi-byte character in half).
+Plain-ASCII values and anything that isn't valid UTF-8 are returned untouched,
+so a correct name can never be corrupted by "repairing" it. Round-trip tested
+against Bogotá / Île-de-France / Oświęcim / Ta'if / München / 東京.
 
-**Touched is its own column**, between Closest and Status, and the status cell
-is back to the bare word. Both are sortable.
+**Backlog** — `server-v2/scripts/backfill-visit-geo.js`, two idempotent passes:
 
-**Sort resets per view.** `defaultOutcomeSort()`: Touched → `touched_date` desc,
-Expired → `expiry` desc, everything else → `first_flagged` desc (the server's
-own order, so All/Open look unchanged until you click).
+1. Re-decodes the mangled city/region already in the table. Handles BOTH latin1
+   and cp1252 flavours — cp1252 maps byte 0x9B to U+203A, so a plain latin1
+   decode fails on exactly the Polish and Turkish names that need it.
+2. Geocodes each distinct (city, region, country) once through Open-Meteo and
+   writes the coordinate onto every row sharing it. Region is a TIEBREAK, never
+   a filter: Cloudflare says "Mecca Region" where the geocoder says "Mecca", and
+   filtering on that would drop the correct hit.
 
-**Nulls sink in both directions.** An untouched row has no touch date; letting
-those float to the top of a descending sort would bury exactly the rows the
-sort was asked for.
+`WHERE latitude IS NULL` throughout — a real Cloudflare coordinate is never
+overwritten with a geocoded guess, and a second run finds nothing to do.
 
-**Status sorts by lifecycle, not alphabet** — `open → touched → expired` via
-`STATUS_RANK`, rather than the A–Z order that would read `expired, open,
-touched`.
+Run it:
 
-Sorting is client-side over the page the endpoint already returned (the `limit`
-is applied server-side), so it re-orders the fetched rows and does not re-query.
+    docker compose exec -T dashboard node server-v2/scripts/backfill-visit-geo.js --dry
+    docker compose exec -T dashboard node server-v2/scripts/backfill-visit-geo.js
 
-## 2026-08-13 - Scanner Watch tab: /proxy/far-cb-outcomes no longer blocks the page
+### Notes
 
-Edited: `server-v2/far-cb-recorder.js` (quote enrichment rewritten as a
-background single-flight pass), `server-v2/server-with-proxy.js`
-(`/proxy/far-cb-outcomes` gains `quotes=0`), `components/pages/Scanner.tsx`
-(`WatchThisScanner`: Results view opts out of quotes, outcomes re-poll).
+The dashed country-level dots stay in the map for what genuinely has no city —
+133 rows, plus whatever the geocoder can't place. That's the honest rendering
+for "we know the country, not the city", and the script prints exactly which
+places fell into it rather than failing silently.
+
+## 2026-08-13 - Visitor map: 329 visitors who were never on it
+
+Edited: `owner-vite/src/components/VisitorMap.tsx` (`aggregate`, `spreadOffset`,
+`countryAnchors`, `mainlandOf`, dot layer, legend),
+`owner-vite/src/pages/Visitors.tsx` (header stats, footnote).
 
 ### What
 
-Opening `/app/scanner?tab=watch` took minutes. In the network waterfall
-`far-cb-outcomes?status=all&limit=100` sat pending for **2.1 minutes** and then
-returned **524**, and `status=touched&limit=100` took **39.9s** — while every
-other fetch on the page (`quotes-batch`, `tt-quotes`, `bzila-alerts`) queued
-behind them, because a browser allows only 6 connections per host and the two
-stalled requests were holding two of them.
+Yesterday's fix started coordinates flowing, and the map went from 0 dots to
+13 — out of 458 visitors. That is worse than it sounds: the dot layer only ever
+plotted rows carrying `lat`/`lon`, and nothing before 2026-08-13 has them (the
+column was being dropped on write — see yesterday's entry). So 97% of the
+history rendered as choropleth shading and nothing else, and the map read as
+emptier than the day the bug was still in.
 
-### Why it was slow
+The country was there the whole time on 6,131 of those rows. Only the city was
+missing.
 
-`enrichOutcomesWithQuotes()` ran **inline inside the request, one row at a
-time**: per tracked contract, a `fetchContractDailyBars()` call to Theta plus a
-hardcoded `await sleep(120)`. At 100 rows that is 100 sequential vendor calls
-and 12s of pure sleep before the first byte; at the Results view's 300-row
-ceiling it is three times that. The 60s per-contract cache only helped once a
-pass had already finished — and no pass ever finished before the proxy timed
-out, so the cache stayed empty and every poll paid full price again.
+### How
 
-### How it is fixed
+A row with a country but no coordinate now gets a dot on that COUNTRY's
+centroid, drawn **dashed at half opacity** so it never passes for a measured
+position. Solid = a place we geolocated; dashed = a country we know and a
+position we invented. Counted separately in the header ("country-level"), the
+footer legend, and the dot-toggle tooltip.
 
-**The request no longer does the work.** `computeOutcomeQuotes()` now starts (or
-joins) a single background fill and `Promise.race`s it against a budget —
-`FAR_CB_QUOTE_WAIT_MS`, default **2500ms**. Whatever is in the cache when the
-budget expires is what ships; the pass keeps running and the next poll picks up
-the rest. Cached entries are served even past their TTL: a slightly old mark
-beats a blank column when a refresh is already in flight.
+Three details that make it honest rather than decorative:
 
-**The fill itself is parallel.** `FAR_CB_QUOTE_CONCURRENCY` (default 5) workers,
-no per-row sleep, capped at `FAR_CB_QUOTE_MAX_PER_PASS` (default 60) contracts
-per pass so a backlog fills over successive polls instead of pinning Theta.
-The greeks snapshot is memoised per `(symbol, expiry)` and the queue is sorted
-group-major, so parallel workers share a snapshot rather than each opening a
-different one. A failed contract caches a null entry so a dead vendor is not
-re-asked on every poll.
-
-**`_quoteFill` is single-flight**, so N open scanner tabs share one pass rather
-than each starting its own — previously the concurrent polls multiplied the
-vendor load.
-
-**`quotes=0`** skips enrichment entirely. `ResultsByDay` only renders per-day
-counts and flag fields — it never reads `opt_price` — so the 300-row Results
-fetch now sends `quotes=0` and is a straight DB read. The Tracked-results table
-does show premium, so it keeps quotes on.
-
-**Outcomes re-poll every 60s** while the tab is visible (`document.hidden`
-skips it), so the contracts the background pass fills after the first response
-appear without a manual refresh.
+- **Centroids come from the map's own geometry** — `geoCentroid` over the
+  country's LARGEST polygon (`mainlandOf`), not the whole MultiPolygon. France's
+  overseas départements would otherwise put its centre in the Atlantic and the
+  USA's somewhere near Alaska. No second data file to vendor or keep in sync.
+- **One person is still one dot.** A visitor seen today with a city coordinate
+  and last week without would have become a city dot PLUS a country dot. So
+  coordinate-less rows first look for a city that same visitor was seen at in
+  that same country (`knownPlace`, built newest-first) and join that dot; only a
+  visitor with no located row anywhere in the country falls through to the
+  centroid.
+- **The fan is sized to the country.** `spreadOffset` takes a max spread; a city
+  cluster keeps its ~1°, a country gets a third of its own shorter bounding-box
+  side (clamped 1.2°–9°), so the US blob stays inside the US.
 
 ### Result
 
-`/proxy/far-cb-outcomes` returns in <2.5s worst case and near-instantly once
-warm, instead of 40s–2min-then-524. The connection-pool starvation that made
-the whole Watch tab feel slow goes away with it.
+342 dots instead of 13 — 13 on real city coordinates, 329 country-level across
+32 countries. The city half grows on its own every day now that the write path
+works; the dashed half is frozen history and will never improve, which is
+exactly what dashing it says.
 
-### Tunables
+## 2026-08-12 - Visitor map: coordinates were never stored, and never read back
 
-| Env | Default | Meaning |
-|-----|---------|---------|
-| `FAR_CB_QUOTE_WAIT_MS` | 2500 | Max ms a request waits on the background fill |
-| `FAR_CB_QUOTE_CONCURRENCY` | 5 | Parallel contract refreshes |
-| `FAR_CB_QUOTE_MAX_PER_PASS` | 60 | Contracts refreshed per pass |
-
-## 2026-08-13 - Ticker Lookup: record end-of-day per-strike GEX, show Δ 1D
-
-New: `server-v2/eod-strike-gex-recorder.js`, `app/api/eod-strike-gex-change/route.ts`.
-Edited: `server-v2/server-with-proxy.js` (defensive require + `startEodStrikeGexRecorder()`
-+ two new `/proxy/*` routes), `server-v2/api-router.js` (one `register()`),
-`components/pages/Analytics.tsx` (`TlLadder` Δ column, `TickerLookupCard` feed).
+Edited: `server-v2/api-router.js` (`clientGeo`, `/api/page-status` POST,
+`/api/page-visits` GET).
 
 ### What
 
-The Ticker Lookup right pane could say where the structural gamma IS, never
-what CHANGED. Nothing stored yesterday's board for anything but $SPX/SPY/QQQ.
-Now a 16:05 ET job snapshots per-strike net GEX for the whole board minus 0DTE
-across the full scanner watchlist (~169 symbols, roster re-resolved each sweep
-so a ticker added on the Watchlists page starts recording that evening), and the
-right pane grows a **Δ 1D** column plus a `Δ 1D vs close YYYY-MM-DD` baseline
-line under the board label.
+The owner Visitors map has been logging every visit correctly and drawing the
+country choropleth from it — but the dot layer (one dot per visitor, placed on
+a city centroid) has been empty, because `page_visits.latitude` /
+`page_visits.longitude` were NULL on every row ever written by the live server,
+and would have read back as null even if they weren't.
 
-40 strikes above and 40 below the closing spot per symbol — sliced off the
-strike INDEX like `tlWindow()`, so a $2.50 chain and a $50 chain both give 40
-rungs a side. ~81 rows × 169 symbols/day. 400-day retention.
+Two independent name mismatches, both on the same pair of columns:
 
-### How
+1. **Write.** `clientGeo()` in `api-router.js` returned `{ lat, lon }`, and the
+   `/api/page-status` POST handler passed `lat: geo.lat, lon: geo.lon` into
+   `libDb.insertPageVisit()`. That function reads `r.latitude` / `r.longitude`
+   (`_lib-db.cjs`), so both bound to `undefined` → `?? null` → NULL. The
+   Cloudflare `cf-iplatitude` / `cf-iplongitude` headers were being read and
+   then thrown away.
+2. **Read.** `/api/page-visits` mapped `lat: r.lat ?? null, lon: r.lon ?? null`,
+   but `getPageVisitsSince()` is a `SELECT *` so the row carries `latitude` /
+   `longitude`. Null for every row regardless of what's stored.
 
-**Same formula as the card, on purpose.** `/proxy/gex-by-strike-multi` already
-returns this exact ladder and is deliberately NOT used — it is ThetaData-sourced
-and sparse on single names, which is the documented reason the card stopped
-reading it. The recorder re-implements the client's `accumulateChainGreeks()`
-gex term against the same `fetchChainFull`: OI+Vol basis, same
-`S² · 0.01 · 100`. Verified numerically — stubbed chain through both paths gives
-byte-identical values. `Math.abs()` on each gamma is a no-op on TT data and a
-guard against a signed put gamma silently flipping strikes positive.
-
-**16:05 ET, once**, because the OI+Vol basis is half day-volume and that is only
-final after the 16:00 print. Minute-poll + `_lastRunDate` claim (claimed before
-the await, released if the sweep lands nothing) — same idiom as `oi-daily`.
-Window stays open to 22:00 ET so an evening restart still captures the session.
-
-**Δ is computed in Postgres, not the browser.** `getStrikeGexChange()` FULL JOINs
-the two most recent snapshot DATES for the symbol — not calendar today/yesterday,
-so a holiday or missed run degrades to "vs the last session we have". FULL, not
-LEFT: the window follows spot, so a wall that came OFF has a prev row and no cur
-row, and anchoring on cur would discard exactly the largest negative changes.
-Verified against a real PG 16 instance: unwinds surface, new strikes read full
-value, single-snapshot returns `prevDate: null`.
-
-Re-fire clears the day's rows per symbol before writing — the window MOVES, so a
-bare upsert would leave a day holding the union of two windows.
-
-Client shows `—` (not 0) for a strike with no snapshot, and keeps the column off
-entirely until a second session exists, so a column of zeros never gets read as
-"the board didn't move".
-
-**Proxy changes were additive only** — no existing route touched;
-`proxy-tastytrade.js` is read-only (imported, not edited).
-
-Manual fire: `POST /proxy/eod-strike-gex-run[?symbol=NVDA][&date=YYYY-MM-DD]`.
-Kill switch: `EOD_STRIKE_GEX_RECORDER=0`.
-
-
-## 2026-08-13 - Ticker Lookup: level chips are one uniform height
-
-Edited: `components/pages/Analytics.tsx` (`TlLevelChip`, new `TL_CHIP_MIN_H` /
-`TL_CHIP_ROW`, the `.tl-split` container and both chip rows).
-
-### What
-
-In the ticker-lookup popup off the Multi Greek chart, the four level cards —
-CORE (CB) / CALL WALL / PUT WALL / GAMMA FLIP — were ragged. Cards grew when
-their note or distance string wrapped, and the left pane's row sat at a
-different height from the right pane's because the two ladders above them are
-different lengths.
+`country` / `region` / `city` matched on both sides, which is why the map looked
+half-alive: countries shaded, visitor count climbed, hourly refresh worked, no
+dots. The Next.js fallback at `app/api/page-status/route.ts` had it right all
+along (`latitude` / `longitude`) — the in-process router copy drifted from it,
+and the router copy is the one that runs in production (`API_ROUTER=1`).
 
 ### How
 
-Each chip row is now a fixed line box: the label, value, distance and note
-lines carry explicit `lineHeight` values (14 / 24 / 15 / 15) and are clipped to
-ONE line with `nowrap` + ellipsis, with the full string on `title` for hover.
-The chip carries `minHeight: TL_CHIP_MIN_H` (92 = 14+24+15+15 + 6 gaps + 16
-padding + 2 border) and `boxSizing: border-box`, so nothing can grow it.
+- `clientGeo()` now returns `latitude` / `longitude`, matching both
+  `insertPageVisit()` and the Next fallback.
+- Added the fallback's `usable` guard: `0,0` is Cloudflare's "no fix" answer,
+  not a location in the Gulf of Guinea, so it stores NULL instead of parking
+  visitors off the coast of Africa.
+- `/api/page-visits` reads `r.latitude` / `r.longitude`.
 
-The two rows now share one `TL_CHIP_ROW` style with `alignItems: "stretch"`
-and `marginTop: "auto"`, and the `.tl-split` grid moved from
-`alignItems: "start"` to `"stretch"` — so both panes are the same height and
-both chip rows are pinned to the bottom, lining up across the split.
+### Notes
 
-Affects the Analytics page's own `<TickerLookupCard />` too, which is the same
-component.
-
-
-## 2026-08-12 - GEX Map: a third field — gamma sign × delta sign
-
-Edited: `app/test/GexMapTab.tsx` (`FIELD_MODES`, `buildModel`, `sliceModel`,
-`TapeField`, `MapCard`, new `quadColor`).
-
-### What
-
-DEX per strike is now on the map, as a third tab beside HEATMAP and TERRAIN
-rather than a layer painted over one of them. Four rounds of mockups all said
-the same thing: anything drawn ON TOP of the gamma — rings, bars, hatching,
-ribbons — either covers the field or is too faint to read. So the cell colour
-IS the pair.
-
-    green family  = positive gamma, dealers dampen
-    rose family   = negative gamma, dealers amplify
-    deep          = DEX positive  (dealers short delta · buy dips)
-    light         = DEX negative  (dealers long delta · sell rips)
-
-Two families of two, so the dampening-vs-amplifying read still lands from
-across the room before you look at delta at all.
-
-### How
-
-`quadColor(g, d, intensity)`. The hue only COMMITS as |DEX| grows — at zero
-delta a cell is the plain gamma colour of its family and slides to the corner as
-delta arrives. Forcing every cell into one of four buckets by the sign of a
-number that is mostly noise turns the field into a two-tone flag drawn by
-rounding error. Brightness is `max(|GEX|, 0.75·|DEX|)`, and the cull runs on
-that same combined magnitude: a strike carrying delta with thin gamma now
-appears, which is the cell the plain heatmap drops and the whole reason the tab
-is worth having. Colours were picked against live tape in a throwaway picker
-mock; `WHITE_LIFT` is 0.52 because four hues need less burn-to-white than two.
-
-The model gained `dexHeat` — signed DEX per cell, on the same geometric column
-blend as the gamma, so the morning is legible in delta for the same reason it is
-now legible in gamma. It is EMPTY unless `dexSurface`: the fallback DEX shape is
-one ladder for the whole session, and stretching that across every column would
-draw a surface the recorder never wrote. On a session without slot-aligned DEX
-the tab draws the gamma and says so on the field rather than blanking or
-pretending.
-
-The four-state key renders above the chart on that tab only, and is deliberately
-NOT `[data-capture-hide]` — a green/rose field is unreadable without it, so the
-shared PNG has to carry it. The intensity slider now covers both cell fields.
-
+Historical rows can't be recovered — their coordinates were never written. Dots
+will appear for visits logged after this deploys; older visits keep their
+country and stay in the choropleth. Requires a deploy to take effect.
 
 ## 2026-08-12 - GEX Map: the morning is back, and Terrain survives the snapshot
 

@@ -365,13 +365,13 @@ export default function Visitors() {
           One dot per visitor, not per city — visitors sharing a location are fanned out around it,
           so zoom in to separate them. A solid gold dot is a signed-in account (click it for the
           email, Discord, user id, member-since and last login); a hollow slate dot is an anonymous
-          visitor, known only by IP. A <b>dashed, dimmed</b> dot is a visitor whose row carried a
-          country but no coordinate — they are fanned out around the middle of that country, not
-          located. Every row before 13 Aug 2026 is one of those: the coordinate columns were being
-          read from Cloudflare and then dropped on the way into the database, so that history cannot
-          be recovered. Click a country or a dot to pin its detail card. Scroll to zoom, drag to pan,
-          double-click to zoom in. Solid positions are Cloudflare metro centroids from the visitor's
-          IP, not device locations.
+          visitor, known only by IP. A <b>dashed, dimmed</b> dot has no city on its row at all and is
+          fanned out around the middle of its country — a real visitor at a position we are guessing.
+          Rows before 13 Aug 2026 lost their coordinates on the way into the database, but kept their
+          city name, so <code>backfill-visit-geo.js</code> geocodes them back to a real place; only
+          what that cannot resolve stays dashed. Click a country or a dot to pin its detail card.
+          Scroll to zoom, drag to pan, double-click to zoom in. Solid positions are metro centroids
+          from the visitor's IP, not device locations.
           {meta?.oldestAt && (
             <> History goes back to {new Date(meta.oldestAt).toLocaleDateString()}; the log is no longer
             trimmed, so this range grows on its own. Auto-refreshes hourly while this tab is visible.</>

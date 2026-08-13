@@ -21,10 +21,12 @@ import { ALPHA2_NAME, FEATURE_ID_TO_ALPHA2 } from "../lib/countryMaps";
  *
  * Precision is per-row, and the map says which it has. `latitude`/`longitude`
  * were being read from Cloudflare and then dropped on the way into the database
- * until 2026-08-13 (a key-name mismatch — see that day's changelog), so every
- * row before then has a country and nothing finer. Rather than plot 3% of the
- * traffic and leave the map looking dead, those visitors are fanned out around
- * their COUNTRY's centroid and drawn dashed and dimmed. A solid dot is a place
+ * until 2026-08-13 (a key-name mismatch — see that day's changelog), so older
+ * rows arrive with no coordinate. Most of them DO still carry a city, and
+ * `server-v2/scripts/backfill-visit-geo.js` geocodes those back to a real
+ * position; what remains is rows with a country and nothing finer. Rather than
+ * drop those visitors off the map entirely, they are fanned out around their
+ * COUNTRY's centroid and drawn dashed and dimmed. A solid dot is a place
  * we measured; a dashed one is a country we know and a position we invented.
  * The two are counted separately everywhere they are counted at all.
  *
