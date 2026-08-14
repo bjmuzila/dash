@@ -213,6 +213,12 @@ function Ladder({
 
 // ── page ────────────────────────────────────────────────────────────────────
 const TOP_N = 5;
+// Both panes fill the window rather than sitting at a fixed 620/560px. The
+// subtrahend is everything above and below them that does NOT scroll — global
+// toolbar, card header, the controls row, the footnote and the shell's padding.
+// A `min` floor keeps the rail usable on a short laptop screen; below that the
+// page scrolls as a whole, which is the right failure.
+const PANE_H = "max(340px, calc(100vh - 318px))";
 // The series only changes once a day at 16:05 ET, so this is a courtesy refresh
 // for a tab left open overnight — not a live poll. The ↻ button is the real
 // refresh path.
@@ -447,7 +453,7 @@ export default function GexGrowth() {
               : "No end-of-day snapshots recorded yet. The first sweep runs at 16:05 ET; the Δ column needs a second session before it can say anything."}
           </div>
         ) : (
-          <div className="gexgrowth-split" style={{ display: "grid", gridTemplateColumns: "268px 1fr", gap: 14, alignItems: "start" }}>
+          <div className="gexgrowth-split" style={{ display: "grid", gridTemplateColumns: "268px 1fr", gap: 14, alignItems: "stretch" }}>
 
             {/* ── rail ───────────────────────────────────────────────── */}
             <div
@@ -456,7 +462,7 @@ export default function GexGrowth() {
               aria-label={mode === "levels" ? "Symbols ranked by absolute net GEX" : "Symbols ranked by absolute ΔGEX"}
               style={{
                 border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden",
-                maxHeight: 620, overflowY: "auto", outline: "none",
+                height: PANE_H, overflowY: "auto", outline: "none",
               }}
             >
               {rail.map((s) => {
@@ -501,7 +507,14 @@ export default function GexGrowth() {
             </div>
 
             {/* ── detail ─────────────────────────────────────────────── */}
-            <div style={{ border: `1px solid ${T.border}`, borderRadius: 14, padding: 14, background: T.panelBg, minWidth: 0 }}>
+            {/* Flex column at the same height as the rail: the header, the big
+                number and the top-N strip are fixed rows, and the ladder takes
+                whatever is left. That is what lets the ladder scroll inside a
+                full-height card instead of the page scrolling around it. */}
+            <div style={{
+              border: `1px solid ${T.border}`, borderRadius: 14, padding: 14, background: T.panelBg,
+              minWidth: 0, height: PANE_H, display: "flex", flexDirection: "column",
+            }}>
               {sel == null ? (
                 <div style={{ opacity: 0.6, fontSize: 13 }}>Pick a symbol.</div>
               ) : (
@@ -563,14 +576,17 @@ export default function GexGrowth() {
                   ) : !detail?.rows?.length ? (
                     <div style={{ opacity: 0.6, fontSize: 13 }}>No recorded strikes for {sel}.</div>
                   ) : (
-                    // Same cap as the rail, so the two panes stay side by side
-                    // instead of the page growing to 81 rows tall next to a
-                    // short list — master–detail only works if both are onscreen.
+                    // flex:1 + minHeight:0, not a fixed height — the ladder eats
+                    // the rest of the pane whatever the header above it costs.
+                    // minHeight:0 is load-bearing: a flex child defaults to
+                    // min-height:auto, which refuses to shrink below its content
+                    // and would push the ladder out of the card instead of
+                    // scrolling it.
                     <div
                       ref={ladderScroll}
                       style={{
                         opacity: detailLoading ? 0.55 : 1, transition: "opacity .12s",
-                        maxHeight: 560, overflowY: "auto", paddingRight: 4,
+                        flex: 1, minHeight: 0, overflowY: "auto", paddingRight: 4,
                       }}
                     >
                       <Ladder rows={detail.rows} spot={detail.spot ?? null} mode={mode} scrollRef={ladderScroll} />
@@ -594,6 +610,10 @@ export default function GexGrowth() {
       <style>{`
         @media (max-width: 860px) {
           .gexgrowth-split { grid-template-columns: 1fr !important; }
+          /* Stacked, two full-height panes would be two screens of scrolling
+             before the second one starts. Cap them and let the page scroll.
+             !important because the height is an inline style. */
+          .gexgrowth-split > div { height: auto !important; max-height: 70vh; }
         }
       `}</style>
     </PageShell>

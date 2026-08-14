@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-08-14 - ΔGEX Board: panes fill the window
+
+Edited: `owner-vite/src/pages/GexGrowth.tsx` (`PANE_H`, detail pane becomes a
+flex column, mobile height cap).
+
+### What
+
+The rail and the ladder were pinned at 620px and 560px, so on a tall monitor the
+card floated in the middle of a mostly empty page while both lists scrolled
+inside their own little boxes. Both panes now run the full height of the window
+and scroll there.
+
+### How
+
+- `PANE_H = max(340px, calc(100vh - 318px))` on both panes. The subtrahend is
+  everything above and below them that does NOT scroll — global toolbar, card
+  header, controls row, footnote, shell padding. The `max()` floor keeps the
+  rail usable on a short laptop screen; below that the page scrolls as a whole,
+  which is the right failure.
+- The detail pane is a flex column at that height: header, big number and top-N
+  strip are fixed rows, and the ladder is `flex: 1; min-height: 0`. `minHeight`
+  is load-bearing — a flex child defaults to `min-height: auto`, refuses to
+  shrink below its content, and would push the ladder out of the card instead of
+  scrolling it.
+- Grid switched to `alignItems: stretch` so the two panes stay the same height.
+- Under 860px the panes stack, and two full-height ones would be two screens of
+  scrolling before the second even starts — capped at `70vh` with `height: auto`
+  (`!important`, since the height is inline).
+
+### Note
+
+Spot still centres itself in the ladder on load. The centring is measured off
+the viewport's own rect, so it follows the new height with no change.
+
+
 ## 2026-08-14 - Multi Greek: replay slider — all four panels on one clock
 
 Edited: `app/mult-greek/MultGreekClient.tsx`.
