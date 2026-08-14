@@ -1,55 +1,65 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // app/levels/page.tsx — /levels
 //
-// THE WHOLE SCANNER UNIVERSE'S LEVELS ON ONE PAGE.
+// THE WHOLE SCANNER UNIVERSE AT ONCE, WITH FOUR PINNED LADDERS ON TOP.
 //
-// Multi Greek shows CB / call wall / put wall for four tickers by pulling a full
-// option chain per ticker in the browser. That does not scale: 169 chains is
-// hundreds of requests and tens of megabytes, so this page reads the numbers the
-// SERVER already computed instead —
+// Two halves:
+//
+//   INDEX  — one small cell per roster ticker: symbol, its Core Bullseye, the
+//            move vs that core, and a 4px bar showing where spot sits between
+//            the walls. ~92px wide, so 169 tickers land in about eight rows and
+//            the whole universe is genuinely visible without scrolling.
+//   DOCK   — four fixed slots at the top. Click a cell to pin that ticker as a
+//            full price-scaled ladder; click again (or the ✕) to unpin. Pinning
+//            a fifth drops the oldest. Pins survive a reload.
+//
+// This replaced a grid of 169 expandable cards. The cards were the layout, so
+// the page was a wall of chrome and you had to open one to learn anything; now
+// the board is the layout and the card is a detail view of the handful you are
+// actually working.
+//
+// DATA. Multi Greek shows these levels for four tickers by pulling a full option
+// chain per ticker in the browser. That does not scale to 169, so this page
+// reads what the SERVER already computed —
 //
 //   GET /proxy/scanner?any=1   →  latest scanner_snapshots row per symbol:
 //                                 spot, expiry, cb, call_wall, put_wall,
 //                                 gex_flip, total_net_gex, plus `stale`.
 //
-// scanner-recorder.js sweeps that table every 5 minutes for exactly the roster
-// this page lists, so one request paints every ticker. `any=1` means a weekend
-// or a pre-market load shows Friday's close rather than an empty page; those
-// rows come back flagged `stale` and are marked as such.
+// scanner-recorder.js sweeps that table every 5 minutes for exactly this roster,
+// so one request paints the entire board. `any=1` means a weekend or pre-market
+// load shows Friday's close rather than an empty page; those rows come back
+// flagged `stale` and say so.
 //
-// LIVE SPOT. The levels step every 5 minutes, but the marker does not have to.
-// A second poll (/api/tt-quotes, 5s, chunked) overlays a live last price per
-// symbol, so the spot pill and the SPOT-VS-CB readout move continuously between
-// sweeps while the rails hold still.
+// LIVE SPOT. Levels step on the 5-minute sweep; the marker does not have to. A
+// second poll (/api/tt-quotes, 5s, chunked) overlays a live last price, so the
+// spot pill, the range bars and every SPOT-VS-CB readout move continuously
+// between sweeps while the rails hold still.
 //
-// COLLAPSED BY DEFAULT. A tile's header band carries ticker + CB + CW + PW + DTE
-// on one ~34px line; clicking it opens the price-scaled ladder underneath. The
-// whole roster therefore fits in about a screen and a half, and you open only
-// what you want to look at.
-//
-// ONE FLAT ALPHABETICAL BOARD. An earlier cut grouped the tiles under the
-// roster's lanes (Main / Shares / Spreads / Option volume). It is gone: a ticker
-// is where its name says it is, every time, and you never have to know which
-// bucket the server filed something in to find it. Sort is A–Z by default; the
-// other two orders stay as buttons.
+// COLOUR. Nothing on this page changes colour because of where price is. Not the
+// card, not the index cell. Both used to, and both read as noise: a surface that
+// repaints as spot moves is weather, not information, and 169 of them at once is
+// a light show. The only highlight on the board marks the four cells that are
+// PINNED above — which is a question the user asked, not one the market did.
+// Everywhere else, colour means WHICH LEVEL a thing is and never anything else:
+// CB gold, CW blue, PW red, plus up/down green-red on the two deltas. Position
+// still reads, from the range bar's marks rather than from a wash.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // WHY THIS PAGE SHIPS A <style> BLOCK INSTEAD OF PURE INLINE STYLE
 //
-// Two things inline styles cannot express, both of which this layout needs:
+// `@container` and `:hover`, neither of which an inline style can express. The
+// card's band drops its pieces (expiry → put wall → call wall → the CB/CW/PW
+// letters) as the CARD narrows rather than the window, so the same ladder fires
+// whether a dock slot got narrow because the browser did or because a dock is
+// four-up on a laptop.
 //
-//   1. `@container` — the band drops its pieces (expiry → put wall → call wall →
-//      the CB/CW/PW letters) as the CARD gets narrow, not the window. Same
-//      ladder whether the tile shrank because the browser did, because you chose
-//      8 across, or because a dock opened. One rule, every cause.
-//   2. `:hover` on the band.
+// Nothing in that band may SHRINK — every element is `flex:0 0 auto` with
+// `white-space:nowrap` and a flexible spacer eats the slack — so a value is
+// either fully drawn or removed by the ladder. Half-drawn numbers are impossible
+// by construction.
 //
-// Nothing in the band is allowed to SHRINK — every element is `flex:0 0 auto`
-// with `white-space:nowrap` and a flexible spacer eats the slack — so a value is
-// either fully drawn or removed by the ladder above. Half-drawn numbers (the
-// clipped "CB 3" / "CW:" state) are impossible by construction.
-//
-// Every colour in that CSS is interpolated from homeTheme / LEVEL_COLORS. There
+// Every colour in the CSS is interpolated from homeTheme / LEVEL_COLORS. There
 // are no colour literals in this file; `alpha()` derives its rgba from a theme
 // token and nothing else.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -60,6 +70,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import {
   HOME_THEME,
   LEVEL_COLORS,
+  LIGHT_BLUE,
   ES_CANDLE_UP,
   ES_CANDLE_DOWN,
   homeInputStyle,
@@ -80,22 +91,21 @@ const LEVELS_POLL_MS = 60_000;
 const QUOTES_POLL_MS = 5_000;
 /** Symbols per /api/tt-quotes call — keeps the query string sane. */
 const QUOTE_CHUNK = 40;
-/**
- * Rail height in px on an open tile. 104 → 140: at 104 the three levels and the
- * spot marker crowded each other on any ticker whose walls sit close together,
- * and the open card read as a squashed version of the collapsed one. The extra
- * 36px is pure vertical room for the ladder — no new content.
- */
+/** Rail height in px on a docked card. */
 const RAIL_H = 140;
-/** Spot within this fraction of the CB counts as sitting ON the core. */
-const AT_CORE_PCT = 0.0035;
-/** Spot within this fraction of a wall counts as in reach of it. */
-const NEAR_WALL_PCT = 0.006;
-const PREFS_KEY = "cb-levels-prefs-v3";
+/** Dock slots. Four fits a laptop at a readable card width. */
+const MAX_PINS = 4;
+const PREFS_KEY = "cb-levels-prefs-v4";
+/**
+ * Pins live in localStorage, which is per browser PROFILE per machine — the same
+ * scope as the density/sort prefs this page has always saved. A second computer
+ * (or a second Chrome profile) starts empty. Moving them to the account would
+ * mean a server-side prefs row; deliberately not done yet.
+ */
+const PINS_KEY = "cb-levels-pins-v1";
 
 type SortId = "core" | "gex" | "az";
 type LevelKey = "cb" | "cw" | "pw" | "flip";
-type Zone = "cb" | "cw" | "pw" | "mid";
 
 type ScannerRow = {
   symbol: string;
@@ -171,46 +181,46 @@ function alpha(hex: string, a: number): string {
 
 // ── The stylesheet (see the header note for why this exists) ─────────────────
 
-const ZONE_COLOR: Record<Zone, string> = {
-  cb: LEVEL_COLORS.cb,
-  cw: LEVEL_COLORS.cw,
-  pw: LEVEL_COLORS.pw,
-  mid: HOME_THEME.text,
-};
-
 const CSS = `
-.cblv-grid{display:grid;grid-template-columns:repeat(var(--cblv-cols,5),minmax(0,1fr));gap:18px;align-items:start}
-@media (max-width:900px){.cblv-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:560px){.cblv-grid{grid-template-columns:1fr}}
+/* ── INDEX ── one cell per ticker; the whole roster on screen at once. */
+.cblv-idx{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:5px}
+.cblv-cell{display:flex;flex-direction:column;gap:1px;padding:5px 7px 6px;border-radius:7px;cursor:pointer;
+  border:1px solid ${alpha(HOME_THEME.text, 0.12)};background:${alpha(HOME_THEME.text, 0.03)};
+  transition:transform .08s,border-color .08s,background .08s}
+.cblv-cell:hover{transform:translateY(-1px);border-color:${alpha(HOME_THEME.text, 0.5)}}
+/* THE ONLY CELL STATE IS "IS IT IN THE DOCK". Cells used to tint themselves gold
+   / blue / red by where spot sat, which meant 169 of them repainted as price
+   moved and the board read as weather rather than as a list. A cell is now
+   neutral unless it is one of the four pinned above — the highlight answers
+   "which of these am I looking at", and nothing else on the board competes with
+   it. Position still shows, in the range bar, which is a mark rather than a
+   wash. */
+.cblv-cell.cblv-pinned{border-color:${HOME_THEME.text};background:${alpha(HOME_THEME.text, 0.14)};
+  box-shadow:0 0 0 2px ${alpha(HOME_THEME.text, 0.12)}}
+.cblv-cell > *{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-/* EDGE. The fill is deliberately left where it is — it sits ~4% above the page
-   background, which is inside the noise floor of most monitors, so the BORDER
-   does the separating: white at 36% (from 16%, which was too faint to read as an
-   edge at all) plus a 3px soft halo outside it. Page stays as dark as it was;
-   the tiles stop being holes in it. */
+/* ── DOCK ── four fixed slots. Empty ones are drawn so the layout never jumps. */
+.cblv-dock{display:grid;grid-template-columns:repeat(${MAX_PINS},minmax(0,1fr));gap:18px;align-items:start}
+@media (max-width:1200px){.cblv-dock{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:640px){.cblv-dock{grid-template-columns:1fr}}
+.cblv-slot{min-height:96px;border-radius:14px;display:flex;align-items:center;justify-content:center;
+  border:1px dashed ${alpha(HOME_THEME.text, 0.14)};color:${alpha(HOME_THEME.text, 0.22)};
+  font-size:10px;font-weight:800;letter-spacing:.1em}
+
+/* ── CARD ── one neutral surface. Nothing here reacts to where spot sits. */
 .cblv-card{container-type:inline-size;min-width:0;border-radius:14px;overflow:hidden;
   background:linear-gradient(180deg,${alpha(HOME_THEME.panel, 0.98)},${alpha(HOME_THEME.bg, 0.92)});
   border:1px solid ${alpha(HOME_THEME.text, 0.36)};
   box-shadow:0 0 0 3px ${alpha(HOME_THEME.text, 0.06)},
              0 14px 28px -12px ${alpha(HOME_THEME.bg, 0.9)},
              inset 0 1px 0 ${alpha(HOME_THEME.text, 0.07)}}
-
-/* NEUTRAL BAND. The card used to wash itself gold / blue / red depending on
-   where spot sat, which meant the surface changed meaning as price moved and a
-   board of them read as noise. One colourless band now, on every card, always.
-   Colour is reserved for things that never change what they mean: CB gold, CW
-   blue, PW red on the values and the rail, up/down green-red on SPOT VS CB. The
-   only state left on the card is the small chip beside the ticker. */
-.cblv-band{display:flex;align-items:center;gap:7px;padding:9px 11px;cursor:pointer;user-select:none;
-  background:linear-gradient(180deg,${alpha(HOME_THEME.text, 0.09)},${alpha(HOME_THEME.text, 0.015)});
-  transition:background .12s}
-.cblv-band:hover{background:linear-gradient(180deg,${alpha(HOME_THEME.text, 0.15)},${alpha(HOME_THEME.text, 0.045)})}
-.cblv-card.cblv-open .cblv-band{border-bottom:1px solid ${HOME_THEME.border}}
-
-.cblv-caret{flex:0 0 9px;font-size:9px;line-height:1;color:${alpha(HOME_THEME.text, 0.35)};transition:transform .12s}
-.cblv-card.cblv-open .cblv-caret{transform:rotate(90deg)}
-.cblv-tk,.cblv-v,.cblv-dte{flex:0 0 auto;white-space:nowrap}
+.cblv-band{display:flex;align-items:center;gap:7px;padding:9px 11px;
+  border-bottom:1px solid ${HOME_THEME.border};
+  background:linear-gradient(180deg,${alpha(HOME_THEME.text, 0.09)},${alpha(HOME_THEME.text, 0.015)})}
+.cblv-tk,.cblv-v,.cblv-dte,.cblv-x{flex:0 0 auto;white-space:nowrap}
 .cblv-sp{flex:1 1 auto;min-width:4px}
+.cblv-x{cursor:pointer;color:${alpha(HOME_THEME.text, 0.4)};font-size:11px;padding:0 2px}
+.cblv-x:hover{color:${HOME_THEME.text}}
 
 /* DROP LADDER — measured against the CARD. Ticker + CB never leave. */
 @container (max-width:268px){.cblv-dte{display:none}}
@@ -219,54 +229,111 @@ const CSS = `
 @container (max-width:168px){.cblv-lb{display:none}}
 `;
 
-// ── One ticker tile ──────────────────────────────────────────────────────────
+// ── Index cell ───────────────────────────────────────────────────────────────
 
-function LevelTile({
-  row, spot, show, open, onToggle,
+function IndexCell({
+  row, spot, pinned, onToggle,
 }: {
   row: ScannerRow;
-  /** Live last price when the quote poll has one, else the sweep's spot. */
+  spot: number | null;
+  pinned: boolean;
+  onToggle: (symbol: string) => void;
+}) {
+  const cb = row.cb, cw = row.call_wall, pw = row.put_wall;
+  const dCbPct = spot != null && cb ? ((spot - cb) / cb) * 100 : null;
+  // Position of spot (and of the core) between the two walls, 0…1.
+  const span = cw != null && pw != null ? cw - pw : null;
+  const at = (v: number | null) =>
+    v != null && span && pw != null ? Math.max(0, Math.min(100, ((v - pw) / span) * 100)) : null;
+  const spotPct = at(spot);
+  const cbPct = at(cb);
+
+  return (
+    <div
+      className={`cblv-cell${pinned ? " cblv-pinned" : ""}`}
+      role="button"
+      tabIndex={0}
+      onClick={() => onToggle(row.symbol)}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(row.symbol); } }}
+      title={[
+        `${row.symbol} — sweep ${fmtClock(row.ts)} ET${row.stale ? ` (stale, ${row.date})` : ""}`,
+        spot != null ? `spot ${fmtSpot(spot)}` : null,
+        cb != null ? `CB ${fmtLevel(cb)}` : null,
+        cw != null ? `CW ${fmtLevel(cw)}` : null,
+        pw != null ? `PW ${fmtLevel(pw)}` : null,
+        row.total_net_gex != null ? `net GEX ${fmtGex(row.total_net_gex)}` : null,
+        pinned ? "pinned — click to unpin" : "click to pin",
+      ].filter(Boolean).join("\n")}
+    >
+      {/* Ticker in the app's light-blue accent, not white. It is the only word
+          in a cell of numbers, and giving it the one non-level colour on the
+          page makes a wall of 169 cells scannable by NAME without touching any
+          of the level colours (CB gold, CW blue, PW red) or reintroducing a
+          tint that moves with price. */}
+      <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.02em", color: LIGHT_BLUE }}>
+        {row.symbol}
+        {pinned && <span style={{ fontSize: 8, opacity: 0.65 }}> ●</span>}
+      </span>
+
+      {/* The core, directly under the ticker — the one number worth reading
+          without opening anything.
+          NOT gold. On the card, CB gold earns its keep by telling three levels
+          apart; here there is only ever one number, so the colour identifies
+          nothing and 169 gold figures at once is just a yellow page. Plain ink,
+          and the gold stays where it does work: the tick in the range bar below
+          and the labelled levels on the docked card. */}
+      <span style={{ fontSize: 11, fontWeight: 800, color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>
+        {cb != null ? fmtLevel(cb) : "—"}
+      </span>
+
+      <span
+        style={{
+          fontSize: 9, fontWeight: 700, fontVariantNumeric: "tabular-nums",
+          color: dCbPct == null ? alpha(HOME_THEME.text, 0.4) : dCbPct >= 0 ? ES_CANDLE_UP : ES_CANDLE_DOWN,
+          opacity: 0.9,
+        }}
+      >
+        {dCbPct == null ? "—" : `${fmtSigned(dCbPct)}%`}
+      </span>
+
+      {/* PW ── CW with the core as a gold tick and spot as a white one. */}
+      <span
+        style={{
+          position: "relative", height: 4, borderRadius: 2, marginTop: 2,
+          background: alpha(HOME_THEME.text, 0.08), display: "block",
+        }}
+      >
+        {cbPct != null && (
+          <i style={{ position: "absolute", top: -1, height: 6, width: 2, borderRadius: 1, left: `${cbPct}%`, background: LEVEL_COLORS.cb }} />
+        )}
+        {spotPct != null && (
+          <i style={{ position: "absolute", top: -1, height: 6, width: 2, borderRadius: 1, left: `${spotPct}%`, background: HOME_THEME.text }} />
+        )}
+      </span>
+    </div>
+  );
+}
+
+// ── Docked card ──────────────────────────────────────────────────────────────
+
+function DockCard({
+  row, spot, show, onClose,
+}: {
+  row: ScannerRow;
   spot: number | null;
   show: Record<LevelKey, boolean>;
-  open: boolean;
-  onToggle: (symbol: string) => void;
+  onClose: (symbol: string) => void;
 }) {
   const cb = row.cb, cw = row.call_wall, pw = row.put_wall, flip = row.gex_flip;
   const dte = dteOf(row.expiry);
-
-  // Where is spot, in one word. Drives the band tint + the chip beside the
-  // ticker — the two things that make a name findable while collapsed.
-  const zone: Zone = (() => {
-    if (spot == null) return "mid";
-    const rel = (v: number | null) => (v ? Math.abs((spot - v) / v) : Number.POSITIVE_INFINITY);
-    if (rel(cb) < AT_CORE_PCT) return "cb";
-    if (rel(cw) < NEAR_WALL_PCT) return "cw";
-    if (rel(pw) < NEAR_WALL_PCT) return "pw";
-    return "mid";
-  })();
-  const zoneLabel = zone === "cb" ? "CORE" : zone === "cw" ? "CW" : zone === "pw" ? "PW" : null;
-
   const dCb = spot != null && cb != null ? spot - cb : null;
   const dCbPct = dCb != null && cb ? (dCb / cb) * 100 : null;
 
   // Rows written before the CB/wall exclusion landed can still carry a wall on
-  // the same strike as the core. Draw ONE line badged "CB·CW" rather than two
-  // stacked badges, and drop the duplicate number from the band.
+  // the same strike as the core: draw ONE line badged "CB·CW".
   const cwIsCb = cw != null && cb != null && cw === cb;
   const pwIsCb = pw != null && cb != null && pw === cb;
 
-  const title = [
-    `${row.symbol} — sweep ${fmtClock(row.ts)} ET${row.stale ? ` (stale, ${row.date})` : ""}`,
-    row.expiry ? `expiry ${row.expiry}${dte != null ? ` (${dte}DTE)` : ""}` : null,
-    cb != null ? `CB ${fmtLevel(cb)}` : null,
-    cw != null ? `CW ${fmtLevel(cw)}` : null,
-    pw != null ? `PW ${fmtLevel(pw)}` : null,
-    flip != null ? `gamma flip ${fmtLevel(flip)}` : null,
-    row.total_net_gex != null ? `net GEX ${fmtGex(row.total_net_gex)}` : null,
-    dCbPct != null ? `spot vs CB ${fmtSigned(dCbPct)}%` : null,
-  ].filter(Boolean).join("\n");
-
-  // ── the rail (open only) ──
   const marks = (() => {
     const wanted = [
       show.cb && cb != null ? { k: "CB", v: cb, c: LEVEL_COLORS.cb } : null,
@@ -286,7 +353,6 @@ function LevelTile({
   const pts = [...marks.map((m) => m.v), ...(spot != null ? [spot] : [])];
   const rawHi = pts.length ? Math.max(...pts) : 1;
   const rawLo = pts.length ? Math.min(...pts) : 0;
-  // A ticker whose levels all landed on one strike would divide by zero.
   const span = rawHi - rawLo || Math.max(Math.abs(rawHi) * 0.004, 0.02);
   const hi = rawHi + span * 0.14;
   const lo = rawLo - span * 0.14;
@@ -302,30 +368,18 @@ function LevelTile({
   );
 
   return (
-    <div className={`cblv-card${open ? " cblv-open" : ""}`} data-zone={zone}>
-      {/* ── band: the whole tile when collapsed ── */}
+    <div className="cblv-card">
       <div
         className="cblv-band"
-        title={title}
-        role="button"
-        tabIndex={0}
-        onClick={() => onToggle(row.symbol)}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(row.symbol); } }}
+        title={[
+          `${row.symbol} — sweep ${fmtClock(row.ts)} ET${row.stale ? ` (stale, ${row.date})` : ""}`,
+          row.expiry ? `expiry ${row.expiry}${dte != null ? ` (${dte}DTE)` : ""}` : null,
+          row.total_net_gex != null ? `net GEX ${fmtGex(row.total_net_gex)}` : null,
+          dCbPct != null ? `spot vs CB ${fmtSigned(dCbPct)}%` : null,
+        ].filter(Boolean).join("\n")}
       >
-        <span className="cblv-caret">▶</span>
-        <span className="cblv-tk" style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.text, letterSpacing: "0.03em" }}>
+        <span className="cblv-tk" style={{ fontSize: 13, fontWeight: 800, color: LIGHT_BLUE, letterSpacing: "0.03em" }}>
           {row.symbol}
-          {zoneLabel && (
-            <span
-              style={{
-                fontSize: 7, fontWeight: 800, letterSpacing: "0.06em", padding: "1px 4px",
-                borderRadius: 999, marginLeft: 4, verticalAlign: "middle",
-                color: ZONE_COLOR[zone], background: alpha(ZONE_COLOR[zone], 0.16),
-              }}
-            >
-              {zoneLabel}
-            </span>
-          )}
         </span>
         <span className="cblv-sp" />
         {show.cb && cb != null && bandValue("cb", "CB", cb, LEVEL_COLORS.cb)}
@@ -341,81 +395,88 @@ function LevelTile({
         >
           {row.stale ? `STALE ${row.date.slice(5)}` : dte != null ? `${dte}D` : "—"}
         </span>
+        <span
+          className="cblv-x"
+          role="button"
+          tabIndex={0}
+          title="Unpin"
+          onClick={() => onClose(row.symbol)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClose(row.symbol); } }}
+        >
+          ✕
+        </span>
       </div>
 
-      {/* ── body: price-scaled ladder ── */}
-      {open && (
-        <div style={{ padding: "10px 12px 9px" }}>
-          <div style={{ position: "relative", height: RAIL_H, margin: "4px 0 8px" }}>
-            {marks.map((m) => (
-              <div
-                key={m.labels.join("-")}
-                style={{
-                  position: "absolute", left: 0, right: 0, top: y(m.v),
-                  transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: 5,
-                }}
-              >
-                <span
-                  style={{
-                    flex: "0 0 auto", fontSize: 8, fontWeight: 800, letterSpacing: "0.06em",
-                    padding: "1px 4px", borderRadius: 3, color: m.color,
-                    border: `1px solid ${m.color}`, opacity: 0.75,
-                  }}
-                >
-                  {m.labels.join("·")}
-                </span>
-                <span style={{ flex: "1 1 auto", minWidth: 6, height: 1, background: m.color, opacity: 0.4 }} />
-                <span
-                  style={{
-                    flex: "0 0 auto", fontSize: 10, fontWeight: 700, color: m.color,
-                    fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
-                  }}
-                >
-                  {fmtLevel(m.v)}
-                </span>
-              </div>
-            ))}
-            {spot != null && (
-              <div
-                style={{
-                  position: "absolute", left: 0, right: 0, top: y(spot),
-                  transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: 4,
-                }}
-              >
-                <span style={{ flex: "1 1 auto", minWidth: 4, borderTop: `1px dashed ${alpha(HOME_THEME.text, 0.5)}` }} />
-                <span
-                  style={{
-                    flex: "0 0 auto", fontSize: 10, fontWeight: 800, padding: "1px 6px", borderRadius: 6,
-                    background: HOME_THEME.panelBgStrong, border: `1px solid ${alpha(HOME_THEME.text, 0.22)}`,
-                    color: HOME_THEME.text, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
-                  }}
-                >
-                  {fmtSpot(spot)}
-                </span>
-                <span style={{ flex: "1 1 auto", minWidth: 4, borderTop: `1px dashed ${alpha(HOME_THEME.text, 0.5)}` }} />
-              </div>
-            )}
-          </div>
-
-          <div
-            style={{
-              display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 6,
-              borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 5,
-              fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
-            }}
-          >
-            <span style={{ color: alpha(HOME_THEME.text, 0.4), whiteSpace: "nowrap" }}>SPOT VS CB</span>
-            <span
+      <div style={{ padding: "10px 12px 9px" }}>
+        <div style={{ position: "relative", height: RAIL_H, margin: "4px 0 8px" }}>
+          {marks.map((m) => (
+            <div
+              key={m.labels.join("-")}
               style={{
-                fontSize: 11, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums",
-                color: dCb == null ? alpha(HOME_THEME.text, 0.4) : dCb >= 0 ? ES_CANDLE_UP : ES_CANDLE_DOWN,
+                position: "absolute", left: 0, right: 0, top: y(m.v),
+                transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: 5,
               }}
             >
-              {dCb == null ? "—" : fmtSigned(dCb)}
-            </span>
-          </div>
+              <span
+                style={{
+                  flex: "0 0 auto", fontSize: 8, fontWeight: 800, letterSpacing: "0.06em",
+                  padding: "1px 4px", borderRadius: 3, color: m.color,
+                  border: `1px solid ${m.color}`, opacity: 0.75,
+                }}
+              >
+                {m.labels.join("·")}
+              </span>
+              <span style={{ flex: "1 1 auto", minWidth: 6, height: 1, background: m.color, opacity: 0.4 }} />
+              <span
+                style={{
+                  flex: "0 0 auto", fontSize: 10, fontWeight: 700, color: m.color,
+                  fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
+                }}
+              >
+                {fmtLevel(m.v)}
+              </span>
+            </div>
+          ))}
+          {spot != null && (
+            <div
+              style={{
+                position: "absolute", left: 0, right: 0, top: y(spot),
+                transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: 4,
+              }}
+            >
+              <span style={{ flex: "1 1 auto", minWidth: 4, borderTop: `1px dashed ${alpha(HOME_THEME.text, 0.5)}` }} />
+              <span
+                style={{
+                  flex: "0 0 auto", fontSize: 10, fontWeight: 800, padding: "1px 6px", borderRadius: 6,
+                  background: HOME_THEME.panelBgStrong, border: `1px solid ${alpha(HOME_THEME.text, 0.22)}`,
+                  color: HOME_THEME.text, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
+                }}
+              >
+                {fmtSpot(spot)}
+              </span>
+              <span style={{ flex: "1 1 auto", minWidth: 4, borderTop: `1px dashed ${alpha(HOME_THEME.text, 0.5)}` }} />
+            </div>
+          )}
         </div>
-      )}
+
+        <div
+          style={{
+            display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 6,
+            borderTop: `1px solid ${HOME_THEME.border}`, paddingTop: 5,
+            fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
+          }}
+        >
+          <span style={{ color: alpha(HOME_THEME.text, 0.4), whiteSpace: "nowrap" }}>SPOT VS CB</span>
+          <span
+            style={{
+              fontSize: 11, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums",
+              color: dCb == null ? alpha(HOME_THEME.text, 0.4) : dCb >= 0 ? ES_CANDLE_UP : ES_CANDLE_DOWN,
+            }}
+          >
+            {dCb == null ? "—" : fmtSigned(dCb)}
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -432,32 +493,37 @@ export default function LevelsPage() {
   const [error, setError] = useState<string | null>(null);
   const [sweptAt, setSweptAt] = useState<string | null>(null);
 
-  const [cols, setCols] = useState(5);
   const [sort, setSort] = useState<SortId>("az");
   const [query, setQuery] = useState("");
   const [show, setShow] = useState<Record<LevelKey, boolean>>({ cb: true, cw: true, pw: true, flip: false });
-  const [openTiles, setOpenTiles] = useState<Record<string, boolean>>({});
+  const [pins, setPins] = useState<string[]>([]);
 
-  // Saved view. Read AFTER mount so the server-rendered first paint and the
-  // client's agree (a localStorage read in useState would not).
+  // Saved view + pins. Read AFTER mount so the server-rendered first paint and
+  // the client's agree (a localStorage read in useState would not).
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(PREFS_KEY);
-      if (!raw) return;
-      const p = JSON.parse(raw) as Partial<{
-        cols: number; sort: SortId; show: Record<LevelKey, boolean>;
-      }>;
-      if (p.cols) setCols(p.cols);
-      if (p.sort) setSort(p.sort);
-      const savedShow = p.show;
-      if (savedShow) setShow((s) => ({ ...s, ...savedShow }));
+      if (raw) {
+        const p = JSON.parse(raw) as Partial<{ sort: SortId; show: Record<LevelKey, boolean> }>;
+        if (p.sort) setSort(p.sort);
+        const savedShow = p.show;
+        if (savedShow) setShow((s) => ({ ...s, ...savedShow }));
+      }
     } catch { /* corrupt or blocked storage — defaults are fine */ }
+    try {
+      const raw = window.localStorage.getItem(PINS_KEY);
+      const list = raw ? (JSON.parse(raw) as unknown) : null;
+      if (Array.isArray(list)) {
+        setPins(list.map((x) => String(x).toUpperCase()).filter(Boolean).slice(0, MAX_PINS));
+      }
+    } catch { /* non-fatal */ }
   }, []);
   useEffect(() => {
-    try {
-      window.localStorage.setItem(PREFS_KEY, JSON.stringify({ cols, sort, show }));
-    } catch { /* non-fatal */ }
-  }, [cols, sort, show]);
+    try { window.localStorage.setItem(PREFS_KEY, JSON.stringify({ sort, show })); } catch { /* non-fatal */ }
+  }, [sort, show]);
+  useEffect(() => {
+    try { window.localStorage.setItem(PINS_KEY, JSON.stringify(pins)); } catch { /* non-fatal */ }
+  }, [pins]);
 
   // ── Levels: one request for the whole universe ─────────────────────────────
   const loadLevels = useCallback(async (manual = false) => {
@@ -533,15 +599,16 @@ export default function LevelsPage() {
     return () => { cancelled = true; window.clearInterval(id); };
   }, []);
 
-  // ── The visible list ──────────────────────────────────────────────────────
+  const spotOf = useCallback((r: ScannerRow) => live[r.symbol] ?? r.spot, [live]);
+
+  // ── The visible index ─────────────────────────────────────────────────────
   const view = useMemo(() => {
     const uni = new Set(tickers);
     const q = query.trim().toUpperCase();
     let list = rows.filter((r) => (uni.size ? uni.has(r.symbol) : true));
     if (q) list = list.filter((r) => r.symbol.includes(q));
-    const spotOf = (r: ScannerRow) => live[r.symbol] ?? r.spot;
     const dist = (r: ScannerRow) => {
-      const s = spotOf(r);
+      const s = live[r.symbol] ?? r.spot;
       return s != null && r.cb ? Math.abs((s - r.cb) / r.cb) : Number.POSITIVE_INFINITY;
     };
     const cmp: Record<SortId, (a: ScannerRow, b: ScannerRow) => number> = {
@@ -555,38 +622,32 @@ export default function LevelsPage() {
     return [...list].sort(cmp[sort]);
   }, [rows, tickers, query, sort, live]);
 
-  // A filter is an intent to look at what matched, so matches open themselves
-  // rather than making you click every one of them.
-  const filtering = query.trim().length > 0;
-  const isOpen = (sym: string) => filtering || !!openTiles[sym];
-  const toggleTile = useCallback((sym: string) => {
-    setOpenTiles((o) => ({ ...o, [sym]: !o[sym] }));
+  const bySymbol = useMemo(() => {
+    const m = new Map<string, ScannerRow>();
+    for (const r of rows) m.set(r.symbol, r);
+    return m;
+  }, [rows]);
+
+  /** Pinning a fifth drops the OLDEST, so the dock never refuses a click. */
+  const togglePin = useCallback((sym: string) => {
+    setPins((p) => (p.includes(sym) ? p.filter((x) => x !== sym) : [...p, sym].slice(-MAX_PINS)));
   }, []);
-  const setAllTiles = (open: boolean) => {
-    if (!open) { setOpenTiles({}); return; }
-    const next: Record<string, boolean> = {};
-    for (const r of view) next[r.symbol] = true;
-    setOpenTiles(next);
-  };
+  const unpin = useCallback((sym: string) => setPins((p) => p.filter((x) => x !== sym)), []);
 
   const liveCount = Object.keys(live).length;
   const label: CSSProperties = { fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: alpha(HOME_THEME.text, 0.4) };
   const seg = (active: boolean) => (active ? homeButtonStyle : homeSecondaryButtonStyle);
-  const gridStyle = { "--cblv-cols": String(cols) } as unknown as CSSProperties;
+  const cardEdge: CSSProperties = {
+    border: `1px solid ${alpha(HOME_THEME.text, 0.36)}`,
+    boxShadow: `0 0 0 3px ${alpha(HOME_THEME.text, 0.06)}, 0 14px 28px -12px ${alpha(HOME_THEME.bg, 0.9)}`,
+  };
 
   return (
     <PageShell>
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
 
       {/* ── controls ── */}
-      <Card
-        variant="budget"
-        padding={14}
-        style={{
-          border: `1px solid ${alpha(HOME_THEME.text, 0.36)}`,
-          boxShadow: `0 0 0 3px ${alpha(HOME_THEME.text, 0.06)}, 0 14px 28px -12px ${alpha(HOME_THEME.bg, 0.9)}`,
-        }}
-      >
+      <Card variant="budget" padding={14} style={cardEdge}>
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 2, marginRight: "auto" }}>
             <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" }}>
@@ -594,6 +655,7 @@ export default function LevelsPage() {
             </div>
             <div style={{ fontSize: 11, color: alpha(HOME_THEME.text, 0.45) }}>
               {view.length} tickers · sweep {fmtClock(sweptAt)} ET · spot live{liveCount ? ` (${liveCount})` : ""}
+              {` · ${pins.length}/${MAX_PINS} pinned`}
               {error ? ` · ${error}` : ""}
             </div>
           </div>
@@ -606,14 +668,8 @@ export default function LevelsPage() {
           />
 
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={label}>TILES</span>
-            <button style={homeButtonStyle} onClick={() => setAllTiles(true)}>Expand all ({view.length})</button>
-            <button style={homeSecondaryButtonStyle} onClick={() => setAllTiles(false)}>Collapse all</button>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={label}>SORT</span>
-            {([["core", "Near CB"], ["gex", "Net GEX"], ["az", "A–Z"]] as [SortId, string][]).map(([id, txt]) => (
+            {([["az", "A–Z"], ["core", "Near CB"], ["gex", "Net GEX"]] as [SortId, string][]).map(([id, txt]) => (
               <button key={id} style={seg(sort === id)} onClick={() => setSort(id)}>{txt}</button>
             ))}
           </div>
@@ -641,12 +697,13 @@ export default function LevelsPage() {
             ))}
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={label}>ACROSS</span>
-            {[4, 5, 6, 8].map((n) => (
-              <button key={n} style={seg(cols === n)} onClick={() => setCols(n)}>{n}</button>
-            ))}
-          </div>
+          <button
+            style={homeSecondaryButtonStyle}
+            onClick={() => setPins([])}
+            disabled={pins.length === 0}
+          >
+            Unpin all
+          </button>
 
           <button
             style={homeRefreshButtonStyle(refresh)}
@@ -658,9 +715,21 @@ export default function LevelsPage() {
         </div>
       </Card>
 
-      {/* ── the board ── */}
+      {/* ── dock ── */}
+      <div className="cblv-dock">
+        {Array.from({ length: MAX_PINS }).map((_, i) => {
+          const sym = pins[i];
+          const row = sym ? bySymbol.get(sym) : undefined;
+          if (!row) return <div key={`slot-${i}`} className="cblv-slot">EMPTY SLOT</div>;
+          return (
+            <DockCard key={row.symbol} row={row} spot={spotOf(row)} show={show} onClose={unpin} />
+          );
+        })}
+      </div>
+
+      {/* ── index ── */}
       {view.length === 0 ? (
-        <Card variant="budget" padding={20}>
+        <Card variant="budget" padding={20} style={cardEdge}>
           <div style={{ fontSize: 13, color: alpha(HOME_THEME.text, 0.6) }}>
             {error
               ? `Could not load levels: ${error}`
@@ -668,15 +737,14 @@ export default function LevelsPage() {
           </div>
         </Card>
       ) : (
-        <div className="cblv-grid" style={gridStyle}>
+        <div className="cblv-idx">
           {view.map((r) => (
-            <LevelTile
+            <IndexCell
               key={r.symbol}
               row={r}
-              spot={live[r.symbol] ?? r.spot}
-              show={show}
-              open={isOpen(r.symbol)}
-              onToggle={toggleTile}
+              spot={spotOf(r)}
+              pinned={pins.includes(r.symbol)}
+              onToggle={togglePin}
             />
           ))}
         </div>

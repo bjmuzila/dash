@@ -104,6 +104,14 @@ function drawMl(doseMg: number, conc: number): number {
 function drawUnits(doseMg: number, conc: number): number {
   return drawMl(doseMg, conc) * U_PER_ML;
 }
+/**
+ * Inverse of drawUnits: the mg delivered by N units on a U-100 syringe at a
+ * given concentration. Lets a week be logged from the syringe — what you
+ * actually read off the barrel — instead of from the mg. Still stores mg.
+ */
+function doseFromUnits(units: number, conc: number): number {
+  return conc > 0 ? Math.round((units / U_PER_ML) * conc * 10000) / 10000 : 0;
+}
 
 function rgba(hex: string, a: number): string {
   const h = hex.replace("#", "");
@@ -1064,7 +1072,8 @@ export default function RetaPage() {
               Weekly log
             </div>
             <div style={{ fontSize: 11, color: rgba(HOME_THEME.text, 0.5), marginTop: 2 }}>
-              Units are computed from the recon in force that week — type the dose in mg, tick it when it&apos;s taken.
+              Type the dose in mg <em>or</em> the units you drew on the syringe — each fills in the other using the recon in
+              force that week. Tick it when it&apos;s taken.
             </div>
           </div>
           <button
@@ -1173,8 +1182,13 @@ export default function RetaPage() {
                             doseMg={effectiveDose}
                             placeholder={carried != null ? String(carried) : undefined}
                             units={units}
+                            unitsPlaceholder={
+                              carried != null && c > 0 ? String(Math.round(drawUnits(carried, c) * 10) / 10) : undefined
+                            }
+                            canEditUnits={c > 0}
                             weight={shot?.weight_lb ?? null}
                             taken={shot?.taken === 1}
+                            onUnits={(v) => void saveShot(day, p.key, { doseMg: v == null ? 0 : doseFromUnits(v, c) })}
                             onDose={(v) => void saveShot(day, p.key, { doseMg: v ?? 0 })}
                             onWeight={(v) => void saveShot(day, p.key, { weightLb: v })}
                             onTaken={(v) => void saveShot(day, p.key, { taken: v })}
@@ -1203,22 +1217,31 @@ function ThHeadGroup() {
   return (
     <>
       <th style={{ ...TH, top: 30, textAlign: "right", borderLeft: `1px solid ${HOME_THEME.border}` }}>Dose mg</th>
-      <th style={{ ...TH, top: 30, textAlign: "right" }}>Units</th>
+      <th style={{ ...TH, top: 30, textAlign: "right" }}>Units (u)</th>
       <th style={{ ...TH, top: 30, textAlign: "right" }}>Weight</th>
       <th style={{ ...TH, top: 30, textAlign: "center" }}>Took</th>
     </>
   );
 }
 
-/** One person's four cells for a week: dose, derived units, weight, taken. */
+/**
+ * One person's four cells for a week: dose, units, weight, taken.
+ *
+ * Dose and units are two views of the SAME stored fact (dose_mg) — type either
+ * one and the other follows. Units are only editable once that week has a recon
+ * in force, since without a concentration there is nothing to convert with.
+ */
 function PersonCells({
   accent,
   doseMg,
   placeholder,
   units,
+  unitsPlaceholder,
+  canEditUnits,
   weight,
   taken,
   onDose,
+  onUnits,
   onWeight,
   onTaken,
 }: {
@@ -1226,9 +1249,12 @@ function PersonCells({
   doseMg: number | null;
   placeholder?: string;
   units: number | null;
+  unitsPlaceholder?: string;
+  canEditUnits: boolean;
   weight: number | null;
   taken: boolean;
   onDose: (v: number | null) => void;
+  onUnits: (v: number | null) => void;
   onWeight: (v: number | null) => void;
   onTaken: (v: boolean) => void;
 }) {
@@ -1246,7 +1272,18 @@ function PersonCells({
           fontVariantNumeric: "tabular-nums",
         }}
       >
-        {units != null ? num(units, 1) : "—"}
+        {canEditUnits ? (
+          <NumCell
+            value={units != null ? Math.round(units * 10) / 10 : null}
+            onCommit={onUnits}
+            placeholder={unitsPlaceholder}
+            accent={accent}
+            step="0.5"
+            width={66}
+          />
+        ) : (
+          units != null ? num(units, 1) : "—"
+        )}
       </td>
       <td style={{ ...CELL, textAlign: "right" }}>
         <NumCell value={weight} onCommit={onWeight} step="0.1" width={72} />

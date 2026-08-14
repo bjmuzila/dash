@@ -33,6 +33,9 @@ const TestLab      = lazy(() => import('@/components/pages/TestLab'))
 const StrikeHistory = lazy(() => import('@/components/pages/StrikeHistory'))
 const Replay       = lazy(() => import('@/components/pages/Replay'))
 const LevelLog     = lazy(() => import('@/components/pages/LevelLog'))
+// /guide — static site guide (GEX/DEX explainer + page directory). Linked from
+// the account menu (UserMenu), not the toolbar: read once, referred back to.
+const Guide        = lazy(() => import('@/app/guide/page'))
 
 // ── Phone build (/m/*) ────────────────────────────────────────────────────────
 // Six purpose-built views for a 390px iPhone, each in its own chunk so a phone
@@ -82,6 +85,7 @@ export default function App() {
               <Route path="/confidence-score" element={S(<Confidence />)} />
               <Route path="/fails" element={S(<Fails />)} />
               <Route path="/economic-calendar" element={S(<EconCalendar />)} />
+              <Route path="/guide" element={S(<Guide />)} />
 
               {/* Phone build. Kept as explicit routes rather than a nested
                   layout so each one code-splits on its own. */}

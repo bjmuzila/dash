@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { HOME_THEME } from "./homeTheme";
 
@@ -210,6 +211,27 @@ export default function UserMenu() {
               resolves to /app/whats-new (no route → catch-all → Traders Dash), so
               a real navigation to the top-level Next page is required. Owner is an
               absolute external URL and is owner-gated. */}
+          {/* Site Guide is a REAL SPA route (app/guide/page.tsx + a <Route> in
+              app-vite/src/App.tsx), so next/link is right here where the links
+              below need a native <a>: inside the Vite SPA (basename="/app")
+              href="/guide" resolves to /app/guide, which is exactly the route.
+              On a Next-rendered page it hits the same component server-side. */}
+          <Link
+            href="/guide"
+            onClick={() => setOpen(false)}
+            style={{
+              display: "block",
+              padding: "8px 10px",
+              borderRadius: 6,
+              color: HOME_THEME.text,
+              fontSize: 14,
+              fontWeight: 500,
+              textDecoration: "none",
+            }}
+          >
+            Site Guide
+          </Link>
+
           <a
             href="/whats-new"
             onClick={() => setOpen(false)}

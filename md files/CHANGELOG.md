@@ -1,24 +1,127 @@
 # Changelog
 
-## 2026-08-13 - /levels: the card stops changing colour
+## 2026-08-14 - Reta weekly log: type syringe units OR mg, each fills the other
+
+Edited: `owner-vite/src/pages/Reta.tsx`.
+
+### What
+
+The weekly log's **Units** column is now an input instead of a read-only derived
+number. Type the units you actually drew on the U-100 barrel and the mg dose is
+calculated from the recon in force that week; type the mg and the units still
+follow as before. Both directions write the same stored fact.
+
+### How
+
+- New `doseFromUnits(units, conc)` — the inverse of `drawUnits()`:
+  `mg = (units / 100) * mg-per-mL`, rounded to 4 dp.
+- `PersonCells` takes `onUnits`, `unitsPlaceholder` and `canEditUnits`. The
+  units cell renders a `NumCell` (step 0.5) when a recon is in force for that
+  week, and falls back to the old plain text when `mg/mL` is 0 — with no
+  concentration there is nothing to convert with.
+- Placeholder in the units cell is the carried-forward dose expressed in units,
+  matching how the mg cell already ghosts the carried dose.
+
+### Unchanged
+
+`dose_mg` is still the only stored value — units are never persisted, so
+changing the mix later re-derives past weeks' units from the recon that was in
+force, exactly as before.
+
+
+## 2026-08-13 - Site Guide page (/guide), linked from the account menu
+
+Added: `app/guide/page.tsx`, `app/app/guide/route.ts`.
+Edited: `app-vite/src/App.tsx` (lazy import + `<Route path="/guide">`),
+`components/shared/UserMenu.tsx` (Site Guide link).
+
+### What
+
+A single in-app reference page: what GEX and DEX measure, the four derived
+levels (CB / call wall / put wall / flip), the positive-vs-negative gamma regime
+table, six trade playbooks, a directory of every route with what it's for, the
+Scanner and Test Lab tab breakdowns, the `/m/*` phone build, and a rules + risk
+section.
+
+Static content — no fetches, no socket, no `topics` subscription.
+
+### Where it lives
+
+Account menu (the avatar dropdown), above **What's New**. Not a toolbar tile: it
+is read once and referred back to, and the toolbar is for pages opened every
+session.
+
+The dropdown's other links are native `<a>` because they point at top-level Next
+pages that the SPA catch-all would otherwise swallow. Site Guide uses `next/link`
+instead, on purpose: it IS an SPA route, so inside the Vite SPA
+(`basename="/app"`) `href="/guide"` resolves to `/app/guide` — the route — and
+navigates client-side. `app/app/guide/route.ts` (`serveSpaShell`) keeps a hard
+refresh or a pasted link from 404ing.
+
+### Theme
+
+`PageShell` + `Card` + `HOME_THEME` / `LIGHT_BLUE` / `LEVEL_COLORS` only. Zero
+raw color literals — every tint goes through the local `rgba()` helper applied to
+a theme token, so the level ladder uses the same CB/CW/PW colors Multi Greek
+draws with.
+
+## 2026-08-13 - Far CB tracker watched the wrong contract (put vs call)
+
+Edited: `server-v2/far-cb-recorder.js` (`optTypeOf`, `ensureSchema`, the probe
+and backfill row selects, doc comments).
+
+(Re-logged: this shipped earlier the same day and the entry did not survive a
+later rewrite of this file. The code change is on disk.)
+
+### What
+
+A flag on IONQ's $55 strike with spot at $46.52 was tracked and charted as a
+**$55 Put** — a contract $8.50 in the money, not the 18%-OTM contract the flag
+was about. Every premium number on the row (live mid, % vs open, the daily-bar
+popup) was for the wrong contract.
+
+### How
+
+`optTypeOf()` inferred the contract type from the **sign of
+`gex_value_at_flag`** ("Call-side when >= 0"). That is a statement about dealer
+gamma at the strike, not about which contract is out of the money. A far strike
+above spot with heavy put OI carries negative net GEX, so the tracker flipped to
+the put.
+
+Type is now decided by spot vs strike at the flag — the same thing `side`
+("above" / "below") already stored: `above` → `'C'`, `below` → `'P'`, falling
+back to `strike >= spot_at_flag`, with the GEX sign kept only as a last resort.
+`side` was added to the probe and backfill row selects so both paths get the
+authoritative value.
+
+### Repair of existing rows
+
+`ensureSchema()` runs a one-time cleanup: `far_cb_contract_daily` bars whose
+`opt_type` disagrees with the corrected type are deleted, and those flags'
+`premium_backfilled_at` is cleared so the next backfill pass refills the right
+contract from dxLink. Both statements match nothing once the bad bars are gone,
+so it is a no-op on every later boot.
+
+## 2026-08-13 - /levels: nothing repaints because of price
 
 Edited: `app/levels/page.tsx`.
 
-The tile washed itself gold / blue / red depending on where spot sat relative to
-the core and the walls. That meant the SURFACE changed meaning as price moved —
-a card you were reading could turn a different colour under you — and a board of
-169 of them read as noise rather than as information.
+The index cells still tinted themselves gold / blue / red by where spot sat, so
+169 of them repainted as the tape moved and the board read as weather rather than
+as a list. Gone — cells are neutral.
 
-One colourless band now, on every card, always: white 9% → 1.5% top to bottom,
-white 15% → 4.5% on hover. Ticker ink goes from light blue to plain white, which
-is the right weight once the band behind it has no hue of its own.
+The ONE highlight left on the board marks the cells that are pinned into the dock
+above: white border, white 14% fill, a 2px ring. That answers "which of these am
+I looking at", which is a question the user asked rather than one the market did,
+and with nothing else competing it is visible at a glance across the whole board.
 
-Colour is now reserved for things whose meaning never changes: CB gold, CW blue,
-PW red on both the band values and the rail marks, and up/down green-red on
-SPOT VS CB. The only state left on the card is the small `CORE` / `CW` / `PW`
-chip beside the ticker — deliberately kept, because with no separate index on
-the page it is the only thing that says a name is pinned to its core. It is one
-line to remove if it should go too.
+Position did not disappear; it just stopped being a wash. The range bar still
+carries it as marks — gold tick for the core, white tick for spot, between the
+two walls — and the Δ% keeps its up/down colour.
+
+So the rule across the page is now simple: colour means WHICH LEVEL a thing is
+(CB gold, CW blue, PW red) or WHICH DIRECTION a delta went, and nothing else.
+The zone helper, its two thresholds and the `Zone` type came out with the tints.
 
 ## 2026-08-13 - Visitor map: gold means PAYING
 
