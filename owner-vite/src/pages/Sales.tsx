@@ -1023,10 +1023,13 @@ export default function Sales() {
   // Discord column. Best-effort — a failed fetch just leaves the column blank.
   const [discordByEmail, setDiscordByEmail] = useState<Map<string, string>>(new Map());
 
-  const load = useCallback(async () => {
+  // The server caches this payload (60s fresh, 10m stale-while-revalidate)
+  // because building it costs ~25 sequential Stripe round trips. A page mount
+  // takes the cache; the ↻ Refresh button asks for a rebuild with `refresh=1`.
+  const load = useCallback(async (force = false) => {
     setLoading(true);
     try {
-      const res = await fetch("/api/admin/stripe-summary");
+      const res = await fetch(`/api/admin/stripe-summary${force ? "?refresh=1" : ""}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setData(json);
@@ -1201,7 +1204,7 @@ export default function Sales() {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <GranTabs value={gran} onChange={setGran} />
           <button
-            onClick={() => { load(); loadExpenses(); loadDiscord(); }}
+            onClick={() => { load(true); loadExpenses(); loadDiscord(); }}
             disabled={loading}
             style={{ ...homeSecondaryButtonStyle, padding: "5px 14px", fontSize: 14, opacity: loading ? 0.5 : 1 }}
           >

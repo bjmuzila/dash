@@ -241,7 +241,49 @@ function trialOf(sub: StripeNS.Subscription, paid: PaidRollup | undefined) {
   };
 }
 
-export async function GET() {
+// ── Response cache ───────────────────────────────────────────────────────────
+//
+// WHY: building this payload costs ~25 SEQUENTIAL Stripe round trips — up to 5
+// pages of subscriptions plus up to 20 pages of invoices, each page a separate
+// HTTPS call because Stripe pagination is cursor-based and cannot be fanned
+// out. That is where the Sales page's ~21s `stripe-summary` wait came from, and
+// it was paid again on every mount, every refresh, every tab re-open.
+//
+// Three things fix it, in order of how much they matter:
+//   1. FRESH cache (60s) — a re-render or a second look at the page costs zero
+//      Stripe calls. MRR does not move minute to minute.
+//   2. STALE-WHILE-REVALIDATE (10m) — past 60s the last good payload is
+//      returned INSTANTLY and a rebuild runs behind it, so the owner never
+//      waits on a number that was correct a few minutes ago.
+//   3. Single-flight — concurrent callers share one rebuild instead of each
+//      starting their own 25-call storm.
+// `?refresh=1` bypasses all of it for a deliberate hard refresh.
+
+type SummaryPayload = Record<string, unknown>;
+/** The configured Stripe client, derived from getStripe() so the type can't drift. */
+type StripeClient = NonNullable<Awaited<ReturnType<typeof getStripe>>>;
+
+const FRESH_MS = 60_000; // serve without touching Stripe
+const STALE_MS = 10 * 60_000; // serve instantly, rebuild in the background
+
+let cached: { at: number; data: SummaryPayload } | null = null;
+let inflight: Promise<SummaryPayload> | null = null;
+
+/** Build (or join an in-progress build of) the payload. Single-flight. */
+function buildOnce(stripe: StripeClient): Promise<SummaryPayload> {
+  if (inflight) return inflight;
+  inflight = buildSummary(stripe)
+    .then((data) => {
+      cached = { at: Date.now(), data };
+      return data;
+    })
+    .finally(() => {
+      inflight = null;
+    });
+  return inflight;
+}
+
+export async function GET(req: Request) {
   const userId = await getServerUserId();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (!OWNER_USER_ID || userId !== OWNER_USER_ID) {
@@ -254,13 +296,70 @@ export async function GET() {
     return NextResponse.json({ configured: false, summary: null, trials: null, trialSubscriptions: [], subscriptions: [], cancellations: [], revenueByMonth: {} });
   }
 
+  const force = new URL(req.url).searchParams.get("refresh") === "1";
+  const age = cached ? Date.now() - cached.at : Infinity;
+
+  if (!force && cached) {
+    if (age < FRESH_MS) {
+      return NextResponse.json({ ...cached.data, cache: { hit: "fresh", ageMs: age } });
+    }
+    if (age < STALE_MS) {
+      // Kick the rebuild off and answer from the last good copy right now.
+      void buildOnce(stripe).catch((e) =>
+        console.warn("[stripe-summary] background refresh failed:", e)
+      );
+      return NextResponse.json({ ...cached.data, cache: { hit: "stale", ageMs: age } });
+    }
+  }
+
   try {
-    // EVERY subscription, not just the active ones — cancelled and past_due
-    // subs are the whole point of the cancellations card. Auto-paged so a
-    // couple of hundred rows don't silently truncate at 100.
-    const allSubs = await stripe.subscriptions
-      .list({ status: "all", limit: 100, expand: ["data.customer"] })
-      .autoPagingToArray({ limit: 500 });
+    const data = await buildOnce(stripe);
+    return NextResponse.json({ ...data, cache: { hit: "miss", ageMs: 0 } });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Unknown error";
+    // A cold failure still beats an empty page if we have anything at all.
+    if (cached) {
+      return NextResponse.json({ ...cached.data, cache: { hit: "stale-error", ageMs: age }, error: msg });
+    }
+    return NextResponse.json({ configured: true, summary: null, trials: null, trialSubscriptions: [], subscriptions: [], cancellations: [], revenueByMonth: {}, error: msg }, { status: 500 });
+  }
+}
+
+async function buildSummary(stripe: StripeClient): Promise<SummaryPayload> {
+  // Block kept so the body below stays at its original indentation/diff shape.
+  {
+    // The two big Stripe pulls and the local churn log are INDEPENDENT, so they
+    // run concurrently. They used to run one after the other, which meant the
+    // invoice pull (the slow one) did not start until every subscription page
+    // had landed.
+    const [allSubs, paidInvoices, storedRows] = await Promise.all([
+      // EVERY subscription, not just the active ones — cancelled and past_due
+      // subs are the whole point of the cancellations card. Auto-paged so a
+      // couple of hundred rows don't silently truncate at 100.
+      stripe.subscriptions
+        .list({ status: "all", limit: 100, expand: ["data.customer"] })
+        .autoPagingToArray({ limit: 500 }),
+      // ── Paid invoices: the only source of "money that actually arrived" ───
+      //
+      // One auto-paged pull instead of the old per-customer invoice call (which
+      // cost one round trip per customer and could only ever answer "lifetime
+      // spend"). The same list feeds two things:
+      //   • `spendByCustomer` — lifetime spend for the table's Total Spent column;
+      //   • `revenueByMonth`  — every dollar collected in a calendar month, which
+      //     is what the month-over-month chart plots. A $500 annual invoice lands
+      //     entirely in the month it was paid, because that is when the cash came.
+      stripe.invoices
+        .list({ status: "paid", limit: 100 })
+        .autoPagingToArray({ limit: 2000 }),
+      // Our own churn log — the copy of `cancellation_details` the Stripe webhook
+      // keeps (see lib/db.ts subscription_cancellations). Used only to fill gaps
+      // in what the live API returns; a failure here just means no fallback, so
+      // it must never take the whole Sales page down.
+      getSubscriptionCancellations(1000).catch((e) => {
+        console.warn("[stripe-summary] stored cancellations unavailable:", e);
+        return [] as Awaited<ReturnType<typeof getSubscriptionCancellations>>;
+      }),
+    ]);
 
     // Real launch cutoff — excludes stale/test Stripe subscriptions created
     // before go-live. Applied everywhere below (MRR, active count, the
@@ -272,22 +371,14 @@ export async function GET() {
     const liveSubs = realSubs.filter((s) => LIVE_STATUSES.has(s.status));
     const deadSubs = realSubs.filter((s) => DEAD_STATUSES.has(s.status));
 
-    // Our own churn log — the copy of `cancellation_details` the Stripe webhook
-    // keeps (see lib/db.ts subscription_cancellations). Used only to fill gaps
-    // in what the live API returns; a failure here just means no fallback, so
-    // it must never take the whole Sales page down.
     const storedCancellations = new Map<string, StoredCancellation>();
-    try {
-      for (const row of await getSubscriptionCancellations(1000)) {
-        storedCancellations.set(row.stripe_subscription_id, {
-          reason: row.reason ?? null,
-          feedback: row.feedback ?? null,
-          comment: row.comment ?? null,
-          first_seen_at: row.first_seen_at ?? null,
-        });
-      }
-    } catch (e) {
-      console.warn("[stripe-summary] stored cancellations unavailable:", e);
+    for (const row of storedRows) {
+      storedCancellations.set(row.stripe_subscription_id, {
+        reason: row.reason ?? null,
+        feedback: row.feedback ?? null,
+        comment: row.comment ?? null,
+        first_seen_at: row.first_seen_at ?? null,
+      });
     }
 
     // ── MRR ────────────────────────────────────────────────────────────────
@@ -340,19 +431,7 @@ export async function GET() {
       (s) => (s.ended_at ?? s.canceled_at ?? 0) >= monthStart
     ).length;
 
-    // ── Paid invoices: the only source of "money that actually arrived" ─────
-    //
-    // One auto-paged pull instead of the old per-customer invoice call (which
-    // cost one round trip per customer and could only ever answer "lifetime
-    // spend"). The same list now feeds two things:
-    //   • `spendByCustomer` — lifetime spend for the table's Total Spent column;
-    //   • `revenueByMonth`  — every dollar collected in a calendar month, which
-    //     is what the month-over-month chart plots. A $500 annual invoice lands
-    //     entirely in the month it was paid, because that is when the cash came.
-    const paidInvoices = await stripe.invoices
-      .list({ status: "paid", limit: 100 })
-      .autoPagingToArray({ limit: 2000 });
-
+    // `paidInvoices` was pulled above, alongside the subscriptions.
     const spendByCustomer = new Map<string, number>();
     /** "YYYY-MM" (UTC) → { revenue, invoices } */
     const revenueByMonth: Record<string, { revenue: number; invoices: number }> = {};
@@ -448,7 +527,7 @@ export async function GET() {
       .sort((a, b) => (b.ended_at ?? b.canceled_at ?? 0) - (a.ended_at ?? a.canceled_at ?? 0))
       .map(shape);
 
-    return NextResponse.json({
+    return {
       configured: true,
       summary: {
         mrrMonthly, // headline: monthly plans only, still billing, not cancelling
@@ -477,9 +556,6 @@ export async function GET() {
       revenueByMonth, // "YYYY-MM" → { revenue, invoices } — actual cash collected
       subscriptions,
       cancellations,
-    });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Unknown error";
-    return NextResponse.json({ configured: true, summary: null, trials: null, trialSubscriptions: [], subscriptions: [], cancellations: [], revenueByMonth: {}, error: msg }, { status: 500 });
+    };
   }
 }

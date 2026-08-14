@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useScannerTickers } from "@/lib/useScannerTickers";
@@ -1668,6 +1668,129 @@ const TL_BOARD_REFRESH_MS = 120_000;
 // (The server-side sweep uses 4; this runs from one browser, not the VPS.)
 const TL_BOARD_CONCURRENCY = 6;
 
+// ── Ticker Lookup replay ─────────────────────────────────────────────────────
+// Rewinds BOTH panes off one clock: every ladder, level chip, wall and the
+// plain-language read below them are rebuilt from a recorded strike_growth
+// sweep instead of the live chain. Same recording, same route
+// (/proxy/strike-growth/frames-by-expiry) and the same shared-clock shape the
+// Multi Greek page's replay uses — one implementation of "what did this look
+// like at 10:42", three surfaces reading it.
+//
+// What is and isn't there, because it shapes the UI below:
+//   • The recorder stores the top N strikes per side per expiry per sweep. It
+//     is a record of the WALLS, not the whole ladder — a strike that was never
+//     a wall renders "—", not 0. ("Not recorded" and "no gamma here" are
+//     different answers, and the Δ column already uses that em dash for
+//     exactly this reason.)
+//   • Only GEX is recorded. ± Move and ATM IV are priced off live marks, so
+//     they read "—" while rewound rather than showing today's number on a
+//     three-day-old ladder.
+//   • The Δ 1D column is an END-OF-DAY series (one row per session close). It
+//     has nothing to say about an intraday clock, so it is hidden while rewound.
+//   • Cadence is the recorder's sweep (2 min hot lane / 5 min full roster);
+//     retention is ~5 trading days.
+const TL_REPLAY_SPEEDS = [0.5, 1, 2, 4, 8] as const;
+const TL_REPLAY_BASE_MS = 700;
+
+/** One recorded sweep. `cells` is `${expiry}|${strike}` → GEX. */
+interface TlReplayFrame {
+  ts: string;
+  /** Epoch ms of `ts`, precomputed — the clock compares it per step. */
+  t: number;
+  spot: number;
+  cells: Map<string, { net: number; vol: number }>;
+  /** The expiries THIS sweep carried — the front one can roll intraday. */
+  expiries: string[];
+}
+
+/** The loaded session: frames plus the axes they span. */
+interface TlReplaySession {
+  frames: TlReplayFrame[];
+  /** Every strike recorded in ANY frame, ascending — the fixed ladder axis. */
+  strikes: number[];
+  /** Every expiry recorded in ANY frame, ascending. */
+  expiries: string[];
+}
+
+/** Snap an epoch ms to its minute — the scrubber's resolution. */
+function tlMinute(ms: number): number { return Math.floor(ms / 60_000) * 60_000; }
+
+function fmtTlReplayClock(ms: number): string {
+  try {
+    return new Date(ms).toLocaleTimeString("en-US", {
+      timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+    });
+  } catch { return String(ms); }
+}
+
+/** Transport / speed button in the replay bar. */
+function tlReplayBtn(active: boolean): CSSProperties {
+  return {
+    height: 24, padding: "0 8px", borderRadius: 6, cursor: "pointer",
+    fontSize: 11, fontWeight: 800, fontFamily: "inherit", lineHeight: 1,
+    color: active ? "#0b0f1a" : T.text,
+    background: active ? T.orange : "rgba(255,255,255,0.05)",
+    border: `1px solid ${active ? T.orange : T.border}`,
+  };
+}
+
+/**
+ * Build one pane's ladder from a replay frame.
+ *
+ * The axis is the SESSION's, not the frame's. The recorder stores the top N
+ * strikes a side PER SWEEP, so a frame-built ladder gains and loses rungs on
+ * every step and the whole thing shakes under the reader while it plays. Fixed
+ * for the session, it is one ladder with values changing on it.
+ *
+ * `expiries` = the expiries to sum (one for the left pane, the whole board
+ * minus 0DTE for the right). Returns the rows plus the set of strikes this
+ * sweep did not record, which the ladder draws as "—" instead of a zero bar.
+ */
+function tlReplayRows(
+  frame: TlReplayFrame,
+  sessionStrikes: number[],
+  expiries: string[],
+  basis: "net" | "vol" = "net",
+): { rows: TlRow[]; missing: Set<number> } {
+  const rows: TlRow[] = [];
+  const missing = new Set<number>();
+  for (const strike of sessionStrikes) {
+    let sum = 0;
+    let seen = false;
+    for (const e of expiries) {
+      const cell = frame.cells.get(`${e}|${strike}`);
+      if (!cell) continue;
+      seen = true;
+      sum += basis === "vol" ? cell.vol : cell.net;
+    }
+    if (!seen) missing.add(strike);
+    rows.push({ strike, gex: sum });
+  }
+  return { rows: rows.sort((a, b) => a.strike - b.strike), missing };
+}
+
+/** Sweep timestamps snapped to the minute, deduped and ascending. */
+function tlTimelineOf(frames: TlReplayFrame[]): number[] {
+  const set = new Set<number>();
+  for (const f of frames) set.add(tlMinute(f.t));
+  return [...set].sort((a, b) => a - b);
+}
+
+/** Every strike the session recorded under `expiries` — one pane's fixed axis. */
+function tlSessionAxis(frames: TlReplayFrame[], expiries: string[]): number[] {
+  const keep = new Set(expiries);
+  const out = new Set<number>();
+  for (const f of frames) {
+    f.cells.forEach((_v, key) => {
+      const bar = key.indexOf("|");
+      if (!keep.has(key.slice(0, bar))) return;
+      const k = Number(key.slice(bar + 1));
+      if (Number.isFinite(k)) out.add(k);
+    });
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
 const tlLeg = (o: TlChainLeg | undefined, k: string): number => {
   const v = o?.[k];
   const n = Number(v);
@@ -1846,9 +1969,14 @@ function TlLevelChip({ name, value, spot, color, note }: {
 // right pane passes it — the recorder snapshots the BOARD, so hanging a
 // board-level Δ off the left pane's single-expiry ladder would print a change
 // that doesn't belong to the number beside it.
-function TlLadder({ rows, spot, levels, changes = null }: {
+// `missing` (replay only) = strikes the current sweep did not record. Their row
+// is drawn with no bar and an em dash instead of a value: the recorder stores
+// walls, not the whole ladder, and a 0 bar there would claim "no gamma at this
+// strike" when the honest answer is "not recorded at this moment".
+function TlLadder({ rows, spot, levels, changes = null, missing = null }: {
   rows: TlRow[]; spot: number | null; levels: TlLevels;
   changes?: Map<number, number> | null;
+  missing?: Set<number> | null;
 }) {
   const maxAbs = rows.reduce((m, r) => Math.max(m, Math.abs(r.gex)), 0) || 1;
   const spotRow = spot == null ? null
@@ -1865,6 +1993,7 @@ function TlLadder({ rows, spot, levels, changes = null }: {
         {withChg && <span style={{ textAlign: "right" }}><Label>Δ 1D</Label></span>}
       </div>
       {rows.map((r) => {
+        const unrecorded = missing?.has(r.strike) ?? false;
         const pos = r.gex >= 0;
         const pct = Math.max(2, (Math.abs(r.gex) / maxAbs) * 100);
         const isSpot = spotRow != null && r.strike === spotRow.strike;
@@ -1893,15 +2022,22 @@ function TlLadder({ rows, spot, levels, changes = null }: {
             </span>
             <span style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
               <span style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
-                {!pos && <span style={{ width: `${pct}%`, height: 14, borderRadius: "4px 0 0 4px", background: T.red }} />}
+                {!unrecorded && !pos && <span style={{ width: `${pct}%`, height: 14, borderRadius: "4px 0 0 4px", background: T.red }} />}
               </span>
               <span style={{ width: 1, height: 18, background: T.border, flexShrink: 0 }} />
               <span style={{ flex: 1, display: "flex" }}>
-                {pos && <span style={{ width: `${pct}%`, height: 14, borderRadius: "0 4px 4px 0", background: POS_GREEN }} />}
+                {!unrecorded && pos && <span style={{ width: `${pct}%`, height: 14, borderRadius: "0 4px 4px 0", background: POS_GREEN }} />}
               </span>
             </span>
-            <span style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700, color: pos ? POS_GREEN : T.red }}>
-              {fmtBig(r.gex)}
+            <span
+              title={unrecorded ? "not recorded in this sweep — the recorder stores the walls, not every strike" : undefined}
+              style={{
+                textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 700,
+                color: unrecorded ? T.muted : pos ? POS_GREEN : T.red,
+                opacity: unrecorded ? 0.5 : 1,
+              }}
+            >
+              {unrecorded ? "—" : fmtBig(r.gex)}
             </span>
             {withChg && (() => {
               const chg = changes?.get(r.strike);
@@ -1980,6 +2116,143 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
       return next;
     });
   }, []);
+
+  // ── Replay ────────────────────────────────────────────────────────────────
+  // See the TL_REPLAY block above for what is and isn't recorded. `replayOn` is
+  // the user's intent; every derived value keys off the FRAME, so turning it on
+  // for a symbol with no recorded history shows an explicit empty state rather
+  // than a silently blank card.
+  const [replayOn, setReplayOn] = useState(false);
+  const [replayDates, setReplayDates] = useState<string[]>([]);
+  const [replayDate, setReplayDate] = useState("");
+  const [replaySession, setReplaySession] = useState<TlReplaySession | null>(null);
+  const [replayIdx, setReplayIdx] = useState(0);
+  const [replayPlaying, setReplayPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState<number>(1);
+  const [replayLoading, setReplayLoading] = useState(false);
+  const [replayErr, setReplayErr] = useState("");
+
+  // Leaving replay, or switching ticker, drops the loaded session so the next
+  // entry can't paint one symbol's frames under another's label.
+  useEffect(() => {
+    setReplaySession(null); setReplayIdx(0); setReplayPlaying(false); setReplayErr("");
+  }, [replayOn, sym]);
+
+  // Which sessions are replay-able for this symbol. Retention is ~5 trading
+  // days, so the list is short by design — a rewind, not a history browser.
+  useEffect(() => {
+    if (!replayOn) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/proxy/strike-growth/replay-meta?symbol=${encodeURIComponent(sym)}`, { cache: "no-store" });
+        const j = await res.json().catch(() => null);
+        if (cancelled) return;
+        const ds: string[] = Array.isArray(j?.dates) ? j.dates.map((d: unknown) => String(d).slice(0, 10)) : [];
+        setReplayDates(ds);
+        setReplayDate((cur) => (cur && ds.includes(cur) ? cur : ds[0] ?? ""));
+        if (!ds.length) setReplayErr(`No recorded sessions for ${sym}.`);
+      } catch {
+        if (!cancelled) { setReplayDates([]); setReplayDate(""); setReplayErr("Could not load recorded sessions."); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [replayOn, sym]);
+
+  // The frames. ONE request per (symbol, session) — the whole day is pulled up
+  // front so scrubbing is instant and never re-hits the network mid-drag.
+  useEffect(() => {
+    if (!replayOn || !replayDate) return;
+    let cancelled = false;
+    setReplaySession(null); setReplayIdx(0);
+    setReplayLoading(true); setReplayErr(""); setReplayPlaying(false);
+    (async () => {
+      try {
+        const res = await fetch(
+          `/proxy/strike-growth/frames-by-expiry?symbol=${encodeURIComponent(sym)}&date=${encodeURIComponent(replayDate)}`,
+          { cache: "no-store" },
+        );
+        const j = await res.json().catch(() => null);
+        if (cancelled) return;
+        if (!j?.ok || !Array.isArray(j.frames) || !j.frames.length) {
+          setReplaySession(null);
+          setReplayErr(j?.error ? String(j.error) : `No recorded frames for ${sym} on ${replayDate}.`);
+          return;
+        }
+        // Payload is positional (`cells: [expiryIdx, strike, net, vol]`) with
+        // `expiries` as the index table — see the route for why.
+        const expiryList: string[] = Array.isArray(j.expiries) ? j.expiries.map(String) : [];
+        const strikeSet = new Set<number>();
+        const expSet = new Set<string>();
+        const frames: TlReplayFrame[] = (j.frames as { ts?: unknown; spot?: unknown; cells?: unknown }[])
+          .map((f) => {
+            const cells = new Map<string, { net: number; vol: number }>();
+            const seen = new Set<string>();
+            for (const c of ((f.cells ?? []) as number[][])) {
+              const exp = expiryList[Number(c[0])];
+              const strike = Number(c[1]);
+              if (!exp || !isFinite(strike)) continue;
+              seen.add(exp); expSet.add(exp); strikeSet.add(strike);
+              cells.set(`${exp}|${strike}`, { net: Number(c[2]) || 0, vol: Number(c[3]) || 0 });
+            }
+            const ts = String(f.ts);
+            return {
+              ts, t: new Date(ts).getTime(), spot: Number(f.spot) || 0, cells,
+              expiries: expiryList.filter((e) => seen.has(e)),
+            };
+          })
+          .filter((f) => isFinite(f.t));
+        frames.sort((a, b) => a.t - b.t);
+        if (!frames.length) { setReplaySession(null); setReplayErr(`No recorded frames for ${sym} on ${replayDate}.`); return; }
+        setReplaySession({
+          frames,
+          strikes: [...strikeSet].sort((a, b) => a - b),
+          expiries: [...expSet].sort(),
+        });
+        // Land on the LAST sweep: coming off a live card, the nearest thing to
+        // what was just on screen is the most recent snapshot. Scrub back.
+        setReplayIdx(Math.max(0, tlTimelineOf(frames).length - 1));
+      } catch {
+        if (!cancelled) { setReplaySession(null); setReplayErr("Could not load frames."); }
+      } finally {
+        if (!cancelled) setReplayLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [replayOn, replayDate, sym]);
+
+  // The scrubber's steps: sweep timestamps snapped to the minute. The recorder
+  // sweeps on 2 min / 5 min lanes, so raw timestamps are uneven — snapping
+  // gives one readable step per minute of session instead of a ragged axis.
+  const replayTimeline = useMemo<number[]>(
+    () => (replaySession ? tlTimelineOf(replaySession.frames) : []),
+    [replaySession],
+  );
+  const replayClock = replayTimeline.length
+    ? replayTimeline[Math.min(replayIdx, replayTimeline.length - 1)]
+    : null;
+
+  /** The last sweep AT OR BEFORE the clock — step-hold, never a future reading. */
+  const replayFrame = useMemo<TlReplayFrame | null>(() => {
+    if (!replaySession || replayClock == null) return null;
+    const cutoff = replayClock + 59_999;
+    let pick: TlReplayFrame | null = null;
+    for (const f of replaySession.frames) { if (f.t <= cutoff) pick = f; else break; }
+    return pick;
+  }, [replaySession, replayClock]);
+
+  // Playback. Stops at the last step rather than looping — a session that
+  // silently restarts reads as the tape jumping backwards.
+  useEffect(() => {
+    if (!replayPlaying || replayTimeline.length === 0) return;
+    const id = setInterval(() => {
+      setReplayIdx((i) => {
+        if (i >= replayTimeline.length - 1) { setReplayPlaying(false); return i; }
+        return i + 1;
+      });
+    }, TL_REPLAY_BASE_MS / replaySpeed);
+    return () => clearInterval(id);
+  }, [replayPlaying, replaySpeed, replayTimeline.length]);
 
   // The picker's universe: the live scanner list (same source as the Options
   // Chain menu) plus the quick row and anything typed in here before, so a
@@ -2082,10 +2355,15 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
   }, [sym, boardKey]);
 
   useEffect(() => {
+    // The board sweep is one request PER EXPIRATION and uncapped — SPX lists
+    // 40+. Rewound, none of it is on screen, so it is paused rather than
+    // hammering the proxy for a pane that is showing a recording. The cheap
+    // chain/listing polls stay on so leaving replay doesn't blank the card.
+    if (replayOn) return;
     loadBoard();
     const id = setInterval(loadBoard, TL_BOARD_REFRESH_MS);
     return () => clearInterval(id);
-  }, [loadBoard]);
+  }, [loadBoard, replayOn]);
 
   // A ladder from a previous ticker is worse than none — gate on the symbol the
   // sweep actually ran for.
@@ -2139,22 +2417,89 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
     .sort((a, b) => a.strike - b.strike);
   const rightRows = boardIsFull ? boardRows : frontRows;
 
-  const leftLevels = tlLevelsFrom(leftRows, spot);
+  // ── Live vs rewound: ONE swap, here ───────────────────────────────────────
+  // Everything below this block — levels, walls, the drawn window, the chips,
+  // the plain-language read — is computed from `viewLeftRows` / `viewRightRows`
+  // / `viewSpot` and does not know which mode produced them. That is the whole
+  // of replay: the SOURCE of the two ladders changes, nothing downstream does.
+
+  // The session's 0DTE expiry: the one expiring ON the replayed date. A root
+  // with no same-day listing that session falls back to its front recorded
+  // expiry, so the right pane's ex-0DTE rule means the same thing either way.
+  const replayZeroDte = replaySession
+    ? (replaySession.expiries.includes(replayDate) ? replayDate : (replaySession.expiries[0] ?? ""))
+    : "";
+  // Left pane pills: the session's recorded expiries while rewound, the live
+  // board's otherwise.
+  const viewExpiries = replayOn && replaySession ? replaySession.expiries : expiries;
+  const viewActiveExpiry = replayOn && replaySession
+    ? (expiry != null && replaySession.expiries.includes(expiry) ? expiry : (replaySession.expiries[0] ?? null))
+    : activeExpiry;
+  // Right pane scope: every recorded expiry EXCEPT the session's 0DTE — the
+  // same "structural board" the live right pane draws.
+  const replayBoardExps = useMemo(
+    () => (replaySession ? replaySession.expiries.filter((e) => e !== replayZeroDte) : []),
+    [replaySession, replayZeroDte],
+  );
+
+  // The fixed ladder axes, memoized on the SESSION — not rebuilt per frame.
+  // Walking every frame's cells is cheap once and wasteful sixty times a
+  // minute at 8× playback. Keyed by joined strings because the expiry arrays
+  // are rebuilt each render and their identity would defeat the memo.
+  const leftAxisKey = viewActiveExpiry ?? "";
+  const leftAxis = useMemo(
+    () => (replaySession && leftAxisKey ? tlSessionAxis(replaySession.frames, [leftAxisKey]) : []),
+    [replaySession, leftAxisKey],
+  );
+  const boardAxisKey = replayBoardExps.join(",");
+  const rightAxis = useMemo(
+    () => (replaySession && boardAxisKey ? tlSessionAxis(replaySession.frames, boardAxisKey.split(",")) : []),
+    [replaySession, boardAxisKey],
+  );
+
+  const replayLeft = (replayOn && replayFrame && leftAxisKey && leftAxis.length)
+    ? tlReplayRows(replayFrame, leftAxis, [leftAxisKey])
+    : null;
+  const replayRight = (replayOn && replayFrame && replayBoardExps.length && rightAxis.length)
+    ? tlReplayRows(replayFrame, rightAxis, replayBoardExps)
+    : null;
+
+  const viewSpot = replayOn ? (replayFrame && replayFrame.spot > 0 ? replayFrame.spot : null) : spot;
+  const viewLeftRows = replayOn ? (replayLeft?.rows ?? []) : leftRows;
+  const viewRightRows = replayOn ? (replayRight?.rows ?? []) : rightRows;
+
+  const leftLevels = tlLevelsFrom(viewLeftRows, viewSpot);
   // Both panes now compute their levels the same way, off ladders built by the
   // same function — no second opinion from a second data source to reconcile.
-  const rightLevels = tlLevelsFrom(rightRows, spot);
-  const atm = tlAtm(atmGroup, spot ?? 0);
+  const rightLevels = tlLevelsFrom(viewRightRows, viewSpot);
+  // ± Move and ATM IV are priced off live marks; nothing in the recording can
+  // reconstruct them, so they read "—" while rewound instead of putting today's
+  // premium on a three-day-old ladder.
+  const atm = replayOn ? { move: null, iv: null } : tlAtm(atmGroup, spot ?? 0);
   const positiveGamma = rightLevels.net >= 0;
 
-  const leftLadder = tlWindow(leftRows, spot);
-  const rightLadder = tlWindow(rightRows, spot);
+  const leftLadder = tlWindow(viewLeftRows, viewSpot);
+  const rightLadder = tlWindow(viewRightRows, viewSpot);
   const hasAny = leftLadder.length > 0 || rightLadder.length > 0;
+
+  // The card's top-level gate. Rewound, the live chain's loading/error state is
+  // irrelevant — the replay bar reports its own, and blocking on a live fetch
+  // would hide a session that loaded fine.
+  const gateLoading = replayOn ? replayLoading : loading;
+  const gateError = replayOn ? (replayErr || null) : (error ?? data?.error ?? null);
+  const gateEmpty = replayOn
+    ? `No recorded ladder for ${sym}${replayDate ? ` on ${replayDate}` : ""}.`
+    : `No live option chain for ${sym}.`;
 
   // What the right pane ACTUALLY covers — the count of expiries whose chain came
   // back, not the count requested. Nothing is capped, so a number below the
   // listing means a chain call failed, and the header says which it is rather
   // than implying a complete sweep.
-  const boardLabel = boardIsFull
+  const boardLabel = replayOn
+    ? (replayBoardExps.length
+        ? `${replayBoardExps.length} recorded expiration${replayBoardExps.length === 1 ? "" : "s"} · excl. 0DTE${replayZeroDte ? ` (${replayZeroDte})` : ""} · recorded walls only`
+        : "no recorded expirations past 0DTE this session")
+    : boardIsFull
     ? [
         `${board.exps} expiration${board.exps === 1 ? "" : "s"} · excl. 0DTE`,
         boardExpiries.length > board.exps ? `of ${boardExpiries.length} listed — ${boardExpiries.length - board.exps} chain call(s) failed` : "whole board",
@@ -2197,8 +2542,110 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
           <button onClick={refresh.trigger} style={refresh.style} title="Re-fetch the chain, the listing and the whole-board sweep">
             {refresh.label}
           </button>
+          {/* Replay — rewinds both panes off a recorded session. */}
+          <button
+            onClick={() => setReplayOn((v) => !v)}
+            title="Replay — scrub both ladders back through a recorded session (recorded walls only, ~5 trading days)"
+            style={{
+              ...(replayOn ? homeButtonStyle : homeSecondaryButtonStyle),
+              ...(replayOn ? { background: T.orange, borderColor: T.orange, color: "#0b0f1a" } : { color: T.orange }),
+              fontWeight: 800,
+            }}
+          >⏱ Replay</button>
         </span>
       </Row>
+
+      {/* ── Replay bar ────────────────────────────────────────────────────
+          Session picker · transport · scrubber · speed · the clock being
+          shown, then the coverage caveats said OUT LOUD. The ladders below
+          look exactly like the live ones, so "recorded walls only" has to be
+          stated here or an em-dashed rung reads as a broken card. */}
+      {replayOn && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+          padding: "6px 10px", borderRadius: 10,
+          background: "rgba(251,133,1,0.07)", border: `1px solid ${T.orange}55`,
+          fontSize: 11, color: T.text,
+        }}>
+          <span style={{ fontWeight: 900, letterSpacing: "0.1em", textTransform: "uppercase", color: T.orange, flexShrink: 0 }}>
+            Replay
+          </span>
+
+          <select
+            value={replayDate}
+            onChange={(e) => { setReplayPlaying(false); setReplayDate(e.target.value); }}
+            disabled={!replayDates.length}
+            style={{
+              padding: "3px 6px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
+              background: "rgba(13,17,25,0.72)", color: T.cyan,
+              border: `1px solid ${T.border}`, borderRadius: 6, outline: "none", cursor: "pointer",
+            }}
+          >
+            {replayDates.length === 0 && <option value="">—</option>}
+            {replayDates.map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
+
+          <button
+            onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.max(0, i - 1)); }}
+            disabled={replayIdx <= 0}
+            title="Previous minute"
+            style={{ ...tlReplayBtn(false), opacity: replayIdx > 0 ? 1 : 0.4 }}
+          >◀</button>
+          <button
+            onClick={() => {
+              // Playing from the end shows one step and stops, which reads as
+              // broken — rewind to the start first.
+              if (replayIdx >= replayTimeline.length - 1) setReplayIdx(0);
+              setReplayPlaying((p) => !p);
+            }}
+            disabled={replayTimeline.length < 2}
+            title="Play / pause"
+            style={{ ...tlReplayBtn(replayPlaying), padding: "0 12px", opacity: replayTimeline.length > 1 ? 1 : 0.4 }}
+          >{replayPlaying ? "❚❚" : "▶"}</button>
+          <button
+            onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.min(replayTimeline.length - 1, i + 1)); }}
+            disabled={replayIdx >= replayTimeline.length - 1}
+            title="Next minute"
+            style={{ ...tlReplayBtn(false), opacity: replayIdx < replayTimeline.length - 1 ? 1 : 0.4 }}
+          >▶</button>
+
+          <input
+            type="range"
+            min={0}
+            max={Math.max(0, replayTimeline.length - 1)}
+            value={Math.min(replayIdx, Math.max(0, replayTimeline.length - 1))}
+            disabled={replayTimeline.length < 2}
+            onChange={(e) => { setReplayPlaying(false); setReplayIdx(Number(e.target.value)); }}
+            style={{ flex: 1, minWidth: 180, height: 3, accentColor: T.orange }}
+          />
+
+          <span style={{ fontSize: 10, fontWeight: 700, opacity: 0.6 }}>Speed</span>
+          {TL_REPLAY_SPEEDS.map((sp) => (
+            <button
+              key={sp}
+              onClick={() => setReplaySpeed(sp)}
+              style={{ ...tlReplayBtn(replaySpeed === sp), height: 22, padding: "0 7px", fontSize: 10 }}
+            >{sp}×</button>
+          ))}
+
+          <span style={{ color: T.border }}>|</span>
+
+          <span style={{ fontFamily: "var(--font-mono)", fontWeight: 900 }}>
+            {replayClock != null ? `${fmtTlReplayClock(replayClock)} ET` : "--:--"}
+          </span>
+          <span style={{ opacity: 0.55 }}>
+            {replayTimeline.length ? `${Math.min(replayIdx, replayTimeline.length - 1) + 1} / ${replayTimeline.length}` : ""}
+          </span>
+
+          {replayLoading && <span style={{ color: T.cyan, fontWeight: 700 }}>loading…</span>}
+          {!!replayErr && <span style={{ color: T.red, fontWeight: 700 }}>{replayErr}</span>}
+          {!replayLoading && !replayErr && replayTimeline.length > 0 && (
+            <span style={{ opacity: 0.55 }}>
+              · recorded walls only · sweeps held to the minute · ± Move, ATM IV and Δ 1D off while rewound
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Quick row + whatever the trader looked up last. */}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -2207,19 +2654,21 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
         ))}
       </div>
 
-      {loading || error || !hasAny ? (
+      {gateLoading || gateError || !hasAny ? (
         <CardState
-          loading={loading}
-          error={error ?? data?.error ?? null}
-          empty={`No live option chain for ${sym}.`}
+          loading={gateLoading}
+          error={gateError}
+          empty={gateEmpty}
         />
       ) : (
         <>
           {/* One ticker, one spot — both panes are priced off this number. */}
           <Row style={{ flexWrap: "wrap", gap: 12 }}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+              {/* Rewound, this is the spot RECORDED at that sweep — the live
+                  quote would put today's price on a past session's ladder. */}
               <Value color={T.text} size={26}>
-                {spot == null ? "—" : spot.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                {viewSpot == null ? "—" : viewSpot.toLocaleString("en-US", { maximumFractionDigits: 2 })}
               </Value>
               <span style={{
                 fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase",
@@ -2250,22 +2699,27 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
                 <Stat label="Net GEX" value={fmtBig(leftLevels.net)} color={leftLevels.net >= 0 ? POS_GREEN : T.red} size={16} />
               </Row>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {expiries.map((e) => (
-                  <button key={e} onClick={() => setExpiry(e)} style={activeExpiry === e ? homeButtonStyle : homeSecondaryButtonStyle}>
-                    {tlExpiryChip(e, today)}
+                {/* Rewound, the pills are the expiries the SESSION recorded and
+                    their DTE counts from the replayed date — labelling them off
+                    today would mark the wrong pill "0DTE". */}
+                {viewExpiries.map((e) => (
+                  <button key={e} onClick={() => setExpiry(e)} style={viewActiveExpiry === e ? homeButtonStyle : homeSecondaryButtonStyle}>
+                    {tlExpiryChip(e, replayOn && replayDate ? replayDate : today)}
                   </button>
                 ))}
               </div>
               {leftLadder.length === 0 ? (
-                <Placeholder>No populated strikes on this expiry.</Placeholder>
+                <Placeholder>
+                  {replayOn ? "Nothing recorded on this expiry in this session." : "No populated strikes on this expiry."}
+                </Placeholder>
               ) : (
-                <TlLadder rows={leftLadder} spot={spot} levels={leftLevels} />
+                <TlLadder rows={leftLadder} spot={viewSpot} levels={leftLevels} missing={replayLeft?.missing ?? null} />
               )}
               <div style={TL_CHIP_ROW}>
-                <TlLevelChip name="Core (CB)" value={leftLevels.core} spot={spot} color={LEVEL_COLORS.cb} note="biggest magnet" />
-                <TlLevelChip name="Call wall" value={leftLevels.callWall} spot={spot} color={LEVEL_COLORS.cw} note="ceiling" />
-                <TlLevelChip name="Put wall" value={leftLevels.putWall} spot={spot} color={LEVEL_COLORS.pw} note="floor" />
-                <TlLevelChip name="Gamma flip" value={leftLevels.flip} spot={spot} color={T.orange} note="pinning ↑ trending ↓" />
+                <TlLevelChip name="Core (CB)" value={leftLevels.core} spot={viewSpot} color={LEVEL_COLORS.cb} note="biggest magnet" />
+                <TlLevelChip name="Call wall" value={leftLevels.callWall} spot={viewSpot} color={LEVEL_COLORS.cw} note="ceiling" />
+                <TlLevelChip name="Put wall" value={leftLevels.putWall} spot={viewSpot} color={LEVEL_COLORS.pw} note="floor" />
+                <TlLevelChip name="Gamma flip" value={leftLevels.flip} spot={viewSpot} color={T.orange} note="pinning ↑ trending ↓" />
               </div>
             </div>
 
@@ -2284,23 +2738,40 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
                   baseline is the previous SNAPSHOT date, which after a holiday
                   or a missed run is not calendar yesterday — printing it is the
                   difference between a trustworthy column and a mystery one. */}
-              <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.text, opacity: 0.6 }}>
-                {chgBaseline
-                  ? `Δ 1D vs close ${chgBaseline}`
-                  : chgOk
-                    ? "Δ 1D — first snapshot recorded, baseline lands next session"
-                    : "Δ 1D — no end-of-day history yet"}
-              </span>
+              {/* The Δ column is an end-of-day series — one row per session
+                  close. It has nothing to say about an intraday clock, so both
+                  the column and this caption are off while rewound. */}
+              {!replayOn && (
+                <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.text, opacity: 0.6 }}>
+                  {chgBaseline
+                    ? `Δ 1D vs close ${chgBaseline}`
+                    : chgOk
+                      ? "Δ 1D — first snapshot recorded, baseline lands next session"
+                      : "Δ 1D — no end-of-day history yet"}
+                </span>
+              )}
               {rightLadder.length === 0 ? (
-                <CardState loading={bLoading} error={bError} empty="No board-wide ladder yet (nothing listed past 0DTE)." />
+                <CardState
+                  loading={replayOn ? replayLoading : bLoading}
+                  error={replayOn ? (replayErr || null) : bError}
+                  empty={replayOn
+                    ? "Nothing recorded past 0DTE in this session."
+                    : "No board-wide ladder yet (nothing listed past 0DTE)."}
+                />
               ) : (
-                <TlLadder rows={rightLadder} spot={spot} levels={rightLevels} changes={rightChanges} />
+                <TlLadder
+                  rows={rightLadder}
+                  spot={viewSpot}
+                  levels={rightLevels}
+                  changes={replayOn ? null : rightChanges}
+                  missing={replayRight?.missing ?? null}
+                />
               )}
               <div style={TL_CHIP_ROW}>
-                <TlLevelChip name="Core (CB)" value={rightLevels.core} spot={spot} color={LEVEL_COLORS.cb} note="biggest magnet" />
-                <TlLevelChip name="Call wall" value={rightLevels.callWall} spot={spot} color={LEVEL_COLORS.cw} note="ceiling" />
-                <TlLevelChip name="Put wall" value={rightLevels.putWall} spot={spot} color={LEVEL_COLORS.pw} note="floor" />
-                <TlLevelChip name="Gamma flip" value={rightLevels.flip} spot={spot} color={T.orange} note="pinning ↑ trending ↓" />
+                <TlLevelChip name="Core (CB)" value={rightLevels.core} spot={viewSpot} color={LEVEL_COLORS.cb} note="biggest magnet" />
+                <TlLevelChip name="Call wall" value={rightLevels.callWall} spot={viewSpot} color={LEVEL_COLORS.cw} note="ceiling" />
+                <TlLevelChip name="Put wall" value={rightLevels.putWall} spot={viewSpot} color={LEVEL_COLORS.pw} note="floor" />
+                <TlLevelChip name="Gamma flip" value={rightLevels.flip} spot={viewSpot} color={T.orange} note="pinning ↑ trending ↓" />
               </div>
             </div>
           </div>
@@ -2323,11 +2794,15 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
           </div>
 
           <span style={{ fontSize: 11, color: T.text, opacity: 0.45, fontFamily: "var(--font-mono)" }}>
-            OI+Vol basis · left pane shares Multi Greek&apos;s formula · right pane is the server full-board sweep · educational only, not investment advice
+            {replayOn
+              ? `OI+Vol basis · recorded strike_growth sweeps${replayDate ? ` for ${replayDate}` : ""} · walls only, not the whole ladder · educational only, not investment advice`
+              : "OI+Vol basis · left pane shares Multi Greek's formula · right pane is the server full-board sweep · educational only, not investment advice"}
           </span>
         </>
       )}
-      <UpdatedStamp at={lastUpdated} />
+      {/* The live fetch stamp says nothing about a rewound card — the replay
+          bar's own clock is the timestamp that matters there. */}
+      {!replayOn && <UpdatedStamp at={lastUpdated} />}
     </Card>
   );
 }

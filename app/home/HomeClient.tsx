@@ -263,6 +263,88 @@ function formatStrikeValue(value: number): string {
   return Number.isInteger(value) ? value.toLocaleString("en-US") : value.toFixed(2);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// +GEX % sparkline
+//
+// The Levels strip's "+GEX %" tile is point-in-time: 63% says the 0DTE chain is
+// long-gamma right now, but not whether it climbed there from 40 or bled down
+// from 80 — and that path is the part that trades. This draws the same number's
+// session history underneath the value. Click the tile to hide/show it.
+//
+// Sampled CLIENT-SIDE, on a timer, off the live chain the chart already holds.
+// A server series would only re-derive a number this tab computes every frame,
+// and would need a new proxy route to carry it. Persisted to sessionStorage
+// under today's ET date, so a refresh keeps the curve and tomorrow starts clean.
+//
+// The domain always includes 50 so the split fill stays honest on a quiet day:
+// a chain that never leaves 60–64 draws a line sitting clearly above the midline
+// rather than a full-height squiggle that reads as a regime change.
+// ─────────────────────────────────────────────────────────────────────────────
+const POSGEX_SPARK_MS = 20_000;  // one sample / 20s → ~1,170 over a full RTH day
+const POSGEX_SPARK_MAX = 1200;   // hard cap, oldest dropped first
+const POSGEX_SPARK_KEY = "cbedge.posGexPctSpark";
+const POSGEX_SPARK_ON_KEY = "cbedge.posGexPctSparkOn";
+
+type SparkPoint = { t: number; v: number };
+
+function PosGexSpark({
+  points,
+  width = 66,
+  height = 17,
+}: {
+  points: SparkPoint[];
+  width?: number;
+  height?: number;
+}) {
+  // useId, not a render index — two tiles emitting the same clip id would let
+  // one steal the other's clip region.
+  const uid = React.useId().replace(/:/g, "");
+
+  const geom = useMemo(() => {
+    if (points.length < 2) return null;
+    const vals = points.map((p) => p.v);
+    const lo = Math.min(50, ...vals) - 2;
+    const hi = Math.max(50, ...vals) + 2;
+    const span = hi - lo || 1;
+    const px = (i: number) => (i / (points.length - 1)) * width;
+    const py = (v: number) => height - ((v - lo) / span) * height;
+    const d = vals.map((v, i) => `${i ? "L" : "M"}${px(i).toFixed(2)},${py(v).toFixed(2)}`).join(" ");
+    const lastV = vals[vals.length - 1];
+    return { d, mid: py(50), lastY: py(lastV), lastV };
+  }, [points, width, height]);
+
+  // Reserve the row even before there are two samples, so the tile doesn't grow
+  // a few seconds after the strip first paints and shove the row below it down.
+  if (!geom) return <div style={{ width, height }} />;
+
+  const area = `${geom.d} L${width},${geom.mid} L0,${geom.mid} Z`;
+
+  return (
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      style={{ display: "block", overflow: "visible" }}
+      aria-hidden="true"
+    >
+      <defs>
+        <clipPath id={`${uid}-up`}>
+          <rect x="0" y="0" width={width} height={Math.max(0, geom.mid)} />
+        </clipPath>
+        <clipPath id={`${uid}-dn`}>
+          <rect x="0" y={geom.mid} width={width} height={Math.max(0, height - geom.mid)} />
+        </clipPath>
+      </defs>
+      <path d={area} fill={HOME_THEME.green} opacity={0.18} clipPath={`url(#${uid}-up)`} />
+      <path d={area} fill={HOME_THEME.red} opacity={0.18} clipPath={`url(#${uid}-dn)`} />
+      <line x1={0} x2={width} y1={geom.mid} y2={geom.mid} stroke="rgba(255,255,255,0.28)" strokeWidth={1} strokeDasharray="2 3" />
+      <path d={geom.d} fill="none" stroke={HOME_THEME.green} strokeWidth={1.4} clipPath={`url(#${uid}-up)`} />
+      <path d={geom.d} fill="none" stroke={HOME_THEME.red} strokeWidth={1.4} clipPath={`url(#${uid}-dn)`} />
+      <circle cx={width} cy={geom.lastY} r={1.8} fill={geom.lastV >= 50 ? HOME_THEME.green : HOME_THEME.red} />
+    </svg>
+  );
+}
+
 
 // Today in ET as yyyy-mm-dd. Matches the server's todayYmd() convention so the
 // DTE label agrees with the expiry the feed considers 0DTE regardless of where
@@ -1464,6 +1546,50 @@ export function HomeClient({
     return abs > 0 ? (pos / abs) * 100 : null;
   }, [chartRows, chartSpot]);
 
+  // ── +GEX % session series (drives the tile's sparkline) ──────────────────
+  // Sampled on a fixed timer off a ref rather than in an effect keyed on
+  // posGexPct: on a quiet chain that value can sit unchanged for minutes, and a
+  // value-keyed effect would record nothing at all over that stretch — the flat
+  // part of the curve is exactly the part that has to be there.
+  const [posGexSpark, setPosGexSpark] = useState<SparkPoint[]>([]);
+  const [showGexSpark, setShowGexSpark] = useState(true);
+  const posGexPctRef = useRef<number | null>(null);
+  useEffect(() => { posGexPctRef.current = posGexPct; }, [posGexPct]);
+
+  // Rehydrate today's curve once. A stored series from a previous ET date is
+  // dropped rather than appended to — yesterday's positioning is a different
+  // chain and would draw a fictional overnight move into the line.
+  useEffect(() => {
+    try {
+      const on = sessionStorage.getItem(POSGEX_SPARK_ON_KEY);
+      if (on === "0") setShowGexSpark(false);
+      const raw = sessionStorage.getItem(POSGEX_SPARK_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as { ymd?: string; pts?: SparkPoint[] };
+      if (saved?.ymd === etYmdToday() && Array.isArray(saved.pts)) {
+        setPosGexSpark(saved.pts.slice(-POSGEX_SPARK_MAX));
+      }
+    } catch { /* private mode / quota — the series just starts empty */ }
+  }, []);
+
+  useEffect(() => {
+    const sample = () => {
+      const v = posGexPctRef.current;
+      if (v == null || !Number.isFinite(v)) return;
+      setPosGexSpark((cur) => {
+        const next = cur.concat({ t: Date.now(), v });
+        if (next.length > POSGEX_SPARK_MAX) next.splice(0, next.length - POSGEX_SPARK_MAX);
+        try {
+          sessionStorage.setItem(POSGEX_SPARK_KEY, JSON.stringify({ ymd: etYmdToday(), pts: next }));
+        } catch { /* quota — keep the in-memory series either way */ }
+        return next;
+      });
+    };
+    sample();
+    const id = setInterval(sample, POSGEX_SPARK_MS);
+    return () => clearInterval(id);
+  }, []);
+
   // Bull/Bear premium split — same calc as the /test Flow Inventory panel
   // (buy calls + sell puts = bullish premium), SPX tape only.
   const [flowBull, setFlowBull] = useState<number | null>(null);
@@ -1827,7 +1953,7 @@ export function HomeClient({
                   chart. (Pop-up alerts will hook off these tiles later.) */}
               {gexView === "gex" && (
               <div style={{ display: "flex", justifyContent: "flex-end", flexWrap: "wrap", gap: 6, padding: "0 10px 6px", flexShrink: 0 }}>
-                {[
+                {([
                   { label: "Net GEX",   value: fmtMoneyB(netGex), color: netGex >= 0 ? C.green : C.red },
                   { label: "Call Wall", value: (callWallOiVol ?? callWall) != null ? formatStrikeValue((callWallOiVol ?? callWall)!) : "—", color: C.green },
                   { label: "Put Wall",  value: (putWallOiVol ?? putWall) != null ? formatStrikeValue((putWallOiVol ?? putWall)!) : "—", color: C.red },
@@ -1836,12 +1962,42 @@ export function HomeClient({
                   { label: "Max Pain",  value: maxPainStrike != null ? formatStrikeValue(maxPainStrike) : "—", color: C.cyan },
                   { label: "+1σ (EM)",  value: emLevels.up != null ? formatStrikeValue(emLevels.up) : "—", color: C.green },
                   { label: "−1σ (EM)",  value: emLevels.down != null ? formatStrikeValue(emLevels.down) : "—", color: C.red },
-                  { label: "+GEX %",    value: posGexPct != null ? `${posGexPct.toFixed(0)}%` : "—", color: posGexPct == null ? C.cyan : posGexPct >= 50 ? C.green : C.red },
+                  {
+                    label: "+GEX %",
+                    value: posGexPct != null ? `${posGexPct.toFixed(0)}%` : "—",
+                    color: posGexPct == null ? C.cyan : posGexPct >= 50 ? C.green : C.red,
+                    // The tile IS the switcher — the Levels strip is already ten
+                    // tiles wide, and a dedicated toggle button would cost a
+                    // slot for a control that gets used twice a day.
+                    spark: showGexSpark ? <PosGexSpark points={posGexSpark} /> : null,
+                    onClick: () => {
+                      setShowGexSpark((v) => {
+                        try { sessionStorage.setItem(POSGEX_SPARK_ON_KEY, v ? "0" : "1"); } catch {}
+                        return !v;
+                      });
+                    },
+                    title: showGexSpark
+                      ? "+GEX % — click to hide the session sparkline"
+                      : "+GEX % — click to show the session sparkline",
+                  },
                   { label: "Bull/Bear", value: flowBull != null ? `${flowBull} / ${100 - flowBull}` : "—", color: flowBull == null ? C.cyan : flowBull >= 50 ? C.green : C.red },
-                ].map((t) => (
-                  <div key={t.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, background: "rgba(13,17,25,0.35)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "3px 10px", minWidth: 64 }}>
+                ] as {
+                  label: string;
+                  value: string;
+                  color: string;
+                  spark?: React.ReactNode;
+                  onClick?: () => void;
+                  title?: string;
+                }[]).map((t) => (
+                  <div
+                    key={t.label}
+                    onClick={t.onClick}
+                    title={t.title}
+                    style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, background: "rgba(13,17,25,0.35)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "3px 10px", minWidth: 64, cursor: t.onClick ? "pointer" : undefined }}
+                  >
                     <span style={{ fontSize: 10, color: "rgba(255,255,255,0.75)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>{t.label}</span>
                     <span style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 800, color: t.color }}>{t.value}</span>
+                    {t.spark}
                   </div>
                 ))}
               </div>

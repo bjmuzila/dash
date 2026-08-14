@@ -1,38 +1,106 @@
 # Changelog
 
-## 2026-08-14 - ΔGEX Board: panes fill the window
+## 2026-08-14 - Levels strip: +GEX % sparkline
 
-Edited: `owner-vite/src/pages/GexGrowth.tsx` (`PANE_H`, detail pane becomes a
-flex column, mobile height cap).
+Edited: `app/home/HomeClient.tsx`.
 
 ### What
 
-The rail and the ladder were pinned at 620px and 560px, so on a tall monitor the
-card floated in the middle of a mostly empty page while both lists scrolled
-inside their own little boxes. Both panes now run the full height of the window
-and scroll there.
+The `+GEX %` tile on the home GEX chart's Levels strip now carries a session
+sparkline under the number. The tile was point-in-time — 63% says the 0DTE chain
+is long-gamma right now, but not whether it climbed there from 40 or bled down
+from 80, and that path is the part that trades.
+
+Click the tile to hide/show the line; the choice sticks for the browser session.
 
 ### How
 
-- `PANE_H = max(340px, calc(100vh - 318px))` on both panes. The subtrahend is
-  everything above and below them that does NOT scroll — global toolbar, card
-  header, controls row, footnote, shell padding. The `max()` floor keeps the
-  rail usable on a short laptop screen; below that the page scrolls as a whole,
-  which is the right failure.
-- The detail pane is a flex column at that height: header, big number and top-N
-  strip are fixed rows, and the ladder is `flex: 1; min-height: 0`. `minHeight`
-  is load-bearing — a flex child defaults to `min-height: auto`, refuses to
-  shrink below its content, and would push the ladder out of the card instead of
-  scrolling it.
-- Grid switched to `alignItems: stretch` so the two panes stay the same height.
-- Under 860px the panes stack, and two full-height ones would be two screens of
-  scrolling before the second even starts — capped at `70vh` with `height: auto`
-  (`!important`, since the height is inline).
+New module-scope `PosGexSpark` component + a client-side series in `HomeClient`.
 
-### Note
+- **Sampled off a timer, not off the value.** `posGexPct` is already computed
+  every frame from the live chain the chart holds, so no new route or proxy
+  change was needed. A `setInterval` (20s) reads it through a ref. Keying an
+  effect on `posGexPct` instead would record NOTHING across a quiet stretch where
+  the value sits unchanged — the flat part of the curve is exactly the part that
+  has to be there.
+- **Persisted to `sessionStorage`** under today's ET date (`etYmdToday()`), so a
+  refresh keeps the curve. A stored series from a previous date is dropped rather
+  than appended to — yesterday's positioning is a different chain and would draw
+  a fictional overnight move into the line. Cap 1,200 points (~6.6h at 20s),
+  oldest dropped first.
+- **Domain always includes 50.** A chain that never leaves 60–64 would otherwise
+  auto-scale into a full-height squiggle that reads as a regime change. Fill and
+  line split at the 50% midline: `HOME_THEME.green` above (long gamma),
+  `HOME_THEME.red` below — same tokens the tile's value already uses.
+- **`useId` for the clip-path ids**, not a render index, so two tiles can't steal
+  each other's clip region.
+- Empty `width×height` div rendered until there are two samples, so the tile
+  doesn't grow a few seconds after first paint and shove the strip down.
+- The Levels strip tile array is now explicitly typed (`spark?` / `onClick?` /
+  `title?` optional) since the entries are no longer uniform.
 
-Spot still centres itself in the ladder on load. The centring is measured off
-the viewport's own rect, so it follows the new height with no change.
+No proxy or server change.
+
+
+## 2026-08-14 - Ticker Lookup: replay slider on both panes
+
+Edited: `components/pages/Analytics.tsx`.
+
+### What
+
+The Ticker Lookup card can now be rewound. A `⏱ Replay` button next to the ↻
+opens a replay bar (session picker · ◀ ▶ transport · scrubber · 0.5–8× speed ·
+clock) and BOTH panes — the picked expiration and the whole board ex-0DTE —
+rebuild from a recorded `strike_growth` sweep: ladders, walls, Core/Call/Put/
+Flip chips, the net-GEX readouts and the plain-language read at the bottom all
+follow.
+
+Because the card is exported and mounted in two places, the Multi Greek page's
+toolbar 🔍 overlay gets the same replay for free — one component, no second copy.
+
+### How
+
+Same route and the same shared-clock shape the Multi Greek page's replay uses:
+`/proxy/strike-growth/frames-by-expiry?symbol=&date=`, one request per session
+pulled up front so scrubbing never re-hits the network; `replay-meta` supplies
+the session list. Sweep timestamps snap to the minute for the scrubber's steps,
+and the card holds the last sweep AT OR BEFORE the clock (step-hold, never a
+future reading).
+
+**Pane scoping.** Left = the picked expiry's cells. Right = every recorded
+expiry EXCEPT the session's 0DTE (the expiry landing ON the replayed date, or
+the front recorded one for a root with no same-day listing) — the same
+structural-board rule the live right pane follows.
+
+**The ladder holds still.** The recorder stores the top N strikes a side PER
+SWEEP, so a frame-built axis gains and loses rungs on every step and the ladder
+shakes while it plays. Each pane's axis is fixed for the session (every strike
+recorded in any frame, for that pane's expiries) and memoized on the session,
+not rebuilt per frame.
+
+**"Not recorded" ≠ "no gamma".** `TlLadder` takes an optional `missing` set:
+strikes this sweep didn't record draw no bar and an em dash, matching the
+convention the Δ 1D column already uses. A 0 bar there would be a claim about a
+wall we simply didn't store.
+
+**DTE counts from the replayed session.** The expiry pills label off the replay
+date while rewound — off today, the wrong pill would be marked 0DTE.
+
+### What's off while rewound, and why
+
+- **± Move / ATM IV** — priced off live marks; nothing in the recording
+  reconstructs them, so they read "—" rather than putting today's premium on a
+  three-day-old ladder.
+- **Δ 1D column and its caption** — an end-of-day series, one row per session
+  close. It has nothing to say about an intraday clock.
+- **The "updated" stamp** — that is the live fetch time; the replay bar's clock
+  is the timestamp that matters.
+- **The whole-board sweep** — paused while rewound. It is one request per
+  expiration and uncapped (SPX lists 40+), and none of it is on screen. The
+  cheap chain/listing polls stay on so leaving replay doesn't blank the card.
+
+Live mode is unchanged: with replay off every value comes from the same live
+path it always did.
 
 
 ## 2026-08-14 - Multi Greek: replay slider — all four panels on one clock
