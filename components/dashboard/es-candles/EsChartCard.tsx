@@ -3479,8 +3479,15 @@ export default function EsChartCard({
               // Now #1 gets HIGHLIGHT_BOOST_TOP and the last highlighted wall
               // gets HIGHLIGHT_BOOST_MIN, interpolated linearly in between, so
               // the dominant wall is unmistakably the fattest tube on screen.
-              const HIGHLIGHT_BOOST_TOP = 2.1;
-              const HIGHLIGHT_BOOST_MIN = 1.15;
+              // Raised: with the curve back at 1.0 (linear — radius tracks net
+              // GEX proportionally, see BUBBLE_CFG_DEFAULT) the walls no longer
+              // get any separation for free from the exponent, so ALL of the
+              // "top N are obvious" now has to come from here. Even the LAST
+              // highlighted wall is 1.6x, which puts the whole highlighted set
+              // clearly above the proportional ladder, and #1 at 2.6x is
+              // unmistakable.
+              const HIGHLIGHT_BOOST_TOP = 2.6;
+              const HIGHLIGHT_BOOST_MIN = 1.6;
 
               // GLOBAL strike selection — the key to the continuous-tube look. Rank
               // strikes by their PEAK |GEX| across the whole session (not per column),
@@ -3534,16 +3541,20 @@ export default function EsChartCard({
                   const wallRank = wallStrikes.get(cell.strike);
                   const isHi = wallRank != null;
                   // Size tracks THIS bubble's own |GEX|, shaped by the Curve
-                  // exponent, so each tube tapers as gamma builds/bleeds; walls
-                  // sit near maxSize + a boost.
+                  // exponent, so each tube tapers as gamma builds/bleeds.
                   //
-                  // curve 0.5 reproduces the old √ (area ∝ |GEX|). The default is
-                  // >1 — EXPONENTIAL — because √ was the wrong direction for this
-                  // read: it lifts every mid-sized strike close to the top wall,
-                  // so a strike at 25% of the session max drew at half the radius
-                  // of the biggest one and the ladder looked flat. With curve 2.8
-                  // that same strike lands at ~3% of the span, and only the true
-                  // top-of-session walls get near maxSize.
+                  // The default is now curve 1.0 — LINEAR. Radius is proportional
+                  // to net GEX across the whole ladder: 50% of the session max
+                  // draws at 50% of the span, 25% at 25%. That is the read the
+                  // ladder is for, and the steep exponents this used to default
+                  // to (0.5 = √, then 2.2 / 2.8) both destroyed it from opposite
+                  // ends — √ lifted every mid strike up near the wall, and >2
+                  // collapsed every non-wall onto Min.
+                  //
+                  // Wall prominence comes from HIGHLIGHT_BOOST_* below instead,
+                  // which is rank-based and therefore cannot flatten the strikes
+                  // it isn't applied to. The slider still spans 0.5–8 if you want
+                  // either extreme back.
                   let r = cfg.minSize + Math.pow(ratio, curveExp) * sizeSpan;
                   // Rank-graduated boost: #1 wall → TOP, last highlighted → MIN.
                   // (highlight === 1 has no span, so it takes TOP outright.)

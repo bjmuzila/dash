@@ -1656,9 +1656,11 @@ interface TlChangeResp {
 const TL_LOOKUP_KEY = "analytics.tickerLookup.recent";
 const TL_QUICK: readonly string[] = ["SPX", "SPY", "QQQ", "NVDA", "TSLA"];
 // How deep each drawn ladder runs EACH WAY from the strike price is sitting on:
-// 10 above + the spot strike + 10 below. The wings carry no useful gamma and a
-// 1500-row SPX board is unreadable; the walls that matter live near the money.
-const TL_LADDER_SIDE = 10;
+// 20 above + the spot strike + 20 below. The far wings carry no useful gamma and
+// a 1500-row SPX board is unreadable, but ten a side cropped walls that were
+// still in play on a wide-strike name — twenty reaches them without turning the
+// pane into a scroll.
+const TL_LADDER_SIDE = 20;
 // The board is one /api/chains call per expiration (server-cached 30s), so it
 // polls slowly and is otherwise driven by the ↻ button next to the ticker.
 const TL_BOARD_REFRESH_MS = 120_000;

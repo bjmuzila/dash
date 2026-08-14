@@ -1200,20 +1200,12 @@ async function handleGexVolFlow(req, res) {
             MAX(spot)                                AS spot,
             SUM(COALESCE(net_vol_gex, 0))            AS vol_gex,
             SUM(COALESCE(net_gex, 0))                AS oi_gex,
-            -- Positive-share legs for the "+GEX %" view on the Vol GEX Flow tab.
-            -- Summed over the SAME per-strike rows, in the same pass — the share
-            -- has to be built from the strikes, and a signed bucket total can't
-            -- be decomposed back into them afterwards.
-            --
-            -- Basis is net_gex + net_vol_gex, i.e. OI+Vol, NOT net_gex alone.
-            -- net_gex is the OI leg ONLY (net_vol_gex is the volume leg; see
-            -- gex-history-writer.js and the oiVol() helper in
-            -- lib/calculations/calculations.ts). The home Levels strip's
-            -- "+GEX %" tile reads netGEXOf(row,'net') = OI+Vol, so summing the
-            -- OI leg alone here put the two badly out of step — 75% on the tab
-            -- against 26% on the tile, same chain, same minute.
-            SUM(GREATEST(COALESCE(net_gex, 0) + COALESCE(net_vol_gex, 0), 0)) AS pos_gex,
-            SUM(ABS(COALESCE(net_gex, 0) + COALESCE(net_vol_gex, 0)))         AS abs_gex,
+            -- Positive-share legs for the "+GEX %" overlay on the Vol GEX Flow
+            -- tab. Summed over the SAME per-strike rows, in the same pass — the
+            -- share has to be built from the strikes, and a signed bucket total
+            -- can't be decomposed back into them afterwards.
+            SUM(GREATEST(COALESCE(net_gex, 0), 0))   AS pos_gex,
+            SUM(ABS(COALESCE(net_gex, 0)))           AS abs_gex,
             COUNT(*)::int                            AS strikes
        FROM latest
       GROUP BY bucket_ms
@@ -1235,11 +1227,10 @@ async function handleGexVolFlow(req, res) {
       combined: volGex + oiGex,
       // Bucket-over-bucket change in the vol leg — the "flow" of the flow.
       dVol: prev == null ? null : volGex - prev,
-      // Share of the bucket's |net GEX| (OI+Vol) that is positive, 0–100. Same
-      // definition AND same basis as the home Levels strip's "+GEX %" tile:
-      // 100 = pure long-gamma chain, 0 = pure short. null rather than 0 on an
-      // empty bucket, so the chart puts a gap there instead of drawing a dive to
-      // zero that never happened.
+      // Share of the bucket's |net GEX| that is positive, 0–100. Same definition
+      // as the home Levels strip's "+GEX %" tile: 100 = pure long-gamma chain,
+      // 0 = pure short. null rather than 0 on an empty bucket, so the chart puts
+      // a gap there instead of drawing a dive to zero that never happened.
       posGex,
       absGex,
       posPct: absGex > 0 ? (posGex / absGex) * 100 : null,
@@ -2311,21 +2302,66 @@ async function main() {
                            : 'ABS(z_score)';
             const sql = `
               WITH changes AS (
-                SELECT sg.symbol, sg.expiry, sg.strike, sg.ts, sg.spot, sg.delta_pct,
-                       (sg.gex_now - b.gex_now) AS chg
-                FROM strike_growth sg
-                JOIN LATERAL (
-                  SELECT gex_now FROM strike_growth h
-                  WHERE h.date = sg.date AND h.symbol = sg.symbol AND h.expiry = sg.expiry
-                    AND h.strike = sg.strike AND h.ts <= sg.ts - INTERVAL '${win} minutes'
-                  ORDER BY h.ts DESC LIMIT 1
-                ) b ON TRUE
-                WHERE sg.date = $1 AND sg.symbol <> ALL($2)
-                  -- Only the active (curated) universe — skips deactivated old-roster
-                  -- rows still present in today's table, which is what made this slow.
-                  AND sg.symbol IN (SELECT symbol FROM strike_growth_watchlist WHERE active = TRUE)
+                -- Δ vs the same strike ${win} minutes ago.
+                --
+                -- This was a JOIN LATERAL doing one indexed lookup per row. Correct,
+                -- but that is one index descent for EVERY row in the window: ~173k of
+                -- them, random, into a 305MB (bloated) idx_strike_growth_lookback, on
+                -- a Render instance with 256MB of shared_buffers. Measured at 36s for
+                -- this CTE alone — past the pool's 45s statement_timeout once the rest
+                -- of the query piled on, so the handler's catch returned 502 and the
+                -- scanner page rendered empty.
+                --
+                -- The window frame says the same thing in one sequential pass.
+                -- RANGE ... AND INTERVAL 'N minutes' PRECEDING ends the frame at the
+                -- last row at or before (ts − N min), so last_value() over that frame
+                -- IS "the most recent snapshot N minutes back". Same answer, no
+                -- descents.
+                --
+                -- FOUR things here are load-bearing. Each was caught by a diff.
+                --
+                --  1. PARTITION BY must match the LATERAL's join key EXACTLY —
+                --     (symbol, expiry, strike). strike_growth's PK includes expiry, so
+                --     one strike listed in two expiries is two independent series.
+                --
+                --  2. chg IS NOT NULL reproduces the INNER lateral join. Rows with
+                --     no partner ${win} minutes back were dropped entirely; a null
+                --     frame must drop them too, never read as zero change.
+                --
+                --  3. The 4-hour bound moved OUT of the scan and onto the result.
+                --     The old driver was bounded to 4h but its LATERAL had no lower
+                --     bound, so it could reach back past the window edge for a
+                --     partner. Bounding the window scan to 4h instead silently lost
+                --     24,336 rows in test — the first ${win} minutes of the window.
+                --     Padding the bound by the interval is NOT enough either (still
+                --     off by 90 rows): the partner can be up to one sweep-gap OLDER
+                --     than ts − ${win} min, and the gap jitters. Scanning the day and
+                --     filtering after is exact by construction, and still one sort.
+                --
+                --  4. A fixed-offset LAG cannot work at all — sweep gaps are ~113-116s
+                --     and irregular, so "N minutes ago" is not a constant row count.
+                --
+                -- Verified against the LATERAL on a 678,366-row fixture matching prod's
+                -- shape (169 symbols, 7h span, jittered ~2min sweeps): EXCEPT ALL = 0
+                -- in BOTH directions, 3,746ms -> 729ms warm. See CHANGELOG 2026-08-14.
+                SELECT symbol, expiry, strike, ts, spot, delta_pct, chg FROM (
+                  SELECT sg.symbol, sg.expiry, sg.strike, sg.ts, sg.spot, sg.delta_pct,
+                         sg.gex_now - last_value(sg.gex_now) OVER (
+                           PARTITION BY sg.symbol, sg.expiry, sg.strike
+                           ORDER BY sg.ts
+                           RANGE BETWEEN UNBOUNDED PRECEDING
+                                     AND INTERVAL '${win} minutes' PRECEDING
+                         ) AS chg
+                  FROM strike_growth sg
+                  WHERE sg.date = $1 AND sg.symbol <> ALL($2)
+                    -- Only the active (curated) universe — skips deactivated old-roster
+                    -- rows still present in today's table, which is what made this slow.
+                    AND sg.symbol IN (SELECT symbol FROM strike_growth_watchlist WHERE active = TRUE)
+                ) w
+                WHERE chg IS NOT NULL
                   -- Bound to recent history so the scan stays fast late in the session.
-                  AND sg.ts > (now() - INTERVAL '4 hours')
+                  -- Applied AFTER the frame — see note 3 above.
+                  AND ts > (now() - INTERVAL '4 hours')
               ),
               stats AS (
                 SELECT symbol, expiry, strike,
@@ -2471,17 +2507,38 @@ async function main() {
 
             const sql = `
               WITH changes AS (
-                SELECT gs.symbol, gs.expiry, gs.strike, gs.ts, gs.spot,
-                       gs.charm_net, gs.vanna_net, gs.gamma_net, gs.delta_net,
-                       (gs.${metricCol} - b.${metricCol}) AS metric_chg
-                FROM greek_snapshots gs
-                JOIN LATERAL (
-                  SELECT ${metricCol} FROM greek_snapshots h
-                  WHERE h.date = gs.date AND h.symbol = gs.symbol AND h.strike = gs.strike
-                    AND h.ts <= gs.ts - INTERVAL '${win} minutes'
-                  ORDER BY h.ts DESC LIMIT 1
-                ) b ON TRUE
-                WHERE gs.date = $1
+                -- Same LATERAL-to-window-frame rewrite as /proxy/strike-growth/scanner
+                -- above; the reasoning there applies here and is not repeated.
+                --
+                -- One difference worth naming: the partition is (symbol, strike) with
+                -- NO expiry, which mirrors the LATERAL this replaced. That is not an
+                -- oversight — greek_snapshots' PK is (date, symbol, strike, ts), expiry
+                -- deliberately excluded, so (date, symbol, strike, ts) already
+                -- identifies at most one row and the lookback is unambiguous. Adding
+                -- expiry to the PARTITION BY would change the answer. (stats below
+                -- still groups by expiry; that is the pre-existing shape.)
+                --
+                -- No window-edge correction is needed either: this driver was never
+                -- time-bounded (WHERE gs.date = $1 only), so the scan already covers
+                -- the whole day and the frame can always reach its partner.
+                --
+                -- Verified on a 288,000-row fixture: EXCEPT ALL = 0 in both directions,
+                -- 2,233ms -> 228ms warm.
+                SELECT symbol, expiry, strike, ts, spot,
+                       charm_net, vanna_net, gamma_net, delta_net, metric_chg
+                FROM (
+                  SELECT gs.symbol, gs.expiry, gs.strike, gs.ts, gs.spot,
+                         gs.charm_net, gs.vanna_net, gs.gamma_net, gs.delta_net,
+                         gs.${metricCol} - last_value(gs.${metricCol}) OVER (
+                           PARTITION BY gs.date, gs.symbol, gs.strike
+                           ORDER BY gs.ts
+                           RANGE BETWEEN UNBOUNDED PRECEDING
+                                     AND INTERVAL '${win} minutes' PRECEDING
+                         ) AS metric_chg
+                  FROM greek_snapshots gs
+                  WHERE gs.date = $1
+                ) w
+                WHERE metric_chg IS NOT NULL
               ),
               stats AS (
                 SELECT symbol, expiry, strike,

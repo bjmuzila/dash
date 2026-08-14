@@ -33,13 +33,16 @@
 //   curve       — size-response exponent: r = min + ratio^curve * (max-min).
 //                 0.5 = the old √ (area ∝ |GEX|, small strikes stay fat);
 //                 1 = linear; >1 = exponential — small strikes collapse toward
-//                 min and only the top walls approach max. Default 2.8.
+//                 min and only the top walls approach max. Default 1.0.
 //   brightness  — 0..100 opacity gradient steepness for smaller strikes
 export type BubbleCfg = { topStrikes: number; highlight: number; minSize: number; maxSize: number; curve: number; brightness: number };
-// minSize down / maxSize + curve up: the top walls need to read as obviously
-// fatter than the mid ladder, and the old 0.5→9 span at curve 2.2 left a strike
-// at half the session max still drawing about two-thirds the size of the wall.
-export const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 10, highlight: 3, minSize: 0.4, maxSize: 12, curve: 2.8, brightness: 84 };
+// curve 1.0 = LINEAR, i.e. every bubble's radius tracks its own net GEX
+// proportionally — a strike at half the session max draws at half the span.
+// The steep exponent (2.2, then 2.8) did make the walls dominant, but it did so
+// by flattening everything else onto Min, which threw away the read the whole
+// ladder exists for. The top-N walls now get their prominence from the
+// rank-graduated highlight boost in EsChartCard instead of from the curve.
+export const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 10, highlight: 3, minSize: 0.4, maxSize: 12, curve: 1, brightness: 84 };
 export const BUBBLE_CFG_KEYS: Array<keyof BubbleCfg> = ["topStrikes", "highlight", "minSize", "maxSize", "curve", "brightness"];
 
 // Slider bounds, single-sourced so the UI and the restore clamp can't drift.

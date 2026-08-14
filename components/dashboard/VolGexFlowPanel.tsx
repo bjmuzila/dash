@@ -63,9 +63,10 @@ const ALL = "__all__";
 // and re-labels the six stat cards. Two series stacked on one canvas was tried
 // first and read as noise — different units, different shapes, neither legible.
 //
-// Orange above the 50 line, cyan below. Deliberately NOT the theme green/red:
-// those two already mean gamma polarity for the dollar series on this same
-// canvas, and reusing them here would suggest the two views plot the same thing.
+// Green above the 50 line, red below — the SAME two tokens the Levels strip's
+// "+GEX %" tile inks its value with, so the number and the line agree on what
+// long-gamma looks like. (POS is the dashboard's light blue; it is the "green"
+// of this theme.) Orange stays as the switch's accent only, never the series.
 //
 // `posPct` rides along on the SAME /proxy/gex-vol-flow response the chart
 // already fetches — the endpoint sums the positive and absolute legs over the
@@ -338,12 +339,12 @@ export default function VolGexFlowPanel() {
     pctSeriesRef.current = chart.addSeries(BaselineSeries, {
       priceScaleId: "left",
       baseValue: { type: "price", price: 50 },
-      topLineColor: PCT,
-      topFillColor1: "rgba(251,133,1,0.34)",
-      topFillColor2: "rgba(251,133,1,0.02)",
-      bottomLineColor: C.cyan,
-      bottomFillColor1: "rgba(33,158,188,0.02)",
-      bottomFillColor2: "rgba(33,158,188,0.34)",
+      topLineColor: POS,
+      topFillColor1: "rgba(142,202,230,0.32)",
+      topFillColor2: "rgba(142,202,230,0.02)",
+      bottomLineColor: NEG,
+      bottomFillColor1: "rgba(239,68,68,0.02)",
+      bottomFillColor2: "rgba(239,68,68,0.32)",
       lineWidth: 2,
       priceLineVisible: false,
       visible: false,
@@ -433,13 +434,13 @@ export default function VolGexFlowPanel() {
     if (pctView) {
       if (!pctStats) return [];
       const s = pctStats;
-      const ink = (v: number) => (v >= 50 ? PCT : C.cyan);
+      const ink = (v: number) => (v >= 50 ? POS : NEG);
       return [
         { label: "+GEX %", value: `${s.last.v.toFixed(0)}%`, sub: etTime(Math.floor(s.last.ts / 1000)), color: ink(s.last.v) },
-        { label: "Δ Last Bucket", value: s.d == null ? "—" : `${s.d > 0 ? "+" : "−"}${Math.abs(s.d).toFixed(1)}pt`, sub: BIN_LABEL, color: (s.d ?? 0) >= 0 ? PCT : C.cyan },
-        { label: "Session High", value: `${s.high.v.toFixed(0)}%`, sub: etTime(Math.floor(s.high.at / 1000)), color: PCT },
-        { label: "Session Low", value: `${s.low.v.toFixed(0)}%`, sub: etTime(Math.floor(s.low.at / 1000)), color: C.cyan },
-        { label: "Time > 50%", value: `${s.abovePct.toFixed(0)}%`, sub: s.flips === 0 ? "one regime" : `${s.flips} regime changes`, color: s.abovePct >= 50 ? PCT : C.cyan },
+        { label: "Δ Last Bucket", value: s.d == null ? "—" : `${s.d > 0 ? "+" : "−"}${Math.abs(s.d).toFixed(1)}pt`, sub: BIN_LABEL, color: (s.d ?? 0) >= 0 ? POS : NEG },
+        { label: "Session High", value: `${s.high.v.toFixed(0)}%`, sub: etTime(Math.floor(s.high.at / 1000)), color: POS },
+        { label: "Session Low", value: `${s.low.v.toFixed(0)}%`, sub: etTime(Math.floor(s.low.at / 1000)), color: NEG },
+        { label: "Time > 50%", value: `${s.abovePct.toFixed(0)}%`, sub: s.flips === 0 ? "one regime" : `${s.flips} regime changes`, color: s.abovePct >= 50 ? POS : NEG },
         { label: "Regime", value: s.last.v >= 50 ? "LONG γ" : "SHORT γ", sub: `${s.last.strikes} strikes`, color: ink(s.last.v) },
       ];
     }
@@ -580,10 +581,10 @@ export default function VolGexFlowPanel() {
             am I on". pointerEvents:none so they never eat a crosshair hover. */}
         {pctView && (
           <>
-            <span style={{ position: "absolute", top: 6, left: 10, fontSize: 9.5, fontWeight: 800, letterSpacing: "0.09em", color: "rgba(251,133,1,0.85)", pointerEvents: "none" }}>
+            <span style={{ position: "absolute", top: 6, left: 10, fontSize: 9.5, fontWeight: 800, letterSpacing: "0.09em", color: "rgba(142,202,230,0.85)", pointerEvents: "none" }}>
               LONG GAMMA
             </span>
-            <span style={{ position: "absolute", bottom: 24, left: 10, fontSize: 9.5, fontWeight: 800, letterSpacing: "0.09em", color: "rgba(33,158,188,0.85)", pointerEvents: "none" }}>
+            <span style={{ position: "absolute", bottom: 24, left: 10, fontSize: 9.5, fontWeight: 800, letterSpacing: "0.09em", color: "rgba(239,68,68,0.85)", pointerEvents: "none" }}>
               SHORT GAMMA
             </span>
           </>

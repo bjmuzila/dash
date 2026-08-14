@@ -1,174 +1,184 @@
 # Changelog
 
-## 2026-08-14 - Level Log PNG: hug the card, centre the chip text
+## 2026-08-14 - GEX Change Scanner 502: 173k index descents replaced by one window frame
 
-Edited: `lib/snapshot.ts`, `components/pages/LevelLog.tsx`.
-
-### What
-
-Two complaints about the Level Log screenshot (`/level-log`, the CORE/Wall log
-card on the Scanner tab group):
-
-1. A dead band of card interior between the last entry and the card's bottom
-   border — the PNG did not clip to the log.
-2. The labels inside the rail chips (`09:29 OPEN CORE`) and the `CHANGED` badge
-   sat high in their boxes, even though they are centred on the live page.
-
-### How
-
-**Dead space.** Framed mode reserves `SNAP_BOTTOM_SLACK` (48px) below the
-measured content and then trims it back at the pixel level. But it reserved it
-by setting `clone.style.height = captureH`, i.e. INSIDE the element — fine for a
-target whose background is the capture background, wrong for a card, which
-paints its own frosted fill across that slack. `trimTrailingBackground` then
-cannot cut it: those pixels are card, not background.
-
-- New `SnapOptions.hugTarget`. When set, the clone is pinned to
-  `contentH + SNAP_BAND_H + SNAP_BAND_GAP + 2` instead of `captureH`, so the
-  card ends where its content ends and the slack falls on plain background
-  below it, where the existing trim removes it down to `SNAP_BOTTOM_PAD` (10px).
-  `box-sizing` is pinned to `border-box` on the clone so the band padding is
-  inside that height regardless of the page reset; the `+2` covers the card's
-  own top/bottom hairlines, which the child-height sum does not include.
-- Opt-in only — `SnapLogButton` passes `hugTarget: true`. No other capture site
-  changes behaviour.
-
-**Text centring.**
-
-- `CHANGED` badge was the one badge missing `data-cap-center`, so it never got
-  snapshot.ts's gotcha-10 line-box → padding rewrite. Added.
-- The rail chips were `display: inline-flex` + `align-items: center`. html2canvas
-  does not implement line-box centring — it lays the children out and then draws
-  each label from its rect's top — which is exactly the case gotcha 10 calls out
-  as unfixable in the clone. Rebuilt as `inline-block` with an explicit
-  `RAIL_CHIP_H = 24` + matching `line-height` + `data-cap-center`, the same idiom
-  the badges use. The flex `gap: 7` became explicit right-margins, the dot became
-  `vertical-align: middle`, and the trailing letter-space after the uppercase
-  level label is cancelled with `margin-right: -0.12em` (`text-indent` does not
-  apply to an inline box).
-
-Live-page rendering is unchanged apart from the chip being 24px tall instead of
-its previous padding-derived ~24px.
-
-
-
-## 2026-08-14 - ES Candles: rank-graduated GEX bubble sizing
-
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
-`components/dashboard/es-candles/slotStore.ts`.
+Edited: `server-v2/server-with-proxy.js` - the `changes` CTE in
+`/proxy/strike-growth/scanner` and in `/proxy/greek-scanner`.
 
 ### What
 
-The per-strike GEX bubble rows on the ES Candles chart read flat at the top of
-the ladder: the #1, #2 and #3 walls drew at nearly the same thickness, so the
-dominant level did not stand out from the ones under it.
+The GEX Change Scanner rendered an empty table with a bare
+`Failed to load resource: the server responded with a status of 502` in the
+console. Not a hang - the handler was throwing. Both handlers end in
+`catch (e) { sendJson(res, 502, { ok:false, error }) }` with no server-side log,
+which is why nothing showed up in `docker compose logs`.
 
-Highlighted walls are now sized by their RANK, not by a single flat multiplier,
-and the factory sizing curve is steeper.
+### Cause
 
-### How
+The `changes` CTE found "the same strike N minutes ago" with a `JOIN LATERAL`
+doing one indexed lookup per row. Correct, but that is one index descent for
+EVERY row in the window. Measured on prod: **173,326 rows, 36.1 seconds** for
+that CTE alone. Add `stats`, `scored` and the sort and it passes the pool's 45s
+`STRIKE_GROWTH_STATEMENT_TIMEOUT_MS`, throws, and returns 502.
 
-- `HIGHLIGHT_BOOST` (one flat `1.35x` for every highlighted wall) replaced by
-  `HIGHLIGHT_BOOST_TOP = 2.1` / `HIGHLIGHT_BOOST_MIN = 1.15`, interpolated
-  linearly across the highlighted set. Rank 0 (the session's dominant wall as of
-  that bucket) gets TOP; the last highlighted wall gets MIN. With Highlight = 1
-  there is no span, so that single wall takes TOP.
-- `wallAt` changed from `Map<slotTs, Set<strike>>` to
-  `Map<slotTs, Map<strike, rankIdx>>` so the rank survives to draw time. The
-  ranking itself is unchanged — still the expanding as-of-bucket peak `|GEX|`
-  order, so an already-printed tube can never resize after the fact.
-- Wall glow tapers with the same rank term: `shadowBlur` `22 → 12` across the
-  highlighted set instead of a flat `16`.
-- Defaults: `minSize` `0.5 → 0.4`, `maxSize` `9 → 12`, `curve` `2.2 → 2.8`.
-- Slider headroom: `curve` max `5 → 8`, `maxSize` max `20 → 24`. Past ~4 the mid
-  strikes finally collapse to Min and only the true walls grow.
+36s / 173k descents is ~200us each; a warm B-tree descent is 5-10us. The 20-40x
+gap is disk: `idx_strike_growth_lookback` is 305MB (bloated from 105MB),
+`strike_growth`'s footprint is 1.7GB, and the Render instance has 256MB of
+`shared_buffers`. Practically every descent was a cold read.
 
-Existing saved slider blobs are untouched (the restore clamp only narrows, and
-both ranges widened) — the rank boost applies regardless of saved settings; hit
-Reset in the bubble panel to pick up the new defaults.
+### Fix
 
+A window frame expresses the same lookback in one sequential pass:
 
-## 2026-08-14 - Vol GEX Flow tab: +GEX % view
+```sql
+sg.gex_now - last_value(sg.gex_now) OVER (
+  PARTITION BY sg.symbol, sg.expiry, sg.strike
+  ORDER BY sg.ts
+  RANGE BETWEEN UNBOUNDED PRECEDING AND INTERVAL 'N minutes' PRECEDING
+)
+```
 
-Edited: `components/dashboard/VolGexFlowPanel.tsx`,
-`server-v2/server-with-proxy.js`.
+`RANGE ... AND INTERVAL 'N minutes' PRECEDING` ends the frame at the last row at
+or before `ts - N min`, so `last_value()` over it is exactly what the LATERAL
+returned. 173k random reads become one sort.
+
+### Four things that are load-bearing, each caught by a diff
+
+1. **PARTITION BY must match the LATERAL's join key exactly.** For
+   `strike_growth` that is `(symbol, expiry, strike)` - expiry is in the PK, so
+   one strike in two expiries is two independent series. For `greek_snapshots`
+   it is `(date, symbol, strike)` with **no** expiry, mirroring the LATERAL it
+   replaced: that table's PK is `(date, symbol, strike, ts)`, expiry excluded, so
+   the lookback is unambiguous without it. Adding expiry there would change the
+   answer.
+
+2. **`chg IS NOT NULL` reproduces the INNER lateral join.** Rows with no partner
+   N minutes back were dropped entirely. A null frame must drop them too - never
+   read as zero change.
+
+3. **The 4-hour bound had to move OUT of the scan and onto the result.** The old
+   driver was bounded to 4h but its LATERAL had no lower bound, so it could reach
+   back past the window edge for a partner. Bounding the window scan to 4h
+   instead silently lost **24,336 rows** in test - the first N minutes of the
+   window. Padding the bound by the interval is not enough either (still off by
+   90 rows): the partner can be up to one sweep-gap OLDER than `ts - N min`, and
+   the gap jitters. Scanning the day and filtering after is exact by
+   construction, and still one sort. `/proxy/greek-scanner` needed no such
+   correction - its driver was never time-bounded.
+
+4. **A fixed-offset `LAG` cannot work.** Sweep gaps measured 113-116s and
+   irregular, so "N minutes ago" is not a constant row count.
+
+### Verification
+
+Against the original LATERAL on fixtures matching prod's shape. `EXCEPT ALL` in
+BOTH directions, not just aggregates:
+
+| query | fixture | old | new | diff |
+|---|---|---|---|---|
+| scanner `changes` CTE | 678,366 rows / 169 symbols / 7h | 3,746ms | 729ms | 0 rows |
+| scanner, full query | same, `sort=abs dir=build` | 3,500ms | 1,196ms | 0 rows |
+| scanner, full query | same, `sort=z minZ=1.5 dir=pos minOtm=0.02` | - | - | 0 rows |
+| greek-scanner, full | 288,000 rows | 2,275ms | 568ms | 0 rows |
+
+Both SQL strings were extracted from the edited file with the template
+placeholders resolved exactly as the server builds them, then run through
+`PREPARE`/`EXECUTE` - so what was tested is what ships, not a hand-copy.
+
+The warm-cache speedup understates the prod gain: the win is converting 173k
+random reads into one sequential sort, which matters most precisely where the
+cache is too small to hold the index.
+
+### Not changed, deliberately
+
+`/proxy/strike-growth/top` (line ~1902) and `/proxy/strike-growth/by-expiry`
+(line ~2120) use the same LATERAL shape but drive it from a `latest` CTE - only
+the newest snapshot per symbol (or per symbol+expiry, for a single symbol). That
+is hundreds of driver rows, not 173k, and a window function would have to sort
+the whole day per partition to compute the frame - strictly more work. They also
+match on `(symbol, strike)` without `expiry` against a PK that includes it, so
+their lookback is nondeterministic when a strike trades in two expiries.
+Semantics that are not well-defined cannot be preserved by a rewrite; leave them.
+
+### Still outstanding
+
+The index bloat behind the cold reads. `strike_growth` is 439MB of heap carrying
+1,264MB of index; `option_strike_gex_history` is 501MB carrying 2,012MB.
+`REINDEX INDEX CONCURRENTLY` on the four worst reclaims ~2.5GB. Deferred to after
+the close - `REINDEX TABLE CONCURRENTLY` scans the table once per index and would
+have degraded the site for 90+ minutes mid-session.
+
+Root cause under all of it: the database is a **Render managed instance**
+(virginia-postgres.render.com), so `shared_buffers` is fixed by the plan at 256MB
+against a 4.2GB working set and `ALTER SYSTEM` is not permitted. Network latency
+is not a factor - `SELECT 1` round-trips in 2.9ms.
+
+## 2026-08-14 - Owner Dev page: Flow GEX raw calc card fits its numbers
+
+Edited: `owner-vite/src/pages/Dev.tsx`.
 
 ### What
 
-The Vol GEX Flow tab (home page, Economic Calendar card) gets a
-`$ GEX / +GEX %` switch beside RTH/ETH. Flip to `+GEX %` and the chart becomes
-the +GEX % series for the selected expiry — the same number as the home Levels
-strip tile — split at 50 (orange above = long-gamma chain, cyan below = short),
-with corner labels and the six stat cards re-labelled to percent stats: +GEX %
-now, delta bucket in points, session high/low, time above 50%, regime.
-
-The strip tile was point-in-time: 63% says the chain is long-gamma right now,
-but not whether it climbed there from 40 or bled down from 80, and that path is
-the part that trades.
-
-Default `$ GEX`; the choice sticks for the browser session.
+The "Flow GEX · raw calc" card on the owner Dev page was squeezed into a
+single narrow column, so every mono number wrapped onto two or three lines
+(`12,951 / 50,612` stacked, `60,789,934` broken up). Unreadable at a glance.
 
 ### How
 
-**Served, not sampled.** The share rides along on the SAME
-`/proxy/gex-vol-flow` response the chart already fetches, so it arrives complete
-for the whole session on first load, is identical on every device, and follows
-the expiry chooser.
+- The card's wrapper was `grid-template-columns: repeat(auto-fill, minmax(360px, 1fr))`
+  with ONE child — auto-fill created full-width tracks and pinned the card to
+  the first ~360px one. Replaced with a plain full-width `div`.
+- Column template changed from fraction units to `minmax(<px>, auto)` so each
+  column is sized to the number it holds instead of an equal share of a too-small
+  box.
+- Header + value cells get `white-space: nowrap` and `font-variant-numeric:
+  tabular-nums`; the table body is wrapped in an `overflow-x: auto` scroller with
+  `min-width: 620` so a narrow viewport scrolls sideways rather than wrapping
+  digits. Column gap 10 → 12.
 
-**Proxy change** (`handleGexVolFlow`) — purely additive; route, params, caching
-and every existing field unchanged:
+No calculation or data-path change — layout only.
 
-- Two aggregates added to the existing final SELECT, over the same per-strike
-  `latest` rows in the same pass:
-  `SUM(GREATEST(net_gex + net_vol_gex, 0)) AS pos_gex` and
-  `SUM(ABS(net_gex + net_vol_gex)) AS abs_gex`. The share has to be built from
-  the strikes; the signed bucket total already returned can't be decomposed back
-  into them, so this could not be done client-side off the old response.
-- Each point gains `posGex`, `absGex`, `posPct` (0-100). `posPct` is `null`, not
-  0, on a bucket with no rows, so the chart leaves a gap instead of drawing a
-  dive to zero that never happened.
+## 2026-08-14 - Levels strip: +GEX % sparkline
 
-**Basis: `net_gex + net_vol_gex`, not `net_gex`.** `net_gex` is the OI leg ONLY
-(`net_vol_gex` is the volume leg — see `gex-history-writer.js` and the `oiVol()`
-helper in `lib/calculations/calculations.ts`). The Levels strip tile reads
-`netGEXOf(row,'net')`, which is OI+Vol. A first pass summed the OI leg alone and
-put the two badly out of step — the tab read 75% against the tile's 26%, same
-chain, same minute.
+Edited: `app/home/HomeClient.tsx`.
 
-**Panel:**
+### What
 
-- **Full swap, not an overlay.** Two series stacked on one canvas was built and
-  rejected: different units, different shapes, neither legible.
-- **Two price scales, one series each** — `$` on the right, `%` on the left —
-  so each keeps its own price formatter with no fighting over which series
-  formats the axis. Only one is visible at a time. Both scales are declared in
-  the chart constructor and only have `visible` flipped: adding a price scale to
-  a live chart re-lays-out the pane and jumps the series. Data and visibility
-  live in separate effects, so switching never rebuilds the canvas.
-- **Autoscale padded around the data but always containing 50**, clamped 0-100.
-  Pure data-fit would put the midline wherever it landed and make a 58-64 day
-  look like a regime war; a hard 0-100 would flatten that same day to a straight
-  line. The provider reads a ref, not state — lightweight-charts captures it once
-  at series creation and it would otherwise close over stale data.
-- Cards keep the same grid and the same order of meaning (now / change / high /
-  low / regime / context) across both views, so the block doesn't have to be
-  re-learned on each flip. `pctStats` is computed separately from `stats` because
-  the two views cover different bucket sets — a bucket with rows but no gamma has
-  a `volGex` and no `posPct`.
-- "Time > 50%" counts **50-crossings**, not zero-crossings: on this series the
-  regime change is the chain flipping between net long and net short gamma.
-- The switch is **hidden**, not shown dead, when fewer than two buckets carry a
-  `posPct` — which also gates it off on a server that predates the field, so the
-  tab degrades to its previous behaviour instead of offering a toggle that draws
-  nothing.
+The `+GEX %` tile on the home GEX chart's Levels strip now carries a session
+sparkline under the number. The tile was point-in-time — 63% says the 0DTE chain
+is long-gamma right now, but not whether it climbed there from 40 or bled down
+from 80, and that path is the part that trades.
 
-### Superseded
+Click the tile to hide/show the line; the choice sticks for the browser session.
 
-An earlier pass sampled `posGexPct` client-side in `HomeClient` on a 20s timer
-into `sessionStorage`. It only recorded from whenever the page happened to be
-opened — open the tab at 2pm and the line started at 2pm while the dollar series
-showed the full session beside it. That code is gone; `app/home/HomeClient.tsx`
-is back to its original state and passes no props to the panel.
+### How
+
+New module-scope `PosGexSpark` component + a client-side series in `HomeClient`.
+
+- **Sampled off a timer, not off the value.** `posGexPct` is already computed
+  every frame from the live chain the chart holds, so no new route or proxy
+  change was needed. A `setInterval` (20s) reads it through a ref. Keying an
+  effect on `posGexPct` instead would record NOTHING across a quiet stretch where
+  the value sits unchanged — the flat part of the curve is exactly the part that
+  has to be there.
+- **Persisted to `sessionStorage`** under today's ET date (`etYmdToday()`), so a
+  refresh keeps the curve. A stored series from a previous date is dropped rather
+  than appended to — yesterday's positioning is a different chain and would draw
+  a fictional overnight move into the line. Cap 1,200 points (~6.6h at 20s),
+  oldest dropped first.
+- **Domain always includes 50.** A chain that never leaves 60–64 would otherwise
+  auto-scale into a full-height squiggle that reads as a regime change. Fill and
+  line split at the 50% midline: `HOME_THEME.green` above (long gamma),
+  `HOME_THEME.red` below — same tokens the tile's value already uses.
+- **`useId` for the clip-path ids**, not a render index, so two tiles can't steal
+  each other's clip region.
+- Empty `width×height` div rendered until there are two samples, so the tile
+  doesn't grow a few seconds after first paint and shove the strip down.
+- The Levels strip tile array is now explicitly typed (`spark?` / `onClick?` /
+  `title?` optional) since the entries are no longer uniform.
+
+No proxy or server change.
+
 
 ## 2026-08-14 - Ticker Lookup: replay slider on both panes
 
