@@ -477,6 +477,31 @@ export default function EsChartCard({
   // is a session view and never spans two days. Usually today; off-hours it is
   // the last session that traded (see lastBubbleDayRef).
   const minuteColsRef = useRef<Map<number, GexColumn>>(new Map());
+  // Mutation counter for the map above. The bubble pass derives an expensive
+  // per-bucket ranking from it (sort of every strike seen so far, once per
+  // bucket) and that used to run on EVERY overlay frame — i.e. on every pan,
+  // wheel and pointermove, which is what made the page feel like it was
+  // dragging through mud with a full session loaded. The derivation is now
+  // memoised and this counter is the invalidation key, so the ranking is
+  // rebuilt when the DATA changes (once a minute, or on a backfill) instead of
+  // 60x a second while the mouse moves. Bump it at EVERY write to the map.
+  const minuteColsVerRef = useRef(0);
+  // Memoised output of that derivation, keyed by the signature built in draw().
+  const bubblePrepRef = useRef<{
+    sig: string;
+    mins: GexColumn[];
+    sessMax: number;
+    runMax: Map<number, number>;
+    shownAt: Map<number, Set<number>>;
+    wallAt: Map<number, Map<number, number>>;
+    strikeStep: number;
+  } | null>(null);
+  // Pre-rendered glow sprites for the highlighted walls. `ctx.shadowBlur` is a
+  // per-fill gaussian blur — the single most expensive thing this overlay did,
+  // paid once per wall bubble per column per frame. Rendering the blur ONCE per
+  // (size, colour, blur) into an offscreen canvas and blitting it turns that
+  // into a drawImage, which is effectively free.
+  const glowSpriteRef = useRef<Map<string, { cv: HTMLCanvasElement; w: number; h: number }>>(new Map());
   // Dedupe key for the heatmap backfill fetch: front mode ignores `expiry`
   // server-side, so the rolling feedExpiry must not re-fire the ~700KB/5s call.
   const lastHeatmapKeyRef = useRef<string>("");
@@ -1579,6 +1604,7 @@ export default function EsChartCard({
           if (replayOnRef.current || liveDay === lastBubbleDayRef.current) {
             mmap.set(minTs, { slotTs: minTs, cells, spot: spx > 0 ? spx : undefined });
             if (mmap.size > 2000) mmap.delete(Math.min(...mmap.keys()));
+            minuteColsVerRef.current++;
           }
           const map = columnsRef.current;
           // Stamp the live column with the SPX spot from THIS frame so it ages
@@ -1851,9 +1877,11 @@ export default function EsChartCard({
     if (shapeChanged) {
       columnsRef.current.clear();
       minuteColsRef.current.clear();
+      minuteColsVerRef.current++;
       drawOverlayRef.current();
     } else if (dayChanged) {
       minuteColsRef.current.clear();
+      minuteColsVerRef.current++;
       drawOverlayRef.current();
     }
     (async () => {
@@ -1989,6 +2017,8 @@ export default function EsChartCard({
         const cutoff = Date.now() - minutes * 60_000;
         for (const k of [...map.keys()]) if (k < cutoff) map.delete(k);
         for (const k of [...mmap.keys()]) if (k < cutoff) mmap.delete(k);
+        // One bump covers the whole backfill (clear + inserts + trim above).
+        minuteColsVerRef.current++;
         // One line, every backfill. The whole failure mode of this path is
         // SILENCE — a 200 with rows that then get filtered to nothing leaves an
         // empty trail that is indistinguishable from "the market is quiet", and
@@ -2600,6 +2630,7 @@ export default function EsChartCard({
     prevSymbolRef.current = symbol;
     columnsRef.current.clear();
     minuteColsRef.current.clear();
+    minuteColsVerRef.current++;
     // ── Re-fit the view for the new instrument ────────────────────────────────
     // ES trades ~7500 and SPY ~750 — a 10x price-space change. Two things kept
     // the axis parked on the old range:
@@ -3400,15 +3431,45 @@ export default function EsChartCard({
           const bucketOf = bubbleMinsRef.current === "bar"
             ? (t: number) => barAt(t) ?? t
             : (t: number) => Math.floor(t / (bubbleMinsRef.current as number * 60_000)) * (bubbleMinsRef.current as number * 60_000);
-          const byBucket = new Map<number, GexColumn>();
-          for (const m of [...minuteColsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs)) {
-            if (replayTsRef.current != null && m.slotTs > replayTsRef.current) continue; // replay clamp
-            byBucket.set(bucketOf(m.slotTs), m);
-          }
-          const mins = [...byBucket.values()].sort((a, b) => a.slotTs - b.slotTs);
-          if (mins.length) {
-            const metric = gexMetricRef.current;
-            const valOf = (c: GexCell) => (metric === "vol" ? c.netVol : c.netOiVol);
+          const metric = gexMetricRef.current;
+          const valOf = (c: GexCell) => (metric === "vol" ? c.netVol : c.netOiVol);
+          const cfg = bubbleCfgRef.current;
+
+          // ── Everything below is MEMOISED on the data, not the viewport ────
+          // Bucketing, the session scale, the expanding runMax and the per-
+          // bucket ranking all depend only on (minute store, metric, bucket
+          // size, Top-N/Highlight, replay cursor, bar grid) — never on where
+          // the chart is scrolled. They used to be rebuilt inside every draw(),
+          // and draw() is wired to wheel/pointermove/range-change, so panning a
+          // loaded session re-sorted the whole strike list a few hundred times
+          // per frame. That was the lag. Now a frame that only moved the
+          // viewport reuses this wholesale and just paints.
+          //
+          // minuteColsVerRef is bumped at every write to the minute store, so a
+          // live column landing (or a backfill) invalidates this immediately —
+          // the cache can never serve stale gamma.
+          const barsSig = rowsRef.current;
+          const prepSig = [
+            minuteColsVerRef.current,
+            metric,
+            String(bubbleMinsRef.current),
+            cfg.topStrikes,
+            cfg.highlight,
+            replayTsRef.current ?? "-",
+            // barAt() is the "bar" bucketer, so the bar grid is part of the key.
+            barsSig.length,
+            barsSig.length ? barsSig[barsSig.length - 1].timestamp : 0,
+            candleMsRef.current,
+          ].join("|");
+
+          let prep = bubblePrepRef.current;
+          if (!prep || prep.sig !== prepSig) {
+            const byBucket = new Map<number, GexColumn>();
+            for (const m of [...minuteColsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs)) {
+              if (replayTsRef.current != null && m.slotTs > replayTsRef.current) continue; // replay clamp
+              byBucket.set(bucketOf(m.slotTs), m);
+            }
+            const pMins = [...byBucket.values()].sort((a, b) => a.slotTs - b.slotTs);
             // Session-wide max magnitude → shared radius scale, computed from the
             // minutes BEFORE 15:30 ET only. Into the close, gamma concentrates on 2–3
             // strikes and their |GEX| dwarfs the rest of the day; including them made
@@ -3416,48 +3477,108 @@ export default function EsChartCard({
             // nothing. Excluding them means the scale is set by the 15:25-and-earlier
             // session, and the closing strikes just clamp (ratio caps at 1) — so the
             // biggest late bubble is exactly as big as the biggest 3:25 one, never more.
-            let sessMax = 0;
-            for (const m of mins) {
+            let pSessMax = 0;
+            for (const m of pMins) {
               if (etMinutesOfDay(m.slotTs) >= BUBBLE_SCALE_CUTOFF_MIN) continue;
               for (const c of m.cells) {
                 const a = Math.abs(valOf(c));
-                if (a > sessMax) sessMax = a;
+                if (a > pSessMax) pSessMax = a;
               }
             }
             // Fallback: if the buffer holds ONLY post-15:30 minutes (e.g. the page was
             // opened at 3:45), there's no earlier session to scale against — use those
             // minutes rather than draw nothing.
-            if (sessMax === 0) {
-              for (const m of mins) for (const c of m.cells) {
+            if (pSessMax === 0) {
+              for (const m of pMins) for (const c of m.cells) {
                 const a = Math.abs(valOf(c));
-                if (a > sessMax) sessMax = a;
+                if (a > pSessMax) pSessMax = a;
               }
             }
-            if (sessMax > 0) {
-              const cfg = bubbleCfgRef.current;
-              // scaleSqrt DOMAIN: [0, max |GEX| KNOWN AS OF THAT BUCKET]. RANGE:
-              // [minSize, maxSize] px. sqrt so bubble AREA (not radius) tracks |GEX|.
-              //
-              // EXPANDING WINDOW, not session-wide: a bucket is normalized against
-              // the max seen up to and including itself, so a divisor can never grow
-              // after the fact and an already-printed bubble can never shrink. A
-              // strong 10:00 wall stays exactly as fat at 15:50 as it was at 10:00;
-              // a bigger wall later just clamps (ratio caps at 1) from its own bucket
-              // forward. Floored at 15% of sessMax so the first few buckets of the
-              // day — where acc is tiny — don't all render at maxSize.
-              const runMax = new Map<number, number>();
-              {
-                let acc = 0;
-                for (const m of mins) {
-                  if (etMinutesOfDay(m.slotTs) < BUBBLE_SCALE_CUTOFF_MIN) {
-                    for (const c of m.cells) {
-                      const a = Math.abs(valOf(c));
-                      if (a > acc) acc = a;
-                    }
+            // scaleSqrt DOMAIN: [0, max |GEX| KNOWN AS OF THAT BUCKET]. RANGE:
+            // [minSize, maxSize] px.
+            //
+            // EXPANDING WINDOW, not session-wide: a bucket is normalized against
+            // the max seen up to and including itself, so a divisor can never grow
+            // after the fact and an already-printed bubble can never shrink. A
+            // strong 10:00 wall stays exactly as fat at 15:50 as it was at 10:00;
+            // a bigger wall later just clamps (ratio caps at 1) from its own bucket
+            // forward. Floored at 15% of sessMax so the first few buckets of the
+            // day — where acc is tiny — don't all render at maxSize.
+            const pRunMax = new Map<number, number>();
+            {
+              let acc = 0;
+              for (const m of pMins) {
+                if (etMinutesOfDay(m.slotTs) < BUBBLE_SCALE_CUTOFF_MIN) {
+                  for (const c of m.cells) {
+                    const a = Math.abs(valOf(c));
+                    if (a > acc) acc = a;
                   }
-                  runMax.set(m.slotTs, Math.max(acc, sessMax * 0.15));
                 }
+                pRunMax.set(m.slotTs, Math.max(acc, pSessMax * 0.15));
               }
+            }
+            // GLOBAL strike selection — the key to the continuous-tube look. Rank
+            // strikes by their PEAK |GEX| across the whole session (not per column),
+            // so the dominant walls (Call/Put Wall) are the SAME rows in every
+            // column and render as unbroken bright tubes, while everything else
+            // stays faint. Show Top Strikes = how many rows draw; Highlight = how
+            // many of those are the "walls" (big, white-hot, glowing).
+            // Ranked by peak |GEX| AS OF each bucket (expanding, same reasoning as
+            // runMax above) rather than over the whole session: a strike that was
+            // top-N at 10:00 keeps its 10:00 trail forever, even if it's long since
+            // fallen out of the current top-N. The newest column still shows only
+            // what's top-N right now, so the live read is unchanged.
+            //
+            // The ranking only CHANGES when a new peak appears, so the sort is
+            // skipped for every bucket that didn't move one — on a settled
+            // session that is almost all of them.
+            const peakSoFar = new Map<number, number>();
+            const pShownAt = new Map<number, Set<number>>();
+            // strike → its 0-based rank inside the highlighted set (0 = the
+            // session's dominant wall as of that bucket). A Map, not a Set,
+            // because the rank now drives the radius boost and the glow.
+            const pWallAt = new Map<number, Map<number, number>>();
+            let shownNow: Set<number> = new Set();
+            let wallNow: Map<number, number> = new Map();
+            let dirty = true;
+            for (const m of pMins) {
+              for (const c of m.cells) {
+                const a = Math.abs(valOf(c));
+                if (a > 0 && a > (peakSoFar.get(c.strike) ?? 0)) { peakSoFar.set(c.strike, a); dirty = true; }
+              }
+              if (dirty) {
+                const ranked = [...peakSoFar.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]);
+                shownNow = new Set(ranked.slice(0, Math.max(0, cfg.topStrikes)));
+                wallNow = new Map();
+                ranked.slice(0, Math.max(0, cfg.highlight)).forEach((s, i) => wallNow.set(s, i));
+                dirty = false;
+              }
+              // Shared references: the sets are immutable once built, so an
+              // unchanged bucket costs one pointer instead of a rebuilt Set.
+              pShownAt.set(m.slotTs, shownNow);
+              pWallAt.set(m.slotTs, wallNow);
+            }
+            // The chain's own strike increment. Data, not viewport — but it used
+            // to be recomputed per frame by flat-mapping every cell of every
+            // bucket (tens of thousands of entries on a full session) just to
+            // find a number that changes once a day.
+            let pStrikeStep = 0;
+            {
+              const ks = [...new Set(pMins.flatMap((m) => m.cells.map((c) => c.strike)))].sort((a, b) => a - b);
+              let dK = Infinity;
+              for (let i = 1; i < ks.length; i++) {
+                const d = ks[i] - ks[i - 1];
+                if (d > 0 && d < dK) dK = d;
+              }
+              if (Number.isFinite(dK) && ks.length > 1) pStrikeStep = dK;
+            }
+            prep = { sig: prepSig, mins: pMins, sessMax: pSessMax, runMax: pRunMax, shownAt: pShownAt, wallAt: pWallAt, strikeStep: pStrikeStep };
+            bubblePrepRef.current = prep;
+          }
+          const { mins, sessMax, runMax, shownAt, wallAt, strikeStep } = prep;
+
+          if (mins.length) {
+            if (sessMax > 0) {
               const sizeSpan = cfg.maxSize - cfg.minSize;
               // Size-response exponent (Curve slider). Guarded against an older
               // blob that predates the key — an undefined here would make every
@@ -3488,35 +3609,6 @@ export default function EsChartCard({
               const HIGHLIGHT_BOOST_TOP = 2.2;
               const HIGHLIGHT_BOOST_MIN = 1.4;
 
-              // GLOBAL strike selection — the key to the continuous-tube look. Rank
-              // strikes by their PEAK |GEX| across the whole session (not per column),
-              // so the dominant walls (Call/Put Wall) are the SAME rows in every
-              // column and render as unbroken bright tubes, while everything else
-              // stays faint. Show Top Strikes = how many rows draw; Highlight = how
-              // many of those are the "walls" (big, white-hot, glowing).
-              // Ranked by peak |GEX| AS OF each bucket (expanding, same reasoning as
-              // runMax above) rather than over the whole session: a strike that was
-              // top-N at 10:00 keeps its 10:00 trail forever, even if it's long since
-              // fallen out of the current top-N. The newest column still shows only
-              // what's top-N right now, so the live read is unchanged.
-              const peakSoFar = new Map<number, number>();
-              const shownAt = new Map<number, Set<number>>();
-              // strike → its 0-based rank inside the highlighted set (0 = the
-              // session's dominant wall as of that bucket). A Map, not a Set,
-              // because the rank now drives the radius boost and the glow.
-              const wallAt = new Map<number, Map<number, number>>();
-              for (const m of mins) {
-                for (const c of m.cells) {
-                  const a = Math.abs(valOf(c));
-                  if (a > 0 && a > (peakSoFar.get(c.strike) ?? 0)) peakSoFar.set(c.strike, a);
-                }
-                const ranked = [...peakSoFar.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]);
-                shownAt.set(m.slotTs, new Set(ranked.slice(0, Math.max(0, cfg.topStrikes))));
-                const wallRanks = new Map<number, number>();
-                ranked.slice(0, Math.max(0, cfg.highlight)).forEach((s, i) => wallRanks.set(s, i));
-                wallAt.set(m.slotTs, wallRanks);
-              }
-
               // ── Oval geometry + the two no-overlap caps ────────────────────
               // The mark is an ELLIPSE stretched horizontally, not a circle: a
               // row then reads as a dashed price level instead of a string of
@@ -3534,15 +3626,21 @@ export default function EsChartCard({
               const COL_GAP_PX = 0.8;     // clear space between neighbours
               const ROW_GAP_PX = 1.5;     // clear space between rows
               // Column pitch: the smallest gap between two adjacent bucket x's.
+              // Sampled from the newest ~40 buckets rather than the whole
+              // session — the pitch is uniform (one column per bar) and this
+              // runs on every frame, so walking 400 buckets to learn the same
+              // number is pure overhead.
               let colPitch = Infinity;
               {
                 let prevX: number | null = null;
-                for (const m of mins) {
-                  const xx = xAt(bucketOf(m.slotTs));
+                let seen = 0;
+                for (let i = Math.max(0, mins.length - 40); i < mins.length; i++) {
+                  const xx = xAt(bucketOf(mins[i].slotTs));
                   if (xx == null) continue;
                   if (prevX != null) {
                     const d = Math.abs(xx - prevX);
                     if (d > 0 && d < colPitch) colPitch = d;
+                    if (++seen >= 12) break;
                   }
                   prevX = xx;
                 }
@@ -3554,22 +3652,51 @@ export default function EsChartCard({
               // the shown set changes per bucket, and a cap that changes with it
               // would make a row breathe as its neighbours come and go.
               let rowPitch = 24;
-              {
-                const ks = [...new Set(mins.flatMap((m) => m.cells.map((c) => c.strike)))].sort((a, b) => a - b);
-                let dK = Infinity;
-                for (let i = 1; i < ks.length; i++) {
-                  const d = ks[i] - ks[i - 1];
-                  if (d > 0 && d < dK) dK = d;
-                }
-                if (Number.isFinite(dK) && ks.length > 1) {
-                  const b0 = basisAt(mins[mins.length - 1].slotTs);
-                  const yA = series.priceToCoordinate(ks[0] + b0);
-                  const yB = series.priceToCoordinate(ks[0] + dK + b0);
-                  if (yA != null && yB != null && Math.abs(yA - yB) > 0) rowPitch = Math.abs(yA - yB);
-                }
+              if (strikeStep > 0) {
+                const b0 = basisAt(mins[mins.length - 1].slotTs);
+                const k0 = mins[mins.length - 1].cells[0]?.strike ?? 0;
+                const yA = series.priceToCoordinate(k0 + b0);
+                const yB = series.priceToCoordinate(k0 + strikeStep + b0);
+                if (yA != null && yB != null && Math.abs(yA - yB) > 0) rowPitch = Math.abs(yA - yB);
               }
               const rxCap = Math.max(0.35, colPitch / 2 - COL_GAP_PX);
               const ryCap = Math.max(0.35, rowPitch / 2 - ROW_GAP_PX);
+
+              // Glow sprites (see glowSpriteRef). Sizes are quantised to a half
+              // pixel so a wall that breathes by a hundredth of a px between
+              // buckets reuses one sprite instead of minting hundreds.
+              const glowCache = glowSpriteRef.current;
+              const glowSprite = (rx: number, ry: number, base: number[], fill: number[], blur: number) => {
+                const qx = Math.round(rx * 2) / 2;
+                const qy = Math.round(ry * 2) / 2;
+                const qb = Math.round(blur);
+                const key = `${qx}|${qy}|${qb}|${base[0]},${base[1]},${base[2]}|${fill[0]},${fill[1]},${fill[2]}|${Math.round(dpr * 100)}`;
+                const hit = glowCache.get(key);
+                if (hit) return hit;
+                const pad = qb + 2;
+                const cw = Math.ceil((qx + pad) * 2);
+                const ch = Math.ceil((qy + pad) * 2);
+                const cv = document.createElement("canvas");
+                cv.width = Math.max(1, Math.round(cw * dpr));
+                cv.height = Math.max(1, Math.round(ch * dpr));
+                const cx = cv.getContext("2d");
+                if (cx) {
+                  cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                  cx.shadowColor = `rgba(${base[0]},${base[1]},${base[2]},0.95)`;
+                  cx.shadowBlur = qb;
+                  cx.fillStyle = `rgb(${fill[0]},${fill[1]},${fill[2]})`;
+                  cx.beginPath();
+                  cx.ellipse(cw / 2, ch / 2, qx, qy, 0, 0, Math.PI * 2);
+                  cx.fill();
+                }
+                // Bounded: the cache is only ever a handful of entries per
+                // session, but a pathological zoom sweep shouldn't grow it
+                // without limit.
+                if (glowCache.size > 96) glowCache.clear();
+                const rec = { cv, w: cw, h: ch };
+                glowCache.set(key, rec);
+                return rec;
+              };
 
               ctx.save();
               for (const m of mins) {
@@ -3632,19 +3759,19 @@ export default function EsChartCard({
                   // Oval, capped on both axes — see BUBBLE_ASPECT above.
                   const ry = Math.min(r, ryCap);
                   const rx = Math.min(r * BUBBLE_ASPECT, rxCap);
-                  ctx.beginPath();
-                  ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
                   if (isHi) {
-                    // Glow tapers with rank too, so the #1 wall doesn't just win
-                    // on radius — it's the brightest bloom on the chart.
-                    ctx.shadowColor = `rgba(${base[0]},${base[1]},${base[2]},0.95)`;
-                    ctx.shadowBlur = 22 - 10 * hiT;
+                    // Blitted, not blurred. The glow still tapers with rank, so
+                    // the #1 wall is the brightest bloom on the chart — it's
+                    // just baked into a sprite instead of re-blurred per bubble.
+                    // Walls are always opacity 1, so the sprite is exact.
+                    const sp = glowSprite(rx, ry, base, col, 22 - 10 * hiT);
+                    ctx.drawImage(sp.cv, x - sp.w / 2, y - sp.h / 2, sp.w, sp.h);
                   } else {
-                    ctx.shadowBlur = 0;
+                    ctx.beginPath();
+                    ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+                    ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${opacity})`;
+                    ctx.fill();
                   }
-                  ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${opacity})`;
-                  ctx.fill();
-                  ctx.shadowBlur = 0;
                 }
               }
               ctx.restore();
@@ -3986,9 +4113,19 @@ export default function EsChartCard({
     // (that's time-axis only). Without this, the GEX rail's bar thickness
     // (tied to on-screen strike spacing) would lag ~5s behind a live vertical
     // zoom/drag instead of tracking it in real time.
+    //
+    // DRAGS ONLY. This was a bare `schedule` on pointermove, so every mouse
+    // movement over the chart — just moving the crosshair around while reading
+    // it — repainted the ENTIRE overlay and the rail, at the pointer's event
+    // rate. A hover changes nothing about the projection, so all of that work
+    // was thrown away, and it is the main reason the page felt heavy to move
+    // around in. `buttons !== 0` keeps the case this listener exists for
+    // (dragging the price axis, which fires no range-change event) and drops
+    // the rest; pointerup still catches the settled state.
     const container = chartRef.current;
+    const onDragMove = (e: PointerEvent) => { if (e.buttons !== 0) schedule(); };
     container?.addEventListener("wheel", schedule, { passive: true });
-    container?.addEventListener("pointermove", schedule);
+    container?.addEventListener("pointermove", onDragMove);
     container?.addEventListener("pointerup", schedule);
 
     return () => {
@@ -3996,7 +4133,7 @@ export default function EsChartCard({
       ts.unsubscribeVisibleLogicalRangeChange(schedule);
       ro.disconnect();
       container?.removeEventListener("wheel", schedule);
-      container?.removeEventListener("pointermove", schedule);
+      container?.removeEventListener("pointermove", onDragMove);
       container?.removeEventListener("pointerup", schedule);
       drawOverlayRef.current = () => {};
     };

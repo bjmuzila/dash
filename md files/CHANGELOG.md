@@ -1,5 +1,59 @@
 # Changelog
 
+## 2026-08-14 - ES Candles: fix pan/zoom lag on the chart overlay
+
+Edited: `components/dashboard/es-candles/EsChartCard.tsx`.
+
+### What
+
+The page was heavy to move around — panning, zooming and even just sliding the
+crosshair across the chart dragged. Four things were doing full-cost work on
+every frame; all four are viewport-independent or hover-independent, so none of
+it needed to be there.
+
+### How
+
+**1. Hover no longer repaints anything.** The `pointermove` listener on the
+chart container called `schedule()` unconditionally, so every mouse movement
+over the chart repainted the whole overlay canvas AND the GEX rail at the
+pointer's event rate — for a gesture that changes nothing about the projection.
+Now gated on `e.buttons !== 0`, which keeps the reason the listener exists
+(dragging the price axis fires no `subscribeVisibleLogicalRangeChange`) and
+drops the rest. `pointerup` still catches the settled state. This is the single
+biggest win.
+
+**2. The bubble derivation is memoised.** Bucketing the minute store, the
+session scale, the expanding `runMax`, and the per-bucket top-N ranking depend
+only on the data — but they ran inside `draw()`, which is wired to
+wheel/pointermove/range-change. On a full session that is a sort of the entire
+strike list per bucket, a few hundred times per frame.
+
+- New `bubblePrepRef` caches `{mins, sessMax, runMax, shownAt, wallAt,
+  strikeStep}` behind a signature: `minuteColsVerRef | metric | bucket |
+  topStrikes | highlight | replayTs | bar-grid`.
+- New `minuteColsVerRef`, bumped at every write to `minuteColsRef` (live frame,
+  backfill, and all three clears), is the invalidation key — a landing column
+  invalidates the cache immediately, so it can never serve stale gamma.
+- Inside the build, the per-bucket sort is skipped unless a new peak actually
+  appeared, and unchanged buckets share one `Set`/`Map` reference instead of a
+  rebuilt copy.
+
+**3. Wall glow is a sprite, not a blur.** `ctx.shadowBlur` is a per-fill
+gaussian and was paid once per wall bubble per column per frame (hundreds of
+blurs). Now rendered once per (size, colour, blur) into an offscreen canvas via
+`glowSpriteRef` and blitted with `drawImage`. Sizes are quantised to a half
+pixel so the cache stays a handful of entries; walls are always opacity 1 so the
+sprite is pixel-exact.
+
+**4. Smaller per-frame measurements.** The strike increment was being found by
+flat-mapping every cell of every bucket (tens of thousands of entries) each
+frame — it is data, so it moved into the memo as `strikeStep`. Column pitch is
+now sampled from the newest ~40 buckets (12 gaps) instead of walking the whole
+session for a value that is uniform.
+
+No visual change: same bubbles, same ranking, same glow, same no-overlap caps.
+
+
 ## 2026-08-14 - ES Candles: GEX bubbles are ovals, and can no longer overlap
 
 Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
