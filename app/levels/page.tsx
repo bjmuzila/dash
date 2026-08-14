@@ -67,7 +67,7 @@
 
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   HOME_THEME,
   LEVEL_COLORS,
@@ -96,7 +96,7 @@ const QUOTE_CHUNK = 40;
 const RAIL_H = 140;
 /** Dock slots. Four fits a laptop at a readable card width. */
 const MAX_PINS = 4;
-const PREFS_KEY = "cb-levels-prefs-v4";
+const PREFS_KEY = "cb-levels-prefs-v5";
 /**
  * Pins live in localStorage, which is per browser PROFILE per machine — the same
  * scope as the density/sort prefs this page has always saved. A second computer
@@ -238,6 +238,40 @@ const CSS = `
 @container (max-width:232px){.cblv-v-pw{display:none}}
 @container (max-width:196px){.cblv-v-cw{display:none}}
 @container (max-width:168px){.cblv-lb{display:none}}
+
+/* ── TABLE ── the same rows as columns of numbers, for comparing ACROSS
+   tickers rather than within one. Collapsed until asked for. */
+.cblv-scroll{max-height:540px;overflow:auto}
+.cblv-tbl{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.cblv-tbl thead th{position:sticky;top:0;z-index:2;white-space:nowrap;text-align:right;
+  padding:9px 12px;font-size:9px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;
+  color:${alpha(HOME_THEME.text, 0.42)};background:${alpha(HOME_THEME.bg, 0.97)};
+  backdrop-filter:blur(8px);border-bottom:1px solid ${alpha(HOME_THEME.text, 0.14)}}
+.cblv-tbl th.cblv-sortable{cursor:pointer}
+.cblv-tbl th.cblv-sortable:hover{color:${LIGHT_BLUE}}
+.cblv-tbl th.cblv-active{color:${LIGHT_BLUE}}
+.cblv-tbl tbody td{padding:5px 12px;font-size:12px;text-align:right;white-space:nowrap;
+  border-bottom:1px solid ${alpha(HOME_THEME.text, 0.05)}}
+.cblv-tbl thead th:first-child,.cblv-tbl tbody td:first-child{text-align:left}
+.cblv-tbl tbody tr{cursor:pointer}
+.cblv-tbl tbody tr:nth-child(even){background:${alpha(HOME_THEME.text, 0.018)}}
+.cblv-tbl tbody tr:hover{background:${alpha(LIGHT_BLUE, 0.07)}}
+.cblv-tbl tbody tr.cblv-rowpin{background:${alpha(HOME_THEME.text, 0.1)};
+  box-shadow:inset 3px 0 0 ${HOME_THEME.text}}
+
+/* ── RAILS ── every ticker normalised onto ONE axis, put wall left, call wall
+   right. Shared axis is the whole point: the spot marks line up into a
+   distribution you can read down the column. */
+.cblv-rails{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 26px}
+@media (max-width:1200px){.cblv-rails{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:800px){.cblv-rails{grid-template-columns:1fr}}
+.cblv-rrow{display:flex;align-items:center;gap:8px;height:26px;cursor:pointer;
+  border-bottom:1px solid ${alpha(HOME_THEME.text, 0.04)}}
+.cblv-rrow:hover{background:${alpha(LIGHT_BLUE, 0.06)}}
+.cblv-rrow.cblv-rowpin{background:${alpha(HOME_THEME.text, 0.1)}}
+.cblv-rail{position:relative;flex:1 1 auto;min-width:40px;height:16px}
+.cblv-rail:before{content:"";position:absolute;top:7.5px;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,${LEVEL_COLORS.pw},${alpha(HOME_THEME.text, 0.14)} 50%,${LEVEL_COLORS.cw})}
 `;
 
 // ── Index cell ───────────────────────────────────────────────────────────────
@@ -492,6 +526,242 @@ function DockCard({
   );
 }
 
+/** Collapsible section wrapper — header always drawn, body only when open. */
+function Section({
+  title, hint, open, onToggle, children,
+}: {
+  title: string;
+  hint: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Card
+      variant="budget"
+      padding={0}
+      style={{
+        border: `1px solid ${alpha(HOME_THEME.text, 0.36)}`,
+        boxShadow: `0 0 0 3px ${alpha(HOME_THEME.text, 0.06)}, 0 14px 28px -12px ${alpha(HOME_THEME.bg, 0.9)}`,
+        overflow: "hidden",
+      }}
+    >
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
+        style={{
+          display: "flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none",
+          padding: "12px 14px",
+          borderBottom: open ? `1px solid ${HOME_THEME.border}` : "none",
+          background: open ? alpha(HOME_THEME.text, 0.04) : "transparent",
+        }}
+      >
+        <span style={{ fontSize: 9, color: alpha(HOME_THEME.text, 0.35) }}>{open ? "▼" : "▶"}</span>
+        <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE }}>
+          {title}
+        </span>
+        <span style={{ fontSize: 11, color: alpha(HOME_THEME.text, 0.4) }}>{hint}</span>
+      </div>
+      {open && children}
+    </Card>
+  );
+}
+
+/** Shared PW ── CW bar with the core as a tick and spot as a mark. */
+function RangeBar({ row, spot, height = 9 }: { row: ScannerRow; spot: number | null; height?: number }) {
+  const { cb, call_wall: cw, put_wall: pw } = row;
+  const span = cw != null && pw != null ? cw - pw : null;
+  const at = (v: number | null) =>
+    v != null && span && pw != null ? Math.max(0, Math.min(100, ((v - pw) / span) * 100)) : null;
+  const cbPct = at(cb), spotPct = at(spot);
+  return (
+    <span
+      style={{
+        position: "relative", display: "block", height, minWidth: 110,
+        borderRadius: 2, background: alpha(HOME_THEME.text, 0.06),
+      }}
+    >
+      <i style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: 2, background: LEVEL_COLORS.pw }} />
+      <i style={{ position: "absolute", top: 0, bottom: 0, right: 0, width: 2, background: LEVEL_COLORS.cw }} />
+      {cbPct != null && (
+        <i style={{ position: "absolute", top: -1, height: height + 2, width: 2, left: `${cbPct}%`, background: LEVEL_COLORS.cb }} />
+      )}
+      {spotPct != null && (
+        <i style={{ position: "absolute", top: -1, height: height + 2, width: 2, left: `${spotPct}%`, background: HOME_THEME.text }} />
+      )}
+    </span>
+  );
+}
+
+/**
+ * LADDER TABLE — every number in a column. The index answers "where is this
+ * one"; the table answers "which of them is furthest from its core", which is a
+ * question you can only ask by running an eye down a column. Header cells that
+ * map onto one of the page's three sorts drive it, so the table and the board
+ * above never disagree about order.
+ */
+function LadderTable({
+  rows, spotOf, pins, onToggle, sort, setSort,
+}: {
+  rows: ScannerRow[];
+  spotOf: (r: ScannerRow) => number | null;
+  pins: string[];
+  onToggle: (symbol: string) => void;
+  sort: SortId;
+  setSort: (s: SortId) => void;
+}) {
+  const head = (txt: string, key?: SortId) => (
+    <th
+      className={key ? `cblv-sortable${sort === key ? " cblv-active" : ""}` : undefined}
+      onClick={key ? () => setSort(key) : undefined}
+    >
+      {txt}
+    </th>
+  );
+  return (
+    <div className="cblv-scroll">
+      <table className="cblv-tbl">
+        <thead>
+          <tr>
+            {head("Ticker", "az")}
+            {head("Spot")}
+            {head("CB")}
+            {head("Δ CB", "core")}
+            {head("Δ %")}
+            {head("CW")}
+            {head("PW")}
+            {head("Range")}
+            {head("Net GEX", "gex")}
+            {head("DTE")}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const spot = spotOf(r);
+            const d = spot != null && r.cb != null ? spot - r.cb : null;
+            const dp = d != null && r.cb ? (d / r.cb) * 100 : null;
+            const dte = dteOf(r.expiry);
+            return (
+              <tr
+                key={r.symbol}
+                className={pins.includes(r.symbol) ? "cblv-rowpin" : undefined}
+                onClick={() => onToggle(r.symbol)}
+                title={pins.includes(r.symbol) ? "pinned — click to unpin" : "click to pin"}
+              >
+                <td style={{ fontWeight: 800, color: LIGHT_BLUE, letterSpacing: "0.03em" }}>{r.symbol}</td>
+                <td>{spot != null ? fmtSpot(spot) : "—"}</td>
+                <td style={{ color: LEVEL_COLORS.cb }}>{r.cb != null ? fmtLevel(r.cb) : "—"}</td>
+                <td style={{ color: d == null ? undefined : d >= 0 ? ES_CANDLE_UP : ES_CANDLE_DOWN }}>
+                  {d == null ? "—" : fmtSigned(d)}
+                </td>
+                <td style={{ color: dp == null ? undefined : dp >= 0 ? ES_CANDLE_UP : ES_CANDLE_DOWN }}>
+                  {dp == null ? "—" : `${fmtSigned(dp)}%`}
+                </td>
+                <td style={{ color: LEVEL_COLORS.cw }}>{r.call_wall != null ? fmtLevel(r.call_wall) : "—"}</td>
+                <td style={{ color: LEVEL_COLORS.pw }}>{r.put_wall != null ? fmtLevel(r.put_wall) : "—"}</td>
+                <td><RangeBar row={r} spot={spot} /></td>
+                <td style={{ color: (r.total_net_gex ?? 0) >= 0 ? ES_CANDLE_UP : ES_CANDLE_DOWN }}>
+                  {r.total_net_gex != null ? fmtGex(r.total_net_gex) : "—"}
+                </td>
+                <td style={{ color: alpha(HOME_THEME.text, 0.45) }}>
+                  {r.stale ? "STALE" : dte != null ? `${dte}D` : "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * ALIGNED RANGE RAILS — every ticker squashed onto the SAME 0–100% axis: put
+ * wall at the left edge, call wall at the right, gold tick for the core, white
+ * mark for spot. Because the axis is shared the marks line up into a
+ * distribution, so a column bunched right means the whole tape is leaning into
+ * call walls — which no per-ticker view can show.
+ *
+ * Deliberately sorted by position rather than by the page's sort: the ordering
+ * IS the readout here, and A–Z would scatter it.
+ */
+function RangeRails({
+  rows, spotOf, pins, onToggle,
+}: {
+  rows: ScannerRow[];
+  spotOf: (r: ScannerRow) => number | null;
+  pins: string[];
+  onToggle: (symbol: string) => void;
+}) {
+  const posOf = (r: ScannerRow) => {
+    const spot = spotOf(r);
+    const { call_wall: cw, put_wall: pw } = r;
+    if (spot == null || cw == null || pw == null || cw === pw) return null;
+    return Math.max(0, Math.min(1, (spot - pw) / (cw - pw)));
+  };
+  const ordered = [...rows].sort((a, b) => (posOf(b) ?? -1) - (posOf(a) ?? -1));
+  return (
+    <div style={{ padding: "10px 14px 14px" }}>
+      <div
+        style={{
+          display: "flex", justifyContent: "space-between", fontSize: 8, fontWeight: 800,
+          letterSpacing: "0.1em", color: alpha(HOME_THEME.text, 0.3), padding: "0 0 8px",
+        }}
+      >
+        <span>◄ PUT WALL</span><span>CORE = GOLD TICK</span><span>CALL WALL ►</span>
+      </div>
+      <div className="cblv-rails">
+        {ordered.map((r) => {
+          const pos = posOf(r);
+          const cb = r.cb, cw = r.call_wall, pw = r.put_wall;
+          const span = cw != null && pw != null ? cw - pw : null;
+          const cbPct = cb != null && span && pw != null ? Math.max(0, Math.min(100, ((cb - pw) / span) * 100)) : null;
+          const tone = pos == null ? alpha(HOME_THEME.text, 0.4)
+            : pos > 0.75 ? LEVEL_COLORS.cw : pos < 0.25 ? LEVEL_COLORS.pw : alpha(HOME_THEME.text, 0.55);
+          return (
+            <div
+              key={r.symbol}
+              className={`cblv-rrow${pins.includes(r.symbol) ? " cblv-rowpin" : ""}`}
+              role="button"
+              tabIndex={0}
+              onClick={() => onToggle(r.symbol)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(r.symbol); } }}
+              title={[
+                r.symbol,
+                spotOf(r) != null ? `spot ${fmtSpot(spotOf(r) as number)}` : null,
+                cb != null ? `CB ${fmtLevel(cb)}` : null,
+                cw != null ? `CW ${fmtLevel(cw)}` : null,
+                pw != null ? `PW ${fmtLevel(pw)}` : null,
+              ].filter(Boolean).join(" · ")}
+            >
+              <span style={{ flex: "0 0 52px", fontSize: 11, fontWeight: 800, color: LIGHT_BLUE }}>{r.symbol}</span>
+              <span className="cblv-rail">
+                {cbPct != null && (
+                  <i style={{ position: "absolute", top: 3, height: 10, width: 2, borderRadius: 1, left: `${cbPct}%`, background: LEVEL_COLORS.cb }} />
+                )}
+                {pos != null && (
+                  <i
+                    style={{
+                      position: "absolute", top: 1, left: `${pos * 100}%`, marginLeft: -4, width: 0, height: 0,
+                      borderLeft: "4px solid transparent", borderRight: "4px solid transparent",
+                      borderTop: `7px solid ${HOME_THEME.text}`,
+                    }}
+                  />
+                )}
+              </span>
+              <span style={{ flex: "0 0 44px", textAlign: "right", fontSize: 10, fontWeight: 800, color: tone, fontVariantNumeric: "tabular-nums" }}>
+                {pos == null ? "—" : `${Math.round(pos * 100)}%`}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function LevelsPage() {
@@ -508,6 +778,10 @@ export default function LevelsPage() {
   const [query, setQuery] = useState("");
   const [show, setShow] = useState<Record<LevelKey, boolean>>({ cb: true, cw: true, pw: true, flip: false });
   const [pins, setPins] = useState<string[]>([]);
+  // Both extra views are collapsed on arrival — the board is the page, these are
+  // second opinions you ask for.
+  const [openTable, setOpenTable] = useState(false);
+  const [openRails, setOpenRails] = useState(false);
 
   // Saved view + pins. Read AFTER mount so the server-rendered first paint and
   // the client's agree (a localStorage read in useState would not).
@@ -515,10 +789,14 @@ export default function LevelsPage() {
     try {
       const raw = window.localStorage.getItem(PREFS_KEY);
       if (raw) {
-        const p = JSON.parse(raw) as Partial<{ sort: SortId; show: Record<LevelKey, boolean> }>;
+        const p = JSON.parse(raw) as Partial<{
+          sort: SortId; show: Record<LevelKey, boolean>; openTable: boolean; openRails: boolean;
+        }>;
         if (p.sort) setSort(p.sort);
         const savedShow = p.show;
         if (savedShow) setShow((s) => ({ ...s, ...savedShow }));
+        if (typeof p.openTable === "boolean") setOpenTable(p.openTable);
+        if (typeof p.openRails === "boolean") setOpenRails(p.openRails);
       }
     } catch { /* corrupt or blocked storage — defaults are fine */ }
     try {
@@ -530,8 +808,10 @@ export default function LevelsPage() {
     } catch { /* non-fatal */ }
   }, []);
   useEffect(() => {
-    try { window.localStorage.setItem(PREFS_KEY, JSON.stringify({ sort, show })); } catch { /* non-fatal */ }
-  }, [sort, show]);
+    try {
+      window.localStorage.setItem(PREFS_KEY, JSON.stringify({ sort, show, openTable, openRails }));
+    } catch { /* non-fatal */ }
+  }, [sort, show, openTable, openRails]);
   useEffect(() => {
     try { window.localStorage.setItem(PINS_KEY, JSON.stringify(pins)); } catch { /* non-fatal */ }
   }, [pins]);
@@ -759,6 +1039,36 @@ export default function LevelsPage() {
             />
           ))}
         </div>
+      )}
+
+      {/* ── second opinions, collapsed ── */}
+      {view.length > 0 && (
+        <>
+          <Section
+            title="Ladder table"
+            hint={`${view.length} rows · every number in a column · click a row to pin`}
+            open={openTable}
+            onToggle={() => setOpenTable((v) => !v)}
+          >
+            <LadderTable
+              rows={view}
+              spotOf={spotOf}
+              pins={pins}
+              onToggle={togglePin}
+              sort={sort}
+              setSort={setSort}
+            />
+          </Section>
+
+          <Section
+            title="Aligned range rails"
+            hint="every ticker on one axis, put wall → call wall · sorted by position"
+            open={openRails}
+            onToggle={() => setOpenRails((v) => !v)}
+          >
+            <RangeRails rows={view} spotOf={spotOf} pins={pins} onToggle={togglePin} />
+          </Section>
+        </>
       )}
     </PageShell>
   );
