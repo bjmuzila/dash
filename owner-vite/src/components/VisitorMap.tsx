@@ -166,7 +166,6 @@ interface Aggregate {
   totalUnique: number;
   unknownVisits: number;
   maxUnique: number;
-  maxDotVisits: number;
   /** Dots placed on a real city coordinate, and dots parked on a country
    *  centroid because the row has no coordinate. `cityDots + approxDots ===
    *  dots.length`. Shown separately in the footer — a map that silently mixes
@@ -431,8 +430,10 @@ function aggregate(
       };
     })
     // Paying subscribers sort LAST so they draw on top of the fan and win the
-    // click when a customer shares a city with twenty anonymous visitors. Within
-    // each tier the busiest still sorts last, as before.
+    // click when a customer shares a city with twenty anonymous visitors. Every
+    // dot is the same size now, so draw order is the ONLY thing deciding who is
+    // reachable where marks overlap — within each tier the busiest still sorts
+    // last, as before.
     .sort((a, b) => (a.isSubscriber ? 1 : 0) - (b.isSubscriber ? 1 : 0) || a.visits - b.visits);
 
   return {
@@ -448,7 +449,6 @@ function aggregate(
     totalUnique: globalVisitors.size,
     unknownVisits,
     maxUnique: ranked.length ? ranked[0].unique : 0,
-    maxDotVisits: dots.length ? dots[dots.length - 1].visits : 0,
     cityDots: dots.reduce((n, d) => n + (d.approx ? 0 : 1), 0),
     approxDots: dots.reduce((n, d) => n + (d.approx ? 1 : 0), 0),
     approxCountries: new Set(dots.filter((d) => d.approx).map((d) => d.placeKey)).size,
@@ -498,10 +498,14 @@ function intensity(value: number, max: number): number {
 
 // ── Visitor dots ─────────────────────────────────────────────────────────────
 
-// One dot per visitor, so the size range is deliberately narrow — a dot is a
-// person, and the only thing it varies by is how many pages that person loaded.
-const BUBBLE_MIN_R = 3.2;
-const BUBBLE_MAX_R = 7;
+// ONE size for every dot. A dot is a person, and one person is not worth more
+// map than another — scaling by page loads made the owner's own dot a crater
+// over the east coast and buried the visitors underneath it, while saying
+// nothing you could not read off the detail card. Page loads are a per-visitor
+// number, not a spatial one; the map's job here is WHERE and WHO, and both of
+// those now use their own channel (position, and hue+fill) with nothing
+// competing. Whoever wants the counts can hover.
+const DOT_R = 4;
 // THREE states, on two independent channels — hue and fill:
 //
 //   solid GOLD   paying subscriber (active or trialing)
@@ -543,16 +547,6 @@ const APPROX_OPACITY = 0.5;
 const APPROX_DASH = "2.5 2.5";
 /** Text/badge colour for anonymous visitors, matching their dot. */
 const VISITOR_INK = "#8A93A6";
-
-/**
- * Radius by sqrt of count so AREA tracks the value — the standard for
- * proportional symbols. Scaling radius linearly would make a 10× visitor look
- * 100× bigger.
- */
-function bubbleRadius(value: number, max: number): number {
-  if (value <= 1 || max <= 1) return BUBBLE_MIN_R;
-  return BUBBLE_MIN_R + (BUBBLE_MAX_R - BUBBLE_MIN_R) * Math.sqrt((value - 1) / (max - 1));
-}
 
 // Golden angle: successive slots land on opposite sides of the cluster, so a
 // sunflower spiral fills evenly instead of forming spokes.
@@ -1008,7 +1002,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
       const [lat, lon] = spreadOffset(d.lat, d.lon, d.slot, d.slotCount, d.spreadDeg);
       const xy = projection([lon, lat]);
       if (!xy || !Number.isFinite(xy[0]) || !Number.isFinite(xy[1])) continue;
-      out.push({ ...d, cx: xy[0], cy: xy[1], r: bubbleRadius(d.visits, stats.maxDotVisits) });
+      out.push({ ...d, cx: xy[0], cy: xy[1], r: DOT_R });
     }
     return out;
   }, [projection, stats]);
@@ -1444,7 +1438,7 @@ export function VisitorMap({ rows }: { rows: VisitorMapRow[] }) {
             title={
               stats.dots.length === 0
                 ? "No geolocated rows yet — enable Cloudflare's visitor location headers"
-                : `${stats.dots.length} visitors · ${stats.subscriberDots} paying (solid gold), ${stats.signedInDots - stats.subscriberDots} free accounts (gold ring), ${stats.dots.length - stats.signedInDots} anonymous (slate ring) · ${stats.cityDots} on a city coordinate across ${stats.placeCount} locations, ${stats.approxDots} dashed on a country centroid · size ∝ their page loads · zoom in to separate visitors sharing a place`
+                : `${stats.dots.length} visitors · ${stats.subscriberDots} paying (solid gold), ${stats.signedInDots - stats.subscriberDots} free accounts (gold ring), ${stats.dots.length - stats.signedInDots} anonymous (slate ring) · ${stats.cityDots} on a city coordinate across ${stats.placeCount} locations, ${stats.approxDots} dashed on a country centroid · zoom in to separate visitors sharing a place`
             }
             style={{
               marginLeft: 6,

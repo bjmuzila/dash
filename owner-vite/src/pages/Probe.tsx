@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { PageShell } from "../components/PageCard";
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -147,6 +148,8 @@ const OP_CSS = `
   .op-tgl:hover { color: var(--text1); }
   .op-tgl.on { color: var(--text1); background: rgba(255,255,255,0.08); }
   .op-tgl.on.cyan { color: #219EBC; background: rgba(33,158,188,0.12); border-color: rgba(33,158,188,0.4); }
+  .op-shot { color: var(--text1); border-color: rgba(142,202,230,0.35); background: rgba(142,202,230,0.08); }
+  .op-shot:hover { border-color: #8ECAE6; background: rgba(142,202,230,0.16); }
   .op-chartempty { padding: 40px 0; text-align: center; color: var(--sm-muted); font-size: 12px; font-family: var(--sm-mono); }
   .op-charthint { margin-top: 8px; font-family: var(--sm-mono); font-size: 12px; color: var(--sm-muted); letter-spacing: 0.04em; }
 
@@ -166,27 +169,13 @@ const OP_CSS = `
   }
 `;
 
-type ProbeMetricKey = "mark" | "net_gex" | "delta" | "theta" | "vega" | "iv";
+// Snapshots still carry greeks; the card charts price only, so the metric
+// toggles (Net GEX / Δ / Θ / V / IV) were removed along with their state.
 interface ProbeHistSnap { ts: number; mark: number | null; net_gex: number | null; delta: number | null; theta: number | null; vega: number | null; iv: number | null }
-const PROBE_METRICS: { key: ProbeMetricKey; label: string; d: number }[] = [
-  { key: "mark", label: "Price", d: 2 },
-  { key: "net_gex", label: "Net GEX", d: 0 },
-  { key: "delta", label: "Δ", d: 3 },
-  { key: "theta", label: "Θ", d: 3 },
-  { key: "vega", label: "V", d: 3 },
-  { key: "iv", label: "IV", d: 4 },
-];
 const PROBE_RANGES: { key: string; label: string }[] = [
   { key: "1d", label: "1D" }, { key: "3d", label: "3D" }, { key: "1w", label: "1W" }, { key: "1m", label: "1M" },
 ];
 
-function opFmtGEX(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return "—";
-  const a = Math.abs(v), sign = v >= 0 ? "+" : "−";
-  if (a >= 1e9) return `${sign}$${(a / 1e9).toFixed(2)}B`;
-  if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(2)}M`;
-  return `${sign}$${(a / 1e3).toFixed(2)}K`;
-}
 function opIsRth(ts: number | string | null | undefined): boolean {
   const t = Number(ts);
   if (!Number.isFinite(t)) return false;
@@ -240,53 +229,242 @@ function opDewick<T>(pts: T[], get: (p: T) => number): T[] {
   return out;
 }
 
-function ProbeChart({ history, metric }: { history: ProbeHistSnap[]; metric: ProbeMetricKey }) {
-  const W = 960, H = 340, PADL = 56, PADR = 16, PADT = 16, PADB = 28;
+/**
+ * ProbeChart — the option-contract price line. Price only: the metric toggles
+ * (Net GEX / Δ / Θ / V / IV) were removed, so this reads `mark` and nothing else.
+ *
+ * Treatment: ice-blue line over a fading wash, dashed break-even line at the
+ * entry fill, the session high marked green and the low red, a right-hand price
+ * rail with the live mark in a pill tinted by P/L, and a hover crosshair whose
+ * readout carries time, price and $ P/L per contract. Colors are hardcoded here
+ * (not CSS vars) on purpose — `captureProbeCard` serializes this SVG standalone
+ * for the screenshot, and a var() reference would resolve to nothing off-DOM.
+ */
+function ProbeChart({ history, entry, chartId }: { history: ProbeHistSnap[]; entry: number | null; chartId: string }) {
+  const W = 960, H = 340, PADL = 12, PADR = 78, PADT = 26, PADB = 30;
+  const ICE = "#8ECAE6", GRN = "#30d158", RED = "#ff5b5b";
+  const [hover, setHover] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+
   const clean = history
-    .map((s) => ({ ts: s.ts, v: (metric === "mark" ? opPx(s[metric]) : opNum(s[metric])) }))
+    .map((s) => ({ ts: s.ts, v: opPx(s.mark) }))
     .filter((p) => p.v != null) as { ts: number; v: number }[];
   const pts = opDewick(clean, (p) => p.v);
   if (pts.length < 2) {
     return <div className="op-chartempty">Not enough history yet — snapshots accrue every refresh (and through RTH server-side).</div>;
   }
+
   const xs = pts.map((p) => p.ts), ys = pts.map((p) => p.v);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
-  let minY = Math.min(...ys), maxY = Math.max(...ys);
+  const hi = Math.max(...ys), lo = Math.min(...ys);
+  const hiI = ys.indexOf(hi), loI = ys.indexOf(lo);
+  // The entry line has to stay on-canvas or break-even reads as off-screen.
+  const dom = entry != null && Number.isFinite(entry) ? [...ys, entry] : ys;
+  let minY = Math.min(...dom), maxY = Math.max(...dom);
   if (minY === maxY) { minY -= 1; maxY += 1; }
-  const gpad = (maxY - minY) * 0.08; minY -= gpad; maxY += gpad;
+  const gpad = (maxY - minY) * 0.1; minY -= gpad; maxY += gpad;
+
   const n = pts.length;
   const sx = (i: number) => PADL + (n <= 1 ? 0 : i / (n - 1)) * (W - PADL - PADR);
   const sy = (v: number) => H - PADB - ((v - minY) / (maxY - minY || 1)) * (H - PADT - PADB);
   const path = pts.map((p, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(p.v).toFixed(1)}`).join(" ");
   const area = `${path} L${sx(n - 1).toFixed(1)},${H - PADB} L${sx(0).toFixed(1)},${H - PADB} Z`;
-  const dec = PROBE_METRICS.find((m) => m.key === metric)!.d;
-  const fmtY = (v: number) => (metric === "net_gex" ? opFmtGEX(v) : v.toFixed(dec));
-  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => minY + f * (maxY - minY));
+
+  const last = pts[n - 1].v;
+  const lastUp = entry == null ? null : last - entry;
+  const pillFill = lastUp == null ? ICE : lastUp >= 0 ? GRN : RED;
   const multiDay = maxX - minX > 20 * 3600_000;
   const fmtT = (ts: number) => multiDay
     ? new Date(ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
     : new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const MONO = '"Courier New", monospace';
+
+  const onMove = (e: ReactMouseEvent<SVGSVGElement>) => {
+    const el = svgRef.current;
+    if (!el) return;
+    const box = el.getBoundingClientRect();
+    const vx = ((e.clientX - box.left) / box.width) * W;          // client px → viewBox units
+    const i = Math.round(((vx - PADL) / (W - PADL - PADR)) * (n - 1));
+    setHover(i < 0 ? 0 : i > n - 1 ? n - 1 : i);
+  };
+
+  const hp = hover == null ? null : pts[hover];
+  const hpl = hp == null || entry == null ? null : (hp.v - entry) * 100;
+  // Flip the readout to the left of the crosshair near the right rail.
+  const hx = hp == null ? 0 : sx(hover as number);
+  const tipW = 168, tipFlip = hx + 12 + tipW > W - PADR;
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto" }}>
+    <svg
+      ref={svgRef}
+      id={chartId}
+      viewBox={`0 0 ${W} ${H}`}
+      style={{ width: "100%", height: "auto", display: "block" }}
+      onMouseMove={onMove}
+      onMouseLeave={() => setHover(null)}
+    >
       <defs>
-        <linearGradient id="opwg" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="rgba(33,158,188,0.28)" />
-          <stop offset="100%" stopColor="rgba(33,158,188,0)" />
+        <linearGradient id={`${chartId}-wash`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={ICE} stopOpacity={0.22} />
+          <stop offset="100%" stopColor={ICE} stopOpacity={0} />
         </linearGradient>
       </defs>
-      {yTicks.map((v, i) => (
+
+      {[hi, (hi + lo) / 2, lo].map((v, i) => (
         <g key={i}>
-          <line x1={PADL} y1={sy(v)} x2={W - PADR} y2={sy(v)} stroke="rgba(255,255,255,0.08)" strokeWidth={1} />
-          <text x={PADL - 6} y={sy(v) + 3} textAnchor="end" fontSize={11} fill="#ffffff" fontFamily="var(--sm-mono)">{fmtY(v)}</text>
+          <line x1={PADL} y1={sy(v)} x2={W - PADR} y2={sy(v)} stroke="rgba(255,255,255,0.07)" strokeWidth={1} />
+          <text x={W - PADR + 10} y={sy(v) + 4} fontSize={12} fill="#ffffff" fontFamily={MONO}>{v.toFixed(2)}</text>
         </g>
       ))}
-      <text x={PADL} y={H - 6} textAnchor="start" fontSize={11} fill="#ffffff" fontFamily="var(--sm-mono)">{fmtT(minX)}</text>
-      <text x={W - PADR} y={H - 6} textAnchor="end" fontSize={11} fill="#ffffff" fontFamily="var(--sm-mono)">{fmtT(maxX)}</text>
-      <path d={area} fill="url(#opwg)" />
-      <path d={path} fill="none" stroke="#219EBC" strokeWidth={1.75} strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx={sx(n - 1)} cy={sy(pts[pts.length - 1].v)} r={3} fill="#219EBC" />
+
+      <path d={area} fill={`url(#${chartId}-wash)`} />
+
+      {entry != null && Number.isFinite(entry) && (
+        <>
+          <line x1={PADL} y1={sy(entry)} x2={W - PADR} y2={sy(entry)} stroke="rgba(255,255,255,0.40)" strokeWidth={1} strokeDasharray="3 5" />
+          <text x={PADL + 4} y={sy(entry) - 7} fontSize={11} fill="#ffffff" fontFamily={MONO} letterSpacing="1">ENTRY {entry.toFixed(2)}</text>
+        </>
+      )}
+
+      <path d={path} fill="none" stroke={ICE} strokeWidth={1.9} strokeLinejoin="round" strokeLinecap="round" />
+
+      <circle cx={sx(hiI)} cy={sy(hi)} r={3.4} fill="none" stroke={GRN} strokeWidth={1.6} />
+      <text x={sx(hiI)} y={sy(hi) - 11} fontSize={12} fill={GRN} fontFamily={MONO} textAnchor="middle">H {hi.toFixed(2)}</text>
+      <circle cx={sx(loI)} cy={sy(lo)} r={3.4} fill="none" stroke={RED} strokeWidth={1.6} />
+      <text x={sx(loI)} y={sy(lo) + 18} fontSize={12} fill={RED} fontFamily={MONO} textAnchor="middle">L {lo.toFixed(2)}</text>
+
+      <text x={PADL} y={H - 8} fontSize={12} fill="#ffffff" fontFamily={MONO}>{fmtT(minX)}</text>
+      <text x={W - PADR} y={H - 8} fontSize={12} fill="#ffffff" fontFamily={MONO} textAnchor="end">{fmtT(maxX)}</text>
+
+      <circle cx={sx(n - 1)} cy={sy(last)} r={3.6} fill={pillFill} />
+      <rect x={W - PADR + 4} y={sy(last) - 11} width={62} height={22} rx={5} fill={pillFill} />
+      <text x={W - PADR + 35} y={sy(last) + 4} fontSize={13} fontWeight={700} fill="#06090d" fontFamily={MONO} textAnchor="middle">{last.toFixed(2)}</text>
+
+      {hp != null && (
+        <g>
+          <line x1={hx} y1={PADT} x2={hx} y2={H - PADB} stroke="rgba(255,255,255,0.32)" strokeWidth={1} strokeDasharray="2 3" />
+          <circle cx={hx} cy={sy(hp.v)} r={4} fill="#05060a" stroke={ICE} strokeWidth={2} />
+          <g transform={`translate(${tipFlip ? hx - 12 - tipW : hx + 12},${Math.max(PADT, sy(hp.v) - 46)})`}>
+            <rect width={tipW} height={44} rx={7} fill="rgba(10,13,20,0.96)" stroke="rgba(48,209,88,0.45)" strokeWidth={1} />
+            <text x={12} y={18} fontSize={11} fill="#ffffff" fontFamily={MONO} letterSpacing="1">{fmtT(hp.ts)}</text>
+            <text x={12} y={35} fontSize={15} fontWeight={700} fill="#ffffff" fontFamily={MONO}>${hp.v.toFixed(2)}</text>
+            {hpl != null && (
+              <text x={92} y={35} fontSize={13} fontWeight={700} fill={hpl >= 0 ? GRN : RED} fontFamily={MONO}>
+                {hpl >= 0 ? "+" : "−"}${Math.abs(hpl).toFixed(0)}
+              </text>
+            )}
+          </g>
+        </g>
+      )}
     </svg>
   );
+}
+
+/**
+ * captureProbeCard — PNG of one probe card, no dependency on html2canvas.
+ *
+ * The chart is already an SVG with hardcoded colors, so it rasterizes cleanly
+ * through an <img> + canvas. The header (ticker, %, entry→now, P/L) is painted
+ * on with fillText rather than cloned from the DOM, which keeps the export
+ * identical across browsers instead of inheriting whatever the page computed.
+ * Downloads the file and, where the browser allows it, also puts the PNG on the
+ * clipboard so it can be pasted straight into Discord.
+ */
+async function captureProbeCard(chartId: string, meta: {
+  ticker: string; badge: string; exp: string; pct: number | null;
+  entry: number | null; mark: number | null; dollars: number | null; hint: string;
+}): Promise<void> {
+  const svg = document.getElementById(chartId) as SVGSVGElement | null;
+  if (!svg) return;
+  const SCALE = 2, CW = 1000, HEAD = 132, CH = HEAD + 360;
+  const MONO = '"Courier New", monospace';
+  const GRN = "#30d158", RED = "#ff5b5b";
+  const tone = (v: number | null | undefined) => (v == null ? "#ffffff" : v > 0 ? GRN : v < 0 ? RED : "#ffffff");
+  const px = (v: number | null) => (v == null ? "—" : v.toFixed(2));
+
+  const clone = svg.cloneNode(true) as SVGSVGElement;
+  clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  clone.setAttribute("width", "960");
+  clone.setAttribute("height", "340");
+  const blob = new Blob([new XMLSerializer().serializeToString(clone)], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+
+  try {
+    const img = new Image();
+    await new Promise<void>((res, rej) => {
+      img.onload = () => res();
+      img.onerror = () => rej(new Error("svg rasterize failed"));
+      img.src = url;
+    });
+
+    const cv = document.createElement("canvas");
+    cv.width = CW * SCALE; cv.height = CH * SCALE;
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    ctx.scale(SCALE, SCALE);
+
+    ctx.fillStyle = "#05060a";
+    ctx.fillRect(0, 0, CW, CH);
+    ctx.fillStyle = "#0d1119";
+    ctx.fillRect(0, 0, CW, CH);
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.strokeRect(0.5, 0.5, CW - 1, CH - 1);
+
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `800 26px ${MONO}`;
+    ctx.fillText(meta.ticker, 26, 44);
+    const tw = ctx.measureText(meta.ticker).width;
+    ctx.font = `700 15px ${MONO}`;
+    ctx.fillStyle = "#8ECAE6";
+    ctx.fillText(meta.badge, 26 + tw + 12, 43);
+
+    ctx.font = `13px ${MONO}`;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(meta.exp, 26, 68);
+
+    ctx.font = `800 34px ${MONO}`;
+    ctx.fillStyle = tone(meta.pct);
+    ctx.fillText(meta.pct == null ? "—" : `${meta.pct >= 0 ? "▲" : "▼"} ${Math.abs(meta.pct).toFixed(1)}%`, 26, 110);
+
+    ctx.font = `15px ${MONO}`;
+    ctx.fillStyle = "#ffffff";
+    const line = `IN ${px(meta.entry)} → NOW ${px(meta.mark)}`;
+    ctx.fillText(line, 210, 108);
+    if (meta.dollars != null) {
+      ctx.fillStyle = tone(meta.dollars);
+      ctx.font = `700 15px ${MONO}`;
+      ctx.fillText(` ${meta.dollars >= 0 ? "+" : "−"}$${Math.abs(meta.dollars).toFixed(0)}/ct`, 210 + ctx.measureText(line).width + 14, 108);
+    }
+
+    ctx.drawImage(img, 20, HEAD - 8, 960, 340);
+
+    ctx.font = `12px ${MONO}`;
+    ctx.fillStyle = "rgba(255,255,255,0.75)";
+    ctx.fillText(meta.hint, 26, CH - 14);
+
+    const png: Blob | null = await new Promise((res) => cv.toBlob(res, "image/png"));
+    if (!png) return;
+
+    const name = `${meta.ticker}-${meta.badge}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}.png`;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(png);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+
+    // Clipboard is best-effort: Firefox has no ClipboardItem and Safari needs a
+    // user gesture that this await has already spent. The download stands alone.
+    try {
+      const C = (window as unknown as { ClipboardItem?: new (i: Record<string, Blob>) => unknown }).ClipboardItem;
+      if (C && navigator.clipboard && "write" in navigator.clipboard) {
+        await (navigator.clipboard as unknown as { write: (d: unknown[]) => Promise<void> })
+          .write([new C({ "image/png": png })]);
+      }
+    } catch { /* download already fired */ }
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 function ProbeSpark({ points, entry }: { points: { ts: number; mark: number }[]; entry: number | null }) {
@@ -335,7 +513,7 @@ export default function Probe() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [histFull, setHistFull] = useState<Record<number, ProbeHistSnap[]>>({});
   const [histLoading, setHistLoading] = useState(false);
-  const [metric, setMetric] = useState<ProbeMetricKey>("mark");
+  const [shotId, setShotId] = useState<number | null>(null);
   const [range, setRange] = useState<string>("1d");
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -681,17 +859,29 @@ export default function Probe() {
                               <button key={rg.key} type="button" className={`op-tgl${range === rg.key ? " on" : ""}`} onClick={() => changeRange(rg.key)}>{rg.label}</button>
                             ))}
                           </div>
-                          <div className="op-toggles">
-                            {PROBE_METRICS.map((m) => (
-                              <button key={m.key} type="button" className={`op-tgl${metric === m.key ? " on cyan" : ""}`} onClick={() => setMetric(m.key)}>{m.label}</button>
-                            ))}
-                          </div>
+                          <button
+                            type="button"
+                            className="op-tgl op-shot"
+                            title="Save this card as a PNG"
+                            onClick={() => {
+                              setShotId(r.id);
+                              void captureProbeCard(`probe-chart-${r.id}`, {
+                                ticker: r.ticker,
+                                badge: `${r.strike % 1 ? r.strike : Math.round(r.strike)}${r.side}`,
+                                exp: fmtExp(r.expiration),
+                                pct, entry, mark, dollars,
+                                hint: `Option price (mark) · RTH only · entry @ ${px(entry)}`,
+                              }).finally(() => setTimeout(() => setShotId(null), 1400));
+                            }}
+                          >
+                            {shotId === r.id ? "✓ Saved" : "⬚ Screenshot"}
+                          </button>
                         </div>
                         {histLoading && !(histFull[r.id]?.length)
                           ? <div className="op-chartempty">Loading history…</div>
-                          : <ProbeChart history={histFull[r.id] ?? []} metric={metric} />}
+                          : <ProbeChart history={histFull[r.id] ?? []} entry={entry} chartId={`probe-chart-${r.id}`} />}
                         <div className="op-charthint">
-                          {metric === "mark" ? "Option price (mark)" : PROBE_METRICS.find((m) => m.key === metric)?.label} · RTH only · entry @ {px(entry)} · {ago(r.snapshot?.ts)}
+                          Option price (mark) · RTH only · entry @ {px(entry)} · {ago(r.snapshot?.ts)}
                         </div>
                       </div>
                     )}

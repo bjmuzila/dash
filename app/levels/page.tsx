@@ -27,6 +27,12 @@
 // whole roster therefore fits in about a screen and a half, and you open only
 // what you want to look at.
 //
+// ONE FLAT ALPHABETICAL BOARD. An earlier cut grouped the tiles under the
+// roster's lanes (Main / Shares / Spreads / Option volume). It is gone: a ticker
+// is where its name says it is, every time, and you never have to know which
+// bucket the server filed something in to find it. Sort is A–Z by default; the
+// other two orders stay as buttons.
+//
 // ─────────────────────────────────────────────────────────────────────────────
 // WHY THIS PAGE SHIPS A <style> BLOCK INSTEAD OF PURE INLINE STYLE
 //
@@ -54,7 +60,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import {
   HOME_THEME,
   LEVEL_COLORS,
-  LIGHT_BLUE,
   ES_CANDLE_UP,
   ES_CANDLE_DOWN,
   homeInputStyle,
@@ -65,9 +70,6 @@ import {
 } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { useScannerTickers } from "@/lib/useScannerTickers";
-import {
-  SCANNER_MAIN, SCANNER_SHARES, SCANNER_SPREADS, SCANNER_OPTVOL,
-} from "@/lib/scannerTickers";
 import { usePageLoadStatus } from "@/lib/pageStatus";
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
@@ -78,13 +80,18 @@ const LEVELS_POLL_MS = 60_000;
 const QUOTES_POLL_MS = 5_000;
 /** Symbols per /api/tt-quotes call — keeps the query string sane. */
 const QUOTE_CHUNK = 40;
-/** Rail height in px on an open tile. */
-const RAIL_H = 104;
+/**
+ * Rail height in px on an open tile. 104 → 140: at 104 the three levels and the
+ * spot marker crowded each other on any ticker whose walls sit close together,
+ * and the open card read as a squashed version of the collapsed one. The extra
+ * 36px is pure vertical room for the ladder — no new content.
+ */
+const RAIL_H = 140;
 /** Spot within this fraction of the CB counts as sitting ON the core. */
 const AT_CORE_PCT = 0.0035;
 /** Spot within this fraction of a wall counts as in reach of it. */
 const NEAR_WALL_PCT = 0.006;
-const PREFS_KEY = "cb-levels-prefs-v2";
+const PREFS_KEY = "cb-levels-prefs-v3";
 
 type SortId = "core" | "gex" | "az";
 type LevelKey = "cb" | "cw" | "pw" | "flip";
@@ -104,20 +111,6 @@ type ScannerRow = {
   strikes: number | null;
   stale?: boolean;
 };
-
-// ── Roster lanes ─────────────────────────────────────────────────────────────
-// The four groups already declared in lib/scannerTickers. Used as section
-// headers so 169 tiles have landmarks; a roster ticker in none of them (added
-// on the owner Watchlists page after this file's fallback lists were written)
-// lands in "Other" rather than disappearing.
-const LANES: { key: string; label: string; set: Set<string> }[] = [
-  { key: "main", label: "Main · indices + mega caps", set: new Set(SCANNER_MAIN) },
-  { key: "shares", label: "Shares", set: new Set(SCANNER_SHARES) },
-  { key: "spreads", label: "Spreads", set: new Set(SCANNER_SPREADS) },
-  { key: "optvol", label: "Option volume", set: new Set(SCANNER_OPTVOL) },
-];
-const OTHER_LANE = { key: "other", label: "Other", set: new Set<string>() };
-const laneOf = (sym: string) => LANES.find((l) => l.set.has(sym))?.key ?? OTHER_LANE.key;
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 
@@ -186,22 +179,32 @@ const ZONE_COLOR: Record<Zone, string> = {
 };
 
 const CSS = `
-.cblv-grid{display:grid;grid-template-columns:repeat(var(--cblv-cols,5),minmax(0,1fr));gap:14px;align-items:start}
+.cblv-grid{display:grid;grid-template-columns:repeat(var(--cblv-cols,5),minmax(0,1fr));gap:18px;align-items:start}
 @media (max-width:900px){.cblv-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:560px){.cblv-grid{grid-template-columns:1fr}}
 
+/* EDGE. The fill is deliberately left where it is — it sits ~4% above the page
+   background, which is inside the noise floor of most monitors, so the BORDER
+   does the separating: white at 36% (from 16%, which was too faint to read as an
+   edge at all) plus a 3px soft halo outside it. Page stays as dark as it was;
+   the tiles stop being holes in it. */
 .cblv-card{container-type:inline-size;min-width:0;border-radius:14px;overflow:hidden;
   background:linear-gradient(180deg,${alpha(HOME_THEME.panel, 0.98)},${alpha(HOME_THEME.bg, 0.92)});
-  border:1px solid ${alpha(HOME_THEME.text, 0.16)};
-  box-shadow:0 14px 28px -12px ${alpha(HOME_THEME.bg, 0.9)},inset 0 1px 0 ${alpha(HOME_THEME.text, 0.07)}}
+  border:1px solid ${alpha(HOME_THEME.text, 0.36)};
+  box-shadow:0 0 0 3px ${alpha(HOME_THEME.text, 0.06)},
+             0 14px 28px -12px ${alpha(HOME_THEME.bg, 0.9)},
+             inset 0 1px 0 ${alpha(HOME_THEME.text, 0.07)}}
 
-.cblv-band{display:flex;align-items:center;gap:7px;padding:8px 10px;cursor:pointer;user-select:none;
-  background:linear-gradient(180deg,${alpha(LIGHT_BLUE, 0.13)},${alpha(LIGHT_BLUE, 0.02)});
+/* NEUTRAL BAND. The card used to wash itself gold / blue / red depending on
+   where spot sat, which meant the surface changed meaning as price moved and a
+   board of them read as noise. One colourless band now, on every card, always.
+   Colour is reserved for things that never change what they mean: CB gold, CW
+   blue, PW red on the values and the rail, up/down green-red on SPOT VS CB. The
+   only state left on the card is the small chip beside the ticker. */
+.cblv-band{display:flex;align-items:center;gap:7px;padding:9px 11px;cursor:pointer;user-select:none;
+  background:linear-gradient(180deg,${alpha(HOME_THEME.text, 0.09)},${alpha(HOME_THEME.text, 0.015)});
   transition:background .12s}
-.cblv-band:hover{background:linear-gradient(180deg,${alpha(LIGHT_BLUE, 0.2)},${alpha(LIGHT_BLUE, 0.05)})}
-.cblv-card[data-zone="cb"] .cblv-band{background:linear-gradient(180deg,${alpha(LEVEL_COLORS.cb, 0.14)},${alpha(LEVEL_COLORS.cb, 0.02)})}
-.cblv-card[data-zone="cw"] .cblv-band{background:linear-gradient(180deg,${alpha(LEVEL_COLORS.cw, 0.14)},${alpha(LEVEL_COLORS.cw, 0.02)})}
-.cblv-card[data-zone="pw"] .cblv-band{background:linear-gradient(180deg,${alpha(LEVEL_COLORS.pw, 0.14)},${alpha(LEVEL_COLORS.pw, 0.02)})}
+.cblv-band:hover{background:linear-gradient(180deg,${alpha(HOME_THEME.text, 0.15)},${alpha(HOME_THEME.text, 0.045)})}
 .cblv-card.cblv-open .cblv-band{border-bottom:1px solid ${HOME_THEME.border}}
 
 .cblv-caret{flex:0 0 9px;font-size:9px;line-height:1;color:${alpha(HOME_THEME.text, 0.35)};transition:transform .12s}
@@ -214,11 +217,6 @@ const CSS = `
 @container (max-width:232px){.cblv-v-pw{display:none}}
 @container (max-width:196px){.cblv-v-cw{display:none}}
 @container (max-width:168px){.cblv-lb{display:none}}
-
-.cblv-lane{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:10px;
-  margin:6px 0 2px;padding:8px 2px;cursor:pointer;user-select:none;
-  background:${alpha(HOME_THEME.bg, 0.92)};backdrop-filter:blur(8px)}
-.cblv-lane-rule{flex:1;height:1px;background:linear-gradient(90deg,${alpha(LIGHT_BLUE, 0.35)},transparent)}
 `;
 
 // ── One ticker tile ──────────────────────────────────────────────────────────
@@ -315,7 +313,7 @@ function LevelTile({
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(row.symbol); } }}
       >
         <span className="cblv-caret">▶</span>
-        <span className="cblv-tk" style={{ fontSize: 13, fontWeight: 800, color: LIGHT_BLUE, letterSpacing: "0.03em" }}>
+        <span className="cblv-tk" style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.text, letterSpacing: "0.03em" }}>
           {row.symbol}
           {zoneLabel && (
             <span
@@ -347,8 +345,8 @@ function LevelTile({
 
       {/* ── body: price-scaled ladder ── */}
       {open && (
-        <div style={{ padding: "8px 10px" }}>
-          <div style={{ position: "relative", height: RAIL_H, margin: "2px 0 6px" }}>
+        <div style={{ padding: "10px 12px 9px" }}>
+          <div style={{ position: "relative", height: RAIL_H, margin: "4px 0 8px" }}>
             {marks.map((m) => (
               <div
                 key={m.labels.join("-")}
@@ -435,12 +433,10 @@ export default function LevelsPage() {
   const [sweptAt, setSweptAt] = useState<string | null>(null);
 
   const [cols, setCols] = useState(5);
-  const [sort, setSort] = useState<SortId>("core");
+  const [sort, setSort] = useState<SortId>("az");
   const [query, setQuery] = useState("");
-  const [grouped, setGrouped] = useState(true);
   const [show, setShow] = useState<Record<LevelKey, boolean>>({ cb: true, cw: true, pw: true, flip: false });
   const [openTiles, setOpenTiles] = useState<Record<string, boolean>>({});
-  const [openLanes, setOpenLanes] = useState<Record<string, boolean>>({ main: true });
 
   // Saved view. Read AFTER mount so the server-rendered first paint and the
   // client's agree (a localStorage read in useState would not).
@@ -449,23 +445,19 @@ export default function LevelsPage() {
       const raw = window.localStorage.getItem(PREFS_KEY);
       if (!raw) return;
       const p = JSON.parse(raw) as Partial<{
-        cols: number; sort: SortId; grouped: boolean;
-        show: Record<LevelKey, boolean>; openLanes: Record<string, boolean>;
+        cols: number; sort: SortId; show: Record<LevelKey, boolean>;
       }>;
       if (p.cols) setCols(p.cols);
       if (p.sort) setSort(p.sort);
-      if (typeof p.grouped === "boolean") setGrouped(p.grouped);
       const savedShow = p.show;
       if (savedShow) setShow((s) => ({ ...s, ...savedShow }));
-      const savedLanes = p.openLanes;
-      if (savedLanes) setOpenLanes(savedLanes);
     } catch { /* corrupt or blocked storage — defaults are fine */ }
   }, []);
   useEffect(() => {
     try {
-      window.localStorage.setItem(PREFS_KEY, JSON.stringify({ cols, sort, grouped, show, openLanes }));
+      window.localStorage.setItem(PREFS_KEY, JSON.stringify({ cols, sort, show }));
     } catch { /* non-fatal */ }
-  }, [cols, sort, grouped, show, openLanes]);
+  }, [cols, sort, show]);
 
   // ── Levels: one request for the whole universe ─────────────────────────────
   const loadLevels = useCallback(async (manual = false) => {
@@ -553,26 +545,15 @@ export default function LevelsPage() {
       return s != null && r.cb ? Math.abs((s - r.cb) / r.cb) : Number.POSITIVE_INFINITY;
     };
     const cmp: Record<SortId, (a: ScannerRow, b: ScannerRow) => number> = {
+      // Distance to the core, closest first — "what is pinned right now".
       core: (a, b) => dist(a) - dist(b),
       gex: (a, b) => Math.abs(b.total_net_gex ?? 0) - Math.abs(a.total_net_gex ?? 0),
+      // The default. A flat alphabetical board means a ticker is always where
+      // its name says it is; the other two orders move things under you.
       az: (a, b) => a.symbol.localeCompare(b.symbol),
     };
     return [...list].sort(cmp[sort]);
   }, [rows, tickers, query, sort, live]);
-
-  /** Lanes in declared order, empty ones dropped. */
-  const lanes = useMemo(() => {
-    if (!grouped) return [{ key: "all", label: "", rows: view }];
-    const bucket = new Map<string, ScannerRow[]>();
-    for (const r of view) {
-      const k = laneOf(r.symbol);
-      const cur = bucket.get(k);
-      if (cur) cur.push(r); else bucket.set(k, [r]);
-    }
-    return [...LANES, OTHER_LANE]
-      .map((l) => ({ key: l.key, label: l.label, rows: bucket.get(l.key) ?? [] }))
-      .filter((l) => l.rows.length > 0);
-  }, [view, grouped]);
 
   // A filter is an intent to look at what matched, so matches open themselves
   // rather than making you click every one of them.
@@ -598,7 +579,14 @@ export default function LevelsPage() {
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
 
       {/* ── controls ── */}
-      <Card variant="budget" padding={14}>
+      <Card
+        variant="budget"
+        padding={14}
+        style={{
+          border: `1px solid ${alpha(HOME_THEME.text, 0.36)}`,
+          boxShadow: `0 0 0 3px ${alpha(HOME_THEME.text, 0.06)}, 0 14px 28px -12px ${alpha(HOME_THEME.bg, 0.9)}`,
+        }}
+      >
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 2, marginRight: "auto" }}>
             <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" }}>
@@ -660,8 +648,6 @@ export default function LevelsPage() {
             ))}
           </div>
 
-          <button style={seg(grouped)} onClick={() => setGrouped((v) => !v)}>Lanes</button>
-
           <button
             style={homeRefreshButtonStyle(refresh)}
             onClick={() => void loadLevels(true)}
@@ -682,54 +668,17 @@ export default function LevelsPage() {
           </div>
         </Card>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {lanes.map((lane) => {
-            // Ungrouped renders one nameless lane and no header, so the toggle
-            // can't hide the only section on the page.
-            const headed = grouped && !!lane.label;
-            // Default: Main open, the rest closed. A saved choice wins. A live
-            // filter forces every lane open (see the tile rule above) without
-            // overwriting what the user last chose.
-            const laneStored = openLanes[lane.key] ?? lane.key === "main";
-            const laneOpen = !headed || filtering || laneStored;
-            const toggleLane = () => setOpenLanes((o) => ({ ...o, [lane.key]: !laneStored }));
-            return (
-              <div key={lane.key}>
-                {headed && (
-                  <div
-                    className="cblv-lane"
-                    role="button"
-                    tabIndex={0}
-                    onClick={toggleLane}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleLane(); }
-                    }}
-                  >
-                    <span style={{ fontSize: 9, color: alpha(HOME_THEME.text, 0.35) }}>{laneOpen ? "▼" : "▶"}</span>
-                    <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", textTransform: "uppercase", color: LIGHT_BLUE }}>
-                      {lane.label}
-                    </span>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: alpha(HOME_THEME.text, 0.32) }}>{lane.rows.length}</span>
-                    <span className="cblv-lane-rule" />
-                  </div>
-                )}
-                {laneOpen && (
-                  <div className="cblv-grid" style={gridStyle}>
-                    {lane.rows.map((r) => (
-                      <LevelTile
-                        key={r.symbol}
-                        row={r}
-                        spot={live[r.symbol] ?? r.spot}
-                        show={show}
-                        open={isOpen(r.symbol)}
-                        onToggle={toggleTile}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+        <div className="cblv-grid" style={gridStyle}>
+          {view.map((r) => (
+            <LevelTile
+              key={r.symbol}
+              row={r}
+              spot={live[r.symbol] ?? r.spot}
+              show={show}
+              open={isOpen(r.symbol)}
+              onToggle={toggleTile}
+            />
+          ))}
         </div>
       )}
     </PageShell>

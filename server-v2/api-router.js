@@ -2886,6 +2886,48 @@ register('/api/debug-gex', {
   async handler(req, res) { send(res, 501, { error: 'not implemented' }); },
 });
 
+// ── End-of-day per-strike ΔGEX (eod_strike_gex) ─────────────────────────────
+// Thin forwarders to the two /proxy/* readers in server-with-proxy.js, which
+// call getStrikeGexBoard() / getStrikeGexChange() in eod-strike-gex-recorder.js
+// against the table the 16:05 ET sweep writes.
+//
+// WHY THESE EXIST: the recorder, both /proxy readers and the owner ΔGEX Board
+// page all shipped, but neither /api adapter did. `/api/eod-strike-gex-board`
+// had no route.ts AND no registration here, so every board load fell through to
+// the app/api/[...proxy] catch-all and came back 501 {"error":"not
+// implemented"} — which is exactly what the card rendered. `/api/eod-strike-gex
+// -change` had a route.ts fallback (so the detail ladder worked) but its
+// route.ts header claimed a registration in this file that was never added, so
+// it was running on the Next fallback alone. Both are registered here now.
+//
+// Board is owner-only (whole-board ranking, owner ΔGEX page). Change is
+// subscriber — it also backs the Ticker Lookup Δ 1D column, and enforceAuth's
+// 'subscriber' already admits the owner.
+//
+// NO CDN CACHE on either: once-a-day data, but caching it at the edge would pin
+// a stale baseline date straight across the 16:05 write for the whole TTL.
+register('/api/eod-strike-gex-board', {
+  auth: 'owner', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+    const top = Number(sp.get('top') || 5);
+    const qs = Number.isFinite(top) && top > 0 ? `?top=${Math.floor(top)}` : '';
+    const r = await forwardGet(ctx, `/proxy/eod-strike-gex-board${qs}`);
+    send(res, r.status, r.body, { 'Cache-Control': NO_STORE });
+  },
+});
+
+register('/api/eod-strike-gex-change', {
+  auth: 'subscriber', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+    const symbol = (sp.get('symbol') || '').trim().toUpperCase();
+    const qs = symbol ? `?symbol=${encodeURIComponent(symbol)}` : '';
+    const r = await forwardGet(ctx, `/proxy/eod-strike-gex-change${qs}`);
+    send(res, r.status, r.body, { 'Cache-Control': NO_STORE });
+  },
+});
+
 // /api/dxlink/candles?symbol&interval — weekly OHLC forwarder to the proxy's
 // TT history endpoint. Ported verbatim from app/api/dxlink/candles/route.ts.
 register('/api/dxlink/candles', {
