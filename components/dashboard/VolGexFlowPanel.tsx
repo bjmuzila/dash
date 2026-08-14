@@ -25,7 +25,7 @@
 // Theme: HOME_THEME tokens only — no ad-hoc hex.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BaselineSeries, ColorType, createChart } from "lightweight-charts";
+import { BaselineSeries, ColorType, LineSeries, createChart } from "lightweight-charts";
 import type { IChartApi, ISeriesApi, UTCTimestamp } from "lightweight-charts";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
@@ -57,6 +57,21 @@ const BIN_LABEL = BIN_SEC < 60 ? `${BIN_SEC}s` : `${BIN_SEC / 60}m`;
 // with these because neither parses as a date.
 const FRONT = "__front__";
 const ALL = "__all__";
+
+// ── +GEX % overlay ──────────────────────────────────────────────────────────
+// Orange, on its own LEFT 0–100 scale, over the baseline series. Deliberately
+// not a theme green/red: those two tokens already mean gamma polarity on this
+// chart, and reusing them for a second, unrelated quantity would make the
+// overlay read as more net vol GEX.
+//
+// The series is sampled and owned by app/home/HomeClient.tsx (it stays mounted
+// across tab switches, so the curve has no holes) and passed in as a prop. When
+// the prop is absent — the /test page mounts this same component as a draggable
+// card — the toggle is hidden entirely rather than shown dead.
+const PCT = C.orange;
+const PCT_SERIES_KEY = "cbedge.volGexFlow.pctOverlay";
+
+export type PosGexPoint = { t: number; v: number };
 
 export type VolFlowPoint = {
   ts: number;
@@ -114,7 +129,7 @@ function shortExpiry(iso: string): string {
   });
 }
 
-export default function VolGexFlowPanel() {
+export default function VolGexFlowPanel({ posGexSeries }: { posGexSeries?: PosGexPoint[] } = {}) {
   const [pick, setPick] = useState<string>(FRONT);
   const [session, setSession] = useState<"rth" | "eth">("rth");
   const [points, setPoints] = useState<VolFlowPoint[]>([]);
@@ -124,6 +139,21 @@ export default function VolGexFlowPanel() {
   const [loading, setLoading] = useState(true);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // Overlay is opt-in and remembered for the browser session. Default off so the
+  // tab still opens as the single-series chart it has always been.
+  const [showPct, setShowPct] = useState(false);
+  useEffect(() => {
+    try { if (sessionStorage.getItem(PCT_SERIES_KEY) === "1") setShowPct(true); } catch {}
+  }, []);
+  const togglePct = useCallback(() => {
+    setShowPct((v) => {
+      try { sessionStorage.setItem(PCT_SERIES_KEY, v ? "0" : "1"); } catch {}
+      return !v;
+    });
+  }, []);
+
+  const hasPct = Array.isArray(posGexSeries) && posGexSeries.length > 0;
 
   const load = useCallback(async () => {
     const qs =
@@ -197,6 +227,7 @@ export default function VolGexFlowPanel() {
   const boxRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
+  const pctSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
 
   useEffect(() => {
     const box = boxRef.current;
@@ -215,7 +246,10 @@ export default function VolGexFlowPanel() {
         horzLines: { color: "rgba(255,255,255,.05)" },
       },
       rightPriceScale: { visible: true, borderColor: C.border },
-      leftPriceScale: { visible: false },
+      // Left scale carries the 0–100 % overlay. Kept in the constructor rather
+      // than added later so toggling the overlay only flips `visible` — adding a
+      // price scale to a live chart re-lays-out the pane and jumps the series.
+      leftPriceScale: { visible: false, borderColor: C.border },
       handleScale: false,
       handleScroll: false,
       crosshair: { mode: 0 },
@@ -245,6 +279,33 @@ export default function VolGexFlowPanel() {
     // Bottom margin keeps the lowest price tick off the canvas edge, where
     // lightweight-charts would clip the label in half.
     chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.12, bottom: 0.14 } });
+
+    // +GEX % overlay. The autoscale provider pins the left scale to a true
+    // 0–100 rather than letting it fit the data: autoscaled, a chain that spends
+    // the whole day between 58 and 64 would fill the pane top to bottom and read
+    // as a violent swing, and the 50% line would wander instead of sitting at a
+    // fixed height you can eyeball against.
+    pctSeriesRef.current = chart.addSeries(LineSeries, {
+      priceScaleId: "left",
+      color: PCT,
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: true,
+      crosshairMarkerVisible: true,
+      visible: false,
+      priceFormat: { type: "custom", minMove: 0.1, formatter: (p: number) => `${p.toFixed(0)}%` },
+      autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }),
+    });
+    // The 50% midline is the read: above = long-gamma chain, below = short.
+    pctSeriesRef.current.createPriceLine({
+      price: 50,
+      color: "rgba(255,255,255,0.22)",
+      lineWidth: 1,
+      lineStyle: 2,
+      axisLabelVisible: false,
+      title: "",
+    });
+    chart.priceScale("left").applyOptions({ scaleMargins: { top: 0.12, bottom: 0.14 } });
     chartRef.current = chart;
 
     let lastW = 0, lastH = 0;
@@ -270,8 +331,31 @@ export default function VolGexFlowPanel() {
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
+      pctSeriesRef.current = null;
     };
   }, []);
+
+  // Overlay data + visibility. Split from the chart-creation effect so toggling
+  // never tears down and rebuilds the canvas.
+  useEffect(() => {
+    const s = pctSeriesRef.current;
+    if (!s) return;
+    const on = showPct && hasPct;
+    if (on) {
+      // Guard the sort/dedupe here rather than trusting the producer:
+      // lightweight-charts throws on out-of-order or duplicate times and would
+      // take the whole tab down with it.
+      const seen = new Set<number>();
+      const data = (posGexSeries ?? [])
+        .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.v))
+        .sort((a, b) => a.t - b.t)
+        .filter((p) => (seen.has(p.t) ? false : (seen.add(p.t), true)))
+        .map((p) => ({ time: p.t as UTCTimestamp, value: p.v }));
+      s.setData(data);
+    }
+    s.applyOptions({ visible: on });
+    chartRef.current?.applyOptions({ leftPriceScale: { visible: on, borderColor: C.border } });
+  }, [showPct, hasPct, posGexSeries]);
 
   useEffect(() => {
     if (!seriesRef.current) return;
@@ -341,6 +425,36 @@ export default function VolGexFlowPanel() {
             );
           })}
         </div>
+        {/* +GEX % overlay switch — same segmented shape as RTH/ETH so the header
+            reads as one control row, tinted orange to match the line it draws.
+            Hidden, not shown dead, when the series isn't wired in (app/test
+            mounts this component as a draggable card without the prop). */}
+        {hasPct && (
+          <div style={{ display: "flex", border: `1px solid ${showPct ? "rgba(251,133,1,0.40)" : C.border}`, borderRadius: 7, overflow: "hidden" }}>
+            {([
+              { on: false, label: "OFF", title: "Hide the +GEX % overlay" },
+              { on: true, label: "+GEX % OVERLAY", title: "Overlay +GEX % — the share of the 0DTE chain's |net GEX| that is positive, on its own 0–100 left scale. Above 50% = long-gamma chain." },
+            ] as const).map((o) => {
+              const active = showPct === o.on;
+              return (
+                <button
+                  key={o.label}
+                  onClick={() => { if (!active) togglePct(); }}
+                  title={o.title}
+                  aria-pressed={active}
+                  style={{
+                    fontSize: 10, fontWeight: 800, letterSpacing: "0.1em",
+                    padding: "3px 10px", cursor: "pointer", border: "none",
+                    background: active && o.on ? "rgba(251,133,1,0.18)" : active ? "rgba(255,255,255,0.06)" : "transparent",
+                    color: active && o.on ? PCT : C.text,
+                  }}
+                >
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
         <span style={{ fontSize: 11, color: C.text, letterSpacing: "0.06em" }}>
           {BIN_LABEL} buckets · today ET
         </span>
@@ -399,6 +513,31 @@ export default function VolGexFlowPanel() {
           </div>
         )}
       </div>
+
+      {/* Legend — only while the overlay is up. With one series the colors are
+          self-explanatory; with two on different scales, "which axis is this
+          reading against" is the question, so the units go in the label. */}
+      {showPct && hasPct && (
+        <div style={{ display: "flex", gap: 14, flexShrink: 0, fontSize: 10, color: C.text, letterSpacing: "0.04em", paddingTop: 2 }}>
+          {([
+            { color: POS, label: "Net Vol GEX (right, $)", dash: false },
+            { color: PCT, label: "+GEX % of 0DTE chain (left, %)", dash: false },
+            { color: "rgba(255,255,255,0.35)", label: "50% reference", dash: true },
+          ] as const).map((l) => (
+            <span key={l.label} style={{ display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>
+              <span
+                style={{
+                  width: 14, height: 2, borderRadius: 2, flexShrink: 0,
+                  background: l.dash
+                    ? `repeating-linear-gradient(90deg, ${l.color} 0 3px, transparent 3px 6px)`
+                    : l.color,
+                }}
+              />
+              {l.label}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

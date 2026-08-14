@@ -358,9 +358,11 @@ function FlowGexCalcPanel({
   const cFlow = cGamma != null && cNet != null && s2 != null ? cGamma * cNet * s2 : null;
   const pFlow = pGamma != null && pNet != null && s2 != null ? pGamma * pNet * s2 : null;
   const netFlow = cFlow == null && pFlow == null ? null : (cFlow ?? 0) + (pFlow ?? 0);
-  const cols = "48px 1fr 1fr 1fr 1.1fr 1.25fr";
-  const head: React.CSSProperties = { color: HOME_THEME.muted, fontSize: 14, fontWeight: 400, textAlign: "right" };
-  const cell: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 14, textAlign: "right" };
+  // Every column holds a long mono number, so size them to content and let the
+  // table scroll sideways instead of wrapping digits onto a second line.
+  const cols = "48px minmax(84px, auto) minmax(132px, auto) minmax(88px, auto) minmax(112px, auto) minmax(104px, auto)";
+  const head: React.CSSProperties = { color: HOME_THEME.muted, fontSize: 14, fontWeight: 400, textAlign: "right", whiteSpace: "nowrap" };
+  const cell: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 14, textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" };
   const legs = [
     { tag: "Call", tagColor: CALLS, gamma: cGamma, buy: inv?.callBuyVol ?? null, sell: inv?.callSellVol ?? null, net: cNet, flow: cFlow },
     { tag: "Put", tagColor: PUTS, gamma: pGamma, buy: inv?.putBuyVol ?? null, sell: inv?.putSellVol ?? null, net: pNet, flow: pFlow },
@@ -374,28 +376,32 @@ function FlowGexCalcPanel({
       <div style={{ fontSize: 14, color: HOME_THEME.muted, marginBottom: 10, fontFamily: "var(--font-mono)" }}>
         dealer-inventory basis (live tape) · Spot {fmtSpot(spot)} · Spot² {fmtInt(s2)} · net = buyVol − sellVol
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: cols, gap: 10, borderBottom: `1px solid ${C.border}`, paddingBottom: 6 }}>
-        <span style={{ ...head, textAlign: "left" }}> </span>
-        <span style={head}>γ</span>
-        <span style={head}>Buy / Sell</span>
-        <span style={head}>× Net</span>
-        <span style={head}>× S²</span>
-        <span style={head}>= Flow GEX</span>
-      </div>
-      {legs.map((r) => (
-        <div key={r.tag} style={{ display: "grid", gridTemplateColumns: cols, gap: 10, alignItems: "center", padding: "5px 0" }}>
-          <span style={{ color: r.tagColor, fontWeight: 700, fontSize: 14 }}>{r.tag}</span>
-          <span style={{ ...cell, color: r.gamma == null ? NA : VAL }}>{fmtGamma(r.gamma == null ? null : Math.abs(r.gamma))}</span>
-          <span style={{ ...cell, color: r.buy == null ? NA : VAL, fontSize: 14 }}>{r.buy == null ? "—" : `${fmtInt(r.buy)} / ${fmtInt(r.sell)}`}</span>
-          <span style={{ ...cell, color: r.net == null ? NA : r.net < 0 ? NEG : POS }}>{r.net == null ? "n/a" : fmtInt(r.net)}</span>
-          <span style={{ ...cell, color: s2 == null ? NA : VAL }}>{fmtInt(s2)}</span>
-          <span style={{ ...cell, color: r.flow == null ? NA : r.flow < 0 ? NEG : POS, fontWeight: 700 }}>{r.flow == null ? "n/a" : fmtExp(r.flow)}</span>
+      <div style={{ overflowX: "auto" }}>
+        <div style={{ minWidth: 620 }}>
+          <div style={{ display: "grid", gridTemplateColumns: cols, gap: 12, borderBottom: `1px solid ${C.border}`, paddingBottom: 6 }}>
+            <span style={{ ...head, textAlign: "left" }}> </span>
+            <span style={head}>γ</span>
+            <span style={head}>Buy / Sell</span>
+            <span style={head}>× Net</span>
+            <span style={head}>× S²</span>
+            <span style={head}>= Flow GEX</span>
+          </div>
+          {legs.map((r) => (
+            <div key={r.tag} style={{ display: "grid", gridTemplateColumns: cols, gap: 12, alignItems: "center", padding: "5px 0" }}>
+              <span style={{ color: r.tagColor, fontWeight: 700, fontSize: 14 }}>{r.tag}</span>
+              <span style={{ ...cell, color: r.gamma == null ? NA : VAL }}>{fmtGamma(r.gamma == null ? null : Math.abs(r.gamma))}</span>
+              <span style={{ ...cell, color: r.buy == null ? NA : VAL, fontSize: 14 }}>{r.buy == null ? "—" : `${fmtInt(r.buy)} / ${fmtInt(r.sell)}`}</span>
+              <span style={{ ...cell, color: r.net == null ? NA : r.net < 0 ? NEG : POS }}>{r.net == null ? "n/a" : fmtInt(r.net)}</span>
+              <span style={{ ...cell, color: s2 == null ? NA : VAL }}>{fmtInt(s2)}</span>
+              <span style={{ ...cell, color: r.flow == null ? NA : r.flow < 0 ? NEG : POS, fontWeight: 700 }}>{r.flow == null ? "n/a" : fmtExp(r.flow)}</span>
+            </div>
+          ))}
+          <div style={{ display: "grid", gridTemplateColumns: cols, gap: 12, alignItems: "center", padding: "6px 0 0", borderTop: `1px solid ${C.border}`, marginTop: 2 }}>
+            <span style={{ color: NET, fontWeight: 700, fontSize: 14 }}>Net</span>
+            <span /><span /><span /><span />
+            <span style={{ ...cell, color: netFlow == null ? NA : netFlow < 0 ? NEG : POS, fontWeight: 800 }}>{netFlow == null ? "n/a" : fmtExp(netFlow)}</span>
+          </div>
         </div>
-      ))}
-      <div style={{ display: "grid", gridTemplateColumns: cols, gap: 10, alignItems: "center", padding: "6px 0 0", borderTop: `1px solid ${C.border}`, marginTop: 2 }}>
-        <span style={{ color: NET, fontWeight: 700, fontSize: 14 }}>Net</span>
-        <span /><span /><span /><span />
-        <span style={{ ...cell, color: netFlow == null ? NA : netFlow < 0 ? NEG : POS, fontWeight: 800 }}>{netFlow == null ? "n/a" : fmtExp(netFlow)}</span>
       </div>
     </div>
   );
@@ -666,7 +672,9 @@ export default function Dev() {
 
       {/* Flow GEX raw calculation (volume basis) */}
       <RowLabel text="Flow GEX · raw calc" color={WARN} />
-      <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 12 }}>
+      {/* Full width — the old auto-fill grid pinned this card to one 360px
+          track, which squeezed the number columns into two-line wraps. */}
+      <div style={{ marginTop: 8 }}>
         <FlowGexCalcPanel call={callResult} put={putResult} inv={flowInv} />
       </div>
 

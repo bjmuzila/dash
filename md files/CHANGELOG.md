@@ -1,5 +1,134 @@
 # Changelog
 
+## 2026-08-14 - /strike-history hung forever: the meta query was a 3.1M-row scan for 21 rows
+
+Edited: `server-v2/api-router.js` (`/api/strike-gex-series`, `mode=meta` only).
+
+### What
+
+`/app/strike-history` never loaded. The session/expiry picker sat on
+"Loading..." and every panel stayed on "Pick a session and strike." One request
+was pending in the network panel and never returned:
+`/api/strike-gex-series?mode=meta`. Nothing downstream fires until it answers,
+so the page was dead on arrival.
+
+### The actual cause
+
+The meta query counted every row in the table to produce a 21-row picker list:
+
+```sql
+SELECT date, expiry, COUNT(*)::int AS snaps
+  FROM option_strike_gex_history
+ WHERE symbol = ?
+ GROUP BY date, expiry
+```
+
+`EXPLAIN ANALYZE` on prod: a Parallel Index Only Scan over 3,150,826 index
+entries, **150 seconds**, to return 21 rows. The plan was fine and the index it
+wanted (`idx_osgh_symbol_snap`) existed — the query simply has to visit every
+row to compute `COUNT(*)`.
+
+Two things made that fatal rather than merely slow:
+
+- The pg pool is `max: 5` (`_lib-db.cjs`, Render/VPS connection limits). Two
+  page loads pinned two connections for minutes each. An unrelated
+  `/api/bzila-alerts` took 13.56s in the same trace — collateral damage.
+- The table had reached **2.6GB of index on a 501MB heap**. Daily mass-DELETEs
+  from `pruneOptionStrikeGexHistory` (retention keeps 2 sessions) had bloated
+  the indexes ~5x, so the same plan read the same rows at roughly 1.6MB/s.
+
+### The fix: a loose index scan
+
+`snaps` was never rendered. `StrikeHistory.tsx` labels the picker off
+date/expiry alone, and it was the only reason the query had to touch every row.
+(`StrikeMeta.snaps`, the count in the *strike* dropdown, is a different field
+and is unchanged.)
+
+Dropping it turns the question into "list the distinct (date, expiry) pairs",
+which a recursive CTE answers by walking `idx_osgh_symbol_lookup`
+(symbol, date, expiry, ...) one hop at a time: seed with the newest pair, then
+repeatedly ask for the greatest pair strictly less than the last. Each hop is an
+index descent with `LIMIT 1`. Cost is O(pairs), not O(rows).
+
+The row-comparison `(h.date, h.expiry) < (p.date, p.expiry)` is load-bearing —
+it maps onto the index's own ordering. Rewriting it as
+`date < ? OR (date = ? AND expiry < ?)` loses the range and falls back to a full
+scan.
+
+Measured on a 504k-row fixture with the prod index set:
+
+| | rows visited | buffers | time |
+|---|---|---|---|
+| `GROUP BY` + `COUNT(*)` | 504,000 | full scan | 58.5ms |
+| recursive skip scan | 22 index descents | 73 | **2.1ms** |
+
+Output verified identical: `EXCEPT` in both directions returns 0 rows, 21 pairs
+each. On prod the gap is far wider — the old query scales with table size, the
+new one with the number of sessions retained (~21).
+
+`snaps` is still returned, as `0`, so the client's `DayMeta` shape is intact.
+
+### What was NOT changed, and why
+
+The `mode=series` ATM CTE was the prime suspect — it was caught in
+`pg_stat_activity` at 10m23s, and its `ORDER BY timestamp, ABS(strike - spot)`
+sorts on a computed expression no index can satisfy. Two rewrites were built and
+benchmarked against a prod-shaped session (800 strikes x 600 snapshots,
+work_mem 4MB). **Both were worse:**
+
+| ATM approach | buffers |
+|---|---|
+| current (unchanged) | **11,684** (227ms) |
+| per-timestamp LATERAL, +/-50 strike band | 91,398 |
+| session-wide spot band as an index bound | 24,078 |
+
+The current form wins on heap correlation: `idx_osgh_symbol_snap` is ordered by
+timestamp and rows are INSERTED in timestamp order, so the scan walks the heap
+sequentially (~43 rows/page) and PG13+ turns the sort into an Incremental Sort
+that never spills. The band versions read up to 32x fewer *rows* but drive them
+through a strike-ordered index, hitting ~1 heap page per row.
+
+That finding is now a comment block above the query so the next person doesn't
+re-litigate it. The series query's SQL is byte-identical to before.
+
+### Operational work (no code)
+
+- Cancelled the runaway `WITH atm` backends.
+- `REINDEX TABLE CONCURRENTLY option_strike_gex_history` to reclaim the index
+  bloat. Note: `psql -c "SET statement_timeout=0; REINDEX ..."` fails —
+  multiple statements in one `-c` form an implicit transaction block and
+  `REINDEX CONCURRENTLY` refuses. Use `PGOPTIONS='-c statement_timeout=0'`. A
+  cancelled run leaves invalid `*_ccnew` indexes that must be dropped before
+  retrying.
+- `statement_timeout = 120s` on the role, so no single query can pin a pool slot
+  for minutes again. Long-running backfills should set their own
+  `SET statement_timeout = 0`.
+
+## 2026-08-14 - Owner Dev page: Flow GEX raw calc card fits its numbers
+
+Edited: `owner-vite/src/pages/Dev.tsx`.
+
+### What
+
+The "Flow GEX · raw calc" card on the owner Dev page was squeezed into a
+single narrow column, so every mono number wrapped onto two or three lines
+(`12,951 / 50,612` stacked, `60,789,934` broken up). Unreadable at a glance.
+
+### How
+
+- The card's wrapper was `grid-template-columns: repeat(auto-fill, minmax(360px, 1fr))`
+  with ONE child — auto-fill created full-width tracks and pinned the card to
+  the first ~360px one. Replaced with a plain full-width `div`.
+- Column template changed from fraction units to `minmax(<px>, auto)` so each
+  column is sized to the number it holds instead of an equal share of a too-small
+  box.
+- Header + value cells get `white-space: nowrap` and `font-variant-numeric:
+  tabular-nums`; the table body is wrapped in an `overflow-x: auto` scroller with
+  `min-width: 620` so a narrow viewport scrolls sideways rather than wrapping
+  digits. Column gap 10 → 12.
+
+No calculation or data-path change — layout only.
+
 ## 2026-08-14 - Levels strip: +GEX % sparkline
 
 Edited: `app/home/HomeClient.tsx`.

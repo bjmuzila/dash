@@ -5527,19 +5527,61 @@ if (libDb) {
           // Which (date, expiry) sessions actually have rows. Retention in
           // insertOptionStrikeGexRows prunes to ~2 days, so this list is short
           // by design — do NOT present it as a full history picker.
+          //
+          // This is a LOOSE INDEX SCAN (a.k.a. skip scan), not a GROUP BY, and
+          // the difference is the whole reason the page used to hang.
+          //
+          // The obvious query — `SELECT date, expiry, COUNT(*) … GROUP BY date,
+          // expiry` — has to visit EVERY row to compute the counts. On this
+          // table that is ~3.1M index entries read to produce 21 output rows,
+          // which measured at 150s under load and tripped a 20s
+          // statement_timeout even idle. Since the pool is capped at max:5, two
+          // page loads were enough to starve every other query on the server.
+          //
+          // Instead: walk idx_osgh_symbol_lookup (symbol, date, expiry, …) one
+          // hop at a time. Seed with the newest pair, then repeatedly ask for
+          // the greatest pair strictly less than the last one — each hop is an
+          // index descent with LIMIT 1. Cost is O(number of pairs), not
+          // O(rows): 21 lookups, milliseconds, on the index that already exists.
+          //
+          // The row-comparison `(date, expiry) < (date, expiry)` is what keeps
+          // it sargable — it maps onto the index's own (date, expiry) ordering.
+          // Rewriting it as `date < ? OR (date = ? AND expiry < ?)` would NOT;
+          // the planner loses the range and falls back to a full scan.
+          //
+          // `snaps` is dropped. It was never rendered — StrikeHistory.tsx's
+          // picker labels off date/expiry alone — and it was the entire reason
+          // the old query had to touch every row. StrikeMeta.snaps (the strike
+          // dropdown's count) is a different field and is unaffected.
           if (mode === 'meta') {
             const metaRows = await libDb.queryAll(
-              `SELECT date, expiry, COUNT(*)::int AS snaps
-                 FROM option_strike_gex_history
-                WHERE symbol = ?
-                GROUP BY date, expiry
-                ORDER BY date DESC, expiry ASC`,
-              [symbol]
+              `WITH RECURSIVE pairs AS (
+                 (SELECT date, expiry
+                    FROM option_strike_gex_history
+                   WHERE symbol = ?
+                   ORDER BY date DESC, expiry DESC
+                   LIMIT 1)
+                 UNION ALL
+                 SELECT nxt.date, nxt.expiry
+                   FROM pairs p
+                   CROSS JOIN LATERAL (
+                     SELECT h.date, h.expiry
+                       FROM option_strike_gex_history h
+                      WHERE h.symbol = ?
+                        AND (h.date, h.expiry) < (p.date, p.expiry)
+                      ORDER BY h.date DESC, h.expiry DESC
+                      LIMIT 1
+                   ) nxt
+               )
+               SELECT date, expiry FROM pairs ORDER BY date DESC, expiry ASC`,
+              [symbol, symbol]
             );
             send(res, 200, {
               mode: 'meta', symbol,
+              // snaps is reported as 0 rather than omitted so the DayMeta shape
+              // the client types against stays intact. Nothing reads it.
               days: metaRows.map((r) => ({
-                date: String(r.date), expiry: String(r.expiry), snaps: Number(r.snaps ?? 0),
+                date: String(r.date), expiry: String(r.expiry), snaps: 0,
               })),
             });
             return;
@@ -5577,12 +5619,47 @@ if (libDb) {
           // IV skew needs an ATM reference AT EACH SNAPSHOT, not one for the
           // session: spot moves, so the strike nearest spot changes during the
           // day, and pinning ATM to a single strike would smear that drift into
-          // the skew line. The CTE picks, per timestamp, the strike with the
-          // smallest |strike − spot| — the chosen ATM definition — and takes
-          // the call/put average IV there as the reference.
+          // the skew line. So: per timestamp, the strike with the smallest
+          // |strike − spot| — the chosen ATM definition — and the call/put
+          // average IV there as the reference.
           //
           // Main select is covered by idx_osgh_symbol_lookup
           // (symbol, date, expiry, strike, timestamp DESC).
+          //
+          // ─── DO NOT "optimise" the ATM CTE. Two rewrites measured WORSE. ──
+          //
+          // The ORDER BY on ABS(strike − spot) looks like an obvious problem —
+          // it is a computed expression, so no index can satisfy that sort, and
+          // this query was caught in pg_stat_activity at 10m23s while the page
+          // hung. Both tempting fixes were built and benchmarked against a
+          // prod-shaped session (800 strikes × 600 snapshots, work_mem 4MB).
+          // Buffers read, lower is better:
+          //
+          //   this query, as written .................... 11,684  (227ms)
+          //   per-timestamp LATERAL, ±50 strike band .... 91,398
+          //   session-wide spot band as index bound ..... 24,078
+          //
+          // Why this one wins: idx_osgh_symbol_snap is
+          // (symbol, date, expiry, timestamp) INCLUDE (spot), and rows are
+          // INSERTED in timestamp order — so scanning it walks the heap
+          // sequentially, ~43 rows per page, and PG13+ turns the sort into an
+          // Incremental Sort (presorted on timestamp, quicksort only within
+          // each timestamp group — 68kB peak, never spills).
+          //
+          // Both alternatives lose on heap correlation, not on row count. The
+          // band version reads 32× fewer ROWS but drives them through
+          // idx_osgh_symbol_lookup, which is ordered by STRIKE — consecutive
+          // index entries then point at scattered heap pages, ~1 page per row,
+          // and it needs two extra full scans for the min/max spot bounds.
+          //
+          // So when this query is slow in prod, it is NOT the plan. Check, in
+          // order: (1) index bloat — this table takes daily mass-DELETEs from
+          // pruneOptionStrikeGexHistory and reached 2.6GB of index on a 501MB
+          // heap, at which point the same plan read the same rows at ~1.6MB/s;
+          // (2) whether autovacuum is keeping up; (3) statement_timeout, which
+          // is what stops one slow run from pinning a pool slot (the pool is
+          // max:5, so ~two of these were enough to starve the whole server and
+          // hang even the cheap mode=meta call above).
           const seriesRows = await libDb.queryAll(
             `WITH atm AS (
                SELECT DISTINCT ON (timestamp)

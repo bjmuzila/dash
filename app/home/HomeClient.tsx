@@ -7,7 +7,7 @@ import FlowNetPremPanel from "@/components/dashboard/FlowNetPremPanel";
 import WhaleOrdersPanel from "@/components/dashboard/WhaleOrdersPanel";
 import GreeksHomePanel from "@/components/dashboard/GreeksHomePanel";
 import GexPulsePanel from "@/components/dashboard/GexPulsePanel";
-import VolGexFlowPanel from "@/components/dashboard/VolGexFlowPanel";
+import VolGexFlowPanel, { type PosGexPoint } from "@/components/dashboard/VolGexFlowPanel";
 import IbStatsTab from "@/components/scanner/IbStatsTab";
 // The GEX card's "ES Candles" view reuses the exact standalone /es-candles page
 // (same pattern as the Chain tab reusing /options-chain below) rather than the
@@ -264,86 +264,24 @@ function formatStrikeValue(value: number): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// +GEX % sparkline
+// +GEX % session series
 //
 // The Levels strip's "+GEX %" tile is point-in-time: 63% says the 0DTE chain is
 // long-gamma right now, but not whether it climbed there from 40 or bled down
-// from 80 — and that path is the part that trades. This draws the same number's
-// session history underneath the value. Click the tile to hide/show it.
+// from 80 — and that path is the part that trades. This collects the same
+// number through the session; the Vol GEX Flow tab overlays it on its chart.
 //
-// Sampled CLIENT-SIDE, on a timer, off the live chain the chart already holds.
-// A server series would only re-derive a number this tab computes every frame,
-// and would need a new proxy route to carry it. Persisted to sessionStorage
-// under today's ET date, so a refresh keeps the curve and tomorrow starts clean.
-//
-// The domain always includes 50 so the split fill stays honest on a quiet day:
-// a chain that never leaves 60–64 draws a line sitting clearly above the midline
-// rather than a full-height squiggle that reads as a regime change.
+// Sampled client-side because posGexPct is already computed here every frame
+// off the live chain — a history endpoint would only re-derive what this page
+// already has, and would need a new proxy route to carry it.
 // ─────────────────────────────────────────────────────────────────────────────
-const POSGEX_SPARK_MS = 20_000;  // one sample / 20s → ~1,170 over a full RTH day
-const POSGEX_SPARK_MAX = 1200;   // hard cap, oldest dropped first
-const POSGEX_SPARK_KEY = "cbedge.posGexPctSpark";
-const POSGEX_SPARK_ON_KEY = "cbedge.posGexPctSparkOn";
+const POSGEX_SERIES_MS = 20_000;  // one sample / 20s → ~1,170 over a full RTH day
+const POSGEX_SERIES_MAX = 1200;   // hard cap, oldest dropped first
+const POSGEX_SERIES_KEY = "cbedge.posGexPctSeries";
 
-type SparkPoint = { t: number; v: number };
-
-function PosGexSpark({
-  points,
-  width = 66,
-  height = 17,
-}: {
-  points: SparkPoint[];
-  width?: number;
-  height?: number;
-}) {
-  // useId, not a render index — two tiles emitting the same clip id would let
-  // one steal the other's clip region.
-  const uid = React.useId().replace(/:/g, "");
-
-  const geom = useMemo(() => {
-    if (points.length < 2) return null;
-    const vals = points.map((p) => p.v);
-    const lo = Math.min(50, ...vals) - 2;
-    const hi = Math.max(50, ...vals) + 2;
-    const span = hi - lo || 1;
-    const px = (i: number) => (i / (points.length - 1)) * width;
-    const py = (v: number) => height - ((v - lo) / span) * height;
-    const d = vals.map((v, i) => `${i ? "L" : "M"}${px(i).toFixed(2)},${py(v).toFixed(2)}`).join(" ");
-    const lastV = vals[vals.length - 1];
-    return { d, mid: py(50), lastY: py(lastV), lastV };
-  }, [points, width, height]);
-
-  // Reserve the row even before there are two samples, so the tile doesn't grow
-  // a few seconds after the strip first paints and shove the row below it down.
-  if (!geom) return <div style={{ width, height }} />;
-
-  const area = `${geom.d} L${width},${geom.mid} L0,${geom.mid} Z`;
-
-  return (
-    <svg
-      width={width}
-      height={height}
-      viewBox={`0 0 ${width} ${height}`}
-      style={{ display: "block", overflow: "visible" }}
-      aria-hidden="true"
-    >
-      <defs>
-        <clipPath id={`${uid}-up`}>
-          <rect x="0" y="0" width={width} height={Math.max(0, geom.mid)} />
-        </clipPath>
-        <clipPath id={`${uid}-dn`}>
-          <rect x="0" y={geom.mid} width={width} height={Math.max(0, height - geom.mid)} />
-        </clipPath>
-      </defs>
-      <path d={area} fill={HOME_THEME.green} opacity={0.18} clipPath={`url(#${uid}-up)`} />
-      <path d={area} fill={HOME_THEME.red} opacity={0.18} clipPath={`url(#${uid}-dn)`} />
-      <line x1={0} x2={width} y1={geom.mid} y2={geom.mid} stroke="rgba(255,255,255,0.28)" strokeWidth={1} strokeDasharray="2 3" />
-      <path d={geom.d} fill="none" stroke={HOME_THEME.green} strokeWidth={1.4} clipPath={`url(#${uid}-up)`} />
-      <path d={geom.d} fill="none" stroke={HOME_THEME.red} strokeWidth={1.4} clipPath={`url(#${uid}-dn)`} />
-      <circle cx={width} cy={geom.lastY} r={1.8} fill={geom.lastV >= 50 ? HOME_THEME.green : HOME_THEME.red} />
-    </svg>
-  );
-}
+// Point shape is owned by the consumer (VolGexFlowPanel) — `t` is UNIX SECONDS,
+// matching lightweight-charts' UTCTimestamp, so the overlay hands this list
+// straight to setData() with no remapping.
 
 
 // Today in ET as yyyy-mm-dd. Matches the server's todayYmd() convention so the
@@ -1546,28 +1484,34 @@ export function HomeClient({
     return abs > 0 ? (pos / abs) * 100 : null;
   }, [chartRows, chartSpot]);
 
-  // ── +GEX % session series (drives the tile's sparkline) ──────────────────
-  // Sampled on a fixed timer off a ref rather than in an effect keyed on
-  // posGexPct: on a quiet chain that value can sit unchanged for minutes, and a
-  // value-keyed effect would record nothing at all over that stretch — the flat
-  // part of the curve is exactly the part that has to be there.
-  const [posGexSpark, setPosGexSpark] = useState<SparkPoint[]>([]);
-  const [showGexSpark, setShowGexSpark] = useState(true);
+  // ── +GEX % session series → the Vol GEX Flow tab's overlay ───────────────
+  // Sampled HERE rather than inside VolGexFlowPanel because the panel only
+  // mounts while its tab is showing: sampling there would leave a hole in the
+  // curve for every minute the user spent on Economic Calendar or Whale. This
+  // component is mounted for the whole session, so the series stays continuous
+  // no matter which tab is up.
+  //
+  // Timer-driven off a ref, not an effect keyed on posGexPct: on a quiet chain
+  // that value can sit unchanged for minutes, and a value-keyed effect would
+  // record nothing across the stretch — the flat part of the curve is exactly
+  // the part that has to be there.
+  //
+  // No server round trip and no proxy change: posGexPct is already derived every
+  // frame from the live chain the chart holds.
+  const [posGexSeries, setPosGexSeries] = useState<PosGexPoint[]>([]);
   const posGexPctRef = useRef<number | null>(null);
   useEffect(() => { posGexPctRef.current = posGexPct; }, [posGexPct]);
 
-  // Rehydrate today's curve once. A stored series from a previous ET date is
+  // Rehydrate today's curve once. A stored series from an earlier ET date is
   // dropped rather than appended to — yesterday's positioning is a different
-  // chain and would draw a fictional overnight move into the line.
+  // chain, and joining them draws a fictional overnight move into the line.
   useEffect(() => {
     try {
-      const on = sessionStorage.getItem(POSGEX_SPARK_ON_KEY);
-      if (on === "0") setShowGexSpark(false);
-      const raw = sessionStorage.getItem(POSGEX_SPARK_KEY);
+      const raw = sessionStorage.getItem(POSGEX_SERIES_KEY);
       if (!raw) return;
-      const saved = JSON.parse(raw) as { ymd?: string; pts?: SparkPoint[] };
+      const saved = JSON.parse(raw) as { ymd?: string; pts?: PosGexPoint[] };
       if (saved?.ymd === etYmdToday() && Array.isArray(saved.pts)) {
-        setPosGexSpark(saved.pts.slice(-POSGEX_SPARK_MAX));
+        setPosGexSeries(saved.pts.slice(-POSGEX_SERIES_MAX));
       }
     } catch { /* private mode / quota — the series just starts empty */ }
   }, []);
@@ -1576,17 +1520,21 @@ export function HomeClient({
     const sample = () => {
       const v = posGexPctRef.current;
       if (v == null || !Number.isFinite(v)) return;
-      setPosGexSpark((cur) => {
-        const next = cur.concat({ t: Date.now(), v });
-        if (next.length > POSGEX_SPARK_MAX) next.splice(0, next.length - POSGEX_SPARK_MAX);
+      setPosGexSeries((cur) => {
+        // Whole seconds: lightweight-charts keys points by time and rejects a
+        // series with duplicates, and the overlay consumes this list directly.
+        const t = Math.floor(Date.now() / 1000);
+        if (cur.length && cur[cur.length - 1].t === t) return cur;
+        const next = cur.concat({ t, v });
+        if (next.length > POSGEX_SERIES_MAX) next.splice(0, next.length - POSGEX_SERIES_MAX);
         try {
-          sessionStorage.setItem(POSGEX_SPARK_KEY, JSON.stringify({ ymd: etYmdToday(), pts: next }));
+          sessionStorage.setItem(POSGEX_SERIES_KEY, JSON.stringify({ ymd: etYmdToday(), pts: next }));
         } catch { /* quota — keep the in-memory series either way */ }
         return next;
       });
     };
     sample();
-    const id = setInterval(sample, POSGEX_SPARK_MS);
+    const id = setInterval(sample, POSGEX_SERIES_MS);
     return () => clearInterval(id);
   }, []);
 
@@ -1953,7 +1901,7 @@ export function HomeClient({
                   chart. (Pop-up alerts will hook off these tiles later.) */}
               {gexView === "gex" && (
               <div style={{ display: "flex", justifyContent: "flex-end", flexWrap: "wrap", gap: 6, padding: "0 10px 6px", flexShrink: 0 }}>
-                {([
+                {[
                   { label: "Net GEX",   value: fmtMoneyB(netGex), color: netGex >= 0 ? C.green : C.red },
                   { label: "Call Wall", value: (callWallOiVol ?? callWall) != null ? formatStrikeValue((callWallOiVol ?? callWall)!) : "—", color: C.green },
                   { label: "Put Wall",  value: (putWallOiVol ?? putWall) != null ? formatStrikeValue((putWallOiVol ?? putWall)!) : "—", color: C.red },
@@ -1962,42 +1910,12 @@ export function HomeClient({
                   { label: "Max Pain",  value: maxPainStrike != null ? formatStrikeValue(maxPainStrike) : "—", color: C.cyan },
                   { label: "+1σ (EM)",  value: emLevels.up != null ? formatStrikeValue(emLevels.up) : "—", color: C.green },
                   { label: "−1σ (EM)",  value: emLevels.down != null ? formatStrikeValue(emLevels.down) : "—", color: C.red },
-                  {
-                    label: "+GEX %",
-                    value: posGexPct != null ? `${posGexPct.toFixed(0)}%` : "—",
-                    color: posGexPct == null ? C.cyan : posGexPct >= 50 ? C.green : C.red,
-                    // The tile IS the switcher — the Levels strip is already ten
-                    // tiles wide, and a dedicated toggle button would cost a
-                    // slot for a control that gets used twice a day.
-                    spark: showGexSpark ? <PosGexSpark points={posGexSpark} /> : null,
-                    onClick: () => {
-                      setShowGexSpark((v) => {
-                        try { sessionStorage.setItem(POSGEX_SPARK_ON_KEY, v ? "0" : "1"); } catch {}
-                        return !v;
-                      });
-                    },
-                    title: showGexSpark
-                      ? "+GEX % — click to hide the session sparkline"
-                      : "+GEX % — click to show the session sparkline",
-                  },
+                  { label: "+GEX %",    value: posGexPct != null ? `${posGexPct.toFixed(0)}%` : "—", color: posGexPct == null ? C.cyan : posGexPct >= 50 ? C.green : C.red },
                   { label: "Bull/Bear", value: flowBull != null ? `${flowBull} / ${100 - flowBull}` : "—", color: flowBull == null ? C.cyan : flowBull >= 50 ? C.green : C.red },
-                ] as {
-                  label: string;
-                  value: string;
-                  color: string;
-                  spark?: React.ReactNode;
-                  onClick?: () => void;
-                  title?: string;
-                }[]).map((t) => (
-                  <div
-                    key={t.label}
-                    onClick={t.onClick}
-                    title={t.title}
-                    style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, background: "rgba(13,17,25,0.35)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "3px 10px", minWidth: 64, cursor: t.onClick ? "pointer" : undefined }}
-                  >
+                ].map((t) => (
+                  <div key={t.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, background: "rgba(13,17,25,0.35)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "3px 10px", minWidth: 64 }}>
                     <span style={{ fontSize: 10, color: "rgba(255,255,255,0.75)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>{t.label}</span>
                     <span style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 800, color: t.color }}>{t.value}</span>
-                    {t.spark}
                   </div>
                 ))}
               </div>
@@ -2102,7 +2020,7 @@ export function HomeClient({
                 )}
                 {activeTab === "volgex" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
-                    <VolGexFlowPanel />
+                    <VolGexFlowPanel posGexSeries={posGexSeries} />
                   </div>
                 )}
                 {activeTab === "flow" && (
