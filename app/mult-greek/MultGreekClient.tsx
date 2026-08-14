@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
@@ -38,6 +38,60 @@ const CUSTOM_TICKER_KEY = "mg_custom_ticker";
 // (see EX0_KEY / withEx0Column) that the 4th expiry's data feeds into.
 const MAX_EXP_COLS = 4;
 
+// ── Replay mode ───────────────────────────────────────────────────────────────
+// Rewinds ALL FOUR PANELS AT ONCE off one shared clock: every cell renders from
+// a recorded strike_growth sweep instead of the live chain, so the columns,
+// heat scales, totals, walls and CB/CW/PW markers all follow — the panels take
+// a replay-built ComputedResult in place of the live one rather than painting
+// an overlay on top of live numbers.
+//
+// What that costs, stated here because it shapes the whole UI below:
+//   • strike_growth records only the top N strikes per side per expiry per
+//     sweep. It is a record of the WALLS, not of the whole chain — a strike
+//     that was never a wall has no history, and renders blank.
+//   • Only GEX is recorded, as (gex_now + gex_open) and (gex_now). Those are
+//     the OI+VOL and VOL bases; there is no OI-only series, so the OI basis
+//     falls back to OI+VOL and the replay bar says so.
+//   • Cadence is the recorder's sweep (2 min hot lane / 5 min full roster) and
+//     retention is ~5 trading days.
+//   • Live-only readouts are switched off while rewound: Δ stamps (their
+//     baselines come from a live grid) and the EM bands (this week's EM, not
+//     the replayed session's).
+const MG_REPLAY_SPEEDS = [0.5, 1, 2, 4, 8] as const;
+const MG_REPLAY_BASE_MS = 700; // frame interval at 1× — matches ChainReplay
+
+/** One recorded sweep for ONE ticker. `cells` is `${expiry}|${strike}` → GEX. */
+interface MgReplayFrame {
+  /** ISO timestamp of the sweep. */
+  ts: string;
+  /** Epoch ms of `ts`, precomputed — the timeline merge compares it per step. */
+  t: number;
+  spot: number;
+  cells: Map<string, { net: number; vol: number }>;
+  /** The expiries THIS sweep carried — the front one can roll intraday. */
+  expiries: string[];
+}
+
+/** The whole loaded session for one ticker: frames + the axes they span. */
+interface MgReplaySession {
+  frames: MgReplayFrame[];
+  /** Every strike recorded in ANY frame, ascending — the panel's fixed ladder. */
+  strikes: number[];
+  /** Every expiry recorded in ANY frame, ascending. */
+  expiries: string[];
+}
+
+/** Snap an epoch ms to its minute — the shared clock's resolution. */
+function minuteBucket(ms: number): number { return Math.floor(ms / 60_000) * 60_000; }
+
+function fmtReplayClock(ms: number): string {
+  try {
+    return new Date(ms).toLocaleTimeString("en-US", {
+      timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+    });
+  } catch { return String(ms); }
+}
+
 // EM/2xEM row badge, rasterized as an inline SVG data URI rather than live DOM
 // text. html2canvas is unreliable rasterizing text this small (7px) — it was
 // rendering fine live but vanishing from every screenshot/Discord capture
@@ -52,6 +106,17 @@ function emBadgeDataUri(label: "EM" | "2× EM"): string {
   const uri = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
   emBadgeCache.set(label, uri);
   return uri;
+}
+
+/** Replay-bar transport button — the dock's button language, at bar scale. */
+function mgTransportBtn(active: boolean): CSSProperties {
+  return {
+    height: 24, padding: "0 8px", borderRadius: 6, cursor: "pointer",
+    fontSize: 11, fontWeight: 800, fontFamily: "inherit", lineHeight: 1,
+    color: active ? "#0b0f1a" : HT.text,
+    background: active ? HT.orange : "rgba(255,255,255,0.05)",
+    border: `1px solid ${active ? HT.orange : HT.border}`,
+  };
 }
 
 // Softer than pure #ffffff — the bright white value text was harsh on the dark
@@ -209,8 +274,14 @@ function metricBg(value: number, maxValue: number, topRank: number, intensity: n
 }
 
 // Compact column-header label for an expiry: "0DTE" over "MM-DD".
-function colLabel(date: string): { dte: string; md: string } {
-  const dt = daysTo(date);
+// `base` = the session the DTE is counted FROM. Live columns count from today
+// (the default); a replayed column has to count from the session being replayed
+// or every rewound header is labelled with today's DTE — and the "0DTE" column,
+// which is the one the ex-0DTE total excludes, would be the wrong one.
+function colLabel(date: string, base?: string | null): { dte: string; md: string } {
+  const dt = base
+    ? Math.round((new Date(`${date}T12:00:00Z`).getTime() - new Date(`${base}T12:00:00Z`).getTime()) / 86400000)
+    : daysTo(date);
   return { dte: `${dt}DTE`, md: date.slice(5) };
 }
 
@@ -325,17 +396,34 @@ function computeRows(
     return { strike, isATM: strike === atmStrike, gex };
   });
 
+  return { rows: out, cols, atmStrike, ...columnStats(out, cols) };
+}
+
+// Per-column shading maxima / top-3 / top-5-per-side / peak, for a set of rows
+// that already carry their per-column NET GEX.
+//
+// Extracted so the LIVE path (computeRows, above) and the REPLAY path
+// (computeReplayRows, below) cannot drift: "top 5 each side", the heat
+// denominator and the Core Bullseye pick are one implementation, and a rewound
+// panel ranks and shades by exactly the rule the live one does.
+function columnStats(
+  rows: ComputedRow[],
+  cols: string[],
+): Pick<ComputedResult, "maxAbs" | "top3" | "top5PerSide" | "mvcStrike"> {
   const maxAbs: Record<string, number> = {};
   const top3: Record<string, Record<number, number>> = {};
   const top5PerSide: Record<string, Record<number, number>> = {};
   const mvcStrike: Record<string, number | null> = {};
   cols.forEach(e => {
+    // Unrecorded cells are `undefined` (replay renders those blank), so every
+    // read here goes through `|| 0` — an absent strike must not rank or shade.
+    const g = (r: ComputedRow) => r.gex[e] || 0;
     let mx = 1;
-    out.forEach(r => { const a = Math.abs(r.gex[e]); if (a > mx) mx = a; });
+    rows.forEach(r => { const a = Math.abs(g(r)); if (a > mx) mx = a; });
     maxAbs[e] = mx;
 
     const ranks: Record<number, number> = {};
-    [...out].sort((a, b) => Math.abs(b.gex[e]) - Math.abs(a.gex[e]))
+    [...rows].sort((a, b) => Math.abs(g(b)) - Math.abs(g(a)))
       .slice(0, 3)
       .forEach((row, idx) => { ranks[row.strike] = idx + 1; });
     top3[e] = ranks;
@@ -343,21 +431,66 @@ function computeRows(
     // Top 5 each side, by |GEX| within the sign — same rule the home heatmap
     // uses for its rank badges, so "top 5" means the same thing on both pages.
     const side: Record<number, number> = {};
-    [...out].filter(r => r.gex[e] > 0)
-      .sort((a, b) => Math.abs(b.gex[e]) - Math.abs(a.gex[e])).slice(0, 5)
+    [...rows].filter(r => g(r) > 0)
+      .sort((a, b) => Math.abs(g(b)) - Math.abs(g(a))).slice(0, 5)
       .forEach((row, idx) => { side[row.strike] = idx + 1; });
-    [...out].filter(r => r.gex[e] < 0)
-      .sort((a, b) => Math.abs(b.gex[e]) - Math.abs(a.gex[e])).slice(0, 5)
+    [...rows].filter(r => g(r) < 0)
+      .sort((a, b) => Math.abs(g(b)) - Math.abs(g(a))).slice(0, 5)
       .forEach((row, idx) => { if (side[row.strike] == null) side[row.strike] = idx + 1; });
     top5PerSide[e] = side;
 
     // Core Bullseye per column = strike with the highest ABSOLUTE net GEX.
     let peak: number | null = null, peakAbs = 0;
-    out.forEach(r => { const a = Math.abs(r.gex[e]); if (a > peakAbs) { peakAbs = a; peak = r.strike; } });
+    rows.forEach(r => { const a = Math.abs(g(r)); if (a > peakAbs) { peakAbs = a; peak = r.strike; } });
     mvcStrike[e] = peak;
   });
+  return { maxAbs, top3, top5PerSide, mvcStrike };
+}
 
-  return { rows: out, cols, maxAbs, top3, top5PerSide, atmStrike, mvcStrike };
+// Compute one panel's rows for a REPLAY frame — the same ComputedResult shape
+// computeRows returns, so everything downstream (ex-0DTE total, walls, capture
+// trim, the grid itself) is untouched by replay.
+//
+// Two differences from the live path, both deliberate:
+//   • The strike ladder is the SESSION's, not the frame's. The recorder stores
+//     the top N strikes a side PER SWEEP, so frame-built rows would gain and
+//     lose rows on every step and the ladder would shake under the reader.
+//     Fixed for the session, it is one ladder with values changing on it.
+//   • A strike this sweep didn't record is left `undefined`, not 0 — the grid
+//     already renders that as "--". Zero would read as "no gamma here", which
+//     is a different claim from "not recorded at this moment".
+function computeReplayRows(
+  frame: MgReplayFrame,
+  cols: string[],
+  sessionStrikes: number[],
+  contractMode: ContractMode,
+): ComputedResult {
+  // No OI-only series is recorded (see the MG_REPLAY block) — OI falls back to
+  // the OI+VOL basis, which the replay bar states rather than leaving to be
+  // discovered.
+  const basis: "net" | "vol" = contractMode === "vol" ? "vol" : "net";
+  const spot = frame.spot;
+
+  const allStrikes = [...sessionStrikes].sort((a, b) => b - a); // desc, as live
+  let atmStrike = 0;
+  if (spot > 0 && allStrikes.length) {
+    let minDist = Infinity;
+    allStrikes.forEach(s => {
+      const d = Math.abs(s - spot);
+      if (d < minDist) { minDist = d; atmStrike = s; }
+    });
+  }
+
+  const rows: ComputedRow[] = allStrikes.map(strike => {
+    const gex: Record<string, number> = {};
+    cols.forEach(e => {
+      const cell = frame.cells.get(`${e}|${strike}`);
+      if (cell) gex[e] = basis === "vol" ? cell.vol : cell.net;
+    });
+    return { strike, isATM: strike === atmStrike, gex };
+  });
+
+  return { rows, cols, atmStrike, ...columnStats(rows, cols) };
 }
 
 interface Walls {
@@ -488,6 +621,7 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
 function TickerPanel({
   ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
   showCB, showCW, showPW, getGexChange, deltaWindow, onExpandChain,
+  replayFrame = null, replayStrikes = null, dteBase = null,
 }: {
   ticker: Ticker;
   /** Per-expiry strike rows for this ticker. */
@@ -514,6 +648,14 @@ function TickerPanel({
   deltaWindow: DeltaWindow;
   /** Double-click on the panel header → open this ticker's full-screen chain. */
   onExpandChain: (ticker: Ticker) => void;
+  /** Replay: the recorded sweep to render instead of the live chain. Null = live.
+   *  The panel keys off the FRAME, never off the page's replay toggle — a ticker
+   *  with no recorded history shows its empty state rather than a blank grid. */
+  replayFrame?: MgReplayFrame | null;
+  /** Replay: the session's fixed strike ladder (see computeReplayRows). */
+  replayStrikes?: number[] | null;
+  /** Replay: the session date the column DTE labels count from (see colLabel). */
+  dteBase?: string | null;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
@@ -567,10 +709,19 @@ function TickerPanel({
       : `64px ${cols.map(() => "1fr").join(" ")}`
   ).trim() || "64px";
 
-  const hasData = cols.length > 0 && cols.some(c => (strikesByExp[c.date]?.length ?? 0) > 0);
-  const computedFull = hasData
-    ? computeRows(strikesByExp, colDates, liveData, spot, contractMode)
-    : null;
+  // Replay swaps the SOURCE of the rows and nothing else. Everything below —
+  // the ex-0DTE total, the walls, the capture trim, the grid — reads the same
+  // ComputedResult either way, so there is no second rendering path to keep in
+  // sync with the live one.
+  const isReplay = !!replayFrame;
+  const hasData = isReplay
+    ? cols.length > 0 && (replayStrikes?.length ?? 0) > 0
+    : cols.length > 0 && cols.some(c => (strikesByExp[c.date]?.length ?? 0) > 0);
+  const computedFull = !hasData
+    ? null
+    : (replayFrame
+        ? computeReplayRows(replayFrame, colDates, replayStrikes ?? [], contractMode)
+        : computeRows(strikesByExp, colDates, liveData, spot, contractMode));
 
   // Swap the 4th expiry column for the synthetic ex-0DTE TOTAL when a full set
   // of columns is present. Every fetched expiration except 0DTE feeds the sum
@@ -586,7 +737,7 @@ function TickerPanel({
   // for the ex-0DTE TOTAL, mirroring computed.cols when data is present.
   const displayCols: { date: string; label: { dte: string; md: string } }[] =
     (showEx0 ? cols.slice(0, MAX_EXP_COLS - 1) : cols)
-      .map(c => ({ date: c.date, label: colLabel(c.date) }))
+      .map(c => ({ date: c.date, label: colLabel(c.date, dteBase) }))
       .concat(showEx0 ? [{ date: EX0_KEY, label: { dte: "ALL", md: "EX-0DTE" } }] : []);
 
   // CB / CW / PW levels for the FRONT expiry — shown in the header and marked in
@@ -858,7 +1009,7 @@ function TickerPanel({
       <div ref={bodyRef} style={{ flex: isCapturing ? "0 0 auto" : 1, overflowY: isCapturing ? "visible" : "auto", minHeight: 0 }}>
         {!computed ? (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 80, fontSize: 12, color: "#475569", }}>
-            Select an expiry and click GO
+            {isReplay ? `No recorded sweeps for ${ticker} this session` : "Select an expiry and click GO"}
           </div>
         ) : computed.rows.length === 0 ? (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 80, fontSize: 12, color: "#475569", }}>
@@ -926,7 +1077,7 @@ function TickerPanel({
                 const isEx0Col = e === EX0_KEY;
                 return (
                   <div key={e} data-gexcell="1" className={isCB ? "mvc-peak-cell" : undefined}
-                    onClick={(isCapturing || isEx0Col) ? undefined : (ev) => {
+                    onClick={(isCapturing || isEx0Col || isReplay) ? undefined : (ev) => {
                       ev.stopPropagation();
                       setClickCell(prev => (prev && prev.strike === r.strike && prev.expiry === e)
                         ? null
@@ -935,7 +1086,10 @@ function TickerPanel({
                     style={{
                     padding: "4px 4px", fontSize: 9, fontFamily: "var(--font-mono)",
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                    textAlign: "center", color: SOFT_WHITE, cursor: (isCapturing || isEx0Col) ? "default" : "pointer",
+                    // The click card reads LIVE 15m/30m/open baselines, which
+                    // say nothing about a rewound clock — so replay cells are
+                    // not clickable rather than opening a card about now.
+                    textAlign: "center", color: SOFT_WHITE, cursor: (isCapturing || isEx0Col || isReplay) ? "default" : "pointer",
                     ...(dMode ? { display: "flex", alignItems: "center", gap: 4, minHeight: 23 } : {}),
                     background: val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity),
                     fontWeight: weight,
@@ -1178,6 +1332,191 @@ export function MultGreekClient({
     });
     return out;
   }, [expByTicker, expirations, activeExpiry, selectedExpiry, TICKERS]);
+
+  // ── Replay: one clock, all four panels ─────────────────────────────────────
+  // See the MG_REPLAY block at the top of this file for what is and isn't
+  // recorded. `replayOn` is the user's INTENT; each panel keys off ITS OWN
+  // frame, so a ticker with nothing recorded shows an empty panel beside three
+  // that play, instead of the page refusing to enter replay at all.
+  const [replayOn, setReplayOn] = useState(false);
+  const [replayDates, setReplayDates] = useState<string[]>([]);
+  const [replayDate, setReplayDate] = useState("");
+  const [replaySessions, setReplaySessions] = useState<Record<string, MgReplaySession>>({});
+  const [replayIdx, setReplayIdx] = useState(0);
+  const [replayPlaying, setReplayPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState<number>(1);
+  const [replayLoading, setReplayLoading] = useState(false);
+  const [replayErr, setReplayErr] = useState("");
+
+  // Leaving replay — or changing the panel line-up (the 4th ticker slot) —
+  // drops the loaded session so the next entry can't paint one ticker set's
+  // frames under another's labels.
+  useEffect(() => {
+    setReplaySessions({}); setReplayIdx(0); setReplayPlaying(false); setReplayErr("");
+  }, [replayOn, TICKERS]);
+
+  // Which sessions are replay-able. Retention is ~5 trading days, so this list
+  // is short by design — it is a rewind, not a history browser.
+  useEffect(() => {
+    if (!replayOn) return;
+    let cancelled = false;
+    (async () => {
+      const lists = await Promise.all(TICKERS.map(async (t) => {
+        try {
+          const r = await fetch(`/proxy/strike-growth/replay-meta?symbol=${encodeURIComponent(t)}`, { cache: "no-store" });
+          const j = await r.json().catch(() => null);
+          return Array.isArray(j?.dates) ? j.dates.map((d: unknown) => String(d).slice(0, 10)) : [];
+        } catch { return [] as string[]; }
+      }));
+      if (cancelled) return;
+      // UNION, not intersection. A session SPX recorded and the 4th ticker
+      // didn't is still worth replaying: three panels play and the fourth says
+      // it has nothing. Intersecting would hide the day entirely.
+      const ds = [...new Set(lists.flat())].sort().reverse();
+      setReplayDates(ds);
+      setReplayDate((cur) => (cur && ds.includes(cur) ? cur : ds[0] ?? ""));
+      if (!ds.length) setReplayErr("No recorded sessions for these tickers.");
+    })();
+    return () => { cancelled = true; };
+  }, [replayOn, TICKERS]);
+
+  // The frames. One request per (ticker, session) — the whole day is pulled up
+  // front so scrubbing is instant and never re-hits the network mid-drag.
+  useEffect(() => {
+    if (!replayOn || !replayDate) return;
+    let cancelled = false;
+    // Drop the previous session immediately: holding it while the new day loads
+    // would render one date's grid under another date's label.
+    setReplaySessions({}); setReplayIdx(0);
+    setReplayLoading(true); setReplayErr(""); setReplayPlaying(false);
+    (async () => {
+      const entries = await Promise.all(TICKERS.map(async (t) => {
+        try {
+          const r = await fetch(
+            `/proxy/strike-growth/frames-by-expiry?symbol=${encodeURIComponent(t)}&date=${encodeURIComponent(replayDate)}`,
+            { cache: "no-store" },
+          );
+          const j = await r.json().catch(() => null);
+          if (!j?.ok || !Array.isArray(j.frames) || !j.frames.length) return [t, null] as const;
+          // Payload is positional (`cells: [expiryIdx, strike, net, vol]`) with
+          // `expiries` as the index table — see the route's comment for why.
+          const expiries: string[] = Array.isArray(j.expiries) ? j.expiries.map(String) : [];
+          const strikeSet = new Set<number>();
+          const expSet = new Set<string>();
+          const frames: MgReplayFrame[] = (j.frames as { ts?: unknown; spot?: unknown; cells?: unknown }[]).map((f) => {
+            const cells = new Map<string, { net: number; vol: number }>();
+            const seen = new Set<string>();
+            for (const c of ((f.cells ?? []) as number[][])) {
+              const exp = expiries[Number(c[0])];
+              const strike = Number(c[1]);
+              if (!exp || !Number.isFinite(strike)) continue;
+              seen.add(exp); expSet.add(exp); strikeSet.add(strike);
+              cells.set(`${exp}|${strike}`, { net: Number(c[2]) || 0, vol: Number(c[3]) || 0 });
+            }
+            const ts = String(f.ts);
+            return {
+              ts, t: new Date(ts).getTime(), spot: Number(f.spot) || 0, cells,
+              expiries: expiries.filter((e) => seen.has(e)),
+            };
+          }).filter((f) => Number.isFinite(f.t));
+          frames.sort((a, b) => a.t - b.t);
+          if (!frames.length) return [t, null] as const;
+          return [t, {
+            frames,
+            strikes: [...strikeSet].sort((a, b) => a - b),
+            expiries: [...expSet].sort(),
+          } as MgReplaySession] as const;
+        } catch { return [t, null] as const; }
+      }));
+      if (cancelled) return;
+      const out: Record<string, MgReplaySession> = {};
+      entries.forEach(([t, s]) => { if (s) out[t] = s; });
+      setReplaySessions(out);
+      setReplayLoading(false);
+      if (!Object.keys(out).length) setReplayErr(`No recorded frames on ${replayDate}.`);
+    })();
+    return () => { cancelled = true; };
+  }, [replayOn, replayDate, TICKERS]);
+
+  // ── The shared clock ───────────────────────────────────────────────────────
+  // The recorder sweeps tickers on different lanes (2 min hot / 5 min full), so
+  // their timestamps do NOT line up. One slider over the raw union would be
+  // four interleaved timelines where each step moves one panel and freezes the
+  // other three. Snapping to the minute collapses that into one readable clock:
+  // ~one step per minute of the session, every panel advancing together.
+  const replayTimeline = useMemo<number[]>(() => {
+    const set = new Set<number>();
+    Object.values(replaySessions).forEach((s) => s.frames.forEach((f) => set.add(minuteBucket(f.t))));
+    return [...set].sort((a, b) => a - b);
+  }, [replaySessions]);
+
+  // Land on the LAST step when a session loads: entering replay from a live
+  // page, the nearest thing to what was just on screen is the newest sweep.
+  useEffect(() => { setReplayIdx(Math.max(0, replayTimeline.length - 1)); }, [replayTimeline]);
+
+  const replayClock = replayTimeline.length
+    ? replayTimeline[Math.min(replayIdx, replayTimeline.length - 1)]
+    : null;
+
+  /** Each ticker's last sweep AT OR BEFORE the shared clock. */
+  const replayFrameByTicker = useMemo<Record<string, MgReplayFrame | null>>(() => {
+    const out: Record<string, MgReplayFrame | null> = {};
+    if (replayClock == null) return out;
+    // Step-HOLD, not nearest: a panel shows the most recent state recorded as of
+    // the clock. Snapping to the nearest sweep would let a panel show a reading
+    // from the future relative to the clock beside it.
+    const cutoff = replayClock + 59_999;
+    Object.entries(replaySessions).forEach(([t, s]) => {
+      let pick: MgReplayFrame | null = null;
+      for (const f of s.frames) { if (f.t <= cutoff) pick = f; else break; }
+      out[t] = pick;
+    });
+    return out;
+  }, [replaySessions, replayClock]);
+
+  // Replay column expiries per ticker — the session's own, front → back, with
+  // DTE counted from the replayed date (see colLabel).
+  const replayColsByTicker = useMemo<Record<string, Expiry[]>>(() => {
+    const out: Record<string, Expiry[]> = {};
+    if (!replayDate) return out;
+    const base = new Date(`${replayDate}T12:00:00Z`).getTime();
+    Object.entries(replaySessions).forEach(([t, s]) => {
+      out[t] = s.expiries.slice(0, MAX_EXP_COLS).map((date) => ({
+        date,
+        daysTo: Math.round((new Date(`${date}T12:00:00Z`).getTime() - base) / 86400000),
+        label: date,
+      }));
+    });
+    return out;
+  }, [replaySessions, replayDate]);
+
+  // Playback. Stops at the last step rather than looping — a session that
+  // silently restarts reads as the tape jumping backwards.
+  useEffect(() => {
+    if (!replayPlaying || replayTimeline.length === 0) return;
+    const id = setInterval(() => {
+      setReplayIdx((i) => {
+        if (i >= replayTimeline.length - 1) { setReplayPlaying(false); return i; }
+        return i + 1;
+      });
+    }, MG_REPLAY_BASE_MS / replaySpeed);
+    return () => clearInterval(id);
+  }, [replayPlaying, replaySpeed, replayTimeline.length]);
+
+  // Space toggles play/pause while rewound — the one shortcut worth having on a
+  // scrubber. Ignored while typing in the 4th-ticker box.
+  useEffect(() => {
+    if (!replayOn) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (e.code !== "Space") return;
+      e.preventDefault();
+      setReplayPlaying((p) => !p);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [replayOn]);
 
   // ── Level snapshot ─────────────────────────────────────────────────────────
   // Front-expiry CB / CW / PW for every ticker, for the toolbar snapshot button.
@@ -1768,6 +2107,23 @@ export function MultGreekClient({
           style={{ color: HT.cyan }}
         >🔍</DockButton>
 
+        {/* Replay — rewinds all four panels off one shared clock. Live only:
+            the delayed snapshot is a single frozen expiry with no history. */}
+        {!isStatic && (
+          <DockButton
+            onClick={() => setReplayOn(v => !v)}
+            title="Replay — scrub all four panels back through a recorded session (recorded walls only, ~5 trading days)"
+            style={{
+              color: replayOn ? "#0b0f1a" : HT.orange,
+              fontWeight: 900,
+              // Spread the ON styles rather than a ternary to `undefined`: an
+              // explicit `background: undefined` still wins the object merge
+              // and would strip the dock button's own gradient when OFF.
+              ...(replayOn ? { background: HT.orange, border: `1px solid ${HT.orange}` } : {}),
+            }}
+          >⏱ REPLAY</DockButton>
+        )}
+
         {/* Refresh / Snap / Discord */}
         <DockSpacer />
         {!isStatic && (
@@ -1781,6 +2137,107 @@ export function MultGreekClient({
         <BoxDiscordBtn targetRef={pageRef} fitContent onBeforeCapture={beginCapture} onAfterCapture={endCapture} message={`📊 Multi-Greek GEX by Expiry — ${new Date().toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",hour12:false})} ET`} />
       </Dock>
       </div>
+
+      {/* ── Replay bar ──────────────────────────────────────────────────────
+          Session picker · transport · the shared scrubber · speed · the clock
+          being shown, and then the coverage caveats said OUT LOUD. The grid
+          below looks exactly like the live one, so a blank strike has to be
+          labelled "not recorded" here or it reads as "no gamma there". */}
+      {replayOn && !isStatic && (
+        <div style={{
+          flexShrink: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+          margin: "0 10px 2px", padding: "5px 10px", borderRadius: 10,
+          background: "rgba(251,133,1,0.07)", border: `1px solid ${HT.orange}55`,
+          fontSize: 11, color: HT.text,
+        }}>
+          <span style={{ fontWeight: 900, letterSpacing: "0.1em", textTransform: "uppercase", color: HT.orange, flexShrink: 0 }}>
+            Replay
+          </span>
+
+          <select
+            value={replayDate}
+            onChange={(e) => { setReplayPlaying(false); setReplayDate(e.target.value); }}
+            disabled={!replayDates.length}
+            style={{
+              padding: "3px 6px", fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)",
+              background: HT.panelBgStrong, color: HT.cyan,
+              border: `1px solid ${HT.border}`, borderRadius: 6, outline: "none", cursor: "pointer",
+            }}
+          >
+            {replayDates.length === 0 && <option value="">—</option>}
+            {replayDates.map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
+
+          <button
+            onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.max(0, i - 1)); }}
+            disabled={replayIdx <= 0}
+            title="Previous minute"
+            style={{ ...mgTransportBtn(false), opacity: replayIdx > 0 ? 1 : 0.4 }}
+          >◀</button>
+          <button
+            onClick={() => {
+              // Playing from the end shows one step and stops, which reads as
+              // broken — rewind to the start first.
+              if (replayIdx >= replayTimeline.length - 1) setReplayIdx(0);
+              setReplayPlaying((p) => !p);
+            }}
+            disabled={replayTimeline.length < 2}
+            title="Play / pause (Space)"
+            style={{ ...mgTransportBtn(replayPlaying), padding: "0 12px", opacity: replayTimeline.length > 1 ? 1 : 0.4 }}
+          >{replayPlaying ? "❚❚" : "▶"}</button>
+          <button
+            onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.min(replayTimeline.length - 1, i + 1)); }}
+            disabled={replayIdx >= replayTimeline.length - 1}
+            title="Next minute"
+            style={{ ...mgTransportBtn(false), opacity: replayIdx < replayTimeline.length - 1 ? 1 : 0.4 }}
+          >▶</button>
+
+          <input
+            type="range"
+            min={0}
+            max={Math.max(0, replayTimeline.length - 1)}
+            value={Math.min(replayIdx, Math.max(0, replayTimeline.length - 1))}
+            disabled={replayTimeline.length < 2}
+            onChange={(e) => { setReplayPlaying(false); setReplayIdx(Number(e.target.value)); }}
+            style={{ flex: 1, minWidth: 180, height: 3, accentColor: HT.orange }}
+          />
+
+          <span style={{ fontSize: 10, color: HT.muted, fontWeight: 700, opacity: 0.7 }}>Speed</span>
+          {MG_REPLAY_SPEEDS.map((sp) => (
+            <button
+              key={sp}
+              onClick={() => setReplaySpeed(sp)}
+              style={{ ...mgTransportBtn(replaySpeed === sp), height: 22, padding: "0 7px", fontSize: 10 }}
+            >{sp}×</button>
+          ))}
+
+          <span style={{ color: HT.border }}>|</span>
+
+          <span style={{ fontFamily: "var(--font-mono)", fontWeight: 900, color: HT.text }}>
+            {replayClock != null ? `${fmtReplayClock(replayClock)} ET` : "--:--"}
+          </span>
+          <span style={{ color: HT.muted, opacity: 0.6 }}>
+            {replayTimeline.length
+              ? `${Math.min(replayIdx, replayTimeline.length - 1) + 1} / ${replayTimeline.length}`
+              : ""}
+          </span>
+
+          {/* State, then caveats. Loading and errors first because they explain
+              an empty grid; the coverage note explains a sparse one. */}
+          {replayLoading && <span style={{ color: HT.cyan, fontWeight: 700 }}>loading…</span>}
+          {!!replayErr && <span style={{ color: HT.red, fontWeight: 700 }}>{replayErr}</span>}
+          {!replayLoading && !replayErr && replayTimeline.length > 0 && (
+            <span style={{ color: HT.muted, opacity: 0.6 }}>
+              · recorded walls only · sweeps held to the minute
+              {contractMode === "oi" ? " · OI basis not recorded — showing OI+VOL" : ""}
+              {" · Δ and EM off while rewound"}
+              {TICKERS.some((t) => !replaySessions[t])
+                ? ` · no history: ${TICKERS.filter((t) => !replaySessions[t]).join(", ")}`
+                : ""}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Panels */}
       {embed && (
@@ -1798,20 +2255,28 @@ export function MultGreekClient({
             key={ticker}
             ticker={ticker}
             strikesByExp={strikes[ticker] ?? {}}
-            cols={colsByTicker[ticker] ?? []}
+            cols={replayOn ? (replayColsByTicker[ticker] ?? []) : (colsByTicker[ticker] ?? [])}
             liveData={liveDataRef.current}
-            spot={spots[ticker] ?? 0}
+            // Rewound, the header spot is the spot RECORDED at that sweep — the
+            // live quote would put today's price on a three-day-old ladder.
+            spot={replayOn ? (replayFrameByTicker[ticker]?.spot ?? 0) : (spots[ticker] ?? 0)}
             contractMode={contractMode}
             intensity={intensity}
             emLevels={emByTicker[ticker] ?? null}
-            showEm={!!activeExpiry && isCurrentWeekExp(activeExpiry)}
+            // EM bands are THIS week's expected move; drawing them on a past
+            // session would be a level that didn't exist yet. Δ stamps come
+            // from a live baseline grid, same problem. Both off while rewound.
+            showEm={!replayOn && !!activeExpiry && isCurrentWeekExp(activeExpiry)}
             captureWindow={captureWindow}
             showCB={showCB}
             showCW={showCW}
             showPW={showPW}
             getGexChange={getGexChange}
-            deltaWindow={deltaWindow}
+            deltaWindow={replayOn ? 0 : deltaWindow}
             onExpandChain={setChainTicker}
+            replayFrame={replayOn ? (replayFrameByTicker[ticker] ?? null) : null}
+            replayStrikes={replayOn ? (replaySessions[ticker]?.strikes ?? null) : null}
+            dteBase={replayOn ? replayDate : null}
           />
         ))}
 

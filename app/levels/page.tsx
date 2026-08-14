@@ -544,6 +544,12 @@ function Section({
         border: `1px solid ${alpha(HOME_THEME.text, 0.36)}`,
         boxShadow: `0 0 0 3px ${alpha(HOME_THEME.text, 0.06)}, 0 14px 28px -12px ${alpha(HOME_THEME.bg, 0.9)}`,
         overflow: "hidden",
+        // PageShell's <main> is a scrolling FLEX COLUMN, and a flex item's
+        // default flex-shrink:1 applies even when the container scrolls. With a
+        // 14-row index above them these two sections were squeezed to ~6px
+        // slivers — visible, unreadable, and impossible to click. Opt out of
+        // shrinking and they keep their content height.
+        flexShrink: 0,
       }}
     >
       <div
@@ -1007,7 +1013,7 @@ export default function LevelsPage() {
       </Card>
 
       {/* ── dock ── */}
-      <div className="cblv-dock">
+      <div className="cblv-dock" style={{ flexShrink: 0 }}>
         {Array.from({ length: MAX_PINS }).map((_, i) => {
           const sym = pins[i];
           const row = sym ? bySymbol.get(sym) : undefined;
@@ -1028,7 +1034,7 @@ export default function LevelsPage() {
           </div>
         </Card>
       ) : (
-        <div className="cblv-idx">
+        <div className="cblv-idx" style={{ flexShrink: 0 }}>
           {view.map((r) => (
             <IndexCell
               key={r.symbol}

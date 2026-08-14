@@ -2445,7 +2445,7 @@ Output a SINGLE object with bull/base/bear as keys. Do NOT wrap them in an array
     const formatUserMessage = (d) => [
       `CB Edge — ${d.ticker || 'SPX'} pre-market GEX read${d.date ? ` for ${d.date}` : ''}.`, ``,
       `${d.ticker || 'SPX'} spot: ${num(d.spxSpot)}`, `Gamma flip: ${num(d.gammaFlip)}`, `Call wall (resistance): ${num(d.callWall)}`,
-      `Put wall (support): ${num(d.putWall)}`, `Control node (peak gamma magnet): ${num(d.controlNode)}`,
+      `Put wall (support): ${num(d.putWall)}`, `Core Bullseye (peak gamma magnet): ${num(d.controlNode)}`,
       `Expected move: ±${num(d.expectedMove)}`, `Expected-move range: ${num(d.emLower)} (lower) to ${num(d.emUpper)} (upper)`,
       `Net GEX: ${d.netGex == null ? 'n/a' : `${d.netGex >= 0 ? '+' : ''}${num(d.netGex, 2)}B`}`,
       `Gamma regime: ${d.gammaRegime || 'n/a'}`, `Bias: ${d.bias || 'neutral'}`, ``,

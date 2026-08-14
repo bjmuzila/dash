@@ -975,16 +975,47 @@ const XP_CSS = `
   .xp-mx-row .b.r { color:#0a0d12; background:var(--sm-red); }
   .xp-matrix-foot { margin-top:8px; text-align:center; font-size: 12px; font-weight:800; letter-spacing:.04em; color:var(--cyan); }
 
-  /* PANEL 2 — GEX profile bars */
-  .xp-pf-row { box-sizing:border-box; display:grid; grid-template-columns:34px 1fr; align-items:center; gap:6px; height:22px; margin-bottom:1px; }
-  .xp-pf-row .k { font-family:var(--sm-mono); font-size:10px; font-weight:700; color:#dfe7f0; background:rgba(255,255,255,.05); border-radius:3px; text-align:center; padding:1px 0; }
+  /* PANEL 2 — GEX profile bars.
+     The header strip is a FIXED height and the matrix panel renders an empty
+     .xp-pf2-spacer of the same height, so the two panels' strike rows stay on
+     the same baseline no matter what the strip contains. */
+  .xp-pf2-spacer { box-sizing:border-box; height:52px; display:flex; flex-direction:column; justify-content:space-between; padding-bottom:6px; }
+  .xp-pf2-top { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+  .xp-pf2-top .lbl { font-size:11px; font-weight:800; letter-spacing:.12em; color:var(--cyan); }
+  .xp-pf2-top .tot { display:flex; flex-direction:column; align-items:flex-end; line-height:1.15; }
+  .xp-pf2-top .tot .k { font-size:10px; font-weight:700; letter-spacing:.10em; color:#9aa4b2; }
+  .xp-pf2-top .tot .v { font-family:var(--sm-mono); font-size:13px; font-weight:900; }
+  .xp-pf2-top .tot .v.g { color:var(--sm-green); } .xp-pf2-top .tot .v.r { color:var(--sm-red); }
+  .xp-pf2-exp { align-self:flex-start; font-family:var(--sm-mono); font-size:10px; font-weight:800; letter-spacing:.08em; color:var(--cyan); border:1px solid rgba(33,158,188,.45); background:rgba(33,158,188,.10); border-radius:4px; padding:2px 7px; }
+  .xp-pf2-head { box-sizing:border-box; display:grid; grid-template-columns:52px 1fr 56px; gap:6px; align-items:flex-end; height:18px; padding:0 4px 4px; font-size:10px; font-weight:700; letter-spacing:.06em; color:#9aa4b2; }
+  .xp-pf2-head span:nth-child(2) { text-align:center; }
+  .xp-pf2-head .r { text-align:right; }
+
+  .xp-pf-row { box-sizing:border-box; display:grid; grid-template-columns:52px 1fr 56px; align-items:center; gap:6px; height:22px; margin-bottom:1px; padding:0 4px; border-radius:4px; border:1px solid transparent; }
+  .xp-pf-row.spot { border-color:rgba(33,158,188,.75); background:rgba(33,158,188,.08); }
+  .xp-pf-row .k { position:relative; font-family:var(--sm-mono); font-size:10px; font-weight:700; color:#dfe7f0; padding-right:9px; }
+  .xp-pf-row .k .pf-dot { position:absolute; right:0; top:50%; transform:translateY(-50%); width:5px; height:5px; border-radius:50%; display:block; }
+  .pf-dot.core { background:var(--amber); box-shadow:0 0 6px rgba(249,158,11,.8); }
+  .pf-dot.cw { background:rgb(41,182,246); }
+  .pf-dot.pw { background:rgb(255,71,87); }
+  .pf-dot.flip { background:var(--cyan); }
   .xp-pf-row .track { position:relative; height:11px; }
-  .xp-pf-row .track i { position:absolute; left:0; top:0; height:11px; border-radius:0 6px 6px 0; display:block; }
-  .xp-pf-row .track i.pos { background:rgb(41,182,246); }
-  .xp-pf-row .track i.neg { background:rgb(255,71,87); }
+  .xp-pf-row .track i { position:absolute; top:0; height:11px; border-radius:2px; display:block; }
+  .xp-pf-row .track i.pos { background:var(--sm-green); }
+  .xp-pf-row .track i.neg { background:var(--sm-red); }
   .xp-pf-row .track i.node { background:var(--amber); box-shadow:0 0 8px rgba(249,158,11,.6); }
-  .xp-pf-row .pf-tag { position:absolute; right:4px; top:50%; transform:translateY(-50%); font-size: 10px; font-weight:900; letter-spacing:.02em; white-space:nowrap; }
-  .pf-tag.c-green { color:var(--sm-green); } .pf-tag.c-red { color:var(--sm-red); } .pf-tag.c-amber { color:var(--amber); }
+  .xp-pf-row .val { font-family:var(--sm-mono); font-size:10px; font-weight:800; text-align:right; }
+  .xp-pf-row .val.g { color:var(--sm-green); } .xp-pf-row .val.r { color:var(--sm-red); }
+
+  .xp-pf2-cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(112px, 1fr)); gap:8px; margin-top:12px; }
+  .xp-pfcard { border:1px solid; border-radius:8px; padding:9px 11px; background:rgba(255,255,255,.02); }
+  .xp-pfcard .lbl { font-size:9px; font-weight:900; letter-spacing:.10em; }
+  .xp-pfcard .v { font-family:var(--sm-mono); font-size:19px; font-weight:900; line-height:1.2; margin-top:2px; }
+  .xp-pfcard .d { font-family:var(--sm-mono); font-size:10px; color:#dfe7f0; margin-top:4px; }
+  .xp-pfcard .n { font-size:10px; color:#9aa4b2; margin-top:1px; }
+  .xp-pfcard.amber { border-color:rgba(249,158,11,.5); } .xp-pfcard.amber .lbl, .xp-pfcard.amber .v { color:var(--amber); }
+  .xp-pfcard.cyan { border-color:rgba(33,158,188,.5); } .xp-pfcard.cyan .lbl, .xp-pfcard.cyan .v { color:var(--cyan); }
+  .xp-pfcard.red { border-color:rgba(239,68,68,.5); } .xp-pfcard.red .lbl, .xp-pfcard.red .v { color:var(--sm-red); }
 
   /* PANEL 3 — right rail */
   .xp-kl { display:flex; align-items:center; justify-content:space-between; gap:10px; border:1.5px solid; border-radius:8px; padding:11px 15px; margin-bottom:10px; }
@@ -1004,6 +1035,14 @@ const XP_CSS = `
   .xp-tp.amber { border-color:rgba(249,158,11,.55);} .xp-tp.amber .tp-h { color:var(--amber);}
 
   /* pro insight footer */
+  /* Fills the rail's leftover height below the trade plan with the brand mark.
+     flex:1 + min-height:0 means it takes only what is actually spare — on a
+     short viewport it collapses instead of pushing the plan off the card. */
+  .xp-railmark { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:18px 8px; opacity:.9; }
+  .xp-railmark img { max-width:min(72%, 320px); max-height:100%; width:auto; height:auto; object-fit:contain; filter:drop-shadow(0 6px 22px rgba(33,158,188,.28)); }
+  .xp-railmark-tag { font-family:var(--sm-mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:#9aa4b2; text-align:center; }
+  @media (max-width: 1000px){ .xp-railmark { flex:0 0 auto; } }
+
   .xp-insight { display:flex; align-items:center; gap:20px; margin-top:18px; min-height:120px; border-top:1px solid rgba(255,255,255,.08); padding:26px 4px; }
   .xp-insight .tag { font-size:22px; font-weight:900; letter-spacing:.04em; color:var(--amber); white-space:nowrap; }
   .xp-insight .txt { font-size: 17px; color:#dfe7f0; line-height:1.5; }
@@ -1018,6 +1057,25 @@ const XP_CSS = `
   /* candle canvas styles retained (overlay logic still present though hidden) */
   .xp-candles { position:absolute; top:0; z-index:0; opacity:.7; }
 `;
+
+// One of the four level cards under the GEX profile: the level, how far spot
+// sits from it, and what it means. `value` null renders an em dash rather than
+// a broken number.
+function PfLevelCard({ tone, label, value, spot, note }: {
+  tone: "amber" | "cyan" | "red"; label: string; value: number | null; spot: number; note: string;
+}) {
+  const hasV = value != null && Number.isFinite(value);
+  const hasSpot = Number.isFinite(spot) && spot > 0;
+  const delta = hasV && hasSpot ? value - spot : null;
+  return (
+    <div className={`xp-pfcard ${tone}`}>
+      <div className="lbl">{label}</div>
+      <div className="v">{hasV ? fmt(value, Number.isInteger(value) ? 0 : 2) : "—"}</div>
+      <div className="d">{delta != null ? `${fmt(Math.abs(delta), 2)} ${delta >= 0 ? "above" : "below"}` : "—"}</div>
+      <div className="n">{note}</div>
+    </div>
+  );
+}
 
 function ExplainerMockup({
   form, regime, updated, ladder, dte, onDteChange, gexBasis, onBasisChange, ticker,
@@ -1208,7 +1266,8 @@ function ExplainerMockup({
     const s = k < 0 ? "-" : "";
     return `${s}$${Math.abs(Math.round(k)).toLocaleString("en-US")}K`;
   };
-  // Control node = the strike carrying the peak |net GEX| (largest magnet).
+  // Core Bullseye (CB) = the strike carrying the peak |net GEX| (largest magnet).
+  // Still named controlNode internally: it is the key the trigger-map API takes.
   const controlNode = useMemo(() => {
     if (!ladderRows.length) return null;
     return ladderRows.reduce((b, r) => (Math.abs(r.gx) > Math.abs(b.gx) ? r : b), ladderRows[0]);
@@ -1227,7 +1286,7 @@ function ExplainerMockup({
       if (r.gx > resMag) { resMag = r.gx; resistance = r.k; }
       if (r.gx < supMag) { supMag = r.gx; support = r.k; }
     }
-    // Pivot: strike just above the sign change closest to the control node.
+    // Pivot: strike just above the sign change closest to the Core Bullseye.
     const sorted = [...ladderRows].sort((a, b) => a.k - b.k);
     let pivot: number | null = null;
     const anchor = controlNode?.k ?? sorted[Math.floor(sorted.length / 2)].k;
@@ -1250,6 +1309,49 @@ function ExplainerMockup({
     support: levelStrikes.support,
     pivot: levelStrikes.pivot,
     node: controlNode?.k ?? null,
+  };
+
+  // ── GEX Profile axis ───────────────────────────────────────────────────────
+  // One linear scale shared by both signs, with the zero origin placed where the
+  // negative side actually needs it — so a -741M bar and a +6.1B bar are drawn
+  // to the same dollars-per-pixel instead of each filling its own half.
+  const pfAxis = useMemo(() => {
+    let posMax = 0, negMax = 0;
+    for (const r of ladderRows) {
+      if (r.gx > posMax) posMax = r.gx;
+      if (-r.gx > negMax) negMax = -r.gx;
+    }
+    const total = posMax + negMax;
+    if (!(total > 0)) return { originPct: 20, unit: 0 };
+    const originPct = Math.min(45, Math.max(8, (negMax / total) * 100));
+    const unit = Math.min(
+      posMax > 0 ? (100 - originPct) / posMax : Infinity,
+      negMax > 0 ? originPct / negMax : Infinity,
+    );
+    return { originPct, unit: Number.isFinite(unit) ? unit : 0 };
+  }, [ladderRows]);
+
+  // The ladder strike nearest live spot — highlighted the way the dashboard
+  // profile highlights it.
+  const spotStrike = useMemo(() => {
+    const spot = toNum(form.spot);
+    if (!Number.isFinite(spot) || !ladderRows.length) return null;
+    return ladderRows.reduce((b, r) => (Math.abs(r.k - spot) < Math.abs(b.k - spot) ? r : b), ladderRows[0]).k;
+  }, [ladderRows, form.spot]);
+
+  // "AUG 14 · 0DTE" — the expiry this ladder was pulled for.
+  const expiryLabel = useMemo(() => {
+    const d = new Date();
+    if (dte === 1) d.setDate(d.getDate() + 1);
+    return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase()} · ${dte}DTE`;
+  }, [dte]);
+
+  // $millions → the compact B/M the dashboard ladder prints (+1.2B, -163M).
+  const gexBM = (mm: number) => {
+    if (!Number.isFinite(mm)) return "—";
+    const sign = mm < 0 ? "-" : "+";
+    const a = Math.abs(mm);
+    return a >= 1000 ? `${sign}${(a / 1000).toFixed(1)}B` : `${sign}${Math.round(a).toLocaleString("en-US")}M`;
   };
 
   // Total net GEX across the visible ladder, in $K.
@@ -1310,7 +1412,7 @@ function ExplainerMockup({
           <div className="xp-title">CB EDGE <span className="cy">GEX PLAN</span></div>
           <div className="xp-chip solo">UPDATE: {updated || snapDate}</div>
           <div className="xp-chip amber">
-            <span className="lbl">CONTROL NODE</span>
+            <span className="lbl">CORE BULLSEYE</span>
             <span className="val">{controlNode ? controlNode.k : "—"}</span>
           </div>
           <div className="xp-chip cyan">
@@ -1328,6 +1430,7 @@ function ExplainerMockup({
           <div className="xp-panel">
             <div className="xp-panel-h">GEX MATRIX (STRIKE)</div>
             <div className="xp-matrix">
+              <div className="xp-pf2-spacer" aria-hidden="true" />
               <div className="xp-mx-head"><span>STRIKE</span><span>NET GEX</span></div>
               {ladderRows.map((r) => {
                 const pos = r.gx >= 0;
@@ -1354,27 +1457,54 @@ function ExplainerMockup({
           <div className="xp-panel">
             <div className="xp-panel-h">GEX PROFILE</div>
             <div className="xp-profile">
-              {/* spacer matching the matrix's STRIKE/NET GEX header so rows align */}
-              <div className="xp-mx-head" aria-hidden="true"><span>&nbsp;</span></div>
+              {/* header strip — expiry on the left, running total on the right */}
+              <div className="xp-pf2-spacer">
+                <div className="xp-pf2-top">
+                  <span className="lbl">BY EXPIRATION</span>
+                  <span className="tot">
+                    <span className="k">NET GEX</span>
+                    <span className={`v ${totalNetK >= 0 ? "g" : "r"}`}>{gexBM(totalNetK / 1000)}</span>
+                  </span>
+                </div>
+                <span className="xp-pf2-exp">{expiryLabel}</span>
+              </div>
+              <div className="xp-pf2-head"><span>STRIKE</span><span>NET GEX</span><span className="r">VALUE</span></div>
               {ladderRows.map((r) => {
                 const pos = r.gx >= 0;
-                const w = Math.min(100, (Math.abs(r.gx) / scaleMax) * 100);
                 const isNode = controlNode && r.k === controlNode.k;
-                const badge =
-                  r.k === levelStrikes.resistance ? { t: "CW", c: "c-green" }
-                  : r.k === levelStrikes.support ? { t: "PW", c: "c-red" }
-                  : r.k === levelStrikes.pivot ? { t: "FLIP", c: "c-amber" }
+                const isSpot = spotStrike != null && r.k === spotStrike;
+                // Shared scale, shared origin: positives grow right of it,
+                // negatives grow left of it.
+                const w = Math.max(1.2, Math.abs(r.gx) * pfAxis.unit);
+                const barStyle = pos
+                  ? { left: `${pfAxis.originPct}%`, width: `${Math.min(100 - pfAxis.originPct, w)}%` }
+                  : { left: `${Math.max(0, pfAxis.originPct - Math.min(pfAxis.originPct, w))}%`, width: `${Math.min(pfAxis.originPct, w)}%` };
+                const dot =
+                  isNode ? "core"
+                  : r.k === levelStrikes.resistance ? "cw"
+                  : r.k === levelStrikes.support ? "pw"
+                  : r.k === levelStrikes.pivot ? "flip"
                   : null;
                 return (
-                  <div key={r.k} className="xp-pf-row">
-                    <span className="k">{r.k}</span>
-                    <span className="track">
-                      <i className={isNode ? "node" : pos ? "pos" : "neg"} style={{ width: `${Math.max(2, w)}%` }} />
-                      {badge && <span className={`pf-tag ${badge.c}`}>{badge.t}</span>}
+                  <div key={r.k} className={`xp-pf-row${isSpot ? " spot" : ""}`}>
+                    <span className="k">
+                      {r.k.toLocaleString("en-US")}
+                      {dot && <i className={`pf-dot ${dot}`} />}
                     </span>
+                    <span className="track">
+                      <i className={isNode ? "node" : pos ? "pos" : "neg"} style={barStyle} />
+                    </span>
+                    <span className={`val ${pos ? "g" : "r"}`}>{gexBM(r.gx)}</span>
                   </div>
                 );
               })}
+              {/* level cards — the four numbers the post is actually about */}
+              <div className="xp-pf2-cards">
+                <PfLevelCard tone="amber" label="CORE (CB)" value={controlNode ? controlNode.k : null} spot={toNum(form.spot)} note="biggest magnet" />
+                <PfLevelCard tone="cyan" label="CALL WALL" value={levelStrikes.resistance} spot={toNum(form.spot)} note="ceiling" />
+                <PfLevelCard tone="red" label="PUT WALL" value={levelStrikes.support} spot={toNum(form.spot)} note="floor" />
+                <PfLevelCard tone="amber" label="GAMMA FLIP" value={Number.isFinite(toNum(form.flip)) ? toNum(form.flip) : levelStrikes.pivot} spot={toNum(form.spot)} note="pinning ↑ trending ↓" />
+              </div>
             </div>
           </div>
 
@@ -1383,7 +1513,7 @@ function ExplainerMockup({
             <div className="xp-panel xp-keylevels">
               <div className="xp-panel-h">KEY LEVELS</div>
               <div className="xp-kl green"><span className="lbl">RESISTANCE</span><span className="v">{levelStrikes.resistance ?? "—"}</span></div>
-              <div className="xp-kl amber"><span className="lbl">CONTROL NODE (MAGNET)</span><span className="v">{controlNode ? controlNode.k : "—"}</span></div>
+              <div className="xp-kl amber"><span className="lbl">CORE BULLSEYE (MAGNET)</span><span className="v">{controlNode ? controlNode.k : "—"}</span></div>
               <div className="xp-kl cyan"><span className="lbl">GAMMA FLIP / PIVOT</span><span className="v">{levelStrikes.pivot ?? "—"}</span></div>
               <div className="xp-kl red"><span className="lbl">SUPPORT</span><span className="v">{levelStrikes.support ?? "—"}</span></div>
             </div>
@@ -1403,7 +1533,7 @@ function ExplainerMockup({
               </div>
               <div className="xp-tp green">
                 <div className="tp-h">▲ BULL CASE {aiMap ? `· ${aiMap.bull.odds}%` : ""}</div>
-                <div className="tp-b">{aiMap ? aiMap.bull.desc : <>Holds above {levelStrikes.pivot ?? controlNode?.k ?? "—"} → grind toward {levelStrikes.resistance ?? "—"}; buy dips near the control node.</>}</div>
+                <div className="tp-b">{aiMap ? aiMap.bull.desc : <>Holds above {levelStrikes.pivot ?? controlNode?.k ?? "—"} → grind toward {levelStrikes.resistance ?? "—"}; buy dips near the Core Bullseye.</>}</div>
               </div>
               <div className="xp-tp red">
                 <div className="tp-h">▼ BEAR CASE {aiMap ? `· ${aiMap.bear.odds}%` : ""}</div>
@@ -1415,6 +1545,14 @@ function ExplainerMockup({
               </div>
             </div>
 
+            {/* Brand mark — absorbs whatever height the rail has left under the
+                trade plan so the right column never exports with dead space. */}
+            <div className="xp-railmark">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/cb-edge-logo.png" alt="CB Edge" crossOrigin="anonymous" />
+              <span className="xp-railmark-tag">"Real Edge · Real Orderflow"</span>
+            </div>
+
           </div>
         </div>
 
@@ -1422,7 +1560,7 @@ function ExplainerMockup({
         <div className="xp-insight">
           <span className="tag">CB Edge :</span>
           <span className="txt">
-            The <b>{controlNode ? controlNode.k : "control"}</b> node is dominant control — price gravitates there unless a catalyst breaks it.
+            The <b>{controlNode ? controlNode.k : "control"}</b> Core Bullseye is dominant control — price gravitates there unless a catalyst breaks it.
             {Number.isFinite(flip) ? <> The bigger move only comes if <b>{f(flip)}</b> fails.</> : null}
             <span className="disc">Not financial advice · educational only.</span>
           </span>
