@@ -612,8 +612,18 @@ function todayYmdET() {
 // like a per-ticker bug but isn't. Mirror the same idempotent migration here
 // so reads don't depend on writes having happened first.
 let _flowSchemaEnsured = false;
+// Failure here used to mean "retry on the very next request", which turned a
+// transient error (statement timeout, pool reset) into an unbounded loop: the
+// DDL below takes ACCESS EXCLUSIVE on a 7GB table, so every retry stalled every
+// reader and writer of flow_prints behind it. Measured 7,743 executions in
+// pg_stat_statements. Retries are now floored at one per minute.
+let _flowSchemaRetryAt = 0;
+const FLOW_SCHEMA_RETRY_MS = 60_000;
 async function ensureFlowPrintsSchema(pool) {
   if (_flowSchemaEnsured) return;
+  const _now = Date.now();
+  if (_now < _flowSchemaRetryAt) return;
+  _flowSchemaRetryAt = _now + FLOW_SCHEMA_RETRY_MS;
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS flow_prints (
@@ -649,7 +659,15 @@ async function ensureFlowPrintsSchema(pool) {
     // fetch and silently yields an empty tape. Index the exact shape of that
     // query so it becomes an index range scan.
     await pool.query('CREATE INDEX IF NOT EXISTS flow_prints_date_prem_ts_idx ON flow_prints (date, premium DESC, ts DESC)');
-    await pool.query('UPDATE flow_prints SET underlying_norm = upper(underlying) WHERE underlying_norm IS NULL AND underlying IS NOT NULL');
+    // The `underlying_norm` backfill that used to run here has been REMOVED.
+    // It was dead: flow-history-writer.js populates underlying_norm at INSERT
+    // time (see its upsert column list), so no new row can be NULL, and the
+    // historical rows were backfilled long ago — verified 0 remaining in prod.
+    // Because no index can serve `WHERE underlying_norm IS NULL`, it seq-scanned
+    // the whole 7GB table on EVERY call, and it sat before the guard assignment
+    // below, so any timeout there left _flowSchemaEnsured false and re-ran the
+    // entire block on the next request. Do not reintroduce it; if a future
+    // column needs backfilling, do it once in a migration under scripts/.
     _flowSchemaEnsured = true;
   } catch (e) {
     console.warn('[flow-history-read] schema ensure failed (will retry next request):', e.message);

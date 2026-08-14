@@ -19,6 +19,8 @@
 let pool = null;
 let pgUnavailable = false;
 let tableEnsured = false;
+let tableRetryAt = 0;
+const TABLE_RETRY_MS = 60_000;
 
 function getPool() {
   if (pgUnavailable) return null;
@@ -47,6 +49,12 @@ function getPool() {
 
 async function ensureTable(p) {
   if (tableEnsured) return;
+  // Floor retries at one per minute. The DDL below takes ACCESS EXCLUSIVE on a
+  // multi-GB table; without this, one transient failure means every subsequent
+  // flush re-runs it and stalls all readers/writers of flow_prints behind it.
+  const _now = Date.now();
+  if (_now < tableRetryAt) return;
+  tableRetryAt = _now + TABLE_RETRY_MS;
   await p.query(`
     CREATE TABLE IF NOT EXISTS flow_prints (
       ts          BIGINT       NOT NULL,
@@ -81,8 +89,12 @@ async function ensureTable(p) {
   // per-bin aggregate query on a hot ticker like SPX can be answered as an
   // index-only scan instead of a heap fetch per matching row.
   await p.query('CREATE INDEX IF NOT EXISTS flow_prints_netprem_covering_idx ON flow_prints (date, underlying_norm, ts) INCLUDE (type, side, premium, size, is_otm)');
-  // One-time backfill for rows written before this column existed.
-  await p.query('UPDATE flow_prints SET underlying_norm = upper(underlying) WHERE underlying_norm IS NULL AND underlying IS NOT NULL');
+  // The one-time `underlying_norm` backfill that used to run here has been
+  // REMOVED. The upsert below writes underlying_norm on every INSERT, so no new
+  // row can be NULL, and the pre-column rows were backfilled long ago (verified
+  // 0 remaining in prod). No index can serve `WHERE underlying_norm IS NULL`, so
+  // it seq-scanned all 7GB on every ensureTable() — and ensureTable() runs on
+  // every flush. Do not reintroduce it; backfills belong in scripts/, once.
   tableEnsured = true;
 }
 

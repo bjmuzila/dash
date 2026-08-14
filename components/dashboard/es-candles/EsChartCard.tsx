@@ -3479,15 +3479,14 @@ export default function EsChartCard({
               // Now #1 gets HIGHLIGHT_BOOST_TOP and the last highlighted wall
               // gets HIGHLIGHT_BOOST_MIN, interpolated linearly in between, so
               // the dominant wall is unmistakably the fattest tube on screen.
-              // Raised: with the curve back at 1.0 (linear — radius tracks net
-              // GEX proportionally, see BUBBLE_CFG_DEFAULT) the walls no longer
-              // get any separation for free from the exponent, so ALL of the
-              // "top N are obvious" now has to come from here. Even the LAST
-              // highlighted wall is 1.6x, which puts the whole highlighted set
-              // clearly above the proportional ladder, and #1 at 2.6x is
-              // unmistakable.
-              const HIGHLIGHT_BOOST_TOP = 2.6;
-              const HIGHLIGHT_BOOST_MIN = 1.6;
+              // With the curve at 1.0 (linear — radius tracks net GEX
+              // proportionally, see BUBBLE_CFG_DEFAULT) the walls get no
+              // separation for free from the exponent, so ALL of the "top N are
+              // obvious" comes from here. #1 is 2.2x, #2 1.8x, #3 1.4x against a
+              // 4.5px base — a hard ratio on a restrained pixel budget, so the
+              // walls dominate without any row growing into its neighbours.
+              const HIGHLIGHT_BOOST_TOP = 2.2;
+              const HIGHLIGHT_BOOST_MIN = 1.4;
 
               // GLOBAL strike selection — the key to the continuous-tube look. Rank
               // strikes by their PEAK |GEX| across the whole session (not per column),
@@ -3517,6 +3516,60 @@ export default function EsChartCard({
                 ranked.slice(0, Math.max(0, cfg.highlight)).forEach((s, i) => wallRanks.set(s, i));
                 wallAt.set(m.slotTs, wallRanks);
               }
+
+              // ── Oval geometry + the two no-overlap caps ────────────────────
+              // The mark is an ELLIPSE stretched horizontally, not a circle: a
+              // row then reads as a dashed price level instead of a string of
+              // beads, which is what these rows actually are.
+              //
+              // Overlap is prevented geometrically rather than by picking sizes
+              // that happen to fit — the chart is zoomable, so any "safe" px
+              // number stops being safe the moment the user scrolls the price
+              // scale. Both caps are derived from the CURRENT projection:
+              //   • rx ≤ half the column pitch − gap  → neighbours in a row
+              //     can never touch, at any bar spacing.
+              //   • ry ≤ half the strike pitch − gap  → two rows can never
+              //     touch, at any vertical zoom.
+              const BUBBLE_ASPECT = 2.2;  // horizontal stretch
+              const COL_GAP_PX = 0.8;     // clear space between neighbours
+              const ROW_GAP_PX = 1.5;     // clear space between rows
+              // Column pitch: the smallest gap between two adjacent bucket x's.
+              let colPitch = Infinity;
+              {
+                let prevX: number | null = null;
+                for (const m of mins) {
+                  const xx = xAt(bucketOf(m.slotTs));
+                  if (xx == null) continue;
+                  if (prevX != null) {
+                    const d = Math.abs(xx - prevX);
+                    if (d > 0 && d < colPitch) colPitch = d;
+                  }
+                  prevX = xx;
+                }
+                if (!Number.isFinite(colPitch) || colPitch <= 0) colPitch = 8;
+              }
+              // Strike pitch: the chain's own strike increment, projected to px
+              // through the SAME priceToCoordinate the bubbles use, so it tracks
+              // zoom. Measured off the strike grid rather than the shown rows —
+              // the shown set changes per bucket, and a cap that changes with it
+              // would make a row breathe as its neighbours come and go.
+              let rowPitch = 24;
+              {
+                const ks = [...new Set(mins.flatMap((m) => m.cells.map((c) => c.strike)))].sort((a, b) => a - b);
+                let dK = Infinity;
+                for (let i = 1; i < ks.length; i++) {
+                  const d = ks[i] - ks[i - 1];
+                  if (d > 0 && d < dK) dK = d;
+                }
+                if (Number.isFinite(dK) && ks.length > 1) {
+                  const b0 = basisAt(mins[mins.length - 1].slotTs);
+                  const yA = series.priceToCoordinate(ks[0] + b0);
+                  const yB = series.priceToCoordinate(ks[0] + dK + b0);
+                  if (yA != null && yB != null && Math.abs(yA - yB) > 0) rowPitch = Math.abs(yA - yB);
+                }
+              }
+              const rxCap = Math.max(0.35, colPitch / 2 - COL_GAP_PX);
+              const ryCap = Math.max(0.35, rowPitch / 2 - ROW_GAP_PX);
 
               ctx.save();
               for (const m of mins) {
@@ -3576,8 +3629,11 @@ export default function EsChartCard({
                   const base = v >= 0 ? [41, 182, 246] : [255, 71, 87];
                   const hot  = v >= 0 ? [200, 245, 255] : [255, 205, 210];
                   const col = isHi ? hot : base;
+                  // Oval, capped on both axes — see BUBBLE_ASPECT above.
+                  const ry = Math.min(r, ryCap);
+                  const rx = Math.min(r * BUBBLE_ASPECT, rxCap);
                   ctx.beginPath();
-                  ctx.arc(x, y, r, 0, Math.PI * 2);
+                  ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
                   if (isHi) {
                     // Glow tapers with rank too, so the #1 wall doesn't just win
                     // on radius — it's the brightest bloom on the chart.

@@ -42,7 +42,10 @@ export type BubbleCfg = { topStrikes: number; highlight: number; minSize: number
 // by flattening everything else onto Min, which threw away the read the whole
 // ladder exists for. The top-N walls now get their prominence from the
 // rank-graduated highlight boost in EsChartCard instead of from the curve.
-export const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 10, highlight: 3, minSize: 0.4, maxSize: 12, curve: 1, brightness: 84 };
+// Sizes are deliberately small: the marks are ovals with hard no-overlap caps
+// (EsChartCard), so a big maxSize buys nothing except rows that clip against
+// their caps. 0.3 → 4.5 keeps the whole ladder inside the strike pitch.
+export const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 10, highlight: 3, minSize: 0.3, maxSize: 4.5, curve: 1, brightness: 88 };
 export const BUBBLE_CFG_KEYS: Array<keyof BubbleCfg> = ["topStrikes", "highlight", "minSize", "maxSize", "curve", "brightness"];
 
 // Slider bounds, single-sourced so the UI and the restore clamp can't drift.

@@ -1023,13 +1023,10 @@ export default function Sales() {
   // Discord column. Best-effort — a failed fetch just leaves the column blank.
   const [discordByEmail, setDiscordByEmail] = useState<Map<string, string>>(new Map());
 
-  // The server caches this payload (60s fresh, 10m stale-while-revalidate)
-  // because building it costs ~25 sequential Stripe round trips. A page mount
-  // takes the cache; the ↻ Refresh button asks for a rebuild with `refresh=1`.
-  const load = useCallback(async (force = false) => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/admin/stripe-summary${force ? "?refresh=1" : ""}`);
+      const res = await fetch("/api/admin/stripe-summary");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setData(json);
@@ -1115,6 +1112,31 @@ export default function Sales() {
   const lifetimeRevenue =
     data?.summary?.lifetimeRevenue ??
     Object.values(data?.revenueByMonth ?? {}).reduce((a, m) => a + m.revenue, 0);
+
+  // Trial → paid, formatted for the KPI card. Falls back to counting the trial
+  // rows directly if `trials` is missing (response cached from before trial
+  // tracking shipped), so the card degrades to "0 trials yet" instead of NaN.
+  const trialKpi = useMemo(() => {
+    const t = data?.trials ?? null;
+    const rows = data?.trialSubscriptions ?? [];
+    const started = t?.started ?? rows.length;
+    const converted = t?.converted ?? rows.filter(r => r.trial_converted).length;
+    const inTrial = t?.stillTrialing ?? rows.filter(r => r.status === "trialing").length;
+    const settled = t?.settled ?? started - inTrial;
+    const rate = t?.conversionRate ?? (settled > 0 ? converted / settled : null);
+
+    if (started === 0) {
+      return { value: "—", sub: "no trials yet", accent: T.muted };
+    }
+    return {
+      value: rate === null ? "—" : `${Math.round(rate * 100)}%`,
+      sub:
+        `${converted} of ${settled} paid` +
+        (inTrial > 0 ? ` · ${inTrial} still in trial` : ""),
+      // Matches the panel below so the two never disagree at a glance.
+      accent: rate === null ? T.muted : rate >= 0.5 ? T.green : rate > 0 ? T.gold : T.red,
+    };
+  }, [data?.trials, data?.trialSubscriptions]);
 
   // Every KPI card's curve is bucketed at the granularity picked in the header,
   // using the same buildPeriods() windows the revenue bar charts use — so the
@@ -1204,7 +1226,7 @@ export default function Sales() {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <GranTabs value={gran} onChange={setGran} />
           <button
-            onClick={() => { load(true); loadExpenses(); loadDiscord(); }}
+            onClick={() => { load(); loadExpenses(); loadDiscord(); }}
             disabled={loading}
             style={{ ...homeSecondaryButtonStyle, padding: "5px 14px", fontSize: 14, opacity: loading ? 0.5 : 1 }}
           >
@@ -1299,6 +1321,20 @@ export default function Sales() {
                 formatValue={fmtMoneyTick}
                 tooltip={`Every dollar Stripe has actually collected (sum of paid invoices), including annual plans in full. Not a rate — the granularity tabs don't rescale it. Expense run-rate is ${fmtMoney(expensesMonthly)}/mo; the chart below nets the two per month.`}
               />
+
+              {/* Trial → paid, up here with the other headline numbers. The
+                  detail table lower down is the audit trail; this is the number
+                  you actually check. No sparkline: a conversion RATE over a
+                  handful of trials is noise as a curve, and a fake-looking
+                  wiggle next to the real revenue curves reads as data. */}
+              <LiveKpiCard
+                label="Trial Conversion"
+                value={trialKpi.value}
+                sub={trialKpi.sub}
+                accent={trialKpi.accent}
+                delta={null}
+                tooltip="Trial members who went on to actually pay — a trial counts as converted once a real invoice (> $0) clears, not when Stripe flips it to active. Subscriptions still inside their trial are excluded from the percentage: they haven't been asked to pay yet, so counting them would drag the number down every time a new trial starts. Monthly plan only — yearly has no trial."
+              />
             </div>
 
             {/* Profit per month — real cash collected, less the expense run-rate.
@@ -1309,6 +1345,17 @@ export default function Sales() {
               revenueByMonth={data.revenueByMonth ?? {}}
               subs={[...data.subscriptions, ...(data.cancellations ?? [])]}
               expensesMonthly={expensesMonthly}
+            />
+
+            {/* Trial → paid funnel. Sits directly under the profit chart and
+                ABOVE the subscription tables: those two lists are long and a
+                panel below them was off the bottom of the page — you had to
+                know it was there to find it. Full width rather than sharing
+                the `2fr 1fr` row, because the rows are short but the emails
+                are long and a 1fr column clipped them. */}
+            <TrialConversionPanel
+              trials={data.trials}
+              subs={data.trialSubscriptions ?? []}
             />
 
             {/* Active Subscriptions + Cancellations — above Expenses.
@@ -1325,15 +1372,6 @@ export default function Sales() {
                 leaving={data.subscriptions.filter(s => displayStatus(s).key === "cancelling")}
               />
             </div>
-
-            {/* Trial → paid funnel. Full width under the subscription tables:
-                the row list is short (one line per trial) but the emails are
-                long, and squeezing it into the 1fr column next to the
-                subscriptions table clipped them. */}
-            <TrialConversionPanel
-              trials={data.trials}
-              subs={data.trialSubscriptions ?? []}
-            />
 
             {/* Expenses — recurring + one-off costs, netted into the KPI above */}
             <ExpensesPanel
