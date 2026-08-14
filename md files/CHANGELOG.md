@@ -1,175 +1,75 @@
 # Changelog
 
-## 2026-08-14 - /strike-history hung forever: the meta query was a 3.1M-row scan for 21 rows
+## 2026-08-14 - Vol GEX Flow tab: +GEX % overlay line
 
-Edited: `server-v2/api-router.js` (`/api/strike-gex-series`, `mode=meta` only).
-
-### What
-
-`/app/strike-history` never loaded. The session/expiry picker sat on
-"Loading..." and every panel stayed on "Pick a session and strike." One request
-was pending in the network panel and never returned:
-`/api/strike-gex-series?mode=meta`. Nothing downstream fires until it answers,
-so the page was dead on arrival.
-
-### The actual cause
-
-The meta query counted every row in the table to produce a 21-row picker list:
-
-```sql
-SELECT date, expiry, COUNT(*)::int AS snaps
-  FROM option_strike_gex_history
- WHERE symbol = ?
- GROUP BY date, expiry
-```
-
-`EXPLAIN ANALYZE` on prod: a Parallel Index Only Scan over 3,150,826 index
-entries, **150 seconds**, to return 21 rows. The plan was fine and the index it
-wanted (`idx_osgh_symbol_snap`) existed — the query simply has to visit every
-row to compute `COUNT(*)`.
-
-Two things made that fatal rather than merely slow:
-
-- The pg pool is `max: 5` (`_lib-db.cjs`, Render/VPS connection limits). Two
-  page loads pinned two connections for minutes each. An unrelated
-  `/api/bzila-alerts` took 13.56s in the same trace — collateral damage.
-- The table had reached **2.6GB of index on a 501MB heap**. Daily mass-DELETEs
-  from `pruneOptionStrikeGexHistory` (retention keeps 2 sessions) had bloated
-  the indexes ~5x, so the same plan read the same rows at roughly 1.6MB/s.
-
-### The fix: a loose index scan
-
-`snaps` was never rendered. `StrikeHistory.tsx` labels the picker off
-date/expiry alone, and it was the only reason the query had to touch every row.
-(`StrikeMeta.snaps`, the count in the *strike* dropdown, is a different field
-and is unchanged.)
-
-Dropping it turns the question into "list the distinct (date, expiry) pairs",
-which a recursive CTE answers by walking `idx_osgh_symbol_lookup`
-(symbol, date, expiry, ...) one hop at a time: seed with the newest pair, then
-repeatedly ask for the greatest pair strictly less than the last. Each hop is an
-index descent with `LIMIT 1`. Cost is O(pairs), not O(rows).
-
-The row-comparison `(h.date, h.expiry) < (p.date, p.expiry)` is load-bearing —
-it maps onto the index's own ordering. Rewriting it as
-`date < ? OR (date = ? AND expiry < ?)` loses the range and falls back to a full
-scan.
-
-Measured on a 504k-row fixture with the prod index set:
-
-| | rows visited | buffers | time |
-|---|---|---|---|
-| `GROUP BY` + `COUNT(*)` | 504,000 | full scan | 58.5ms |
-| recursive skip scan | 22 index descents | 73 | **2.1ms** |
-
-Output verified identical: `EXCEPT` in both directions returns 0 rows, 21 pairs
-each. On prod the gap is far wider — the old query scales with table size, the
-new one with the number of sessions retained (~21).
-
-`snaps` is still returned, as `0`, so the client's `DayMeta` shape is intact.
-
-### What was NOT changed, and why
-
-The `mode=series` ATM CTE was the prime suspect — it was caught in
-`pg_stat_activity` at 10m23s, and its `ORDER BY timestamp, ABS(strike - spot)`
-sorts on a computed expression no index can satisfy. Two rewrites were built and
-benchmarked against a prod-shaped session (800 strikes x 600 snapshots,
-work_mem 4MB). **Both were worse:**
-
-| ATM approach | buffers |
-|---|---|
-| current (unchanged) | **11,684** (227ms) |
-| per-timestamp LATERAL, +/-50 strike band | 91,398 |
-| session-wide spot band as an index bound | 24,078 |
-
-The current form wins on heap correlation: `idx_osgh_symbol_snap` is ordered by
-timestamp and rows are INSERTED in timestamp order, so the scan walks the heap
-sequentially (~43 rows/page) and PG13+ turns the sort into an Incremental Sort
-that never spills. The band versions read up to 32x fewer *rows* but drive them
-through a strike-ordered index, hitting ~1 heap page per row.
-
-That finding is now a comment block above the query so the next person doesn't
-re-litigate it. The series query's SQL is byte-identical to before.
-
-### Operational work (no code)
-
-- Cancelled the runaway `WITH atm` backends.
-- `REINDEX TABLE CONCURRENTLY option_strike_gex_history` to reclaim the index
-  bloat. Note: `psql -c "SET statement_timeout=0; REINDEX ..."` fails —
-  multiple statements in one `-c` form an implicit transaction block and
-  `REINDEX CONCURRENTLY` refuses. Use `PGOPTIONS='-c statement_timeout=0'`. A
-  cancelled run leaves invalid `*_ccnew` indexes that must be dropped before
-  retrying.
-- `statement_timeout = 120s` on the role, so no single query can pin a pool slot
-  for minutes again. Long-running backfills should set their own
-  `SET statement_timeout = 0`.
-
-## 2026-08-14 - Owner Dev page: Flow GEX raw calc card fits its numbers
-
-Edited: `owner-vite/src/pages/Dev.tsx`.
+Edited: `components/dashboard/VolGexFlowPanel.tsx`,
+`server-v2/server-with-proxy.js`.
 
 ### What
 
-The "Flow GEX · raw calc" card on the owner Dev page was squeezed into a
-single narrow column, so every mono number wrapped onto two or three lines
-(`12,951 / 50,612` stacked, `60,789,934` broken up). Unreadable at a glance.
+The Vol GEX Flow tab (home page, Economic Calendar card) gets an
+`OFF / +GEX % OVERLAY` switch beside RTH/ETH. Flip it on and the +GEX % number
+from the home Levels strip — the share of the selected expiry's |net GEX| that
+is positive — draws as an orange line over the Net Vol GEX baseline chart, on
+its own 0-100 left scale with a 50% midline and a legend under the chart. Above
+50 = long-gamma chain.
+
+The strip tile was point-in-time: 63% says the chain is long-gamma right now,
+but not whether it climbed there from 40 or bled down from 80, and that path is
+the part that trades. Overlaying it on the flow chart puts the two side by
+side — "share pushed above 50 while net vol GEX flipped negative" is one glance.
+
+Default off; the choice sticks for the browser session.
 
 ### How
 
-- The card's wrapper was `grid-template-columns: repeat(auto-fill, minmax(360px, 1fr))`
-  with ONE child — auto-fill created full-width tracks and pinned the card to
-  the first ~360px one. Replaced with a plain full-width `div`.
-- Column template changed from fraction units to `minmax(<px>, auto)` so each
-  column is sized to the number it holds instead of an equal share of a too-small
-  box.
-- Header + value cells get `white-space: nowrap` and `font-variant-numeric:
-  tabular-nums`; the table body is wrapped in an `overflow-x: auto` scroller with
-  `min-width: 620` so a narrow viewport scrolls sideways rather than wrapping
-  digits. Column gap 10 → 12.
+**Served, not sampled.** The share rides along on the SAME
+`/proxy/gex-vol-flow` response the chart already fetches, so the line arrives
+complete for the whole session on first load, is identical on every device, and
+follows the expiry chooser.
 
-No calculation or data-path change — layout only.
+**Proxy change** (`handleGexVolFlow`) — purely additive; route, params, caching
+and every existing field unchanged:
 
-## 2026-08-14 - Levels strip: +GEX % sparkline
+- Two aggregates added to the existing final SELECT:
+  `SUM(GREATEST(COALESCE(net_gex,0),0)) AS pos_gex` and
+  `SUM(ABS(COALESCE(net_gex,0))) AS abs_gex`. They sum over the same per-strike
+  `latest` rows in the same pass — the share has to be built from the strikes,
+  and the signed bucket total already returned can't be decomposed back into
+  them afterwards, so this could not be done client-side off the old response.
+- Each point gains `posGex`, `absGex` and `posPct` (0-100). `posPct` is `null`,
+  not 0, on a bucket with no rows, so the chart leaves a gap instead of drawing
+  a dive to zero that never happened.
 
-Edited: `app/home/HomeClient.tsx`.
+**Panel:**
 
-### What
+- **Fixed 0-100 left scale** via `autoscaleInfoProvider`, not autoscale. Fit to
+  data, a chain that spends the day between 58 and 64 would fill the pane top to
+  bottom and read as a violent swing, and the 50% line would wander instead of
+  sitting at a height you can eyeball against.
+- **`C.orange`, not green/red.** Those two tokens already mean gamma polarity on
+  this chart; reusing them for a second, unrelated quantity would make the
+  overlay read as more net vol GEX.
+- The left price scale is declared in the chart constructor and only has
+  `visible` flipped — adding a price scale to a live chart re-lays-out the pane
+  and jumps the series. Data + visibility live in their own effect so toggling
+  never tears down and rebuilds the canvas.
+- The switch is **hidden**, not shown dead, when fewer than two buckets carry a
+  `posPct` — which also gates it off on a server that predates the field, so the
+  tab degrades to its previous behaviour instead of offering a toggle that draws
+  nothing.
+- Legend only renders while the overlay is up: with one series the color is
+  self-explanatory, with two on different scales "which axis is this reading
+  against" is the question, so the units go in the label.
 
-The `+GEX %` tile on the home GEX chart's Levels strip now carries a session
-sparkline under the number. The tile was point-in-time — 63% says the 0DTE chain
-is long-gamma right now, but not whether it climbed there from 40 or bled down
-from 80, and that path is the part that trades.
+### Superseded
 
-Click the tile to hide/show the line; the choice sticks for the browser session.
-
-### How
-
-New module-scope `PosGexSpark` component + a client-side series in `HomeClient`.
-
-- **Sampled off a timer, not off the value.** `posGexPct` is already computed
-  every frame from the live chain the chart holds, so no new route or proxy
-  change was needed. A `setInterval` (20s) reads it through a ref. Keying an
-  effect on `posGexPct` instead would record NOTHING across a quiet stretch where
-  the value sits unchanged — the flat part of the curve is exactly the part that
-  has to be there.
-- **Persisted to `sessionStorage`** under today's ET date (`etYmdToday()`), so a
-  refresh keeps the curve. A stored series from a previous date is dropped rather
-  than appended to — yesterday's positioning is a different chain and would draw
-  a fictional overnight move into the line. Cap 1,200 points (~6.6h at 20s),
-  oldest dropped first.
-- **Domain always includes 50.** A chain that never leaves 60–64 would otherwise
-  auto-scale into a full-height squiggle that reads as a regime change. Fill and
-  line split at the 50% midline: `HOME_THEME.green` above (long gamma),
-  `HOME_THEME.red` below — same tokens the tile's value already uses.
-- **`useId` for the clip-path ids**, not a render index, so two tiles can't steal
-  each other's clip region.
-- Empty `width×height` div rendered until there are two samples, so the tile
-  doesn't grow a few seconds after first paint and shove the strip down.
-- The Levels strip tile array is now explicitly typed (`spark?` / `onClick?` /
-  `title?` optional) since the entries are no longer uniform.
-
-No proxy or server change.
-
+An earlier pass on this sampled `posGexPct` client-side in `HomeClient` on a
+20s timer into `sessionStorage`. It worked, but only recorded from whenever the
+page happened to be opened — open the tab at 2pm and the orange line started at
+2pm while the blue series showed the full session beside it. That code is gone;
+`app/home/HomeClient.tsx` is back to its original state and passes no props to
+the panel.
 
 ## 2026-08-14 - Ticker Lookup: replay slider on both panes
 

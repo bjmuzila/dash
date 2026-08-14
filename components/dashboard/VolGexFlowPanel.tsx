@@ -64,14 +64,17 @@ const ALL = "__all__";
 // chart, and reusing them for a second, unrelated quantity would make the
 // overlay read as more net vol GEX.
 //
-// The series is sampled and owned by app/home/HomeClient.tsx (it stays mounted
-// across tab switches, so the curve has no holes) and passed in as a prop. When
-// the prop is absent — the /test page mounts this same component as a draggable
-// card — the toggle is hidden entirely rather than shown dead.
+// `posPct` rides along on the SAME /proxy/gex-vol-flow response the chart
+// already fetches — the endpoint sums the positive and absolute legs over the
+// same per-strike rows in the same pass. So the line arrives complete for the
+// whole session on first load, is identical on every device, and follows the
+// expiry chooser: pick a date and the share is that expiry's chain.
+//
+// (It was briefly sampled client-side instead. That only recorded from whenever
+// the page happened to be opened — open the tab at 2pm and the line started at
+// 2pm while the blue series showed the full session beside it.)
 const PCT = C.orange;
 const PCT_SERIES_KEY = "cbedge.volGexFlow.pctOverlay";
-
-export type PosGexPoint = { t: number; v: number };
 
 export type VolFlowPoint = {
   ts: number;
@@ -81,6 +84,11 @@ export type VolFlowPoint = {
   combined: number;
   dVol: number | null;
   strikes: number;
+  // Positive share of the bucket's |net GEX|, 0–100 — the "+GEX %" number from
+  // the home Levels strip. null on a bucket with no rows.
+  posGex?: number;
+  absGex?: number;
+  posPct?: number | null;
 };
 
 type ExpiryInfo = { expiry: string; rows: number; lastTs: number };
@@ -129,7 +137,7 @@ function shortExpiry(iso: string): string {
   });
 }
 
-export default function VolGexFlowPanel({ posGexSeries }: { posGexSeries?: PosGexPoint[] } = {}) {
+export default function VolGexFlowPanel() {
   const [pick, setPick] = useState<string>(FRONT);
   const [session, setSession] = useState<"rth" | "eth">("rth");
   const [points, setPoints] = useState<VolFlowPoint[]>([]);
@@ -153,7 +161,15 @@ export default function VolGexFlowPanel({ posGexSeries }: { posGexSeries?: PosGe
     });
   }, []);
 
-  const hasPct = Array.isArray(posGexSeries) && posGexSeries.length > 0;
+  // Two points minimum — one makes a dot, not a line, and the switch would look
+  // broken. Also gates the whole control on an older server that predates the
+  // endpoint's posPct field, so the tab degrades to its previous behaviour
+  // rather than offering a toggle that draws nothing.
+  const pctPoints = useMemo(
+    () => points.filter((p) => p.posPct != null && Number.isFinite(p.posPct)),
+    [points]
+  );
+  const hasPct = pctPoints.length > 1;
 
   const load = useCallback(async () => {
     const qs =
@@ -342,20 +358,16 @@ export default function VolGexFlowPanel({ posGexSeries }: { posGexSeries?: PosGe
     if (!s) return;
     const on = showPct && hasPct;
     if (on) {
-      // Guard the sort/dedupe here rather than trusting the producer:
-      // lightweight-charts throws on out-of-order or duplicate times and would
-      // take the whole tab down with it.
-      const seen = new Set<number>();
-      const data = (posGexSeries ?? [])
-        .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.v))
-        .sort((a, b) => a.t - b.t)
-        .filter((p) => (seen.has(p.t) ? false : (seen.add(p.t), true)))
-        .map((p) => ({ time: p.t as UTCTimestamp, value: p.v }));
-      s.setData(data);
+      s.setData(
+        pctPoints.map((p) => ({
+          time: Math.floor(p.ts / 1000) as UTCTimestamp,
+          value: p.posPct as number,
+        }))
+      );
     }
     s.applyOptions({ visible: on });
     chartRef.current?.applyOptions({ leftPriceScale: { visible: on, borderColor: C.border } });
-  }, [showPct, hasPct, posGexSeries]);
+  }, [showPct, hasPct, pctPoints]);
 
   useEffect(() => {
     if (!seriesRef.current) return;
@@ -427,13 +439,13 @@ export default function VolGexFlowPanel({ posGexSeries }: { posGexSeries?: PosGe
         </div>
         {/* +GEX % overlay switch — same segmented shape as RTH/ETH so the header
             reads as one control row, tinted orange to match the line it draws.
-            Hidden, not shown dead, when the series isn't wired in (app/test
-            mounts this component as a draggable card without the prop). */}
+            Hidden, not shown dead, when the response carries no posPct — an
+            older server, or a window with no rows. */}
         {hasPct && (
           <div style={{ display: "flex", border: `1px solid ${showPct ? "rgba(251,133,1,0.40)" : C.border}`, borderRadius: 7, overflow: "hidden" }}>
             {([
               { on: false, label: "OFF", title: "Hide the +GEX % overlay" },
-              { on: true, label: "+GEX % OVERLAY", title: "Overlay +GEX % — the share of the 0DTE chain's |net GEX| that is positive, on its own 0–100 left scale. Above 50% = long-gamma chain." },
+              { on: true, label: "+GEX % OVERLAY", title: "Overlay +GEX % — the share of the selected expiry's |net GEX| that is positive, on its own 0–100 left scale. Above 50% = long-gamma chain." },
             ] as const).map((o) => {
               const active = showPct === o.on;
               return (
@@ -521,7 +533,7 @@ export default function VolGexFlowPanel({ posGexSeries }: { posGexSeries?: PosGe
         <div style={{ display: "flex", gap: 14, flexShrink: 0, fontSize: 10, color: C.text, letterSpacing: "0.04em", paddingTop: 2 }}>
           {([
             { color: POS, label: "Net Vol GEX (right, $)", dash: false },
-            { color: PCT, label: "+GEX % of 0DTE chain (left, %)", dash: false },
+            { color: PCT, label: "+GEX % of chain (left, %)", dash: false },
             { color: "rgba(255,255,255,0.35)", label: "50% reference", dash: true },
           ] as const).map((l) => (
             <span key={l.label} style={{ display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>

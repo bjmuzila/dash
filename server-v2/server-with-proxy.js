@@ -1197,10 +1197,16 @@ async function handleGexVolFlow(req, res) {
         ORDER BY bucket_ms, expiry, strike, timestamp DESC
      )
      SELECT bucket_ms,
-            MAX(spot)                     AS spot,
-            SUM(COALESCE(net_vol_gex, 0)) AS vol_gex,
-            SUM(COALESCE(net_gex, 0))     AS oi_gex,
-            COUNT(*)::int                 AS strikes
+            MAX(spot)                                AS spot,
+            SUM(COALESCE(net_vol_gex, 0))            AS vol_gex,
+            SUM(COALESCE(net_gex, 0))                AS oi_gex,
+            -- Positive-share legs for the "+GEX %" overlay on the Vol GEX Flow
+            -- tab. Summed over the SAME per-strike rows, in the same pass — the
+            -- share has to be built from the strikes, and a signed bucket total
+            -- can't be decomposed back into them afterwards.
+            SUM(GREATEST(COALESCE(net_gex, 0), 0))   AS pos_gex,
+            SUM(ABS(COALESCE(net_gex, 0)))           AS abs_gex,
+            COUNT(*)::int                            AS strikes
        FROM latest
       GROUP BY bucket_ms
       ORDER BY bucket_ms ASC`,
@@ -1211,6 +1217,8 @@ async function handleGexVolFlow(req, res) {
   const points = rows.map((r) => {
     const volGex = Number(r.vol_gex) || 0;
     const oiGex = Number(r.oi_gex) || 0;
+    const posGex = Number(r.pos_gex) || 0;
+    const absGex = Number(r.abs_gex) || 0;
     const p = {
       ts: Number(r.bucket_ms),
       spot: Number(r.spot) || 0,
@@ -1219,6 +1227,13 @@ async function handleGexVolFlow(req, res) {
       combined: volGex + oiGex,
       // Bucket-over-bucket change in the vol leg — the "flow" of the flow.
       dVol: prev == null ? null : volGex - prev,
+      // Share of the bucket's |net GEX| that is positive, 0–100. Same definition
+      // as the home Levels strip's "+GEX %" tile: 100 = pure long-gamma chain,
+      // 0 = pure short. null rather than 0 on an empty bucket, so the chart puts
+      // a gap there instead of drawing a dive to zero that never happened.
+      posGex,
+      absGex,
+      posPct: absGex > 0 ? (posGex / absGex) * 100 : null,
       strikes: Number(r.strikes) || 0,
     };
     prev = volGex;

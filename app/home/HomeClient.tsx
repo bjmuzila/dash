@@ -7,7 +7,7 @@ import FlowNetPremPanel from "@/components/dashboard/FlowNetPremPanel";
 import WhaleOrdersPanel from "@/components/dashboard/WhaleOrdersPanel";
 import GreeksHomePanel from "@/components/dashboard/GreeksHomePanel";
 import GexPulsePanel from "@/components/dashboard/GexPulsePanel";
-import VolGexFlowPanel, { type PosGexPoint } from "@/components/dashboard/VolGexFlowPanel";
+import VolGexFlowPanel from "@/components/dashboard/VolGexFlowPanel";
 import IbStatsTab from "@/components/scanner/IbStatsTab";
 // The GEX card's "ES Candles" view reuses the exact standalone /es-candles page
 // (same pattern as the Chain tab reusing /options-chain below) rather than the
@@ -262,26 +262,6 @@ function fmtExpiryLabel(dateStr: string, label: string) {
 function formatStrikeValue(value: number): string {
   return Number.isInteger(value) ? value.toLocaleString("en-US") : value.toFixed(2);
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// +GEX % session series
-//
-// The Levels strip's "+GEX %" tile is point-in-time: 63% says the 0DTE chain is
-// long-gamma right now, but not whether it climbed there from 40 or bled down
-// from 80 — and that path is the part that trades. This collects the same
-// number through the session; the Vol GEX Flow tab overlays it on its chart.
-//
-// Sampled client-side because posGexPct is already computed here every frame
-// off the live chain — a history endpoint would only re-derive what this page
-// already has, and would need a new proxy route to carry it.
-// ─────────────────────────────────────────────────────────────────────────────
-const POSGEX_SERIES_MS = 20_000;  // one sample / 20s → ~1,170 over a full RTH day
-const POSGEX_SERIES_MAX = 1200;   // hard cap, oldest dropped first
-const POSGEX_SERIES_KEY = "cbedge.posGexPctSeries";
-
-// Point shape is owned by the consumer (VolGexFlowPanel) — `t` is UNIX SECONDS,
-// matching lightweight-charts' UTCTimestamp, so the overlay hands this list
-// straight to setData() with no remapping.
 
 
 // Today in ET as yyyy-mm-dd. Matches the server's todayYmd() convention so the
@@ -1484,60 +1464,6 @@ export function HomeClient({
     return abs > 0 ? (pos / abs) * 100 : null;
   }, [chartRows, chartSpot]);
 
-  // ── +GEX % session series → the Vol GEX Flow tab's overlay ───────────────
-  // Sampled HERE rather than inside VolGexFlowPanel because the panel only
-  // mounts while its tab is showing: sampling there would leave a hole in the
-  // curve for every minute the user spent on Economic Calendar or Whale. This
-  // component is mounted for the whole session, so the series stays continuous
-  // no matter which tab is up.
-  //
-  // Timer-driven off a ref, not an effect keyed on posGexPct: on a quiet chain
-  // that value can sit unchanged for minutes, and a value-keyed effect would
-  // record nothing across the stretch — the flat part of the curve is exactly
-  // the part that has to be there.
-  //
-  // No server round trip and no proxy change: posGexPct is already derived every
-  // frame from the live chain the chart holds.
-  const [posGexSeries, setPosGexSeries] = useState<PosGexPoint[]>([]);
-  const posGexPctRef = useRef<number | null>(null);
-  useEffect(() => { posGexPctRef.current = posGexPct; }, [posGexPct]);
-
-  // Rehydrate today's curve once. A stored series from an earlier ET date is
-  // dropped rather than appended to — yesterday's positioning is a different
-  // chain, and joining them draws a fictional overnight move into the line.
-  useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem(POSGEX_SERIES_KEY);
-      if (!raw) return;
-      const saved = JSON.parse(raw) as { ymd?: string; pts?: PosGexPoint[] };
-      if (saved?.ymd === etYmdToday() && Array.isArray(saved.pts)) {
-        setPosGexSeries(saved.pts.slice(-POSGEX_SERIES_MAX));
-      }
-    } catch { /* private mode / quota — the series just starts empty */ }
-  }, []);
-
-  useEffect(() => {
-    const sample = () => {
-      const v = posGexPctRef.current;
-      if (v == null || !Number.isFinite(v)) return;
-      setPosGexSeries((cur) => {
-        // Whole seconds: lightweight-charts keys points by time and rejects a
-        // series with duplicates, and the overlay consumes this list directly.
-        const t = Math.floor(Date.now() / 1000);
-        if (cur.length && cur[cur.length - 1].t === t) return cur;
-        const next = cur.concat({ t, v });
-        if (next.length > POSGEX_SERIES_MAX) next.splice(0, next.length - POSGEX_SERIES_MAX);
-        try {
-          sessionStorage.setItem(POSGEX_SERIES_KEY, JSON.stringify({ ymd: etYmdToday(), pts: next }));
-        } catch { /* quota — keep the in-memory series either way */ }
-        return next;
-      });
-    };
-    sample();
-    const id = setInterval(sample, POSGEX_SERIES_MS);
-    return () => clearInterval(id);
-  }, []);
-
   // Bull/Bear premium split — same calc as the /test Flow Inventory panel
   // (buy calls + sell puts = bullish premium), SPX tape only.
   const [flowBull, setFlowBull] = useState<number | null>(null);
@@ -2020,7 +1946,7 @@ export function HomeClient({
                 )}
                 {activeTab === "volgex" && (
                   <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
-                    <VolGexFlowPanel posGexSeries={posGexSeries} />
+                    <VolGexFlowPanel />
                   </div>
                 )}
                 {activeTab === "flow" && (
