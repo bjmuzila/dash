@@ -1910,14 +1910,121 @@ register('/api/discord-share', {
   });
 }
 
-// /api/social-media/daily-input — bundled pre-market read (spot/walls/flip/net
-// GEX from /proxy/gex, EM from ATM straddle, ES overnight from candles). GET,
-// subscriber. Ported verbatim from app/api/social-media/daily-input/route.ts;
-// proxyBase fetches → ctx.internalFetch (internal token auto-attached).
+// ── Social-media shared chain helpers (module scope) ─────────────────────────
+// Hoisted out of the /api/social-media/daily-input handler so the ticker-aware
+// /api/social-media/gex-chain route below can reuse the exact same flattening
+// and GEX math. Behaviour is byte-for-byte what the handler used before.
+const SM_GEX_LADDER_HALF = 20;
+
+const smDaysTo = (exp) =>
+  Math.ceil((new Date(exp + 'T16:00:00').getTime() - Date.now()) / 86_400_000);
+
+// Normalise an owner-typed symbol into the root the TastyTrade proxy expects.
+// "$SPX" / "/ES" / " spy " all collapse to the bare uppercase root. Futures
+// aliases match the /api/levels ALIAS table so the picker and the levels store
+// agree on which row belongs to which ticker.
+const SM_TICKER_ALIAS = {
+  ES: 'ESU', ESM: 'ESU', ESU6: 'ESU', ESU26: 'ESU',
+  NQ: 'NQU', NQM: 'NQU', NQU6: 'NQU', NQU26: 'NQU',
+};
+function smNormalizeTicker(raw, fallback = 'SPX') {
+  const cleaned = String(raw ?? '').trim().toUpperCase().replace(/[$]/g, '').replace(/^\//, '');
+  if (!cleaned || !/^[A-Z0-9.\-]{1,12}$/.test(cleaned)) return fallback;
+  return cleaned;
+}
+// The key ticker_levels stores this symbol under (futures roots are aliased).
+function smLevelsSymbol(ticker) {
+  return SM_TICKER_ALIAS[ticker] || ticker;
+}
+
+function smFlattenChain(json) {
+  const root = json ?? {};
+  const data = root.data ?? root;
+  const items = Array.isArray(data.items) ? data.items : [];
+  const legs = [];
+  for (const grp of items) {
+    const expiration = String(grp['expiration-date'] ?? grp.expirationDate ?? grp.expiration ?? '');
+    const strikes = Array.isArray(grp.strikes) ? grp.strikes : [];
+    for (const row of strikes) {
+      const strike = Number(row['strike-price'] ?? row.strikePrice ?? row.strike ?? 0);
+      if (!(strike > 0)) continue;
+      for (const side of ['call', 'put']) {
+        const leg = row[side];
+        if (!leg) continue;
+        legs.push({
+          strike, type: side.toUpperCase(),
+          bid: Number(leg.bid ?? leg['bid-price'] ?? 0), ask: Number(leg.ask ?? leg['ask-price'] ?? 0),
+          mark: Number(leg.mark ?? leg['mark-price'] ?? leg['mid-price'] ?? 0), last: Number(leg.last ?? leg['last-price'] ?? 0),
+          iv: Number(leg.iv ?? leg['implied-volatility'] ?? leg.volatility ?? 0),
+          dte: Number(leg.dte ?? leg.daysToExpiration ?? (expiration ? smDaysTo(expiration) : 0)),
+          gamma: Math.abs(Number(leg.gamma ?? 0)), oi: Number(leg['open-interest'] ?? leg.openInterest ?? leg.oi ?? 0),
+          volume: Number(leg.volume ?? 0), expiration,
+        });
+      }
+    }
+  }
+  const underlying = Number(data.underlyingPrice ?? data.underlying_price ?? root.underlyingPrice ?? 0);
+  return { legs, underlying };
+}
+
+// Collapse flattened legs into the per-strike ChainRow shape the dashboard
+// GexChart / Heatmap components consume (the same shape /api/gex returns for
+// SPX off the live in-memory feed) so any ticker can render the same visuals.
+function smChainRows(legs, spot) {
+  const byStrike = new Map();
+  for (const l of legs) {
+    if (!(l.strike > 0)) continue;
+    const e = byStrike.get(l.strike) ?? { strike: l.strike };
+    if (l.type === 'CALL') {
+      e.callOI = Number(l.oi) || 0; e.callVolume = Number(l.volume) || 0;
+      e.callGamma = Math.abs(Number(l.gamma) || 0); e.callIV = Number(l.iv) || 0;
+      e.callMark = Number(l.mark) || 0;
+    } else {
+      e.putOI = Number(l.oi) || 0; e.putVolume = Number(l.volume) || 0;
+      e.putGamma = Math.abs(Number(l.gamma) || 0); e.putIV = Number(l.iv) || 0;
+      e.putMark = Number(l.mark) || 0;
+    }
+    e.dte = Number.isFinite(Number(l.dte)) ? Number(l.dte) : (e.dte ?? 0);
+    byStrike.set(l.strike, e);
+  }
+  const s2 = spot > 0 ? spot * spot : 0;
+  const rows = [];
+  for (const e of byStrike.values()) {
+    const cOI = e.callOI ?? 0, cV = e.callVolume ?? 0, pOI = e.putOI ?? 0, pV = e.putVolume ?? 0;
+    const callGEX = (e.callGamma ?? 0) * (cOI + cV) * s2;
+    const putGEX = -((e.putGamma ?? 0) * (pOI + pV) * s2);
+    const callVolGEX = (e.callGamma ?? 0) * cV * s2;
+    const putVolGEX = -((e.putGamma ?? 0) * pV * s2);
+    rows.push({
+      strike: e.strike, spotPrice: spot,
+      callOI: cOI, callVolume: cV, putOI: pOI, putVolume: pV,
+      callGamma: e.callGamma ?? 0, putGamma: e.putGamma ?? 0,
+      callIV: e.callIV ?? 0, putIV: e.putIV ?? 0,
+      callMark: e.callMark ?? 0, putMark: e.putMark ?? 0,
+      dte: e.dte ?? 0,
+      callGEX, putGEX,
+      netGEX: callGEX + putGEX,
+      netVolGEX: callVolGEX + putVolGEX,
+    });
+  }
+  rows.sort((a, b) => a.strike - b.strike);
+  return rows;
+}
+
+// /api/social-media/daily-input — bundled pre-market read (spot / prior close /
+// walls / flip / net GEX / EM / overnight H-L, plus prior-day + prior-week
+// reference levels and the published EM-pivot-zone row). GET, owner.
+//
+// ?ticker= (default SPX). SPX keeps the ORIGINAL path verbatim — the live
+// in-memory /proxy/gex feed — so nothing about the existing card changes. Any
+// other ticker is assembled from the already-ticker-wide sources: the
+// TastyTrade chain proxy for GEX + EM, the scanner sweep for CB / walls / flip
+// fallbacks, /api/tt-quotes for spot, /api/ref-levels for PDH-PDL-PWH-PWL and
+// /api/levels for the published row.
 register('/api/social-media/daily-input', {
   auth: 'owner', methods: ['GET'],
   async handler(req, res, ctx) {
-    const GEX_LADDER_HALF = 20;
+    const GEX_LADDER_HALF = SM_GEX_LADDER_HALF;
     const rowNetGex = (o, basis) => {
       const oi = Number(o.netGEX ?? o.netGex ?? 0);
       const vol = Number(o.netVolGEX ?? o.netVolGex ?? 0);
@@ -1954,37 +2061,8 @@ register('/api/social-media/daily-input', {
       const end = Math.min(rows.length, atm + GEX_LADDER_HALF + 1);
       return rows.slice(start, end).sort((a, b) => b.strike - a.strike).map((r) => ({ strike: r.strike, netGex: r.netGEX / 1e6 }));
     };
-    const daysTo = (exp) => Math.ceil((new Date(exp + 'T16:00:00').getTime() - Date.now()) / 86_400_000);
     const legMid = (o) => { if (o.bid > 0 && o.ask > 0) return (o.bid + o.ask) / 2; if (o.mark > 0) return o.mark; if (o.last > 0) return o.last; return 0; };
-    const flattenChain = (json) => {
-      const root = json ?? {};
-      const data = root.data ?? root;
-      const items = Array.isArray(data.items) ? data.items : [];
-      const legs = [];
-      for (const grp of items) {
-        const expiration = String(grp['expiration-date'] ?? grp.expirationDate ?? grp.expiration ?? '');
-        const strikes = Array.isArray(grp.strikes) ? grp.strikes : [];
-        for (const row of strikes) {
-          const strike = Number(row['strike-price'] ?? row.strikePrice ?? row.strike ?? 0);
-          if (!(strike > 0)) continue;
-          for (const side of ['call', 'put']) {
-            const leg = row[side];
-            if (!leg) continue;
-            legs.push({
-              strike, type: side.toUpperCase(),
-              bid: Number(leg.bid ?? leg['bid-price'] ?? 0), ask: Number(leg.ask ?? leg['ask-price'] ?? 0),
-              mark: Number(leg.mark ?? leg['mark-price'] ?? leg['mid-price'] ?? 0), last: Number(leg.last ?? leg['last-price'] ?? 0),
-              iv: Number(leg.iv ?? leg['implied-volatility'] ?? leg.volatility ?? 0),
-              dte: Number(leg.dte ?? leg.daysToExpiration ?? (expiration ? daysTo(expiration) : 0)),
-              gamma: Math.abs(Number(leg.gamma ?? 0)), oi: Number(leg['open-interest'] ?? leg.openInterest ?? leg.oi ?? 0),
-              volume: Number(leg.volume ?? 0), expiration,
-            });
-          }
-        }
-      }
-      const underlying = Number(data.underlyingPrice ?? data.underlying_price ?? root.underlyingPrice ?? 0);
-      return { legs, underlying };
-    };
+    const flattenChain = smFlattenChain;
     const computeExpiryGex = (legs, spot, basis = 'oivol') => {
       if (!legs.length || !(spot > 0)) return null;
       const byStrike = new Map();
@@ -2015,9 +2093,9 @@ register('/api/social-media/daily-input', {
       return { ladder, callWall, putWall, gammaFlip: flip, netGex: Number.isFinite(total) && total !== 0 ? total / 1e9 : null };
     };
     const dteToDateLabel = (dte) => { const d = new Date(); d.setDate(d.getDate() + Math.max(0, dte)); return d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }); };
-    const resolveExpiry = async (dte) => {
+    const resolveExpiry = async (dte, sym = 'SPX') => {
       try {
-        const r = await ctx.internalFetch(`/proxy/api/tt/expirations/SPX`, { cache: 'no-store' });
+        const r = await ctx.internalFetch(`/proxy/api/tt/expirations/${encodeURIComponent(sym)}`, { cache: 'no-store' });
         if (!r.ok) return '';
         const json = await r.json();
         const data = json?.data ?? json;
@@ -2027,19 +2105,19 @@ register('/api/social-media/daily-input', {
         return dte === 0 ? dates[0] : (dates[1] ?? dates[0]);
       } catch { return ''; }
     };
-    const fetchExpiryChain = async (expiration) => {
+    const fetchExpiryChain = async (expiration, sym = 'SPX') => {
       try {
         const q = expiration ? `?expiration=${encodeURIComponent(expiration)}` : '';
-        const r = await ctx.internalFetch(`/proxy/api/tt/chains/SPX${q}`, { cache: 'no-store' });
+        const r = await ctx.internalFetch(`/proxy/api/tt/chains/${encodeURIComponent(sym)}${q}`, { cache: 'no-store' });
         if (!r.ok) return { legs: [], underlying: 0 };
         const { legs, underlying } = flattenChain(await r.json());
         const filtered = expiration ? legs.filter((l) => l.expiration === expiration) : legs;
         return { legs: filtered.length ? filtered : legs, underlying };
       } catch { return { legs: [], underlying: 0 }; }
     };
-    const computeExpectedMove = async (spot) => {
+    const computeExpectedMove = async (spot, sym = 'SPX') => {
       try {
-        const r = await ctx.internalFetch(`/proxy/api/tt/chains/SPX`, { cache: 'no-store' });
+        const r = await ctx.internalFetch(`/proxy/api/tt/chains/${encodeURIComponent(sym)}`, { cache: 'no-store' });
         if (!r.ok) return { em: null, expiry: null };
         const { legs, underlying } = flattenChain(await r.json());
         if (!legs.length) return { em: null, expiry: null };
@@ -2083,12 +2161,75 @@ register('/api/social-media/daily-input', {
       } catch { return { high: null, low: null }; }
     };
 
+    // ── Ticker-wide side reads ───────────────────────────────────────────────
+    // Every one of these already accepts an arbitrary symbol; they are the
+    // sources a non-SPX ticker is assembled from. All are best-effort — a miss
+    // leaves the field null rather than failing the whole bundle.
+    const jsonOf = async (path) => {
+      try {
+        const r = await ctx.internalFetch(path, { cache: 'no-store' });
+        if (!r.ok) return null;
+        return await r.json();
+      } catch { return null; }
+    };
+    const posNum = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
+    const fetchScannerRow = async (sym) => {
+      const j = await jsonOf('/proxy/scanner?any=1&limit=400');
+      const rows = Array.isArray(j?.rows) ? j.rows : [];
+      return rows.find((r) => String(r?.symbol ?? '').toUpperCase() === sym) ?? null;
+    };
+    const fetchQuote = async (sym) => {
+      const j = await jsonOf(`/api/tt-quotes?symbols=${encodeURIComponent(sym)}`);
+      const items = j?.data?.items ?? j?.items ?? j?.data ?? [];
+      const list = Array.isArray(items) ? items : [];
+      const it = list.find((x) => String(x?.symbol ?? '').toUpperCase() === sym) ?? list[0] ?? null;
+      if (!it) return { last: null, prevClose: null };
+      return {
+        last: posNum(it.last) ?? posNum(it['last-price']) ?? posNum(it.mark) ?? posNum(it['mark-price']),
+        prevClose: posNum(it.prevClose) ?? posNum(it['prev-close']) ?? posNum(it.previousClose)
+          ?? posNum(it['previous-close']) ?? posNum(it['close-price']) ?? posNum(it.close),
+      };
+    };
+    const fetchRefLevels = async (sym) => {
+      const j = await jsonOf(`/api/ref-levels?symbol=${encodeURIComponent(sym)}`);
+      if (!j) return null;
+      return { pdh: posNum(j.pdh), pdl: posNum(j.pdl), pwh: posNum(j.pwh), pwl: posNum(j.pwl), pdDate: j.pdDate ?? null };
+    };
+    const fetchTickerLevels = async (sym) => {
+      const j = await jsonOf(`/api/levels?ticker=${encodeURIComponent(sym)}`);
+      if (!j || typeof j !== 'object') return null;
+      const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
+      return {
+        label: j.label ?? null, close: n(j.close), em: n(j.em), up: n(j.up), down: n(j.down),
+        buyNear: n(j.buy_near), buyFar: n(j.buy_far), sellNear: n(j.sell_near), sellFar: n(j.sell_far),
+        pivot: n(j.pivot), expLabel: j.exp_label ?? null,
+      };
+    };
+
     const params = new URL(req.url || '/', 'http://localhost').searchParams;
+    const ticker = smNormalizeTicker(params.get('ticker'), 'SPX');
+    const isSpx = ticker === 'SPX';
     const dte = params.get('dte') === '1' ? 1 : 0;
     const basis = params.get('gexBasis') === 'vol' ? 'vol' : 'oivol';
-    const out = { spxSpot: null, gammaFlip: null, callWall: null, putWall: null, expectedMove: null, expectedMoveExpiry: null, netGex: null, esOvernightHigh: null, esOvernightLow: null, spxPrevClose: null, emUpper: null, emLower: null, gexLadder: [], updatedAt: Date.now() };
+    const out = {
+      ticker,
+      // Generic keys — use these for new code.
+      spot: null, prevClose: null,
+      // Back-compat aliases the existing share card still reads.
+      spxSpot: null, spxPrevClose: null,
+      gammaFlip: null, callWall: null, putWall: null, coreBullseye: null,
+      expectedMove: null, expectedMoveExpiry: null, netGex: null,
+      esOvernightHigh: null, esOvernightLow: null,
+      overnightHigh: null, overnightLow: null,
+      pdh: null, pdl: null, pwh: null, pwl: null, pdDate: null,
+      levels: null, emUpper: null, emLower: null, gexLadder: [],
+      scannerStale: null, scannerTs: null,
+      source: isSpx ? 'live-gex' : 'chain+scanner',
+      updatedAt: Date.now(),
+    };
     let spotForEm = 0;
-    try {
+    // SPX keeps the ORIGINAL live in-memory feed path, untouched.
+    if (isSpx) try {
       const r = await ctx.internalFetch(`/proxy/gex`, { cache: 'no-store' });
       if (r.ok) {
         const p = await r.json();
@@ -2114,7 +2255,46 @@ register('/api/social-media/daily-input', {
         }
       }
     } catch { /* leave nulls */ }
-    if (dte === 1) {
+
+    // Any non-SPX ticker: quote for spot/prior close, the scanner sweep for the
+    // CB + wall + flip fallbacks, and the option chain for the real GEX read.
+    let scanRow = null;
+    if (!isSpx) {
+      const [q, sr] = await Promise.all([fetchQuote(ticker), fetchScannerRow(ticker)]);
+      scanRow = sr;
+      const scanSpot = posNum(scanRow?.spot);
+      const spot = q.last ?? scanSpot ?? 0;
+      out.spxSpot = spot > 0 ? spot : null;
+      out.spxPrevClose = q.prevClose;
+      spotForEm = spot;
+      if (scanRow) {
+        out.callWall = posNum(scanRow.call_wall);
+        out.putWall = posNum(scanRow.put_wall);
+        out.gammaFlip = posNum(scanRow.gex_flip);
+        out.coreBullseye = posNum(scanRow.cb);
+        out.scannerStale = !!scanRow.stale;
+        out.scannerTs = scanRow.ts ?? null;
+        const tng = Number(scanRow.total_net_gex);
+        if (Number.isFinite(tng) && tng !== 0) out.netGex = tng / 1e9;
+      }
+      // Live chain read — overrides the (up to 5-minute stale) sweep whenever
+      // the chain actually returns strikes for this root.
+      try {
+        const expiry = await resolveExpiry(dte, ticker);
+        const { legs, underlying } = await fetchExpiryChain(expiry, ticker);
+        const spotForGex = out.spxSpot ?? (underlying > 0 ? underlying : spotForEm);
+        if (spotForGex > 0 && !out.spxSpot) { out.spxSpot = spotForGex; spotForEm = spotForGex; }
+        const gx = computeExpiryGex(legs, spotForGex, basis);
+        if (gx) {
+          out.gexLadder = gx.ladder;
+          if (gx.callWall != null) out.callWall = gx.callWall;
+          if (gx.putWall != null) out.putWall = gx.putWall;
+          if (gx.gammaFlip != null) out.gammaFlip = gx.gammaFlip;
+          if (gx.netGex != null) out.netGex = gx.netGex;
+          out.source = 'chain';
+        }
+      } catch { /* keep the scanner-derived values */ }
+    } else if (dte === 1) {
       try {
         const expiry = await resolveExpiry(1);
         if (expiry) {
@@ -2131,13 +2311,108 @@ register('/api/social-media/daily-input', {
         }
       } catch { /* keep front-expiry values */ }
     }
-    const [em, es] = await Promise.all([computeExpectedMove(spotForEm), computeEsOvernight()]);
+
+    // Common tail. The ES overnight candle read is genuinely ES-only, so it is
+    // skipped for other roots; prior-day H/L from ref_levels fills that slot in
+    // the UI instead.
+    const [em, es, ref, lv] = await Promise.all([
+      computeExpectedMove(spotForEm, ticker),
+      isSpx ? computeEsOvernight() : Promise.resolve({ high: null, low: null }),
+      fetchRefLevels(ticker),
+      fetchTickerLevels(smLevelsSymbol(ticker)),
+    ]);
     out.expectedMove = em.em;
     out.expectedMoveExpiry = em.expiry;
     out.esOvernightHigh = es.high;
     out.esOvernightLow = es.low;
+    out.overnightHigh = es.high;
+    out.overnightLow = es.low;
+    if (ref) { out.pdh = ref.pdh; out.pdl = ref.pdl; out.pwh = ref.pwh; out.pwl = ref.pwl; out.pdDate = ref.pdDate; }
+    if (lv) out.levels = lv;
+    // Fall back to the published EM / close row when the chain read came up dry
+    // (thin or missing option chain for this root).
+    if (out.expectedMove == null && lv?.em != null && lv.em > 0) {
+      out.expectedMove = lv.em;
+      out.expectedMoveExpiry = out.expectedMoveExpiry ?? lv.expLabel ?? null;
+    }
+    if (out.spxPrevClose == null && lv?.close != null && lv.close > 0) out.spxPrevClose = lv.close;
     if (out.spxPrevClose != null && out.expectedMove != null) { out.emUpper = out.spxPrevClose + out.expectedMove; out.emLower = out.spxPrevClose - out.expectedMove; }
+    // Mirror the legacy spx* keys onto the generic ones.
+    out.spot = out.spxSpot;
+    out.prevClose = out.spxPrevClose;
     send(res, 200, { data: out }, { 'Cache-Control': NO_STORE });
+  },
+});
+
+// /api/social-media/gex-chain?ticker=&expiration= — ticker-aware sibling of
+// /api/gex. Returns the SAME payload shape ({ chain, spotPrice, gexFlip,
+// callWall, putWall, expiration }) so the owner GEX chart / heatmap cards can
+// render any root, not just the single in-memory SPX feed.
+//
+// SPX delegates straight to /api/gex so the live feed (and its exact numbers)
+// stay authoritative for the ticker the desk posts most.
+register('/api/social-media/gex-chain', {
+  auth: 'owner', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+    const ticker = smNormalizeTicker(sp.get('ticker'), 'SPX');
+    const expiration = (sp.get('expiration') || '').trim();
+    try {
+      if (ticker === 'SPX' && !expiration) {
+        const r = await ctx.internalFetch('/api/gex', { cache: 'no-store' });
+        const body = await r.text();
+        send(res, r.status, body, { 'Cache-Control': NO_STORE });
+        return;
+      }
+      const q = expiration ? `?expiration=${encodeURIComponent(expiration)}` : '';
+      const r = await ctx.internalFetch(
+        `/proxy/api/tt/chains/${encodeURIComponent(ticker)}${q}`, { cache: 'no-store' });
+      if (!r.ok) { send(res, 502, { error: `chain ${r.status}`, ticker, chain: [] }); return; }
+      const { legs, underlying } = smFlattenChain(await r.json());
+      const scoped = expiration ? legs.filter((l) => l.expiration === expiration) : legs;
+      const use = scoped.length ? scoped : legs;
+      // Front expiry only unless one was named — matches what /api/gex serves.
+      let pick = use;
+      if (!expiration && use.length) {
+        const exps = [...new Set(use.map((l) => l.expiration).filter(Boolean))].sort();
+        if (exps.length) pick = use.filter((l) => l.expiration === exps[0]);
+      }
+      let spot = underlying;
+      if (!(spot > 0)) {
+        const jq = await ctx.internalFetch(
+          `/api/tt-quotes?symbols=${encodeURIComponent(ticker)}`, { cache: 'no-store' })
+          .then((x) => (x.ok ? x.json() : null)).catch(() => null);
+        const items = jq?.data?.items ?? jq?.items ?? [];
+        const it = Array.isArray(items) ? items[0] : null;
+        spot = Number(it?.last ?? it?.mark ?? 0) || 0;
+      }
+      const chain = smChainRows(pick, spot);
+      // Walls + flip off the same rows so the card strip and the chart agree.
+      const above = chain.filter((r2) => r2.strike > spot && r2.netGEX > 0);
+      const below = chain.filter((r2) => r2.strike < spot && r2.netGEX < 0);
+      let flip = null, cum = 0, prevCum = 0, prevStrike = null;
+      for (const r2 of chain) {
+        prevCum = cum; cum += r2.netGEX;
+        if (prevStrike !== null && prevCum < 0 && cum >= 0) {
+          const range = cum - prevCum;
+          flip = Math.abs(range) > 0 ? prevStrike + (r2.strike - prevStrike) * (-prevCum / range) : r2.strike;
+          break;
+        }
+        prevStrike = r2.strike;
+      }
+      send(res, 200, {
+        ticker,
+        chain,
+        spotPrice: spot,
+        expiration: expiration || (pick[0]?.expiration ?? null),
+        gexFlip: flip,
+        callWall: above.length ? above.reduce((b, r2) => (r2.netGEX > b.netGEX ? r2 : b)).strike : null,
+        putWall: below.length ? below.reduce((b, r2) => (r2.netGEX < b.netGEX ? r2 : b)).strike : null,
+        totalNetGex: chain.reduce((s, r2) => s + r2.netGEX, 0),
+      }, { 'Cache-Control': NO_STORE });
+    } catch (err) {
+      send(res, 500, { error: String(err), ticker, chain: [] });
+    }
   },
 });
 
@@ -2148,7 +2423,7 @@ register('/api/social-media/trigger-map', {
   async handler(req, res) {
     const MODEL = 'claude-sonnet-4-6';
     const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
-    const SYSTEM_PROMPT = `You are the desk analyst for CB Edge, an SPX gamma-exposure (GEX) and options-flow desk. From a pre-market dealer-positioning read you produce a "trigger map": three scenarios for the session — a bull case, a base case, and a bear case — that a trader can react to off the levels.
+    const SYSTEM_PROMPT = `You are the desk analyst for CB Edge, a gamma-exposure (GEX) and options-flow desk covering index and single-name underlyings. From a pre-market dealer-positioning read you produce a "trigger map": three scenarios for the session — a bull case, a base case, and a bear case — that a trader can react to off the levels.
 
 VOICE & RULES
 - Sharp, trader-to-trader. The reader knows gamma, dealer hedging, call/put walls, gamma flip and expected move. Do not explain basics.
@@ -2168,8 +2443,8 @@ Return ONLY a single JSON object — no markdown, no code fences, no commentary 
 Output a SINGLE object with bull/base/bear as keys. Do NOT wrap them in an array and do NOT separate them with "},{". There is exactly one top-level object and one closing brace.`;
     const num = (v, digits = 2) => { if (v == null || !Number.isFinite(v)) return 'n/a'; return v.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: digits }); };
     const formatUserMessage = (d) => [
-      `CB Edge — SPX pre-market GEX read${d.date ? ` for ${d.date}` : ''}.`, ``,
-      `SPX spot: ${num(d.spxSpot)}`, `Gamma flip: ${num(d.gammaFlip)}`, `Call wall (resistance): ${num(d.callWall)}`,
+      `CB Edge — ${d.ticker || 'SPX'} pre-market GEX read${d.date ? ` for ${d.date}` : ''}.`, ``,
+      `${d.ticker || 'SPX'} spot: ${num(d.spxSpot)}`, `Gamma flip: ${num(d.gammaFlip)}`, `Call wall (resistance): ${num(d.callWall)}`,
       `Put wall (support): ${num(d.putWall)}`, `Control node (peak gamma magnet): ${num(d.controlNode)}`,
       `Expected move: ±${num(d.expectedMove)}`, `Expected-move range: ${num(d.emLower)} (lower) to ${num(d.emUpper)} (upper)`,
       `Net GEX: ${d.netGex == null ? 'n/a' : `${d.netGex >= 0 ? '+' : ''}${num(d.netGex, 2)}B`}`,
@@ -2255,7 +2530,7 @@ register('/api/social-media/day-post', {
   async handler(req, res) {
     const MODEL = 'claude-sonnet-4-6';
     const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
-    const SYSTEM_PROMPT = `You are the social-media voice of CB Edge (cbedge.net), an SPX gamma-exposure (GEX) and options-flow desk. You write single X posts at different points of the trading day that turn the live dealer-positioning read into tight, useful market commentary while promoting CB Edge.
+    const SYSTEM_PROMPT = `You are the social-media voice of CB Edge (cbedge.net), a gamma-exposure (GEX) and options-flow desk covering index and single-name underlyings. The underlying for THIS post is named in the read below — write about that ticker, and cash-tag it (e.g. $SPX, $NVDA) rather than assuming SPX. You write single X posts at different points of the trading day that turn the live dealer-positioning read into tight, useful market commentary while promoting CB Edge.
 
 VOICE
 - Sharp and trader-to-trader. The audience already knows gamma, dealer hedging, call/put walls and expected move. Do not explain basics.
@@ -2300,7 +2575,8 @@ Return ONLY a single JSON object, no markdown, no code fences, no commentary:
       const lines = [
         `Post type: ${SLOT_LABEL[slot]}`,
         d.visual && VISUAL_LABEL[d.visual] ? `Attached image: a ${VISUAL_LABEL[d.visual]} screenshot from the CB Edge dashboard.` : `Attached image: none.`, ``,
-        `SPX spot: ${num(d.spxSpot)}`, `SPX prior-day close: ${num(d.spxPrevClose)}`, `Gamma flip: ${num(d.gammaFlip)}`,
+        `Underlying: ${d.ticker || 'SPX'}`,
+        `${d.ticker || 'SPX'} spot: ${num(d.spxSpot)}`, `${d.ticker || 'SPX'} prior-day close: ${num(d.spxPrevClose)}`, `Gamma flip: ${num(d.gammaFlip)}`,
         `Call wall: ${num(d.callWall)}`, `Put wall: ${num(d.putWall)}`, `Expected move: ±${num(d.expectedMove)}`,
         `EM range (off prior close): ${num(d.emLower)} to ${num(d.emUpper)}`,
         `Net GEX: ${d.netGex == null ? 'n/a' : `${d.netGex >= 0 ? '+' : ''}${num(d.netGex, 2)}B`}`,
@@ -2356,7 +2632,7 @@ register('/api/social-media/generate', {
   async handler(req, res) {
     const MODEL = 'claude-sonnet-4-6';
     const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
-    const SYSTEM_PROMPT = `You are the social-media voice of CB Edge, an SPX gamma-exposure (GEX) and options-flow desk. You write a single pre-market tweet that turns the morning dealer-positioning read into tight, useful market commentary.
+    const SYSTEM_PROMPT = `You are the social-media voice of CB Edge, a gamma-exposure (GEX) and options-flow desk covering index and single-name underlyings. The underlying for THIS post is named in the read below — write about that ticker, and cash-tag it (e.g. $SPX, $NVDA) rather than assuming SPX. You write a single pre-market tweet that turns the morning dealer-positioning read into tight, useful market commentary.
 
 VOICE
 - Sharp and trader-to-trader. You are talking to people who already know what gamma, dealer hedging, call/put walls and expected move are. Do not explain the basics.
@@ -2380,7 +2656,8 @@ Return ONLY a single JSON object, no markdown, no code fences, no commentary, wi
     const num = (v, digits = 2) => { if (v == null || !Number.isFinite(v)) return 'n/a'; return v.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: digits }); };
     const formatUserMessage = (d) => [
       `CB Edge — SPX pre-market GEX read${d.date ? ` for ${d.date}` : ''}.`, ``,
-      `SPX spot: ${num(d.spxSpot)}`, `SPX prior-day close: ${num(d.spxPrevClose)}`,
+      `Underlying: ${d.ticker || 'SPX'}`,
+      `${d.ticker || 'SPX'} spot: ${num(d.spxSpot)}`, `${d.ticker || 'SPX'} prior-day close: ${num(d.spxPrevClose)}`,
       `Gamma flip: ${num(d.gammaFlip)}`, `Call wall: ${num(d.callWall)}`, `Put wall: ${num(d.putWall)}`,
       `Expected move (ATM straddle): ±${num(d.expectedMove)}${d.expectedMoveExpiry ? ` (exp ${d.expectedMoveExpiry})` : ''}`,
       `Expected-move range (off the prior close): ${num(d.emLower)} (lower) to ${num(d.emUpper)} (upper) — these are the EM levels; cite them as the expected range, anchored to the ${num(d.spxPrevClose)} prior close.`,

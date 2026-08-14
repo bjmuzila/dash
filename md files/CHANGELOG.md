@@ -1,5 +1,89 @@
 # Changelog
 
+## 2026-08-14 - Social Media: any ticker, and every stat behind it
+
+Edited: `server-v2/api-router.js` (`/api/social-media/daily-input` takes
+`?ticker=`, new `/api/social-media/gex-chain`, ticker-aware prompts on
+`trigger-map` / `day-post` / `generate`), `owner-vite/src/pages/SocialMedia.tsx`
+(page-level ticker picker, stats panel, ticker threaded into every data tab).
+Added: `owner-vite/src/lib/tickers.ts`.
+
+### What
+
+The Social Media page was SPX and nothing else — the share card said `SPX`, the
+API returned keys literally named `spxSpot` / `spxPrevClose`, and the live GEX
+visuals came off `/proxy/gex`, a single in-memory SPX feed. Posting a levels
+card for NVDA meant doing it by hand.
+
+Now there is one **ticker picker** in the page header, backed by the live
+scanner universe (~169 symbols), and it drives every data tab: Daily Levels,
+GEX Image Cards, GEX Data, Day Posts and the Explainer trigger map. The choice
+is persisted (`cb-sm-ticker-v1`), so the desk comes back to the symbol it was
+working on.
+
+Alongside it, a new **all stats** panel under the Daily Input fields shows
+everything the bundle returns that isn't an editable field — Core Bullseye,
+prior-day and prior-week H/L, pivot, published EM and the no-long / no-short
+zones — for whatever ticker is selected.
+
+### How
+
+**SPX is untouched.** `?ticker=SPX` (the default) takes the ORIGINAL code path
+verbatim: the live in-memory `/proxy/gex` feed, same numbers, same DTE-1 chain
+override. Nothing about the existing card changed. `/proxy/gex` itself was not
+modified.
+
+**Everything else is assembled from sources that were already ticker-wide.**
+Nothing new had to be recorded:
+
+| Field | Source |
+|---|---|
+| spot, prior close | `/api/tt-quotes?symbols=` |
+| CB, walls, flip, net GEX (fallback) | `/proxy/scanner` (`scanner_snapshots`) |
+| walls, flip, net GEX, ladder (primary) | `/proxy/api/tt/chains/<TICKER>` |
+| expected move | ATM straddle off the same chain, then `ticker_levels.em` |
+| PDH / PDL / PWH / PWL | `/api/ref-levels?symbol=` (`ref_levels`) |
+| pivot, EM up/down, zones | `/api/levels?ticker=` (`ticker_levels`) |
+
+The live chain read wins over the (up to 5-minute stale) scanner sweep whenever
+it returns strikes; the sweep is the fallback for roots with a thin chain. If
+the chain EM comes up dry, the published `ticker_levels` row fills it.
+
+**`/api/social-media/gex-chain`** is the new ticker-aware sibling of `/api/gex`.
+Same payload shape (`chain` / `spotPrice` / `gexFlip` / `callWall` / `putWall`),
+so the ported `GexChart` and `Heatmap` render any root with no component
+changes. `ticker=SPX` with no expiration delegates straight to `/api/gex`, so
+the live feed stays authoritative for the symbol the desk posts most.
+
+**Overnight H/L stays honest.** It is an ES-only 5-minute candle read, so for
+any other root that slot carries the prior-day range from `ref_levels` instead
+and the field relabels itself from "ES Overnight (H / L)" to "Prior Day (H / L)"
+rather than silently showing ES numbers under another ticker's name.
+
+**The AI prompts name the ticker.** `trigger-map`, `day-post` and `generate` now
+take `ticker` in the POST body and cash-tag it; the system prompts no longer
+assert the desk is SPX-only.
+
+**Back-compat.** The API still returns `spxSpot` / `spxPrevClose` as mirrors of
+the new generic `spot` / `prevClose`, so any consumer that wasn't updated keeps
+reading the selected ticker's values instead of breaking.
+
+**Why a new lib file.** owner-vite is a standalone Vite app whose `@` alias
+points at `owner-vite/src` — it cannot import `lib/scannerTickers.ts` from the
+repo root the way the Next pages do. `owner-vite/src/lib/tickers.ts` reads the
+same source of truth over HTTP (`/proxy/scanner-tickers`), memoises it at module
+scope and mirrors it into localStorage, so the picker is instant on the second
+visit and degrades to a cached list rather than an empty one.
+
+### Notes
+
+- Changing the ticker clears the dirty guard, the stats and the GEX ladder, so a
+  new symbol never inherits the previous one's edited fields.
+- The picker accepts a free-typed root the sweep hasn't seen yet; symbols with
+  no chain and no sweep row simply read `—` rather than erroring.
+- Screenshot Brander and Explainer Mockup have no live data of their own and
+  were left alone apart from the caption cash-tag.
+
 ## 2026-08-14 - ΔGEX Board: previous sessions + a Net GEX / Δ toggle
 
 Edited: `server-v2/eod-strike-gex-recorder.js` (as-of `date` on both read

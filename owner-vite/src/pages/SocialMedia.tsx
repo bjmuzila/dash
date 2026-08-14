@@ -1,6 +1,7 @@
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { shareToDiscord } from "../lib/discord";
 import { SegGroup } from "../components/DockToolbar";
+import { useTickerUniverse, normalizeTicker, LIVE_FEED_TICKER } from "../lib/tickers";
 import GexChart from "../gex/GexChart";
 import Heatmap from "../gex/Heatmap";
 import { type ChainRow } from "../gex/calc";
@@ -11,10 +12,12 @@ import { type ChainRow } from "../gex/calc";
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Social Media (admin) — turns the daily pre-market GEX read into a shareable
- * "SPX · Daily Levels" card for X.
+ * "<TICKER> · Daily Levels" card for X. A page-level ticker picker (backed by
+ * the live scanner universe) drives every data tab; SPX is the default and is
+ * the only root served off the live in-memory GEX feed.
  *
  * Left "Daily Input" panel hydrates from live dashboard state via
- * /api/social-media/daily-input (SPX spot / prior close / gamma flip / call+put
+ * /api/social-media/daily-input?ticker= (spot / prior close / gamma flip / call+put
  * walls / expected move / net GEX / ES overnight H-L) and seeds the Bias field
  * from the options-flow regime. Every field stays editable for event-day edits.
  *
@@ -39,6 +42,8 @@ async function getHtml2Canvas() {
 }
 
 interface DailyInput {
+  // `spxSpot` / `spxPrevClose` are the legacy names the API still mirrors; they
+  // hold the SELECTED ticker's values, whatever that ticker is.
   spxSpot: number | null;
   gammaFlip: number | null;
   callWall: number | null;
@@ -52,7 +57,62 @@ interface DailyInput {
   emUpper: number | null;
   emLower: number | null;
   gexLadder?: { strike: number; netGex: number }[];
+  // ── ticker-wide additions ──────────────────────────────────────────────────
+  ticker?: string;
+  spot?: number | null;
+  prevClose?: number | null;
+  coreBullseye?: number | null;
+  overnightHigh?: number | null;
+  overnightLow?: number | null;
+  pdh?: number | null;
+  pdl?: number | null;
+  pwh?: number | null;
+  pwl?: number | null;
+  pdDate?: string | null;
+  levels?: TickerLevels | null;
+  source?: string;
+  scannerStale?: boolean | null;
+  scannerTs?: string | null;
 }
+
+// The published /api/levels row for this ticker (EM, pivot and the no-long /
+// no-short zones the /em page and the Pine script read).
+export interface TickerLevels {
+  label: string | null;
+  close: number | null;
+  em: number | null;
+  up: number | null;
+  down: number | null;
+  buyNear: number | null;
+  buyFar: number | null;
+  sellNear: number | null;
+  sellFar: number | null;
+  pivot: number | null;
+  expLabel: string | null;
+}
+
+// Everything the daily-input bundle returns that isn't an editable form field.
+// Kept beside FormState (which is string-only) and refreshed with it.
+export interface TickerStats {
+  ticker: string;
+  coreBullseye: number | null;
+  pdh: number | null;
+  pdl: number | null;
+  pwh: number | null;
+  pwl: number | null;
+  pdDate: string | null;
+  overnightHigh: number | null;
+  overnightLow: number | null;
+  levels: TickerLevels | null;
+  source: string;
+  scannerStale: boolean;
+}
+
+export const EMPTY_STATS: TickerStats = {
+  ticker: "SPX", coreBullseye: null, pdh: null, pdl: null, pwh: null, pwl: null,
+  pdDate: null, overnightHigh: null, overnightLow: null, levels: null,
+  source: "", scannerStale: false,
+};
 
 // Per-strike net GEX (netGex in $millions) for the Explainer ladder.
 export interface GexLadderRow { strike: number; netGex: number }
@@ -178,7 +238,7 @@ function regimeOf(form: FormState): Regime {
 }
 
 // ── EM range readout (off the prior-day close) ───────────────────────────────
-// Shows the expected range as lower / upper centered on the SPX prior close,
+// Shows the expected range as lower / upper centered on the prior close,
 // e.g. "Close 6,012 · ±56 → 5,956 / 6,068". Prompts for a close if missing.
 function EmRangeReadout({ form }: { form: FormState }) {
   const band = emBand(form);
@@ -188,7 +248,7 @@ function EmRangeReadout({ form }: { form: FormState }) {
       <div className="hint">
         {haveClose
           ? "enter an expected move to see the range"
-          : "enter SPX prior close to anchor the EM range"}
+          : "enter the prior close to anchor the EM range"}
       </div>
     );
   }
@@ -243,7 +303,7 @@ function LevelLadder({ form }: { form: FormState }) {
 }
 
 // ── Share card (the shareable image) ─────────────────────────────────────────
-// Mirrors the published-card design: SPX · Daily Levels header, Estimated Move
+// Mirrors the published-card design: <TICKER> · Daily Levels header, Estimated Move
 // row (Spot box = prior close, EM, Up, Down off the close), regime strip,
 // Upside/Downside levels, Overnight Action, CB Edge footer + disclaimer. Pure
 // presentational; html2canvas captures the forwarded ref.
@@ -255,7 +315,8 @@ const ShareCard = forwardRef<HTMLDivElement, {
   form: FormState;
   regime: Regime;
   updated: string;
-}>(function ShareCard({ form, regime, updated }, ref) {
+  ticker: string;
+}>(function ShareCard({ form, regime, updated, ticker }, ref) {
   const band = emBand(form);
   const close = toNum(form.prevClose);
   const em = toNum(form.em);
@@ -270,7 +331,7 @@ const ShareCard = forwardRef<HTMLDivElement, {
       {/* header */}
       <div className="sc-head">
         <div className="sc-title">
-          <span className="sc-spx">SPX</span> <span className="sc-sub">DAILY LEVELS</span>
+          <span className="sc-spx">{ticker}</span> <span className="sc-sub">DAILY LEVELS</span>
         </div>
         <div className="sc-updated">{updated ? `Updated ${updated}` : ""}</div>
       </div>
@@ -601,7 +662,7 @@ const CARD_DIMS: Record<CardKind, { w: number; h: number }> = {
 const CHART_DEFAULTS: CardFields = { a: "7,346.55", b: "7,330", bSmall: "", c: "−$1.0B", cSmall: "peak", d: "7,250–7,450" };
 const HEAT_DEFAULTS: CardFields = { a: "7,345", b: "−$1.26B", bSmall: "7,330", c: "+ below 7,330", cSmall: "", d: "Neg thru body" };
 
-const CHART_LABELS = { a: "SPX SPOT", b: "CB", c: "NET GEX", d: "RANGE" };
+const chartLabels = (ticker: string) => ({ a: `${ticker} SPOT`, b: "CB", c: "NET GEX", d: "RANGE" });
 const HEAT_LABELS = { a: "ATM STRIKE", b: "LARGEST NEG GEX", c: "NET VEX FLIP", d: "DEX" };
 
 // Seed card fields from the live Daily-Input form so the card is correct WITHOUT
@@ -624,8 +685,8 @@ function fieldsFromForm(kind: CardKind, form: FormState): CardFields {
 }
 
 function GexCard({
-  kind, updated, today, regimeNeg, form, coreBehavior,
-}: { kind: CardKind; updated: string; today: string; regimeNeg: boolean; form: FormState; coreBehavior: string }) {
+  kind, updated, today, regimeNeg, form, coreBehavior, ticker,
+}: { kind: CardKind; updated: string; today: string; regimeNeg: boolean; form: FormState; coreBehavior: string; ticker: string }) {
   const dims = CARD_DIMS[kind];
   const [img, setImg] = useState<string | null>(null);
   // "drop" = user-dropped screenshot (gets the toolbar-crop hack); "live" = our
@@ -639,7 +700,9 @@ function GexCard({
   const loadLive = useCallback(async () => {
     setLiveLoading(true);
     try {
-      const res = await fetch("/api/gex", { cache: "no-store" });
+      // Ticker-aware sibling of /api/gex — SPX still resolves to the live
+      // in-memory feed server-side, any other root is pulled off the chain.
+      const res = await fetch(`/api/social-media/gex-chain?ticker=${encodeURIComponent(ticker)}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`gex ${res.status}`);
       const d = await res.json();
       const chain = (Array.isArray(d.chain) ? d.chain : []) as ChainRow[];
@@ -648,7 +711,7 @@ function GexCard({
     } catch (e) {
       console.error("[gex-card live]", e);
     } finally { setLiveLoading(false); }
-  }, []);
+  }, [ticker]);
   const [fields, setFields] = useState<CardFields>(() => fieldsFromForm(kind, form));
   // Re-seed from form until the user has dropped an image / edited a field.
   const touchedRef = useRef(false);
@@ -663,7 +726,7 @@ function GexCard({
     if (shareTimer.current) clearTimeout(shareTimer.current);
     shareTimer.current = setTimeout(() => setShare(""), 1600);
   }, []);
-  const labels = kind === "chart" ? CHART_LABELS : HEAT_LABELS;
+  const labels = kind === "chart" ? chartLabels(ticker) : HEAT_LABELS;
 
   // Only lock out future re-seeds from `form` if the value actually changed —
   // a stray click-then-blur on a contentEditable pill (no typing) must not
@@ -745,9 +808,9 @@ function GexCard({
   // API can't pre-attach the image, so the user pastes the copied card).
   const onShareX = useCallback(async () => {
     await onCopy();
-    const text = `Todays $SPX Levels\nprovided by https://www.cbedge.net/`;
+    const text = `Todays $${ticker} Levels\nprovided by https://www.cbedge.net/`;
     window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank", "noopener");
-  }, [onCopy]);
+  }, [onCopy, ticker]);
 
   const onPick = () => {
     const inp = document.createElement("input"); inp.type = "file"; inp.accept = "image/*";
@@ -764,7 +827,7 @@ function GexCard({
           className="gx-btn load"
           onClick={loadLive}
           disabled={liveLoading}
-          title="Render the live SPX GEX profile / heatmap from /api/gex into the card."
+          title={`Render the live ${ticker} GEX profile / heatmap into the card.`}
         >
           {liveLoading ? "Loading…" : live ? "↻ Refresh live" : kind === "chart" ? "⤓ Live GEX profile" : "⤓ Live heatmap"}
         </button>
@@ -827,8 +890,8 @@ function GexCard({
       <TweetMockup
         title={kind === "chart" ? "Tweet preview — NET GEX chart" : "Tweet preview — GEX heatmap"}
         getBlob={renderBlob}
-        caption={`Todays $SPX Levels\nprovided by https://www.cbedge.net/`}
-        refreshKey={img}
+        caption={`Todays $${ticker} Levels\nprovided by https://www.cbedge.net/`}
+        refreshKey={`${ticker}-${img ?? ""}`}
       />
     </div>
   );
@@ -957,11 +1020,12 @@ const XP_CSS = `
 `;
 
 function ExplainerMockup({
-  form, regime, updated, ladder, dte, onDteChange, gexBasis, onBasisChange,
+  form, regime, updated, ladder, dte, onDteChange, gexBasis, onBasisChange, ticker,
 }: {
   form: FormState; regime: Regime; updated: string; ladder: GexLadderRow[];
   dte: 0 | 1; onDteChange: (d: 0 | 1) => void;
   gexBasis: "oivol" | "vol"; onBasisChange: (b: "oivol" | "vol") => void;
+  ticker: string;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -996,6 +1060,7 @@ function ExplainerMockup({
     try {
       const lv = levelsRef.current;
       const body = {
+        ticker,
         spxSpot: toNum(form.spot), gammaFlip: lv.pivot ?? toNum(form.flip),
         callWall: lv.resistance ?? toNum(form.call), putWall: lv.support ?? toNum(form.put),
         controlNode: lv.node,
@@ -1021,7 +1086,7 @@ function ExplainerMockup({
       setAiState("err");
       setTimeout(() => setAiState("idle"), 2000);
     }
-  }, [form, regime.label]);
+  }, [form, regime.label, ticker]);
 
   // Live SPX candle overlay removed — it depended on the ES-candle WebSocket
   // stream (useEsCandles) and was never rendered in the exported card anyway.
@@ -1369,7 +1434,7 @@ function ExplainerMockup({
       <TweetMockup
         title="Tweet preview — GEX read + trade plan"
         getBlob={renderBlob}
-        caption={`Todays $SPX GEX read + trade plan\nprovided by https://www.cbedge.net/`}
+        caption={`Todays $${ticker} GEX read + trade plan\nprovided by https://www.cbedge.net/`}
         refreshKey={`${updated}-${controlNode ? controlNode.k : ""}-${aiMap ? "ai" : "static"}`}
       />
     </div>
@@ -1384,7 +1449,7 @@ interface GeneratedPost {
   tweet: string;
 }
 
-function PostGenerator({ form }: { form: FormState }) {
+function PostGenerator({ form, ticker }: { form: FormState; ticker: string }) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState<string>("");
@@ -1420,7 +1485,7 @@ function PostGenerator({ form }: { form: FormState }) {
   const loadGex = useCallback(async () => {
     setGexLoading(true);
     try {
-      const res = await fetch("/api/gex", { cache: "no-store" });
+      const res = await fetch(`/api/social-media/gex-chain?ticker=${encodeURIComponent(ticker)}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`gex ${res.status}`);
       const data = await res.json();
       setGexChain(Array.isArray(data.chain) ? data.chain : []);
@@ -1431,7 +1496,7 @@ function PostGenerator({ form }: { form: FormState }) {
     } finally {
       setGexLoading(false);
     }
-  }, []);
+  }, [ticker]);
 
   // Draw the mounted GexChart's raw canvas onto an offscreen canvas at native
   // size, then stamp the logo/CTA via the SAME drawBrandStamp function
@@ -1489,6 +1554,7 @@ function PostGenerator({ form }: { form: FormState }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          ticker,
           spxSpot: n(form.spot),
           spxPrevClose: n(form.prevClose),
           gammaFlip: n(form.flip),
@@ -1631,7 +1697,7 @@ function PostGenerator({ form }: { form: FormState }) {
                 <TweetMockup
                   title="Tweet preview — GEX profile"
                   getBlob={renderBrandedBlob}
-                  caption={`Todays $SPX GEX profile\nprovided by https://www.cbedge.net/`}
+                  caption={`Todays $${ticker} GEX profile\nprovided by https://www.cbedge.net/`}
                   refreshKey={`${gexChain.length}-${logoCorner}-${ctaCorner}`}
                 />
               </div>
@@ -1732,10 +1798,13 @@ const DAY_SLOTS: { v: DaySlot; label: string }[] = [
 ];
 
 type DayVisual = "gex" | "flow" | "chain" | "greeks" | "candles";
-const DAY_VISUALS: { v: DayVisual; label: string; embed?: string }[] = [
+// Embed URLs are ticker-scoped where the target page understands a symbol
+// (flow + option chain); /gex, /mult-greek and /es-candles are driven by their
+// own pickers inside the iframe.
+const dayVisuals = (ticker: string): { v: DayVisual; label: string; embed?: string }[] => [
   { v: "gex", label: "GEX Chart", embed: "/gex?embed=1&chartonly=1" },
-  { v: "flow", label: "Option Flow (SPX 0DTE OTM)", embed: "/flow?embed=1&chartonly=1&ticker=SPX&dteMax=0" },
-  { v: "chain", label: "Option Chain", embed: "/options-chain?embed=1" },
+  { v: "flow", label: `Option Flow (${ticker} 0DTE OTM)`, embed: `/flow?embed=1&chartonly=1&ticker=${encodeURIComponent(ticker)}&dteMax=0` },
+  { v: "chain", label: "Option Chain", embed: `/options-chain?embed=1&symbol=${encodeURIComponent(ticker)}` },
   { v: "greeks", label: "Multi Greeks", embed: "/mult-greek?embed=1" },
   { v: "candles", label: "ES Candles", embed: "/es-candles?embed=1" },
 ];
@@ -1746,7 +1815,8 @@ const DP_EMB_H = 800;
 interface DayPost { id: string; ts: string; slot: DaySlot; tweet: string }
 const DAY_POSTS_KEY = "cb-edge-day-posts";
 
-function DayPosts({ form }: { form: FormState }) {
+function DayPosts({ form, ticker }: { form: FormState; ticker: string }) {
+  const DAY_VISUALS = useMemo(() => dayVisuals(ticker), [ticker]);
   const [slot, setSlot] = useState<DaySlot>("premarket");
   const [visual, setVisual] = useState<DayVisual>("gex");
   const [notes, setNotes] = useState("");
@@ -1761,7 +1831,7 @@ function DayPosts({ form }: { form: FormState }) {
 
   // Trade idea.
   const [ideaOn, setIdeaOn] = useState(false);
-  const [ideaTicker, setIdeaTicker] = useState("SPX");
+  const [ideaTicker, setIdeaTicker] = useState(ticker);
   const [ideaStrike, setIdeaStrike] = useState("");
   const [ideaRight, setIdeaRight] = useState<"C" | "P">("C");
   const [ideaExp, setIdeaExp] = useState("");
@@ -1832,7 +1902,7 @@ function DayPosts({ form }: { form: FormState }) {
     setError("");
     if (visual === "gex") {
       try {
-        const res = await fetch("/api/gex", { cache: "no-store" });
+        const res = await fetch(`/api/social-media/gex-chain?ticker=${encodeURIComponent(ticker)}`, { cache: "no-store" });
         if (!res.ok) throw new Error(`gex ${res.status}`);
         const d = await res.json();
         setGexLive({ chain: (Array.isArray(d.chain) ? d.chain : []) as ChainRow[], spot: Number(d.spotPrice ?? 0), flip: d.gexFlip ?? null });
@@ -1841,7 +1911,7 @@ function DayPosts({ form }: { form: FormState }) {
       return;
     }
     setIframeOn(true);
-  }, [visual]);
+  }, [visual, ticker]);
 
   // Freeze the current live view into rawRef.
   const capture = useCallback(async () => {
@@ -1923,11 +1993,12 @@ function DayPosts({ form }: { form: FormState }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          ticker,
           slot,
           notes: notes || null,
           visual: rawRef.current ? visual : null,
           tradeIdea: ideaOn && (ideaStrike || ideaTicker) ? {
-            ticker: ideaTicker || "SPX", strike: ideaStrike || null,
+            ticker: ideaTicker || ticker, strike: ideaStrike || null,
             right: ideaRight, expiration: ideaExp || null,
             price: ideaPrice || null, note: ideaNote || null,
           } : null,
@@ -2119,7 +2190,7 @@ function DayPosts({ form }: { form: FormState }) {
   );
 }
 
-function GexImageCards({ updated, today, form }: { updated: string; today: string; form: FormState }) {
+function GexImageCards({ updated, today, form, ticker }: { updated: string; today: string; form: FormState; ticker: string }) {
   const reg = regimeOf(form);
   const neg = reg.neg;
   const stageRef = useRef<HTMLDivElement>(null);
@@ -2152,8 +2223,8 @@ function GexImageCards({ updated, today, form }: { updated: string; today: strin
         Then <b>Download</b> for a clean image (1600×900 chart · 900×1600 heatmap).
       </p>
       <div className="gx-stage" ref={stageRef}>
-        <GexCard kind="chart" updated={updated} today={today} regimeNeg={neg} form={form} coreBehavior={reg.coreBehavior} />
-        <GexCard kind="heat" updated={updated} today={today} regimeNeg={neg} form={form} coreBehavior={reg.coreBehavior} />
+        <GexCard kind="chart" updated={updated} today={today} regimeNeg={neg} form={form} coreBehavior={reg.coreBehavior} ticker={ticker} />
+        <GexCard kind="heat" updated={updated} today={today} regimeNeg={neg} form={form} coreBehavior={reg.coreBehavior} ticker={ticker} />
       </div>
     </div>
   );
@@ -3017,8 +3088,103 @@ function OptionsProbe() {
   );
 }
 
+// ── Ticker picker ───────────────────────────────────────────────────────────
+// One page-level control that drives every data tab. Backed by the live scanner
+// universe (/proxy/scanner-tickers, ~169 symbols) through a <datalist> so it is
+// type-ahead searchable without pulling in a combobox dependency, and it still
+// accepts a free-typed root the sweep hasn't seen yet.
+const TICKER_KEY = "cb-sm-ticker-v1";
+
+function readStoredTicker(): string {
+  if (typeof window === "undefined") return "SPX";
+  try { return normalizeTicker(window.localStorage.getItem(TICKER_KEY) || "") || "SPX"; }
+  catch { return "SPX"; }
+}
+
+function TickerPicker({ value, onChange }: { value: string; onChange: (t: string) => void }) {
+  const { tickers, live } = useTickerUniverse();
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+
+  const commit = (raw: string) => {
+    const t = normalizeTicker(raw);
+    if (!t) { setDraft(value); return; }
+    if (t !== value) onChange(t);
+    setDraft(t);
+  };
+
+  return (
+    <span className="sm-ticker" title={live ? `${tickers.length} symbols from the live scanner sweep` : "scanner universe unavailable — showing the cached list"}>
+      <label htmlFor="sm-ticker-input">Ticker</label>
+      <input
+        id="sm-ticker-input"
+        list="sm-ticker-list"
+        value={draft}
+        spellCheck={false}
+        autoComplete="off"
+        onChange={(e) => setDraft(e.target.value.toUpperCase())}
+        onBlur={(e) => commit(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit((e.target as HTMLInputElement).value); } }}
+      />
+      <datalist id="sm-ticker-list">
+        {tickers.map((t) => <option key={t} value={t} />)}
+      </datalist>
+      {value !== LIVE_FEED_TICKER && (
+        <button type="button" className="sm-ticker-reset" onClick={() => onChange(LIVE_FEED_TICKER)} title="Back to SPX (live in-memory feed)">↺ SPX</button>
+      )}
+    </span>
+  );
+}
+
+// ── Ticker-wide stats block ─────────────────────────────────────────────────
+// Everything the daily-input bundle returns that isn't an editable field:
+// Core Bullseye, prior-day / prior-week reference levels and the published
+// EM / pivot / no-long-no-short zone row. Rendered for EVERY ticker.
+function StatsPanel({ stats, ticker }: { stats: TickerStats; ticker: string }) {
+  const lv = stats.levels;
+  const rows: { k: string; v: string; hint?: string }[] = [
+    { k: "Core Bullseye", v: stats.coreBullseye != null ? fmt(stats.coreBullseye) : "—", hint: "scanner sweep" },
+    { k: "Prior day H", v: stats.pdh != null ? fmt(stats.pdh) : "—", hint: stats.pdDate ?? undefined },
+    { k: "Prior day L", v: stats.pdl != null ? fmt(stats.pdl) : "—", hint: stats.pdDate ?? undefined },
+    { k: "Prior week H", v: stats.pwh != null ? fmt(stats.pwh) : "—" },
+    { k: "Prior week L", v: stats.pwl != null ? fmt(stats.pwl) : "—" },
+    { k: "Pivot", v: lv?.pivot != null ? fmt(lv.pivot) : "—", hint: "published levels" },
+    { k: "Published EM", v: lv?.em != null ? `±${fmt(lv.em)}` : "—", hint: lv?.expLabel ?? undefined },
+    { k: "EM up / down", v: lv?.up != null && lv?.down != null ? `${fmt(lv.up)} / ${fmt(lv.down)}` : "—" },
+    { k: "No-short zone", v: lv?.buyNear != null && lv?.buyFar != null ? `${fmt(lv.buyNear)} → ${fmt(lv.buyFar)}` : "—" },
+    { k: "No-long zone", v: lv?.sellNear != null && lv?.sellFar != null ? `${fmt(lv.sellNear)} → ${fmt(lv.sellFar)}` : "—" },
+  ];
+  return (
+    <div className="sm-stats">
+      <div className="sm-stats-h">
+        <span>{ticker} · all stats</span>
+        <small>
+          {stats.source === "live-gex" ? "live feed" : stats.source === "chain" ? "live chain" : stats.source || "—"}
+          {stats.scannerStale ? " · sweep stale" : ""}
+        </small>
+      </div>
+      <div className="sm-stats-grid">
+        {rows.map((r) => (
+          <div className="sm-stat" key={r.k}>
+            <span className="k">{r.k}</span>
+            <span className="v">{r.v}</span>
+            {r.hint && <span className="h">{r.hint}</span>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function SocialMedia() {
   const [tab, setTab] = useState<"levels" | "cards" | "explainer" | "postgen" | "brander" | "probe" | "dayposts">("levels");
+  // The ticker every data tab reads. Persisted so the desk comes back to the
+  // symbol it was working on.
+  const [ticker, setTicker] = useState<string>(readStoredTicker);
+  const [stats, setStats] = useState<TickerStats>(EMPTY_STATS);
+  useEffect(() => {
+    try { window.localStorage.setItem(TICKER_KEY, ticker); } catch { /* blocked */ }
+  }, [ticker]);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   // Live per-strike GEX ladder (netGex in $millions) for the Explainer tab.
   // Kept out of FormState (which is string-only) and refreshed alongside it.
@@ -3073,12 +3239,27 @@ export default function SocialMedia() {
   // the user freeze it by editing (dirtyRef) — a re-hydrate won't clobber edits.
   const hydrate = useCallback(async () => {
     try {
-      const r = await fetch(`/api/social-media/daily-input?dte=${dte}&gexBasis=${gexBasis}`, { cache: "no-store" });
+      const r = await fetch(
+        `/api/social-media/daily-input?ticker=${encodeURIComponent(ticker)}&dte=${dte}&gexBasis=${gexBasis}`,
+        { cache: "no-store" },
+      );
       if (!r.ok) return;
       const json = await r.json();
       const d = (json?.data ?? json) as DailyInput;
       // GEX ladder isn't user-editable — always refresh it from live state.
       if (Array.isArray(d.gexLadder)) setGexLadder(d.gexLadder);
+      // Neither are the reference stats — they have no form fields to dirty.
+      setStats({
+        ticker: d.ticker ?? ticker,
+        coreBullseye: d.coreBullseye ?? null,
+        pdh: d.pdh ?? null, pdl: d.pdl ?? null, pwh: d.pwh ?? null, pwl: d.pwl ?? null,
+        pdDate: d.pdDate ?? null,
+        overnightHigh: d.overnightHigh ?? d.esOvernightHigh ?? null,
+        overnightLow: d.overnightLow ?? d.esOvernightLow ?? null,
+        levels: d.levels ?? null,
+        source: d.source ?? "",
+        scannerStale: !!d.scannerStale,
+      });
       if (dirtyRef.current) {
         setHydrated(true);
         return;
@@ -3088,10 +3269,12 @@ export default function SocialMedia() {
       const netGex = d.netGex ?? NaN;
       // ES overnight H/L comes straight from the daily-input API (the live ES
       // candle feed that used to override it is stubbed in this build).
-      const ovn =
-        d.esOvernightHigh != null && d.esOvernightLow != null
-          ? `${fmt(d.esOvernightHigh)} / ${fmt(d.esOvernightLow)}`
-          : "";
+      // Overnight H/L is an ES-only candle read. For any other root the same
+      // slot carries the prior-day range from ref_levels instead (the label in
+      // the panel switches to match).
+      const ovnHi = d.overnightHigh ?? d.esOvernightHigh ?? d.pdh ?? null;
+      const ovnLo = d.overnightLow ?? d.esOvernightLow ?? d.pdl ?? null;
+      const ovn = ovnHi != null && ovnLo != null ? `${fmt(ovnHi)} / ${fmt(ovnLo)}` : "";
       setForm({
         spot: d.spxSpot != null ? fmt(d.spxSpot) : "",
         prevClose: d.spxPrevClose != null ? fmt(d.spxPrevClose) : "",
@@ -3111,7 +3294,7 @@ export default function SocialMedia() {
     } catch {
       setHydrated(true);
     }
-  }, [stampUpdated, dte, gexBasis]);
+  }, [stampUpdated, dte, gexBasis, ticker]);
 
   // ON-DEMAND ONLY: nothing fetches on mount. The page loads its data only when
   // the user clicks "Load" / "Refresh". After the first load, changing the DTE
@@ -3192,7 +3375,7 @@ export default function SocialMedia() {
     if (!ok) await downloadCard();
     // Open the X composer with a prefilled caption (text only — X's intent API
     // cannot pre-attach the image, so the user still pastes the copied card).
-    const text = `Todays $SPX Levels\nprovided by https://www.cbedge.net/`;
+    const text = `Todays $${ticker} Levels\nprovided by https://www.cbedge.net/`;
     window.open(
       `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`,
       "_blank",
@@ -3302,6 +3485,22 @@ export default function SocialMedia() {
         .sm-stop:hover { background: rgba(239,68,68,.2); border-color: var(--sm-red); }
         .sm-stop:active { transform: translateY(1px); }
         .sm-stop:disabled { opacity: 0.4; cursor: not-allowed; }
+        .sm-ticker { display: inline-flex; align-items: center; gap: 6px; }
+        .sm-ticker label { font-family: var(--sm-mono); font-size: 10px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--sm-muted); }
+        .sm-ticker input { width: 88px; font-family: var(--sm-mono); font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--cyan); background: var(--bg3); border: 1px solid var(--sm-border); border-radius: 5px; padding: 6px 8px; outline: none; transition: border-color 0.12s; }
+        .sm-ticker input:focus { border-color: var(--cyan); }
+        .sm-ticker-reset { font-family: var(--sm-mono); font-size: 10px; letter-spacing: 0.06em; cursor: pointer; padding: 5px 7px; border-radius: 4px; border: 1px solid var(--sm-border); background: transparent; color: var(--sm-muted); }
+        .sm-ticker-reset:hover { color: var(--cyan); border-color: var(--cyan); }
+
+        .sm-stats { margin-top: 18px; border: 1px solid var(--sm-border); border-radius: 8px; overflow: hidden; }
+        .sm-stats-h { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 8px 12px; background: var(--bg0); border-bottom: 1px solid var(--sm-border); font-family: var(--sm-mono); font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--cyan); }
+        .sm-stats-h small { font-weight: 500; letter-spacing: 0.06em; color: var(--sm-muted); text-transform: none; }
+        .sm-stats-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--sm-border); }
+        .sm-stat { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; background: var(--bg1); }
+        .sm-stat .k { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--sm-muted); }
+        .sm-stat .v { font-family: var(--sm-mono); font-size: 14px; font-weight: 700; color: var(--text1); }
+        .sm-stat .h { font-size: 9px; letter-spacing: 0.04em; color: var(--sm-muted); opacity: 0.75; }
+
         .sm-live { font-family: var(--sm-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--cyan); display: flex; align-items: center; gap: 5px; }
         .sm-live i { width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 8px var(--cyan); display: inline-block; }
 
@@ -3411,6 +3610,18 @@ export default function SocialMedia() {
       <div className="sm-head">
         <h1>Social Media</h1>
         <span className="sm-tag">Admin</span>
+        <TickerPicker
+          value={ticker}
+          onChange={(t) => {
+            if (t === ticker) return;
+            // A new symbol invalidates every hydrated field, including any the
+            // user had edited — clear the dirty guard so the next pull lands.
+            dirtyRef.current = false;
+            setStats({ ...EMPTY_STATS, ticker: t });
+            setGexLadder([]);
+            setTicker(t);
+          }}
+        />
         <SegGroup
           options={[
             { label: "Probe", value: "probe" },
@@ -3431,7 +3642,7 @@ export default function SocialMedia() {
           className="sm-refresh"
           onClick={handleRefresh}
           disabled={refreshing}
-          title="Pull dashboard stats & ES overnight on demand"
+          title={`Pull ${ticker} stats on demand`}
         >
           {refreshing ? "Loading…" : hydrated ? "↻ Refresh" : "⤓ Load data"}
         </button>
@@ -3446,7 +3657,7 @@ export default function SocialMedia() {
         </button>
       </div>
 
-      {tab === "cards" && <GexImageCards updated={updatedLabel} today={today} form={form} />}
+      {tab === "cards" && <GexImageCards updated={updatedLabel} today={today} form={form} ticker={ticker} />}
       {tab === "explainer" && (
         <ExplainerMockup
           form={form}
@@ -3468,12 +3679,13 @@ export default function SocialMedia() {
             dirtyRef.current = false;
             setGexBasis(b);
           }}
+          ticker={ticker}
         />
       )}
-      {tab === "postgen" && <PostGenerator form={form} />}
+      {tab === "postgen" && <PostGenerator form={form} ticker={ticker} />}
       {tab === "brander" && <ScreenshotBrander />}
       {tab === "probe" && <OptionsProbe />}
-      {tab === "dayposts" && <DayPosts form={form} />}
+      {tab === "dayposts" && <DayPosts key={ticker} form={form} ticker={ticker} />}
 
       <div className="sm-grid" style={tab !== "levels" ? { display: "none" } : undefined}>
         {/* LEFT: dashboard-derived input */}
@@ -3489,11 +3701,11 @@ export default function SocialMedia() {
 
             <div className="sm-row2">
               <div className="sm-field">
-                <label>SPX Spot</label>
+                <label>{ticker} Spot</label>
                 <input value={form.spot} onChange={(e) => setField("spot", e.target.value)} />
               </div>
               <div className="sm-field">
-                <label>SPX Prior Close</label>
+                <label>{ticker} Prior Close</label>
                 <input value={form.prevClose} onChange={(e) => setField("prevClose", e.target.value)} />
               </div>
             </div>
@@ -3523,7 +3735,7 @@ export default function SocialMedia() {
               <EmRangeReadout form={form} />
             </div>
             <div className="sm-field">
-              <label>ES Overnight (H / L)</label>
+              <label>{ticker === LIVE_FEED_TICKER ? "ES Overnight (H / L)" : "Prior Day (H / L)"}</label>
               <input value={form.ovn} onChange={(e) => setField("ovn", e.target.value)} placeholder="high / low" />
             </div>
             <div className="sm-field">
@@ -3532,12 +3744,14 @@ export default function SocialMedia() {
               <div className="hint">pre-filled from options-flow regime — edit on event days</div>
             </div>
 
+            <StatsPanel stats={stats} ticker={ticker} />
+
           </div>
         </div>
 
         {/* RIGHT: share card (auto-filled from the left) + copy/X actions */}
         <div className="sm-out">
-          <ShareCard ref={cardRef} form={form} regime={regime} updated={updatedLabel} />
+          <ShareCard ref={cardRef} form={form} regime={regime} updated={updatedLabel} ticker={ticker} />
           <div className="sm-share-acts">
             <button type="button" className="sm-btn lg" onClick={onCopyCard}>
               {shareState === "copied" ? "Copied ✓" : shareState === "saved" ? "Saved PNG ✓" : shareState === "error" ? "Copy failed" : "Copy card"}
@@ -3556,8 +3770,8 @@ export default function SocialMedia() {
           <TweetMockup
             title="Tweet preview — Daily Levels"
             getBlob={renderCardBlob}
-            caption={`Todays $SPX Levels\nprovided by https://www.cbedge.net/`}
-            refreshKey={`${updatedLabel}-${form.spot}-${form.flip}-${form.call}-${form.put}-${form.gex}`}
+            caption={`Todays $${ticker} Levels\nprovided by https://www.cbedge.net/`}
+            refreshKey={`${ticker}-${updatedLabel}-${form.spot}-${form.flip}-${form.call}-${form.put}-${form.gex}`}
           />
         </div>
       </div>
