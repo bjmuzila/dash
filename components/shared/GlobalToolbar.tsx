@@ -551,6 +551,29 @@ export default function GlobalToolbar() {
     if (sectionKey) setStripOpen(true);
   }, [sectionKey]);
 
+  // ── Hydration guard for the strip (fixes React #418 on every 404) ─────────
+  // app/not-found.tsx is PRERENDERED AT BUILD TIME: one static document is
+  // served for every unmatched URL — verified, the 404 HTML is byte-identical
+  // for /app/replay, /scanner/nope and /zzz-not-a-page — and that prerender
+  // runs with pathname "/_not-found". The browser then hydrates that same HTML
+  // under the REAL url. So on a 404 inside a section (/replay and
+  // /strike-history are both Scanner routes) the client's FIRST render adds an
+  // entire sub-strip that the served HTML does not contain, the tree changes
+  // shape mid-hydration, and React throws
+  //   "Minified React error #418" — hydration failed, tree regenerated
+  // on every 404. Nothing else in the toolbar is structurally path-derived:
+  // GexGroupNav renders nothing until useNavCapacity measures the window, and
+  // the hamburger's isMobilePath() is false for both paths.
+  //
+  // Mounting the strip one tick AFTER hydration makes the server HTML and the
+  // first client render identical on every route. It costs nothing visible:
+  // both sections (/scanner, /test) live in the Vite SPA, which client-renders
+  // anyway and never hydrates.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => {
+    setHydrated(true);
+  }, []);
+
   // Clicking the circle of the section you are already in toggles its strip
   // instead of re-navigating to a page you're already on. Returns true when it
   // handled the click, so the Link's default navigation gets suppressed.
@@ -800,8 +823,11 @@ export default function GlobalToolbar() {
           Rendered on mobile too: this is now those sections' ONLY tab bar, so
           hiding it on a phone would leave every tab but the default
           unreachable. The row collapses pills to icons and then scrolls
-          horizontally, so it fits. ── */}
-      <SectionSubStrip open={stripOpen} />
+          horizontally, so it fits.
+          `hydrated &&` is load-bearing — see the note where it is declared:
+          without it the build-time 404 prerender hydrates without this strip
+          while the client renders one, and React #418s on every 404. ── */}
+      {hydrated && <SectionSubStrip open={stripOpen} />}
     </div>
   );
 }

@@ -4,6 +4,11 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 
 
+## Thursday 8/13/2026
+
+* **New Levels page.** Every ticker in the scanner universe on one board — each shows its Core Bullseye and where price sits between the call and put walls — and clicking any of them pins its full ladder to one of four slots at the top, which stay put between visits.
+* **New Site Guide, in your account menu.** Click your avatar and open **Site Guide** for a plain-English rundown of what GEX and DEX actually measure, how the Core Bullseye, call wall, put wall and gamma flip are built, how the two gamma regimes change which trade is the right one, and what every page on the site is for.
+
 ## Wednesday 8/12/2026
 
 * **The Options tile is gone from the toolbar.** It was an unfinished placeholder page; **Options Chain** is unchanged and still where the full chain lives.

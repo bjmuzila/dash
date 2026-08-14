@@ -49,10 +49,19 @@
  *   table for nothing.
  *
  * ── READ PATH ───────────────────────────────────────────────────────────────
- *   GET /proxy/eod-strike-gex-change?symbol=NVDA
+ *   GET /proxy/eod-strike-gex-change?symbol=NVDA[&date=YYYY-MM-DD]
  *   joins the two most recent snapshot DATES for the symbol and returns
  *   netGex / prevNetGex / chg per strike. The diff is computed IN POSTGRES,
  *   not in the browser — the client never holds yesterday's ladder.
+ *
+ *   GET /proxy/eod-strike-gex-board?top=5[&date=YYYY-MM-DD]
+ *   the same read for the whole roster at once, ranked, for the owner board.
+ *
+ *   GET /proxy/eod-strike-gex-dates[?limit=90]
+ *   which sessions are on file, newest first — populates the board's picker.
+ *
+ *   `date` on the first two is an AS-OF (latest session on or before it), not
+ *   an exact match, so a date that a given symbol missed still answers.
  *
  * COST: ~169 tickers × every listed expiry, paced at TICKER_DELAY_MS. Uncapped
  * expiry depth is deliberate — "all expirations" has to mean all of them, and a
@@ -507,10 +516,54 @@ async function runSweep({ symbols = null, date = null } = {}) {
   return summary;
 }
 
-// ── Read helper (backs /proxy/eod-strike-gex-change) ─────────────────────────
+// ── Read helpers (back the /proxy/eod-strike-gex-* endpoints) ───────────────
 
 /**
- * Day-over-day per-strike GEX change for one symbol.
+ * Normalise an "as of" date param to YYYY-MM-DD, or null.
+ *
+ * Anything that is not exactly YYYY-MM-DD becomes null — i.e. "latest", the
+ * behaviour every caller had before the date param existed. Deliberately NOT
+ * passed through to Postgres to let it parse: a loose string reaches the query
+ * as a `$n::date` cast, and a cast failure is a 500 out of a URL a reader can
+ * type. Falling back to latest is the safe read.
+ */
+function normDate(v) {
+  const s = String(v ?? '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
+/**
+ * Every session date that has recorded rows, newest first.
+ *
+ * Backs the ΔGEX Board's date picker. Reads DISTINCT date off
+ * idx_eod_strike_gex_date, so it stays an index-only scan as the table grows to
+ * a year of the full watchlist — this is a picker populate, not a report.
+ */
+async function listStrikeGexDates(limit = 90) {
+  if (!(await ensureSchema())) return { ok: false, error: 'no DB' };
+  const p = getPool();
+  const n = Math.max(1, Math.min(400, Number(limit) || 90));
+  const { rows } = await p.query(
+    `SELECT DISTINCT to_char(date, 'YYYY-MM-DD') AS d
+       FROM eod_strike_gex ORDER BY d DESC LIMIT $1`,
+    [n],
+  );
+  return { ok: true, dates: rows.map((r) => r.d) };
+}
+
+/**
+ * Per-strike GEX for one symbol as of a session, with the day-over-day change.
+ *
+ * `date` (optional, YYYY-MM-DD) is an AS-OF, not an exact match: the two most
+ * recent snapshot dates ON OR BEFORE it. Omitted → the latest two, which is the
+ * original behaviour. As-of rather than equality so a date typed into the URL,
+ * or a picker entry from a symbol that missed that particular sweep, still
+ * answers with the closest session it actually has instead of an empty ladder.
+ *
+ * Every row carries BOTH readings, so the client can switch between absolute
+ * levels and the Δ without a second request:
+ *   netGex  — the level at `date`
+ *   chg     — that level minus the prior session's
  *
  * Takes the two most recent snapshot DATES that exist for the symbol — not
  * "today and yesterday" by calendar, which would break after a holiday, a
@@ -527,11 +580,12 @@ async function runSweep({ symbols = null, date = null } = {}) {
  * is null and every chg reads 0 — the client renders that as "no baseline yet"
  * rather than as a board that did not move.
  */
-async function getStrikeGexChange(symbol) {
+async function getStrikeGexChange(symbol, { date = null } = {}) {
   if (!(await ensureSchema())) return { ok: false, error: 'no DB' };
   const p = getPool();
   const sym = String(symbol || '').toUpperCase().trim();
   if (!sym) return { ok: false, error: 'symbol required' };
+  const asOf = normDate(date);
 
   // to_char, not the raw DATE: node-postgres turns a DATE into a JS Date at
   // LOCAL midnight, so formatting it back to YYYY-MM-DD shifts by a day on any
@@ -539,8 +593,11 @@ async function getStrikeGexChange(symbol) {
   // off-by-one, and `$n::date` casts it back for the comparisons below.
   const { rows: dateRows } = await p.query(
     `SELECT DISTINCT to_char(date, 'YYYY-MM-DD') AS d
-       FROM eod_strike_gex WHERE symbol = $1 ORDER BY d DESC LIMIT 2`,
-    [sym],
+       FROM eod_strike_gex
+      WHERE symbol = $1
+        AND ($2::text IS NULL OR date <= $2::date)
+      ORDER BY d DESC LIMIT 2`,
+    [sym, asOf],
   );
   if (!dateRows.length) {
     return { ok: true, symbol: sym, date: null, prevDate: null, spot: null, prevSpot: null, rows: [] };
@@ -599,26 +656,49 @@ async function getStrikeGexChange(symbol) {
  * — anchoring the whole board on one date pair would silently show those names
  * as flat (or as an enormous fake change against nothing).
  *
- * Returns { ok, top, symbols: [{ symbol, date, prevDate, spot, net, absTot,
- * strikes: [{ strike, chg }] }] } sorted by |absTot| desc — the rail's order.
- * Symbols with only ONE snapshot are returned with net/absTot 0 and no strikes,
- * so the rail can show them as "awaiting baseline" instead of dropping them.
+ * `date` (optional, YYYY-MM-DD) is an AS-OF: each symbol's latest two dates ON
+ * OR BEFORE it. Omitted → its latest two, the original behaviour. As-of, not
+ * equality, for the same reason as getStrikeGexChange — a symbol that missed
+ * that one sweep still answers with the session it actually has.
+ *
+ * TWO rankings come back per symbol, because the board reads in two modes and
+ * one round trip has to serve both:
+ *   net / absTot / strikes          — the Δ vs the prior session
+ *   gexNet / gexAbs / gexStrikes    — the ABSOLUTE level at `date`
+ * The Δ figures are computed on the FULL JOIN (a strike that fell out of the
+ * window is the biggest negative change there is); the level figures are
+ * computed on the cur side only, since a strike with no `cur` row has no level
+ * to report — it is absent, not zero.
+ *
+ * Returns { ok, top, date, symbols: [{ symbol, date, prevDate, spot, net,
+ * absTot, strikes: [{ strike, chg }], gexNet, gexAbs,
+ * gexStrikes: [{ strike, gex }] }] } sorted by |absTot| desc — the rail's
+ * default order; the client re-sorts for level mode off gexAbs/gexNet.
+ * Symbols with only ONE snapshot are returned with net/absTot 0 and no Δ
+ * strikes, so the rail can show them as "awaiting baseline" instead of dropping
+ * them — their LEVEL figures are still real and still render.
  */
-async function getStrikeGexBoard(topN = 5) {
+async function getStrikeGexBoard(topN = 5, { date = null } = {}) {
   if (!(await ensureSchema())) return { ok: false, error: 'no DB' };
   const p = getPool();
   const top = Math.max(1, Math.min(40, Number(topN) || 5));
+  const asOf = normDate(date);
 
   // ONE pass. `d` ranks each symbol's own dates; `cur`/`prv` pick its latest
   // two; `j` FULL JOINs them (full, not left — a strike that fell out of the
-  // window entirely is the biggest negative change there is); `agg` and
-  // `ranked` are computed off that same CTE so the net total and the top-N
-  // list can never disagree about what the diff was.
+  // window entirely is the biggest negative change there is); `agg` and the two
+  // `ranked` CTEs are computed off that same CTE so the totals and the top-N
+  // lists can never disagree about what the numbers were.
+  //
+  // The top-N lists are json_agg'd rather than LEFT JOINed as rows: joining two
+  // independent rank lists on the same query would cross-product them (top²
+  // rows per symbol, 4k+ rows to render 169 names). One row per symbol instead.
   const sql = `
     WITH d AS (
       SELECT symbol, date,
              dense_rank() OVER (PARTITION BY symbol ORDER BY date DESC) AS rk
-        FROM (SELECT DISTINCT symbol, date FROM eod_strike_gex) s
+        FROM (SELECT DISTINCT symbol, date FROM eod_strike_gex
+               WHERE ($2::text IS NULL OR date <= $2::date)) s
     ),
     cur AS (SELECT symbol, date FROM d WHERE rk = 1),
     prv AS (SELECT symbol, date FROM d WHERE rk = 2),
@@ -628,6 +708,7 @@ async function getStrikeGexBoard(topN = 5) {
       SELECT COALESCE(c.symbol, p.symbol)                        AS symbol,
              COALESCE(c.strike, p.strike)                        AS strike,
              COALESCE(c.net_gex, 0) - COALESCE(p.net_gex, 0)     AS chg,
+             c.net_gex                                           AS lvl,
              c.spot                                              AS spot
         FROM c FULL JOIN p ON p.symbol = c.symbol AND p.strike = c.strike
     ),
@@ -635,6 +716,8 @@ async function getStrikeGexBoard(topN = 5) {
       SELECT symbol,
              SUM(chg)                                            AS net,
              SUM(ABS(chg))                                       AS abs_tot,
+             SUM(COALESCE(lvl, 0))                               AS gex_net,
+             SUM(ABS(COALESCE(lvl, 0)))                          AS gex_abs,
              MAX(spot)                                           AS spot
         FROM j GROUP BY symbol
     ),
@@ -642,48 +725,58 @@ async function getStrikeGexBoard(topN = 5) {
       SELECT symbol, strike, chg,
              row_number() OVER (PARTITION BY symbol ORDER BY ABS(chg) DESC, strike) AS rn
         FROM j WHERE chg <> 0
+    ),
+    ranked_lvl AS (
+      SELECT symbol, strike, lvl,
+             row_number() OVER (PARTITION BY symbol ORDER BY ABS(lvl) DESC, strike) AS rn
+        FROM j WHERE lvl IS NOT NULL AND lvl <> 0
+    ),
+    tops AS (
+      SELECT symbol, json_agg(json_build_object('strike', strike, 'chg', chg) ORDER BY rn) AS s
+        FROM ranked WHERE rn <= $1 GROUP BY symbol
+    ),
+    tops_lvl AS (
+      SELECT symbol, json_agg(json_build_object('strike', strike, 'gex', lvl) ORDER BY rn) AS s
+        FROM ranked_lvl WHERE rn <= $1 GROUP BY symbol
     )
     SELECT a.symbol,
-           a.net, a.abs_tot, a.spot,
+           a.net, a.abs_tot, a.gex_net, a.gex_abs, a.spot,
            to_char(cur.date, 'YYYY-MM-DD')                       AS cur_date,
            to_char(prv.date, 'YYYY-MM-DD')                       AS prev_date,
-           r.strike, r.chg, r.rn
+           COALESCE(t.s,  '[]'::json)                            AS strikes,
+           COALESCE(tl.s, '[]'::json)                            AS gex_strikes
       FROM agg a
-      LEFT JOIN cur ON cur.symbol = a.symbol
-      LEFT JOIN prv ON prv.symbol = a.symbol
-      LEFT JOIN ranked r ON r.symbol = a.symbol AND r.rn <= $1
-     ORDER BY ABS(a.abs_tot) DESC, a.symbol, r.rn`;
+      LEFT JOIN cur      ON cur.symbol = a.symbol
+      LEFT JOIN prv      ON prv.symbol = a.symbol
+      LEFT JOIN tops     t  ON t.symbol  = a.symbol
+      LEFT JOIN tops_lvl tl ON tl.symbol = a.symbol
+     ORDER BY ABS(a.abs_tot) DESC, a.symbol`;
 
-  const { rows } = await p.query(sql, [top]);
+  const { rows } = await p.query(sql, [top, asOf]);
 
-  const bySym = new Map();
-  for (const r of rows) {
-    let e = bySym.get(r.symbol);
-    if (!e) {
-      // prevDate null = the symbol has exactly one snapshot. Its net/absTot are
-      // then a diff against nothing, so they are forced to 0 here rather than
-      // reported as a day-one landslide.
-      const hasBaseline = r.prev_date != null;
-      e = {
-        symbol: r.symbol,
-        date: r.cur_date,
-        prevDate: r.prev_date ?? null,
-        spot: Number(r.spot) || null,
-        net: hasBaseline ? Number(r.net) || 0 : 0,
-        absTot: hasBaseline ? Number(r.abs_tot) || 0 : 0,
-        strikes: [],
-      };
-      bySym.set(r.symbol, e);
-    }
-    // LEFT JOIN on `ranked` — a symbol whose strikes all came back unchanged
-    // (or which has no baseline) yields one row with a null strike.
-    if (e.prevDate && r.strike != null) {
-      e.strikes.push({ strike: Number(r.strike), chg: Number(r.chg) || 0 });
-    }
-  }
+  const symbols = rows.map((r) => {
+    // prevDate null = the symbol has no session before this one. Its net/absTot
+    // are then a diff against nothing, so they are forced to 0 here rather than
+    // reported as a day-one landslide. The LEVEL figures are untouched — they
+    // need no baseline.
+    const hasBaseline = r.prev_date != null;
+    return {
+      symbol: r.symbol,
+      date: r.cur_date,
+      prevDate: r.prev_date ?? null,
+      spot: Number(r.spot) || null,
+      net: hasBaseline ? Number(r.net) || 0 : 0,
+      absTot: hasBaseline ? Number(r.abs_tot) || 0 : 0,
+      strikes: hasBaseline
+        ? (r.strikes || []).map((k) => ({ strike: Number(k.strike), chg: Number(k.chg) || 0 }))
+        : [],
+      gexNet: Number(r.gex_net) || 0,
+      gexAbs: Number(r.gex_abs) || 0,
+      gexStrikes: (r.gex_strikes || []).map((k) => ({ strike: Number(k.strike), gex: Number(k.gex) || 0 })),
+    };
+  });
 
-  const symbols = [...bySym.values()].sort((a, b) => Math.abs(b.absTot) - Math.abs(a.absTot));
-  return { ok: true, top, symbols };
+  return { ok: true, top, date: asOf, symbols };
 }
 
 // ── Scheduler ────────────────────────────────────────────────────────────────
@@ -754,6 +847,7 @@ module.exports = {
   runSweep,
   getStrikeGexChange,
   getStrikeGexBoard,
+  listStrikeGexDates,
   ensureSchema,
   getPool,
   gexRowsForSymbol,

@@ -9,17 +9,25 @@
  * (components/shared/UserMenu.tsx) rather than the toolbar: it is read once and
  * referred back to, not opened every session.
  *
- * Content is static — no fetches, no sockets. The page is deliberately plain
- * React + the shared theme so it stays cheap to keep current when a route is
- * added or renamed.
+ * Content is static — no fetches, no sockets.
  *
- * THEME. PageShell + Card + HOME_THEME / LIGHT_BLUE / LEVEL_COLORS only. The
- * one local helper is rgba(), the same converter every themed page carries, so
- * tints stay derived from the theme tokens instead of being written out as
- * literals.
+ * THEME. Every panel is a <Card> on the shared dashboard surface. No left
+ * accent bars, no per-card accent color: the card treatment is the one in
+ * components/shared/PageCard.tsx and nothing here re-styles it.
+ *
+ * Two documented color exceptions, both deliberate and both single-sourced at
+ * the top of this file:
+ *   TITLE — every heading on the page (#fb7185). A product decision, not a
+ *           theme token; declared once so it cannot drift per section.
+ *   LINK  — LIGHT_BLUE from the theme, for the page cross-links.
+ * Body copy is HOME_THEME.text (white) throughout — no dimmed gray.
+ *
+ * Every page name in the copy is a real link to that page (PageLink), so the
+ * guide doubles as navigation.
  */
 
 import type { CSSProperties, ReactNode } from "react";
+import Link from "next/link";
 import { HOME_THEME as HT, LIGHT_BLUE, LEVEL_COLORS } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 
@@ -29,19 +37,21 @@ function rgba(hex: string, a: number): string {
   return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`;
 }
 
-const DIM = rgba(HT.text, 0.62);
-const DIMMER = rgba(HT.text, 0.42);
+/** Heading color for this page — see the header note. One constant, everywhere. */
+const TITLE = "#fb7185";
+/** Cross-link color — the theme's light blue. */
+const LINK = LIGHT_BLUE;
 
-// ── small shared bits ────────────────────────────────────────────────────────
+// ── text primitives ──────────────────────────────────────────────────────────
 
-const body: CSSProperties = { fontSize: 15, lineHeight: 1.6, color: DIM, margin: "0 0 10px" };
+const body: CSSProperties = { fontSize: 15, lineHeight: 1.6, color: HT.text, margin: "0 0 10px" };
 
 function P({ children, style }: { children: ReactNode; style?: CSSProperties }) {
   return <p style={{ ...body, ...style }}>{children}</p>;
 }
 
 function Strong({ children }: { children: ReactNode }) {
-  return <span style={{ color: HT.text, fontWeight: 650 }}>{children}</span>;
+  return <span style={{ color: HT.text, fontWeight: 700 }}>{children}</span>;
 }
 
 function Code({ children }: { children: ReactNode }) {
@@ -54,7 +64,7 @@ function Code({ children }: { children: ReactNode }) {
         border: `1px solid ${HT.border}`,
         padding: "1px 6px",
         borderRadius: 6,
-        color: LIGHT_BLUE,
+        color: LINK,
         whiteSpace: "nowrap",
       }}
     >
@@ -75,17 +85,54 @@ function Bullets({ items }: { items: ReactNode[] }) {
   );
 }
 
+/**
+ * Cross-link to another page in the app. next/link, not <a>: inside the Vite
+ * SPA (basename "/app") href="/flow" resolves to /app/flow, which is the route.
+ */
+function PageLink({ to, children }: { to: string; children: ReactNode }) {
+  return (
+    <Link
+      href={to}
+      style={{
+        color: LINK,
+        fontWeight: 650,
+        textDecoration: "underline",
+        textDecorationColor: rgba(LINK, 0.4),
+        textUnderlineOffset: 3,
+      }}
+    >
+      {children}
+    </Link>
+  );
+}
+
+// ── headings ─────────────────────────────────────────────────────────────────
+
+/** Card <title> content — bigger than the shared card header, and TITLE-colored. */
+function CardTitle({ children, size = 19 }: { children: ReactNode; size?: number }) {
+  return <span style={{ color: TITLE, fontSize: size, letterSpacing: "0.08em" }}>{children}</span>;
+}
+
+/** Heading inside a card (block titles, section splits). */
+function Head({ children, size = 21 }: { children: ReactNode; size?: number }) {
+  return (
+    <div style={{ fontSize: size, fontWeight: 750, color: TITLE, margin: "0 0 8px", letterSpacing: "-0.01em" }}>
+      {children}
+    </div>
+  );
+}
+
 /** Uppercase micro-heading used inside cards. */
-function SubHead({ children, color = HT.green }: { children: ReactNode; color?: string }) {
+function SubHead({ children }: { children: ReactNode }) {
   return (
     <div
       style={{
-        fontSize: 12,
+        fontSize: 14,
         fontWeight: 800,
         letterSpacing: "0.1em",
         textTransform: "uppercase",
-        color,
-        margin: "18px 0 8px",
+        color: TITLE,
+        margin: "20px 0 8px",
       }}
     >
       {children}
@@ -124,7 +171,7 @@ function Callout({ tone = "cyan", children }: { tone?: "cyan" | "orange"; childr
         lineHeight: 1.6,
         background: rgba(c, 0.07),
         border: `1px solid ${rgba(c, 0.28)}`,
-        color: rgba(HT.text, 0.85),
+        color: HT.text,
         marginTop: 16,
       }}
     >
@@ -160,8 +207,8 @@ function Rung({ color, name, children }: { color: string; name: string; children
       }}
     >
       <span style={{ width: 9, height: 9, borderRadius: "50%", background: color, flex: "none" }} />
-      <span style={{ fontWeight: 700, color, minWidth: 112, fontSize: 15 }}>{name}</span>
-      <span style={{ fontSize: 15, color: DIM, flex: 1, minWidth: 240 }}>{children}</span>
+      <span style={{ fontWeight: 750, color, minWidth: 112, fontSize: 15 }}>{name}</span>
+      <span style={{ fontSize: 15, color: HT.text, flex: 1, minWidth: 240 }}>{children}</span>
     </div>
   );
 }
@@ -191,7 +238,9 @@ function PageRow({
         borderBottom: `1px solid ${rgba(HT.text, 0.06)}`,
       }}
     >
-      <div
+      <Link
+        href={route}
+        aria-label={`Open ${name}`}
         style={{
           width: 38,
           height: 38,
@@ -199,29 +248,34 @@ function PageRow({
           display: "grid",
           placeItems: "center",
           fontSize: 18,
+          textDecoration: "none",
           background: rgba(HT.cyan, 0.1),
           border: `1px solid ${rgba(HT.cyan, 0.24)}`,
         }}
       >
         {icon}
-      </div>
+      </Link>
       <div style={{ minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 9, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 17, fontWeight: 750, color: HT.text }}>{name}</span>
-          <span
+          <Link href={route} style={{ fontSize: 19, fontWeight: 750, color: TITLE, textDecoration: "none" }}>
+            {name}
+          </Link>
+          <Link
+            href={route}
             style={{
               fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace",
               fontSize: 12,
               fontWeight: 600,
-              color: LIGHT_BLUE,
-              background: rgba(LIGHT_BLUE, 0.09),
-              border: `1px solid ${rgba(LIGHT_BLUE, 0.2)}`,
+              color: LINK,
+              background: rgba(LINK, 0.09),
+              border: `1px solid ${rgba(LINK, 0.2)}`,
               padding: "1px 7px",
               borderRadius: 6,
+              textDecoration: "none",
             }}
           >
             {route}
-          </span>
+          </Link>
         </div>
         <P style={{ margin: "5px 0 0" }}>{what}</P>
         <div style={{ marginTop: 6, fontSize: 14, color: HT.green }}>
@@ -235,20 +289,25 @@ function PageRow({
   );
 }
 
-function Pill({ children }: { children: ReactNode }) {
+// ── pills (each one navigates to the view it names) ──────────────────────────
+
+function Pill({ to, children }: { to: string; children: ReactNode }) {
   return (
-    <span
+    <Link
+      href={to}
       style={{
         fontSize: 13.5,
         padding: "5px 11px",
         borderRadius: 999,
         background: rgba(HT.text, 0.045),
         border: `1px solid ${HT.border}`,
-        color: DIM,
+        color: HT.text,
+        textDecoration: "none",
+        display: "inline-block",
       }}
     >
       {children}
-    </span>
+    </Link>
   );
 }
 
@@ -258,18 +317,9 @@ function Pills({ children }: { children: ReactNode }) {
 
 // ── playbook card ────────────────────────────────────────────────────────────
 
-function Play({ tone, title, rows }: { tone: string; title: string; rows: [string, ReactNode][] }) {
+function Play({ title, rows }: { title: ReactNode; rows: [string, ReactNode][] }) {
   return (
-    <div
-      style={{
-        borderRadius: 14,
-        border: `1px solid ${HT.border}`,
-        borderLeft: `3px solid ${tone}`,
-        padding: "16px 18px",
-        background: rgba(HT.text, 0.022),
-      }}
-    >
-      <div style={{ fontSize: 16, fontWeight: 750, color: HT.text, marginBottom: 8 }}>{title}</div>
+    <Card variant="classic" padding={18} title={<CardTitle size={17}>{title}</CardTitle>}>
       <dl style={{ margin: 0 }}>
         {rows.map(([k, v]) => (
           <div key={k}>
@@ -279,17 +329,18 @@ function Play({ tone, title, rows }: { tone: string; title: string; rows: [strin
                 fontWeight: 800,
                 letterSpacing: "0.1em",
                 textTransform: "uppercase",
-                color: DIMMER,
+                color: HT.text,
+                opacity: 0.75,
                 marginTop: 10,
               }}
             >
               {k}
             </dt>
-            <dd style={{ margin: "3px 0 0", fontSize: 14.5, lineHeight: 1.55, color: DIM }}>{v}</dd>
+            <dd style={{ margin: "3px 0 0", fontSize: 14.5, lineHeight: 1.55, color: HT.text }}>{v}</dd>
           </div>
         ))}
       </dl>
-    </div>
+    </Card>
   );
 }
 
@@ -314,39 +365,28 @@ const REGIME_ROWS: [string, ReactNode, ReactNode][] = [
 export default function GuidePage() {
   return (
     <PageShell>
-      {/* Hero is a plain div, not a <Card>: it wants the stronger panel fill and
-          a cyan wash rather than the shared card surface, and it carries the
-          page's <h1>. Everything below it is a real <Card>. */}
-      <div
-        style={{
-          borderRadius: 20,
-          border: `1px solid ${HT.border}`,
-          padding: "clamp(20px, 3vw, 32px)",
-          background: `radial-gradient(circle at 50% 0%, ${rgba(HT.cyan, 0.1)} 0%, transparent 60%), ${HT.panelBgStrong}`,
-          backdropFilter: "blur(16px)",
-        }}
-      >
+      {/* Hero carries the page's <h1>; same card surface as everything below. */}
+      <Card>
         <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.16em", textTransform: "uppercase", color: HT.cyan }}>
           CB Edge · Site guide
         </div>
-        <h1 style={{ margin: "8px 0 10px", fontSize: "clamp(24px, 3.4vw, 36px)", lineHeight: 1.1, fontWeight: 800, color: HT.text }}>
-          The whole site, <span style={{ color: HT.cyan }}>end to end</span>
+        <h1 style={{ margin: "8px 0 10px", fontSize: "clamp(26px, 3.6vw, 38px)", lineHeight: 1.1, fontWeight: 800, color: TITLE }}>
+          The whole site, end to end
         </h1>
         <P style={{ maxWidth: "70ch", fontSize: 16, marginBottom: 0 }}>
           What GEX and DEX actually measure, the levels the platform derives from them, how to trade
-          around those levels, and what every page in the app is for.
+          around those levels, and what every page in the app is for. Every page name below is a link —
+          click it to go there.
         </P>
-      </div>
+      </Card>
 
       {/* ── 1. concepts ── */}
-      <Card title="① The two numbers everything is built on">
-        <div style={{ borderLeft: `3px solid ${HT.cyan}`, paddingLeft: 16, marginBottom: 24 }}>
-          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HT.cyan }}>
+      <Card title={<CardTitle>① The two numbers everything is built on</CardTitle>}>
+        <div style={{ marginBottom: 26 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: TITLE }}>
             GEX — Gamma Exposure
           </div>
-          <div style={{ fontSize: 19, fontWeight: 750, color: HT.text, margin: "4px 0 8px" }}>
-            How hard dealers have to trade to stay hedged
-          </div>
+          <Head>How hard dealers have to trade to stay hedged</Head>
           <P>
             Gamma is the rate of change of an option&apos;s delta. Market makers who sold you the option
             hedge that delta in the underlying — so as price moves, their hedge has to move too. GEX is
@@ -371,20 +411,19 @@ export default function GuidePage() {
                 the book is being rebuilt.
               </>,
               <>
-                <Strong>Flow GEX</Strong> (Strike History) is the only genuinely dealer-signed series in
-                the app — it reads classified tape rather than assuming a side.
+                <Strong>Flow GEX</Strong> (on <PageLink to="/strike-history">Strike History</PageLink>) is
+                the only genuinely dealer-signed series in the app — it reads classified tape rather than
+                assuming a side.
               </>,
             ]}
           />
         </div>
 
-        <div style={{ borderLeft: `3px solid ${HT.orange}`, paddingLeft: 16 }}>
-          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: HT.orange }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase", color: TITLE }}>
             DEX — Delta Exposure
           </div>
-          <div style={{ fontSize: 19, fontWeight: 750, color: HT.text, margin: "4px 0 8px" }}>
-            Which way dealers are already leaning
-          </div>
+          <Head>Which way dealers are already leaning</Head>
           <P>
             Delta is directional exposure. DEX aggregates the dealer&apos;s net delta across the chain —
             the position they are <i>already</i> carrying, before the next tick.
@@ -420,10 +459,12 @@ export default function GuidePage() {
       </Card>
 
       {/* ── 2. levels ── */}
-      <Card title="② The levels the platform derives">
+      <Card title={<CardTitle>② The levels the platform derives</CardTitle>}>
         <P>
-          Every level on the site comes out of the same strike ladder. These four names appear on Home,
-          Multi Greek, Levels, Scanner and the Level Log — same definition everywhere.
+          Every level on the site comes out of the same strike ladder. These four names appear on{" "}
+          <PageLink to="/home">Home</PageLink>, <PageLink to="/mult-greek">Multi Greek</PageLink>,{" "}
+          <PageLink to="/levels">Levels</PageLink>, <PageLink to="/scanner">Scanner</PageLink> and the{" "}
+          <PageLink to="/level-log">Level Log</PageLink> — same definition everywhere.
         </P>
         <div style={{ display: "flex", flexDirection: "column", gap: 6, margin: "14px 0 4px" }}>
           <Rung color={LEVEL_COLORS.cw} name="Call Wall">
@@ -440,7 +481,7 @@ export default function GuidePage() {
           </Rung>
         </div>
 
-        <div style={{ ...grid(300), marginTop: 18 }}>
+        <div style={{ ...grid(300), marginTop: 8 }}>
           <div>
             <SubHead>Reading them together</SubHead>
             <Bullets
@@ -456,10 +497,10 @@ export default function GuidePage() {
             <SubHead>Where each one lives</SubHead>
             <Bullets
               items={[
-                <><Strong>Home</Strong> — the GEX chart with all four marked on the ladder.</>,
-                <><Strong>Multi Greek</Strong> — CB / CW / PW for four tickers side by side.</>,
-                <><Strong>Levels</Strong> — the same three numbers across the whole roster at once.</>,
-                <><Strong>Level Log</Strong> — what those levels <i>were</i> at each 15-min capture, and how spot behaved when it reached one.</>,
+                <><PageLink to="/home">Home</PageLink> — the GEX chart with all four marked on the ladder.</>,
+                <><PageLink to="/mult-greek">Multi Greek</PageLink> — CB / CW / PW for four tickers side by side.</>,
+                <><PageLink to="/levels">Levels</PageLink> — the same three numbers across the whole roster at once.</>,
+                <><PageLink to="/level-log">Level Log</PageLink> — what those levels <i>were</i> at each 15-min capture, and how spot behaved when it reached one.</>,
               ]}
             />
           </div>
@@ -467,7 +508,7 @@ export default function GuidePage() {
       </Card>
 
       {/* ── 3. regimes ── */}
-      <Card title="③ The two regimes — this is the whole edge">
+      <Card title={<CardTitle>③ The two regimes — this is the whole edge</CardTitle>}>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15, minWidth: 620 }}>
             <thead>
@@ -477,16 +518,16 @@ export default function GuidePage() {
                     key={h}
                     style={{
                       textAlign: "left",
-                      fontSize: 11,
+                      fontSize: 12,
                       fontWeight: 800,
                       letterSpacing: "0.1em",
                       textTransform: "uppercase",
-                      color: DIMMER,
+                      color: TITLE,
                       padding: "0 12px 9px 0",
                       borderBottom: `1px solid ${HT.border}`,
                     }}
                   >
-                    {h || " "}
+                    {h || " "}
                   </th>
                 ))}
               </tr>
@@ -501,8 +542,8 @@ export default function GuidePage() {
                         padding: "11px 12px 11px 0",
                         borderBottom: `1px solid ${rgba(HT.text, 0.05)}`,
                         verticalAlign: "top",
-                        color: i === 0 ? HT.text : DIM,
-                        fontWeight: i === 0 ? 650 : 400,
+                        color: HT.text,
+                        fontWeight: i === 0 ? 700 : 400,
                         whiteSpace: i === 0 ? "nowrap" : "normal",
                       }}
                     >
@@ -522,76 +563,74 @@ export default function GuidePage() {
       </Card>
 
       {/* ── 4. playbook ── */}
-      <Card title="④ How to actually trade it">
+      <Card title={<CardTitle>④ How to actually trade it</CardTitle>}>
         <div style={grid(330)}>
           <Play
-            tone={HT.cyan}
             title="1 · Wall fade (positive gamma)"
             rows={[
               ["Setup", <>Spot <Strong>above the flip</Strong>, approaching the call wall or put wall with no fresh catalyst.</>],
-              ["Trigger", <>First rejection candle at the wall on <Strong>ES Candles</Strong>; GEX at that strike still growing (Scanner → GEX Δ Top).</>],
+              ["Trigger", <>First rejection candle at the wall on <PageLink to="/es-candles">ES Candles</PageLink>; GEX at that strike still growing (<PageLink to="/scanner?tab=gexchangetop">GEX Δ Top</PageLink>).</>],
               ["Target", "Core Bullseye. That's the magnet, and it's where the hedging wants price."],
               ["Invalidation", <>Close through the wall, or the wall <Strong>moves</Strong> — if the level rolls, the thesis rolled with it.</>],
             ]}
           />
           <Play
-            tone={HT.green}
             title="2 · Flip break (regime change)"
             rows={[
               ["Setup", <>Spot pressing the <Strong>GEX flip</Strong> from above, into the afternoon.</>],
-              ["Trigger", "Sustained trade below flip — not a wick. Confirm on the Home GEX chart that cumulative GEX is genuinely negative below."],
+              ["Trigger", <>Sustained trade below flip — not a wick. Confirm on the <PageLink to="/home">Home</PageLink> GEX chart that cumulative GEX is genuinely negative below.</>],
               ["Why it works", "Crossing the flip changes who's on the other side of you: hedging goes from cushioning the move to feeding it."],
               ["Management", "Trail. Don't use the put wall as a hard target — in negative gamma, walls are speed bumps, not floors."],
             ]}
           />
           <Play
-            tone={HT.cyan}
             title="3 · Pin trade (into expiry)"
             rows={[
-              ["Setup", <>0–1 DTE, spot within ~0.3% of the Core Bullseye, positive gamma, no macro print on the <Strong>Economic Calendar</Strong>.</>],
+              ["Setup", <>0–1 DTE, spot within ~0.3% of the Core Bullseye, positive gamma, no macro print on the <PageLink to="/economic-calendar">Economic Calendar</PageLink>.</>],
               ["Trigger", "Two failed pushes away from CB. Sell the wings, or fade the extremes back to CB."],
               ["Kill switch", "Any tier-1 econ release, or the CB relocating to a different strike. Both end the pin."],
             ]}
           />
           <Play
-            tone={HT.orange}
-            title="4 · Far-OTM flag follow (Scanner → Watch This)"
+            title="4 · Far-OTM flag follow"
             rows={[
-              ["Setup", <>A ticker&apos;s dominant GEX strike sits <Strong>&gt;15% away from spot</Strong> inside 30 DTE — someone is positioned for a move the tape hasn&apos;t made yet.</>],
+              ["Setup", <>On <PageLink to="/scanner?tab=watch">Watch This</PageLink>: a ticker&apos;s dominant GEX strike sits <Strong>&gt;15% away from spot</Strong> inside 30 DTE — someone is positioned for a move the tape hasn&apos;t made yet.</>],
               ["Read", <>Strike above spot → the OTM <Strong>call</Strong> is the contract in question. Below spot → the <Strong>put</Strong>. Tracked results shows how the contract and the underlying actually performed from the flag date.</>],
-              ["Trade", <>It&apos;s a lead, not a signal. Pair with a catalyst (earnings on the calendar, unusual flow on <Strong>Flow</Strong>) before acting.</>],
+              ["Trade", <>It&apos;s a lead, not a signal. Pair with a catalyst (earnings on the <PageLink to="/economic-calendar">Economic Calendar</PageLink>, unusual flow on <PageLink to="/flow">Flow</PageLink>) before acting.</>],
               ["Reality check", "Most far-OTM flags expire untouched. Size like a lottery ticket, not a thesis."],
             ]}
           />
           <Play
-            tone={HT.cyan}
             title="5 · EM band discipline"
             rows={[
-              ["Setup", <><Strong>Est. Moves</Strong> gives the option-implied daily range for the ticker.</>],
+              ["Setup", <><PageLink to="/em">Est. Moves</PageLink> gives the option-implied daily range for the ticker.</>],
               ["Use", "Inside the band and in positive gamma → fade the edges. Outside the band early → the day is trending; stop fading it."],
               ["Sizing", "Let the band, not a fixed dollar stop, set the width of your risk. A 1.8% EM day and a 0.6% EM day are not the same trade."],
             ]}
           />
           <Play
-            tone={HT.red}
             title="6 · Flow confirmation (never lead with it)"
             rows={[
-              ["Setup", <><Strong>Flow</Strong> page: cumulative net call vs net put premium for the active ticker.</>],
+              ["Setup", <><PageLink to="/flow">Flow</PageLink>: cumulative net call vs net put premium for the active ticker.</>],
               ["Use", "Net premium drifting the same way as your GEX read = conviction. Drifting against it = wait."],
               ["Trap", "A single large print is not flow. Read the cumulative line; one sweep is noise until the drift follows."],
             ]}
           />
         </div>
         <Callout tone="orange">
-          <Strong>A workable morning routine:</Strong> Home (regime + levels) → Levels or Multi Greek (is
-          this ticker special or is the whole tape doing it) → Economic Calendar (what can break the
-          structure) → Est. Moves (how wide is today) → ES Candles for execution → Journal it.
+          <Strong>A workable morning routine:</Strong> <PageLink to="/home">Home</PageLink> (regime +
+          levels) → <PageLink to="/levels">Levels</PageLink> or{" "}
+          <PageLink to="/mult-greek">Multi Greek</PageLink> (is this ticker special or is the whole tape
+          doing it) → <PageLink to="/economic-calendar">Economic Calendar</PageLink> (what can break the
+          structure) → <PageLink to="/em">Est. Moves</PageLink> (how wide is today) →{" "}
+          <PageLink to="/es-candles">ES Candles</PageLink> for execution →{" "}
+          <PageLink to="/trading">Journal</PageLink> it.
         </Callout>
       </Card>
 
       {/* ── 5. pages ── */}
-      <Card title="⑤ Every page, and what it's for">
-        <SubHead color={LIGHT_BLUE}>Core dashboard</SubHead>
+      <Card title={<CardTitle>⑤ Every page, and what it&apos;s for</CardTitle>}>
+        <SubHead>Core dashboard</SubHead>
         <PageRow
           icon="🏠" name="Home" route="/home"
           what="The main GEX chart with the strike ladder, Core Bullseye / call wall / put wall / flip marked, plus docked panels: gauges, GEX pulse, whale orders, net premium, greeks and the econ calendar. Strike hover and detail popups drill into any single strike."
@@ -658,7 +697,7 @@ export default function GuidePage() {
           use="the only part of this that actually compounds."
         />
 
-        <SubHead color={LIGHT_BLUE}>Supporting pages</SubHead>
+        <SubHead>Supporting pages</SubHead>
         <PageRow
           icon="🗓️" name="Economic Calendar" route="/economic-calendar"
           what="Macro releases with impact tiers, forecast / previous / actual, plus earnings grouped by date."
@@ -693,51 +732,57 @@ export default function GuidePage() {
 
       {/* ── 6. scanner / test lab ── */}
       <div style={grid(340)}>
-        <Card title="🔍 Scanner · /scanner">
-          <P>Nine inline tabs in three clusters, plus three sibling routes.</P>
+        <Card title={<CardTitle>🔍 Scanner</CardTitle>}>
+          <P>
+            Nine inline tabs in three clusters, plus three sibling routes. Every pill below opens that
+            view on <PageLink to="/scanner">Scanner</PageLink>.
+          </P>
           <SubHead>Gamma</SubHead>
           <Pills>
-            <Pill><Strong>GEX Scanner</Strong> — biggest GEX names now</Pill>
-            <Pill><Strong>GEX Δ Top</Strong> — biggest change in GEX</Pill>
-            <Pill><Strong>GEX%</Strong> — GEX relative to size</Pill>
-            <Pill><Strong>Strike Query</Strong> — ask about one strike</Pill>
+            <Pill to="/scanner?tab=gex"><Strong>GEX Scanner</Strong> — biggest GEX names now</Pill>
+            <Pill to="/scanner?tab=gexchangetop"><Strong>GEX Δ Top</Strong> — biggest change in GEX</Pill>
+            <Pill to="/scanner?tab=gexpct"><Strong>GEX%</Strong> — GEX relative to size</Pill>
+            <Pill to="/scanner?tab=strike"><Strong>Strike Query</Strong> — ask about one strike</Pill>
           </Pills>
           <SubHead>Structure</SubHead>
           <Pills>
-            <Pill><Strong>TPO Structures</Strong></Pill>
-            <Pill><Strong>IB Stats</Strong></Pill>
-            <Pill><Strong>Market Quality</Strong></Pill>
-            <Pill><Strong>Stat Prompter</Strong></Pill>
+            <Pill to="/scanner?tab=tpo"><Strong>TPO Structures</Strong></Pill>
+            <Pill to="/scanner?tab=ibstats"><Strong>IB Stats</Strong></Pill>
+            <Pill to="/scanner?tab=marketquality"><Strong>Market Quality</Strong></Pill>
+            <Pill to="/scanner?tab=statprompter"><Strong>Stat Prompter</Strong></Pill>
           </Pills>
           <SubHead>Tracking</SubHead>
           <Pills>
-            <Pill><Strong>Watch This</Strong> — far-OTM CB flags (&gt;15% away, ≤30 DTE) with tracked outcomes</Pill>
+            <Pill to="/scanner?tab=watch"><Strong>Watch This</Strong> — far-OTM CB flags (&gt;15% away, ≤30 DTE)</Pill>
           </Pills>
           <SubHead>Sibling routes</SubHead>
           <Pills>
-            <Pill><Strong>Level Log</Strong> ↗</Pill>
-            <Pill><Strong>Strike History</Strong> ↗</Pill>
-            <Pill><Strong>Replay</Strong> ↗</Pill>
+            <Pill to="/level-log"><Strong>Level Log</Strong> ↗</Pill>
+            <Pill to="/strike-history"><Strong>Strike History</Strong> ↗</Pill>
+            <Pill to="/replay"><Strong>Replay</Strong> ↗</Pill>
           </Pills>
         </Card>
 
-        <Card title="⚗️ Test Lab · /test">
-          <P>Seven tabs in three clusters. Research surface — treat outputs as hypotheses.</P>
+        <Card title={<CardTitle>⚗️ Test Lab</CardTitle>}>
+          <P>
+            Seven tabs in three clusters on <PageLink to="/test">Test Lab</PageLink>. Research surface —
+            treat outputs as hypotheses.
+          </P>
           <SubHead>Gamma</SubHead>
           <Pills>
-            <Pill>🌀 <Strong>Squeeze</Strong></Pill>
-            <Pill>📏 <Strong>GEX Levels</Strong></Pill>
-            <Pill>🎚️ <Strong>Dealer Gamma</Strong></Pill>
-            <Pill>🗺️ <Strong>GEX Map</Strong></Pill>
+            <Pill to="/test?tab=squeeze">🌀 <Strong>Squeeze</Strong></Pill>
+            <Pill to="/test?tab=gexlevels">📏 <Strong>GEX Levels</Strong></Pill>
+            <Pill to="/test?tab=dealergamma">🎚️ <Strong>Dealer Gamma</Strong></Pill>
+            <Pill to="/test?tab=gexmap">🗺️ <Strong>GEX Map</Strong></Pill>
           </Pills>
           <SubHead>Tape (what dollars changed hands)</SubHead>
           <Pills>
-            <Pill>🌊 <Strong>Flow Inventory</Strong></Pill>
-            <Pill>⚖️ <Strong>Prem Diff</Strong> — ATM premium traded, calls vs puts</Pill>
+            <Pill to="/test?tab=flow">🌊 <Strong>Flow Inventory</Strong></Pill>
+            <Pill to="/test?tab=premdiff">⚖️ <Strong>Prem Diff</Strong> — ATM premium traded</Pill>
           </Pills>
           <SubHead>Calendar</SubHead>
           <Pills>
-            <Pill>📅 <Strong>Seasonality</Strong> — nothing here updates intraday</Pill>
+            <Pill to="/test?tab=seasonality">📅 <Strong>Seasonality</Strong> — nothing here updates intraday</Pill>
           </Pills>
           <P style={{ marginTop: 14, marginBottom: 0, fontSize: 14 }}>
             The distinction that matters: the gamma tabs read the <Strong>book</Strong> (what&apos;s
@@ -748,19 +793,19 @@ export default function GuidePage() {
       </div>
 
       {/* ── 7. phone ── */}
-      <Card title="⑦ The phone build">
+      <Card title={<CardTitle>⑦ The phone build</CardTitle>}>
         <P>
           Six purpose-built views at <Code>/app/m/*</Code> — not restyled desktop pages. A phone on a
           matching desktop route is redirected automatically; long-press the tab bar to opt out for the
-          session. Desktop browsers are never redirected away, so these can be tested on a laptop.
+          session. Desktop browsers are never redirected away, so these can be opened on a laptop too.
         </P>
         <Pills>
-          <Pill><Strong>GEX</Strong> — gamma exposure chart</Pill>
-          <Pill><Strong>Heat</Strong> — GEX heatmap</Pill>
-          <Pill><Strong>ES</Strong> — ES candles</Pill>
-          <Pill><Strong>Chain</Strong> — option chain</Pill>
-          <Pill><Strong>EM</Strong> — estimated moves</Pill>
-          <Pill><Strong>Cal</Strong> — economic calendar</Pill>
+          <Pill to="/m/gex"><Strong>GEX</Strong> — gamma exposure chart</Pill>
+          <Pill to="/m/heatmap"><Strong>Heat</Strong> — GEX heatmap</Pill>
+          <Pill to="/m/es"><Strong>ES</Strong> — ES candles</Pill>
+          <Pill to="/m/chain"><Strong>Chain</Strong> — option chain</Pill>
+          <Pill to="/m/em"><Strong>EM</Strong> — estimated moves</Pill>
+          <Pill to="/m/econ"><Strong>Cal</Strong> — economic calendar</Pill>
         </Pills>
         <P style={{ marginTop: 12, marginBottom: 0, fontSize: 14 }}>
           Data is shared, not copied — the phone views ride the same socket and the same endpoints the
@@ -769,7 +814,7 @@ export default function GuidePage() {
       </Card>
 
       {/* ── 8. rules ── */}
-      <Card title="⑧ Rules of the road">
+      <Card title={<CardTitle>⑧ Rules of the road</CardTitle>}>
         <div style={grid(300)}>
           <div>
             <SubHead>What this data is good at</SubHead>
@@ -787,8 +832,8 @@ export default function GuidePage() {
               items={[
                 "Not a direction signal on its own. GEX is positioning, not intent.",
                 "Not valid through a catalyst. A CPI print rewrites the book in minutes.",
-                "Not a substitute for a stop. Walls fail — the Level Log exists to show you how often.",
-                "Not real-time truth about dealer positioning. The book series assume a hedging convention; only Flow GEX reads classified tape.",
+                <>Not a substitute for a stop. Walls fail — the <PageLink to="/level-log">Level Log</PageLink> exists to show you how often.</>,
+                <>Not real-time truth about dealer positioning. The book series assume a hedging convention; only Flow GEX on <PageLink to="/strike-history">Strike History</PageLink> reads classified tape.</>,
               ]}
             />
           </div>
@@ -796,10 +841,11 @@ export default function GuidePage() {
         <Callout tone="orange">
           <Strong>Three habits that separate the people who make money with this from the people who
           don&apos;t:</Strong> check the regime before the level; never take a structural trade over a
-          scheduled release without halving size; and log the trade — the Journal page is the only one
-          that tells you whether any of the rest of it is working for <i>you</i>.
+          scheduled release without halving size; and log the trade — the{" "}
+          <PageLink to="/trading">Journal</PageLink> page is the only one that tells you whether any of
+          the rest of it is working for <i>you</i>.
         </Callout>
-        <div style={{ marginTop: 20, paddingTop: 18, borderTop: `1px solid ${HT.border}`, fontSize: 13, lineHeight: 1.7, color: DIMMER }}>
+        <div style={{ marginTop: 20, paddingTop: 18, borderTop: `1px solid ${HT.border}`, fontSize: 13.5, lineHeight: 1.7, color: HT.text }}>
           <Strong>Not investment advice.</Strong> Options carry substantial risk, including the total loss
           of premium paid. Everything above describes what the platform measures and how the levels are
           conventionally read — it is not a recommendation to enter any position, and nothing here accounts

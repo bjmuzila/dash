@@ -5,14 +5,26 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 /**
- * /api/eod-strike-gex-change?symbol=NVDA
+ * /api/eod-strike-gex-change?symbol=NVDA[&date=YYYY-MM-DD]
  *
- * Day-over-day per-strike ΔGEX for the whole board ex-0DTE, backing the Ticker
- * Lookup card's Δ 1D column. Forwards to /proxy/eod-strike-gex-change, which
- * FULL JOINs the two most recent end-of-day snapshots written by
+ * Per-strike GEX for one symbol as of a session, with the day-over-day Δ —
+ * backing both the Ticker Lookup card's Δ 1D column and the owner ΔGEX Board's
+ * detail ladder. Forwards to /proxy/eod-strike-gex-change, which FULL JOINs the
+ * two relevant end-of-day snapshots written by
  * server-v2/eod-strike-gex-recorder.js and returns
  * { ok, symbol, date, prevDate, spot, prevSpot,
  *   rows: [{ strike, netGex, prevNetGex, chg, hadPrev }] }.
+ *
+ * Every row carries both readings — `netGex` is the absolute level at `date`,
+ * `chg` is that level minus the prior session's — so a client can switch
+ * between levels and Δ without a second request.
+ *
+ * `date` is an AS-OF (the latest session on or before it, and the one before
+ * that), not an exact match: a holiday, a long weekend, or a symbol that missed
+ * that particular 16:05 run still answers with the closest session it actually
+ * has instead of an empty ladder. Omitted → the latest two, which is what this
+ * route did before the param existed. Validated against YYYY-MM-DD here rather
+ * than forwarded raw, since the proxy casts it to ::date.
  *
  * FALLBACK ONLY. The live path is register('/api/eod-strike-gex-change') in
  * server-v2/api-router.js; this file exists so the column still works when
@@ -26,7 +38,15 @@ export const revalidate = 0;
  * emits no-store; this route passes that straight through.
  */
 export async function GET(req: NextRequest) {
-  const symbol = (new URL(req.url).searchParams.get("symbol") || "").trim().toUpperCase();
-  const qs = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
+  const sp = new URL(req.url).searchParams;
+  const q = new URLSearchParams();
+
+  const symbol = (sp.get("symbol") || "").trim().toUpperCase();
+  if (symbol) q.set("symbol", symbol);
+
+  const date = (sp.get("date") || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) q.set("date", date);
+
+  const qs = q.toString() ? `?${q}` : "";
   return forwardGet(`/proxy/eod-strike-gex-change${qs}`);
 }

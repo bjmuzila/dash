@@ -9,7 +9,9 @@
  *   2) a customer toolbar nav item (GlobalToolbar NAV_ITEMS) points at an
  *      in-app route that has no matching <Route> in App.tsx — i.e. it would
  *      redirect to /traders-dashboard, or
- *   3) ANY module reachable from App.tsx imports a local file that isn't there.
+ *   3) ANY module reachable from App.tsx imports a local file that isn't there, or
+ *   4) a <Route> in App.tsx has no Next shell handler at app/app/<path>/route.ts
+ *      — the route works via in-app nav but a hard refresh / pasted link 404s.
  *
  * WHY 3 EXISTS. Check 1 only looks at App.tsx's OWN imports, one level deep.
  * Deleting app/test/DexCharmTab.tsx sailed past this guard and then failed the
@@ -88,6 +90,31 @@ for (const { href, block } of navItems) {
   if (NEXT_ONLY.has(href)) continue;
   if (DRY) { console.log('  nav ' + href + ' -> ' + (routePaths.has(href) ? 'has route' : 'NO ROUTE')); continue; }
   if (!routePaths.has(href)) errors.push('Toolbar nav item "' + href + '" has no <Route path="' + href + '"> in app-vite/src/App.tsx — it will redirect to /traders-dashboard. Add the route (client-component page) or remove the item.');
+}
+
+// ---- (4) every SPA route needs a Next shell handler ----
+//
+// The SPA is client-routed, but the FIRST request for /app/<x> is a normal
+// document request that Next answers. Each route therefore needs its own tiny
+// app/app/<x>/route.ts calling serveSpaShell('app'). Miss it and the route
+// works perfectly via in-app navigation while a hard refresh, a pasted link or
+// a bookmark falls through to the Next 404 — which is exactly how /app/replay
+// and /app/strike-history shipped broken.
+const SHELL_EXEMPT = new Set([
+  '*',  // catch-all -> /traders-dashboard
+  '/m', // bare phone path is a <Navigate> to /m/gex
+]);
+for (const p of routePaths) {
+  if (SHELL_EXEMPT.has(p)) continue;
+  if (!p.startsWith('/')) continue;
+  const handler = join(ROOT, 'app', 'app', ...p.slice(1).split('/'), 'route.ts');
+  if (DRY) { console.log('  shell ' + p + ' -> ' + (existsSync(handler) ? 'has route.ts' : 'NO route.ts')); continue; }
+  if (!existsSync(handler)) {
+    errors.push('SPA route "' + p + '" has no Next shell handler at app/app' + p + '/route.ts'
+      + ' — in-app nav works but a hard refresh on /app' + p + ' 404s. Create that file with:'
+      + ' import { serveSpaShell } from "@/lib/serveSpaShell"; export const dynamic = "force-dynamic";'
+      + ' export const GET = () => serveSpaShell("app");');
+  }
 }
 
 // ---- (3) the WHOLE graph reachable from App.tsx must resolve ----

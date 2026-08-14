@@ -889,18 +889,18 @@ function VolPinScanner() {
           <thead>
             <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 14, textTransform: "uppercase" }}>
               <th style={{ ...th, textAlign: "left" }}>#</th>
-              <OutcomeTh label="Symbol" col="symbol" align="left" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <OutcomeTh label="Spot" col="spot" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="Symbol" col="symbol" align="left" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="Spot" col="spot" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
               <th style={th}>Pin Strike</th>
-              <OutcomeTh label="Dist" col="dist" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <OutcomeTh label="Pin OI" col="pinOi" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <OutcomeTh label="ATM IV" col="atmIv" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <OutcomeTh label="RV" col="rv" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <OutcomeTh label="IV−RV%" col="ivRv" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <OutcomeTh label="Spread Trend" col="spreadTrend" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <OutcomeTh label="Range" col="range" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <OutcomeTh label="Range Trend" col="rangeTrend" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
-              <OutcomeTh label="Status" col="status" align="center" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="Dist" col="dist" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="Pin OI" col="pinOi" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="ATM IV" col="atmIv" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="RV" col="rv" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="IV−RV%" col="ivRv" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="Spread Trend" col="spreadTrend" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="Range" col="range" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="Range Trend" col="rangeTrend" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
+              <SortTh label="Status" col="status" align="center" sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
             </tr>
           </thead>
           <tbody>
@@ -1483,6 +1483,220 @@ type OutcomeDetail = {
   days: OutcomeDetailDay[];
 };
 
+/** Stable identity for one tracked contract, used to key the expanded row. */
+const outcomeKey = (o: OutcomeRow) => `${o.symbol}|${o.expiry}|${o.strike}`;
+
+// ── probe chart ──────────────────────────────────────────────────────────────
+/**
+ * The flagged contract's own price series — the "probe" chart. Past sessions
+ * are the contract's daily bars; today's point is the 15-minute probe, so the
+ * last dot moves intraday.
+ *
+ * Hand-rolled SVG rather than a chart library: this renders inside a table cell
+ * that is already inside two other tables, and every charting lib on this page
+ * wants a measured container. A viewBox scales without measuring anything.
+ *
+ * Two independent scales — the contract is worth a couple of dollars and spot
+ * is worth tens or hundreds, so a shared axis would flatten the contract into
+ * the baseline. Contract owns the left axis and the solid line; spot is the
+ * dashed reference on the right. Only the SHAPES are comparable, not the levels.
+ */
+function ProbeChart({ days, touchedDate }: { days: OutcomeDetailDay[]; touchedDate: string | null }) {
+  const W = 720, H = 168;
+  const padL = 52, padR = 52, padT = 14, padB = 24;
+
+  const n = days.length;
+  const cVals = days.map((d) => (d.contractClose != null && Number.isFinite(d.contractClose) ? d.contractClose : null));
+  const sVals = days.map((d) => (Number.isFinite(d.spot) ? d.spot : null));
+  const known = cVals.filter((v): v is number => v != null);
+  if (!known.length) return null;
+
+  const x = (i: number) => (n <= 1 ? (padL + W - padR) / 2 : padL + (i / (n - 1)) * (W - padL - padR));
+  const scale = (vals: (number | null)[]) => {
+    const ok = vals.filter((v): v is number => v != null);
+    const lo = Math.min(...ok), hi = Math.max(...ok);
+    const pad = hi === lo ? Math.max(Math.abs(hi) * 0.05, 0.01) : (hi - lo) * 0.12;
+    const min = lo - pad, max = hi + pad;
+    return {
+      lo, hi,
+      y: (v: number) => padT + (1 - (v - min) / (max - min)) * (H - padT - padB),
+    };
+  };
+  const c = scale(cVals);
+  const s = scale(sVals);
+
+  // A no-trade day has no bar, so the line BREAKS there rather than drawing a
+  // straight segment across a gap that never happened.
+  const segments = (vals: (number | null)[], y: (v: number) => number) => {
+    const out: string[] = [];
+    let cur: string[] = [];
+    vals.forEach((v, i) => {
+      if (v == null) { if (cur.length > 1) out.push(cur.join(" ")); cur = []; return; }
+      cur.push(`${cur.length ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+    });
+    if (cur.length > 1) out.push(cur.join(" "));
+    return out;
+  };
+
+  const first = known[0], last = known[known.length - 1];
+  const pct = first > 0 ? ((last - first) / first) * 100 : null;
+  const up = last >= first;
+  const lineColor = up ? HOME_THEME.green : HOME_THEME.red;
+  const touchIdx = touchedDate ? days.findIndex((d) => d.date === ymd(touchedDate)) : -1;
+
+  const axisLabel: React.CSSProperties = { fontSize: 10, fill: HOME_THEME.text, opacity: 0.6 } as React.CSSProperties;
+
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.05em", color: LIGHT_BLUE }}>CONTRACT PROBE</span>
+        <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.7 }}>
+          ${first.toFixed(2)} → ${last.toFixed(2)}
+          {pct != null && (
+            <span style={{ color: up ? HOME_THEME.green : HOME_THEME.red, fontWeight: 700 }}>
+              {" "}({pct >= 0 ? "+" : ""}{pct.toFixed(1)}%)
+            </span>
+          )}
+        </span>
+        <span style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.45 }}>
+          solid = contract (left) · dashed = spot (right) · scales are independent
+        </span>
+      </div>
+
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }} role="img"
+        aria-label="Contract price probe">
+        <rect x={padL} y={padT} width={W - padL - padR} height={H - padT - padB}
+          fill="rgba(0,0,0,0.20)" stroke="rgba(255,255,255,0.06)" />
+
+        {/* Touched marker — the session spot first reached the flagged strike. */}
+        {touchIdx >= 0 && (
+          <>
+            <line x1={x(touchIdx)} x2={x(touchIdx)} y1={padT} y2={H - padB}
+              stroke={LIGHT_BLUE} strokeWidth={1} strokeDasharray="3 3" opacity={0.65} />
+            <text x={x(touchIdx) + 4} y={padT + 10} style={{ fontSize: 10, fill: LIGHT_BLUE } as React.CSSProperties}>touched</text>
+          </>
+        )}
+
+        {/* Spot reference, right axis. */}
+        {segments(sVals, s.y).map((d, i) => (
+          <path key={`s${i}`} d={d} fill="none" stroke={HOME_THEME.text} strokeOpacity={0.3}
+            strokeWidth={1.25} strokeDasharray="4 4" />
+        ))}
+
+        {/* Contract, left axis. */}
+        {segments(cVals, c.y).map((d, i) => (
+          <path key={`c${i}`} d={d} fill="none" stroke={lineColor} strokeWidth={2}
+            strokeLinejoin="round" strokeLinecap="round" />
+        ))}
+        {cVals.map((v, i) => v == null ? null : (
+          <circle key={`d${i}`} cx={x(i)} cy={c.y(v)} r={i === n - 1 ? 3.5 : 2.2} fill={lineColor} />
+        ))}
+
+        {/* Axis extremes only — a full gridline set is noise at this size. */}
+        <text x={padL - 6} y={c.y(c.hi) + 3} textAnchor="end" style={{ ...axisLabel, fill: lineColor, opacity: 0.9 }}>${c.hi.toFixed(2)}</text>
+        <text x={padL - 6} y={c.y(c.lo) + 3} textAnchor="end" style={{ ...axisLabel, fill: lineColor, opacity: 0.9 }}>${c.lo.toFixed(2)}</text>
+        <text x={W - padR + 6} y={s.y(s.hi) + 3} style={axisLabel}>${s.hi.toFixed(0)}</text>
+        <text x={W - padR + 6} y={s.y(s.lo) + 3} style={axisLabel}>${s.lo.toFixed(0)}</text>
+        <text x={padL} y={H - 8} style={axisLabel}>{days[0]?.date}</text>
+        <text x={W - padR} y={H - 8} textAnchor="end" style={axisLabel}>{days[n - 1]?.date}</text>
+      </svg>
+    </div>
+  );
+}
+
+/**
+ * The expanded detail for one tracked flag. Rendered INLINE under the row that
+ * was clicked (it used to be a centered modal) so the row it belongs to stays
+ * on screen and you can open one, read it, and move down the list.
+ */
+function OutcomeDetailPanel({
+  detail, loading, err, onClose,
+}: {
+  detail: OutcomeDetail | null;
+  loading: boolean;
+  err: string | null;
+  onClose: () => void;
+}) {
+  return (
+    <div style={{
+      borderLeft: `2px solid ${LIGHT_BLUE}`,
+      background: "rgba(0,0,0,0.22)",
+      borderRadius: "0 8px 8px 0",
+      padding: "12px 14px 14px",
+      margin: "2px 0 6px",
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 10 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text }}>
+            {detail ? `${detail.symbol} · $${detail.strike} ${detail.type === "C" ? "Call" : "Put"} · ${detail.expiry}` : "Loading…"}
+          </div>
+          {detail && (
+            <>
+              <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.75, marginTop: 2 }}>
+                Flagged {detail.firstFlagged} at spot ${detail.spotAtFlag.toFixed(2)} ({detail.otmPctAtFlag.toFixed(0)}% OTM) ·{" "}
+                <span style={{ color: detail.status === "touched" ? LIGHT_BLUE : detail.status === "expired" ? HOME_THEME.text : HOME_THEME.green, fontWeight: 700 }}>
+                  {detail.status === "touched" ? `TOUCHED ${detail.touchedDate ?? ""}` : detail.status.toUpperCase()}
+                </span>
+              </div>
+              {/* Past sessions are the contract's own daily bars; today is our
+                  15-minute probe. A day the contract never traded has no bar,
+                  so it stays "—" until the probe covers it. */}
+              <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.55, marginTop: 2 }}>
+                Daily bars from the contract&apos;s own tape · today sampled every 15m · no-trade days show —
+              </div>
+            </>
+          )}
+        </div>
+        <button onClick={(e) => { e.stopPropagation(); onClose(); }} style={{ ...seg(false), padding: "3px 9px" }}>✕</button>
+      </div>
+
+      {loading && <div style={{ padding: 18, textAlign: "center", color: HOME_THEME.text }}>Loading day-by-day detail…</div>}
+      {err && <div style={{ padding: 18, textAlign: "center", color: HOME_THEME.orange }}>{err}</div>}
+      {detail && !detail.days.length && (
+        <div style={{ padding: 18, textAlign: "center", color: HOME_THEME.text }}>No daily bars yet.</div>
+      )}
+
+      {detail && !!detail.days.length && (
+        <>
+          <ProbeChart days={detail.days} touchedDate={detail.touchedDate} />
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+              <thead>
+                <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 14, textTransform: "uppercase" }}>
+                  <th style={{ ...th, textAlign: "left" }}>Date</th>
+                  <th style={th}>Spot</th>
+                  <th style={th}>Spot Δ%</th>
+                  <th style={th}>Contract</th>
+                  <th style={th}>Contract Δ$</th>
+                  <th style={th}>Contract Δ%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detail.days.map((d, i) => (
+                  <tr key={d.date} style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
+                    <td style={{ ...td, textAlign: "left" }}>{d.date}</td>
+                    <td style={td}>${d.spot.toFixed(2)}</td>
+                    <td style={{ ...td, color: d.spotPctChg == null ? HOME_THEME.text : d.spotPctChg >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                      {d.spotPctChg == null ? "—" : `${d.spotPctChg >= 0 ? "+" : ""}${d.spotPctChg.toFixed(2)}%`}
+                    </td>
+                    <td style={td}>{d.contractClose == null ? "—" : `$${d.contractClose.toFixed(2)}`}</td>
+                    <td style={{ ...td, color: d.contractDollarChg == null ? HOME_THEME.text : d.contractDollarChg >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                      {d.contractDollarChg == null ? "—" : `${d.contractDollarChg >= 0 ? "+" : ""}$${d.contractDollarChg.toFixed(2)}`}
+                    </td>
+                    <td style={{ ...td, color: d.contractPctChg == null ? HOME_THEME.text : d.contractPctChg >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
+                      {d.contractPctChg == null ? "—" : `${d.contractPctChg >= 0 ? "+" : ""}${d.contractPctChg.toFixed(2)}%`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function WatchThisScanner() {
   const [rows, setRows] = useState<WatchRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1518,23 +1732,45 @@ function WatchThisScanner() {
   const [detail, setDetail] = useState<OutcomeDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailErr, setDetailErr] = useState<string | null>(null);
+  // Which row is expanded. One at a time, keyed by a UI-unique string rather
+  // than the contract, because the Results view can list the SAME contract in
+  // both the Opened and Touched sections of a date — keying by contract alone
+  // would open both.
+  const [openRow, setOpenRow] = useState<string | null>(null);
+  // Guards against a slow response for a row you already closed (or moved past)
+  // painting itself into whatever row is open now.
+  const detailReq = useRef(0);
 
-  const openDetail = useCallback(async (o: OutcomeRow) => {
+  const closeDetail = useCallback(() => {
+    detailReq.current += 1;
+    setOpenRow(null); setDetail(null); setDetailErr(null); setDetailLoading(false);
+  }, []);
+
+  const openDetail = useCallback(async (uiKey: string, o: OutcomeRow) => {
+    if (openRow === uiKey) { closeDetail(); return; } // second click on the same row closes it
+    const req = ++detailReq.current;
+    setOpenRow(uiKey);
     setDetail(null); setDetailErr(null); setDetailLoading(true);
     try {
       const qs = new URLSearchParams({ symbol: o.symbol, strike: String(o.strike), expiry: o.expiry }).toString();
       const res = await fetch(`/proxy/far-cb-outcome-detail?${qs}`, { cache: "no-store" });
       const j = await res.json();
+      if (detailReq.current !== req) return;
       if (!j.ok) throw new Error(j.error || "load failed");
       setDetail(j);
     } catch (e: any) {
+      if (detailReq.current !== req) return;
       setDetailErr(String(e?.message || e));
     } finally {
-      setDetailLoading(false);
+      if (detailReq.current === req) setDetailLoading(false);
     }
-  }, []);
+  }, [openRow, closeDetail]);
 
-  const closeDetail = useCallback(() => { setDetail(null); setDetailErr(null); }, []);
+  // The panel is rendered inline under whichever row is open, in whichever
+  // table that row lives in — built once here so both call sites stay in sync.
+  const detailPanel = (
+    <OutcomeDetailPanel detail={detail} loading={detailLoading} err={detailErr} onClose={closeDetail} />
+  );
 
   const [newTicker, setNewTicker] = useState("");
   const [addStatus, setAddStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
@@ -1761,6 +1997,8 @@ function WatchThisScanner() {
             openDay={openDay}
             onToggleDay={(d) => setOpenDay((cur) => (cur === d ? null : d))}
             onPickRow={openDetail}
+            openRow={openRow}
+            detailPanel={detailPanel}
           />
         ) : (
         <div style={{ overflowX: "auto" }}>
@@ -1781,13 +2019,17 @@ function WatchThisScanner() {
               </tr>
             </thead>
             <tbody>
-              {sortedOutcomes.map((o, i) => (
-                <tr key={`${o.symbol}-${o.expiry}-${o.strike}`}
-                  onClick={() => openDetail(o)}
-                  title="Click for day-by-day detail"
+              {sortedOutcomes.map((o, i) => {
+                const rk = `flat|${outcomeKey(o)}`;
+                const isOpen = openRow === rk;
+                return (
+                <Fragment key={rk}>
+                <tr
+                  onClick={() => openDetail(rk, o)}
+                  title={isOpen ? "Click to collapse" : "Click for day-by-day detail"}
                   style={{
                     borderTop: "1px solid rgba(255,255,255,0.06)",
-                    background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent",
+                    background: isOpen ? "rgba(33,158,188,0.10)" : i % 2 ? "rgba(255,255,255,0.02)" : "transparent",
                     cursor: "pointer",
                   }}>
                   <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{o.symbol}</td>
@@ -1826,7 +2068,16 @@ function WatchThisScanner() {
                     </span>
                   </td>
                 </tr>
-              ))}
+                {isOpen && (
+                  <tr>
+                    <td colSpan={11} style={{ padding: "0 0 0 10px", background: "rgba(0,0,0,0.20)" }}>
+                      {detailPanel}
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+                );
+              })}
               {!outcomes.length && (
                 <tr><td colSpan={11} style={{ padding: 20, textAlign: "center", color: HOME_THEME.text }}>
                   No tracked flags yet.
@@ -1838,99 +2089,6 @@ function WatchThisScanner() {
         )}
       </div>
 
-      {(detailLoading || detail || detailErr) && (
-        <ModalPortal>
-        <div
-          onClick={closeDetail}
-          style={{
-            position: "fixed", inset: 0, zIndex: 200,
-            background: "rgba(0,0,0,0.55)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            padding: 20,
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: "min(720px, 100%)", maxHeight: "80vh", overflowY: "auto",
-              borderRadius: 12, padding: "18px 20px",
-              background: "rgba(13,17,25,0.97)",
-              border: "1px solid rgba(255,255,255,0.12)",
-              boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-              <div>
-                <div style={{ fontSize: 17, fontWeight: 800, color: HOME_THEME.text }}>
-                  {detail ? `${detail.symbol} · $${detail.strike} ${detail.type === "C" ? "Call" : "Put"} · ${detail.expiry}` : "Loading…"}
-                </div>
-                {detail && (
-                  <>
-                    <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.75, marginTop: 2 }}>
-                      Flagged {detail.firstFlagged} at spot ${detail.spotAtFlag.toFixed(2)} ({detail.otmPctAtFlag.toFixed(0)}% OTM) ·{" "}
-                      <span style={{ color: detail.status === "touched" ? LIGHT_BLUE : detail.status === "expired" ? HOME_THEME.text : HOME_THEME.green, fontWeight: 700 }}>
-                        {detail.status === "touched" ? `TOUCHED ${detail.touchedDate ?? ""}` : detail.status.toUpperCase()}
-                      </span>
-                    </div>
-                    {/* Past sessions are the contract's own daily bars; today is
-                        our 15-minute probe. A day the contract never traded has
-                        no bar, so it stays "—" until the probe covers it. */}
-                    <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.55, marginTop: 2 }}>
-                      Daily bars from the contract&apos;s own tape · today sampled every 15m · no-trade days show —
-                    </div>
-                  </>
-                )}
-              </div>
-              <button onClick={closeDetail} style={{ ...seg(false), padding: "4px 10px" }}>✕</button>
-            </div>
-
-            {detailLoading && (
-              <div style={{ padding: 24, textAlign: "center", color: HOME_THEME.text }}>Loading day-by-day detail…</div>
-            )}
-            {detailErr && (
-              <div style={{ padding: 24, textAlign: "center", color: HOME_THEME.orange }}>{detailErr}</div>
-            )}
-            {detail && !detail.days.length && (
-              <div style={{ padding: 24, textAlign: "center", color: HOME_THEME.text }}>No daily bars yet.</div>
-            )}
-            {detail && !!detail.days.length && (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-                  <thead>
-                    <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 14, textTransform: "uppercase" }}>
-                      <th style={{ ...th, textAlign: "left" }}>Date</th>
-                      <th style={th}>Spot</th>
-                      <th style={th}>Spot Δ%</th>
-                      <th style={th}>Contract</th>
-                      <th style={th}>Contract Δ$</th>
-                      <th style={th}>Contract Δ%</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detail.days.map((d, i) => (
-                      <tr key={d.date} style={{ borderTop: "1px solid rgba(255,255,255,0.06)", background: i % 2 ? "rgba(255,255,255,0.02)" : "transparent" }}>
-                        <td style={{ ...td, textAlign: "left" }}>{d.date}</td>
-                        <td style={td}>${d.spot.toFixed(2)}</td>
-                        <td style={{ ...td, color: d.spotPctChg == null ? HOME_THEME.text : d.spotPctChg >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
-                          {d.spotPctChg == null ? "—" : `${d.spotPctChg >= 0 ? "+" : ""}${d.spotPctChg.toFixed(2)}%`}
-                        </td>
-                        <td style={td}>{d.contractClose == null ? "—" : `$${d.contractClose.toFixed(2)}`}</td>
-                        <td style={{ ...td, color: d.contractDollarChg == null ? HOME_THEME.text : d.contractDollarChg >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
-                          {d.contractDollarChg == null ? "—" : `${d.contractDollarChg >= 0 ? "+" : ""}$${d.contractDollarChg.toFixed(2)}`}
-                        </td>
-                        <td style={{ ...td, color: d.contractPctChg == null ? HOME_THEME.text : d.contractPctChg >= 0 ? HOME_THEME.green : HOME_THEME.red }}>
-                          {d.contractPctChg == null ? "—" : `${d.contractPctChg >= 0 ? "+" : ""}${d.contractPctChg.toFixed(2)}%`}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-        </ModalPortal>
-      )}
     </Card>
   );
 }
@@ -1947,14 +2105,18 @@ const RESULT_SECTIONS = [
 ];
 
 function ResultsByDay({
-  days, loading, err, openDay, onToggleDay, onPickRow,
+  days, loading, err, openDay, onToggleDay, onPickRow, openRow, detailPanel,
 }: {
   days: DayBucket[];
   loading: boolean;
   err: string | null;
   openDay: string | null;
   onToggleDay: (date: string) => void;
-  onPickRow: (o: OutcomeRow) => void;
+  /** (uiKey, row) — uiKey identifies the clicked ROW, not the contract. */
+  onPickRow: (uiKey: string, o: OutcomeRow) => void;
+  openRow: string | null;
+  /** Rendered inline under whichever row `openRow` names. */
+  detailPanel: ReactNode;
 }) {
   const count = (n: number, color: string) => (
     <span style={{ fontWeight: 800, color: n ? color : "rgba(255,255,255,0.35)" }}>{n}</span>
@@ -2039,14 +2201,21 @@ function ResultsByDay({
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {rows.map((o, j) => (
+                                    {rows.map((o, j) => {
+                                      // Section-scoped: one contract can appear
+                                      // under both Opened and Touched on the
+                                      // same date, and only the clicked one
+                                      // should expand.
+                                      const rk = `day|${d.date}|${sec.key}|${outcomeKey(o)}`;
+                                      const isOpen = openRow === rk;
+                                      return (
+                                      <Fragment key={rk}>
                                       <tr
-                                        key={`${sec.key}-${o.symbol}-${o.expiry}-${o.strike}`}
-                                        onClick={() => onPickRow(o)}
-                                        title="Click for day-by-day detail"
+                                        onClick={() => onPickRow(rk, o)}
+                                        title={isOpen ? "Click to collapse" : "Click for day-by-day detail"}
                                         style={{
                                           borderTop: "1px solid rgba(255,255,255,0.06)",
-                                          background: j % 2 ? "rgba(255,255,255,0.02)" : "transparent",
+                                          background: isOpen ? "rgba(33,158,188,0.10)" : j % 2 ? "rgba(255,255,255,0.02)" : "transparent",
                                           cursor: "pointer",
                                         }}
                                       >
@@ -2070,7 +2239,16 @@ function ResultsByDay({
                                           </span>
                                         </td>
                                       </tr>
-                                    ))}
+                                      {isOpen && (
+                                        <tr>
+                                          <td colSpan={8} style={{ padding: "0 0 0 10px", background: "rgba(0,0,0,0.25)" }}>
+                                            {detailPanel}
+                                          </td>
+                                        </tr>
+                                      )}
+                                      </Fragment>
+                                      );
+                                    })}
                                   </tbody>
                                 </table>
                               )}

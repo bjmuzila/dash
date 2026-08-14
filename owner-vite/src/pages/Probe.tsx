@@ -150,6 +150,17 @@ const OP_CSS = `
   .op-tgl.on.cyan { color: #219EBC; background: rgba(33,158,188,0.12); border-color: rgba(33,158,188,0.4); }
   .op-shot { color: var(--text1); border-color: rgba(142,202,230,0.35); background: rgba(142,202,230,0.08); }
   .op-shot:hover { border-color: #8ECAE6; background: rgba(142,202,230,0.16); }
+  .op-shot.ok { border-color: rgba(48,209,88,0.6); background: rgba(48,209,88,0.14); color: #30d158; }
+  .op-shot.bad { border-color: rgba(255,91,91,0.6); background: rgba(255,91,91,0.12); color: #ff5b5b; }
+  .op-sell { display: flex; align-items: center; gap: 6px; font-family: var(--sm-mono); font-size: 12px; }
+  .op-sell label { color: var(--text1); letter-spacing: 0.08em; text-transform: uppercase; font-size: 10px; }
+  .op-sell input { width: 74px; box-sizing: border-box; background: var(--bg0); color: var(--text1); border: 1px solid var(--sm-border); border-radius: 6px; padding: 4px 8px; font-family: var(--sm-mono); font-size: 12px; }
+  .op-sell input:focus { outline: none; border-color: #30d158; }
+  .op-sell input.set { border-color: rgba(48,209,88,0.55); background: rgba(48,209,88,0.08); }
+  .op-sell .clr { background: none; border: none; color: var(--text1); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
+  .op-sell .clr:hover { color: #ff5b5b; }
+  .op-badge.sold { color: #30d158; background: rgba(48,209,88,0.12); border: 1px solid rgba(48,209,88,0.45); text-transform: uppercase; letter-spacing: 0.06em; }
+  .op-badge.sold.loss { color: #ff5b5b; background: rgba(255,91,91,0.12); border-color: rgba(255,91,91,0.45); }
   .op-chartempty { padding: 40px 0; text-align: center; color: var(--sm-muted); font-size: 12px; font-family: var(--sm-mono); }
   .op-charthint { margin-top: 8px; font-family: var(--sm-mono); font-size: 12px; color: var(--sm-muted); letter-spacing: 0.04em; }
 
@@ -172,6 +183,7 @@ const OP_CSS = `
 // Snapshots still carry greeks; the card charts price only, so the metric
 // toggles (Net GEX / Δ / Θ / V / IV) were removed along with their state.
 interface ProbeHistSnap { ts: number; mark: number | null; net_gex: number | null; delta: number | null; theta: number | null; vega: number | null; iv: number | null }
+const PROBE_SELL_KEY = "probe-sell-v1";
 const PROBE_RANGES: { key: string; label: string }[] = [
   { key: "1d", label: "1D" }, { key: "3d", label: "3D" }, { key: "1w", label: "1W" }, { key: "1m", label: "1M" },
 ];
@@ -240,7 +252,7 @@ function opDewick<T>(pts: T[], get: (p: T) => number): T[] {
  * (not CSS vars) on purpose — `captureProbeCard` serializes this SVG standalone
  * for the screenshot, and a var() reference would resolve to nothing off-DOM.
  */
-function ProbeChart({ history, entry, chartId }: { history: ProbeHistSnap[]; entry: number | null; chartId: string }) {
+function ProbeChart({ history, entry, sell, chartId }: { history: ProbeHistSnap[]; entry: number | null; sell: number | null; chartId: string }) {
   const W = 960, H = 340, PADL = 12, PADR = 78, PADT = 26, PADB = 30;
   const ICE = "#8ECAE6", GRN = "#30d158", RED = "#ff5b5b";
   const [hover, setHover] = useState<number | null>(null);
@@ -258,8 +270,11 @@ function ProbeChart({ history, entry, chartId }: { history: ProbeHistSnap[]; ent
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const hi = Math.max(...ys), lo = Math.min(...ys);
   const hiI = ys.indexOf(hi), loI = ys.indexOf(lo);
-  // The entry line has to stay on-canvas or break-even reads as off-screen.
-  const dom = entry != null && Number.isFinite(entry) ? [...ys, entry] : ys;
+  // Entry (and the exit, once one is typed) have to stay on-canvas or the two
+  // lines the P/L is measured between read as off-screen.
+  const dom = [...ys];
+  if (entry != null && Number.isFinite(entry)) dom.push(entry);
+  if (sell != null && Number.isFinite(sell)) dom.push(sell);
   let minY = Math.min(...dom), maxY = Math.max(...dom);
   if (minY === maxY) { minY -= 1; maxY += 1; }
   const gpad = (maxY - minY) * 0.1; minY -= gpad; maxY += gpad;
@@ -270,7 +285,9 @@ function ProbeChart({ history, entry, chartId }: { history: ProbeHistSnap[]; ent
   const path = pts.map((p, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(p.v).toFixed(1)}`).join(" ");
   const area = `${path} L${sx(n - 1).toFixed(1)},${H - PADB} L${sx(0).toFixed(1)},${H - PADB} Z`;
 
-  const last = pts[n - 1].v;
+  // Closed position: the pill and the readouts price off the fill you sold at,
+  // not the live mark — the contract is no longer yours to mark.
+  const last = sell != null && Number.isFinite(sell) ? sell : pts[n - 1].v;
   const lastUp = entry == null ? null : last - entry;
   const pillFill = lastUp == null ? ICE : lastUp >= 0 ? GRN : RED;
   const multiDay = maxX - minX > 20 * 3600_000;
@@ -328,6 +345,15 @@ function ProbeChart({ history, entry, chartId }: { history: ProbeHistSnap[]; ent
 
       <path d={path} fill="none" stroke={ICE} strokeWidth={1.9} strokeLinejoin="round" strokeLinecap="round" />
 
+      {sell != null && Number.isFinite(sell) && (
+        <>
+          <line x1={PADL} y1={sy(sell)} x2={W - PADR} y2={sy(sell)} strokeWidth={1.4}
+                stroke={entry != null && sell < entry ? RED : GRN} strokeDasharray="6 4" />
+          <text x={PADL + 4} y={sy(sell) - 7} fontSize={11} fontFamily={MONO} letterSpacing="1"
+                fill={entry != null && sell < entry ? RED : GRN}>EXIT {sell.toFixed(2)}</text>
+        </>
+      )}
+
       <circle cx={sx(hiI)} cy={sy(hi)} r={3.4} fill="none" stroke={GRN} strokeWidth={1.6} />
       <text x={sx(hiI)} y={sy(hi) - 11} fontSize={12} fill={GRN} fontFamily={MONO} textAnchor="middle">H {hi.toFixed(2)}</text>
       <circle cx={sx(loI)} cy={sy(lo)} r={3.4} fill="none" stroke={RED} strokeWidth={1.6} />
@@ -372,10 +398,11 @@ function ProbeChart({ history, entry, chartId }: { history: ProbeHistSnap[]; ent
  */
 async function captureProbeCard(chartId: string, meta: {
   ticker: string; badge: string; exp: string; pct: number | null;
-  entry: number | null; mark: number | null; dollars: number | null; hint: string;
-}): Promise<void> {
+  entry: number | null; mark: number | null; dollars: number | null;
+  closed: boolean; hint: string;
+}): Promise<boolean> {
   const svg = document.getElementById(chartId) as SVGSVGElement | null;
-  if (!svg) return;
+  if (!svg) return false;
   const SCALE = 2, CW = 1000, HEAD = 132, CH = HEAD + 360;
   const MONO = '"Courier New", monospace';
   const GRN = "#30d158", RED = "#ff5b5b";
@@ -400,7 +427,7 @@ async function captureProbeCard(chartId: string, meta: {
     const cv = document.createElement("canvas");
     cv.width = CW * SCALE; cv.height = CH * SCALE;
     const ctx = cv.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) return false;
     ctx.scale(SCALE, SCALE);
 
     ctx.fillStyle = "#05060a";
@@ -429,7 +456,7 @@ async function captureProbeCard(chartId: string, meta: {
 
     ctx.font = `15px ${MONO}`;
     ctx.fillStyle = "#ffffff";
-    const line = `IN ${px(meta.entry)} → NOW ${px(meta.mark)}`;
+    const line = `IN ${px(meta.entry)} → ${meta.closed ? "SOLD" : "NOW"} ${px(meta.mark)}`;
     ctx.fillText(line, 210, 108);
     if (meta.dollars != null) {
       ctx.fillStyle = tone(meta.dollars);
@@ -444,24 +471,17 @@ async function captureProbeCard(chartId: string, meta: {
     ctx.fillText(meta.hint, 26, CH - 14);
 
     const png: Blob | null = await new Promise((res) => cv.toBlob(res, "image/png"));
-    if (!png) return;
+    if (!png) return false;
 
-    const name = `${meta.ticker}-${meta.badge}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}.png`;
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(png);
-    a.download = name;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-
-    // Clipboard is best-effort: Firefox has no ClipboardItem and Safari needs a
-    // user gesture that this await has already spent. The download stands alone.
-    try {
-      const C = (window as unknown as { ClipboardItem?: new (i: Record<string, Blob>) => unknown }).ClipboardItem;
-      if (C && navigator.clipboard && "write" in navigator.clipboard) {
-        await (navigator.clipboard as unknown as { write: (d: unknown[]) => Promise<void> })
-          .write([new C({ "image/png": png })]);
-      }
-    } catch { /* download already fired */ }
+    // Clipboard only — nothing is written to disk. Firefox ships no
+    // ClipboardItem, so the button reports a miss rather than silently no-oping.
+    const C = (window as unknown as { ClipboardItem?: new (i: Record<string, Blob>) => unknown }).ClipboardItem;
+    if (!C || !navigator.clipboard || !("write" in navigator.clipboard)) return false;
+    await (navigator.clipboard as unknown as { write: (d: unknown[]) => Promise<void> })
+      .write([new C({ "image/png": png })]);
+    return true;
+  } catch {
+    return false;
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -514,6 +534,32 @@ export default function Probe() {
   const [histFull, setHistFull] = useState<Record<number, ProbeHistSnap[]>>({});
   const [histLoading, setHistLoading] = useState(false);
   const [shotId, setShotId] = useState<number | null>(null);
+  const [shotOk, setShotOk] = useState(true);
+  /**
+   * Sell price per contract — the fill you closed at. Kept in localStorage, not
+   * on the watch row: /api/watch only speaks add / refresh / remove, so posting
+   * an exit would mean a new server action and a column migration. Once a sell
+   * is set the card stops marking to the live quote and reports the realized
+   * number instead.
+   */
+  const [sellById, setSellById] = useState<Record<number, number>>(() => {
+    try {
+      const raw = localStorage.getItem(PROBE_SELL_KEY);
+      const o = raw ? JSON.parse(raw) : {};
+      return o && typeof o === "object" ? (o as Record<number, number>) : {};
+    } catch { return {}; }
+  });
+  const [sellDraft, setSellDraft] = useState<Record<number, string>>({});
+  const commitSell = useCallback((id: number, raw: string) => {
+    const v = parseFloat(raw);
+    setSellById((prev) => {
+      const next = { ...prev };
+      if (raw.trim() === "" || !Number.isFinite(v) || v <= 0) delete next[id];
+      else next[id] = v;
+      try { localStorage.setItem(PROBE_SELL_KEY, JSON.stringify(next)); } catch { /* private mode */ }
+      return next;
+    });
+  }, []);
   const [range, setRange] = useState<string>("1d");
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -807,8 +853,11 @@ export default function Probe() {
                 // so the card holds the price instead of blanking to "—".
                 const liveMark = opPx(r.snapshot?.mark) ?? opPx(r.snapshot?.last);
                 const mark = liveMark ?? (hist.length ? hist[hist.length - 1].mark : null);
-                const pct = entry != null && mark != null && entry !== 0 ? ((mark - entry) / entry) * 100 : null;
-                const dollars = entry != null && mark != null ? (mark - entry) * 100 : null;
+                // A closed position prices off the sell fill, not the live mark.
+                const sell = sellById[r.id] ?? null;
+                const effMark = sell ?? mark;
+                const pct = entry != null && effMark != null && entry !== 0 ? ((effMark - entry) / entry) * 100 : null;
+                const dollars = entry != null && effMark != null ? (effMark - entry) * 100 : null;
                 const liveTs = Number(r.snapshot?.ts);
                 const pts = liveMark != null && Number.isFinite(liveTs) && opIsRth(liveTs) && (!hist.length || liveTs > hist[hist.length - 1].ts)
                   ? [...hist, { ts: liveTs, mark: liveMark }]
@@ -826,6 +875,7 @@ export default function Probe() {
                       <div>
                         <span className="op-tick">{r.ticker}</span>
                         <span className={`op-badge ${r.side === "C" ? "c" : "p"}`}>{r.strike % 1 ? r.strike : Math.round(r.strike)}{r.side}</span>
+                        {sell != null && <span className={`op-badge sold${dollars != null && dollars < 0 ? " loss" : ""}`}>Sold {sell.toFixed(2)}</span>}
                         {expired && <span className="op-badge exp">Expired</span>}
                         <span className="op-chev">{isOpen ? "▾" : "▸"}</span>
                       </div>
@@ -837,7 +887,7 @@ export default function Probe() {
                         {pct == null ? "—" : `${pct >= 0 ? "▲" : "▼"} ${Math.abs(pct).toFixed(1)}%`}
                       </div>
                       <div className="op-bigsub">
-                        <span className="lbl">in</span>{px(entry)}<span className="arrow">→</span><span className="lbl">now</span>{px(mark)}
+                        <span className="lbl">in</span>{px(entry)}<span className="arrow">→</span><span className="lbl">{sell != null ? "sold" : "now"}</span>{px(effMark)}
                         <span className="op-dollars" style={{ color: upDown(dollars) }}>
                           {dollars == null ? "" : ` · ${dollars >= 0 ? "+" : "−"}$${Math.abs(dollars).toFixed(0)}/ct`}
                         </span>
@@ -847,7 +897,7 @@ export default function Probe() {
                     {!isOpen && (
                       <div className="op-legend">
                         <span><i className="dot in" /> in {px(entry)}</span>
-                        <span><i className="dot now" style={{ background: upDown(pct) }} /> now {px(mark)}</span>
+                        <span><i className="dot now" style={{ background: upDown(pct) }} /> {sell != null ? "sold" : "now"} {px(effMark)}</span>
                         <span className="op-legend-ago">{ago(r.snapshot?.ts)}</span>
                       </div>
                     )}
@@ -859,29 +909,55 @@ export default function Probe() {
                               <button key={rg.key} type="button" className={`op-tgl${range === rg.key ? " on" : ""}`} onClick={() => changeRange(rg.key)}>{rg.label}</button>
                             ))}
                           </div>
-                          <button
-                            type="button"
-                            className="op-tgl op-shot"
-                            title="Save this card as a PNG"
-                            onClick={() => {
-                              setShotId(r.id);
-                              void captureProbeCard(`probe-chart-${r.id}`, {
-                                ticker: r.ticker,
-                                badge: `${r.strike % 1 ? r.strike : Math.round(r.strike)}${r.side}`,
-                                exp: fmtExp(r.expiration),
-                                pct, entry, mark, dollars,
-                                hint: `Option price (mark) · RTH only · entry @ ${px(entry)}`,
-                              }).finally(() => setTimeout(() => setShotId(null), 1400));
-                            }}
-                          >
-                            {shotId === r.id ? "✓ Saved" : "⬚ Screenshot"}
-                          </button>
+                          <div className="op-sell">
+                            <label htmlFor={`op-sell-${r.id}`}>Sell</label>
+                            <input
+                              id={`op-sell-${r.id}`}
+                              className={sell != null ? "set" : ""}
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              placeholder="—"
+                              value={sellDraft[r.id] ?? (sell != null ? String(sell) : "")}
+                              onChange={(e) => setSellDraft((d) => ({ ...d, [r.id]: e.target.value }))}
+                              onBlur={(e) => commitSell(r.id, e.target.value)}
+                              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                            />
+                            {sell != null && (
+                              <button
+                                type="button"
+                                className="clr"
+                                title="Clear the sell price and go back to marking live"
+                                onClick={() => { setSellDraft((d) => ({ ...d, [r.id]: "" })); commitSell(r.id, ""); }}
+                              >×</button>
+                            )}
+                            <button
+                              type="button"
+                              className={`op-tgl op-shot${shotId === r.id ? (shotOk ? " ok" : " bad") : ""}`}
+                              title="Copy this card to the clipboard as a PNG"
+                              onClick={() => {
+                                void captureProbeCard(`probe-chart-${r.id}`, {
+                                  ticker: r.ticker,
+                                  badge: `${r.strike % 1 ? r.strike : Math.round(r.strike)}${r.side}`,
+                                  exp: fmtExp(r.expiration),
+                                  pct, entry, mark: effMark, dollars,
+                                  closed: sell != null,
+                                  hint: `Option price (mark) · RTH only · entry @ ${px(entry)}${sell != null ? ` · sold @ ${px(sell)}` : ""}`,
+                                }).then((ok) => {
+                                  setShotOk(ok); setShotId(r.id);
+                                  setTimeout(() => setShotId(null), 1600);
+                                });
+                              }}
+                            >
+                              {shotId === r.id ? (shotOk ? "✓ Copied" : "✗ Copy failed") : "⧉ Copy image"}
+                            </button>
+                          </div>
                         </div>
                         {histLoading && !(histFull[r.id]?.length)
                           ? <div className="op-chartempty">Loading history…</div>
-                          : <ProbeChart history={histFull[r.id] ?? []} entry={entry} chartId={`probe-chart-${r.id}`} />}
+                          : <ProbeChart history={histFull[r.id] ?? []} entry={entry} sell={sell} chartId={`probe-chart-${r.id}`} />}
                         <div className="op-charthint">
-                          Option price (mark) · RTH only · entry @ {px(entry)} · {ago(r.snapshot?.ts)}
+                          Option price (mark) · RTH only · entry @ {px(entry)}{sell != null ? ` · sold @ ${px(sell)}` : ""} · {ago(r.snapshot?.ts)}
                         </div>
                       </div>
                     )}

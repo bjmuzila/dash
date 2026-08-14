@@ -1,338 +1,495 @@
 # Changelog
 
-## 2026-08-14 - Reta weekly log: type syringe units OR mg, each fills the other
+## 2026-08-14 - ΔGEX Board: previous sessions + a Net GEX / Δ toggle
 
-Edited: `owner-vite/src/pages/Reta.tsx`.
+Edited: `server-v2/eod-strike-gex-recorder.js` (as-of `date` on both read
+helpers, absolute-level aggregates, new `listStrikeGexDates`),
+`server-v2/server-with-proxy.js` (`&date` on the two readers, new
+`/proxy/eod-strike-gex-dates`), `server-v2/api-router.js` (pass `date`, register
+`/api/eod-strike-gex-dates`), `owner-vite/src/pages/GexGrowth.tsx` (date picker,
+mode tabs).
+Added: `app/api/eod-strike-gex-dates/route.ts`.
 
 ### What
 
-The weekly log's **Units** column is now an input instead of a read-only derived
-number. Type the units you actually drew on the U-100 barrel and the mg dose is
-calculated from the recon in force that week; type the mg and the units still
-follow as before. Both directions write the same stored fact.
+The board could only ever show the latest close. Retention is ~400 days, so a
+year of sessions was sitting in `eod_strike_gex` with nothing able to read it.
+Two additions:
+
+- **Date picker** — any recorded session, newest first.
+- **Net GEX / Δ 1 day tabs** — absolute per-strike level at that close, or the
+  change against the session before it.
 
 ### How
 
-- New `doseFromUnits(units, conc)` — the inverse of `drawUnits()`:
-  `mg = (units / 100) * mg-per-mL`, rounded to 4 dp.
-- `PersonCells` takes `onUnits`, `unitsPlaceholder` and `canEditUnits`. The
-  units cell renders a `NumCell` (step 0.5) when a recon is in force for that
-  week, and falls back to the old plain text when `mg/mL` is 0 — with no
-  concentration there is nothing to convert with.
-- Placeholder in the units cell is the carried-forward dose expressed in units,
-  matching how the mg cell already ghosts the carried dose.
+**One payload, two readings.** Both routes already returned `netGex` (the level)
+alongside `chg` (the diff), so the ladder toggle is a re-render, never a fetch.
+`getStrikeGexBoard` now returns the rail's ranking twice — `net`/`absTot`/
+`strikes` for Δ, `gexNet`/`gexAbs`/`gexStrikes` for levels — off the same CTE, so
+the two views cannot disagree about the numbers.
 
-### Unchanged
+**`date` is an AS-OF, not an equality match.** The latest snapshot on or before
+it. A holiday, a long weekend, or a symbol that missed that particular 16:05
+sweep still answers with the closest session it actually has, instead of an
+empty ladder. Omitted → latest, byte-for-byte the previous behaviour.
 
-`dose_mg` is still the only stored value — units are never persisted, so
-changing the mix later re-derives past weeks' units from the recon that was in
-force, exactly as before.
+**Validated at every hop.** `YYYY-MM-DD` or it's dropped — in the Next adapter,
+in `api-router.js`, and again in the recorder's `normDate`. The proxy casts the
+value to `::date`, and this is a URL a reader can type; a malformed one falls
+back to latest rather than 500ing.
+
+**Ranked twice without a cross product.** The two top-N lists are `json_agg`'d
+in the query rather than LEFT JOINed as rows — joining two independent rank
+lists would multiply them (top² rows per symbol, 4k+ to render 169 names). One
+row per symbol.
+
+**Level figures need no baseline.** A name on its first recorded session shows
+`—` in Δ mode but a real ladder in Net GEX mode, and the "needs a second
+session" message is now gated to Δ so it can't hide data that exists.
+
+**The picker reads recorded rows, not a calendar** (`/…-dates`) — a holiday or a
+failed sweep is simply not in the list.
+
+### Note
+
+Picking an older session switches the view to Net GEX, since "what did the board
+look like on the 8th" is a level question. Returning to the newest session
+restores Δ. The tabs stay live either way — it's a default, not a lock.
 
 
-## 2026-08-13 - Site Guide page (/guide), linked from the account menu
+## 2026-08-14 - Site Guide (/guide): dashboard cards, rose headings, every page name is a link
 
-Added: `app/guide/page.tsx`, `app/app/guide/route.ts`.
-Edited: `app-vite/src/App.tsx` (lazy import + `<Route path="/guide">`),
-`components/shared/UserMenu.tsx` (Site Guide link).
+Edited: `app/guide/page.tsx`.
+
+### Cards
+
+Every panel is now a plain `<Card>` on the shared dashboard surface. The left
+accent bars are gone from the playbook and concept blocks, and no card carries a
+per-card accent color — the hero is a Card too, not a hand-styled div.
+
+### Headings
+
+`#fb7185`, one step larger. That hex is the ONLY raw color literal on the page:
+a deliberate product choice, declared once as `TITLE` at the top of the file
+(with `LINK` = `LIGHT_BLUE` beside it) so it cannot drift section to section.
+Everything else still resolves through `HOME_THEME`.
+
+### Text
+
+Body copy is `HOME_THEME.text` throughout. The dimmed-gray `DIM` / `DIMMER`
+constants were deleted rather than lightened, so nothing can reintroduce gray
+body text later.
+
+### The guide is navigation now
+
+Every page name in the copy is a `next/link` to that page (`PageLink`), as are
+the directory rows — icon, name and route chip all navigate. The Scanner and
+Test Lab pills carry the `?tab=` the section strip reads, so a pill lands on the
+exact view it names, and the phone pills go to `/m/*`.
+
+## 2026-08-14 - ΔGEX Board: ladder opens on the money
+
+Edited: `owner-vite/src/pages/GexGrowth.tsx` (`Ladder` gains `scrollRef` + a
+centring layout effect; the detail viewport now carries a ref).
 
 ### What
 
-A single in-app reference page: what GEX and DEX measure, the four derived
-levels (CB / call wall / put wall / flip), the positive-vs-negative gamma regime
-table, six trade playbooks, a directory of every route with what it's for, the
-Scanner and Test Lab tab breakdowns, the `/m/*` phone build, and a rules + risk
-section.
-
-Static content — no fetches, no socket, no `topics` subscription.
-
-### Where it lives
-
-Account menu (the avatar dropdown), above **What's New**. Not a toolbar tile: it
-is read once and referred back to, and the toolbar is for pages opened every
-session.
-
-The dropdown's other links are native `<a>` because they point at top-level Next
-pages that the SPA catch-all would otherwise swallow. Site Guide uses `next/link`
-instead, on purpose: it IS an SPA route, so inside the Vite SPA
-(`basename="/app"`) `href="/guide"` resolves to `/app/guide` — the route — and
-navigates client-side. `app/app/guide/route.ts` (`serveSpaShell`) keeps a hard
-refresh or a pasted link from 404ing.
-
-### Theme
-
-`PageShell` + `Card` + `HOME_THEME` / `LIGHT_BLUE` / `LEVEL_COLORS` only. Zero
-raw color literals — every tint goes through the local `rgba()` helper applied to
-a theme token, so the level ladder uses the same CB/CW/PW colors Multi Greek
-draws with.
-
-## 2026-08-13 - Far CB tracker watched the wrong contract (put vs call)
-
-Edited: `server-v2/far-cb-recorder.js` (`optTypeOf`, `ensureSchema`, the probe
-and backfill row selects, doc comments).
-
-(Re-logged: this shipped earlier the same day and the entry did not survive a
-later rewrite of this file. The code change is on disk.)
-
-### What
-
-A flag on IONQ's $55 strike with spot at $46.52 was tracked and charted as a
-**$55 Put** — a contract $8.50 in the money, not the 18%-OTM contract the flag
-was about. Every premium number on the row (live mid, % vs open, the daily-bar
-popup) was for the wrong contract.
+The ladder is ±40 strikes deep and sorted high→low, so `scrollTop: 0` put the
+reader's first sight of every name at the far upside wing — 40 rungs above
+spot. Every single symbol needed a scroll before it said anything. Spot now
+parks in the vertical middle of the viewport on load.
 
 ### How
 
-`optTypeOf()` inferred the contract type from the **sign of
-`gex_value_at_flag`** ("Call-side when >= 0"). That is a statement about dealer
-gamma at the strike, not about which contract is out of the money. A far strike
-above spot with heavy put OI carries negative net GEX, so the tracker flipped to
-the put.
+`Ladder` takes the scrolling viewport as `scrollRef` and centres the row it
+already marks as spot:
 
-Type is now decided by spot vs strike at the flag — the same thing `side`
-("above" / "below") already stored: `above` → `'C'`, `below` → `'P'`, falling
-back to `strike >= spot_at_flag`, with the GEX sign kept only as a last resort.
-`side` was added to the probe and backfill row selects so both paths get the
-authoritative value.
+- Positioned by **rect delta**, not `offsetTop` — the viewport is a plain div
+  with no `position`, so `offsetParent` is somewhere up the card and `offsetTop`
+  would measure against the wrong box.
+- `useLayoutEffect`, not `useEffect` — runs before paint, so the ladder is never
+  briefly seen at the top and then jumped.
+- Keyed on `[rows, spotStrike]`. `rows` is a fresh array per fetch, so it
+  re-centres when the symbol changes and stays put on unrelated re-renders —
+  otherwise the view would yank back mid-scroll every time the poll fired.
 
-### Repair of existing rows
+`scrollRef` is typed structurally (`{ current: HTMLDivElement | null }`) rather
+than as `React.RefObject`, which fits both the React 18 and 19 ref types without
+a cast.
 
-`ensureSchema()` runs a one-time cleanup: `far_cb_contract_daily` bars whose
-`opt_type` disagrees with the corrected type are deleted, and those flags'
-`premium_backfilled_at` is cleared so the next backfill pass refills the right
-contract from dxLink. Both statements match nothing once the bad bars are gone,
-so it is a no-op on every later boot.
+### Note
 
-## 2026-08-13 - /levels: nothing repaints because of price
+The spot rung itself is unchanged — still found by nearest-strike-to-spot, still
+marked with the cyan border and ◀. Only the initial scroll position moved.
 
-Edited: `app/levels/page.tsx`.
 
-The index cells still tinted themselves gold / blue / red by where spot sat, so
-169 of them repainted as the tape moved and the board read as weather rather than
-as a list. Gone — cells are neutral.
+## 2026-08-14 - /app/replay + /app/strike-history 404 on load; build guard now catches it
 
-The ONE highlight left on the board marks the cells that are pinned into the dock
-above: white border, white 14% fill, a 2px ring. That answers "which of these am
-I looking at", which is a question the user asked rather than one the market did,
-and with nothing else competing it is visible at a glance across the whole board.
-
-Position did not disappear; it just stopped being a wash. The range bar still
-carries it as marks — gold tick for the core, white tick for spot, between the
-two walls — and the Δ% keeps its up/down colour.
-
-So the rule across the page is now simple: colour means WHICH LEVEL a thing is
-(CB gold, CW blue, PW red) or WHICH DIRECTION a delta went, and nothing else.
-The zone helper, its two thresholds and the `Zone` type came out with the tints.
-
-## 2026-08-13 - Visitor map: gold means PAYING
-
-Edited: `server-v2/api-router.js` (`/api/page-visits` account join),
-`owner-vite/src/components/VisitorMap.tsx` (dot styling, legend, detail card),
-`owner-vite/src/pages/Visitors.tsx` (header stat, footnote).
+Added: `app/app/replay/route.ts`, `app/app/strike-history/route.ts`.
+Edited: `app-vite/scripts/check-routes.mjs` — new check (4).
 
 ### What
 
-Gold meant "signed in", which put a free registration and a paying customer in
-the same colour — 39 gold dots for what is a much smaller number of actual
-subscribers. That made the map unable to answer the one question it is best
-placed to answer: where is the revenue.
+`/app/replay` returned the 404 page ("This page got chased off the chart") even
+though the route exists in `app-vite/src/App.tsx` and `components/pages/Replay.tsx`
+is intact. The route was never the problem — the SPA is client-routed, but the
+FIRST request for `/app/<x>` is a plain document request that Next answers, and
+every SPA route needs its own `app/app/<x>/route.ts` calling `serveSpaShell("app")`
+to hand back the shell. `replay` and `strike-history` were the only two routes in
+`App.tsx` without one, so both worked via in-app navigation and 404'd on a hard
+refresh, a bookmark or a pasted link. Neither is in the toolbar, so direct URL is
+the only way in — which is why it read as "the page doesn't exist".
 
-### How
+### The guard
 
-`/api/page-visits` now LEFT JOINs `subscriptions` alongside the existing user
-join — one query, no extra round trip — and returns `isSubscriber` (true for
-`active` / `trialing`, via the same `libDb.PAID_STATUSES` the rest of the app
-gates on, so the map can never call someone a customer that `/pricing` would
-still be selling to) plus the raw `subStatus`.
+`check-routes.mjs` already failed the build for a nav item with no `<Route>`; it
+did not check the other direction. Check (4) now walks every `<Route path>` in
+`App.tsx` and requires a matching `app/app/<path>/route.ts`, exempting only the
+`*` catch-all and the bare `/m` redirect. It runs as app-vite's `prebuild`, so
+local `npm run build` and the Docker deploy both fail loudly instead of shipping
+a route that only works if you never refresh. `--dry` prints a `shell <path> ->`
+line per route.
 
-Three dot states on two independent channels, hue and fill:
+## 2026-08-14 - ΔGEX Board: the missing /api adapter
 
-| mark | meaning |
-|------|---------|
-| solid gold | paying subscriber |
-| gold ring, dark fill | signed-in account, not paying |
-| slate ring, dark fill | anonymous visitor |
-
-Hue now means "has an account", fill means "is paying". Two channels, so the
-distinction survives colour-blindness and 3px rendering — and the heaviest mark
-on the map is the rarest and most valuable state, which is the right way round.
-
-Paying dots also sort LAST, so they draw on top of the fan and win the click
-when a customer shares a city with twenty anonymous visitors.
-
-The footer legend counts all three (`N paying · N free · N anonymous`), the
-header gains a `subscribers` stat, and the detail card gets a **Subscription**
-row showing the raw status. That last one matters: "no subscription" and
-"canceled last week" are identical on the map and could not be less alike in
-what you would do about them, so a lapsed account reads `Free account ·
-canceled` rather than collapsing into a plain "no".
-
-## 2026-08-13 - Visitor map: the cities were there the whole time
-
-Edited: `server-v2/api-router.js` (`clientGeoTrim`, new `decodeHeaderText`),
-`owner-vite/src/components/VisitorMap.tsx` + `owner-vite/src/pages/Visitors.tsx`
-(doc copy only). Added: `server-v2/scripts/backfill-visit-geo.js`.
+Added: `app/api/eod-strike-gex-board/route.ts`.
+Edited: `server-v2/api-router.js` (registered `/api/eod-strike-gex-board` and
+`/api/eod-strike-gex-change`).
 
 ### What
 
-The country-centroid fallback shipped an hour ago put 329 visitors in a blob
-over Kansas. Correct, and the wrong answer — because `page_visits.city` was
-never broken. Only `latitude`/`longitude` were dropped on write. 6,047 of the
-6,180 coordinate-less rows carry a city name, across just **145 distinct
-places**. That is 145 geocoder lookups to put six thousand rows on their real
-city.
+The owner ΔGEX Board rendered `Board failed: not implemented` on every load.
+Not a data problem — the 16:05 ET sweep, the `eod_strike_gex` table, the
+`/proxy/eod-strike-gex-board` reader and the page itself were all already
+shipped and working. The `/api` → `/proxy` adapter was the one piece nobody
+wrote.
 
-Found on the way in: a third bug in the same four lines. Cloudflare sends
-`cf-ipcity: Bogotá` as UTF-8 bytes; Node hands raw header bytes back as latin1;
-so what we have been storing is `BogotÃ¡`, `Ãle-de-France`, `OÅ›wiÄ™cim`.
-Every non-ASCII city and region we have ever logged is mangled — and mangled
-names do not geocode, so this had to be fixed first.
+`/api/eod-strike-gex-board` existed in exactly zero places: no `route.ts`
+directory, no `register()` in `api-router.js`. So the fetch fell through to the
+`app/api/[...proxy]` catch-all, which answers 501 `{"error":"not implemented"}`
+— the literal string the card was printing back.
 
 ### How
 
-**Write path** — `clientGeoTrim` now re-decodes the header before trimming
-(decode first: trimming to 80 chars can cut a multi-byte character in half).
-Plain-ASCII values and anything that isn't valid UTF-8 are returned untouched,
-so a correct name can never be corrupted by "repairing" it. Round-trip tested
-against Bogotá / Île-de-France / Oświęcim / Ta'if / München / 東京.
+- New `app/api/eod-strike-gex-board/route.ts`, a `forwardGet` adapter matching
+  its `eod-strike-gex-change` sibling. Passes `?top=` through after coercing it
+  to a positive integer.
+- Registered both `/api/eod-strike-gex-board` (auth `owner`) and
+  `/api/eod-strike-gex-change` (auth `subscriber`, since it also backs the
+  Ticker Lookup Δ 1D column) in `api-router.js`, so both work with
+  `API_ROUTER=1` instead of depending on the Next fallthrough.
+- Both send `no-store`. The data only moves once a day, but an edge cache would
+  pin a stale baseline date straight across the 16:05 write.
 
-**Backlog** — `server-v2/scripts/backfill-visit-geo.js`, two idempotent passes:
+### Note
 
-1. Re-decodes the mangled city/region already in the table. Handles BOTH latin1
-   and cp1252 flavours — cp1252 maps byte 0x9B to U+203A, so a plain latin1
-   decode fails on exactly the Polish and Turkish names that need it.
-2. Geocodes each distinct (city, region, country) once through Open-Meteo and
-   writes the coordinate onto every row sharing it. Region is a TIEBREAK, never
-   a filter: Cloudflare says "Mecca Region" where the geocoder says "Mecca", and
-   filtering on that would drop the correct hit.
+`/api/eod-strike-gex-change` had a `route.ts`, so the detail ladder worked — but
+that file's header already claimed a registration in `api-router.js` that had
+never been added. It was running on the Next fallback alone. That claim is now
+true.
 
-`WHERE latitude IS NULL` throughout — a real Cloudflare coordinate is never
-overwritten with a geocoded guess, and a second run finds nothing to do.
+(Re-added: this entry was written earlier today and got clobbered by a later
+CHANGELOG write from a stale copy.)
 
-Run it:
+## 2026-08-13 - Watch tab: detail expands inline under the row + contract probe chart
 
-    docker compose exec -T dashboard node server-v2/scripts/backfill-visit-geo.js --dry
-    docker compose exec -T dashboard node server-v2/scripts/backfill-visit-geo.js
-
-### Dry-run findings, folded back in
-
-The first `--dry` on prod surfaced two flaws in this script, both fixed here:
-
-- **The dry run lied about 10 places.** Pass 2 re-reads city names from the
-  table, and on a dry run pass 1 has written nothing — so it geocoded
-  `BogotÃ¡` and reported "no results" for the exact ten places the real run
-  would have got right. Pass 2 now decodes the name itself before geocoding, so
-  `--dry` predicts the real outcome and `--no-repair` works on an unrepaired
-  table. 135/145 → 145/145.
-- **Washington, Virginia landed in West Virginia.** The region tiebreak used
-  `includes`, and "West Virginia" contains "Virginia", so the bigger town won a
-  60-point bonus it had not earned. It is a `startsWith` test now — every real
-  mismatch between Cloudflare's vocabulary and the geocoder's is a SUFFIX the
-  geocoder adds ("Île-de-France Region", "Beijing Municipality") — plus a
-  −40 penalty when the two regions genuinely disagree, so a bigger town in the
-  wrong state can no longer win on population alone. The penalty only reorders
-  candidates; the best one is still taken even when every score goes negative.
-
-### Notes
-
-The dashed country-level dots stay in the map for what genuinely has no city —
-133 rows, plus whatever the geocoder can't place. That's the honest rendering
-for "we know the country, not the city", and the script prints exactly which
-places fell into it rather than failing silently.
-
-## 2026-08-13 - Visitor map: 329 visitors who were never on it
-
-Edited: `owner-vite/src/components/VisitorMap.tsx` (`aggregate`, `spreadOffset`,
-`countryAnchors`, `mainlandOf`, dot layer, legend),
-`owner-vite/src/pages/Visitors.tsx` (header stats, footnote).
+Edited: `components/pages/Scanner.tsx` — new `ProbeChart` + `OutcomeDetailPanel`,
+`WatchThisScanner` detail state re-keyed, `ResultsByDay` takes the panel.
+Client-only; `/proxy/far-cb-outcome-detail` is unchanged.
 
 ### What
 
-Yesterday's fix started coordinates flowing, and the map went from 0 dots to
-13 — out of 458 visitors. That is worse than it sounds: the dot layer only ever
-plotted rows carrying `lat`/`lon`, and nothing before 2026-08-13 has them (the
-column was being dropped on write — see yesterday's entry). So 97% of the
-history rendered as choropleth shading and nothing else, and the map read as
-emptier than the day the bug was still in.
+Clicking a tracked flag opened a centered modal over the page. In the Results
+view that meant the popup covered the very rows it came from — the screenshot
+of IONQ sat directly on top of the Touched section it was launched from. It now
+expands **inline, directly under the row you clicked**, so the row stays put and
+you can open one, read it, collapse it, and keep moving down the list. Clicking
+the same row again collapses it; the ✕ still closes.
 
-The country was there the whole time on 6,131 of those rows. Only the city was
-missing.
+The panel also gained a **contract probe chart** above the day table.
+
+### The chart
+
+Hand-rolled SVG, not a chart library: this renders inside a `<td>` that is
+already nested in two other tables, and every charting lib on this page wants a
+measured container. A `viewBox` scales without measuring anything.
+
+- **Solid line = the contract**, left axis, green/red by net direction, one dot
+  per sampled day and a fatter dot on the last point (today's 15-minute probe,
+  so it moves intraday).
+- **Dashed line = spot**, right axis, faint.
+- **The two scales are independent and labeled as such.** A $0.23 contract
+  against a $45 underlying on one axis would flatten the contract onto the
+  baseline. Only the shapes are comparable, not the levels.
+- **No-trade days break the line** instead of drawing a segment across a gap
+  that never happened — `segments()` splits the path on nulls, matching the "—"
+  the table already shows for those days.
+- A dashed vertical marker with a `touched` label sits on the touch date when it
+  falls inside the window.
+- Header line carries first → last price and the total %.
+
+### Row keying
+
+`openRow` is a **UI key, not a contract key** — `day|<date>|<section>|SYM|EXP|STRIKE`
+in the Results view, `flat|SYM|EXP|STRIKE` in the flat table. The same contract
+can legitimately appear under both **Opened** and **Touched** on one date, and
+keying by contract alone expanded both at once.
+
+A `detailReq` counter guards the fetch: a slow response for a row you already
+closed or moved past is dropped instead of painting itself into whatever row is
+open now.
+
+### Also fixed (regression from earlier today)
+
+The blanket `<SortTh` → `<OutcomeTh` rename in the sortable-columns change also
+renamed the **Pin table's** own `SortTh` call sites, which take a different
+sort-key type. Restored — the rename now only applies to tags without a `col=`
+prop. Caught by a type check; both tables build clean.
+
+## 2026-08-13 - Scanner Watch tab: tracked-results table is sortable, Touched gets its own column
+
+Edited: `components/pages/Scanner.tsx` (`WatchThisScanner` + new `OutcomeTh`,
+`sortOutcomes`, `defaultOutcomeSort`). Client-side only — no endpoint change.
+
+### What
+
+The tracked-results table under the Watch cards was fixed in the server's order
+(`first_flagged DESC`) with no way to re-order it. On the **Touched** tab that
+is the wrong axis entirely: you want the most recent touch first, and the touch
+date was not even a column — it was concatenated onto the status label
+(`TOUCHED 2026-08-11`), so it could not be sorted or scanned down.
 
 ### How
 
-A row with a country but no coordinate now gets a dot on that COUNTRY's
-centroid, drawn **dashed at half opacity** so it never passes for a measured
-position. Solid = a place we geolocated; dashed = a country we know and a
-position we invented. Counted separately in the header ("country-level"), the
-footer legend, and the dot-toggle tooltip.
+**Every header is now clickable.** `OutcomeTh` renders the label plus a
+direction caret (dim `▾` when inactive, `▲`/`▼` when it is the active key), and
+clicking the active column flips direction. First click on a new column opens
+**descending** for dates and numbers (newest / biggest first) and **ascending**
+for Symbol. Named `OutcomeTh` rather than `SortTh` because the Pin table further
+up the file already owns that name with a different key type.
 
-Three details that make it honest rather than decorative:
+**Touched is its own column**, between Closest and Status, and the status cell
+is back to the bare word. Both are sortable.
 
-- **Centroids come from the map's own geometry** — `geoCentroid` over the
-  country's LARGEST polygon (`mainlandOf`), not the whole MultiPolygon. France's
-  overseas départements would otherwise put its centre in the Atlantic and the
-  USA's somewhere near Alaska. No second data file to vendor or keep in sync.
-- **One person is still one dot.** A visitor seen today with a city coordinate
-  and last week without would have become a city dot PLUS a country dot. So
-  coordinate-less rows first look for a city that same visitor was seen at in
-  that same country (`knownPlace`, built newest-first) and join that dot; only a
-  visitor with no located row anywhere in the country falls through to the
-  centroid.
-- **The fan is sized to the country.** `spreadOffset` takes a max spread; a city
-  cluster keeps its ~1°, a country gets a third of its own shorter bounding-box
-  side (clamped 1.2°–9°), so the US blob stays inside the US.
+**Sort resets per view.** `defaultOutcomeSort()`: Touched → `touched_date` desc,
+Expired → `expiry` desc, everything else → `first_flagged` desc (the server's
+own order, so All/Open look unchanged until you click).
+
+**Nulls sink in both directions.** An untouched row has no touch date; letting
+those float to the top of a descending sort would bury exactly the rows the
+sort was asked for.
+
+**Status sorts by lifecycle, not alphabet** — `open → touched → expired` via
+`STATUS_RANK`, rather than the A–Z order that would read `expired, open,
+touched`.
+
+Sorting is client-side over the page the endpoint already returned (the `limit`
+is applied server-side), so it re-orders the fetched rows and does not re-query.
+
+## 2026-08-13 - Scanner Watch tab: /proxy/far-cb-outcomes no longer blocks the page
+
+Edited: `server-v2/far-cb-recorder.js` (quote enrichment rewritten as a
+background single-flight pass), `server-v2/server-with-proxy.js`
+(`/proxy/far-cb-outcomes` gains `quotes=0`), `components/pages/Scanner.tsx`
+(`WatchThisScanner`: Results view opts out of quotes, outcomes re-poll).
+
+### What
+
+Opening `/app/scanner?tab=watch` took minutes. In the network waterfall
+`far-cb-outcomes?status=all&limit=100` sat pending for **2.1 minutes** and then
+returned **524**, and `status=touched&limit=100` took **39.9s** — while every
+other fetch on the page (`quotes-batch`, `tt-quotes`, `bzila-alerts`) queued
+behind them, because a browser allows only 6 connections per host and the two
+stalled requests were holding two of them.
+
+### Why it was slow
+
+`enrichOutcomesWithQuotes()` ran **inline inside the request, one row at a
+time**: per tracked contract, a `fetchContractDailyBars()` call to Theta plus a
+hardcoded `await sleep(120)`. At 100 rows that is 100 sequential vendor calls
+and 12s of pure sleep before the first byte; at the Results view's 300-row
+ceiling it is three times that. The 60s per-contract cache only helped once a
+pass had already finished — and no pass ever finished before the proxy timed
+out, so the cache stayed empty and every poll paid full price again.
+
+### How it is fixed
+
+**The request no longer does the work.** `computeOutcomeQuotes()` now starts (or
+joins) a single background fill and `Promise.race`s it against a budget —
+`FAR_CB_QUOTE_WAIT_MS`, default **2500ms**. Whatever is in the cache when the
+budget expires is what ships; the pass keeps running and the next poll picks up
+the rest. Cached entries are served even past their TTL: a slightly old mark
+beats a blank column when a refresh is already in flight.
+
+**The fill itself is parallel.** `FAR_CB_QUOTE_CONCURRENCY` (default 5) workers,
+no per-row sleep, capped at `FAR_CB_QUOTE_MAX_PER_PASS` (default 60) contracts
+per pass so a backlog fills over successive polls instead of pinning Theta.
+The greeks snapshot is memoised per `(symbol, expiry)` and the queue is sorted
+group-major, so parallel workers share a snapshot rather than each opening a
+different one. A failed contract caches a null entry so a dead vendor is not
+re-asked on every poll.
+
+**`_quoteFill` is single-flight**, so N open scanner tabs share one pass rather
+than each starting its own — previously the concurrent polls multiplied the
+vendor load.
+
+**`quotes=0`** skips enrichment entirely. `ResultsByDay` only renders per-day
+counts and flag fields — it never reads `opt_price` — so the 300-row Results
+fetch now sends `quotes=0` and is a straight DB read. The Tracked-results table
+does show premium, so it keeps quotes on.
+
+**Outcomes re-poll every 60s** while the tab is visible (`document.hidden`
+skips it), so the contracts the background pass fills after the first response
+appear without a manual refresh.
 
 ### Result
 
-342 dots instead of 13 — 13 on real city coordinates, 329 country-level across
-32 countries. The city half grows on its own every day now that the write path
-works; the dashed half is frozen history and will never improve, which is
-exactly what dashing it says.
+`/proxy/far-cb-outcomes` returns in <2.5s worst case and near-instantly once
+warm, instead of 40s–2min-then-524. The connection-pool starvation that made
+the whole Watch tab feel slow goes away with it.
 
-## 2026-08-12 - Visitor map: coordinates were never stored, and never read back
+### Tunables
 
-Edited: `server-v2/api-router.js` (`clientGeo`, `/api/page-status` POST,
-`/api/page-visits` GET).
+| Env | Default | Meaning |
+|-----|---------|---------|
+| `FAR_CB_QUOTE_WAIT_MS` | 2500 | Max ms a request waits on the background fill |
+| `FAR_CB_QUOTE_CONCURRENCY` | 5 | Parallel contract refreshes |
+| `FAR_CB_QUOTE_MAX_PER_PASS` | 60 | Contracts refreshed per pass |
+
+## 2026-08-13 - Ticker Lookup: record end-of-day per-strike GEX, show Δ 1D
+
+New: `server-v2/eod-strike-gex-recorder.js`, `app/api/eod-strike-gex-change/route.ts`.
+Edited: `server-v2/server-with-proxy.js` (defensive require + `startEodStrikeGexRecorder()`
++ two new `/proxy/*` routes), `server-v2/api-router.js` (one `register()`),
+`components/pages/Analytics.tsx` (`TlLadder` Δ column, `TickerLookupCard` feed).
 
 ### What
 
-The owner Visitors map has been logging every visit correctly and drawing the
-country choropleth from it — but the dot layer (one dot per visitor, placed on
-a city centroid) has been empty, because `page_visits.latitude` /
-`page_visits.longitude` were NULL on every row ever written by the live server,
-and would have read back as null even if they weren't.
+The Ticker Lookup right pane could say where the structural gamma IS, never
+what CHANGED. Nothing stored yesterday's board for anything but $SPX/SPY/QQQ.
+Now a 16:05 ET job snapshots per-strike net GEX for the whole board minus 0DTE
+across the full scanner watchlist (~169 symbols, roster re-resolved each sweep
+so a ticker added on the Watchlists page starts recording that evening), and the
+right pane grows a **Δ 1D** column plus a `Δ 1D vs close YYYY-MM-DD` baseline
+line under the board label.
 
-Two independent name mismatches, both on the same pair of columns:
-
-1. **Write.** `clientGeo()` in `api-router.js` returned `{ lat, lon }`, and the
-   `/api/page-status` POST handler passed `lat: geo.lat, lon: geo.lon` into
-   `libDb.insertPageVisit()`. That function reads `r.latitude` / `r.longitude`
-   (`_lib-db.cjs`), so both bound to `undefined` → `?? null` → NULL. The
-   Cloudflare `cf-iplatitude` / `cf-iplongitude` headers were being read and
-   then thrown away.
-2. **Read.** `/api/page-visits` mapped `lat: r.lat ?? null, lon: r.lon ?? null`,
-   but `getPageVisitsSince()` is a `SELECT *` so the row carries `latitude` /
-   `longitude`. Null for every row regardless of what's stored.
-
-`country` / `region` / `city` matched on both sides, which is why the map looked
-half-alive: countries shaded, visitor count climbed, hourly refresh worked, no
-dots. The Next.js fallback at `app/api/page-status/route.ts` had it right all
-along (`latitude` / `longitude`) — the in-process router copy drifted from it,
-and the router copy is the one that runs in production (`API_ROUTER=1`).
+40 strikes above and 40 below the closing spot per symbol — sliced off the
+strike INDEX like `tlWindow()`, so a $2.50 chain and a $50 chain both give 40
+rungs a side. ~81 rows × 169 symbols/day. 400-day retention.
 
 ### How
 
-- `clientGeo()` now returns `latitude` / `longitude`, matching both
-  `insertPageVisit()` and the Next fallback.
-- Added the fallback's `usable` guard: `0,0` is Cloudflare's "no fix" answer,
-  not a location in the Gulf of Guinea, so it stores NULL instead of parking
-  visitors off the coast of Africa.
-- `/api/page-visits` reads `r.latitude` / `r.longitude`.
+**Same formula as the card, on purpose.** `/proxy/gex-by-strike-multi` already
+returns this exact ladder and is deliberately NOT used — it is ThetaData-sourced
+and sparse on single names, which is the documented reason the card stopped
+reading it. The recorder re-implements the client's `accumulateChainGreeks()`
+gex term against the same `fetchChainFull`: OI+Vol basis, same
+`S² · 0.01 · 100`. Verified numerically — stubbed chain through both paths gives
+byte-identical values. `Math.abs()` on each gamma is a no-op on TT data and a
+guard against a signed put gamma silently flipping strikes positive.
 
-### Notes
+**16:05 ET, once**, because the OI+Vol basis is half day-volume and that is only
+final after the 16:00 print. Minute-poll + `_lastRunDate` claim (claimed before
+the await, released if the sweep lands nothing) — same idiom as `oi-daily`.
+Window stays open to 22:00 ET so an evening restart still captures the session.
 
-Historical rows can't be recovered — their coordinates were never written. Dots
-will appear for visits logged after this deploys; older visits keep their
-country and stay in the choropleth. Requires a deploy to take effect.
+**Δ is computed in Postgres, not the browser.** `getStrikeGexChange()` FULL JOINs
+the two most recent snapshot DATES for the symbol — not calendar today/yesterday,
+so a holiday or missed run degrades to "vs the last session we have". FULL, not
+LEFT: the window follows spot, so a wall that came OFF has a prev row and no cur
+row, and anchoring on cur would discard exactly the largest negative changes.
+Verified against a real PG 16 instance: unwinds surface, new strikes read full
+value, single-snapshot returns `prevDate: null`.
+
+Re-fire clears the day's rows per symbol before writing — the window MOVES, so a
+bare upsert would leave a day holding the union of two windows.
+
+Client shows `—` (not 0) for a strike with no snapshot, and keeps the column off
+entirely until a second session exists, so a column of zeros never gets read as
+"the board didn't move".
+
+**Proxy changes were additive only** — no existing route touched;
+`proxy-tastytrade.js` is read-only (imported, not edited).
+
+Manual fire: `POST /proxy/eod-strike-gex-run[?symbol=NVDA][&date=YYYY-MM-DD]`.
+Kill switch: `EOD_STRIKE_GEX_RECORDER=0`.
+
+
+## 2026-08-13 - Ticker Lookup: level chips are one uniform height
+
+Edited: `components/pages/Analytics.tsx` (`TlLevelChip`, new `TL_CHIP_MIN_H` /
+`TL_CHIP_ROW`, the `.tl-split` container and both chip rows).
+
+### What
+
+In the ticker-lookup popup off the Multi Greek chart, the four level cards —
+CORE (CB) / CALL WALL / PUT WALL / GAMMA FLIP — were ragged. Cards grew when
+their note or distance string wrapped, and the left pane's row sat at a
+different height from the right pane's because the two ladders above them are
+different lengths.
+
+### How
+
+Each chip row is now a fixed line box: the label, value, distance and note
+lines carry explicit `lineHeight` values (14 / 24 / 15 / 15) and are clipped to
+ONE line with `nowrap` + ellipsis, with the full string on `title` for hover.
+The chip carries `minHeight: TL_CHIP_MIN_H` (92 = 14+24+15+15 + 6 gaps + 16
+padding + 2 border) and `boxSizing: border-box`, so nothing can grow it.
+
+The two rows now share one `TL_CHIP_ROW` style with `alignItems: "stretch"`
+and `marginTop: "auto"`, and the `.tl-split` grid moved from
+`alignItems: "start"` to `"stretch"` — so both panes are the same height and
+both chip rows are pinned to the bottom, lining up across the split.
+
+Affects the Analytics page's own `<TickerLookupCard />` too, which is the same
+component.
+
+
+## 2026-08-12 - GEX Map: a third field — gamma sign × delta sign
+
+Edited: `app/test/GexMapTab.tsx` (`FIELD_MODES`, `buildModel`, `sliceModel`,
+`TapeField`, `MapCard`, new `quadColor`).
+
+### What
+
+DEX per strike is now on the map, as a third tab beside HEATMAP and TERRAIN
+rather than a layer painted over one of them. Four rounds of mockups all said
+the same thing: anything drawn ON TOP of the gamma — rings, bars, hatching,
+ribbons — either covers the field or is too faint to read. So the cell colour
+IS the pair.
+
+    green family  = positive gamma, dealers dampen
+    rose family   = negative gamma, dealers amplify
+    deep          = DEX positive  (dealers short delta · buy dips)
+    light         = DEX negative  (dealers long delta · sell rips)
+
+Two families of two, so the dampening-vs-amplifying read still lands from
+across the room before you look at delta at all.
+
+### How
+
+`quadColor(g, d, intensity)`. The hue only COMMITS as |DEX| grows — at zero
+delta a cell is the plain gamma colour of its family and slides to the corner as
+delta arrives. Forcing every cell into one of four buckets by the sign of a
+number that is mostly noise turns the field into a two-tone flag drawn by
+rounding error. Brightness is `max(|GEX|, 0.75·|DEX|)`, and the cull runs on
+that same combined magnitude: a strike carrying delta with thin gamma now
+appears, which is the cell the plain heatmap drops and the whole reason the tab
+is worth having. Colours were picked against live tape in a throwaway picker
+mock; `WHITE_LIFT` is 0.52 because four hues need less burn-to-white than two.
+
+The model gained `dexHeat` — signed DEX per cell, on the same geometric column
+blend as the gamma, so the morning is legible in delta for the same reason it is
+now legible in gamma. It is EMPTY unless `dexSurface`: the fallback DEX shape is
+one ladder for the whole session, and stretching that across every column would
+draw a surface the recorder never wrote. On a session without slot-aligned DEX
+the tab draws the gamma and says so on the field rather than blanking or
+pretending.
+
+The four-state key renders above the chart on that tab only, and is deliberately
+NOT `[data-capture-hide]` — a green/rose field is unreadable without it, so the
+shared PNG has to carry it. The intensity slider now covers both cell fields.
+
 
 ## 2026-08-12 - GEX Map: the morning is back, and Terrain survives the snapshot
 

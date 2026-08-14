@@ -1765,7 +1765,7 @@ async function main() {
       // ── End-of-day per-strike GEX snapshot ───────────────────────────────
       // Day-over-day ΔGEX per strike for one symbol, whole board ex-0DTE.
       // Backs the Ticker Lookup card's Δ column.
-      //   GET /proxy/eod-strike-gex-change?symbol=NVDA
+      //   GET /proxy/eod-strike-gex-change?symbol=NVDA[&date=YYYY-MM-DD]
       // Returns { ok, symbol, date, prevDate, spot, prevSpot, rows:[{strike,
       // netGex, prevNetGex, chg, hadPrev}] }. date/prevDate are the two most
       // recent snapshot DATES that exist for the symbol — not calendar
@@ -1773,6 +1773,12 @@ async function main() {
       // degrades to "compare against the last session we actually have"
       // instead of returning nothing. Before the second snapshot ever lands,
       // prevDate is null and every chg reads 0.
+      //
+      // `date` is an AS-OF, not an exact match: the latest snapshot on or
+      // before it, and the one before that. Omitted → latest, byte-for-byte the
+      // behaviour this endpoint had before the param existed. A malformed value
+      // is ignored rather than 400'd (normDate in the recorder) — this is a URL
+      // a reader can type, and falling back to latest is the safe read.
       if (pathname === '/proxy/eod-strike-gex-change' && req.method === 'GET') {
         (async () => {
           try {
@@ -1780,7 +1786,7 @@ async function main() {
             const u = new URL(req.url, `http://localhost:${PORT}`);
             const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
             if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
-            const out = await getStrikeGexChange(symbol);
+            const out = await getStrikeGexChange(symbol, { date: u.searchParams.get('date') });
             sendJson(res, out.ok ? 200 : 503, out);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
@@ -1788,18 +1794,42 @@ async function main() {
       }
       // Whole-board ranking for the owner ΔGEX page: every symbol, its net Δ
       // and its top N strikes by |Δ|, in ONE query.
-      //   GET /proxy/eod-strike-gex-board?top=5
-      // Returns { ok, top, symbols:[{symbol,date,prevDate,spot,net,absTot,
-      // strikes:[{strike,chg}]}] } sorted by |absTot| desc. Each symbol is
-      // diffed against ITS OWN two latest snapshot dates — a name added to the
-      // roster last week, or one whose chain failed at 16:05, has a different
-      // pair than the rest, and a board-wide date would show it as flat.
+      //   GET /proxy/eod-strike-gex-board?top=5[&date=YYYY-MM-DD]
+      // Returns { ok, top, date, symbols:[{symbol,date,prevDate,spot,net,absTot,
+      // strikes:[{strike,chg}],gexNet,gexAbs,gexStrikes:[{strike,gex}]}] }
+      // sorted by |absTot| desc. Each symbol is diffed against ITS OWN two
+      // latest snapshot dates — a name added to the roster last week, or one
+      // whose chain failed at 16:05, has a different pair than the rest, and a
+      // board-wide date would show it as flat.
+      //
+      // The gex* fields are the ABSOLUTE per-strike level at `date`, alongside
+      // the Δ. Both ship in one response because the board switches between the
+      // two views client-side and a mode toggle must not cost a round trip.
+      // `date` is an AS-OF, same as the change endpoint.
       if (pathname === '/proxy/eod-strike-gex-board' && req.method === 'GET') {
         (async () => {
           try {
             const { getStrikeGexBoard } = require('./eod-strike-gex-recorder');
             const u = new URL(req.url, `http://localhost:${PORT}`);
-            const out = await getStrikeGexBoard(Number(u.searchParams.get('top') || 5));
+            const out = await getStrikeGexBoard(
+              Number(u.searchParams.get('top') || 5),
+              { date: u.searchParams.get('date') },
+            );
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Which sessions are on file, newest first — populates the board's date
+      // picker. Retention is ~400 days, so this is the whole recorded history.
+      //   GET /proxy/eod-strike-gex-dates[?limit=90]
+      // Returns { ok, dates:['YYYY-MM-DD', …] }.
+      if (pathname === '/proxy/eod-strike-gex-dates' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { listStrikeGexDates } = require('./eod-strike-gex-recorder');
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const out = await listStrikeGexDates(Number(u.searchParams.get('limit') || 90));
             sendJson(res, out.ok ? 200 : 503, out);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();

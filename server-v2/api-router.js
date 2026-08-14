@@ -2906,12 +2906,27 @@ register('/api/debug-gex', {
 //
 // NO CDN CACHE on either: once-a-day data, but caching it at the edge would pin
 // a stale baseline date straight across the 16:05 write for the whole TTL.
+// `date` (YYYY-MM-DD) is passed through to the proxy as an AS-OF — the session
+// on or before it. Validated HERE as well as in the recorder: this is the
+// public-facing hop, and forwarding an unvalidated string into a URL the proxy
+// then casts to ::date is how a typo becomes a 500. Anything malformed is
+// dropped, which the recorder reads as "latest".
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+const ymdParam = (sp) => {
+  const d = (sp.get('date') || '').trim();
+  return YMD.test(d) ? d : '';
+};
+
 register('/api/eod-strike-gex-board', {
   auth: 'owner', methods: ['GET'],
   async handler(req, res, ctx) {
     const sp = new URL(req.url || '/', 'http://localhost').searchParams;
     const top = Number(sp.get('top') || 5);
-    const qs = Number.isFinite(top) && top > 0 ? `?top=${Math.floor(top)}` : '';
+    const q = new URLSearchParams();
+    if (Number.isFinite(top) && top > 0) q.set('top', String(Math.floor(top)));
+    const date = ymdParam(sp);
+    if (date) q.set('date', date);
+    const qs = q.toString() ? `?${q}` : '';
     const r = await forwardGet(ctx, `/proxy/eod-strike-gex-board${qs}`);
     send(res, r.status, r.body, { 'Cache-Control': NO_STORE });
   },
@@ -2922,8 +2937,25 @@ register('/api/eod-strike-gex-change', {
   async handler(req, res, ctx) {
     const sp = new URL(req.url || '/', 'http://localhost').searchParams;
     const symbol = (sp.get('symbol') || '').trim().toUpperCase();
-    const qs = symbol ? `?symbol=${encodeURIComponent(symbol)}` : '';
+    const q = new URLSearchParams();
+    if (symbol) q.set('symbol', symbol);
+    const date = ymdParam(sp);
+    if (date) q.set('date', date);
+    const qs = q.toString() ? `?${q}` : '';
     const r = await forwardGet(ctx, `/proxy/eod-strike-gex-change${qs}`);
+    send(res, r.status, r.body, { 'Cache-Control': NO_STORE });
+  },
+});
+
+// Which sessions are on file — populates the board's date picker. Owner-only,
+// same as the board it feeds.
+register('/api/eod-strike-gex-dates', {
+  auth: 'owner', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+    const limit = Number(sp.get('limit') || 90);
+    const qs = Number.isFinite(limit) && limit > 0 ? `?limit=${Math.floor(limit)}` : '';
+    const r = await forwardGet(ctx, `/proxy/eod-strike-gex-dates${qs}`);
     send(res, r.status, r.body, { 'Cache-Control': NO_STORE });
   },
 });

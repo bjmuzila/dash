@@ -1347,6 +1347,23 @@ function pathFor(pts: (number | null)[], x: (i: number) => number, y: (v: number
 }
 
 /**
+ * Path that skips missing weeks instead of breaking at them — every logged
+ * point joins to the next one that exists. Used for WEIGHT, where the gaps are
+ * just weeks nobody stepped on the scale and the trend is the whole point. Dose
+ * deliberately does NOT use this: a missing shot is a real gap, not a straight
+ * line through it.
+ */
+function pathConnecting(pts: (number | null)[], x: (i: number) => number, y: (v: number) => number): string {
+  let d = "", pen = false;
+  pts.forEach((v, i) => {
+    if (v == null) return;
+    d += `${pen ? "L" : "M"}${x(i).toFixed(1)} ${y(v).toFixed(1)} `;
+    pen = true;
+  });
+  return d.trim();
+}
+
+/**
  * Backlit line: a blurred colored copy under a solid stroke under a thin white
  * core — the glow reads on the near-black surface without any area fill.
  */
@@ -1403,7 +1420,8 @@ function PersonChart({
     s: { lo: number; hi: number; ticks: number[] } | null,
     top: number,
     h: number,
-    dp: number
+    dp: number,
+    connect = false
   ) => (
     <>
       <rect x={PAD_L} y={top - 19} width={7} height={7} rx={1.5} fill={color} />
@@ -1423,7 +1441,11 @@ function PersonChart({
               </g>
             );
           })}
-          <GlowLine d={pathFor(values, x, (v) => yIn(v, s, top, h))} color={color} id={glowId} />
+          <GlowLine
+            d={(connect ? pathConnecting : pathFor)(values, x, (v) => yIn(v, s, top, h))}
+            color={color}
+            id={glowId}
+          />
           {values.map((v, i) =>
             v == null ? null : (
               <circle key={i} cx={x(i)} cy={yIn(v, s, top, h)} r={hover === i ? 4 : 2.4}
@@ -1476,7 +1498,7 @@ function PersonChart({
         )}
 
         {panel("DOSE", "mg", person.color, series.map((p) => p.dose), doseScale, DOSE_TOP, DOSE_H, 2)}
-        {panel("WEIGHT", "lb", RETA_PALETTE.green, series.map((p) => p.weight), weightScale, WEIGHT_TOP, WEIGHT_H, 1)}
+        {panel("WEIGHT", "lb", RETA_PALETTE.green, series.map((p) => p.weight), weightScale, WEIGHT_TOP, WEIGHT_H, 1, true)}
 
         {labelIdx.map((i) => (
           <text key={`x${i}`} x={x(i)} y={X_LABEL_Y} textAnchor="middle" fill={rgba(HOME_THEME.text, 0.4)} fontSize={9}>

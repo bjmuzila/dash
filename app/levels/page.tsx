@@ -5,10 +5,11 @@
 //
 // Two halves:
 //
-//   INDEX  — one small cell per roster ticker: symbol, its Core Bullseye, the
-//            move vs that core, and a 4px bar showing where spot sits between
-//            the walls. ~92px wide, so 169 tickers land in about eight rows and
-//            the whole universe is genuinely visible without scrolling.
+//   INDEX  — one cell per roster ticker: symbol, its Core Bullseye, the move vs
+//            that core, and a bar showing where spot sits between the walls.
+//            Twelve across on a wide screen (fewer as it narrows), so 169
+//            tickers land in ~14 rows and the whole universe is visible with
+//            barely a scroll.
 //   DOCK   — four fixed slots at the top. Click a cell to pin that ticker as a
 //            full price-scaled ladder; click again (or the ✕) to unpin. Pinning
 //            a fifth drops the oldest. Pins survive a reload.
@@ -182,9 +183,19 @@ function alpha(hex: string, a: number): string {
 // ── The stylesheet (see the header note for why this exists) ─────────────────
 
 const CSS = `
-/* ── INDEX ── one cell per ticker; the whole roster on screen at once. */
-.cblv-idx{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:5px}
-.cblv-cell{display:flex;flex-direction:column;gap:1px;padding:5px 7px 6px;border-radius:7px;cursor:pointer;
+/* ── INDEX ── one cell per ticker; the whole roster on screen at once.
+   TWELVE ACROSS, not auto-fill. auto-fill at 92px gave ~19 columns on a wide
+   monitor, which made every cell the width of its own text and the board read
+   as a wall of tiny type. A fixed count means the cells GROW with the window
+   instead of multiplying, so the numbers stay legible on a 4K screen; the
+   roster still lands in ~14 rows. Steps down on narrower windows so a cell
+   never falls under about 110px. */
+.cblv-idx{display:grid;grid-template-columns:repeat(var(--cblv-cols,12),minmax(0,1fr));gap:6px}
+@media (max-width:1500px){.cblv-idx{--cblv-cols:9}}
+@media (max-width:1200px){.cblv-idx{--cblv-cols:7}}
+@media (max-width:900px){.cblv-idx{--cblv-cols:5}}
+@media (max-width:640px){.cblv-idx{--cblv-cols:3}}
+.cblv-cell{display:flex;flex-direction:column;gap:1px;padding:7px 9px 8px;border-radius:7px;cursor:pointer;
   border:1px solid ${alpha(HOME_THEME.text, 0.12)};background:${alpha(HOME_THEME.text, 0.03)};
   transition:transform .08s,border-color .08s,background .08s}
 .cblv-cell:hover{transform:translateY(-1px);border-color:${alpha(HOME_THEME.text, 0.5)}}
@@ -270,7 +281,7 @@ function IndexCell({
           page makes a wall of 169 cells scannable by NAME without touching any
           of the level colours (CB gold, CW blue, PW red) or reintroducing a
           tint that moves with price. */}
-      <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.02em", color: LIGHT_BLUE }}>
+      <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.02em", color: LIGHT_BLUE }}>
         {row.symbol}
         {pinned && <span style={{ fontSize: 8, opacity: 0.65 }}> ●</span>}
       </span>
@@ -282,13 +293,13 @@ function IndexCell({
           nothing and 169 gold figures at once is just a yellow page. Plain ink,
           and the gold stays where it does work: the tick in the range bar below
           and the labelled levels on the docked card. */}
-      <span style={{ fontSize: 11, fontWeight: 800, color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>
+      <span style={{ fontSize: 13, fontWeight: 800, color: HOME_THEME.text, fontVariantNumeric: "tabular-nums" }}>
         {cb != null ? fmtLevel(cb) : "—"}
       </span>
 
       <span
         style={{
-          fontSize: 9, fontWeight: 700, fontVariantNumeric: "tabular-nums",
+          fontSize: 10, fontWeight: 700, fontVariantNumeric: "tabular-nums",
           color: dCbPct == null ? alpha(HOME_THEME.text, 0.4) : dCbPct >= 0 ? ES_CANDLE_UP : ES_CANDLE_DOWN,
           opacity: 0.9,
         }}
@@ -299,15 +310,15 @@ function IndexCell({
       {/* PW ── CW with the core as a gold tick and spot as a white one. */}
       <span
         style={{
-          position: "relative", height: 4, borderRadius: 2, marginTop: 2,
+          position: "relative", height: 5, borderRadius: 2, marginTop: 4,
           background: alpha(HOME_THEME.text, 0.08), display: "block",
         }}
       >
         {cbPct != null && (
-          <i style={{ position: "absolute", top: -1, height: 6, width: 2, borderRadius: 1, left: `${cbPct}%`, background: LEVEL_COLORS.cb }} />
+          <i style={{ position: "absolute", top: -1, height: 7, width: 2, borderRadius: 1, left: `${cbPct}%`, background: LEVEL_COLORS.cb }} />
         )}
         {spotPct != null && (
-          <i style={{ position: "absolute", top: -1, height: 6, width: 2, borderRadius: 1, left: `${spotPct}%`, background: HOME_THEME.text }} />
+          <i style={{ position: "absolute", top: -1, height: 7, width: 2, borderRadius: 1, left: `${spotPct}%`, background: HOME_THEME.text }} />
         )}
       </span>
     </div>
