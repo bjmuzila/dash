@@ -1,75 +1,174 @@
 # Changelog
 
-## 2026-08-14 - Vol GEX Flow tab: +GEX % overlay line
+## 2026-08-14 - Level Log PNG: hug the card, centre the chip text
+
+Edited: `lib/snapshot.ts`, `components/pages/LevelLog.tsx`.
+
+### What
+
+Two complaints about the Level Log screenshot (`/level-log`, the CORE/Wall log
+card on the Scanner tab group):
+
+1. A dead band of card interior between the last entry and the card's bottom
+   border — the PNG did not clip to the log.
+2. The labels inside the rail chips (`09:29 OPEN CORE`) and the `CHANGED` badge
+   sat high in their boxes, even though they are centred on the live page.
+
+### How
+
+**Dead space.** Framed mode reserves `SNAP_BOTTOM_SLACK` (48px) below the
+measured content and then trims it back at the pixel level. But it reserved it
+by setting `clone.style.height = captureH`, i.e. INSIDE the element — fine for a
+target whose background is the capture background, wrong for a card, which
+paints its own frosted fill across that slack. `trimTrailingBackground` then
+cannot cut it: those pixels are card, not background.
+
+- New `SnapOptions.hugTarget`. When set, the clone is pinned to
+  `contentH + SNAP_BAND_H + SNAP_BAND_GAP + 2` instead of `captureH`, so the
+  card ends where its content ends and the slack falls on plain background
+  below it, where the existing trim removes it down to `SNAP_BOTTOM_PAD` (10px).
+  `box-sizing` is pinned to `border-box` on the clone so the band padding is
+  inside that height regardless of the page reset; the `+2` covers the card's
+  own top/bottom hairlines, which the child-height sum does not include.
+- Opt-in only — `SnapLogButton` passes `hugTarget: true`. No other capture site
+  changes behaviour.
+
+**Text centring.**
+
+- `CHANGED` badge was the one badge missing `data-cap-center`, so it never got
+  snapshot.ts's gotcha-10 line-box → padding rewrite. Added.
+- The rail chips were `display: inline-flex` + `align-items: center`. html2canvas
+  does not implement line-box centring — it lays the children out and then draws
+  each label from its rect's top — which is exactly the case gotcha 10 calls out
+  as unfixable in the clone. Rebuilt as `inline-block` with an explicit
+  `RAIL_CHIP_H = 24` + matching `line-height` + `data-cap-center`, the same idiom
+  the badges use. The flex `gap: 7` became explicit right-margins, the dot became
+  `vertical-align: middle`, and the trailing letter-space after the uppercase
+  level label is cancelled with `margin-right: -0.12em` (`text-indent` does not
+  apply to an inline box).
+
+Live-page rendering is unchanged apart from the chip being 24px tall instead of
+its previous padding-derived ~24px.
+
+
+
+## 2026-08-14 - ES Candles: rank-graduated GEX bubble sizing
+
+Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
+`components/dashboard/es-candles/slotStore.ts`.
+
+### What
+
+The per-strike GEX bubble rows on the ES Candles chart read flat at the top of
+the ladder: the #1, #2 and #3 walls drew at nearly the same thickness, so the
+dominant level did not stand out from the ones under it.
+
+Highlighted walls are now sized by their RANK, not by a single flat multiplier,
+and the factory sizing curve is steeper.
+
+### How
+
+- `HIGHLIGHT_BOOST` (one flat `1.35x` for every highlighted wall) replaced by
+  `HIGHLIGHT_BOOST_TOP = 2.1` / `HIGHLIGHT_BOOST_MIN = 1.15`, interpolated
+  linearly across the highlighted set. Rank 0 (the session's dominant wall as of
+  that bucket) gets TOP; the last highlighted wall gets MIN. With Highlight = 1
+  there is no span, so that single wall takes TOP.
+- `wallAt` changed from `Map<slotTs, Set<strike>>` to
+  `Map<slotTs, Map<strike, rankIdx>>` so the rank survives to draw time. The
+  ranking itself is unchanged — still the expanding as-of-bucket peak `|GEX|`
+  order, so an already-printed tube can never resize after the fact.
+- Wall glow tapers with the same rank term: `shadowBlur` `22 → 12` across the
+  highlighted set instead of a flat `16`.
+- Defaults: `minSize` `0.5 → 0.4`, `maxSize` `9 → 12`, `curve` `2.2 → 2.8`.
+- Slider headroom: `curve` max `5 → 8`, `maxSize` max `20 → 24`. Past ~4 the mid
+  strikes finally collapse to Min and only the true walls grow.
+
+Existing saved slider blobs are untouched (the restore clamp only narrows, and
+both ranges widened) — the rank boost applies regardless of saved settings; hit
+Reset in the bubble panel to pick up the new defaults.
+
+
+## 2026-08-14 - Vol GEX Flow tab: +GEX % view
 
 Edited: `components/dashboard/VolGexFlowPanel.tsx`,
 `server-v2/server-with-proxy.js`.
 
 ### What
 
-The Vol GEX Flow tab (home page, Economic Calendar card) gets an
-`OFF / +GEX % OVERLAY` switch beside RTH/ETH. Flip it on and the +GEX % number
-from the home Levels strip — the share of the selected expiry's |net GEX| that
-is positive — draws as an orange line over the Net Vol GEX baseline chart, on
-its own 0-100 left scale with a 50% midline and a legend under the chart. Above
-50 = long-gamma chain.
+The Vol GEX Flow tab (home page, Economic Calendar card) gets a
+`$ GEX / +GEX %` switch beside RTH/ETH. Flip to `+GEX %` and the chart becomes
+the +GEX % series for the selected expiry — the same number as the home Levels
+strip tile — split at 50 (orange above = long-gamma chain, cyan below = short),
+with corner labels and the six stat cards re-labelled to percent stats: +GEX %
+now, delta bucket in points, session high/low, time above 50%, regime.
 
 The strip tile was point-in-time: 63% says the chain is long-gamma right now,
 but not whether it climbed there from 40 or bled down from 80, and that path is
-the part that trades. Overlaying it on the flow chart puts the two side by
-side — "share pushed above 50 while net vol GEX flipped negative" is one glance.
+the part that trades.
 
-Default off; the choice sticks for the browser session.
+Default `$ GEX`; the choice sticks for the browser session.
 
 ### How
 
 **Served, not sampled.** The share rides along on the SAME
-`/proxy/gex-vol-flow` response the chart already fetches, so the line arrives
-complete for the whole session on first load, is identical on every device, and
-follows the expiry chooser.
+`/proxy/gex-vol-flow` response the chart already fetches, so it arrives complete
+for the whole session on first load, is identical on every device, and follows
+the expiry chooser.
 
 **Proxy change** (`handleGexVolFlow`) — purely additive; route, params, caching
 and every existing field unchanged:
 
-- Two aggregates added to the existing final SELECT:
-  `SUM(GREATEST(COALESCE(net_gex,0),0)) AS pos_gex` and
-  `SUM(ABS(COALESCE(net_gex,0))) AS abs_gex`. They sum over the same per-strike
-  `latest` rows in the same pass — the share has to be built from the strikes,
-  and the signed bucket total already returned can't be decomposed back into
-  them afterwards, so this could not be done client-side off the old response.
-- Each point gains `posGex`, `absGex` and `posPct` (0-100). `posPct` is `null`,
-  not 0, on a bucket with no rows, so the chart leaves a gap instead of drawing
-  a dive to zero that never happened.
+- Two aggregates added to the existing final SELECT, over the same per-strike
+  `latest` rows in the same pass:
+  `SUM(GREATEST(net_gex + net_vol_gex, 0)) AS pos_gex` and
+  `SUM(ABS(net_gex + net_vol_gex)) AS abs_gex`. The share has to be built from
+  the strikes; the signed bucket total already returned can't be decomposed back
+  into them, so this could not be done client-side off the old response.
+- Each point gains `posGex`, `absGex`, `posPct` (0-100). `posPct` is `null`, not
+  0, on a bucket with no rows, so the chart leaves a gap instead of drawing a
+  dive to zero that never happened.
+
+**Basis: `net_gex + net_vol_gex`, not `net_gex`.** `net_gex` is the OI leg ONLY
+(`net_vol_gex` is the volume leg — see `gex-history-writer.js` and the `oiVol()`
+helper in `lib/calculations/calculations.ts`). The Levels strip tile reads
+`netGEXOf(row,'net')`, which is OI+Vol. A first pass summed the OI leg alone and
+put the two badly out of step — the tab read 75% against the tile's 26%, same
+chain, same minute.
 
 **Panel:**
 
-- **Fixed 0-100 left scale** via `autoscaleInfoProvider`, not autoscale. Fit to
-  data, a chain that spends the day between 58 and 64 would fill the pane top to
-  bottom and read as a violent swing, and the 50% line would wander instead of
-  sitting at a height you can eyeball against.
-- **`C.orange`, not green/red.** Those two tokens already mean gamma polarity on
-  this chart; reusing them for a second, unrelated quantity would make the
-  overlay read as more net vol GEX.
-- The left price scale is declared in the chart constructor and only has
-  `visible` flipped — adding a price scale to a live chart re-lays-out the pane
-  and jumps the series. Data + visibility live in their own effect so toggling
-  never tears down and rebuilds the canvas.
+- **Full swap, not an overlay.** Two series stacked on one canvas was built and
+  rejected: different units, different shapes, neither legible.
+- **Two price scales, one series each** — `$` on the right, `%` on the left —
+  so each keeps its own price formatter with no fighting over which series
+  formats the axis. Only one is visible at a time. Both scales are declared in
+  the chart constructor and only have `visible` flipped: adding a price scale to
+  a live chart re-lays-out the pane and jumps the series. Data and visibility
+  live in separate effects, so switching never rebuilds the canvas.
+- **Autoscale padded around the data but always containing 50**, clamped 0-100.
+  Pure data-fit would put the midline wherever it landed and make a 58-64 day
+  look like a regime war; a hard 0-100 would flatten that same day to a straight
+  line. The provider reads a ref, not state — lightweight-charts captures it once
+  at series creation and it would otherwise close over stale data.
+- Cards keep the same grid and the same order of meaning (now / change / high /
+  low / regime / context) across both views, so the block doesn't have to be
+  re-learned on each flip. `pctStats` is computed separately from `stats` because
+  the two views cover different bucket sets — a bucket with rows but no gamma has
+  a `volGex` and no `posPct`.
+- "Time > 50%" counts **50-crossings**, not zero-crossings: on this series the
+  regime change is the chain flipping between net long and net short gamma.
 - The switch is **hidden**, not shown dead, when fewer than two buckets carry a
   `posPct` — which also gates it off on a server that predates the field, so the
   tab degrades to its previous behaviour instead of offering a toggle that draws
   nothing.
-- Legend only renders while the overlay is up: with one series the color is
-  self-explanatory, with two on different scales "which axis is this reading
-  against" is the question, so the units go in the label.
 
 ### Superseded
 
-An earlier pass on this sampled `posGexPct` client-side in `HomeClient` on a
-20s timer into `sessionStorage`. It worked, but only recorded from whenever the
-page happened to be opened — open the tab at 2pm and the orange line started at
-2pm while the blue series showed the full session beside it. That code is gone;
-`app/home/HomeClient.tsx` is back to its original state and passes no props to
-the panel.
+An earlier pass sampled `posGexPct` client-side in `HomeClient` on a 20s timer
+into `sessionStorage`. It only recorded from whenever the page happened to be
+opened — open the tab at 2pm and the line started at 2pm while the dollar series
+showed the full session beside it. That code is gone; `app/home/HomeClient.tsx`
+is back to its original state and passes no props to the panel.
 
 ## 2026-08-14 - Ticker Lookup: replay slider on both panes
 

@@ -3470,7 +3470,17 @@ export default function EsChartCard({
               // small strikes ~0.1 so the big walls dominate by contrast.
               const brightness01 = Math.max(0, Math.min(1, cfg.brightness / 100));
               const minOpacity = Math.max(0.1, 1 - brightness01);
-              const HIGHLIGHT_BOOST = 1.35; // highlighted walls' radius multiplier
+              // Highlighted walls' radius multiplier, GRADUATED BY RANK rather
+              // than one flat number. A single 1.35x for every highlighted wall
+              // made the top strikes bunch: the #1 and #3 walls usually sit
+              // within a few percent of each other on raw |GEX|, so after the
+              // curve they landed at nearly the same radius and the ladder read
+              // flat at the top — exactly where the separation matters most.
+              // Now #1 gets HIGHLIGHT_BOOST_TOP and the last highlighted wall
+              // gets HIGHLIGHT_BOOST_MIN, interpolated linearly in between, so
+              // the dominant wall is unmistakably the fattest tube on screen.
+              const HIGHLIGHT_BOOST_TOP = 2.1;
+              const HIGHLIGHT_BOOST_MIN = 1.15;
 
               // GLOBAL strike selection — the key to the continuous-tube look. Rank
               // strikes by their PEAK |GEX| across the whole session (not per column),
@@ -3485,7 +3495,10 @@ export default function EsChartCard({
               // what's top-N right now, so the live read is unchanged.
               const peakSoFar = new Map<number, number>();
               const shownAt = new Map<number, Set<number>>();
-              const wallAt = new Map<number, Set<number>>();
+              // strike → its 0-based rank inside the highlighted set (0 = the
+              // session's dominant wall as of that bucket). A Map, not a Set,
+              // because the rank now drives the radius boost and the glow.
+              const wallAt = new Map<number, Map<number, number>>();
               for (const m of mins) {
                 for (const c of m.cells) {
                   const a = Math.abs(valOf(c));
@@ -3493,7 +3506,9 @@ export default function EsChartCard({
                 }
                 const ranked = [...peakSoFar.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]);
                 shownAt.set(m.slotTs, new Set(ranked.slice(0, Math.max(0, cfg.topStrikes))));
-                wallAt.set(m.slotTs, new Set(ranked.slice(0, Math.max(0, cfg.highlight))));
+                const wallRanks = new Map<number, number>();
+                ranked.slice(0, Math.max(0, cfg.highlight)).forEach((s, i) => wallRanks.set(s, i));
+                wallAt.set(m.slotTs, wallRanks);
               }
 
               ctx.save();
@@ -3516,7 +3531,8 @@ export default function EsChartCard({
                   const y = series.priceToCoordinate(cell.strike + mBasis);
                   if (y == null || y < -20 || y > h + 20) continue;
                   const ratio = Math.min(Math.abs(v) / domainMax, 1);
-                  const isHi = wallStrikes.has(cell.strike);
+                  const wallRank = wallStrikes.get(cell.strike);
+                  const isHi = wallRank != null;
                   // Size tracks THIS bubble's own |GEX|, shaped by the Curve
                   // exponent, so each tube tapers as gamma builds/bleeds; walls
                   // sit near maxSize + a boost.
@@ -3525,11 +3541,18 @@ export default function EsChartCard({
                   // >1 — EXPONENTIAL — because √ was the wrong direction for this
                   // read: it lifts every mid-sized strike close to the top wall,
                   // so a strike at 25% of the session max drew at half the radius
-                  // of the biggest one and the ladder looked flat. With curve 2.2
+                  // of the biggest one and the ladder looked flat. With curve 2.8
                   // that same strike lands at ~3% of the span, and only the true
                   // top-of-session walls get near maxSize.
                   let r = cfg.minSize + Math.pow(ratio, curveExp) * sizeSpan;
-                  if (isHi) r *= HIGHLIGHT_BOOST;
+                  // Rank-graduated boost: #1 wall → TOP, last highlighted → MIN.
+                  // (highlight === 1 has no span, so it takes TOP outright.)
+                  let hiT = 0;
+                  if (isHi) {
+                    const nWalls = Math.max(1, wallStrikes.size);
+                    hiT = nWalls > 1 ? (wallRank as number) / (nWalls - 1) : 0;
+                    r *= HIGHLIGHT_BOOST_TOP - (HIGHLIGHT_BOOST_TOP - HIGHLIGHT_BOOST_MIN) * hiT;
+                  }
                   // Cull only degenerate radii. This used to be < 0.5, which
                   // silently dropped every bubble once the Min-size slider went
                   // sub-pixel — canvas antialiases arcs well below 1px, so let
@@ -3545,8 +3568,10 @@ export default function EsChartCard({
                   ctx.beginPath();
                   ctx.arc(x, y, r, 0, Math.PI * 2);
                   if (isHi) {
+                    // Glow tapers with rank too, so the #1 wall doesn't just win
+                    // on radius — it's the brightest bloom on the chart.
                     ctx.shadowColor = `rgba(${base[0]},${base[1]},${base[2]},0.95)`;
-                    ctx.shadowBlur = 16;
+                    ctx.shadowBlur = 22 - 10 * hiT;
                   } else {
                     ctx.shadowBlur = 0;
                   }
@@ -4119,7 +4144,7 @@ export default function EsChartCard({
                       label="min" labelWidth={SLIDER_LABEL_W} width="auto"
                       value={bubbleCfg.minSize} min={BUBBLE_CFG_RANGE.minSize.min} max={BUBBLE_CFG_RANGE.minSize.max} step={0.05}
                       format={(v) => v.toFixed(2)} onChange={(v) => updateBubbleCfg({ minSize: v })}
-                      title="Min bubble radius (px) — the size of the smallest strike (can't exceed Max). Default 0.50 = center of the slider"
+                      title="Min bubble radius (px) — the size of the smallest strike (can't exceed Max). Default 0.40 — lower it for more separation between the walls and the mid ladder"
                     />
                     <DockSlider
                       label="max" labelWidth={SLIDER_LABEL_W} width="auto"

@@ -33,10 +33,13 @@
 //   curve       — size-response exponent: r = min + ratio^curve * (max-min).
 //                 0.5 = the old √ (area ∝ |GEX|, small strikes stay fat);
 //                 1 = linear; >1 = exponential — small strikes collapse toward
-//                 min and only the top walls approach max. Default 2.2.
+//                 min and only the top walls approach max. Default 2.8.
 //   brightness  — 0..100 opacity gradient steepness for smaller strikes
 export type BubbleCfg = { topStrikes: number; highlight: number; minSize: number; maxSize: number; curve: number; brightness: number };
-export const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 10, highlight: 3, minSize: 0.5, maxSize: 9, curve: 2.2, brightness: 84 };
+// minSize down / maxSize + curve up: the top walls need to read as obviously
+// fatter than the mid ladder, and the old 0.5→9 span at curve 2.2 left a strike
+// at half the session max still drawing about two-thirds the size of the wall.
+export const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 10, highlight: 3, minSize: 0.4, maxSize: 12, curve: 2.8, brightness: 84 };
 export const BUBBLE_CFG_KEYS: Array<keyof BubbleCfg> = ["topStrikes", "highlight", "minSize", "maxSize", "curve", "brightness"];
 
 // Slider bounds, single-sourced so the UI and the restore clamp can't drift.
@@ -49,8 +52,10 @@ export const BUBBLE_CFG_RANGE: Record<keyof BubbleCfg, { min: number; max: numbe
   topStrikes: { min: 1, max: 30 },
   highlight: { min: 0, max: 30 },
   minSize: { min: 0, max: 1 },
-  maxSize: { min: 1, max: 20 },
-  curve: { min: 0.5, max: 5 },
+  maxSize: { min: 1, max: 24 },
+  // Curve runs to 8 now. 5 was not enough separation at the top of the ladder —
+  // past ~4 the mid strikes finally collapse to Min and only the true walls grow.
+  curve: { min: 0.5, max: 8 },
   brightness: { min: 0, max: 100 },
 };
 export const clampBubbleVal = (k: keyof BubbleCfg, v: number) =>

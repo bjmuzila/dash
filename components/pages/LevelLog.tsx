@@ -141,6 +141,14 @@ const FS_META = 12;    // mono: time, GEX line, counters
 const LS_LABEL = "0.12em";
 /** Height of a row's first line — the badge box. The timeline dot centers on it. */
 const ROW_LEAD_H = 20;
+/**
+ * Height of a rail chip. Explicit for the same reason the badges are (see
+ * `wallBadgeStyle`): the label is centered by a fixed height + matching
+ * line-height, and the box opts into snapshot.ts's `data-cap-center` rewrite so
+ * the capture centers it too. Padding-based chips read fine on the page and
+ * rode high in the PNG.
+ */
+const RAIL_CHIP_H = 24;
 
 const LEVEL_LABEL: Record<WallLevel, string> = { call_wall: "Call Wall", put_wall: "Put Wall", cb: "CORE" };
 const LEVEL_COLOR: Record<WallLevel, string> = { call_wall: AMBER, put_wall: GREEN, cb: LIGHT_BLUE };
@@ -332,7 +340,10 @@ function SnapLogButton({ targetRef, filename, title, disabled }: {
     if (!el) return;
     setState("working");
     try {
-      setState(await captureAndCopy(el, filename, { framed: true, title }));
+      // hugTarget: the target IS a card. Without it framed mode reserves its
+      // bottom slack INSIDE the card, which read as a dead band between the
+      // last entry and the card's bottom border.
+      setState(await captureAndCopy(el, filename, { framed: true, hugTarget: true, title }));
     } catch (e) {
       console.error("[level-log] snapshot", e);
       setState("err");
@@ -835,21 +846,33 @@ function WallRailChips({ marks }: { marks: RailMark[] }) {
       );
     }
     const c = LEVEL_COLOR[m.lt];
+    // Deliberately inline-BLOCK, not inline-flex. `align-items:center` is a
+    // line-box trick html2canvas does not implement — it lays the children out
+    // but still draws each label from its rect's top, so the chip text sat high
+    // in the PNG while looking centred on the page. A fixed height + matching
+    // line-height + `data-cap-center` is the same idiom the badges use, and it
+    // is the one snapshot.ts knows how to rewrite for the clone. The flex `gap`
+    // becomes explicit right-margins, since inline-block has no gap.
     out.push(
-      <span key={`${m.slot}|${m.lt}`} title={m.note} style={{
-        display: "inline-flex", alignItems: "center", gap: 7, padding: "4px 9px 4px 7px",
+      <span key={`${m.slot}|${m.lt}`} title={m.note} data-cap-center style={{
+        display: "inline-block", boxSizing: "border-box",
+        height: RAIL_CHIP_H, lineHeight: `${RAIL_CHIP_H - 2}px`, padding: "0 9px 0 7px",
         borderRadius: 7, border: `1px solid ${C.border}`, background: "rgba(255,255,255,0.028)",
         fontFamily: "var(--font-mono)", fontSize: 11.5, whiteSpace: "nowrap",
       }}>
         <span style={{
-          width: 6, height: 6, borderRadius: "50%", flex: "0 0 auto",
+          display: "inline-block", verticalAlign: "middle", marginRight: 7,
+          width: 6, height: 6, borderRadius: "50%",
           background: m.kind === "approach" ? "transparent" : c,
           border: m.kind === "approach" ? `1.5px solid ${c}` : undefined,
           boxShadow: m.kind === "approach" ? undefined : `0 0 7px ${rgba(c, 0.55)}`,
         }} />
-        <span>{m.at}</span>
-        <b style={{ fontWeight: 700 }}>{RAIL_KIND_LABEL[m.kind]}</b>
-        <span style={{ fontSize: 10, letterSpacing: LS_LABEL, textTransform: "uppercase", color: c }}>
+        <span style={{ marginRight: 7 }}>{m.at}</span>
+        <b style={{ fontWeight: 700, marginRight: 7 }}>{RAIL_KIND_LABEL[m.kind]}</b>
+        {/* `textIndent` has no effect on an inline box, so the trailing
+            letter-space of the uppercase tracking is cancelled with a negative
+            right margin instead — otherwise the chip reads padded-right. */}
+        <span style={{ fontSize: 10, letterSpacing: LS_LABEL, textTransform: "uppercase", color: c, marginRight: "-0.12em" }}>
           {LEVEL_LABEL[m.lt]}
         </span>
       </span>,
@@ -973,7 +996,7 @@ function WallTimeline({ log, events, view }: { log: WallLogRow[]; events: WallEv
                   {LEVEL_LABEL[e.lt]}
                 </span>
                 {e.kind === "open" ? <span data-cap-center style={wallBadgeStyle(MUTED)}>Open baseline</span> : null}
-                {e.kind === "change" ? <span style={wallBadgeStyle(C.cyan)}>Changed</span> : null}
+                {e.kind === "change" ? <span data-cap-center style={wallBadgeStyle(C.cyan)}>Changed</span> : null}
                 {e.kind === "hit" ? wallBadge(ev?.reaction ?? null, false, ev?.reclaim_min ?? null) : null}
                 {/* Direction of approach, stated up front rather than left to be
                     inferred from spot vs. strike further down the row. */}

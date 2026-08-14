@@ -116,6 +116,27 @@ export type SnapOptions = {
   title?: string;
   /** Crop the PNG to the real content box (framed mode). */
   fitContent?: boolean;
+  /**
+   * Hug the target: pin the CLONE to its measured content height instead of the
+   * full `captureH`, so `SNAP_BOTTOM_SLACK` is reserved on the page background
+   * BELOW the element rather than inside it.
+   *
+   * Why this exists: framed mode sets `clone.style.height = captureH`, which
+   * bakes the 48px slack into the element itself. That is invisible on a target
+   * whose background matches `SNAP_BG` — but a CARD paints its own frosted panel
+   * fill, so the slack came out as a band of card interior under the last row,
+   * and `trimTrailingBackground` cannot remove it: those pixels are not the
+   * capture background, they are the card. The Level Log PNG was the reported
+   * case — dead space between the last entry and the card's bottom border.
+   *
+   * With this flag the card ends where its content ends (bottom border and
+   * radius sit right under the last row) and the slack lands on plain
+   * background, which trims back to SNAP_BOTTOM_PAD exactly as designed.
+   *
+   * Only for targets that are themselves a bordered/filled card. Leave it off
+   * for full-page or background-colored captures — there is nothing to hug.
+   */
+  hugTarget?: boolean;
   /** Override the capture background. Defaults to the theme background. */
   background?: string;
   /** Override the scale. Defaults to `snapScale()`. */
@@ -419,6 +440,7 @@ async function captureToCanvasInner(
   const titleText = opts.title && opts.title.trim() ? opts.title : "SPX GEX";
   const bg = opts.background ?? SNAP_BG;
   const fitContent = !!opts.fitContent;
+  const hugTarget = !!opts.hugTarget;
 
   // A lightweight-charts target (ES Candles) is a FLEX COLUMN (chart card +
   // lanes), not a bare bitmap. It happens to contain a <canvas>, but it must
@@ -660,7 +682,18 @@ async function captureToCanvasInner(
       // ── Framed mode: expand the clone and bake in the title band ──────────
       clone.style.position = "relative";
       // Explicit px height — never auto/0 (gotcha 2) — plus room for the band.
-      clone.style.height = `${captureH}px`;
+      //
+      // hugTarget stops at the content instead of at captureH, leaving the
+      // SNAP_BOTTOM_SLACK to fall on the page background below the element
+      // where trimTrailingBackground can actually cut it (see the option's
+      // doc). +2 covers the element's own top/bottom hairline borders, which
+      // the child-height sum in `contentH` does not include. box-sizing is
+      // pinned so the padded band is inside that height either way, rather
+      // than depending on whatever the page's reset happens to set.
+      clone.style.boxSizing = "border-box";
+      clone.style.height = hugTarget
+        ? `${contentH + SNAP_BAND_H + SNAP_BAND_GAP + 2}px`
+        : `${captureH}px`;
       clone.style.maxHeight = "none";
       clone.style.overflow = "visible";
       clone.style.paddingTop = `${SNAP_BAND_H + SNAP_BAND_GAP}px`;

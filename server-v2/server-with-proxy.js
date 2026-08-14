@@ -1200,12 +1200,20 @@ async function handleGexVolFlow(req, res) {
             MAX(spot)                                AS spot,
             SUM(COALESCE(net_vol_gex, 0))            AS vol_gex,
             SUM(COALESCE(net_gex, 0))                AS oi_gex,
-            -- Positive-share legs for the "+GEX %" overlay on the Vol GEX Flow
-            -- tab. Summed over the SAME per-strike rows, in the same pass — the
-            -- share has to be built from the strikes, and a signed bucket total
-            -- can't be decomposed back into them afterwards.
-            SUM(GREATEST(COALESCE(net_gex, 0), 0))   AS pos_gex,
-            SUM(ABS(COALESCE(net_gex, 0)))           AS abs_gex,
+            -- Positive-share legs for the "+GEX %" view on the Vol GEX Flow tab.
+            -- Summed over the SAME per-strike rows, in the same pass — the share
+            -- has to be built from the strikes, and a signed bucket total can't
+            -- be decomposed back into them afterwards.
+            --
+            -- Basis is net_gex + net_vol_gex, i.e. OI+Vol, NOT net_gex alone.
+            -- net_gex is the OI leg ONLY (net_vol_gex is the volume leg; see
+            -- gex-history-writer.js and the oiVol() helper in
+            -- lib/calculations/calculations.ts). The home Levels strip's
+            -- "+GEX %" tile reads netGEXOf(row,'net') = OI+Vol, so summing the
+            -- OI leg alone here put the two badly out of step — 75% on the tab
+            -- against 26% on the tile, same chain, same minute.
+            SUM(GREATEST(COALESCE(net_gex, 0) + COALESCE(net_vol_gex, 0), 0)) AS pos_gex,
+            SUM(ABS(COALESCE(net_gex, 0) + COALESCE(net_vol_gex, 0)))         AS abs_gex,
             COUNT(*)::int                            AS strikes
        FROM latest
       GROUP BY bucket_ms
@@ -1227,10 +1235,11 @@ async function handleGexVolFlow(req, res) {
       combined: volGex + oiGex,
       // Bucket-over-bucket change in the vol leg — the "flow" of the flow.
       dVol: prev == null ? null : volGex - prev,
-      // Share of the bucket's |net GEX| that is positive, 0–100. Same definition
-      // as the home Levels strip's "+GEX %" tile: 100 = pure long-gamma chain,
-      // 0 = pure short. null rather than 0 on an empty bucket, so the chart puts
-      // a gap there instead of drawing a dive to zero that never happened.
+      // Share of the bucket's |net GEX| (OI+Vol) that is positive, 0–100. Same
+      // definition AND same basis as the home Levels strip's "+GEX %" tile:
+      // 100 = pure long-gamma chain, 0 = pure short. null rather than 0 on an
+      // empty bucket, so the chart puts a gap there instead of drawing a dive to
+      // zero that never happened.
       posGex,
       absGex,
       posPct: absGex > 0 ? (posGex / absGex) * 100 : null,

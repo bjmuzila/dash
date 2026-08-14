@@ -2169,6 +2169,28 @@ const FLOW_TS_MAX = Number(process.env.FLOW_TS_MAX || 600);
 // silences BOTH paths and the strike goes to zero rather than to coarse.
 const FLOW_TS_HEALTHY_MS = Number(process.env.FLOW_TS_HEALTHY_MS || 60_000);
 
+// Trade-fed option prints are sized by the dayVolume DELTA rather than by the
+// event's `size` field, and dropped entirely when that delta is <= 0.
+//
+// dxLink `Trade` is a last-trade SNAPSHOT, not a tick: it carries the contract's
+// most recent print and is replayed verbatim every time the subscription is
+// (re)established — _syncTimeSaleWindow re-subscribing as spot drifts, and every
+// reconnect. FEED_SETUP.Trade requests no `time` field, so addPrint stamps
+// Date.now() and each replay lands as a brand-new tape order with the SAME size
+// and price. Overnight, when TimeAndSale is quiet because nothing is trading,
+// FLOW_TS_HEALTHY_MS reads that silence as a stall and lets every one of those
+// replays through: on 2026-08-14 a single 5,460-lot at SPX 7810 was re-ingested
+// 11 times across the session (identical size, price, IV, OI and volume on every
+// row), inflating dealer callSellVol to ~55k and the strike's flow GEX to -17B.
+//
+// dayVolume is monotonic within a session, so the delta cannot double-count: the
+// total Trade-fed volume booked for a symbol can never exceed its true dayVolume.
+// A replay carries an unchanged dayVolume -> delta 0 -> dropped. The first Trade
+// seen for a symbol only primes the baseline (it IS a snapshot of an earlier
+// print, so booking it would be the same phantom). Set FLOW_TRADE_DVOL_DEDUP=0
+// to revert to the raw `size` field live.
+const FLOW_TRADE_DVOL_DEDUP = process.env.FLOW_TRADE_DVOL_DEDUP !== '0'; // default ON
+
 // How far back a TimeAndSale `time` may be and still be believed (ms). dxFeed
 // can replay a contract's recent tape when a subscription is (re)established, so
 // legitimately old exchange times DO arrive — but a garbage/epoch-0 value must
@@ -2267,6 +2289,15 @@ class TastytradeProxy {
      * @type {Map<string, number>}
      */
     this._tsLastPrintAt = new Map();
+    /**
+     * streamerSymbol -> the dayVolume carried by the last `Trade` event we
+     * ACTED on for that symbol. Baseline for the delta that sizes (and
+     * de-duplicates) Trade-fed flow prints — see FLOW_TRADE_DVOL_DEDUP. Kept
+     * separate from `this.volumes`, which is the chain's authoritative
+     * per-strike volume and is read by unrelated consumers.
+     * @type {Map<string, number>}
+     */
+    this._tradeDvol = new Map();
     this.quotes = new Map(); // streamerSymbol -> { bid, ask, mid }
     this.summaries = new Map(); // streamerSymbol -> { oi, prevClose }
     this.greeks = new Map(); // streamerSymbol -> { iv, delta, gamma, theta, vega } (raw broker greeks)
@@ -4386,6 +4417,33 @@ class TastytradeProxy {
       const gk = this.greeks.get(sym);
       const sm = this.summaries.get(sym);
       const dvol = this.volumes.get(sym);
+      // Snapshot-replay guard. `Trade` is a last-trade snapshot re-sent on every
+      // (re)subscribe, so `size` alone cannot distinguish a fresh print from the
+      // same print handed to us for the eleventh time — size the print off the
+      // monotonic dayVolume delta instead, and drop it when nothing new traded.
+      // See FLOW_TRADE_DVOL_DEDUP for the failure this fixes.
+      //
+      // The baseline is updated here, ABOVE the recorder / TimeAndSale-health
+      // returns, so volume that those paths swallow is never re-attributed to a
+      // later Trade print as a backlog.
+      let tradeSize = Number.isFinite(sz) ? sz : 0;
+      if (FLOW_TRADE_DVOL_DEDUP) {
+        // No dayVolume on the event → no way to tell a replay from a print.
+        // Dropping is the safe side: the phantom is unbounded, the miss is one
+        // coarse fallback print on a feed that also has TimeAndSale.
+        if (!Number.isFinite(dv)) return;
+        const prevDvol = this._tradeDvol.get(sym);
+        this._tradeDvol.set(sym, dv);
+        // First sighting for this symbol is the subscribe snapshot — an echo of
+        // a print that already happened. Prime the baseline, book nothing.
+        if (prevDvol == null) return;
+        const delta = dv - prevDvol;
+        // 0 = replay of the same last trade. Negative = session roll (dayVolume
+        // reset); the baseline is already re-seeded above, so the next real
+        // trade measures correctly.
+        if (!(delta > 0)) return;
+        tradeSize = delta;
+      }
       // Isolated recorder: extra-root option prints go to this.flowRecord ONLY
       // (flow_prints), never the SPX card. isOtm uses that root's tracked spot.
       const recRoot = this.flowRecordContracts.get(sym);
@@ -4393,7 +4451,7 @@ class TastytradeProxy {
         this.flowRecord.addPrint({
           streamerSymbol: sym,
           price: Number(ev.price),
-          size: Number.isFinite(sz) ? sz : 0,
+          size: tradeSize, // dayVolume-delta sized; see FLOW_TRADE_DVOL_DEDUP
           quote,
           spot: this.flowRecordSpot.get(recRoot) || 0,
           iv: gk?.iv,
@@ -4427,7 +4485,7 @@ class TastytradeProxy {
       this.flow.addPrint({
         streamerSymbol: sym,
         price: Number(ev.price),
-        size: Number.isFinite(sz) ? sz : 0, // snapshot Trade events can omit size → NaN; guard it
+        size: tradeSize, // dayVolume-delta sized; see FLOW_TRADE_DVOL_DEDUP
         quote,
         // this.spot lags at 0 until the underlying streamer quote arrives; fall
         // back to the authoritative market-state spot (set on every quote + GEX

@@ -25,7 +25,7 @@
 // Theme: HOME_THEME tokens only — no ad-hoc hex.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BaselineSeries, ColorType, LineSeries, createChart } from "lightweight-charts";
+import { BaselineSeries, ColorType, createChart } from "lightweight-charts";
 import type { IChartApi, ISeriesApi, UTCTimestamp } from "lightweight-charts";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
@@ -58,11 +58,14 @@ const BIN_LABEL = BIN_SEC < 60 ? `${BIN_SEC}s` : `${BIN_SEC / 60}m`;
 const FRONT = "__front__";
 const ALL = "__all__";
 
-// ── +GEX % overlay ──────────────────────────────────────────────────────────
-// Orange, on its own LEFT 0–100 scale, over the baseline series. Deliberately
-// not a theme green/red: those two tokens already mean gamma polarity on this
-// chart, and reusing them for a second, unrelated quantity would make the
-// overlay read as more net vol GEX.
+// ── +GEX % view ─────────────────────────────────────────────────────────────
+// A full swap, not an overlay: the switch replaces the $ series with the % one
+// and re-labels the six stat cards. Two series stacked on one canvas was tried
+// first and read as noise — different units, different shapes, neither legible.
+//
+// Orange above the 50 line, cyan below. Deliberately NOT the theme green/red:
+// those two already mean gamma polarity for the dollar series on this same
+// canvas, and reusing them here would suggest the two views plot the same thing.
 //
 // `posPct` rides along on the SAME /proxy/gex-vol-flow response the chart
 // already fetches — the endpoint sums the positive and absolute legs over the
@@ -74,7 +77,7 @@ const ALL = "__all__";
 // the page happened to be opened — open the tab at 2pm and the line started at
 // 2pm while the blue series showed the full session beside it.)
 const PCT = C.orange;
-const PCT_SERIES_KEY = "cbedge.volGexFlow.pctOverlay";
+const PCT_VIEW_KEY = "cbedge.volGexFlow.pctView";
 
 export type VolFlowPoint = {
   ts: number;
@@ -148,15 +151,15 @@ export default function VolGexFlowPanel() {
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // Overlay is opt-in and remembered for the browser session. Default off so the
-  // tab still opens as the single-series chart it has always been.
+  // Opt-in, remembered for the browser session. Default off so the tab still
+  // opens on the dollar series it has always shown.
   const [showPct, setShowPct] = useState(false);
   useEffect(() => {
-    try { if (sessionStorage.getItem(PCT_SERIES_KEY) === "1") setShowPct(true); } catch {}
+    try { if (sessionStorage.getItem(PCT_VIEW_KEY) === "1") setShowPct(true); } catch {}
   }, []);
   const togglePct = useCallback(() => {
     setShowPct((v) => {
-      try { sessionStorage.setItem(PCT_SERIES_KEY, v ? "0" : "1"); } catch {}
+      try { sessionStorage.setItem(PCT_VIEW_KEY, v ? "0" : "1"); } catch {}
       return !v;
     });
   }, []);
@@ -170,6 +173,7 @@ export default function VolGexFlowPanel() {
     [points]
   );
   const hasPct = pctPoints.length > 1;
+  const pctView = showPct && hasPct;
 
   const load = useCallback(async () => {
     const qs =
@@ -239,11 +243,42 @@ export default function VolGexFlowPanel() {
     };
   }, [points]);
 
+  // Same shape, computed on the % series. Kept separate rather than folded into
+  // `stats` because the two views cover different bucket sets: a bucket with
+  // rows but no gamma at all has a volGex and no posPct.
+  const pctStats = useMemo(() => {
+    if (pctPoints.length === 0) return null;
+    const vals = pctPoints.map((p) => p.posPct as number);
+    const last = pctPoints[pctPoints.length - 1];
+    const hiIdx = vals.reduce((m, v, i) => (v > vals[m] ? i : m), 0);
+    const loIdx = vals.reduce((m, v, i) => (v < vals[m] ? i : m), 0);
+    const above = vals.filter((v) => v >= 50).length;
+    // 50-crossings, not 0-crossings: on this series the regime change is the
+    // chain flipping between net long and net short gamma.
+    let flips = 0;
+    for (let i = 1; i < vals.length; i++) {
+      if ((vals[i - 1] < 50 && vals[i] >= 50) || (vals[i - 1] >= 50 && vals[i] < 50)) flips++;
+    }
+    const prev = vals.length > 1 ? vals[vals.length - 2] : null;
+    return {
+      last: { v: vals[vals.length - 1], ts: last.ts, strikes: last.strikes },
+      d: prev == null ? null : vals[vals.length - 1] - prev,
+      high: { v: vals[hiIdx], at: pctPoints[hiIdx].ts },
+      low: { v: vals[loIdx], at: pctPoints[loIdx].ts },
+      abovePct: (above / vals.length) * 100,
+      flips,
+    };
+  }, [pctPoints]);
+
   // ── Chart ──
   const boxRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
-  const pctSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const pctSeriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
+  // Read by the % series' autoscale provider, which lightweight-charts calls
+  // during its own layout pass — a ref, not state, because the provider is
+  // captured once at series creation and would otherwise close over stale data.
+  const pctValsRef = useRef<number[]>([]);
 
   useEffect(() => {
     const box = boxRef.current;
@@ -262,9 +297,9 @@ export default function VolGexFlowPanel() {
         horzLines: { color: "rgba(255,255,255,.05)" },
       },
       rightPriceScale: { visible: true, borderColor: C.border },
-      // Left scale carries the 0–100 % overlay. Kept in the constructor rather
-      // than added later so toggling the overlay only flips `visible` — adding a
-      // price scale to a live chart re-lays-out the pane and jumps the series.
+      // Left scale carries the % series. Declared in the constructor rather than
+      // added on demand so switching views only flips `visible` — adding a price
+      // scale to a live chart re-lays-out the pane and jumps the series.
       leftPriceScale: { visible: false, borderColor: C.border },
       handleScale: false,
       handleScroll: false,
@@ -296,30 +331,35 @@ export default function VolGexFlowPanel() {
     // lightweight-charts would clip the label in half.
     chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.12, bottom: 0.14 } });
 
-    // +GEX % overlay. The autoscale provider pins the left scale to a true
-    // 0–100 rather than letting it fit the data: autoscaled, a chain that spends
-    // the whole day between 58 and 64 would fill the pane top to bottom and read
-    // as a violent swing, and the 50% line would wander instead of sitting at a
-    // fixed height you can eyeball against.
-    pctSeriesRef.current = chart.addSeries(LineSeries, {
+    // +GEX % view — a second Baseline, split at 50 instead of 0, on the LEFT
+    // scale. Two scales rather than one shared: each carries exactly one series,
+    // so each keeps its own price formatter ($ vs %) with no fighting over which
+    // series formats the axis. Only one is ever visible.
+    pctSeriesRef.current = chart.addSeries(BaselineSeries, {
       priceScaleId: "left",
-      color: PCT,
+      baseValue: { type: "price", price: 50 },
+      topLineColor: PCT,
+      topFillColor1: "rgba(251,133,1,0.34)",
+      topFillColor2: "rgba(251,133,1,0.02)",
+      bottomLineColor: C.cyan,
+      bottomFillColor1: "rgba(33,158,188,0.02)",
+      bottomFillColor2: "rgba(33,158,188,0.34)",
       lineWidth: 2,
       priceLineVisible: false,
-      lastValueVisible: true,
-      crosshairMarkerVisible: true,
       visible: false,
       priceFormat: { type: "custom", minMove: 0.1, formatter: (p: number) => `${p.toFixed(0)}%` },
-      autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }),
-    });
-    // The 50% midline is the read: above = long-gamma chain, below = short.
-    pctSeriesRef.current.createPriceLine({
-      price: 50,
-      color: "rgba(255,255,255,0.22)",
-      lineWidth: 1,
-      lineStyle: 2,
-      axisLabelVisible: false,
-      title: "",
+      // Padded around the data but ALWAYS containing 50, clamped to 0–100. Pure
+      // data-fit would put the midline wherever it landed and make a 58–64 day
+      // look like a regime war; a hard 0–100 would flatten that same day into a
+      // dead straight line. This keeps the 50 crossing visible and the shape
+      // readable at the same time.
+      autoscaleInfoProvider: () => {
+        const vals = pctValsRef.current;
+        if (!vals.length) return { priceRange: { minValue: 0, maxValue: 100 } };
+        const lo = Math.max(0, Math.min(50, ...vals) - 5);
+        const hi = Math.min(100, Math.max(50, ...vals) + 5);
+        return { priceRange: { minValue: lo, maxValue: hi } };
+      },
     });
     chart.priceScale("left").applyOptions({ scaleMargins: { top: 0.12, bottom: 0.14 } });
     chartRef.current = chart;
@@ -351,24 +391,6 @@ export default function VolGexFlowPanel() {
     };
   }, []);
 
-  // Overlay data + visibility. Split from the chart-creation effect so toggling
-  // never tears down and rebuilds the canvas.
-  useEffect(() => {
-    const s = pctSeriesRef.current;
-    if (!s) return;
-    const on = showPct && hasPct;
-    if (on) {
-      s.setData(
-        pctPoints.map((p) => ({
-          time: Math.floor(p.ts / 1000) as UTCTimestamp,
-          value: p.posPct as number,
-        }))
-      );
-    }
-    s.applyOptions({ visible: on });
-    chartRef.current?.applyOptions({ leftPriceScale: { visible: on, borderColor: C.border } });
-  }, [showPct, hasPct, pctPoints]);
-
   useEffect(() => {
     if (!seriesRef.current) return;
     seriesRef.current.setData(
@@ -377,8 +399,50 @@ export default function VolGexFlowPanel() {
     try { chartRef.current?.timeScale().fitContent(); } catch { /* not laid out yet */ }
   }, [points]);
 
+  useEffect(() => {
+    const s = pctSeriesRef.current;
+    if (!s) return;
+    pctValsRef.current = pctPoints.map((p) => p.posPct as number);
+    s.setData(
+      pctPoints.map((p) => ({
+        time: Math.floor(p.ts / 1000) as UTCTimestamp,
+        value: p.posPct as number,
+      }))
+    );
+  }, [pctPoints]);
+
+  // View swap. Split from the chart-creation effect so switching never tears
+  // down and rebuilds the canvas — only visibility and which scale is showing.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !seriesRef.current || !pctSeriesRef.current) return;
+    seriesRef.current.applyOptions({ visible: !pctView });
+    pctSeriesRef.current.applyOptions({ visible: pctView });
+    chart.applyOptions({
+      rightPriceScale: { visible: !pctView, borderColor: C.border },
+      leftPriceScale: { visible: pctView, borderColor: C.border },
+    });
+    try { chart.timeScale().fitContent(); } catch { /* not laid out yet */ }
+  }, [pctView]);
+
   // ── Cards ──
+  // The six tiles re-label with the view. Same grid, same order of meaning
+  // (now / change / high / low / regime / context) so the eye doesn't have to
+  // re-learn the block when you flip the switch.
   const cards = useMemo(() => {
+    if (pctView) {
+      if (!pctStats) return [];
+      const s = pctStats;
+      const ink = (v: number) => (v >= 50 ? PCT : C.cyan);
+      return [
+        { label: "+GEX %", value: `${s.last.v.toFixed(0)}%`, sub: etTime(Math.floor(s.last.ts / 1000)), color: ink(s.last.v) },
+        { label: "Δ Last Bucket", value: s.d == null ? "—" : `${s.d > 0 ? "+" : "−"}${Math.abs(s.d).toFixed(1)}pt`, sub: BIN_LABEL, color: (s.d ?? 0) >= 0 ? PCT : C.cyan },
+        { label: "Session High", value: `${s.high.v.toFixed(0)}%`, sub: etTime(Math.floor(s.high.at / 1000)), color: PCT },
+        { label: "Session Low", value: `${s.low.v.toFixed(0)}%`, sub: etTime(Math.floor(s.low.at / 1000)), color: C.cyan },
+        { label: "Time > 50%", value: `${s.abovePct.toFixed(0)}%`, sub: s.flips === 0 ? "one regime" : `${s.flips} regime changes`, color: s.abovePct >= 50 ? PCT : C.cyan },
+        { label: "Regime", value: s.last.v >= 50 ? "LONG γ" : "SHORT γ", sub: `${s.last.strikes} strikes`, color: ink(s.last.v) },
+      ];
+    }
     if (!stats) return [];
     const last = stats.last;
     return [
@@ -389,7 +453,7 @@ export default function VolGexFlowPanel() {
       { label: "Sign Flips", value: String(stats.flips), sub: stats.flips === 0 ? "one regime" : "regime changes", color: stats.flips > 0 ? C.orange : C.cyan },
       { label: "Spot", value: last.spot ? last.spot.toFixed(2) : "—", sub: `${last.strikes} strikes`, color: C.cyan },
     ];
-  }, [stats]);
+  }, [stats, pctStats, pctView]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, gap: 8, padding: 14, overflow: "auto" }}>
@@ -397,7 +461,7 @@ export default function VolGexFlowPanel() {
           to sit above the chart canvas while it's open. */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0, flexWrap: "wrap", position: "relative", zIndex: menuOpen ? 30 : 1 }}>
         <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: C.text }}>
-          Net Vol GEX Flow
+          {pctView ? "+GEX % of Chain" : "Net Vol GEX Flow"}
         </span>
         <ThemedSelect
           value={pick}
@@ -437,15 +501,15 @@ export default function VolGexFlowPanel() {
             );
           })}
         </div>
-        {/* +GEX % overlay switch — same segmented shape as RTH/ETH so the header
-            reads as one control row, tinted orange to match the line it draws.
+        {/* View switch — same segmented shape as RTH/ETH so the header reads as
+            one control row, tinted orange in the % view to match the series.
             Hidden, not shown dead, when the response carries no posPct — an
             older server, or a window with no rows. */}
         {hasPct && (
-          <div style={{ display: "flex", border: `1px solid ${showPct ? "rgba(251,133,1,0.40)" : C.border}`, borderRadius: 7, overflow: "hidden" }}>
+          <div style={{ display: "flex", border: `1px solid ${pctView ? "rgba(251,133,1,0.40)" : C.border}`, borderRadius: 7, overflow: "hidden" }}>
             {([
-              { on: false, label: "OFF", title: "Hide the +GEX % overlay" },
-              { on: true, label: "+GEX % OVERLAY", title: "Overlay +GEX % — the share of the selected expiry's |net GEX| that is positive, on its own 0–100 left scale. Above 50% = long-gamma chain." },
+              { on: false, label: "$ GEX", title: "Net vol GEX in dollars — the signed flow series" },
+              { on: true, label: "+GEX %", title: "Share of the selected expiry's |net GEX| (OI+Vol) that is positive — the same number as the home Levels strip's +GEX % tile. Above 50% = long-gamma chain." },
             ] as const).map((o) => {
               const active = showPct === o.on;
               return (
@@ -511,6 +575,20 @@ export default function VolGexFlowPanel() {
       <div style={{ flex: 1, minHeight: 200, position: "relative" }}>
         <div ref={boxRef} style={{ position: "absolute", inset: 0 }} />
 
+        {/* Corner labels instead of a legend — with one series on screen the
+            question isn't "which line is which", it's "which side of the 50 line
+            am I on". pointerEvents:none so they never eat a crosshair hover. */}
+        {pctView && (
+          <>
+            <span style={{ position: "absolute", top: 6, left: 10, fontSize: 9.5, fontWeight: 800, letterSpacing: "0.09em", color: "rgba(251,133,1,0.85)", pointerEvents: "none" }}>
+              LONG GAMMA
+            </span>
+            <span style={{ position: "absolute", bottom: 24, left: 10, fontSize: 9.5, fontWeight: 800, letterSpacing: "0.09em", color: "rgba(33,158,188,0.85)", pointerEvents: "none" }}>
+              SHORT GAMMA
+            </span>
+          </>
+        )}
+
         {(loading || err || (!points.length && !loading)) && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(5,6,10,0.72)", borderRadius: 10, textAlign: "center", padding: 16 }}>
             <span style={{ fontSize: 12, color: err ? C.red : C.cyan, letterSpacing: "0.06em", fontWeight: 700 }}>
@@ -526,30 +604,6 @@ export default function VolGexFlowPanel() {
         )}
       </div>
 
-      {/* Legend — only while the overlay is up. With one series the colors are
-          self-explanatory; with two on different scales, "which axis is this
-          reading against" is the question, so the units go in the label. */}
-      {showPct && hasPct && (
-        <div style={{ display: "flex", gap: 14, flexShrink: 0, fontSize: 10, color: C.text, letterSpacing: "0.04em", paddingTop: 2 }}>
-          {([
-            { color: POS, label: "Net Vol GEX (right, $)", dash: false },
-            { color: PCT, label: "+GEX % of chain (left, %)", dash: false },
-            { color: "rgba(255,255,255,0.35)", label: "50% reference", dash: true },
-          ] as const).map((l) => (
-            <span key={l.label} style={{ display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>
-              <span
-                style={{
-                  width: 14, height: 2, borderRadius: 2, flexShrink: 0,
-                  background: l.dash
-                    ? `repeating-linear-gradient(90deg, ${l.color} 0 3px, transparent 3px 6px)`
-                    : l.color,
-                }}
-              />
-              {l.label}
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
