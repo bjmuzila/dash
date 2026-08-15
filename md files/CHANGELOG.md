@@ -1,173 +1,47 @@
 # Changelog
 
-## 2026-08-14 - ES Candles: fix pan/zoom lag on the chart overlay
+## 2026-08-14 - gex-vol-flow: one snapshot per bucket, scoped to one symbol
 
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`.
-
-### What
-
-The page was heavy to move around — panning, zooming and even just sliding the
-crosshair across the chart dragged. Four things were doing full-cost work on
-every frame; all four are viewport-independent or hover-independent, so none of
-it needed to be there.
-
-### How
-
-**1. Hover no longer repaints anything.** The `pointermove` listener on the
-chart container called `schedule()` unconditionally, so every mouse movement
-over the chart repainted the whole overlay canvas AND the GEX rail at the
-pointer's event rate — for a gesture that changes nothing about the projection.
-Now gated on `e.buttons !== 0`, which keeps the reason the listener exists
-(dragging the price axis fires no `subscribeVisibleLogicalRangeChange`) and
-drops the rest. `pointerup` still catches the settled state. This is the single
-biggest win.
-
-**2. The bubble derivation is memoised.** Bucketing the minute store, the
-session scale, the expanding `runMax`, and the per-bucket top-N ranking depend
-only on the data — but they ran inside `draw()`, which is wired to
-wheel/pointermove/range-change. On a full session that is a sort of the entire
-strike list per bucket, a few hundred times per frame.
-
-- New `bubblePrepRef` caches `{mins, sessMax, runMax, shownAt, wallAt,
-  strikeStep}` behind a signature: `minuteColsVerRef | metric | bucket |
-  topStrikes | highlight | replayTs | bar-grid`.
-- New `minuteColsVerRef`, bumped at every write to `minuteColsRef` (live frame,
-  backfill, and all three clears), is the invalidation key — a landing column
-  invalidates the cache immediately, so it can never serve stale gamma.
-- Inside the build, the per-bucket sort is skipped unless a new peak actually
-  appeared, and unchanged buckets share one `Set`/`Map` reference instead of a
-  rebuilt copy.
-
-**3. Wall glow is a sprite, not a blur.** `ctx.shadowBlur` is a per-fill
-gaussian and was paid once per wall bubble per column per frame (hundreds of
-blurs). Now rendered once per (size, colour, blur) into an offscreen canvas via
-`glowSpriteRef` and blitted with `drawImage`. Sizes are quantised to a half
-pixel so the cache stays a handful of entries; walls are always opacity 1 so the
-sprite is pixel-exact.
-
-**4. Smaller per-frame measurements.** The strike increment was being found by
-flat-mapping every cell of every bucket (tens of thousands of entries) each
-frame — it is data, so it moved into the memo as `strikeStep`. Column pitch is
-now sampled from the newest ~40 buckets (12 gaps) instead of walking the whole
-session for a value that is uniform.
-
-No visual change: same bubbles, same ranking, same glow, same no-overlap caps.
-
-
-## 2026-08-14 - ES Candles: GEX bubbles are ovals, and can no longer overlap
-
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
-`components/dashboard/es-candles/slotStore.ts`.
-Preview: `generated/2026-08-14-bubble-sizing-examples.html`.
+Edited: `server-v2/server-with-proxy.js` (`handleGexVolFlow`).
 
 ### What
 
-Shipped the "Restrained" preset from the sizing preview, and changed the mark
-itself from a circle to a horizontally-stretched oval that is geometrically
-prevented from touching its neighbours.
+`/proxy/gex-vol-flow` was summing more rows than a single chain snapshot, which
+inflated the dollar series and badly skewed the new +GEX % view — the tab read
+87% where the home Levels strip read 50% on the same chain at the same minute.
+
+Symptom that gave it away: the Regime card reported **493 strikes** in one 30s
+bucket. The feed only ever subscribes ±8% of spot (`STRIKE_WINDOW_PCT`, default
+0.08 in `proxy-tastytrade.js`) — about 250 strikes for SPX at 5pt spacing — and
+that same `gexRows` array is what `writeGexSnapshot` persists. 493 is two
+snapshots, not one.
+
+After this, the strike count on that card should read ~250. If it still reads
+~490, the bucketing was not the cause and the next suspect is two writers.
 
 ### How
 
-**Oval mark.** `ctx.arc` → `ctx.ellipse` with `BUBBLE_ASPECT = 2.2`. A row now
-reads as a dashed price level instead of a string of beads, which is what these
-rows actually are.
+**One snapshot per bucket.** The `latest` CTE was
+`DISTINCT ON (bucket_ms, expiry, strike) … ORDER BY … timestamp DESC` — newest
+row PER STRIKE, which UNIONS the strike sets of every write that landed in the
+bucket. One write per slot is the intent (the grid-slot throttle in
+`gex-history-writer.js`), but a restart, a drifting writer, or a second process
+pointed at the same database breaks that, and the union then carries strikes
+from two different spot centres at once.
 
-**Two no-overlap caps, derived from the live projection** — not from sizes that
-happen to fit. The chart zooms, so any fixed "safe" pixel number stops being
-safe the moment the price scale is scrolled:
+Replaced with a `slot` CTE taking `MAX(timestamp)` per (bucket, expiry) and a
+join back on that exact timestamp. The writer stamps every strike of a batch
+with the same instant, so this selects exactly one write's rows.
 
-- `rx <= colPitch / 2 - 0.8` where `colPitch` is the smallest gap between two
-  adjacent bucket x's. Neighbours within a row can never touch, at any bar
-  spacing.
-- `ry <= rowPitch / 2 - 1.5` where `rowPitch` is the chain's own strike
-  increment projected through the same `priceToCoordinate` the bubbles use. Two
-  rows can never touch, at any vertical zoom. Measured off the strike GRID, not
-  the shown rows — the shown set changes per bucket and a cap that moved with it
-  would make a row breathe as its neighbours came and went.
+**Symbol scoping.** `option_strike_gex_history` is multi-symbol — the `symbol`
+column defaults to `'$SPX'`, `gex-history-writer.js` normalises `'SPX'` → `'$SPX'`,
+and SPY/QQQ recorders pass their own ticker. Neither the points query nor the
+expiry-list query filtered on it, so chains that merely share an expiry DATE were
+being summed together. Both now take `symbol` (query param, default `'$SPX'`),
+and it is part of the cache key and echoed in the response.
 
-**Sizing (Restrained preset).**
-
-- Defaults: `minSize` `0.4 -> 0.3`, `maxSize` `12 -> 4.5`, `brightness`
-  `84 -> 88`. `curve` stays 1.0 (linear, proportional to net GEX).
-- `HIGHLIGHT_BOOST_TOP` `2.6 -> 2.2`, `HIGHLIGHT_BOOST_MIN` `1.6 -> 1.4`. Top
-  three walls land at 2.2x / 1.8x / 1.4x on a 4.5px base.
-
-The previous 12px base at 2.6x was a 31px radius — a 62px band per wall, which
-swallowed its neighbours at normal chart heights. With the caps in place a large
-`maxSize` buys nothing but clipping, hence the smaller budget.
-
-Saved slider blobs still win over defaults; Reset in the bubble panel picks up
-the new values. The oval geometry and both caps apply regardless of settings.
-
-
-## 2026-08-14 - ES Candles: bubble size back to proportional, walls carried by rank
-
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
-`components/dashboard/es-candles/slotStore.ts`.
-
-### What
-
-Bubble radius is proportional to net GEX again across the whole ladder, with the
-top 3 walls made obvious by their own multiplier rather than by bending the
-curve for everyone.
-
-The steep size curve (2.2, then 2.8 earlier today) made the walls dominant by
-collapsing every non-wall strike onto Min — so the mid ladder carried no
-magnitude information at all, which is the read it exists for.
-
-### How
-
-- Default `curve` `2.8 → 1` (LINEAR). A strike at half the session max now draws
-  at half the size span; 25% draws at 25%. Straight proportionality to that
-  bubble's own net GEX.
-- All of the "top N stand out" now comes from the rank-graduated highlight
-  boost, which only touches the highlighted strikes and therefore cannot flatten
-  the rest: `HIGHLIGHT_BOOST_TOP` `2.1 → 2.6`, `HIGHLIGHT_BOOST_MIN`
-  `1.15 → 1.6`. Even the #3 wall sits 1.6x above the proportional ladder; #1 is
-  2.6x.
-- Ranking, glow taper, opacity gradient, expanding as-of-bucket scale: unchanged.
-- Slider ranges unchanged — `curve` still spans 0.5–8, so the old exponential
-  behaviour is one drag away.
-
-Saved slider blobs still win over defaults; hit Reset in the bubble panel to
-pick up curve 1.0.
-
-
-## 2026-08-14 - ES Candles: rank-graduated GEX bubble sizing
-
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
-`components/dashboard/es-candles/slotStore.ts`.
-
-### What
-
-The per-strike GEX bubble rows on the ES Candles chart read flat at the top of
-the ladder: the #1, #2 and #3 walls drew at nearly the same thickness, so the
-dominant level did not stand out from the ones under it.
-
-Highlighted walls are now sized by their RANK, not by a single flat multiplier,
-and the factory sizing curve is steeper.
-
-### How
-
-- `HIGHLIGHT_BOOST` (one flat `1.35x` for every highlighted wall) replaced by
-  `HIGHLIGHT_BOOST_TOP = 2.1` / `HIGHLIGHT_BOOST_MIN = 1.15`, interpolated
-  linearly across the highlighted set. Rank 0 (the session's dominant wall as of
-  that bucket) gets TOP; the last highlighted wall gets MIN. With Highlight = 1
-  there is no span, so that single wall takes TOP.
-- `wallAt` changed from `Map<slotTs, Set<strike>>` to
-  `Map<slotTs, Map<strike, rankIdx>>` so the rank survives to draw time. The
-  ranking itself is unchanged — still the expanding as-of-bucket peak `|GEX|`
-  order, so an already-printed tube can never resize after the fact.
-- Wall glow tapers with the same rank term: `shadowBlur` `22 → 12` across the
-  highlighted set instead of a flat `16`.
-- Defaults: `minSize` `0.5 → 0.4`, `maxSize` `9 → 12`, `curve` `2.2 → 2.8`.
-- Slider headroom: `curve` max `5 → 8`, `maxSize` max `20 → 24`. Past ~4 the mid
-  strikes finally collapse to Min and only the true walls grow.
-
-Existing saved slider blobs are untouched (the restore clamp only narrows, and
-both ranges widened) — the rank boost applies regardless of saved settings; hit
-Reset in the bubble panel to pick up the new defaults.
-
+Note: the sibling baseline query around line 703 has the same missing symbol
+filter. Left alone here — separate change, separate blast radius.
 
 ## 2026-08-14 - Vol GEX Flow tab: +GEX % view
 
@@ -179,9 +53,14 @@ Edited: `components/dashboard/VolGexFlowPanel.tsx`,
 The Vol GEX Flow tab (home page, Economic Calendar card) gets a
 `$ GEX / +GEX %` switch beside RTH/ETH. Flip to `+GEX %` and the chart becomes
 the +GEX % series for the selected expiry — the same number as the home Levels
-strip tile — split at 50 (orange above = long-gamma chain, cyan below = short),
+strip tile — split at 50 (green above = long-gamma chain, red below = short),
 with corner labels and the six stat cards re-labelled to percent stats: +GEX %
 now, delta bucket in points, session high/low, time above 50%, regime.
+
+Line, fill, card ink and corner labels all use `POS`/`NEG` — the same two tokens
+the Levels strip tile inks its value with, so the number and the line agree on
+what long-gamma looks like. Orange is the switch's accent only, never the
+series.
 
 The strip tile was point-in-time: 63% says the chain is long-gamma right now,
 but not whether it climbed there from 40 or bled down from 80, and that path is

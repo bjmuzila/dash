@@ -29,24 +29,48 @@
 // Sizing/filtering is pure taste, so it shouldn't reset every visit.
 //   topStrikes  — Show Top Strikes: draw only the N strongest strikes per column
 //   highlight   — Highlight Top N Walls: top X of the shown set render dominant (X ≤ N)
-//   minSize/maxSize — radius range in px
+//   maxSize — OVERALL SIZE: the largest wall's radius in px, and a straight
+//             multiplier on every other bubble. Drag it, the whole ladder moves.
+//   minSize — CONTRAST: the smallest strike's size as a FRACTION of maxSize
+//             (0.05 = a twentieth of the wall). Not a pixel floor — that form
+//             left the small bubbles parked while Max only moved the top.
+//   topBoost — MAX: a top-weighted multiplier, 1 = off. Scales by ratio, so the
+//             strongest strike gets the full factor and the weakest gets none.
+//             `size` moves the WHOLE ladder; this one stretches only its top,
+//             which is the knob for "the walls need to be bigger" without
+//             dragging the wings up with them.
 //   curve       — size-response exponent: r = min + ratio^curve * (max-min).
 //                 0.5 = the old √ (area ∝ |GEX|, small strikes stay fat);
 //                 1 = linear; >1 = exponential — small strikes collapse toward
-//                 min and only the top walls approach max. Default 1.0.
+//                 min and only the top walls approach max. Default 1
+//                 (pure log over the stretched domain).
 //   brightness  — 0..100 opacity gradient steepness for smaller strikes
-export type BubbleCfg = { topStrikes: number; highlight: number; minSize: number; maxSize: number; curve: number; brightness: number };
-// curve 1.0 = LINEAR, i.e. every bubble's radius tracks its own net GEX
-// proportionally — a strike at half the session max draws at half the span.
-// The steep exponent (2.2, then 2.8) did make the walls dominant, but it did so
-// by flattening everything else onto Min, which threw away the read the whole
-// ladder exists for. The top-N walls now get their prominence from the
-// rank-graduated highlight boost in EsChartCard instead of from the curve.
-// Sizes are deliberately small: the marks are ovals with hard no-overlap caps
-// (EsChartCard), so a big maxSize buys nothing except rows that clip against
-// their caps. 0.3 → 4.5 keeps the whole ladder inside the strike pitch.
-export const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 10, highlight: 3, minSize: 0.3, maxSize: 4.5, curve: 1, brightness: 88 };
-export const BUBBLE_CFG_KEYS: Array<keyof BubbleCfg> = ["topStrikes", "highlight", "minSize", "maxSize", "curve", "brightness"];
+export type BubbleCfg = { topStrikes: number; highlight: number; minSize: number; maxSize: number; topBoost: number; curve: number; brightness: number };
+// SIZE = |net GEX| at that strike. COLOR = the top-N highlight. Those are the
+// only two things the layer encodes, and they are deliberately orthogonal: the
+// highlight no longer multiplies the radius (see the note in EsChartCard), so
+// changing how many walls you highlight can never change what the sizes say.
+//
+// The size scale is LOG over a contrast-stretched domain (see EsChartCard).
+// Net GEX runs four orders of magnitude across a chain — 301.95B at the peak
+// against 52.1M at the wings on a real 11:26 SPX book — so a linear scale gives
+// the peak everything and pins the other dozen rows on minSize. Log spreads all
+// of them and is how gamma is actually read ("twice the wall", "an order of
+// magnitude smaller").
+//
+// `curve` is the exponent applied ON TOP of the log ratio: 1 = pure log, above
+// 1 pushes the mid-ladder back down, below 1 lifts it.
+//
+// topStrikes 16, not 6: with size carrying the magnitude and colour carrying
+// the emphasis, more of the chain can be on screen without it turning to mush —
+// the small strikes simply draw small and dim.
+// maxSize 14: the top of the ladder was too timid. minSize stays low, so the
+// span widens upward — the walls grow, the wings do not. The geometric row cap
+// in EsChartCard still bounds it (a mark can never exceed half the strike
+// pitch), so a big number here is safe: it just means the walls use whatever
+// vertical room the current zoom actually has.
+export const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 16, highlight: 2, minSize: 0.06, maxSize: 14, topBoost: 1, curve: 1, brightness: 60 };
+export const BUBBLE_CFG_KEYS: Array<keyof BubbleCfg> = ["topStrikes", "highlight", "minSize", "maxSize", "topBoost", "curve", "brightness"];
 
 // Slider bounds, single-sourced so the UI and the restore clamp can't drift.
 // The size ranges are deliberately CENTERED on the defaults (min 0.5 sits mid
@@ -57,8 +81,13 @@ export const BUBBLE_CFG_KEYS: Array<keyof BubbleCfg> = ["topStrikes", "highlight
 export const BUBBLE_CFG_RANGE: Record<keyof BubbleCfg, { min: number; max: number }> = {
   topStrikes: { min: 1, max: 30 },
   highlight: { min: 0, max: 30 },
-  minSize: { min: 0, max: 1 },
-  maxSize: { min: 1, max: 24 },
+  minSize: { min: 0, max: 0.9 },  // fraction of maxSize, not px
+  // Runs to 60. The geometric row cap in EsChartCard bounds every mark at half
+  // the strike pitch anyway, so a high ceiling here is not a way to break the
+  // chart — it just means the walls can use all the vertical room a zoomed-in
+  // view actually has.
+  maxSize: { min: 1, max: 60 },
+  topBoost: { min: 1, max: 5 },
   // Curve runs to 8 now. 5 was not enough separation at the top of the ladder —
   // past ~4 the mid strikes finally collapse to Min and only the true walls grow.
   curve: { min: 0.5, max: 8 },

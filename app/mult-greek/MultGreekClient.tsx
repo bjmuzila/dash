@@ -525,9 +525,13 @@ const EX0_KEY = "ALL_EX_0DTE";
 
 // Fold the synthetic ex-0DTE total column into a computed result: per-row sum
 // across `sumDates`, plus the same shading maxima / top-3 / top-5-per-side /
-// peak bookkeeping every real column gets, with the LAST real column swapped
-// out of `cols` so the panel renders front + next 2 + the total.
-function withEx0Column(res: ComputedResult, sumDates: string[]): ComputedResult {
+// peak bookkeeping every real column gets.
+//
+// `replaceLast` = the live shape: the LAST real column is swapped out of `cols`
+// so the panel renders front + next 2 + the total in four columns. Replay passes
+// false — it only ever has 3 recorded expiries, so the total is APPENDED and no
+// recorded expiry is hidden to make room (see the call site).
+function withEx0Column(res: ComputedResult, sumDates: string[], replaceLast = true): ComputedResult {
   const rows = res.rows.map(r => ({
     ...r,
     gex: { ...r.gex, [EX0_KEY]: sumDates.reduce((s, d) => s + (r.gex[d] || 0), 0) },
@@ -550,7 +554,7 @@ function withEx0Column(res: ComputedResult, sumDates: string[]): ComputedResult 
   return {
     ...res,
     rows,
-    cols: [...res.cols.slice(0, res.cols.length - 1), EX0_KEY],
+    cols: replaceLast ? [...res.cols.slice(0, res.cols.length - 1), EX0_KEY] : [...res.cols, EX0_KEY],
     maxAbs: { ...res.maxAbs, [EX0_KEY]: mx },
     top3: { ...res.top3, [EX0_KEY]: ranks },
     top5PerSide: { ...res.top5PerSide, [EX0_KEY]: side },
@@ -698,16 +702,6 @@ function TickerPanel({
   }, [clickCell?.strike, clickCell?.expiry, ticker]);
 
   const colDates = useMemo(() => cols.map(c => c.date), [cols]);
-  // In Δ mode the FRONT column also carries a chip, and at 4 expiries a 1fr
-  // column (~94px in a 440px panel) cannot hold "−$1,694M" plus the value —
-  // measured, it needs ~146px. Widening the front to 1.9fr fits both while
-  // leaving the other columns (~77px) enough for their value. Non-front columns
-  // are unchanged, and with the mode off the grid is exactly as it was.
-  const gridCols = (
-    deltaWindow !== 0 && cols.length > 1
-      ? `64px 1.9fr ${cols.slice(1).map(() => "1fr").join(" ")}`
-      : `64px ${cols.map(() => "1fr").join(" ")}`
-  ).trim() || "64px";
 
   // Replay swaps the SOURCE of the rows and nothing else. Everything below —
   // the ex-0DTE total, the walls, the capture trim, the grid — reads the same
@@ -723,22 +717,55 @@ function TickerPanel({
         ? computeReplayRows(replayFrame, colDates, replayStrikes ?? [], contractMode)
         : computeRows(strikesByExp, colDates, liveData, spot, contractMode));
 
-  // Swap the 4th expiry column for the synthetic ex-0DTE TOTAL when a full set
-  // of columns is present. Every fetched expiration except 0DTE feeds the sum
-  // — the 4th expiry still contributes, it just no longer gets its own column.
-  // Fewer than 4 columns (static mode's single snapshot expiry, thin
-  // calendars) render unchanged.
-  const showEx0 = cols.length === MAX_EXP_COLS;
+  // Swap the 4th expiry column for the synthetic ex-0DTE TOTAL. Every expiration
+  // except 0DTE feeds the sum — at a full 4-column set the 4th expiry still
+  // contributes, it just no longer gets its own column.
+  //
+  // REPLAY never reaches 4 columns: strike_growth records only
+  // EXPIRIES_PER_TICKER (3) expiries per sweep, so gating the total on exactly 4
+  // made the ALL column vanish the moment you rewound — even though the recorded
+  // rows support it (the /analytics Ticker Lookup builds the same "ALL
+  // EXPIRATIONS · EX-0DTE" ladder off this same history). So the total is gated
+  // on the SUM being meaningful, not on the column count: it needs 2+ non-0DTE
+  // expiries (a 1-expiry sum would just duplicate that expiry's own column), and
+  // it REPLACES the last column only when there is a 4th expiry to fold away —
+  // otherwise it is appended, so a rewound panel shows its 3 recorded expiries
+  // plus ALL and keeps the same 4-column width as live.
+  const ex0Dates = cols.filter(c => c.daysTo !== 0).map(c => c.date);
+  const ex0ReplacesLast = cols.length === MAX_EXP_COLS;
+  // How many expiries are in the total ON SCREEN. Which COLUMNS exist stays a
+  // session-level decision (a column set that appears and disappears as you
+  // scrub is unreadable), but the count the header reports is per-sweep: a sweep
+  // that skipped an expiry the session recorded elsewhere really is summing
+  // fewer, and saying otherwise describes the recording instead of the ladder.
+  const ex0InProfile = replayFrame
+    ? ex0Dates.filter(d => replayFrame.expiries.includes(d)).length
+    : ex0Dates.length;
+  const showEx0 = ex0ReplacesLast || (isReplay && ex0Dates.length >= 2 && cols.length < MAX_EXP_COLS);
   const computedAug = (computedFull && showEx0)
-    ? withEx0Column(computedFull, cols.filter(c => c.daysTo !== 0).map(c => c.date))
+    ? withEx0Column(computedFull, ex0Dates, ex0ReplacesLast)
     : computedFull;
 
   // Header/totals column descriptors — the real expiries with the 4th swapped
-  // for the ex-0DTE TOTAL, mirroring computed.cols when data is present.
+  // for the ex-0DTE TOTAL (or the total appended, in replay), mirroring
+  // computed.cols when data is present.
   const displayCols: { date: string; label: { dte: string; md: string } }[] =
-    (showEx0 ? cols.slice(0, MAX_EXP_COLS - 1) : cols)
+    ((showEx0 && ex0ReplacesLast) ? cols.slice(0, MAX_EXP_COLS - 1) : cols)
       .map(c => ({ date: c.date, label: colLabel(c.date, dteBase) }))
       .concat(showEx0 ? [{ date: EX0_KEY, label: { dte: "ALL", md: "EX-0DTE" } }] : []);
+
+  // In Δ mode the FRONT column also carries a chip, and at 4 expiries a 1fr
+  // column (~94px in a 440px panel) cannot hold "−$1,694M" plus the value —
+  // measured, it needs ~146px. Widening the front to 1.9fr fits both while
+  // leaving the other columns (~77px) enough for their value. Non-front columns
+  // are unchanged, and with the mode off the grid is exactly as it was.
+  // Sized off displayCols, not cols: replay APPENDS the ALL column, so the two
+  // lengths differ there and a cols-sized track list would leave it unpainted.
+  const gridCols = (
+    deltaWindow !== 0 && displayCols.length > 1
+      ? `64px 1.9fr ${displayCols.slice(1).map(() => "1fr").join(" ")}`
+      : `64px ${displayCols.map(() => "1fr").join(" ")}`
+  ).trim() || "64px";
 
   // CB / CW / PW levels for the FRONT expiry — shown in the header and marked in
   // the front column. Computed from the full (untrimmed) rows so the capture
@@ -966,7 +993,12 @@ function TickerPanel({
           return (
             <div
               key={c.date}
-              title={c.date === EX0_KEY ? "Total NET GEX per strike across all expirations excluding 0DTE" : undefined}
+              title={c.date !== EX0_KEY ? undefined
+                : isReplay
+                  // Rewound, say what the total actually covers — the same
+                  // disclosure the Ticker Lookup replay header makes.
+                  ? `Total NET GEX per strike across ${ex0InProfile} expiration${ex0InProfile === 1 ? "" : "s"}, excluding 0DTE`
+                  : "Total NET GEX per strike across all expirations excluding 0DTE"}
               style={{ padding: "3px 4px", textAlign: "center", lineHeight: 1.15 }}
             >
               <div style={{ color: HT.cyan, fontSize: 10, fontWeight: 800, letterSpacing: "0.04em" }}>{lbl.dte}</div>

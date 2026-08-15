@@ -1745,17 +1745,24 @@ function tlReplayBtn(active: boolean): CSSProperties {
  * for the session, it is one ladder with values changing on it.
  *
  * `expiries` = the expiries to sum (one for the left pane, the whole board
- * minus 0DTE for the right). Returns the rows plus the set of strikes this
- * sweep did not record, which the ladder draws as "—" instead of a zero bar.
+ * minus 0DTE for the right). Returns the rows, the set of strikes this sweep
+ * did not record (the ladder draws those as "—" instead of a zero bar), and
+ * `used` — the expiries that actually put a cell into THIS profile.
+ *
+ * `used` is what the header counts. The session's expiry list is a property of
+ * the recording, not of the ladder on screen: an expiry can be in the session
+ * and contribute nothing to the sweep you are parked on. The number beside the
+ * ladder has to describe the ladder.
  */
 function tlReplayRows(
   frame: TlReplayFrame,
   sessionStrikes: number[],
   expiries: string[],
   basis: "net" | "vol" = "net",
-): { rows: TlRow[]; missing: Set<number> } {
+): { rows: TlRow[]; missing: Set<number>; used: string[] } {
   const rows: TlRow[] = [];
   const missing = new Set<number>();
+  const usedSet = new Set<string>();
   for (const strike of sessionStrikes) {
     let sum = 0;
     let seen = false;
@@ -1763,12 +1770,17 @@ function tlReplayRows(
       const cell = frame.cells.get(`${e}|${strike}`);
       if (!cell) continue;
       seen = true;
+      usedSet.add(e);
       sum += basis === "vol" ? cell.vol : cell.net;
     }
     if (!seen) missing.add(strike);
     rows.push({ strike, gex: sum });
   }
-  return { rows: rows.sort((a, b) => a.strike - b.strike), missing };
+  return {
+    rows: rows.sort((a, b) => a.strike - b.strike),
+    missing,
+    used: expiries.filter((e) => usedSet.has(e)),
+  };
 }
 
 /** Sweep timestamps snapped to the minute, deduped and ascending. */
@@ -2497,9 +2509,18 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
   // back, not the count requested. Nothing is capped, so a number below the
   // listing means a chain call failed, and the header says which it is rather
   // than implying a complete sweep.
+  //
+  // Rewound, the same rule: the count is the expiries IN THE PROFILE ON SCREEN
+  // (`replayRight.used`), not the session's recorded expiry list. Those two
+  // differ whenever a sweep skipped an expiry the session recorded elsewhere,
+  // and the session count would then describe the recording rather than the
+  // ladder it sits beside. The number now moves with the sweeps as you scrub.
+  const replayBoardUsed = replayRight?.used.length ?? 0;
   const boardLabel = replayOn
-    ? (replayBoardExps.length
-        ? `${replayBoardExps.length} recorded expiration${replayBoardExps.length === 1 ? "" : "s"} · excl. 0DTE${replayZeroDte ? ` (${replayZeroDte})` : ""} · recorded walls only`
+    ? (replayBoardUsed
+        ? `${replayBoardUsed} expiration${replayBoardUsed === 1 ? "" : "s"} · excl. 0DTE${replayZeroDte ? ` (${replayZeroDte})` : ""} · recorded walls only`
+        : replayBoardExps.length
+        ? `no expirations past 0DTE in this sweep · ${replayBoardExps.length} recorded this session`
         : "no recorded expirations past 0DTE this session")
     : boardIsFull
     ? [
@@ -2688,6 +2709,40 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
           </Row>
 
           <div style={divider} />
+
+          {/* Capture mark — symbol + expiry left, brand right.
+              A screen recording of this card gets cropped to the two ladders,
+              and everything that says WHAT is on screen (the symbol picker, the
+              replay bar) sits above that crop. So the identity rides directly
+              on top of the split: any capture that includes the ladders now
+              includes the ticker, the expiration they are drawn for, and the
+              mark. `crossOrigin` on the logo so html2canvas exports bake it in
+              rather than tainting the canvas — same handling the footer uses. */}
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            gap: 12, flexWrap: "wrap", marginBottom: 10,
+          }}>
+            <span style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 20, fontWeight: 800, letterSpacing: "0.1em", color: T.cyan }}>{sym}</span>
+              <span style={{
+                fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+                fontFamily: "var(--font-mono)", color: T.text, opacity: 0.75,
+              }}>
+                {/* The LEFT pane's expiry — the one thing on the card that is a
+                    single expiration. DTE counts from the replayed date while
+                    rewound, same rule as the pills. */}
+                {viewActiveExpiry ? tlExpiryChip(viewActiveExpiry, replayOn && replayDate ? replayDate : today) : "—"}
+                {replayOn && replayDate ? ` · replay ${replayDate}` : ""}
+              </span>
+            </span>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/cb-edge-logo.png"
+              alt="CB Edge"
+              crossOrigin="anonymous"
+              style={{ height: 30, width: "auto", display: "block", flexShrink: 0, opacity: 0.95 }}
+            />
+          </div>
 
           {/* The split: picked expiry | whole board. */}
           <div className="tl-split" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "stretch" }}>

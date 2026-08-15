@@ -494,6 +494,7 @@ export default function EsChartCard({
     runMax: Map<number, number>;
     shownAt: Map<number, Set<number>>;
     wallAt: Map<number, Map<number, number>>;
+    floorAt: Map<number, number>;
     strikeStep: number;
   } | null>(null);
   // Pre-rendered glow sprites for the highlighted walls. `ctx.shadowBlur` is a
@@ -1205,13 +1206,14 @@ export default function EsChartCard({
 
   // Patch the config with slider constraints enforced, then persist:
   //   • Highlight can't exceed Show Top Strikes (lowering N pulls X down).
-  //   • Min size can't exceed Max size (and vice versa).
+  //   • Min (a fraction of Max) stays inside 0..0.9.
   const updateBubbleCfg = useCallback((patch: Partial<BubbleCfg>) => {
     setBubbleCfg((prev) => {
       const next: BubbleCfg = { ...prev, ...patch };
-      if (next.maxSize < next.minSize) {
-        if ("minSize" in patch) next.maxSize = next.minSize; else next.minSize = next.maxSize;
-      }
+      // No min-vs-max clamp any more: minSize is a FRACTION of maxSize, not a
+      // competing pixel value, so the two can't cross. Its own range (0..0.9)
+      // is the only bound it needs.
+      next.minSize = Math.max(0, Math.min(0.9, next.minSize));
       next.highlight = Math.max(0, Math.min(next.highlight, next.topStrikes));
       saveSetting({ ...next }); // merge — must not drop `mins` / `on`
       return next;
@@ -3538,6 +3540,8 @@ export default function EsChartCard({
             // session's dominant wall as of that bucket). A Map, not a Set,
             // because the rank now drives the radius boost and the glow.
             const pWallAt = new Map<number, Map<number, number>>();
+            // Per-bucket bottom of the size scale (see the contrast note below).
+            const pFloorAt = new Map<number, number>();
             let shownNow: Set<number> = new Set();
             let wallNow: Map<number, number> = new Map();
             let dirty = true;
@@ -3557,6 +3561,28 @@ export default function EsChartCard({
               // unchanged bucket costs one pointer instead of a rebuilt Set.
               pShownAt.set(m.slotTs, shownNow);
               pWallAt.set(m.slotTs, wallNow);
+              // ── CONTRAST STRETCH: the floor of the size scale ──────────────
+              // Normalising |GEX| against the max alone assumes the ladder uses
+              // the whole 0..max range. A real chain does not: strike gamma is
+              // a smooth curve, so the dozen strikes around the peak all sit at
+              // 60-95% of the max and — at ANY exponent — draw within a couple
+              // of pixels of each other. That is the "ten bubbles looking the
+              // same" problem, and it is a normalisation bug, not a curve one.
+              //
+              // So the domain is the SHOWN SET'S OWN RANGE, [floor, runMax],
+              // not [0, runMax]. The weakest strike on screen lands on minSize,
+              // the strongest on maxSize, and the rest spread across the whole
+              // budget however bunched the underlying numbers are. Size is
+              // still strictly monotone in |net GEX| — it is a contrast
+              // stretch, not a re-ranking — so a bigger dot still means more
+              // gamma, and only the CONTRAST changes.
+              let floorV = Infinity;
+              for (const c of m.cells) {
+                if (!shownNow.has(c.strike)) continue;
+                const a = Math.abs(valOf(c));
+                if (a > 0 && a < floorV) floorV = a;
+              }
+              pFloorAt.set(m.slotTs, Number.isFinite(floorV) ? floorV : 0);
             }
             // The chain's own strike increment. Data, not viewport — but it used
             // to be recomputed per frame by flat-mapping every cell of every
@@ -3572,14 +3598,34 @@ export default function EsChartCard({
               }
               if (Number.isFinite(dK) && ks.length > 1) pStrikeStep = dK;
             }
-            prep = { sig: prepSig, mins: pMins, sessMax: pSessMax, runMax: pRunMax, shownAt: pShownAt, wallAt: pWallAt, strikeStep: pStrikeStep };
+            prep = { sig: prepSig, mins: pMins, sessMax: pSessMax, runMax: pRunMax, shownAt: pShownAt, wallAt: pWallAt, floorAt: pFloorAt, strikeStep: pStrikeStep };
             bubblePrepRef.current = prep;
           }
-          const { mins, sessMax, runMax, shownAt, wallAt, strikeStep } = prep;
+          const { mins, sessMax, runMax, shownAt, wallAt, floorAt, strikeStep } = prep;
 
           if (mins.length) {
             if (sessMax > 0) {
-              const sizeSpan = cfg.maxSize - cfg.minSize;
+              // ── MAX IS THE OVERALL SIZE KNOB ───────────────────────────────
+              // `minSize` is a FRACTION of maxSize now, not an absolute pixel
+              // floor. With the old `min + ratio*(max-min)` form, dragging Max
+              // only moved the top of the ladder: a strike at ratio 0 sat at
+              // `min` px no matter where Max went, so the small bubbles never
+              // changed and the slider felt half-broken.
+              //
+              //   r = maxSize * (minFrac + ratio^curve * (1 - minFrac))
+              //
+              // Now Max is a pure multiplier on the whole ladder — every bubble
+              // scales with it — and Min controls the ladder's CONTRAST (how
+              // small the weakest strike gets relative to the strongest), which
+              // is the thing that was actually wanted from it all along.
+              const minFrac = Math.max(0, Math.min(0.9, cfg.minSize));
+              // Guarded like curveExp — an older saved blob predates this key.
+              const topBoost = Number.isFinite(cfg.topBoost) && cfg.topBoost > 0
+                ? cfg.topBoost
+                : BUBBLE_CFG_DEFAULT.topBoost;
+              // How tightly Max concentrates on the strongest strikes. Higher =
+              // fewer bubbles affected. See the topMul note in the draw loop.
+              const TOP_BOOST_FOCUS = 4;
               // Size-response exponent (Curve slider). Guarded against an older
               // blob that predates the key — an undefined here would make every
               // radius NaN and silently blank the whole bubble layer.
@@ -3591,28 +3637,38 @@ export default function EsChartCard({
               // small strikes ~0.1 so the big walls dominate by contrast.
               const brightness01 = Math.max(0, Math.min(1, cfg.brightness / 100));
               const minOpacity = Math.max(0.1, 1 - brightness01);
-              // Highlighted walls' radius multiplier, GRADUATED BY RANK rather
-              // than one flat number. A single 1.35x for every highlighted wall
-              // made the top strikes bunch: the #1 and #3 walls usually sit
-              // within a few percent of each other on raw |GEX|, so after the
-              // curve they landed at nearly the same radius and the ladder read
-              // flat at the top — exactly where the separation matters most.
-              // Now #1 gets HIGHLIGHT_BOOST_TOP and the last highlighted wall
-              // gets HIGHLIGHT_BOOST_MIN, interpolated linearly in between, so
-              // the dominant wall is unmistakably the fattest tube on screen.
-              // With the curve at 1.0 (linear — radius tracks net GEX
-              // proportionally, see BUBBLE_CFG_DEFAULT) the walls get no
-              // separation for free from the exponent, so ALL of the "top N are
-              // obvious" comes from here. #1 is 2.2x, #2 1.8x, #3 1.4x against a
-              // 4.5px base — a hard ratio on a restrained pixel budget, so the
-              // walls dominate without any row growing into its neighbours.
-              const HIGHLIGHT_BOOST_TOP = 2.2;
-              const HIGHLIGHT_BOOST_MIN = 1.4;
+              // ── SIZE MEANS ONE THING: |net GEX| AT THAT STRIKE ────────────
+              // Highlight no longer touches the radius. It used to multiply it
+              // (1.35x flat, then 2.6x graduated, then 1.45x), and every one of
+              // those made a strike bigger for a reason that has nothing to do
+              // with its gamma — so the size scale silently stopped meaning what
+              // the legend says it means. A wall that is 1.4x a neighbour's
+              // gamma but drew 2x its size is a lie, and it is exactly why the
+              // ladder stopped being rankable by eye.
+              //
+              // The two channels are now cleanly split:
+              //   SIZE  = |net GEX|, nothing else. Read it like the reference
+              //           bubble column: bigger dot = more gamma, always.
+              //   COLOR = the Highlight-top-N selection. The chosen ranks go
+              //           white-hot with a glow; everything else stays base
+              //           blue/red with opacity tracking magnitude.
+              // Keeping them orthogonal means turning Highlight up or down can
+              // never change what the sizes are telling you.
+              const HIGHLIGHT_GLOW_TOP = 24; // #1 wall's glow radius, px
+              const HIGHLIGHT_GLOW_MIN = 11; // last highlighted wall's glow
 
-              // ── Oval geometry + the two no-overlap caps ────────────────────
-              // The mark is an ELLIPSE stretched horizontally, not a circle: a
-              // row then reads as a dashed price level instead of a string of
-              // beads, which is what these rows actually are.
+              // ── Mark geometry + the two no-overlap caps ────────────────────
+              // ROUND. The mark was briefly stretched 2.2x horizontally, on the
+              // theory that a row should read as a dashed level rather than a
+              // string of beads. It was wrong: the stretch closed the gaps
+              // between marks, every row fused into a continuous ribbon, and the
+              // trail lost the dotted texture that made the chart legible in the
+              // first place. The gaps ARE the design — they are what lets ten
+              // rows sit over the candles without burying them.
+              //
+              // BUBBLE_ASPECT is left as a named constant rather than deleted:
+              // it is the one number to change if a slightly oval mark is ever
+              // wanted again. 1.0 = circle.
               //
               // Overlap is prevented geometrically rather than by picking sizes
               // that happen to fit — the chart is zoomable, so any "safe" px
@@ -3622,9 +3678,14 @@ export default function EsChartCard({
               //     can never touch, at any bar spacing.
               //   • ry ≤ half the strike pitch − gap  → two rows can never
               //     touch, at any vertical zoom.
-              const BUBBLE_ASPECT = 2.2;  // horizontal stretch
+              const BUBBLE_ASPECT = 1.0;  // 1 = round; >1 stretches horizontally
               const COL_GAP_PX = 0.8;     // clear space between neighbours
-              const ROW_GAP_PX = 1.5;     // clear space between rows
+              // 3px, not 1.5: "not overlapping" is not the same as "clearly
+              // separate". Two rows that stop 1.5px short of touching still read
+              // as one thick band at a glance, which is the complaint this cap
+              // was added for in the first place.
+              // ROW_GAP_PX is retired: the vertical bound is now a safety rail
+              // rather than a no-touch guarantee (see ryCap below).
               // Column pitch: the smallest gap between two adjacent bucket x's.
               // Sampled from the newest ~40 buckets rather than the whole
               // session — the pitch is uniform (one column per bar) and this
@@ -3659,8 +3720,53 @@ export default function EsChartCard({
                 const yB = series.priceToCoordinate(k0 + strikeStep + b0);
                 if (yA != null && yB != null && Math.abs(yA - yB) > 0) rowPitch = Math.abs(yA - yB);
               }
-              const rxCap = Math.max(0.35, colPitch / 2 - COL_GAP_PX);
-              const ryCap = Math.max(0.35, rowPitch / 2 - ROW_GAP_PX);
+              // ── Column DECIMATION, SIZED BY THE BIGGEST MARK ───────────────
+              // This is the bug that made every bubble on the chart look the
+              // same size while the same data looked fine in a snapshot column.
+              //
+              // The old order of operations was backwards: pick a stride that
+              // clears some fixed 5px pitch, THEN clamp every mark to
+              // `pitch/2 − gap`. With a 5px pitch that clamp is ~1.7px, so the
+              // 14px wall, the 8px secondary and the 3px mid strike ALL came
+              // out at 1.7px. The size scale was computed perfectly and then
+              // thrown away one line later by the anti-overlap clamp. Every
+              // rework of the curve, the stretch and the log scale was invisible
+              // for exactly this reason.
+              //
+              // Correct order: the biggest mark decides the pitch, not the other
+              // way round. Work out the largest radius that can actually be
+              // drawn (maxSize, itself bounded by the vertical row cap), then
+              // stride far enough that two of those fit side by side with a gap.
+              // Fewer columns, every one at its true size, and overlap is still
+              // impossible — it is prevented by the SPACING now rather than by
+              // shrinking the thing being spaced.
+              const topBoostPre = Number.isFinite(cfg.topBoost) && cfg.topBoost > 0 ? cfg.topBoost : 1;
+              const rMaxDrawn = Math.max(0.35, cfg.maxSize * topBoostPre * BUBBLE_ASPECT);
+              const neededPitch = 2 * rMaxDrawn + 2 * COL_GAP_PX;
+              const colStride = Math.max(1, Math.ceil(neededPitch / Math.max(0.5, colPitch)));
+              const effColPitch = colPitch * colStride;
+              // Still a cap, but it should now essentially never bind — it is a
+              // backstop for the degenerate case where even one stride cannot
+              // open up enough room (a chart squeezed to a few pixels tall).
+              const rxCap = Math.max(0.35, effColPitch / 2 - COL_GAP_PX);
+              // ── The vertical bound is a SAFETY RAIL, not a size policy ─────
+              // It used to be `rowPitch / 2 - ROW_GAP_PX`, a hard clip at half
+              // the strike spacing. That is what made Size and Max look dead:
+              // the walls were already sitting on the clip, so dragging either
+              // slider raised a number the draw code then threw away, and the
+              // biggest rows never changed by a pixel. Same class of bug as the
+              // horizontal clamp — a cap silently overruling the encoding.
+              //
+              // Rows sit at fixed prices and cannot be spread apart the way
+              // columns can, so "bigger walls" and "rows never touch" are in
+              // real tension. That is the USER'S call to make with the sliders,
+              // not something to decide behind their back: crank Size and the
+              // walls are allowed to grow into their neighbours.
+              //
+              // What stays is a rail at 1.5x the strike pitch, which no sane
+              // setting reaches — it exists so a mis-drag cannot paint the
+              // whole canvas.
+              const ryCap = Math.max(0.35, rowPitch * 1.5);
 
               // Glow sprites (see glowSpriteRef). Sizes are quantised to a half
               // pixel so a wall that breathes by a hundredth of a px between
@@ -3699,7 +3805,10 @@ export default function EsChartCard({
               };
 
               ctx.save();
-              for (const m of mins) {
+              for (let mi = mins.length - 1; mi >= 0; mi--) {
+                // Decimation, anchored to the newest bucket (see colStride).
+                if ((mins.length - 1 - mi) % colStride !== 0) continue;
+                const m = mins[mi];
                 // xAt, not timeToCoordinate: these are sub-bar buckets. Snap x to
                 // the bucket's own start so the newest column lands on its candle,
                 // not in the right-axis gap ("newest bubbles render strange").
@@ -3708,16 +3817,51 @@ export default function EsChartCard({
                 const mBasis = basisAt(m.slotTs);
                 // Per-bucket scale + row filter — both frozen at print time.
                 const domainMax = runMax.get(m.slotTs) || sessMax;
+                // Bottom of the stretched domain — see the contrast note in the
+                // memo. Held a hair below the weakest shown strike so that
+                // strike draws at minSize rather than vanishing.
+                // Strictly positive: this is the bottom of a LOG domain now, so
+                // a zero floor would send the whole scale to −Infinity. A
+                // millionth of the max is six decades of headroom, far more
+                // than any real chain uses.
+                const domainMin = Math.max(
+                  Math.min(floorAt.get(m.slotTs) || domainMax * 1e-6, domainMax * 0.98),
+                  domainMax * 1e-6,
+                );
                 const shownStrikes = shownAt.get(m.slotTs);
                 const wallStrikes = wallAt.get(m.slotTs);
                 if (!shownStrikes || !wallStrikes) continue;
-                for (const cell of m.cells) {
-                  if (!shownStrikes.has(cell.strike)) continue; // as-of-bucket row filter
+                // Biggest first, so when the user does crank Size past the
+                // strike pitch the smaller rows land ON TOP of the wall rather
+                // than disappearing underneath it.
+                const drawOrder = m.cells
+                  .filter((c) => shownStrikes.has(c.strike))
+                  .sort((a, b) => Math.abs(valOf(b)) - Math.abs(valOf(a)));
+                for (const cell of drawOrder) {
                   const v = valOf(cell);
                   if (!v) continue;
                   const y = series.priceToCoordinate(cell.strike + mBasis);
                   if (y == null || y < -20 || y > h + 20) continue;
-                  const ratio = Math.min(Math.abs(v) / domainMax, 1);
+                  // ── LOG SCALE. Net GEX spans FOUR ORDERS OF MAGNITUDE ────
+                  // A real SPX chain at 11:26 ran 301.95B at the peak down to
+                  // 52.1M at the wings — a 5,800:1 range. On a linear scale the
+                  // peak takes the whole budget and everything below the top
+                  // three or four strikes lands on minSize: 151.52B and 8.68B,
+                  // an 17x difference in actual gamma, drew 4.94px vs 0.61px
+                  // while ten more rows sat indistinguishable underneath.
+                  //
+                  // Gamma is read multiplicatively — "twice the wall", "an
+                  // order of magnitude smaller" — so the scale should be too.
+                  // On log the same ladder spreads 9.50 / 7.99 / 7.93 / 7.14 /
+                  // 5.93 / 5.28 / 5.01 / 4.19 / 3.28 / 3.05 / 2.82 / 2.28 …
+                  // every row distinct, and still strictly monotone in |GEX|.
+                  //
+                  // `curve` still applies ON TOP of this: 1 = pure log, >1
+                  // pushes the mid-ladder back down, <1 lifts it.
+                  const logLo = Math.log(Math.max(domainMin, domainMax * 1e-6));
+                  const logHi = Math.log(Math.max(domainMax, Number.MIN_VALUE));
+                  const logSpan = Math.max(logHi - logLo, 1e-6);
+                  const ratio = Math.max(0, Math.min((Math.log(Math.max(Math.abs(v), Number.MIN_VALUE)) - logLo) / logSpan, 1));
                   const wallRank = wallStrikes.get(cell.strike);
                   const isHi = wallRank != null;
                   // Size tracks THIS bubble's own |GEX|, shaped by the Curve
@@ -3735,14 +3879,24 @@ export default function EsChartCard({
                   // which is rank-based and therefore cannot flatten the strikes
                   // it isn't applied to. The slider still spans 0.5–8 if you want
                   // either extreme back.
-                  let r = cfg.minSize + Math.pow(ratio, curveExp) * sizeSpan;
-                  // Rank-graduated boost: #1 wall → TOP, last highlighted → MIN.
-                  // (highlight === 1 has no span, so it takes TOP outright.)
+                  // Radius is a pure function of this strike's own |net GEX|.
+                  // No rank term, no highlight term — see the note above.
+                  // `size` scales the whole ladder; `max` (topBoost) stretches
+                  // ONLY its top.
+                  //
+                  // The weight is ratio^4, not ratio. Linear weighting gave a
+                  // mid strike at ratio 0.5 half the boost, so dragging Max
+                  // visibly moved every bubble on the chart and it read as a
+                  // second Size slider. The 4th power concentrates it hard on
+                  // the peak: ratio 0.5 gets 6% of the factor, 0.8 gets 41%,
+                  // 0.9 gets 66%, and only the top of the ladder gets the lot.
+                  const topMul = 1 + (topBoost - 1) * Math.pow(ratio, TOP_BOOST_FOCUS);
+                  const r = cfg.maxSize * (minFrac + Math.pow(ratio, curveExp) * (1 - minFrac)) * topMul;
+                  // Rank only drives how hard this row GLOWS (#1 brightest).
                   let hiT = 0;
                   if (isHi) {
                     const nWalls = Math.max(1, wallStrikes.size);
                     hiT = nWalls > 1 ? (wallRank as number) / (nWalls - 1) : 0;
-                    r *= HIGHLIGHT_BOOST_TOP - (HIGHLIGHT_BOOST_TOP - HIGHLIGHT_BOOST_MIN) * hiT;
                   }
                   // Cull only degenerate radii. This used to be < 0.5, which
                   // silently dropped every bubble once the Min-size slider went
@@ -3756,7 +3910,7 @@ export default function EsChartCard({
                   const base = v >= 0 ? [41, 182, 246] : [255, 71, 87];
                   const hot  = v >= 0 ? [200, 245, 255] : [255, 205, 210];
                   const col = isHi ? hot : base;
-                  // Oval, capped on both axes — see BUBBLE_ASPECT above.
+                  // Round mark, capped on both axes — see BUBBLE_ASPECT above.
                   const ry = Math.min(r, ryCap);
                   const rx = Math.min(r * BUBBLE_ASPECT, rxCap);
                   if (isHi) {
@@ -3764,7 +3918,7 @@ export default function EsChartCard({
                     // the #1 wall is the brightest bloom on the chart — it's
                     // just baked into a sprite instead of re-blurred per bubble.
                     // Walls are always opacity 1, so the sprite is exact.
-                    const sp = glowSprite(rx, ry, base, col, 22 - 10 * hiT);
+                    const sp = glowSprite(rx, ry, base, col, HIGHLIGHT_GLOW_TOP - (HIGHLIGHT_GLOW_TOP - HIGHLIGHT_GLOW_MIN) * hiT);
                     ctx.drawImage(sp.cv, x - sp.w / 2, y - sp.h / 2, sp.w, sp.h);
                   } else {
                     ctx.beginPath();
@@ -4345,16 +4499,22 @@ export default function EsChartCard({
 
                   <PanelSection title="Bubble size">
                     <DockSlider
-                      label="min" labelWidth={SLIDER_LABEL_W} width="auto"
-                      value={bubbleCfg.minSize} min={BUBBLE_CFG_RANGE.minSize.min} max={BUBBLE_CFG_RANGE.minSize.max} step={0.05}
-                      format={(v) => v.toFixed(2)} onChange={(v) => updateBubbleCfg({ minSize: v })}
-                      title="Min bubble radius (px) — the size of the smallest strike (can't exceed Max). Default 0.40 — lower it for more separation between the walls and the mid ladder"
+                      label="contrast" labelWidth={SLIDER_LABEL_W} width="auto"
+                      value={bubbleCfg.minSize} min={BUBBLE_CFG_RANGE.minSize.min} max={BUBBLE_CFG_RANGE.minSize.max} step={0.01}
+                      format={(v) => `${Math.round(v * 100)}%`} onChange={(v) => updateBubbleCfg({ minSize: v })}
+                      title="Contrast — the smallest strike's size as a PERCENTAGE of the largest. 5% = the weakest row is a twentieth of the wall; 50% = a flat-looking ladder. Max scales everything; this sets the spread between them"
+                    />
+                    <DockSlider
+                      label="size" labelWidth={SLIDER_LABEL_W} width="auto"
+                      value={bubbleCfg.maxSize} min={BUBBLE_CFG_RANGE.maxSize.min} max={BUBBLE_CFG_RANGE.maxSize.max} step={0.5}
+                      format={(v) => v.toFixed(1)} onChange={(v) => updateBubbleCfg({ maxSize: v })}
+                      title="Overall size (px) — the radius of the largest wall, and a straight multiplier on every other bubble. Drag it and the whole ladder scales together"
                     />
                     <DockSlider
                       label="max" labelWidth={SLIDER_LABEL_W} width="auto"
-                      value={bubbleCfg.maxSize} min={BUBBLE_CFG_RANGE.maxSize.min} max={BUBBLE_CFG_RANGE.maxSize.max} step={0.1}
-                      format={(v) => v.toFixed(1)} onChange={(v) => updateBubbleCfg({ maxSize: v })}
-                      title="Max bubble radius (px) — the size of the largest wall. With Curve above 1 only the top-of-session walls ever reach it"
+                      value={bubbleCfg.topBoost} min={BUBBLE_CFG_RANGE.topBoost.min} max={BUBBLE_CFG_RANGE.topBoost.max} step={0.05}
+                      format={(v) => `${v.toFixed(2)}×`} onChange={(v) => updateBubbleCfg({ topBoost: v })}
+                      title="Max — stretches only the top of the ladder, on top of Size. 1.00× is off. Weighted by the 4th power of the strike's rank ratio, so the peak gets the full factor, a mid strike gets ~6% of it, and the wings do not move at all"
                     />
                     <DockSlider
                       label="curve" labelWidth={SLIDER_LABEL_W} width="auto"
