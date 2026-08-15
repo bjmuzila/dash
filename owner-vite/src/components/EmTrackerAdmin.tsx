@@ -74,6 +74,26 @@ function rosterRows(ocrRows: DiscordRow[]): DiscordRow[] {
   return out;
 }
 
+// ─── Scope: Core board vs the full publish roster ────────────────────────────
+// The weekly seeder (levels-engine.seedUpcomingWeek) writes an em_tracker row
+// for EVERY symbol in server-v2/em-tickers.js — ~220 names — and the Saturday
+// evaluator scores all of them. Only the 20 below are the "core" board that the
+// main Estimated Moves page publishes and that the Discord EM image carries.
+// The Scope tabs switch every panel on this page between the two sets.
+//
+// Rows are stored under the DISPLAY label (ESM -> ESU, NQM -> NQU), but older
+// imported rows and hand-added rows can carry the raw future root, so both
+// forms are matched here.
+const CORE_ALIASES = ["ESM", "NQM", "ESU6", "NQM6", "ESU26", "NQU26"];
+const CORE_SET = new Set<string>([...TICKERS, ...BOARD_ROSTER, ...CORE_ALIASES]);
+
+/** True when a ticker belongs to the core Estimated Moves board. */
+function isCoreTicker(t: string): boolean {
+  return CORE_SET.has(String(t ?? "").trim().toUpperCase());
+}
+
+type Scope = "all" | "core";
+
 // ─── OCR sanity flagging ──────────────────────────────────────────────────────
 // Per-cell issues we know OCR produces on these boards. A flagged ticker turns
 // red in the review panel with a tooltip naming the problem(s).
@@ -221,6 +241,12 @@ export default function EmTrackerAdmin() {
   const [msg, setMsg] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
 
+  // Which slice of the roster every panel below is computed over.
+  const [scope, setScope] = useState<Scope>("all");
+  // Free-text ticker filter for the per-ticker table (the "all" list is ~220
+  // rows long, so scrolling to one name is otherwise painful).
+  const [tickerFilter, setTickerFilter] = useState("");
+
   // Discord OCR review
   const [review, setReview] = useState<DiscordPreview | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -255,13 +281,28 @@ export default function EmTrackerAdmin() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Rows narrowed to the active scope — everything derived below (weekly
+  // rollup, per-ticker expansion) reads this rather than `rows`.
+  const scopedRows = useMemo(
+    () => (scope === "core" ? rows.filter((r) => isCoreTicker(r.ticker)) : rows),
+    [rows, scope]
+  );
+
+  // How many tickers each tab covers, for the badge on the switcher.
+  const scopeCounts = useMemo(() => {
+    const all = new Set<string>([...Object.keys(history.tallies), ...summary.map((s) => s.ticker)]);
+    let core = 0;
+    all.forEach((t) => { if (isCoreTicker(t)) core++; });
+    return { all: all.size, core };
+  }, [summary, history]);
+
   // Combined record = verified historical tally (from the original spreadsheet)
   // + going-forward weeks auto-scored from OHLC each Saturday.
   const merged = useMemo(() => {
     const bySym = new Map<string, Summary>();
     summary.forEach((s) => bySym.set(s.ticker, s));
     const keys = new Set<string>([...Object.keys(history.tallies), ...summary.map((s) => s.ticker)]);
-    return Array.from(keys).map((ticker) => {
+    return Array.from(keys).filter((t) => scope === "all" || isCoreTicker(t)).map((ticker) => {
       const live = bySym.get(ticker);
       const hist = history.tallies[ticker];
       const liveHits = live?.hits ?? 0;
@@ -279,7 +320,14 @@ export default function EmTrackerAdmin() {
         latestEm: live?.latest_em ?? hist?.latest_em ?? null,
       };
     }).sort((a, b) => (b.combinedPct ?? -1) - (a.combinedPct ?? -1));
-  }, [summary, history]);
+  }, [summary, history, scope]);
+
+  // Same list, narrowed by the search box. Kept separate from `merged` so the
+  // header totals stay the scope's totals and don't move as you type.
+  const visibleMerged = useMemo(() => {
+    const q = tickerFilter.trim().toUpperCase();
+    return q ? merged.filter((m) => m.ticker.includes(q)) : merged;
+  }, [merged, tickerFilter]);
 
   const totals = useMemo(() => {
     const hits = merged.reduce((s, m) => s + m.totalHits, 0);
@@ -287,14 +335,14 @@ export default function EmTrackerAdmin() {
     return { hits, evald, pct: evald > 0 ? (hits / evald) * 100 : null };
   }, [merged]);
 
-  // ── Weekly rollup: win/loss across EVERY scored ticker, grouped by week ──────
-  // Aggregates every going-forward row (all stocks that have a row) by week, so
-  // each week shows how many names closed inside their band (win) vs broke out
+  // ── Weekly rollup: win/loss across every scored ticker IN SCOPE, by week ─────
+  // Aggregates every going-forward row in the active scope by week, so each week
+  // shows how many names closed inside their band (win) vs broke out
   // (loss). Most-recent week first; the newest scored week is surfaced as "This
   // week". Pending (not-yet-scored) rows are counted separately, never as losses.
   const weeklyStats = useMemo(() => {
     const by = new Map<string, { key: string; label: string; wins: number; losses: number; pending: number }>();
-    for (const r of rows) {
+    for (const r of scopedRows) {
       // Bucket on the week's MONDAY so a row stored against any other day of the
       // same week (e.g. the Friday) merges in instead of forming its own row.
       const key = r.week_start ? mondayOfWeek(r.week_start) : r.week_label;
@@ -311,7 +359,7 @@ export default function EmTrackerAdmin() {
     return Array.from(by.values())
       .map((w) => { const scored = w.wins + w.losses; return { ...w, scored, pct: scored > 0 ? (w.wins / scored) * 100 : null }; })
       .sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0));
-  }, [rows]);
+  }, [scopedRows]);
   // "This week" = newest week that already has a scored result (falls back to the
   // newest week overall if nothing is scored yet).
   const thisWeek = useMemo(
@@ -526,6 +574,15 @@ export default function EmTrackerAdmin() {
     return m;
   }, [rows]);
 
+  // Add/Update Week picker: the core board first, then every other ticker that
+  // already has tracker rows, so a long-tail name can be hand-corrected without
+  // editing this file.
+  const formTickerOptions = useMemo(() => {
+    const known = new Set<string>([...Object.keys(history.tallies), ...summary.map((s) => s.ticker)]);
+    const extra = Array.from(known).filter((t) => !TICKERS.includes(t)).sort();
+    return [...TICKERS, ...extra];
+  }, [summary, history]);
+
   // Per-ticker median up-level across the preview, for OCR outlier flagging.
   const reviewMedians = useMemo(
     () => (review ? buildTickerMedians(review.weeks) : {}),
@@ -558,7 +615,7 @@ export default function EmTrackerAdmin() {
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {totals.pct != null && (
             <span style={{ fontSize: 11, color: HOME_THEME.muted }}>
-              Overall&nbsp;
+              {scope === "all" ? "All" : "Core"}&nbsp;
               <b style={{ color: pctColor(totals.pct) }}>{totals.pct.toFixed(1)}%</b>
               &nbsp;({totals.hits}/{totals.evald})
             </span>
@@ -580,12 +637,61 @@ export default function EmTrackerAdmin() {
         <div style={{ ...homePanelStyle, padding: "8px 14px", fontSize: 11, color: HOME_THEME.cyan, animation: "emfade .3s" }}>{msg}</div>
       )}
 
+      {/* Scope tabs — the full publish roster vs the core Estimated Moves board.
+          Drives the weekly rollup, the header total and the per-ticker table. */}
+      <div style={{ ...homePanelStyle, padding: "10px 14px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <span style={{ ...lbl }}>Scope</span>
+        <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: 10, border: `1px solid ${HOME_THEME.border}`, background: "rgba(0,0,0,0.25)" }}>
+          {([
+            ["all", "All Tickers", scopeCounts.all],
+            ["core", "Core Board", scopeCounts.core],
+          ] as Array<[Scope, string, number]>).map(([key, label, n]) => {
+            const on = scope === key;
+            return (
+              <button
+                key={key}
+                onClick={() => { setScope(key); setExpanded(null); }}
+                style={{
+                  display: "flex", alignItems: "center", gap: 7,
+                  padding: "6px 14px", borderRadius: 8, cursor: "pointer",
+                  border: `1px solid ${on ? `${HOME_THEME.cyan}66` : "transparent"}`,
+                  background: on ? `${HOME_THEME.cyan}1f` : "transparent",
+                  color: on ? HOME_THEME.cyan : HOME_THEME.muted,
+                  fontSize: 11, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase",
+                }}
+              >
+                {label}
+                <span style={{
+                  fontSize: 10, fontWeight: 800, fontFamily: "var(--font-mono)",
+                  padding: "1px 6px", borderRadius: 999,
+                  background: on ? `${HOME_THEME.cyan}22` : "rgba(255,255,255,0.06)",
+                  color: on ? HOME_THEME.cyan : HOME_THEME.muted,
+                }}>{n}</span>
+              </button>
+            );
+          })}
+        </div>
+        <span style={{ fontSize: 10, color: HOME_THEME.muted }}>
+          {scope === "all"
+            ? "Every ticker the weekly publisher seeds and the Saturday grader scores."
+            : "The 20 names on the main Estimated Moves board (the Discord EM image)."}
+        </span>
+        <input
+          value={tickerFilter}
+          onChange={(e) => setTickerFilter(e.target.value.toUpperCase())}
+          placeholder="Filter ticker…"
+          style={{ ...homeInputStyle, width: 130, marginLeft: "auto" }}
+        />
+      </div>
+
       {/* Weekly stats — win/loss across EVERY scored stock, grouped by week */}
       {!loading && weeklyStats.length > 0 && (
         <div style={{ ...homePanelStyle, padding: "14px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ ...lbl }}>Weekly Stats</span>
-            <span style={{ fontSize: 10, color: HOME_THEME.muted }}>Win / loss across every scored stock, by week</span>
+            <span style={{ fontSize: 10, color: HOME_THEME.muted }}>
+              Win / loss by week across {scope === "all" ? `all ${scopeCounts.all} scored tickers` : `the ${scopeCounts.core} core board tickers`}
+            </span>
           </div>
 
           {thisWeek && (
@@ -736,7 +842,14 @@ export default function EmTrackerAdmin() {
           <span style={{ textAlign: "right" }}>Going-Fwd</span><span style={{ textAlign: "right" }}>Combined</span><span style={{ textAlign: "right" }}>Latest EM</span>
         </div>
         {loading && <div style={{ padding: 16, fontSize: 12, color: HOME_THEME.muted }}>Loading…</div>}
-        {!loading && merged.map((m) => {
+        {!loading && visibleMerged.length === 0 && (
+          <div style={{ padding: 16, fontSize: 12, color: HOME_THEME.muted }}>
+            {tickerFilter ? `No ticker matching “${tickerFilter}” in this scope.` : "No tracked tickers yet."}
+          </div>
+        )}
+        {/* The "all" list runs ~220 rows, so it scrolls inside the panel. */}
+        <div style={{ maxHeight: scope === "all" ? 620 : undefined, overflowY: scope === "all" ? "auto" : undefined }}>
+        {!loading && visibleMerged.map((m) => {
           const open = expanded === m.ticker;
           const trows = rowsByTicker.get(m.ticker) ?? [];
           return (
@@ -836,6 +949,7 @@ export default function EmTrackerAdmin() {
             </div>
           );
         })}
+        </div>
       </div>
 
       {/* add-week form */}
@@ -844,7 +958,7 @@ export default function EmTrackerAdmin() {
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" }}>
           <Field label="Ticker">
             <select value={fTicker} onChange={(e) => setFTicker(e.target.value)} style={{ ...homeInputStyle, minWidth: 90 }}>
-              {TICKERS.map((t) => <option key={t} value={t}>{t}</option>)}
+              {formTickerOptions.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </Field>
           <Field label="Week (Mon)">

@@ -330,6 +330,12 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/options-chain",     label: "Options Chain", emoji: "⛓️" },
   { href: "/em",                label: "Est. Moves",    emoji: "↔️" },
   { href: "/analytics",         label: "Analysis",      emoji: "📈" },
+  // Replay — the hub page: chain ladder, GEX levels, Multi Greek and the full
+  // options chain, each rewound, one tab apiece. Sits beside Analysis because
+  // it is the same reading, made after the fact. Existing users have a saved
+  // drag order in localStorage; GexGroupNav appends unknown items, so this
+  // lands at the END of their strip rather than here until they re-order.
+  { href: "/replay",            label: "Replay",        emoji: "⏱️" },
   { href: "/flow",              label: "Flow",          emoji: "🌊" },
   { href: "/es-candles",        label: "ES Candles",    emoji: "🕯️" },
   { href: "/scanner",           label: "Scanner",       emoji: "🔍" },

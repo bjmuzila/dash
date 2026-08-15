@@ -1,5 +1,99 @@
 # Changelog
 
+## 2026-08-14 - Ticker Lookup: level chips stop moving, three of them, bigger
+
+Edited: `components/pages/Analytics.tsx`.
+
+### The chips stopped moving
+
+The CB / CW / PW chips slid down the page every time the ladder above them
+gained a rung, and with a different strike count on the left than the right the
+two panes' chips didn't line up with each other either.
+
+The split now has a FIXED height (`clamp(460px, 64vh, 900px)`), the LADDER
+scrolls inside each pane (`flex: 1; minHeight: 0; overflowY: auto` - the
+`minHeight: 0` is what lets it shrink in the flex column instead of pushing the
+chips out the bottom), and `TL_CHIP_ROW`'s `marginTop: auto` pins the chips to
+the pane floor. Ladder length no longer moves anything.
+
+### Gamma flip chip removed; the other three got bigger
+
+Three chips, not four. `minmax` in the chip grid 120 -> 150px so three don't
+wrap to two rows on a narrow pane, and the type went up across the board: name
+10 -> 12, value 19 -> 26, distance and note 11 -> 13, `TL_CHIP_MIN_H` 92 -> 106.
+
+Gamma flip is still computed and still stated in the plain-language read under
+the split - it just no longer takes a quarter of the chip row.
+
+### Mockup: level colour on the bar
+
+`generated/2026-08-14-tl-level-outline-mockup.png` - the same SPX ladder three
+ways: A today (small square beside the strike), B the bar outlined in the level
+colour, C outline + glow + a faint row tint. Not applied to the page; it is a
+decision aid.
+
+One thing the render makes obvious: on a SMALL bar (CB at 7810) a 2px outline is
+most of the bar, so the mark reads as a hollow box rather than a highlighted
+value. If B or C ships, the outline wants to be 1px under some width, or drawn
+just outside the bar.
+
+## 2026-08-14 - Multi Greek: one panel's ATM row drifting out of line
+
+Edited: `app/mult-greek/MultGreekClient.tsx`.
+
+### What
+
+SPY's ATM row wandered up and down a row at a time while SPX/QQQ/TSLA sat still.
+With four ladders side by side the ATM row is the reading anchor - if it is not
+at the same height in all four, the eye has to re-find "where is price" in each
+panel before it can compare anything.
+
+### Why
+
+Two bugs stacked.
+
+1. **The latch fired on gestures that moved nothing.** `userScrolledRef` was set
+   by any `wheel` or `touchstart` over the panel body - including wheeling the
+   PAGE with the cursor parked over a panel, or wheeling one already at its end
+   stop. One stray wheel over SPY was enough.
+2. **The latch was permanent.** Once set, that panel never auto-centred again.
+   Every chain update adds and drops strikes at the ends of the ladder, so the
+   rows slid underneath a frozen `scrollTop` - one row at a time, which is
+   exactly what "moves up and down" looked like.
+
+The other three panels kept re-centring, so only the panel that caught the wheel
+drifted. Nothing about SPY specifically.
+
+### How
+
+- The latch now marks only when the gesture ACTUALLY moved the panel: capture
+  `scrollTop`, compare it a frame later. Nothing re-renders on a wheel, so a
+  change in between can only be the user. (`touchstart` -> `touchmove` for the
+  same reason - a tap is not a scroll.)
+- The latch is scoped to the ladder it was made on, keyed by
+  `atmStrike | row count | top strike`. Scroll away and the panel stays where
+  you put it; when the ladder itself changes, the position you chose no longer
+  refers to anything, so it re-centres. Deliberate re-reads survive, drift
+  cannot. The reset effect is declared BEFORE the centring effect so it clears
+  the latch in the same commit the new ladder lands in.
+- `scrollTop` is rounded. Four panels each landing on their own fraction of a
+  pixel is four rows that don't quite line up.
+
+## 2026-08-14 - Replay gets a toolbar tile
+
+Edited: `components/shared/GlobalToolbar.tsx`.
+
+`{ href: "/replay", label: "Replay", emoji: "⏱️" }` added to `NAV_ITEMS`,
+next to Analysis - it is the same reading, made after the fact.
+
+Note for anyone who wonders why it is not there: `GexGroupNav` hydrates the strip
+order from localStorage and APPENDS items it has never seen, so an existing user
+gets the tile at the END of their strip, not beside Analysis, until they drag it.
+A fresh profile sees it in the declared position.
+
+`check-routes.mjs --dry` confirms `nav /replay -> has route`; the Next shell
+handler `app/app/replay/route.ts` was already in place.
+
 ## 2026-08-14 - The identity line moves onto the cards, and Multi Greek gets one
 
 Edited: `components/pages/Analytics.tsx`, `app/mult-greek/MultGreekClient.tsx`.

@@ -1930,17 +1930,25 @@ function tlWindow(rows: TlRow[], spot: number | null): TlRow[] {
 
 // Fixed chip height: 14 (label) + 24 (value) + 15 (dist) + 15 (note)
 // + 6 (three 2px gaps) + 16 (padding) + 2 (border) = 92.
-const TL_CHIP_MIN_H = 92;
+// Taller: the chip type went up a size across the board (these are read at a
+// glance, often from across the desk or off a recording).
+const TL_CHIP_MIN_H = 106;
 
 // Row of level chips. `stretch` keeps every chip the same height, and the
 // auto top margin pins the row to the bottom of its pane so the left and
 // right panes' rows line up even when their ladders differ in length.
+// Three chips now, not four (Gamma flip removed), so each gets more room —
+// minmax raised to match, which is what stops three chips wrapping to two rows
+// on a narrow pane. `marginTop: auto` pins the row to the BOTTOM of the pane;
+// the pane is a fixed height and the ladder above it scrolls, so these sit at
+// the same y no matter how many rungs the ladder has.
 const TL_CHIP_ROW: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
   gap: 8,
   alignItems: "stretch",
   marginTop: "auto",
+  flexShrink: 0,
 };
 
 // Compact chip for a computed level: name, price, and how far spot is from it.
@@ -1960,17 +1968,17 @@ function TlLevelChip({ name, value, spot, color, note }: {
       display: "flex", flexDirection: "column", gap: 2, minWidth: 0,
       minHeight: TL_CHIP_MIN_H, boxSizing: "border-box",
     }}>
-      <span style={{ ...oneLine, fontSize: 10, lineHeight: "14px", fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color }} title={name}>{name}</span>
-      <span style={{ ...oneLine, display: "block", lineHeight: "24px" }}>
-        <Value color={value == null ? T.muted : color} size={19}>
+      <span style={{ ...oneLine, fontSize: 12, lineHeight: "16px", fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color }} title={name}>{name}</span>
+      <span style={{ ...oneLine, display: "block", lineHeight: "30px" }}>
+        <Value color={value == null ? T.muted : color} size={26}>
           {value == null ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 2 })}
         </Value>
       </span>
-      <span style={{ ...oneLine, fontSize: 11, lineHeight: "15px", fontFamily: "var(--font-mono)", color: T.text }}>
+      <span style={{ ...oneLine, fontSize: 13, lineHeight: "18px", fontFamily: "var(--font-mono)", color: T.text }}>
         {dist == null ? "—" : dist === 0 ? "at price"
           : `${Math.abs(dist).toLocaleString("en-US", { maximumFractionDigits: 2 })} ${dist > 0 ? "above" : "below"}`}
       </span>
-      <span style={{ ...oneLine, fontSize: 11, lineHeight: "15px", color: T.text }} title={note}>{note}</span>
+      <span style={{ ...oneLine, fontSize: 13, lineHeight: "18px", color: T.text }} title={note}>{note}</span>
     </div>
   );
 }
@@ -2770,7 +2778,18 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
           </div>
 
           {/* The split: picked expiry | whole board. */}
-          <div className="tl-split" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "stretch" }}>
+          {/* Fixed height, deliberately. The chip row under each ladder is the
+              thing being read at a glance, and it used to slide down the page
+              every time the ladder above it gained a rung — a different number
+              of strikes on the left than the right, and the two panes' chips
+              didn't even line up with each other. The pane height is now fixed,
+              the LADDER scrolls inside it (see the scroll wrappers below), and
+              the chips are pinned to the bottom by TL_CHIP_ROW's `marginTop:
+              auto`. Ladder length no longer moves anything. */}
+          <div className="tl-split" style={{
+            display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14,
+            alignItems: "stretch", height: "clamp(460px, 64vh, 900px)",
+          }}>
 
             {/* LEFT — one expiration */}
             <div style={{ border: `1px solid ${T.border}`, borderRadius: 14, padding: 12, display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
@@ -2790,18 +2809,22 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
                   </button>
                 ))}
               </div>
-              {leftLadder.length === 0 ? (
-                <Placeholder>
-                  {replayOn ? "Nothing recorded on this expiry in this session." : "No populated strikes on this expiry."}
-                </Placeholder>
-              ) : (
-                <TlLadder rows={leftLadder} spot={viewSpot} levels={leftLevels} missing={replayLeft?.missing ?? null} />
-              )}
+              {/* The ONLY thing that scrolls in this pane. minHeight:0 is what
+                  lets it actually shrink inside the flex column instead of
+                  pushing the chips out the bottom. */}
+              <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
+                {leftLadder.length === 0 ? (
+                  <Placeholder>
+                    {replayOn ? "Nothing recorded on this expiry in this session." : "No populated strikes on this expiry."}
+                  </Placeholder>
+                ) : (
+                  <TlLadder rows={leftLadder} spot={viewSpot} levels={leftLevels} missing={replayLeft?.missing ?? null} />
+                )}
+              </div>
               <div style={TL_CHIP_ROW}>
                 <TlLevelChip name="Core (CB)" value={leftLevels.core} spot={viewSpot} color={LEVEL_COLORS.cb} note="biggest magnet" />
                 <TlLevelChip name="Call wall" value={leftLevels.callWall} spot={viewSpot} color={LEVEL_COLORS.cw} note="ceiling" />
                 <TlLevelChip name="Put wall" value={leftLevels.putWall} spot={viewSpot} color={LEVEL_COLORS.pw} note="floor" />
-                <TlLevelChip name="Gamma flip" value={leftLevels.flip} spot={viewSpot} color={T.orange} note="pinning ↑ trending ↓" />
               </div>
             </div>
 
@@ -2832,28 +2855,29 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
                       : "Δ 1D — no end-of-day history yet"}
                 </span>
               )}
-              {rightLadder.length === 0 ? (
-                <CardState
-                  loading={replayOn ? replayLoading : bLoading}
-                  error={replayOn ? (replayErr || null) : bError}
-                  empty={replayOn
-                    ? "Nothing recorded past 0DTE in this session."
-                    : "No board-wide ladder yet (nothing listed past 0DTE)."}
-                />
-              ) : (
-                <TlLadder
-                  rows={rightLadder}
-                  spot={viewSpot}
-                  levels={rightLevels}
-                  changes={replayOn ? null : rightChanges}
-                  missing={replayRight?.missing ?? null}
-                />
-              )}
+              <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
+                {rightLadder.length === 0 ? (
+                  <CardState
+                    loading={replayOn ? replayLoading : bLoading}
+                    error={replayOn ? (replayErr || null) : bError}
+                    empty={replayOn
+                      ? "Nothing recorded past 0DTE in this session."
+                      : "No board-wide ladder yet (nothing listed past 0DTE)."}
+                  />
+                ) : (
+                  <TlLadder
+                    rows={rightLadder}
+                    spot={viewSpot}
+                    levels={rightLevels}
+                    changes={replayOn ? null : rightChanges}
+                    missing={replayRight?.missing ?? null}
+                  />
+                )}
+              </div>
               <div style={TL_CHIP_ROW}>
                 <TlLevelChip name="Core (CB)" value={rightLevels.core} spot={viewSpot} color={LEVEL_COLORS.cb} note="biggest magnet" />
                 <TlLevelChip name="Call wall" value={rightLevels.callWall} spot={viewSpot} color={LEVEL_COLORS.cw} note="ceiling" />
                 <TlLevelChip name="Put wall" value={rightLevels.putWall} spot={viewSpot} color={LEVEL_COLORS.pw} note="floor" />
-                <TlLevelChip name="Gamma flip" value={rightLevels.flip} spot={viewSpot} color={T.orange} note="pinning ↑ trending ↓" />
               </div>
             </div>
           </div>

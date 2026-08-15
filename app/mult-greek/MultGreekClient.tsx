@@ -899,23 +899,63 @@ function TickerPanel({
       }))
     : null;
 
-  // Auto-scroll to ATM
+  // ── Auto-scroll to ATM ─────────────────────────────────────────────────────
+  //
+  // The ATM row is the reading anchor. With four panels side by side it has to
+  // sit at the SAME height in all four, or the eye has to re-find "where is
+  // price" in each one before it can compare anything.
+  //
+  // The old rule was a permanent one-way latch: the first wheel or touch over a
+  // panel switched auto-centring off for that panel for the rest of the session.
+  // One stray wheel — parking the cursor over SPY while scrolling the page is
+  // enough, and the listener fires even when the panel itself does not scroll —
+  // and that one panel stopped re-centring. Every chain update then adds or
+  // drops strikes at the ends of its ladder, sliding the rows underneath a
+  // frozen scrollTop. That is exactly the reported symptom: SPY wandering a row
+  // at a time while the other three sat still.
+  //
+  // The latch is now scoped to the ladder it was made on. Scroll away and the
+  // panel stays where you put it; when the ladder ITSELF changes — different ATM
+  // strike, different row count, different top strike — the position you chose
+  // no longer refers to anything, so the panel re-centres. Deliberate re-reads
+  // survive, drift cannot.
+  const anchorKey = `${computed?.atmStrike ?? 0}|${computed?.rows.length ?? 0}|${computed?.rows[0]?.strike ?? 0}`;
+  const anchorRef = useRef("");
+  // Declared BEFORE the centring effect so it clears the latch in the same
+  // commit the new ladder lands in — effects run in declaration order.
+  useEffect(() => {
+    if (anchorRef.current === anchorKey) return;
+    anchorRef.current = anchorKey;
+    userScrolledRef.current = false;
+  }, [anchorKey]);
+
   useEffect(() => {
     if (!bodyRef.current || !computed?.atmStrike || userScrolledRef.current) return;
     const el = bodyRef.current.querySelector(`[data-strike="${computed.atmStrike}"]`) as HTMLElement | null;
     if (el) {
       const top = el.offsetTop - bodyRef.current.clientHeight / 2 + el.offsetHeight / 2;
-      bodyRef.current.scrollTop = Math.max(0, top);
+      // Round: a fractional scrollTop lands the row a sub-pixel off, and four
+      // panels each off by their own fraction is four rows that don't line up.
+      bodyRef.current.scrollTop = Math.max(0, Math.round(top));
     }
   });
 
   useEffect(() => {
     const body = bodyRef.current;
     if (!body) return;
-    const mark = () => { userScrolledRef.current = true; };
+    // Latch only on a gesture that ACTUALLY moved this panel. The old version
+    // marked on the event alone, so wheeling the PAGE with the cursor parked
+    // over a panel — or wheeling one that is already at its end stop — froze
+    // that panel's ATM anchor without moving it a pixel. Compare scrollTop
+    // across a frame instead. Nothing re-renders on a wheel, so the only thing
+    // that can have moved it in between is the user.
+    const mark = () => {
+      const before = body.scrollTop;
+      requestAnimationFrame(() => { if (body.scrollTop !== before) userScrolledRef.current = true; });
+    };
     body.addEventListener("wheel", mark, { passive: true });
-    body.addEventListener("touchstart", mark, { passive: true });
-    return () => { body.removeEventListener("wheel", mark); body.removeEventListener("touchstart", mark); };
+    body.addEventListener("touchmove", mark, { passive: true });
+    return () => { body.removeEventListener("wheel", mark); body.removeEventListener("touchmove", mark); };
   }, []);
 
   // During capture (rows trimmed to a compact window), collapse to hug the
