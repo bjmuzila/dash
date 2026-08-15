@@ -2089,9 +2089,14 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null }: {
 //                  symbols inside it without the host yanking it back.
 //   embedded       drops the full-width grid span, which is meaningless outside
 //                  this page's card grid.
-export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
+//   initialReplay  open already rewound. /replay mounts this as a replay tab,
+//                  where making the user press ⏱ Replay every time is asking
+//                  them to confirm the thing they navigated to. Initial state
+//                  only — the toggle still works normally after mount.
+export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, initialReplay = false }: {
   initialSymbol?: string;
   embedded?: boolean;
+  initialReplay?: boolean;
 } = {}) {
   const today = etDateISO();
   const [sym, setSym] = useState(() => (initialSymbol || "SPX").trim().toUpperCase() || "SPX");
@@ -2136,7 +2141,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
   // the user's intent; every derived value keys off the FRAME, so turning it on
   // for a symbol with no recorded history shows an explicit empty state rather
   // than a silently blank card.
-  const [replayOn, setReplayOn] = useState(false);
+  const [replayOn, setReplayOn] = useState(initialReplay);
   const [replayDates, setReplayDates] = useState<string[]>([]);
   const [replayDate, setReplayDate] = useState("");
   const [replaySession, setReplaySession] = useState<TlReplaySession | null>(null);
@@ -2530,6 +2535,11 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
     : bLoading ? "sweeping the board…"
     : `${frontExpiries.length} front expirations · excl. 0DTE · full board unavailable`;
 
+  // The identity line renders the same numbers the ladders are drawn from, so
+  // it is only honest when the ladders are actually up. While loading, errored
+  // or empty the card shows its state and the header stays a plain title.
+  const showStatus = !gateLoading && !gateError && hasAny;
+
   // One button, whole card: the base chain, the listing, and the board sweep.
   const refresh = useRefreshButton(useCallback(async () => {
     await Promise.all([reloadChain(), reloadExps(), loadBoard()]);
@@ -2537,13 +2547,70 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
 
   return (
     <Card variant="budget" padding={16} style={{ gridColumn: embedded ? undefined : "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
-      <Row style={{ flexWrap: "wrap" }}>
-        <span style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+      {/* ── The identity line ─────────────────────────────────────────────
+          Title, then everything that says WHAT is on screen: spot, gamma
+          regime, ticker, expiry + DTE, the session date, the replay clock, and
+          what the ex-0DTE board actually covers.
+
+          These used to be three separate rows — a spot/gamma row under the
+          controls, a capture strip above the ladders, a coverage caption over
+          the right ladder. Same facts in three places, and a screen recording
+          had to include all three to be self-describing. One line now, at the
+          top, so a capture that includes the header includes the context. */}
+      <Row style={{ flexWrap: "wrap", alignItems: "center", rowGap: 8 }}>
+        <span style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", minWidth: 0 }}>
           <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
             Ticker Lookup
           </span>
           <span style={{ fontSize: 22, fontWeight: 800, color: T.text }}>${sym}</span>
           <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.text, opacity: 0.6 }}>GEX levels</span>
+
+          {showStatus && (
+            <>
+              {/* Rewound, this is the spot RECORDED at that sweep — the live
+                  quote would put today's price on a past session's ladder. */}
+              <Value color={T.text} size={22}>
+                {viewSpot == null ? "—" : viewSpot.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+              </Value>
+              <span style={{
+                fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase",
+                color: positiveGamma ? POS_GREEN : T.red,
+                border: `1px solid ${positiveGamma ? POS_GREEN : T.red}`,
+                borderRadius: 999, padding: "3px 10px",
+              }}>
+                {positiveGamma ? "Positive gamma" : "Negative gamma"}
+              </span>
+              {/* Ticker · expiry + DTE · the session on screen · the clock.
+                  DTE counts from the replayed date while rewound, same rule as
+                  the expiry pills — off today it would label the wrong one. */}
+              <span style={{
+                fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700,
+                letterSpacing: "0.06em", textTransform: "uppercase", color: T.text, opacity: 0.78,
+              }}>
+                {[
+                  sym,
+                  viewActiveExpiry ? tlExpiryChip(viewActiveExpiry, replayOn && replayDate ? replayDate : today) : null,
+                  replayOn ? (replayDate || null) : today,
+                  replayOn && replayClock != null ? `${fmtTlReplayClock(replayClock)} ET` : null,
+                ].filter(Boolean).join(" · ")}
+              </span>
+              {/* What the ex-0DTE board covers — the right ladder's caption,
+                  moved up here so it reads as part of the same statement. */}
+              <span style={{
+                fontSize: 11, fontFamily: "var(--font-mono)",
+                color: replayOn || boardIsFull ? T.text : T.orange,
+                opacity: replayOn || boardIsFull ? 0.6 : 0.85,
+              }}>
+                {boardLabel}
+              </span>
+              {/* Live-only: both are priced off live marks, so they read "—"
+                  while rewound rather than putting today's premium on a
+                  three-day-old ladder. */}
+              <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.text, opacity: 0.6 }}>
+                {`± Move ${atm.move == null ? "—" : `±${atm.move.toFixed(2)}`} · ATM IV ${atm.iv == null ? "—" : `${(atm.iv * 100).toFixed(1)}%`}`}
+              </span>
+            </>
+          )}
         </span>
         {/* Ticker menu + one refresh for the whole card. The picker is the same
             component the Ticker Levels card uses — the searchable, star-to-
@@ -2575,9 +2642,31 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
               fontWeight: 800,
             }}
           >⏱ Replay</button>
+          {/* Brand, on the toolbar with the rest of the controls.
+              `crossOrigin` so html2canvas exports bake it in rather than
+              tainting the canvas — same handling the footer uses. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/cb-edge-logo.png"
+            alt="CB Edge"
+            crossOrigin="anonymous"
+            style={{ height: 28, width: "auto", display: "block", flexShrink: 0, opacity: 0.95, marginLeft: 2 }}
+          />
         </span>
       </Row>
 
+      {/* Quick row + whatever the trader looked up last. */}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {[...TL_QUICK, ...recent.filter((r) => !TL_QUICK.includes(r))].map((s) => (
+          <button key={s} onClick={() => lookup(s)} style={s === sym ? homeButtonStyle : homeSecondaryButtonStyle}>{s}</button>
+        ))}
+      </div>
+
+
+      {/* The replay transport sits UNDER the ticker choices, not above
+          them: picking a symbol reloads the session, so the control that
+          changes what is being replayed belongs before the one that scrubs
+          through it. Reading order now matches cause and effect. */}
       {/* ── Replay bar ────────────────────────────────────────────────────
           Session picker · transport · scrubber · speed · the clock being
           shown, then the coverage caveats said OUT LOUD. The ladders below
@@ -2670,13 +2759,6 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
         </div>
       )}
 
-      {/* Quick row + whatever the trader looked up last. */}
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {[...TL_QUICK, ...recent.filter((r) => !TL_QUICK.includes(r))].map((s) => (
-          <button key={s} onClick={() => lookup(s)} style={s === sym ? homeButtonStyle : homeSecondaryButtonStyle}>{s}</button>
-        ))}
-      </div>
-
       {gateLoading || gateError || !hasAny ? (
         <CardState
           loading={gateLoading}
@@ -2685,64 +2767,11 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
         />
       ) : (
         <>
-          {/* One ticker, one spot — both panes are priced off this number. */}
-          <Row style={{ flexWrap: "wrap", gap: 12 }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-              {/* Rewound, this is the spot RECORDED at that sweep — the live
-                  quote would put today's price on a past session's ladder. */}
-              <Value color={T.text} size={26}>
-                {viewSpot == null ? "—" : viewSpot.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-              </Value>
-              <span style={{
-                fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase",
-                color: positiveGamma ? POS_GREEN : T.red,
-                border: `1px solid ${positiveGamma ? POS_GREEN : T.red}`,
-                borderRadius: 999, padding: "3px 10px",
-              }}>
-                {positiveGamma ? "Positive gamma" : "Negative gamma"}
-              </span>
-            </div>
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <Stat label="± Move" value={atm.move == null ? "—" : `±${atm.move.toFixed(2)}`} size={18} />
-              <Stat label="ATM IV" value={atm.iv == null ? "—" : `${(atm.iv * 100).toFixed(1)}%`} color={T.orange} size={18} />
-            </div>
-          </Row>
-
+          {/* Spot, gamma, ticker, expiry, session date, clock and the board
+              coverage all moved to the identity line in the card header, and
+              the logo went with them onto the toolbar. What used to be three
+              rows between the controls and the ladders is now zero. */}
           <div style={divider} />
-
-          {/* Capture mark — symbol + expiry left, brand right.
-              A screen recording of this card gets cropped to the two ladders,
-              and everything that says WHAT is on screen (the symbol picker, the
-              replay bar) sits above that crop. So the identity rides directly
-              on top of the split: any capture that includes the ladders now
-              includes the ticker, the expiration they are drawn for, and the
-              mark. `crossOrigin` on the logo so html2canvas exports bake it in
-              rather than tainting the canvas — same handling the footer uses. */}
-          <div style={{
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-            gap: 12, flexWrap: "wrap", marginBottom: 10,
-          }}>
-            <span style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 20, fontWeight: 800, letterSpacing: "0.1em", color: T.cyan }}>{sym}</span>
-              <span style={{
-                fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
-                fontFamily: "var(--font-mono)", color: T.text, opacity: 0.75,
-              }}>
-                {/* The LEFT pane's expiry — the one thing on the card that is a
-                    single expiration. DTE counts from the replayed date while
-                    rewound, same rule as the pills. */}
-                {viewActiveExpiry ? tlExpiryChip(viewActiveExpiry, replayOn && replayDate ? replayDate : today) : "—"}
-                {replayOn && replayDate ? ` · replay ${replayDate}` : ""}
-              </span>
-            </span>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/cb-edge-logo.png"
-              alt="CB Edge"
-              crossOrigin="anonymous"
-              style={{ height: 30, width: "auto", display: "block", flexShrink: 0, opacity: 0.95 }}
-            />
-          </div>
 
           {/* The split: picked expiry | whole board. */}
           <div className="tl-split" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "stretch" }}>
@@ -2788,9 +2817,9 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false }: {
                 </span>
                 <Stat label="Net GEX" value={fmtBig(rightLevels.net)} color={rightLevels.net >= 0 ? POS_GREEN : T.red} size={16} />
               </Row>
-              <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: boardIsFull ? T.text : T.orange, opacity: boardIsFull ? 0.6 : 0.85 }}>
-                {boardLabel}
-              </span>
+              {/* `boardLabel` used to print here. It is on the identity line in
+                  the card header now — one statement of what is on screen, in
+                  one place, and inside any capture that includes the header. */}
               {/* What the Δ column is measured against, said out loud. The
                   baseline is the previous SNAPSHOT date, which after a holiday
                   or a missed run is not calendar yesterday — printing it is the

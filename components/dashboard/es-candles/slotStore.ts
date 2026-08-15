@@ -52,24 +52,22 @@ export type BubbleCfg = { topStrikes: number; highlight: number; minSize: number
 // changing how many walls you highlight can never change what the sizes say.
 //
 // The size scale is LOG over a contrast-stretched domain (see EsChartCard).
-// Net GEX runs four orders of magnitude across a chain — 301.95B at the peak
-// against 52.1M at the wings on a real 11:26 SPX book — so a linear scale gives
-// the peak everything and pins the other dozen rows on minSize. Log spreads all
-// of them and is how gamma is actually read ("twice the wall", "an order of
-// magnitude smaller").
+// Net GEX runs four orders of magnitude across a chain, so a linear scale gives
+// the peak everything and pins the rest on the floor.
 //
-// `curve` is the exponent applied ON TOP of the log ratio: 1 = pure log, above
-// 1 pushes the mid-ladder back down, below 1 lifts it.
+// ── Defaults set from the reference platforms, not from theory ──────────────
+// Bullflow, SpotGamma and the SPY GEX overlay were all put side by side, and
+// they agree on things this chart had been fighting:
 //
-// topStrikes 16, not 6: with size carrying the magnitude and colour carrying
-// the emphasis, more of the chain can be on screen without it turning to mush —
-// the small strikes simply draw small and dim.
-// maxSize 14: the top of the ladder was too timid. minSize stays low, so the
-// span widens upward — the walls grow, the wings do not. The geometric row cap
-// in EsChartCard still bounds it (a mark can never exceed half the strike
-// pitch), so a big number here is safe: it just means the walls use whatever
-// vertical room the current zoom actually has.
-export const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 16, highlight: 2, minSize: 0.06, maxSize: 14, topBoost: 1, curve: 1, brightness: 60 };
+//   • FEW LEVELS. Three to six rows, never sixteen. The sparsity is the design.
+//   • THIN ROWS. 4-8px dots. None of them use a fat mark for a big wall.
+//   • SIZE IS THE JUNIOR CHANNEL. Sizes differ between rows, but only mildly —
+//     what separates the dominant level is COLOUR and GLOW, not radius. A whole
+//     day was spent trying to make size carry a load it was never meant to.
+//   • EVERY LEVEL IS A FULL ROW across the session. The row IS the level.
+//
+// So: 5 strikes, 1 highlight, a 5px top mark, gentle contrast, no top boost.
+export const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 5, highlight: 1, minSize: 0.35, maxSize: 5, topBoost: 1, curve: 1, brightness: 45 };
 export const BUBBLE_CFG_KEYS: Array<keyof BubbleCfg> = ["topStrikes", "highlight", "minSize", "maxSize", "topBoost", "curve", "brightness"];
 
 // Slider bounds, single-sourced so the UI and the restore clamp can't drift.

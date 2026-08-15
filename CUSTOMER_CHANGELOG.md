@@ -4,6 +4,10 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 
 
+## Friday 8/14/2026
+
+* **The Vol GEX Flow tab can now show +GEX %.** Flip the new **+GEX %** switch and the chart swaps from dollars to the share of the chain sitting in positive gamma through the day — green above the 50% line, red below — so you can see whether the board built into long gamma or bled out of it, instead of only what it is right now.
+
 ## Thursday 8/13/2026
 
 * **New Levels page.** Every ticker in the scanner universe on one board — each shows its Core Bullseye and where price sits between the call and put walls — and clicking any of them pins its full ladder to one of four slots at the top, which stay put between visits.

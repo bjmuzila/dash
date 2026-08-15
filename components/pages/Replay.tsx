@@ -168,7 +168,16 @@ export default function ReplayPage() {
         <div style={{ padding: "12px clamp(14px, 2vw, 24px) 0", flexShrink: 0 }}>{tabBar}</div>
         <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           <Suspense fallback={fallback}>
-            {active.id === "mult-greek" ? <MultGreekClient /> : <OptionsChainPage />}
+            {/* Every tab opens ALREADY REWOUND. This page exists to replay —
+                making the user press the page's own replay toggle first is
+                asking them to confirm the thing they navigated to. It is
+                initial state, so each page's toggle still works normally.
+                Options Chain also opens scoped to 0DTE: this tab is for
+                watching the front contract move, and "all expiries" is one
+                click away on its own scope control. */}
+            {active.id === "mult-greek"
+              ? <MultGreekClient initialReplay />
+              : <OptionsChainPage initialReplay initialReplayScope="0dte" />}
           </Suspense>
         </div>
       </div>
@@ -183,7 +192,9 @@ export default function ReplayPage() {
           {/* No symbol prop: ChainReplay picks MSFT if it was recorded and the
               first recorded symbol otherwise, and carries its own picker. A
               hardcoded default here would just be a second place to be wrong. */}
-          {active.id === "chain-ladder" ? <ChainReplay embedded /> : <TickerLookupCard embedded />}
+          {active.id === "chain-ladder"
+            ? <ChainReplay embedded />
+            : <TickerLookupCard embedded initialReplay />}
         </Suspense>
       </Card>
     </PageShell>

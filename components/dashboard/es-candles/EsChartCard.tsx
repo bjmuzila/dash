@@ -3840,6 +3840,12 @@ export default function EsChartCard({
                 for (const cell of drawOrder) {
                   const v = valOf(cell);
                   if (!v) continue;
+                  // (Walls draw a FULL ROW, same as every other strike. A
+                  // single-bubble-per-wall variant was tried and reverted:
+                  // every comparable platform — Bullflow, SpotGamma, the SPY
+                  // GEX overlay — draws each level as a continuous row of dots
+                  // across the session. The row IS the level; one dot at the
+                  // right edge reads as an annotation, not a level.)
                   const y = series.priceToCoordinate(cell.strike + mBasis);
                   if (y == null || y < -20 || y > h + 20) continue;
                   // ── LOG SCALE. Net GEX spans FOUR ORDERS OF MAGNITUDE ────

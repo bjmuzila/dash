@@ -19,6 +19,7 @@ import { edgeCatchAmdEmail, edgeCatchAmdText, EDGE_CATCH_AMD_SUBJECT } from "@/l
 import { noPantsPromoEmail, noPantsPromoText, NOPANTS_PROMO_SUBJECT } from "@/lib/emails/nopants-promo";
 import { noPantsExtensionEmail, noPantsExtensionText, NOPANTS_EXTENSION_SUBJECT } from "@/lib/emails/nopants-extension";
 import { flowDialedInEmail, flowDialedInText, FLOW_DIALED_IN_SUBJECT } from "@/lib/emails/flow-dialed-in";
+import { mobileFeedbackEmail, mobileFeedbackText, MOBILE_FEEDBACK_SUBJECT } from "@/lib/emails/mobile-feedback";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -163,6 +164,13 @@ function buildTemplates(): Template[] {
       subject: FLOW_DIALED_IN_SUBJECT,
       html: flowDialedInEmail(),
       text: flowDialedInText(),
+    },
+    {
+      id: "mobile-feedback",
+      label: "📱 Mobile site feedback ask — what pages to add / adjust",
+      subject: MOBILE_FEEDBACK_SUBJECT,
+      html: mobileFeedbackEmail(),
+      text: mobileFeedbackText(),
     },
   ];
 }

@@ -1271,6 +1271,7 @@ export function MultGreekClient({
   isStatic = false,
   initialSnapshot = null,
   snapshotTs = null,
+  initialReplay = false,
 }: {
   /** Unpaid signed-in viewer: render from a frozen SPX/SPY/QQQ snapshot, never
    *  hit the live /api/chains loop. The delayed snapshot only carries ONE
@@ -1279,6 +1280,10 @@ export function MultGreekClient({
   initialSnapshot?: MultGreekSnapshot | null;
   /** epoch ms the current snapshot was captured, for the "delayed" banner. */
   snapshotTs?: number | null;
+  /** Mount already rewound. /replay mounts this page as its Multi Greek tab,
+   *  where making the user press REPLAY first is asking them to confirm the
+   *  thing they navigated to. Initial state only — the toggle still works. */
+  initialReplay?: boolean;
 } = {}) {
   const [expirations, setExpirations] = useState<Expiry[]>([]);
   const [activeExpiry, setActiveExpiry] = useState<string | null>(null);
@@ -1370,7 +1375,7 @@ export function MultGreekClient({
   // recorded. `replayOn` is the user's INTENT; each panel keys off ITS OWN
   // frame, so a ticker with nothing recorded shows an empty panel beside three
   // that play, instead of the page refusing to enter replay at all.
-  const [replayOn, setReplayOn] = useState(false);
+  const [replayOn, setReplayOn] = useState(initialReplay);
   const [replayDates, setReplayDates] = useState<string[]>([]);
   const [replayDate, setReplayDate] = useState("");
   const [replaySessions, setReplaySessions] = useState<Record<string, MgReplaySession>>({});

@@ -1560,6 +1560,8 @@ export default function OptionsChainPage({
   expiryCount,
   ticker: externalTicker,
   showGrandTotal = true,
+  initialReplay = false,
+  initialReplayScope = "all",
 }: {
   // "sequential" (default, standalone /options-chain route): next EXP_COLUMNS
   // expirations starting at the user's selected date. "key" (/new-home embed):
@@ -1577,6 +1579,16 @@ export default function OptionsChainPage({
   // Hide the toolbar's "Total <greek>" readout. The /home embed passes false so
   // the compact chain panel doesn't show a per-ticker grand-total GEX.
   showGrandTotal?: boolean;
+  // Mount already rewound. /replay mounts this page as its Options Chain tab,
+  // where making the user press ▶ Replay first is asking them to confirm the
+  // thing they navigated to. Initial state only — the toolbar toggle still
+  // works, and in-grid replay still needs isStandalone (no external ticker).
+  initialReplay?: boolean;
+  // Which expiries the rewound grid opens on. The page's own default is "all"
+  // (entering replay should look like the live chain, with the 0DTE collapse an
+  // explicit choice); /replay passes "0dte" because that tab exists to watch
+  // the front contract move.
+  initialReplayScope?: ReplayScope;
 } = {}) {
   // Number of sequential columns to render (default 14; embeds may narrow it).
   const seqColumns = Math.max(1, Math.floor(expiryCount ?? EXP_COLUMNS));
@@ -1672,7 +1684,7 @@ export default function OptionsChainPage({
   // whether there is actually a frame to render — the grid keys off the frame,
   // never off the intent, so turning replay on for a symbol with no recorded
   // history shows an explicit empty state instead of a silently blank chain.
-  const [replayOn, setReplayOn] = useState(false);
+  const [replayOn, setReplayOn] = useState(initialReplay);
   const [replayDates, setReplayDates] = useState<string[]>([]);
   const [replayDate, setReplayDate] = useState("");
   const [replayFrames, setReplayFrames] = useState<ReplayFrame[]>([]);
@@ -1681,10 +1693,11 @@ export default function OptionsChainPage({
   const [replaySpeed, setReplaySpeed] = useState<number>(1);
   const [replayLoading, setReplayLoading] = useState(false);
   const [replayErr, setReplayErr] = useState("");
-  // Which expiries the rewound grid renders — see REPLAY_SCOPES. Defaults to
-  // "all" so entering replay looks like the live chain (every expiry + Total)
-  // and the 0DTE collapse is an explicit choice rather than a surprise.
-  const [replayScope, setReplayScope] = useState<ReplayScope>("all");
+  // Which expiries the rewound grid renders — see REPLAY_SCOPES. The page's own
+  // default is "all" so entering replay looks like the live chain (every expiry
+  // + Total) and the 0DTE collapse is an explicit choice rather than a surprise.
+  // A host can open on a different scope: /replay passes "0dte".
+  const [replayScope, setReplayScope] = useState<ReplayScope>(initialReplayScope);
   // What the greek/change tabs were before replay took them over, so leaving
   // replay puts the page back where the user left it instead of stranding them
   // on GEX/Live.

@@ -9,7 +9,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { HOME_THEME, LIGHT_BLUE, classicCardAccentStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE, ES_CANDLE_UP, ES_CANDLE_DOWN, classicCardAccentStyle } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { ScoreInfo } from "@/components/shared/InfoTip";
@@ -1492,59 +1492,111 @@ const outcomeKey = (o: OutcomeRow) => `${o.symbol}|${o.expiry}|${o.strike}`;
  * are the contract's daily bars; today's point is the 15-minute probe, so the
  * last dot moves intraday.
  *
+ * This is the SAME treatment as the owner site's /owner/probe card, ported
+ * verbatim onto the tracked-flag day series: ice-blue line over a fading wash,
+ * three gridlines with a right-hand price rail, a dashed reference at the price
+ * the contract was flagged at, the session high marked green and the low red,
+ * the last mark in a pill tinted by P/L, and a hover crosshair whose readout
+ * carries the date, the price and the $ P/L per contract.
+ *
+ * Price only, exactly like the owner card — spot is NOT drawn. It would need a
+ * second independent scale (the contract is worth a couple of dollars, spot is
+ * worth hundreds) and the day-by-day table directly below already carries spot,
+ * spot Δ% and the contract Δ$/Δ% for every row on this chart.
+ *
  * Hand-rolled SVG rather than a chart library: this renders inside a table cell
  * that is already inside two other tables, and every charting lib on this page
  * wants a measured container. A viewBox scales without measuring anything.
- *
- * Two independent scales — the contract is worth a couple of dollars and spot
- * is worth tens or hundreds, so a shared axis would flatten the contract into
- * the baseline. Contract owns the left axis and the solid line; spot is the
- * dashed reference on the right. Only the SHAPES are comparable, not the levels.
  */
 function ProbeChart({ days, touchedDate }: { days: OutcomeDetailDay[]; touchedDate: string | null }) {
-  const W = 720, H = 168;
-  const padL = 52, padR = 52, padT = 14, padB = 24;
+  const W = 960, H = 340, PADL = 12, PADR = 78, PADT = 26, PADB = 30;
+  // Same three colors the owner card draws with, sourced from the theme rather
+  // than hardcoded: HOME_THEME.green IS the ice blue, and the candle pair IS
+  // the saturated green/red that card marks its high and low with.
+  const ICE = HOME_THEME.green, GRN = ES_CANDLE_UP, RED = ES_CANDLE_DOWN;
+  const MONO = '"Courier New", monospace';
+  const [hover, setHover] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
 
   const n = days.length;
-  const cVals = days.map((d) => (d.contractClose != null && Number.isFinite(d.contractClose) ? d.contractClose : null));
-  const sVals = days.map((d) => (Number.isFinite(d.spot) ? d.spot : null));
-  const known = cVals.filter((v): v is number => v != null);
-  if (!known.length) return null;
+  // A no-trade day has no bar. Those days keep their slot on the x axis (the
+  // timeline stays even) but carry no point, so the line BREAKS there rather
+  // than drawing a straight segment across a gap that never happened.
+  const pts = days
+    .map((d, i) => ({ i, date: d.date, v: d.contractClose }))
+    .filter((p) => p.v != null && Number.isFinite(p.v)) as { i: number; date: string; v: number }[];
 
-  const x = (i: number) => (n <= 1 ? (padL + W - padR) / 2 : padL + (i / (n - 1)) * (W - padL - padR));
-  const scale = (vals: (number | null)[]) => {
-    const ok = vals.filter((v): v is number => v != null);
-    const lo = Math.min(...ok), hi = Math.max(...ok);
-    const pad = hi === lo ? Math.max(Math.abs(hi) * 0.05, 0.01) : (hi - lo) * 0.12;
-    const min = lo - pad, max = hi + pad;
-    return {
-      lo, hi,
-      y: (v: number) => padT + (1 - (v - min) / (max - min)) * (H - padT - padB),
-    };
-  };
-  const c = scale(cVals);
-  const s = scale(sVals);
+  if (pts.length < 2) {
+    return (
+      <div style={{
+        padding: "34px 0", textAlign: "center", fontFamily: MONO, fontSize: 13,
+        color: HOME_THEME.text, opacity: 0.5, marginBottom: 14,
+      }}>
+        Not enough history yet — the contract needs a second session on the tape.
+      </div>
+    );
+  }
 
-  // A no-trade day has no bar, so the line BREAKS there rather than drawing a
-  // straight segment across a gap that never happened.
-  const segments = (vals: (number | null)[], y: (v: number) => number) => {
-    const out: string[] = [];
-    let cur: string[] = [];
-    vals.forEach((v, i) => {
-      if (v == null) { if (cur.length > 1) out.push(cur.join(" ")); cur = []; return; }
-      cur.push(`${cur.length ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+  const ys = pts.map((p) => p.v);
+  const hi = Math.max(...ys), lo = Math.min(...ys);
+  const hiP = pts[ys.indexOf(hi)], loP = pts[ys.indexOf(lo)];
+
+  // The contract's price on the day it was flagged is this chart's break-even:
+  // it is what you would have paid to take the flag. It has to stay on-canvas
+  // or the line the P/L is measured from reads as off-screen.
+  const entry = pts[0].v;
+  let minY = Math.min(lo, entry), maxY = Math.max(hi, entry);
+  if (minY === maxY) { minY -= 1; maxY += 1; }
+  const gpad = (maxY - minY) * 0.1; minY -= gpad; maxY += gpad;
+
+  const sx = (i: number) => PADL + (n <= 1 ? 0 : i / (n - 1)) * (W - PADL - PADR);
+  const sy = (v: number) => H - PADB - ((v - minY) / (maxY - minY || 1)) * (H - PADT - PADB);
+
+  const segs: { i: number; v: number }[][] = [];
+  {
+    let cur: { i: number; v: number }[] = [];
+    days.forEach((d, i) => {
+      const v = d.contractClose;
+      if (v == null || !Number.isFinite(v)) { if (cur.length) segs.push(cur); cur = []; return; }
+      cur.push({ i, v });
     });
-    if (cur.length > 1) out.push(cur.join(" "));
-    return out;
-  };
+    if (cur.length) segs.push(cur);
+  }
+  const dOf = (s: { i: number; v: number }[]) =>
+    s.map((p, k) => `${k ? "L" : "M"}${sx(p.i).toFixed(1)},${sy(p.v).toFixed(1)}`).join(" ");
+  const areaOf = (s: { i: number; v: number }[]) =>
+    s.length < 2 ? "" : `${dOf(s)} L${sx(s[s.length - 1].i).toFixed(1)},${H - PADB} L${sx(s[0].i).toFixed(1)},${H - PADB} Z`;
 
-  const first = known[0], last = known[known.length - 1];
+  const first = pts[0].v, last = pts[pts.length - 1].v;
   const pct = first > 0 ? ((last - first) / first) * 100 : null;
-  const up = last >= first;
-  const lineColor = up ? HOME_THEME.green : HOME_THEME.red;
+  const up = last >= entry;
+  const pillFill = up ? GRN : RED;
   const touchIdx = touchedDate ? days.findIndex((d) => d.date === ymd(touchedDate)) : -1;
 
-  const axisLabel: React.CSSProperties = { fontSize: 10, fill: HOME_THEME.text, opacity: 0.6 } as React.CSSProperties;
+  // Dates arrive as YYYY-MM-DD. Parse as UTC noon so a local timezone west of
+  // Greenwich cannot roll the label back a day.
+  const fmtD = (d: string) => {
+    const t = Date.parse(`${d}T12:00:00Z`);
+    return Number.isFinite(t) ? new Date(t).toLocaleDateString([], { month: "short", day: "numeric" }) : d;
+  };
+
+  const chartId = `probe-${days[0]?.date ?? "x"}-${n}`;
+
+  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const el = svgRef.current;
+    if (!el) return;
+    const box = el.getBoundingClientRect();
+    const vx = ((e.clientX - box.left) / box.width) * W;               // client px → viewBox units
+    const raw = ((vx - PADL) / (W - PADL - PADR)) * (n - 1);
+    let best = 0, bd = Infinity;                                        // snap to the nearest DAY THAT TRADED
+    pts.forEach((p, k) => { const d = Math.abs(p.i - raw); if (d < bd) { bd = d; best = k; } });
+    setHover(best);
+  };
+
+  const hp = hover == null ? null : pts[hover];
+  const hpl = hp == null ? null : (hp.v - entry) * 100;
+  const hx = hp == null ? 0 : sx(hp.i);
+  const tipW = 168, tipFlip = hx + 12 + tipW > W - PADR;                // flip left near the right rail
 
   return (
     <div style={{ marginBottom: 14 }}>
@@ -1553,52 +1605,85 @@ function ProbeChart({ days, touchedDate }: { days: OutcomeDetailDay[]; touchedDa
         <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.7 }}>
           ${first.toFixed(2)} → ${last.toFixed(2)}
           {pct != null && (
-            <span style={{ color: up ? HOME_THEME.green : HOME_THEME.red, fontWeight: 700 }}>
+            <span style={{ color: up ? GRN : RED, fontWeight: 700 }}>
               {" "}({pct >= 0 ? "+" : ""}{pct.toFixed(1)}%)
             </span>
           )}
         </span>
         <span style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.45 }}>
-          solid = contract (left) · dashed = spot (right) · scales are independent
+          contract mark · dashed = price when flagged · P/L per contract · hover for the day
         </span>
       </div>
 
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }} role="img"
-        aria-label="Contract price probe">
-        <rect x={padL} y={padT} width={W - padL - padR} height={H - padT - padB}
-          fill="rgba(0,0,0,0.20)" stroke="rgba(255,255,255,0.06)" />
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        style={{ width: "100%", height: "auto", display: "block" }}
+        onMouseMove={onMove}
+        onMouseLeave={() => setHover(null)}
+        role="img"
+        aria-label="Contract price probe"
+      >
+        <defs>
+          <linearGradient id={`${chartId}-wash`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={ICE} stopOpacity={0.22} />
+            <stop offset="100%" stopColor={ICE} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+
+        {[hi, (hi + lo) / 2, lo].map((v, i) => (
+          <g key={i}>
+            <line x1={PADL} y1={sy(v)} x2={W - PADR} y2={sy(v)} stroke="rgba(255,255,255,0.07)" strokeWidth={1} />
+            <text x={W - PADR + 10} y={sy(v) + 4} fontSize={12} fill={HOME_THEME.text} fontFamily={MONO}>{v.toFixed(2)}</text>
+          </g>
+        ))}
+
+        {segs.map((s, i) => <path key={`a${i}`} d={areaOf(s)} fill={`url(#${chartId}-wash)`} />)}
 
         {/* Touched marker — the session spot first reached the flagged strike. */}
         {touchIdx >= 0 && (
           <>
-            <line x1={x(touchIdx)} x2={x(touchIdx)} y1={padT} y2={H - padB}
+            <line x1={sx(touchIdx)} x2={sx(touchIdx)} y1={PADT} y2={H - PADB}
               stroke={LIGHT_BLUE} strokeWidth={1} strokeDasharray="3 3" opacity={0.65} />
-            <text x={x(touchIdx) + 4} y={padT + 10} style={{ fontSize: 10, fill: LIGHT_BLUE } as React.CSSProperties}>touched</text>
+            <text x={sx(touchIdx) + 5} y={PADT + 10} fontSize={11} fill={LIGHT_BLUE} fontFamily={MONO} letterSpacing="1">TOUCHED</text>
           </>
         )}
 
-        {/* Spot reference, right axis. */}
-        {segments(sVals, s.y).map((d, i) => (
-          <path key={`s${i}`} d={d} fill="none" stroke={HOME_THEME.text} strokeOpacity={0.3}
-            strokeWidth={1.25} strokeDasharray="4 4" />
+        <line x1={PADL} y1={sy(entry)} x2={W - PADR} y2={sy(entry)} stroke="rgba(255,255,255,0.40)" strokeWidth={1} strokeDasharray="3 5" />
+        <text x={PADL + 4} y={sy(entry) - 7} fontSize={11} fill={HOME_THEME.text} fontFamily={MONO} letterSpacing="1">FLAGGED {entry.toFixed(2)}</text>
+
+        {segs.map((s, i) => (
+          <path key={`l${i}`} d={dOf(s)} fill="none" stroke={ICE} strokeWidth={1.9} strokeLinejoin="round" strokeLinecap="round" />
         ))}
 
-        {/* Contract, left axis. */}
-        {segments(cVals, c.y).map((d, i) => (
-          <path key={`c${i}`} d={d} fill="none" stroke={lineColor} strokeWidth={2}
-            strokeLinejoin="round" strokeLinecap="round" />
-        ))}
-        {cVals.map((v, i) => v == null ? null : (
-          <circle key={`d${i}`} cx={x(i)} cy={c.y(v)} r={i === n - 1 ? 3.5 : 2.2} fill={lineColor} />
-        ))}
+        <circle cx={sx(hiP.i)} cy={sy(hi)} r={3.4} fill="none" stroke={GRN} strokeWidth={1.6} />
+        <text x={sx(hiP.i)} y={sy(hi) - 11} fontSize={12} fill={GRN} fontFamily={MONO} textAnchor="middle">H {hi.toFixed(2)}</text>
+        <circle cx={sx(loP.i)} cy={sy(lo)} r={3.4} fill="none" stroke={RED} strokeWidth={1.6} />
+        <text x={sx(loP.i)} y={sy(lo) + 18} fontSize={12} fill={RED} fontFamily={MONO} textAnchor="middle">L {lo.toFixed(2)}</text>
 
-        {/* Axis extremes only — a full gridline set is noise at this size. */}
-        <text x={padL - 6} y={c.y(c.hi) + 3} textAnchor="end" style={{ ...axisLabel, fill: lineColor, opacity: 0.9 }}>${c.hi.toFixed(2)}</text>
-        <text x={padL - 6} y={c.y(c.lo) + 3} textAnchor="end" style={{ ...axisLabel, fill: lineColor, opacity: 0.9 }}>${c.lo.toFixed(2)}</text>
-        <text x={W - padR + 6} y={s.y(s.hi) + 3} style={axisLabel}>${s.hi.toFixed(0)}</text>
-        <text x={W - padR + 6} y={s.y(s.lo) + 3} style={axisLabel}>${s.lo.toFixed(0)}</text>
-        <text x={padL} y={H - 8} style={axisLabel}>{days[0]?.date}</text>
-        <text x={W - padR} y={H - 8} textAnchor="end" style={axisLabel}>{days[n - 1]?.date}</text>
+        <text x={PADL} y={H - 8} fontSize={12} fill={HOME_THEME.text} fontFamily={MONO}>{fmtD(days[0]?.date ?? "")}</text>
+        <text x={W - PADR} y={H - 8} fontSize={12} fill={HOME_THEME.text} fontFamily={MONO} textAnchor="end">{fmtD(days[n - 1]?.date ?? "")}</text>
+
+        <circle cx={sx(pts[pts.length - 1].i)} cy={sy(last)} r={3.6} fill={pillFill} />
+        <rect x={W - PADR + 4} y={sy(last) - 11} width={62} height={22} rx={5} fill={pillFill} />
+        <text x={W - PADR + 35} y={sy(last) + 4} fontSize={13} fontWeight={700} fill="#06090d" fontFamily={MONO} textAnchor="middle">{last.toFixed(2)}</text>
+
+        {hp != null && (
+          <g>
+            <line x1={hx} y1={PADT} x2={hx} y2={H - PADB} stroke="rgba(255,255,255,0.32)" strokeWidth={1} strokeDasharray="2 3" />
+            <circle cx={hx} cy={sy(hp.v)} r={4} fill={HOME_THEME.bg} stroke={ICE} strokeWidth={2} />
+            <g transform={`translate(${tipFlip ? hx - 12 - tipW : hx + 12},${Math.max(PADT, sy(hp.v) - 46)})`}>
+              <rect width={tipW} height={44} rx={7} fill="rgba(10,13,20,0.96)" stroke="rgba(48,209,88,0.45)" strokeWidth={1} />
+              <text x={12} y={18} fontSize={11} fill={HOME_THEME.text} fontFamily={MONO} letterSpacing="1">{hp.date}</text>
+              <text x={12} y={35} fontSize={15} fontWeight={700} fill={HOME_THEME.text} fontFamily={MONO}>${hp.v.toFixed(2)}</text>
+              {hpl != null && (
+                <text x={92} y={35} fontSize={13} fontWeight={700} fill={hpl >= 0 ? GRN : RED} fontFamily={MONO}>
+                  {hpl >= 0 ? "+" : "−"}${Math.abs(hpl).toFixed(0)}
+                </text>
+              )}
+            </g>
+          </g>
+        )}
       </svg>
     </div>
   );
