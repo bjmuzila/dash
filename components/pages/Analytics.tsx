@@ -2535,11 +2535,6 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
     : bLoading ? "sweeping the board…"
     : `${frontExpiries.length} front expirations · excl. 0DTE · full board unavailable`;
 
-  // The identity line renders the same numbers the ladders are drawn from, so
-  // it is only honest when the ladders are actually up. While loading, errored
-  // or empty the card shows its state and the header stays a plain title.
-  const showStatus = !gateLoading && !gateError && hasAny;
-
   // One button, whole card: the base chain, the listing, and the board sweep.
   const refresh = useRefreshButton(useCallback(async () => {
     await Promise.all([reloadChain(), reloadExps(), loadBoard()]);
@@ -2547,71 +2542,10 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
 
   return (
     <Card variant="budget" padding={16} style={{ gridColumn: embedded ? undefined : "1 / -1", display: "flex", flexDirection: "column", gap: 12 }}>
-      {/* ── The identity line ─────────────────────────────────────────────
-          Title, then everything that says WHAT is on screen: spot, gamma
-          regime, ticker, expiry + DTE, the session date, the replay clock, and
-          what the ex-0DTE board actually covers.
-
-          These used to be three separate rows — a spot/gamma row under the
-          controls, a capture strip above the ladders, a coverage caption over
-          the right ladder. Same facts in three places, and a screen recording
-          had to include all three to be self-describing. One line now, at the
-          top, so a capture that includes the header includes the context. */}
-      <Row style={{ flexWrap: "wrap", alignItems: "center", rowGap: 8 }}>
-        <span style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", minWidth: 0 }}>
-          <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
-            Ticker Lookup
-          </span>
-          <span style={{ fontSize: 22, fontWeight: 800, color: T.text }}>${sym}</span>
-          <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.text, opacity: 0.6 }}>GEX levels</span>
-
-          {showStatus && (
-            <>
-              {/* Rewound, this is the spot RECORDED at that sweep — the live
-                  quote would put today's price on a past session's ladder. */}
-              <Value color={T.text} size={22}>
-                {viewSpot == null ? "—" : viewSpot.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-              </Value>
-              <span style={{
-                fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase",
-                color: positiveGamma ? POS_GREEN : T.red,
-                border: `1px solid ${positiveGamma ? POS_GREEN : T.red}`,
-                borderRadius: 999, padding: "3px 10px",
-              }}>
-                {positiveGamma ? "Positive gamma" : "Negative gamma"}
-              </span>
-              {/* Ticker · expiry + DTE · the session on screen · the clock.
-                  DTE counts from the replayed date while rewound, same rule as
-                  the expiry pills — off today it would label the wrong one. */}
-              <span style={{
-                fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700,
-                letterSpacing: "0.06em", textTransform: "uppercase", color: T.text, opacity: 0.78,
-              }}>
-                {[
-                  sym,
-                  viewActiveExpiry ? tlExpiryChip(viewActiveExpiry, replayOn && replayDate ? replayDate : today) : null,
-                  replayOn ? (replayDate || null) : today,
-                  replayOn && replayClock != null ? `${fmtTlReplayClock(replayClock)} ET` : null,
-                ].filter(Boolean).join(" · ")}
-              </span>
-              {/* What the ex-0DTE board covers — the right ladder's caption,
-                  moved up here so it reads as part of the same statement. */}
-              <span style={{
-                fontSize: 11, fontFamily: "var(--font-mono)",
-                color: replayOn || boardIsFull ? T.text : T.orange,
-                opacity: replayOn || boardIsFull ? 0.6 : 0.85,
-              }}>
-                {boardLabel}
-              </span>
-              {/* Live-only: both are priced off live marks, so they read "—"
-                  while rewound rather than putting today's premium on a
-                  three-day-old ladder. */}
-              <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.text, opacity: 0.6 }}>
-                {`± Move ${atm.move == null ? "—" : `±${atm.move.toFixed(2)}`} · ATM IV ${atm.iv == null ? "—" : `${(atm.iv * 100).toFixed(1)}%`}`}
-              </span>
-            </>
-          )}
-        </span>
+      {/* Controls: ticker menu, one refresh for the whole card, the replay
+          toggle, and the mark. The identity line that used to sit up here
+          moved DOWN to rest directly on top of the ladders — see below. */}
+      <Row style={{ flexWrap: "wrap", justifyContent: "flex-end", rowGap: 8 }}>
         {/* Ticker menu + one refresh for the whole card. The picker is the same
             component the Ticker Levels card uses — the searchable, star-to-
             favorite menu modelled on the Options Chain page's TICKERS dropdown —
@@ -2767,11 +2701,73 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
         />
       ) : (
         <>
-          {/* Spot, gamma, ticker, expiry, session date, clock and the board
-              coverage all moved to the identity line in the card header, and
-              the logo went with them onto the toolbar. What used to be three
-              rows between the controls and the ladders is now zero. */}
-          <div style={divider} />
+          {/* ── The identity line ───────────────────────────────────────
+              Everything that says WHAT is on screen: the card name, the
+              symbol, spot, gamma regime, ticker + expiry + DTE, the session
+              date, the replay clock, what the ex-0DTE board covers, and the
+              live-only ± Move / ATM IV.
+
+              It sits HERE — below the replay transport, directly on top of
+              the ladders — and not in the card header, because this is the
+              line a screen capture has to contain. Cropping to the ladders
+              now picks it up; up in the header it was one scroll or one crop
+              away from being left out. It also reads in the right order: the
+              controls change what is drawn, this states what got drawn. */}
+          <div style={{
+            display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+            paddingBottom: 10, borderBottom: `1px solid ${T.border}`,
+          }}>
+            <span style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", minWidth: 0 }}>
+              <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: T.cyan }}>
+                Ticker Lookup
+              </span>
+              <span style={{ fontSize: 22, fontWeight: 800, color: T.text }}>${sym}</span>
+              <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: T.text, opacity: 0.6 }}>GEX levels</span>
+
+                  {/* Rewound, this is the spot RECORDED at that sweep — the live
+                      quote would put today's price on a past session's ladder. */}
+                  <Value color={T.text} size={22}>
+                    {viewSpot == null ? "—" : viewSpot.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                  </Value>
+                  <span style={{
+                    fontSize: 11, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase",
+                    color: positiveGamma ? POS_GREEN : T.red,
+                    border: `1px solid ${positiveGamma ? POS_GREEN : T.red}`,
+                    borderRadius: 999, padding: "3px 10px",
+                  }}>
+                    {positiveGamma ? "Positive gamma" : "Negative gamma"}
+                  </span>
+                  {/* Ticker · expiry + DTE · the session on screen · the clock.
+                      DTE counts from the replayed date while rewound, same rule as
+                      the expiry pills — off today it would label the wrong one. */}
+                  <span style={{
+                    fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700,
+                    letterSpacing: "0.06em", textTransform: "uppercase", color: T.text, opacity: 0.78,
+                  }}>
+                    {[
+                      sym,
+                      viewActiveExpiry ? tlExpiryChip(viewActiveExpiry, replayOn && replayDate ? replayDate : today) : null,
+                      replayOn ? (replayDate || null) : today,
+                      replayOn && replayClock != null ? `${fmtTlReplayClock(replayClock)} ET` : null,
+                    ].filter(Boolean).join(" · ")}
+                  </span>
+                  {/* What the ex-0DTE board covers — the right ladder's caption,
+                      moved up here so it reads as part of the same statement. */}
+                  <span style={{
+                    fontSize: 11, fontFamily: "var(--font-mono)",
+                    color: replayOn || boardIsFull ? T.text : T.orange,
+                    opacity: replayOn || boardIsFull ? 0.6 : 0.85,
+                  }}>
+                    {boardLabel}
+                  </span>
+                  {/* Live-only: both are priced off live marks, so they read "—"
+                      while rewound rather than putting today's premium on a
+                      three-day-old ladder. */}
+                  <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.text, opacity: 0.6 }}>
+                    {`± Move ${atm.move == null ? "—" : `±${atm.move.toFixed(2)}`} · ATM IV ${atm.iv == null ? "—" : `${(atm.iv * 100).toFixed(1)}%`}`}
+                  </span>
+            </span>
+          </div>
 
           {/* The split: picked expiry | whole board. */}
           <div className="tl-split" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "stretch" }}>

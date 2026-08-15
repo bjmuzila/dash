@@ -45,8 +45,6 @@ export interface WeeklyEdgeOpts {
   oilBody?: string[];
   coreBullseyePct?: string;
   coreBullseyeSub?: string;
-  ictModelPct?: string;
-  ictModelSub?: string;
   estMovePct?: string;
   estMoveSub?: string;
   confRows?: ConfRow[];
@@ -79,17 +77,19 @@ const DEFAULT_EARNINGS: EarningsDay[] = [
 ];
 
 const DEFAULT_CONF_ROWS: ConfRow[] = [
-  { date: "07-31", s945: "7500", c945: "0.9", hit945: true, s1030: "7400", c1030: "7.7", hit1030: true, s1200: "7470", c1200: "0.3", hit1200: true },
-  { date: "07-30", s945: "7400", c945: "1.0", hit945: true, s1030: "7420", c1030: "0.7", hit1030: true, s1200: "7420", c1200: "0.7", hit1200: true },
-  { date: "07-29", s945: "7350", c945: "0.1", hit945: true, s1030: "7350", c1030: "0.1", hit1030: true, s1200: "7350", c1200: "0.1", hit1200: true },
-  { date: "07-28", s945: "7400", c945: "0.2", hit945: true, s1030: "7430", c1030: "0.6", hit1030: true, s1200: "7450", c1200: "0.0", hit1200: true },
-  { date: "07-27", s945: "7500", c945: "26.3", hit945: false, s1030: "7400", c1030: "0.1", hit1030: true, s1200: "7400", c1200: "0.1", hit1200: true },
+  { date: "08-14", s945: "7810", c945: "2.1", hit945: true, s1030: "7810", c1030: "3.1", hit1030: true, s1200: "7780", c1200: "0.1", hit1200: true },
+  { date: "08-13", s945: "7800", c945: "0.1", hit945: true, s1030: "7820", c1030: "4.8", hit1030: true, s1200: "7780", c1200: "0.1", hit1200: true },
+  { date: "08-12", s945: "7800", c945: "41.3", hit945: false, s1030: "7780", c1030: "21.7", hit1030: false, s1200: "7740", c1200: "0.3", hit1200: true },
+  { date: "08-11", s945: "7780", c945: "17.9", hit945: false, s1030: "7780", c1030: "17.9", hit1030: false, s1200: "7740", c1200: "0.2", hit1200: true },
+  { date: "08-10", s945: "7775", c945: "2.0", hit945: true, s1030: "7775", c1030: "2.0", hit1030: true, s1200: "7775", c1200: "8.3", hit1200: false },
+  { date: "08-07", s945: "7750", c945: "0.2", hit945: true, s1030: "7750", c1030: "0.2", hit1030: true, s1200: "7760", c1200: "0.3", hit1200: true },
+  { date: "08-06", s945: "7700", c945: "1.7", hit945: true, s1030: "7700", c1030: "1.7", hit1030: true, s1200: "7700", c1200: "1.7", hit1200: true },
 ];
 
 function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
   "issueLabel" | "recapHeadline" | "recapBody" | "indexMoves" | "aheadHeadline" | "calendarEvents" |
   "earningsDays" | "aheadNote" | "oilHeadline" | "oilPrice" | "oilChangeNote" | "oilBody" |
-  "coreBullseyePct" | "coreBullseyeSub" | "ictModelPct" | "ictModelSub" | "estMovePct" | "estMoveSub" |
+  "coreBullseyePct" | "coreBullseyeSub" | "estMovePct" | "estMoveSub" |
   "confRows" | "resultsNote" | "ctaUrl">> {
   return {
     issueLabel: opts.issueLabel || "Week of Aug 3–7",
@@ -110,14 +110,12 @@ function withDefaults(opts: WeeklyEdgeOpts): Required<Pick<WeeklyEdgeOpts,
       "Brent climbed again last week on renewed Iran-claimed tanker attacks in the Strait of Hormuz, continued Houthi strikes in the Red Sea, and Saudi operations against Iran-backed groups — compounded by declining US crude inventories. Separately, attacks on Black Sea and Caspian Pipeline Consortium infrastructure have disrupted Kazakhstan's export flows, adding a second front to the supply squeeze. Consensus now calls for Brent near $90 by quarter-end and above $102 within 12 months if the disruptions persist.",
       "With crude holding a sustained risk premium and the Fed split on its next move, expect overnight futures to stay headline-sensitive — watch for gap risk around the 9:45 CB window on any fresh Hormuz, Red Sea or Black Sea developments.",
     ],
-    coreBullseyePct: opts.coreBullseyePct || "—",
-    coreBullseyeSub: opts.coreBullseyeSub || "[ADD CB EDGE STAT #1]",
-    ictModelPct: opts.ictModelPct || "—",
-    ictModelSub: opts.ictModelSub || "[ADD CB EDGE STAT #2]",
-    estMovePct: opts.estMovePct || "—",
-    estMoveSub: opts.estMoveSub || "[ADD CB EDGE STAT #3]",
-    confRows: opts.confRows || [],
-    resultsNote: opts.resultsNote || "[Add this week's Core Bullseye / confidence table screenshot or write-up here.]",
+    coreBullseyePct: opts.coreBullseyePct || "86%",
+    coreBullseyeSub: opts.coreBullseyeSub || "12:00 CB &middot; 71% at 9:45 &amp; 10:30",
+    estMovePct: opts.estMovePct || "67.5%",
+    estMoveSub: opts.estMoveSub || "158-76 &middot; 234 scored (week of 8/14)",
+    confRows: opts.confRows || DEFAULT_CONF_ROWS,
+    resultsNote: opts.resultsNote || "Core Bullseye hit rate this week: 71% at 9:45, 71% at 10:30, and 86% at 12:00 — with the 12:00 read landing within 8 points on 6 of the last 7 sessions.",
     ctaUrl: opts.ctaUrl || PRICING_URL,
   };
 }
@@ -245,8 +243,8 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
                 <td style="padding:7px 6px;font:600 12px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;text-align:center;${i < o.confRows.length - 1 ? "border-bottom:1px solid rgba(255,255,255,0.06);" : ""}">${confCell(r.c1200, r.hit1200)}</td>
               </tr>`).join("");
 
-  const resultTile = (label: string, pct: string, sub: string, color: string) => `
-              <td width="33%" valign="top" style="padding:0 5px;">
+  const resultTile = (label: string, pct: string, sub: string, color: string, width: string = "33%") => `
+              <td width="${width}" valign="top" style="padding:0 5px;">
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid rgba(255,255,255,0.10);border-radius:10px;background:rgba(255,255,255,0.02);">
                   <tr><td align="center" style="padding:14px 8px;">
                     <div style="font:700 9px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:#6b7d8f;">${label}</div>
@@ -336,9 +334,8 @@ export function weeklyEdgeEmail(opts: WeeklyEdgeOpts = {}): string {
               <div style="font:800 11px/1 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;letter-spacing:0.14em;text-transform:uppercase;color:#00E676;">● CB Edge — This Week's Results</div>
               <div style="font:800 17px/1.35 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin-top:8px;">The dashboard called it — here's the scorecard</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;"><tr>
-                ${resultTile("Core Bullseye", o.coreBullseyePct, o.coreBullseyeSub, "#38BDF8")}
-                ${resultTile("2022 ICT Model", o.ictModelPct, o.ictModelSub, "#00E676")}
-                ${resultTile("Estimated Move", o.estMovePct, o.estMoveSub, "#FFB300")}
+                ${resultTile("Core Bullseye", o.coreBullseyePct, o.coreBullseyeSub, "#38BDF8", "50%")}
+                ${resultTile("Estimated Move", o.estMovePct, o.estMoveSub, "#FFB300", "50%")}
               </tr></table>
 
               ${o.confRows.length ? `

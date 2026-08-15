@@ -1947,6 +1947,16 @@ export function MultGreekClient({
 
   const isCapturing = captureWindow != null;
 
+  // ── Identity line ──────────────────────────────────────────────────────────
+  // Feeds the band that sits under the replay transport and directly on top of
+  // the four cards — the Multi Greek twin of the GEX-levels card's line. The
+  // front expiry is the first ticker's front column (every panel leads with its
+  // own calendar's front, and they agree far more often than not), labelled off
+  // the REPLAYED date while rewound so the DTE isn't counted from today.
+  const idFrontCol = (replayOn ? replayColsByTicker[TICKERS[0]] : colsByTicker[TICKERS[0]])?.[0] ?? null;
+  const idFront = idFrontCol ? colLabel(idFrontCol.date, replayOn ? replayDate : null) : null;
+  const idSession = replayOn ? (replayDate || "—") : todayETStr();
+
   // ── Chain overlay ──────────────────────────────────────────────────────────
   // Double-clicking a panel header sets this to that panel's ticker; the chain
   // then covers the panels row — exactly the 4 cards, toolbar untouched. Esc
@@ -2275,6 +2285,55 @@ export function MultGreekClient({
           )}
         </div>
       )}
+
+      {/* ── Identity line ───────────────────────────────────────────────────
+          The GEX-levels card's line, for four tickers: the page name, each
+          ticker with the SPOT its panel is drawn from, the front expiry + DTE,
+          the session on screen, the replay clock, and the mark.
+
+          Under the replay transport and directly on top of the cards, for the
+          same reason it sits there on the lookup card — that band is what a
+          screen capture of the panels actually contains. Rendered in capture
+          mode too, so an exported PNG carries its own context. */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+        padding: "0 10px 8px", borderBottom: `1px solid ${HT.border}`, flexShrink: 0,
+      }}>
+        <span style={{ fontSize: 15, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: HT.cyan }}>
+          Multi Greek
+        </span>
+        {TICKERS.map((t) => {
+          // Rewound, the spot is the one RECORDED at that sweep — the live
+          // quote would put today's price beside a past session's ladder.
+          const sp = replayOn ? (replayFrameByTicker[t]?.spot ?? 0) : (spots[t] ?? 0);
+          return (
+            <span key={t} style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+              <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.06em", color: HT.text }}>{t}</span>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 800, color: SOFT_WHITE }}>
+                {sp > 0 ? sp.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—"}
+              </span>
+            </span>
+          );
+        })}
+        <span style={{
+          fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700,
+          letterSpacing: "0.06em", textTransform: "uppercase", color: HT.text, opacity: 0.78,
+        }}>
+          {[
+            idFront ? `${idFront.md} · ${idFront.dte}` : null,
+            idSession,
+            replayOn && replayClock != null ? `${fmtReplayClock(replayClock)} ET` : null,
+            replayOn ? "recorded walls only" : null,
+          ].filter(Boolean).join(" · ")}
+        </span>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/cb-edge-logo.png"
+          alt="CB Edge"
+          crossOrigin="anonymous"
+          style={{ height: 26, width: "auto", display: "block", flexShrink: 0, opacity: 0.95, marginLeft: "auto" }}
+        />
+      </div>
 
       {/* Panels */}
       {embed && (

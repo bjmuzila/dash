@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-08-14 - The identity line moves onto the cards, and Multi Greek gets one
+
+Edited: `components/pages/Analytics.tsx`, `app/mult-greek/MultGreekClient.tsx`.
+
+### GEX levels: identity line drops below the replay transport
+
+It was in the card header. Wrong place: that line is the one a screen capture
+has to contain, and up in the header it was one crop away from being left out.
+It now sits directly on top of the two ladders, under the replay bar, with a
+hairline rule under it.
+
+Order reads as cause then effect: the controls change what is drawn, the replay
+bar scrubs it, the identity line states what got drawn.
+
+The card header is now just the toolbar - ticker menu, refresh, replay toggle,
+CB Edge mark - right-aligned. `showStatus` is gone: the line lives inside the
+branch that already guarantees data, so the guard was restating its own
+condition.
+
+### Multi Greek: the same band, above the four cards
+
+New line under the replay transport and directly on top of the panels, carrying
+the same kinds of fact as the lookup card's: `MULTI GREEK`, each ticker with the
+SPOT its panel is drawn from (the recorded sweep's spot while rewound, not the
+live quote), the front expiry + DTE, the session on screen, the replay clock,
+`recorded walls only` when rewound, and the mark on the right.
+
+The front expiry comes from the first ticker's front column, labelled off the
+REPLAYED date while rewound - counting DTE from today would mislabel every
+rewound header. Rendered in capture mode too, so exported PNGs carry their own
+context.
+
 ## 2026-08-14 - Replay tabs open rewound; Ticker Lookup collapses to one identity line
 
 Edited: `components/pages/Replay.tsx`, `components/pages/Analytics.tsx`,
