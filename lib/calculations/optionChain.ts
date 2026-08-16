@@ -42,6 +42,27 @@ export type GreekCell = {
 };
 
 /**
+ * The three fixed rank floors the heat scale reserves for a column's dominant
+ * strikes. Hue is the SIGN of the value (+GEX cyan, −GEX red); the alpha is the
+ * rank. Exported because two things paint with them:
+ *
+ *   1. metricBg() below, for the top-3 magnitudes of a normal heated column.
+ *   2. Levels-only mode (an Intensity slider at its minimum stop), where the
+ *      gamma field is off and CB / CW / PW are painted at ranks 1 / 2 / 3 — see
+ *      lib/calculations/heatLevels. Those cells must read as HEAT, in the same
+ *      blue/red language as every other cell on the grid, not in the gold/blue/
+ *      red of the level BADGES. The badge says which level it is; the fill says
+ *      how much gamma is there and which way it points.
+ */
+export const RANK_FLOOR_ALPHA = [0.90, 0.45, 0.25] as const;
+
+/** Heat fill for a cell being painted at a fixed rank floor. */
+export function rankBg(value: number, rank: 1 | 2 | 3): string {
+  const a = RANK_FLOOR_ALPHA[rank - 1];
+  return (value || 0) >= 0 ? `rgba(41,182,246,${a})` : `rgba(255,71,87,${a})`;
+}
+
+/**
  * Intensity-scaled heat tint for a chain cell. The three largest magnitudes get
  * fixed rank floors so the dominant strikes always stand out; everything else
  * follows a curve scaled by `intensity`.
@@ -52,9 +73,7 @@ export function metricBg(value: number, maxValue: number, intensity: number, top
   if (m === 0 || !n) return "transparent";
   const pos = n >= 0;
   const rank = topValues.indexOf(Math.abs(n)) + 1;
-  if (rank === 1) return pos ? "rgba(41,182,246,0.90)" : "rgba(255,71,87,0.90)";
-  if (rank === 2) return pos ? "rgba(41,182,246,0.45)" : "rgba(255,71,87,0.45)";
-  if (rank === 3) return pos ? "rgba(41,182,246,0.25)" : "rgba(255,71,87,0.25)";
+  if (rank === 1 || rank === 2 || rank === 3) return rankBg(n, rank);
   const ratio = Math.min(Math.abs(n) / m, 1);
   const eased = Math.pow(ratio * Math.max(intensity || 0.1, 1), 1.4);
   const alpha = Math.min(0.18, 0.02 + eased * 0.16);

@@ -6,8 +6,8 @@ import { ColorType, CrosshairMode, LineSeries, createChart } from "lightweight-c
 import type { IChartApi, ISeriesApi, LineData, UTCTimestamp } from "lightweight-charts";
 import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
-import { HOME_THEME as HT, homeShellStyle, homeButtonStyle, LEVEL_COLORS } from "@/components/shared/homeTheme";
-import { atMinIntensity, columnWalls, wallAt, INTENSITY_MIN } from "@/lib/calculations/heatLevels";
+import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
+import { atMinIntensity, columnWalls, wallAt, INTENSITY_MIN, WALL_RANK } from "@/lib/calculations/heatLevels";
 import { Dock, SegGroup } from "@/components/shared/DockToolbar";
 import { ChainReplay } from "@/components/shared/ChainReplay";
 import { useScannerTickers } from "@/lib/useScannerTickers";
@@ -15,7 +15,7 @@ import { dedupeFetch } from "@/lib/dedupeFetch";
 import { etDateKey, etToday, isSessionLive, isSpxFeedLive, isTradingDay } from "@/lib/marketSession";
 // Chain math (GreekCell, parseExpiration, metricBg) moved to lib/ so the ES
 // Candles page's 0DTE side panel can share it without importing this route.
-import { metricBg, parseExpiration, type GreekCell, type DataMode } from "@/lib/calculations/optionChain";
+import { metricBg, rankBg, parseExpiration, type GreekCell, type DataMode } from "@/lib/calculations/optionChain";
 
 // rgba helper — matches the convention used across themed pages.
 function rgba(hex: string, a: number): string {
@@ -1470,10 +1470,12 @@ const ChainMatrix = memo(function ChainMatrix({
                   style={{
                     padding: isCountMode ? "3px 6px" : "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
                     color: value == null ? "#3a4a5e" : SOFT_WHITE,
-                    // Levels-only: no gamma wash. CB/CW/PW keep the shared level
-                    // wash; every other cell (and every change column) is bare.
+                    // Levels-only: no gamma wash. CB/CW/PW paint at the heat
+                    // scale's rank floors (CB 1, CW 2, PW 3) so the fill still
+                    // carries the sign; every other cell — and every change
+                    // column — is bare.
                     background: levelsOnly
-                      ? (cellWall ? LEVEL_COLORS.wash[cellWall] : "transparent")
+                      ? (cellWall && value != null ? rankBg(value, WALL_RANK[cellWall]) : "transparent")
                       : (value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent"),
                     boxShadow: atmShadow,
                     whiteSpace: "nowrap", overflow: "hidden",
@@ -1484,9 +1486,6 @@ const ChainMatrix = memo(function ChainMatrix({
                     opacity: (strikeDim || (selMode && !(col != null && selExps.has(col.expiration)))) ? 0.13 : 1,
                     transition: "opacity .12s",
                     ...(isMvc ? { outline: "2px solid #ffb300", outlineOffset: "-2px" } : {}),
-                    // Level ring wins over the MVC ring: in levels-only mode the
-                    // CB/CW/PW identity is the only thing the cell is saying.
-                    ...(cellWall ? { outline: `2px solid ${LEVEL_COLORS[cellWall]}`, outlineOffset: "-2px", zIndex: 2 } : {}),
                   }}
                 >
                   {/* OI tab renders the day-over-day CHANGE only — one line
@@ -1558,9 +1557,8 @@ const ChainMatrix = memo(function ChainMatrix({
                   padding: "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 700,
                   color: tot === 0 ? "#3a4a5e" : "rgba(255,255,255,0.92)",
                   background: levelsOnly
-                    ? (totWall ? LEVEL_COLORS.wash[totWall] : "transparent")
+                    ? (totWall && tot !== 0 ? rankBg(tot, WALL_RANK[totWall]) : "transparent")
                     : (tot !== 0 ? metricBg(tot, totalScale.max, intensity, totalScale.top3) : "transparent"),
-                  ...(totWall ? { outline: `2px solid ${LEVEL_COLORS[totWall]}`, outlineOffset: "-2px" } : {}),
                   borderLeft: `2px solid ${rgba(HT.cyan, selMode ? 0.8 : 0.35)}`,
                   boxShadow: atmTotShadow,
                   whiteSpace: "nowrap", overflow: "hidden",

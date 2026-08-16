@@ -38,8 +38,10 @@
 // CORRECTION? Contrast / Size / Max / Curve / Brightness were all corrections —
 // you moved them because the chart was wrong, and a chart that needs five knobs
 // to look right is just wrong five ways. "How many levels" and "how loud" are
-// questions, they have no correct answer, and they stay (BUBBLE_LEVELS_RANGE /
-// BUBBLE_INTENSITY_RANGE below).
+// questions, they have no correct answer, and they stay — along with "how big",
+// which is a question about how much of the chart the marks may take rather than
+// a patch on a broken scale (BUBBLE_LEVELS_RANGE / BUBBLE_INTENSITY_RANGE /
+// BUBBLE_SIZE_RANGE below).
 //
 // Everything else is a frozen style, calibrated once against real data rather
 // than nudged by feel. Source: `gex_strike_history.csv` — 1.25M per-strike $SPX
@@ -60,7 +62,7 @@
 // one could rank by eye. Size is a PRIMARY channel on this chart and it is
 // proportional — see the size law below.
 // ── The size law ────────────────────────────────────────────────────────────
-//     budget = min(maxPx, rowPitch × maxPxRowFrac, colPitch × maxPxColFrac)
+//     budget = size × min(maxPx, rowPitch × maxPxRowFrac, colPitch × maxPxColFrac)
 //     r      = budget × (|net GEX| / reference)
 //
 // STRAIGHT PROPORTIONAL. Twice the gamma is twice the radius, four times the
@@ -134,6 +136,8 @@ export type BubbleStyle = {
   fade: number;
   /** DEFAULT overall opacity multiplier — the "intensity" control. */
   intensity: number;
+  /** DEFAULT multiplier on the whole size budget — the "size" control. */
+  size: number;
 };
 
 export const BUBBLE_STYLE: BubbleStyle = {
@@ -148,24 +152,41 @@ export const BUBBLE_STYLE: BubbleStyle = {
   glowMaxPx: 9,
   fade: 0.55,
   intensity: 1,
+  size: 1,
 };
 
 /**
- * The two bubble controls that ARE still live, and their bounds.
+ * The three bubble controls that ARE live, and their bounds.
  *
- * Everything else about the layer is frozen (see the size law above). These two
- * survive because neither of them is a correction: "how many levels" is a
- * question about how much of the board you want on screen, and "intensity" is a
- * question about how loud the overlay sits against the candles. Both are per
- * card and persist into the slot blob (`bLevels` / `bInt`).
+ * Everything else about the layer is frozen (see the size law above). These
+ * three survive because none of them is a correction: "how many levels" is a
+ * question about how much of the board you want on screen, "intensity" is a
+ * question about how loud the overlay sits against the candles, and "size" is a
+ * question about how much of the chart the marks are allowed to take. All three
+ * are per card and persist into the slot blob (`bLevels` / `bInt` / `bSize`).
  *
  * The ladder request to the server is a constant 30 (see BUBBLE_LADDER_REQUEST
  * in EsChartCard), so the level cap has to stay under it — the strike ranking is
  * session-wide and a strike can only enter it if it survived the server-side
  * truncation in at least one column.
+ *
+ * ── What `size` does, and where the no-overlap guarantee ends ────────────────
+ * It multiplies the FINAL budget — the one already capped against both pitches —
+ * rather than just `maxPx`. That ordering matters: capping after the multiply
+ * would mean dragging the slider up did nothing at all whenever a pitch cap was
+ * binding, which is most of the time on a zoomed-out chart, and a slider that
+ * silently does nothing is the exact failure this layer keeps being rebuilt to
+ * escape.
+ *
+ * The consequence is the honest one: **at or below 1.00x marks are guaranteed
+ * never to touch; above it they may.** That is the user asking for bigger marks
+ * and accepting fused rows, which is a legitimate thing to want on a zoomed-in
+ * chart where the pitch caps are over-conservative. The ceiling is 2x, not 5x,
+ * so the ask stays a nudge rather than a way to paint the canvas.
  */
 export const BUBBLE_LEVELS_RANGE = { min: 1, max: 15 } as const;
 export const BUBBLE_INTENSITY_RANGE = { min: 0.2, max: 1 } as const;
+export const BUBBLE_SIZE_RANGE = { min: 0.4, max: 2 } as const;
 
 /**
  * Floor under the EXPANDING session reference, as a fraction of the reference

@@ -120,14 +120,11 @@ export const ES_CANDLE_DOWN = "#ff5b5b";
  * `tint` is the faint cell wash for each level; `onSolid` is the ink to use on
  * top of a solid fill of that color (the toolbar's active-toggle state).
  *
- * `wash` is the LEVELS-ONLY fill: what a CB / CW / PW cell gets when an
- * Intensity slider is dragged to its minimum stop, the gamma heat field is
- * switched off, and these three strikes are the only thing left painted (see
- * lib/calculations/heatLevels). Heavier than `tint` on purpose — with nothing
- * else on the grid it has to carry the highlight by itself — but still under
- * the 0.90 a rank-1 wall paints at full intensity, so the two modes never read
- * as the same thing. It is also low enough to keep white cell text legible on
- * gold, which a solid fill is not.
+ * These are BADGE colors — they identify which level a strike is. They are
+ * deliberately NOT used to fill a cell in levels-only mode (an Intensity slider
+ * at its minimum stop): a filled cell has to keep saying the sign of its gamma,
+ * so those cells take the heat scale's rank floors instead. See
+ * lib/calculations/heatLevels.
  */
 export const LEVEL_COLORS = {
   cb: "#ffd600",
@@ -137,11 +134,6 @@ export const LEVEL_COLORS = {
     cb: "rgba(255,214,0,0.05)",
     cw: "rgba(41,182,246,0.05)",
     pw: "rgba(255,71,87,0.05)",
-  },
-  wash: {
-    cb: "rgba(255,214,0,0.38)",
-    cw: "rgba(41,182,246,0.38)",
-    pw: "rgba(255,71,87,0.38)",
   },
   onSolid: "#04121a",
 } as const;

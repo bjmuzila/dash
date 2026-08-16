@@ -25,11 +25,11 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
-import { HOME_THEME, LEVEL_COLORS } from "@/components/shared/homeTheme";
-import { atMinIntensity, columnWalls, wallAt, INTENSITY_MIN } from "@/lib/calculations/heatLevels";
+import { HOME_THEME } from "@/components/shared/homeTheme";
+import { atMinIntensity, columnWalls, wallAt, INTENSITY_MIN, WALL_RANK } from "@/lib/calculations/heatLevels";
 import { dedupeFetch } from "@/lib/dedupeFetch";
 import { cachedJson } from "@/lib/sharedCache";
-import { parseExpiration, metricBg, type GreekCell } from "@/lib/calculations/optionChain";
+import { parseExpiration, metricBg, rankBg, type GreekCell } from "@/lib/calculations/optionChain";
 
 /** Greeks this panel can show. "oi" is deliberately absent — the chain page's OI
  *  tab reads a day-over-day snapshot, not the live chain, so it has no meaning
@@ -284,7 +284,7 @@ export default function ChainRail({
 
       const wk = levelsOnly ? wallAt(walls, strike) : null;
       const bg = levelsOnly
-        ? (wk ? LEVEL_COLORS.wash[wk] : "transparent")
+        ? (wk && v ? rankBg(v, WALL_RANK[wk]) : "transparent")
         : metricBg(v, max, heat, top3);
       if (bg !== "transparent") {
         ctx.fillStyle = bg;

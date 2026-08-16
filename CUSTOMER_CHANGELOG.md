@@ -6,7 +6,8 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Sunday 8/16/2026
 
-* **ES Candles: the GEX bubbles now mean something you can read at a glance.** Bubble size is straight proportional to net GEX against one reference for the whole expiration — so the dominant wall really is the biggest mark on the chart — the 3:00–4:00 gamma surge is corrected out instead of flattening your morning, the sliders that existed to patch the old scale are gone (levels and intensity stay), the page opens on the full 9:30–4:00 session, and the ticker picker now carries SPY, QQQ, NDX, VIX, AAPL, AMD, AMZN, GOOGL, META, MSFT, NVDA, SPCX and TSLA alongside ES.
+* **Scanner and Test Labs swapped a few tabs.** **GEX Levels** now lives on the **Scanner** page (and is what it opens on), while **GEX Scanner**, **GEX%**, **Market Quality**, **Stat Prompter** and **Strike History** moved over to **Test Labs** — same tools, same data, just grouped where they belong.
+* **ES Candles got a rebuilt GEX bubble layer.** Bubble size is now straight proportional to net GEX so the dominant wall is visibly the biggest mark on the chart, the chart opens on the full 9:30–4:00 session, and the ticker picker adds NDX, VIX and the mega-caps alongside ES, SPY and QQQ.
 
 ## Friday 8/14/2026
 

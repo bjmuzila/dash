@@ -23,12 +23,31 @@
  * cannot drift into four different answers for "which strikes survive at the
  * bottom of the slider".
  *
- * The colours are NOT here: a levels-only cell is filled from
- * LEVEL_COLORS.wash in components/shared/homeTheme, the same source the CB/CW/PW
- * badges and toolbar toggles read. This module is pure math.
+ * ── What the surviving cells look like ──────────────────────────────────────
+ * They keep the HEATMAP's language, not the level badges'. A levels-only cell is
+ * painted at one of the heat scale's three fixed rank floors — CB at rank 1, CW
+ * at rank 2, PW at rank 3 — so it is still cyan for positive gamma and red for
+ * negative, exactly as it would be at any other slider position. Filling them
+ * gold/blue/red to match the CB/CW/PW badges was the obvious first move and it
+ * was wrong: it threw away the sign, which is the one thing a gamma cell must
+ * never stop saying, and it made a Put Wall and a red heat cell two different
+ * shades of "red" for two unrelated reasons.
+ *
+ * The badge still names the level; the fill still says how much and which way.
+ * The colours themselves live with each surface's heat function (rankBg() in
+ * lib/calculations/optionChain, gexRankColor() in the ES card's chartMath) so
+ * this module stays pure math.
  */
 
 export type WallKind = "cb" | "cw" | "pw";
+
+/**
+ * Which heat rank floor each level paints at in levels-only mode. CB is the
+ * column's biggest |net| by definition, so it is rank 1 whatever the heat scale
+ * would have said; CW and PW take 2 and 3 to keep the three tiers visibly
+ * ordered. Feed these to rankBg() / gexRankColor().
+ */
+export const WALL_RANK: Record<WallKind, 1 | 2 | 3> = { cb: 1, cw: 2, pw: 3 };
 
 export interface ColumnWalls {
   cb: number | null;

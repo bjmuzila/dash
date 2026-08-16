@@ -6,7 +6,8 @@ import Link from "next/link";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { HOME_THEME as HT, homeShellStyle, LEVEL_COLORS } from "@/components/shared/homeTheme";
-import { atMinIntensity, columnWalls, wallAt, wallVisible, INTENSITY_MIN, type ColumnWalls } from "@/lib/calculations/heatLevels";
+import { atMinIntensity, columnWalls, wallAt, wallVisible, INTENSITY_MIN, WALL_RANK, type ColumnWalls } from "@/lib/calculations/heatLevels";
+import { rankBg } from "@/lib/calculations/optionChain";
 import { Card } from "@/components/shared/PageCard";
 import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockSlider, DockExpiryPicker } from "@/components/shared/DockToolbar";
 import { MultiGreekSnapshotBtn, type SnapshotRow } from "@/components/dashboard/MultiGreekLevelSnapshot";
@@ -273,9 +274,10 @@ function metricBg(value: number, maxValue: number, topRank: number, intensity: n
   const m = maxValue || 0;
   if (m === 0 || !n) return "transparent";
   const pos = n >= 0;
-  if (topRank === 1) return pos ? "rgba(41,182,246,0.90)" : "rgba(255,71,87,0.90)";
-  if (topRank === 2) return pos ? "rgba(41,182,246,0.45)" : "rgba(255,71,87,0.45)";
-  if (topRank === 3) return pos ? "rgba(41,182,246,0.25)" : "rgba(255,71,87,0.25)";
+  // Rank floors come from the shared chain helper — the ladder here and the
+  // option chain grid paint their dominant strikes identically, and levels-only
+  // mode reuses the same three colours.
+  if (topRank === 1 || topRank === 2 || topRank === 3) return rankBg(n, topRank);
   const ratio = Math.min(Math.abs(n) / m, 1);
   const eased = Math.pow(ratio * Math.max(intensity || 0.1, 1), 1.4);
   const alpha = Math.min(0.18, 0.02 + eased * 0.16);
@@ -1201,10 +1203,12 @@ function TickerPanel({
                     // not clickable rather than opening a card about now.
                     textAlign: "center", color: SOFT_WHITE, cursor: (isCapturing || isEx0Col || isReplay) ? "default" : "pointer",
                     ...(dMode ? { display: "flex", alignItems: "center", gap: 4, minHeight: 23 } : {}),
-                    // Levels-only: no gamma wash at all. A CB/CW/PW cell gets the
-                    // shared level wash; every other cell is bare.
+                    // Levels-only: no gamma wash at all. A CB/CW/PW cell is
+                    // painted at the heat scale's rank floor (CB 1, CW 2, PW 3)
+                    // so it still reads cyan for +GEX and red for −GEX; the
+                    // badge, not the fill, is what names the level.
                     background: levelsOnly
-                      ? (lvlShown && lvlKind ? LEVEL_COLORS.wash[lvlKind] : "transparent")
+                      ? (lvlShown && lvlKind && val != null ? rankBg(val, WALL_RANK[lvlKind]) : "transparent")
                       : (val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity)),
                     fontWeight: weight,
                     position: "relative",
