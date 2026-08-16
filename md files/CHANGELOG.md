@@ -1,77 +1,14 @@
 # Changelog
 
-## 2026-08-16 - Intensity at minimum now means "levels only" (CB / CW / PW)
-
-Added: `lib/calculations/heatLevels.ts`.
-Edited: `components/shared/homeTheme.ts`,
-`app/mult-greek/MultGreekClient.tsx`,
-`components/pages/OptionsChain.tsx`,
-`components/dashboard/es-candles/EsChartCard.tsx`,
-`components/dashboard/es-candles/ChainRail.tsx`.
-
-Every Intensity slider in the app scaled the same thing - a per-column gamma
-wash behind the numbers - and every one of them wasted its bottom half. Dragged
-to minimum the wash didn't switch off, it collapsed toward a uniform floor tint:
-every strike still painted, all of them within a couple of percent of the same
-alpha. That is the least readable position the control has, and it is exactly
-the position people reach for when they want LESS noise on the grid.
-
-**The minimum stop now means something.** At the bottom of the track the heat
-field is dropped entirely and only the three named levels stay lit:
-
-- **CB** - Core Bullseye, the largest |net| strike in the column (sign-blind)
-- **CW** - Call Wall, the largest +net strike
-- **PW** - Put Wall, the most -net strike
-
-CB claims its strike first; CW and PW skip it, so three labels always name three
-DISTINCT strikes instead of printing one level twice. Same rule `computeWalls()`
-and `deriveColumnLevels()` already used - it now lives in one module
-(`lib/calculations/heatLevels.ts`) so the four surfaces that host a slider can't
-drift into four different answers for "which strikes survive at the bottom".
-
-The value readout says `LEVELS` instead of a multiplier when the slider is
-there, so the mode is legible without hovering.
-
-### Per surface
-
-- **Multi Greek** (`min 0.5`) - walls are computed for EVERY column in this
-  mode, not just the front one. The badges stay front-only in normal mode
-  (deliberate, for clutter), but with the field off, an unmarked column is a
-  blank strip of numbers. The CB/CW/PW toolbar toggles are still honoured: a
-  level switched off does not come back because the slider hit bottom. The
-  rank-1 ring and the gold peak star are part of the heat field, so they go with
-  it.
-- **Option chain grid** (`min 0.5`) - walls read through `valueAt()`, so they
-  follow the active greek tab exactly like the heat scale does. The Sigma Total
-  column is ranked as its own series. Change / delta columns are left bare -
-  "the wall" is a statement about gamma, not about a 15-minute delta.
-- **ES Candles heatmap** (`min 0.1`) - ranked per stored column on the active
-  metric through `valOf()`, so the marks track the Vol+OI / Vol toggle.
-- **ES chain rail** - follows the card's slider off the same value, ranked over
-  the same visible rows, so the two panels never describe different ladders.
-
-### Notes
-
-- `LEVEL_COLORS.wash` (new, in `homeTheme`) is the fill: heavier than `tint`
-  because with nothing else painted it carries the highlight alone, but under
-  the 0.90 a rank-1 wall paints at full intensity - the two modes never read as
-  the same thing - and low enough to keep white cell text legible on gold.
-- The colour functions themselves (`metricBg`, `gexColor`) are UNCHANGED. The
-  gate sits at the call sites, so the curves stay honest and this mode is a
-  branch you can see rather than a special case buried in an alpha formula.
-- Not touched: `GexHeatmap.tsx` and `EsCandlesFullPanel.tsx` carry the same
-  curve but have no slider (fixed 1.4 and 0.65), so they can never reach a
-  minimum stop.
-
----
-
-## 2026-08-16 - ES Candles: the GEX bubbles get an absolute scale, and lose their sliders
+## 2026-08-16 - ES Candles: GEX bubbles get an absolute, proportional scale
 
 Edited: `components/dashboard/es-candles/chartMath.ts`,
 `components/dashboard/es-candles/slotStore.ts`,
-`components/dashboard/es-candles/EsChartCard.tsx`.
+`components/dashboard/es-candles/EsChartCard.tsx`,
+`components/dashboard/es-candles/LayoutPresetButton.tsx`.
 
-Two changes, and the second is the reason the first is possible.
+The scale is rebuilt from the ground up, the controls that existed to patch it
+are gone, and the two that were actually questions rather than patches stay.
 
 ### 1. Bubble size is now measured against ONE reference for the expiration
 
@@ -125,79 +62,130 @@ The biggest strike into the bell carries ~4.7x the gamma it carried at the open,
 every session, whatever the tape did. Re-derive it the same way if it ever drifts;
 the anchors in the file are lightly smoothed to stay monotone.
 
-### 2b. The ladder is stretched so the ranks are actually distinguishable
+### 2b. Radius is straight proportional to gamma
 
-An absolute scale is faithful but, on its own, unreadable. A real chain's top
-five strikes genuinely sit within ~2.3x of each other in |net GEX|, so a straight
-log mapping drew them at **6.0 / 5.1 / 4.4 / 4.2 / 4.0 px** - a 1.5:1 spread
-across the whole visible ladder, i.e. "they all look the same". That is not a bug
-in the scale; reading a hierarchy needs the mapping to stretch on purpose.
+An absolute scale on its own is faithful and unreadable. The first cut mapped
+|net GEX| onto a log domain, on the reasoning that a chain's gamma spans four
+orders of magnitude and a linear scale would hand the whole pixel budget to the
+peak. That is true of the WHOLE chain and false of what actually gets drawn: only
+the top five strikes render, and those sit within about 2.3x of each other. Log
+squeezed that into a 1.5x spread of pixels - **6.0 / 5.1 / 4.4 / 4.2 / 4.0 px** -
+and every row looked the same.
 
-So `BUBBLE_STYLE.curve` squares the log ratio, and the overall budget goes from
-7px to 12px. Same five strikes now draw **8.7 / 6.4 / 4.8 / 4.3 / 3.9 px** -
-2.2x on radius, ~5x on AREA, which is the channel the eye actually compares. Size
-is still strictly monotone in |net GEX|, so a bigger dot is still always more
-gamma; only the contrast changed.
+**Now:** `r = maxPx x |net GEX| / reference`. No exponent, no log. Twice the
+gamma is twice the radius and four times the area - the mark IS the number, and a
+strike carrying almost double its neighbour's gamma draws almost double its
+neighbour's mark. Across the six calibration sessions the top five now draw a
+median **9.8 / 6.7 / 5.2 / 4.6 / 4.1 px**: the dominant wall runs 1.9x the third
+strike and 2.4x the fifth, which is exactly what their gamma is.
 
-This is not the old `curve` slider coming back. It is one calibrated constant, in
-one place, and it is the number to move if the ladder ever reads flat again.
+`maxPx` is 20, bounded by `rowPitch x 0.42`. Rows sit at fixed prices, so on a
+zoomed-out price scale the whole ladder scales down together - which preserves
+the ratios. The old clip at half the strike pitch did the opposite: it was
+applied AFTER the size was computed, so the top of the ladder sat on the clip and
+the encoding was silently discarded. That single ordering mistake is why every
+previous rework of the size curve was invisible.
 
-`maxPx` is additionally bounded by `rowPitch x 0.55`. Rows sit at fixed prices, so
-on a zoomed-out chart the strikes can be ten pixels apart and a 12px mark would
-swallow its neighbours; the whole ladder scales down with the pitch instead,
-which keeps the ratios - the actual encoding - untouched. The old vertical clip
-at half the strike pitch was the opposite: it flattened the top of the ladder
-onto a cap while leaving everything under it alone. On a normally zoomed chart
-the pitch is far wider than this and `maxPx` simply wins.
+One of the design laws this file has been quoting is walked back on purpose:
+"size is the junior channel, sizes differ only mildly." It was read off platforms
+whose marks are a fixed size, and following it here produced five rows a pixel
+apart that nobody could rank by eye. Size is a PRIMARY channel here.
 
-Bigger marks mean the anti-overlap stride opens up, so a row is a sparser line of
-larger dots than before. That is the intended trade - the gaps are what let
-several rows sit over the candles without burying them.
+`BUBBLE_REF_FLOOR_FRAC` goes 0.20 -> 0.30. The reference is a running maximum, so
+at the first bucket of a session it is just that bucket's own biggest strike and
+the ladder renders full-size before there is anything to compare it against. 0.30
+is the knee: the median top-strike mark runs 12.1px at 0.20, 9.8px at 0.30, 7.8px
+at 0.40, and top-to-third contrast 2.16 / 1.92 / 1.59.
 
-### 3. Every slider in the Overlays menu is gone
+### 2c. One bubble per bucket. The column decimation is gone.
 
-Top / Highlight / Contrast / Size / Max / Curve / Brightness, plus the
-"Save default" and "Reset" buttons under them. They existed because the scale
-they were sitting on top of never looked right two days running, so the numbers
-had to be re-tuned by hand against whatever was on the screen. With an absolute
-scale there is nothing left for them to correct.
+The bucket picker is the only thing that decides how many columns there are: pick
+**1m** and you get a bubble every minute; pick **Bar** and you get one per candle.
 
-They are replaced by `BUBBLE_STYLE` in `slotStore.ts` - a frozen style, with the
-numbers taken off the same six sessions rather than nudged by feel:
+It used to skip columns - a stride wide enough for two full-size marks to sit
+side by side with a gap, so a row could never fuse into a solid ribbon. With the
+marks now up to 20px that stride ran to 3 or 4 on a zoomed-out chart, which meant
+"1 minute" quietly drew a bubble every third or fourth minute. That is the
+control lying about what it does.
 
-| | | why |
-|---|---|---|
-| `topStrikes` | 5 | the design law: three to six rows, never sixteen |
-| `highlight` | 1 | one wall, colour + glow only - it never touches radius |
-| `maxPx` | 12 | radius of a strike sitting AT the reference (bounded by `rowPitch x 0.55`) |
-| `curve` | 2 | the separation knob - squares the log ratio so the ranks pull apart |
-| `minPx` | 0.6 | hard floor, so a wing strike stays a visible speck |
-| `decades` | 1.5 | measured: rank-5 runs a median 0.44 of a column's top (p10 0.27), and a column's top a median 0.345 of the session reference - so the visible ladder spans ~1.5 decades |
-| `fade` | 0.55 | opacity gradient, so magnitude reads in size AND brightness |
+Horizontal overlap is simply allowed now. A row of overlapping marks is a thick
+tube and a row of small ones is a thin dotted line - and since thickness is
+exactly what the size law encodes, the fused row is still telling the truth: a
+fat tube IS the dominant level. What must never fuse is two ROWS into one band,
+and that is handled up front by `maxPxRowFrac` rather than by clamping marks
+after the fact.
 
-`topBoost` - the top-of-ladder multiplier - is deleted outright, not defaulted:
-it weighted by the 4th power of a strike's rank ratio, which bent size away from
-gamma for reasons that had nothing to do with gamma. `curve` survives as a
-constant because it is a contrast control on a monotone mapping, not a
-re-ranking (see 2b).
+### 3. Five of the seven sliders are gone. Two stay, and one moves in.
 
-What the Bubbles sub-panel keeps: the **Bucket** (Bar / 1m / 5m) and the
-**CB line** toggle. Both are genuine preferences rather than corrections.
+The test for whether a control belongs in the Overlays menu: is it a QUESTION or
+a CORRECTION?
 
-The heatmap's `intensity` slider in the dock is untouched - it is not in the
-Overlays menu and controls a different overlay.
+**Corrections - deleted.** Contrast, Size, Max, Curve, Brightness, plus the
+"Save default" / "Reset" buttons under them. You moved those because the chart
+was coming out wrong, and a chart that needs five knobs to look right is just
+wrong five ways. The scale they were correcting is absolute now.
+
+**Questions - kept, as `levels` and `intensity`.** How much of the board do you
+want on screen, and how loud should the overlay sit against the candles. Neither
+has a correct answer to hardcode, and - importantly - neither touches SIZE.
+Radius stays straight proportional to |net GEX| whatever they are set to, so a
+wall is never bigger because you asked for more rows.
+
+- `levels` - 1 to 15, default 5. Strikes drawn per column, ranked by peak |GEX|
+  across the whole session, so a level keeps its trail even after it drops out of
+  the current top N. The server request stays pinned at 30 strikes: it is part of
+  the URL, and a value that moves with a slider would re-fire a ~700KB backfill
+  on every drag and defeat dedupeFetch.
+- `intensity` - 20% to 100%, default 100%. Multiplies the whole layer, with the
+  magnitude gradient still running underneath, so turning it down dims the wings
+  and the wall together rather than flattening one into the other. Applied to the
+  glow blit via `globalAlpha` too, since the wall sprite is cached by size and
+  colour and therefore baked opaque.
+
+**The heatmap `intensity` slider moves out of the dock** into Overlays → Heatmap
+brightness. It only does anything while the heatmap is on, and it was the last
+lone slider in a toolbar otherwise made of buttons and segmented pickers - so it
+now lives with the overlay that owns it and disappears with it.
+
+What the Bubbles sub-panel holds now: **levels**, **intensity**, the **Bucket**
+(Bar / 1m / 5m), and the **CB line** toggle.
+
+`topBoost` is deleted outright rather than defaulted: it weighted radius by the
+4th power of a strike's RANK, which bent size away from gamma for a reason that
+had nothing to do with gamma. `curve` is gone for a simpler reason - it has
+nothing left to bend now that the mapping is proportional.
+
+### 4. The Layout dropdown closes when you click off it
+
+`LayoutPresetButton` only closed on Escape or on the button. Outside-click was
+deliberately absent, matching the page's other popovers - but those hover OVER
+the charts and click-away would shut the indicator menu the instant you tried to
+scrub the chart to see what you had just enabled. The layout panel is nothing
+like that: it is a list of saved layouts, you are done with it the moment you
+pick one, and leaving it parked over the chart until you find the button again is
+just a menu that will not go away.
+
+It now takes the same shape as the Overlays menu - a `mousedown` listener on
+`document` that ignores the button wrapper and a ref on the portaled panel.
+`mousedown`, not `click`: a `click` handler fires after the target has already
+re-rendered, so clicking a row that removes itself lands on nothing and reads as
+outside.
 
 ### Migration
 
-Old slot blobs still hold the seven slider keys. They are simply never read
-again - nothing deletes them, so a rollback finds the user's setup where it
+Old slot blobs still hold the seven slider keys. Five of them are simply never
+read again - nothing deletes them, so a rollback finds the user's setup where it
 expects it. The legacy pre-multi-card migration no longer seeds them into fresh
-slots. `es-candles-bubble-default-v1` survives only because `presetStore` still
-snapshots it; the card no longer writes it.
+slots; the two live controls persist under fresh keys (`bLevels`, `bInt`) rather
+than reusing `topStrikes` / `brightness`, so an old blob cannot half-restore a
+retired meaning. `es-candles-bubble-default-v1` survives only because
+`presetStore` still snapshots it; the card no longer writes it.
 
 Simulated across all six sessions, the top-5 marks hold a median
-**8.7 / 6.4 / 4.8 / 4.3 / 3.9px** ladder from 09:30 to 16:00, with no blowout into
-the close and no collapse at the open.
+**9.8 / 6.7 / 5.2 / 4.6 / 4.1px** ladder from 09:30 to 16:00, with no blowout into
+the close and no collapse at the open. For comparison the old scale ran
+**4.1 / 3.4 / 2.5 / 2.0 / 1.8px** - the same rank ordering inside four pixels,
+which is why it read as one size.
 
 ## 2026-08-16 - Options Flow: stop inventing timestamps, stop asserting moneyness
 

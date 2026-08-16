@@ -27,34 +27,60 @@
 
 // ── Bubble style ─────────────────────────────────────────────────────────────
 // This used to be a seven-slider config blob (Top / Highlight / Contrast / Size
-// / Max / Curve / Brightness) persisted per card. The sliders are GONE — see
-// CHANGELOG 2026-08-16. They existed because the size scale was self-normalising
-// and therefore never looked right two days running, so the numbers had to be
-// hand-tuned to whatever was on screen. The scale is absolute now (a time-of-day
-// detrended session reference, `gexTodScale` in chartMath), which is the thing
-// the sliders were compensating for, so the knobs have nothing left to do.
+// / Max / Curve / Brightness) persisted per card. Five of the seven are GONE —
+// see CHANGELOG 2026-08-16. They existed because the size scale was
+// self-normalising and therefore never looked right two days running, so the
+// numbers had to be hand-tuned to whatever was on screen. The scale is absolute
+// now (a time-of-day detrended session reference, `gexTodScale` in chartMath),
+// which is the thing they were compensating for.
 //
-// What is left is a frozen style, calibrated once against real data rather than
-// nudged by feel. Source: `gex_strike_history.csv` — 1.25M per-strike $SPX rows
-// over the six sessions 2026-07-10 … 2026-07-17.
+// The test for whether a control belongs here: is it a QUESTION or a
+// CORRECTION? Contrast / Size / Max / Curve / Brightness were all corrections —
+// you moved them because the chart was wrong, and a chart that needs five knobs
+// to look right is just wrong five ways. "How many levels" and "how loud" are
+// questions, they have no correct answer, and they stay (BUBBLE_LEVELS_RANGE /
+// BUBBLE_INTENSITY_RANGE below).
+//
+// Everything else is a frozen style, calibrated once against real data rather
+// than nudged by feel. Source: `gex_strike_history.csv` — 1.25M per-strike $SPX
+// rows over the six sessions 2026-07-10 … 2026-07-17.
 //
 // ── The design laws these obey ──────────────────────────────────────────────
 // Bullflow, SpotGamma and the SPY GEX overlay were put side by side, and they
 // agree on things this chart had been fighting:
 //
-//   • FEW LEVELS. Three to six rows, never sixteen. The sparsity is the design.
-//   • THIN ROWS. 4-8px dots. None of them use a fat mark for a big wall.
-//   • SIZE IS THE JUNIOR CHANNEL. Sizes differ between rows, but only mildly —
-//     what separates the dominant level is COLOUR and GLOW, not radius.
+//   • FEW LEVELS by default. Three to six rows; the sparsity is the design, and
+//     it is what the "levels" control opens at. It goes to 15 for a board read.
 //   • EVERY LEVEL IS A FULL ROW across the session. The row IS the level.
-// ── The size law ────────────────────────────────────────────────────────────
-//     r = clamp(maxPx, rowPitch × maxPxRowFrac) × ratio^curve,  floored at minPx
+//   • COLOUR AND GLOW mark the dominant level; they never touch its radius.
 //
-// where `ratio` is the strike's |net GEX| on a log scale whose top is the
-// session reference and whose bottom is `decades` under it. Read the comment on
-// `curve` — it is the number that decides whether the ladder is rankable by eye.
+// One law from that list has been walked back deliberately: "size is the junior
+// channel, sizes differ only mildly." That was read off platforms whose marks are
+// a fixed size, and following it here produced five rows a pixel apart that no
+// one could rank by eye. Size is a PRIMARY channel on this chart and it is
+// proportional — see the size law below.
+// ── The size law ────────────────────────────────────────────────────────────
+//     r = clamp(maxPx, rowPitch × maxPxRowFrac) × (|net GEX| / reference)
+//
+// STRAIGHT PROPORTIONAL. Twice the gamma is twice the radius, four times the
+// area. No exponent, no log, nothing to interpret — the mark is the number.
+//
+// It was briefly a log scale with an exponent on top, on the theory that gamma
+// spans four orders of magnitude across a chain and a linear scale would hand
+// the whole pixel budget to the peak. That is true of the WHOLE chain and false
+// of what is drawn: only the top five strikes render, and those sit within about
+// 2.3x of each other. Log compressed that 2.3x into a 1.5x spread in pixels and
+// every row looked the same, which was the complaint. On the straight mapping
+// the top strike runs a median 1.9x the third and 2.4x the fifth — which is what
+// their gamma actually is.
 export type BubbleStyle = {
-  /** How many strikes draw per column, ranked by peak |GEX| so far. */
+  /**
+   * DEFAULT number of strikes drawn per column, ranked by peak |GEX| so far.
+   * This one is a live control again (Overlays → Bubbles → "levels") because it
+   * is a question about how much of the board you want to see, not a correction
+   * to a scale that was coming out wrong — which is what every retired slider
+   * was. See BUBBLE_LEVELS_RANGE.
+   */
   topStrikes: number;
   /** How many of those render as walls — white-hot with a glow. Colour only. */
   highlight: number;
@@ -63,67 +89,68 @@ export type BubbleStyle = {
   /**
    * Ceiling on `maxPx` as a fraction of the STRIKE PITCH in px.
    *
-   * Rows sit at fixed prices, so on a zoomed-out chart the strikes can be ten
-   * pixels apart and a 12px mark would swallow its neighbours. This scales the
+   * Rows sit at fixed prices, so on a zoomed-out chart the strikes can be a few
+   * pixels apart and a 20px mark would swallow its neighbours. This scales the
    * whole ladder down with the available room instead — the RATIOS between the
-   * ranks, which are the actual encoding, are untouched. On any normally-zoomed
-   * chart the pitch is far wider than this and `maxPx` simply wins.
+   * ranks, which are the actual encoding, are untouched. At 0.42 two full-size
+   * neighbours still clear each other by ~16% of the pitch.
+   *
+   * Note this is the ONLY thing bounding the mark vertically now. The old hard
+   * clip at half the strike pitch was applied AFTER the size was computed, so
+   * the top of the ladder sat on the clip and the encoding was silently thrown
+   * away — the same bug in two places, and the reason every rework of the size
+   * curve was invisible.
    */
   maxPxRowFrac: number;
   /** Hard floor so a wing strike stays a visible speck instead of vanishing. */
   minPx: number;
-  /**
-   * Size-response exponent on the log ratio. THIS is the separation knob.
-   *
-   * At 1 (a straight log mapping) the top five strikes drew 6.0 / 5.1 / 4.4 /
-   * 4.2 / 4.0 px — a 1.5:1 spread across the whole visible ladder, which is
-   * "they all look the same" and was the complaint. That is not a bug in the
-   * scale; a real chain's top five genuinely sit within ~2.3x of each other, so
-   * ANY faithful mapping compresses them. Reading the hierarchy needs the
-   * mapping to stretch deliberately.
-   *
-   * At 2 the same five draw 8.7 / 6.4 / 4.8 / 4.3 / 3.9 px — 2.2:1 on radius,
-   * ~5:1 on area, which is what the eye actually compares. Still strictly
-   * monotone in |net GEX|, so a bigger dot is still always more gamma; only the
-   * contrast changes.
-   */
-  curve: number;
-  /**
-   * Width of the log size domain, in decades below the reference.
-   *
-   * 1.5 (≈32:1) is measured, not picked: in the six-session sample the 5th
-   * ranked strike of a column runs a median 0.44 of that column's top (p10
-   * 0.27) and the column top itself runs a median 0.345 of the session
-   * reference — so the visible ladder spans roughly 1.5 decades end to end.
-   * Narrower and the wings clip onto the floor; wider and the top five bunch
-   * back together no matter what `curve` does.
-   */
-  decades: number;
   /** Opacity gradient steepness, 0..1. The weakest row fades to 1 − this. */
   fade: number;
+  /** DEFAULT overall opacity multiplier — the "intensity" control. */
+  intensity: number;
 };
 
 export const BUBBLE_STYLE: BubbleStyle = {
   topStrikes: 5,
   highlight: 1,
-  maxPx: 12,
-  maxPxRowFrac: 0.55,
-  minPx: 0.6,
-  curve: 2,
-  decades: 1.5,
+  maxPx: 20,
+  maxPxRowFrac: 0.42,
+  minPx: 0.8,
   fade: 0.55,
+  intensity: 1,
 };
+
+/**
+ * The two bubble controls that ARE still live, and their bounds.
+ *
+ * Everything else about the layer is frozen (see the size law above). These two
+ * survive because neither of them is a correction: "how many levels" is a
+ * question about how much of the board you want on screen, and "intensity" is a
+ * question about how loud the overlay sits against the candles. Both are per
+ * card and persist into the slot blob (`bLevels` / `bInt`).
+ *
+ * The ladder request to the server is a constant 30 (see BUBBLE_LADDER_REQUEST
+ * in EsChartCard), so the level cap has to stay under it — the strike ranking is
+ * session-wide and a strike can only enter it if it survived the server-side
+ * truncation in at least one column.
+ */
+export const BUBBLE_LEVELS_RANGE = { min: 1, max: 15 } as const;
+export const BUBBLE_INTENSITY_RANGE = { min: 0.2, max: 1 } as const;
 
 /**
  * Floor under the EXPANDING session reference, as a fraction of the reference
  * over the whole loaded buffer.
  *
- * Without it the first few buckets of a session — where the running maximum is
- * one or two prints — normalise everything on screen to full size, so the open
- * paints a row of identical fat dots before there is anything to compare them
- * against. It stops binding within the first few minutes and is inert after.
+ * The reference is a running maximum, so at the very first bucket of a session
+ * it is simply that bucket's own biggest strike — and the ladder renders at full
+ * size before there is anything to compare it against. This holds the divisor up
+ * until the session has actually produced some gamma. 0.30 is where the morning
+ * stops rendering as the day's peak without flattening the ladder's contrast
+ * (measured across the six calibration sessions: the median top-strike mark goes
+ * 12.1px at 0.20 → 9.8px at 0.30 → 7.8px at 0.40, and the top-to-third ratio
+ * 2.16 → 1.92 → 1.59; 0.30 is the knee).
  */
-export const BUBBLE_REF_FLOOR_FRAC = 0.2;
+export const BUBBLE_REF_FLOOR_FRAC = 0.3;
 
 /**
  * Bubble time bucket. Storage is always 1-minute; this aggregates at DRAW time.

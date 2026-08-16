@@ -43,15 +43,41 @@ export default function LayoutPresetButton() {
   const [name, setName] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  // The portaled panel, so the outside-click handler can tell "inside the menu"
+  // from "outside" — the panel is not a DOM descendant of the button.
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
 
-  // Escape closes, matching the page's other popovers. Outside-click does not,
-  // for the same reason they don't: the charts are what you reach for next.
+  // Escape closes, and so does a click anywhere outside the button or the panel.
+  //
+  // Outside-click used to be deliberately absent here, on the reasoning that the
+  // page's other popovers skip it: those hover OVER the charts, and click-away
+  // would shut the indicator menu the instant you tried to scrub the chart to
+  // see what you had just turned on. This panel is nothing like that — it is a
+  // list of saved layouts, you are done with it the moment you pick one, and
+  // leaving it parked over the chart until you find the button again is just a
+  // menu that will not go away.
+  //
+  // `mousedown`, not `click`, and the same shape as the Overlays menu in
+  // EsChartCard: a `click` handler fires after the target has already been
+  // re-rendered, so a click on a row that removes itself lands on nothing and
+  // reads as outside.
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setOpen(false); setConfirmDelete(null); } };
+    const close = () => { setOpen(false); setConfirmDelete(null); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (wrapRef.current?.contains(t)) return;   // the button itself toggles
+      if (menuRef.current?.contains(t)) return;   // typing a name, hitting Save
+      close();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDoc);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDoc);
+    };
   }, [open]);
 
   // FIXED, not absolute — measured off the button each time it opens.
@@ -136,6 +162,7 @@ export default function LayoutPresetButton() {
           place from inside a nested tree. */}
       {open && pos && typeof document !== "undefined" && createPortal(
         <div
+          ref={menuRef}
           className="es-candles-popover"
           style={{
             // Same treatment as the page's Charts / Indicators panels so the
