@@ -1,5 +1,127 @@
 # Changelog
 
+## 2026-08-16 - Options Flow: stop inventing timestamps, stop asserting moneyness
+
+Edited: `server-v2/proxy-tastytrade.js`, `server-v2/computation/flow-processor.js`,
+`server-v2/flow-print-time.selftest.js`.
+Added: `server-v2/scripts/flow-prune-offhours.js`.
+
+The /flow page on a past session looked like the feed had died mid-morning. It
+had not. Two separate bugs were writing data that could not be true, and the
+page was rendering it faithfully.
+
+### 1. A print with no exchange time was stamped with the ingest clock
+
+`stampFlowTime()` fell back to `Date.now()` whenever a dxLink TimeAndSale
+arrived without a usable `time`. dxLink replays a contract's recent tape every
+time a subscription is (re)established, and those replayed prints often carry no
+time - so each replay wrote the print AGAIN, stamped with the moment of the
+reconnect rather than the moment of the trade.
+
+That produced rows that are impossible on their face. SPX options trade
+09:30-16:15 ET; prod held SPX prints at 00:00, 02:00, 05:00, 22:00. On
+2026-08-14 the 16:00 ET hour alone held **711 prints - more than the entire real
+session (~280)**, which is the post-close reconnect dumping the day back into
+the table.
+
+It also quietly defeated deduplication. `flow_prints`' primary key is
+`(ts, symbol, side)`, so a re-delivered print is supposed to land on the row it
+already wrote. Re-stamping changed `ts` - the very column the key rests on - so
+every replay inserted a fresh row. One $6.61M SPX print exists at hours 00, 01
+and 08 of the same day; hours 05 and 07 of 2026-08-14 are byte-identical
+aggregates (35 prints / $53,600K) of a single batch. Premium totals on the page
+were inflated by whatever the replay count happened to be.
+
+**Now:** `stampFlowTime()` returns `null` for an unusable time and the
+TimeAndSale handler drops the print. A print with no exchange time carries no
+information about WHEN it happened, and when is the entire point of a tape -
+guessing writes a lie nothing downstream can detect, while dropping loses a row
+that could never have been placed correctly and lets the primary key do the
+dedup it was designed for.
+
+Drops are counted and logged at most once a minute (`[FLOW-TIME] dropped N
+print(s)...`). Silently discarding prints is exactly the change that must stay
+visible if the feed ever stops sending `time` wholesale, since /flow would
+otherwise go empty with no error at all. `FLOW_TS_REQUIRE_EXCHANGE=0` restores
+the old fallback without a deploy.
+
+### 2. `is_otm` claimed "in the money" whenever spot was unknown
+
+`FlowProcessor.addPrint()` computed `isOtm` as `false` when the tracked
+underlying spot was 0. `false` is a CLAIM - it says the print was in the money -
+and with no spot there is nothing to make that claim from.
+
+On 2026-08-14 the tracked spot sat at 0 through the middle of the SPX session,
+so **every print from 10:00-15:00 ET was written `is_otm = false`**. With
+MONEYNESS set to OTM the page then filtered out the whole midday session, and
+Net Drift flatlined from 09:52 to the close on a day that had 118 prints in
+hours 10 and 11. The chart was correct; its input was not.
+
+**Now:** `null` when spot is unknown. An `is_otm = true` filter still excludes
+it - correctly, the moneyness is genuinely unknown - but the row no longer
+asserts the opposite, and a real ITM print is distinguishable from an untagged
+one in the table. `flow-history-writer.js` already persisted a non-boolean as
+SQL NULL, so no writer change was needed.
+
+### 3. Cleanup for the rows already on disk
+
+`server-v2/scripts/flow-prune-offhours.js` removes prints whose timestamp falls
+outside the instrument's real trading window - 09:30-16:15 ET for index roots,
+04:00-20:00 ET for everything else, plus all weekend rows. That rule is provable
+rather than heuristic: an SPX option cannot print at 02:00 ET, so such a row is
+fabricated by definition.
+
+```
+docker compose exec dashboard node server-v2/scripts/flow-prune-offhours.js \
+  --from 2026-08-01 --to 2026-08-15          # dry run, prints a per-day breakdown
+docker compose exec dashboard node server-v2/scripts/flow-prune-offhours.js \
+  --from 2026-08-01 --to 2026-08-15 --apply  # actually deletes
+```
+
+**Dry run by default.** It deliberately does NOT collapse in-window duplicates
+by `(symbol, side, price, size)` - two genuine fills of the same contract at the
+same price and size in one session are ordinary, and deduping on that shape
+would destroy real prints to remove fake ones. Those are reported and left
+alone.
+
+### Worth knowing
+
+**SPX has no recorder backstop.** The boot log reads
+`[TT-MULTIFLOW] streaming SPY, QQQ` and `[FLOW-RECORD] recording SPY, QQQ, AAPL,
+...` - SPX is in neither roster. It rides only the `_syncTimeSaleWindow`
+TimeAndSale subscription, so if that window drops mid-session SPX flow simply
+stops with nothing covering it. Separately, SPX volume in `flow_prints` runs
+200-400 prints/day, orders of magnitude below the real 0DTE tape;
+`proxy-tastytrade.js:4518` describes the strike-growth feed claiming SPX's ATM
+band and discarding its prints. Both are still open.
+
+**The netprem cache holds per-date bins in memory.** `_netPremCache` in
+`server-with-proxy.js` treats any past date as immutable, so after pruning rows
+the /flow chart keeps painting the old shape until the container restarts.
+
+## 2026-08-14 - Ticker Lookup: CB / CW / PW mark their row
+
+Edited: `components/pages/Analytics.tsx` (`TlLadder`).
+
+A level strike now says so two ways on one row:
+
+- a **named tag** beside the strike - `CB` / `CW` / `PW` - replacing the
+  anonymous coloured dot. Three dot colours is a legend to memorise; "CB" is not.
+- a **faint wash** across the row, plus a hairline in the same colour.
+
+The BARS are left alone - no outline, no glow. Both were tried and both fought
+the one thing a bar exists to say, which is magnitude and sign. The level is
+said by the row it sits in and the tag beside the strike.
+
+### Worth knowing
+
+**Spot outranks a level on the row chrome.** A strike that is both spot and a
+level keeps the cyan row border and cyan background - "where price is" must
+never be ambiguous - and still gets its tag and its lit bar.
+
+A strike can be more than one level (core and call wall coincide often): every
+match gets a tag, and the row tint takes the first by priority CB -> CW -> PW.
+
 ## 2026-08-14 - Ticker Lookup: level chips stop moving, three of them, bigger
 
 Edited: `components/pages/Analytics.tsx`.

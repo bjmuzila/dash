@@ -45,14 +45,14 @@ const NOW = 1_770_000_000_000;
 // so the function is lifted out of the source text. That also asserts it is
 // still THERE and still named this — if it gets renamed or inlined, this fails
 // loudly instead of quietly testing a stale copy.
-function loadStampFlowTime() {
+function loadStampFlowTime(env = {}) {
   const src = fs.readFileSync(PROXY, 'utf8');
-  const consts = [...src.matchAll(/^const (FLOW_TS_MAX_AGE_MS|FLOW_TS_MAX_SKEW_MS) = [^;]+;/gm)].map((m) => m[0]);
-  assert.strictEqual(consts.length, 2, 'FLOW_TS_MAX_AGE_MS / FLOW_TS_MAX_SKEW_MS not found in proxy-tastytrade.js');
+  const consts = [...src.matchAll(/^const (FLOW_TS_MAX_AGE_MS|FLOW_TS_MAX_SKEW_MS|FLOW_TS_REQUIRE_EXCHANGE) = [^;]+;/gm)].map((m) => m[0]);
+  assert.strictEqual(consts.length, 3, 'FLOW_TS_MAX_AGE_MS / FLOW_TS_MAX_SKEW_MS / FLOW_TS_REQUIRE_EXCHANGE not found in proxy-tastytrade.js');
   const start = src.indexOf('function stampFlowTime(');
   assert.ok(start > 0, 'stampFlowTime() not found in proxy-tastytrade.js');
   const end = src.indexOf('\n}', start) + 2;
-  return new Function('process', `${consts.join('\n')}\n${src.slice(start, end)}\nreturn stampFlowTime;`)({ env: {} });
+  return new Function('process', `${consts.join('\n')}\n${src.slice(start, end)}\nreturn stampFlowTime;`)({ env });
 }
 
 async function suiteStamp() {
@@ -61,13 +61,28 @@ async function suiteStamp() {
   await t('keeps a genuine 45-minute-old exchange time (the replay case)',
     () => assert.strictEqual(stampFlowTime(NOW - 45 * 60000, NOW), NOW - 45 * 60000));
   await t('keeps a normal live print', () => assert.strictEqual(stampFlowTime(NOW - 250, NOW), NOW - 250));
-  await t('falls back when the field is absent', () => assert.strictEqual(stampFlowTime(undefined, NOW), NOW));
-  await t('falls back on epoch 0', () => assert.strictEqual(stampFlowTime(0, NOW), NOW));
-  await t('falls back on garbage', () => assert.strictEqual(stampFlowTime('abc', NOW), NOW));
-  await t('falls back on a negative', () => assert.strictEqual(stampFlowTime(-5, NOW), NOW));
-  await t('rejects a far-future stamp', () => assert.strictEqual(stampFlowTime(NOW + 5 * 60000, NOW), NOW));
   await t('tolerates 30s of clock skew', () => assert.strictEqual(stampFlowTime(NOW + 30000, NOW), NOW + 30000));
-  await t('rejects a pre-1970-ish value', () => assert.strictEqual(stampFlowTime(1000, NOW), NOW));
+
+  // A print with no usable exchange time is DROPPED (null), never stamped with
+  // the ingest clock. The old `return now` fallback both invented trading hours
+  // (SPX rows at 02:00 ET, when SPX options do not trade) and defeated the
+  // (ts, symbol, side) primary key — every dxLink replay re-inserted the same
+  // print under a fresh ts. See the 2026-08-16 CHANGELOG entry.
+  await t('drops when the field is absent', () => assert.strictEqual(stampFlowTime(undefined, NOW), null));
+  await t('drops on epoch 0', () => assert.strictEqual(stampFlowTime(0, NOW), null));
+  await t('drops on garbage', () => assert.strictEqual(stampFlowTime('abc', NOW), null));
+  await t('drops on a negative', () => assert.strictEqual(stampFlowTime(-5, NOW), null));
+  await t('drops a far-future stamp', () => assert.strictEqual(stampFlowTime(NOW + 5 * 60000, NOW), null));
+  await t('drops a pre-1970-ish value', () => assert.strictEqual(stampFlowTime(1000, NOW), null));
+  await t('drops a stamp older than the max age', () => assert.strictEqual(stampFlowTime(NOW - 48 * 3600000, NOW), null));
+
+  // Escape hatch: if the feed ever stops supplying `time` wholesale, one env var
+  // restores the old behaviour rather than leaving /flow silently empty.
+  const legacy = loadStampFlowTime({ FLOW_TS_REQUIRE_EXCHANGE: '0' });
+  await t('FLOW_TS_REQUIRE_EXCHANGE=0 restores the ingest-clock fallback',
+    () => assert.strictEqual(legacy(undefined, NOW), NOW));
+  await t('FLOW_TS_REQUIRE_EXCHANGE=0 still keeps a good exchange time',
+    () => assert.strictEqual(legacy(NOW - 250, NOW), NOW - 250));
 }
 
 // ── 2. FlowProcessor ───────────────────────────────────────────────────────

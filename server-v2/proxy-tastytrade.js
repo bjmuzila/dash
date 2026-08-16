@@ -2201,10 +2201,35 @@ const FLOW_TS_MAX_AGE_MS = Number(process.env.FLOW_TS_MAX_AGE_MS || 24 * 60 * 60
 // a print stamped ahead of `now` would sit in a bin the chart renders as
 // whitespace and would drag the netprem cursor past every later real print.
 const FLOW_TS_MAX_SKEW_MS = Number(process.env.FLOW_TS_MAX_SKEW_MS || 60 * 1000);
+// DROP a print whose exchange time is unusable instead of stamping it with the
+// ingest clock. Set FLOW_TS_REQUIRE_EXCHANGE=0 to restore the old fallback.
+//
+// The old `return now` fallback is what manufactured the flow_prints corruption
+// found on 2026-08-15 (see CHANGELOG). Two compounding failures:
+//
+//   1. FABRICATED HOURS. Every replayed print with no usable `time` was stamped
+//      with the moment of the reconnect, so SPX rows landed at 00:00–08:00 and
+//      17:00–23:00 ET — hours in which SPX options do not trade at all. On
+//      2026-08-14 the 16:00 ET hour alone held 711 prints, more than the entire
+//      real session (~280).
+//   2. UNBOUNDED DUPLICATION. flow_prints' primary key is (ts, symbol, side),
+//      so an identical print re-delivered by a replay is meant to collapse onto
+//      the row it already wrote. Re-stamping it with Date.now() changes `ts` —
+//      the very column the key rests on — so each replay inserted a NEW row.
+//      One $6.61M SPX print appeared at hours 00, 01 and 08; hours 05 and 07
+//      were byte-identical aggregates (35 prints / $53,600K) of one batch.
+//
+// Dropping is the safe direction. A print with no exchange time carries no
+// information about WHEN it happened, and a flow tape's whole value is when.
+// Guessing writes a lie that no downstream consumer can detect; dropping loses
+// a row we could never have placed correctly anyway, and lets the PK do the
+// dedup it was designed for.
+const FLOW_TS_REQUIRE_EXCHANGE = process.env.FLOW_TS_REQUIRE_EXCHANGE !== '0';
 
 /**
- * Exchange timestamp for a flow print, or the ingest clock when the feed gives
- * us nothing usable.
+ * Exchange timestamp for a flow print, or null when the feed gives us nothing
+ * usable and FLOW_TS_REQUIRE_EXCHANGE is on (the default) — callers must treat
+ * null as "drop this print".
  *
  * dxLink TimeAndSale carries `time` (epoch ms) and FEED_SETUP has always asked
  * for it — but the handler dropped it on the floor and let FlowProcessor default
@@ -2217,14 +2242,32 @@ const FLOW_TS_MAX_SKEW_MS = Number(process.env.FLOW_TS_MAX_SKEW_MS || 60 * 1000)
  *
  * @param {number|string|undefined} evTime raw TimeAndSale.time off the wire
  * @param {number} [now] injected for tests
- * @returns {number} epoch ms
+ * @returns {number|null} epoch ms, or null when unusable (drop the print)
  */
 function stampFlowTime(evTime, now = Date.now()) {
   const t = Number(evTime);
-  if (!Number.isFinite(t) || t <= 0) return now;
-  if (t > now + FLOW_TS_MAX_SKEW_MS) return now;
-  if (t < now - FLOW_TS_MAX_AGE_MS) return now;
-  return t;
+  const usable = Number.isFinite(t)
+    && t > 0
+    && t <= now + FLOW_TS_MAX_SKEW_MS
+    && t >= now - FLOW_TS_MAX_AGE_MS;
+  if (usable) return t;
+  return FLOW_TS_REQUIRE_EXCHANGE ? null : now;
+}
+
+// Drops are counted and reported at most once a minute: silently discarding
+// prints is exactly the kind of change that must be visible if the feed ever
+// stops supplying `time` wholesale, since /flow would go empty with no error.
+let _flowTimeDrops = 0;
+let _flowTimeDropsLoggedAt = 0;
+function noteFlowTimeDrop() {
+  _flowTimeDrops++;
+  const now = Date.now();
+  if (now - _flowTimeDropsLoggedAt < 60_000) return;
+  _flowTimeDropsLoggedAt = now;
+  console.warn(
+    `[FLOW-TIME] dropped ${_flowTimeDrops} print(s) with no usable exchange timestamp `
+    + '— set FLOW_TS_REQUIRE_EXCHANGE=0 to persist them at the ingest clock instead'
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -4528,6 +4571,10 @@ class TastytradeProxy {
       // stampFlowTime() — without it a replayed batch piles an hour of prints
       // into one bin and the /flow net-drift line goes flat-then-vertical.
       const time = stampFlowTime(ev.time);
+      // No usable exchange time → drop. See stampFlowTime(): stamping the ingest
+      // clock here is what wrote SPX prints into hours the market is shut and
+      // duplicated each replayed print into a fresh row.
+      if (time == null) { noteFlowTimeDrop(); return; }
       // TT multi-flow (TT_FLOW_TICKERS_LIST): extra-root option prints route into the
       // SAME this.flow tape as SPX (see _startTtMultiFlow), just tagged with
       // that root's own tracked spot for correct isOtm classification. These

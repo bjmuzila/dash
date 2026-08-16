@@ -164,9 +164,19 @@ class FlowProcessor {
     // Build the FlowOrder-shaped tape entry. Only buy/sell prints get a
     // directional action; mid/unknown collapse to a neutral 'FLOW' row.
     const isCall = parsed.type === 'C';
+    // NULL — not false — when the underlying spot is unknown. `false` is a
+    // CLAIM ("this print was in the money"), and with no spot there is nothing
+    // to make that claim from. On 2026-08-14 the tracked spot sat at 0 through
+    // the middle of the SPX session, so every print from 10:00–15:00 ET was
+    // written is_otm = false; the /flow MONEYNESS = OTM filter then removed the
+    // whole midday session and the page read as if the feed had died. A null is
+    // still excluded by an `is_otm = true` filter — correctly, the moneyness is
+    // genuinely unknown — but it no longer asserts the opposite, and it is now
+    // distinguishable from a real ITM print in the table.
+    // flow-history-writer.js already persists a non-boolean as SQL NULL.
     const isOtm = spot > 0
       ? (isCall ? parsed.strike > spot : parsed.strike < spot)
-      : false;
+      : null;
     let action = 'FLOW';
     let bucket = 'neutral';
     if (side === 'buy' || side === 'sell') {

@@ -1983,9 +1983,19 @@ function TlLevelChip({ name, value, spot, color, note }: {
   );
 }
 
+// LEVEL_COLORS are hex; the row tint needs them at low alpha. Kept local and
+// tiny rather than pulling a colour lib in for one gradient.
+function tlHexA(hex: string, a: number): string {
+  const h = hex.replace("#", "");
+  const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
 // One pane's ladder. Bars run out from a center rail: +GEX right, −GEX left.
-// Level marks are DOTS, not words — the strike column stays a column of
-// numbers, and the chips under the ladder name each level.
+// Level marks are the level's own colour, said two ways on the same row: a
+// named tag beside the strike (CB / CW / PW) and a faint wash + hairline across
+// the row. The BARS are left alone — outlining or lighting them fought the one
+// thing they exist to say, which is magnitude and sign.
 // `changes` (optional) turns on the day-over-day Δ column: strike → ΔGEX vs the
 // previous end-of-day snapshot, already differenced by the backend. Only the
 // right pane passes it — the recorder snapshots the BOARD, so hanging a
@@ -2019,18 +2029,29 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null }: {
         const pos = r.gex >= 0;
         const pct = Math.max(2, (Math.abs(r.gex) / maxAbs) * 100);
         const isSpot = spotRow != null && r.strike === spotRow.strike;
-        const marks: string[] = [];
-        if (levels.callWall === r.strike) marks.push(LEVEL_COLORS.cw);
-        if (levels.putWall === r.strike) marks.push(LEVEL_COLORS.pw);
-        if (levels.core === r.strike) marks.push(LEVEL_COLORS.cb);
+        // Which levels land on this strike. A strike can BE more than one (core
+        // and call wall coincide often), so every match gets a tag; the ROW can
+        // only be tinted one colour, so it takes the first by this priority.
+        const marks: { key: string; label: string; color: string }[] = [];
+        if (levels.core === r.strike) marks.push({ key: "cb", label: "CB", color: LEVEL_COLORS.cb });
+        if (levels.callWall === r.strike) marks.push({ key: "cw", label: "CW", color: LEVEL_COLORS.cw });
+        if (levels.putWall === r.strike) marks.push({ key: "pw", label: "PW", color: LEVEL_COLORS.pw });
+        const lv = marks[0]?.color ?? null;
         return (
           <div
             key={r.strike}
             style={{
               display: "grid", gridTemplateColumns: cols, alignItems: "center", gap: 8,
               padding: "2px 6px", borderRadius: 8,
-              border: `1px solid ${isSpot ? T.cyan : "transparent"}`,
-              background: isSpot ? "rgba(33,158,188,0.08)" : "transparent",
+              // Spot outranks a level on the row chrome — "where price is" is
+              // the one thing that must never be ambiguous. A level strike that
+              // is also spot still gets its tag and its lit bar.
+              border: `1px solid ${isSpot ? T.cyan : lv ? tlHexA(lv, 0.30) : "transparent"}`,
+              background: isSpot
+                ? "rgba(33,158,188,0.08)"
+                : lv
+                  ? `linear-gradient(90deg, transparent, ${tlHexA(lv, 0.10)})`
+                  : "transparent",
             }}
           >
             <span style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0, flexWrap: "wrap" }}>
@@ -2038,10 +2059,23 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null }: {
                 {r.strike.toLocaleString("en-US", { maximumFractionDigits: 2 })}
               </span>
               {isSpot && <span style={{ fontSize: 9, fontWeight: 800, color: T.cyan, letterSpacing: "0.08em" }}>◀</span>}
-              {marks.map((c) => (
-                <span key={c} style={{ width: 7, height: 7, borderRadius: 2, background: c, flexShrink: 0 }} />
+              {/* Named tags, not anonymous dots. Three dot colours is a legend
+                  to memorise; "CB" is not. */}
+              {marks.map((m) => (
+                <span
+                  key={m.key}
+                  title={m.key === "cb" ? "Core — biggest magnet" : m.key === "cw" ? "Call wall — ceiling" : "Put wall — floor"}
+                  style={{
+                    fontSize: 9, fontWeight: 800, letterSpacing: "0.06em",
+                    padding: "1px 4px", borderRadius: 3, flexShrink: 0,
+                    background: m.color, color: "#0b0f1a",
+                  }}
+                >{m.label}</span>
               ))}
             </span>
+            {/* The bars are deliberately UNTOUCHED by the level marking — no
+                outline, no glow. A bar's job is magnitude and sign; the level
+                is said by the row it sits in and the tag beside the strike. */}
             <span style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
               <span style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
                 {!unrecorded && !pos && <span style={{ width: `${pct}%`, height: 14, borderRadius: "4px 0 0 4px", background: T.red }} />}
