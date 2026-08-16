@@ -180,6 +180,7 @@ __export(db_exports, {
   clearStatementMonth: () => clearStatementMonth,
   deleteStatementTx: () => deleteStatementTx,
   insertStatementTx: () => insertStatementTx,
+  listStatementCategoryTrend: () => listStatementCategoryTrend,
   listStatementMonths: () => listStatementMonths,
   listStatementTx: () => listStatementTx,
   listSubscriptions: () => listSubscriptions,
@@ -4724,6 +4725,26 @@ async function listStatementMonths(profileId) {
     [profileId]
   );
 }
+// Spend per category per month — the series behind the Categories-tab trend.
+// One row per (month, category); an uncategorized row comes back with
+// category_id NULL so the client can fold it into its own bucket.
+//
+// Outflow only. A refund posts as direction 'in' against the same category and
+// would otherwise punch a hole in the curve that reads as "you stopped buying
+// groceries in March" rather than "one thing got returned".
+async function listStatementCategoryTrend(profileId, sinceMonth, untilMonth) {
+  return queryAll(
+    `SELECT month,
+            category_id,
+            SUM(amount)   AS spent,
+            COUNT(*)::int AS n
+       FROM budget_statement_tx
+      WHERE profile_id = ? AND direction = 'out' AND month >= ? AND month <= ?
+      GROUP BY month, category_id
+      ORDER BY month ASC`,
+    [profileId, sinceMonth, untilMonth || '9999-12']
+  );
+}
 async function updateStatementTx(profileId, id, patch) {
   const pool = await getDb();
   await pool.query(
@@ -5298,6 +5319,7 @@ async function getLatestMultGreekStaticSnapshot() {
   clearStatementMonth,
   deleteStatementTx,
   insertStatementTx,
+  listStatementCategoryTrend,
   listStatementMonths,
   listStatementTx,
   listSubscriptions,

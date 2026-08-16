@@ -2811,12 +2811,18 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
               the chips are pinned to the bottom by TL_CHIP_ROW's `marginTop:
               auto`. Ladder length no longer moves anything. */}
           <div className="tl-split" style={{
-            display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14,
+            display: "grid", gridTemplateColumns: "1fr 1fr",
+            // A grid item's automatic minimum size is its CONTENT — without an
+            // explicit minmax(0,…) row the panes ignore the fixed height, grow
+            // to the full ladder, and paint straight over "The read" block and
+            // the disclaimer below. minmax(0,1fr) here + minHeight:0 on each
+            // pane is what actually hands the overflow to the ladder scrollers.
+            gridTemplateRows: "minmax(0, 1fr)", gap: 14,
             alignItems: "stretch", height: "clamp(460px, 64vh, 900px)",
           }}>
 
             {/* LEFT — one expiration */}
-            <div style={{ border: `1px solid ${T.border}`, borderRadius: 14, padding: 12, display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
+            <div style={{ border: `1px solid ${T.border}`, borderRadius: 14, padding: 12, display: "flex", flexDirection: "column", gap: 10, minWidth: 0, minHeight: 0 }}>
               <Row style={{ flexWrap: "wrap" }}>
                 <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: T.cyan }}>
                   By expiration
@@ -2860,7 +2866,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
             </div>
 
             {/* RIGHT — every listed expiration except today's (never 0DTE) */}
-            <div style={{ border: `1px solid ${T.border}`, borderRadius: 14, padding: 12, display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
+            <div style={{ border: `1px solid ${T.border}`, borderRadius: 14, padding: 12, display: "flex", flexDirection: "column", gap: 10, minWidth: 0, minHeight: 0 }}>
               <Row style={{ flexWrap: "wrap" }}>
                 <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: T.cyan }}>
                   All expirations · ex-0DTE

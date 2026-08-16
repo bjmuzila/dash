@@ -6641,7 +6641,7 @@ if (libDb) {
   // 'pushSubscription' action, which promotes ONE detected subscription into the
   // register as a recurring rule — an explicit, per-item decision.
   //
-  // GET  ?month=YYYY-MM  → { month, tx, subscriptions, categories, months }
+  // GET  ?month=YYYY-MM  → { month, tx, subscriptions, categories, months, trend }
   // POST { action: import | updateTx | setTxCategory | deleteTx | clearMonth
   //                | setSubscription | pushSubscription }
   {
@@ -6664,12 +6664,24 @@ if (libDb) {
 
           if (req.method === 'GET') {
             const month = new URL(req.url || '/', 'http://localhost').searchParams.get('month') || currentMonth();
-            const [tx, subscriptions, categories, months, adviceRow] = await Promise.all([
+            // Trend window: the 11 months before the loaded one, plus itself.
+            // Anchored to the LOADED month, not to today, so scrolling back to
+            // March shows March's run-up rather than a curve that stops a year
+            // ago and leaves the selected month off the right edge.
+            const trendSince = (() => {
+              const y = Number(month.slice(0, 4));
+              const m = Number(month.slice(5, 7));
+              if (!Number.isFinite(y) || !Number.isFinite(m)) return '0000-01';
+              const d = new Date(Date.UTC(y, m - 1 - 11, 1));
+              return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+            })();
+            const [tx, subscriptions, categories, months, adviceRow, trend] = await Promise.all([
               D.listStatementTx(profile.id, month),
               D.listSubscriptions(profile.id),
               D.listBudgetCategories(profile.id),
               D.listStatementMonths(profile.id),
               D.getBudgetAdvice(profile.id, month),
+              D.listStatementCategoryTrend(profile.id, trendSince, month),
             ]);
             // The stored "what to fix" pass for this month, if one was ever run.
             const advice = adviceRow
@@ -6681,7 +6693,15 @@ if (libDb) {
                 model: adviceRow.model,
               }
               : null;
-            send(res, 200, { profile, month, tx, subscriptions, categories, months, advice });
+            send(res, 200, {
+              profile, month, tx, subscriptions, categories, months, advice,
+              trend: (trend || []).map((r) => ({
+                month: r.month,
+                categoryId: r.category_id == null ? null : Number(r.category_id),
+                spent: Number(r.spent) || 0,
+                count: Number(r.n) || 0,
+              })),
+            });
             return;
           }
 

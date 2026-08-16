@@ -1,5 +1,80 @@
 # Changelog
 
+## 2026-08-16 - Budget: month-over-month category history, a Budget tab, and a Spend Pace that answers a month-shaped question
+
+Edited: `server-v2/_lib-db.cjs`, `server-v2/api-router.js`,
+`owner-vite/src/pages/budget/RealMonth.tsx`, `owner-vite/src/pages/Budget.tsx`.
+
+Real Month could only ever see one month. Every number it showed answered "what
+did this month cost" and none of them answered the question that always follows
+it - **is that normal?** Three changes, one new data path underneath all of them.
+
+**The data path.** `listStatementCategoryTrend()` rolls `budget_statement_tx` up
+to one row per (month, category), outflow only - a refund posts as `direction
+'in'` against the same category and would otherwise punch a hole in the curve
+that reads as "you stopped buying groceries in March" rather than "one thing got
+returned". `GET /api/budget/real` now returns it as `trend`, windowed to the 11
+months before the loaded month plus itself. The window is anchored to the LOADED
+month, not to today, so scrolling back to March shows March's run-up instead of
+a curve that stops a year ago with the selected month off the right edge.
+
+**Category trend** (Categories tab). Pills across the top pick a category; the
+chart draws its spend month over month against two reference lines - its own
+average, and the budget it was given. Hue is bound to the category's stable id
+order, the same rule the donut uses, so a category is the same colour on both
+charts. **A month with no statement imported breaks the line rather than
+plotting a zero** - an unimported month and a month where you genuinely spent
+nothing are the same zero in the totals and mean opposite things, and drawing
+the first as the second invents a cliff that never happened.
+
+**Budget tab** (new, between Categories and Subscriptions). Every category as a
+row, every month as a column, monthly budget editable in place, average and
+status on the right, and three counters on top: on track/under, watch it, over
+budget. Two decisions worth naming:
+
+- **The edit writes through to `budget_categories`** (upsert on name - the same
+  write the Categories tab makes), not to localStorage. A budget set here is the
+  budget everywhere, not a copy that lives in one browser and silently disagrees
+  with the rest of the app.
+- **Status reads the AVERAGE, never the latest month.** One expensive week is
+  not a broken budget, and a row that flips red every time a quarterly bill
+  lands teaches you to stop reading the colour. Bands are avg/budget: <=0.6
+  crushed it, <=1.0 on track, <=1.15 watch it, above that over budget.
+
+The average divides by **months that have a statement behind them** - not by
+months where that category happened to see spend, and not by the whole axis.
+Dividing by the months it appeared in would give the average size of a Travel
+trip when what a budget asks is the average Travel cost per month, quiet months
+included; dividing by the whole axis would count an unimported month as a zero,
+which it is not. Both the tab and the trend chart read the one definition, so
+they cannot disagree about what a category costs.
+
+**Spend Pace** is now pinned to the selected month, day by day. It followed the
+range tab, which on this page is "monthly" - so the card drew Jan-Dec against a
+12x budget: a year-shaped answer sitting in a row of month-scoped tiles. It also
+gained a second dashed ramp, **a typical month**, averaged over the months of
+the year that have spend, excluding the month being drawn (averaging a
+half-finished month into its own benchmark flatters it). That line is the useful
+half of the card: a budget that was never once hit stops being information,
+while "ahead of a normal month by $310 on the 14th" always is.
+
+## 2026-08-16 - Ticker Lookup: "The read" no longer buried under the ladders
+
+Edited: `components/pages/Analytics.tsx`.
+
+The Ticker Lookup split gives its two panes a fixed height so the level chips
+stay pinned and stop sliding with ladder length. That height was being ignored:
+a grid item's automatic minimum size is its CONTENT, so each pane grew to the
+full ladder, overflowed the container, and painted straight over the
+plain-language **The read** paragraph, the OI+Vol disclaimer and the Updated
+stamp underneath it.
+
+Fix is two lines: `gridTemplateRows: "minmax(0, 1fr)"` on `.tl-split` and
+`minHeight: 0` on both pane columns. With the automatic minimum released, the
+fixed pane height is honored and the overflow lands where it was always meant to
+- the inner ladder scroller (`flex: 1; minHeight: 0; overflowY: auto`). The read
+block and the disclaimer now sit below the panes, unobstructed.
+
 ## 2026-08-16 - Intensity at minimum now means "levels only" (CB / CW / PW)
 
 Added: `lib/calculations/heatLevels.ts`.

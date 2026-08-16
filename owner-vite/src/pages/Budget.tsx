@@ -176,7 +176,11 @@ export default function Budget() {
   const range: RangeMode = "monthly";
   // Cash Flow is always day-by-day across the month in the picker.
   const cfMode: RangeMode = "daily";
-  const paceRange = range;
+  // Spend Pace is pinned to the SELECTED MONTH, day by day. It used to follow
+  // the range tab, which on this page means "monthly" — so the card drew
+  // Jan–Dec against a 12× budget: a year-shaped answer to a month-shaped
+  // question, sitting in a row of month-scoped tiles.
+  const paceRange: RangeMode = "daily";
 
   // Add-row composer
   const [rwDate, setRwDate] = useState(todayIso());
@@ -744,11 +748,13 @@ export default function Budget() {
     return out;
   }, [spendWindow, categories]);
 
-  // ── Spend pace at each resolution ─────────────────────────────────────────
-  // Cumulative spend vs a straight-line budget, re-bucketed per tab:
-  // daily = days of the month, weekly = W1..W5, monthly = Jan..Dec,
-  // yearly = Q1..Q4. Budget scales with the span (monthly budget × 12 for the
-  // year-wide views), so "over/under pace" means the same thing on every tab.
+  // ── Spend pace ────────────────────────────────────────────────────────────
+  // Cumulative spend vs a straight-line budget AND vs a typical month. The
+  // card itself is pinned to `paceRange` = daily (the selected month, day by
+  // day); the other buckets stay here because they are correct and the pin is
+  // a display decision, not a data one. Budget scales with the span (monthly
+  // budget × 12 for the year-wide views), so "over/under pace" would mean the
+  // same thing at any resolution.
   const paceSeries = useMemo(() => {
     const monthBudget = intel.budgetTotal;
     const yearBudget = monthBudget * 12;
@@ -764,22 +770,31 @@ export default function Budget() {
     const monthsUpTo = yearIsCurrent ? nowMonth : String(year) < todayIso().slice(0, 4) ? 12 : 0;
     const monthShort = new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
+    // A typical month, for the second reference line. Only months that
+    // actually have spend, and never the month being drawn — averaging a
+    // half-finished month into its own benchmark flatters it, and a projected
+    // month with nothing logged would drag the whole thing to zero.
+    const priorMonths = yearMonths.months.filter((m) => m.expenses > 0 && m.ym !== month);
+    const avgMonth = priorMonths.length
+      ? priorMonths.reduce((s, m) => s + m.expenses, 0) / priorMonths.length
+      : 0;
+
     if (paceRange === "daily") {
-      return { cum: intel.cum, labels: intel.cum.map((_, i) => String(i + 1)), budget: monthBudget, upTo: intel.todayDay, span: intel.daysInMonth, scope: monthShort };
+      return { cum: intel.cum, labels: intel.cum.map((_, i) => String(i + 1)), budget: monthBudget, avg: avgMonth, avgN: priorMonths.length, upTo: intel.todayDay, span: intel.daysInMonth, scope: monthShort };
     }
     if (paceRange === "weekly") {
       const nWeeks = Math.ceil(intel.daysInMonth / 7);
       const weeks = new Array<number>(nWeeks).fill(0);
       spendByDay.forEach((v, i) => { weeks[Math.floor(i / 7)] += v; });
       const upTo = intel.todayDay > 0 ? Math.floor((intel.todayDay - 1) / 7) + 1 : 0;
-      return { cum: cumulate(weeks), labels: weeks.map((_, i) => `W${i + 1}`), budget: monthBudget, upTo, span: nWeeks, scope: monthShort };
+      return { cum: cumulate(weeks), labels: weeks.map((_, i) => `W${i + 1}`), budget: monthBudget, avg: avgMonth, avgN: priorMonths.length, upTo, span: nWeeks, scope: monthShort };
     }
     if (paceRange === "monthly") {
       const vals = yearMonths.months.map((m) => m.expenses);
-      return { cum: cumulate(vals), labels: yearMonths.months.map((m) => new Date(2000, m.m - 1, 1).toLocaleDateString("en-US", { month: "narrow" })), budget: yearBudget, upTo: monthsUpTo, span: 12, scope: String(year) };
+      return { cum: cumulate(vals), labels: yearMonths.months.map((m) => new Date(2000, m.m - 1, 1).toLocaleDateString("en-US", { month: "narrow" })), budget: yearBudget, avg: avgMonth * 12, avgN: priorMonths.length, upTo: monthsUpTo, span: 12, scope: String(year) };
     }
     const quarters = [1, 2, 3, 4].map((q) => yearMonths.months.filter((m) => Math.floor((m.m - 1) / 3) + 1 === q).reduce((s, m) => s + m.expenses, 0));
-    return { cum: cumulate(quarters), labels: ["Q1", "Q2", "Q3", "Q4"], budget: yearBudget, upTo: Math.ceil(monthsUpTo / 3), span: 4, scope: String(year) };
+    return { cum: cumulate(quarters), labels: ["Q1", "Q2", "Q3", "Q4"], budget: yearBudget, avg: avgMonth * 12, avgN: priorMonths.length, upTo: Math.ceil(monthsUpTo / 3), span: 4, scope: String(year) };
   }, [paceRange, intel, computed.groups, yearMonths.months, year, month]);
 
   // Income / expenses / net for the month. The monthly
@@ -1105,6 +1120,7 @@ export default function Budget() {
             currency={currency}
             defaultBank="secu"
             onOpenCategories={() => setTab("categories")}
+            onCategoriesChanged={() => refresh(month)}
           />
         )}
         {tab === "categories" && (
@@ -1730,17 +1746,20 @@ function SafeToSpendCard({ intel, currency, range }: { intel: Intel; currency: s
 }
 
 /**
- * Spend Pace: cumulative spend vs a straight-line budget, at whatever
- * resolution the tab asks for (days of the month → weeks → months of the year
- * → quarters). Drawn in the /owner/charts-ui area-chart idiom: dashed grid,
- * gradient fill under a smooth curve, dashed pace line, marker on the last
- * real point.
+ * Spend Pace: cumulative spend for the selected month against TWO reference
+ * ramps — the straight-line budget (what you intended) and a typical month
+ * (what you actually do). The second one is the useful half: a budget that
+ * was never once hit stops being information, while "ahead of a normal month
+ * by $310 on the 14th" always is.
+ *
+ * Drawn in the /owner/charts-ui area-chart idiom: dashed grid, gradient fill
+ * under a smooth curve, dashed pace lines, marker on the last real point.
  */
-type PaceSeries = { cum: number[]; labels: string[]; budget: number; upTo: number; span: number; scope: string };
+type PaceSeries = { cum: number[]; labels: string[]; budget: number; avg: number; avgN: number; upTo: number; span: number; scope: string };
 function SpendPaceCard({ series, currency, range }: { series: PaceSeries; currency: string; range: RangeMode }) {
   const W = 300, H = 132, PADB = 16;
   const n = Math.max(series.span, 1);
-  const maxV = Math.max(series.budget, series.cum[series.cum.length - 1] || 0, 1);
+  const maxV = Math.max(series.budget, series.avg, series.cum[series.cum.length - 1] || 0, 1);
   const px = (i: number) => (n === 1 ? W / 2 : (i / (n - 1)) * W);
   const py = (v: number) => H - PADB - (v / maxV) * (H - PADB - 10);
   const upTo = Math.max(0, Math.min(series.upTo, series.cum.length));
@@ -1752,6 +1771,9 @@ function SpendPaceCard({ series, currency, range }: { series: PaceSeries; curren
   const over = spent > pace;
   const delta = Math.abs(spent - pace);
   const accent = over ? SOFT_RED : LIGHT_BLUE;
+  // Where a typical month had reached by this point in its own run.
+  const avgSoFar = (series.avg * upTo) / n;
+  const vsAvg = spent - avgSoFar;
   // Sparse x labels — every label would collide at 31 days wide.
   const step = Math.max(1, Math.ceil(series.labels.length / 7));
   return (
@@ -1776,6 +1798,11 @@ function SpendPaceCard({ series, currency, range }: { series: PaceSeries; curren
         ))}
         {/* straight-line budget pace */}
         <line x1={px(0)} y1={py(series.budget / n)} x2={px(n - 1)} y2={py(series.budget)} stroke="rgba(255,255,255,0.30)" strokeDasharray="4 5" />
+        {/* a typical month, on the same ramp — the honest benchmark next to
+            the budget, which is only ever what you INTENDED to spend */}
+        {series.avg > 0 && (
+          <line x1={px(0)} y1={py(series.avg / n)} x2={px(n - 1)} y2={py(series.avg)} stroke={bRgba(HOME_THEME.gold, 0.6)} strokeDasharray="2 4" />
+        )}
         {area && <path d={area} fill="url(#paceFill)" />}
         {line && <path d={line} fill="none" stroke={bRgba(accent, 0.45)} strokeWidth={8} strokeLinejoin="round" strokeLinecap="round" />}
         {line && <path d={line} fill="none" stroke={accent} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />}
@@ -1788,6 +1815,18 @@ function SpendPaceCard({ series, currency, range }: { series: PaceSeries; curren
         <span style={{ opacity: 0.6 }}>Spent <b style={{ color: HOME_THEME.text }}>{fmtMoney(spent, currency)}</b></span>
         <span style={{ opacity: 0.6 }}>Budget <b style={{ color: HOME_THEME.text }}>{fmtMoney(series.budget, currency)}</b></span>
       </div>
+      {series.avg > 0 && (
+        <div style={{ marginTop: 5, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
+          <span style={{ opacity: 0.6, display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span style={{ width: 12, height: 0, borderTop: `2px dotted ${bRgba(HOME_THEME.gold, 0.8)}`, display: "inline-block" }} />
+            Avg month <b style={{ color: HOME_THEME.text }}>{fmtMoney(series.avg, currency)}</b>
+            <span style={{ opacity: 0.55 }}>({series.avgN} mo)</span>
+          </span>
+          <span style={{ color: vsAvg > 0 ? SOFT_RED : HOME_THEME.green, fontWeight: 800 }}>
+            {vsAvg > 0 ? "+" : ""}{fmtMoney(vsAvg, currency)} vs avg
+          </span>
+        </div>
+      )}
     </div>
   );
 }
