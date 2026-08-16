@@ -201,10 +201,19 @@ export function useEsCandles(
       `${intervalMinutes}|${historyDays}`,
       () => Promise.allSettled([
         queryEsCandlesToday(intervalMinutes),
-        // 1m history is deliberately short: dxFeed only serves ~7 days of it, and
-        // this array feeds buildSlotAverages — a 20-day request at 1m would be 5x
-        // the rows for baselines that mostly don't exist.
-        queryEsCandlesHistorical(intervalMinutes === 1 ? 2 : historyDays, intervalMinutes),
+        // 1m history stays SHORT — dxFeed only serves ~7 days of it, and this
+        // array feeds buildSlotAverages, where a 20-day request at 1m would be
+        // 5x the rows for baselines that mostly don't exist.
+        //
+        // It is a CEILING, not a fixed 2. It used to be a hard `? 2 :`, which
+        // meant ES Candles could never show more than two sessions of 1-minute
+        // bars however far its own window reached — the caller's number was
+        // silently discarded. `Math.min` keeps the ceiling and honours anything
+        // under it, so a caller asking for 2 still gets exactly 2.
+        queryEsCandlesHistorical(
+          intervalMinutes === 1 ? Math.min(historyDays, 5) : historyDays,
+          intervalMinutes,
+        ),
       ]),
     );
     if (todayRes.status === "rejected") console.warn("[es-candles] today load failed:", todayRes.reason);
