@@ -65,12 +65,82 @@ export function etMinutesOfDay(ts: number): number {
   return hh < 0 ? -1 : hh * 60 + mm;
 }
 
-// 15:30 ET. In the last half hour, dealer gamma collapses onto 2–3 strikes into the
-// close and |GEX| there dwarfs everything printed earlier in the session. Letting
-// those minutes set the bubble scale makes them render enormous and squashes the
-// whole rest of the day to dust — so they're excluded from the normalization and
-// simply CLAMP at the pre-15:30 max instead. See the bubble draw.
-export const BUBBLE_SCALE_CUTOFF_MIN = 15 * 60 + 30;
+/**
+ * ── Time-of-day gamma profile ────────────────────────────────────────────────
+ * |net GEX| at the session's biggest strike is NOT stationary through the day.
+ * It grows all morning and then runs away into the close: dealer gamma collapses
+ * onto two or three strikes, and the numbers there are several times anything
+ * printed at lunch. That is STRUCTURAL — it happens every single session — so it
+ * is a property of the clock, not a signal about today.
+ *
+ * The previous fix was a cliff: ignore every minute from 15:30 on when setting
+ * the bubble scale (the old `BUBBLE_SCALE_CUTOFF_MIN`). It stopped the close
+ * from flattening the morning, but it also meant the last half hour carried no
+ * information at all — every late wall clamped to the same maximum size, so a
+ * genuinely enormous 15:50 pin drew exactly like an ordinary one.
+ *
+ * This table replaces it. It is the EXPECTED |GEX| of the biggest strike at a
+ * given ET minute, as a multiple of its midday level, so the bubble scale can
+ * divide it out and judge a 15:50 wall against what 15:50 normally looks like
+ * instead of against noon.
+ *
+ * ── Calibration: measured, not guessed ──────────────────────────────────────
+ * Source: `gex_strike_history.csv` at the repo root — 1.25M per-strike $SPX rows
+ * over the six full sessions 2026-07-10 … 2026-07-17. For each minute of each
+ * session take the largest |net_gex| on the board, divide by that day's own
+ * median over 10:00–14:00 ET, then take the median across days. The shape came
+ * out monotone and tight day to day:
+ *
+ *   09:30 0.73    11:30 1.00    13:30 1.33    15:20 2.59
+ *   10:00 0.81    12:00 0.97    14:00 1.63    15:30 2.85
+ *   10:30 0.83    12:30 1.02    14:30 2.01    15:50 3.10
+ *   11:00 0.85    13:00 1.15    15:00 2.24    16:00 3.42
+ *
+ * — the biggest strike into the bell carries ~4.7x the gamma it carried at the
+ * open, whatever the tape did.
+ *
+ * Re-derive it the same way if the profile ever drifts. The anchors below are
+ * lightly smoothed to stay monotone (the raw 15:40 bin dips under 15:30 on a
+ * six-session sample; that is noise, not a real lull).
+ */
+const GEX_TOD_ANCHORS: Array<[minuteOfDay: number, scale: number]> = [
+  [9 * 60 + 30, 0.72],
+  [10 * 60, 0.80],
+  [10 * 60 + 30, 0.85],
+  [11 * 60, 0.88],
+  [11 * 60 + 30, 0.98],
+  [12 * 60, 1.00],
+  [12 * 60 + 30, 1.03],
+  [13 * 60, 1.15],
+  [13 * 60 + 30, 1.33],
+  [14 * 60, 1.65],
+  [14 * 60 + 30, 2.00],
+  [15 * 60, 2.25],
+  [15 * 60 + 30, 2.85],
+  [16 * 60, 3.40],
+];
+
+/**
+ * Expected |GEX| of the biggest strike at `minuteOfDay` ET, as a multiple of its
+ * midday level. Piecewise-linear between the anchors and FLAT outside the cash
+ * session — an overnight print is scaled like the open, which is the closest
+ * thing to a quiet-book reference the profile has.
+ */
+export function gexTodScale(minuteOfDay: number): number {
+  if (!Number.isFinite(minuteOfDay) || minuteOfDay < 0) return 1;
+  const first = GEX_TOD_ANCHORS[0];
+  const last = GEX_TOD_ANCHORS[GEX_TOD_ANCHORS.length - 1];
+  if (minuteOfDay <= first[0]) return first[1];
+  if (minuteOfDay >= last[0]) return last[1];
+  for (let i = 1; i < GEX_TOD_ANCHORS.length; i++) {
+    const [b, vb] = GEX_TOD_ANCHORS[i];
+    if (minuteOfDay <= b) {
+      const [a, va] = GEX_TOD_ANCHORS[i - 1];
+      return va + (vb - va) * ((minuteOfDay - a) / (b - a));
+    }
+  }
+  return 1;
+}
 
 // Cash session bounds in minutes past ET midnight. Single-sourced because three
 // things now read them — isCashOpen below, etSessionStarted, and the replay
@@ -364,39 +434,112 @@ export function parseLevelNum(v: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-// ── Default zoom ─────────────────────────────────────────────────────────────
-// The chart opens on the most recent DEFAULT_VIEW_BARS bars, not the whole
-// loaded history. fitContent() crushed a full session (plus overnight) into the
-// container, which left the candles hairline-thin and — worse — packed the
-// 1-min GEX bubbles so tightly they merged into one solid rail.
+// ── Default zoom: THE CASH SESSION ───────────────────────────────────────────
+// The chart opens on 09:30–16:00 ET of the most recent session that has RTH
+// bars. That is the frame the page is for — gamma levels are a statement about
+// the cash session, and every read on this chart (walls, flip, CB, the bubble
+// trail, the EM band) is scoped to it.
 //
-// This is a BAR COUNT, not a duration, and that matters now that the card has a
-// timeframe switcher. It used to be `4h / CANDLE_MS`, which is 48 bars at 5m —
-// but the same 4h window at 1h would open the chart on FOUR bars. Holding the
-// bar count fixed makes every interval open at identical visual density, which
-// is the property the original comment was actually reaching for.
+// It used to open on the most recent DEFAULT_VIEW_BARS bars, a fixed count. That
+// was written to stop fitContent() crushing a full session plus overnight into
+// the container, and it did — but 60 bars is 5 hours at 5m and FIFTY MINUTES at
+// 1m, so on the intervals people actually use it opened deep inside the day with
+// the morning off-screen, and the "why is it so zoomed in" was earned.
+//
+// THE WINDOW IS RESERVED, NOT FITTED. The right edge is placed at the session's
+// LAST bar slot, not at the newest bar that has printed, so at 09:35 you see the
+// whole day's frame with five bars in it rather than five bars stretched across
+// the width. The frame therefore stays put as the session fills instead of
+// re-zooming under the cursor.
 export const DEFAULT_VIEW_BARS = 60;
 // Right gutter, in bars, so the newest candle isn't jammed against the price
 // axis (fitContent leaves a similar gap).
 export const DEFAULT_VIEW_RIGHT_PAD = 2;
-// Show the last DEFAULT_VIEW_BARS of `barCount` bars. Falls back to fitContent
-// when there isn't enough history to fill the window (early premarket, a thin
-// replay slice), so a short session still fills the width instead of rendering
-// a handful of bars stranded on the right.
-export function applyDefaultView(chart: IChartApi | null, barCount: number) {
+// A little air before the open, so the 09:30 bar isn't welded to the left edge.
+const RTH_VIEW_LEFT_PAD = 1;
+// Bound on the backward walk to the session's first bar. The walk stops at the
+// day boundary and at 09:30 anyway; this is a guard so a pathological bar array
+// (duplicate timestamps, a 1m series with weeks of history) can't turn a fit
+// into a long Intl-formatting loop.
+const RTH_WALK_MAX = 800;
+
+/**
+ * Frame the cash session.
+ *
+ * `bars` must be the rows the series is CURRENTLY showing — during replay that
+ * is the filtered slice, not the full history, or the logical indices below
+ * point at the wrong candles.
+ *
+ * `candleMs` sizes the reserved window. Falls back to whatever has printed when
+ * it isn't known, and to the old fixed-bar-count view (then fitContent) when
+ * there is no RTH bar to anchor on at all — early premarket on a fresh mount, a
+ * thin replay slice, a symbol whose history hasn't streamed in yet.
+ */
+export function applyDefaultView(
+  chart: IChartApi | null,
+  bars: ReadonlyArray<{ timestamp: number }> | number,
+  candleMs = 0,
+) {
   if (!chart) return;
   const ts = chart.timeScale();
+  // Legacy call shape (a bare bar count) — no timestamps, so the cash session
+  // can't be located. Keep the old behaviour rather than guess.
+  if (typeof bars === "number") {
+    try {
+      if (bars > DEFAULT_VIEW_BARS) {
+        ts.setVisibleLogicalRange({ from: bars - DEFAULT_VIEW_BARS, to: bars - 1 + DEFAULT_VIEW_RIGHT_PAD });
+      } else {
+        ts.fitContent();
+      }
+    } catch { try { ts.fitContent(); } catch { /* ignore */ } }
+    return;
+  }
+
+  const n = bars.length;
+  const fallback = () => {
+    try {
+      if (n > DEFAULT_VIEW_BARS) {
+        ts.setVisibleLogicalRange({ from: n - DEFAULT_VIEW_BARS, to: n - 1 + DEFAULT_VIEW_RIGHT_PAD });
+      } else {
+        ts.fitContent();
+      }
+    } catch { try { ts.fitContent(); } catch { /* ignore */ } }
+  };
+  if (!n) { fallback(); return; }
+
   try {
-    if (barCount > DEFAULT_VIEW_BARS) {
-      ts.setVisibleLogicalRange({
-        from: barCount - DEFAULT_VIEW_BARS,
-        to: barCount - 1 + DEFAULT_VIEW_RIGHT_PAD,
-      });
-    } else {
-      ts.fitContent();
+    const inRth = (t: number) => {
+      const m = etMinutesOfDay(t);
+      return m >= RTH_OPEN_MIN && m < RTH_CLOSE_MIN;
+    };
+    // Newest RTH bar, searching backwards — so an overnight tape past 16:00, or
+    // a premarket mount before 09:30, both land on the last session that traded
+    // rather than on a frame with nothing in it.
+    let endIdx = -1;
+    for (let i = n - 1; i >= 0 && n - i <= RTH_WALK_MAX; i--) {
+      if (inRth(bars[i].timestamp)) { endIdx = i; break; }
     }
+    if (endIdx < 0) { fallback(); return; }
+    // Back to that session's first bar.
+    const dayKey = etDayKey(bars[endIdx].timestamp);
+    let startIdx = endIdx;
+    for (let k = 0; startIdx > 0 && k < RTH_WALK_MAX; k++) {
+      const prev = bars[startIdx - 1].timestamp;
+      if (etDayKey(prev) !== dayKey || !inRth(prev)) break;
+      startIdx--;
+    }
+    // Reserve the whole 6.5h, so the frame is the session and not just the part
+    // of it that has printed. Never narrower than what IS on screen.
+    const printed = endIdx - startIdx + 1;
+    const session = candleMs > 0
+      ? Math.ceil(((RTH_CLOSE_MIN - RTH_OPEN_MIN) * 60_000) / candleMs)
+      : printed;
+    ts.setVisibleLogicalRange({
+      from: startIdx - RTH_VIEW_LEFT_PAD,
+      to: startIdx + Math.max(session, printed) - 1 + DEFAULT_VIEW_RIGHT_PAD,
+    });
   } catch {
-    try { ts.fitContent(); } catch { /* ignore */ }
+    fallback();
   }
 }
 
@@ -479,32 +622,15 @@ export function deriveColumnLevels(
  *   • non-top-3 ceiling raised 0.18 → 0.30, floor 0.02 → 0.04, but still kept
  *     strictly below the rank-3 wall (0.35) so the wall hierarchy is preserved.
  */
-/**
- * The ES card's three fixed rank floors — same idea as the chain page's, held
- * higher because this heatmap is composited at 0.6 over the candles and a 0.25
- * wall would vanish into them.
- *
- * Exported because levels-only mode (the Intensity slider at its 0.1 stop, see
- * lib/calculations/heatLevels) paints CB / CW / PW at ranks 1 / 2 / 3 with these
- * exact colours: with the gamma field off, those cells still have to read as
- * HEAT — cyan for positive gamma, red for negative — rather than in the
- * gold/blue/red of the level labels.
- */
-export const GEX_RANK_ALPHA = [0.90, 0.55, 0.35] as const;
-
-/** Heatmap fill for a cell being painted at a fixed rank floor. */
-export function gexRankColor(value: number, rank: 1 | 2 | 3): string {
-  const a = GEX_RANK_ALPHA[rank - 1];
-  return (value || 0) >= 0 ? `rgba(41,182,246,${a})` : `rgba(255,71,87,${a})`;
-}
-
 export function gexColor(value: number, maxValue: number, intensity: number, top3: number[]): string | null {
   const n = value || 0;
   const m = maxValue || 0;
   if (m === 0 || !n) return null;
   const pos = n >= 0;
   const rank = top3.indexOf(Math.abs(n)) + 1;
-  if (rank === 1 || rank === 2 || rank === 3) return gexRankColor(n, rank);
+  if (rank === 1) return pos ? "rgba(41,182,246,0.90)" : "rgba(255,71,87,0.90)";
+  if (rank === 2) return pos ? "rgba(41,182,246,0.55)" : "rgba(255,71,87,0.55)";
+  if (rank === 3) return pos ? "rgba(41,182,246,0.35)" : "rgba(255,71,87,0.35)";
   const ratio = Math.min(Math.abs(n) / m, 1);
   const eased = Math.pow(ratio, 0.6);
   const alpha = Math.min(0.30, 0.04 + eased * (intensity || 0.1) * 0.26);
