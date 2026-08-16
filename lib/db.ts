@@ -5052,13 +5052,22 @@ export async function insertOptionStrikeGexRows(rows: Omit<OptionStrikeGexRecord
        Number.isFinite(row.net_vol_gex as number) ? clampReal(row.net_vol_gex as number) : null]
     );
   }
-  // Retention: keep only the last 2 days. The heatmap + bubble backfill never
-  // reads older, and the unbounded window scan over this table is what made the
-  // ~700KB/5s query slow. Runs once per batch (~1/min), so the table stays small.
-  await pool.query(
-    `DELETE FROM option_strike_gex_history WHERE timestamp < $1`,
-    [Date.now() - 2 * 24 * 60 * 60 * 1000]
-  );
+  // ── NO RETENTION DELETE HERE. Deliberately. ────────────────────────────
+  // This used to be `DELETE ... WHERE timestamp < now - 48h`, and it is the
+  // single line that destroyed every Friday. The gex writer stops Friday 17:00
+  // ET and reopens Sunday 20:00 ET, so the first insert on Sunday night cut
+  // everything older than Friday 20:00 — the whole of Friday's session — in one
+  // statement. 48 wall-clock hours is roughly two sessions Tue–Fri and less than
+  // one across a weekend.
+  //
+  // The same bug was fixed in server-v2/_lib-db.cjs (pruneOptionStrikeGexHistory
+  // counts SESSIONS, weekdays only) and NOT here, so this file quietly kept the
+  // original behaviour on whatever traffic still reaches the Next route. Rather
+  // than duplicate the session-count logic in a second place that can drift
+  // again, this path now does no pruning at all: retention for this table is
+  // owned by server-v2 (the per-insert session prune) and by the nightly
+  // server-v2/state/retention-cleanup.js job. Both run in the same process that
+  // serves the site.
 }
 
 export async function getOptionStrikeRollingNetGex(

@@ -2,7 +2,9 @@
 /**
  * server-v2/state/etf-candle-recorder.js
  *
- * Server-side recorder for SPY / QQQ 1-minute OHLC candles. Runs on its own
+ * Server-side recorder for 1-minute OHLC candles on every ES-Candles symbol
+ * that is not ES itself — SPY/QQQ plus the scanner MAIN lane as of 2026-08-16.
+ * Runs on its own
  * interval across the extended session (04:00–20:00 ET) so the day's bars are
  * persisted going forward —
  * building a real intraday history in Postgres instead of depending on the
@@ -26,7 +28,19 @@
 const { fetchIntradayCandles } = require('./candle-history');
 
 const INTERVAL_MS = Number(process.env.ETF_CANDLE_RECORDER_INTERVAL_MS || 60_000);
-const SYMBOLS = String(process.env.ETF_CANDLE_SYMBOLS || 'SPY,QQQ')
+// Roster mirrors etf-gex-recorder's: a symbol with recorded gamma but no
+// recorded bars renders as an empty ES-Candles chart, because useEtfCandles has
+// nothing to draw the trail on. SPX is excluded for the same reason it is there
+// — the "ES" symbol reads the /ws/gex futures stream, not this table.
+//
+// A symbol dxLink will not serve 1m candles for (some indices) simply logs and
+// is skipped by the per-symbol try/catch in record(); it costs one failed fetch
+// a minute and nothing else.
+const DEFAULT_CANDLE_SYMBOLS = [
+  'SPY', 'QQQ', 'NDX', 'VIX',
+  'AAPL', 'AMD', 'AMZN', 'GOOGL', 'META', 'MSFT', 'NVDA', 'SPCX', 'TSLA',
+];
+const SYMBOLS = String(process.env.ETF_CANDLE_SYMBOLS || DEFAULT_CANDLE_SYMBOLS.join(','))
   .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
 // Sessions of 1-minute history pulled once on boot. dxFeed serves ~7 days of
 // 1m, so 5 is the practical ceiling that still returns in one request; 0 skips

@@ -41,6 +41,13 @@ type UserRow = {
 const GREEN = "#1FD98A";
 const CYAN = OWNER_THEME.cyan;
 
+// Both cards on this page are a HISTORY view, not a feed. The bare endpoints
+// return what the customer toolbar bell needs (latest 5 alerts, latest 50 in the
+// report), which quietly truncated the owner's list and made older alerts — and
+// the 👍/👎 recorded against them — vanish from the tallies. ?limit= is honoured
+// for the owner only, so the bell is unaffected.
+const HISTORY_LIMIT = 2000;
+
 function ago(iso: string): string {
   const t = new Date(iso).getTime();
   if (!t) return "";
@@ -94,7 +101,7 @@ export default function BzilaAlerts() {
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch("/api/bzila-alerts", { cache: "no-store" });
+      const r = await fetch(`/api/bzila-alerts?limit=${HISTORY_LIMIT}`, { cache: "no-store" });
       const d = await r.json();
       setAlerts(Array.isArray(d?.alerts) ? d.alerts : []);
       setErr(null);
@@ -107,7 +114,7 @@ export default function BzilaAlerts() {
 
   const loadReport = useCallback(async () => {
     try {
-      const r = await fetch("/api/bzila-alerts/report", { cache: "no-store" });
+      const r = await fetch(`/api/bzila-alerts/report?limit=${HISTORY_LIMIT}`, { cache: "no-store" });
       const d = await r.json();
       setReport(Array.isArray(d?.alerts) ? d.alerts : []);
     } catch {

@@ -2,9 +2,13 @@
 /**
  * server-v2/etf-gex-recorder.js
  *
- * Server-side recorder for SPY / QQQ PER-STRIKE net GEX history — the ETF
- * equivalent of the SPX pipeline that feeds the ES-Candles heatmap, GEX bubbles
- * and strike rail.
+ * Server-side recorder for PER-STRIKE net GEX history on every ticker that is
+ * NOT on the live SPX feed — the sibling of the SPX pipeline that feeds the
+ * ES-Candles heatmap, GEX bubbles and strike rail.
+ *
+ * The name is now a misnomer and is kept only because the env vars and the log
+ * prefix are: as of 2026-08-16 the roster is the SCANNER MAIN lane, not just
+ * two ETFs — SPY, QQQ, NDX, VIX and the mega-cap singles. See SYMBOLS below.
  *
  * SPX gets its per-strike rows from the LIVE dashboard feed: proxy-tastytrade
  * streams the chain, computation/gex-calculator.js reduces it, and
@@ -35,10 +39,56 @@
 
 const { fetchExpirations, fetchChainFull } = require('./proxy-tastytrade');
 const { writeGexSnapshot } = require('./gex-history-writer');
+const { SCANNER_HOT } = require('./scanner-tickers');
 
 const INTERVAL_MS = Number(process.env.ETF_GEX_RECORDER_INTERVAL_MS || 60_000);
-const SYMBOLS = String(process.env.ETF_GEX_SYMBOLS || 'SPY,QQQ')
-  .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+
+// ── Roster ───────────────────────────────────────────────────────────────────
+// The scanner's MAIN lane (scanner-tickers.js) — indices + mega-caps — minus
+// whatever the LIVE SPX feed already writes.
+//
+// SPX IS EXCLUDED AND MUST STAY EXCLUDED. normGexSymbol() folds 'SPX' onto
+// '$SPX' (_lib-db.cjs), which is exactly the key proxy-tastytrade writes every
+// 30s off the streamed chain. Recording it here too would put two writers with
+// different strike windows and different cadences on one key, and the heatmap's
+// `DISTINCT ON (minute_bucket, strike) ORDER BY ..., timestamp DESC` would hand
+// each minute to whichever landed last. The ES-Candles "ES" symbol reads $SPX
+// and is already covered.
+//
+// Sourced from the FILE's MAIN list, deliberately NOT from roster-store. The
+// Watchlists page can add fifty names to the scanner roster without anyone
+// thinking about write volume; this recorder writes ~81 rows per symbol per
+// minute into the table that caused the 2026-07 disk incident, so its roster is
+// a reviewed, code-level decision. Override with ETF_GEX_SYMBOLS for a one-off.
+const LIVE_FEED_SYMBOLS = new Set(['SPX', '$SPX']);
+const SYMBOLS = (process.env.ETF_GEX_SYMBOLS
+  ? String(process.env.ETF_GEX_SYMBOLS).split(',')
+  : SCANNER_HOT)
+  .map((s) => String(s).trim().toUpperCase())
+  .filter(Boolean)
+  .filter((s) => !LIVE_FEED_SYMBOLS.has(s));
+
+// ── Strike window ────────────────────────────────────────────────────────────
+// Strikes either side of spot, so one write is bounded at 2N+1 rows.
+//
+// It used to be UNCAPPED — every strike in the expiry with any book or tape. On
+// two ETFs that was tolerable; on a fourteen-name roster it is the difference
+// between a bounded table and the 2.9GB one. 40/side matches
+// eod-strike-gex-recorder's WINDOW_SIDE, so the two per-strike tables cover the
+// same ladder.
+//
+// COUNT, not a percentage of spot. A ±8% band is ~24 strikes on NVDA and ~3 on
+// VIX, whose whole chain lives inside a few points — a percentage window is a
+// different instrument on every underlying, which is not what a "same shape
+// everywhere" recorder wants.
+const STRIKE_SIDE = Math.max(5, Math.min(200, Number(process.env.ETF_GEX_STRIKE_SIDE || 40)));
+
+// Pause between symbols so a fourteen-name sweep trickles instead of firing
+// fourteen chain fetches at the same instant. Same idea as
+// eod-strike-gex-recorder's TICKER_DELAY_MS, at a shorter interval because this
+// one runs every minute rather than once a day.
+const TICKER_DELAY_MS = Math.max(0, Number(process.env.ETF_GEX_TICKER_DELAY_MS || 250));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // How many expirations forward to record.
 //
@@ -159,6 +209,20 @@ async function snapshotStrikes(ticker, expiry) {
   }
 
   rows.sort((a, b) => a.strike - b.strike);
+
+  // ── Trim to ±STRIKE_SIDE around spot ───────────────────────────────────────
+  // Centred on the strike nearest spot rather than on a price band, so the
+  // window is the same COUNT on every underlying (see STRIKE_SIDE). Applied
+  // after the book/tape filter, so it is 40 live strikes a side, not 40 slots
+  // of a chain that may be half dead.
+  if (rows.length > STRIKE_SIDE * 2 + 1) {
+    let atm = 0;
+    for (let i = 1; i < rows.length; i++) {
+      if (Math.abs(rows[i].strike - spot) < Math.abs(rows[atm].strike - spot)) atm = i;
+    }
+    const lo = Math.max(0, Math.min(atm - STRIKE_SIDE, rows.length - (STRIKE_SIDE * 2 + 1)));
+    return { spot, rows: rows.slice(lo, lo + STRIKE_SIDE * 2 + 1) };
+  }
   return { spot, rows };
 }
 
@@ -166,7 +230,10 @@ async function snapshotStrikes(ticker, expiry) {
 async function tick() {
   if (!isRthNowET()) return;
 
+  let first = true;
   for (const symbol of SYMBOLS) {
+    if (!first && TICKER_DELAY_MS) await sleep(TICKER_DELAY_MS); // eslint-disable-line no-await-in-loop
+    first = false;
     try {
       const expiries = await resolveExpiries(symbol, EXPIRY_DEPTH); // eslint-disable-line no-await-in-loop
       if (!expiries.length) {
@@ -208,8 +275,9 @@ function startEtfGexRecorder() {
     tick().catch((e) => console.warn('[etf-gex] initial tick error:', e.message));
   }, 25_000);
   console.log(
-    `[etf-gex] recorder started — ${SYMBOLS.join('/')} per-strike GEX (RTH), ` +
-    `${EXPIRY_DEPTH} expiry(s), every ${INTERVAL_MS / 1000}s`,
+    `[etf-gex] recorder started — ${SYMBOLS.length} symbols per-strike GEX (RTH), ` +
+    `±${STRIKE_SIDE} strikes, ${EXPIRY_DEPTH} expiry(s), every ${INTERVAL_MS / 1000}s, ` +
+    `${TICKER_DELAY_MS}ms apart: ${SYMBOLS.join(',')}`,
   );
 }
 

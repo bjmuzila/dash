@@ -2192,9 +2192,13 @@ async function upsertBzilaNote(content) {
     [content]
   );
 }
+// Default 5 = what the customer toolbar bell shows. The owner Bzila Alerts page
+// asks for the full history, so the ceiling is 2000 rather than 50 — at 50 the
+// owner's "All alerts" list and the per-user reaction report silently truncated
+// and older alerts (and the likes attached to them) vanished from both cards.
 async function getBzilaAlerts(limit = 5) {
   await getDb();
-  const n = Math.min(Math.max(1, Math.floor(limit) || 5), 50);
+  const n = Math.min(Math.max(1, Math.floor(limit) || 5), 2e3);
   return queryAll(
     `SELECT id, title, body, created_at, updated_at
        FROM bzila_alerts ORDER BY id DESC LIMIT ${n}`
@@ -4291,7 +4295,15 @@ async function insertOptionStrikeGexRows(rows) {
   await pruneOptionStrikeGexHistory(pool);
 }
 // How many TRADING SESSIONS of strike history to keep — sessions, not hours.
-var GEX_HISTORY_KEEP_SESSIONS = 2;
+//
+// 3, not 2. At 2 the window is exactly "yesterday and today", and the moment a
+// weekend date enters the count (see the weekday filter in the prune below, and
+// why it was needed) or a holiday lands, Friday falls off before anyone has
+// looked at it on Monday. The third session is cheap — one more day of a table
+// the nightly retention job already thins to the 5-minute grid outside RTH —
+// and it is the difference between "Friday is there on Monday morning" and a
+// support ticket.
+var GEX_HISTORY_KEEP_SESSIONS = Number(process.env.GEX_HISTORY_KEEP_SESSIONS || 3);
 // Prune at most this often. The old wall-clock DELETE was a cheap range scan;
 // this one does a DISTINCT over `date`, and insertOptionStrikeGexRows runs
 // several times a minute (once per symbol/expiry the recorders sweep). No
@@ -4319,9 +4331,18 @@ function etDateString(ts = Date.now()) {
  * Friday no longer existed. 48 wall-clock hours is ~2 sessions Tue–Fri; across
  * a weekend it is less than one.
  *
- * Counting distinct session dates is weekend- and holiday-proof by
- * construction: Saturday and Sunday produce no `date` values, so they cost
- * nothing. Two sessions on a Monday means Friday + Monday, which is the point.
+ * Counting distinct session dates was supposed to be weekend-proof by
+ * construction — "Saturday and Sunday produce no `date` values, so they cost
+ * nothing." THAT WAS WRONG, and it is why Friday still went missing.
+ * gex-history-writer's recording window reopens at SUNDAY 20:00 ET, so Sunday
+ * night writes rows stamped with Sunday's ET date. Four hours later Monday's
+ * date appears, the two newest distinct dates are {Sunday, Monday}, MIN is
+ * Sunday, and everything before it — the whole of Friday — is deleted before
+ * Monday's open.
+ *
+ * So the DISTINCT is now filtered to WEEKDAYS. A Sunday-evening or Saturday
+ * date can still hold rows (the reopen tape is real and the chart reads it),
+ * it just cannot consume one of the session slots and push a real session out.
  *
  * Still deliberately NOT scoped by symbol — every symbol shares one window.
  *
@@ -4344,6 +4365,9 @@ async function pruneOptionStrikeGexHistory(pool, { force = false } = {}) {
           SELECT DISTINCT date AS d
             FROM option_strike_gex_history
            WHERE date <= $2
+             -- ISODOW: 1=Mon … 5=Fri. Weekend-stamped rows (the Sunday 20:00 ET
+             -- reopen) must not consume a session slot; see the note above.
+             AND EXTRACT(ISODOW FROM date::date) < 6
            ORDER BY d DESC
            LIMIT $1
         ) recent

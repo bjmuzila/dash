@@ -35,6 +35,10 @@ const WINDOW_END_MINS   = Number(process.env.RETENTION_WINDOW_END_MINS || 40);  
 const RETENTION = {
   strike_growth:              Number(process.env.RETENTION_STRIKE_GROWTH_DAYS || 5),
   option_strike_gex_history:  Number(process.env.RETENTION_GEX_HISTORY_DAYS || 10),
+  // Sessions of option_strike_gex_history kept at FULL 1-minute resolution.
+  // Older days survive, thinned to the 5-minute grid. See the thinning note on
+  // the DELETE below — this is the number that pays for the multi-ticker roster.
+  gex_history_fullres_days:   Number(process.env.RETENTION_GEX_FULLRES_DAYS || 2),
   flow_prints:                Number(process.env.RETENTION_FLOW_PRINTS_DAYS || 5),    // ≥ big-premium prints kept this many session days (0–7DTE Combined lookback)
   flow_prints_big_premium:    Number(process.env.RETENTION_FLOW_BIG_PREMIUM || 500_000), // "big" = survives the full window regardless of expiry
   flow_prints_small_days:     Number(process.env.RETENTION_FLOW_SMALL_DAYS || 1),     // < big-premium prints: purged on expiry or after this many days (disk guard)
@@ -89,7 +93,13 @@ function nowEtParts() {
   const get = (t) => fmt.find((p) => p.type === t)?.value;
   const ymd = `${get('year')}-${get('month')}-${get('day')}`;
   const minsSinceMidnight = Number(get('hour')) * 60 + Number(get('minute'));
-  return { ymd, minsSinceMidnight };
+  // ISO day-of-week from the ET calendar date, 1 = Mon … 7 = Sun. Derived from
+  // the formatted Y-M-D rather than from `new Date().getDay()`, which is the
+  // SERVER's weekday and is a day off for anything ET-evening on a UTC box.
+  const [y, m, d] = ymd.split('-').map(Number);
+  const jsDow = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0 = Sun
+  const isoDow = jsDow === 0 ? 7 : jsDow;
+  return { ymd, minsSinceMidnight, isoDow, isWeekend: isoDow >= 6 };
 }
 
 /** Runs every DELETE, logging (and swallowing) per-table errors so one bad
@@ -116,27 +126,55 @@ async function runDeletes(p) {
   // option_strike_gex_history: keep only the front/0DTE expiry (see
   // scripts/db-prune.sql for the reasoning).
   //
+  // GROUPED BY (date, symbol), not by date alone. `MIN(expiry) GROUP BY date`
+  // was symbol-blind: SPX, SPY and QQQ rows for the same date all measured
+  // themselves against ONE global minimum expiry, so any symbol whose front
+  // expiry was not the smallest string on the board had its entire day deleted
+  // every night. On a Friday, with SPX 0DTE at the same date and the ETFs
+  // carrying a different front, that is the whole session gone.
+  //
   // Time-of-day: this used to delete EVERYTHING outside 09:30–16:00 ET, which is
   // why the ES Candles heatmap went black from the 18:00 Globex open to midnight
   // — the columns were written, then purged overnight. The overnight tape is real
   // context for a futures chart, so non-RTH rows are now KEPT, thinned to the
   // 5-minute grid (SLOT_MS in app/es-candles/page.tsx) the heatmap buckets into
-  // anyway. That's lossless for the chart at ~1/5th the overnight rows. RTH keeps
-  // full 1-min resolution.
+  // anyway. That's lossless for the chart at ~1/5th the overnight rows.
+  //
+  // ── AGE-BASED THINNING (2026-08-16) ────────────────────────────────────────
+  // RTH used to keep full 1-minute resolution for the entire 10-day window. That
+  // was affordable at three symbols. The recorder roster is now the scanner MAIN
+  // lane (~13 names, see etf-gex-recorder.js), and RTH-only recorders keep every
+  // row they write — 390 writes x 81 strikes x 13 symbols x 10 days is the shape
+  // that produced the 2.9GB table in the first place.
+  //
+  // So full 1-minute resolution is kept for the newest `gex_history_fullres_days`
+  // sessions — which is every window the ES-Candles page can actually request
+  // (1D/2D heatmap, single-session bubbles, and the replay day picker) — and
+  // everything older is thinned to the same 5-minute grid the heatmap buckets
+  // into anyway. Roughly a 3.6x cut on the 10-day footprint, invisible to every
+  // current reader.
+  //
+  // Raise RETENTION_GEX_FULLRES_DAYS if a reader ever wants minute resolution
+  // further back; it is the only number that has to move.
   await run('option_strike_gex_history', `
     DELETE FROM option_strike_gex_history t
     USING (
-      SELECT date, MIN(expiry) AS front_expiry
+      SELECT date, symbol, MIN(expiry) AS front_expiry
       FROM option_strike_gex_history
-      GROUP BY date
+      GROUP BY date, symbol
     ) f
     WHERE t.date = f.date
+      AND t.symbol IS NOT DISTINCT FROM f.symbol
       AND (
         t.date::date < CURRENT_DATE - INTERVAL '${RETENTION.option_strike_gex_history} days'
         OR t.expiry <> f.front_expiry
         OR (
           to_char(to_timestamp(t.timestamp / 1000) AT TIME ZONE 'America/New_York', 'HH24:MI')
             NOT BETWEEN '09:30' AND '16:00'
+          AND (EXTRACT(MINUTE FROM to_timestamp(t.timestamp / 1000) AT TIME ZONE 'America/New_York')::int % 5) <> 0
+        )
+        OR (
+          t.date::date < CURRENT_DATE - INTERVAL '${RETENTION.gex_history_fullres_days} days'
           AND (EXTRACT(MINUTE FROM to_timestamp(t.timestamp / 1000) AT TIME ZONE 'America/New_York')::int % 5) <> 0
         )
       )
@@ -227,8 +265,20 @@ async function runCleanup({ force = false } = {}) {
 function startRetentionCleanup() {
   if (!process.env.DATABASE_URL) return; // no-op without a DB, matches other recorders
   const tick = async () => {
-    const { ymd, minsSinceMidnight } = nowEtParts();
+    const { ymd, minsSinceMidnight, isWeekend } = nowEtParts();
     if (lastRunYmd === ymd) return; // already ran today
+    // SKIP SATURDAY AND SUNDAY.
+    //
+    // Nothing is written between Friday 17:00 and Sunday 20:00 ET (see
+    // isRecordingWindow in gex-history-writer.js), so a weekend run has no new
+    // rows to reclaim — it can only re-apply the deletes to FRIDAY's data, twice,
+    // before anyone has looked at it on Monday. Every cutoff here is 5 days or
+    // more, so missing two nights costs nothing on disk; the Monday run catches
+    // up on all three days at once.
+    //
+    // `force` (POST /proxy/retention-cleanup-run) still runs any day — this gate
+    // is on the automatic tick only, so a manual disk emergency is unaffected.
+    if (isWeekend) return;
     if (minsSinceMidnight < WINDOW_START_MINS || minsSinceMidnight > WINDOW_END_MINS) return;
     try {
       await runCleanup({ force: false });

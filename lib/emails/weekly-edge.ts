@@ -1,7 +1,7 @@
 // Weekly newsletter — "The Weekly Edge". Recaps last week's market action,
 // previews this week's catalysts (FOMC, earnings, econ data), covers the
 // oil/geopolitical situation, and closes with the CB Edge dashboard scorecard
-// (Core Bullseye, 2022 ICT Model, Estimated Move) as social proof + a CTA.
+// (Core Bullseye, Estimated Move) as social proof + a CTA.
 //
 // Data-driven via opts — every number below is a parameter so this template
 // gets reused week to week without touching markup. Sensible defaults are
@@ -150,7 +150,6 @@ export function weeklyEdgeText(opts: WeeklyEdgeOpts = {}): string {
     "",
     "CB EDGE — THIS WEEK'S RESULTS",
     `Core Bullseye: ${o.coreBullseyePct} (${strip(o.coreBullseyeSub)})`,
-    `2022 ICT Model: ${o.ictModelPct} (${strip(o.ictModelSub)})`,
     `Estimated Move: ${o.estMovePct} (${strip(o.estMoveSub)})`,
     strip(o.resultsNote),
     "",

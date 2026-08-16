@@ -2746,8 +2746,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
           {/* ── The identity line ───────────────────────────────────────
               Everything that says WHAT is on screen: the card name, the
               symbol, spot, gamma regime, ticker + expiry + DTE, the session
-              date, the replay clock, what the ex-0DTE board covers, and the
-              live-only ± Move / ATM IV.
+              date and the replay clock. Nothing else — see the note inside.
 
               It sits HERE — below the replay transport, directly on top of
               the ladders — and not in the card header, because this is the
@@ -2793,21 +2792,12 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
                       replayOn && replayClock != null ? `${fmtTlReplayClock(replayClock)} ET` : null,
                     ].filter(Boolean).join(" · ")}
                   </span>
-                  {/* What the ex-0DTE board covers — the right ladder's caption,
-                      moved up here so it reads as part of the same statement. */}
-                  <span style={{
-                    fontSize: 11, fontFamily: "var(--font-mono)",
-                    color: replayOn || boardIsFull ? T.text : T.orange,
-                    opacity: replayOn || boardIsFull ? 0.6 : 0.85,
-                  }}>
-                    {boardLabel}
-                  </span>
-                  {/* Live-only: both are priced off live marks, so they read "—"
-                      while rewound rather than putting today's premium on a
-                      three-day-old ladder. */}
-                  <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.text, opacity: 0.6 }}>
-                    {`± Move ${atm.move == null ? "—" : `±${atm.move.toFixed(2)}`} · ATM IV ${atm.iv == null ? "—" : `${(atm.iv * 100).toFixed(1)}%`}`}
-                  </span>
+                  {/* Nothing else belongs on this line. The ex-0DTE coverage
+                      note went back over the right ladder (it captions that
+                      ladder, not the card) and ± Move / ATM IV to the left pane
+                      (they price the picked expiry). This line answers one
+                      question — what am I looking at — and every extra fact made
+                      it answer that question slower. */}
             </span>
           </div>
 
@@ -2843,6 +2833,13 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
                   </button>
                 ))}
               </div>
+              {/* ATM premium for the PICKED expiry, which is what this pane is.
+                  Both are priced off live marks, so they read "—" while rewound
+                  rather than putting today's premium on a past session's
+                  ladder. */}
+              <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: T.text, opacity: 0.6 }}>
+                {`± Move ${atm.move == null ? "—" : `±${atm.move.toFixed(2)}`} · ATM IV ${atm.iv == null ? "—" : `${(atm.iv * 100).toFixed(1)}%`}`}
+              </span>
               {/* The ONLY thing that scrolls in this pane. minHeight:0 is what
                   lets it actually shrink inside the flex column instead of
                   pushing the chips out the bottom. */}
@@ -2870,9 +2867,15 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
                 </span>
                 <Stat label="Net GEX" value={fmtBig(rightLevels.net)} color={rightLevels.net >= 0 ? POS_GREEN : T.red} size={16} />
               </Row>
-              {/* `boardLabel` used to print here. It is on the identity line in
-                  the card header now — one statement of what is on screen, in
-                  one place, and inside any capture that includes the header. */}
+              {/* What this ladder actually covers. Briefly lived on the identity
+                  line; it belongs here, beside the ladder it captions. */}
+              <span style={{
+                fontSize: 11, fontFamily: "var(--font-mono)",
+                color: replayOn || boardIsFull ? T.text : T.orange,
+                opacity: replayOn || boardIsFull ? 0.6 : 0.85,
+              }}>
+                {boardLabel}
+              </span>
               {/* What the Δ column is measured against, said out loud. The
                   baseline is the previous SNAPSHOT date, which after a holiday
                   or a missed run is not calendar yesterday — printing it is the

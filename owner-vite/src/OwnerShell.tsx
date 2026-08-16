@@ -1,7 +1,8 @@
 import { useEffect, useState, Suspense } from "react";
 import type { CSSProperties } from "react";
 import { Link, useLocation, Outlet } from "react-router-dom";
-import { OWNER_SIDEBAR_GROUPS } from "./lib/nav";
+import { OWNER_SIDEBAR_GROUPS, OWNER_PINNED_LINKS } from "./lib/nav";
+import type { OwnerLink } from "./lib/nav";
 import { OWNER_THEME } from "./lib/theme";
 import OwnerToolbar from "./OwnerToolbar";
 
@@ -79,8 +80,44 @@ export default function OwnerShell() {
         borderRight: `1px solid ${OWNER_THEME.border}`,
       };
 
+  // One row renderer for both the pinned links and the grouped ones, so the
+  // pinned Hub can't drift out of style from everything under it.
+  const navLink = (link: OwnerLink, accent: string) => {
+    const here = isActive(link.href);
+    return (
+      <Link
+        key={link.href}
+        to={link.href}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "8px 10px",
+          borderRadius: 8,
+          fontSize: 14,
+          fontWeight: here ? 800 : 600,
+          textDecoration: "none",
+          whiteSpace: "nowrap",
+          color: here ? accent : OWNER_THEME.text,
+          background: here ? `${accent}1f` : "transparent",
+          border: `1px solid ${here ? `${accent}59` : "transparent"}`,
+        }}
+      >
+        <span aria-hidden style={{ width: 18, textAlign: "center", opacity: 1, fontSize: 14 }}>
+          {link.glyph}
+        </span>
+        {link.label}
+      </Link>
+    );
+  };
+
   const rail = (
     <aside style={asideStyle}>
+      {/* Pinned — above every group, with no group header of its own. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {OWNER_PINNED_LINKS.map((link) => navLink(link, OWNER_THEME.cyan))}
+      </div>
+
       {OWNER_SIDEBAR_GROUPS.map((group) => (
         <div key={group.label} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <div
@@ -95,34 +132,7 @@ export default function OwnerShell() {
           >
             {group.label}
           </div>
-          {group.links.map((link) => {
-            const here = isActive(link.href);
-            return (
-              <Link
-                key={link.href}
-                to={link.href}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "8px 10px",
-                  borderRadius: 8,
-                  fontSize: 14,
-                  fontWeight: here ? 800 : 600,
-                  textDecoration: "none",
-                  whiteSpace: "nowrap",
-                  color: here ? group.accent : OWNER_THEME.text,
-                  background: here ? `${group.accent}1f` : "transparent",
-                  border: `1px solid ${here ? `${group.accent}59` : "transparent"}`,
-                }}
-              >
-                <span aria-hidden style={{ width: 18, textAlign: "center", opacity: 1, fontSize: 14 }}>
-                  {link.glyph}
-                </span>
-                {link.label}
-              </Link>
-            );
-          })}
+          {group.links.map((link) => navLink(link, group.accent))}
         </div>
       ))}
     </aside>

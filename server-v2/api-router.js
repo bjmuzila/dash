@@ -7742,9 +7742,18 @@ if (libDb) {
         let access = { ok: false };
         try { access = await ctx.verifyWsRequest(req); } catch { access = { ok: false }; }
         if (!access.ok || !access.userId) { send(res, 200, { alerts: [] }); return; }
+        // Subscribers always get the latest 5 (that's the toolbar bell). The
+        // owner page passes ?limit= to pull the FULL history — every alert and
+        // the 👍/👎 attached to it — so nothing older than the 5th alert falls
+        // off its cards.
+        let limit = 5;
+        if (ctx.ownerUserId && access.userId === ctx.ownerUserId) {
+          const q = Number(new URL(req.url || '/', 'http://localhost').searchParams.get('limit'));
+          if (Number.isFinite(q) && q > 0) limit = q;
+        }
         try {
           const [alerts, counts, mine] = await Promise.all([
-            libDb.getBzilaAlerts(5), libDb.getBzilaAlertCounts(), libDb.getUserBzilaReactions(access.userId),
+            libDb.getBzilaAlerts(limit), libDb.getBzilaAlertCounts(), libDb.getUserBzilaReactions(access.userId),
           ]);
           const countMap = new Map(counts.map((c) => [c.alert_id, c]));
           const merged = alerts.map((a) => ({ ...a, up: countMap.get(a.id)?.up ?? 0, down: countMap.get(a.id)?.down ?? 0, mine: mine[a.id] ?? '' }));
@@ -7814,7 +7823,11 @@ if (libDb) {
   register('/api/bzila-alerts/report', {
     auth: 'owner', methods: ['GET'],
     async handler(req, res) {
-      try { const alerts = await libDb.getBzilaAlertReport(50); send(res, 200, { alerts }); }
+      // ?limit= (owner-only route) so the "Reactions by user" card can tally the
+      // whole history instead of the last 50 alerts.
+      const q = Number(new URL(req.url || '/', 'http://localhost').searchParams.get('limit'));
+      const limit = Number.isFinite(q) && q > 0 ? q : 50;
+      try { const alerts = await libDb.getBzilaAlertReport(limit); send(res, 200, { alerts }); }
       catch (err) { send(res, 500, { error: 'Load failed', detail: String(err) }); }
     },
   });

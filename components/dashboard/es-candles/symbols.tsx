@@ -27,7 +27,9 @@ import { createPortal } from "react-dom";
 import { DockButton } from "@/components/shared/DockToolbar";
 import { HOME_THEME, DOCK_THEME } from "@/components/shared/homeTheme";
 
-export type ChartSymbol = "ES" | "SPY" | "QQQ";
+export type ChartSymbol =
+  | "ES" | "SPY" | "QQQ" | "NDX" | "VIX"
+  | "AAPL" | "AMD" | "AMZN" | "GOOGL" | "META" | "MSFT" | "NVDA" | "SPCX" | "TSLA";
 export type SymbolDef = {
   key: ChartSymbol;
   label: string;
@@ -36,10 +38,36 @@ export type SymbolDef = {
   candles: "es" | "etf";
 };
 
+/**
+ * The list is the SCANNER MAIN lane (server-v2/scanner-tickers.js) — indices
+ * plus mega-caps — with ES standing in for SPX.
+ *
+ * It has to stay in step with etf-gex-recorder.js's roster and
+ * etf-candle-recorder.js's DEFAULT_CANDLE_SYMBOLS. A symbol listed here with no
+ * recorder writing it renders as an empty chart, not an error: the gamma query
+ * returns nothing and useEtfCandles has no bars.
+ *
+ * `key` doubles as the persisted value in the slot blob, so renaming one drops
+ * that card back to ES on the next reload. Add, don't rename.
+ */
 export const SYMBOLS: SymbolDef[] = [
-  { key: "ES",  label: "ES",  gexSymbol: "$SPX", chainSymbol: "SPX", candles: "es"  },
-  { key: "SPY", label: "SPY", gexSymbol: "SPY",  chainSymbol: "SPY", candles: "etf" },
-  { key: "QQQ", label: "QQQ", gexSymbol: "QQQ",  chainSymbol: "QQQ", candles: "etf" },
+  // Index / ETF. "ES" is SPX gamma on ES futures candles — the original pairing,
+  // and the only row whose gexSymbol differs from its ticker.
+  { key: "ES",    label: "ES",    gexSymbol: "$SPX", chainSymbol: "SPX",   candles: "es"  },
+  { key: "SPY",   label: "SPY",   gexSymbol: "SPY",   chainSymbol: "SPY",   candles: "etf" },
+  { key: "QQQ",   label: "QQQ",   gexSymbol: "QQQ",   chainSymbol: "QQQ",   candles: "etf" },
+  { key: "NDX",   label: "NDX",   gexSymbol: "NDX",   chainSymbol: "NDX",   candles: "etf" },
+  { key: "VIX",   label: "VIX",   gexSymbol: "VIX",   chainSymbol: "VIX",   candles: "etf" },
+  // Mega-cap singles.
+  { key: "AAPL",  label: "AAPL",  gexSymbol: "AAPL",  chainSymbol: "AAPL",  candles: "etf" },
+  { key: "AMD",   label: "AMD",   gexSymbol: "AMD",   chainSymbol: "AMD",   candles: "etf" },
+  { key: "AMZN",  label: "AMZN",  gexSymbol: "AMZN",  chainSymbol: "AMZN",  candles: "etf" },
+  { key: "GOOGL", label: "GOOGL", gexSymbol: "GOOGL", chainSymbol: "GOOGL", candles: "etf" },
+  { key: "META",  label: "META",  gexSymbol: "META",  chainSymbol: "META",  candles: "etf" },
+  { key: "MSFT",  label: "MSFT",  gexSymbol: "MSFT",  chainSymbol: "MSFT",  candles: "etf" },
+  { key: "NVDA",  label: "NVDA",  gexSymbol: "NVDA",  chainSymbol: "NVDA",  candles: "etf" },
+  { key: "SPCX",  label: "SPCX",  gexSymbol: "SPCX",  chainSymbol: "SPCX",  candles: "etf" },
+  { key: "TSLA",  label: "TSLA",  gexSymbol: "TSLA",  chainSymbol: "TSLA",  candles: "etf" },
 ];
 
 const SYMBOL_KEYS = SYMBOLS.map((s) => s.key);

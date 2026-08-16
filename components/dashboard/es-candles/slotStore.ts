@@ -60,7 +60,8 @@
 // one could rank by eye. Size is a PRIMARY channel on this chart and it is
 // proportional — see the size law below.
 // ── The size law ────────────────────────────────────────────────────────────
-//     r = clamp(maxPx, rowPitch × maxPxRowFrac) × (|net GEX| / reference)
+//     budget = min(maxPx, rowPitch × maxPxRowFrac, colPitch × maxPxColFrac)
+//     r      = budget × (|net GEX| / reference)
 //
 // STRAIGHT PROPORTIONAL. Twice the gamma is twice the radius, four times the
 // area. No exponent, no log, nothing to interpret — the mark is the number.
@@ -102,8 +103,33 @@ export type BubbleStyle = {
    * curve was invisible.
    */
   maxPxRowFrac: number;
+  /**
+   * Ceiling on `maxPx` as a fraction of the COLUMN pitch in px — the distance
+   * between two adjacent bubble columns.
+   *
+   * MARKS MUST NEVER TOUCH, horizontally or vertically. At 0.45 two full-size
+   * neighbours in a row are separated by 10% of the pitch.
+   *
+   * This is why the column decimation could be deleted. The old code kept one
+   * bubble per N columns so a full-size mark would always have room; that made
+   * the bucket picker lie ("1m" drew a bubble every third minute). Bounding the
+   * BUDGET instead keeps one mark per bucket exactly as the picker says, and
+   * scales the whole ladder — every rank together, ratios intact — down to
+   * whatever room the current zoom actually has. Zoom in and the marks grow.
+   */
+  maxPxColFrac: number;
   /** Hard floor so a wing strike stays a visible speck instead of vanishing. */
   minPx: number;
+  /**
+   * The highlighted wall's glow, as a multiple of its own radius (blur px).
+   * Tapers to `glowMinFactor` at the last highlighted rank. Proportional rather
+   * than a fixed 24px, which at small marks was a bloom several times the size
+   * of the thing it was highlighting and fused a row into one lit bar.
+   */
+  glowTopFactor: number;
+  glowMinFactor: number;
+  /** Absolute cap on that blur, px. */
+  glowMaxPx: number;
   /** Opacity gradient steepness, 0..1. The weakest row fades to 1 − this. */
   fade: number;
   /** DEFAULT overall opacity multiplier — the "intensity" control. */
@@ -115,7 +141,11 @@ export const BUBBLE_STYLE: BubbleStyle = {
   highlight: 1,
   maxPx: 20,
   maxPxRowFrac: 0.42,
+  maxPxColFrac: 0.45,
   minPx: 0.8,
+  glowTopFactor: 0.75,
+  glowMinFactor: 0.35,
+  glowMaxPx: 9,
   fade: 0.55,
   intensity: 1,
 };

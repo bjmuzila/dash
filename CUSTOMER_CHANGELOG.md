@@ -4,6 +4,10 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 
 
+## Sunday 8/16/2026
+
+* **ES Candles: the GEX bubbles now mean something you can read at a glance.** Bubble size is straight proportional to net GEX against one reference for the whole expiration — so the dominant wall really is the biggest mark on the chart — the 3:00–4:00 gamma surge is corrected out instead of flattening your morning, the sliders that existed to patch the old scale are gone (levels and intensity stay), the page opens on the full 9:30–4:00 session, and the ticker picker now carries SPY, QQQ, NDX, VIX, AAPL, AMD, AMZN, GOOGL, META, MSFT, NVDA, SPCX and TSLA alongside ES.
+
 ## Friday 8/14/2026
 
 * **The Vol GEX Flow tab can now show +GEX %.** Flip the new **+GEX %** switch and the chart swaps from dollars to the share of the chain sitting in positive gamma through the day — green above the 50% line, red below — so you can see whether the board built into long gamma or bled out of it, instead of only what it is right now.

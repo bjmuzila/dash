@@ -58,7 +58,7 @@ import type { EsCandleRecord } from "@/lib/snapdb";
 import {
   toChartTime, etDayKey, fmtEtHM, isPlausibleBasis, etMinutesOfDay, gexTodScale,
   isCashOpen, etSessionStarted, isEtWeekend, etMinutes, RTH_OPEN_MIN, RTH_CLOSE_MIN, buildVolumeProfile, TPO_PERIOD_MS, buildTpoProfile, SLOT_MS, slotFloorMs,
-  SPOT_LINE_GRAY, EM_VIOLET, parseLevelNum, DEFAULT_VIEW_BARS, DEFAULT_VIEW_RIGHT_PAD, applyDefaultView,
+  SPOT_LINE_GRAY, EM_VIOLET, parseLevelNum, applyDefaultView,
   deriveColumnLevels, gexColor,
   type GexCell, type GexColumn, type GexMetric, type VolumeProfile, type TpoProfile,
 } from "./chartMath";
@@ -438,6 +438,11 @@ export default function EsChartCard({
   // the chart-init effect (double-click recenter, collapsed-container re-fit)
   // runs with an empty dep array so it can't close over candleData.
   const barCountRef = useRef(0);
+  // The rows the SERIES is currently showing — the replay slice while scrubbing,
+  // the full history otherwise. applyDefaultView frames the cash session off
+  // these, and it reads logical INDICES, so handing it rowsRef during a replay
+  // would point the frame at the wrong candles.
+  const viewRowsRef = useRef<Array<{ timestamp: number }>>([]);
   // The plotted bars, mirrored for the imperative overlay draw. xAt() binary-
   // searches this to place sub-bar GEX slots; it cannot derive the bar grid
   // arithmetically any more (see xAt).
@@ -2311,7 +2316,7 @@ export default function EsChartCard({
         lastW = w; lastH = h;
         chart.applyOptions({ width: w, height: h });
         if (wasCollapsed) {
-          applyDefaultView(chart, barCountRef.current);
+          applyDefaultView(chart, viewRowsRef.current, candleMsRef.current);
           drawOverlayRef.current();
         }
       });
@@ -2320,12 +2325,12 @@ export default function EsChartCard({
       lastH = Math.round(container.clientHeight);
       chart.applyOptions({ width: lastW, height: lastH });
 
-      // Double-click anywhere on the chart → recenter: back to the DEFAULT 4h
-      // view (not fit-all — that was the old behavior and it re-crushed the
-      // bubbles every time you tried to undo a stray scroll) and snap both price
-      // scales back to autoscale (right axis right).
+      // Double-click anywhere on the chart → recenter: back to the cash session
+      // (not fit-all — that was the old behavior and it re-crushed the bubbles
+      // every time you tried to undo a stray scroll) and snap both price scales
+      // back to autoscale (right axis right).
       const onDblClick = () => {
-        applyDefaultView(chart, barCountRef.current);
+        applyDefaultView(chart, viewRowsRef.current, candleMsRef.current);
         chart.priceScale("right").applyOptions({ autoScale: true });
         drawOverlayRef.current();
       };
@@ -2391,8 +2396,9 @@ export default function EsChartCard({
     // never re-center, preserving the user's pan/zoom on live updates.
     const lastDay = candleData.length ? rows[rows.length - 1].date : "";
     barCountRef.current = candleData.length;
+    viewRowsRef.current = srcRows;
     if (candleData.length && (!didFitRef.current || lastDay !== lastFitDayRef.current)) {
-      applyDefaultView(chart, candleData.length);
+      applyDefaultView(chart, srcRows, candleMsRef.current);
       didFitRef.current = true;
       lastFitDayRef.current = lastDay;
     }
@@ -2658,7 +2664,7 @@ export default function EsChartCard({
     didFitRef.current = false;
     lastFitDayRef.current = "";
     try { chartApiRef.current?.priceScale("right").applyOptions({ autoScale: true }); } catch { /* chart not up yet */ }
-    applyDefaultView(chartApiRef.current, barCountRef.current);
+    applyDefaultView(chartApiRef.current, viewRowsRef.current, candleMsRef.current);
     // Deliberately NOT touching lastHeatmapKeyRef. Effects flush in declaration
     // order, and the backfill effect above already ran for the new symbol — it
     // set the key and started its fetch. Clearing it here would make that
@@ -2701,7 +2707,11 @@ export default function EsChartCard({
     didFitRef.current = false;
     lastFitDayRef.current = "";
     try { chartApiRef.current?.priceScale("right").applyOptions({ autoScale: true }); } catch { /* chart not up yet */ }
-    applyDefaultView(chartApiRef.current, barCountRef.current);
+    // candleMs is derived from `interval`, and this effect runs on the render
+    // where it changed — so read the NEW value rather than the ref, which the
+    // assignment above this component's body has already updated but which is
+    // easy to mistake for stale when reading this in isolation.
+    applyDefaultView(chartApiRef.current, viewRowsRef.current, intervalMs(interval));
     drawOverlayRef.current();
   }, [interval]);
 
@@ -3639,8 +3649,15 @@ export default function EsChartCard({
               //           blue/red with opacity tracking magnitude.
               // Keeping them orthogonal means turning Highlight up or down can
               // never change what the sizes are telling you.
-              const HIGHLIGHT_GLOW_TOP = 24; // #1 wall's glow radius, px
-              const HIGHLIGHT_GLOW_MIN = 11; // last highlighted wall's glow
+              // The wall's glow is PROPORTIONAL to its own mark now, not a
+              // fixed 24px. At the small marks a tight column pitch forces, a
+              // fixed bloom was several times the size of the thing it was
+              // highlighting and welded the whole row into one lit bar.
+              const glowBlurFor = (r: number, hiT: number) => Math.min(
+                BUBBLE_STYLE.glowMaxPx,
+                Math.max(1.5, r * (BUBBLE_STYLE.glowTopFactor
+                  - (BUBBLE_STYLE.glowTopFactor - BUBBLE_STYLE.glowMinFactor) * hiT)),
+              );
 
               // ── Mark geometry + the two no-overlap caps ────────────────────
               // ROUND. The mark was briefly stretched 2.2x horizontally, on the
@@ -3655,12 +3672,12 @@ export default function EsChartCard({
               // it is the one number to change if a slightly oval mark is ever
               // wanted again. 1.0 = circle.
               //
-              // ROW separation is what is protected, and it is protected UP
-              // FRONT by maxPxRowFrac rather than by clamping a mark after its
-              // size has been decided (that ordering is what silently threw the
-              // encoding away for so long). COLUMN separation is deliberately
-              // NOT protected any more — see the decimation note below.
+              // Separation in BOTH directions is protected UP FRONT, by capping
+              // the size budget against the two pitches — never by clamping a
+              // mark after its size has been decided. That ordering is what
+              // silently threw the encoding away for so long.
               const BUBBLE_ASPECT = 1.0;  // 1 = round; >1 stretches horizontally
+              const COL_GAP_PX = 0.8;     // clear space left between neighbours
               // Column pitch: the smallest gap between two adjacent bucket x's.
               // Sampled from the newest ~40 buckets rather than the whole
               // session — the pitch is uniform (one column per bar) and this
@@ -3718,25 +3735,39 @@ export default function EsChartCard({
               // within a bucket, so where they do overlap the smaller neighbour
               // lands on top rather than vanishing underneath.
               const colStride = 1;
-              // The overall pixel budget, bounded by the room the PRICE scale
-              // actually has (see BUBBLE_STYLE.maxPxRowFrac). Rows sit at fixed
-              // prices and cannot be spread apart the way columns can, so when
-              // the strikes are close the whole ladder scales down together —
-              // which preserves the ratios instead of flattening the top of the
-              // ladder onto a clip. On a normally zoomed chart the strike pitch
-              // is far wider than this and `maxPx` simply wins.
-              const maxPx = Math.max(2, Math.min(BUBBLE_STYLE.maxPx, rowPitch * BUBBLE_STYLE.maxPxRowFrac));
-              // Horizontal rail only — it exists so a degenerate projection
-              // cannot paint the canvas, and at 3x the column pitch nothing a
-              // real chart produces reaches it.
-              const rxCap = Math.max(0.35, colPitch * 3);
+              // ── The size BUDGET, bounded by the room that actually exists ──
+              // MARKS MUST NEVER TOUCH — not in a row, not between rows. The
+              // budget is therefore capped by BOTH pitches, and every rank
+              // scales with it, so the ladder shrinks as ONE THING and the
+              // ratios survive. Zoom in and the marks grow back.
+              //
+              // Bounding the budget is what lets the decimation go. The old code
+              // held the mark size fixed and skipped columns until a full-size
+              // mark had room — which made the bucket picker lie ("1m" drawing a
+              // bubble every third minute). Capping the size instead keeps one
+              // mark per bucket exactly as the picker promises.
+              //
+              // Clamping AFTER the radius is computed — which is what the old
+              // rx/ry caps did — is the thing to never go back to: the top of the
+              // ladder lands on the clip while everything under it is untouched,
+              // so the encoding is silently thrown away and every rework of the
+              // size curve comes out invisible.
+              const maxPx = Math.max(1.2, Math.min(
+                BUBBLE_STYLE.maxPx,
+                rowPitch * BUBBLE_STYLE.maxPxRowFrac,
+                colPitch * BUBBLE_STYLE.maxPxColFrac,
+              ));
+              // Rails, not policy. The budget above already guarantees the gap;
+              // these exist only so a degenerate projection (a chart squeezed to
+              // a few pixels) cannot paint over everything.
+              const rxCap = Math.max(0.35, colPitch / 2 - COL_GAP_PX);
               // ── The vertical bound is a SAFETY RAIL, not a size policy ─────
               // It used to be `rowPitch / 2`, a hard clip at half the strike
               // spacing, and the walls sat ON it — so the size scale was
               // computed correctly and then thrown away one line later, and the
               // biggest rows never changed by a pixel however the encoding was
               // reworked. The pitch is respected UP FRONT now, in `maxPx` above.
-              const ryCap = Math.max(0.35, rowPitch * 1.5);
+              const ryCap = Math.max(0.35, rowPitch / 2 - COL_GAP_PX);
 
               // Glow sprites (see glowSpriteRef). Sizes are quantised to a half
               // pixel so a wall that breathes by a hundredth of a px between
@@ -3865,7 +3896,7 @@ export default function EsChartCard({
                     // the #1 wall is the brightest bloom on the chart — it's
                     // just baked into a sprite instead of re-blurred per bubble.
                     // Walls are always opacity 1, so the sprite is exact.
-                    const sp = glowSprite(rx, ry, base, col, HIGHLIGHT_GLOW_TOP - (HIGHLIGHT_GLOW_TOP - HIGHLIGHT_GLOW_MIN) * hiT);
+                    const sp = glowSprite(rx, ry, base, col, glowBlurFor(Math.max(rx, ry), hiT));
                     // The sprite is baked opaque (it has to be — it is cached by
                     // size and colour, not by alpha), so the intensity control is
                     // applied to the BLIT instead. Restored immediately: this is

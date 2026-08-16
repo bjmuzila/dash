@@ -1,11 +1,90 @@
 # Changelog
 
+## 2026-08-16 - Owner: Bzila Alerts keeps its whole history; the email Templates list is back
+
+Edited: `server-v2/api-router.js`, `server-v2/_lib-db.cjs`,
+`owner-vite/src/pages/BzilaAlerts.tsx`, `lib/emails/weekly-edge.ts`,
+`app/api/admin/email-templates/route.ts`.
+
+### 1. Bzila Alerts showed the last 5 alerts, not the history
+
+The owner page and the customer toolbar bell read the SAME endpoint, and that
+endpoint was hard-coded to the bell's needs: `getBzilaAlerts(5)`. So "All alerts"
+never listed more than five, the three stat tiles above it (Alerts sent, 👍
+Total, 👎 Total) only ever counted those five, and every like on a sixth-oldest
+alert was invisible. "Reactions by user" had the same problem one level out — the
+report was fixed at 50 and the DB helper clamped ANY request to 50 rows, so the
+per-subscriber tally silently dropped the older half of the history.
+
+**Now:** `?limit=` is honoured on `/api/bzila-alerts` (owner only — a subscriber
+hitting it still gets exactly 5, so the bell is untouched) and on
+`/api/bzila-alerts/report` (already an owner-only route). The DB ceiling moves
+50 → 2000. The page asks for the full history on both cards, so the list, the
+three tiles and the per-user reaction table all cover every alert ever sent.
+
+### 2. The Templates section vanished from the owner email page
+
+`weeklyEdgeText()` still referenced `o.ictModelPct` and `o.ictModelSub` after the
+2022 ICT Model row was dropped from `WeeklyEdgeOpts`. `ignoreBuildErrors: true`
+let that ship; at runtime `strip(undefined)` threw a TypeError.
+
+That one throw took the entire endpoint down, because `buildTemplates()` rendered
+all ~20 email bodies eagerly even for the plain list request that only needs
+id + label. `GET /api/admin/email-templates` 500'd, and the compose page treats a
+failed template fetch as "no templates" (`if (tr.ok)`), so the whole Templates
+block stopped rendering with no error anywhere on screen.
+
+**Now:** the stale ICT line is gone, and `html`/`text` are stored as thunks
+rather than rendered strings. The list request renders nothing; `?id=` renders
+only the template being loaded, inside a try/catch that returns 500 with the
+offending template's id in the message. A broken template can now only break
+itself, and it says so out loud.
+
+## 2026-08-16 - Owner sidebar: groups named after the job, not the layer
+
+Edited: `owner-vite/src/lib/nav.ts`, `owner-vite/src/OwnerShell.tsx`.
+
+The rail was Owner / Backend / Personal, and two of those three had no
+membership test. Every page on this site is owner-only, and every page has a
+backend — so "Owner" meant "unsorted" and "Backend" had accumulated Social
+Media, Newsletter, Emails, Post Studio, Watchlists and the ΔGEX Board. A new
+page had no correct home, so it went wherever, and finding one later meant
+scanning 22 links across two buckets. Bzila Alerts was the worked example: a
+broadcast to customers, filed two groups away from Emails and Newsletter.
+
+**Now** five groups, each answering "what am I DOING when I open this?":
+
+| Group | Pages |
+|-------|-------|
+| Business | Admin, Sales, Visitors, Emails, Newsletter, Bzila Alerts |
+| Content  | Social Media, Post Studio, Changelog |
+| Market   | Results, Backtests, Probe, Greeks, ΔGEX Board, Est. Moves BE, Watchlists, Chart Types |
+| System   | Dev, Overview, Database, Tree |
+| Personal | Budget, Reta, To-Do |
+
+Hub is pinned above the groups in no group — it's the way home, not a category.
+It moves into a new `OWNER_PINNED_LINKS` export, which `OWNER_ROUTES` now reads
+FIRST (leaving it out would have dropped `/owner` from the router). `OwnerShell`
+grew a single `navLink()` row renderer shared by the pinned link and the grouped
+ones so the two can't drift apart in style.
+
+Every one of the 25 links keeps its exact label, glyph, key and **href** — the
+hrefs are also the route table and every bookmark in existence, so the URL
+scheme (`/owner/dev/sales` vs `/greeks` vs `/database`) stays as inconsistent as
+it was. The sidebar group and the URL do not agree; that's a deliberate trade to
+avoid breaking links, and it's written down at the top of `nav.ts` along with
+the membership test for the next page that gets added.
+
 ## 2026-08-16 - ES Candles: GEX bubbles get an absolute, proportional scale
 
 Edited: `components/dashboard/es-candles/chartMath.ts`,
 `components/dashboard/es-candles/slotStore.ts`,
 `components/dashboard/es-candles/EsChartCard.tsx`,
-`components/dashboard/es-candles/LayoutPresetButton.tsx`.
+`components/dashboard/es-candles/LayoutPresetButton.tsx`,
+`server-v2/_lib-db.cjs`, `server-v2/state/retention-cleanup.js`, `lib/db.ts`,
+`server-v2/etf-gex-recorder.js`, `server-v2/etf-candle-recorder.js`,
+`components/dashboard/es-candles/symbols.tsx`.
+Customer-facing note: `CUSTOMER_CHANGELOG.md`, Sunday 8/16/2026.
 
 The scale is rebuilt from the ground up, the controls that existed to patch it
 are gone, and the two that were actually questions rather than patches stay.
@@ -170,6 +249,186 @@ It now takes the same shape as the Overlays menu - a `mousedown` listener on
 `mousedown`, not `click`: a `click` handler fires after the target has already
 re-rendered, so clicking a row that removes itself lands on nothing and reads as
 outside.
+
+### 5. Marks never touch again — the budget is capped by BOTH pitches
+
+Deleting the column decimation (2c) gave the bucket picker back its honesty and
+took away the only thing stopping a row from fusing. At 1m on a zoomed-out chart
+the result was a solid lit bar where a dotted level used to be.
+
+The fix is not to clamp the mark — clamping after the radius is computed is the
+bug that made every previous size rework invisible, because the top of the ladder
+lands on the clip while everything under it is untouched. The SIZE BUDGET is
+capped instead:
+
+```
+budget = min(maxPx, rowPitch x maxPxRowFrac, colPitch x maxPxColFrac)
+r      = budget x (|net GEX| / reference)
+```
+
+Every rank scales with it, so the ladder shrinks as one thing and the ratios
+survive intact. Zoom in and the marks grow back. `maxPxColFrac` is 0.45, so two
+full-size neighbours in a row clear each other by 10% of the pitch; `rxCap` /
+`ryCap` drop back to `pitch/2 - 0.8` as pure rails that the budget already
+guarantees.
+
+The highlighted wall's glow is proportional now too — `glowTopFactor 0.75` of its
+own radius, tapering to 0.35 at the last highlighted rank, capped at 9px. It was
+a fixed 24px, which at the small marks a tight column pitch forces was a bloom
+several times the size of the thing it was highlighting, and welded the row into
+one continuous lit bar all by itself.
+
+### 6. Friday survives the weekend — three separate deleters, all wrong
+
+Friday's candles were fine; Friday's GAMMA was being deleted before Monday's
+open. Three independent mechanisms, each of which could do it alone.
+
+**`server-v2/_lib-db.cjs` — the session count included Sunday.** The prune keeps
+the N newest distinct `date` values. Its own comment claimed this was
+"weekend-proof by construction: Saturday and Sunday produce no `date` values."
+That is false. `gex-history-writer`'s recording window reopens at **Sunday 20:00
+ET**, so Sunday night writes rows stamped with Sunday's ET date; four hours later
+Monday's date appears, the two newest distinct dates are `{Sunday, Monday}`, MIN
+is Sunday, and everything before it — all of Friday — is deleted.
+
+Fixed two ways: the DISTINCT is filtered to weekdays
+(`EXTRACT(ISODOW FROM date::date) < 6`), so a weekend date can hold rows but can
+never consume a session slot; and `GEX_HISTORY_KEEP_SESSIONS` goes 2 → 3
+(env-overridable). At 2 the window is exactly "yesterday and today" and one
+holiday puts Friday back in the bin.
+
+**`server-v2/state/retention-cleanup.js` — symbol-blind front-expiry, run on
+weekends.** Its keep-only-the-front-expiry clause computed
+`MIN(expiry) GROUP BY date` — across ALL symbols. SPX, SPY and QQQ rows for the
+same date measured themselves against one global minimum, so any symbol whose
+front expiry was not the smallest string on the board had its **entire day**
+deleted every night. Now `GROUP BY date, symbol` with a matching join predicate.
+
+And the nightly tick now **skips Saturday and Sunday**. Nothing is written
+between Friday 17:00 and Sunday 20:00 ET, so a weekend run has no new rows to
+reclaim — it can only re-apply the deletes to Friday, twice, before anyone has
+looked at it. Every cutoff in the job is 5 days or more, so two skipped nights
+cost nothing and Monday catches up on all three. `force` (POST
+`/proxy/retention-cleanup-run`) is unaffected — the gate is on the automatic tick
+only, so a disk emergency can still be handled any day.
+
+The weekday test derives ISO day-of-week from the formatted **ET** date, not
+`new Date().getDay()` — the latter is the server's weekday and is a day off for
+anything ET-evening on a UTC box, which is precisely when this runs.
+
+**`lib/db.ts` — the original 48h DELETE was still there.** `insertOptionStrikeGexRows`
+ended with `DELETE ... WHERE timestamp < now - 48h`. That is the line the
+server-v2 fix was written to replace, and it was only ever fixed in the bundle;
+the TypeScript source kept the old behaviour on whatever traffic reaches the Next
+route. 48 wall-clock hours is ~2 sessions Tue–Fri and less than one across a
+weekend, so the first Sunday-night insert cut everything older than Friday 20:00.
+
+That path now prunes NOTHING rather than growing a second copy of the session
+logic that can drift again. Retention for this table is owned by server-v2: the
+per-insert session prune and the nightly cleanup, both in the process that serves
+the site.
+
+### 7. Per-strike GEX for the whole scanner MAIN lane
+
+The bubble/heatmap pipeline covered three symbols. It now covers **13 recorded
+plus $SPX** — the scanner's MAIN lane from `server-v2/scanner-tickers.js`:
+
+```
+SPY QQQ NDX VIX  AAPL AMD AMZN GOOGL META MSFT NVDA SPCX TSLA   (+ ES = $SPX)
+```
+
+**The streamer is untouched.** SPY/QQQ were never on the dxLink hot feed —
+`etf-gex-recorder.js` is a REST chain poller (`fetchExpirations` /
+`fetchChainFull`), so ten more names add zero subscriptions. For scale,
+`startStrikeGrowthFeed` already holds ~40k contracts across the full 169-name
+roster on that connection.
+
+**SPX is excluded from the recorder and must stay excluded.** `normGexSymbol()`
+folds `'SPX'` onto `'$SPX'`, which is the key `proxy-tastytrade` writes every 30s
+off the streamed chain. Recording it here too puts two writers with different
+strike windows and cadences on one key, and the heatmap's
+`DISTINCT ON (minute_bucket, strike) ORDER BY ..., timestamp DESC` hands each
+minute to whichever landed last.
+
+**The roster comes from the FILE, not roster-store.** The Watchlists page can add
+fifty names to the scanner roster without anyone thinking about write volume;
+this recorder writes ~81 rows per symbol per minute into the table that caused
+the 2026-07 disk incident. `ETF_GEX_SYMBOLS` still overrides for a one-off.
+
+#### Two new bounds, because uncapped x 13 is the 2.9GB table again
+
+- **`ETF_GEX_STRIKE_SIDE = 40`** — ±40 strikes around the ATM strike, so a write
+  is bounded at 81 rows. It was UNCAPPED (every strike with any book or tape),
+  which was tolerable on two ETFs. 40/side matches `eod-strike-gex-recorder`'s
+  `WINDOW_SIDE`, so the two per-strike tables cover the same ladder. Deliberately
+  a COUNT, not a percentage of spot: a ±8% band is ~24 strikes on NVDA and ~3 on
+  VIX, i.e. a different instrument on every underlying.
+- **`ETF_GEX_TICKER_DELAY_MS = 250`** — the sweep was a bare sequential loop with
+  no pacing. Thirteen names now trickle over ~3s of a 60s tick instead of firing
+  thirteen chain fetches at one instant.
+
+#### Age-based thinning pays for it
+
+`retention-cleanup.js` kept RTH at full 1-minute resolution for the entire 10-day
+window, and RTH-only recorders keep every row they write. New
+**`RETENTION_GEX_FULLRES_DAYS = 2`**: the newest two sessions stay at 1-minute,
+everything older is thinned to the same 5-minute grid the heatmap buckets into
+anyway. That is every window the page can actually request — 1D/2D heatmap,
+single-session bubbles, the replay day picker — so it is invisible to every
+current reader, at roughly a 3.6x cut.
+
+Measured on the new roster: **~411k rows/day written → ~1.48M kept ≈ 0.6 GB**
+for the whole 13-name set, against ~1.25 GB for SPX alone before this change.
+
+#### Also needed, and easy to miss
+
+`etf-candle-recorder.js`'s `ETF_CANDLE_SYMBOLS` default grows to the same list. A
+symbol with recorded gamma but no recorded bars renders as an EMPTY chart rather
+than an error — `useEtfCandles` simply has nothing to draw the trail on. A symbol
+dxLink will not serve 1m candles for logs once a minute and is skipped by the
+existing per-symbol try/catch.
+
+`components/dashboard/es-candles/symbols.tsx` gains the 13 rows and the widened
+`ChartSymbol` union. `key` doubles as the persisted slot value, so add rather
+than rename — a renamed key drops that card back to ES on the next reload. The
+picker already has search, favourites and a 260px scroll, so it takes the longer
+list without a layout change.
+
+### 8. The chart opens on the cash session
+
+`applyDefaultView` framed the last `DEFAULT_VIEW_BARS = 60` bars. That was
+written to stop `fitContent()` crushing a full session plus overnight into the
+container — and it did — but a fixed bar count is 5 hours at 5m and **fifty
+minutes at 1m**, so on the intervals people actually use the page opened deep
+inside the day with the morning off-screen. "Way zoomed in on default load" was
+earned.
+
+It now frames **09:30–16:00 ET of the most recent session that has RTH bars**,
+which is the frame the page is for: gamma levels are a statement about the cash
+session, and every read on the chart — walls, flip, CB, the bubble trail, the EM
+band — is scoped to it. Searching backwards for the newest RTH bar means an
+overnight tape past 16:00 and a premarket mount before 09:30 both land on the
+last session that traded rather than on an empty frame.
+
+**The window is RESERVED, not fitted.** The right edge is placed at the
+session's last bar SLOT (derived from `candleMs`), not at the newest bar that has
+printed — so at 09:35 you see the whole day's frame with five bars in it rather
+than five bars stretched across the width, and the frame stays put as the session
+fills instead of re-zooming under the cursor.
+
+Two things worth knowing if this is touched again:
+
+- The function reads logical INDICES, so it must be handed the rows the SERIES
+  is currently showing. During replay that is the filtered slice, not the full
+  history — hence the new `viewRowsRef`, and hence passing `srcRows` rather than
+  `rows` at the data-load call site.
+- The old `(chart, barCount)` call shape still works and keeps the old
+  behaviour. A bare count has no timestamps, so the cash session cannot be
+  located from it and guessing would be worse than the fixed window.
+
+Fallbacks are unchanged in spirit: no RTH bar to anchor on (a thin replay slice,
+a symbol whose history hasn't streamed) falls back to the fixed-bar window, and
+then to `fitContent`.
 
 ### Migration
 

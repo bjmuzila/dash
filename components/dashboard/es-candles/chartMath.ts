@@ -434,39 +434,112 @@ export function parseLevelNum(v: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-// ── Default zoom ─────────────────────────────────────────────────────────────
-// The chart opens on the most recent DEFAULT_VIEW_BARS bars, not the whole
-// loaded history. fitContent() crushed a full session (plus overnight) into the
-// container, which left the candles hairline-thin and — worse — packed the
-// 1-min GEX bubbles so tightly they merged into one solid rail.
+// ── Default zoom: THE CASH SESSION ───────────────────────────────────────────
+// The chart opens on 09:30–16:00 ET of the most recent session that has RTH
+// bars. That is the frame the page is for — gamma levels are a statement about
+// the cash session, and every read on this chart (walls, flip, CB, the bubble
+// trail, the EM band) is scoped to it.
 //
-// This is a BAR COUNT, not a duration, and that matters now that the card has a
-// timeframe switcher. It used to be `4h / CANDLE_MS`, which is 48 bars at 5m —
-// but the same 4h window at 1h would open the chart on FOUR bars. Holding the
-// bar count fixed makes every interval open at identical visual density, which
-// is the property the original comment was actually reaching for.
+// It used to open on the most recent DEFAULT_VIEW_BARS bars, a fixed count. That
+// was written to stop fitContent() crushing a full session plus overnight into
+// the container, and it did — but 60 bars is 5 hours at 5m and FIFTY MINUTES at
+// 1m, so on the intervals people actually use it opened deep inside the day with
+// the morning off-screen, and the "why is it so zoomed in" was earned.
+//
+// THE WINDOW IS RESERVED, NOT FITTED. The right edge is placed at the session's
+// LAST bar slot, not at the newest bar that has printed, so at 09:35 you see the
+// whole day's frame with five bars in it rather than five bars stretched across
+// the width. The frame therefore stays put as the session fills instead of
+// re-zooming under the cursor.
 export const DEFAULT_VIEW_BARS = 60;
 // Right gutter, in bars, so the newest candle isn't jammed against the price
 // axis (fitContent leaves a similar gap).
 export const DEFAULT_VIEW_RIGHT_PAD = 2;
-// Show the last DEFAULT_VIEW_BARS of `barCount` bars. Falls back to fitContent
-// when there isn't enough history to fill the window (early premarket, a thin
-// replay slice), so a short session still fills the width instead of rendering
-// a handful of bars stranded on the right.
-export function applyDefaultView(chart: IChartApi | null, barCount: number) {
+// A little air before the open, so the 09:30 bar isn't welded to the left edge.
+const RTH_VIEW_LEFT_PAD = 1;
+// Bound on the backward walk to the session's first bar. The walk stops at the
+// day boundary and at 09:30 anyway; this is a guard so a pathological bar array
+// (duplicate timestamps, a 1m series with weeks of history) can't turn a fit
+// into a long Intl-formatting loop.
+const RTH_WALK_MAX = 800;
+
+/**
+ * Frame the cash session.
+ *
+ * `bars` must be the rows the series is CURRENTLY showing — during replay that
+ * is the filtered slice, not the full history, or the logical indices below
+ * point at the wrong candles.
+ *
+ * `candleMs` sizes the reserved window. Falls back to whatever has printed when
+ * it isn't known, and to the old fixed-bar-count view (then fitContent) when
+ * there is no RTH bar to anchor on at all — early premarket on a fresh mount, a
+ * thin replay slice, a symbol whose history hasn't streamed in yet.
+ */
+export function applyDefaultView(
+  chart: IChartApi | null,
+  bars: ReadonlyArray<{ timestamp: number }> | number,
+  candleMs = 0,
+) {
   if (!chart) return;
   const ts = chart.timeScale();
+  // Legacy call shape (a bare bar count) — no timestamps, so the cash session
+  // can't be located. Keep the old behaviour rather than guess.
+  if (typeof bars === "number") {
+    try {
+      if (bars > DEFAULT_VIEW_BARS) {
+        ts.setVisibleLogicalRange({ from: bars - DEFAULT_VIEW_BARS, to: bars - 1 + DEFAULT_VIEW_RIGHT_PAD });
+      } else {
+        ts.fitContent();
+      }
+    } catch { try { ts.fitContent(); } catch { /* ignore */ } }
+    return;
+  }
+
+  const n = bars.length;
+  const fallback = () => {
+    try {
+      if (n > DEFAULT_VIEW_BARS) {
+        ts.setVisibleLogicalRange({ from: n - DEFAULT_VIEW_BARS, to: n - 1 + DEFAULT_VIEW_RIGHT_PAD });
+      } else {
+        ts.fitContent();
+      }
+    } catch { try { ts.fitContent(); } catch { /* ignore */ } }
+  };
+  if (!n) { fallback(); return; }
+
   try {
-    if (barCount > DEFAULT_VIEW_BARS) {
-      ts.setVisibleLogicalRange({
-        from: barCount - DEFAULT_VIEW_BARS,
-        to: barCount - 1 + DEFAULT_VIEW_RIGHT_PAD,
-      });
-    } else {
-      ts.fitContent();
+    const inRth = (t: number) => {
+      const m = etMinutesOfDay(t);
+      return m >= RTH_OPEN_MIN && m < RTH_CLOSE_MIN;
+    };
+    // Newest RTH bar, searching backwards — so an overnight tape past 16:00, or
+    // a premarket mount before 09:30, both land on the last session that traded
+    // rather than on a frame with nothing in it.
+    let endIdx = -1;
+    for (let i = n - 1; i >= 0 && n - i <= RTH_WALK_MAX; i--) {
+      if (inRth(bars[i].timestamp)) { endIdx = i; break; }
     }
+    if (endIdx < 0) { fallback(); return; }
+    // Back to that session's first bar.
+    const dayKey = etDayKey(bars[endIdx].timestamp);
+    let startIdx = endIdx;
+    for (let k = 0; startIdx > 0 && k < RTH_WALK_MAX; k++) {
+      const prev = bars[startIdx - 1].timestamp;
+      if (etDayKey(prev) !== dayKey || !inRth(prev)) break;
+      startIdx--;
+    }
+    // Reserve the whole 6.5h, so the frame is the session and not just the part
+    // of it that has printed. Never narrower than what IS on screen.
+    const printed = endIdx - startIdx + 1;
+    const session = candleMs > 0
+      ? Math.ceil(((RTH_CLOSE_MIN - RTH_OPEN_MIN) * 60_000) / candleMs)
+      : printed;
+    ts.setVisibleLogicalRange({
+      from: startIdx - RTH_VIEW_LEFT_PAD,
+      to: startIdx + Math.max(session, printed) - 1 + DEFAULT_VIEW_RIGHT_PAD,
+    });
   } catch {
-    try { ts.fitContent(); } catch { /* ignore */ }
+    fallback();
   }
 }
 
