@@ -47,6 +47,12 @@
 //   • SIZE IS THE JUNIOR CHANNEL. Sizes differ between rows, but only mildly —
 //     what separates the dominant level is COLOUR and GLOW, not radius.
 //   • EVERY LEVEL IS A FULL ROW across the session. The row IS the level.
+// ── The size law ────────────────────────────────────────────────────────────
+//     r = clamp(maxPx, rowPitch × maxPxRowFrac) × ratio^curve,  floored at minPx
+//
+// where `ratio` is the strike's |net GEX| on a log scale whose top is the
+// session reference and whose bottom is `decades` under it. Read the comment on
+// `curve` — it is the number that decides whether the ladder is rankable by eye.
 export type BubbleStyle = {
   /** How many strikes draw per column, ranked by peak |GEX| so far. */
   topStrikes: number;
@@ -54,8 +60,34 @@ export type BubbleStyle = {
   highlight: number;
   /** Radius in px of a strike sitting AT the session reference. */
   maxPx: number;
-  /** Radius of the bottom of the log domain, as a fraction of `maxPx`. */
-  minFrac: number;
+  /**
+   * Ceiling on `maxPx` as a fraction of the STRIKE PITCH in px.
+   *
+   * Rows sit at fixed prices, so on a zoomed-out chart the strikes can be ten
+   * pixels apart and a 12px mark would swallow its neighbours. This scales the
+   * whole ladder down with the available room instead — the RATIOS between the
+   * ranks, which are the actual encoding, are untouched. On any normally-zoomed
+   * chart the pitch is far wider than this and `maxPx` simply wins.
+   */
+  maxPxRowFrac: number;
+  /** Hard floor so a wing strike stays a visible speck instead of vanishing. */
+  minPx: number;
+  /**
+   * Size-response exponent on the log ratio. THIS is the separation knob.
+   *
+   * At 1 (a straight log mapping) the top five strikes drew 6.0 / 5.1 / 4.4 /
+   * 4.2 / 4.0 px — a 1.5:1 spread across the whole visible ladder, which is
+   * "they all look the same" and was the complaint. That is not a bug in the
+   * scale; a real chain's top five genuinely sit within ~2.3x of each other, so
+   * ANY faithful mapping compresses them. Reading the hierarchy needs the
+   * mapping to stretch deliberately.
+   *
+   * At 2 the same five draw 8.7 / 6.4 / 4.8 / 4.3 / 3.9 px — 2.2:1 on radius,
+   * ~5:1 on area, which is what the eye actually compares. Still strictly
+   * monotone in |net GEX|, so a bigger dot is still always more gamma; only the
+   * contrast changes.
+   */
+  curve: number;
   /**
    * Width of the log size domain, in decades below the reference.
    *
@@ -63,9 +95,8 @@ export type BubbleStyle = {
    * ranked strike of a column runs a median 0.44 of that column's top (p10
    * 0.27) and the column top itself runs a median 0.345 of the session
    * reference — so the visible ladder spans roughly 1.5 decades end to end.
-   * Narrower and the wings clip onto the floor; wider and the top five all
-   * bunch within a pixel of each other, which is the "every bubble looks the
-   * same" complaint this number exists to answer.
+   * Narrower and the wings clip onto the floor; wider and the top five bunch
+   * back together no matter what `curve` does.
    */
   decades: number;
   /** Opacity gradient steepness, 0..1. The weakest row fades to 1 − this. */
@@ -75,8 +106,10 @@ export type BubbleStyle = {
 export const BUBBLE_STYLE: BubbleStyle = {
   topStrikes: 5,
   highlight: 1,
-  maxPx: 7,
-  minFrac: 0.15,
+  maxPx: 12,
+  maxPxRowFrac: 0.55,
+  minPx: 0.6,
+  curve: 2,
   decades: 1.5,
   fade: 0.55,
 };

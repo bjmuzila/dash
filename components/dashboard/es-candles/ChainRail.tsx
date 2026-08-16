@@ -25,7 +25,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
-import { HOME_THEME } from "@/components/shared/homeTheme";
+import { HOME_THEME, LEVEL_COLORS } from "@/components/shared/homeTheme";
+import { atMinIntensity, columnWalls, wallAt, INTENSITY_MIN } from "@/lib/calculations/heatLevels";
 import { dedupeFetch } from "@/lib/dedupeFetch";
 import { cachedJson } from "@/lib/sharedCache";
 import { parseExpiration, metricBg, type GreekCell } from "@/lib/calculations/optionChain";
@@ -264,6 +265,13 @@ export default function ChainRail({
     // dead over this panel.
     const heat = 1 + intensityRef.current * 2;
 
+    // Levels-only: the card's slider at its bottom stop (0.1) switches the heat
+    // field off on the chart, and the rail has to follow or the two panels stop
+    // describing the same thing. Ranked over the SAME visible rows the heat
+    // scale uses, so the rail's CB/CW/PW are the ladder you can actually see.
+    const levelsOnly = atMinIntensity(intensityRef.current, INTENSITY_MIN.esCandles);
+    const walls = levelsOnly ? columnWalls(rows.map((r) => ({ strike: r.strike, net: r.v }))) : null;
+
     // Strike + value needs ~105px. Below that the value alone wins — see the
     // note at the label draw for why losing the strike costs nothing.
     const showStrikes = w >= 105;
@@ -274,7 +282,10 @@ export default function ChainRail({
       const { top, bot } = bandFor(i);
       const bandH = Math.max(1, bot - top);
 
-      const bg = metricBg(v, max, heat, top3);
+      const wk = levelsOnly ? wallAt(walls, strike) : null;
+      const bg = levelsOnly
+        ? (wk ? LEVEL_COLORS.wash[wk] : "transparent")
+        : metricBg(v, max, heat, top3);
       if (bg !== "transparent") {
         ctx.fillStyle = bg;
         ctx.fillRect(0, top, w, bandH);

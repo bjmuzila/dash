@@ -51,12 +51,13 @@ import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { Dock, SegGroup, DockButton, DockGap, DockSlider, DockSpacer } from "@/components/shared/DockToolbar";
 import FitScale from "@/components/shared/FitScale";
-import { HOME_THEME, DOCK_THEME, LIGHT_BLUE, SOFT_RED, ES_CANDLE_UP, ES_CANDLE_DOWN, dissolveCardStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME, DOCK_THEME, LIGHT_BLUE, SOFT_RED, ES_CANDLE_UP, ES_CANDLE_DOWN, LEVEL_COLORS, dissolveCardStyle } from "@/components/shared/homeTheme";
+import { atMinIntensity, columnWalls, wallAt, INTENSITY_MIN } from "@/lib/calculations/heatLevels";
 import type { RailRow } from "@/components/dashboard/EsGexRail";
 import type { EsCandleRecord } from "@/lib/snapdb";
 
 import {
-  toChartTime, etDayKey, fmtEtHM, isPlausibleBasis, etMinutesOfDay, gexTodScale,
+  toChartTime, etDayKey, fmtEtHM, isPlausibleBasis, etMinutesOfDay, BUBBLE_SCALE_CUTOFF_MIN,
   isCashOpen, etSessionStarted, isEtWeekend, etMinutes, RTH_OPEN_MIN, RTH_CLOSE_MIN, buildVolumeProfile, TPO_PERIOD_MS, buildTpoProfile, SLOT_MS, slotFloorMs,
   SPOT_LINE_GRAY, EM_VIOLET, parseLevelNum, DEFAULT_VIEW_BARS, DEFAULT_VIEW_RIGHT_PAD, applyDefaultView,
   deriveColumnLevels, gexColor,
@@ -67,13 +68,13 @@ import {
   type ChartInterval,
 } from "./interval";
 import { SymbolListDropdown, symbolDef, isChartSymbol, type ChartSymbol } from "./symbols";
-import { PanelSection, PanelChip, OVL_PANEL_W, OVL_VIEWPORT_PAD, OVL_MIN_H } from "./panelUi";
+import { PanelSection, PanelChip, SLIDER_LABEL_W, OVL_PANEL_W, OVL_VIEWPORT_PAD, OVL_MIN_H } from "./panelUi";
 import {
-  BUBBLE_STYLE, BUBBLE_REF_FLOOR_FRAC,
+  BUBBLE_CFG_DEFAULT, BUBBLE_CFG_RANGE, bubbleCfgFrom,
   readSlot, writeSlot, broadcastSlot, subscribeSlot,
-  isBubbleBucket,
+  readBubbleDefault, writeBubbleDefault, isBubbleBucket,
   subscribeReplayCmd, INDICATORS_DEFAULT,
-  type BubbleBucket, type SlotId, type SlotBlob, type IndicatorCfg,
+  type BubbleCfg, type BubbleBucket, type SlotId, type SlotBlob, type IndicatorCfg,
 } from "./slotStore";
 import { ema as emaOf, bollinger, rsi as rsiOf, fmtCountdown, EMA_COLORS, type BollingerBands } from "./indicators";
 import SidePanel, { SIDE_PANEL_SPEC, type SidePanelKind } from "./SidePanel";
@@ -88,22 +89,6 @@ const dissolveCard = dissolveCardStyle;
  * one chart on a 1280 laptop is just as cramped as three on a 1920.
  */
 const COMPACT_CARD_WIDTH = 760;
-
-/**
- * How many strikes per column the gamma backfill asks for.
- *
- * Deliberately much larger than `BUBBLE_STYLE.topStrikes` (5). The bubble layer
- * ranks strikes across the WHOLE session — that is what makes a wall render as
- * one continuous tube instead of a dotted line that appears and vanishes — and
- * a strike can only enter that ranking if it survived the server-side
- * truncation in at least one column. Asking for exactly 5 would silently make
- * the session ranking a per-column one.
- *
- * It is a CONSTANT, not derived from anything the user can change, because it
- * is part of the request URL: a value that moves re-fires a ~700KB backfill and
- * defeats dedupeFetch.
- */
-const BUBBLE_LADDER_REQUEST = 30;
 
 export interface EsChartCardProps {
   /**
@@ -506,14 +491,11 @@ export default function EsChartCard({
   const bubblePrepRef = useRef<{
     sig: string;
     mins: GexColumn[];
-    /** Session reference, TIME-OF-DAY DETRENDED. See the bubble draw. */
-    sessRef: number;
-    /** Expanding detrended reference as of each bucket, keyed by slotTs. */
-    runRef: Map<number, number>;
+    sessMax: number;
+    runMax: Map<number, number>;
     shownAt: Map<number, Set<number>>;
     wallAt: Map<number, Map<number, number>>;
-    /** gexTodScale() for each bucket, cached — it formats a Date to get ET. */
-    todAt: Map<number, number>;
+    floorAt: Map<number, number>;
     strikeStep: number;
   } | null>(null);
   // Pre-rendered glow sprites for the highlighted walls. `ctx.shadowBlur` is a
@@ -544,10 +526,15 @@ export default function EsChartCard({
   // weekend backfill wipe and repaint — the wall clock says Saturday, the data
   // says Friday, and they'd disagree forever.
   const lastWallDayRef = useRef<string>("");
+  const bubbleCfgRef = useRef<BubbleCfg>(BUBBLE_CFG_DEFAULT);
   const bubbleMinsRef = useRef<BubbleBucket>("bar");
   // Replay cursor, mirrored for the imperative overlay draw (null = live).
   const replayOnRef = useRef(false);
   const replayTsRef = useRef<number | null>(null);
+  // NOTE: the effect that syncs this ref lives next to the bubbleCfg useState
+  // below — NOT here. A `[bubbleCfg]` dep array is evaluated during render, and
+  // the state is declared further down, so putting it here threw a TDZ
+  // ReferenceError ("Cannot access before initialization") and 500'd the page.
   // Imperative redraw hook set up by the overlay effect; apply() calls it when a
   // new gex snapshot lands so in-place column updates repaint immediately.
   const drawOverlayRef = useRef<() => void>(() => {});
@@ -736,11 +723,10 @@ export default function EsChartCard({
   // at that strike in that minute, normalized to the session max so the bubble
   // trail shows gamma building/bleeding at each level through the day.
   const [showGexBubbles, setShowGexBubbles] = useState(true);
-  // (There is no bubble CONFIG state any more. Top strikes, highlight count,
-  // size, contrast, curve and brightness were seven persisted sliders; they are
-  // now the frozen BUBBLE_STYLE constant. See the note on it in slotStore — the
-  // scale they were compensating for is absolute now, so there is nothing left
-  // for them to tune.)
+  // Bubble controls: Show Top Strikes (N) + Highlight Top N Walls (X≤N) filter
+  // WHICH strikes draw; Min/Max Bubble Size (scaleSqrt range) + Brightness
+  // (opacity gradient) control HOW they draw. Persisted as one blob.
+  const [bubbleCfg, setBubbleCfg] = useState<BubbleCfg>(BUBBLE_CFG_DEFAULT);
   // Bubble time bucket. Storage is always 1-min; this aggregates at DRAW time.
   // At 1m the bubbles sit a few px apart and overlap into solid rails, which is
   // the whole reason a bucket exists.
@@ -1145,7 +1131,7 @@ export default function EsChartCard({
   // Empty dep array on purpose: this reads state SETTERS declared further down
   // the component, which is safe because the body runs after mount. Putting any
   // of those values in the dep array would evaluate them during render and throw
-  // a TDZ ReferenceError.
+  // a TDZ ReferenceError (see the note by bubbleCfgRef).
   //
   // Factored out because it runs from TWO places: the mount restore below, and
   // the shared-toolbar subscription. Both hand it the same shape — a full blob
@@ -1169,9 +1155,13 @@ export default function EsChartCard({
     if (typeof p.ovSessions === "boolean") setShowSessions(p.ovSessions);
     if (typeof p.ovFlipCross === "boolean") setShowFlipCross(p.ovFlipCross);
 
-    // The seven bubble-slider keys are deliberately NOT read. An old blob still
-    // carries them; the style is frozen now, so they are inert rather than a
-    // hidden per-card override that would make two cards size differently.
+    // Bubble sliders: copy ONLY the known numeric keys, clamped. Spreading the
+    // whole blob would inject `mins` / `on` into bubbleCfg and give them two
+    // owners; clamping matters because a blob saved under the older, much wider
+    // size ranges can hold values (maxSize 20) that no longer exist on the
+    // slider, which would render as a pinned handle you couldn't explain.
+    const patch = bubbleCfgFrom(p);
+    if (Object.keys(patch).length) setBubbleCfg((c) => ({ ...c, ...patch }));
     if (isBubbleBucket(p.mins)) setBubbleMins(p.mins);
     if (typeof p.on === "boolean") setShowGexBubbles(p.on);
     if (typeof p.cb === "boolean") setShowCb(p.cb);
@@ -1215,17 +1205,52 @@ export default function EsChartCard({
     return subscribeSlot(cfgSlot, applySettings);
   }, [shared, cfgSlot, applySettings]);
 
+  // Patch the config with slider constraints enforced, then persist:
+  //   • Highlight can't exceed Show Top Strikes (lowering N pulls X down).
+  //   • Min (a fraction of Max) stays inside 0..0.9.
+  const updateBubbleCfg = useCallback((patch: Partial<BubbleCfg>) => {
+    setBubbleCfg((prev) => {
+      const next: BubbleCfg = { ...prev, ...patch };
+      // No min-vs-max clamp any more: minSize is a FRACTION of maxSize, not a
+      // competing pixel value, so the two can't cross. Its own range (0..0.9)
+      // is the only bound it needs.
+      next.minSize = Math.max(0, Math.min(0.9, next.minSize));
+      next.highlight = Math.max(0, Math.min(next.highlight, next.topStrikes));
+      saveSetting({ ...next }); // merge — must not drop `mins` / `on`
+      return next;
+    });
+  }, [saveSetting]);
   // The bucket and the Bubbles on/off both persist into the same slot blob, so
   // the panel comes back exactly as you left it.
   const updateBubbleMins = useCallback((m: BubbleBucket) => { setBubbleMins(m); saveSetting({ mins: m }); }, [saveSetting]);
   const updateShowBubbles = useCallback((on: boolean) => { setShowGexBubbles(on); saveSetting({ on }); }, [saveSetting]);
-  // ("Save default" / "Reset" lived here. They pinned a slider setup into a
-  // global key and restored it. With no sliders there is nothing to pin — the
-  // one remaining preference in the panel, the bucket, already persists per slot
-  // on every change.)
+  // Pin the current panel as the default. Snapshots the sliders + the bucket;
+  // the on/off toggle is deliberately NOT part of a default (you turn the
+  // overlay on and off constantly — that's working state, not a preset).
   //
-  // Mirrored into a ref so the imperative overlay draw reads it without
-  // re-subscribing.
+  // The pinned preset is GLOBAL, not per slot: Reset in any card should restore
+  // the one setup you deliberately saved.
+  const [defSavedFlash, setDefSavedFlash] = useState(false);
+  const defFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveBubbleDefault = useCallback(() => {
+    writeBubbleDefault({ ...bubbleCfg, mins: bubbleMins });
+    setDefSavedFlash(true);
+    if (defFlashTimer.current) clearTimeout(defFlashTimer.current);
+    defFlashTimer.current = setTimeout(() => setDefSavedFlash(false), 1600);
+  }, [bubbleCfg, bubbleMins]);
+  useEffect(() => () => { if (defFlashTimer.current) clearTimeout(defFlashTimer.current); }, []);
+  // Reset → the pinned default if there is one, else the factory values.
+  const resetBubbleCfg = useCallback(() => {
+    const saved = readBubbleDefault();
+    const next: BubbleCfg = { ...BUBBLE_CFG_DEFAULT, ...bubbleCfgFrom(saved) };
+    const mins: BubbleBucket = saved && isBubbleBucket(saved.mins) ? saved.mins : "bar";
+    setBubbleCfg(next);
+    setBubbleMins(mins);
+    saveSetting({ ...next, mins });
+  }, [saveSetting]);
+  // Mirrored into refs so the imperative overlay draw reads them without
+  // re-subscribing. Must stay BELOW the useState above (see bubbleCfgRef).
+  useEffect(() => { bubbleCfgRef.current = bubbleCfg; }, [bubbleCfg]);
   useEffect(() => { bubbleMinsRef.current = bubbleMins; }, [bubbleMins]);
   // Auto-collapse the side panel when it would starve the candles.
   //
@@ -1764,7 +1789,7 @@ export default function EsChartCard({
     // treated like a symbol/expiry switch. See the wipe rule below.
     // ── Server-side strike truncation (?top=N) ────────────────────────────────
     // The bubble trail draws only the N strongest strikes per column
-    // (BUBBLE_STYLE.topStrikes). Pulling the WHOLE ladder for every
+    // (cfg.topStrikes, default 10, max 30). Pulling the WHOLE ladder for every
     // minute of a 24h window and discarding ~90% of it in the browser is what
     // made this the page's heaviest request. Asking the server for the top N
     // collapses it by roughly an order of magnitude.
@@ -1807,14 +1832,14 @@ export default function EsChartCard({
     // confirm before looking anywhere else — this is the only place the ETF
     // ladder is narrowed.
     const needsFullLadder = showHeatmap || replayOn;
-    // Ask for a fixed, generous ladder rather than exactly BUBBLE_STYLE.topStrikes.
-    // The draw filters down to the top 5 anyway, and asking for 5 here would mean
-    // the SESSION-WIDE strike ranking (which is what makes a wall a continuous
-    // tube) could only ever see the strikes that were top-5 in each individual
-    // column. 30 is the old slider ceiling, kept because it is a known-good
-    // response size and the URL must stay constant or dedupeFetch can't collapse
-    // repeat requests.
-    const topStrikes = needsFullLadder ? 0 : BUBBLE_LADDER_REQUEST;
+    // Request the slider's MAXIMUM, not its current value. Asking for exactly
+    // `cfg.topStrikes` made the URL move every time the slider did — and worse,
+    // the saved bubble config is restored in an effect AFTER mount, so the
+    // default 10 fired one request and the restored value immediately fired a
+    // second. The client already filters to `cfg.topStrikes` at draw time, so a
+    // constant max-30 request serves every slider position from one response:
+    // stable URL, no refetch on drag, no restore-triggered duplicate.
+    const topStrikes = needsFullLadder ? 0 : BUBBLE_CFG_RANGE.topStrikes.max;
     // `expiry` is IGNORED server-side under anyExpiry=1 (the Any query takes only
     // since+symbol), but it still has to be CONSTANT or the URL churns: the live
     // feed publishes an expiry a moment after mount, `heatmapExpiry` flips from
@@ -2019,10 +2044,11 @@ export default function EsChartCard({
     })();
     // No cleanup cancel: a same-key re-render must not abort a valid in-flight
     // backfill; the resolution-time key check handles real invalidation.
-    // showHeatmap / showFlipCross / isEs are deps because they feed `topStrikes`
-    // above — turning the heatmap on has to re-request at full ladder resolution.
-    // That lands as a shapeKey change, so the truncated columns get wiped rather
-    // than merged into.
+    // showHeatmap / showFlipCross / isEs / bubbleCfg.topStrikes are deps because
+    // they feed `topStrikes` above — turning the heatmap on has to re-request at
+    // full ladder resolution, and raising the Top Strikes slider has to re-request
+    // the wider set. Both land as a shapeKey change, so the truncated columns get
+    // wiped rather than merged into.
   }, [settingsLoaded, heatmapExpiry, heatmapDays, replayOn, activeReplayDay, selectedExpiry, sym.gexSymbol, gexPoll,
       showHeatmap, isEs]);
 
@@ -2600,7 +2626,7 @@ export default function EsChartCard({
   // times off-scale. The DTE pick resets to Front for a related reason: the
   // expiration list comes from the SPX feed, and an explicit pick would filter
   // the new symbol's rows by a string that may not exist for it.
-  // Declared HERE, below the state it touches.
+  // Declared HERE, below the state it touches — see the TDZ note by bubbleCfg.
   const prevSymbolRef = useRef(symbol);
   useEffect(() => {
     if (prevSymbolRef.current === symbol) return;
@@ -3317,6 +3343,14 @@ export default function EsChartCard({
             if (d <= 0) return 1;
             return Math.max(0.12, 1 - d / fadeSpan);
           };
+          // ── Levels-only heatmap ─────────────────────────────────────────────
+          // Intensity at its bottom stop (0.1) switches the gamma wash off and
+          // paints ONLY each column's CB / CW / PW. Ranked per column on the
+          // ACTIVE metric through valOf(), same as the heat scale, so the marks
+          // track the Vol+OI / Vol toggle instead of quietly staying on one
+          // basis. The chain rail applies the identical rule off the same
+          // slider value — see ChainRail.
+          const heatLevelsOnly = atMinIntensity(intensity, INTENSITY_MIN.esCandles);
           for (let ci = 0; ci < cols.length; ci++) {
             const col = cols[ci];
             // Per-session historical basis (see buildBasisAt above).
@@ -3346,9 +3380,15 @@ export default function EsChartCard({
             const colMax = absVals.length ? Math.max(...absVals) : 1;
             const colTop3 = [...absVals].sort((a, b) => b - a).slice(0, 3);
             const sorted = [...col.cells].sort((a, b) => a.strike - b.strike);
+            const colWalls = heatLevelsOnly
+              ? columnWalls(col.cells.map((c) => ({ strike: c.strike, net: valOf(c) })))
+              : null;
             for (let i = 0; i < sorted.length; i++) {
               const cell = sorted[i];
-              const color = gexColor(valOf(cell), colMax, intensity, colTop3);
+              const wk = heatLevelsOnly ? wallAt(colWalls, cell.strike) : null;
+              const color = heatLevelsOnly
+                ? (wk ? LEVEL_COLORS.wash[wk] : null)
+                : gexColor(valOf(cell), colMax, intensity, colTop3);
               if (!color) continue;
               const fade = distFade(cell.strike + colBasis);
               if (fade <= 0) continue;
@@ -3387,17 +3427,11 @@ export default function EsChartCard({
       // active metric. Same data the heatmap/rail use; cyan = +GEX (calls),
       // red = −GEX (puts). Thicker = larger gamma at that strike.
       {
-        // ── 1b) 1-minute per-strike GEX bubbles ─────────────────────────────
-        // One bubble per shown strike per bucket. Radius is a function of that
-        // strike's |net GEX| measured against ONE reference for the whole
-        // expiration, so the biggest gamma on the board draws the biggest mark
-        // and every other bubble on the chart — earlier in the day, at another
-        // strike — is directly comparable to it.
-        //
-        // The reference is TIME-OF-DAY DETRENDED (gexTodScale, chartMath). See
-        // the long note at the scale itself for why, and for the calibration.
-        // There is no user control over any of this any more: style is the
-        // frozen BUBBLE_STYLE, and the scale is measured rather than tuned.
+        // ── 1b) 1-minute per-strike GEX bubbles. One bubble per strike per
+        // minute; radius ∝ √|net GEX| at that strike, normalized to the max |GEX|
+        // seen across ALL minutes in the buffer (a session-wide scale) so the
+        // trail reads as gamma building/bleeding over time. The Strikes/Size/
+        // Brightness sliders (bubbleCfg) control which strikes draw and how.
         if (showGexBubbles) {
           // Aggregate the 1-min store into the selected bucket. We keep the LAST
           // minute in each bucket (the freshest read of that strike's gamma), not
@@ -3416,11 +3450,12 @@ export default function EsChartCard({
             : (t: number) => Math.floor(t / (bubbleMinsRef.current as number * 60_000)) * (bubbleMinsRef.current as number * 60_000);
           const metric = gexMetricRef.current;
           const valOf = (c: GexCell) => (metric === "vol" ? c.netVol : c.netOiVol);
+          const cfg = bubbleCfgRef.current;
 
           // ── Everything below is MEMOISED on the data, not the viewport ────
-          // Bucketing, the session reference, its expanding form and the per-
+          // Bucketing, the session scale, the expanding runMax and the per-
           // bucket ranking all depend only on (minute store, metric, bucket
-          // size, replay cursor, bar grid) — never on where
+          // size, Top-N/Highlight, replay cursor, bar grid) — never on where
           // the chart is scrolled. They used to be rebuilt inside every draw(),
           // and draw() is wired to wheel/pointermove/range-change, so panning a
           // loaded session re-sorted the whole strike list a few hundred times
@@ -3435,6 +3470,8 @@ export default function EsChartCard({
             minuteColsVerRef.current,
             metric,
             String(bubbleMinsRef.current),
+            cfg.topStrikes,
+            cfg.highlight,
             replayTsRef.current ?? "-",
             // barAt() is the "bar" bucketer, so the bar grid is part of the key.
             barsSig.length,
@@ -3450,67 +3487,61 @@ export default function EsChartCard({
               byBucket.set(bucketOf(m.slotTs), m);
             }
             const pMins = [...byBucket.values()].sort((a, b) => a.slotTs - b.slotTs);
-            // ── THE SIZE REFERENCE ────────────────────────────────────────
-            // One number for the whole expiration: the biggest |net GEX| the
-            // board has carried this session. The strike holding it draws at
-            // full size, and every other bubble — any strike, any minute — is
-            // measured against the SAME number, which is what makes two marks
-            // on this chart comparable at all.
-            //
-            // It is measured in DETRENDED units. Gamma at the top strike grows
-            // ~4.7x from the open to the bell every single session (see
-            // gexTodScale in chartMath, calibrated off six sessions of real
-            // per-strike history), so a raw session max is really just "what
-            // 15:55 looked like" and normalising against it squashes the entire
-            // morning to dust. Dividing each bucket by its expected time-of-day
-            // level removes that, and the reference becomes "the biggest gamma
-            // this board has carried, relative to the clock".
-            //
-            // This replaces the old 15:30 cliff, which fixed the squashing by
-            // throwing the last half hour out of the scale entirely — so every
-            // closing wall clamped to the same maximum and the most interesting
-            // half hour of the day carried no size information at all.
-            const pTodAt = new Map<number, number>();
-            for (const m of pMins) pTodAt.set(m.slotTs, gexTodScale(etMinutesOfDay(m.slotTs)));
-            const detrendedMaxOf = (m: GexColumn) => {
-              let mx = 0;
+            // Session-wide max magnitude → shared radius scale, computed from the
+            // minutes BEFORE 15:30 ET only. Into the close, gamma concentrates on 2–3
+            // strikes and their |GEX| dwarfs the rest of the day; including them made
+            // those few bubbles gigantic and normalized every earlier minute down to
+            // nothing. Excluding them means the scale is set by the 15:25-and-earlier
+            // session, and the closing strikes just clamp (ratio caps at 1) — so the
+            // biggest late bubble is exactly as big as the biggest 3:25 one, never more.
+            let pSessMax = 0;
+            for (const m of pMins) {
+              if (etMinutesOfDay(m.slotTs) >= BUBBLE_SCALE_CUTOFF_MIN) continue;
               for (const c of m.cells) {
                 const a = Math.abs(valOf(c));
-                if (a > mx) mx = a;
+                if (a > pSessMax) pSessMax = a;
               }
-              return mx / (pTodAt.get(m.slotTs) || 1);
-            };
-            let pSessRef = 0;
-            for (const m of pMins) {
-              const d = detrendedMaxOf(m);
-              if (d > pSessRef) pSessRef = d;
             }
-            // EXPANDING, not session-wide: a bucket is scaled against the
-            // reference known up to and including itself, so the divisor can
-            // never grow after the fact and an already-printed bubble can never
-            // shrink. A strong 10:00 wall is exactly as fat at 15:50 as it was
-            // at 10:00; a bigger wall later just clamps from its own bucket on.
+            // Fallback: if the buffer holds ONLY post-15:30 minutes (e.g. the page was
+            // opened at 3:45), there's no earlier session to scale against — use those
+            // minutes rather than draw nothing.
+            if (pSessMax === 0) {
+              for (const m of pMins) for (const c of m.cells) {
+                const a = Math.abs(valOf(c));
+                if (a > pSessMax) pSessMax = a;
+              }
+            }
+            // scaleSqrt DOMAIN: [0, max |GEX| KNOWN AS OF THAT BUCKET]. RANGE:
+            // [minSize, maxSize] px.
             //
-            // Floored at a fraction of the session reference so the first few
-            // buckets of the day — where the running max is one or two prints —
-            // don't render everything at full size.
-            const pRunRef = new Map<number, number>();
+            // EXPANDING WINDOW, not session-wide: a bucket is normalized against
+            // the max seen up to and including itself, so a divisor can never grow
+            // after the fact and an already-printed bubble can never shrink. A
+            // strong 10:00 wall stays exactly as fat at 15:50 as it was at 10:00;
+            // a bigger wall later just clamps (ratio caps at 1) from its own bucket
+            // forward. Floored at 15% of sessMax so the first few buckets of the
+            // day — where acc is tiny — don't all render at maxSize.
+            const pRunMax = new Map<number, number>();
             {
               let acc = 0;
               for (const m of pMins) {
-                const d = detrendedMaxOf(m);
-                if (d > acc) acc = d;
-                pRunRef.set(m.slotTs, Math.max(acc, pSessRef * BUBBLE_REF_FLOOR_FRAC));
+                if (etMinutesOfDay(m.slotTs) < BUBBLE_SCALE_CUTOFF_MIN) {
+                  for (const c of m.cells) {
+                    const a = Math.abs(valOf(c));
+                    if (a > acc) acc = a;
+                  }
+                }
+                pRunMax.set(m.slotTs, Math.max(acc, pSessMax * 0.15));
               }
             }
             // GLOBAL strike selection — the key to the continuous-tube look. Rank
             // strikes by their PEAK |GEX| across the whole session (not per column),
             // so the dominant walls (Call/Put Wall) are the SAME rows in every
             // column and render as unbroken bright tubes, while everything else
-            // stays faint. BUBBLE_STYLE.topStrikes = how many rows draw;
-            // .highlight = how many of those are "walls" (white-hot, glowing).
+            // stays faint. Show Top Strikes = how many rows draw; Highlight = how
+            // many of those are the "walls" (big, white-hot, glowing).
             // Ranked by peak |GEX| AS OF each bucket (expanding, same reasoning as
-            // runRef above) rather than over the whole session: a strike that was
+            // runMax above) rather than over the whole session: a strike that was
             // top-N at 10:00 keeps its 10:00 trail forever, even if it's long since
             // fallen out of the current top-N. The newest column still shows only
             // what's top-N right now, so the live read is unchanged.
@@ -3524,6 +3555,8 @@ export default function EsChartCard({
             // session's dominant wall as of that bucket). A Map, not a Set,
             // because the rank now drives the radius boost and the glow.
             const pWallAt = new Map<number, Map<number, number>>();
+            // Per-bucket bottom of the size scale (see the contrast note below).
+            const pFloorAt = new Map<number, number>();
             let shownNow: Set<number> = new Set();
             let wallNow: Map<number, number> = new Map();
             let dirty = true;
@@ -3534,22 +3567,37 @@ export default function EsChartCard({
               }
               if (dirty) {
                 const ranked = [...peakSoFar.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]);
-                shownNow = new Set(ranked.slice(0, Math.max(0, BUBBLE_STYLE.topStrikes)));
+                shownNow = new Set(ranked.slice(0, Math.max(0, cfg.topStrikes)));
                 wallNow = new Map();
-                ranked.slice(0, Math.max(0, BUBBLE_STYLE.highlight)).forEach((s, i) => wallNow.set(s, i));
+                ranked.slice(0, Math.max(0, cfg.highlight)).forEach((s, i) => wallNow.set(s, i));
                 dirty = false;
               }
               // Shared references: the sets are immutable once built, so an
               // unchanged bucket costs one pointer instead of a rebuilt Set.
               pShownAt.set(m.slotTs, shownNow);
               pWallAt.set(m.slotTs, wallNow);
-              // (A per-column CONTRAST STRETCH used to be computed here: the
-              // bottom of the size domain was the weakest strike shown in THIS
-              // column, so every column was re-normalised to its own range. It
-              // made a quiet column's ladder look exactly like a loud one's,
-              // which is precisely the comparison the bubbles exist to support.
-              // The domain bottom is now a fixed number of decades under the
-              // session reference — see BUBBLE_STYLE.decades.)
+              // ── CONTRAST STRETCH: the floor of the size scale ──────────────
+              // Normalising |GEX| against the max alone assumes the ladder uses
+              // the whole 0..max range. A real chain does not: strike gamma is
+              // a smooth curve, so the dozen strikes around the peak all sit at
+              // 60-95% of the max and — at ANY exponent — draw within a couple
+              // of pixels of each other. That is the "ten bubbles looking the
+              // same" problem, and it is a normalisation bug, not a curve one.
+              //
+              // So the domain is the SHOWN SET'S OWN RANGE, [floor, runMax],
+              // not [0, runMax]. The weakest strike on screen lands on minSize,
+              // the strongest on maxSize, and the rest spread across the whole
+              // budget however bunched the underlying numbers are. Size is
+              // still strictly monotone in |net GEX| — it is a contrast
+              // stretch, not a re-ranking — so a bigger dot still means more
+              // gamma, and only the CONTRAST changes.
+              let floorV = Infinity;
+              for (const c of m.cells) {
+                if (!shownNow.has(c.strike)) continue;
+                const a = Math.abs(valOf(c));
+                if (a > 0 && a < floorV) floorV = a;
+              }
+              pFloorAt.set(m.slotTs, Number.isFinite(floorV) ? floorV : 0);
             }
             // The chain's own strike increment. Data, not viewport — but it used
             // to be recomputed per frame by flat-mapping every cell of every
@@ -3565,37 +3613,45 @@ export default function EsChartCard({
               }
               if (Number.isFinite(dK) && ks.length > 1) pStrikeStep = dK;
             }
-            prep = { sig: prepSig, mins: pMins, sessRef: pSessRef, runRef: pRunRef, shownAt: pShownAt, wallAt: pWallAt, todAt: pTodAt, strikeStep: pStrikeStep };
+            prep = { sig: prepSig, mins: pMins, sessMax: pSessMax, runMax: pRunMax, shownAt: pShownAt, wallAt: pWallAt, floorAt: pFloorAt, strikeStep: pStrikeStep };
             bubblePrepRef.current = prep;
           }
-          const { mins, sessRef, runRef, shownAt, wallAt, todAt, strikeStep } = prep;
+          const { mins, sessMax, runMax, shownAt, wallAt, floorAt, strikeStep } = prep;
 
           if (mins.length) {
-            if (sessRef > 0) {
-              // ── THE SIZE LAW ──────────────────────────────────────────────
-              //   r = maxPx * (minFrac + ratio * (1 - minFrac))
+            if (sessMax > 0) {
+              // ── MAX IS THE OVERALL SIZE KNOB ───────────────────────────────
+              // `minSize` is a FRACTION of maxSize now, not an absolute pixel
+              // floor. With the old `min + ratio*(max-min)` form, dragging Max
+              // only moved the top of the ladder: a strike at ratio 0 sat at
+              // `min` px no matter where Max went, so the small bubbles never
+              // changed and the slider felt half-broken.
               //
-              // where `ratio` is this strike's |net GEX| placed on a LOG scale
-              // whose top is the session reference for this bucket and whose
-              // bottom is `decades` below it. Nothing else enters. In
-              // particular there is no curve exponent and no top boost any more
-              // — those were sliders that existed to bend a scale that kept
-              // coming out wrong, and with an absolute reference the straight
-              // log mapping is what the numbers actually say.
+              //   r = maxSize * (minFrac + ratio^curve * (1 - minFrac))
               //
-              // Log, not linear, because gamma is read multiplicatively: a real
-              // SPX chain runs four orders of magnitude from the peak to the
-              // wings, so a linear scale hands the whole pixel budget to the
-              // top strike and pins every other row on the floor.
-              const maxPx = BUBBLE_STYLE.maxPx;
-              const minFrac = Math.max(0, Math.min(0.9, BUBBLE_STYLE.minFrac));
-              // Width of the log domain. See BUBBLE_STYLE.decades for how 1.5
-              // was measured rather than chosen.
-              const domainSpanLog = Math.LN10 * Math.max(0.2, BUBBLE_STYLE.decades);
-              // Opacity gradient: the weakest visible row fades to 1 − fade, the
-              // strongest is fully opaque, so magnitude reads twice (size and
-              // brightness) without either channel carrying it alone.
-              const minOpacity = Math.max(0.1, 1 - Math.max(0, Math.min(1, BUBBLE_STYLE.fade)));
+              // Now Max is a pure multiplier on the whole ladder — every bubble
+              // scales with it — and Min controls the ladder's CONTRAST (how
+              // small the weakest strike gets relative to the strongest), which
+              // is the thing that was actually wanted from it all along.
+              const minFrac = Math.max(0, Math.min(0.9, cfg.minSize));
+              // Guarded like curveExp — an older saved blob predates this key.
+              const topBoost = Number.isFinite(cfg.topBoost) && cfg.topBoost > 0
+                ? cfg.topBoost
+                : BUBBLE_CFG_DEFAULT.topBoost;
+              // How tightly Max concentrates on the strongest strikes. Higher =
+              // fewer bubbles affected. See the topMul note in the draw loop.
+              const TOP_BOOST_FOCUS = 4;
+              // Size-response exponent (Curve slider). Guarded against an older
+              // blob that predates the key — an undefined here would make every
+              // radius NaN and silently blank the whole bubble layer.
+              const curveExp = Number.isFinite(cfg.curve) && cfg.curve > 0
+                ? cfg.curve
+                : BUBBLE_CFG_DEFAULT.curve;
+              // Brightness gradient: intensity 0..1 → the SMALLEST strike's opacity
+              // = max(0.1, 1 - intensity). 0% ⇒ min 1.0 (flat, no gradient); 90% ⇒
+              // small strikes ~0.1 so the big walls dominate by contrast.
+              const brightness01 = Math.max(0, Math.min(1, cfg.brightness / 100));
+              const minOpacity = Math.max(0.1, 1 - brightness01);
               // ── SIZE MEANS ONE THING: |net GEX| AT THAT STRIKE ────────────
               // Highlight no longer touches the radius. It used to multiply it
               // (1.35x flat, then 2.6x graduated, then 1.45x), and every one of
@@ -3694,12 +3750,13 @@ export default function EsChartCard({
               //
               // Correct order: the biggest mark decides the pitch, not the other
               // way round. Work out the largest radius that can actually be
-              // drawn (maxPx, itself bounded by the vertical row cap), then
+              // drawn (maxSize, itself bounded by the vertical row cap), then
               // stride far enough that two of those fit side by side with a gap.
               // Fewer columns, every one at its true size, and overlap is still
               // impossible — it is prevented by the SPACING now rather than by
               // shrinking the thing being spaced.
-              const rMaxDrawn = Math.max(0.35, maxPx * BUBBLE_ASPECT);
+              const topBoostPre = Number.isFinite(cfg.topBoost) && cfg.topBoost > 0 ? cfg.topBoost : 1;
+              const rMaxDrawn = Math.max(0.35, cfg.maxSize * topBoostPre * BUBBLE_ASPECT);
               const neededPitch = 2 * rMaxDrawn + 2 * COL_GAP_PX;
               const colStride = Math.max(1, Math.ceil(neededPitch / Math.max(0.5, colPitch)));
               const effColPitch = colPitch * colStride;
@@ -3773,27 +3830,25 @@ export default function EsChartCard({
                 const x = xAt(bucketOf(m.slotTs));
                 if (x == null || x < -20 || x > w + 20) continue;
                 const mBasis = basisAt(m.slotTs);
-                // ── This bucket's slice of the absolute scale ─────────────
-                // The reference is carried in DETRENDED units, so it has to be
-                // put back on the clock before |GEX| can be measured against
-                // it: at 15:50 the same reference means a number ~3x the one it
-                // means at noon, which is exactly the correction that stops the
-                // last half hour from swallowing the chart.
-                //
-                // Both ends are frozen at print time (runRef is expanding), so
-                // a bubble already on screen can never resize.
-                const domainMax = Math.max(
-                  (runRef.get(m.slotTs) || sessRef) * (todAt.get(m.slotTs) || 1),
-                  Number.MIN_VALUE,
+                // Per-bucket scale + row filter — both frozen at print time.
+                const domainMax = runMax.get(m.slotTs) || sessMax;
+                // Bottom of the stretched domain — see the contrast note in the
+                // memo. Held a hair below the weakest shown strike so that
+                // strike draws at minSize rather than vanishing.
+                // Strictly positive: this is the bottom of a LOG domain now, so
+                // a zero floor would send the whole scale to −Infinity. A
+                // millionth of the max is six decades of headroom, far more
+                // than any real chain uses.
+                const domainMin = Math.max(
+                  Math.min(floorAt.get(m.slotTs) || domainMax * 1e-6, domainMax * 0.98),
+                  domainMax * 1e-6,
                 );
-                const logHi = Math.log(domainMax);
-                const logLo = logHi - domainSpanLog;
                 const shownStrikes = shownAt.get(m.slotTs);
                 const wallStrikes = wallAt.get(m.slotTs);
                 if (!shownStrikes || !wallStrikes) continue;
-                // Biggest first, so if a mark ever grows past the strike pitch
-                // the smaller rows land ON TOP of the wall rather than
-                // disappearing underneath it.
+                // Biggest first, so when the user does crank Size past the
+                // strike pitch the smaller rows land ON TOP of the wall rather
+                // than disappearing underneath it.
                 const drawOrder = m.cells
                   .filter((c) => shownStrikes.has(c.strike))
                   .sort((a, b) => Math.abs(valOf(b)) - Math.abs(valOf(a)));
@@ -3808,40 +3863,66 @@ export default function EsChartCard({
                   // right edge reads as an annotation, not a level.)
                   const y = series.priceToCoordinate(cell.strike + mBasis);
                   if (y == null || y < -20 || y > h + 20) continue;
-                  // ── Where this strike sits on the absolute log scale ────
-                  // 1 = it IS the biggest gamma the expiration has carried
-                  // (adjusted for the clock); 0 = it is `decades` below that.
-                  // The ends came from the memo and do not depend on which
-                  // other strikes happen to be in this column — that is the
-                  // whole point. A strike's mark changes when ITS gamma
-                  // changes, and never because a neighbour's did.
+                  // ── LOG SCALE. Net GEX spans FOUR ORDERS OF MAGNITUDE ────
+                  // A real SPX chain at 11:26 ran 301.95B at the peak down to
+                  // 52.1M at the wings — a 5,800:1 range. On a linear scale the
+                  // peak takes the whole budget and everything below the top
+                  // three or four strikes lands on minSize: 151.52B and 8.68B,
+                  // an 17x difference in actual gamma, drew 4.94px vs 0.61px
+                  // while ten more rows sat indistinguishable underneath.
                   //
-                  // Log, not linear: a real SPX chain runs four orders of
-                  // magnitude from peak to wings, and on a linear scale the
-                  // peak takes the entire pixel budget while 151B and 8.7B —
-                  // a 17x difference — both land on the floor.
-                  const ratio = Math.max(0, Math.min((Math.log(Math.max(Math.abs(v), Number.MIN_VALUE)) - logLo) / domainSpanLog, 1));
+                  // Gamma is read multiplicatively — "twice the wall", "an
+                  // order of magnitude smaller" — so the scale should be too.
+                  // On log the same ladder spreads 9.50 / 7.99 / 7.93 / 7.14 /
+                  // 5.93 / 5.28 / 5.01 / 4.19 / 3.28 / 3.05 / 2.82 / 2.28 …
+                  // every row distinct, and still strictly monotone in |GEX|.
+                  //
+                  // `curve` still applies ON TOP of this: 1 = pure log, >1
+                  // pushes the mid-ladder back down, <1 lifts it.
+                  const logLo = Math.log(Math.max(domainMin, domainMax * 1e-6));
+                  const logHi = Math.log(Math.max(domainMax, Number.MIN_VALUE));
+                  const logSpan = Math.max(logHi - logLo, 1e-6);
+                  const ratio = Math.max(0, Math.min((Math.log(Math.max(Math.abs(v), Number.MIN_VALUE)) - logLo) / logSpan, 1));
                   const wallRank = wallStrikes.get(cell.strike);
                   const isHi = wallRank != null;
-                  // ── SIZE MEANS ONE THING ───────────────────────────────
-                  // Radius is a pure function of this strike's own |net GEX|
-                  // against the session reference. No rank term, no highlight
-                  // term, no top boost. Highlight used to multiply the radius
-                  // (1.35x, then 2.6x graduated, then 1.45x) and every version
-                  // made a strike bigger for a reason that has nothing to do
-                  // with its gamma, which is what stopped the ladder being
-                  // rankable by eye. The two channels stay orthogonal:
-                  //   SIZE  = |net GEX|, always. Bigger dot = more gamma.
-                  //   COLOR = the top-N wall selection. White-hot with a glow.
-                  const r = maxPx * (minFrac + ratio * (1 - minFrac));
+                  // Size tracks THIS bubble's own |GEX|, shaped by the Curve
+                  // exponent, so each tube tapers as gamma builds/bleeds.
+                  //
+                  // The default is now curve 1.0 — LINEAR. Radius is proportional
+                  // to net GEX across the whole ladder: 50% of the session max
+                  // draws at 50% of the span, 25% at 25%. That is the read the
+                  // ladder is for, and the steep exponents this used to default
+                  // to (0.5 = √, then 2.2 / 2.8) both destroyed it from opposite
+                  // ends — √ lifted every mid strike up near the wall, and >2
+                  // collapsed every non-wall onto Min.
+                  //
+                  // Wall prominence comes from HIGHLIGHT_BOOST_* below instead,
+                  // which is rank-based and therefore cannot flatten the strikes
+                  // it isn't applied to. The slider still spans 0.5–8 if you want
+                  // either extreme back.
+                  // Radius is a pure function of this strike's own |net GEX|.
+                  // No rank term, no highlight term — see the note above.
+                  // `size` scales the whole ladder; `max` (topBoost) stretches
+                  // ONLY its top.
+                  //
+                  // The weight is ratio^4, not ratio. Linear weighting gave a
+                  // mid strike at ratio 0.5 half the boost, so dragging Max
+                  // visibly moved every bubble on the chart and it read as a
+                  // second Size slider. The 4th power concentrates it hard on
+                  // the peak: ratio 0.5 gets 6% of the factor, 0.8 gets 41%,
+                  // 0.9 gets 66%, and only the top of the ladder gets the lot.
+                  const topMul = 1 + (topBoost - 1) * Math.pow(ratio, TOP_BOOST_FOCUS);
+                  const r = cfg.maxSize * (minFrac + Math.pow(ratio, curveExp) * (1 - minFrac)) * topMul;
                   // Rank only drives how hard this row GLOWS (#1 brightest).
                   let hiT = 0;
                   if (isHi) {
                     const nWalls = Math.max(1, wallStrikes.size);
                     hiT = nWalls > 1 ? (wallRank as number) / (nWalls - 1) : 0;
                   }
-                  // Cull only degenerate radii — canvas antialiases arcs well
-                  // below 1px, so let them draw and skip only the invisible.
+                  // Cull only degenerate radii. This used to be < 0.5, which
+                  // silently dropped every bubble once the Min-size slider went
+                  // sub-pixel — canvas antialiases arcs well below 1px, so let
+                  // them draw and only skip effectively-invisible ones.
                   if (r < 0.12) continue;
                   // Opacity: smallest → minOpacity, largest → 1.0. Walls always full.
                   const opacity = isHi ? 1 : minOpacity + ratio * (1 - minOpacity);
@@ -4234,7 +4315,7 @@ export default function EsChartCard({
     // bb / weeklyEm are here because the Bollinger cloud and the EM boundaries
     // are painted on THIS canvas, so toggling either has to re-run the draw —
     // there is no series for React to update on their behalf.
-  }, [showHeatmap, showGexBubbles, bubbleMins, intensity, gexMetric, rows, interval, showProfile, profile, showTpo, tpoProfiles, showLevels, showFlipCross, mvcHistory, showCb, bb, weeklyEm]);
+  }, [showHeatmap, showGexBubbles, bubbleCfg, bubbleMins, intensity, gexMetric, rows, interval, showProfile, profile, showTpo, tpoProfiles, showLevels, showFlipCross, mvcHistory, showCb, bb, weeklyEm]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -4405,8 +4486,10 @@ export default function EsChartCard({
               ))}
               </div>
 
-              {/* Sub-controls only make sense when their overlay is on. There
-                  are no sliders left in here — see the note under Bubbles. */}
+              {/* Sub-controls only make sense when their overlay is on.
+                  SLIDER_LABEL_W is shared by every slider below so the labels,
+                  tracks, values and steppers form real columns across sections
+                  instead of each row sizing itself to its own label. */}
               {showHeatmap && (
                 <div style={{ marginTop: 7, paddingTop: 8, borderTop: `1px solid ${HOME_THEME.border}` }}>
                   <PanelSection title="Heatmap range" first>
@@ -4420,23 +4503,59 @@ export default function EsChartCard({
               )}
               {showGexBubbles && (
                 <div style={{ marginTop: 7, paddingTop: 8, borderTop: `1px solid ${HOME_THEME.border}` }}>
-                  {/* No sliders. There were seven — Top / Highlight / Contrast /
-                      Size / Max / Curve / Brightness — and they existed because
-                      the bubble scale used to normalise against whatever was on
-                      screen, so it never looked right two days running and the
-                      numbers had to be re-tuned by hand against today's chart.
-                      The scale is absolute now (a time-of-day detrended session
-                      reference, calibrated off six sessions of per-strike
-                      history), and the style is the frozen BUBBLE_STYLE, so
-                      there is nothing left for a knob to correct. What remains
-                      is the one thing that is a genuine preference — how the
-                      trail is bucketed — plus the CB line toggle. */}
+                  <PanelSection title="Strikes shown" first>
+                    <DockSlider
+                      label="top" labelWidth={SLIDER_LABEL_W} width="auto"
+                      value={bubbleCfg.topStrikes} min={1} max={30} step={1}
+                      format={(v) => v.toFixed(0)} onChange={(v) => updateBubbleCfg({ topStrikes: Math.round(v) })}
+                      title="Show Top Strikes — draw only the N strongest strikes (by |GEX|) per column"
+                    />
+                    <DockSlider
+                      label="highlight" labelWidth={SLIDER_LABEL_W} width="auto"
+                      value={bubbleCfg.highlight} min={0} max={bubbleCfg.topStrikes} step={1}
+                      format={(v) => v.toFixed(0)} onChange={(v) => updateBubbleCfg({ highlight: Math.round(v) })}
+                      title="Highlight Top N Walls — the strongest X of the shown strikes render larger, brighter, glowing (can't exceed Top)"
+                    />
+                  </PanelSection>
+
+                  <PanelSection title="Bubble size">
+                    <DockSlider
+                      label="contrast" labelWidth={SLIDER_LABEL_W} width="auto"
+                      value={bubbleCfg.minSize} min={BUBBLE_CFG_RANGE.minSize.min} max={BUBBLE_CFG_RANGE.minSize.max} step={0.01}
+                      format={(v) => `${Math.round(v * 100)}%`} onChange={(v) => updateBubbleCfg({ minSize: v })}
+                      title="Contrast — the smallest strike's size as a PERCENTAGE of the largest. 5% = the weakest row is a twentieth of the wall; 50% = a flat-looking ladder. Max scales everything; this sets the spread between them"
+                    />
+                    <DockSlider
+                      label="size" labelWidth={SLIDER_LABEL_W} width="auto"
+                      value={bubbleCfg.maxSize} min={BUBBLE_CFG_RANGE.maxSize.min} max={BUBBLE_CFG_RANGE.maxSize.max} step={0.5}
+                      format={(v) => v.toFixed(1)} onChange={(v) => updateBubbleCfg({ maxSize: v })}
+                      title="Overall size (px) — the radius of the largest wall, and a straight multiplier on every other bubble. Drag it and the whole ladder scales together"
+                    />
+                    <DockSlider
+                      label="max" labelWidth={SLIDER_LABEL_W} width="auto"
+                      value={bubbleCfg.topBoost} min={BUBBLE_CFG_RANGE.topBoost.min} max={BUBBLE_CFG_RANGE.topBoost.max} step={0.05}
+                      format={(v) => `${v.toFixed(2)}×`} onChange={(v) => updateBubbleCfg({ topBoost: v })}
+                      title="Max — stretches only the top of the ladder, on top of Size. 1.00× is off. Weighted by the 4th power of the strike's rank ratio, so the peak gets the full factor, a mid strike gets ~6% of it, and the wings do not move at all"
+                    />
+                    <DockSlider
+                      label="curve" labelWidth={SLIDER_LABEL_W} width="auto"
+                      value={bubbleCfg.curve} min={BUBBLE_CFG_RANGE.curve.min} max={BUBBLE_CFG_RANGE.curve.max} step={0.1}
+                      format={(v) => v.toFixed(1)} onChange={(v) => updateBubbleCfg({ curve: v })}
+                      title="Size curve — exponent on |GEX|. 0.5 = √ (flat, every mid strike stays fat); 1 = linear; higher = exponential, so only the biggest GEX levels grow and everything else collapses to Min"
+                    />
+                    <DockSlider
+                      label="bright" labelWidth={SLIDER_LABEL_W} width="auto"
+                      value={bubbleCfg.brightness} min={0} max={100} step={1}
+                      format={(v) => `${v.toFixed(0)}%`} onChange={(v) => updateBubbleCfg({ brightness: Math.round(v) })}
+                      title="Brightness gradient — 0% = every strike full opacity; higher fades smaller strikes so walls dominate"
+                    />
+                  </PanelSection>
 
                   {/* "Bar" = one bubble column per candle, and it's the default:
                       a fixed 5m bucket stacks twelve columns inside a 1h candle
                       and merges them back into the solid rail the bucket exists
                       to prevent. 1m/5m stay for sub-bar detail on a 15m+ chart. */}
-                  <PanelSection title="Bucket" first>
+                  <PanelSection title="Bucket">
                     <SegGroup
                       options={[{ label: "Bar", value: "bar" }, { label: "1m", value: "1" }, { label: "5m", value: "5" }]}
                       active={String(bubbleMins)}
@@ -4444,9 +4563,10 @@ export default function EsChartCard({
                     />
                   </PanelSection>
 
-                  {/* CB (MVC) lives HERE, not under Levels. The top bubble is
-                      already marking the MVC strike, so the CB step line is the
-                      same read in line form; it belongs beside the bubbles. */}
+                  {/* CB (MVC) lives HERE, not under Levels. The top bubble — or
+                      `highlight 1` — is already marking the MVC strike, so the CB
+                      step line is the same read in line form; it belongs beside
+                      the controls that decide what the bubbles emphasize. */}
                   <PanelSection title="Marker">
                     <PanelChip
                       label="CB line"
@@ -4455,6 +4575,42 @@ export default function EsChartCard({
                       title="Central Band (MVC) as a white step line. Same strike the top bubble marks — turn it off if the bubble is enough."
                     />
                   </PanelSection>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, paddingTop: 8, borderTop: `1px solid ${HOME_THEME.border}` }}>
+                    <button
+                      onClick={saveBubbleDefault}
+                      title="Pin the current sliders + bucket as your default. Survives a hard refresh; Reset comes back here."
+                      style={{
+                        flex: 1, fontSize: 9, letterSpacing: ".07em", textTransform: "uppercase",
+                        padding: "4px 6px", borderRadius: 6, cursor: "pointer", fontWeight: 800,
+                        border: `1px solid ${DOCK_THEME.activeBorder}`, background: DOCK_THEME.activeTile, color: HOME_THEME.cyan,
+                      }}
+                    >
+                      Save default
+                    </button>
+                    <button
+                      onClick={resetBubbleCfg}
+                      title="Restore your saved default (or the factory values if you haven't saved one)"
+                      style={{
+                        flex: 1, fontSize: 9, letterSpacing: ".07em", textTransform: "uppercase",
+                        padding: "4px 6px", borderRadius: 6, cursor: "pointer", fontWeight: 800,
+                        border: `1px solid ${HOME_THEME.border}`, background: "transparent", color: HOME_THEME.muted,
+                      }}
+                    >
+                      Reset
+                    </button>
+                    {/* Status moved onto its own line-end dot+word so the two
+                        buttons can share the width evenly instead of being
+                        squeezed by a variable-length label. */}
+                    <span
+                      title={defSavedFlash ? "Saved" : "Changes are saved automatically"}
+                      style={{
+                        flexShrink: 0, width: 7, height: 7, borderRadius: 99,
+                        background: defSavedFlash ? "#1FD98A" : HOME_THEME.muted,
+                        opacity: defSavedFlash ? 1 : 0.4, transition: "opacity .2s, background .2s",
+                      }}
+                    />
+                  </div>
                 </div>
               )}
             </div>,
@@ -4543,7 +4699,17 @@ export default function EsChartCard({
           />
 
           {/* intensity slider */}
-          <DockSlider label="intensity" value={intensity} min={0.1} max={1} step={0.05} onChange={(v) => { setIntensity(v); saveSetting({ intensity: v }); }} title="Heatmap brightness" />
+          <DockSlider
+            label="intensity"
+            value={intensity}
+            min={0.1}
+            max={1}
+            step={0.05}
+            onChange={(v) => { setIntensity(v); saveSetting({ intensity: v }); }}
+            format={(v) => (v <= 0.1 ? "LEVELS" : v.toFixed(2))}
+            valueWidth={46}
+            title="Heatmap brightness. At the minimum stop the gamma wash switches off and only CB / CW / PW stay marked."
+          />
 
           {/* The page's CANDLES toolbar hosts this button when there is one, so
               the card drops its own rather than offering two switches for one

@@ -6,7 +6,8 @@ import { ColorType, CrosshairMode, LineSeries, createChart } from "lightweight-c
 import type { IChartApi, ISeriesApi, LineData, UTCTimestamp } from "lightweight-charts";
 import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
-import { HOME_THEME as HT, homeShellStyle, homeButtonStyle } from "@/components/shared/homeTheme";
+import { HOME_THEME as HT, homeShellStyle, homeButtonStyle, LEVEL_COLORS } from "@/components/shared/homeTheme";
+import { atMinIntensity, columnWalls, wallAt, INTENSITY_MIN } from "@/lib/calculations/heatLevels";
 import { Dock, SegGroup } from "@/components/shared/DockToolbar";
 import { ChainReplay } from "@/components/shared/ChainReplay";
 import { useScannerTickers } from "@/lib/useScannerTickers";
@@ -1171,6 +1172,24 @@ const ChainMatrix = memo(function ChainMatrix({
   const totalScale = { max: totalAbs[0] ?? 1, top3: totalAbs.slice(0, 3) };
   const grandVisibleTotal = [...rowTotals.values()].reduce((a, b) => a + b, 0);
 
+  // ── Levels-only mode ───────────────────────────────────────────────────────
+  // Intensity at its bottom stop (0.5) drops the heat field entirely and paints
+  // ONLY each column's CB / CW / PW. Walls are read through valueAt(), so they
+  // follow the active greek tab exactly like the heat scale does — on the GEX
+  // tab CB is the same strike the ★ MVC marker already names.
+  //
+  // The ⅀ Total column is ranked as its own column (it is a real per-strike
+  // series, not a repeat of any expiry). Δ / change columns are left bare:
+  // "the wall" is a statement about gamma, not about a 15-minute delta.
+  const levelsOnly = atMinIntensity(intensity, INTENSITY_MIN.chain);
+  const liveStrikes = visibleStrikes.filter((s): s is number => s != null);
+  const wallsByCol = levelsOnly
+    ? columns.map((col) => columnWalls(liveStrikes.map((s) => ({ strike: s, net: valueAt(col, s) ?? 0 }))))
+    : [];
+  const totalWalls = levelsOnly
+    ? columnWalls(liveStrikes.map((s) => ({ strike: s, net: rowTotals.get(s) ?? 0 })))
+    : null;
+
   // ── Reserved (ghost) tracks ───────────────────────────────────────────────
   // Expiry tracks are `1fr`, so they divide the container: drop from 4 columns
   // to 1 and that one column inflates to the full grid width, which is not a
@@ -1438,6 +1457,10 @@ const ChainMatrix = memo(function ChainMatrix({
               // Side letters only where position can't tell you the side — the
               // ATM pivot, the one row that renders both call and put.
               const oiBothSides = sides.call && sides.put;
+              // Which level (if any) this cell is, in levels-only mode.
+              const cellWall = levelsOnly && !isChangeCol && col != null
+                ? wallAt(wallsByCol[colIdx], strike)
+                : null;
               return (
                 <div
                   key={`${strike}-${colIdx}`}
@@ -1447,7 +1470,11 @@ const ChainMatrix = memo(function ChainMatrix({
                   style={{
                     padding: isCountMode ? "3px 6px" : "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 400,
                     color: value == null ? "#3a4a5e" : SOFT_WHITE,
-                    background: value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent",
+                    // Levels-only: no gamma wash. CB/CW/PW keep the shared level
+                    // wash; every other cell (and every change column) is bare.
+                    background: levelsOnly
+                      ? (cellWall ? LEVEL_COLORS.wash[cellWall] : "transparent")
+                      : (value != null ? metricBg(value, cellScale.max, intensity, cellScale.top3) : "transparent"),
                     boxShadow: atmShadow,
                     whiteSpace: "nowrap", overflow: "hidden",
                     display: "flex", alignItems: isCountMode ? "center" : "baseline", justifyContent: "flex-end", gap: 5,
@@ -1457,6 +1484,9 @@ const ChainMatrix = memo(function ChainMatrix({
                     opacity: (strikeDim || (selMode && !(col != null && selExps.has(col.expiration)))) ? 0.13 : 1,
                     transition: "opacity .12s",
                     ...(isMvc ? { outline: "2px solid #ffb300", outlineOffset: "-2px" } : {}),
+                    // Level ring wins over the MVC ring: in levels-only mode the
+                    // CB/CW/PW identity is the only thing the cell is saying.
+                    ...(cellWall ? { outline: `2px solid ${LEVEL_COLORS[cellWall]}`, outlineOffset: "-2px", zIndex: 2 } : {}),
                   }}
                 >
                   {/* OI tab renders the day-over-day CHANGE only — one line
@@ -1519,6 +1549,7 @@ const ChainMatrix = memo(function ChainMatrix({
             {/* ── ⅀ Total cell: this strike's sum across every expiration ── */}
             {showTotalCol && (() => {
               const tot = rowTotals.get(strike) ?? 0;
+              const totWall = levelsOnly ? wallAt(totalWalls, strike) : null;
               const atmTotShadow = isATM
                 ? "inset 0 2px 0 #ffffff, inset 0 -2px 0 #ffffff, inset -2px 0 0 #ffffff"
                 : undefined;
@@ -1526,7 +1557,10 @@ const ChainMatrix = memo(function ChainMatrix({
                 <div style={{
                   padding: "2px 8px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right", fontWeight: 700,
                   color: tot === 0 ? "#3a4a5e" : "rgba(255,255,255,0.92)",
-                  background: tot !== 0 ? metricBg(tot, totalScale.max, intensity, totalScale.top3) : "transparent",
+                  background: levelsOnly
+                    ? (totWall ? LEVEL_COLORS.wash[totWall] : "transparent")
+                    : (tot !== 0 ? metricBg(tot, totalScale.max, intensity, totalScale.top3) : "transparent"),
+                  ...(totWall ? { outline: `2px solid ${LEVEL_COLORS[totWall]}`, outlineOffset: "-2px" } : {}),
                   borderLeft: `2px solid ${rgba(HT.cyan, selMode ? 0.8 : 0.35)}`,
                   boxShadow: atmTotShadow,
                   whiteSpace: "nowrap", overflow: "hidden",
@@ -2954,10 +2988,11 @@ export default function OptionsChainPage({
           type="range" min={0.5} max={5} step={0.01}
           value={intensity}
           onChange={(event) => setIntensity(Number(event.target.value))}
+          title="Heat intensity. At the minimum stop the gamma wash switches off and only CB / CW / PW stay marked."
           style={{ width: 80, height: 3, accentColor: "#219EBC" }}
         />
-        <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 36, fontFamily: "var(--font-mono)" }}>
-          {intensity.toFixed(2)}x
+        <span style={{ fontSize: 10, color: "#219EBC", fontWeight: 700, minWidth: 44, fontFamily: "var(--font-mono)" }}>
+          {intensity <= INTENSITY_MIN.chain ? "LEVELS" : `${intensity.toFixed(2)}x`}
         </span>
 
         <span style={{ color: HT.border }}>|</span>

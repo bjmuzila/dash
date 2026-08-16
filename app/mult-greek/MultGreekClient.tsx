@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { HOME_THEME as HT, homeShellStyle, LEVEL_COLORS } from "@/components/shared/homeTheme";
+import { atMinIntensity, columnWalls, wallAt, wallVisible, INTENSITY_MIN, type ColumnWalls } from "@/lib/calculations/heatLevels";
 import { Card } from "@/components/shared/PageCard";
 import { Dock, SegGroup, DockButton, DockGap, DockSpacer, DockSlider, DockExpiryPicker } from "@/components/shared/DockToolbar";
 import { MultiGreekSnapshotBtn, type SnapshotRow } from "@/components/dashboard/MultiGreekLevelSnapshot";
@@ -259,6 +260,14 @@ function fmtExpShort(exp?: string | null): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+/**
+ * Heat tint for one ladder cell.
+ *
+ * At the Intensity slider's MINIMUM stop the caller does not reach this function
+ * at all — the whole gamma field switches off and only CB / CW / PW stay
+ * painted (see lib/calculations/heatLevels and the levelsOnly branch at the cell
+ * render). Everything below describes the normal, above-minimum behaviour.
+ */
 function metricBg(value: number, maxValue: number, topRank: number, intensity: number): string {
   const n = parseFloat(String(value)) || 0;
   const m = maxValue || 0;
@@ -774,6 +783,25 @@ function TickerPanel({
     ? computeWalls(computedFull.rows, computedFull.cols[0])
     : null;
 
+  // ── Levels-only mode ────────────────────────────────────────────────────────
+  // Intensity at its bottom stop (0.5) means "show me the levels, not the
+  // field": every heat tint is dropped and ONLY CB / CW / PW stay painted.
+  //
+  // Walls are computed for EVERY column here, not just the front one. The badges
+  // stay front-only in normal mode — that is a deliberate call about clutter —
+  // but with the field switched off, a column whose levels aren't marked is a
+  // blank strip of numbers. In this mode each column names its own three.
+  //
+  // Built off the untrimmed rows for the same reason `walls` is: the capture
+  // window must not change which strike is a wall.
+  const levelsOnly = atMinIntensity(intensity, INTENSITY_MIN.chain);
+  const wallsByCol: Record<string, ColumnWalls> = {};
+  if (levelsOnly && computedAug) {
+    for (const e of computedAug.cols) {
+      wallsByCol[e] = columnWalls(computedAug.rows.map(r => ({ strike: r.strike, net: r.gex[e] ?? 0 })));
+    }
+  }
+
   // Screenshot mode: trim rows to ±captureWindow around the ATM strike so the
   // capture shows a focused window (ATM in the middle) rather than every strike.
   const computed = (() => {
@@ -1129,11 +1157,21 @@ function TickerPanel({
                 // each gated by its toolbar toggle. Strikes come from computeWalls
                 // (CB = max |GEX|, CW = top +GEX, PW = most −GEX; all distinct).
                 const isFront = ci === 0;
-                const lvl = isFront && walls
-                  ? (walls.cb === r.strike && showCB ? { t: "CB", c: LEVEL_COLORS.cb, title: "CB — highest |GEX| level" }
-                    : walls.cw === r.strike && showCW ? { t: "CW", c: LEVEL_COLORS.cw, title: "CW — highest +GEX level" }
-                    : walls.pw === r.strike && showPW ? { t: "PW", c: LEVEL_COLORS.pw, title: "PW — most −GEX level" }
-                    : null)
+                // Levels-only (Intensity at minimum) marks every column's own
+                // CB/CW/PW; normal mode keeps the badges on the front column so
+                // the other three read as plain heat. Both paths honour the
+                // CB/CW/PW toolbar toggles — a level switched off does not come
+                // back just because the slider hit bottom.
+                const lvlKind = levelsOnly
+                  ? wallAt(wallsByCol[e], r.strike)
+                  : (isFront && walls
+                      ? (walls.cb === r.strike ? "cb" : walls.cw === r.strike ? "cw" : walls.pw === r.strike ? "pw" : null)
+                      : null);
+                const lvlShown = wallVisible(lvlKind, { cb: showCB, cw: showCW, pw: showPW });
+                const lvl = lvlShown && lvlKind
+                  ? (lvlKind === "cb" ? { t: "CB", c: LEVEL_COLORS.cb, title: "CB — highest |GEX| level" }
+                    : lvlKind === "cw" ? { t: "CW", c: LEVEL_COLORS.cw, title: "CW — highest +GEX level" }
+                    : { t: "PW", c: LEVEL_COLORS.pw, title: "PW — most −GEX level" })
                   : null;
                 const isCB = lvl?.t === "CB";
                 const isSel = clickCell != null && clickCell.strike === r.strike && clickCell.expiry === e;
@@ -1163,15 +1201,24 @@ function TickerPanel({
                     // not clickable rather than opening a card about now.
                     textAlign: "center", color: SOFT_WHITE, cursor: (isCapturing || isEx0Col || isReplay) ? "default" : "pointer",
                     ...(dMode ? { display: "flex", alignItems: "center", gap: 4, minHeight: 23 } : {}),
-                    background: val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity),
+                    // Levels-only: no gamma wash at all. A CB/CW/PW cell gets the
+                    // shared level wash; every other cell is bare.
+                    background: levelsOnly
+                      ? (lvlShown && lvlKind ? LEVEL_COLORS.wash[lvlKind] : "transparent")
+                      : (val == null ? "transparent" : metricBg(val, scaleMax, topRank, intensity)),
                     fontWeight: weight,
                     position: "relative",
-                    ...(topRank === 1 && val != null ? { outline: `1px solid ${val >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", zIndex: 1 } : {}),
+                    // The rank-1 ring is part of the heat field, so it goes with
+                    // it — otherwise "only the levels" still leaves a ring on
+                    // every column's top strike.
+                    ...(!levelsOnly && topRank === 1 && val != null ? { outline: `1px solid ${val >= 0 ? "rgba(41,182,246,.9)" : "rgba(255,71,87,.9)"}`, outlineOffset: "-1px", zIndex: 1 } : {}),
                     ...(lvl ? { outline: `2px solid ${lvl.c}`, outlineOffset: "-2px", zIndex: 2 } : {}),
                     ...(isSel ? { outline: "2px solid #ffffff", outlineOffset: "-2px", zIndex: 3 } : {}),
                   }}>
-                    {/* Non-front columns keep the plain gold peak star. */}
-                    {!isFront && topRank === 1 && (
+                    {/* Non-front columns keep the plain gold peak star — but not
+                        in levels-only mode, where the CB badge already names
+                        that strike and a second gold mark on it is noise. */}
+                    {!levelsOnly && !isFront && topRank === 1 && (
                       <span style={{
                         position: "absolute", top: 1, left: 2, fontSize: 10, lineHeight: 1,
                         color: "#ffd600", textShadow: "0 0 2px rgba(0,0,0,.8)", pointerEvents: "none",
@@ -2183,7 +2230,18 @@ export function MultGreekClient({
         <DockGap />
 
         {/* Intensity slider */}
-        <DockSlider label="Intensity" value={intensity} min={0.5} max={3} step={0.01} onChange={setIntensity} width={80} format={(v) => `${v.toFixed(2)}x`} />
+        <DockSlider
+          label="Intensity"
+          value={intensity}
+          min={0.5}
+          max={3}
+          step={0.01}
+          onChange={setIntensity}
+          width={80}
+          format={(v) => (v <= 0.5 ? "LEVELS" : `${v.toFixed(2)}x`)}
+          valueWidth={46}
+          title="Heat intensity. At the minimum stop the gamma wash switches off and only CB / CW / PW stay marked."
+        />
 
         {/* Ticker Lookup — ONE page-level 🔍 (moved out of the panel headers).
             The lookup card has its own symbol picker, so it opens on SPX and
