@@ -14,8 +14,7 @@ import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 
 /** Tabs that render inline on /scanner. */
 export type ScannerTabId =
-  | "gex" | "strike" | "watch" | "marketquality"
-  | "tpo" | "ibstats" | "statprompter" | "gexchangetop" | "gexpct";
+  | "gexlevels" | "gexchangetop" | "strike" | "tpo" | "ibstats" | "watch";
 
 /** What the bar can mark as current: a /scanner tab, or a split-out route. */
 export type ScannerBarActive = ScannerTabId | "strikehistory" | null;
@@ -31,17 +30,23 @@ export type TabDef = {
   icon: string;
 };
 
-/** Bar order + per-tab accent, matching the original inline markup. */
+/**
+ * Bar order + per-tab accent.
+ *
+ * 2026-08-16: "gex" (GEX Scanner), "gexpct" (GEX%), "marketquality" (Quality)
+ * and "statprompter" (Prompter) moved to the Test Lab section, and "gexlevels"
+ * (GEX Levels) came the other way — see TESTLAB_SECTION in
+ * components/shared/sectionNav.ts. An id has to leave BOTH this list and
+ * SCANNER_GROUPS below: a stale key in `groups` alone is harmless (renderItem
+ * returns null for an unknown id), but a stale entry here still draws the pill.
+ */
 export const SCANNER_TABS: TabDef[] = [
-  { id: "gex",          label: "GEX Scanner",    short: "GEX Scanner",color: HOME_THEME.cyan,   icon: "🔍" },
+  { id: "gexlevels",    label: "GEX Levels",     short: "Levels",     color: HOME_THEME.cyan,   icon: "📏" },
+  { id: "gexchangetop", label: "GEX Change Top", short: "GEX Δ Top",  color: HOME_THEME.orange, icon: "📊" },
   { id: "strike",       label: "Strike Query",   short: "Strike",     color: HOME_THEME.cyan,   icon: "🎯" },
-  { id: "watch",        label: "Watch This",     short: "Watch",      color: LIGHT_BLUE,        icon: "👁️" },
-  { id: "marketquality",label: "Market Quality", short: "Quality",    color: HOME_THEME.orange, icon: "📶" },
   { id: "tpo",          label: "TPO Structures", short: "TPO",        color: LIGHT_BLUE,        icon: "🏛️" },
   { id: "ibstats",      label: "IB Stats",       short: "IB Stats",   color: HOME_THEME.green,  icon: "📐" },
-  { id: "statprompter", label: "Stat Prompter",  short: "Prompter",   color: LIGHT_BLUE,        icon: "💡" },
-  { id: "gexchangetop", label: "GEX Change Top", short: "GEX Δ Top",  color: HOME_THEME.orange, icon: "📊" },
-  { id: "gexpct",       label: "GEX%",           short: "GEX%",       color: LIGHT_BLUE,        icon: "％" },
+  { id: "watch",        label: "Watch This",     short: "Watch",      color: LIGHT_BLUE,        icon: "👁️" },
 ];
 
 /**
@@ -58,7 +63,11 @@ export type ScannerRouteDef = {
 
 export const SCANNER_ROUTES: ScannerRouteDef[] = [
   { href: "/level-log",      label: "Level Log",      short: "Log",     color: HOME_THEME.orange, icon: "🧾" },
-  { href: "/strike-history", label: "Strike History", short: "History", color: LIGHT_BLUE,        icon: "🕘" },
+  // /strike-history was here until 2026-08-16. It is listed in
+  // TESTLAB_SECTION.routes now. The ROUTE is unchanged — same page file, same
+  // <Route> in app-vite/src/App.tsx — only which sub-strip claims it moved, and
+  // dropping it here is what takes it out of SCANNER_SECTION_PATHS so the
+  // Scanner strip stops following you onto it.
   // /replay was here. It is a top-level toolbar destination now (⏱️ Replay in
   // GlobalToolbar's NAV_ITEMS) and owns four tabs of its own, so borrowing a
   // slot in the Scanner sub-strip made it look like a Scanner view and put a
@@ -74,12 +83,12 @@ export const SCANNER_ROUTES: ScannerRouteDef[] = [
  *
  * There is no "overview" tab any more: the sub-strip is always on screen inside
  * the Scanner section, so a landing page whose only job was linking to the other
- * tabs had nothing left to do. /scanner opens on GEX Scanner.
+ * tabs had nothing left to do. /scanner opens on GEX Levels.
  */
 export const SCANNER_GROUPS: { key: string; tabs: ScannerTabId[]; routes?: string[] }[] = [
-  { key: "gamma",     tabs: ["gex", "gexchangetop", "gexpct", "strike"] },
-  { key: "structure", tabs: ["tpo", "ibstats", "marketquality", "statprompter"] },
-  { key: "more",      tabs: ["watch"], routes: ["/level-log", "/strike-history"] },
+  { key: "gamma",     tabs: ["gexlevels", "gexchangetop", "strike"] },
+  { key: "structure", tabs: ["tpo", "ibstats"] },
+  { key: "more",      tabs: ["watch"], routes: ["/level-log"] },
 ];
 
 /** Every route the Scanner section owns — used to decide whether to show the strip. */

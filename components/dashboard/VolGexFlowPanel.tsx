@@ -165,16 +165,17 @@ export default function VolGexFlowPanel() {
     });
   }, []);
 
-  // Two points minimum — one makes a dot, not a line, and the switch would look
-  // broken. Also gates the whole control on an older server that predates the
-  // endpoint's posPct field, so the tab degrades to its previous behaviour
-  // rather than offering a toggle that draws nothing.
   const pctPoints = useMemo(
     () => points.filter((p) => p.posPct != null && Number.isFinite(p.posPct)),
     [points]
   );
-  const hasPct = pctPoints.length > 1;
-  const pctView = showPct && hasPct;
+  // The switch is ALWAYS rendered and the view follows it alone — it is not
+  // gated on there being data. An earlier version hid the control whenever the
+  // window held no posPct rows, which meant the whole feature vanished on a
+  // weekend or any session the recorder hadn't written yet, and read as the
+  // change having been rolled back. An empty % view is self-explanatory: it
+  // lands on the same "no snapshots" scrim the $ view already shows.
+  const pctView = showPct;
 
   const load = useCallback(async () => {
     const qs =
@@ -504,9 +505,10 @@ export default function VolGexFlowPanel() {
         </div>
         {/* View switch — same segmented shape as RTH/ETH so the header reads as
             one control row, tinted orange in the % view to match the series.
-            Hidden, not shown dead, when the response carries no posPct — an
-            older server, or a window with no rows. */}
-        {hasPct && (
+            ALWAYS rendered: it used to hide itself whenever the window held no
+            posPct rows, so the feature disappeared on weekends and read as a
+            rollback. */}
+        {(
           <div style={{ display: "flex", border: `1px solid ${pctView ? "rgba(251,133,1,0.40)" : C.border}`, borderRadius: 7, overflow: "hidden" }}>
             {([
               { on: false, label: "$ GEX", title: "Net vol GEX in dollars — the signed flow series" },
@@ -596,7 +598,7 @@ export default function VolGexFlowPanel() {
               {err
                 ? err
                 : loading
-                  ? "Loading net vol GEX history…"
+                  ? (pctView ? "Loading +GEX % history…" : "Loading net vol GEX history…")
                   : session === "rth"
                     ? "No snapshots in today's RTH window — try ETH"
                     : "No snapshots recorded yet today"}

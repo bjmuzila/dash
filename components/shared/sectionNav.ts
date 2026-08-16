@@ -2,9 +2,10 @@
  * sectionNav — the registry behind the GlobalToolbar's sub-strip.
  *
  * A "section" is a toolbar destination that owns more than one view: Scanner
- * (9 inline tabs + 3 split-out routes) and Test Lab (5 inline tabs) today. Each
- * one declares its tabs, how they cluster, and which routes it owns; the toolbar
- * renders whichever section matches the current path.
+ * (6 inline tabs + the /level-log route) and Test Lab (10 inline tabs + the
+ * /strike-history route) today. Each one declares its tabs, how they cluster,
+ * and which routes it owns; the toolbar renders whichever section matches the
+ * current path.
  *
  * Deliberately a plain data module — no "use client", no React, no next/* — so
  * the toolbar can import it without dragging page components into every bundle.
@@ -70,7 +71,7 @@ export const SCANNER_SECTION: SectionNav = {
   key: "scanner",
   rootPath: "/scanner",
   paths: ["/scanner", ...SCANNER_ROUTES.map((r) => r.href)],
-  defaultTab: "gex",
+  defaultTab: "gexlevels",
   tabs: SCANNER_TABS,
   routes: SCANNER_ROUTES,
   groups: SCANNER_GROUPS,
@@ -83,14 +84,26 @@ export const TESTLAB_TAB_EVENT = "cb:testlab-tab";
 export const TESTLAB_SECTION: SectionNav = {
   key: "testlab",
   rootPath: "/test",
-  paths: ["/test"],
+  // /strike-history moved under Test Lab on 2026-08-16. Listing it here is what
+  // makes the Test Lab strip show on that route (and what stops the Scanner one
+  // showing); the route itself is unchanged.
+  paths: ["/test", "/strike-history"],
   defaultTab: "squeeze",
-  routes: [],
+  routes: [
+    { href: "/strike-history", label: "Strike History", short: "History", color: LIGHT_BLUE, icon: "🕘" },
+  ],
   tabs: [
     { id: "squeeze",     label: "Squeeze",         short: "Squeeze",  color: HOME_THEME.orange, icon: "🌀" },
-    { id: "gexlevels",   label: "GEX Levels",      short: "Levels",   color: HOME_THEME.cyan,   icon: "📏" },
     { id: "dealergamma", label: "Dealer Gamma",    short: "Dealer γ", color: LIGHT_BLUE,        icon: "🎚️" },
     { id: "gexmap",      label: "GEX Map",         short: "GEX Map",  color: LIGHT_BLUE,        icon: "🗺️" },
+    // Moved in from /scanner on 2026-08-16. Same rule as the removed "dexcharm"
+    // below: an id must be in BOTH `tabs` and `groups` to draw AND place a pill.
+    // "gexlevels" went the other way and is a /scanner tab now — it is gone from
+    // both lists here and from TestLab's TestTab union.
+    { id: "gex",         label: "GEX Scanner",     short: "GEX Scan", color: HOME_THEME.cyan,   icon: "🔍" },
+    { id: "gexpct",      label: "GEX%",            short: "GEX%",     color: LIGHT_BLUE,        icon: "％" },
+    { id: "marketquality", label: "Market Quality", short: "Quality", color: HOME_THEME.orange, icon: "📶" },
+    { id: "statprompter", label: "Stat Prompter",  short: "Prompter", color: LIGHT_BLUE,        icon: "💡" },
     // No "dexcharm" pill. app/test/DexCharmTab.tsx was deleted and TestLab's
     // TestTab union dropped the id with it, so the pill navigated to
     // /test?tab=dexcharm and rendered the fallback tab — a button that opened
@@ -107,9 +120,10 @@ export const TESTLAB_SECTION: SectionNav = {
     { id: "seasonality", label: "Seasonality",     short: "Season",   color: LIGHT_BLUE,        icon: "📅" },
   ],
   groups: [
-    { key: "gamma",  tabs: ["squeeze", "gexlevels", "dealergamma", "gexmap"] },
-    { key: "flow",   tabs: ["flow", "premdiff"] },
-    { key: "season", tabs: ["seasonality"] },
+    { key: "gamma",   tabs: ["squeeze", "dealergamma", "gexmap"] },
+    { key: "scanner", tabs: ["gex", "gexpct", "marketquality", "statprompter"], routes: ["/strike-history"] },
+    { key: "flow",    tabs: ["flow", "premdiff"] },
+    { key: "season",  tabs: ["seasonality"] },
   ],
   event: TESTLAB_TAB_EVENT,
 };

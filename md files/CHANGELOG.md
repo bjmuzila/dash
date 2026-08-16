@@ -1,1126 +1,123 @@
 # Changelog
 
-## 2026-08-16 - Owner: Bzila Alerts keeps its whole history; the email Templates list is back
-
-Edited: `server-v2/api-router.js`, `server-v2/_lib-db.cjs`,
-`owner-vite/src/pages/BzilaAlerts.tsx`, `lib/emails/weekly-edge.ts`,
-`app/api/admin/email-templates/route.ts`.
-
-### 1. Bzila Alerts showed the last 5 alerts, not the history
-
-The owner page and the customer toolbar bell read the SAME endpoint, and that
-endpoint was hard-coded to the bell's needs: `getBzilaAlerts(5)`. So "All alerts"
-never listed more than five, the three stat tiles above it (Alerts sent, 👍
-Total, 👎 Total) only ever counted those five, and every like on a sixth-oldest
-alert was invisible. "Reactions by user" had the same problem one level out — the
-report was fixed at 50 and the DB helper clamped ANY request to 50 rows, so the
-per-subscriber tally silently dropped the older half of the history.
-
-**Now:** `?limit=` is honoured on `/api/bzila-alerts` (owner only — a subscriber
-hitting it still gets exactly 5, so the bell is untouched) and on
-`/api/bzila-alerts/report` (already an owner-only route). The DB ceiling moves
-50 → 2000. The page asks for the full history on both cards, so the list, the
-three tiles and the per-user reaction table all cover every alert ever sent.
-
-### 2. The Templates section vanished from the owner email page
-
-`weeklyEdgeText()` still referenced `o.ictModelPct` and `o.ictModelSub` after the
-2022 ICT Model row was dropped from `WeeklyEdgeOpts`. `ignoreBuildErrors: true`
-let that ship; at runtime `strip(undefined)` threw a TypeError.
-
-That one throw took the entire endpoint down, because `buildTemplates()` rendered
-all ~20 email bodies eagerly even for the plain list request that only needs
-id + label. `GET /api/admin/email-templates` 500'd, and the compose page treats a
-failed template fetch as "no templates" (`if (tr.ok)`), so the whole Templates
-block stopped rendering with no error anywhere on screen.
-
-**Now:** the stale ICT line is gone, and `html`/`text` are stored as thunks
-rather than rendered strings. The list request renders nothing; `?id=` renders
-only the template being loaded, inside a try/catch that returns 500 with the
-offending template's id in the message. A broken template can now only break
-itself, and it says so out loud.
-
-## 2026-08-16 - Owner sidebar: groups named after the job, not the layer
-
-Edited: `owner-vite/src/lib/nav.ts`, `owner-vite/src/OwnerShell.tsx`.
-
-The rail was Owner / Backend / Personal, and two of those three had no
-membership test. Every page on this site is owner-only, and every page has a
-backend — so "Owner" meant "unsorted" and "Backend" had accumulated Social
-Media, Newsletter, Emails, Post Studio, Watchlists and the ΔGEX Board. A new
-page had no correct home, so it went wherever, and finding one later meant
-scanning 22 links across two buckets. Bzila Alerts was the worked example: a
-broadcast to customers, filed two groups away from Emails and Newsletter.
-
-**Now** five groups, each answering "what am I DOING when I open this?":
-
-| Group | Pages |
-|-------|-------|
-| Business | Admin, Sales, Visitors, Emails, Newsletter, Bzila Alerts |
-| Content  | Social Media, Post Studio, Changelog |
-| Market   | Results, Backtests, Probe, Greeks, ΔGEX Board, Est. Moves BE, Watchlists, Chart Types |
-| System   | Dev, Overview, Database, Tree |
-| Personal | Budget, Reta, To-Do |
-
-Hub is pinned above the groups in no group — it's the way home, not a category.
-It moves into a new `OWNER_PINNED_LINKS` export, which `OWNER_ROUTES` now reads
-FIRST (leaving it out would have dropped `/owner` from the router). `OwnerShell`
-grew a single `navLink()` row renderer shared by the pinned link and the grouped
-ones so the two can't drift apart in style.
-
-Every one of the 25 links keeps its exact label, glyph, key and **href** — the
-hrefs are also the route table and every bookmark in existence, so the URL
-scheme (`/owner/dev/sales` vs `/greeks` vs `/database`) stays as inconsistent as
-it was. The sidebar group and the URL do not agree; that's a deliberate trade to
-avoid breaking links, and it's written down at the top of `nav.ts` along with
-the membership test for the next page that gets added.
-
-## 2026-08-16 - ES Candles: GEX bubbles get an absolute, proportional scale
-
-Edited: `components/dashboard/es-candles/chartMath.ts`,
-`components/dashboard/es-candles/slotStore.ts`,
-`components/dashboard/es-candles/EsChartCard.tsx`,
-`components/dashboard/es-candles/LayoutPresetButton.tsx`,
-`server-v2/_lib-db.cjs`, `server-v2/state/retention-cleanup.js`, `lib/db.ts`,
-`server-v2/etf-gex-recorder.js`, `server-v2/etf-candle-recorder.js`,
-`components/dashboard/es-candles/symbols.tsx`.
-Customer-facing note: `CUSTOMER_CHANGELOG.md`, Sunday 8/16/2026.
-
-The scale is rebuilt from the ground up, the controls that existed to patch it
-are gone, and the two that were actually questions rather than patches stay.
-
-### 1. Bubble size is now measured against ONE reference for the expiration
-
-The size scale used to be self-normalising in two directions at once. The top of
-the domain was the session's running maximum; the BOTTOM was the weakest strike
-shown in that particular column. So every column was re-stretched to its own
-range, and a quiet 11:00 ladder drew almost exactly like a loud 14:00 one. Two
-bubbles on the same chart were not comparable, which is the one thing a trail of
-bubbles across a session is for.
-
-**Now:** one reference for the whole expiration - the biggest |net GEX| the board
-has carried this session - and every bubble on the chart is placed against it on
-a fixed log domain 1.5 decades wide. The strike holding the most gamma draws the
-biggest mark; a strike with a tenth of it draws the same size at 09:45 as it
-would at 15:15. A bubble changes when ITS gamma changes and never because a
-neighbour's did.
-
-The reference is still EXPANDING (frozen at print time), so nothing already on
-screen can resize when a bigger wall shows up later.
-
-### 2. 3:00-4:00 is handled by a measured profile, not a cliff
-
-Gamma at the top strike is not stationary through the day - it climbs all
-session and then runs away into the close as dealer gamma collapses onto two or
-three strikes. The old code dealt with that by refusing to let any minute from
-15:30 on touch the scale (`BUBBLE_SCALE_CUTOFF_MIN`). That stopped the close
-from squashing the morning, but it also meant the last half hour carried no size
-information at all: every closing wall clamped to the same maximum, so a genuinely
-enormous 15:50 pin drew exactly like an ordinary one.
-
-That constant is gone, replaced by `gexTodScale()` in `chartMath.ts` - the
-expected |GEX| of the biggest strike at a given ET minute, as a multiple of its
-midday level. The reference is carried in DETRENDED units and put back on the
-clock per column, so a 15:50 wall is judged against what 15:50 normally looks
-like instead of against noon.
-
-**It is measured, not guessed.** Derived from `gex_strike_history.csv` at the
-repo root - 1.25M per-strike $SPX rows over the six full sessions 2026-07-10 to
-2026-07-17. Per minute, the largest |net_gex| on the board; divided by that day's
-own 10:00-14:00 median; median across days. The shape came out monotone and
-tight day to day:
-
-```
-09:30 0.73    11:30 1.00    13:30 1.33    15:20 2.59
-10:00 0.81    12:00 0.97    14:00 1.63    15:30 2.85
-10:30 0.83    12:30 1.02    14:30 2.01    15:50 3.10
-11:00 0.85    13:00 1.15    15:00 2.24    16:00 3.42
-```
-
-The biggest strike into the bell carries ~4.7x the gamma it carried at the open,
-every session, whatever the tape did. Re-derive it the same way if it ever drifts;
-the anchors in the file are lightly smoothed to stay monotone.
-
-### 2b. Radius is straight proportional to gamma
-
-An absolute scale on its own is faithful and unreadable. The first cut mapped
-|net GEX| onto a log domain, on the reasoning that a chain's gamma spans four
-orders of magnitude and a linear scale would hand the whole pixel budget to the
-peak. That is true of the WHOLE chain and false of what actually gets drawn: only
-the top five strikes render, and those sit within about 2.3x of each other. Log
-squeezed that into a 1.5x spread of pixels - **6.0 / 5.1 / 4.4 / 4.2 / 4.0 px** -
-and every row looked the same.
-
-**Now:** `r = maxPx x |net GEX| / reference`. No exponent, no log. Twice the
-gamma is twice the radius and four times the area - the mark IS the number, and a
-strike carrying almost double its neighbour's gamma draws almost double its
-neighbour's mark. Across the six calibration sessions the top five now draw a
-median **9.8 / 6.7 / 5.2 / 4.6 / 4.1 px**: the dominant wall runs 1.9x the third
-strike and 2.4x the fifth, which is exactly what their gamma is.
-
-`maxPx` is 20, bounded by `rowPitch x 0.42`. Rows sit at fixed prices, so on a
-zoomed-out price scale the whole ladder scales down together - which preserves
-the ratios. The old clip at half the strike pitch did the opposite: it was
-applied AFTER the size was computed, so the top of the ladder sat on the clip and
-the encoding was silently discarded. That single ordering mistake is why every
-previous rework of the size curve was invisible.
-
-One of the design laws this file has been quoting is walked back on purpose:
-"size is the junior channel, sizes differ only mildly." It was read off platforms
-whose marks are a fixed size, and following it here produced five rows a pixel
-apart that nobody could rank by eye. Size is a PRIMARY channel here.
-
-`BUBBLE_REF_FLOOR_FRAC` goes 0.20 -> 0.30. The reference is a running maximum, so
-at the first bucket of a session it is just that bucket's own biggest strike and
-the ladder renders full-size before there is anything to compare it against. 0.30
-is the knee: the median top-strike mark runs 12.1px at 0.20, 9.8px at 0.30, 7.8px
-at 0.40, and top-to-third contrast 2.16 / 1.92 / 1.59.
-
-### 2c. One bubble per bucket. The column decimation is gone.
-
-The bucket picker is the only thing that decides how many columns there are: pick
-**1m** and you get a bubble every minute; pick **Bar** and you get one per candle.
-
-It used to skip columns - a stride wide enough for two full-size marks to sit
-side by side with a gap, so a row could never fuse into a solid ribbon. With the
-marks now up to 20px that stride ran to 3 or 4 on a zoomed-out chart, which meant
-"1 minute" quietly drew a bubble every third or fourth minute. That is the
-control lying about what it does.
-
-Horizontal overlap is simply allowed now. A row of overlapping marks is a thick
-tube and a row of small ones is a thin dotted line - and since thickness is
-exactly what the size law encodes, the fused row is still telling the truth: a
-fat tube IS the dominant level. What must never fuse is two ROWS into one band,
-and that is handled up front by `maxPxRowFrac` rather than by clamping marks
-after the fact.
-
-### 3. Five of the seven sliders are gone. Two stay, and one moves in.
-
-The test for whether a control belongs in the Overlays menu: is it a QUESTION or
-a CORRECTION?
-
-**Corrections - deleted.** Contrast, Size, Max, Curve, Brightness, plus the
-"Save default" / "Reset" buttons under them. You moved those because the chart
-was coming out wrong, and a chart that needs five knobs to look right is just
-wrong five ways. The scale they were correcting is absolute now.
-
-**Questions - kept, as `levels` and `intensity`.** How much of the board do you
-want on screen, and how loud should the overlay sit against the candles. Neither
-has a correct answer to hardcode, and - importantly - neither touches SIZE.
-Radius stays straight proportional to |net GEX| whatever they are set to, so a
-wall is never bigger because you asked for more rows.
-
-- `levels` - 1 to 15, default 5. Strikes drawn per column, ranked by peak |GEX|
-  across the whole session, so a level keeps its trail even after it drops out of
-  the current top N. The server request stays pinned at 30 strikes: it is part of
-  the URL, and a value that moves with a slider would re-fire a ~700KB backfill
-  on every drag and defeat dedupeFetch.
-- `intensity` - 20% to 100%, default 100%. Multiplies the whole layer, with the
-  magnitude gradient still running underneath, so turning it down dims the wings
-  and the wall together rather than flattening one into the other. Applied to the
-  glow blit via `globalAlpha` too, since the wall sprite is cached by size and
-  colour and therefore baked opaque.
-
-**The heatmap `intensity` slider moves out of the dock** into Overlays → Heatmap
-brightness. It only does anything while the heatmap is on, and it was the last
-lone slider in a toolbar otherwise made of buttons and segmented pickers - so it
-now lives with the overlay that owns it and disappears with it.
-
-What the Bubbles sub-panel holds now: **levels**, **intensity**, the **Bucket**
-(Bar / 1m / 5m), and the **CB line** toggle.
-
-`topBoost` is deleted outright rather than defaulted: it weighted radius by the
-4th power of a strike's RANK, which bent size away from gamma for a reason that
-had nothing to do with gamma. `curve` is gone for a simpler reason - it has
-nothing left to bend now that the mapping is proportional.
-
-### 4. The Layout dropdown closes when you click off it
-
-`LayoutPresetButton` only closed on Escape or on the button. Outside-click was
-deliberately absent, matching the page's other popovers - but those hover OVER
-the charts and click-away would shut the indicator menu the instant you tried to
-scrub the chart to see what you had just enabled. The layout panel is nothing
-like that: it is a list of saved layouts, you are done with it the moment you
-pick one, and leaving it parked over the chart until you find the button again is
-just a menu that will not go away.
-
-It now takes the same shape as the Overlays menu - a `mousedown` listener on
-`document` that ignores the button wrapper and a ref on the portaled panel.
-`mousedown`, not `click`: a `click` handler fires after the target has already
-re-rendered, so clicking a row that removes itself lands on nothing and reads as
-outside.
-
-### 5. Marks never touch again — the budget is capped by BOTH pitches
-
-Deleting the column decimation (2c) gave the bucket picker back its honesty and
-took away the only thing stopping a row from fusing. At 1m on a zoomed-out chart
-the result was a solid lit bar where a dotted level used to be.
-
-The fix is not to clamp the mark — clamping after the radius is computed is the
-bug that made every previous size rework invisible, because the top of the ladder
-lands on the clip while everything under it is untouched. The SIZE BUDGET is
-capped instead:
-
-```
-budget = min(maxPx, rowPitch x maxPxRowFrac, colPitch x maxPxColFrac)
-r      = budget x (|net GEX| / reference)
-```
-
-Every rank scales with it, so the ladder shrinks as one thing and the ratios
-survive intact. Zoom in and the marks grow back. `maxPxColFrac` is 0.45, so two
-full-size neighbours in a row clear each other by 10% of the pitch; `rxCap` /
-`ryCap` drop back to `pitch/2 - 0.8` as pure rails that the budget already
-guarantees.
-
-The highlighted wall's glow is proportional now too — `glowTopFactor 0.75` of its
-own radius, tapering to 0.35 at the last highlighted rank, capped at 9px. It was
-a fixed 24px, which at the small marks a tight column pitch forces was a bloom
-several times the size of the thing it was highlighting, and welded the row into
-one continuous lit bar all by itself.
-
-### 6. Friday survives the weekend — three separate deleters, all wrong
-
-Friday's candles were fine; Friday's GAMMA was being deleted before Monday's
-open. Three independent mechanisms, each of which could do it alone.
-
-**`server-v2/_lib-db.cjs` — the session count included Sunday.** The prune keeps
-the N newest distinct `date` values. Its own comment claimed this was
-"weekend-proof by construction: Saturday and Sunday produce no `date` values."
-That is false. `gex-history-writer`'s recording window reopens at **Sunday 20:00
-ET**, so Sunday night writes rows stamped with Sunday's ET date; four hours later
-Monday's date appears, the two newest distinct dates are `{Sunday, Monday}`, MIN
-is Sunday, and everything before it — all of Friday — is deleted.
-
-Fixed two ways: the DISTINCT is filtered to weekdays
-(`EXTRACT(ISODOW FROM date::date) < 6`), so a weekend date can hold rows but can
-never consume a session slot; and `GEX_HISTORY_KEEP_SESSIONS` goes 2 → 3
-(env-overridable). At 2 the window is exactly "yesterday and today" and one
-holiday puts Friday back in the bin.
-
-**`server-v2/state/retention-cleanup.js` — symbol-blind front-expiry, run on
-weekends.** Its keep-only-the-front-expiry clause computed
-`MIN(expiry) GROUP BY date` — across ALL symbols. SPX, SPY and QQQ rows for the
-same date measured themselves against one global minimum, so any symbol whose
-front expiry was not the smallest string on the board had its **entire day**
-deleted every night. Now `GROUP BY date, symbol` with a matching join predicate.
-
-And the nightly tick now **skips Saturday and Sunday**. Nothing is written
-between Friday 17:00 and Sunday 20:00 ET, so a weekend run has no new rows to
-reclaim — it can only re-apply the deletes to Friday, twice, before anyone has
-looked at it. Every cutoff in the job is 5 days or more, so two skipped nights
-cost nothing and Monday catches up on all three. `force` (POST
-`/proxy/retention-cleanup-run`) is unaffected — the gate is on the automatic tick
-only, so a disk emergency can still be handled any day.
-
-The weekday test derives ISO day-of-week from the formatted **ET** date, not
-`new Date().getDay()` — the latter is the server's weekday and is a day off for
-anything ET-evening on a UTC box, which is precisely when this runs.
-
-**`lib/db.ts` — the original 48h DELETE was still there.** `insertOptionStrikeGexRows`
-ended with `DELETE ... WHERE timestamp < now - 48h`. That is the line the
-server-v2 fix was written to replace, and it was only ever fixed in the bundle;
-the TypeScript source kept the old behaviour on whatever traffic reaches the Next
-route. 48 wall-clock hours is ~2 sessions Tue–Fri and less than one across a
-weekend, so the first Sunday-night insert cut everything older than Friday 20:00.
-
-That path now prunes NOTHING rather than growing a second copy of the session
-logic that can drift again. Retention for this table is owned by server-v2: the
-per-insert session prune and the nightly cleanup, both in the process that serves
-the site.
-
-### 7. Per-strike GEX for the whole scanner MAIN lane
-
-The bubble/heatmap pipeline covered three symbols. It now covers **13 recorded
-plus $SPX** — the scanner's MAIN lane from `server-v2/scanner-tickers.js`:
-
-```
-SPY QQQ NDX VIX  AAPL AMD AMZN GOOGL META MSFT NVDA SPCX TSLA   (+ ES = $SPX)
-```
-
-**The streamer is untouched.** SPY/QQQ were never on the dxLink hot feed —
-`etf-gex-recorder.js` is a REST chain poller (`fetchExpirations` /
-`fetchChainFull`), so ten more names add zero subscriptions. For scale,
-`startStrikeGrowthFeed` already holds ~40k contracts across the full 169-name
-roster on that connection.
-
-**SPX is excluded from the recorder and must stay excluded.** `normGexSymbol()`
-folds `'SPX'` onto `'$SPX'`, which is the key `proxy-tastytrade` writes every 30s
-off the streamed chain. Recording it here too puts two writers with different
-strike windows and cadences on one key, and the heatmap's
-`DISTINCT ON (minute_bucket, strike) ORDER BY ..., timestamp DESC` hands each
-minute to whichever landed last.
-
-**The roster comes from the FILE, not roster-store.** The Watchlists page can add
-fifty names to the scanner roster without anyone thinking about write volume;
-this recorder writes ~81 rows per symbol per minute into the table that caused
-the 2026-07 disk incident. `ETF_GEX_SYMBOLS` still overrides for a one-off.
-
-#### Two new bounds, because uncapped x 13 is the 2.9GB table again
-
-- **`ETF_GEX_STRIKE_SIDE = 40`** — ±40 strikes around the ATM strike, so a write
-  is bounded at 81 rows. It was UNCAPPED (every strike with any book or tape),
-  which was tolerable on two ETFs. 40/side matches `eod-strike-gex-recorder`'s
-  `WINDOW_SIDE`, so the two per-strike tables cover the same ladder. Deliberately
-  a COUNT, not a percentage of spot: a ±8% band is ~24 strikes on NVDA and ~3 on
-  VIX, i.e. a different instrument on every underlying.
-- **`ETF_GEX_TICKER_DELAY_MS = 250`** — the sweep was a bare sequential loop with
-  no pacing. Thirteen names now trickle over ~3s of a 60s tick instead of firing
-  thirteen chain fetches at one instant.
-
-#### Age-based thinning pays for it
-
-`retention-cleanup.js` kept RTH at full 1-minute resolution for the entire 10-day
-window, and RTH-only recorders keep every row they write. New
-**`RETENTION_GEX_FULLRES_DAYS = 2`**: the newest two sessions stay at 1-minute,
-everything older is thinned to the same 5-minute grid the heatmap buckets into
-anyway. That is every window the page can actually request — 1D/2D heatmap,
-single-session bubbles, the replay day picker — so it is invisible to every
-current reader, at roughly a 3.6x cut.
-
-Measured on the new roster: **~411k rows/day written → ~1.48M kept ≈ 0.6 GB**
-for the whole 13-name set, against ~1.25 GB for SPX alone before this change.
-
-#### Also needed, and easy to miss
-
-`etf-candle-recorder.js`'s `ETF_CANDLE_SYMBOLS` default grows to the same list. A
-symbol with recorded gamma but no recorded bars renders as an EMPTY chart rather
-than an error — `useEtfCandles` simply has nothing to draw the trail on. A symbol
-dxLink will not serve 1m candles for logs once a minute and is skipped by the
-existing per-symbol try/catch.
-
-`components/dashboard/es-candles/symbols.tsx` gains the 13 rows and the widened
-`ChartSymbol` union. `key` doubles as the persisted slot value, so add rather
-than rename — a renamed key drops that card back to ES on the next reload. The
-picker already has search, favourites and a 260px scroll, so it takes the longer
-list without a layout change.
-
-### 8. The chart opens on the cash session
-
-`applyDefaultView` framed the last `DEFAULT_VIEW_BARS = 60` bars. That was
-written to stop `fitContent()` crushing a full session plus overnight into the
-container — and it did — but a fixed bar count is 5 hours at 5m and **fifty
-minutes at 1m**, so on the intervals people actually use the page opened deep
-inside the day with the morning off-screen. "Way zoomed in on default load" was
-earned.
-
-It now frames **09:30–16:00 ET of the most recent session that has RTH bars**,
-which is the frame the page is for: gamma levels are a statement about the cash
-session, and every read on the chart — walls, flip, CB, the bubble trail, the EM
-band — is scoped to it. Searching backwards for the newest RTH bar means an
-overnight tape past 16:00 and a premarket mount before 09:30 both land on the
-last session that traded rather than on an empty frame.
-
-**The window is RESERVED, not fitted.** The right edge is placed at the
-session's last bar SLOT (derived from `candleMs`), not at the newest bar that has
-printed — so at 09:35 you see the whole day's frame with five bars in it rather
-than five bars stretched across the width, and the frame stays put as the session
-fills instead of re-zooming under the cursor.
-
-Two things worth knowing if this is touched again:
-
-- The function reads logical INDICES, so it must be handed the rows the SERIES
-  is currently showing. During replay that is the filtered slice, not the full
-  history — hence the new `viewRowsRef`, and hence passing `srcRows` rather than
-  `rows` at the data-load call site.
-- The old `(chart, barCount)` call shape still works and keeps the old
-  behaviour. A bare count has no timestamps, so the cash session cannot be
-  located from it and guessing would be worse than the fixed window.
-
-Fallbacks are unchanged in spirit: no RTH bar to anchor on (a thin replay slice,
-a symbol whose history hasn't streamed) falls back to the fixed-bar window, and
-then to `fitContent`.
-
-### Migration
-
-Old slot blobs still hold the seven slider keys. Five of them are simply never
-read again - nothing deletes them, so a rollback finds the user's setup where it
-expects it. The legacy pre-multi-card migration no longer seeds them into fresh
-slots; the two live controls persist under fresh keys (`bLevels`, `bInt`) rather
-than reusing `topStrikes` / `brightness`, so an old blob cannot half-restore a
-retired meaning. `es-candles-bubble-default-v1` survives only because
-`presetStore` still snapshots it; the card no longer writes it.
-
-Simulated across all six sessions, the top-5 marks hold a median
-**9.8 / 6.7 / 5.2 / 4.6 / 4.1px** ladder from 09:30 to 16:00, with no blowout into
-the close and no collapse at the open. For comparison the old scale ran
-**4.1 / 3.4 / 2.5 / 2.0 / 1.8px** - the same rank ordering inside four pixels,
-which is why it read as one size.
-
-## 2026-08-16 - Options Flow: stop inventing timestamps, stop asserting moneyness
-
-Edited: `server-v2/proxy-tastytrade.js`, `server-v2/computation/flow-processor.js`,
-`server-v2/flow-print-time.selftest.js`.
-Added: `server-v2/scripts/flow-prune-offhours.js`.
-
-The /flow page on a past session looked like the feed had died mid-morning. It
-had not. Two separate bugs were writing data that could not be true, and the
-page was rendering it faithfully.
-
-### 1. A print with no exchange time was stamped with the ingest clock
-
-`stampFlowTime()` fell back to `Date.now()` whenever a dxLink TimeAndSale
-arrived without a usable `time`. dxLink replays a contract's recent tape every
-time a subscription is (re)established, and those replayed prints often carry no
-time - so each replay wrote the print AGAIN, stamped with the moment of the
-reconnect rather than the moment of the trade.
-
-That produced rows that are impossible on their face. SPX options trade
-09:30-16:15 ET; prod held SPX prints at 00:00, 02:00, 05:00, 22:00. On
-2026-08-14 the 16:00 ET hour alone held **711 prints - more than the entire real
-session (~280)**, which is the post-close reconnect dumping the day back into
-the table.
-
-It also quietly defeated deduplication. `flow_prints`' primary key is
-`(ts, symbol, side)`, so a re-delivered print is supposed to land on the row it
-already wrote. Re-stamping changed `ts` - the very column the key rests on - so
-every replay inserted a fresh row. One $6.61M SPX print exists at hours 00, 01
-and 08 of the same day; hours 05 and 07 of 2026-08-14 are byte-identical
-aggregates (35 prints / $53,600K) of a single batch. Premium totals on the page
-were inflated by whatever the replay count happened to be.
-
-**Now:** `stampFlowTime()` returns `null` for an unusable time and the
-TimeAndSale handler drops the print. A print with no exchange time carries no
-information about WHEN it happened, and when is the entire point of a tape -
-guessing writes a lie nothing downstream can detect, while dropping loses a row
-that could never have been placed correctly and lets the primary key do the
-dedup it was designed for.
-
-Drops are counted and logged at most once a minute (`[FLOW-TIME] dropped N
-print(s)...`). Silently discarding prints is exactly the change that must stay
-visible if the feed ever stops sending `time` wholesale, since /flow would
-otherwise go empty with no error at all. `FLOW_TS_REQUIRE_EXCHANGE=0` restores
-the old fallback without a deploy.
-
-### 2. `is_otm` claimed "in the money" whenever spot was unknown
-
-`FlowProcessor.addPrint()` computed `isOtm` as `false` when the tracked
-underlying spot was 0. `false` is a CLAIM - it says the print was in the money -
-and with no spot there is nothing to make that claim from.
-
-On 2026-08-14 the tracked spot sat at 0 through the middle of the SPX session,
-so **every print from 10:00-15:00 ET was written `is_otm = false`**. With
-MONEYNESS set to OTM the page then filtered out the whole midday session, and
-Net Drift flatlined from 09:52 to the close on a day that had 118 prints in
-hours 10 and 11. The chart was correct; its input was not.
-
-**Now:** `null` when spot is unknown. An `is_otm = true` filter still excludes
-it - correctly, the moneyness is genuinely unknown - but the row no longer
-asserts the opposite, and a real ITM print is distinguishable from an untagged
-one in the table. `flow-history-writer.js` already persisted a non-boolean as
-SQL NULL, so no writer change was needed.
-
-### 3. Cleanup for the rows already on disk
-
-`server-v2/scripts/flow-prune-offhours.js` removes prints whose timestamp falls
-outside the instrument's real trading window - 09:30-16:15 ET for index roots,
-04:00-20:00 ET for everything else, plus all weekend rows. That rule is provable
-rather than heuristic: an SPX option cannot print at 02:00 ET, so such a row is
-fabricated by definition.
-
-```
-docker compose exec dashboard node server-v2/scripts/flow-prune-offhours.js \
-  --from 2026-08-01 --to 2026-08-15          # dry run, prints a per-day breakdown
-docker compose exec dashboard node server-v2/scripts/flow-prune-offhours.js \
-  --from 2026-08-01 --to 2026-08-15 --apply  # actually deletes
-```
-
-**Dry run by default.** It deliberately does NOT collapse in-window duplicates
-by `(symbol, side, price, size)` - two genuine fills of the same contract at the
-same price and size in one session are ordinary, and deduping on that shape
-would destroy real prints to remove fake ones. Those are reported and left
-alone.
-
-### Worth knowing
-
-**SPX has no recorder backstop.** The boot log reads
-`[TT-MULTIFLOW] streaming SPY, QQQ` and `[FLOW-RECORD] recording SPY, QQQ, AAPL,
-...` - SPX is in neither roster. It rides only the `_syncTimeSaleWindow`
-TimeAndSale subscription, so if that window drops mid-session SPX flow simply
-stops with nothing covering it. Separately, SPX volume in `flow_prints` runs
-200-400 prints/day, orders of magnitude below the real 0DTE tape;
-`proxy-tastytrade.js:4518` describes the strike-growth feed claiming SPX's ATM
-band and discarding its prints. Both are still open.
-
-**The netprem cache holds per-date bins in memory.** `_netPremCache` in
-`server-with-proxy.js` treats any past date as immutable, so after pruning rows
-the /flow chart keeps painting the old shape until the container restarts.
-
-## 2026-08-14 - Ticker Lookup: CB / CW / PW mark their row
-
-Edited: `components/pages/Analytics.tsx` (`TlLadder`).
-
-A level strike now says so two ways on one row:
-
-- a **named tag** beside the strike - `CB` / `CW` / `PW` - replacing the
-  anonymous coloured dot. Three dot colours is a legend to memorise; "CB" is not.
-- a **faint wash** across the row, plus a hairline in the same colour.
-
-The BARS are left alone - no outline, no glow. Both were tried and both fought
-the one thing a bar exists to say, which is magnitude and sign. The level is
-said by the row it sits in and the tag beside the strike.
-
-### Worth knowing
-
-**Spot outranks a level on the row chrome.** A strike that is both spot and a
-level keeps the cyan row border and cyan background - "where price is" must
-never be ambiguous - and still gets its tag and its lit bar.
-
-A strike can be more than one level (core and call wall coincide often): every
-match gets a tag, and the row tint takes the first by priority CB -> CW -> PW.
-
-## 2026-08-14 - Ticker Lookup: level chips stop moving, three of them, bigger
-
-Edited: `components/pages/Analytics.tsx`.
-
-### The chips stopped moving
-
-The CB / CW / PW chips slid down the page every time the ladder above them
-gained a rung, and with a different strike count on the left than the right the
-two panes' chips didn't line up with each other either.
-
-The split now has a FIXED height (`clamp(460px, 64vh, 900px)`), the LADDER
-scrolls inside each pane (`flex: 1; minHeight: 0; overflowY: auto` - the
-`minHeight: 0` is what lets it shrink in the flex column instead of pushing the
-chips out the bottom), and `TL_CHIP_ROW`'s `marginTop: auto` pins the chips to
-the pane floor. Ladder length no longer moves anything.
-
-### Gamma flip chip removed; the other three got bigger
-
-Three chips, not four. `minmax` in the chip grid 120 -> 150px so three don't
-wrap to two rows on a narrow pane, and the type went up across the board: name
-10 -> 12, value 19 -> 26, distance and note 11 -> 13, `TL_CHIP_MIN_H` 92 -> 106.
-
-Gamma flip is still computed and still stated in the plain-language read under
-the split - it just no longer takes a quarter of the chip row.
-
-### Mockup: level colour on the bar
-
-`generated/2026-08-14-tl-level-outline-mockup.png` - the same SPX ladder three
-ways: A today (small square beside the strike), B the bar outlined in the level
-colour, C outline + glow + a faint row tint. Not applied to the page; it is a
-decision aid.
-
-One thing the render makes obvious: on a SMALL bar (CB at 7810) a 2px outline is
-most of the bar, so the mark reads as a hollow box rather than a highlighted
-value. If B or C ships, the outline wants to be 1px under some width, or drawn
-just outside the bar.
-
-## 2026-08-14 - Multi Greek: one panel's ATM row drifting out of line
-
-Edited: `app/mult-greek/MultGreekClient.tsx`.
+## 2026-08-16 - Scanner / Test Lab tab swap
+
+Edited: `components/pages/Scanner.tsx`, `components/pages/TestLab.tsx`,
+`components/scanner/scannerNav.ts`, `components/shared/sectionNav.ts`.
+New: `components/scanner/GexScannerTab.tsx`, `components/scanner/MarketQualityTab.tsx`,
+`components/scanner/GexLevelsTab.tsx`, `components/scanner/scannerStyles.ts`.
 
 ### What
 
-SPY's ATM row wandered up and down a row at a time while SPX/QQQ/TSLA sat still.
-With four ladders side by side the ATM row is the reading anchor - if it is not
-at the same height in all four, the eye has to re-find "where is price" in each
-panel before it can compare anything.
+Four tabs and one route moved off **/scanner** onto the **Test Lab** page, and
+GEX Levels came the other way.
 
-### Why
+| View | Was | Now |
+|------|-----|-----|
+| GEX Scanner | `/scanner?tab=gex` | `/test?tab=gex` |
+| GEX% | `/scanner?tab=gexpct` | `/test?tab=gexpct` |
+| Market Quality | `/scanner?tab=marketquality` | `/test?tab=marketquality` |
+| Stat Prompter | `/scanner?tab=statprompter` | `/test?tab=statprompter` |
+| Strike History | Scanner section route | Test Lab section route |
+| **GEX Levels** | `/test?tab=gexlevels` | `/scanner?tab=gexlevels` |
 
-Two bugs stacked.
+`/scanner` now opens on GEX Levels instead of GEX Scanner (`SCANNER_SECTION.defaultTab`
+and `ScannerPage`'s initial state both changed). Test Lab still opens on Squeeze.
 
-1. **The latch fired on gestures that moved nothing.** `userScrolledRef` was set
-   by any `wheel` or `touchstart` over the panel body - including wheeling the
-   PAGE with the cursor parked over a panel, or wheeling one already at its end
-   stop. One stray wheel over SPY was enough.
-2. **The latch was permanent.** Once set, that panel never auto-centred again.
-   Every chain update adds and drops strikes at the ends of the ladder, so the
-   rows slid underneath a frozen `scrollTop` - one row at a time, which is
-   exactly what "moves up and down" looked like.
-
-The other three panels kept re-centring, so only the panel that caught the wheel
-drifted. Nothing about SPY specifically.
+Nothing about the routes themselves changed: `/strike-history` is the same page
+file with the same `<Route>` in `app-vite/src/App.tsx` and the same
+`app/app/strike-history/route.ts` shell handler. Only which sub-strip claims it
+moved — it left `SCANNER_ROUTES` (and therefore `SCANNER_SECTION_PATHS`) and
+joined `TESTLAB_SECTION.routes` / `.paths`, so the Test Lab strip shows there and
+the Scanner one no longer follows you onto it.
 
 ### How
 
-- The latch now marks only when the gesture ACTUALLY moved the panel: capture
-  `scrollTop`, compare it a frame later. Nothing re-renders on a wheel, so a
-  change in between can only be the user. (`touchstart` -> `touchmove` for the
-  same reason - a tap is not a scroll.)
-- The latch is scoped to the ladder it was made on, keyed by
-  `atmStrike | row count | top strike`. Scroll away and the panel stays where
-  you put it; when the ladder itself changes, the position you chose no longer
-  refers to anything, so it re-centres. Deliberate re-reads survive, drift
-  cannot. The reset effect is declared BEFORE the centring effect so it clears
-  the latch in the same commit the new ladder lands in.
-- `scrollTop` is rounded. Four panels each landing on their own fraction of a
-  pixel is four rows that don't quite line up.
+The two page files are 189KB and 121KB and each defined its moving tabs inline.
+Importing them page-to-page would have been an **import cycle** (Scanner needs
+GEX Levels out of TestLab; TestLab needs GEX Scanner + Market Quality out of
+Scanner) and would have fused both pages' lazy chunks into one, so each moving
+tab was extracted into its own module instead. Bodies are unchanged apart from
+`React.ReactNode` -> `ReactNode` in the Market Quality file.
 
-## 2026-08-14 - Replay gets a toolbar tile
+- `GexScannerTab.tsx` <- Scanner.tsx's `GexScanner` + `SignalBadge` + its types.
+- `MarketQualityTab.tsx` <- Scanner.tsx's `MarketQualityScanner` + `RingGauge` /
+  `MqPanel` / `MqRow` / `clamp01` / `scoreColor` / `TONE_COLOR`.
+- `GexLevelsTab.tsx` <- TestLab.tsx's whole GEX Levels half (~1900 lines), and
+  `AmTbrStat` with it — GexLevelsTab was its only remaining consumer.
+- `scannerStyles.ts` <- the `th` / `td` / `seg()` / `zColor` / `fmtB` / `fmtInt` /
+  `fmtChg` / `NEUTRAL` helpers that used to be local to Scanner.tsx and are now
+  wanted on both pages.
 
-Edited: `components/shared/GlobalToolbar.tsx`.
+All four new files live under `components/scanner/`. That folder is the feature
+family, not the page that hosts the tab — `TestLab.tsx` already imported from
+`app/test/*` and `app/squeeze/*` the same way.
 
-`{ href: "/replay", label: "Replay", emoji: "⏱️" }` added to `NAV_ITEMS`,
-next to Analysis - it is the same reading, made after the fact.
+`type Win` stayed behind in Scanner.tsx (with a copy in `GexScannerTab.tsx`):
+`GreeksScanner`, which did not move, still uses it.
 
-Note for anyone who wonders why it is not there: `GexGroupNav` hydrates the strip
-order from localStorage and APPENDS items it has never seen, so an existing user
-gets the tile at the END of their strip, not beside Analysis, until they drag it.
-A fresh profile sees it in the declared position.
+Both tab unions were updated, not just the render branches. `setTab(id as …)`
+casts a string straight out of a DOM event in both pages, so a stale
+`?tab=gexlevels` link into /test — or `?tab=gex` into /scanner — would otherwise
+select a tab that renders nothing. Ids were removed from `tabs` AND `groups` in
+the nav registries for the same reason a stale `tabs` entry still draws a pill.
 
-`check-routes.mjs --dry` confirms `nav /replay -> has route`; the Next shell
-handler `app/app/replay/route.ts` was already in place.
+## 2026-08-16 - Vol GEX Flow: the view switch no longer hides itself
 
-## 2026-08-14 - The identity line moves onto the cards, and Multi Greek gets one
+Edited: `components/dashboard/VolGexFlowPanel.tsx`.
 
-Edited: `components/pages/Analytics.tsx`, `app/mult-greek/MultGreekClient.tsx`.
+The `$ GEX / +GEX %` switch was gated on `hasPct` (at least two buckets carrying
+a `posPct`). On a weekend — the recorder is closed Fri 17:00 ET to Sun 20:00 ET
+(`isRecordingWindow`) — the window holds no rows at all, so the control vanished
+and the tab looked like the feature had been rolled back.
 
-### GEX levels: identity line drops below the replay transport
+The switch now always renders and `pctView` follows it alone. An empty % view is
+self-explanatory: it lands on the same "No snapshots in today's RTH window" scrim
+the dollar view already shows, and the loading line names whichever series is
+selected.
 
-It was in the card header. Wrong place: that line is the one a screen capture
-has to contain, and up in the header it was one crop away from being left out.
-It now sits directly on top of the two ladders, under the replay bar, with a
-hairline rule under it.
+## 2026-08-14 - gex-vol-flow: one snapshot per bucket, scoped to one symbol
 
-Order reads as cause then effect: the controls change what is drawn, the replay
-bar scrubs it, the identity line states what got drawn.
-
-The card header is now just the toolbar - ticker menu, refresh, replay toggle,
-CB Edge mark - right-aligned. `showStatus` is gone: the line lives inside the
-branch that already guarantees data, so the guard was restating its own
-condition.
-
-### Multi Greek: the same band, above the four cards
-
-New line under the replay transport and directly on top of the panels, carrying
-the same kinds of fact as the lookup card's: `MULTI GREEK`, each ticker with the
-SPOT its panel is drawn from (the recorded sweep's spot while rewound, not the
-live quote), the front expiry + DTE, the session on screen, the replay clock,
-`recorded walls only` when rewound, and the mark on the right.
-
-The front expiry comes from the first ticker's front column, labelled off the
-REPLAYED date while rewound - counting DTE from today would mislabel every
-rewound header. Rendered in capture mode too, so exported PNGs carry their own
-context.
-
-## 2026-08-14 - Replay tabs open rewound; Ticker Lookup collapses to one identity line
-
-Edited: `components/pages/Replay.tsx`, `components/pages/Analytics.tsx`,
-`components/pages/OptionsChain.tsx`, `app/mult-greek/MultGreekClient.tsx`.
-
-### Every /replay tab opens already rewound
-
-Three new INITIAL-STATE props - `TickerLookupCard({ initialReplay })`,
-`MultGreekClient({ initialReplay })`, `OptionsChainPage({ initialReplay,
-initialReplayScope })`. Initial state only: each page's own replay toggle still
-works exactly as before, and every other mount of these components is unchanged
-(all default to false / "all").
-
-Making the user press the replay toggle on a page called /replay is asking them
-to confirm the thing they navigated to.
-
-Options Chain also opens scoped to **0DTE** - that tab is for watching the front
-contract move. `replayScope` already existed with a `0dte` / `all` control; it
-now takes its initial value from the host instead of being hardcoded to `all`,
-so "all expiries" is still one click away.
-
-### Ticker Lookup: three rows of context collapse into one identity line
-
-The card said what was on screen in three places - a spot/gamma row under the
-controls, the capture strip above the ladders, and the coverage caption over the
-right ladder - so a screen recording had to include all three to be
-self-describing.
-
-One line now, in the card header beside `TICKER LOOKUP $SPX GEX levels`: spot,
-the gamma-regime pill, `SPX - Aug 17 - 3DTE - <session date> - 09:30 ET`, the
-`N expirations - excl. 0DTE (...) - recorded walls only` coverage line, and the
-live-only ± Move / ATM IV. Gated on `showStatus` (not loading, not errored, has
-rows) so the header does not report numbers the ladders are not drawing.
-
-The CB Edge logo moved onto the toolbar with the picker / refresh / replay
-buttons. The capture strip and the spot row are gone; three rows between the
-controls and the ladders became zero.
-
-### Replay transport moved under the ticker choices
-
-Picking a symbol reloads the session, so the control that changes WHAT is being
-replayed now sits above the one that scrubs THROUGH it. Reading order matches
-cause and effect.
-
-## 2026-08-14 - /replay is a hub: every replay, one page, four tabs
-
-Edited: `components/pages/Replay.tsx` (rewritten).
+Edited: `server-v2/server-with-proxy.js` (`handleGexVolFlow`).
 
 ### What
 
-The replays were scattered and you had to remember which page hid which one:
-chain ladder on /replay, GEX-levels ladders inside the /analytics Ticker Lookup,
-the four-panel rewind inside /mult-greek, the full grid inside /options-chain.
-/replay is now the place you go when replay itself is the thing you want.
+`/proxy/gex-vol-flow` was summing more rows than a single chain snapshot, which
+inflated the dollar series and badly skewed the new +GEX % view — the tab read
+87% where the home Levels strip read 50% on the same chain at the same minute.
 
-Tabs: **Chain ladder** | **GEX levels** | **Multi Greek** | **Options chain**.
+Symptom that gave it away: the Regime card reported **493 strikes** in one 30s
+bucket. The feed only ever subscribes ±8% of spot (`STRIKE_WINDOW_PCT`, default
+0.08 in `proxy-tastytrade.js`) — about 250 strikes for SPX at 5pt spacing — and
+that same `gexRows` array is what `writeGexSnapshot` persists. 493 is two
+snapshots, not one.
 
-Nothing was removed from the original pages - rewinding in context is the point
-of having it there. Every tab mounts the SAME component its page mounts,
-imported not copied.
-
-### How
-
-Two shapes of tab, and the difference is the whole design:
-
-- **Framed** (chain ladder, GEX levels) - small enough to sit in a `Card` inside
-  this page's `PageShell`.
-- **Full** (Multi Greek, Options Chain) - whole page components that render
-  their OWN `PageShell`. Wrapping those in a second shell would double the
-  padding and nest a scroller inside a scroller, so they get the tab bar and the
-  rest of the viewport and nothing else. `minHeight: 0` on the column and the
-  pane is what keeps their internal scroller from pushing the tab bar off-screen.
-
-Everything but the chain ladder is `lazy()` - opening /replay should not pull
-Multi Greek's and Options Chain's chunks before you pick them.
-
-The tab lives in `#tab=<id>` so a tab is linkable and the back button works. Read
-in an effect, never in the `useState` initializer - the Next server render has no
-`location` and has to agree with the first client render.
-
-Dropped the hardcoded `symbol="MSFT"` on `<ChainReplay>`. It already falls back
-to MSFT-if-recorded, else the first recorded symbol, and carries its own picker;
-the prop was just a second place to be wrong.
-
-## 2026-08-14 - Ticker Lookup: capture mark above the ladders
-
-Edited: `components/pages/Analytics.tsx`.
-
-### What
-
-Screen recordings of the lookup get cropped to the two ladders, and everything
-identifying them - the symbol picker, the replay bar, the card title - sits
-above that crop. The clip showed two GEX profiles and no ticker.
+After this, the strike count on that card should read ~250. If it still reads
+~490, the bucketing was not the cause and the next suspect is two writers.
 
 ### How
 
-A strip directly on top of the `.tl-split`, so any crop that includes the
-ladders includes their identity: `SPX` in cyan on the left with the LEFT pane's
-expiration beside it (`Aug 17 - 3DTE`, DTE counted from the replayed date while
-rewound, same rule as the pills, plus `- replay <date>`), and the CB Edge logo
-on the right at 30px.
-
-`crossOrigin="anonymous"` on the logo, matching the footer, so html2canvas
-exports bake it in instead of tainting the canvas.
-
-## 2026-08-14 - Ex-0DTE header counts the profile, not the recording
-
-Edited: `components/pages/Analytics.tsx`, `app/mult-greek/MultGreekClient.tsx`.
-
-### What
-
-The Ticker Lookup's right pane read "2 recorded expirations - excl. 0DTE" while
-rewound. That number was the SESSION's recorded expiry list, which is a fact
-about the recording, not about the ladder it sits beside. It now reports how
-many expirations are actually in the GEX profile on screen, and it moves as you
-scrub.
-
-### How
-
-- `tlReplayRows()` now also returns `used` — the expiries that put at least one
-  cell into this frame's profile, in input order.
-- `boardLabel` counts `replayRight.used` instead of `replayBoardExps`, and drops
-  the word "recorded" from the count so it reads the same as the live header
-  ("3 expirations - excl. 0DTE"). "recorded walls only" stays — that one is
-  about strikes, and it is still true.
-- New middle state: sweeps that carried nothing past 0DTE say so, and still
-  report what the session holds, instead of showing a count no row supports.
-- Multi Greek's ALL tooltip does the same, off `replayFrame.expiries`. Which
-  COLUMNS exist stays session-level on purpose — a column set that appears and
-  disappears mid-scrub is unreadable — but the count reported is per-sweep.
-
-## 2026-08-14 - Multi Greek: the ALL (ex-0DTE) column survives replay
-
-Edited: `app/mult-greek/MultGreekClient.tsx`.
-
-### What
-
-Rewinding a panel dropped the `ALL / EX-0DTE` total column. The recorded data
-supported it the whole time — the `/analytics` Ticker Lookup builds the same
-"ALL EXPIRATIONS - EX-0DTE" ladder off the same history and states its basis
-("2 recorded expirations - excl. 0DTE"). Multi Greek just refused to draw it.
-
-### Why it dropped
-
-The total was gated on the panel having EXACTLY four columns
-(`showEx0 = cols.length === MAX_EXP_COLS`). Live, `pickCols()` always hands over
-four expiries, so the 4th slot gets swapped for the synthetic total. In replay
-the columns come from what `strike-growth-recorder.js` actually stored, and that
-is `EXPIRIES_PER_TICKER` (env `STRIKE_GROWTH_EXPIRIES`, default **3**). Three
-columns, never four, so the gate never opened.
-
-### How
-
-Gate the total on the SUM being meaningful instead of on the column count:
-
-- `ex0Dates` (the non-0DTE columns) is computed once and reused.
-- `showEx0` is now true at a full 4-column set (live, unchanged) OR in replay
-  when 2+ non-0DTE expiries were recorded. The 2+ floor is deliberate: a
-  one-expiry sum would just duplicate that expiry's own column.
-- `withEx0Column()` takes `replaceLast` (default `true`, so live is byte-for-byte
-  what it was). Replay passes `false` — the total is APPENDED rather than
-  swapping a column out, so a rewound panel shows its 3 recorded expiries PLUS
-  ALL and keeps the same 4-column width as live. Nothing recorded gets hidden.
-- `gridCols` now sizes off `displayCols`, not `cols`. Replay appends, so the two
-  lengths differ there and a `cols`-sized track list would have left the new
-  column unpainted. This was the trap in the change.
-- The ALL header tooltip states the recorded count while rewound, mirroring the
-  Ticker Lookup's disclosure.
-
-### Not done
-
-`STRIKE_GROWTH_EXPIRIES` left at 3. Raising it to 4 would only affect sessions
-recorded from that point on (retention is ~5 trading days) and it must stay
-`<= STRIKE_GROWTH_FEED_EXPIRIES` in `proxy-tastytrade.js`. This fix works on the
-history that already exists.
-
-## 2026-08-14 - ES Candles: bubbles back to round dots + the old defaults
-
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
-`components/dashboard/es-candles/slotStore.ts`.
-
-### What
-
-Undid today's look changes. The chart was better before them; this puts the
-mark and the defaults back and keeps only the parts that were real fixes.
-
-### How
-
-**Round, not oval.** `BUBBLE_ASPECT` `2.2 -> 1.0`. The horizontal stretch closed
-the gaps between marks and fused every row into a continuous ribbon. The gaps
-are the design — they are what lets ten rows sit over the candles without
-burying them. The constant is kept (not deleted) as the one number to change if
-an oval is ever wanted again.
-
-**Defaults restored to what worked**: `topStrikes 10, highlight 1, minSize 1,
-maxSize 7, curve 4, brightness 0`.
-
-The detour worth writing down: curve was dropped to 1.0 (linear) on the theory
-that size should be proportional to net GEX. It is more "correct" and it looks
-worse — a proportional ladder puts real ink on eight mid strikes nobody trades
-off. The steep exponent is deliberate: it collapses the middle of the ladder to
-almost nothing so only the levels that matter have size. Sparse is the feature.
-
-**Highlight boost pulled back**: `HIGHLIGHT_BOOST_TOP` `2.2 -> 1.45`,
-`HIGHLIGHT_BOOST_MIN` `1.4 -> 1.15`. With `highlight 1` there is no rank span,
-so the single wall takes TOP — one white-hot level, everything else ranked by
-size alone. The big multipliers existed to force separation while the curve was
-flat; with curve 4 the exponent does that already and a boost on top just makes
-a blob.
-
-### Kept
-
-- The perf work (memoised bubble derivation, glow sprites, hover no longer
-  repaints, cheaper per-frame measurements) — none of it is visible.
-- The two no-overlap caps and the column decimation that made the 1m bucket
-  usable.
-- Rank-graduated boost stays in the code; it only has an effect above
-  `highlight 1`.
-
-
-## 2026-08-14 - ES Candles: column decimation makes the 1m bubble bucket usable
-
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`.
-Preview: `generated/2026-08-14-bubble-panel-redesign.html`.
-
-### What
-
-On the 1m bucket every bubble row collapsed into a continuous hairline ribbon —
-the 7800 wall rendered as one solid white caterpillar across the session. Not
-readable as a level, and nothing about which strike or how big survived.
-
-### How
-
-The no-overlap cap added earlier is not sufficient on its own: it only stops
-marks from touching, it does not stop them being drawn on top of each other in
-the first place. At 1m over an intraday chart the column pitch falls to ~1px, so
-`rx` bottomed out on its 0.35 floor and 400 near-identical hairlines merged.
-
-Fix is to draw FEWER columns instead of thinner ones:
-
-- `MIN_COL_PITCH_PX = 5`, `colStride = ceil(MIN_COL_PITCH_PX / colPitch)`.
-- The bucket loop strides by `colStride`, and `rxCap` is computed from the
-  EFFECTIVE pitch (`colPitch * colStride`) rather than the raw one, so the ovals
-  grow back to a legible width instead of staying at the floor.
-- Striding is anchored to the END of the array (loop runs newest → oldest) so
-  the newest bucket is always drawn. The live column must never be the one that
-  gets skipped.
-
-Net effect: a row stays a dashed price level at every bucket size and every
-zoom. Only the sampling density changes — 1m now reads like Bar, just with more
-detail where there is room for it.
-
-### Also
-
-The panel-redesign preview had dead Bar/1m/5m buttons; they now drive the mock
-chart and the preview strip through the same decimation, and the caption reports
-the stride ("every 3rd column") so the behaviour is visible rather than implied.
-
-
-## 2026-08-14 - ES Candles: fix pan/zoom lag on the chart overlay
-
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`.
-
-### What
-
-The page was heavy to move around — panning, zooming and even just sliding the
-crosshair across the chart dragged. Four things were doing full-cost work on
-every frame; all four are viewport-independent or hover-independent, so none of
-it needed to be there.
-
-### How
-
-**1. Hover no longer repaints anything.** The `pointermove` listener on the
-chart container called `schedule()` unconditionally, so every mouse movement
-over the chart repainted the whole overlay canvas AND the GEX rail at the
-pointer's event rate — for a gesture that changes nothing about the projection.
-Now gated on `e.buttons !== 0`, which keeps the reason the listener exists
-(dragging the price axis fires no `subscribeVisibleLogicalRangeChange`) and
-drops the rest. `pointerup` still catches the settled state. This is the single
-biggest win.
-
-**2. The bubble derivation is memoised.** Bucketing the minute store, the
-session scale, the expanding `runMax`, and the per-bucket top-N ranking depend
-only on the data — but they ran inside `draw()`, which is wired to
-wheel/pointermove/range-change. On a full session that is a sort of the entire
-strike list per bucket, a few hundred times per frame.
-
-- New `bubblePrepRef` caches `{mins, sessMax, runMax, shownAt, wallAt,
-  strikeStep}` behind a signature: `minuteColsVerRef | metric | bucket |
-  topStrikes | highlight | replayTs | bar-grid`.
-- New `minuteColsVerRef`, bumped at every write to `minuteColsRef` (live frame,
-  backfill, and all three clears), is the invalidation key — a landing column
-  invalidates the cache immediately, so it can never serve stale gamma.
-- Inside the build, the per-bucket sort is skipped unless a new peak actually
-  appeared, and unchanged buckets share one `Set`/`Map` reference instead of a
-  rebuilt copy.
-
-**3. Wall glow is a sprite, not a blur.** `ctx.shadowBlur` is a per-fill
-gaussian and was paid once per wall bubble per column per frame (hundreds of
-blurs). Now rendered once per (size, colour, blur) into an offscreen canvas via
-`glowSpriteRef` and blitted with `drawImage`. Sizes are quantised to a half
-pixel so the cache stays a handful of entries; walls are always opacity 1 so the
-sprite is pixel-exact.
-
-**4. Smaller per-frame measurements.** The strike increment was being found by
-flat-mapping every cell of every bucket (tens of thousands of entries) each
-frame — it is data, so it moved into the memo as `strikeStep`. Column pitch is
-now sampled from the newest ~40 buckets (12 gaps) instead of walking the whole
-session for a value that is uniform.
-
-No visual change: same bubbles, same ranking, same glow, same no-overlap caps.
-
-
-## 2026-08-14 - ES Candles: GEX bubbles are ovals, and can no longer overlap
-
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
-`components/dashboard/es-candles/slotStore.ts`.
-Preview: `generated/2026-08-14-bubble-sizing-examples.html`.
-
-### What
-
-Shipped the "Restrained" preset from the sizing preview, and changed the mark
-itself from a circle to a horizontally-stretched oval that is geometrically
-prevented from touching its neighbours.
-
-### How
-
-**Oval mark.** `ctx.arc` → `ctx.ellipse` with `BUBBLE_ASPECT = 2.2`. A row now
-reads as a dashed price level instead of a string of beads, which is what these
-rows actually are.
-
-**Two no-overlap caps, derived from the live projection** — not from sizes that
-happen to fit. The chart zooms, so any fixed "safe" pixel number stops being
-safe the moment the price scale is scrolled:
-
-- `rx <= colPitch / 2 - 0.8` where `colPitch` is the smallest gap between two
-  adjacent bucket x's. Neighbours within a row can never touch, at any bar
-  spacing.
-- `ry <= rowPitch / 2 - 1.5` where `rowPitch` is the chain's own strike
-  increment projected through the same `priceToCoordinate` the bubbles use. Two
-  rows can never touch, at any vertical zoom. Measured off the strike GRID, not
-  the shown rows — the shown set changes per bucket and a cap that moved with it
-  would make a row breathe as its neighbours came and went.
-
-**Sizing (Restrained preset).**
-
-- Defaults: `minSize` `0.4 -> 0.3`, `maxSize` `12 -> 4.5`, `brightness`
-  `84 -> 88`. `curve` stays 1.0 (linear, proportional to net GEX).
-- `HIGHLIGHT_BOOST_TOP` `2.6 -> 2.2`, `HIGHLIGHT_BOOST_MIN` `1.6 -> 1.4`. Top
-  three walls land at 2.2x / 1.8x / 1.4x on a 4.5px base.
-
-The previous 12px base at 2.6x was a 31px radius — a 62px band per wall, which
-swallowed its neighbours at normal chart heights. With the caps in place a large
-`maxSize` buys nothing but clipping, hence the smaller budget.
-
-Saved slider blobs still win over defaults; Reset in the bubble panel picks up
-the new values. The oval geometry and both caps apply regardless of settings.
-
-
-## 2026-08-14 - ES Candles: bubble size back to proportional, walls carried by rank
-
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
-`components/dashboard/es-candles/slotStore.ts`.
-
-### What
-
-Bubble radius is proportional to net GEX again across the whole ladder, with the
-top 3 walls made obvious by their own multiplier rather than by bending the
-curve for everyone.
-
-The steep size curve (2.2, then 2.8 earlier today) made the walls dominant by
-collapsing every non-wall strike onto Min — so the mid ladder carried no
-magnitude information at all, which is the read it exists for.
-
-### How
-
-- Default `curve` `2.8 → 1` (LINEAR). A strike at half the session max now draws
-  at half the size span; 25% draws at 25%. Straight proportionality to that
-  bubble's own net GEX.
-- All of the "top N stand out" now comes from the rank-graduated highlight
-  boost, which only touches the highlighted strikes and therefore cannot flatten
-  the rest: `HIGHLIGHT_BOOST_TOP` `2.1 → 2.6`, `HIGHLIGHT_BOOST_MIN`
-  `1.15 → 1.6`. Even the #3 wall sits 1.6x above the proportional ladder; #1 is
-  2.6x.
-- Ranking, glow taper, opacity gradient, expanding as-of-bucket scale: unchanged.
-- Slider ranges unchanged — `curve` still spans 0.5–8, so the old exponential
-  behaviour is one drag away.
-
-Saved slider blobs still win over defaults; hit Reset in the bubble panel to
-pick up curve 1.0.
-
-
-## 2026-08-14 - ES Candles: rank-graduated GEX bubble sizing
-
-Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
-`components/dashboard/es-candles/slotStore.ts`.
-
-### What
-
-The per-strike GEX bubble rows on the ES Candles chart read flat at the top of
-the ladder: the #1, #2 and #3 walls drew at nearly the same thickness, so the
-dominant level did not stand out from the ones under it.
-
-Highlighted walls are now sized by their RANK, not by a single flat multiplier,
-and the factory sizing curve is steeper.
-
-### How
-
-- `HIGHLIGHT_BOOST` (one flat `1.35x` for every highlighted wall) replaced by
-  `HIGHLIGHT_BOOST_TOP = 2.1` / `HIGHLIGHT_BOOST_MIN = 1.15`, interpolated
-  linearly across the highlighted set. Rank 0 (the session's dominant wall as of
-  that bucket) gets TOP; the last highlighted wall gets MIN. With Highlight = 1
-  there is no span, so that single wall takes TOP.
-- `wallAt` changed from `Map<slotTs, Set<strike>>` to
-  `Map<slotTs, Map<strike, rankIdx>>` so the rank survives to draw time. The
-  ranking itself is unchanged — still the expanding as-of-bucket peak `|GEX|`
-  order, so an already-printed tube can never resize after the fact.
-- Wall glow tapers with the same rank term: `shadowBlur` `22 → 12` across the
-  highlighted set instead of a flat `16`.
-- Defaults: `minSize` `0.5 → 0.4`, `maxSize` `9 → 12`, `curve` `2.2 → 2.8`.
-- Slider headroom: `curve` max `5 → 8`, `maxSize` max `20 → 24`. Past ~4 the mid
-  strikes finally collapse to Min and only the true walls grow.
-
-Existing saved slider blobs are untouched (the restore clamp only narrows, and
-both ranges widened) — the rank boost applies regardless of saved settings; hit
-Reset in the bubble panel to pick up the new defaults.
-
+**One snapshot per bucket.** The `latest` CTE was
+`DISTINCT ON (bucket_ms, expiry, strike) … ORDER BY … timestamp DESC` — newest
+row PER STRIKE, which UNIONS the strike sets of every write that landed in the
+bucket. One write per slot is the intent (the grid-slot throttle in
+`gex-history-writer.js`), but a restart, a drifting writer, or a second process
+pointed at the same database breaks that, and the union then carries strikes
+from two different spot centres at once.
+
+Replaced with a `slot` CTE taking `MAX(timestamp)` per (bucket, expiry) and a
+join back on that exact timestamp. The writer stamps every strike of a batch
+with the same instant, so this selects exactly one write's rows.
+
+**Symbol scoping.** `option_strike_gex_history` is multi-symbol — the `symbol`
+column defaults to `'$SPX'`, `gex-history-writer.js` normalises `'SPX'` → `'$SPX'`,
+and SPY/QQQ recorders pass their own ticker. Neither the points query nor the
+expiry-list query filtered on it, so chains that merely share an expiry DATE were
+being summed together. Both now take `symbol` (query param, default `'$SPX'`),
+and it is part of the cache key and echoed in the response.
+
+Note: the sibling baseline query around line 703 has the same missing symbol
+filter. Left alone here — separate change, separate blast radius.
 
 ## 2026-08-14 - Vol GEX Flow tab: +GEX % view
 
@@ -1132,9 +129,14 @@ Edited: `components/dashboard/VolGexFlowPanel.tsx`,
 The Vol GEX Flow tab (home page, Economic Calendar card) gets a
 `$ GEX / +GEX %` switch beside RTH/ETH. Flip to `+GEX %` and the chart becomes
 the +GEX % series for the selected expiry — the same number as the home Levels
-strip tile — split at 50 (orange above = long-gamma chain, cyan below = short),
+strip tile — split at 50 (green above = long-gamma chain, red below = short),
 with corner labels and the six stat cards re-labelled to percent stats: +GEX %
 now, delta bucket in points, session high/low, time above 50%, regime.
+
+Line, fill, card ink and corner labels all use `POS`/`NEG` — the same two tokens
+the Levels strip tile inks its value with, so the number and the line agree on
+what long-gamma looks like. Orange is the switch's accent only, never the
+series.
 
 The strip tile was point-in-time: 63% says the chain is long-gamma right now,
 but not whether it climbed there from 40 or bled down from 80, and that path is
