@@ -8,7 +8,8 @@ Edited: `components/dashboard/es-candles/chartMath.ts`,
 `components/dashboard/es-candles/LayoutPresetButton.tsx`,
 `server-v2/_lib-db.cjs`, `server-v2/state/retention-cleanup.js`, `lib/db.ts`,
 `server-v2/etf-gex-recorder.js`, `server-v2/etf-candle-recorder.js`,
-`components/dashboard/es-candles/symbols.tsx`, `hooks/useEsCandles.ts`.
+`components/dashboard/es-candles/symbols.tsx`, `hooks/useEsCandles.ts`,
+`lib/snapdb.ts`.
 Customer-facing note: `CUSTOMER_CHANGELOG.md`, Sunday 8/16/2026.
 
 The scale is rebuilt from the ground up, the controls that existed to patch it
@@ -369,49 +370,79 @@ then to `fitContent`.
 
 ### 9. The chart holds 5 sessions, not "however much 48 hours happens to be"
 
-There was only ever today on the page. `rows5` cut the series at
-`Date.now() - 48h`, and a rolling wall-clock window is a different amount of
-history depending on when you look: 48 hours back from a Monday afternoon lands
-on **Saturday**, so the chart held exactly one session and there was nothing to
-scroll into. `replayDays` is derived from the same array, so the day picker could
-never offer a second day either — the feature looked broken because its input
-was.
+There was only ever today on the page, and FOUR separate things were doing it —
+three in the browser and one in the SQL.
 
-Nothing on the server was responsible. `es_candles` and `etf_candles` are not in
-`retention-cleanup.js` at all, there is no DELETE against either anywhere in the
-repo, `/api/snapshots/candles` has no cap on `daysBack`, and the ETF route clamps
-at 30 days. Three client-side numbers did all of it.
+**9a. A rolling wall-clock cut in `rows5`.** The series was cut at
+`Date.now() - 48h`, and a rolling window is a different amount of history
+depending on when you look: 48 hours back from a Sunday evening is Friday
+evening, and Friday's session ended at 17:00 ET — so not one Friday bar survived.
+`replayDays` is derived from the same array, so the day picker could never offer
+a second day either; the feature looked broken because its input was.
 
-**Now: `HISTORY_SESSIONS = 5`, counted in distinct ET days.** Sessions, not
-hours, so the chart is the same size every day of the week. The set is walked
-from the newest bar backwards, so the CURRENT session is always in it even when
-it holds one bar. A bar with no date is kept rather than dropped — it cannot be
-placed in a session, and dropping it would punch a silent hole in the series.
+Now `HISTORY_SESSIONS = 5`, counted in distinct ET days. Sessions, not hours, so
+the chart is the same size every day of the week. The set is walked from the
+newest bar backwards, so the CURRENT session is always in it even when it holds
+one bar, and a bar with no date is kept rather than dropped — it cannot be placed
+in a session, and dropping it would punch a silent hole in the series.
 
-Three edits:
+**9b. Sessions and calendar days were the same number.** They are not. Five
+sessions viewed from a Sunday reaches back to the previous Monday — SEVEN
+calendar days, eight with a holiday. Conflating them is why a "5" anywhere in
+this path quietly returned three sessions every weekend. Split into
+`HISTORY_SESSIONS = 5` (the trim) and `HISTORY_FETCH_DAYS = 9` (the request):
+over-asking costs a few rows the trim drops, under-asking shortens the chart on
+exactly the days someone is looking back.
 
-- `useEsCandles(true, 2, ...)` → `HISTORY_SESSIONS`. The 2 was chosen when the
-  page's own window was 2 days; it stopped being a saving and started being the
-  ceiling.
-- `useEtfCandles(..., 5, ...)` → `HISTORY_SESSIONS` (the route allows 30).
-- `useEsCandles.ts` clamped 1-minute history with a hard
-  `intervalMinutes === 1 ? 2 : historyDays`, so ES Candles could never show more
-  than two sessions of 1m bars however far its own window reached — the caller's
-  number was silently discarded. Now `Math.min(historyDays, 5)`: still a ceiling
-  (dxFeed serves ~7 days of 1m, and this array also feeds `buildSlotAverages`),
-  but it honours anything under it, so callers asking for 2 still get exactly 2
-  and no other page's payload moves.
+`useEsCandles` had the same conflation in its own ceiling —
+`intervalMinutes === 1 ? 2 : historyDays` meant ES Candles could never show more
+than two sessions of 1-minute bars however far its window reached, the caller's
+number being silently discarded. Now `Math.min(historyDays, 7)`: still a ceiling
+(dxFeed serves ~7 days of 1m, and the array also feeds `buildSlotAverages`), but
+it honours anything under it, so callers asking for 2 still get exactly 2 and no
+other page's payload moves.
+
+**9c. `getEsCandles` compared a UTC date against an ET column.** The cutoff was
+`new Date(Date.now() - daysBack * 864e5).toISOString().slice(0, 10)` — a UTC date
+— tested against `date`, which is the ET calendar date the bar belongs to. After
+20:00 ET the UTC date has already rolled, so the cutoff came out a day LATER than
+asked for and the oldest session in the window fell off inside the SQL. Read at
+21:00 ET on a Sunday with `daysBack=2`, the cutoff resolved to Saturday and
+Friday's rows failed `date >= cutoff` before anything reached the browser.
+
+Now `etDateString(Date.now() - daysBack * 864e5)` — the same ET formatter the
+rest of the file uses. Fixed in `getNqCandles` too; it was a copy of the same
+line.
+
+**9d. The `daysBack` branch truncated the NEWEST bars.** It was
+`ORDER BY timestamp ASC LIMIT n`, so asking for more history than the limit
+allows removed TODAY from the chart — the opposite of every caller's intent, and
+invisible (you just get fewer bars). Now `DESC` + reverse in JS, bounded by the
+limit so the reverse is free. `queryEsCandlesHistorical`'s limit also goes
+10000 → 20000: five sessions of 1m ES is ~7k rows on RTH alone and ~9.7k with the
+overnight tape, close enough to a 10k ceiling that a quiet week would fit and a
+busy one would not.
 
 `rollupCandles`' `cutoffMs` is dropped at the call site. It existed to discard the
 half-formed leading bucket the rolling 48h cut left behind; with a session-
 boundary trim the oldest bar IS a session start, so passing a cutoff would just
 eat a real bar off the left edge.
 
-Worth knowing: gamma history is a shorter window than candles now, so scrolling
-back past ~2 sessions shows candles with no bubbles or heatmap under them. That
-is the intended shape — the bubble trail is a single-session view by definition —
-but it is the first thing to check if someone reports "the bubbles disappear when
-I scroll left".
+Nothing on the server was deleting anything: `es_candles` and `etf_candles` are
+not in `retention-cleanup.js`, `scripts/db-prune.sql` explicitly exempts
+`es_candles`, and there is no DELETE against either anywhere in the repo.
+
+Two things to know that are NOT bugs:
+
+- Gamma history is a shorter window than candles, so scrolling back past ~2
+  sessions shows candles with no bubbles or heatmap under them. The bubble trail
+  is a single-session view by definition — but it is the first thing to check if
+  someone reports "the bubbles disappear when I scroll left".
+- 1-minute ES rows are written only when `ES_1M_CANDLES=1`
+  (`proxy-tastytrade.js`). With it off, `interval=1` reads return nothing at all
+  — no error, just an empty chart. The 5m stream also replays 15 days from dxFeed
+  on reconnect while 1m replays only 2, so 1m history depends on process uptime
+  in a way 5m does not.
 
 ### Migration
 

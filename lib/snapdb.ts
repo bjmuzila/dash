@@ -448,7 +448,12 @@ export async function queryEsCandlesToday(interval: 1 | 5 = 5): Promise<EsCandle
  *  bigger limit still keeps the most-recent bars intact rather than truncating
  *  them off the tail). */
 export async function queryEsCandlesHistorical(daysBack = 20, interval: 1 | 5 = 5): Promise<EsCandleRecord[]> {
-  const qs = daysBack > 0 ? `daysBack=${daysBack}&limit=10000` : `limit=50000`;
+  // 20000, not 10000. Five sessions of 1-minute ES bars is ~7k rows on RTH alone
+  // and ~9.7k with the overnight tape — close enough to a 10k ceiling that a
+  // quiet holiday week would sit under it and a busy one would not, and the
+  // failure mode is invisible (you just get fewer bars). The route caps at
+  // 50000 either way.
+  const qs = daysBack > 0 ? `daysBack=${daysBack}&limit=20000` : `limit=50000`;
   return _dedupeCandles(`/api/snapshots/candles?${qs}&interval=${interval}&lite=1`);
 }
 

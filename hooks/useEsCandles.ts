@@ -210,8 +210,13 @@ export function useEsCandles(
         // bars however far its own window reached — the caller's number was
         // silently discarded. `Math.min` keeps the ceiling and honours anything
         // under it, so a caller asking for 2 still gets exactly 2.
+        //
+        // 7, because the ceiling is in CALENDAR days and callers want SESSIONS.
+        // Five sessions viewed from a Sunday reaches back to the previous
+        // Monday — seven calendar days — so a 5 here quietly returned three
+        // sessions every weekend.
         queryEsCandlesHistorical(
-          intervalMinutes === 1 ? Math.min(historyDays, 5) : historyDays,
+          intervalMinutes === 1 ? Math.min(historyDays, 7) : historyDays,
           intervalMinutes,
         ),
       ]),

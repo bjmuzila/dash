@@ -121,6 +121,19 @@ const BUBBLE_LADDER_REQUEST = 30;
  */
 const HISTORY_SESSIONS = 5;
 
+/**
+ * How many CALENDAR days to REQUEST to be sure of getting HISTORY_SESSIONS.
+ *
+ * These are two different numbers and conflating them is the whole reason
+ * Friday kept going missing. Five sessions viewed from a Sunday reaches back to
+ * the previous Monday — SEVEN calendar days — and a holiday makes it eight. So
+ * the request window is generous and the SESSION trim below does the actual
+ * bounding; asking for more days than needed costs a few rows the trim then
+ * drops, while asking for too few silently returns a shorter chart on exactly
+ * the days someone is most likely to be looking back.
+ */
+const HISTORY_FETCH_DAYS = 9;
+
 export interface EsChartCardProps {
   /**
    * Persistence namespace: 0 | 1 | 2 for the page's three cards, "embed" for the
@@ -325,15 +338,15 @@ export default function EsChartCard({
   // hook's `intervalMinutes` dep stable across those three, which is what makes
   // switching between them free — no map wipe, no SQLite re-query, no refetch.
   const nativeInterval = nativeIntervalFor(interval);
-  const { sessionCandles: liveRows, historical: esHistorical, connected: esConnected, refresh: esRefresh } = useEsCandles(true, HISTORY_SESSIONS, nativeInterval);
+  const { sessionCandles: liveRows, historical: esHistorical, connected: esConnected, refresh: esRefresh } = useEsCandles(true, HISTORY_FETCH_DAYS, nativeInterval);
   // ETF bars come over HTTP from the etf_candles recorder, not /ws/gex. Passing
   // "" when ES is active keeps the hook completely idle — no fetch, no interval.
-  const { rows: etfRows, connected: etfConnected, refresh: etfRefresh } = useEtfCandles(isEs ? "" : sym.gexSymbol, HISTORY_SESSIONS, nativeInterval);
+  const { rows: etfRows, connected: etfConnected, refresh: etfRefresh } = useEtfCandles(isEs ? "" : sym.gexSymbol, HISTORY_FETCH_DAYS, nativeInterval);
 
   // History feed for the derived layers (prior-session levels, the ES basis
-  // anchor). ES pulls HISTORY_SESSIONS days from Postgres; the ETF side gets
-  // whatever the recorder has, and that same array doubles as its "live" rows
-  // since there is no separate streaming source.
+  // anchor). Both sides pull HISTORY_FETCH_DAYS calendar days and are trimmed
+  // to HISTORY_SESSIONS below; the ETF array doubles as its "live" rows since
+  // there is no separate streaming source.
   const historical = isEs ? esHistorical : etfRows;
   const connected = isEs ? esConnected : etfConnected;
 
