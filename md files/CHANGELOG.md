@@ -1,5 +1,108 @@
 # Changelog
 
+## 2026-08-16 - ES Candles: the GEX bubbles get an absolute scale, and lose their sliders
+
+Edited: `components/dashboard/es-candles/chartMath.ts`,
+`components/dashboard/es-candles/slotStore.ts`,
+`components/dashboard/es-candles/EsChartCard.tsx`.
+
+Two changes, and the second is the reason the first is possible.
+
+### 1. Bubble size is now measured against ONE reference for the expiration
+
+The size scale used to be self-normalising in two directions at once. The top of
+the domain was the session's running maximum; the BOTTOM was the weakest strike
+shown in that particular column. So every column was re-stretched to its own
+range, and a quiet 11:00 ladder drew almost exactly like a loud 14:00 one. Two
+bubbles on the same chart were not comparable, which is the one thing a trail of
+bubbles across a session is for.
+
+**Now:** one reference for the whole expiration - the biggest |net GEX| the board
+has carried this session - and every bubble on the chart is placed against it on
+a fixed log domain 1.5 decades wide. The strike holding the most gamma draws the
+biggest mark; a strike with a tenth of it draws the same size at 09:45 as it
+would at 15:15. A bubble changes when ITS gamma changes and never because a
+neighbour's did.
+
+The reference is still EXPANDING (frozen at print time), so nothing already on
+screen can resize when a bigger wall shows up later.
+
+### 2. 3:00-4:00 is handled by a measured profile, not a cliff
+
+Gamma at the top strike is not stationary through the day - it climbs all
+session and then runs away into the close as dealer gamma collapses onto two or
+three strikes. The old code dealt with that by refusing to let any minute from
+15:30 on touch the scale (`BUBBLE_SCALE_CUTOFF_MIN`). That stopped the close
+from squashing the morning, but it also meant the last half hour carried no size
+information at all: every closing wall clamped to the same maximum, so a genuinely
+enormous 15:50 pin drew exactly like an ordinary one.
+
+That constant is gone, replaced by `gexTodScale()` in `chartMath.ts` - the
+expected |GEX| of the biggest strike at a given ET minute, as a multiple of its
+midday level. The reference is carried in DETRENDED units and put back on the
+clock per column, so a 15:50 wall is judged against what 15:50 normally looks
+like instead of against noon.
+
+**It is measured, not guessed.** Derived from `gex_strike_history.csv` at the
+repo root - 1.25M per-strike $SPX rows over the six full sessions 2026-07-10 to
+2026-07-17. Per minute, the largest |net_gex| on the board; divided by that day's
+own 10:00-14:00 median; median across days. The shape came out monotone and
+tight day to day:
+
+```
+09:30 0.73    11:30 1.00    13:30 1.33    15:20 2.59
+10:00 0.81    12:00 0.97    14:00 1.63    15:30 2.85
+10:30 0.83    12:30 1.02    14:30 2.01    15:50 3.10
+11:00 0.85    13:00 1.15    15:00 2.24    16:00 3.42
+```
+
+The biggest strike into the bell carries ~4.7x the gamma it carried at the open,
+every session, whatever the tape did. Re-derive it the same way if it ever drifts;
+the anchors in the file are lightly smoothed to stay monotone.
+
+### 3. Every slider in the Overlays menu is gone
+
+Top / Highlight / Contrast / Size / Max / Curve / Brightness, plus the
+"Save default" and "Reset" buttons under them. They existed because the scale
+they were sitting on top of never looked right two days running, so the numbers
+had to be re-tuned by hand against whatever was on the screen. With an absolute
+scale there is nothing left for them to correct.
+
+They are replaced by `BUBBLE_STYLE` in `slotStore.ts` - a frozen style, with the
+numbers taken off the same six sessions rather than nudged by feel:
+
+| | | why |
+|---|---|---|
+| `topStrikes` | 5 | the design law: three to six rows, never sixteen |
+| `highlight` | 1 | one wall, colour + glow only - it never touches radius |
+| `maxPx` | 7 | radius of a strike sitting AT the reference |
+| `minFrac` | 0.15 | bottom of the domain, as a fraction of `maxPx` |
+| `decades` | 1.5 | measured: rank-5 runs a median 0.44 of a column's top (p10 0.27), and a column's top a median 0.345 of the session reference - so the visible ladder spans ~1.5 decades |
+| `fade` | 0.55 | opacity gradient, so magnitude reads in size AND brightness |
+
+The size-response `curve` exponent and the `topBoost` top-of-ladder multiplier
+are deleted outright, not defaulted. Both bent the mapping away from what the
+numbers say, which was only ever needed because the numbers themselves were
+being re-normalised per column.
+
+What the Bubbles sub-panel keeps: the **Bucket** (Bar / 1m / 5m) and the
+**CB line** toggle. Both are genuine preferences rather than corrections.
+
+The heatmap's `intensity` slider in the dock is untouched - it is not in the
+Overlays menu and controls a different overlay.
+
+### Migration
+
+Old slot blobs still hold the seven slider keys. They are simply never read
+again - nothing deletes them, so a rollback finds the user's setup where it
+expects it. The legacy pre-multi-card migration no longer seeds them into fresh
+slots. `es-candles-bubble-default-v1` survives only because `presetStore` still
+snapshots it; the card no longer writes it.
+
+Simulated across all six sessions, the top-5 marks now hold a stable 7.0 -> ~4.5px
+spread from 09:30 to 16:00, with no blowout into the close and no collapse at the
+open.
+
 ## 2026-08-16 - Options Flow: stop inventing timestamps, stop asserting moneyness
 
 Edited: `server-v2/proxy-tastytrade.js`, `server-v2/computation/flow-processor.js`,

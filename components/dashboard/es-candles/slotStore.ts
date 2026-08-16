@@ -25,74 +25,72 @@
  * before the Vite SPA takes over. Call these from an effect.
  */
 
-// ── Bubble config ────────────────────────────────────────────────────────────
-// Sizing/filtering is pure taste, so it shouldn't reset every visit.
-//   topStrikes  — Show Top Strikes: draw only the N strongest strikes per column
-//   highlight   — Highlight Top N Walls: top X of the shown set render dominant (X ≤ N)
-//   maxSize — OVERALL SIZE: the largest wall's radius in px, and a straight
-//             multiplier on every other bubble. Drag it, the whole ladder moves.
-//   minSize — CONTRAST: the smallest strike's size as a FRACTION of maxSize
-//             (0.05 = a twentieth of the wall). Not a pixel floor — that form
-//             left the small bubbles parked while Max only moved the top.
-//   topBoost — MAX: a top-weighted multiplier, 1 = off. Scales by ratio, so the
-//             strongest strike gets the full factor and the weakest gets none.
-//             `size` moves the WHOLE ladder; this one stretches only its top,
-//             which is the knob for "the walls need to be bigger" without
-//             dragging the wings up with them.
-//   curve       — size-response exponent: r = min + ratio^curve * (max-min).
-//                 0.5 = the old √ (area ∝ |GEX|, small strikes stay fat);
-//                 1 = linear; >1 = exponential — small strikes collapse toward
-//                 min and only the top walls approach max. Default 1
-//                 (pure log over the stretched domain).
-//   brightness  — 0..100 opacity gradient steepness for smaller strikes
-export type BubbleCfg = { topStrikes: number; highlight: number; minSize: number; maxSize: number; topBoost: number; curve: number; brightness: number };
-// SIZE = |net GEX| at that strike. COLOR = the top-N highlight. Those are the
-// only two things the layer encodes, and they are deliberately orthogonal: the
-// highlight no longer multiplies the radius (see the note in EsChartCard), so
-// changing how many walls you highlight can never change what the sizes say.
+// ── Bubble style ─────────────────────────────────────────────────────────────
+// This used to be a seven-slider config blob (Top / Highlight / Contrast / Size
+// / Max / Curve / Brightness) persisted per card. The sliders are GONE — see
+// CHANGELOG 2026-08-16. They existed because the size scale was self-normalising
+// and therefore never looked right two days running, so the numbers had to be
+// hand-tuned to whatever was on screen. The scale is absolute now (a time-of-day
+// detrended session reference, `gexTodScale` in chartMath), which is the thing
+// the sliders were compensating for, so the knobs have nothing left to do.
 //
-// The size scale is LOG over a contrast-stretched domain (see EsChartCard).
-// Net GEX runs four orders of magnitude across a chain, so a linear scale gives
-// the peak everything and pins the rest on the floor.
+// What is left is a frozen style, calibrated once against real data rather than
+// nudged by feel. Source: `gex_strike_history.csv` — 1.25M per-strike $SPX rows
+// over the six sessions 2026-07-10 … 2026-07-17.
 //
-// ── Defaults set from the reference platforms, not from theory ──────────────
-// Bullflow, SpotGamma and the SPY GEX overlay were all put side by side, and
-// they agree on things this chart had been fighting:
+// ── The design laws these obey ──────────────────────────────────────────────
+// Bullflow, SpotGamma and the SPY GEX overlay were put side by side, and they
+// agree on things this chart had been fighting:
 //
 //   • FEW LEVELS. Three to six rows, never sixteen. The sparsity is the design.
 //   • THIN ROWS. 4-8px dots. None of them use a fat mark for a big wall.
 //   • SIZE IS THE JUNIOR CHANNEL. Sizes differ between rows, but only mildly —
-//     what separates the dominant level is COLOUR and GLOW, not radius. A whole
-//     day was spent trying to make size carry a load it was never meant to.
+//     what separates the dominant level is COLOUR and GLOW, not radius.
 //   • EVERY LEVEL IS A FULL ROW across the session. The row IS the level.
-//
-// So: 5 strikes, 1 highlight, a 5px top mark, gentle contrast, no top boost.
-export const BUBBLE_CFG_DEFAULT: BubbleCfg = { topStrikes: 5, highlight: 1, minSize: 0.35, maxSize: 5, topBoost: 1, curve: 1, brightness: 45 };
-export const BUBBLE_CFG_KEYS: Array<keyof BubbleCfg> = ["topStrikes", "highlight", "minSize", "maxSize", "topBoost", "curve", "brightness"];
-
-// Slider bounds, single-sourced so the UI and the restore clamp can't drift.
-// The size ranges are deliberately CENTERED on the defaults (min 0.5 sits mid
-// of 0..1): the useful sizes are all small, so a 0..20 / 1..40 range wasted 90%
-// of the travel and made fine tuning at the low end impossible.
-// maxSize runs to 20 because with curve > 1 only a handful of bubbles ever
-// REACH max — that headroom is what makes the top walls read as dominant.
-export const BUBBLE_CFG_RANGE: Record<keyof BubbleCfg, { min: number; max: number }> = {
-  topStrikes: { min: 1, max: 30 },
-  highlight: { min: 0, max: 30 },
-  minSize: { min: 0, max: 0.9 },  // fraction of maxSize, not px
-  // Runs to 60. The geometric row cap in EsChartCard bounds every mark at half
-  // the strike pitch anyway, so a high ceiling here is not a way to break the
-  // chart — it just means the walls can use all the vertical room a zoomed-in
-  // view actually has.
-  maxSize: { min: 1, max: 60 },
-  topBoost: { min: 1, max: 5 },
-  // Curve runs to 8 now. 5 was not enough separation at the top of the ladder —
-  // past ~4 the mid strikes finally collapse to Min and only the true walls grow.
-  curve: { min: 0.5, max: 8 },
-  brightness: { min: 0, max: 100 },
+export type BubbleStyle = {
+  /** How many strikes draw per column, ranked by peak |GEX| so far. */
+  topStrikes: number;
+  /** How many of those render as walls — white-hot with a glow. Colour only. */
+  highlight: number;
+  /** Radius in px of a strike sitting AT the session reference. */
+  maxPx: number;
+  /** Radius of the bottom of the log domain, as a fraction of `maxPx`. */
+  minFrac: number;
+  /**
+   * Width of the log size domain, in decades below the reference.
+   *
+   * 1.5 (≈32:1) is measured, not picked: in the six-session sample the 5th
+   * ranked strike of a column runs a median 0.44 of that column's top (p10
+   * 0.27) and the column top itself runs a median 0.345 of the session
+   * reference — so the visible ladder spans roughly 1.5 decades end to end.
+   * Narrower and the wings clip onto the floor; wider and the top five all
+   * bunch within a pixel of each other, which is the "every bubble looks the
+   * same" complaint this number exists to answer.
+   */
+  decades: number;
+  /** Opacity gradient steepness, 0..1. The weakest row fades to 1 − this. */
+  fade: number;
 };
-export const clampBubbleVal = (k: keyof BubbleCfg, v: number) =>
-  Math.min(BUBBLE_CFG_RANGE[k].max, Math.max(BUBBLE_CFG_RANGE[k].min, v));
+
+export const BUBBLE_STYLE: BubbleStyle = {
+  topStrikes: 5,
+  highlight: 1,
+  maxPx: 7,
+  minFrac: 0.15,
+  decades: 1.5,
+  fade: 0.55,
+};
+
+/**
+ * Floor under the EXPANDING session reference, as a fraction of the reference
+ * over the whole loaded buffer.
+ *
+ * Without it the first few buckets of a session — where the running maximum is
+ * one or two prints — normalise everything on screen to full size, so the open
+ * paints a row of identical fat dots before there is anything to compare them
+ * against. It stops binding within the first few minutes and is inert after.
+ */
+export const BUBBLE_REF_FLOOR_FRAC = 0.2;
 
 /**
  * Bubble time bucket. Storage is always 1-minute; this aggregates at DRAW time.
@@ -125,9 +123,10 @@ const slotStorageKey = (slot: SlotId) => `${SLOT_PREFIX}${slot}`;
 //    rollback still finds the user's settings sitting where it expects them.
 const LEGACY_SYMBOL_KEY = "es-candles-symbol-v1";
 const LEGACY_BUBBLE_KEY = "es-candles-bubble-cfg-v1";
-// The pinned preset. Global, unchanged, and deliberately separate from working
-// state: every slider nudge overwrites the slot blob, but only "Save default"
-// writes this one, so nothing can trample it.
+// The pinned preset. Global. The card's own "Save default" / "Reset" buttons are
+// gone with the sliders, so nothing in the ES Candles dock writes this any more;
+// it survives only because the page-preset snapshot (presetStore) still carries
+// it, and a preset saved before 2026-08-16 has one in it.
 export const BUBBLE_DEF_KEY = "es-candles-bubble-default-v1";
 
 function readJson(key: string): Record<string, unknown> | null {
@@ -225,19 +224,11 @@ export function writeBubbleDefault(v: Record<string, unknown>): void {
   try { window.localStorage.setItem(BUBBLE_DEF_KEY, JSON.stringify(v)); } catch { /* ignore */ }
 }
 
-/** Pull a clean BubbleCfg out of any blob, clamped and merged over defaults. */
-export function bubbleCfgFrom(blob: Record<string, unknown> | null): Partial<BubbleCfg> {
-  const patch: Partial<BubbleCfg> = {};
-  if (!blob) return patch;
-  for (const k of BUBBLE_CFG_KEYS) {
-    const v = blob[k];
-    // Clamp on read: a blob saved under the older, much wider size ranges can
-    // hold values (e.g. maxSize 20) that no longer exist on the slider, which
-    // would render as a pinned handle you couldn't explain.
-    if (typeof v === "number" && Number.isFinite(v)) patch[k] = clampBubbleVal(k, v);
-  }
-  return patch;
-}
+// (`bubbleCfgFrom` lived here. It pulled the seven slider values out of a saved
+// blob and clamped them. The sliders are gone and the style is frozen in
+// BUBBLE_STYLE, so any leftover numeric keys in an old slot blob are now inert —
+// they are simply never read. Nothing deletes them: a rollback should still find
+// the user's old setup sitting where it expects it.)
 
 // ── Page-level keys ──────────────────────────────────────────────────────────
 export const MAX_CARDS = 3;
@@ -418,7 +409,10 @@ export function ensureMigrated(): void {
   let legacySymbol: string | null = null;
   try { legacySymbol = window.localStorage.getItem(LEGACY_SYMBOL_KEY); } catch { /* ignore */ }
 
-  const seed: SlotBlob = { ...bubbleCfgFrom(legacyBubble) };
+  // Only the keys that still MEAN something get carried across. The legacy blob
+  // also held the seven bubble sliders; those are retired (see BUBBLE_STYLE) and
+  // seeding them would just plant dead numbers in every fresh slot.
+  const seed: SlotBlob = {};
   if (legacySymbol) seed.symbol = legacySymbol;
   if (isBubbleBucket(legacyBubble.mins)) seed.mins = legacyBubble.mins;
   if (typeof legacyBubble.on === "boolean") seed.on = legacyBubble.on;

@@ -65,12 +65,82 @@ export function etMinutesOfDay(ts: number): number {
   return hh < 0 ? -1 : hh * 60 + mm;
 }
 
-// 15:30 ET. In the last half hour, dealer gamma collapses onto 2–3 strikes into the
-// close and |GEX| there dwarfs everything printed earlier in the session. Letting
-// those minutes set the bubble scale makes them render enormous and squashes the
-// whole rest of the day to dust — so they're excluded from the normalization and
-// simply CLAMP at the pre-15:30 max instead. See the bubble draw.
-export const BUBBLE_SCALE_CUTOFF_MIN = 15 * 60 + 30;
+/**
+ * ── Time-of-day gamma profile ────────────────────────────────────────────────
+ * |net GEX| at the session's biggest strike is NOT stationary through the day.
+ * It grows all morning and then runs away into the close: dealer gamma collapses
+ * onto two or three strikes, and the numbers there are several times anything
+ * printed at lunch. That is STRUCTURAL — it happens every single session — so it
+ * is a property of the clock, not a signal about today.
+ *
+ * The previous fix was a cliff: ignore every minute from 15:30 on when setting
+ * the bubble scale (the old `BUBBLE_SCALE_CUTOFF_MIN`). It stopped the close
+ * from flattening the morning, but it also meant the last half hour carried no
+ * information at all — every late wall clamped to the same maximum size, so a
+ * genuinely enormous 15:50 pin drew exactly like an ordinary one.
+ *
+ * This table replaces it. It is the EXPECTED |GEX| of the biggest strike at a
+ * given ET minute, as a multiple of its midday level, so the bubble scale can
+ * divide it out and judge a 15:50 wall against what 15:50 normally looks like
+ * instead of against noon.
+ *
+ * ── Calibration: measured, not guessed ──────────────────────────────────────
+ * Source: `gex_strike_history.csv` at the repo root — 1.25M per-strike $SPX rows
+ * over the six full sessions 2026-07-10 … 2026-07-17. For each minute of each
+ * session take the largest |net_gex| on the board, divide by that day's own
+ * median over 10:00–14:00 ET, then take the median across days. The shape came
+ * out monotone and tight day to day:
+ *
+ *   09:30 0.73    11:30 1.00    13:30 1.33    15:20 2.59
+ *   10:00 0.81    12:00 0.97    14:00 1.63    15:30 2.85
+ *   10:30 0.83    12:30 1.02    14:30 2.01    15:50 3.10
+ *   11:00 0.85    13:00 1.15    15:00 2.24    16:00 3.42
+ *
+ * — the biggest strike into the bell carries ~4.7x the gamma it carried at the
+ * open, whatever the tape did.
+ *
+ * Re-derive it the same way if the profile ever drifts. The anchors below are
+ * lightly smoothed to stay monotone (the raw 15:40 bin dips under 15:30 on a
+ * six-session sample; that is noise, not a real lull).
+ */
+const GEX_TOD_ANCHORS: Array<[minuteOfDay: number, scale: number]> = [
+  [9 * 60 + 30, 0.72],
+  [10 * 60, 0.80],
+  [10 * 60 + 30, 0.85],
+  [11 * 60, 0.88],
+  [11 * 60 + 30, 0.98],
+  [12 * 60, 1.00],
+  [12 * 60 + 30, 1.03],
+  [13 * 60, 1.15],
+  [13 * 60 + 30, 1.33],
+  [14 * 60, 1.65],
+  [14 * 60 + 30, 2.00],
+  [15 * 60, 2.25],
+  [15 * 60 + 30, 2.85],
+  [16 * 60, 3.40],
+];
+
+/**
+ * Expected |GEX| of the biggest strike at `minuteOfDay` ET, as a multiple of its
+ * midday level. Piecewise-linear between the anchors and FLAT outside the cash
+ * session — an overnight print is scaled like the open, which is the closest
+ * thing to a quiet-book reference the profile has.
+ */
+export function gexTodScale(minuteOfDay: number): number {
+  if (!Number.isFinite(minuteOfDay) || minuteOfDay < 0) return 1;
+  const first = GEX_TOD_ANCHORS[0];
+  const last = GEX_TOD_ANCHORS[GEX_TOD_ANCHORS.length - 1];
+  if (minuteOfDay <= first[0]) return first[1];
+  if (minuteOfDay >= last[0]) return last[1];
+  for (let i = 1; i < GEX_TOD_ANCHORS.length; i++) {
+    const [b, vb] = GEX_TOD_ANCHORS[i];
+    if (minuteOfDay <= b) {
+      const [a, va] = GEX_TOD_ANCHORS[i - 1];
+      return va + (vb - va) * ((minuteOfDay - a) / (b - a));
+    }
+  }
+  return 1;
+}
 
 // Cash session bounds in minutes past ET midnight. Single-sourced because three
 // things now read them — isCashOpen below, etSessionStarted, and the replay
