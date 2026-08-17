@@ -1,5 +1,147 @@
 # Changelog
 
+## 2026-08-17 (c) - owner.cbedge.net rail: star favorites to pin them to the top
+
+Edited: `owner-vite/src/OwnerShell.tsx`.
+
+Port of the favorites feature into the standalone owner app served at
+owner.cbedge.net. The earlier pass landed in `components/shared/OwnerSidebar.tsx`,
+which is the **Next.js** rail (`/owner/*` plus `/database`, `/estimated-move`,
+`/changelog`, `/social-media`, `/greeks`, mounted by `LayoutShell`) — a different
+build that shares no code with `owner-vite/`. Both rails now behave the same.
+
+- Every group link has a star button on its right edge: fades in on hover, stays
+  lit once starred. It is a real `<button>` inside the row but outside the
+  `<Link>`, with `preventDefault`/`stopPropagation`, so clicking it toggles the
+  star instead of navigating.
+- Starred links are lifted into a **★ FAVORITES** block placed directly under the
+  pinned Hub and above every group, in the order they were starred, followed by a
+  hairline divider. A starred link is *removed* from its own group, so nothing is
+  listed twice; a group that empties out is not rendered at all.
+- Each favorite keeps its home group's accent (Business cyan / Content orange /
+  Market gold / System light blue / Personal green), so you can still see which
+  group a pinned page came from.
+- Favorites reorder in place: hovering one reveals ▲/▼ nudges (hidden when there
+  is only one favorite).
+- The pinned Hub is deliberately NOT starrable — it is already the way home from
+  anywhere, and starring it would only move it down past the divider.
+- Stored per-browser in `localStorage` under `cbedge.ownerRail.favorites.v1`
+  (separate key from the Next rail's `cbedge.ownerSidebar.favorites.v1`; separate
+  hosts, separate origins). Reads happen in a `useEffect` after mount, never
+  during render. A `cbedge:owner-favorites` `CustomEvent` plus the native
+  `storage` event keep the desktop rail, the mobile drawer, and other tabs in
+  sync. All storage access is wrapped in try/catch — in private mode the stars
+  work for the session and just don't persist.
+- `lib/nav.ts` is untouched and remains the single source of truth. Favorites are
+  a pure view-layer reordering, so `OWNER_ROUTES` — and therefore the router in
+  `App.jsx` — is unaffected, and adding a page in `nav.ts` still works exactly as
+  before.
+
+## 2026-08-17 (b) - Mobile ES Candles: price zoom is now a gesture on the axis, and it actually works
+
+Edited: `components/mobile/pages/MobileEsCandles.tsx`.
+
+Replaces this morning's ± stepper. Two problems with it: it floated over the
+plot and covered candles, and — more seriously — **it did not work at rest.**
+
+**The bug in the first version.** It changed the zoom multiplier and called
+`priceScale().setAutoScale(true)` to make `autoscaleInfoProvider` re-run. It
+doesn't. `setAutoScale`/`applyOptions({ autoScale })` only merge the option and
+repaint; the price range is cached behind `_invalidatedForRange` and the provider
+is consulted only when something invalidates it (new data, a pan, a resize). So
+on a live chart the zoom limped in on the next 250ms tick, and on a still chart
+(after hours, or paused feed) nothing happened at all. Verified against the real
+v5 bundle in headless Chromium: with the multiplier at 4x, `setAutoScale(true)`
+left the visible range at 48.0 points — unchanged — while
+`applyOptions({ autoScale: true, mode: PriceScaleMode.Normal })` moved it to 12.0.
+Passing `mode` is the only public call that invalidates the cache
+(`PriceScale._setMode` sets `_invalidatedForRange.isValid = false`), so that is
+what `applyYZoom()` now sends, re-passing the mode the scale already has.
+
+**The gesture.** A transparent strip, `zIndex: 4`, anchored to the right edge and
+sized to the MEASURED `priceScale('right').width()` — it must not cover a single
+pixel of plot, because the newest bars sit right against the axis and eating
+their pans would be worse than no zoom. Press and slide: up zooms in, down zooms
+out, exponentially at 150px per doubling, clamped 0.4x–12x; double-tap resets;
+pointer capture keeps a thumb that wanders off the 56px strip in the gesture. The
+multiplier is written to a ref and pushed to the chart inside the pointermove, so
+the axis tracks the thumb instead of waiting for React; `yZoom` state still
+updates for the readout, and the render-time ref mirror is skipped while a drag
+is live so a 4Hz feed render can't stutter it backwards.
+
+Axis width is measured, not assumed: the price scale reports 0 before the first
+paint and its final width only once bars widen the labels, so the mount rAF pump
+keeps sampling for ~3s and the data effect re-measures on the next frame.
+
+Native price-axis scaling is now OFF on both `axisPressedMouseMove` and
+`axisDoubleClickReset` — it freezes the range (autoscale off, view drifts off
+price within the half hour) and would fight the strip. Autoscale stays ON under
+the multiplier, so every new bar re-centres the zoomed view.
+
+Verified in headless Chromium against the real bundle, driving the strip with
+synthesised pointer events: drag up 150px -> 2.00x, range 48.0 -> 24.0; drag down
+300px -> 0.50x, range 96.0; double-tap -> 1.00x, range 48.0; mid price stays at
+the vertical centre (204px of 400px) at every zoom.
+
+## 2026-08-17 - 0DTE rail: the ladder is one interpolated field, not a stack of tiles
+
+Edited: `components/dashboard/es-candles/ChainRail.tsx`.
+Mockup of the options considered: `generated/2026-08-17-0dte-rail-interpolated.html`.
+
+**The complaint.** The rail's colours did not line up with the bubbles on the
+chart. A flat band runs midpoint-to-midpoint, so a strike at 773 painted a solid
+block covering 772.5-773.5 — and the eye reads the block's EDGE as a level.
+There is no level at 773.5.
+
+(Checked first and ruled out: this was NOT a basis misalignment. The rail uses
+`steadyBasisRef || effectiveBasis()` and the bubbles use `basisAt(slotTs)`,
+which resolves to the live server basis for today's session by construction —
+see resolution rule 1 in `buildBasisAt`. The two agree. The band geometry was
+also already correct: `bandFor` centres it on the strike. The problem was purely
+that the band is FLAT, so being centred bought nothing.)
+
+**The change.** Heat mode is now ONE linear gradient down the whole ladder with
+a colour stop at every strike. Consequences:
+
+- Everything between two strikes is the interpolation of those two, so the pixel
+  halfway between 773 and 774 is their average — which is the honest answer for
+  a price with no contract at it.
+- The brightest pixel of a row now sits exactly on its strike, lined up with
+  that strike's bubble. No edge anywhere to mistake for a second level.
+- A small solid core (`STRIKE_CORE_FRAC`, 0.18) keeps a strike from looking
+  thinner than its neighbour just because the ramp eats it from both sides. Set
+  it to 0 for a pure triangular peak.
+- A 1px notch at each strike, because with a continuous field there is no band
+  edge left to read a level off. This is the mark that visibly registers against
+  the bubble row.
+
+**Sign flips** are a one-line switch, `FLIP_STYLE`:
+
+- `"seam"` (default) — a transparent stop at the exact zero-crossing between
+  opposite-sign neighbours: the point where the interpolated net GEX is 0, which
+  IS the gamma flip. Cyan fades out, red fades in, the dark gap lands on
+  something real, and no off-scale colour is ever shown.
+- `"blend"` — let the gradient run straight through. Softer, no dark band
+  interrupting the field, at the cost of a few pixels of grey-purple around each
+  flip (usually one or two places on the whole rail).
+
+Both were exercised against the edge-case ladders below.
+
+**Levels-only mode is unchanged** and stays discrete: it paints CB / Call Wall /
+Put Wall and nothing else, so there is nothing to interpolate between — a
+gradient would fade three named levels into the void.
+
+Also: labels now anchor on the strike's own y rather than the band centre. On an
+uneven ladder those differ, and a label has to sit on the price it names.
+
+Cheaper than what it replaces — one gradient and one `fillRect` instead of N
+`fillRect`s, on a canvas that repaints every frame.
+
+Edge cases exercised against the real function (monotonic stop offsets, no
+out-of-range offsets, no throws): plain +/-, single sign flip, alternating
+flips, interleaved zeros, all-zero, single row, two rows, duplicate y, sub-pixel
+pitch, huge pitch, reversed y order, off-screen y, empty ladder.
+
 ## 2026-08-17 - ES Candles: Replay no longer touches the chart until you use it
 
 Edited: `components/dashboard/es-candles/EsChartCard.tsx`,

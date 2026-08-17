@@ -31,6 +31,149 @@ import { dedupeFetch } from "@/lib/dedupeFetch";
 import { cachedJson } from "@/lib/sharedCache";
 import { parseExpiration, metricBg, rankBg, type GreekCell } from "@/lib/calculations/optionChain";
 
+/**
+ * How much of the gap to each neighbour stays at the strike's own colour before
+ * the ramp starts. 0 = a pure triangular peak; 0.5 would be the old flat band.
+ *
+ * A small core is worth having: a pure peak is mathematically the cleanest
+ * reading of "this is the level", but at a tight row pitch it makes a strong
+ * strike look thinner than a weak one just because the ramp eats it from both
+ * sides. 0.18 keeps the strike unmistakable without reintroducing an edge that
+ * reads as a second level.
+ */
+const STRIKE_CORE_FRAC = 0.18;
+
+/**
+ * What happens where the ladder changes sign.
+ *
+ * A canvas gradient interpolates RGBA linearly, so a cyan strike next to a red
+ * one blends through grey-purple — a colour that appears nowhere on this scale
+ * and therefore means nothing. Two defensible answers:
+ *
+ *   "seam"  — insert a transparent stop at the exact zero-crossing (the point
+ *             where the interpolated net GEX is 0, which IS the gamma flip).
+ *             Cyan fades out, red fades in, and the dark gap lands on something
+ *             real. Never shows an off-scale colour.
+ *
+ *   "blend" — let it run straight through. Softer, no dark band interrupting
+ *             the field, at the cost of a few pixels of purple around each
+ *             flip. On a 0DTE ladder that is usually one or two places on the
+ *             whole rail.
+ *
+ * One line to change. Nothing else in this file depends on which is picked.
+ */
+const FLIP_STYLE: "seam" | "blend" = "seam";
+
+/** `rgba(r,g,b,a)` -> the same colour at alpha 0. Used for zero-crossings and end tapers. */
+function fadeOut(css: string): string {
+  const m = /^rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)/.exec(css);
+  return m ? `rgba(${m[1]},${m[2]},${m[3]},0)` : "rgba(0,0,0,0)";
+}
+
+/**
+ * The heat field: ONE gradient down the ladder, a colour stop per strike.
+ *
+ * Two things make this more than a cosmetic change.
+ *
+ * 1. Between two strikes the canvas interpolates, so every pixel there is the
+ *    average of the two strikes bracketing it. That is the honest answer for a
+ *    price with no contract at it, and it removes the hard midpoint step that
+ *    made the ladder read as a stack of tiles.
+ *
+ * 2. Sign flips get whatever FLIP_STYLE says — see that constant.
+ *
+ * Cheaper than what it replaces: one gradient and one fillRect instead of N
+ * fillRects, on a canvas that repaints every frame.
+ */
+function paintHeatField(
+  ctx: CanvasRenderingContext2D,
+  rows: Array<{ strike: number; y: number; v: number }>,
+  w: number,
+  max: number,
+  heat: number,
+  top3: number[],
+): void {
+  if (!rows.length) return;
+  const col = (v: number) => metricBg(v, max, heat, top3);
+  // Screen order (top of the pane first). `rows` is strike-ascending and y
+  // decreases as strike rises, so this is the reverse — but sort rather than
+  // reverse(), because an inverted price scale would flip the relationship and
+  // a silent assumption here would put the gradient in upside down.
+  const ord = [...rows].sort((a, b) => a.y - b.y);
+  if (ord.length === 1) {
+    const c = col(ord[0].v);
+    if (c === "transparent") return;
+    const g = ctx.createLinearGradient(0, ord[0].y - 8, 0, ord[0].y + 8);
+    g.addColorStop(0, fadeOut(c)); g.addColorStop(0.5, c); g.addColorStop(1, fadeOut(c));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, ord[0].y - 8, w, 16);
+    return;
+  }
+
+  const top = ord[0].y, bot = ord[ord.length - 1].y, span = bot - top;
+  if (!(span > 0)) return;
+  const g = ctx.createLinearGradient(0, top, 0, bot);
+  const at = (y: number) => Math.max(0, Math.min(1, (y - top) / span));
+  // Stops must be added in non-decreasing order, and two stops may not share an
+  // offset or the later one wins outright — nudge by an epsilon instead.
+  let last = -1;
+  const stop = (y: number, css: string) => {
+    let t = at(y);
+    if (t <= last) t = Math.min(1, last + 1e-6);
+    last = t;
+    g.addColorStop(t, css);
+  };
+
+  for (let i = 0; i < ord.length; i++) {
+    const r = ord[i];
+    const c = col(r.v);
+    // A zero row has no colour of its own. Anchor a transparent stop at it so
+    // its neighbours ramp INTO nothing rather than straight across it.
+    const own = c === "transparent"
+      ? fadeOut(col(ord[i - 1]?.v ?? ord[i + 1]?.v ?? 1))
+      : c;
+    const prevGap = i > 0 ? r.y - ord[i - 1].y : (ord[1].y - ord[0].y);
+    const nextGap = i < ord.length - 1 ? ord[i + 1].y - r.y : prevGap;
+    if (STRIKE_CORE_FRAC > 0) {
+      stop(r.y - prevGap * STRIKE_CORE_FRAC, own);
+      stop(r.y, own);
+      stop(r.y + nextGap * STRIKE_CORE_FRAC, own);
+    } else {
+      stop(r.y, own);
+    }
+
+    if (FLIP_STYLE !== "seam") continue;
+    const nxt = ord[i + 1];
+    if (!nxt) continue;
+    const a = r.v, b = nxt.v;
+    if (a === 0 || b === 0 || Math.sign(a) === Math.sign(b)) continue;
+    // Linear zero-crossing between the two strikes.
+    const t = Math.abs(a) / (Math.abs(a) + Math.abs(b));
+    const zy = r.y + (nxt.y - r.y) * t;
+    stop(zy, fadeOut(col(a)));
+    stop(zy, fadeOut(col(b)));
+  }
+
+  ctx.fillStyle = g;
+  ctx.fillRect(0, top, w, span);
+
+  // Taper past the outermost strikes rather than stopping dead on them — a
+  // gradient that ends on a hard line has reintroduced exactly the edge this
+  // whole change exists to remove.
+  const cap = (y: number, v: number, dir: -1 | 1, gap: number) => {
+    const c = col(v);
+    if (c === "transparent") return;
+    const reach = Math.max(4, gap * 0.5);
+    const gg = ctx.createLinearGradient(0, y, 0, y + dir * reach);
+    gg.addColorStop(0, c);
+    gg.addColorStop(1, fadeOut(c));
+    ctx.fillStyle = gg;
+    ctx.fillRect(0, dir < 0 ? y - reach : y, w, reach);
+  };
+  cap(top, ord[0].v, -1, ord[1].y - ord[0].y);
+  cap(bot, ord[ord.length - 1].v, 1, ord[ord.length - 1].y - ord[ord.length - 2].y);
+}
+
 /** Greeks this panel can show. "oi" is deliberately absent — the chain page's OI
  *  tab reads a day-over-day snapshot, not the live chain, so it has no meaning
  *  in a panel that only ever holds one live expiry. */
@@ -299,19 +442,41 @@ function ChainRail({
     // frame. Assigning ctx.font is a CSS font-shorthand parse; it is not free.
     // Batching by style makes it two assignments total.
     const labels: Array<{ mid: number; strike: number; v: number }> = [];
+
+    // ── The field ────────────────────────────────────────────────────────────
+    //
+    // LEVELS-ONLY keeps discrete blocks. That mode paints CB / Call Wall / Put
+    // Wall and nothing else, so there is nothing to interpolate BETWEEN — a
+    // gradient would just fade three named levels into the void.
+    //
+    // HEAT mode is one continuous gradient down the whole ladder, with a colour
+    // stop at every strike. Everything between two strikes is therefore the
+    // interpolation of those two, which is both what the data actually says and
+    // what fixes the complaint the flat bands caused: a flat band runs from
+    // midpoint to midpoint, so a strike at 773 painted a solid block covering
+    // 772.5-773.5 and the eye read the block's EDGE as a level. There is no
+    // level at 773.5. Now the brightest pixel of a row sits exactly on its
+    // strike — lined up with that strike's bubble on the chart — and 773.5 is
+    // the average of 773 and 774.
+    if (levelsOnly) {
+      for (let i = 0; i < rows.length; i++) {
+        const { strike, v } = rows[i];
+        const { top, bot } = bandFor(i);
+        const wk = wallAt(walls, strike);
+        const bg = wk && v ? rankBg(v, WALL_RANK[wk]) : "transparent";
+        if (bg !== "transparent") {
+          ctx.fillStyle = bg;
+          ctx.fillRect(0, top, w, Math.max(1, bot - top));
+        }
+      }
+    } else {
+      paintHeatField(ctx, rows, w, max, heat, top3);
+    }
+
     for (let i = 0; i < rows.length; i++) {
       const { strike, v } = rows[i];
       const { top, bot } = bandFor(i);
       const bandH = Math.max(1, bot - top);
-
-      const wk = levelsOnly ? wallAt(walls, strike) : null;
-      const bg = levelsOnly
-        ? (wk && v ? rankBg(v, WALL_RANK[wk]) : "transparent")
-        : metricBg(v, max, heat, top3);
-      if (bg !== "transparent") {
-        ctx.fillStyle = bg;
-        ctx.fillRect(0, top, w, bandH);
-      }
 
       // Labels only when the band can hold them. At a zoomed-out view the rows
       // are 2px tall and text would just be a smear — the heat still reads.
@@ -321,7 +486,19 @@ function ChainRail({
       // immediately to the left of this panel already labelling those prices.
       // Printing them twice was only ever necessary when the ladder was free to
       // drift out of register.
-      if (bandH >= 9) labels.push({ mid: (top + bot) / 2, strike, v });
+      // Anchored on the STRIKE's own y, not the band centre. With an uneven
+      // ladder those differ, and the label has to sit on the price it names.
+      if (bandH >= 9) labels.push({ mid: rows[i].y, strike, v });
+    }
+
+    // A 1px notch at every strike. With a continuous field there is no band edge
+    // left to read a level off, so this is what says "the level is exactly
+    // here" — and it is the thing that visibly lines up with the bubble row.
+    if (!levelsOnly) {
+      ctx.fillStyle = "rgba(255,255,255,0.28)";
+      for (const r of rows) {
+        if (r.y > 0 && r.y < h) ctx.fillRect(0, Math.round(r.y), 5, 1);
+      }
     }
 
     if (labels.length) {

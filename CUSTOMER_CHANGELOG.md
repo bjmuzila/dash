@@ -6,7 +6,7 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 ## Monday 8/17/2026
 
-* **Pinch-free price zoom on the mobile ES chart.** The phone ES Candles chart now zooms the price scale as well as time — tap the + / − buttons at the right edge of the chart (or drag the price numbers themselves, double-tap them to reset) to stretch a quiet range out or fit a wide one on screen, and the GEX bubbles, GEX rail and 0DTE ladder stay locked to price as you do it.
+* **Price zoom on the mobile ES chart.** Press and hold the price numbers down the right edge of the phone ES Candles chart and slide — up to zoom in, down to zoom out, double-tap to snap back. Stretch a quiet range out or fit a wide one on screen; the chart keeps following price as new bars print, and the GEX bubbles, GEX rail and 0DTE ladder stay locked to it.
 
 * **Right-click anything to save it to Notes.** Highlight any wording and right-click to file it in your Notes panel, or right-click a chart or panel with nothing selected to save a picture of it — each note is labelled with the page and chart it came from, and the image expands with a click.
 

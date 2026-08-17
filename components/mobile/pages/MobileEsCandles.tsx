@@ -1,7 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
+import type { PointerEvent as ReactPointerEvent } from "react";
+import {
+  CandlestickSeries,
+  ColorType,
+  CrosshairMode,
+  LineStyle,
+  PriceScaleMode,
+  createChart,
+} from "lightweight-charts";
 import type {
   AutoscaleInfo,
   CandlestickData,
@@ -72,21 +80,30 @@ import { M_COLOR, MONO, RADIUS, TYPE, fmtPrice, noTapHighlight, rgba } from "../
  *
  * PRICE-AXIS ZOOM
  * ---------------
- * Two independent ways in, because neither alone is enough on a phone:
+ * ONE gesture: press the price axis and slide. Up zooms in, down zooms out,
+ * release ends it, double-tap the axis resets. No buttons — an earlier ± stepper
+ * floated over the plot and was struck for covering candles.
  *
- *   - the ± stepper floating over the plot's right edge. It drives
- *     `autoscaleInfoProvider`: autoscale still computes the range the bars need,
- *     and this squeezes or widens it around its own midpoint. Because autoscale
- *     stays ON, new bars keep re-centring the view, so a zoomed-in chart doesn't
- *     drift off price the way a frozen range does.
- *   - dragging the price gutter itself (`axisPressedMouseMove.price`), for fine
- *     control, plus double-tap on the gutter to reset. Native axis drag turns
- *     autoscale off; any stepper tap calls `setAutoScale(true)` again, so the
- *     stepper is always the way back out.
+ * The gesture is ours, not the library's, via a transparent strip sized to
+ * `priceScale('right').width()` and driven with pointer capture (see
+ * AXIS_ZOOM_* and the strip's own comment). Two reasons not to use the built-in
+ * `axisPressedMouseMove.price`:
+ *
+ *   - it freezes the price range. Autoscale goes off and stays off, so a chart
+ *     you zoomed at 10:00 has drifted off price by 10:30 and the only way back
+ *     is a double-tap that throws the zoom away too.
+ *   - it scales about the axis midpoint at a fixed rate with no floor or
+ *     ceiling, so a fast phone swipe lands on a flat line or a wall of noise.
+ *
+ * Instead the strip drives a MULTIPLIER on `autoscaleInfoProvider`: autoscale
+ * still computes the range the bars need, and the multiplier squeezes or widens
+ * it around its own midpoint, clamped to AXIS_ZOOM range. Autoscale stays ON, so
+ * every new bar re-centres the zoomed view and it cannot drift.
  *
  * Drag-inside-the-plot vertical scaling stays off (`vertTouchDrag: false`): on a
  * touchscreen it cannot be separated from a horizontal pan, and users end up
- * with a squashed axis and no idea how they got there.
+ * with a squashed axis and no idea how they got there. That is exactly why the
+ * gesture is confined to the axis strip.
  */
 
 const INTERVALS: { id: "1" | "5"; label: string }[] = [
@@ -143,13 +160,32 @@ const BUBBLE_SCALE_DEFAULT = 1;
  * context). 0.4 shows ~2.5× the day's range — enough to put an overnight session
  * and both walls on screen at once; 12 gets down to a couple of points across
  * 390px, which is about as far as tick-level scalping needs.
- *
- * The step is multiplicative, so each tap feels the same size at every level.
  */
 const Y_ZOOM_MIN = 0.4;
 const Y_ZOOM_MAX = 12;
-const Y_ZOOM_STEP = 1.35;
 const Y_ZOOM_DEFAULT = 1;
+
+/**
+ * The press-and-slide gesture on the axis.
+ *
+ * `PX_PER_DOUBLE` — vertical pixels that double (or halve) the zoom. It is
+ * exponential, not linear, so the gesture feels identical whether you are at
+ * 0.5× or 8×; 150px means a comfortable thumb slide of about a third of the
+ * chart's height per doubling, and the full 0.4–12 range is reachable in one
+ * stroke without being twitchy.
+ *
+ * `DEADZONE` — movement below this is still a tap, not a drag, so a double-tap
+ * reset never nudges the zoom on its way through.
+ *
+ * `DOUBLE_TAP_MS` — two taps inside this window reset to 1×. This replaces the
+ * library's own axis double-click reset, which the strip intercepts.
+ */
+const AXIS_ZOOM_PX_PER_DOUBLE = 150;
+const AXIS_ZOOM_DEADZONE = 4;
+const AXIS_ZOOM_DOUBLE_TAP_MS = 320;
+
+/** Widest the axis strip is allowed to get if the price scale reports nonsense. */
+const AXIS_STRIP_MAX_W = 76;
 
 /**
  * Squeeze/widen the autoscaled range around its midpoint.
@@ -247,58 +283,6 @@ function OverlayToggle({
   );
 }
 
-/**
- * One button of the price-axis zoom stepper.
- *
- * 34px square: the plot is only ~344px wide with a gutter open, so this is the
- * smallest square that still clears the 44px-with-padding tap target once the
- * 5px of surrounding gap is counted. `touchAction: "none"` keeps a fast repeat
- * tap from being read as a double-tap zoom by the browser.
- */
-function YZoomButton({
-  label,
-  title,
-  onPress,
-  disabled,
-  emphasis,
-}: {
-  label: string;
-  title: string;
-  onPress: () => void;
-  disabled?: boolean;
-  emphasis?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      title={title}
-      aria-label={title}
-      disabled={disabled}
-      onClick={onPress}
-      style={{
-        ...noTapHighlight,
-        width: 34,
-        height: 34,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        border: "none",
-        background: emphasis ? rgba(M_COLOR.cyan, 0.14) : "transparent",
-        // Literal, not rgba(M_COLOR.faint, …): the token is already an rgba()
-        // string and the helper only parses hex.
-        color: disabled ? "rgba(255,255,255,0.2)" : emphasis ? M_COLOR.cyan : M_COLOR.text,
-        fontSize: emphasis ? TYPE.micro : 17,
-        fontWeight: 800,
-        lineHeight: 1,
-        cursor: disabled ? "default" : "pointer",
-        touchAction: "none",
-      }}
-    >
-      {label}
-    </button>
-  );
-}
-
 export default function MobileEsCandles() {
   const [interval, setInterval] = useState<"1" | "5">("5");
   const [showLevels, setShowLevels] = useState(true);
@@ -310,6 +294,11 @@ export default function MobileEsCandles() {
   const [showBubbles, setShowBubbles] = useState(true);
   const [bubbleScale, setBubbleScale] = useState(BUBBLE_SCALE_DEFAULT);
   const [yZoom, setYZoom] = useState(Y_ZOOM_DEFAULT);
+  // Live width of the right price scale, so the zoom strip covers exactly the
+  // axis and not a pixel of the plot (covering the plot would eat pans on the
+  // newest bars, which sit right against the axis).
+  const [axisW, setAxisW] = useState(46);
+  const [zooming, setZooming] = useState(false);
   const [ovlOpen, setOvlOpen] = useState(false);
   const { sessionCandles, connected } = useEsCandles(true, 2, interval === "1" ? 1 : 5);
   const g = useMobileGex("oi-vol");
@@ -345,9 +334,17 @@ export default function MobileEsCandles() {
   const linesRef = useRef<IPriceLine[]>([]);
   const didFitRef = useRef(false);
   // Read inside autoscaleInfoProvider, which is installed once at series
-  // creation and must not be re-created on every zoom tap.
+  // creation and must not be re-created mid-gesture.
   const yZoomRef = useRef(yZoom);
-  yZoomRef.current = yZoom;
+  const measureAxisRef = useRef<() => void>(() => {});
+  // Live gesture state. A ref, not state: this updates on every pointermove and
+  // nothing about it belongs in a render.
+  const zoomDragRef = useRef<{ y0: number; z0: number; moved: boolean } | null>(null);
+  // Mirror state → ref, EXCEPT mid-gesture: the ref leads during a slide, and a
+  // render triggered by the 4Hz feed carries a `yZoom` one move behind, which
+  // would stutter the axis back a frame.
+  if (!zoomDragRef.current) yZoomRef.current = yZoom;
+  const lastAxisTapRef = useRef(0);
 
   // ── chart lifecycle ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -388,8 +385,10 @@ export default function MobileEsCandles() {
       handleScroll: { vertTouchDrag: false, horzTouchDrag: true, mouseWheel: true, pressedMouseMove: true },
       handleScale: {
         pinch: true,
-        axisPressedMouseMove: { time: true, price: true },
-        axisDoubleClickReset: { time: true, price: true },
+        // price: false on BOTH — the axis strip owns the price gesture, and the
+        // built-in versions would fight it by freezing the range (header note).
+        axisPressedMouseMove: { time: true, price: false },
+        axisDoubleClickReset: { time: true, price: false },
         mouseWheel: true,
       },
       crosshair: { mode: CrosshairMode.Normal },
@@ -420,6 +419,22 @@ export default function MobileEsCandles() {
 
     let lastW = 0;
     let lastH = 0;
+    let lastAxisW = 0;
+    // The axis is as wide as its widest label, so it changes with the price
+    // format and with a locale's separators — measure rather than assume.
+    const measureAxis = () => {
+      let aw = 0;
+      try {
+        aw = chart.priceScale("right").width();
+      } catch {
+        aw = 0;
+      }
+      const clamped = Math.min(AXIS_STRIP_MAX_W, Math.max(28, Math.round(aw) || 46));
+      if (clamped !== lastAxisW) {
+        lastAxisW = clamped;
+        setAxisW(clamped);
+      }
+    };
     const applySize = () => {
       const w = host.clientWidth;
       const h = host.clientHeight;
@@ -428,19 +443,27 @@ export default function MobileEsCandles() {
         lastH = h;
         chart.applyOptions({ width: w, height: h });
       }
+      measureAxis();
     };
+    measureAxisRef.current = measureAxis;
+
     const ro = new ResizeObserver(applySize);
     ro.observe(host);
 
     // The host is 0-height for the first frame or two while the flex column
     // resolves. Pump on rAF until it has a real box, or the chart stays stuck
     // at its initial collapsed size.
+    //
+    // It keeps pumping past that point for ~3s purely to settle the AXIS width:
+    // the price scale reports 0 until the first paint and its final width until
+    // the first bars widen its labels, and the zoom strip is sized from it.
     let raf = 0;
     let tries = 0;
     const pump = () => {
       applySize();
       tries += 1;
-      if ((lastW === 0 || lastH === 0) && tries < 120) raf = requestAnimationFrame(pump);
+      const stillCollapsed = lastW === 0 || lastH === 0;
+      if (stillCollapsed ? tries < 120 : tries < 180) raf = requestAnimationFrame(pump);
     };
     raf = requestAnimationFrame(pump);
 
@@ -461,38 +484,119 @@ export default function MobileEsCandles() {
   }, [interval]);
 
   // ── price-axis zoom ────────────────────────────────────────────────────────
-  // setAutoScale(true) does two jobs here: it re-runs autoscaleInfoProvider so
-  // the new multiplier lands, and it releases the manual range a price-gutter
-  // drag would have left behind — so the stepper is always the way back.
-  useEffect(() => {
-    const series = seriesRef.current;
-    if (!series) return;
+  /**
+   * Push the current multiplier into the chart.
+   *
+   * The price range is CACHED — `autoscaleInfoProvider` is only consulted when
+   * the cache has been invalidated, which normally happens on new data, a pan or
+   * a resize. So a multiplier change needs an explicit invalidation, and the only
+   * public call that performs one is passing `mode` to the price scale:
+   * `setAutoScale(true)` / `applyOptions({ autoScale: true })` merge the option
+   * and repaint from the STALE range, which is why the zoom appeared to do
+   * nothing at rest and only caught up on the next tick.
+   *
+   * Re-passing the mode it already has (Normal) is the invalidation; `autoScale`
+   * rides along so the zoom also re-arms autoscale if anything ever turned it
+   * off, and can therefore never get stuck.
+   */
+  const applyYZoom = useCallback(() => {
     try {
-      series.priceScale().setAutoScale(true);
+      seriesRef.current?.priceScale().applyOptions({
+        autoScale: true,
+        mode: PriceScaleMode.Normal,
+      });
     } catch {
-      /* series torn down mid-update */
+      /* series torn down mid-gesture */
     }
-  }, [yZoom]);
-
-  const stepYZoom = useCallback((dir: 1 | -1) => {
-    setYZoom((z) => {
-      const next = dir > 0 ? z * Y_ZOOM_STEP : z / Y_ZOOM_STEP;
-      const clamped = Math.min(Y_ZOOM_MAX, Math.max(Y_ZOOM_MIN, next));
-      // Snap back to exactly 1 when a step lands next to it, so the default is
-      // reachable by tapping rather than only by the reset button.
-      return Math.abs(clamped - 1) < 0.06 ? 1 : clamped;
-    });
   }, []);
 
-  // The gutter drag can leave autoscale off with the multiplier still at 1, in
-  // which case "reset" has no state change to react to — force it directly.
+  useEffect(() => {
+    applyYZoom();
+  }, [applyYZoom, yZoom]);
+
   const resetYZoom = useCallback(() => {
+    yZoomRef.current = Y_ZOOM_DEFAULT;
     setYZoom(Y_ZOOM_DEFAULT);
-    try {
-      seriesRef.current?.priceScale().setAutoScale(true);
-    } catch {
-      /* series torn down mid-update */
-    }
+    applyYZoom();
+  }, [applyYZoom]);
+
+  /**
+   * Press-and-slide on the axis strip.
+   *
+   * The multiplier is written to `yZoomRef` and pushed to the chart IMMEDIATELY,
+   * before React re-renders — the provider reads the ref, so the axis tracks the
+   * thumb at pointer-event rate instead of waiting on a render. `setYZoom` still
+   * runs so the readout and the reset chip stay honest, but nothing about the
+   * zoom itself depends on that render landing.
+   *
+   * Pointer capture means a slide that wanders off the 46px strip — which a
+   * thumb does constantly — keeps zooming instead of dying halfway.
+   */
+  const onAxisPointerDown = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (e.button != null && e.button > 0) return;
+      zoomDragRef.current = { y0: e.clientY, z0: yZoomRef.current, moved: false };
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* capture is a nicety, the gesture still works without it */
+      }
+    },
+    [],
+  );
+
+  const onAxisPointerMove = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      const d = zoomDragRef.current;
+      if (!d) return;
+      const dy = e.clientY - d.y0;
+      if (!d.moved) {
+        if (Math.abs(dy) < AXIS_ZOOM_DEADZONE) return;
+        d.moved = true;
+        setZooming(true);
+      }
+      // Up (negative dy) zooms IN — the same direction as pulling the price
+      // labels apart, which is what the gesture looks like it's doing.
+      const next = d.z0 * Math.pow(2, -dy / AXIS_ZOOM_PX_PER_DOUBLE);
+      const clamped = Math.min(Y_ZOOM_MAX, Math.max(Y_ZOOM_MIN, next));
+      if (clamped === yZoomRef.current) return;
+      yZoomRef.current = clamped;
+      applyYZoom();
+      setYZoom(clamped);
+    },
+    [applyYZoom],
+  );
+
+  const onAxisPointerUp = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      const d = zoomDragRef.current;
+      zoomDragRef.current = null;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        /* already released */
+      }
+      if (!d) return;
+      if (d.moved) {
+        setZooming(false);
+        return;
+      }
+      // A tap, not a slide: second tap inside the window resets. Using the event
+      // clock (not Date.now via a timer) keeps this to one source of truth.
+      const now = e.timeStamp || performance.now();
+      if (now - lastAxisTapRef.current < AXIS_ZOOM_DOUBLE_TAP_MS) {
+        lastAxisTapRef.current = 0;
+        resetYZoom();
+      } else {
+        lastAxisTapRef.current = now;
+      }
+    },
+    [resetYZoom],
+  );
+
+  const onAxisPointerCancel = useCallback(() => {
+    zoomDragRef.current = null;
+    setZooming(false);
   }, []);
 
   // ── candles ────────────────────────────────────────────────────────────────
@@ -508,6 +612,10 @@ export default function MobileEsCandles() {
       close: r.close,
     }));
     series.setData(data);
+    // First real data widens the axis from empty to "6000.00" — re-measure, on
+    // the next frame because the width isn't known until that paint, or the zoom
+    // strip stays sized for the empty chart.
+    const axisRaf = requestAnimationFrame(() => measureAxisRef.current?.());
     if (data.length && !didFitRef.current) {
       didFitRef.current = true;
       // Open on the most recent stretch rather than the whole session: 30h of
@@ -516,6 +624,7 @@ export default function MobileEsCandles() {
       const to = data.length - 1;
       chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, to - bars), to: to + 2 });
     }
+    return () => cancelAnimationFrame(axisRaf);
   }, [sessionCandles, interval]);
 
   // ── the gutter panels' link to the price axis ──────────────────────────────
@@ -847,53 +956,74 @@ export default function MobileEsCandles() {
               style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 2 }}
             />
           )}
-          {/* Price-axis zoom stepper. Sits just inside the plot's right edge —
-              `right: 52` clears the price gutter so it never covers an axis
-              label and never swallows a gutter drag. zIndex 3 keeps it above
-              the bubble canvas. */}
-          {sessionCandles.length > 0 && (
-            <div
+          {/* Price-axis zoom strip.
+              Exactly as wide as the price scale (measured, see `axisW`) and the
+              full height of the plot, so it owns every touch on the axis and
+              none on the candles. Transparent — the axis labels underneath ARE
+              the affordance; it only tints while a slide is live so you can see
+              which axis you grabbed. `touchAction: "none"` stops the browser
+              claiming the vertical drag as a page scroll, which is what would
+              otherwise kill the gesture on the first pixel. */}
+          <div
+            role="slider"
+            aria-label="Price axis zoom — slide up to zoom in, down to zoom out, double-tap to reset"
+            aria-valuemin={Y_ZOOM_MIN}
+            aria-valuemax={Y_ZOOM_MAX}
+            aria-valuenow={Number(yZoom.toFixed(2))}
+            tabIndex={-1}
+            onPointerDown={onAxisPointerDown}
+            onPointerMove={onAxisPointerMove}
+            onPointerUp={onAxisPointerUp}
+            onPointerCancel={onAxisPointerCancel}
+            style={{
+              ...noTapHighlight,
+              position: "absolute",
+              top: 0,
+              right: 0,
+              width: axisW,
+              // Clear of the time axis, or the strip would swallow taps meant
+              // for it. 22px is that axis's own label band.
+              bottom: 22,
+              zIndex: 4,
+              cursor: "ns-resize",
+              touchAction: "none",
+              background: zooming ? rgba(M_COLOR.cyan, 0.09) : "transparent",
+              borderLeft: zooming ? `1px solid ${rgba(M_COLOR.cyan, 0.35)}` : "1px solid transparent",
+            }}
+          />
+
+          {/* Readout. Live factor while sliding; afterwards it stays as a
+              tap-to-reset chip until the zoom is back at 1×, which is the only
+              standing hint that the chart is not on autoscale. */}
+          {(zooming || Math.abs(yZoom - Y_ZOOM_DEFAULT) > 1e-6) && (
+            <button
+              type="button"
+              onClick={resetYZoom}
+              title="Reset price zoom"
               style={{
+                ...noTapHighlight,
+                ...MONO,
                 position: "absolute",
-                right: 52,
-                top: "50%",
-                transform: "translateY(-50%)",
-                zIndex: 3,
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "stretch",
-                borderRadius: RADIUS.md,
-                overflow: "hidden",
-                border: `1px solid ${rgba("#ffffff", 0.1)}`,
-                background: "rgba(5,8,13,0.66)",
-                backdropFilter: "blur(6px)",
+                right: axisW + 6,
+                top: 6,
+                zIndex: 5,
+                minHeight: 24,
+                padding: "0 8px",
+                borderRadius: RADIUS.sm,
+                border: `1px solid ${rgba(M_COLOR.cyan, 0.4)}`,
+                background: "rgba(5,8,13,0.72)",
+                color: M_COLOR.cyan,
+                fontSize: TYPE.micro,
+                fontWeight: 800,
+                cursor: "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
               }}
             >
-              <YZoomButton
-                label="+"
-                title="Zoom in price axis"
-                onPress={() => stepYZoom(1)}
-                disabled={yZoom >= Y_ZOOM_MAX - 1e-6}
-              />
-              <span style={{ height: 1, background: rgba("#ffffff", 0.08) }} />
-              <YZoomButton
-                label="−"
-                title="Zoom out price axis"
-                onPress={() => stepYZoom(-1)}
-                disabled={yZoom <= Y_ZOOM_MIN + 1e-6}
-              />
-              {Math.abs(yZoom - Y_ZOOM_DEFAULT) > 1e-6 && (
-                <>
-                  <span style={{ height: 1, background: rgba("#ffffff", 0.08) }} />
-                  <YZoomButton
-                    label={`${yZoom.toFixed(1)}×`}
-                    title="Reset price zoom"
-                    onPress={resetYZoom}
-                    emphasis
-                  />
-                </>
-              )}
-            </div>
+              {yZoom.toFixed(2)}×
+              {!zooming && <span style={{ fontWeight: 900, opacity: 0.8 }}>✕</span>}
+            </button>
           )}
           {sessionCandles.length === 0 && (
             <div style={{ position: "absolute", inset: 0, display: "flex" }}>
