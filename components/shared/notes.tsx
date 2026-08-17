@@ -1,13 +1,38 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { HOME_THEME } from "./homeTheme";
 
 // Notes are stored per Clerk user: `${NOTES_STORAGE_PREFIX}${userId}`.
 // Key kept identical to the old sidebar implementation so existing notes carry over.
 const NOTES_STORAGE_PREFIX = "sidebar-notes-v1:";
 
-export type Note = { id: string; text: string; ts: number };
+/**
+ * Cross-instance sync event.
+ *
+ * `useNotes` is called in several places at once (GlobalToolbar for the count
+ * badge, NotesDock for the list, NoteClipMenu for the right-click "+ Notes"
+ * action) and each call is its own `useState`. Without a broadcast, a note added
+ * from the clip menu would sit in localStorage while the open dock and the count
+ * badge kept showing the old list until a remount. Every mutation now dispatches
+ * this event with the new array and every other instance on the same storage key
+ * adopts it.
+ */
+const NOTES_EVENT = "cb-notes-changed";
+type NotesEventDetail = { key: string; notes: Note[]; from: string };
+
+export type Note = {
+  id: string;
+  text: string;
+  ts: number;
+  /** JPEG/PNG data URL — set for clips captured from a chart/panel (see NoteClipMenu). */
+  img?: string;
+  /** Where the note came from, e.g. "ES Candles — GEX Chart". */
+  src?: string;
+};
+
+/** Extra fields a caller can attach when adding a note. */
+export type NoteExtra = { img?: string; src?: string };
 
 // ─── icon ────────────────────────────────────────────────────────────────────
 type IconProps = { size?: number };
@@ -23,6 +48,37 @@ const CloseIcon = ({ size = 12 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
 );
 
+/**
+ * Write the list to localStorage, shedding weight until it fits.
+ *
+ * Clip notes carry a base64 image, so the notes key can now realistically reach
+ * the ~5MB origin quota — and a `setItem` that throws used to leave the in-memory
+ * list and storage silently out of sync (the note vanished on reload). On
+ * QuotaExceeded we drop the OLDEST image first (that note's text survives), then
+ * whole oldest notes as a last resort, and return the list that actually landed
+ * so state can be set to it.
+ */
+function writeStore(key: string, wanted: Note[]): Note[] {
+  let list = wanted;
+  for (let guard = 0; guard < 200; guard++) {
+    try {
+      localStorage.setItem(key, JSON.stringify(list));
+      return list;
+    } catch {
+      // Oldest note carrying an image (list is newest-first).
+      let victim = -1;
+      for (let i = list.length - 1; i >= 0; i--) if (list[i].img) { victim = i; break; }
+      if (victim >= 0) {
+        list = list.map((n, i) => (i === victim ? { ...n, img: undefined } : n));
+        continue;
+      }
+      if (list.length > 1) { list = list.slice(0, -1); continue; }
+      return list; // one note and still failing — storage is unusable
+    }
+  }
+  return list;
+}
+
 // ─── hook (per-user, localStorage) ────────────────────────────────────────────
 // Quick-jot notes. Stored per Clerk user so different logins on the same browser
 // don't share notes. Persists across resets/reloads.
@@ -30,39 +86,84 @@ export function useNotes(userId: string | null | undefined) {
   const [notes, setNotes] = useState<Note[]>([]);
   const storageKey = userId ? `${NOTES_STORAGE_PREFIX}${userId}` : null;
 
+  // Identity for this hook instance, so it can ignore its own broadcast.
+  const selfId = useRef<string>("");
+  if (!selfId.current) selfId.current = Math.random().toString(36).slice(2);
+
+  // Latest list without re-creating the mutators on every change (the clip menu
+  // holds onto `addNote` across a long async capture).
+  const listRef = useRef<Note[]>([]);
+  useEffect(() => { listRef.current = notes; }, [notes]);
+
   // Load whenever the signed-in user changes (and clear when signed out).
   useEffect(() => {
-    if (!storageKey) { setNotes([]); return; }
+    if (!storageKey) { setNotes([]); listRef.current = []; return; }
     try {
       const raw = localStorage.getItem(storageKey);
       const parsed = raw ? JSON.parse(raw) : [];
-      setNotes(Array.isArray(parsed) ? parsed.filter((n) => n && typeof n.text === "string") : []);
+      const next: Note[] = Array.isArray(parsed) ? parsed.filter((n) => n && typeof n.text === "string") : [];
+      setNotes(next);
+      listRef.current = next;
     } catch {
       setNotes([]);
+      listRef.current = [];
     }
   }, [storageKey]);
 
-  const persist = (next: Note[]) => {
-    if (storageKey) {
-      try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* ignore */ }
-    }
-    return next;
-  };
+  // Adopt mutations made by any other useNotes instance on this key.
+  useEffect(() => {
+    if (!storageKey) return;
+    const onChanged = (e: Event) => {
+      const d = (e as CustomEvent<NotesEventDetail>).detail;
+      if (!d || d.key !== storageKey || d.from === selfId.current) return;
+      setNotes(d.notes);
+      listRef.current = d.notes;
+    };
+    window.addEventListener(NOTES_EVENT, onChanged as EventListener);
+    return () => window.removeEventListener(NOTES_EVENT, onChanged as EventListener);
+  }, [storageKey]);
 
-  const addNote = (text: string) => {
+  // Single write path: persist (shedding images if over quota), set state to
+  // whatever actually landed, then tell the other instances.
+  const apply = useCallback((next: Note[]) => {
+    const landed = storageKey ? writeStore(storageKey, next) : next;
+    listRef.current = landed;
+    setNotes(landed);
+    if (storageKey) {
+      try {
+        window.dispatchEvent(new CustomEvent<NotesEventDetail>(NOTES_EVENT, {
+          detail: { key: storageKey, notes: landed, from: selfId.current },
+        }));
+      } catch { /* ignore */ }
+    }
+  }, [storageKey]);
+
+  /** Add a note. `text` may be empty when `extra.img` is set (an image-only clip). */
+  const addNote = useCallback((text: string, extra?: NoteExtra) => {
+    const t = (text || "").trim();
+    if (!t && !extra?.img) return;
+    const note: Note = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      text: t,
+      ts: Date.now(),
+      ...(extra?.img ? { img: extra.img } : {}),
+      ...(extra?.src ? { src: extra.src } : {}),
+    };
+    apply([note, ...listRef.current]);
+  }, [apply]);
+
+  const editNote = useCallback((id: string, text: string) => {
     const t = text.trim();
-    if (!t) return;
-    setNotes((prev) => persist([{ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, text: t, ts: Date.now() }, ...prev]));
-  };
-  const editNote = (id: string, text: string) => {
-    const t = text.trim();
-    setNotes((prev) => {
-      if (!t) return persist(prev.filter((n) => n.id !== id)); // emptied → delete
-      return persist(prev.map((n) => (n.id === id ? { ...n, text: t } : n)));
-    });
-  };
-  const deleteNote = (id: string) =>
-    setNotes((prev) => persist(prev.filter((n) => n.id !== id)));
+    const cur = listRef.current;
+    const target = cur.find((n) => n.id === id);
+    // Emptied → delete, UNLESS the note is a clip (the image is the content).
+    if (!t && !target?.img) { apply(cur.filter((n) => n.id !== id)); return; }
+    apply(cur.map((n) => (n.id === id ? { ...n, text: t } : n)));
+  }, [apply]);
+
+  const deleteNote = useCallback((id: string) => {
+    apply(listRef.current.filter((n) => n.id !== id));
+  }, [apply]);
 
   return { notes, addNote, editNote, deleteNote };
 }
@@ -89,7 +190,7 @@ export function NotesBody({
   maxListHeight,
 }: {
   notes: Note[];
-  addNote: (text: string) => void;
+  addNote: (text: string, extra?: NoteExtra) => void;
   editNote: (id: string, text: string) => void;
   deleteNote: (id: string) => void;
   maxListHeight?: number | string;
@@ -98,6 +199,8 @@ export function NotesBody({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  // Clip whose image is expanded to full panel width (thumbnails otherwise).
+  const [zoomId, setZoomId] = useState<string | null>(null);
 
   const submitDraft = () => { addNote(draft); setDraft(""); };
   const startEdit = (n: Note) => { setEditingId(n.id); setEditText(n.text); };
@@ -136,11 +239,13 @@ export function NotesBody({
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12, overflowY: "auto", maxHeight: maxListHeight, flex: 1, minHeight: 0, scrollbarWidth: "thin" }}>
         {notes.length === 0 && (
           <div style={{ fontSize: 14, color: HOME_THEME.muted, padding: "8px 2px", lineHeight: 1.5 }}>
-            No notes yet. Type above and press Enter.
+            No notes yet. Type above and press Enter — or right-click highlighted
+            text or any chart on a page and choose “Add to Notes”.
           </div>
         )}
         {notes.map((n) => {
           const editing = editingId === n.id;
+          const zoomed = zoomId === n.id;
           return (
             <div
               key={n.id}
@@ -181,6 +286,36 @@ export function NotesBody({
                     <div style={{ flex: 1, minWidth: 0, fontSize: 14, color: HOME_THEME.text, whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.45 }}>{n.text}</div>
                     <span style={{ flexShrink: 0, fontSize: 14, color: HOME_THEME.muted, fontWeight: 600, letterSpacing: "0.02em", whiteSpace: "nowrap" }}>{formatNoteTime(n.ts)}</span>
                   </div>
+
+                  {/* where it came from (right-click captures) */}
+                  {n.src && (
+                    <div style={{ marginTop: 4, fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: HOME_THEME.cyan, opacity: 0.8, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {n.src}
+                    </div>
+                  )}
+
+                  {/* clip image — thumbnail, click to expand in place */}
+                  {n.img && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={n.img}
+                      alt={n.text || "Clip"}
+                      onClick={() => setZoomId((z) => (z === n.id ? null : n.id))}
+                      title={zoomed ? "Shrink" : "Expand"}
+                      style={{
+                        display: "block",
+                        marginTop: 8,
+                        width: "100%",
+                        maxHeight: zoomed ? "none" : 120,
+                        objectFit: zoomed ? "contain" : "cover",
+                        objectPosition: "top left",
+                        borderRadius: 10,
+                        border: "1px solid rgba(255,255,255,0.08)",
+                        cursor: zoomed ? "zoom-out" : "zoom-in",
+                      }}
+                    />
+                  )}
+
                   {/* edit/delete reveal on hover */}
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 4, height: hoveredId === n.id ? 22 : 0, marginTop: hoveredId === n.id ? 4 : 0, overflow: "hidden", transition: "height 0.15s, margin-top 0.15s" }}>
                     <button

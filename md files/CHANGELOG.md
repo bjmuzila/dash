@@ -1,5 +1,68 @@
 # Changelog
 
+## 2026-08-17 - Right-click → "Add to Notes" anywhere in the app
+
+Edited: `components/shared/notes.tsx`, `components/shared/NotesDock.tsx`,
+`components/shared/LayoutShell.tsx`.
+New: `components/shared/NoteClipMenu.tsx`.
+
+Highlight any wording, or right-click any chart/panel, and file it straight into
+the Notes dock. One mount in `LayoutShell` covers every dashboard route — no page
+opts in.
+
+### The menu (`NoteClipMenu`)
+
+A single `contextmenu` listener on `window` decides what it can offer:
+
+- **Text selected** → "Add selection to Notes". The selected string becomes the
+  note (trimmed at 1200 chars).
+- **Nothing selected, cursor over a panel** → "Add snapshot to Notes". The panel
+  is rendered to a JPEG through `lib/snapshot`'s `captureToCanvas` — the same
+  path the 📸 Snapshot buttons use — downscaled to 720px wide at q0.72 (~40-80KB)
+  and stored on the note.
+- Both, when there is a selection inside a card.
+- Plus "Open Notes panel".
+
+Target resolution, in order: `[data-note-clip]` (explicit opt-in) → the enclosing
+`.card-hover` Card → a bare `canvas`/`svg` chart's container. The clip is labelled
+from `[data-note-label]`, else the card's heading, else the page name — so a note
+reads "ES Candles — GEX Chart".
+
+The native browser menu is never taken away silently: we only `preventDefault()`
+when there is actually something to clip, `shift`+right-click always yields the
+browser menu, an event already `defaultPrevented` by a page's own context menu is
+left alone, and inputs / links / the notes dock itself (`data-notes-dock`) are
+skipped — that is where Paste and Copy-link live. `[data-no-note-clip]` opts a
+subtree out.
+
+Adding does NOT auto-open the dock (it pushes page content sideways, which would
+shove the chart you are reading). A toast confirms; clicking the toast opens the
+panel.
+
+### Notes now carry an image and a source
+
+`Note` gained optional `img` (data URL) and `src` (where it came from).
+`NotesBody` renders the source as a small cyan caption and the image as a 120px
+thumbnail that expands in place on click.
+
+### Two bugs this had to fix first
+
+1. **`useNotes` instances did not talk to each other.** GlobalToolbar (count
+   badge), NotesDock (list) and now the clip menu each call `useNotes` and each
+   had its own `useState`, so a note added in one place sat in localStorage while
+   the others showed the old list until a remount — the toolbar badge was already
+   stale after every add from the dock. Every mutation now broadcasts a
+   `cb-notes-changed` event with the new array and the other instances adopt it.
+2. **A failed `localStorage` write was silent.** Clip images make the ~5MB origin
+   quota reachable, and `setItem` throwing used to leave state and storage out of
+   sync (the note vanished on reload). `writeStore` now sheds the oldest image
+   first, then whole oldest notes, and returns the list that actually landed so
+   state matches storage.
+
+Also: a clip note whose text is emptied in the editor is no longer deleted — the
+image is its content.
+
+
 ## 2026-08-17 - Multi Greek: the Δ toggle no longer resizes the grid
 
 Edited: `app/mult-greek/MultGreekClient.tsx`.

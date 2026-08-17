@@ -7,6 +7,7 @@ import PublicNav from "@/components/landing/PublicNav";
 import { useAuth } from "@/components/auth/AuthProvider";
 import OwnerSidebar, { isOwnerChromePath } from "./OwnerSidebar";
 import NotesDock from "./NotesDock";
+import NoteClipMenu from "./NoteClipMenu";
 import GexDock from "./GexDock";
 import { HOME_THEME } from "./homeTheme";
 import { MobileNavProvider } from "./MobileNavContext";
@@ -82,6 +83,9 @@ function ShellInner({ children }: { children: React.ReactNode }) {
         <GexDock />
         <NotesDock />
       </div>
+      {/* App-wide right-click → "Add to Notes". One mount for every dashboard
+          route; renders nothing until a right-click has something to clip. */}
+      <NoteClipMenu />
     </div>
   );
 }

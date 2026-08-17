@@ -30,6 +30,9 @@ export default function NotesDock() {
     <aside
       aria-label="Notes"
       aria-hidden={!open}
+      // Marks the dock as off-limits to the right-click "Add to Notes" menu
+      // (NoteClipMenu) — inside the panel the native menu is the useful one.
+      data-notes-dock
       style={{
         flexShrink: 0,
         width: open ? PANEL_WIDTH : 0,

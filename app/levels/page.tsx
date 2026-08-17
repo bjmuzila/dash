@@ -249,7 +249,7 @@ const axisX = (d: number) =>
 
 /** The colour a chip/dot takes from its WALL state. Never from where spot is. */
 const zoneColor = (z: Mark["zone"]) =>
-  z === "outc" ? LEVEL_COLORS.cw : z === "out" ? LEVEL_COLORS.pw : z === "near" ? LEVEL_COLORS.cb : alpha(HOME_THEME.text, 0.72);
+  z === "outc" ? LEVEL_COLORS.cw : z === "out" ? LEVEL_COLORS.pw : z === "near" ? LEVEL_COLORS.cb : HOME_THEME.text;
 
 // ── The stylesheet ───────────────────────────────────────────────────────────
 // Same reason the previous page shipped one: `:hover` and `@container`, neither
@@ -262,7 +262,7 @@ const CSS = `
 .cblv-axis .ln{position:absolute;left:0;right:0;top:50%;height:1px;background:${alpha(HOME_THEME.text, 0.12)}}
 .cblv-axis .t{position:absolute;top:0;transform:translateX(-50%);text-align:center}
 .cblv-axis .t i{display:block;width:1px;height:10px;margin:0 auto;background:${alpha(HOME_THEME.text, 0.2)}}
-.cblv-axis .t span{font-size:9px;font-weight:800;letter-spacing:.08em;color:${alpha(HOME_THEME.text, 0.32)}}
+.cblv-axis .t span{font-size:9px;font-weight:800;letter-spacing:.08em;color:${HOME_THEME.text}}
 .cblv-axis .t.core i{height:30px;width:2px;background:${LEVEL_COLORS.cb};box-shadow:0 0 10px ${alpha(LEVEL_COLORS.cb, 0.5)}}
 .cblv-axis .t.core span{color:${LEVEL_COLORS.cb}}
 
@@ -283,7 +283,7 @@ const CSS = `
 .cblv-chip{position:absolute;transform:translateX(-50%);font-weight:800;letter-spacing:.02em;
   padding:2px 7px;border-radius:5px;white-space:nowrap;cursor:pointer;
   border:1px solid ${alpha(HOME_THEME.text, 0.14)};background:${alpha(HOME_THEME.text, 0.05)};
-  color:${alpha(HOME_THEME.text, 0.8)};transition:transform .08s,border-color .08s,background .08s}
+  color:${HOME_THEME.text};transition:transform .08s,border-color .08s,background .08s}
 .cblv-chip:hover{border-color:${HOME_THEME.text};background:${alpha(HOME_THEME.text, 0.18)};z-index:6;
   transform:translateX(-50%) translateY(-1px)}
 .cblv-chip.pin{color:${LEVEL_COLORS.onSolid};background:${HOME_THEME.text};border-color:${HOME_THEME.text};
@@ -310,7 +310,7 @@ const CSS = `
 .cblv-pd{position:absolute;transform:translate(-50%,-50%);border-radius:50%;cursor:pointer;transition:transform .08s}
 .cblv-pd:hover{transform:translate(-50%,-50%) scale(1.6);z-index:9}
 .cblv-qlab{position:absolute;font-size:9px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;
-  color:${alpha(HOME_THEME.text, 0.24)};pointer-events:none}
+  color:${HOME_THEME.text};pointer-events:none}
 
 /* ── DESK ── */
 .cblv-desk{display:grid;grid-template-columns:236px minmax(0,1fr) 252px;gap:14px;
@@ -334,7 +334,7 @@ const CSS = `
 .cblv-tbl{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
 .cblv-tbl thead th{position:sticky;top:0;z-index:2;white-space:nowrap;text-align:right;padding:9px 12px;
   font-size:9px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;
-  color:${alpha(HOME_THEME.text, 0.42)};background:${alpha(HOME_THEME.bg, 0.97)};
+  color:${HOME_THEME.text};background:${alpha(HOME_THEME.bg, 0.97)};
   backdrop-filter:blur(8px);border-bottom:1px solid ${alpha(HOME_THEME.text, 0.14)}}
 .cblv-tbl th.srt{cursor:pointer}
 .cblv-tbl th.srt:hover,.cblv-tbl th.act{color:${LIGHT_BLUE}}
@@ -374,11 +374,13 @@ const CSS = `
 
 const labelStyle: CSSProperties = {
   fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase",
-  color: alpha(HOME_THEME.text, 0.4), whiteSpace: "nowrap",
+  color: HOME_THEME.text, whiteSpace: "nowrap",
 };
 const tickerStyle: CSSProperties = { color: LIGHT_BLUE, fontWeight: 800, letterSpacing: "0.03em" };
+/** Up/down ink for a delta. A missing value is WHITE, not a faded white — a
+ *  dimmed em-dash reads as "disabled" when it only means "no number yet". */
 const deltaColor = (n: number | null) =>
-  n == null ? alpha(HOME_THEME.text, 0.4) : n >= 0 ? ES_CANDLE_UP : ES_CANDLE_DOWN;
+  n == null ? HOME_THEME.text : n >= 0 ? ES_CANDLE_UP : ES_CANDLE_DOWN;
 
 /** The ±3% rule, drawn once and reused by every board mode. */
 function Axis() {
@@ -406,7 +408,7 @@ function ZoneHeader({ marks }: { marks: Mark[] }) {
         const n = marks.filter((m) => m.dPct != null && m.dPct >= lo && m.dPct < hi).length;
         const a = axisX(lo), b = axisX(hi);
         return (
-          <div key={nm} style={{ left: `${a}%`, width: `${b - a}%`, color: colors[i], borderBottom: `1px solid ${HOME_THEME.border}`, opacity: 0.9 }}>
+          <div key={nm} style={{ left: `${a}%`, width: `${b - a}%`, color: colors[i], borderBottom: `1px solid ${HOME_THEME.border}` }}>
             {nm} · {n}
           </div>
         );
@@ -542,7 +544,7 @@ function BoardRidge({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; 
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 9 }}>
         <span style={{ fontSize: 20, fontWeight: 800, color: c }}>{arr.length}</span>
         <span style={labelStyle}>{nm}</span>
-        <span style={{ marginLeft: "auto", fontSize: 10, color: alpha(HOME_THEME.text, 0.3) }}>click to pin</span>
+        <span style={{ marginLeft: "auto", fontSize: 10, color: HOME_THEME.text }}>click to pin</span>
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
         {arr.slice(0, 30).map((m) => (
@@ -563,10 +565,10 @@ function BoardRidge({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; 
           </span>
         ))}
         {arr.length > 30 && (
-          <span className="cblv-tc" style={{ color: alpha(HOME_THEME.text, 0.3) }}>+{arr.length - 30}</span>
+          <span className="cblv-tc" style={{ color: HOME_THEME.text }}>+{arr.length - 30}</span>
         )}
         {arr.length === 0 && (
-          <span style={{ fontSize: 11, color: alpha(HOME_THEME.text, 0.32) }}>nothing out here right now</span>
+          <span style={{ fontSize: 11, color: HOME_THEME.text }}>nothing out here right now</span>
         )}
       </div>
     </div>
@@ -683,10 +685,10 @@ function BoardSwarm({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; 
           return (
             <div key={sector} className="cblv-grp">
               <div>
-                <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.09em", textTransform: "uppercase", color: alpha(HOME_THEME.text, 0.55) }}>
+                <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.09em", textTransform: "uppercase", color: HOME_THEME.text }}>
                   {sector}
                 </div>
-                <div style={{ fontSize: 9, fontWeight: 700, color: alpha(HOME_THEME.text, 0.26), marginTop: 2 }}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: HOME_THEME.text, marginTop: 2 }}>
                   {ms.length} name{ms.length === 1 ? "" : "s"}
                 </div>
               </div>
@@ -716,7 +718,7 @@ function BoardSwarm({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; 
                         style={{
                           position: "absolute", left: `${x}%`, top, transform: "translateX(-50%)",
                           fontSize: 8.5, fontWeight: 800, whiteSpace: "nowrap", pointerEvents: "none",
-                          color: pinned ? HOME_THEME.text : alpha(HOME_THEME.text, 0.62),
+                          color: HOME_THEME.text,
                         }}
                       >
                         {m.symbol}
@@ -765,8 +767,8 @@ function BoardQuadrants({ marks, pins, onToggle }: { marks: Mark[]; pins: string
           <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 1, background: alpha(HOME_THEME.text, 0.16) }} />
           <div style={{ position: "absolute", left: `${axisX(0)}%`, top: 0, bottom: 0, width: 1, background: alpha(LEVEL_COLORS.cb, 0.4) }} />
           <span className="cblv-qlab" style={{ left: 14, top: 12 }}>below core · long gamma — magnet back up</span>
-          <span className="cblv-qlab" style={{ right: 14, top: 12, color: alpha(ES_CANDLE_UP, 0.5) }}>above core · long gamma — pinned / suppressed</span>
-          <span className="cblv-qlab" style={{ left: 14, bottom: 12, color: alpha(ES_CANDLE_DOWN, 0.5) }}>below core · short gamma — unstable</span>
+          <span className="cblv-qlab" style={{ right: 14, top: 12 }}>above core · long gamma — pinned / suppressed</span>
+          <span className="cblv-qlab" style={{ left: 14, bottom: 12 }}>below core · short gamma — unstable</span>
           <span className="cblv-qlab" style={{ right: 14, bottom: 12 }}>above core · short gamma — chase risk</span>
 
           {plotted.map((m) => {
@@ -795,7 +797,7 @@ function BoardQuadrants({ marks, pins, onToggle }: { marks: Mark[]; pins: string
                   style={{
                     position: "absolute", left: `${x}%`, top: `calc(${y}% - ${sz / 2 + 9}px)`,
                     transform: "translateX(-50%)", fontSize: 8.5, fontWeight: 800, whiteSpace: "nowrap",
-                    pointerEvents: "none", color: pinned ? HOME_THEME.text : alpha(HOME_THEME.text, 0.62),
+                    pointerEvents: "none", color: HOME_THEME.text,
                     textShadow: `0 1px 3px ${HOME_THEME.bg}, 0 0 6px ${HOME_THEME.bg}`,
                   }}
                 >
@@ -862,7 +864,7 @@ function DeskView({
       <Card variant="budget" padding={0} className="cblv-col">
         <div className="cblv-colhd">
           <span style={labelStyle}>Roster</span>
-          <span style={{ marginLeft: "auto", fontSize: 9, color: alpha(HOME_THEME.text, 0.3) }}>{list.length}</span>
+          <span style={{ marginLeft: "auto", fontSize: 9, color: HOME_THEME.text }}>{list.length}</span>
         </div>
         <div className="cblv-scroll">
           {list.map((m) => (
@@ -890,7 +892,7 @@ function DeskView({
       {/* stage */}
       <Card variant="budget" padding={0} className="cblv-col">
         {!sel ? (
-          <div style={{ padding: 24, fontSize: 13, color: alpha(HOME_THEME.text, 0.5) }}>
+          <div style={{ padding: 24, fontSize: 13, color: HOME_THEME.text }}>
             Nothing to show yet — the recorder writes one row per ticker every 5 minutes.
           </div>
         ) : (
@@ -956,7 +958,7 @@ function DeskView({
       <Card variant="budget" padding={0} className="cblv-col">
         <div className="cblv-colhd">
           <span style={labelStyle}>Compare</span>
-          <span style={{ marginLeft: "auto", fontSize: 9, color: alpha(HOME_THEME.text, 0.3) }}>{pins.length} / {MAX_PINS}</span>
+          <span style={{ marginLeft: "auto", fontSize: 9, color: HOME_THEME.text }}>{pins.length} / {MAX_PINS}</span>
         </div>
         <div className="cblv-scroll">
           {pins.map((s) => {
@@ -989,7 +991,7 @@ function DeskView({
             );
           })}
           {pins.length === 0 && (
-            <div style={{ padding: 16, margin: 10, textAlign: "center", fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", color: alpha(HOME_THEME.text, 0.22), border: `1px dashed ${alpha(HOME_THEME.text, 0.12)}`, borderRadius: 10 }}>
+            <div style={{ padding: 16, margin: 10, textAlign: "center", fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.text, border: `1px dashed ${alpha(HOME_THEME.text, 0.12)}`, borderRadius: 10 }}>
               NOTHING PINNED
             </div>
           )}
@@ -1032,7 +1034,7 @@ function MonitorView({
       className={pins.includes(m.symbol) ? "pin" : undefined}
       onClick={() => onToggle(m.symbol)}
     >
-      <td><span style={tickerStyle}>{m.symbol}</span>{pins.includes(m.symbol) && <span style={{ fontSize: 8, opacity: 0.6 }}> ●</span>}</td>
+      <td><span style={tickerStyle}>{m.symbol}</span>{pins.includes(m.symbol) && <span style={{ fontSize: 8 }}> ●</span>}</td>
       <td style={{ fontWeight: 800 }}>{m.spot != null ? fmtSpot(m.spot) : "—"}</td>
       <td>
         <span className="cblv-cellbar">
@@ -1045,11 +1047,11 @@ function MonitorView({
       <td style={{ color: LEVEL_COLORS.cw }}>{m.row.call_wall != null ? fmtLevel(m.row.call_wall) : "—"}</td>
       <td style={{ color: LEVEL_COLORS.pw }}>{m.row.put_wall != null ? fmtLevel(m.row.put_wall) : "—"}</td>
       <td style={{ color: HOME_THEME.cyan }}>{m.row.gex_flip != null ? fmtLevel(m.row.gex_flip) : "—"}</td>
-      <td style={{ color: m.row.total_net_gex == null ? alpha(HOME_THEME.text, 0.4) : deltaColor(m.row.total_net_gex), fontWeight: 700 }}>
+      <td style={{ color: m.row.total_net_gex == null ? HOME_THEME.text : deltaColor(m.row.total_net_gex), fontWeight: 700 }}>
         {m.row.total_net_gex == null ? "—" : fmtGex(m.row.total_net_gex)}
       </td>
-      <td style={{ color: alpha(HOME_THEME.text, 0.5) }}>{dteOf(m.row.expiry) != null ? `${dteOf(m.row.expiry)}D` : "—"}</td>
-      <td style={{ fontSize: 10, color: m.row.stale ? HOME_THEME.orange : alpha(HOME_THEME.text, 0.35) }}>
+      <td style={{ color: HOME_THEME.text }}>{dteOf(m.row.expiry) != null ? `${dteOf(m.row.expiry)}D` : "—"}</td>
+      <td style={{ fontSize: 10, color: m.row.stale ? HOME_THEME.orange : HOME_THEME.text }}>
         {m.row.stale ? "STALE" : fmtClock(m.row.ts)}
       </td>
     </tr>
@@ -1116,7 +1118,7 @@ function LanesView({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; o
             <div style={{ padding: "11px 13px 10px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
               <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: l.c }}>{l.nm}</div>
               <div style={{ fontSize: 24, fontWeight: 800, lineHeight: 1.1, marginTop: 3 }}>{l.ms.length}</div>
-              <div style={{ fontSize: 9.5, color: alpha(HOME_THEME.text, 0.34), marginTop: 2, lineHeight: 1.4 }}>{l.sh}</div>
+              <div style={{ fontSize: 9.5, color: HOME_THEME.text, marginTop: 2, lineHeight: 1.4 }}>{l.sh}</div>
             </div>
             <div style={{ padding: 9, display: "flex", flexDirection: "column", gap: 5, overflow: "auto" }}>
               {[...l.ms]
@@ -1133,7 +1135,7 @@ function LanesView({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; o
                   >
                     <span>
                       <span style={{ ...tickerStyle, fontSize: 11 }}>{m.symbol}</span>{" "}
-                      <span style={{ fontSize: 10, fontWeight: 700, color: alpha(HOME_THEME.text, 0.55) }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: HOME_THEME.text }}>
                         {m.row.cb != null ? fmtLevel(m.row.cb) : "—"}
                       </span>
                     </span>
@@ -1345,7 +1347,7 @@ export default function LevelsPage() {
 
   const body: ReactNode = marks.length === 0 ? (
     <Card variant="budget" padding={20} style={cardFlex}>
-      <div style={{ fontSize: 13, color: alpha(HOME_THEME.text, 0.6) }}>
+      <div style={{ fontSize: 13, color: HOME_THEME.text }}>
         {error
           ? `Could not load levels: ${error}`
           : "No scanner snapshots yet — the recorder writes one row per ticker every 5 minutes."}
@@ -1374,12 +1376,12 @@ export default function LevelsPage() {
           [LEVEL_COLORS.pw, "below put wall"],
           [HOME_THEME.text, "pinned"],
         ] as [string, string][]).map(([c, t]) => (
-          <span key={t} style={{ fontSize: 10, color: alpha(HOME_THEME.text, 0.44), display: "flex", alignItems: "center", gap: 6 }}>
+          <span key={t} style={{ fontSize: 10, color: HOME_THEME.text, display: "flex", alignItems: "center", gap: 6 }}>
             <i style={{ width: 9, height: 9, borderRadius: 3, background: c, display: "block" }} />
             {t}
           </span>
         ))}
-        <span style={{ marginLeft: "auto", fontSize: 10, color: alpha(HOME_THEME.text, 0.3) }}>
+        <span style={{ marginLeft: "auto", fontSize: 10, color: HOME_THEME.text }}>
           {board === "cloud" ? "bigger type = larger |net GEX| · click a chip to pin it"
             : board === "swarm" ? "dot size = |net GEX| · gold line marks core"
             : board === "quadrants" ? "dot size = |net GEX| · quadrant = the setup"
@@ -1400,7 +1402,7 @@ export default function LevelsPage() {
             <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" }}>
               Levels
             </div>
-            <div style={{ fontSize: 11, color: alpha(HOME_THEME.text, 0.45) }}>
+            <div style={{ fontSize: 11, color: HOME_THEME.text }}>
               {marks.length} tickers · sweep {fmtClock(sweptAt)} ET · spot live{liveCount ? ` (${liveCount})` : ""}
               {" · "}
               <span style={{ color: LEVEL_COLORS.cb }}>{nearCore} at core</span>
