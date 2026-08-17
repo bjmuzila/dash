@@ -171,7 +171,7 @@ type TrendPoint = { month: string; categoryId: number | null; spent: number; cou
 type Finding = { title: string; severity: "high" | "medium" | "low"; detail: string; monthlySavings: number; evidence: string };
 type Advice = { headline: string; findings: Finding[]; quickWins: string[]; generatedAt?: string | null };
 
-type View = "merchants" | "donut" | "ledger" | "categories" | "budget" | "subs";
+type View = "merchants" | "donut" | "ledger" | "categories" | "subs";
 type SortKey = "date" | "merchant" | "amount" | "category";
 
 type RegisterBatch = {
@@ -1075,7 +1075,7 @@ export default function RealMonth({
       {/* ── View switch ──────────────────────────────────────────────────── */}
       {hasData && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {([["merchants", `Merchants (${allMerchants.length})`], ["donut", "Where it went"], ["ledger", `Ledger (${tx.length})`], ["categories", "Categories"], ["budget", "Budget"], ["subs", `Subscriptions (${subRows.length})`]] as const).map(([k, l]) => (
+          {([["merchants", `Merchants (${allMerchants.length})`], ["donut", "Where it went"], ["ledger", `Ledger (${tx.length})`], ["categories", "Categories"], ["subs", `Subscriptions (${subRows.length})`]] as const).map(([k, l]) => (
             <button key={k} onClick={() => setView(k)} style={pill(view === k)}>{l}</button>
           ))}
           <div style={{ flex: 1 }} />
@@ -1312,7 +1312,20 @@ export default function RealMonth({
         </Card>
       )}
 
-      {/* ── CATEGORIES ───────────────────────────────────────────────────── */}
+      {/* ── CATEGORIES ───────────────────────────────────────────────────────
+          Three cards, widest lens first: every category across every imported
+          month (with the budgets editable), then one category's history, then
+          the single month you have loaded. */}
+      {hasData && view === "categories" && (
+        <BudgetGrid
+          grid={budgetGrid}
+          imported={importedMonths}
+          currency={currency}
+          onSave={saveBudget}
+          onOpenCategories={onOpenCategories}
+        />
+      )}
+
       {hasData && view === "categories" && catTrend.series.length > 0 && (
         <CategoryTrend
           axis={catTrend.months}
@@ -1326,7 +1339,7 @@ export default function RealMonth({
 
       {hasData && view === "categories" && (
         <Card variant="classic" padding={0} style={{ overflow: "hidden" }}>
-          <SectionHead title="By category" sub="Real spend against the budgets on the Categories tab." />
+          <SectionHead title="This month by category" sub="Just the loaded month, with a transaction count per category — the two cards above put it in context." />
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -1366,17 +1379,6 @@ export default function RealMonth({
             </tbody>
           </table>
         </Card>
-      )}
-
-      {/* ── BUDGET vs ACTUAL ─────────────────────────────────────────────── */}
-      {hasData && view === "budget" && (
-        <BudgetGrid
-          grid={budgetGrid}
-          imported={importedMonths}
-          currency={currency}
-          onSave={saveBudget}
-          onOpenCategories={onOpenCategories}
-        />
       )}
 
       {/* ── SUBSCRIPTIONS ────────────────────────────────────────────────── */}
@@ -1821,10 +1823,10 @@ function BudgetGrid({
       <Card variant="classic" padding={0} style={{ overflow: "hidden" }}>
         <SectionHead
           title="Budget vs actual"
-          sub="Monthly budget is editable here and saves to the category itself. Status reads the average, not the last month."
+          sub="Every category across the imported months. The monthly budget is editable in place and saves to the category itself, so it is the same budget everywhere. Status reads the average, not the last month."
           right={
             onOpenCategories && (
-              <button onClick={onOpenCategories} style={ghost()}>Manage categories</button>
+              <button onClick={onOpenCategories} style={ghost()}>Add / rename categories</button>
             )
           }
         />

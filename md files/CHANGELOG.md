@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-08-16 - Budget vs actual moved onto the Categories tab
+
+Edited: `owner-vite/src/pages/budget/RealMonth.tsx`.
+
+The month x category grid was given its own "Budget" pill in the Real Month
+view switch. It belongs on **Categories** — that tab was already the place you
+go to ask what a category costs, and splitting the answer across two pills
+meant the budget you set in one place and the spend you read in the other never
+appeared on screen together.
+
+The Categories tab is now three cards, widest lens first:
+
+1. **Budget vs actual** — every category across every imported month, monthly
+   budget editable in place, average + status. The three counters (on track /
+   watch it / over budget) sit above it.
+2. **Category trend** — one category's month-over-month line against its own
+   average and its budget.
+3. **This month by category** — the loaded month with a transaction count.
+
+The `budget` view was removed from the `View` union and the pill row, so the
+switch is back to five: Merchants, Where it went, Ledger, Categories,
+Subscriptions.
+
+Two labels changed to survive the merge. The bottom card was subtitled "Real
+spend against the budgets on the Categories tab" — which now points at itself;
+it reads "Just the loaded month… the two cards above put it in context". And
+the grid's "Manage categories" button is "Add / rename categories", because
+"Categories" now means two different things one word apart: this sub-tab, and
+the page-level tab where categories are created and coloured. The button still
+goes to the page-level one.
+
+Verified: `tsc --noEmit` clean for RealMonth.tsx, `vite build` green, and the
+emitted `Budget-*.js` chunk carries "Budget vs actual", "Category trend" and
+"This month by category".
+
 ## 2026-08-16 - Correction: owner-vite IS deployed (owner.cbedge.net), + Balance Projection restored
 
 Edited: `owner-vite/src/pages/Budget.tsx`.
