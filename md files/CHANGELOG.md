@@ -1,5 +1,63 @@
 # Changelog
 
+## 2026-08-17 - Ticker dropdowns: the search box is empty every time you open it
+
+Edited: `components/shared/TickerListDropdown.tsx`,
+`components/pages/OptionsChain.tsx`, `components/pages/Analytics.tsx`,
+`components/dashboard/NquQuotePill.tsx`.
+
+**The bug.** Search a ticker, pick it, come back for a different one — the
+dropdown reopened still filtered by the last thing you typed, so the first move
+was always deleting a box you did not fill in. The stale query has already done
+its job the moment a ticker is selected.
+
+**Fix.** Each picker now clears its query on CLOSE (`useEffect` on `!open`),
+not on open, so the menu never renders one frame of stale filtering on the way
+in. Closing by any route — selecting a row, clicking outside, Escape,
+re-clicking the trigger — flips `open`, so every path is covered.
+
+| Picker | Where it shows up | Before | After |
+|---|---|---|---|
+| `TickerListDropdown` (shared) | GEX / Chain Replay | kept last query | empty |
+| `TickerListDropdown` (inline copy) | Options Chain toolbar | kept last query | empty |
+| Analytics ticker picker | Analytics | cleared on select/add only — outside click / Esc kept it | empty on every close |
+| `NquQuotePill` add-ticker footer | global toolbar quotes panel | half-typed symbol survived close | resets input + collapses "adding" |
+
+`components/dashboard/es-candles/symbols.tsx` (`SymbolListDropdown`, the ES
+Candles dock picker) already did this — the other four now match it.
+
+Not touched: the inline table filters (`GexPctTab`, `DodMoversTab`,
+`LevelLog`) and the Multi-Greek "4TH" ticker field. Those are persistent
+controls on the page, not dropdown search boxes — clearing them would throw
+away a filter the user can see is applied.
+
+## 2026-08-17 - Replay / Ticker Lookup ladders: one strike = one row, and CB never doubles as the put wall
+
+Edited: `components/pages/Analytics.tsx` (the `TickerLookupCard` ladders, which
+`/replay` -> "GEX levels" mounts directly).
+
+**CB collision rule now runs on BOTH sides.** Core (CB) is the highest |GEX|
+strike on the board, so it IS whichever wall sits on its own side of zero. The
+call side already handled this — a call-side core stepped the call wall down to
+the second-highest +GEX strike — but the put side did not, on the assumption
+that a core "can never" collide with the put wall. It can, and does: whenever
+the biggest strike on the board is negative, CB and PW landed on the same
+number, the card printed 7,755 twice (Core 7,755 / Put wall 7,755) and the
+ladder row carried two tags.
+
+Now a put-side core steps the put wall down to the SECOND most-negative strike —
+the next real floor below the magnet — exactly mirroring the call side. Core has
+one sign, so only ever one wall can collide; the other is untouched.
+
+**One strike = one row.** The strike cell was `flexWrap: "wrap"` in an 88px
+column. With a 5-digit strike plus two tags it overflowed and the second tag
+dropped to its own line, so a single strike occupied two rows and read as a
+second strike with a blank number. The cell is now `nowrap` (with `whiteSpace:
+nowrap` and `flexShrink: 0` on the strike, the spot caret and the tags) and the
+strike column widened 88px -> 132px, sized for the widest it can ever get.
+Belt and braces: the collision fix above means CB+PW no longer co-occur at all.
+
+
 ## 2026-08-17 - GEX bubbles: they can actually get big on a 1-minute bucket now
 
 Edited: `components/dashboard/es-candles/slotStore.ts`,

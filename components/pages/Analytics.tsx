@@ -1223,6 +1223,19 @@ function TickerLevelsPicker({
     };
   }, []);
 
+  // The search box starts EMPTY every time the menu opens.
+  //
+  // `choose()`/`add()` already cleared it on the happy path, but closing any
+  // other way — outside click, Escape, re-clicking the trigger — left the query
+  // behind, so reopening the list showed it pre-filtered to a stale search and
+  // the first thing you had to do was clear a box you did not fill in.
+  //
+  // Cleared on CLOSE rather than on open so the menu never renders one frame of
+  // stale filtering on the way in.
+  useEffect(() => {
+    if (!open) setQuery("");
+  }, [open]);
+
   const toggleFav = (t: string) =>
     setFavs((prev) => {
       const next = prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t];
@@ -1833,9 +1846,11 @@ interface TlLevels {
 // points out is still the wall, and cropping the ladder first would invent a
 // nearer one.
 function tlLevelsFrom(rows: TlRow[], spot: number | null): TlLevels {
-  // Top TWO +GEX strikes, not one — see the CB collision rule below.
+  // Top TWO +GEX strikes and bottom TWO −GEX strikes, not one each — see the
+  // CB collision rule below.
   let callWall: TlRow | null = null, callWall2: TlRow | null = null;
-  let putWall: TlRow | null = null, core: TlRow | null = null;
+  let putWall: TlRow | null = null, putWall2: TlRow | null = null;
+  let core: TlRow | null = null;
   let net = 0;
   for (const r of rows) {
     net += r.gex;
@@ -1843,17 +1858,25 @@ function tlLevelsFrom(rows: TlRow[], spot: number | null): TlLevels {
       if (callWall == null || r.gex > callWall.gex) { callWall2 = callWall; callWall = r; }
       else if (callWall2 == null || r.gex > callWall2.gex) callWall2 = r;
     }
-    if (r.gex < 0 && (putWall == null || r.gex < putWall.gex)) putWall = r;
+    if (r.gex < 0) {
+      if (putWall == null || r.gex < putWall.gex) { putWall2 = putWall; putWall = r; }
+      else if (putWall2 == null || r.gex < putWall2.gex) putWall2 = r;
+    }
     if (core == null || Math.abs(r.gex) > Math.abs(core.gex)) core = r;
   }
-  // CB COLLISION RULE. Core is the highest |GEX| strike on the board; when that
-  // strike is call-side it IS the highest +GEX strike, so Core and Call wall
-  // land on the same number and the card prints one level twice. In that case
-  // the call wall steps down to the SECOND highest +GEX strike — the next real
-  // ceiling above the magnet. Put wall is untouched: a call-side core can never
-  // collide with it.
+  // CB COLLISION RULE. Core is the highest |GEX| strike on the board, so it IS
+  // whichever wall sits on its own side of zero — a call-side core is the
+  // highest +GEX strike, a put-side core is the most −GEX strike. Either way
+  // Core and that wall land on the same number, the card prints one level
+  // twice and two tags stack on one ladder row. The colliding wall steps down
+  // to the SECOND strike on its side: the next real ceiling above the magnet,
+  // or the next real floor below it. Core has ONE sign, so only one wall can
+  // ever collide — the other is untouched.
   if (core != null && callWall != null && core.strike === callWall.strike) {
     callWall = callWall2;
+  }
+  if (core != null && putWall != null && core.strike === putWall.strike) {
+    putWall = putWall2;
   }
   // Gamma flip — PORT OF server-v2/computation/gex-calculator.js findGexFlip(),
   // which is what /proxy/gex, the EOD recorder and every other GEX surface in
@@ -2015,7 +2038,10 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null }: {
     : rows.reduce<TlRow | null>((best, r) =>
         best == null || Math.abs(r.strike - spot) < Math.abs(best.strike - spot) ? r : best, null);
   const withChg = changes != null;
-  const cols = withChg ? "88px 1fr 68px 66px" : "88px 1fr 68px";
+  // Strike column is sized for the WIDEST it ever gets — a 5-digit strike, the
+  // ◀ spot caret and two level tags — because the row must stay ONE line. A
+  // narrower column made the tags wrap and a single strike took two rows.
+  const cols = withChg ? "132px 1fr 68px 66px" : "132px 1fr 68px";
 
   // Park the spot row in the MIDDLE of the pane, not at the top of it.
   // tlWindow already centres spot in the row DATA (±TL_LADDER_SIDE rungs), but
@@ -2084,11 +2110,15 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null }: {
                   : "transparent",
             }}
           >
-            <span style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0, flexWrap: "wrap" }}>
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: isSpot ? 800 : 600, color: isSpot ? T.cyan : T.text }}>
+            {/* ONE STRIKE = ONE ROW. Never wrap: the tags are annotations on the
+                strike beside them, and pushing one to a second line reads as a
+                second strike with a blank number. nowrap + flexShrink on the
+                tags keeps the whole cell on a single line. */}
+            <span style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0, flexWrap: "nowrap", whiteSpace: "nowrap" }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: isSpot ? 800 : 600, color: isSpot ? T.cyan : T.text, flexShrink: 0 }}>
                 {r.strike.toLocaleString("en-US", { maximumFractionDigits: 2 })}
               </span>
-              {isSpot && <span style={{ fontSize: 9, fontWeight: 800, color: T.cyan, letterSpacing: "0.08em" }}>◀</span>}
+              {isSpot && <span style={{ fontSize: 9, fontWeight: 800, color: T.cyan, letterSpacing: "0.08em", flexShrink: 0 }}>◀</span>}
               {/* Named tags, not anonymous dots. Three dot colours is a legend
                   to memorise; "CB" is not. */}
               {marks.map((m) => (

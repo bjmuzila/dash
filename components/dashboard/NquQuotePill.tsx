@@ -357,6 +357,19 @@ export default function NquQuotePill({ buttonRef: externalBtnRef }: { buttonRef?
     return () => document.removeEventListener("mousedown", onDown);
   }, []);
 
+  // The add-ticker box starts EMPTY every time the panel opens.
+  //
+  // addTicker() clears it on the happy path, but abandoning a half-typed symbol
+  // and closing the panel used to leave the text sitting there, so the next
+  // time you opened the quotes list the footer was still in "adding" mode with
+  // a stale ticker in the field waiting to be deleted.
+  //
+  // Reset on CLOSE rather than on open so the panel never renders one frame of
+  // the stale input on the way in.
+  useEffect(() => {
+    if (!open) { setNewSym(""); setAdding(false); }
+  }, [open]);
+
   const sorted = useMemo(() => {
     // Exclude only the index futures (ESU/NQU) — those stay inline in the top
     // toolbar. VIX and SPX now live here in the dropdown. NQU still drives the

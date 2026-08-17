@@ -253,6 +253,22 @@ function TickerListDropdown({ activeTicker, onSelect }: { activeTicker: string; 
     return () => document.removeEventListener("mousedown", h);
   }, []);
 
+  // The search box starts EMPTY every time the menu opens.
+  //
+  // It used to keep whatever you last typed, which is only ever right if your
+  // next search is a prefix of your last one. Every other time — and the common
+  // case is picking a ticker, coming back, and wanting a DIFFERENT one — the
+  // list reopens pre-filtered to a stale query and the first thing you have to
+  // do is clear a box you did not fill in. The old text has already done its
+  // job the moment a ticker is selected.
+  //
+  // Cleared on CLOSE rather than on open so the menu never renders one frame of
+  // stale filtering on the way in. Every close route (select, outside click,
+  // re-clicking the trigger) flips `open`, so this covers all of them.
+  useEffect(() => {
+    if (!open) setQuery("");
+  }, [open]);
+
   const toggleFav = (t: string) =>
     setFavs((prev) => {
       const next = prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t];
