@@ -92,7 +92,8 @@ import { SymbolListDropdown, symbolDef, isChartSymbol, type ChartSymbol } from "
 import { PanelSection, PanelChip, SLIDER_LABEL_W, OVL_PANEL_W, OVL_VIEWPORT_PAD, OVL_MIN_H } from "./panelUi";
 import {
   BUBBLE_STYLE, BUBBLE_REF_FLOOR_FRAC, BUBBLE_LEVELS_RANGE, BUBBLE_INTENSITY_RANGE, BUBBLE_SIZE_RANGE, BUBBLE_CURVE_RANGE,
-  readSlot, writeSlot, broadcastSlot, subscribeSlot,
+  SHARED_SLOT,
+  readSlot, writeSlot, writeSlotQuiet, broadcastSlot, subscribeSlot,
   isBubbleBucket,
   subscribeReplayCmd, broadcastReplayCmd, INDICATORS_DEFAULT,
   type BubbleBucket, type SlotId, type SlotBlob, type IndicatorCfg,
@@ -349,7 +350,37 @@ function EsChartCard({
     // card is subscribed to this slot, so one control moves all three on the
     // same tick — no prop drilling, and no re-render of the page above them.
     writeSlot(cfgSlot, patch);
-  }, [cfgSlot]);
+    // ── MIRROR into the other namespace ──────────────────────────────────────
+    //
+    // There are two blobs — the card's own slot and SHARED_SLOT — and the chart
+    // count decides which one is read. Only ever writing to the active one made
+    // them diverge the moment you used both layouts, and then whichever you
+    // switched to served stale settings. Two directions, both real:
+    //
+    //   multi -> single  Everything set with 2-3 charts up went to SHARED, and
+    //                    single-chart restore reads its own blob ONLY. Set your
+    //                    overlays on a 3-up row, drop to one chart, and they are
+    //                    gone. This is the one that reads as "the overlays don't
+    //                    save".
+    //   single -> multi  ensureSharedSeeded() copies slot 0 into SHARED exactly
+    //                    ONCE, when SHARED does not exist yet. After that,
+    //                    changes made in single-chart mode never reach SHARED,
+    //                    but SHARED still WINS the merge on the way back up — so
+    //                    going multi could resurrect settings from whenever that
+    //                    seed happened to be taken.
+    //
+    // Mirroring every write keeps both blobs current, so it stops mattering
+    // which one is read and the last thing you touched is always what you get.
+    //
+    // `symbol` is excluded by construction: it is written through writeSlot(slot)
+    // directly and never goes through saveSetting, because the per-card ticker is
+    // the whole point of a multi-chart row (ensureSharedSeeded deletes it from
+    // the seed for the same reason).
+    const mirror: SlotId = shared ? slot : SHARED_SLOT;
+    // No broadcast for the mirror — subscribers listen on cfgSlot, and the write
+    // above already notified them. This is a persistence backfill, not an event.
+    writeSlotQuiet(mirror, patch);
+  }, [cfgSlot, shared, slot]);
 
   // ── Active chart symbol ────────────────────────────────────────────────────
   const [symbol, setSymbolState] = useState<ChartSymbol>("ES");

@@ -352,11 +352,29 @@ function notifySlot(slot: SlotId, patch: SlotBlob): void {
 
 /** Read-modify-write, then broadcast. Merges `patch` over whatever is stored. */
 export function writeSlot(slot: SlotId, patch: SlotBlob): void {
+  persistSlot(slot, patch);
+  notifySlot(slot, patch);
+}
+
+/**
+ * Persist without broadcasting.
+ *
+ * For the mirror write in EsChartCard's saveSetting: the card keeps BOTH its own
+ * blob and SHARED_SLOT current, so it stops mattering which one the current
+ * chart count reads. Only the active namespace should raise an event — every
+ * subscriber is listening on that one, and notifying the mirror as well would
+ * deliver each change twice, and in the shared case would feed cards a patch on
+ * a slot they do not own.
+ */
+export function writeSlotQuiet(slot: SlotId, patch: SlotBlob): void {
+  persistSlot(slot, patch);
+}
+
+function persistSlot(slot: SlotId, patch: SlotBlob): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(slotStorageKey(slot), JSON.stringify({ ...readSlot(slot), ...patch }));
   } catch { /* ignore */ }
-  notifySlot(slot, patch);
 }
 
 /**
