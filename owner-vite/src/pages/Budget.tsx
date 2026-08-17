@@ -174,10 +174,6 @@ export default function Budget() {
   const [yearRows, setYearRows] = useState<RegisterRow[]>([]);
   const [yearLoading, setYearLoading] = useState(false);
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
-  // Calendar / Projection toggle on the right-hand overview card. The
-  // projection was lost when this page was ported out of the Next route; its
-  // smoothPath() helper stayed behind, unused, which is how it was found.
-  const [rightTab, setRightTab] = useState<"calendar" | "projection">("calendar");
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   // The overview reads as a single month.
   const range: RangeMode = "monthly";
@@ -1136,19 +1132,17 @@ export default function Budget() {
           <StatTile label="Bzila" value={fmtMoney(bzilaMonth.net, currency)} sub={`${fmtMoney(bzilaMonth.inAmt, currency)} in · ${fmtMoney(bzilaMonth.outAmt, currency)} out`} valueColor={bzilaMonth.net < 0 ? SOFT_RED : HOME_THEME.green} />
         </div>
 
-        {/* Daily/weekly budgeting intelligence.
-            Two rows, not one row of four. Safe-to-Spend and Balance Check are
-            short stat lists and read fine narrow; Spend Pace is a 31-point
-            chart and Where It Went is a pie plus a legend — at a quarter of
-            the width the chart was a scribble and the legend's percentage
-            column was clipped off the right edge. */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12, alignItems: "stretch" }}>
+        {/* Daily/weekly budgeting intelligence — one row of four.
+            `auto-fit` collapses the empty tracks, so with four children this is
+            four equal columns (~450px each on a wide monitor) rather than the
+            280px minimum. Both graphic cards are sized for that width: the
+            pace chart's viewBox is ~1:1 with it so its axis text renders at
+            its stated size, and the donut splits its card in half. */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, alignItems: "stretch" }}>
           <SafeToSpendCard intel={intel} currency={currency} range={range} />
-          <BalanceCheckCard data={reconcile} currency={currency} />
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(430px, 1fr))", gap: 12, alignItems: "stretch" }}>
           <SpendPaceCard series={paceSeries} currency={currency} />
           <CategoryDonutCard slices={slicesFor(range)} currency={currency} range={range} />
+          <BalanceCheckCard data={reconcile} currency={currency} />
         </div>
 
         {/* Cash flow (daily) + cashflow calendar */}
@@ -1164,25 +1158,16 @@ export default function Budget() {
                 <span style={{ width: 8, height: 8, borderRadius: 2, background: SOFT_RED, marginLeft: 8 }} /> Out
               </span>
             </div>
-            <CashFlowBars buckets={cashflow} currency={currency} beginningBalance={computed.anyBeginning ? computed.beginningBalance : 0} />
+            <CashFlowBars buckets={cashflow} currency={currency} beginningBalance={computed.anyBeginning ? computed.beginningBalance : 0} height={430} />
           </div>
 
           <div style={{ ...card(), padding: 16 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 14 }}>
               <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>
-                {rightTab === "calendar" ? "Cashflow Calendar" : "Balance Projection"}
+                Cashflow Calendar
               </div>
-              <Segmented
-                value={rightTab}
-                onChange={(v) => setRightTab(v as "calendar" | "projection")}
-                options={[{ value: "calendar", label: "Calendar" }, { value: "projection", label: "Projection" }]}
-              />
             </div>
-            {rightTab === "calendar" ? (
-              <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} mode={range} yearNet={yearNet} year={year} />
-            ) : (
-              <ProjectionChart series={computed.series} currency={currency} />
-            )}
+            <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} mode={range} yearNet={yearNet} year={year} />
           </div>
         </div>
 
@@ -1414,25 +1399,6 @@ function RecurringManager({
 
 type DayGroup = { date: string; rows: ComputedRow[]; dailyNet: number; eod: number };
 
-// Catmull-Rom → cubic-bezier smoothing for a set of [x,y] points. `t` controls
-// curviness (0 = straight polyline, ~0.2 = gentle, higher = loopier).
-function smoothPath(pts: [number, number][], t = 0.2): string {
-  if (pts.length < 2) return "";
-  if (pts.length === 2) return `M ${pts[0][0]} ${pts[0][1]} L ${pts[1][0]} ${pts[1][1]}`;
-  let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[i - 1] || pts[i];
-    const p1 = pts[i];
-    const p2 = pts[i + 1];
-    const p3 = pts[i + 2] || p2;
-    const c1x = p1[0] + (p2[0] - p0[0]) * t;
-    const c1y = p1[1] + (p2[1] - p0[1]) * t;
-    const c2x = p2[0] - (p3[0] - p1[0]) * t;
-    const c2y = p2[1] - (p3[1] - p1[1]) * t;
-    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
-  }
-  return d;
-}
 
 // Cashflow calendar. Three shapes behind one control:
 //   Daily / Monthly → the month grid (Daily just pins the highlight on today)
@@ -1467,102 +1433,6 @@ function DayCell({ d, iso, g, currency, isSel, isToday, onSelect, w = CELL_W, h 
       </div>
       {g && <div style={{ fontSize: 13, fontWeight: 800, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
     </button>
-  );
-}
-
-/**
- * A small pill toggle for switching one card between two views.
- * Ported back from the Next owner route along with ProjectionChart.
- */
-function Segmented({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
-  return (
-    <div style={{ display: "inline-flex", padding: 3, borderRadius: 10, background: "rgba(0,0,0,0.35)", border: `1px solid ${HOME_THEME.border}` }}>
-      {options.map((o) => {
-        const on = o.value === value;
-        return (
-          <button
-            key={o.value}
-            onClick={() => onChange(o.value)}
-            style={{
-              padding: "5px 12px",
-              borderRadius: 7,
-              border: "none",
-              cursor: "pointer",
-              fontSize: 12,
-              fontWeight: 800,
-              letterSpacing: "0.06em",
-              background: on ? bRgba(HOME_THEME.cyan, 0.18) : "transparent",
-              color: on ? HOME_THEME.cyan : HOME_THEME.muted,
-              opacity: on ? 1 : 0.6,
-            }}
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-/**
- * Balance Projection — the running combined balance across the month, with a
- * hover guide and a tooltip carrying the exact date and balance.
- *
- * The calendar answers "what happens on the 14th". This answers the question
- * the calendar cannot: "does the balance ever go negative before payday", which
- * is a shape, not a cell.
- */
-function ProjectionChart({ series, currency }: { series: { date: string; balance: number }[]; currency: string }) {
-  const [hover, setHover] = useState<number | null>(null);
-  if (series.length < 2) {
-    return <div style={{ height: 240, display: "grid", placeItems: "center", color: HOME_THEME.muted, fontSize: 14 }}>Add entries to see the projection.</div>;
-  }
-  const W = 560, H = 240, padL = 4, padR = 4, padT = 8, padB = 18;
-  const ys = series.map((p) => p.balance);
-  const maxY = Math.max(...ys, 0);
-  const minY = Math.min(...ys, 0);
-  const span = Math.max(maxY - minY, 1);
-  const x = (i: number) => padL + (i / (series.length - 1)) * (W - padL - padR);
-  const y = (v: number) => padT + (1 - (v - minY) / span) * (H - padT - padB);
-  const zeroY = y(0);
-  const path = smoothPath(series.map((p, i) => [x(i), y(p.balance)] as [number, number]), 0.22);
-  const ticks = series.filter((_, i) => i % Math.ceil(series.length / 8) === 0);
-
-  const onMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    setHover(Math.round(ratio * (series.length - 1)));
-  };
-  const hp = hover !== null ? series[hover] : null;
-  const hx = hover !== null ? (hover / (series.length - 1)) * 100 : 0;
-
-  return (
-    <div style={{ position: "relative" }} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none">
-        <defs>
-          <linearGradient id="projAreaFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={LIGHT_BLUE} stopOpacity={0.32} />
-            <stop offset="100%" stopColor={LIGHT_BLUE} stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <line x1={padL} x2={W - padR} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.18)" strokeDasharray="3 5" />
-        <path d={`${path} L ${x(series.length - 1).toFixed(1)} ${H - padB} L ${x(0).toFixed(1)} ${H - padB} Z`} fill="url(#projAreaFill)" stroke="none" />
-        {/* soft under-stroke = neon glow without an SVG filter */}
-        <path d={path} fill="none" stroke={bRgba(LIGHT_BLUE, 0.45)} strokeWidth={9} strokeLinejoin="round" strokeLinecap="round" />
-        <path d={path} fill="none" stroke={LIGHT_BLUE} strokeWidth={3} strokeLinejoin="round" strokeLinecap="round" />
-        {hp && <line x1={x(hover!)} x2={x(hover!)} y1={padT} y2={H - padB} stroke="rgba(255,255,255,0.28)" strokeWidth={1} />}
-        {hp && <circle cx={x(hover!)} cy={y(hp.balance)} r={3.5} fill={LIGHT_BLUE} stroke={INK} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
-        {ticks.map((p, i) => (
-          <text key={i} x={x(series.indexOf(p))} y={H - 4} fill={HOME_THEME.muted} fontSize={11} textAnchor="middle">{shortDate(p.date)}</text>
-        ))}
-      </svg>
-      {hp && (
-        <div style={{ position: "absolute", top: 0, left: `${hx}%`, transform: `translateX(${hx > 60 ? "-108%" : "8px"})`, pointerEvents: "none", background: "rgba(5,8,14,0.88)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: `1px solid ${bRgba(LIGHT_BLUE, 0.22)}`, borderRadius: 8, padding: "6px 10px", whiteSpace: "nowrap", boxShadow: "0 8px 20px rgba(0,0,0,0.5)" }}>
-          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.muted }}>{shortDate(hp.date)}</div>
-          <div style={{ fontSize: 17, fontWeight: 900, color: hp.balance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(hp.balance, currency)}</div>
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -1989,7 +1859,7 @@ type PaceSeries = {
 };
 function SpendPaceCard({ series, currency }: { series: PaceSeries; currency: string }) {
   const [hover, setHover] = useState<number | null>(null);
-  const W = 680, H = 250, PADL = 8, PADR = 8, PADT = 12, PADB = 26;
+  const W = 450, H = 235, PADL = 6, PADR = 6, PADT = 12, PADB = 24;
   const n = Math.max(series.span, 1);
   const plotW = W - PADL - PADR;
   const plotH = H - PADT - PADB;
@@ -2083,12 +1953,12 @@ function SpendPaceCard({ series, currency }: { series: PaceSeries; currency: str
           />
         ))}
 
-        <g fill={CHART.axis} fontSize={11} textAnchor="middle">
+        <g fill={CHART.axis} fontSize={10} textAnchor="middle">
           {series.labels.map((l, i) => (i % step === 0 ? <text key={i} x={px(i)} y={H - 8}>{l}</text> : null))}
         </g>
       </svg>
 
-      <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 16, justifyContent: "space-between", fontSize: 12, fontVariantNumeric: "tabular-nums" }}>
+      <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: "4px 14px", justifyContent: "space-between", fontSize: 11.5, fontVariantNumeric: "tabular-nums" }}>
         <span style={{ opacity: 0.6, display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 12, height: 0, borderTop: `2px solid ${accent}`, display: "inline-block" }} />
           Spent <b style={{ color: HOME_THEME.text }}>{fmtMoney(spent, currency)}</b>
@@ -2123,7 +1993,6 @@ function CategoryDonutCard({ slices, currency, range }: { slices: Intel["slices"
   const hasAvg = slices.some((x) => x.avg != null);
   const avgTotal = slices.reduce((s, x) => s + (x.avg ?? 0), 0);
   const CX = 60, CY = 60, R = 46, POP = 5;
-  const DONUT_PX = 168;
 
   // Wedge path. `push` offsets the slice along its own mid-angle so the hovered
   // one lifts out of the pie instead of just changing colour.
@@ -2155,9 +2024,13 @@ function CategoryDonutCard({ slices, currency, range }: { slices: Intel["slices"
       {total <= 0 ? (
         <div style={{ flex: 1, display: "grid", placeItems: "center", opacity: 0.55, fontSize: 14, textAlign: "center" }}>No categorized spend {RANGE_WINDOW_LABEL[range].toLowerCase()}.</div>
       ) : (
-        <div style={{ display: "flex", alignItems: "center", gap: 14, minHeight: 0 }}>
-          <div style={{ position: "relative", flex: "none" }}>
-            <svg viewBox="0 0 120 120" width={DONUT_PX} height={DONUT_PX} onMouseLeave={() => setHover(null)} style={{ overflow: "visible" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, minHeight: 0 }}>
+          {/* Half the card is the pie, half is the words. Both halves are
+              `flex: 1` rather than a fixed pie width, so the split holds at any
+              card width instead of the legend absorbing every extra pixel. */}
+          <div style={{ flex: 1, minWidth: 0, display: "grid", placeItems: "center" }}>
+            <div style={{ position: "relative", width: "100%", maxWidth: 210, aspectRatio: "1 / 1" }}>
+            <svg viewBox="0 0 120 120" width="100%" height="100%" onMouseLeave={() => setHover(null)} style={{ overflow: "visible", display: "block" }}>
               {arcs.map(({ sl, a0, a1 }, i) => {
                 const on = hover === i;
                 const dim = hover !== null && !on;
@@ -2191,17 +2064,24 @@ function CategoryDonutCard({ slices, currency, range }: { slices: Intel["slices"
                 )}
               </div>
             </div>
+            </div>
           </div>
 
-          <div style={{ flex: 1, minWidth: 0, display: "grid", gap: 2, fontSize: 12, fontVariantNumeric: "tabular-nums" }} onMouseLeave={() => setHover(null)}>
+          <div style={{ flex: 1.15, minWidth: 0, display: "grid", gap: 2, fontSize: 11.5, fontVariantNumeric: "tabular-nums", alignContent: "center" }} onMouseLeave={() => setHover(null)}>
             {slices.slice(0, 8).map((sl, i) => {
               const on = hover === i;
               return (
                 <div
                   key={i}
                   onMouseEnter={() => setHover(i)}
+                  title={
+                    `${sl.label}: ${fmtMoney(sl.value, currency)} · ${Math.round((sl.value / total) * 100)}% of spend` +
+                    (sl.avg != null && sl.avg > 0
+                      ? ` · typical month ${fmtMoney(sl.avg, currency)} (${sl.value >= sl.avg ? "+" : "−"}${fmtMoney(Math.abs(sl.value - sl.avg), currency)})`
+                      : "")
+                  }
                   style={{
-                    display: "flex", alignItems: "center", gap: 7, padding: "3px 6px", borderRadius: 7, cursor: "pointer",
+                    display: "flex", alignItems: "center", gap: 6, padding: "3px 4px", borderRadius: 7, cursor: "pointer",
                     background: on ? "rgba(255,255,255,0.07)" : "transparent",
                     opacity: hover !== null && !on ? 0.45 : 1,
                     transition: "background .15s ease, opacity .15s ease",
@@ -2209,21 +2089,18 @@ function CategoryDonutCard({ slices, currency, range }: { slices: Intel["slices"
                 >
                   <span style={{ width: 9, height: 9, borderRadius: 999, background: sl.color, boxShadow: `0 0 8px ${sl.color}`, flex: "none" }} />
                   <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: on ? 800 : 600, color: on ? HOME_THEME.text : "rgba(255,255,255,0.8)" }}>{sl.label}</span>
-                  <b style={{ width: 76, textAlign: "right", flex: "none", color: on ? HOME_THEME.text : "rgba(255,255,255,0.55)" }}>{fmtMoney(sl.value, currency).replace(/\.\d+$/, "")}</b>
-                  <span style={{ width: 40, textAlign: "right", flex: "none", opacity: 0.5 }}>{Math.round((sl.value / total) * 100)}%</span>
+                  <b style={{ width: 50, textAlign: "right", flex: "none", color: on ? HOME_THEME.text : "rgba(255,255,255,0.55)" }}>{fmtMoney(sl.value, currency).replace(/\.\d+$/, "")}</b>
                   {hasAvg && (() => {
                     const avg = sl.avg ?? 0;
                     // A category with no history has nothing to be over or
                     // under, and printing "+100%" for its first month would be
                     // noise dressed as a signal.
-                    if (avg <= 0) return <span style={{ width: 96, textAlign: "right", flex: "none", opacity: 0.3 }}>new</span>;
+                    if (avg <= 0) return <span style={{ width: 38, textAlign: "right", flex: "none", opacity: 0.3 }}>new</span>;
                     const d = sl.value - avg;
                     const pct = Math.round((d / avg) * 100);
                     return (
-                      <span style={{ width: 96, textAlign: "right", flex: "none", color: d > 0 ? SOFT_RED : HOME_THEME.green, opacity: on ? 1 : 0.75 }}
-                        title={`Typical month: ${fmtMoney(avg, currency)}`}>
-                        {d > 0 ? "▲" : "▼"} {fmtMoney(Math.abs(d), currency).replace(/\.\d+$/, "")}
-                        <span style={{ opacity: 0.6 }}> {Math.abs(pct)}%</span>
+                      <span style={{ width: 38, textAlign: "right", flex: "none", color: d > 0 ? SOFT_RED : HOME_THEME.green, opacity: on ? 1 : 0.8 }}>
+                        {d > 0 ? "▲" : "▼"}{Math.abs(pct)}%
                       </span>
                     );
                   })()}
@@ -2306,14 +2183,16 @@ function BalanceCheckCard({ data, currency }: { data: Reconcile | null; currency
 }
 
 /** Grouped in/out bar chart for the cash-flow card. */
-function CashFlowBars({ buckets, currency, beginningBalance = 0 }: { buckets: { label: string; inflow: number; outflow: number }[]; currency: string; beginningBalance?: number }) {
+function CashFlowBars({ buckets, currency, beginningBalance = 0, height = 240 }: { buckets: { label: string; inflow: number; outflow: number }[]; currency: string; beginningBalance?: number; height?: number }) {
   const [hover, setHover] = useState<number | null>(null);
   if (!buckets.length) {
     return <div style={{ height: 260, display: "grid", placeItems: "center", color: HOME_THEME.muted, opacity: 0.6, fontSize: 14 }}>No cash flow this period yet.</div>;
   }
   const max = Math.max(1, ...buckets.map((b) => Math.max(b.inflow, b.outflow)));
-  const H = 240;
+  const H = height;
   const grid = [0, 0.5, 1];
+  // Keep roughly a label every ~48px of chart, whatever the bucket count.
+  const labelEvery = buckets.length > 24 ? 4 : buckets.length > 16 ? 3 : buckets.length > 10 ? 2 : 1;
 
   // Running balance is still computed for the hover tooltip, but it is no longer
   // drawn as a line/axis on the chart — the bars alone carry the story.
@@ -2359,14 +2238,23 @@ function CashFlowBars({ buckets, currency, beginningBalance = 0 }: { buckets: { 
             </div>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 10, fontSize: 12, color: HOME_THEME.muted }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: HOME_THEME.green }} />In</span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: SOFT_RED }} />Out</span>
-        </div>
-        <div style={{ display: "flex", gap: buckets.length > 20 ? 2 : 8, marginTop: 8 }}>
+        {/* A day label is ~30px wide and a cell is ~27px at 17 buckets, so
+            `overflow: hidden` per cell was slicing the last character off
+            every single label ("8-12" rendering as "8-1"). Labels are thinned
+            to every Nth instead, and the ones that survive are allowed to
+            overflow their cell — their neighbours are empty strings, so there
+            is nothing to collide with. */}
+        <div style={{ display: "flex", gap: buckets.length > 20 ? 2 : 8, marginTop: 10 }}>
           {buckets.map((b, i) => (
-            <div key={`${b.label}-l-${i}`} style={{ flex: 1, minWidth: 0, textAlign: "center", fontSize: 12, color: HOME_THEME.muted, opacity: hover === i ? 1 : 0.5, overflow: "hidden", whiteSpace: "nowrap" }}>
-              {buckets.length > 16 && i % 2 === 1 ? "" : b.label}
+            <div
+              key={`${b.label}-l-${i}`}
+              style={{
+                flex: 1, minWidth: 0, textAlign: "center", fontSize: 12,
+                color: HOME_THEME.muted, opacity: hover === i ? 1 : 0.5,
+                whiteSpace: "nowrap", overflow: "visible", pointerEvents: "none",
+              }}
+            >
+              {i % labelEvery === 0 ? b.label : ""}
             </div>
           ))}
         </div>

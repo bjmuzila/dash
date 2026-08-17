@@ -1,5 +1,61 @@
 # Changelog
 
+## 2026-08-16 - Back to four across; Where It Went splits pie / words
+
+Edited: `owner-vite/src/pages/Budget.tsx`.
+
+Reverted the two-row intelligence grid to **one row of four**. `auto-fit`
+collapses empty tracks, so four children means four equal columns — ~453px each
+on a 1878px monitor, not the 280px minimum. Both graphic cards are sized for
+that width rather than assuming it:
+
+- **Spend Pace** viewBox 680x250 -> **450x235**. With `preserveAspectRatio` the
+  whole SVG scales to the card, so an 11px label inside a 680-wide box rendered
+  at 418px came out at ~7px. At 450 the viewBox is ~1:1 with the card and the
+  axis text renders at the size it says.
+- **Where It Went** is now pie on one side, words on the other, both `flex`
+  rather than a fixed pie width, so the split holds as the card resizes.
+
+The split is 1 : 1.15 in favour of the words, not a straight half. A true 50/50
+leaves 67px for the label column at this card width, which puts "Car expenses"
+straight back into an ellipsis — the clipping this card was fixed for two
+changes ago. At 1:1.15 the pie is 190px and the label column 101px, which fits
+every current category name.
+
+Paying for that: the share-of-total column is gone (the pie already encodes it)
+and the delta keeps only its percentage. Both dollar figures moved into the row
+tooltip, which now reads "Car expenses: $445 · 14% of spend · typical month
+$645 (−$200)" — the precise number belongs there once the column is 38px wide.
+
+## 2026-08-16 - Cash Flow labels were being sliced; Projection tab removed
+
+Edited: `owner-vite/src/pages/Budget.tsx`.
+
+**Every x-axis label on the Cash Flow chart was losing its last character** —
+"8-12" rendering as "8-1", "8-28" as "8-2". Each label sits in its own flex
+cell with `overflow: hidden`, and at 17 active days across that card a cell is
+~25px while a day label is ~30px. It had nothing to do with the card being too
+narrow; the label simply never fit its own cell.
+
+Two changes: labels are thinned by bucket count (`labelEvery` — every 2nd at
+>10 buckets, 3rd at >16, 4th at >24) and the survivors may overflow their cell,
+since their neighbours render an empty string and there is nothing to collide
+with. Measured across 10/14/17/22/31 buckets the gap between shown labels is
+55-98px against a ~30px label, so nothing overlaps at any bucket count.
+
+**The In/Out legend was drawn twice** — once in the card header, once inside
+`CashFlowBars` below the plot. Removed the inner one.
+
+**The chart now fills the card.** It was a hard-coded 240px sitting next to a
+~600px calendar, leaving a third of the card empty; `CashFlowBars` takes a
+`height` prop now and the overview passes 430.
+
+**Removed the Calendar / Projection toggle** from the Cashflow Calendar, along
+with `ProjectionChart`, `Segmented` and `smoothPath` — all three existed only
+to serve that toggle. Worth noting for the record that I ported the projection
+back in earlier today on the grounds that dropping it looked accidental. It
+wasn't; it was not wanted. The code is in git history if it is ever missed.
+
 ## 2026-08-16 - Where It Went: each category against its own typical month
 
 Edited: `owner-vite/src/pages/Budget.tsx`.

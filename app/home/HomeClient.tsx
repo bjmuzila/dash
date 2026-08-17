@@ -1778,7 +1778,7 @@ export function HomeClient({
         </div>
       )}
       <main className="home-no-hover" style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0 }}>
-        <div className="home-split" style={{ flex: 1, display: "flex", flexDirection: "row", padding: "24px", gap: 32, minHeight: 0, overflow: "hidden" }}>
+        <div className="home-split" style={{ flex: 1, display: "flex", flexDirection: "row", padding: "6px 10px 10px", gap: 12, minHeight: 0, overflow: "hidden" }}>
           <div className="home-col home-col-left" style={{ width: "55%", display: "flex", flexDirection: "column", minWidth: 0, height: "100%", overflow: "hidden", minHeight: 0 }}>
             {/* Card tabs live above the card, sitting on its top edge. Hidden
                 along with the card when the econ panel is expanded to full. */}
@@ -1888,7 +1888,7 @@ export function HomeClient({
               </div>
             </div>
 
-            <div style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: econSize === "min" ? "0 0 auto" : 1, minHeight: 0, overflow: "hidden", marginTop: econSize === "full" ? 0 : 24 }}>
+            <div style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: econSize === "min" ? "0 0 auto" : 1, minHeight: 0, overflow: "hidden", marginTop: econSize === "full" ? 0 : 12 }}>
               {/* Tabs + right-side controls scale down together so the size
                   buttons / discord / refresh never get pushed out of the card
                   on a narrow window. */}
@@ -1938,34 +1938,34 @@ export function HomeClient({
                 </div>
               </div>
               </FitScale>
-              <div style={{ flex: 1, minHeight: 0, overflow: "hidden", padding: 24, display: econSize === "min" ? "none" : "block" }}>
+              <div style={{ flex: 1, minHeight: 0, overflow: "hidden", padding: 14, display: econSize === "min" ? "none" : "block" }}>
                 {activeTab === "calendar" && (
-                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
+                  <div className="tab-panel-embed" style={{ margin: "-14px", height: "calc(100% + 28px)" }}>
                     <EconCalendarPanel controlsPortalEl={econControlsSlotEl} />
                   </div>
                 )}
                 {activeTab === "volgex" && (
-                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
+                  <div className="tab-panel-embed" style={{ margin: "-14px", height: "calc(100% + 28px)" }}>
                     <VolGexFlowPanel />
                   </div>
                 )}
                 {activeTab === "flow" && (
-                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
+                  <div className="tab-panel-embed" style={{ margin: "-14px", height: "calc(100% + 28px)" }}>
                     <FlowNetPremPanel />
                   </div>
                 )}
                 {activeTab === "whale" && (
-                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
+                  <div className="tab-panel-embed" style={{ margin: "-14px", height: "calc(100% + 28px)" }}>
                     <WhaleOrdersPanel />
                   </div>
                 )}
                 {activeTab === "greeks" && (
-                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)" }}>
+                  <div className="tab-panel-embed" style={{ margin: "-14px", height: "calc(100% + 28px)" }}>
                     <GreeksHomePanel />
                   </div>
                 )}
                 {activeTab === "pulse" && (
-                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)", overflow: "auto" }}>
+                  <div className="tab-panel-embed" style={{ margin: "-14px", height: "calc(100% + 28px)", overflow: "auto" }}>
                     <GexPulsePanel
                       spot={chartSpot}
                       cb={mvcStrike}
@@ -1980,7 +1980,7 @@ export function HomeClient({
                   </div>
                 )}
                 {activeTab === "ib" && (
-                  <div className="tab-panel-embed" style={{ margin: "-24px", height: "calc(100% + 48px)", overflow: "auto" }}>
+                  <div className="tab-panel-embed" style={{ margin: "-14px", height: "calc(100% + 28px)", overflow: "auto" }}>
                     <IbStatsTab />
                   </div>
                 )}
@@ -1993,12 +1993,12 @@ export function HomeClient({
                 a timestamp. Sourced from user-authored public/signals.txt (polled).
                 Replaced the NET GEX / CALL WALL / PUT WALL / FLIP / CB / MAX PAIN
                 readout, which still lives on the left Levels strip above the chart. */}
-            <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 16, marginBottom: 16 }}>
+            <div className="grad-divider-b" style={{ flexShrink: 0, paddingBottom: 10, marginBottom: 10 }}>
               <HomeGaugeRail gammaPctVol={gaugeMetrics.gammaPctVol} ibDirection={ibDirection} />
             </div>
 
             <div ref={heatmapContainerRef} style={{ background: "rgba(13,17,25,0.85)", borderRadius: 16, border: "1px solid rgba(255,255,255,0.10)", display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
-              <div className="grad-divider-b" style={{ paddingBottom: 16, display: "flex", flexDirection: "column", gap: 12, flexShrink: 0 }}>
+              <div className="grad-divider-b" style={{ paddingBottom: 10, display: "flex", flexDirection: "column", gap: 8, flexShrink: 0 }}>
                 {/* Header row scales to fit — title + intensity/speed controls on
                     the left and refresh/snap/discord/view-switch on the right
                     otherwise overflow the card and get clipped on a narrow window. */}
