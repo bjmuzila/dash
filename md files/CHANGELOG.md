@@ -1,57 +1,99 @@
 # Changelog
 
-## 2026-08-17 - /levels rebuilt: one normalized axis, four views, four board modes
+## 2026-08-16 - Where It Went: each category against its own typical month
 
-Edited: `app/levels/page.tsx` (full replacement).
+Edited: `owner-vite/src/pages/Budget.tsx`.
 
-The old page drew one identical cell per ticker. 169 of them made it a wall of
-chrome you had to READ rather than SEE: every cell cost a glance, and "what is
-the whole universe doing" was not on the page at any zoom. Deleted outright —
-the four-slot pin dock, the 169-cell index grid, and both collapsed sections
-("Ladder table", "Aligned range rails"). None of it survives.
+Spend Pace got a typical-month benchmark; the category card did not, so it
+still answered "Rent was $2,240" without the half that matters — whether
+$2,240 is normal for Rent. Every legend row now carries a delta against what
+that category costs in a typical month.
 
-Replaced with ONE SHARED AXIS: x = (spot - CB) / CB as a percent, clamped to
-+/-3%. Normalized, so SPX at 6,400 and a $40 stock land on the same scale and
-can be compared directly - which is the whole trick. Position carries the
-meaning, so the shape of the roster is legible before you read a symbol.
+`categoryAvg` averages `yearRows` by month and category, excluding the month on
+screen. A category missing from a past month counts as a zero for that month,
+which is right here: the register covers every month it has rows for, so absent
+means nothing was spent, not that nothing is known. That is the opposite of the
+rule on the Categories grid, where the source is imported statements and a
+missing month genuinely IS unknown — the two divisors differ because the two
+data sources mean different things by "missing".
 
-Four views in the top switcher. BOARD is the axis itself. DESK is a rail plus
-ONE large price-scaled ladder plus a compare stack, for when you are working a
-single ticker - the old dock put four ladders side by side at ~300px each,
-which is exactly why the ladder was unreadable. MONITOR is every level as a
-table column, grouped by regime and sortable. LANES is five buckets by wall
-position where the COUNT per lane is the read: "22 at core, 28 above the call
-wall" is a market-wide sentence the old page could not say.
+Shown as ▲/▼ with the dollar gap and the percentage, red over / green under,
+with the exact typical figure in the row's tooltip. The donut centre picks it up
+too: hovering a wedge shows "usually $440" under the label, and with nothing
+hovered it shows the typical month's total under the month's own.
 
-Four BOARD modes in a second switcher. CLOUD is the default: every ticker named
-and packed onto the axis, with the five sections separated by rules and each
-band carrying its own count. RIDGE bins the same axis into a histogram and
-names only the tails, because a name helps for the handful that have left their
-walls and is noise for the 140 that have not. SWARM gives each sector its own
-row, so the page reads rotation rather than tickers, with a sortable mean-delta
-column. QUADRANTS plots distance from core against net GEX - the quadrant a
-name sits in IS the setup. Its y axis is a SIGNED SQRT: a handful of index
-names carry net GEX an order of magnitude above everything else and on a linear
-axis they own the extremes while the other 160 collapse into one band.
+Two cases deliberately not dressed up as signal:
 
-Geometry is derived ONCE into a `Mark[]` and consumed by every view, so two
-views cannot disagree about where a ticker sits. Chip and dot COLOUR still comes
-from wall state only (CB gold, CW blue, PW red) and never from where spot
-happens to be - a name past its call wall reads blue wherever it lands on the
-axis. Nothing on the page repaints as spot moves except the marks that ARE spot.
+- **A category with no history reads "new"**, not "+100%". Its first month has
+  nothing to be over or under.
+- **The column only appears on the monthly view.** On a 7-day window a
+  "vs typical month" delta would be comparing a week against a month and would
+  read massively under every time.
 
-Data is unchanged and no new endpoint was added: `/proxy/scanner?any=1` for the
-5m sweep, `/api/tt-quotes` chunked at 5s for the live spot overlay. Prefs and
-pins bumped to `cb-levels-prefs-v6` / `cb-levels-pins-v2` since the shape of
-both changed. Sector grouping for SWARM is a literal map in the file with an
-explicit "Other" row - the recorder does not store a sector, and adding a
-request for one to draw a chart would be the wrong trade; a name silently
-vanishing from a board is the failure mode this page exists to fix.
+Checked against the shape of the current month: Rent 2,240 vs 2,240 typical
+(0%), Car expenses 445 vs 440 (▲1%), debt payoff 302 vs 291 (▲4%) — small
+honest numbers rather than the noise a percentage-only column would produce.
 
-No colour literals: every value interpolates from homeTheme / LEVEL_COLORS
-through `alpha()`. Not verified locally - the container could not reach the
-repo's toolchain this session, so `tsc --noEmit` and `npm run build` still need
-a run on the laptop before push.
+## 2026-08-16 - Spend Pace benchmarked against a real month's shape, not a straight line
+
+Edited: `owner-vite/src/pages/Budget.tsx`.
+
+**The badge was always red and that was the chart's fault, not the spending's.**
+Rent, the car and the debt payment clear in the first five days, so cumulative
+spend jumps most of the month's total before the 6th and then crawls. Measured
+against a straight-line budget ramp that is "OVER $1,654" on the 16th of every
+month, forever. A warning that never turns off is not a warning.
+
+The benchmark is now the average of the **prior months' own day-by-day
+curves** — the rent step is in the reference line too, so the comparison is
+like for like. Built from `yearRows` (already loaded on this tab), excluding
+the month being drawn, and resampled onto the loaded month's length so a
+28-day February lines up with a 31-day March by position rather than by index
+— otherwise February contributes nothing to days 29-31 and drags the tail
+down.
+
+On the numbers in front of me the difference is the whole point:
+
+| day | typical month | straight ramp |
+|-----|---------------|---------------|
+| 1   | $2,240        | $134          |
+| 5   | $2,974        | $668          |
+| 16  | $3,475        | $2,138        |
+| 31  | $4,142        | $4,142        |
+
+$3,825 spent on the 16th reads **+$1,687 over** against the straight line and
+**+$351 over** against the shape. The second number is the one worth acting on.
+
+The badge now says which reference it used — "OVER $351 vs avg", falling back
+to "vs budget" when there is no history to average. The straight budget line is
+still drawn, demoted to a faint dash, because what you intended is still worth
+seeing next to what you do.
+
+Also added a hover: a guide line with the day's actual and the typical month's
+value at that same day, so any point in the month can be checked, not just
+today.
+
+## 2026-08-16 - Spend Pace and Where It Went get the width they needed
+
+Edited: `owner-vite/src/pages/Budget.tsx`.
+
+The intelligence row was four cards on one line at `minmax(280px, 1fr)`. Two of
+them are stat lists and read fine narrow; two are graphics that were being
+crushed. **Where It Went's legend was clipped** — `overflow: hidden` on the
+legend column plus a 32px percentage cell meant "73%" was cut in half at the
+right edge.
+
+Now two rows: Safe to Spend + Weekly Balance Check at `minmax(260px)`, then
+Spend Pace + Where It Went at `minmax(430px)` — roughly double the width each.
+
+- **Spend Pace** was a 300x132 viewBox with `preserveAspectRatio="none"`, which
+  stretches the axis text horizontally as the card grows. Redrawn at 680x250
+  with proportional scaling, real padding, 11px axis labels and a label every
+  ~3 days instead of every ~5.
+- **Where It Went**: donut 132px -> 168px, centre readout up to 19px, legend
+  shows 8 rows instead of 6, and the amount/percent cells are fixed-width so
+  they form a column instead of drifting with label length. The `overflow:
+  hidden` that did the clipping is gone; the label span already ellipsises.
 
 ## 2026-08-16 - Budget vs actual now on BOTH Categories tabs, from one component
 

@@ -16,19 +16,32 @@
 // snapshot dates, so a name that missed a sweep compares against the last
 // session it actually has instead of reading as flat.
 //
-// TWO MODES over the SAME payload. Both routes return the absolute level and
-// the Δ on every strike, so switching modes is a re-render, never a fetch:
-//   levels — net GEX as that session closed
-//   delta  — that level minus the session before it
+// THREE MODES over the SAME payload. Every route returns the absolute level,
+// the PRIOR level and the Δ on every strike, so switching modes is a re-render,
+// never a fetch:
+//   levels  — net GEX as that session closed
+//   delta   — that level minus the session before it
+//   compare — prior and now drawn on one rail, plus the four-way split below
 // Retention is ~400 days, so the date picker reaches back a year. Picking an
 // older session switches to `levels`, because "what did the board look like on
 // the 8th" is a level question; the Δ tab is right there for the other read.
+//
+// WHY `compare` EXISTS. A red Δ bar is AMBIGUOUS on its own. `chg` is
+// `now − prior` on a signed net_gex, so "net GEX at this strike went down" is
+// equally consistent with two opposite tapes:
+//   positive (call-dominant) gamma being TAKEN OFF, and
+//   negative (put-dominant) gamma being PILED ON.
+// The Δ ladder cannot tell those apart and neither can the Most-pulled sort.
+// Compare mode draws yesterday as an outline and today as a fill on the same
+// rung — so a shrinking green bar and a growing red bar are visibly different
+// events — and splitChange() totals the four cases exactly. Do not "simplify"
+// this back into a single Δ bar.
 //
 // COLOUR: green/red alone fails deuteranope separation (ΔE 7.4), so the sign is
 // ALSO carried by which side of the centre rail a bar sits on and by an
 // explicit +/− on every value. Do not "simplify" this to colour-only bars.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { HOME_THEME, LIGHT_BLUE, homeButtonStyle, homeSecondaryButtonStyle } from "../lib/theme";
 import { PageShell, Card } from "../components/PageCard";
 import { ThemedSelect } from "../components/ThemedSelect";
@@ -43,7 +56,7 @@ const MONO = "var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, m
 
 // ── payload shapes ──────────────────────────────────────────────────────────
 /** Which reading the board is showing. Not a filter — a different number. */
-type Mode = "delta" | "levels";
+type Mode = "delta" | "levels" | "compare";
 
 type BoardStrike = { strike: number; chg: number };
 type BoardLevelStrike = { strike: number; gex: number };
@@ -90,7 +103,49 @@ const MODE_COPY: Record<Mode, {
     axis: "← negative · positive →",
     sorts: ["Biggest gamma", "Most positive", "Most negative"],
   },
+  // Compare is a Δ reading — same rail numbers, same sorts as `delta`. Only the
+  // ladder and the header strip differ, so the two tabs rank identically and a
+  // reader can flip between them without the list reshuffling under them.
+  compare: {
+    tab: "Prior → now",
+    ladderCol: "Δ 1D",
+    bigLabel: "net Δ 1D",
+    axis: "← negative · positive →",
+    sorts: ["Biggest move", "Most built", "Most pulled"],
+  },
 };
+
+/** Δ readings — everything that needs a baseline session to mean anything. */
+const isDelta = (m: Mode) => m !== "levels";
+
+/**
+ * Split a session's Δ into the four things that can produce it.
+ *
+ * Positive and negative gamma are tracked SEPARATELY per strike, because the
+ * headline Δ is ambiguous: net GEX falling is equally consistent with call
+ * gamma being taken off and with put gamma being piled on, and those are
+ * opposite reads of the tape.
+ *
+ * The split is exact and additive by construction:
+ *   posPart = max(now,0) − max(prior,0)     change in the positive leg
+ *   negPart = min(now,0) − min(prior,0)     change in the negative leg
+ *   posPart + negPart === now − prior === chg
+ * That identity holds even when a strike FLIPS sign across the session, which
+ * is exactly the case a naive `prior > 0 ? …` bucket would misfile. So the four
+ * buckets always sum back to the headline net Δ — if they ever don't, the bug
+ * is here and not in the reader's arithmetic.
+ */
+function splitChange(rows: ChangeRow[]) {
+  let posBuilt = 0, posPulled = 0, negBuilt = 0, negPulled = 0;
+  for (const r of rows) {
+    const posPart = Math.max(r.netGex, 0) - Math.max(r.prevNetGex, 0);
+    const negPart = Math.min(r.netGex, 0) - Math.min(r.prevNetGex, 0);
+    if (posPart >= 0) posBuilt += posPart; else posPulled += posPart;
+    // negPart < 0 means the negative leg got DEEPER, i.e. −γ was built.
+    if (negPart <= 0) negBuilt += negPart; else negPulled += negPart;
+  }
+  return { posBuilt, posPulled, negBuilt, negPulled };
+}
 
 // ── formatting ──────────────────────────────────────────────────────────────
 function fmtBig(v: number): string {
@@ -115,52 +170,79 @@ const oneLine: CSSProperties = { whiteSpace: "nowrap", overflow: "hidden", textO
 // the top, like a DOM, so the shape matches every other ladder in the app.
 const LADDER_COLS = "82px 1fr 78px";
 
+/**
+ * One rung's bars, drawn out from a shared centre rail. `compare` passes TWO
+ * items (prior as an outline, now as a fill); the other modes pass one.
+ *
+ * The rail is absolutely positioned behind the stack rather than rendered
+ * inline per bar: two inline rails would stack into a dashed line and a
+ * two-bar rung would read as two adjacent strikes instead of one strike
+ * measured twice.
+ */
+function RailBars({ items, max }: { items: Array<{ v: number; ghost?: boolean }>; max: number }) {
+  const h = items.length > 1 ? 8 : 12;
+  return (
+    <span style={{ position: "relative", display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+      <span aria-hidden style={{ position: "absolute", left: "50%", top: -2, bottom: -2, width: 1, background: T.border }} />
+      {items.map((it, i) => {
+        const pos = it.v >= 0;
+        // A 2% floor keeps a real-but-tiny value visible; a true zero draws
+        // nothing, so "no change" and "a rounding crumb" stay distinguishable.
+        const pct = it.v === 0 ? 0 : Math.max(2, (Math.abs(it.v) / max) * 100);
+        const c = pos ? POS : NEG;
+        // Outline + wash for the prior session. Two solid bars would compete;
+        // the eye should land on TODAY and use yesterday as the reference edge.
+        const skin: CSSProperties = it.ghost
+          ? { border: `1px solid ${c}`, background: `${c}26`, boxSizing: "border-box" }
+          : { background: c, boxSizing: "border-box" };
+        return (
+          <span key={i} style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+            <span style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
+              {!pos && pct > 0 && <span style={{ width: `${pct}%`, height: h, borderRadius: "4px 0 0 4px", ...skin }} />}
+            </span>
+            <span style={{ width: 1, flexShrink: 0, margin: "0 2px" }} />
+            <span style={{ flex: 1, display: "flex" }}>
+              {pos && pct > 0 && <span style={{ width: `${pct}%`, height: h, borderRadius: "0 4px 4px 0", ...skin }} />}
+            </span>
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
 function Ladder({
-  rows, spot, mode, scrollRef,
+  rows, spot, mode,
 }: {
   rows: ChangeRow[];
   spot: number | null;
   mode: Mode;
-  /** The scrolling viewport this ladder is rendered inside. Typed structurally
-   *  rather than as React.RefObject so it fits both the React 18 and 19 ref
-   *  types without a cast. */
-  scrollRef?: { current: HTMLDivElement | null };
 }) {
   // The ONE place the mode picks a number. Everything below — the bar, the
   // scale, the sign, the colour — reads `val`, so the two views cannot drift
   // into drawing one number and labelling it as the other.
+  const cmp = mode === "compare";
   const val = (r: ChangeRow) => (mode === "levels" ? r.netGex : r.chg);
-  const max = rows.reduce((m, r) => Math.max(m, Math.abs(val(r))), 0) || 1;
+  // Compare draws two LEVELS per rung, so its scale has to cover both of them
+  // rather than the (much smaller) Δ between them — otherwise every bar pegs.
+  const max = rows.reduce(
+    (m, r) => Math.max(m, cmp ? Math.max(Math.abs(r.prevNetGex), Math.abs(r.netGex)) : Math.abs(val(r))),
+    0,
+  ) || 1;
   // The rung price is actually sitting on — marked, not sorted to the middle.
   const spotStrike = spot == null || !rows.length
     ? null
     : rows.reduce((b, r) => (Math.abs(r.strike - spot) < Math.abs(b.strike - spot) ? r : b), rows[0]).strike;
   const desc = [...rows].sort((a, b) => b.strike - a.strike);
 
-  // Open ON the money. The ladder is ±40 strikes deep and sorted high→low, so
-  // scrollTop 0 lands ~40 rungs above spot — the reader's first sight of a name
-  // was the far upside wing, and finding the strikes that matter meant scrolling
-  // every single time.
-  //
-  // Positioned by rect delta rather than offsetTop: the viewport is a plain div
-  // with no `position`, so offsetParent is somewhere up the card and offsetTop
-  // would be measured against the wrong box.
-  //
-  // useLayoutEffect, not useEffect — this runs before paint, so the ladder is
-  // never briefly seen at the top and then jumped.
-  const spotRowRef = useRef<HTMLDivElement | null>(null);
-  useLayoutEffect(() => {
-    const c = scrollRef?.current;
-    const r = spotRowRef.current;
-    if (!c || !r) return;
-    const delta = r.getBoundingClientRect().top - c.getBoundingClientRect().top;
-    c.scrollTop += delta - (c.clientHeight - r.offsetHeight) / 2;
-    // `rows` is a fresh array on every fetch, so this re-centres when the symbol
-    // or the session date changes — and NOT on an unrelated re-render, which
-    // would yank the view back while the reader is scrolling. `mode` is in here
-    // too: the two views have different row heights only in theory, but the
-    // toggle is exactly when a reader is looking for spot.
-  }, [rows, spotStrike, mode, scrollRef]);
+  // NO auto-scroll-to-spot. There used to be a useLayoutEffect here that parked
+  // the spot rung in the middle of the ladder's own scrolling viewport, because
+  // the ladder is ±40 strikes deep and sorted high→low — so scrollTop 0 opened
+  // on the far upside wing. That viewport is gone: the ladder now renders full
+  // length and the WINDOW scrolls. Recreating the behaviour would mean scrolling
+  // the page, which would drag the card header, the split chips and the symbol
+  // rail off-screen every time you arrowed to the next name. The cyan spot rung
+  // is still marked, and the whole ladder is visible by scrolling normally.
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -171,13 +253,15 @@ function Ladder({
       </div>
       {desc.map((r) => {
         const v = val(r);
-        const pos = v >= 0;
-        const pct = Math.max(2, (Math.abs(v) / max) * 100);
         const isSpot = spotStrike != null && r.strike === spotStrike;
+        // Prior first so it sits ABOVE today — the rung reads top-to-bottom as
+        // "was → is", which is the direction the tab name promises.
+        const bars = cmp
+          ? [{ v: r.prevNetGex, ghost: true }, { v: r.netGex }]
+          : [{ v }];
         return (
           <div
             key={r.strike}
-            ref={isSpot ? spotRowRef : undefined}
             title={`${r.strike} · now ${sgn(r.netGex)} · prior ${sgn(r.prevNetGex)} · Δ ${sgn(r.chg)}${r.hadPrev ? "" : " (new strike — no prior row)"}`}
             style={{
               display: "grid", gridTemplateColumns: LADDER_COLS, gap: 8, alignItems: "center",
@@ -192,15 +276,7 @@ function Ladder({
               </span>
               {isSpot && <span style={{ fontSize: 9, fontWeight: 800, color: T.cyan }}>◀</span>}
             </span>
-            <span style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
-              <span style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
-                {!pos && <span style={{ width: `${pct}%`, height: 12, borderRadius: "4px 0 0 4px", background: NEG }} />}
-              </span>
-              <span style={{ width: 1, height: 17, background: T.border, flexShrink: 0, margin: "0 2px" }} />
-              <span style={{ flex: 1, display: "flex" }}>
-                {pos && <span style={{ width: `${pct}%`, height: 12, borderRadius: "0 4px 4px 0", background: POS }} />}
-              </span>
-            </span>
+            <RailBars items={bars} max={max} />
             <span style={{ ...oneLine, textAlign: "right", fontFamily: MONO, fontSize: 12.5, fontWeight: 700, color: col(v) }}>
               {sgn(v)}
             </span>
@@ -213,12 +289,22 @@ function Ladder({
 
 // ── page ────────────────────────────────────────────────────────────────────
 const TOP_N = 5;
-// Both panes fill the window rather than sitting at a fixed 620/560px. The
-// subtrahend is everything above and below them that does NOT scroll — global
-// toolbar, card header, the controls row, the footnote and the shell's padding.
-// A `min` floor keeps the rail usable on a short laptop screen; below that the
-// page scrolls as a whole, which is the right failure.
-const PANE_H = "max(340px, calc(100vh - 318px))";
+// THE CARD IS FULL LENGTH AND THE PAGE SCROLLS. Both panes used to be pinned to
+// `max(340px, calc(100vh - 318px))` with the ladder scrolling INSIDE the card —
+// so the ±40-rung ladder was read through a ~400px slot while the page itself
+// never moved. Now the detail pane has no height at all: it renders all ~81
+// rungs, the card grows to fit, and the browser scrolls the whole page.
+//
+// The rail is the one thing that CANNOT follow that rule — it is 169 names, far
+// taller than any ladder, and letting it size the grid row would leave the card
+// several screens of empty space below the last strike. So it keeps its own
+// scroll and is sized BY the detail pane rather than by its own content: the
+// wrapper is `position: relative` and contributes only RAIL_MIN_H of intrinsic
+// height, and the rail inside it is `position: absolute; inset: 0`. Absolute
+// means the rail's 169 rows are out of flow and cannot inflate the grid row, so
+// the row height comes from the ladder and the rail fills exactly that. That is
+// what keeps the two panes level without a magic pixel number.
+const RAIL_MIN_H = 340;
 // The series only changes once a day at 16:05 ET, so this is a courtesy refresh
 // for a tab left open overnight — not a live poll. The ↻ button is the real
 // refresh path.
@@ -244,9 +330,6 @@ export default function GexGrowth() {
   // Monotonic token — clicking down the rail faster than the network answers
   // must not let an earlier name's ladder land under a later name's header.
   const detailReq = useRef(0);
-  // The ladder's scrolling viewport, so Ladder can park spot in the middle of it
-  // on every load instead of opening 40 rungs above the money.
-  const ladderScroll = useRef<HTMLDivElement | null>(null);
 
   // Session list. Loaded once — a new date only appears at 16:05 ET, and the ↻
   // button re-reads it along with everything else.
@@ -372,6 +455,22 @@ export default function GexGrowth() {
       : (selRow.strikes ?? []).map((k) => ({ strike: k.strike, v: k.chg })))
     : [];
   const sessionLabel = date || dates[0] || "latest";
+  // Compare mode's headline. Read off the DETAIL rows, not the rail row — the
+  // board payload carries only `chg` per strike and this needs both levels.
+  const split = useMemo(
+    () => (mode === "compare" && detail?.rows?.length && detail.prevDate ? splitChange(detail.rows) : null),
+    [mode, detail],
+  );
+  // Labelled so the sign on the value is never a surprise: "built" always adds
+  // magnitude on its own side, "pulled" always removes it.
+  const splitChips: Array<{ k: string; v: number; t: string }> = split
+    ? [
+      { k: "+γ built", v: split.posBuilt, t: "Positive (call-dominant) gamma ADDED — net GEX up" },
+      { k: "+γ pulled", v: split.posPulled, t: "Positive gamma TAKEN OFF — net GEX down without any new put gamma" },
+      { k: "−γ built", v: split.negBuilt, t: "Negative (put-dominant) gamma PILED ON — net GEX down" },
+      { k: "−γ pulled", v: split.negPulled, t: "Negative gamma COVERED — net GEX up" },
+    ]
+    : [];
 
   return (
     <PageShell>
@@ -402,14 +501,16 @@ export default function GexGrowth() {
           {/* Mode tabs. Both readings are already in the payload, so this is a
               re-render — switching never re-fetches and never re-diffs. */}
           <span style={{ display: "flex", gap: 4, border: `1px solid ${T.border}`, borderRadius: 999, padding: 3 }}>
-            {(["levels", "delta"] as const).map((m) => (
+            {(["levels", "delta", "compare"] as const).map((m) => (
               <button
                 key={m}
                 onClick={() => setMode(m)}
                 aria-pressed={mode === m}
                 title={m === "levels"
                   ? "Net GEX as that session closed"
-                  : "That session minus the one before it"}
+                  : m === "delta"
+                    ? "That session minus the one before it"
+                    : "Prior and current level on the same rung — tells apart +γ taken off from −γ piled on, which a single Δ bar cannot"}
                 style={{
                   ...(mode === m ? homeButtonStyle : homeSecondaryButtonStyle),
                   borderRadius: 999, padding: "5px 12px", border: mode === m ? undefined : "1px solid transparent",
@@ -456,15 +557,21 @@ export default function GexGrowth() {
           <div className="gexgrowth-split" style={{ display: "grid", gridTemplateColumns: "268px 1fr", gap: 14, alignItems: "stretch" }}>
 
             {/* ── rail ───────────────────────────────────────────────── */}
-            <div
-              tabIndex={0}
-              onKeyDown={onRailKey}
-              aria-label={mode === "levels" ? "Symbols ranked by absolute net GEX" : "Symbols ranked by absolute ΔGEX"}
-              style={{
-                border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden",
-                height: PANE_H, overflowY: "auto", outline: "none",
-              }}
-            >
+            {/* Wrapper carries only the floor height; the rail itself is out of
+                flow (see RAIL_MIN_H) so 169 names cannot stretch the grid row
+                past the ladder. `min-height` not `height`, so a short ladder
+                still gets a usable rail instead of a 40px sliver. */}
+            <div className="gexgrowth-rail-wrap" style={{ position: "relative", minHeight: RAIL_MIN_H }}>
+              <div
+                tabIndex={0}
+                onKeyDown={onRailKey}
+                aria-label={mode === "levels" ? "Symbols ranked by absolute net GEX" : "Symbols ranked by absolute ΔGEX"}
+                style={{
+                  position: "absolute", inset: 0,
+                  border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden",
+                  overflowY: "auto", outline: "none",
+                }}
+              >
               {rail.map((s) => {
                 const on = s.symbol === sel;
                 return (
@@ -504,16 +611,17 @@ export default function GexGrowth() {
               {rail.length === 0 && (
                 <div style={{ padding: 12, fontSize: 12, color: T.text, opacity: 0.5 }}>No symbol matches that filter.</div>
               )}
+              </div>
             </div>
 
             {/* ── detail ─────────────────────────────────────────────── */}
-            {/* Flex column at the same height as the rail: the header, the big
-                number and the top-N strip are fixed rows, and the ladder takes
-                whatever is left. That is what lets the ladder scroll inside a
-                full-height card instead of the page scrolling around it. */}
+            {/* No height and no inner scroller — this pane is what SIZES the
+                grid row. It renders the header, the big number, the strip and
+                the full ladder at natural height, the card grows to fit, and
+                the page scrolls. */}
             <div style={{
               border: `1px solid ${T.border}`, borderRadius: 14, padding: 14, background: T.panelBg,
-              minWidth: 0, height: PANE_H, display: "flex", flexDirection: "column",
+              minWidth: 0, display: "flex", flexDirection: "column",
             }}>
               {sel == null ? (
                 <div style={{ opacity: 0.6, fontSize: 13 }}>Pick a symbol.</div>
@@ -541,9 +649,28 @@ export default function GexGrowth() {
                     ) : null}
                   </div>
 
-                  {/* Top-N strip — the same five the rail ranked on, so the
-                      list and the chart can't tell different stories. */}
-                  {topStrikes.length ? (
+                  {/* Compare replaces the top-N strip with the four-way split —
+                      same vertical cost, and it is the whole reason the tab
+                      exists. The four values sum EXACTLY back to the net Δ
+                      above them (see splitChange), so this strip and the big
+                      number can never disagree. */}
+                  {splitChips.length ? (
+                    <div
+                      title="The four ways a session's net Δ can be produced. They sum exactly to the net Δ above."
+                      style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "0 0 12px" }}
+                    >
+                      {splitChips.map((c) => (
+                        <span key={c.k} title={c.t} style={{
+                          display: "flex", alignItems: "baseline", gap: 6,
+                          border: `1px solid ${T.border}`, borderRadius: 999, padding: "3px 10px",
+                          fontFamily: MONO, fontSize: 11.5,
+                        }}>
+                          <span style={{ opacity: 0.65 }}>{c.k}</span>
+                          <span style={{ fontWeight: 700, color: col(c.v) }}>{sgn(c.v)}</span>
+                        </span>
+                      ))}
+                    </div>
+                  ) : topStrikes.length ? (
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "0 0 12px" }}>
                       {topStrikes.map((k) => (
                         <span key={k.strike} style={{
@@ -562,7 +689,7 @@ export default function GexGrowth() {
                     <div style={{ color: NEG, fontSize: 13, fontFamily: MONO }}>Ladder failed: {detailErr}</div>
                   ) : detailLoading && !detail ? (
                     <div style={{ opacity: 0.6, fontSize: 13 }}>Reading ladder…</div>
-                  ) : mode === "delta" && detail && detail.date && !detail.prevDate ? (
+                  ) : isDelta(mode) && detail && detail.date && !detail.prevDate ? (
                     // Checked BEFORE the empty-rows case: a symbol on its first
                     // session has rows but no baseline, and "no recorded
                     // strikes" would be the wrong answer to why it looks blank.
@@ -576,20 +703,12 @@ export default function GexGrowth() {
                   ) : !detail?.rows?.length ? (
                     <div style={{ opacity: 0.6, fontSize: 13 }}>No recorded strikes for {sel}.</div>
                   ) : (
-                    // flex:1 + minHeight:0, not a fixed height — the ladder eats
-                    // the rest of the pane whatever the header above it costs.
-                    // minHeight:0 is load-bearing: a flex child defaults to
-                    // min-height:auto, which refuses to shrink below its content
-                    // and would push the ladder out of the card instead of
-                    // scrolling it.
-                    <div
-                      ref={ladderScroll}
-                      style={{
-                        opacity: detailLoading ? 0.55 : 1, transition: "opacity .12s",
-                        flex: 1, minHeight: 0, overflowY: "auto", paddingRight: 4,
-                      }}
-                    >
-                      <Ladder rows={detail.rows} spot={detail.spot ?? null} mode={mode} scrollRef={ladderScroll} />
+                    // No flex:1, no overflow — the ladder renders every rung at
+                    // natural height and this pane grows with it. The old
+                    // flex:1 + minHeight:0 + overflowY:auto was what trapped the
+                    // ladder in a ~400px slot inside a fixed-height card.
+                    <div style={{ opacity: detailLoading ? 0.55 : 1, transition: "opacity .12s" }}>
+                      <Ladder rows={detail.rows} spot={detail.spot ?? null} mode={mode} />
                     </div>
                   )}
                 </>
@@ -602,7 +721,9 @@ export default function GexGrowth() {
           OI+Vol basis · whole board excl. 0DTE · ±40 strikes around the close ·
           {mode === "levels"
             ? " net GEX as each symbol's session closed"
-            : " each symbol diffed against its own two most recent snapshots"}
+            : mode === "compare"
+              ? " outline = prior close, fill = current close · the four chips sum to the net Δ"
+              : " each symbol diffed against its own two most recent snapshots"}
           {date ? ` · as of ${date}` : ""}
         </div>
       </Card>
@@ -610,10 +731,12 @@ export default function GexGrowth() {
       <style>{`
         @media (max-width: 860px) {
           .gexgrowth-split { grid-template-columns: 1fr !important; }
-          /* Stacked, two full-height panes would be two screens of scrolling
-             before the second one starts. Cap them and let the page scroll.
-             !important because the height is an inline style. */
-          .gexgrowth-split > div { height: auto !important; max-height: 70vh; }
+          /* Stacked, the rail's absolute-fill trick has nothing to size against
+             — the ladder is no longer beside it, it is below it — so a 169-name
+             list would push the ladder a full screen down. Give the rail back a
+             capped height of its own and let it scroll there. The detail pane is
+             untouched and still renders full length. */
+          .gexgrowth-rail-wrap { min-height: 0 !important; height: 46vh; }
         }
       `}</style>
     </PageShell>

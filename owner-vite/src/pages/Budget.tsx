@@ -50,7 +50,9 @@ type Intel = {
   paceNow: number; spentMtd: number;
   week: { date: string; net: number; out: number }[];
   wkOut: number; prevWkOut: number;
-  slices: { label: string; value: number; color: string }[];
+  /** `avg` = what this category costs in a typical month; null when the window
+      is not a whole month, or when there is no history to average. */
+  slices: { label: string; value: number; color: string; avg: number | null }[];
 };
 
 // Red standardized to theme's #EF4444 — amounts, deficits and delete accents.
@@ -625,10 +627,10 @@ export default function Budget() {
 
     // Donut slices: per-category spend + the unsorted bucket.
     const slices = categories
-      .map((c, i) => ({ label: c.name, value: categoryStats.spent[c.id] || 0, color: c.color || CATEGORY_COLORS[i % CATEGORY_COLORS.length] }))
+      .map((c, i) => ({ label: c.name, value: categoryStats.spent[c.id] || 0, color: c.color || CATEGORY_COLORS[i % CATEGORY_COLORS.length], avg: null as number | null }))
       .filter((s) => s.value > 0)
       .sort((a, b) => b.value - a.value);
-    if (categoryStats.unsortedTotal > 0) slices.push({ label: "Unsorted", value: categoryStats.unsortedTotal, color: "rgba(255,255,255,0.35)" });
+    if (categoryStats.unsortedTotal > 0) slices.push({ label: "Unsorted", value: categoryStats.unsortedTotal, color: "rgba(255,255,255,0.35)", avg: null });
 
     return { daysInMonth, todayDay, daysLeft, billsLeft, safe, safePerDay, cum, budgetTotal, paceNow, spentMtd, week, wkOut, prevWkOut, slices };
   }, [register, recurring, month, allBanks, categories, categoryStats, computed]);
@@ -743,15 +745,54 @@ export default function Budget() {
   }, [yearRows, register, month, year]);
 
   // Donut slices for whichever window the "Where It Went" card is showing.
+  // What each category costs in a typical month, from the same register
+  // history the pace curve reads. Averaged over the months that HAVE rows and
+  // never over the month being displayed — a category is compared against its
+  // own past, not against a divisor that changes with how far back the data
+  // happens to reach.
+  const categoryAvg = useMemo(() => {
+    const perMonth = new Map<string, Map<number | null, number>>();
+    for (const r of yearRows) {
+      if (r.is_beginning || r.amount >= 0) continue;
+      const ym = r.entry_date.slice(0, 7);
+      if (ym === month) continue;
+      const slot = perMonth.get(ym) ?? new Map<number | null, number>();
+      const k = r.category_id ?? null;
+      slot.set(k, (slot.get(k) ?? 0) + Math.abs(r.amount));
+      perMonth.set(ym, slot);
+    }
+    const n = perMonth.size;
+    const byCat = new Map<number | null, number>();
+    if (n) {
+      for (const slot of perMonth.values()) {
+        for (const [k, v] of slot) byCat.set(k, (byCat.get(k) ?? 0) + v);
+      }
+      // A category absent from a month counts as a zero for that month, which
+      // is correct here: the register covers every month it has rows for, so a
+      // missing category means nothing was spent, not that nothing is known.
+      for (const [k, v] of byCat) byCat.set(k, v / n);
+    }
+    return { byCat, months: n };
+  }, [yearRows, month]);
+
   const slicesFor = useCallback((mode: RangeMode) => {
     const w = spendWindow[mode];
+    // The average is only comparable to a whole month's spend, so it rides
+    // along only on the monthly view. On a 7-day window "vs typical month"
+    // would compare a week against a month and always read wildly under.
+    const withAvg = mode === "monthly" && categoryAvg.months > 0;
     const out = categories
-      .map((c, i) => ({ label: c.name, value: w.byCat[c.id] || 0, color: c.color || CATEGORY_COLORS[i % CATEGORY_COLORS.length] }))
+      .map((c, i) => ({
+        label: c.name,
+        value: w.byCat[c.id] || 0,
+        color: c.color || CATEGORY_COLORS[i % CATEGORY_COLORS.length],
+        avg: withAvg ? categoryAvg.byCat.get(c.id) ?? 0 : null,
+      }))
       .filter((s) => s.value > 0)
       .sort((a, b) => b.value - a.value);
-    if (w.unsorted > 0) out.push({ label: "Unsorted", value: w.unsorted, color: "rgba(255,255,255,0.35)" });
+    if (w.unsorted > 0) out.push({ label: "Unsorted", value: w.unsorted, color: "rgba(255,255,255,0.35)", avg: withAvg ? categoryAvg.byCat.get(null) ?? 0 : null });
     return out;
-  }, [spendWindow, categories]);
+  }, [spendWindow, categories, categoryAvg]);
 
   // ── Spend pace ────────────────────────────────────────────────────────────
   // Cumulative spend vs a straight-line budget AND vs a typical month. The
@@ -763,10 +804,11 @@ export default function Budget() {
   const paceSeries = useMemo(() => {
     const monthBudget = intel.budgetTotal;
     const yearBudget = monthBudget * 12;
-    const spendByDay = new Array<number>(intel.daysInMonth).fill(0);
+    const daysInMonth = intel.daysInMonth;
+    const spendByDay = new Array<number>(daysInMonth).fill(0);
     for (const g of computed.groups) {
       const d = Number(g.date.split("-")[2]) - 1;
-      if (d < 0 || d >= intel.daysInMonth) continue;
+      if (d < 0 || d >= daysInMonth) continue;
       for (const r of g.rows) if (r.amount < 0) spendByDay[d] += -r.amount;
     }
     const cumulate = (vals: number[]) => { let a = 0; return vals.map((v) => (a += v)); };
@@ -775,32 +817,84 @@ export default function Budget() {
     const monthsUpTo = yearIsCurrent ? nowMonth : String(year) < todayIso().slice(0, 4) ? 12 : 0;
     const monthShort = new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
-    // A typical month, for the second reference line. Only months that
-    // actually have spend, and never the month being drawn — averaging a
-    // half-finished month into its own benchmark flatters it, and a projected
-    // month with nothing logged would drag the whole thing to zero.
-    const priorMonths = yearMonths.months.filter((m) => m.expenses > 0 && m.ym !== month);
-    const avgMonth = priorMonths.length
-      ? priorMonths.reduce((s, m) => s + m.expenses, 0) / priorMonths.length
-      : 0;
+    // ── the benchmark: a typical month's SHAPE, day by day ──────────────────
+    //
+    // A straight ramp is the wrong reference for this data. Rent and the big
+    // bills clear in the first few days, so cumulative spend jumps most of the
+    // month's total before the 5th and then crawls. Against a straight line
+    // that reads "massively over pace" every single month until the line
+    // catches up near the 25th — a red badge that is always red, which tells
+    // you nothing.
+    //
+    // So the benchmark is the average of the PRIOR months' own day-by-day
+    // curves. The rent step is in the benchmark too, and "ahead of a normal
+    // month on the 16th" becomes a real statement.
+    const avgCurve = (() => {
+      const spendByMonth = new Map<string, number[]>();
+      for (const r of yearRows) {
+        if (r.is_beginning || r.amount >= 0) continue;
+        const ym = r.entry_date.slice(0, 7);
+        // Never average a month into its own benchmark.
+        if (ym === month) continue;
+        const dim = new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0).getDate();
+        const arr = spendByMonth.get(ym) ?? new Array<number>(dim).fill(0);
+        const d = Number(r.entry_date.slice(8, 10)) - 1;
+        if (d >= 0 && d < arr.length) arr[d] += -r.amount;
+        spendByMonth.set(ym, arr);
+      }
+
+      const curves: number[][] = [];
+      for (const arr of spendByMonth.values()) {
+        if (!arr.some((v) => v > 0)) continue;
+        let a = 0;
+        const c = arr.map((v) => (a += v));
+        // Resample onto the loaded month's length so a 28-day February and a
+        // 31-day March line up by POSITION in the month, not by raw index —
+        // otherwise February contributes nothing to days 29-31 and drags the
+        // tail of the average down.
+        curves.push(
+          Array.from({ length: daysInMonth }, (_, i) => {
+            const pos = daysInMonth === 1 ? 0 : (i / (daysInMonth - 1)) * (c.length - 1);
+            const lo = Math.floor(pos);
+            const hi = Math.min(c.length - 1, lo + 1);
+            return c[lo] + (c[hi] - c[lo]) * (pos - lo);
+          })
+        );
+      }
+      if (!curves.length) return null;
+      return Array.from({ length: daysInMonth }, (_, i) => curves.reduce((s, c) => s + c[i], 0) / curves.length);
+    })();
+
+    const avgN = (() => {
+      const seen = new Set<string>();
+      for (const r of yearRows) {
+        if (r.is_beginning || r.amount >= 0) continue;
+        const ym = r.entry_date.slice(0, 7);
+        if (ym !== month) seen.add(ym);
+      }
+      return seen.size;
+    })();
+    const avgMonth = avgCurve ? avgCurve[avgCurve.length - 1] : 0;
 
     if (paceRange === "daily") {
-      return { cum: intel.cum, labels: intel.cum.map((_, i) => String(i + 1)), budget: monthBudget, avg: avgMonth, avgN: priorMonths.length, upTo: intel.todayDay, span: intel.daysInMonth, scope: monthShort };
+      return { cum: intel.cum, labels: intel.cum.map((_, i) => String(i + 1)), budget: monthBudget, avg: avgMonth, avgCum: avgCurve, avgN, upTo: intel.todayDay, span: daysInMonth, scope: monthShort };
     }
     if (paceRange === "weekly") {
-      const nWeeks = Math.ceil(intel.daysInMonth / 7);
+      const nWeeks = Math.ceil(daysInMonth / 7);
       const weeks = new Array<number>(nWeeks).fill(0);
       spendByDay.forEach((v, i) => { weeks[Math.floor(i / 7)] += v; });
       const upTo = intel.todayDay > 0 ? Math.floor((intel.todayDay - 1) / 7) + 1 : 0;
-      return { cum: cumulate(weeks), labels: weeks.map((_, i) => `W${i + 1}`), budget: monthBudget, avg: avgMonth, avgN: priorMonths.length, upTo, span: nWeeks, scope: monthShort };
+      // Weekly buckets the same curve, so the benchmark keeps its shape here too.
+      const avgWeeks = avgCurve ? Array.from({ length: nWeeks }, (_, i) => avgCurve[Math.min(daysInMonth - 1, (i + 1) * 7 - 1)]) : null;
+      return { cum: cumulate(weeks), labels: weeks.map((_, i) => `W${i + 1}`), budget: monthBudget, avg: avgMonth, avgCum: avgWeeks, avgN, upTo, span: nWeeks, scope: monthShort };
     }
     if (paceRange === "monthly") {
       const vals = yearMonths.months.map((m) => m.expenses);
-      return { cum: cumulate(vals), labels: yearMonths.months.map((m) => new Date(2000, m.m - 1, 1).toLocaleDateString("en-US", { month: "narrow" })), budget: yearBudget, avg: avgMonth * 12, avgN: priorMonths.length, upTo: monthsUpTo, span: 12, scope: String(year) };
+      return { cum: cumulate(vals), labels: yearMonths.months.map((m) => new Date(2000, m.m - 1, 1).toLocaleDateString("en-US", { month: "narrow" })), budget: yearBudget, avg: avgMonth * 12, avgCum: null, avgN, upTo: monthsUpTo, span: 12, scope: String(year) };
     }
     const quarters = [1, 2, 3, 4].map((q) => yearMonths.months.filter((m) => Math.floor((m.m - 1) / 3) + 1 === q).reduce((s, m) => s + m.expenses, 0));
-    return { cum: cumulate(quarters), labels: ["Q1", "Q2", "Q3", "Q4"], budget: yearBudget, avg: avgMonth * 12, avgN: priorMonths.length, upTo: Math.ceil(monthsUpTo / 3), span: 4, scope: String(year) };
-  }, [paceRange, intel, computed.groups, yearMonths.months, year, month]);
+    return { cum: cumulate(quarters), labels: ["Q1", "Q2", "Q3", "Q4"], budget: yearBudget, avg: avgMonth * 12, avgCum: null, avgN, upTo: Math.ceil(monthsUpTo / 3), span: 4, scope: String(year) };
+  }, [paceRange, intel, computed.groups, yearMonths.months, yearRows, year, month]);
 
   // Income / expenses / net for the month. The monthly
   // view keeps the old behaviour exactly (register totals + Amazon net) so the
@@ -1042,12 +1136,19 @@ export default function Budget() {
           <StatTile label="Bzila" value={fmtMoney(bzilaMonth.net, currency)} sub={`${fmtMoney(bzilaMonth.inAmt, currency)} in · ${fmtMoney(bzilaMonth.outAmt, currency)} out`} valueColor={bzilaMonth.net < 0 ? SOFT_RED : HOME_THEME.green} />
         </div>
 
-        {/* Daily/weekly budgeting intelligence */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, alignItems: "stretch" }}>
+        {/* Daily/weekly budgeting intelligence.
+            Two rows, not one row of four. Safe-to-Spend and Balance Check are
+            short stat lists and read fine narrow; Spend Pace is a 31-point
+            chart and Where It Went is a pie plus a legend — at a quarter of
+            the width the chart was a scribble and the legend's percentage
+            column was clipped off the right edge. */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12, alignItems: "stretch" }}>
           <SafeToSpendCard intel={intel} currency={currency} range={range} />
+          <BalanceCheckCard data={reconcile} currency={currency} />
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(430px, 1fr))", gap: 12, alignItems: "stretch" }}>
           <SpendPaceCard series={paceSeries} currency={currency} />
           <CategoryDonutCard slices={slicesFor(range)} currency={currency} range={range} />
-          <BalanceCheckCard data={reconcile} currency={currency} />
         </div>
 
         {/* Cash flow (daily) + cashflow calendar */}
@@ -1879,78 +1980,131 @@ function SafeToSpendCard({ intel, currency, range }: { intel: Intel; currency: s
  * Drawn in the /owner/charts-ui area-chart idiom: dashed grid, gradient fill
  * under a smooth curve, dashed pace lines, marker on the last real point.
  */
-type PaceSeries = { cum: number[]; labels: string[]; budget: number; avg: number; avgN: number; upTo: number; span: number; scope: string };
+type PaceSeries = {
+  cum: number[]; labels: string[]; budget: number;
+  /** A typical month's TOTAL, and its day-by-day shape (null when there is no
+      prior history, or at a resolution with no day axis). */
+  avg: number; avgCum: number[] | null; avgN: number;
+  upTo: number; span: number; scope: string;
+};
 function SpendPaceCard({ series, currency }: { series: PaceSeries; currency: string }) {
-  const W = 300, H = 132, PADB = 16;
+  const [hover, setHover] = useState<number | null>(null);
+  const W = 680, H = 250, PADL = 8, PADR = 8, PADT = 12, PADB = 26;
   const n = Math.max(series.span, 1);
+  const plotW = W - PADL - PADR;
+  const plotH = H - PADT - PADB;
+
+  const avgCum = series.avgCum;
   const maxV = Math.max(series.budget, series.avg, series.cum[series.cum.length - 1] || 0, 1);
-  const px = (i: number) => (n === 1 ? W / 2 : (i / (n - 1)) * W);
-  const py = (v: number) => H - PADB - (v / maxV) * (H - PADB - 10);
+  const px = (i: number) => (n === 1 ? PADL + plotW / 2 : PADL + (i / (n - 1)) * plotW);
+  const py = (v: number) => PADT + plotH - (Math.min(v, maxV) / maxV) * plotH;
+
   const upTo = Math.max(0, Math.min(series.upTo, series.cum.length));
   const pts = series.cum.slice(0, upTo);
   const line = pts.map((v, i) => `${i === 0 ? "M" : "L"} ${px(i).toFixed(1)} ${py(v).toFixed(1)}`).join(" ");
-  const area = pts.length ? `${line} L ${px(pts.length - 1).toFixed(1)} ${H - PADB} L ${px(0).toFixed(1)} ${H - PADB} Z` : "";
+  const area = pts.length ? `${line} L ${px(pts.length - 1).toFixed(1)} ${PADT + plotH} L ${px(0).toFixed(1)} ${PADT + plotH} Z` : "";
   const spent = pts.length ? pts[pts.length - 1] : 0;
-  const pace = (series.budget * upTo) / n;
-  const over = spent > pace;
-  const delta = Math.abs(spent - pace);
+
+  // The benchmark is the average month's own curve where we have one, and only
+  // falls back to the straight budget ramp when there is no history to average.
+  // Which one is driving the badge is stated on the badge, because "over by
+  // $1,654" means two completely different things depending on the answer.
+  const avgSoFar = avgCum && upTo > 0 ? avgCum[Math.min(upTo, avgCum.length) - 1] : null;
+  const benchmark = avgSoFar ?? (series.budget * upTo) / n;
+  const usingAvg = avgSoFar != null;
+  const over = spent > benchmark;
+  const delta = Math.abs(spent - benchmark);
   const accent = over ? SOFT_RED : LIGHT_BLUE;
-  // Where a typical month had reached by this point in its own run.
-  const avgSoFar = (series.avg * upTo) / n;
-  const vsAvg = spent - avgSoFar;
+
+  const avgPath = avgCum
+    ? avgCum.map((v, i) => `${i === 0 ? "M" : "L"} ${px(i).toFixed(1)} ${py(v).toFixed(1)}`).join(" ")
+    : "";
+
   // Sparse x labels — every label would collide at 31 days wide.
-  const step = Math.max(1, Math.ceil(series.labels.length / 7));
+  const step = Math.max(1, Math.ceil(series.labels.length / 10));
+  const hv = hover != null ? series.cum[hover] ?? 0 : 0;
+  const ha = hover != null && avgCum ? avgCum[Math.min(hover, avgCum.length - 1)] : null;
+  const hovered = hover != null && hover < upTo;
+
   return (
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
       <IntelHeader title="Spend Pace" />
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: -6, marginBottom: 8 }}>
-        <span style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6 }}>{series.scope}</span>
+        <span style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6 }}>
+          {series.scope}
+          {hovered && <> · day {series.labels[hover!]} · <b style={{ color: HOME_THEME.text }}>{fmtMoney(hv, currency).replace(/\.\d+$/, "")}</b>
+            {ha != null && <> vs <span style={{ color: HOME_THEME.gold }}>{fmtMoney(ha, currency).replace(/\.\d+$/, "")}</span></>}</>}
+        </span>
         <span style={{ fontSize: 12, fontWeight: 900, letterSpacing: "0.08em", padding: "3px 10px", borderRadius: 999, color: over ? SOFT_RED : HOME_THEME.green, background: bRgba(over ? SOFT_RED : HOME_THEME.green, 0.12), border: `1px solid ${bRgba(over ? SOFT_RED : HOME_THEME.green, 0.4)}`, boxShadow: `0 0 12px ${bRgba(over ? SOFT_RED : HOME_THEME.green, 0.25)}` }}>
-          {over ? "OVER" : "UNDER"} {fmtMoney(delta, currency).replace(/\.\d+$/, "")}
+          {over ? "OVER" : "UNDER"} {fmtMoney(delta, currency).replace(/\.\d+$/, "")} {usingAvg ? "vs avg" : "vs budget"}
         </span>
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" role="img">
+
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="auto" role="img" style={{ display: "block" }}>
         <defs>
           <linearGradient id="paceFill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={accent} stopOpacity={0.42} />
             <stop offset="100%" stopColor={accent} stopOpacity={0} />
           </linearGradient>
         </defs>
-        {/* dashed grid, charts-ui style */}
         {[0, 0.25, 0.5, 0.75, 1].map((g) => (
-          <line key={g} x1={0} x2={W} y1={10 + g * (H - PADB - 10)} y2={10 + g * (H - PADB - 10)} stroke={CHART.grid} strokeDasharray="4 4" />
+          <line key={g} x1={PADL} x2={W - PADR} y1={PADT + g * plotH} y2={PADT + g * plotH} stroke={CHART.grid} strokeDasharray="4 4" />
         ))}
-        {/* straight-line budget pace */}
-        <line x1={px(0)} y1={py(series.budget / n)} x2={px(n - 1)} y2={py(series.budget)} stroke="rgba(255,255,255,0.30)" strokeDasharray="4 5" />
-        {/* a typical month, on the same ramp — the honest benchmark next to
-            the budget, which is only ever what you INTENDED to spend */}
-        {series.avg > 0 && (
-          <line x1={px(0)} y1={py(series.avg / n)} x2={px(n - 1)} y2={py(series.avg)} stroke={bRgba(HOME_THEME.gold, 0.6)} strokeDasharray="2 4" />
-        )}
+
+        {/* straight-line budget — kept, but demoted: it is what you intended,
+            not what a month of yours actually looks like */}
+        <line x1={px(0)} y1={py(series.budget / n)} x2={px(n - 1)} y2={py(series.budget)} stroke="rgba(255,255,255,0.20)" strokeDasharray="4 5" />
+
+        {/* the average month's real shape — rent step and all */}
+        {avgPath && <path d={avgPath} fill="none" stroke={bRgba(HOME_THEME.gold, 0.75)} strokeWidth={2} strokeDasharray="3 4" strokeLinejoin="round" strokeLinecap="round" />}
+
         {area && <path d={area} fill="url(#paceFill)" />}
         {line && <path d={line} fill="none" stroke={bRgba(accent, 0.45)} strokeWidth={8} strokeLinejoin="round" strokeLinecap="round" />}
         {line && <path d={line} fill="none" stroke={accent} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />}
         {pts.length > 0 && <circle cx={px(pts.length - 1)} cy={py(spent)} r={4} fill={accent} stroke={INK} strokeWidth={1.5} />}
-        <g fill={CHART.axis} fontSize={8} textAnchor="middle">
-          {series.labels.map((l, i) => (i % step === 0 ? <text key={i} x={px(i)} y={H - 3}>{l}</text> : null))}
+
+        {hovered && (
+          <>
+            <line x1={px(hover!)} x2={px(hover!)} y1={PADT} y2={PADT + plotH} stroke="rgba(255,255,255,0.28)" />
+            <circle cx={px(hover!)} cy={py(hv)} r={4} fill={accent} stroke={INK} strokeWidth={1.5} />
+            {ha != null && <circle cx={px(hover!)} cy={py(ha)} r={3.5} fill={HOME_THEME.gold} stroke={INK} strokeWidth={1.5} />}
+          </>
+        )}
+
+        {/* per-point hit targets: exact, and immune to the viewBox scaling */}
+        {series.labels.map((_, i) => (
+          <rect
+            key={i}
+            x={px(i) - plotW / (2 * Math.max(n - 1, 1))} y={PADT}
+            width={plotW / Math.max(n - 1, 1)} height={plotH}
+            fill="transparent"
+            onMouseEnter={() => setHover(i)}
+            onMouseLeave={() => setHover((h) => (h === i ? null : h))}
+          />
+        ))}
+
+        <g fill={CHART.axis} fontSize={11} textAnchor="middle">
+          {series.labels.map((l, i) => (i % step === 0 ? <text key={i} x={px(i)} y={H - 8}>{l}</text> : null))}
         </g>
       </svg>
-      <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", fontSize: 12, fontVariantNumeric: "tabular-nums" }}>
-        <span style={{ opacity: 0.6 }}>Spent <b style={{ color: HOME_THEME.text }}>{fmtMoney(spent, currency)}</b></span>
-        <span style={{ opacity: 0.6 }}>Budget <b style={{ color: HOME_THEME.text }}>{fmtMoney(series.budget, currency)}</b></span>
-      </div>
-      {series.avg > 0 && (
-        <div style={{ marginTop: 5, display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
+
+      <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 16, justifyContent: "space-between", fontSize: 12, fontVariantNumeric: "tabular-nums" }}>
+        <span style={{ opacity: 0.6, display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 12, height: 0, borderTop: `2px solid ${accent}`, display: "inline-block" }} />
+          Spent <b style={{ color: HOME_THEME.text }}>{fmtMoney(spent, currency)}</b>
+        </span>
+        {series.avg > 0 && (
           <span style={{ opacity: 0.6, display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <span style={{ width: 12, height: 0, borderTop: `2px dotted ${bRgba(HOME_THEME.gold, 0.8)}`, display: "inline-block" }} />
-            Avg month <b style={{ color: HOME_THEME.text }}>{fmtMoney(series.avg, currency)}</b>
+            <span style={{ width: 12, height: 0, borderTop: `2px dotted ${bRgba(HOME_THEME.gold, 0.9)}`, display: "inline-block" }} />
+            {avgCum ? "Typical month" : "Avg month"} <b style={{ color: HOME_THEME.text }}>{fmtMoney(series.avg, currency)}</b>
             <span style={{ opacity: 0.55 }}>({series.avgN} mo)</span>
           </span>
-          <span style={{ color: vsAvg > 0 ? SOFT_RED : HOME_THEME.green, fontWeight: 800 }}>
-            {vsAvg > 0 ? "+" : ""}{fmtMoney(vsAvg, currency)} vs avg
-          </span>
-        </div>
-      )}
+        )}
+        <span style={{ opacity: 0.6, display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 12, height: 0, borderTop: "2px dashed rgba(255,255,255,0.35)", display: "inline-block" }} />
+          Budget <b style={{ color: HOME_THEME.text }}>{fmtMoney(series.budget, currency)}</b>
+        </span>
+      </div>
     </div>
   );
 }
@@ -1966,7 +2120,10 @@ function SpendPaceCard({ series, currency }: { series: PaceSeries; currency: str
 function CategoryDonutCard({ slices, currency, range }: { slices: Intel["slices"]; currency: string; range: RangeMode }) {
   const [hover, setHover] = useState<number | null>(null);
   const total = slices.reduce((s, x) => s + x.value, 0);
+  const hasAvg = slices.some((x) => x.avg != null);
+  const avgTotal = slices.reduce((s, x) => s + (x.avg ?? 0), 0);
   const CX = 60, CY = 60, R = 46, POP = 5;
+  const DONUT_PX = 168;
 
   // Wedge path. `push` offsets the slice along its own mid-angle so the hovered
   // one lifts out of the pie instead of just changing colour.
@@ -1991,13 +2148,16 @@ function CategoryDonutCard({ slices, currency, range }: { slices: Intel["slices"
   return (
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
       <IntelHeader title="Where It Went" />
-      <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: -6, marginBottom: 8 }}>{RANGE_WINDOW_LABEL[range]}</div>
+      <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: -6, marginBottom: 8, display: "flex", justifyContent: "space-between", gap: 8 }}>
+        <span>{RANGE_WINDOW_LABEL[range]}</span>
+        {hasAvg && <span>vs a typical month</span>}
+      </div>
       {total <= 0 ? (
         <div style={{ flex: 1, display: "grid", placeItems: "center", opacity: 0.55, fontSize: 14, textAlign: "center" }}>No categorized spend {RANGE_WINDOW_LABEL[range].toLowerCase()}.</div>
       ) : (
         <div style={{ display: "flex", alignItems: "center", gap: 14, minHeight: 0 }}>
           <div style={{ position: "relative", flex: "none" }}>
-            <svg viewBox="0 0 120 120" width={132} height={132} onMouseLeave={() => setHover(null)} style={{ overflow: "visible" }}>
+            <svg viewBox="0 0 120 120" width={DONUT_PX} height={DONUT_PX} onMouseLeave={() => setHover(null)} style={{ overflow: "visible" }}>
               {arcs.map(({ sl, a0, a1 }, i) => {
                 const on = hover === i;
                 const dim = hover !== null && !on;
@@ -2018,18 +2178,23 @@ function CategoryDonutCard({ slices, currency, range }: { slices: Intel["slices"
             {/* Centre readout floats over the pie so the wedges stay solid. */}
             <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", pointerEvents: "none", textAlign: "center" }}>
               <div>
-                <div style={{ fontSize: 15, fontWeight: 900, color: HOME_THEME.text, fontVariantNumeric: "tabular-nums", textShadow: "0 2px 8px rgba(0,0,0,0.9)" }}>
+                <div style={{ fontSize: 19, fontWeight: 900, color: HOME_THEME.text, fontVariantNumeric: "tabular-nums", textShadow: "0 2px 8px rgba(0,0,0,0.9)" }}>
                   {fmtMoney(active ? active.value : total, currency).replace(/\.\d+$/, "")}
                 </div>
-                <div style={{ fontSize: 8, fontWeight: 800, letterSpacing: "0.1em", color: "rgba(255,255,255,0.65)", textTransform: "uppercase", maxWidth: 78, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textShadow: "0 2px 8px rgba(0,0,0,0.9)" }}>
+                <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: "rgba(255,255,255,0.65)", textTransform: "uppercase", maxWidth: 104, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textShadow: "0 2px 8px rgba(0,0,0,0.9)" }}>
                   {active ? active.label : "Spent"}
                 </div>
+                {hasAvg && (
+                  <div style={{ fontSize: 9, fontWeight: 700, marginTop: 2, color: "rgba(255,255,255,0.5)", whiteSpace: "nowrap", textShadow: "0 2px 8px rgba(0,0,0,0.9)" }}>
+                    usually {fmtMoney(active ? active.avg ?? 0 : avgTotal, currency).replace(/\.\d+$/, "")}
+                  </div>
+                )}
               </div>
             </div>
           </div>
 
-          <div style={{ flex: 1, minWidth: 0, display: "grid", gap: 2, fontSize: 12, fontVariantNumeric: "tabular-nums", overflow: "hidden" }} onMouseLeave={() => setHover(null)}>
-            {slices.slice(0, 6).map((sl, i) => {
+          <div style={{ flex: 1, minWidth: 0, display: "grid", gap: 2, fontSize: 12, fontVariantNumeric: "tabular-nums" }} onMouseLeave={() => setHover(null)}>
+            {slices.slice(0, 8).map((sl, i) => {
               const on = hover === i;
               return (
                 <div
@@ -2044,8 +2209,24 @@ function CategoryDonutCard({ slices, currency, range }: { slices: Intel["slices"
                 >
                   <span style={{ width: 9, height: 9, borderRadius: 999, background: sl.color, boxShadow: `0 0 8px ${sl.color}`, flex: "none" }} />
                   <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: on ? 800 : 600, color: on ? HOME_THEME.text : "rgba(255,255,255,0.8)" }}>{sl.label}</span>
-                  <b style={{ color: on ? HOME_THEME.text : "rgba(255,255,255,0.55)" }}>{fmtMoney(sl.value, currency).replace(/\.\d+$/, "")}</b>
-                  <span style={{ width: 32, textAlign: "right", opacity: 0.55 }}>{Math.round((sl.value / total) * 100)}%</span>
+                  <b style={{ width: 76, textAlign: "right", flex: "none", color: on ? HOME_THEME.text : "rgba(255,255,255,0.55)" }}>{fmtMoney(sl.value, currency).replace(/\.\d+$/, "")}</b>
+                  <span style={{ width: 40, textAlign: "right", flex: "none", opacity: 0.5 }}>{Math.round((sl.value / total) * 100)}%</span>
+                  {hasAvg && (() => {
+                    const avg = sl.avg ?? 0;
+                    // A category with no history has nothing to be over or
+                    // under, and printing "+100%" for its first month would be
+                    // noise dressed as a signal.
+                    if (avg <= 0) return <span style={{ width: 96, textAlign: "right", flex: "none", opacity: 0.3 }}>new</span>;
+                    const d = sl.value - avg;
+                    const pct = Math.round((d / avg) * 100);
+                    return (
+                      <span style={{ width: 96, textAlign: "right", flex: "none", color: d > 0 ? SOFT_RED : HOME_THEME.green, opacity: on ? 1 : 0.75 }}
+                        title={`Typical month: ${fmtMoney(avg, currency)}`}>
+                        {d > 0 ? "▲" : "▼"} {fmtMoney(Math.abs(d), currency).replace(/\.\d+$/, "")}
+                        <span style={{ opacity: 0.6 }}> {Math.abs(pct)}%</span>
+                      </span>
+                    );
+                  })()}
                 </div>
               );
             })}
