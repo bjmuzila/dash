@@ -171,6 +171,10 @@ export default function Budget() {
   const [yearRows, setYearRows] = useState<RegisterRow[]>([]);
   const [yearLoading, setYearLoading] = useState(false);
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
+  // Calendar / Projection toggle on the right-hand overview card. The
+  // projection was lost when this page was ported out of the Next route; its
+  // smoothPath() helper stayed behind, unused, which is how it was found.
+  const [rightTab, setRightTab] = useState<"calendar" | "projection">("calendar");
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   // The overview reads as a single month.
   const range: RangeMode = "monthly";
@@ -1040,7 +1044,7 @@ export default function Budget() {
         {/* Daily/weekly budgeting intelligence */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, alignItems: "stretch" }}>
           <SafeToSpendCard intel={intel} currency={currency} range={range} />
-          <SpendPaceCard series={paceSeries} currency={currency} range={range} />
+          <SpendPaceCard series={paceSeries} currency={currency} />
           <CategoryDonutCard slices={slicesFor(range)} currency={currency} range={range} />
           <BalanceCheckCard data={reconcile} currency={currency} />
         </div>
@@ -1064,10 +1068,19 @@ export default function Budget() {
           <div style={{ ...card(), padding: 16 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 14 }}>
               <div style={{ fontSize: 14, fontWeight: 900, letterSpacing: "0.14em", textTransform: "uppercase" }}>
-                Cashflow Calendar
+                {rightTab === "calendar" ? "Cashflow Calendar" : "Balance Projection"}
               </div>
+              <Segmented
+                value={rightTab}
+                onChange={(v) => setRightTab(v as "calendar" | "projection")}
+                options={[{ value: "calendar", label: "Calendar" }, { value: "projection", label: "Projection" }]}
+              />
             </div>
-            <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} mode={range} yearNet={yearNet} year={year} />
+            {rightTab === "calendar" ? (
+              <CalendarGrid month={month} groups={computed.groups} currency={currency} selected={selectedDate} onSelect={setSelectedDate} mode={range} yearNet={yearNet} year={year} />
+            ) : (
+              <ProjectionChart series={computed.series} currency={currency} />
+            )}
           </div>
         </div>
 
@@ -1338,6 +1351,102 @@ function DayCell({ d, iso, g, currency, isSel, isToday, onSelect, w = CELL_W, h 
       </div>
       {g && <div style={{ fontSize: 13, fontWeight: 800, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: neg ? SOFT_RED : pos ? HOME_THEME.green : HOME_THEME.muted }}>{pos ? "+" : ""}{fmtMoney(net, currency)}</div>}
     </button>
+  );
+}
+
+/**
+ * A small pill toggle for switching one card between two views.
+ * Ported back from the Next owner route along with ProjectionChart.
+ */
+function Segmented({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
+  return (
+    <div style={{ display: "inline-flex", padding: 3, borderRadius: 10, background: "rgba(0,0,0,0.35)", border: `1px solid ${HOME_THEME.border}` }}>
+      {options.map((o) => {
+        const on = o.value === value;
+        return (
+          <button
+            key={o.value}
+            onClick={() => onChange(o.value)}
+            style={{
+              padding: "5px 12px",
+              borderRadius: 7,
+              border: "none",
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 800,
+              letterSpacing: "0.06em",
+              background: on ? bRgba(HOME_THEME.cyan, 0.18) : "transparent",
+              color: on ? HOME_THEME.cyan : HOME_THEME.muted,
+              opacity: on ? 1 : 0.6,
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Balance Projection — the running combined balance across the month, with a
+ * hover guide and a tooltip carrying the exact date and balance.
+ *
+ * The calendar answers "what happens on the 14th". This answers the question
+ * the calendar cannot: "does the balance ever go negative before payday", which
+ * is a shape, not a cell.
+ */
+function ProjectionChart({ series, currency }: { series: { date: string; balance: number }[]; currency: string }) {
+  const [hover, setHover] = useState<number | null>(null);
+  if (series.length < 2) {
+    return <div style={{ height: 240, display: "grid", placeItems: "center", color: HOME_THEME.muted, fontSize: 14 }}>Add entries to see the projection.</div>;
+  }
+  const W = 560, H = 240, padL = 4, padR = 4, padT = 8, padB = 18;
+  const ys = series.map((p) => p.balance);
+  const maxY = Math.max(...ys, 0);
+  const minY = Math.min(...ys, 0);
+  const span = Math.max(maxY - minY, 1);
+  const x = (i: number) => padL + (i / (series.length - 1)) * (W - padL - padR);
+  const y = (v: number) => padT + (1 - (v - minY) / span) * (H - padT - padB);
+  const zeroY = y(0);
+  const path = smoothPath(series.map((p, i) => [x(i), y(p.balance)] as [number, number]), 0.22);
+  const ticks = series.filter((_, i) => i % Math.ceil(series.length / 8) === 0);
+
+  const onMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    setHover(Math.round(ratio * (series.length - 1)));
+  };
+  const hp = hover !== null ? series[hover] : null;
+  const hx = hover !== null ? (hover / (series.length - 1)) * 100 : 0;
+
+  return (
+    <div style={{ position: "relative" }} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="projAreaFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={LIGHT_BLUE} stopOpacity={0.32} />
+            <stop offset="100%" stopColor={LIGHT_BLUE} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <line x1={padL} x2={W - padR} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.18)" strokeDasharray="3 5" />
+        <path d={`${path} L ${x(series.length - 1).toFixed(1)} ${H - padB} L ${x(0).toFixed(1)} ${H - padB} Z`} fill="url(#projAreaFill)" stroke="none" />
+        {/* soft under-stroke = neon glow without an SVG filter */}
+        <path d={path} fill="none" stroke={bRgba(LIGHT_BLUE, 0.45)} strokeWidth={9} strokeLinejoin="round" strokeLinecap="round" />
+        <path d={path} fill="none" stroke={LIGHT_BLUE} strokeWidth={3} strokeLinejoin="round" strokeLinecap="round" />
+        {hp && <line x1={x(hover!)} x2={x(hover!)} y1={padT} y2={H - padB} stroke="rgba(255,255,255,0.28)" strokeWidth={1} />}
+        {hp && <circle cx={x(hover!)} cy={y(hp.balance)} r={3.5} fill={LIGHT_BLUE} stroke={INK} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
+        {ticks.map((p, i) => (
+          <text key={i} x={x(series.indexOf(p))} y={H - 4} fill={HOME_THEME.muted} fontSize={11} textAnchor="middle">{shortDate(p.date)}</text>
+        ))}
+      </svg>
+      {hp && (
+        <div style={{ position: "absolute", top: 0, left: `${hx}%`, transform: `translateX(${hx > 60 ? "-108%" : "8px"})`, pointerEvents: "none", background: "rgba(5,8,14,0.88)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: `1px solid ${bRgba(LIGHT_BLUE, 0.22)}`, borderRadius: 8, padding: "6px 10px", whiteSpace: "nowrap", boxShadow: "0 8px 20px rgba(0,0,0,0.5)" }}>
+          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.1em", color: HOME_THEME.muted }}>{shortDate(hp.date)}</div>
+          <div style={{ fontSize: 17, fontWeight: 900, color: hp.balance < 0 ? SOFT_RED : HOME_THEME.text }}>{fmtMoney(hp.balance, currency)}</div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1756,7 +1865,7 @@ function SafeToSpendCard({ intel, currency, range }: { intel: Intel; currency: s
  * under a smooth curve, dashed pace lines, marker on the last real point.
  */
 type PaceSeries = { cum: number[]; labels: string[]; budget: number; avg: number; avgN: number; upTo: number; span: number; scope: string };
-function SpendPaceCard({ series, currency, range }: { series: PaceSeries; currency: string; range: RangeMode }) {
+function SpendPaceCard({ series, currency }: { series: PaceSeries; currency: string }) {
   const W = 300, H = 132, PADB = 16;
   const n = Math.max(series.span, 1);
   const maxV = Math.max(series.budget, series.avg, series.cum[series.cum.length - 1] || 0, 1);
