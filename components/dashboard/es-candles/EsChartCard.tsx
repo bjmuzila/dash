@@ -18,7 +18,7 @@
  *      dock has a compact density for when the card is a third of the screen.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, createChart } from "lightweight-charts";
 import type { UTCTimestamp, IChartApi, ISeriesApi, IPriceLine, CandlestickData, LineData, HistogramData } from "lightweight-charts";
@@ -33,7 +33,29 @@ import { useGexSocket, type GexMessage } from "@/lib/gexSocket";
 // handler ignores that frame today, but the card DOES read `expiry` /
 // `expirations` off whatever frame it gets, so scoping it out would make that
 // path strictly worse than it already is.
+//
+// Two topic sets, chosen by whether the card is on ES.
+//
+// This used to be ONE module constant including "status" and "gex" for every
+// card, whatever it was showing:
+//
+//   • "status" stays in BOTH sets. It looks droppable — onGexFrame branches on
+//     snapshot | gex | GEX_UPDATE | spot | aux and never on "status" — but the
+//     topic also governs what scopeSnapshot puts in the CONNECT snapshot, and
+//     the expiry / expirations list rides on it. Dropping it emptied the DTE
+//     picker on any layout with no ES card (union = spot,aux) and off-hours on
+//     ES, where the snapshot can be the only frame that ever arrives.
+//
+//   • "gex" is the single heaviest frame on the feed (the whole per-strike
+//     ladder). On a SPY/QQQ card `ingestLive` explicitly refuses it — /ws/gex is
+//     an SPX feed — so it was being delivered across the wire, parsed, fanned
+//     out to every subscriber, and thrown away. An ETF card asks for the scalar
+//     legs only.
+//
+// (Both must be declared at module scope, and stay referentially stable: the
+// value keys gexSocket's subscription effect.)
 const ES_CHART_TOPICS = ["gex", "spot", "aux", "status"] as const;
+const ETF_CHART_TOPICS = ["spot", "aux", "status"] as const;
 import { dedupeFetch } from "@/lib/dedupeFetch";
 // cachedJson, NOT dedupeFetch, for the page-GLOBAL reads below (levels, mvc,
 // basis, eod-gex). dedupeFetch only collapses requests that overlap in time; it
@@ -59,7 +81,7 @@ import {
   toChartTime, etDayKey, fmtEtHM, isPlausibleBasis, etMinutesOfDay, gexTodScale,
   isCashOpen, etSessionStarted, isEtWeekend, etMinutes, RTH_OPEN_MIN, RTH_CLOSE_MIN, buildVolumeProfile, TPO_PERIOD_MS, buildTpoProfile, SLOT_MS, slotFloorMs,
   SPOT_LINE_GRAY, EM_VIOLET, parseLevelNum, applyDefaultView,
-  deriveColumnLevels, gexColor,
+  deriveColumnLevels, gexAlphaOf, gexPaint,
   type GexCell, type GexColumn, type GexMetric, type VolumeProfile, type TpoProfile,
 } from "./chartMath";
 import {
@@ -81,6 +103,42 @@ import type { ChainGreek } from "./ChainRail";
 
 // Card/accent styling now sourced from the shared theme (see BUDGET_UI_STYLE.md).
 const dissolveCard = dissolveCardStyle;
+
+/**
+ * Trim a slot-keyed column map down to `cap`, dropping the OLDEST slots.
+ *
+ * Replaces `map.delete(Math.min(...map.keys()))`, which spread up to 10,000
+ * arguments onto the stack on every overflowing frame — O(n) work and close
+ * enough to the engine's argument limit to be a real stack-overflow risk.
+ *
+ * Deliberately NOT `map.keys().next()`. Insertion order is not time order here:
+ * the heatmap backfill merges its rows NEWEST-FIRST (it sorts descending so the
+ * freshest snapshot in each bucket wins), so straight after a backfill the first
+ * key is the most recent column — and evicting that would walk backwards through
+ * the session deleting the newest history instead of trimming the left edge.
+ *
+ * One linear pass per overflow, no allocation, no spread. Overflow is rare (the
+ * backfill's own cutoff keeps these maps well under their caps), so the cost is
+ * irrelevant; correctness is not.
+ */
+function evictOldest(map: Map<number, GexColumn>, cap: number) {
+  while (map.size > cap) {
+    let oldest = Infinity;
+    for (const k of map.keys()) if (k < oldest) oldest = k;
+    if (!Number.isFinite(oldest)) break;
+    map.delete(oldest);
+  }
+}
+
+/**
+ * useLayoutEffect on the client, useEffect on the server.
+ *
+ * React warns when useLayoutEffect runs during SSR (it can't — there is no
+ * layout), so the standard isomorphic swap. Used for the settings restore,
+ * where landing one commit earlier moves the page's heaviest fetch ahead of the
+ * first paint.
+ */
+const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 /**
  * Below this card width the dock switches to its compact density and the stat
@@ -231,7 +289,7 @@ function frameIdxAtOrBefore(frames: number[], ts: number): number {
   return idx;
 }
 
-export default function EsChartCard({
+function EsChartCard({
   slot = 0,
   settingsSlot,
   sidePanel = "rail",
@@ -338,7 +396,16 @@ export default function EsChartCard({
   // hook's `intervalMinutes` dep stable across those three, which is what makes
   // switching between them free — no map wipe, no SQLite re-query, no refetch.
   const nativeInterval = nativeIntervalFor(interval);
-  const { sessionCandles: liveRows, historical: esHistorical, connected: esConnected, refresh: esRefresh } = useEsCandles(true, HISTORY_FETCH_DAYS, nativeInterval);
+  // enabled = isEs.
+  //
+  // This was hardcoded `true`, so a SPY or QQQ card still pulled today's + nine
+  // days of ES candle history from the DB and still put `esCandles`/`es1mCandles`
+  // on the shared socket's topic union — and then discarded all of it, because
+  // `historical` and `rows5` both ignore the ES series when !isEs. On a three-up
+  // ES/SPY/QQQ row that was two wasted loads and two wasted streams.
+  //
+  // withAverages = false: this page never reads `candles` (see the hook).
+  const { sessionCandles: liveRows, historical: esHistorical, connected: esConnected, refresh: esRefresh } = useEsCandles(isEs, HISTORY_FETCH_DAYS, nativeInterval, false);
   // ETF bars come over HTTP from the etf_candles recorder, not /ws/gex. Passing
   // "" when ES is active keeps the hook completely idle — no fetch, no interval.
   const { rows: etfRows, connected: etfConnected, refresh: etfRefresh } = useEtfCandles(isEs ? "" : sym.gexSymbol, HISTORY_FETCH_DAYS, nativeInterval);
@@ -392,7 +459,8 @@ export default function EsChartCard({
         // below, so a real tick always crosses the TTL and refetches.
         const j = await cachedJson<Record<string, unknown>>(
           `/api/levels?ticker=${encodeURIComponent(sym.key)}`,
-          { ttlMs: 150_000, persist: true },
+          // 30 min TTL, was 2.5 — see the note on the other /api/levels call.
+          { ttlMs: 1_800_000, persist: true },
         );
         if (cancelled) return;
         const up = parseLevelNum(j?.up);
@@ -400,7 +468,14 @@ export default function EsChartCard({
         // Bands are NULLed server-side by /api/levels/expire-stale once the week
         // they were struck for has passed, so "missing" is the correct signal to
         // draw nothing rather than to fall back to a stale band.
-        setEmWeekly(up != null && down != null ? { up, down, exp: String(j?.exp_label ?? "") } : null);
+        // Identity-guarded: the poll re-fires every 5 min for a value that is
+        // published WEEKLY, and it used to hand back a fresh object every time.
+        const exp = String(j?.exp_label ?? "");
+        setEmWeekly((prev) => {
+          if (up == null || down == null) return prev === null ? prev : null;
+          if (prev && prev.up === up && prev.down === down && prev.exp === exp) return prev;
+          return { up, down, exp };
+        });
       } catch (e) {
         // An HTTP error is the old `!r.ok` branch: the ticker has no row, so
         // clear the band. A network blip keeps the last good one.
@@ -408,9 +483,13 @@ export default function EsChartCard({
       }
     };
     load();
-    // 5 min, matching HomeClient. The band is frozen weekly, so this only exists
-    // to pick up the Friday publish (and a mid-week republish) without a reload.
-    const id = setInterval(load, 300_000);
+    // 30 min, was 5.
+    //
+    // The band is published WEEKLY (levels-auto-publish.js, Fridays 16:00 ET).
+    // A 5-minute poll meant ~2,000 identical responses per trading week per
+    // card; this still picks up the Friday publish (and any mid-week
+    // republish) well inside the hour, without a reload.
+    const id = setInterval(load, 1_800_000);
     return () => { cancelled = true; clearInterval(id); };
   }, [settingsLoaded, sym.key]);
 
@@ -466,6 +545,32 @@ export default function EsChartCard({
     if (interval <= 5) return rows5;
     return rollupCandles(rows5, interval);
   }, [rows5, interval]);
+  /**
+   * Content fingerprint of the plotted bars.
+   *
+   * `(length, last timestamp)` is NOT a sufficient key for this array, which is
+   * exactly why the candle series carries its own `prefixSig`: `rows5` is a
+   * slotKey merge in which the live socket copy overwrites the SQLite copy, and
+   * rollupCandles rebuilds every bucket at 15m/30m/1h — either can revise a bar
+   * in the MIDDLE of the array while the length and both end timestamps stay
+   * equal.
+   *
+   * The per-session basis model reads bar closes (esCloseAt inside
+   * buildBasisAt), and that model is now memoised and feeds the heatmap layer
+   * cache, so it needs the same guarantee. FNV-1a over integers via Math.imul:
+   * no allocation, ~7k iterations of integer arithmetic per rows change.
+   */
+  const rowsHash = useMemo(() => {
+    let hval = 2166136261;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      hval = Math.imul(hval ^ (r.timestamp | 0), 16777619);
+      hval = Math.imul(hval ^ Math.round(r.close * 100), 16777619);
+      hval = Math.imul(hval ^ Math.round(r.high * 100), 16777619);
+      hval = Math.imul(hval ^ Math.round(r.low * 100), 16777619);
+    }
+    return hval >>> 0;
+  }, [rows]);
   const { trigger: refreshTrigger, label: refreshLabel, style: refreshStyle } = useRefreshButton(async () => {
     await (isEs ? esRefresh() : etfRefresh());
   });
@@ -506,14 +611,60 @@ export default function EsChartCard({
   // Right-axis SPX readouts. liveSpx = badge pinned at the last ES price (y in
   // px within the chart). crossSpx = SPX at the crosshair (y in px), shown only
   // while hovering the chart. Both = ES − effective basis.
-  const [liveSpx, setLiveSpx] = useState<{ y: number; spx: number } | null>(null);
-  const [crossSpx, setCrossSpx] = useState<{ y: number; spx: number } | null>(null);
+  //
+  // These are NOT React state.
+  //
+  // They were, and both allocated a fresh { y, spx } object every time they were
+  // written — so React could never bail out. crossSpx was written from
+  // subscribeCrosshairMove (i.e. at pointer-event rate, ~60Hz, just from moving
+  // the mouse across the chart) and liveSpx from the visible-range subscription
+  // (i.e. every frame of a pan). Each write re-rendered this entire 5,000-line
+  // component and its children — rebuilding the dock's ~56 elements, the stats
+  // line and the replay bar — to move two labels by a few pixels. That is what
+  // made the crosshair feel heavy.
+  //
+  // Both badges are a single absolutely-positioned <div> with a `top` and a
+  // string in it. Written directly, from the same rAF that paints the canvas.
+  const liveSpxElRef = useRef<HTMLDivElement | null>(null);
+  const crossSpxElRef = useRef<HTMLDivElement | null>(null);
+  const paintBadge = useCallback((el: HTMLDivElement | null, v: { y: number; spx: number } | null) => {
+    if (!el) return;
+    if (!v || !Number.isFinite(v.y) || !Number.isFinite(v.spx)) {
+      if (el.style.display !== "none") el.style.display = "none";
+      return;
+    }
+    if (el.style.display !== "block") el.style.display = "block";
+    const top = `${Math.round(Math.max(2, v.y - 9))}px`;
+    if (el.style.top !== top) el.style.top = top;
+    const txt = `SPX ${v.spx.toFixed(2)}`;
+    if (el.textContent !== txt) el.textContent = txt;
+  }, []);
   // Frozen prior-day closes (ES 16:00 − SPX 16:00) → prior-day basis source.
   const [prevCloses, setPrevCloses] = useState<{ es: number; spx: number; date: string } | null>(null);
   // Today's MVC history: raw SPX strikeOIVol per snapshot. Converted to ES at
   // DRAW time using the live ESU basis (same as the other levels), so the line
   // tracks the current /ESU price — not the stale per-row esPrice.
   const [mvcHistory, setMvcHistory] = useState<Array<{ ts: number; spx: number; spxPx: number; basis: number | null }>>([]);
+  /**
+   * Content fingerprint of the CB series, for the per-frame basis memo.
+   *
+   * The basis model is a function of every point in here — including `basis`,
+   * which starts null and gets filled in for rows that already exist — so
+   * keying the memo on (length, last ts) would keep serving a basis built from
+   * incomplete rows. Memoised on the array identity, which setMvcHistory now
+   * only changes when the content actually differs.
+   */
+  const mvcHistoryHash = useMemo(() => {
+    let hval = 2166136261;
+    for (let i = 0; i < mvcHistory.length; i++) {
+      const p = mvcHistory[i];
+      hval = Math.imul(hval ^ (p.ts | 0), 16777619);
+      hval = Math.imul(hval ^ Math.round(p.spx * 100), 16777619);
+      hval = Math.imul(hval ^ Math.round(p.spxPx * 100), 16777619);
+      hval = Math.imul(hval ^ (p.basis == null ? 0x9e3779b1 : Math.round(p.basis * 100)), 16777619);
+    }
+    return hval >>> 0;
+  }, [mvcHistory]);
   // CB (central band / MVC) step line. Lives with the BUBBLES controls, not the
   // Levels group: the top bubble — or `highlight 1` — is already marking the MVC
   // strike, so CB is the same read in line form and belongs beside the controls
@@ -554,7 +705,20 @@ export default function EsChartCard({
   // rebuilt when the DATA changes (once a minute, or on a backfill) instead of
   // 60x a second while the mouse moves. Bump it at EVERY write to the map.
   const minuteColsVerRef = useRef(0);
+  // Version of the HEATMAP column store (columnsRef), bumped at every write.
+  //
+  // Separate from minuteColsVerRef, which tracks the bubble minute map. The two
+  // are written on different conditions: the live ingest path guards the minute
+  // map on `liveDay === lastBubbleDayRef.current` but writes the heatmap column
+  // unconditionally, so a column can land with no bump to minuteColsVerRef at
+  // all. That happens every minute once the wall clock rolls past ET midnight
+  // with the card still open, and all weekend.
+  const columnsVerRef = useRef(0);
   // Memoised output of that derivation, keyed by the signature built in draw().
+  // Memoised per-session basis resolver (see the note at its use site in draw()).
+  const basisFnRef = useRef<{ sig: string; fn: (tsMs: number) => number } | null>(null);
+  // Memoised flip-cross series — viewport-independent, was rebuilt every frame.
+  const flipPtsRef = useRef<{ sig: string; pts: Array<{ ts: number; es: number }> } | null>(null);
   const bubblePrepRef = useRef<{
     sig: string;
     mins: GexColumn[];
@@ -564,6 +728,15 @@ export default function EsChartCard({
     runRef: Map<number, number>;
     shownAt: Map<number, Set<number>>;
     wallAt: Map<number, Map<number, number>>;
+    /**
+     * Per-bucket cells to draw, already filtered to the shown strikes and sorted
+     * biggest-first. Lives here rather than in draw() because it is a pure
+     * function of (cells, shownAt, metric) — every one of which is already in
+     * this memo's signature. In draw() it was a filter + a sort per bucket, per
+     * frame: ~100k predicate calls and several hundred array allocations and
+     * sorts on a full session.
+     */
+    orderAt: Map<number, GexCell[]>;
     /** gexTodScale() for each bucket, cached — it formats a Date to get ET. */
     todAt: Map<number, number>;
     strikeStep: number;
@@ -574,6 +747,11 @@ export default function EsChartCard({
   // (size, colour, blur) into an offscreen canvas and blitting it turns that
   // into a drawImage, which is effectively free.
   const glowSpriteRef = useRef<Map<string, { cv: HTMLCanvasElement; w: number; h: number }>>(new Map());
+  // True while a pan/zoom gesture is in flight. Used to trade a little precision
+  // for cache hits in the glow-sprite path, where a continuously-changing size
+  // otherwise misses on every frame of a zoom.
+  const interactingRef = useRef(false);
+  const interactEndRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Dedupe key for the heatmap backfill fetch: front mode ignores `expiry`
   // server-side, so the rolling feedExpiry must not re-fire the ~700KB/5s call.
   const lastHeatmapKeyRef = useRef<string>("");
@@ -606,6 +784,37 @@ export default function EsChartCard({
   // Imperative redraw hook set up by the overlay effect; apply() calls it when a
   // new gex snapshot lands so in-place column updates repaint immediately.
   const drawOverlayRef = useRef<() => void>(() => {});
+  // ── The ONE paint scheduler ────────────────────────────────────────────────
+  //
+  // Every repaint request in this file goes through here. It used to be that a
+  // correct rAF coalescer existed inside the overlay effect — and fifteen other
+  // call sites called drawOverlayRef.current() SYNCHRONOUSLY around it. A burst
+  // of websocket frames therefore meant a burst of full-viewport repaints,
+  // several per animation frame, none of which could reach the screen.
+  //
+  // Worse, a SECOND independent rAF loop lived in the 5s backstop effect and was
+  // subscribed to visible-time-range change while the overlay's was subscribed
+  // to visible-LOGICAL-range change. Both fire on the same pan, and because they
+  // held separate rAF handles they could not coalesce with each other — one drag
+  // frame scheduled two full repaints plus an extra rail draw.
+  //
+  // One handle, one callback, one paint per frame. The rail and the SPX badge
+  // ride along because both are functions of the same projection: if the chart
+  // moved, all three are stale together.
+  const paintRafRef = useRef(0);
+  const schedulePaint = useCallback(() => {
+    if (paintRafRef.current) return;
+    paintRafRef.current = requestAnimationFrame(() => {
+      paintRafRef.current = 0;
+      drawOverlayRef.current();
+      railDrawRef.current();
+      updateLiveSpxRef.current();
+    });
+  }, []);
+  useEffect(() => () => {
+    if (paintRafRef.current) cancelAnimationFrame(paintRafRef.current);
+    paintRafRef.current = 0;
+  }, []);
   // Cached right price-axis gutter width (px). Updated only on >=1px change so
   // the heatmap's right edge doesn't shimmer with sub-pixel label wobble.
   const hmScaleWRef = useRef(0);
@@ -613,7 +822,16 @@ export default function EsChartCard({
   // draw() on every frame — a full-viewport canvas per rAF during a pan/zoom,
   // which is pure allocation + GC churn. Resized only when the canvas size
   // actually changes; otherwise just cleared.
+  // Shape of what the candle series currently holds, so a live tick can go
+  // through series.update() (O(1)) instead of a full setData() re-ingest.
+  const seriesShapeRef = useRef<{ len: number; firstTs: number; lastTs: number; prefixSig: number } | null>(null);
   const hmBufRef = useRef<HTMLCanvasElement | null>(null);
+  // Finished heatmap LAYER (cells + blur + crisp pass already composited),
+  // keyed by a fingerprint of everything that can change those pixels. A frame
+  // where neither the data nor the projection moved blits this instead of
+  // re-running the per-cell loop and, more importantly, the full-viewport
+  // ctx.filter blur — which alone is 4-12ms on a large plot.
+  const hmLayerRef = useRef<{ sig: string; cv: HTMLCanvasElement } | null>(null);
   // Visible candle price band (ES) — min low / max high of the loaded bars.
   // Heatmap cells fade with distance from this band so far-away GEX walls read
   // as faint context instead of loud bars floating in the dead zone above price.
@@ -645,8 +863,20 @@ export default function EsChartCard({
   // the loaded GEX columns made every SPX→ES conversion (CB line included) shift
   // when the user toggled 1D vs 5D, because a different set of days had spots.
   const dayBasisRef = useRef<Map<string, number>>(new Map());
+  // Bumped on every write to dayBasisRef, so the per-frame basis memo below
+  // can tell that the daily-close table changed without diffing a Map.
+  const dayBasisVerRef = useRef(0);
   // Throttle for the ?debugBasis=1 console dump (the overlay redraws on rAF).
   const basisDebugAtRef = useRef(0);
+  // ?debugBasis=1, read ONCE. This was `new URLSearchParams(location.search)`
+  // inside draw() — a fresh parse of the query string on every single
+  // animation frame, just to test a flag that cannot change without a
+  // navigation.
+  const debugBasisRef = useRef(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { debugBasisRef.current = new URLSearchParams(window.location.search).get("debugBasis") === "1"; } catch {}
+  }, []);
   // Front expiry from the live feed; drives the one-time history backfill.
   const [feedExpiry, setFeedExpiry] = useState<string>("");
   // Expirations offered by the feed + the one the heatmap history is showing.
@@ -904,9 +1134,23 @@ export default function EsChartCard({
   // so during replay we read the stored column at/nearest-below the cursor and
   // derive the rail bars + Call/Put Wall + Flip from it (walls = max +/− net on
   // the active metric; flip = zero-cross, same basis as live). CB stays live.
-  // Recomputed each render (cheap) so a scrub tick (replayTs change) repaints.
-  const replayGex = (() => {
+  // MEMOISED, not "recomputed each render (cheap)" — it is not cheap.
+  //
+  // This is a linear scan of the whole column store, which is capped at 10,000
+  // columns each holding a full strike array, followed by deriveColumnLevels
+  // (two filters, two sorts and a findGEXFlip over that column). It sat in the
+  // render body, so it re-ran on EVERY render of this component while replay was
+  // on — including the 2-8Hz setReplayIdx playback loop and, before the badges
+  // were moved out of React, every mouse move. Its own consumer `chainReplay`
+  // is memoised on `[replayOn, replayGex, chainGreek]`, so that memo could never
+  // hit either.
+  //
+  // minuteColsVerRef is bumped on every write to the column store, which is the
+  // change signal the scan actually depends on.
+  const columnStoreVer = minuteColsVerRef.current + columnsVerRef.current;
+  const replayGex = useMemo(() => {
     if (!replayOn || replayTs == null) return null;
+    void columnStoreVer;
     let col: GexColumn | null = null;
     for (const c of columnsRef.current.values()) {
       if (c.slotTs <= replayTs && (!col || c.slotTs > col.slotTs)) col = c;
@@ -914,7 +1158,12 @@ export default function EsChartCard({
     // cbAware only off ES — see the flag's note in chartMath. On SPX the walls
     // being replayed came from the live feed, which ranks them plainly.
     return deriveColumnLevels(col, gexMetricRef.current, { cbAware: !isEs });
-  })();
+    // `gexMetric` is a dep even though the value is read through a ref: the ref
+    // is what the imperative draws need, but this memo has to REBUILD when the
+    // Vol+OI / Vol toggle moves. Without it, flipping the metric with replay
+    // paused leaves the rail, both walls, the flip and the 0DTE ladder on the
+    // old metric until the cursor moves.
+  }, [replayOn, replayTs, isEs, columnStoreVer, gexMetric]);
   const replayGexRef = useRef(replayGex);
   replayGexRef.current = replayGex;
 
@@ -1048,25 +1297,38 @@ export default function EsChartCard({
 
   // Bar countdown. Its own 1s tick — the candle feed publishes on trades, so
   // hanging this off `rows` would make the clock stutter in a quiet tape.
-  const [countdownNow, setCountdownNow] = useState(0);
+  //
+  // The tick does NOT go through React. It used to be
+  // `setInterval(() => setCountdownNow(Date.now()), 1000)` feeding a useMemo,
+  // which re-rendered this entire component once a second, forever, to update
+  // one text node — and because `rows` was in the memo's deps it also invalidated
+  // on every candle batch. The clock now writes its own <div>.
+  const countdownElRef = useRef<HTMLDivElement | null>(null);
+  const barCountdownOn = indicators.countdown && !replayOn;
   useEffect(() => {
-    if (!indicators.countdown || replayOn) return; // nothing is forming in replay
-    setCountdownNow(Date.now());
-    const id = setInterval(() => setCountdownNow(Date.now()), 1000);
+    const el = countdownElRef.current;
+    if (!el) return;
+    if (!barCountdownOn) { el.textContent = ""; return; }
+    const tick = () => {
+      const node = countdownElRef.current;
+      if (!node) return;
+      const bars = rowsRef.current;
+      if (!bars.length) { node.textContent = ""; return; }
+      const last = bars[bars.length - 1].timestamp;
+      const ms = candleMsRef.current;
+      // Time to the END of the bar the clock is currently inside. Derived from
+      // the last bar's open rather than from `now % candleMs`: 15m/30m/1h bars
+      // are anchored to 09:30 ET and the close forces a short bar, so an
+      // epoch-aligned modulo drifts against the actual grid by up to half a bar.
+      const elapsed = Date.now() - last;
+      if (elapsed < 0) { node.textContent = ""; return; }
+      const txt = fmtCountdown(ms - (elapsed % ms));
+      if (node.textContent !== txt) node.textContent = txt;
+    };
+    tick();
+    const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [indicators.countdown, replayOn]);
-  const barCountdown = useMemo(() => {
-    if (!indicators.countdown || replayOn || !rows.length || !countdownNow) return null;
-    const last = rows[rows.length - 1].timestamp;
-    // Time to the END of the bar the clock is currently inside. Derived from the
-    // last bar's open rather than from `now % candleMs`: 15m/30m/1h bars are
-    // anchored to 09:30 ET and the close forces a short bar, so an epoch-aligned
-    // modulo drifts against the actual grid by up to half a bar.
-    const elapsed = countdownNow - last;
-    if (elapsed < 0) return null;
-    const left = candleMs - (elapsed % candleMs);
-    return fmtCountdown(left);
-  }, [indicators.countdown, replayOn, rows, countdownNow, candleMs]);
+  }, [barCountdownOn]);
 
   // ── EMA + volume series ────────────────────────────────────────────────────
   // Real chart series rather than canvas paint: they need the price scale's own
@@ -1179,14 +1441,21 @@ export default function EsChartCard({
         // resolve to the same ticker (always, on SPY/QQQ).
         const json = await cachedJson<Record<string, unknown> | null>(
           `/api/levels?ticker=${encodeURIComponent(ticker)}`,
-          { ttlMs: 150_000, persist: true },
+          // 30 min TTL, was 2.5. /api/levels is a WEEKLY publish; a 150s TTL
+          // meant the two callers on this card (this one and the emWeekly effect
+          // above) each re-opened a socket every few minutes for a value that
+          // had not moved since Friday.
+          { ttlMs: 1_800_000, persist: true },
         );
         if (cancelled || !json) return;
         const up = parseLevelNum(json.up);
         const down = parseLevelNum(json.down);
         // Both or neither. Half a band is worse than none — a single line with
         // no partner reads as a level someone deliberately drew.
-        if (up != null && down != null) setWeeklyEm({ up, down });
+        // Identity-guarded, like every other cached-poll setter on this card.
+        if (up != null && down != null) {
+          setWeeklyEm((prev) => (prev && prev.up === up && prev.down === down ? prev : { up, down }));
+        }
         else console.warn(`[weekly-em] ${ticker} has no published up/down yet — band not drawn`);
       } catch (e) {
         console.warn("[weekly-em] failed:", e);
@@ -1280,7 +1549,7 @@ export default function EsChartCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
+  useIsoLayoutEffect(() => {
     const own = readSlot(slot);
     if (isChartSymbol(own.symbol)) setSymbolState(own.symbol);
     // ── OWN as the base, SHARED layered over it ──────────────────────────────
@@ -1299,6 +1568,20 @@ export default function EsChartCard({
     // chart cfgSlot IS slot, so the spread is a no-op and this is the old path.
     applySettings(cfgSlot === slot ? own : { ...own, ...readSlot(cfgSlot) }, { initial: true });
     setSettingsLoaded(true);
+    // useLayoutEffect, not useEffect.
+    //
+    // Every page-global request on this card is gated on `settingsLoaded`
+    // (correctly — their URLs are built from the restored symbol/expiry, and
+    // firing them twice would double a ~1.6MB backfill). As a plain effect the
+    // sequence was: render -> effects (all gated ones bail) -> PAINT -> this
+    // setState -> render -> effects fire the requests. A layout effect flushes
+    // before the paint, so the same setState lands in the same frame and the
+    // heavy backfill starts a full paint earlier.
+    //
+    // Deliberately NOT a lazy useState initializer, which would be earlier
+    // still: this route is also server-rendered by Next before the SPA takes
+    // over, and reading localStorage during the first render is a hydration
+    // mismatch. The isomorphic wrapper below keeps SSR on the plain effect.
   }, [slot, cfgSlot, applySettings]);
 
   // ── Shared-toolbar sync ────────────────────────────────────────────────────
@@ -1364,10 +1647,13 @@ export default function EsChartCard({
       applyDefaultView(chart, viewRowsRef.current, candleMsRef.current);
     }
     // The gamma overlays are painted on a canvas that tracks the time scale, so
-    // they have to repaint at the new offset. The visible-range subscription
-    // would get there on its own, but a frame late — and on a chart this dense
-    // that lands as a visible tear.
+    // they have to repaint at the new offset. SYNCHRONOUS on purpose, unlike
+    // every other repaint request in this file: the visible-range subscription
+    // would get there on its own, but a frame late, and on a chart this dense
+    // that lands as a visible tear. This runs once per button press, so there is
+    // nothing to coalesce.
     drawOverlayRef.current();
+    railDrawRef.current();
   }, []);
   // Mirrored into refs so the imperative overlay draw reads them without
   // re-subscribing.
@@ -1462,7 +1748,10 @@ export default function EsChartCard({
   const sessionLevels = useMemo(() => {
     if (!rows.length) return null;
     void clockTick; // re-evaluate on the clock so the window rolls forward
-    const dayKey = (ts: number) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ts));
+    // PERF: etDayKey, not a fresh Intl.DateTimeFormat per row. This is called
+    // inside a loop over every candle (~7k at 1m/5d) and used to construct a
+    // formatter each time.
+    const dayKey = etDayKey;
 
     // Build the ms boundaries for "today" in ET from the current time.
     const now = Date.now();
@@ -1506,7 +1795,7 @@ export default function EsChartCard({
   const ibLevels = useMemo(() => {
     if (!rows.length) return null;
     void clockTick;
-    const dayKey = (ts: number) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ts));
+    const dayKey = etDayKey; // PERF: see sessionLevels above.
     const today = dayKey(Date.now());
     let h = -Infinity, l = Infinity;
     for (const r of rows) {
@@ -1645,7 +1934,7 @@ export default function EsChartCard({
         // Lock basis on first set only — never recalculate intraday so heatmap stays fixed.
         if (nextBasis != null && !basisRef.current) basisRef.current = nextBasis;
         else if (!basisRef.current && nextSpx != null && nextEs != null) basisRef.current = nextEs - nextSpx;
-        return {
+        const next = {
           callWall: d.callWall != null ? Number(d.callWall) || null : prev.callWall,
           putWall:  d.putWall  != null ? Number(d.putWall)  || null : prev.putWall,
           gexFlip:  computedFlip != null ? computedFlip : prev.gexFlip,
@@ -1655,6 +1944,21 @@ export default function EsChartCard({
           spx:      nextSpx,
           esFut:    nextEs,
         };
+        // Bail out when nothing actually moved.
+        //
+        // This updater unconditionally returned a new object literal, so EVERY
+        // spot/aux/gex frame — several per second — gave `levels` a new identity
+        // and re-rendered the whole card, whether or not a single field had
+        // changed. Worse, `levels.esFut` and `levels.basis` are in the dep array
+        // of the live-SPX effect, so each of those frames also tore down and
+        // re-registered a time-scale subscription. (Same pattern already used
+        // correctly by setLineLevels further down.)
+        if (
+          next.callWall === prev.callWall && next.putWall === prev.putWall &&
+          next.gexFlip === prev.gexFlip && next.mvc === prev.mvc &&
+          next.basis === prev.basis && next.spx === prev.spx && next.esFut === prev.esFut
+        ) return prev;
+        return next;
       });
 
       // Snapshot per-strike GEX into the current 5-min column.
@@ -1686,7 +1990,20 @@ export default function EsChartCard({
           // Feed the vertical GEX rail with the current frame's per-strike net,
           // using the active heatmap metric (Vol+OI vs Vol-only).
           const metric = gexMetricRef.current;
-          setRailRows(cells.map((c) => ({ strike: c.strike, net: metric === "vol" ? c.netVol : c.netOiVol })));
+          // Identity-guarded: this built a brand-new array of EVERY strike on
+          // every gex frame, which re-rendered the card (and the rail) even when
+          // the ladder was byte-identical to the last one.
+          setRailRows((prev) => {
+            const nextRows = cells.map((c) => ({ strike: c.strike, net: metric === "vol" ? c.netVol : c.netOiVol }));
+            if (prev.length === nextRows.length) {
+              let same = true;
+              for (let i = 0; i < nextRows.length; i++) {
+                if (prev[i].strike !== nextRows[i].strike || prev[i].net !== nextRows[i].net) { same = false; break; }
+              }
+              if (same) return prev;
+            }
+            return nextRows;
+          });
           const slotTs = slotFloorMs(Date.now());
           // 1-min bucket for the bubble trail (last write in the minute wins).
           const minTs = Math.floor(Date.now() / 60_000) * 60_000;
@@ -1729,21 +2046,19 @@ export default function EsChartCard({
           // at draw time.
           if (replayOnRef.current || liveDay === lastBubbleDayRef.current) {
             mmap.set(minTs, { slotTs: minTs, cells, spot: spx > 0 ? spx : undefined });
-            if (mmap.size > 2000) mmap.delete(Math.min(...mmap.keys()));
+            if (mmap.size > 2000) evictOldest(mmap, 2000);
             minuteColsVerRef.current++;
           }
           const map = columnsRef.current;
+          columnsVerRef.current++;
           // Stamp the live column with the SPX spot from THIS frame so it ages
           // into history carrying its own basis, exactly like a DB-backfilled one.
           map.set(slotTs, { slotTs, cells, spot: spx > 0 ? spx : undefined });
           // Keep ~2 full days of 1-min slots (a 24h day = 1440 slots). The old
           // 200 cap chopped off the morning columns mid-session, making the
           // all-day heatmap vanish from the left.
-          if (map.size > 10000) {
-            const oldest = Math.min(...map.keys());
-            map.delete(oldest);
-          }
-          drawOverlayRef.current(); // repaint with the fresh/updated column
+          if (map.size > 10000) evictOldest(map, 10000);
+          schedulePaint(); // repaint with the fresh/updated column
         }
       }
     };
@@ -1759,7 +2074,7 @@ export default function EsChartCard({
 
   // Value-driven bandwidth gate, unchanged — it now decides whether this page
   // subscribes to the shared socket rather than whether it opens its own.
-  useGexSocket(esShouldConnect, onGexFrame, undefined, ES_CHART_TOPICS);
+  useGexSocket(esShouldConnect, onGexFrame, undefined, isEs ? ES_CHART_TOPICS : ETF_CHART_TOPICS);
 
   // ── ETF GEX refresh ────────────────────────────────────────────────────────
   // SPX columns arrive two ways: this HTTP backfill for history, then the
@@ -2035,13 +2350,14 @@ export default function EsChartCard({
     lastWallDayRef.current = wallDayNow;
     if (shapeChanged) {
       columnsRef.current.clear();
+      columnsVerRef.current++;
       minuteColsRef.current.clear();
       minuteColsVerRef.current++;
-      drawOverlayRef.current();
+      schedulePaint();
     } else if (dayChanged) {
       minuteColsRef.current.clear();
       minuteColsVerRef.current++;
-      drawOverlayRef.current();
+      schedulePaint();
     }
     (async () => {
       try {
@@ -2094,6 +2410,7 @@ export default function EsChartCard({
         // response; a same-key WS re-render must NOT discard it.
         if (lastHeatmapKeyRef.current !== fetchKey || !raw.length) return;
         const map = columnsRef.current;
+        columnsVerRef.current++;
         // DB rows are 1-min granular; snap to the 5-min candle grid. Sort
         // descending so the newest snapshot within each bucket wins (first seen).
         const sortedRaw = [...raw].sort((a, b) => b.slotTs - a.slotTs);
@@ -2191,7 +2508,7 @@ export default function EsChartCard({
         });
         // Rows are in — let the derived walls/flip republish off them.
         setGexVersion((v) => v + 1);
-        drawOverlayRef.current();
+        schedulePaint();
       } catch (e) {
         // Live feed still populates the front expiry going forward, so this is
         // survivable — but it must not be invisible.
@@ -2277,7 +2594,22 @@ export default function EsChartCard({
           console.log("[basis] parsed CB pts (first 3):", pts.slice(0, 3));
         }
         if (cancelled) return;
-        setMvcHistory(pts);
+        // Identity-guarded on (length, last ts). The poll runs every 60s and
+        // returns ~1000 rows of which at most ONE is new — but the array was
+        // replaced wholesale each time, and `mvcHistory` is a dependency of the
+        // big overlay draw effect, so every poll used to rebuild that effect.
+        setMvcHistory((prev) => {
+          if (prev.length !== pts.length) return pts;
+          // Full content compare, not just the newest row: `basis` starts null
+          // and is filled in by a later poll for the SAME ts/spx, and the
+          // recorders do revise middle rows. A weaker key drops those silently,
+          // and basisSig below is built from this array.
+          for (let i = 0; i < pts.length; i++) {
+            const a = prev[i], b = pts[i];
+            if (a.ts !== b.ts || a.spx !== b.spx || a.spxPx !== b.spxPx || a.basis !== b.basis) return pts;
+          }
+          return prev;
+        });
         // Latest CB (SPX points) → the legend chip. strikeOIVol is a real strike,
         // so this is trustworthy — unlike the row's gexFlip column, which the
         // recorders backfill with the CB strike when /api/gex omits a flip. The
@@ -2344,7 +2676,7 @@ export default function EsChartCard({
 
   useEffect(() => {
     let canceled = false;
-    const init = async () => {
+    const init = (): (() => void) | undefined => {
       const container = chartRef.current;
       if (!container) return;
       if (canceled) return;
@@ -2432,6 +2764,9 @@ export default function EsChartCard({
       });
       chartApiRef.current = chart;
       candleSeriesRef.current = candleSeries;
+      // A fresh series holds nothing, so the tail-update fast path must not
+      // believe the shape recorded against the OLD one.
+      seriesShapeRef.current = null;
       // The old series is gone with the old chart — any handles still in the map
       // are dead. Drop them so the draw effect recreates against the new series
       // instead of applyOptions-ing a destroyed line.
@@ -2471,8 +2806,13 @@ export default function EsChartCard({
         chart.applyOptions({ width: w, height: h });
         if (wasCollapsed) {
           applyDefaultView(chart, viewRowsRef.current, candleMsRef.current);
-          drawOverlayRef.current();
         }
+        // The overlay canvas is sized from this same box, so a resize always
+        // invalidates it. (This used to be a SECOND ResizeObserver created and
+        // destroyed by the overlay effect — which had `rows` in its deps, so it
+        // was being torn down and rebuilt several times a second, and
+        // ro.observe() fires a synchronous callback on every construction.)
+        schedulePaint();
       });
       ro.observe(container);
       lastW = Math.round(container.clientWidth);
@@ -2486,29 +2826,91 @@ export default function EsChartCard({
       const onDblClick = () => {
         applyDefaultView(chart, viewRowsRef.current, candleMsRef.current);
         chart.priceScale("right").applyOptions({ autoScale: true });
-        drawOverlayRef.current();
+        schedulePaint();
       };
       container.addEventListener("dblclick", onDblClick);
 
       // Crosshair SPX readout: convert the ES price under the cursor → SPX and
       // pin a label at that y. Cleared when the cursor leaves the chart.
       const onCrosshair = (param: { point?: { y: number }; seriesData?: Map<unknown, unknown> }) => {
-        if (!param.point) { setCrossSpx(null); return; }
+        if (!param.point) { paintBadge(crossSpxElRef.current, null); return; }
         const es = candleSeries.coordinateToPrice(param.point.y);
-        if (es == null) { setCrossSpx(null); return; }
-        setCrossSpx({ y: param.point.y, spx: (es as number) - effectiveBasis() });
+        if (es == null) { paintBadge(crossSpxElRef.current, null); return; }
+        paintBadge(crossSpxElRef.current, { y: param.point.y, spx: (es as number) - effectiveBasis() });
       };
       chart.subscribeCrosshairMove(onCrosshair);
 
+      // ── Overlay repaint wiring ──────────────────────────────────────────
+      //
+      // These five subscriptions live HERE, with the chart, because their
+      // lifetime is the chart's. They used to live in the overlay draw effect,
+      // whose dep array contains `rows` / `profile` / `tpoProfiles` / `bb` —
+      // all of which get a fresh identity on every candle batch. So four times
+      // a second (twelve on a three-card row) this whole set was unsubscribed,
+      // a ResizeObserver was disconnected and rebuilt, and three DOM listeners
+      // were removed and re-added. That churn was the single largest React-side
+      // cost on the page, and none of it produced a pixel.
+      //
+      // Nothing here needs to change when the data changes: they all just ask
+      // for a repaint, and the repaint reads the latest closure out of
+      // drawOverlayRef.
+      const tsApi = chart.timeScale();
+      tsApi.subscribeVisibleLogicalRangeChange(schedulePaint);
+
+      // lightweight-charts doesn't expose a price-scale (Y-axis) range-change
+      // event — dragging the right axis to expand/contract the chart vertically
+      // only fires DOM pointer/wheel events, not subscribeVisibleLogicalRangeChange
+      // (that's time-axis only). Without this, the GEX rail's bar thickness
+      // (tied to on-screen strike spacing) would lag behind a live vertical
+      // zoom/drag instead of tracking it.
+      //
+      // DRAGS ONLY. This was a bare `schedule` on pointermove, so every mouse
+      // movement over the chart — just moving the crosshair around while reading
+      // it — repainted the ENTIRE overlay and the rail at the pointer's event
+      // rate. A hover changes nothing about the projection, so all of that work
+      // was thrown away. `buttons !== 0` keeps the case this listener exists for
+      // and drops the rest; pointerup still catches the settled state.
+      // markInteracting: sets the gesture flag and schedules a settle. A trailing
+      // repaint after the settle re-renders the frame at full precision (see the
+      // glow-sprite quantisation note).
+      const markInteracting = () => {
+        interactingRef.current = true;
+        if (interactEndRef.current) clearTimeout(interactEndRef.current);
+        interactEndRef.current = setTimeout(() => {
+          interactEndRef.current = null;
+          interactingRef.current = false;
+          schedulePaint();
+        }, 180);
+      };
+      const onDragMove = (e: PointerEvent) => { if (e.buttons !== 0) { markInteracting(); schedulePaint(); } };
+      const onWheel = () => { markInteracting(); schedulePaint(); };
+      const onPointerUp = () => { markInteracting(); schedulePaint(); };
+      container.addEventListener("wheel", onWheel, { passive: true });
+      container.addEventListener("pointermove", onDragMove);
+      container.addEventListener("pointerup", onPointerUp);
+
       return () => {
         ro.disconnect();
+        if (interactEndRef.current) { clearTimeout(interactEndRef.current); interactEndRef.current = null; }
+        interactingRef.current = false;
         chart.unsubscribeCrosshairMove(onCrosshair);
+        tsApi.unsubscribeVisibleLogicalRangeChange(schedulePaint);
         container.removeEventListener("dblclick", onDblClick);
+        container.removeEventListener("wheel", onWheel);
+        container.removeEventListener("pointermove", onDragMove);
+        container.removeEventListener("pointerup", onPointerUp);
       };
     };
 
-    let cleanup: void | (() => void);
-    void init().then((fn) => { cleanup = fn; });
+    // NOT async.
+    //
+    // `init` was declared `async` and contained no `await`, so `cleanup = fn`
+    // landed in a microtask while the returned cleanup runs synchronously. Under
+    // StrictMode's double-mount the first cleanup therefore ran BEFORE the
+    // assignment and silently did nothing — leaking the ResizeObserver, the
+    // dblclick listener and the crosshair subscription, and leaving an orphaned
+    // observer calling applyOptions() on a removed chart for the life of the page.
+    const cleanup = init();
 
     return () => {
       canceled = true;
@@ -2517,7 +2919,7 @@ export default function EsChartCard({
       chartApiRef.current = null;
       candleSeriesRef.current = null;
     };
-  }, []);
+  }, [schedulePaint]);
 
   useEffect(() => {
     const candleSeries = candleSeriesRef.current;
@@ -2526,18 +2928,76 @@ export default function EsChartCard({
 
     // Replay: reveal only bars at/before the cursor (null = live, full history).
     const srcRows = replayTs != null ? rows.filter((r) => r.timestamp <= replayTs) : rows;
-    const candleData: CandlestickData[] = srcRows.map((row) => ({
-      time: toChartTime(row.timestamp),
-      open: row.open,
-      high: row.high,
-      low: row.low,
-      close: row.close,
-    }));
 
-    candleSeries.setData(candleData);
+    // ── setData() vs update() ─────────────────────────────────────────────
+    //
+    // The overwhelmingly common case on a live tape is "same bars, last one's
+    // close moved". This effect used to answer that by mapping all ~7,000 rows
+    // into ~7,000 fresh objects and handing them to setData(), which makes
+    // lightweight-charts re-ingest and re-index the ENTIRE series — several
+    // times a second.
+    //
+    // series.update() takes one bar and is O(1). It is only valid when the bar
+    // count and the leading timestamps are unchanged, so we track the previous
+    // shape and fall back to setData() for anything else (interval switch,
+    // symbol switch, history load, replay scrub, a new bar appearing).
+    const lastRow = srcRows.length ? srcRows[srcRows.length - 1] : null;
+    const prevShape = seriesShapeRef.current;
+    // Hash of every bar EXCEPT the last, so "only the tail changed" is proven
+    // rather than assumed. (len, firstTs, lastTs) is not enough: `rows5` is a
+    // slotKey merge in which the live socket copy overwrites the SQLite copy,
+    // and rollupCandles rebuilds every bucket at 15m/30m/1h — either can revise
+    // a bar in the middle of the array while all three anchors stay equal, and
+    // update() would then discard that correction permanently.
+    //
+    // FNV-1a over integers via Math.imul: no allocation, no string building,
+    // ~7k iterations of integer arithmetic. Cheap next to allocating 7k objects
+    // and making lightweight-charts re-index the whole series.
+    const prefixSig = (() => {
+      let hval = 2166136261;
+      for (let i = 0; i < srcRows.length - 1; i++) {
+        const r = srcRows[i];
+        hval = Math.imul(hval ^ (r.timestamp | 0), 16777619);
+        hval = Math.imul(hval ^ Math.round(r.open * 100), 16777619);
+        hval = Math.imul(hval ^ Math.round(r.high * 100), 16777619);
+        hval = Math.imul(hval ^ Math.round(r.low * 100), 16777619);
+        hval = Math.imul(hval ^ Math.round(r.close * 100), 16777619);
+        hval = Math.imul(hval ^ (r.volume | 0), 16777619);
+      }
+      return hval >>> 0;
+    })();
+    const canUpdateTail =
+      prevShape != null &&
+      lastRow != null &&
+      prevShape.len === srcRows.length &&
+      prevShape.firstTs === srcRows[0].timestamp &&
+      prevShape.lastTs === lastRow.timestamp &&
+      prevShape.prefixSig === prefixSig;
+
+    if (canUpdateTail) {
+      candleSeries.update({
+        time: toChartTime(lastRow!.timestamp),
+        open: lastRow!.open,
+        high: lastRow!.high,
+        low: lastRow!.low,
+        close: lastRow!.close,
+      });
+    } else {
+      const candleData: CandlestickData[] = srcRows.map((row) => ({
+        time: toChartTime(row.timestamp),
+        open: row.open,
+        high: row.high,
+        low: row.low,
+        close: row.close,
+      }));
+      candleSeries.setData(candleData);
+    }
+    seriesShapeRef.current = lastRow
+      ? { len: srcRows.length, firstTs: srcRows[0].timestamp, lastTs: lastRow.timestamp, prefixSig }
+      : null;
     // Track the price band the candles actually occupy so the heatmap can fade
     // by distance from it.
-    if (candleData.length) {
+    if (srcRows.length) {
       let lo = Infinity, hi = -Infinity;
       for (const r of srcRows) { if (r.low < lo) lo = r.low; if (r.high > hi) hi = r.high; }
       candleBandRef.current = Number.isFinite(lo) ? { lo, hi } : null;
@@ -2548,20 +3008,18 @@ export default function EsChartCard({
     // the day we last fit for — so the chart follows the session into the new
     // day instead of staying parked on the prior one. Within the same day we
     // never re-center, preserving the user's pan/zoom on live updates.
-    const lastDay = candleData.length ? rows[rows.length - 1].date : "";
-    barCountRef.current = candleData.length;
+    const lastDay = srcRows.length ? rows[rows.length - 1].date : "";
+    barCountRef.current = srcRows.length;
     viewRowsRef.current = srcRows;
-    if (candleData.length && (!didFitRef.current || lastDay !== lastFitDayRef.current)) {
+    if (srcRows.length && (!didFitRef.current || lastDay !== lastFitDayRef.current)) {
       applyDefaultView(chart, srcRows, candleMsRef.current);
       didFitRef.current = true;
       lastFitDayRef.current = lastDay;
     }
-    updateLiveSpxRef.current();
+    schedulePaint();
     // Live candle updates shift the time axis without always firing a logical-
     // range change, which could leave the heatmap overlay painting a stale or
     // cleared frame. Repaint whenever candle data changes.
-    drawOverlayRef.current();
-    railDrawRef.current();
   }, [rows, replayTs]);
 
   // Live SPX badge: last ES close → SPX, pinned at its y-coordinate on the
@@ -2572,17 +3030,21 @@ export default function EsChartCard({
       const series = candleSeriesRef.current;
       // Follow the replay cursor when active so the badge isn't a lookahead.
       const src = replayTsRef.current != null ? rows.filter((r) => r.timestamp <= replayTsRef.current!) : rows;
-      if (!series || !src.length) { setLiveSpx(null); return; }
+      if (!series || !src.length) { paintBadge(liveSpxElRef.current, null); return; }
       const lastEs = src[src.length - 1].close;
       const y = series.priceToCoordinate(lastEs);
-      if (y == null) { setLiveSpx(null); return; }
-      setLiveSpx({ y, spx: lastEs - effectiveBasis() });
+      if (y == null) { paintBadge(liveSpxElRef.current, null); return; }
+      paintBadge(liveSpxElRef.current, { y, spx: lastEs - effectiveBasis() });
     };
     updateLiveSpxRef.current();
-    const chart = chartApiRef.current;
-    const onRange = () => updateLiveSpxRef.current();
-    chart?.timeScale().subscribeVisibleLogicalRangeChange(onRange);
-    return () => { chart?.timeScale().unsubscribeVisibleLogicalRangeChange(onRange); };
+    // No range subscription here any more.
+    //
+    // schedulePaint() calls updateLiveSpxRef on every paint, and every pan/zoom
+    // produces a paint — so this effect's own
+    // subscribeVisibleLogicalRangeChange was a third subscriber to the same
+    // event doing the same work. It was also re-registered whenever
+    // `levels.esFut` moved a tick, which (before setLevels was identity-guarded)
+    // was several times a second.
   }, [rows, prevCloses, levels.basis, levels.esFut, levels.spx]);
 
   // Feed the LIVE basis inputs (see effectiveBasis §1). lastEsCloseRef is the charted
@@ -2633,10 +3095,9 @@ export default function EsChartCard({
               const n = Number(v);
               if (isPlausibleBasis(n)) next.set(d, n);
             }
-            if (next.size) dayBasisRef.current = next;
+            if (next.size) { dayBasisRef.current = next; dayBasisVerRef.current++; }
           }
-          drawOverlayRef.current();
-          railDrawRef.current();
+          schedulePaint();
         } else {
           console.warn(`[basis] trusted basis unusable:`, j);
         }
@@ -2670,6 +3131,21 @@ export default function EsChartCard({
   // ES-only, same reason as the /proxy/es-spx-basis poll above — and this one
   // would additionally spam the "NO ANCHOR" warning on every SPY/QQQ refresh,
   // since ETF bars have no 16:00 ES close to anchor against.
+  // PREFETCH: warm the eod-gex cache entry the moment the card mounts.
+  //
+  // `compute` below can't run until `historical` has loaded, because it derives
+  // the ES date from the candles — so this request was strictly serialized
+  // behind the candle round-trip even though it needs nothing from it (the date
+  // match falls back to spxRows[0]). Firing it here overlaps the two; `compute`
+  // then hits the cachedJson entry instead of opening a socket.
+  useEffect(() => {
+    if (!isEs) return;
+    void cachedJson<{ rows?: unknown }>(
+      `/api/eod-gex?symbol=$SPX&limit=30`,
+      { ttlMs: 600_000, persist: true },
+    ).catch(() => {});
+  }, [isEs]);
+
   useEffect(() => {
     if (!isEs) return;
     let cancelled = false;
@@ -2715,7 +3191,12 @@ export default function EsChartCard({
           const anchor = esClose - spxClose;
           if (isPlausibleBasis(anchor)) {
             prevBasisRef.current = anchor;
-            setPrevCloses({ es: esClose, spx: spxClose, date: esDate });
+            // Identity-guarded: polled every 5 min for a value that changes once
+            // a day at the close.
+            setPrevCloses((prev) =>
+              prev && prev.es === esClose && prev.spx === spxClose && prev.date === esDate
+                ? prev
+                : { es: esClose, spx: spxClose, date: esDate });
           } else {
             // ES close and SPX close disagree impossibly → one of them is from the
             // wrong contract/day. Refuse it; a bad anchor poisons every level.
@@ -2740,14 +3221,17 @@ export default function EsChartCard({
           // SPX closes are backfill artifacts — this is the weaker source and must not
           // clobber the good one on its 5-min refresh.
           if (next.size && !isPlausibleBasis(trustedBasisRef.current)) {
-            dayBasisRef.current = next;
-            drawOverlayRef.current(); // repaint with the corrected historical basis
+            dayBasisRef.current = next; dayBasisVerRef.current++;
+            schedulePaint(); // repaint with the corrected historical basis
           }
         }
       } catch { /* keep last frozen basis */ }
     };
     void compute();
-    const id = setInterval(compute, 300_000);
+    // 30 min, was 5. These are prior-day CLOSES: they change exactly once a day,
+    // at 16:00 ET. A 5-minute poll was 78 requests a day per card to observe one
+    // change, and every one of them re-ran the whole per-day basis rebuild.
+    const id = setInterval(compute, 1_800_000);
     return () => { cancelled = true; clearInterval(id); };
   }, [historical, isEs]);
 
@@ -2788,6 +3272,7 @@ export default function EsChartCard({
     if (prevSymbolRef.current === symbol) return;
     prevSymbolRef.current = symbol;
     columnsRef.current.clear();
+    columnsVerRef.current++;
     minuteColsRef.current.clear();
     minuteColsVerRef.current++;
     // ── Re-fit the view for the new instrument ────────────────────────────────
@@ -2830,21 +3315,21 @@ export default function EsChartCard({
     setSelectedExpiry("");
     setLineLevels({ callWall: null, putWall: null, gexFlip: null });
     setRailRows([]);
-    setLiveSpx(null);
-    setCrossSpx(null);
+    paintBadge(liveSpxElRef.current, null);
+    paintBadge(crossSpxElRef.current, null);
+    seriesShapeRef.current = null; // force a full setData on the new symbol
     // The ES-only basis sources are NOT cleared by their own gated effects (they
     // simply stop refreshing), so a switch would leave the previous symbol's
     // ~50pt ES−SPX carry sitting in these refs — and buildBasisAt's
     // "abs(b) >= 1 wins" rule actively PREFERS that stale value over 0 for every
     // prior-day column. Wipe them with the columns they belong to.
-    dayBasisRef.current = new Map();
+    dayBasisRef.current = new Map(); dayBasisVerRef.current++;
     prevBasisRef.current = 0;
     trustedBasisRef.current = 0;
     basisRef.current = 0;
     setPrevCloses(null);
     setGexVersion((v) => v + 1);
-    drawOverlayRef.current();
-    railDrawRef.current();
+    schedulePaint();
   }, [symbol]);
 
   // ── Re-fit the view when the timeframe changes ─────────────────────────────
@@ -2866,7 +3351,7 @@ export default function EsChartCard({
     // assignment above this component's body has already updated but which is
     // easy to mistake for stale when reading this in isolation.
     applyDefaultView(chartApiRef.current, viewRowsRef.current, intervalMs(interval));
-    drawOverlayRef.current();
+    schedulePaint();
   }, [interval]);
 
   useEffect(() => {
@@ -2925,8 +3410,7 @@ export default function EsChartCard({
       const b = toTick(effectiveBasis());
       if (b === steadyBasisRef.current) return; // nothing moved → no repaint
       steadyBasisRef.current = b;
-      drawOverlayRef.current();
-      railDrawRef.current();
+      schedulePaint();
     };
     publish();
     const id = setInterval(publish, 60_000);
@@ -3221,14 +3705,36 @@ export default function EsChartCard({
           return Math.abs(b) >= 1 ? b : (basis || prevBasisRef.current || b);
         };
       };
-      const basisAt = buildBasisAt();
+      // PERF: the basis model is built ONCE per data change, not per frame.
+      //
+      // buildBasisAt() walks all of mvcHistory, binary-searches the candle array
+      // once per CB point, calls etDayKey per point, builds two Maps, sorts the
+      // day list and takes a median (array copy + sort) per day. None of that
+      // depends on the viewport — only on the CB history, the candles and the
+      // basis inputs — yet it ran on every single repaint, including repaints
+      // caused by nothing but a crosshair move.
+      //
+      // Same memo-behind-a-signature shape the bubble prep already uses below.
+      const basisSig = [
+        mvcHistory.length, mvcHistoryHash,
+        rows.length, rowsHash,
+        Math.round(basis * 1000),
+        dayBasisVerRef.current,
+        Math.round((prevBasisRef.current || 0) * 1000),
+        isEs ? 1 : 0,
+      ].join("|");
+      let basisAt: (tsMs: number) => number;
+      if (basisFnRef.current && basisFnRef.current.sig === basisSig) {
+        basisAt = basisFnRef.current.fn;
+      } else {
+        basisAt = buildBasisAt();
+        basisFnRef.current = { sig: basisSig, fn: basisAt };
+      }
 
       // ?debugBasis=1 → dump exactly what basis each source yields per ET day, so
       // a wrong level can be traced to a number instead of eyeballed off a chart.
       // Logs once per second at most; costs nothing when the flag is absent.
-      if (typeof window !== "undefined"
-          && new URLSearchParams(window.location.search).get("debugBasis") === "1"
-          && Date.now() - basisDebugAtRef.current > 1000) {
+      if (debugBasisRef.current && Date.now() - basisDebugAtRef.current > 1000) {
         basisDebugAtRef.current = Date.now();
         const todayKey = rows.length ? etDayKey(rows[rows.length - 1].timestamp) : "";
         const days = [...new Set([...columnsRef.current.values()].map((c) => etDayKey(c.slotTs)))].sort();
@@ -3426,6 +3932,68 @@ export default function EsChartCard({
       // Rendered to an offscreen buffer, then composited back through a blur so
       // adjacent strike/time cells melt into smooth bands instead of hard tiles.
       if (showHeatmap) {
+        // ── PERF: whole-layer cache ────────────────────────────────────────
+        //
+        // Everything below — the spread/filter/sort of the column store, the
+        // per-column loop, and the two full-viewport composites — produces the
+        // SAME pixels whenever neither the data nor the projection has moved.
+        // And it was running on every repaint, including repaints triggered by
+        // nothing but a crosshair move or the 5s backstop.
+        //
+        // The blur is the expensive half: `ctx.filter = "blur(2.5px)"` over a
+        // 1600x700 plot is 4-12ms on its own, and `ctx.filter` / `shadowBlur`
+        // are the two most expensive things you can ask a 2D context for.
+        //
+        // So: composite the finished layer into its own canvas, fingerprint the
+        // inputs, and on a match just blit it. Pre-compositing is exact rather
+        // than approximate — source-over is associative, so (sharp over blur)
+        // over scene is identical to sharp over (blur over scene).
+        // Gutter width is measured BEFORE the fingerprint, not inside the build
+        // below: it is an input to the layer's pixels, so if a cache hit skipped
+        // the measurement the ref could never notice the gutter had moved and
+        // the layer would stay stale forever.
+        {
+          let measured = 0;
+          try { measured = chart.priceScale("right").width(); } catch {}
+          if (Math.abs(measured - hmScaleWRef.current) >= 1) hmScaleWRef.current = measured;
+        }
+        const vr = ts.getVisibleLogicalRange();
+        const probeA = series.priceToCoordinate(5000);
+        const probeB = series.priceToCoordinate(6000);
+        const cband = candleBandRef.current;
+        const barsNow = rowsRef.current;
+        const hmSig = [
+          Math.round(w), Math.round(h),
+          vr ? Math.round(vr.from * 100) : "n", vr ? Math.round(vr.to * 100) : "n",
+          Math.round(barSpacing * 100),
+          probeA == null ? "n" : Math.round(probeA * 10),
+          probeB == null ? "n" : Math.round(probeB * 10),
+          minuteColsVerRef.current,
+          // Column store version. NOT the same counter as minuteColsVerRef —
+          // that one tracks the BUBBLE minute map, and a live frame can write a
+          // heatmap column without touching it (see the live ingest path).
+          columnsVerRef.current,
+          // The basis model itself. basisAt() decides the Y of every cell, and it
+          // is rebuilt whenever the CB history / daily-close map / prior-day
+          // anchor moves — none of which show up in any other term here. Without
+          // this the bands stay frozen on the basis they were first drawn with
+          // while the CB line and the flip comet (not cached) move to the
+          // corrected one, and the two disagree by 10-30pt over a 5-day window.
+          basisSig,
+          gexMetricRef.current,
+          Math.round(intensity * 1000),
+          replayTsRef.current ?? "n",
+          cband ? Math.round(cband.lo * 10) : "n",
+          cband ? Math.round(cband.hi * 10) : "n",
+          barsNow.length, barsNow.length ? barsNow[barsNow.length - 1].timestamp : 0,
+          Math.round(hmScaleWRef.current),
+          Math.round(paintSlotMs),
+          Math.round((steadyBasisRef.current || 0) * 100),
+        ].join("|");
+        const cached = hmLayerRef.current;
+        if (cached && cached.sig === hmSig && cached.cv.width === Math.max(1, Math.round(w))) {
+          ctx.drawImage(cached.cv, 0, 0, w, h);
+        } else {
         const colsRaw = [...columnsRef.current.values()]
           .filter((c) => replayTsRef.current == null || c.slotTs <= replayTsRef.current)
           .sort((a, b) => a.slotTs - b.slotTs);
@@ -3446,11 +4014,7 @@ export default function EsChartCard({
         // a ref and only accept changes of >=1px: the live price label can wobble
         // the measured width sub-pixel each tick, and reacting to that per-frame
         // made the band edge shimmer. The cached, snapped value is stable.
-        let measuredScaleW = 0;
-        try { measuredScaleW = chart.priceScale("right").width(); } catch {}
-        if (Math.abs(measuredScaleW - hmScaleWRef.current) >= 1) {
-          hmScaleWRef.current = measuredScaleW;
-        }
+        // (The measurement itself now happens above the layer-cache gate.)
         const hmPlotRight = Math.max(0, w - hmScaleWRef.current - 1);
         const lastSlotTs = cols.length ? cols[cols.length - 1].slotTs : -1;
         // ── How far right the band may reach ────────────────────────────────
@@ -3503,11 +4067,41 @@ export default function EsChartCard({
             if (d <= 0) return 1;
             return Math.max(0.12, 1 - d / fadeSpan);
           };
+          // PERF: strike → Y, memoised per basis value for the whole frame.
+          //
+          // This loop used to call series.priceToCoordinate() TWICE per cell.
+          // With showHeatmap on, needsFullLadder disables the server-side `top`
+          // truncation, so a column carries the full ~200-400 strike ladder —
+          // hundreds of visible columns worked out to 50k-250k of these calls
+          // per frame, and half were redundant by construction (a cell's top
+          // edge IS the next cell's bottom edge).
+          //
+          // Two facts collapse it: the strike grid is identical across columns,
+          // and `colBasis` is a per-ET-SESSION constant, so there are only ever
+          // a handful of distinct (basis, strike) pairs in a frame. Cache them.
+          const yCache = new Map<number, Map<number, number | null>>();
+          const yFor = (basis: number, strike: number): number | null => {
+            let m = yCache.get(basis);
+            if (!m) { m = new Map(); yCache.set(basis, m); }
+            const hit = m.get(strike);
+            if (hit !== undefined) return hit;
+            const v = series.priceToCoordinate(strike + basis);
+            m.set(strike, v ?? null);
+            return v ?? null;
+          };
+          // PERF: one slotX() per column, not two.
+          //
+          // The loop below needs the NEXT column's left edge to carry a column
+          // forward, and it used to get that by calling slotX(cols[ci+1]) — then
+          // threw the result away and recomputed the identical value as `sx` on
+          // the following iteration. slotX is 2 xAt() calls, each a binary search
+          // over the bar array plus a timeScale.timeToCoordinate(), so that was
+          // ~4 of those per column instead of 2.
+          const xs: Array<{ left: number; w: number } | null> = new Array(cols.length);
+          for (let ci = 0; ci < cols.length; ci++) xs[ci] = slotX(cols[ci].slotTs);
           for (let ci = 0; ci < cols.length; ci++) {
             const col = cols[ci];
-            // Per-session historical basis (see buildBasisAt above).
-            const colBasis = basisAt(col.slotTs);
-            const sx = slotX(col.slotTs);
+            const sx = xs[ci];
             if (!sx) continue;
             // Carry each column forward to the NEXT stored column's left edge so
             // slots with no GEX update (the WS skip-if-unchanged throttle stops
@@ -3516,7 +4110,7 @@ export default function EsChartCard({
             if (col.slotTs === lastSlotTs && bandRight > sx.left) {
               sx.w = bandRight - sx.left;
             } else if (ci + 1 < cols.length) {
-              const nextX = slotX(cols[ci + 1].slotTs);
+              const nextX = xs[ci + 1];
               if (nextX && nextX.left > sx.left) sx.w = nextX.left - sx.left;
             }
             // CULL to the visible plot. slotX only returns null for times the
@@ -3527,24 +4121,58 @@ export default function EsChartCard({
             // of work per frame to show the ~40 on screen. Must come AFTER the
             // carry-forward above (that's what sets the real width).
             if (sx.left + sx.w < -2 || sx.left > bandRight + 2) continue;
-            // Per-column max + top-3 magnitudes for THIS metric (drives color/rank).
-            const absVals = col.cells.map((c) => Math.abs(valOf(c))).filter((v) => v > 0);
-            const colMax = absVals.length ? Math.max(...absVals) : 1;
-            const colTop3 = [...absVals].sort((a, b) => b - a).slice(0, 3);
-            const sorted = [...col.cells].sort((a, b) => a.strike - b.strike);
+            // Per-session historical basis (see buildBasisAt above). Resolved
+            // AFTER the cull — basisAt() does an etDayKey + a binary search, and
+            // running it for every stored column just to discard the answer for
+            // the off-screen ones was most of its cost.
+            const colBasis = basisAt(col.slotTs);
+            // Per-column max + top-3 magnitudes for THIS metric (drives color/rank),
+            // and the strike-sorted cell list.
+            //
+            // PERF: cached ON THE COLUMN. This is 4 array allocations and 2 sorts
+            // (plus a Math.max(...spread) of 200-400 args) that used to run per
+            // visible column PER FRAME — for data that, on every column except the
+            // newest, never changes again for the life of the session. The stamp
+            // is the metric, which is the only input a user can move.
+            type Derived = { metric: GexMetric; max: number; top3: number[]; sorted: GexCell[] };
+            const holder = col as GexColumn & { __d?: Derived };
+            let d = holder.__d;
+            if (!d || d.metric !== metric) {
+              let max = 0;
+              let t1 = 0, t2 = 0, t3 = 0;
+              for (let k = 0; k < col.cells.length; k++) {
+                const a = Math.abs(valOf(col.cells[k]));
+                if (a <= 0) continue;
+                if (a > max) max = a;
+                if (a > t1) { t3 = t2; t2 = t1; t1 = a; }
+                else if (a > t2) { t3 = t2; t2 = a; }
+                else if (a > t3) { t3 = a; }
+              }
+              const top3: number[] = [];
+              if (t1 > 0) top3.push(t1);
+              if (t2 > 0) top3.push(t2);
+              if (t3 > 0) top3.push(t3);
+              d = {
+                metric,
+                max: max || 1,
+                top3,
+                sorted: [...col.cells].sort((a, b) => a.strike - b.strike),
+              };
+              holder.__d = d;
+            }
+            const { max: colMax, top3: colTop3, sorted } = d;
             for (let i = 0; i < sorted.length; i++) {
               const cell = sorted[i];
-              const color = gexColor(valOf(cell), colMax, intensity, colTop3);
-              if (!color) continue;
+              const v = valOf(cell);
+              const a0 = gexAlphaOf(v, colMax, intensity, colTop3);
+              if (a0 <= 0) continue;
               const fade = distFade(cell.strike + colBasis);
               if (fade <= 0) continue;
-              // Scale the rgba alpha by the distance fade.
-              const faded = fade >= 0.999
-                ? color
-                : color.replace(/,([0-9.]+)\)$/, (_m, a) => `,${(parseFloat(a) * fade).toFixed(3)})`);
+              const faded = gexPaint(v >= 0, a0 * fade);
+              if (!faded) continue;
               const nextStrike = i + 1 < sorted.length ? sorted[i + 1].strike : cell.strike + 5;
-              const pTop = series.priceToCoordinate(nextStrike + colBasis);
-              const pBot = series.priceToCoordinate(cell.strike + colBasis);
+              const pTop = yFor(colBasis, nextStrike);
+              const pBot = yFor(colBasis, cell.strike);
               if (pTop == null || pBot == null) continue;
               const top = Math.min(pTop, pBot);
               const cellH = Math.max(1, Math.abs(pBot - pTop));
@@ -3553,18 +4181,48 @@ export default function EsChartCard({
               bctx.fillRect(sx.left - 0.5, top - 0.5, sx.w + 1, cellH + 1);
             }
           }
-          // Composite back at reduced opacity: a soft blurred pass for the
-          // blend, then a lighter crisp pass. Kept dim so candles read clearly
-          // through it (the heatmap is context, not the foreground).
-          ctx.save();
-          ctx.globalAlpha = 0.6;
-          ctx.filter = "blur(2.5px)";
-          ctx.drawImage(buf, 0, 0, w, h);
-          ctx.filter = "none";
-          ctx.globalAlpha = 0.45;
-          ctx.drawImage(buf, 0, 0, w, h); // sharp, dimmed
-          ctx.globalAlpha = 1;
-          ctx.restore();
+          // Composite at reduced opacity: a soft blurred pass for the blend,
+          // then a lighter crisp pass. Kept dim so candles read clearly through
+          // it (the heatmap is context, not the foreground).
+          //
+          // Composited into the LAYER CACHE rather than straight onto the main
+          // context, so the next frame that changes nothing can skip all of this
+          // (see the fingerprint above). Identical output — source-over is
+          // associative, so pre-compositing onto transparent then drawing the
+          // result over the scene equals drawing the two passes over the scene.
+          let layer = hmLayerRef.current?.cv ?? null;
+          if (!layer) layer = document.createElement("canvas");
+          if (layer.width !== bw || layer.height !== bh) {
+            layer.width = bw;
+            layer.height = bh;
+          }
+          const lctx = layer.getContext("2d");
+          if (lctx) {
+            lctx.clearRect(0, 0, bw, bh);
+            lctx.globalAlpha = 0.6;
+            lctx.filter = "blur(2.5px)";
+            lctx.drawImage(buf, 0, 0, bw, bh);
+            lctx.filter = "none";
+            lctx.globalAlpha = 0.45;
+            lctx.drawImage(buf, 0, 0, bw, bh); // sharp, dimmed
+            lctx.globalAlpha = 1;
+            hmLayerRef.current = { sig: hmSig, cv: layer };
+            ctx.drawImage(layer, 0, 0, w, h);
+          } else {
+            // No 2D context on the layer canvas (shouldn't happen). Fall back to
+            // the original direct composite so the heatmap still paints.
+            hmLayerRef.current = null;
+            ctx.save();
+            ctx.globalAlpha = 0.6;
+            ctx.filter = "blur(2.5px)";
+            ctx.drawImage(buf, 0, 0, w, h);
+            ctx.filter = "none";
+            ctx.globalAlpha = 0.45;
+            ctx.drawImage(buf, 0, 0, w, h);
+            ctx.globalAlpha = 1;
+            ctx.restore();
+          }
+        }
         }
       }
 
@@ -3711,6 +4369,7 @@ export default function EsChartCard({
             // session's dominant wall as of that bucket). A Map, not a Set,
             // because the rank now drives the radius boost and the glow.
             const pWallAt = new Map<number, Map<number, number>>();
+            const pOrderAt = new Map<number, GexCell[]>();
             let shownNow: Set<number> = new Set();
             let wallNow: Map<number, number> = new Map();
             let dirty = true;
@@ -3730,6 +4389,15 @@ export default function EsChartCard({
               // unchanged bucket costs one pointer instead of a rebuilt Set.
               pShownAt.set(m.slotTs, shownNow);
               pWallAt.set(m.slotTs, wallNow);
+              // Biggest first, so a mark that grows toward the strike pitch lets
+              // the smaller rows land ON TOP of it rather than disappearing
+              // underneath. (Was computed per frame in draw().)
+              pOrderAt.set(
+                m.slotTs,
+                m.cells
+                  .filter((c) => shownNow.has(c.strike))
+                  .sort((a, b) => Math.abs(valOf(b)) - Math.abs(valOf(a))),
+              );
               // (A per-column CONTRAST STRETCH used to be computed here: the
               // bottom of the size domain was the weakest strike shown in THIS
               // column, so every column was re-normalised to its own range. It
@@ -3752,10 +4420,10 @@ export default function EsChartCard({
               }
               if (Number.isFinite(dK) && ks.length > 1) pStrikeStep = dK;
             }
-            prep = { sig: prepSig, mins: pMins, sessRef: pSessRef, runRef: pRunRef, shownAt: pShownAt, wallAt: pWallAt, todAt: pTodAt, strikeStep: pStrikeStep };
+            prep = { sig: prepSig, mins: pMins, sessRef: pSessRef, runRef: pRunRef, shownAt: pShownAt, wallAt: pWallAt, orderAt: pOrderAt, todAt: pTodAt, strikeStep: pStrikeStep };
             bubblePrepRef.current = prep;
           }
-          const { mins, sessRef, runRef, shownAt, wallAt, todAt, strikeStep } = prep;
+          const { mins, sessRef, runRef, shownAt, wallAt, orderAt, todAt, strikeStep } = prep;
 
           if (mins.length) {
             if (sessRef > 0) {
@@ -3939,13 +4607,29 @@ export default function EsChartCard({
               // pixel so a wall that breathes by a hundredth of a px between
               // buckets reuses one sprite instead of minting hundreds.
               const glowCache = glowSpriteRef.current;
+              // While the user is actively panning/zooming, snap sizes to whole
+              // pixels instead of half pixels. During a zoom rowPitch changes
+              // continuously, so rx/ry change continuously, so the half-pixel
+              // quantisation missed the cache on EVERY frame and every
+              // highlighted bubble re-rendered a shadowBlur ellipse. A 1px step
+              // is invisible mid-gesture and lands on ~half as many keys; the
+              // settled frame after the gesture repaints at full precision.
+              const qStep = interactingRef.current ? 1 : 2;
               const glowSprite = (rx: number, ry: number, base: number[], fill: number[], blur: number) => {
-                const qx = Math.round(rx * 2) / 2;
-                const qy = Math.round(ry * 2) / 2;
+                const qx = Math.round(rx * qStep) / qStep;
+                const qy = Math.round(ry * qStep) / qStep;
                 const qb = Math.round(blur);
                 const key = `${qx}|${qy}|${qb}|${base[0]},${base[1]},${base[2]}|${fill[0]},${fill[1]},${fill[2]}|${Math.round(dpr * 100)}`;
                 const hit = glowCache.get(key);
-                if (hit) return hit;
+                if (hit) {
+                  // Re-insert to move it to the back of the iteration order —
+                  // Map.set on an EXISTING key does not reorder, so without this
+                  // the eviction below is FIFO and throws out the sprite being
+                  // asked for every frame.
+                  glowCache.delete(key);
+                  glowCache.set(key, hit);
+                  return hit;
+                }
                 const pad = qb + 2;
                 const cw = Math.ceil((qx + pad) * 2);
                 const ch = Math.ceil((qy + pad) * 2);
@@ -3962,12 +4646,21 @@ export default function EsChartCard({
                   cx.ellipse(cw / 2, ch / 2, qx, qy, 0, 0, Math.PI * 2);
                   cx.fill();
                 }
-                // Bounded: the cache is only ever a handful of entries per
-                // session, but a pathological zoom sweep shouldn't grow it
-                // without limit.
-                if (glowCache.size > 96) glowCache.clear();
+                // Bounded, by LRU eviction rather than by wiping the map.
+                //
+                // `glowCache.clear()` threw away all 96 entries at once, and a
+                // zoom sweep is exactly the case that hits the bound — so it
+                // repeatedly discarded sprites it was about to ask for again,
+                // and each miss allocates a canvas and renders a shadowBlur
+                // ellipse, the most expensive primitive in this file. A Map
+                // iterates in insertion order, so the first key is the coldest.
                 const rec = { cv, w: cw, h: ch };
                 glowCache.set(key, rec);
+                while (glowCache.size > 192) {
+                  const k = glowCache.keys().next();
+                  if (k.done) break;
+                  glowCache.delete(k.value);
+                }
                 return rec;
               };
 
@@ -4000,12 +4693,9 @@ export default function EsChartCard({
                 const shownStrikes = shownAt.get(m.slotTs);
                 const wallStrikes = wallAt.get(m.slotTs);
                 if (!shownStrikes || !wallStrikes) continue;
-                // Biggest first, so a mark that grows toward the strike pitch
-                // lets the smaller rows land ON TOP of it rather than
-                // disappearing underneath.
-                const drawOrder = m.cells
-                  .filter((c) => shownStrikes.has(c.strike))
-                  .sort((a, b) => Math.abs(valOf(b)) - Math.abs(valOf(a)));
+                // Prepared in the memo above — see `orderAt`.
+                const drawOrder = orderAt.get(m.slotTs);
+                if (!drawOrder) continue;
                 for (const cell of drawOrder) {
                   const v = valOf(cell);
                   if (!v) continue;
@@ -4154,8 +4844,17 @@ export default function EsChartCard({
             }
             const isPoc = tp.poc != null && Math.abs(b.price - tp.poc) < 0.5;
             ctx.fillStyle = isPoc ? "rgba(229,231,235,0.9)" : "rgba(156,163,175,0.65)";
-            for (let i = 0; i < b.count; i++) {
-              ctx.fillRect(left + i * (boxW + boxGap), top, boxW, bh);
+            // One fillRect per TPO box is thousands of calls a frame across four
+            // profiles. When box + gap rounds below ~1.5 device px the boxes and
+            // their gaps are indistinguishable anyway, so draw the row as a
+            // single rect — visually identical, O(1) instead of O(count).
+            const pitch = boxW + boxGap;
+            if (pitch * dpr < 1.5) {
+              ctx.fillRect(left, top, Math.max(boxW, b.count * pitch - boxGap), bh);
+            } else {
+              for (let i = 0; i < b.count; i++) {
+                ctx.fillRect(left + i * pitch, top, boxW, bh);
+              }
             }
           }
 
@@ -4280,7 +4979,26 @@ export default function EsChartCard({
       if (showFlipCross) {
         const metricFc = gexMetricRef.current;
         const valFc = (c: GexCell) => (metricFc === "vol" ? c.netVol : c.netOiVol);
-        const flipPts: Array<{ ts: number; es: number }> = [];
+        // PERF: memoised. This whole series is viewport-independent — it maps a
+        // timestamp to an ES price — and it used to be rebuilt on every frame.
+        // The build spreads and sorts the entire minute store (up to 2,000
+        // columns) and then COPIES-AND-SORTS every one of those columns' cell
+        // arrays: ~2,000 sorts of 200-400 elements, per repaint. Only the
+        // projection to pixels (further down) actually belongs in draw().
+        //
+        // minuteColsVerRef is bumped on every write to the minute store, so it
+        // is a complete change signal for it.
+        const flipSig = [
+          minuteColsVerRef.current,
+          metricFc,
+          replayTsRef.current ?? "n",
+          basisSig,
+        ].join("|");
+        let flipPts: Array<{ ts: number; es: number }>;
+        if (flipPtsRef.current && flipPtsRef.current.sig === flipSig) {
+          flipPts = flipPtsRef.current.pts;
+        } else {
+        flipPts = [];
         let prevPickSpx: number | null = null;
         for (const m of [...minuteColsRef.current.values()].sort((a, b) => a.slotTs - b.slotTs)) {
           if (replayTsRef.current != null && m.slotTs > replayTsRef.current) continue; // replay clamp
@@ -4319,6 +5037,8 @@ export default function EsChartCard({
             : crossings.reduce((best, c) => (Math.abs(c - ref) < Math.abs(best - ref) ? c : best));
           prevPickSpx = pick;
           flipPts.push({ ts: m.slotTs, es: pick + basisAt(m.slotTs) });
+        }
+        flipPtsRef.current = { sig: flipSig, pts: flipPts };
         }
 
         if (flipPts.length >= 2) {
@@ -4392,94 +5112,59 @@ export default function EsChartCard({
 
     };
 
-    drawOverlayRef.current = draw;
-
-    // Coalesce every repaint trigger through ONE rAF. The overlay reads the
-    // live right-axis width (to stretch the last heatmap column to the edge);
-    // during a tick the axis label width changes → plot width shifts → the time
-    // scale fires a range-change → repaint → axis re-measures… The two range
-    // subscriptions + the ResizeObserver were ping-ponging synchronously each
-    // frame, which is the back-and-forth jitter. Draining them into a single
-    // rAF lets the layout settle to a fixed point before we paint once.
-    let raf = 0;
-    const schedule = () => {
-      if (raf) return;
-      raf = requestAnimationFrame(() => { raf = 0; draw(); railDrawRef.current(); });
-    };
-
-    const ts = chart.timeScale();
-    ts.subscribeVisibleLogicalRangeChange(schedule);
-    const ro = new ResizeObserver(schedule);
-    if (canvas.parentElement) ro.observe(canvas.parentElement);
-    draw();
-
-    // lightweight-charts doesn't expose a price-scale (Y-axis) range-change
-    // event — dragging the right axis to expand/contract the chart vertically
-    // only fires DOM pointer/wheel events, not subscribeVisibleLogicalRangeChange
-    // (that's time-axis only). Without this, the GEX rail's bar thickness
-    // (tied to on-screen strike spacing) would lag ~5s behind a live vertical
-    // zoom/drag instead of tracking it in real time.
+    // Publish the freshly-closed-over draw and ask for ONE paint.
     //
-    // DRAGS ONLY. This was a bare `schedule` on pointermove, so every mouse
-    // movement over the chart — just moving the crosshair around while reading
-    // it — repainted the ENTIRE overlay and the rail, at the pointer's event
-    // rate. A hover changes nothing about the projection, so all of that work
-    // was thrown away, and it is the main reason the page felt heavy to move
-    // around in. `buttons !== 0` keeps the case this listener exists for
-    // (dragging the price axis, which fires no range-change event) and drops
-    // the rest; pointerup still catches the settled state.
-    const container = chartRef.current;
-    const onDragMove = (e: PointerEvent) => { if (e.buttons !== 0) schedule(); };
-    container?.addEventListener("wheel", schedule, { passive: true });
-    container?.addEventListener("pointermove", onDragMove);
-    container?.addEventListener("pointerup", schedule);
+    // That is the entire job of this effect now. Every subscription that used to
+    // live down here — the time-scale listener, a ResizeObserver, and the wheel/
+    // pointermove/pointerup handlers — moved into the chart-init effect, where
+    // they are created once and live as long as the chart. See the note there.
+    drawOverlayRef.current = draw;
+    schedulePaint();
 
-    return () => {
-      cancelAnimationFrame(raf);
-      ts.unsubscribeVisibleLogicalRangeChange(schedule);
-      ro.disconnect();
-      container?.removeEventListener("wheel", schedule);
-      container?.removeEventListener("pointermove", onDragMove);
-      container?.removeEventListener("pointerup", schedule);
-      drawOverlayRef.current = () => {};
-    };
+    return () => { drawOverlayRef.current = () => {}; };
     // bb / weeklyEm are here because the Bollinger cloud and the EM boundaries
     // are painted on THIS canvas, so toggling either has to re-run the draw —
     // there is no series for React to update on their behalf.
-  }, [showHeatmap, showGexBubbles, bubbleMins, bubbleLevels, bubbleIntensity, bubbleSize, intensity, gexMetric, rows, interval, showProfile, profile, showTpo, tpoProfiles, showLevels, showFlipCross, mvcHistory, showCb, bb, weeklyEm]);
+    //
+    // `showLevels` was in this list and is a DEAD dependency — it is consumed
+    // only by the price-line effect, never inside draw(). Removed.
+    // rowsHash / mvcHistoryHash are derived from `rows` / `mvcHistory` and are
+    // read by draw() (they key the basis memo), so they belong here even though
+    // their sources already are — exhaustive-deps is right about that, and
+    // listing them costs nothing: each is stable whenever its source is.
+  }, [schedulePaint, showHeatmap, showGexBubbles, bubbleMins, bubbleLevels, bubbleIntensity, bubbleSize, intensity, gexMetric, rows, rowsHash, interval, showProfile, profile, showTpo, tpoProfiles, showFlipCross, mvcHistory, mvcHistoryHash, showCb, bb, weeklyEm]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
   // directly, so this interval is just a backstop — bumped from 1s to 5s to
   // stop the 1Hz canvas churn that was burning CPU even when nothing changed.
   useEffect(() => {
-    const chart = chartApiRef.current;
-    if (!chart) return;
-    let raf = 0;
     const repaint = () => {
       // A hidden tab still fires the interval, and its rAF callbacks queue up to
       // run in one burst when the tab comes back. Three cards make that burst
       // three times the size, so skip the tick entirely while nothing is on
       // screen — the visibilitychange listener repaints once on return.
       if (typeof document !== "undefined" && document.hidden) return;
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        drawOverlayRef.current();
-        updateLiveSpxRef.current();
-        railDrawRef.current();
-      });
+      schedulePaint();
     };
-    const tsApi = chart.timeScale();
-    tsApi.subscribeVisibleTimeRangeChange(repaint);
+    // NOTE: no subscribeVisibleTimeRangeChange here any more.
+    //
+    // It fired on exactly the same gestures as the overlay's
+    // subscribeVisibleLogicalRangeChange, and because this effect owned its OWN
+    // rAF handle the two could not coalesce — one pan frame produced two full
+    // repaints plus an extra rail draw. The logical-range subscription (now in
+    // the chart-init effect) is the more precise event and covers this.
+    //
+    // The interval is a pure backstop, and it is cheap now: the heatmap layer
+    // is fingerprint-cached, so a tick with nothing changed re-blits a bitmap
+    // instead of re-running the cell loop and the blur.
     document.addEventListener("visibilitychange", repaint);
     const id = setInterval(repaint, 5_000);
     return () => {
-      cancelAnimationFrame(raf);
       clearInterval(id);
       document.removeEventListener("visibilitychange", repaint);
-      tsApi.unsubscribeVisibleTimeRangeChange(repaint);
     };
-  }, []);
+  }, [schedulePaint]);
 
   // ── Toolbar placement ──────────────────────────────────────────────────────
   // One dock, three possible homes:
@@ -4503,7 +5188,15 @@ export default function EsChartCard({
   // reads: watermark band → toolbar → chart. data-capture-hide is still applied
   // per-control below to the pieces that are meaningless in a static image
   // (the Snap/Discord buttons themselves).
-  const dock = (
+  // Built ONLY when it will actually be rendered.
+  //
+  // `dockMode === "symbol"` cards (every card but the first, on a 2-3 up row)
+  // render `tickerBar`, not this — but this ~56-element tree was constructed
+  // unconditionally on every render of every card and then thrown away, taking
+  // FitScale, Dock, five DockButtons, two SegGroups, SymbolListDropdown and the
+  // two capture buttons with it.
+  const dockWanted = dockMode === "full" || dockMode === "shared";
+  const dock = !dockWanted ? null : (
       // pt-2, and the page's mount point contributes NO padding of its own —
       // the two were stacking into ~24px of empty bar above the toolbar.
       <div className="px-4 pt-2 pb-1" style={{ position: "relative", zIndex: 30 }}>
@@ -5089,11 +5782,17 @@ export default function EsChartCard({
               below stays on the right, where the cursor's own axis readout is.)
               ES-only: off ES the basis is 0, so these would just restate the
               price already on the axis under a misleading "SPX" label. */}
-          {isEs && liveSpx ? (
+          {isEs ? (
             <div
+              ref={liveSpxElRef}
               className="pointer-events-none absolute z-10 rounded font-mono font-medium"
               style={{
-                top: Math.max(2, liveSpx.y - 9),
+                // Position and text are written imperatively (see paintBadge).
+                // Mounted unconditionally and hidden until there is something to
+                // show, so the writer always has a node to write to and a live
+                // tick never has to go through React to move this 2px.
+                display: "none",
+                top: 2,
                 left: 6,
                 background: "rgba(41,182,246,.92)",
                 color: "#001018",
@@ -5109,16 +5808,14 @@ export default function EsChartCard({
                 lineHeight: "12px",
                 padding: "3px 6px",
               }}
-            >
-              SPX {liveSpx.spx.toFixed(2)}
-            </div>
+            />
           ) : null}
           {/* RSI + bar countdown. Text in the corner rather than a pane: a pane
               costs a third of the chart's height to show a number you read as
               "high / low / middling", and this card already gives the bottom
               strip to volume. Right-aligned so the two stack cleanly and neither
               moves when the other's width changes. */}
-          {(rsiValue != null || barCountdown) && (
+          {(rsiValue != null || barCountdownOn) && (
             <div
               className="pointer-events-none absolute z-10 font-mono"
               style={{
@@ -5137,15 +5834,18 @@ export default function EsChartCard({
                   RSI {rsiValue.toFixed(1)}
                 </div>
               )}
-              {barCountdown && <div style={{ color: LIGHT_BLUE, opacity: 0.85 }}>{barCountdown}</div>}
+              {/* Text written by the 1s interval above, not by React. */}
+              <div ref={countdownElRef} style={{ color: LIGHT_BLUE, opacity: 0.85 }} />
             </div>
           )}
           {/* SPX at the crosshair, follows the cursor's y on the right gutter. */}
-          {isEs && crossSpx ? (
+          {isEs ? (
             <div
+              ref={crossSpxElRef}
               className="pointer-events-none absolute z-10 rounded font-mono"
               style={{
-                top: Math.max(2, crossSpx.y - 9),
+                display: "none",
+                top: 2,
                 right: 64,
                 background: "rgba(255,255,255,.85)",
                 color: "#001018",
@@ -5155,9 +5855,7 @@ export default function EsChartCard({
                 lineHeight: "12px",
                 padding: "3px 6px",
               }}
-            >
-              SPX {crossSpx.spx.toFixed(2)}
-            </div>
+            />
           ) : null}
           {rows.length === 0 ? (
             <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-white/50">
@@ -5210,3 +5908,16 @@ export default function EsChartCard({
     </div>
   );
 }
+
+/**
+ * memo().
+ *
+ * The card was a plain export, so it re-rendered whenever the page did — and the
+ * page re-renders on every popover toggle and, while a popover is open, on every
+ * scroll event. With up to three of these mounted, one scroll meant three full
+ * reconciliations of the largest component in the app.
+ *
+ * Its props are now stable by construction: the page memoises the toolbar node
+ * and the indicator blob is state.
+ */
+export default memo(EsChartCard);

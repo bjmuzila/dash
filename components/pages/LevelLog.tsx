@@ -255,8 +255,8 @@ const wallStrike = (n: number | null | undefined) =>
 /**
  * The level log as plain text, laid out for pasting into Discord or notes.
  * Built from the raw rows rather than scraped out of the rendered timeline, so
- * the copy carries the meta the eye skips. Ordering matches the screen: newest
- * first, and within one slot the hit leads the change that produced it.
+ * the copy carries the meta the eye skips. Ordering matches the screen: oldest
+ * first, and within one slot the change leads the hit it produced.
  */
 function buildLogText(
   symbol: string, spot: number | null, date: string, view: LogView,
@@ -308,7 +308,7 @@ function buildLogText(
     lines.push({ slot: e.hit_slot, hit: true, text: t });
   }
 
-  lines.sort((a, b) => b.slot - a.slot || (a.hit === b.hit ? 0 : a.hit ? -1 : 1));
+  lines.sort((a, b) => a.slot - b.slot || (a.hit === b.hit ? 0 : a.hit ? 1 : -1));
   if (lines.length) { out.push(""); for (const l of lines) out.push(...l.text); }
   else out.push("", "No changes or touches recorded.");
   return out.join("\n");
@@ -953,10 +953,11 @@ function WallTimeline({ log, events, view }: { log: WallLogRow[]; events: WallEv
     });
   }
 
-  // Newest first — the latest slot reads at the top. Within one slot the hit is
-  // the later event, so it leads the change that produced it.
-  const kindRank = (k: Entry["kind"]) => (k === "hit" ? 0 : 1);
-  entries.sort((a, b) => b.slot - a.slot || kindRank(a.kind) - kindRank(b.kind));
+  // Oldest first — the session reads top to bottom in the order it happened,
+  // so the open baseline leads and the latest slot lands at the bottom. Within
+  // one slot the change comes first and the hit it produced follows it.
+  const kindRank = (k: Entry["kind"]) => (k === "hit" ? 1 : 0);
+  entries.sort((a, b) => a.slot - b.slot || kindRank(a.kind) - kindRank(b.kind));
 
   const evByKey = new Map(events.map((e) => [`${e.hit_slot}|${e.level_type}`, e]));
 

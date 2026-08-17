@@ -526,10 +526,17 @@ async function computeLiveGexEx0dte(symbol, sessionDate, spot) {
 // Both on the OI+Vol basis via computeGexRows, so they are directly comparable
 // to the 0DTE card and to eod_gex.total_gex_0dte / total_gex_ex0dte.
 //
-// Returned rows are deliberately slim — { strike, netGEX, netVolGEX } is all the
-// client's cumulative curve needs (it sums netGEX + netVolGEX per strike), and a
-// full SPX board is ~1500 strikes, so shipping every greek would bloat the
+// Returned rows are deliberately slim — { strike, netGEX, netVolGEX, netDEX,
+// volNetDEX } is all the client's ladders need (the gamma curve sums
+// netGEX + netVolGEX per strike; the net-delta ladder sums netDEX + volNetDEX),
+// and a full SPX board is ~1500 strikes, so shipping every greek would bloat the
 // payload for nothing.
+//
+// The two DELTA legs were added 2026-08 for the GEX Levels tab's "Net delta
+// exposure by strike (ex-0DTE)" card. computeGexRowsMultiExpiry already sums
+// netDEX/volNetDEX per strike (see the SUMMABLE list in
+// computation/gex-calculator.js) — nothing new is computed here, the fields were
+// simply being dropped on the way out. Cost is 2 ints per strike.
 const MULTI_TTL_MS = Number(process.env.GEX_MULTI_TTL_MS || 60_000);
 const _multiCache = new Map(); // `symbol|sessionDate` -> { at:number, payload:object }
 
@@ -538,6 +545,8 @@ function slimRows(gexRows) {
     strike: r.strike,
     netGEX: Math.round(r.netGEX || 0),
     netVolGEX: Math.round(r.netVolGEX || 0),
+    netDEX: Math.round(r.netDEX || 0),
+    volNetDEX: Math.round(r.volNetDEX || 0),
   }));
 }
 

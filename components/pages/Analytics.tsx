@@ -2016,8 +2016,37 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null }: {
         best == null || Math.abs(r.strike - spot) < Math.abs(best.strike - spot) ? r : best, null);
   const withChg = changes != null;
   const cols = withChg ? "88px 1fr 68px 66px" : "88px 1fr 68px";
+
+  // Park the spot row in the MIDDLE of the pane, not at the top of it.
+  // tlWindow already centres spot in the row DATA (±TL_LADDER_SIDE rungs), but
+  // the pane is a fixed-height scroller that opens at scrollTop 0 — so the card
+  // painted the highest strikes and spot sat below the fold, which is the one
+  // row a ladder exists to show. Measured with getBoundingClientRect rather than
+  // offsetTop: the scroll wrapper is position:static, so offsetParent is some
+  // ancestor Card and offsetTop would be measured against the wrong box.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const spotStrike = spotRow?.strike ?? null;
+  const windowKey = rows.length ? `${rows[0].strike}:${rows[rows.length - 1].strike}` : "";
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || spotStrike == null) return;
+    const scroller = root.parentElement;
+    if (!scroller) return;
+    const el = root.querySelector<HTMLElement>(`[data-tl-strike="${spotStrike}"]`);
+    if (!el) return;
+    const slack = scroller.scrollHeight - scroller.clientHeight;
+    if (slack <= 0) return; // whole ladder already fits — nothing to centre
+    const rootBox = root.getBoundingClientRect();
+    const elBox = el.getBoundingClientRect();
+    const offsetInRoot = elBox.top - rootBox.top; // stable regardless of current scroll
+    const target = offsetInRoot - scroller.clientHeight / 2 + elBox.height / 2;
+    scroller.scrollTop = Math.max(0, Math.min(target, slack));
+    // Re-centres when the ticker/expiry changes the window, or when spot walks
+    // to a new strike (which re-slices the window anyway) — NOT on every tick.
+  }, [spotStrike, windowKey]);
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+    <div ref={rootRef} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       <div style={{ display: "grid", gridTemplateColumns: cols, alignItems: "center", gap: 8, paddingBottom: 4 }}>
         <Label>Strike</Label>
         <span style={{ textAlign: "center" }}><Label>Net GEX</Label></span>
@@ -2040,6 +2069,7 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null }: {
         return (
           <div
             key={r.strike}
+            data-tl-strike={r.strike}
             style={{
               display: "grid", gridTemplateColumns: cols, alignItems: "center", gap: 8,
               padding: "2px 6px", borderRadius: 8,

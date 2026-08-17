@@ -69,6 +69,11 @@ type GexLevelsRow = {
   netGEX: number;
   netVolGEX: number;
   netDEX: number;
+  // Volume leg of net delta. /proxy/gex has always shipped it (gex-calculator
+  // emits netDEX + volNetDEX side by side) and since 2026-08 so does
+  // /proxy/gex-by-strike-multi — optional only because the older row shapes in
+  // localStorage caches predate it.
+  volNetDEX?: number;
 };
 
 type GexLevelsSnapshot = {
@@ -86,6 +91,19 @@ type GexLevelsSnapshot = {
 
 function glOiVolNet(r: GexLevelsRow): number {
   return (r.netGEX ?? 0) + (r.netVolGEX ?? 0);
+}
+
+// Net-delta basis, deliberately parallel to glOiVolNet above.
+//   "oi"     OI leg only — what the original 0DTE "Net delta exposure by
+//            strike" card has always drawn.
+//   "oivol"  OI + volume, the same basis as every gamma ladder on this tab and
+//            as the DEX line on the home GEX chart.
+// Kept as one accessor so the two net-delta cards can never silently drift onto
+// different bases again.
+type DexBasis = "oi" | "oivol";
+function glDexOf(r: GexLevelsRow, basis: DexBasis): number {
+  const oi = r.netDEX ?? 0;
+  return basis === "oi" ? oi : oi + (r.volNetDEX ?? 0);
 }
 
 function glFmt0(n: number | null | undefined): string {
@@ -603,8 +621,11 @@ function NetGammaBarsByStrikeChart({ rows, spot, neutral }: { rows: GexLevelsRow
   );
 }
 
-// Net Delta by strike — same bar treatment as Net Gamma, using r.netDEX.
-function NetDeltaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: number }) {
+// Net Delta by strike — same bar treatment as Net Gamma, using glDexOf().
+// `basis` picks the leg(s): "oi" for the 0DTE card (unchanged behaviour, and the
+// default so nothing that omits the prop shifts), "oivol" for the multi-expiry
+// ex-0DTE card.
+function NetDeltaByStrikeChart({ rows, spot, basis = "oi" }: { rows: GexLevelsRow[]; spot: number; basis?: DexBasis }) {
   const W = 720, H = 220, padL = 50, padR = 16, padB = 26, padT = 18;
   const { containerRef, hover, show, hide } = useChartHover();
   const pan = useChartPan(rows, spot);
@@ -615,7 +636,7 @@ function NetDeltaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: num
   const xlo = shown[0].strike, xhi = shown[shown.length - 1].strike;
   const x = (k: number) => padL + ((k - xlo) / (xhi - xlo || 1)) * (W - padL - padR);
   const pxPerStrike = (W - padL - padR) / ((xhi - xlo) || 1);
-  const vals = shown.map((r) => r.netDEX ?? 0);
+  const vals = shown.map((r) => glDexOf(r, basis));
   let minV = Math.min(0, ...vals), maxV = Math.max(0, ...vals);
   if (minV === maxV) { minV -= 1; maxV += 1; }
   const y = (v: number) => padT + (1 - (v - minV) / (maxV - minV)) * (H - padT - padB);
@@ -636,7 +657,7 @@ function NetDeltaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: num
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" preserveAspectRatio="xMidYMid meet" style={{ display: "block", maxHeight: 240 }}>
         <line x1={padL} x2={W - padR} y1={y0} y2={y0} stroke={HOME_THEME.border} strokeWidth={1} />
         {shown.map((r, i) => {
-          const v = r.netDEX ?? 0;
+          const v = glDexOf(r, basis);
           const top = v >= 0 ? y(v) : y0;
           const h = Math.max(1, Math.abs(y(v) - y0));
           return (
@@ -664,7 +685,10 @@ function NetDeltaByStrikeChart({ rows, spot }: { rows: GexLevelsRow[]; spot: num
       {hover && hp && !pan.isDragging && (
         <ChartTooltip x={hover.x} y={hover.y}>
           <div style={{ fontWeight: 800 }}>Strike {glFmt2(hp.strike)}</div>
-          <div>Net Delta: {glFmt0(hp.netDEX)}</div>
+          <div>Net Delta: {glFmt0(glDexOf(hp, basis))}</div>
+          {basis === "oivol" && (
+            <div style={{ opacity: 0.6 }}>OI {glFmt0(hp.netDEX ?? 0)} · Vol {glFmt0(hp.volNetDEX ?? 0)}</div>
+          )}
         </ChartTooltip>
       )}
     </div>
@@ -1215,18 +1239,24 @@ type GexMultiPayload = {
 
 const GEX_MULTI_POLL_MS = 60_000;
 
-// The endpoint ships slim rows ({ strike, netGEX, netVolGEX }) — everything the
-// cumulative curve needs, since glOiVolNet sums exactly those two. Fill the rest
-// of GexLevelsRow with zeros so the shared chart components stay untouched.
+// The endpoint ships slim rows ({ strike, netGEX, netVolGEX, netDEX, volNetDEX })
+// — everything the two ladders need, since glOiVolNet sums the gamma pair and
+// glDexOf sums the delta pair. Fill the rest of GexLevelsRow with zeros so the
+// shared chart components stay untouched.
+//
+// The delta legs arrive as 0 from a server-v2 that predates the slimRows change
+// in eod-gex-recorder.js; the ex-0DTE net-delta card then draws a flat line
+// rather than throwing. If that card is empty after a deploy, the server is stale.
 function multiRow(r: unknown): GexLevelsRow {
-  const o = (r ?? {}) as { strike?: number; netGEX?: number; netVolGEX?: number };
+  const o = (r ?? {}) as { strike?: number; netGEX?: number; netVolGEX?: number; netDEX?: number; volNetDEX?: number };
   return {
     strike: Number(o.strike ?? 0),
     callOI: 0, putOI: 0, callVolume: 0, putVolume: 0,
     callGEX: 0, putGEX: 0,
     netGEX: Number(o.netGEX ?? 0),
     netVolGEX: Number(o.netVolGEX ?? 0),
-    netDEX: 0,
+    netDEX: Number(o.netDEX ?? 0),
+    volNetDEX: Number(o.volNetDEX ?? 0),
   };
 }
 
@@ -1323,6 +1353,58 @@ function NetGammaMultiPanel({
         <>
           <NetGammaBarsByStrikeChart rows={ladder.rows} spot={spot} neutral={ladder.gexFlip} />
           <ChartLegend items={[{ label: "Positive gamma$", color: GEX_POS_GREEN }, { label: "Negative gamma$", color: HOME_THEME.red }, { label: "Spot", color: LIGHT_BLUE }, { label: "Flip", color: GEX_POS_GREEN }]} />
+        </>
+      )}
+    </div>
+  );
+}
+
+// One net-DELTA card body for a multi-expiry ladder. Same shape as
+// NetGammaMultiPanel above (shared poll, shared refresh button, same empty/error
+// states) but charts glDexOf on the OI+Vol basis.
+//
+// The header total is summed client-side on purpose: the payload's `totalNetGex`
+// is a GAMMA total, and there is no server-side delta total to borrow. Summing
+// the ladder we are already drawing keeps the number and the bars in lockstep.
+function NetDeltaMultiPanel({
+  ladder, spot, loading, err, refresh, scopeNote,
+}: {
+  ladder: GexMultiLadder | null;
+  spot: number;
+  loading: boolean;
+  err: string | null;
+  refresh: () => void;
+  scopeNote: string;
+}) {
+  const totalDex = useMemo(
+    () => (ladder?.rows ?? []).reduce((a, r) => a + glDexOf(r, "oivol"), 0),
+    [ladder]
+  );
+  // A stale server-v2 (pre-slimRows-delta) ships the rows with both delta legs
+  // zeroed. Say so instead of drawing a convincing flat line.
+  const allZero = !!ladder?.rows.length && ladder.rows.every((r) => glDexOf(r, "oivol") === 0);
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+        <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.6 }}>
+          {loading && !ladder
+            ? "Loading…"
+            : ladder
+              ? `${scopeNote} · total ${glFmtBn(totalDex)}`
+              : "—"}
+        </div>
+        <button onClick={refresh} style={{ ...homeButtonStyle, padding: "4px 10px", fontSize: 14, marginLeft: "auto" }}>Refresh</button>
+      </div>
+      {err && <div style={{ fontSize: 14, color: HOME_THEME.red, marginBottom: 8 }}>Multi-expiry DEX error: {err}</div>}
+      {!ladder || !ladder.rows.length ? (
+        <GlEmpty note={loading ? "sweeping the board…" : err ? "no ladder available" : "no strikes returned"} />
+      ) : allZero ? (
+        <GlEmpty note="net delta is zero at every strike — server-v2 is likely running a build before /proxy/gex-by-strike-multi shipped netDEX; redeploy it" />
+      ) : (
+        <>
+          <NetDeltaByStrikeChart rows={ladder.rows} spot={spot} basis="oivol" />
+          <ChartLegend items={[{ label: "Positive delta$", color: LIGHT_BLUE }, { label: "Negative delta$", color: HOME_THEME.red }, { label: "Spot", color: HOME_THEME.text }]} />
         </>
       )}
     </div>
@@ -1527,81 +1609,191 @@ function HistoryTable({ rows }: { rows: GlHistoryEntry[] }) {
   );
 }
 
-// ── Drag-to-reorder for the right-column chart cards ────────────────────────
+// ── Drag-to-arrange for the chart cards, ACROSS both columns ────────────────
 // Native HTML5 drag & drop, scoped to a small grip handle in each card's title
-// row (not the whole card) so grabbing the handle reorders cards while
-// grabbing anywhere inside a chart still pans it (useChartPan above) — the
-// two gestures would otherwise fight over the same mousedown+drag. Order
-// persists in localStorage so it survives reloads.
-// Left column = the daily/session-history stack: OI by date, SPX EOD GEX by
-// session, and the history of key level changes.
-// Right column = the live-chain stack: OI by expiration + the continuous
-// by-strike charts (net gamma, call/put gamma, net delta).
-const LEFT_CARD_KEYS = ["oiDate", "eodGex", "eodGexEx0dte", "history"] as const;
-type LeftCardKey = (typeof LEFT_CARD_KEYS)[number];
-// netGammaAll / netGammaEx0dte are the multi-expiry siblings of netGamma (which
-// stays 0DTE-only). useCardOrder appends keys it doesn't find in saved order, so
-// adding them here lands them at the bottom for anyone with a stored layout —
-// no need to bump RIGHT_CARD_ORDER_STORAGE_KEY and reset everyone's arrangement.
-// volFlow is the only TIME-series card in this column — everything else is
+// row (not the whole card) so grabbing the handle moves the card while grabbing
+// anywhere inside a chart still pans it (useChartPan above) — the two gestures
+// would otherwise fight over the same mousedown+drag.
+//
+// This used to be TWO independent useCardOrder() hooks, one per column, each
+// with its own key union and its own localStorage key. That made a card
+// structurally unable to leave the column it was declared in: a left-column
+// drag could only ever produce a LeftCardKey. Now there is ONE key union and one
+// persisted { left, right } layout, so any card can land in either column.
+//
+// Drop targets, in priority order:
+//   • onto another card  → the dragged card takes that card's slot, in THAT
+//     card's column, pushing it (and everything below) down. Same-column drags
+//     behave exactly as they did before.
+//   • onto the column's tail strip / empty gutter → append to the bottom of that
+//     column. This is the only way to reach an empty column, so the strip is
+//     rendered (dashed, "drop here") for the whole duration of a drag.
+// Card drops stopPropagation so they win over the column handler underneath.
+//
+// Default columns are unchanged: left = the daily/session-history stack (OI by
+// date, the two EOD GEX boards, the key-level history table); right = the
+// live-chain stack (OI by expiration + the by-strike ladders + the vol-GEX flow
+// time series). They are only DEFAULTS now, not a constraint.
+const ALL_CARD_KEYS = [
+  "oiDate", "eodGex", "eodGexEx0dte", "history",
+  "oiExpiry", "netGamma", "netGammaAll", "netGammaEx0dte",
+  "callPutGamma", "netDelta", "netDeltaEx0dte", "volFlow",
+] as const;
+type CardKey = (typeof ALL_CARD_KEYS)[number];
+type ColumnId = "left" | "right";
+type CardLayout = Record<ColumnId, CardKey[]>;
+
+const COLUMN_IDS: readonly ColumnId[] = ["left", "right"];
+
+// netGammaAll / netGammaEx0dte / netDeltaEx0dte are the multi-expiry siblings of
+// netGamma and netDelta (which stay 0DTE-only). normalizeLayout() appends keys
+// it doesn't find in the saved layout, so adding one here lands it at the bottom
+// of its default column for anyone with a stored arrangement — no need to bump
+// the storage key and reset everyone's layout.
+// volFlow is the only TIME-series card on the tab — everything else is
 // by-strike. It answers "how did today's vol GEX get to the level the boards
 // above are showing", which a strike ladder structurally cannot.
-const RIGHT_CARD_KEYS = ["oiExpiry", "netGamma", "netGammaAll", "netGammaEx0dte", "callPutGamma", "netDelta", "volFlow"] as const;
-type RightCardKey = (typeof RIGHT_CARD_KEYS)[number];
-const RIGHT_CARD_ORDER_STORAGE_KEY = "gexlevels-card-order-right-v3";
-const LEFT_CARD_ORDER_STORAGE_KEY = "gexlevels-card-order-left-v3";
+const DEFAULT_LAYOUT: CardLayout = {
+  left: ["oiDate", "eodGex", "eodGexEx0dte", "history"],
+  right: ["oiExpiry", "netGamma", "netGammaAll", "netGammaEx0dte", "callPutGamma", "netDelta", "netDeltaEx0dte", "volFlow"],
+};
 
-function useCardOrder<K extends string>(defaultOrder: readonly K[], storageKey: string) {
-  const [order, setOrder] = useState<K[]>(() => [...defaultOrder]);
-  const [draggingId, setDraggingId] = useState<K | null>(null);
+const CARD_LAYOUT_STORAGE_KEY = "gexlevels-card-layout-v1";
+// The two pre-cross-column keys, read once to migrate an existing arrangement
+// instead of throwing it away.
+const LEGACY_LEFT_ORDER_KEY = "gexlevels-card-order-left-v3";
+const LEGACY_RIGHT_ORDER_KEY = "gexlevels-card-order-right-v3";
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(storageKey);
-      if (!raw) return;
-      const saved = JSON.parse(raw) as string[];
-      const known = saved.filter((k): k is K => (defaultOrder as readonly string[]).includes(k));
-      const missing = defaultOrder.filter((k) => !known.includes(k));
-      if (known.length) setOrder([...known, ...missing]);
-    } catch {
-      // ignore — falls back to default order
+function isCardKey(v: unknown): v is CardKey {
+  return typeof v === "string" && (ALL_CARD_KEYS as readonly string[]).includes(v);
+}
+
+// Drop unknown keys (a card that was renamed or removed), drop duplicates
+// (first position wins), then append every key the saved layout is missing to
+// the bottom of its DEFAULT column. Guarantees the result renders all 12 cards
+// exactly once whatever is in localStorage.
+function normalizeLayout(raw: unknown): CardLayout {
+  const src = (raw ?? {}) as Partial<Record<ColumnId, unknown>>;
+  const out: CardLayout = { left: [], right: [] };
+  const seen = new Set<CardKey>();
+  for (const col of COLUMN_IDS) {
+    const arr = Array.isArray(src[col]) ? (src[col] as unknown[]) : [];
+    for (const v of arr) {
+      if (!isCardKey(v) || seen.has(v)) continue;
+      seen.add(v);
+      out[col].push(v);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }
+  for (const col of COLUMN_IDS) {
+    for (const k of DEFAULT_LAYOUT[col]) {
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out[col].push(k);
+    }
+  }
+  return out;
+}
+
+function readStoredLayout(): CardLayout {
+  try {
+    const raw = localStorage.getItem(CARD_LAYOUT_STORAGE_KEY);
+    if (raw) return normalizeLayout(JSON.parse(raw));
+    const legacyLeft = localStorage.getItem(LEGACY_LEFT_ORDER_KEY);
+    const legacyRight = localStorage.getItem(LEGACY_RIGHT_ORDER_KEY);
+    if (legacyLeft || legacyRight) {
+      return normalizeLayout({
+        left: legacyLeft ? JSON.parse(legacyLeft) : DEFAULT_LAYOUT.left,
+        right: legacyRight ? JSON.parse(legacyRight) : DEFAULT_LAYOUT.right,
+      });
+    }
+  } catch {
+    // ignore — falls back to the default layout
+  }
+  return normalizeLayout(DEFAULT_LAYOUT);
+}
+
+function saveLayout(next: CardLayout) {
+  try { localStorage.setItem(CARD_LAYOUT_STORAGE_KEY, JSON.stringify(next)); } catch {}
+}
+
+// Prefer the dataTransfer payload over React state: it survives a re-render
+// mid-drag, and it is what the browser guarantees is set on drop.
+function draggedKeyFrom(e: DragEvent, fallback: CardKey | null): CardKey | null {
+  try {
+    const v = e.dataTransfer.getData("text/plain");
+    if (isCardKey(v)) return v;
+  } catch {
+    // some browsers throw reading dataTransfer outside a drop handler
+  }
+  return fallback;
+}
+
+function useCardLayout() {
+  const [layout, setLayout] = useState<CardLayout>(() => normalizeLayout(DEFAULT_LAYOUT));
+  const [draggingId, setDraggingId] = useState<CardKey | null>(null);
+
+  useEffect(() => { setLayout(readStoredLayout()); }, []);
+
+  // Pull the key out of whichever column holds it, then splice it in at `at`
+  // (null = append) in the target column. One code path for same-column
+  // reorders and cross-column moves.
+  const place = useCallback((key: CardKey, col: ColumnId, before: CardKey | null) => {
+    setLayout((prev) => {
+      const next: CardLayout = {
+        left: prev.left.filter((k) => k !== key),
+        right: prev.right.filter((k) => k !== key),
+      };
+      const idx = before ? next[col].indexOf(before) : -1;
+      next[col].splice(idx === -1 ? next[col].length : idx, 0, key);
+      saveLayout(next);
+      return next;
+    });
   }, []);
 
-  const persist = useCallback((next: K[]) => {
-    setOrder(next);
-    try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch {}
-  }, [storageKey]);
-
-  const handleDragStart = useCallback((id: K) => (e: DragEvent) => {
+  const handleDragStart = useCallback((id: CardKey) => (e: DragEvent) => {
     setDraggingId(id);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", id);
   }, []);
-  const handleDragEnd = useCallback(() => setDraggingId(null), []);
-  const cardDragOver = useCallback((id: K) => (e: DragEvent) => {
-    if (draggingId && draggingId !== id) e.preventDefault();
-  }, [draggingId]);
-  const cardDrop = useCallback((id: K) => (e: DragEvent) => {
-    e.preventDefault();
-    setDraggingId((current) => {
-      if (!current || current === id) return null;
-      setOrder((prevOrder) => {
-        const next = prevOrder.slice();
-        const from = next.indexOf(current);
-        const to = next.indexOf(id);
-        if (from === -1 || to === -1) return prevOrder;
-        next.splice(from, 1);
-        next.splice(to, 0, current);
-        persist(next);
-        return next;
-      });
-      return null;
-    });
-  }, [persist]);
 
-  return { order, draggingId, handleDragStart, handleDragEnd, cardDragOver, cardDrop };
+  const handleDragEnd = useCallback(() => setDraggingId(null), []);
+
+  const cardDragOver = useCallback((id: CardKey) => (e: DragEvent) => {
+    if (!draggingId || draggingId === id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }, [draggingId]);
+
+  const cardDrop = useCallback((col: ColumnId, id: CardKey) => (e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation(); // don't also fire the column's append handler
+    const dragged = draggedKeyFrom(e, draggingId);
+    setDraggingId(null);
+    if (!dragged || dragged === id) return;
+    place(dragged, col, id);
+  }, [draggingId, place]);
+
+  const columnDragOver = useCallback((e: DragEvent) => {
+    if (!draggingId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }, [draggingId]);
+
+  const columnDrop = useCallback((col: ColumnId) => (e: DragEvent) => {
+    e.preventDefault();
+    const dragged = draggedKeyFrom(e, draggingId);
+    setDraggingId(null);
+    if (!dragged) return;
+    place(dragged, col, null);
+  }, [draggingId, place]);
+
+  const reset = useCallback(() => {
+    const next = normalizeLayout(DEFAULT_LAYOUT);
+    saveLayout(next);
+    setLayout(next);
+  }, []);
+
+  return { layout, draggingId, handleDragStart, handleDragEnd, cardDragOver, cardDrop, columnDragOver, columnDrop, reset };
 }
 
 function DragHandle({ onDragStart, onDragEnd }: { onDragStart: (e: DragEvent) => void; onDragEnd: () => void }) {
@@ -1611,7 +1803,7 @@ function DragHandle({ onDragStart, onDragEnd }: { onDragStart: (e: DragEvent) =>
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onMouseDown={(e) => e.stopPropagation()}
-      title="Drag to reorder"
+      title="Drag to move — reorder within a column or drop into the other one"
       style={{ cursor: "grab", color: HOME_THEME.text, opacity: 0.4, fontSize: 17, lineHeight: 1, padding: "2px 6px", userSelect: "none", flexShrink: 0 }}
     >
       ⠿
@@ -1628,11 +1820,35 @@ function CardTitleRow({ label, onDragStart, onDragEnd }: { label: string; onDrag
   );
 }
 
+// Tail strip: the append target, and the ONLY way into a column that has been
+// emptied out. Only mounted while a drag is in flight so it costs nothing at
+// rest. Sits inside the column div, so the column's own onDrop handles it.
+function ColumnDropZone({ active }: { active: boolean }) {
+  return (
+    <div
+      style={{
+        border: `1px dashed ${HOME_THEME.border}`,
+        borderRadius: 10,
+        padding: "14px 10px",
+        textAlign: "center",
+        fontSize: 14,
+        letterSpacing: "0.04em",
+        textTransform: "uppercase",
+        fontWeight: 800,
+        color: HOME_THEME.text,
+        opacity: active ? 0.55 : 0.25,
+        transition: "opacity .15s",
+      }}
+    >
+      Drop here
+    </div>
+  );
+}
+
 function GexLevelsTab() {
   const { snap, err, load } = useGexLevels();
   const { trigger, label, style: refreshStyle } = useRefreshButton(load);
-  const rightOrder = useCardOrder(RIGHT_CARD_KEYS, RIGHT_CARD_ORDER_STORAGE_KEY);
-  const leftOrder = useCardOrder(LEFT_CARD_KEYS, LEFT_CARD_ORDER_STORAGE_KEY);
+  const cards = useCardLayout();
   const [history, setHistory] = useState<GlHistoryEntry[]>([]);
 
   const d = useMemo(() => deriveGexLevels(snap), [snap]);
@@ -1754,177 +1970,186 @@ function GexLevelsTab() {
         </div>
       </Card>
 
-      {d && (
-        // Two independent, separately-reorderable columns.
-        // Left column: Open Interest by Date, SPX EOD GEX (one bar per session
-        // from eod_gex), and the History of key level changes.
-        // Right column: Open Interest by Expiration + the live-chain charts —
-        // cumulative Net Gamma (all strikes), Call/Put Gamma, Net Delta.
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-start" }}>
-          <div style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column", gap: 20 }}>
-            {(() => {
-              const content: Record<LeftCardKey, ReactNode> = {
-                oiDate: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Open interest by date" onDragStart={leftOrder.handleDragStart("oiDate")} onDragEnd={leftOrder.handleDragEnd} />}
-                    subtitle="Total call+put open interest in CONTRACTS (not gamma dollars — no γ, no spot² here), one bar per trading day logged"
-                  >
-                    <OiByDateChart rows={history} />
-                  </Card>
-                ),
-                eodGex: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="SPX EOD GEX by session" onDragStart={leftOrder.handleDragStart("eodGex")} onDragEnd={leftOrder.handleDragEnd} />}
-                    subtitle={`0DTE net GEX at the close on the OI+Vol basis — γ × (OI + volume) × spot², the same basis as the walls, the flip and $Gamma · last ${EOD_GEX_DAYS} sessions (eod_gex.total_gex_0dte, ${EOD_GEX_SYMBOL})`}
-                  >
-                    <EodGexPanel field="totalGex0dte" />
-                  </Card>
-                ),
-                eodGexEx0dte: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="SPX EOD GEX (ex-0DTE) by session" onDragStart={leftOrder.handleDragStart("eodGexEx0dte")} onDragEnd={leftOrder.handleDragEnd} />}
-                    subtitle={`Net GEX at the close across all listed expirations except 0DTE, same OI+Vol basis as the card above · add the two for the whole-chain total · last ${EOD_GEX_DAYS} sessions (eod_gex.total_gex_ex0dte, ${EOD_GEX_SYMBOL})`}
-                  >
-                    <EodGexPanel field="totalGexEx0dte" />
-                  </Card>
-                ),
-                history: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="History of key level changes" onDragStart={leftOrder.handleDragStart("history")} onDragEnd={leftOrder.handleDragEnd} />}
-                    subtitle="One row per trading day — today updates live, prior days stay frozen"
-                  >
-                    {history.length === 0 ? <GlEmpty note="Logging starts as soon as a level moves." /> : <HistoryTable rows={history} />}
-                  </Card>
-                ),
-              };
-              return leftOrder.order.map((key) => (
-                <div
-                  key={key}
-                  onDragOver={leftOrder.cardDragOver(key)}
-                  onDrop={leftOrder.cardDrop(key)}
-                  style={{ opacity: leftOrder.draggingId === key ? 0.35 : 1, transition: "opacity .15s" }}
-                >
-                  {content[key]}
-                </div>
-              ));
-            })()}
-          </div>
+      {d && (() => {
+        // ONE card registry for both columns. The layout hook decides which
+        // column each key renders in, so a card is no longer tied to the column
+        // its JSX was written next to.
+        const content: Record<CardKey, ReactNode> = {
+          oiDate: (
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<CardTitleRow label="Open interest by date" onDragStart={cards.handleDragStart("oiDate")} onDragEnd={cards.handleDragEnd} />}
+              subtitle="Total call+put open interest in CONTRACTS (not gamma dollars — no γ, no spot² here), one bar per trading day logged"
+            >
+              <OiByDateChart rows={history} />
+            </Card>
+          ),
+          eodGex: (
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<CardTitleRow label="SPX EOD GEX by session" onDragStart={cards.handleDragStart("eodGex")} onDragEnd={cards.handleDragEnd} />}
+              subtitle={`0DTE net GEX at the close on the OI+Vol basis — γ × (OI + volume) × spot², the same basis as the walls, the flip and $Gamma · last ${EOD_GEX_DAYS} sessions (eod_gex.total_gex_0dte, ${EOD_GEX_SYMBOL})`}
+            >
+              <EodGexPanel field="totalGex0dte" />
+            </Card>
+          ),
+          eodGexEx0dte: (
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<CardTitleRow label="SPX EOD GEX (ex-0DTE) by session" onDragStart={cards.handleDragStart("eodGexEx0dte")} onDragEnd={cards.handleDragEnd} />}
+              subtitle={`Net GEX at the close across all listed expirations except 0DTE, same OI+Vol basis as the card above · add the two for the whole-chain total · last ${EOD_GEX_DAYS} sessions (eod_gex.total_gex_ex0dte, ${EOD_GEX_SYMBOL})`}
+            >
+              <EodGexPanel field="totalGexEx0dte" />
+            </Card>
+          ),
+          history: (
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<CardTitleRow label="History of key level changes" onDragStart={cards.handleDragStart("history")} onDragEnd={cards.handleDragEnd} />}
+              subtitle="One row per trading day — today updates live, prior days stay frozen"
+            >
+              {history.length === 0 ? <GlEmpty note="Logging starts as soon as a level moves." /> : <HistoryTable rows={history} />}
+            </Card>
+          ),
+          oiExpiry: (
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<CardTitleRow label="Open interest by expiration" onDragStart={cards.handleDragStart("oiExpiry")} onDragEnd={cards.handleDragEnd} />}
+              subtitle={`${snap?.symbol ?? "SPX"} · nearest ${OI_EXPIRY_MAX} listed expirations`}
+            >
+              <OiByExpirationPanel symbol={snap?.symbol ?? "SPX"} expirations={snap?.expirations ?? []} />
+            </Card>
+          ),
+          netGamma: (
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<CardTitleRow label={`Net gamma exposure by strike (0DTE${snap?.expiry ? ` · ${glFmtExpiryLabel(snap.expiry)}` : ""})`} onDragStart={cards.handleDragStart("netGamma")} onDragEnd={cards.handleDragEnd} />}
+              subtitle="The live feed's SINGLE expiry. Cumulative across ALL its strikes — green above zero (dealers long gamma), red below (short gamma); crosses zero at the gamma flip (Neutral) · scroll to zoom, drag to pan, double-click to reset"
+            >
+              <NetGammaByStrikeChart rows={d.rows} spot={d.spot} neutral={d.neutral} />
+              <ChartLegend items={[{ label: "Positive gamma$", color: GEX_POS_GREEN }, { label: "Negative gamma$", color: HOME_THEME.red }, { label: "Spot", color: LIGHT_BLUE }]} />
+            </Card>
+          ),
+          netGammaAll: (
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<CardTitleRow label="Net gamma exposure by strike (all expirations)" onDragStart={cards.handleDragStart("netGammaAll")} onDragEnd={cards.handleDragEnd} />}
+              subtitle="Every listed expiration combined, 0DTE included — gamma$ per strike, green above zero / red below · OI+Vol basis · scroll to zoom, drag to pan, double-click to reset · refreshed once a minute"
+            >
+              <NetGammaMultiPanel
+                ladder={multi.data?.all ?? null}
+                spot={multi.data?.spot ?? d.spot}
+                loading={multi.loading}
+                err={multi.err}
+                refresh={multi.refresh}
+                scopeNote={`${multi.data?.expiryCount ?? 0} expirations`}
+              />
+            </Card>
+          ),
+          netGammaEx0dte: (
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<CardTitleRow label="Net gamma exposure by strike (ex-0DTE)" onDragStart={cards.handleDragStart("netGammaEx0dte")} onDragEnd={cards.handleDragEnd} />}
+              subtitle="Same board with the 0DTE expiry removed — gamma$ per strike, what's left standing after today expires · OI+Vol basis · scroll to zoom, drag to pan · refreshed once a minute"
+            >
+              <NetGammaMultiPanel
+                ladder={multi.data?.ex0dte ?? null}
+                spot={multi.data?.spot ?? d.spot}
+                loading={multi.loading}
+                err={multi.err}
+                refresh={multi.refresh}
+                scopeNote={`${Math.max(0, (multi.data?.expiryCount ?? 0) - 1)} expirations, 0DTE excluded`}
+              />
+            </Card>
+          ),
+          callPutGamma: (
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<CardTitleRow label="Call/put gamma exposure by strike" onDragStart={cards.handleDragStart("callPutGamma")} onDragEnd={cards.handleDragEnd} />}
+              subtitle="Click-drag to pan, double-click to reset"
+            >
+              <CallPutGammaByStrikeChart rows={d.rows} spot={d.spot} />
+              <ChartLegend items={[{ label: "CallGEX", color: LIGHT_BLUE }, { label: "PutGEX", color: HOME_THEME.red }]} />
+            </Card>
+          ),
+          netDelta: (
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<CardTitleRow label={`Net delta exposure by strike (0DTE${snap?.expiry ? ` · ${glFmtExpiryLabel(snap.expiry)}` : ""})`} onDragStart={cards.handleDragStart("netDelta")} onDragEnd={cards.handleDragEnd} />}
+              subtitle="The live feed's SINGLE expiry — delta$ per strike on the OI leg only · click-drag to pan, double-click to reset"
+            >
+              <NetDeltaByStrikeChart rows={d.rows} spot={d.spot} basis="oi" />
+              <ChartLegend items={[{ label: "Positive", color: LIGHT_BLUE }, { label: "Negative", color: HOME_THEME.red }]} />
+            </Card>
+          ),
+          netDeltaEx0dte: (
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<CardTitleRow label="Net delta exposure by strike (ex-0DTE)" onDragStart={cards.handleDragStart("netDeltaEx0dte")} onDragEnd={cards.handleDragEnd} />}
+              subtitle="Every listed expiration EXCEPT 0DTE — delta$ per strike on the OI+Vol basis, so it matches the gamma ladders above rather than the 0DTE delta card · hover a bar to split the two legs · scroll to zoom, drag to pan · refreshed once a minute"
+            >
+              <NetDeltaMultiPanel
+                ladder={multi.data?.ex0dte ?? null}
+                spot={multi.data?.spot ?? d.spot}
+                loading={multi.loading}
+                err={multi.err}
+                refresh={multi.refresh}
+                scopeNote={`${Math.max(0, (multi.data?.expiryCount ?? 0) - 1)} expirations, 0DTE excluded`}
+              />
+            </Card>
+          ),
+          volFlow: (
+            <Card
+              variant="budget"
+              accent={LIGHT_BLUE}
+              title={<CardTitleRow label="Net vol GEX flow (today)" onDragStart={cards.handleDragStart("volFlow")} onDragEnd={cards.handleDragEnd} />}
+              subtitle="Intraday path of the volume leg, 5m buckets from option_strike_gex_history · pick an expiration or track the front · above zero = flow adding long gamma (dampening), below = short gamma (amplifying)"
+            >
+              <div style={{ height: 460 }}>
+                <VolGexFlowPanel />
+              </div>
+            </Card>
+          ),
+        };
 
-          <div style={{ flex: "1 1 480px", minWidth: 380, display: "flex", flexDirection: "column", gap: 20 }}>
-            {(() => {
-              const content: Record<RightCardKey, ReactNode> = {
-                oiExpiry: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Open interest by expiration" onDragStart={rightOrder.handleDragStart("oiExpiry")} onDragEnd={rightOrder.handleDragEnd} />}
-                    subtitle={`${snap?.symbol ?? "SPX"} · nearest ${OI_EXPIRY_MAX} listed expirations`}
-                  >
-                    <OiByExpirationPanel symbol={snap?.symbol ?? "SPX"} expirations={snap?.expirations ?? []} />
-                  </Card>
-                ),
-                netGamma: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label={`Net gamma exposure by strike (0DTE${snap?.expiry ? ` · ${glFmtExpiryLabel(snap.expiry)}` : ""})`} onDragStart={rightOrder.handleDragStart("netGamma")} onDragEnd={rightOrder.handleDragEnd} />}
-                    subtitle="The live feed's SINGLE expiry. Cumulative across ALL its strikes — green above zero (dealers long gamma), red below (short gamma); crosses zero at the gamma flip (Neutral) · scroll to zoom, drag to pan, double-click to reset"
-                  >
-                    <NetGammaByStrikeChart rows={d.rows} spot={d.spot} neutral={d.neutral} />
-                    <ChartLegend items={[{ label: "Positive gamma$", color: GEX_POS_GREEN }, { label: "Negative gamma$", color: HOME_THEME.red }, { label: "Spot", color: LIGHT_BLUE }]} />
-                  </Card>
-                ),
-                netGammaAll: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Net gamma exposure by strike (all expirations)" onDragStart={rightOrder.handleDragStart("netGammaAll")} onDragEnd={rightOrder.handleDragEnd} />}
-                    subtitle="Every listed expiration combined, 0DTE included — gamma$ per strike, green above zero / red below · OI+Vol basis · scroll to zoom, drag to pan, double-click to reset · refreshed once a minute"
-                  >
-                    <NetGammaMultiPanel
-                      ladder={multi.data?.all ?? null}
-                      spot={multi.data?.spot ?? d.spot}
-                      loading={multi.loading}
-                      err={multi.err}
-                      refresh={multi.refresh}
-                      scopeNote={`${multi.data?.expiryCount ?? 0} expirations`}
-                    />
-                  </Card>
-                ),
-                netGammaEx0dte: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Net gamma exposure by strike (ex-0DTE)" onDragStart={rightOrder.handleDragStart("netGammaEx0dte")} onDragEnd={rightOrder.handleDragEnd} />}
-                    subtitle="Same board with the 0DTE expiry removed — gamma$ per strike, what's left standing after today expires · OI+Vol basis · scroll to zoom, drag to pan · refreshed once a minute"
-                  >
-                    <NetGammaMultiPanel
-                      ladder={multi.data?.ex0dte ?? null}
-                      spot={multi.data?.spot ?? d.spot}
-                      loading={multi.loading}
-                      err={multi.err}
-                      refresh={multi.refresh}
-                      scopeNote={`${Math.max(0, (multi.data?.expiryCount ?? 0) - 1)} expirations, 0DTE excluded`}
-                    />
-                  </Card>
-                ),
-                callPutGamma: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Call/put gamma exposure by strike" onDragStart={rightOrder.handleDragStart("callPutGamma")} onDragEnd={rightOrder.handleDragEnd} />}
-                    subtitle="Click-drag to pan, double-click to reset"
-                  >
-                    <CallPutGammaByStrikeChart rows={d.rows} spot={d.spot} />
-                    <ChartLegend items={[{ label: "CallGEX", color: LIGHT_BLUE }, { label: "PutGEX", color: HOME_THEME.red }]} />
-                  </Card>
-                ),
-                netDelta: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Net delta exposure by strike" onDragStart={rightOrder.handleDragStart("netDelta")} onDragEnd={rightOrder.handleDragEnd} />}
-                    subtitle="Click-drag to pan, double-click to reset"
-                  >
-                    <NetDeltaByStrikeChart rows={d.rows} spot={d.spot} />
-                    <ChartLegend items={[{ label: "Positive", color: LIGHT_BLUE }, { label: "Negative", color: HOME_THEME.red }]} />
-                  </Card>
-                ),
-                volFlow: (
-                  <Card
-                    variant="budget"
-                    accent={LIGHT_BLUE}
-                    title={<CardTitleRow label="Net vol GEX flow (today)" onDragStart={rightOrder.handleDragStart("volFlow")} onDragEnd={rightOrder.handleDragEnd} />}
-                    subtitle="Intraday path of the volume leg, 5m buckets from option_strike_gex_history · pick an expiration or track the front · above zero = flow adding long gamma (dampening), below = short gamma (amplifying)"
-                  >
-                    <div style={{ height: 460 }}>
-                      <VolGexFlowPanel />
-                    </div>
-                  </Card>
-                ),
-              };
-              return rightOrder.order.map((key) => (
-                <div
-                  key={key}
-                  onDragOver={rightOrder.cardDragOver(key)}
-                  onDrop={rightOrder.cardDrop(key)}
-                  style={{ opacity: rightOrder.draggingId === key ? 0.35 : 1, transition: "opacity .15s" }}
-                >
-                  {content[key]}
-                </div>
-              ));
-            })()}
+        const renderColumn = (col: ColumnId) => (
+          <div
+            style={{ flex: "1 1 480px", minWidth: 380, minHeight: 60, display: "flex", flexDirection: "column", gap: 20 }}
+            onDragOver={cards.columnDragOver}
+            onDrop={cards.columnDrop(col)}
+          >
+            {cards.layout[col].map((key) => (
+              <div
+                key={key}
+                onDragOver={cards.cardDragOver(key)}
+                onDrop={cards.cardDrop(col, key)}
+                style={{ opacity: cards.draggingId === key ? 0.35 : 1, transition: "opacity .15s" }}
+              >
+                {content[key]}
+              </div>
+            ))}
+            {cards.draggingId && <ColumnDropZone active={true} />}
           </div>
-        </div>
-      )}
+        );
+
+        return (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-start" }}>
+            {renderColumn("left")}
+            {renderColumn("right")}
+          </div>
+        );
+      })()}
     </>
   );
 }

@@ -42,7 +42,24 @@ export type GexMetric = "voloi" | "vol";
 // ET calendar date (YYYY-MM-DD) for a ms timestamp. Module-level so the overlay
 // draw can group GEX columns into sessions for the per-session basis.
 const ET_DAY_FMT = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" });
-export const etDayKey = (ts: number) => ET_DAY_FMT.format(new Date(ts));
+/**
+ * PERF: memoised on the UTC HOUR.
+ *
+ * The overlay draw calls this per stored GEX column (thousands) on every frame,
+ * and `Intl.format` + `new Date` is not cheap at that rate. Hour buckets are
+ * safe because ET's offset from UTC is always a whole number of hours (-5 / -4),
+ * so an ET calendar date can never change part-way through a UTC hour.
+ */
+const ET_DAY_CACHE = new Map<number, string>();
+export const etDayKey = (ts: number): string => {
+  const key = Math.floor(ts / 3_600_000);
+  const hit = ET_DAY_CACHE.get(key);
+  if (hit !== undefined) return hit;
+  const out = ET_DAY_FMT.format(new Date(ts));
+  if (ET_DAY_CACHE.size > 20_000) ET_DAY_CACHE.clear();
+  ET_DAY_CACHE.set(key, out);
+  return out;
+};
 const ET_HHMM_FMT = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false });
 export const fmtEtHM = (ts: number) => ET_HHMM_FMT.format(new Date(ts));
 
@@ -203,14 +220,36 @@ export function etSessionStarted(ts: number = Date.now()): boolean {
   return hh * 60 + mm >= RTH_OPEN_MIN;
 }
 
-/** Minutes-since-ET-midnight for a slot timestamp. */
+/**
+ * Minutes-since-ET-midnight for a slot timestamp.
+ *
+ * PERF: the formatter is module-level, like every other formatter in this file.
+ * It used to be constructed PER CALL, and this function is called per MVC point
+ * per overlay frame (EsChartCard's CB/flip draw) — hundreds of
+ * `new Intl.DateTimeFormat` per frame, ~10-40us each. That was several ms of
+ * every single repaint, from one missing hoist.
+ *
+ * There is also a small memo on the result: consecutive callers ask about the
+ * same handful of timestamps (a column's slot, then its cells), and `formatToParts`
+ * is the expensive part even with the formatter cached.
+ */
+const ET_MIN_FMT = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+});
+// Minute-resolution key → minutes-past-ET-midnight. A trading day is 1440 keys;
+// the cap is generous enough that a multi-session draw never thrashes it.
+const ET_MIN_CACHE = new Map<number, number>();
 export function etMinutes(ts: number): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
-  }).formatToParts(new Date(ts));
+  const key = Math.floor(ts / 60_000);
+  const hit = ET_MIN_CACHE.get(key);
+  if (hit !== undefined) return hit;
+  const parts = ET_MIN_FMT.formatToParts(new Date(ts));
   const m: Record<string, string> = {};
   parts.forEach((p) => { m[p.type] = p.value; });
-  return Number(m.hour) * 60 + Number(m.minute);
+  const out = Number(m.hour) * 60 + Number(m.minute);
+  if (ET_MIN_CACHE.size > 20_000) ET_MIN_CACHE.clear();
+  ET_MIN_CACHE.set(key, out);
+  return out;
 }
 
 /**
@@ -668,4 +707,58 @@ export function gexColor(value: number, maxValue: number, intensity: number, top
   const eased = Math.pow(ratio, 0.6);
   const alpha = Math.min(0.30, 0.04 + eased * (intensity || 0.1) * 0.26);
   return pos ? `rgba(41,182,246,${alpha.toFixed(3)})` : `rgba(255,71,87,${alpha.toFixed(3)})`;
+}
+
+// ── Heatmap colour, the fast path ────────────────────────────────────────────
+//
+// gexColor() above is the readable reference implementation and stays the single
+// source of truth for the CURVE. It is not usable in the heatmap's inner loop,
+// though: it builds an `rgba()` STRING per cell, and the draw then ran a regex
+// replace + parseFloat + a second toFixed(3) over that string to apply the
+// distance fade — four string operations and a CSS colour parse, per cell, per
+// frame, over ~100k cells.
+//
+// So the loop uses the two helpers below instead:
+//   gexAlphaOf() → the same curve, returning a NUMBER (0 = don't paint)
+//   gexPaint()   → alpha × fade → an interned string from a fixed palette
+//
+// Quantising to 1/256 is invisible (the canvas composites in 8-bit alpha anyway)
+// and means `fillStyle` only ever sees one of ~512 strings, which the browser
+// parses once and caches.
+
+/** Alpha for a heatmap cell, 0 = paint nothing. Same curve as gexColor(). */
+export function gexAlphaOf(value: number, maxValue: number, intensity: number, top3: number[]): number {
+  const n = value || 0;
+  const m = maxValue || 0;
+  if (m === 0 || !n) return 0;
+  const rank = top3.indexOf(Math.abs(n)) + 1;
+  if (rank === 1) return 0.90;
+  if (rank === 2) return 0.55;
+  if (rank === 3) return 0.35;
+  const ratio = Math.min(Math.abs(n) / m, 1);
+  const eased = Math.pow(ratio, 0.6);
+  return Math.min(0.30, 0.04 + eased * (intensity || 0.1) * 0.26);
+}
+
+const GEX_STEPS = 256;
+const GEX_POS_PAL: Array<string | null> = new Array(GEX_STEPS + 1).fill(null);
+const GEX_NEG_PAL: Array<string | null> = new Array(GEX_STEPS + 1).fill(null);
+
+/**
+ * Interned `rgba()` for a cell. `alpha` is the gexAlphaOf() result already
+ * multiplied by any distance fade. Positive GEX = cyan, negative = red — the
+ * same two hues gexColor() uses.
+ */
+export function gexPaint(pos: boolean, alpha: number): string | null {
+  if (!(alpha > 0.002)) return null;
+  const q = alpha >= 1 ? GEX_STEPS : (Math.round(alpha * GEX_STEPS) | 0);
+  if (q <= 0) return null;
+  const pal = pos ? GEX_POS_PAL : GEX_NEG_PAL;
+  let s = pal[q];
+  if (s == null) {
+    const a = (q / GEX_STEPS).toFixed(3);
+    s = pos ? `rgba(41,182,246,${a})` : `rgba(255,71,87,${a})`;
+    pal[q] = s;
+  }
+  return s;
 }

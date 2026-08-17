@@ -20,7 +20,7 @@
  * through lib/calculations/optionChain.ts.
  */
 
-import { type MutableRefObject } from "react";
+import { memo, type MutableRefObject } from "react";
 import EsGexRail, { type RailRow } from "@/components/dashboard/EsGexRail";
 import ChainRail, { type ChainGreek } from "./ChainRail";
 // Declared in slotStore (which has no React dependency) so the page-level
@@ -76,7 +76,7 @@ interface SidePanelProps {
   chainReplay?: { rows: Array<{ strike: number; v: number }>; unavailable: boolean } | null;
 }
 
-export default function SidePanel({
+function SidePanel({
   kind, width, chainSymbol, intensity, chainGreek,
   railRows, callWall, putWall, gexFlip, spot, basis, priceToY, drawRef, chainReplay = null,
 }: SidePanelProps) {
@@ -116,3 +116,6 @@ export default function SidePanel({
     </div>
   );
 }
+
+/** memo(): re-rendered with every parent render despite usually identical props. */
+export default memo(SidePanel);

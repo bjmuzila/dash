@@ -231,24 +231,6 @@ function fmtCellM(v: number) {
   return (m < 0 ? "-" : "+") + "$" + Math.abs(m).toLocaleString("en-US") + "M";
 }
 
-// Heatmap rank badge ("#1", "#2"...), rasterized as an inline SVG data URI
-// rather than live DOM text. html2canvas is unreliable rasterizing text this
-// small (9px) inside a flex layout — captures were showing a blank/garbled
-// swatch instead of the number. An <img> bitmap is composited directly, so it
-// always captures correctly.
-const rankBadgeCache = new Map<string, string>();
-function rankBadgeDataUri(rank: number, bg: string): string {
-  const fg = bg === "#FB8501" ? "#000000" : "#ffffff";
-  const key = `${rank}|${bg}`;
-  const cached = rankBadgeCache.get(key);
-  if (cached) return cached;
-  const w = 20, h = 13;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" rx="3" fill="${bg}"/><text x="${w / 2}" y="${h / 2 + 3}" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="9" font-weight="700" fill="${fg}">#${rank}</text></svg>`;
-  const uri = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-  rankBadgeCache.set(key, uri);
-  return uri;
-}
-
 // Net GEX header value is already denominated in BILLIONS of dollars.
 function fmtMoneyB(vB: number) {
   if (!isFinite(vB)) return "--";
@@ -2289,7 +2271,6 @@ export function HomeClient({
                               ) : (
                                 <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
                                   <span style={{ flexShrink: 0, minWidth: 28, display: "flex", alignItems: "center", gap: 3 }}>
-                                    {row.rank && <img src={rankBadgeDataUri(row.rank, row.rankColor ?? "#8B94A7")} width={20} height={13} style={{ display: "block" }} alt={`#${row.rank}`} />}
                                     {deltaWindow !== 0 && heatmapDeltas.by[row.strikeNum] && heatmapDeltas.by[row.strikeNum].rank <= 5 && (
                                       <DeltaStamp
                                         d={heatmapDeltas.by[row.strikeNum].d}

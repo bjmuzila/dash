@@ -52,7 +52,7 @@
  * single card and renders no chrome of its own.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import EsChartCard from "@/components/dashboard/es-candles/EsChartCard";
 import {
   MAX_CARDS, SHARED_SLOT, ensureMigrated,
@@ -343,16 +343,30 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // breakpoint, so a hardcoded offset would drift the moment the window moved.
   useEffect(() => {
     if (!popover) return;
+    // rAF-throttled, and identity-guarded.
+    //
+    // `measure` was called synchronously from a capture-phase scroll listener,
+    // so every scroll ANYWHERE in the document forced a layout
+    // (getBoundingClientRect) and then wrote page state — which re-rendered all
+    // three chart cards. Coalescing to one measure per frame and bailing when
+    // the number hasn't moved makes an open popover free to scroll past.
+    let raf = 0;
     const measure = () => {
+      raf = 0;
       const r = anchorRef.current?.getBoundingClientRect();
-      if (r) setAnchorBottom(r.bottom);
+      if (r) setAnchorBottom((prev) => (Math.abs(prev - r.bottom) < 0.5 ? prev : r.bottom));
+    };
+    const schedule = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(measure);
     };
     measure();
-    window.addEventListener("resize", measure);
-    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, true);
     return () => {
-      window.removeEventListener("resize", measure);
-      window.removeEventListener("scroll", measure, true);
+      if (raf) cancelAnimationFrame(raf);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("scroll", schedule, true);
     };
   }, [popover, cards]);
 
@@ -417,21 +431,18 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     });
   }, []);
 
-  // The home GEX card embeds this component. It wants exactly the chart, with
-  // its own switcher in the dock and no page chrome — so short-circuit to one
-  // card rather than growing an `embedded` branch through the layout below.
-  if (embedded) {
-    // density="full" pins the home card to the dock it has today. Its width sits
-    // near the compact threshold, and this page's layout work has no business
-    // silently restyling the home dashboard's toolbar.
-    return <EsChartCard slot="embed" sidePanel="rail" leading={leading} embedded density="full" indicators={indicators} />;
-  }
-
-  const multi = cards > 1;
-
   // The three page-level controls, rendered INTO the chart's own dock. The page
   // still owns every piece of state behind them; only the pixels move.
-  const toolbarButtons = (
+  //
+  // Memoised: this node is handed to the (now memo()'d) card as `toolbarExtras`,
+  // so rebuilding it every render would defeat the memo on every parent render.
+  //
+  // Declared ABOVE the `embedded` early-return below, not next to its use site.
+  // A hook after a conditional return is a rules-of-hooks violation, and it is a
+  // live one here: the home GEX card renders this component with `embedded`, and
+  // flipping that prop on the same element would change the hook count between
+  // renders.
+  const toolbarButtons = useMemo(() => (
     <div ref={anchorRef} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
       <DockButton
         onClick={() => togglePopover("charts")}
@@ -462,7 +473,19 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         })()}
       </DockButton>
     </div>
-  );
+  ), [popover, cards, indicators, togglePopover, toggleReplay]);
+
+  // The home GEX card embeds this component. It wants exactly the chart, with
+  // its own switcher in the dock and no page chrome — so short-circuit to one
+  // card rather than growing an `embedded` branch through the layout below.
+  if (embedded) {
+    // density="full" pins the home card to the dock it has today. Its width sits
+    // near the compact threshold, and this page's layout work has no business
+    // silently restyling the home dashboard's toolbar.
+    return <EsChartCard slot="embed" sidePanel="rail" leading={leading} embedded density="full" indicators={indicators} />;
+  }
+
+  const multi = cards > 1;
 
   return (
     <div className="es-candles-page flex h-full flex-col" style={{ background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow }}>

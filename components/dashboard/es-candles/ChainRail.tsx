@@ -24,7 +24,7 @@
  * positioned rows at 60fps is exactly the jank the rail was built to avoid.
  */
 
-import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import { HOME_THEME } from "@/components/shared/homeTheme";
 import { atMinIntensity, columnWalls, wallAt, INTENSITY_MIN, WALL_RANK } from "@/lib/calculations/heatLevels";
 import { dedupeFetch } from "@/lib/dedupeFetch";
@@ -100,7 +100,7 @@ interface ChainRailProps {
   replay?: { rows: Array<{ strike: number; v: number }>; unavailable: boolean } | null;
 }
 
-export default function ChainRail({
+function ChainRail({
   symbol, basis, priceToY, drawRef, intensity, greek, replay = null,
 }: ChainRailProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -242,9 +242,23 @@ export default function ChainRail({
     // Heat scale over the VISIBLE rows only, matching how the chain page scales
     // per column: an off-screen monster wall shouldn't wash out everything you
     // are actually looking at.
-    const absVals = rows.map((r) => Math.abs(r.v)).filter((v) => v > 0);
-    const max = absVals.length ? Math.max(...absVals) : 1;
-    const top3 = [...absVals].sort((x, y) => y - x).slice(0, 3);
+    // Single pass for max + top-3 instead of map + filter + spread + sort. The
+    // spread in particular pushed one argument per visible strike onto the stack
+    // on every rail draw, i.e. every overlay frame.
+    let max = 0, t1 = 0, t2 = 0, t3 = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const a = Math.abs(rows[i].v);
+      if (!(a > 0)) continue;
+      if (a > max) max = a;
+      if (a > t1) { t3 = t2; t2 = t1; t1 = a; }
+      else if (a > t2) { t3 = t2; t2 = a; }
+      else if (a > t3) { t3 = a; }
+    }
+    if (max === 0) max = 1;
+    const top3: number[] = [];
+    if (t1 > 0) top3.push(t1);
+    if (t2 > 0) top3.push(t2);
+    if (t3 > 0) top3.push(t3);
 
     // Row bands: halfway to each neighbour, so the ladder tiles with no gaps and
     // no overlap however irregular the strike spacing is. y DECREASES as strike
@@ -277,6 +291,14 @@ export default function ChainRail({
     const showStrikes = w >= 105;
 
     ctx.textBaseline = "middle";
+    // Labels are collected here and drawn in two passes AFTER the bands.
+    //
+    // They used to be drawn inline, which meant `ctx.font` was assigned twice
+    // and `ctx.textAlign` flipped twice for every row — ~200 rows, so ~400
+    // font-string parses per rail draw, and the rail draws on every overlay
+    // frame. Assigning ctx.font is a CSS font-shorthand parse; it is not free.
+    // Batching by style makes it two assignments total.
+    const labels: Array<{ mid: number; strike: number; v: number }> = [];
     for (let i = 0; i < rows.length; i++) {
       const { strike, v } = rows[i];
       const { top, bot } = bandFor(i);
@@ -299,18 +321,26 @@ export default function ChainRail({
       // immediately to the left of this panel already labelling those prices.
       // Printing them twice was only ever necessary when the ladder was free to
       // drift out of register.
-      if (bandH >= 9) {
-        const mid = (top + bot) / 2;
-        if (showStrikes) {
-          ctx.font = "600 9.5px ui-monospace, SFMono-Regular, Menlo, monospace";
-          ctx.fillStyle = "rgba(255,255,255,0.55)";
-          ctx.textAlign = "left";
-          ctx.fillText(String(strike), 4, mid);
-        }
-        ctx.font = `700 ${showStrikes ? 9.5 : 9}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-        ctx.fillStyle = v === 0 ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.92)";
-        ctx.textAlign = "right";
-        ctx.fillText(fmtM(v), w - 3, mid);
+      if (bandH >= 9) labels.push({ mid: (top + bot) / 2, strike, v });
+    }
+
+    if (labels.length) {
+      // Pass 1: the strike column (left-aligned, lighter weight).
+      if (showStrikes) {
+        ctx.font = "600 9.5px ui-monospace, SFMono-Regular, Menlo, monospace";
+        ctx.fillStyle = "rgba(255,255,255,0.55)";
+        ctx.textAlign = "left";
+        for (const l of labels) ctx.fillText(String(l.strike), 4, l.mid);
+      }
+      // Pass 2: the value column (right-aligned, bold). fillStyle still flips
+      // per row for the zero case, but that is a cheap colour swap, not a parse.
+      ctx.font = `700 ${showStrikes ? 9.5 : 9}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+      ctx.textAlign = "right";
+      let curFill = "";
+      for (const l of labels) {
+        const fill = l.v === 0 ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.92)";
+        if (fill !== curFill) { ctx.fillStyle = fill; curFill = fill; }
+        ctx.fillText(fmtM(l.v), w - 3, l.mid);
       }
     }
 
@@ -393,3 +423,12 @@ export default function ChainRail({
     </div>
   );
 }
+
+/**
+ * memo().
+ *
+ * The rail is a canvas that repaints itself imperatively through `drawRef`, so a
+ * React re-render of it accomplishes nothing but reconciliation work — and it was
+ * getting one for every parent render, i.e. formerly every mouse move.
+ */
+export default memo(ChainRail);

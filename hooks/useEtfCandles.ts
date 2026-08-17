@@ -20,7 +20,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EsCandleRecord } from "@/lib/snapdb";
 
-const REFRESH_MS = 30_000;
+/**
+ * 60s, was 30.
+ *
+ * The header already says it: the underlying rows are written ONCE A MINUTE by
+ * etf-candle-recorder.js. A 30s poll therefore made every other request a
+ * provable no-op, and the responses are not small — this endpoint is the one
+ * candle route that never got the `lite=1` treatment, so each one ships the
+ * verbose shape for the full history window. Three ETF cards were pulling
+ * ~1.5MB/min between them to learn about one new bar.
+ */
+const REFRESH_MS = 60_000;
 
 export interface UseEtfCandlesResult {
   /** Bars oldest-first, same field names as the ES candle records. */
@@ -66,7 +76,26 @@ export function useEtfCandles(
       const json = await res.json();
       if (unmountedRef.current || seq !== seqRef.current) return;
       const next = Array.isArray(json?.rows) ? (json.rows as EsCandleRecord[]) : [];
-      setRows(next);
+      // Identity-guarded.
+      //
+      // The poll returns the whole history window every time and at most one row
+      // of it is new, but `setRows(next)` handed the consumer a fresh array
+      // regardless — and on /es-candles that array's identity is what drives the
+      // chart's `rows`, which drives the big overlay effect. So a poll that
+      // learned nothing still cost a full re-render and a full redraw.
+      setRows((prev) => {
+        if (prev.length !== next.length) return next;
+        // FULL compare, not just the newest bar: the recorder revises earlier
+        // bars (late prints, a corrected volume), and this response is the whole
+        // history window every time — so a last-bar-only check would drop any
+        // mid-array correction for good.
+        for (let i = 0; i < next.length; i++) {
+          const a = prev[i], b = next[i];
+          if (a.slotKey !== b.slotKey || a.open !== b.open || a.high !== b.high
+            || a.low !== b.low || a.close !== b.close || a.volume !== b.volume) return next;
+        }
+        return prev;
+      });
       setOk(next.length > 0);
     } catch {
       if (seq === seqRef.current && !unmountedRef.current) setOk(false);

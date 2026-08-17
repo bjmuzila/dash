@@ -22,6 +22,15 @@ import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
 // will be wanted, and asking for only the current one would make the toggle
 // silently dead until a remount.
 //
+// Scoping this to the ACTIVE interval was tried and reverted. It does halve
+// candle bandwidth at the default 5m (every es1mCandles frame is currently
+// parsed, fanned out to every subscriber, and discarded by all of them) — but
+// the narrow-then-widen sequence on a 1m<->5m toggle makes gexSocket take the
+// reopenWithScope() path: a real WebSocket close/open that clears the replay
+// cache and bounces onStatus for EVERY consumer on the page, including the
+// other two chart cards and the toolbar ticker. A visible reconnect blip on a
+// routine timeframe click is a worse trade than the bytes.
+//
 // "regime-fit-updated" / "pairs-regime-updated" are deliberately absent: the
 // server pushes those through broadcastEvent(), which ignores client topics
 // entirely, so they arrive either way.
@@ -135,10 +144,24 @@ function sharedLoad(
  *   1m is server-gated by ES_1M_CANDLES=1. With it off, the WS frames never
  *   arrive and only DB history renders.
  */
+/**
+ * Stable empty array for the `candles` result when averages are not requested.
+ * A fresh `[]` per render would defeat every downstream memo that depends on it.
+ */
+const EMPTY_CANDLES: EsCandle[] = [];
+
 export function useEsCandles(
   enabled: boolean = true,
   historyDays: number = 20,
   intervalMinutes: 1 | 5 = 5,
+  /**
+   * Compute the 5/14-day per-slot volume averages attached to `candles`.
+   *
+   * Defaults to TRUE so every existing caller behaves exactly as before. Pass
+   * false from consumers that only want `sessionCandles` / `historical` — see
+   * the note on the memo itself for what it costs.
+   */
+  withAverages: boolean = true,
 ) {
   // Final gate = global bandwidth lifecycle AND the caller's enable flag.
   const lifecycle = useWsLifecycle();
@@ -174,8 +197,11 @@ export function useEsCandles(
   // still written on every frame, so NO data is dropped — only the render is
   // deferred, and whatever lands in the window is published together.
   const COALESCE_MS = 250;
-  const tickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const rowsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const publishTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Which publishes are owed. Accumulated across the coalesce window — see the
+  // note at the arm site.
+  const pendingRowsRef = useRef(false);
+  const pendingTickRef = useRef(false);
 
   // Monotonic load token. Guards against a STALE fetch landing after a switch:
   // loadFromDb is async, so toggling 1m→5m leaves the 1m request in flight, and
@@ -295,18 +321,34 @@ export function useEsCandles(
       // Coalesced publish (see COALESCE_MS above). The `if (!timer)` guard makes
       // this trailing-edge: the first frame in a quiet period arms the timer and
       // every frame for the next 250ms rides it, then one render carries them all.
-      if (changed && !rowsTimerRef.current) {
-        rowsTimerRef.current = setTimeout(() => {
-          rowsTimerRef.current = null;
+      // ONE timer for both publishes.
+      //
+      // These were two independent setTimeouts, and a live frame almost always
+      // sets both `changed` and `sessionChanged` — so they armed together, fired
+      // as two separate macrotasks, and React batched neither against the other.
+      // The documented 4Hz ceiling was really 8 renders/sec of the consuming
+      // page, which on /es-candles is a 5,000-line component whose biggest
+      // effect has `rows` in its dep array.
+      //
+      // The two flags ACCUMULATE across the window rather than being captured
+      // when the timer is armed. A batch can be session-only (bars not dated
+      // today), and if that batch armed the timer, a today-dated batch arriving
+      // 50ms later would otherwise ride a callback that had already decided not
+      // to publish `todayRows` — leaving it stale until the next frame that
+      // happened to arm a fresh timer.
+      if (changed) pendingRowsRef.current = true;
+      if (sessionChanged) pendingTickRef.current = true;
+      if ((changed || sessionChanged) && !publishTimerRef.current) {
+        publishTimerRef.current = setTimeout(() => {
+          publishTimerRef.current = null;
           if (unmountedRef.current) return;
-          setTodayRows([...liveMapRef.current.values()]);
-        }, COALESCE_MS);
-      }
-      if (sessionChanged && !tickTimerRef.current) {
-        tickTimerRef.current = setTimeout(() => {
-          tickTimerRef.current = null;
-          if (unmountedRef.current) return;
-          setSessionTick((n) => n + 1);
+          const wantRows = pendingRowsRef.current;
+          const wantTick = pendingTickRef.current;
+          pendingRowsRef.current = false;
+          pendingTickRef.current = false;
+          // Both setStates in one callback → one React batch → one render.
+          if (wantRows) setTodayRows([...liveMapRef.current.values()]);
+          if (wantTick) setSessionTick((n) => n + 1);
         }, COALESCE_MS);
       }
     };
@@ -350,8 +392,9 @@ export function useEsCandles(
     return () => {
       unmountedRef.current = true;
       // Pending coalesced publishes must not fire into an unmounted tree.
-      if (tickTimerRef.current) { clearTimeout(tickTimerRef.current); tickTimerRef.current = null; }
-      if (rowsTimerRef.current) { clearTimeout(rowsTimerRef.current); rowsTimerRef.current = null; }
+      if (publishTimerRef.current) { clearTimeout(publishTimerRef.current); publishTimerRef.current = null; }
+      pendingRowsRef.current = false;
+      pendingTickRef.current = false;
       unsubscribe?.();
       setConnected(false);
     };
@@ -359,7 +402,16 @@ export function useEsCandles(
   }, [shouldConnect]);
 
   // Enrich today's bars with 5/14-day slot averages.
+  //
+  // OPT-IN (`withAverages`). This was unconditional, and it is expensive: TWO
+  // full buildSlotAverages passes over the entire historical array, plus a sort
+  // and a map, re-run every time `todayRows` is republished — i.e. 4x/sec while
+  // the tape is live. /es-candles, which mounts up to three of these hooks,
+  // destructures { sessionCandles, historical, connected, refresh } and has
+  // never read `candles` at all, so on that page 100% of that work was thrown
+  // away. The RelVol / IB consumers that DO want it pass withAverages.
   const candles = useMemo<EsCandle[]>(() => {
+    if (!withAverages) return EMPTY_CANDLES;
     const today = todayETStr();
     const avg5 = buildSlotAverages(historical, today, 5);
     const avg14 = buildSlotAverages(historical, today, 14);
@@ -369,7 +421,7 @@ export function useEsCandles(
         const slot = slotTimeOf(c);
         return { ...c, avg5: avg5.get(slot) ?? 0, avg14: avg14.get(slot) ?? 0 };
       });
-  }, [todayRows, historical]);
+  }, [withAverages, todayRows, historical]);
 
   // Rolling continuous-session view: ~30h of bars regardless of ET date, so the
   // overnight (prior-day-dated) session is included and the chart follows into a
