@@ -109,7 +109,7 @@ function LogoTrigger({
   triggerRef: React.RefObject<HTMLButtonElement | null>;
 }) {
   const [hover, setHover] = useState(false);
-  const h = compact ? 32 : 48;
+  const h = compact ? 36 : 54;
 
   const logo = (
     // eslint-disable-next-line @next/next/no-img-element
@@ -228,13 +228,13 @@ function QuickCircle({
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        width: 30,
-        height: 30,
+        width: 36,
+        height: 36,
         borderRadius: "50%",
         border: `1px solid ${cyanA(0.3)}`,
         background: "rgba(255,255,255,0.04)",
         color: HOME_THEME.text,
-        fontSize: 14,
+        fontSize: 18,
         lineHeight: 1,
         fontFamily: "'Segoe UI Symbol','Apple Symbols','Noto Sans Symbols2',sans-serif",
         transition: "background 0.14s, border-color 0.14s, transform 0.14s, box-shadow 0.14s",
@@ -249,7 +249,7 @@ function QuickCircle({
       <span
         style={{
           maxWidth: NAV_ITEM_W,
-          fontSize: 10,
+          fontSize: 11,
           fontWeight: 600,
           color: HOME_THEME.text,
           opacity: 0.8,
@@ -360,7 +360,7 @@ const NAV_ORDER_KEY = "cb-toolbar-nav-order-v1";
 
 // ── Responsive sizing for the left-side nav strip ─────────────────────────────
 // Each QuickCircle is a fixed-width column so we can compute how many fit.
-const NAV_ITEM_W = 44;   // px, column width (circle is 30px, label ellipsises)
+const NAV_ITEM_W = 50;   // px, column width (circle is 36px, label ellipsises)
 const NAV_GAP = 6;       // px, gap between columns
 // Everything else in the pill that is NOT the nav strip: hamburger, logo, bell,
 // ticker (min), divider, clock, notes, user menu, gaps + pill padding + band
@@ -597,7 +597,7 @@ export default function GlobalToolbar() {
         flexDirection: "column",
         alignItems: "stretch",
         flexShrink: 0,
-        padding: isMobile ? "6px 8px" : "8px 14px",
+        padding: isMobile ? "6px 4px" : "8px 6px",
         paddingTop: "max(8px, env(safe-area-inset-top, 0px))",
         boxSizing: "border-box",
         position: "relative",
@@ -634,7 +634,7 @@ export default function GlobalToolbar() {
             display: "flex",
             alignItems: "center",
             gap: isMobile ? 6 : "clamp(8px, 1.2vw, 16px)",
-            height: isMobile ? 48 : 56,
+            height: isMobile ? 52 : 62,
             padding: isMobile ? "0 8px" : "0 16px",
             borderRadius: 998,
             minWidth: 0,
@@ -693,8 +693,8 @@ export default function GlobalToolbar() {
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
-                width: 38,
-                height: 38,
+                width: 42,
+                height: 42,
                 flexShrink: 0,
                 borderRadius: "50%",
                 border: `1px solid ${menuActive ? cyanA(0.45) : "transparent"}`,
@@ -706,7 +706,7 @@ export default function GlobalToolbar() {
                 transition: "background 0.14s, border-color 0.14s, color 0.14s, box-shadow 0.14s, transform 0.14s",
               }}
             >
-              <MenuIcon size={20} />
+              <MenuIcon size={23} />
             </button>
             <NavMenu anchor={anchor} />
           </div>
@@ -772,8 +772,8 @@ export default function GlobalToolbar() {
                   display: "inline-flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  width: 38,
-                  height: 38,
+                  width: 42,
+                  height: 42,
                   flexShrink: 0,
                   borderRadius: "50%",
                   border: `1px solid ${open || hoverNotes ? cyanA(0.55) : cyanA(0.35)}`,
@@ -785,7 +785,7 @@ export default function GlobalToolbar() {
                   transition: "border-color 0.14s, box-shadow 0.14s, transform 0.14s",
                 }}
               >
-                <PencilIcon size={18} />
+                <PencilIcon size={21} />
                 {notes.length > 0 && (
                   <span
                     style={{

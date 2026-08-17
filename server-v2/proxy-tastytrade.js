@@ -2936,6 +2936,13 @@ class TastytradeProxy {
           this.warmedExpiries.clear(); // prior session's warm cache is now stale — force re-warm
           this.oiReady = false;
           this.oiPlateauHits = 0;
+          // Take in the new session's book. This watcher fires at the 18:00 ET
+          // reopen, which is when the next day's expirations list — and until
+          // this call existed nothing ever re-read the chain after boot, so a
+          // newly-listed expiry could not become "front" without a restart.
+          // Fire-and-forget: the roll must not block the volume/OI reset above,
+          // and _refreshChainForNewSession swallows its own failures.
+          this._refreshChainForNewSession().catch(() => {});
           this._refreshOI().catch(() => {}).finally(() => this._scheduleOiRefresh());
         }
         this.optSessionKey = key;
@@ -4678,18 +4685,28 @@ class TastytradeProxy {
     }
   }
 
-  /** Build flat rows, compute greeks locally, write GEX + flow to state. */
-  _recompute() {
-    // Idle is a hard kill-switch: even if a reconnect/session-roll re-armed the
-    // timer, do no work (and broadcast nothing) while paused.
-    if (this.idle) return;
-    if (!(this.spot > 0)) return; // bootstrap gate: need at least one real broker print
-    // All GEX math below prices off `spot`, NOT this.spot directly — see
-    // _effectiveSpot(): during RTH they're the same value, off-hours this is
-    // the ES-future + cash-basis reconstruction (this.spot alone freezes at
-    // the last RTH print and silently mis-centers every wall/flip/CB).
-    const spot = this._effectiveSpot();
-
+  /**
+   * Advance `this.expiry` when the active one has passed.
+   *
+   * Returns true if it rolled, so the caller can bail and pick up next tick.
+   *
+   * Extracted from _recompute() so it can run ahead of the spot gate — see the
+   * call site. Pure date-string comparison against the contract map; it needs
+   * no quote, no greeks and no network.
+   */
+  _rollExpiryIfDue() {
+    // ── Refuse to roll without a usable price centre ────────────────────────
+    // Rolling calls setExpiry → _resubscribe → _activeContracts, and that
+    // window is `|strike − centre| <= band`. With no centre the band is
+    // Infinity and EVERY contract of the new expiry gets subscribed — a few
+    // thousand symbols instead of ~500, four dxLink subscriptions each.
+    //
+    // The old call site sat below `if (!(this.spot > 0)) return`, so it could
+    // never be reached in that state; this preserves that invariant now that
+    // the call runs earlier. `_effectiveSpot()` is the right test rather than
+    // `this.spot`: off-hours it reconstructs from ES + cash basis, so the
+    // Sunday 18:00 ET reopen — the exact moment this needs to work — passes.
+    if (!(this._effectiveSpot() > 0)) return false;
     // Auto-roll expiry: advance when the active expiry has passed, OR when
     // today's 0DTE has expired (after 4:15pm ET the 0DTE has no live OI/greeks
     // so pre-roll to next session's expiry).
@@ -4703,37 +4720,117 @@ class TastytradeProxy {
     //            contracts are dead. Only then do we want the NEXT session.
     const staleRoll = this.expiry < ymd;
     const shouldRoll = staleRoll || (this.expiry === ymd && afterClose);
-    if (shouldRoll) {
-      const expirations = [...new Set([...this.contracts.values()].map(c => c.expiration))].sort();
-      const live = expirations.filter((e) => e >= ymd);
-      // Re-publish the today-forward list BEFORE rolling. setExpirations() was
-      // previously only ever called once at feed startup, so after a date change
-      // the picker kept serving yesterday's array while this.expiry had already
-      // rolled — that mismatch is what made the position-based 0DTE/1DTE labels
-      // point at the wrong dates and made re-selecting the stale entry bounce
-      // straight back here on the next tick.
-      if (live.length) marketState.setExpirations(live);
-      // `live` is sorted and filtered to >= ymd, so live[0] IS today's 0DTE
-      // whenever today has contracts (and the nearest forward expiry when it
-      // does not — an early roll on a holiday still lands somewhere real).
-      //
-      // This used to be `live.find(e => e > ymd) || live[0]` for BOTH cases,
-      // which skips today entirely on a stale roll: at 00:22 ET on 2026-08-13
-      // it rolled 2026-08-12 → 2026-08-14, so the whole session's per-strike
-      // history was stamped with tomorrow's expiry and every 0DTE reader
-      // (/api/gex-map's Tape Field, the ES-Candles gamma trail) drew holes
-      // where the recorder had in fact been writing at full cadence the entire
-      // time. `find(e => e > ymd)` is correct ONLY for the afterClose roll,
-      // which is the one case where today is genuinely done.
-      const next = staleRoll
-        ? (live[0] || live.find((e) => e > ymd))
-        : (live.find((e) => e > ymd) || live[0]);
-      if (next && next !== this.expiry) {
-        // setExpiry logs the transition itself now, with the source tag.
-        this.setExpiry(next, 'auto-roll');
-        return; // recompute next tick with new expiry
-      }
+    if (!shouldRoll) return false;
+    const expirations = [...new Set([...this.contracts.values()].map(c => c.expiration))].sort();
+    const live = expirations.filter((e) => e >= ymd);
+    // Re-publish the today-forward list BEFORE rolling. setExpirations() was
+    // previously only ever called once at feed startup, so after a date change
+    // the picker kept serving yesterday's array while this.expiry had already
+    // rolled — that mismatch is what made the position-based 0DTE/1DTE labels
+    // point at the wrong dates and made re-selecting the stale entry bounce
+    // straight back here on the next tick.
+    if (live.length) marketState.setExpirations(live);
+    // `live` is sorted and filtered to >= ymd, so live[0] IS today's 0DTE
+    // whenever today has contracts (and the nearest forward expiry when it
+    // does not — an early roll on a holiday still lands somewhere real).
+    //
+    // This used to be `live.find(e => e > ymd) || live[0]` for BOTH cases,
+    // which skips today entirely on a stale roll: at 00:22 ET on 2026-08-13
+    // it rolled 2026-08-12 → 2026-08-14, so the whole session's per-strike
+    // history was stamped with tomorrow's expiry and every 0DTE reader
+    // (/api/gex-map's Tape Field, the ES-Candles gamma trail) drew holes
+    // where the recorder had in fact been writing at full cadence the entire
+    // time. `find(e => e > ymd)` is correct ONLY for the afterClose roll,
+    // which is the one case where today is genuinely done.
+    const next = staleRoll
+      ? (live[0] || live.find((e) => e > ymd))
+      : (live.find((e) => e > ymd) || live[0]);
+    if (next && next !== this.expiry) {
+      // setExpiry logs the transition itself now, with the source tag.
+      this.setExpiry(next, 'auto-roll');
+      return true;
     }
+    return false;
+  }
+
+  /**
+   * Re-read the option chain and take in any newly-listed expirations.
+   *
+   * THE CONTRACT MAP WAS LOADED ONCE AND NEVER AGAIN. `fetchChain()` ran only
+   * inside start(), so `this.contracts` was frozen at boot — no timer, no
+   * midnight hook, nothing refreshed it. The auto-roll can only ever pick from
+   * that map, and `marketState.setExpirations()` only fires at boot or inside a
+   * roll, so once `this.expiry` was a future date the toolbar's list was pinned
+   * forever too.
+   *
+   * The visible symptom: SPX lists Monday's book on Sunday evening, and the
+   * dashboard keeps showing Friday as "Front" until someone restarts the
+   * process. The REST path (`fetchExpirations` → `getChainCached`, 10-minute
+   * TTL) had Monday the whole time, which is what made the two disagree.
+   *
+   * Called from the session-roll watcher, which already fires at the 18:00 ET
+   * reopen — the moment the new book is listed. One chain pull a day.
+   *
+   * MERGES, never replaces. A rebuild would drop the streamerSymbols the live
+   * dxLink subscription is keyed on mid-flight; every contract already in the
+   * map keeps its identity and only genuinely new ones are added.
+   */
+  async _refreshChainForNewSession() {
+    let chain;
+    try {
+      chain = await fetchChain(SYMBOL);
+    } catch (e) {
+      // Never throw out of the roll watcher — a failed pull just means the old
+      // map survives to the next session, which is the pre-existing behaviour.
+      console.warn(`[SESSION] chain refresh failed: ${e.message}`);
+      return;
+    }
+    const contracts = chain?.contracts || [];
+    if (!contracts.length) {
+      console.warn('[SESSION] chain refresh returned no contracts — keeping the existing map');
+      return;
+    }
+    let added = 0;
+    for (const c of contracts) {
+      if (!this.contracts.has(c.streamerSymbol)) added++;
+      this.contracts.set(c.streamerSymbol, c);
+    }
+    const { ymd } = todayYmd();
+    const all = [...new Set([...this.contracts.values()].map((c) => c.expiration))].sort();
+    const live = all.filter((e) => e >= ymd);
+    if (live.length) marketState.setExpirations(live);
+    console.log(`[SESSION] chain refresh: +${added} new contracts, ${live.length} today-forward expirations (front ${live[0] || '(none)'})`);
+    // Roll onto the new front if the active expiry has been left behind. Uses
+    // the same helper as the tick, so the stale-vs-afterClose distinction and
+    // the resubscribe/re-warm it triggers are identical — there is exactly one
+    // place that decides what "front" means.
+    this._rollExpiryIfDue();
+  }
+
+  /** Build flat rows, compute greeks locally, write GEX + flow to state. */
+  _recompute() {
+    // Idle is a hard kill-switch: even if a reconnect/session-roll re-armed the
+    // timer, do no work (and broadcast nothing) while paused.
+    if (this.idle) return;
+    // ── Roll the expiry BEFORE the spot gate ───────────────────────────────
+    // This used to sit below `if (!(this.spot > 0)) return`, and that ordering
+    // made the roll unreachable for an entire weekend: there are no SPX prints
+    // between Friday's close and Monday's open, so a process that restarted at
+    // any point in between had this.spot === 0 and returned here every tick.
+    // The expiry then sat on Friday's date until Monday's first quote landed —
+    // which is well after the Sunday-evening book lists, and is exactly the
+    // "front is still showing Friday" report.
+    //
+    // Nothing in the roll needs a spot: it is a comparison of date strings
+    // against the contract map. Running it first costs one string compare per
+    // tick and removes the dependency entirely.
+    if (this._rollExpiryIfDue()) return; // recompute next tick with the new expiry
+    if (!(this.spot > 0)) return; // bootstrap gate: need at least one real broker print
+    // All GEX math below prices off `spot`, NOT this.spot directly — see
+    // _effectiveSpot(): during RTH they're the same value, off-hours this is
+    // the ES-future + cash-basis reconstruction (this.spot alone freezes at
+    // the last RTH print and silently mis-centers every wall/flip/CB).
+    const spot = this._effectiveSpot();
 
     // Pass 1: gather each contract's price/OI/volume and solve IV where the
     // price supports it. Track ATM IV (nearest strike with a good solve) to use

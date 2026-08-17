@@ -5,6 +5,7 @@ import { HOME_THEME } from "../lib/theme";
 import { ThemedSelect } from "../components/ThemedSelect";
 import { ThemedMonthPicker } from "../components/ThemedMonthPicker";
 import RealMonth from "./budget/RealMonth";
+import { CategoryBudgetSection } from "./budget/CategoryBudget";
 
 type Bank = "coastal" | "truist" | "secu";
 type BudgetProfile = { id: number; name: string; currency: string };
@@ -1133,6 +1134,20 @@ export default function Budget() {
             currency={currency}
             defaultBank="secu"
             onOpenCategories={() => setTab("categories")}
+            onCategoriesChanged={() => refresh(month)}
+          />
+        )}
+        {/* Budget vs actual sits ABOVE the category editor, because the
+            question "what should this budget be" is answered by the twelve
+            months of actuals next to it — and the same block is on Real Month
+            > Categories, rendered from the same component so the two can never
+            drift. This copy fetches its own statement history; the editor
+            below only knows about the plan. */}
+        {tab === "categories" && (
+          <CategoryBudgetSection
+            month={month}
+            categories={categories}
+            currency={currency}
             onCategoriesChanged={() => refresh(month)}
           />
         )}
