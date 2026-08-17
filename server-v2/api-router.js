@@ -6641,7 +6641,7 @@ if (libDb) {
   // 'pushSubscription' action, which promotes ONE detected subscription into the
   // register as a recurring rule — an explicit, per-item decision.
   //
-  // GET  ?month=YYYY-MM  → { month, tx, subscriptions, categories, months, trend }
+  // GET  ?month=YYYY-MM  → { month, tx, subscriptions, categories, months, trend, daily }
   // POST { action: import | updateTx | setTxCategory | deleteTx | clearMonth
   //                | setSubscription | pushSubscription }
   {
@@ -6675,13 +6675,14 @@ if (libDb) {
               const d = new Date(Date.UTC(y, m - 1 - 11, 1));
               return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
             })();
-            const [tx, subscriptions, categories, months, adviceRow, trend] = await Promise.all([
+            const [tx, subscriptions, categories, months, adviceRow, trend, daily] = await Promise.all([
               D.listStatementTx(profile.id, month),
               D.listSubscriptions(profile.id),
               D.listBudgetCategories(profile.id),
               D.listStatementMonths(profile.id),
               D.getBudgetAdvice(profile.id, month),
               D.listStatementCategoryTrend(profile.id, trendSince, month),
+              D.listStatementDailyTrend(profile.id, trendSince, month),
             ]);
             // The stored "what to fix" pass for this month, if one was ever run.
             const advice = adviceRow
@@ -6700,6 +6701,12 @@ if (libDb) {
                 categoryId: r.category_id == null ? null : Number(r.category_id),
                 spent: Number(r.spent) || 0,
                 count: Number(r.n) || 0,
+              })),
+              // Day-level outflow for the same window. Dates come back as
+              // YYYY-MM-DD strings; the client slices month and day off them.
+              daily: (daily || []).map((r) => ({
+                date: typeof r.tx_date === 'string' ? r.tx_date.slice(0, 10) : new Date(r.tx_date).toISOString().slice(0, 10),
+                spent: Number(r.spent) || 0,
               })),
             });
             return;

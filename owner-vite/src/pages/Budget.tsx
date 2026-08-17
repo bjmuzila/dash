@@ -172,6 +172,22 @@ export default function Budget() {
   const [tab, setTab] = useState<"overview" | "register" | "real" | "categories" | "amazon" | "bzila" | "yearly">("overview");
   const [year, setYear] = useState<number>(() => new Date().getFullYear());
   const [yearRows, setYearRows] = useState<RegisterRow[]>([]);
+  /**
+   * Imported bank/card statements — `budget_statement_tx` via /api/budget/real.
+   *
+   * The spend-analysis cards (Spend Pace, Where It Went) read THIS, not the
+   * register. The register is the plan: what you expect to pay and what you
+   * typed in. Statements are what actually cleared. A card headed "spent" has
+   * to mean the second one, and until now two cards on the same page quietly
+   * meant different things by it.
+   *
+   * Everything about bills, balances and the calendar still reads the register,
+   * because those are questions about the plan and about the bank, not about
+   * what a category cost.
+   */
+  const [stmtTrend, setStmtTrend] = useState<{ month: string; categoryId: number | null; spent: number }[]>([]);
+  const [stmtDaily, setStmtDaily] = useState<{ date: string; spent: number }[]>([]);
+  const [stmtMonths, setStmtMonths] = useState<string[]>([]);
   const [yearLoading, setYearLoading] = useState(false);
   const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -248,6 +264,28 @@ export default function Budget() {
 
   // Load a whole year of register rows for the Yearly tab and for the Overview's
   // monthly cash-flow bucket.
+  // Statement history for the overview's spend cards. Same window the
+  // Categories tab uses, fetched here because Budget.tsx has no RealMonth
+  // mounted to borrow it from.
+  useEffect(() => {
+    if (tab !== "overview") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/budget/real?month=${month}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setStmtTrend((data.trend || []).map((r: { month: string; categoryId: number | null; spent: number }) => ({
+          month: String(r.month), categoryId: r.categoryId == null ? null : Number(r.categoryId), spent: Number(r.spent) || 0,
+        })));
+        setStmtDaily((data.daily || []).map((r: { date: string; spent: number }) => ({ date: String(r.date), spent: Number(r.spent) || 0 })));
+        setStmtMonths((data.months || []).map((m: { month: string }) => String(m.month)));
+      } catch { /* the cards fall back to their empty state */ }
+    })();
+    return () => { cancelled = true; };
+  }, [tab, month]);
+
   useEffect(() => {
     // Bzila needs the year's register rows too — its Contracts stream is read
     // from the Payments register rather than entered on the tab.
@@ -747,48 +785,60 @@ export default function Budget() {
   // own past, not against a divisor that changes with how far back the data
   // happens to reach.
   const categoryAvg = useMemo(() => {
-    const perMonth = new Map<string, Map<number | null, number>>();
-    for (const r of yearRows) {
-      if (r.is_beginning || r.amount >= 0) continue;
-      const ym = r.entry_date.slice(0, 7);
-      if (ym === month) continue;
-      const slot = perMonth.get(ym) ?? new Map<number | null, number>();
-      const k = r.category_id ?? null;
-      slot.set(k, (slot.get(k) ?? 0) + Math.abs(r.amount));
-      perMonth.set(ym, slot);
-    }
-    const n = perMonth.size;
     const byCat = new Map<number | null, number>();
-    if (n) {
-      for (const slot of perMonth.values()) {
-        for (const [k, v] of slot) byCat.set(k, (byCat.get(k) ?? 0) + v);
-      }
-      // A category absent from a month counts as a zero for that month, which
-      // is correct here: the register covers every month it has rows for, so a
-      // missing category means nothing was spent, not that nothing is known.
-      for (const [k, v] of byCat) byCat.set(k, v / n);
+    for (const r of stmtTrend) {
+      if (r.month === month) continue;
+      byCat.set(r.categoryId, (byCat.get(r.categoryId) ?? 0) + r.spent);
     }
+    // Divide by IMPORTED months, not by months this category appears in. A
+    // month you imported where a category saw nothing is a real zero and has
+    // to pull the average down; a month you never imported is unknown and must
+    // not count at all. That distinction only exists because the source is
+    // statements — the register had no notion of a month being "missing".
+    const n = stmtMonths.filter((m) => m !== month).length;
+    if (n) for (const [k, v] of byCat) byCat.set(k, v / n);
+    else byCat.clear();
     return { byCat, months: n };
-  }, [yearRows, month]);
+  }, [stmtTrend, stmtMonths, month]);
 
+  /** This month's spend per category, straight off the imported statement. */
+  const stmtThisMonth = useMemo(() => {
+    const byCat = new Map<number | null, number>();
+    for (const r of stmtTrend) {
+      if (r.month !== month) continue;
+      byCat.set(r.categoryId, (byCat.get(r.categoryId) ?? 0) + r.spent);
+    }
+    return byCat;
+  }, [stmtTrend, month]);
+
+  // Category spend for the donut, off the imported statement. The window modes
+  // other than monthly are still register-backed — a 7-day window is a
+  // question about what just cleared the plan, and the statement view has no
+  // sub-month notion of "this week" that lines up with it.
   const slicesFor = useCallback((mode: RangeMode) => {
+    if (mode === "monthly") {
+      const withAvg = categoryAvg.months > 0;
+      const out = categories
+        .map((c, i) => ({
+          label: c.name,
+          value: stmtThisMonth.get(c.id) ?? 0,
+          color: c.color || CATEGORY_COLORS[i % CATEGORY_COLORS.length],
+          avg: withAvg ? categoryAvg.byCat.get(c.id) ?? 0 : null,
+        }))
+        .filter((s) => s.value > 0)
+        .sort((a, b) => b.value - a.value);
+      const uncat = stmtThisMonth.get(null) ?? 0;
+      if (uncat > 0) out.push({ label: "Uncategorized", value: uncat, color: "rgba(255,255,255,0.35)", avg: withAvg ? categoryAvg.byCat.get(null) ?? 0 : null });
+      return out;
+    }
     const w = spendWindow[mode];
-    // The average is only comparable to a whole month's spend, so it rides
-    // along only on the monthly view. On a 7-day window "vs typical month"
-    // would compare a week against a month and always read wildly under.
-    const withAvg = mode === "monthly" && categoryAvg.months > 0;
     const out = categories
-      .map((c, i) => ({
-        label: c.name,
-        value: w.byCat[c.id] || 0,
-        color: c.color || CATEGORY_COLORS[i % CATEGORY_COLORS.length],
-        avg: withAvg ? categoryAvg.byCat.get(c.id) ?? 0 : null,
-      }))
+      .map((c, i) => ({ label: c.name, value: w.byCat[c.id] || 0, color: c.color || CATEGORY_COLORS[i % CATEGORY_COLORS.length], avg: null as number | null }))
       .filter((s) => s.value > 0)
       .sort((a, b) => b.value - a.value);
-    if (w.unsorted > 0) out.push({ label: "Unsorted", value: w.unsorted, color: "rgba(255,255,255,0.35)", avg: withAvg ? categoryAvg.byCat.get(null) ?? 0 : null });
+    if (w.unsorted > 0) out.push({ label: "Unsorted", value: w.unsorted, color: "rgba(255,255,255,0.35)", avg: null });
     return out;
-  }, [spendWindow, categories, categoryAvg]);
+  }, [spendWindow, categories, categoryAvg, stmtThisMonth]);
 
   // ── Spend pace ────────────────────────────────────────────────────────────
   // Cumulative spend vs a straight-line budget AND vs a typical month. The
@@ -825,17 +875,27 @@ export default function Budget() {
     // So the benchmark is the average of the PRIOR months' own day-by-day
     // curves. The rent step is in the benchmark too, and "ahead of a normal
     // month on the 16th" becomes a real statement.
+    // Day-level statement spend, bucketed by month. This is the source for BOTH
+    // the current month's curve and the benchmark, so the two are always the
+    // same kind of number.
+    const stmtByMonth = new Map<string, number[]>();
+    for (const r of stmtDaily) {
+      const ym = r.date.slice(0, 7);
+      const dim = new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0).getDate();
+      const arr = stmtByMonth.get(ym) ?? new Array<number>(dim).fill(0);
+      const d = Number(r.date.slice(8, 10)) - 1;
+      if (d >= 0 && d < arr.length) arr[d] += r.spent;
+      stmtByMonth.set(ym, arr);
+    }
+    const thisMonthDays = stmtByMonth.get(month) ?? null;
+    const stmtCum = thisMonthDays ? cumulate(thisMonthDays) : null;
+    const monthImported = stmtMonths.includes(month);
+
     const avgCurve = (() => {
       const spendByMonth = new Map<string, number[]>();
-      for (const r of yearRows) {
-        if (r.is_beginning || r.amount >= 0) continue;
-        const ym = r.entry_date.slice(0, 7);
+      for (const [ym, arr] of stmtByMonth) {
         // Never average a month into its own benchmark.
         if (ym === month) continue;
-        const dim = new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0).getDate();
-        const arr = spendByMonth.get(ym) ?? new Array<number>(dim).fill(0);
-        const d = Number(r.entry_date.slice(8, 10)) - 1;
-        if (d >= 0 && d < arr.length) arr[d] += -r.amount;
         spendByMonth.set(ym, arr);
       }
 
@@ -861,19 +921,14 @@ export default function Budget() {
       return Array.from({ length: daysInMonth }, (_, i) => curves.reduce((s, c) => s + c[i], 0) / curves.length);
     })();
 
-    const avgN = (() => {
-      const seen = new Set<string>();
-      for (const r of yearRows) {
-        if (r.is_beginning || r.amount >= 0) continue;
-        const ym = r.entry_date.slice(0, 7);
-        if (ym !== month) seen.add(ym);
-      }
-      return seen.size;
-    })();
+    // Count IMPORTED months, not months that happen to have a row — a month
+    // with a statement and no spend is a real zero and belongs in the average.
+    const avgN = stmtMonths.filter((m) => m !== month).length;
     const avgMonth = avgCurve ? avgCurve[avgCurve.length - 1] : 0;
 
     if (paceRange === "daily") {
-      return { cum: intel.cum, labels: intel.cum.map((_, i) => String(i + 1)), budget: monthBudget, avg: avgMonth, avgCum: avgCurve, avgN, upTo: intel.todayDay, span: daysInMonth, scope: monthShort };
+      const cum = stmtCum ?? new Array<number>(daysInMonth).fill(0);
+      return { cum, labels: cum.map((_, i) => String(i + 1)), budget: monthBudget, avg: avgMonth, avgCum: avgCurve, avgN, upTo: intel.todayDay, span: daysInMonth, scope: monthShort, imported: monthImported, hasCurve: stmtCum != null };
     }
     if (paceRange === "weekly") {
       const nWeeks = Math.ceil(daysInMonth / 7);
@@ -882,15 +937,15 @@ export default function Budget() {
       const upTo = intel.todayDay > 0 ? Math.floor((intel.todayDay - 1) / 7) + 1 : 0;
       // Weekly buckets the same curve, so the benchmark keeps its shape here too.
       const avgWeeks = avgCurve ? Array.from({ length: nWeeks }, (_, i) => avgCurve[Math.min(daysInMonth - 1, (i + 1) * 7 - 1)]) : null;
-      return { cum: cumulate(weeks), labels: weeks.map((_, i) => `W${i + 1}`), budget: monthBudget, avg: avgMonth, avgCum: avgWeeks, avgN, upTo, span: nWeeks, scope: monthShort };
+      return { cum: cumulate(weeks), labels: weeks.map((_, i) => `W${i + 1}`), budget: monthBudget, avg: avgMonth, avgCum: avgWeeks, avgN, upTo, span: nWeeks, scope: monthShort, imported: monthImported, hasCurve: stmtCum != null };
     }
     if (paceRange === "monthly") {
       const vals = yearMonths.months.map((m) => m.expenses);
-      return { cum: cumulate(vals), labels: yearMonths.months.map((m) => new Date(2000, m.m - 1, 1).toLocaleDateString("en-US", { month: "narrow" })), budget: yearBudget, avg: avgMonth * 12, avgCum: null, avgN, upTo: monthsUpTo, span: 12, scope: String(year) };
+      return { cum: cumulate(vals), labels: yearMonths.months.map((m) => new Date(2000, m.m - 1, 1).toLocaleDateString("en-US", { month: "narrow" })), budget: yearBudget, avg: avgMonth * 12, avgCum: null, avgN, upTo: monthsUpTo, span: 12, scope: String(year), imported: monthImported, hasCurve: stmtCum != null };
     }
     const quarters = [1, 2, 3, 4].map((q) => yearMonths.months.filter((m) => Math.floor((m.m - 1) / 3) + 1 === q).reduce((s, m) => s + m.expenses, 0));
-    return { cum: cumulate(quarters), labels: ["Q1", "Q2", "Q3", "Q4"], budget: yearBudget, avg: avgMonth * 12, avgCum: null, avgN, upTo: Math.ceil(monthsUpTo / 3), span: 4, scope: String(year) };
-  }, [paceRange, intel, computed.groups, yearMonths.months, yearRows, year, month]);
+    return { cum: cumulate(quarters), labels: ["Q1", "Q2", "Q3", "Q4"], budget: yearBudget, avg: avgMonth * 12, avgCum: null, avgN, upTo: Math.ceil(monthsUpTo / 3), span: 4, scope: String(year), imported: monthImported, hasCurve: stmtCum != null };
+  }, [paceRange, intel, computed.groups, yearMonths.months, stmtDaily, stmtMonths, year, month]);
 
   // Income / expenses / net for the month. The monthly
   // view keeps the old behaviour exactly (register totals + Amazon net) so the
@@ -1856,6 +1911,13 @@ type PaceSeries = {
       prior history, or at a resolution with no day axis). */
   avg: number; avgCum: number[] | null; avgN: number;
   upTo: number; span: number; scope: string;
+  /** The month has statement rows at all (from `months`, not inferred from the
+      day rollup — those are different questions and conflating them once told
+      the user they had never imported a month they had). */
+  imported: boolean;
+  /** The day-level series arrived. False with `imported` true means the month
+      is there but has no outflow rows to draw. */
+  hasCurve: boolean;
 };
 function SpendPaceCard({ series, currency }: { series: PaceSeries; currency: string }) {
   const [hover, setHover] = useState<number | null>(null);
@@ -1896,12 +1958,35 @@ function SpendPaceCard({ series, currency }: { series: PaceSeries; currency: str
   const ha = hover != null && avgCum ? avgCum[Math.min(hover, avgCum.length - 1)] : null;
   const hovered = hover != null && hover < upTo;
 
+  // Zeros are not the same as "nothing spent". Drawing a flat line along the
+  // bottom for an un-imported month would read as a month of no spending.
+  if (!series.imported || !series.hasCurve) {
+    return (
+      <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
+        <IntelHeader title="Spend Pace" />
+        <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: -6 }}>{series.scope}</div>
+        <div style={{ flex: 1, display: "grid", placeItems: "center", textAlign: "center", padding: "28px 8px" }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.muted }}>
+              {series.imported ? "No spending rows this month" : "No statement imported"}
+            </div>
+            <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: 6, maxWidth: 240, lineHeight: 1.5 }}>
+              {series.imported
+                ? `${series.scope} is imported but has no outflow rows to pace.`
+                : `This card reads what actually cleared. Import ${series.scope} on Real Month and it fills in.`}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
       <IntelHeader title="Spend Pace" />
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: -6, marginBottom: 8 }}>
         <span style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6 }}>
-          {series.scope}
+          {series.scope} · imported statement
           {hovered && <> · day {series.labels[hover!]} · <b style={{ color: HOME_THEME.text }}>{fmtMoney(hv, currency).replace(/\.\d+$/, "")}</b>
             {ha != null && <> vs <span style={{ color: HOME_THEME.gold }}>{fmtMoney(ha, currency).replace(/\.\d+$/, "")}</span></>}</>}
         </span>
@@ -2018,11 +2103,18 @@ function CategoryDonutCard({ slices, currency, range }: { slices: Intel["slices"
     <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
       <IntelHeader title="Where It Went" />
       <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: -6, marginBottom: 8, display: "flex", justifyContent: "space-between", gap: 8 }}>
-        <span>{RANGE_WINDOW_LABEL[range]}</span>
+        <span>{RANGE_WINDOW_LABEL[range]} · imported statement</span>
         {hasAvg && <span>vs a typical month</span>}
       </div>
       {total <= 0 ? (
-        <div style={{ flex: 1, display: "grid", placeItems: "center", opacity: 0.55, fontSize: 14, textAlign: "center" }}>No categorized spend {RANGE_WINDOW_LABEL[range].toLowerCase()}.</div>
+        <div style={{ flex: 1, display: "grid", placeItems: "center", textAlign: "center", padding: "28px 8px" }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.muted }}>No statement imported</div>
+            <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: 6, maxWidth: 240, lineHeight: 1.5 }}>
+              Import the month on Real Month and every category lands here with its own average.
+            </div>
+          </div>
+        </div>
       ) : (
         <div style={{ display: "flex", alignItems: "center", gap: 12, minHeight: 0 }}>
           {/* Half the card is the pie, half is the words. Both halves are

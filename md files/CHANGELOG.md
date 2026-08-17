@@ -1,5 +1,80 @@
 # Changelog
 
+## 2026-08-16 - "No statement imported" was lying about imported months
+
+Edited: `owner-vite/src/pages/Budget.tsx`.
+
+July reported "No statement imported" for a July that had been imported and was
+visible on Real Month the same day.
+
+The empty state was keyed off `stmtCum != null` — whether the **new** `daily`
+rollup came back with rows for the month. That conflates three unrelated
+states: the month was never imported, the month is imported but has no outflow
+rows, and the API did not send `daily` at all. The third case is live right now
+for anyone running a `dashboard` image built before `listStatementDailyTrend`
+existed: the SPA is new enough to render the empty state, the API is old enough
+not to send the field, and the card confidently reports that a month you
+imported was never imported.
+
+The predicate is now `months.includes(month)` — the list of months that have
+statement rows, which this endpoint has returned since it was written and which
+therefore survives an older API. `hasCurve` is tracked separately, so:
+
+- not in `months` -> "No statement imported"
+- in `months`, no day rows -> "No spending rows this month"
+
+Worth stating plainly: the underlying deploy issue is not fixed by this. If
+`daily` is missing the curve still cannot be drawn — the card just stops
+misattributing the cause. `docker compose build dashboard && docker compose up
+-d dashboard` is what makes July draw.
+
+## 2026-08-16 - Overview spend cards moved onto imported statements
+
+Added: `listStatementDailyTrend()` in `server-v2/_lib-db.cjs`, `daily` on
+`GET /api/budget/real` in `server-v2/api-router.js`.
+Edited: `owner-vite/src/pages/Budget.tsx`.
+
+The page had two definitions of "spent" on it. The Categories tab read
+`budget_statement_tx` — what actually cleared the bank. The Overview read
+`budget_register` — the plan, what you expect to pay and what you typed in.
+Same page, same word, different numbers, and nothing said which was which.
+
+**Spend Pace and Where It Went now read statements.** A card headed "spent" has
+to mean money that actually left the account.
+
+Still on the register, deliberately: Safe to Spend, Weekly Balance Check, Cash
+Flow and the calendar. Those are questions about the plan and about the bank
+balance — bills still due, what clears before rent — not about what a category
+cost. The register is the right source for those and moving them would be wrong,
+not merely unnecessary.
+
+**New: day-level statement spend.** The category trend endpoint returns month x
+category, which cannot draw a day-by-day pace curve. `listStatementDailyTrend`
+adds outflow grouped by `tx_date` over the same 12-month window, and the GET
+response carries it as `daily`. Both the current month's curve and the typical-
+month benchmark are now built from that one array, so they are guaranteed to be
+the same kind of number.
+
+**The averaging rule changed with the source, and it had to.** On the register,
+a category missing from a month meant zero was spent. On statements, a month
+you never imported is *unknown* — averaging it in as zero would halve every
+figure. Both averages now divide by IMPORTED months (excluding the one on
+screen): a month you imported where a category saw nothing still counts as a
+real zero, a month you never imported does not count at all. This is the same
+rule the Categories grid already used; the two surfaces finally agree.
+
+**Empty states, because zero and unknown look identical on a chart.** With no
+statement for the month, Spend Pace would have drawn a flat line along the
+bottom — indistinguishable from a month of no spending. Both cards now say "No
+statement imported" and point at Real Month. Both also carry "imported
+statement" in the subtitle, so the source is legible next to the register-backed
+cards beside them.
+
+Verified end to end against a synthetic four-month import: SQL rollup -> daily
+curve -> resampled benchmark -> per-category averages. Day 16 reads $3,420 spent
+against a $3,413 typical — and the daily-tail category correctly shows less than
+its typical, because only 11 days of it have happened.
+
 ## 2026-08-16 - Back to four across; Where It Went splits pie / words
 
 Edited: `owner-vite/src/pages/Budget.tsx`.

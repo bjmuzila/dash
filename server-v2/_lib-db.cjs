@@ -180,6 +180,8 @@ __export(db_exports, {
   clearStatementMonth: () => clearStatementMonth,
   deleteStatementTx: () => deleteStatementTx,
   insertStatementTx: () => insertStatementTx,
+  listStatementCategoryTrend: () => listStatementCategoryTrend,
+  listStatementDailyTrend: () => listStatementDailyTrend,
   listStatementMonths: () => listStatementMonths,
   listStatementTx: () => listStatementTx,
   listSubscriptions: () => listSubscriptions,
@@ -3753,20 +3755,6 @@ async function upsertEsCandle(r) {
     ]
   );
 }
-/**
- * `daysBack` cutoff as an ET DATE STRING.
- *
- * The candle tables' `date` column is the ET calendar date the bar belongs to
- * (see etFiveMinSlot in proxy-tastytrade.js). This used to be
- * `new Date(...).toISOString().slice(0, 10)` — a UTC date — compared against it.
- * After 20:00 ET the UTC date has already rolled, so the cutoff string came out
- * one day LATER than asked for and the oldest session in the window silently
- * fell off. Read at 21:00 ET on a Sunday with daysBack=2, the cutoff resolved to
- * Saturday's date and Friday's rows failed `date >= cutoff` in the SQL itself.
- */
-function candleCutoffDate(daysBack) {
-  return etDateString(Date.now() - daysBack * 864e5);
-}
 async function getEsCandles(date, daysBack, limit = 2e3, intervalMinutes = 5) {
   if (date) {
     return queryAll(
@@ -3775,17 +3763,11 @@ async function getEsCandles(date, daysBack, limit = 2e3, intervalMinutes = 5) {
     );
   }
   if (daysBack) {
-    // DESC + reverse, not ASC. With `ORDER BY timestamp ASC LIMIT n` an
-    // over-limit window truncates the NEWEST bars — so asking for more history
-    // than the limit allows silently removes today from the chart, which is the
-    // opposite of every caller's intent. Ordering newest-first and reversing in
-    // JS drops the oldest instead. The row count here is bounded by the limit,
-    // so the reverse is cheap.
-    const rows = await queryAll(
-      `SELECT * FROM es_candles WHERE date >= ? AND "intervalMinutes" = ? ORDER BY timestamp DESC LIMIT ?`,
-      [candleCutoffDate(daysBack), intervalMinutes, limit]
+    const cutoff = new Date(Date.now() - daysBack * 864e5).toISOString().slice(0, 10);
+    return queryAll(
+      `SELECT * FROM es_candles WHERE date >= ? AND "intervalMinutes" = ? ORDER BY timestamp ASC LIMIT ?`,
+      [cutoff, intervalMinutes, limit]
     );
-    return rows.reverse();
   }
   return queryAll(
     `SELECT * FROM es_candles WHERE "intervalMinutes" = ? ORDER BY timestamp DESC LIMIT ?`,
@@ -3825,12 +3807,11 @@ async function getNqCandles(date, daysBack, limit = 2e3) {
     );
   }
   if (daysBack) {
-    // Same ET-cutoff and DESC-then-reverse reasoning as getEsCandles above.
-    const rows = await queryAll(
-      `SELECT * FROM nq_candles WHERE date >= ? ORDER BY timestamp DESC LIMIT ?`,
-      [candleCutoffDate(daysBack), limit]
+    const cutoff = new Date(Date.now() - daysBack * 864e5).toISOString().slice(0, 10);
+    return queryAll(
+      `SELECT * FROM nq_candles WHERE date >= ? ORDER BY timestamp ASC LIMIT ?`,
+      [cutoff, limit]
     );
-    return rows.reverse();
   }
   return queryAll(
     `SELECT * FROM nq_candles ORDER BY timestamp DESC LIMIT ?`,
@@ -4745,6 +4726,42 @@ async function listStatementMonths(profileId) {
     [profileId]
   );
 }
+// Spend per category per month — the series behind the Categories-tab trend.
+// One row per (month, category); an uncategorized row comes back with
+// category_id NULL so the client can fold it into its own bucket.
+//
+// Outflow only. A refund posts as direction 'in' against the same category and
+// would otherwise punch a hole in the curve that reads as "you stopped buying
+// groceries in March" rather than "one thing got returned".
+// Outflow per DAY across the trend window — the series behind Spend Pace once
+// it reads statements instead of the register. Kept separate from the category
+// trend because the two are different shapes (day vs month x category) and the
+// pace curve does not care which category a charge belongs to.
+async function listStatementDailyTrend(profileId, sinceMonth, untilMonth) {
+  return queryAll(
+    `SELECT tx_date,
+            SUM(amount)   AS spent,
+            COUNT(*)::int AS n
+       FROM budget_statement_tx
+      WHERE profile_id = ? AND direction = 'out' AND month >= ? AND month <= ?
+      GROUP BY tx_date
+      ORDER BY tx_date ASC`,
+    [profileId, sinceMonth, untilMonth || '9999-12']
+  );
+}
+async function listStatementCategoryTrend(profileId, sinceMonth, untilMonth) {
+  return queryAll(
+    `SELECT month,
+            category_id,
+            SUM(amount)   AS spent,
+            COUNT(*)::int AS n
+       FROM budget_statement_tx
+      WHERE profile_id = ? AND direction = 'out' AND month >= ? AND month <= ?
+      GROUP BY month, category_id
+      ORDER BY month ASC`,
+    [profileId, sinceMonth, untilMonth || '9999-12']
+  );
+}
 async function updateStatementTx(profileId, id, patch) {
   const pool = await getDb();
   await pool.query(
@@ -5319,6 +5336,8 @@ async function getLatestMultGreekStaticSnapshot() {
   clearStatementMonth,
   deleteStatementTx,
   insertStatementTx,
+  listStatementCategoryTrend,
+  listStatementDailyTrend,
   listStatementMonths,
   listStatementTx,
   listSubscriptions,
