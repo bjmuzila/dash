@@ -1211,9 +1211,25 @@ export default function EsChartCard({
   // the shared-toolbar subscription. Both hand it the same shape — a full blob
   // on restore, a one-key patch on broadcast — and every field is guarded
   // individually, so a partial patch only moves what it names.
-  const applySettings = useCallback((p: SlotBlob) => {
+  //
+  // `opts.initial` marks the MOUNT restore. It exists for exactly one key, the
+  // expiry — see below.
+  const applySettings = useCallback((p: SlotBlob, opts: { initial?: boolean } = {}) => {
     if (isChartInterval(p.interval)) setIntervalState(p.interval);
-    if (typeof p.expiry === "string") setSelectedExpiry(p.expiry);
+    // ── THE DTE PICK IS NOT RESTORED. Every load starts on Front (live). ─────
+    // Every other setting here is a preference — how the chart looks, what is
+    // drawn on it — and should come back exactly as you left it. An expiry is
+    // not a preference, it is a place you went to look at something, and it
+    // goes stale on its own: pick 3DTE on a Thursday, come back Monday, and the
+    // saved string is an expiration that has already traded. The chart then
+    // opens on an empty ladder with no visible reason, because the control
+    // reads "2026-08-15" and nothing about that says "this is over".
+    //
+    // So the mount restore skips it and the card opens on Front — which is what
+    // "the front contract" means and is right on every session. Broadcasts
+    // still carry it (opts.initial is only set by the mount restore), so moving
+    // the DTE picker in a shared-toolbar row still moves all three charts.
+    if (!opts.initial && typeof p.expiry === "string") setSelectedExpiry(p.expiry);
     if (p.metric === "vol" || p.metric === "voloi") setGexMetric(p.metric);
     if (typeof p.intensity === "number" && Number.isFinite(p.intensity)) {
       setIntensity(Math.min(1, Math.max(0.1, p.intensity)));
@@ -1267,7 +1283,21 @@ export default function EsChartCard({
   useEffect(() => {
     const own = readSlot(slot);
     if (isChartSymbol(own.symbol)) setSymbolState(own.symbol);
-    applySettings(cfgSlot === slot ? own : readSlot(cfgSlot));
+    // ── OWN as the base, SHARED layered over it ──────────────────────────────
+    // Not `cfgSlot === slot ? own : readSlot(cfgSlot)`. With 2–3 charts up the
+    // settings namespace is SHARED_SLOT, and that blob only ever holds the keys
+    // someone has touched WHILE in multi-chart mode. So a reload with two charts
+    // read a blob with no overlay keys in it and every card came up on the
+    // factory defaults — heatmap off, levels off — however carefully they had
+    // been set on the single-chart view five minutes earlier. It read as "the
+    // overlays don't stick", and it was worst for exactly the settings people
+    // set once and expect to stay set.
+    //
+    // Merging fixes it without giving any key two owners: the shared blob still
+    // WINS wherever it has an opinion (that is what "shared" means), and the
+    // card's own remembered value only fills the gaps it is silent about. At one
+    // chart cfgSlot IS slot, so the spread is a no-op and this is the old path.
+    applySettings(cfgSlot === slot ? own : { ...own, ...readSlot(cfgSlot) }, { initial: true });
     setSettingsLoaded(true);
   }, [slot, cfgSlot, applySettings]);
 
@@ -1783,10 +1813,43 @@ export default function EsChartCard({
     return derived ? { ...derived, spot: newest?.spot ?? null } : null;
   }, [isEs, gexVersion, gexMetric]);
 
+  // ── What "Front" actually resolves to ──────────────────────────────────────
+  // The FIRST expiration in the feed's own list that has not traded yet, in ET.
+  // Not `feedExpiry`, which is the string the server happens to be publishing
+  // and is latched at the first frame this card sees (see applyGexFrame — the
+  // latch is deliberate, it keeps a rolling value from churning the ~700KB
+  // backfill URL). Latched is right for request stability and wrong for the
+  // ROLL: sit on the page through Friday's close, or open it on a Sunday
+  // evening after the Monday book has come up, and the latched string is an
+  // expiration that has already traded. "Front" then quietly means "the last
+  // one", the ladder is empty, and nothing on screen says why.
+  //
+  // `expirations` arrives on every gex frame and is re-set unconditionally, so
+  // it is the one input here that cannot go stale. Taking the earliest entry
+  // that is >= today ET means Front rolls the moment the new book is listed.
+  //
+  // Falls back to feedExpiry when the list is empty — the ETF/single-name cards
+  // have no /ws/gex feed at all, and front mode does not need a real string
+  // anyway (it sends anyExpiry=1; see queryExpiry below).
+  const frontExpiry = useMemo(() => {
+    if (!expirations.length) return feedExpiry;
+    const todayEt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+    let best = "";
+    for (const e of expirations) {
+      if (!e || e < todayEt) continue;
+      if (!best || e < best) best = e;
+    }
+    return best || feedExpiry;
+  }, [expirations, feedExpiry]);
+
   // Heatmap history backfill. Effective expiry = the DTE picker selection, or
-  // the live front expiry when nothing is picked. Re-runs whenever the picker
-  // OR the 1D/5D range toggle changes: clears the column map and reloads.
-  const heatmapExpiry = selectedExpiry || feedExpiry;
+  // the resolved front expiry when nothing is picked. Re-runs whenever the
+  // picker OR the 1D/5D range toggle changes: clears the column map and reloads.
+  //
+  // Front mode sends `expiry=front` + anyExpiry=1 (see queryExpiry), and
+  // shapeKey keys on the literal "front", so frontExpiry moving across the roll
+  // cannot re-fire the backfill.
+  const heatmapExpiry = selectedExpiry || frontExpiry;
   useEffect(() => {
     // Wait for this slot's saved settings before the first backfill. This is a
     // ~1.6MB request keyed on the expiry and the 1D/2D window, both of which are
@@ -4672,9 +4735,19 @@ export default function EsChartCard({
               className="max-h-72 w-48 overflow-y-auto py-1"
               style={{ position: "fixed", left: dteRect.left, top: dteRect.top, borderRadius: 14, border: `1px solid ${HOME_THEME.border}`, borderTop: `2px solid ${DOCK_THEME.cyanTop}`, background: DOCK_THEME.bg, backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)", boxShadow: DOCK_THEME.shadow, zIndex: 100000, padding: 6 }}
             >
-              {[{ value: "", label: "Front (live)", sub: "" }, ...expirations.map((exp) => ({
-                value: exp, label: dayDateOf(exp), sub: `${dteOf(exp)}DTE`,
-              }))].map((opt) => {
+              {/* Already-traded expirations are filtered out. The feed's list can
+                  still carry them for a while after the roll, and an entry
+                  reading "-1DTE" is not a thing anyone wants to pick — it just
+                  loads an empty ladder. Sorted ascending so the first row under
+                  "Front (live)" is genuinely the next book. */}
+              {[{ value: "", label: `Front${frontExpiry ? ` · ${dayDateOf(frontExpiry)}` : " (live)"}`, sub: frontExpiry ? `${dteOf(frontExpiry)}DTE` : "" },
+                ...expirations
+                  .filter((exp) => exp && dteOf(exp) >= 0)
+                  .slice()
+                  .sort()
+                  .map((exp) => ({
+                    value: exp, label: dayDateOf(exp), sub: `${dteOf(exp)}DTE`,
+                  }))].map((opt) => {
                 const active = selectedExpiry === opt.value;
                 return (
                   <button
