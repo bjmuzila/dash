@@ -123,6 +123,22 @@ export type BubbleStyle = {
   /** Hard floor so a wing strike stays a visible speck instead of vanishing. */
   minPx: number;
   /**
+   * Floor (px) under the COLUMN-pitch term of the size budget.
+   *
+   * Horizontal overlap is allowed by design — a fused row is a thick tube and
+   * thickness is exactly what the size law encodes — so the column pitch is a
+   * taste bound, not a correctness one. Only the ROW pitch is a guarantee (two
+   * rows must never merge into one band).
+   *
+   * Without this floor the column term still strangled everything: at a
+   * 1-minute bucket adjacent columns can be 2-3px apart, so `colPitch * 0.45`
+   * drove the whole budget under a pixel and the marks vanished no matter what
+   * the size slider said. The floor is inert whenever there is real room
+   * (colPitch beyond ~15px) and only bites where the grid is too dense to
+   * respect anyway.
+   */
+  colBoundFloorPx: number;
+  /**
    * The highlighted wall's glow, as a multiple of its own radius (blur px).
    * Tapers to `glowMinFactor` at the last highlighted rank. Proportional rather
    * than a fixed 24px, which at small marks was a bloom several times the size
@@ -146,6 +162,7 @@ export const BUBBLE_STYLE: BubbleStyle = {
   maxPx: 20,
   maxPxRowFrac: 0.42,
   maxPxColFrac: 0.45,
+  colBoundFloorPx: 7,
   minPx: 0.8,
   glowTopFactor: 0.75,
   glowMinFactor: 0.35,
@@ -186,7 +203,31 @@ export const BUBBLE_STYLE: BubbleStyle = {
  */
 export const BUBBLE_LEVELS_RANGE = { min: 1, max: 15 } as const;
 export const BUBBLE_INTENSITY_RANGE = { min: 0.2, max: 1 } as const;
-export const BUBBLE_SIZE_RANGE = { min: 0.4, max: 2 } as const;
+/**
+ * Ceiling raised 2 -> 4.
+ *
+ * 2x was picked when the column pitch still hard-bounded the budget, so the top
+ * of the travel was mostly theoretical — on a dense bucket the pitch cap bound
+ * first and the last of the slider did nothing. With `colBoundFloorPx` stopping
+ * that strangle there is real room up there now, and a zoomed-in 1-minute chart
+ * is exactly where someone wants it.
+ */
+export const BUBBLE_SIZE_RANGE = { min: 0.4, max: 4 } as const;
+/**
+ * Exponent on the size law: r = maxPx * (|net GEX| / reference) ^ curve.
+ *
+ * 1.00 is the straight-proportional law and stays the default — twice the gamma
+ * is twice the radius, which is what makes the ladder rankable by eye.
+ *
+ * Above 1 the TOP of the ladder keeps the full budget while everything under it
+ * shrinks, so the dominant strikes stand out further without the wings bloating
+ * with them. This is deliberately the ONLY way to make the top bigger relative
+ * to the rest, and it is not the same thing as the rank bonus this layer keeps
+ * being rescued from: a bonus made a mark bigger for a reason unrelated to its
+ * gamma and broke the encoding, whereas an exponent is monotonic — more gamma is
+ * still strictly more radius at every setting, the scale just gets steeper.
+ */
+export const BUBBLE_CURVE_RANGE = { min: 1, max: 3 } as const;
 
 /**
  * Floor under the EXPANDING session reference, as a fraction of the reference

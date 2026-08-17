@@ -144,6 +144,21 @@ export function SymbolListDropdown({ active, onSelect }: { active: ChartSymbol; 
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open]);
 
+  // The search box starts EMPTY every time the menu opens.
+  //
+  // It used to keep whatever you last typed, which is only ever right if your
+  // next search is a prefix of your last one. Every other time — and the common
+  // case is picking a ticker, coming back, and wanting a different one — the
+  // list opens pre-filtered to a stale query and the first thing you have to do
+  // is clear a box you did not fill in. The old text has already done its job
+  // the moment a symbol is selected.
+  //
+  // Cleared on CLOSE rather than on open so the menu never renders one frame of
+  // stale filtering on the way in.
+  useEffect(() => {
+    if (!open) setQuery("");
+  }, [open]);
+
   const toggleFav = (s: ChartSymbol) =>
     setFavs((prev) => {
       const next = prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s];

@@ -1,87 +1,112 @@
 # Changelog
 
-## 2026-08-17 (c) - owner.cbedge.net rail: star favorites to pin them to the top
+## 2026-08-17 - GEX bubbles: they can actually get big on a 1-minute bucket now
 
-Edited: `owner-vite/src/OwnerShell.tsx`.
+Edited: `components/dashboard/es-candles/slotStore.ts`,
+`components/dashboard/es-candles/EsChartCard.tsx`.
 
-Port of the favorites feature into the standalone owner app served at
-owner.cbedge.net. The earlier pass landed in `components/shared/OwnerSidebar.tsx`,
-which is the **Next.js** rail (`/owner/*` plus `/database`, `/estimated-move`,
-`/changelog`, `/social-media`, `/greeks`, mounted by `LayoutShell`) — a different
-build that shares no code with `owner-vite/`. Both rails now behave the same.
+**Why 1m was tiny.** The size budget was
+`min(maxPx, rowPitch*0.42, colPitch*0.45)`, and the layer's own notes say
+horizontal overlap is ALLOWED — a fused row is a thick tube, and thickness is
+exactly what the size law encodes — with only the ROW pitch being a real
+guarantee (two rows must never merge into one band). But the column pitch was
+still bounding the budget without limit, which contradicted that. Adjacent 1m
+columns can sit 2-3px apart, so `colPitch * 0.45` drove the whole budget under a
+pixel, and `size` could not rescue it because the multiplier is applied AFTER
+the `Math.min` — it was scaling a number that had already collapsed. The `rxCap`
+rail had the same shape and evaluated to ~0.2px at a 2px column pitch.
 
-- Every group link has a star button on its right edge: fades in on hover, stays
-  lit once starred. It is a real `<button>` inside the row but outside the
-  `<Link>`, with `preventDefault`/`stopPropagation`, so clicking it toggles the
-  star instead of navigating.
-- Starred links are lifted into a **★ FAVORITES** block placed directly under the
-  pinned Hub and above every group, in the order they were starred, followed by a
-  hairline divider. A starred link is *removed* from its own group, so nothing is
-  listed twice; a group that empties out is not rendered at all.
-- Each favorite keeps its home group's accent (Business cyan / Content orange /
-  Market gold / System light blue / Personal green), so you can still see which
-  group a pinned page came from.
-- Favorites reorder in place: hovering one reveals ▲/▼ nudges (hidden when there
-  is only one favorite).
-- The pinned Hub is deliberately NOT starrable — it is already the way home from
-  anywhere, and starring it would only move it down past the divider.
-- Stored per-browser in `localStorage` under `cbedge.ownerRail.favorites.v1`
-  (separate key from the Next rail's `cbedge.ownerSidebar.favorites.v1`; separate
-  hosts, separate origins). Reads happen in a `useEffect` after mount, never
-  during render. A `cbedge:owner-favorites` `CustomEvent` plus the native
-  `storage` event keep the desktop rail, the mobile drawer, and other tabs in
-  sync. All storage access is wrapped in try/catch — in private mode the stars
-  work for the session and just don't persist.
-- `lib/nav.ts` is untouched and remains the single source of truth. Favorites are
-  a pure view-layer reordering, so `OWNER_ROUTES` — and therefore the router in
-  `App.jsx` — is unaffected, and adding a page in `nav.ts` still works exactly as
-  before.
+**Fix: a floor under the column term** (`BUBBLE_STYLE.colBoundFloorPx = 7`),
+applied to both the budget and the rail. Measured, top-of-ladder mark radius:
 
-## 2026-08-17 (b) - Mobile ES Candles: price zoom is now a gesture on the axis, and it actually works
+| scenario | size | before | after |
+|---|---|---|---|
+| 1m, zoomed out | 1.0x | 0.40px | **3.50px** |
+| 1m, zoomed out | 2.0x | 0.80px | **7.00px** |
+| 1m, mid zoom | 2.0x | 3.40px | **7.00px** |
+| 1m, zoomed in | 1.0x | 6.20px | 6.20px (floor inert) |
+| 5m bucket | 2.0x | 19.80px | 19.80px (unchanged) |
+| bar bucket | 2.0x | 34.20px | 34.20px (unchanged) |
 
-Edited: `components/mobile/pages/MobileEsCandles.tsx`.
+The floor only binds below ~15px of column pitch, so every bucket that already
+had room renders identically. The row bound is untouched — the one guarantee
+that matters still holds exactly.
 
-Replaces this morning's ± stepper. Two problems with it: it floated over the
-plot and covered candles, and — more seriously — **it did not work at rest.**
+**Size ceiling 2x -> 4x.** 2x was chosen when the column pitch still hard-bounded
+the budget, so the top of the travel was mostly theoretical. There is real room
+up there now.
 
-**The bug in the first version.** It changed the zoom multiplier and called
-`priceScale().setAutoScale(true)` to make `autoscaleInfoProvider` re-run. It
-doesn't. `setAutoScale`/`applyOptions({ autoScale })` only merge the option and
-repaint; the price range is cached behind `_invalidatedForRange` and the provider
-is consulted only when something invalidates it (new data, a pan, a resize). So
-on a live chart the zoom limped in on the next 250ms tick, and on a still chart
-(after hours, or paused feed) nothing happened at all. Verified against the real
-v5 bundle in headless Chromium: with the multiplier at 4x, `setAutoScale(true)`
-left the visible range at 48.0 points — unchanged — while
-`applyOptions({ autoScale: true, mode: PriceScaleMode.Normal })` moved it to 12.0.
-Passing `mode` is the only public call that invalidates the cache
-(`PriceScale._setMode` sets `_invalidatedForRange.isValid = false`), so that is
-what `applyYZoom()` now sends, re-passing the mode the scale already has.
+**New `top` slider (1.00 - 3.00, default "flat" = unchanged).** An EXPONENT on
+the size law: `r = maxPx * (|net GEX| / reference) ^ curve`. Above 1 the top of
+the ladder keeps the full budget while the wings shrink under it, so the
+dominant strikes pull away without everything growing together.
 
-**The gesture.** A transparent strip, `zIndex: 4`, anchored to the right edge and
-sized to the MEASURED `priceScale('right').width()` — it must not cover a single
-pixel of plot, because the newest bars sit right against the axis and eating
-their pans would be worse than no zoom. Press and slide: up zooms in, down zooms
-out, exponentially at 150px per doubling, clamped 0.4x–12x; double-tap resets;
-pointer capture keeps a thumb that wanders off the 56px strip in the gesture. The
-multiplier is written to a ref and pushed to the chart inside the pointermove, so
-the axis tracks the thumb instead of waiting for React; `yZoom` state still
-updates for the readout, and the render-time ref mirror is skipped while a drag
-is live so a 4Hz feed render can't stutter it backwards.
+This is deliberately NOT the rank bonus this layer keeps being rescued from. A
+bonus made a mark bigger for a reason unrelated to its gamma and broke the
+encoding; an exponent is monotonic on [0,1], so more gamma is still strictly a
+bigger mark at every setting — the scale just gets steeper. Verified monotonic
+at 1.0 / 1.6 / 2.2 / 3.0.
 
-Axis width is measured, not assumed: the price scale reports 0 before the first
-paint and its final width only once bars widen the labels, so the mount rAF pump
-keeps sampling for ~3s and the data effect re-measures on the next frame.
+Caveat worth knowing: at the top of the curve's travel the smallest strikes all
+bottom out on `minPx` (0.8px) and stop being distinguishable from each other.
+That is the intended trade — it is what "the wings shrink" means — but if the
+bottom of the ladder matters to you, stay nearer "flat".
 
-Native price-axis scaling is now OFF on both `axisPressedMouseMove` and
-`axisDoubleClickReset` — it freezes the range (autoscale off, view drifts off
-price within the half hour) and would fight the strip. Autoscale stays ON under
-the multiplier, so every new bar re-centres the zoomed view.
+Persists per card as `bCurve`, alongside `bLevels` / `bInt` / `bSize`.
 
-Verified in headless Chromium against the real bundle, driving the strip with
-synthesised pointer events: drag up 150px -> 2.00x, range 48.0 -> 24.0; drag down
-300px -> 0.50x, range 96.0; double-tap -> 1.00x, range 48.0; mid price stays at
-the vertical centre (204px of 400px) at every zoom.
+## 2026-08-17 - ES Candles: every dropdown closes on click-away; ticker search resets
+
+Edited: `components/pages/EsCandles.tsx`,
+`components/dashboard/es-candles/symbols.tsx`,
+`components/dashboard/es-candles/EsChartCard.tsx`.
+
+**Click-away.** Overlays, the DTE picker, the ticker chooser and the Layout menu
+already closed on an outside click. The three PAGE-level popovers — Charts,
+Replay, Indicators — did not; they only answered Escape. That was deliberate
+(the panels hover over the charts, and click-away would shut the indicator menu
+the instant you reached for the chart to see what you had just turned on), but
+the opposite complaint wins in practice: a menu you have to go back and un-press
+is a menu that will not go away, and being the only three that behaved that way
+made them read as broken.
+
+They now close on document `mousedown` outside the panel and outside the three
+buttons that own it. `mousedown`, not `click`, matching the other menus — a
+`click` handler fires after the target has re-rendered, so a click on a row that
+removes itself lands on nothing and reads as outside.
+
+The Layout button sits in the same row but is deliberately OUTSIDE the exclusion
+wrapper, so pressing it closes the popover instead of leaving two menus open.
+
+**Click-away does not end a running replay.** Only the Replay button and
+"● Live" do that. Clicking away just hides the transport — and the Replay button
+now stays lit while a replay is running, so a running-but-hidden replay is still
+visible rather than being the invisible frozen chart the close-exits-replay rule
+was written to prevent.
+
+**Ticker search starts empty.** It used to keep whatever you last typed, which
+is only right if your next search is a prefix of your last one. Every other time
+— and the common case is picking a ticker, coming back, and wanting a different
+one — the list opened pre-filtered to a stale query and the first thing you had
+to do was clear a box you did not fill in. Cleared on close rather than on open,
+so the menu never renders a frame of stale filtering on the way in.
+
+**Two bugs found while reviewing it**
+
+- `CardSlot` renders a bare `<div>` at one chart and a `<Card>` at two or three,
+  so a 1↔multi switch changes the element type at that position and React
+  remounts the whole card — silently resetting `replayOn`. The page's
+  `replayActiveRef` is not in that subtree and stayed true, so its button went
+  on claiming a replay that no longer existed; pressing it opened an empty
+  transport and took two more presses to recover. Pre-existing, but the newly
+  lit button turned a silent desync into a visible lie. The card now broadcasts
+  `{on:false}` when a hosted transport unmounts with it.
+- Dismissing by click-away skipped `NumField`'s blur clamp. React flushes
+  `setPopover(null)` before the browser runs mousedown's default focus change,
+  so the input was unmounted before it could receive a blur — clearing the
+  Bollinger length box and then clicking the chart persisted `bbPeriod: 0` for
+  the session and silently stopped the cloud drawing. Both the click-away and
+  Escape paths now blur the focused field first, turning the dismiss gesture
+  back into an ordinary commit. (Escape had the same hole before this change.)
 
 ## 2026-08-17 - 0DTE rail: the ladder is one interpolated field, not a stack of tiles
 

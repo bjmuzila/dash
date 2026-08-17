@@ -313,11 +313,23 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // can't be positioned relative to anything in this file's own layout — it is
   // measured off the buttons and drawn `fixed`. A ref works across the portal.
   const anchorRef = useRef<HTMLDivElement | null>(null);
+  // Just the three popover buttons — NOT the whole row, which also holds the
+  // Layout button. See the outside-click effect.
+  const popBtnsRef = useRef<HTMLDivElement | null>(null);
+  // The hovering panel, so the outside-click test can tell "inside the menu"
+  // from "outside": it is `fixed` and not a DOM descendant of the button row.
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const [anchorBottom, setAnchorBottom] = useState(0);
   // Is replay RUNNING, as distinct from "is its panel open". They come apart the
   // moment you open Indicators while a replay is going, and conflating them made
   // that round trip restart the replay from the open.
   const replayActiveRef = useRef(false);
+  // The same fact as replayActiveRef, but as state so the Replay button can
+  // render lit. It matters now that clicking away CLOSES the transport without
+  // ending the replay: without a lit button, a running replay behind a closed
+  // panel is invisible, which is the exact "reads as a broken page" state the
+  // close-exits-replay rule was written to avoid.
+  const [replayRunning, setReplayRunning] = useState(false);
 
   useEffect(() => {
     // Folds the pre-multi-card keys into slot blobs. Idempotent; no-ops once
@@ -341,19 +353,68 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // back on.
   useEffect(() => subscribeReplayCmd(({ on }) => {
     replayActiveRef.current = on;
+    setReplayRunning(on);
     if (!on) setPopover((prev) => (prev === "replay" ? null : prev));
   }), []);
 
-  // Close a popover on Escape. Not on outside-click: the panels hover OVER the
-  // charts, and the charts are the thing you reach for next — click-away would
-  // shut the indicator menu the instant you tried to scrub the chart to see
-  // what the indicator you just enabled actually did.
+  /**
+   * Close the panel, letting whatever is focused inside it commit first.
+   *
+   * NumField deliberately clamps on BLUR rather than on change — clamping as
+   * you type makes "2" unreachable on the way to "20" when the minimum is 5.
+   * But React flushes `setPopover(null)` before the browser runs mousedown's
+   * default focus change, so the input is already unmounted and never receives
+   * a blur: clearing the Bollinger length box and then clicking the chart used
+   * to persist `bbPeriod: 0` for the session, silently killing the cloud.
+   * Blurring first turns the dismiss gesture back into an ordinary commit.
+   */
+  const closePopover = useCallback(() => {
+    const ae = typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null;
+    if (ae && panelRef.current?.contains(ae)) ae.blur();
+    setPopover(null);
+  }, []);
+
+  // Click anywhere outside the panel or its own three buttons closes it.
+  //
+  // This was deliberately absent, on the reasoning that the panels hover OVER
+  // the charts and click-away would shut the indicator menu the instant you
+  // reached for the chart to see what you had just turned on. In practice the
+  // opposite complaint won: a menu you have to go back and un-press is a menu
+  // that will not go away, and every OTHER dropdown on this page (Overlays,
+  // DTE, ticker, Layout) already closes this way — so the three that did not
+  // just read as broken.
+  //
+  // `mousedown`, not `click`, matching those other menus: a `click` handler
+  // fires after the target has already been re-rendered, so a click on a row
+  // that removes itself lands on nothing and reads as outside.
+  //
+  // Excluded: the panel itself, and the three buttons that own it (which
+  // toggle themselves — letting this handler close first would make the button
+  // re-open it on the same press). NOT excluded: the Layout button, which sits
+  // in the same row but owns its own menu — pressing it should close this one.
+  //
+  // Note it does NOT broadcast replay off. Closing the panel by clicking away
+  // leaves a running replay running; only the Replay button and "● Live" end
+  // it. See replayRunning for how that stays visible.
   useEffect(() => {
     if (!popover) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setPopover(null); };
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (popBtnsRef.current?.contains(t)) return;
+      if (panelRef.current?.contains(t)) return;
+      closePopover();
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [popover, closePopover]);
+
+  // Close a popover on Escape.
+  useEffect(() => {
+    if (!popover) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closePopover(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [popover]);
+  }, [popover, closePopover]);
 
   // Keep the panel under its buttons. Measured on open and on resize/scroll —
   // the dock's height changes with the FitScale factor and with the compact
@@ -419,9 +480,11 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   }, []);
 
   // Replay is a command, not a stored setting: the button says on/off and the
-  // cards do the rest. Closing the popover exits replay — leaving a chart
-  // frozen mid-session behind a closed panel with no visible way back is the
-  // kind of state that reads as a broken page.
+  // cards do the rest. Pressing the BUTTON to close exits replay — leaving a
+  // chart frozen mid-session behind a closed panel with no visible way back is
+  // the kind of state that reads as a broken page. (Clicking AWAY only hides
+  // the panel; the button stays lit so the replay is still visible. See the
+  // outside-click effect.)
   //
   // The side effects are OUTSIDE the state updater. They used to live inside
   // it, which was already a lie (a setState updater must be pure — React may
@@ -471,6 +534,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // renders.
   const toolbarButtons = useMemo(() => (
     <div ref={anchorRef} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+      {/* anchorRef measures the whole row for panel placement; popBtnsRef is
+          only the three buttons that OWN the panel, so pressing Layout (a
+          sibling, with its own menu) counts as an outside click. */}
+      <div ref={popBtnsRef} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
       <DockButton
         onClick={() => togglePopover("charts")}
         title="Chart count and side panel"
@@ -486,7 +553,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
         title="Replay the session — reveal candles and gamma from the open forward"
         caret
         open={popover === "replay"}
-        style={popover === "replay" ? { color: HOME_THEME.cyan, borderColor: HOME_THEME.cyan } : undefined}
+        style={popover === "replay" || replayRunning ? { color: HOME_THEME.cyan, borderColor: HOME_THEME.cyan } : undefined}
       >
         <span>Replay</span>
       </DockButton>
@@ -505,10 +572,11 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           return n ? <span style={{ opacity: 0.5, fontSize: 10 }}>{n}</span> : null;
         })()}
       </DockButton>
+      </div>
       {/* Owns all of its own state — see LayoutPresetButton. */}
       <LayoutPresetButton />
     </div>
-  ), [popover, cards, indicators, togglePopover, toggleReplay]);
+  ), [popover, replayRunning, cards, indicators, togglePopover, toggleReplay]);
 
   // The home GEX card embeds this component. It wants exactly the chart, with
   // its own switcher in the dock and no page chrome — so short-circuit to one
@@ -577,6 +645,7 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
           is nothing in this file's own layout to be absolute against. */}
       {popover && (
         <div
+          ref={panelRef}
           className="es-candles-popover"
           style={{
             position: "fixed",

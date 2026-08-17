@@ -91,7 +91,7 @@ import {
 import { SymbolListDropdown, symbolDef, isChartSymbol, type ChartSymbol } from "./symbols";
 import { PanelSection, PanelChip, SLIDER_LABEL_W, OVL_PANEL_W, OVL_VIEWPORT_PAD, OVL_MIN_H } from "./panelUi";
 import {
-  BUBBLE_STYLE, BUBBLE_REF_FLOOR_FRAC, BUBBLE_LEVELS_RANGE, BUBBLE_INTENSITY_RANGE, BUBBLE_SIZE_RANGE,
+  BUBBLE_STYLE, BUBBLE_REF_FLOOR_FRAC, BUBBLE_LEVELS_RANGE, BUBBLE_INTENSITY_RANGE, BUBBLE_SIZE_RANGE, BUBBLE_CURVE_RANGE,
   readSlot, writeSlot, broadcastSlot, subscribeSlot,
   isBubbleBucket,
   subscribeReplayCmd, broadcastReplayCmd, INDICATORS_DEFAULT,
@@ -778,11 +778,15 @@ function EsChartCard({
   const bubbleLevelsRef = useRef(BUBBLE_STYLE.topStrikes);
   const bubbleIntensityRef = useRef(BUBBLE_STYLE.intensity);
   const bubbleSizeRef = useRef(BUBBLE_STYLE.size);
+  // Explicit <number>: BUBBLE_CURVE_RANGE is `as const`, so `min` infers as the
+  // literal 1 and the ref would refuse every other value.
+  const bubbleCurveRef = useRef<number>(BUBBLE_CURVE_RANGE.min);
   // Replay cursor, mirrored for the imperative overlay draw (null = live).
   // Only the ENGAGED flag is mirrored: nothing imperative cares whether the
   // transport is merely open. (replayOnRef used to exist here and became dead
   // when the two flags were split.)
   const replayEngagedRef = useRef(false);
+  const replayOnRef = useRef(false);
   // `hostedReplay` mirrored, so the []-dep exitReplay callback can read it
   // without taking it as a dependency.
   const hostedReplayRef = useRef(false);
@@ -1037,6 +1041,7 @@ function EsChartCard({
   const [bubbleLevels, setBubbleLevels] = useState(BUBBLE_STYLE.topStrikes);
   const [bubbleIntensity, setBubbleIntensity] = useState(BUBBLE_STYLE.intensity);
   const [bubbleSize, setBubbleSize] = useState(BUBBLE_STYLE.size);
+  const [bubbleCurve, setBubbleCurve] = useState<number>(BUBBLE_CURVE_RANGE.min);
   // Bubble time bucket. Storage is always 1-min; this aggregates at DRAW time.
   // At 1m the bubbles sit a few px apart and overlap into solid rails, which is
   // the whole reason a bucket exists.
@@ -1180,6 +1185,24 @@ function EsChartCard({
   // (the next tick corrects it) and stuck until you scrub while paused.
   const sharedRpTsRef = useRef<number | null>(null);
   useEffect(() => { replayEngagedRef.current = replayEngaged; }, [replayEngaged]);
+  useEffect(() => { replayOnRef.current = replayOn; }, [replayOn]);
+  /**
+   * Tell the row when a hosted transport goes away with the card.
+   *
+   * The page's CardSlot renders a bare <div> at one chart and a <Card> at two
+   * or three, so a 1<->multi switch changes the element TYPE at that position
+   * and React unmounts and remounts this whole component — silently resetting
+   * `replayOn` to false. The page's own replayActiveRef is not in that subtree
+   * and stayed true, so its Replay button went on claiming a replay was running
+   * after the replay had ceased to exist: pressing it re-opened an empty
+   * transport and did nothing, and it took two more presses to recover.
+   *
+   * Broadcasting on the way out keeps the page (and any sibling card) honest
+   * for every cause of a remount, not just the ones the page can predict.
+   */
+  useEffect(() => () => {
+    if (hostedReplayRef.current && replayOnRef.current) broadcastReplayCmd({ on: false });
+  }, []);
   useEffect(() => { hostedReplayRef.current = hostedReplay; }, [hostedReplay]);
   useEffect(() => { replayTsRef.current = replayTs; }, [replayTs]);
   // Keep the cursor in range as live bars extend the session.
@@ -1602,6 +1625,9 @@ function EsChartCard({
     if (typeof p.bSize === "number" && Number.isFinite(p.bSize)) {
       setBubbleSize(Math.min(BUBBLE_SIZE_RANGE.max, Math.max(BUBBLE_SIZE_RANGE.min, p.bSize)));
     }
+    if (typeof p.bCurve === "number" && Number.isFinite(p.bCurve)) {
+      setBubbleCurve(Math.min(BUBBLE_CURVE_RANGE.max, Math.max(BUBBLE_CURVE_RANGE.min, p.bCurve)));
+    }
     if (typeof p.on === "boolean") setShowGexBubbles(p.on);
     if (typeof p.cb === "boolean") setShowCb(p.cb);
 
@@ -1697,6 +1723,11 @@ function EsChartCard({
     setBubbleSize(v);
     saveSetting({ bSize: v });
   }, [saveSetting]);
+  const updateBubbleCurve = useCallback((n: number) => {
+    const v = Math.min(BUBBLE_CURVE_RANGE.max, Math.max(BUBBLE_CURVE_RANGE.min, n));
+    setBubbleCurve(v);
+    saveSetting({ bCurve: v });
+  }, [saveSetting]);
 
   // ── Snap back to the forming candle ────────────────────────────────────────
   // Pan a few sessions left and there was no way back except double-clicking the
@@ -1737,6 +1768,7 @@ function EsChartCard({
   useEffect(() => { bubbleLevelsRef.current = bubbleLevels; }, [bubbleLevels]);
   useEffect(() => { bubbleIntensityRef.current = bubbleIntensity; }, [bubbleIntensity]);
   useEffect(() => { bubbleSizeRef.current = bubbleSize; }, [bubbleSize]);
+  useEffect(() => { bubbleCurveRef.current = bubbleCurve; }, [bubbleCurve]);
   // Auto-collapse the side panel when it would starve the candles.
   //
   // This used to be one flat number (560px of total card width, whatever the
@@ -4663,17 +4695,35 @@ function EsChartCard({
               // 1.00x marks are guaranteed never to touch; above it they may,
               // which is the user asking for bigger and accepting fused rows.
               const sizeMul = Math.max(BUBBLE_SIZE_RANGE.min, Math.min(BUBBLE_SIZE_RANGE.max, bubbleSizeRef.current));
+              // ── The column term has a FLOOR ────────────────────────────────
+              // The note above says horizontal overlap is allowed and that the
+              // only thing which must never fuse is two ROWS — yet the budget
+              // still let the column pitch bound it without limit, which
+              // contradicted that and was the whole reason a 1-minute bucket
+              // drew invisible dots. Adjacent 1m columns can sit 2-3px apart, so
+              // `colPitch * 0.45` drove the budget under a pixel and no amount
+              // of `size` could rescue it: the multiplier is applied after the
+              // Math.min, so it was scaling a number that had already collapsed.
+              //
+              // The floor is inert wherever there is real room (it only binds
+              // below ~15px of column pitch) and the ROW bound is untouched, so
+              // the one guarantee that matters still holds exactly.
+              const colBound = Math.max(colPitch * BUBBLE_STYLE.maxPxColFrac, BUBBLE_STYLE.colBoundFloorPx);
               const maxPx = Math.max(1.2, sizeMul * Math.min(
                 BUBBLE_STYLE.maxPx,
                 rowPitch * BUBBLE_STYLE.maxPxRowFrac,
-                colPitch * BUBBLE_STYLE.maxPxColFrac,
+                colBound,
               ));
               // Rails, not policy. The budget above already guarantees the gap
               // at 1.00x; these exist only so a degenerate projection (a chart
               // squeezed to a few pixels) cannot paint over everything. They
               // scale with `size` for the same reason the budget does — a rail
               // that does not move turns the top of the slider's travel dead.
-              const rxCap = Math.max(0.35, sizeMul * (colPitch / 2 - COL_GAP_PX));
+              // Floored the same way, and for the same reason: a rail that
+              // collapses with the column pitch is not a rail, it is the clip
+              // that made the marks disappear. At a 2px column pitch the old
+              // expression evaluated to ~0.2px.
+              const rxCap = Math.max(0.35, sizeMul * Math.max(colPitch / 2 - COL_GAP_PX, BUBBLE_STYLE.colBoundFloorPx / 2));
               // ── The vertical bound is a SAFETY RAIL, not a size policy ─────
               // It used to be `rowPitch / 2`, a hard clip at half the strike
               // spacing, and the walls sat ON it — so the size scale was
@@ -4806,7 +4856,16 @@ function EsChartCard({
                   // rankable by eye. The two channels stay orthogonal:
                   //   SIZE  = |net GEX|, always. Bigger dot = more gamma.
                   //   COLOR = the top-N wall selection. White-hot with a glow.
-                  const r = Math.max(minPx, maxPx * ratio);
+                  // `curve` is an EXPONENT, not a rank bonus (see the note
+                  // above, and BUBBLE_CURVE_RANGE). At 1.00 this is the straight
+                  // proportional law unchanged. Above it the top of the ladder
+                  // keeps the full budget while the wings shrink, so the
+                  // dominant strikes pull away without everything bloating with
+                  // them — and because x^k is monotonic on [0,1], more gamma is
+                  // still strictly more radius at every setting.
+                  const curve = bubbleCurveRef.current;
+                  const shaped = curve === 1 ? ratio : Math.pow(ratio, curve);
+                  const r = Math.max(minPx, maxPx * shaped);
                   // Rank only drives how hard this row GLOWS (#1 brightest).
                   let hiT = 0;
                   if (isHi) {
@@ -5211,7 +5270,7 @@ function EsChartCard({
     // read by draw() (they key the basis memo), so they belong here even though
     // their sources already are — exhaustive-deps is right about that, and
     // listing them costs nothing: each is stable whenever its source is.
-  }, [schedulePaint, showHeatmap, showGexBubbles, bubbleMins, bubbleLevels, bubbleIntensity, bubbleSize, intensity, gexMetric, rows, rowsHash, interval, showProfile, profile, showTpo, tpoProfiles, showFlipCross, mvcHistory, mvcHistoryHash, showCb, bb, weeklyEm]);
+  }, [schedulePaint, showHeatmap, showGexBubbles, bubbleMins, bubbleLevels, bubbleIntensity, bubbleSize, bubbleCurve, intensity, gexMetric, rows, rowsHash, interval, showProfile, profile, showTpo, tpoProfiles, showFlipCross, mvcHistory, mvcHistoryHash, showCb, bb, weeklyEm]);
 
   // Safety-net repaint: coalesced rAF tied to the time scale's visible-range
   // change AND a low-rate interval. Data events already call drawOverlayRef
@@ -5420,19 +5479,23 @@ function EsChartCard({
               )}
               {showGexBubbles && (
                 <div style={{ marginTop: 7, paddingTop: 8, borderTop: `1px solid ${HOME_THEME.border}` }}>
-                  {/* Three sliders, not seven. Contrast / Max / Curve /
-                      Brightness are gone: they were CORRECTIONS, moved because
-                      the chart was coming out wrong, and the scale they were
-                      correcting is absolute now (see slotStore's size law).
-                      These three are QUESTIONS — how much of the board do you
-                      want on screen, how loud should it sit against the candles,
-                      how much room may the marks take — and questions have no
-                      correct answer to hardcode.
+                  {/* Four sliders, not seven. Contrast / Max / Brightness are
+                      gone: they were CORRECTIONS, moved because the chart was
+                      coming out wrong, and the scale they were correcting is
+                      absolute now (see slotStore's size law). These four are
+                      QUESTIONS — how much of the board do you want on screen,
+                      how loud should it sit against the candles, how much room
+                      may the marks take, and how hard should the top pull away
+                      — and questions have no correct answer to hardcode.
 
-                      None of them changes what size MEANS. `size` scales the
-                      whole ladder at once, so the ratio between the wall and the
-                      fifth strike is identical at 0.4x and at 2x; radius stays
-                      straight proportional to |net GEX| at every setting. */}
+                      `size` scales the whole ladder at once, so the ratio
+                      between the wall and the fifth strike is identical at 0.4x
+                      and at 4x. `top` is the one control that changes that
+                      ratio, and it does it by steepening the curve rather than
+                      by handing ranked strikes a bonus — so the mark still means
+                      |net GEX| and nothing else, and the ladder stays rankable
+                      by eye. At its default ("flat") the law is exactly the
+                      straight-proportional one it has always been. */}
                   <PanelSection title="Bubbles" first>
                     <DockSlider
                       label="levels" labelWidth={SLIDER_LABEL_W} width="auto"
@@ -5449,6 +5512,14 @@ function EsChartCard({
                       format={(v) => `${v.toFixed(2)}×`}
                       onChange={(v) => updateBubbleSize(v)}
                       title="Scales the whole ladder at once — the ratio between the wall and the smallest strike is identical at every setting. At or below 1.00× marks are guaranteed never to touch; above it they may overlap, which is the trade for bigger marks on a tight chart"
+                    />
+                    <DockSlider
+                      label="top" labelWidth={SLIDER_LABEL_W} width="auto"
+                      value={bubbleCurve}
+                      min={BUBBLE_CURVE_RANGE.min} max={BUBBLE_CURVE_RANGE.max} step={0.05}
+                      format={(v) => (v <= 1.001 ? "flat" : `${v.toFixed(2)}`)}
+                      onChange={(v) => updateBubbleCurve(v)}
+                      title="How hard the biggest levels pull away from the rest. At 'flat' the radius is straight proportional to |net GEX|. Turning it up steepens the scale — the top strikes keep the full size budget while the wings shrink under them — so the dominant levels dominate without everything growing together. Monotonic at every setting: more gamma is always a bigger mark"
                     />
                     <DockSlider
                       label="intensity" labelWidth={SLIDER_LABEL_W} width="auto"
