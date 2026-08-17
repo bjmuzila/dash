@@ -3607,10 +3607,27 @@ export default function SocialMedia() {
         }
         #page-social-media, #page-social-media * { font-family: var(--font-inter), "Inter", "Helvetica Neue", Arial, sans-serif; box-sizing: border-box; }
 
-        .sm-head { display: flex; align-items: baseline; gap: 14px; border-bottom: 1px solid var(--sm-border); padding-bottom: 14px; margin-bottom: 22px; max-width: 1100px; margin-left: auto; margin-right: auto; }
+        /* The head packs a title, ticker picker, a 7-item tab group, a status
+           pill, the date and two buttons into one row. At 1100px that row is
+           wider than the container, and a non-wrapping flex row clipped the
+           right-hand end (status / Load data / Stop data) off-screen. Wrap
+           instead: everything stays reachable, it just takes a second line on
+           narrow viewports. align-items:center keeps wrapped lines aligned —
+           baseline mis-stacks them once the row breaks. */
+        .sm-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; border-bottom: 1px solid var(--sm-border); padding-bottom: 14px; margin-bottom: 22px; max-width: 1100px; margin-left: auto; margin-right: auto; }
         .sm-head h1 { font-size: 20px; font-weight: 700; letter-spacing: 0.02em; margin: 0; color: var(--text1); }
         .sm-tag { font-family: var(--sm-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--amber); border: 1px solid var(--amber); border-radius: 3px; padding: 2px 6px; opacity: 0.85; }
-        .sm-tabs { display: inline-flex; gap: 4px; padding: 3px; background: var(--bg2); border: 1px solid var(--sm-border); border-radius: 8px; }
+        /* The tab group is the widest single item — let it wrap internally too
+           so it never forces horizontal overflow on its own. */
+        .sm-head > * { min-width: 0; }
+        .sm-tabs { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 3px; background: var(--bg2); border: 1px solid var(--sm-border); border-radius: 8px; }
+        /* SegGroup (.tab-strip) is inline-styled with flexShrink:0 and a fixed
+           34px height, so it can neither shrink nor wrap — on a narrow viewport
+           it alone would overflow the head. Let it shrink and scroll sideways
+           instead (the !important is required to beat the inline style), with
+           the scrollbar hidden so it still reads as a pill group. */
+        .sm-head .tab-strip { max-width: 100%; flex-shrink: 1 !important; overflow-x: auto; scrollbar-width: none; }
+        .sm-head .tab-strip::-webkit-scrollbar { display: none; }
         .sm-tabs button { font-family: var(--sm-mono); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; cursor: pointer; padding: 6px 12px; border-radius: 5px; border: 1px solid transparent; background: transparent; color: var(--sm-muted); transition: all 0.12s; }
         .sm-tabs button:hover { color: var(--text1); }
         .sm-tabs button.on { background: var(--cyan); color: #05060a; border-color: var(--cyan); box-shadow: 0 0 12px rgba(33,158,188,0.35); }

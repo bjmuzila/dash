@@ -1338,6 +1338,37 @@ export default function EsChartCard({
     setBubbleSize(v);
     saveSetting({ bSize: v });
   }, [saveSetting]);
+
+  // ── Snap back to the forming candle ────────────────────────────────────────
+  // Pan a few sessions left and there was no way back except double-clicking the
+  // canvas — which is undiscoverable, and which does something DIFFERENT: it
+  // re-frames the whole cash session at the default zoom. Two distinct wants:
+  //
+  //   "take me back to now"      → keep my zoom, scroll to the right edge.
+  //   "reset the view"           → the session frame at the default zoom.
+  //
+  // This button is the first. `scrollToRealTime()` is lightweight-charts' own
+  // call for it: it animates the time scale to the newest bar and leaves the bar
+  // spacing alone, so a chart zoomed into 20 bars stays zoomed into 20 bars.
+  // Double-click still does the second, unchanged.
+  //
+  // Falls back to the session frame if the call throws — some chart states (a
+  // series with no data yet) reject it, and doing nothing on a click reads as a
+  // dead button.
+  const scrollToNow = useCallback(() => {
+    const chart = chartApiRef.current;
+    if (!chart) return;
+    try {
+      chart.timeScale().scrollToRealTime();
+    } catch {
+      applyDefaultView(chart, viewRowsRef.current, candleMsRef.current);
+    }
+    // The gamma overlays are painted on a canvas that tracks the time scale, so
+    // they have to repaint at the new offset. The visible-range subscription
+    // would get there on its own, but a frame late — and on a chart this dense
+    // that lands as a visible tear.
+    drawOverlayRef.current();
+  }, []);
   // Mirrored into refs so the imperative overlay draw reads them without
   // re-subscribing.
   useEffect(() => { bubbleMinsRef.current = bubbleMins; }, [bubbleMins]);
@@ -4701,6 +4732,20 @@ export default function EsChartCard({
             active={String(interval)}
             onChange={(v) => { const n = Number(v); if (isChartInterval(n)) setInterval_(n); }}
           />
+
+          {/* Back to the forming candle. Sits with the timeframe rather than
+              with Refresh at the far end: both answer "what part of the tape am
+              I looking at", where Refresh/Snap/Discord are actions ON the chart.
+              Kept out of the overflow menu — a way back from a stray scroll is
+              worthless if you have to open a menu to find it. */}
+          {/* "Latest", not "Now" — the refresh button at the far end of this
+              same bar already reads "↻ Now" (see useRefreshButton), and two
+              buttons on one toolbar saying Now while doing different things is
+              the kind of thing you only notice after clicking the wrong one. */}
+          <DockButton onClick={scrollToNow} title="Jump to the current candle — keeps your zoom (double-click the chart to re-frame the whole session instead)">
+            <span aria-hidden style={{ fontSize: 13, lineHeight: 1 }}>⇥</span>
+            {!dockCompact && <span>Latest</span>}
+          </DockButton>
 
           {/* status + count badges */}
           {!dockCompact && (

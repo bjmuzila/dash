@@ -1195,8 +1195,8 @@ export default function Budget() {
             its stated size, and the donut splits its card in half. */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, alignItems: "stretch" }}>
           <SafeToSpendCard intel={intel} currency={currency} range={range} />
-          <SpendPaceCard series={paceSeries} currency={currency} />
-          <CategoryDonutCard slices={slicesFor(range)} currency={currency} range={range} />
+          <SpendPaceCard series={paceSeries} currency={currency} importedMonths={stmtMonths} onMonth={setMonth} />
+          <CategoryDonutCard slices={slicesFor(range)} currency={currency} range={range} importedMonths={stmtMonths} />
           <BalanceCheckCard data={reconcile} currency={currency} />
         </div>
 
@@ -1896,6 +1896,51 @@ function SafeToSpendCard({ intel, currency, range }: { intel: Intel; currency: s
 }
 
 /**
+ * Shown by the statement-backed cards when the selected month has no statement.
+ *
+ * It lists the months that DO, as buttons. Without that list the message is
+ * indistinguishable from "your import failed" — which is exactly how it read
+ * when the only imported month was July and the picker was sitting on August.
+ */
+function NoStatement({ title, scope, months, onMonth }: { title: string; scope: string; months: string[]; onMonth?: (m: string) => void }) {
+  const label = (m: string) =>
+    new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1, 1).toLocaleDateString("en-US", { month: "short", year: "numeric" });
+  const others = months.filter((m) => m !== scope);
+  return (
+    <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
+      <IntelHeader title={title} />
+      <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: -6 }}>{scope}</div>
+      <div style={{ flex: 1, display: "grid", placeItems: "center", textAlign: "center", padding: "22px 8px" }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.muted }}>No statement for this month</div>
+          <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: 6, maxWidth: 250, lineHeight: 1.5 }}>
+            {others.length
+              ? "This card reads what actually cleared. You have statements for:"
+              : "Import it on Real Month and this fills in."}
+          </div>
+          {others.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", marginTop: 10 }}>
+              {others.slice(0, 12).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => onMonth?.(m)}
+                  style={{
+                    fontSize: 11, fontWeight: 800, padding: "4px 9px", borderRadius: 999, cursor: "pointer",
+                    color: LIGHT_BLUE, border: `1px solid ${bRgba(LIGHT_BLUE, 0.35)}`, background: bRgba(LIGHT_BLUE, 0.1),
+                  }}
+                >
+                  {label(m)}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Spend Pace: cumulative spend for the selected month against TWO reference
  * ramps — the straight-line budget (what you intended) and a typical month
  * (what you actually do). The second one is the useful half: a budget that
@@ -1919,7 +1964,7 @@ type PaceSeries = {
       is there but has no outflow rows to draw. */
   hasCurve: boolean;
 };
-function SpendPaceCard({ series, currency }: { series: PaceSeries; currency: string }) {
+function SpendPaceCard({ series, currency, importedMonths = [], onMonth }: { series: PaceSeries; currency: string; importedMonths?: string[]; onMonth?: (m: string) => void }) {
   const [hover, setHover] = useState<number | null>(null);
   const W = 450, H = 235, PADL = 6, PADR = 6, PADT = 12, PADB = 24;
   const n = Math.max(series.span, 1);
@@ -1961,24 +2006,7 @@ function SpendPaceCard({ series, currency }: { series: PaceSeries; currency: str
   // Zeros are not the same as "nothing spent". Drawing a flat line along the
   // bottom for an un-imported month would read as a month of no spending.
   if (!series.imported || !series.hasCurve) {
-    return (
-      <div style={{ ...card(), padding: 16, display: "flex", flexDirection: "column" }}>
-        <IntelHeader title="Spend Pace" />
-        <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: -6 }}>{series.scope}</div>
-        <div style={{ flex: 1, display: "grid", placeItems: "center", textAlign: "center", padding: "28px 8px" }}>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.muted }}>
-              {series.imported ? "No spending rows this month" : "No statement imported"}
-            </div>
-            <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: 6, maxWidth: 240, lineHeight: 1.5 }}>
-              {series.imported
-                ? `${series.scope} is imported but has no outflow rows to pace.`
-                : `This card reads what actually cleared. Import ${series.scope} on Real Month and it fills in.`}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+    return <NoStatement title="Spend Pace" scope={series.scope} months={importedMonths} onMonth={onMonth} />;
   }
 
   return (
@@ -2072,7 +2100,7 @@ function SpendPaceCard({ series, currency }: { series: PaceSeries; currency: str
  * the window total to the hovered slice. Pointer state is shared, so the two
  * halves always agree.
  */
-function CategoryDonutCard({ slices, currency, range }: { slices: Intel["slices"]; currency: string; range: RangeMode }) {
+function CategoryDonutCard({ slices, currency, range, importedMonths = [] }: { slices: Intel["slices"]; currency: string; range: RangeMode; importedMonths?: string[] }) {
   const [hover, setHover] = useState<number | null>(null);
   const total = slices.reduce((s, x) => s + x.value, 0);
   const hasAvg = slices.some((x) => x.avg != null);
@@ -2107,11 +2135,13 @@ function CategoryDonutCard({ slices, currency, range }: { slices: Intel["slices"
         {hasAvg && <span>vs a typical month</span>}
       </div>
       {total <= 0 ? (
-        <div style={{ flex: 1, display: "grid", placeItems: "center", textAlign: "center", padding: "28px 8px" }}>
+        <div style={{ flex: 1, display: "grid", placeItems: "center", textAlign: "center", padding: "24px 8px" }}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.muted }}>No statement imported</div>
-            <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: 6, maxWidth: 240, lineHeight: 1.5 }}>
-              Import the month on Real Month and every category lands here with its own average.
+            <div style={{ fontSize: 14, fontWeight: 800, color: HOME_THEME.muted }}>No statement for this month</div>
+            <div style={{ fontSize: 12, color: HOME_THEME.muted, opacity: 0.6, marginTop: 6, maxWidth: 250, lineHeight: 1.5 }}>
+              {importedMonths.length
+                ? "Every category lands here, with its own average, once the month is imported."
+                : "Import the month on Real Month and every category lands here."}
             </div>
           </div>
         </div>

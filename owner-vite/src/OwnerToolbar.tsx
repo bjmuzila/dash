@@ -36,12 +36,12 @@ export default function OwnerToolbar() {
   }
 
   const pill = (extra: object = {}) => ({
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: 700,
     letterSpacing: "0.04em",
     textTransform: "uppercase" as const,
-    padding: "6px 12px",
-    borderRadius: 8,
+    padding: "5px 10px",
+    borderRadius: 7,
     textDecoration: "none",
     cursor: "pointer",
     ...extra,
@@ -53,8 +53,8 @@ export default function OwnerToolbar() {
         flexShrink: 0,
         display: "flex",
         alignItems: "center",
-        gap: 14,
-        padding: "9px 16px",
+        gap: 10,
+        padding: "7px 14px",
         position: "relative",
         background: `radial-gradient(circle at 50% 0%, ${rgba(CY, 0.08)} 0%, transparent 60%), ${OWNER_THEME.panelBgStrong}`,
         borderBottom: `1px solid ${OWNER_THEME.border}`,
@@ -72,9 +72,9 @@ export default function OwnerToolbar() {
         }}
       />
 
-      <Link to="/owner" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
-        <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 26, width: "auto" }} />
-        <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.18em", color: CY, textTransform: "uppercase" }}>
+      <Link to="/owner" style={{ display: "flex", alignItems: "center", gap: 8, textDecoration: "none" }}>
+        <img src="/cb-edge-logo.png" alt="CB Edge" style={{ height: 22, width: "auto" }} />
+        <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.16em", color: CY, textTransform: "uppercase" }}>
           Owner
         </span>
       </Link>
@@ -83,7 +83,7 @@ export default function OwnerToolbar() {
 
       <span
         title="Eastern Time"
-        style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 800, color: "#e8edf5", fontVariantNumeric: "tabular-nums", letterSpacing: ".05em", whiteSpace: "nowrap" }}
+        style={{ fontFamily: "var(--font-mono)", fontSize: 12.5, fontWeight: 800, color: "#e8edf5", fontVariantNumeric: "tabular-nums", letterSpacing: ".05em", whiteSpace: "nowrap" }}
       >
         {clock} ET
       </span>

@@ -604,6 +604,20 @@ type GexGrid = Record<string, Record<number, GexGridCell>>;
 function fmtDeltaChip(d: number): string {
   if (!isFinite(d)) return "--";
   const sign = d < 0 ? "\u2212" : "+";
+  const a = Math.abs(d);
+  if (a >= 1e9) {
+    const b = a / 1e9;
+    return `${sign}${b >= 10 ? Math.round(b) : b.toFixed(1)}B`;
+  }
+  const m = Math.round(a / 1e6);
+  if (m === 0) return `${sign}<1M`;
+  return `${sign}${m}M`;
+}
+
+/** Full dollar text \u2014 tooltip only, so the abbreviated chip never loses info. */
+function fmtDeltaChipFull(d: number): string {
+  if (!isFinite(d)) return "--";
+  const sign = d < 0 ? "\u2212" : "+";
   const m = Math.round(Math.abs(d) / 1e6);
   if (m === 0) return `${sign}<$1M`;
   return `${sign}$${m.toLocaleString("en-US")}M`;
@@ -618,13 +632,13 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
   // the number's colour alone; nothing here encodes rank.
   return (
     <span
-      title={`Δ ${text} over the window · #${rank} mover (${Math.abs(Math.round(pct))}%)`}
+      title={`Δ ${fmtDeltaChipFull(d)} over the window · #${rank} mover (${Math.abs(Math.round(pct))}%)`}
       style={{
         flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center",
-        height: 15, boxSizing: "border-box",
-        fontSize: 9, fontWeight: rank === 1 ? 900 : 800,
+        height: 12, boxSizing: "border-box",
+        fontSize: 8, fontWeight: rank === 1 ? 900 : 800,
         fontFamily: "var(--font-mono)", lineHeight: 1,
-        padding: "0 5px", borderRadius: 4, whiteSpace: "nowrap",
+        padding: "0 3px", borderRadius: 3, whiteSpace: "nowrap",
         background: "#0D1119",
         color: pos ? "#4ade80" : "#f87171",
         border: "none",
@@ -765,17 +779,16 @@ function TickerPanel({
       .map(c => ({ date: c.date, label: colLabel(c.date, dteBase) }))
       .concat(showEx0 ? [{ date: EX0_KEY, label: { dte: "ALL", md: "EX-0DTE" } }] : []);
 
-  // In Δ mode the FRONT column also carries a chip, and at 4 expiries a 1fr
-  // column (~94px in a 440px panel) cannot hold "−$1,694M" plus the value —
-  // measured, it needs ~146px. Widening the front to 1.9fr fits both while
-  // leaving the other columns (~77px) enough for their value. Non-front columns
-  // are unchanged, and with the mode off the grid is exactly as it was.
+  // Column tracks are IDENTICAL whether or not Δ mode is on. The front column
+  // used to widen to 1.9fr to fit the chip, which made every panel jump and left
+  // the grid visibly ragged — one fat column beside three thin ones. Instead the
+  // chip is abbreviated (fmtDeltaChip: "−1.4B", not "−$1,441M") and shrunk to
+  // 12px tall so it fits inside a plain 1fr cell. Do not reintroduce a Δ-only
+  // track size here: toggling Δ must not resize a single cell.
   // Sized off displayCols, not cols: replay APPENDS the ALL column, so the two
   // lengths differ there and a cols-sized track list would leave it unpainted.
   const gridCols = (
-    deltaWindow !== 0 && displayCols.length > 1
-      ? `64px 1.9fr ${displayCols.slice(1).map(() => "1fr").join(" ")}`
-      : `64px ${displayCols.map(() => "1fr").join(" ")}`
+    `64px ${displayCols.map(() => "1fr").join(" ")}`
   ).trim() || "64px";
 
   // CB / CW / PW levels for the FRONT expiry — shown in the header and marked in
@@ -1072,8 +1085,8 @@ function TickerPanel({
               style={{ padding: "3px 4px", textAlign: "center", lineHeight: 1.15 }}
             >
               <div style={{ color: HT.cyan, fontSize: 10, fontWeight: 800, letterSpacing: "0.04em" }}>{lbl.dte}</div>
-              <div style={{ color: HT.muted, fontSize: 8, fontWeight: 700 }}>
-                {deltaWindow !== 0 && ci === 0 ? `GEX +Δ${deltaWindow}M` : "GEX"} · {lbl.md}
+              <div style={{ color: HT.muted, fontSize: 8, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {deltaWindow !== 0 && ci === 0 ? `GEX Δ${deltaWindow}M` : "GEX"} · {lbl.md}
               </div>
             </div>
           );
@@ -1202,7 +1215,10 @@ function TickerPanel({
                     // say nothing about a rewound clock — so replay cells are
                     // not clickable rather than opening a card about now.
                     textAlign: "center", color: SOFT_WHITE, cursor: (isCapturing || isEx0Col || isReplay) ? "default" : "pointer",
-                    ...(dMode ? { display: "flex", alignItems: "center", gap: 4, minHeight: 23 } : {}),
+                    // Δ mode only switches the cell to a flex row so the chip can
+                    // sit beside the value. No minHeight, no padding change, no
+                    // width change — the cell box is byte-identical to Δ-off.
+                    ...(dMode ? { display: "flex", alignItems: "center", gap: 3 } : {}),
                     // Levels-only: no gamma wash at all. A CB/CW/PW cell is
                     // painted at the heat scale's rank floor (CB 1, CW 2, PW 3)
                     // so it still reads cyan for +GEX and red for −GEX; the

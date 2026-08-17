@@ -60,21 +60,21 @@ export default function OwnerShell() {
         boxShadow: open ? "0 0 40px rgba(0,0,0,0.6)" : "none",
         display: "flex",
         flexDirection: "column",
-        gap: 18,
-        padding: "18px 12px",
-        paddingTop: "max(18px, env(safe-area-inset-top, 0px))",
+        gap: 12,
+        padding: "14px 10px",
+        paddingTop: "max(14px, env(safe-area-inset-top, 0px))",
         overflowY: "auto",
         background: "rgba(10,13,20,0.98)",
         backdropFilter: "blur(16px)",
         borderRight: `1px solid ${OWNER_THEME.border}`,
       }
     : {
-        width: 224,
+        width: 206,
         flexShrink: 0,
         display: "flex",
         flexDirection: "column",
-        gap: 18,
-        padding: "18px 12px",
+        gap: 12,
+        padding: "14px 10px",
         overflowY: "auto",
         background: OWNER_THEME.panelBgStrong,
         borderRight: `1px solid ${OWNER_THEME.border}`,
@@ -91,10 +91,10 @@ export default function OwnerShell() {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 8,
-          padding: "8px 10px",
-          borderRadius: 8,
-          fontSize: 14,
+          gap: 7,
+          padding: "6px 9px",
+          borderRadius: 7,
+          fontSize: 13,
           fontWeight: here ? 800 : 600,
           textDecoration: "none",
           whiteSpace: "nowrap",
@@ -103,7 +103,7 @@ export default function OwnerShell() {
           border: `1px solid ${here ? `${accent}59` : "transparent"}`,
         }}
       >
-        <span aria-hidden style={{ width: 18, textAlign: "center", opacity: 1, fontSize: 14 }}>
+        <span aria-hidden style={{ width: 16, textAlign: "center", opacity: 1, fontSize: 13 }}>
           {link.glyph}
         </span>
         {link.label}
@@ -114,20 +114,20 @@ export default function OwnerShell() {
   const rail = (
     <aside style={asideStyle}>
       {/* Pinned — above every group, with no group header of its own. */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {OWNER_PINNED_LINKS.map((link) => navLink(link, OWNER_THEME.cyan))}
       </div>
 
       {OWNER_SIDEBAR_GROUPS.map((group) => (
-        <div key={group.label} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div key={group.label} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <div
             style={{
-              fontSize: 17,
+              fontSize: 11,
               fontWeight: 800,
-              letterSpacing: "0.14em",
+              letterSpacing: "0.16em",
               textTransform: "uppercase",
               color: group.accent,
-              padding: "0 8px 5px",
+              padding: "0 7px 2px",
             }}
           >
             {group.label}

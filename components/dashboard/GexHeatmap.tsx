@@ -193,21 +193,13 @@ export default function GexHeatmap({
 
   const aboveATM = rows.filter(r => r.strike > (atm?.strike ?? 0));
   const belowATM = rows.filter(r => r.strike <= (atm?.strike ?? 0));
-  const rankSide = (arr: HeatmapRow[]) => {
-    const m = new Map<number, number>();
-    [...arr].sort((a, b) => Math.abs(b.netGEX) - Math.abs(a.netGEX)).slice(0, 5).forEach((r, i) => m.set(r.strike, i + 1));
-    return m;
-  };
   // Single strike with the highest |NET GEX| — gets a golden box (NET GEX cell only).
   const peakNetGexStrike = rows.length
     ? rows.reduce((best, r) => (Math.abs(r.netGEX) > Math.abs(best.netGEX) ? r : best), rows[0]).strike
     : null;
-  const rankAbove = rankSide(aboveATM);
-  const rankBelow = rankSide(belowATM);
   // Highest |NET GEX| strike on each side of spot → 📍 pin (possible pin/explosive level).
   const pinAbove = aboveATM.length ? aboveATM.reduce((b, r) => (Math.abs(r.netGEX) > Math.abs(b.netGEX) ? r : b)).strike : null;
   const pinBelow = belowATM.length ? belowATM.reduce((b, r) => (Math.abs(r.netGEX) > Math.abs(b.netGEX) ? r : b)).strike : null;
-  const rankColors: Record<number, string> = { 1: "#ffd700", 2: "#c0c0c0", 3: "#cd7f32", 4: "#4a7a99", 5: "#3a5570" };
 
   useEffect(() => {
     if (!bodyRef.current || !atm || initializedRef.current) return;
@@ -261,7 +253,6 @@ export default function GexHeatmap({
       <div ref={bodyRef} style={{ flex: 1, overflowY: "auto" }}>
         {rows.map(row => {
           const isATM = row.strike === atm?.strike;
-          const rank = rankAbove.get(row.strike) ?? rankBelow.get(row.strike);
           const vals: Record<ColKey, number | null> = {
             netGEX: row.netGEX,
             netVolGEX: row.netVolGEX,
@@ -304,11 +295,6 @@ export default function GexHeatmap({
                 {row.strike.toLocaleString()}
                 {isATM && (
                   <span style={{ fontSize: 10, color: "#219EBC", background: "#062030", padding: "1px 3px", borderRadius: 2 }}>ATM</span>
-                )}
-                {rank && (
-                  <span style={{ fontSize: 10, fontWeight: 800, color: rankColors[rank], background: `${rankColors[rank]}22`, padding: "0 3px", borderRadius: 2, border: `1px solid ${rankColors[rank]}44` }}>
-                    #{rank}
-                  </span>
                 )}
               </div>
 

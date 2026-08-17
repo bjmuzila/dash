@@ -434,29 +434,51 @@ export function parseLevelNum(v: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-// ── Default zoom: THE CASH SESSION ───────────────────────────────────────────
-// The chart opens on 09:30–16:00 ET of the most recent session that has RTH
-// bars. That is the frame the page is for — gamma levels are a statement about
-// the cash session, and every read on this chart (walls, flip, CB, the bubble
-// trail, the EM band) is scoped to it.
+// ── Default zoom ─────────────────────────────────────────────────────────────
+// THE NEWEST CANDLE IS ALWAYS ON SCREEN. Everything else is about where the LEFT
+// edge goes.
 //
-// It used to open on the most recent DEFAULT_VIEW_BARS bars, a fixed count. That
-// was written to stop fitContent() crushing a full session plus overnight into
-// the container, and it did — but 60 bars is 5 hours at 5m and FIFTY MINUTES at
-// 1m, so on the intervals people actually use it opened deep inside the day with
-// the morning off-screen, and the "why is it so zoomed in" was earned.
+// Two earlier versions each got half of it:
 //
-// THE WINDOW IS RESERVED, NOT FITTED. The right edge is placed at the session's
-// LAST bar slot, not at the newest bar that has printed, so at 09:35 you see the
-// whole day's frame with five bars in it rather than five bars stretched across
-// the width. The frame therefore stays put as the session fills instead of
-// re-zooming under the cursor.
+//   1. The last DEFAULT_VIEW_BARS bars, a fixed count. Written to stop
+//      fitContent() crushing a full session plus overnight into the container,
+//      and it did — but 60 bars is 5 hours at 5m and FIFTY MINUTES at 1m, so on
+//      the intervals people use it opened deep inside the day with the morning
+//      off-screen.
+//   2. The cash session RESERVED — 09:30 to 16:00 of the newest session with RTH
+//      bars, with the right edge at the session's last SLOT rather than at the
+//      newest bar. Correct framing on a finished day, and wrong the rest of the
+//      time: at 09:35 it drew five candles against six hours of empty space, and
+//      overnight it framed the previous RTH block while the live candles sat off
+//      the right edge entirely. "The candles need to open inside the chart."
+//
+// The rule now, in order:
+//
+//   RIGHT  the newest bar (plus a small gutter). Non-negotiable — a default view
+//          that does not contain the candle currently printing is broken however
+//          nice the rest of the framing is.
+//   LEFT   the cash open of the newest RTH session, so a normal intraday load
+//          opens on 09:30 → now and grows into the full 09:30–16:00 frame as the
+//          day fills.
+//   CAP    never more than one session's WIDTH back from the newest bar. This is
+//          what stops a Sunday-evening load from spanning Friday 09:30 → Sunday
+//          20:30 in the name of "anchor on the cash open".
+//   FLOOR  never fewer than MIN_VIEW_MS of bars. At 09:35 the cash open is
+//          fifteen minutes away and five candles across a whole chart is not a
+//          chart; the left edge falls back into premarket until two hours of tape
+//          is on screen.
 export const DEFAULT_VIEW_BARS = 60;
 // Right gutter, in bars, so the newest candle isn't jammed against the price
 // axis (fitContent leaves a similar gap).
 export const DEFAULT_VIEW_RIGHT_PAD = 2;
 // A little air before the open, so the 09:30 bar isn't welded to the left edge.
 const RTH_VIEW_LEFT_PAD = 1;
+// The FLOOR. Two hours of tape, whatever the interval — 120 bars at 1m, 24 at
+// 5m, 2 at 1h. Below this the chart reads as empty rather than as early.
+const MIN_VIEW_MS = 2 * 60 * 60_000;
+// The CAP: one cash session. Also the fallback width when there is no RTH bar to
+// anchor on at all (a pure overnight series, a thin replay slice).
+const SESSION_VIEW_MS = (RTH_CLOSE_MIN - RTH_OPEN_MIN) * 60_000;
 // Bound on the backward walk to the session's first bar. The walk stops at the
 // day boundary and at 09:30 anyway; this is a guard so a pathological bar array
 // (duplicate timestamps, a 1m series with weeks of history) can't turn a fit
@@ -464,16 +486,14 @@ const RTH_VIEW_LEFT_PAD = 1;
 const RTH_WALK_MAX = 800;
 
 /**
- * Frame the cash session.
+ * Frame the chart on load.
  *
  * `bars` must be the rows the series is CURRENTLY showing — during replay that
  * is the filtered slice, not the full history, or the logical indices below
  * point at the wrong candles.
  *
- * `candleMs` sizes the reserved window. Falls back to whatever has printed when
- * it isn't known, and to the old fixed-bar-count view (then fitContent) when
- * there is no RTH bar to anchor on at all — early premarket on a fresh mount, a
- * thin replay slice, a symbol whose history hasn't streamed in yet.
+ * `candleMs` converts the two time bounds above into bar counts. Without it both
+ * degrade to the old fixed-bar-count view, which is wrong-ish but never broken.
  */
 export function applyDefaultView(
   chart: IChartApi | null,
@@ -482,8 +502,9 @@ export function applyDefaultView(
 ) {
   if (!chart) return;
   const ts = chart.timeScale();
-  // Legacy call shape (a bare bar count) — no timestamps, so the cash session
-  // can't be located. Keep the old behaviour rather than guess.
+  // Legacy call shape (a bare bar count) — no timestamps, so neither the cash
+  // open nor the two-hour floor can be located. Keep the old behaviour rather
+  // than guess.
   if (typeof bars === "number") {
     try {
       if (bars > DEFAULT_VIEW_BARS) {
@@ -506,37 +527,49 @@ export function applyDefaultView(
     } catch { try { ts.fitContent(); } catch { /* ignore */ } }
   };
   if (!n) { fallback(); return; }
+  if (!(candleMs > 0)) { fallback(); return; }
 
   try {
+    const endIdx = n - 1;                 // the newest bar — always on screen
+    const slots = (ms: number) => Math.max(1, Math.ceil(ms / candleMs));
+    const minSlots = slots(MIN_VIEW_MS);
+    const capSlots = slots(SESSION_VIEW_MS);
+
     const inRth = (t: number) => {
       const m = etMinutesOfDay(t);
       return m >= RTH_OPEN_MIN && m < RTH_CLOSE_MIN;
     };
-    // Newest RTH bar, searching backwards — so an overnight tape past 16:00, or
-    // a premarket mount before 09:30, both land on the last session that traded
-    // rather than on a frame with nothing in it.
-    let endIdx = -1;
-    for (let i = n - 1; i >= 0 && n - i <= RTH_WALK_MAX; i--) {
-      if (inRth(bars[i].timestamp)) { endIdx = i; break; }
+    // Newest RTH bar, searching backwards, then back to that session's open.
+    // Bounded by capSlots + the walk guard: an RTH open further back than one
+    // session is going to lose to the cap anyway, so there is no reason to walk
+    // days of overnight tape to find it.
+    let openIdx = -1;
+    {
+      let rthIdx = -1;
+      const scanLimit = Math.min(n, Math.max(capSlots * 2, 64), RTH_WALK_MAX);
+      for (let k = 0; k < scanLimit; k++) {
+        const i = endIdx - k;
+        if (i < 0) break;
+        if (inRth(bars[i].timestamp)) { rthIdx = i; break; }
+      }
+      if (rthIdx >= 0) {
+        const dayKey = etDayKey(bars[rthIdx].timestamp);
+        openIdx = rthIdx;
+        for (let k = 0; openIdx > 0 && k < RTH_WALK_MAX; k++) {
+          const prev = bars[openIdx - 1].timestamp;
+          if (etDayKey(prev) !== dayKey || !inRth(prev)) break;
+          openIdx--;
+        }
+      }
     }
-    if (endIdx < 0) { fallback(); return; }
-    // Back to that session's first bar.
-    const dayKey = etDayKey(bars[endIdx].timestamp);
-    let startIdx = endIdx;
-    for (let k = 0; startIdx > 0 && k < RTH_WALK_MAX; k++) {
-      const prev = bars[startIdx - 1].timestamp;
-      if (etDayKey(prev) !== dayKey || !inRth(prev)) break;
-      startIdx--;
-    }
-    // Reserve the whole 6.5h, so the frame is the session and not just the part
-    // of it that has printed. Never narrower than what IS on screen.
-    const printed = endIdx - startIdx + 1;
-    const session = candleMs > 0
-      ? Math.ceil(((RTH_CLOSE_MIN - RTH_OPEN_MIN) * 60_000) / candleMs)
-      : printed;
+
+    // LEFT: the cash open, capped at one session back, floored at two hours.
+    let from = openIdx >= 0 ? openIdx : endIdx - capSlots + 1;
+    if (from < endIdx - capSlots + 1) from = endIdx - capSlots + 1;   // cap
+    if (endIdx - from + 1 < minSlots) from = endIdx - minSlots + 1;   // floor
     ts.setVisibleLogicalRange({
-      from: startIdx - RTH_VIEW_LEFT_PAD,
-      to: startIdx + Math.max(session, printed) - 1 + DEFAULT_VIEW_RIGHT_PAD,
+      from: from - RTH_VIEW_LEFT_PAD,
+      to: endIdx + DEFAULT_VIEW_RIGHT_PAD,
     });
   } catch {
     fallback();

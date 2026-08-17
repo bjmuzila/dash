@@ -299,13 +299,13 @@ const CSS = `
 /* ── SWARM ── */
 .cblv-grp{display:grid;grid-template-columns:126px minmax(0,1fr) 64px;gap:12px;align-items:center;
   padding:9px 0;border-bottom:1px solid ${alpha(HOME_THEME.text, 0.05)}}
-.cblv-swarm{position:relative;height:40px}
+.cblv-swarm{position:relative}
 .cblv-dot{position:absolute;transform:translate(-50%,-50%);border-radius:50%;cursor:pointer;
   border:1px solid ${alpha(HOME_THEME.text, 0.35)};transition:transform .08s}
 .cblv-dot:hover{transform:translate(-50%,-50%) scale(1.7);z-index:8;border-color:${HOME_THEME.text}}
 
 /* ── QUADRANTS ── */
-.cblv-plot{position:relative;height:clamp(340px,52vh,560px);border-radius:14px;overflow:hidden;
+.cblv-plot{position:relative;height:clamp(420px,60vh,680px);border-radius:14px;overflow:hidden;
   border:1px solid ${alpha(HOME_THEME.text, 0.08)};background:${alpha(HOME_THEME.text, 0.012)}}
 .cblv-pd{position:absolute;transform:translate(-50%,-50%);border-radius:50%;cursor:pointer;transition:transform .08s}
 .cblv-pd:hover{transform:translate(-50%,-50%) scale(1.6);z-index:9}
@@ -346,9 +346,13 @@ const CSS = `
 .cblv-tbl tbody tr:hover{background:${alpha(LIGHT_BLUE, 0.07)}}
 .cblv-tbl tbody tr.pin{background:${alpha(HOME_THEME.text, 0.1)};box-shadow:inset 3px 0 0 ${HOME_THEME.text}}
 .cblv-tbl tbody tr.grp{cursor:default}
-.cblv-tbl tbody tr.grp td{background:${alpha(LIGHT_BLUE, 0.05)};font-size:9px;font-weight:800;
-  letter-spacing:.12em;text-transform:uppercase;color:${LIGHT_BLUE};padding:6px 12px;
-  border-bottom:1px solid ${alpha(LIGHT_BLUE, 0.18)};text-align:left}
+/* Group headers are STRUCTURE, not data. They were light-blue, which is the
+   ticker colour — a regime name reading in the same ink as a symbol made the
+   row look like an entry rather than a divider. Plain white ink; the tint on
+   the row is what separates it. */
+.cblv-tbl tbody tr.grp td{background:${alpha(HOME_THEME.text, 0.05)};font-size:9px;font-weight:800;
+  letter-spacing:.12em;text-transform:uppercase;color:${HOME_THEME.text};padding:6px 12px;
+  border-bottom:1px solid ${HOME_THEME.border};text-align:left}
 .cblv-cellbar{position:relative;height:9px;width:150px;border-radius:2px;
   background:${alpha(HOME_THEME.text, 0.07)};display:inline-block;vertical-align:middle}
 .cblv-cellbar i{position:absolute;top:-2px;height:13px;border-radius:1px}
@@ -402,7 +406,7 @@ function ZoneHeader({ marks }: { marks: Mark[] }) {
         const n = marks.filter((m) => m.dPct != null && m.dPct >= lo && m.dPct < hi).length;
         const a = axisX(lo), b = axisX(hi);
         return (
-          <div key={nm} style={{ left: `${a}%`, width: `${b - a}%`, color: colors[i], borderBottom: `2px solid ${colors[i]}`, opacity: 0.85 }}>
+          <div key={nm} style={{ left: `${a}%`, width: `${b - a}%`, color: colors[i], borderBottom: `1px solid ${HOME_THEME.border}`, opacity: 0.9 }}>
             {nm} · {n}
           </div>
         );
@@ -503,8 +507,14 @@ function BoardCloud({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; 
  * so the chart is exact at any width without a viewBox.
  */
 function BoardRidge({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; onToggle: (s: string) => void }) {
-  const BW = 0.25, H = 236;
-  const plotted = marks.filter((m) => m.dPct != null);
+  const BW = 0.25;
+  /**
+   * Bars are sized as a PERCENTAGE of the plot, not in px, so the chart can take
+   * a viewport-relative height and stay correct at any window size. 86% leaves
+   * headroom for the peak callout, which sits above the tallest bar.
+   */
+  const BAR_MAX_PCT = 86;
+  const plotted = useMemo(() => marks.filter((m) => m.dPct != null), [marks]);
 
   const bins = useMemo(() => {
     const b: { lo: number; hi: number; n: number; out: number; outc: number }[] = [];
@@ -528,7 +538,7 @@ function BoardRidge({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; 
   const above = plotted.filter((m) => m.zone === "outc").sort((a, b) => (b.dPct as number) - (a.dPct as number));
 
   const tail = (nm: string, arr: Mark[], c: string) => (
-    <div className="cblv-tail" style={{ borderTop: `2px solid ${c}` }}>
+    <div className="cblv-tail">
       <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 9 }}>
         <span style={{ fontSize: 20, fontWeight: 800, color: c }}>{arr.length}</span>
         <span style={labelStyle}>{nm}</span>
@@ -564,7 +574,7 @@ function BoardRidge({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; 
 
   return (
     <>
-      <div style={{ position: "relative", height: H, marginBottom: 2 }}>
+      <div style={{ position: "relative", height: "clamp(360px, 50vh, 620px)", marginBottom: 2 }}>
         <Separators />
         {bins.map((b) => {
           if (!b.n) return null;
@@ -577,7 +587,7 @@ function BoardRidge({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; 
             <div
               key={b.lo}
               className="cblv-bar"
-              style={{ left: `${axisX(b.lo)}%`, width: `${colW}%`, height: (b.n / max) * (H - 30) }}
+              style={{ left: `${axisX(b.lo)}%`, width: `${colW}%`, height: `${(b.n / max) * BAR_MAX_PCT}%` }}
               title={`${b.n} tickers · ${b.lo.toFixed(2)}…${b.hi.toFixed(2)}% from core`}
             >
               <i style={{ background: `linear-gradient(180deg, ${alpha(c, 0.8)}, ${alpha(c, 0.13)})`, boxShadow: `inset 0 1px 0 ${c}` }} />
@@ -588,7 +598,7 @@ function BoardRidge({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; 
           <div
             style={{
               position: "absolute", left: `${axisX((peak.lo + peak.hi) / 2)}%`,
-              top: H - (peak.n / max) * (H - 30) - 22, transform: "translateX(-50%)",
+              bottom: `calc(${(peak.n / max) * BAR_MAX_PCT}% + 8px)`, transform: "translateX(-50%)",
               fontSize: 10, fontWeight: 800, color: LEVEL_COLORS.cb, whiteSpace: "nowrap",
             }}
           >
@@ -603,7 +613,7 @@ function BoardRidge({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; 
             <div
               key={m.symbol}
               style={{
-                position: "absolute", left: `${axisX(m.dPct as number)}%`, top: H - 20 - i * 19,
+                position: "absolute", left: `${axisX(m.dPct as number)}%`, bottom: 6 + i * 20,
                 transform: "translateX(-50%)", fontSize: 9.5, fontWeight: 800,
                 color: LEVEL_COLORS.onSolid, background: HOME_THEME.text, padding: "2px 7px",
                 borderRadius: 5, whiteSpace: "nowrap", boxShadow: `0 2px 8px ${alpha(HOME_THEME.bg, 0.6)}`,
@@ -654,8 +664,22 @@ function BoardSwarm({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; 
       <div style={{ position: "relative" }}>
         <Separators />
         {rows.map(({ sector, ms, mean }) => {
-          // Vertical jitter into three sub-lanes so overlapping dots stay countable.
-          const used: { lane: number; x: number }[] = [];
+          // EVERY dot is labelled, so the packer has to reserve room for the
+          // LABEL and not just the dot — a swarm whose names overlap is worse
+          // than a taller row. Lane count is whatever the row needed; the row
+          // grows to fit rather than folding names back on top of each other.
+          const used: { lane: number; x: number; w: number }[] = [];
+          const placed = [...ms]
+            .sort((a, b) => (a.dPct as number) - (b.dPct as number))
+            .map((m) => {
+              const x = axisX(m.dPct as number);
+              const w = m.symbol.length * 0.46 + 1.6;
+              let lane = 0;
+              while (used.some((u) => u.lane === lane && Math.abs(u.x - x) < (u.w + w) / 2)) lane++;
+              used.push({ lane, x, w });
+              return { m, x, lane };
+            });
+          const laneCount = Math.max(1, ...placed.map((p) => p.lane + 1));
           return (
             <div key={sector} className="cblv-grp">
               <div>
@@ -666,14 +690,10 @@ function BoardSwarm({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; 
                   {ms.length} name{ms.length === 1 ? "" : "s"}
                 </div>
               </div>
-              <div className="cblv-swarm">
+              <div className="cblv-swarm" style={{ height: laneCount * 19 + 8 }}>
                 <span style={{ position: "absolute", left: `${axisX(0)}%`, top: 2, bottom: 2, width: 1, background: alpha(LEVEL_COLORS.cb, 0.35) }} />
-                {ms.map((m) => {
-                  const x = axisX(m.dPct as number);
-                  let lane = 0;
-                  while (used.some((u) => u.lane === lane && Math.abs(u.x - x) < 2.4)) lane++;
-                  used.push({ lane, x });
-                  const y = 20 + ((lane % 3) - 1) * 10;
+                {placed.map(({ m, x, lane }) => {
+                  const top = 4 + lane * 19;
                   const sz = 5 + Math.pow(Math.abs(m.gex) / gmax, 0.55) * 7;
                   const pinned = pins.includes(m.symbol);
                   const c = pinned ? HOME_THEME.text : deltaColor(m.dPct);
@@ -686,17 +706,21 @@ function BoardSwarm({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; 
                         onClick={() => onToggle(m.symbol)}
                         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(m.symbol); } }}
                         style={{
-                          left: `${x}%`, top: y, width: sz, height: sz,
+                          left: `${x}%`, top: top + 13, width: sz, height: sz,
                           background: pinned ? HOME_THEME.text : alpha(c, 0.75),
                           borderColor: pinned ? HOME_THEME.text : alpha(HOME_THEME.text, 0.35),
                         }}
                         title={`${m.symbol} · ${fmtSigned(m.dPct as number)}% from core · net GEX ${fmtGex(m.gex)}`}
                       />
-                      {pinned && (
-                        <span style={{ position: "absolute", left: `${x}%`, top: y - 16, transform: "translateX(-50%)", fontSize: 8.5, fontWeight: 800, color: HOME_THEME.text, whiteSpace: "nowrap", pointerEvents: "none" }}>
-                          {m.symbol}
-                        </span>
-                      )}
+                      <span
+                        style={{
+                          position: "absolute", left: `${x}%`, top, transform: "translateX(-50%)",
+                          fontSize: 8.5, fontWeight: 800, whiteSpace: "nowrap", pointerEvents: "none",
+                          color: pinned ? HOME_THEME.text : alpha(HOME_THEME.text, 0.62),
+                        }}
+                      >
+                        {m.symbol}
+                      </span>
                     </span>
                   );
                 })}
@@ -750,7 +774,9 @@ function BoardQuadrants({ marks, pins, onToggle }: { marks: Mark[]; pins: string
             const pinned = pins.includes(m.symbol);
             const sz = 5 + Math.pow(Math.abs(m.gex) / gmax, 0.5) * 11;
             const c = pinned ? HOME_THEME.text : alpha(m.gex >= 0 ? ES_CANDLE_UP : ES_CANDLE_DOWN, 0.55);
-            const named = pinned || Math.abs(m.gex) / gmax > 0.5 || Math.abs(m.dPct as number) > 2.4;
+            // EVERY dot carries its symbol. The plot is dense, so the label is
+            // small and gets a dark halo rather than being withheld — a name you
+            // have to hover for is not a label.
             return (
               <span key={m.symbol}>
                 <span
@@ -765,17 +791,16 @@ function BoardQuadrants({ marks, pins, onToggle }: { marks: Mark[]; pins: string
                   }}
                   title={`${m.symbol} · ${fmtSigned(m.dPct as number)}% from core · net GEX ${fmtGex(m.gex)}`}
                 />
-                {named && (
-                  <span
-                    style={{
-                      position: "absolute", left: `${x}%`, top: `calc(${y}% - ${sz / 2 + 9}px)`,
-                      transform: "translateX(-50%)", fontSize: 9, fontWeight: 800, whiteSpace: "nowrap",
-                      pointerEvents: "none", color: pinned ? HOME_THEME.text : alpha(HOME_THEME.text, 0.6),
-                    }}
-                  >
-                    {m.symbol}
-                  </span>
-                )}
+                <span
+                  style={{
+                    position: "absolute", left: `${x}%`, top: `calc(${y}% - ${sz / 2 + 9}px)`,
+                    transform: "translateX(-50%)", fontSize: 8.5, fontWeight: 800, whiteSpace: "nowrap",
+                    pointerEvents: "none", color: pinned ? HOME_THEME.text : alpha(HOME_THEME.text, 0.62),
+                    textShadow: `0 1px 3px ${HOME_THEME.bg}, 0 0 6px ${HOME_THEME.bg}`,
+                  }}
+                >
+                  {m.symbol}
+                </span>
               </span>
             );
           })}
@@ -1087,7 +1112,7 @@ function LanesView({ marks, pins, onToggle }: { marks: Mark[]; pins: string[]; o
       </div>
       <div className="cblv-lanesgrid">
         {lanes.map((l) => (
-          <div key={l.nm} className="cblv-lane" style={{ borderTop: `2px solid ${l.c}` }}>
+          <div key={l.nm} className="cblv-lane">
             <div style={{ padding: "11px 13px 10px", borderBottom: `1px solid ${HOME_THEME.border}` }}>
               <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", textTransform: "uppercase", color: l.c }}>{l.nm}</div>
               <div style={{ fontSize: 24, fontWeight: 800, lineHeight: 1.1, marginTop: 3 }}>{l.ms.length}</div>
@@ -1300,11 +1325,16 @@ export default function LevelsPage() {
 
   const liveCount = Object.keys(live).length;
   const seg = (active: boolean) => (active ? homeButtonStyle : homeSecondaryButtonStyle);
-  const cardEdge: CSSProperties = {
-    border: `1px solid ${alpha(HOME_THEME.text, 0.36)}`,
-    boxShadow: `0 0 0 3px ${alpha(HOME_THEME.text, 0.06)}, 0 14px 28px -12px ${alpha(HOME_THEME.bg, 0.9)}`,
-    flexShrink: 0,
-  };
+  /**
+   * NO CARD EDGE OVERRIDE. The previous page drew a bright 1px white border plus
+   * a 3px white ring around every card, which is not the dashboard surface — it
+   * is a second, louder card style that only this page had. `Card` already owns
+   * the look (frosted fill, hairline theme edge, soft shadow) and it is the
+   * single source of truth for it; the only thing a card here adds is opting out
+   * of flex-shrink, because PageShell's <main> is a scrolling flex column and a
+   * flex item shrinks by default even when the container scrolls.
+   */
+  const cardFlex: CSSProperties = { flexShrink: 0 };
 
   const VIEWS: [ViewId, string][] = [["board", "Board"], ["desk", "Desk"], ["monitor", "Monitor"], ["lanes", "Lanes"]];
   const BOARDS: [BoardId, string][] = [["cloud", "Cloud"], ["ridge", "Ridge"], ["swarm", "Swarm"], ["quadrants", "Quadrants"]];
@@ -1314,7 +1344,7 @@ export default function LevelsPage() {
   const belowPw = marks.filter((m) => m.zone === "out").length;
 
   const body: ReactNode = marks.length === 0 ? (
-    <Card variant="budget" padding={20} style={cardEdge}>
+    <Card variant="budget" padding={20} style={cardFlex}>
       <div style={{ fontSize: 13, color: alpha(HOME_THEME.text, 0.6) }}>
         {error
           ? `Could not load levels: ${error}`
@@ -1324,15 +1354,15 @@ export default function LevelsPage() {
   ) : view === "desk" ? (
     <DeskView marks={marks} selected={selected} onSelect={setSelected} pins={pins} onToggle={togglePin} show={show} />
   ) : view === "monitor" ? (
-    <Card variant="budget" padding={0} style={{ ...cardEdge, overflow: "hidden" }}>
+    <Card variant="budget" padding={0} style={{ ...cardFlex, overflow: "hidden" }}>
       <MonitorView marks={marks} pins={pins} onToggle={togglePin} sort={sort} setSort={setSort} grouped={grouped} />
     </Card>
   ) : view === "lanes" ? (
-    <Card variant="budget" padding={18} style={cardEdge}>
+    <Card variant="budget" padding={18} style={cardFlex}>
       <LanesView marks={marks} pins={pins} onToggle={togglePin} />
     </Card>
   ) : (
-    <Card variant="budget" padding="22px 26px 18px" style={cardEdge}>
+    <Card variant="budget" padding="22px 26px 18px" style={cardFlex}>
       {board === "cloud" && <BoardCloud marks={marks} pins={pins} onToggle={togglePin} />}
       {board === "ridge" && <BoardRidge marks={marks} pins={pins} onToggle={togglePin} />}
       {board === "swarm" && <BoardSwarm marks={marks} pins={pins} onToggle={togglePin} />}
@@ -1364,7 +1394,7 @@ export default function LevelsPage() {
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
 
       {/* ── controls ── */}
-      <Card variant="budget" padding={14} style={cardEdge}>
+      <Card variant="budget" padding={14} style={cardFlex}>
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 2, marginRight: "auto" }}>
             <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" }}>
