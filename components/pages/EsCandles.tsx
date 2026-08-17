@@ -46,13 +46,13 @@
  * single card and renders no chrome of its own.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import EsChartCard from "@/components/dashboard/es-candles/EsChartCard";
 import {
   MAX_CARDS, SHARED_SLOT, ensureMigrated,
   readCardCount, writeCardCount, readSidePanel, writeSidePanel,
   readChainGreek, writeChainGreek,
-  readIndicators, writeIndicators, broadcastReplayCmd,
+  readIndicators, writeIndicators, broadcastReplayCmd, subscribeReplayCmd,
   INDICATORS_DEFAULT, MAX_EMAS,
   type SidePanelKind, type IndicatorCfg,
 } from "@/components/dashboard/es-candles/slotStore";
@@ -299,6 +299,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const [chainGreek, setChainGreekState] = useState<ChainGreek>("gex");
   const [indicators, setIndicatorsState] = useState<IndicatorCfg>(INDICATORS_DEFAULT);
   const [popover, setPopover] = useState<Popover>(null);
+  // Mirrored so the []-dep toggleReplay can read the current panel without
+  // doing it from inside a state updater (see there).
+  const popoverRef = useRef<Popover>(null);
+  popoverRef.current = popover;
   // The shared dock's mount point. State, not a ref: card 0 renders into it via
   // a portal, and a ref wouldn't re-render the tree once the node exists.
   const [dockTarget, setDockTarget] = useState<HTMLDivElement | null>(null);
@@ -327,6 +331,19 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     if (isChainGreek(g)) setChainGreekState(g);
   }, []);
 
+  // Keep `replayActiveRef` honest.
+  //
+  // A card can end a replay by itself — the transport's own "● Live" button is
+  // portaled into this popover, and pressing it broadcasts {on:false}. Without
+  // listening, this file would still believe a replay was running: the popover
+  // would sit open over an empty transport, and the next press of Replay would
+  // take the "already running, just re-open the panel" branch and turn nothing
+  // back on.
+  useEffect(() => subscribeReplayCmd(({ on }) => {
+    replayActiveRef.current = on;
+    if (!on) setPopover((prev) => (prev === "replay" ? null : prev));
+  }), []);
+
   // Close a popover on Escape. Not on outside-click: the panels hover OVER the
   // charts, and the charts are the thing you reach for next — click-away would
   // shut the indicator menu the instant you tried to scrub the chart to see
@@ -343,16 +360,30 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // breakpoint, so a hardcoded offset would drift the moment the window moved.
   useEffect(() => {
     if (!popover) return;
+    // rAF-throttled, and identity-guarded.
+    //
+    // `measure` was called synchronously from a capture-phase scroll listener,
+    // so every scroll ANYWHERE in the document forced a layout
+    // (getBoundingClientRect) and then wrote page state — which re-rendered all
+    // three chart cards. Coalescing to one measure per frame and bailing when
+    // the number hasn't moved makes an open popover free to scroll past.
+    let raf = 0;
     const measure = () => {
+      raf = 0;
       const r = anchorRef.current?.getBoundingClientRect();
-      if (r) setAnchorBottom(r.bottom);
+      if (r) setAnchorBottom((prev) => (Math.abs(prev - r.bottom) < 0.5 ? prev : r.bottom));
+    };
+    const schedule = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(measure);
     };
     measure();
-    window.addEventListener("resize", measure);
-    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, true);
     return () => {
-      window.removeEventListener("resize", measure);
-      window.removeEventListener("scroll", measure, true);
+      if (raf) cancelAnimationFrame(raf);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("scroll", schedule, true);
     };
   }, [popover, cards]);
 
@@ -391,22 +422,32 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // cards do the rest. Closing the popover exits replay — leaving a chart
   // frozen mid-session behind a closed panel with no visible way back is the
   // kind of state that reads as a broken page.
+  //
+  // The side effects are OUTSIDE the state updater. They used to live inside
+  // it, which was already a lie (a setState updater must be pure — React may
+  // invoke it twice, and does under StrictMode), and it became a real hazard
+  // once the page started SUBSCRIBING to the same channel it broadcasts on:
+  // `broadcastReplayCmd` synchronously reaches the new subscriber below, which
+  // calls setPopover again — re-entering the updater we are currently inside.
+  // It happens to converge today because every branch lands on the same value;
+  // it would stop the moment one returned `prev`. Reading the flag first and
+  // acting after is the same behaviour with none of that.
   const toggleReplay = useCallback(() => {
-    setPopover((prev) => {
-      if (prev === "replay") {
-        broadcastReplayCmd({ on: false });
-        replayActiveRef.current = false;
-        return null;
-      }
-      // Only START a replay that isn't already running. Coming back from the
-      // Indicators panel must re-open the transport where you left it, not
-      // rewind to the open — the command resets the cursor.
-      if (!replayActiveRef.current) {
-        broadcastReplayCmd({ on: true });
-        replayActiveRef.current = true;
-      }
-      return "replay";
-    });
+    const closing = popoverRef.current === "replay";
+    if (closing) {
+      replayActiveRef.current = false;
+      setPopover(null);
+      broadcastReplayCmd({ on: false });
+      return;
+    }
+    // Only START a replay that isn't already running. Coming back from the
+    // Indicators panel must re-open the transport where you left it, not
+    // rewind to the open — the command resets the cursor.
+    setPopover("replay");
+    if (!replayActiveRef.current) {
+      replayActiveRef.current = true;
+      broadcastReplayCmd({ on: true });
+    }
   }, []);
 
   const togglePopover = useCallback((which: Exclude<Popover, null>) => {
@@ -417,21 +458,18 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     });
   }, []);
 
-  // The home GEX card embeds this component. It wants exactly the chart, with
-  // its own switcher in the dock and no page chrome — so short-circuit to one
-  // card rather than growing an `embedded` branch through the layout below.
-  if (embedded) {
-    // density="full" pins the home card to the dock it has today. Its width sits
-    // near the compact threshold, and this page's layout work has no business
-    // silently restyling the home dashboard's toolbar.
-    return <EsChartCard slot="embed" sidePanel="rail" leading={leading} embedded density="full" indicators={indicators} />;
-  }
-
-  const multi = cards > 1;
-
   // The three page-level controls, rendered INTO the chart's own dock. The page
   // still owns every piece of state behind them; only the pixels move.
-  const toolbarButtons = (
+  //
+  // Memoised: this node is handed to the (now memo()'d) card as `toolbarExtras`,
+  // so rebuilding it every render would defeat that memo on every parent render.
+  //
+  // Declared ABOVE the `embedded` early-return below, not next to its use site.
+  // A hook after a conditional return is a rules-of-hooks violation, and it is a
+  // live one here: the home GEX card renders this component with `embedded`, and
+  // flipping that prop on the same element would change the hook count between
+  // renders.
+  const toolbarButtons = useMemo(() => (
     <div ref={anchorRef} style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
       <DockButton
         onClick={() => togglePopover("charts")}
@@ -470,7 +508,20 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
       {/* Owns all of its own state — see LayoutPresetButton. */}
       <LayoutPresetButton />
     </div>
-  );
+  ), [popover, cards, indicators, togglePopover, toggleReplay]);
+
+  // The home GEX card embeds this component. It wants exactly the chart, with
+  // its own switcher in the dock and no page chrome — so short-circuit to one
+  // card rather than growing an `embedded` branch through the layout below.
+  if (embedded) {
+    // density="full" pins the home card to the dock it has today. Its width sits
+    // near the compact threshold, and this page's layout work has no business
+    // silently restyling the home dashboard's toolbar.
+    return <EsChartCard slot="embed" sidePanel="rail" leading={leading} embedded density="full" indicators={indicators} />;
+  }
+
+  const multi = cards > 1;
+
 
   return (
     <div className="es-candles-page flex h-full flex-col" style={{ background: HOME_THEME.bg, backgroundImage: HOME_THEME.shellGlow }}>

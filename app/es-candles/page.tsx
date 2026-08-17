@@ -58,7 +58,7 @@ import {
   MAX_CARDS, SHARED_SLOT, ensureMigrated,
   readCardCount, writeCardCount, readSidePanel, writeSidePanel,
   readChainGreek, writeChainGreek,
-  readIndicators, writeIndicators, broadcastReplayCmd,
+  readIndicators, writeIndicators, broadcastReplayCmd, subscribeReplayCmd,
   INDICATORS_DEFAULT, MAX_EMAS,
   type SidePanelKind, type IndicatorCfg,
 } from "@/components/dashboard/es-candles/slotStore";
@@ -299,6 +299,10 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   const [chainGreek, setChainGreekState] = useState<ChainGreek>("gex");
   const [indicators, setIndicatorsState] = useState<IndicatorCfg>(INDICATORS_DEFAULT);
   const [popover, setPopover] = useState<Popover>(null);
+  // Mirrored so the []-dep toggleReplay can read the current panel without
+  // doing it from inside a state updater (see there).
+  const popoverRef = useRef<Popover>(null);
+  popoverRef.current = popover;
   // The shared dock's mount point. State, not a ref: card 0 renders into it via
   // a portal, and a ref wouldn't re-render the tree once the node exists.
   const [dockTarget, setDockTarget] = useState<HTMLDivElement | null>(null);
@@ -326,6 +330,13 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     const g = readChainGreek();
     if (isChainGreek(g)) setChainGreekState(g);
   }, []);
+
+  // Keep `replayActiveRef` honest — a card can end a replay by itself via the
+  // transport's own "● Live" button, which broadcasts {on:false}.
+  useEffect(() => subscribeReplayCmd(({ on }) => {
+    replayActiveRef.current = on;
+    if (!on) setPopover((prev) => (prev === "replay" ? null : prev));
+  }), []);
 
   // Close a popover on Escape. Not on outside-click: the panels hover OVER the
   // charts, and the charts are the thing you reach for next — click-away would
@@ -405,22 +416,26 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // cards do the rest. Closing the popover exits replay — leaving a chart
   // frozen mid-session behind a closed panel with no visible way back is the
   // kind of state that reads as a broken page.
+  //
+  // Side effects OUTSIDE the state updater — an updater must be pure, and the
+  // page now subscribes to the very channel it broadcasts on, so broadcasting
+  // from inside one re-enters it. See the matching note in
+  // components/pages/EsCandles.tsx.
   const toggleReplay = useCallback(() => {
-    setPopover((prev) => {
-      if (prev === "replay") {
-        broadcastReplayCmd({ on: false });
-        replayActiveRef.current = false;
-        return null;
-      }
-      // Only START a replay that isn't already running. Coming back from the
-      // Indicators panel must re-open the transport where you left it, not
-      // rewind to the open — the command resets the cursor.
-      if (!replayActiveRef.current) {
-        broadcastReplayCmd({ on: true });
-        replayActiveRef.current = true;
-      }
-      return "replay";
-    });
+    if (popoverRef.current === "replay") {
+      replayActiveRef.current = false;
+      setPopover(null);
+      broadcastReplayCmd({ on: false });
+      return;
+    }
+    // Only START a replay that isn't already running. Coming back from the
+    // Indicators panel must re-open the transport where you left it, not
+    // rewind to the open — the command resets the cursor.
+    setPopover("replay");
+    if (!replayActiveRef.current) {
+      replayActiveRef.current = true;
+      broadcastReplayCmd({ on: true });
+    }
   }, []);
 
   const togglePopover = useCallback((which: Exclude<Popover, null>) => {

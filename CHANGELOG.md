@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-08-17 — Mobile ES Candles: price-axis (Y) zoom (`components/mobile/pages/MobileEsCandles.tsx`)
+
+The phone ES chart could only zoom time; the price axis was pinned to autoscale. Added a ± stepper floating inside the plot's right edge (`right: 52`, clears the price gutter) that drives `autoscaleInfoProvider` — it squeezes/widens the autoscaled range around its own midpoint, 0.4x–12x, 1.35x multiplicative per tap, with a third button showing the live factor that resets it. Autoscale deliberately stays ON so new bars keep re-centring instead of the view drifting off price. Also enabled native price-gutter drag scaling plus double-tap reset (`axisPressedMouseMove.price`, `axisDoubleClickReset`); a gutter drag turns autoscale off and every stepper tap calls `setAutoScale(true)`, so the stepper is always the way back out. In-plot vertical drag stays off (`vertTouchDrag: false`) — unseparable from a horizontal pan on touch. Bubbles, the GEX rail and the 0DTE ladder follow for free (they map prices through the candle series and the existing rAF driver samples that mapping). Full write-up in `md files/CHANGELOG.md`.
+
+## 2026-08-17 — Right-click → "Add to Notes" anywhere (`components/shared/NoteClipMenu.tsx` NEW, `components/shared/notes.tsx`, `NotesDock.tsx`, `LayoutShell.tsx`)
+
+New `NoteClipMenu`, mounted once in `LayoutShell`, puts a themed right-click menu on every dashboard route: highlighted text files straight into the Notes dock, and a right-click on any chart or Card files a JPEG snapshot of it (via `lib/snapshot`'s `captureToCanvas`, downscaled to 720px) plus an auto label like "ES Candles — GEX Chart". `notes.tsx` gained `img`/`src` on `Note`, a `cb-notes-changed` broadcast so the toolbar badge and open dock update the moment a note is added from anywhere, and a quota-safe `writeStore` that sheds the oldest clip images instead of silently losing the write. Full write-up in `md files/CHANGELOG.md`.
+
 ## 2026-08-02 (b) — ICT: Turtle Soup rebuilt to the actual model (`lib/calculations/ictPlays.ts`)
 
 Turtle Soup on the play layer was a stand-in: any EQH/EQL cluster swept with a close back inside, entered at the raid candle, stopped at the nearest structural pivot. Rebuilt against theinnercircletraders.com's write-up, per the owner's calls on each rule:

@@ -71,6 +71,13 @@ export default function ChipLogo({
         alt={sym}
         width={size}
         height={size}
+        // Stage 2 is a same-origin URL that 302s to a third-party host, and
+        // drawing the result TAINTS a capture canvas — html2canvas cannot tell,
+        // because it classifies images by the src string (lib/snapshot.ts
+        // gotcha 9). Tagging it lets the snapshot engine swap this chip for its
+        // ticker-text form instead of losing the whole PNG to a SecurityError
+        // on toBlob(). Stage 1 is a real same-origin file and always draws.
+        {...(stage === "proxy" ? { "data-snap-untrusted": "1" } : {})}
         // The chips sit inside a scrolling week strip — most are off-screen at
         // first paint, so let the browser defer them instead of racing them all.
         loading="lazy"

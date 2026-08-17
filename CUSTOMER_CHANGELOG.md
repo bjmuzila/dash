@@ -4,6 +4,12 @@ A plain-language log of updates to the dashboard. Each day compiles into one sec
 
 
 
+## Monday 8/17/2026
+
+* **Pinch-free price zoom on the mobile ES chart.** The phone ES Candles chart now zooms the price scale as well as time — tap the + / − buttons at the right edge of the chart (or drag the price numbers themselves, double-tap them to reset) to stretch a quiet range out or fit a wide one on screen, and the GEX bubbles, GEX rail and 0DTE ladder stay locked to price as you do it.
+
+* **Right-click anything to save it to Notes.** Highlight any wording and right-click to file it in your Notes panel, or right-click a chart or panel with nothing selected to save a picture of it — each note is labelled with the page and chart it came from, and the image expands with a click.
+
 ## Sunday 8/16/2026
 
 * **ES Candles got a rebuilt GEX bubble layer.** Bubble size is now straight proportional to net GEX so the dominant wall is visibly the biggest mark on the chart, the chart opens on the full 9:30–4:00 session with the last five sessions behind it to scroll through, and the ticker picker adds NDX, VIX and the mega-caps alongside ES, SPY and QQQ.

@@ -44,6 +44,19 @@
  *  7. `backdrop-filter` is not implemented at all. Frosted panels come out as
  *     their raw low-alpha background over whatever the capture background is,
  *     which reads as washed out. We swap them to the solid panel color.
+ *  9. `allowTaint:false` does NOT protect a SAME-ORIGIN url that REDIRECTS to a
+ *     foreign host. html2canvas decides whether to request an image in CORS mode
+ *     by looking at the src string: a relative `/proxy/ticker-logo?...` reads as
+ *     same-origin, so it is fetched without `crossOrigin`, the 302 lands on a
+ *     third-party CDN, and the drawn image taints the canvas anyway — `toBlob()`
+ *     then throws SecurityError and the whole PNG is lost over a 16px logo. The
+ *     src heuristic cannot see the redirect, so those images are REMOVED from
+ *     the clone instead (`stripUntrustedImages`) and replaced with a ticker-text
+ *     placeholder. See `allowTaint` in SnapOptions.
+ * 10. `canvas.toBlob()` yields NULL when the bitmap is too big to encode. A
+ *     full-page capture of a long list at devicePixelRatio 2 gets there easily,
+ *     so the scale is clamped to a pixel budget before rendering and the encode
+ *     retries once at half size.
  */
 
 import { HOME_THEME } from "@/components/shared/homeTheme";
@@ -163,6 +176,13 @@ export type SnapOptions = {
    * allowTaint:false html2canvas SKIPS any image it cannot read, so the cost is
    * a missing logo rather than a missing snapshot.
    *
+   * html2canvas's own skipping is NOT enough on its own — see gotcha 9: it
+   * classifies by the src string, so a same-origin URL that redirects off-site
+   * is fetched in no-CORS mode and taints regardless of this flag. So this flag
+   * ALSO switches on `stripUntrustedImages()`, which drops those images from the
+   * clone (anything `[data-snap-untrusted]`, anything under `/proxy/`, and any
+   * cross-origin src) and leaves a ticker-text chip in their place.
+   *
    * An option rather than the default because the trade runs the other way for
    * the chart panels: they carry no foreign images, and allowTaint:true is the
    * more forgiving setting for anything that fails a CORS preflight.
@@ -234,6 +254,99 @@ function canvasCoversElement(el: HTMLElement): boolean {
   if (r.width <= 0 || r.height <= 0) return false;
   const coverage = (c.width * c.height) / (r.width * r.height);
   return coverage >= 0.9;
+}
+
+/**
+ * Chromium refuses to allocate a canvas past ~16384px on either axis, and
+ * `toBlob()` returns null well before that when the total pixel count gets
+ * large. The budget below is deliberately conservative: a capture that comes
+ * back one third smaller is still a capture, whereas a null blob is nothing.
+ */
+const MAX_CANVAS_DIM = 16384;
+const MAX_CANVAS_PIXELS = 24_000_000;
+
+/** Clamp a requested scale so the rendered bitmap stays inside the budget. */
+function fitScale(scale: number, cssW: number, cssH: number): number {
+  if (!(cssW > 0) || !(cssH > 0)) return scale;
+  const byDim = Math.min(MAX_CANVAS_DIM / cssW, MAX_CANVAS_DIM / cssH);
+  const byArea = Math.sqrt(MAX_CANVAS_PIXELS / (cssW * cssH));
+  // Never scale UP past what was asked for, and never below 0.5 — a capture
+  // that unreadable is not worth producing.
+  return Math.max(0.5, Math.min(scale, byDim, byArea));
+}
+
+/** Half-size copy of a canvas, for the toBlob retry. Null if it can't be made. */
+function downscaleCanvas(src: HTMLCanvasElement, factor: number): HTMLCanvasElement | null {
+  try {
+    const w = Math.max(1, Math.round(src.width * factor));
+    const h = Math.max(1, Math.round(src.height * factor));
+    const out = document.createElement("canvas");
+    out.width = w;
+    out.height = h;
+    const ctx = out.getContext("2d");
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(src, 0, 0, w, h);
+    return out;
+  } catch {
+    return null; // tainted source — a copy would be tainted too
+  }
+}
+
+/**
+ * Gotcha 9: remove images that would taint the canvas, so `toBlob()` can export.
+ *
+ * Risky = tagged `[data-snap-untrusted]` (the caller knows the URL redirects),
+ * anything under `/proxy/` (our resolvers 302 to third-party hosts), or a plain
+ * cross-origin src. Each one is replaced by a same-size chip carrying the img's
+ * `alt` text — visually the same fallback ChipLogo shows when a logo 404s, so a
+ * capture degrades to "ticker instead of logo" rather than failing outright.
+ *
+ * Runs on the CLONE only; the live page keeps its logos.
+ */
+function stripUntrustedImages(doc: Document, root: HTMLElement) {
+  const imgs = Array.from(root.querySelectorAll<HTMLImageElement>("img"));
+  // Tag test, not `instanceof`: these nodes belong to html2canvas's about:blank
+  // iframe, so they are instances of THAT window's HTMLImageElement and every
+  // `instanceof` against ours is false.
+  if (root.tagName === "IMG") imgs.push(root as HTMLImageElement);
+  const pageUrl = typeof window !== "undefined" ? window.location.href : "";
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  for (const img of imgs) {
+    const raw = img.getAttribute("src") || "";
+    if (!raw || raw.startsWith("data:")) continue;
+    let risky = img.hasAttribute("data-snap-untrusted");
+    if (!risky) {
+      try {
+        // Resolve against the LIVE page URL. `doc.baseURI` in the clone is
+        // about:blank, which makes every relative src unparseable — that would
+        // strip the mirrored /logos/*.png files, which are the ones that work.
+        const u = new URL(raw, pageUrl || undefined);
+        risky = u.origin !== origin || u.pathname.startsWith("/proxy/");
+      } catch {
+        risky = true; // unparseable src — assume the worst, it's one logo
+      }
+    }
+    if (!risky) continue;
+
+    const w = Number(img.getAttribute("width")) || img.width || 0;
+    const h = Number(img.getAttribute("height")) || img.height || 0;
+    const label = (img.getAttribute("alt") || "").slice(0, 4);
+    const chip = doc.createElement("span");
+    chip.textContent = label;
+    chip.setAttribute("style", [
+      "display:inline-flex", "align-items:center", "justify-content:center",
+      "box-sizing:border-box", "overflow:hidden", "line-height:1",
+      w ? `width:${w}px` : "", h ? `height:${h}px` : "",
+      "border-radius:7px",
+      `background:${HOME_THEME.cyan}1A`,
+      `border:1px solid ${HOME_THEME.border}`,
+      `color:${HOME_THEME.cyan}`,
+      "font-weight:800",
+      `font-size:${Math.max(9, Math.round((h || 24) / 3))}px`,
+    ].filter(Boolean).join(";"));
+    img.replaceWith(chip);
+  }
 }
 
 /**
@@ -492,7 +605,7 @@ async function captureToCanvasInner(
   }
 
   const { default: html2canvas } = await import("html2canvas");
-  const scale = opts.scale ?? snapScale();
+  const requestedScale = opts.scale ?? snapScale();
   const bandShift = framed ? SNAP_BAND_H + SNAP_BAND_GAP : 0;
 
   // ── Gotcha 5: live <canvas> bitmaps ───────────────────────────────────────
@@ -602,6 +715,15 @@ async function captureToCanvasInner(
     ? opts.width ?? (fitContent ? (el.scrollWidth || visibleW) : visibleW)
     : opts.width;
 
+  // Gotcha 10: clamp the scale to the canvas budget. A whole-page capture of a
+  // long list (the /economic-calendar earnings tab, every row expanded) at
+  // devicePixelRatio 2 renders a bitmap big enough that toBlob() hands back
+  // null — no error, no PNG. Measured against the dimensions actually being
+  // rendered, so ordinary panels keep the full 2x.
+  const budgetW = contentW || Math.round(el.getBoundingClientRect().width) || el.clientWidth || 0;
+  const budgetH = captureH || el.scrollHeight || 0;
+  const scale = fitScale(requestedScale, budgetW, budgetH);
+
   const base = await html2canvas(el, {
     backgroundColor: bg,
     useCORS: true,
@@ -670,6 +792,12 @@ async function captureToCanvasInner(
       // for that via hiddenShift, plain mode assumes the chrome is not stacked
       // above a chart. That holds everywhere this is used today.)
       clone.querySelectorAll('[data-noshot="1"]').forEach((n) => n.remove());
+
+      // Gotcha 9: drop images the canvas would not be allowed to export. AFTER
+      // the canvas pairing above (an <img> swap cannot move a <canvas>, but the
+      // ordering rule there is absolute) and only when the caller has declared
+      // the subtree taint-sensitive.
+      if (opts.allowTaint === false) stripUntrustedImages(doc, clone);
 
       if (!framed) {
         // Plain mode drops the chrome here (framed mode does it at the very end
@@ -871,10 +999,24 @@ export async function captureToDataUrl(el: HTMLElement, opts: SnapOptions = {}):
   return (await captureToCanvas(el, opts)).toDataURL("image/png");
 }
 
-/** Capture to a PNG blob. */
+/**
+ * Capture to a PNG blob.
+ *
+ * Gotcha 10: `toBlob()` reports "too big to encode" as a null blob rather than
+ * an error. The scale is already clamped to a pixel budget during the render,
+ * but the budget is a guess about the encoder's limit and the encode also has
+ * to fit in whatever memory the tab has left — so a null result retries once at
+ * half size instead of throwing away a capture that already succeeded.
+ */
 export async function captureToBlob(el: HTMLElement, opts: SnapOptions = {}): Promise<Blob> {
   const canvas = await captureToCanvas(el, opts);
-  const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/png"));
+  const encode = (c: HTMLCanvasElement) =>
+    new Promise<Blob | null>((res) => c.toBlob(res, "image/png"));
+  let blob = await encode(canvas);
+  if (!blob) {
+    const half = downscaleCanvas(canvas, 0.5);
+    if (half) blob = await encode(half);
+  }
   if (!blob) throw new Error("canvas.toBlob returned null");
   return blob;
 }

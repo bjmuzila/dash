@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CandlestickSeries, ColorType, CrosshairMode, LineStyle, createChart } from "lightweight-charts";
 import type {
+  AutoscaleInfo,
   CandlestickData,
   IChartApi,
   IPriceLine,
@@ -68,6 +69,24 @@ import { M_COLOR, MONO, RADIUS, TYPE, fmtPrice, noTapHighlight, rgba } from "../
  * Gamma flip and the two walls are SPX prices; this chart is ES. They are drawn
  * only when the live ES/SPX pair gives a trustworthy basis (see useMobileGex).
  * Off-hours the lines disappear rather than sit at a wrong price.
+ *
+ * PRICE-AXIS ZOOM
+ * ---------------
+ * Two independent ways in, because neither alone is enough on a phone:
+ *
+ *   - the ± stepper floating over the plot's right edge. It drives
+ *     `autoscaleInfoProvider`: autoscale still computes the range the bars need,
+ *     and this squeezes or widens it around its own midpoint. Because autoscale
+ *     stays ON, new bars keep re-centring the view, so a zoomed-in chart doesn't
+ *     drift off price the way a frozen range does.
+ *   - dragging the price gutter itself (`axisPressedMouseMove.price`), for fine
+ *     control, plus double-tap on the gutter to reset. Native axis drag turns
+ *     autoscale off; any stepper tap calls `setAutoScale(true)` again, so the
+ *     stepper is always the way back out.
+ *
+ * Drag-inside-the-plot vertical scaling stays off (`vertTouchDrag: false`): on a
+ * touchscreen it cannot be separated from a horizontal pan, and users end up
+ * with a squashed axis and no idea how they got there.
  */
 
 const INTERVALS: { id: "1" | "5"; label: string }[] = [
@@ -115,6 +134,47 @@ const BUBBLE_SCALE_MIN = 0.4;
 const BUBBLE_SCALE_MAX = 3;
 const BUBBLE_SCALE_STEP = 0.1;
 const BUBBLE_SCALE_DEFAULT = 1;
+
+/**
+ * Price-axis zoom.
+ *
+ * A multiplier on the autoscaled price range: 1 = exactly what autoscale wants,
+ * >1 narrows it (zoom in, fewer points per screen), <1 widens it (zoom out, more
+ * context). 0.4 shows ~2.5× the day's range — enough to put an overnight session
+ * and both walls on screen at once; 12 gets down to a couple of points across
+ * 390px, which is about as far as tick-level scalping needs.
+ *
+ * The step is multiplicative, so each tap feels the same size at every level.
+ */
+const Y_ZOOM_MIN = 0.4;
+const Y_ZOOM_MAX = 12;
+const Y_ZOOM_STEP = 1.35;
+const Y_ZOOM_DEFAULT = 1;
+
+/**
+ * Squeeze/widen the autoscaled range around its midpoint.
+ *
+ * Anchoring on the midpoint of what autoscale ASKED FOR (not on the last price,
+ * and not on a frozen range) is what keeps this usable without a vertical pan
+ * gesture: the anchor is the centre of the bars currently in view, so zooming in
+ * pulls toward the visible price action and panning the time axis re-anchors.
+ */
+function zoomedAutoscale(
+  base: () => AutoscaleInfo | null,
+  zoom: number,
+): AutoscaleInfo | null {
+  const info = base();
+  if (!info?.priceRange) return info;
+  if (!(zoom > 0) || Math.abs(zoom - 1) < 1e-6) return info;
+  const { minValue, maxValue } = info.priceRange;
+  if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) return info;
+  const mid = (minValue + maxValue) / 2;
+  // A degenerate range (one flat bar) has no half-width to scale — invent a
+  // small one so zooming still does something instead of silently no-op'ing.
+  const half = Math.abs(maxValue - minValue) / 2 || Math.max(0.25, Math.abs(mid) * 1e-4);
+  const next = half / zoom;
+  return { ...info, priceRange: { minValue: mid - next, maxValue: mid + next } };
+}
 
 /** One labelled switch row in the overlays sheet. */
 function OverlayToggle({
@@ -187,6 +247,58 @@ function OverlayToggle({
   );
 }
 
+/**
+ * One button of the price-axis zoom stepper.
+ *
+ * 34px square: the plot is only ~344px wide with a gutter open, so this is the
+ * smallest square that still clears the 44px-with-padding tap target once the
+ * 5px of surrounding gap is counted. `touchAction: "none"` keeps a fast repeat
+ * tap from being read as a double-tap zoom by the browser.
+ */
+function YZoomButton({
+  label,
+  title,
+  onPress,
+  disabled,
+  emphasis,
+}: {
+  label: string;
+  title: string;
+  onPress: () => void;
+  disabled?: boolean;
+  emphasis?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={onPress}
+      style={{
+        ...noTapHighlight,
+        width: 34,
+        height: 34,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        border: "none",
+        background: emphasis ? rgba(M_COLOR.cyan, 0.14) : "transparent",
+        // Literal, not rgba(M_COLOR.faint, …): the token is already an rgba()
+        // string and the helper only parses hex.
+        color: disabled ? "rgba(255,255,255,0.2)" : emphasis ? M_COLOR.cyan : M_COLOR.text,
+        fontSize: emphasis ? TYPE.micro : 17,
+        fontWeight: 800,
+        lineHeight: 1,
+        cursor: disabled ? "default" : "pointer",
+        touchAction: "none",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 export default function MobileEsCandles() {
   const [interval, setInterval] = useState<"1" | "5">("5");
   const [showLevels, setShowLevels] = useState(true);
@@ -197,6 +309,7 @@ export default function MobileEsCandles() {
   // later turns them off anyway.
   const [showBubbles, setShowBubbles] = useState(true);
   const [bubbleScale, setBubbleScale] = useState(BUBBLE_SCALE_DEFAULT);
+  const [yZoom, setYZoom] = useState(Y_ZOOM_DEFAULT);
   const [ovlOpen, setOvlOpen] = useState(false);
   const { sessionCandles, connected } = useEsCandles(true, 2, interval === "1" ? 1 : 5);
   const g = useMobileGex("oi-vol");
@@ -231,6 +344,10 @@ export default function MobileEsCandles() {
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const linesRef = useRef<IPriceLine[]>([]);
   const didFitRef = useRef(false);
+  // Read inside autoscaleInfoProvider, which is installed once at series
+  // creation and must not be re-created on every zoom tap.
+  const yZoomRef = useRef(yZoom);
+  yZoomRef.current = yZoom;
 
   // ── chart lifecycle ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -264,12 +381,17 @@ export default function MobileEsCandles() {
         secondsVisible: false,
         rightOffset: 2,
       },
-      // Touch: one finger pans, two fingers pinch-zoom the time axis. The
-      // vertical drag-to-scale gesture is deliberately off — on a phone it is
-      // impossible to separate from a pan and users end up with a squashed
-      // price axis they can't recover from without a reload.
+      // Touch: one finger pans, two fingers pinch-zoom the time axis. Vertical
+      // drag INSIDE the plot stays off — on a phone it is impossible to separate
+      // from a pan. Price zoom lives on the axis itself (drag the gutter,
+      // double-tap it to reset) and on the ± stepper; see the header note.
       handleScroll: { vertTouchDrag: false, horzTouchDrag: true, mouseWheel: true, pressedMouseMove: true },
-      handleScale: { pinch: true, axisPressedMouseMove: { time: true, price: false }, mouseWheel: true },
+      handleScale: {
+        pinch: true,
+        axisPressedMouseMove: { time: true, price: true },
+        axisDoubleClickReset: { time: true, price: true },
+        mouseWheel: true,
+      },
       crosshair: { mode: CrosshairMode.Normal },
       localization: {
         priceFormatter: (p: number) => p.toFixed(2),
@@ -290,6 +412,7 @@ export default function MobileEsCandles() {
       downColor: "#ff5b5b",
       wickDownColor: "#ff5b5b",
       borderVisible: false,
+      autoscaleInfoProvider: (base) => zoomedAutoscale(base, yZoomRef.current),
     });
 
     chartRef.current = chart;
@@ -336,6 +459,41 @@ export default function MobileEsCandles() {
   useEffect(() => {
     didFitRef.current = false;
   }, [interval]);
+
+  // ── price-axis zoom ────────────────────────────────────────────────────────
+  // setAutoScale(true) does two jobs here: it re-runs autoscaleInfoProvider so
+  // the new multiplier lands, and it releases the manual range a price-gutter
+  // drag would have left behind — so the stepper is always the way back.
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    try {
+      series.priceScale().setAutoScale(true);
+    } catch {
+      /* series torn down mid-update */
+    }
+  }, [yZoom]);
+
+  const stepYZoom = useCallback((dir: 1 | -1) => {
+    setYZoom((z) => {
+      const next = dir > 0 ? z * Y_ZOOM_STEP : z / Y_ZOOM_STEP;
+      const clamped = Math.min(Y_ZOOM_MAX, Math.max(Y_ZOOM_MIN, next));
+      // Snap back to exactly 1 when a step lands next to it, so the default is
+      // reachable by tapping rather than only by the reset button.
+      return Math.abs(clamped - 1) < 0.06 ? 1 : clamped;
+    });
+  }, []);
+
+  // The gutter drag can leave autoscale off with the multiplier still at 1, in
+  // which case "reset" has no state change to react to — force it directly.
+  const resetYZoom = useCallback(() => {
+    setYZoom(Y_ZOOM_DEFAULT);
+    try {
+      seriesRef.current?.priceScale().setAutoScale(true);
+    } catch {
+      /* series torn down mid-update */
+    }
+  }, []);
 
   // ── candles ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -688,6 +846,54 @@ export default function MobileEsCandles() {
               ref={bubbleCanvasRef}
               style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 2 }}
             />
+          )}
+          {/* Price-axis zoom stepper. Sits just inside the plot's right edge —
+              `right: 52` clears the price gutter so it never covers an axis
+              label and never swallows a gutter drag. zIndex 3 keeps it above
+              the bubble canvas. */}
+          {sessionCandles.length > 0 && (
+            <div
+              style={{
+                position: "absolute",
+                right: 52,
+                top: "50%",
+                transform: "translateY(-50%)",
+                zIndex: 3,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "stretch",
+                borderRadius: RADIUS.md,
+                overflow: "hidden",
+                border: `1px solid ${rgba("#ffffff", 0.1)}`,
+                background: "rgba(5,8,13,0.66)",
+                backdropFilter: "blur(6px)",
+              }}
+            >
+              <YZoomButton
+                label="+"
+                title="Zoom in price axis"
+                onPress={() => stepYZoom(1)}
+                disabled={yZoom >= Y_ZOOM_MAX - 1e-6}
+              />
+              <span style={{ height: 1, background: rgba("#ffffff", 0.08) }} />
+              <YZoomButton
+                label="−"
+                title="Zoom out price axis"
+                onPress={() => stepYZoom(-1)}
+                disabled={yZoom <= Y_ZOOM_MIN + 1e-6}
+              />
+              {Math.abs(yZoom - Y_ZOOM_DEFAULT) > 1e-6 && (
+                <>
+                  <span style={{ height: 1, background: rgba("#ffffff", 0.08) }} />
+                  <YZoomButton
+                    label={`${yZoom.toFixed(1)}×`}
+                    title="Reset price zoom"
+                    onPress={resetYZoom}
+                    emphasis
+                  />
+                </>
+              )}
+            </div>
           )}
           {sessionCandles.length === 0 && (
             <div style={{ position: "absolute", inset: 0, display: "flex" }}>

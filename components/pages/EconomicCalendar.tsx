@@ -173,9 +173,18 @@ export default function EconomicCalendarPage() {
    * 2. Ticker logos that fall through to /proxy/ticker-logo end up 302'd to a
    *    third-party host. Drawing one of those into the canvas TAINTS it and
    *    toBlob then throws SecurityError, killing the whole screenshot over a
-   *    16px image. `useCORS` + `allowTaint:false` makes html2canvas skip any
-   *    image it cannot read instead: a missing logo, not a missing screenshot.
-   *    Locally-mirrored logos in public/logos are same-origin and always draw.
+   *    16px image — which is exactly what the earnings tab was doing, because
+   *    that tab is nothing BUT logo chips and several of its names are not
+   *    mirrored yet.
+   *
+   *    `allowTaint:false` alone did not fix it: html2canvas decides whether to
+   *    request an image in CORS mode by looking at the src STRING, and
+   *    `/proxy/ticker-logo?...` reads as same-origin, so it never saw the
+   *    redirect coming (lib/snapshot.ts gotcha 9). The flag now also makes the
+   *    engine REMOVE those images from the clone — ChipLogo tags the proxy
+   *    stage `data-snap-untrusted` — leaving the same ticker-text chip the page
+   *    shows when a logo 404s. Locally-mirrored logos in public/logos are real
+   *    same-origin files and still draw normally.
    */
   const takeShot = useCallback(async () => {
     const el = shotRef.current;
@@ -210,6 +219,10 @@ export default function EconomicCalendarPage() {
         // canvas and toBlob then throws. The engine defaults to allowTaint:true
         // for the chart panels, which carry no foreign images; this page does.
         allowTaint: false,
+        // A logo that never answers must not hold the capture: html2canvas
+        // waits 15s per image by default, and the earnings tab has one chip per
+        // name. A skipped logo costs a chip, not the PNG.
+        imageTimeout: 4000,
         // The scroll container is expanded to its natural height above, so the
         // element's own box is already the full list. `height` is a pure output
         // crop, unlike windowWidth/windowHeight which REFLOW the cloned document
@@ -637,6 +650,9 @@ export default function EconomicCalendarPage() {
             onClick={takeShot}
             disabled={shot === "working"}
             title="Save the full calendar as a PNG"
+            // The capture includes this toolbar, so without this the PNG shows
+            // the button frozen mid-click on "…". Dropped from the clone only.
+            data-noshot="1"
             style={{
               ...homeButtonStyle,
               color: shot === "failed" ? HT.red : undefined,
@@ -645,7 +661,7 @@ export default function EconomicCalendarPage() {
           >
             {shot === "working" ? "…" : shot === "failed" ? "✕ failed" : "⧉ Shot"}
           </button>
-          <button onClick={load} disabled={loading} style={{ ...homeButtonStyle }}>
+          <button onClick={load} disabled={loading} data-noshot="1" style={{ ...homeButtonStyle }}>
             {loading ? "…" : "↻ Now"}
           </button>
         </div>

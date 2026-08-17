@@ -94,7 +94,7 @@ import {
   BUBBLE_STYLE, BUBBLE_REF_FLOOR_FRAC, BUBBLE_LEVELS_RANGE, BUBBLE_INTENSITY_RANGE, BUBBLE_SIZE_RANGE,
   readSlot, writeSlot, broadcastSlot, subscribeSlot,
   isBubbleBucket,
-  subscribeReplayCmd, INDICATORS_DEFAULT,
+  subscribeReplayCmd, broadcastReplayCmd, INDICATORS_DEFAULT,
   type BubbleBucket, type SlotId, type SlotBlob, type IndicatorCfg,
 } from "./slotStore";
 import { ema as emaOf, bollinger, rsi as rsiOf, fmtCountdown, EMA_COLORS, type BollingerBands } from "./indicators";
@@ -779,7 +779,13 @@ function EsChartCard({
   const bubbleIntensityRef = useRef(BUBBLE_STYLE.intensity);
   const bubbleSizeRef = useRef(BUBBLE_STYLE.size);
   // Replay cursor, mirrored for the imperative overlay draw (null = live).
-  const replayOnRef = useRef(false);
+  // Only the ENGAGED flag is mirrored: nothing imperative cares whether the
+  // transport is merely open. (replayOnRef used to exist here and became dead
+  // when the two flags were split.)
+  const replayEngagedRef = useRef(false);
+  // `hostedReplay` mirrored, so the []-dep exitReplay callback can read it
+  // without taking it as a dependency.
+  const hostedReplayRef = useRef(false);
   const replayTsRef = useRef<number | null>(null);
   // Imperative redraw hook set up by the overlay effect; apply() calls it when a
   // new gex snapshot lands so in-place column updates repaint immediately.
@@ -1047,6 +1053,25 @@ function EsChartCard({
   // can watch price and gamma build from the open forward. The rail / TPO /
   // level lines stay live — a snapshot or a full-day profile, nothing to replay.
   const [replayOn, setReplayOn] = useState(false);
+  /**
+   * Has the user actually STARTED replaying, as distinct from having the
+   * transport open?
+   *
+   * Opening the panel used to be the same event as clamping the chart: the
+   * command handler set replayOn AND replayIdx=0, so a single click on Replay
+   * threw the chart back to the first bar of the session. Worse, `replayOn`
+   * keys the gamma backfill (it widens the window to 4 days and drops the
+   * server-side ladder truncation), so pressing it re-fired a ~1.6MB request —
+   * and pressing it again to undo fired a second one. An accidental click cost
+   * a full reload of the page's heaviest data, twice.
+   *
+   * So the two are split. Opening the transport is inert: the chart stays live,
+   * the cursor parks at the live edge, and nothing refetches. The chart is only
+   * clamped once the user MOVES the slider, steps a bar, presses play, or picks
+   * a different day/session — every one of which is an unambiguous "I want to
+   * replay". Closing the panel disengages.
+   */
+  const [replayEngaged, setReplayEngaged] = useState(false);
   const [replayIdx, setReplayIdx] = useState(0);
   const [replayPlaying, setReplayPlaying] = useState(false);
   const [replaySpeed, setReplaySpeed] = useState(2); // bars per second
@@ -1099,9 +1124,52 @@ function EsChartCard({
       : day;
     return src.map((r) => r.timestamp);
   }, [rows, activeReplayDay, replaySession]);
-  const replayTs = replayOn && replayFrames.length
+  // NOT `replayOn` — see replayEngaged. This is the one value that clamps the
+  // candles, the heatmap, the bubbles and the rail, so gating it here is what
+  // makes an open-but-untouched transport a no-op everywhere at once.
+  const replayTs = replayOn && replayEngaged && replayFrames.length
     ? replayFrames[Math.min(replayIdx, replayFrames.length - 1)]
     : null;
+  /**
+   * Where the transport's slider and readout sit.
+   *
+   * Before the user engages, that is the LIVE EDGE — the last bar — not bar 0.
+   * A transport that opens parked at 09:30 while the chart shows the whole
+   * session is lying about what you are looking at, and it makes the first drag
+   * jump backwards through the entire day.
+   */
+  const replayViewIdx = replayFrames.length
+    ? (replayEngaged ? Math.min(replayIdx, replayFrames.length - 1) : replayFrames.length - 1)
+    : 0;
+  /** Engage at `idx`, stop playback. Every control that means "replay this" calls it. */
+  const engageReplayAt = useCallback((idx: number) => {
+    setReplayEngaged(true);
+    setReplayPlaying(false);
+    setReplayIdx(Math.max(0, idx));
+  }, []);
+  /**
+   * Back to live, completely.
+   *
+   * `replayDay` is reset HERE rather than on entry, which matters more than it
+   * looks: `activeReplayDay` feeds the gamma backfill's shapeKey unconditionally
+   * — in live mode too. Clearing it on entry meant that after replaying a past
+   * session, merely RE-OPENING the transport flipped activeReplayDay back to
+   * today, changed the key, wiped the column store and re-fired the whole
+   * ~1.6MB backfill. Clearing on exit leaves the key stable across an open.
+   */
+  const exitReplay = useCallback(() => {
+    setReplayPlaying(false);
+    setReplayEngaged(false);
+    setReplayOn(false);
+    setReplayDay(null);
+    // Tell the ROW, not just this card. On /es-candles the transport is
+    // portaled into the page's Replay popover, so "● Live" pressed inside it
+    // has to reach the page — otherwise the popover stays open over an empty
+    // transport and the page's replayActiveRef still believes a replay is
+    // running, which makes the next press of Replay a no-op. Our own
+    // subscription re-applies the same values, which React bails on.
+    if (hostedReplayRef.current) broadcastReplayCmd({ on: false });
+  }, []);
   // Read by the channel subscriber, which is a []-dep useCallback and so cannot
   // close over the frames. Assigned during render, like replayGexRef below.
   const replayFramesRef = useRef<number[]>(replayFrames);
@@ -1111,7 +1179,8 @@ function EsChartCard({
   // after the owner's last broadcast sits at bar 0 — invisible during playback
   // (the next tick corrects it) and stuck until you scrub while paused.
   const sharedRpTsRef = useRef<number | null>(null);
-  useEffect(() => { replayOnRef.current = replayOn; }, [replayOn]);
+  useEffect(() => { replayEngagedRef.current = replayEngaged; }, [replayEngaged]);
+  useEffect(() => { hostedReplayRef.current = hostedReplay; }, [hostedReplay]);
   useEffect(() => { replayTsRef.current = replayTs; }, [replayTs]);
   // Keep the cursor in range as live bars extend the session.
   useEffect(() => {
@@ -1215,10 +1284,10 @@ function EsChartCard({
   useEffect(() => {
     if (!shared || !replayOwner) return;
     broadcastSlot(cfgSlot, {
-      rpOn: replayOn, rpPlaying: replayPlaying, rpTs: replayTs,
+      rpOn: replayOn, rpEngaged: replayEngaged, rpPlaying: replayPlaying, rpTs: replayTs,
       rpSpeed: replaySpeed, rpDay: replayDay, rpSession: replaySession,
     });
-  }, [shared, replayOwner, cfgSlot, replayOn, replayPlaying, replayTs, replaySpeed, replayDay, replaySession]);
+  }, [shared, replayOwner, cfgSlot, replayOn, replayEngaged, replayPlaying, replayTs, replaySpeed, replayDay, replaySession]);
 
   // ── Page-hosted Replay button ──────────────────────────────────────────────
   // The toolbar above owns the BUTTON; this card owns the STATE, because only it
@@ -1228,9 +1297,15 @@ function EsChartCard({
   useEffect(() => subscribeReplayCmd(({ on }) => {
     setReplayOn(on);
     setReplayPlaying(false);
-    // Entering: rewind to the open and drop any day pick from a previous
-    // session, matching what the card's own Replay button always did.
-    if (on) { setReplayIdx(0); setReplayDay(null); }
+    // Entering is INERT. This used to rewind to the open (setReplayIdx(0)),
+    // which is what made a stray click on Replay collapse the chart to the
+    // first bar of the session. The cursor is parked at the live edge by
+    // replayViewIdx instead, and nothing clamps until the user engages.
+    setReplayEngaged(false);
+    // replayDay is NOT cleared here — see exitReplay. Clearing it on entry is
+    // what made re-opening the transport re-fire the gamma backfill.
+    if (on) setReplayIdx(0);
+    else setReplayDay(null);
   }), []);
 
   // Follower re-snap. Its frames can arrive (or change day / interval) long
@@ -1304,7 +1379,7 @@ function EsChartCard({
   // one text node — and because `rows` was in the memo's deps it also invalidated
   // on every candle batch. The clock now writes its own <div>.
   const countdownElRef = useRef<HTMLDivElement | null>(null);
-  const barCountdownOn = indicators.countdown && !replayOn;
+  const barCountdownOn = indicators.countdown && !replayEngaged;
   useEffect(() => {
     const el = countdownElRef.current;
     if (!el) return;
@@ -1533,6 +1608,7 @@ function EsChartCard({
     // Replay rides the same channel but is BROADCAST-only, never persisted —
     // see the shared-toolbar subscription below.
     if (typeof p.rpOn === "boolean") setReplayOn(p.rpOn);
+    if (typeof p.rpEngaged === "boolean") setReplayEngaged(p.rpEngaged);
     if (typeof p.rpPlaying === "boolean") setReplayPlaying(p.rpPlaying);
     // Land the shared cursor on this card's own bar grid. Remembered in a ref as
     // well, because a card whose candles finish loading AFTER the owner's last
@@ -2044,7 +2120,7 @@ function EsChartCard({
           // Replay passes through untouched: there the map is deliberately the
           // scrubbed day, and live frames are already hidden by the cursor clamp
           // at draw time.
-          if (replayOnRef.current || liveDay === lastBubbleDayRef.current) {
+          if (replayEngagedRef.current || liveDay === lastBubbleDayRef.current) {
             mmap.set(minTs, { slotTs: minTs, cells, spot: spx > 0 ? spx : undefined });
             if (mmap.size > 2000) evictOldest(mmap, 2000);
             minuteColsVerRef.current++;
@@ -2240,8 +2316,11 @@ function EsChartCard({
     // same size either way. Live intraday is untouched — it still asks for
     // heatmapDays * 1440.
     const GEX_WINDOW_MAX_MIN = 5760; // 4 days; must match the clamp in api-router.js
-    const offSession = !replayOn && !etSessionStarted();
-    const minutes = replayOn || offSession
+    // replayEngaged, NOT replayOn: merely OPENING the transport must not change
+    // the request key, or a stray click re-fires this ~1.6MB query and clicking
+    // it again to undo fires a second one.
+    const offSession = !replayEngaged && !etSessionStarted();
+    const minutes = replayEngaged || offSession
       ? GEX_WINDOW_MAX_MIN
       : Math.min(GEX_WINDOW_MAX_MIN, heatmapDays * 1440);
     // Front mode passes anyExpiry=1, so the server IGNORES `expiry`; the rolling
@@ -2302,7 +2381,7 @@ function EsChartCard({
     // If the ETF walls or flip ever look wrong, put `|| !isEs` back FIRST and
     // confirm before looking anywhere else — this is the only place the ETF
     // ladder is narrowed.
-    const needsFullLadder = showHeatmap || replayOn;
+    const needsFullLadder = showHeatmap || replayEngaged; // see the note on `minutes`
     // Ask for a fixed, generous ladder rather than exactly the current "levels".
     // Two reasons. The draw filters down anyway, and asking for exactly N would
     // mean the SESSION-WIDE strike ranking (which is what makes a wall render as
@@ -2343,7 +2422,7 @@ function EsChartCard({
     // turned out to be from (lastBubbleDayRef, wiped at merge time below). Its
     // job is the tab left open across midnight, where the live socket starts
     // stamping a new day's minutes into a map still holding the old session.
-    const wallDayNow = replayOn && activeReplayDay ? activeReplayDay : etDayKey(Date.now());
+    const wallDayNow = replayEngaged && activeReplayDay ? activeReplayDay : etDayKey(Date.now());
     const shapeChanged = shapeKey !== lastHeatmapShapeRef.current;
     const dayChanged = wallDayNow !== lastWallDayRef.current;
     lastHeatmapShapeRef.current = shapeKey;
@@ -2456,7 +2535,7 @@ function EsChartCard({
           if (!tradedKey) tradedKey = k;
           if (!barDays.size || barDays.has(k)) { pickedKey = k; break; }
         }
-        const targetKey = replayOn && activeReplayDay
+        const targetKey = replayEngaged && activeReplayDay
           ? activeReplayDay
           : (pickedKey || tradedKey || etDayKey(Date.now()));
         // The day the map holds just changed (rolled into a new session, or the
@@ -2521,7 +2600,7 @@ function EsChartCard({
     // above — turning the heatmap on has to re-request at full ladder resolution.
     // That lands as a shapeKey change, so the truncated columns get wiped rather
     // than merged into.
-  }, [settingsLoaded, heatmapExpiry, heatmapDays, replayOn, activeReplayDay, selectedExpiry, sym.gexSymbol, gexPoll,
+  }, [settingsLoaded, heatmapExpiry, heatmapDays, replayEngaged, activeReplayDay, selectedExpiry, sym.gexSymbol, gexPoll,
       showHeatmap, isEs]);
 
   // Load today's full MVC history (raw SPX strikeOIVol) and refresh every 60s.
@@ -3356,7 +3435,7 @@ function EsChartCard({
 
   useEffect(() => {
     const publish = () => {
-      if (replayOnRef.current) return; // replay owns the lines while scrubbing
+      if (replayEngagedRef.current) return; // an ENGAGED replay owns the lines while scrubbing
       // `levels` is the /ws/gex feed, and that feed is SPX. On SPY/QQQ those
       // walls would be SPX strikes (~6800) drawn on a ~640 chart — not merely
       // wrong, but so far off-scale they'd blow out the price axis. Derive the
@@ -3386,7 +3465,7 @@ function EsChartCard({
     publish();
     const id = setInterval(publish, 60_000);
     return () => clearInterval(id);
-  }, [effectiveBasis, hasLevels, replayOn, isEs, gexVersion]);
+  }, [effectiveBasis, hasLevels, replayEngaged, isEs, gexVersion]);
 
   // ── Steady basis for the CANVAS overlay ───────────────────────────────────
   // Same defect the price lines above already fixed, in the other half of the
@@ -3419,9 +3498,9 @@ function EsChartCard({
 
   // Replay: drive the Call/Put Wall + Flip price lines off the reconstructed
   // cursor column (ES-tick snapped). Fires on scrub (replayTs) and on toggle;
-  // exiting replay re-runs the live publisher above (replayOn is in its deps).
+  // exiting replay re-runs the live publisher above (replayEngaged is in its deps).
   useEffect(() => {
-    if (!replayOn) return;
+    if (!replayEngaged) return;
     const g = replayGexRef.current;
     const b = steadyBasisRef.current || effectiveBasis();
     const es = (v: number | null | undefined) => (v != null ? toTick(v + b) : null);
@@ -3431,7 +3510,7 @@ function EsChartCard({
         ? prev
         : next
     );
-  }, [replayOn, replayTs, effectiveBasis]);
+  }, [replayEngaged, replayTs, effectiveBasis]);
 
   // Draw GEX level lines (Call Wall / Put Wall / Flip) on the candle series.
   // Update in place; only create/remove when a level appears or disappears.
@@ -5526,7 +5605,15 @@ function EsChartCard({
               piece of state. The home embed has no page toolbar and keeps it. */}
           {!hostedReplay && (
             <DockButton
-              onClick={() => { const nv = !replayOn; setReplayOn(nv); setReplayPlaying(false); if (nv) { setReplayIdx(0); setReplayDay(null); } }}
+              onClick={() => {
+                if (replayOn) { exitReplay(); return; }
+                // Inert entry — see replayEngaged. Opening the transport leaves
+                // the chart live and refetches nothing.
+                setReplayOn(true);
+                setReplayPlaying(false);
+                setReplayEngaged(false);
+                setReplayIdx(0);
+              }}
               title="Replay this session — reveal candles + gamma from the open forward"
               style={{ color: replayOn ? HOME_THEME.cyan : undefined }}
             >
@@ -5578,10 +5665,14 @@ function EsChartCard({
           const [y, m, day] = d.split("-").map(Number);
           return new Date(y, m - 1, day, 12).toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
         };
-        const go = (d: string) => { setReplayDay(d); setReplayPlaying(false); setReplayIdx(0); };
+        // Picking a different day IS "I want to replay that day", so it engages.
+        const go = (d: string) => { setReplayDay(d); setReplayEngaged(true); setReplayPlaying(false); setReplayIdx(0); };
         // Remember the instant BEFORE the frames change; the effect above lands
         // it on the new grid once the memo has recomputed.
         const goSession = (v: "rth" | "eth") => {
+          // Deliberately does NOT engage: this only says WHICH bars the cursor
+          // may travel over. Flipping RTH/ETH to see the range should not clamp
+          // a chart that is still live.
           sessionSnapTsRef.current = replayTs;
           setReplayPlaying(false);
           setReplaySession(v);
@@ -5611,27 +5702,59 @@ function EsChartCard({
       ) : (
         <>
           <div className="flex items-center gap-1">
-            <DockButton onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.max(0, i - 1)); }} title="Step back one bar"><span>⏮</span></DockButton>
+            <DockButton onClick={() => engageReplayAt(replayViewIdx - 1)} title="Step back one bar"><span>⏮</span></DockButton>
             <DockButton
-              onClick={() => { if (replayIdx >= replayFrames.length - 1) { setReplayIdx(0); setReplayPlaying(true); } else { setReplayPlaying((p) => !p); } }}
+              onClick={() => {
+                // Play from an un-engaged transport rewinds to the open, because
+                // "replay the session" from the live edge has nothing to play.
+                // Once engaged it is a plain play/pause, and hitting play at the
+                // last bar rewinds as it always did.
+                if (!replayEngaged || replayIdx >= replayFrames.length - 1) {
+                  setReplayEngaged(true);
+                  setReplayIdx(0);
+                  setReplayPlaying(true);
+                } else {
+                  setReplayPlaying((p) => !p);
+                }
+              }}
               title={replayPlaying ? "Pause" : "Play"}
             ><span style={{ minWidth: 12, display: "inline-block", textAlign: "center" }}>{replayPlaying ? "⏸" : "▶"}</span></DockButton>
-            <DockButton onClick={() => { setReplayPlaying(false); setReplayIdx((i) => Math.min(replayFrames.length - 1, i + 1)); }} title="Step forward one bar"><span>⏭</span></DockButton>
+            {/* Step FORWARD from an un-engaged transport is a no-op by
+                definition — the cursor is already parked at the live edge, so
+                there is no next bar. Engaging anyway would freeze the chart and
+                re-fire the full-ladder backfill without the cursor appearing to
+                move, which is exactly the surprise the open/engage split exists
+                to remove. Step BACK is unguarded: it always has somewhere to go
+                and clearly means "start replaying from here". */}
+            <DockButton
+              onClick={() => {
+                if (replayViewIdx >= replayFrames.length - 1) return;
+                engageReplayAt(replayViewIdx + 1);
+              }}
+              title="Step forward one bar"
+            ><span>⏭</span></DockButton>
           </div>
           <DockSlider
             label="bar"
-            value={Math.min(replayIdx, replayFrames.length - 1)}
+            value={replayViewIdx}
             min={0}
             max={Math.max(0, replayFrames.length - 1)}
             step={1}
             width={240}
             format={(v) => fmtEtHM(replayFrames[Math.min(Math.round(v), replayFrames.length - 1)])}
-            onChange={(v) => { setReplayPlaying(false); setReplayIdx(Math.round(v)); }}
+            onChange={(v) => engageReplayAt(Math.round(v))}
             title="Scrub through the session"
           />
           <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: HOME_THEME.muted, whiteSpace: "nowrap" }}>
-            {fmtEtHM(replayFrames[Math.min(replayIdx, replayFrames.length - 1)])} · {Math.min(replayIdx, replayFrames.length - 1) + 1}/{replayFrames.length}
+            {fmtEtHM(replayFrames[replayViewIdx])} · {replayViewIdx + 1}/{replayFrames.length}
           </span>
+          {/* Armed but inert. Says so, so an open transport over an unchanged
+              chart doesn't read as "replay is broken". */}
+          {!replayEngaged && (
+            <span style={{ fontSize: 11, fontWeight: 700, color: HOME_THEME.muted, whiteSpace: "nowrap", opacity: 0.8 }}>
+              live — scrub or press play to start
+            </span>
+          )}
           <div className="flex items-center gap-2">
             <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: HOME_THEME.muted }}>Speed</span>
             <SegGroup
@@ -5640,7 +5763,12 @@ function EsChartCard({
               onChange={(v) => setReplaySpeed(Number(v))}
             />
           </div>
-          <DockButton onClick={() => { setReplayPlaying(false); setReplayOn(false); setReplayDay(null); }} title="Exit replay — back to live" style={{ color: HOME_THEME.cyan }}><span>● Live</span></DockButton>
+          {/* Must clear replayEngaged as well as replayOn. This is the primary
+              exit on /es-candles (the transport is portaled into the popover, so
+              this button is its last control), and leaving `engaged` true with
+              `on` false makes the live price-line publisher bail forever — the
+              walls and the flip get removed and never come back. */}
+          <DockButton onClick={exitReplay} title="Exit replay — back to live" style={{ color: HOME_THEME.cyan }}><span>● Live</span></DockButton>
         </>
       )}
     </div>

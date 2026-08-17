@@ -1,5 +1,108 @@
 # Changelog
 
+## 2026-08-17 - ES Candles: Replay no longer touches the chart until you use it
+
+Edited: `components/dashboard/es-candles/EsChartCard.tsx`,
+`components/pages/EsCandles.tsx`, `app/es-candles/page.tsx`.
+
+**The bug.** Pressing Replay did two things at once: it opened the transport AND
+it set the cursor to bar 0, so the chart collapsed to the first bar of the
+session on the click. Worse, `replayOn` keyed the gamma backfill — it widened
+the request window to 4 days and dropped the server-side ladder truncation — so
+a stray click re-fired a ~1.6MB query, and clicking again to undo fired a second
+one. An accidental press cost a full reload of the page's heaviest data, twice.
+
+**The fix.** Replay is now two flags:
+
+- `replayOn` — the transport panel is open.
+- `replayEngaged` — the user has actually started replaying.
+
+Opening is inert. The chart stays live, the cursor parks at the LIVE EDGE (not
+at 09:30 — a transport that opens parked at the open while the chart shows the
+whole session is lying about what you are looking at, and it made the first drag
+jump backwards through the entire day), and nothing refetches. The transport
+says `live — scrub or press play to start` while it is armed but doing nothing.
+
+The chart is clamped only when the user unambiguously asks for it:
+
+- moving the scrubber
+- stepping a bar (back always; forward is a no-op at the live edge rather than
+  a silent freeze)
+- pressing play — which rewinds to the open, because "replay the session" from
+  the live edge has nothing to play
+- picking a different day
+
+The RTH/ETH switch deliberately does NOT engage: it only says which bars the
+cursor may travel over, so flipping it to see the range should not freeze a live
+chart.
+
+`replayTs` is the single value everything downstream reads (candles, heatmap,
+bubbles, flip-cross, rail, RSI, EMA/volume, price lines), so gating it on
+`replayEngaged` is what makes an untouched transport a no-op everywhere at once.
+Every DATA-side use of `replayOn` moved to `replayEngaged`: the backfill window,
+`needsFullLadder`, the target bubble day, the live-ingest guard, the price-line
+publishers and the bar countdown.
+
+**Three bugs found while fixing it**
+
+- The `● Live` button cleared `replayOn` but not `replayEngaged`, so it left the
+  card in a state where the live price-line publisher bailed forever — Call Wall
+  / Put Wall / Flip were removed from the chart and never came back, and the
+  gamma backfill stayed stuck in its wide replay shape. It now routes through a
+  shared `exitReplay()`.
+- `replayDay` was reset on ENTRY. It feeds `activeReplayDay`, which feeds the
+  backfill's shape key unconditionally — including in live mode — so after
+  replaying a past session, merely RE-OPENING the transport flipped the day back
+  to today, wiped the column store and re-fired the whole backfill. Reset on
+  exit instead, so the key is stable across an open.
+- `● Live` is portaled into the page's Replay popover, so pressing it left the
+  page believing a replay was still running: the popover stayed open over an
+  empty transport and the next press of Replay was a no-op. `exitReplay` now
+  broadcasts, and the page subscribes to the channel it was only ever
+  broadcasting on.
+
+Also cleaned up: `toggleReplay` was calling `broadcastReplayCmd` from INSIDE a
+`setPopover` updater. That was always a lie (an updater must be pure; React may
+invoke it twice, and does under StrictMode) and became a real hazard once the
+page subscribed to that channel — the broadcast synchronously re-entered the
+updater it was running inside. Reads the flag first, acts after.
+
+`replayOnRef` was deleted; nothing imperative cares whether the panel is merely
+open.
+
+---
+
+## 2026-08-17 - ES Candles: page-level perf fixes ported to the file the SPA actually renders
+
+Edited: `components/pages/EsCandles.tsx`.
+
+**There are two /es-candles page files and only one of them is live.**
+
+- `components/pages/EsCandles.tsx` — the live one. `app-vite/src/App.tsx:25`
+  lazy-imports it; the route is registered at `:77`.
+- `app/es-candles/page.tsx` — a diverged near-copy the SPA never renders.
+
+The performance pass earlier today put its two PAGE-level changes in the second
+one. Ported here: the `toolbarButtons` memo and the rAF-throttled popover
+measure. (Everything else in that pass — EsChartCard, chartMath, ChainRail,
+SidePanel, useEsCandles, useEtfCandles — is shared by both files and was always
+on the live path.)
+
+The memo also had to move ABOVE the `if (embedded)` early return: a hook after a
+conditional return is a rules-of-hooks violation, and it is a live one here
+because the home GEX card renders this component with `embedded`.
+
+**The two files should not both exist.** They have already drifted (the live one
+has `caret`/`open` props on the dock buttons and the Layout preset button; the
+dead one does not), and the drift is invisible until a change lands in the wrong
+one. Worth deleting `app/es-candles/page.tsx` once someone confirms nothing
+serves `cbedge.net/es-candles` on the Next side.
+
+Correction to the previous entry's "unused hooks" note: only `useStrikeGexRate`
+is genuinely unused. `useGexBubbleHistory` and `useEmLookup` are used by
+`components/mobile/`, and `useStrikeGexHistory` by `HomeClient`, `GexChart` and
+`StrikeDetailPopup`.
+
 ## 2026-08-17 - ES Candles: performance pass (render, draw loop, network)
 
 Edited: `components/dashboard/es-candles/EsChartCard.tsx`, `chartMath.ts`,
