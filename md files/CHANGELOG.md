@@ -1,82 +1,167 @@
 # Changelog
 
-## 2026-08-18 - ΔGEX Board: Live toggle on "Prior → now" (close → the chain right now)
+## 2026-08-18 - Sales page: Expenses panel collapsed to a hairline
 
-Added: `getStrikeGexLive()` in `server-v2/eod-strike-gex-recorder.js`,
-`GET /proxy/eod-strike-gex-live` in `server-v2/server-with-proxy.js`,
-`GET /api/eod-strike-gex-live` in `server-v2/api-router.js`.
-Edited: `owner-vite/src/pages/GexGrowth.tsx`.
+Edited: `owner-vite/src/pages/Sales.tsx`.
 
-The owner ΔGEX Board was entirely end-of-day: every number on it came from the
-16:05 ET sweep, so during a session it showed yesterday's close against the day
-before. The **Prior → now** tab now carries a **Live** toggle that swaps the
-"now" side of the OPEN symbol's ladder for the chain as it stands this second,
-against that symbol's last recorded close.
+The Expenses panel on `owner.cbedge.net/sales` rendered as a ~1px line between
+the subscription tables and the Stripe link, and only appeared at full height
+once the browser was zoomed way out.
 
-### What it is — and what it is NOT
+Cause: the page body is `display:flex; flex-direction:column; overflow-y:auto`,
+so every section is a flex item with the default `flex-shrink: 1`. `ExpensesPanel`
+also sets `overflow: hidden`, which zeroes its automatic minimum size -- so once
+the page content exceeded the viewport, flexbox was free to squash it to nothing.
+Zooming out shrank the content below the viewport height, the shrink pressure
+went away, and the panel popped back.
 
-Not a Δ 1D, and the page says so on screen rather than only in a tooltip. GEX
-here is the OI+Vol basis: open interest is last night's settled file and does
-not move until tomorrow's, while volume starts at zero at 09:30 and accrues all
-session. So live-vs-close is **today's tape building on a fixed OI base** — near
-zero at the open, growing into the bell. That is the signal, but it is a
-different quantity from the session-over-session Δ the other two tabs show.
-A caveat strip above the split chips states this, and swaps copy for two edge
-cases the server flags: `prevIsToday` (today's 16:05 sweep already landed, so
-the outline IS today's close and the Δ is post-close drift) and
-`marketDay === false`.
+- `flexShrink: 0` on `ExpensesPanel`, `TrialConversionPanel` and
+  `MonthlyProfitChart` roots, plus the KPI grid row, the subscriptions/
+  cancellations grid row and the Stripe-dashboard footer row -- every direct
+  child of the scrolling body now keeps its natural height.
+- Comments added at the two `overflow: hidden` panels explaining why the
+  property is required, so it doesn't get "cleaned up" later.
 
-### Server
+No behavior, data or layout changes beyond the sections no longer being
+compressible.
 
-- `getStrikeGexLive(symbol, { force })` joins the symbol's **most recent single
-  recorded date** (the prior side) against a fresh `gexRowsForSymbol()` +
-  `windowRows()` (the now side). Same OI+Vol formula, same ±40 index window, so
-  the two sides are the same definition of GEX.
-- **Writes nothing.** An intraday row in `eod_strike_gex` would become
-  tomorrow's Δ baseline and silently corrupt the recorded series — which is why
-  this is a separate function and not `runSweep()` with a flag.
-- Strikes are the **union** of both windows, not just the live one, for the same
-  reason `getStrikeGexChange` FULL JOINs: a wall that came off, or fell out of
-  the window as spot moved, is the biggest negative change there is.
-- Response is the `getStrikeGexChange` shape plus
-  `{ live, asOf, expiryCount, cached, ageMs, prevIsToday, marketDay }`, so the
-  client's ladder renders it unchanged.
-- **Cost control.** Each uncached read re-runs every listed expiry for one
-  symbol — one slice of the nightly sweep. Results cache per symbol for
-  `EOD_STRIKE_GEX_LIVE_TTL_MS` (default 60s, cache bounded at 220 entries), and
-  concurrent callers share ONE in-flight sweep. `force=1` skips the cache but
-  still joins an in-flight job, so a double-click on ↻ costs one sweep, not two.
-- `/api/eod-strike-gex-live` is **owner-only** (unlike `-change`, which is
-  subscriber): this is not a table read, and behind `subscriber` it would be a
-  request amplifier aimed at our own upstream. No `date` param and no
-  board-wide variant — "live" only ever means now, and 169 names live is the
-  nightly sweep on a click.
 
-### Client
+## 2026-08-18 - Scanner "Watch This": the flag detail is now the owner probe card
 
-- Toggle renders **only on the `compare` tab** (live IS the prior→now reading)
-  and suspends itself when an older session is picked — "live vs the 8th" would
-  be a spread over N sessions, not a day's build. The toggle stays lit so
-  returning to the latest session restores it.
-- **Headline and "biggest" chip are recomputed off the live rows.** They used to
-  come from the rail row, which is the recorded close-to-close Δ — in live mode
-  that would have contradicted the bars underneath it.
-- The four split chips still sum exactly to the net Δ above them, now off the
-  live rows (verified: `posBuilt + posPulled + negBuilt + negPulled === Σ chg`,
-  including strikes that flip sign).
-- Labels key off the **payload** (`detail.live`), never off the toggle's intent,
-  so the few hundred ms between toggling and the fetch landing can never caption
-  a live ladder as end-of-day.
-- Ladder column becomes `Δ vs close`, axis `← lighter · heavier →`, header shows
-  `live HH:MM:SS ET vs close YYYY-MM-DD` off the server's `asOf` (so a cached
-  payload stamps when it was actually swept), plus a dim `cached Ns` marker.
-- Distinct empty state: "no recorded close on file yet" points at the missing
-  baseline, not at "one snapshot on file" which would name the wrong problem.
-- **No auto-poll.** ↻ is the refresh, and with Live on it also forces a fresh
-  sweep for the open name. Arrowing the rail costs one sweep per name you stop
-  on, per minute.
-- Rail stays end-of-day throughout.
+Edited: `components/pages/Scanner.tsx`.
 
+The expanded row under a tracked flag drew the same SVG the owner `/owner/probe`
+card draws, but everything around it was different -- a blue left-rail strip,
+theme-token colors, a "CONTRACT PROBE" caption row, and a chart stretched to the
+full width of the tab, which rendered the type at roughly 2x the owner card. Same
+chart, nothing like the same card.
+
+- The panel is now the probe card: `#05060a` surface, cyan open-border, 10px
+  radius, 14px padding, capped at 940px so the chart draws at the owner card's
+  scale instead of stretching across the tab.
+- Header matches -- ticker in mono 18/800, a strike+side badge (ice blue for
+  calls, amber for puts), a status chip (OPEN green / TOUCHED ice / EXPIRED red),
+  and a muted sub-line with expiry, flag date, spot at flag and OTM%.
+- Big row matches -- 24px mono `▲/▼ x.x%`, then `in 0.21 -> now 0.04` with the
+  per-contract dollars (x100) tinted by sign.
+- Chart well matches -- hairline divider, toolbar, then the SVG, then the mono
+  hint footer. The old caption row above the chart is gone; its text moved into
+  the footer where the owner card keeps it.
+- Chart palette is now the owner card's literals (`#8ECAE6` / `#30d158` /
+  `#ff5b5b` / `#ffffff`) instead of `HOME_THEME` + `ES_CANDLE_UP/DOWN`, which is
+  what the PNG export requires -- a token that resolved to a CSS var serializes
+  to nothing off-DOM. `ES_CANDLE_UP/DOWN` dropped from the imports.
+- Added the owner card's `Copy image` button: `captureFlagCard` rasterizes the
+  SVG onto a canvas under a painted header and puts the PNG on the clipboard.
+  Ported from `owner-vite/src/pages/Probe.tsx` (clipboard only, no download).
+
+Unchanged: the day-by-day table below the chart, the `/proxy/far-cb-outcome-detail`
+call, the touched marker, and the no-trade-day line break.
+
+## 2026-08-18 - Multi Greek: wall cards use the dashboard card theme
+
+Edited: `app/mult-greek/MultGreekClient.tsx`.
+
+The CB / CW / PW cards above each panel were color-coded -- each one tinted and
+outlined with its own `LEVEL_COLORS` value, with a hand-written rgba shadow.
+Three differently-colored tiles over a card that is itself neutral read as three
+unrelated widgets, and the alpha suffixes (`14`, `aa`, `33`) were literals.
+
+- The card surface is now `classicCardAccentStyle` from `homeTheme` -- the same
+  frosted fill, hairline edge and shadow the ticker panel below it uses -- plus
+  the `card-hover` lift every other dashboard card has.
+- Selected state is the app's standard active tile: `DOCK_THEME.activeTile`,
+  `activeBorder` and `activeGlow` (cyan), the same treatment dock/menu items use.
+  Deselected drops to `HOME_THEME.border` and 0.62 opacity.
+- Label is `HOME_THEME.cyan`, the name beneath it `HOME_THEME.muted`, the strike
+  `HOME_THEME.text`. No hex or rgba literal remains in the block; the level
+  colors still mark the cells inside the ladder, where they carry meaning.
+
+## 2026-08-18 - Multi Greek: CB/CW/PW as three cards above each ticker panel
+
+Edited: `app/mult-greek/MultGreekClient.tsx`.
+
+Follow-up to the identity-row pass. The wall readout was still a set of small
+chips crammed into each panel header, and the toggles were a separate control
+somewhere else — two places for one idea.
+
+- `TickerPanel` now renders a 3-across row of CB / CW / PW cards DIRECTLY above
+  its own Card, so each level sits over the ticker it belongs to. The panel is
+  wrapped in a flex column (cards row, then the Card) and keeps its `flex: 1`
+  sizing, so column widths and the embed/capture paths are unchanged.
+- Cards are noticeably bigger than the old chips: level tag + full name on top,
+  the strike in 18px mono beneath. A missing wall prints an em dash instead of
+  disappearing, so the three slots never shift.
+- Clicking a card toggles that marker in the ladders, replacing the toolbar
+  buttons and the identity-row toggles. New `onToggleWall` prop on
+  `TickerPanel`; new `toggleWall` callback in `MultGreekClient` flips the
+  existing page-wide `showCB/showCW/showPW` flags.
+- Removed the CB/CW/PW chips from the panel header (it is ticker + spot now) and
+  the toggle cards from the identity row (front expiry/DTE, session and replay
+  clock only).
+
+## 2026-08-18 - Multi Greek: identity row trimmed, CB/CW/PW promoted to cards
+
+Edited: `app/mult-greek/MultGreekClient.tsx`.
+
+The band between the dock and the four ticker panels carried a "MULTI GREEK"
+title, a spot price for every ticker, the expiry/session string and the CB Edge
+mark. The title restated the nav, and each panel header already prints its own
+ticker and spot, so the row was mostly duplicate.
+
+- Removed the `Multi Greek` heading, the per-ticker SPOT readouts and the
+  `/cb-edge-logo.png` mark from the identity row. Only the front expiry + DTE,
+  the session and the replay clock remain.
+- The CB / CW / PW wall toggles moved OUT of the toolbar dock and into that
+  identity row, re-rendered as cards (panel background, level-colored border and
+  glow when on) with the badge plus its full name -- Core Bullseye, Call Wall,
+  Put Wall -- so the legend sits directly above the panels it marks.
+- Toggle behaviour, `showCB/showCW/showPW` state and the `wallVisible()` wiring
+  into `TickerPanel` are unchanged; only the placement and chrome moved.
+
+## 2026-08-18 - Ticker Lookup: taller panes, ten strikes a side visible on open
+
+Edited: `components/pages/Analytics.tsx`.
+
+The Ticker Lookup card's two ladder panes were a fixed
+`clamp(460px, 64vh, 900px)`. At the low end that showed roughly six rungs, so
+the card opened mid-scroll and the walls sat below the fold even though the
+ladder already held +/-20 strikes of data.
+
+- New `TL_LADDER_VIEW_SIDE = 10` states how many rungs must be VISIBLE each way
+  the moment the card paints (the loaded window stays `TL_LADDER_SIDE = 20` --
+  scroll still reaches the far wings).
+- New `TL_ROW_H` (26px, measured) and `TL_PANE_CHROME_H` (padding, heading,
+  expiry pills allowing one wrap, the caption line, the gaps, and the pinned
+  chip row) feed `TL_SPLIT_MIN_H` -- the pane height solved for the column
+  header plus 21 rows.
+- Split height is now `clamp(838px, 86vh, 1500px)`. The existing spot-centring
+  effect in `TlLadder` puts the spot row in the middle of that box, so ten
+  strikes above and ten below land on screen with no scrolling.
+
+No data-fetching change: the ladder window, the board fetch and the replay path
+are untouched.
+
+## 2026-08-18 - Level Log: readable wording for near-miss (approach) rows
+
+Edited: `components/pages/LevelLog.tsx`.
+
+The approach rows read `Came up down to 7,700 from above at 7,710.20 without
+tagging` — a hardcoded "Came up" with the direction bolted on after it, the
+side stated twice, and the two numbers left for the reader to subtract.
+
+- New `missPts()` helper returns how far the approach stopped short (null when
+  the gap rounds to nothing, so it never prints "0.00 short").
+- Timeline row now reads: **Came down to 7,710.20 — 10.20 short of 7,700,
+  never tagged.** One direction word, distance stated outright. The `↓ from
+  above` chip beside the badge already carries the side, so the body no longer
+  repeats it.
+- Degenerate case (spot sitting on the strike) reads "came down to 7,700, right
+  on 7,700 but never tagged" instead of a 0.00 gap.
+- Copy-to-clipboard text updated to match: `came down to 7,710.20, 10.20 short
+  of 7,700, no tag`.
+
+Tag rows and all meta lines are unchanged.
 
 ## 2026-08-18 - New email template: final call — 2 spots at $300/yr, ends at midnight
 
@@ -109,12 +194,6 @@ per the `EMAILS_HANDOFF.md` checklist, so `newestFirst()` puts it on top of the
 picker.
 
 Preview: `generated/2026-08-18-midnight-300-preview.html`.
-
-X post assets for the same drop: `md files/midnight-300-x-post.md` (main post +
-2 alts + 4 bump replies), `midnight-300-x-post.svg` and the rendered 1200x675
-`midnight-300-x-post.png`, also copied to `generated/`. Same layout as the
-NOPANTS post graphics, with the "sold out in 30 min" badge swapped for
-**ENDS AT MIDNIGHT / 2 SPOTS · NO EXTENSION** and both spot pips shown open.
 
 
 ## 2026-08-18 - Ex-0DTE ladders get their own walls; Scanner level tiles get a scope chip

@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
-import { HOME_THEME as HT, homeShellStyle, LEVEL_COLORS } from "@/components/shared/homeTheme";
+import { HOME_THEME as HT, homeShellStyle, LEVEL_COLORS, classicCardAccentStyle, DOCK_THEME } from "@/components/shared/homeTheme";
 import { atMinIntensity, columnWalls, wallAt, wallVisible, INTENSITY_MIN, WALL_RANK, type ColumnWalls } from "@/lib/calculations/heatLevels";
 import { rankBg } from "@/lib/calculations/optionChain";
 import { Card } from "@/components/shared/PageCard";
@@ -1030,10 +1030,16 @@ function TickerPanel({
   // the panel's width, so the level and its number are readable at a glance
   // and always sit over the ticker they belong to. Clicking a card toggles
   // that marker in the ladder (page-wide, as the toolbar buttons did).
+  //
+  // They are NOT color-coded: the surface is the dashboard card
+  // (classicCardAccentStyle — the same frosted fill + hairline edge the panel
+  // below uses) and the on/off state is the app's standard cyan active tile
+  // from DOCK_THEME. Nothing here is a literal — every color comes from
+  // homeTheme, so a theme change carries these along.
   const wallCards = ([
-    { k: "cb", t: "CB", name: "Core Bullseye", c: LEVEL_COLORS.cb, s: walls?.cb ?? null, on: showCB, title: "Core Bullseye — highest |GEX| level" },
-    { k: "cw", t: "CW", name: "Call Wall", c: LEVEL_COLORS.cw, s: walls?.cw ?? null, on: showCW, title: "Call Wall — highest +GEX level" },
-    { k: "pw", t: "PW", name: "Put Wall", c: LEVEL_COLORS.pw, s: walls?.pw ?? null, on: showPW, title: "Put Wall — most −GEX level" },
+    { k: "cb", t: "CB", name: "Core Bullseye", s: walls?.cb ?? null, on: showCB, title: "Core Bullseye — highest |GEX| level" },
+    { k: "cw", t: "CW", name: "Call Wall", s: walls?.cw ?? null, on: showCW, title: "Call Wall — highest +GEX level" },
+    { k: "pw", t: "PW", name: "Put Wall", s: walls?.pw ?? null, on: showPW, title: "Put Wall — most −GEX level" },
   ] as const);
 
   return (
@@ -1046,25 +1052,27 @@ function TickerPanel({
         {wallCards.map(x => (
           <button
             key={x.k}
+            className="card-hover"
             onClick={() => onToggleWall(x.k)}
             title={`${x.title} — click to ${x.on ? "hide" : "show"} the marker`}
             style={{
+              ...classicCardAccentStyle,
               display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
-              padding: "6px 6px 7px", borderRadius: 12, cursor: "pointer", minWidth: 0,
-              background: `${x.c}14`,
-              border: `1px solid ${x.on ? `${x.c}aa` : HT.border}`,
-              boxShadow: x.on ? `0 1px 10px ${x.c}33` : "0 1px 6px rgba(0,0,0,0.35)",
-              opacity: x.on ? 1 : 0.55,
+              padding: "7px 6px 8px", borderRadius: 12, cursor: "pointer", minWidth: 0,
+              background: x.on ? DOCK_THEME.activeTile : classicCardAccentStyle.background,
+              border: `1px solid ${x.on ? DOCK_THEME.activeBorder : HT.border}`,
+              boxShadow: x.on ? DOCK_THEME.activeGlow : classicCardAccentStyle.boxShadow,
+              opacity: x.on ? 1 : 0.62,
             }}
           >
             <span style={{
-              fontSize: 10, fontWeight: 900, letterSpacing: "0.1em", color: x.c,
+              fontSize: 10, fontWeight: 900, letterSpacing: "0.1em", color: HT.cyan,
               display: "flex", alignItems: "baseline", gap: 5, whiteSpace: "nowrap",
             }}>
               {x.t}
               <span style={{
                 fontSize: 8, fontWeight: 800, letterSpacing: "0.06em",
-                textTransform: "uppercase", color: HT.muted,
+                textTransform: "uppercase", color: HT.muted, opacity: 0.6,
                 overflow: "hidden", textOverflow: "ellipsis",
               }}>{x.name}</span>
             </span>

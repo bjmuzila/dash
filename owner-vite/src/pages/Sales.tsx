@@ -444,7 +444,7 @@ function MonthlyProfitChart({ revenueByMonth, subs, expensesMonthly }: {
   const PLOT_H = 150;
 
   return (
-    <div style={{ ...homePanelStyle, padding: "18px 20px" }}>
+    <div style={{ ...homePanelStyle, padding: "18px 20px", flexShrink: 0 }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 2, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 17, fontWeight: 700, color: T.gold, marginBottom: 3 }}>Profit per Month</div>
@@ -798,7 +798,11 @@ function TrialConversionPanel({ trials, subs }: { trials: TrialSummary | null | 
   const rateColor = rate === null ? T.muted : rate >= 0.5 ? T.green : rate > 0 ? T.gold : T.red;
 
   return (
-    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    // flexShrink: 0 — the page body is a scrolling flex COLUMN, so every direct
+    // child is a flex item that will shrink. `overflow: hidden` zeroes this
+    // panel's automatic minimum size, so without this it squashes to a 1px line
+    // whenever the page overflows (and only reappears when you zoom out).
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
       <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: 17, fontWeight: 700, color: T.lightBlue }}>Trial conversion</span>
 
@@ -919,7 +923,10 @@ function ExpensesPanel({ expenses, loading, error, onAdd, onRemove, busy }: {
   };
 
   return (
-    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    // flexShrink: 0 — see TrialConversionPanel. This panel is the one that bit
+    // us: it sits near the bottom of a long scrolling flex column and collapsed
+    // to a hairline until the page was zoomed out far enough to stop overflowing.
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
       <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ fontSize: 17, fontWeight: 700, color: T.gold }}>Expenses</span>
         <span
@@ -1252,7 +1259,7 @@ export default function Sales() {
                 granularity selected in the header. Hover anywhere on a curve for
                 the crosshair readout (period + exact value); the pill top-right
                 is the change across the whole visible window. */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(272px, 1fr))", gap: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(272px, 1fr))", gap: 12, flexShrink: 0 }}>
               {/* Recurring Revenue is now MONTHLY PLANS ONLY, still billing and
                   not cancelling — the charge that genuinely repeats next month.
                   Annual plans are excluded (they bill once, then nothing for
@@ -1363,7 +1370,7 @@ export default function Sales() {
                 get lost) plus a flex-column wrapper on the left makes both cards
                 end on the same line: the taller list sets the row height and the
                 shorter one just has empty space under its last row. */}
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12, alignItems: "stretch" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12, alignItems: "stretch", flexShrink: 0 }}>
               <div style={{ minHeight: 320, display: "flex", flexDirection: "column", minWidth: 0 }}>
                 <SubscriptionTable subs={data.subscriptions} discordByEmail={discordByEmail} />
               </div>
@@ -1384,7 +1391,7 @@ export default function Sales() {
             />
 
             {/* Stripe Dashboard link */}
-            <div style={{ ...homePanelStyle, padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ ...homePanelStyle, padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
               <span style={{ fontSize: 14, color: T.muted }}>Full billing management, invoices, and payouts</span>
               <a
                 href="https://dashboard.stripe.com"

@@ -24,7 +24,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { HOME_THEME, LIGHT_BLUE, ES_CANDLE_UP, ES_CANDLE_DOWN } from "@/components/shared/homeTheme";
+import { HOME_THEME, LIGHT_BLUE } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { ThemedSelect } from "@/components/shared/ThemedSelect";
 import { useEsCandles, type EsCandle } from "@/hooks/useEsCandles";
@@ -1103,6 +1103,143 @@ type OutcomeDetail = {
 /** Stable identity for one tracked contract, used to key the expanded row. */
 const outcomeKey = (o: OutcomeRow) => `${o.symbol}|${o.expiry}|${o.strike}`;
 
+// ── probe card ───────────────────────────────────────────────────────────────
+// The owner site's /owner/probe card, ported here so a tracked flag reads
+// EXACTLY like a probed contract: same palette, same mono type, same header
+// (ticker · strike badge, expiry sub, big ▲/▼ %, "in → now · $/ct"), same chart,
+// same hint footer, same "⧉ Copy image" PNG. The colors are literals rather
+// than theme tokens on purpose — `captureFlagCard` serializes the SVG standalone
+// and any var() reference would resolve to nothing off-DOM.
+const PROBE_ICE = "#8ECAE6";
+const PROBE_GRN = "#30d158";
+const PROBE_RED = "#ff5b5b";
+const PROBE_TXT = "#ffffff";
+const PROBE_MUTED = "rgba(255,255,255,0.62)";
+const PROBE_BG = "#05060a";
+const PROBE_BORDER = "rgba(255,255,255,0.1)";
+const PROBE_MONO = '"Courier New", monospace';
+
+/** Owner-card tone: green above water, red below, white flat/unknown. */
+const probeTone = (v: number | null) => (v == null ? PROBE_TXT : v > 0 ? PROBE_GRN : v < 0 ? PROBE_RED : PROBE_TXT);
+const probePx = (v: number | null) => (v == null ? "—" : v.toFixed(2));
+
+/**
+ * Header numbers for one tracked flag: the contract's first traded mark is the
+ * basis (what taking the flag would have cost), the last traded mark is "now",
+ * and P/L is per single contract (×100) — same arithmetic the owner card runs.
+ */
+function probeStats(days: OutcomeDetailDay[]) {
+  const vals = days.map((d) => d.contractClose).filter((v): v is number => v != null && Number.isFinite(v));
+  if (!vals.length) return null;
+  const entry = vals[0], mark = vals[vals.length - 1];
+  return {
+    entry,
+    mark,
+    pct: entry > 0 ? ((mark - entry) / entry) * 100 : null,
+    dollars: (mark - entry) * 100,
+  };
+}
+
+/** Expiry in the owner card's format: "Sep 18, 26". */
+const probeExp = (v: string) => {
+  const t = Date.parse(`${String(v).slice(0, 10)}T12:00:00Z`);
+  return Number.isFinite(t)
+    ? new Date(t).toLocaleDateString([], { month: "short", day: "numeric", year: "2-digit" })
+    : v;
+};
+
+/**
+ * captureFlagCard — PNG of one flag card, ported from the owner probe page.
+ *
+ * The chart is already an SVG with hardcoded colors, so it rasterizes cleanly
+ * through an <img> + canvas. The header is painted on with fillText rather than
+ * cloned from the DOM, which keeps the export identical across browsers instead
+ * of inheriting whatever the page computed. Clipboard only — nothing is written
+ * to disk.
+ */
+async function captureFlagCard(chartId: string, meta: {
+  ticker: string; badge: string; exp: string; pct: number | null;
+  entry: number | null; mark: number | null; dollars: number | null; hint: string;
+}): Promise<boolean> {
+  const svg = document.getElementById(chartId) as SVGSVGElement | null;
+  if (!svg) return false;
+  const SCALE = 2, CW = 1000, HEAD = 132, CH = HEAD + 360;
+  const MONO = PROBE_MONO;
+
+  const clone = svg.cloneNode(true) as SVGSVGElement;
+  clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  clone.setAttribute("width", "960");
+  clone.setAttribute("height", "340");
+  const blob = new Blob([new XMLSerializer().serializeToString(clone)], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+
+  try {
+    const img = new Image();
+    await new Promise<void>((res, rej) => {
+      img.onload = () => res();
+      img.onerror = () => rej(new Error("svg rasterize failed"));
+      img.src = url;
+    });
+
+    const cv = document.createElement("canvas");
+    cv.width = CW * SCALE; cv.height = CH * SCALE;
+    const ctx = cv.getContext("2d");
+    if (!ctx) return false;
+    ctx.scale(SCALE, SCALE);
+
+    ctx.fillStyle = "#0d1119";
+    ctx.fillRect(0, 0, CW, CH);
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.strokeRect(0.5, 0.5, CW - 1, CH - 1);
+
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = PROBE_TXT;
+    ctx.font = `800 26px ${MONO}`;
+    ctx.fillText(meta.ticker, 26, 44);
+    const tw = ctx.measureText(meta.ticker).width;
+    ctx.font = `700 15px ${MONO}`;
+    ctx.fillStyle = PROBE_ICE;
+    ctx.fillText(meta.badge, 26 + tw + 12, 43);
+
+    ctx.font = `13px ${MONO}`;
+    ctx.fillStyle = PROBE_TXT;
+    ctx.fillText(meta.exp, 26, 68);
+
+    ctx.font = `800 34px ${MONO}`;
+    ctx.fillStyle = probeTone(meta.pct);
+    ctx.fillText(meta.pct == null ? "—" : `${meta.pct >= 0 ? "▲" : "▼"} ${Math.abs(meta.pct).toFixed(1)}%`, 26, 110);
+
+    ctx.font = `15px ${MONO}`;
+    ctx.fillStyle = PROBE_TXT;
+    const line = `IN ${probePx(meta.entry)} → NOW ${probePx(meta.mark)}`;
+    ctx.fillText(line, 210, 108);
+    if (meta.dollars != null) {
+      ctx.fillStyle = probeTone(meta.dollars);
+      ctx.font = `700 15px ${MONO}`;
+      ctx.fillText(` ${meta.dollars >= 0 ? "+" : "−"}$${Math.abs(meta.dollars).toFixed(0)}/ct`, 210 + ctx.measureText(line).width + 14, 108);
+    }
+
+    ctx.drawImage(img, 20, HEAD - 8, 960, 340);
+
+    ctx.font = `12px ${MONO}`;
+    ctx.fillStyle = "rgba(255,255,255,0.75)";
+    ctx.fillText(meta.hint, 26, CH - 14);
+
+    const png: Blob | null = await new Promise((res) => cv.toBlob(res, "image/png"));
+    if (!png) return false;
+
+    const C = (window as unknown as { ClipboardItem?: new (i: Record<string, Blob>) => unknown }).ClipboardItem;
+    if (!C || !navigator.clipboard || !("write" in navigator.clipboard)) return false;
+    await (navigator.clipboard as unknown as { write: (d: unknown[]) => Promise<void> })
+      .write([new C({ "image/png": png })]);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 // ── probe chart ──────────────────────────────────────────────────────────────
 /**
  * The flagged contract's own price series — the "probe" chart. Past sessions
@@ -1125,13 +1262,13 @@ const outcomeKey = (o: OutcomeRow) => `${o.symbol}|${o.expiry}|${o.strike}`;
  * that is already inside two other tables, and every charting lib on this page
  * wants a measured container. A viewBox scales without measuring anything.
  */
-function ProbeChart({ days, touchedDate }: { days: OutcomeDetailDay[]; touchedDate: string | null }) {
+function ProbeChart({ days, touchedDate, chartId }: { days: OutcomeDetailDay[]; touchedDate: string | null; chartId: string }) {
   const W = 960, H = 340, PADL = 12, PADR = 78, PADT = 26, PADB = 30;
-  // Same three colors the owner card draws with, sourced from the theme rather
-  // than hardcoded: HOME_THEME.green IS the ice blue, and the candle pair IS
-  // the saturated green/red that card marks its high and low with.
-  const ICE = HOME_THEME.green, GRN = ES_CANDLE_UP, RED = ES_CANDLE_DOWN;
-  const MONO = '"Courier New", monospace';
+  // The owner card's exact palette, hardcoded for the same reason it is there:
+  // `captureFlagCard` serializes this SVG standalone for the PNG, and a theme
+  // token that resolved to a CSS var would come out empty off-DOM.
+  const ICE = PROBE_ICE, GRN = PROBE_GRN, RED = PROBE_RED;
+  const MONO = PROBE_MONO;
   const [hover, setHover] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
@@ -1184,8 +1321,7 @@ function ProbeChart({ days, touchedDate }: { days: OutcomeDetailDay[]; touchedDa
   const areaOf = (s: { i: number; v: number }[]) =>
     s.length < 2 ? "" : `${dOf(s)} L${sx(s[s.length - 1].i).toFixed(1)},${H - PADB} L${sx(s[0].i).toFixed(1)},${H - PADB} Z`;
 
-  const first = pts[0].v, last = pts[pts.length - 1].v;
-  const pct = first > 0 ? ((last - first) / first) * 100 : null;
+  const last = pts[pts.length - 1].v;
   const up = last >= entry;
   const pillFill = up ? GRN : RED;
   const touchIdx = touchedDate ? days.findIndex((d) => d.date === ymd(touchedDate)) : -1;
@@ -1196,8 +1332,6 @@ function ProbeChart({ days, touchedDate }: { days: OutcomeDetailDay[]; touchedDa
     const t = Date.parse(`${d}T12:00:00Z`);
     return Number.isFinite(t) ? new Date(t).toLocaleDateString([], { month: "short", day: "numeric" }) : d;
   };
-
-  const chartId = `probe-${days[0]?.date ?? "x"}-${n}`;
 
   const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
     const el = svgRef.current;
@@ -1216,24 +1350,10 @@ function ProbeChart({ days, touchedDate }: { days: OutcomeDetailDay[]; touchedDa
   const tipW = 168, tipFlip = hx + 12 + tipW > W - PADR;                // flip left near the right rail
 
   return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 14, fontWeight: 800, letterSpacing: "0.05em", color: LIGHT_BLUE }}>CONTRACT PROBE</span>
-        <span style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.7 }}>
-          ${first.toFixed(2)} → ${last.toFixed(2)}
-          {pct != null && (
-            <span style={{ color: up ? GRN : RED, fontWeight: 700 }}>
-              {" "}({pct >= 0 ? "+" : ""}{pct.toFixed(1)}%)
-            </span>
-          )}
-        </span>
-        <span style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.45 }}>
-          contract mark · dashed = price when flagged · P/L per contract · hover for the day
-        </span>
-      </div>
-
+    <div>
       <svg
         ref={svgRef}
+        id={chartId}
         viewBox={`0 0 ${W} ${H}`}
         style={{ width: "100%", height: "auto", display: "block" }}
         onMouseMove={onMove}
@@ -1251,7 +1371,7 @@ function ProbeChart({ days, touchedDate }: { days: OutcomeDetailDay[]; touchedDa
         {[hi, (hi + lo) / 2, lo].map((v, i) => (
           <g key={i}>
             <line x1={PADL} y1={sy(v)} x2={W - PADR} y2={sy(v)} stroke="rgba(255,255,255,0.07)" strokeWidth={1} />
-            <text x={W - PADR + 10} y={sy(v) + 4} fontSize={12} fill={HOME_THEME.text} fontFamily={MONO}>{v.toFixed(2)}</text>
+            <text x={W - PADR + 10} y={sy(v) + 4} fontSize={12} fill={PROBE_TXT} fontFamily={MONO}>{v.toFixed(2)}</text>
           </g>
         ))}
 
@@ -1267,7 +1387,7 @@ function ProbeChart({ days, touchedDate }: { days: OutcomeDetailDay[]; touchedDa
         )}
 
         <line x1={PADL} y1={sy(entry)} x2={W - PADR} y2={sy(entry)} stroke="rgba(255,255,255,0.40)" strokeWidth={1} strokeDasharray="3 5" />
-        <text x={PADL + 4} y={sy(entry) - 7} fontSize={11} fill={HOME_THEME.text} fontFamily={MONO} letterSpacing="1">FLAGGED {entry.toFixed(2)}</text>
+        <text x={PADL + 4} y={sy(entry) - 7} fontSize={11} fill={PROBE_TXT} fontFamily={MONO} letterSpacing="1">FLAGGED {entry.toFixed(2)}</text>
 
         {segs.map((s, i) => (
           <path key={`l${i}`} d={dOf(s)} fill="none" stroke={ICE} strokeWidth={1.9} strokeLinejoin="round" strokeLinecap="round" />
@@ -1278,8 +1398,8 @@ function ProbeChart({ days, touchedDate }: { days: OutcomeDetailDay[]; touchedDa
         <circle cx={sx(loP.i)} cy={sy(lo)} r={3.4} fill="none" stroke={RED} strokeWidth={1.6} />
         <text x={sx(loP.i)} y={sy(lo) + 18} fontSize={12} fill={RED} fontFamily={MONO} textAnchor="middle">L {lo.toFixed(2)}</text>
 
-        <text x={PADL} y={H - 8} fontSize={12} fill={HOME_THEME.text} fontFamily={MONO}>{fmtD(days[0]?.date ?? "")}</text>
-        <text x={W - PADR} y={H - 8} fontSize={12} fill={HOME_THEME.text} fontFamily={MONO} textAnchor="end">{fmtD(days[n - 1]?.date ?? "")}</text>
+        <text x={PADL} y={H - 8} fontSize={12} fill={PROBE_TXT} fontFamily={MONO}>{fmtD(days[0]?.date ?? "")}</text>
+        <text x={W - PADR} y={H - 8} fontSize={12} fill={PROBE_TXT} fontFamily={MONO} textAnchor="end">{fmtD(days[n - 1]?.date ?? "")}</text>
 
         <circle cx={sx(pts[pts.length - 1].i)} cy={sy(last)} r={3.6} fill={pillFill} />
         <rect x={W - PADR + 4} y={sy(last) - 11} width={62} height={22} rx={5} fill={pillFill} />
@@ -1288,11 +1408,11 @@ function ProbeChart({ days, touchedDate }: { days: OutcomeDetailDay[]; touchedDa
         {hp != null && (
           <g>
             <line x1={hx} y1={PADT} x2={hx} y2={H - PADB} stroke="rgba(255,255,255,0.32)" strokeWidth={1} strokeDasharray="2 3" />
-            <circle cx={hx} cy={sy(hp.v)} r={4} fill={HOME_THEME.bg} stroke={ICE} strokeWidth={2} />
+            <circle cx={hx} cy={sy(hp.v)} r={4} fill="#05060a" stroke={ICE} strokeWidth={2} />
             <g transform={`translate(${tipFlip ? hx - 12 - tipW : hx + 12},${Math.max(PADT, sy(hp.v) - 46)})`}>
               <rect width={tipW} height={44} rx={7} fill="rgba(10,13,20,0.96)" stroke="rgba(48,209,88,0.45)" strokeWidth={1} />
-              <text x={12} y={18} fontSize={11} fill={HOME_THEME.text} fontFamily={MONO} letterSpacing="1">{hp.date}</text>
-              <text x={12} y={35} fontSize={15} fontWeight={700} fill={HOME_THEME.text} fontFamily={MONO}>${hp.v.toFixed(2)}</text>
+              <text x={12} y={18} fontSize={11} fill={PROBE_TXT} fontFamily={MONO} letterSpacing="1">{hp.date}</text>
+              <text x={12} y={35} fontSize={15} fontWeight={700} fill={PROBE_TXT} fontFamily={MONO}>${hp.v.toFixed(2)}</text>
               {hpl != null && (
                 <text x={92} y={35} fontSize={13} fontWeight={700} fill={hpl >= 0 ? GRN : RED} fontFamily={MONO}>
                   {hpl >= 0 ? "+" : "−"}${Math.abs(hpl).toFixed(0)}
@@ -1319,49 +1439,145 @@ function OutcomeDetailPanel({
   err: string | null;
   onClose: () => void;
 }) {
+  const [shot, setShot] = useState<"idle" | "ok" | "bad">("idle");
+
+  const stats = detail ? probeStats(detail.days) : null;
+  const badge = detail ? `${detail.strike % 1 ? detail.strike : Math.round(detail.strike)}${detail.type}` : "";
+  // DOM id for the capture — the SVG is fetched by id, so it has to be unique
+  // per open card and free of the "." a fractional strike carries.
+  const chartId = `flag-chart-${(detail ? `${detail.symbol}-${badge}-${ymd(detail.expiry) ?? detail.expiry}` : "x").replace(/[^A-Za-z0-9-]/g, "")}`;
+  const hint = detail
+    ? `Contract mark · daily bars · flagged @ ${probePx(stats?.entry ?? null)}${detail.touchedDate ? ` · touched ${detail.touchedDate}` : ""} · today sampled every 15m`
+    : "";
+
+  const empty: React.CSSProperties = {
+    padding: "40px 0", textAlign: "center", color: PROBE_MUTED, fontSize: 12, fontFamily: PROBE_MONO,
+  };
+  const lbl: React.CSSProperties = {
+    color: PROBE_MUTED, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 3,
+  };
+  const chip = (fg: string, bg: string, bd: string): React.CSSProperties => ({
+    fontFamily: PROBE_MONO, fontSize: 12, fontWeight: 700, padding: "1px 6px", borderRadius: 4,
+    marginLeft: 6, color: fg, background: bg, border: `1px solid ${bd}`,
+  });
+
   return (
     <div style={{
-      borderLeft: `2px solid ${LIGHT_BLUE}`,
-      background: "rgba(0,0,0,0.22)",
-      borderRadius: "0 8px 8px 0",
-      padding: "12px 14px 14px",
-      margin: "2px 0 6px",
+      background: PROBE_BG,
+      border: "1px solid rgba(33,158,188,0.5)",
+      borderRadius: 10,
+      padding: 14,
+      margin: "2px 0 8px",
+      maxWidth: 940,
     }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 10 }}>
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: HOME_THEME.text }}>
-            {detail ? `${detail.symbol} · $${detail.strike} ${detail.type === "C" ? "Call" : "Put"} · ${detail.expiry}` : "Loading…"}
-          </div>
+      {/* Header — ticker + strike badge + status, mirroring the owner card. */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontFamily: PROBE_MONO, fontSize: 18, fontWeight: 800, color: PROBE_TXT }}>
+            {detail ? detail.symbol : "…"}
+          </span>
           {detail && (
-            <>
-              <div style={{ fontSize: 14, color: HOME_THEME.text, opacity: 0.75, marginTop: 2 }}>
-                Flagged {detail.firstFlagged} at spot ${detail.spotAtFlag.toFixed(2)} ({detail.otmPctAtFlag.toFixed(0)}% OTM) ·{" "}
-                <span style={{ color: detail.status === "touched" ? LIGHT_BLUE : detail.status === "expired" ? HOME_THEME.text : HOME_THEME.green, fontWeight: 700 }}>
-                  {detail.status === "touched" ? `TOUCHED ${detail.touchedDate ?? ""}` : detail.status.toUpperCase()}
-                </span>
-              </div>
-              {/* Past sessions are the contract's own daily bars; today is our
-                  15-minute probe. A day the contract never traded has no bar,
-                  so it stays "—" until the probe covers it. */}
-              <div style={{ fontSize: 13, color: HOME_THEME.text, opacity: 0.55, marginTop: 2 }}>
-                Daily bars from the contract&apos;s own tape · today sampled every 15m · no-trade days show —
-              </div>
-            </>
+            <span style={detail.type === "C"
+              ? chip(PROBE_ICE, "rgba(142,202,230,0.12)", "rgba(142,202,230,0.4)")
+              : chip(HOME_THEME.orange, "rgba(251,133,1,0.12)", "rgba(251,133,1,0.4)")}>
+              {badge}
+            </span>
+          )}
+          {detail && (
+            <span style={
+              detail.status === "touched" ? chip(PROBE_ICE, "rgba(142,202,230,0.12)", "rgba(142,202,230,0.45)")
+              : detail.status === "expired" ? chip(PROBE_RED, "rgba(255,91,91,0.12)", "rgba(255,91,91,0.45)")
+              : chip(PROBE_GRN, "rgba(48,209,88,0.12)", "rgba(48,209,88,0.45)")
+            }>
+              {detail.status === "touched" ? `Touched ${detail.touchedDate ?? ""}` : detail.status.toUpperCase()}
+            </span>
           )}
         </div>
-        <button onClick={(e) => { e.stopPropagation(); onClose(); }} style={{ ...seg(false), padding: "3px 9px" }}>✕</button>
+        <button
+          onClick={(e) => { e.stopPropagation(); onClose(); }}
+          style={{ background: "none", border: "none", color: PROBE_TXT, cursor: "pointer", fontSize: 17, lineHeight: 1, padding: "0 2px" }}
+        >×</button>
       </div>
 
-      {loading && <div style={{ padding: 18, textAlign: "center", color: HOME_THEME.text }}>Loading day-by-day detail…</div>}
-      {err && <div style={{ padding: 18, textAlign: "center", color: HOME_THEME.orange }}>{err}</div>}
-      {detail && !detail.days.length && (
-        <div style={{ padding: 18, textAlign: "center", color: HOME_THEME.text }}>No daily bars yet.</div>
+      <div style={{ fontFamily: PROBE_MONO, fontSize: 12, color: PROBE_MUTED, marginTop: 3 }}>
+        {detail
+          ? `${probeExp(detail.expiry)} · flagged ${detail.firstFlagged} at spot $${detail.spotAtFlag.toFixed(2)} (${detail.otmPctAtFlag.toFixed(0)}% OTM)`
+          : "Loading…"}
+      </div>
+
+      {/* Big row — ▲/▼ % over "in → now · $/ct", per single contract (×100). */}
+      {stats && (
+        <div style={{ margin: "10px 0 8px" }}>
+          <div style={{ fontFamily: PROBE_MONO, fontSize: 24, fontWeight: 800, lineHeight: 1, color: probeTone(stats.pct) }}>
+            {stats.pct == null ? "—" : `${stats.pct >= 0 ? "▲" : "▼"} ${Math.abs(stats.pct).toFixed(1)}%`}
+          </div>
+          <div style={{ fontFamily: PROBE_MONO, fontSize: 14, color: PROBE_TXT, marginTop: 6 }}>
+            <span style={lbl}>in</span>{probePx(stats.entry)}
+            <span style={{ color: PROBE_MUTED, margin: "0 6px" }}>→</span>
+            <span style={lbl}>now</span>{probePx(stats.mark)}
+            <span style={{ fontWeight: 700, color: probeTone(stats.dollars) }}>
+              {` · ${stats.dollars >= 0 ? "+" : "−"}$${Math.abs(stats.dollars).toFixed(0)}/ct`}
+            </span>
+          </div>
+        </div>
       )}
+
+      {/* Chart well — same divider, toolbar and hint footer as the owner card. */}
+      <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${PROBE_BORDER}` }}>
+        {detail && !!detail.days.length && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginBottom: 10 }}>
+            <button
+              type="button"
+              title="Copy this card to the clipboard as a PNG"
+              onClick={(e) => {
+                e.stopPropagation();
+                void captureFlagCard(chartId, {
+                  ticker: detail.symbol,
+                  badge,
+                  exp: probeExp(detail.expiry),
+                  pct: stats?.pct ?? null,
+                  entry: stats?.entry ?? null,
+                  mark: stats?.mark ?? null,
+                  dollars: stats?.dollars ?? null,
+                  hint,
+                }).then((ok) => {
+                  setShot(ok ? "ok" : "bad");
+                  setTimeout(() => setShot("idle"), 1600);
+                });
+              }}
+              style={{
+                fontFamily: PROBE_MONO, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                padding: "4px 10px", borderRadius: 6,
+                color: shot === "ok" ? PROBE_GRN : shot === "bad" ? PROBE_RED : PROBE_TXT,
+                border: `1px solid ${shot === "ok" ? "rgba(48,209,88,0.6)" : shot === "bad" ? "rgba(255,91,91,0.6)" : "rgba(142,202,230,0.35)"}`,
+                background: shot === "ok" ? "rgba(48,209,88,0.14)" : shot === "bad" ? "rgba(255,91,91,0.12)" : "rgba(142,202,230,0.08)",
+              }}
+            >
+              {shot === "ok" ? "✓ Copied" : shot === "bad" ? "✗ Copy failed" : "⧉ Copy image"}
+            </button>
+          </div>
+        )}
+
+        {loading && <div style={empty}>Loading day-by-day detail…</div>}
+        {err && <div style={{ ...empty, color: HOME_THEME.orange }}>{err}</div>}
+        {detail && !detail.days.length && <div style={empty}>No daily bars yet.</div>}
+
+        {detail && !!detail.days.length && (
+          <>
+            <ProbeChart days={detail.days} touchedDate={detail.touchedDate} chartId={chartId} />
+            {/* Past sessions are the contract's own daily bars; today is our
+                15-minute probe. A day the contract never traded has no bar, so
+                it stays "—" until the probe covers it. */}
+            <div style={{ marginTop: 8, fontFamily: PROBE_MONO, fontSize: 12, color: PROBE_MUTED, letterSpacing: "0.04em" }}>
+              {hint} · no-trade days show —
+            </div>
+          </>
+        )}
+      </div>
 
       {detail && !!detail.days.length && (
         <>
-          <ProbeChart days={detail.days} touchedDate={detail.touchedDate} />
-          <div style={{ overflowX: "auto" }}>
+          <div style={{ overflowX: "auto", marginTop: 14 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
               <thead>
                 <tr style={{ color: HOME_THEME.green, textAlign: "right", fontSize: 14, textTransform: "uppercase" }}>
