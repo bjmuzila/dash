@@ -1379,6 +1379,7 @@ export function MultGreekClient({
   initialSnapshot = null,
   snapshotTs = null,
   initialReplay = false,
+  tickers: tickersProp,
 }: {
   /** Unpaid signed-in viewer: render from a frozen SPX/SPY/QQQ snapshot, never
    *  hit the live /api/chains loop. The delayed snapshot only carries ONE
@@ -1391,6 +1392,20 @@ export function MultGreekClient({
    *  where making the user press REPLAY first is asking them to confirm the
    *  thing they navigated to. Initial state only — the toggle still works. */
   initialReplay?: boolean;
+  /**
+   * Override the panel line-up. Omit (the page's own use) and it is the fixed
+   * SPX / SPY / QQQ plus the user's 4th slot; pass a list and those tickers are
+   * the panels, verbatim.
+   *
+   * Added for the /board "Multi Greek (one ticker)" card, which wants exactly
+   * one column. When set, the toolbar's 4TH input is hidden — it edits a slot
+   * that is no longer in the line-up.
+   *
+   * Pass a MODULE-SCOPE array, not an inline literal: the value feeds the
+   * chain-fetch effect's dependency key, so a fresh array each render would
+   * restart the fetch loop on every render.
+   */
+  tickers?: string[];
 } = {}) {
   const [expirations, setExpirations] = useState<Expiry[]>([]);
   const [activeExpiry, setActiveExpiry] = useState<string | null>(null);
@@ -1420,12 +1435,20 @@ export function MultGreekClient({
       if (saved != null) { setCustomTicker(saved); setTickerInput(saved); }
     } catch { /* ignore */ }
   }, []);
+  // Normalised once so the memo below can key off a string rather than the
+  // caller's array identity.
+  const tickerOverrideKey = (tickersProp ?? [])
+    .map((t) => t.trim().toUpperCase())
+    .filter(Boolean)
+    .join(",");
   const TICKERS = useMemo(() => {
+    // Explicit line-up wins outright — no base tickers, no 4th slot.
+    if (tickerOverrideKey) return tickerOverrideKey.split(",");
     const base = [...BASE_TICKERS] as string[];
     const t = customTicker.trim().toUpperCase();
     if (!isStatic && t && !base.includes(t)) base.push(t);
     return base;
-  }, [customTicker, isStatic]);
+  }, [customTicker, isStatic, tickerOverrideKey]);
   const commitTicker = useCallback(() => {
     const t = tickerInput.trim().toUpperCase();
     setTickerInput(t);
@@ -2223,8 +2246,10 @@ export function MultGreekClient({
           >{b.key}</button>
         ))}
 
-        {/* 4th ticker input — persisted per browser (localStorage). Live only. */}
-        {!isStatic && (
+        {/* 4th ticker input — persisted per browser (localStorage). Live only,
+            and hidden when the caller pinned the line-up (`tickers`), where it
+            would edit a slot that isn't on screen. */}
+        {!isStatic && !tickerOverrideKey && (
           <>
             <DockGap />
             <span style={{ fontSize: 10, fontWeight: 800, color: HT.muted, letterSpacing: "0.06em", whiteSpace: "nowrap" }}>4TH</span>

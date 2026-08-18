@@ -1,5 +1,58 @@
 # Changelog
 
+## 2026-08-18 - /board: Feed Health removed, GEX card is now the whole /home panel, chain card is Multi Greek on one ticker
+
+Edited: `components/pages/Board.tsx`, `app/mult-greek/MultGreekClient.tsx`.
+
+**Feed Health is gone.** The `health` card type, `HealthBody`, its `health#1`
+entry in `DEFAULT_LAYOUT` and the `lastByTypeRef` plumbing that existed only to
+feed it are all deleted, along with the two table styles nothing else used. The
+board no longer stamps an arrival time on every frame.
+
+**The GEX card is the /home GEX panel, whole — toolbar included.** It was the
+bare `GexChart` canvas on fixed defaults with no controls. It now renders the
+same `GexToolbar` + `GexChart` pair `HomeClient` does, wired to the same props:
+
+- DTE / expiry picker, Net GEX vs Call−Put, OI+Vol / Vol Only / Flow GEX
+- OI / DEX / Flip overlay toggles, refresh, snap + Discord (pointed at the canvas)
+- ghost overlays via `useStrikeGexHistory`, polled only while a ghost is on
+- the 401-level gamma profile is now recomputed on the SELECTED `dataMode`
+  instead of always `oi-vol`, so the flip curve agrees with the bars under it
+
+The toolbar sits in `FitScale min={0.42}`, same as /home, so it scales instead of
+scrolling in a narrow tile. Card is `chrome: false` (it brings its own frame) and
+`singleton` (see below). Default tile grew 8×11 → 8×13 to fit the toolbar.
+
+**Expiry is board-wide, and that is deliberate.** The DTE picker sends
+`SET_EXPIRY` through `sendGex`. That command is per-CONNECTION on the shared
+`/ws/gex`, so it retargets every card on the board at once — tiles, Key Levels,
+ES card, Greeks panel. This reverses the page's previous "never send SET_EXPIRY"
+stance, which is why the GEX card is a singleton: two pickers would fight over
+one board-wide setting. The picker shows the clicked date immediately and settles
+onto whatever the feed confirms, so a round trip doesn't read as a dead button.
+
+**/home is not affected.** `HomeClient` still opens its own private `/ws/gex`
+connection, so a `SET_EXPIRY` sent from /board never reaches it.
+
+**The Options Chain card is now Multi Greek pinned to one ticker.** The `chain`
+card dropped `<OptionsChainPage embed />` and mounts
+`<MultGreekClient tickers={["SPX"]} />` instead — the same page /mult-greek
+renders, with its toolbar, expiry picker, Δ stamps, CB/CW/PW badges, intensity
+slider, replay and click-through option chain, just one panel instead of four.
+The card keeps the id `chain` so saved layouts pick it up in place rather than
+dropping a tile; default size 12×18 → 6×18.
+
+**New `tickers` prop on `MultGreekClient`** (`app/mult-greek/MultGreekClient.tsx`).
+Omitted, nothing changes: SPX / SPY / QQQ plus the user's 4th slot. Passed, that
+list IS the line-up, and the toolbar's 4TH input is hidden because it would edit
+a slot that is no longer on screen. Keyed off a normalised joined string, not
+array identity, so a caller passing an inline array can't restart the chain-fetch
+loop every render (the /board card passes a module-scope constant anyway).
+
+**Feed additions.** `BoardFeed` gained `expirations: string[]` (read from the
+`gex`/`snapshot` payload and from `status`/`EXPIRATIONS` frames, same as /home)
+and lost `profile` and `lastByTypeRef`.
+
 ## 2026-08-18 - /board cards now mount the REAL page components, not lookalikes
 
 Edited: `components/pages/Board.tsx`.

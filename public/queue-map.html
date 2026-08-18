@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Visual Queue Map — SPX orderflow</title>
+<style>
+  /* Dark surfaces are the same six stops as the board theme
+     (--app #010102 / --shell #020304 / --card #0a0b0e). */
+  :root{
+    --ink:#eceff6; --ink2:#a8b0c2; --ink3:#6f7789;
+    --grid:rgba(255,255,255,.055); --axis:rgba(255,255,255,.16);
+    --panel:#0a0b0e; --page:#020304; --field:#0d0e12;
+    --edge:rgba(255,255,255,.075);
+
+    --green:#3ec98a; --red:#ef5f6b;
+    --blue:#4d8dff; --purple:#9b7cf6; --teal:#2fd4c6; --orange:#f59f3c;
+    --olive:#b8a13a;
+    --accent:#2fd4c6;
+
+    --band-pin:rgba(122,140,255,.10);
+    --band-put:rgba(62,201,138,.10);
+    --band-call:rgba(239,95,107,.10);
+  }
+  ::selection{background:rgba(47,212,198,.3)}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--page); color:var(--ink);
+    font:13px/1.45 -apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+    padding:18px;
+  }
+  .wrap{max-width:1500px;margin:0 auto}
+
+  h1{font-size:19px;font-weight:800;text-align:center;line-height:1.35}
+  h1 small{display:block;font-size:13px;font-weight:600;color:var(--ink2);margin-top:3px}
+
+  /* ── controls ─────────────────────────────────────────────── */
+  .ctrls{
+    background:var(--panel);border:1px solid var(--edge);border-radius:10px;
+    padding:13px 15px;margin:14px 0 16px;
+    display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;
+  }
+  .f{display:flex;flex-direction:column;gap:5px}
+  .f label{font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3)}
+  .f input[type=text],.f input[type=date],.f input[type=number],.f select{
+    font:inherit;padding:6px 9px;border:1px solid var(--edge);border-radius:6px;
+    background:var(--field);color:var(--ink);color-scheme:dark;
+  }
+  .f input::placeholder{color:var(--ink3)}
+  .f input:focus{outline:none;border-color:rgba(47,212,198,.5)}
+  .f input[type=text]{width:230px}
+  .slider{min-width:290px}
+  .slider .row{display:flex;align-items:center;gap:10px}
+  .slider input[type=range]{
+    flex:1;-webkit-appearance:none;appearance:none;height:4px;border-radius:3px;
+    background:linear-gradient(90deg,#000,#3a4152);outline:none;cursor:pointer;
+  }
+  .slider input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:15px;height:15px;border-radius:50%;
+    background:var(--accent);border:2px solid var(--panel);cursor:pointer;
+    box-shadow:0 2px 6px rgba(0,0,0,.7);
+  }
+  .slider input[type=range]::-moz-range-thumb{
+    width:13px;height:13px;border-radius:50%;background:var(--accent);
+    border:2px solid var(--panel);cursor:pointer;
+  }
+  .slider b{font-variant-numeric:tabular-nums;font-size:15px;min-width:56px;text-align:right;color:var(--accent)}
+  button{
+    font:inherit;font-weight:700;padding:7px 15px;border-radius:7px;cursor:pointer;
+    border:1px solid rgba(47,212,198,.35);background:rgba(47,212,198,.13);color:var(--accent);
+  }
+  button:hover{background:rgba(47,212,198,.2)}
+  button.sec{background:rgba(255,255,255,.04);color:var(--ink2);border-color:var(--edge)}
+  .split{
+    margin-left:auto;font-size:11.5px;color:var(--ink2);text-align:right;line-height:1.6;
+  }
+  .split b{font-variant-numeric:tabular-nums;color:var(--ink)}
+
+  #status{margin:0 0 12px;font-size:12px;color:var(--ink2);min-height:17px}
+  #status.err{color:var(--red)}
+
+  /* ── drop zone ────────────────────────────────────────────── */
+  #drop{
+    display:none;border:2px dashed var(--edge);border-radius:12px;background:var(--panel);
+    padding:34px 20px;text-align:center;color:var(--ink2);margin-bottom:16px;
+  }
+  #drop.on{display:block}
+  #drop.hot{border-color:var(--accent);background:rgba(47,212,198,.06)}
+  #drop h3{font-size:14px;margin-bottom:6px;color:var(--ink)}
+  #drop code{background:var(--field);padding:1px 5px;border-radius:4px;font-size:11px;color:var(--ink2)}
+
+  /* ── chart ────────────────────────────────────────────────── */
+  .chart{background:var(--panel);border:1px solid var(--edge);border-radius:10px;padding:10px 6px 4px}
+  svg{display:block;width:100%;height:auto}
+  .ptitle{font-size:13px;font-weight:600;fill:var(--ink)}
+  .ylab{font-size:11px;fill:var(--ink2)}
+  .tick{font-size:10px;fill:var(--ink2)}
+  .xtick{font-size:10.5px;fill:var(--ink2)}
+  .axis{stroke:var(--axis);stroke-width:1;fill:none}
+  .gridline{stroke:var(--grid);stroke-width:1}
+  .zero{stroke:rgba(255,255,255,.35);stroke-width:1}
+  .lg{font-size:11px;fill:var(--ink)}
+
+  .note{font-size:11px;color:var(--ink3);margin-top:12px;line-height:1.6}
+  .note b{color:var(--ink2)}
+  .note code{background:var(--field);padding:1px 4px;border-radius:3px;color:var(--ink2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>
+    Visual Queue Map — <span id="hdr-title">SPX orderflow</span>
+    <small id="hdr-sub">split by print size · market maker vs customer</small>
+  </h1>
+
+  <div class="ctrls">
+    <div class="f">
+      <label for="c-base">API base</label>
+      <input type="text" id="c-base" placeholder="(same origin)" />
+    </div>
+    <div class="f">
+      <label for="c-sym">Underlying</label>
+      <input type="text" id="c-sym" value="SPX" style="width:90px" />
+    </div>
+    <div class="f">
+      <label for="c-date">Session</label>
+      <input type="date" id="c-date" />
+    </div>
+    <div class="f">
+      <label for="c-strikes">Strikes shown</label>
+      <input type="number" id="c-strikes" value="14" min="4" max="40" step="1" style="width:80px" />
+    </div>
+    <div class="f slider">
+      <label for="c-thr">Market-maker cutoff — prints ≥ this size</label>
+      <div class="row">
+        <input type="range" id="c-thr" min="1" max="500" step="1" value="50" />
+        <b id="c-thr-v">50</b>
+      </div>
+    </div>
+    <div class="f">
+      <label>&nbsp;</label>
+      <button id="c-load">Load</button>
+    </div>
+    <div class="f">
+      <label>&nbsp;</label>
+      <button class="sec" id="c-file">Open file…</button>
+      <input type="file" id="c-fileinput" accept=".json,.csv,.txt" hidden />
+    </div>
+    <div class="split" id="split"></div>
+  </div>
+
+  <div id="status">Ready.</div>
+
+  <div id="drop">
+    <h3>Drop a tape export here</h3>
+    Opened from disk, so a same-origin fetch isn't possible.<br />
+    Drag in the JSON from <code>/proxy/flow-history?underlying=SPX&amp;limit=20000&amp;date=YYYY-MM-DD</code>
+    — either the whole <code>{"tape":[…]}</code> object or a bare array.
+  </div>
+
+  <div class="chart"><svg id="svg" viewBox="0 0 1500 1560" preserveAspectRatio="xMidYMid meet"></svg></div>
+
+  <div class="note">
+    <b>How this is built.</b>
+    Prints with size <b>≥ cutoff</b> are treated as market maker; <b>&lt; cutoff</b> as customer — that's the slider.
+    The two customer panels are signed contract counts (buy +, sell −).
+    The three MM panels are dollar exposures computed per print with Black–Scholes (r = q = 0) from the print's own
+    <code>iv</code>, its days to expiry and the spot at print time, then signed by the MM's side and summed per strike:
+    <b>GEX</b> = γ · contracts · 100 · S² · 1% ($M per 1% move) ·
+    <b>VEX</b> = vega · contracts · 100 ($K per 1 vol point) ·
+    <b>CEX</b> = charm · contracts · 100 · S ($M of delta per day).
+    Prints with no <code>iv</code> can't be greeked and are counted in the customer panels only — the split readout says how many.
+    Shaded bands are derived, not typed in: the call wall is the strike with the largest net customer call position,
+    the put wall the most negative net customer put, and the pin zone the densest contiguous run of strikes by total contracts.
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ════════════════════════════════════════════════════════════════════════
+   DATA
+   ════════════════════════════════════════════════════════════════════════ */
+
+let TAPE = [];          // FlowOrder[] as returned by /proxy/flow-history
+const $ = (id) => document.getElementById(id);
+
+/** Most recent weekday strictly before today, in ET. */
+function lastSessionISO() {
+  const et = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+  const d = new Date(et + "T12:00:00");
+  do { d.setDate(d.getDate() - 1); } while (d.getDay() === 0 || d.getDay() === 6);
+  return d.toISOString().slice(0, 10);
+}
+
+function setStatus(msg, isErr) {
+  const el = $("status");
+  el.textContent = msg;
+  el.className = isErr ? "err" : "";
+}
+
+async function load() {
+  const base = $("c-base").value.trim().replace(/\/$/, "");
+  const sym = $("c-sym").value.trim().toUpperCase() || "SPX";
+  const date = $("c-date").value;
+  const url = `${base}/proxy/flow-history?underlying=${encodeURIComponent(sym)}&limit=20000&date=${date}`;
+  setStatus(`Loading ${sym} ${date}…`);
+  try {
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    ingest(Array.isArray(j) ? j : (j && j.tape) || []);
+  } catch (e) {
+    setStatus(`Could not fetch ${url} — ${e.message}. Drop a file instead.`, true);
+    $("drop").classList.add("on");
+  }
+}
+
+/** Accepts the endpoint's JSON, a bare array, or a CSV with a header row. */
+function parseAny(text) {
+  const t = text.trim();
+  if (t.startsWith("{") || t.startsWith("[")) {
+    const j = JSON.parse(t);
+    return Array.isArray(j) ? j : (j.tape || j.orders || j.rows || []);
+  }
+  const lines = t.split(/\r?\n/).filter(Boolean);
+  const head = lines[0].split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
+  return lines.slice(1).map((ln) => {
+    const cells = ln.split(",");
+    const o = {};
+    head.forEach((h, i) => {
+      const raw = (cells[i] ?? "").trim().replace(/^"|"$/g, "");
+      const n = Number(raw);
+      o[h] = raw !== "" && Number.isFinite(n) ? n : raw;
+    });
+    return o;
+  });
+}
+
+function ingest(rows) {
+  TAPE = (rows || []).filter((o) => o && Number.isFinite(Number(o.strike)) && Number(o.size) > 0);
+  if (!TAPE.length) { setStatus("No usable prints in that data.", true); return; }
+  $("drop").classList.remove("on");
+  const withIv = TAPE.filter((o) => Number(o.iv) > 0).length;
+  setStatus(`${TAPE.length.toLocaleString()} prints loaded · ${withIv.toLocaleString()} carry an IV (greekable).`);
+  render();
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   BLACK–SCHOLES (r = q = 0), matching the model the GEX profile uses
+   ════════════════════════════════════════════════════════════════════════ */
+
+const pdf = (x) => Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+
+/** gamma, vega (per 1.00 vol) and charm (dDelta per YEAR) for one contract. */
+function greeks(S, K, vol, T) {
+  if (!(S > 0 && K > 0 && vol > 0 && T > 0)) return null;
+  const sqrtT = Math.sqrt(T);
+  const d1 = (Math.log(S / K) + 0.5 * vol * vol * T) / (vol * sqrtT);
+  const d2 = d1 - vol * sqrtT;
+  const p = pdf(d1);
+  return {
+    gamma: p / (S * vol * sqrtT),
+    vega: S * p * sqrtT,
+    // Charm with r=q=0. Identical for calls and puts, since Δput = Δcall − 1.
+    charm: p * d2 / (2 * T),
+  };
+}
+
+/** Days between the print and its expiry, floored so 0DTE isn't a divide-by-zero. */
+function yearsToExpiry(o) {
+  const exp = String(o.expiration || "");
+  if (!/^\d{4}-\d{2}-\d{2}/.test(exp)) return null;
+  const ts = Number(o.ts) || Date.now();
+  const days = (new Date(exp + "T20:00:00Z").getTime() - ts) / 86400000;
+  return Math.max(days, 0.05) / 365;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   AGGREGATION
+   ════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Build the five per-strike series.
+ *
+ * Sign convention is the MM's / customer's OWN position: a buy is long (+), a
+ * sell is short (−). The tape already classifies side, so there is no need for
+ * the OI-based "calls +, puts −" dealer assumption used elsewhere in the app.
+ */
+function aggregate(threshold) {
+  const by = new Map();     // strike -> series
+  const row = (k) => {
+    if (!by.has(k)) by.set(k, { strike: k, custC: 0, custP: 0, gex: 0, vex: 0, cex: 0, contracts: 0 });
+    return by.get(k);
+  };
+
+  let mmPrints = 0, custPrints = 0, mmGreeked = 0, spotSum = 0, spotN = 0;
+
+  for (const o of TAPE) {
+    const K = Number(o.strike);
+    const size = Number(o.size) || 0;
+    const isCall = String(o.type || "").toUpperCase().startsWith("C");
+    const sign = String(o.side || "").toLowerCase() === "sell" ? -1 : 1;
+    const r = row(K);
+    r.contracts += size;
+
+    const S = Number(o.spot) || 0;
+    if (S > 0) { spotSum += S; spotN++; }
+
+    if (size >= threshold) {
+      // ── market maker ───────────────────────────────────────────────────
+      mmPrints++;
+      const vol = Number(o.iv) || 0;
+      const T = yearsToExpiry(o);
+      const g = T == null ? null : greeks(S, K, vol, T);
+      if (!g) continue;
+      mmGreeked++;
+      const pos = sign * size * 100;                       // signed share-equivalents
+      r.gex += (g.gamma * pos * S * S * 0.01) / 1e6;        // $M per 1% move
+      r.vex += (g.vega * pos * 0.01) / 1e3;                 // $K per 1 vol point
+      r.cex += (g.charm / 365 * pos * S) / 1e6;             // $M of delta per day
+    } else {
+      // ── customer ───────────────────────────────────────────────────────
+      custPrints++;
+      if (isCall) r.custC += sign * size;
+      else r.custP += sign * size;
+    }
+  }
+
+  const all = [...by.values()];
+  const spot = spotN ? spotSum / spotN : 0;
+
+  // Keep the busiest strikes, then read left-to-right by strike — same shape as
+  // the reference, where the x-axis is the active strikes, not a fixed grid.
+  const want = Math.max(4, Math.min(40, Number($("c-strikes").value) || 14));
+  const kept = all.sort((a, b) => b.contracts - a.contracts).slice(0, want)
+                  .sort((a, b) => a.strike - b.strike);
+
+  return { rows: kept, spot, mmPrints, custPrints, mmGreeked };
+}
+
+/** Call wall / put wall / pin zone, derived from the customer series. */
+function bands(rows) {
+  if (!rows.length) return { call: null, put: null, pin: null };
+  let call = null, put = null;
+  for (const r of rows) {
+    if (r.custC > 0 && (!call || r.custC > call.custC)) call = r;
+    if (r.custP < 0 && (!put || r.custP < put.custP)) put = r;
+  }
+  // Pin zone = the densest contiguous run of strikes by total contracts.
+  const W = Math.min(6, rows.length);
+  let bestI = 0, bestSum = -1;
+  for (let i = 0; i + W <= rows.length; i++) {
+    let s = 0;
+    for (let k = i; k < i + W; k++) s += rows[k].contracts;
+    if (s > bestSum) { bestSum = s; bestI = i; }
+  }
+  return {
+    call: call ? call.strike : null,
+    put: put ? put.strike : null,
+    pin: rows.length >= 2 ? [rows[bestI].strike, rows[bestI + W - 1].strike] : null,
+  };
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   RENDER
+   ════════════════════════════════════════════════════════════════════════ */
+
+const W = 1500;
+const M = { l: 96, r: 26, t: 96, b: 92 };
+// The gap has to clear the next panel's title, which is drawn above its box.
+const PANEL_H = 250, PANEL_GAP = 48;
+
+const PANELS = [
+  { key: "custC", title: "Customer Calls — net contracts (buy +, sell −)", ylab: "Customer Calls",
+    pos: "var(--green)", neg: "var(--red)" },
+  { key: "custP", title: "Customer Puts — net contracts (buy +, sell −)", ylab: "Customer Puts",
+    pos: "var(--green)", neg: "var(--red)" },
+  { key: "gex", title: "Net MM GEX", ylab: "GEX ($M / 1%)",
+    pos: "var(--blue)", neg: "var(--orange)" },
+  // VEX lands two orders of magnitude below GEX in dollars, so it is shown in
+  // $K — otherwise every bar rounds to 0.0 on the axis.
+  { key: "vex", title: "Net MM VEX", ylab: "VEX ($K / vol pt)",
+    pos: "var(--purple)", neg: "var(--olive)" },
+  { key: "cex", title: "Net MM CEX — time-decay flows", ylab: "CEX ($M / day)",
+    pos: "var(--teal)", neg: "var(--orange)" },
+];
+
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+function fmtTick(v) {
+  const a = Math.abs(v);
+  if (a === 0) return "0";
+  if (a >= 1000) return Math.round(v).toLocaleString();
+  if (a >= 10) return v.toFixed(0);
+  if (a >= 1) return v.toFixed(1);
+  return v.toFixed(2);
+}
+
+function render() {
+  const thr = Number($("c-thr").value);
+  const { rows, spot, mmPrints, custPrints, mmGreeked } = aggregate(thr);
+  const b = bands(rows);
+
+  $("split").innerHTML = rows.length
+    ? `MM (≥${thr}): <b>${mmPrints.toLocaleString()}</b> prints · <b>${mmGreeked.toLocaleString()}</b> greekable<br>`
+      + `Customer (&lt;${thr}): <b>${custPrints.toLocaleString()}</b> prints`
+      + (spot ? ` · avg spot <b>${spot.toFixed(2)}</b>` : "")
+    : "";
+
+  const H = M.t + PANELS.length * PANEL_H + (PANELS.length - 1) * PANEL_GAP + M.b;
+  const svg = $("svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+
+  if (!rows.length) {
+    svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" class="ptitle">No data loaded</text>`;
+    return;
+  }
+
+  const plotW = W - M.l - M.r;
+  const step = plotW / rows.length;
+  const barW = step * 0.62;
+  const xOf = (i) => M.l + i * step + step / 2;
+  const idxOf = (strike) => rows.findIndex((r) => r.strike === strike);
+
+  const sym = $("c-sym").value.trim().toUpperCase() || "SPX";
+  $("hdr-title").textContent = `${sym} orderflow — ${$("c-date").value}`;
+  $("hdr-sub").textContent =
+    `market maker = prints ≥ ${thr} lots · customer = prints < ${thr} lots`
+    + (b.put != null ? ` · put wall ${b.put}` : "")
+    + (b.call != null ? ` · call wall ${b.call}` : "");
+
+  let out = "";
+
+  // ── shaded bands, drawn once behind every panel ──────────────────────────
+  const bandTop = M.t - 18;
+  const bandBot = M.t + PANELS.length * PANEL_H + (PANELS.length - 1) * PANEL_GAP;
+  const spanOf = (a, z) => {
+    const i = idxOf(a), j = idxOf(z);
+    if (i < 0 || j < 0) return null;
+    return { x: M.l + i * step, w: (j - i + 1) * step };
+  };
+  const bandRects = [];
+  if (b.pin) { const s = spanOf(b.pin[0], b.pin[1]); if (s) bandRects.push([s, "var(--band-pin)"]); }
+  if (b.put != null) { const s = spanOf(b.put, b.put); if (s) bandRects.push([s, "var(--band-put)"]); }
+  if (b.call != null) { const s = spanOf(b.call, b.call); if (s) bandRects.push([s, "var(--band-call)"]); }
+  for (const [s, fill] of bandRects) {
+    out += `<rect x="${s.x.toFixed(1)}" y="${bandTop}" width="${s.w.toFixed(1)}" height="${(bandBot - bandTop).toFixed(1)}" fill="${fill}"/>`;
+  }
+
+  // ── panels ───────────────────────────────────────────────────────────────
+  PANELS.forEach((p, pi) => {
+    const top = M.t + pi * (PANEL_H + PANEL_GAP);
+    const bot = top + PANEL_H;
+    const vals = rows.map((r) => r[p.key]);
+    const hi = Math.max(0, ...vals), lo = Math.min(0, ...vals);
+    const pad = (hi - lo) * 0.08 || 1;
+    const yHi = hi + pad, yLo = lo - pad;
+    const yOf = (v) => bot - ((v - yLo) / (yHi - yLo)) * PANEL_H;
+    const zeroY = yOf(0);
+
+    out += `<text x="${W / 2}" y="${top - 15}" text-anchor="middle" class="ptitle">${esc(p.title)}</text>`;
+
+    // y grid + ticks (5 steps, snapped through zero)
+    for (let t = 0; t <= 4; t++) {
+      const v = yLo + ((yHi - yLo) * t) / 4;
+      const y = yOf(v);
+      out += `<line class="gridline" x1="${M.l}" y1="${y.toFixed(1)}" x2="${W - M.r}" y2="${y.toFixed(1)}"/>`;
+      out += `<text class="tick" x="${M.l - 8}" y="${(y + 3.5).toFixed(1)}" text-anchor="end">${fmtTick(v)}</text>`;
+    }
+
+    // bars
+    rows.forEach((r, i) => {
+      const v = r[p.key];
+      const y = yOf(v);
+      const h = Math.abs(y - zeroY);
+      if (h < 0.4 && v === 0) return;
+      out += `<rect x="${(xOf(i) - barW / 2).toFixed(1)}" y="${Math.min(y, zeroY).toFixed(1)}"`
+           + ` width="${barW.toFixed(1)}" height="${Math.max(h, 1).toFixed(1)}"`
+           + ` fill="${v >= 0 ? p.pos : p.neg}" opacity="0.92">`
+           + `<title>${r.strike} · ${fmtTick(v)}</title></rect>`;
+    });
+
+    out += `<line class="zero" x1="${M.l}" y1="${zeroY.toFixed(1)}" x2="${W - M.r}" y2="${zeroY.toFixed(1)}"/>`;
+    out += `<rect class="axis" x="${M.l}" y="${top}" width="${plotW}" height="${PANEL_H}"/>`;
+    out += `<text class="ylab" transform="translate(${M.l - 52},${top + PANEL_H / 2}) rotate(-90)" text-anchor="middle">${esc(p.ylab)}</text>`;
+  });
+
+  // ── x axis, once, under the last panel ───────────────────────────────────
+  const xAxisY = M.t + PANELS.length * PANEL_H + (PANELS.length - 1) * PANEL_GAP;
+  rows.forEach((r, i) => {
+    out += `<text class="xtick" transform="translate(${xOf(i).toFixed(1)},${xAxisY + 16}) rotate(-45)" text-anchor="end">${r.strike}</text>`;
+  });
+  out += `<text class="ylab" x="${W / 2}" y="${xAxisY + 74}" text-anchor="middle">Strike</text>`;
+
+  // ── legend, top-left of the first panel ──────────────────────────────────
+  const legend = [
+    ["var(--band-pin)", "Pin / dense zone"],
+    ["var(--band-put)", b.put != null ? `Put wall / support (${b.put})` : "Put wall / support"],
+    ["var(--band-call)", b.call != null ? `Call wall / resistance (${b.call})` : "Call wall / resistance"],
+  ];
+  const lgW = 232, lgH = 16 + legend.length * 19;
+  out += `<rect x="${M.l + 8}" y="${M.t + 8}" width="${lgW}" height="${lgH}"`
+       + ` fill="var(--field)" stroke="var(--edge)" rx="6" opacity="0.96"/>`;
+  legend.forEach(([fill, label], i) => {
+    const y = M.t + 20 + i * 19;
+    // Drawn three times: the band tints are faint by design over the chart, and
+    // a single pass at that alpha is invisible in a 20×12 swatch.
+    out += `<rect x="${M.l + 17}" y="${y}" width="20" height="12" fill="${fill}"/>`.repeat(3)
+         + `<rect x="${M.l + 17}" y="${y}" width="20" height="12" fill="none" stroke="var(--axis)"/>`;
+    out += `<text class="lg" x="${M.l + 45}" y="${y + 10.5}">${esc(label)}</text>`;
+  });
+
+  svg.innerHTML = out;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   WIRING
+   ════════════════════════════════════════════════════════════════════════ */
+
+$("c-date").value = lastSessionISO();
+
+$("c-thr").addEventListener("input", () => {
+  $("c-thr-v").textContent = $("c-thr").value;
+  if (TAPE.length) render();
+});
+$("c-strikes").addEventListener("change", () => { if (TAPE.length) render(); });
+$("c-load").addEventListener("click", load);
+$("c-file").addEventListener("click", () => $("c-fileinput").click());
+$("c-fileinput").addEventListener("change", (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (f) readFile(f);
+});
+
+function readFile(f) {
+  const fr = new FileReader();
+  fr.onload = () => {
+    try { ingest(parseAny(String(fr.result))); }
+    catch (err) { setStatus(`Could not parse ${f.name} — ${err.message}`, true); }
+  };
+  fr.readAsText(f);
+}
+
+const drop = $("drop");
+["dragenter", "dragover"].forEach((ev) =>
+  document.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("on", "hot"); }));
+["dragleave", "drop"].forEach((ev) =>
+  document.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("hot"); }));
+document.addEventListener("drop", (e) => {
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) readFile(f);
+});
+
+// Served from the site → the relative fetch works, so go straight at it.
+// Opened from disk → skip the doomed request and show the drop zone.
+if (location.protocol === "http:" || location.protocol === "https:") {
+  load();
+} else {
+  setStatus("Opened from disk — a same-origin fetch isn't possible here. Drop a tape export, or set an API base and press Load.");
+  drop.classList.add("on");
+}
+</script>
+</body>
+</html>

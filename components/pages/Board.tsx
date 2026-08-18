@@ -24,13 +24,13 @@
  * THE CARDS ARE THE REAL PAGES
  * ----------------------------
  * Almost every card mounts the component the matching dashboard page actually
- * renders — GexChart from /home, EsChartCard (via EsCandlesPage's `embedded`
- * path) from /es-candles, OptionsChainPage in its proven embed configuration,
- * EconCalendarPanel, EmCustomer, GexChangeTop, IbStatsTab, MultGreekClient.
- * They are not reimplementations, so they cannot drift from the pages.
+ * renders — GexChart + GexToolbar from /home (the same pair, same props, same
+ * controls), EsChartCard (via EsCandlesPage's `embedded` path) from
+ * /es-candles, MultGreekClient, EconCalendarPanel, EmCustomer, GexChangeTop,
+ * IbStatsTab. They are not reimplementations, so they cannot drift.
  *
- * Only three cards are board-native, because no mountable equivalent exists:
- * the Overview tiles, Key Levels, and Feed Health.
+ * Only two cards are board-native, because no mountable equivalent exists:
+ * the Overview tiles and Key Levels.
  *
  * DATA — ONE SUBSCRIPTION FOR THE BOARD'S OWN CARDS
  * -------------------------------------------------
@@ -43,25 +43,33 @@
  * rail, EsChartCard) are fine: gexSocket is refcounted and their topic lists
  * are subsets of BOARD_TOPICS, so they ride this same connection.
  *
- * Deliberate non-goal: this page does NOT send SET_EXPIRY. That command is
- * per-CONNECTION on a socket the whole tab shares, so pinning an expiry here
- * would silently retarget every other mounted consumer. The board shows
- * whatever expiry the feed is on and labels it.
+ * EXPIRY IS BOARD-WIDE, NOT PER-CARD
+ * ----------------------------------
+ * The GEX card carries the real /home GexToolbar, DTE picker included, and that
+ * picker sends SET_EXPIRY through `sendGex`. SET_EXPIRY is per-CONNECTION on a
+ * socket every consumer shares, so it retargets the WHOLE board at once — the
+ * tiles, Key Levels, the ES card and the Greeks panel all follow it. That is
+ * the intended behaviour here (one board, one expiry); it is also why there is
+ * no second, independent expiry control anywhere on this page.
+ *
+ * /home is unaffected: HomeClient still opens its own private /ws/gex
+ * connection, so a SET_EXPIRY sent from this board never reaches it.
  */
 
 import {
-  createContext, useContext, useEffect, useMemo, useRef, useState,
-  type CSSProperties, type ReactNode,
+  createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
+  type ReactNode,
 } from "react";
 import DashGrid, { compactLayout, type GridItem } from "@/components/shared/DashGrid";
 import LayoutBar from "@/components/shared/LayoutBar";
 import { useDashboardLayout } from "@/components/shared/useDashboardLayout";
-import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
+import { sendGex, subscribeGex, type GexMessage } from "@/lib/gexSocket";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
+import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import {
   computeGEXProfile, findGEXFlip, netGEXOf, formatGEX, formatStrike,
-  type ChainRow, type GEXProfile,
+  type ChainRow,
 } from "@/lib/calculations/calculations";
 
 /* ── the REAL dashboard components each card mounts ──────────────────────────
@@ -69,7 +77,7 @@ import {
    not a re-implementation. Where a page delegates to a panel (GexChart under
    /home, EsChartCard under /es-candles, EconCalendarPanel under /analytics) the
    card mounts the PANEL; where the page IS the unit and already has an embed
-   contract (OptionsChainPage, EsCandlesPage) the card mounts the page in its
+   contract (EsCandlesPage, MultGreekClient) the card mounts the page in its
    embedded mode.
 
    Three pages are deliberately absent — /flow, /levels and /traders-dashboard
@@ -77,9 +85,10 @@ import {
    would nest a page shell inside a tile. Their reusable pieces (FlowTape,
    FlowNetPremPanel) ARE here as cards.
    ─────────────────────────────────────────────────────────────────────────── */
-import GexChart from "@/components/dashboard/GexChart";
+import GexChart, { type GexMode, type DataMode } from "@/components/dashboard/GexChart";
+import GexToolbar from "@/components/dashboard/GexToolbar";
+import FitScale from "@/components/shared/FitScale";
 import EsCandlesPage from "@/components/pages/EsCandles";
-import OptionsChainPage from "@/components/pages/OptionsChain";
 import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
 import FlowTape from "@/components/dashboard/FlowTape";
 import FlowNetPremPanel from "@/components/dashboard/FlowNetPremPanel";
@@ -157,6 +166,21 @@ const BOARD_TOPICS = ["gex", "spot", "aux", "status", "flow"] as const;
 /** Coalesce bursts: the feed pushes continuously, one render per window. */
 const FRAME_MS = 700;
 
+/**
+ * The single ticker the Multi Greek card is pinned to.
+ *
+ * MODULE SCOPE, not an inline array: MultGreekClient keys its chain-fetch
+ * effects off this list, so a fresh array each render would restart the loop
+ * every render.
+ */
+const BOARD_ONE_TICKER = ["SPX"];
+
+/**
+ * Ghost-overlay ages, in minutes — the same three /home offers. Module scope for
+ * the same reason: useStrikeGexHistory keys its poll off the list.
+ */
+const GHOST_AGES = [5, 15, 30];
+
 type BoardFeed = {
   chain: ChainRow[];
   spot: number;
@@ -166,26 +190,22 @@ type BoardFeed = {
   flip: number | null;
   totalNetGex: number | null;
   esFut: number;
+  /** The expiry the FEED is currently on (what the rows are actually for). */
   expiry: string;
+  /**
+   * Every expiry the feed offers, newest-first as the server sends them. Feeds
+   * the GEX card's DTE picker — the same list /home's picker is built from.
+   */
+  expirations: string[];
   tape: FlowOrder[];
   connected: boolean;
   hasData: boolean;
-  /**
-   * Epoch ms of the last frame of each type, as a REF rather than state.
-   *
-   * Only the Feed Health card reads it, and it already ticks its own 1s clock.
-   * Publishing these as state would re-render every card on the board at the
-   * feed's rate — a diagnostic panel must not become the page's most expensive
-   * component.
-   */
-  lastByTypeRef: { readonly current: Record<string, number> };
-  profile: GEXProfile | null;
 };
 
 const EMPTY_FEED: BoardFeed = {
   chain: [], spot: 0, prevClose: 0, callWall: null, putWall: null, flip: null,
-  totalNetGex: null, esFut: 0, expiry: "", tape: [], connected: false,
-  hasData: false, lastByTypeRef: { current: {} }, profile: null,
+  totalNetGex: null, esFut: 0, expiry: "", expirations: [], tape: [],
+  connected: false, hasData: false,
 };
 
 const FeedCtx = createContext<BoardFeed>(EMPTY_FEED);
@@ -210,6 +230,7 @@ function useBoardFeed(): BoardFeed {
   const [totalNetGex, setTotalNetGex] = useState<number | null>(null);
   const [esFut, setEsFut] = useState(0);
   const [expiry, setExpiry] = useState("");
+  const [expirations, setExpirations] = useState<string[]>([]);
   const [tape, setTape] = useState<FlowOrder[]>([]);
   const [connected, setConnected] = useState(false);
   const [hasData, setHasData] = useState(false);
@@ -217,7 +238,6 @@ function useBoardFeed(): BoardFeed {
   // Coalescer state lives in refs so the subscribe effect never re-runs.
   const pendingRef = useRef<Record<string, unknown> | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastByTypeRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     if (!enabled) return;
@@ -238,6 +258,11 @@ function useBoardFeed(): BoardFeed {
       const es = num(p.esFut);
       if (es > 0) setEsFut(es);
       if (typeof p.expiry === "string" && p.expiry) setExpiry(p.expiry);
+      // The gex/snapshot frame carries the calendar alongside the rows — this is
+      // where /home's picker gets its list too.
+      if (Array.isArray(p.expirations) && p.expirations.length) {
+        setExpirations(p.expirations as string[]);
+      }
     };
 
     const flush = () => {
@@ -265,8 +290,6 @@ function useBoardFeed(): BoardFeed {
         const type = String(msg.type ?? "");
         // server-v2 nests under `data`; legacy frames put fields on the message.
         const data = msg.data && typeof msg.data === "object" ? asRecord(msg.data) : asRecord(msg);
-        // Mutated, not published — see BoardFeed.lastByTypeRef.
-        lastByTypeRef.current[type] = Date.now();
         switch (type) {
           case "snapshot":
             queue(data, true);
@@ -284,6 +307,9 @@ function useBoardFeed(): BoardFeed {
           case "status":
           case "EXPIRATIONS":
             if (typeof data.expiry === "string" && data.expiry) setExpiry(data.expiry);
+            if (Array.isArray(data.expirations) && data.expirations.length) {
+              setExpirations(data.expirations as string[]);
+            }
             break;
           case "flow":
             if (Array.isArray(data.tape)) setTape(data.tape as FlowOrder[]);
@@ -301,19 +327,20 @@ function useBoardFeed(): BoardFeed {
   }, [enabled]);
 
   // Prefer the client-side flip: it is derived from the exact rows on screen.
+  // Matches /home's `flipPoint` exactly (findGEXFlip(chartRows, chartSpot)).
   const flip = useMemo(() => findGEXFlip(chain, spot) ?? serverFlip, [chain, spot, serverFlip]);
-  const profile = useMemo(
-    () => (chain.length ? computeGEXProfile(chain, spot, "oi-vol") : null),
-    [chain, spot],
-  );
+
+  // NOTE: the 401-level gamma profile is NOT computed here. It depends on the
+  // chart's dataMode, which is now a control on the GEX card's toolbar — so the
+  // card computes its own and the board doesn't pay for a basis nobody is on.
 
   return useMemo(
     () => ({
       chain, spot, prevClose, callWall, putWall, flip, totalNetGex, esFut,
-      expiry, tape, connected, hasData, lastByTypeRef, profile,
+      expiry, expirations, tape, connected, hasData,
     }),
     [chain, spot, prevClose, callWall, putWall, flip, totalNetGex, esFut,
-     expiry, tape, connected, hasData, profile],
+     expiry, expirations, tape, connected, hasData],
   );
 }
 
@@ -364,23 +391,20 @@ const CARD_TYPES: Record<string, CardDef> = {
     body: () => <LevelsBody />,
     w: 4, h: 7,
   },
-  health: {
-    label: "Feed health",
-    title: "Feed Health",
-    subtitle: "/ws/gex · topic-scoped",
-    body: () => <HealthBody />,
-    w: 4, h: 7,
-  },
 
   // ── /home ─────────────────────────────────────────────────────────────────
   gexchart: {
-    label: "GEX chart",
-    title: "GEX by Strike",
-    subtitle: "the /home chart",
-    // The real canvas chart. Pure props + its own ResizeObserver, so it fills
-    // whatever the tile gives it. `transparentBg` exists for exactly this.
+    label: "GEX chart (with toolbar)",
+    // No card header: the card IS the /home GEX panel — GexToolbar on top, the
+    // canvas below — and a title bar above the toolbar would just be a third
+    // stacked strip. The edit-mode grip strip still floats over it.
+    chrome: false,
+    // SINGLETON: the DTE picker on the toolbar sends SET_EXPIRY, which is a
+    // per-connection command on a socket the whole board shares. Two of these
+    // would be two controls fighting over one board-wide setting.
+    singleton: true,
     body: () => <GexChartBody />,
-    w: 8, h: 11,
+    w: 8, h: 13,
   },
   greeks: {
     label: "Greeks panel",
@@ -418,19 +442,25 @@ const CARD_TYPES: Record<string, CardDef> = {
     w: 8, h: 16,
   },
 
-  // ── /options-chain ────────────────────────────────────────────────────────
+  // ── /mult-greek, one column ───────────────────────────────────────────────
+  // Was the embedded Options Chain page. Replaced by the Multi Greek grid
+  // restricted to a SINGLE ticker (`tickers` prop) — same component /mult-greek
+  // mounts, same toolbar, expiry picker, Δ stamps, CB/CW/PW badges, intensity,
+  // replay and click-through chain, just one panel instead of four. Clicking
+  // the panel's expand still opens the full option chain over it, so nothing
+  // that was reachable from the old card was lost.
+  //
+  // Keeps the id `chain` on purpose: card type lives in the grid id, so saved
+  // layouts that already have `chain#1` pick this up in place rather than
+  // dropping a tile.
   chain: {
-    label: "Options chain",
+    label: "Multi Greek (one ticker)",
     chrome: false,
-    // The real page in its proven embed configuration — the same one /home
-    // uses. `ticker` hides the page's own ticker input; showGrandTotal drops
-    // the total readout that only makes sense full-page.
-    body: () => (
-      <div style={{ height: "100%", overflow: "auto" }}>
-        <OptionsChainPage expirySelection="key" ticker="SPX" showGrandTotal={false} />
-      </div>
-    ),
-    w: 12, h: 18,
+    // SINGLETON: the page holds a per-browser localStorage key and its own
+    // chain/expiration fetch loop. A second instance doubles both.
+    singleton: true,
+    body: () => <MultGreekClient tickers={BOARD_ONE_TICKER} />,
+    w: 6, h: 18,
   },
 
   // ── /flow (the page itself is PageShell-bound; these are its panels) ───────
@@ -484,11 +514,13 @@ const CARD_TYPES: Record<string, CardDef> = {
 
   // ── /mult-greek ───────────────────────────────────────────────────────────
   multgreek: {
-    label: "Multi Greek (wide)",
+    label: "Multi Greek (all four tickers)",
     chrome: false,
     // Whole page in a tile: four ticker columns plus its own dock. It mounts
     // cleanly (height:100%, all props optional) but wants ~1000px of width —
-    // hence the full-width default and the label.
+    // hence the full-width default and the label. The one-ticker version of the
+    // same page is the `chain` card above; both mount MultGreekClient, so
+    // running both at once means two chain-fetch loops.
     singleton: true,
     body: () => <MultGreekClient />,
     w: 12, h: 20,
@@ -516,14 +548,13 @@ function nextInstanceId(type: string, layout: GridItem[]): string {
  */
 const DEFAULT_LAYOUT: GridItem[] = [
   { id: "stats#1",    x: 0, y: 0,  w: 12, h: 3 },
-  { id: "gexchart#1", x: 0, y: 3,  w: 8,  h: 11 },
+  { id: "gexchart#1", x: 0, y: 3,  w: 8,  h: 13 },
   { id: "levels#1",   x: 8, y: 3,  w: 4,  h: 7 },
   { id: "gauges#1",   x: 8, y: 10, w: 4,  h: 9 },
-  { id: "escandles#1", x: 0, y: 14, w: 8, h: 16 },
+  { id: "escandles#1", x: 0, y: 16, w: 8, h: 16 },
   { id: "tape#1",     x: 8, y: 19, w: 4,  h: 12 },
-  { id: "chain#1",    x: 0, y: 30, w: 12, h: 18 },
-  { id: "econ#1",     x: 0, y: 48, w: 6,  h: 10 },
-  { id: "health#1",   x: 6, y: 48, w: 4,  h: 7 },
+  { id: "chain#1",    x: 0, y: 32, w: 6,  h: 18 },
+  { id: "econ#1",     x: 6, y: 32, w: 6,  h: 10 },
 ];
 
 export default function Board() {
@@ -795,17 +826,6 @@ function Waiting({ what }: { what: string }) {
   );
 }
 
-const thStyle: CSSProperties = {
-  textAlign: "left", fontSize: 9, fontWeight: 700, letterSpacing: "0.05em",
-  textTransform: "uppercase", color: BOARD_THEME.text3, padding: "7px 6px",
-  borderBottom: `1px solid ${BOARD_THEME.line}`, position: "sticky", top: 0,
-  background: BOARD_THEME.card,
-};
-const tdStyle: CSSProperties = {
-  padding: "6px 6px", borderBottom: `1px solid ${BOARD_THEME.line2}`,
-  color: BOARD_THEME.text2, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums",
-};
-
 /* ═══════════════════════════════════════════════════════════════════════════
    CARD BODIES
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -866,33 +886,175 @@ function StatsBody() {
   );
 }
 
+/* ── GEX card — the /home panel, whole ────────────────────────────────────────
+   Toolbar on top, canvas below: the SAME GexToolbar + GexChart pair /home
+   renders, wired to the same props with the same defaults, so every control is
+   here — DTE picker, Net GEX / Call−Put, OI+Vol / Vol Only / Flow GEX, the
+   OI / DEX / Flip overlay toggles, refresh, and the snap + Discord buttons
+   pointed at the canvas.
+
+   What differs from /home, and why:
+   · The rows come from THIS board's shared socket instead of HomeClient's
+     private one — same server, same frames, one connection for the page.
+   · The DTE picker is board-wide (SET_EXPIRY is per-connection; see the file
+     header). The card shows the picked expiry immediately and settles onto
+     whatever the feed confirms.
+   ─────────────────────────────────────────────────────────────────────────── */
+
 /**
- * The real /home GEX chart, fed from this board's socket.
- *
- * GexChart is pure props with its own ResizeObserver, so it fills whatever the
- * tile gives it and redraws on resize with no help from us. `transparentBg`
- * drops its opaque background so the card surface shows through — that prop
- * exists for exactly this case.
- *
- * No toolbar: GexToolbar is fully controlled and needs the page's expiry list,
- * mode state and an onRefresh. The chart's own defaults (net / OI+Vol) are the
- * ones /home opens with, and the flip curve is on because the board already
- * computes the profile.
+ * Expiry values for the picker, filtered exactly like /home's
+ * buildExpiryOptions: anything already past is dropped (a stale leading entry
+ * the feed hadn't pruned is what used to mislabel the whole picker), capped at
+ * the eight nearest.
  */
+function usableExpirations(dates: string[]): string[] {
+  const today = etYmdToday();
+  return dates.filter((d) => daysBetweenYmd(today, d) >= 0).slice(0, 8);
+}
+
+/** Today in ET as yyyy-mm-dd — matches the server's todayYmd() convention. */
+function etYmdToday(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date());
+  const map = Object.fromEntries(
+    parts.filter((p) => p.type !== "literal").map((p) => [p.type, p.value]),
+  );
+  return `${map.year}-${map.month}-${map.day}`;
+}
+
+/** Calendar days between two yyyy-mm-dd strings, parsed as UTC midnight. */
+function daysBetweenYmd(fromYmd: string, toYmd: string): number {
+  const a = Date.parse(`${fromYmd}T00:00:00Z`);
+  const b = Date.parse(`${toYmd}T00:00:00Z`);
+  if (!isFinite(a) || !isFinite(b)) return 0;
+  return Math.round((b - a) / 86400000);
+}
+
 function GexChartBody() {
-  const { chain, spot, flip, profile, expiry } = useFeed();
-  if (!chain.length) return <Waiting what="gex rows" />;
+  const { chain, spot, flip, expiry, expirations } = useFeed();
+
+  // Chart controls — same names, same defaults as HomeClient.
+  const [gexMode, setGexMode] = useState<GexMode>("net");
+  const [dataMode, setDataMode] = useState<DataMode>("oi-vol");
+  const [showOI, setShowOI] = useState(false);
+  const [showDex, setShowDex] = useState(false);
+  const [showFlipCurve, setShowFlipCurve] = useState(false);
+  const [showGhost5, setShowGhost5] = useState(false);
+  const [showGhost15, setShowGhost15] = useState(false);
+  const [showGhost30, setShowGhost30] = useState(false);
+
+  // Screenshot target: the canvas box only, not the toolbar above it.
+  const chartRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * The picker's value.
+   *
+   * The feed is the source of truth, but SET_EXPIRY takes a round trip, so a
+   * click would otherwise snap back to the old date for a second and read as
+   * "the button didn't work". `pending` holds the user's choice until the feed
+   * confirms it (or the server answers with a different date, which then wins).
+   */
+  const [pending, setPending] = useState<string | null>(null);
+  const selectedExpiry = pending ?? expiry;
+  useEffect(() => {
+    if (pending && expiry && expiry === pending) setPending(null);
+  }, [pending, expiry]);
+
+  const handleExpiry = useCallback((next: string) => {
+    setPending(next);
+    // Queued automatically if the socket isn't OPEN yet — see sendGex.
+    sendGex({ type: "SET_EXPIRY", expiry: next });
+  }, []);
+
+  // No client-side chain fetch to redo: the server owns the rows. Re-asserting
+  // the expiry is what actually makes it push a fresh frame.
+  const handleRefresh = useCallback(async () => {
+    if (selectedExpiry) sendGex({ type: "SET_EXPIRY", expiry: selectedExpiry });
+  }, [selectedExpiry]);
+
+  const expiryValues = useMemo(() => usableExpirations(expirations), [expirations]);
+
+  // Basis-aware, exactly like /home: the profile has to be computed on the mode
+  // the bars are drawn on or the flip curve disagrees with the chart under it.
+  const profile = useMemo(
+    () => (chain.length ? computeGEXProfile(chain, spot, dataMode) : null),
+    [chain, spot, dataMode],
+  );
+
+  // Ghost baselines are only fetched while a ghost is actually on — passing ""
+  // for the expiry is the hook's own "don't poll" signal.
+  const anyGhost = showGhost5 || showGhost15 || showGhost30;
+  const baselines = useStrikeGexHistory(anyGhost ? selectedExpiry : "", GHOST_AGES, 30_000, true);
+
   return (
-    <div style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-      <GexChart
-        chain={chain}
-        spotPrice={spot}
-        flipPoint={flip}
-        gexProfile={profile}
-        showFlipCurve
-        expiry={expiry}
-        transparentBg
-      />
+    <div style={{
+      height: "100%", display: "flex", flexDirection: "column",
+      minHeight: 0, minWidth: 0, overflow: "hidden",
+      background: BOARD_THEME.card,
+      border: `1px solid ${BOARD_THEME.line}`,
+      borderRadius: 14,
+    }}>
+      {/* Scales down instead of scrolling, so the full control set stays
+          reachable in a tile narrower than the /home column. */}
+      <FitScale min={0.42}>
+        <GexToolbar
+          gexMode={gexMode}
+          dataMode={dataMode}
+          showOI={showOI}
+          showDex={showDex}
+          showFlipCurve={showFlipCurve}
+          expirations={expiryValues}
+          selectedExpiry={selectedExpiry}
+          onExpiry={handleExpiry}
+          onGexMode={setGexMode}
+          onDataMode={setDataMode}
+          showGhost5={showGhost5}
+          showGhost15={showGhost15}
+          showGhost30={showGhost30}
+          onToggleOI={() => setShowOI((v) => !v)}
+          onToggleDex={() => setShowDex((v) => !v)}
+          onToggleFlip={() => setShowFlipCurve((v) => !v)}
+          onToggleGhost5={() => { setShowGhost5((v) => !v); setShowGhost15(false); setShowGhost30(false); }}
+          onToggleGhost15={() => { setShowGhost15((v) => !v); setShowGhost5(false); setShowGhost30(false); }}
+          onToggleGhost30={() => { setShowGhost30((v) => !v); setShowGhost5(false); setShowGhost15(false); }}
+          onRefresh={handleRefresh}
+          containerRef={chartRef}
+          discordMessage={`NET GEX • ${selectedExpiry}`}
+        />
+      </FitScale>
+
+      {/* Same box /home gives the canvas: a flex child with a resolved height,
+          NOT itself a flex container — GexChart's root is height:100% and needs
+          a definite parent height to measure against. */}
+      <div
+        ref={chartRef}
+        style={{ flex: 1, minHeight: 0, minWidth: 0, position: "relative", overflow: "hidden" }}
+      >
+        {chain.length ? (
+          <GexChart
+            chain={chain}
+            spotPrice={spot}
+            flipPoint={flip}
+            gexProfile={profile}
+            mode={gexMode}
+            dataMode={dataMode}
+            showOI={showOI}
+            showDex={showDex}
+            showFlipCurve={showFlipCurve}
+            baselines={baselines}
+            showGhost5={showGhost5}
+            showGhost15={showGhost15}
+            showGhost30={showGhost30}
+            expiry={selectedExpiry}
+            transparentBg
+          />
+        ) : (
+          <div style={{ position: "absolute", inset: 0, display: "flex" }}>
+            <Waiting what="gex rows" />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -965,62 +1127,6 @@ function LevelsBody() {
           {r.gex != null && <Chip color={r.color}>{formatGEX(r.gex)}</Chip>}
         </div>
       ))}
-    </div>
-  );
-}
-
-/**
- * The gamma profile curve — dealer gamma recomputed at 401 hypothetical spot
- * levels (computeGEXProfile, pure client math on the rows already in memory).
- * Zero crossing is the flip.
- */
-function HealthBody() {
-  const { connected, lastByTypeRef } = useFeed();
-  // Local clock: this card re-renders once a second on its own, and reads the
-  // arrival times out of the ref, so the rest of the board never re-renders for it.
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  const stamps = lastByTypeRef.current;
-  const age = (t?: number) => (t == null ? null : (now - t) / 1000);
-  // `snapshot` isn't a topic — it's the connect frame — but it is the single
-  // most useful row here, so it's listed alongside them.
-  const rows = ["snapshot", ...BOARD_TOPICS];
-
-  return (
-    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 8 }}>
-      <div>
-        <Chip color={connected ? BOARD_THEME.green : BOARD_THEME.red}>
-          {connected ? "Connected" : "Disconnected"}
-        </Chip>
-      </div>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5 }}>
-        <thead>
-          <tr>
-            <th style={thStyle}>Frame</th>
-            <th style={thStyle}>Last</th>
-            <th style={thStyle}>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((t) => {
-            const a = age(stamps[t]);
-            const color = a == null ? BOARD_THEME.text3 : a < 15 ? BOARD_THEME.green : a < 90 ? BOARD_THEME.orange : BOARD_THEME.red;
-            return (
-              <tr key={t}>
-                <td style={{ ...tdStyle, color: BOARD_THEME.text, fontWeight: 600 }}>{t}</td>
-                <td style={tdStyle}>{a == null ? "—" : a < 60 ? `${a.toFixed(1)}s` : `${Math.round(a / 60)}m`}</td>
-                <td style={tdStyle}>
-                  <Chip color={color}>{a == null ? "none" : a < 15 ? "OK" : a < 90 ? "slow" : "stale"}</Chip>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
     </div>
   );
 }
