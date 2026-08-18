@@ -47,8 +47,16 @@
     background:var(--field);color:var(--ink);color-scheme:dark;
   }
   .f input::placeholder{color:var(--ink3)}
-  .f input:focus{outline:none;border-color:rgba(47,212,198,.5)}
+  .f input:focus,.f select:focus{outline:none;border-color:rgba(47,212,198,.5)}
+  .f select option{background:var(--field);color:var(--ink)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.on{background:rgba(47,212,198,.28);border-color:rgba(47,212,198,.6)}
   .f input[type=text]{width:230px}
+  .chk{
+    display:flex;align-items:center;gap:7px;font-size:12px;color:var(--ink2);cursor:pointer;
+    padding:6px 11px;border:1px solid var(--edge);border-radius:6px;background:var(--field);
+  }
+  .chk input{accent-color:var(--accent);cursor:pointer}
   .slider{min-width:290px}
   .slider .row{display:flex;align-items:center;gap:10px}
   .slider input[type=range]{
@@ -102,6 +110,7 @@
   .ylab{font-size:11px;fill:var(--ink2)}
   .tick{font-size:10px;fill:var(--ink2)}
   .xtick{font-size:10.5px;fill:var(--ink2)}
+  .blab{font-size:9px;font-weight:600;paint-order:stroke;stroke:var(--panel);stroke-width:2.5px;stroke-linejoin:round}
   .axis{stroke:var(--axis);stroke-width:1;fill:none}
   .gridline{stroke:var(--grid);stroke-width:1}
   .zero{stroke:rgba(255,255,255,.35);stroke-width:1}
@@ -134,6 +143,13 @@
       <input type="date" id="c-date" />
     </div>
     <div class="f">
+      <label for="c-exp">Expiration</label>
+      <div style="display:flex;gap:6px">
+        <select id="c-exp" style="min-width:230px"><option value="">All expirations</option></select>
+        <button class="sec" id="c-opex" title="Jump to the monthly OPEX expiry in this tape" disabled>OPEX</button>
+      </div>
+    </div>
+    <div class="f">
       <label for="c-strikes">Strikes shown</label>
       <input type="number" id="c-strikes" value="14" min="4" max="40" step="1" style="width:80px" />
     </div>
@@ -157,6 +173,10 @@
         <input type="range" id="c-thr" min="1" max="500" step="1" value="50" />
         <b id="c-thr-v">50</b>
       </div>
+    </div>
+    <div class="f">
+      <label for="c-labels">Bar labels</label>
+      <label class="chk"><input type="checkbox" id="c-labels" checked /> show</label>
     </div>
     <div class="f">
       <label>&nbsp;</label>
@@ -188,14 +208,20 @@
     <b>&lt; cutoff</b> → the two retail panels. At 50 that is 1–49 retail, 50+ market maker. Nothing is counted twice
     and nothing is left out.
     The two retail panels are signed contract counts (buy +, sell −).
-    The three MM panels are dollar exposures computed per print with Black–Scholes (r = q = 0) from the print's own
-    <code>iv</code>, its days to expiry and the spot at print time, then signed by the MM's side and summed per strike:
+    The three MM panels are dollar exposures computed per print with Black–Scholes (r = q = 0), signed by the MM's side
+    and summed per strike:
     <b>GEX</b> = γ · contracts · 100 · S² · 1% ($M per 1% move) ·
     <b>VEX</b> = vega · contracts · 100 ($K per 1 vol point) ·
     <b>CEX</b> = charm · contracts · 100 · S ($M of delta per day).
-    An MM print with no <code>iv</code> or no parseable expiry can't be greeked, so it contributes to no panel — it is
-    <b>not</b> quietly reassigned to retail. It still counts toward which strikes are shown. The readout above says how
-    many of the MM prints were greekable; a large gap there means the exposure panels understate.
+    <b>Where the vol comes from.</b> <code>/proxy/flow-history</code> has <b>no <code>iv</code> column</b> — the live
+    WebSocket frame carries one, but the writer never persists it, so every historical row arrives without it. The vol
+    is therefore <b>solved from the print's own fill price</b> (bisection on the BS price, r = q = 0), which uses only
+    fields history does have: <code>price</code>, <code>strike</code>, <code>spot</code>, <code>expiration</code>.
+    A print whose price sits at or below intrinsic has no solution and falls back to the Fallback IV input.
+    The diagnostic line says how many were solved versus fallen back — a large fallback share means the exposure panels
+    are leaning on an assumption rather than the tape.
+    An MM print that still can't be greeked contributes to no panel; it is <b>not</b> quietly reassigned to retail, and
+    it still counts toward which strikes are shown.
     Shaded bands are derived, not typed in: the call wall is the strike with the largest net retail call position,
     the put wall the most negative net retail put, and the pin zone the densest contiguous run of strikes by total contracts.
   </div>
@@ -277,6 +303,7 @@ function ingest(rows) {
     + `side ${has("side").toLocaleString()}`
   );
   console.log("[queue-map] first print:", TAPE[0]);
+  fillExpiryPicker();
   render();
 }
 
@@ -285,6 +312,54 @@ function ingest(rows) {
    ════════════════════════════════════════════════════════════════════════ */
 
 const pdf = (x) => Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+
+/** Cumulative normal (Abramowitz & Stegun 7.1.26 on erf). */
+function cdf(x) {
+  const s = x < 0 ? -1 : 1;
+  const z = Math.abs(x) / Math.SQRT2;
+  const t = 1 / (1 + 0.3275911 * z);
+  const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z);
+  return 0.5 * (1 + s * y);
+}
+
+/** Black–Scholes price, r = q = 0. */
+function bsPrice(S, K, vol, T, isCall) {
+  if (!(vol > 0 && T > 0)) return Math.max(0, isCall ? S - K : K - S);
+  const sqrtT = Math.sqrt(T);
+  const d1 = (Math.log(S / K) + 0.5 * vol * vol * T) / (vol * sqrtT);
+  const d2 = d1 - vol * sqrtT;
+  return isCall ? S * cdf(d1) - K * cdf(d2) : K * cdf(-d2) - S * cdf(-d1);
+}
+
+/**
+ * Implied vol from the print's own fill price.
+ *
+ * THIS IS WHY IT EXISTS: /proxy/flow-history has NO `iv` column. The live
+ * WebSocket `flow` frame carries one (decimal, from the dxLink Greeks event),
+ * but the writer never persists it, so every historical row arrives without it
+ * — which is exactly what left the MM panels blank. `price` IS always present,
+ * so the vol is recovered from it instead of assumed.
+ *
+ * Bisection, not Newton: vega collapses toward zero for deep OTM 0DTE prints
+ * and Newton diverges there. 60 halvings over [0.5%, 500%] is ~1e-15 wide and
+ * costs nothing at this row count.
+ *
+ * Returns null when the price is at or below intrinsic (no vol solves it) or
+ * outside the bracket — the caller then falls back rather than inventing one.
+ */
+function impliedVol(S, K, T, price, isCall) {
+  if (!(S > 0 && K > 0 && T > 0 && price > 0)) return null;
+  const intrinsic = Math.max(0, isCall ? S - K : K - S);
+  if (price <= intrinsic + 1e-6) return null;
+  let lo = 0.005, hi = 5;
+  if (bsPrice(S, K, hi, T, isCall) < price) return null;   // above the bracket
+  for (let i = 0; i < 60; i++) {
+    const mid = 0.5 * (lo + hi);
+    if (bsPrice(S, K, mid, T, isCall) < price) lo = mid; else hi = mid;
+  }
+  const v = 0.5 * (lo + hi);
+  return v > 0.006 && v < 4.99 ? v : null;
+}
 
 /** gamma, vega (per 1.00 vol) and charm (dDelta per YEAR) for one contract. */
 function greeks(S, K, vol, T) {
@@ -299,6 +374,80 @@ function greeks(S, K, vol, T) {
     // Charm with r=q=0. Identical for calls and puts, since Δput = Δcall − 1.
     charm: p * d2 / (2 * T),
   };
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   EXPIRATIONS
+   ════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Monthly OPEX = the THIRD Friday. Two conditions, both necessary:
+ * it must be a Friday, and it must fall on the 15th–21st — the only week a
+ * third Friday can land in, for any month, in any year. (Weeklies are Fridays
+ * too, which is why the day-of-month half is not optional.)
+ *
+ * Parsed as UTC so the browser's timezone can't shift the weekday.
+ */
+function isMonthlyOpex(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || "");
+  if (!m) return false;
+  const d = Number(m[3]);
+  if (d < 15 || d > 21) return false;
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, d)).getUTCDay() === 5;
+}
+
+const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function weekday(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || "");
+  return m ? WD[new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).getUTCDay()] : "";
+}
+
+/** Whole days from the session date to an expiry. */
+function dteFrom(sessionIso, expIso) {
+  if (!/^\d{4}-\d{2}-\d{2}/.test(sessionIso || "") || !/^\d{4}-\d{2}-\d{2}/.test(expIso || "")) return null;
+  return Math.round((Date.parse(expIso + "T00:00:00Z") - Date.parse(sessionIso + "T00:00:00Z")) / 86400000);
+}
+
+/** Distinct expirations in the loaded tape, with weight, soonest first. */
+function expiryIndex() {
+  const by = new Map();
+  for (const o of TAPE) {
+    const e = String(o.expiration || "");
+    if (!e) continue;
+    const cur = by.get(e) || { exp: e, prints: 0, contracts: 0 };
+    cur.prints++;
+    cur.contracts += Number(o.size) || 0;
+    by.set(e, cur);
+  }
+  return [...by.values()].sort((a, b) => a.exp.localeCompare(b.exp));
+}
+
+function fillExpiryPicker() {
+  const sel = $("c-exp");
+  const prev = sel.value;
+  const list = expiryIndex();
+  const session = $("c-date").value;
+  const total = list.reduce((s, e) => s + e.prints, 0);
+
+  sel.innerHTML = `<option value="">All expirations (${total.toLocaleString()} prints)</option>`
+    + list.map((e) => {
+        const dte = dteFrom(session, e.exp);
+        const bits = [weekday(e.exp)];
+        if (dte != null) bits.push(dte === 0 ? "0DTE" : `${dte}DTE`);
+        if (isMonthlyOpex(e.exp)) bits.push("OPEX");
+        bits.push(`${e.prints.toLocaleString()} prints`);
+        return `<option value="${e.exp}">${e.exp} · ${bits.join(" · ")}</option>`;
+      }).join("");
+
+  // Keep the user's choice across a reload if that expiry still exists.
+  sel.value = list.some((e) => e.exp === prev) ? prev : "";
+
+  const opex = list.find((e) => isMonthlyOpex(e.exp));
+  $("c-opex").disabled = !opex;
+  $("c-opex").dataset.exp = opex ? opex.exp : "";
+  $("c-opex").title = opex
+    ? `Jump to ${opex.exp} — the monthly OPEX in this tape`
+    : "No monthly (third-Friday) expiry in this tape";
 }
 
 /** Days between the print and its expiry, floored so 0DTE isn't a divide-by-zero. */
@@ -344,6 +493,7 @@ function aggregate(threshold) {
   // panel comes up blank, so it is counted rather than guessed at.
   const miss = { spot: 0, iv: 0, expiry: 0 };
   let usedSpotFallback = 0, usedIvFallback = 0, usedDteFallback = 0;
+  let ivFromField = 0, ivSolved = 0;
 
   // ── pass 1: session spot ──────────────────────────────────────────────────
   // `spot` is OPTIONAL on a tape row. When it is absent, greeks with S = 0 are
@@ -362,7 +512,14 @@ function aggregate(threshold) {
   const fbDte = Math.max(0, Number($("c-dte").value) || 0);
 
   // ── pass 2: aggregate ─────────────────────────────────────────────────────
+  // The expiry filter is applied HERE rather than at load, so switching expiry
+  // never re-fetches and "All" stays one click away.
+  const wantExp = $("c-exp").value;
+  let inScope = 0;
+
   for (const o of TAPE) {
+    if (wantExp && String(o.expiration || "") !== wantExp) continue;
+    inScope++;
     const K = Number(o.strike);
     const size = Number(o.size) || 0;
     const isCall = String(o.type || "").toUpperCase().startsWith("C");
@@ -378,13 +535,22 @@ function aggregate(threshold) {
       let S = Number(o.spot) || 0;
       if (!(S > 0)) { miss.spot++; S = sessionSpot; if (S > 0) usedSpotFallback++; }
 
-      let vol = Number(o.iv) || 0;
-      // Some feeds carry IV as a percent (18.4) rather than a decimal (0.184).
-      if (vol > 3) vol /= 100;
-      if (!(vol > 0)) { miss.iv++; vol = fbIv; if (vol > 0) usedIvFallback++; }
-
       let T = yearsToExpiry(o);
       if (T == null) { miss.expiry++; T = fbDte > 0 ? fbDte / 365 : null; if (T != null) usedDteFallback++; }
+
+      // IV, in order of trustworthiness:
+      //   1. the print's own field — live WS frames have it, history NEVER does
+      //   2. solved from the print's own fill price (this is the history path)
+      //   3. the fallback input, counted separately so its weight is visible
+      let vol = Number(o.iv) || 0;
+      if (vol > 3) vol /= 100;          // some feeds send 18.4, not 0.184
+      if (vol > 0) {
+        ivFromField++;
+      } else {
+        const solved = T == null ? null : impliedVol(S, K, T, Number(o.price) || 0, isCall);
+        if (solved) { vol = solved; ivSolved++; }
+        else { miss.iv++; vol = fbIv; if (vol > 0) usedIvFallback++; }
+      }
 
       const g = T == null ? null : greeks(S, K, vol, T);
       // Still no greeks → no exposure. It stays an MM print (mmPrints already
@@ -410,11 +576,11 @@ function aggregate(threshold) {
   // Keep the busiest strikes, then read left-to-right by strike — same shape as
   // the reference, where the x-axis is the active strikes, not a fixed grid.
   const want = Math.max(4, Math.min(40, Number($("c-strikes").value) || 14));
-  const kept = all.sort((a, b) => b.contracts - a.contracts).slice(0, want)
-                  .sort((a, b) => a.strike - b.strike);
+  const keptRows = all.sort((a, b) => b.contracts - a.contracts).slice(0, want)
+                      .sort((a, b) => a.strike - b.strike);
 
-  return { rows: kept, spot, mmPrints, custPrints, mmGreeked, miss,
-           usedSpotFallback, usedIvFallback, usedDteFallback };
+  return { rows: keptRows, spot, mmPrints, custPrints, mmGreeked, miss, wantExp, inScope,
+           usedSpotFallback, usedIvFallback, usedDteFallback, ivFromField, ivSolved };
 }
 
 /** Call wall / put wall / pin zone, derived from the customer series. */
@@ -466,6 +632,24 @@ const PANELS = [
 
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
 
+/**
+ * Bar label — shorter than an axis tick, because 14 of these sit shoulder to
+ * shoulder. Thousands abbreviate; everything else keeps enough precision to
+ * distinguish neighbouring bars.
+ */
+function fmtBar(v) {
+  const a = Math.abs(v);
+  const s = v < 0 ? "−" : "";
+  if (a >= 10000) return s + (a / 1000).toFixed(0) + "k";
+  if (a >= 1000) return s + (a / 1000).toFixed(1) + "k";
+  // The retail panels are whole contracts — "−46" not "−46.0".
+  if (Number.isInteger(v)) return s + a.toFixed(0);
+  if (a >= 100) return s + a.toFixed(0);
+  if (a >= 10) return s + a.toFixed(1);
+  if (a >= 1) return s + a.toFixed(2);
+  return s + a.toFixed(2);
+}
+
 function fmtTick(v) {
   const a = Math.abs(v);
   if (a === 0) return "0";
@@ -478,8 +662,10 @@ function fmtTick(v) {
 function render() {
   const thr = Number($("c-thr").value);
   const A = aggregate(thr);
-  const { rows, spot, mmPrints, custPrints, mmGreeked, miss } = A;
+  const { rows, spot, mmPrints, custPrints, mmGreeked, miss, wantExp, inScope } = A;
   const b = bands(rows);
+
+  $("c-opex").classList.toggle("on", !!wantExp && isMonthlyOpex(wantExp));
 
   $("split").innerHTML = rows.length
     ? `MM (≥${thr}): <b>${mmPrints.toLocaleString()}</b> prints · <b>${mmGreeked.toLocaleString()}</b> greeked<br>`
@@ -492,13 +678,21 @@ function render() {
   // are too, and the cause is always a missing input. Say which one, in
   // numbers, instead of leaving an empty chart to interpret.
   const diag = [];
+  if (wantExp && inScope === 0) {
+    diag.push(`No prints on <b>${wantExp}</b> in this tape — the whole board is empty. Pick another expiry.`);
+  } else if (wantExp) {
+    const dte = dteFrom($("c-date").value, wantExp);
+    diag.push(`Filtered to <b>${wantExp}</b>${isMonthlyOpex(wantExp) ? " <b>(monthly OPEX)</b>" : ""}`
+      + `${dte != null ? ` · ${dte}DTE` : ""} — <b>${inScope.toLocaleString()}</b> of ${TAPE.length.toLocaleString()} prints.`);
+  }
   if (mmPrints === 0) {
     diag.push(`No print is ≥ ${thr} lots — the MM panels have nothing to draw. Lower the cutoff.`);
   } else if (mmGreeked === 0) {
     diag.push(`All ${mmPrints.toLocaleString()} MM prints failed to greek, so GEX/VEX/CEX are empty.`);
   }
   if (miss.spot) diag.push(`${miss.spot.toLocaleString()} MM prints had no <code>spot</code>${A.usedSpotFallback ? ` — used ${spot.toFixed(2)}` : " and the tape carries no spot at all. Type one into <b>Spot override</b>"}.`);
-  if (miss.iv) diag.push(`${miss.iv.toLocaleString()} MM prints had no <code>iv</code>${A.usedIvFallback ? " — used the fallback IV" : " and the fallback IV is 0, so they contribute nothing"}.`);
+  if (A.ivSolved) diag.push(`IV: <b>${A.ivSolved.toLocaleString()}</b> solved from the fill price${A.ivFromField ? ` · ${A.ivFromField.toLocaleString()} from the print's own field` : " (history carries no <code>iv</code> column, so this is expected)"}.`);
+  if (miss.iv) diag.push(`${miss.iv.toLocaleString()} MM prints had no <code>iv</code> and no solvable price${A.usedIvFallback ? " — used the fallback IV" : "; the fallback IV is 0, so they contribute nothing"}.`);
   if (miss.expiry) diag.push(`${miss.expiry.toLocaleString()} MM prints had no parseable <code>expiration</code>${A.usedDteFallback ? " — used the fallback DTE" : " and the fallback DTE is 0, so they contribute nothing"}.`);
   $("diag").innerHTML = diag.length ? diag.join("<br>") : "";
   $("diag").style.display = diag.length ? "block" : "none";
@@ -512,6 +706,7 @@ function render() {
     return;
   }
 
+  const showLabels = $("c-labels").checked;
   const plotW = W - M.l - M.r;
   const step = plotW / rows.length;
   const barW = step * 0.62;
@@ -520,8 +715,11 @@ function render() {
 
   const sym = $("c-sym").value.trim().toUpperCase() || "SPX";
   $("hdr-title").textContent = `${sym} orderflow — ${$("c-date").value}`;
+  const expLabel = wantExp
+    ? `${wantExp}${isMonthlyOpex(wantExp) ? " OPEX" : ""}`
+    : "all expirations";
   $("hdr-sub").textContent =
-    `market maker = prints ≥ ${thr} lots · retail = prints < ${thr} lots`
+    `${expLabel} · MM ≥ ${thr} lots · retail < ${thr} lots`
     + (b.put != null ? ` · put wall ${b.put}` : "")
     + (b.call != null ? ` · call wall ${b.call}` : "");
 
@@ -553,6 +751,9 @@ function render() {
     const yHi = hi + pad, yLo = lo - pad;
     const yOf = (v) => bot - ((v - yLo) / (yHi - yLo)) * PANEL_H;
     const zeroY = yOf(0);
+    // Per-panel, because the five panels are in different units. 4% of the
+    // panel's own largest bar.
+    const labelFloor = Math.max(Math.abs(hi), Math.abs(lo)) * 0.04;
 
     out += `<text x="${W / 2}" y="${top - 15}" text-anchor="middle" class="ptitle">${esc(p.title)}</text>`;
 
@@ -575,6 +776,26 @@ function render() {
            + ` fill="${v >= 0 ? p.pos : p.neg}" opacity="0.92">`
            + `<title>${r.strike} · ${fmtTick(v)}</title></rect>`;
     });
+
+    // value labels — drawn AFTER every bar in the panel so a tall neighbour
+    // can't paint over one. Outside the bar (above a positive, below a
+    // negative) rather than inside it: a short bar has no room within itself,
+    // and half the labels would sit on the zero line.
+    if (showLabels) {
+      rows.forEach((r, i) => {
+        const v = r[p.key];
+        if (v === 0) return;
+        // Drop labels on bars too small to read — at 14 strikes these would
+        // just be a row of noise along the axis.
+        if (Math.abs(v) < labelFloor) return;
+        const y = yOf(v);
+        // Clamped into the panel so a bar that runs to the top or bottom of
+        // the plot doesn't push its label out of the box.
+        const ly = Math.min(Math.max(v >= 0 ? y - 4 : y + 10, top + 9), bot - 3);
+        out += `<text class="blab" x="${xOf(i).toFixed(1)}" y="${ly.toFixed(1)}"`
+             + ` text-anchor="middle" fill="${v >= 0 ? p.pos : p.neg}">${fmtBar(v)}</text>`;
+      });
+    }
 
     out += `<line class="zero" x1="${M.l}" y1="${zeroY.toFixed(1)}" x2="${W - M.r}" y2="${zeroY.toFixed(1)}"/>`;
     out += `<rect class="axis" x="${M.l}" y="${top}" width="${plotW}" height="${PANEL_H}"/>`;
@@ -619,10 +840,22 @@ $("c-thr").addEventListener("input", () => {
   $("c-thr-v").textContent = $("c-thr").value;
   if (TAPE.length) render();
 });
-for (const id of ["c-strikes", "c-iv", "c-dte", "c-spot"]) {
+for (const id of ["c-strikes", "c-iv", "c-dte", "c-spot", "c-labels", "c-exp"]) {
   $(id).addEventListener("change", () => { if (TAPE.length) render(); });
   $(id).addEventListener("input", () => { if (TAPE.length) render(); });
 }
+
+// OPEX toggles: click once to jump to the monthly, again to go back to All.
+$("c-opex").addEventListener("click", () => {
+  const exp = $("c-opex").dataset.exp;
+  if (!exp) return;
+  $("c-exp").value = $("c-exp").value === exp ? "" : exp;
+  render();
+});
+
+// The DTE labels in the picker are relative to the session date, so they have
+// to be rebuilt when it changes — even before a reload.
+$("c-date").addEventListener("change", () => { if (TAPE.length) { fillExpiryPicker(); render(); } });
 $("c-load").addEventListener("click", load);
 $("c-file").addEventListener("click", () => $("c-fileinput").click());
 $("c-fileinput").addEventListener("change", (e) => {

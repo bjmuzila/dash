@@ -445,6 +445,33 @@ export function writeSidePanel(v: SidePanelKind): void {
   try { window.localStorage.setItem(SIDE_PANEL_KEY, v); } catch { /* ignore */ }
 }
 
+// ── The EMBEDDED card's side panel ───────────────────────────────────────────
+// `EsCandlesPage embedded` (the /home GEX card's ES view, and the /board ES
+// tile) used to hardcode "rail". It is now a toggle in that card's own dock,
+// stored under its OWN key rather than sharing SIDE_PANEL_KEY above.
+//
+// Separate on purpose: the embed sits inches away from a full GEX chart, so
+// turning the rail off there is a layout decision about THAT tile. Sharing the
+// key would mean hiding the rail in a 6-column tile silently strips it from the
+// full /es-candles route as well, which is not what anyone pressing that button
+// is asking for.
+//
+// Defaults to "rail" so nothing changes for anyone who never touches it.
+const EMBED_SIDE_PANEL_KEY = "es-candles-side-panel-embed-v1";
+
+export function readEmbedSidePanel(): SidePanelKind {
+  if (typeof window === "undefined") return "rail";
+  try {
+    const v = window.localStorage.getItem(EMBED_SIDE_PANEL_KEY);
+    return isSidePanel(v) ? v : "rail";
+  } catch { return "rail"; }
+}
+
+export function writeEmbedSidePanel(v: SidePanelKind): void {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(EMBED_SIDE_PANEL_KEY, v); } catch { /* ignore */ }
+}
+
 // ── Indicators ───────────────────────────────────────────────────────────────
 // PAGE-LEVEL, not per slot, and deliberately so: the point of two or three
 // charts side by side is comparison, and comparing ES against SPY with a 21 EMA

@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-08-18 - ES Candles embed: the right-edge GEX rail is now a toggle
+
+Edited: `components/pages/EsCandles.tsx`, `components/dashboard/es-candles/slotStore.ts`.
+
+**The problem.** `EsCandlesPage embedded` — the ES card on /board and the ES view
+of /home's GEX card — passed `sidePanel="rail"` as a literal. The vertical
+GEX-by-strike rail on the right edge was permanent there, with no control, and in
+a 6-column board tile it eats width the candles need. The full /es-candles route
+has had a None / Rail / 0DTE picker in its Charts popover all along; the embed
+had nothing.
+
+**The change.** A `Rail` button in the embedded card's own dock (passed as
+`toolbarExtras`, which is where the page already injects Charts / Replay /
+Indicators). Lit when the rail is on, unlit when off. Two states, not the page's
+three — the 0DTE chain panel needs 340px of chart beside it and is suppressed on
+width in a tile that narrow anyway, so offering it there would be a button that
+mostly does nothing.
+
+**Its own storage key**: `es-candles-side-panel-embed-v1`, via new
+`readEmbedSidePanel` / `writeEmbedSidePanel` in `slotStore`. It does NOT share
+`es-candles-side-panel-v1` with the full route, because the embed is a narrow box
+sitting beside a full GEX chart — hiding the rail there is a decision about that
+tile, and sharing the key would silently strip it from /es-candles too. Defaults
+to `"rail"`, so nothing changes for anyone who never presses it.
+
+Read in an effect, never in a `useState` initializer (this route is still
+server-rendered by Next before the Vite SPA takes over). The toggle keeps a ref
+mirror so the localStorage write stays outside the state updater.
+
 ## 2026-08-18 - /board: Feed Health removed, GEX card is now the whole /home panel, chain card is Multi Greek on one ticker
 
 Edited: `components/pages/Board.tsx`, `app/mult-greek/MultGreekClient.tsx`.

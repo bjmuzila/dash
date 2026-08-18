@@ -51,6 +51,7 @@ import EsChartCard from "@/components/dashboard/es-candles/EsChartCard";
 import {
   MAX_CARDS, SHARED_SLOT, ensureMigrated,
   readCardCount, writeCardCount, readSidePanel, writeSidePanel,
+  readEmbedSidePanel, writeEmbedSidePanel,
   readChainGreek, writeChainGreek,
   readIndicators, writeIndicators, broadcastReplayCmd, subscribeReplayCmd,
   INDICATORS_DEFAULT, MAX_EMAS,
@@ -296,6 +297,20 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
   // also the sensible default for a new user.
   const [cards, setCards] = useState(1);
   const [sidePanel, setSidePanelState] = useState<SidePanelKind>("rail");
+  /**
+   * The EMBEDDED card's side panel — the right-edge GEX rail, on or off.
+   *
+   * Its own state and its own storage key, NOT the `sidePanel` above: the embed
+   * (the /home GEX card's ES view, the /board ES tile) is a narrow box sitting
+   * beside a full GEX chart, so hiding the rail there is a decision about that
+   * tile and must not strip it from the full /es-candles route.
+   *
+   * Mirrored into a ref so the toggle can read the current value without doing
+   * it from inside a state updater — the write to localStorage is a side effect
+   * and updaters must stay pure (React may run them twice under StrictMode).
+   */
+  const [embedPanel, setEmbedPanel] = useState<SidePanelKind>("rail");
+  const embedPanelRef = useRef<SidePanelKind>("rail");
   const [chainGreek, setChainGreekState] = useState<ChainGreek>("gex");
   const [indicators, setIndicatorsState] = useState<IndicatorCfg>(INDICATORS_DEFAULT);
   const [popover, setPopover] = useState<Popover>(null);
@@ -338,6 +353,9 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     ensureMigrated();
     setCards(readCardCount());
     setSidePanelState(readSidePanel());
+    const ep = readEmbedSidePanel();
+    embedPanelRef.current = ep;
+    setEmbedPanel(ep);
     setIndicatorsState(readIndicators());
     const g = readChainGreek();
     if (isChainGreek(g)) setChainGreekState(g);
@@ -461,6 +479,20 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     setChainGreekState(v);
     writeChainGreek(v);
   }, []);
+  /**
+   * Embed only: show / hide the right-edge GEX rail.
+   *
+   * Two states, not the page's three. The 0DTE chain panel is twice the rail's
+   * width and needs 340px of chart beside it — in a tile that is already the
+   * narrow half of a dashboard it would be suppressed on width most of the time
+   * anyway, so offering it here would be a button that mostly does nothing.
+   */
+  const toggleEmbedRail = useCallback(() => {
+    const next: SidePanelKind = embedPanelRef.current === "none" ? "rail" : "none";
+    embedPanelRef.current = next;
+    setEmbedPanel(next);
+    writeEmbedSidePanel(next);
+  }, []);
   // One updater for the whole indicator blob: every control is a patch over the
   // current value, so no control needs to know about any other.
   const patchIndicators = useCallback((patch: Partial<IndicatorCfg>) => {
@@ -578,14 +610,43 @@ export default function EsCandlesPage({ leading, embedded = false }: { leading?:
     </div>
   ), [popover, replayRunning, cards, indicators, togglePopover, toggleReplay]);
 
-  // The home GEX card embeds this component. It wants exactly the chart, with
-  // its own switcher in the dock and no page chrome — so short-circuit to one
-  // card rather than growing an `embedded` branch through the layout below.
+  // The GEX rail toggle, injected into the embedded card's own dock. Declared
+  // with the other hooks, above the early return — a useMemo after a conditional
+  // return is a rules-of-hooks violation, and `embedded` is a prop that can flip
+  // on the same element (the home card's view switcher).
+  const embedToolbarExtras = useMemo(() => (
+    <DockButton
+      onClick={toggleEmbedRail}
+      title={embedPanel === "none"
+        ? "Show the GEX rail on the right edge"
+        : "Hide the GEX rail and give the width back to the candles"}
+      style={embedPanel === "none" ? undefined : { color: LIGHT_BLUE, borderColor: LIGHT_BLUE }}
+    >
+      <span>Rail</span>
+    </DockButton>
+  ), [embedPanel, toggleEmbedRail]);
+
+  // The home GEX card and the /board ES tile embed this component. They want
+  // exactly the chart, with their own switcher in the dock and no page chrome —
+  // so short-circuit to one card rather than growing an `embedded` branch
+  // through the layout below.
   if (embedded) {
     // density="full" pins the home card to the dock it has today. Its width sits
     // near the compact threshold, and this page's layout work has no business
     // silently restyling the home dashboard's toolbar.
-    return <EsChartCard slot="embed" sidePanel="rail" leading={leading} embedded density="full" indicators={indicators} />;
+    return (
+      <EsChartCard
+        slot="embed"
+        // Was hardcoded "rail". Now the embed's own remembered choice, driven by
+        // the Rail button in `toolbarExtras` below.
+        sidePanel={embedPanel}
+        leading={leading}
+        embedded
+        density="full"
+        indicators={indicators}
+        toolbarExtras={embedToolbarExtras}
+      />
+    );
   }
 
   const multi = cards > 1;
