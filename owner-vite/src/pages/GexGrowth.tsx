@@ -49,7 +49,7 @@
 // explicit +/− on every value. Do not "simplify" this to colour-only bars.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { HOME_THEME, LIGHT_BLUE, homeButtonStyle, homeSecondaryButtonStyle } from "../lib/theme";
+import { HOME_THEME, LIGHT_BLUE, classicCardStyle, homeButtonStyle, homeSecondaryButtonStyle } from "../lib/theme";
 import { PageShell, Card } from "../components/PageCard";
 import { ThemedSelect } from "../components/ThemedSelect";
 
@@ -214,7 +214,7 @@ const col = (v: number) => (v > 0 ? POS : v < 0 ? NEG : T.textMuted);
 
 const label: CSSProperties = {
   fontSize: 10, fontWeight: 800, letterSpacing: "0.1em",
-  textTransform: "uppercase", color: T.text, opacity: 0.45,
+  textTransform: "uppercase", color: T.text,
 };
 const oneLine: CSSProperties = { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 };
 
@@ -681,7 +681,7 @@ export default function GexGrowth() {
         {boardErr ? (
           <div style={{ color: NEG, fontSize: 13, fontFamily: MONO }}>Board failed: {boardErr}</div>
         ) : board != null && board.length === 0 ? (
-          <div style={{ color: T.text, opacity: 0.6, fontSize: 13 }}>
+          <div style={{ color: T.text, fontSize: 13 }}>
             {date
               ? `Nothing recorded on or before ${date}. Pick a later session.`
               : "No end-of-day snapshots recorded yet. The first sweep runs at 16:05 ET; the Δ column needs a second session before it can say anything."}
@@ -735,14 +735,14 @@ export default function GexGrowth() {
                         opacity: railHasValue(s) ? 1 : 0.25,
                       }} />
                     </span>
-                    <span style={{ ...oneLine, textAlign: "right", fontFamily: MONO, fontSize: 11.5, fontWeight: 700, color: railHasValue(s) ? col(railSigned(s)) : T.textMuted, opacity: railHasValue(s) ? 1 : 0.45 }}>
+                    <span style={{ ...oneLine, textAlign: "right", fontFamily: MONO, fontSize: 11.5, fontWeight: 700, color: railHasValue(s) ? col(railSigned(s)) : T.textMuted }}>
                       {railHasValue(s) ? sgn(railSigned(s)) : "—"}
                     </span>
                   </div>
                 );
               })}
               {rail.length === 0 && (
-                <div style={{ padding: 12, fontSize: 12, color: T.text, opacity: 0.5 }}>No symbol matches that filter.</div>
+                <div style={{ padding: 12, fontSize: 12, color: T.text }}>No symbol matches that filter.</div>
               )}
               </div>
             </div>
@@ -757,12 +757,12 @@ export default function GexGrowth() {
               minWidth: 0, display: "flex", flexDirection: "column",
             }}>
               {sel == null ? (
-                <div style={{ opacity: 0.6, fontSize: 13 }}>Pick a symbol.</div>
+                <div style={{ fontSize: 13, color: T.text }}>Pick a symbol.</div>
               ) : (
                 <>
                   <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 20, fontWeight: 800 }}>{sel}</span>
-                    <span style={{ fontFamily: MONO, fontSize: 11.5, color: T.text, opacity: 0.6 }}>
+                    <span style={{ fontFamily: MONO, fontSize: 11.5, color: T.text }}>
                       {detail?.spot != null ? `spot ${detail.spot.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : ""}
                       {showLive
                         // Live says WHEN, not which session — the "as of" stamp
@@ -794,7 +794,7 @@ export default function GexGrowth() {
                     ) : null}
                     {showLive && detail?.cached ? (
                       <span
-                        style={{ ...label, marginLeft: 6, opacity: 0.3 }}
+                        style={{ ...label, marginLeft: 6 }}
                         title="Served from the server's one-minute cache. ↻ forces a fresh sweep."
                       >cached {Math.round((detail.ageMs ?? 0) / 1000)}s</span>
                     ) : null}
@@ -807,11 +807,15 @@ export default function GexGrowth() {
                       for a session-over-session change reads every morning as
                       "nothing happening". */}
                   {showLive ? (
+                    // Dashboard card language — classicCardStyle, the same
+                    // surface every other card on the site uses. NO accent
+                    // edge: an accent stripe here read as a warning banner,
+                    // and this is explanatory chrome, not an alert.
                     <div style={{
+                      ...classicCardStyle,
                       display: "flex", alignItems: "flex-start", gap: 8,
-                      border: `1px solid ${T.border}`, borderLeft: `2px solid ${LIGHT_BLUE}`,
-                      borderRadius: 10, padding: "6px 10px", margin: "0 0 10px",
-                      fontSize: 11.5, lineHeight: 1.45, color: T.text, opacity: 0.72,
+                      padding: "8px 12px", margin: "0 0 10px",
+                      fontSize: 11.5, lineHeight: 1.45, color: T.text,
                     }}>
                       <span>
                         {detail?.prevIsToday
@@ -842,7 +846,7 @@ export default function GexGrowth() {
                           border: `1px solid ${T.border}`, borderRadius: 999, padding: "3px 10px",
                           fontFamily: MONO, fontSize: 11.5,
                         }}>
-                          <span style={{ opacity: 0.65 }}>{c.k}</span>
+                          <span style={{ color: T.text }}>{c.k}</span>
                           <span style={{ fontWeight: 700, color: col(c.v) }}>{sgn(c.v)}</span>
                         </span>
                       ))}
@@ -855,7 +859,7 @@ export default function GexGrowth() {
                           border: `1px solid ${T.border}`, borderRadius: 999, padding: "3px 10px",
                           fontFamily: MONO, fontSize: 11.5,
                         }}>
-                          <span style={{ opacity: 0.65 }}>{k.strike}</span>
+                          <span style={{ color: T.text }}>{k.strike}</span>
                           <span style={{ fontWeight: 700, color: col(k.v) }}>{sgn(k.v)}</span>
                         </span>
                       ))}
@@ -865,13 +869,13 @@ export default function GexGrowth() {
                   {detailErr ? (
                     <div style={{ color: NEG, fontSize: 13, fontFamily: MONO }}>Ladder failed: {detailErr}</div>
                   ) : detailLoading && !detail ? (
-                    <div style={{ opacity: 0.6, fontSize: 13 }}>Reading ladder…</div>
+                    <div style={{ fontSize: 13, color: T.text }}>Reading ladder…</div>
                   ) : showLive && detail && !detail.prevDate ? (
                     // Live has a DIFFERENT no-baseline story from the EOD tabs:
                     // the live side is fine, it is the recorded close that has
                     // never been written. Saying "one snapshot on file" here
                     // would point at the wrong missing thing.
-                    <div style={{ opacity: 0.75, fontSize: 13 }}>
+                    <div style={{ fontSize: 13, color: T.text }}>
                       No recorded close on file for {sel} yet, so there is nothing to compare the live chain against.
                       {" "}The first snapshot lands at the next 16:05 ET sweep.
                     </div>
@@ -882,12 +886,12 @@ export default function GexGrowth() {
                     // Δ mode only — the LEVEL ladder is perfectly readable with
                     // one snapshot on file, so gating it here would hide real
                     // data behind a message about a diff nobody asked for.
-                    <div style={{ opacity: 0.75, fontSize: 13 }}>
+                    <div style={{ fontSize: 13, color: T.text }}>
                       One snapshot on file ({detail.date}). The Δ needs a second session — it lands after the next 16:05 ET sweep.
                       {" "}Switch to <strong>Net GEX</strong> to read this one on its own.
                     </div>
                   ) : !detail?.rows?.length ? (
-                    <div style={{ opacity: 0.6, fontSize: 13 }}>No recorded strikes for {sel}.</div>
+                    <div style={{ fontSize: 13, color: T.text }}>No recorded strikes for {sel}.</div>
                   ) : (
                     // No flex:1, no overflow — the ladder renders every rung at
                     // natural height and this pane grows with it. The old
@@ -903,7 +907,7 @@ export default function GexGrowth() {
           </div>
         )}
 
-        <div style={{ ...label, marginTop: 12, opacity: 0.35 }}>
+        <div style={{ ...label, marginTop: 12 }}>
           OI+Vol basis · whole board excl. 0DTE · ±40 strikes around the close ·
           {mode === "levels"
             ? " net GEX as each symbol's session closed"
