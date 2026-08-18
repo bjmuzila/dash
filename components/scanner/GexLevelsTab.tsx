@@ -24,11 +24,42 @@ import VolGexFlowPanel from "@/components/dashboard/VolGexFlowPanel";
 // AmTbrStat — small stat tile, still used by GexLevelsTab below. (AM TBR itself
 // moved to /es-candles as an on/off "AM TBR" toggle strip, per Brandon's ask —
 // see app/es-candles/page.tsx for buildAmTbrCandles/AmTbrChart/AmTbrPanel/etc.)
-function AmTbrStat({ label, value, accent }: { label: string; value: string; accent: string }) {
+function AmTbrStat({
+  label, value, accent, scope, title,
+}: {
+  label: string;
+  value: string;
+  accent: string;
+  /**
+   * Scope chip beside the label, e.g. "0DTE".
+   *
+   * These tiles read as THE levels for the symbol, and until now nothing on them
+   * said which contracts they came from. That was fine when the page had one
+   * source; it stopped being fine once the same page grew whole-board and
+   * ex-0DTE cards that print their own flip and walls. Two different numbers
+   * called "Neutral" and "flip" on one screen, with no scope on either, reads as
+   * a bug rather than as two honest measurements of different things.
+   */
+  scope?: string;
+  title?: string;
+}) {
   return (
-    <div style={{ ...statTileStyle, padding: "16px 18px" }}>
-      <div style={{ fontSize: 17, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.6, fontWeight: 700 }}>
-        {label}
+    <div style={{ ...statTileStyle, padding: "16px 18px" }} title={title}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 7 }}>
+        <div style={{ fontSize: 17, textTransform: "uppercase", letterSpacing: "0.08em", color: HOME_THEME.text, opacity: 0.6, fontWeight: 700 }}>
+          {label}
+        </div>
+        {scope && (
+          <span style={{
+            fontSize: 11, fontWeight: 800, letterSpacing: "0.06em",
+            padding: "1px 6px", borderRadius: 999, whiteSpace: "nowrap",
+            color: LIGHT_BLUE,
+            background: "rgba(141,205,255,0.10)",
+            border: "1px solid rgba(141,205,255,0.28)",
+          }}>
+            {scope}
+          </span>
+        )}
       </div>
       <div style={{ fontSize: 14, fontWeight: 900, color: accent, marginTop: 6 }}>{value}</div>
     </div>
@@ -1226,7 +1257,16 @@ function EodGexPanel({ field = "totalGex" }: { field?: EodGexField }) {
 //
 // Server-side cached ~60s (the sweep is one upstream fetch per expiration), so
 // this polls at 60s rather than riding the 15s /proxy/gex loop.
-type GexMultiLadder = { rows: GexLevelsRow[]; totalNetGex: number | null; gexFlip: number | null };
+type GexMultiLadder = {
+  rows: GexLevelsRow[];
+  totalNetGex: number | null;
+  gexFlip: number | null;
+  // Added 2026-08 alongside the server change. A server-v2 that predates it
+  // simply omits them and they parse as null — the header then prints "—" for
+  // the walls rather than borrowing the 0DTE ones, which is the whole point.
+  callWall: number | null;
+  putWall: number | null;
+};
 type GexMultiPayload = {
   spot: number;
   sessionDate: string;
@@ -1261,12 +1301,17 @@ function multiRow(r: unknown): GexLevelsRow {
 }
 
 function parseMultiLadder(v: unknown): GexMultiLadder {
-  const o = (v ?? {}) as { rows?: unknown[]; totalNetGex?: number | null; gexFlip?: number | null };
+  const o = (v ?? {}) as {
+    rows?: unknown[]; totalNetGex?: number | null; gexFlip?: number | null;
+    callWall?: number | null; putWall?: number | null;
+  };
   const rows = Array.isArray(o.rows) ? o.rows.map(multiRow).filter((r) => Number.isFinite(r.strike) && r.strike > 0) : [];
   return {
     rows,
     totalNetGex: o.totalNetGex == null ? null : Number(o.totalNetGex),
     gexFlip: o.gexFlip == null ? null : Number(o.gexFlip),
+    callWall: o.callWall == null ? null : Number(o.callWall),
+    putWall: o.putWall == null ? null : Number(o.putWall),
   };
 }
 
@@ -1341,7 +1386,20 @@ function NetGammaMultiPanel({
           {loading && !ladder
             ? "Loading…"
             : ladder
-              ? `${scopeNote} · total ${glFmtBn(ladder.totalNetGex)} · flip ${ladder.gexFlip != null ? glFmt0(ladder.gexFlip) : "—"}`
+              ? [
+                  scopeNote,
+                  `total ${glFmtBn(ladder.totalNetGex)}`,
+                  `flip ${ladder.gexFlip != null ? glFmt0(ladder.gexFlip) : "—"}`,
+                  // THIS ladder's own walls, not /proxy/gex's. Those are 0DTE and
+                  // clipped to ±8% of spot, so putting them on a whole-board curve
+                  // was comparing today's pin against the standing book.
+                  // Dropped entirely (rather than printed as "—") when the server
+                  // predates the change, so a stale deploy reads as "this build has
+                  // no walls" instead of "there are no walls".
+                  ladder.callWall != null || ladder.putWall != null
+                    ? `res ${ladder.callWall != null ? glFmt0(ladder.callWall) : "—"} · sup ${ladder.putWall != null ? glFmt0(ladder.putWall) : "—"}`
+                    : null,
+                ].filter(Boolean).join(" · ")
               : "—"}
         </div>
         <button onClick={refresh} style={{ ...homeButtonStyle, padding: "4px 10px", fontSize: 14, marginLeft: "auto" }}>Refresh</button>
@@ -1926,9 +1984,26 @@ function GexLevelsTab() {
               <div style={{ ...homeInputStyle, fontSize: 14, opacity: 0.7, cursor: "not-allowed", textAlign: "center", fontWeight: 800 }}>{snap?.symbol ?? "SPX"}</div>
             </div>
             <AmTbrStat label="Stock Price" value={glFmt2(d.spot)} accent={HOME_THEME.text} />
-            <AmTbrStat label="Resistance" value={d.resistance != null ? glFmt0(d.resistance) : "—"} accent={LIGHT_BLUE} />
-            <AmTbrStat label="Support" value={d.support != null ? glFmt0(d.support) : "—"} accent={HOME_THEME.red} />
-            <AmTbrStat label="Neutral" value={d.neutral != null ? glFmt0(d.neutral) : "—"} accent={HOME_THEME.text} />
+            {/* All three are the LIVE FEED's levels: one expiry (0DTE for SPX),
+                clipped to ±8% of spot by the proxy's contract subscription.
+                The scope chip is there because the ex-0DTE cards further down
+                this same page print their own flip and walls off the whole
+                board — different scope, different number, both correct. */}
+            <AmTbrStat
+              label="Resistance" scope="0DTE" accent={LIGHT_BLUE}
+              value={d.resistance != null ? glFmt0(d.resistance) : "—"}
+              title="Call wall on the live feed's single expiry (±8% of spot). The ex-0DTE card lower down has the whole board's."
+            />
+            <AmTbrStat
+              label="Support" scope="0DTE" accent={HOME_THEME.red}
+              value={d.support != null ? glFmt0(d.support) : "—"}
+              title="Put wall on the live feed's single expiry (±8% of spot). The ex-0DTE card lower down has the whole board's."
+            />
+            <AmTbrStat
+              label="Neutral" scope="0DTE" accent={HOME_THEME.text}
+              value={d.neutral != null ? glFmt0(d.neutral) : "—"}
+              title="Gamma flip on the live feed's single expiry. The all-expirations and ex-0DTE cards lower down each report their own — they are not meant to match this one."
+            />
             <SemiGauge
               label="$Gamma"
               value={d.dollarGamma}

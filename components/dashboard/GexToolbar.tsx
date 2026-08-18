@@ -4,11 +4,34 @@ import { type RefObject, type ReactNode } from "react";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
 import { BoxDiscordBtn, BoxSnapBtn } from "@/components/shared/DataBox";
 import { Dock, SegGroup, ToggleTile, DockButton, DockSpacer, DockSep, DockGap, type SegOption } from "@/components/shared/DockToolbar";
-import type { GexMode, DataMode } from "./GexChart";
+import type { GexMode, DataMode, GexMetric } from "./GexChart";
 
 interface GexToolbarProps {
   gexMode:       GexMode;
   dataMode:      DataMode;
+  /**
+   * ── Series switch (OPTIONAL) ─────────────────────────────────────────────
+   * GEX | DEX, plus an EX-0DTE toggle. The two compose into the four series a
+   * host can show: GEX, DEX, GEX ex-0DTE, DEX ex-0DTE.
+   *
+   * Every field here is optional, and each control renders ONLY when its
+   * handler is supplied. That is what lets one host adopt the switch without
+   * every other host changing: /home passes none of them and its toolbar is
+   * exactly what it was.
+   *
+   * EX-0DTE is a different DATA SOURCE, not a chart setting — the live socket is
+   * single-expiry by construction, so the host has to fetch the summed board
+   * itself. Hence `ex0dteBusy` / `ex0dteError`: this toggle has to be able to
+   * say "fetching" and "that didn't work", which a display toggle never would.
+   */
+  metric?:       GexMetric;
+  onMetric?:     (m: GexMetric) => void;
+  ex0dte?:       boolean;
+  onToggleEx0dte?: () => void;
+  /** The ex-0DTE board sweep is in flight. */
+  ex0dteBusy?:   boolean;
+  /** Last ex-0DTE fetch failed — surfaced on the tile's tooltip. */
+  ex0dteError?:  string | null;
   showOI:        boolean;
   showDex:       boolean;
   showFlipCurve: boolean;
@@ -55,6 +78,8 @@ export default function GexToolbar({
   showGhost5, showGhost15, showGhost30,
   expirations, selectedExpiry, onExpiry,
   onGexMode, onDataMode,
+  metric = "gex", onMetric,
+  ex0dte = false, onToggleEx0dte, ex0dteBusy = false, ex0dteError = null,
   onToggleOI, onToggleDex, onToggleFlip,
   onToggleGhost5, onToggleGhost15, onToggleGhost30,
   onRefresh,
@@ -80,10 +105,46 @@ export default function GexToolbar({
       <Dock className="dock-noscroll" style={{ width: "100%", gap: 8 }} fullWidth flat noScroll>
         {leading}
         {leading && <DockGap />}
-        {/* DTE / Expiry picker */}
+        {/* DTE / Expiry picker.
+            Dimmed while EX-0DTE is on: the bars are then a sum across the whole
+            board, so no single expiry is "the" one on screen. It stays LIVE
+            rather than disabled on purpose — the picker drives SET_EXPIRY on the
+            shared socket, so everything else reading that feed still needs it. */}
         {dteOptions.length > 0 && (
           <>
-            <SegGroup options={dteOptions} active={selectedExpiry} onChange={onExpiry} />
+            <span style={{ display: "inline-flex", opacity: ex0dte ? 0.45 : 1 }}
+                  title={ex0dte ? "Showing every expiry except 0DTE — this picker still sets the live feed's expiry for the rest of the page" : undefined}>
+              <SegGroup options={dteOptions} active={selectedExpiry} onChange={onExpiry} />
+            </span>
+            <DockGap />
+          </>
+        )}
+
+        {/* ── Series: gamma or delta, whole board or ex-0DTE ──────────────────
+            Rendered only when the host wires them up (see the props). Placed
+            right after the DTE picker, because both answer "WHICH numbers am I
+            looking at" — the mode/basis groups after them answer "how are they
+            drawn". */}
+        {onMetric && (
+          <>
+            <SegGroup
+              options={[{ label: "GEX", value: "gex" }, { label: "DEX", value: "dex" }]}
+              active={metric}
+              onChange={(v) => onMetric(v as GexMetric)}
+            />
+            <DockGap />
+          </>
+        )}
+        {onToggleEx0dte && (
+          <>
+            <ToggleTile
+              label={ex0dteBusy ? "EX-0DTE…" : "EX-0DTE"}
+              on={ex0dte}
+              onClick={onToggleEx0dte}
+              title={ex0dteError
+                ? `Ex-0DTE board unavailable: ${ex0dteError}`
+                : "Every listed expiration EXCEPT today's, summed per strike. Same-day gamma dwarfs the rest of the board and decays to nothing by the close, so excluding it shows the walls that outlive today's pin."}
+            />
             <DockGap />
           </>
         )}

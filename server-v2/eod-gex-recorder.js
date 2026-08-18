@@ -49,7 +49,10 @@
 // computeGexRows is SINGLE-EXPIRY (it groups by strike alone, so multi-expiry
 // input keeps only the last expiry per strike/side). Anything spanning more than
 // one expiration must use computeGexRowsMultiExpiry.
-const { computeGexRows, computeGexRowsMultiExpiry, totalNetGex, findGexFlip } = require('./computation/gex-calculator');
+const {
+  computeGexRows, computeGexRowsMultiExpiry, totalNetGex, findGexFlip,
+  findCallWall, findPutWall,
+} = require('./computation/gex-calculator');
 // ThetaData was removed 2026-08-18 (see config/data-source.js). tt-snapshot is
 // TastyTrade REST and is now the only options provider; it is a drop-in with
 // the same *Theta-suffixed signatures, which is why those names survive here.
@@ -536,6 +539,11 @@ async function computeLiveGexEx0dte(symbol, sessionDate, spot) {
 // and a full SPX board is ~1500 strikes, so shipping every greek would bloat the
 // payload for nothing.
 //
+// Each ladder also carries its OWN summary levels: totalNetGex, gexFlip, and
+// (since 2026-08) callWall / putWall. The walls were the gap: a whole-board view
+// had a flip of its own but had to borrow /proxy/gex's 0DTE walls, which is a
+// different measurement on a different scope.
+//
 // The two DELTA legs were added 2026-08 for the GEX Levels tab's "Net delta
 // exposure by strike (ex-0DTE)" card. computeGexRowsMultiExpiry already sums
 // netDEX/volNetDEX per strike (see the SUMMABLE list in
@@ -577,6 +585,26 @@ async function computeLiveGexRowsMulti(symbol, sessionDate, spot) {
   // ex-0DTE ladder rather than pretending it equals `all`.
   const exRows = exFlat.length ? computeGexRowsMultiExpiry(exFlat, Number(spot)) : [];
 
+  // ── Walls, per ladder ──────────────────────────────────────────────────────
+  // Added 2026-08 so a whole-board view has its own call/put wall instead of
+  // having to borrow the 0DTE ones off /proxy/gex. Those are a DIFFERENT
+  // measurement — /proxy/gex is one expiry, clipped to ±8% of spot — so reading
+  // them beside an ex-0DTE ladder was comparing today's pin to the standing
+  // book. Now each ladder carries the walls that belong to it.
+  //
+  // Same definitions as everywhere else (findCallWall / findPutWall on the
+  // OI+Vol net, highest +GEX above spot / most −GEX below), computed from the
+  // FULL rows, not `slimRows` — slimming happens on the way out and the wall
+  // pick needs nothing it drops, but running it on the merged rows keeps this
+  // identical to computeGexSummary's pick.
+  //
+  // `exclude` is deliberately NOT passed: that option exists so the scanner's
+  // CB and CW can't land on the same strike, and there is no CB on this payload.
+  const walls = (rows) => ({
+    callWall: rows.length ? findCallWall(rows, Number(spot)) : null,
+    putWall: rows.length ? findPutWall(rows, Number(spot)) : null,
+  });
+
   return {
     symbol,
     sessionDate,
@@ -587,11 +615,13 @@ async function computeLiveGexRowsMulti(symbol, sessionDate, spot) {
       rows: slimRows(allRows),
       totalNetGex: totalNetGex(allRows),
       gexFlip: findGexFlip(allRows, Number(spot)),
+      ...walls(allRows),
     },
     ex0dte: {
       rows: slimRows(exRows),
       totalNetGex: exRows.length ? totalNetGex(exRows) : null,
       gexFlip: exRows.length ? findGexFlip(exRows, Number(spot)) : null,
+      ...walls(exRows),
     },
     updatedAt: Date.now(),
   };

@@ -188,7 +188,9 @@ __export(db_exports, {
   getBudgetAdvice: () => getBudgetAdvice,
   upsertBudgetAdvice: () => upsertBudgetAdvice,
   setStatementCategoriesBulk: () => setStatementCategoriesBulk,
+  setStatementCategoriesByMerchantBulk: () => setStatementCategoriesByMerchantBulk,
   setStatementCategoryByMerchant: () => setStatementCategoryByMerchant,
+  listMerchantCategoryMemory: () => listMerchantCategoryMemory,
   setStatementTxCategory: () => setStatementTxCategory,
   updateStatementTx: () => updateStatementTx,
   upsertSubscription: () => upsertSubscription,
@@ -4778,10 +4780,27 @@ async function updateStatementTx(profileId, id, patch) {
      patch.amount ?? null, patch.direction ?? null, patch.is_recurring ?? null]
   );
 }
+// The merchant grouping key, written ONCE and reused by every statement that
+// has to match a merchant. It must stay byte-identical to the JS side
+// (`merchantKey` in api-router.js, `mKey` in RealMonth.tsx): trim, collapse
+// whitespace runs, lowercase, cut at 60.
+//
+// Two things here are load-bearing:
+//   - `\\s+`, not `\s+`. In a JS template literal `\s` is not an escape, so it
+//     collapses to a bare `s` — the previous inline copy of this expression
+//     shipped `regexp_replace(..., 's+', ' ')`, which replaced runs of the
+//     LETTER s with a space. Any merchant containing an "s" therefore never
+//     matched its own key, and a bulk re-file silently updated zero rows.
+//   - `left(..., 60)`. merchant is an 80-char column and the JS key is sliced
+//     to 60; without the same cut, a long descriptor that groups as one row in
+//     the UI fails to match here.
+const MERCHANT_KEY_SQL = "left(lower(regexp_replace(btrim(merchant), '\\s+', ' ', 'g')), 60)";
+const merchantKeySqlOn = (alias) => MERCHANT_KEY_SQL.replace('merchant)', `${alias}.merchant)`);
+
 // Re-file every row from one merchant in a single UPDATE. The match is on the
-// same normalization the client uses for grouping (trim, collapse runs of
-// whitespace, lowercase), so what you see merged in the merchant rollup is
-// exactly what gets updated. month = null re-files that merchant everywhere.
+// same normalization the client uses for grouping, so what you see merged in
+// the merchant rollup is exactly what gets updated. month = null re-files that
+// merchant everywhere.
 async function setStatementCategoryByMerchant(profileId, month, merchantKey, categoryId) {
   const pool = await getDb();
   const r = await pool.query(
@@ -4789,10 +4808,57 @@ async function setStatementCategoryByMerchant(profileId, month, merchantKey, cat
         SET category_id = $2, updated_at = CURRENT_TIMESTAMP
       WHERE profile_id = $1
         AND ($3::text IS NULL OR month = $3)
-        AND lower(regexp_replace(btrim(merchant), '\s+', ' ', 'g')) = $4`,
+        AND ${MERCHANT_KEY_SQL} = $4`,
     [profileId, categoryId, month, merchantKey]
   );
   return r.rowCount ?? 0;
+}
+
+// Re-file MANY merchants at once, across EVERY month, in one UPDATE.
+//
+// This is what makes a category decision stick. Filing "SQ *BLUE BOTTLE" under
+// Coffee is a statement about that merchant, not about the row that happened to
+// be on screen — January's copies of the same charge are the same decision. The
+// `IS DISTINCT FROM` guard excludes rows already on the target category, so the
+// count returned is the number of rows that actually moved, not the number
+// examined.
+async function setStatementCategoriesByMerchantBulk(profileId, keys, cats) {
+  if (!keys.length) return 0;
+  const pool = await getDb();
+  const r = await pool.query(
+    `UPDATE budget_statement_tx AS t
+        SET category_id = v.cat, updated_at = CURRENT_TIMESTAMP
+       FROM (SELECT * FROM unnest($2::text[], $3::int[]) AS x(mkey, cat)) AS v
+      WHERE t.profile_id = $1
+        AND ${merchantKeySqlOn('t')} = v.mkey
+        AND t.category_id IS DISTINCT FROM v.cat`,
+    [profileId, keys, cats]
+  );
+  return r.rowCount ?? 0;
+}
+
+// What this profile has historically filed each merchant under — the memory an
+// import reads, so a merchant categorized by hand in June arrives already filed
+// in July instead of being re-decided every month. One row per merchant key:
+// the category it has been given most often, ties broken by the most recent
+// transaction. Uncategorized rows never vote.
+async function listMerchantCategoryMemory(profileId) {
+  return queryAll(
+    `SELECT mkey AS merchant_key, category_id
+       FROM (
+         SELECT ${MERCHANT_KEY_SQL} AS mkey,
+                category_id,
+                ROW_NUMBER() OVER (
+                  PARTITION BY ${MERCHANT_KEY_SQL}
+                  ORDER BY COUNT(*) DESC, MAX(tx_date) DESC
+                ) AS rk
+           FROM budget_statement_tx
+          WHERE profile_id = ? AND category_id IS NOT NULL
+          GROUP BY ${MERCHANT_KEY_SQL}, category_id
+       ) ranked
+      WHERE rk = 1`,
+    [profileId]
+  );
 }
 // Separate from updateStatementTx because COALESCE cannot express "set to NULL".
 async function setStatementTxCategory(profileId, id, categoryId) {
@@ -5344,7 +5410,9 @@ async function getLatestMultGreekStaticSnapshot() {
   getBudgetAdvice,
   upsertBudgetAdvice,
   setStatementCategoriesBulk,
+  setStatementCategoriesByMerchantBulk,
   setStatementCategoryByMerchant,
+  listMerchantCategoryMemory,
   setStatementTxCategory,
   updateStatementTx,
   upsertSubscription,

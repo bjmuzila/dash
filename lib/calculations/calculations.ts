@@ -114,8 +114,61 @@ export function putGEXOf(row: ChainRow, mode: CalcMode = "net", spot?: number): 
   const s = spotForRow(row, spot);
   return -(Math.abs(row.putGamma ?? 0) * putPosOf(row, mode) * s * s);
 }
+/**
+ * Per-strike NET GEX.
+ *
+ * Normally recomputed from the raw legs (gamma × contracts × spot²), which is
+ * what makes OI+Vol / Vol-only mean the same thing everywhere.
+ *
+ * FALLBACK for pre-summed rows: a row that carries NO gamma on either side but
+ * does carry `netGEX` / `netVolGEX` is a server-summed ladder — the multi-expiry
+ * ("all" / "ex-0DTE") ladders from /proxy/gex-by-strike-multi are deliberately
+ * slimmed to `{ strike, netGEX, netVolGEX, netDEX, volNetDEX }`, because a full
+ * SPX board is ~1500 strikes and shipping every greek would bloat the payload.
+ * Recomputing from absent legs returned 0 for every strike, which drew an empty
+ * chart rather than an error. The composite matches the recomputed basis:
+ * netGEX is the OI leg, netVolGEX the volume leg.
+ *
+ * The gate is `== null` on BOTH sides, so a genuine zero-gamma strike (and the
+ * chart's densified gap-filler rows, which set gamma to 0) still takes the
+ * normal path and stays 0.
+ */
 export function netGEXOf(row: ChainRow, mode: CalcMode = "net", spot?: number): number {
+  if (
+    row.callGamma == null && row.putGamma == null &&
+    (row.netGEX != null || row.netVolGEX != null)
+  ) {
+    return mode === "vol"
+      ? (row.netVolGEX ?? 0)
+      : (row.netGEX ?? 0) + (row.netVolGEX ?? 0);
+  }
   return callGEXOf(row, mode, spot) + putGEXOf(row, mode, spot);
+}
+
+/**
+ * Per-strike NET DEX (dealer delta exposure), the DEX counterpart of netGEXOf.
+ *
+ * Precomputed legs WIN here, which is the opposite priority from GEX and is
+ * deliberate: `netDEX` (OI-based) and `volNetDEX` (volume-based) are what the
+ * server publishes and what every existing DEX readout draws — the chart's DEX
+ * overlay line, the heatmap's DEX column, the home total. Recomputing would put
+ * a second opinion about delta exposure on the same screen as the first.
+ *
+ * `calculateNetDEX` is the fallback, for client-built chains that have raw
+ * delta/OI legs but no precomputed fields.
+ *
+ *   mode "net" (OI+Vol) → netDEX + volNetDEX
+ *   mode "vol"          → volNetDEX alone
+ *
+ * (matching the convention the DEX line and the heatmap column already use.)
+ */
+export function netDEXOf(row: ChainRow, mode: CalcMode = "net", spot?: number): number {
+  if (row.netDEX != null || row.volNetDEX != null) {
+    return mode === "vol"
+      ? (row.volNetDEX ?? 0)
+      : (row.netDEX ?? 0) + (row.volNetDEX ?? 0);
+  }
+  return calculateNetDEX(row, spotForRow(row, spot), mode);
 }
 
 export function calculateNetGEX(row: ChainRow, mode: CalcMode = "net"): number {

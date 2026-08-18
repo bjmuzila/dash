@@ -1,12 +1,27 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type ChainRow, type CalcMode, callGEXOf, putGEXOf, netGEXOf } from "@/lib/calculations/calculations";
+import { type ChainRow, type CalcMode, callGEXOf, putGEXOf, netGEXOf, netDEXOf } from "@/lib/calculations/calculations";
 import { type GexBaselines } from "@/hooks/useStrikeGexHistory";
 
 export type GexMode   = "net" | "call-put";
 export type DataMode  = "oi-vol" | "vol-only" | "flow";
 export type ChartMode = "line" | "bars";
+/**
+ * Which exposure the BARS draw.
+ *
+ *   gex — dealer gamma exposure. The chart's whole history; every overlay
+ *         (flip curve, prior-state ghosts, MVC tracking) is built on it.
+ *   dex — dealer DELTA exposure, same bars, same axes, netDEXOf per strike.
+ *
+ * DEX has always been available here as a thin overlay LINE on its own hidden
+ * scale (`showDex`). That answers "which way does delta lean" but not "how big
+ * is it, in dollars, at this strike" — the line is normalised to its own max and
+ * has no gridlines. As a bar series it reads on the same axis as everything
+ * else. The overlay is suppressed while the bars are DEX; two drawings of one
+ * number is not a comparison.
+ */
+export type GexMetric = "gex" | "dex";
 
 interface GexChartProps {
   chain:          ChainRow[];
@@ -16,6 +31,18 @@ interface GexChartProps {
   mode?:          GexMode;
   dataMode?:      DataMode;
   chartMode?:     ChartMode;
+  /** Gamma or delta exposure in the bars. Defaults to "gex" — see GexMetric. */
+  metric?:        GexMetric;
+  /**
+   * Drawn top-left, small and quiet, when the chart is showing something other
+   * than plain live GEX (e.g. "NET DEX", "NET GEX · EX-0DTE").
+   *
+   * The chart cannot work this out for itself: `metric` it knows, but whether
+   * `chain` is one expiry or a whole board summed ex-0DTE is entirely the
+   * caller's doing — the rows look the same either way. Passing the label in
+   * beats letting an ex-0DTE ladder silently masquerade as today's.
+   */
+  seriesLabel?:   string;
   showOI?:        boolean;
   showDex?:       boolean;
   showFlipCurve?: boolean;
@@ -183,6 +210,8 @@ export default function GexChart({
   expiry,
   mode       = "net",
   dataMode   = "oi-vol",
+  metric     = "gex",
+  seriesLabel,
   showOI     = false,
   showDex    = false,
   showFlipCurve = false,
@@ -294,8 +323,32 @@ export default function GexChart({
     if (!data.length) return;
 
     const isVol     = dataMode === "vol-only";
-    const isFlow    = dataMode === "flow";
-    const isCallPut = mode === "call-put";
+    const isDex     = metric === "dex";
+    /**
+     * WHAT THE ROWS CAN ACTUALLY SUPPORT.
+     *
+     * A server-summed ladder (the multi-expiry / ex-0DTE ones from
+     * /proxy/gex-by-strike-multi) is slimmed to the net figures per strike:
+     * no call gamma, no put gamma, no flowGEX. Call/put geometry and the flow
+     * basis therefore have literally nothing to draw on those rows, and used to
+     * render an empty chart rather than say so. Both fall back to the net bars,
+     * which those rows DO support.
+     *
+     * Tested on the raw `chain`, not the densified rows: densify's gap fillers
+     * set gamma to 0, which is a legitimate leg, not a missing one. One pass,
+     * short-circuited — `chain` is ~1500 strikes on a full board.
+     */
+    let hasSideLegs = false;
+    let hasFlow = false;
+    for (const r of chain) {
+      if (!hasSideLegs && (r.callGamma != null || r.putGamma != null)) hasSideLegs = true;
+      if (!hasFlow && r.flowGEX != null) hasFlow = true;
+      if (hasSideLegs && hasFlow) break;
+    }
+    // Flow is also a GEX-only basis even where it IS present: the tape is
+    // classified into dealer gamma inventory and there is no flowDEX.
+    const isFlow    = dataMode === "flow" && !isDex && hasFlow;
+    const isCallPut = mode === "call-put" && !isDex && hasSideLegs;
     // Resolve the contract basis once; compute GEX from the chain rows via the
     // shared library so all bases (OI+Vol / OI / Vol) are consistent everywhere
     // and don't depend on how a given page precomputed netGEX/callGEX/putGEX.
@@ -304,7 +357,10 @@ export default function GexChart({
     // passed explicitly (chart chain rows often lack spotPrice). calls +, puts −, abs γ.
     const getCall = (r: ChainRow) => callGEXOf(r, calcMode, spotPrice);
     const getPut  = (r: ChainRow) => putGEXOf(r, calcMode, spotPrice);
-    const getNet  = (r: ChainRow) => isFlow ? (r.flowGEX ?? 0) : netGEXOf(r, calcMode, spotPrice);
+    const getNet  = (r: ChainRow) =>
+      isDex  ? netDEXOf(r, calcMode, spotPrice)
+    : isFlow ? (r.flowGEX ?? 0)
+             : netGEXOf(r, calcMode, spotPrice);
 
     // ── Chart area (no axis border space) ──
     const cW    = W - PAD_L - PAD_R;
@@ -428,7 +484,9 @@ export default function GexChart({
     if (showGhost5)  ghostAges.push("5");
     let ghostDrawn = 0;
     const ghostActive = ghostAges.length > 0;
-    if (ghostActive && baselines && !isCallPut && !isVol) {
+    // …and skipped entirely in DEX: the baselines are stored net GEX, so
+    // differencing them against a delta bar would subtract two different units.
+    if (ghostActive && baselines && !isCallPut && !isVol && !isDex) {
       // Older → newer so the most recent (5m) sits on top of the older halos.
       for (const age of ghostAges) {
         const tint = GHOST_TINTS[age];
@@ -492,7 +550,7 @@ export default function GexChart({
       }
     }
     // Ghost requested but unsupported in this mode, or no history yet.
-    if (ghostActive && (isCallPut || isVol)) {
+    if (ghostActive && (isCallPut || isVol || isDex)) {
       ctx.fillStyle = "rgba(255,255,255,0.45)";
       ctx.font = "bold 9px Arial"; ctx.textAlign = "center";
       ctx.fillText("Prior GEX shows in Net GEX · OI+Vol mode", W / 2, PAD_T + 24);
@@ -542,7 +600,9 @@ export default function GexChart({
     // Match the heatmap's DEX column convention:
     //   OI + Vol mode → netDEX + volNetDEX   (OI-based plus volume-based)
     //   Vol Only mode → volNetDEX            (volume-based alone)
-    if (showDex) {
+    // Suppressed when the BARS are already DEX — same number, drawn twice, on
+    // two different scales, which reads as two series that disagree.
+    if (showDex && !isDex) {
       const dexVals = data.map(r => isVol
         ? (r.volNetDEX ?? 0)
         : (r.netDEX ?? 0) + (r.volNetDEX ?? 0));
@@ -571,7 +631,11 @@ export default function GexChart({
     }
 
     // ── GEX Flip: BS profile curve + gamma-zero vertical line ──
-    if (showFlipCurve) {
+    // GEX only. The profile is dealer GAMMA recomputed at 401 hypothetical spot
+    // levels and its zero crossing is the gamma flip; there is no delta
+    // equivalent, and plotting the gamma curve over delta bars would put an
+    // unrelated line on the same axes.
+    if (showFlipCurve && !isDex) {
       // ── Profile curve (smooth quadratic bezier) ──
       const drawSmoothCurve = (pts: { x: number; y: number }[]) => {
         if (pts.length < 2) return;
@@ -676,7 +740,11 @@ export default function GexChart({
     // the MVC, so the chart shows where the cluster went after price reached it.
     const track      = mvcRef.current;
     const peakStrike = peak?.strike ?? null;
-    if (trackMvcTouch && peakStrike != null) {
+    // GEX only: the whole read ("price traded into the gamma cluster, then the
+    // cluster moved") is about dealer gamma, and the badge copy says GEX. The
+    // latched values are cleared when `metric` changes — see the reset effect.
+    const mvcOn = trackMvcTouch && !isDex;
+    if (mvcOn && peakStrike != null) {
       const now = Date.now();
       const tol = Math.max(detectedStep / 2, 0.5);
       if (!track.touched && spotPrice > 0 && Math.abs(spotPrice - peakStrike) <= tol) {
@@ -708,7 +776,11 @@ export default function GexChart({
       const col = pv >= 0 ? "#29b6f6" : "#ffb300";
       ctx.save();
       ctx.font = "bold 10px Arial";
-      const lbl = `${isVol ? "CB·Vol" : "CB"} ${peak.strike.toLocaleString()}`;
+      // "CB" (Core Bullseye) is a GAMMA name — the strike carrying the most
+      // dealer gamma. On delta bars the same arithmetic finds the biggest DELTA
+      // strike, which is a different thing, so it gets a neutral label.
+      const peakTag = isDex ? "PEAK DEX" : isVol ? "CB·Vol" : "CB";
+      const lbl = `${peakTag} ${peak.strike.toLocaleString()}`;
       const tw  = ctx.measureText(lbl).width;
       const bw  = tw + 10, bh = 15;
       const bx  = clamp(xAt(pi) - bw / 2, 2, W - bw - 2);
@@ -729,7 +801,7 @@ export default function GexChart({
       s != null && data.length > 0 && s >= data[0].strike && s <= data[data.length - 1].strike;
 
     // ── MVC touch overlay: origin marker + migration arrow ────────────────────
-    if (trackMvcTouch && track.touched && inView(track.touchStrike)) {
+    if (mvcOn && track.touched && inView(track.touchStrike)) {
       const tx = xForStrike(track.touchStrike!);
       ctx.save();
       ctx.beginPath(); ctx.rect(PAD_L, PAD_T, cW, cH); ctx.clip();
@@ -854,6 +926,20 @@ export default function GexChart({
       ctx.fillText(r.strike.toLocaleString(), xAt(i), PAD_T + cH - 18);
     });
 
+    // ── Series label (top-left) ───────────────────────────────────────────────
+    // The legend was removed per design, and for plain live GEX that is right —
+    // the page around the chart already says what it is. It stops being right the
+    // moment the bars are something else: DEX bars and an ex-0DTE board look
+    // exactly like today's GEX, and a screenshot of one carries no clue which it
+    // was. Only drawn when the caller passes a label, so the default chart is
+    // unchanged.
+    if (seriesLabel) {
+      ctx.fillStyle = "rgba(255,255,255,0.55)";
+      ctx.font = "bold 9px Arial";
+      ctx.textAlign = "left";
+      ctx.fillText(seriesLabel.toUpperCase(), PAD_L + 3, PAD_T + 10);
+    }
+
     // ── Legend (top-left) — removed per design ──
 
     // ── Viewport hint (bottom-right, very dim) ──
@@ -866,7 +952,7 @@ export default function GexChart({
     }
 
     // ── Sync the HTML readout with the latched track (no-ops when unchanged) ──
-    if (trackMvcTouch && track.touched && track.touchStrike != null && track.liveStrike != null
+    if (mvcOn && track.touched && track.touchStrike != null && track.liveStrike != null
         && track.touchAt != null && track.touchGex != null && touchGexNow != null) {
       const from = track.touchStrike, to = track.liveStrike, at = track.touchAt;
       const gexAt = track.touchGex, gexNow = touchGexNow;
@@ -879,7 +965,7 @@ export default function GexChart({
       setMvcBadge(prev => (prev === null ? prev : null));
     }
 
-  }, [chain, spotPrice, flipPoint, gexProfile, mode, dataMode, showOI, showDex, showFlipCurve, expiry, baselines, showGhost5, showGhost15, showGhost30, tooltip?.row.strike, transparentBg, trackMvcTouch, getDensified]);
+  }, [chain, spotPrice, flipPoint, gexProfile, mode, dataMode, metric, seriesLabel, showOI, showDex, showFlipCurve, expiry, baselines, showGhost5, showGhost15, showGhost30, tooltip?.row.strike, transparentBg, trackMvcTouch, getDensified]);
 
   // Draw on changes + resize
   useEffect(() => { draw(); }, [draw]);
@@ -935,12 +1021,13 @@ export default function GexChart({
     draw();
   }, [expiry]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The latched GEX is basis-specific (OI+Vol vs Vol-only vs Flow). Switching
-  // basis would compare apples to oranges, so drop the latch and re-arm.
+  // The latched GEX is basis-specific (OI+Vol vs Vol-only vs Flow) and
+  // metric-specific (gamma vs delta). Switching either would compare apples to
+  // oranges, so drop the latch and re-arm.
   useEffect(() => {
     mvcRef.current = emptyMvcTrack();
     setMvcBadge(null);
-  }, [dataMode]);
+  }, [dataMode, metric]);
 
   // Keep the "Xm ago" readout fresh while a touch is latched.
   useEffect(() => {
@@ -1137,7 +1224,15 @@ export default function GexChart({
         const flowGex  = r.flowGEX ?? 0;
         const chainLbl = dataMode === "vol-only" ? "VOL" : "OI+VOL";
         // Active basis first (it's the one the bars are drawn on), context second.
-        const legs: { label: string; value: number; active: boolean }[] = dataMode === "flow"
+        //
+        // DEX bars get their own pair: the delta figure the bar IS, and the gamma
+        // figure on the same strike for context. Flow has no delta counterpart
+        // (the tape is classified into gamma inventory), so it is not offered.
+        const legs: { label: string; value: number; active: boolean }[] =
+          metric === "dex"
+          ? [{ label: `DEX ${chainLbl}`, value: netDEXOf(r, tMode, spotPrice), active: true },
+             { label: `GEX ${chainLbl}`, value: chainGex, active: false }]
+          : dataMode === "flow"
           ? [{ label: "FLOW", value: flowGex, active: true },
              { label: chainLbl, value: chainGex, active: false }]
           : [{ label: chainLbl, value: chainGex, active: true },

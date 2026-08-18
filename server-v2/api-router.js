@@ -6984,12 +6984,29 @@ if (libDb) {
             const month = String(body?.month ?? currentMonth()).slice(0, 7);
             const source = body?.source ? String(body.source).slice(0, 120) : null;
             const rows = Array.isArray(body?.rows) ? body.rows : [];
-            let inserted = 0, skipped = 0;
+            // The same decision, carried forward. A merchant filed by hand in
+            // June should arrive already filed in July — otherwise every import
+            // re-asks a question that was answered months ago. History only
+            // fills a GAP: a category the reviewer set on the staging table
+            // always wins, so this can never overwrite a deliberate choice.
+            const memory = new Map();
+            try {
+              for (const m of await D.listMerchantCategoryMemory(profile.id)) {
+                if (m?.merchant_key && m.category_id != null) memory.set(String(m.merchant_key), Number(m.category_id));
+              }
+            } catch { /* memory is an optimisation — never block an import on it */ }
+            let inserted = 0, skipped = 0, inherited = 0;
             for (const r of rows) {
               const tx_date = String(r?.date ?? '').slice(0, 10);
               const amount = Math.abs(Number(r?.amount ?? 0));
               const description = String(r?.description ?? '').slice(0, 200);
               if (!/^\d{4}-\d{2}-\d{2}$/.test(tx_date) || !Number.isFinite(amount) || amount <= 0) { skipped++; continue; }
+              const merchantIn = String(r?.merchant ?? description).slice(0, 80);
+              let categoryIn = r?.categoryId == null ? null : Number(r.categoryId);
+              if (categoryIn == null || !Number.isFinite(categoryIn)) {
+                const remembered = memory.get(merchantKey(merchantIn));
+                if (remembered != null) { categoryIn = remembered; inherited++; } else categoryIn = null;
+              }
               const rec = {
                 profile_id: profile.id,
                 // File the row under the month it actually fell in, not the month
@@ -6997,10 +7014,10 @@ if (libDb) {
                 month: tx_date.slice(0, 7),
                 tx_date,
                 description,
-                merchant: String(r?.merchant ?? description).slice(0, 80),
+                merchant: merchantIn,
                 amount,
                 direction: r?.direction === 'in' ? 'in' : 'out',
-                category_id: r?.categoryId == null ? null : Number(r.categoryId),
+                category_id: categoryIn,
                 is_recurring: r?.recurring ? 1 : 0,
                 bank: normBank(r?.bank),
                 source,
@@ -7009,7 +7026,7 @@ if (libDb) {
               const out = await D.insertStatementTx(rec);
               if (out) inserted++; else skipped++;
             }
-            send(res, 200, { ok: true, inserted, skipped, month });
+            send(res, 200, { ok: true, inserted, skipped, inherited, month });
             return;
           }
 
@@ -7043,19 +7060,46 @@ if (libDb) {
         }
 
         // One write for a whole editing session's worth of category changes.
+        //
+        // With allMonths (the client's default), the same decision is then
+        // applied to every OTHER month's copies of the same merchants. Filing
+        // Blue Bottle under Coffee is a fact about Blue Bottle, not about the
+        // row that happened to be on screen — without this, every month has to
+        // be re-filed by hand and the category trend is built on a history that
+        // disagrees with itself.
+        //
+        // Order matters: the id write goes first so an explicitly-picked row
+        // always lands, then the merchant sweep carries it outward.
         if (action === 'setCategoriesBulk') {
           const changes = Array.isArray(body?.changes) ? body.changes : [];
           const ids = [];
           const cats = [];
+          // Last write wins per merchant. Two rows of one merchant sent to two
+          // different categories in a single batch is a contradiction; the
+          // alternative (spreading neither) silently ignores the edit.
+          const byMerchant = new Map();
           for (const c of changes) {
             const id = Number(c?.id);
             if (!Number.isFinite(id) || id <= 0) continue;
             const cat = c?.categoryId == null || c.categoryId === '' ? null : Number(c.categoryId);
+            const catOrNull = Number.isFinite(cat) ? cat : null;
             ids.push(id);
-            cats.push(Number.isFinite(cat) ? cat : null);
+            cats.push(catOrNull);
+            const mk = merchantKey(c?.merchant ?? '');
+            if (mk) byMerchant.set(mk, catOrNull);
           }
           const updated = await D.setStatementCategoriesBulk(profile.id, ids, cats);
-          send(res, 200, { ok: true, updated, submitted: ids.length }); return;
+          let spread = 0;
+          if (body?.allMonths && byMerchant.size) {
+            // Runs AFTER the id write on purpose: those rows now already sit on
+            // the target category, and the sweep's `IS DISTINCT FROM` guard
+            // skips them — so this count is exactly the rows elsewhere in
+            // history that moved, with no double-counting to subtract out.
+            spread = await D.setStatementCategoriesByMerchantBulk(
+              profile.id, [...byMerchant.keys()], [...byMerchant.values()]
+            );
+          }
+          send(res, 200, { ok: true, updated, spread, merchants: byMerchant.size, submitted: ids.length }); return;
         }
 
         if (action === 'deleteTx') {

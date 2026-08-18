@@ -2146,11 +2146,15 @@ function CategoryDonutCard({ slices, currency, range, importedMonths = [] }: { s
           </div>
         </div>
       ) : (
-        <div style={{ display: "flex", alignItems: "center", gap: 12, minHeight: 0 }}>
-          {/* Half the card is the pie, half is the words. Both halves are
-              `flex: 1` rather than a fixed pie width, so the split holds at any
-              card width instead of the legend absorbing every extra pixel. */}
-          <div style={{ flex: 1, minWidth: 0, display: "grid", placeItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, minHeight: 0, minWidth: 0 }}>
+          {/* 40/60, not 50/50. The pie is happy at any size — it is an
+              aspect-ratio box that just scales — while the legend has a hard
+              floor: swatch + amount + delta are fixed-width columns, and once
+              the legend is narrower than their sum the row cannot shrink and
+              spills out of the card over the neighbouring one. Giving the
+              words the larger share keeps that floor comfortably inside the
+              card at every column width this grid produces. */}
+          <div style={{ flex: "0 1 36%", minWidth: 0, display: "grid", placeItems: "center" }}>
             <div style={{ position: "relative", width: "100%", maxWidth: 210, aspectRatio: "1 / 1" }}>
             <svg viewBox="0 0 120 120" width="100%" height="100%" onMouseLeave={() => setHover(null)} style={{ overflow: "visible", display: "block" }}>
               {arcs.map(({ sl, a0, a1 }, i) => {
@@ -2189,7 +2193,12 @@ function CategoryDonutCard({ slices, currency, range, importedMonths = [] }: { s
             </div>
           </div>
 
-          <div style={{ flex: 1.15, minWidth: 0, display: "grid", gap: 2, fontSize: 11.5, fontVariantNumeric: "tabular-nums", alignContent: "center" }} onMouseLeave={() => setHover(null)}>
+          {/* gridTemplateColumns is minmax(0, 1fr), not the implicit `auto`.
+              An auto column is floored at its content's min-content width, so
+              the rows here — whose fixed columns cannot shrink — would widen
+              the column past the card instead of ellipsising the label. This
+              is the line that actually stops the overflow. */}
+          <div style={{ flex: "1 1 64%", minWidth: 0, display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 2, fontSize: 11.5, fontVariantNumeric: "tabular-nums", alignContent: "center" }} onMouseLeave={() => setHover(null)}>
             {slices.slice(0, 8).map((sl, i) => {
               const on = hover === i;
               return (
@@ -2203,7 +2212,11 @@ function CategoryDonutCard({ slices, currency, range, importedMonths = [] }: { s
                       : "")
                   }
                   style={{
-                    display: "flex", alignItems: "center", gap: 6, padding: "3px 4px", borderRadius: 7, cursor: "pointer",
+                    display: "flex", alignItems: "center", gap: 6, padding: "3px 3px", borderRadius: 7, cursor: "pointer",
+                    // Last line of defence: at an extreme column width even the
+                    // fixed columns cannot all fit, and a clipped percentage is
+                    // still better than one painted over the next card.
+                    minWidth: 0, overflow: "hidden",
                     background: on ? "rgba(255,255,255,0.07)" : "transparent",
                     opacity: hover !== null && !on ? 0.45 : 1,
                     transition: "background .15s ease, opacity .15s ease",
@@ -2211,17 +2224,17 @@ function CategoryDonutCard({ slices, currency, range, importedMonths = [] }: { s
                 >
                   <span style={{ width: 9, height: 9, borderRadius: 999, background: sl.color, boxShadow: `0 0 8px ${sl.color}`, flex: "none" }} />
                   <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: on ? 800 : 600, color: on ? HOME_THEME.text : "rgba(255,255,255,0.8)" }}>{sl.label}</span>
-                  <b style={{ width: 50, textAlign: "right", flex: "none", color: on ? HOME_THEME.text : "rgba(255,255,255,0.55)" }}>{fmtMoney(sl.value, currency).replace(/\.\d+$/, "")}</b>
+                  <b style={{ width: 48, textAlign: "right", flex: "none", color: on ? HOME_THEME.text : "rgba(255,255,255,0.55)" }}>{fmtMoney(sl.value, currency).replace(/\.\d+$/, "")}</b>
                   {hasAvg && (() => {
                     const avg = sl.avg ?? 0;
                     // A category with no history has nothing to be over or
                     // under, and printing "+100%" for its first month would be
                     // noise dressed as a signal.
-                    if (avg <= 0) return <span style={{ width: 38, textAlign: "right", flex: "none", opacity: 0.3 }}>new</span>;
+                    if (avg <= 0) return <span style={{ width: 36, textAlign: "right", flex: "none", opacity: 0.3 }}>new</span>;
                     const d = sl.value - avg;
                     const pct = Math.round((d / avg) * 100);
                     return (
-                      <span style={{ width: 38, textAlign: "right", flex: "none", color: d > 0 ? SOFT_RED : HOME_THEME.green, opacity: on ? 1 : 0.8 }}>
+                      <span style={{ width: 36, textAlign: "right", flex: "none", color: d > 0 ? SOFT_RED : HOME_THEME.green, opacity: on ? 1 : 0.8 }}>
                         {d > 0 ? "▲" : "▼"}{Math.abs(pct)}%
                       </span>
                     );

@@ -1,5 +1,149 @@
 # Changelog
 
+## 2026-08-18 - Ex-0DTE ladders get their own walls; Scanner level tiles get a scope chip
+
+Edited: `server-v2/eod-gex-recorder.js`, `components/scanner/GexLevelsTab.tsx`,
+`hooks/useBoardGexLadder.ts`, `components/pages/Board.tsx`.
+
+**The problem.** The Scanner's GEX Levels tab showed two different flips with
+nothing reconciling them. The `Neutral` tile at the top is `/proxy/gex` — ONE
+expiry (0DTE for SPX), clipped to ±8% of spot by the proxy's contract
+subscription. The ex-0DTE card lower down prints `findGexFlip()` over the whole
+board minus today. Both correct, different scopes, and neither said so — which
+reads as a bug. Worse, `Resistance` / `Support` had no whole-board counterpart at
+all: `/proxy/gex-by-strike-multi` returned `{rows, totalNetGex, gexFlip}` per
+ladder and no walls, so a board view had to borrow the 0DTE ones or show nothing.
+
+### Server: walls on both multi-expiry ladders
+
+`server-v2/eod-gex-recorder.js` → `computeLiveGexRowsMulti()` now adds
+`callWall` / `putWall` to BOTH the `all` and `ex0dte` ladders, via the existing
+`findCallWall` / `findPutWall` from `gex-calculator.js` — same definitions as
+everywhere else (highest +GEX above spot, most −GEX below, OI+Vol basis).
+
+- **Additive only.** No existing key changed shape or meaning; `/proxy/gex-by-strike-multi`
+  in `server-with-proxy.js` already spreads the payload, so the route is untouched.
+- Computed from the FULL merged rows, not `slimRows` — the wall pick needs
+  nothing slimming drops, but running it pre-slim keeps it identical to
+  `computeGexSummary`'s pick.
+- `exclude` is deliberately NOT passed. That option exists so the scanner's CB
+  and CW can't land on the same strike, and there is no CB on this payload.
+
+### Client: the walls, and honest scope
+
+`components/scanner/GexLevelsTab.tsx`
+
+- `GexMultiLadder` / `parseMultiLadder` carry `callWall` / `putWall`. A server
+  that predates the change omits them → they parse to null → the header **drops
+  the segment entirely** rather than printing `—`, so a stale deploy reads as
+  "this build has no walls", not "there are no walls".
+- The multi-expiry card header now reads
+  `N expirations, 0DTE excluded · total … · flip … · res … · sup …`.
+- `AmTbrStat` gained optional `scope` (a chip beside the label) and `title`.
+  `Resistance`, `Support` and `Neutral` are now chipped **0DTE** and carry
+  tooltips naming the ±8% window and pointing at the ex-0DTE card. The two flips
+  on that page now visibly measure different things.
+
+`hooks/useBoardGexLadder.ts` + `components/pages/Board.tsx`
+
+- `GexLadder` carries the walls too, and the board GEX card's `seriesLabel` shows
+  the ex-0DTE ladder's OWN `CW / PW / FLIP` while EX-0DTE is on — never the
+  feed's. GEX only: there is no delta wall.
+
+**Deploy note:** the server change needs a server-v2 restart. Until then the
+walls arrive absent and every consumer above degrades to not showing them.
+
+## 2026-08-18 - /board GEX card: GEX | DEX switch + EX-0DTE toggle (four series)
+
+Edited: `components/pages/Board.tsx`, `components/dashboard/GexChart.tsx`,
+`components/dashboard/GexToolbar.tsx`, `components/shared/DockToolbar.tsx`,
+`lib/calculations/calculations.ts`. New: `hooks/useBoardGexLadder.ts`.
+
+**The change.** Two controls on the board's GEX card toolbar — a `GEX | DEX`
+segmented group and an `EX-0DTE` toggle — composing into the four series asked
+for: GEX, DEX, GEX ex-0DTE, DEX ex-0DTE.
+
+**/home is untouched.** Every new `GexToolbar` prop is optional and each control
+renders only when its handler is supplied. `HomeClient` passes none of them, so
+its toolbar is exactly what it was.
+
+### DEX bars
+
+DEX was already in `GexChart` — as a thin overlay LINE on its own hidden 60%
+scale (`showDex`). That answers "which way does delta lean" but not "how big is
+it at this strike". New `metric?: "gex" | "dex"` prop swaps the BARS to
+`netDEXOf`, on the same axis and gridlines as everything else. The overlay line
+is suppressed while the bars are DEX — one number drawn twice on two scales
+reads as two series that disagree.
+
+Suppressed in DEX because they are gamma-specific, not merely unhelpful:
+- the flip curve + gamma-zero line (dealer gamma repriced at 401 spots; there is
+  no delta equivalent)
+- the prior-state ghosts (baselines are stored net GEX — differencing them
+  against delta bars subtracts two different units)
+- MVC touch tracking (the whole read is about the gamma cluster; the latch is
+  cleared when `metric` changes, alongside the existing `dataMode` reset)
+- the `CB` peak label becomes `PEAK DEX` — Core Bullseye is a gamma name
+- Flow basis falls back to OI+Vol (the tape is classified into gamma inventory;
+  there is no flowDEX)
+
+The hover tooltip in DEX shows the delta figure as the active leg with the gamma
+figure on the same strike as context.
+
+### EX-0DTE is a different DATA SOURCE, not a setting
+
+`/ws/gex` is single-expiry **by construction** — the proxy's `_activeContracts()`
+filters `c.expiration !== this.expiry`, and `computeGexRows()` carries a scope
+warning that multi-expiry input keeps only the last expiry per (strike, side).
+There is no frame to ask for.
+
+New `hooks/useBoardGexLadder.ts` reads **`/proxy/gex-by-strike-multi`** — the
+existing board sweep built for the /test page, which returns both the `all` and
+`ex0dte` ladders (OI+Vol, summed per strike by `computeGexRowsMultiExpiry`, so
+they line up with `eod_gex.total_gex_ex0dte`). **No proxy or server code was
+changed** — this is a GET against an endpoint that already existed.
+
+- Fetched ONLY while the toggle is on. The sweep is one upstream fetch per
+  expiration server-side; a board nobody switches to ex-0DTE never runs one.
+- Polled at 60s, matching the server's own `GEX_MULTI_TTL_MS` cache. Polling
+  faster would re-read the same cache entry and buy nothing.
+- While the first sweep is in flight (or if it failed) the card keeps drawing
+  the live rows and the tile says `EX-0DTE…` / carries the error in its tooltip,
+  rather than blanking.
+- Refresh (↻) re-runs the sweep instead of re-asserting SET_EXPIRY.
+- The DTE picker dims but stays live — it still drives the shared socket for
+  every other card on the board.
+
+### Slim rows, and what had to change to make them draw
+
+The sweep's rows are `{ strike, netGEX, netVolGEX, netDEX, volNetDEX }` — no
+gamma, no delta, no OI. A full SPX board is ~1500 strikes.
+
+- **`netGEXOf` gained a fallback** (`lib/calculations/calculations.ts`): a row
+  with NO gamma on either side but with `netGEX`/`netVolGEX` present is a
+  pre-summed ladder, so read the composite instead of recomputing from absent
+  legs (which returned 0 for every strike — an empty chart, not an error). Gated
+  on `== null` for BOTH sides, so a genuine zero-gamma strike and the chart's
+  densified gap-fillers still take the normal path.
+- **New `netDEXOf`**, the DEX counterpart. Precomputed legs WIN here — the
+  opposite priority from GEX, deliberately: `netDEX`/`volNetDEX` are what every
+  existing DEX readout draws, and recomputing would put a second opinion about
+  delta exposure next to the first. `calculateNetDEX` is the fallback.
+- **`GexChart` now degrades instead of drawing nothing.** One short-circuited
+  pass over `chain` establishes whether per-side gamma legs and `flowGEX` exist
+  at all; Call−Put and the Flow basis fall back to net bars when they don't.
+
+### Series label
+
+New optional `seriesLabel` prop draws a small top-left caption when the bars are
+anything other than plain live GEX (`NET DEX`, `NET GEX · EX-0DTE (7 exp)`). The
+chart cannot infer this — whether `chain` is one expiry or a summed board is
+entirely the caller's doing, and the rows look identical either way. Without it a
+screenshot of an ex-0DTE board is indistinguishable from today's.
+
+`ToggleTile` (`components/shared/DockToolbar.tsx`) gained an optional `title` so
+the EX-0DTE tile can explain itself and surface a fetch error.
+
 ## 2026-08-18 - ES Candles embed: the right-edge GEX rail is now a toggle
 
 Edited: `components/pages/EsCandles.tsx`, `components/dashboard/es-candles/slotStore.ts`.

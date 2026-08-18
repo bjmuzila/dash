@@ -66,6 +66,7 @@ import { useDashboardLayout } from "@/components/shared/useDashboardLayout";
 import { sendGex, subscribeGex, type GexMessage } from "@/lib/gexSocket";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { useStrikeGexHistory } from "@/hooks/useStrikeGexHistory";
+import { useBoardGexLadder } from "@/hooks/useBoardGexLadder";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import {
   computeGEXProfile, findGEXFlip, netGEXOf, formatGEX, formatStrike,
@@ -85,7 +86,7 @@ import {
    would nest a page shell inside a tile. Their reusable pieces (FlowTape,
    FlowNetPremPanel) ARE here as cards.
    ─────────────────────────────────────────────────────────────────────────── */
-import GexChart, { type GexMode, type DataMode } from "@/components/dashboard/GexChart";
+import GexChart, { type GexMode, type DataMode, type GexMetric } from "@/components/dashboard/GexChart";
 import GexToolbar from "@/components/dashboard/GexToolbar";
 import FitScale from "@/components/shared/FitScale";
 import EsCandlesPage from "@/components/pages/EsCandles";
@@ -899,6 +900,25 @@ function StatsBody() {
    · The DTE picker is board-wide (SET_EXPIRY is per-connection; see the file
      header). The card shows the picked expiry immediately and settles onto
      whatever the feed confirms.
+   · It has a SERIES SWITCH /home does not: GEX | DEX, and an EX-0DTE toggle.
+     Those two compose into the four series — GEX, DEX, GEX ex-0DTE, DEX
+     ex-0DTE. The toolbar props behind them are optional, which is exactly why
+     /home's toolbar is untouched by their existence.
+
+   EX-0DTE IS A DIFFERENT DATA SOURCE, NOT A SETTING
+   -------------------------------------------------
+   The socket is single-expiry by construction (the proxy only subscribes the
+   selected expiry's contracts), so "every expiry except today's" cannot come
+   from it. It comes from `useBoardGexLadder` → /proxy/gex-by-strike-multi,
+   the server-summed board sweep, polled at the server's own 60s cache TTL.
+
+   Those rows are SLIM — { strike, netGEX, netVolGEX, netDEX, volNetDEX }, no
+   gamma legs — so while EX-0DTE is on:
+     · Call−Put has no per-side data. GexChart falls back to net bars by itself.
+     · The prior-state ghosts and the flip curve are suppressed here: the
+       baselines and the profile are both single-expiry.
+     · The bars are OI+Vol regardless of the data-mode group; the sweep only
+       computes that basis.
    ─────────────────────────────────────────────────────────────────────────── */
 
 /**
@@ -932,11 +952,14 @@ function daysBetweenYmd(fromYmd: string, toYmd: string): number {
 }
 
 function GexChartBody() {
-  const { chain, spot, flip, expiry, expirations } = useFeed();
+  const { chain: liveChain, spot: liveSpot, flip, expiry, expirations } = useFeed();
 
   // Chart controls — same names, same defaults as HomeClient.
   const [gexMode, setGexMode] = useState<GexMode>("net");
   const [dataMode, setDataMode] = useState<DataMode>("oi-vol");
+  // Series switch. Gamma or delta, this expiry or the board without today's.
+  const [metric, setMetric] = useState<GexMetric>("gex");
+  const [ex0dte, setEx0dte] = useState(false);
   const [showOI, setShowOI] = useState(false);
   const [showDex, setShowDex] = useState(false);
   const [showFlipCurve, setShowFlipCurve] = useState(false);
@@ -967,25 +990,75 @@ function GexChartBody() {
     sendGex({ type: "SET_EXPIRY", expiry: next });
   }, []);
 
-  // No client-side chain fetch to redo: the server owns the rows. Re-asserting
-  // the expiry is what actually makes it push a fresh frame.
-  const handleRefresh = useCallback(async () => {
-    if (selectedExpiry) sendGex({ type: "SET_EXPIRY", expiry: selectedExpiry });
-  }, [selectedExpiry]);
-
   const expiryValues = useMemo(() => usableExpirations(expirations), [expirations]);
+
+  // ── EX-0DTE source ─────────────────────────────────────────────────────────
+  // Only swept while the toggle is ON: the sweep costs one upstream fetch per
+  // expiration server-side, so a board nobody switches to ex-0DTE never runs it.
+  const ladder = useBoardGexLadder("$SPX", ex0dte);
+  const ex0Rows = ladder.ex0dte?.rows ?? null;
+  // ON but nothing usable yet (first sweep in flight, or it failed) — keep
+  // drawing the live rows rather than blanking the card, and let the toolbar
+  // tile say why.
+  const ex0Live = ex0dte && !!ex0Rows?.length;
+
+  const chain = ex0Live ? ex0Rows! : liveChain;
+  // The sweep computes its ladders on the feed's own spot, so the two agree;
+  // prefer the live value and fall back to the payload's.
+  const spot = liveSpot > 0 ? liveSpot : ladder.spot;
+
+  // Re-asserting the expiry is what makes the server push a fresh frame — there
+  // is no client-side chain fetch to redo. On the ex-0DTE board, refresh means
+  // re-running the sweep instead.
+  const refreshLadder = ladder.refresh;
+  const handleRefresh = useCallback(async () => {
+    if (ex0dte) { refreshLadder(); return; }
+    if (selectedExpiry) sendGex({ type: "SET_EXPIRY", expiry: selectedExpiry });
+  }, [ex0dte, refreshLadder, selectedExpiry]);
 
   // Basis-aware, exactly like /home: the profile has to be computed on the mode
   // the bars are drawn on or the flip curve disagrees with the chart under it.
+  //
+  // Null on anything but single-expiry GEX. computeGEXProfile re-prices dealer
+  // gamma at 401 hypothetical spots from each row's IV/DTE/gamma — none of which
+  // the summed ex-0DTE rows carry — and there is no delta equivalent at all.
   const profile = useMemo(
-    () => (chain.length ? computeGEXProfile(chain, spot, dataMode) : null),
-    [chain, spot, dataMode],
+    () => (!ex0Live && metric === "gex" && chain.length
+      ? computeGEXProfile(chain, spot, dataMode)
+      : null),
+    [ex0Live, metric, chain, spot, dataMode],
   );
 
   // Ghost baselines are only fetched while a ghost is actually on — passing ""
-  // for the expiry is the hook's own "don't poll" signal.
+  // for the expiry is the hook's own "don't poll" signal. They are stored net
+  // GEX for ONE expiry, so they mean nothing against delta bars or a summed
+  // board; not fetching beats fetching and having the chart ignore them.
   const anyGhost = showGhost5 || showGhost15 || showGhost30;
-  const baselines = useStrikeGexHistory(anyGhost ? selectedExpiry : "", GHOST_AGES, 30_000, true);
+  const ghostable = !ex0Live && metric === "gex";
+  const baselines = useStrikeGexHistory(
+    anyGhost && ghostable ? selectedExpiry : "", GHOST_AGES, 30_000, true,
+  );
+
+  // What the bars actually are, drawn on the chart and stamped into a snapshot.
+  //
+  // On the ex-0DTE board this also carries THAT ladder's own walls and flip —
+  // not the feed's. The feed's are one expiry clipped to ±8% of spot, so putting
+  // them beside a whole-board curve would be comparing today's pin to the
+  // standing book. They are omitted (rather than shown as "—") when the server
+  // predates the walls, so a stale deploy reads as "this build has no walls".
+  const seriesLabel = useMemo(() => {
+    const base = metric === "dex" ? "NET DEX" : "NET GEX";
+    if (!ex0dte) return metric === "dex" ? base : "";
+    if (!ex0Live) return `${base} · EX-0DTE ${ladder.error ? "unavailable" : "loading…"}`;
+    const l = ladder.ex0dte;
+    const scope = ladder.expiryCount ? `${ladder.expiryCount - 1} exp` : "board";
+    const levels = metric === "gex" && l && (l.callWall != null || l.putWall != null)
+      ? ` · CW ${l.callWall != null ? formatStrike(l.callWall) : "—"}`
+        + ` · PW ${l.putWall != null ? formatStrike(l.putWall) : "—"}`
+        + (l.gexFlip != null ? ` · FLIP ${formatStrike(l.gexFlip)}` : "")
+      : "";
+    return `${base} · EX-0DTE (${scope})${levels}`;
+  }, [metric, ex0dte, ex0Live, ladder.error, ladder.expiryCount, ladder.ex0dte]);
 
   return (
     <div style={{
@@ -1009,6 +1082,12 @@ function GexChartBody() {
           onExpiry={handleExpiry}
           onGexMode={setGexMode}
           onDataMode={setDataMode}
+          metric={metric}
+          onMetric={setMetric}
+          ex0dte={ex0dte}
+          onToggleEx0dte={() => setEx0dte((v) => !v)}
+          ex0dteBusy={ex0dte && ladder.loading && !ex0Live}
+          ex0dteError={ex0dte ? ladder.error : null}
           showGhost5={showGhost5}
           showGhost15={showGhost15}
           showGhost30={showGhost30}
@@ -1035,10 +1114,14 @@ function GexChartBody() {
           <GexChart
             chain={chain}
             spotPrice={spot}
-            flipPoint={flip}
+            // The gamma flip is a single-expiry GEX reading; it has no meaning
+            // on delta bars or on a board summed across expiries.
+            flipPoint={ex0Live || metric === "dex" ? null : flip}
             gexProfile={profile}
             mode={gexMode}
             dataMode={dataMode}
+            metric={metric}
+            seriesLabel={seriesLabel}
             showOI={showOI}
             showDex={showDex}
             showFlipCurve={showFlipCurve}
@@ -1046,12 +1129,15 @@ function GexChartBody() {
             showGhost5={showGhost5}
             showGhost15={showGhost15}
             showGhost30={showGhost30}
-            expiry={selectedExpiry}
+            // Keys the chart's viewport/MVC reset. The ex-0DTE board is a
+            // different ladder, not a different expiry, so it needs its own key
+            // or the viewport would carry over from whatever expiry was on.
+            expiry={ex0Live ? "ex0dte" : selectedExpiry}
             transparentBg
           />
         ) : (
           <div style={{ position: "absolute", inset: 0, display: "flex" }}>
-            <Waiting what="gex rows" />
+            <Waiting what={ex0dte ? "the ex-0DTE board" : "gex rows"} />
           </div>
         )}
       </div>

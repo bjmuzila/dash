@@ -201,15 +201,19 @@ export function ToggleTile({
   on,
   onClick,
   accent = ACCENT,
+  title,
 }: {
   label: string;
   on: boolean;
   onClick: () => void;
   accent?: string;
+  /** Native tooltip. Optional — a tile whose label needs no explaining omits it. */
+  title?: string;
 }) {
   return (
     <button
       onClick={onClick}
+      title={title}
       style={{
         display: "flex",
         alignItems: "center",

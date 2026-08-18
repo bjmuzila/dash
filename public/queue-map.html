@@ -149,6 +149,13 @@
         <button class="sec" id="c-opex" title="Jump to the monthly OPEX expiry in this tape" disabled>OPEX</button>
       </div>
     </div>
+    <!-- Pushed to the server, where it is applied in SQL BEFORE the newest-N
+         cap — which is the only way to stop the evening GTH prints from
+         evicting the whole RTH session. See the truncation warning. -->
+    <div class="f">
+      <label for="c-minprem" title="Server-side floor, applied before the row cap">Min premium $</label>
+      <input type="number" id="c-minprem" value="0" min="0" step="5000" style="width:110px" />
+    </div>
     <div class="f">
       <label for="c-strikes">Strikes shown</label>
       <input type="number" id="c-strikes" value="14" min="4" max="40" step="1" style="width:80px" />
@@ -237,6 +244,17 @@
 let TAPE = [];          // FlowOrder[] as returned by /proxy/flow-history
 const $ = (id) => document.getElementById(id);
 
+/**
+ * The server caps this at 20,000 (`Math.min(limit, 20000)`), and the query is
+ * `ORDER BY ts DESC LIMIT n` — NEWEST first — so hitting the cap silently drops
+ * the EARLY session, not the late one. That matters more than it sounds: the
+ * `date` column is the wall-clock ET flush date, so an evening GTH session
+ * (18:00+ ET, already trading the NEXT day's 0DTE) carries the same `date` and
+ * the largest timestamps. Those rows win the cap and evict the actual RTH day.
+ * `minPremium` is applied in SQL BEFORE the cap, which is the way out.
+ */
+const LIMIT = 20000;
+
 /** Most recent weekday strictly before today, in ET. */
 function lastSessionISO() {
   const et = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
@@ -255,7 +273,9 @@ async function load() {
   const base = $("c-base").value.trim().replace(/\/$/, "");
   const sym = $("c-sym").value.trim().toUpperCase() || "SPX";
   const date = $("c-date").value;
-  const url = `${base}/proxy/flow-history?underlying=${encodeURIComponent(sym)}&limit=20000&date=${date}`;
+  const minPrem = Math.max(0, Number($("c-minprem").value) || 0);
+  const url = `${base}/proxy/flow-history?underlying=${encodeURIComponent(sym)}&limit=${LIMIT}&date=${date}`
+            + (minPrem > 0 ? `&minPremium=${minPrem}` : "");
   setStatus(`Loading ${sym} ${date}…`);
   try {
     const r = await fetch(url, { cache: "no-store" });
@@ -678,6 +698,26 @@ function render() {
   // are too, and the cause is always a missing input. Say which one, in
   // numbers, instead of leaving an empty chart to interpret.
   const diag = [];
+
+  // Truncation. The endpoint returns the NEWEST `limit` rows, so a full window
+  // means the early session was cut, not that the day was quiet.
+  if (TAPE.length >= LIMIT) {
+    diag.push(`Hit the <b>${LIMIT.toLocaleString()}-row cap</b> — this is the NEWEST ${LIMIT.toLocaleString()} prints, so the early session is missing. `
+      + `Raise <b>Min premium $</b> (the server applies it before the cap) to reach back through the whole day.`);
+  }
+
+  // The tape's `date` is the wall-clock ET flush date, not the session. After
+  // the 16:15 ET auto-roll — and again when GTH reopens at 18:00 — the feed is
+  // already streaming the NEXT day's expiry while still stamping this date.
+  const session = $("c-date").value;
+  const later = TAPE.filter((o) => String(o.expiration || "") > session).length;
+  if (TAPE.length && later / TAPE.length > 0.6) {
+    diag.push(`<b>${Math.round((later / TAPE.length) * 100)}%</b> of these prints expire AFTER the ${session} session. `
+      + `The <code>date</code> column is the wall-clock ET flush date, not the session — after the 16:15 ET auto-roll and `
+      + `the 18:00 GTH reopen the feed is already streaming the NEXT day's expiry while still stamping this date. `
+      + `Those evening rows also carry the largest timestamps, so they win the row cap.`);
+  }
+
   if (wantExp && inScope === 0) {
     diag.push(`No prints on <b>${wantExp}</b> in this tape — the whole board is empty. Pick another expiry.`);
   } else if (wantExp) {

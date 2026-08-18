@@ -233,9 +233,17 @@ function sinceLabel(iso?: string | null): string {
   const days = Math.round(hrs / 24);
   return `${days}d ago`;
 }
+/**
+ * The merchant grouping key. Must stay identical to `merchantKey` in
+ * server-v2/api-router.js and MERCHANT_KEY_SQL in _lib-db.cjs — the whole
+ * "re-file this merchant everywhere" path is a join on this string, so a
+ * divergence here silently updates nothing.
+ */
 function mKey(v: string): string {
   return String(v || "").trim().toLowerCase().replace(/\s+/g, " ").slice(0, 60);
 }
+/** Whether a category edit spreads to every month. See the state comment. */
+const ALL_MONTHS_KEY = "budget:real:cat-all-months";
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const fr = new FileReader();
@@ -305,6 +313,26 @@ export default function RealMonth({
   const [advice, setAdvice] = useState<Advice | null>(null);
   const [adviceOpen, setAdviceOpen] = useState(true);
   const [dragging, setDragging] = useState(false);
+  /**
+   * Whether a category change also re-files that merchant in every OTHER month.
+   *
+   * ON by default, because that is what a category edit means: filing Blue
+   * Bottle under Coffee is a fact about Blue Bottle, not about the row that
+   * happened to be on screen. Left off, the same fix has to be repeated in
+   * every month and the category trend is drawn from a history that disagrees
+   * with itself. The toggle exists for the genuine exception — a merchant that
+   * really did change what it was, e.g. a card used for groceries until March
+   * and for fuel after.
+   *
+   * localStorage because it is a working preference, not data.
+   */
+  const [allMonths, setAllMonths] = useState<boolean>(() => {
+    try { return localStorage.getItem(ALL_MONTHS_KEY) !== "0"; } catch { return true; }
+  });
+  const toggleAllMonths = (next: boolean) => {
+    setAllMonths(next);
+    try { localStorage.setItem(ALL_MONTHS_KEY, next ? "1" : "0"); } catch { /* private mode — just don't persist */ }
+  };
   const [sourceName, setSourceName] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -453,7 +481,12 @@ export default function RealMonth({
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json?.ok) { setError(json?.error || "Save failed."); return; }
-      setNotice(`Saved ${json.inserted} to Real Month${json.skipped ? ` · ${json.skipped} already there (skipped)` : ""}. Payments and Overview are untouched.`);
+      setNotice(
+        `Saved ${json.inserted} to Real Month${json.skipped ? ` · ${json.skipped} already there (skipped)` : ""}` +
+        // Rows the server filed from how the same merchant was categorized in
+        // earlier months — a decision made once, not re-asked every import.
+        `${json.inherited ? ` · ${json.inherited} categorized from earlier months` : ""}. Payments and Overview are untouched.`
+      );
       setStaged([]);
       await load(month);
     } catch (e) {
@@ -504,12 +537,27 @@ export default function RealMonth({
     setSaving(true);
     setError(null);
     setNotice(null);
-    const changes = [...pending.entries()].map(([id, categoryId]) => ({ id, categoryId }));
+    // The merchant rides along with each change so the server can carry the
+    // decision to that merchant's rows in every other month. Same fallback the
+    // rollups group on (merchant, else description), so what the UI shows as
+    // one merchant is what gets re-filed.
+    const changes = [...pending.entries()].map(([id, categoryId]) => {
+      const row = tx.find((r) => r.id === id);
+      return { id, categoryId, merchant: row ? row.merchant || row.description : "" };
+    });
     try {
-      const out = await post({ action: "setCategoriesBulk", changes });
+      const out = await post({ action: "setCategoriesBulk", changes, allMonths });
       if (!out?.ok) { setError("Categories did not save — nothing was changed."); return; }
       setPending(new Map());
-      setNotice(`Saved ${out.updated} categor${out.updated === 1 ? "y" : "ies"}.`);
+      const spread = Number(out.spread ?? 0);
+      setNotice(
+        `Saved ${out.updated} categor${out.updated === 1 ? "y" : "ies"}.` +
+        (allMonths
+          ? spread > 0
+            ? ` Also re-filed ${spread} matching row${spread === 1 ? "" : "s"} in other months.`
+            : " Every other month already agreed."
+          : " This month only.")
+      );
       await load(month);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Categories did not save.");
@@ -940,6 +988,22 @@ export default function RealMonth({
           </span>
           <span style={{ fontSize: TYPE.label, ...MUTED }}>The totals above already show it — nothing is stored until you save.</span>
           <div style={{ flex: 1 }} />
+          {/* The default. A category is a fact about the merchant, so the same
+              merchant in January gets the same answer — otherwise the trend is
+              drawn from a history that disagrees with itself. Turned off only
+              for a merchant that genuinely changed what it was. */}
+          <label
+            title="Apply each change to that merchant's rows in every month, not just this one"
+            style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", fontSize: TYPE.label, fontWeight: 800, letterSpacing: "0.06em", color: allMonths ? ACCENT : HOME_THEME.muted }}
+          >
+            <input
+              type="checkbox"
+              checked={allMonths}
+              onChange={(e) => toggleAllMonths(e.target.checked)}
+              style={{ accentColor: HOME_THEME.cyan, cursor: "pointer" }}
+            />
+            Apply to every month
+          </label>
           <button onClick={() => setPending(new Map())} disabled={saving} style={ghost()}>Discard</button>
           <button onClick={() => void saveCategories()} disabled={saving} style={{ ...primary(), opacity: saving ? 0.5 : 1 }}>
             {saving ? "Saving…" : `Save ${pending.size} change${pending.size === 1 ? "" : "s"}`}
@@ -1049,7 +1113,10 @@ export default function RealMonth({
                               <td style={{ ...td("right"), width: 115, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(m.total, currency)}</td>
                               <td style={{ ...td("right"), width: 95, ...MUTED, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(m.total / m.count, currency)}</td>
                               <td style={{ ...td("left"), width: 190 }}>
-                                {/* One dropdown re-files every transaction from this vendor. */}
+                                {/* One dropdown re-files every transaction from
+                                    this vendor — this month here and now, and,
+                                    with "Apply to every month" on, the rest of
+                                    history when you save. */}
                                 <ThemedSelect
                                   value={m.categoryId == null || m.mixedCategory ? "" : String(m.categoryId)}
                                   onChange={(v) => setMerchantCategory(m.merchant, v ? Number(v) : null)}
