@@ -1,117 +1,138 @@
 # Changelog
 
-## 2026-08-18 - Budget → Real Month: CSV statement import
+## 2026-08-18 - /board cards now mount the REAL page components, not lookalikes
 
-Edited: `server-v2/api-router.js` (`/api/budget/parse-statement`),
-`owner-vite/src/pages/budget/RealMonth.tsx`.
+Edited: `components/pages/Board.tsx`.
 
-The import card on **owner.cbedge.net → Budget → Real Month** now takes a bank
-or credit-card **CSV** alongside the existing PDF / screenshot paths. Same
-staging table, same Save — nothing about where the rows land changed, and they
-still go only to `budget_statement_tx` (Payments and Overview untouched).
+**The change.** The first cut of /board hand-rolled its cards — an SVG bar chart
+for GEX, a `<table>` for the chain, a list for flow. They looked right and were
+fed live data, but they were a second implementation of nine things that already
+exist, free to drift from the pages they imitated. Every card that has a real
+counterpart now mounts THAT component:
 
-**The numbers are not sent to a model.** A CSV already has the columns, so the
-server parses them: RFC4180 splitter (quotes, embedded commas, embedded
-newlines), delimiter sniffing across `, ; tab |`, header-row detection that
-skips the account-name/date-range preamble banks put on top, and column mapping
-by pattern (`transaction date` preferred over `post date`, any header containing
-`balance` excluded so a running-balance column can never import as spend).
-Amounts handle `$`, thousands separators, `(12.34)` accounting negatives and the
-EU `1.234,56` form; dates handle ISO, `MM/DD/YYYY`, `DD-Aug-2026` and
-`Aug 12, 2026`, with `MM/DD` assumed and flipped only when impossible.
+| Card | Mounts | From |
+|---|---|---|
+| GEX chart | `components/dashboard/GexChart.tsx` | /home |
+| Greeks panel | `components/dashboard/GreeksHomePanel.tsx` | /home |
+| Gauge rail | `components/dashboard/HomeGaugeRail.tsx` | /home |
+| Vol GEX flow | `components/dashboard/VolGexFlowPanel.tsx` | /home |
+| ES candles | `<EsCandlesPage embedded />` → `EsChartCard slot="embed"` | /es-candles |
+| Options chain | `<OptionsChainPage expirySelection="key" ticker="SPX" showGrandTotal={false} />` | /options-chain |
+| Flow tape | `components/dashboard/FlowTape.tsx` | /flow |
+| Net premium | `components/dashboard/FlowNetPremPanel.tsx` | /flow |
+| Estimated moves | `components/dashboard/EmCustomer.tsx` | /em |
+| Economic calendar | `<EconCalendarPanel todayOnly hideToolbar />` | /economic-calendar |
+| Scanner · GEX change top | `components/scanner/GexChangeTop.tsx` | /scanner |
+| Scanner · IB stats | `components/scanner/IbStatsTab.tsx` | /scanner |
+| Multi Greek | `app/mult-greek/MultGreekClient.tsx` | /mult-greek |
 
-Direction comes from a debit/credit column pair when present, else a `Type`
-column, else the sign. A file whose amounts are **all one sign** carries no
-direction signal (Amex exports spend positive, Chase negative), so those rows
-fall back to reading the descriptor — and the staging header gained a
-**"Flip all in/out"** button for when that reading comes out backwards.
+Three cards stay board-native because nothing mountable exists: Overview tiles,
+Key Levels, Feed Health.
 
-Claude is used for the two things a CSV genuinely lacks — merchant
-normalization and category matching — and only over the **distinct** descriptors,
-batched 120 at a time, 3 batches in flight, on Haiku. A 900-row export is a
-couple of small calls instead of one enormous one. `ANTHROPIC_API_KEY` is no
-longer required for this route: without it the CSV still imports, with a scrubbed
-merchant, no category, and a warning on the notice line. PDF and image still
-require the key and still 500 without it.
+**`chrome: false` is back**, copied from the Options board: a component that
+renders its own `<Card>` or page chrome mounts raw and gets only a slim
+edit-mode strip for the grip and the ✕, instead of a header we own. Otherwise
+GexChangeTop, IbStatsTab, EmCustomer and MultGreek would each show two stacked
+titles.
 
-Client: `.csv`/`.tsv` accepted by extension (Excel hands them over as
-`application/vnd.ms-excel`, and a drag can supply no MIME type at all), error
-text now surfaces the server's `detail` — which reports the header row it
-actually read, the whole diagnosis when a column map misses.
+**Two cards are singletons, for a concrete reason.** `escandles` — `EsChartCard`
+namespaces its localStorage by `slot`, and `EsCandlesPage embedded` hardcodes
+`slot="embed"`, so two instances would fight over ticker / interval /
+indicators. `multgreek` — it is a whole page in a tile (four ticker columns plus
+its own dock) and wants ~1000px of width.
 
-## 2026-08-18 - ThetaData sweep: every dead code path removed from server-v2
+**Socket discipline.** Several mounted components subscribe on their own, which
+is fine because `gexSocket` is refcounted AND their topic lists are subsets of
+`BOARD_TOPICS`: GreeksHomePanel `["gex","spot"]`, HomeGaugeRail `["gex"]`,
+EsChartCard `["gex","spot","aux","status"]`. They ride the board's connection
+rather than widening it. Anything added later must be checked the same way —
+**`components/dashboard/WhaleOrdersPanel.tsx` is deliberately NOT offered as a
+card** because it opens a raw UNSCOPED `/ws/gex`, which would drag the whole
+tab back to the firehose while it is mounted.
 
-Edited: `server-v2/proxy-tastytrade.js`, `server-with-proxy.js`, `api-router.js`,
-`config/data-source.js`, `eod-gex-recorder.js`, `far-cb-recorder.js`,
-`scanner-recorder.js`, `vol-pin-recorder.js`, `walls-reach.js`,
-`levels-engine.js`.
-To delete (`git rm`): `server-v2/proxy-thetadata.js`, `multi-flow.js`,
-`state/flow-watchdog.js`, `state/theta-restart.js`,
-`server-v2/scripts/theta-*.mjs`, `scripts/fetch-theta-bars.mjs`,
-`deploy/theta/`, `docker-compose.staging.yml`,
-`app/api/owner/theta-stats/`, `server-v2/theta-soak-2026-06-29.log`.
+**Three pages have no card, and this is not an oversight.** `/flow`, `/levels`
+and `/traders-dashboard` each render their own `<PageShell>` with every panel
+inline and nothing exported, so mounting one nests a page shell inside a tile.
+/flow's reusable pieces (FlowTape, FlowNetPremPanel) are cards; the other two
+would need real extraction first. `app/home/HomeClient.tsx` is excluded for a
+different reason: it opens a raw per-mount `/ws/gex` and sends `SET_EXPIRY`,
+which is exactly the connection-wide side effect this board avoids — hence
+mounting `GexChart` with the board's own feed instead.
 
-Follows the container removal earlier today. The stack ran `DATA_SOURCE=tt` and
-`INDEX_SOURCE=dxlink`, so `useTheta()` and `useThetaIndex()` were permanently
-false in production — every edit here is a mechanical collapse of a branch under
-a known-false predicate. **Behaviour under `tt` is unchanged.**
+**Also worth knowing (found while mapping this):** `components/dashboard/`
+`EstimatedMoves.tsx`, `GexHeatmap.tsx`, `EsCandlesCard.tsx`, `EsStatsLadder.tsx`,
+`ScannerHomePanel.tsx`, `SnapshotPanel.tsx` and `components/scanner/`
+`DodMoversTab.tsx`, `SemisTab.tsx` are imported by no route — dead. In
+particular `EstimatedMoves.tsx` (73KB) is NOT what /em mounts; /em mounts
+`EmCustomer.tsx`. `FlowTape.tsx` was also an orphan and is the one this change
+resurrects.
 
-**config/data-source.js** rewritten. It was the Theta rollback switch; it now
-states the single provider. Exports `DATA_SOURCE`, `useTastytradeForOptions`,
-`INDEX_SOURCE` — `useTheta`, `useThetaIndex` and the three `THETA_*` connection
-constants are gone.
+**Verified.** `tsc --strict` clean on Board.tsx, typechecked against the real
+component files so every prop name and type above is the actual signature.
 
-**proxy-tastytrade.js** (the live feed) — 24 guard sites collapsed:
 
-- the ~100-line Theta leg in `start()`: the 5s bulk greeks REST poll, the FPSS
-  Trade+Quote+Greeks stream, the flow watchdog, MultiFlowManager, and the Theta
-  index subscription for SPX/VIX spot
-- the Theta chain build, the whole-expiry OPRA OI snapshot, the per-symbol
-  watch-quotes path, and `probeRest`'s Theta strike-resolution body
-- deleted with zero surviving callers: `_statsFromTheta`, `_refreshGreeksTheta`,
-  `_subscribeThetaFlow`, `_onThetaIndex`, `_refreshVolume`,
-  `_scheduleVolRefresh`, and the `volTimer` / `thetaStream` / `thetaGreeksTimer`
-  fields
-- `thetaAdapter.resetCalendarCache()` dropped — it was literally
-  `resetCalendarCache: () => {}` in the adapter, so removing it is equivalent
+## 2026-08-18 - /board: a second card board with add/remove, on the near-black palette
 
-**Elsewhere:** the option-history Theta fallback in `server-with-proxy.js` (it
-was already gated, and calling it under `tt` was what produced the old
-bad-gateway drawer); `/api/owner/theta-stats`; the stale `source: 'thetadata'`
-label on `/api/semi-strength`, which has been TastyTrade-only for a long time.
-The five recorders now require `tt-snapshot` directly. The `*Theta`-suffixed
-function names survive on purpose — `tt-snapshot` is a drop-in with those
-signatures, and renaming ~50 call sites for cosmetics is how you introduce a bug
-in a change that is supposed to have none.
+New: `components/pages/Board.tsx`, `app/app/board/route.ts`.
+Edited: `app-vite/src/App.tsx` (lazy import + `<Route path="/board">`),
+`components/shared/GlobalToolbar.tsx` (NAV_ITEMS entry).
 
-**far-cb-recorder.js** — the one ungated live Theta call. It fetched per-contract
-EOD bars behind a 10-minute circuit breaker, so in practice it had been
-returning `[]` since the Terminal died. Now returns `[]` directly; both callers
-already handle that, and the dxLink path (`fetchContractDailyBarsDx`, the
-contract's own session bars with real OHLC + volume) is the better source and
-was already wired.
+**What it is.** A second customer dashboard on the SAME grid machinery as the
+Options board — `DashGrid` + `useDashboardLayout` + `LayoutBar`. Drag a card's
+header to move it, drag the corner to resize, "+ Add card" in the bar to add
+one, ✕ on a card to remove it; the arrangement saves per user as a named
+template in `dashboard_layouts` under the page key `"board"`. Card TYPE lives in
+the id as `type#n`, so add/remove/duplicate needs no schema change.
 
-**A review pass caught a critical bug in this sweep before it shipped.**
-Deleting `_statsFromTheta` over-reached and took three provider-agnostic
-declarations with it — `CONTRACT_STATS_MAX_CONTRACTS`, `_statsCache`,
-`_statsInFlight`. `node --check` passes on that (an undeclared read is a runtime
-error, not a parse error), so it would have shipped. Every
-`/proxy/contract-stats` request would have thrown `ReferenceError: _statsCache
-is not defined` on the first line of `_statsForGroup`; the per-group try/catch
-turns that into `{}` with **no log line**, so every Vol / OI / IV / mark cell on
-the /flow tape would have rendered "—" silently. Restored. A second, minor slice
-also dropped `this.restOISessionKey = this.optSessionKey` mid-comment; restored
-too (the field has no readers today, but it was outside any predicate).
+Nine card types: Overview tiles, GEX by Strike, Key Levels, Gamma Profile,
+Options Chain, Whale Flow, Estimated Moves, Economic Calendar, Feed Health.
+Every number is live — nothing is hardcoded.
 
-**Verification.** `node --check` on all 10 files; a declaration-diff proving
-every removed module-level `const`/`function`/method has zero surviving
-references; a require-graph walk proving nothing outside the delete-list
-requires a deleted module; route count on `api-router.js` 40 -> 39 (exactly the
-one route); CRLF line endings preserved.
+**Why it doesn't use PageCard / homeTheme.** This page is the near-black palette
+trial: flat opaque surfaces (`--app #010102` / `--shell #020304` /
+`--card #0a0b0e`), deliberately unlike homeTheme's frosted translucent panels.
+It is SCOPED TO THIS PAGE (`BOARD_THEME` at the top of the file) so nothing else
+in the app changes while the look is being lived with. There are no literal hex
+values outside that one block. If it graduates, move those six surface values
+into `homeTheme.ts` and delete `BOARD_THEME` — do not start hardcoding hex
+elsewhere. Palette source: `generated/2026-08-18-dark-slate-card-theme.html`.
 
-**Not verified:** none of this was run. No server start, no request against the
-live feed. The changes are mechanical collapses under a predicate that was false
-in production, but the first market open after deploying is the real test.
+**One subscription for the whole page.** `useBoardFeed` opens exactly one
+`subscribeGex` and fans the parsed frames out through React context. Nine cards
+each calling `subscribeGex` would each re-parse the same ~100KB gex frame.
+
+Three deliberate choices worth not re-litigating:
+
+- **Topics are declared at module scope** as
+  `BOARD_TOPICS = ["gex","spot","aux","status","flow"]`, including the scalar
+  frames, which the server drops if unlisted. `flow` stays in the list even when
+  the Whale Flow card is removed — the value keys the subscription effect, and
+  making it depend on the card set would reconnect (clearing the replay cache)
+  on every add/remove.
+- **It does NOT send `SET_EXPIRY`.** That command is per-CONNECTION on a socket
+  the whole tab shares, so pinning an expiry here would silently retarget the
+  toolbar and every other mounted consumer. The board shows whatever expiry the
+  feed is on and labels it. (`useMobileGex` does pin, which is correct for the
+  phone build — it owns its route.)
+- **Frame arrival times are a ref, not state.** Only Feed Health reads them and
+  it already ticks its own 1s clock; publishing them as state re-rendered every
+  card on the board at the feed's rate. A diagnostic panel must not become the
+  page's most expensive component.
+
+**No ES candle card.** `hooks/useEsCandles` is a large stateful hook with its own
+topic set and a lightweight-charts mount; wrapping it in a resizable tile is its
+own change. Gamma Profile fills the chart slot using `computeGEXProfile`, which
+is pure client math on rows already in memory.
+
+**Verified.** `tsc --strict` clean on the new file. `check-routes.mjs --dry`
+reports `nav /board -> has route` and `shell /board -> has route.ts`, so the
+build guard passes on both counts.
+
+**Note found along the way.** `components/pages/Options.tsx` — the original
+add/remove board and the only other `DashGrid` consumer — has had no SPA route
+since `/options` was removed 2026-08-12. The file still builds and is still
+reachable by import, but nothing routes to it.
+
 
 ## 2026-08-18 - theta-terminal removed; it took the site down and was already unused
 

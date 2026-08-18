@@ -21,22 +21,32 @@
  * hardcoding hex in other pages. Every color below comes from BOARD_THEME;
  * there are no literal hex values outside that one block.
  *
- * DATA — ONE SUBSCRIPTION FOR THE WHOLE PAGE
- * ------------------------------------------
- * `useBoardFeed` opens exactly one `subscribeGex` (the shared refcounted
- * /ws/gex) and fans the parsed frames out to every card through context. Cards
- * do NOT subscribe individually — nine cards each calling subscribeGex would
- * each re-parse the same ~100KB gex frame.
+ * THE CARDS ARE THE REAL PAGES
+ * ----------------------------
+ * Almost every card mounts the component the matching dashboard page actually
+ * renders — GexChart from /home, EsChartCard (via EsCandlesPage's `embedded`
+ * path) from /es-candles, OptionsChainPage in its proven embed configuration,
+ * EconCalendarPanel, EmCustomer, GexChangeTop, IbStatsTab, MultGreekClient.
+ * They are not reimplementations, so they cannot drift from the pages.
  *
- * Deliberate non-goals, so the next person doesn't go looking:
- *   - It does NOT send SET_EXPIRY. That command is per-CONNECTION on a socket
- *     the whole tab shares, so pinning an expiry here would silently retarget
- *     the toolbar and any other mounted consumer. The board shows whatever
- *     expiry the feed is on and labels it.
- *   - There is no ES candle card. The real ES chart (hooks/useEsCandles) is a
- *     large stateful hook with its own topic set and lightweight-charts mount;
- *     wrapping it in a resizable tile is its own change. The Gamma Profile card
- *     covers the "chart" slot with math the page already has client-side.
+ * Only three cards are board-native, because no mountable equivalent exists:
+ * the Overview tiles, Key Levels, and Feed Health.
+ *
+ * DATA — ONE SUBSCRIPTION FOR THE BOARD'S OWN CARDS
+ * -------------------------------------------------
+ * `useBoardFeed` opens exactly one `subscribeGex` (the shared refcounted
+ * /ws/gex) and fans the parsed frames out through context, so the tiles, Key
+ * Levels, the GEX chart and the flow tape all read one parse of the ~100KB gex
+ * frame instead of four.
+ *
+ * Mounted components that subscribe on their own (GreeksHomePanel, the gauge
+ * rail, EsChartCard) are fine: gexSocket is refcounted and their topic lists
+ * are subsets of BOARD_TOPICS, so they ride this same connection.
+ *
+ * Deliberate non-goal: this page does NOT send SET_EXPIRY. That command is
+ * per-CONNECTION on a socket the whole tab shares, so pinning an expiry here
+ * would silently retarget every other mounted consumer. The board shows
+ * whatever expiry the feed is on and labels it.
  */
 
 import {
@@ -48,14 +58,38 @@ import LayoutBar from "@/components/shared/LayoutBar";
 import { useDashboardLayout } from "@/components/shared/useDashboardLayout";
 import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
-import { useEconCalendar } from "@/hooks/useEconCalendar";
-import { useEmLookup, emNumber } from "@/hooks/useEmLookup";
-import { isStale } from "@/lib/econCalendar";
 import type { FlowOrder } from "@/hooks/useSpxFlow";
 import {
   computeGEXProfile, findGEXFlip, netGEXOf, formatGEX, formatStrike,
   type ChainRow, type GEXProfile,
 } from "@/lib/calculations/calculations";
+
+/* ── the REAL dashboard components each card mounts ──────────────────────────
+   Every card below is the component the corresponding page actually renders —
+   not a re-implementation. Where a page delegates to a panel (GexChart under
+   /home, EsChartCard under /es-candles, EconCalendarPanel under /analytics) the
+   card mounts the PANEL; where the page IS the unit and already has an embed
+   contract (OptionsChainPage, EsCandlesPage) the card mounts the page in its
+   embedded mode.
+
+   Three pages are deliberately absent — /flow, /levels and /traders-dashboard
+   each render their own <PageShell> with zero extracted panels, so mounting one
+   would nest a page shell inside a tile. Their reusable pieces (FlowTape,
+   FlowNetPremPanel) ARE here as cards.
+   ─────────────────────────────────────────────────────────────────────────── */
+import GexChart from "@/components/dashboard/GexChart";
+import EsCandlesPage from "@/components/pages/EsCandles";
+import OptionsChainPage from "@/components/pages/OptionsChain";
+import EconCalendarPanel from "@/components/dashboard/EconCalendarPanel";
+import FlowTape from "@/components/dashboard/FlowTape";
+import FlowNetPremPanel from "@/components/dashboard/FlowNetPremPanel";
+import GreeksHomePanel from "@/components/dashboard/GreeksHomePanel";
+import HomeGaugeRail from "@/components/dashboard/HomeGaugeRail";
+import VolGexFlowPanel from "@/components/dashboard/VolGexFlowPanel";
+import EmCustomer from "@/components/dashboard/EmCustomer";
+import GexChangeTop from "@/components/scanner/GexChangeTop";
+import IbStatsTab from "@/components/scanner/IbStatsTab";
+import { MultGreekClient } from "@/app/mult-greek/MultGreekClient";
 
 /* ═══════════════════════════════════════════════════════════════════════════
    THEME — the ONLY place this file names a color.
@@ -105,10 +139,18 @@ function tint(hex: string, a: number): string {
  * topic does not throw; the panel just goes quietly stale. Erring wide costs a
  * few hundred bytes.
  *
- * `flow` is here for the Whale Flow card. It stays in the list even when that
- * card is removed from the board — the value keys the subscription effect, and
- * making it depend on the card set would reconnect the socket (clearing the
- * replay cache) every time someone adds or drops a card.
+ * `flow` is here for the Tape card. It stays in the list even when that card is
+ * removed from the board — the value keys the subscription effect, and making
+ * it depend on the card set would reconnect the socket (clearing the replay
+ * cache) every time someone adds or drops a card.
+ *
+ * This set is also a SUPERSET of what the mounted components ask for on their
+ * own subscriptions, which is what lets them ride this connection rather than
+ * widening it: GreeksHomePanel wants ["gex","spot"], HomeGaugeRail ["gex"],
+ * EsChartCard ["gex","spot","aux","status"]. Anything added to this board must
+ * be checked against that — a card whose component subscribes UNSCOPED (no
+ * topics) drags the whole tab back to the firehose. That is why
+ * WhaleOrdersPanel is not offered here.
  */
 const BOARD_TOPICS = ["gex", "spot", "aux", "status", "flow"] as const;
 
@@ -285,75 +327,171 @@ const GUTTER = 14;
 const STACK_BELOW_PX = 900;
 
 type CardDef = {
+  /** Menu label in "+ Add card". */
   label: string;
+  /** Header line. Omit together with `chrome: false`. */
   title?: string;
   subtitle?: string;
   body: () => ReactNode;
+  /** Default tile size when added from the menu. */
   w: number;
   h: number;
   padding?: number;
+  /**
+   * false = the component renders its own card shell / page chrome, so it
+   * mounts raw and gets only a slim edit-mode strip for the grip and the ✕.
+   * Wrapping one of these in a titled card would show two stacked headers.
+   */
+  chrome?: boolean;
+  /**
+   * Only one may exist on a board. Used where a second instance would fight the
+   * first over a shared persistence namespace or simply makes no sense.
+   */
   singleton?: boolean;
 };
 
 const CARD_TYPES: Record<string, CardDef> = {
+  // ── board-native (no page equivalent) ──────────────────────────────────────
   stats: {
     label: "Overview tiles",
     singleton: true,
     body: () => <StatsBody />,
     w: 12, h: 3, padding: 0,
   },
-  gexbars: {
-    label: "GEX by strike",
-    title: "GEX by Strike",
-    subtitle: "net gamma exposure",
-    body: () => <GexBarsBody />,
-    w: 5, h: 9,
-  },
   levels: {
     label: "Key levels",
     title: "Key Levels",
     body: () => <LevelsBody />,
-    w: 5, h: 7,
-  },
-  profile: {
-    label: "Gamma profile",
-    title: "Gamma Profile",
-    subtitle: "$B per 1% move, by spot",
-    body: () => <ProfileBody />,
-    w: 7, h: 9,
-  },
-  chain: {
-    label: "Options chain",
-    title: "Options Chain",
-    body: () => <ChainBody />,
-    w: 7, h: 11,
-  },
-  flow: {
-    label: "Whale flow",
-    title: "Whale Flow",
-    subtitle: "largest premium on the tape",
-    body: () => <FlowBody />,
-    w: 5, h: 9,
-  },
-  em: {
-    label: "Estimated moves",
-    title: "Estimated Moves",
-    subtitle: "published EM levels",
-    body: () => <EmBody />,
-    w: 5, h: 8,
-  },
-  econ: {
-    label: "Economic calendar",
-    title: "Economic Calendar",
-    body: () => <EconBody />,
-    w: 7, h: 8,
+    w: 4, h: 7,
   },
   health: {
     label: "Feed health",
     title: "Feed Health",
     subtitle: "/ws/gex · topic-scoped",
     body: () => <HealthBody />,
-    w: 5, h: 7,
+    w: 4, h: 7,
+  },
+
+  // ── /home ─────────────────────────────────────────────────────────────────
+  gexchart: {
+    label: "GEX chart",
+    title: "GEX by Strike",
+    subtitle: "the /home chart",
+    // The real canvas chart. Pure props + its own ResizeObserver, so it fills
+    // whatever the tile gives it. `transparentBg` exists for exactly this.
+    body: () => <GexChartBody />,
+    w: 8, h: 11,
+  },
+  greeks: {
+    label: "Greeks panel",
+    title: "Greeks",
+    subtitle: "the /home greeks panel",
+    // Rides the shared socket with topics ["gex","spot"] — inside BOARD_TOPICS.
+    body: () => <GreeksHomePanel />,
+    w: 4, h: 10,
+  },
+  gauges: {
+    label: "Gauge rail",
+    title: "Gauges",
+    // Subscribes ["gex"]. gammaPctVol / ibDirection are optional and only
+    // populated on /home from page state this board does not compute.
+    body: () => <HomeGaugeRail />,
+    w: 4, h: 9,
+  },
+  volgex: {
+    label: "Vol GEX flow",
+    title: "Vol GEX Flow",
+    body: () => <VolGexFlowPanel />,
+    w: 6, h: 9,
+  },
+
+  // ── /es-candles ───────────────────────────────────────────────────────────
+  escandles: {
+    label: "ES candles",
+    chrome: false,
+    // `embedded` is the page's own first-class embed path — it drops the page
+    // shell and returns <EsChartCard slot="embed" …> with its dock inside.
+    // SINGLETON because `slot` is a localStorage namespace: two instances would
+    // fight over ticker / interval / indicators.
+    singleton: true,
+    body: () => <EsCandlesPage embedded />,
+    w: 8, h: 16,
+  },
+
+  // ── /options-chain ────────────────────────────────────────────────────────
+  chain: {
+    label: "Options chain",
+    chrome: false,
+    // The real page in its proven embed configuration — the same one /home
+    // uses. `ticker` hides the page's own ticker input; showGrandTotal drops
+    // the total readout that only makes sense full-page.
+    body: () => (
+      <div style={{ height: "100%", overflow: "auto" }}>
+        <OptionsChainPage expirySelection="key" ticker="SPX" showGrandTotal={false} />
+      </div>
+    ),
+    w: 12, h: 18,
+  },
+
+  // ── /flow (the page itself is PageShell-bound; these are its panels) ───────
+  tape: {
+    label: "Flow tape",
+    title: "Flow Tape",
+    // Pure props — fed from this board's own socket, no second connection.
+    body: () => <TapeBody />,
+    w: 6, h: 12,
+  },
+  netprem: {
+    label: "Net premium chart",
+    title: "Net Premium",
+    body: () => <FlowNetPremPanel />,
+    w: 6, h: 9,
+  },
+
+  // ── /em ───────────────────────────────────────────────────────────────────
+  em: {
+    label: "Estimated moves",
+    chrome: false,
+    // The component /em actually mounts. It carries its own page header (logo +
+    // h1) — that is what the page looks like, which is the point.
+    body: () => <EmCustomer />,
+    w: 6, h: 16,
+  },
+
+  // ── /economic-calendar ────────────────────────────────────────────────────
+  econ: {
+    label: "Economic calendar",
+    title: "Economic Calendar",
+    subtitle: "today only",
+    // The panel /home and /analytics embed, with its designed embed props.
+    body: () => <EconCalendarPanel todayOnly hideToolbar />,
+    w: 6, h: 10,
+  },
+
+  // ── /scanner (PageShell is page-level; every tab body is bare) ─────────────
+  scanner: {
+    label: "Scanner · GEX change top",
+    chrome: false,
+    body: () => <GexChangeTop />,
+    w: 5, h: 14,
+  },
+  ibstats: {
+    label: "Scanner · IB stats",
+    chrome: false,
+    body: () => <IbStatsTab />,
+    w: 7, h: 14,
+  },
+
+  // ── /mult-greek ───────────────────────────────────────────────────────────
+  multgreek: {
+    label: "Multi Greek (wide)",
+    chrome: false,
+    // Whole page in a tile: four ticker columns plus its own dock. It mounts
+    // cleanly (height:100%, all props optional) but wants ~1000px of width —
+    // hence the full-width default and the label.
+    singleton: true,
+    body: () => <MultGreekClient />,
+    w: 12, h: 20,
   },
 };
 
@@ -377,14 +515,15 @@ function nextInstanceId(type: string, layout: GridItem[]): string {
  * resurrect itself on the next reload.
  */
 const DEFAULT_LAYOUT: GridItem[] = [
-  { id: "stats#1",   x: 0, y: 0,  w: 12, h: 3 },
-  { id: "gexbars#1", x: 0, y: 3,  w: 5,  h: 9 },
-  { id: "profile#1", x: 5, y: 3,  w: 7,  h: 9 },
-  { id: "levels#1",  x: 0, y: 12, w: 5,  h: 7 },
-  { id: "chain#1",   x: 5, y: 12, w: 7,  h: 11 },
-  { id: "flow#1",    x: 0, y: 19, w: 5,  h: 9 },
-  { id: "econ#1",    x: 5, y: 23, w: 7,  h: 8 },
-  { id: "health#1",  x: 0, y: 28, w: 5,  h: 7 },
+  { id: "stats#1",    x: 0, y: 0,  w: 12, h: 3 },
+  { id: "gexchart#1", x: 0, y: 3,  w: 8,  h: 11 },
+  { id: "levels#1",   x: 8, y: 3,  w: 4,  h: 7 },
+  { id: "gauges#1",   x: 8, y: 10, w: 4,  h: 9 },
+  { id: "escandles#1", x: 0, y: 14, w: 8, h: 16 },
+  { id: "tape#1",     x: 8, y: 19, w: 4,  h: 12 },
+  { id: "chain#1",    x: 0, y: 30, w: 12, h: 18 },
+  { id: "econ#1",     x: 0, y: 48, w: 6,  h: 10 },
+  { id: "health#1",   x: 6, y: 48, w: 4,  h: 7 },
 ];
 
 export default function Board() {
@@ -448,6 +587,7 @@ export default function Board() {
                 editing={editing}
                 title={def.title}
                 subtitle={def.subtitle}
+                chrome={def.chrome !== false}
                 padding={def.padding}
                 onRemove={removeCard}
               >
@@ -501,6 +641,7 @@ function BoardCard({
   title,
   subtitle,
   editing,
+  chrome = true,
   padding = 14,
   onRemove,
   children,
@@ -509,11 +650,66 @@ function BoardCard({
   title?: string;
   subtitle?: string;
   editing: boolean;
+  chrome?: boolean;
   padding?: number;
   onRemove?: (id: string) => void;
   children: ReactNode;
 }) {
   const showHeader = title != null || editing;
+
+  const grip = (
+    <span aria-hidden title="Drag to move"
+      style={{ fontSize: 12, lineHeight: 1, letterSpacing: 1, color: BOARD_THEME.cyan, opacity: 0.8 }}>
+      ⠿
+    </span>
+  );
+
+  const removeBtn = onRemove ? (
+    // Sits INSIDE the drag handle — DashGrid's own "ignore interactive
+    // elements" check is what stops this click from starting a drag.
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onRemove(id); }}
+      title="Remove this card"
+      aria-label="Remove this card"
+      style={{
+        display: "flex", alignItems: "center", justifyContent: "center",
+        width: 18, height: 18, marginLeft: "auto", flexShrink: 0, padding: 0,
+        borderRadius: 4, border: `1px solid ${BOARD_THEME.line}`,
+        background: BOARD_THEME.card2, color: BOARD_THEME.text,
+        opacity: 0.7, fontSize: 11, lineHeight: 1, cursor: "pointer",
+      }}
+    >
+      ✕
+    </button>
+  ) : null;
+
+  // Components that bring their own card/page chrome mount raw. They get only a
+  // slim floating strip while editing, instead of a header we own — otherwise
+  // every one of them would show two stacked titles.
+  if (!chrome) {
+    return (
+      <div data-grid-id={id} style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden" }}>
+        {editing && (
+          <div
+            data-dashgrid-handle=""
+            style={{
+              position: "absolute", top: 0, left: 0, right: 0, zIndex: 6,
+              display: "flex", alignItems: "center", gap: 8, padding: "4px 8px",
+              cursor: "grab", userSelect: "none",
+              background: tint(BOARD_THEME.app, 0.82),
+              borderBottom: `1px solid ${BOARD_THEME.line}`,
+              borderTopLeftRadius: 12, borderTopRightRadius: 12,
+            }}
+          >
+            {grip}
+            {removeBtn}
+          </div>
+        )}
+        {children}
+      </div>
+    );
+  }
 
   return (
     <div data-grid-id={id} style={{ width: "100%", height: "100%" }}>
@@ -546,12 +742,7 @@ function BoardCard({
               userSelect: editing ? "none" : undefined,
             }}
           >
-            {editing && (
-              <span aria-hidden title="Drag to move"
-                style={{ fontSize: 12, lineHeight: 1, letterSpacing: 1, color: BOARD_THEME.cyan, opacity: 0.8 }}>
-                ⠿
-              </span>
-            )}
+            {editing && grip}
             <div style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}>
               {title != null && (
                 <div style={{
@@ -565,25 +756,7 @@ function BoardCard({
                 <div style={{ fontSize: 10, color: BOARD_THEME.text3 }}>{subtitle}</div>
               )}
             </div>
-            {editing && onRemove && (
-              // Inside the drag handle — DashGrid's "ignore interactive elements"
-              // check is what stops this click from starting a drag.
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); onRemove(id); }}
-                title="Remove this card"
-                aria-label="Remove this card"
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  width: 18, height: 18, marginLeft: "auto", flexShrink: 0, padding: 0,
-                  borderRadius: 4, border: `1px solid ${BOARD_THEME.line}`,
-                  background: BOARD_THEME.card2, color: BOARD_THEME.text,
-                  opacity: 0.7, fontSize: 11, lineHeight: 1, cursor: "pointer",
-                }}
-              >
-                ✕
-              </button>
-            )}
+            {editing && removeBtn}
           </div>
         )}
         <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", overflow: "auto" }}>
@@ -693,67 +866,44 @@ function StatsBody() {
   );
 }
 
-/** The N strikes nearest spot, in strike order — what every strike view wants. */
-function nearSpot(chain: ChainRow[], spot: number, n: number): ChainRow[] {
-  if (!chain.length) return [];
-  if (spot <= 0) return [...chain].sort((a, b) => a.strike - b.strike).slice(0, n);
-  return [...chain]
-    .sort((a, b) => Math.abs(a.strike - spot) - Math.abs(b.strike - spot))
-    .slice(0, n)
-    .sort((a, b) => a.strike - b.strike);
+/**
+ * The real /home GEX chart, fed from this board's socket.
+ *
+ * GexChart is pure props with its own ResizeObserver, so it fills whatever the
+ * tile gives it and redraws on resize with no help from us. `transparentBg`
+ * drops its opaque background so the card surface shows through — that prop
+ * exists for exactly this case.
+ *
+ * No toolbar: GexToolbar is fully controlled and needs the page's expiry list,
+ * mode state and an onRefresh. The chart's own defaults (net / OI+Vol) are the
+ * ones /home opens with, and the flip curve is on because the board already
+ * computes the profile.
+ */
+function GexChartBody() {
+  const { chain, spot, flip, profile, expiry } = useFeed();
+  if (!chain.length) return <Waiting what="gex rows" />;
+  return (
+    <div style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
+      <GexChart
+        chain={chain}
+        spotPrice={spot}
+        flipPoint={flip}
+        gexProfile={profile}
+        showFlipCurve
+        expiry={expiry}
+        transparentBg
+      />
+    </div>
+  );
 }
 
-function GexBarsBody() {
-  const { chain, spot } = useFeed();
-  const rows = useMemo(() => nearSpot(chain, spot, 22), [chain, spot]);
-
-  if (!rows.length) return <Waiting what="gex rows" />;
-
-  const vals = rows.map((r) => netGEXOf(r, "net", spot));
-  const max = Math.max(...vals.map(Math.abs), 1);
-  const W = 300, H = 140, MID = H / 2;
-  const gap = 2;
-  const bw = (W - gap * (rows.length - 1)) / rows.length;
-  // Nearest bar to spot, for the dashed marker.
-  const spotIdx = rows.reduce(
-    (best, r, i) => (Math.abs(r.strike - spot) < Math.abs(rows[best].strike - spot) ? i : best), 0);
-
+/** The real /flow tape, on this board's frames — no second socket. */
+function TapeBody() {
+  const { tape, connected } = useFeed();
+  if (!tape.length) return <Waiting what="the flow tape" />;
   return (
-    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="100%" preserveAspectRatio="none"
-           style={{ flex: 1, minHeight: 0 }}>
-        <line x1={0} y1={MID} x2={W} y2={MID} stroke={BOARD_THEME.line} strokeWidth={1} />
-        {rows.map((r, i) => {
-          const v = vals[i];
-          const h = (Math.abs(v) / max) * (MID - 6);
-          return (
-            <rect
-              key={r.strike}
-              x={i * (bw + gap)}
-              y={v > 0 ? MID - h : MID}
-              width={bw}
-              height={Math.max(h, 1)}
-              rx={2}
-              fill={v > 0 ? BOARD_THEME.cyan : BOARD_THEME.red}
-              opacity={0.9}
-            />
-          );
-        })}
-        {spot > 0 && (
-          <line
-            x1={spotIdx * (bw + gap) + bw / 2} y1={0}
-            x2={spotIdx * (bw + gap) + bw / 2} y2={H}
-            stroke={BOARD_THEME.yellow} strokeWidth={1} strokeDasharray="3 3" opacity={0.75}
-          />
-        )}
-      </svg>
-      <div style={{
-        display: "flex", justifyContent: "space-between", fontSize: 8.5,
-        color: BOARD_THEME.text3, marginTop: 4, flexShrink: 0,
-      }}>
-        <span>{formatStrike(rows[0].strike)}</span>
-        <span>{formatStrike(rows[rows.length - 1].strike)}</span>
-      </div>
+    <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column" }}>
+      <FlowTape orders={tape} connected={connected} />
     </div>
   );
 }
@@ -761,8 +911,8 @@ function GexBarsBody() {
 function LevelsBody() {
   const { chain, spot, callWall, putWall, flip } = useFeed();
 
-  // Core Bullseye = the strike carrying the most absolute gamma. Computed from
-  // the rows on screen, same basis as the bars above it.
+  // Core Bullseye = the strike carrying the most absolute gamma, on the same
+  // basis the GEX chart draws with.
   const cb = useMemo(() => {
     if (!chain.length) return null;
     let best: ChainRow | null = null;
@@ -823,288 +973,6 @@ function LevelsBody() {
  * The gamma profile curve — dealer gamma recomputed at 401 hypothetical spot
  * levels (computeGEXProfile, pure client math on the rows already in memory).
  * Zero crossing is the flip.
- */
-function ProfileBody() {
-  const { profile, spot } = useFeed();
-  if (!profile || profile.levels.length < 2) return <Waiting what="a gamma profile" />;
-
-  const { levels, values } = profile;
-  const W = 400, H = 220, PAD = 6;
-  const xMin = levels[0], xMax = levels[levels.length - 1];
-  const vMax = Math.max(...values.map(Math.abs), 1e-9);
-  const x = (v: number) => ((v - xMin) / (xMax - xMin || 1)) * W;
-  const y = (v: number) => PAD + (0.5 - v / (2 * vMax)) * (H - PAD * 2);
-
-  const d = levels.map((lv, i) => `${i === 0 ? "M" : "L"}${x(lv).toFixed(1)},${y(values[i]).toFixed(1)}`).join(" ");
-  const zeroY = y(0);
-
-  return (
-    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="100%" preserveAspectRatio="none"
-           style={{ flex: 1, minHeight: 0 }}>
-        <path d={`${d} L${W},${zeroY} L0,${zeroY} Z`} fill={tint(BOARD_THEME.cyan, 0.1)} />
-        <line x1={0} y1={zeroY} x2={W} y2={zeroY} stroke={BOARD_THEME.line} strokeWidth={1} />
-        <path d={d} fill="none" stroke={BOARD_THEME.cyan} strokeWidth={1.8} strokeLinejoin="round" />
-        {spot > 0 && spot >= xMin && spot <= xMax && (
-          <line x1={x(spot)} y1={0} x2={x(spot)} y2={H}
-                stroke={BOARD_THEME.yellow} strokeWidth={1} strokeDasharray="3 3" opacity={0.8} />
-        )}
-        {profile.flipPoint != null && profile.flipPoint >= xMin && profile.flipPoint <= xMax && (
-          <line x1={x(profile.flipPoint)} y1={0} x2={x(profile.flipPoint)} y2={H}
-                stroke={BOARD_THEME.purple} strokeWidth={1} strokeDasharray="2 4" opacity={0.9} />
-        )}
-      </svg>
-      <div style={{
-        display: "flex", justifyContent: "space-between", alignItems: "center",
-        fontSize: 9, color: BOARD_THEME.text3, marginTop: 5, flexShrink: 0, gap: 8,
-      }}>
-        <span>{formatStrike(xMin)}</span>
-        <span style={{ color: BOARD_THEME.purple }}>
-          flip {profile.flipPoint != null ? formatStrike(profile.flipPoint) : "—"}
-        </span>
-        <span>{formatStrike(xMax)}</span>
-      </div>
-    </div>
-  );
-}
-
-function ChainBody() {
-  const { chain, spot, expiry } = useFeed();
-  const rows = useMemo(() => nearSpot(chain, spot, 24), [chain, spot]);
-  if (!rows.length) return <Waiting what="the chain" />;
-
-  const atm = rows.reduce(
-    (best, r, i) => (Math.abs(r.strike - spot) < Math.abs(rows[best].strike - spot) ? i : best), 0);
-
-  return (
-    <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-      {expiry && (
-        <div style={{ fontSize: 9.5, color: BOARD_THEME.text3, marginBottom: 4 }}>expiry {expiry}</div>
-      )}
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5 }}>
-        <thead>
-          <tr>
-            <th style={thStyle}>Strike</th>
-            <th style={thStyle}>Call OI</th>
-            <th style={thStyle}>Call Vol</th>
-            <th style={thStyle}>Net GEX</th>
-            <th style={thStyle}>Put Vol</th>
-            <th style={thStyle}>Put OI</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => {
-            const net = netGEXOf(r, "net", spot);
-            return (
-              <tr key={r.strike} style={i === atm ? { background: BOARD_THEME.card2 } : undefined}>
-                <td style={{ ...tdStyle, color: BOARD_THEME.text, fontWeight: 600 }}>
-                  {formatStrike(r.strike)}
-                </td>
-                <td style={tdStyle}>{Math.round(r.callOI ?? 0).toLocaleString()}</td>
-                <td style={tdStyle}>{Math.round(r.callVolume ?? 0).toLocaleString()}</td>
-                <td style={{ ...tdStyle, color: net >= 0 ? BOARD_THEME.cyan : BOARD_THEME.red }}>
-                  {formatGEX(net)}
-                </td>
-                <td style={tdStyle}>{Math.round(r.putVolume ?? 0).toLocaleString()}</td>
-                <td style={tdStyle}>{Math.round(r.putOI ?? 0).toLocaleString()}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-const fmtPrem = (v: number) =>
-  v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `$${Math.round(v / 1e3)}k` : `$${Math.round(v)}`;
-
-function FlowBody() {
-  const { tape } = useFeed();
-  // Biggest premium first — the tape arrives oldest-first and unsorted by size.
-  const top = useMemo(
-    () => [...tape].sort((a, b) => (b.premium || 0) - (a.premium || 0)).slice(0, 14),
-    [tape],
-  );
-  if (!top.length) return <Waiting what="the flow tape" />;
-
-  return (
-    <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-      {top.map((o, i) => {
-        const call = o.type === "C";
-        const color = call ? BOARD_THEME.green : BOARD_THEME.red;
-        return (
-          <div key={`${o.ts}-${o.symbol}-${i}`} style={{
-            display: "flex", alignItems: "center", gap: 10, padding: "7px 2px",
-            borderBottom: i === top.length - 1 ? "none" : `1px solid ${BOARD_THEME.line2}`,
-          }}>
-            <div style={{
-              width: 26, height: 26, borderRadius: 8, display: "grid", placeItems: "center",
-              fontSize: 9.5, fontWeight: 800, flexShrink: 0,
-              background: tint(color, 0.15), color,
-            }}>
-              {o.type}
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{
-                fontSize: 11, fontWeight: 600, color: BOARD_THEME.text,
-                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-              }}>
-                {o.underlying ?? o.symbol} {formatStrike(o.strike)}{o.type}
-              </div>
-              <div style={{ fontSize: 9.5, color: BOARD_THEME.text3, marginTop: 1 }}>
-                {new Date(o.ts).toLocaleTimeString("en-US", { hour12: false, timeZone: "America/New_York" })}
-                {" · "}{o.side}{o.expiration ? ` · ${o.expiration}` : ""}
-                {o.size ? ` · ${o.size.toLocaleString()}x` : ""}
-              </div>
-            </div>
-            <Chip color={color}>{fmtPrem(o.premium || 0)}</Chip>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/**
- * Published EM levels for SPX. `useEmLookup` is the SAME hook the /em page uses
- * — the lookup fires once on mount, and only while this card is on the board.
- */
-function EmBody() {
-  const em = useEmLookup();
-  const { lookup } = em;
-  const { spot } = useFeed();
-
-  useEffect(() => { void lookup("SPX"); }, [lookup]);
-
-  if (em.loading && !em.data) return <Waiting what="EM levels" />;
-  if (em.error) {
-    return (
-      <div style={{ flex: 1, display: "grid", placeItems: "center", fontSize: 11, color: BOARD_THEME.text3, padding: 12, textAlign: "center" }}>
-        {em.error}
-      </div>
-    );
-  }
-  if (!em.data) return <Waiting what="EM levels" />;
-
-  const emVal = emNumber(em.data.em);
-  const close = emNumber(em.data.close);
-  const pct = emVal != null && close ? (emVal / close) * 100 : null;
-
-  const rows: { label: string; value: number | null; color: string }[] = [
-    { label: "Upper", value: emNumber(em.data.up), color: BOARD_THEME.green },
-    { label: "Pivot", value: emNumber(em.data.pivot), color: BOARD_THEME.text2 },
-    { label: "Lower", value: emNumber(em.data.down), color: BOARD_THEME.red },
-    { label: "Sell zone (near)", value: emNumber(em.data.sell_near), color: BOARD_THEME.orange },
-    { label: "Buy zone (near)", value: emNumber(em.data.buy_near), color: BOARD_THEME.blue },
-  ];
-
-  return (
-    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-        <span style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em" }}>
-          {emVal != null ? `±${emVal.toFixed(2)}` : "—"}
-        </span>
-        {pct != null && <span style={{ fontSize: 11, color: BOARD_THEME.text3 }}>({pct.toFixed(2)}%)</span>}
-        {em.data.exp_label && <Chip color={BOARD_THEME.cyan}>{em.data.exp_label}</Chip>}
-      </div>
-      <div style={{ display: "flex", flexDirection: "column" }}>
-        {rows.map((r, i) => (
-          <div key={r.label} style={{
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-            padding: "6px 2px", fontSize: 11,
-            borderBottom: i === rows.length - 1 ? "none" : `1px solid ${BOARD_THEME.line2}`,
-          }}>
-            <span style={{ color: BOARD_THEME.text2 }}>{r.label}</span>
-            <span style={{ color: r.color, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
-              {r.value != null ? formatStrike(r.value) : "—"}
-              {r.value != null && spot > 0 && (
-                <span style={{ color: BOARD_THEME.text3, fontWeight: 400 }}>
-                  {" "}({r.value > spot ? "+" : ""}{Math.round(r.value - spot)})
-                </span>
-              )}
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-const IMPACT_COLOR: Record<string, string> = {
-  High: BOARD_THEME.red,
-  Medium: BOARD_THEME.orange,
-  Low: BOARD_THEME.yellow,
-  Holiday: BOARD_THEME.text3,
-  President: BOARD_THEME.purple,
-};
-
-function EconBody() {
-  const cal = useEconCalendar();
-  // `cal.now` ticks once a minute; deriving the ET date FROM it is what rolls
-  // the card over at midnight ET rather than at the device's midnight.
-  const today = useMemo(
-    () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(cal.now)),
-    [cal.now],
-  );
-
-  const todays = useMemo(
-    () => cal.events.filter((e) => e.date === today).slice(0, 12),
-    [cal.events, today],
-  );
-
-  if (cal.loading && !cal.events.length) return <Waiting what="the calendar" />;
-  if (!todays.length) {
-    return (
-      <div style={{ flex: 1, display: "grid", placeItems: "center", fontSize: 11, color: BOARD_THEME.text3, textAlign: "center", padding: 12 }}>
-        {cal.source === "unavailable" ? "calendar feed unavailable" : "no US events scheduled today"}
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5 }}>
-        <thead>
-          <tr>
-            <th style={thStyle}>Time</th>
-            <th style={thStyle}>Event</th>
-            <th style={thStyle}>Impact</th>
-            <th style={thStyle}>Fcst</th>
-            <th style={thStyle}>Prev</th>
-            <th style={thStyle}>Actual</th>
-          </tr>
-        </thead>
-        <tbody>
-          {todays.map((e, i) => (
-            <tr key={`${e.time}-${e.title}-${i}`} style={{ opacity: isStale(e, cal.now) ? 0.45 : 1 }}>
-              <td style={tdStyle}>{e.time_formatted || e.time || "—"}</td>
-              <td style={{ ...tdStyle, color: BOARD_THEME.text, fontWeight: 600, whiteSpace: "normal" }}>
-                {e.title}
-              </td>
-              <td style={tdStyle}>
-                <Chip color={IMPACT_COLOR[e.impact] ?? BOARD_THEME.text3}>{e.impact || "—"}</Chip>
-              </td>
-              <td style={tdStyle}>{e.forecast || "—"}</td>
-              <td style={tdStyle}>{e.previous || "—"}</td>
-              <td style={{ ...tdStyle, color: e.actual ? BOARD_THEME.text : BOARD_THEME.text3 }}>
-                {e.actual || "—"}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {cal.warning && (
-        <div style={{ fontSize: 9.5, color: BOARD_THEME.orange, marginTop: 6 }}>{cal.warning}</div>
-      )}
-    </div>
-  );
-}
-
-/**
- * Feed Health — what this page actually asked the socket for, and when each of
- * those frame types last arrived. The point is diagnosing a silently-stale card
- * (the classic symptom of a missing topic).
  */
 function HealthBody() {
   const { connected, lastByTypeRef } = useFeed();
