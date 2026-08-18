@@ -1674,6 +1674,16 @@ const TL_QUICK: readonly string[] = ["SPX", "SPY", "QQQ", "NVDA", "TSLA"];
 // still in play on a wide-strike name — twenty reaches them without turning the
 // pane into a scroll.
 const TL_LADDER_SIDE = 20;
+// …and how many of those rungs must be VISIBLE each way the moment the card
+// paints, before anyone scrolls. The ladder holds twenty a side; ten a side is
+// the window that has to be on screen, because the spot row is auto-centred in
+// the scroller (see TlLadder) and a pane too short for it opened with the walls
+// below the fold. The pane height (TL_SPLIT_MIN_H, below TL_CHIP_MIN_H) is
+// solved for this number.
+const TL_LADDER_VIEW_SIDE = 10;
+// One ladder row, measured: 18px content (the bar is the tallest thing in it)
+// + 2px padding a side + 1px border a side + the 2px column gap = 26.
+const TL_ROW_H = 26;
 // The board is one /api/chains call per expiration (server-cached 30s), so it
 // polls slowly and is otherwise driven by the ↻ button next to the ticker.
 const TL_BOARD_REFRESH_MS = 120_000;
@@ -1956,6 +1966,17 @@ function tlWindow(rows: TlRow[], spot: number | null): TlRow[] {
 // Taller: the chip type went up a size across the board (these are read at a
 // glance, often from across the desk or off a recording).
 const TL_CHIP_MIN_H = 106;
+
+// Everything in a pane that is NOT the ladder: 12px padding a side, the heading
+// row, the expiry pills (allowing one wrap), the ±Move / Δ-baseline caption, the
+// four 10px gaps, and the chip row pinned to the bottom. Named so the height it
+// feeds reads as the arithmetic it is instead of a magic number.
+const TL_PANE_CHROME_H = 24 + 20 + 64 + 18 + 40 + TL_CHIP_MIN_H;
+// The split's height: tall enough to paint the column header plus
+// 2 × TL_LADDER_VIEW_SIDE + 1 rungs — ten strikes above spot, ten below, and the
+// strike price is sitting on — with no scrolling on open.
+const TL_SPLIT_MIN_H =
+  TL_PANE_CHROME_H + 20 + (TL_LADDER_VIEW_SIDE * 2 + 1) * TL_ROW_H;
 
 // Row of level chips. `stretch` keeps every chip the same height, and the
 // auto top margin pins the row to the bottom of its pane so the left and
@@ -2878,7 +2899,13 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
             // the disclaimer below. minmax(0,1fr) here + minHeight:0 on each
             // pane is what actually hands the overflow to the ladder scrollers.
             gridTemplateRows: "minmax(0, 1fr)", gap: 14,
-            alignItems: "stretch", height: "clamp(460px, 64vh, 900px)",
+            // Sized so the DEFAULT view shows TL_LADDER_VIEW_SIDE rungs above and
+            // below the spot row without touching the scrollbar — the ladder still
+            // holds ±TL_LADDER_SIDE and the spot row is auto-centred, so the ten a
+            // side are what land on screen. TL_SPLIT_MIN_H is that arithmetic;
+            // the vh term lets a tall monitor show more than the minimum.
+            alignItems: "stretch",
+            height: `clamp(${TL_SPLIT_MIN_H}px, 86vh, 1500px)`,
           }}>
 
             {/* LEFT — one expiration */}

@@ -1,5 +1,68 @@
 # Changelog
 
+## 2026-08-18 - Multi Greek: identity row trimmed, CB/CW/PW promoted to cards
+
+Edited: `app/mult-greek/MultGreekClient.tsx`.
+
+The band between the dock and the four ticker panels carried a "MULTI GREEK"
+title, a spot price for every ticker, the expiry/session string and the CB Edge
+mark. The title restated the nav, and each panel header already prints its own
+ticker and spot, so the row was mostly duplicate.
+
+- Removed the `Multi Greek` heading, the per-ticker SPOT readouts and the
+  `/cb-edge-logo.png` mark from the identity row. Only the front expiry + DTE,
+  the session and the replay clock remain.
+- The CB / CW / PW wall toggles moved OUT of the toolbar dock and into that
+  identity row, re-rendered as cards (panel background, level-colored border and
+  glow when on) with the badge plus its full name -- Core Bullseye, Call Wall,
+  Put Wall -- so the legend sits directly above the panels it marks.
+- Toggle behaviour, `showCB/showCW/showPW` state and the `wallVisible()` wiring
+  into `TickerPanel` are unchanged; only the placement and chrome moved.
+
+## 2026-08-18 - Ticker Lookup: taller panes, ten strikes a side visible on open
+
+Edited: `components/pages/Analytics.tsx`.
+
+The Ticker Lookup card's two ladder panes were a fixed
+`clamp(460px, 64vh, 900px)`. At the low end that showed roughly six rungs, so
+the card opened mid-scroll and the walls sat below the fold even though the
+ladder already held +/-20 strikes of data.
+
+- New `TL_LADDER_VIEW_SIDE = 10` states how many rungs must be VISIBLE each way
+  the moment the card paints (the loaded window stays `TL_LADDER_SIDE = 20` --
+  scroll still reaches the far wings).
+- New `TL_ROW_H` (26px, measured) and `TL_PANE_CHROME_H` (padding, heading,
+  expiry pills allowing one wrap, the caption line, the gaps, and the pinned
+  chip row) feed `TL_SPLIT_MIN_H` -- the pane height solved for the column
+  header plus 21 rows.
+- Split height is now `clamp(838px, 86vh, 1500px)`. The existing spot-centring
+  effect in `TlLadder` puts the spot row in the middle of that box, so ten
+  strikes above and ten below land on screen with no scrolling.
+
+No data-fetching change: the ladder window, the board fetch and the replay path
+are untouched.
+
+## 2026-08-18 - Level Log: readable wording for near-miss (approach) rows
+
+Edited: `components/pages/LevelLog.tsx`.
+
+The approach rows read `Came up down to 7,700 from above at 7,710.20 without
+tagging` — a hardcoded "Came up" with the direction bolted on after it, the
+side stated twice, and the two numbers left for the reader to subtract.
+
+- New `missPts()` helper returns how far the approach stopped short (null when
+  the gap rounds to nothing, so it never prints "0.00 short").
+- Timeline row now reads: **Came down to 7,710.20 — 10.20 short of 7,700,
+  never tagged.** One direction word, distance stated outright. The `↓ from
+  above` chip beside the badge already carries the side, so the body no longer
+  repeats it.
+- Degenerate case (spot sitting on the strike) reads "came down to 7,700, right
+  on 7,700 but never tagged" instead of a 0.00 gap.
+- Copy-to-clipboard text updated to match: `came down to 7,710.20, 10.20 short
+  of 7,700, no tag`.
+
+Tag rows and all meta lines are unchanged.
+
 ## 2026-08-18 - New email template: final call — 2 spots at $300/yr, ends at midnight
 
 Added: `lib/emails/midnight-300.ts`.

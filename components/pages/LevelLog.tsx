@@ -253,6 +253,18 @@ const wallStrike = (n: number | null | undefined) =>
     : Number(n).toLocaleString("en-US", { maximumFractionDigits: 2 });
 
 /**
+ * Distance an approach stopped short of the level, in points. Null when the
+ * gap rounds to nothing (or either number is missing) so the caller can say
+ * "right on the level" instead of printing a meaningless "0.00 short".
+ */
+const missPts = (strike: number | null | undefined, spot: number | null | undefined): number | null => {
+  const s = Number(strike), p = Number(spot);
+  if (!Number.isFinite(s) || !Number.isFinite(p)) return null;
+  const d = Math.abs(p - s);
+  return d < 0.005 ? null : d;
+};
+
+/**
  * The level log as plain text, laid out for pasting into Discord or notes.
  * Built from the raw rows rather than scraped out of the rendered timeline, so
  * the copy carries the meta the eye skips. Ordering matches the screen: oldest
@@ -291,8 +303,11 @@ function buildLogText(
       : isBreakThenReject(e) ? `BREAK & REJECT (${e.reclaim_min}m)`
       : REACTION_LABEL[e.reaction].toUpperCase();
     const side = approachSide(e);
+    const miss = missPts(e.strike, e.spot_at_hit);
     const body = approach
-      ? `near ${wallStrike(e.strike)} from ${side} at ${wallNum(e.spot_at_hit)}, no tag`
+      ? (miss != null
+          ? `came ${side === "below" ? "up" : "down"} to ${wallNum(e.spot_at_hit)}, ${wallNum(miss)} short of ${wallStrike(e.strike)}, no tag`
+          : `came ${side === "below" ? "up" : "down"} right onto ${wallStrike(e.strike)}, no tag`)
       : `tagged ${wallStrike(e.strike)} from ${side} at ${wallNum(e.spot_at_hit)}`;
     const t = [`${e.at}  ${L(e.level_type).padEnd(10)} ${verdict.padEnd(22)} ${body}`];
 
@@ -928,10 +943,19 @@ function WallTimeline({ log, events, view }: { log: WallLogRow[]; events: WallEv
     const approach = e.kind === "approach";
     const build = gexBuildPct(e.gex_at_hit, e.gex_at_resolve);
     const side = approachSide(e);
+    // How far the approach stopped short. The old line read "Came up down to
+    // 7,700 from above at 7,710.20" — a hardcoded "Came up" with the direction
+    // bolted on after it, and the two numbers left for the reader to subtract.
+    // One direction word, then the distance stated outright.
+    const miss = missPts(e.strike, e.spot_at_hit);
     entries.push({
       slot: e.hit_slot, at: e.at, kind: "hit", lt: e.level_type, side,
       body: approach
-        ? <>Came up {side === "below" ? "to" : "down to"} <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(e.strike)}</b> from {side} at <b style={{ fontFamily: "var(--font-mono)" }}>{wallNum(e.spot_at_hit)}</b> without tagging{e.note ? ` — ${e.note}.` : "."}</>
+        ? <>Came {side === "below" ? "up" : "down"} to <b style={{ fontFamily: "var(--font-mono)" }}>{wallNum(e.spot_at_hit)}</b>
+            {miss != null
+              ? <> — <b style={{ fontFamily: "var(--font-mono)" }}>{wallNum(miss)}</b> short of <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(e.strike)}</b>, never tagged</>
+              : <>, right on <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(e.strike)}</b> but never tagged</>}
+            {e.note ? ` — ${e.note}.` : "."}</>
         : <>Tagged <b style={{ fontFamily: "var(--font-mono)" }}>{wallStrike(e.strike)}</b> from {side} at <b style={{ fontFamily: "var(--font-mono)" }}>{wallNum(e.spot_at_hit)}</b>{e.note ? ` — ${e.note}.` : "."}</>,
       meta: [
         // Excursion is measured in the BREAK direction, which is the opposite
