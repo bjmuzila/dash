@@ -76,8 +76,14 @@
   }
   .split b{font-variant-numeric:tabular-nums;color:var(--ink)}
 
-  #status{margin:0 0 12px;font-size:12px;color:var(--ink2);min-height:17px}
+  #status{margin:0 0 8px;font-size:12px;color:var(--ink2);min-height:17px}
   #status.err{color:var(--red)}
+  #diag{
+    display:none;margin:0 0 12px;padding:9px 12px;font-size:11.5px;line-height:1.7;
+    color:var(--orange);background:rgba(245,159,60,.07);
+    border:1px solid rgba(245,159,60,.25);border-radius:8px;
+  }
+  #diag code{background:rgba(0,0,0,.35);padding:1px 5px;border-radius:4px}
 
   /* ── drop zone ────────────────────────────────────────────── */
   #drop{
@@ -111,7 +117,7 @@
 
   <h1>
     Visual Queue Map — <span id="hdr-title">SPX orderflow</span>
-    <small id="hdr-sub">split by print size · market maker vs customer</small>
+    <small id="hdr-sub">split by print size · market maker vs retail</small>
   </h1>
 
   <div class="ctrls">
@@ -130,6 +136,20 @@
     <div class="f">
       <label for="c-strikes">Strikes shown</label>
       <input type="number" id="c-strikes" value="14" min="4" max="40" step="1" style="width:80px" />
+    </div>
+    <!-- Used ONLY for prints whose own field is missing. A tape row carrying
+         its own iv / expiration is never overridden by these. -->
+    <div class="f">
+      <label for="c-iv" title="Applied only to MM prints with no iv of their own">Fallback IV %</label>
+      <input type="number" id="c-iv" value="15" min="0" max="300" step="0.5" style="width:86px" />
+    </div>
+    <div class="f">
+      <label for="c-dte" title="Applied only to MM prints with no parseable expiration">Fallback DTE</label>
+      <input type="number" id="c-dte" value="1" min="0" max="365" step="1" style="width:80px" />
+    </div>
+    <div class="f">
+      <label for="c-spot" title="Blank = use the session median from the tape">Spot override</label>
+      <input type="number" id="c-spot" placeholder="auto" min="0" step="0.01" style="width:100px" />
     </div>
     <div class="f slider">
       <label for="c-thr">Market-maker cutoff — prints ≥ this size</label>
@@ -151,6 +171,7 @@
   </div>
 
   <div id="status">Ready.</div>
+  <div id="diag"></div>
 
   <div id="drop">
     <h3>Drop a tape export here</h3>
@@ -163,16 +184,20 @@
 
   <div class="note">
     <b>How this is built.</b>
-    Prints with size <b>≥ cutoff</b> are treated as market maker; <b>&lt; cutoff</b> as customer — that's the slider.
-    The two customer panels are signed contract counts (buy +, sell −).
+    Every print lands in exactly one bucket, decided only by size: <b>≥ cutoff</b> → the three market-maker panels,
+    <b>&lt; cutoff</b> → the two retail panels. At 50 that is 1–49 retail, 50+ market maker. Nothing is counted twice
+    and nothing is left out.
+    The two retail panels are signed contract counts (buy +, sell −).
     The three MM panels are dollar exposures computed per print with Black–Scholes (r = q = 0) from the print's own
     <code>iv</code>, its days to expiry and the spot at print time, then signed by the MM's side and summed per strike:
     <b>GEX</b> = γ · contracts · 100 · S² · 1% ($M per 1% move) ·
     <b>VEX</b> = vega · contracts · 100 ($K per 1 vol point) ·
     <b>CEX</b> = charm · contracts · 100 · S ($M of delta per day).
-    Prints with no <code>iv</code> can't be greeked and are counted in the customer panels only — the split readout says how many.
-    Shaded bands are derived, not typed in: the call wall is the strike with the largest net customer call position,
-    the put wall the most negative net customer put, and the pin zone the densest contiguous run of strikes by total contracts.
+    An MM print with no <code>iv</code> or no parseable expiry can't be greeked, so it contributes to no panel — it is
+    <b>not</b> quietly reassigned to retail. It still counts toward which strikes are shown. The readout above says how
+    many of the MM prints were greekable; a large gap there means the exposure panels understate.
+    Shaded bands are derived, not typed in: the call wall is the strike with the largest net retail call position,
+    the put wall the most negative net retail put, and the pin zone the densest contiguous run of strikes by total contracts.
   </div>
 </div>
 
@@ -242,8 +267,16 @@ function ingest(rows) {
   TAPE = (rows || []).filter((o) => o && Number.isFinite(Number(o.strike)) && Number(o.size) > 0);
   if (!TAPE.length) { setStatus("No usable prints in that data.", true); return; }
   $("drop").classList.remove("on");
-  const withIv = TAPE.filter((o) => Number(o.iv) > 0).length;
-  setStatus(`${TAPE.length.toLocaleString()} prints loaded · ${withIv.toLocaleString()} carry an IV (greekable).`);
+  const has = (k) => TAPE.filter((o) => o[k] != null && o[k] !== "").length;
+  // Field census, so a blank panel is traceable to the data rather than guessed
+  // at — and so an unexpected field NAME is visible immediately.
+  setStatus(
+    `${TAPE.length.toLocaleString()} prints · `
+    + `iv ${has("iv").toLocaleString()} · spot ${has("spot").toLocaleString()} · `
+    + `expiration ${has("expiration").toLocaleString()} · size ${has("size").toLocaleString()} · `
+    + `side ${has("side").toLocaleString()}`
+  );
+  console.log("[queue-map] first print:", TAPE[0]);
   render();
 }
 
@@ -284,9 +317,20 @@ function yearsToExpiry(o) {
 /**
  * Build the five per-strike series.
  *
- * Sign convention is the MM's / customer's OWN position: a buy is long (+), a
- * sell is short (−). The tape already classifies side, so there is no need for
- * the OI-based "calls +, puts −" dealer assumption used elsewhere in the app.
+ * THE SPLIT IS THE WHOLE POINT and it is one comparison: a print's size decides
+ * which half of the board it feeds, and nothing else does.
+ *
+ *   size >= threshold  → market maker  → the GEX / VEX / CEX panels
+ *   size <  threshold  → retail        → the calls / puts panels
+ *
+ * At threshold 50 that reads 1–49 retail, 50 and up market maker. The buckets
+ * are exclusive and exhaustive: no print feeds both, none is dropped from the
+ * split. (An MM print that can't be greeked feeds no EXPOSURE, but it is still
+ * an MM print — it is never reassigned to retail. See the `continue` below.)
+ *
+ * Sign convention is the trader's OWN position: a buy is long (+), a sell is
+ * short (−). The tape already classifies side, so there is no need for the
+ * OI-based "calls +, puts −" dealer assumption used elsewhere in the app.
  */
 function aggregate(threshold) {
   const by = new Map();     // strike -> series
@@ -295,25 +339,57 @@ function aggregate(threshold) {
     return by.get(k);
   };
 
-  let mmPrints = 0, custPrints = 0, mmGreeked = 0, spotSum = 0, spotN = 0;
+  let mmPrints = 0, custPrints = 0, mmGreeked = 0;
+  // Why an MM print produced no exposure. This is the whole diagnosis when a
+  // panel comes up blank, so it is counted rather than guessed at.
+  const miss = { spot: 0, iv: 0, expiry: 0 };
+  let usedSpotFallback = 0, usedIvFallback = 0, usedDteFallback = 0;
 
+  // ── pass 1: session spot ──────────────────────────────────────────────────
+  // `spot` is OPTIONAL on a tape row. When it is absent, greeks with S = 0 are
+  // all zero and every MM panel renders empty — which is exactly what a blank
+  // GEX chart looks like. So establish one session spot up front and fall back
+  // to it per print. Median, not mean: one bad 0 or a fat-fingered print
+  // shouldn't drag the level.
+  const spots = TAPE.map((o) => Number(o.spot)).filter((v) => v > 0).sort((a, b) => a - b);
+  const override = Number($("c-spot").value) || 0;
+  // An explicit override wins outright — that is the escape hatch for a tape
+  // that carries no spot at all, where there is otherwise nothing to price on.
+  const sessionSpot = override > 0 ? override
+                    : spots.length ? spots[Math.floor(spots.length / 2)] : 0;
+
+  const fbIv = Math.max(0, Number($("c-iv").value) || 0) / 100;
+  const fbDte = Math.max(0, Number($("c-dte").value) || 0);
+
+  // ── pass 2: aggregate ─────────────────────────────────────────────────────
   for (const o of TAPE) {
     const K = Number(o.strike);
     const size = Number(o.size) || 0;
     const isCall = String(o.type || "").toUpperCase().startsWith("C");
-    const sign = String(o.side || "").toLowerCase() === "sell" ? -1 : 1;
+    const sideStr = String(o.side || "").toLowerCase();
+    const sign = (sideStr.startsWith("s") || sideStr === "-1") ? -1 : 1;
     const r = row(K);
     r.contracts += size;
-
-    const S = Number(o.spot) || 0;
-    if (S > 0) { spotSum += S; spotN++; }
 
     if (size >= threshold) {
       // ── market maker ───────────────────────────────────────────────────
       mmPrints++;
-      const vol = Number(o.iv) || 0;
-      const T = yearsToExpiry(o);
+
+      let S = Number(o.spot) || 0;
+      if (!(S > 0)) { miss.spot++; S = sessionSpot; if (S > 0) usedSpotFallback++; }
+
+      let vol = Number(o.iv) || 0;
+      // Some feeds carry IV as a percent (18.4) rather than a decimal (0.184).
+      if (vol > 3) vol /= 100;
+      if (!(vol > 0)) { miss.iv++; vol = fbIv; if (vol > 0) usedIvFallback++; }
+
+      let T = yearsToExpiry(o);
+      if (T == null) { miss.expiry++; T = fbDte > 0 ? fbDte / 365 : null; if (T != null) usedDteFallback++; }
+
       const g = T == null ? null : greeks(S, K, vol, T);
+      // Still no greeks → no exposure. It stays an MM print (mmPrints already
+      // counted it) and it is already in r.contracts, so it still influences
+      // which strikes are shown. It is NOT pushed into the retail panels.
       if (!g) continue;
       mmGreeked++;
       const pos = sign * size * 100;                       // signed share-equivalents
@@ -321,7 +397,7 @@ function aggregate(threshold) {
       r.vex += (g.vega * pos * 0.01) / 1e3;                 // $K per 1 vol point
       r.cex += (g.charm / 365 * pos * S) / 1e6;             // $M of delta per day
     } else {
-      // ── customer ───────────────────────────────────────────────────────
+      // ── retail ─────────────────────────────────────────────────────────
       custPrints++;
       if (isCall) r.custC += sign * size;
       else r.custP += sign * size;
@@ -329,7 +405,7 @@ function aggregate(threshold) {
   }
 
   const all = [...by.values()];
-  const spot = spotN ? spotSum / spotN : 0;
+  const spot = sessionSpot;
 
   // Keep the busiest strikes, then read left-to-right by strike — same shape as
   // the reference, where the x-axis is the active strikes, not a fixed grid.
@@ -337,7 +413,8 @@ function aggregate(threshold) {
   const kept = all.sort((a, b) => b.contracts - a.contracts).slice(0, want)
                   .sort((a, b) => a.strike - b.strike);
 
-  return { rows: kept, spot, mmPrints, custPrints, mmGreeked };
+  return { rows: kept, spot, mmPrints, custPrints, mmGreeked, miss,
+           usedSpotFallback, usedIvFallback, usedDteFallback };
 }
 
 /** Call wall / put wall / pin zone, derived from the customer series. */
@@ -373,9 +450,9 @@ const M = { l: 96, r: 26, t: 96, b: 92 };
 const PANEL_H = 250, PANEL_GAP = 48;
 
 const PANELS = [
-  { key: "custC", title: "Customer Calls — net contracts (buy +, sell −)", ylab: "Customer Calls",
+  { key: "custC", title: "Retail Calls — net contracts (buy +, sell −)", ylab: "Retail Calls",
     pos: "var(--green)", neg: "var(--red)" },
-  { key: "custP", title: "Customer Puts — net contracts (buy +, sell −)", ylab: "Customer Puts",
+  { key: "custP", title: "Retail Puts — net contracts (buy +, sell −)", ylab: "Retail Puts",
     pos: "var(--green)", neg: "var(--red)" },
   { key: "gex", title: "Net MM GEX", ylab: "GEX ($M / 1%)",
     pos: "var(--blue)", neg: "var(--orange)" },
@@ -400,14 +477,31 @@ function fmtTick(v) {
 
 function render() {
   const thr = Number($("c-thr").value);
-  const { rows, spot, mmPrints, custPrints, mmGreeked } = aggregate(thr);
+  const A = aggregate(thr);
+  const { rows, spot, mmPrints, custPrints, mmGreeked, miss } = A;
   const b = bands(rows);
 
   $("split").innerHTML = rows.length
-    ? `MM (≥${thr}): <b>${mmPrints.toLocaleString()}</b> prints · <b>${mmGreeked.toLocaleString()}</b> greekable<br>`
-      + `Customer (&lt;${thr}): <b>${custPrints.toLocaleString()}</b> prints`
-      + (spot ? ` · avg spot <b>${spot.toFixed(2)}</b>` : "")
+    ? `MM (≥${thr}): <b>${mmPrints.toLocaleString()}</b> prints · <b>${mmGreeked.toLocaleString()}</b> greeked<br>`
+      + `Retail (&lt;${thr}): <b>${custPrints.toLocaleString()}</b> prints`
+      + (spot ? ` · spot <b>${spot.toFixed(2)}</b>` : "")
     : "";
+
+  // ── why is a panel blank? ────────────────────────────────────────────────
+  // The three MM panels share one code path, so if GEX is empty VEX and CEX
+  // are too, and the cause is always a missing input. Say which one, in
+  // numbers, instead of leaving an empty chart to interpret.
+  const diag = [];
+  if (mmPrints === 0) {
+    diag.push(`No print is ≥ ${thr} lots — the MM panels have nothing to draw. Lower the cutoff.`);
+  } else if (mmGreeked === 0) {
+    diag.push(`All ${mmPrints.toLocaleString()} MM prints failed to greek, so GEX/VEX/CEX are empty.`);
+  }
+  if (miss.spot) diag.push(`${miss.spot.toLocaleString()} MM prints had no <code>spot</code>${A.usedSpotFallback ? ` — used ${spot.toFixed(2)}` : " and the tape carries no spot at all. Type one into <b>Spot override</b>"}.`);
+  if (miss.iv) diag.push(`${miss.iv.toLocaleString()} MM prints had no <code>iv</code>${A.usedIvFallback ? " — used the fallback IV" : " and the fallback IV is 0, so they contribute nothing"}.`);
+  if (miss.expiry) diag.push(`${miss.expiry.toLocaleString()} MM prints had no parseable <code>expiration</code>${A.usedDteFallback ? " — used the fallback DTE" : " and the fallback DTE is 0, so they contribute nothing"}.`);
+  $("diag").innerHTML = diag.length ? diag.join("<br>") : "";
+  $("diag").style.display = diag.length ? "block" : "none";
 
   const H = M.t + PANELS.length * PANEL_H + (PANELS.length - 1) * PANEL_GAP + M.b;
   const svg = $("svg");
@@ -427,7 +521,7 @@ function render() {
   const sym = $("c-sym").value.trim().toUpperCase() || "SPX";
   $("hdr-title").textContent = `${sym} orderflow — ${$("c-date").value}`;
   $("hdr-sub").textContent =
-    `market maker = prints ≥ ${thr} lots · customer = prints < ${thr} lots`
+    `market maker = prints ≥ ${thr} lots · retail = prints < ${thr} lots`
     + (b.put != null ? ` · put wall ${b.put}` : "")
     + (b.call != null ? ` · call wall ${b.call}` : "");
 
@@ -525,7 +619,10 @@ $("c-thr").addEventListener("input", () => {
   $("c-thr-v").textContent = $("c-thr").value;
   if (TAPE.length) render();
 });
-$("c-strikes").addEventListener("change", () => { if (TAPE.length) render(); });
+for (const id of ["c-strikes", "c-iv", "c-dte", "c-spot"]) {
+  $(id).addEventListener("change", () => { if (TAPE.length) render(); });
+  $(id).addEventListener("input", () => { if (TAPE.length) render(); });
+}
 $("c-load").addEventListener("click", load);
 $("c-file").addEventListener("click", () => $("c-fileinput").click());
 $("c-fileinput").addEventListener("change", (e) => {
