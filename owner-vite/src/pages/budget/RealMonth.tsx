@@ -22,8 +22,13 @@ import {
 /**
  * Budget → Real Month.
  *
- * What actually cleared, read off a bank/card statement PDF or screenshot and
- * stored in budget_statement_tx — a table Overview and Payments never touch.
+ * What actually cleared, read off a bank/card statement CSV, PDF or screenshot
+ * and stored in budget_statement_tx — a table Overview and Payments never touch.
+ *
+ * CSV is the accurate path and worth preferring when the bank offers it: the
+ * server parses the columns itself, so amounts and dates come across exactly as
+ * exported. Only the merchant name and the category are inferred. PDFs and
+ * screenshots go through vision, where every field is a reading.
  *
  * That separation is the whole point. The register is the PLAN: expected
  * payments plus recurring rules projected forward. This is the TRUTH: what the
@@ -368,10 +373,15 @@ export default function RealMonth({
     try {
       let added = 0;
       let hitError = false;
+      let warned: string | null = null;
       for (const file of list) {
-        const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
-        const isImg = file.type.startsWith("image/");
-        if (!isPdf && !isImg) { setError(`${file.name} isn't a PDF or an image — skipped.`); hitError = true; continue; }
+        // CSV first: a .csv is often handed over with type "application/vnd.ms-excel"
+        // (Excel claims the extension on Windows) or an empty type from a drag,
+        // so the extension is the reliable test, not the MIME type.
+        const isCsv = /\.(csv|tsv)$/i.test(file.name) || file.type === "text/csv";
+        const isPdf = !isCsv && (file.type === "application/pdf" || /\.pdf$/i.test(file.name));
+        const isImg = !isCsv && file.type.startsWith("image/");
+        if (!isCsv && !isPdf && !isImg) { setError(`${file.name} isn't a CSV, a PDF or an image — skipped.`); hitError = true; continue; }
         if (file.size > 25 * 1024 * 1024) { setError(`${file.name} is over 25 MB — split it and try again.`); hitError = true; continue; }
 
         const data = await fileToBase64(file);
@@ -379,13 +389,20 @@ export default function RealMonth({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            kind: isPdf ? "pdf" : "image", data,
-            mediaType: file.type || (isPdf ? "application/pdf" : "image/png"),
+            kind: isCsv ? "csv" : isPdf ? "pdf" : "image", data,
+            mediaType: file.type || (isPdf ? "application/pdf" : isCsv ? "text/csv" : "image/png"),
             categories: categories.map((c) => ({ id: c.id, name: c.name })),
           }),
         });
         const json = await res.json().catch(() => ({}));
-        if (!res.ok) { setError(json?.error || `Parse failed (${res.status}).`); hitError = true; continue; }
+        if (!res.ok) {
+          // The CSV path returns `detail` with the header row it actually read,
+          // which is the whole diagnosis when a column map misses.
+          setError([json?.error || `Parse failed (${res.status}).`, json?.detail].filter(Boolean).join(" — "));
+          hitError = true;
+          continue;
+        }
+        if (json?.warning) warned = String(json.warning);
 
         const parsed: StagedRow[] = (json.rows || []).map((r: Record<string, unknown>, i: number) => ({
           key: `${file.name}-${i}-${String(r.date)}-${String(r.amount)}`,
@@ -403,7 +420,7 @@ export default function RealMonth({
         setStaged((prev) => [...prev, ...parsed].sort((a, b) => a.date.localeCompare(b.date)));
         setSourceName(file.name);
       }
-      if (added) setNotice(`Read ${added} transaction${added === 1 ? "" : "s"}. Check them, then save.`);
+      if (added) setNotice(`Read ${added} transaction${added === 1 ? "" : "s"}. Check them, then save.${warned ? ` (${warned})` : ""}`);
       else if (!hitError) setError("No transactions could be read from that file.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Parse failed.");
@@ -1312,11 +1329,12 @@ export default function RealMonth({
           <div style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap" }}>
             <div style={{ flex: "1 1 320px", minWidth: 260 }}>
               <div style={{ fontSize: TYPE.title, fontWeight: 900, letterSpacing: "0.06em" }}>
-                {parsing ? "Reading statement…" : hasData ? "Add another statement" : "Drop a statement PDF or screenshot"}
+                {parsing ? "Reading statement…" : hasData ? "Add another statement" : "Drop a statement CSV, PDF or screenshot"}
               </div>
               <div style={{ ...MUTED, fontSize: 13, marginTop: 6, lineHeight: 1.5 }}>
                 Lands in Real Month only — <span style={{ color: ACCENT }}>Payments and Overview never see it</span>, so nothing double-counts.
-                Re-importing an overlapping statement skips rows already stored.
+                Re-importing an overlapping statement skips rows already stored.{" "}
+                <span style={{ color: ACCENT }}>CSV is the accurate one</span> — the numbers are read straight from the columns, never guessed.
                 {sourceName && !parsing ? <> Last read: <span style={{ color: ACCENT }}>{sourceName}</span>.</> : null}
               </div>
             </div>
@@ -1325,7 +1343,7 @@ export default function RealMonth({
               <ThemedSelect value={bank} onChange={(v) => setBank(v as Bank)} options={BANKS.map((b) => ({ value: b, label: BANK_LABEL[b] }))} />
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "flex-end", paddingBottom: 1 }}>
-              <input ref={fileRef} type="file" accept="application/pdf,image/png,image/jpeg,image/webp" multiple onChange={(e) => void handleFiles(e.target.files)} style={{ display: "none" }} />
+              <input ref={fileRef} type="file" accept=".csv,.tsv,text/csv,application/pdf,image/png,image/jpeg,image/webp" multiple onChange={(e) => void handleFiles(e.target.files)} style={{ display: "none" }} />
               <button onClick={() => fileRef.current?.click()} disabled={parsing} style={{ ...primary(), opacity: parsing ? 0.5 : 1 }}>
                 {parsing ? "Parsing…" : "Choose file"}
               </button>
@@ -1351,6 +1369,18 @@ export default function RealMonth({
               <div style={{ fontSize: 13, ...MUTED, marginTop: 3 }}>{stagedIncluded.length} of {staged.length} selected. Fix anything wrong, then save.</div>
             </div>
             <div style={{ flex: 1 }} />
+            {/* Some exports write spending as positive and income as negative
+                (Amex) and some do the reverse (Chase). When a CSV is one-sided
+                the sign carries no information at all, so the server reads the
+                descriptor — and this is the one click that fixes it when that
+                reading came out backwards. */}
+            <button
+              onClick={() => setStaged((prev) => prev.map((r) => ({ ...r, direction: r.direction === "out" ? "in" : "out" })))}
+              title="Swap in/out on every staged row — for an export whose signs are inverted"
+              style={ghost()}
+            >
+              Flip all in/out
+            </button>
             <button onClick={() => setStaged([])} style={ghost()}>Discard</button>
             <button onClick={() => void saveStaged()} disabled={saving || !stagedIncluded.length} style={{ ...primary(), opacity: saving || !stagedIncluded.length ? 0.5 : 1 }}>
               {saving ? "Saving…" : `Save ${stagedIncluded.length} to Real Month`}
@@ -1404,7 +1434,7 @@ export default function RealMonth({
         <Card variant="classic" padding={28} style={{ textAlign: "center" }}>
           <div style={{ fontSize: TYPE.subhead, fontWeight: 800 }}>Nothing stored for {monthLabel(month)} yet</div>
           <div style={{ fontSize: 13, ...MUTED, marginTop: 6 }}>
-            Drop that month's statement above, or pick a month that already has data from the chips at the top.
+            Drop that month's statement CSV, PDF or screenshot above, or pick a month that already has data from the chips at the top.
           </div>
         </Card>
       )}

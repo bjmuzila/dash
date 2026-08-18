@@ -2854,12 +2854,19 @@ register('/api/budget/parse-statement', {
     const MODEL = 'claude-sonnet-4-6';
     const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
     try {
-      if (!process.env.ANTHROPIC_API_KEY) { send(res, 500, { error: "Statement import isn't configured (missing ANTHROPIC_API_KEY)." }); return; }
       // Base64 PDFs are big — the 1MB default would reject a 3-page statement.
       const body = await readJson(req, 40_000_000);
-      const kind = body?.kind === 'pdf' ? 'pdf' : 'image';
+      const kind = body?.kind === 'pdf' ? 'pdf' : body?.kind === 'csv' ? 'csv' : 'image';
       const data = String(body?.data ?? '');
       if (!data) { send(res, 400, { error: 'No file provided.' }); return; }
+      // The key gate is per-kind, not global: the CSV path below parses the
+      // numbers itself and degrades to "no categories" without a key, so
+      // refusing the whole route on a missing key would break a path that
+      // does not need it. PDF and image genuinely cannot work without it.
+      if (kind !== 'csv' && !process.env.ANTHROPIC_API_KEY) {
+        send(res, 500, { error: "Statement import isn't configured (missing ANTHROPIC_API_KEY)." });
+        return;
+      }
 
       const cats = Array.isArray(body?.categories)
         ? body.categories
@@ -2869,6 +2876,302 @@ register('/api/budget/parse-statement', {
       const catList = cats.length
         ? cats.map((c) => `- ${c.name} (id ${c.id})`).join('\n')
         : '(none defined yet — leave categoryId null and put your best guess in categoryGuess)';
+
+      // ── CSV ────────────────────────────────────────────────────────────
+      // A CSV export already HAS the numbers, so they are parsed here rather
+      // than by the model: it is instant, free, and cannot hallucinate a digit
+      // or silently drop row 340 of 900. The model is used only for the two
+      // things a bank CSV genuinely lacks — a clean merchant name and a
+      // category — and only over the DISTINCT descriptors, so a 900-row export
+      // is a couple of small calls instead of one enormous one. With no
+      // ANTHROPIC_API_KEY the import still works; rows come back with a
+      // scrubbed merchant and no category.
+      if (kind === 'csv') {
+        const CSV_MODEL = 'claude-haiku-4-5-20251001';
+        let text;
+        try { text = Buffer.from(data, 'base64').toString('utf8'); }
+        catch { send(res, 400, { error: 'Could not read that CSV.' }); return; }
+        text = text.replace(/^\uFEFF/, '');
+        if (!text.trim()) { send(res, 400, { error: 'That CSV is empty.' }); return; }
+
+        // RFC4180: quotes, embedded delimiters, embedded newlines, "" escapes.
+        // A naive split on "," mangles every row with a comma in the payee.
+        const splitCsv = (src, delim) => {
+          const out = []; let row = []; let field = ''; let q = false;
+          for (let i = 0; i < src.length; i++) {
+            const ch = src[i];
+            if (q) {
+              if (ch === '"') { if (src[i + 1] === '"') { field += '"'; i++; } else q = false; }
+              else field += ch;
+            } else if (ch === '"') q = true;
+            else if (ch === delim) { row.push(field); field = ''; }
+            else if (ch === '\n') { row.push(field); field = ''; out.push(row); row = []; }
+            else if (ch !== '\r') field += ch;
+          }
+          if (field !== '' || row.length) { row.push(field); out.push(row); }
+          return out.map((r) => r.map((c) => c.trim())).filter((r) => r.some((c) => c !== ''));
+        };
+        // Sniff the delimiter: whichever produces the widest grid with the most
+        // rows agreeing on that width. Covers comma, semicolon (EU exports),
+        // tab and pipe without asking the user which one they have.
+        const probe = text.split('\n').slice(0, 40).join('\n');
+        let delim = ','; let bestScore = -1;
+        for (const d of [',', ';', '\t', '|']) {
+          const widths = splitCsv(probe, d).map((r) => r.length);
+          if (!widths.length) continue;
+          const wide = Math.max(...widths);
+          if (wide < 2) continue;
+          const score = wide * 100 + widths.filter((w) => w === wide).length;
+          if (score > bestScore) { bestScore = score; delim = d; }
+        }
+        const grid = splitCsv(text, delim);
+        if (!grid.length) { send(res, 400, { error: 'Nothing parseable in that CSV.' }); return; }
+
+        const norm = (h) => String(h || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        const DATE_TESTS = [/^(transaction|trans|purchase|activity|effective)\s*date$/, /^date$/, /^(post|posted|posting|settlement|cleared|clearing)\s*date$/, /date/];
+        const DESC_TESTS = [/^(description|payee|merchant|name|details|memo|narrative|particulars)$/, /^(transaction|original|extended)\s*(description|details|memo|name)$/, /(description|payee|merchant|narrative|particulars)/, /(details|memo|name)/];
+        const AMT_TESTS = [/^amount$/, /^(transaction|trans|billing|posted)\s*amount$/, /^amount\b/, /amount/, /^value$/];
+        const DEB_TESTS = [/^(debit|debits|withdrawal|withdrawals|money out|paid out|outflow|dr amount|debit amount)$/, /^(withdrawal|debit)/];
+        const CRE_TESTS = [/^(credit|credits|deposit|deposits|money in|paid in|inflow|cr amount|credit amount)$/, /^(deposit|credit)/];
+        const TYPE_TESTS = [/^(type|transaction type|trans type|debit credit|dr cr|cr dr)$/];
+        // `balance` is excluded everywhere: a running-balance column matches
+        // /amount/ on plenty of exports and would import the balance as spend.
+        const pick = (heads, tests) => {
+          for (const t of tests) {
+            const i = heads.findIndex((h) => h && !/balance/.test(h) && t.test(h));
+            if (i !== -1) return i;
+          }
+          return -1;
+        };
+
+        // Banks pad the top of an export with the account name, a date range
+        // and blank lines. Find the first row that actually looks like a
+        // header rather than assuming row 0.
+        let headRow = -1; let heads = []; let col = null;
+        for (let i = 0; i < Math.min(grid.length, 25); i++) {
+          const h = grid[i].map(norm);
+          const dateI = pick(h, DATE_TESTS);
+          if (dateI === -1) continue;
+          const amtI = pick(h, AMT_TESTS);
+          const debI = pick(h, DEB_TESTS);
+          const creI = pick(h, CRE_TESTS);
+          if (amtI === -1 && debI === -1 && creI === -1) continue;
+          headRow = i; heads = h;
+          col = { date: dateI, desc: pick(h, DESC_TESTS), amount: amtI, debit: debI, credit: creI, type: pick(h, TYPE_TESTS) };
+          break;
+        }
+        if (headRow === -1) {
+          send(res, 400, {
+            error: 'Could not find a header row with a date column and an amount column in that CSV.',
+            detail: `First row read: ${(grid[0] || []).slice(0, 12).join(' | ')}`,
+          });
+          return;
+        }
+
+        const numAt = (r, i) => {
+          if (i === -1) return null;
+          let t = String(r[i] ?? '').trim();
+          if (!t) return null;
+          let neg = false;
+          if (/^\(.*\)$/.test(t)) { neg = true; t = t.slice(1, -1); }   // (12.34) accounting negative
+          t = t.replace(/[^0-9.,+-]/g, '');
+          // 1.234,56 (EU) vs 1,234.56 (US) — decided by which separator is last.
+          if (/,\d{1,2}$/.test(t) && /\.\d{3}/.test(t)) t = t.replace(/\./g, '').replace(',', '.');
+          else t = t.replace(/,/g, '');
+          if (t.startsWith('-')) { neg = true; t = t.slice(1); }
+          if (t.startsWith('+')) t = t.slice(1);
+          const v = Number(t);
+          if (!Number.isFinite(v)) return null;
+          return neg ? -v : v;
+        };
+        const MON = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+        const isoDate = (y, m, d) => `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const toIso = (raw) => {
+          const t = String(raw ?? '').trim();
+          if (!t) return '';
+          let m;
+          if ((m = t.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/))) return isoDate(+m[1], +m[2], +m[3]);
+          if ((m = t.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/))) {
+            const a = +m[1]; const b = +m[2]; let y = +m[3];
+            if (y < 100) y += y >= 70 ? 1900 : 2000;
+            // US MM/DD by default; flipped only when that reading is impossible.
+            let mo = a; let d = b;
+            if (a > 12 && b <= 12) { mo = b; d = a; }
+            if (mo < 1 || mo > 12 || d < 1 || d > 31) return '';
+            return isoDate(y, mo, d);
+          }
+          if ((m = t.match(/^(\d{1,2})[ -]([A-Za-z]{3})[a-z]*[ -](\d{2,4})/))) {
+            const mo = MON[m[2].toLowerCase()]; let y = +m[3];
+            if (y < 100) y += y >= 70 ? 1900 : 2000;
+            return mo ? isoDate(y, mo, +m[1]) : '';
+          }
+          if ((m = t.match(/^([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})/))) {
+            const mo = MON[m[1].toLowerCase()];
+            return mo ? isoDate(+m[3], mo, +m[2]) : '';
+          }
+          const d2 = new Date(t);
+          return Number.isFinite(d2.getTime()) ? isoDate(d2.getFullYear(), d2.getMonth() + 1, d2.getDate()) : '';
+        };
+        const INCOME_RE = /\b(deposit|direct dep|payroll|salary|refund|reversal|rebate|interest|dividend|cashback|cash back|received|transfer from|zelle from|venmo from)\b/i;
+        const OUT_TYPE = /\b(debit|withdrawal|purchase|sale|charge|dr|pos|ach debit|payment sent)\b/i;
+        const IN_TYPE = /\b(credit|deposit|cr|refund|ach credit)\b/i;
+
+        const rows0 = [];
+        let signed = 0; let negatives = 0;
+        for (let i = headRow + 1; i < grid.length && rows0.length < 5000; i++) {
+          const r = grid[i];
+          const date = toIso(r[col.date]);
+          if (!date) continue;                                  // totals / footers / blank spacers
+          const description = String((col.desc !== -1 ? r[col.desc] : '') || '').replace(/\s{2,}/g, ' ').trim().slice(0, 120);
+          if (!description) continue;
+          const deb = numAt(r, col.debit);
+          const cre = numAt(r, col.credit);
+          if (deb != null && Math.abs(deb) > 0) { rows0.push({ date, description, amount: Math.abs(deb), direction: 'out', fromSign: false }); continue; }
+          if (cre != null && Math.abs(cre) > 0) { rows0.push({ date, description, amount: Math.abs(cre), direction: 'in', fromSign: false }); continue; }
+          const a = numAt(r, col.amount);
+          if (a == null || a === 0) continue;
+          signed++; if (a < 0) negatives++;
+          const ty = col.type !== -1 ? String(r[col.type] || '') : '';
+          let direction; let fromSign = false;
+          if (ty && IN_TYPE.test(ty) && !OUT_TYPE.test(ty)) direction = 'in';
+          else if (ty && OUT_TYPE.test(ty)) direction = 'out';
+          else { direction = a < 0 ? 'out' : 'in'; fromSign = true; }
+          rows0.push({ date, description, amount: Math.abs(a), direction, fromSign });
+        }
+        // A file whose amounts are all one sign carries no direction signal —
+        // the sign is a formatting choice (Amex exports spend as positive,
+        // Chase as negative). Read the descriptor instead; anything wrong is
+        // one click to flip in the staging table.
+        if (signed > 0 && (negatives === 0 || negatives === signed)) {
+          for (const r of rows0) if (r.fromSign) r.direction = INCOME_RE.test(r.description) ? 'in' : 'out';
+        }
+        if (!rows0.length) {
+          send(res, 400, {
+            error: 'No transactions found in that CSV.',
+            detail: `Header read as: ${heads.filter(Boolean).slice(0, 12).join(' | ')}`,
+          });
+          return;
+        }
+
+        const titleCase = (s) => s.replace(/[\w'’]+/g, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase());
+        // Only used when the model pass is unavailable — a best-effort scrub of
+        // auth numbers, gateway prefixes and the trailing state code, so the
+        // ledger still groups on something readable instead of "SQ *…4471".
+        const scrub = (d) => {
+          const t = d
+            .replace(/\b\d{3,}\b/g, ' ')
+            .replace(/[^A-Za-z0-9&'’ ]+/g, ' ')
+            .replace(/\s+[A-Z]{2}\s*$/, ' ')
+            .replace(/\s{2,}/g, ' ')
+            .trim();
+          return titleCase(t).slice(0, 60) || d.slice(0, 60);
+        };
+
+        const distinct = [...new Set(rows0.map((r) => r.description))];
+        const enrich = new Map();
+        let warning = null;
+        if (!process.env.ANTHROPIC_API_KEY) {
+          warning = 'Imported without merchant/category matching — ANTHROPIC_API_KEY is not configured on the server.';
+        } else {
+          const CSV_SYSTEM = `You normalize bank-statement descriptors and file them into categories.
+Return ONLY a JSON array. No prose, no code fences, no explanation.
+
+Each element:
+{"description":string,"merchant":string,"categoryId":number|null,"categoryGuess":string,"recurring":boolean}
+
+Rules:
+- description: echo the input line back EXACTLY, character for character. It is the join key — if you alter it the row is dropped.
+- merchant: the NORMALIZED brand behind the descriptor, Title Case, no location, no store number, no punctuation noise. This is what gets grouped, so identical vendors MUST produce byte-identical merchant strings.
+  "AMZN MKTP US*2K4TR91Q3" -> "Amazon"
+  "SQ *BLUE BOTTLE COFFE 4471" -> "Blue Bottle Coffee"
+  "TST* THE LOCAL 88 RALEIGH NC" -> "The Local"
+  "NETFLIX.COM 866-579-7172 CA" -> "Netflix"
+  "SHELL OIL 57444120209" -> "Shell"
+  "PAYPAL *SPOTIFYUSA" -> "Spotify"
+- categoryId: pick the single best match from the caller's category list below and return its numeric id. If nothing fits, return null.
+- categoryGuess: a short 1-3 word category name you would use (e.g. "Groceries", "Dining", "Subscriptions"). Always fill this in, even when categoryId is set.
+- recurring: true when the descriptor looks like a subscription or fixed recurring bill (streaming, software, gym, insurance, phone, rent, loan payment). Otherwise false.
+- Return exactly one element per input line, in the same order. Never merge, split, reorder or invent lines.
+
+The caller's existing categories:
+${catList}`;
+          const BATCH = 120;
+          const batches = [];
+          for (let i = 0; i < distinct.length; i += BATCH) batches.push(distinct.slice(i, i + BATCH));
+          const runBatch = async (lines) => {
+            try {
+              const rr = await fetch(ANTHROPIC_URL, {
+                method: 'POST',
+                headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+                body: JSON.stringify({
+                  model: CSV_MODEL, max_tokens: 8000, system: CSV_SYSTEM,
+                  messages: [{ role: 'user', content: `Descriptors (one per line):\n${lines.join('\n')}\n\nReturn only the JSON array.` }],
+                }),
+              });
+              if (!rr.ok) return [];
+              const p = await rr.json();
+              const t = p?.content?.map((c) => (c?.type === 'text' ? c.text : '')).join('') ?? '';
+              const s = t.indexOf('['); const e = t.lastIndexOf(']');
+              if (s === -1 || e <= s) return [];
+              const arr = JSON.parse(t.slice(s, e + 1));
+              return Array.isArray(arr) ? arr : [];
+            } catch { return []; }
+          };
+          // Three at a time: enough to keep a 900-row import quick, far enough
+          // under the account rate limit that a big file does not 429 itself.
+          for (let i = 0; i < batches.length; i += 3) {
+            const chunk = await Promise.all(batches.slice(i, i + 3).map(runBatch));
+            for (const arr of chunk) {
+              for (const x of arr) {
+                const key = String(x?.description ?? '');
+                if (!key) continue;
+                enrich.set(key, {
+                  merchant: String(x?.merchant ?? '').slice(0, 60),
+                  categoryId: Number(x?.categoryId),
+                  categoryGuess: String(x?.categoryGuess ?? '').slice(0, 40),
+                  recurring: x?.recurring === true,
+                });
+              }
+            }
+          }
+          if (!enrich.size) warning = 'Merchant and category matching was unavailable — rows imported with their raw descriptions.';
+          else if (enrich.size < distinct.length) warning = `${distinct.length - enrich.size} descriptor(s) could not be matched to a category — set those by hand below.`;
+        }
+
+        const validCsvIds = new Set(cats.map((c) => c.id));
+        const csvRows = rows0.map((r) => {
+          const e = enrich.get(r.description);
+          const catId = Number(e?.categoryId);
+          return {
+            date: r.date,
+            description: r.description,
+            merchant: (e?.merchant || scrub(r.description)).slice(0, 60) || r.description.slice(0, 60),
+            amount: r.amount,
+            direction: r.direction,
+            categoryId: validCsvIds.has(catId) ? catId : null,
+            categoryGuess: String(e?.categoryGuess ?? '').slice(0, 40),
+            recurring: e?.recurring === true,
+          };
+        });
+
+        send(res, 200, {
+          rows: csvRows,
+          count: csvRows.length,
+          source: 'csv',
+          warning,
+          model: enrich.size ? CSV_MODEL : null,
+          columns: {
+            delimiter: delim === '\t' ? 'tab' : delim,
+            headerRow: headRow + 1,
+            date: heads[col.date] ?? null,
+            description: col.desc === -1 ? null : heads[col.desc],
+            amount: col.amount === -1 ? null : heads[col.amount],
+            debit: col.debit === -1 ? null : heads[col.debit],
+            credit: col.credit === -1 ? null : heads[col.credit],
+          },
+        });
+        return;
+      }
 
       const SYSTEM = `You extract transactions from a bank or credit-card statement and file them.
 Return ONLY a JSON array. No prose, no code fences, no explanation.

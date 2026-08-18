@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-08-18 - Budget → Real Month: CSV statement import
+
+Edited: `server-v2/api-router.js` (`/api/budget/parse-statement`),
+`owner-vite/src/pages/budget/RealMonth.tsx`.
+
+The import card on **owner.cbedge.net → Budget → Real Month** now takes a bank
+or credit-card **CSV** alongside the existing PDF / screenshot paths. Same
+staging table, same Save — nothing about where the rows land changed, and they
+still go only to `budget_statement_tx` (Payments and Overview untouched).
+
+**The numbers are not sent to a model.** A CSV already has the columns, so the
+server parses them: RFC4180 splitter (quotes, embedded commas, embedded
+newlines), delimiter sniffing across `, ; tab |`, header-row detection that
+skips the account-name/date-range preamble banks put on top, and column mapping
+by pattern (`transaction date` preferred over `post date`, any header containing
+`balance` excluded so a running-balance column can never import as spend).
+Amounts handle `$`, thousands separators, `(12.34)` accounting negatives and the
+EU `1.234,56` form; dates handle ISO, `MM/DD/YYYY`, `DD-Aug-2026` and
+`Aug 12, 2026`, with `MM/DD` assumed and flipped only when impossible.
+
+Direction comes from a debit/credit column pair when present, else a `Type`
+column, else the sign. A file whose amounts are **all one sign** carries no
+direction signal (Amex exports spend positive, Chase negative), so those rows
+fall back to reading the descriptor — and the staging header gained a
+**"Flip all in/out"** button for when that reading comes out backwards.
+
+Claude is used for the two things a CSV genuinely lacks — merchant
+normalization and category matching — and only over the **distinct** descriptors,
+batched 120 at a time, 3 batches in flight, on Haiku. A 900-row export is a
+couple of small calls instead of one enormous one. `ANTHROPIC_API_KEY` is no
+longer required for this route: without it the CSV still imports, with a scrubbed
+merchant, no category, and a warning on the notice line. PDF and image still
+require the key and still 500 without it.
+
+Client: `.csv`/`.tsv` accepted by extension (Excel hands them over as
+`application/vnd.ms-excel`, and a drag can supply no MIME type at all), error
+text now surfaces the server's `detail` — which reports the header row it
+actually read, the whole diagnosis when a column map misses.
+
 ## 2026-08-18 - ThetaData sweep: every dead code path removed from server-v2
 
 Edited: `server-v2/proxy-tastytrade.js`, `server-with-proxy.js`, `api-router.js`,
