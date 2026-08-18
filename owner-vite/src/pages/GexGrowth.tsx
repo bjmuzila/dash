@@ -333,6 +333,8 @@ type Analysis = {
   callWall: Wall; putWall: Wall;
   flipNow: number | null; flipPrev: number | null;
   crossingsNow: number;
+  /** Every strike the same sign. NOT the same claim as "no zero crossing". */
+  oneSided: boolean;
   /** Signed points from spot to the flip. Positive = spot is above it. */
   cushionNow: number | null; cushionPrev: number | null;
   /** Ranked by |Δ|, already band-filtered. */
@@ -355,6 +357,12 @@ function analyzeLadder(rows: ChangeRow[], spot: number | null, band: Band, hasPr
   }
   const deltaNet = netTotal - prevTotal;
 
+  // A ladder can be mixed-sign at every rung and still never have its RUNNING
+  // TOTAL reach zero — a deeply short book with fat call strikes does exactly
+  // that. Tracked separately because the flip tile has to explain which of the
+  // two situations it is in, and conflating them prints a claim the movers list
+  // three inches below visibly contradicts.
+  const signs = new Set(rows.filter((r) => r.netGex !== 0).map((r) => Math.sign(r.netGex)));
   const crossNow = zeroCrossings(rows, (r) => r.netGex);
   const crossPrev = hasPrior ? zeroCrossings(rows, (r) => r.prevNetGex) : [];
   const anchor = spot ?? (rows.length ? rows[Math.floor(rows.length / 2)].strike : 0);
@@ -386,6 +394,7 @@ function analyzeLadder(rows: ChangeRow[], spot: number | null, band: Band, hasPr
     putWall: spot == null ? null : findWall(rows, spot, "put"),
     flipNow, flipPrev,
     crossingsNow: crossNow.length,
+    oneSided: signs.size <= 1,
     cushionNow: flipNow == null || spot == null ? null : spot - flipNow,
     cushionPrev: flipPrev == null || spot == null ? null : spot - flipPrev,
     movers,
@@ -402,7 +411,7 @@ function analyzeLadder(rows: ChangeRow[], spot: number | null, band: Band, hasPr
  * trade call is the reader's, and a dashboard that makes it for them is wrong
  * the first time the regime is right and the tape is not.
  */
-function regimeCopy(netTotal: number, deltaNet: number, hasPrior: boolean): { word: string; line: string } {
+function regimeCopy(netTotal: number, prevTotal: number, hasPrior: boolean): { word: string; line: string } {
   const pos = netTotal > 0;
   const word = netTotal === 0 ? "FLAT" : pos ? "POSITIVE" : "NEGATIVE";
   if (!hasPrior) {
@@ -413,6 +422,23 @@ function regimeCopy(netTotal: number, deltaNet: number, hasPrior: boolean): { wo
         : "Net short gamma — dealer hedging amplifies moves.",
     };
   }
+  const deltaNet = netTotal - prevTotal;
+
+  // THE BOOK CROSSED ZERO. Checked FIRST, and it is not a bigger version of the
+  // growing/shrinking cases below — it is a different event. Dealer hedging
+  // reversed direction: it used to lean against moves and now leans into them
+  // (or the reverse). Falling through to the size wording gets this actively
+  // wrong — a book going +4.61B → −8.31B was reported as "NEGATIVE · deepening",
+  // and nothing deepens from positive.
+  if (prevTotal !== 0 && netTotal !== 0 && Math.sign(prevTotal) !== Math.sign(netTotal)) {
+    return {
+      word: `${word} · flipped from ${pos ? "short" : "long"}`,
+      line: pos
+        ? "The whole book crossed zero — short gamma at the prior close, long now. Hedging has gone from amplifying moves to damping them."
+        : "The whole book crossed zero — long gamma at the prior close, short now. Hedging has gone from damping moves to amplifying them.",
+    };
+  }
+
   const grew = pos ? deltaNet > 0 : deltaNet < 0;
   if (pos) {
     return {
@@ -450,6 +476,22 @@ const pts = (v: number) => {
   return `${v > 0 ? "+" : v < 0 ? "−" : ""}${a.toFixed(a < 1 ? 2 : a < 10 ? 1 : 0)}`;
 };
 const strikeStr = (v: number) => v.toLocaleString("en-US", { maximumFractionDigits: 2 });
+/**
+ * How much a level moved, relative to where it started.
+ *
+ * Past roughly a doubling a percentage stops being readable — a put wall going
+ * −844.9M → −4.79B printed as "−467%", which is correct and useless. Beyond 2×
+ * this switches to a multiple, which is how anyone would say it out loud.
+ * Sign-crossing moves have no meaningful ratio at all, so they get neither.
+ */
+function growthStr(prior: number, now: number): string {
+  if (prior === 0) return "";
+  if (Math.sign(prior) !== Math.sign(now) && now !== 0) return "crossed zero";
+  const mult = Math.abs(now) / Math.abs(prior);
+  if (mult >= 2) return `${mult.toFixed(1)}× deeper`;
+  if (mult > 0 && mult <= 0.5) return `${(1 / mult).toFixed(1)}× smaller`;
+  return pctStr((now - prior) / Math.abs(prior), 0);
+}
 
 const label: CSSProperties = {
   fontSize: 10, fontWeight: 800, letterSpacing: "0.1em",
@@ -504,6 +546,7 @@ function WallTile({ side, wall, hasPrior }: { side: "call" | "put"; wall: Wall; 
   // stop and re-derive what it meant. Call walls build/erode, put walls
   // deepen/lift, and the word matches the colour in both.
   const word = !hasPrior ? "no baseline" : isCall ? (grew ? "building" : "eroding") : grew ? "deepening" : "lifting";
+  const growth = hasPrior ? growthStr(wall.prior, wall.now) : "";
   const tone: "pos" | "neg" | "warn" = !hasPrior ? "warn" : grew ? (isCall ? "pos" : "warn") : isCall ? "neg" : "pos";
   return (
     <div style={tile}>
@@ -518,7 +561,7 @@ function WallTile({ side, wall, hasPrior }: { side: "call" | "put"; wall: Wall; 
           <>
             <span>was <span style={{ color: col(wall.prior) }}>{sgn(wall.prior)}</span></span>
             <span style={{ color: col(isCall ? wall.chg : -wall.chg) }}>
-              {sgn(wall.chg)}{wall.pct == null ? "" : ` · ${pctStr(wall.pct, 0)}`}
+              {sgn(wall.chg)}{growth ? ` · ${growth}` : ""}
             </span>
           </>
         ) : null}
@@ -540,7 +583,7 @@ function WallTile({ side, wall, hasPrior }: { side: "call" | "put"; wall: Wall; 
 function ReadPanel({ a, mode, hasPrior, live }: {
   a: Analysis; mode: Mode; hasPrior: boolean; live: boolean;
 }) {
-  const reg = regimeCopy(a.netTotal, a.deltaNet, hasPrior);
+  const reg = regimeCopy(a.netTotal, a.prevTotal, hasPrior);
   const regTone = a.netTotal > 0 ? POS : a.netTotal < 0 ? NEG : T.textMuted;
   const cushionShrank =
     a.cushionNow != null && a.cushionPrev != null &&
@@ -593,7 +636,9 @@ function ReadPanel({ a, mode, hasPrior, live }: {
             <>
               <div style={{ fontFamily: MONO, fontSize: 19, fontWeight: 800, marginTop: 2 }}>—</div>
               <div style={{ fontSize: 11, marginTop: 2 }}>
-                Cumulative GEX never crosses zero in this window — the whole ladder is one sign.
+                {a.oneSided
+                  ? "Every strike in this window carries gamma of one sign, so there is nothing to cross."
+                  : "Running total never reaches zero inside the recorded ±40-strike window — individual strikes do change sign, but the cumulative does not. The flip, if there is one, sits outside the window."}
               </div>
             </>
           ) : (

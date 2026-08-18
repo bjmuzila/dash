@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-08-18 - ΔGEX Board: three Read-panel bugs the first real SPY payload exposed
+
+Edited: `owner-vite/src/pages/GexGrowth.tsx`.
+
+The Read panel shipped earlier today was verified against synthetic ladders. The
+first look at live SPY (`+4.61B` at the 08-14 close, `−8.31B` on 08-17) broke
+three things at once. All three were WORDING that contradicted the data beside
+it — the arithmetic was right throughout.
+
+1. **A whole-book sign flip was reported as "deepening."** `regimeCopy` keyed on
+   the sign of the Δ, so a book crossing zero fell through to the size wording:
+   SPY read `NEGATIVE · deepening` when it had gone from long gamma to short.
+   Nothing deepens from positive. A flip is now checked FIRST and gets its own
+   copy — `NEGATIVE · flipped from long`, with a line naming the reversal —
+   because it is a different event, not a bigger version of the same one. The
+   function now takes `prevTotal` rather than `deltaNet`, since the flip test
+   needs both endpoints.
+2. **The gamma-flip tile asserted something the movers list disproved.** With no
+   zero crossing it printed "the whole ladder is one sign," three inches above a
+   list showing `776 +3.83B` and `772 −4.79B`. "The running total never reaches
+   zero" and "every rung has the same sign" are different claims and I wrote the
+   wrong one — a deeply short book with fat call strikes is exactly the case
+   where they diverge. `Analysis` now carries `oneSided` and the tile picks the
+   true message, the mixed case naming the ±40-strike window as where the flip
+   probably sits.
+3. **`−467%`.** The put wall went `−844.9M → −4.79B`. Correct, unreadable. New
+   `growthStr()` switches to a multiple past 2× (`5.7× deeper`), inverts below
+   0.5× (`2.5× smaller`), and returns `crossed zero` for sign-crossing moves,
+   which have no meaningful ratio at all.
+
+Verified: 58 assertions (up from 45), including the exact SPY numbers for the
+flip case, `zero prior is not a flip`, and a mixed-sign ladder with no crossing
+asserting `oneSided === false`. `tsc --noEmit` clean, `vite build` green, page
+re-rendered against the real SPY figures with zero console errors.
+
 ## 2026-08-18 - ΔGEX Board: the Read panel — regime, walls, gamma flip and ranked movers, on live data
 
 Edited: `owner-vite/src/pages/GexGrowth.tsx`,
