@@ -55,8 +55,10 @@
  */
 
 const { MARKET_HOLIDAYS } = require('./scanner-recorder');
-const { useTheta } = require('./config/data-source');
-const dailyAdapter = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
+// ThetaData was removed 2026-08-18 (see config/data-source.js). tt-snapshot is
+// TastyTrade REST and is now the only options provider; it is a drop-in with
+// the same *Theta-suffixed signatures, which is why those names survive here.
+const dailyAdapter = require('./tt-snapshot');
 
 const LEVEL_TYPES = ['call_wall', 'put_wall', 'cb'];
 

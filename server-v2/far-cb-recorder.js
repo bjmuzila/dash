@@ -37,10 +37,12 @@
  */
 
 const { computeGexRows } = require('./computation/gex-calculator');
-const { useTheta } = require('./config/data-source');
-// Option data source follows the SAME DATA_SOURCE flag as the main feed:
-// Theta when on, TastyTrade REST (tt-snapshot) when the subscription is paused.
-const _optSrc = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
+// Option data source. ThetaData was removed 2026-08-18 (see
+// config/data-source.js); tt-snapshot is TastyTrade REST and is now the only
+// provider. The *Theta-suffixed export names are kept because tt-snapshot is a
+// drop-in with the same signatures — renaming them would touch every recorder
+// for no behaviour change.
+const _optSrc = require('./tt-snapshot');
 const {
   fetchChainTheta,
   fetchGreeksTheta,
@@ -52,33 +54,18 @@ const {
 const { getActiveRoster } = require('./far-cb-tickers');
 const { fetchStockDailyHistoryTheta, fetchIndexDailyHistoryTheta } = _optSrc;
 
-// Per-contract EOD history is the ONE leg tt-snapshot cannot serve: with
-// DATA_SOURCE=tt its fetchOptionDailyHistoryTheta is a warn-once stub that
-// returns []. Every `.catch(() => [])` around it then swallowed the emptiness,
-// which is why the tracked-row popup rendered SPOT fine (Yahoo daily) and every
-// CONTRACT cell as "—". Theta's Terminal is a sibling container that runs
-// regardless of DATA_SOURCE — server-with-proxy.js already imports this module
-// ungated for the flow drawer — so ask Theta DIRECTLY for contract bars and
-// treat a dead Terminal as "no bars" rather than routing through the stub.
-const _thetaHist = require('./proxy-thetadata');
-// Circuit breaker: with the Terminal paused every call would burn its retry
-// budget before failing, and /proxy/far-cb-outcomes makes one per tracked row.
-// After a failure, stop asking for THETA_COOLDOWN_MS and serve the probe.
-const THETA_COOLDOWN_MS = 10 * 60_000;
-let _thetaDownUntil = 0;
-
-async function fetchContractDailyBars(symbol, expiry, strike, type, fromDate, toDate, strikeRange) {
-  if (Date.now() < _thetaDownUntil) return [];
-  try {
-    const bars = await _thetaHist.fetchOptionDailyHistoryTheta(
-      symbol, expiry, Number(strike), type, fromDate, toDate, strikeRange
-    );
-    return Array.isArray(bars) ? bars : [];
-  } catch (e) {
-    _thetaDownUntil = Date.now() + THETA_COOLDOWN_MS;
-    console.warn(`[far-cb] Theta contract EOD unavailable (${e.message}) — using the recorded daily probe for the next ${Math.round(THETA_COOLDOWN_MS / 60000)}m`);
-    return [];
-  }
+// Per-contract EOD history was the ONE leg TastyTrade cannot serve, so this
+// used to call ThetaData directly (ungated, behind a 10-minute circuit breaker)
+// even when DATA_SOURCE was tt.
+//
+// ThetaData is gone (2026-08-18) and so is that path. It had already been
+// returning [] in practice — the breaker trips on the first failure — and
+// dxLink is the better source anyway: fetchContractDailyBarsDx below replays
+// the contract's own session bars with real OHLC + volume, verified 2026-08-11,
+// rather than a single vendor EOD close. Callers already treat [] as "no bars"
+// and fall back to the recorded daily probe.
+async function fetchContractDailyBars() {
+  return [];
 }
 
 // dxLink IS entitled for option Candle history on this account — verified

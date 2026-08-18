@@ -22,6 +22,10 @@ const Em           = lazy(() => import('@/components/pages/Em'))
 // components/pages wrapper.
 const Levels       = lazy(() => import('@/app/levels/page'))
 const Flow         = lazy(() => import('@/components/pages/Flow'))
+// /board — the near-black card board. Same DashGrid machinery as the Options
+// board (drag/resize/add/remove, layout saved per user), on a page-scoped
+// palette that is deliberately NOT homeTheme while the look is being trialled.
+const Board        = lazy(() => import('@/components/pages/Board'))
 const EsCandles    = lazy(() => import('@/components/pages/EsCandles'))
 const Scanner      = lazy(() => import('@/components/pages/Scanner'))
 const Ict          = lazy(() => import('@/components/pages/Ict'))
@@ -74,6 +78,7 @@ export default function App() {
               <Route path="/levels" element={S(<Levels />)} />
               <Route path="/em" element={S(<Em />)} />
               <Route path="/flow" element={S(<Flow />)} />
+              <Route path="/board" element={S(<Board />)} />
               <Route path="/es-candles" element={S(<EsCandles />)} />
               <Route path="/scanner" element={S(<Scanner />)} />
               <Route path="/level-log" element={S(<LevelLog />)} />

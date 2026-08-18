@@ -14,3 +14,17 @@ DEPLOY_CLOUDFLARE.md
 .idea
 coverage
 tests
+
+# Big binaries that must never reach the image.
+#
+# The Dockerfile does `COPY . .`, and nothing here excluded jars — so building
+# from a local working copy silently baked ~103MB of dead ThetaData jars
+# (ThetaTerminalv3.jar + lib/*.jar) into the dashboard image. A VPS build from a
+# git clone never hit it because they are gitignored, which is exactly why it
+# went unnoticed. Theta is gone now and these are dead weight either way.
+#
+# Deliberately NOT excluding *.csv or eng.traineddata: the OCR data feeds
+# /api/tpo-extract and some CSVs under data/ may be read at runtime. Excluding
+# either on a guess is how you break a route nobody tests.
+*.jar
+isolate-*.log

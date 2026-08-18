@@ -1,5 +1,158 @@
 # Changelog
 
+## 2026-08-18 - ThetaData sweep: every dead code path removed from server-v2
+
+Edited: `server-v2/proxy-tastytrade.js`, `server-with-proxy.js`, `api-router.js`,
+`config/data-source.js`, `eod-gex-recorder.js`, `far-cb-recorder.js`,
+`scanner-recorder.js`, `vol-pin-recorder.js`, `walls-reach.js`,
+`levels-engine.js`.
+To delete (`git rm`): `server-v2/proxy-thetadata.js`, `multi-flow.js`,
+`state/flow-watchdog.js`, `state/theta-restart.js`,
+`server-v2/scripts/theta-*.mjs`, `scripts/fetch-theta-bars.mjs`,
+`deploy/theta/`, `docker-compose.staging.yml`,
+`app/api/owner/theta-stats/`, `server-v2/theta-soak-2026-06-29.log`.
+
+Follows the container removal earlier today. The stack ran `DATA_SOURCE=tt` and
+`INDEX_SOURCE=dxlink`, so `useTheta()` and `useThetaIndex()` were permanently
+false in production — every edit here is a mechanical collapse of a branch under
+a known-false predicate. **Behaviour under `tt` is unchanged.**
+
+**config/data-source.js** rewritten. It was the Theta rollback switch; it now
+states the single provider. Exports `DATA_SOURCE`, `useTastytradeForOptions`,
+`INDEX_SOURCE` — `useTheta`, `useThetaIndex` and the three `THETA_*` connection
+constants are gone.
+
+**proxy-tastytrade.js** (the live feed) — 24 guard sites collapsed:
+
+- the ~100-line Theta leg in `start()`: the 5s bulk greeks REST poll, the FPSS
+  Trade+Quote+Greeks stream, the flow watchdog, MultiFlowManager, and the Theta
+  index subscription for SPX/VIX spot
+- the Theta chain build, the whole-expiry OPRA OI snapshot, the per-symbol
+  watch-quotes path, and `probeRest`'s Theta strike-resolution body
+- deleted with zero surviving callers: `_statsFromTheta`, `_refreshGreeksTheta`,
+  `_subscribeThetaFlow`, `_onThetaIndex`, `_refreshVolume`,
+  `_scheduleVolRefresh`, and the `volTimer` / `thetaStream` / `thetaGreeksTimer`
+  fields
+- `thetaAdapter.resetCalendarCache()` dropped — it was literally
+  `resetCalendarCache: () => {}` in the adapter, so removing it is equivalent
+
+**Elsewhere:** the option-history Theta fallback in `server-with-proxy.js` (it
+was already gated, and calling it under `tt` was what produced the old
+bad-gateway drawer); `/api/owner/theta-stats`; the stale `source: 'thetadata'`
+label on `/api/semi-strength`, which has been TastyTrade-only for a long time.
+The five recorders now require `tt-snapshot` directly. The `*Theta`-suffixed
+function names survive on purpose — `tt-snapshot` is a drop-in with those
+signatures, and renaming ~50 call sites for cosmetics is how you introduce a bug
+in a change that is supposed to have none.
+
+**far-cb-recorder.js** — the one ungated live Theta call. It fetched per-contract
+EOD bars behind a 10-minute circuit breaker, so in practice it had been
+returning `[]` since the Terminal died. Now returns `[]` directly; both callers
+already handle that, and the dxLink path (`fetchContractDailyBarsDx`, the
+contract's own session bars with real OHLC + volume) is the better source and
+was already wired.
+
+**A review pass caught a critical bug in this sweep before it shipped.**
+Deleting `_statsFromTheta` over-reached and took three provider-agnostic
+declarations with it — `CONTRACT_STATS_MAX_CONTRACTS`, `_statsCache`,
+`_statsInFlight`. `node --check` passes on that (an undeclared read is a runtime
+error, not a parse error), so it would have shipped. Every
+`/proxy/contract-stats` request would have thrown `ReferenceError: _statsCache
+is not defined` on the first line of `_statsForGroup`; the per-group try/catch
+turns that into `{}` with **no log line**, so every Vol / OI / IV / mark cell on
+the /flow tape would have rendered "—" silently. Restored. A second, minor slice
+also dropped `this.restOISessionKey = this.optSessionKey` mid-comment; restored
+too (the field has no readers today, but it was outside any predicate).
+
+**Verification.** `node --check` on all 10 files; a declaration-diff proving
+every removed module-level `const`/`function`/method has zero surviving
+references; a require-graph walk proving nothing outside the delete-list
+requires a deleted module; route count on `api-router.js` 40 -> 39 (exactly the
+one route); CRLF line endings preserved.
+
+**Not verified:** none of this was run. No server start, no request against the
+live feed. The changes are mechanical collapses under a predicate that was false
+in production, but the first market open after deploying is the real test.
+
+## 2026-08-18 - theta-terminal removed; it took the site down and was already unused
+
+Edited: `docker-compose.yml`, `.dockerignore`.
+To delete by hand (see the deploy notes): `deploy/theta/`,
+`docker-compose.staging.yml`, the root `*.jar` files.
+
+**What happened.** A routine deploy built cleanly — Next OK, the Vite route
+check passed, the SPA built, `bzila-dashboard:latest` built, and
+`dashboard-dashboard-1` was recreated. Then compose aborted the whole `up`:
+
+```
+Container theta-terminal Started
+Container theta-terminal Waiting
+Container theta-terminal Error dependency theta-terminal failed to start
+dependency failed to start: container theta-terminal is unhealthy
+```
+
+The dashboard never started, so the site went down over a container that has
+nothing to do with serving it.
+
+**Root cause — nothing to do with the deploy.** `deploy/theta/Dockerfile.theta`
+only ever `ADD`ed the BOOTSTRAP jar from `download-unstable.thetadata.us`. The
+bootstrap then downloaded the actual runtime jar over the network on EVERY
+container boot; nothing was cached in the image and nothing was copied from the
+repo (the comment said so outright). That download began returning 404:
+
+```
+WARN: Failed to download JAR file. HTTP error code: 404
+ERROR: Unable to contact the server to find the correct JAR file to run,
+ERROR: and there are no JAR files in the library.
+```
+
+No jar to run, no library to fall back on, crash-loop. This would have fired on
+the next restart whatever was deployed — an `unstable` channel plus a boot-time
+download plus no cached fallback is a time bomb, and the deploy just happened to
+be the thing that pulled the pin.
+
+**It was already dead weight.** The VPS runs `DATA_SOURCE=tt` and
+`INDEX_SOURCE=dxlink`, so every live path — the GEX ladder, greeks, OI, volume,
+the flow tape, `/ws/gex`, ES/NQ candles, ETF candles, spot — comes from
+TastyTrade + dxLink. `server-v2/tt-snapshot.js` is the drop-in that made that
+switch and is what has actually been serving all of it. ES/NQ candles never had
+a Theta path at all.
+
+**Changes**
+
+- Removed the `theta-terminal` service, replaced in place by a comment saying
+  why and what to do differently if it ever comes back.
+- Removed `dashboard.depends_on: theta-terminal: condition: service_healthy`.
+  That gate existed to kill a cold-start race ("Feed failed to start: fetch
+  failed" -> spot:0), but the race is already handled in code —
+  `server-with-proxy.js:3588-3605` retries feed start forever with backoff
+  (2s -> 30s cap) and its comment literally says "Theta will come up". The gate
+  was belt-and-braces that became a single point of failure. **`docker-proxy` is
+  untouched.**
+- `.dockerignore` now excludes `*.jar`. The Dockerfile does `COPY . .` and
+  nothing excluded jars, so building from a local working copy silently baked
+  ~103MB of dead ThetaData jars into the dashboard image. VPS builds from a git
+  clone never hit it (they're gitignored), which is exactly why it went
+  unnoticed. Deliberately NOT excluding `*.csv` or `eng.traineddata` — the OCR
+  data feeds `/api/tpo-extract` and some CSVs may be read at runtime.
+
+**Deliberately left alone.** Everything else degrades on its own and did not
+need touching the same hour the site was down:
+
+- `far-cb-recorder.js:63-82` — the only ungated live Theta call. Its circuit
+  breaker returns `[]` after one failure and stops asking for 10 min; the dxLink
+  backfill at `:84-91` is already the preferred path.
+- `/api/owner/theta-stats` (`api-router.js:3120-3156`) — owner-only container
+  metrics tile, will 500.
+- `state/flow-watchdog.js` / `state/theta-restart.js` — only started under
+  `useTheta()`, so already inert under `tt`.
+
+Worth doing later as a clean sweep, not under pressure.
+
+**Cost of the removal:** the documented one-env-var `DATA_SOURCE=theta` rollback
+lever is gone for good. Everything behind `useTheta()` (Theta FPSS flow stream,
+bulk greeks poll, Theta OI/volume, `INDEX_SOURCE=theta`) is now unreachable.
+
 ## 2026-08-17 - Overlay settings really do stick now (they didn't across a chart-count switch)
 
 Edited: `components/dashboard/es-candles/slotStore.ts`,

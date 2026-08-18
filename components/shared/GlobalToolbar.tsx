@@ -327,6 +327,10 @@ const NAV_ITEMS: NavItem[] = [
   // read across 169 tickers instead of four.
   { href: "/levels",            label: "Levels",        emoji: "🧱" },
   { href: "/traders-dashboard", label: "Traders Dash",  emoji: "📊" },
+  // Board — the customizable card board (drag/resize/add/remove, layout saved
+  // per user). Sits next to Traders Dash because it is the same overview
+  // material, arranged by the user instead of fixed.
+  { href: "/board",             label: "Board",         emoji: "🧩" },
   { href: "/options-chain",     label: "Options Chain", emoji: "⛓️" },
   { href: "/em",                label: "Est. Moves",    emoji: "↔️" },
   { href: "/analytics",         label: "Analysis",      emoji: "📈" },

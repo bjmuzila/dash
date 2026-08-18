@@ -37,8 +37,6 @@ const { getFlowGexHistoryWindow } = require('./state/flow-gex-history');
 const { startTickerWallRecorder, getWallHistory: getTickerWallHistory } = require('./state/ticker-wall-recorder');
 const { buildSnapshot, createGexWsServer, getWsBandwidth } = require('./websocket-server');
 const { TastytradeProxy, probeRest, contractStats, fetchChainFull, fetchExpirations, fetchOptionMarks, fetchUnderlyingQuotes, fetchUnderlyingDayOhlc, fetchDailyHistory } = require('./proxy-tastytrade');
-const { fetchOptionDailyHistoryTheta, fetchOptionIntradayTheta } = require('./proxy-thetadata');
-const { useTheta } = require('./config/data-source');
 const { etEpochMs } = require('./computation/utils');
 // Optional feature modules — loaded defensively so a missing or broken file can
 // NEVER take down the whole origin on boot. A hard `require` that throws here
@@ -3368,19 +3366,12 @@ async function main() {
             bars = (Array.isArray(rows) ? rows : []).filter((b) => b.time >= fromMs && b.time <= toMs);
           }
 
-          // ── Fallback: ThetaData, but only when it's actually the configured
-          // provider. Calling it under DATA_SOURCE=tt is what produced the old
-          // bad-gateway drawer — the Terminal isn't necessarily even running.
-          if (!bars.length && useTheta()) {
-            // Strikes are selected by `strike_range` (dollars around that day's
-            // spot), so a far-OTM strike needs a cushion wide enough to stay
-            // inside the window — a default range would not return the contract.
-            const cushion = spot > 0 ? Math.abs(strike - spot) + spot * 0.15 : strike * 0.25;
-            bars = await fetchOptionIntradayTheta(
-              ticker, expiry, strike, type, start, interval, cushion, end,
-            );
-            source = 'theta';
-          }
+          // (A ThetaData fallback lived here for when dxLink returned nothing.
+          // It was already gated on DATA_SOURCE=theta — calling it under tt is
+          // what produced the old bad-gateway drawer, since the Terminal was not
+          // necessarily running — so it has been dead for as long as the stack
+          // has been on tt. ThetaData was removed 2026-08-18; dxLink is the only
+          // source now and an empty `bars` is reported honestly.)
 
           sendJson(res, 200, { bars, start, end, interval, spot, source, symbol: streamer, elapsedMs: Date.now() - t0 });
         } catch (e) {

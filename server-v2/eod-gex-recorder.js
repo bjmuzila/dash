@@ -50,9 +50,13 @@
 // input keeps only the last expiry per strike/side). Anything spanning more than
 // one expiration must use computeGexRowsMultiExpiry.
 const { computeGexRows, computeGexRowsMultiExpiry, totalNetGex, findGexFlip } = require('./computation/gex-calculator');
-const { useTheta } = require('./config/data-source');
-// Option data source follows the SAME DATA_SOURCE flag as the main feed:
-// Theta when on, TastyTrade REST (tt-snapshot) when the subscription is paused.
+// ThetaData was removed 2026-08-18 (see config/data-source.js). tt-snapshot is
+// TastyTrade REST and is now the only options provider; it is a drop-in with
+// the same *Theta-suffixed signatures, which is why those names survive here.
+//
+// NOTE: six of these (the *History*/Eod ones) have no TastyTrade equivalent and
+// are warn-once stubs returning empty in tt-snapshot. That was already the case
+// whenever DATA_SOURCE=tt, which is what has been running.
 const {
   fetchChainTheta,
   fetchGreeksTheta,
@@ -64,7 +68,7 @@ const {
   fetchEodHistoryTheta,
   fetchIndexEodTheta,
   fetchStockEodTheta,
-} = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
+} = require('./tt-snapshot');
 const { bsGreeks, impliedVol, yearsToExpiry, etEpochMs } = require('./computation/utils');
 
 // `exp|strike|type` key matching proxy-thetadata's keyOf()

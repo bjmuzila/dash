@@ -32,15 +32,15 @@
  * Manual fire: POST /proxy/vol-pin-run
  */
 
-const { useTheta } = require('./config/data-source');
-// Option data source follows the SAME DATA_SOURCE flag as the main feed:
-// Theta when on, TastyTrade REST (tt-snapshot) when the subscription is paused.
+// ThetaData was removed 2026-08-18 (see config/data-source.js). tt-snapshot is
+// TastyTrade REST and is now the only options provider; it is a drop-in with
+// the same *Theta-suffixed signatures, which is why those names survive here.
 const {
   fetchChainTheta,
   fetchOpenInterestTheta,
   fetchGreeksTheta,
   fetchStockQuoteTheta,
-} = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
+} = require('./tt-snapshot');
 
 // ── tunables ──────────────────────────────────────────────────────────────────
 

@@ -698,10 +698,12 @@ async function fetchWeeklyHistoryFutures(ticker, daysBack = 140) {
     .sort((a, b) => a.time - b.time);
 }
 
-// Theta weekly history. Index route for SPX/NDX, stock route for equities.
-// Futures (ESM/NQM) have no Theta feed and are handled by the dxLink path.
+// Weekly history from TastyTrade REST. Index route for SPX/NDX, stock route
+// for equities. Futures (ESM/NQM) are handled by the dxLink path.
+// (Name kept: the *Theta suffix is tt-snapshot's drop-in signature, not a
+// provider. ThetaData was removed 2026-08-18.)
 async function fetchWeeklyHistoryTheta(ticker, daysBack = 140) {
-  const theta = require('./config/data-source').useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
+  const theta = require('./tt-snapshot');
   const end = new Date();
   const start = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
   let daily;

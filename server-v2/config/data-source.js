@@ -2,65 +2,41 @@
 /**
  * server-v2/config/data-source.js
  *
- * Single source of truth for the ThetaData migration rollback flag (doc §9/§10).
+ * The options data provider. There is exactly one now: TastyTrade + dxLink.
  *
- * DATA_SOURCE selects the OPTIONS data provider only. Futures (ES/NQ candles,
- * settle, watchlist) ALWAYS stay on TastyTrade/dxLink regardless of this flag —
- * ThetaData does not sell futures data, so there is nothing to switch there.
+ * ── History ─────────────────────────────────────────────────────────────────
+ * This file used to be the ThetaData rollback switch — `DATA_SOURCE=tt|theta`
+ * plus a separate `INDEX_SOURCE=dxlink|theta` for SPX/VIX spot — so a bad Theta
+ * day could be reverted with one env change and no code rollback.
  *
- *   DATA_SOURCE=tt     (default) → options chain/OI/greeks/flow from TT + dxLink
- *   DATA_SOURCE=theta            → options chain/OI/greeks/flow from ThetaData
+ * ThetaData was removed on 2026-08-18. Its container could never build a
+ * working terminal: the image only shipped the BOOTSTRAP jar and downloaded the
+ * real runtime jar over the network at every boot, so when that download began
+ * 404ing it crash-looped — and because the dashboard had a
+ * `depends_on: theta-terminal: condition: service_healthy` gate, it took the
+ * whole site down with it. The stack had been running `DATA_SOURCE=tt` for a
+ * long time, so nothing user-visible was on the Theta path.
  *
- * Build the flag FIRST so a bad Theta day can be reverted with one env change
- * and a `docker compose up -d --force-recreate` — no code rollback.
+ * `useTastytradeForOptions()` is kept (it is imported in a few places and is now
+ * trivially true) rather than deleted, so callers reading "is TT the options
+ * provider" still read as a question with an answer.
+ *
+ * Futures (ES/NQ candles, settle, watchlist) were ALWAYS on TastyTrade/dxLink —
+ * Theta never sold futures data, so there was never anything to switch there.
  */
 
-const RAW = String(process.env.DATA_SOURCE || 'tt').trim().toLowerCase();
-const DATA_SOURCE = RAW === 'theta' ? 'theta' : 'tt';
+const DATA_SOURCE = 'tt';
+const useTastytradeForOptions = () => true;
 
-const useTheta = () => DATA_SOURCE === 'theta';
-const useTastytradeForOptions = () => DATA_SOURCE === 'tt';
+const INDEX_SOURCE = 'dxlink';
 
-// INDEX_SOURCE is a SEPARATE flag for SPX/VIX spot (indices), independent of the
-// options DATA_SOURCE. Default dxlink (real-time, free with the brokerage). Set
-// to theta only after confirming Theta Index is real-time during RTH (PRO Index
-// tier). ES futures ALWAYS stay on dxLink regardless — Theta has no futures.
-const RAW_IDX = String(process.env.INDEX_SOURCE || 'dxlink').trim().toLowerCase();
-const INDEX_SOURCE = RAW_IDX === 'theta' ? 'theta' : 'dxlink';
-const useThetaIndex = () => INDEX_SOURCE === 'theta';
-
-// ThetaData Terminal connection. Locally the Terminal binds 127.0.0.1:25503
-// (v3 REST, paths under /v3/...) and ws://127.0.0.1:25520/v1/events. On the VPS
-// the Terminal is a sibling container, so point these at the compose service
-// name (e.g. http://theta-terminal:25503) via env — never hardcode 127.0.0.1
-// once it's a separate container (doc §7).
-const THETA_BASE_URL = (process.env.THETA_BASE_URL || 'http://127.0.0.1:25503').replace(/\/+$/, '');
-const THETA_WS_URL = process.env.THETA_WS_URL || 'ws://127.0.0.1:25520/v1/events';
-const THETA_DATA_API_KEY = process.env.THETA_DATA_API_KEY || '';
-
-if (useTheta()) {
-  // eslint-disable-next-line no-console
-  console.log(`[DATA_SOURCE] options provider = THETA (base ${THETA_BASE_URL}); futures stay on TT/dxLink`);
-} else {
-  // eslint-disable-next-line no-console
-  console.log('[DATA_SOURCE] options provider = TASTYTRADE/dxLink (default)');
-}
-
-if (useThetaIndex()) {
-  // eslint-disable-next-line no-console
-  console.log('[INDEX_SOURCE] SPX/VIX spot = THETA index price stream');
-} else {
-  // eslint-disable-next-line no-console
-  console.log('[INDEX_SOURCE] SPX/VIX spot = dxLink (default)');
-}
+// eslint-disable-next-line no-console
+console.log('[DATA_SOURCE] options provider = TASTYTRADE/dxLink');
+// eslint-disable-next-line no-console
+console.log('[INDEX_SOURCE] SPX/VIX spot = dxLink');
 
 module.exports = {
   DATA_SOURCE,
-  useTheta,
   useTastytradeForOptions,
   INDEX_SOURCE,
-  useThetaIndex,
-  THETA_BASE_URL,
-  THETA_WS_URL,
-  THETA_DATA_API_KEY,
 };

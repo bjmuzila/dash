@@ -24,8 +24,10 @@
  * No-op unless SCANNER_TICKERS is set and DATABASE_URL is available.
  */
 
-const { useTheta } = require('./config/data-source');
-const thetaAdapter = useTheta() ? require('./proxy-thetadata') : require('./tt-snapshot');
+// ThetaData was removed 2026-08-18 (see config/data-source.js). tt-snapshot is
+// TastyTrade REST and is now the only options provider; it is a drop-in with
+// the same *Theta-suffixed signatures, which is why those names survive here.
+const optSrc = require('./tt-snapshot');
 const { computeGexSummary, findCallWall, findPutWall } = require('./computation/gex-calculator');
 
 const INTERVAL_MINS = Number(process.env.SCANNER_INTERVAL_MINS || 5);
@@ -202,10 +204,10 @@ function inSweepWindow() {
 async function resolveSpot(root) {
   try {
     if (INDEX_ROOTS.has(root)) {
-      const p = await thetaAdapter.fetchIndexPriceTheta(root);
+      const p = await optSrc.fetchIndexPriceTheta(root);
       return p > 0 ? p : 0;
     }
-    const getSpot = thetaAdapter.fetchStockSpotTheta || thetaAdapter.fetchStockQuoteTheta;
+    const getSpot = optSrc.fetchStockSpotTheta || optSrc.fetchStockQuoteTheta;
     const q = await getSpot(root);
     return q && q.mark > 0 ? q.mark : (q && q.last > 0 ? q.last : 0);
   } catch {
@@ -277,7 +279,7 @@ function gexAtStrike(gexRows, strike) {
  * which made a quote outage look identical to a genuinely thin chain.
  */
 async function snapshotTicker(root, { pick = null } = {}) {
-  const chain = await thetaAdapter.fetchChainTheta(root).catch(() => null);
+  const chain = await optSrc.fetchChainTheta(root).catch(() => null);
   const exps = chain?.expirations ?? [];
   // `pick` lets the forward recorder reuse this whole path for a different
   // contract. Default stays expirations[0] — the nearest, i.e. 0DTE intraday.
@@ -290,9 +292,9 @@ async function snapshotTicker(root, { pick = null } = {}) {
   // for this one root rather than dropping it.
   const [spot, expiryRows, volMap] = await Promise.all([
     resolveSpot(root),
-    thetaAdapter.buildExpiryRows(root, expiry).catch(() => []),
-    typeof thetaAdapter.fetchVolumeTheta === 'function'
-      ? thetaAdapter.fetchVolumeTheta(root, expiry).catch(() => null)
+    optSrc.buildExpiryRows(root, expiry).catch(() => []),
+    typeof optSrc.fetchVolumeTheta === 'function'
+      ? optSrc.fetchVolumeTheta(root, expiry).catch(() => null)
       : Promise.resolve(null),
   ]);
   if (!(spot > 0)) return { err: 'no-spot' };

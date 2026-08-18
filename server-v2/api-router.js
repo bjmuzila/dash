@@ -833,7 +833,7 @@ register('/api/semi-strength', {
     }
     const rthOpen = buildView('open');
     const rthOpenAvailable = benchRows.get('SMH').open != null && rthOpen.breadthTotal > 0;
-    send(res, 200, { source: 'thetadata', updatedAt: new Date().toISOString(), rthOpenAvailable, prevClose: buildView('prevClose'), rthOpen }, { 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0' });
+    send(res, 200, { source: 'tastytrade', updatedAt: new Date().toISOString(), rthOpenAvailable, prevClose: buildView('prevClose'), rthOpen }, { 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0' });
   },
 });
 
@@ -3113,49 +3113,11 @@ register('/api/premarket-movers', {
   },
 });
 
-// /api/owner/theta-stats — owner-only theta-terminal container metrics via the
-// docker-socket-proxy sidecar. Ported verbatim from app/api/owner/theta-stats/
-// route.ts; enforceAuth 'owner' replaces the getServerUserId/OWNER_USER_ID gate
-// (still fails closed).
-register('/api/owner/theta-stats', {
-  auth: 'owner', methods: ['GET'],
-  async handler(req, res) {
-    const DOCKER_PROXY_URL = (process.env.DOCKER_PROXY_URL || 'http://docker-proxy:2375').trim();
-    const CONTAINER = 'theta-terminal';
-    const cpuPercent = (s) => {
-      const cpuDelta = s.cpu_stats.cpu_usage.total_usage - s.precpu_stats.cpu_usage.total_usage;
-      const sysDelta = (s.cpu_stats.system_cpu_usage ?? 0) - (s.precpu_stats.system_cpu_usage ?? 0);
-      const cpus = s.cpu_stats.online_cpus || s.cpu_stats.cpu_usage.percpu_usage?.length || 1;
-      if (sysDelta <= 0 || cpuDelta < 0) return null;
-      return (cpuDelta / sysDelta) * cpus * 100;
-    };
-    try {
-      const [statsRes, inspectRes] = await Promise.all([
-        fetch(`${DOCKER_PROXY_URL}/containers/${CONTAINER}/stats?stream=false`, { cache: 'no-store' }),
-        fetch(`${DOCKER_PROXY_URL}/containers/${CONTAINER}/json`, { cache: 'no-store' }),
-      ]);
-      if (!statsRes.ok || !inspectRes.ok) { send(res, 502, { ok: false, error: `docker-proxy returned ${statsRes.status}/${inspectRes.status}` }); return; }
-      const stats = await statsRes.json();
-      const inspect = await inspectRes.json();
-      const memUsageRaw = stats.memory_stats.usage ?? 0;
-      const cache = stats.memory_stats.stats?.cache ?? stats.memory_stats.stats?.inactive_file ?? 0;
-      const memUsage = Math.max(memUsageRaw - cache, 0);
-      const memLimit = stats.memory_stats.limit ?? 0;
-      send(res, 200, {
-        ok: true, container: CONTAINER, cpuPercent: cpuPercent(stats),
-        memUsageBytes: memUsage, memLimitBytes: memLimit,
-        memPercent: memLimit > 0 ? (memUsage / memLimit) * 100 : null,
-        pids: stats.pids_stats?.current ?? null,
-        status: inspect.State?.Status ?? 'unknown',
-        health: inspect.State?.Health?.Status ?? null,
-        restarting: inspect.State?.Restarting ?? false,
-        oomKilled: inspect.State?.OOMKilled ?? false,
-        startedAt: inspect.State?.StartedAt ?? null,
-        fetchedAt: new Date().toISOString(),
-      });
-    } catch (err) { send(res, 500, { ok: false, error: 'theta-stats fetch failed', detail: String(err) }); }
-  },
-});
+// (/api/owner/theta-stats was removed 2026-08-18 with the theta-terminal
+// container. It reported that container's CPU/mem/health through the
+// docker-socket-proxy sidecar; with no container to inspect it could only
+// ever 502. docker-proxy itself stays — the owner page still reads other
+// containers through it.)
 
 // /api/debug-gex — legacy 501 stub (GET+POST). Ported verbatim.
 register('/api/debug-gex', {

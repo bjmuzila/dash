@@ -23,9 +23,6 @@ const WebSocket = require('ws');
 const fs = require('fs');
 const path = require('path');
 
-const { useTheta, useThetaIndex } = require('./config/data-source');
-const thetaAdapterQuotes = require('./proxy-thetadata'); // stock quotes when DATA_SOURCE=theta
-const thetaAdapter = require('./proxy-thetadata');
 const marketState = require('./state/market-state');
 const { writeGexSnapshot } = require('./gex-history-writer');
 const { writeFlowTape } = require('./state/flow-history-writer');
@@ -38,7 +35,10 @@ const { computeGexSummary } = require('./computation/gex-calculator');
 const { emptyTotals, accumulateExposureTotals } = require('./computation/vex-chex');
 const { FlowProcessor } = require('./computation/flow-processor');
 const { FlowGexAccumulator } = require('./computation/flow-gex');
-const { MultiFlowManager } = require('./multi-flow');
+// (MultiFlowManager — server-v2/multi-flow.js — streamed extra roots' option
+//  trades over the Theta FPSS stream. It was already disabled behind an
+//  `if (false && ...)` and is fully replaced by _startTtMultiFlow() below,
+//  which does the same thing over dxLink. Removed with ThetaData 2026-08-18.)
 const {
   parseOptionSymbol,
   yearsToExpiry,
@@ -253,10 +253,6 @@ const CANDLE_1M_FLUSH_MS = Number(process.env.CANDLE_1M_FLUSH_MS || 5000);
 const ES_1M_MAX_BARS = Number(process.env.ES_1M_MAX_BARS || 480);
 
 // ThetaData greeks poll cadence (DATA_SOURCE=theta only). Greeks/all is one bulk
-// REST call per poll; 5s keeps gamma fresh against spot drift without burning the
-// concurrency budget. No effect in TT mode.
-const THETA_GREEKS_MS = Number(process.env.THETA_GREEKS_MS || 5000);
-const THETA_GREEKS_MS_OFFHOURS = Number(process.env.THETA_GREEKS_MS_OFFHOURS || 60000);
 
 // ---------------------------------------------------------------------------
 // OAuth
@@ -850,237 +846,11 @@ async function probeRestTT({ ticker, expiry, type, strike }) {
   return { ...meta, found: true, status: 'ready', source: 'tt', result };
 }
 
-async function probeRest({ ticker, expiry, type, strike }) {
-  // DATA_SOURCE=tt: Theta paused -> resolve + price the probe entirely from
-  // TastyTrade REST. The Theta path below is unchanged and used when useTheta().
-  if (!useTheta()) return probeRestTT({ ticker, expiry, type, strike });
-  const reqStrike = Number(strike);
-  const root = chainTicker(ticker); // SPX, NDX, etc.
-
-  // Fetch Theta chain (for strike resolution) + TT chain (for OCC symbol → TT OI compare).
-  // Both are cached — this is typically sub-millisecond on a warm cache.
-  const [thetaChain, ttChain] = await Promise.all([
-    thetaAdapter.fetchChainTheta(root).catch(() => null),
-    getChainCached(ticker).catch(() => ({ expirations: [], contracts: [] })),
-  ]);
-
-  // Resolve nearest strike from Theta chain.
-  const thetaContracts = (thetaChain?.contracts || []).filter(
-    (c) => c.expiration === expiry && c.type === type,
-  );
-  let best = null, bestDist = Infinity;
-  for (const c of thetaContracts) {
-    const d = Math.abs(Number(c.strike) - reqStrike);
-    if (d < bestDist) { bestDist = d; best = c; }
-  }
-  if (!best) {
-    const expiryExists = (thetaChain?.expirations || []).includes(expiry);
-    return {
-      found: false,
-      status: expiryExists ? 'no-strike' : 'no-expiry',
-      source: 'theta',
-      chainTicker: root,
-      requestedStrike: Number.isFinite(reqStrike) ? reqStrike : null,
-      resolvedStrike: null,
-      availableExpirations: (thetaChain?.expirations || []).slice(0, 12),
-    };
-  }
-
-  // Find matching TT contract for its OCC symbol (needed to query TT by-type).
-  // On a monthly-expiration Friday, TT's nested chain can carry BOTH the
-  // AM-settled monthly (root-symbol "SPX") and the PM-settled weekly
-  // (root-symbol "SPXW") under the same expiration date/strike/type — filter
-  // to the root the user actually typed first, and only fall back to an
-  // unfiltered match for symbols where TT never tagged a root-symbol at all
-  // (equities, or older cache entries).
-  const wantRoot = String(ticker || '').toUpperCase().replace(/^\./, '');
-  const ttCandidates = (ttChain?.contracts || []).filter(
-    (c) => c.expiration === expiry && c.type === type &&
-           Math.abs(Number(c.strike) - best.strike) < 0.01,
-  );
-  const ttContract =
-    ttCandidates.find((c) => c.rootSymbol === wantRoot) ||
-    (ttCandidates.some((c) => c.rootSymbol) ? null : ttCandidates[0]) ||
-    null;
-  const occSymbol = ttContract?.occSymbol || null;
-  const streamerSymbol = ttContract?.streamerSymbol || `${root}_${expiry}_${type}${best.strike}`;
-
-  const meta = {
-    resolvedSymbol: streamerSymbol,
-    occSymbol,
-    snapped: Number.isFinite(reqStrike) && best.strike !== reqStrike,
-    requestedStrike: Number.isFinite(reqStrike) ? reqStrike : null,
-    resolvedStrike: best.strike,
-    source: 'theta',
-  };
-
-  const probeKey = _probeKeyOf(expiry, best.strike, type);
-
-  // Fetch all Theta snapshots + TT market-data (kept ONLY for the OI cross-
-  // check panel — quote/greeks/mark are Theta-only, see fetchQuoteTheta).
-  const [oiMap, greekMap, volMap, quoteMap, ttIt, spot] = await Promise.all([
-    thetaAdapter.fetchOpenInterestTheta(root, expiry).catch(() => new Map()),
-    thetaAdapter.fetchGreeksTheta(root, expiry).catch(() => new Map()),
-    thetaAdapter.fetchVolumeTheta(root, expiry).catch(() => new Map()),
-    thetaAdapter.fetchQuoteTheta(root, expiry).catch(() => new Map()),
-    occSymbol
-      ? ttGet(`/market-data/by-type?equity-option[]=${encodeURIComponent(occSymbol)}`)
-          .then((j) => j?.data?.items?.[0] || null)
-          .catch(() => null)
-      : Promise.resolve(null),
-    (async () => {
-      // Pre/post-market, Theta's raw cash-index snapshot is frozen at the last
-      // RTH print (SPX cash doesn't trade off-hours) while option NBBO keeps
-      // moving with the futures-implied level — that mismatch was making ITM
-      // legs look "priced below intrinsic" and killing the IV solve. Prefer
-      // the live class's spotDisplay (RTH broker spot, or ES future + cash
-      // basis off-hours — see _publishSpotDisplay), same value the rest of
-      // the dashboard shows, and only fall back to the raw Theta snapshot if
-      // spotDisplay hasn't been published yet (e.g. right after a restart).
-      const live = Number(marketState.getState().spotDisplay) || 0;
-      if (INDEX_ROOTS.has(root) && live > 0) return live;
-      try {
-        if (INDEX_ROOTS.has(root)) return await thetaAdapter.fetchIndexPriceTheta(root);
-        const q = await thetaAdapter.fetchStockQuoteTheta(root);
-        return q?.last || q?.mark || live || null;
-      } catch { return live || null; }
-    })(),
-  ]);
-
-  const thetaOI = oiMap.get(probeKey)?.oi ?? null;
-  const thetaVol = volMap.get(probeKey) ?? null;
-  const g = greekMap.get(probeKey) || {};
-  const tq = quoteMap.get(probeKey) || {};
-
-  const n = firstFiniteNumber;
-
-  // Quote: Theta's own NBBO (docs.thetadata.us/operations/option_snapshot_quote.html)
-  // — no more TT fallback here; TT is only used below for the OI cross-check.
-  const bid = n(tq.bid);
-  const ask = n(tq.ask);
-  const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : null;
-  const mark = mid;
-
-  // Black-Scholes fallback greeks — calculated for THIS contract's side
-  // (call/put), so a Theta gap never blanks delta/theta/etc: sign always
-  // matches the side being watched. Uses Theta IV when present, otherwise
-  // backs out IV from the live quote.
-  const T = yearsToExpiry(best.expiration);
-  // Theta sometimes returns a degenerate row for thin/0DTE ITM legs
-  // (delta:1, gamma/theta/vega:0, iv missing) — don't treat that as real data.
-  const thetaGreeksValid = g.iv > 0 && !(g.gamma === 0 && g.theta === 0 && g.vega === 0);
-  // Theta-only mark for the IV solve — TT is quote-source for the Quote panel
-  // only (Theta has no NBBO), never for computing greeks. g.mark comes from
-  // Theta's own greeks/all snapshot (its bid/ask mid, else its last/close) —
-  // use it if it clears intrinsic; otherwise there's no valid Theta price to
-  // solve from, so leave it null rather than borrowing a TT price.
-  const intrinsic = type === 'C' ? Math.max(spot - best.strike, 0) : Math.max(best.strike - spot, 0);
-  // Two Theta-only candidates: the greeks snapshot's own embedded mark, and
-  // the dedicated NBBO quote's mid — take whichever clears intrinsic first.
-  const markForBs = [g.mark, mid].find((v) => v > intrinsic) ?? null;
-  const ivForBs = thetaGreeksValid ? g.iv : (markForBs ? impliedVol({ price: markForBs, S: spot, K: best.strike, T, r: RISK_FREE, type }) : NaN);
-  const bsRaw = (spot > 0 && T > 0 && ivForBs > 0)
-    ? bsGreeks({ S: spot, K: best.strike, T, sigma: ivForBs, r: RISK_FREE, type })
-    : null;
-  // Normalize to conventional reporting units, same as the GEX greeks pass:
-  //   theta: per-year -> per-day (÷365); vega: per 1.00 vol -> per 1% vol (÷100).
-  // bsGreeks() returns raw annualized/unit-vol values, so leaving these unscaled
-  // makes theta/vega read ~100x-365x too large (e.g. theta -78 instead of -0.21).
-  const bs = bsRaw ? { ...bsRaw, theta: bsRaw.theta / 365, vega: bsRaw.vega / 100 } : null;
-
-  const feeds = {
-    Quote: {
-      bid,            // Theta NBBO
-      ask,            // Theta NBBO
-      mid,            // Theta NBBO
-      mark,           // Theta NBBO
-      bidSize: n(tq.bidSize),
-      askSize: n(tq.askSize),
-      _src: 'Theta NBBO',
-    },
-    Trade: {
-      // No Theta adapter for last-trade price yet (only OHLC volume) — this
-      // one field still reads TT REST until fetchVolumeTheta is extended to
-      // carry close/last from the OHLC snapshot.
-      last: n(ttIt?.last),
-      volume: thetaVol,           // Theta OHLC snapshot
-      _volumeSrc: 'Theta',
-      _src: 'TT last / Theta vol',
-    },
-    Summary: {
-      openInterest: thetaOI,      // Theta OPRA OI — authoritative
-      prevClose: n(ttIt?.['prev-close']),
-      prevCloseDate: ttIt?.['prev-close-date'] ?? null,
-      _src: 'Theta OI / TT prevClose',
-    },
-    Greeks: {
-      // Theta live greeks when available; otherwise fall back to Black-Scholes
-      // computed for THIS contract's side (call/put), so delta/theta always
-      // carry the correct sign for the side being watched rather than nulling out.
-      iv: thetaGreeksValid ? g.iv : (ivForBs > 0 ? ivForBs : null),
-      delta: thetaGreeksValid ? g.delta : (bs?.delta ?? null),
-      gamma: thetaGreeksValid ? g.gamma : (bs?.gamma ?? null),
-      theta: thetaGreeksValid ? g.theta : (bs?.theta ?? null),
-      vega: thetaGreeksValid ? g.vega : (bs?.vega ?? null),
-      _src: thetaGreeksValid ? 'Theta' : 'Black-Scholes (calculated, this side)',
-      // Pure Black-Scholes values (never Theta-live), for consumers that want
-      // the BS-calculated greeks specifically regardless of Theta coverage
-      // (e.g. the Watch tracker) — same ivForBs basis used for `bs` above.
-      bsIv: ivForBs > 0 ? ivForBs : null,
-      bsDelta: bs?.delta ?? null,
-      bsGamma: bs?.gamma ?? null,
-      bsTheta: bs?.theta ?? null,
-      bsVega: bs?.vega ?? null,
-    },
-  };
-
-  // Exposures use Theta OI + Theta greeks + Theta spot.
-  const isCall = type === 'C';
-  const sign = isCall ? 1 : -1;
-  const oi = thetaOI;
-  const vol = thetaVol;
-  // Use the same validated greeks as the Greeks panel (thetaGreeksValid), not
-  // raw g.* — otherwise a degenerate Theta row zeroes GEX/DEX/VEX even though
-  // the panel above is showing the BS fallback values.
-  const eGamma = thetaGreeksValid ? g.gamma : (bs?.gamma ?? 0);
-  const eDelta = thetaGreeksValid ? g.delta : (bs?.delta ?? 0);
-  const eVega = thetaGreeksValid ? g.vega : (bs?.vega ?? 0);
-  const eTheta = thetaGreeksValid ? g.theta : (bs?.theta ?? 0);
-  const exposures = (spot > 0 && oi != null)
-    ? {
-        spot,
-        oi,
-        volume: vol,
-        gex: sign * Math.abs(eGamma || 0) * oi * spot * spot,
-        gexVol: sign * Math.abs(eGamma || 0) * (vol || 0) * spot * spot,
-        dex: sign * Math.abs(eDelta || 0) * oi * 100 * spot,
-        vex: sign * (eVega || 0) * oi * 100 * spot,
-        thetaExp: sign * (eTheta || 0) * oi * 100 * spot,
-        vannaExp: bs ? sign * (bs.vanna / 100) * oi * 100 * spot : null,
-        charmExp: bs ? sign * (bs.charm / 365) * oi * 100 * spot : null,
-      }
-    : { spot, oi, volume: vol, gex: null, gexVol: null, dex: null, vex: null, thetaExp: null, vannaExp: null, charmExp: null };
-
-  // OI cross-check: Theta OPRA (authoritative) vs TT REST.
-  const ttOI = n(ttIt?.['open-interest']) || null;
-  let oiCompare = null;
-  if (thetaOI != null && ttOI != null) {
-    const diff = thetaOI - ttOI;
-    const pctDiff = ttOI !== 0 ? (diff / ttOI) * 100 : null;
-    oiCompare = { ok: true, match: true, theta: thetaOI, tt: ttOI, diff, pctDiff };
-  } else {
-    oiCompare = { ok: true, match: false, theta: thetaOI, tt: ttOI };
-  }
-
-  const result = {
-    eventType: 'THETA',
-    eventSymbol: streamerSymbol,
-    occSymbol,
-    feeds,
-    exposures,
-    oiCompare,
-  };
-  return { ...meta, found: true, status: 'ready', source: 'theta', result };
+// Probe a single contract. ThetaData was removed 2026-08-18, so this is now
+// purely the TastyTrade REST path it already delegated to under DATA_SOURCE=tt
+// (the Theta strike-resolution + OI-compare body that followed went with it).
+async function probeRest(args) {
+  return probeRestTT(args);
 }
 
 // ---------------------------------------------------------------------------
@@ -1109,37 +879,6 @@ const CONTRACT_STATS_MAX_CONTRACTS = 800;
 
 const _statsCache = new Map();    // `${root}|${expiry}` -> { at, byKey }
 const _statsInFlight = new Map(); // `${root}|${expiry}` -> Promise<byKey>
-
-// --- Theta snapshot path (DATA_SOURCE=theta) --------------------------------
-async function _statsFromTheta(root, expiry) {
-  const [oiMap, greekMap, volMap] = await Promise.all([
-    thetaAdapter.fetchOpenInterestTheta(root, expiry).catch(() => new Map()),
-    thetaAdapter.fetchGreeksTheta(root, expiry).catch(() => new Map()),
-    thetaAdapter.fetchVolumeTheta(root, expiry).catch(() => new Map()),
-  ]);
-
-  // Union the three maps' keys: a contract can have volume but no greeks yet
-  // (pre-open), or OI but no trades today. Missing legs stay null rather than
-  // 0 so the UI can render "—" instead of a misleading zero.
-  const byKey = {};
-  const keys = new Set([...oiMap.keys(), ...greekMap.keys(), ...volMap.keys()]);
-  for (const k of keys) {
-    // Theta keys are `exp|strike|type` — same shape _probeKeyOf builds.
-    const [, strike, type] = String(k).split('|');
-    const g = greekMap.get(k) || {};
-    const oi = oiMap.get(k)?.oi;
-    const vol = volMap.get(k);
-    byKey[`${strike}|${type}`] = {
-      vol: Number.isFinite(vol) ? vol : null,
-      oi: Number.isFinite(oi) ? oi : null,
-      // Theta reports IV as a decimal (0.184). Keep it decimal here; the UI
-      // owns the ×100 so the API stays unit-consistent with greeks.
-      iv: Number.isFinite(g.iv) && g.iv > 0 ? g.iv : null,
-      mark: Number.isFinite(g.mark) && g.mark > 0 ? g.mark : null,
-    };
-  }
-  return byKey;
-}
 
 // --- TastyTrade REST path (DATA_SOURCE=tt, i.e. Theta paused) ---------------
 // The Theta path above is the ONLY source this endpoint had, so with Theta
@@ -1207,18 +946,9 @@ async function _statsForGroup(root, expiry) {
   if (inFlight) return inFlight;
 
   const p = (async () => {
-    // Source follows DATA_SOURCE. Either way, an EMPTY result falls through to
-    // the other provider — a paused/rate-limited upstream must not silently
-    // blank the tape when the other one still has the numbers.
-    let byKey = useTheta()
-      ? await _statsFromTheta(root, expiry).catch(() => ({}))
-      : await _statsFromTT(root, expiry).catch(() => ({}));
-
-    if (!Object.keys(byKey).length) {
-      byKey = useTheta()
-        ? await _statsFromTT(root, expiry).catch(() => ({}))
-        : await _statsFromTheta(root, expiry).catch(() => ({}));
-    }
+    // TastyTrade is the only provider since ThetaData was removed 2026-08-18.
+    // This used to try the configured source and fall back to the other one.
+    const byKey = await _statsFromTT(root, expiry).catch(() => ({}));
 
     // Never cache an empty map for the full TTL — that pins "—" on the tape for
     // 20s after a single upstream hiccup. Let the next poll retry instead.
@@ -1362,30 +1092,10 @@ async function fetchUnderlyingQuotes(symbols) {
     }
   };
 
-  // Equities: Theta when DATA_SOURCE=theta (per-symbol snapshot, TT fallback on
-  // miss); else the TT by-type batch. Indices + futures unchanged below.
+  // Equities: the TT by-type batch. (A per-symbol Theta snapshot path with a
+  // batched TT fallback sat here until ThetaData was removed 2026-08-18.)
   const eqBack = new Map(equities.map((e) => [e, e]));
-  if (useTheta()) {
-    // Collect misses and fall back in ONE batched TT call. Doing it per symbol
-    // meant a wide watchlist (the ~100-name movers universe) could fan out to
-    // 100 individual TT requests whenever Theta was gated.
-    const misses = [];
-    await Promise.all([...eqBack.keys()].map(async (e) => {
-      try {
-        const q = await thetaAdapterQuotes.fetchStockQuoteTheta(e);
-        if (q) { out.set(e, q); return; }
-      } catch (err) {
-        console.warn('[WATCH-QUOTES][theta]', e, String(err.message).slice(0, 120));
-      }
-      misses.push(e);
-    }));
-    if (misses.length) {
-      console.warn(`[WATCH-QUOTES][theta] ${misses.length}/${eqBack.size} miss → TT fallback`);
-      await batchParam('equity', misses, (v) => v);
-    }
-  } else {
-    await batchParam('equity', [...eqBack.keys()], (v) => v);
-  }
+  await batchParam('equity', [...eqBack.keys()], (v) => v);
   // Build index original-symbol map (root → first original that produced it).
   const idxOriginals = new Map();
   for (const sym of list) {
@@ -2362,7 +2072,6 @@ class TastytradeProxy {
     this.sessionPutPremium  = 0;   // cumulative put  premium for today's RTH session
     this.premiumLastPost = 0;      // epoch ms of last /api/snapshots/premium POST
     this.oiTimer = null;
-    this.volTimer = null;
     this.flowTimer = null;
     this.premiumTimer = null;
     this.idle = (() => {
@@ -2541,21 +2250,7 @@ class TastytradeProxy {
     // mode the option contracts are NOT subscribed to dxLink (see _resubscribe);
     // dxLink carries only spot + ES/NQ candles. TT chain is the default path.
     let expirations; let contracts;
-    if (useTheta()) {
-      const tc = await thetaAdapterQuotes.fetchChainTheta(SYMBOL);
-      expirations = tc.expirations;
-      contracts = tc.contracts.map((c) => ({
-        ...c,
-        streamerSymbol: thetaAdapterQuotes.streamerSymbolFromContract({
-          root: tc.root, expiration: thetaAdapterQuotes.toThetaStreamExp(c.expiration),
-          strike: c.strike, right: c.type,
-        }),
-        occSymbol: null, // Theta has no OCC; OI/greeks match on exp|strike|type
-      }));
-      console.log(`[FEED][theta] chain built from Theta: ${contracts.length} contracts, ${expirations.length} expirations`);
-    } else {
-      ({ expirations, contracts } = await fetchChain());
-    }
+    ({ expirations, contracts } = await fetchChain());
     marketState.setState({ symbol: SYMBOL });
     // Publish only TODAY-FORWARD expirations. The raw chain still carries
     // already-expired dates, and the home GEX chart labels its picker by list
@@ -2613,7 +2308,7 @@ class TastytradeProxy {
     // near-spot chain on this SAME dxLink client and route its option trades into
     // this.flowRecord (flow_prints only). tt mode only — theta owns option flow
     // under useTheta(). Re-runs on reconnect because it lives in the bring-up.
-    if (!useTheta() && this.flowRecord) {
+    if (this.flowRecord) {
       this._startFlowRecord().catch((e) =>
         console.warn('[FLOW-RECORD] start failed:', String(e?.message || e).slice(0, 160)));
     }
@@ -2626,7 +2321,7 @@ class TastytradeProxy {
     // streamerSymbol root, same as SPX). tt mode only — under useTheta() the
     // Theta FPSS stream still owns option flow (this feature is for
     // DATA_SOURCE=tt only). Re-runs on reconnect, same as flow-record above.
-    if (!useTheta() && TT_FLOW_ENABLED) {
+    if (TT_FLOW_ENABLED) {
       this._startTtMultiFlow().catch((e) =>
         console.warn('[TT-MULTIFLOW] start failed:', String(e?.message || e).slice(0, 160)));
     }
@@ -2681,113 +2376,18 @@ class TastytradeProxy {
     // current every VOL_REFRESH_MS (default 2 min) during RTH without re-hitting OI.
     await this._refreshOI();
     this._scheduleOiRefresh();
-    this._scheduleVolRefresh(); // volume-only refresh, independent of OI gate
 
     // Seed the SPX session key now, then watch for the ~6PM ET rollover so OI +
     // volume self-refresh across the session boundary without a restart.
     this.optSessionKey = this._sessionKey();
     this._scheduleSessionRoll();
 
-    // Theta greeks: 5s bulk REST poll (_refreshGreeksTheta = one greeks/all
-    // snapshot per poll). The per-contract GREEKS stream was removed — at ~700
-    // contracts its per-change push firehose dominated JVM CPU. One bulk REST
-    // call every 5s is far cheaper and fully covers the SPX-single-symbol GEX.
-    // Seed once immediately so _recompute has data before the first poll.
-    if (useTheta()) {
-      await this._refreshGreeksTheta().catch(() => {}); // immediate seed
-
-      // Self-rescheduling greeks REST poll (replaces the per-contract stream).
-      // 5s RTH / 60s off-hours (THETA_GREEKS_MS[_OFFHOURS]).
-      clearTimeout(this.greeksTimer);
-      const scheduleGreeks = () => {
-        const ms = isOptionsRthEt() ? THETA_GREEKS_MS : THETA_GREEKS_MS_OFFHOURS;
-        this.greeksTimer = setTimeout(async () => {
-          if (!this.idle && useTheta()) await this._refreshGreeksTheta().catch(() => {});
-          scheduleGreeks();
-        }, ms);
-      };
-      scheduleGreeks();
-
-      // FPSS option Trade+Quote+Greeks stream. Trades → FlowProcessor (unchanged).
-      // Greeks → this.greeks map directly, replacing the REST poll entirely.
-      if (!this.thetaStream) {
-        this.thetaStream = new thetaAdapter.ThetaStreamClient({
-          getSpot: () => this.spot || marketState.getSpot(),
-          onTrade: (print) => {
-            // rawTape has read 0 in production despite a confirmed-live Theta
-            // firehose — log the first several raw prints reaching this
-            // handler (shape + any addPrint exception) so we can see exactly
-            // where the chain breaks instead of guessing further blind.
-            if (!this._flowPrintLogCount) this._flowPrintLogCount = 0;
-            if (this._flowPrintLogCount < 10) {
-              this._flowPrintLogCount++;
-              console.log('[FLOW_DEBUG] onTrade fired:', JSON.stringify(print));
-            }
-            try {
-              this.flow.addPrint(print);
-              // Accumulate session-level call/put premium for the sparkline card.
-              if (print.price > 0 && print.size > 0) {
-                const parsed = parseOptionSymbol(print.streamerSymbol);
-                if (parsed) {
-                  const prem = print.price * print.size * 100;
-                  if (parsed.type === 'C') this.sessionCallPremium += prem;
-                  else this.sessionPutPremium += prem;
-                } else {
-                  // Log first few parse failures to catch symbol format issues
-                  if (!this._premiumParseWarnCount) this._premiumParseWarnCount = 0;
-                  if (this._premiumParseWarnCount++ < 3) {
-                    console.warn('[premium-flow] parseOptionSymbol returned null for:', print.streamerSymbol);
-                  }
-                }
-              }
-            } catch (e) {
-              if (!this._addPrintErrCount) this._addPrintErrCount = 0;
-              if (this._addPrintErrCount++ < 5) {
-                console.error('[FLOW_DEBUG] addPrint threw:', e?.message, JSON.stringify(print));
-              }
-            }
-          },
-          onIndex: (root, price) => this._onThetaIndex(root, price),
-          onGreeks: (streamerSymbol, entry) => {
-            // Write streamed greeks directly into the same map _recompute reads.
-            // Merge with any existing entry so a partial tick (e.g. missing vega)
-            // doesn't wipe fields that arrived on an earlier tick.
-            const prev = this.greeks.get(streamerSymbol) || {};
-            this.greeks.set(streamerSymbol, { ...prev, ...entry });
-          },
-        });
-        this.thetaStream.connect();
-        // Detects the "socket open but theta-terminal wedged, no real prints"
-        // failure mode that a close/error-based reconnect can't see. See
-        // state/flow-watchdog.js.
-        require('./state/flow-watchdog').startFlowWatchdog(this.thetaStream);
-      }
-      this._subscribeThetaFlow();
-      // DISABLED: the Theta-based MultiFlowManager (server-v2/multi-flow.js)
-      // used to stream extra FLOW_TICKERS (Theta) roots' near-spot option trades here
-      // via the shared ThetaStreamClient. It is replaced by the dxLink-based
-      // _startTtMultiFlow() (see the !useTheta() branch above, TT_FLOW_ENABLED)
-      // which streams 0DTE-30DTE multi-expiry windows on the Tastytrade dxLink
-      // connection instead. Deliberately NOT started here anymore — running
-      // both simultaneously would double/conflict-write flow_prints for the
-      // same roots. If useTheta() is ever re-enabled as the primary data
-      // source for non-SPX flow, MultiFlowManager would need to be re-wired
-      // here (and TT_FLOW_ENABLED gated off for useTheta()) rather than both
-      // running at once.
-      if (false && !this.multiFlow) {
-        this.multiFlow = new MultiFlowManager({ thetaStream: this.thetaStream });
-        this.multiFlow.start().catch((e) =>
-          console.warn('[MULTIFLOW] start failed:', String(e?.message || e).slice(0, 160)));
-      }
-      // SPX/VIX spot from Theta's index price stream (separate INDEX_SOURCE flag).
-      if (useThetaIndex()) {
-        this.thetaStream.subscribeIndex('SPX');
-        this.thetaStream.subscribeIndex('VIX');
-        // Seed immediately from a REST snapshot so spot isn't 0 until the first tick.
-        thetaAdapter.fetchIndexPriceTheta('SPX').then((p) => { if (p) this._onThetaIndex('SPX', p); }).catch(() => {});
-        thetaAdapter.fetchIndexPriceTheta('VIX').then((p) => { if (p) this._onThetaIndex('VIX', p); }).catch(() => {});
-      }
-    }
+    // (The Theta leg sat here: a 5s bulk greeks REST poll, the FPSS
+    // Trade+Quote+Greeks stream, the flow watchdog, MultiFlowManager, and the
+    // Theta index subscription for SPX/VIX spot. All of it was gated on
+    // DATA_SOURCE=theta and had been dead for as long as the stack ran on tt.
+    // ThetaData removed 2026-08-18 — greeks come from dxLink Greeks events,
+    // flow from dxLink TimeAndSale, spot from the dxLink quote.)
 
     // Self-rescheduling recompute: 2s during RTH, 15s off-hours.
     // A fixed setInterval at 2s burned ~80% CPU overnight on a 1-vCPU host.
@@ -2932,7 +2532,9 @@ class TastytradeProxy {
           }
           this.sessionCallPremium = 0;
           this.sessionPutPremium  = 0;
-          thetaAdapter.resetCalendarCache(); // force re-check tomorrow's market open status
+          // (thetaAdapter.resetCalendarCache() was called here. It was a literal
+          //  no-op in proxy-thetadata — `resetCalendarCache: () => {}` — so dropping
+          //  it with ThetaData on 2026-08-18 is exactly equivalent.)
           this.warmedExpiries.clear(); // prior session's warm cache is now stale — force re-warm
           this.oiReady = false;
           this.oiPlateauHits = 0;
@@ -2957,55 +2559,17 @@ class TastytradeProxy {
     if (!active.length) return;
     let filled = 0;
 
-    // When expiry is next-day (not today's 0DTE), Theta WS won't push GREEKS —
-    // refresh via REST on every OI poll so greeks stay current.
-    if (useTheta() && this.expiry !== todayYmd().ymd) {
-      this._refreshGreeksTheta().catch(() => {});
-    }
 
-    if (useTheta()) {
-      // Theta path: one whole-expiry OPRA OI snapshot, matched to the active
-      // contracts by strike+type (Theta has no streamerSymbol/OCC). OI keyed by
-      // `exp|strike|type` from the adapter. Empty snapshot (pre-06:30 / weekend)
-      // means "no update" — DON'T overwrite a known OI with empty (preserve the
-      // existing dxFeed-era guard semantics).
-      const exp = this.expiry; // YYYY-MM-DD
-      const [oiMap, volMap] = await Promise.all([
-        thetaAdapter.fetchOpenInterestTheta(SYMBOL, exp).catch(() => new Map()),
-        thetaAdapter.fetchVolumeTheta(SYMBOL, exp).catch(() => new Map()),
-      ]);
-      if (oiMap.size === 0) {
-        // legitimate empty — keep whatever restOI we already have, recount it
-        for (const c of active) { if ((this.restOI.get(c.streamerSymbol)?.oi || 0) > 0) filled++; }
-        console.log('[OI][theta] empty snapshot (pre-06:30/closed) — preserving prior OI');
-      } else {
-        for (const c of active) {
-          const row = oiMap.get(`${exp}|${Number(c.strike)}|${c.type}`);
-          if (row && Number.isFinite(row.oi)) {
-            // Volume comes from the OHLC snapshot (volMap); fall back to any prior
-            // value when this strike isn't in the (possibly empty) volume snapshot.
-            const prev = this.restOI.get(c.streamerSymbol) || {};
-            const vol = volMap.get(`${exp}|${Number(c.strike)}|${c.type}`);
-            this.restOI.set(c.streamerSymbol, {
-              oi: row.oi,
-              volume: Number.isFinite(vol) ? vol : (prev.volume || 0),
-              mark: prev.mark || 0,
-            });
-            if (row.oi > 0) filled++;
-          } else if ((this.restOI.get(c.streamerSymbol)?.oi || 0) > 0) {
-            filled++; // strike not in snapshot but we already had OI — keep it
-          }
-        }
-      }
-    } else {
-      const occ = active.map((c) => c.occSymbol).filter(Boolean);
-      const byOcc = await fetchOpenInterest(occ);
-      for (const c of active) {
-        const m = byOcc.get(normalizeOcc(c.occSymbol));
-        if (m) {
-          this.restOI.set(c.streamerSymbol, m);
-          if (m.oi > 0) filled++;
-        }
+    // (A Theta whole-expiry OPRA OI snapshot path sat here, matched to active
+    // contracts by strike+type. ThetaData removed 2026-08-18; the TT REST path
+    // below is the only one now.)
+    const occ = active.map((c) => c.occSymbol).filter(Boolean);
+    const byOcc = await fetchOpenInterest(occ);
+    for (const c of active) {
+      const m = byOcc.get(normalizeOcc(c.occSymbol));
+      if (m) {
+        this.restOI.set(c.streamerSymbol, m);
+        if (m.oi > 0) filled++;
       }
     }
     const prevOiCoverage = this.oiCoverage;
@@ -3015,7 +2579,6 @@ class TastytradeProxy {
       this.oiReady = true;
       this.oiPlateauHits = 0;
       console.log(`[OI] coverage ${(this.oiCoverage * 100).toFixed(0)}% ≥ ${(OI_READY_RATIO * 100).toFixed(0)}% — GEX broadcast enabled`);
-      this._subscribeThetaFlow(); // subscribe now that active contracts are loaded
     } else if (!this.oiReady) {
       // Plateau: some expiries (esp. thinner ones) never reach the ratio because
       // far-OTM strikes legitimately carry no OI. Once coverage stops climbing
@@ -3030,117 +2593,15 @@ class TastytradeProxy {
       if (this.oiPlateauHits >= OI_PLATEAU_HITS) {
         this.oiReady = true;
         console.log(`[OI] coverage plateaued at ${(this.oiCoverage * 100).toFixed(0)}% (floor ${(floor * 100).toFixed(0)}% @ ${dteFromIso(this.expiry)}DTE) — GEX broadcast enabled`);
-        this._subscribeThetaFlow(); // subscribe now that active contracts are loaded
       }
     }
     console.log(`[OI] REST backfill: ${filled}/${active.length} strikes with OI`);
     // Mark the session this REST data belongs to so we don't use stale volume
     // across session boundaries.
     this.restOISessionKey = this.optSessionKey;
-    // Re-arm the Theta flow/trade subscription every poll, not just on the
-    // one-time "became ready" edge above — the active window drifts with
-    // spot, and a strike that enters the window later was never subscribed,
-    // so it carries no live volume even after the OI-side fix. subscribeActive
-    // re-sends the current leg list; safe/cheap to call repeatedly.
-    this._subscribeThetaFlow();
   }
 
-  /**
-   * Theta greeks poll (DATA_SOURCE=theta only). One whole-expiry greeks/all
-   * snapshot → fill this.greeks keyed by streamerSymbol, matched by strike+type.
-   * _recompute already PREFERS this.greeks (gk.gamma) over BS, so populating it
-   * makes Theta the primary greeks source with BS as the per-field fallback —
-   * exactly the "Theta primary, BS fallback" decision. Vanna/charm stay BS in
-   * _recompute for now (Theta has them too but wiring those is a later step).
-   * NOTE: REST greeks round to 4dp — far-OTM wing gammas may read 0; BS fallback
-   * covers those legs, so coverage/GEX don't break.
-   */
-  async _refreshGreeksTheta() {
-    if (!useTheta()) return;
-    const active = this._activeContracts();
-    if (!active.length) return;
-    const exp = this.expiry;
-    const gMap = await thetaAdapter.fetchGreeksTheta(SYMBOL, exp).catch(() => new Map());
-    if (gMap.size === 0) {
-      // Theta has no live greeks snapshot outside the cash session — expected,
-      // not an error. Stay quiet outside RTH; only log if empty DURING RTH.
-      if (isOptionsRthEt()) console.log('[GREEKS][theta] empty snapshot');
-      return;
-    }
-    let filled = 0;
-    for (const c of active) {
-      const g = gMap.get(`${exp}|${Number(c.strike)}|${c.type}`);
-      if (!g) continue;
-      // Only set fields that are finite & non-zero so a 4dp-zeroed gamma doesn't
-      // clobber the BS fallback path in _recompute (which keys off gamma!==0).
-      const entry = {
-        iv: Number.isFinite(g.iv) && g.iv > 0 ? g.iv : undefined,
-        delta: Number.isFinite(g.delta) ? g.delta : undefined,
-        gamma: Number.isFinite(g.gamma) && g.gamma !== 0 ? g.gamma : undefined,
-        theta: Number.isFinite(g.theta) ? g.theta : undefined,
-        vega: Number.isFinite(g.vega) ? g.vega : undefined,
-      };
-      this.greeks.set(c.streamerSymbol, entry);
-      if (entry.gamma !== undefined) filled++;
-      // Contract mark rides along on the greeks/all snapshot NBBO. Quote streaming
-      // is off (TRADE-only sub) so this is the only live mark source — write it
-      // into restOI (preserving oi/volume) for the strike-detail popup price.
-      if (Number.isFinite(g.mark) && g.mark > 0) {
-        const prev = this.restOI.get(c.streamerSymbol) || {};
-        this.restOI.set(c.streamerSymbol, { ...prev, mark: g.mark });
-      }
-    }
-    console.log(`[GREEKS][theta] greeks/all: ${filled}/${active.length} strikes with non-zero gamma`);
-  }
 
-  /**
-   * Subscribe the active SPXW window's contracts to the Theta Trade+Quote stream.
-   * Idempotent per contract (the stream client de-dupes via its quote cache /
-   * sub list). Called on start and whenever the active window shifts so the flow
-   * tape tracks spot. No-op unless DATA_SOURCE=theta and the stream is up.
-   */
-  _subscribeThetaFlow() {
-    if (!useTheta() || !this.thetaStream) return;
-    const root = thetaAdapter.thetaRoot(SYMBOL);
-    // Bulk mode: don't enumerate SPXW contracts — the firehose covers them. Just
-    // register SPXW in the keep-list and arm the single bulk subscription once.
-    // (subscribeBulkTrades is idempotent-safe: re-calling only re-sends the sub.)
-    if (FLOW_BULK_STREAM) {
-      this.thetaStream.addBulkRoot(root);
-      if (!this._bulkArmed) { this.thetaStream.subscribeBulkTrades(); this._bulkArmed = true; }
-      return;
-    }
-    const active = this._activeContracts();
-    if (!active.length) return;
-    // active contracts carry {strike,type,expiration}; only this expiry's legs
-    const legs = active
-      .filter((c) => c.expiration === this.expiry)
-      .map((c) => ({ strike: c.strike, type: c.type, expiration: c.expiration }));
-    this.thetaStream.subscribeActive(legs, root);
-  }
-
-  /**
-   * Theta index price tick (INDEX_SOURCE=theta). Feeds the SAME fields the dxLink
-   * Quote branch sets: SPX → this.spot (which _publishSpotDisplay + all GEX math
-   * read; cash-basis seam preserved unchanged since it keys off this.spot), VIX →
-   * aux. Indices tick only on change, so a quiet gap = unchanged; the last value
-   * persists, which is the correct interpretation (no gap-fill needed).
-   */
-  _onThetaIndex(root, price) {
-    if (!(price > 0)) return;
-    if (root === 'SPX' || root === SYMBOL) {
-      this.spot = price;
-      // marketState.spot is the field /greeks (and any other direct spot
-      // consumer) reads — push the corrected value, not the raw tick, so
-      // those pages don't independently re-freeze off-hours the same way
-      // the GEX chart did before _effectiveSpot() (see greeks-frozen-spot-
-      // crosses.md: raw setSpot() calls were the actual upstream freeze).
-      marketState.setSpot(this._effectiveSpot());
-      this._publishSpotDisplay(); // refresh display SPX + RTH cash-basis capture
-    } else if (root === 'VIX') {
-      marketState.setAux({ vix: price });
-    }
-  }
 
   /**
    * Self-rescheduling OI refresh. Polls quickly (RECOMPUTE_MS) while the chart
@@ -3166,45 +2627,10 @@ class TastytradeProxy {
     }, delay);
   }
 
-  /**
-   * Volume-only refresh (Theta mode). OI is once-daily and latched after the
-   * initial backfill — no need to re-fetch it. Volume builds intraday, so we
-   * refresh it on a separate, slower timer without touching OI at all.
-   * Only runs in Theta mode; TT mode gets volume from the dxLink Trade stream.
-   */
-  async _refreshVolume() {
-    if (!useTheta()) return;
-    const active = this._activeContracts();
-    if (!active.length) return;
-    const exp = this.expiry;
-    const volMap = await thetaAdapter.fetchVolumeTheta(SYMBOL, exp).catch(() => new Map());
-    if (!volMap.size) return; // pre-open / empty — leave existing volume untouched
-    let updated = 0;
-    for (const c of active) {
-      const vol = volMap.get(`${exp}|${Number(c.strike)}|${c.type}`);
-      if (Number.isFinite(vol)) {
-        const prev = this.restOI.get(c.streamerSymbol) || {};
-        this.restOI.set(c.streamerSymbol, { ...prev, volume: vol });
-        updated++;
-      }
-    }
-    if (updated) console.log(`[VOL][theta] refreshed volume for ${updated}/${active.length} strikes`);
-  }
-
-  /** Self-rescheduling volume refresh. FIX 2026-07-06: no longer gated to any
-   *  equity-style RTH window — SPX/SPXW run on Cboe Global Trading Hours
-   *  (~Sun 8pm ET through Fri 4:15pm ET, nearly 24x5), not the 9:30-16:00/16:15
-   *  single-name options session. fetchVolumeTheta's own empty-response
-   *  handling already covers the brief daily maintenance gap. Pauses when idle. */
-  _scheduleVolRefresh() {
-    if (this.volTimer) { clearTimeout(this.volTimer); this.volTimer = null; }
-    this.volTimer = setTimeout(async () => {
-      if (!this.idle) {
-        try { await this._refreshVolume(); } catch {}
-      }
-      this._scheduleVolRefresh();
-    }, VOL_REFRESH_MS);
-  }
+  /* (_scheduleVolRefresh / _refreshVolume were the Theta whole-expiry volume poll.
+     Under DATA_SOURCE=tt _refreshVolume returned immediately, so that timer had
+     been spinning on a no-op; both went with ThetaData on 2026-08-18. Contract
+     volume comes from dxLink Trade(dayVolume), cached per symbol in this.volumes.) */
 
   /** Pick contracts for the active expiry within the strike window of spot. */
   _activeContracts() {
@@ -3256,11 +2682,8 @@ class TastytradeProxy {
     if (this.esSymbol) syms.add(this.esSymbol);
     if (this.nqSymbol) syms.add(this.nqSymbol);
     // In theta mode the option streamerSymbols are SYNTHETIC (not real dxLink
-    // symbols) and option data comes from Theta — never subscribe them to dxLink.
-    // dxLink carries spot + ES/NQ candles only.
-    if (!useTheta()) {
-      for (const c of this._activeContracts()) syms.add(c.streamerSymbol);
-    }
+    // dxLink carries spot + ES/NQ candles AND the option contracts.
+    for (const c of this._activeContracts()) syms.add(c.streamerSymbol);
     this.client.subscribe([...syms]);
     marketState.setStatus({ contractsSubscribed: syms.size });
   }
@@ -3273,7 +2696,7 @@ class TastytradeProxy {
    * never throws into the recompute loop. No-op in theta mode or when disabled.
    */
   _syncTimeSaleWindow() {
-    if (!FLOW_TIMESALES || useTheta() || !this.client || !this.client.channelOpen) return;
+    if (!FLOW_TIMESALES || !this.client || !this.client.channelOpen) return;
     try {
       const spot = (this._effectiveSpot ? this._effectiveSpot() : this.spot) || marketState.getSpot() || 0;
       const desired = new Set();
@@ -3915,8 +3338,6 @@ class TastytradeProxy {
     // Backfill the new expiry's OI immediately, and resume fast polling until the
     // new expiry's coverage is ready again.
     this._refreshOI().catch(() => {}).finally(() => this._scheduleOiRefresh());
-    // Re-seed greeks for the new expiry (WS stream only pushes for same-day 0DTE).
-    this._refreshGreeksTheta().catch(() => {});
   }
 
   /**
@@ -4307,9 +3728,7 @@ class TastytradeProxy {
       // branches below start returning. See _fanoutUnderlyingPx.
       this._fanoutUnderlyingPx(sym, mid);
       if (sym === this.spotSymbol) {
-        // When INDEX_SOURCE=theta, Theta's index stream owns spot — ignore the
-        // dxLink SPX quote so the two sources don't fight over this.spot.
-        if (mid > 0 && !useThetaIndex()) {
+        if (mid > 0) {
           this.spot = mid;
           marketState.setSpot(this._effectiveSpot()); // corrected, not raw — see note above
           this._publishSpotDisplay(); // refresh display SPX + RTH basis capture
@@ -4317,7 +3736,7 @@ class TastytradeProxy {
         return;
       }
       if (sym === this.vixSymbol) {
-        if (mid > 0 && !useThetaIndex()) marketState.setAux({ vix: mid });
+        if (mid > 0) marketState.setAux({ vix: mid });
         return;
       }
       if (sym === this.esSymbol) {
@@ -4386,7 +3805,7 @@ class TastytradeProxy {
       this._fanoutUnderlyingPx(sym, Number(ev.price));
       if (sym === this.spotSymbol) {
         const px = Number(ev.price);
-        if (px > 0 && !useThetaIndex()) {
+        if (px > 0) {
           this.spot = px;
           marketState.setSpot(this._effectiveSpot()); // corrected, not raw — see note above
           this._publishSpotDisplay(); // refresh display SPX + RTH basis capture
@@ -4395,7 +3814,7 @@ class TastytradeProxy {
       }
       if (sym === this.vixSymbol) {
         const px = Number(ev.price);
-        if (px > 0 && !useThetaIndex()) marketState.setAux({ vix: px });
+        if (px > 0) marketState.setAux({ vix: px });
         return;
       }
       if (sym === this.esSymbol) {
@@ -4456,9 +3875,7 @@ class TastytradeProxy {
           && !this.ttFlowContracts.has(sym)
           && !this.flowRecordContracts.has(sym)) return;
       // In Theta mode the FPSS Trade stream owns option flow — don't double-feed
-      // FlowProcessor from the dxLink option Trade events too. (Volume capture
-      // above is still fine; it's keyed per-symbol and idempotent.)
-      if (useTheta()) return;
+      // (A `useTheta()` bail sat here so Theta's stream owned flow. Removed 2026-08-18.)
       const quote = this.quotes.get(sym) || null;
       const sz = Number(ev.size);
       // Contract-level IV / OI / volume arrive on their own Greeks + Summary +
@@ -4551,9 +3968,8 @@ class TastytradeProxy {
     if (ev.eventType === 'TimeAndSale') {
       // Tick-by-tick option prints for the near-spot window (see
       // _syncTimeSaleWindow). Real per-print size + exchange aggressorSide, so
-      // the flow tape reflects true 0DTE activity instead of the conflated Trade
-      // trickle. Options only — ES/NQ/index TimeAndSale is not routed here.
-      if (useTheta()) return;
+      // (A `useTheta()` bail sat here so Theta's FPSS stream owned option flow
+      // and dxLink TimeAndSale was ignored. ThetaData removed 2026-08-18.)
       if (sym === this.esSymbol || sym === this.nqSymbol || sym === this.spotSymbol || sym === this.vixSymbol) return;
       // NOTE: strikeGrowthContracts membership must NOT veto TimeAndSale. The
       // strike-growth feed only ever plain-subscribes (Quote/Greeks/Summary/
@@ -5397,7 +4813,6 @@ class TastytradeProxy {
     this.probeSubs.clear();
     if (this.recomputeTimer) clearInterval(this.recomputeTimer);
     if (this.oiTimer) clearTimeout(this.oiTimer);
-    if (this.volTimer) clearTimeout(this.volTimer);
     if (this.flowTimer) clearInterval(this.flowTimer);
     if (this.flowRecordTimer) clearInterval(this.flowRecordTimer);
     this.flowRecordTimer = null;
@@ -5406,14 +4821,10 @@ class TastytradeProxy {
     if (this.strikeGrowthTimer) clearInterval(this.strikeGrowthTimer);
     this.strikeGrowthTimer = null;
     if (this.premiumTimer) clearInterval(this.premiumTimer);
-    if (this.thetaGreeksTimer) clearInterval(this.thetaGreeksTimer);
     this.recomputeTimer = null;
     this.oiTimer = null;
-    this.volTimer = null;
     this.flowTimer = null;
     this.premiumTimer = null;
-    this.thetaGreeksTimer = null;
-    if (this.thetaStream) { this.thetaStream.close(); this.thetaStream = null; }
     this.client?.close();
   }
 
