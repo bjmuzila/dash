@@ -20,6 +20,7 @@ import { noPantsPromoEmail, noPantsPromoText, NOPANTS_PROMO_SUBJECT } from "@/li
 import { noPantsExtensionEmail, noPantsExtensionText, NOPANTS_EXTENSION_SUBJECT } from "@/lib/emails/nopants-extension";
 import { flowDialedInEmail, flowDialedInText, FLOW_DIALED_IN_SUBJECT } from "@/lib/emails/flow-dialed-in";
 import { mobileFeedbackEmail, mobileFeedbackText, MOBILE_FEEDBACK_SUBJECT } from "@/lib/emails/mobile-feedback";
+import { midnight300Email, midnight300Text, MIDNIGHT_300_SUBJECT } from "@/lib/emails/midnight-300";
 
 // Owner-only. Returns rendered email templates (subject + html + text) so the
 // /admin/emails compose page can load a preset with one click instead of pasting
@@ -179,6 +180,13 @@ function buildTemplates(): Template[] {
       subject: MOBILE_FEEDBACK_SUBJECT,
       html: mobileFeedbackEmail,
       text: mobileFeedbackText,
+    },
+    {
+      id: "midnight-300",
+      label: "⏳ Final call — 2 spots at $300/yr, ends at midnight (EDGE)",
+      subject: MIDNIGHT_300_SUBJECT,
+      html: midnight300Email,
+      text: midnight300Text,
     },
   ];
 }

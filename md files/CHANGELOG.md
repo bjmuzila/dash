@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-08-18 - New email template: final call — 2 spots at $300/yr, ends at midnight
+
+Added: `lib/emails/midnight-300.ts`.
+Edited: `app/api/admin/email-templates/route.ts`.
+
+New one-click preset for the owner broadcast composer (`owner.cbedge.net` →
+Emails). Same invoice-style layout and dashboard palette as `nopants-promo.ts` /
+`nopants-extension.ts`, re-cut as a hard deadline drop:
+
+- Subject: `2 spots left at $300/yr — ends tonight at midnight`.
+- Pill banner reads **⏳ ENDS TONIGHT AT MIDNIGHT** instead of the extension's
+  "sold out in 30 minutes" proof banner — the scarcity here is the clock, not
+  the social proof.
+- Hero: "2 spots left. Then the code dies." + "no extension this time" (the
+  previous drop already used an extension, so promising another would burn the
+  deadline's credibility).
+- Invoice card unchanged in shape: $1,000.00 list, −$700.00 today, $300.00 due.
+- Code is **EDGE** (NOT the NOPANTS code the previous two drops used — a fresh
+  code so the old batch's redemptions can't leak into this one's 2-spot cap).
+  **Must exist in Stripe as $700 off the $1,000 annual price before this sends.**
+  `code`, `price`, `listPrice`, `spots` and `deadline` are all `Midnight300Opts`
+  overrides, so a different code/price is a call-site change, not an edit.
+- Keeps `{{UNSUBSCRIBE_URL}}` (`UNSUB_URL_PLACEHOLDER`) so the send route can
+  swap in the per-recipient tokenized link.
+
+Registered in `buildTemplates()` as id `midnight-300`, label
+`⏳ Final call — 2 spots at $300/yr, ends at midnight (EDGE)`. Appended last
+per the `EMAILS_HANDOFF.md` checklist, so `newestFirst()` puts it on top of the
+picker.
+
+Preview: `generated/2026-08-18-midnight-300-preview.html`.
+
+
 ## 2026-08-18 - Ex-0DTE ladders get their own walls; Scanner level tiles get a scope chip
 
 Edited: `server-v2/eod-gex-recorder.js`, `components/scanner/GexLevelsTab.tsx`,
