@@ -649,7 +649,7 @@ function DeltaStamp({ d, pct, rank }: { d: number; pct: number; rank: number }) 
 
 function TickerPanel({
   ticker, strikesByExp, cols, liveData, spot, contractMode, intensity, emLevels, showEm, captureWindow,
-  showCB, showCW, showPW, getGexChange, deltaWindow, onExpandChain,
+  showCB, showCW, showPW, onToggleWall, getGexChange, deltaWindow, onExpandChain,
   replayFrame = null, replayStrikes = null, dteBase = null,
 }: {
   ticker: Ticker;
@@ -668,6 +668,9 @@ function TickerPanel({
   showCB: boolean;
   showCW: boolean;
   showPW: boolean;
+  /** Click a wall card above the panel to toggle that marker page-wide (the
+   *  flags are one set for all four panels, as they were on the toolbar). */
+  onToggleWall: (kind: "cb" | "cw" | "pw") => void;
   /** When set (screenshot mode), render only this many strikes on each side of
    *  ATM so the shot is centered + compact instead of the full chain. */
   captureWindow: number | null;
@@ -1021,7 +1024,60 @@ function TickerPanel({
     return { calls: side(sr?.callSym), puts: side(sr?.putSym) };
   })();
 
+  // ── CB / CW / PW cards, rendered ABOVE this ticker's panel ────────────────
+  // They used to be small chips inside the panel header, squeezed between the
+  // ticker and the spot. Out here each one is a card of its own, three across
+  // the panel's width, so the level and its number are readable at a glance
+  // and always sit over the ticker they belong to. Clicking a card toggles
+  // that marker in the ladder (page-wide, as the toolbar buttons did).
+  const wallCards = ([
+    { k: "cb", t: "CB", name: "Core Bullseye", c: LEVEL_COLORS.cb, s: walls?.cb ?? null, on: showCB, title: "Core Bullseye — highest |GEX| level" },
+    { k: "cw", t: "CW", name: "Call Wall", c: LEVEL_COLORS.cw, s: walls?.cw ?? null, on: showCW, title: "Call Wall — highest +GEX level" },
+    { k: "pw", t: "PW", name: "Put Wall", c: LEVEL_COLORS.pw, s: walls?.pw ?? null, on: showPW, title: "Put Wall — most −GEX level" },
+  ] as const);
+
   return (
+    <div style={{
+      flex: isCapturing ? "0 0 auto" : 1,
+      display: "flex", flexDirection: "column", gap: 6,
+      minWidth: 0, minHeight: 0,
+    }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6, flexShrink: 0 }}>
+        {wallCards.map(x => (
+          <button
+            key={x.k}
+            onClick={() => onToggleWall(x.k)}
+            title={`${x.title} — click to ${x.on ? "hide" : "show"} the marker`}
+            style={{
+              display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+              padding: "6px 6px 7px", borderRadius: 12, cursor: "pointer", minWidth: 0,
+              background: `${x.c}14`,
+              border: `1px solid ${x.on ? `${x.c}aa` : HT.border}`,
+              boxShadow: x.on ? `0 1px 10px ${x.c}33` : "0 1px 6px rgba(0,0,0,0.35)",
+              opacity: x.on ? 1 : 0.55,
+            }}
+          >
+            <span style={{
+              fontSize: 10, fontWeight: 900, letterSpacing: "0.1em", color: x.c,
+              display: "flex", alignItems: "baseline", gap: 5, whiteSpace: "nowrap",
+            }}>
+              {x.t}
+              <span style={{
+                fontSize: 8, fontWeight: 800, letterSpacing: "0.06em",
+                textTransform: "uppercase", color: HT.muted,
+                overflow: "hidden", textOverflow: "ellipsis",
+              }}>{x.name}</span>
+            </span>
+            <span style={{
+              fontFamily: "var(--font-mono)", fontSize: 18, fontWeight: 900,
+              lineHeight: 1.05, color: HT.text, whiteSpace: "nowrap",
+            }}>
+              {x.s == null ? "—" : Number.isInteger(x.s) ? x.s : x.s.toFixed(2)}
+            </span>
+          </button>
+        ))}
+      </div>
+
     <Card
       variant="budget"
       padding={0}
@@ -1029,7 +1085,8 @@ function TickerPanel({
     >
       <style>{`@keyframes mvcGlow{0%,100%{box-shadow:0 0 3px rgba(255,255,255,.35)}50%{box-shadow:0 0 10px rgba(255,255,255,.85)}}.mvc-peak-cell{animation:mvcGlow 2.4s ease-in-out infinite}`}</style>
 
-      {/* Panel header — ticker · CB/CW/PW front-expiry levels · spot.
+      {/* Panel header — ticker · spot. The CB/CW/PW front-expiry levels are the
+          three cards directly above this panel now.
           Double-click anywhere on it opens this ticker's full-screen chain.
           userSelect:none so the second click of the gesture doesn't leave the
           header text highlighted behind the overlay. */}
@@ -1041,25 +1098,8 @@ function TickerPanel({
         {/* Ticker Lookup 🔍 moved to the page toolbar — one button for the
             whole page instead of one per panel. */}
         <span style={{ fontSize: 17, fontWeight: 800, color: HT.cyan, letterSpacing: "0.1em", flexShrink: 0 }}>{ticker}</span>
-        <div style={{ display: "flex", gap: 5, alignItems: "center", overflow: "hidden", flex: 1, justifyContent: "flex-end" }}>
-          {/* Header readout always shows the CB/CW/PW levels — the toolbar
-              toggles only control the cell markers, per user. */}
-          {([
-            { t: "CB", c: LEVEL_COLORS.cb, s: walls?.cb ?? null, title: "Core Bullseye — highest |GEX| level" },
-            { t: "CW", c: LEVEL_COLORS.cw, s: walls?.cw ?? null, title: "Call Wall — highest +GEX level" },
-            { t: "PW", c: LEVEL_COLORS.pw, s: walls?.pw ?? null, title: "Put Wall — most −GEX level" },
-          ] as const).filter(x => x.s != null).map(x => (
-            <span key={x.t} title={x.title} style={{
-              display: "inline-flex", alignItems: "baseline", gap: 3, whiteSpace: "nowrap",
-              padding: "2px 6px", borderRadius: 5, background: `${x.c}1f`, border: `1px solid ${x.c}66`,
-            }}>
-              <span style={{ fontSize: 9, fontWeight: 900, color: x.c, letterSpacing: "0.04em" }}>{x.t}</span>
-              <span style={{ fontSize: 12, fontWeight: 800, fontFamily: "var(--font-mono)", color: HT.text }}>
-                {Number.isInteger(x.s as number) ? x.s : (x.s as number).toFixed(2)}
-              </span>
-            </span>
-          ))}
-        </div>
+        {/* The CB/CW/PW readout moved OUT of this header — it is now the row of
+            three cards directly above this panel (see wallCards). */}
         <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 17, fontFamily: "var(--font-mono)", color: HT.text, flexShrink: 0 }}>
           {spot > 0 && (
             <span style={{ color: HT.cyan, fontWeight: 700 }}>{spot.toFixed(2)}</span>
@@ -1369,6 +1409,7 @@ function TickerPanel({
         );
       })()}
     </Card>
+    </div>
   );
 }
 
@@ -1417,12 +1458,19 @@ export function MultGreekClient({
   );
 
   // Front-column level badges: CB (highest |GEX|), CW (2nd), PW (3rd). Toggled
-  // from the toolbar; all on by default.
+  // by clicking the wall cards above each panel; all on by default. One set of
+  // flags for the whole page, so a click on any panel's card marks/unmarks that
+  // level everywhere — the behaviour the old toolbar buttons had.
   // Δ stamps — 0 = off. Drives every panel at once.
   const [deltaWindow, setDeltaWindow] = useState<DeltaWindow>(0);
   const [showCB, setShowCB] = useState(true);
   const [showCW, setShowCW] = useState(true);
   const [showPW, setShowPW] = useState(true);
+  const toggleWall = useCallback((kind: "cb" | "cw" | "pw") => {
+    if (kind === "cb") setShowCB(v => !v);
+    else if (kind === "cw") setShowCW(v => !v);
+    else setShowPW(v => !v);
+  }, []);
 
   // User-configurable 4th ticker, persisted per browser (localStorage). Live
   // mode only — the delayed snapshot recorder only carries SPX/SPY/QQQ.
@@ -2411,12 +2459,12 @@ export function MultGreekClient({
 
       {/* ── Identity line ───────────────────────────────────────────────────
           The GEX-levels card's line, for four tickers: the front expiry + DTE,
-          the session on screen and the replay clock — plus the CB / CW / PW
-          wall toggles, now rendered as cards in this row (moved out of the
-          dock) so they sit directly above the four ticker panels they mark.
+          the session on screen and the replay clock.
 
           The page name, the per-ticker spot prices and the CB Edge mark were
-          removed: each panel header already carries its own ticker + spot.
+          removed (each panel header already carries its own ticker + spot), and
+          the CB / CW / PW toggles are now the cards sitting directly above each
+          ticker's panel, so this band is just the shared context line.
 
           Under the replay transport and directly on top of the cards, for the
           same reason it sits there on the lookup card — that band is what a
@@ -2426,38 +2474,6 @@ export function MultGreekClient({
         display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
         padding: "0 10px 8px", borderBottom: `1px solid ${HT.border}`, flexShrink: 0,
       }}>
-        {/* CB / CW / PW top-|GEX| level cards (front expiry). Click to toggle. */}
-        {[
-          { key: "CB", on: showCB, set: setShowCB, color: LEVEL_COLORS.cb, label: "Core Bullseye", title: "Core Bullseye — highest |GEX| level" },
-          { key: "CW", on: showCW, set: setShowCW, color: LEVEL_COLORS.cw, label: "Call Wall", title: "Call Wall — highest +GEX level" },
-          { key: "PW", on: showPW, set: setShowPW, color: LEVEL_COLORS.pw, label: "Put Wall", title: "Put Wall — most −GEX level" },
-        ].map(b => (
-          <button
-            key={b.key}
-            onClick={() => b.set(v => !v)}
-            title={`${b.key}: ${b.title} — click to ${b.on ? "hide" : "show"}`}
-            style={{
-              display: "flex", alignItems: "center", gap: 7,
-              padding: "5px 10px", borderRadius: 10, cursor: "pointer", whiteSpace: "nowrap",
-              background: HT.panel,
-              border: `1px solid ${b.on ? b.color : HT.border}`,
-              boxShadow: b.on ? `0 1px 8px ${b.color}33` : "0 1px 6px rgba(0,0,0,0.35)",
-              opacity: b.on ? 1 : 0.6,
-            }}
-          >
-            <span style={{
-              padding: "2px 6px", borderRadius: 5,
-              fontSize: 10, fontWeight: 900, letterSpacing: "0.04em",
-              color: b.on ? LEVEL_COLORS.onSolid : HT.text,
-              background: b.on ? b.color : "transparent",
-              border: `1px solid ${b.on ? b.color : HT.border}`,
-            }}>{b.key}</span>
-            <span style={{
-              fontSize: 10, fontWeight: 800, letterSpacing: "0.06em",
-              textTransform: "uppercase", color: HT.muted,
-            }}>{b.label}</span>
-          </button>
-        ))}
         <span style={{
           fontSize: 11, fontFamily: "var(--font-mono)", fontWeight: 700,
           letterSpacing: "0.06em", textTransform: "uppercase", color: HT.text, opacity: 0.78,
@@ -2503,6 +2519,7 @@ export function MultGreekClient({
             showCB={showCB}
             showCW={showCW}
             showPW={showPW}
+            onToggleWall={toggleWall}
             getGexChange={getGexChange}
             deltaWindow={replayOn ? 0 : deltaWindow}
             onExpandChain={setChainTicker}

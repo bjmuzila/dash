@@ -3489,6 +3489,33 @@ register('/api/eod-strike-gex-change', {
   },
 });
 
+// Close → live: same ladder, but the "now" side is computed off the chain on
+// demand instead of read from eod_strike_gex. Backs the ΔGEX Board's Live
+// toggle.
+//
+// OWNER-ONLY, unlike -change. This is not a table read — every uncached call
+// re-runs one symbol's whole expiry board against TastyTrade, which is one
+// slice of the nightly sweep. Behind 'subscriber' it would be a request
+// amplifier pointed at our own upstream. `force=1` (the board's ↻) skips the
+// recorder's one-minute cache; it still joins an in-flight sweep rather than
+// starting a second one, so a double-click costs one sweep, not two.
+//
+// No `date` param and no board-wide variant, both deliberate: "live" only ever
+// means now, and 169 names live is the nightly sweep on a click.
+register('/api/eod-strike-gex-live', {
+  auth: 'owner', methods: ['GET'],
+  async handler(req, res, ctx) {
+    const sp = new URL(req.url || '/', 'http://localhost').searchParams;
+    const symbol = (sp.get('symbol') || '').trim().toUpperCase();
+    const q = new URLSearchParams();
+    if (symbol) q.set('symbol', symbol);
+    if (/^(1|true|yes)$/i.test(sp.get('force') || '')) q.set('force', '1');
+    const qs = q.toString() ? `?${q}` : '';
+    const r = await forwardGet(ctx, `/proxy/eod-strike-gex-live${qs}`);
+    send(res, r.status, r.body, { 'Cache-Control': NO_STORE });
+  },
+});
+
 // Which sessions are on file — populates the board's date picker. Owner-only,
 // same as the board it feeds.
 register('/api/eod-strike-gex-dates', {

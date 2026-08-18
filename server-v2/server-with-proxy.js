@@ -1888,6 +1888,36 @@ async function main() {
         })();
         return;
       }
+      // The same per-strike ladder, but with the "now" side computed LIVE off
+      // the chain instead of read out of eod_strike_gex. Prior side is the
+      // symbol's most recent RECORDED close. Backs the ΔGEX Board's Live toggle
+      // on the Prior → now tab.
+      //   GET /proxy/eod-strike-gex-live?symbol=NVDA[&force=1]
+      // Returns the getStrikeGexChange shape plus { live:true, asOf, cached,
+      // ageMs, expiryCount, prevIsToday, marketDay }.
+      //
+      // READ-ONLY: it never writes to eod_strike_gex. An intraday row there
+      // would become tomorrow's Δ baseline and corrupt the recorded series.
+      //
+      // ONE SYMBOL ONLY, and no board-wide equivalent by design — this re-runs
+      // every listed expiry for the name, which is one slice of the nightly
+      // sweep. The recorder caches it per symbol for a minute and de-dupes
+      // concurrent callers; `force=1` skips the cache (the client's ↻) but
+      // still joins an in-flight sweep rather than starting a second one.
+      if (pathname === '/proxy/eod-strike-gex-live' && req.method === 'GET') {
+        (async () => {
+          try {
+            const { getStrikeGexLive } = require('./eod-strike-gex-recorder');
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
+            if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
+            const force = /^(1|true|yes)$/i.test(u.searchParams.get('force') || '');
+            const out = await getStrikeGexLive(symbol, { force });
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
       // Manual fire of the EOD per-strike GEX sweep (normally automatic at
       // 16:05 ET). Safe to re-run: the day's rows for each symbol are cleared
       // and rewritten, so a re-fire replaces the window rather than unioning

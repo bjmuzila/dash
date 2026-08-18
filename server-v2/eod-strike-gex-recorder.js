@@ -60,6 +60,14 @@
  *   GET /proxy/eod-strike-gex-dates[?limit=90]
  *   which sessions are on file, newest first — populates the board's picker.
  *
+ *   GET /proxy/eod-strike-gex-live?symbol=NVDA[&force=1]
+ *   the SAME ladder shape, but the "now" side is computed off the live chain
+ *   instead of read from the table, against the symbol's last recorded close.
+ *   Writes NOTHING. Read the big comment above getStrikeGexLive() before using
+ *   it — intraday, OI is last night's settled file and volume is only part
+ *   accrued, so that Δ is today's tape building, NOT a session-over-session
+ *   change. Cached per symbol for a minute; `force=1` bypasses the cache.
+ *
  *   `date` on the first two is an AS-OF (latest session on or before it), not
  *   an exact match, so a date that a given symbol missed still answers.
  *
@@ -640,6 +648,173 @@ async function getStrikeGexChange(symbol, { date = null } = {}) {
   };
 }
 
+// ── LIVE read: last recorded close vs the chain RIGHT NOW ───────────────────
+//
+// getStrikeGexChange() answers "close vs close". This answers "close vs NOW":
+// the prior side is still the symbol's most recent recorded session, but the
+// current side is computed on demand off the live chain instead of read out of
+// eod_strike_gex.
+//
+// ── WHAT THIS NUMBER ACTUALLY IS ────────────────────────────────────────────
+// NOT a one-day Δ, and it must never be labelled as one. The OI+Vol basis is
+// half settled open interest and half day volume:
+//   • OI is last night's settled file and does not move until tomorrow's.
+//   • Volume starts at zero at 09:30 and accrues all session.
+// So `chg` here is, in the main, TODAY'S TAPE ACCUMULATING on top of a fixed OI
+// base. At 09:31 it reads ~0 and it grows through the day — that is the whole
+// signal, not a bug. The header of this file explains why the recorded sweep
+// waits until 16:05 for exactly this reason; this route deliberately breaks
+// that rule, so the client is required to say so on the page.
+//
+// ── NOTHING IS WRITTEN ──────────────────────────────────────────────────────
+// This never touches eod_strike_gex. An intraday row in that table would become
+// tomorrow's Δ baseline and would silently corrupt the recorded series — which
+// is also why this is a separate function and not runSweep() with a flag.
+//
+// ── COST ────────────────────────────────────────────────────────────────────
+// One symbol × every listed expiry, ex-0DTE — the same work one slice of the
+// nightly sweep does, i.e. a few seconds of TastyTrade chain fetches. That is
+// far too expensive to run per render or per rail click, so results are cached
+// per symbol for LIVE_TTL_MS and concurrent callers share one in-flight sweep.
+// The client's ↻ passes force=1, which skips the cache but still joins an
+// in-flight job rather than starting a second one.
+const LIVE_TTL_MS = Math.max(5_000, Number(process.env.EOD_STRIKE_GEX_LIVE_TTL_MS || 60_000));
+// Bounded so a long-running process cannot accumulate a ladder per symbol
+// forever. This is a cache, not a store.
+const LIVE_CACHE_MAX = 220;
+
+/** symbol → { at, payload }. */
+const _liveCache = new Map();
+/** symbol → Promise, so N callers on one symbol cost ONE chain sweep. */
+const _liveInflight = new Map();
+
+/**
+ * The symbol's most recent recorded session: its date, its ladder and its spot.
+ * ONE date, not two — the other side of this comparison is the live chain.
+ */
+async function latestRecordedLadder(sym) {
+  if (!(await ensureSchema())) return { prevDate: null, prevSpot: null, prevMap: new Map() };
+  const p = getPool();
+  // to_char for the same reason getStrikeGexChange uses it — a raw DATE comes
+  // back as a JS Date at LOCAL midnight and formats back a day early east of
+  // UTC.
+  const { rows: dr } = await p.query(
+    `SELECT to_char(MAX(date), 'YYYY-MM-DD') AS d FROM eod_strike_gex WHERE symbol = $1`,
+    [sym],
+  );
+  const prevDate = dr[0]?.d ?? null;
+  if (!prevDate) return { prevDate: null, prevSpot: null, prevMap: new Map() };
+
+  const { rows } = await p.query(
+    `SELECT strike, net_gex, spot FROM eod_strike_gex WHERE symbol = $1 AND date = $2::date`,
+    [sym, prevDate],
+  );
+  const prevMap = new Map();
+  let prevSpot = null;
+  for (const r of rows) {
+    prevMap.set(Number(r.strike), Number(r.net_gex) || 0);
+    if (prevSpot == null && Number(r.spot) > 0) prevSpot = Number(r.spot);
+  }
+  return { prevDate, prevSpot, prevMap };
+}
+
+/** The uncached body of getStrikeGexLive(). Never call this directly. */
+async function computeStrikeGexLive(sym) {
+  // Recorded side first: it is a cheap indexed read, and if the chain sweep
+  // below throws we have paid nothing for it.
+  const { prevDate, prevSpot, prevMap } = await latestRecordedLadder(sym);
+
+  const { spot, expiryCount, rows } = await gexRowsForSymbol(sym);
+  if (!rows.length) return { ok: false, error: `no live chain data for ${sym}` };
+
+  // The same ±WINDOW_SIDE index slice the recorder writes, so the live ladder
+  // and the recorded one are the same SHAPE and the union below stays ~81 rungs
+  // rather than the whole chain.
+  const win = windowRows(rows, spot);
+  const liveMap = new Map(win.map((r) => [r.strike, r.gex]));
+
+  // UNION of both windows, not just the live one — the same reason
+  // getStrikeGexChange FULL JOINs instead of LEFT JOINing. A strike that
+  // carried real gamma at the close and has gone inert (or fallen out of the
+  // window as spot moved) is the single biggest negative change there is, and
+  // anchoring on the live side would discard exactly those.
+  const strikes = [...new Set([...liveMap.keys(), ...prevMap.keys()])].sort((a, b) => a - b);
+
+  const out = strikes.map((strike) => {
+    const netGex = liveMap.get(strike) ?? 0;
+    const prevNetGex = prevDate ? (prevMap.get(strike) ?? 0) : 0;
+    return {
+      strike,
+      netGex,
+      prevNetGex,
+      chg: prevDate ? netGex - prevNetGex : 0,
+      hadPrev: prevMap.has(strike),
+    };
+  });
+
+  const today = todayYmdET();
+  return {
+    ok: true,
+    symbol: sym,
+    // Shaped exactly like getStrikeGexChange so the client's ladder renders it
+    // unchanged. `live` is what tells the client to relabel — the ladder maths
+    // is identical, only the MEANING of the "now" column differs.
+    date: today,
+    prevDate,
+    spot: spot > 0 ? spot : null,
+    prevSpot,
+    rows: out,
+    live: true,
+    asOf: new Date().toISOString(),
+    expiryCount,
+    // The post-16:05 case: today's sweep has already landed, so the "prior"
+    // side IS today's close and `chg` collapses to post-close chain drift
+    // rather than a session's build. The client warns instead of pretending.
+    prevIsToday: prevDate === today,
+    marketDay: isTradingDayET(),
+  };
+}
+
+/**
+ * Cached, de-duplicated wrapper around computeStrikeGexLive().
+ *
+ * `force` skips the CACHE but deliberately still joins an in-flight sweep: two
+ * fast clicks on ↻ must not fire two full chain sweeps at TastyTrade.
+ */
+async function getStrikeGexLive(symbol, { force = false } = {}) {
+  const sym = String(symbol || '').toUpperCase().trim();
+  if (!sym) return { ok: false, error: 'symbol required' };
+
+  const now = Date.now();
+  const hit = _liveCache.get(sym);
+  if (!force && hit && now - hit.at < LIVE_TTL_MS) {
+    return { ...hit.payload, cached: true, ageMs: now - hit.at };
+  }
+
+  let job = _liveInflight.get(sym);
+  if (!job) {
+    job = computeStrikeGexLive(sym)
+      .then((val) => {
+        if (val?.ok) {
+          if (_liveCache.size >= LIVE_CACHE_MAX) {
+            // Map iterates in insertion order, so the first key is the oldest
+            // WRITE. Good enough for a TTL cache — this is a bound, not an LRU.
+            const oldest = _liveCache.keys().next().value;
+            if (oldest !== undefined) _liveCache.delete(oldest);
+          }
+          _liveCache.set(sym, { at: Date.now(), payload: val });
+        }
+        return val;
+      })
+      .catch((e) => ({ ok: false, error: String(e?.message || e) }))
+      .finally(() => { _liveInflight.delete(sym); });
+    _liveInflight.set(sym, job);
+  }
+
+  const res = await job;
+  return res?.ok ? { ...res, cached: false, ageMs: 0 } : res;
+}
+
 /**
  * WHOLE-BOARD ranking — every symbol, its net ΔGEX, and its top N strikes by
  * |Δ|, in ONE query.
@@ -846,6 +1021,7 @@ module.exports = {
   startEodStrikeGexRecorder,
   runSweep,
   getStrikeGexChange,
+  getStrikeGexLive,
   getStrikeGexBoard,
   listStrikeGexDates,
   ensureSchema,

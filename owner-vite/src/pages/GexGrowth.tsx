@@ -26,6 +26,13 @@
 // older session switches to `levels`, because "what did the board look like on
 // the 8th" is a level question; the Δ tab is right there for the other read.
 //
+// ONE EXCEPTION to "three modes, one payload": `compare` carries a LIVE toggle
+// that DOES fetch — GET /api/eod-strike-gex-live?symbol=… , one symbol at a
+// time, swapping the "now" side for the chain as it stands this second against
+// the last recorded close. Read LIVE_COPY before touching it: that number is
+// NOT a Δ 1D, and the page is required to say so on screen rather than only in
+// a tooltip. The rail never goes live — 169 names live is the nightly sweep.
+//
 // WHY `compare` EXISTS. A red Δ bar is AMBIGUOUS on its own. `chg` is
 // `now − prior` on a signed net_gex, so "net GEX at this strike went down" is
 // equally consistent with two opposite tapes:
@@ -81,6 +88,11 @@ type ChangeRow = { strike: number; netGex: number; prevNetGex: number; chg: numb
 type ChangeResp = {
   ok?: boolean; symbol?: string; date?: string | null; prevDate?: string | null;
   spot?: number | null; prevSpot?: number | null; rows?: ChangeRow[]; error?: string;
+  // Present only on the LIVE route. Identical row SHAPE, different meaning on
+  // the `netGex` side — see LIVE_NOTE below and the big comment above
+  // getStrikeGexLive() in server-v2/eod-strike-gex-recorder.js.
+  live?: boolean; asOf?: string; expiryCount?: number;
+  cached?: boolean; ageMs?: number; prevIsToday?: boolean; marketDay?: boolean;
 };
 type DatesResp = { ok?: boolean; dates?: string[]; error?: string };
 
@@ -117,6 +129,47 @@ const MODE_COPY: Record<Mode, {
 
 /** Δ readings — everything that needs a baseline session to mean anything. */
 const isDelta = (m: Mode) => m !== "levels";
+
+/**
+ * LIVE MODE — a toggle ON `compare`, not a fourth tab.
+ *
+ * Everything else on this page is end-of-day: the rail, the date picker and
+ * both other tabs read the 16:05 ET table. Live swaps ONLY the "now" side of
+ * the open symbol's ladder for the chain as it stands right this second, so
+ * the rung reads "last recorded close → now" instead of "close → close".
+ *
+ * WHY IT IS NOT A Δ 1D, AND WHY THE PAGE SAYS SO. GEX here is on the OI+Vol
+ * basis. Open interest is last night's settled file and does not move until
+ * tomorrow's; volume starts at zero at 09:30 and accrues all session. So an
+ * intraday "close → now" is, in the main, TODAY'S TAPE PILING UP on a fixed OI
+ * base: near zero at the open, growing into the bell. That is the signal — but
+ * it is a different quantity from the session-over-session Δ the other two tabs
+ * show, and labelling both "Δ 1D" would be a lie. Hence LIVE_COPY.
+ *
+ * SCOPE IS ONE SYMBOL. Each live read re-runs every listed expiry for the name
+ * against TastyTrade — one slice of the nightly sweep. The rail stays on the
+ * recorded board, and there is no "everything live" button on purpose.
+ *
+ * NO AUTO-POLL. The server caches a symbol for a minute; ↻ is the refresh.
+ * Arrowing down the rail with Live on is one sweep per name you stop on.
+ */
+const LIVE_COPY = {
+  ladderCol: "Δ vs close",
+  bigLabel: "net Δ vs close",
+  axis: "← lighter · heavier →",
+};
+
+/** ET wall clock for the "as of" stamp — the table's own timezone. */
+const fmtEtTime = (iso?: string) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? ""
+    : new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", hourCycle: "h23",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    }).format(d);
+};
 
 /**
  * Split a session's Δ into the four things that can produce it.
@@ -212,11 +265,13 @@ function RailBars({ items, max }: { items: Array<{ v: number; ghost?: boolean }>
 }
 
 function Ladder({
-  rows, spot, mode,
+  rows, spot, mode, live = false,
 }: {
   rows: ChangeRow[];
   spot: number | null;
   mode: Mode;
+  /** Compare mode reading the LIVE chain — relabels only, the maths is identical. */
+  live?: boolean;
 }) {
   // The ONE place the mode picks a number. Everything below — the bar, the
   // scale, the sign, the colour — reads `val`, so the two views cannot drift
@@ -248,8 +303,8 @@ function Ladder({
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       <div style={{ display: "grid", gridTemplateColumns: LADDER_COLS, gap: 8, alignItems: "center", paddingBottom: 5 }}>
         <span style={label}>Strike</span>
-        <span style={{ ...label, textAlign: "center" }}>{MODE_COPY[mode].axis}</span>
-        <span style={{ ...label, textAlign: "right" }}>{MODE_COPY[mode].ladderCol}</span>
+        <span style={{ ...label, textAlign: "center" }}>{live ? LIVE_COPY.axis : MODE_COPY[mode].axis}</span>
+        <span style={{ ...label, textAlign: "right" }}>{live ? LIVE_COPY.ladderCol : MODE_COPY[mode].ladderCol}</span>
       </div>
       {desc.map((r) => {
         const v = val(r);
@@ -262,7 +317,7 @@ function Ladder({
         return (
           <div
             key={r.strike}
-            title={`${r.strike} · now ${sgn(r.netGex)} · prior ${sgn(r.prevNetGex)} · Δ ${sgn(r.chg)}${r.hadPrev ? "" : " (new strike — no prior row)"}`}
+            title={`${r.strike} · ${live ? "live" : "now"} ${sgn(r.netGex)} · ${live ? "last close" : "prior"} ${sgn(r.prevNetGex)} · Δ ${sgn(r.chg)}${r.hadPrev ? "" : " (new strike — no prior row)"}`}
             style={{
               display: "grid", gridTemplateColumns: LADDER_COLS, gap: 8, alignItems: "center",
               padding: "2px 6px", borderRadius: 8,
@@ -317,6 +372,9 @@ export default function GexGrowth() {
   const [filter, setFilter] = useState("");
   const [dir, setDir] = useState<"abs" | "built" | "pulled">("abs");
   const [mode, setMode] = useState<Mode>("delta");
+  // Live is a preference, not a mode — it survives tab-hopping and comes back
+  // on when you return to `compare`, which is how a toggle should behave.
+  const [live, setLive] = useState(false);
 
   // Recorded sessions, newest first. "" = latest, which is what both routes do
   // with no date param — kept as the empty string rather than null so it drops
@@ -343,6 +401,13 @@ export default function GexGrowth() {
 
   const dateQs = date ? `&date=${date}` : "";
 
+  // The one gate. Live only means anything on `compare` (it IS the prior→now
+  // reading) and only against the LATEST session — "live vs the 8th" would be
+  // a spread over however many sessions, not a day's build, so picking an older
+  // date suspends it rather than silently redefining the number. The toggle
+  // stays lit so returning to the latest session restores it.
+  const liveOn = live && mode === "compare" && !date;
+
   const loadBoard = useCallback(async () => {
     try {
       const res = await fetch(`/api/eod-strike-gex-board?top=${TOP_N}${dateQs}`, { cache: "no-store" });
@@ -363,15 +428,18 @@ export default function GexGrowth() {
     return () => clearInterval(id);
   }, [loadBoard]);
 
-  const loadDetail = useCallback(async (symbol: string) => {
+  // `force` is the ↻ path and ONLY the ↻ path: it skips the server's per-symbol
+  // minute cache. Rail clicks never force, so walking the board with Live on
+  // costs one chain sweep per name per minute rather than one per click.
+  const loadDetail = useCallback(async (symbol: string, force = false) => {
     const mine = ++detailReq.current;
     setDetailLoading(true);
     setDetailErr(null);
     try {
-      const res = await fetch(
-        `/api/eod-strike-gex-change?symbol=${encodeURIComponent(symbol)}${dateQs}`,
-        { cache: "no-store" },
-      );
+      const url = liveOn
+        ? `/api/eod-strike-gex-live?symbol=${encodeURIComponent(symbol)}${force ? "&force=1" : ""}`
+        : `/api/eod-strike-gex-change?symbol=${encodeURIComponent(symbol)}${dateQs}`;
+      const res = await fetch(url, { cache: "no-store" });
       const json: ChangeResp = await res.json();
       if (detailReq.current !== mine) return;
       if (!res.ok || json.ok === false) throw new Error(json.error || `HTTP ${res.status}`);
@@ -381,7 +449,10 @@ export default function GexGrowth() {
     } finally {
       if (detailReq.current === mine) setDetailLoading(false);
     }
-  }, [dateQs]);
+    // liveOn belongs in here, not in a ref: flipping the toggle has to re-read
+    // the open name, and keying the effect below on this identity is what makes
+    // that happen without a second effect racing it.
+  }, [dateQs, liveOn]);
 
   const pickDate = useCallback((d: string) => {
     setDate(d);
@@ -392,8 +463,9 @@ export default function GexGrowth() {
     setMode(d && d !== dates[0] ? "levels" : "delta");
   }, [dates]);
 
-  // Changing the session re-reads the OPEN name's ladder, so the rail and the
-  // detail pane can never be showing two different dates.
+  // Changing the session — or flipping Live — re-reads the OPEN name's ladder,
+  // so the rail and the detail pane can never be showing two different dates,
+  // and the toggle can never leave a stale EOD ladder under a "live" header.
   //
   // Keyed on loadDetail — whose identity is keyed on the date — rather than on
   // `date` plus `sel`: adding `sel` would re-fetch on every rail click, which
@@ -455,6 +527,33 @@ export default function GexGrowth() {
       : (selRow.strikes ?? []).map((k) => ({ strike: k.strike, v: k.chg })))
     : [];
   const sessionLabel = date || dates[0] || "latest";
+
+  // Is the ladder currently ON SCREEN a live one? Keyed off the PAYLOAD ALONE,
+  // never off `liveOn`. Toggling refetches, so for the few hundred ms in
+  // between, intent and data disagree — and every label on this pane describes
+  // the DATA. `liveOn && detail.live` would caption a live ladder as end-of-day
+  // the instant you toggled off, which is the worse of the two mislabels.
+  const showLive = !!detail?.live;
+  // The headline, in live mode, MUST come off the rows being drawn. The rail
+  // row is the recorded close-to-close Δ; the ladder is close-to-now. They are
+  // different numbers, and the old code took the big number from the rail — so
+  // in live mode the header would have contradicted the bars underneath it.
+  const liveNet = useMemo(
+    () => (detail?.live && detail.prevDate && detail.rows?.length
+      ? detail.rows.reduce((s, r) => s + r.chg, 0)
+      : null),
+    [detail],
+  );
+  const headlineVal = showLive ? liveNet : (selRow && railHasValue(selRow) ? railSigned(selRow) : null);
+  // Same trap as the headline: `topStrikes` is the RECORDED top-N off the board
+  // payload, so in live mode the "biggest …" chip has to be recomputed off the
+  // live rows or it would name yesterday's strike beside today's number.
+  const liveBiggest = useMemo(() => {
+    if (!(detail?.live && detail.prevDate && detail.rows?.length)) return null;
+    const b = detail.rows.reduce((m, r) => (Math.abs(r.chg) > Math.abs(m.chg) ? r : m), detail.rows[0]);
+    return Math.abs(b.chg) > 0 ? { strike: b.strike, v: b.chg } : null;
+  }, [detail]);
+
   // Compare mode's headline. Read off the DETAIL rows, not the rail row — the
   // board payload carries only `chg` per strike and this needs both levels.
   const split = useMemo(
@@ -535,7 +634,41 @@ export default function GexGrowth() {
             ]}
           />
 
-          <button onClick={() => { loadDates(); loadBoard(); }} style={homeSecondaryButtonStyle} title="Re-read the recorded board">↻</button>
+          {/* Live toggle — compare only, because live IS the prior→now reading.
+              Rendered only on that tab rather than disabled everywhere, so the
+              control row does not carry a permanently dead button. */}
+          {mode === "compare" && (
+            <button
+              onClick={() => setLive((v) => !v)}
+              aria-pressed={liveOn}
+              title={date
+                ? "Live compares against the LATEST close only — clear the date picker to use it"
+                : liveOn
+                  ? "Reading the chain now. Δ is today's tape building on last night's settled OI, not a session-over-session change. ↻ forces a fresh sweep."
+                  : "Replace the 'now' side with the chain as it stands right now, against this symbol's last recorded close. One symbol, a few seconds per name."}
+              style={{
+                ...(liveOn ? homeButtonStyle : homeSecondaryButtonStyle),
+                borderRadius: 999, padding: "5px 12px",
+                display: "flex", alignItems: "center", gap: 6,
+                opacity: date ? 0.45 : 1,
+              }}
+            >
+              <span aria-hidden style={{
+                width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
+                background: liveOn ? POS : T.textMuted,
+              }} />
+              Live
+            </button>
+          )}
+
+          {/* ↻ re-reads the recorded board, and when Live is on also forces a
+              fresh chain sweep for the OPEN name — the cache is a minute deep,
+              so without force=1 this button would look broken. */}
+          <button
+            onClick={() => { loadDates(); loadBoard(); if (liveOn && sel) loadDetail(sel, true); }}
+            style={homeSecondaryButtonStyle}
+            title={liveOn ? "Re-read the recorded board and force a fresh live sweep for this symbol" : "Re-read the recorded board"}
+          >↻</button>
           <span style={{ ...label, marginLeft: "auto" }}>
             {board == null
               ? "loading…"
@@ -631,32 +764,76 @@ export default function GexGrowth() {
                     <span style={{ fontSize: 20, fontWeight: 800 }}>{sel}</span>
                     <span style={{ fontFamily: MONO, fontSize: 11.5, color: T.text, opacity: 0.6 }}>
                       {detail?.spot != null ? `spot ${detail.spot.toLocaleString("en-US", { maximumFractionDigits: 2 })}` : ""}
-                      {mode === "levels"
-                        ? (detail?.date ? ` · close ${detail.date}` : "")
-                        : detail?.prevDate ? ` · ${detail.date} vs close ${detail.prevDate}` : detail?.date ? ` · ${detail.date} · no baseline yet` : ""}
+                      {showLive
+                        // Live says WHEN, not which session — the "as of" stamp
+                        // is the only thing that dates this reading, and the
+                        // server's own asOf is used rather than a client clock
+                        // so a cached payload stamps when it was SWEPT.
+                        ? (detail?.prevDate
+                          ? ` · live ${fmtEtTime(detail.asOf)} ET vs close ${detail.prevDate}`
+                          : " · live · no recorded close yet")
+                        : mode === "levels"
+                          ? (detail?.date ? ` · close ${detail.date}` : "")
+                          : detail?.prevDate ? ` · ${detail.date} vs close ${detail.prevDate}` : detail?.date ? ` · ${detail.date} · no baseline yet` : ""}
                     </span>
                   </div>
 
                   <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "3px 0 6px", flexWrap: "wrap" }}>
-                    <span style={{ fontFamily: MONO, fontSize: 24, fontWeight: 800, color: selRow ? col(railSigned(selRow)) : T.text }}>
-                      {selRow && railHasValue(selRow) ? sgn(railSigned(selRow)) : "—"}
+                    <span style={{ fontFamily: MONO, fontSize: 24, fontWeight: 800, color: headlineVal != null ? col(headlineVal) : T.text }}>
+                      {headlineVal != null ? sgn(headlineVal) : "—"}
                     </span>
-                    <span style={label}>{MODE_COPY[mode].bigLabel}</span>
-                    {topStrikes.length ? (
+                    <span style={label}>{showLive ? LIVE_COPY.bigLabel : MODE_COPY[mode].bigLabel}</span>
+                    {showLive ? (liveBiggest ? (
+                      <span style={{ ...label, marginLeft: 10 }}>
+                        biggest {liveBiggest.strike} · {sgn(liveBiggest.v)}
+                      </span>
+                    ) : null) : topStrikes.length ? (
                       <span style={{ ...label, marginLeft: 10 }}>
                         biggest {topStrikes[0].strike} · {sgn(topStrikes[0].v)}
                       </span>
                     ) : null}
+                    {showLive && detail?.cached ? (
+                      <span
+                        style={{ ...label, marginLeft: 6, opacity: 0.3 }}
+                        title="Served from the server's one-minute cache. ↻ forces a fresh sweep."
+                      >cached {Math.round((detail.ageMs ?? 0) / 1000)}s</span>
+                    ) : null}
                   </div>
+
+                  {/* The live caveat, on the page and not only in a tooltip.
+                      This Δ is NOT the other tabs' Δ: OI is last night's
+                      settled file and volume accrues from 09:30, so it opens
+                      near zero and grows into the bell. A reader who takes it
+                      for a session-over-session change reads every morning as
+                      "nothing happening". */}
+                  {showLive ? (
+                    <div style={{
+                      display: "flex", alignItems: "flex-start", gap: 8,
+                      border: `1px solid ${T.border}`, borderLeft: `2px solid ${LIGHT_BLUE}`,
+                      borderRadius: 10, padding: "6px 10px", margin: "0 0 10px",
+                      fontSize: 11.5, lineHeight: 1.45, color: T.text, opacity: 0.72,
+                    }}>
+                      <span>
+                        {detail?.prevIsToday
+                          ? <>Today&apos;s 16:05 sweep has already landed, so the outline IS today&apos;s close — this Δ is post-close chain drift, not a session&apos;s build.</>
+                          : detail?.marketDay === false
+                            ? <>Market closed today. The live chain is the last state it settled in, so this reads as the gap since the last recorded close rather than a session in progress.</>
+                            : <>Fill is the chain <strong>right now</strong>, outline is the {detail?.prevDate} close. OI is last night&apos;s settled file and volume accrues from 09:30, so this Δ is <strong>today&apos;s tape building</strong> — near zero at the open, growing into the bell. It is not the session-over-session Δ the other tabs show.</>}
+                      </span>
+                    </div>
+                  ) : null}
 
                   {/* Compare replaces the top-N strip with the four-way split —
                       same vertical cost, and it is the whole reason the tab
                       exists. The four values sum EXACTLY back to the net Δ
                       above them (see splitChange), so this strip and the big
-                      number can never disagree. */}
+                      number can never disagree — including in live mode, where
+                      both are computed off the same live rows. */}
                   {splitChips.length ? (
                     <div
-                      title="The four ways a session's net Δ can be produced. They sum exactly to the net Δ above."
+                      title={showLive
+                        ? "The four ways this Δ can be produced. They sum exactly to the net Δ above."
+                        : "The four ways a session's net Δ can be produced. They sum exactly to the net Δ above."}
                       style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "0 0 12px" }}
                     >
                       {splitChips.map((c) => (
@@ -689,6 +866,15 @@ export default function GexGrowth() {
                     <div style={{ color: NEG, fontSize: 13, fontFamily: MONO }}>Ladder failed: {detailErr}</div>
                   ) : detailLoading && !detail ? (
                     <div style={{ opacity: 0.6, fontSize: 13 }}>Reading ladder…</div>
+                  ) : showLive && detail && !detail.prevDate ? (
+                    // Live has a DIFFERENT no-baseline story from the EOD tabs:
+                    // the live side is fine, it is the recorded close that has
+                    // never been written. Saying "one snapshot on file" here
+                    // would point at the wrong missing thing.
+                    <div style={{ opacity: 0.75, fontSize: 13 }}>
+                      No recorded close on file for {sel} yet, so there is nothing to compare the live chain against.
+                      {" "}The first snapshot lands at the next 16:05 ET sweep.
+                    </div>
                   ) : isDelta(mode) && detail && detail.date && !detail.prevDate ? (
                     // Checked BEFORE the empty-rows case: a symbol on its first
                     // session has rows but no baseline, and "no recorded
@@ -708,7 +894,7 @@ export default function GexGrowth() {
                     // flex:1 + minHeight:0 + overflowY:auto was what trapped the
                     // ladder in a ~400px slot inside a fixed-height card.
                     <div style={{ opacity: detailLoading ? 0.55 : 1, transition: "opacity .12s" }}>
-                      <Ladder rows={detail.rows} spot={detail.spot ?? null} mode={mode} />
+                      <Ladder rows={detail.rows} spot={detail.spot ?? null} mode={mode} live={showLive} />
                     </div>
                   )}
                 </>
@@ -722,7 +908,9 @@ export default function GexGrowth() {
           {mode === "levels"
             ? " net GEX as each symbol's session closed"
             : mode === "compare"
-              ? " outline = prior close, fill = current close · the four chips sum to the net Δ"
+              ? (showLive
+                ? " outline = last recorded close, fill = the chain now · rail stays end-of-day · one symbol per live read, cached 60s"
+                : " outline = prior close, fill = current close · the four chips sum to the net Δ")
               : " each symbol diffed against its own two most recent snapshots"}
           {date ? ` · as of ${date}` : ""}
         </div>
