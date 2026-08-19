@@ -184,6 +184,14 @@ const CSS = `
 .pmk .onrange .cap.top{top:0}
 .pmk .onrange .cap.bot{top:40px;color:var(--dim)}
 
+/* Gap fill. The bar is the only place a PARTIAL fill is visible — the two rows
+   above can only say filled or not. */
+.pmk .stat.gap-filled .l{color:var(--pos)}
+.pmk .gapbar{display:flex;align-items:center;gap:8px;padding:6px 0 2px}
+.pmk .gapbar .t{flex:1;height:5px;border-radius:3px;background:#1a2230;overflow:hidden}
+.pmk .gapbar .t .f{height:100%;border-radius:3px;transition:width .3s}
+.pmk .gapbar .lbl{font-size:10px;color:var(--dim2);white-space:nowrap}
+
 .pmk .deltas .d{display:grid;grid-template-columns:54px 1fr 66px;align-items:center;gap:8px;padding:4px 0}
 .pmk .deltas .d .s{font-size:11px;color:var(--dim)}
 .pmk .deltas .d .t{height:6px;background:#1a2230;border-radius:4px;position:relative;overflow:hidden}
@@ -481,53 +489,111 @@ export default function Premarket() {
       const [h, m] = hm.split(":").map(Number);
       return Number.isFinite(h) ? h * 60 + (m || 0) : -1;
     };
-    let hi = -Infinity, lo = Infinity, pdc: number | null = null, pdcTs = -1;
-    // Prior RTH session (09:30–16:00 on the last dated day before today) — the
-    // range the gap is measured against.
-    let pdHi = -Infinity, pdLo = Infinity, pdDate = "";
+
+    // The last dated session before today — what "prior close" and "prior day
+    // range" mean.
+    let pdDate = "";
     for (const c of sessionCandles) {
       const d = c.date ?? c.slotKey.slice(0, 10);
       if (d < today && d > pdDate) pdDate = d;
     }
+
+    let hi = -Infinity, lo = Infinity;          // overnight (18:00 -> 09:30)
+    let pdHi = -Infinity, pdLo = Infinity;      // prior RTH range
+    let pdc: number | null = null, pdcTs = -1;  // prior 16:00 close
+    let openPx: number | null = null;           // today's 09:30 open
+    let rthHi = -Infinity, rthLo = Infinity;    // today's RTH so far
+
     for (const c of sessionCandles) {
       const d = c.date ?? c.slotKey.slice(0, 10);
       const mins = minOf(c.slotKey);
       if (mins < 0) continue;
-      const isOvernight = (d === today && mins < RTH_OPEN_MIN) || (d < today && mins >= 18 * 60);
-      if (isOvernight) {
+
+      if ((d === today && mins < RTH_OPEN_MIN) || (d < today && mins >= 18 * 60)) {
         if (c.high > hi) hi = c.high;
         if (c.low < lo) lo = c.low;
       }
       if (d === pdDate && mins >= RTH_OPEN_MIN && mins < RTH_CLOSE_MIN) {
         if (c.high > pdHi) pdHi = c.high;
         if (c.low < pdLo) pdLo = c.low;
+        // The prior session's LAST RTH bar is the 16:00 close the gap is
+        // measured from. Deliberately not the last overnight print.
+        if (c.timestamp > pdcTs) { pdcTs = c.timestamp; pdc = c.close; }
       }
-      // prior RTH close
-      if (d < today && mins < RTH_CLOSE_MIN && c.timestamp > pdcTs) { pdcTs = c.timestamp; pdc = c.close; }
+      if (d === today && mins >= RTH_OPEN_MIN && mins < RTH_CLOSE_MIN) {
+        if (mins === RTH_OPEN_MIN) openPx = c.open;
+        if (c.high > rthHi) rthHi = c.high;
+        if (c.low < rthLo) rthLo = c.low;
+      }
     }
-    const pd = Number.isFinite(pdHi) && Number.isFinite(pdLo) ? { hi: pdHi, lo: pdLo } : null;
-    if (!Number.isFinite(hi) || !Number.isFinite(lo)) {
-      return pdc != null ? { hi: null, lo: null, pdc, pd } : null;
-    }
-    return { hi, lo, pdc, pd };
+
+    return {
+      hi: Number.isFinite(hi) ? hi : null,
+      lo: Number.isFinite(lo) ? lo : null,
+      pdc,
+      pd: Number.isFinite(pdHi) && Number.isFinite(pdLo) ? { hi: pdHi, lo: pdLo } : null,
+      openPx,
+      rthHi: Number.isFinite(rthHi) ? rthHi : null,
+      rthLo: Number.isFinite(rthLo) ? rthLo : null,
+    };
   }, [sessionCandles, clock]);
 
   /**
-   * The gap: front ES against the prior RTH close.
+   * The gap: prior 16:00 ET close -> today's 09:30 ET open. That pair, always.
    *
-   * `outside` is the one that changes how you trade it — a gap that opens beyond
-   * yesterday's range has no reference above/below it, so it runs or fails hard;
-   * a gap inside the range is sitting in known territory and fills far more
-   * often. `fillPts` is the distance back to the prior close.
+   * BEFORE 09:30 there is no open yet, so the front ES stands in for it and the
+   * row is marked PROJECTED — it moves until the bell and should not be read as
+   * a fact. From 09:30 the gap is FIXED at the printed open and never moves
+   * again for the rest of the day.
+   *
+   * FILLED = price traded back through the prior close after the open. A gap up
+   * fills when today's RTH low reaches the close; a gap down when the RTH high
+   * does. `retrace` is how far back it has come as a share of the gap, so a
+   * partial fill is visible before it completes.
+   *
+   * `outside` is the read that changes how you trade it: a gap opening beyond
+   * yesterday's range has no reference above or below it, so it runs or fails
+   * hard, while a gap inside the range is in known territory and fills far more
+   * often.
    */
+  const GAP_EPS = 0.25; // ES ticks — below this there is no gap to talk about
+
   const gap = useMemo(() => {
     const pdc = overnight?.pdc;
-    if (pdc == null || !(esFut > 0)) return null;
-    const pts = esFut - pdc;
+    if (pdc == null || !(pdc > 0)) return null;
+    const openPx = overnight?.openPx ?? null;
+    const projected = openPx == null;
+    const ref = openPx ?? (esFut > 0 ? esFut : null);
+    if (ref == null) return null;
+
+    const pts = ref - pdc;
     const pct = (pts / pdc) * 100;
+    const flat = Math.abs(pts) < GAP_EPS;
+    const up = pts > 0;
+
+    // Fill only counts from the RTH bars, and only once there is an open.
+    const filled = projected || flat
+      ? false
+      : up
+        ? overnight?.rthLo != null && overnight.rthLo <= pdc
+        : overnight?.rthHi != null && overnight.rthHi >= pdc;
+
+    // How far back toward the close it has come. Uses the extreme in the fill
+    // direction, not the last price, so a fill that already reversed still reads
+    // as filled/near-filled.
+    const extreme = up ? overnight?.rthLo : overnight?.rthHi;
+    const retrace = projected || flat || extreme == null
+      ? null
+      : Math.max(0, Math.min(100, ((ref - extreme) / (ref - pdc)) * 100));
+
+    // Distance from the LIVE price back to the close.
+    const last = esFut > 0 ? esFut : ref;
+    const remaining = filled ? 0 : pdc - last;
+
     const pd = overnight?.pd ?? null;
-    const outside = pd ? esFut > pd.hi || esFut < pd.lo : null;
-    return { pts, pct, outside, fillPts: -pts, pd };
+    const outside = pd ? ref > pd.hi || ref < pd.lo : null;
+
+    return { pts, pct, projected, flat, up, filled, retrace, remaining, outside, openPx, pdc, pd };
   }, [overnight, esFut]);
 
   // ── catalysts for today ────────────────────────────────────────────────────
@@ -927,24 +993,49 @@ export default function Premarket() {
                   </span>
                 )}
               </span></div>
-              <div className="stat"><span className="l">Gap vs prior close</span><span className="r mono">
-                {gap ? (
-                  <>
-                    <span className={gap.pts >= 0 ? "chg-pos" : "chg-neg"}>
-                      {gap.pts >= 0 ? "+" : "−"}{Math.abs(gap.pts).toFixed(2)} ({fmtPct(gap.pct)})
-                    </span>{" "}
-                    <span className={`pill ${gap.outside ? "warn" : ""}`}>
-                      {gap.outside == null ? (gap.pts >= 0 ? "gap up" : "gap down")
-                        : gap.outside ? "outside PD range" : "inside PD range"}
-                    </span>
-                  </>
-                ) : "—"}
-              </span></div>
-              <div className="stat"><span className="l">Gap fill target</span><span className="r mono">
-                {gap && overnight?.pdc != null
-                  ? <>{fmtPx(overnight.pdc, 2)} <span className="muted">({nf(Math.abs(gap.fillPts), 0)} pts {gap.fillPts >= 0 ? "up" : "down"})</span></>
-                  : "—"}
-              </span></div>
+              <div className={`stat${gap?.filled ? " gap-filled" : ""}`}>
+                <span className="l">Gap {gap?.projected ? "(projected)" : "(4pm → 9:30)"}</span>
+                <span className="r mono">
+                  {gap ? (
+                    <>
+                      <span className={gap.flat ? "muted" : gap.up ? "chg-pos" : "chg-neg"}>
+                        {gap.flat ? "flat" : `${gap.up ? "+" : "−"}${Math.abs(gap.pts).toFixed(2)} (${fmtPct(gap.pct)})`}
+                      </span>{" "}
+                      {gap.filled
+                        ? <span className="pill cool">✓ FILLED</span>
+                        : gap.projected
+                          ? <span className="pill">projected · pre-open</span>
+                          : <span className={`pill ${gap.outside ? "warn" : ""}`}>
+                              {gap.outside == null ? (gap.up ? "gap up" : "gap down")
+                                : gap.outside ? "outside PD range" : "inside PD range"}
+                            </span>}
+                    </>
+                  ) : "—"}
+                </span>
+              </div>
+              <div className={`stat${gap?.filled ? " gap-filled" : ""}`}>
+                <span className="l">Gap fill target</span>
+                <span className="r mono">
+                  {!gap || gap.flat ? "—"
+                    : gap.filled
+                      ? <span className="chg-pos">✓ filled at {fmtPx(gap.pdc, 2)}</span>
+                      : <>
+                          {fmtPx(gap.pdc, 2)}{" "}
+                          <span className="muted">
+                            ({nf(Math.abs(gap.remaining), 0)} pts {gap.remaining >= 0 ? "up" : "down"}
+                            {gap.retrace != null ? ` · ${gap.retrace.toFixed(0)}% retraced` : ""})
+                          </span>
+                        </>}
+                </span>
+              </div>
+              {gap && !gap.flat && !gap.projected && (
+                <div className="gapbar">
+                  <div className="t"><div className="f" style={{ width: `${Math.max(2, Math.min(100, gap.filled ? 100 : gap.retrace ?? 0))}%`, background: gap.filled ? "var(--pos)" : "var(--blue)" }} /></div>
+                  <span className="lbl">
+                    {gap.filled ? "gap closed" : `${(gap.retrace ?? 0).toFixed(0)}% of the gap retraced`}
+                  </span>
+                </div>
+              )}
               <div className="stat"><span className="l">Prior day range (ES)</span><span className="r mono">
                 {overnight?.pd
                   ? <>{fmtPx(overnight.pd.lo, 0)} – {fmtPx(overnight.pd.hi, 0)} <span className="muted">({nf(overnight.pd.hi - overnight.pd.lo, 0)})</span></>
