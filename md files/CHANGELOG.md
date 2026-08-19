@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-08-19 - FIX: /premarket crashed at runtime — backtick inside the CSS template
+
+`"...".inside is not a function` on load, the whole page blank.
+
+Two CSS comments I added in the styling pass contained BACKTICKS (```.inside```,
+```.pmk .g```) — and that CSS lives in a template literal. The first backtick
+ended the literal early, so everything after it parsed as a tagged-template
+call. Valid JavaScript, which is why it built clean and only died in the
+browser.
+
+- Removed every backtick from the `CSS` template literal and left a note in the
+  file saying why none may go back in.
+- Also fixed `.pmk .s b` → `.pmk .sect .s b`, missed when the sector chip rules
+  were scoped.
+
 ## 2026-08-19 - FIX: /premarket broke the Docker build — moved to components/pages/
 
 `npm run build` failed with `Export encountered an error on /premarket/page:

@@ -70,6 +70,29 @@ not by memory.
 | Routes | `src/App.tsx` |
 | Early boot (socket opens here) | `index.html` |
 
+## Living inside the v2 repo: two traps
+
+Both cost real time on 2026-08-19. Both are already handled — this is here so
+nobody "tidies up" the handling.
+
+1. **`css.postcss` in `vite.config.ts` must stay pinned.** The repo root has a
+   `postcss.config.js` loading Tailwind **v3**. Vite searches UPWARD for a
+   PostCSS config, finds it, and runs v3 over this app's v4 stylesheet — dying
+   with "`@layer base` is used but no matching `@tailwind base` directive". It
+   only reproduces when a parent config exists, so it passes on a standalone
+   checkout and fails only inside the Docker image.
+
+2. **No `package-lock.json`.** Regenerating it on Windows records the win32
+   builds of the native binaries rollup and `@tailwindcss/oxide` ship as
+   optional platform packages; npm then skips the linux-x64 ones on a cold
+   install and `vite build` dies with "Cannot find module
+   @rollup/rollup-linux-x64-gnu". It is gitignored, and the Dockerfile deletes
+   it defensively. `app-vite` avoids this the same way.
+
+The shape of both: **a standalone checkout is not the environment this builds
+in.** Before trusting a green local build, consider what the parent directory
+adds.
+
 ## The early boot
 
 `index.html` opens the WebSocket and starts the IndexedDB read **before the

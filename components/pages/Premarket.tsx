@@ -156,8 +156,12 @@ const CSS = `
    tag hung off the end of the bar ran past the track and over the neighbouring
    column (call wall) or over the strike gutter (put wall). Wide bars carry the
    tag INSIDE, flush to the bar's end; only short bars hang it outside, where
-   there is room by definition. `.inside` also drops the dark plate so the tag
-   reads on the bar's own colour. */
+   there is room by definition. The .inside variant also drops the dark plate
+   so the tag reads on the bar's own colour.
+
+   NOTE: no backticks anywhere in this string — it is a template literal, and a
+   stray backtick in a CSS comment ends it and turns the rest into a tagged
+   template call. That shipped once and blew up the page at runtime. */
 .pmk .row .tag{position:absolute;top:-1px;font-size:9.5px;padding:1px 5px;border-radius:4px;white-space:nowrap;letter-spacing:.03em;background:#0d1117;max-width:calc(50% - 8px);overflow:hidden;text-overflow:ellipsis}
 .pmk .row .tag.inside{background:rgba(6,10,16,.55);border-color:transparent!important;color:#fff!important}
 .pmk .spotline,.pmk .flipline{position:absolute;left:60px;right:0;border-top:1px dashed;display:flex;justify-content:flex-end;pointer-events:none}
@@ -189,7 +193,7 @@ const CSS = `
 .pmk .sect{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:4px}
 .pmk .sect .s{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:7px;font-size:11.5px;border:1px solid var(--card);gap:8px;min-width:0}
 .pmk .sect .s > span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pmk .s b{font-weight:600;font-size:11.5px}
+.pmk .sect .s b{font-weight:600;font-size:11.5px}
 
 .pmk .play{border:1px solid var(--card);border-radius:var(--r);background:var(--panel2);padding:11px 12px;margin-top:10px}
 .pmk .play .h{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2);margin-bottom:6px}
@@ -201,7 +205,7 @@ const CSS = `
 .pmk .scen > div{display:grid;grid-template-columns:16px 1fr;gap:8px;font-size:11.5px;color:var(--dim)}
 .pmk .scen b{color:var(--txt);font-weight:600}
 
-/* SCOPED TO .greeks ON PURPOSE. As a bare `.pmk .g` this also matched the
+/* SCOPED TO .greeks ON PURPOSE. As a bare .pmk .g this also matched the
    <span class="g"> the one-liner uses for its green highlight, which then
    inherited the tile's panel background, border and padding — that is what put
    a black box through the middle of the sentence. */

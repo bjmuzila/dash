@@ -38,6 +38,29 @@ export default defineConfig(({ mode }) => {
         '/ws': { target: wsBackend, ws: true, changeOrigin: true },
       },
     },
+    css: {
+      // ── DO NOT REMOVE ───────────────────────────────────────────────────
+      // This pins PostCSS to "no plugins" so Vite does not search UPWARD for a
+      // config file.
+      //
+      // cbedge-v3 lives inside the v2 repo, and the repo root has a
+      // postcss.config.js that loads Tailwind v3 (v2's version). Without this
+      // block Vite walks up, finds it, and runs Tailwind **v3** over v3's
+      // Tailwind **v4** stylesheet. The build then dies with:
+      //
+      //   [postcss] src/design/tokens.css: `@layer base` is used but no
+      //   matching `@tailwind base` directive is present
+      //
+      // — with the stack pointing at the PARENT node_modules/tailwindcss.
+      //
+      // It only reproduces when a parent config is present, which is why it
+      // passed on a standalone checkout and failed only inside the Docker
+      // image. Cost 40 minutes on 2026-08-19.
+      //
+      // v3 needs no PostCSS plugins at all: @tailwindcss/vite does its own
+      // processing, and autoprefixer is unnecessary at this browser target.
+      postcss: { plugins: [] },
+    },
     build: {
       target: 'es2022',
       // Source maps are worth their weight — they cost nothing at runtime
