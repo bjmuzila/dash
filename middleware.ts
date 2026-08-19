@@ -63,6 +63,12 @@ const OWNER_PATTERNS: RegExp[] = [
   // assets (/home3/assets/*.js, *.css, *.png) bypass this gate via the matcher
   // extension exclusion below; only the bare /home3 entry route is gated.
   /^\/home3$/,
+  // Dashboard v3 (public/v3, built from cbedge-v3/) — owner-only for the same
+  // reason /home3 is: it is a blank-slate rebuild being designed in the open,
+  // and a paying customer landing on it would think the product broke. Static
+  // assets (/v3/assets/*) bypass this gate via the matcher extension exclusion
+  // below; only the SPA entry routes are gated. Drop this line when v3 ships.
+  /^\/v3(\/.*)?$/,
 ];
 const isOwnerRoute = (path: string) => OWNER_PATTERNS.some((re) => re.test(path));
 

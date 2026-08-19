@@ -1,0 +1,115 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   TOKENS — the single source of truth for every colour, space and type step.
+
+   This is a Tailwind v4 @theme block, which does two things at once:
+     1. generates the utilities (bg-surface, text-muted, gap-2, …)
+     2. emits every token as a CSS custom property on :root
+
+   So plain CSS can use var(--color-surface) and Tailwind can use bg-surface,
+   and they are the same value. No JS theme object, no runtime cost.
+
+   THE RULE: no hex, rgb, or px colour value may appear anywhere in src/
+   outside this file. That is not a style preference — it is what stops v3
+   drifting into v2, where every page invented its own palette.
+
+   VALUES BELOW ARE PLACEHOLDERS. They are a neutral dark scale chosen to be
+   obviously provisional. Replace them as you design; nothing downstream
+   hardcodes any of it.
+
+   ⚠ --color-bg and --color-fg are duplicated in index.html's inline <style>
+   so the first paint is correct before this file loads. Change one, change
+   both — scripts/check-budgets.mjs fails the build if they drift.
+   ──────────────────────────────────────────────────────────────────────── */
+
+@import 'tailwindcss';
+
+@theme {
+  /* ── Surfaces ──────────────────────────────────────────────────────────
+     bg      page background
+     surface cards, panels
+     raised  hovered / elevated surface
+     line    borders and dividers                                          */
+  --color-bg: #0a0b0d;
+  --color-surface: #121417;
+  --color-raised: #1a1d22;
+  --color-line: #23272e;
+
+  /* ── Text ─────────────────────────────────────────────────────────────
+     fg      primary text
+     muted   labels, axis ticks, secondary text
+     faint   disabled, watermarks                                          */
+  --color-fg: #e6e8eb;
+  --color-muted: #8d949e;
+  --color-faint: #565c66;
+
+  /* ── Semantic ─────────────────────────────────────────────────────────
+     Directional colour for a trading UI. Deliberately not red/green yet —
+     pick a pair that survives a colourblind check before you commit.       */
+  --color-up: #35c28e;
+  --color-down: #e0645f;
+  --color-flat: #7a828d;
+  --color-accent: #5b8cff;
+  --color-warn: #e0a44a;
+
+  /* ── Data series ──────────────────────────────────────────────────────
+     Categorical ramp for charts. Keep to 6; if a chart needs more than six
+     distinguishable series it needs a different chart.                     */
+  --color-series-1: #5b8cff;
+  --color-series-2: #35c28e;
+  --color-series-3: #e0a44a;
+  --color-series-4: #b07be0;
+  --color-series-5: #4fb8d4;
+  --color-series-6: #e0645f;
+
+  /* ── Type scale ───────────────────────────────────────────────────────
+     Numbers use the tabular font so columns do not jitter as prices tick.  */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, monospace;
+
+  --text-xs: 0.6875rem; /* 11px — dense table cells, axis ticks */
+  --text-sm: 0.8125rem; /* 13px — default UI text */
+  --text-base: 0.9375rem; /* 15px — body */
+  --text-lg: 1.125rem; /* 18px — card titles */
+  --text-xl: 1.5rem; /* 24px — stat values */
+  --text-2xl: 2rem; /* 32px — hero numbers */
+
+  /* ── Space ────────────────────────────────────────────────────────────
+     4px base. Everything is a multiple; nothing is a one-off.              */
+  --spacing: 0.25rem;
+
+  /* ── Shape ────────────────────────────────────────────────────────────  */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+/* Numbers must not jitter as they tick. Any element showing a live figure
+   should carry .tabular (or font-mono). */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* Stale data — painted from cache, not yet confirmed live. Applied by panels
+   while the first live frame is outstanding. Intentionally subtle: the point
+   is that the screen is never empty, not that the user is warned. */
+.stale {
+  opacity: 0.55;
+  transition: opacity 120ms ease-out;
+}
+
+/* 100dvh where supported; see the note in index.html. */
+.cb-viewport {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* Respect the user's motion preference globally rather than per-component. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

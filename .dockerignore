@@ -28,3 +28,14 @@ tests
 # either on a guess is how you break a route nobody tests.
 *.jar
 isolate-*.log
+
+# cbedge-v3 (dashboard v3) build artefacts. The Dockerfile runs its own
+# `npm install` + build inside the image, so shipping the laptop's copies is
+# pure context bloat — and a Windows-resolved node_modules can carry
+# platform-specific binaries that do not run on the Linux build.
+#
+# Listed explicitly rather than as `**/node_modules`: a broad glob here would
+# also change what reaches the image for app-vite, owner-vite, budget-vite and
+# recipe-vite, and none of that has been tested.
+cbedge-v3/node_modules
+cbedge-v3/dist

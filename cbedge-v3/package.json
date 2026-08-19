@@ -1,0 +1,33 @@
+{
+  "name": "cbedge-v3",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build && node scripts/check-budgets.mjs",
+    "build:fast": "vite build",
+    "budgets": "node scripts/check-budgets.mjs",
+    "mock": "node scripts/mock-server.mjs 4310",
+    "check:ws": "node scripts/ws-scope-check.mjs",
+    "check": "npm run typecheck && npm run build:fast && npm run budgets && npm run check:ws",
+    "preview": "vite preview --port 4173"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.9.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.14",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.1",
+    "@vitejs/plugin-react": "^5.0.4",
+    "playwright": "^1.62.1",
+    "tailwindcss": "^4.1.14",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.9"
+  }
+}

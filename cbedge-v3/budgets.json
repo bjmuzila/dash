@@ -1,0 +1,9 @@
+{
+  "$comment": "Hard limits, in BROTLI-compressed bytes, enforced by scripts/check-budgets.mjs on every build. These are set close to current reality on purpose — a budget with 4x headroom enforces nothing. Raising a number is a deliberate decision that shows up in a diff, which is the whole point: 'no exceptions' only survives if a machine enforces it.",
+  "entry": 46000,
+  "react": 55000,
+  "route": 80000,
+  "css": 20000,
+  "html": 4096,
+  "totalInitial": 112000
+}

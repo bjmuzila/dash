@@ -34,6 +34,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { useMobileGex } from "@/hooks/useMobileGex";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useEconCalendar } from "@/hooks/useEconCalendar";
@@ -53,7 +54,11 @@ import {
 const CSS = `
 .pmk{
   --bg:#0a0d12; --panel:#11161f; --panel2:#151b26;
-  --line:#1f2733; --line2:#2a3441;
+  --line:#242e3b; --line2:#33404f;
+  /* Card outline. Deliberately a white alpha, not a slate hex: the cards sit on
+     three different backgrounds (panel, panel2, the green/red regime wash) and
+     a fixed hex reads as a different weight on each. */
+  --card:rgba(255,255,255,.20);
   --txt:#e6edf6; --dim:#ffffff; --dim2:#ffffff;
   --pos:#2ecc8f; --posDim:#1b7a56; --neg:#ff5c6c; --negDim:#8c2f3a;
   --amber:#f5b942; --blue:#4da3ff; --violet:#a78bfa; --r:10px;
@@ -72,7 +77,7 @@ const CSS = `
 .pmk .badge-concept{font-size:10px;padding:3px 8px;border:1px solid var(--line2);border-radius:999px;color:var(--dim);letter-spacing:.06em}
 
 .pmk .prep{
-  border:1px solid var(--line);border-radius:14px;overflow:hidden;
+  border:1px solid var(--card);border-radius:14px;overflow:hidden;
   background:linear-gradient(180deg,rgba(46,204,143,.07),rgba(46,204,143,0) 190px), var(--panel);
   box-shadow:0 0 0 1px rgba(46,204,143,.09), 0 18px 50px -30px #000;
 }
@@ -109,14 +114,7 @@ const CSS = `
 .pmk .bias .d{font-size:11px;color:var(--dim);margin-top:2px}
 
 .pmk .levels{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
-.pmk .lvl{position:relative;border:1px solid var(--line);border-radius:var(--r);background:var(--panel2);padding:10px 11px 11px;overflow:hidden}
-.pmk .lvl::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--dim2)}
-.pmk .lvl.call::before{background:var(--neg)}
-.pmk .lvl.put::before{background:var(--pos)}
-.pmk .lvl.flip::before{background:var(--amber)}
-.pmk .lvl.magnet::before{background:var(--violet)}
-.pmk .lvl.pain::before{background:var(--blue)}
-.pmk .lvl.spot::before{background:#fff}
+.pmk .lvl{position:relative;border:1px solid var(--card);border-radius:var(--r);background:var(--panel2);padding:10px 11px 11px;overflow:hidden}
 .pmk .lvl .name{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim2);display:flex;justify-content:space-between;align-items:center;gap:6px}
 .pmk .lvl .name em{font-style:normal;font-size:9px;padding:1px 5px;border-radius:4px;background:#0d1117;border:1px solid var(--line2);color:var(--dim);white-space:nowrap}
 .pmk .lvl .px{font-size:21px;font-weight:660;letter-spacing:-.03em;margin:4px 0 1px}
@@ -146,7 +144,14 @@ const CSS = `
 .pmk .bar.p{left:50%;background:linear-gradient(90deg,var(--posDim),var(--pos))}
 .pmk .bar.n{right:50%;background:linear-gradient(270deg,var(--negDim),var(--neg))}
 .pmk .bar.dimmed{opacity:.45}
-.pmk .row .tag{position:absolute;top:-1px;font-size:9.5px;padding:1px 5px;border-radius:4px;white-space:nowrap;letter-spacing:.03em;background:#0d1117}
+/* Strike labels. A tagged strike is usually the LARGEST bar in the window, so a
+   tag hung off the end of the bar ran past the track and over the neighbouring
+   column (call wall) or over the strike gutter (put wall). Wide bars carry the
+   tag INSIDE, flush to the bar's end; only short bars hang it outside, where
+   there is room by definition. `.inside` also drops the dark plate so the tag
+   reads on the bar's own colour. */
+.pmk .row .tag{position:absolute;top:-1px;font-size:9.5px;padding:1px 5px;border-radius:4px;white-space:nowrap;letter-spacing:.03em;background:#0d1117;max-width:calc(50% - 8px);overflow:hidden;text-overflow:ellipsis}
+.pmk .row .tag.inside{background:rgba(6,10,16,.55);border-color:transparent!important;color:#fff!important}
 .pmk .spotline,.pmk .flipline{position:absolute;left:60px;right:0;border-top:1px dashed;display:flex;justify-content:flex-end;pointer-events:none}
 .pmk .spotline{border-color:#fff9}
 .pmk .flipline{border-color:var(--amber)}
@@ -174,10 +179,11 @@ const CSS = `
 .pmk .deltas .d .v{font-size:11px;text-align:right}
 
 .pmk .sect{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:4px}
-.pmk .s{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:7px;font-size:11.5px;border:1px solid var(--line);gap:8px}
+.pmk .s{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:7px;font-size:11.5px;border:1px solid var(--card);gap:8px;min-width:0}
+.pmk .s > span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pmk .s b{font-weight:600;font-size:11.5px}
 
-.pmk .play{border:1px solid var(--line);border-radius:var(--r);background:var(--panel2);padding:11px 12px;margin-top:10px}
+.pmk .play{border:1px solid var(--card);border-radius:var(--r);background:var(--panel2);padding:11px 12px;margin-top:10px}
 .pmk .play .h{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2);margin-bottom:6px}
 .pmk .play p{margin:0;font-size:12.5px;line-height:1.5}
 .pmk .play .k{color:var(--amber);font-weight:600}
@@ -188,7 +194,7 @@ const CSS = `
 .pmk .scen b{color:var(--txt);font-weight:600}
 
 .pmk .greeks{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
-.pmk .g{border:1px solid var(--line);border-radius:8px;padding:8px 9px;background:var(--panel2)}
+.pmk .g{border:1px solid var(--card);border-radius:8px;padding:8px 9px;background:var(--panel2)}
 .pmk .g .n{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2)}
 .pmk .g .v{font-size:15px;font-weight:640;margin-top:2px;letter-spacing:-.02em}
 .pmk .g .m{font-size:10px;color:var(--dim)}
@@ -752,19 +758,27 @@ export default function PremarketPage() {
                           className={`bar ${pos ? "p" : "n"}${Math.abs(b.net) > bigCut ? "" : " dimmed"}`}
                           style={{ width: `${w}%` }}
                         />
-                        {tag && (
-                          <span
-                            className="tag"
-                            style={{
-                              ...(pos
-                                ? { left: `calc(50% + ${w}% + 6px)` }
-                                : { right: `calc(50% + ${w}% + 6px)` }),
-                              color: tag.color, border: `1px solid ${tag.color}`,
-                            }}
-                          >
-                            {tag.text}
-                          </span>
-                        )}
+                        {tag && (() => {
+                          // A tagged strike is usually the widest bar in the
+                          // window, so hanging the label off its end pushes it
+                          // out of the track. Wide bars take it inside.
+                          const inside = w >= 22;
+                          const style: CSSProperties = inside
+                            ? pos
+                              ? { left: `calc(50% + ${w}% - 4px)`, transform: "translateX(-100%)" }
+                              : { right: `calc(50% + ${w}% - 4px)`, transform: "translateX(100%)" }
+                            : pos
+                              ? { left: `calc(50% + ${w}% + 6px)` }
+                              : { right: `calc(50% + ${w}% + 6px)` };
+                          return (
+                            <span
+                              className={`tag${inside ? " inside" : ""}`}
+                              style={{ ...style, color: tag.color, border: `1px solid ${tag.color}` }}
+                            >
+                              {tag.text}
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
                   );

@@ -1,5 +1,59 @@
 # Changelog
 
+## 2026-08-19 - v3 wired to cbedge.net/v3 (owner-only). New cbedge-v3/ app.
+
+Edited: `Dockerfile`, `middleware.ts`, `.dockerignore`. Added: `app/v3/route.ts`,
+`cbedge-v3/` (31 files).
+
+v3 now lives **in this repo**, as a sibling to `app-vite/`, `owner-vite/`,
+`budget-vite/` and `recipe-vite/`. It was going to be its own repo, but code
+reaches the VPS only through this one — a separate repo would have needed its own
+clone, compose service and tunnel rule to buy nothing. The isolation that matters
+is the dependency graph: `cbedge-v3/` has its own `package.json` and imports
+nothing from v2.
+
+- `Dockerfile`: builds `cbedge-v3` → `public/v3` every deploy, mirroring the
+  `app-vite` → `public/app` step. Runs **`build:fast`, not `build`** — the full
+  build also runs the brotli budget check, and an over-budget v3 bundle must
+  never be able to block a v2 hotfix from reaching the VPS. Budgets are enforced
+  on the laptop via `npm run check` before pushing.
+- `app/v3/route.ts`: three lines, `serveSpaShell("v3")`. Deliberately NOT a
+  catch-all — a catch-all would swallow `/v3/assets/*.js` and return HTML, which
+  is why every `/app/*` route has its own handler. Each new v3 page needs its own
+  `app/v3/<name>/route.ts` or it 404s on hard refresh.
+- `middleware.ts`: `/^\/v3(\/.*)?$/` added to `OWNER_PATTERNS`, the same
+  treatment `/home3` already gets — a blank rebuild must not be reachable by
+  paying customers. Remove that line when v3 ships.
+- `.dockerignore`: `cbedge-v3/node_modules` and `cbedge-v3/dist` excluded.
+  Listed explicitly rather than as `**/node_modules`, which would silently change
+  what reaches the image for four other Vite apps.
+
+Not deployed — reaches the VPS on the next `push.ps1` + rebuild.
+
+Leftover to delete by hand: `generated/cbedge-v3/` (the first copy, git-ignored).
+
+
+## 2026-08-19 - /premarket: card accents removed, borders raised, strike tags contained
+
+`app/premarket/page.tsx`, styling only — no data changes.
+
+- Dropped the coloured left accent bar on the six key-level cards
+  (`.lvl::before` and its call / put / flip / magnet / pain / spot variants).
+- Card outlines are more pronounced: new `--card: rgba(255,255,255,.20)` on the
+  section shell, the level cards, the greek tiles, the playbook and the sector
+  chips. A white alpha rather than a slate hex, because those cards sit on three
+  different backgrounds (panel, panel2, the green/red regime wash) and a fixed
+  hex reads as a different weight on each. Divider `--line` also lifted
+  (#1f2733 → #242e3b).
+- CALL WALL / PUT WALL no longer cover their neighbours. A tagged strike is
+  usually the WIDEST bar in the window, so a label hung off the bar's end ran
+  past the track — over the Overnight column on the call side and over the
+  strike gutter on the put side. Bars ≥22% of the half-track now carry the label
+  INSIDE, flush to the bar's end, on a translucent plate in white; only short
+  bars hang it outside, where there is room by definition. Tags are also capped
+  at half the track width and ellipsised.
+- Sector chips truncate their name instead of overflowing the card.
+
 ## 2026-08-19 - /premarket wired to live data (no more placeholders)
 
 `app/premarket/page.tsx` — the page now reads the real feed. Every number that

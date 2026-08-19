@@ -56,6 +56,15 @@ RUN npm run build
 # /traders-dashboard. This step is the permanent fix; do not remove it.
 RUN cd app-vite && npm install --no-audit --no-fund && npm run build
 RUN rm -rf public/app && cp -r app-vite/dist public/app
+# Dashboard v3 (cbedge-v3) — the blank-slate rebuild, served at /v3 and gated to
+# owner-only in middleware.ts. Same pattern as app-vite above.
+#
+# NOTE: build:fast, NOT build. `npm run build` in cbedge-v3 also runs the brotli
+# budget check, which is meant to fail a COMMIT, not a deploy — an over-budget v3
+# bundle must never be able to block a v2 hotfix from reaching the VPS. Run
+# `npm run check` on the laptop before pushing; that is where budgets are enforced.
+RUN cd cbedge-v3 && npm install --no-audit --no-fund && npm run build:fast
+RUN rm -rf public/v3 && cp -r cbedge-v3/dist public/v3
 
 # ---- runtime ----
 FROM base AS runtime
