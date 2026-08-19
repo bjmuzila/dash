@@ -81,9 +81,23 @@ RUN rm -rf public/app && cp -r app-vite/dist public/app
 # `set -ux` (no -e) so a failure lands in the else branch instead of aborting.
 # The echoed commands are what makes the real npm/vite error legible in the
 # build log; without them BuildKit collapses the step to "exit code: 1".
+# `rm -f package-lock.json`: the lockfile is regenerated on Brandon's WINDOWS
+# laptop whenever he runs npm install there, and push.ps1 commits it. A
+# Windows-resolved lockfile records the win32 builds of the native binaries that
+# rollup and @tailwindcss/oxide ship as OPTIONAL platform packages — and npm then
+# skips their linux-x64 counterparts on a cold install. The install "succeeds",
+# then `vite build` dies immediately with "Cannot find module
+# @rollup/rollup-linux-x64-gnu".
+#
+# It only bites cold, inside the image: a warm node_modules on the VPS host has
+# the right binaries already, which is why the same commands pass when run by
+# hand there. app-vite dodges this by shipping no lockfile at all; deleting it
+# here gives cbedge-v3 the same behaviour without touching the laptop's copy.
+# The root Dockerfile comment above records the same Windows-lockfile problem.
 RUN set -ux; \
     if ls -la cbedge-v3/package.json \
        && cd cbedge-v3 \
+       && rm -f package-lock.json \
        && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-audit --no-fund \
        && npm run build:fast; then \
       cd /app && rm -rf public/v3 && cp -r cbedge-v3/dist public/v3 && ls public/v3; \

@@ -1,5 +1,17 @@
 node_modules
 dist
+
+# NOT committed, on purpose — app-vite does the same.
+#
+# This lockfile gets regenerated on Windows every time `npm install` runs on the
+# laptop, and a Windows-resolved lockfile omits the linux-x64 builds of the
+# native binaries rollup and @tailwindcss/oxide ship as optional platform
+# packages. The Docker image then installs cold without them and `vite build`
+# dies with "Cannot find module @rollup/rollup-linux-x64-gnu".
+#
+# The Dockerfile deletes it defensively too, so a stray committed copy cannot
+# break a deploy. If one is already tracked: git rm --cached cbedge-v3/package-lock.json
+package-lock.json
 .env
 .env.local
 *.log
