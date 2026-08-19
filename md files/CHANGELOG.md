@@ -1,5 +1,92 @@
 # Changelog
 
+## 2026-08-18 - ΔGEX Board: rail badges, call/put legs, live 0DTE, and deep links out
+
+Edited: `server-v2/eod-strike-gex-recorder.js`,
+`owner-vite/src/pages/GexGrowth.tsx`.
+Schema: `eod_strike_gex` gains `call_gex` and `put_gex` (nullable, no backfill).
+
+The remaining modules from the interpretation-layer doc, minus the two sections
+that were commentary rather than features.
+
+### Call/put legs — the schema change
+
+`net_gex` is the sum of a positive call leg and a negative put leg, and the sum
+is lossy: net GEX falling is equally consistent with call gamma coming off and
+put gamma piling on. `accumulateChainGex()` always computed both halves and
+threw them away. It now keeps them, and `callLeg + putLeg` is bit-for-bit the
+old single expression — so the legs land alongside a year of history with no
+discontinuity in the net.
+
+**No backfill, deliberately.** The chains those rows were built from are gone.
+Pre-migration sessions carry NULL legs all the way to the client, never
+COALESCEd to 0, because "not recorded" and "no call gamma here" are different
+facts. `hasLegs` / `hasPrevLegs` let the panel explain the gap in one line
+instead of showing a fabricated split. Legs are summed ONLY when both sessions
+have them — a mixed sum would report the entire current call book as "built
+today".
+
+### 0DTE — live only, and NOT a new column
+
+The obvious design was a second expiry bucket in the table, and it is wrong.
+The recorded sweep fires at **16:05 ET, after the close, by which point today's
+0DTE has expired** — storing it would write a ladder of zeros under a column
+implying it meant something, every day, forever. Intraday it is the opposite:
+the fastest gamma on the board and the half the recorded series structurally
+cannot see. So `resolveBoardExpiries()` gained a `zerodte` bucket that the LIVE
+route alone uses, the table keeps its ex-0DTE definition unchanged, and the
+panel shows 0DTE as a summary (net, share of |book|, top strikes) rather than a
+second ladder. Both buckets are fetched in one `Promise.all` so they can never
+be from different seconds.
+
+### Rail badges
+
+`getStrikeGexBadges()` computes per-symbol structure — flip level now/prior,
+migration, sign-flip count, walls — and merges into the board response. **In
+Node, not SQL**: the flip is a zero crossing of a running total with linear
+interpolation, and expressing it in a window function would be a second, subtly
+different implementation of a definition the client already has. One extra query
+of per-strike rows, reduced to one small object per symbol before it reaches the
+browser — the wire payload is unchanged. Failure degrades the rail to its old
+behaviour rather than taking the board down.
+
+`railBadge()` picks ONE headline for ~60px: appeared/vanished outranks a
+migration, which outranks a sign-flip count. New `Most structural` sort ranks on
+`structScore`, which is what the |Δ| sort is blind to.
+
+### Deep links
+
+Flow takes `ticker` (**not** `symbol` — it silently ignores `symbol`) and
+`dteMax=0` for the 0DTE tape; strikes link to Options Chain per the established
+`Scanner.tsx` href. Absolute URLs, because the owner SPA is a different origin
+and a bare `/flow` resolves against it. Overridable via `VITE_SITE_ORIGIN`.
+
+### Caught in review
+
+- **A gamma flip that VANISHES from the window scored zero.** `structScore` keyed
+  on `flipMove`, which is null when the crossing stops existing — one of the
+  largest structural changes there is, rated at nothing. Added `flipState`
+  (`moved` / `stable` / `vanished` / `appeared` / `none`); appear and vanish are
+  now scored as events.
+- Rail badges clipped tickers to `S..`. The symbol is the row's identity — the
+  magnitude bar gives up width now, never the name.
+- `+31% of the book` read as a change. A share is a magnitude; the sign is gone.
+
+### Verified
+
+121 assertions — 41 server (against a stubbed pg), 80 client. Including: legs
+summing exactly to `net_gex` at every strike; the call leg never negative and
+the put leg never positive; 0DTE never reaching the table; live fetching both
+buckets; pre-migration legs reported missing rather than zero; a proportional
+change NOT moving the flip while a lopsided one does; and every deep-link param
+name matching what the receiving page actually reads. `tsc --noEmit` clean,
+`vite build` green, rendered with zero console errors.
+
+Five of the harness failures on the first run were my test's arithmetic, not the
+code — the GEX multiplier is `S²·0.01·100` = 10,000, and `cnt()` counts OI **+
+volume**. Both are now pinned by assertion so nobody repeats them.
+
+
 ## 2026-08-18 - ΔGEX Board: three Read-panel bugs the first real SPY payload exposed
 
 Edited: `owner-vite/src/pages/GexGrowth.tsx`.

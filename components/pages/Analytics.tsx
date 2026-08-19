@@ -1951,14 +1951,64 @@ function tlAtm(group: TlChainGroup | undefined, spot: number): { move: number | 
 function tlWindow(rows: TlRow[], spot: number | null): TlRow[] {
   if (!rows.length) return [];
   const anchor = spot ?? rows[Math.floor(rows.length / 2)].strike;
-  let ai = 0;
-  for (let i = 1; i < rows.length; i++) {
-    if (Math.abs(rows[i].strike - anchor) < Math.abs(rows[ai].strike - anchor)) ai = i;
-  }
+  const ai = Math.max(0, tlNearestIdx(rows, anchor));
   return rows
     .slice(Math.max(0, ai - TL_LADDER_SIDE), ai + TL_LADDER_SIDE + 1)
     .slice()
     .sort((a, b) => b.strike - a.strike);
+}
+
+/** Index of the row whose strike sits closest to `price`; -1 if there is none. */
+function tlNearestIdx(rows: TlRow[], price: number | null): number {
+  if (!rows.length || price == null) return -1;
+  let ai = 0;
+  for (let i = 1; i < rows.length; i++) {
+    if (Math.abs(rows[i].strike - price) < Math.abs(rows[ai].strike - price)) ai = i;
+  }
+  return ai;
+}
+
+// How far spot has to WALK before the ladder re-anchors, in strikes.
+// Rewound, spot moves a point or two per frame; anchoring the window on the
+// nearest strike to the LIVE spot meant that every few frames the slice shifted
+// by one rung and the auto-centre scrolled — the whole ladder juddered for the
+// length of the replay. The window carries ±TL_LADDER_SIDE (20) rungs and the
+// pane shows ±TL_LADDER_VIEW_SIDE (10), so letting spot drift 5 strikes off the
+// anchor still leaves it comfortably on screen with ladder either side. Cheap
+// slack, still chart.
+const TL_ANCHOR_SLACK = 5;
+
+/**
+ * Spot, quantised to a strike that only moves once spot has walked
+ * TL_ANCHOR_SLACK rungs away from it. Everything that would make the ladder
+ * MOVE — the window slice and the scroll centring — reads this instead of the
+ * live spot; the ◀ caret and the level chips keep reading the real one, so the
+ * marker still tracks price tick by tick, it is the paper underneath that
+ * stops sliding.
+ *
+ * `resetKey` (symbol / expiry / live-vs-rewound) forces a fresh anchor: those
+ * change the axis outright, so carrying the old strike over would centre on a
+ * rung that may not exist in the new ladder.
+ *
+ * The ref is settled during render on purpose. The anchor is a pure function of
+ * (rows, spot, resetKey) plus its own previous value, and re-running it lands on
+ * the same strike, so there is nothing for an effect to schedule — an effect
+ * would only add a paint at the old scroll position before correcting it.
+ */
+function useTlAnchor(rows: TlRow[], spot: number | null, resetKey: string): number | null {
+  const held = useRef<{ key: string; strike: number | null }>({ key: "", strike: null });
+  const idxSpot = tlNearestIdx(rows, spot);
+  if (idxSpot < 0) return held.current.strike; // no rows / no spot — hold the last
+  const cur = held.current;
+  if (cur.key !== resetKey || cur.strike == null) {
+    held.current = { key: resetKey, strike: rows[idxSpot].strike };
+  } else {
+    const idxAnchor = tlNearestIdx(rows, cur.strike);
+    if (idxAnchor < 0 || Math.abs(idxSpot - idxAnchor) >= TL_ANCHOR_SLACK) {
+      held.current = { key: resetKey, strike: rows[idxSpot].strike };
+    }
+  }
+  return held.current.strike;
 }
 
 // Fixed chip height: 14 (label) + 24 (value) + 15 (dist) + 15 (note)
@@ -2049,10 +2099,14 @@ function tlHexA(hex: string, a: number): string {
 // is drawn with no bar and an em dash instead of a value: the recorder stores
 // walls, not the whole ladder, and a 0 bar there would claim "no gamma at this
 // strike" when the honest answer is "not recorded at this moment".
-function TlLadder({ rows, spot, levels, changes = null, missing = null }: {
+// `anchor` (optional) = the strike the pane scrolls to, held steady by
+// useTlAnchor so a replay's tick-by-tick spot cannot scroll the ladder every
+// frame. Omit it and the pane centres on spot exactly as before.
+function TlLadder({ rows, spot, levels, changes = null, missing = null, anchor = null }: {
   rows: TlRow[]; spot: number | null; levels: TlLevels;
   changes?: Map<number, number> | null;
   missing?: Set<number> | null;
+  anchor?: number | null;
 }) {
   const maxAbs = rows.reduce((m, r) => Math.max(m, Math.abs(r.gex)), 0) || 1;
   const spotRow = spot == null ? null
@@ -2071,8 +2125,17 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null }: {
   // row a ladder exists to show. Measured with getBoundingClientRect rather than
   // offsetTop: the scroll wrapper is position:static, so offsetParent is some
   // ancestor Card and offsetTop would be measured against the wrong box.
+  //
+  // What it centres on is the ANCHOR row, not the spot row. Rewound, spot moves
+  // every frame and re-centring on each move is exactly the jitter this pane
+  // was showing; the anchor only advances once spot has walked TL_ANCHOR_SLACK
+  // strikes (see useTlAnchor). Falls back to the spot row when no anchor is
+  // passed, which is the live path's behaviour unchanged.
   const rootRef = useRef<HTMLDivElement>(null);
-  const spotStrike = spotRow?.strike ?? null;
+  const anchorRow = anchor == null ? null
+    : rows.reduce<TlRow | null>((best, r) =>
+        best == null || Math.abs(r.strike - anchor) < Math.abs(best.strike - anchor) ? r : best, null);
+  const spotStrike = (anchorRow ?? spotRow)?.strike ?? null;
   const windowKey = rows.length ? `${rows[0].strike}:${rows[rows.length - 1].strike}` : "";
   useEffect(() => {
     const root = rootRef.current;
@@ -2620,8 +2683,16 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
   const atm = replayOn ? { move: null, iv: null } : tlAtm(atmGroup, spot ?? 0);
   const positiveGamma = rightLevels.net >= 0;
 
-  const leftLadder = tlWindow(viewLeftRows, viewSpot);
-  const rightLadder = tlWindow(viewRightRows, viewSpot);
+  // The strike each pane is BUILT around. Held steady by useTlAnchor so a
+  // rewound spot walking a point a frame cannot re-slice the window (and
+  // re-centre the scroller) on every frame — it re-anchors once spot is
+  // TL_ANCHOR_SLACK strikes away. The reset key is everything that changes the
+  // axis under it: a new symbol, a new expiry, or crossing live↔rewound.
+  const leftAnchor = useTlAnchor(viewLeftRows, viewSpot, `${sym}|L|${leftAxisKey}|${replayOn ? "r" : "l"}`);
+  const rightAnchor = useTlAnchor(viewRightRows, viewSpot, `${sym}|R|${boardAxisKey}|${replayOn ? "r" : "l"}`);
+
+  const leftLadder = tlWindow(viewLeftRows, leftAnchor ?? viewSpot);
+  const rightLadder = tlWindow(viewRightRows, rightAnchor ?? viewSpot);
   const hasAny = leftLadder.length > 0 || rightLadder.length > 0;
 
   // The card's top-level gate. Rewound, the live chain's loading/error state is
@@ -2942,7 +3013,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
                     {replayOn ? "Nothing recorded on this expiry in this session." : "No populated strikes on this expiry."}
                   </Placeholder>
                 ) : (
-                  <TlLadder rows={leftLadder} spot={viewSpot} levels={leftLevels} missing={replayLeft?.missing ?? null} />
+                  <TlLadder rows={leftLadder} spot={viewSpot} anchor={leftAnchor} levels={leftLevels} missing={replayLeft?.missing ?? null} />
                 )}
               </div>
               <div style={TL_CHIP_ROW}>
@@ -2998,6 +3069,7 @@ export function TickerLookupCard({ initialSymbol = "SPX", embedded = false, init
                   <TlLadder
                     rows={rightLadder}
                     spot={viewSpot}
+                    anchor={rightAnchor}
                     levels={rightLevels}
                     changes={replayOn ? null : rightChanges}
                     missing={replayRight?.missing ?? null}

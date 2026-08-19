@@ -81,10 +81,33 @@ type BoardSymbol = {
   gexNet: number;
   gexAbs: number;
   gexStrikes: BoardLevelStrike[];
+  badge?: Badge;
 };
 type BoardResp = { ok?: boolean; top?: number; date?: string | null; symbols?: BoardSymbol[]; error?: string };
 
-type ChangeRow = { strike: number; netGex: number; prevNetGex: number; chg: number; hadPrev: boolean };
+type ChangeRow = {
+  strike: number; netGex: number; prevNetGex: number; chg: number; hadPrev: boolean;
+  // The two halves of netGex. NULL, never 0, when the session predates the
+  // 2026-08-18 leg migration — the chains are gone and no backfill is possible,
+  // so "not recorded" has to stay distinguishable from "no call gamma here".
+  callGex?: number | null; putGex?: number | null;
+  prevCallGex?: number | null; prevPutGex?: number | null;
+};
+
+/** Today's expiry, summarised. Live route only — see the 0DTE note in ReadPanel. */
+type ZeroDte = {
+  net: number; abs: number; shareOfAbs: number;
+  strikes: Array<{ strike: number; gex: number; callGex: number; putGex: number }>;
+};
+
+/** Per-symbol structural summary for the rail. Null when the board query failed. */
+type Badge = {
+  flipNow: number | null; flipPrev: number | null; flipMove: number | null;
+  flipState: "moved" | "stable" | "vanished" | "appeared" | "none";
+  flips: number;
+  callWall: number | null; putWall: number | null; wallChg: number | null;
+  structScore: number;
+} | null;
 type ChangeResp = {
   ok?: boolean; symbol?: string; date?: string | null; prevDate?: string | null;
   spot?: number | null; prevSpot?: number | null; rows?: ChangeRow[]; error?: string;
@@ -93,27 +116,29 @@ type ChangeResp = {
   // getStrikeGexLive() in server-v2/eod-strike-gex-recorder.js.
   live?: boolean; asOf?: string; expiryCount?: number;
   cached?: boolean; ageMs?: number; prevIsToday?: boolean; marketDay?: boolean;
+  hasLegs?: boolean; hasPrevLegs?: boolean;
+  zeroDte?: ZeroDte | null;
 };
 type DatesResp = { ok?: boolean; dates?: string[]; error?: string };
 
 /** Per-mode wording. Kept in one table so a label can't drift from its number. */
 const MODE_COPY: Record<Mode, {
   tab: string; ladderCol: string; bigLabel: string; axis: string;
-  sorts: readonly [string, string, string];
+  sorts: readonly [string, string, string, string];
 }> = {
   delta: {
     tab: "Δ 1 day",
     ladderCol: "Δ 1D",
     bigLabel: "net Δ 1D",
     axis: "← removed · added →",
-    sorts: ["Biggest move", "Most built", "Most pulled"],
+    sorts: ["Biggest move", "Most built", "Most pulled", "Most structural"],
   },
   levels: {
     tab: "Net GEX",
     ladderCol: "Net GEX",
     bigLabel: "net GEX",
     axis: "← negative · positive →",
-    sorts: ["Biggest gamma", "Most positive", "Most negative"],
+    sorts: ["Biggest gamma", "Most positive", "Most negative", "Most structural"],
   },
   // Compare is a Δ reading — same rail numbers, same sorts as `delta`. Only the
   // ladder and the header strip differ, so the two tabs rank identically and a
@@ -123,7 +148,7 @@ const MODE_COPY: Record<Mode, {
     ladderCol: "Δ 1D",
     bigLabel: "net Δ 1D",
     axis: "← negative · positive →",
-    sorts: ["Biggest move", "Most built", "Most pulled"],
+    sorts: ["Biggest move", "Most built", "Most pulled", "Most structural"],
   },
 };
 
@@ -339,6 +364,13 @@ type Analysis = {
   cushionNow: number | null; cushionPrev: number | null;
   /** Ranked by |Δ|, already band-filtered. */
   movers: Mover[];
+  /**
+   * The Δ, split by which LEG moved. This is the question a net number cannot
+   * answer: net GEX falling is equally consistent with call gamma coming off
+   * and put gamma piling on, and those are opposite reads of the tape.
+   * null when either session lacks recorded legs — see ChangeRow.
+   */
+  legs: { callChg: number; putChg: number; callNow: number; putNow: number } | null;
 };
 
 /**
@@ -348,7 +380,10 @@ type Analysis = {
  * always computed on the full ladder: a band is a reading aid for the ranking,
  * and applying it to a sum would silently redefine the sum.
  */
-function analyzeLadder(rows: ChangeRow[], spot: number | null, band: Band, hasPrior: boolean): Analysis {
+function analyzeLadder(
+  rows: ChangeRow[], spot: number | null, band: Band, hasPrior: boolean,
+  hasLegs = false, hasPrevLegs = false,
+): Analysis {
   let netTotal = 0, prevTotal = 0, absTot = 0;
   for (const r of rows) {
     netTotal += r.netGex;
@@ -387,8 +422,24 @@ function analyzeLadder(rows: ChangeRow[], spot: number | null, band: Band, hasPr
       .sort((a, b) => Math.abs(b.chg) - Math.abs(a.chg))
     : [];
 
+  // Legs are summed ONLY when both sessions have them. A mixed sum — today's
+  // real call leg against a prior side that is null-treated-as-zero — would
+  // print the entire current call book as "built today".
+  let legs: Analysis["legs"] = null;
+  if (hasLegs && (!hasPrior || hasPrevLegs)) {
+    let callNow = 0, putNow = 0, callPrev = 0, putPrev = 0;
+    for (const r of rows) {
+      callNow += r.callGex ?? 0;
+      putNow += r.putGex ?? 0;
+      callPrev += r.prevCallGex ?? 0;
+      putPrev += r.prevPutGex ?? 0;
+    }
+    legs = { callNow, putNow, callChg: callNow - callPrev, putChg: putNow - putPrev };
+  }
+
   return {
     netTotal, prevTotal, deltaNet, absTot,
+    legs,
     deltaPct: absTot === 0 ? null : deltaNet / absTot,
     callWall: spot == null ? null : findWall(rows, spot, "call"),
     putWall: spot == null ? null : findWall(rows, spot, "put"),
@@ -499,6 +550,71 @@ const label: CSSProperties = {
 };
 const oneLine: CSSProperties = { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 };
 
+// ── deep links out to the customer app ──────────────────────────────────────
+//
+// The owner SPA is served from its own origin (owner.cbedge.net, nginx), so a
+// bare "/flow" here resolves against the OWNER app and 404s. These are absolute
+// on purpose. Overridable at build time for a staging host.
+const SITE = (import.meta as { env?: Record<string, string> }).env?.VITE_SITE_ORIGIN || "https://cbedge.net";
+
+/**
+ * Flow, focused on a symbol. Params follow components/pages/Flow.tsx:
+ * `ticker` (NOT `symbol` — Flow silently ignores `symbol`) and `dteMax`, where
+ * 0 means 0DTE only. Flow has no strike filter, so a strike cannot be passed;
+ * see chainHref for the strike-level target.
+ */
+const flowHref = (symbol: string, zeroDteOnly = false) =>
+  `${SITE}/app/flow?ticker=${encodeURIComponent(symbol)}${zeroDteOnly ? "&dteMax=0" : ""}`;
+
+/**
+ * Options Chain, prefilled. Matches the established href in
+ * components/pages/Scanner.tsx — bare route path (next.config.js redirects it
+ * to /app/*), encodeURIComponent on every value, `strike` included for
+ * consistency even though OptionsChain does not currently read it.
+ *
+ * NOTE it PREFILLS but does not auto-load: the reader still presses GO. The
+ * link text says "open in chain" rather than "show" for that reason.
+ */
+const chainHref = (symbol: string, strike: number) =>
+  `${SITE}/options-chain?symbol=${encodeURIComponent(symbol)}&strike=${strike}`;
+
+const linkStyle: CSSProperties = {
+  color: LIGHT_BLUE, textDecoration: "none", borderBottom: `1px dotted ${LIGHT_BLUE}77`,
+  cursor: "pointer", whiteSpace: "nowrap",
+};
+
+/**
+ * The ONE structural fact worth 60px of rail, or null.
+ *
+ * A rail row has room for a symbol, a magnitude bar, a value and roughly one
+ * short chip. So this picks a single headline rather than stacking three: a
+ * crossing that appeared or vanished outranks a migration, which outranks a
+ * count of sign flips. Everything it does not show is one click away in the
+ * panel, which is the right place for detail.
+ */
+function railBadge(b: Badge, spot: number | null): { text: string; tone: "pos" | "neg" | "warn"; title: string } | null {
+  if (!b) return null;
+  if (b.flipState === "vanished") {
+    return { text: "FLIP GONE", tone: "warn", title: "The gamma flip was inside the recorded window at the prior close and is not now — the running total no longer crosses zero here." };
+  }
+  if (b.flipState === "appeared") {
+    return { text: "FLIP NEW", tone: "warn", title: "A gamma flip has appeared inside the window that was not there at the prior close." };
+  }
+  if (b.flipMove != null && spot && Math.abs(b.flipMove / spot) * 100 >= 0.15) {
+    // Points, not percent: a trader reads a flip level in points, and the
+    // percent already did its job in the ranking.
+    return {
+      text: `FLIP ${pts(b.flipMove)}`,
+      tone: b.flipMove > 0 ? "pos" : "neg",
+      title: `Gamma flip moved from ${b.flipPrev?.toFixed(2)} to ${b.flipNow?.toFixed(2)}.`,
+    };
+  }
+  if (b.flips >= 2) {
+    return { text: `${b.flips}× FLIP`, tone: "warn", title: `${b.flips} strikes crossed zero overnight — a change of kind, not just size.` };
+  }
+  return null;
+}
+
 // ── the read panel ──────────────────────────────────────────────────────────
 const tile: CSSProperties = {
   border: `1px solid ${T.border}`, borderRadius: 12, padding: "9px 12px",
@@ -522,7 +638,9 @@ function toneChip(t: "pos" | "neg" | "warn"): CSSProperties {
  * strike. What it implies for a trade depends on regime, tape and the reader's
  * own rules, none of which this panel can see, so it does not guess.
  */
-function WallTile({ side, wall, hasPrior }: { side: "call" | "put"; wall: Wall; hasPrior: boolean }) {
+function WallTile({ side, wall, hasPrior, symbol }: {
+  side: "call" | "put"; wall: Wall; hasPrior: boolean; symbol: string;
+}) {
   const isCall = side === "call";
   const name = isCall ? "Call wall" : "Put wall";
   if (!wall) {
@@ -554,7 +672,13 @@ function WallTile({ side, wall, hasPrior }: { side: "call" | "put"; wall: Wall; 
         <span style={label}>{name} · {pts(wall.dist)}%</span>
         {hasPrior ? <span style={toneChip(tone)}>{grew ? "▲" : "▼"} {word}</span> : null}
       </div>
-      <div style={{ fontFamily: MONO, fontSize: 19, fontWeight: 800, marginTop: 2 }}>{strikeStr(wall.strike)}</div>
+      <div style={{ fontFamily: MONO, fontSize: 19, fontWeight: 800, marginTop: 2 }}>
+        <a href={chainHref(symbol, wall.strike)} target="_blank" rel="noreferrer"
+          style={{ ...linkStyle, borderBottomColor: "transparent" }}
+          title={`Open ${symbol} in the options chain, prefilled to this strike (you still press GO)`}>
+          {strikeStr(wall.strike)}
+        </a>
+      </div>
       <div style={{ fontFamily: MONO, fontSize: 11, marginTop: 3, display: "flex", flexWrap: "wrap", gap: 8 }}>
         <span style={{ color: col(wall.now) }}>{sgn(wall.now)}</span>
         {hasPrior ? (
@@ -580,8 +704,9 @@ function WallTile({ side, wall, hasPrior }: { side: "call" | "put"; wall: Wall; 
  * one of them in a sentence is worse than a dashboard reporting the number and
  * letting the reader apply their own.
  */
-function ReadPanel({ a, mode, hasPrior, live }: {
+function ReadPanel({ a, mode, hasPrior, live, symbol, zeroDte, legsMissing }: {
   a: Analysis; mode: Mode; hasPrior: boolean; live: boolean;
+  symbol: string; zeroDte: ZeroDte | null; legsMissing: boolean;
 }) {
   const reg = regimeCopy(a.netTotal, a.prevTotal, hasPrior);
   const regTone = a.netTotal > 0 ? POS : a.netTotal < 0 ? NEG : T.textMuted;
@@ -620,8 +745,8 @@ function ReadPanel({ a, mode, hasPrior, live }: {
 
       {/* Walls + flip. */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 10 }}>
-        <WallTile side="call" wall={a.callWall} hasPrior={hasPrior} />
-        <WallTile side="put" wall={a.putWall} hasPrior={hasPrior} />
+        <WallTile side="call" wall={a.callWall} hasPrior={hasPrior} symbol={symbol} />
+        <WallTile side="put" wall={a.putWall} hasPrior={hasPrior} symbol={symbol} />
         <div style={tile}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
             <span style={label}>Gamma flip</span>
@@ -660,6 +785,80 @@ function ReadPanel({ a, mode, hasPrior, live }: {
         </div>
       </div>
 
+      {/* ── which LEG moved ────────────────────────────────────────────────
+          The reason a single Δ bar is ambiguous, answered directly. `callChg`
+          and `putChg` sum exactly to the net Δ, since netGex is defined as
+          callGex + putGex at every strike. */}
+      {isDelta(mode) && hasPrior && a.legs ? (
+        <div style={tile}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+            <span style={label}>Which leg moved · call vs put gamma</span>
+            <a href={flowHref(symbol)} target="_blank" rel="noreferrer" style={{ ...linkStyle, fontSize: 11 }}
+              title="ΔGEX cannot see intent — whether this came from aggressive customer buying or passive flow. That lives in the tape.">
+              check the tape ↗
+            </a>
+          </div>
+          <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 6, fontFamily: MONO, fontSize: 12 }}>
+            <span>
+              <span style={label}>call leg</span><br />
+              <span style={{ color: col(a.legs.callNow) }}>{sgn(a.legs.callNow)}</span>{" "}
+              <span style={{ color: col(a.legs.callChg) }}>({sgn(a.legs.callChg)})</span>
+            </span>
+            <span>
+              <span style={label}>put leg</span><br />
+              <span style={{ color: col(a.legs.putNow) }}>{sgn(a.legs.putNow)}</span>{" "}
+              <span style={{ color: col(a.legs.putChg) }}>({sgn(a.legs.putChg)})</span>
+            </span>
+            <span style={{ flex: 1, minWidth: 210, fontFamily: "inherit", fontSize: 11.5 }}>
+              {/* The four readings a net Δ collapses into one. */}
+              {a.legs.callChg < 0 && a.legs.putChg < 0
+                ? "Calls came off AND puts piled on — both push the same way."
+                : a.legs.callChg > 0 && a.legs.putChg > 0
+                  ? "Calls added AND puts covered — both push the same way."
+                  : Math.abs(a.legs.callChg) > Math.abs(a.legs.putChg)
+                    ? `Mostly the call leg — ${a.legs.callChg > 0 ? "added" : "taken off"}, with the put leg the smaller half.`
+                    : `Mostly the put leg — ${a.legs.putChg < 0 ? "piled on" : "covered"}, with the call leg the smaller half.`}
+            </span>
+          </div>
+        </div>
+      ) : isDelta(mode) && hasPrior && legsMissing ? (
+        <div style={{ ...tile, fontSize: 11.5 }}>
+          <span style={label}>Which leg moved</span>
+          <div style={{ marginTop: 3 }}>
+            Not available for these sessions. Call and put legs have been recorded
+            separately since 2026-08-18; earlier snapshots stored only the net, and
+            the chains they came from are gone, so there is nothing to backfill from.
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── 0DTE, live only ────────────────────────────────────────────────
+          The recorded series is ex-0DTE by design: the sweep runs at 16:05, by
+          which point today's expiry is dead. Intraday it is the opposite — the
+          fastest gamma on the board and the half the table structurally cannot
+          see — so it appears only on the live read. */}
+      {live && zeroDte ? (
+        <div style={tile}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+            <span style={label}>0DTE · expires tonight · NOT in the ladder below</span>
+            <a href={flowHref(symbol, true)} target="_blank" rel="noreferrer" style={{ ...linkStyle, fontSize: 11 }}>
+              0DTE tape ↗
+            </a>
+          </div>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 6, fontFamily: MONO, fontSize: 12, alignItems: "baseline" }}>
+            <span style={{ fontSize: 18, fontWeight: 800, color: col(zeroDte.net) }}>{sgn(zeroDte.net)}</span>
+            <span title="Share of all gamma on this name, measured on |GEX|, that expires today. A board that is mostly 0DTE is a different object from one that is mostly structural.">
+              {(zeroDte.shareOfAbs * 100).toFixed(0)}% of the book
+            </span>
+            {zeroDte.strikes.slice(0, 4).map((k) => (
+              <span key={k.strike} style={{ ...chipBase, textTransform: "none", fontWeight: 700 }}>
+                {strikeStr(k.strike)} <span style={{ color: col(k.gex) }}>{sgn(k.gex)}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {/* Movers — band-filtered, ranked by |Δ|, each one named. Δ readings only:
           in `levels` mode there is no change to rank. */}
       {isDelta(mode) && hasPrior && a.movers.length ? (
@@ -677,7 +876,11 @@ function ReadPanel({ a, mode, hasPrior, live }: {
                     gap: 8, alignItems: "center", fontFamily: MONO, fontSize: 11.5,
                   }}
                 >
-                  <span style={{ fontWeight: 700 }}>{strikeStr(m.strike)}</span>
+                  <a href={chainHref(symbol, m.strike)} target="_blank" rel="noreferrer"
+                    style={{ ...linkStyle, fontWeight: 700, borderBottomColor: "transparent" }}
+                    title={`Open ${symbol} in the options chain at ${strikeStr(m.strike)}`}>
+                    {strikeStr(m.strike)}
+                  </a>
                   <span style={{ color: T.text }}>{pts(m.dist)}%</span>
                   <span style={{ color: col(m.prior) }}>
                     {sgn(m.prior)} <span style={{ color: T.text }}>→</span> <span style={{ color: col(m.now) }}>{sgn(m.now)}</span>
@@ -847,7 +1050,7 @@ export default function GexGrowth() {
   const [boardErr, setBoardErr] = useState<string | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
-  const [dir, setDir] = useState<"abs" | "built" | "pulled">("abs");
+  const [dir, setDir] = useState<"abs" | "built" | "pulled" | "struct">("abs");
   const [mode, setMode] = useState<Mode>("delta");
   // Live is a preference, not a mode — it survives tab-hopping and comes back
   // on when you return to `compare`, which is how a toggle should behave.
@@ -973,6 +1176,10 @@ export default function GexGrowth() {
     let list = (board ?? []).filter((s) => !q || s.symbol.includes(q));
     if (dir === "built") list = [...list].sort((a, b) => railSigned(b) - railSigned(a));
     else if (dir === "pulled") list = [...list].sort((a, b) => railSigned(a) - railSigned(b));
+    // The sort the |Δ| ranking is blind to. A name whose flip jumped seven
+    // strikes on a modest dollar change is invisible in every other order here,
+    // and it is exactly the name worth opening.
+    else if (dir === "struct") list = [...list].sort((a, b) => (b.badge?.structScore ?? -1) - (a.badge?.structScore ?? -1));
     // The server's default order is |Δ|. Level mode wants |net GEX|, so "biggest"
     // has to re-sort rather than lean on the payload order.
     else if (mode === "levels") list = [...list].sort((a, b) => Math.abs(b.gexAbs) - Math.abs(a.gexAbs));
@@ -1044,9 +1251,14 @@ export default function GexGrowth() {
   const detailSpot = detail?.spot ?? null;
   const hasPrior = !!detail?.prevDate;
   const analysis = useMemo(
-    () => (detail?.rows?.length ? analyzeLadder(detail.rows, detailSpot, band, hasPrior) : null),
+    () => (detail?.rows?.length
+      ? analyzeLadder(detail.rows, detailSpot, band, hasPrior, !!detail.hasLegs, !!detail.hasPrevLegs)
+      : null),
     [detail, detailSpot, band, hasPrior],
   );
+  // Legs exist on today's side but not on the baseline's — the pre-migration
+  // case. Distinct from "no legs at all", which is just an older payload shape.
+  const legsMissing = !!detail?.rows?.length && (!detail.hasLegs || (hasPrior && !detail.hasPrevLegs));
   // The band applies to what the ladder DRAWS. Kept separate from the analysis
   // so narrowing the band can never move the regime number above it.
   const ladderRows = useMemo(() => {
@@ -1092,7 +1304,7 @@ export default function GexGrowth() {
               padding: "7px 11px", color: T.text, fontFamily: MONO, fontSize: 13, width: 150,
             }}
           />
-          {(["abs", "built", "pulled"] as const).map((k, i) => (
+          {(["abs", "built", "pulled", "struct"] as const).map((k, i) => (
             <button key={k} onClick={() => setDir(k)} style={dir === k ? homeButtonStyle : homeSecondaryButtonStyle}>
               {MODE_COPY[mode].sorts[i]}
             </button>
@@ -1251,7 +1463,7 @@ export default function GexGrowth() {
                         ? `${s.symbol} · ${s.date} vs ${s.prevDate}`
                         : `${s.symbol} · one snapshot only (${s.date}) — no baseline yet`}
                     style={{
-                      display: "grid", gridTemplateColumns: "1fr 62px", gap: 8, alignItems: "center",
+                      display: "grid", gridTemplateColumns: "1fr auto 62px", gap: 7, alignItems: "center",
                       padding: "8px 10px", cursor: "pointer",
                       borderBottom: `1px solid rgba(255,255,255,0.05)`,
                       background: on ? "rgba(125,211,252,0.12)" : "transparent",
@@ -1259,16 +1471,28 @@ export default function GexGrowth() {
                     }}
                   >
                     <span style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
-                      <span style={{ ...oneLine, fontSize: 13, fontWeight: 800 }}>{s.symbol}</span>
+                      {/* flexShrink 0: adding the badge column started clipping
+                          tickers to "S..". The symbol is the row's identity —
+                          the BAR gives up width, never the name. */}
+                      <span style={{ fontSize: 13, fontWeight: 800, flexShrink: 0 }}>{s.symbol}</span>
                       {/* Magnitude bar — the summed ABSOLUTE of whichever
                           reading is showing, so a name that churned hard both
                           ways still reads as busy even when its net is ~0. */}
                       <span style={{
-                        height: 5, borderRadius: 3, background: LIGHT_BLUE, flexShrink: 0,
+                        height: 5, borderRadius: 3, background: LIGHT_BLUE, minWidth: 0,
                         width: Math.max(6, (Math.abs(railMag(s)) / maxAbs) * 84),
                         opacity: railHasValue(s) ? 1 : 0.25,
                       }} />
                     </span>
+                    {/* Structural badge. Empty span (not omitted) so the three
+                        columns stay aligned down the rail whether or not a
+                        given name has one. */}
+                    {(() => {
+                      const bd = railBadge(s.badge ?? null, s.spot);
+                      return bd ? (
+                        <span title={bd.title} style={{ ...toneChip(bd.tone), fontSize: 8.5, padding: "1px 6px" }}>{bd.text}</span>
+                      ) : <span />;
+                    })()}
                     <span style={{ ...oneLine, textAlign: "right", fontFamily: MONO, fontSize: 11.5, fontWeight: 700, color: railHasValue(s) ? col(railSigned(s)) : T.textMuted }}>
                       {railHasValue(s) ? sgn(railSigned(s)) : "—"}
                     </span>
@@ -1367,7 +1591,10 @@ export default function GexGrowth() {
                       the same array the ladder draws — so the two can never
                       disagree. Hidden when there are no rows to read. */}
                   {showRead && analysis ? (
-                    <ReadPanel a={analysis} mode={mode} hasPrior={hasPrior} live={showLive} />
+                    <ReadPanel
+                      a={analysis} mode={mode} hasPrior={hasPrior} live={showLive}
+                      symbol={sel} zeroDte={detail?.zeroDte ?? null} legsMissing={legsMissing}
+                    />
                   ) : null}
 
                   {/* Compare replaces the top-N strip with the four-way split —

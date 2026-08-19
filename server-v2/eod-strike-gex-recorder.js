@@ -225,6 +225,22 @@ async function ensureSchema() {
       PRIMARY KEY (date, symbol, strike)
     );
   `);
+  // CALL/PUT LEGS — added 2026-08-18, after the table had ~a year of rows.
+  //
+  // net_gex is the SUM of a positive call leg and a negative put leg, and the
+  // sum is lossy: "net GEX fell" is equally consistent with call gamma coming
+  // off and put gamma piling on. accumulateChainGex() always had both halves
+  // and threw them away. Now it keeps them.
+  //
+  // NULLABLE, and there is deliberately NO BACKFILL — the chains those rows
+  // were built from are gone, so every date before the migration has NULL legs
+  // and the read path reports that honestly rather than inventing a split. Do
+  // not "fix" this by deriving legs from net_gex; it cannot be done.
+  //
+  // ADD COLUMN IF NOT EXISTS so a redeploy against an existing table is a
+  // no-op rather than an error, in the same spirit as the CREATE above.
+  await p.query(`ALTER TABLE eod_strike_gex ADD COLUMN IF NOT EXISTS call_gex DOUBLE PRECISION;`);
+  await p.query(`ALTER TABLE eod_strike_gex ADD COLUMN IF NOT EXISTS put_gex  DOUBLE PRECISION;`);
   // The read path is always "the latest two dates for THIS symbol", so leading
   // with symbol keeps it a small ordered index scan even once the table holds a
   // year of the full watchlist.
@@ -263,10 +279,32 @@ const cnt = (o) => {
   return oi + vol;
 };
 
-/** The expirations to sweep: every listed date strictly AFTER today ET. */
-async function resolveBoardExpiries(ticker) {
+/**
+ * The expirations to sweep.
+ *
+ * `bucket` = 'board' (default) → every listed date strictly AFTER today ET.
+ * `bucket` = 'zerodte'         → today ET only.
+ *
+ * ── WHY 0DTE IS LIVE-ONLY, AND IS NOT A NEW COLUMN ──────────────────────────
+ * The obvious design was a second expiry bucket in eod_strike_gex, and it is
+ * the wrong one. The recorded sweep fires at 16:05 ET — AFTER the close, by
+ * which point today's 0DTE has expired. Storing it would store a ladder of
+ * zeros under a column implying it meant something, every single day, forever.
+ *
+ * Intraday it is the opposite: 0DTE is the fastest-moving gamma on the board
+ * and it is the half the recorded series structurally cannot see. So the split
+ * is exposed on the LIVE route only, where "now" is a real moment inside the
+ * session, and the table keeps its ex-0DTE definition unchanged.
+ */
+async function resolveBoardExpiries(ticker, bucket = 'board') {
   const { items } = await fetchExpirations(ticker).catch(() => ({ items: [] }));
   const today = todayYmdET();
+  if (bucket === 'zerodte') {
+    const has = (items || [])
+      .map((it) => String(it['expiration-date'] || '').slice(0, 10))
+      .some((d) => d === today);
+    return has ? [today] : [];
+  }
   // Strictly `> today`, never `>=`. ISO dates compare correctly as strings, so
   // this drops both 0DTE and anything stale the listing still carries — the
   // same ex-0DTE rule the card's right pane applies. Same-day gamma dwarfs the
@@ -316,9 +354,16 @@ function accumulateChainGex(payload, acc) {
       // No book AND no tape is a dead strike — skip it rather than write the
       // whole inert tail of every chain.
       if (cc === 0 && pc === 0) continue;
-      const gex = (Math.abs(num(c, 'gamma')) * cc - Math.abs(num(p, 'gamma')) * pc) * mult;
-      if (!Number.isFinite(gex)) continue;
-      acc.set(strike, (acc.get(strike) ?? 0) + gex);
+      // The two legs, kept apart. `callLeg` is always >= 0 and `putLeg` always
+      // <= 0, and callLeg + putLeg is EXACTLY the old single expression — the
+      // net number is bit-for-bit what it was before the split, which is what
+      // lets the legs land alongside a year of history without a discontinuity.
+      const callLeg = Math.abs(num(c, 'gamma')) * cc * mult;
+      const putLeg = -Math.abs(num(p, 'gamma')) * pc * mult;
+      if (!Number.isFinite(callLeg) || !Number.isFinite(putLeg)) continue;
+      const cur = acc.get(strike);
+      if (cur) { cur.gex += callLeg + putLeg; cur.callGex += callLeg; cur.putGex += putLeg; }
+      else acc.set(strike, { gex: callLeg + putLeg, callGex: callLeg, putGex: putLeg });
     }
   }
   return S;
@@ -328,8 +373,8 @@ function accumulateChainGex(payload, acc) {
  * The whole board for one symbol, ex-0DTE, summed per strike.
  * Returns { spot, expiryCount, rows: [{ strike, gex }] } ascending by strike.
  */
-async function gexRowsForSymbol(symbol) {
-  const expiries = await resolveBoardExpiries(symbol);
+async function gexRowsForSymbol(symbol, bucket = 'board') {
+  const expiries = await resolveBoardExpiries(symbol, bucket);
   if (!expiries.length) return { spot: 0, expiryCount: 0, rows: [] };
 
   const acc = new Map();
@@ -355,7 +400,7 @@ async function gexRowsForSymbol(symbol) {
   await Promise.all(Array.from({ length: Math.min(EXPIRY_CONCURRENCY, expiries.length) }, worker));
 
   const rows = [...acc.entries()]
-    .map(([strike, gex]) => ({ strike, gex }))
+    .map(([strike, v]) => ({ strike, gex: v.gex, callGex: v.callGex, putGex: v.putGex }))
     .filter((r) => Number.isFinite(r.strike) && r.strike > 0 && Number.isFinite(r.gex) && r.gex !== 0)
     .sort((a, b) => a.strike - b.strike);
 
@@ -396,19 +441,23 @@ async function writeRows(date, symbol, spot, expiryCount, rows) {
     slice.forEach((r) => {
       const a = params.push(r.strike);
       const b = params.push(r.gex);
-      values.push(`($1,$2,$${a},$${b},$3,$4,now())`);
+      const c = params.push(r.callGex ?? null);
+      const d = params.push(r.putGex ?? null);
+      values.push(`($1,$2,$${a},$${b},$3,$4,now(),$${c},$${d})`);
     });
     // Upsert, so a manual re-fire after a bad close overwrites the day instead
     // of erroring — that is what makes POST /proxy/eod-strike-gex-run safe.
     // eslint-disable-next-line no-await-in-loop
     await p.query(
-      `INSERT INTO eod_strike_gex (date, symbol, strike, net_gex, spot, expiry_count, ts)
+      `INSERT INTO eod_strike_gex (date, symbol, strike, net_gex, spot, expiry_count, ts, call_gex, put_gex)
        VALUES ${values.join(',')}
        ON CONFLICT (date, symbol, strike) DO UPDATE
          SET net_gex      = EXCLUDED.net_gex,
              spot         = EXCLUDED.spot,
              expiry_count = EXCLUDED.expiry_count,
-             ts           = EXCLUDED.ts`,
+             ts           = EXCLUDED.ts,
+             call_gex     = EXCLUDED.call_gex,
+             put_gex      = EXCLUDED.put_gex`,
       params,
     );
     written += slice.length;
@@ -535,6 +584,13 @@ async function runSweep({ symbols = null, date = null } = {}) {
  * as a `$n::date` cast, and a cast failure is a 500 out of a URL a reader can
  * type. Falling back to latest is the safe read.
  */
+/** NULL stays null; anything numeric becomes a number. Never 0-for-missing. */
+function numOrNull(v) {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 function normDate(v) {
   const s = String(v ?? '').trim();
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
@@ -620,6 +676,13 @@ async function getStrikeGexChange(symbol, { date = null } = {}) {
             COALESCE(prev.net_gex, 0)                             AS prev_net_gex,
             COALESCE(cur.net_gex, 0) - COALESCE(prev.net_gex, 0)  AS chg,
             (prev.strike IS NOT NULL)                             AS had_prev,
+            -- Legs stay NULL-able all the way to the client. NOT COALESCEd to
+            -- 0: a date recorded before the migration has no legs, and a zero
+            -- would render as "no call gamma here" instead of "not recorded".
+            cur.call_gex                                          AS call_gex,
+            cur.put_gex                                           AS put_gex,
+            prev.call_gex                                         AS prev_call_gex,
+            prev.put_gex                                          AS prev_put_gex,
             MAX(cur.spot)  OVER ()                                AS cur_spot,
             MAX(prev.spot) OVER ()                                AS prev_spot
        FROM (SELECT * FROM eod_strike_gex
@@ -644,7 +707,16 @@ async function getStrikeGexChange(symbol, { date = null } = {}) {
       prevNetGex: prevDate ? Number(r.prev_net_gex) || 0 : 0,
       chg: prevDate ? Number(r.chg) || 0 : 0,
       hadPrev: !!r.had_prev,
+      callGex: numOrNull(r.call_gex),
+      putGex: numOrNull(r.put_gex),
+      prevCallGex: prevDate ? numOrNull(r.prev_call_gex) : null,
+      prevPutGex: prevDate ? numOrNull(r.prev_put_gex) : null,
     })),
+    // Whether the split is available on BOTH sides. The client needs one flag,
+    // not 81 null checks, to decide between showing the split and explaining
+    // why it cannot.
+    hasLegs: rows.some((r) => r.call_gex != null),
+    hasPrevLegs: !!prevDate && rows.some((r) => r.prev_call_gex != null),
   };
 }
 
@@ -706,13 +778,18 @@ async function latestRecordedLadder(sym) {
   if (!prevDate) return { prevDate: null, prevSpot: null, prevMap: new Map() };
 
   const { rows } = await p.query(
-    `SELECT strike, net_gex, spot FROM eod_strike_gex WHERE symbol = $1 AND date = $2::date`,
+    `SELECT strike, net_gex, spot, call_gex, put_gex
+       FROM eod_strike_gex WHERE symbol = $1 AND date = $2::date`,
     [sym, prevDate],
   );
   const prevMap = new Map();
   let prevSpot = null;
   for (const r of rows) {
-    prevMap.set(Number(r.strike), Number(r.net_gex) || 0);
+    prevMap.set(Number(r.strike), {
+      gex: Number(r.net_gex) || 0,
+      callGex: numOrNull(r.call_gex),
+      putGex: numOrNull(r.put_gex),
+    });
     if (prevSpot == null && Number(r.spot) > 0) prevSpot = Number(r.spot);
   }
   return { prevDate, prevSpot, prevMap };
@@ -724,14 +801,23 @@ async function computeStrikeGexLive(sym) {
   // below throws we have paid nothing for it.
   const { prevDate, prevSpot, prevMap } = await latestRecordedLadder(sym);
 
-  const { spot, expiryCount, rows } = await gexRowsForSymbol(sym);
+  // The ex-0DTE board (comparable to the recorded close) and today's 0DTE
+  // (which the recorded series structurally cannot contain — see
+  // resolveBoardExpiries) are fetched TOGETHER, because they are one answer:
+  // "what does the book look like now, and how much of that is expiring today".
+  // Separate round trips would let a reader see them from different seconds.
+  const [board, zero] = await Promise.all([
+    gexRowsForSymbol(sym, 'board'),
+    gexRowsForSymbol(sym, 'zerodte').catch(() => ({ spot: 0, expiryCount: 0, rows: [] })),
+  ]);
+  const { spot, expiryCount, rows } = board;
   if (!rows.length) return { ok: false, error: `no live chain data for ${sym}` };
 
   // The same ±WINDOW_SIDE index slice the recorder writes, so the live ladder
   // and the recorded one are the same SHAPE and the union below stays ~81 rungs
   // rather than the whole chain.
   const win = windowRows(rows, spot);
-  const liveMap = new Map(win.map((r) => [r.strike, r.gex]));
+  const liveMap = new Map(win.map((r) => [r.strike, r]));
 
   // UNION of both windows, not just the live one — the same reason
   // getStrikeGexChange FULL JOINs instead of LEFT JOINing. A strike that
@@ -741,16 +827,31 @@ async function computeStrikeGexLive(sym) {
   const strikes = [...new Set([...liveMap.keys(), ...prevMap.keys()])].sort((a, b) => a - b);
 
   const out = strikes.map((strike) => {
-    const netGex = liveMap.get(strike) ?? 0;
-    const prevNetGex = prevDate ? (prevMap.get(strike) ?? 0) : 0;
+    const cur = liveMap.get(strike);
+    const netGex = cur?.gex ?? 0;
+    const prior = prevDate ? (prevMap.get(strike) ?? null) : null;
+    const prevNetGex = prior?.gex ?? 0;
     return {
       strike,
       netGex,
       prevNetGex,
       chg: prevDate ? netGex - prevNetGex : 0,
       hadPrev: prevMap.has(strike),
+      // Live ALWAYS has the legs — they come straight off the chain, so unlike
+      // the recorded side there is no pre-migration gap to explain here.
+      callGex: cur ? cur.callGex : null,
+      putGex: cur ? cur.putGex : null,
+      prevCallGex: prior ? prior.callGex : null,
+      prevPutGex: prior ? prior.putGex : null,
     };
   });
+
+  // 0DTE rides along as a SUMMARY, not a second ladder: the question it answers
+  // is "how much of what I am looking at expires tonight", and that is a number
+  // and a handful of strikes, not 81 more rungs.
+  const zeroWin = zero.rows.length ? windowRows(zero.rows, zero.spot || spot) : [];
+  const zeroNet = zeroWin.reduce((t, r) => t + r.gex, 0);
+  const zeroAbs = zeroWin.reduce((t, r) => t + Math.abs(r.gex), 0);
 
   const today = todayYmdET();
   return {
@@ -767,6 +868,24 @@ async function computeStrikeGexLive(sym) {
     live: true,
     asOf: new Date().toISOString(),
     expiryCount,
+    hasLegs: true,
+    hasPrevLegs: [...prevMap.values()].some((v) => v.callGex != null),
+    // null (not zero) when the symbol has no expiry dated today at all — "this
+    // name has no 0DTE" and "its 0DTE nets to zero" are different facts.
+    zeroDte: zeroWin.length
+      ? {
+        net: zeroNet,
+        abs: zeroAbs,
+        strikes: [...zeroWin].sort((a, b) => Math.abs(b.gex) - Math.abs(a.gex)).slice(0, 5)
+          .map((r) => ({ strike: r.strike, gex: r.gex, callGex: r.callGex, putGex: r.putGex })),
+        // What share of everything on screen expires tonight. The reason this
+        // summary exists: a board that is mostly 0DTE is a different object
+        // from one that is mostly structural, and the ladder cannot show it.
+        shareOfAbs: zeroAbs + out.reduce((t, r) => t + Math.abs(r.netGex), 0) === 0
+          ? 0
+          : zeroAbs / (zeroAbs + out.reduce((t, r) => t + Math.abs(r.netGex), 0)),
+      }
+      : null,
     // The post-16:05 case: today's sweep has already landed, so the "prior"
     // side IS today's close and `chg` collapses to post-close chain drift
     // rather than a session's build. The client warns instead of pretending.
@@ -813,6 +932,144 @@ async function getStrikeGexLive(symbol, { force = false } = {}) {
 
   const res = await job;
   return res?.ok ? { ...res, cached: false, ageMs: 0 } : res;
+}
+
+/**
+ * PER-SYMBOL STRUCTURAL SUMMARY — what the rail badges read.
+ *
+ * ── THE PROBLEM ─────────────────────────────────────────────────────────────
+ * The rail ranks 169 names by |Δ| alone, so a symbol whose gamma flip jumped
+ * seven strikes on a modest dollar change sorts below five names that did
+ * nothing structurally interesting. You cannot see it without opening it, and
+ * opening 169 names is the thing this page exists to avoid.
+ *
+ * ── WHY THIS IS NODE AND NOT SQL ────────────────────────────────────────────
+ * The flip is a zero crossing of a RUNNING TOTAL with linear interpolation
+ * between the straddling strikes. That is expressible in Postgres — a SUM()
+ * OVER (PARTITION BY symbol ORDER BY strike) plus LAG and some arithmetic —
+ * but it would be a second, subtly different implementation of the same
+ * definition the client already uses, and the two would drift the first time
+ * either changed. Instead this pulls the per-strike rows ONE time and reduces
+ * them here, so there is exactly one definition of "flip" on the server.
+ *
+ * The wire cost is what matters and it is unchanged: ~169 symbols × ~81 strikes
+ * × 2 dates is a few tens of thousands of rows over a local socket, reduced to
+ * one small object per symbol before it reaches the browser. The board endpoint
+ * still answers in one round trip and still sends the browser a ranking, not a
+ * ladder.
+ *
+ * Returns Map<symbol, { flipNow, flipPrev, flipMove, flips, callWall, putWall,
+ * wallChg, structScore }>.
+ */
+async function getStrikeGexBadges(pairs) {
+  const out = new Map();
+  if (!pairs.length) return out;
+  const p = getPool();
+  if (!p) return out;
+
+  // One query for every (symbol, date) pair the board already resolved, so the
+  // badge and the row beside it can never be describing different sessions.
+  const syms = pairs.map((x) => x.symbol);
+  const curDates = pairs.map((x) => x.date);
+  const prevDates = pairs.map((x) => x.prevDate || x.date);
+  const { rows } = await p.query(
+    `SELECT g.symbol, to_char(g.date,'YYYY-MM-DD') AS d, g.strike, g.net_gex, g.spot
+       FROM eod_strike_gex g
+       JOIN (SELECT unnest($1::text[]) AS symbol,
+                    unnest($2::date[]) AS cur,
+                    unnest($3::date[]) AS prev) w
+         ON w.symbol = g.symbol AND (g.date = w.cur OR g.date = w.prev)
+      ORDER BY g.symbol, g.date, g.strike`,
+    [syms, curDates, prevDates],
+  );
+
+  /** Interpolated zero crossings of the running total. Same rule as the client. */
+  const crossings = (ladder) => {
+    const res = [];
+    let cum = 0, prevStrike = null;
+    for (const r of ladder) {
+      const before = cum;
+      cum += r.gex;
+      if (prevStrike != null && ((before < 0 && cum >= 0) || (before > 0 && cum <= 0))) {
+        const t = cum === before ? 0 : (0 - before) / (cum - before);
+        res.push(prevStrike + t * (r.strike - prevStrike));
+      }
+      prevStrike = r.strike;
+    }
+    return res;
+  };
+  const nearest = (xs, target) =>
+    xs.length ? xs.reduce((b, x) => (Math.abs(x - target) < Math.abs(b - target) ? x : b), xs[0]) : null;
+
+  // symbol → date → ladder
+  const bySym = new Map();
+  for (const r of rows) {
+    const sym = r.symbol;
+    if (!bySym.has(sym)) bySym.set(sym, new Map());
+    const byDate = bySym.get(sym);
+    if (!byDate.has(r.d)) byDate.set(r.d, []);
+    byDate.get(r.d).push({ strike: Number(r.strike), gex: Number(r.net_gex) || 0, spot: Number(r.spot) || 0 });
+  }
+
+  for (const { symbol, date, prevDate } of pairs) {
+    const byDate = bySym.get(symbol);
+    if (!byDate) continue;
+    const cur = byDate.get(date) || [];
+    const prev = prevDate ? byDate.get(prevDate) || [] : [];
+    if (!cur.length) continue;
+    const spot = cur.find((r) => r.spot > 0)?.spot || cur[Math.floor(cur.length / 2)].strike;
+
+    const flipNow = nearest(crossings(cur), spot);
+    const flipPrev = prev.length ? nearest(crossings(prev), spot) : null;
+
+    // Strikes that crossed zero overnight — a change of KIND, which is why it
+    // gets its own count instead of folding into the |Δ| ranking.
+    const prevAt = new Map(prev.map((r) => [r.strike, r.gex]));
+    let flips = 0;
+    for (const r of cur) {
+      const q = prevAt.get(r.strike);
+      if (q != null && q !== 0 && r.gex !== 0 && Math.sign(q) !== Math.sign(r.gex)) flips += 1;
+    }
+
+    const above = cur.filter((r) => r.strike > spot);
+    const below = cur.filter((r) => r.strike < spot);
+    const callWall = above.length ? above.reduce((b, r) => (r.gex > b.gex ? r : b), above[0]) : null;
+    const putWall = below.length ? below.reduce((b, r) => (r.gex < b.gex ? r : b), below[0]) : null;
+    const wallChg = callWall && prevAt.has(callWall.strike) ? callWall.gex - prevAt.get(callWall.strike) : null;
+
+    const flipMove = flipNow != null && flipPrev != null ? flipNow - flipPrev : null;
+    // A flip can do four things overnight, and only ONE of them is a distance.
+    // Scoring on `flipMove` alone silently rates the other two at zero: a book
+    // whose crossing left the recorded window entirely — because the negative
+    // leg deepened until the running total never gets back to zero — is one of
+    // the largest structural changes there is, and it produces a null, not a
+    // big number. `vanished` and `appeared` are therefore scored as events.
+    const flipState =
+      flipNow != null && flipPrev != null ? (flipNow === flipPrev ? 'stable' : 'moved')
+        : flipNow == null && flipPrev != null ? 'vanished'
+          : flipNow != null && flipPrev == null ? 'appeared'
+            : 'none';
+
+    // Structural movement expressed in PERCENT OF SPOT, so one score ranks a
+    // $6 name against a $6,000 index. Flip migration and sign flips are the two
+    // things the |Δ| sort is blind to, so they are the two things it counts.
+    // The appear/vanish constant is deliberately large — those are step changes,
+    // not small ones — but finite, so a genuinely enormous migration can still
+    // outrank them.
+    const structScore =
+      (flipMove != null && spot > 0 ? Math.abs(flipMove / spot) * 100 : 0)
+      + (flipState === 'vanished' || flipState === 'appeared' ? 3 : 0)
+      + flips * 0.25;
+
+    out.set(symbol, {
+      flipNow, flipPrev, flipMove, flipState, flips,
+      callWall: callWall && callWall.gex > 0 ? callWall.strike : null,
+      putWall: putWall && putWall.gex < 0 ? putWall.strike : null,
+      wallChg,
+      structScore,
+    });
+  }
+  return out;
 }
 
 /**
@@ -951,6 +1208,21 @@ async function getStrikeGexBoard(topN = 5, { date = null } = {}) {
     };
   });
 
+  // Structural badges, merged in from ONE extra query over the same
+  // (symbol, date, prevDate) triples the ranking above just resolved. Failure
+  // here degrades the rail to its old behaviour — the badge column disappears
+  // and every number on the page is still correct — so it must never take the
+  // board down with it.
+  try {
+    const badges = await getStrikeGexBadges(
+      symbols.map((x) => ({ symbol: x.symbol, date: x.date, prevDate: x.prevDate })),
+    );
+    for (const x of symbols) x.badge = badges.get(x.symbol) ?? null;
+  } catch (e) {
+    console.warn('[eod-strike-gex] badges failed (rail falls back to plain):', e.message);
+    for (const x of symbols) x.badge = null;
+  }
+
   return { ok: true, top, date: asOf, symbols };
 }
 
@@ -1023,6 +1295,7 @@ module.exports = {
   getStrikeGexChange,
   getStrikeGexLive,
   getStrikeGexBoard,
+  getStrikeGexBadges,
   listStrikeGexDates,
   ensureSchema,
   getPool,
