@@ -23,9 +23,11 @@ const Em           = lazy(() => import('@/components/pages/Em'))
 const Levels       = lazy(() => import('@/app/levels/page'))
 const Flow         = lazy(() => import('@/components/pages/Flow'))
 // /premarket — the premarket prep board (regime, walls, flip, overnight
-// context, expected range, playbook). Client component under app/, imported
-// straight from '@/app' like MultGreekClient and Levels.
-const Premarket    = lazy(() => import('@/app/premarket/page'))
+// context, expected range, playbook). Lives in components/pages/ like every
+// other live-feed page: it rides lib/gexSocket, and anything under app/ gets
+// prerendered by Next, which cannot open a socket. app/premarket/page.tsx is
+// only a force-dynamic redirect to /app/premarket.
+const Premarket    = lazy(() => import('@/components/pages/Premarket'))
 // /board — the near-black card board. Same DashGrid machinery as the Options
 // board (drag/resize/add/remove, layout saved per user), on a page-scoped
 // palette that is deliberately NOT homeTheme while the look is being trialled.

@@ -71,15 +71,31 @@ RUN rm -rf public/app && cp -r app-vite/dist public/app
 # The image never runs that test, so skip the download. Same reasoning as
 # PUPPETEER_SKIP_DOWNLOAD at the top of this file.
 #
-# `set -eux` + the ls: if cbedge-v3/ ever fails to reach the build context (not
-# committed, excluded by .dockerignore), this says so in one line instead of a
-# bare "exit code: 1" with no output.
-RUN set -eux; \
-    ls -la cbedge-v3/package.json; \
-    cd cbedge-v3 && \
-    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-audit --no-fund && \
-    npm run build:fast
-RUN rm -rf public/v3 && cp -r cbedge-v3/dist public/v3 && ls public/v3
+# THIS STEP IS DELIBERATELY NON-FATAL. v3 is a pre-alpha side app, gated to
+# owner-only, that no customer can reach. It must never be able to stop a v2
+# hotfix from reaching the VPS — the same lesson docker-compose.yml records about
+# theta-terminal on 2026-08-18, where an unrelated container's failure took the
+# whole site down. If v3 fails to build, the deploy continues and /v3 simply
+# 404s until it is fixed.
+#
+# `set -ux` (no -e) so a failure lands in the else branch instead of aborting.
+# The echoed commands are what makes the real npm/vite error legible in the
+# build log; without them BuildKit collapses the step to "exit code: 1".
+RUN set -ux; \
+    if ls -la cbedge-v3/package.json \
+       && cd cbedge-v3 \
+       && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-audit --no-fund \
+       && npm run build:fast; then \
+      cd /app && rm -rf public/v3 && cp -r cbedge-v3/dist public/v3 && ls public/v3; \
+      echo "cbedge-v3: built OK -> public/v3"; \
+    else \
+      cd /app; \
+      echo "##############################################################"; \
+      echo "## cbedge-v3 BUILD FAILED - deploying WITHOUT /v3.          ##"; \
+      echo "## v2 is unaffected. /v3 will 404 until this is fixed.      ##"; \
+      echo "## The real error is in the output directly above this box. ##"; \
+      echo "##############################################################"; \
+    fi
 
 # ---- runtime ----
 FROM base AS runtime

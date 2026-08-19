@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-08-19 - FIX: /premarket broke the Docker build — moved to components/pages/
+
+`npm run build` failed with `Export encountered an error on /premarket/page:
+/premarket`, which took the whole VPS deploy down.
+
+Cause: `/premarket` is a LIVE-FEED page — it rides `lib/gexSocket` through
+`useMobileGex` and `useEsCandles`. Anything under `app/` gets prerendered by
+Next at build time, and that tree cannot render on a server. Every other
+feed-consuming dashboard page already avoids this by living in
+`components/pages/` and being mounted ONLY by the Vite SPA: there is no
+`app/<name>/page.tsx` for /flow, /em, /traders-dashboard, /ict, /board,
+/replay, /analytics, /options-chain, /scanner or the rest. `/premarket` was the
+odd one out.
+
+- **Moved** the page to `components/pages/Premarket.tsx` (unchanged apart from
+  the export name and a header note).
+- `app/premarket/page.tsx` is now a three-line server component:
+  `export const dynamic = "force-dynamic"` + `redirect("/app/premarket")`, so
+  the bare `cbedge.net/premarket` URL still lands somewhere and Next never
+  prerenders the client tree.
+- `app-vite/src/App.tsx` imports `@/components/pages/Premarket`.
+- `app/app/premarket/route.ts` (the SPA shell handler) and the toolbar nav item
+  are unchanged.
+
+Rule of thumb going forward: **if a page subscribes to the feed, it belongs in
+`components/pages/`, not `app/`.**
+
 ## 2026-08-19 - /premarket: black box in the one-liner, wall tags contained
 
 `app/premarket/page.tsx`, styling only.
