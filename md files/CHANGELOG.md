@@ -1,388 +1,82 @@
 # Changelog
 
-## 2026-08-19 - /premarket: gap is 4pm → 9:30, and a filled gap is marked
-
-`components/pages/Premarket.tsx` — Overnight Context.
-
-- **The gap is now the prior 16:00 ET close → today's 09:30 ET open, always.**
-  It was front ES against the prior close, which drifted all day. `pdc` is taken
-  from the prior session's last RTH bar (not the last overnight print) and the
-  open from today's 09:30 bar.
-- Before 09:30 there is no open yet, so front ES stands in and the row is
-  labelled **projected · pre-open** — it moves until the bell. From 09:30 the
-  gap is fixed at the printed open and never moves again that day.
-- **FILLED is marked.** A gap up fills when today's RTH low reaches the prior
-  close, a gap down when the RTH high does. Both gap rows turn green and show a
-  ✓ FILLED pill / "filled at <price>".
-- New fill-progress bar under the two rows — the only place a PARTIAL fill is
-  visible. Retrace % is measured off the RTH extreme in the fill direction, not
-  the last price, so a fill that already reversed still reads as filled.
-- Gaps under 0.25 ES points read "flat" instead of pretending there is a gap.
-- `overnight` now also returns today's 09:30 open and the RTH high/low so far.
-
-## 2026-08-19 - Traders Dashboard: link to /premarket
-
-`components/pages/TradersDashboard.tsx`.
-
-- **Premarket Prep button in the header**, beside the snapshot button — orange
-  (`HOME_THEME.orange`, via the file's `rgba()` helper; no hardcoded hex). Uses
-  `next/link`, which the SPA shims to a router push, so it navigates in-app
-  instead of reloading the bundle.
-- `DEFAULT_LINKS` now leads with Premarket Prep. That only affects users with no
-  saved Quick Links; everyone else keeps their arrangement, which is exactly why
-  the header button exists too.
-- Renamed the Quick Links picker entry "Premarket" → "Premarket Prep".
-
-## 2026-08-19 - FIX: /premarket crashed at runtime — backtick inside the CSS template
-
-`"...".inside is not a function` on load, the whole page blank.
-
-Two CSS comments I added in the styling pass contained BACKTICKS (```.inside```,
-```.pmk .g```) — and that CSS lives in a template literal. The first backtick
-ended the literal early, so everything after it parsed as a tagged-template
-call. Valid JavaScript, which is why it built clean and only died in the
-browser.
-
-- Removed every backtick from the `CSS` template literal and left a note in the
-  file saying why none may go back in.
-- Also fixed `.pmk .s b` → `.pmk .sect .s b`, missed when the sector chip rules
-  were scoped.
-
-## 2026-08-19 - FIX: /premarket broke the Docker build — moved to components/pages/
-
-`npm run build` failed with `Export encountered an error on /premarket/page:
-/premarket`, which took the whole VPS deploy down.
-
-Cause: `/premarket` is a LIVE-FEED page — it rides `lib/gexSocket` through
-`useMobileGex` and `useEsCandles`. Anything under `app/` gets prerendered by
-Next at build time, and that tree cannot render on a server. Every other
-feed-consuming dashboard page already avoids this by living in
-`components/pages/` and being mounted ONLY by the Vite SPA: there is no
-`app/<name>/page.tsx` for /flow, /em, /traders-dashboard, /ict, /board,
-/replay, /analytics, /options-chain, /scanner or the rest. `/premarket` was the
-odd one out.
-
-- **Moved** the page to `components/pages/Premarket.tsx` (unchanged apart from
-  the export name and a header note).
-- `app/premarket/page.tsx` is now a three-line server component:
-  `export const dynamic = "force-dynamic"` + `redirect("/app/premarket")`, so
-  the bare `cbedge.net/premarket` URL still lands somewhere and Next never
-  prerenders the client tree.
-- `app-vite/src/App.tsx` imports `@/components/pages/Premarket`.
-- `app/app/premarket/route.ts` (the SPA shell handler) and the toolbar nav item
-  are unchanged.
-
-Rule of thumb going forward: **if a page subscribes to the feed, it belongs in
-`components/pages/`, not `app/`.**
-
-## 2026-08-19 - /premarket: black box in the one-liner, wall tags contained
-
-`app/premarket/page.tsx`, styling only.
-
-- **Black box through "Today's one-liner".** The greek tile rule was written as
-  a bare `.pmk .g`, which also matched the `<span class="g">` the one-liner and
-  the scenario bullets use for their green highlight — so those spans inherited
-  the tile's panel background, border and padding and rendered as boxes mid-
-  sentence. Scoped it to `.pmk .greeks .g` (and its `.n` / `.v` / `.m`
-  children). Sector chips were scoped the same way (`.pmk .sect .s`) for the
-  same reason.
-- **CALL WALL / PUT WALL still overlapping.** The inside-the-bar placement now
-  anchors with `left`/`right` only, no transform: the bar's outer edge sits
-  (50 − w)% from the far side of the track, so pinning the tag's matching edge
-  there right-aligns it inside the bar and it can never exceed the track,
-  whatever the bar width. Short bars (<22% of the half-track) still hang the
-  label outside, where there is room by definition.
-
-## 2026-08-19 - /premarket: "Yesterday's flip" replaced with gap info
-
-`app/premarket/page.tsx` — Overnight Context.
-
-- Removed the "Yesterday's flip" row.
-- Added three rows in its place, all off the existing 5m ES bars (no new fetch):
-  - **Gap vs prior close** — front ES minus the prior RTH close, in points and
-    percent, with an inside/outside pill. Outside is the one that changes how you
-    trade it: a gap beyond yesterday's range has no reference above or below it,
-    so it runs or fails hard, while a gap inside the range sits in known
-    territory and fills far more often.
-  - **Gap fill target** — the prior close, plus the distance back to it.
-  - **Prior day range (ES)** — yesterday's RTH high/low and its width.
-- `overnight` now also resolves the prior RTH session's high/low (09:30–16:00 on
-  the last dated day before today) to support the inside/outside test.
-
-## 2026-08-19 - /premarket: card accents removed, borders raised, strike tags contained
-
-`app/premarket/page.tsx`, styling only — no data changes.
-
-- Dropped the coloured left accent bar on the six key-level cards
-  (`.lvl::before` and its call / put / flip / magnet / pain / spot variants).
-- Card outlines are more pronounced: new `--card: rgba(255,255,255,.20)` on the
-  section shell, the level cards, the greek tiles, the playbook and the sector
-  chips. A white alpha rather than a slate hex, because those cards sit on three
-  different backgrounds (panel, panel2, the green/red regime wash) and a fixed
-  hex reads as a different weight on each. Divider `--line` also lifted
-  (#1f2733 → #242e3b).
-- CALL WALL / PUT WALL no longer cover their neighbours. A tagged strike is
-  usually the WIDEST bar in the window, so a label hung off the bar's end ran
-  past the track — over the Overnight column on the call side and over the
-  strike gutter on the put side. Bars ≥22% of the half-track now carry the label
-  INSIDE, flush to the bar's end, on a translucent plate in white; only short
-  bars hang it outside, where there is room by definition. Tags are also capped
-  at half the track width and ellipsised.
-- Sector chips truncate their name instead of overflowing the card.
-
-## 2026-08-19 - /premarket wired to live data (no more placeholders)
-
-`app/premarket/page.tsx` — the page now reads the real feed. Every number that
-was a hardcoded mockup value is gone.
-
-Sources, all shared, none duplicated:
-
-- `useMobileGex("oi-vol")` — the one live-GEX layer (rides `lib/gexSocket`,
-  refcounted, pinned to today's 0DTE). Supplies spot, prev close, gamma flip,
-  call/put wall, total net GEX, ES front, ES−SPX basis and the chain.
-- `useEsCandles(true, 3, 5, false)` — same socket. Overnight high/low and the
-  prior RTH close come off the 5m ES bars (ON window = prior 18:00 ET → 09:30).
-- `useEconCalendar({ withQuote: false })` — today's US High/Medium events plus
-  the two largest earnings names, with the 30-minute staleness fade.
-- `/api/quotes-batch?symbols=/ES,/NQ,VIX` — ES / NQ / VIX day change, 30s.
-- `/api/scanner/market-quality` — **sector heat now comes from Market Quality**
-  (its `sectorBars`, 5-day sector change), not a new fetch. Its `globalScore`
-  also feeds the "Market quality" row. 60s.
-
-Derived client-side from that one chain through `lib/calculations` (so the page
-can never disagree with the GEX chart): per-strike net GEX bars (±12 strikes
-around spot), max pain, the 0DTE magnet, expected move (ATM straddle × 0.85,
-falling back to ATM IV × √(1/252)), DEX / vanna / call-vs-put gamma totals, the
-regime bias and the three scenarios.
-
-- **"vs prior close" needs one session to warm up.** Nothing in the app persists
-  an EOD GEX snapshot, so this page takes its own: once per session between
-  15:40 and 16:10 ET into `localStorage` (`cb-premarket-eod-v1`). Until a
-  snapshot from a PREVIOUS date exists, the net-GEX % change, the strike deltas
-  and "yesterday's flip" render "—" instead of a made-up number.
-- Removed the mockup's "build notes" and "alt strip" sections and the
-  not-wired badge; the header now shows expiry, feed state (LIVE / REST
-  FALLBACK / PAUSED) and the countdown to the open.
-- CHEX tile dropped — charm is not on `ChainRow`. Replaced with a call-vs-put
-  gamma split. MVC row replaced with the overnight range.
-- Added a <1180px stack for the three columns and the six level cards.
-
-## 2026-08-19 - New page: /premarket (Premarket Prep board)
-
-New customer dashboard page at `/app/premarket` — the pre-open prep board:
-regime header (net GEX, gamma flip, spot, one-line bias), a six-card key-levels
-strip (call wall / 0DTE magnet / spot / max pain / flip / put wall), the GEX
-profile by strike with spot + flip overlays, overnight context (ON range vs
-PDC, biggest GEX changes vs prior close, sector heat), and expected range +
-playbook with today's catalysts.
-
-- `app/premarket/page.tsx` — new `"use client"` page. Renders the approved
-  concept mockup verbatim; every selector is scoped under `.pmk` and the CSS
-  custom properties are declared on `.pmk` (not `:root`) so the mockup's
-  generic class names (`.row`, `.col`, `.bar`, `.stat`, `.g`, `.s`) cannot leak
-  into the rest of the app. **All values are static placeholders — nothing is
-  wired to the chain, the WebSocket or any API yet.**
-- `app-vite/src/App.tsx` — `lazy()` import + `<Route path="/premarket">`.
-- `app/app/premarket/route.ts` — Next shell handler (`serveSpaShell`) so a hard
-  refresh on `/app/premarket` doesn't 404.
-- `components/shared/GlobalToolbar.tsx` — `NAV_ITEMS` entry (🌅 Premarket),
-  placed after Traders Dash.
-- Mockup source kept at `generated/2026-08-19-premarket-prep-mockup.html`.
-- Dimmed/secondary text set to white throughout (`--dim` / `--dim2` = #fff).
-
-## 2026-08-19 - Budget / Bzila: cards follow the selected month, plus a year toggle
-
-`owner-vite/src/pages/Budget.tsx` — the Bzila tab's summary tiles (Income /
-Expenses / Net) and the three stream cards (CB Edge / Contracts / Prop) were
-always year-to-date, so changing the month picker did nothing to them.
-
-- `bzilaComputed` now also returns `monthStreams` — the per-stream in/out/net
-  breakdown keyed by `YYYY-MM`.
-- `BzilaPanel` takes `month` and has a scope toggle above the tiles: the
-  selected month (default) or the year. The tiles and stream cards read from
-  whichever scope is active; the Monthly All ledger below still lists the whole
-  year.
-- Selecting a month while in month scope auto-expands that month's ledger row.
-
-## 2026-08-19 - v3: new repo scaffolded (cbedge-v3) — speed layer done, UI blank
-
-New repo, delivered as `generated/2026-08-19-cbedge-v3-scaffold.zip`. Nothing in
-this repo changed.
-
-v3 is a **frontend-only** rewrite. `server-v2/` stays exactly as it is and
-remains the only source of data — the recorders, levels engine, walls-reach and
-the TT/Theta proxies are not being reproduced. v3 talks to it over HTTP plus one
-WebSocket and is served at `/v3/*` while v2 keeps `/app/*`, so both run side by
-side and there is no cutover day.
-
-Stack: Vite 7 + React 19 + TS + Tailwind v4, tokens as CSS custom properties.
-
-The UI is deliberately blank — one placeholder page. What is finished is the part
-that is hard to retrofit later:
-
-- **Early boot.** The WebSocket opens in `index.html` before the bundle is
-  fetched and buffers frames until React adopts it; the IndexedDB read starts in
-  the same breath. Measured against the mock server: first frame 51ms, first
-  paint 80ms — data beats pixels. In v2 the socket did not open until a
-  component mounted and subscribed.
-- **Derived topic scoping.** `?topics=` is computed from what is actually
-  subscribed, so there is no hand-maintained list to forget an entry in and no
-  way for a panel to silently go stale. The boot connection stays unscoped on
-  purpose; scoping applies ~1.2s later once the route settles, so the early-boot
-  head start is not traded away for a few hundred bytes.
-- **One store, per-field selectors, rAF coalescing.** 20 frames inside one
-  animation frame produce one notification.
-- **Instant stale paint.** Last-known state is cached in IndexedDB and painted
-  dimmed until live data replaces it. No spinners on numbers.
-- **Budgets that fail the build.** Every chunk measured in brotli against
-  `budgets.json`. Initial load 69.5kb against a 109kb ceiling.
-- **`ws-scope-check.mjs`** drives a real browser against a mock server that
-  mirrors server-v2's filtering and asserts all of the scoping behaviour above.
-  8/8 passing.
-
-Also carried over as explicit rules in the new `AGENTS.md`: no colour literals
-outside `tokens.css`, no catch-all route redirect (v2 fell through to
-`/traders-dashboard`, which made unregistered pages look half-working), charts
-updated imperatively, no request waterfalls.
-
-
-## 2026-08-19 - Snapshot: pill labels sit on the box's centre again
-
-Edited: `lib/snapshot.ts`.
-
-The wall log's PNG (`/app/scanner` → log page, 📸 PNG) drew every badge —
-`OPEN BASELINE`, `CHANGED`, the capture-rail chips — with its label off the
-box's vertical centre, even though the same pills are perfectly centred on the
-live page.
-
-Gotcha 10 already rewrote those pills for the clone (fixed height + line-height
-→ `line-height: 1` + symmetric padding), and that half was right but not
-sufficient. The remaining offset is html2canvas itself: it paints text at
-`textRect.top + baseline`, and `baseline` comes from its own probe
-(`FontMetrics.parseMetrics`) — an inline span plus a 1px baseline-aligned img,
-measured with **integer** `offsetTop`s and then padded by a hardcoded `+ 2`.
-That overshoots the real ascent by ~1–2px, so every run of text is drawn low.
-Symmetric padding cannot cancel a constant downward push.
-
-New `captureBaselineBias()` measures the push instead of guessing it: it runs
-html2canvas's probe verbatim in the clone document, compares it with where the
-baseline actually is, and returns the difference in CSS px. The `data-cap-center`
-rewrite then splits the pill's padding asymmetrically by that bias, so the glyphs
-land back on the optical centre. Painted height, border and box position are
-unchanged; the live page never sees any of it.
-
-Because the bias depends on the font the CLONE resolved (not the one the live box
-was sized for) it is measured per font + weight + size and cached per capture,
-and it is clamped to ±4px so a probe that runs before a webfont loads can never
-shove a label out of its box. Pills with no declared height keep their computed
-padding and only shift the text.
-
-### Padding-sized controls too (same bias, no opt-in)
-
-The Tape Field switcher on TestLab's GEX map (`HEATMAP` / `TERRAIN` / `GEX × DEX`)
-showed the same thing, and it is not a `data-cap-center` pill: those are
-padding-sized `<button>`s (`homeButtonStyle`), so there is no line box to rewrite
-— only the same ~2px drop to cancel. Text-only buttons now get the correction
-automatically, by re-splitting their vertical padding: the sum is preserved, so
-the painted control is pixel-identical and only the label moves. Buttons with
-element children are skipped (an icon + label would shift apart) and a button
-with no top padding is a no-op, so this can never resize a control.
-
-The `data-cap-center` branch for boxes with NO declared height no longer collapses
-`line-height` either — that box is sized by its own padding, so collapsing the
-line box shrank it. It now gets the padding swap alone.
-
-Verified against a headless Chromium harness driving the repo's own html2canvas
-build: pill label vs. box centre, five font families × four height/font-size
-pairs. Before: 0.83–1.75px low. After: 0.00–0.01px at 12px labels (what the log
-page uses) and ≤0.88px at the odd sizes, where html2canvas's integer probe
-quantises what is left. Every case improved; none regressed.
-
-## 2026-08-18 - ΔGEX Board: rail badges, call/put legs, live 0DTE, and deep links out
-
-Edited: `server-v2/eod-strike-gex-recorder.js`,
-`owner-vite/src/pages/GexGrowth.tsx`.
-Schema: `eod_strike_gex` gains `call_gex` and `put_gex` (nullable, no backfill).
-
-The remaining modules from the interpretation-layer doc, minus the two sections
-that were commentary rather than features.
-
-### Call/put legs — the schema change
-
-`net_gex` is the sum of a positive call leg and a negative put leg, and the sum
-is lossy: net GEX falling is equally consistent with call gamma coming off and
-put gamma piling on. `accumulateChainGex()` always computed both halves and
-threw them away. It now keeps them, and `callLeg + putLeg` is bit-for-bit the
-old single expression — so the legs land alongside a year of history with no
-discontinuity in the net.
-
-**No backfill, deliberately.** The chains those rows were built from are gone.
-Pre-migration sessions carry NULL legs all the way to the client, never
-COALESCEd to 0, because "not recorded" and "no call gamma here" are different
-facts. `hasLegs` / `hasPrevLegs` let the panel explain the gap in one line
-instead of showing a fabricated split. Legs are summed ONLY when both sessions
-have them — a mixed sum would report the entire current call book as "built
-today".
-
-### 0DTE — live only, and NOT a new column
-
-The obvious design was a second expiry bucket in the table, and it is wrong.
-The recorded sweep fires at **16:05 ET, after the close, by which point today's
-0DTE has expired** — storing it would write a ladder of zeros under a column
-implying it meant something, every day, forever. Intraday it is the opposite:
-the fastest gamma on the board and the half the recorded series structurally
-cannot see. So `resolveBoardExpiries()` gained a `zerodte` bucket that the LIVE
-route alone uses, the table keeps its ex-0DTE definition unchanged, and the
-panel shows 0DTE as a summary (net, share of |book|, top strikes) rather than a
-second ladder. Both buckets are fetched in one `Promise.all` so they can never
-be from different seconds.
-
-### Rail badges
-
-`getStrikeGexBadges()` computes per-symbol structure — flip level now/prior,
-migration, sign-flip count, walls — and merges into the board response. **In
-Node, not SQL**: the flip is a zero crossing of a running total with linear
-interpolation, and expressing it in a window function would be a second, subtly
-different implementation of a definition the client already has. One extra query
-of per-strike rows, reduced to one small object per symbol before it reaches the
-browser — the wire payload is unchanged. Failure degrades the rail to its old
-behaviour rather than taking the board down.
-
-`railBadge()` picks ONE headline for ~60px: appeared/vanished outranks a
-migration, which outranks a sign-flip count. New `Most structural` sort ranks on
-`structScore`, which is what the |Δ| sort is blind to.
-
-### Deep links
-
-Flow takes `ticker` (**not** `symbol` — it silently ignores `symbol`) and
-`dteMax=0` for the 0DTE tape; strikes link to Options Chain per the established
-`Scanner.tsx` href. Absolute URLs, because the owner SPA is a different origin
-and a bare `/flow` resolves against it. Overridable via `VITE_SITE_ORIGIN`.
-
-### Caught in review
-
-- **A gamma flip that VANISHES from the window scored zero.** `structScore` keyed
-  on `flipMove`, which is null when the crossing stops existing — one of the
-  largest structural changes there is, rated at nothing. Added `flipState`
-  (`moved` / `stable` / `vanished` / `appeared` / `none`); appear and vanish are
-  now scored as events.
-- Rail badges clipped tickers to `S..`. The symbol is the row's identity — the
-  magnitude bar gives up width now, never the name.
-- `+31% of the book` read as a change. A share is a magnitude; the sign is gone.
-
-### Verified
-
-121 assertions — 41 server (against a stubbed pg), 80 client. Including: legs
-summing exactly to `net_gex` at every strike; the call leg never negative and
-the put leg never positive; 0DTE never reaching the table; live fetching both
-buckets; pre-migration legs reported missing rather than zero; a proportional
-change NOT moving the flip while a lopsided one does; and every deep-link param
-name matching what the receiving page actually reads. `tsc --noEmit` clean,
-`vite build` green, rendered with zero console errors.
-
-Five of the harness failures on the first run were my test's arithmetic, not the
-code — the GEX multiplier is `S²·0.01·100` = 10,000, and `cnt()` counts OI **+
-volume**. Both are now pinned by assertion so nobody repeats them.
+## 2026-08-19 (b) - GEX levels replay: a white spot line across the ladder
+
+Edited: `components/pages/Analytics.tsx` (`TlLadder`) — the "GEX levels" tab of
+`/replay`, both panes.
+
+Matches the chain-ladder replay: one white rule straight across the ladder, from
+the strike column to the value column, sitting at the PRICE rather than on the
+nearest rung, with the price printed at its right end. The ◀ caret says which
+strike price is closest to; the line says where inside that strike it actually
+is — the difference between "769, roughly" and "769.9, leaning on 770".
+
+Rows moved into their own column div (`rowsColRef`) so the line has something to
+measure against, and the root became `position: relative`. Pitch is measured off
+the real DOM — rows carry padding and a border, so a guessed px-per-row drifts —
+from first→last / (n−1) so nothing compounds, re-measured by a ResizeObserver
+only when the ladder changes size. The pixel position is DERIVED DURING RENDER,
+never state fed by an effect: an effect paints the line one commit behind the
+spot it is labelled with, which is invisible when idle and a visible trail
+during playback. Spot is interpolated between the two strikes that bracket it,
+so an uneven strike grid still lands in the right place.
+
+
+## 2026-08-19 (c) - Options Chain replay: the ATM rule stopped jumping when cells filled in
+
+Edited: `components/pages/OptionsChain.tsx` (`ChainGrid`).
+
+Two separate things moved the white ATM box, and both were geometry, not intent.
+
+1. **Rows sized to their contents.** The replay axis is fixed for the whole
+   session, so a strike the current sweep did not record renders blank and the
+   next sweep prints `+$0` in the same row. Blank cell, no line box; `+$0`, one
+   line — the row grew, everything under it shifted, and the ATM rule a few rows
+   away jumped. Padding rows had the same disease in reverse: rendered fully
+   empty, they collapsed to 4px slivers and so never held the centre they exist
+   to hold. New `ROW_MIN_H` (17) floors the sticky strike cell — the one cell
+   every row has, data or padding — which floors the grid row. Count-mode cells
+   that need two lines still grow past it; it is a floor, not a fixed height.
+
+2. **The ATM row was 4px taller than every other row.** The value cells draw the
+   white box with inset box-shadow specifically so it cannot shift layout — and
+   then the strike cell drew its half with real `border-top` / `border-bottom`,
+   adding 4px to the tallest cell in the row. So every time spot crossed a
+   strike the outgoing ATM row shrank and the incoming one grew, and the rule
+   lurched instead of stepping one row. Now inset, like the cells beside it. The
+   box's left edge stays on the first value cell where it always was.
+
+Neither change touches which strike is ATM, the OI call/put split, or the walls
+— `nearestStrike` still follows real spot exactly.
+
+
+## 2026-08-19 - GEX levels replay: the ladder stopped juddering under a walking spot
+
+Edited: `components/pages/Analytics.tsx` (`TickerLookupCard` / `TlLadder`) — the
+"GEX levels" tab of `/replay`.
+
+Rewound, both ladders anchored on the strike nearest the LIVE spot of whichever
+frame was playing. Spot walks a point or two per frame, so every few frames it
+crossed to the next strike: `tlWindow` re-sliced the ±20-rung window one rung
+over, `windowKey` changed, and the auto-centre effect scrolled the pane. Over a
+session that read as a constant shudder — the numbers were right, the paper
+under them would not sit still.
+
+The window and the scroll now read a HELD anchor instead of spot. New
+`useTlAnchor(rows, spot, resetKey)` returns spot quantised to a strike that only
+advances once spot has walked `TL_ANCHOR_SLACK` (5) strikes away from it; the
+window carries ±20 rungs and the pane shows ±10, so 5 strikes of drift still
+leaves spot on screen with ladder either side. `resetKey` (symbol · pane ·
+expiry · live-vs-rewound) forces a fresh anchor whenever the axis changes
+outright, so it never centres on a rung the new ladder does not have.
+
+`TlLadder` takes an optional `anchor` prop and centres on that row; omitted, it
+centres on the spot row exactly as before, so the live path is unchanged. The
+◀ spot caret, the lit row and the level chips all still read the real spot —
+the marker keeps tracking price frame by frame, only the scroll holds still.
+
+Also factored the nearest-strike scan out of `tlWindow` into `tlNearestIdx`,
+which both it and the anchor hook use.
 
 
 ## 2026-08-18 - ΔGEX Board: three Read-panel bugs the first real SPY payload exposed

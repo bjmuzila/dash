@@ -1158,6 +1158,21 @@ const ChainMatrix = memo(function ChainMatrix({
   const STRIKE_COL = 56;
   // Sticky header/strike column must be fully opaque — rows scroll under it.
   const HDR_BG = "#0D1119";
+  // Every strike row is at least this tall, floored on the sticky strike cell
+  // (the one cell EVERY row has, data row or padding row).
+  //
+  // Grid rows size to their content, so without a floor a row's height is a
+  // function of what happens to be IN it — and in replay that changes under
+  // playback. A strike the current sweep didn't record renders blank, then the
+  // next sweep records it and the same row prints "+$0"; the row grows by a
+  // line, everything below it shifts down, and the white ATM rule a few rows
+  // away visibly jumps. Same story for the padding rows, which rendered as 4px
+  // slivers and so never actually held the centre they exist to hold. Pinning
+  // the floor makes a row's height independent of its contents: values can
+  // appear and disappear all session and nothing moves. Count-mode cells that
+  // legitimately need two lines still grow past it — this is a floor, not a
+  // fixed height.
+  const ROW_MIN_H = 17;
   // ⅀ Total column — per-strike sum across every rendered expiration EXCEPT
   // 0DTE (front expiry excluded on purpose; label stays plain "Total"), with
   // its own heat scale (over the visible strikes) so the biggest net totals pop.
@@ -1334,7 +1349,7 @@ const ChainMatrix = memo(function ChainMatrix({
         if (strike == null) {
           return (
             <div key={`pad-${rowIdx}`} style={{ display: "contents" }}>
-              <div style={{ position: "sticky", left: 0, zIndex: 2, padding: "2px 8px", fontSize: 12, background: HDR_BG, borderRight: `1px solid ${HT.border}` }} />
+              <div style={{ position: "sticky", left: 0, zIndex: 2, padding: "2px 8px", fontSize: 12, minHeight: ROW_MIN_H, background: HDR_BG, borderRight: `1px solid ${HT.border}` }} />
               {renderIdx.map((i) => (
                 <div key={`pad-${rowIdx}-${i}`} style={{ padding: "2px 8px", fontSize: 12 }} />
               ))}
@@ -1372,6 +1387,7 @@ const ChainMatrix = memo(function ChainMatrix({
               style={{
               position: "sticky", left: 0, zIndex: 2,
               padding: "2px 5px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right",
+              minHeight: ROW_MIN_H,
               // ATM reads like the /home GEX heatmap: no amber fill, blue strike
               // text with a blue "ATM" tag beside it, inside the white rule.
               color: isATM ? HT.cyan : "#e4e4e7",
@@ -1379,10 +1395,21 @@ const ChainMatrix = memo(function ChainMatrix({
               background: strikeSel
                 ? `linear-gradient(90deg, ${rgba(HT.cyan, 0.06)}, ${rgba(HT.cyan, 0.30)}), ${HDR_BG}`
                 : HDR_BG,
-              boxShadow: strikeSel ? `inset -2px 0 0 ${HT.cyan}` : undefined,
+              // The ATM rule is drawn INSET, never as a border — same reason the
+              // value cells use box-shadow (see atmShadow). A real 2px top and
+              // bottom border adds 4px to this cell, and since it is the tallest
+              // cell in its row that made the ATM row 4px taller than every
+              // other one. So every time spot crossed a strike the old ATM row
+              // shrank and the new one grew, shoving the whole ladder — the
+              // white rule appeared to jump rather than move one row. Inset, the
+              // rule paints over the cell and the geometry never changes.
+              boxShadow: [
+                ...(strikeSel ? [`inset -2px 0 0 ${HT.cyan}`] : []),
+                // Top and bottom only — the box's left edge stays where it was,
+                // on the first value cell (see atmShadow's isFirst branch).
+                ...(isATM ? ["inset 0 2px 0 #ffffff", "inset 0 -2px 0 #ffffff"] : []),
+              ].join(", ") || undefined,
               borderRight: `1px solid ${HT.border}`,
-              borderTop: isATM ? "2px solid #ffffff" : undefined,
-              borderBottom: isATM ? "2px solid #ffffff" : undefined,
               display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 3,
               cursor: "pointer",
               opacity: strikeDim ? 0.28 : 1,

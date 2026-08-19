@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useScannerTickers } from "@/lib/useScannerTickers";
@@ -2155,14 +2155,100 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null, anchor =
     // to a new strike (which re-slices the window anyway) — NOT on every tick.
   }, [spotStrike, windowKey]);
 
+  // ── The spot line ──────────────────────────────────────────────────────────
+  // The same white rule the chain-ladder replay draws: one line straight across
+  // the ladder, from the strike column to the value column, sitting at the price
+  // ITSELF rather than on the nearest rung. The ◀ caret says which strike price
+  // is closest to; the line says where inside that strike it actually is, which
+  // is the difference between "769, roughly" and "769.9, leaning on 770".
+  //
+  // Position is DERIVED DURING RENDER, never state fed by an effect: an effect
+  // would paint the line one commit behind the spot it is labelled with, and
+  // during replay — where spot moves every frame — it would visibly trail.
+  // Row pitch IS measured off the DOM (rows carry padding and a border, so a
+  // guessed px-per-row drifts), but from first→last / (n−1) so nothing
+  // compounds, and only when the ladder changes size.
+  const rowsColRef = useRef<HTMLDivElement | null>(null);
+  const [rowGeom, setRowGeom] = useState<{ top0: number; pitch: number } | null>(null);
+  const geomKey = `${windowKey}:${withChg ? 1 : 0}`;
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    const col = rowsColRef.current;
+    if (!root || !col || !col.firstElementChild || !col.lastElementChild) { setRowGeom(null); return; }
+    const measure = () => {
+      const first = col.firstElementChild as HTMLElement | null;
+      const last = col.lastElementChild as HTMLElement | null;
+      if (!root || !first || !last) return;
+      const n = col.childElementCount;
+      const rTop = root.getBoundingClientRect().top;
+      const fr = first.getBoundingClientRect();
+      const lr = last.getBoundingClientRect();
+      const top0 = fr.top - rTop + fr.height / 2;
+      const pitch = n > 1 ? ((lr.top - rTop + lr.height / 2) - top0) / (n - 1) : fr.height;
+      // Identity-stable unless it really moved, so a ResizeObserver tick can't
+      // re-render the whole ladder for a sub-pixel reflow.
+      setRowGeom((prev) =>
+        prev && Math.abs(prev.top0 - top0) < 0.5 && Math.abs(prev.pitch - pitch) < 0.01
+          ? prev
+          : { top0, pitch },
+      );
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(col);
+    return () => ro.disconnect();
+  }, [geomKey]);
+
+  // Continuous row index of spot, interpolated between the two strikes that
+  // bracket it so an uneven strike grid still lands in the right place, then
+  // mapped to pixels through the measured pitch. `rows` runs high→low.
+  const spotTop = useMemo(() => {
+    const n = rows.length;
+    if (!rowGeom || n === 0 || spot == null || !(spot > 0)) return null;
+    let i = 0;
+    while (i < n && rows[i].strike > spot) i++;
+    let pos: number;
+    if (i === 0) pos = 0;                     // above the top rung — pin to it
+    else if (i >= n) pos = n - 1;             // below the bottom rung
+    else {
+      const hi = rows[i - 1].strike, lo = rows[i].strike;
+      pos = (i - 1) + (hi === lo ? 0 : (hi - spot) / (hi - lo));
+    }
+    return rowGeom.top0 + pos * rowGeom.pitch;
+  }, [rowGeom, rows, spot]);
+
   return (
-    <div ref={rootRef} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+    <div ref={rootRef} style={{ display: "flex", flexDirection: "column", gap: 2, position: "relative" }}>
       <div style={{ display: "grid", gridTemplateColumns: cols, alignItems: "center", gap: 8, paddingBottom: 4 }}>
         <Label>Strike</Label>
         <span style={{ textAlign: "center" }}><Label>Net GEX</Label></span>
         <span style={{ textAlign: "right" }}><Label>Value</Label></span>
         {withChg && <span style={{ textAlign: "right" }}><Label>Δ 1D</Label></span>}
       </div>
+      {spotTop !== null && (
+        <div
+          style={{
+            position: "absolute", left: 0, right: 0, top: spotTop, height: 0,
+            borderTop: `1px solid ${T.text}`,
+            pointerEvents: "none", zIndex: 2,
+            // No CSS transition. Replay already eases spot frame by frame;
+            // a transition on top of that restarts every frame and the line
+            // ends up permanently trailing the price written on it.
+          }}
+        >
+          <span
+            style={{
+              position: "absolute", right: 0, top: -13,
+              fontFamily: "var(--font-mono)", fontSize: 9, fontWeight: 800,
+              letterSpacing: "0.04em", color: T.text,
+              background: T.panel, padding: "0 4px", borderRadius: 3,
+            }}
+          >
+            {spot!.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </span>
+        </div>
+      )}
+      <div ref={rowsColRef} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       {rows.map((r) => {
         const unrecorded = missing?.has(r.strike) ?? false;
         const pos = r.gex >= 0;
@@ -2263,6 +2349,7 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null, anchor =
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
