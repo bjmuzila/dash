@@ -1816,9 +1816,45 @@ async function main() {
         return;
       }
       // ── End-of-day per-strike GEX snapshot ───────────────────────────────
+      //
+      // ── `basis` (all four read routes) ───────────────────────────────────
+      // Every route below takes an optional &basis= choosing WHICH number the
+      // ladder is made of. Anything unrecognised reads as `oivol`, the original
+      // behaviour, so an old client keeps working byte-for-byte.
+      //
+      //   oivol (default) — |gamma| x (OI + volume). The legacy series, ~a year
+      //                     of history. Its LEVEL is what every other surface
+      //                     in the app prints. Its Δ double-counts a session:
+      //                     OI at 16:05 is settled through the PREVIOUS close
+      //                     while volume is today's, so the diff adds
+      //                     ΔOI(T-1) and subtracts Vol(T-1) — the same
+      //                     session's trading, once net and once gross. Kept as
+      //                     the default anyway; the page labels it.
+      //   oi              — |gamma| x open interest, re-stamped next morning
+      //                     off the settled file. Both sides of a diff are then
+      //                     settled and the Δ is a true ΔOI. The honest
+      //                     structural read. Response carries oiSettled /
+      //                     prevOiSettled so a caller can tell whether the
+      //                     re-stamp actually reached both sides.
+      //   vol             — |gamma| x volume. Same-session by construction, so
+      //                     the LEVEL ("how much gamma traded today") is the
+      //                     read; its Δ is a second difference.
+      //   flow            — signed DEALER INVENTORY x gamma, from classified
+      //                     prints in flow_prints. The only basis that knows
+      //                     direction rather than assuming it. SPX/SPY/QQQ
+      //                     only, premium-floored, and for SPY/QQQ limited to
+      //                     the near-spot front-expiry window the streamer
+      //                     subscribes to — read getFlowLadder()'s four
+      //                     caveats in the recorder before trusting it.
+      //
+      // Responses echo `basis` and carry `hasBasis`. hasBasis=false means the
+      // basis has NOTHING recorded for that session/symbol — a zero board and
+      // an unrecorded board are indistinguishable once COALESCEd, and the
+      // difference matters, so callers must branch on the flag not the values.
+      //
       // Day-over-day ΔGEX per strike for one symbol, whole board ex-0DTE.
       // Backs the Ticker Lookup card's Δ column.
-      //   GET /proxy/eod-strike-gex-change?symbol=NVDA[&date=YYYY-MM-DD]
+      //   GET /proxy/eod-strike-gex-change?symbol=NVDA[&date=YYYY-MM-DD][&basis=oi]
       // Returns { ok, symbol, date, prevDate, spot, prevSpot, rows:[{strike,
       // netGex, prevNetGex, chg, hadPrev}] }. date/prevDate are the two most
       // recent snapshot DATES that exist for the symbol — not calendar
@@ -1839,7 +1875,10 @@ async function main() {
             const u = new URL(req.url, `http://localhost:${PORT}`);
             const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
             if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
-            const out = await getStrikeGexChange(symbol, { date: u.searchParams.get('date') });
+            const out = await getStrikeGexChange(symbol, {
+              date: u.searchParams.get('date'),
+              basis: u.searchParams.get('basis'),
+            });
             sendJson(res, out.ok ? 200 : 503, out);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
@@ -1866,7 +1905,7 @@ async function main() {
             const u = new URL(req.url, `http://localhost:${PORT}`);
             const out = await getStrikeGexBoard(
               Number(u.searchParams.get('top') || 5),
-              { date: u.searchParams.get('date') },
+              { date: u.searchParams.get('date'), basis: u.searchParams.get('basis') },
             );
             sendJson(res, out.ok ? 200 : 503, out);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
@@ -1882,7 +1921,10 @@ async function main() {
           try {
             const { listStrikeGexDates } = require('./eod-strike-gex-recorder');
             const u = new URL(req.url, `http://localhost:${PORT}`);
-            const out = await listStrikeGexDates(Number(u.searchParams.get('limit') || 90));
+            const out = await listStrikeGexDates(
+              Number(u.searchParams.get('limit') || 90),
+              { basis: u.searchParams.get('basis') },
+            );
             sendJson(res, out.ok ? 200 : 503, out);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
@@ -1912,7 +1954,7 @@ async function main() {
             const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
             if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
             const force = /^(1|true|yes)$/i.test(u.searchParams.get('force') || '');
-            const out = await getStrikeGexLive(symbol, { force });
+            const out = await getStrikeGexLive(symbol, { force, basis: u.searchParams.get('basis') });
             sendJson(res, out.ok ? 200 : 503, out);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();
@@ -1931,6 +1973,33 @@ async function main() {
             const one = (u.searchParams.get('symbol') || '').toUpperCase().trim();
             const date = (u.searchParams.get('date') || '').trim() || null;
             const out = await runSweep({ ...(one ? { symbols: [one] } : {}), date });
+            sendJson(res, out.ok ? 200 : 503, out);
+          } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
+        })();
+        return;
+      }
+      // Manual fire of the morning OI re-stamp (normally automatic at 09:25 ET).
+      //   POST /proxy/eod-strike-gex-restamp[?symbol=NVDA][&date=YYYY-MM-DD]
+      //
+      // Rewrites the oi_* columns of the LATEST RECORDED SESSION (or `date`)
+      // off the settled OI file now on the chain, and stamps oi_stamped_date.
+      // Touches nothing else — net_gex, call_gex, put_gex and vol_* are the
+      // evening's record of a settled close and stay exactly as they were.
+      //
+      // Safe to re-run: it is an UPDATE keyed on (date, symbol, strike) and
+      // never inserts, so a second fire writes the same numbers again.
+      //
+      // REFUSES a date >= today ET. Today's open interest does not settle until
+      // tonight, so stamping today's rows would put a false "settled" marker on
+      // the one fact the oi basis depends on being true.
+      if (pathname === '/proxy/eod-strike-gex-restamp' && req.method === 'POST') {
+        (async () => {
+          try {
+            const { runOiRestamp } = require('./eod-strike-gex-recorder');
+            const u = new URL(req.url, `http://localhost:${PORT}`);
+            const one = (u.searchParams.get('symbol') || '').toUpperCase().trim();
+            const date = (u.searchParams.get('date') || '').trim() || null;
+            const out = await runOiRestamp({ ...(one ? { symbols: [one] } : {}), date });
             sendJson(res, out.ok ? 200 : 503, out);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();

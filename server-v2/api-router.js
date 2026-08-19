@@ -3459,6 +3459,22 @@ const ymdParam = (sp) => {
   return YMD.test(d) ? d : '';
 };
 
+// `basis` picks WHICH number the ladder is made of — see the long block above
+// the /proxy/eod-strike-gex-* handlers in server-with-proxy.js for what each
+// one means and which of them can honestly be differenced.
+//
+// Whitelisted HERE as well as in the recorder, for the same reason `date` is:
+// this is the public-facing hop, and the recorder turns a basis into a COLUMN
+// NAME interpolated into SQL. The recorder's normBasis() already refuses
+// anything off this list, so this is defence in depth rather than the only
+// gate — but the gate nearest the internet should never be the one that is
+// missing. Anything unrecognised is dropped, which reads as `oivol`.
+const BASES = new Set(['oivol', 'oi', 'vol', 'flow']);
+const basisParam = (sp) => {
+  const b = (sp.get('basis') || '').trim().toLowerCase();
+  return BASES.has(b) ? b : '';
+};
+
 register('/api/eod-strike-gex-board', {
   auth: 'owner', methods: ['GET'],
   async handler(req, res, ctx) {
@@ -3468,6 +3484,8 @@ register('/api/eod-strike-gex-board', {
     if (Number.isFinite(top) && top > 0) q.set('top', String(Math.floor(top)));
     const date = ymdParam(sp);
     if (date) q.set('date', date);
+    const basis = basisParam(sp);
+    if (basis) q.set('basis', basis);
     const qs = q.toString() ? `?${q}` : '';
     const r = await forwardGet(ctx, `/proxy/eod-strike-gex-board${qs}`);
     send(res, r.status, r.body, { 'Cache-Control': NO_STORE });
@@ -3483,6 +3501,8 @@ register('/api/eod-strike-gex-change', {
     if (symbol) q.set('symbol', symbol);
     const date = ymdParam(sp);
     if (date) q.set('date', date);
+    const basis = basisParam(sp);
+    if (basis) q.set('basis', basis);
     const qs = q.toString() ? `?${q}` : '';
     const r = await forwardGet(ctx, `/proxy/eod-strike-gex-change${qs}`);
     send(res, r.status, r.body, { 'Cache-Control': NO_STORE });
@@ -3510,6 +3530,12 @@ register('/api/eod-strike-gex-live', {
     const q = new URLSearchParams();
     if (symbol) q.set('symbol', symbol);
     if (/^(1|true|yes)$/i.test(sp.get('force') || '')) q.set('force', '1');
+    // basis=flow is refused downstream rather than silently downgraded: flow is
+    // built from the recorded session's classified tape, and a half-written
+    // session is not a ladder. Forwarded as-is so the caller sees that error
+    // instead of an OI number under a "direction was measured" header.
+    const basis = basisParam(sp);
+    if (basis) q.set('basis', basis);
     const qs = q.toString() ? `?${q}` : '';
     const r = await forwardGet(ctx, `/proxy/eod-strike-gex-live${qs}`);
     send(res, r.status, r.body, { 'Cache-Control': NO_STORE });
@@ -3523,7 +3549,14 @@ register('/api/eod-strike-gex-dates', {
   async handler(req, res, ctx) {
     const sp = new URL(req.url || '/', 'http://localhost').searchParams;
     const limit = Number(sp.get('limit') || 90);
-    const qs = Number.isFinite(limit) && limit > 0 ? `?limit=${Math.floor(limit)}` : '';
+    const q = new URLSearchParams();
+    if (Number.isFinite(limit) && limit > 0) q.set('limit', String(Math.floor(limit)));
+    // The picker is basis-scoped: the new columns start at their migration
+    // date, so an unfiltered list would offer a year of sessions that render as
+    // an empty ladder on oi/vol/flow.
+    const basis = basisParam(sp);
+    if (basis) q.set('basis', basis);
+    const qs = q.toString() ? `?${q}` : '';
     const r = await forwardGet(ctx, `/proxy/eod-strike-gex-dates${qs}`);
     send(res, r.status, r.body, { 'Cache-Control': NO_STORE });
   },

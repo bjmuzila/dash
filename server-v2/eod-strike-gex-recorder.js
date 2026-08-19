@@ -23,6 +23,77 @@
  * so the day-over-day diff is session-to-session and not "3:40pm yesterday vs
  * 11:20am today".
  *
+ * ── THE FOUR BASES, AND THE BUG THAT FORCED THE SPLIT ───────────────────────
+ * Until 2026-08-19 this table stored ONE number per strike: net_gex, on the
+ * OI+Vol basis, i.e. |gamma| x (open_interest + volume). The day-over-day diff
+ * of that number is broken, and not in the small way "16:05 is a bit early"
+ * suggests.
+ *
+ * OI does not settle at the close. OCC publishes overnight and the figure the
+ * chain carries at 16:05 on session T is the file settled through T-1's close.
+ * Volume, on the same response, is T's full session. So a row is
+ *
+ *     row(T) = OI(T-1) + Vol(T)
+ *
+ * and the diff the board draws expands to
+ *
+ *     row(T) - row(T-1) = [OI(T-1) - OI(T-2)] + [Vol(T) - Vol(T-1)]
+ *
+ * The left bracket is the NET result of session T-1's trading. The right
+ * bracket SUBTRACTS Vol(T-1), the GROSS of that same session. Session T-1
+ * therefore appears in the Δ twice, once net and once gross, with opposite
+ * signs — a name that traded heavy on Tuesday and quiet on Wednesday prints a
+ * large negative Δ on Wednesday that has nothing to do with Wednesday. It is a
+ * contamination, not a lag, and no scheduling change alone fixes it.
+ *
+ * So the table now carries the halves apart, and the read path takes a `basis`:
+ *
+ *   oivol — net_gex, the ORIGINAL series, untouched and still the default.
+ *           Kept because a year of history is on it and because the level (as
+ *           opposed to the diff) is the number every other surface in the app
+ *           prints. Its Δ still has the double-count described above; the UI
+ *           says so rather than the table quietly changing meaning.
+ *   oi    — oi_gex, |gamma| x open_interest only. Re-stamped the next morning
+ *           (see below) so BOTH sides of a diff are settled files and the Δ is
+ *           a true session-over-session ΔOI. This is the honest structural read.
+ *   vol   — vol_gex, |gamma| x volume only. Same-session by construction, so
+ *           its LEVEL is "how much gamma actually traded today". Its Δ is a
+ *           second difference (today's turnover vs yesterday's) and is the
+ *           least useful of the four — the level is the read.
+ *   flow  — flow_gex, signed DEALER INVENTORY x gamma, from the tape. The only
+ *           basis of the four that knows direction. See getFlowLadder().
+ *
+ * net_gex/call_gex/put_gex are computed by the UNCHANGED expressions, so the
+ * legacy series is bit-for-bit what it was. oi_gex + vol_gex therefore agrees
+ * with net_gex only to float noise, not exactly — history continuity beat
+ * exact additivity of the new columns, deliberately.
+ *
+ * ── THE MORNING OI RE-STAMP ─────────────────────────────────────────────────
+ * A second, cheaper pass at 09:25 ET rewrites the PREVIOUS session's oi_*
+ * columns off the freshly settled file, and stamps oi_stamped_date so a reader
+ * can tell a settled row from a provisional one. Nothing else is touched: the
+ * evening's net_gex, call_gex, put_gex and vol_* stay exactly as recorded.
+ *
+ * That is what makes the `oi` basis a real ΔOI. Without it, oi_gex on row(T)
+ * would be OI(T-1) and the diff would be lagged one session — correct in shape
+ * but describing the wrong day.
+ *
+ * ── WHY OI CANNOT TELL YOU DIRECTION (AND WHAT flow DOES ABOUT IT) ──────────
+ * accumulateChainGex signs the legs by CONVENTION: calls +, puts -, both on
+ * |gamma| x count. That is an assumption about who opened the position, not a
+ * measurement, and open interest carries no side. A 6400 call strike with 40k
+ * OI is dealer-short-gamma or dealer-long-gamma depending on whether the public
+ * bought those calls or wrote them, and no amount of OI arithmetic can tell
+ * those apart. Every one of the first three bases inherits that blindness.
+ *
+ * The flow basis does not. It is built from bid/ask-classified prints in
+ * flow_prints, mirrored into a dealer position (taker buys -> dealer short,
+ * taker sells -> dealer long), so its sign is measured rather than assumed. The
+ * price is coverage: read the caveats in getFlowLadder() before trusting it —
+ * it is premium-floored, it is a session quantity rather than a book, and for
+ * anything but SPX it covers only the near-spot front-expiry window the
+ * streamer subscribes to.
+ *
  * ── WHY THE SAME FORMULA AS THE CARD, NOT THE THETA SWEEP ───────────────────
  * /proxy/gex-by-strike-multi already returns a ladder shaped exactly like this
  * one, and it is deliberately NOT used. That sweep is ThetaData-sourced
@@ -37,7 +108,11 @@
  * same multiplier. See gexRowsForSymbol() for the line-by-line correspondence.
  *
  * ── WHAT IT WRITES ──────────────────────────────────────────────────────────
- *   eod_strike_gex(date, symbol, strike, net_gex, spot, expiry_count, ts)
+ *   eod_strike_gex(date, symbol, strike, net_gex, spot, expiry_count, ts,
+ *                  call_gex, put_gex,
+ *                  oi_gex,   oi_call_gex,   oi_put_gex,   oi_stamped_date,
+ *                  vol_gex,  vol_call_gex,  vol_put_gex,
+ *                  flow_gex, flow_call_gex, flow_put_gex, flow_prints)
  *   One row per (date, symbol, strike). PK upsert, so a manual re-fire
  *   overwrites the day cleanly instead of duplicating it.
  *
@@ -109,6 +184,38 @@ const TICKER_DELAY_MS = Number(process.env.EOD_STRIKE_GEX_DELAY_MS || 300);
 // eventually week-over-week, so it keeps far more than the two days a bare Δ
 // needs. ~400 days ≈ a full year of sessions plus slack.
 const RETAIN_DAYS = Math.max(3, Number(process.env.EOD_STRIKE_GEX_RETAIN_DAYS || 400));
+
+// ── OI RE-STAMP (see "THE MORNING OI RE-STAMP" in the header) ───────────────
+// Minute-of-day ET for the pass that rewrites the PREVIOUS session's oi_*
+// columns off the settled OI file. 565 = 09:25 ET — after OCC's overnight file
+// is live on the feed, before 09:30 starts accruing today's volume.
+const RESTAMP_AT_MIN = Number(process.env.EOD_STRIKE_GEX_RESTAMP_AT_MIN || 565);
+// Latest minute the re-stamp may START. 11:00 ET. Wider than "before the bell"
+// looks reckless but is not: this pass reads ONLY `open-interest`, which is a
+// settled file that does not move again until tonight, so a sweep that crosses
+// the open reads exactly the same number at 09:26 and at 10:40. The window is
+// bounded at all only so a process booted mid-afternoon does not re-stamp a
+// session the evening sweep is about to overwrite anyway.
+const RESTAMP_CLOSE_MIN = Number(process.env.EOD_STRIKE_GEX_RESTAMP_CLOSE_MIN || 660);
+// Set to 0 to disable the morning pass and leave oi_* as the provisional 16:05
+// read (oi_stamped_date then stays NULL and the read path labels it as such).
+const RESTAMP_ENABLED = process.env.EOD_STRIKE_GEX_RESTAMP !== '0';
+
+// ── FLOW BASIS ──────────────────────────────────────────────────────────────
+// Which underlyings get a signed dealer-inventory ladder written into flow_*.
+// SPX/SPY/QQQ to start: SPX because the core feed engine streams its full
+// active window, SPY/QQQ because MultiFlowManager already carries them. Every
+// other symbol gets NULL flow_* columns, which the read path reports as "this
+// basis has no data for this name" rather than as a flat zero board.
+//
+// Widening this list is cheap (one extra grouped read per symbol) but
+// MEANINGLESS unless the root is actually streaming into flow_prints — that
+// table only holds what the streamer subscribed to. Check FLOW_TICKERS and
+// multi-flow.js before adding a name here.
+const FLOW_GEX_SYMBOLS = new Set(
+  String(process.env.EOD_STRIKE_GEX_FLOW_SYMBOLS || 'SPX,SPY,QQQ')
+    .split(/[,\s]+/).map((s) => s.trim().toUpperCase()).filter(Boolean),
+);
 
 // Roster override. Resolved PER SWEEP, never frozen at module load — a ticker
 // added on the owner Watchlists page has to start recording that same evening,
@@ -241,6 +348,37 @@ async function ensureSchema() {
   // no-op rather than an error, in the same spirit as the CREATE above.
   await p.query(`ALTER TABLE eod_strike_gex ADD COLUMN IF NOT EXISTS call_gex DOUBLE PRECISION;`);
   await p.query(`ALTER TABLE eod_strike_gex ADD COLUMN IF NOT EXISTS put_gex  DOUBLE PRECISION;`);
+
+  // THE FOUR BASES — added 2026-08-19. See the header for why the single
+  // OI+Vol number could not produce an honest day-over-day Δ.
+  //
+  // Same NULLABLE / NO BACKFILL rule as the legs above, and for the same
+  // reason: the chains these rows were built from are gone. Every date before
+  // this migration has NULL on all of them, and the read path reports that as
+  // "this basis has no data for this session" rather than drawing a flat zero
+  // board. Do NOT try to derive oi_gex from net_gex — the split is exactly the
+  // information net_gex threw away.
+  for (const col of [
+    'oi_gex', 'oi_call_gex', 'oi_put_gex',
+    'vol_gex', 'vol_call_gex', 'vol_put_gex',
+    'flow_gex', 'flow_call_gex', 'flow_put_gex',
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await p.query(`ALTER TABLE eod_strike_gex ADD COLUMN IF NOT EXISTS ${col} DOUBLE PRECISION;`);
+  }
+  // Which settled-OI file the oi_* columns came from.
+  //   NULL      → provisional: written by the 16:05 sweep off the file settled
+  //               through the PREVIOUS session, never re-stamped. Diffing two
+  //               of these is lagged one session.
+  //   = date    → settled: the 09:25 pass rewrote it off this session's own
+  //               settled file. Diffing two of these is a true ΔOI.
+  // A reader must be able to tell the two apart, so this is a stored fact and
+  // not an inference from `ts`.
+  await p.query(`ALTER TABLE eod_strike_gex ADD COLUMN IF NOT EXISTS oi_stamped_date DATE;`);
+  // How many classified prints backed this strike's flow_gex. 0/NULL is the
+  // honest "no tape here", which is a different statement from "flow gamma
+  // netted to zero" — the ladder needs to tell those apart.
+  await p.query(`ALTER TABLE eod_strike_gex ADD COLUMN IF NOT EXISTS flow_prints INTEGER;`);
   // The read path is always "the latest two dates for THIS symbol", so leading
   // with symbol keeps it a small ordered index scan even once the table holds a
   // year of the full watchlist.
@@ -263,20 +401,27 @@ const num = (o, k) => {
 };
 
 /**
- * OI + VOLUME, the contract count this basis uses.
+ * The two contract counts, kept APART.
  *
- * This is the half of the formula most likely to be "cleaned up" later into
- * plain open interest, so: it is intentional, and it must not change without
- * changing the client. The Ticker Lookup card, the Multi Greek card and the
- * Options Chain ⅀ Total column all count `open-interest + volume`, and the
- * card's own footer says "OI+Vol basis". Recording plain OI here would make the
- * Δ column subtract a different number from the one printed beside it.
+ * `oi + vol` is still the OI+Vol basis and still what net_gex is built from —
+ * that has not changed and must not, because the Ticker Lookup card, the Multi
+ * Greek card and the Options Chain ⅀ Total column all count
+ * `open-interest + volume` and the card's footer says "OI+Vol basis". Recording
+ * plain OI into net_gex would make the Δ column subtract a different number
+ * from the one printed beside it.
+ *
+ * What changed on 2026-08-19 is that the halves are now ALSO kept separately,
+ * because their day-over-day diffs are not commensurable: OI at 16:05 is the
+ * file settled through the PREVIOUS close while volume is this session's, so
+ * summing them first and differencing second double-counts a session (header,
+ * "THE FOUR BASES"). Returning the pair lets accumulateChainGex build all three
+ * OI/vol ladders in one pass over the chain.
  */
-const cnt = (o) => {
-  if (!o) return 0;
+const counts = (o) => {
+  if (!o) return { oi: 0, vol: 0 };
   const oi = parseInt(String(o['open-interest'] ?? o.openInterest ?? 0), 10) || 0;
   const vol = parseInt(String(o.volume ?? 0), 10) || 0;
-  return oi + vol;
+  return { oi, vol };
 };
 
 /**
@@ -337,7 +482,7 @@ async function resolveBoardExpiries(ticker, bucket = 'board') {
  * silently flip positive in the recorded history. etf-gex-recorder.js carries
  * the same guard for the same reason.
  */
-function accumulateChainGex(payload, acc) {
+function accumulateChainGex(payload, acc, expiry = '', gammaAcc = null) {
   const data = payload?.data ?? payload;
   const items = Array.isArray(data?.items) ? data.items : [];
   const S = Number(data?.underlyingPrice) || 0;
@@ -349,21 +494,67 @@ function accumulateChainGex(payload, acc) {
       if (!(strike > 0)) continue;
       const c = s.call;
       const p = s.put;
-      const cc = cnt(c);
-      const pc = cnt(p);
+      const cCnt = counts(c);
+      const pCnt = counts(p);
+      const cc = cCnt.oi + cCnt.vol;
+      const pc = pCnt.oi + pCnt.vol;
       // No book AND no tape is a dead strike — skip it rather than write the
       // whole inert tail of every chain.
       if (cc === 0 && pc === 0) continue;
+      const cGamma = Math.abs(num(c, 'gamma'));
+      const pGamma = Math.abs(num(p, 'gamma'));
       // The two legs, kept apart. `callLeg` is always >= 0 and `putLeg` always
       // <= 0, and callLeg + putLeg is EXACTLY the old single expression — the
       // net number is bit-for-bit what it was before the split, which is what
       // lets the legs land alongside a year of history without a discontinuity.
-      const callLeg = Math.abs(num(c, 'gamma')) * cc * mult;
-      const putLeg = -Math.abs(num(p, 'gamma')) * pc * mult;
+      //
+      // The four basis legs below are computed as SEPARATE products rather than
+      // by re-deriving them from callLeg/putLeg, so each is exact on its own
+      // terms. The consequence, stated plainly because someone will one day
+      // write an assertion about it: oi_gex + vol_gex agrees with net_gex only
+      // to float noise. That is the accepted trade — a year of net_gex history
+      // must not shift by an ulp to make the new columns sum prettily.
+      const callLeg = cGamma * cc * mult;
+      const putLeg = -pGamma * pc * mult;
+      const oiCallLeg = cGamma * cCnt.oi * mult;
+      const oiPutLeg = -pGamma * pCnt.oi * mult;
+      const volCallLeg = cGamma * cCnt.vol * mult;
+      const volPutLeg = -pGamma * pCnt.vol * mult;
       if (!Number.isFinite(callLeg) || !Number.isFinite(putLeg)) continue;
-      const cur = acc.get(strike);
-      if (cur) { cur.gex += callLeg + putLeg; cur.callGex += callLeg; cur.putGex += putLeg; }
-      else acc.set(strike, { gex: callLeg + putLeg, callGex: callLeg, putGex: putLeg });
+
+      let cur = acc.get(strike);
+      if (!cur) {
+        cur = {
+          gex: 0, callGex: 0, putGex: 0,
+          oiGex: 0, oiCallGex: 0, oiPutGex: 0,
+          volGex: 0, volCallGex: 0, volPutGex: 0,
+        };
+        acc.set(strike, cur);
+      }
+      cur.gex += callLeg + putLeg;
+      cur.callGex += callLeg;
+      cur.putGex += putLeg;
+      cur.oiGex += oiCallLeg + oiPutLeg;
+      cur.oiCallGex += oiCallLeg;
+      cur.oiPutGex += oiPutLeg;
+      cur.volGex += volCallLeg + volPutLeg;
+      cur.volCallGex += volCallLeg;
+      cur.volPutGex += volPutLeg;
+
+      // PER-EXPIRY GAMMA, for the flow basis only.
+      //
+      // Flow inventory in flow_prints is keyed by (expiration, strike): the
+      // same strike carries different gamma on a weekly and on a LEAP, so
+      // folding inventory across expiries first and multiplying by one gamma
+      // afterwards would be wrong by whatever the term structure is. Keeping
+      // the per-expiry gamma here lets getFlowLadder() multiply each expiry's
+      // inventory by ITS OWN gamma and only then sum into the strike.
+      //
+      // `mult` rides along because it is a function of the spot captured on
+      // THIS response, and the flow pass runs after the sweep has moved on.
+      if (gammaAcc && expiry) {
+        gammaAcc.set(`${expiry}|${strike}`, { cGamma, pGamma, mult });
+      }
     }
   }
   return S;
@@ -373,8 +564,65 @@ function accumulateChainGex(payload, acc) {
  * The whole board for one symbol, ex-0DTE, summed per strike.
  * Returns { spot, expiryCount, rows: [{ strike, gex }] } ascending by strike.
  */
-async function gexRowsForSymbol(symbol, bucket = 'board') {
+async function gexRowsForSymbol(symbol, bucket = 'board', { wantGamma = false } = {}) {
   const expiries = await resolveBoardExpiries(symbol, bucket);
+  if (!expiries.length) return { spot: 0, expiryCount: 0, rows: [], gamma: null };
+
+  const acc = new Map();
+  // Only allocated when a caller is going to build a flow ladder — for the
+  // other ~166 names this stays null and the sweep costs exactly what it did.
+  const gammaAcc = wantGamma ? new Map() : null;
+  let spot = 0;
+  let ok = 0;
+  const queue = [...expiries];
+
+  const worker = async () => {
+    while (queue.length) {
+      const exp = queue.shift();
+      if (!exp) return;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const payload = await fetchChainFull(symbol, exp);
+        const S = accumulateChainGex(payload, acc, exp, gammaAcc);
+        if (S > 0) { spot = S; ok += 1; }
+      } catch {
+        // One dead expiry must not blank the symbol — it just narrows the
+        // board, and expiryCount records how narrow it actually got.
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(EXPIRY_CONCURRENCY, expiries.length) }, worker));
+
+  const rows = [...acc.entries()]
+    .map(([strike, v]) => ({
+      strike,
+      gex: v.gex, callGex: v.callGex, putGex: v.putGex,
+      oiGex: v.oiGex, oiCallGex: v.oiCallGex, oiPutGex: v.oiPutGex,
+      volGex: v.volGex, volCallGex: v.volCallGex, volPutGex: v.volPutGex,
+    }))
+    // The `gex !== 0` filter stays on the OI+Vol net, unchanged, so the recorded
+    // strike SET is identical to what it has always been. Filtering on any of
+    // the new bases would silently change which rungs exist and break the
+    // continuity of the level series.
+    .filter((r) => Number.isFinite(r.strike) && r.strike > 0 && Number.isFinite(r.gex) && r.gex !== 0)
+    .sort((a, b) => a.strike - b.strike);
+
+  return { spot, expiryCount: ok, rows, gamma: gammaAcc };
+}
+
+/**
+ * OPEN-INTEREST-ONLY ladder, for the 09:25 re-stamp.
+ *
+ * Same walk as gexRowsForSymbol but it reads `open-interest` and nothing else,
+ * because that is the only field on the chain that has changed meaning since
+ * last night: OCC settled overnight and the file now describes the PREVIOUS
+ * session's close. `volume` on this same response is either yesterday's stale
+ * figure or already accruing today's — either way it is not the volume that
+ * belongs on the row being re-stamped, which is why this deliberately does not
+ * touch vol_* or net_gex.
+ */
+async function oiRowsForSymbol(symbol) {
+  const expiries = await resolveBoardExpiries(symbol, 'board');
   if (!expiries.length) return { spot: 0, expiryCount: 0, rows: [] };
 
   const acc = new Map();
@@ -389,19 +637,44 @@ async function gexRowsForSymbol(symbol, bucket = 'board') {
       try {
         // eslint-disable-next-line no-await-in-loop
         const payload = await fetchChainFull(symbol, exp);
-        const S = accumulateChainGex(payload, acc);
-        if (S > 0) { spot = S; ok += 1; }
+        const data = payload?.data ?? payload;
+        const items = Array.isArray(data?.items) ? data.items : [];
+        const S = Number(data?.underlyingPrice) || 0;
+        if (!(S > 0) || !items.length) continue;
+        const mult = S * S * 0.01 * 100;
+        for (const group of items) {
+          for (const s of group?.strikes || []) {
+            const strike = parseFloat(String(s['strike-price'] ?? 0));
+            if (!(strike > 0)) continue;
+            const oiC = counts(s.call).oi;
+            const oiP = counts(s.put).oi;
+            if (oiC === 0 && oiP === 0) continue;
+            const callLeg = Math.abs(num(s.call, 'gamma')) * oiC * mult;
+            const putLeg = -Math.abs(num(s.put, 'gamma')) * oiP * mult;
+            if (!Number.isFinite(callLeg) || !Number.isFinite(putLeg)) continue;
+            const cur = acc.get(strike);
+            if (cur) {
+              cur.oiGex += callLeg + putLeg;
+              cur.oiCallGex += callLeg;
+              cur.oiPutGex += putLeg;
+            } else {
+              acc.set(strike, { oiGex: callLeg + putLeg, oiCallGex: callLeg, oiPutGex: putLeg });
+            }
+          }
+        }
+        spot = S;
+        ok += 1;
       } catch {
-        // One dead expiry must not blank the symbol — it just narrows the
-        // board, and expiryCount records how narrow it actually got.
+        // Same rule as the evening sweep: one dead expiry narrows the ladder
+        // rather than losing the symbol.
       }
     }
   };
   await Promise.all(Array.from({ length: Math.min(EXPIRY_CONCURRENCY, expiries.length) }, worker));
 
   const rows = [...acc.entries()]
-    .map(([strike, v]) => ({ strike, gex: v.gex, callGex: v.callGex, putGex: v.putGex }))
-    .filter((r) => Number.isFinite(r.strike) && r.strike > 0 && Number.isFinite(r.gex) && r.gex !== 0)
+    .map(([strike, v]) => ({ strike, ...v }))
+    .filter((r) => Number.isFinite(r.strike) && r.strike > 0 && Number.isFinite(r.oiGex))
     .sort((a, b) => a.strike - b.strike);
 
   return { spot, expiryCount: ok, rows };
@@ -428,41 +701,238 @@ function windowRows(rows, spot) {
   return rows.slice(Math.max(0, ai - WINDOW_SIDE), ai + WINDOW_SIDE + 1);
 }
 
+// ── FLOW BASIS: signed dealer inventory × gamma ─────────────────────────────
+//
+// The other three bases all sign their legs by CONVENTION — calls positive,
+// puts negative, on |gamma| × an unsigned contract count. Open interest carries
+// no side, so none of them can tell "the public bought 40k of the 6400 calls"
+// (dealer short gamma) from "the public wrote 40k of them" (dealer long). This
+// basis is the one that can, because it is built from prints that were
+// classified against the prevailing bid/ask and then mirrored:
+//
+//     taker BUY  → dealer SOLD    → dealer short that contract
+//     taker SELL → dealer BOUGHT  → dealer long that contract
+//
+// which is the same rule FlowGexAccumulator.ingestTape and
+// flow-gex-rehydrate.rebuildInventoryFromFlowPrints already apply live. This
+// function is the end-of-day, per-strike, all-expiries version of that read,
+// and it deliberately reuses the SQL shape of the rehydrate query so the two
+// definitions of "dealer inventory" cannot drift apart.
+//
+// POLARITY: both legs use the SAME sign, unlike the OI bases. Negating the put
+// term there converts "customer long puts" into "dealer implicitly short"; here
+// that conversion is already baked into the inventory's sign, so doing it again
+// would double-negate. Dealer long (either side) = positive gamma contribution.
+// See the long comment on FlowGexAccumulator.computeFlowGEX, which says the same.
+//
+// ── READ THESE FOUR CAVEATS BEFORE TRUSTING THE NUMBER ──────────────────────
+// 1. PREMIUM-FLOORED. flow_prints only holds prints above FLOW_TAPE_FLOOR
+//    (default $5,000 premium). This is block/sweep flow, NOT the whole tape, so
+//    flow_gex is systematically smaller in magnitude than vol_gex and the two
+//    are not comparable in size. It answers "which way did the SIZE lean", not
+//    "how much traded".
+// 2. COVERAGE IS NOT THE CHAIN. Only SPX gets a full active window (the core
+//    engine streams it). SPY/QQQ come through MultiFlowManager, which
+//    subscribes a near-spot band (FLOW_STRIKE_WINDOW_PCT, default ±6%) of the
+//    NEAREST expiry only. So a SPY flow ladder is front-expiry and near-money
+//    by construction — a wall four months out is invisible to it, and its
+//    absence is not evidence.
+// 3. UNCLASSIFIED PRINTS ARE DROPPED, not guessed. FlowProcessor coerces
+//    mid/unknown prints to side:'buy' for the display tape but tags them
+//    bucket:'neutral'; including those would bias the whole ladder short. The
+//    `bucket <> 'neutral'` filter below is load-bearing.
+// 4. IT IS A SESSION, NOT A BOOK. Dealer inventory here resets every morning —
+//    it is what dealers took on TODAY, not what they are carrying. So the LEVEL
+//    is the read. A day-over-day Δ of it is a second difference ("did today
+//    lean harder than yesterday") and is almost never the question.
+/**
+ * Per-strike flow GEX for one symbol on one session, from flow_prints.
+ *
+ * @param {string} symbol
+ * @param {string} date 'YYYY-MM-DD'
+ * @param {Map<string,{cGamma,pGamma,mult}>} gamma per-expiry `exp|strike` gamma
+ *   captured during the same chain sweep (see accumulateChainGex).
+ * @returns {Promise<Map<number,{flowGex,flowCallGex,flowPutGex,prints}>>}
+ */
+async function getFlowLadder(symbol, date, gamma) {
+  const out = new Map();
+  const p = getPool();
+  if (!p || !gamma || !gamma.size) return out;
+
+  let rows;
+  try {
+    ({ rows } = await p.query(
+      `SELECT expiration, strike, type, side, SUM(size) AS vol, COUNT(*) AS n
+         FROM flow_prints
+        WHERE date = $1
+          AND underlying_norm = $2
+          AND strike IS NOT NULL
+          AND size IS NOT NULL
+          AND expiration IS NOT NULL
+          AND (bucket IS NULL OR bucket <> 'neutral')
+          AND side IN ('buy','sell')
+        GROUP BY expiration, strike, type, side`,
+      [date, symbol],
+    ));
+  } catch (e) {
+    // A missing flow_prints table (a deploy without the flow writer) must not
+    // take the whole sweep down — the other three bases are unaffected.
+    console.warn(`[eod-strike-gex] flow read ${symbol} ${date} failed:`, e.message);
+    return out;
+  }
+  if (!rows.length) return out;
+
+  // (expiration|strike) → signed dealer position per leg.
+  const inv = new Map();
+  for (const r of rows) {
+    const strike = Number(r.strike);
+    const vol = Number(r.vol);
+    if (!(strike > 0) || !(vol > 0)) continue;
+    const key = `${r.expiration}|${strike}`;
+    let v = inv.get(key);
+    if (!v) { v = { callNet: 0, putNet: 0, prints: 0 }; inv.set(key, v); }
+    v.prints += Number(r.n) || 0;
+    // Mirror: taker buy leaves the dealer SHORT (negative), taker sell leaves
+    // the dealer LONG (positive).
+    const signed = r.side === 'buy' ? -vol : vol;
+    if (r.type === 'C') v.callNet += signed;
+    else if (r.type === 'P') v.putNet += signed;
+  }
+
+  for (const [key, v] of inv) {
+    const g = gamma.get(key);
+    // No gamma for this (expiry, strike) means the evening chain sweep never
+    // saw it — an expiry that failed, or a strike outside what the chain
+    // returned. Skipped rather than assumed: a flow print with no gamma has no
+    // GEX, and inventing one from a neighbouring strike would be fabrication.
+    if (!g) continue;
+    const strike = Number(key.split('|')[1]);
+    if (!(strike > 0)) continue;
+    // SAME polarity on both legs — the sign is already in the inventory.
+    const callGex = g.cGamma * v.callNet * g.mult;
+    const putGex = g.pGamma * v.putNet * g.mult;
+    if (!Number.isFinite(callGex) || !Number.isFinite(putGex)) continue;
+    const cur = out.get(strike);
+    if (cur) {
+      cur.flowGex += callGex + putGex;
+      cur.flowCallGex += callGex;
+      cur.flowPutGex += putGex;
+      cur.prints += v.prints;
+    } else {
+      out.set(strike, {
+        flowGex: callGex + putGex,
+        flowCallGex: callGex,
+        flowPutGex: putGex,
+        prints: v.prints,
+      });
+    }
+  }
+  return out;
+}
+
 /** Bulk upsert one symbol's windowed ladder. Chunked so $n stays sane. */
 async function writeRows(date, symbol, spot, expiryCount, rows) {
   const p = getPool();
   if (!p || !rows.length) return 0;
-  const CHUNK = 400;
+  const CHUNK = 200;
   let written = 0;
   for (let i = 0; i < rows.length; i += CHUNK) {
     const slice = rows.slice(i, i + CHUNK);
     const values = [];
     const params = [date, symbol, spot, expiryCount];
     slice.forEach((r) => {
-      const a = params.push(r.strike);
-      const b = params.push(r.gex);
-      const c = params.push(r.callGex ?? null);
-      const d = params.push(r.putGex ?? null);
-      values.push(`($1,$2,$${a},$${b},$3,$4,now(),$${c},$${d})`);
+      const ph = [
+        r.strike, r.gex, r.callGex ?? null, r.putGex ?? null,
+        r.oiGex ?? null, r.oiCallGex ?? null, r.oiPutGex ?? null,
+        r.volGex ?? null, r.volCallGex ?? null, r.volPutGex ?? null,
+        r.flowGex ?? null, r.flowCallGex ?? null, r.flowPutGex ?? null,
+        r.flowPrints ?? null,
+      ].map((v) => `$${params.push(v)}`);
+      values.push(`($1,$2,${ph[0]},${ph[1]},$3,$4,now(),${ph.slice(2).join(',')})`);
     });
     // Upsert, so a manual re-fire after a bad close overwrites the day instead
     // of erroring — that is what makes POST /proxy/eod-strike-gex-run safe.
+    //
+    // oi_stamped_date is NOT in this statement, deliberately. The evening sweep
+    // writes a PROVISIONAL oi_gex (settled through the previous close), and
+    // leaving the stamp NULL is what marks it as such. Only the 09:25 pass sets
+    // it. A re-fire of the evening sweep correctly clears any stamp back to
+    // NULL — the row it just overwrote is provisional again.
     // eslint-disable-next-line no-await-in-loop
     await p.query(
-      `INSERT INTO eod_strike_gex (date, symbol, strike, net_gex, spot, expiry_count, ts, call_gex, put_gex)
+      `INSERT INTO eod_strike_gex
+         (date, symbol, strike, net_gex, spot, expiry_count, ts, call_gex, put_gex,
+          oi_gex, oi_call_gex, oi_put_gex,
+          vol_gex, vol_call_gex, vol_put_gex,
+          flow_gex, flow_call_gex, flow_put_gex, flow_prints)
        VALUES ${values.join(',')}
        ON CONFLICT (date, symbol, strike) DO UPDATE
-         SET net_gex      = EXCLUDED.net_gex,
-             spot         = EXCLUDED.spot,
-             expiry_count = EXCLUDED.expiry_count,
-             ts           = EXCLUDED.ts,
-             call_gex     = EXCLUDED.call_gex,
-             put_gex      = EXCLUDED.put_gex`,
+         SET net_gex       = EXCLUDED.net_gex,
+             spot          = EXCLUDED.spot,
+             expiry_count  = EXCLUDED.expiry_count,
+             ts            = EXCLUDED.ts,
+             call_gex      = EXCLUDED.call_gex,
+             put_gex       = EXCLUDED.put_gex,
+             oi_gex        = EXCLUDED.oi_gex,
+             oi_call_gex   = EXCLUDED.oi_call_gex,
+             oi_put_gex    = EXCLUDED.oi_put_gex,
+             vol_gex       = EXCLUDED.vol_gex,
+             vol_call_gex  = EXCLUDED.vol_call_gex,
+             vol_put_gex   = EXCLUDED.vol_put_gex,
+             flow_gex      = EXCLUDED.flow_gex,
+             flow_call_gex = EXCLUDED.flow_call_gex,
+             flow_put_gex  = EXCLUDED.flow_put_gex,
+             flow_prints   = EXCLUDED.flow_prints,
+             oi_stamped_date = NULL`,
       params,
     );
     written += slice.length;
   }
   return written;
+}
+
+/**
+ * Rewrite one symbol's oi_* columns for one session off the settled OI file.
+ *
+ * UPDATE, never INSERT: this pass corrects rows the evening sweep already
+ * wrote. A strike that has settled OI but no recorded row is one the evening
+ * sweep excluded (dead on the OI+Vol basis, or outside the ±WINDOW_SIDE band),
+ * and adding it here would make the row SET of a session depend on which pass
+ * ran last — the level series has to keep one definition of "which rungs exist".
+ *
+ * Touches oi_gex, oi_call_gex, oi_put_gex and oi_stamped_date and NOTHING else.
+ * net_gex, call_gex, put_gex and vol_* are the evening's record of a settled
+ * close and stay exactly as they were; the whole point of the basis split is
+ * that correcting OI no longer means rewriting the legacy series.
+ */
+async function restampOi(date, symbol, rows) {
+  const p = getPool();
+  if (!p || !rows.length) return 0;
+  const CHUNK = 400;
+  let touched = 0;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const slice = rows.slice(i, i + CHUNK);
+    const strikes = slice.map((r) => r.strike);
+    const oi = slice.map((r) => r.oiGex);
+    const oiC = slice.map((r) => r.oiCallGex);
+    const oiP = slice.map((r) => r.oiPutGex);
+    // eslint-disable-next-line no-await-in-loop
+    const { rowCount } = await p.query(
+      `UPDATE eod_strike_gex g
+          SET oi_gex          = v.oi,
+              oi_call_gex     = v.oic,
+              oi_put_gex      = v.oip,
+              oi_stamped_date = $1::date
+         FROM (SELECT unnest($3::double precision[]) AS strike,
+                      unnest($4::double precision[]) AS oi,
+                      unnest($5::double precision[]) AS oic,
+                      unnest($6::double precision[]) AS oip) v
+        WHERE g.date = $1::date AND g.symbol = $2 AND g.strike = v.strike`,
+      [date, symbol, strikes, oi, oiC, oiP],
+    );
+    touched += rowCount || 0;
+  }
+  return touched;
 }
 
 /**
@@ -519,18 +989,49 @@ async function runSweep({ symbols = null, date = null } = {}) {
   let tickersOk = 0;
   let tickersFailed = 0;
   let rowsWritten = 0;
+  let flowSymbols = 0;
   const failures = [];
 
   try {
     for (const symbol of roster) {
       try {
+        const wantFlow = FLOW_GEX_SYMBOLS.has(symbol);
         // eslint-disable-next-line no-await-in-loop
-        const { spot, expiryCount, rows } = await gexRowsForSymbol(symbol);
+        const { spot, expiryCount, rows, gamma } = await gexRowsForSymbol(symbol, 'board', { wantGamma: wantFlow });
         const win = windowRows(rows, spot);
         if (!win.length) {
           tickersFailed += 1;
           failures.push(`${symbol}: empty board`);
         } else {
+          // FLOW BASIS, for the handful of names that stream into flow_prints.
+          // Folded onto the SAME windowed rows rather than written as its own
+          // ladder: a strike with flow but no OI+Vol row does not exist on this
+          // board, and one row set per (date, symbol) is what keeps every basis
+          // describing the same rungs.
+          //
+          // Failure here is contained — the other three bases are already in
+          // `win` and land regardless. A flow outage must not cost a session.
+          if (wantFlow) {
+            try {
+              // eslint-disable-next-line no-await-in-loop
+              const flow = await getFlowLadder(symbol, day, gamma);
+              if (flow.size) {
+                for (const r of win) {
+                  const f = flow.get(r.strike);
+                  if (!f) continue;
+                  r.flowGex = f.flowGex;
+                  r.flowCallGex = f.flowCallGex;
+                  r.flowPutGex = f.flowPutGex;
+                  r.flowPrints = f.prints;
+                }
+                flowSymbols += 1;
+              } else {
+                failures.push(`${symbol}: no classified flow prints for ${day}`);
+              }
+            } catch (e) {
+              failures.push(`${symbol}: flow basis failed (${e?.message || e})`);
+            }
+          }
           // eslint-disable-next-line no-await-in-loop
           await clearDay(day, symbol);
           // eslint-disable-next-line no-await-in-loop
@@ -562,15 +1063,113 @@ async function runSweep({ symbols = null, date = null } = {}) {
   // worse than a noisy retry, and a lost session is a permanent hole in the Δ.
   const ok = rowsWritten > 0;
   const summary = {
-    ok, date: day, tickersOk, tickersFailed, rowsWritten, seconds: secs,
+    ok, date: day, tickersOk, tickersFailed, rowsWritten, flowSymbols, seconds: secs,
     ...(ok ? {} : { error: 'sweep wrote no rows' }),
     failures: failures.slice(0, 10),
   };
   console[ok ? 'log' : 'warn'](
     `[eod-strike-gex] sweep ${ok ? 'done' : 'FAILED'} ${day} — ${tickersOk} ok / ${tickersFailed} failed, ` +
-    `${rowsWritten} rows in ${secs}s`,
+    `${rowsWritten} rows, ${flowSymbols} with flow, in ${secs}s`,
   );
   return summary;
+}
+
+// ── The morning OI re-stamp ─────────────────────────────────────────────────
+//
+// WHY THIS PASS EXISTS, IN ONE LINE: at 16:05 the chain's open-interest field
+// is the file OCC settled through the PREVIOUS close, so the oi_* columns the
+// evening sweep writes describe the wrong session. This corrects them once the
+// real file lands overnight.
+//
+// It re-stamps the LATEST RECORDED SESSION, which on a normal Wednesday morning
+// is Tuesday's rows. Explicitly not "yesterday by calendar" — after a holiday
+// or a long weekend the latest recorded session is several days back, and that
+// is still exactly the session whose settled file is now on the feed.
+//
+// GUARD: never re-stamps a row dated today. Today's rows can only exist if a
+// manual re-fire wrote them, and their OI is provisional by definition until
+// TOMORROW morning — stamping them settled would be a lie, and a load-bearing
+// one, since the whole value of the `oi` basis is that both sides of a diff
+// carry the stamp.
+//
+// COST: one more full chain sweep of the roster, same shape and same pacing as
+// the evening one. That is the honest price of a correct ΔOI; there is no
+// cheaper source for settled open interest than the chain itself.
+let _restamping = false;
+let _lastRestampDate = null;
+
+/**
+ * @param {object} [opts]
+ * @param {string[]|null} [opts.symbols] narrow the roster (manual route)
+ * @param {string|null}   [opts.date] force a session; default = latest recorded
+ */
+async function runOiRestamp({ symbols = null, date = null } = {}) {
+  if (_restamping) return { ok: false, error: 'restamp already running' };
+  _restamping = true;
+  try {
+    if (!(await ensureSchema())) return { ok: false, error: 'no DB' };
+    const p = getPool();
+    const today = todayYmdET();
+
+    // Which session are we correcting? The latest recorded one STRICTLY BEFORE
+    // today, resolved from the table rather than from the calendar.
+    let target = normDate(date);
+    if (!target) {
+      const { rows } = await p.query(
+        `SELECT to_char(MAX(date), 'YYYY-MM-DD') AS d
+           FROM eod_strike_gex WHERE date < $1::date`,
+        [today],
+      );
+      target = rows[0]?.d ?? null;
+    }
+    if (!target) return { ok: false, error: 'no recorded session to re-stamp' };
+    if (target >= today) return { ok: false, error: `refusing to stamp ${target} settled — its OI file lands tomorrow` };
+
+    const roster = (symbols && symbols.length) ? symbols : await resolveSymbols();
+    const started = Date.now();
+    let tickersOk = 0;
+    let tickersFailed = 0;
+    let rowsTouched = 0;
+    const failures = [];
+
+    for (const symbol of roster) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const { rows } = await oiRowsForSymbol(symbol);
+        if (!rows.length) {
+          tickersFailed += 1;
+          failures.push(`${symbol}: empty OI board`);
+        } else {
+          // eslint-disable-next-line no-await-in-loop
+          const n = await restampOi(target, symbol, rows);
+          rowsTouched += n;
+          // 0 rows touched is not a failure: the symbol may simply have no rows
+          // on that date (added to the roster since), and the UPDATE correctly
+          // did nothing.
+          tickersOk += 1;
+        }
+      } catch (e) {
+        tickersFailed += 1;
+        failures.push(`${symbol}: ${e?.message || e}`);
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(TICKER_DELAY_MS);
+    }
+
+    const secs = Math.round((Date.now() - started) / 1000);
+    const ok = rowsTouched > 0;
+    console[ok ? 'log' : 'warn'](
+      `[eod-strike-gex] OI re-stamp ${ok ? 'done' : 'FAILED'} for ${target} — ` +
+      `${tickersOk} ok / ${tickersFailed} failed, ${rowsTouched} rows in ${secs}s`,
+    );
+    return {
+      ok, date: target, tickersOk, tickersFailed, rowsTouched, seconds: secs,
+      ...(ok ? {} : { error: 're-stamp touched no rows' }),
+      failures: failures.slice(0, 10),
+    };
+  } finally {
+    _restamping = false;
+  }
 }
 
 // ── Read helpers (back the /proxy/eod-strike-gex-* endpoints) ───────────────
@@ -597,22 +1196,53 @@ function normDate(v) {
 }
 
 /**
+ * BASIS → the three columns that back it. See "THE FOUR BASES" in the header.
+ *
+ * This map is the ONLY place a basis name becomes a column name, and every read
+ * below goes through normBasis() to reach it. That is a security boundary as
+ * much as a tidiness one: these identifiers are interpolated into SQL (Postgres
+ * has no parameter form for a column name), so an unvalidated basis string
+ * would be an injection. normBasis falls back to 'oivol' for anything not
+ * literally one of these four keys — never passes the input through.
+ */
+const BASIS_COLS = {
+  oivol: { net: 'net_gex', call: 'call_gex', put: 'put_gex' },
+  oi: { net: 'oi_gex', call: 'oi_call_gex', put: 'oi_put_gex' },
+  vol: { net: 'vol_gex', call: 'vol_call_gex', put: 'vol_put_gex' },
+  flow: { net: 'flow_gex', call: 'flow_call_gex', put: 'flow_put_gex' },
+};
+const BASES = Object.keys(BASIS_COLS);
+
+/** Anything unrecognised reads as the legacy basis — same rule as normDate. */
+function normBasis(v) {
+  const s = String(v ?? '').trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(BASIS_COLS, s) ? s : 'oivol';
+}
+
+/**
  * Every session date that has recorded rows, newest first.
  *
  * Backs the ΔGEX Board's date picker. Reads DISTINCT date off
  * idx_eod_strike_gex_date, so it stays an index-only scan as the table grows to
  * a year of the full watchlist — this is a picker populate, not a report.
  */
-async function listStrikeGexDates(limit = 90) {
+async function listStrikeGexDates(limit = 90, { basis = 'oivol' } = {}) {
   if (!(await ensureSchema())) return { ok: false, error: 'no DB' };
   const p = getPool();
   const n = Math.max(1, Math.min(400, Number(limit) || 90));
+  const bas = normBasis(basis);
+  const C = BASIS_COLS[bas];
+  // Basis-scoped: the picker must offer the sessions THIS basis can answer for.
+  // The new columns start at their migration date, so an unfiltered list would
+  // offer a year of dates that render as an empty ladder on `oi`/`vol`/`flow`.
   const { rows } = await p.query(
     `SELECT DISTINCT to_char(date, 'YYYY-MM-DD') AS d
-       FROM eod_strike_gex ORDER BY d DESC LIMIT $1`,
+       FROM eod_strike_gex
+      WHERE ${C.net} IS NOT NULL
+      ORDER BY d DESC LIMIT $1`,
     [n],
   );
-  return { ok: true, dates: rows.map((r) => r.d) };
+  return { ok: true, basis: bas, dates: rows.map((r) => r.d) };
 }
 
 /**
@@ -644,12 +1274,14 @@ async function listStrikeGexDates(limit = 90) {
  * is null and every chg reads 0 — the client renders that as "no baseline yet"
  * rather than as a board that did not move.
  */
-async function getStrikeGexChange(symbol, { date = null } = {}) {
+async function getStrikeGexChange(symbol, { date = null, basis = 'oivol' } = {}) {
   if (!(await ensureSchema())) return { ok: false, error: 'no DB' };
   const p = getPool();
   const sym = String(symbol || '').toUpperCase().trim();
   if (!sym) return { ok: false, error: 'symbol required' };
   const asOf = normDate(date);
+  const bas = normBasis(basis);
+  const C = BASIS_COLS[bas];
 
   // to_char, not the raw DATE: node-postgres turns a DATE into a JS Date at
   // LOCAL midnight, so formatting it back to YYYY-MM-DD shifts by a day on any
@@ -670,21 +1302,43 @@ async function getStrikeGexChange(symbol, { date = null } = {}) {
   const curDate = dateRows[0].d;
   const prevDate = dateRows[1]?.d ?? null;
 
+  // `basis` selects which trio of columns backs netGex/callGex/putGex. The row
+  // SHAPE is identical across all four, so the client's ladder renders any of
+  // them unchanged — only the MEANING of the number differs, which is why the
+  // basis is echoed back and the page is required to label it.
+  //
+  // COALESCE(...,0) on the level is safe for `oivol` (NOT NULL since day one)
+  // but NOT self-evidently so for the three new ones, where NULL means "this
+  // session predates the migration" or "this name has no flow". `hasBasis`
+  // below is what distinguishes a genuine zero board from an unrecorded one;
+  // the client must check it before drawing.
   const { rows } = await p.query(
-    `SELECT COALESCE(cur.strike, prev.strike)                     AS strike,
-            COALESCE(cur.net_gex, 0)                              AS net_gex,
-            COALESCE(prev.net_gex, 0)                             AS prev_net_gex,
-            COALESCE(cur.net_gex, 0) - COALESCE(prev.net_gex, 0)  AS chg,
-            (prev.strike IS NOT NULL)                             AS had_prev,
+    `SELECT COALESCE(cur.strike, prev.strike)                       AS strike,
+            COALESCE(cur.${C.net}, 0)                               AS net_gex,
+            COALESCE(prev.${C.net}, 0)                              AS prev_net_gex,
+            COALESCE(cur.${C.net}, 0) - COALESCE(prev.${C.net}, 0)  AS chg,
+            (prev.strike IS NOT NULL)                               AS had_prev,
+            -- has_cur/has_prev are the PRE-COALESCE truth. The level columns
+            -- above are COALESCEd to 0 for arithmetic, which destroys exactly
+            -- the distinction that matters most on the three new bases:
+            -- "recorded as zero" vs "never recorded". These two carry it.
+            (cur.${C.net} IS NOT NULL)                              AS has_cur,
+            (prev.${C.net} IS NOT NULL)                             AS has_prev,
             -- Legs stay NULL-able all the way to the client. NOT COALESCEd to
             -- 0: a date recorded before the migration has no legs, and a zero
             -- would render as "no call gamma here" instead of "not recorded".
-            cur.call_gex                                          AS call_gex,
-            cur.put_gex                                           AS put_gex,
-            prev.call_gex                                         AS prev_call_gex,
-            prev.put_gex                                          AS prev_put_gex,
-            MAX(cur.spot)  OVER ()                                AS cur_spot,
-            MAX(prev.spot) OVER ()                                AS prev_spot
+            cur.${C.call}                                           AS call_gex,
+            cur.${C.put}                                            AS put_gex,
+            prev.${C.call}                                          AS prev_call_gex,
+            prev.${C.put}                                           AS prev_put_gex,
+            cur.flow_prints                                         AS flow_prints,
+            MAX(cur.spot)  OVER ()                                  AS cur_spot,
+            MAX(prev.spot) OVER ()                                  AS prev_spot,
+            -- Settled-OI provenance, both sides. The oi basis is only a true
+            -- session-over-session ΔOI when BOTH carry a stamp; the client
+            -- says so when they do not.
+            BOOL_OR(cur.oi_stamped_date  IS NOT NULL) OVER ()        AS cur_settled,
+            BOOL_OR(prev.oi_stamped_date IS NOT NULL) OVER ()        AS prev_settled
        FROM (SELECT * FROM eod_strike_gex
               WHERE symbol = $1 AND date = $2::date) cur
        FULL JOIN (SELECT * FROM eod_strike_gex
@@ -694,11 +1348,14 @@ async function getStrikeGexChange(symbol, { date = null } = {}) {
     [sym, curDate, prevDate],
   );
 
+  const hasBasis = rows.some((r) => r.has_cur);
+
   return {
     ok: true,
     symbol: sym,
     date: curDate,
     prevDate,
+    basis: bas,
     spot: rows.length ? (Number(rows[0].cur_spot) || null) : null,
     prevSpot: rows.length ? (Number(rows[0].prev_spot) || null) : null,
     rows: rows.map((r) => ({
@@ -711,12 +1368,25 @@ async function getStrikeGexChange(symbol, { date = null } = {}) {
       putGex: numOrNull(r.put_gex),
       prevCallGex: prevDate ? numOrNull(r.prev_call_gex) : null,
       prevPutGex: prevDate ? numOrNull(r.prev_put_gex) : null,
+      // Only meaningful on the flow basis: how many classified prints backed
+      // this rung. NULL/0 = no tape here, which is not the same as "netted out".
+      ...(bas === 'flow' ? { flowPrints: numOrNull(r.flow_prints) } : {}),
     })),
     // Whether the split is available on BOTH sides. The client needs one flag,
     // not 81 null checks, to decide between showing the split and explaining
     // why it cannot.
     hasLegs: rows.some((r) => r.call_gex != null),
     hasPrevLegs: !!prevDate && rows.some((r) => r.prev_call_gex != null),
+    // FALSE = this basis has nothing recorded for this session/symbol. A board
+    // of zeros and an unrecorded board look identical once COALESCEd, and the
+    // difference matters enormously — "SPY had no flow" vs "we did not record
+    // flow for SPY". The page must branch on this, not on the row values.
+    hasBasis,
+    hasPrevBasis: !!prevDate && rows.some((r) => r.has_prev),
+    // Δ-validity on the `oi` basis. Both stamped → a true session-over-session
+    // ΔOI. Either missing → the OI half is lagged and the page must say so.
+    oiSettled: !!rows[0]?.cur_settled,
+    prevOiSettled: !!rows[0]?.prev_settled,
   };
 }
 
@@ -764,8 +1434,9 @@ const _liveInflight = new Map();
  * The symbol's most recent recorded session: its date, its ladder and its spot.
  * ONE date, not two — the other side of this comparison is the live chain.
  */
-async function latestRecordedLadder(sym) {
+async function latestRecordedLadder(sym, bas = 'oivol') {
   if (!(await ensureSchema())) return { prevDate: null, prevSpot: null, prevMap: new Map() };
+  const C = BASIS_COLS[normBasis(bas)];
   const p = getPool();
   // to_char for the same reason getStrikeGexChange uses it — a raw DATE comes
   // back as a JS Date at LOCAL midnight and formats back a day early east of
@@ -778,12 +1449,14 @@ async function latestRecordedLadder(sym) {
   if (!prevDate) return { prevDate: null, prevSpot: null, prevMap: new Map() };
 
   const { rows } = await p.query(
-    `SELECT strike, net_gex, spot, call_gex, put_gex
+    `SELECT strike, ${C.net} AS net_gex, spot, ${C.call} AS call_gex, ${C.put} AS put_gex,
+            oi_stamped_date
        FROM eod_strike_gex WHERE symbol = $1 AND date = $2::date`,
     [sym, prevDate],
   );
   const prevMap = new Map();
   let prevSpot = null;
+  let prevSettled = false;
   for (const r of rows) {
     prevMap.set(Number(r.strike), {
       gex: Number(r.net_gex) || 0,
@@ -791,15 +1464,32 @@ async function latestRecordedLadder(sym) {
       putGex: numOrNull(r.put_gex),
     });
     if (prevSpot == null && Number(r.spot) > 0) prevSpot = Number(r.spot);
+    if (r.oi_stamped_date != null) prevSettled = true;
   }
-  return { prevDate, prevSpot, prevMap };
+  return { prevDate, prevSpot, prevMap, prevSettled };
 }
 
-/** The uncached body of getStrikeGexLive(). Never call this directly. */
-async function computeStrikeGexLive(sym) {
+/**
+ * The uncached body of getStrikeGexLive(). Never call this directly.
+ *
+ * BASIS ON THE LIVE ROUTE: oivol / oi / vol are all computable straight off the
+ * chain, so all three are live-able. `flow` is NOT — it needs classified prints
+ * out of flow_prints, which the streamer is still writing for the open session,
+ * and a half-written session is not a ladder. Asking for flow here returns an
+ * explicit error rather than silently falling back to another basis, because a
+ * silent fallback would put an unsigned OI number under a header that says the
+ * sign was measured.
+ */
+async function computeStrikeGexLive(sym, bas = 'oivol') {
+  if (bas === 'flow') {
+    return {
+      ok: false,
+      error: 'flow basis has no live read — it is built from the recorded session tape',
+    };
+  }
   // Recorded side first: it is a cheap indexed read, and if the chain sweep
   // below throws we have paid nothing for it.
-  const { prevDate, prevSpot, prevMap } = await latestRecordedLadder(sym);
+  const { prevDate, prevSpot, prevMap, prevSettled } = await latestRecordedLadder(sym, bas);
 
   // The ex-0DTE board (comparable to the recorded close) and today's 0DTE
   // (which the recorded series structurally cannot contain — see
@@ -817,7 +1507,14 @@ async function computeStrikeGexLive(sym) {
   // and the recorded one are the same SHAPE and the union below stays ~81 rungs
   // rather than the whole chain.
   const win = windowRows(rows, spot);
-  const liveMap = new Map(win.map((r) => [r.strike, r]));
+  // Which field off the live row this basis reads. The chain carries all three,
+  // so the basis is a projection here rather than a different fetch.
+  const pick = bas === 'oi'
+    ? (r) => ({ gex: r.oiGex, callGex: r.oiCallGex, putGex: r.oiPutGex })
+    : bas === 'vol'
+      ? (r) => ({ gex: r.volGex, callGex: r.volCallGex, putGex: r.volPutGex })
+      : (r) => ({ gex: r.gex, callGex: r.callGex, putGex: r.putGex });
+  const liveMap = new Map(win.map((r) => [r.strike, { ...r, ...pick(r) }]));
 
   // UNION of both windows, not just the live one — the same reason
   // getStrikeGexChange FULL JOINs instead of LEFT JOINing. A strike that
@@ -849,7 +1546,11 @@ async function computeStrikeGexLive(sym) {
   // 0DTE rides along as a SUMMARY, not a second ladder: the question it answers
   // is "how much of what I am looking at expires tonight", and that is a number
   // and a handful of strikes, not 81 more rungs.
-  const zeroWin = zero.rows.length ? windowRows(zero.rows, zero.spot || spot) : [];
+  // Projected through the SAME basis as the ladder above — a 0DTE share
+  // computed on OI+Vol under a "volume only" header would be comparing two
+  // different quantities and the share would be nonsense.
+  const zeroWin = (zero.rows.length ? windowRows(zero.rows, zero.spot || spot) : [])
+    .map((r) => ({ ...r, ...pick(r) }));
   const zeroNet = zeroWin.reduce((t, r) => t + r.gex, 0);
   const zeroAbs = zeroWin.reduce((t, r) => t + Math.abs(r.gex), 0);
 
@@ -870,6 +1571,15 @@ async function computeStrikeGexLive(sym) {
     expiryCount,
     hasLegs: true,
     hasPrevLegs: [...prevMap.values()].some((v) => v.callGex != null),
+    basis: bas,
+    // Live is ALWAYS computed off the chain, so the current side of an `oi`
+    // read is whatever OI the feed is carrying right now — which is last
+    // night's settled file. It is therefore never "settled for today", and the
+    // prior side is settled only if the morning pass reached it.
+    oiSettled: false,
+    prevOiSettled: !!prevSettled,
+    hasBasis: true,
+    hasPrevBasis: [...prevMap.values()].some((v) => Number.isFinite(v.gex)),
     // null (not zero) when the symbol has no expiry dated today at all — "this
     // name has no 0DTE" and "its 0DTE nets to zero" are different facts.
     zeroDte: zeroWin.length
@@ -900,19 +1610,24 @@ async function computeStrikeGexLive(sym) {
  * `force` skips the CACHE but deliberately still joins an in-flight sweep: two
  * fast clicks on ↻ must not fire two full chain sweeps at TastyTrade.
  */
-async function getStrikeGexLive(symbol, { force = false } = {}) {
+async function getStrikeGexLive(symbol, { force = false, basis = 'oivol' } = {}) {
   const sym = String(symbol || '').toUpperCase().trim();
   if (!sym) return { ok: false, error: 'symbol required' };
+  const bas = normBasis(basis);
+  // The cache and the in-flight de-dupe are keyed by SYMBOL+BASIS, not symbol.
+  // Keying on symbol alone would serve an `oi` ladder to a `vol` request for
+  // the next 60 seconds — the same rungs, silently the wrong number.
+  const key = `${sym}|${bas}`;
 
   const now = Date.now();
-  const hit = _liveCache.get(sym);
+  const hit = _liveCache.get(key);
   if (!force && hit && now - hit.at < LIVE_TTL_MS) {
     return { ...hit.payload, cached: true, ageMs: now - hit.at };
   }
 
-  let job = _liveInflight.get(sym);
+  let job = _liveInflight.get(key);
   if (!job) {
-    job = computeStrikeGexLive(sym)
+    job = computeStrikeGexLive(sym, bas)
       .then((val) => {
         if (val?.ok) {
           if (_liveCache.size >= LIVE_CACHE_MAX) {
@@ -921,13 +1636,13 @@ async function getStrikeGexLive(symbol, { force = false } = {}) {
             const oldest = _liveCache.keys().next().value;
             if (oldest !== undefined) _liveCache.delete(oldest);
           }
-          _liveCache.set(sym, { at: Date.now(), payload: val });
+          _liveCache.set(key, { at: Date.now(), payload: val });
         }
         return val;
       })
       .catch((e) => ({ ok: false, error: String(e?.message || e) }))
-      .finally(() => { _liveInflight.delete(sym); });
-    _liveInflight.set(sym, job);
+      .finally(() => { _liveInflight.delete(key); });
+    _liveInflight.set(key, job);
   }
 
   const res = await job;
@@ -961,11 +1676,12 @@ async function getStrikeGexLive(symbol, { force = false } = {}) {
  * Returns Map<symbol, { flipNow, flipPrev, flipMove, flips, callWall, putWall,
  * wallChg, structScore }>.
  */
-async function getStrikeGexBadges(pairs) {
+async function getStrikeGexBadges(pairs, bas = 'oivol') {
   const out = new Map();
   if (!pairs.length) return out;
   const p = getPool();
   if (!p) return out;
+  const C = BASIS_COLS[normBasis(bas)];
 
   // One query for every (symbol, date) pair the board already resolved, so the
   // badge and the row beside it can never be describing different sessions.
@@ -973,7 +1689,7 @@ async function getStrikeGexBadges(pairs) {
   const curDates = pairs.map((x) => x.date);
   const prevDates = pairs.map((x) => x.prevDate || x.date);
   const { rows } = await p.query(
-    `SELECT g.symbol, to_char(g.date,'YYYY-MM-DD') AS d, g.strike, g.net_gex, g.spot
+    `SELECT g.symbol, to_char(g.date,'YYYY-MM-DD') AS d, g.strike, g.${C.net} AS net_gex, g.spot
        FROM eod_strike_gex g
        JOIN (SELECT unnest($1::text[]) AS symbol,
                     unnest($2::date[]) AS cur,
@@ -1110,11 +1826,13 @@ async function getStrikeGexBadges(pairs) {
  * strikes, so the rail can show them as "awaiting baseline" instead of dropping
  * them — their LEVEL figures are still real and still render.
  */
-async function getStrikeGexBoard(topN = 5, { date = null } = {}) {
+async function getStrikeGexBoard(topN = 5, { date = null, basis = 'oivol' } = {}) {
   if (!(await ensureSchema())) return { ok: false, error: 'no DB' };
   const p = getPool();
   const top = Math.max(1, Math.min(40, Number(topN) || 5));
   const asOf = normDate(date);
+  const bas = normBasis(basis);
+  const C = BASIS_COLS[bas];
 
   // ONE pass. `d` ranks each symbol's own dates; `cur`/`prv` pick its latest
   // two; `j` FULL JOINs them (full, not left — a strike that fell out of the
@@ -1125,23 +1843,34 @@ async function getStrikeGexBoard(topN = 5, { date = null } = {}) {
   // The top-N lists are json_agg'd rather than LEFT JOINed as rows: joining two
   // independent rank lists on the same query would cross-product them (top²
   // rows per symbol, 4k+ rows to render 169 names). One row per symbol instead.
+  // BASIS-AWARE DATE RESOLUTION. `d` filters to sessions that actually have a
+  // value on THIS basis, which is what keeps the rail honest across all four:
+  //   • pre-migration dates have NULL oi_/vol_/flow_ and drop out, instead of
+  //     ranking as an enormous fake Δ against a zero board;
+  //   • on `flow`, only the FLOW_GEX_SYMBOLS have rows at all, so the rail
+  //     shrinks to those names rather than listing 169 flat zeros.
+  // Without this filter every new basis would look like it had a year of
+  // history the moment it shipped.
   const sql = `
     WITH d AS (
       SELECT symbol, date,
              dense_rank() OVER (PARTITION BY symbol ORDER BY date DESC) AS rk
         FROM (SELECT DISTINCT symbol, date FROM eod_strike_gex
-               WHERE ($2::text IS NULL OR date <= $2::date)) s
+               WHERE ($2::text IS NULL OR date <= $2::date)
+                 AND ${C.net} IS NOT NULL) s
     ),
     cur AS (SELECT symbol, date FROM d WHERE rk = 1),
     prv AS (SELECT symbol, date FROM d WHERE rk = 2),
     c AS (SELECT e.* FROM eod_strike_gex e JOIN cur ON cur.symbol = e.symbol AND cur.date = e.date),
     p AS (SELECT e.* FROM eod_strike_gex e JOIN prv ON prv.symbol = e.symbol AND prv.date = e.date),
     j AS (
-      SELECT COALESCE(c.symbol, p.symbol)                        AS symbol,
-             COALESCE(c.strike, p.strike)                        AS strike,
-             COALESCE(c.net_gex, 0) - COALESCE(p.net_gex, 0)     AS chg,
-             c.net_gex                                           AS lvl,
-             c.spot                                              AS spot
+      SELECT COALESCE(c.symbol, p.symbol)                          AS symbol,
+             COALESCE(c.strike, p.strike)                          AS strike,
+             COALESCE(c.${C.net}, 0) - COALESCE(p.${C.net}, 0)     AS chg,
+             c.${C.net}                                            AS lvl,
+             c.spot                                                AS spot,
+             c.oi_stamped_date                                     AS cur_stamp,
+             p.oi_stamped_date                                     AS prev_stamp
         FROM c FULL JOIN p ON p.symbol = c.symbol AND p.strike = c.strike
     ),
     agg AS (
@@ -1150,7 +1879,9 @@ async function getStrikeGexBoard(topN = 5, { date = null } = {}) {
              SUM(ABS(chg))                                       AS abs_tot,
              SUM(COALESCE(lvl, 0))                               AS gex_net,
              SUM(ABS(COALESCE(lvl, 0)))                          AS gex_abs,
-             MAX(spot)                                           AS spot
+             MAX(spot)                                           AS spot,
+             BOOL_OR(cur_stamp  IS NOT NULL)                     AS cur_settled,
+             BOOL_OR(prev_stamp IS NOT NULL)                     AS prev_settled
         FROM j GROUP BY symbol
     ),
     ranked AS (
@@ -1173,6 +1904,7 @@ async function getStrikeGexBoard(topN = 5, { date = null } = {}) {
     )
     SELECT a.symbol,
            a.net, a.abs_tot, a.gex_net, a.gex_abs, a.spot,
+           a.cur_settled, a.prev_settled,
            to_char(cur.date, 'YYYY-MM-DD')                       AS cur_date,
            to_char(prv.date, 'YYYY-MM-DD')                       AS prev_date,
            COALESCE(t.s,  '[]'::json)                            AS strikes,
@@ -1205,6 +1937,10 @@ async function getStrikeGexBoard(topN = 5, { date = null } = {}) {
       gexNet: Number(r.gex_net) || 0,
       gexAbs: Number(r.gex_abs) || 0,
       gexStrikes: (r.gex_strikes || []).map((k) => ({ strike: Number(k.strike), gex: Number(k.gex) || 0 })),
+      // Only consulted on the `oi` basis: is this name's Δ a true settled ΔOI,
+      // or is one side still the provisional 16:05 read?
+      oiSettled: !!r.cur_settled,
+      prevOiSettled: !!r.prev_settled,
     };
   });
 
@@ -1216,6 +1952,7 @@ async function getStrikeGexBoard(topN = 5, { date = null } = {}) {
   try {
     const badges = await getStrikeGexBadges(
       symbols.map((x) => ({ symbol: x.symbol, date: x.date, prevDate: x.prevDate })),
+      bas,
     );
     for (const x of symbols) x.badge = badges.get(x.symbol) ?? null;
   } catch (e) {
@@ -1223,7 +1960,7 @@ async function getStrikeGexBoard(topN = 5, { date = null } = {}) {
     for (const x of symbols) x.badge = null;
   }
 
-  return { ok: true, top, date: asOf, symbols };
+  return { ok: true, top, date: asOf, basis: bas, symbols };
 }
 
 // ── Scheduler ────────────────────────────────────────────────────────────────
@@ -1243,9 +1980,52 @@ function startEodStrikeGexRecorder() {
   }
   if (!symbolsSync().length) return;
 
+  // ── The 09:25 OI re-stamp, on the same minute poll ────────────────────────
+  //
+  // Separate claim (_lastRestampDate) and separate guard (_restamping) from the
+  // evening sweep, because they are different jobs on different sessions: this
+  // one corrects YESTERDAY's rows, the evening one writes TODAY's. Sharing a
+  // day-claim would make whichever ran first cancel the other.
+  //
+  // Runs on trading days only. A settled file does land on a holiday morning
+  // for the prior session, but the roster's chains are not being quoted, and a
+  // 169-symbol sweep against a closed market is a lot of upstream traffic for a
+  // number that will still be there on the next open.
+  const checkRestamp = () => {
+    try {
+      if (!RESTAMP_ENABLED) return;
+      if (_restamping || _running) return;
+      if (!isTradingDayET()) return;
+      const day = todayYmdET();
+      if (_lastRestampDate === day) return;
+      const { minutes } = nowET();
+      if (minutes < RESTAMP_AT_MIN || minutes >= RESTAMP_CLOSE_MIN) return;
+      _lastRestampDate = day; // claim before awaiting, same reason as below
+      runOiRestamp()
+        .then((r) => {
+          // Release on a pass that touched nothing so the next tick retries —
+          // but NOT when the reason is "no recorded session to re-stamp", which
+          // is a permanent state for today (a fresh table, or a first run) and
+          // would otherwise retry every minute until 11:00.
+          if (!r?.ok && !/no recorded session/.test(r?.error || '')) {
+            console.warn(`[eod-strike-gex] re-stamp did not land (${r?.error || 'unknown'}) — will retry`);
+            _lastRestampDate = null;
+          }
+        })
+        .catch((e) => {
+          console.warn('[eod-strike-gex] re-stamp error:', e.message);
+          _lastRestampDate = null;
+        });
+    } catch (e) {
+      console.warn('[eod-strike-gex] re-stamp scheduler error:', e.message);
+    }
+  };
+
   const check = () => {
+    checkRestamp();
     try {
       if (_running) return;
+      if (_restamping) return; // never two full chain sweeps at once
       if (!isTradingDayET()) return;
       const day = todayYmdET();
       if (_lastRunDate === day) return;
@@ -1280,25 +2060,33 @@ function startEodStrikeGexRecorder() {
   // First check shortly after boot so an evening restart still backfills today.
   setTimeout(check, 45_000);
 
-  const hh = String(Math.floor(RUN_AT_MIN / 60)).padStart(2, '0');
-  const mm = String(RUN_AT_MIN % 60).padStart(2, '0');
+  const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
   console.log(
     `[eod-strike-gex] recorder started — ${symbolsSync().length} symbols × ` +
     `${EXPIRY_DEPTH > 0 ? EXPIRY_DEPTH : 'all'} expiries (ex-0DTE), ±${WINDOW_SIDE} strikes, ` +
-    `once daily at ${hh}:${mm} ET, ${RETAIN_DAYS}d retention (roster re-resolved each sweep)`,
+    `once daily at ${hhmm(RUN_AT_MIN)} ET, ${RETAIN_DAYS}d retention (roster re-resolved each sweep); ` +
+    `bases oivol/oi/vol + flow for [${[...FLOW_GEX_SYMBOLS].join(',') || 'none'}]; ` +
+    `OI re-stamp ${RESTAMP_ENABLED ? `at ${hhmm(RESTAMP_AT_MIN)} ET` : 'DISABLED'}`,
   );
 }
 
 module.exports = {
   startEodStrikeGexRecorder,
   runSweep,
+  runOiRestamp,
   getStrikeGexChange,
   getStrikeGexLive,
   getStrikeGexBoard,
   getStrikeGexBadges,
+  getFlowLadder,
   listStrikeGexDates,
   ensureSchema,
   getPool,
   gexRowsForSymbol,
+  oiRowsForSymbol,
   windowRows,
+  normBasis,
+  BASES,
+  BASIS_COLS,
+  FLOW_GEX_SYMBOLS,
 };

@@ -1,5 +1,117 @@
 # Changelog
 
+## 2026-08-19 (d) - ΔGEX Board: four bases, and the day-over-day diff that was double-counting a session
+
+Edited: `server-v2/eod-strike-gex-recorder.js`, `server-v2/server-with-proxy.js`,
+`server-v2/api-router.js`, `owner-vite/src/pages/GexGrowth.tsx`.
+
+### The bug
+
+`eod_strike_gex` stored ONE number per strike: `net_gex`, on the OI+Vol basis
+(`|γ| × (open_interest + volume)`). Its day-over-day diff was not slightly
+early — it was counting a session twice.
+
+Open interest does not settle at the close. OCC publishes overnight, so the OI
+the chain carries at 16:05 on session T is the file settled through **T−1**.
+Volume on the same response is **T**'s. A row is `OI(T−1) + Vol(T)`, so:
+
+    row(T) − row(T−1) = [OI(T−1) − OI(T−2)] + [Vol(T) − Vol(T−1)]
+
+The left bracket is the NET result of session T−1's trading. The right bracket
+SUBTRACTS `Vol(T−1)` — the GROSS of that same session. T−1 appears in the Δ
+twice, once net and once gross, with opposite signs. A name that traded heavy
+Tuesday and quiet Wednesday printed a big negative Δ on Wednesday about nothing
+that happened on Wednesday.
+
+No scheduling change fixes that. The halves had to be stored apart.
+
+### Four bases
+
+New columns (all NULLABLE, **no backfill** — the chains are gone and the split
+is exactly what `net_gex` threw away). `basis` is now a param on all four read
+routes; anything unrecognised reads as `oivol`, so old clients are byte-identical.
+
+| basis | column | what it is | honest Δ? |
+|-------|--------|-----------|-----------|
+| `oivol` | `net_gex` | `\|γ\| × (OI + volume)` — the original series, ~a year of history, still the default | no (the double-count above) |
+| `oi` | `oi_gex` | `\|γ\| × open interest`, re-stamped next morning | **yes** |
+| `vol` | `vol_gex` | `\|γ\| × volume` — same-session, so the LEVEL is the read | no (second difference) |
+| `flow` | `flow_gex` | signed **dealer inventory** × γ, from the tape | no (session, not book) |
+
+`net_gex` / `call_gex` / `put_gex` are still computed by the UNCHANGED
+expressions, so the legacy series is bit-for-bit what it was. Consequence,
+stated because someone will assert on it: `oi_gex + vol_gex` agrees with
+`net_gex` only to float noise, not exactly. History continuity beat additivity.
+
+### The 09:25 OI re-stamp
+
+New pass (`runOiRestamp`, `POST /proxy/eod-strike-gex-restamp`) rewrites the
+**previous** session's `oi_*` columns off the freshly settled file and stamps
+`oi_stamped_date`. That is what makes `oi` a real ΔOI — without it `oi_gex` on
+row(T) is `OI(T−1)` and the diff describes the wrong day.
+
+UPDATE, never INSERT, and it touches nothing but `oi_*`: the evening's
+`net_gex`/`vol_*` are a record of a settled close and stay as recorded. Refuses
+any date ≥ today (today's OI settles tonight; stamping it "settled" would be a
+load-bearing lie). Re-stamps the latest RECORDED session, not "yesterday" by
+calendar, so holidays and long weekends resolve correctly. Costs one more full
+chain sweep — there is no cheaper source for settled OI than the chain.
+
+### Flow basis — the only one that knows direction
+
+The other three sign their legs by CONVENTION (calls +, puts −, on an unsigned
+count). Open interest carries no side: 40k OI on the 6400 calls is dealer-short
+or dealer-long depending on who opened it, and no OI arithmetic can tell those
+apart. `flow` is built from bid/ask-classified prints in `flow_prints`, mirrored
+(public buys → dealer short, public sells → dealer long), so its sign is
+**measured**. Both legs use the same polarity — the conversion the OI bases do
+by negating the put term is already baked into the inventory's sign.
+
+Per-expiry gamma is captured during the same chain sweep (`gammaAcc` keyed
+`exp|strike`) so each expiry's inventory multiplies by ITS OWN gamma before
+folding into the strike — a weekly and a LEAP at one strike are not the same γ.
+
+Four limits, documented on screen and in `getFlowLadder()`: SPX/SPY/QQQ only
+(`EOD_STRIKE_GEX_FLOW_SYMBOLS`); premium-floored, so block flow not the whole
+tape; for SPY/QQQ only the near-spot front-expiry window the streamer
+subscribes to; and inventory resets each morning, so it is a SESSION not a book.
+Unclassified (`bucket='neutral'`) prints are dropped, not guessed — including
+them would bias the whole ladder short.
+
+### Reads
+
+`basis` selects a column trio through `BASIS_COLS`, the only place a basis
+becomes a column name. `normBasis()` whitelists it in the recorder and
+`basisParam()` again in `api-router` — these identifiers are interpolated into
+SQL (Postgres has no parameter form for a column name), so the gate nearest the
+internet must not be the missing one. Verified: an injection string falls back
+to `oivol`.
+
+Date resolution is basis-scoped everywhere (board CTE, `listStrikeGexDates`), or
+every new basis would look like it had a year of history the day it shipped, and
+`flow` would list 169 names of flat zeros instead of three real ones.
+
+`hasBasis` / `hasPrevBasis` ship pre-COALESCE, because a zero board and an
+unrecorded board are pixel-identical once COALESCEd and the difference is the
+whole point — "SPY had no flow" is not "we never recorded flow for SPY".
+
+Live (`getStrikeGexLive`) serves `oivol`/`oi`/`vol` off the chain and **refuses**
+`flow` rather than downgrading — a silent fallback would put an unsigned OI
+number under a header claiming the sign was measured. Its cache is now keyed
+`symbol|basis`; keyed on symbol alone it would serve an `oi` ladder to a `vol`
+request for 60s.
+
+### Page
+
+Basis picker beside the mode tabs (it re-fetches — four columns, not four views
+of one payload). The caveat for the active basis renders ON SCREEN, not in a
+tooltip, and the strip turns gold on a Δ tab whose basis cannot honestly be
+differenced — that is the exact mistake this change exists to stop. On `oi`, a
+SETTLED / PROVISIONAL chip says whether the re-stamp reached both sides of the
+diff. Live is hidden (not disabled) on `flow`. Switching basis clears the
+session pick, since the picker is basis-scoped.
+
+
 ## 2026-08-19 (b) - GEX levels replay: a white spot line across the ladder
 
 Edited: `components/pages/Analytics.tsx` (`TlLadder`) — the "GEX levels" tab of

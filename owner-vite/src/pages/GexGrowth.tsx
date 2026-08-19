@@ -65,6 +65,30 @@ const MONO = "var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, m
 /** Which reading the board is showing. Not a filter — a different number. */
 type Mode = "delta" | "levels" | "compare";
 
+/**
+ * WHICH NUMBER THE LADDER IS MADE OF. Orthogonal to Mode: `basis` picks the
+ * quantity, `mode` picks whether you see its level, its Δ, or both.
+ *
+ * This exists because the original single number could not be differenced
+ * honestly. GEX on the OI+Vol basis is |gamma| × (open_interest + volume), and
+ * open interest does NOT settle at the close — OCC publishes overnight, so the
+ * figure the chain carries at 16:05 on session T is settled through T−1. Volume
+ * on that same response is T's. A row is therefore OI(T−1) + Vol(T), and the
+ * day-over-day diff expands to
+ *
+ *     [OI(T−1) − OI(T−2)] + [Vol(T) − Vol(T−1)]
+ *
+ * where the left bracket is the NET of session T−1's trading and the right
+ * bracket subtracts the GROSS of that same session. T−1 lands in the Δ twice,
+ * once net and once gross, with opposite signs. A name that traded heavy on
+ * Tuesday and quiet on Wednesday prints a big negative Δ on Wednesday about
+ * nothing that happened on Wednesday.
+ *
+ * So the halves are recorded apart and this control chooses between them. See
+ * BASIS_COPY for what each one is honest about.
+ */
+type Basis = "oivol" | "oi" | "vol" | "flow";
+
 type BoardStrike = { strike: number; chg: number };
 type BoardLevelStrike = { strike: number; gex: number };
 type BoardSymbol = {
@@ -82,8 +106,14 @@ type BoardSymbol = {
   gexAbs: number;
   gexStrikes: BoardLevelStrike[];
   badge?: Badge;
+  // `oi` basis only — see ChangeResp.oiSettled.
+  oiSettled?: boolean;
+  prevOiSettled?: boolean;
 };
-type BoardResp = { ok?: boolean; top?: number; date?: string | null; symbols?: BoardSymbol[]; error?: string };
+type BoardResp = {
+  ok?: boolean; top?: number; date?: string | null; basis?: Basis;
+  symbols?: BoardSymbol[]; error?: string;
+};
 
 type ChangeRow = {
   strike: number; netGex: number; prevNetGex: number; chg: number; hadPrev: boolean;
@@ -92,6 +122,10 @@ type ChangeRow = {
   // so "not recorded" has to stay distinguishable from "no call gamma here".
   callGex?: number | null; putGex?: number | null;
   prevCallGex?: number | null; prevPutGex?: number | null;
+  // FLOW BASIS ONLY: how many classified prints backed this rung. 0/undefined
+  // is "no tape here", which is a different statement from "flow netted to
+  // zero" — the ladder has to be able to tell those apart, so the count ships.
+  flowPrints?: number | null;
 };
 
 /** Today's expiry, summarised. Live route only — see the 0DTE note in ReadPanel. */
@@ -118,8 +152,19 @@ type ChangeResp = {
   cached?: boolean; ageMs?: number; prevIsToday?: boolean; marketDay?: boolean;
   hasLegs?: boolean; hasPrevLegs?: boolean;
   zeroDte?: ZeroDte | null;
+  basis?: Basis;
+  // FALSE = this basis has nothing recorded for this session/symbol. A zero
+  // board and an unrecorded board are indistinguishable once the server
+  // COALESCEs, and the difference matters enormously ("SPY had no flow" vs "we
+  // never recorded flow for SPY"), so the page branches on this, never on the
+  // row values.
+  hasBasis?: boolean; hasPrevBasis?: boolean;
+  // `oi` basis only: did the 09:25 re-stamp reach each side? Both true → the Δ
+  // is a real session-over-session ΔOI. Either false → that side's OI is the
+  // provisional 16:05 read, lagged one session, and the page must say so.
+  oiSettled?: boolean; prevOiSettled?: boolean;
 };
-type DatesResp = { ok?: boolean; dates?: string[]; error?: string };
+type DatesResp = { ok?: boolean; dates?: string[]; basis?: Basis; error?: string };
 
 /** Per-mode wording. Kept in one table so a label can't drift from its number. */
 const MODE_COPY: Record<Mode, {
@@ -151,6 +196,70 @@ const MODE_COPY: Record<Mode, {
     sorts: ["Biggest move", "Most built", "Most pulled", "Most structural"],
   },
 };
+
+/**
+ * Per-basis wording, in one table for the same reason MODE_COPY is: a label
+ * that drifts from its number is worse than no label.
+ *
+ * `caveat` is rendered ON SCREEN, not hidden in a tooltip. Three of these four
+ * numbers are wrong to read as a plain "day-over-day change" and the fourth
+ * only covers three symbols — a reader who does not know which one they are
+ * looking at will draw a confident wrong conclusion, and the whole reason this
+ * control exists is that the single old number let them do exactly that.
+ *
+ * `deltaHonest` marks whether the Δ tabs are a real session-over-session
+ * change on this basis. Where it is false the page keeps the tabs live (the
+ * numbers are still computed correctly from what was recorded) but says what
+ * the reading actually is.
+ */
+const BASIS_COPY: Record<Basis, {
+  tab: string; name: string; unit: string; caveat: string; deltaHonest: boolean;
+}> = {
+  oivol: {
+    tab: "OI + Vol",
+    name: "OI + Volume",
+    unit: "|γ| × (open interest + volume)",
+    caveat:
+      "Δ double-counts a session: OI at 16:05 is settled through the PREVIOUS close, volume is today's, "
+      + "so the diff adds yesterday's net OI change and subtracts yesterday's gross volume. "
+      + "The LEVEL is sound and matches every other card in the app — the Δ is the part to distrust. Use OI-only for a real day-over-day.",
+    deltaHonest: false,
+  },
+  oi: {
+    tab: "OI only",
+    name: "Open interest",
+    unit: "|γ| × open interest",
+    caveat:
+      "Re-stamped at 09:25 ET off the settled OCC file, so both sides of a Δ describe their own session. "
+      + "This is the honest structural read. It still cannot tell you DIRECTION — calls count positive and puts negative by convention, "
+      + "and open interest carries no side, so who opened the position is an assumption here. Flow is the basis that measures it.",
+    deltaHonest: true,
+  },
+  vol: {
+    tab: "Volume only",
+    name: "Day volume",
+    unit: "|γ| × volume",
+    caveat:
+      "Same-session by construction, so the LEVEL — how much gamma actually traded — is the read. "
+      + "Its Δ is a second difference (today's turnover vs yesterday's), which is rarely the question. "
+      + "Volume counts both sides of every trade unsigned, so this is activity, not positioning.",
+    deltaHonest: false,
+  },
+  flow: {
+    tab: "Flow (signed)",
+    name: "Dealer inventory",
+    unit: "|γ| × signed dealer position",
+    caveat:
+      "The only basis that MEASURES direction instead of assuming it: prints are classified against the bid/ask and mirrored "
+      + "(public buys → dealer short, public sells → dealer long). Four limits — SPX/SPY/QQQ only; premium-floored, so it is block flow "
+      + "and not the whole tape; for SPY/QQQ only the near-spot front-expiry window the streamer subscribes to; and inventory resets each "
+      + "morning, so this is a SESSION, not a book. Read the level, not the Δ.",
+    deltaHonest: false,
+  },
+};
+
+/** Basis order in the picker — legacy first, then honest-est, then signed. */
+const BASES: readonly Basis[] = ["oivol", "oi", "vol", "flow"] as const;
 
 /** Δ readings — everything that needs a baseline session to mean anything. */
 const isDelta = (m: Mode) => m !== "levels";
@@ -1059,6 +1168,9 @@ export default function GexGrowth() {
   const [filter, setFilter] = useState("");
   const [dir, setDir] = useState<"abs" | "built" | "pulled" | "struct">("abs");
   const [mode, setMode] = useState<Mode>("delta");
+  // Which quantity the whole page is made of. Defaults to the legacy basis so
+  // the page opens on the series it has always shown and a year of history.
+  const [basis, setBasis] = useState<Basis>("oivol");
   // Live is a preference, not a mode — it survives tab-hopping and comes back
   // on when you return to `compare`, which is how a toggle should behave.
   const [live, setLive] = useState(false);
@@ -1084,26 +1196,34 @@ export default function GexGrowth() {
 
   // Session list. Loaded once — a new date only appears at 16:05 ET, and the ↻
   // button re-reads it along with everything else.
+  // Basis-scoped: oi_/vol_/flow_ start at their migration date, so an
+  // unfiltered list would offer a year of sessions that draw an empty ladder.
   const loadDates = useCallback(async () => {
     try {
-      const res = await fetch(`/api/eod-strike-gex-dates?limit=180`, { cache: "no-store" });
+      const res = await fetch(`/api/eod-strike-gex-dates?limit=180&basis=${basis}`, { cache: "no-store" });
       const json: DatesResp = await res.json();
       if (res.ok && json.ok !== false) setDates(json.dates ?? []);
     } catch { /* the picker just stays on "latest" — not worth an error banner */ }
-  }, []);
+  }, [basis]);
 
   const dateQs = date ? `&date=${date}` : "";
+  const basisQs = `&basis=${basis}`;
 
   // The one gate. Live only means anything on `compare` (it IS the prior→now
   // reading) and only against the LATEST session — "live vs the 8th" would be
   // a spread over however many sessions, not a day's build, so picking an older
   // date suspends it rather than silently redefining the number. The toggle
   // stays lit so returning to the latest session restores it.
-  const liveOn = live && mode === "compare" && !date;
+  //
+  // FLOW is the second gate. Live reads the chain, and the chain has no notion
+  // of who lifted whom — the signed inventory only exists in the recorded
+  // session's classified tape. So Live is not merely disabled on flow, it is
+  // meaningless there, and the toggle is not rendered.
+  const liveOn = live && mode === "compare" && !date && basis !== "flow";
 
   const loadBoard = useCallback(async () => {
     try {
-      const res = await fetch(`/api/eod-strike-gex-board?top=${TOP_N}${dateQs}`, { cache: "no-store" });
+      const res = await fetch(`/api/eod-strike-gex-board?top=${TOP_N}${dateQs}${basisQs}`, { cache: "no-store" });
       const json: BoardResp = await res.json();
       if (!res.ok || json.ok === false) throw new Error(json.error || `HTTP ${res.status}`);
       setBoard(json.symbols ?? []);
@@ -1111,9 +1231,30 @@ export default function GexGrowth() {
     } catch (e) {
       setBoardErr(String((e as Error)?.message || e));
     }
-  }, [dateQs]);
+  }, [dateQs, basisQs]);
 
   useEffect(() => { loadDates(); }, [loadDates]);
+
+  /**
+   * Switching basis clears the session pick.
+   *
+   * The picker is basis-scoped — `oi`, `vol` and `flow` only start at their
+   * migration date, and `flow` only has sessions where SPX/SPY/QQQ actually
+   * streamed. So a date that is perfectly valid on OI+Vol can be a session the
+   * new basis has never heard of, and the AS-OF resolution would quietly answer
+   * with whatever it does have. Falling back to "latest" makes the reset
+   * visible in the control instead of silently redefining which day is on
+   * screen.
+   *
+   * Deliberately NOT keyed on `dates`: that array reloads on every basis change
+   * and re-running this on it would stomp a pick the user just made.
+   */
+  const basisRef = useRef<Basis>(basis);
+  useEffect(() => {
+    if (basisRef.current === basis) return;
+    basisRef.current = basis;
+    setDate("");
+  }, [basis]);
 
   useEffect(() => {
     loadBoard();
@@ -1130,8 +1271,8 @@ export default function GexGrowth() {
     setDetailErr(null);
     try {
       const url = liveOn
-        ? `/api/eod-strike-gex-live?symbol=${encodeURIComponent(symbol)}${force ? "&force=1" : ""}`
-        : `/api/eod-strike-gex-change?symbol=${encodeURIComponent(symbol)}${dateQs}`;
+        ? `/api/eod-strike-gex-live?symbol=${encodeURIComponent(symbol)}${force ? "&force=1" : ""}${basisQs}`
+        : `/api/eod-strike-gex-change?symbol=${encodeURIComponent(symbol)}${dateQs}${basisQs}`;
       const res = await fetch(url, { cache: "no-store" });
       const json: ChangeResp = await res.json();
       if (detailReq.current !== mine) return;
@@ -1144,8 +1285,10 @@ export default function GexGrowth() {
     }
     // liveOn belongs in here, not in a ref: flipping the toggle has to re-read
     // the open name, and keying the effect below on this identity is what makes
-    // that happen without a second effect racing it.
-  }, [dateQs, liveOn]);
+    // that happen without a second effect racing it. Same argument for basisQs
+    // — switching basis MUST re-read the open ladder, or the pane would keep
+    // drawing OI+Vol rungs under an "OI only" header.
+  }, [dateQs, liveOn, basisQs]);
 
   const pickDate = useCallback((d: string) => {
     setDate(d);
@@ -1297,7 +1440,7 @@ export default function GexGrowth() {
         variant="budget"
         accent={LIGHT_BLUE}
         title="ΔGEX Board"
-        subtitle="Per-strike dealer gamma at the close, or what was built and taken off — whole board ex-0DTE, scanner watchlist. Recorded 16:05 ET, ~400 sessions on file."
+        subtitle="Per-strike dealer gamma at the close, or what was built and taken off — whole board ex-0DTE, scanner watchlist. Recorded 16:05 ET with the open-interest half re-stamped from the settled file at 09:25, ~400 sessions on file. Pick a basis: what the number is made of decides what its Δ can honestly mean."
       >
         {/* Controls: one row above the data, per the house pattern. */}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
@@ -1316,6 +1459,29 @@ export default function GexGrowth() {
               {MODE_COPY[mode].sorts[i]}
             </button>
           ))}
+
+          {/* BASIS picker — which NUMBER, as opposed to which reading of it.
+              Unlike the mode tabs below, switching this DOES re-fetch: the
+              four bases are four different columns in the table, not four
+              views of one payload. */}
+          <span style={{ display: "flex", gap: 4, border: `1px solid ${T.border}`, borderRadius: 999, padding: 3 }}>
+            {BASES.map((b) => (
+              <button
+                key={b}
+                onClick={() => setBasis(b)}
+                aria-pressed={basis === b}
+                title={`${BASIS_COPY[b].name} — ${BASIS_COPY[b].unit}. ${BASIS_COPY[b].caveat}`}
+                style={{
+                  ...(basis === b ? homeButtonStyle : homeSecondaryButtonStyle),
+                  borderRadius: 999, padding: "5px 12px",
+                  border: basis === b ? undefined : "1px solid transparent",
+                  background: basis === b ? undefined : "transparent",
+                }}
+              >
+                {BASIS_COPY[b].tab}
+              </button>
+            ))}
+          </span>
 
           {/* Mode tabs. Both readings are already in the payload, so this is a
               re-render — switching never re-fetches and never re-diffs. */}
@@ -1356,8 +1522,13 @@ export default function GexGrowth() {
 
           {/* Live toggle — compare only, because live IS the prior→now reading.
               Rendered only on that tab rather than disabled everywhere, so the
-              control row does not carry a permanently dead button. */}
-          {mode === "compare" && (
+              control row does not carry a permanently dead button.
+
+              Also hidden on the FLOW basis, and hidden rather than disabled:
+              signed dealer inventory is reconstructed from the recorded
+              session's classified tape, so there is no "live" version of it to
+              offer. A greyed-out button would imply one exists. */}
+          {mode === "compare" && basis !== "flow" && (
             <button
               onClick={() => setLive((v) => !v)}
               aria-pressed={liveOn}
@@ -1431,13 +1602,65 @@ export default function GexGrowth() {
           </span>
         </div>
 
+        {/* WHAT THIS NUMBER IS, ON SCREEN. Not a tooltip: three of the four
+            bases are wrong to read as a plain day-over-day change and the
+            fourth covers three symbols, so the caveat has to be as visible as
+            the bars. The strip turns amber on a Δ tab whose basis cannot
+            honestly be differenced — that is the specific mistake this whole
+            change exists to stop someone making. */}
+        <div
+          style={{
+            display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap",
+            marginBottom: 10, padding: "7px 11px", borderRadius: 10,
+            background: T.panelInset,
+            // T.gold is this file's established "warn" colour (see toneColor);
+            // the 73 suffix is the same hex-alpha idiom toneChip uses rather
+            // than a second, differently-expressed amber.
+            border: `1px solid ${isDelta(mode) && !BASIS_COPY[basis].deltaHonest ? `${T.gold}73` : T.border}`,
+          }}
+        >
+          <span style={{ fontSize: 12, fontWeight: 800, color: LIGHT_BLUE, flexShrink: 0 }}>
+            {BASIS_COPY[basis].name}
+          </span>
+          <span style={{ fontSize: 11, fontFamily: MONO, color: T.textMuted, flexShrink: 0 }}>
+            {BASIS_COPY[basis].unit}
+          </span>
+          <span style={{ fontSize: 11.5, color: T.text, minWidth: 180, flex: 1 }}>
+            {BASIS_COPY[basis].caveat}
+          </span>
+          {/* Settled-OI provenance. Only meaningful on `oi`, and it is the flag
+              that says whether the Δ on screen is a real ΔOI or two
+              provisional reads subtracted. */}
+          {basis === "oi" && detail && (
+            <span
+              title={detail.oiSettled && detail.prevOiSettled
+                ? "Both sessions were re-stamped from the settled OCC file, so this Δ is a true session-over-session change in open interest."
+                : "At least one side is still the provisional 16:05 read — its open interest is the file settled through the session BEFORE it, so this Δ is lagged. The 09:25 pass fills it in."}
+              style={{
+                ...toneChip(detail.oiSettled && detail.prevOiSettled ? "pos" : "warn"),
+                fontSize: 10, fontWeight: 800, padding: "2px 7px", flexShrink: 0,
+              }}
+            >
+              {detail.oiSettled && detail.prevOiSettled ? "SETTLED" : "PROVISIONAL"}
+            </span>
+          )}
+        </div>
+
         {boardErr ? (
           <div style={{ color: NEG, fontSize: 13, fontFamily: MONO }}>Board failed: {boardErr}</div>
         ) : board != null && board.length === 0 ? (
           <div style={{ color: T.text, fontSize: 13 }}>
-            {date
-              ? `Nothing recorded on or before ${date}. Pick a later session.`
-              : "No end-of-day snapshots recorded yet. The first sweep runs at 16:05 ET; the Δ column needs a second session before it can say anything."}
+            {/* The three new bases start at their migration date and `flow`
+                only ever covers a handful of names, so "nothing here" is a
+                routine and EXPECTED state for them — worth explaining rather
+                than reading as a broken page. */}
+            {basis === "flow"
+              ? "No flow recorded yet. This basis needs classified prints in flow_prints, which only SPX, SPY and QQQ stream — and only for sessions since the flow basis shipped."
+              : basis !== "oivol"
+                ? `No sessions recorded on this basis yet${date ? ` on or before ${date}` : ""}. The ${BASIS_COPY[basis].tab} columns start at the migration date; earlier sessions only have OI + Vol and cannot be split after the fact.`
+                : date
+                  ? `Nothing recorded on or before ${date}. Pick a later session.`
+                  : "No end-of-day snapshots recorded yet. The first sweep runs at 16:05 ET; the Δ column needs a second session before it can say anything."}
           </div>
         ) : (
           <div className="gexgrowth-split" style={{ display: "grid", gridTemplateColumns: "268px 1fr", gap: 14, alignItems: "stretch" }}>
@@ -1647,6 +1870,21 @@ export default function GexGrowth() {
                     <div style={{ color: NEG, fontSize: 13, fontFamily: MONO }}>Ladder failed: {detailErr}</div>
                   ) : detailLoading && !detail ? (
                     <div style={{ fontSize: 13, color: T.text }}>Reading ladder…</div>
+                  ) : detail && detail.hasBasis === false ? (
+                    // CHECKED BEFORE every other empty case. The server
+                    // COALESCEs a missing basis to 0, so an unrecorded ladder
+                    // and a genuinely flat one are pixel-identical — and the
+                    // difference is the whole point. Without this branch, "we
+                    // never recorded flow for this name" would render as "this
+                    // name had no dealer flow", which is a claim we cannot make.
+                    <div style={{ fontSize: 13, color: T.text }}>
+                      No <strong>{BASIS_COPY[basis].tab}</strong> data recorded for {sel}
+                      {detail.date ? ` on ${detail.date}` : ""}.
+                      {basis === "flow"
+                        ? " Flow is only recorded for the names that stream into the tape — SPX, SPY and QQQ."
+                        : " Sessions before the migration only have the combined OI + Vol number, and it cannot be split after the fact."}
+                      {" "}This is an absence of data, not a reading of zero.
+                    </div>
                   ) : showLive && detail && !detail.prevDate ? (
                     // Live has a DIFFERENT no-baseline story from the EOD tabs:
                     // the live side is fine, it is the recorded close that has
