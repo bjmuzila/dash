@@ -499,46 +499,89 @@ function applyUniversalCloneFixes(root: HTMLElement) {
   // ever runs on the clone.
   const biasCache = new Map<string, number>();
   root.querySelectorAll<HTMLElement>("[data-cap-center]").forEach((n) => {
-    const doc = n.ownerDocument;
-    const view = doc ? doc.defaultView : null;
-    const cs = view ? view.getComputedStyle(n) : null;
+    const cs = styleOf(n);
     const h = parseFloat(n.style.height || "");
     const fs = parseFloat(n.style.fontSize || "") || parseFloat(cs?.fontSize || "") || 12;
-    // Computed, not inline: `var(--font-inter)` has to be resolved before the
-    // probe can measure the family html2canvas will actually draw with.
-    const family = cs?.fontFamily || n.style.fontFamily || "sans-serif";
-    const weight = cs?.fontWeight || n.style.fontWeight || "400";
-    const bias = captureBaselineBias(doc, family, weight, fs, biasCache);
+    const bias = biasFor(n, fs, biasCache);
 
-    let padTop: number;
-    let padBottom: number;
     if (h > 0) {
       // border-box: the declared height already contains the 1px borders.
       const bt = parseFloat(n.style.borderTopWidth || "") || (n.style.border ? 1 : 0);
       const bb = parseFloat(n.style.borderBottomWidth || "") || (n.style.border ? 1 : 0);
       const slack = Math.max(0, h - bt - bb - fs);
-      padTop = slack / 2 - bias;
-      padBottom = slack - padTop;
+      // Collapsing the line box only works because the padding replaces it —
+      // `slack` is exactly what the old `height` reserved around the glyphs.
       n.style.height = "auto";
+      n.style.lineHeight = "1";
+      setSplitPadding(n, slack / 2 - bias, slack);
     } else {
-      // No declared height: keep the padding it already has, so the painted box
-      // does not change size — only move the text inside it.
-      const pt = parseFloat(cs?.paddingTop || "") || 0;
-      const pb = parseFloat(cs?.paddingBottom || "") || 0;
-      padTop = pt - bias;
-      padBottom = pt + pb - padTop;
+      // No declared height: the box is sized by its own padding, so leave both
+      // the height and the line box alone and only move the text inside it.
+      shiftTextByBias(n, bias, cs);
     }
-    // Never negative — the box would shrink and the border would move.
-    if (padTop < 0) { padBottom = Math.max(0, padBottom + padTop); padTop = 0; }
-    if (padBottom < 0) { padTop = Math.max(0, padTop + padBottom); padBottom = 0; }
-
-    n.style.lineHeight = "1";
-    n.style.paddingTop = `${padTop}px`;
-    n.style.paddingBottom = `${padBottom}px`;
     // inline-flex centering is its own html2canvas hazard (it lays the child out
     // but still draws text from the rect's top) — force the simple flow box.
     if ((n.style.display || "").includes("flex")) n.style.display = "inline-block";
   });
+
+  // Same bias, no opt-in: the app's segmented switches and toolbar chips are
+  // padding-sized <button>s (`homeButtonStyle`), not fixed-height pills, so
+  // there is no line box to rewrite — the label was simply drawn ~2px low inside
+  // the button. That is the TestLab Tape Field switcher (HEATMAP / TERRAIN /
+  // GEX × DEX) and every control shaped like it. Text-only buttons only: one
+  // with element children could be an icon + label whose parts would shift
+  // apart, and the padding swap is a no-op on a button with no top padding, so
+  // this can never resize a control.
+  root.querySelectorAll<HTMLElement>("button").forEach((n) => {
+    if (n.hasAttribute("data-cap-center")) return;
+    if (n.firstElementChild) return;
+    if (!(n.textContent || "").trim()) return;
+    const cs = styleOf(n);
+    const fs = parseFloat(cs?.fontSize || "") || parseFloat(n.style.fontSize || "") || 12;
+    shiftTextByBias(n, biasFor(n, fs, biasCache), cs);
+  });
+}
+
+/** Computed style of a cloned node, or null if the clone has no view yet. */
+function styleOf(n: HTMLElement): CSSStyleDeclaration | null {
+  const view = n.ownerDocument ? n.ownerDocument.defaultView : null;
+  return view ? view.getComputedStyle(n) : null;
+}
+
+/** `captureBaselineBias` for an element, with its font resolved off the clone. */
+function biasFor(n: HTMLElement, fontSize: number, cache: Map<string, number>): number {
+  const cs = styleOf(n);
+  // Computed, not inline: `var(--font-sans)` has to be resolved before the probe
+  // can measure the family html2canvas will actually draw with.
+  const family = cs?.fontFamily || n.style.fontFamily || "sans-serif";
+  const weight = cs?.fontWeight || n.style.fontWeight || "400";
+  return captureBaselineBias(n.ownerDocument, family, weight, fontSize, cache);
+}
+
+/**
+ * Write `padTop` / `total - padTop` as the element's vertical padding, clamped
+ * so neither side goes negative — a negative pad would shrink the box and move
+ * the border, and the whole point is that only the TEXT moves.
+ */
+function setSplitPadding(n: HTMLElement, padTop: number, total: number): void {
+  let top = padTop;
+  let bottom = total - top;
+  if (top < 0) { bottom = Math.max(0, bottom + top); top = 0; }
+  if (bottom < 0) { top = Math.max(0, top + bottom); bottom = 0; }
+  n.style.paddingTop = `${top}px`;
+  n.style.paddingBottom = `${bottom}px`;
+}
+
+/**
+ * Move an element's text up by `bias` without changing anything else about it:
+ * the vertical padding is re-split, so the sum — and therefore the painted box —
+ * is identical. A box with no top padding has nowhere to give and is left alone.
+ */
+function shiftTextByBias(n: HTMLElement, bias: number, cs: CSSStyleDeclaration | null): void {
+  const pt = parseFloat(cs?.paddingTop || "") || 0;
+  const pb = parseFloat(cs?.paddingBottom || "") || 0;
+  if (!(pt > 0) && bias > 0) return;
+  setSplitPadding(n, pt - bias, pt + pb);
 }
 
 /** 1x1 GIF — the same probe image html2canvas measures its own metrics with. */

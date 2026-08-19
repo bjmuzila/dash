@@ -277,6 +277,21 @@ and it is clamped to ±4px so a probe that runs before a webfont loads can never
 shove a label out of its box. Pills with no declared height keep their computed
 padding and only shift the text.
 
+### Padding-sized controls too (same bias, no opt-in)
+
+The Tape Field switcher on TestLab's GEX map (`HEATMAP` / `TERRAIN` / `GEX × DEX`)
+showed the same thing, and it is not a `data-cap-center` pill: those are
+padding-sized `<button>`s (`homeButtonStyle`), so there is no line box to rewrite
+— only the same ~2px drop to cancel. Text-only buttons now get the correction
+automatically, by re-splitting their vertical padding: the sum is preserved, so
+the painted control is pixel-identical and only the label moves. Buttons with
+element children are skipped (an icon + label would shift apart) and a button
+with no top padding is a no-op, so this can never resize a control.
+
+The `data-cap-center` branch for boxes with NO declared height no longer collapses
+`line-height` either — that box is sized by its own padding, so collapsing the
+line box shrank it. It now gets the padding swap alone.
+
 Verified against a headless Chromium harness driving the repo's own html2canvas
 build: pill label vs. box centre, five font families × four height/font-size
 pairs. Before: 0.83–1.75px low. After: 0.00–0.01px at 12px labels (what the log
