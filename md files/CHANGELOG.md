@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-08-19 - New page: /premarket (Premarket Prep board)
+
+New customer dashboard page at `/app/premarket` — the pre-open prep board:
+regime header (net GEX, gamma flip, spot, one-line bias), a six-card key-levels
+strip (call wall / 0DTE magnet / spot / max pain / flip / put wall), the GEX
+profile by strike with spot + flip overlays, overnight context (ON range vs
+PDC, biggest GEX changes vs prior close, sector heat), and expected range +
+playbook with today's catalysts.
+
+- `app/premarket/page.tsx` — new `"use client"` page. Renders the approved
+  concept mockup verbatim; every selector is scoped under `.pmk` and the CSS
+  custom properties are declared on `.pmk` (not `:root`) so the mockup's
+  generic class names (`.row`, `.col`, `.bar`, `.stat`, `.g`, `.s`) cannot leak
+  into the rest of the app. **All values are static placeholders — nothing is
+  wired to the chain, the WebSocket or any API yet.**
+- `app-vite/src/App.tsx` — `lazy()` import + `<Route path="/premarket">`.
+- `app/app/premarket/route.ts` — Next shell handler (`serveSpaShell`) so a hard
+  refresh on `/app/premarket` doesn't 404.
+- `components/shared/GlobalToolbar.tsx` — `NAV_ITEMS` entry (🌅 Premarket),
+  placed after Traders Dash.
+- Mockup source kept at `generated/2026-08-19-premarket-prep-mockup.html`.
+- Dimmed/secondary text set to white throughout (`--dim` / `--dim2` = #fff).
+
 ## 2026-08-19 - Budget / Bzila: cards follow the selected month, plus a year toggle
 
 `owner-vite/src/pages/Budget.tsx` — the Bzila tab's summary tiles (Income /

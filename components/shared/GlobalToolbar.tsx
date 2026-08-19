@@ -327,6 +327,10 @@ const NAV_ITEMS: NavItem[] = [
   // read across 169 tickers instead of four.
   { href: "/levels",            label: "Levels",        emoji: "🧱" },
   { href: "/traders-dashboard", label: "Traders Dash",  emoji: "📊" },
+  // Premarket — the pre-open prep board (regime, walls, flip, overnight
+  // context, expected range, playbook). Sits next to Traders Dash because it
+  // is the same overview material, read before 09:30.
+  { href: "/premarket",         label: "Premarket",     emoji: "🌅" },
   // Board — the customizable card board (drag/resize/add/remove, layout saved
   // per user). Sits next to Traders Dash because it is the same overview
   // material, arranged by the user instead of fixed.

@@ -22,6 +22,10 @@ const Em           = lazy(() => import('@/components/pages/Em'))
 // components/pages wrapper.
 const Levels       = lazy(() => import('@/app/levels/page'))
 const Flow         = lazy(() => import('@/components/pages/Flow'))
+// /premarket — the premarket prep board (regime, walls, flip, overnight
+// context, expected range, playbook). Client component under app/, imported
+// straight from '@/app' like MultGreekClient and Levels.
+const Premarket    = lazy(() => import('@/app/premarket/page'))
 // /board — the near-black card board. Same DashGrid machinery as the Options
 // board (drag/resize/add/remove, layout saved per user), on a page-scoped
 // palette that is deliberately NOT homeTheme while the look is being trialled.
@@ -78,6 +82,7 @@ export default function App() {
               <Route path="/levels" element={S(<Levels />)} />
               <Route path="/em" element={S(<Em />)} />
               <Route path="/flow" element={S(<Flow />)} />
+              <Route path="/premarket" element={S(<Premarket />)} />
               <Route path="/board" element={S(<Board />)} />
               <Route path="/es-candles" element={S(<EsCandles />)} />
               <Route path="/scanner" element={S(<Scanner />)} />
