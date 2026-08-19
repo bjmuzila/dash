@@ -1,5 +1,98 @@
 # Changelog
 
+## 2026-08-19 - Budget / Bzila: cards follow the selected month, plus a year toggle
+
+`owner-vite/src/pages/Budget.tsx` — the Bzila tab's summary tiles (Income /
+Expenses / Net) and the three stream cards (CB Edge / Contracts / Prop) were
+always year-to-date, so changing the month picker did nothing to them.
+
+- `bzilaComputed` now also returns `monthStreams` — the per-stream in/out/net
+  breakdown keyed by `YYYY-MM`.
+- `BzilaPanel` takes `month` and has a scope toggle above the tiles: the
+  selected month (default) or the year. The tiles and stream cards read from
+  whichever scope is active; the Monthly All ledger below still lists the whole
+  year.
+- Selecting a month while in month scope auto-expands that month's ledger row.
+
+## 2026-08-19 - v3: new repo scaffolded (cbedge-v3) — speed layer done, UI blank
+
+New repo, delivered as `generated/2026-08-19-cbedge-v3-scaffold.zip`. Nothing in
+this repo changed.
+
+v3 is a **frontend-only** rewrite. `server-v2/` stays exactly as it is and
+remains the only source of data — the recorders, levels engine, walls-reach and
+the TT/Theta proxies are not being reproduced. v3 talks to it over HTTP plus one
+WebSocket and is served at `/v3/*` while v2 keeps `/app/*`, so both run side by
+side and there is no cutover day.
+
+Stack: Vite 7 + React 19 + TS + Tailwind v4, tokens as CSS custom properties.
+
+The UI is deliberately blank — one placeholder page. What is finished is the part
+that is hard to retrofit later:
+
+- **Early boot.** The WebSocket opens in `index.html` before the bundle is
+  fetched and buffers frames until React adopts it; the IndexedDB read starts in
+  the same breath. Measured against the mock server: first frame 51ms, first
+  paint 80ms — data beats pixels. In v2 the socket did not open until a
+  component mounted and subscribed.
+- **Derived topic scoping.** `?topics=` is computed from what is actually
+  subscribed, so there is no hand-maintained list to forget an entry in and no
+  way for a panel to silently go stale. The boot connection stays unscoped on
+  purpose; scoping applies ~1.2s later once the route settles, so the early-boot
+  head start is not traded away for a few hundred bytes.
+- **One store, per-field selectors, rAF coalescing.** 20 frames inside one
+  animation frame produce one notification.
+- **Instant stale paint.** Last-known state is cached in IndexedDB and painted
+  dimmed until live data replaces it. No spinners on numbers.
+- **Budgets that fail the build.** Every chunk measured in brotli against
+  `budgets.json`. Initial load 69.5kb against a 109kb ceiling.
+- **`ws-scope-check.mjs`** drives a real browser against a mock server that
+  mirrors server-v2's filtering and asserts all of the scoping behaviour above.
+  8/8 passing.
+
+Also carried over as explicit rules in the new `AGENTS.md`: no colour literals
+outside `tokens.css`, no catch-all route redirect (v2 fell through to
+`/traders-dashboard`, which made unregistered pages look half-working), charts
+updated imperatively, no request waterfalls.
+
+
+## 2026-08-19 - Snapshot: pill labels sit on the box's centre again
+
+Edited: `lib/snapshot.ts`.
+
+The wall log's PNG (`/app/scanner` → log page, 📸 PNG) drew every badge —
+`OPEN BASELINE`, `CHANGED`, the capture-rail chips — with its label off the
+box's vertical centre, even though the same pills are perfectly centred on the
+live page.
+
+Gotcha 10 already rewrote those pills for the clone (fixed height + line-height
+→ `line-height: 1` + symmetric padding), and that half was right but not
+sufficient. The remaining offset is html2canvas itself: it paints text at
+`textRect.top + baseline`, and `baseline` comes from its own probe
+(`FontMetrics.parseMetrics`) — an inline span plus a 1px baseline-aligned img,
+measured with **integer** `offsetTop`s and then padded by a hardcoded `+ 2`.
+That overshoots the real ascent by ~1–2px, so every run of text is drawn low.
+Symmetric padding cannot cancel a constant downward push.
+
+New `captureBaselineBias()` measures the push instead of guessing it: it runs
+html2canvas's probe verbatim in the clone document, compares it with where the
+baseline actually is, and returns the difference in CSS px. The `data-cap-center`
+rewrite then splits the pill's padding asymmetrically by that bias, so the glyphs
+land back on the optical centre. Painted height, border and box position are
+unchanged; the live page never sees any of it.
+
+Because the bias depends on the font the CLONE resolved (not the one the live box
+was sized for) it is measured per font + weight + size and cached per capture,
+and it is clamped to ±4px so a probe that runs before a webfont loads can never
+shove a label out of its box. Pills with no declared height keep their computed
+padding and only shift the text.
+
+Verified against a headless Chromium harness driving the repo's own html2canvas
+build: pill label vs. box centre, five font families × four height/font-size
+pairs. Before: 0.83–1.75px low. After: 0.00–0.01px at 12px labels (what the log
+page uses) and ≤0.88px at the odd sizes, where html2canvas's integer probe
+quantises what is left. Every case improved; none regressed.
+
 ## 2026-08-18 - ΔGEX Board: rail badges, call/put legs, live 0DTE, and deep links out
 
 Edited: `server-v2/eod-strike-gex-recorder.js`,

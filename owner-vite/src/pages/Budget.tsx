@@ -42,6 +42,16 @@ type PropRow = { id: number; entry_date: string; source: PropSource; firm: strin
 // from budget_prop; contracts are read out of the Payments register).
 type BzilaEntry = { key: string; id: number | null; date: string; stream: "prop" | "cbedge" | "contracts"; label: string; accounts: number; inAmt: number; outAmt: number };
 const STREAM_LABEL: Record<BzilaEntry["stream"], string> = { prop: "Prop", cbedge: "CB Edge", contracts: "Contracts" };
+type BzilaStreamTotal = { inAmt: number; outAmt: number; net: number };
+type BzilaStreams = { cbedge: BzilaStreamTotal; contracts: BzilaStreamTotal; prop: BzilaStreamTotal };
+type BzilaComputed = {
+  months: { ym: string; rows: BzilaEntry[]; inAmt: number; outAmt: number; net: number }[];
+  totalIn: number;
+  totalOut: number;
+  net: number;
+  streams: BzilaStreams;
+  monthStreams: Record<string, BzilaStreams>;
+};
 type Frequency = "weekly" | "biweekly" | "monthly";
 type RecurringRule = { id: number; label: string; bank: Bank; amount: number; frequency: Frequency; anchor_date: string; active: number };
 type Intel = {
@@ -477,20 +487,29 @@ export default function Budget() {
       })
       .sort((a, b) => (a.ym < b.ym ? 1 : -1));
 
-    const streamTotal = (s: BzilaEntry["stream"]) => {
-      const rows = entries.filter((e) => e.stream === s);
+    const streamTotalOf = (rowsIn: BzilaEntry[], s: BzilaEntry["stream"]) => {
+      const rows = rowsIn.filter((e) => e.stream === s);
       const inAmt = rows.reduce((x, r) => x + r.inAmt, 0);
       const outAmt = rows.reduce((x, r) => x + r.outAmt, 0);
       return { inAmt, outAmt, net: inAmt - outAmt };
     };
+    const streamsOf = (rowsIn: BzilaEntry[]) => ({
+      cbedge: streamTotalOf(rowsIn, "cbedge"),
+      contracts: streamTotalOf(rowsIn, "contracts"),
+      prop: streamTotalOf(rowsIn, "prop"),
+    });
     const totalIn = entries.reduce((s, r) => s + r.inAmt, 0);
     const totalOut = entries.reduce((s, r) => s + r.outAmt, 0);
+    // Per-month stream breakdown so the Bzila cards can follow the month picker.
+    const monthStreams: Record<string, BzilaStreams> = {};
+    for (const m of months) monthStreams[m.ym] = streamsOf(m.rows);
     return {
       months,
       totalIn,
       totalOut,
       net: totalIn - totalOut,
-      streams: { cbedge: streamTotal("cbedge"), contracts: streamTotal("contracts"), prop: streamTotal("prop") },
+      streams: streamsOf(entries),
+      monthStreams,
     };
   }, [propRows, yearRows, categories]);
 
@@ -1313,7 +1332,7 @@ export default function Budget() {
           </div>
         )}
         {tab === "bzila" && (
-          <BzilaPanel data={bzilaComputed} year={Number(month.slice(0, 4))} currency={currency} onDelete={deleteProp} onOpenPayments={() => setTab("register")} />
+          <BzilaPanel data={bzilaComputed} year={Number(month.slice(0, 4))} month={month} currency={currency} onDelete={deleteProp} onOpenPayments={() => setTab("register")} />
         )}
         {tab === "yearly" && (
           <YearlyPanel data={yearMonths} categories={categories} year={year} onYear={setYear} currency={currency} loading={yearLoading} />
@@ -3257,27 +3276,41 @@ function YearlyPanel({
 // Bzila — the business ledger. Year summary + per-stream breakdown (CB Edge /
 // Contracts / Prop) + monthly rows that expand to their entries. Contracts rows
 // are read out of the Payments register, so they're shown but not editable here.
-type BzilaStreamTotal = { inAmt: number; outAmt: number; net: number };
 function BzilaPanel({
   data,
   year,
+  month,
   currency,
   onDelete,
   onOpenPayments,
 }: {
-  data: {
-    months: { ym: string; rows: BzilaEntry[]; inAmt: number; outAmt: number; net: number }[];
-    totalIn: number;
-    totalOut: number;
-    net: number;
-    streams: { cbedge: BzilaStreamTotal; contracts: BzilaStreamTotal; prop: BzilaStreamTotal };
-  };
+  data: BzilaComputed;
   year: number;
+  month: string;
   currency: string;
   onDelete: (id: number) => void;
   onOpenPayments: () => void;
 }) {
+  // Scope toggle: the summary + stream cards either follow the month picker or
+  // roll up the whole year. Ledger below always shows the year's months.
+  const [scope, setScope] = useState<"month" | "year">("month");
   const [open, setOpen] = useState<string | null>(data.months[0]?.ym ?? null);
+  useEffect(() => {
+    if (scope === "month") setOpen(month);
+  }, [month, scope]);
+
+  const EMPTY_STREAM: BzilaStreamTotal = { inAmt: 0, outAmt: 0, net: 0 };
+  const monthRow = data.months.find((m) => m.ym === month);
+  const monthLabel = new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 1, 1)
+    .toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  const isMonth = scope === "month";
+  const scopeLabel = isMonth ? monthLabel : String(year);
+  const sumIn = isMonth ? monthRow?.inAmt ?? 0 : data.totalIn;
+  const sumOut = isMonth ? monthRow?.outAmt ?? 0 : data.totalOut;
+  const sumNet = sumIn - sumOut;
+  const scopeStreams = isMonth
+    ? data.monthStreams[month] ?? { cbedge: EMPTY_STREAM, contracts: EMPTY_STREAM, prop: EMPTY_STREAM }
+    : data.streams;
   const monthName = (ym: string) => {
     const [y, m] = ym.split("-").map(Number);
     return new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "long" });
@@ -3290,17 +3323,44 @@ function BzilaPanel({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {/* Year summary */}
+      {/* Scope toggle — selected month vs. full year */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {([["month", monthLabel], ["year", String(year)]] as const).map(([k, l]) => {
+          const active = scope === k;
+          return (
+            <button
+              key={k}
+              onClick={() => setScope(k)}
+              style={{
+                ...ghost(),
+                padding: "6px 14px",
+                fontSize: 12,
+                fontWeight: 900,
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                borderRadius: 999,
+                color: active ? HOME_THEME.cyan : HOME_THEME.muted,
+                background: active ? bRgba(HOME_THEME.cyan, 0.12) : "transparent",
+                border: `1px solid ${active ? bRgba(HOME_THEME.cyan, 0.4) : HOME_THEME.border}`,
+              }}
+            >
+              {l}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Summary — follows the scope toggle */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
-        <StatTile label={`${year} Income`} value={fmtMoney(data.totalIn, currency)} sub="CB Edge · contracts · payouts" valueColor={HOME_THEME.green} />
-        <StatTile label="Expenses" value={fmtMoney(data.totalOut, currency)} sub="All three streams" valueColor={SOFT_RED} />
-        <StatTile label="Net" value={fmtMoney(data.net, currency)} sub="Income − expenses" valueColor={data.net < 0 ? SOFT_RED : HOME_THEME.green} />
+        <StatTile label={`${scopeLabel} Income`} value={fmtMoney(sumIn, currency)} sub="CB Edge · contracts · payouts" valueColor={HOME_THEME.green} />
+        <StatTile label="Expenses" value={fmtMoney(sumOut, currency)} sub="All three streams" valueColor={SOFT_RED} />
+        <StatTile label="Net" value={fmtMoney(sumNet, currency)} sub="Income − expenses" valueColor={sumNet < 0 ? SOFT_RED : HOME_THEME.green} />
       </div>
 
       {/* Per-stream breakdown */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
         {(["cbedge", "contracts", "prop"] as const).map((s) => {
-          const t = data.streams[s];
+          const t = scopeStreams[s];
           return (
             <div key={s} style={{ ...card(), padding: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>

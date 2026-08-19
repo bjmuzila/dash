@@ -484,29 +484,135 @@ function applyUniversalCloneFixes(root: HTMLElement) {
   // in an about:blank iframe where `var(--font-inter)` does not resolve, so the
   // fallback's ascent is not the one the live box was sized for. The taller the
   // line box relative to the font, the further that error throws the glyphs:
-  // a 12px label in a 20px pill lands visibly high.
+  // a 12px label in a 20px pill lands visibly off centre.
   //
-  // Fix: for anything opted in with `data-cap-center`, stop centering with a line
-  // box at all. Collapse `line-height` to 1 and re-express the difference as
-  // symmetric vertical padding, so the box hugs the text and there is no leading
-  // left for a wrong ascent to mis-split. Same painted height, same border, and
-  // the live page is untouched — this only ever runs on the clone.
+  // Fix, part 1: for anything opted in with `data-cap-center`, stop centering
+  // with a line box at all. Collapse `line-height` to 1 and re-express the
+  // difference as vertical padding, so the box hugs the text and there is no
+  // leading left for a wrong ascent to mis-split.
+  //
+  // Fix, part 2: part 1 alone still left every label sitting LOW in its pill,
+  // because html2canvas's baseline is not the font's ascent — see
+  // `captureBaselineBias()`. The padding is therefore split asymmetrically by the
+  // measured bias, which pushes the glyphs back onto the box's optical centre.
+  // Same painted height, same border, and the live page is untouched — this only
+  // ever runs on the clone.
+  const biasCache = new Map<string, number>();
   root.querySelectorAll<HTMLElement>("[data-cap-center]").forEach((n) => {
+    const doc = n.ownerDocument;
+    const view = doc ? doc.defaultView : null;
+    const cs = view ? view.getComputedStyle(n) : null;
     const h = parseFloat(n.style.height || "");
-    const fs = parseFloat(n.style.fontSize || "") || 12;
-    if (!(h > 0)) { n.style.lineHeight = "1"; return; }
-    // border-box: the declared height already contains the 1px borders.
-    const bt = parseFloat(n.style.borderTopWidth || "") || (n.style.border ? 1 : 0);
-    const bb = parseFloat(n.style.borderBottomWidth || "") || (n.style.border ? 1 : 0);
-    const pad = Math.max(0, (h - bt - bb - fs) / 2);
-    n.style.height = "auto";
+    const fs = parseFloat(n.style.fontSize || "") || parseFloat(cs?.fontSize || "") || 12;
+    // Computed, not inline: `var(--font-inter)` has to be resolved before the
+    // probe can measure the family html2canvas will actually draw with.
+    const family = cs?.fontFamily || n.style.fontFamily || "sans-serif";
+    const weight = cs?.fontWeight || n.style.fontWeight || "400";
+    const bias = captureBaselineBias(doc, family, weight, fs, biasCache);
+
+    let padTop: number;
+    let padBottom: number;
+    if (h > 0) {
+      // border-box: the declared height already contains the 1px borders.
+      const bt = parseFloat(n.style.borderTopWidth || "") || (n.style.border ? 1 : 0);
+      const bb = parseFloat(n.style.borderBottomWidth || "") || (n.style.border ? 1 : 0);
+      const slack = Math.max(0, h - bt - bb - fs);
+      padTop = slack / 2 - bias;
+      padBottom = slack - padTop;
+      n.style.height = "auto";
+    } else {
+      // No declared height: keep the padding it already has, so the painted box
+      // does not change size — only move the text inside it.
+      const pt = parseFloat(cs?.paddingTop || "") || 0;
+      const pb = parseFloat(cs?.paddingBottom || "") || 0;
+      padTop = pt - bias;
+      padBottom = pt + pb - padTop;
+    }
+    // Never negative — the box would shrink and the border would move.
+    if (padTop < 0) { padBottom = Math.max(0, padBottom + padTop); padTop = 0; }
+    if (padBottom < 0) { padTop = Math.max(0, padTop + padBottom); padBottom = 0; }
+
     n.style.lineHeight = "1";
-    n.style.paddingTop = `${pad}px`;
-    n.style.paddingBottom = `${pad}px`;
+    n.style.paddingTop = `${padTop}px`;
+    n.style.paddingBottom = `${padBottom}px`;
     // inline-flex centering is its own html2canvas hazard (it lays the child out
     // but still draws text from the rect's top) — force the simple flow box.
     if ((n.style.display || "").includes("flex")) n.style.display = "inline-block";
   });
+}
+
+/** 1x1 GIF — the same probe image html2canvas measures its own metrics with. */
+const PROBE_GIF =
+  "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+/**
+ * How many px LOWER than the browser html2canvas will draw a run of text.
+ *
+ * html2canvas paints every run at `textRect.top + baseline`, and that `baseline`
+ * comes from its own probe (`FontMetrics.parseMetrics` in the bundle): an inline
+ * <span> of sample text followed by a 1px baseline-aligned <img>, measured with
+ * INTEGER `offsetTop`s and then padded by a hardcoded `+ 2`. The result overshoots
+ * the real ascent by ~1–2px, so EVERY label is drawn low — which inside a
+ * fixed-height pill is exactly the "text doesn't sit in the middle of the box"
+ * the wall log's PNG showed.
+ *
+ * The overshoot depends on the font the CLONE resolved and on the font size, so
+ * it is measured, not guessed: run html2canvas's probe verbatim, compare it with
+ * where the baseline really is (the 1px img's bottom edge sits on it), and return
+ * the difference.
+ *
+ * The probe is appended to the clone document's <body> and removed again before
+ * returning — never inside `root`, so the canvas index-pairing downstream is
+ * untouched. Cached per capture, per font + weight + size.
+ */
+function captureBaselineBias(
+  doc: Document,
+  fontFamily: string,
+  fontWeight: string,
+  fontSize: number,
+  cache: Map<string, number>,
+): number {
+  const key = `${fontFamily}|${fontWeight}|${fontSize}`;
+  const hit = cache.get(key);
+  if (hit != null) return hit;
+
+  let bias = 0;
+  try {
+    const host = doc.body || doc.documentElement;
+    const size = `${fontSize}px`;
+    const container = doc.createElement("div");
+    const span = doc.createElement("span");
+    const img = doc.createElement("img");
+    container.style.cssText =
+      "visibility:hidden;position:absolute;left:-99999px;top:0;margin:0;padding:0;white-space:nowrap;";
+    container.style.fontFamily = fontFamily;
+    container.style.fontSize = size;
+    span.style.cssText = "margin:0;padding:0;";
+    span.style.fontFamily = fontFamily;
+    span.style.fontSize = size;
+    span.style.fontWeight = fontWeight;
+    span.appendChild(doc.createTextNode("Hidden Text"));
+    img.src = PROBE_GIF;
+    img.width = 1;
+    img.height = 1;
+    img.style.cssText = "margin:0;padding:0;vertical-align:baseline;";
+    container.appendChild(span);
+    container.appendChild(img);
+    host.appendChild(container);
+
+    const assumed = img.offsetTop - span.offsetTop + 2; // what html2canvas will use
+    const actual = img.getBoundingClientRect().bottom - span.getBoundingClientRect().top;
+    container.remove();
+    if (Number.isFinite(assumed) && Number.isFinite(actual)) bias = assumed - actual;
+  } catch {
+    bias = 0;
+  }
+  // A sub-pixel-to-2px nudge, never a layout move. If the probe comes back wild
+  // (no layout yet, a font that failed to load), ignore it rather than shove the
+  // label out of its box.
+  if (!Number.isFinite(bias) || Math.abs(bias) > 4) bias = 0;
+  cache.set(key, bias);
+  return bias;
 }
 
 /**
