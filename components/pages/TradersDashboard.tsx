@@ -1,6 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+// next/link, not <a>: the SPA shims it to a router push, so the Premarket
+// button below navigates in-app instead of reloading the whole bundle. Same
+// import GlobalToolbar uses for its nav.
+import Link from "next/link";
 import { HOME_THEME as HT } from "@/components/shared/homeTheme";
 import { PageShell, Card } from "@/components/shared/PageCard";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -53,15 +57,18 @@ const ALL_PAGES: { label: string; href: string }[] = [
   { label: "Greeks", href: "/greeks" },
   { label: "Confidence", href: "/confidence-score" },
   { label: "Fails", href: "/fails" },
-  { label: "Premarket", href: "/premarket" },
+  { label: "Premarket Prep", href: "/premarket" },
   { label: "Economic Calendar", href: "/economic-calendar" },
   { label: "Traders Dashboard", href: "/traders-dashboard" },
 ];
 
+// Only applies to users with no saved Quick Links yet. Everyone else keeps the
+// set they arranged — which is why Premarket also gets a button in the header.
 const DEFAULT_LINKS: LinkItem[] = [
-  { id: "l1", label: "Home", href: "/home" },
-  { id: "l2", label: "Multi Greek", href: "/mult-greek" },
-  { id: "l3", label: "Analytics", href: "/analytics" },
+  { id: "l1", label: "Premarket Prep", href: "/premarket" },
+  { id: "l2", label: "Home", href: "/home" },
+  { id: "l3", label: "Multi Greek", href: "/mult-greek" },
+  { id: "l4", label: "Analytics", href: "/analytics" },
 ];
 
 const DEFAULT_TASKS: TaskItem[] = [
@@ -309,6 +316,30 @@ export default function TradersDashboardPage() {
             <div style={{ color: HT.muted, fontSize: 14, marginTop: 4 }}>{dateStr}</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {/* Premarket Prep — the page you want BEFORE this one, so it sits in
+              the header rather than down in Quick Links. */}
+          <Link
+            href="/premarket"
+            prefetch={false}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 8,
+              padding: "9px 14px", borderRadius: 8,
+              border: `1px solid ${rgba(HT.orange, 0.55)}`,
+              background: `linear-gradient(180deg, ${rgba(HT.orange, 0.20)}, ${rgba(HT.orange, 0.06)})`,
+              color: HT.text, textDecoration: "none",
+              fontWeight: 700, fontSize: 13, letterSpacing: "0.04em",
+              whiteSpace: "nowrap", transition: "background .15s, border-color .15s",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = HT.orange; e.currentTarget.style.background = rgba(HT.orange, 0.28); }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = rgba(HT.orange, 0.55);
+              e.currentTarget.style.background = `linear-gradient(180deg, ${rgba(HT.orange, 0.20)}, ${rgba(HT.orange, 0.06)})`;
+            }}
+          >
+            <span aria-hidden>🌅</span>
+            <span>Premarket Prep</span>
+            <span style={{ color: HT.orange }}>→</span>
+          </Link>
           <CopySnapButton targetRef={snapRef} filename="traders-dashboard.png" />
           <div style={{ textAlign: "right" }}>
             {weather ? (

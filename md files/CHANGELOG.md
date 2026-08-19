@@ -1,254 +1,28 @@
 # Changelog
 
-## 2026-08-19 - FIX: /premarket crashed at runtime — backtick inside the CSS template
+## 2026-08-18 - ΔGEX Board: gamma flip stays neutral (decision, not omission)
 
-`"...".inside is not a function` on load, the whole page blank.
+Edited: `owner-vite/src/pages/GexGrowth.tsx`.
 
-Two CSS comments I added in the styling pass contained BACKTICKS (```.inside```,
-```.pmk .g```) — and that CSS lives in a template literal. The first backtick
-ended the literal early, so everything after it parsed as a tagged-template
-call. Valid JavaScript, which is why it built clean and only died in the
-browser.
+The open question from today's build is closed: the flip tile reports the level,
+the migration and the cushion as MEASUREMENTS and says nothing about direction.
 
-- Removed every backtick from the `CSS` template literal and left a note in the
-  file saying why none may go back in.
-- Also fixed `.pmk .s b` → `.pmk .sect .s b`, missed when the sector chip rules
-  were scoped.
+Two conventions are in common use and they read a rising flip in opposite ways —
+one has the short-gamma zone climbing toward spot (more fragile), the other has
+more of the book below spot turning supportive. A dashboard asserting one of
+them in prose is worse than one reporting the number, because the reader cannot
+tell which convention produced the sentence.
 
-## 2026-08-19 - FIX: /premarket broke the Docker build — moved to components/pages/
+**Also removed the gold-on-shrinking cushion colour.** A one-sided colour is the
+same assertion in a quieter form: highlighting only the shrinking case says
+"shrinking is the bad direction" without saying it. The cushion is plain text
+now. The migration value is still highlighted, but symmetrically — it flags that
+the level moved, never which way was good.
 
-`npm run build` failed with `Export encountered an error on /premarket/page:
-/premarket`, which took the whole VPS deploy down.
+The reasoning is recorded above `ReadPanel` as a do-not-add note, since a later
+pass would otherwise read the missing sentence as an oversight.
 
-Cause: `/premarket` is a LIVE-FEED page — it rides `lib/gexSocket` through
-`useMobileGex` and `useEsCandles`. Anything under `app/` gets prerendered by
-Next at build time, and that tree cannot render on a server. Every other
-feed-consuming dashboard page already avoids this by living in
-`components/pages/` and being mounted ONLY by the Vite SPA: there is no
-`app/<name>/page.tsx` for /flow, /em, /traders-dashboard, /ict, /board,
-/replay, /analytics, /options-chain, /scanner or the rest. `/premarket` was the
-odd one out.
-
-- **Moved** the page to `components/pages/Premarket.tsx` (unchanged apart from
-  the export name and a header note).
-- `app/premarket/page.tsx` is now a three-line server component:
-  `export const dynamic = "force-dynamic"` + `redirect("/app/premarket")`, so
-  the bare `cbedge.net/premarket` URL still lands somewhere and Next never
-  prerenders the client tree.
-- `app-vite/src/App.tsx` imports `@/components/pages/Premarket`.
-- `app/app/premarket/route.ts` (the SPA shell handler) and the toolbar nav item
-  are unchanged.
-
-Rule of thumb going forward: **if a page subscribes to the feed, it belongs in
-`components/pages/`, not `app/`.**
-
-## 2026-08-19 - /premarket: black box in the one-liner, wall tags contained
-
-`app/premarket/page.tsx`, styling only.
-
-- **Black box through "Today's one-liner".** The greek tile rule was written as
-  a bare `.pmk .g`, which also matched the `<span class="g">` the one-liner and
-  the scenario bullets use for their green highlight — so those spans inherited
-  the tile's panel background, border and padding and rendered as boxes mid-
-  sentence. Scoped it to `.pmk .greeks .g` (and its `.n` / `.v` / `.m`
-  children). Sector chips were scoped the same way (`.pmk .sect .s`) for the
-  same reason.
-- **CALL WALL / PUT WALL still overlapping.** The inside-the-bar placement now
-  anchors with `left`/`right` only, no transform: the bar's outer edge sits
-  (50 − w)% from the far side of the track, so pinning the tag's matching edge
-  there right-aligns it inside the bar and it can never exceed the track,
-  whatever the bar width. Short bars (<22% of the half-track) still hang the
-  label outside, where there is room by definition.
-
-## 2026-08-19 - /premarket: "Yesterday's flip" replaced with gap info
-
-`app/premarket/page.tsx` — Overnight Context.
-
-- Removed the "Yesterday's flip" row.
-- Added three rows in its place, all off the existing 5m ES bars (no new fetch):
-  - **Gap vs prior close** — front ES minus the prior RTH close, in points and
-    percent, with an inside/outside pill. Outside is the one that changes how you
-    trade it: a gap beyond yesterday's range has no reference above or below it,
-    so it runs or fails hard, while a gap inside the range sits in known
-    territory and fills far more often.
-  - **Gap fill target** — the prior close, plus the distance back to it.
-  - **Prior day range (ES)** — yesterday's RTH high/low and its width.
-- `overnight` now also resolves the prior RTH session's high/low (09:30–16:00 on
-  the last dated day before today) to support the inside/outside test.
-
-## 2026-08-19 - /premarket: card accents removed, borders raised, strike tags contained
-
-`app/premarket/page.tsx`, styling only — no data changes.
-
-- Dropped the coloured left accent bar on the six key-level cards
-  (`.lvl::before` and its call / put / flip / magnet / pain / spot variants).
-- Card outlines are more pronounced: new `--card: rgba(255,255,255,.20)` on the
-  section shell, the level cards, the greek tiles, the playbook and the sector
-  chips. A white alpha rather than a slate hex, because those cards sit on three
-  different backgrounds (panel, panel2, the green/red regime wash) and a fixed
-  hex reads as a different weight on each. Divider `--line` also lifted
-  (#1f2733 → #242e3b).
-- CALL WALL / PUT WALL no longer cover their neighbours. A tagged strike is
-  usually the WIDEST bar in the window, so a label hung off the bar's end ran
-  past the track — over the Overnight column on the call side and over the
-  strike gutter on the put side. Bars ≥22% of the half-track now carry the label
-  INSIDE, flush to the bar's end, on a translucent plate in white; only short
-  bars hang it outside, where there is room by definition. Tags are also capped
-  at half the track width and ellipsised.
-- Sector chips truncate their name instead of overflowing the card.
-
-## 2026-08-19 - /premarket wired to live data (no more placeholders)
-
-`app/premarket/page.tsx` — the page now reads the real feed. Every number that
-was a hardcoded mockup value is gone.
-
-Sources, all shared, none duplicated:
-
-- `useMobileGex("oi-vol")` — the one live-GEX layer (rides `lib/gexSocket`,
-  refcounted, pinned to today's 0DTE). Supplies spot, prev close, gamma flip,
-  call/put wall, total net GEX, ES front, ES−SPX basis and the chain.
-- `useEsCandles(true, 3, 5, false)` — same socket. Overnight high/low and the
-  prior RTH close come off the 5m ES bars (ON window = prior 18:00 ET → 09:30).
-- `useEconCalendar({ withQuote: false })` — today's US High/Medium events plus
-  the two largest earnings names, with the 30-minute staleness fade.
-- `/api/quotes-batch?symbols=/ES,/NQ,VIX` — ES / NQ / VIX day change, 30s.
-- `/api/scanner/market-quality` — **sector heat now comes from Market Quality**
-  (its `sectorBars`, 5-day sector change), not a new fetch. Its `globalScore`
-  also feeds the "Market quality" row. 60s.
-
-Derived client-side from that one chain through `lib/calculations` (so the page
-can never disagree with the GEX chart): per-strike net GEX bars (±12 strikes
-around spot), max pain, the 0DTE magnet, expected move (ATM straddle × 0.85,
-falling back to ATM IV × √(1/252)), DEX / vanna / call-vs-put gamma totals, the
-regime bias and the three scenarios.
-
-- **"vs prior close" needs one session to warm up.** Nothing in the app persists
-  an EOD GEX snapshot, so this page takes its own: once per session between
-  15:40 and 16:10 ET into `localStorage` (`cb-premarket-eod-v1`). Until a
-  snapshot from a PREVIOUS date exists, the net-GEX % change, the strike deltas
-  and "yesterday's flip" render "—" instead of a made-up number.
-- Removed the mockup's "build notes" and "alt strip" sections and the
-  not-wired badge; the header now shows expiry, feed state (LIVE / REST
-  FALLBACK / PAUSED) and the countdown to the open.
-- CHEX tile dropped — charm is not on `ChainRow`. Replaced with a call-vs-put
-  gamma split. MVC row replaced with the overnight range.
-- Added a <1180px stack for the three columns and the six level cards.
-
-## 2026-08-19 - New page: /premarket (Premarket Prep board)
-
-New customer dashboard page at `/app/premarket` — the pre-open prep board:
-regime header (net GEX, gamma flip, spot, one-line bias), a six-card key-levels
-strip (call wall / 0DTE magnet / spot / max pain / flip / put wall), the GEX
-profile by strike with spot + flip overlays, overnight context (ON range vs
-PDC, biggest GEX changes vs prior close, sector heat), and expected range +
-playbook with today's catalysts.
-
-- `app/premarket/page.tsx` — new `"use client"` page. Renders the approved
-  concept mockup verbatim; every selector is scoped under `.pmk` and the CSS
-  custom properties are declared on `.pmk` (not `:root`) so the mockup's
-  generic class names (`.row`, `.col`, `.bar`, `.stat`, `.g`, `.s`) cannot leak
-  into the rest of the app. **All values are static placeholders — nothing is
-  wired to the chain, the WebSocket or any API yet.**
-- `app-vite/src/App.tsx` — `lazy()` import + `<Route path="/premarket">`.
-- `app/app/premarket/route.ts` — Next shell handler (`serveSpaShell`) so a hard
-  refresh on `/app/premarket` doesn't 404.
-- `components/shared/GlobalToolbar.tsx` — `NAV_ITEMS` entry (🌅 Premarket),
-  placed after Traders Dash.
-- Mockup source kept at `generated/2026-08-19-premarket-prep-mockup.html`.
-- Dimmed/secondary text set to white throughout (`--dim` / `--dim2` = #fff).
-
-## 2026-08-19 - Budget / Bzila: cards follow the selected month, plus a year toggle
-
-`owner-vite/src/pages/Budget.tsx` — the Bzila tab's summary tiles (Income /
-Expenses / Net) and the three stream cards (CB Edge / Contracts / Prop) were
-always year-to-date, so changing the month picker did nothing to them.
-
-- `bzilaComputed` now also returns `monthStreams` — the per-stream in/out/net
-  breakdown keyed by `YYYY-MM`.
-- `BzilaPanel` takes `month` and has a scope toggle above the tiles: the
-  selected month (default) or the year. The tiles and stream cards read from
-  whichever scope is active; the Monthly All ledger below still lists the whole
-  year.
-- Selecting a month while in month scope auto-expands that month's ledger row.
-
-## 2026-08-19 - v3: new repo scaffolded (cbedge-v3) — speed layer done, UI blank
-
-New repo, delivered as `generated/2026-08-19-cbedge-v3-scaffold.zip`. Nothing in
-this repo changed.
-
-v3 is a **frontend-only** rewrite. `server-v2/` stays exactly as it is and
-remains the only source of data — the recorders, levels engine, walls-reach and
-the TT/Theta proxies are not being reproduced. v3 talks to it over HTTP plus one
-WebSocket and is served at `/v3/*` while v2 keeps `/app/*`, so both run side by
-side and there is no cutover day.
-
-Stack: Vite 7 + React 19 + TS + Tailwind v4, tokens as CSS custom properties.
-
-The UI is deliberately blank — one placeholder page. What is finished is the part
-that is hard to retrofit later:
-
-- **Early boot.** The WebSocket opens in `index.html` before the bundle is
-  fetched and buffers frames until React adopts it; the IndexedDB read starts in
-  the same breath. Measured against the mock server: first frame 51ms, first
-  paint 80ms — data beats pixels. In v2 the socket did not open until a
-  component mounted and subscribed.
-- **Derived topic scoping.** `?topics=` is computed from what is actually
-  subscribed, so there is no hand-maintained list to forget an entry in and no
-  way for a panel to silently go stale. The boot connection stays unscoped on
-  purpose; scoping applies ~1.2s later once the route settles, so the early-boot
-  head start is not traded away for a few hundred bytes.
-- **One store, per-field selectors, rAF coalescing.** 20 frames inside one
-  animation frame produce one notification.
-- **Instant stale paint.** Last-known state is cached in IndexedDB and painted
-  dimmed until live data replaces it. No spinners on numbers.
-- **Budgets that fail the build.** Every chunk measured in brotli against
-  `budgets.json`. Initial load 69.5kb against a 109kb ceiling.
-- **`ws-scope-check.mjs`** drives a real browser against a mock server that
-  mirrors server-v2's filtering and asserts all of the scoping behaviour above.
-  8/8 passing.
-
-Also carried over as explicit rules in the new `AGENTS.md`: no colour literals
-outside `tokens.css`, no catch-all route redirect (v2 fell through to
-`/traders-dashboard`, which made unregistered pages look half-working), charts
-updated imperatively, no request waterfalls.
-
-
-## 2026-08-19 - Snapshot: pill labels sit on the box's centre again
-
-Edited: `lib/snapshot.ts`.
-
-The wall log's PNG (`/app/scanner` → log page, 📸 PNG) drew every badge —
-`OPEN BASELINE`, `CHANGED`, the capture-rail chips — with its label off the
-box's vertical centre, even though the same pills are perfectly centred on the
-live page.
-
-Gotcha 10 already rewrote those pills for the clone (fixed height + line-height
-→ `line-height: 1` + symmetric padding), and that half was right but not
-sufficient. The remaining offset is html2canvas itself: it paints text at
-`textRect.top + baseline`, and `baseline` comes from its own probe
-(`FontMetrics.parseMetrics`) — an inline span plus a 1px baseline-aligned img,
-measured with **integer** `offsetTop`s and then padded by a hardcoded `+ 2`.
-That overshoots the real ascent by ~1–2px, so every run of text is drawn low.
-Symmetric padding cannot cancel a constant downward push.
-
-New `captureBaselineBias()` measures the push instead of guessing it: it runs
-html2canvas's probe verbatim in the clone document, compares it with where the
-baseline actually is, and returns the difference in CSS px. The `data-cap-center`
-rewrite then splits the pill's padding asymmetrically by that bias, so the glyphs
-land back on the optical centre. Painted height, border and box position are
-unchanged; the live page never sees any of it.
-
-Because the bias depends on the font the CLONE resolved (not the one the live box
-was sized for) it is measured per font + weight + size and cached per capture,
-and it is clamped to ±4px so a probe that runs before a webfont loads can never
-shove a label out of its box. Pills with no declared height keep their computed
-padding and only shift the text.
-
-Verified against a headless Chromium harness driving the repo's own html2canvas
-build: pill label vs. box centre, five font families × four height/font-size
-pairs. Before: 0.83–1.75px low. After: 0.00–0.01px at 12px labels (what the log
-page uses) and ≤0.88px at the odd sizes, where html2canvas's integer probe
-quantises what is left. Every case improved; none regressed.
+80 client assertions still green, `tsc --noEmit` clean, `vite build` green.
 
 ## 2026-08-18 - ΔGEX Board: rail badges, call/put legs, live 0DTE, and deep links out
 

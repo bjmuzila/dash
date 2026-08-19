@@ -3,6 +3,16 @@
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
 
+## Wednesday 8/19/2026
+
+* **New Premarket Prep page.** One screen before the open: gamma regime, call and put walls, the flip, overnight range and gap, expected move, sector heat and today's catalysts — with a one-line plan.
+
+* **Quick link to it from the Traders Dashboard.** A Premarket Prep button sits at the top of the page.
+
+
+* **Steadier GEX levels replay.** The strike ladder no longer slides around as you play a session back — it holds still and only re-centres once price has moved about five strikes.
+
+
 
 ## Monday 8/17/2026
 

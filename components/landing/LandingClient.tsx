@@ -108,6 +108,8 @@ export default function LandingClient() {
           .landing-card .receipts-grid { grid-template-columns: 1fr 1fr !important; gap: 7px !important; }
           .landing-card .receipts-cell { padding: 8px 9px !important; }
           .landing-card .hero-frame { margin-bottom: 14px !important; }
+          .landing-card .tradeify-card { padding: 10px 12px !important; gap: 10px !important; }
+          .landing-card .tradeify-copy { font-size: 11px !important; }
         }
         @media (max-width: 640px) and (max-height: 750px) {
           /* Short viewports: the feature grid is the first thing to go. The
@@ -236,6 +238,20 @@ export default function LandingClient() {
                 </div>
               </Link>
             ))}
+          </div>
+
+          {/* Tradeify partner code. Badge only — no outbound link, so it never
+              competes with the trial CTA above. Sits under the feature grid and
+              outside .landing-top, which keeps it clear of the two-column
+              height-matching rules that pin the CTA / Bzila cards to 78px. */}
+          <div style={tradeifyCard} className="tradeify-card">
+            <div style={{ minWidth: 0 }}>
+              <div style={tradeifyLabel}>Partner code</div>
+              <div className="tradeify-copy" style={{ color: T.muted, opacity: 0.75, fontSize: 12, lineHeight: 1.4 }}>
+                Funding a Tradeify account? Use this code for the best available offer.
+              </div>
+            </div>
+            <span style={tradeifyCode}>BZILA</span>
           </div>
 
           <a
@@ -383,6 +399,45 @@ const bzilaCard: React.CSSProperties = {
   border: "1px solid rgba(33,158,188,0.22)",
   background: "linear-gradient(180deg, rgba(33,158,188,0.10), rgba(255,255,255,0.02))",
   color: "inherit",
+};
+
+// Tradeify partner code. Orange accent (T.orange) so it reads as a separate,
+// third-party offer rather than another CB Edge action — the cyan family on
+// this page is reserved for things that click through to the product.
+const tradeifyCard: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 14,
+  marginTop: 12,
+  padding: "12px 16px",
+  borderRadius: 12,
+  border: "1px solid rgba(251,133,1,0.24)",
+  background: "linear-gradient(180deg, rgba(251,133,1,0.09), rgba(255,255,255,0.02))",
+};
+
+const tradeifyLabel: React.CSSProperties = {
+  fontWeight: 800,
+  fontSize: 13,
+  letterSpacing: "0.10em",
+  textTransform: "uppercase",
+  color: T.orange,
+  marginBottom: 3,
+};
+
+// The code itself — monospace and boxed so it reads as something to type.
+const tradeifyCode: React.CSSProperties = {
+  flexShrink: 0,
+  padding: "7px 14px",
+  borderRadius: 10,
+  border: "1px solid rgba(251,133,1,0.5)",
+  background: "rgba(251,133,1,0.16)",
+  color: T.orange,
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+  fontSize: 16,
+  fontWeight: 800,
+  letterSpacing: "0.16em",
+  whiteSpace: "nowrap",
 };
 
 const bzilaTag: React.CSSProperties = {

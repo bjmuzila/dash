@@ -699,10 +699,20 @@ function WallTile({ side, wall, hasPrior, symbol }: {
  * off the rows the ladder is drawing.
  *
  * The flip block reports the MIGRATION and the CUSHION as measurements and
- * stops there. It deliberately does not say whether a rising flip is bullish:
- * the two conventions in common use disagree on that, and a dashboard asserting
- * one of them in a sentence is worse than a dashboard reporting the number and
- * letting the reader apply their own.
+ * stops there. DO NOT add an interpretation sentence, and do not colour the
+ * cushion by whether it grew or shrank.
+ *
+ * This is a decision, not an omission. Two conventions are in common use and
+ * they read a rising flip in opposite directions — one has the short-gamma zone
+ * climbing toward spot (more fragile), the other has more of the book below
+ * spot turning supportive. A dashboard that asserts one of them in prose is
+ * worse than one that reports the number, because the reader cannot tell which
+ * convention produced the sentence.
+ *
+ * A one-sided colour is the same assertion in a quieter form: gold-on-shrinking
+ * says "shrinking is the bad direction" without saying it. That is why the
+ * cushion is plain text. The migration value IS highlighted, but symmetrically
+ * — it flags that the level moved, never which way was good.
  */
 function ReadPanel({ a, mode, hasPrior, live, symbol, zeroDte, legsMissing }: {
   a: Analysis; mode: Mode; hasPrior: boolean; live: boolean;
@@ -710,9 +720,6 @@ function ReadPanel({ a, mode, hasPrior, live, symbol, zeroDte, legsMissing }: {
 }) {
   const reg = regimeCopy(a.netTotal, a.prevTotal, hasPrior);
   const regTone = a.netTotal > 0 ? POS : a.netTotal < 0 ? NEG : T.textMuted;
-  const cushionShrank =
-    a.cushionNow != null && a.cushionPrev != null &&
-    Math.abs(a.cushionNow) < Math.abs(a.cushionPrev);
 
   return (
     <div style={{ display: "grid", gap: 10, margin: "0 0 12px" }}>
@@ -776,7 +783,7 @@ function ReadPanel({ a, mode, hasPrior, live, symbol, zeroDte, legsMissing }: {
                 {a.cushionNow != null ? (
                   <span title="Signed distance from spot to the crossing. Positive = spot is above the flip.">
                     spot {pts(a.cushionNow)}
-                    {a.cushionPrev != null ? <span style={{ color: cushionShrank ? T.gold : T.text }}> (was {pts(a.cushionPrev)})</span> : null}
+                    {a.cushionPrev != null ? <span> (was {pts(a.cushionPrev)})</span> : null}
                   </span>
                 ) : null}
               </div>
