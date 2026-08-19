@@ -70,6 +70,10 @@ const nextConfig = {
       // The index.html shells stay no-store; only /assets/* is hashed.
       { source: '/app/assets/:path*', headers: IMMUTABLE },
       { source: '/home3/assets/:path*', headers: IMMUTABLE },
+      // Dashboard v3 (public/v3, built from cbedge-v3/). Without this line its
+      // hashed chunks are served with the default headers and get revalidated
+      // on every load — which quietly destroys the whole point of a warm start.
+      { source: '/v3/assets/:path*', headers: IMMUTABLE },
       // Mirrored company logos (scripts/fetch-ticker-logos.mjs). Content keyed by
       // ticker; a logo change is a redeploy, and the earnings chips fall back to
       // /proxy/ticker-logo on 404 anyway.
