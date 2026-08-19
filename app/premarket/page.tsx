@@ -148,8 +148,14 @@ const CSS = `
    tag hung off the end of the bar ran past the track and over the neighbouring
    column (call wall) or over the strike gutter (put wall). Wide bars carry the
    tag INSIDE, flush to the bar's end; only short bars hang it outside, where
-   there is room by definition. `.inside` also drops the dark plate so the tag
-   reads on the bar's own colour. */
+   there is room by definition. The .inside class also drops the dark plate so
+   the tag reads on the bar's own colour.
+
+   NOTE: never put a backtick in this comment. It lives inside the CSS template
+   literal, so a backtick closes the string early and whatever word follows is
+   parsed as a tagged template on it. That is exactly what broke the production
+   build on 2026-08-19: a backticked .inside here produced the error
+   ".inside is not a function" and failed the /premarket export. */
 .pmk .row .tag{position:absolute;top:-1px;font-size:9.5px;padding:1px 5px;border-radius:4px;white-space:nowrap;letter-spacing:.03em;background:#0d1117;max-width:calc(50% - 8px);overflow:hidden;text-overflow:ellipsis}
 .pmk .row .tag.inside{background:rgba(6,10,16,.55);border-color:transparent!important;color:#fff!important}
 .pmk .spotline,.pmk .flipline{position:absolute;left:60px;right:0;border-top:1px dashed;display:flex;justify-content:flex-end;pointer-events:none}

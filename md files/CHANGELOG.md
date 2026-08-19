@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-08-19 - Fix: /premarket broke the production build (".inside is not a function")
+
+Edited: `app/premarket/page.tsx`.
+
+`docker compose build` failed on the VPS at the Next build step, before anything
+else ran:
+
+    TypeError: "   there is room by definition. ".inside is not a function
+    Export encountered an error on /premarket/page: /premarket, exiting the build.
+
+The CSS for this page lives in a template literal (`const CSS = ...`, lines
+54-216). A comment inside that literal described the tag class by wrapping it in
+backticks. A backtick inside a template literal CLOSES it — so the parser saw the
+CSS-so-far as a finished string, then `.inside` as a property on it, then the
+rest of the comment as a tagged template. The result is a tagged-template call on
+a string, which is perfectly valid syntax (tsc reports zero syntax errors) and
+throws at runtime. That is why it survived typecheck and only died during static
+export.
+
+Fix: the word is spelled out in prose instead of quoted, and the comment now
+carries an explicit warning never to put a backtick there. Reproduced the exact
+production error locally from the original lines 54-216 and confirmed the edited
+version evaluates clean.
+
+Worth remembering as a class of bug: inside a CSS-in-template-literal block,
+backticks are not punctuation, and the failure they cause is a runtime TypeError
+in a build worker rather than anything that looks like a string problem.
+
+
 ## 2026-08-19 - v3 wired to cbedge.net/v3 (owner-only). New cbedge-v3/ app.
 
 Edited: `Dockerfile`, `middleware.ts`, `.dockerignore`. Added: `app/v3/route.ts`,
