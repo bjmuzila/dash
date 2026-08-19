@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-08-19 - /premarket wired to live data (no more placeholders)
+
+`app/premarket/page.tsx` — the page now reads the real feed. Every number that
+was a hardcoded mockup value is gone.
+
+Sources, all shared, none duplicated:
+
+- `useMobileGex("oi-vol")` — the one live-GEX layer (rides `lib/gexSocket`,
+  refcounted, pinned to today's 0DTE). Supplies spot, prev close, gamma flip,
+  call/put wall, total net GEX, ES front, ES−SPX basis and the chain.
+- `useEsCandles(true, 3, 5, false)` — same socket. Overnight high/low and the
+  prior RTH close come off the 5m ES bars (ON window = prior 18:00 ET → 09:30).
+- `useEconCalendar({ withQuote: false })` — today's US High/Medium events plus
+  the two largest earnings names, with the 30-minute staleness fade.
+- `/api/quotes-batch?symbols=/ES,/NQ,VIX` — ES / NQ / VIX day change, 30s.
+- `/api/scanner/market-quality` — **sector heat now comes from Market Quality**
+  (its `sectorBars`, 5-day sector change), not a new fetch. Its `globalScore`
+  also feeds the "Market quality" row. 60s.
+
+Derived client-side from that one chain through `lib/calculations` (so the page
+can never disagree with the GEX chart): per-strike net GEX bars (±12 strikes
+around spot), max pain, the 0DTE magnet, expected move (ATM straddle × 0.85,
+falling back to ATM IV × √(1/252)), DEX / vanna / call-vs-put gamma totals, the
+regime bias and the three scenarios.
+
+- **"vs prior close" needs one session to warm up.** Nothing in the app persists
+  an EOD GEX snapshot, so this page takes its own: once per session between
+  15:40 and 16:10 ET into `localStorage` (`cb-premarket-eod-v1`). Until a
+  snapshot from a PREVIOUS date exists, the net-GEX % change, the strike deltas
+  and "yesterday's flip" render "—" instead of a made-up number.
+- Removed the mockup's "build notes" and "alt strip" sections and the
+  not-wired badge; the header now shows expiry, feed state (LIVE / REST
+  FALLBACK / PAUSED) and the countdown to the open.
+- CHEX tile dropped — charm is not on `ChainRow`. Replaced with a call-vs-put
+  gamma split. MVC row replaced with the overnight range.
+- Added a <1180px stack for the three columns and the six level cards.
+
 ## 2026-08-19 - New page: /premarket (Premarket Prep board)
 
 New customer dashboard page at `/app/premarket` — the pre-open prep board:
