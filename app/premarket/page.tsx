@@ -148,14 +148,8 @@ const CSS = `
    tag hung off the end of the bar ran past the track and over the neighbouring
    column (call wall) or over the strike gutter (put wall). Wide bars carry the
    tag INSIDE, flush to the bar's end; only short bars hang it outside, where
-   there is room by definition. The .inside class also drops the dark plate so
-   the tag reads on the bar's own colour.
-
-   NOTE: never put a backtick in this comment. It lives inside the CSS template
-   literal, so a backtick closes the string early and whatever word follows is
-   parsed as a tagged template on it. That is exactly what broke the production
-   build on 2026-08-19: a backticked .inside here produced the error
-   ".inside is not a function" and failed the /premarket export. */
+   there is room by definition. `.inside` also drops the dark plate so the tag
+   reads on the bar's own colour. */
 .pmk .row .tag{position:absolute;top:-1px;font-size:9.5px;padding:1px 5px;border-radius:4px;white-space:nowrap;letter-spacing:.03em;background:#0d1117;max-width:calc(50% - 8px);overflow:hidden;text-overflow:ellipsis}
 .pmk .row .tag.inside{background:rgba(6,10,16,.55);border-color:transparent!important;color:#fff!important}
 .pmk .spotline,.pmk .flipline{position:absolute;left:60px;right:0;border-top:1px dashed;display:flex;justify-content:flex-end;pointer-events:none}
@@ -185,8 +179,8 @@ const CSS = `
 .pmk .deltas .d .v{font-size:11px;text-align:right}
 
 .pmk .sect{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:4px}
-.pmk .s{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:7px;font-size:11.5px;border:1px solid var(--card);gap:8px;min-width:0}
-.pmk .s > span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pmk .sect .s{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:7px;font-size:11.5px;border:1px solid var(--card);gap:8px;min-width:0}
+.pmk .sect .s > span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pmk .s b{font-weight:600;font-size:11.5px}
 
 .pmk .play{border:1px solid var(--card);border-radius:var(--r);background:var(--panel2);padding:11px 12px;margin-top:10px}
@@ -199,11 +193,15 @@ const CSS = `
 .pmk .scen > div{display:grid;grid-template-columns:16px 1fr;gap:8px;font-size:11.5px;color:var(--dim)}
 .pmk .scen b{color:var(--txt);font-weight:600}
 
+/* SCOPED TO .greeks ON PURPOSE. As a bare `.pmk .g` this also matched the
+   <span class="g"> the one-liner uses for its green highlight, which then
+   inherited the tile's panel background, border and padding — that is what put
+   a black box through the middle of the sentence. */
 .pmk .greeks{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
-.pmk .g{border:1px solid var(--card);border-radius:8px;padding:8px 9px;background:var(--panel2)}
-.pmk .g .n{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2)}
-.pmk .g .v{font-size:15px;font-weight:640;margin-top:2px;letter-spacing:-.02em}
-.pmk .g .m{font-size:10px;color:var(--dim)}
+.pmk .greeks .g{border:1px solid var(--card);border-radius:8px;padding:8px 9px;background:var(--panel2)}
+.pmk .greeks .g .n{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2)}
+.pmk .greeks .g .v{font-size:15px;font-weight:640;margin-top:2px;letter-spacing:-.02em}
+.pmk .greeks .g .m{font-size:10px;color:var(--dim)}
 
 .pmk .footbar{display:flex;justify-content:space-between;align-items:center;padding:9px 18px;border-top:1px solid var(--line);background:#0d1117;gap:10px;flex-wrap:wrap}
 .pmk .footbar .l{font-size:10.5px;color:var(--dim2)}
@@ -472,6 +470,13 @@ export default function PremarketPage() {
       return Number.isFinite(h) ? h * 60 + (m || 0) : -1;
     };
     let hi = -Infinity, lo = Infinity, pdc: number | null = null, pdcTs = -1;
+    // Prior RTH session (09:30–16:00 on the last dated day before today) — the
+    // range the gap is measured against.
+    let pdHi = -Infinity, pdLo = Infinity, pdDate = "";
+    for (const c of sessionCandles) {
+      const d = c.date ?? c.slotKey.slice(0, 10);
+      if (d < today && d > pdDate) pdDate = d;
+    }
     for (const c of sessionCandles) {
       const d = c.date ?? c.slotKey.slice(0, 10);
       const mins = minOf(c.slotKey);
@@ -481,12 +486,37 @@ export default function PremarketPage() {
         if (c.high > hi) hi = c.high;
         if (c.low < lo) lo = c.low;
       }
+      if (d === pdDate && mins >= RTH_OPEN_MIN && mins < RTH_CLOSE_MIN) {
+        if (c.high > pdHi) pdHi = c.high;
+        if (c.low < pdLo) pdLo = c.low;
+      }
       // prior RTH close
       if (d < today && mins < RTH_CLOSE_MIN && c.timestamp > pdcTs) { pdcTs = c.timestamp; pdc = c.close; }
     }
-    if (!Number.isFinite(hi) || !Number.isFinite(lo)) return pdc != null ? { hi: null, lo: null, pdc } : null;
-    return { hi, lo, pdc };
+    const pd = Number.isFinite(pdHi) && Number.isFinite(pdLo) ? { hi: pdHi, lo: pdLo } : null;
+    if (!Number.isFinite(hi) || !Number.isFinite(lo)) {
+      return pdc != null ? { hi: null, lo: null, pdc, pd } : null;
+    }
+    return { hi, lo, pdc, pd };
   }, [sessionCandles, clock]);
+
+  /**
+   * The gap: front ES against the prior RTH close.
+   *
+   * `outside` is the one that changes how you trade it — a gap that opens beyond
+   * yesterday's range has no reference above/below it, so it runs or fails hard;
+   * a gap inside the range is sitting in known territory and fills far more
+   * often. `fillPts` is the distance back to the prior close.
+   */
+  const gap = useMemo(() => {
+    const pdc = overnight?.pdc;
+    if (pdc == null || !(esFut > 0)) return null;
+    const pts = esFut - pdc;
+    const pct = (pts / pdc) * 100;
+    const pd = overnight?.pd ?? null;
+    const outside = pd ? esFut > pd.hi || esFut < pd.lo : null;
+    return { pts, pct, outside, fillPts: -pts, pd };
+  }, [overnight, esFut]);
 
   // ── catalysts for today ────────────────────────────────────────────────────
   const todayEvents = useMemo(() => {
@@ -767,12 +797,20 @@ export default function PremarketPage() {
                         {tag && (() => {
                           // A tagged strike is usually the widest bar in the
                           // window, so hanging the label off its end pushes it
-                          // out of the track. Wide bars take it inside.
+                          // out of the track — over the next column on the call
+                          // side, over the strike gutter on the put side. Wide
+                          // bars take the label INSIDE, flush to the bar's end.
+                          //
+                          // Anchored with left/right only (no transform): the
+                          // bar's outer edge sits (50 − w)% from the far side,
+                          // so pinning the tag's matching edge there right-
+                          // aligns it inside the bar and can never exceed the
+                          // track, whatever w is.
                           const inside = w >= 22;
                           const style: CSSProperties = inside
                             ? pos
-                              ? { left: `calc(50% + ${w}% - 4px)`, transform: "translateX(-100%)" }
-                              : { right: `calc(50% + ${w}% - 4px)`, transform: "translateX(100%)" }
+                              ? { right: `calc(50% - ${w}% + 4px)` }
+                              : { left: `calc(50% - ${w}% + 4px)` }
                             : pos
                               ? { left: `calc(50% + ${w}% + 6px)` }
                               : { right: `calc(50% + ${w}% + 6px)` };
@@ -877,12 +915,27 @@ export default function PremarketPage() {
                   </span>
                 )}
               </span></div>
-              <div className="stat"><span className="l">Yesterday&apos;s flip</span><span className="r mono">
-                {baseline?.flip != null && flip != null
-                  ? <>{fmtPx(baseline.flip, 0)} → <b>{fmtPx(flip, 0)}</b>{" "}
-                    <span className={flip - baseline.flip >= 0 ? "chg-pos" : "chg-neg"}>
-                      {flip - baseline.flip >= 0 ? "↑" : "↓"}{nf(Math.abs(flip - baseline.flip), 0)}
-                    </span></>
+              <div className="stat"><span className="l">Gap vs prior close</span><span className="r mono">
+                {gap ? (
+                  <>
+                    <span className={gap.pts >= 0 ? "chg-pos" : "chg-neg"}>
+                      {gap.pts >= 0 ? "+" : "−"}{Math.abs(gap.pts).toFixed(2)} ({fmtPct(gap.pct)})
+                    </span>{" "}
+                    <span className={`pill ${gap.outside ? "warn" : ""}`}>
+                      {gap.outside == null ? (gap.pts >= 0 ? "gap up" : "gap down")
+                        : gap.outside ? "outside PD range" : "inside PD range"}
+                    </span>
+                  </>
+                ) : "—"}
+              </span></div>
+              <div className="stat"><span className="l">Gap fill target</span><span className="r mono">
+                {gap && overnight?.pdc != null
+                  ? <>{fmtPx(overnight.pdc, 2)} <span className="muted">({nf(Math.abs(gap.fillPts), 0)} pts {gap.fillPts >= 0 ? "up" : "down"})</span></>
+                  : "—"}
+              </span></div>
+              <div className="stat"><span className="l">Prior day range (ES)</span><span className="r mono">
+                {overnight?.pd
+                  ? <>{fmtPx(overnight.pd.lo, 0)} – {fmtPx(overnight.pd.hi, 0)} <span className="muted">({nf(overnight.pd.hi - overnight.pd.lo, 0)})</span></>
                   : "—"}
               </span></div>
 

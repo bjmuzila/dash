@@ -1,66 +1,38 @@
 # Changelog
 
-## 2026-08-19 - Fix: /premarket broke the production build (".inside is not a function")
+## 2026-08-19 - /premarket: black box in the one-liner, wall tags contained
 
-Edited: `app/premarket/page.tsx`.
+`app/premarket/page.tsx`, styling only.
 
-`docker compose build` failed on the VPS at the Next build step, before anything
-else ran:
+- **Black box through "Today's one-liner".** The greek tile rule was written as
+  a bare `.pmk .g`, which also matched the `<span class="g">` the one-liner and
+  the scenario bullets use for their green highlight — so those spans inherited
+  the tile's panel background, border and padding and rendered as boxes mid-
+  sentence. Scoped it to `.pmk .greeks .g` (and its `.n` / `.v` / `.m`
+  children). Sector chips were scoped the same way (`.pmk .sect .s`) for the
+  same reason.
+- **CALL WALL / PUT WALL still overlapping.** The inside-the-bar placement now
+  anchors with `left`/`right` only, no transform: the bar's outer edge sits
+  (50 − w)% from the far side of the track, so pinning the tag's matching edge
+  there right-aligns it inside the bar and it can never exceed the track,
+  whatever the bar width. Short bars (<22% of the half-track) still hang the
+  label outside, where there is room by definition.
 
-    TypeError: "   there is room by definition. ".inside is not a function
-    Export encountered an error on /premarket/page: /premarket, exiting the build.
+## 2026-08-19 - /premarket: "Yesterday's flip" replaced with gap info
 
-The CSS for this page lives in a template literal (`const CSS = ...`, lines
-54-216). A comment inside that literal described the tag class by wrapping it in
-backticks. A backtick inside a template literal CLOSES it — so the parser saw the
-CSS-so-far as a finished string, then `.inside` as a property on it, then the
-rest of the comment as a tagged template. The result is a tagged-template call on
-a string, which is perfectly valid syntax (tsc reports zero syntax errors) and
-throws at runtime. That is why it survived typecheck and only died during static
-export.
+`app/premarket/page.tsx` — Overnight Context.
 
-Fix: the word is spelled out in prose instead of quoted, and the comment now
-carries an explicit warning never to put a backtick there. Reproduced the exact
-production error locally from the original lines 54-216 and confirmed the edited
-version evaluates clean.
-
-Worth remembering as a class of bug: inside a CSS-in-template-literal block,
-backticks are not punctuation, and the failure they cause is a runtime TypeError
-in a build worker rather than anything that looks like a string problem.
-
-
-## 2026-08-19 - v3 wired to cbedge.net/v3 (owner-only). New cbedge-v3/ app.
-
-Edited: `Dockerfile`, `middleware.ts`, `.dockerignore`. Added: `app/v3/route.ts`,
-`cbedge-v3/` (31 files).
-
-v3 now lives **in this repo**, as a sibling to `app-vite/`, `owner-vite/`,
-`budget-vite/` and `recipe-vite/`. It was going to be its own repo, but code
-reaches the VPS only through this one — a separate repo would have needed its own
-clone, compose service and tunnel rule to buy nothing. The isolation that matters
-is the dependency graph: `cbedge-v3/` has its own `package.json` and imports
-nothing from v2.
-
-- `Dockerfile`: builds `cbedge-v3` → `public/v3` every deploy, mirroring the
-  `app-vite` → `public/app` step. Runs **`build:fast`, not `build`** — the full
-  build also runs the brotli budget check, and an over-budget v3 bundle must
-  never be able to block a v2 hotfix from reaching the VPS. Budgets are enforced
-  on the laptop via `npm run check` before pushing.
-- `app/v3/route.ts`: three lines, `serveSpaShell("v3")`. Deliberately NOT a
-  catch-all — a catch-all would swallow `/v3/assets/*.js` and return HTML, which
-  is why every `/app/*` route has its own handler. Each new v3 page needs its own
-  `app/v3/<name>/route.ts` or it 404s on hard refresh.
-- `middleware.ts`: `/^\/v3(\/.*)?$/` added to `OWNER_PATTERNS`, the same
-  treatment `/home3` already gets — a blank rebuild must not be reachable by
-  paying customers. Remove that line when v3 ships.
-- `.dockerignore`: `cbedge-v3/node_modules` and `cbedge-v3/dist` excluded.
-  Listed explicitly rather than as `**/node_modules`, which would silently change
-  what reaches the image for four other Vite apps.
-
-Not deployed — reaches the VPS on the next `push.ps1` + rebuild.
-
-Leftover to delete by hand: `generated/cbedge-v3/` (the first copy, git-ignored).
-
+- Removed the "Yesterday's flip" row.
+- Added three rows in its place, all off the existing 5m ES bars (no new fetch):
+  - **Gap vs prior close** — front ES minus the prior RTH close, in points and
+    percent, with an inside/outside pill. Outside is the one that changes how you
+    trade it: a gap beyond yesterday's range has no reference above or below it,
+    so it runs or fails hard, while a gap inside the range sits in known
+    territory and fills far more often.
+  - **Gap fill target** — the prior close, plus the distance back to it.
+  - **Prior day range (ES)** — yesterday's RTH high/low and its width.
+- `overnight` now also resolves the prior RTH session's high/low (09:30–16:00 on
+  the last dated day before today) to support the inside/outside test.
 
 ## 2026-08-19 - /premarket: card accents removed, borders raised, strike tags contained
 

@@ -63,8 +63,23 @@ RUN rm -rf public/app && cp -r app-vite/dist public/app
 # budget check, which is meant to fail a COMMIT, not a deploy — an over-budget v3
 # bundle must never be able to block a v2 hotfix from reaching the VPS. Run
 # `npm run check` on the laptop before pushing; that is where budgets are enforced.
-RUN cd cbedge-v3 && npm install --no-audit --no-fund && npm run build:fast
-RUN rm -rf public/v3 && cp -r cbedge-v3/dist public/v3
+#
+# PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: cbedge-v3 carries `playwright` as a devDep for
+# scripts/ws-scope-check.mjs (a laptop-only test). `npm install` runs its
+# postinstall, which downloads ~150MB of Chromium — inside a deploy that is at
+# best wasted minutes and at worst a failed build on a slow or restricted network.
+# The image never runs that test, so skip the download. Same reasoning as
+# PUPPETEER_SKIP_DOWNLOAD at the top of this file.
+#
+# `set -eux` + the ls: if cbedge-v3/ ever fails to reach the build context (not
+# committed, excluded by .dockerignore), this says so in one line instead of a
+# bare "exit code: 1" with no output.
+RUN set -eux; \
+    ls -la cbedge-v3/package.json; \
+    cd cbedge-v3 && \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-audit --no-fund && \
+    npm run build:fast
+RUN rm -rf public/v3 && cp -r cbedge-v3/dist public/v3 && ls public/v3
 
 # ---- runtime ----
 FROM base AS runtime
