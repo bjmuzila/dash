@@ -1982,9 +1982,9 @@ const TL_ANCHOR_SLACK = 5;
  * Spot, quantised to a strike that only moves once spot has walked
  * TL_ANCHOR_SLACK rungs away from it. Everything that would make the ladder
  * MOVE — the window slice and the scroll centring — reads this instead of the
- * live spot; the ◀ caret and the level chips keep reading the real one, so the
- * marker still tracks price tick by tick, it is the paper underneath that
- * stops sliding.
+ * live spot; the dashed spot line and the level chips keep reading the real one,
+ * so the marker still tracks price tick by tick — it is the paper underneath
+ * that stops sliding.
  *
  * `resetKey` (symbol / expiry / live-vs-rewound) forces a fresh anchor: those
  * change the axis outright, so carrying the old strike over would centre on a
@@ -2113,9 +2113,9 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null, anchor =
     : rows.reduce<TlRow | null>((best, r) =>
         best == null || Math.abs(r.strike - spot) < Math.abs(best.strike - spot) ? r : best, null);
   const withChg = changes != null;
-  // Strike column is sized for the WIDEST it ever gets — a 5-digit strike, the
-  // ◀ spot caret and two level tags — because the row must stay ONE line. A
-  // narrower column made the tags wrap and a single strike took two rows.
+  // Strike column is sized for the WIDEST it ever gets — a 5-digit strike and
+  // two level tags — because the row must stay ONE line. A narrower column made
+  // the tags wrap and a single strike took two rows.
   const cols = withChg ? "132px 1fr 68px 66px" : "132px 1fr 68px";
 
   // Park the spot row in the MIDDLE of the pane, not at the top of it.
@@ -2158,8 +2158,8 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null, anchor =
   // ── The spot line ──────────────────────────────────────────────────────────
   // The same white rule the chain-ladder replay draws: one line straight across
   // the ladder, from the strike column to the value column, sitting at the price
-  // ITSELF rather than on the nearest rung. The ◀ caret says which strike price
-  // is closest to; the line says where inside that strike it actually is, which
+  // ITSELF rather than on the nearest rung: the lit row says which strike price
+  // is closest to, the line says where inside that strike it actually is, which
   // is the difference between "769, roughly" and "769.9, leaning on 770".
   //
   // Position is DERIVED DURING RENDER, never state fed by an effect: an effect
@@ -2229,7 +2229,7 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null, anchor =
         <div
           style={{
             position: "absolute", left: 0, right: 0, top: spotTop, height: 0,
-            borderTop: `1px solid ${T.text}`,
+            borderTop: `1px dashed ${T.text}`,
             pointerEvents: "none", zIndex: 2,
             // No CSS transition. Replay already eases spot frame by frame;
             // a transition on top of that restarts every frame and the line
@@ -2288,7 +2288,12 @@ function TlLadder({ rows, spot, levels, changes = null, missing = null, anchor =
               <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: isSpot ? 800 : 600, color: isSpot ? T.cyan : T.text, flexShrink: 0 }}>
                 {r.strike.toLocaleString("en-US", { maximumFractionDigits: 2 })}
               </span>
-              {isSpot && <span style={{ fontSize: 9, fontWeight: 800, color: T.cyan, letterSpacing: "0.08em", flexShrink: 0 }}>◀</span>}
+              {/* No spot caret. It was a ◀ at 9px, which the UI font draws as an
+                  unreadable little cyan block sitting where a level tag should
+                  be — and the dashed white line now says the same thing better,
+                  drawn at the PRICE rather than on the nearest rung. The row
+                  still lights cyan, so which strike price is closest to is not
+                  lost. */}
               {/* Named tags, not anonymous dots. Three dot colours is a legend
                   to memorise; "CB" is not. */}
               {marks.map((m) => (

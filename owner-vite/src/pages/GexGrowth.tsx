@@ -612,6 +612,30 @@ type Analysis = {
    * null when either session lacks recorded legs — see ChangeRow.
    */
   legs: { callChg: number; putChg: number; callNow: number; putNow: number } | null;
+  /**
+   * THE HEAVIEST RUNG ON THE BOARD — the largest |netGex| anywhere, and which
+   * landmark (if any) it turns out to be.
+   *
+   * NOT a fourth landmark. On a normal call-dominant book the biggest single
+   * rung IS the call wall, so drawing it as its own tick would put two labels
+   * on one strike most days and imply a distinction that is not there. It is an
+   * ATTRIBUTE instead: the strip rings whichever landmark this lands on. The
+   * fact it adds is one the walls alone cannot give you — whether the wall you
+   * are looking at is THE wall, or merely the best one on its side.
+   *
+   * `at` is "call" / "put" when it coincides with that wall, else null — in
+   * which case the heaviest gamma on the board is a rung neither wall names,
+   * and the strip draws it on its own.
+   */
+  heaviest: { strike: number; now: number; at: "call" | "put" | null } | null;
+  /**
+   * GRAVITY — share of |gamma| sitting below vs above spot.
+   *
+   * Where the book's weight is, which is a different question from where its
+   * walls are: two boards with identical walls can have completely different
+   * mass distributions between them. Sums to 1 (or is null on an empty board).
+   */
+  gravity: { above: number; below: number } | null;
 };
 
 /**
@@ -678,12 +702,36 @@ function analyzeLadder(
     legs = { callNow, putNow, callChg: callNow - callPrev, putChg: putNow - putPrev };
   }
 
+  // Heaviest rung + gravity, both one pass over the same rows.
+  let heaviestRow: ChangeRow | null = null;
+  let absAbove = 0, absBelow = 0;
+  for (const r of rows) {
+    if (r.netGex !== 0 && (!heaviestRow || Math.abs(r.netGex) > Math.abs(heaviestRow.netGex))) heaviestRow = r;
+    if (spot != null) {
+      if (r.strike > spot) absAbove += Math.abs(r.netGex);
+      else if (r.strike < spot) absBelow += Math.abs(r.netGex);
+    }
+  }
+  const cw = spot == null ? null : findWall(rows, spot, "call");
+  const pw = spot == null ? null : findWall(rows, spot, "put");
+  const heaviest = heaviestRow
+    ? {
+      strike: heaviestRow.strike,
+      now: heaviestRow.netGex,
+      at: cw && heaviestRow.strike === cw.strike ? "call" as const
+        : pw && heaviestRow.strike === pw.strike ? "put" as const
+          : null,
+    }
+    : null;
+  const absSides = absAbove + absBelow;
+  const gravity = absSides === 0 ? null : { above: absAbove / absSides, below: absBelow / absSides };
+
   return {
     netTotal, prevTotal, deltaNet, absTot,
-    legs,
+    legs, heaviest, gravity,
     deltaPct: absTot === 0 ? null : deltaNet / absTot,
-    callWall: spot == null ? null : findWall(rows, spot, "call"),
-    putWall: spot == null ? null : findWall(rows, spot, "put"),
+    callWall: cw,
+    putWall: pw,
     flipNow, flipPrev,
     crossingsNow: crossNow.length,
     oneSided: signs.size <= 1,
@@ -955,9 +1003,219 @@ function WallTile({ side, wall, hasPrior, symbol }: {
  * cushion is plain text. The migration value IS highlighted, but symmetrically
  * — it flags that the level moved, never which way was good.
  */
-function ReadPanel({ a, mode, hasPrior, live, symbol, zeroDte, legsMissing }: {
+/**
+ * ── STRUCTURAL RANGE ────────────────────────────────────────────────────────
+ *
+ * Where price sits inside the book's own structure, as two regime zones rather
+ * than four ticks on a line.
+ *
+ * ── WHY ZONES AND NOT LANDMARKS ─────────────────────────────────────────────
+ * The walls and the flip are already numbers in the panel above. What the panel
+ * cannot show is the SHAPE: how much room there is between price and the wall
+ * it is heading for, and which side of the flip that room is on. Width carries
+ * that — a wide DAMPEN band is a genuinely different board from a narrow one
+ * with the same three strikes.
+ *
+ * ── THE ONLY ORDERING THIS CODE MAY ASSUME ──────────────────────────────────
+ * `findWall` filters by side before picking, so putWall < spot < callWall is
+ * guaranteed. NOTHING ELSE IS. In particular:
+ *   • the flip is a zero crossing of the running total and can land anywhere,
+ *     including outside both walls on a one-sided book;
+ *   • the heaviest rung on the board can be below spot (a fat put wall), so it
+ *     cannot be used as a zone boundary either.
+ * An earlier draft laid out three zones as putWall < flip < magnet < callWall
+ * and would have drawn a nonsense picture the first put-heavy session it saw.
+ * The flip is therefore the ONE divider, and everything else is a marker.
+ *
+ * ── ONE-SIDED BOOKS ─────────────────────────────────────────────────────────
+ * When the flip falls outside the span (or there is none), the strip collapses
+ * to a SINGLE band named by the sign of the book and says so. It does not clamp
+ * the divider to the nearest wall: that would draw a boundary at a strike where
+ * nothing happens, and the whole value of the band widths is that they are real.
+ *
+ * ── THE HEAVIEST RUNG IS AN ATTRIBUTE, NOT A LANDMARK ───────────────────────
+ * On a call-dominant book the largest |gamma| rung IS the call wall, so giving
+ * it its own tick would put two labels on one strike most days. It rings the
+ * landmark it lands on instead, and only draws standalone when it is neither
+ * wall — which is exactly when it is telling you something new.
+ */
+const RANGE_COLORS = {
+  /**
+   * Snapped to pass the dataviz six-check validator against this app's panel
+   * surface (#0D1119) in dark mode: lightness band, chroma floor, CVD
+   * separation (worst adjacent ΔE 18.6 protan), normal-vision floor (ΔE 25.0)
+   * and contrast ≥ 3:1 all PASS.
+   *
+   * The obvious vivid choices — #EF4444 / #8B5CF6 / #22D3EE — FAIL the
+   * lightness band on this surface at L 0.77–0.83 against a 0.48–0.67 band,
+   * which is why they bloom and smear on a dark panel. Kept local and named for
+   * the same reason POS/NEG above are: they are an encoding, not chrome, and
+   * the theme has no token that means "put support".
+   */
+  put: "#D54A47",
+  flip: "#8667DB",
+  wall: "#009CB4",
+} as const;
+
+function StructuralRange({ a, spot }: { a: Analysis; spot: number | null }) {
+  const { callWall, putWall, flipNow, heaviest, gravity } = a;
+  // Needs both walls and a spot to have a span at all. One wall means the book
+  // is entirely on one side of price and there is no range to draw.
+  if (spot == null || !callWall || !putWall) return null;
+
+  const lo = putWall.strike, hi = callWall.strike;
+  const span = hi - lo;
+  if (!(span > 0)) return null;
+  const pct = (v: number) => ((v - lo) / span) * 100;
+  const clamp = (n: number) => Math.max(0, Math.min(100, n));
+
+  // The divider only exists if the flip is genuinely inside the span.
+  const flipIn = flipNow != null && flipNow > lo && flipNow < hi;
+  const zones = flipIn
+    ? [
+      { a: lo, b: flipNow as number, lab: "AMPLIFY", c: RANGE_COLORS.put,
+        tip: "Below the flip: dealers are short gamma, so they sell weakness and buy strength. Moves EXTEND." },
+      { a: flipNow as number, b: hi, lab: "DAMPEN", c: RANGE_COLORS.flip,
+        tip: "Above the flip: dealers are long gamma, so they buy weakness and sell strength. Moves COMPRESS." },
+    ]
+    : [{
+      a: lo, b: hi,
+      lab: a.netTotal >= 0 ? "DAMPEN" : "AMPLIFY",
+      c: a.netTotal >= 0 ? RANGE_COLORS.flip : RANGE_COLORS.put,
+      tip: "No gamma flip inside this range — the running total never crosses zero between the walls, so the whole span is one regime.",
+    }];
+  const inZone = zones.find((z) => spot >= z.a && spot < z.b) ?? zones[zones.length - 1];
+
+  // Standalone only when it is neither wall; otherwise the wall wears the ring.
+  //
+  // Also suppressed when it would land on top of a neighbour. The tick labels
+  // are ~9 characters wide and the strip is a few hundred px, so two marks
+  // inside ~7% of the span overlap into an unreadable smear — and the loose
+  // heaviest is the one to drop, because when it is that close to a wall the
+  // wall already tells you where the weight is. It keeps its ★ nowhere in that
+  // case, which is honest: the fact was "this is near the wall", and the wall
+  // is drawn.
+  const MIN_GAP = 0.07;
+  const farFrom = (v: number) => Math.abs(heaviest!.strike - v) / span > MIN_GAP;
+  const heavyLoose = heaviest && heaviest.at == null
+    && heaviest.strike > lo && heaviest.strike < hi
+    && farFrom(lo) && farFrom(hi) && (!flipIn || farFrom(flipNow as number))
+    ? heaviest : null;
+  const ringCall = heaviest?.at === "call";
+  const ringPut = heaviest?.at === "put";
+
+  const tick = (v: number, color: string, cap: string, ring: boolean, tip: string) => (
+    <div
+      key={cap}
+      title={tip}
+      style={{ position: "absolute", left: `${clamp(pct(v))}%`, top: 0, transform: "translateX(-50%)" }}
+    >
+      <div style={{
+        fontFamily: MONO, fontSize: 14, fontWeight: 800, color, textAlign: "center",
+        whiteSpace: "nowrap", lineHeight: 1.2,
+      }}>
+        {ring ? "★ " : ""}{v.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+      </div>
+      <div style={{
+        width: ring ? 4 : 2.5, height: 15, margin: "3px auto 0", borderRadius: 2, background: color,
+        boxShadow: ring ? `0 0 0 2px ${T.panel}, 0 0 9px 1px ${color}` : "none",
+      }} />
+      <div style={{
+        fontFamily: MONO, fontSize: 8.5, fontWeight: 800, letterSpacing: ".1em", color,
+        textAlign: "center", whiteSpace: "nowrap", marginTop: 3,
+      }}>{cap}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ ...tile, display: "grid", gap: 0 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 9 }}>
+        <span style={label}>Structural range</span>
+        <span style={{ fontSize: 11.5 }}>
+          spot sits in <b style={{ color: inZone.c }}>{inZone.lab}</b>
+          {flipIn ? "" : " · no flip in range"}
+        </span>
+        <span style={{ ...label, marginLeft: "auto" }}>
+          {lo.toLocaleString("en-US")} — {hi.toLocaleString("en-US")}
+        </span>
+      </div>
+
+      {/* Zones. flex-grow is the point-span, so the widths are to scale — an
+          evenly-divided strip would be a lie about where the flip sits.
+
+          The spot rule lives INSIDE this wrapper rather than in a zero-height
+          sibling below it: as a sibling it painted behind the zone fills and
+          was invisible against them, which is a bad way to lose the one mark
+          the whole strip is oriented around. */}
+      <div style={{ position: "relative", display: "flex", gap: 2, height: 34 }}>
+        <span
+          title={`Spot ${spot.toLocaleString("en-US", { maximumFractionDigits: 2 })}`}
+          style={{
+            position: "absolute", left: `${clamp(pct(spot))}%`, top: -4, bottom: -4, width: 2,
+            background: T.text, transform: "translateX(-50%)", borderRadius: 1, zIndex: 2,
+            boxShadow: `0 0 8px 1px ${T.text}8c`, pointerEvents: "none",
+          }}
+        />
+        {zones.map((z) => (
+          <div
+            key={z.lab}
+            title={z.tip}
+            style={{
+              flex: z.b - z.a, minWidth: 0, borderRadius: 5,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: `linear-gradient(180deg, ${z.c}9e, ${z.c}3d)`,
+              outline: z === inZone ? `1.5px solid ${T.borderStrong}` : "none",
+              outlineOffset: 1,
+            }}
+          >
+            <span style={{
+              fontFamily: MONO, fontSize: 8.5, fontWeight: 800, letterSpacing: ".08em",
+              color: T.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", padding: "0 4px",
+            }}>{z.lab}</span>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ position: "relative", height: 52, marginTop: 6 }}>
+        {tick(putWall.strike, RANGE_COLORS.put, "PUT SUPP", ringPut,
+          `Largest negative rung below spot${ringPut ? " — and the heaviest gamma on the whole board" : ""}. Where dealer hedging buys into weakness.`)}
+        {flipIn && tick(flipNow as number, RANGE_COLORS.flip, "FLIP", false,
+          "Zero crossing of the cumulative ladder. Above it dealers dampen; below, they amplify.")}
+        {heavyLoose && tick(heavyLoose.strike, T.gold, "HEAVIEST", true,
+          "The largest |gamma| rung on the board — and it is neither wall, so it is pinning weight the walls do not name.")}
+        {tick(callWall.strike, RANGE_COLORS.wall, "CALL WALL", ringCall,
+          `Largest positive rung above spot${ringCall ? " — and the heaviest gamma on the whole board" : ""}. Where dealer hedging sells into strength.`)}
+      </div>
+
+      {gravity ? (
+        <div
+          title="Share of |gamma| below vs above spot. Where the book's WEIGHT is, which is a different question from where its walls are — two boards with identical walls can distribute mass completely differently between them."
+          style={{ marginTop: 2 }}
+        >
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <span style={label}>Gravity</span>
+            <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700 }}>
+              <span style={{ color: POS }}>↑ {(gravity.above * 100).toFixed(0)}%</span>
+              <span style={{ color: T.textMuted }}> / </span>
+              <span style={{ color: NEG }}>{(gravity.below * 100).toFixed(0)}% ↓</span>
+            </span>
+          </div>
+          <div style={{ display: "flex", height: 5, borderRadius: 3, marginTop: 5, gap: 2 }}>
+            <span style={{ width: `${gravity.above * 100}%`, background: POS, borderRadius: 2 }} />
+            <span style={{ width: `${gravity.below * 100}%`, background: NEG, borderRadius: 2 }} />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ReadPanel({ a, mode, hasPrior, live, symbol, zeroDte, legsMissing, spot }: {
   a: Analysis; mode: Mode; hasPrior: boolean; live: boolean;
   symbol: string; zeroDte: ZeroDte | null; legsMissing: boolean;
+  /** Needed by StructuralRange — the walls and the flip are all positions
+      RELATIVE to it, so the strip cannot be drawn without it. */
+  spot: number | null;
 }) {
   const reg = regimeCopy(a.netTotal, a.prevTotal, hasPrior);
   const regTone = a.netTotal > 0 ? POS : a.netTotal < 0 ? NEG : T.textMuted;
@@ -1079,6 +1337,14 @@ function ReadPanel({ a, mode, hasPrior, live, symbol, zeroDte, legsMissing }: {
           </div>
         </div>
       ) : null}
+
+      {/* ── structural range ───────────────────────────────────────────────
+          Sits directly under "which leg moved" because it answers the next
+          question: that block says WHAT changed, this says where price is
+          relative to the structure it changed. Rendered in every mode — unlike
+          the leg block it needs no baseline session, only the current ladder,
+          so it is just as readable on `levels` and on a symbol's first day. */}
+      <StructuralRange a={a} spot={spot} />
 
       {/* ── 0DTE, live only ────────────────────────────────────────────────
           The recorded series is ex-0DTE by design: the sweep runs at 16:05, by
@@ -2183,6 +2449,7 @@ export default function GexGrowth() {
                     <ReadPanel
                       a={analysis} mode={mode} hasPrior={hasPrior} live={showLive}
                       symbol={sel} zeroDte={detail?.zeroDte ?? null} legsMissing={legsMissing}
+                      spot={detailSpot}
                     />
                   ) : null}
 
