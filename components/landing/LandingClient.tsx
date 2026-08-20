@@ -60,23 +60,22 @@ export default function LandingClient() {
         @media (prefers-reduced-motion: reduce) { .fw { animation: none !important; opacity: 1; } }
         .landing-feature { transition: border-color .18s, box-shadow .18s, transform .18s; cursor: pointer; }
         .landing-feature:hover { border-color: rgba(33,158,188,0.45) !important; box-shadow: 0 0 18px rgba(33,158,188,0.25); transform: translateY(-2px); }
-        .bzila-card { transition: border-color .18s, box-shadow .18s, transform .18s; }
-        .bzila-card:hover { border-color: rgba(33,158,188,0.55); box-shadow: 0 0 18px rgba(33,158,188,0.28); transform: translateY(-2px); }
+        .tradeify-card { transition: border-color .18s, box-shadow .18s; }
         /* Column mechanics for the two-up block.
            The receipts strip and the product shot have to read as ONE pair:
            same top edge, same height, same bottom edge. That is done here in
            CSS rather than in the two components, so ReceiptsStrip and
            HeroVideo stay usable elsewhere at their natural sizes.
              1. Each column is a flex column.
-             2. The header row (trial CTA / Bzila card) is pinned to one fixed
-                height in BOTH columns — that is what puts the two cards below
-                them on the same line.
+             2. The header row (trial CTA / Tradeify code card) is pinned to one
+                fixed height in BOTH columns — that is what puts the two cards
+                below them on the same line.
              3. The two cards take flex:1, so they end on the same line too.
                 The hero's 16:9 spacer is collapsed to absolute here; without
                 that it would drive its own height and break the match. */
         .landing-top .landing-col { display: flex; flex-direction: column; min-width: 0; }
         .landing-top .landing-cta,
-        .landing-top .bzila-card { height: 78px; flex: 0 0 78px; margin: 0 0 16px !important; max-width: none !important; }
+        .landing-top .tradeify-card { height: 78px; flex: 0 0 78px; margin: 0 0 16px !important; max-width: none !important; }
         .landing-top .receipts { flex: 1 1 auto; display: flex; flex-direction: column; margin-top: 0 !important; }
         .landing-top .receipts-grid { flex: 1 1 auto; }
         .landing-top .hero-frame { flex: 1 1 auto; margin-bottom: 0 !important; }
@@ -89,7 +88,7 @@ export default function LandingClient() {
           /* Stacked: nothing to match heights WITH, so everything goes back to
              its natural size and the hero gets its aspect ratio back. */
           .landing-top .landing-cta,
-          .landing-top .bzila-card { height: auto; flex: 0 0 auto; padding: 12px 14px !important; }
+          .landing-top .tradeify-card { height: auto; flex: 0 0 auto; padding: 12px 14px !important; }
           .landing-top .receipts,
           .landing-top .hero-frame { flex: 0 0 auto; }
           .landing-top .hero-frame { margin-bottom: 16px !important; }
@@ -201,23 +200,19 @@ export default function LandingClient() {
                 into public/ and this becomes a live capture; until then it holds
                 the frame with the existing still. */}
             <div className="landing-col">
-              {/* Free section — sits directly above the product shot. */}
-              <Link href="/bzila" style={{ ...bzilaCard, textDecoration: "none" }} className="bzila-card">
-                <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                  <span style={bzilaTag}>Free</span>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 800, fontSize: 16, letterSpacing: "0.02em", color: T.text }}>
-                      Bzila
-                    </div>
-                    <div style={{ color: T.muted, opacity: 0.7, fontSize: 12, lineHeight: 1.35 }}>
-                      Free posts, ideas and levels — no account needed.
-                    </div>
+              {/* Tradeify partner code — sits directly above the product shot,
+                  in the slot the free Bzila card used to hold. Badge only: no
+                  link, nothing to click, so it cannot compete with the trial
+                  CTA opposite it. */}
+              <div style={tradeifyCard} className="tradeify-card">
+                <div style={{ minWidth: 0 }}>
+                  <div style={tradeifyLabel}>Tradeify partner code</div>
+                  <div className="tradeify-copy" style={{ color: T.muted, opacity: 0.7, fontSize: 12, lineHeight: 1.35 }}>
+                    Funding an account? Use this code for the best available offer.
                   </div>
                 </div>
-                <span style={{ fontSize: 13, fontWeight: 800, color: T.cyan, whiteSpace: "nowrap" }}>
-                  Open →
-                </span>
-              </Link>
+                <span style={tradeifyCode}>BZILA</span>
+              </div>
 
               <HeroVideo />
             </div>
@@ -238,20 +233,6 @@ export default function LandingClient() {
                 </div>
               </Link>
             ))}
-          </div>
-
-          {/* Tradeify partner code. Badge only — no outbound link, so it never
-              competes with the trial CTA above. Sits under the feature grid and
-              outside .landing-top, which keeps it clear of the two-column
-              height-matching rules that pin the CTA / Bzila cards to 78px. */}
-          <div style={tradeifyCard} className="tradeify-card">
-            <div style={{ minWidth: 0 }}>
-              <div style={tradeifyLabel}>Partner code</div>
-              <div className="tradeify-copy" style={{ color: T.muted, opacity: 0.75, fontSize: 12, lineHeight: 1.4 }}>
-                Funding a Tradeify account? Use this code for the best available offer.
-              </div>
-            </div>
-            <span style={tradeifyCode}>BZILA</span>
           </div>
 
           <a
@@ -385,32 +366,18 @@ const logo: React.CSSProperties = {
   filter: "drop-shadow(0 6px 20px rgba(33,158,188,0.25))",
 };
 
-// Free "Bzila" entry point. Styled like a feature cell but wider and with the
-// accent pulled forward — it is a second destination, not a second CTA, so it
-// stays quieter than the trial button.
-const bzilaCard: React.CSSProperties = {
+// Tradeify partner code — replaced the free "Bzila" card in the right column,
+// directly above the product shot. Orange accent (T.orange) so it reads as a
+// separate, third-party offer rather than another CB Edge action: the cyan
+// family on this page is reserved for things that click through to the product.
+// Not a link, so it stays quieter than the trial button opposite it.
+const tradeifyCard: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
   gap: 12,
   marginBottom: 14,
   padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(33,158,188,0.22)",
-  background: "linear-gradient(180deg, rgba(33,158,188,0.10), rgba(255,255,255,0.02))",
-  color: "inherit",
-};
-
-// Tradeify partner code. Orange accent (T.orange) so it reads as a separate,
-// third-party offer rather than another CB Edge action — the cyan family on
-// this page is reserved for things that click through to the product.
-const tradeifyCard: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 14,
-  marginTop: 12,
-  padding: "12px 16px",
   borderRadius: 12,
   border: "1px solid rgba(251,133,1,0.24)",
   background: "linear-gradient(180deg, rgba(251,133,1,0.09), rgba(255,255,255,0.02))",
@@ -438,19 +405,6 @@ const tradeifyCode: React.CSSProperties = {
   fontWeight: 800,
   letterSpacing: "0.16em",
   whiteSpace: "nowrap",
-};
-
-const bzilaTag: React.CSSProperties = {
-  flexShrink: 0,
-  padding: "3px 8px",
-  borderRadius: 999,
-  border: "1px solid rgba(33,158,188,0.45)",
-  background: "rgba(33,158,188,0.16)",
-  color: T.cyan,
-  fontSize: 11,
-  fontWeight: 800,
-  letterSpacing: "0.08em",
-  textTransform: "uppercase",
 };
 
 // Three across on purpose: six features in two rows instead of three keeps the
