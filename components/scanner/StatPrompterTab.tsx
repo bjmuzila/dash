@@ -184,6 +184,9 @@ const TF_OPT = {
     { value: "5", label: "5 min" },
     { value: "15", label: "15 min" },
     { value: "30", label: "30 min" },
+    // "D" is one bar per SESSION, close-to-close across the overnight gap —
+    // a different series from the intraday ones, not just a coarser one.
+    { value: "D", label: "Daily" },
   ],
 };
 const MISSING = (sym: string): Result => ({
@@ -1550,7 +1553,7 @@ const PROMPTS: Prompt[] = [
     id: "autocorr",
     cat: "Bar stats",
     title: "Autocorrelation, variance ratio & streaks — is this thing trending or reverting?",
-    ask: "The regime question, answered three ways: return autocorrelation at lags 1–20, the variance ratio (>1 trends, <1 reverts), volatility clustering on absolute returns, and what actually happens after N consecutive bars in one direction.",
+    ask: "The regime question, answered three ways: return autocorrelation at lags 1–20, the variance ratio (>1 trends, <1 reverts), volatility clustering on absolute returns, and what actually happens after N consecutive bars in one direction — at 1/5/15/30 minutes or on DAILY bars, where a 'bar' is a whole session and a streak is consecutive up or down closes.",
     controls: [
       SYM_OPT,
       TF_OPT,
@@ -1568,10 +1571,23 @@ const PROMPTS: Prompt[] = [
       const B = bars[(s.sym || "ES") as "ES" | "NQ"];
       if (!B) return MISSING(s.sym || "ES");
       const tf = s.tf || "5";
+      const isD = tf === "D";
       const A = B.auto[tf];
-      if (!A) return MISSING(B.symbol);
-      const head = `${B.symbol} · ${tf}-minute bars · ${B.sessions} sessions (${B.from} → ${B.to}).`;
+      if (!A)
+        return isD
+          ? {
+              headline: `No daily stat book for ${B.symbol} yet.`,
+              rows: [],
+              caveat: `Daily bars were added to the builder after this ${B.symbol} export was written. Rebuild it:  node scripts/build-bar-stats.mjs --sym ${B.symbol} --in "<path-to-${B.symbol}-1min.csv>"  — the daily series is rolled up from the same 1-minute CSV, so nothing else changes.`,
+            }
+          : MISSING(B.symbol);
+      /** one step at this timeframe, in words — "15 min" intraday, "3 days" daily */
+      const span = (steps: number) => (isD ? `${steps} ${steps === 1 ? "day" : "days"}` : `${steps * Number(tf)} min`);
+      const barWord = isD ? "day" : "bar";
+      const head = `${B.symbol} · ${isD ? "daily" : `${tf}-minute`} bars · ${B.sessions} sessions (${B.from} → ${B.to}).`;
       const view = s.view || "streaks";
+      const dailyNote =
+        "Daily returns are close-to-close and INCLUDE the overnight gap — on an RTH-only export that gap is the entire globex session in one number. It is a legitimate daily return but a different series from the intraday ones, so don't compare these numbers against the 5m/15m rows directly.";
 
       if (view === "streaks") {
         // cont at run r = P(reach r+1 | already at r). The RATE column is that
@@ -1581,12 +1597,12 @@ const PROMPTS: Prompt[] = [
         // move ever gets this long.
         let surv = 1;
         return {
-          headline: `${head} RATE = at a run of N, the odds the NEXT bar extends it to N+1. "reach from fresh" = odds a brand-new move ever gets this long (cumulative). 50% extension = a coin flip.`,
+          headline: `${head} RATE = at a run of N, the odds the NEXT ${barWord} extends it to N+1. "reach from fresh" = odds a brand-new move ever gets this long (cumulative). 50% extension = a coin flip.`,
           cols: ["edge vs 50%", "reach from fresh"],
           rows: A.streaks.byRun.map((r) => {
             surv *= r.cont;
             return {
-              label: `${r.run} in a row → ${r.run + 1} in a row`,
+              label: `${r.run} ${isD ? (r.run === 1 ? "up/down day" : "in a row") : "in a row"} → ${r.run + 1} in a row`,
               n: r.n,
               k: Math.round(r.cont * r.n),
               emphasis: Math.abs(r.cont - 0.5) > 0.02,
@@ -1598,15 +1614,18 @@ const PROMPTS: Prompt[] = [
           }),
           verdict:
             "The RATE column answers it directly: at 2 in a row, that's your odds of a 3rd; at 3, your odds of a 4th; and so on. On index futures each step sits within a point or two of 50%, so the streak itself carries almost no directional edge — but 'reach from fresh' still falls off fast because you're multiplying near-coin-flips (≈50% → 25% → 12%…). If a single step is meaningfully off 50, check the bar count before trusting it.",
+          caveat: isD
+            ? `A run here is consecutive UP or DOWN closes and it spans sessions — that's the point of a daily streak. Watch the n column: with ~${B.sessions} sessions there are only a few hundred daily observations total, so the 5-and-6-in-a-row rows are a handful of samples and mean nothing. ${dailyNote}`
+            : undefined,
         };
       }
 
       if (view === "vr") {
         return {
-          headline: `${head} VR(q) = Var(q-bar return) / (q × Var(1-bar return)). Above 1 = trending. Below 1 = mean-reverting. Exactly 1 = random walk.`,
+          headline: `${head} VR(q) = Var(q-${barWord} return) / (q × Var(1-${barWord} return)). Above 1 = trending. Below 1 = mean-reverting. Exactly 1 = random walk.`,
           cols: ["variance ratio", "read"],
           rows: A.vr.map((x) => ({
-            label: `VR over ${x.q} bars (${x.q * Number(tf)} min)`,
+            label: `VR over ${x.q} ${barWord}s (${span(x.q)})`,
             n: B.sessions,
             emphasis: x.v != null && Math.abs(x.v - 1) > 0.05,
             extra: {
@@ -1616,6 +1635,9 @@ const PROMPTS: Prompt[] = [
           })),
           verdict:
             "This is the single most useful number here: it tells you whether to buy breakouts or fade them at this timeframe. A VR near 1 across the board means neither — and that price alone won't give you an edge, so the edge has to come from elsewhere (time of day, positioning, GEX).",
+          caveat: isD
+            ? `Daily VR is the weakest-powered row in this tab: VR over 16 days uses non-overlapping windows, so ${B.sessions} sessions buys you only ~${Math.floor(B.sessions / 16)} independent observations. Treat anything inside 0.9–1.1 as indistinguishable from a random walk here, not as a mild lean. ${dailyNote}`
+            : undefined,
         };
       }
 
@@ -1623,8 +1645,8 @@ const PROMPTS: Prompt[] = [
         headline: `${head} ACF of returns = does direction persist. ACF of |returns| = volatility clustering (does a big bar beget a big bar).`,
         cols: ["ACF returns", "ACF |returns|"],
         rows: A.acf.map((x, i) => ({
-          label: `Lag ${x.lag} (${x.lag * Number(tf)} min back)`,
-          n: B.bars,
+          label: `Lag ${x.lag} (${span(x.lag)} back)`,
+          n: isD ? B.sessions : B.bars,
           emphasis: x.v != null && Math.abs(x.v) > 0.03,
           extra: {
             "ACF returns": x.v != null ? x.v.toFixed(4) : "—",
@@ -1636,7 +1658,9 @@ const PROMPTS: Prompt[] = [
         caveat:
           tf === "1"
             ? "At 1 minute the lag-1 ACF is usually negative because of bid-ask bounce — that's microstructure, not a mean-reversion edge. You cannot trade it through the spread. Look at 5m and 15m instead."
-            : undefined,
+            : isD
+              ? `Daily lags are capped at one-tenth of the sample, so a short export shows fewer than 20 rows on purpose. There is no bid-ask bounce at this horizon, so a negative lag-1 here would be real overnight mean reversion rather than microstructure — but with only ~${B.sessions} returns the noise band is roughly ±${(2 / Math.sqrt(Math.max(1, B.sessions))).toFixed(3)}, so ignore anything smaller. ${dailyNote}`
+              : undefined,
       };
     },
   },

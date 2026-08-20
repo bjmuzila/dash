@@ -171,6 +171,87 @@ function todayETStr(): string {
   return `${m.year}-${m.month}-${m.day}`;
 }
 
+/* ── GEX chart basis (OI + VOL vs VOL only) ──────────────────────────────────
+ * Every live GEX chart on this page (image card, post-generator profile, day-
+ * post visual) can be weighted two ways:
+ *   "oivol" → open interest + volume  (GexChart dataMode "oi-vol")
+ *   "vol"   → volume only             (GexChart dataMode "vol-only")
+ * Premarket the overnight book is still yesterday's OI, so the SPX read opens
+ * on VOL before the 09:30 ET bell. The toggle always wins once clicked. */
+export type ChartBasis = "oivol" | "vol";
+
+const BASIS_DATAMODE: Record<ChartBasis, "oi-vol" | "vol-only"> = {
+  oivol: "oi-vol",
+  vol: "vol-only",
+};
+
+// Minutes past midnight, right now, in ET.
+function etMinutesNow(): number {
+  const p = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(new Date());
+  const g = (k: string) => Number(p.find((x) => x.type === k)?.value ?? 0);
+  return (g("hour") % 24) * 60 + g("minute");
+}
+
+// Premarket = anything before the 09:30 ET cash open.
+function isPremarketET(): boolean {
+  return etMinutesNow() < 9 * 60 + 30;
+}
+
+// SPX premarket defaults to volume-only; everything else to OI + VOL.
+function defaultChartBasis(ticker: string): ChartBasis {
+  return String(ticker || "").toUpperCase() === "SPX" && isPremarketET() ? "vol" : "oivol";
+}
+
+// Two-button OI+VOL / VOL switch. Inline-styled off the page CSS vars so it
+// drops into any of the three toolbars without a scoped stylesheet.
+function BasisToggle({
+  value, onChange, title,
+}: { value: ChartBasis; onChange: (b: ChartBasis) => void; title?: string }) {
+  const btn = (b: ChartBasis, label: string) => (
+    <button
+      key={b}
+      type="button"
+      onClick={() => onChange(b)}
+      aria-pressed={value === b}
+      style={{
+        fontFamily: "var(--sm-mono)", fontSize: 11, fontWeight: 700, letterSpacing: "0.06em",
+        cursor: "pointer", padding: "6px 11px", lineHeight: 1.2,
+        border: "1px solid var(--sm-border)",
+        borderRightWidth: b === "oivol" ? 0 : 1,
+        borderRadius: b === "oivol" ? "6px 0 0 6px" : "0 6px 6px 0",
+        background: value === b ? "var(--cyan)" : "transparent",
+        color: value === b ? "#05060a" : "var(--sm-muted)",
+        transition: "all .12s",
+      }}
+    >{label}</button>
+  );
+  return (
+    <span
+      role="group"
+      aria-label="GEX chart basis"
+      title={title ?? "Weight the chart by open interest + volume, or by volume only."}
+      style={{ display: "inline-flex", alignItems: "center" }}
+    >
+      {btn("oivol", "OI + VOL")}
+      {btn("vol", "VOL")}
+    </span>
+  );
+}
+
+// Basis state + the premarket/ticker default, shared by all three chart sites.
+// Once the user clicks the toggle their pick sticks for the session.
+function useChartBasis(ticker: string): [ChartBasis, (b: ChartBasis) => void] {
+  const [basis, setBasis] = useState<ChartBasis>(() => defaultChartBasis(ticker));
+  const touched = useRef(false);
+  useEffect(() => {
+    if (!touched.current) setBasis(defaultChartBasis(ticker));
+  }, [ticker]);
+  const pick = useCallback((b: ChartBasis) => { touched.current = true; setBasis(b); }, []);
+  return [basis, pick];
+}
+
 // ── Bias from the options-flow regime ────────────────────────────────────────
 // Net GEX sign is the source of truth for the regime label (it must always
 // agree with the net GEX value the card shows). Spot-vs-flip is context only.
@@ -688,6 +769,8 @@ function GexCard({
   kind, updated, today, regimeNeg, form, coreBehavior, ticker,
 }: { kind: CardKind; updated: string; today: string; regimeNeg: boolean; form: FormState; coreBehavior: string; ticker: string }) {
   const dims = CARD_DIMS[kind];
+  // OI+VOL / VOL basis for the live NET GEX chart baked into this card.
+  const [basis, setBasis] = useChartBasis(ticker);
   const [img, setImg] = useState<string | null>(null);
   // "drop" = user-dropped screenshot (gets the toolbar-crop hack); "live" = our
   // own captured profile/heatmap (plain contain-fit, nothing to crop).
@@ -822,6 +905,7 @@ function GexCard({
     <div className="gx-cardwrap">
       <div className="gx-caprow" style={{ width: dims.w }}>
         <div className="gx-caplabel">{kind === "chart" ? "NET GEX chart" : "GEX heatmap"} · {dims.w} × {dims.h}</div>
+        {kind === "chart" && <BasisToggle value={basis} onChange={setBasis} />}
         <button
           type="button"
           className="gx-btn load"
@@ -853,7 +937,7 @@ function GexCard({
           onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files?.[0]) { setLive(null); loadFile(e.dataTransfer.files[0]); } }}>
           {live
             ? (kind === "chart"
-                ? <GexChart chain={live.chain} spotPrice={live.spot} flipPoint={live.flip} transparentBg />
+                ? <GexChart chain={live.chain} spotPrice={live.spot} flipPoint={live.flip} dataMode={BASIS_DATAMODE[basis]} transparentBg />
                 : <Heatmap chain={live.chain} spot={live.spot} intensity={1} />)
             : img && <img src={img} alt="capture" crossOrigin="anonymous" />}
         </div>
@@ -1613,6 +1697,8 @@ function PostGenerator({ form, ticker }: { form: FormState; ticker: string }) {
   const [gexSpot, setGexSpot] = useState(0);
   const [gexFlip, setGexFlip] = useState<number | null>(null);
   const [gexLoading, setGexLoading] = useState(false);
+  // OI+VOL / VOL basis for the attached profile image.
+  const [gexBasis, setGexBasis] = useChartBasis(ticker);
   const [snapState, setSnapState] = useState<"" | "saved" | "copied" | "err">("");
   const chartCaptureRef = useRef<HTMLDivElement>(null);
   // Same corner-picker logic as Screenshot Brander — move the CB Edge logo /
@@ -1802,7 +1888,8 @@ function PostGenerator({ form, ticker }: { form: FormState; ticker: string }) {
         <div className="pg-controls">
           <div className="pg-type-row" style={{ justifyContent: "space-between" }}>
             <span className="pg-type-label">GEX Profile · attach to your post</span>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <BasisToggle value={gexBasis} onChange={setGexBasis} />
               <button type="button" className="pg-type-btn" onClick={loadGex} disabled={gexLoading}>
                 {gexLoading ? "Loading…" : gexChain.length ? "↻ Refresh" : "⤓ Load profile"}
               </button>
@@ -1829,7 +1916,7 @@ function PostGenerator({ form, ticker }: { form: FormState; ticker: string }) {
                 </label>
               </div>
               <div ref={chartCaptureRef} style={{ width: "100%", height: 360, background: "var(--bg0)", borderRadius: 8, overflow: "hidden", marginTop: 10 }}>
-                <GexChart chain={gexChain as ChainRow[]} spotPrice={gexSpot} flipPoint={gexFlip} transparentBg />
+                <GexChart chain={gexChain as ChainRow[]} spotPrice={gexSpot} flipPoint={gexFlip} dataMode={BASIS_DATAMODE[gexBasis]} transparentBg />
               </div>
               <div style={{ marginTop: 14 }}>
                 <TweetMockup
@@ -2011,6 +2098,8 @@ function DayPosts({ form, ticker }: { form: FormState; ticker: string }) {
   // iframe embed does not exist in this standalone owner build). Captured by
   // grabbing the chart canvas directly in capture().
   const [gexLive, setGexLive] = useState<{ chain: ChainRow[]; spot: number; flip: number | null } | null>(null);
+  // OI+VOL / VOL basis for the inline GEX visual.
+  const [gexBasis, setGexBasis] = useChartBasis(ticker);
   const gexInlineRef = useRef<HTMLDivElement>(null);
 
   // GEX now renders via the same-origin /gex-embed iframe (see DAY_VISUALS), so
@@ -2198,6 +2287,7 @@ function DayPosts({ form, ticker }: { form: FormState; ticker: string }) {
             <button key={v.v} type="button" className={`dp-btn${visual === v.v ? " on" : ""}`} onClick={() => setVisual(v.v)}>{v.label}</button>
           ))}
           <span style={{ flex: 1 }} />
+          {visual === "gex" && <BasisToggle value={gexBasis} onChange={setGexBasis} />}
           <button type="button" className="dp-btn" onClick={retrieve}>⤓ Retrieve</button>
           <button type="button" className="dp-btn on" onClick={capture} disabled={capturing || (!iframeOn && !(visual === "gex" && gexLive))}>
             {capturing ? "Capturing…" : "📸 Capture"}
@@ -2207,7 +2297,7 @@ function DayPosts({ form, ticker }: { form: FormState; ticker: string }) {
         {visual === "gex" && gexLive && (
           <div ref={embedBoxRef} className="dp-embed" style={{ height: DP_EMB_H * embScale, background: "#05060a" }}>
             <div ref={gexInlineRef} style={{ width: DP_EMB_W, height: DP_EMB_H, transform: `scale(${embScale})`, transformOrigin: "top left" }}>
-              <GexChart chain={gexLive.chain} spotPrice={gexLive.spot} flipPoint={gexLive.flip} />
+              <GexChart chain={gexLive.chain} spotPrice={gexLive.spot} flipPoint={gexLive.flip} dataMode={BASIS_DATAMODE[gexBasis]} />
             </div>
           </div>
         )}
@@ -3332,7 +3422,7 @@ export default function SocialMedia() {
   // GEX weighting basis for the Explainer read: "oivol" = open interest + volume
   // combined (default, matches the heatmap / greeks), "vol" = volume-only GEX.
   // Re-pulls the daily-input frame on change.
-  const [gexBasis, setGexBasis] = useState<"oivol" | "vol">("oivol");
+  const [gexBasis, setGexBasis] = useState<"oivol" | "vol">(() => defaultChartBasis(ticker));
   const [hydrated, setHydrated] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   // Share-card capture target + transient button status ("" | "copied" | "opened" | "saved" | "error").

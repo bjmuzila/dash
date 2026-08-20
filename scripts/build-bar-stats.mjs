@@ -25,6 +25,9 @@
  * • Returns are LOG returns in basis points, computed close-to-close and NEVER
  *   across a session boundary. The overnight gap is not a 1-minute return and
  *   including it would poison every ACF and time-of-day mean.
+ *   THE ONE EXCEPTION is the DAILY series (auto.D), where the session boundary
+ *   is exactly what the return is measuring — one bar per session, close to
+ *   close, gap included. Daily streaks likewise span sessions.
  * • Every time-of-day cell is the mean over ~N sessions of that clock minute.
  *   Minute-level means on 1m data are TINY (fractions of a bp) and dominated by
  *   noise — the hour table is the one to read. The minute table is kept for
@@ -423,12 +426,14 @@ function varianceRatio(seqs, q) {
   return vq == null ? null : r4(vq / (q * v1));
 }
 
-/** After k consecutive same-direction bars, does the next bar continue? */
-function streaks(tf) {
+/** After k consecutive same-direction bars, does the next bar continue?
+ *  `groups` is a list of bar arrays a run may never cross — one per session for
+ *  the intraday timeframes, and a SINGLE array for the daily series, where the
+ *  run is supposed to span sessions because that is what a daily streak is. */
+function streaksOver(groups, withHour = true) {
   const out = new Map();       // k → { cont, n }
   const byHour = new Map();    // "k|hour" → { cont, n }
-  for (const s of RS[tf]) {
-    const B = s.bars;
+  for (const B of groups) {
     let run = 0, dir = 0;
     for (let i = 0; i < B.length - 1; i++) {
       const d = B[i].c > B[i].o ? 1 : B[i].c < B[i].o ? -1 : 0;
@@ -440,7 +445,10 @@ function streaks(tf) {
       const nd = nx.c > nx.o ? 1 : nx.c < nx.o ? -1 : 0;
       if (nd === 0) continue;
       const cont = nd === dir;
-      for (const [map, key] of [[out, run], [byHour, `${run}|${Math.floor(B[i].min / 60)}`]]) {
+      const targets = withHour
+        ? [[out, run], [byHour, `${run}|${Math.floor(B[i].min / 60)}`]]
+        : [[out, run]];
+      for (const [map, key] of targets) {
         if (!map.has(key)) map.set(key, { cont: 0, n: 0 });
         const c = map.get(key);
         c.n++;
@@ -459,6 +467,43 @@ function streaks(tf) {
   };
 }
 
+const streaks = (tf) => streaksOver(RS[tf].map((s) => s.bars), true);
+
+/* ── DAILY series ───────────────────────────────────────────────────────────
+ * One bar per session, rolled up from the same 1m tape: open = first bar's
+ * open, high/low = session extremes, close = last bar's close, volume summed.
+ *
+ * The daily return is CLOSE-TO-CLOSE ACROSS sessions — the one place in this
+ * file where crossing a session boundary is correct, because the overnight gap
+ * IS part of a daily return. On an RTH-only export that gap is the whole globex
+ * session compressed into one number; on --all-hours it is the 16:00→18:00
+ * break. Both are legitimate daily returns, they are just not the same series,
+ * so don't compare a daily VR from an RTH build against one from a 24h build.
+ *
+ * Streaks span sessions here (3 up days in a row is the whole point), unlike
+ * every intraday timeframe, where a run resets at the open.
+ * ─────────────────────────────────────────────────────────────────────────── */
+const dailyBars = sessions.map((s) => {
+  const B = s.bars;
+  let h = -Infinity, l = Infinity, v = 0;
+  for (const b of B) {
+    if (b.h > h) h = b.h;
+    if (b.l < l) l = b.l;
+    v += b.v;
+  }
+  return { date: s.date, min: 0, o: B[0].o, h, l, c: B[B.length - 1].c, v };
+});
+
+/** the whole daily history as ONE sequence — see the note above */
+function dailyRets() {
+  const r = [];
+  for (let i = 1; i < dailyBars.length; i++) {
+    const x = bp(dailyBars[i - 1].c, dailyBars[i].c);
+    if (Number.isFinite(x)) r.push(x);
+  }
+  return [{ date: "daily", r }];
+}
+
 const auto = {};
 for (const tf of [1, 5, 15, 30]) {
   const seqs = retsBySession(tf);
@@ -469,6 +514,22 @@ for (const tf of [1, 5, 15, 30]) {
     vr: [2, 4, 8, 16].map((q) => ({ q, v: varianceRatio(seqs, q) })),
     streaks: streaks(tf),
   };
+}
+
+{
+  const seqs = dailyRets();
+  const abs = seqs.map((s) => ({ date: s.date, r: s.r.map(Math.abs) }));
+  // ACF lags and VR horizons are capped so a short history can't emit a number
+  // built from three overlapping windows and have it read like a finding.
+  const n = seqs[0].r.length;
+  const maxLag = Math.max(1, Math.min(20, Math.floor(n / 10)));
+  auto.D = {
+    acf: Array.from({ length: maxLag }, (_, i) => ({ lag: i + 1, v: acf(seqs, i + 1) })),
+    acfAbs: Array.from({ length: maxLag }, (_, i) => ({ lag: i + 1, v: acf(abs, i + 1) })),
+    vr: [2, 4, 8, 16].filter((q) => n / q >= 12).map((q) => ({ q, v: varianceRatio(seqs, q) })),
+    streaks: streaksOver([dailyBars], false),
+  };
+  console.log(`  daily: ${dailyBars.length} sessions → ${n} close-to-close returns · ACF to lag ${maxLag} · VR @ ${auto.D.vr.map((x) => x.q).join("/") || "none (too few days)"}`);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -595,5 +656,5 @@ const kb = (fs.statSync(OUT).size / 1024).toFixed(0);
 console.log(`\nwrote ${OUT}  (${kb} KB)`);
 console.log(`  time-of-day: ${tod.hour.length} hourly cells, ${tod.min1.length} minute cells`);
 console.log(`  vol: ranges @ ${TFS.join("/")}m, patterns @ 5/15/30m`);
-console.log(`  auto: ACF 20 lags + VR + streaks @ 1/5/15/30m`);
+console.log(`  auto: ACF 20 lags + VR + streaks @ 1/5/15/30m + daily (${dailyBars.length} sessions)`);
 console.log(`\nNow reload /scanner → Stat Prompter. The "Bar Stats" prompts will light up.`);

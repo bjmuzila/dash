@@ -146,7 +146,13 @@ const bandBodyStyle: React.CSSProperties = { padding: "17px 18px" };
  * that to a quarter without hiding anything: every section is one click away
  * and the header totals stay pinned above the nav.
  */
+// Calendar is FIRST and is the landing pane. The page opens on the month grid —
+// the one view that answers "how did I do?" at a glance — and every other pane
+// (Leaks, the clock, charts, the tables) is one click away from there. Clicking
+// a day still sets the day filter, so the calendar doubles as the entry point
+// into the rest of the page.
 const PANES = [
+  { key: "calendar", label: "Calendar" },
   { key: "leaks", label: "Leaks" },
   { key: "clock", label: "The clock" },
   { key: "charts", label: "Charts" },
@@ -583,9 +589,13 @@ export default function TradingPage() {
   const [modalErr, setModalErr] = useState("");
   const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; });
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  /** Hovered calendar cell. State rather than CSS :hover because the page root
+   *  carries .no-card-lift and the heat cells are inline-styled with no class
+   *  name a stylesheet could reach. */
+  const [hoverDay, setHoverDay] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  /** Which focus pane is on screen. See PANES. */
-  const [pane, setPane] = useState<PaneKey>("leaks");
+  /** Which focus pane is on screen. Opens on the calendar. See PANES. */
+  const [pane, setPane] = useState<PaneKey>("calendar");
 
   // CSV import
   const fileRef = useRef<HTMLInputElement>(null);
@@ -1142,19 +1152,44 @@ export default function TradingPage() {
   }, [visibleTrades]);
 
   // ── Calendar ─────────────────────────────────────────────────────────────────
+  /**
+   * One cell per day, plus the trade count and win rate the heat-grid cell
+   * prints under the dollar figure. Win rate is TRADE-weighted across the day's
+   * rows — a day can hold more than one journal row (two accounts, or a manual
+   * row beside an imported one), and averaging the percentages instead would
+   * let a 1-trade row outvote a 20-trade one.
+   */
   const calCells = useMemo(() => {
     const first = new Date(calMonth.y, calMonth.m, 1);
     const days = new Date(calMonth.y, calMonth.m + 1, 0).getDate();
     const lead = first.getDay();
-    const cells: ({ day: number; date: string; pnl: number | null } | null)[] = Array(lead).fill(null);
+    type CalCell = { day: number; date: string; pnl: number | null; trades: number; winRate: number | null };
+    const cells: (CalCell | null)[] = Array(lead).fill(null);
     for (let d = 1; d <= days; d++) {
       const date = `${calMonth.y}-${String(calMonth.m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
       const dayJ = journals.filter((j) => j.date === date);
-      cells.push({ day: d, date, pnl: dayJ.length ? dayJ.reduce((s, j) => s + j.net_pnl, 0) : null });
+      const trades = dayJ.reduce((s, j) => s + j.trades, 0);
+      cells.push({
+        day: d,
+        date,
+        pnl: dayJ.length ? dayJ.reduce((s, j) => s + j.net_pnl, 0) : null,
+        trades,
+        winRate: dayJ.length && trades > 0
+          ? dayJ.reduce((s, j) => s + (j.win_rate || 0) * j.trades, 0) / trades
+          : null,
+      });
     }
     while (cells.length % 7) cells.push(null);
     return cells;
   }, [calMonth, journals]);
+
+  /** Biggest |P&L| in the month on screen — the scale the cell tint is read
+   *  against, so the heat is relative to THIS month rather than to all time.
+   *  Floored at 1 so a flat month can't divide by zero. */
+  const calMaxAbs = useMemo(
+    () => Math.max(1, ...calCells.map((c) => (c && c.pnl != null ? Math.abs(c.pnl) : 0))),
+    [calCells],
+  );
 
   const monthLabel = new Date(calMonth.y, calMonth.m, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
@@ -1849,7 +1884,125 @@ export default function TradingPage() {
           </div>
         )}
 
-        {/* ── PANE · JOURNAL — the tables + the calendar ─────────────── */}
+        {/* ── PANE · CALENDAR — the landing view ───────────────────────
+            The month grid on its own, first in the nav and the pane the page
+            opens on. It used to sit at the bottom of the Journal pane, four
+            scrolls down, which meant the first thing you saw on a journaling
+            page was a leak card rather than "how did the month go". Clicking a
+            day still sets `selectedDay`, which filters every other pane — so
+            this is the entry point, not a dead-end view. */}
+        {pane === "calendar" && (
+          <Card padding={16}>
+            <div style={{ ...collapseTitleStyle, cursor: "default" }}>
+              <span>Session Calendar</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 16, color: SOFT, fontSize: 14 }}>
+                <span style={{ cursor: "pointer" }} onClick={() => setCalMonth((c) => ({ y: c.m === 0 ? c.y - 1 : c.y, m: c.m === 0 ? 11 : c.m - 1 }))}>&lt;</span>
+                <strong style={{ color: HT.text }}>{monthLabel}</strong>
+                <span style={{ cursor: "pointer" }} onClick={() => setCalMonth((c) => ({ y: c.m === 11 ? c.y + 1 : c.y, m: c.m === 11 ? 0 : c.m + 1 }))}>&gt;</span>
+              </div>
+            </div>
+            {/* HEAT GRID. The dollar figure is the cell — the tint is a second,
+                pre-attentive channel for SIZE so a $2k day and a $60 day don't
+                read alike at a glance, and it's scaled against the month's own
+                biggest day (calMaxAbs) rather than an absolute dollar ramp.
+                Alpha floors at .10 so a small day is still legibly green/red.
+                Dots = trade count (capped at 6 — past that the row is just
+                "busy", and the exact number is on the line below). */}
+            <div className="journal-cal" style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 5 }}>
+              {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+                <div key={d} style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: ".1em", color: HT.muted, textAlign: "center", padding: "2px 0", textTransform: "uppercase" }}>{d}</div>
+              ))}
+              {calCells.map((c, i) => {
+                if (!c) return <div key={i} style={{ minHeight: 78 }} />;
+                const on = selectedDay === c.date;
+                const traded = c.pnl != null;
+                const tone = traded ? (c.pnl! >= 0 ? T.green : T.red) : null;
+                const a = traded ? 0.10 + 0.30 * (Math.abs(c.pnl!) / calMaxAbs) : 0;
+                return (
+                  <div
+                    key={i}
+                    onClick={() => setSelectedDay(on ? null : c.date)}
+                    onMouseEnter={() => setHoverDay(c.date)}
+                    onMouseLeave={() => setHoverDay((h) => (h === c.date ? null : h))}
+                    style={{
+                      minHeight: 78, borderRadius: 9, padding: "7px 9px", cursor: "pointer",
+                      display: "flex", flexDirection: "column", justifyContent: "space-between",
+                      background: tone ? rgba(tone, a) : "rgba(255,255,255,0.02)",
+                      border: `1px solid ${tone ? rgba(tone, 0.35) : HT.border}`,
+                      outline: on ? `2px solid ${HT.cyan}` : "none", outlineOffset: -2,
+                      opacity: traded ? 1 : 0.42,
+                      transform: hoverDay === c.date && traded ? "translateY(-2px)" : "none",
+                      transition: "transform .12s, background .12s, border-color .12s",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: HT.muted, fontVariantNumeric: "tabular-nums" }}>{c.day}</span>
+                      {traded && (
+                        <span style={{ display: "flex", gap: 2 }}>
+                          {Array.from({ length: Math.min(c.trades, 6) }).map((_, n) => (
+                            <i key={n} style={{ width: 3, height: 3, borderRadius: "50%", background: "rgba(255,255,255,0.40)" }} />
+                          ))}
+                        </span>
+                      )}
+                    </div>
+                    {traded ? (
+                      <div>
+                        <div style={{ fontSize: 15, lineHeight: 1.1, fontWeight: 800, color: tone!, fontVariantNumeric: "tabular-nums" }}>{fmt$(c.pnl!)}</div>
+                        <div style={{ fontSize: 9.5, color: HT.muted, letterSpacing: ".04em" }}>
+                          {c.trades}T{c.winRate != null ? ` · ${c.winRate.toFixed(0)}%` : ""}
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 9.5, color: HT.muted }}>—</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", marginTop: 12, fontSize: 10.5, color: HT.muted }}>
+              <span><i style={{ display: "inline-block", width: 9, height: 9, borderRadius: 3, background: T.green, marginRight: 6, verticalAlign: -1 }} />green day</span>
+              <span><i style={{ display: "inline-block", width: 9, height: 9, borderRadius: 3, background: T.red, marginRight: 6, verticalAlign: -1 }} />red day</span>
+              <span><i style={{ display: "inline-block", width: 9, height: 9, borderRadius: 3, background: "rgba(255,255,255,0.10)", marginRight: 6, verticalAlign: -1 }} />no session</span>
+              <span style={{ marginLeft: "auto" }}>Tint = the day&apos;s size against the month&apos;s biggest · dots = trades</span>
+            </div>
+
+            {/* SELECTED-DAY STRIP. The click already filters every other pane;
+                this makes the filter legible without leaving the calendar, so
+                you can step through days and read each one in place. */}
+            {selectedDay && (() => {
+              const d = calCells.find((c) => c && c.date === selectedDay);
+              if (!d || d.pnl == null) return null;
+              const tone = d.pnl >= 0 ? T.green : T.red;
+              const per = d.trades > 0 ? d.pnl / d.trades : null;
+              return (
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap",
+                  marginTop: 14, padding: "11px 14px", borderRadius: 10,
+                  border: `1px solid ${HT.border}`, background: HT.panelBgStrong,
+                }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: HT.cyan }}>
+                    {new Date(`${selectedDay}T12:00:00`).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+                  </span>
+                  {([
+                    ["Net P&L", fmt$(d.pnl), tone],
+                    ["Trades", String(d.trades), HT.text],
+                    ["Win %", d.winRate != null ? `${d.winRate.toFixed(0)}%` : "—", HT.text],
+                    ["Per trade", per != null ? fmt$(per) : "—", per != null && per >= 0 ? T.green : T.red],
+                  ] as [string, string, string][]).map(([lab, val, col]) => (
+                    <span key={lab} style={{ display: "flex", flexDirection: "column", lineHeight: 1.25 }}>
+                      <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: HT.muted }}>{lab}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: col, fontVariantNumeric: "tabular-nums" }}>{val}</span>
+                    </span>
+                  ))}
+                  <button style={{ ...btnStyle(), marginLeft: "auto", padding: "4px 10px", fontSize: 11 }} onClick={() => setSelectedDay(null)}>Clear ✕</button>
+                </div>
+              );
+            })()}
+          </Card>
+        )}
+
+        {/* ── PANE · JOURNAL — the tables ────────────────────────────── */}
         {pane === "journal" && (
           <>
             <div className="journal-tables" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: 22 }}>
@@ -2028,36 +2181,6 @@ export default function TradingPage() {
               )}
             </Card>
 
-            {/* Calendar */}
-            <Card padding={16}>
-              <div style={{ ...collapseTitleStyle, cursor: "default" }}>
-                <span>Session Calendar</span>
-                <div style={{ display: "flex", alignItems: "center", gap: 16, color: SOFT, fontSize: 14 }}>
-                  <span style={{ cursor: "pointer" }} onClick={() => setCalMonth((c) => ({ y: c.m === 0 ? c.y - 1 : c.y, m: c.m === 0 ? 11 : c.m - 1 }))}>&lt;</span>
-                  <strong style={{ color: HT.text }}>{monthLabel}</strong>
-                  <span style={{ cursor: "pointer" }} onClick={() => setCalMonth((c) => ({ y: c.m === 11 ? c.y + 1 : c.y, m: c.m === 11 ? 0 : c.m + 1 }))}>&gt;</span>
-                </div>
-              </div>
-              <div className="journal-cal" style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
-                {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
-                  <div key={d} style={{ fontSize: 12, color: HT.muted, textAlign: "center", padding: 4, textTransform: "uppercase" }}>{d}</div>
-                ))}
-                {calCells.map((c, i) => c ? (
-                  <div key={i}
-                    onClick={() => setSelectedDay(selectedDay === c.date ? null : c.date)}
-                    style={{
-                      minHeight: 52, border: `1px solid ${selectedDay === c.date ? HT.cyan : HT.border}`,
-                      borderRadius: 4, padding: 6, cursor: "pointer",
-                      background: c.pnl != null ? (c.pnl >= 0 ? `${T.green}14` : `${T.red}14`) : "transparent",
-                    }}>
-                    <div style={{ fontSize: 14, color: HT.muted }}>{c.day}</div>
-                    {c.pnl != null && (
-                      <div style={{ fontSize: 12, fontWeight: 700, color: c.pnl >= 0 ? T.green : T.red }}>{fmt$(c.pnl)}</div>
-                    )}
-                  </div>
-                ) : <div key={i} style={{ minHeight: 52 }} />)}
-              </div>
-            </Card>
           </>
         )}
       </div>

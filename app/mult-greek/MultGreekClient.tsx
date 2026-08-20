@@ -4,6 +4,9 @@ import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense, type
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRefreshButton } from "@/hooks/useRefreshButton";
+import { subscribeGex, type GexMessage } from "@/lib/gexSocket";
+import { useWsLifecycle } from "@/hooks/useWsLifecycle";
+import { isCashOpen, isPlausibleBasis } from "@/components/dashboard/es-candles/chartMath";
 import { BoxSnapBtn, BoxDiscordBtn } from "@/components/shared/DataBox";
 import { HOME_THEME as HT, homeShellStyle, LEVEL_COLORS, classicCardAccentStyle, DOCK_THEME } from "@/components/shared/homeTheme";
 import { atMinIntensity, columnWalls, wallAt, wallVisible, INTENSITY_MIN, WALL_RANK, type ColumnWalls } from "@/lib/calculations/heatLevels";
@@ -1421,6 +1424,112 @@ function TickerPanel({
   );
 }
 
+// ── Live SPX from ES ──────────────────────────────────────────────────────────
+// The panel spot came from /api/chains `underlyingPrice`, which only moves when
+// the 15s chain loop runs — and out of cash hours it does not move at all, so
+// the SPX header price and the ATM row froze at the 16:00 print while ES traded
+// all night. This derives SPX from the live ES future with the SAME convention
+// the ES candles chart uses:
+//
+//     basis = ES − SPX   (positive: carry − dividends)   ⇒   SPX = ES − basis
+//
+// Basis ladder (same shape as EsChartCard's `effectiveBasis`, minus the chart-
+// only tiers): live ws `basis` while it is plausible, else the roll-corrected
+// daily anchor from /proxy/es-spx-basis. `isPlausibleBasis` / `isCashOpen` are
+// imported from chartMath rather than re-implemented — one definition of what a
+// real basis is.
+//
+// While cash is open the feed's own SPX print IS the index, so it wins outright
+// and no conversion happens. Only SPX is touched; SPY/QQQ/the 4th slot keep
+// their chain price.
+const MG_SPX_TOPICS = ["spot", "aux"] as const;
+// ES ticks far faster than this page can afford to re-render (every change
+// re-runs computeRows in 4 panels), so frames land in refs and one publish tick
+// promotes them to state.
+const MG_SPX_PUBLISH_MS = 2000;
+const MG_BASIS_REFRESH_MS = 30 * 60_000;
+
+/** Live SPX index price derived from ES, or 0 when it can't be trusted. */
+function useSpxFromEs(enabled: boolean): number {
+  const [spx, setSpx] = useState(0);
+
+  const spotRef = useRef(0);          // feed's SPX cash print
+  const esFutRef = useRef(0);         // front ES future last
+  const wsBasisRef = useRef(0);       // server's live ES − SPX (holds last good)
+  const spotDisplayRef = useRef(0);   // server's own ES-derived display SPX
+  const trustedBasisRef = useRef(0);  // /proxy/es-spx-basis daily anchor
+  const publishedRef = useRef(0);
+
+  // Daily anchor, so a server restart out of hours still has a basis to use.
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const j = await fetch("/proxy/es-spx-basis", { cache: "no-store" }).then(r => r.json());
+        if (cancelled) return;
+        const b = Number(j?.basis);
+        if (isPlausibleBasis(b)) trustedBasisRef.current = b;
+      } catch { /* keep whatever we had */ }
+    };
+    load();
+    const id = setInterval(load, MG_BASIS_REFRESH_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled) return;
+
+    const num = (v: unknown): number => {
+      const n = typeof v === "number" ? v : parseFloat(String(v ?? ""));
+      return Number.isFinite(n) ? n : 0;
+    };
+    const take = (d: Record<string, unknown>) => {
+      const s = num(d.spot);           if (s > 0) spotRef.current = s;
+      const e = num(d.esFut);          if (e > 0) esFutRef.current = e;
+      const sd = num(d.spotDisplay);   if (sd > 0) spotDisplayRef.current = sd;
+      const b = num(d.basis);          if (isPlausibleBasis(b)) wsBasisRef.current = b;
+    };
+
+    const off = subscribeGex({
+      topics: MG_SPX_TOPICS,
+      onMessage: (m: GexMessage) => {
+        const d = (m.data ?? {}) as Record<string, unknown>;
+        // `snapshot` always rides along on connect, scoped or not.
+        if (m.type === "snapshot" || m.type === "spot" || m.type === "aux") take(d);
+      },
+    });
+
+    const publish = () => {
+      const spot = spotRef.current;
+      const es = esFutRef.current;
+
+      let next = 0;
+      if (isCashOpen() && spot > 0) {
+        next = spot;                                   // cash open: the print IS SPX
+      } else {
+        const basis = isPlausibleBasis(wsBasisRef.current)
+          ? wsBasisRef.current
+          : (isPlausibleBasis(trustedBasisRef.current) ? trustedBasisRef.current : 0);
+        if (es > 0 && basis > 0) next = es - basis;    // ES → SPX
+        else if (spotDisplayRef.current > 0) next = spotDisplayRef.current;
+        else next = spot;
+      }
+      if (!(next > 0)) return;
+      next = Math.round(next * 100) / 100;
+      if (next === publishedRef.current) return;
+      publishedRef.current = next;
+      setSpx(next);
+    };
+
+    publish();
+    const id = setInterval(publish, MG_SPX_PUBLISH_MS);
+    return () => { off(); clearInterval(id); };
+  }, [enabled]);
+
+  return enabled ? spx : 0;
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export function MultGreekClient({
@@ -1523,6 +1632,19 @@ export function MultGreekClient({
   // Per-ticker, per-expiry strikes: ticker → expiry → StrikeRow[].
   const [strikes, setStrikes]   = useState<Record<string, Record<string, StrikeRow[]>>>({});
   const [spots, setSpots]       = useState<Record<string, number>>({});
+
+  // SPX's spot, live off the ES future (see useSpxFromEs above). Delayed/static
+  // viewers never open a socket — their frozen snapshot is the whole point.
+  const wsEnabled = useWsLifecycle();
+  const spxFromEs = useSpxFromEs(!isStatic && wsEnabled);
+  // What the page actually renders and computes from: `spots` with SPX replaced
+  // by the ES-derived index price. One object so the header price, the ATM row
+  // and the GEX math can never disagree about where spot is.
+  const effectiveSpots = useMemo<Record<string, number>>(() => {
+    if (!(spxFromEs > 0)) return spots;
+    if (Math.abs((spots.SPX ?? 0) - spxFromEs) < 0.005) return spots;
+    return { ...spots, SPX: spxFromEs };
+  }, [spots, spxFromEs]);
   // Per-ticker weekly EM (DB-backed via /api/levels) for the EM bands.
   const [emByTicker, setEmByTicker] = useState<Record<string, { close: number; em: number } | null>>({});
   // Each ticker's OWN expiration calendar (for its column dates). SPX is also
@@ -1754,7 +1876,7 @@ export function MultGreekClient({
     TICKERS.forEach((ticker) => {
       const cols = colsByTicker[ticker] ?? [];
       const byExp = strikes[ticker] ?? {};
-      const spot = spots[ticker] ?? 0;
+      const spot = effectiveSpots[ticker] ?? 0;
       const front = cols[0]?.date ?? "";
       if (!front) return;
       const computed = computeRows(byExp, cols.map(c => c.date), liveDataRef.current, spot, contractMode);
@@ -1766,7 +1888,7 @@ export function MultGreekClient({
       out.push({ ticker, spot, expiration: computed.cols[0], cb: w.cb, cw: w.cw, pw: w.pw });
     });
     return out;
-  }, [TICKERS, colsByTicker, strikes, spots, contractMode]);
+  }, [TICKERS, colsByTicker, strikes, effectiveSpots, contractMode]);
 
   // Fetch weekly EM for each ticker.
   useEffect(() => {
@@ -2031,7 +2153,7 @@ export function MultGreekClient({
     const open = isMarketOpen();
     const RING_MS = 35 * 60_000;
     TICKERS.forEach(t => {
-      const spot = spots[t] ?? 0;
+      const spot = effectiveSpots[t] ?? 0;
       const byExp = strikes[t];
       if (!(spot > 0) || !byExp) return;
       Object.entries(byExp).forEach(([exp, rows]) => {
@@ -2049,7 +2171,7 @@ export function MultGreekClient({
         });
       });
     });
-  }, [strikes, spots, contractMode, TICKERS]);
+  }, [strikes, effectiveSpots, contractMode, TICKERS]);
 
   // Read the 15m / 30m / open change for one cell (ticker+expiry+strike).
   const getGexChange = useCallback((ticker: string, expiry: string, strike: number) => {
@@ -2515,7 +2637,7 @@ export function MultGreekClient({
             liveData={liveDataRef.current}
             // Rewound, the header spot is the spot RECORDED at that sweep — the
             // live quote would put today's price on a three-day-old ladder.
-            spot={replayOn ? (replayFrameByTicker[ticker]?.spot ?? 0) : (spots[ticker] ?? 0)}
+            spot={replayOn ? (replayFrameByTicker[ticker]?.spot ?? 0) : (effectiveSpots[ticker] ?? 0)}
             contractMode={contractMode}
             intensity={intensity}
             emLevels={emByTicker[ticker] ?? null}

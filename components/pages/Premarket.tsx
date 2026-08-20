@@ -170,7 +170,23 @@ const CSS = `
 .pmk .seg button:last-child{border-right:0}
 .pmk .seg button.on{background:#1e2836;color:var(--txt)}
 
-.pmk .chart{position:relative}
+/* SCROLLING PROFILE.
+   The ladder renders ±60 strikes but only ~22 rows are ever in view, so the
+   panel is the scroll container. Two consequences worth knowing:
+   - .spotline / .flipline are absolutely positioned INSIDE this box, so they
+     scroll with their rows, which is what makes them mean anything.
+   - overscroll-behavior:contain stops a flick at the end of the ladder from
+     scrolling the whole page behind it. */
+.pmk .chart{position:relative;max-height:440px;overflow-y:auto;overscroll-behavior:contain;
+  scrollbar-width:thin;scrollbar-color:#33404f transparent;padding-right:2px}
+.pmk .chart::-webkit-scrollbar{width:8px}
+.pmk .chart::-webkit-scrollbar-thumb{background:#2b3745;border-radius:4px}
+.pmk .chart::-webkit-scrollbar-thumb:hover{background:#3b4a5c}
+.pmk .chart::-webkit-scrollbar-track{background:transparent}
+.pmk .recenter{position:absolute;right:10px;bottom:8px;z-index:3;font:inherit;font-size:10px;
+  letter-spacing:.06em;text-transform:uppercase;color:var(--dim);cursor:pointer;
+  background:rgba(13,17,23,.92);border:1px solid var(--line2);border-radius:6px;padding:3px 8px}
+.pmk .recenter:hover{color:var(--txt);border-color:#4a5b70}
 .pmk .row{display:grid;grid-template-columns:52px 1fr;align-items:center;height:19px;gap:8px}
 .pmk .row .k{font-size:10.5px;text-align:right;color:var(--dim)}
 .pmk .row.key .k{color:var(--txt);font-weight:600}
@@ -454,24 +470,45 @@ export default function Premarket() {
       .sort((a, b) => a.strike - b.strike);
   }, [chain, spot]);
 
-  /** The ~25 strikes around spot — what actually matters for the open. */
-  const bars = useMemo(() => {
-    if (!perStrike.length) return [];
-    const idx = perStrike.reduce(
+  /**
+   * TWO windows around spot, deliberately different sizes.
+   *
+   * `nearBars` (±12) is the ~25 strikes that decide the open. It is what the bar
+   * WIDTHS are scaled against and where the 0DTE magnet is looked for — both of
+   * those must keep meaning what they meant when the chart showed 25 rows, or a
+   * single monster strike 200 points out would flatten every bar near the money
+   * and steal the magnet tag.
+   *
+   * `bars` (±60) is what actually RENDERS. The panel scrolls, so the extra rows
+   * cost nothing until you go looking for them, and the walls almost always sit
+   * outside ±12 — which is exactly when you want to scroll to one.
+   */
+  const NEAR_HALF = 12;
+  const VIEW_HALF = 60;
+
+  const spotIdx = useMemo(() => {
+    if (!perStrike.length) return -1;
+    return perStrike.reduce(
       (b, r, i) => (Math.abs(r.strike - spot) < Math.abs(perStrike[b].strike - spot) ? i : b), 0);
-    const half = 12;
-    const lo = Math.max(0, idx - half);
-    const hi = Math.min(perStrike.length, idx + half + 1);
-    return perStrike.slice(lo, hi).slice().reverse(); // high strike at the top
   }, [perStrike, spot]);
+
+  const windowAt = useCallback((half: number) => {
+    if (spotIdx < 0) return [];
+    const lo = Math.max(0, spotIdx - half);
+    const hi = Math.min(perStrike.length, spotIdx + half + 1);
+    return perStrike.slice(lo, hi).slice().reverse();   // high strike at the top
+  }, [perStrike, spotIdx]);
+
+  const nearBars = useMemo(() => windowAt(NEAR_HALF), [windowAt]);
+  const bars = useMemo(() => windowAt(VIEW_HALF), [windowAt]);
 
   const maxPain = useMemo(() => computeMaxPain(chain), [chain]);
 
-  /** 0DTE magnet = the biggest absolute per-strike GEX in the window. */
+  /** 0DTE magnet = the biggest absolute per-strike GEX in the NEAR window. */
   const magnet = useMemo(() => {
-    if (!bars.length) return null;
-    return bars.reduce((b, r) => (Math.abs(r.net) > Math.abs(b.net) ? r : b), bars[0]);
-  }, [bars]);
+    if (!nearBars.length) return null;
+    return nearBars.reduce((b, r) => (Math.abs(r.net) > Math.abs(b.net) ? r : b), nearBars[0]);
+  }, [nearBars]);
 
   const wallGex = useMemo(() => {
     const at = (k: number | null | undefined) =>
@@ -693,12 +730,53 @@ export default function Premarket() {
     return (ov / (emHi - emLo)) * 100;
   }, [emLo, emHi, callWall, putWall]);
 
-  const maxP = Math.max(1, ...bars.filter((b) => b.net > 0).map((b) => b.net));
-  const maxN = Math.max(1, ...bars.filter((b) => b.net < 0).map((b) => -b.net));
+  // Scaled on the NEAR window, not the scrolled one — see the bars comment.
+  const maxP = Math.max(1, ...nearBars.filter((b) => b.net > 0).map((b) => b.net));
+  const maxN = Math.max(1, ...nearBars.filter((b) => b.net < 0).map((b) => -b.net));
   const bigCut = Math.max(maxP, maxN) * 0.55;
 
   const spotStrike = nearestStrike(bars.map((b) => b.strike), spot);
   const flipStrike = flip ? nearestStrike(bars.map((b) => b.strike), flip) : null;
+  /**
+   * Keep spot in view without fighting the user. The panel centres on the spot
+   * row while it is "pinned" — the state it loads in and returns to via the
+   * button — and un-pins the moment the user scrolls it themselves, so reading
+   * the 7,900 wall is never yanked back to the money by the next frame.
+   * `progScrollRef` marks our own scrollTo writes so the onScroll they fire is
+   * not mistaken for the user's hand.
+   */
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const pinnedRef = useRef(true);
+  const progScrollRef = useRef(false);
+  const [pinned, setPinned] = useState(true);
+
+  const centerOnSpot = useCallback(() => {
+    const el = chartRef.current;
+    if (!el) return;
+    const i = bars.findIndex((b) => b.strike === spotStrike);
+    if (i < 0) return;
+    progScrollRef.current = true;
+    el.scrollTop = Math.max(0, i * 19 + 9.5 - el.clientHeight / 2);
+    // The scroll event lands on the next frame, so the flag is cleared there.
+    requestAnimationFrame(() => { progScrollRef.current = false; });
+  }, [bars, spotStrike]);
+
+  useEffect(() => {
+    if (!pinnedRef.current) return;
+    centerOnSpot();
+  }, [centerOnSpot]);
+
+  const onChartScroll = useCallback(() => {
+    if (progScrollRef.current) return;
+    if (pinnedRef.current) { pinnedRef.current = false; setPinned(false); }
+  }, []);
+
+  const repin = useCallback(() => {
+    pinnedRef.current = true;
+    setPinned(true);
+    centerOnSpot();
+  }, [centerOnSpot]);
+
   const rowTop = (strike: number | null) => {
     if (strike == null) return null;
     const i = bars.findIndex((b) => b.strike === strike);
@@ -1034,10 +1112,13 @@ export default function Premarket() {
             <div className="col">
               <div className="colhead">
                 <h3>GEX Profile by Strike</h3>
-                <span className="tiny">{isZeroDte ? "0DTE" : "front"} · OI + Vol · {bars.length} strikes</span>
+                <span className="tiny">
+                  {isZeroDte ? "0DTE" : "front"} · OI + Vol · {bars.length} strikes · scroll
+                </span>
               </div>
 
-              <div className="chart" style={{ position: "relative" }}>
+              <div style={{ position: "relative" }}>
+              <div className="chart" ref={chartRef} onScroll={onChartScroll}>
                 {bars.length === 0 && (
                   <div style={{ padding: "40px 0", textAlign: "center", color: "var(--dim)", fontSize: 12 }}>
                     Waiting for the chain…
@@ -1098,6 +1179,10 @@ export default function Premarket() {
                     <span>FLIP {fmtPx(flip, 0)}</span>
                   </div>
                 )}
+              </div>
+              {!pinned && bars.length > 0 && (
+                <button type="button" className="recenter" onClick={repin}>⤒ back to spot</button>
+              )}
               </div>
               <div className="axis">
                 <span>{fmtUsd(-maxN, false)}</span><span>0</span><span>{fmtUsd(maxP, false)}</span>

@@ -1,5 +1,148 @@
 # Changelog
 
+## 2026-08-20 (e) - Stat Prompter: Daily timeframe on the autocorrelation / VR / streaks prompt
+
+Edited: `components/scanner/StatPrompterTab.tsx`, `scripts/build-bar-stats.mjs`.
+
+The "Autocorrelation, variance ratio & streaks - is this thing trending or
+reverting?" prompt (Bar Stats) now has **Daily** in its Timeframe dropdown,
+alongside 1 / 5 / 15 / 30 min.
+
+- **Builder (`build-bar-stats.mjs`)** rolls the same 1-minute CSV up to one bar
+  per session (open = first bar's open, high/low = session extremes, close =
+  last bar's close, volume summed) and writes it as `auto.D` in
+  `public/data/bars-<SYM>.json`. No new input file - it is the existing tape.
+- **Daily returns cross the session boundary on purpose.** Every intraday
+  series in that script refuses to pair across sessions; the daily series is
+  the one exception, because the overnight gap *is* part of a close-to-close
+  daily return. Documented in the file's methodology header so the next reader
+  doesn't "fix" it.
+- **Daily streaks also span sessions** - 3 up days in a row is the point.
+  `streaks(tf)` was generalised to `streaksOver(groups, withHour)`; intraday
+  passes one group per session, daily passes a single group and skips the
+  by-hour breakdown (meaningless at this horizon).
+- **Sample-size guards:** daily ACF lags are capped at one-tenth of the sample
+  (so a short export shows fewer than 20 rows instead of 20 rows of noise), and
+  a VR horizon is only emitted if there are >= 12 non-overlapping windows.
+- **UI units follow the timeframe.** VR/ACF row labels read "3 days" instead of
+  a NaN minute count, "bar" becomes "day" in the copy, the ACF `n` column shows
+  sessions rather than 1-minute bars, and each view gains a daily-specific
+  caveat (gap inclusion, the ~+/-2/sqrt(N) ACF noise band, and how few
+  independent observations a 16-day VR actually has).
+- **Graceful on stale data:** a `bars-<SYM>.json` built before this change has
+  no `auto.D`, so picking Daily shows a "rebuild with this command" note rather
+  than the generic "no bar stats" one.
+
+**Action required to see numbers:** rebuild the stat book -
+`node scripts/build-bar-stats.mjs --sym ES --in "<path-to-ES-1min.csv>"`
+(add `--all-hours` for the globex build). Nothing else changes in the output.
+
+## 2026-08-20 (d) - Multi Greek: SPX spot/ATM now derived from ES
+
+Edited: `app/mult-greek/MultGreekClient.tsx`.
+
+The SPX panel's header price and ATM row came from `/api/chains`
+`underlyingPrice`, which only moves when the 15s chain loop runs - and out of
+cash hours does not move at all. SPX sat at the 16:00 print all night while ES
+traded.
+
+- **New `useSpxFromEs()` hook** (local to the page). Subscribes to the shared
+  `/ws/gex` socket with `topics: ["spot", "aux"]` and derives SPX from the live
+  ES future using the repo's standard convention: `basis = ES - SPX`, so
+  `SPX = ES - basis`.
+- **Basis ladder**, same shape as `EsChartCard`'s `effectiveBasis` minus the
+  chart-only tiers: live ws `basis` (server holds the last good one when one leg
+  goes stale) -> the roll-corrected daily anchor from `/proxy/es-spx-basis`
+  (polled every 30 min) -> server `spotDisplay` -> raw `spot`.
+- **Cash hours are untouched.** While `isCashOpen()` and the feed has an SPX
+  print, that print IS the index and wins outright - no conversion.
+- `isPlausibleBasis` / `isCashOpen` are imported from
+  `components/dashboard/es-candles/chartMath` rather than re-implemented, so
+  there is one definition of what a real basis is.
+- **Only SPX is touched.** SPY / QQQ / the 4th slot keep their chain price. A
+  new `effectiveSpots` memo (`spots` with SPX overridden) is what the header,
+  the ATM row, `strikeGex`, the GEX-history sampler and the level snapshot all
+  read, so they can never disagree about where spot is.
+- **Render cost bounded:** ES frames land in refs; one 2s publish tick promotes
+  the value to state, and only when the 2dp value actually changed.
+- Delayed/static viewers and replay mode are unaffected - static never opens a
+  socket, replay still renders each frame's recorded spot.
+
+## 2026-08-20 (c) - Social Media: GEX chart basis toggle (OI + VOL / VOL)
+
+Edited: `owner-vite/src/pages/SocialMedia.tsx`.
+
+Every live GEX chart on owner.cbedge.net -> Social Media can now be weighted
+two ways, and SPX opens on volume-only before the bell.
+
+- **New `BasisToggle`** (OI + VOL | VOL) + a `useChartBasis(ticker)` hook, both
+  local to `SocialMedia.tsx`. The toggle maps to the `GexChart` `dataMode` prop
+  that already existed (`"oi-vol"` / `"vol-only"`), so no chart or calc code
+  changed - `owner-vite/src/gex/GexChart.tsx` and `calc.ts` are untouched.
+- **Wired into all three chart sites:** the GEX Image Card ("Live GEX profile",
+  chart card only - the heatmap has no basis), the Post Generator's attached
+  GEX profile, and the Day Posts inline GEX visual. Each keeps its own pick.
+- **Premarket default:** `defaultChartBasis()` returns `"vol"` when the ticker
+  is SPX and it is before 09:30 ET, otherwise `"oivol"`. Rationale: overnight
+  the OI leg is still yesterday's book, so premarket the volume leg is the only
+  fresh signal. After the bell it reverts to OI + VOL.
+- The default re-evaluates when the ticker changes, but **only until the user
+  clicks the toggle** - a manual pick sticks for the session.
+- The Explainer tab's existing `gexBasis` (which re-pulls `/api/social-media/
+  daily-input`) now seeds from the same `defaultChartBasis()` rule instead of
+  hardcoded `"oivol"`, so the two surfaces agree premarket. Its toggle is
+  unchanged.
+
+## 2026-08-20 (b) - Calendar pane: Option A (heat grid) built
+
+Edited: `components/pages/Trading.tsx`.
+
+Picked from the four mockups in `generated/2026-08-20-journal-calendar-options.html`.
+The Calendar pane's grid is now the heat grid, replacing the flat 52px cells.
+
+- **Tint = size.** Cell background is the day's tone at `0.10 + 0.30 *
+  (|pnl| / calMaxAbs)`, so a $2k day and a $60 day no longer read alike.
+  `calMaxAbs` is the biggest |P&L| in the MONTH ON SCREEN — the heat is
+  relative to that month, not to an absolute dollar ramp, and it re-scales as
+  you page. Floored at 1 so a flat month can't divide by zero; alpha floors at
+  .10 so a small day is still legibly green/red.
+- **Cells** are 78px, radius 9: day number + trade dots on top (capped at 6),
+  P&L at 15px/800 and `{n}T · {win}%` beneath. Untraded days drop to 0.42
+  opacity with an em dash — present, but not competing.
+- `calCells` now carries `trades` and `winRate`. Win rate is **trade-weighted**
+  across the day's rows (a day can hold two accounts, or a manual row beside an
+  imported one) — averaging the percentages would let a 1-trade row outvote a
+  20-trade one.
+- **Selected-day strip** under the grid: date, Net P&L, Trades, Win %, Per
+  trade, Clear. The click already filtered every other pane; this makes the
+  filter readable without leaving the calendar.
+- Hover lift is `hoverDay` state, not CSS `:hover` — the page root carries
+  `.no-card-lift` and the cells are inline-styled with no class name a
+  stylesheet can reach.
+- Colors come from `T.green` / `T.red` through the existing local `rgba()`
+  helper (previously dead code). No new hex literals.
+
+## 2026-08-20 (a) - Trade journal opens on the calendar
+
+Edited: `components/pages/Trading.tsx`.
+Added: `generated/2026-08-20-journal-calendar-options.html` (mockup, not wired).
+
+The journaling page (`/app/trading`) opened on the **Leaks** pane, and the
+Session Calendar sat at the bottom of the **Journal** pane — four scrolls down.
+The first thing a journaling page shows should be the month, not a leak card.
+
+- New **Calendar** pane, first in `PANES`, and the page's default (`useState<PaneKey>("calendar")`).
+- The calendar `Card` moved out of the Journal pane into that pane on its own;
+  cells grew from 52px to 72px and the P&L figure from 12px to 14px now that the
+  grid is not competing with three tables above it.
+- Journal pane keeps By Account / Session vs Targets / Journal Log / Trades.
+- Clicking a day still sets `selectedDay`, which filters every other pane — the
+  calendar is the entry point into the page, not a dead-end view.
+
+Mockup with four calendar designs (heat grid / ledger + weekly totals / column
+cells / chips) rendered to `generated/` for a design pick. None of them are wired
+into the page yet — the pane above still uses the existing grid.
+
 ## 2026-08-19 (n) - Structural Range: GEX % replaces Gravity
 
 Edited: `owner-vite/src/pages/GexGrowth.tsx`.

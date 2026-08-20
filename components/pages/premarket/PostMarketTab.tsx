@@ -690,13 +690,19 @@ export default function PostMarketTab(p: PostMarketProps) {
     [openScale.ok, openByStrikeRaw],
   );
 
-  /** ±12 strikes around spot, high first — same window the profile chart uses. */
-  const evBars = useMemo(() => {
+  /**
+   * Same two-window rule as the premarket profile: ±12 sets the bar SCALE (so a
+   * monster strike far from the money cannot flatten everything near it), ±60
+   * renders and the panel scrolls.
+   */
+  const evWindow = useCallback((half: number) => {
     if (!perStrike.length || !(spot > 0)) return [];
     const idx = perStrike.reduce(
       (b, r, i) => (Math.abs(r.strike - spot) < Math.abs(perStrike[b].strike - spot) ? i : b), 0);
-    return perStrike.slice(Math.max(0, idx - 12), Math.min(perStrike.length, idx + 13)).slice().reverse();
+    return perStrike.slice(Math.max(0, idx - half), Math.min(perStrike.length, idx + half + 1)).slice().reverse();
   }, [perStrike, spot]);
+  const evNear = useMemo(() => evWindow(12), [evWindow]);
+  const evBars = useMemo(() => evWindow(60), [evWindow]);
 
   const strikeDeltas = useMemo(() => {
     if (!openByStrike.size) return [];
@@ -986,7 +992,7 @@ export default function PostMarketTab(p: PostMarketProps) {
     accRows.length ? `${accRows.filter(pick).length} / ${accRows.length}` : "—";
 
   // ── render helpers ─────────────────────────────────────────────────────────
-  const maxAbsBar = Math.max(1, ...evBars.map((b) => Math.abs(b.net)));
+  const maxAbsBar = Math.max(1, ...evNear.map((b) => Math.abs(b.net)));
   const openTag = (strike: number): { text: string; color: string } | null => {
     if (callWall != null && strike === callWall) return { text: "CALL WALL", color: "var(--neg)" };
     if (putWall != null && strike === putWall) return { text: "PUT WALL", color: "var(--pos)" };
@@ -1167,6 +1173,7 @@ export default function PostMarketTab(p: PostMarketProps) {
 
         <div className="body" style={{ gridTemplateColumns: "1.35fr 1fr" }}>
           <div className="col">
+            <div className="chart">
             {evBars.length === 0 && (
               <div style={{ padding: "30px 0", textAlign: "center", color: "var(--dim)", fontSize: 12 }}>
                 Waiting for the chain…
@@ -1207,6 +1214,7 @@ export default function PostMarketTab(p: PostMarketProps) {
                 </div>
               );
             })}
+            </div>
           </div>
 
           <div className="col">
@@ -1234,13 +1242,13 @@ export default function PostMarketTab(p: PostMarketProps) {
             })}
 
             <div className="colhead" style={{ marginTop: 14 }}><h3>Δ GEX by strike</h3><span className="tiny">green = gamma added</span></div>
-            {evBars.length > 0 && openByStrike.size > 0 ? (
+            {evNear.length > 0 && openByStrike.size > 0 ? (
               <>
-                <div className="heat" style={{ gridTemplateColumns: `repeat(${evBars.length}, 1fr)` }}>
-                  {evBars.slice().reverse().map((b) => {
+                <div className="heat" style={{ gridTemplateColumns: `repeat(${evNear.length}, 1fr)` }}>
+                  {evNear.slice().reverse().map((b) => {
                     const o = openByStrike.get(b.strike);
                     const d = o == null ? 0 : b.net - o;
-                    const maxD = Math.max(1, ...evBars.map((x) => {
+                    const maxD = Math.max(1, ...evNear.map((x) => {
                       const ox = openByStrike.get(x.strike);
                       return ox == null ? 0 : Math.abs(x.net - ox);
                     }));
@@ -1249,9 +1257,9 @@ export default function PostMarketTab(p: PostMarketProps) {
                   })}
                 </div>
                 <div className="heatx">
-                  <span>{fmtPx(evBars[evBars.length - 1]?.strike)}</span>
+                  <span>{fmtPx(evNear[evNear.length - 1]?.strike)}</span>
                   <span>{fmtPx(spot)}</span>
-                  <span>{fmtPx(evBars[0]?.strike)}</span>
+                  <span>{fmtPx(evNear[0]?.strike)}</span>
                 </div>
               </>
             ) : (
