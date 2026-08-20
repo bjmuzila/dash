@@ -26,6 +26,15 @@
  *                               is the newest NON-WEEKEND day present, not
  *                               etDayKey(now) — the recorder has no market-hours
  *                               gate and rewrites a frozen copy all weekend).
+ *   /proxy/walls?date&symbol=SPX
+ *                               the SAVED grade. server-v2/walls-recorder.js
+ *                               captures SPX's call wall / put wall / CORE at
+ *                               09:29 and every 15 min to 16:00, writes only on
+ *                               a change, and classifies every touch four slots
+ *                               later (reject / break / pin / new wall / …). The
+ *                               scorecard reads that verdict instead of inventing
+ *                               its own, exactly like /level-log; the derived
+ *                               grade stays underneath as the fallback.
  *   /api/expirations + /api/chains
  *                               the ONE thing that needs a second chain: tomorrow's
  *                               structure cannot be derived from today's expiring
@@ -92,9 +101,13 @@ export const POSTMARKET_CSS = `
 .pmk .scorecard{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
 .pmk .sc{position:relative;border:1px solid var(--card);border-radius:var(--r);background:var(--panel2);
   padding:10px 11px 11px;overflow:hidden}
-.pmk .sc::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--line2)}
-.pmk .sc.ok::before{background:var(--pos)} .pmk .sc.bad::before{background:var(--neg)}
-.pmk .sc.warn::before{background:var(--amber)} .pmk .sc.vio::before{background:var(--violet)}
+/* The accent is an ELEMENT, not a ::before with tone classes. The tone classes
+   only ever fired when the grade resolved, so a card whose level had no verdict
+   yet drew a grey edge and the row read as unstyled. Every card now carries its
+   LEVEL's colour on the edge — call wall red, put wall green, CORE violet — and
+   the verdict shows in the pill, which is the thing that actually changes. */
+.pmk .sc .accent{position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:0 2px 2px 0}
+.pmk .sc .src{font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim2);margin-top:6px}
 .pmk .sc .nm{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim2);
   display:flex;justify-content:space-between;align-items:center;gap:6px}
 .pmk .sc .px{font-size:20px;font-weight:660;letter-spacing:-.03em;margin:3px 0 1px}
@@ -139,6 +152,11 @@ export const POSTMARKET_CSS = `
 .pmk .acc .c{flex:1;background:#1a2230;border-radius:3px 3px 0 0;position:relative;min-height:4px}
 .pmk .acc .c i{position:absolute;left:0;right:0;bottom:0;border-radius:3px 3px 0 0;
   background:linear-gradient(180deg,var(--pos),var(--posDim))}
+.pmk .movelog{display:grid;gap:0;margin-top:10px}
+.pmk .movelog .mv{display:grid;grid-template-columns:52px 74px 1fr auto;gap:10px;align-items:center;
+  padding:5px 0;border-bottom:1px dashed var(--line);font-size:11.5px}
+.pmk .movelog .mv:last-child{border-bottom:0}
+.pmk .rx{font-size:9.5px;padding:2px 6px;border-radius:5px;white-space:nowrap;border:1px solid var(--line2)}
 .pmk .replay{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;margin-top:8px}
 .pmk .replay input[type=range]{width:100%;accent-color:#4da3ff}
 .pmk .readout{display:flex;gap:16px;flex-wrap:wrap;margin-top:8px}
@@ -242,9 +260,21 @@ type HistState = "loading" | "ok" | "empty" | "error";
 
 /**
  * Today's per-minute ladder, RTH only. Mirrors hooks/useGexBubbleHistory's two
- * hard-won guards (200-with-an-error-key, and "today" = newest non-weekend day
- * present) rather than rediscovering them, but asks for a much deeper ladder
- * (top=60) because this tab draws the whole profile, not 8 bubbles.
+ * hard-won guards — the route answers 200 even when it threw, and "today" is the
+ * newest NON-WEEKEND day present — but differs from it in one critical way:
+ *
+ *   NO `anyExpiry=1`.
+ *
+ * That flag drops the expiry filter so a multi-DAY backfill can span expiries
+ * (each trading day is written under its own front expiry). Here it silently
+ * merged EVERY expiry recorded in the window into one slot bucket, so the "09:30
+ * profile" came back as the whole SPX board while the live side is today's 0DTE
+ * alone. The two are ~100x apart: the change hatch ran the full width of every
+ * row and the biggest-strike list printed +$65B deltas. This tab compares one
+ * expiry with itself, so it asks for that expiry by name.
+ *
+ * `top` is not a parameter this route understands (the bubble hook passes one
+ * anyway) — heatmap mode always returns the full ladder. It is not sent here.
  */
 function useIntradayLadder(enabled: boolean, expiry: string) {
   const [cols, setCols] = useState<Col[]>([]);
@@ -258,7 +288,7 @@ function useIntradayLadder(enabled: boolean, expiry: string) {
       try {
         const res = await dedupeFetch(
           `/api/snapshots/option-strike-gex-history?mode=heatmap&minutes=480` +
-            `&expiry=${encodeURIComponent(expiry)}&anyExpiry=1&symbol=${encodeURIComponent("$SPX")}&top=60`,
+            `&expiry=${encodeURIComponent(expiry)}`,
           { cache: "no-store" },
           20_000,
         );
@@ -288,11 +318,22 @@ function useIntradayLadder(enabled: boolean, expiry: string) {
             return m >= RTH_OPEN_MIN && m <= RTH_CLOSE_MIN;
           })
           .sort((a, b) => a.slotTs - b.slotTs)
-          .map((c) => ({
-            ts: c.slotTs,
-            spot: Number(c.spot ?? 0),
-            cells: c.cells.filter((x) => Number.isFinite(x.strike) && Number.isFinite(x.net)),
-          }));
+          .map((c) => {
+            // One reading per strike per slot. The recorder writes ~once a
+            // minute and the route buckets to 5-minute slots, so a strike can
+            // appear more than once in a column; summing the duplicates would
+            // double-count that strike's gamma.
+            const byStrike = new Map<number, number>();
+            for (const x of c.cells) {
+              if (!Number.isFinite(x.strike) || !Number.isFinite(x.net)) continue;
+              byStrike.set(x.strike, x.net);
+            }
+            return {
+              ts: c.slotTs,
+              spot: Number(c.spot ?? 0),
+              cells: [...byStrike.entries()].map(([strike, net]) => ({ strike, net })),
+            };
+          });
 
         if (cancelled) return;
         setCols(day);
@@ -431,6 +472,109 @@ function useNextExpiryStructure(enabled: boolean, todayExpiry: string, spot: num
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  the SAVED level grades — server-v2/walls-recorder.js, via /proxy/walls
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The recorder captures SPX's call wall / put wall / CORE at 09:29 ET and then
+ * every 15 minutes to 16:00, writing only when a level MOVES, and it opens a
+ * wall_event whenever spot trades into a live level — classified four slots
+ * later as reject / break / broke-and-consolidated / new wall / pin / rolled
+ * over. That is a real, server-side grade of the day, already stored.
+ *
+ * So this tab does not invent its own verdict for those three levels: it reads
+ * the recorded one, exactly as /level-log does, and only falls back to grading
+ * the price path itself when nothing was recorded for the day. Gamma flip and
+ * max pain are not recorded, so those two are always path-derived.
+ *
+ * Same endpoint and same response shape as components/pages/LevelLog.tsx —
+ * { ok, symbol, log[], events[] } for a symbol query.
+ */
+export type WallLevel = "call_wall" | "put_wall" | "cb";
+export type WallReaction =
+  | "reject" | "break_lt5" | "break_5" | "consolidated" | "new_wall" | "pin"
+  | "rolled_over" | "reached" | "stalled";
+
+type WallLogRow = {
+  slot: number; at: string; ts: string; level_type: WallLevel;
+  strike: number; prev_strike: number | null; delta: number | null;
+  spot: number; reason: "open" | "change"; level_gex: number | null;
+};
+type WallEventRow = {
+  hit_slot: number; at: string; level_type: WallLevel; strike: number;
+  spot_at_hit: number; reaction: WallReaction | null; excursion_pts: number | null;
+  reclaim_min: number | null; kind: "touch" | "approach"; attempts: number;
+};
+
+const REACTION_LABEL: Record<WallReaction, string> = {
+  reject: "REJECTED", break_lt5: "BROKE <5", break_5: "BROKEN",
+  consolidated: "BROKE & HELD", new_wall: "WALL ROLLED", pin: "PINNED",
+  rolled_over: "HELD AT DISTANCE", reached: "TAGGED", stalled: "STALLED NEAR",
+};
+/** Verdict → the tone the card reads in. Green = the level did its job. */
+const REACTION_TONE: Record<WallReaction, "ok" | "bad" | "warn" | "vio"> = {
+  reject: "ok", rolled_over: "ok",
+  break_lt5: "warn", break_5: "bad", consolidated: "bad", new_wall: "bad",
+  pin: "vio", reached: "warn", stalled: "warn",
+};
+const LEVEL_LABEL: Record<WallLevel, string> = { call_wall: "Call Wall", put_wall: "Put Wall", cb: "CORE" };
+
+type RecordedLevel = {
+  open: number | null;      // the 09:29 capture
+  last: number | null;      // where it ended the day
+  moves: number;            // how many times it was rewritten
+  events: WallEventRow[];   // every classified touch, oldest first
+};
+
+function useRecordedWalls(date: string, symbol = "SPX") {
+  const [log, setLog] = useState<WallLogRow[]>([]);
+  const [events, setEvents] = useState<WallEventRow[]>([]);
+  const [state, setState] = useState<HistState>("loading");
+
+  useEffect(() => {
+    if (!date) return;
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(
+          `/proxy/walls?date=${encodeURIComponent(date)}&symbol=${encodeURIComponent(symbol)}`,
+          { cache: "no-store" },
+        );
+        const j = await r.json();
+        if (!alive) return;
+        if (!j?.ok) { setState("error"); return; }
+        const l: WallLogRow[] = Array.isArray(j.log) ? j.log : [];
+        const e: WallEventRow[] = Array.isArray(j.events) ? j.events : [];
+        setLog(l); setEvents(e);
+        setState(l.length || e.length ? "ok" : "empty");
+      } catch {
+        if (alive) setState("error");
+      }
+    })();
+    return () => { alive = false; };
+  }, [date, symbol]);
+
+  const byLevel = useMemo(() => {
+    const out = new Map<WallLevel, RecordedLevel>();
+    for (const lvl of ["call_wall", "put_wall", "cb"] as WallLevel[]) {
+      const rows = log.filter((r) => r.level_type === lvl).sort((a, b) => a.slot - b.slot);
+      if (!rows.length) continue;
+      out.set(lvl, {
+        // `open` is the 09:29 baseline the recorder writes with reason="open";
+        // if it is missing (a late start), the first row of the day stands in.
+        open: (rows.find((r) => r.reason === "open") ?? rows[0]).strike ?? null,
+        last: rows[rows.length - 1].strike ?? null,
+        moves: rows.filter((r) => r.reason === "change").length,
+        events: events.filter((x) => x.level_type === lvl).sort((a, b) => a.hit_slot - b.hit_slot),
+      });
+    }
+    return out;
+  }, [log, events]);
+
+  return { log, events, byLevel, state };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  component
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -447,6 +591,8 @@ type Grade = {
   detail: string;
   taps: ("" | "t" | "b" | "c")[];
   foot: string;
+  /** RECORDED = the walls recorder's own verdict. DERIVED = graded here. */
+  src: "recorded" | "derived";
 };
 
 export default function PostMarketTab(p: PostMarketProps) {
@@ -457,6 +603,7 @@ export default function PostMarketTab(p: PostMarketProps) {
 
   const { cols, state: histState } = useIntradayLadder(true, expiry);
   const { next, state: nextState } = useNextExpiryStructure(true, expiry, spot);
+  const { log: wallLog, byLevel: recorded, state: wallState } = useRecordedWalls(etDate, "SPX");
 
   const es = (px: number | null | undefined) => (px == null || basis == null ? null : px + basis);
   const toSpx = useCallback((esPx: number | null | undefined) =>
@@ -506,11 +653,42 @@ export default function PostMarketTab(p: PostMarketProps) {
     return findGEXFlip(openCol.cells.map((c) => ({ strike: c.strike, netGEX: c.net } as ChainRow)), openCol.spot || spot);
   }, [openCol, spot]);
 
-  const openByStrike = useMemo(() => {
+  const openByStrikeRaw = useMemo(() => {
     const m = new Map<number, number>();
     if (openCol) for (const c of openCol.cells) m.set(c.strike, c.net);
     return m;
   }, [openCol]);
+
+  /**
+   * SCALE GUARD. The open ladder and the live chain must be the same basis for a
+   * difference to mean anything — same expiry, same OI+Vol convention. When they
+   * are not (the `anyExpiry=1` merge that shipped first made the recorded side
+   * the whole SPX board while the live side was 0DTE alone), the difference is
+   * not "gamma was added", it is two different books subtracted from each other:
+   * the hatch ran the full width of every row and the delta list printed +$65B.
+   *
+   * Rather than trust the request shape forever, compare the two over the strikes
+   * they share. More than 4x apart in total magnitude is not a market move, it is
+   * a mismatch — so the overlay is dropped and the reason is shown instead of a
+   * confident wrong number.
+   */
+  const openScale = useMemo(() => {
+    if (!openByStrikeRaw.size || !perStrike.length) return { ratio: null as number | null, ok: false };
+    let a = 0, b = 0, n = 0;
+    for (const r of perStrike) {
+      const o = openByStrikeRaw.get(r.strike);
+      if (o == null) continue;
+      a += Math.abs(o); b += Math.abs(r.net); n++;
+    }
+    if (n < 5 || !(a > 0) || !(b > 0)) return { ratio: null, ok: false };
+    const ratio = a / b;
+    return { ratio, ok: ratio > 0.25 && ratio < 4 };
+  }, [openByStrikeRaw, perStrike]);
+
+  const openByStrike = useMemo(
+    () => (openScale.ok ? openByStrikeRaw : new Map<number, number>()),
+    [openScale.ok, openByStrikeRaw],
+  );
 
   /** ±12 strikes around spot, high first — same window the profile chart uses. */
   const evBars = useMemo(() => {
@@ -541,7 +719,8 @@ export default function PostMarketTab(p: PostMarketProps) {
       mode: "above" | "below" | "cross" | "near",
     ): Grade => {
       const base: Grade = {
-        key, name, hint, px, color, tone: "", status: "—", detail: "no level", taps: Array(BUCKETS).fill(""), foot: "",
+        key, name, hint, px, color, tone: "", status: "—", detail: "no level",
+        taps: Array(BUCKETS).fill(""), foot: "", src: "derived",
       };
       if (px == null || !(px > 0)) return base;
       if (!pts.length) return { ...base, status: "NO PATH", detail: "no intraday prices recorded", foot: "" };
@@ -616,14 +795,54 @@ export default function PostMarketTab(p: PostMarketProps) {
       };
     };
 
+    /**
+     * The recorder's verdict WINS for the three levels it tracks. It watched the
+     * level all day at 15-minute resolution and classified the touch four slots
+     * later; this file only ever sees the last frame plus whatever price path it
+     * could reconstruct. Where a recorded grade exists the derived one is kept
+     * underneath as the sparkline and the "also" line, so nothing is lost.
+     */
+    const withRecorded = (g: Grade, lvl: WallLevel): Grade => {
+      const rec = recorded.get(lvl);
+      if (!rec) return g;
+      const last = rec.events.length ? rec.events[rec.events.length - 1] : null;
+      const rx = last?.reaction ?? null;
+      const moved = rec.open != null && rec.last != null && rec.open !== rec.last;
+      const hits = rec.events.filter((e) => e.kind === "touch").length;
+
+      const detail = [
+        moved ? `${nf(rec.open as number, 0)} → ${nf(rec.last as number, 0)}` : `held ${fmtPx(rec.last ?? g.px)} all day`,
+        rec.moves ? `moved ${rec.moves}×` : "never moved",
+        hits ? `${hits} tag${hits > 1 ? "s" : ""}` : "no tags",
+      ].join(" · ");
+
+      const foot = last
+        ? [
+            last.excursion_pts != null ? `${fmtPts(last.excursion_pts)} through` : null,
+            last.reclaim_min != null ? `reclaimed in ${last.reclaim_min} min` : null,
+            last.attempts > 1 ? `${last.attempts} attempts` : null,
+          ].filter(Boolean).join(" · ") || "recorded by the wall log"
+        : "watched all day, never traded into";
+
+      return {
+        ...g,
+        px: rec.last ?? g.px,
+        src: "recorded",
+        tone: rx ? REACTION_TONE[rx] : (hits ? "warn" : "ok"),
+        status: rx ? REACTION_LABEL[rx] : (hits ? "TAGGED" : "UNTESTED"),
+        detail,
+        foot,
+      };
+    };
+
     return [
-      build("CW", "Call Wall", "resistance", callWall, "var(--neg)", "above"),
-      build("PW", "Put Wall", "support", putWall, "var(--pos)", "below"),
+      withRecorded(build("CW", "Call Wall", "resistance", callWall, "var(--neg)", "above"), "call_wall"),
+      withRecorded(build("PW", "Put Wall", "support", putWall, "var(--pos)", "below"), "put_wall"),
       build("FLIP", "Gamma Flip", "regime", flip, "var(--amber)", "cross"),
-      build("CB", "Core Bullseye", "max γ", coreBullseye?.strike ?? null, "var(--violet)", "near"),
+      withRecorded(build("CB", "CORE", "max γ", coreBullseye?.strike ?? null, "var(--violet)", "near"), "cb"),
       build("MP", "Max Pain", "OI", maxPain, "var(--blue)", "near"),
     ];
-  }, [callWall, putWall, flip, coreBullseye, maxPain, path, spot, closePx]);
+  }, [callWall, putWall, flip, coreBullseye, maxPain, path, spot, closePx, recorded]);
 
   const gradeOf = (k: LevelKey) => grades.find((g) => g.key === k) ?? null;
 
@@ -777,7 +996,9 @@ export default function PostMarketTab(p: PostMarketProps) {
   };
 
   const histNote =
-    histState === "ok" ? null
+    histState === "ok" && openByStrikeRaw.size && !openScale.ok
+      ? `The recorded 09:30 ladder is ${openScale.ratio ? `${openScale.ratio.toFixed(1)}×` : "far"} the size of the live one — a different book, not a different day. The open overlay is hidden rather than shown wrong.`
+      : histState === "ok" ? null
       : histState === "loading" ? "Loading today's recorded ladder…"
         : histState === "empty" ? "No per-minute ladder recorded for today — the open-vs-close panels need it. Everything else below is live."
           : "The intraday recorder did not answer. Open-vs-close and replay are unavailable; the rest is live.";
@@ -872,17 +1093,18 @@ export default function PostMarketTab(p: PostMarketProps) {
         <div className="sechead">
           <h3><span className="secn">2</span>Level Performance Scorecard</h3>
           <span className="tiny">
-            {path.pts.length
-              ? `${path.pts.length} samples · tolerance ±${nf(Math.max(3, spot * 0.0005), 0)} pts`
-              : "no intraday path"}
+            {wallState === "ok" ? "SPX wall log · 09:29 → 16:00" : wallState === "loading" ? "loading the wall log…" : "wall log unavailable"}
+            {path.pts.length ? ` · ${path.pts.length} price samples` : ""}
           </span>
         </div>
         <div className="scorecard">
           {grades.map((g) => (
-            <div className={`sc${g.tone ? ` ${g.tone}` : ""}`} key={g.key}>
+            <div className="sc" key={g.key}>
+              <i className="accent" style={{ background: g.color }} />
               <div className="nm">
-                <span>{g.name} <em style={{ fontStyle: "normal", opacity: .75 }}>{g.hint}</em></span>
-                <span className={`pill${g.tone === "ok" ? " cool" : g.tone === "bad" ? " hot" : g.tone === "warn" ? " warn" : ""}`}>
+                <span style={{ color: g.color }}>{g.name}</span>
+                <span className={`pill${g.tone === "ok" ? " cool" : g.tone === "bad" ? " hot" : g.tone === "warn" ? " warn" : ""}`}
+                  style={g.tone === "vio" ? { borderColor: "rgba(167,139,250,.45)", color: "var(--violet)", background: "rgba(167,139,250,.09)" } : undefined}>
                   {g.status}
                 </span>
               </div>
@@ -892,9 +1114,41 @@ export default function PostMarketTab(p: PostMarketProps) {
                 {g.taps.map((t, i) => <i key={i} className={t} />)}
               </div>
               <div className="sub" style={{ marginTop: 5 }}>{g.foot}</div>
+              <div className="src">
+                {g.src === "recorded" ? "graded by the wall log" : `derived · ${g.hint}`}
+              </div>
             </div>
           ))}
         </div>
+
+        {wallState === "ok" && wallLog.some((r) => r.reason === "change") && (
+          <div className="movelog">
+            <div className="tiny" style={{ marginBottom: 4 }}>Every time a level moved today</div>
+            {wallLog
+              .filter((r) => r.reason === "change")
+              .sort((a, b) => a.slot - b.slot)
+              .slice(-8)
+              .map((r, i) => (
+                <div className="mv" key={`${r.level_type}-${r.slot}-${i}`}>
+                  <span className="mono">{String(r.at ?? "").slice(0, 5) || `slot ${r.slot}`}</span>
+                  <span style={{ color: r.level_type === "call_wall" ? "var(--neg)" : r.level_type === "put_wall" ? "var(--pos)" : "var(--violet)" }}>
+                    {LEVEL_LABEL[r.level_type]}
+                  </span>
+                  <span className="mono">
+                    {r.prev_strike != null ? `${nf(r.prev_strike, 0)} → ` : ""}{nf(r.strike, 0)}
+                    {r.delta != null ? <span className={r.delta >= 0 ? "chg-pos" : "chg-neg"}>{"  "}{fmtPts(r.delta)}</span> : null}
+                  </span>
+                  <span className="tiny">spot {fmtPx(r.spot)}</span>
+                </div>
+              ))}
+          </div>
+        )}
+        {wallState === "empty" && (
+          <div className="warnbar" style={{ marginTop: 10 }}>
+            Nothing recorded in the SPX wall log for {etDate} — the three wall cards above are graded
+            from the price path instead of the recorder&apos;s own verdict.
+          </div>
+        )}
       </div>
 
       {/* ── 3. GEX EVOLUTION ─────────────────────────────────────────────── */}
@@ -922,7 +1176,9 @@ export default function PostMarketTab(p: PostMarketProps) {
               const openNet = openByStrike.get(b.strike);
               const pos = b.net >= 0;
               const w = (Math.abs(b.net) / maxAbsBar) * 46;
-              const wo = openNet == null ? null : (Math.abs(openNet) / maxAbsBar) * 46;
+              // Clamped: a caret can never be drawn outside the track, so a bad
+              // scale shows as a pegged marker rather than a row-wide smear.
+              const wo = openNet == null ? null : Math.min(46, (Math.abs(openNet) / maxAbsBar) * 46);
               const lo = wo == null ? null : Math.min(w, wo);
               const hi = wo == null ? null : Math.max(w, wo);
               const tag = openTag(b.strike);

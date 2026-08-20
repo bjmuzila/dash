@@ -629,13 +629,22 @@ type Analysis = {
    */
   heaviest: { strike: number; now: number; at: "call" | "put" | null } | null;
   /**
-   * GRAVITY — share of |gamma| sitting below vs above spot.
+   * GEX % — the share of |gamma| carried by CALL-DOMINANT rungs.
    *
-   * Where the book's weight is, which is a different question from where its
-   * walls are: two boards with identical walls can have completely different
-   * mass distributions between them. Sums to 1 (or is null on an empty board).
+   * 0-100, where 50 is a balanced book. Split by the SIGN of each rung, not by
+   * its position relative to spot: a strike is call-dominant when its net is
+   * positive, wherever it sits.
+   *
+   * NOTE FOR ANYONE ADDING A "ONE-SIDEDNESS" FEATURE LATER: this is exactly
+   * `net/|net|` rescaled — posShare = (net_norm + 1) / 2, algebraically, always.
+   * gex-move-study.mjs tests the same quantity under the name `net_norm`. They
+   * are one number in two dresses; do not show both and do not regress on both.
+   *
+   * Replaced GRAVITY (share of |gamma| below vs above spot) on 2026-08-19: the
+   * home page GEX chart already shows the distribution around spot, so the
+   * strip was repeating it.
    */
-  gravity: { above: number; below: number } | null;
+  gexPct: { pos: number; neg: number } | null;
 };
 
 /**
@@ -702,15 +711,15 @@ function analyzeLadder(
     legs = { callNow, putNow, callChg: callNow - callPrev, putChg: putNow - putPrev };
   }
 
-  // Heaviest rung + gravity, both one pass over the same rows.
+  // Heaviest rung + GEX %, both one pass over the same rows.
   let heaviestRow: ChangeRow | null = null;
-  let absAbove = 0, absBelow = 0;
+  let absPos = 0, absNeg = 0;
   for (const r of rows) {
     if (r.netGex !== 0 && (!heaviestRow || Math.abs(r.netGex) > Math.abs(heaviestRow.netGex))) heaviestRow = r;
-    if (spot != null) {
-      if (r.strike > spot) absAbove += Math.abs(r.netGex);
-      else if (r.strike < spot) absBelow += Math.abs(r.netGex);
-    }
+    // Split by SIGN, not by side of spot — a call-dominant rung is
+    // call-dominant whether it sits above price or below it.
+    if (r.netGex > 0) absPos += r.netGex;
+    else if (r.netGex < 0) absNeg += -r.netGex;
   }
   const cw = spot == null ? null : findWall(rows, spot, "call");
   const pw = spot == null ? null : findWall(rows, spot, "put");
@@ -723,12 +732,12 @@ function analyzeLadder(
           : null,
     }
     : null;
-  const absSides = absAbove + absBelow;
-  const gravity = absSides === 0 ? null : { above: absAbove / absSides, below: absBelow / absSides };
+  const absBoth = absPos + absNeg;
+  const gexPct = absBoth === 0 ? null : { pos: absPos / absBoth, neg: absNeg / absBoth };
 
   return {
     netTotal, prevTotal, deltaNet, absTot,
-    legs, heaviest, gravity,
+    legs, heaviest, gexPct,
     deltaPct: absTot === 0 ? null : deltaNet / absTot,
     callWall: cw,
     putWall: pw,
@@ -1058,7 +1067,7 @@ const RANGE_COLORS = {
 } as const;
 
 function StructuralRange({ a, spot }: { a: Analysis; spot: number | null }) {
-  const { callWall, putWall, flipNow, heaviest, gravity } = a;
+  const { callWall, putWall, flipNow, heaviest, gexPct } = a;
   // Needs both walls and a spot to have a span at all. One wall means the book
   // is entirely on one side of price and there is no range to draw.
   if (spot == null || !callWall || !putWall) return null;
@@ -1252,22 +1261,28 @@ function StructuralRange({ a, spot }: { a: Analysis; spot: number | null }) {
 
       </div>{/* /axis inset */}
 
-      {gravity ? (
+      {gexPct ? (
         <div
-          title="Share of |gamma| below vs above spot. Where the book's WEIGHT is, which is a different question from where its walls are — two boards with identical walls can distribute mass completely differently between them."
+          title="Share of |gamma| carried by call-dominant rungs vs put-dominant ones — which way the whole book leans. 50/50 is balanced. Split by the SIGN of each strike, not by whether it sits above or below spot: the home page GEX chart already shows the distribution around price, so this says the other thing."
           style={{ marginTop: 2 }}
         >
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-            <span style={label}>Gravity</span>
+            <span style={label}>GEX %</span>
             <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700 }}>
-              <span style={{ color: POS }}>↑ {(gravity.above * 100).toFixed(0)}%</span>
+              <span style={{ color: POS }}>+γ {(gexPct.pos * 100).toFixed(0)}%</span>
               <span style={{ color: T.textMuted }}> / </span>
-              <span style={{ color: NEG }}>{(gravity.below * 100).toFixed(0)}% ↓</span>
+              <span style={{ color: NEG }}>{(gexPct.neg * 100).toFixed(0)}% −γ</span>
+            </span>
+            {/* The one-line read, so the number does not need interpreting.
+                A 5-point band around 50 counts as balanced — 51/49 is not a
+                lean, and calling it one would make the label flicker daily. */}
+            <span style={{ fontSize: 11, color: T.text }}>
+              {gexPct.pos > 0.55 ? "call-dominant" : gexPct.pos < 0.45 ? "put-dominant" : "balanced"}
             </span>
           </div>
           <div style={{ display: "flex", height: 5, borderRadius: 3, marginTop: 5, gap: 2 }}>
-            <span style={{ width: `${gravity.above * 100}%`, background: POS, borderRadius: 2 }} />
-            <span style={{ width: `${gravity.below * 100}%`, background: NEG, borderRadius: 2 }} />
+            <span style={{ width: `${gexPct.pos * 100}%`, background: POS, borderRadius: 2 }} />
+            <span style={{ width: `${gexPct.neg * 100}%`, background: NEG, borderRadius: 2 }} />
           </div>
         </div>
       ) : null}

@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-08-19 (n) - Structural Range: GEX % replaces Gravity
+
+Edited: `owner-vite/src/pages/GexGrowth.tsx`.
+
+Gravity was the share of |gamma| sitting below vs above spot. The home page GEX
+chart already draws the distribution around price, so the strip was repeating a
+picture that exists two clicks away.
+
+Replaced with **GEX %** — the share of |gamma| carried by call-dominant rungs vs
+put-dominant ones. Split by the SIGN of each strike rather than by which side of
+spot it sits on, so it answers the other question: not *where the weight is*,
+but *which way the book leans*. Same two-tone meter, `+γ 68% / 32% −γ`, with a
+one-word read beside it so the number does not need interpreting.
+
+The "balanced" band is ±5 points around 50. 51/49 is not a lean, and calling it
+one would make the label flicker daily.
+
+### Noted in the code because it will otherwise get re-added
+
+GEX % is **exactly `net_norm` rescaled** — `posShare = (net_norm + 1) / 2`,
+algebraically, always. `gex-move-study.mjs` already tests that quantity under
+the name `net_norm`. They are one number in two dresses: do not display both,
+and do not put both in a regression. Verified across five ladders (all-positive,
+all-negative, balanced, call lean, put lean); the identity holds to 1e-12 and
+the two shares sum to 1 in every case.
+
+`Analysis.gravity` is gone rather than kept alongside — two ways of saying "the
+book leans" sitting in the same card is how a page starts contradicting itself.
+
+Rendered at call-dominant / balanced / put-dominant to confirm the label switches
+where it should and the meter tracks the split.
+
+
 ## 2026-08-19 (m) - Research: what price did AT the level, not whether it predicts
 
 Added: `server-v2/scripts/gex-level-reaction.mjs`.
