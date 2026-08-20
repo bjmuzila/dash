@@ -23,7 +23,10 @@
  * Phone-specific decisions:
  *   - The desktop's horizontal level rail becomes a VERTICAL ladder. Five labels
  *     across 358px overlap; the same five as rows, sorted high to low with spot
- *     inline, read at a glance and need no legend.
+ *     inline, read at a glance and need no legend. It also REPLACES the shared
+ *     LevelsBar on this page rather than sitting under it: the two showed the
+ *     same four numbers, and LevelsBar paints the walls on the CHART's blue/red
+ *     pole ramp, which would have put two different wall colours on one screen.
  *   - PRE / POST is a segmented control that picks itself by the clock and then
  *     stays where you put it (sessionStorage), same rule as the desktop tab.
  *   - Every grid goes through gridCols() — see mobileTheme, the app-wide GLOBAL
@@ -35,7 +38,6 @@ import { useMobileGex } from "@/hooks/useMobileGex";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { netGEXOf } from "@/lib/calculations/calculations";
 import MobileShell from "../MobileShell";
-import LevelsBar from "../LevelsBar";
 import ExpiryBadge from "../ExpiryBadge";
 import { MCard, MEmpty, MSegmented, MStat, MStatGrid, MStatusDot } from "../MobileUI";
 import {
@@ -61,6 +63,16 @@ const VIEWS: { id: View; label: string }[] = [
   { id: "pre", label: "Premarket" },
   { id: "post", label: "Post-Market" },
 ];
+
+/**
+ * WALL COLOURS — call wall GREEN, put wall RED, on every ticker and every
+ * surface. Deliberately not M_COLOR.pos / .neg: those two mean "positive or
+ * negative gamma" and belong to the bars and the heat ramp. Flipping the wall
+ * convention must not re-colour a single bar, so the levels get their own pair.
+ * The desktop board carries the same split as --cw / --pw.
+ */
+const CW_COLOR = M_COLOR.up;
+const PW_COLOR = M_COLOR.down;
 
 const TONE_COLOR: Record<"ok" | "bad" | "warn" | "vio", string> = {
   ok: M_COLOR.up, bad: M_COLOR.neg, warn: M_COLOR.orange, vio: M_COLOR.cb,
@@ -246,11 +258,11 @@ export default function MobilePrep() {
         out.push({ code, name, px: v, color, dist: isSpot || !(g.spot > 0) ? null : v - g.spot, isSpot });
       }
     };
-    add("CW", "call wall", g.callWall, M_COLOR.neg);
+    add("CW", "call wall", g.callWall, CW_COLOR);
     add("CORE", "max γ strike", cb?.strike, M_COLOR.cb);
     add("SPOT", g.esFut > 0 ? `ES ${fmtPrice(g.esFut, 2)}` : "live", g.spot > 0 ? g.spot : null, M_COLOR.text, true);
     add("FLIP", "gamma flip", g.flip, M_COLOR.orange);
-    add("PW", "put wall", g.putWall, M_COLOR.pos);
+    add("PW", "put wall", g.putWall, PW_COLOR);
     return out.sort((a, b) => b.px - a.px);
   }, [g.callWall, g.putWall, g.flip, g.spot, g.esFut, cb]);
 
@@ -357,8 +369,6 @@ function PreView({
         </div>
       </div>
 
-      <LevelsBar spot={g.spot} prevClose={g.prevClose} flip={g.flip} callWall={g.callWall} putWall={g.putWall} />
-
       <MCard title="Levels · high to low">
         <LevelLadder rows={ladderRows} />
       </MCard>
@@ -373,8 +383,8 @@ function PreView({
 
       <MCard title="Overnight">
         <MStatGrid cols={2}>
-          <MStat label="ON high" value={px0(onHi)} sub={onHi != null && g.spot > 0 ? `${pts(onHi - g.spot)} from spot` : undefined} accent={M_COLOR.neg} />
-          <MStat label="ON low" value={px0(onLo)} sub={onLo != null && g.spot > 0 ? `${pts(onLo - g.spot)} from spot` : undefined} accent={M_COLOR.pos} />
+          <MStat label="ON high" value={px0(onHi)} sub={onHi != null && g.spot > 0 ? `${pts(onHi - g.spot)} from spot` : undefined} accent={M_COLOR.up} />
+          <MStat label="ON low" value={px0(onLo)} sub={onLo != null && g.spot > 0 ? `${pts(onLo - g.spot)} from spot` : undefined} accent={M_COLOR.down} />
           <MStat label="Prior close" value={px0(pdc)} sub="SPX-equivalent" />
           <MStat
             label="Gap"
@@ -442,9 +452,9 @@ function PostView({
   }, [g.spot, g.callWall, g.putWall, rthHi, rthLo, cb]);
 
   const GRADE_ROWS: { lvl: WallLevel; label: string; color: string; live: number | null }[] = [
-    { lvl: "call_wall", label: "Call Wall", color: M_COLOR.neg, live: g.callWall },
+    { lvl: "call_wall", label: "Call Wall", color: CW_COLOR, live: g.callWall },
     { lvl: "cb", label: "CORE", color: M_COLOR.cb, live: cb?.strike ?? null },
-    { lvl: "put_wall", label: "Put Wall", color: M_COLOR.pos, live: g.putWall },
+    { lvl: "put_wall", label: "Put Wall", color: PW_COLOR, live: g.putWall },
   ];
 
   const nextBand = next?.callWall != null && next?.putWall != null ? Math.abs(next.callWall - next.putWall) : null;
@@ -534,9 +544,9 @@ function PostView({
         ) : (
           <>
             <MStatGrid cols={2}>
-              <MStat label="Call wall" value={px0(next.callWall)} accent={M_COLOR.neg}
+              <MStat label="Call wall" value={px0(next.callWall)} accent={CW_COLOR}
                 sub={next.callWall != null && g.spot > 0 ? `${pts(next.callWall - g.spot)} from close` : undefined} />
-              <MStat label="Put wall" value={px0(next.putWall)} accent={M_COLOR.pos}
+              <MStat label="Put wall" value={px0(next.putWall)} accent={PW_COLOR}
                 sub={next.putWall != null && g.spot > 0 ? `${pts(next.putWall - g.spot)} from close` : undefined} />
               <MStat label="Flip" value={px0(next.flip)} accent={M_COLOR.orange}
                 sub={next.flip != null && g.spot > 0 ? `${pts(next.flip - g.spot)} from close` : undefined} />

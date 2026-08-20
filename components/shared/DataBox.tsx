@@ -1,19 +1,18 @@
 "use client";
 
 import { useState, useCallback, useRef, type ReactNode, type CSSProperties, type RefObject } from "react";
-import { useAuth } from "@/components/auth/AuthProvider";
+import { useIsOwner } from "@/components/auth/useIsOwner";
 import { shareToDiscord } from "@/lib/discord/share";
 import { captureToBlob, captureToDataUrl, copyOrDownload } from "@/lib/snapshot";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type BtnState = "idle" | "busy" | "ok" | "err";
 
-// ── Owner gate (cosmetic — matches NavMenu) ───────────────────────────────────
-function useIsOwner(): boolean {
-  const { isSignedIn, user } = useAuth();
-  const ownerId = process.env.NEXT_PUBLIC_OWNER_USER_ID;
-  return ownerId ? user?.id === ownerId : !!isSignedIn;
-}
+// Owner gate (cosmetic) now comes from the shared useIsOwner() hook. The local
+// copy that used to live here fell back to `!!isSignedIn` whenever
+// NEXT_PUBLIC_OWNER_USER_ID was absent from the build, which showed the Discord
+// share button below on every paying customer's panels. The shared hook fails
+// closed. Real enforcement is /api/discord-share's own owner check.
 
 // ── Screenshot capture ────────────────────────────────────────────────────────
 // The capture engine used to live here, and every other snapshot button in the

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { useAuth } from "@/components/auth/AuthProvider";
+import { useIsOwner } from "@/components/auth/useIsOwner";
 import SnapButton from "./SnapButton";
 import { useWsLifecycle } from "@/hooks/useWsLifecycle";
 import { useGexSocket, type GexMessage } from "@/lib/gexSocket";
@@ -136,11 +136,11 @@ function saveTodayCloses(es: number, spx: number, date?: string) {
 // ─── component ───────────────────────────────────────────────────────────────
 export default function TopBar() {
   const router = useRouter();
-  const { isSignedIn, user } = useAuth();
   // Owner-only nav items (Personal) hidden from non-owner accounts. Routes are
   // hard-gated in middleware; this just keeps the link out of the picker.
-  const ownerId = (process.env.NEXT_PUBLIC_OWNER_USER_ID || "").trim();
-  const isOwner = ownerId ? user?.id === ownerId : !!isSignedIn;
+  // Shared fail-closed hook — the old inline check fell back to `!!isSignedIn`
+  // when NEXT_PUBLIC_OWNER_USER_ID was missing from the build.
+  const isOwner = useIsOwner();
   const navItems = NAV_ITEMS.filter((i) => !i.ownerOnly || isOwner);
   const pathname = usePathname();
   // Bandwidth gate — passed to the shared /ws/gex subscription below. Reconnect

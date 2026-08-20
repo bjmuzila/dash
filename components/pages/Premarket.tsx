@@ -71,6 +71,13 @@ const CSS = `
   --card:rgba(255,255,255,.20);
   --txt:#e6edf6; --dim:#ffffff; --dim2:#ffffff;
   --pos:#2ecc8f; --posDim:#1b7a56; --neg:#ff5c6c; --negDim:#8c2f3a;
+  /* WALL COLOURS, kept separate from the +/− gamma pair on purpose.
+     --pos / --neg say "positive or negative gamma" and belong to the bars.
+     --cw / --pw say "call wall / put wall" and belong to the LEVELS. They were
+     the same tokens until 2026-08-20, which meant flipping the wall convention
+     would have re-coloured every bar on the page. Call wall reads GREEN and put
+     wall RED on every ticker and every surface — change it here, once. */
+  --cw:#2ecc8f; --pw:#ff5c6c;
   --amber:#f5b942; --blue:#4da3ff; --violet:#a78bfa; --r:10px;
   background:var(--bg);color:var(--txt);
   font:13px/1.45 ui-sans-serif,-apple-system,"Segoe UI",Inter,Roboto,sans-serif;
@@ -138,7 +145,7 @@ const CSS = `
 .pmk .gexrail .rh h3{margin:0;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);font-weight:600}
 .pmk .rail{position:relative;height:120px;margin-top:2px}
 .pmk .rail .track2{position:absolute;left:0;right:0;top:54px;height:10px;border-radius:6px;background:#1a2230;border:1px solid var(--line)}
-.pmk .rail .band{position:absolute;top:-1px;bottom:-1px;border-radius:6px;background:linear-gradient(90deg,rgba(46,204,143,.30),rgba(77,163,255,.14),rgba(255,92,108,.30))}
+.pmk .rail .band{position:absolute;top:-1px;bottom:-1px;border-radius:6px;background:linear-gradient(90deg,rgba(255,92,108,.28),rgba(77,163,255,.14),rgba(46,204,143,.28))}
 .pmk .rail .mk2{position:absolute;top:44px;width:2px;height:30px;border-radius:2px;transform:translateX(-50%)}
 .pmk .rail .mk2.spot{width:3px;height:34px;top:42px;box-shadow:0 0 0 3px rgba(255,255,255,.10)}
 .pmk .rail .cap2{position:absolute;transform:translateX(-50%);text-align:center;white-space:nowrap;line-height:1.25}
@@ -797,8 +804,8 @@ export default function Premarket() {
   };
 
   const tagFor = (strike: number): { text: string; color: string } | null => {
-    if (callWall != null && strike === callWall) return { text: "CALL WALL", color: "var(--neg)" };
-    if (putWall != null && strike === putWall) return { text: "PUT WALL", color: "var(--pos)" };
+    if (callWall != null && strike === callWall) return { text: "CALL WALL", color: "var(--cw)" };
+    if (putWall != null && strike === putWall) return { text: "PUT WALL", color: "var(--pw)" };
     if (magnet && strike === magnet.strike) return { text: "0DTE MAGNET", color: "var(--violet)" };
     if (maxPain != null && strike === maxPain) return { text: "MAX PAIN", color: "var(--blue)" };
     if (flipStrike != null && strike === flipStrike) return { text: "GAMMA FLIP", color: "var(--amber)" };
@@ -832,11 +839,11 @@ export default function Premarket() {
     const add = (code: string, name: string, px: number | null | undefined, color: string) => {
       if (px != null && Number.isFinite(px) && px > 0) marks.push({ code, name, px, color });
     };
-    add("PW", "Put Wall", putWall, "var(--pos)");
+    add("PW", "Put Wall", putWall, "var(--pw)");
     add("FLIP", "Gamma Flip", flip, "var(--amber)");
     add("CORE", "max γ strike", coreBullseye?.strike, "var(--violet)");
     add("SPOT", "Spot", spot > 0 ? spot : null, "#ffffff");
-    add("CW", "Call Wall", callWall, "var(--neg)");
+    add("CW", "Call Wall", callWall, "var(--cw)");
     if (marks.length < 2) return null;
 
     const lo = Math.min(...marks.map((m) => m.px));
@@ -1266,8 +1273,8 @@ export default function Premarket() {
                     <div className="cap top" style={{ left: "12%", color: "var(--pos)" }}>ON low {fmtPx(overnight.lo, 0)}</div>
                     <div className="cap top" style={{ left: "88%", color: "var(--neg)" }}>ON high {fmtPx(overnight.hi, 0)}</div>
                     <div className="bar2"><div className="fill" style={{ left: "12%", right: "12%" }} /></div>
-                    <div className="mk" style={{ left: "12%", background: "var(--pos)" }} />
-                    <div className="mk" style={{ left: "88%", background: "var(--neg)" }} />
+                    <div className="mk" style={{ left: "12%", background: "var(--pw)" }} />
+                    <div className="mk" style={{ left: "88%", background: "var(--cw)" }} />
                     {onPos(esFut) != null && (
                       <>
                         <div className="mk" style={{ left: `${onPos(esFut)}%`, background: "#fff", height: 34, top: 9 }} />
@@ -1424,14 +1431,14 @@ export default function Premarket() {
                     </div>
                     {emPos(putWall) != null && (
                       <>
-                        <div className="mk" style={{ left: `${emPos(putWall)}%`, background: "var(--pos)", top: 18, height: 24 }} />
-                        <div className="cap bot" style={{ left: `${emPos(putWall)}%`, top: 46, color: "var(--pos)" }}>Put Wall</div>
+                        <div className="mk" style={{ left: `${emPos(putWall)}%`, background: "var(--pw)", top: 18, height: 24 }} />
+                        <div className="cap bot" style={{ left: `${emPos(putWall)}%`, top: 46, color: "var(--pw)" }}>Put Wall</div>
                       </>
                     )}
                     {emPos(callWall) != null && (
                       <>
-                        <div className="mk" style={{ left: `${emPos(callWall)}%`, background: "var(--neg)", top: 18, height: 24 }} />
-                        <div className="cap bot" style={{ left: `${emPos(callWall)}%`, top: 46, color: "var(--neg)" }}>Call Wall</div>
+                        <div className="mk" style={{ left: `${emPos(callWall)}%`, background: "var(--cw)", top: 18, height: 24 }} />
+                        <div className="cap bot" style={{ left: `${emPos(callWall)}%`, top: 46, color: "var(--cw)" }}>Call Wall</div>
                       </>
                     )}
                     {emPos(spot) != null && (

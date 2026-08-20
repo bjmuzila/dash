@@ -30,7 +30,7 @@
  * two boards cannot drift apart visually.
  */
 
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import {
   useNextExpiryStructure,
@@ -108,11 +108,11 @@ export default function TickerBoard({
     const add = (code: string, name: string, px: number | null | undefined, color: string) => {
       if (px != null && Number.isFinite(px) && px > 0) marks.push({ code, name, px, color });
     };
-    add("PW", "Put Wall", board.putWall, "var(--pos)");
+    add("PW", "Put Wall", board.putWall, "var(--pw)");
     add("FLIP", "Gamma Flip", board.flip, "var(--amber)");
     add("CORE", "max γ strike", board.cb, "var(--violet)");
     add("SPOT", "Spot", spot > 0 ? spot : null, "#ffffff");
-    add("CW", "Call Wall", board.callWall, "var(--neg)");
+    add("CW", "Call Wall", board.callWall, "var(--cw)");
     if (marks.length < 2) return null;
     const lo = Math.min(...marks.map((m) => m.px));
     const hi = Math.max(...marks.map((m) => m.px));
@@ -130,6 +130,44 @@ export default function TickerBoard({
       : null;
     return { placed, band };
   }, [board, spot]);
+
+  /**
+   * The ladder renders ±60 strikes, so left alone it opens sixty strikes above
+   * the money where every bar is a sliver. Same rule as the SPX profile: centre
+   * on the spot row while pinned, un-pin the moment the reader scrolls (so a far
+   * wall stays put once you go looking at it), and flag our own scrollTop writes
+   * so the scroll event they fire is not read as the user's hand.
+   */
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const pinnedRef = useRef(true);
+  const progRef = useRef(false);
+  const [pinned, setPinned] = useState(true);
+
+  const spotRowIdx = useMemo(() => {
+    if (!bars.length || !(spot > 0)) return -1;
+    return bars.reduce((b, r, i) => (Math.abs(r.strike - spot) < Math.abs(bars[b].strike - spot) ? i : b), 0);
+  }, [bars, spot]);
+
+  const centerOnSpot = useCallback(() => {
+    const el = chartRef.current;
+    if (!el || spotRowIdx < 0) return;
+    progRef.current = true;
+    el.scrollTop = Math.max(0, spotRowIdx * 20 + 10 - el.clientHeight / 2);
+    requestAnimationFrame(() => { progRef.current = false; });
+  }, [spotRowIdx]);
+
+  useEffect(() => { if (pinnedRef.current) centerOnSpot(); }, [centerOnSpot]);
+
+  const onChartScroll = useCallback(() => {
+    if (progRef.current) return;
+    if (pinnedRef.current) { pinnedRef.current = false; setPinned(false); }
+  }, []);
+
+  const repin = useCallback(() => {
+    pinnedRef.current = true;
+    setPinned(true);
+    centerOnSpot();
+  }, [centerOnSpot]);
 
   const wallBand = board?.callWall != null && board?.putWall != null
     ? Math.abs(board.callWall - board.putWall) : null;
@@ -290,7 +328,8 @@ export default function TickerBoard({
             <h3>GEX Profile by Strike</h3>
             <span className="tiny">OI + Vol · {bars.length} strikes · scroll</span>
           </div>
-          <div className="chart">
+          <div style={{ position: "relative" }}>
+          <div className="chart" ref={chartRef} onScroll={onChartScroll}>
             {bars.map((b) => {
               const pos = b.net >= 0;
               const w = (Math.abs(b.net) / (pos ? maxP : maxN)) * 50;
@@ -314,6 +353,10 @@ export default function TickerBoard({
                 </div>
               );
             })}
+          </div>
+          {!pinned && bars.length > 0 && (
+            <button type="button" className="recenter" onClick={repin}>⤒ back to spot</button>
+          )}
           </div>
           <div className="axis">
             <span>{fmtUsd(-maxN, false)}</span><span>0</span><span>{fmtUsd(maxP, false)}</span>
@@ -393,9 +436,9 @@ export default function TickerBoard({
                     const last = rec?.events.length ? rec.events[rec.events.length - 1] : null;
                     const rx = last?.reaction ?? null;
                     const tone = rx ? REACTION_TONE[rx] : null;
-                    const color = lvl === "call_wall" ? "var(--neg)" : lvl === "put_wall" ? "var(--pos)" : "var(--violet)";
+                    const color = lvl === "call_wall" ? "var(--cw)" : lvl === "put_wall" ? "var(--pw)" : "var(--violet)";
                     return (
-                      <div className="sc" key={lvl} style={{ borderLeftColor: color }}>
+                      <div className="sc" key={lvl} style={{ borderLeft: `4px solid ${color}` }}>
                         <div className="nm">
                           <span style={{ color }}>{LEVEL_LABEL[lvl]}</span>
                           <span className={`pill${tone === "ok" ? " cool" : tone === "bad" ? " hot" : tone === "warn" ? " warn" : ""}`}>
@@ -426,8 +469,8 @@ export default function TickerBoard({
               </div>
               {nextState === "ok" && next ? (
                 <>
-                  <div className="stat"><span className="l">Call wall</span><span className="r mono chg-neg">{fmtPx(next.callWall, dp)}</span></div>
-                  <div className="stat"><span className="l">Put wall</span><span className="r mono chg-pos">{fmtPx(next.putWall, dp)}</span></div>
+                  <div className="stat"><span className="l">Call wall</span><span className="r mono" style={{ color: "var(--cw)" }}>{fmtPx(next.callWall, dp)}</span></div>
+                  <div className="stat"><span className="l">Put wall</span><span className="r mono" style={{ color: "var(--pw)" }}>{fmtPx(next.putWall, dp)}</span></div>
                   <div className="stat"><span className="l">Flip</span><span className="r mono">{fmtPx(next.flip, dp)}</span></div>
                   <div className="stat"><span className="l">Net GEX rolls to</span><span className="r mono">{fmtUsd(next.netGex)}</span></div>
                 </>
@@ -443,7 +486,7 @@ export default function TickerBoard({
                   {wallLog.filter((r) => r.reason === "change").sort((a, b) => a.slot - b.slot).slice(-6).map((r, i) => (
                     <div className="mv" key={`${r.level_type}-${r.slot}-${i}`}>
                       <span className="mono">{String(r.at ?? "").slice(0, 5) || `#${r.slot}`}</span>
-                      <span style={{ color: r.level_type === "call_wall" ? "var(--neg)" : r.level_type === "put_wall" ? "var(--pos)" : "var(--violet)" }}>
+                      <span style={{ color: r.level_type === "call_wall" ? "var(--cw)" : r.level_type === "put_wall" ? "var(--pw)" : "var(--violet)" }}>
                         {LEVEL_LABEL[r.level_type]}
                       </span>
                       <span className="mono">
@@ -492,8 +535,8 @@ function tagFor(
   board: { callWall: number | null; putWall: number | null; cb: number | null; maxPain: number | null; flip: number | null },
   strike: number,
 ): { text: string; color: string } | null {
-  if (board.callWall != null && strike === board.callWall) return { text: "CALL WALL", color: "var(--neg)" };
-  if (board.putWall != null && strike === board.putWall) return { text: "PUT WALL", color: "var(--pos)" };
+  if (board.callWall != null && strike === board.callWall) return { text: "CALL WALL", color: "var(--cw)" };
+  if (board.putWall != null && strike === board.putWall) return { text: "PUT WALL", color: "var(--pw)" };
   if (board.cb != null && strike === board.cb) return { text: "CORE", color: "var(--violet)" };
   if (board.maxPain != null && strike === board.maxPain) return { text: "MAX PAIN", color: "var(--blue)" };
   return null;

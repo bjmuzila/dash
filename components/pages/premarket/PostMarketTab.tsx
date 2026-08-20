@@ -95,7 +95,13 @@ export const POSTMARKET_CSS = `
 }
 .pmk .sec{padding:14px 18px;border-bottom:1px solid var(--line)}
 .pmk .sec:last-child{border-bottom:0}
-.pmk .sechead{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:11px;flex-wrap:wrap}
+/* Section headers: title, then whatever the section's legend is, then a spacer.
+   The legend belongs BESIDE the thing it explains — flung to the far right of a
+   1560px header it reads as unrelated chrome, and on the build-time ramp that
+   is five swatches nobody connects to the bars under them. `.sechead .right`
+   opts a trailing item back out to the right edge. */
+.pmk .sechead{display:flex;align-items:baseline;justify-content:flex-start;gap:14px;margin-bottom:11px;flex-wrap:wrap}
+.pmk .sechead .right{margin-left:auto}
 .pmk .sechead h3{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);margin:0;font-weight:600}
 .pmk .secn{width:17px;height:17px;border-radius:5px;background:#1e2836;color:var(--dim);display:inline-grid;
   place-items:center;font-size:9.5px;font-weight:700;margin-right:8px;vertical-align:1px}
@@ -116,7 +122,7 @@ export const POSTMARKET_CSS = `
 .pmk .snap .bias{justify-self:stretch;max-width:none;text-align:left}
 .pmk .rangebar{position:relative;height:42px;margin-top:8px}
 .pmk .rangebar .wallband{position:absolute;left:0;right:0;top:16px;height:14px;border-radius:7px;
-  background:linear-gradient(90deg,rgba(46,204,143,.22),rgba(255,255,255,.05),rgba(255,92,108,.22));border:1px solid var(--line)}
+  background:linear-gradient(90deg,rgba(255,92,108,.20),rgba(255,255,255,.05),rgba(46,204,143,.20));border:1px solid var(--line)}
 .pmk .rangebar .act{position:absolute;top:19px;height:8px;border-radius:5px;
   background:linear-gradient(90deg,rgba(77,163,255,.45),rgba(77,163,255,.85))}
 .pmk .rangebar .mk3{position:absolute;top:11px;width:2px;height:24px;border-radius:2px;transform:translateX(-50%)}
@@ -213,6 +219,18 @@ export const POSTMARKET_CSS = `
   padding:5px 0;border-bottom:1px dashed var(--line);font-size:11.5px}
 .pmk .movelog .mv:last-child{border-bottom:0}
 .pmk .rx{font-size:9.5px;padding:2px 6px;border-radius:5px;white-space:nowrap;border:1px solid var(--line2)}
+/* 7 — strike paths. auto-fill so the grid uses whatever width the page has
+   rather than a fixed column count that leaves a gutter at 1440 and clips at
+   1100. */
+.pmk .sparkgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:8px}
+.pmk .spark{border:1px solid var(--card);border-left-width:3px;border-radius:9px;background:var(--panel2);
+  padding:7px 8px 4px;min-width:0}
+.pmk .spark .sh{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
+.pmk .spark .sk{font-size:11px;font-weight:650;letter-spacing:-.01em}
+.pmk .spark .sv{font-size:9.5px;color:var(--dim)}
+.pmk .spark svg{display:block;margin-top:3px}
+.pmk .spark .st{font-size:8.5px;letter-spacing:.06em;text-transform:uppercase;margin-top:1px}
+
 .pmk .replay{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;margin-top:8px}
 .pmk .replay input[type=range]{width:100%;accent-color:#4da3ff}
 .pmk .readout{display:flex;gap:16px;flex-wrap:wrap;margin-top:8px}
@@ -470,6 +488,29 @@ export default function PostMarketTab(p: PostMarketProps) {
   }, [evBars, series, idxAtMin]);
 
   /**
+   * STRIKE PATHS — one sparkline per strike, the literal "how did this strike
+   * change" answer, kept as its own section because it is a different question
+   * from the profile: the profile ranks strikes against each other, this ranks
+   * each strike against ITS OWN day.
+   *
+   * Each line is therefore normalised to that strike's own peak. A shared scale
+   * would flatten every strike outside the two or three biggest into a straight
+   * line at zero, which is precisely the strikes whose SHAPE is interesting —
+   * the one that built at 10:00 and was gone by noon reads identically to a
+   * strike that never traded. The magnitude is not lost: it is printed next to
+   * the line, and the profile above is the ranked view.
+   */
+  const strikePaths = useMemo(() => {
+    if (!cols.length || !evNear.length) return [];
+    return evNear.map((b) => {
+      const e = series.get(b.strike);
+      if (!e) return { strike: b.strike, net: b.net, vals: [] as number[], max: 0 };
+      const max = e.vals.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+      return { strike: b.strike, net: b.net, vals: e.vals, max };
+    }).filter((r) => r.vals.length > 2);
+  }, [cols, evNear, series]);
+
+  /**
    * WALL MIGRATION — where the levels sat, minute by minute, against spot.
    *
    * The recorder stores NET per strike only, so these are net-basis proxies: the
@@ -483,25 +524,29 @@ export default function PostMarketTab(p: PostMarketProps) {
   const wallPath = useMemo(() => {
     if (cols.length < 3) return null;
     const raw = cols.map((c) => {
-      let cw = c.cells[0], pw = c.cells[0], cb = c.cells[0];
+      // The two walls, net-basis: the most positive strike and the most
+      // negative one. CORE is not looked for separately — it IS whichever of
+      // those two is carrying more gamma at that minute (see below).
+      let cw = c.cells[0], pw = c.cells[0];
       for (const x of c.cells) {
         if (x.net > cw.net) cw = x;
         if (x.net < pw.net) pw = x;
-        if (Math.abs(x.net) > Math.abs(cb.net)) cb = x;
       }
-      return { ts: c.ts, spot: c.spot, cw: cw?.strike ?? null, pw: pw?.strike ?? null, cb: cb?.strike ?? null };
+      return {
+        ts: c.ts, spot: c.spot,
+        cw: cw?.strike ?? null, cwNet: cw?.net ?? 0,
+        pw: pw?.strike ?? null, pwNet: pw?.net ?? 0,
+      };
     }).filter((p) => p.cw != null && p.pw != null);
     if (raw.length < 3) return null;
 
     /**
      * ROLLING MODE, not the raw pick.
      *
-     * CORE is "the biggest |net| strike", and on a minute where the largest
-     * positive and the largest negative strike are within a few percent of each
-     * other it alternates between them — two strikes 60 points apart, flipping
-     * every sample. Drawn as a line that is a picket fence of vertical jumps,
-     * which is what the violet back-and-forth was; the two walls flicker the
-     * same way at the edges of the ladder.
+     * A wall is the extreme strike of the column, so on a minute where two
+     * strikes are within a few percent of each other the pick alternates
+     * between them — two strikes sixty points apart, flipping every sample.
+     * Drawn as a line that is a picket fence of vertical jumps.
      *
      * A level is a discrete strike, so the honest smoother is the MOST COMMON
      * value in a short window, never an average — averaging would invent
@@ -527,27 +572,48 @@ export default function PostMarketTab(p: PostMarketProps) {
       return best;
     };
 
-    const cwRaw = raw.map((p) => p.cw);
-    const pwRaw = raw.map((p) => p.pw);
-    const cbRaw = raw.map((p) => p.cb);
+    /**
+     * TWO ROLES, NOT THREE LEVELS.
+     *
+     * Three lines (call wall, put wall, CORE) always drew CORE on top of one of
+     * the other two, because CORE IS one of them — whichever is carrying more
+     * gamma. The chart spent a colour and a legend entry saying the same thing
+     * twice, and the reader had to work out which wall was hiding underneath.
+     *
+     * So the two series are ROLES: CORE is the heavier wall at that minute, and
+     * OTHER is the lighter one. When they swap, the lines swap — which is the
+     * event worth seeing (the day's dominant level changing sides), and it is
+     * legible precisely because there are only two lines.
+     *
+     * The roles are what get smoothed, not the walls: mode-filtering call and
+     * put separately and THEN comparing would let a smoothed value fight an
+     * unsmoothed magnitude and flicker the roles back.
+     */
+    const coreRaw = raw.map((p) => (Math.abs(p.cwNet) >= Math.abs(p.pwNet) ? p.cw : p.pw));
+    const otherRaw = raw.map((p) => (Math.abs(p.cwNet) >= Math.abs(p.pwNet) ? p.pw : p.cw));
+    const sideRaw = raw.map((p) => (Math.abs(p.cwNet) >= Math.abs(p.pwNet) ? "call" : "put") as "call" | "put");
+
     const pts = raw.map((p, i) => ({
       ts: p.ts,
       spot: p.spot,
-      cw: mode(cwRaw, i),
-      pw: mode(pwRaw, i),
-      cb: mode(cbRaw, i),
+      core: mode(coreRaw, i),
+      other: mode(otherRaw, i),
+      coreSide: sideRaw[i],
     }));
 
     const vals: number[] = [];
     for (const p of pts) {
       if (p.spot > 0) vals.push(p.spot);
-      if (p.cw != null) vals.push(p.cw);
-      if (p.pw != null) vals.push(p.pw);
-      if (p.cb != null) vals.push(p.cb);
+      if (p.core != null) vals.push(p.core);
+      if (p.other != null) vals.push(p.other);
     }
     const lo = Math.min(...vals), hi = Math.max(...vals);
     if (!(hi > lo)) return null;
-    return { pts, lo, hi };
+
+    // How much of the session each side spent as CORE — the one-line read under
+    // the chart, and the reason the swap is worth drawing at all.
+    const callMin = pts.filter((p) => p.coreSide === "call").length;
+    return { pts, lo, hi, callCoreShare: callMin / pts.length };
   }, [cols]);
 
   /**
@@ -733,8 +799,8 @@ export default function PostMarketTab(p: PostMarketProps) {
     };
 
     return [
-      withRecorded(build("CW", "Call Wall", "resistance", callWall, "var(--neg)", "above"), "call_wall"),
-      withRecorded(build("PW", "Put Wall", "support", putWall, "var(--pos)", "below"), "put_wall"),
+      withRecorded(build("CW", "Call Wall", "resistance", callWall, "var(--cw)", "above"), "call_wall"),
+      withRecorded(build("PW", "Put Wall", "support", putWall, "var(--pw)", "below"), "put_wall"),
       build("FLIP", "Gamma Flip", "regime", flip, "var(--amber)", "cross"),
       withRecorded(build("CORE", "CORE", "max γ", coreBullseye?.strike ?? null, "var(--violet)", "near"), "cb"),
       build("MP", "Max Pain", "OI", maxPain, "var(--blue)", "near"),
@@ -793,11 +859,11 @@ export default function PostMarketTab(p: PostMarketProps) {
     const add = (code: string, name: string, px: number | null | undefined, color: string) => {
       if (px != null && Number.isFinite(px) && px > 0) marks.push({ code, name, px, color });
     };
-    add("PW", "Put Wall", next.putWall, "var(--pos)");
+    add("PW", "Put Wall", next.putWall, "var(--pw)");
     add("FLIP", "Gamma Flip", next.flip, "var(--amber)");
     add("CORE", "max γ strike", next.cb, "var(--violet)");
     add("CLOSE", "SPX Close", closePx > 0 ? closePx : null, "#ffffff");
-    add("CW", "Call Wall", next.callWall, "var(--neg)");
+    add("CW", "Call Wall", next.callWall, "var(--cw)");
     if (marks.length < 2) return null;
     const lo = Math.min(...marks.map((m) => m.px)), hi = Math.max(...marks.map((m) => m.px));
     const span = hi - lo;
@@ -885,8 +951,8 @@ export default function PostMarketTab(p: PostMarketProps) {
   // ── render helpers ─────────────────────────────────────────────────────────
   const maxAbsBar = Math.max(1, ...evNear.map((b) => Math.abs(b.net)));
   const openTag = (strike: number): { text: string; color: string } | null => {
-    if (callWall != null && strike === callWall) return { text: "CALL WALL", color: "var(--neg)" };
-    if (putWall != null && strike === putWall) return { text: "PUT WALL", color: "var(--pos)" };
+    if (callWall != null && strike === callWall) return { text: "CALL WALL", color: "var(--cw)" };
+    if (putWall != null && strike === putWall) return { text: "PUT WALL", color: "var(--pw)" };
     if (coreBullseye && strike === coreBullseye.strike) return { text: "CORE", color: "var(--violet)" };
     if (maxPain != null && strike === maxPain) return { text: "MAX PAIN", color: "var(--blue)" };
     return null;
@@ -945,7 +1011,7 @@ export default function PostMarketTab(p: PostMarketProps) {
       <div className="sec">
         <div className="sechead">
           <h3><span className="secn">1</span>Day Snapshot</h3>
-          <span className="tiny">
+          <span className="tiny right">
             {path.src === "recorder" ? "per-minute recorder" : "5m ES bars via basis"} · {expiry || "—"}
           </span>
         </div>
@@ -974,17 +1040,17 @@ export default function PostMarketTab(p: PostMarketProps) {
               {rPos(rthLo) != null && rPos(rthHi) != null && (
                 <div className="act" style={{ left: `${rPos(rthLo)}%`, width: `${(rPos(rthHi) as number) - (rPos(rthLo) as number)}%` }} />
               )}
-              {rPos(putWall) != null && <div className="mk3" style={{ left: `${rPos(putWall)}%`, background: "var(--pos)" }} />}
-              {rPos(callWall) != null && <div className="mk3" style={{ left: `${rPos(callWall)}%`, background: "var(--neg)" }} />}
+              {rPos(putWall) != null && <div className="mk3" style={{ left: `${rPos(putWall)}%`, background: "var(--pw)" }} />}
+              {rPos(callWall) != null && <div className="mk3" style={{ left: `${rPos(callWall)}%`, background: "var(--cw)" }} />}
               {rPos(closePx) != null && <div className="mk3" style={{ left: `${rPos(closePx)}%`, background: "#fff" }} />}
               {rPos(putWall) != null && (
-                <div className="cp3" style={{ left: `${Math.max(9, rPos(putWall) as number)}%`, color: "var(--pos)" }}>PW {fmtPx(putWall)}</div>
+                <div className="cp3" style={{ left: `${Math.max(9, rPos(putWall) as number)}%`, color: "var(--pw)" }}>PW {fmtPx(putWall)}</div>
               )}
               {rPos(closePx) != null && (
                 <div className="cp3" style={{ left: `${Math.min(82, Math.max(28, rPos(closePx) as number))}%` }}>close {fmtPx(closePx)}</div>
               )}
               {rPos(callWall) != null && (
-                <div className="cp3" style={{ left: `${Math.min(91, rPos(callWall) as number)}%`, color: "var(--neg)" }}>CW {fmtPx(callWall)}</div>
+                <div className="cp3" style={{ left: `${Math.min(91, rPos(callWall) as number)}%`, color: "var(--cw)" }}>CW {fmtPx(callWall)}</div>
               )}
             </div>
             <div className="rangelabs">
@@ -1029,14 +1095,14 @@ export default function PostMarketTab(p: PostMarketProps) {
       <div className="sec">
         <div className="sechead">
           <h3><span className="secn">2</span>Level Performance Scorecard</h3>
-          <span className="tiny">
+          <span className="tiny right">
             {wallState === "ok" ? "SPX wall log · 09:29 → 16:00" : wallState === "loading" ? "loading the wall log…" : "wall log unavailable"}
             {path.pts.length ? ` · ${path.pts.length} price samples` : ""}
           </span>
         </div>
         <div className="scorecard">
           {grades.map((g) => (
-            <div className="sc" key={g.key} style={{ borderLeftColor: g.color }}>
+            <div className="sc" key={g.key} style={{ borderLeft: `4px solid ${g.color}` }}>
               <div className="nm">
                 <span style={{ color: g.color }}>{g.name}</span>
                 <span className={`pill${g.tone === "ok" ? " cool" : g.tone === "bad" ? " hot" : g.tone === "warn" ? " warn" : ""}`}
@@ -1067,7 +1133,7 @@ export default function PostMarketTab(p: PostMarketProps) {
               .map((r, i) => (
                 <div className="mv" key={`${r.level_type}-${r.slot}-${i}`}>
                   <span className="mono">{String(r.at ?? "").slice(0, 5) || `slot ${r.slot}`}</span>
-                  <span style={{ color: r.level_type === "call_wall" ? "var(--neg)" : r.level_type === "put_wall" ? "var(--pos)" : "var(--violet)" }}>
+                  <span style={{ color: r.level_type === "call_wall" ? "var(--cw)" : r.level_type === "put_wall" ? "var(--pw)" : "var(--violet)" }}>
                     {LEVEL_LABEL[r.level_type]}
                   </span>
                   <span className="mono">
@@ -1186,9 +1252,8 @@ export default function PostMarketTab(p: PostMarketProps) {
                 says nothing about these four series — which is exactly how a
                 violet CORE line reads as an unexplained squiggle. */}
             <div className="evlegend" style={{ marginBottom: 6 }}>
-              <span><i style={{ background: "var(--neg)" }} />call wall</span>
-              <span><i style={{ background: "var(--violet)" }} />CORE</span>
-              <span><i style={{ background: "var(--pos)" }} />put wall</span>
+              <span><i style={{ background: "var(--violet)" }} />CORE — the heavier wall</span>
+              <span><i style={{ background: "rgba(255,255,255,.42)" }} />the other wall</span>
               <span><i style={{ background: "#fff" }} />spot</span>
             </div>
             {wallPath ? (
@@ -1200,8 +1265,11 @@ export default function PostMarketTab(p: PostMarketProps) {
                   <span>{etHm(wallPath.pts[wallPath.pts.length - 1].ts)}</span>
                 </div>
                 <div className="tiny" style={{ marginTop: 6, letterSpacing: 0, textTransform: "none" }}>
-                  A level that sits while price travels is the one to fade; one that moves with price is
-                  dealers chasing. Section 2 above carries the wall log&apos;s own classified verdict.
+                  CORE is whichever wall carries more gamma at that minute, so the two lines SWAP when the
+                  dominant side changes — today the call wall held it{" "}
+                  <b style={{ color: "var(--txt)" }}>{Math.round(wallPath.callCoreShare * 100)}%</b> of the
+                  session. A level that sits while price travels is the one to fade; one that moves with
+                  price is dealers chasing. Section 2 carries the wall log&apos;s own classified verdict.
                 </div>
               </>
             ) : (
@@ -1252,7 +1320,7 @@ export default function PostMarketTab(p: PostMarketProps) {
       <div className="sec">
         <div className="sechead">
           <h3><span className="secn">4</span>Positioning at the Close</h3>
-          <span className="tiny">same chain, same formulas as the GEX chart</span>
+          <span className="tiny right">same chain, same formulas as the GEX chart</span>
         </div>
         <div className="tiles">
           <div className="tile" style={{ ["--tile-accent" as string]: totals.dex >= 0 ? "var(--pos)" : "var(--neg)" } as CSSProperties}>
@@ -1346,7 +1414,7 @@ export default function PostMarketTab(p: PostMarketProps) {
       <div className="sec">
         <div className="sechead">
           <h3><span className="secn">5</span>Tomorrow&apos;s Map — after 0DTE rolls off</h3>
-          <span className="tiny">
+          <span className="tiny right">
             {nextState === "ok" && next ? `${next.expiry} chain` : nextState === "loading" ? "loading the next expiry…" : "next expiry unavailable"}
           </span>
         </div>
@@ -1509,6 +1577,46 @@ export default function PostMarketTab(p: PostMarketProps) {
         </div>
       </div>
 
+      {/* ── 7. STRIKE PATHS ──────────────────────────────────────────────── */}
+      {strikePaths.length > 0 && (
+        <div className="sec">
+          <div className="sechead">
+            <h3><span className="secn">7</span>Strike paths</h3>
+            <span className="tiny right">
+              {strikePaths.length} strikes around spot · each line scaled to its own day
+            </span>
+          </div>
+          <div className="sparkgrid">
+            {strikePaths.map((r) => {
+              const tag = openTag(r.strike);
+              const pos = r.net >= 0;
+              const stroke = tag ? tag.color : pos ? "var(--pos)" : "var(--neg)";
+              const W = 108, H = 26;
+              const max = r.max || 1;
+              const pts = r.vals
+                .map((v, i) => `${(i / Math.max(1, r.vals.length - 1)) * W},${H - 2 - (Math.abs(v) / max) * (H - 5)}`)
+                .join(" ");
+              return (
+                <div className="spark" key={r.strike} style={{ borderLeftColor: stroke }}>
+                  <div className="sh">
+                    <span className="sk mono">{nf(r.strike, 0)}</span>
+                    <span className="sv mono">{fmtUsd(r.net, false)}</span>
+                  </div>
+                  <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+                    <polygon points={`0,${H} ${pts} ${W},${H}`} fill={stroke} opacity={.14} />
+                    <polyline points={pts} fill="none" stroke={stroke} strokeWidth={1.3}
+                      vectorEffect="non-scaling-stroke" />
+                  </svg>
+                  <div className="st" style={{ color: tag ? tag.color : "transparent" }}>
+                    {tag ? tag.text : "—"}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="footbar">
         <span className="l">
           Recap for {etDate} · {expiry || "—"} · ES {fmtPx(esFut, 2)}
@@ -1533,7 +1641,10 @@ function WallChart({
   path,
   height = 190,
 }: {
-  path: { pts: { ts: number; spot: number; cw: number | null; pw: number | null; cb: number | null }[]; lo: number; hi: number };
+  path: {
+    pts: { ts: number; spot: number; core: number | null; other: number | null; coreSide: "call" | "put" }[];
+    lo: number; hi: number;
+  };
   height?: number;
 }) {
   const pad = 8;
@@ -1565,27 +1676,27 @@ function WallChart({
     pts.map((p, i) => { const v = pick(p); return v == null || !(v > 0) ? null : `${x(i)},${y(v)}`; })
        .filter(Boolean).join(" ");
 
-  const cw = step((p) => p.cw);
-  const pw = step((p) => p.pw);
-  const cb = step((p) => p.cb);
+  const core = step((p) => p.core);
+  const other = step((p) => p.other);
   const sp = smooth((p) => (p.spot > 0 ? p.spot : null));
 
   return (
     <svg viewBox={`0 0 100 ${height}`} height={height} preserveAspectRatio="none"
       style={{ width: "100%", display: "block" }}>
-      {/* The wall-to-wall corridor, so the room price actually had is readable. */}
-      {cw && pw && (
+      {/* The corridor between the two, so the room price actually had is readable. */}
+      {core && other && (
         <polygon
-          points={`${cw} ${pts.slice().reverse().map((p, k) => {
+          points={`${core} ${pts.slice().reverse().map((p, k) => {
             const i = pts.length - 1 - k;
-            return p.pw == null ? null : `${x(i)},${y(p.pw)}`;
+            return p.other == null ? null : `${x(i)},${y(p.other)}`;
           }).filter(Boolean).join(" ")}`}
           fill="rgba(77,163,255,.06)"
         />
       )}
-      {pw && <polyline points={pw} fill="none" stroke="var(--pos)" strokeWidth={1.7} vectorEffect="non-scaling-stroke" />}
-      {cb && <polyline points={cb} fill="none" stroke="var(--violet)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" opacity={.9} />}
-      {cw && <polyline points={cw} fill="none" stroke="var(--neg)" strokeWidth={1.7} vectorEffect="non-scaling-stroke" />}
+      {other && <polyline points={other} fill="none" stroke="rgba(255,255,255,.42)" strokeWidth={1.4}
+        vectorEffect="non-scaling-stroke" />}
+      {core && <polyline points={core} fill="none" stroke="var(--violet)" strokeWidth={2}
+        vectorEffect="non-scaling-stroke" />}
       {sp && <polyline points={sp} fill="none" stroke="#ffffff" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
     </svg>
   );

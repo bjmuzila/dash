@@ -13,19 +13,17 @@
  */
 
 import { useState, useCallback } from "react";
-import { useAuth } from "@/components/auth/AuthProvider";
+import { useIsOwner } from "@/components/auth/useIsOwner";
 import { buildCalendarTemplateImage } from "@/lib/discord/econSnapshot";
 import { shareToDiscord, base64ToPngBlob } from "@/lib/discord/share";
 import { copyOrDownload } from "@/lib/snapshot";
 
 type TemplateBtnState = "idle" | "busy" | "ok" | "err";
 
-// ── Owner gate (cosmetic — matches DataBox/NavMenu) ───────────────────────────
-function useIsOwner(): boolean {
-  const { isSignedIn, user } = useAuth();
-  const ownerId = process.env.NEXT_PUBLIC_OWNER_USER_ID;
-  return ownerId ? user?.id === ownerId : !!isSignedIn;
-}
+// Owner gate (cosmetic) comes from the shared useIsOwner() hook. The local copy
+// that used to live here fell back to `!!isSignedIn` when
+// NEXT_PUBLIC_OWNER_USER_ID was missing from the build, so both buttons below
+// rendered for every signed-in customer. The shared hook fails closed.
 
 function postToDiscord(imageBase64: string): Promise<void> {
   const now = new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false });

@@ -1,392 +1,929 @@
 # Changelog
 
-## 2026-08-19 - Landing page: Tradeify code REPLACES the free Bzila card
+## 2026-08-20 (m) - Comped access: grant paid-customer access from the Admin page
 
-`components/landing/LandingClient.tsx`. Supersedes the entry below it.
+Added: `app/api/admin/comp-access/route.ts`, `comp_access` table.
+Edited: `lib/db.ts`, `owner-vite/src/pages/Admin.tsx`,
+`scripts/grant-paid-access.mjs` (rewritten onto the new mechanism).
 
-- The Tradeify partner code moved OUT of its own row under the feature grid and
-  INTO the right column, above the product shot — the slot the free "Bzila"
-  card held. The Bzila card, its `bzilaCard` / `bzilaTag` styles and its
-  `/bzila` link are gone (that route did not exist in `app/` anyway).
-- Renamed the two-column height-matching rules from `.bzila-card` to
-  `.tradeify-card`, so the code card is what gets pinned to 78px opposite the
-  trial CTA and the cards below both columns still land on the same line.
-- Dropped the `:hover` lift/glow the Bzila card had — the new card is not a
-  link, so nothing should suggest it is clickable.
-- Card reads: label "Tradeify partner code", copy "Funding an account? Use this
-  code for the best available offer.", and the code `BZILA` in a monospace
-  badge. Orange (`HOME_THEME.orange`) keeps it visually separate from the cyan
-  the page uses for its own actions.
+There was no way to hand someone full customer access short of running SQL. The
+owner Admin page now has a **Comped Access** card: email + optional note +
+optional expiry → Grant, with a list and a Revoke button (same shape as the
+Unsubscribes card directly below it).
 
+**Storage — its own table, not a fake Stripe row.**
+`subscriptions` is the mirror of Stripe. A hand-written `status='active'` row
+there is indistinguishable from a real customer to everything that reads that
+table, and the Stripe webhook would clobber it the moment that person actually
+subscribed. So comps live in `comp_access`:
 
-## 2026-08-19 - Landing page: Tradeify partner code card
+    comp_access (email PK, note, expires_at, granted_by, granted_at, revoked_at)
 
-`components/landing/LandingClient.tsx`.
+- **Keyed on email, not user_id**, so a comp can be granted BEFORE the person
+  has an account. The row waits; the join picks it up on their first request
+  after signup. Those rows render as `pending signup` in the card.
+- `expires_at` NULL = never. A date from the picker expires at the END of that
+  day, EST-anchored — deliberately an hour generous in summer rather than an
+  hour short, because a comp that ends early reads as a broken account.
+- Revoke stamps `revoked_at` instead of deleting, so the history of who was
+  comped and when survives a re-grant. Re-granting a revoked email revives the
+  row (`ON CONFLICT ... SET revoked_at = NULL`).
 
-- New **Tradeify partner code** card, badge only — displays the code `BZILA`
-  with the line "Funding a Tradeify account? Use this code for the best
-  available offer." No outbound link on purpose, so it cannot compete with the
-  trial CTA at the top of the card.
-- Sits directly under the six-tile feature grid, above the sign-in link, and
-  OUTSIDE `.landing-top` — that keeps it clear of the two-column
-  height-matching rules that pin the trial CTA and the Bzila card to 78px.
-- Orange accent (`HOME_THEME.orange`) rather than the page's cyan: cyan on this
-  page is reserved for things that click through into the product, so a
-  third-party offer reads as its own thing. No hardcoded hex outside the
-  existing rgba() tints already used in this file.
-- Code rendered in monospace with wide letter-spacing so it reads as something
-  to type at checkout.
-- Added a `<=640px` rule tightening the card's padding and copy size.
+**The gate — one line, one place.** `getSessionWithUser()` in `lib/db.ts` now
+computes `is_paid` as *(Stripe active/trialing)* **OR** *(live comp row)*. That
+is the only flag `middleware.ts` gates paid routes on, so a comp unlocks exactly
+what a subscriber sees. It does not touch `users.is_owner`, so `/owner/*`,
+`/social-media`, `/home3`, `/v3` and every `ownerApiGate` endpoint still reject
+a comped account. A new `is_comped` field rides along for display only.
 
+**API.** `/api/admin/comp-access` — GET (live comps) / POST (grant) / DELETE
+(revoke). Owner-session only, fails CLOSED like its `/api/admin/*` siblings, and
+deliberately NOT wired to the `INTERNAL_API_TOKEN` bypass: this endpoint hands
+out paid access and has no automated caller.
 
-## 2026-08-19 - Traders Dashboard: link to /premarket
+**Deliberately left on Next, not ported to `server-v2/api-router.js`.** The
+router requires `_lib-db.cjs`, an esbuild bundle of `lib/db.ts` that is
+committed rather than rebuilt on deploy — a route registered there would call
+`libDb.listCompAccess` and find it missing until someone regenerates the bundle.
+Unregistered paths fall through to Next, which imports `lib/db.ts` directly, so
+the Next route is the live one. (Regenerating the bundle is still worthwhile
+housekeeping: `esbuild lib/db.ts --bundle --platform=node --format=cjs
+--external:pg --outfile=server-v2/_lib-db.cjs`.)
 
-`components/pages/TradersDashboard.tsx`.
+**Table creation** happens through `ensureAllTables()` on the first `getDb()` in
+the Next process, which every gated request already hits. No migration to run.
 
-- **Premarket Prep button in the header**, beside the snapshot button — orange
-  (`HOME_THEME.orange`, via the file's `rgba()` helper; no hardcoded hex). Uses
-  `next/link`, which the SPA shims to a router push, so it navigates in-app
-  instead of reloading the bundle.
-- `DEFAULT_LINKS` now leads with Premarket Prep. That only affects users with no
-  saved Quick Links; everyone else keeps their arrangement, which is exactly why
-  the header button exists too.
-- Renamed the Quick Links picker entry "Premarket" → "Premarket Prep".
+**Script.** `scripts/grant-paid-access.mjs` was rewritten to write `comp_access`
+instead of a fake subscription. It gained `--note`, `--until YYYY-MM-DD`,
+`--list`, and `--check` — the last one reports leftover `status='active'`
+subscription rows with no Stripe id, i.e. grants made by the previous version of
+this script, so they can be migrated and deleted.
 
-## 2026-08-19 - FIX: /premarket crashed at runtime — backtick inside the CSS template
-
-`"...".inside is not a function` on load, the whole page blank.
-
-Two CSS comments I added in the styling pass contained BACKTICKS (```.inside```,
-```.pmk .g```) — and that CSS lives in a template literal. The first backtick
-ended the literal early, so everything after it parsed as a tagged-template
-call. Valid JavaScript, which is why it built clean and only died in the
-browser.
-
-- Removed every backtick from the `CSS` template literal and left a note in the
-  file saying why none may go back in.
-- Also fixed `.pmk .s b` → `.pmk .sect .s b`, missed when the sector chip rules
-  were scoped.
-
-## 2026-08-19 - FIX: /premarket broke the Docker build — moved to components/pages/
-
-`npm run build` failed with `Export encountered an error on /premarket/page:
-/premarket`, which took the whole VPS deploy down.
-
-Cause: `/premarket` is a LIVE-FEED page — it rides `lib/gexSocket` through
-`useMobileGex` and `useEsCandles`. Anything under `app/` gets prerendered by
-Next at build time, and that tree cannot render on a server. Every other
-feed-consuming dashboard page already avoids this by living in
-`components/pages/` and being mounted ONLY by the Vite SPA: there is no
-`app/<name>/page.tsx` for /flow, /em, /traders-dashboard, /ict, /board,
-/replay, /analytics, /options-chain, /scanner or the rest. `/premarket` was the
-odd one out.
-
-- **Moved** the page to `components/pages/Premarket.tsx` (unchanged apart from
-  the export name and a header note).
-- `app/premarket/page.tsx` is now a three-line server component:
-  `export const dynamic = "force-dynamic"` + `redirect("/app/premarket")`, so
-  the bare `cbedge.net/premarket` URL still lands somewhere and Next never
-  prerenders the client tree.
-- `app-vite/src/App.tsx` imports `@/components/pages/Premarket`.
-- `app/app/premarket/route.ts` (the SPA shell handler) and the toolbar nav item
-  are unchanged.
-
-Rule of thumb going forward: **if a page subscribes to the feed, it belongs in
-`components/pages/`, not `app/`.**
-
-## 2026-08-19 - /premarket: black box in the one-liner, wall tags contained
-
-`app/premarket/page.tsx`, styling only.
-
-- **Black box through "Today's one-liner".** The greek tile rule was written as
-  a bare `.pmk .g`, which also matched the `<span class="g">` the one-liner and
-  the scenario bullets use for their green highlight — so those spans inherited
-  the tile's panel background, border and padding and rendered as boxes mid-
-  sentence. Scoped it to `.pmk .greeks .g` (and its `.n` / `.v` / `.m`
-  children). Sector chips were scoped the same way (`.pmk .sect .s`) for the
-  same reason.
-- **CALL WALL / PUT WALL still overlapping.** The inside-the-bar placement now
-  anchors with `left`/`right` only, no transform: the bar's outer edge sits
-  (50 − w)% from the far side of the track, so pinning the tag's matching edge
-  there right-aligns it inside the bar and it can never exceed the track,
-  whatever the bar width. Short bars (<22% of the half-track) still hang the
-  label outside, where there is room by definition.
-
-## 2026-08-19 - /premarket: "Yesterday's flip" replaced with gap info
-
-`app/premarket/page.tsx` — Overnight Context.
-
-- Removed the "Yesterday's flip" row.
-- Added three rows in its place, all off the existing 5m ES bars (no new fetch):
-  - **Gap vs prior close** — front ES minus the prior RTH close, in points and
-    percent, with an inside/outside pill. Outside is the one that changes how you
-    trade it: a gap beyond yesterday's range has no reference above or below it,
-    so it runs or fails hard, while a gap inside the range sits in known
-    territory and fills far more often.
-  - **Gap fill target** — the prior close, plus the distance back to it.
-  - **Prior day range (ES)** — yesterday's RTH high/low and its width.
-- `overnight` now also resolves the prior RTH session's high/low (09:30–16:00 on
-  the last dated day before today) to support the inside/outside test.
-
-## 2026-08-19 - /premarket: card accents removed, borders raised, strike tags contained
-
-`app/premarket/page.tsx`, styling only — no data changes.
-
-- Dropped the coloured left accent bar on the six key-level cards
-  (`.lvl::before` and its call / put / flip / magnet / pain / spot variants).
-- Card outlines are more pronounced: new `--card: rgba(255,255,255,.20)` on the
-  section shell, the level cards, the greek tiles, the playbook and the sector
-  chips. A white alpha rather than a slate hex, because those cards sit on three
-  different backgrounds (panel, panel2, the green/red regime wash) and a fixed
-  hex reads as a different weight on each. Divider `--line` also lifted
-  (#1f2733 → #242e3b).
-- CALL WALL / PUT WALL no longer cover their neighbours. A tagged strike is
-  usually the WIDEST bar in the window, so a label hung off the bar's end ran
-  past the track — over the Overnight column on the call side and over the
-  strike gutter on the put side. Bars ≥22% of the half-track now carry the label
-  INSIDE, flush to the bar's end, on a translucent plate in white; only short
-  bars hang it outside, where there is room by definition. Tags are also capped
-  at half the track width and ellipsised.
-- Sector chips truncate their name instead of overflowing the card.
-
-## 2026-08-19 - /premarket wired to live data (no more placeholders)
-
-`app/premarket/page.tsx` — the page now reads the real feed. Every number that
-was a hardcoded mockup value is gone.
-
-Sources, all shared, none duplicated:
-
-- `useMobileGex("oi-vol")` — the one live-GEX layer (rides `lib/gexSocket`,
-  refcounted, pinned to today's 0DTE). Supplies spot, prev close, gamma flip,
-  call/put wall, total net GEX, ES front, ES−SPX basis and the chain.
-- `useEsCandles(true, 3, 5, false)` — same socket. Overnight high/low and the
-  prior RTH close come off the 5m ES bars (ON window = prior 18:00 ET → 09:30).
-- `useEconCalendar({ withQuote: false })` — today's US High/Medium events plus
-  the two largest earnings names, with the 30-minute staleness fade.
-- `/api/quotes-batch?symbols=/ES,/NQ,VIX` — ES / NQ / VIX day change, 30s.
-- `/api/scanner/market-quality` — **sector heat now comes from Market Quality**
-  (its `sectorBars`, 5-day sector change), not a new fetch. Its `globalScore`
-  also feeds the "Market quality" row. 60s.
-
-Derived client-side from that one chain through `lib/calculations` (so the page
-can never disagree with the GEX chart): per-strike net GEX bars (±12 strikes
-around spot), max pain, the 0DTE magnet, expected move (ATM straddle × 0.85,
-falling back to ATM IV × √(1/252)), DEX / vanna / call-vs-put gamma totals, the
-regime bias and the three scenarios.
-
-- **"vs prior close" needs one session to warm up.** Nothing in the app persists
-  an EOD GEX snapshot, so this page takes its own: once per session between
-  15:40 and 16:10 ET into `localStorage` (`cb-premarket-eod-v1`). Until a
-  snapshot from a PREVIOUS date exists, the net-GEX % change, the strike deltas
-  and "yesterday's flip" render "—" instead of a made-up number.
-- Removed the mockup's "build notes" and "alt strip" sections and the
-  not-wired badge; the header now shows expiry, feed state (LIVE / REST
-  FALLBACK / PAUSED) and the countdown to the open.
-- CHEX tile dropped — charm is not on `ChainRow`. Replaced with a call-vs-put
-  gamma split. MVC row replaced with the overnight range.
-- Added a <1180px stack for the three columns and the six level cards.
-
-## 2026-08-19 - New page: /premarket (Premarket Prep board)
-
-New customer dashboard page at `/app/premarket` — the pre-open prep board:
-regime header (net GEX, gamma flip, spot, one-line bias), a six-card key-levels
-strip (call wall / 0DTE magnet / spot / max pain / flip / put wall), the GEX
-profile by strike with spot + flip overlays, overnight context (ON range vs
-PDC, biggest GEX changes vs prior close, sector heat), and expected range +
-playbook with today's catalysts.
-
-- `app/premarket/page.tsx` — new `"use client"` page. Renders the approved
-  concept mockup verbatim; every selector is scoped under `.pmk` and the CSS
-  custom properties are declared on `.pmk` (not `:root`) so the mockup's
-  generic class names (`.row`, `.col`, `.bar`, `.stat`, `.g`, `.s`) cannot leak
-  into the rest of the app. **All values are static placeholders — nothing is
-  wired to the chain, the WebSocket or any API yet.**
-- `app-vite/src/App.tsx` — `lazy()` import + `<Route path="/premarket">`.
-- `app/app/premarket/route.ts` — Next shell handler (`serveSpaShell`) so a hard
-  refresh on `/app/premarket` doesn't 404.
-- `components/shared/GlobalToolbar.tsx` — `NAV_ITEMS` entry (🌅 Premarket),
-  placed after Traders Dash.
-- Mockup source kept at `generated/2026-08-19-premarket-prep-mockup.html`.
-- Dimmed/secondary text set to white throughout (`--dim` / `--dim2` = #fff).
-
-## 2026-08-19 - Budget / Bzila: cards follow the selected month, plus a year toggle
-
-`owner-vite/src/pages/Budget.tsx` — the Bzila tab's summary tiles (Income /
-Expenses / Net) and the three stream cards (CB Edge / Contracts / Prop) were
-always year-to-date, so changing the month picker did nothing to them.
-
-- `bzilaComputed` now also returns `monthStreams` — the per-stream in/out/net
-  breakdown keyed by `YYYY-MM`.
-- `BzilaPanel` takes `month` and has a scope toggle above the tiles: the
-  selected month (default) or the year. The tiles and stream cards read from
-  whichever scope is active; the Monthly All ledger below still lists the whole
-  year.
-- Selecting a month while in month scope auto-expands that month's ledger row.
-
-## 2026-08-19 - v3: new repo scaffolded (cbedge-v3) — speed layer done, UI blank
-
-New repo, delivered as `generated/2026-08-19-cbedge-v3-scaffold.zip`. Nothing in
-this repo changed.
-
-v3 is a **frontend-only** rewrite. `server-v2/` stays exactly as it is and
-remains the only source of data — the recorders, levels engine, walls-reach and
-the TT/Theta proxies are not being reproduced. v3 talks to it over HTTP plus one
-WebSocket and is served at `/v3/*` while v2 keeps `/app/*`, so both run side by
-side and there is no cutover day.
-
-Stack: Vite 7 + React 19 + TS + Tailwind v4, tokens as CSS custom properties.
-
-The UI is deliberately blank — one placeholder page. What is finished is the part
-that is hard to retrofit later:
-
-- **Early boot.** The WebSocket opens in `index.html` before the bundle is
-  fetched and buffers frames until React adopts it; the IndexedDB read starts in
-  the same breath. Measured against the mock server: first frame 51ms, first
-  paint 80ms — data beats pixels. In v2 the socket did not open until a
-  component mounted and subscribed.
-- **Derived topic scoping.** `?topics=` is computed from what is actually
-  subscribed, so there is no hand-maintained list to forget an entry in and no
-  way for a panel to silently go stale. The boot connection stays unscoped on
-  purpose; scoping applies ~1.2s later once the route settles, so the early-boot
-  head start is not traded away for a few hundred bytes.
-- **One store, per-field selectors, rAF coalescing.** 20 frames inside one
-  animation frame produce one notification.
-- **Instant stale paint.** Last-known state is cached in IndexedDB and painted
-  dimmed until live data replaces it. No spinners on numbers.
-- **Budgets that fail the build.** Every chunk measured in brotli against
-  `budgets.json`. Initial load 69.5kb against a 109kb ceiling.
-- **`ws-scope-check.mjs`** drives a real browser against a mock server that
-  mirrors server-v2's filtering and asserts all of the scoping behaviour above.
-  8/8 passing.
-
-Also carried over as explicit rules in the new `AGENTS.md`: no colour literals
-outside `tokens.css`, no catch-all route redirect (v2 fell through to
-`/traders-dashboard`, which made unregistered pages look half-working), charts
-updated imperatively, no request waterfalls.
+KNOWN GAP: `listAllUsersForBroadcast()` still derives `paid` from Stripe alone,
+so a comped account shows up in the Admin page's "Not Paying" list and in
+upsell broadcast audiences. Left as-is — folding comps in there changes what
+that list means for revenue.
 
 
-## 2026-08-19 - Snapshot: pill labels sit on the box's centre again
+## 2026-08-20 (l) - Owner-only UI was visible to every signed-in customer
 
-Edited: `lib/snapshot.ts`.
+Added: `components/auth/useIsOwner.ts`.
+Edited: `components/shared/NavMenu.tsx`, `components/shared/DataBox.tsx`,
+`components/shared/EconCalendarDiscordBtn.tsx`, `components/shared/TopBar.tsx`.
 
-The wall log's PNG (`/app/scanner` → log page, 📸 PNG) drew every badge —
-`OPEN BASELINE`, `CHANGED`, the capture-rail chips — with its label off the
-box's vertical centre, even though the same pills are perfectly centred on the
-live page.
+Four components each carried their own copy of the client-side owner check, and
+all four had the same fallback:
 
-Gotcha 10 already rewrote those pills for the clone (fixed height + line-height
-→ `line-height: 1` + symmetric padding), and that half was right but not
-sufficient. The remaining offset is html2canvas itself: it paints text at
-`textRect.top + baseline`, and `baseline` comes from its own probe
-(`FontMetrics.parseMetrics`) — an inline span plus a 1px baseline-aligned img,
-measured with **integer** `offsetTop`s and then padded by a hardcoded `+ 2`.
-That overshoots the real ascent by ~1–2px, so every run of text is drawn low.
-Symmetric padding cannot cancel a constant downward push.
+    const ownerId = process.env.NEXT_PUBLIC_OWNER_USER_ID;
+    const isOwner = ownerId ? user?.id === ownerId : !!isSignedIn;   // <- bug
 
-New `captureBaselineBias()` measures the push instead of guessing it: it runs
-html2canvas's probe verbatim in the clone document, compares it with where the
-baseline actually is, and returns the difference in CSS px. The `data-cap-center`
-rewrite then splits the pill's padding asymmetrically by that bias, so the glyphs
-land back on the optical centre. Painted height, border and box position are
-unchanged; the live page never sees any of it.
+`NEXT_PUBLIC_OWNER_USER_ID` is only a Docker build ARG. On any build where it
+was not passed, the ternary took the `!!isSignedIn` branch and promoted EVERY
+signed-in paying customer to "owner". That is why a plain customer account saw
+the **Owner** row in the hamburger nav and the Discord share buttons on panel
+headers. Nothing was actually reachable — `middleware.ts` blocks `/owner/*` and
+`/api/discord-share` does its own owner check — but the UI advertised it.
 
-Because the bias depends on the font the CLONE resolved (not the one the live box
-was sized for) it is measured per font + weight + size and cached per capture,
-and it is clamped to ±4px so a probe that runs before a webfont loads can never
-shove a label out of its box. Pills with no declared height keep their computed
-padding and only shift the text.
+- New `useIsOwner()` hook is the single client-side owner check, and it FAILS
+  CLOSED: `isOwnerClaim || (ownerId && user.id === ownerId)`, never a bare
+  "is signed in". `isOwnerClaim` is server truth (`users.is_owner`, delivered
+  by `/api/auth/me`), so the env fallback is no longer load-bearing and an
+  unconfigured build now hides owner UI from everyone instead of showing it to
+  everyone.
+- `NavMenu` — the **Owner** row (`https://owner.cbedge.net`) now renders only
+  for a real owner. `hasFullAccess` folded the redundant `isOwnerClaim` term
+  into `isOwner`.
+- `DataBox` — `BoxDiscordBtn` is what every panel-header Discord button renders
+  through (`GexToolbar`, `SnapshotPanel`, and every `DataBox showDiscord`), so
+  this one change covers all of them.
+- `EconCalendarDiscordBtn` — both the Discord post and template-copy buttons.
+- `TopBar` — the `ownerOnly` nav filter. (This component is currently
+  unreferenced; fixed for consistency.)
+- Untouched on purpose: `UserMenu`'s "Join Discord" link is gated on
+  `isPaid || isOwnerClaim` — that is the customer Discord-community link, not an
+  owner tool. `EconCalendarPanel`, `GlobalToolbar`, `GexDock`, `BzilaAlerts`,
+  `TradersDashboard` and `WhatsNewClient` already used the strict form.
+- `components/NavMenu.tsx` (repo-root duplicate) still has the old fallback and
+  was left alone — nothing imports it.
 
-Verified against a headless Chromium harness driving the repo's own html2canvas
-build: pill label vs. box centre, five font families × four height/font-size
-pairs. Before: 0.83–1.75px low. After: 0.00–0.01px at 12px labels (what the log
-page uses) and ≤0.88px at the odd sizes, where html2canvas's integer probe
-quantises what is left. Every case improved; none regressed.
+NOTE: because the check now prefers the server claim, the owner account must
+have `users.is_owner = TRUE` in Postgres, not just a matching
+`OWNER_USER_ID`/`NEXT_PUBLIC_OWNER_USER_ID` env value:
 
-## 2026-08-18 - ΔGEX Board: rail badges, call/put legs, live 0DTE, and deep links out
+    UPDATE users SET is_owner = TRUE WHERE lower(email) = '<owner email>';
 
-Edited: `server-v2/eod-strike-gex-recorder.js`,
+
+## 2026-08-20 (k) - New script: grant comped paid-customer access by email
+
+Added: `scripts/grant-paid-access.mjs`. No app code touched.
+
+There was no way to hand someone full customer access without running them
+through Stripe. This is that switch — and only that switch.
+
+- The paywall reads exactly one thing: `getSessionWithUser()` in `lib/db.ts`
+  computes `is_paid` as `sub.status IN ('active','trialing')` off the
+  `subscriptions` row keyed by the user's id, and `middleware.ts` gates every
+  protected route on it. The script upserts that row with `status='active'`.
+- `users.is_owner` is deliberately untouched, so the account stays a plain
+  customer: `/owner/*`, `/social-media`, `/home3`, `/v3` and every
+  `ownerApiGate` endpoint keep rejecting it. The script prints `is_owner` back
+  after the write as a check, and warns if it is somehow true.
+- Writes no `stripe_customer_id` / `stripe_subscription_id` / `price_id`, so a
+  comp never reads as real revenue and the Stripe webhook has nothing to
+  collide with if that account ever does subscribe for real.
+- Stamps `welcome_email_sent_at` so the founder auto-welcome does not fire at
+  a comped account.
+- `current_period_end` is set to 2100-01-01 (epoch 4102444800) so anything
+  doing renewal-date display or grace-window math treats it as current.
+- `--revoke` flips the row to `canceled` — same gate, reversed.
+- The account must already exist; the script exits 2 with a "sign up first"
+  message if the email has no `users` row. Since 2026-08-20 (j) that means
+  email + password at `/sign-up`, not Google.
+- Takes effect within ~8s (the `lib/auth/session.ts` validation cache TTL), or
+  instantly on re-login.
+- Header of the script carries the `docker exec` invocation for the VPS and a
+  plain-SQL equivalent for psql.
+
+
+## 2026-08-20 (j) - Auth: Google sign-in removed, email/password only
+
+Edited: `components/auth/AuthForm.tsx`, `app/api/auth/google/start/route.ts`,
+`app/auth/callback/route.ts`.
+
+Google OAuth kept failing at the consent screen with
+`Error 400: redirect_uri_mismatch`, so the Google path is gone. Sign-in and
+sign-up are now email + password only.
+
+- `AuthForm` lost the "Continue with Google" button, the `or` divider and the
+  `withGoogle()` handler. The email/password form, Turnstile captcha and rate
+  limiting are unchanged — it is just the first thing on the card now.
+- `/api/auth/google/start` and `/auth/callback` are reduced to stubs that
+  redirect to `/sign-in` (the callback also clears any leftover
+  `g_oauth_state` / `g_oauth_next` cookies). Kept rather than deleted so a
+  stale bookmark, a cached bundle, or a consent screen left open in a tab
+  lands on the login page instead of a 404.
+- `middleware.ts` unchanged — those two paths stay public so the stub
+  redirects are reachable without a session.
+- `lib/auth/google.ts` and the `google_sub` column are now unused. Existing
+  Google-only accounts (rows with no `password_hash`) cannot sign in until
+  they set a password via Forgot password.
+
+
+## 2026-08-20 (i) - Options Chain: mirrored strike rail on the right edge
+
+Edited: `components/pages/OptionsChain.tsx`.
+
+The chain grid had one strike ladder, sticky on the left. With a wide expiry
+set the right-hand columns sit far enough from it that naming a row means
+scrolling back — so the same ladder now repeats as a sticky column on the far
+right edge of the grid.
+
+- New `STRIKE_COL`-wide track appended to `gridTemplateColumns`, after the
+  reserved (ghost) tracks, so it is always the outermost column.
+- Header corner, padding rows and data rows each got their mirrored cell.
+- The right rail is a full peer of the left one: same click-to-focus and
+  shift-click-to-isolate handler, same ATM cyan + white inset rule, same EM
+  +/-1s / +/-2s tags, same selection tint and dim behaviour.
+- Geometry is flipped, not restyled: border and selection rule on the LEFT
+  edge, number left-aligned, EM tag pushed to the outer (right) edge.
+- ATM/selection rules stay `box-shadow` insets rather than real borders, for
+  the same reason as the left rail: a real 2px border would make the ATM row
+  taller than its neighbours and the ladder would jump every time spot crossed
+  a strike.
+
+## 2026-08-20 (h) - Post-Market §3 rebuilt: build-time bars, peak marks, wall path, written-vs-traded
+
+Edited: `components/pages/premarket/PostMarketTab.tsx`, `components/pages/Premarket.tsx`.
+
+"09:30 vs now" is a dead question on 0DTE. The open book is ~2% of the close, so
+every strike reads "+100% added" and the delta chart is a copy of the profile
+sitting next to the profile. The section now asks a question the session can
+answer: HOW was the book built, and is it still there.
+
+### The profile row carries three facts
+
+- **Build-time bar** — the same bar, segmented by WHEN its gamma arrived:
+  blue 09:30–12:00, violet 12:00–15:00, amber 15:00–close, laid from the centre
+  outwards in time order. The profile keeps its shape and the colour composition
+  IS the change. Shares are normalised over the ABSOLUTE moves, so a strike that
+  built and gave some back reads as its two moves rather than >100%.
+- **High-water mark** — a tick at the strike's intraday peak, with the gamma it
+  gave back hatched between mark and bar. At its peak = live level; well short of
+  its own mark = abandoned, do not carry it into tomorrow.
+- **The label** — "62% AM · at peak" / "71% PM · −34% 13:10".
+
+### Three new panels
+
+- **Wall migration** (`WallChart`) — call wall / CORE / put wall / spot over the
+  session on one price axis. A level that sits while price travels is the one to
+  fade; one that moves with price is dealers chasing. These are NET-basis proxies
+  off the recorded ladder (the recorder stores net per strike only) and the panel
+  says so — /proxy/walls in section 2 is the classified truth.
+- **Written vs traded** — gamma added per strike against minutes spent at that
+  strike, growing away from a centred label. Peaks that line up are a pin; peaks
+  that separate mean the level was pulling.
+- **Positioned vs written** (section 4) — the share of each strike's gamma that
+  came from settled OI rather than today's volume. Aggregate says "mostly volume"
+  and is useless; per strike it separates levels set up before the bell from ones
+  written from nothing after lunch. It reads the LIVE CHAIN only, so it is the one
+  panel here that still works on a day the recorder missed.
+
+The open-vs-now overlay, its scale guard and the Δ heatmap are gone with the
+question they answered. `PostMarketTab` now takes the raw `chain` prop for the
+OI/volume split.
+
+## 2026-08-20 (g) - Premarket: SPY and QQQ boards
+
+Added: `components/pages/premarket/TickerBoard.tsx`.
+Edited: `components/pages/premarket/postMarketData.ts`, `components/pages/Premarket.tsx`.
+
+A SPX / SPY / QQQ switch sits next to the page title and is remembered for the
+session. SPX is unchanged. The other two render `TickerBoard`, in the same `.pmk`
+theme, with the same PRE / POST split.
+
+### Why SPY and QQQ cannot just be a prop on the SPX page
+
+`lib/gexSocket` carries ONE symbol and `useMobileGex` pins it to SPX's front
+expiry, so these two cannot ride the live feed — and half the SPX panels exist
+only because SPX has ES futures behind it and a recorder writing its ladder every
+minute (ES basis, overnight range, the gap, open-vs-now, replay). A ticker prop
+would have produced a page where a third of the cards said "—" forever.
+
+What SPY and QQQ DO have, and what the board therefore carries:
+
+| Source | Panel |
+|---|---|
+| `/api/expirations` + `/api/chains` (the path `useDualTickerGex` already uses) | regime, level rail, five level cards, scrolling GEX profile, expected range, playbook |
+| `/proxy/walls?symbol=SPY\|QQQ` | the SAME saved, server-classified post-market grade SPX gets — both are quick tickers on /level-log |
+| the next expiry's chain | tomorrow's structure |
+
+`parseTickerBoard` computes walls / flip / CORE / max pain / EM off the raw legs
+at gamma x (OI + volume) x S^2 x 0.01 x 100 — 0.01 x 100 = 1, so it lands on
+exactly the same number as `netGEXOf` and the three boards are directly
+comparable. Strike labels drop to 0dp because SPY/QQQ ladders are $1 wide.
+
+It is a 60-second poll, not a tape, and the board says so — plus one line naming
+the SPX-only panels that are deliberately absent rather than empty. Only the
+markup switches: the SPX hooks keep running (one refcounted socket, shared with
+the toolbar), so switching back is instant, and TickerBoard's poll only exists
+while it is mounted.
+
+## 2026-08-20 (f) - Post-Market: the scale guard was blocking a REAL 0DTE build
+
+Edited: `components/pages/premarket/PostMarketTab.tsx`.
+
+The guard added in (c) rejected anything more than 4x apart in EITHER direction.
+On a live 0DTE it measured 0.1x and hid the open overlay, the biggest-strike list
+and the delta heatmap, all three, with "a different book, not a different day".
+
+It was a different day. The basis is OI + VOLUME, and at 09:29 today's contracts
+have essentially no volume — the book that decides the session is written after
+the bell. A 5x-20x build from open to close is the normal shape of an SPX 0DTE,
+and showing it is the entire point of the panel.
+
+The guard is now directional:
+
+- ratio > 4 (recorded HOLDS MORE than live) stays blocked — the recorded side
+  cannot legally carry more gamma than the live one unless it is a bigger book,
+  which is exactly what `anyExpiry=1` used to produce.
+- ratio < 0.02 stays blocked — 0.01x is the per-1% convention error
+  (S^2 * 0.01 vs S^2), not a session.
+- everything between is a real day and renders.
+
+A build is now SAID rather than hidden: the section legend carries
+"book grew 10.4x since 09:30" when the open ladder is under 60% of live.
+
+## 2026-08-20 (e) - Phone build: PREP tab replaces EM
+
+Added: `components/mobile/pages/MobilePrep.tsx`, `components/pages/premarket/postMarketData.ts`,
+`app/app/m/prep/route.ts`.
+Edited: `components/mobile/mobileNav.ts`, `app-vite/src/App.tsx`,
+`components/pages/premarket/PostMarketTab.tsx`.
+
+The Estimated Moves tab in the bottom bar is now **Prep** — Premarket Prep and
+the Post-Market Recap on one phone screen, with the same PRE / POST switch as the
+desktop page. EM was one number a day; this is the screen you actually open
+before the bell and again after the close.
+
+All three registry edits were made (the ones mobileNav's header lists): the tab,
+the `lazy()` route in `App.tsx`, and `app/app/m/prep/route.ts` — miss the third
+and the tab works in-app but the URL 404s on a hard refresh.
+
+### The data layer came out of the desktop tab
+
+`postMarketData.ts` is new but not new code: the recorded-ladder hook, the SAVED
+wall grades (`/proxy/walls`) and the next-expiry structure were lifted out of
+`PostMarketTab.tsx` the moment a second surface needed them. Both screens now
+read the same hooks, so the phone can never disagree with the laptop about how
+the day went — and the phone chunk does not pull the desktop tab's markup in to
+get at them.
+
+### Phone-specific, not a squeezed desktop page
+
+- The desktop's horizontal level rail becomes a VERTICAL ladder: CW / CB / SPOT /
+  FLIP / PW as rows, sorted high to low, distance from spot on the right. Five
+  labels across 358px overlap; five rows do not, and they need no legend.
+- PRE carries regime, the shared `LevelsBar`, the ladder, expected range, the
+  overnight card and one base-case sentence.
+- POST carries the verdict, net GEX open → now, the three recorded level grades
+  (with the recorder's own reaction badge), and tomorrow's map after the roll.
+- Every grid goes through `gridCols()` — the GLOBAL GRID COLLAPSE in globals.css
+  would otherwise flatten them.
+- The POST hooks live in a child component, so the phone spends no request on the
+  recap while you are reading the morning map.
+
+`/m/em` stays routed and `MobileEm` stays in the build — old links and bookmarks
+still work, EM just no longer holds a slot in the six-tab bar. `/premarket` now
+redirects a phone to `/m/prep`.
+
+## 2026-08-20 (d) - Premarket: the GEX profile scrolls
+
+Edited: `components/pages/Premarket.tsx`, `components/pages/premarket/PostMarketTab.tsx`.
+
+"GEX Profile by Strike" showed ±12 strikes and nothing else existed. The walls
+routinely sit outside that window, which is exactly when you want to look at
+them. The panel is now the scroll container and renders ±60.
+
+### Two windows, on purpose
+
+Widening the single window would have changed what the chart MEANS:
+
+- `nearBars` (±12) still sets the bar widths and still owns the 0DTE magnet. One
+  monster strike 200 points out would otherwise flatten every bar near the money
+  and steal the magnet tag.
+- `bars` (±60) renders. The rows cost nothing until you scroll to them.
+
+`.spotline` / `.flipline` are absolutely positioned inside the scroll box, so
+they travel with their rows instead of floating over whatever happens to be in
+view. `overscroll-behavior: contain` stops a flick at the end of the ladder from
+scrolling the page behind it.
+
+### Centring that does not fight you
+
+The panel loads centred on spot and STAYS centred while it is pinned. The first
+scroll by hand un-pins it, so reading a far wall is never yanked back to the
+money by the next live frame; a "back to spot" button appears and re-pins. Our
+own `scrollTop` writes are flagged so the scroll event they fire is not mistaken
+for the user's hand.
+
+The post-market GEX-evolution ladder gets the same treatment (same two windows,
+same scroll box). Its Δ heatmap deliberately stays on the ±12 window — 121 cells
+in one row is a smear, not a heatmap.
+
+## 2026-08-20 (c) - Post-Market tab: graded off the SAVED wall log, and the evolution panel un-broken
+
+Edited: `components/pages/premarket/PostMarketTab.tsx`.
+
+### The GEX evolution panel was comparing two different books
+
+`useIntradayLadder` copied `anyExpiry=1` from the bubble-trail hook. That flag
+exists so a multi-DAY backfill can span expiries (each day is written under its
+own front expiry); here it dropped the expiry filter and merged EVERY expiry in
+the window into one slot, so the "09:30 profile" was the whole SPX board while
+the live side was today's 0DTE alone. ~100x apart: the change hatch ran the full
+width of every row and the biggest-strike list printed +$65B deltas.
+
+Three fixes, deliberately overlapping:
+
+1. Ask for the expiry by name — no `anyExpiry`. (`top` was never a parameter this
+   route understands; heatmap mode always returns the full ladder. Dropped.)
+2. Dedupe cells per strike per slot, so a strike written twice in one 5-minute
+   bucket cannot be counted twice.
+3. A SCALE GUARD that does not trust the request shape: compare the recorded and
+   live ladders over the strikes they share, and if total magnitude is more than
+   4x apart, hide the overlay and say why instead of drawing a confident wrong
+   number. The caret width is clamped to the track as a last resort.
+
+### The card accents had no colour
+
+The accent was a `::before` painted by tone classes, so a card whose level had no
+verdict yet drew grey and the row read as unstyled. It is now an element carrying
+the LEVEL's own colour — call wall red, put wall green, CORE violet — with the
+verdict in the pill, which is the part that actually changes.
+
+### SPX core values are graded from the log that already saves them
+
+`server-v2/walls-recorder.js` captures SPX's call wall / put wall / CORE at 09:29
+and every 15 minutes to 16:00, writes only when a level MOVES, and classifies
+every touch four slots later — reject / break <5 / break / broke-and-consolidated
+/ new wall / pinned / rolled over. That is a real server-side grade of the day and
+it was already stored; the tab was busy inventing a worse one from the last frame.
+
+`useRecordedWalls` now reads `/proxy/walls?date&symbol=SPX` (same endpoint and
+shape as `/level-log`) and the recorder's verdict WINS for those three cards:
+status is the classified reaction, the line under it reads
+`7,750 → 7,745 · moved 2x · 3 tags`, and the foot carries excursion, reclaim
+minutes and attempts. Gamma flip and max pain are not recorded, so those two stay
+path-derived. Each card states which it is. Under the scorecard, every level MOVE
+of the day is listed with its prev → new strike and the spot at the time.
+
+When the log has nothing for the date, the three cards fall back to the derived
+grade and say so.
+
+## 2026-08-20 (b) - Premarket: POST-MARKET tab
+
+Edited: `components/pages/Premarket.tsx`.
+Added: `components/pages/premarket/PostMarketTab.tsx`.
+
+/premarket now carries two tabs on one page. The premarket tab is unchanged. The
+new one answers the questions that only exist after the close: did the morning
+map hold, what changed inside the day, and what does tomorrow look like once
+0DTE rolls off.
+
+### The tab itself
+
+Auto-selects by the clock — Premarket until 09:30, Post-Market from 16:05 (the
+settle, not the bell; the last frames land in those five minutes). Either is
+defensible in between, so the FIRST manual click pins the choice into
+`sessionStorage` and the clock never moves it again for that session.
+
+### Six sections, no invented numbers
+
+| # | Section | Comes from |
+|---|---|---|
+| 1 | Day snapshot + verdict | live chain + ES session bars |
+| 2 | Level scorecard (CW/PW/flip/CB/max pain) | the intraday spot path |
+| 3 | GEX evolution, 09:30 vs now | the recorded per-minute ladder |
+| 4 | Positioning at the close | the same DEX/vanna/call-put math the page already runs |
+| 5 | Tomorrow's map | the NEXT expiry's chain |
+| 6 | Journal, level accuracy, replay | localStorage + the recorded ladder |
+
+**The unlock is `/api/snapshots/option-strike-gex-history`** — the per-minute
+ladder the ES chart's bubble trail already backfills from. The live socket keeps
+no history, so without it there is no 09:30 profile and no intraday spot path,
+and half of this tab could only be faked. `useIntradayLadder` reuses that hook's
+two hard-won guards rather than rediscovering them: the route answers HTTP 200
+even when it threw (an `error` key and no `columns`), and "today" is the newest
+NON-WEEKEND day present, because the recorder has no market-hours gate and
+rewrites a frozen copy of Friday all weekend. It asks for `top=60` instead of 8 —
+this tab draws the whole profile, not a handful of bubbles.
+
+**Tomorrow's map is the only panel that needs a second chain.** `/api/gex`
+ignores its `expiry` param (it mirrors whatever the socket is pinned to), so the
+next expiry comes from `/api/expirations` + `/api/chains` and the walls are
+computed here. `structureFromChain` COPIES the per-strike formula out of
+`parseExpiration` — gamma x (OI + volume) x S^2 x 0.01 x 100, put side negated —
+rather than calling it, because that helper returns only the net per strike and a
+call wall is per-side by definition. Same constants, so tomorrow's walls are
+computed exactly the way today's are. Fetched once per tab-open, never polled.
+
+**Nothing renders a plausible-looking placeholder.** A number that cannot be
+derived shows "—" or an explicit "not recorded today" note. The scorecard is only
+worth reading if a green pill means the level actually held.
+
+### Notes
+
+- No new socket and no new topics — the tab is fed by props off the same
+  `useMobileGex` frame the premarket tab uses.
+- The 09:30-vs-now profile draws ONE bar (now), a white caret at the 09:30 level
+  and a hatched segment between them. The first design drew both profiles as
+  filled shapes and was unreadable.
+- Level accuracy writes one row per session to localStorage after 16:05 and keeps
+  20; it starts empty and fills in with use.
+- The journal is per-date localStorage on that device — not synced, not a server
+  record.
+
+## 2026-08-20 (a) - Premarket: one GEX level rail above the cards
+
+Edited: `components/pages/Premarket.tsx`.
+
+The two mockup strips (OVERNIGHT CONTEXT / EXPECTED RANGE) each drew their own
+axis, so the same price sat at two different x positions one card apart. This
+collapses the idea into ONE rail, mounted between the regime row and the KEY
+LEVELS grid (directly above the Call Wall card): put wall, gamma flip, core
+bullseye, spot, call wall, all on a single shared price domain.
+
+- **CB = Core Bullseye** — the strike carrying the most *absolute* gamma across
+  the WHOLE chain, the same definition `Board.tsx`'s levels panel uses, so the
+  two surfaces can never print a different CB. It is deliberately not the "0DTE
+  Magnet" card, which is capped to the +/-12-strike window the profile draws and
+  can therefore miss a larger strike further out.
+- Domain = min..max of the five levels + 14% padding; the put-wall..call-wall
+  span is washed in behind the track.
+- Captions alternate above/below in PRICE order (not by code) and are clamped to
+  4%..96%, because two levels can print a few points apart and would otherwise
+  overprint or run off the card edge.
+- Each caption carries the level's price plus its distance from spot; SPOT
+  carries its ES equivalent through the existing `basis`.
+- Under 1180px the long level name is dropped and only the code remains.
+
+No new data source: everything comes off the chain `useMobileGex` already
+delivers, so the rail cannot disagree with the cards under it.
+
+## 2026-08-19 (g) - ΔGEX Board: every basis carries its own "run at" timestamp
+
+Edited: `server-v2/eod-strike-gex-recorder.js`, `server-v2/server-with-proxy.js`,
 `owner-vite/src/pages/GexGrowth.tsx`.
-Schema: `eod_strike_gex` gains `call_gex` and `put_gex` (nullable, no backfill).
 
-The remaining modules from the interpretation-layer doc, minus the two sections
-that were commentary rather than features.
+### There is no single "when was this row run"
 
-### Call/put legs — the schema change
+`ts` is the INSERT clock and always has been. That is not the same fact as *when
+this data was true*, and on this table the two diverge two different ways:
 
-`net_gex` is the sum of a positive call leg and a negative put leg, and the sum
-is lossy: net GEX falling is equally consistent with call gamma coming off and
-put gamma piling on. `accumulateChainGex()` always computed both halves and
-threw them away. It now keeps them, and `callLeg + putLeg` is bit-for-bit the
-old single expression — so the legs land alongside a year of history with no
-discontinuity in the net.
+- The sweep **paces** across ~169 symbols over several minutes, so the write
+  clock is minutes later than the read for most of them.
+- After the 09:25 re-stamp, `oi_*` on a row was read **the next morning** while
+  `vol_*` on that same row was read at yesterday's 16:05 sweep. One row, two
+  values, a full session apart.
 
-**No backfill, deliberately.** The chains those rows were built from are gone.
-Pre-migration sessions carry NULL legs all the way to the client, never
-COALESCEd to 0, because "not recorded" and "no call gamma here" are different
-facts. `hasLegs` / `hasPrevLegs` let the panel explain the gap in one line
-instead of showing a fabricated split. Legs are summed ONLY when both sessions
-have them — a mixed sum would report the entire current call book as "built
-today".
+So a single row timestamp is wrong for at least one basis every single day.
 
-### 0DTE — live only, and NOT a new column
+### Three capture columns
 
-The obvious design was a second expiry bucket in the table, and it is wrong.
-The recorded sweep fires at **16:05 ET, after the close, by which point today's
-0DTE has expired** — storing it would write a ladder of zeros under a column
-implying it meant something, every day, forever. Intraday it is the opposite:
-the fastest gamma on the board and the half the recorded series structurally
-cannot see. So `resolveBoardExpiries()` gained a `zerodte` bucket that the LIVE
-route alone uses, the table keeps its ex-0DTE definition unchanged, and the
-panel shows 0DTE as a summary (net, share of |book|, top strikes) rather than a
-second ladder. Both buckets are fetched in one `Promise.all` so they can never
-be from different seconds.
+| column | stamps | set by |
+|---|---|---|
+| `captured_at` | oivol, vol, and oi while provisional | evening sweep |
+| `oi_captured_at` | oi once settled | 09:25 re-stamp |
+| `flow_captured_at` | flow | the `flow_prints` aggregate |
 
-### Rail badges
+All three are the moment the **read started**, not the write finished — a symbol
+whose chain sweep takes 40s describes the book as of when the fetch went out, and
+stamping the INSERT would date it 40s late every time. `flow_captured_at` is its
+own moment because the flow aggregate runs after that symbol's chain sweep
+finishes, even though both land in one INSERT.
 
-`getStrikeGexBadges()` computes per-symbol structure — flip level now/prior,
-migration, sign-flip count, walls — and merges into the board response. **In
-Node, not SQL**: the flip is a zero crossing of a running total with linear
-interpolation, and expressing it in a window function would be a second, subtly
-different implementation of a definition the client already has. One extra query
-of per-strike rows, reduced to one small object per symbol before it reaches the
-browser — the wire payload is unchanged. Failure degrades the rail to its old
-behaviour rather than taking the board down.
+`flowCapturedAt` is reset to null when the flow read lands nothing or throws —
+an absence does not get a timestamp.
 
-`railBadge()` picks ONE headline for ~60px: appeared/vanished outranks a
-migration, which outranks a sign-flip count. New `Most structural` sort ranks on
-`structScore`, which is what the |Δ| sort is blind to.
+### Resolution
 
-### Deep links
+`BASIS_STAMP` maps each basis to its COALESCE chain, and `stampExpr(basis, alias)`
+builds the SQL:
 
-Flow takes `ticker` (**not** `symbol` — it silently ignores `symbol`) and
-`dteMax=0` for the 0DTE tape; strikes link to Options Chain per the established
-`Scanner.tsx` href. Absolute URLs, because the owner SPA is a different origin
-and a bare `/flow` resolves against it. Overridable via `VITE_SITE_ORIGIN`.
+    oivol / vol  →  COALESCE(captured_at, ts)
+    oi           →  COALESCE(oi_captured_at, captured_at, ts)
+    flow         →  COALESCE(flow_captured_at, captured_at, ts)
 
-### Caught in review
+The `ts` tail is the fallback for rows written before these columns existed — a
+coarser answer, but a true one, and better than a NULL the page has to explain.
 
-- **A gamma flip that VANISHES from the window scored zero.** `structScore` keyed
-  on `flipMove`, which is null when the crossing stops existing — one of the
-  largest structural changes there is, rated at nothing. Added `flipState`
-  (`moved` / `stable` / `vanished` / `appeared` / `none`); appear and vanish are
-  now scored as events.
-- Rail badges clipped tickers to `S..`. The symbol is the row's identity — the
-  magnitude bar gives up width now, never the name.
-- `+31% of the book` read as a change. A share is a magnitude; the sign is gone.
+Change route returns `capturedAt` + `prevCapturedAt` (so a Δ names both moments
+it compares). Board returns a **per-symbol** `capturedAt` — the sweep paces, so a
+name whose chain failed at 16:05 genuinely is reading an older moment than the
+rows above it in the rail. Live sets `capturedAt` to now by definition and keeps
+the prior side's recorded stamp.
 
-### Verified
+Re-firing the evening sweep clears **both** `oi_stamped_date` and
+`oi_captured_at` — the row is provisional again, and leaving the morning stamp
+behind would date a provisional read to a pass that no longer applies to it.
 
-121 assertions — 41 server (against a stubbed pg), 80 client. Including: legs
-summing exactly to `net_gex` at every strike; the call leg never negative and
-the put leg never positive; 0DTE never reaching the table; live fetching both
-buckets; pre-migration legs reported missing rather than zero; a proportional
-change NOT moving the flip while a lopsided one does; and every deep-link param
-name matching what the receiving page actually reads. `tsc --noEmit` clean,
-`vite build` green, rendered with zero console errors.
+### Page
 
-Five of the harness failures on the first run were my test's arithmetic, not the
-code — the GEX multiplier is `S²·0.01·100` = 10,000, and `cnt()` counts OI **+
-volume**. Both are now pinned by assertion so nobody repeats them.
+New `fmtEtStamp` prints date *and* time, deliberately unlike the existing
+time-only `fmtEtTime`: a bare `09:25:14` would hide exactly the
+session-apart difference these stamps exist to expose. Rendered as a `run
+YYYY-MM-DD HH:MM:SS ET` pill in the basis strip — always visible, not a tooltip —
+with the prior session's stamp on hover.
+
+Also fixed while here: `stampExpr` replaced a first cut that built the alias
+prefix with chained `.replace(/\(/g, ...)` on the COALESCE string. It worked and
+was unreadable; the column list is now explicit data.
+
+
+## 2026-08-19 (f) - ΔGEX Board: Split — calls and puts on the same rung
+
+Edited: `owner-vite/src/pages/GexGrowth.tsx`. **Client only** — no server, no
+schema, no new request.
+
+The leg picker was exclusive (Net / Calls / Puts), which meant comparing the two
+legs at one strike required toggling and holding a number in your head. That is
+the same "the sum is lossy, so squint and remember" problem the basis split
+exists to kill, one level down.
+
+### Why it costs nothing
+
+The ladder is already a centred diverging bar with a rail down the middle:
+negatives draw left, positives right. On `oivol` / `oi` / `vol` the call leg is
+≥ 0 and the put leg ≤ 0 at *every* strike by construction — so the two legs
+occupy opposite halves of the row and **cannot collide**. Drawing both is one
+row, same height, no overlap, and it is the standard gamma-profile-by-strike
+picture.
+
+New leg setting `split`, alongside the existing three. Calls and Puts stay, so
+the rail can still be ranked by one leg alone.
+
+### No fetch
+
+`split` is the only leg that is not a server-side projection. Every response
+already carries the full `callGex`/`putGex` pair *alongside* whichever leg was
+asked for, so Split sends `leg=net` and renders what came back. The rail
+therefore still ranks by net under it — which is right, not a workaround: Split
+is a decomposition OF the net, not a different ordering.
+
+### `RailBars` grew a side
+
+`{ v }` → `{ left, right }`, each drawn independently, so a row can carry a bar
+on both sides. Single-value callers pass `{ left: min(v,0), right: max(v,0) }`,
+which is byte-for-byte the old rendering — verified by rendering the component
+to static markup across all seven mode × leg combinations. Colour still comes
+from the SIDE, not the leg, so a bar left of the rail is red everywhere on this
+page.
+
+### Per-mode and per-basis
+
+| combination | rendering |
+|---|---|
+| split, unsigned basis, levels/delta | ONE row — puts left, calls right |
+| split, unsigned basis, compare | TWO rows (was → is), each carrying both legs |
+| split, `flow`, levels/delta | TWO rows, one per leg — either leg can be negative there, so they cannot share a rung's sides |
+| split, `flow`, compare | **not offered** — four rows a strike. The button is not rendered, same as Live on flow, rather than left lit and quietly doing something else |
+
+Value column shows both numbers, calls over puts, matching the bars. Axis header
+reads `← puts · calls →` when the legs share a row.
+
+**Bug caught by the render harness:** compare mode drew the ghost row from prior
+LEVELS but the solid row from leg DELTAS — two different quantities on one rung
+at two different scales. `legPair` now keys on `mode === "delta"` rather than
+`!== "levels"`, so compare is level-vs-level exactly as it is for net. `isDelta`
+still treats compare as a Δ mode for the rail, which is correct there and was
+the source of the confusion.
+
+`splitBlocked()` guards the flow+compare case, and `effLeg` degrades a
+already-selected `split` to `net` if the mode changes under it — so the page can
+never sit in a state its own controls do not offer.
+
+
+## 2026-08-19 (e) - ΔGEX Board: call vs put per strike, and the gross flow split behind the net
+
+Edited: `server-v2/eod-strike-gex-recorder.js`, `server-v2/server-with-proxy.js`,
+`server-v2/api-router.js`, `owner-vite/src/pages/GexGrowth.tsx`.
+
+Follows (d). Two splits, one level below the basis split.
+
+### `leg` — net / call / put, on every basis
+
+New param on all four read routes, orthogonal to `basis`: basis picks the
+contract count, leg picks which option type's gamma. `(basis, leg)` resolves
+through `levelCol()` to one of twelve columns — the only place a request
+parameter becomes a SQL identifier, whitelisted in the recorder (`normLeg`) and
+again at the public hop (`legParam`). Verified: `leg=call, (SELECT 1)` falls
+back to `net`.
+
+`net` is call + put and that sum is lossy — a fall is equally consistent with
+call gamma coming off and put gamma piling on. Compare mode told those apart in
+aggregate; this tells them apart rung by rung.
+
+**The sign means different things per basis, and that is the value:**
+
+- `oivol` / `oi` / `vol` — legs are signed by CONVENTION (calls +, puts −, on an
+  unsigned count), so the call leg is ≥ 0 and the put leg ≤ 0 at *every* strike.
+  A single-leg ladder there maps WHERE that type's gamma sits; it cannot cross
+  zero. The caveat strip says so on screen, because a reader arriving expecting
+  a flip will not find one and the absence is arithmetic, not the book.
+- `flow` — legs are signed by MEASUREMENT, so either can take either sign.
+  "Dealers are short call gamma at 6400 and long put gamma at 6300" is a
+  sentence only this basis can produce.
+
+The rail ranks on the same column the ladder draws. The structural **badges
+(flip, walls, sign flips) deliberately stay on the basis's NET column** whatever
+the leg is set to — every one of them is a property of the two legs together,
+and a monotonic single-leg running total has no crossing to find. Computing a
+"flip" on a call-only ladder would return null for every symbol on the board, or
+worse, a number off a curve with no zero. The badges describe the book; the
+ladder describes the leg you asked for.
+
+Date picker is now basis AND leg scoped: both dimensions have their own
+migration date (legs 2026-08-18, bases 2026-08-19), so `oivol/call` and
+`oivol/net` do not offer the same sessions. Live's cache key went
+`symbol|basis` → `symbol|basis|leg`; without the leg it would serve a call
+ladder to a put request for 60s.
+
+### Flow gross: four columns, because a net of two opposite events hides size
+
+New: `flow_call_buy_gex`, `flow_call_sell_gex`, `flow_put_buy_gex`,
+`flow_put_sell_gex`.
+
+`flow_call_gex` nets two opposite events — gamma the dealer took ON (the public
+sold calls to them) and gamma they took OFF (the public bought). A strike where
+they did 5,000 of each nets to ~zero and reads **identically to a strike nothing
+traded at**. That is the same "a red bar has two stories" ambiguity compare mode
+exists to fix, reappearing inside a single session.
+
+`getFlowLadder()` now keeps the inventory gross (`callLong`/`callShort`/
+`putLong`/`putShort`) instead of netting at ingest, and the legs are rolled up
+FROM the components — so the identities hold by construction, not coincidence:
+
+    call_buy + call_sell = flow_call_gex
+    put_buy  + put_sell  = flow_put_gex
+    all four             = flow_gex
+
+`*_buy_gex` is always ≥ 0 (dealer long that leg), `*_sell_gex` always ≤ 0.
+
+Worked case from the test harness — dealer short 5,000 calls and long 4,900 of
+the same strike:
+
+| reading | value |
+|---|---|
+| call leg NET | −20,000 (looks almost quiet) |
+| call leg GROSS | 1,980,000 (huge two-way size) |
+| directional | 5.3% |
+
+### Page
+
+Leg picker beside the basis picker (re-fetches — the rail must rank on the
+column the ladder draws). Ladder column header appends the leg, so a call
+ladder stops being labelled "Net GEX". Caveat strip names the leg and, on the
+unsigned bases, warns that the ladder is one-sided and has no flip to read.
+
+On `flow`, a "dealer took on" chip row shows the four gross components summed
+over the rows in view (so the ±% band applies), plus a **% directional** line —
+net ÷ gross. Near 1, the flow went one way and the net is the whole story. Near
+0, the dealer took size on both sides and ended up flat: a busy strike a
+net-only ladder draws as a quiet one. `hasGross` is reported separately from
+`hasBasis`, so a flow session recorded before these columns shipped shows its
+real net ladder and says the decomposition was not recorded — rather than
+silently omitting the row.
+
+
+## 2026-08-19 (d) - ΔGEX Board: four bases, and the day-over-day diff that was double-counting a session
+
+Edited: `server-v2/eod-strike-gex-recorder.js`, `server-v2/server-with-proxy.js`,
+`server-v2/api-router.js`, `owner-vite/src/pages/GexGrowth.tsx`.
+
+### The bug
+
+`eod_strike_gex` stored ONE number per strike: `net_gex`, on the OI+Vol basis
+(`|γ| × (open_interest + volume)`). Its day-over-day diff was not slightly
+early — it was counting a session twice.
+
+Open interest does not settle at the close. OCC publishes overnight, so the OI
+the chain carries at 16:05 on session T is the file settled through **T−1**.
+Volume on the same response is **T**'s. A row is `OI(T−1) + Vol(T)`, so:
+
+    row(T) − row(T−1) = [OI(T−1) − OI(T−2)] + [Vol(T) − Vol(T−1)]
+
+The left bracket is the NET result of session T−1's trading. The right bracket
+SUBTRACTS `Vol(T−1)` — the GROSS of that same session. T−1 appears in the Δ
+twice, once net and once gross, with opposite signs. A name that traded heavy
+Tuesday and quiet Wednesday printed a big negative Δ on Wednesday about nothing
+that happened on Wednesday.
+
+No scheduling change fixes that. The halves had to be stored apart.
+
+### Four bases
+
+New columns (all NULLABLE, **no backfill** — the chains are gone and the split
+is exactly what `net_gex` threw away). `basis` is now a param on all four read
+routes; anything unrecognised reads as `oivol`, so old clients are byte-identical.
+
+| basis | column | what it is | honest Δ? |
+|-------|--------|-----------|-----------|
+| `oivol` | `net_gex` | `\|γ\| × (OI + volume)` — the original series, ~a year of history, still the default | no (the double-count above) |
+| `oi` | `oi_gex` | `\|γ\| × open interest`, re-stamped next morning | **yes** |
+| `vol` | `vol_gex` | `\|γ\| × volume` — same-session, so the LEVEL is the read | no (second difference) |
+| `flow` | `flow_gex` | signed **dealer inventory** × γ, from the tape | no (session, not book) |
+
+`net_gex` / `call_gex` / `put_gex` are still computed by the UNCHANGED
+expressions, so the legacy series is bit-for-bit what it was. Consequence,
+stated because someone will assert on it: `oi_gex + vol_gex` agrees with
+`net_gex` only to float noise, not exactly. History continuity beat additivity.
+
+### The 09:25 OI re-stamp
+
+New pass (`runOiRestamp`, `POST /proxy/eod-strike-gex-restamp`) rewrites the
+**previous** session's `oi_*` columns off the freshly settled file and stamps
+`oi_stamped_date`. That is what makes `oi` a real ΔOI — without it `oi_gex` on
+row(T) is `OI(T−1)` and the diff describes the wrong day.
+
+UPDATE, never INSERT, and it touches nothing but `oi_*`: the evening's
+`net_gex`/`vol_*` are a record of a settled close and stay as recorded. Refuses
+any date ≥ today (today's OI settles tonight; stamping it "settled" would be a
+load-bearing lie). Re-stamps the latest RECORDED session, not "yesterday" by
+calendar, so holidays and long weekends resolve correctly. Costs one more full
+chain sweep — there is no cheaper source for settled OI than the chain.
+
+### Flow basis — the only one that knows direction
+
+The other three sign their legs by CONVENTION (calls +, puts −, on an unsigned
+count). Open interest carries no side: 40k OI on the 6400 calls is dealer-short
+or dealer-long depending on who opened it, and no OI arithmetic can tell those
+apart. `flow` is built from bid/ask-classified prints in `flow_prints`, mirrored
+(public buys → dealer short, public sells → dealer long), so its sign is
+**measured**. Both legs use the same polarity — the conversion the OI bases do
+by negating the put term is already baked into the inventory's sign.
+
+Per-expiry gamma is captured during the same chain sweep (`gammaAcc` keyed
+`exp|strike`) so each expiry's inventory multiplies by ITS OWN gamma before
+folding into the strike — a weekly and a LEAP at one strike are not the same γ.
+
+Four limits, documented on screen and in `getFlowLadder()`: SPX/SPY/QQQ only
+(`EOD_STRIKE_GEX_FLOW_SYMBOLS`); premium-floored, so block flow not the whole
+tape; for SPY/QQQ only the near-spot front-expiry window the streamer
+subscribes to; and inventory resets each morning, so it is a SESSION not a book.
+Unclassified (`bucket='neutral'`) prints are dropped, not guessed — including
+them would bias the whole ladder short.
+
+### Reads
+
+`basis` selects a column trio through `BASIS_COLS`, the only place a basis
+becomes a column name. `normBasis()` whitelists it in the recorder and
+`basisParam()` again in `api-router` — these identifiers are interpolated into
+SQL (Postgres has no parameter form for a column name), so the gate nearest the
+internet must not be the missing one. Verified: an injection string falls back
+to `oivol`.
+
+Date resolution is basis-scoped everywhere (board CTE, `listStrikeGexDates`), or
+every new basis would look like it had a year of history the day it shipped, and
+`flow` would list 169 names of flat zeros instead of three real ones.
+
+`hasBasis` / `hasPrevBasis` ship pre-COALESCE, because a zero board and an
+unrecorded board are pixel-identical once COALESCEd and the difference is the
+whole point — "SPY had no flow" is not "we never recorded flow for SPY".
+
+Live (`getStrikeGexLive`) serves `oivol`/`oi`/`vol` off the chain and **refuses**
+`flow` rather than downgrading — a silent fallback would put an unsigned OI
+number under a header claiming the sign was measured. Its cache is now keyed
+`symbol|basis`; keyed on symbol alone it would serve an `oi` ladder to a `vol`
+request for 60s.
+
+### Page
+
+Basis picker beside the mode tabs (it re-fetches — four columns, not four views
+of one payload). The caveat for the active basis renders ON SCREEN, not in a
+tooltip, and the strip turns gold on a Δ tab whose basis cannot honestly be
+differenced — that is the exact mistake this change exists to stop. On `oi`, a
+SETTLED / PROVISIONAL chip says whether the re-stamp reached both sides of the
+diff. Live is hidden (not disabled) on `flow`. Switching basis clears the
+session pick, since the picker is basis-scoped.
+
+
+## 2026-08-19 (b) - GEX levels replay: a white spot line across the ladder
+
+Edited: `components/pages/Analytics.tsx` (`TlLadder`) — the "GEX levels" tab of
+`/replay`, both panes.
+
+Matches the chain-ladder replay: one white rule straight across the ladder, from
+the strike column to the value column, sitting at the PRICE rather than on the
+nearest rung, with the price printed at its right end. The ◀ caret says which
+strike price is closest to; the line says where inside that strike it actually
+is — the difference between "769, roughly" and "769.9, leaning on 770".
+
+Rows moved into their own column div (`rowsColRef`) so the line has something to
+measure against, and the root became `position: relative`. Pitch is measured off
+the real DOM — rows carry padding and a border, so a guessed px-per-row drifts —
+from first→last / (n−1) so nothing compounds, re-measured by a ResizeObserver
+only when the ladder changes size. The pixel position is DERIVED DURING RENDER,
+never state fed by an effect: an effect paints the line one commit behind the
+spot it is labelled with, which is invisible when idle and a visible trail
+during playback. Spot is interpolated between the two strikes that bracket it,
+so an uneven strike grid still lands in the right place.
+
+
+## 2026-08-19 (c) - Options Chain replay: the ATM rule stopped jumping when cells filled in
+
+Edited: `components/pages/OptionsChain.tsx` (`ChainGrid`).
+
+Two separate things moved the white ATM box, and both were geometry, not intent.
+
+1. **Rows sized to their contents.** The replay axis is fixed for the whole
+   session, so a strike the current sweep did not record renders blank and the
+   next sweep prints `+$0` in the same row. Blank cell, no line box; `+$0`, one
+   line — the row grew, everything under it shifted, and the ATM rule a few rows
+   away jumped. Padding rows had the same disease in reverse: rendered fully
+   empty, they collapsed to 4px slivers and so never held the centre they exist
+   to hold. New `ROW_MIN_H` (17) floors the sticky strike cell — the one cell
+   every row has, data or padding — which floors the grid row. Count-mode cells
+   that need two lines still grow past it; it is a floor, not a fixed height.
+
+2. **The ATM row was 4px taller than every other row.** The value cells draw the
+   white box with inset box-shadow specifically so it cannot shift layout — and
+   then the strike cell drew its half with real `border-top` / `border-bottom`,
+   adding 4px to the tallest cell in the row. So every time spot crossed a
+   strike the outgoing ATM row shrank and the incoming one grew, and the rule
+   lurched instead of stepping one row. Now inset, like the cells beside it. The
+   box's left edge stays on the first value cell where it always was.
+
+Neither change touches which strike is ATM, the OI call/put split, or the walls
+— `nearestStrike` still follows real spot exactly.
+
+
+## 2026-08-19 - GEX levels replay: the ladder stopped juddering under a walking spot
+
+Edited: `components/pages/Analytics.tsx` (`TickerLookupCard` / `TlLadder`) — the
+"GEX levels" tab of `/replay`.
+
+Rewound, both ladders anchored on the strike nearest the LIVE spot of whichever
+frame was playing. Spot walks a point or two per frame, so every few frames it
+crossed to the next strike: `tlWindow` re-sliced the ±20-rung window one rung
+over, `windowKey` changed, and the auto-centre effect scrolled the pane. Over a
+session that read as a constant shudder — the numbers were right, the paper
+under them would not sit still.
+
+The window and the scroll now read a HELD anchor instead of spot. New
+`useTlAnchor(rows, spot, resetKey)` returns spot quantised to a strike that only
+advances once spot has walked `TL_ANCHOR_SLACK` (5) strikes away from it; the
+window carries ±20 rungs and the pane shows ±10, so 5 strikes of drift still
+leaves spot on screen with ladder either side. `resetKey` (symbol · pane ·
+expiry · live-vs-rewound) forces a fresh anchor whenever the axis changes
+outright, so it never centres on a rung the new ladder does not have.
+
+`TlLadder` takes an optional `anchor` prop and centres on that row; omitted, it
+centres on the spot row exactly as before, so the live path is unchanged. The
+◀ spot caret, the lit row and the level chips all still read the real spot —
+the marker keeps tracking price frame by frame, only the scroll holds still.
+
+Also factored the nearest-strike scan out of `tlWindow` into `tlNearestIdx`,
+which both it and the anchor hook use.
 
 
 ## 2026-08-18 - ΔGEX Board: three Read-panel bugs the first real SPY payload exposed

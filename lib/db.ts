@@ -955,6 +955,39 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     -- paid user. NULL = never sent. Guarantees exactly one welcome per customer.
     ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS welcome_email_sent_at TIMESTAMPTZ;
 
+    -- Comped access. One row per email the owner has granted full customer
+    -- access to without a Stripe subscription (beta testers, friends, support
+    -- cases). Read by getSessionWithUser() below, which ORs it into is_paid —
+    -- so a comp unlocks exactly what a paying customer sees and nothing more
+    -- (owner routes are gated on users.is_owner, which this never touches).
+    --
+    -- WHY ITS OWN TABLE rather than a fake status='active' row in
+    -- subscriptions: that table is the mirror of Stripe. A hand-written row
+    -- there is indistinguishable from a real customer to everything that reads
+    -- it (revenue counts, churn, the welcome-email job), and the Stripe webhook
+    -- would clobber it the moment that person did subscribe for real. Keeping
+    -- comps separate means "paid" and "comped" can never be confused, and the
+    -- two can coexist on one account without fighting.
+    --
+    -- KEYED ON EMAIL, NOT user_id, on purpose: a comp can be granted BEFORE the
+    -- person has an account. The row just sits here until they sign up with
+    -- that address, and the join below picks it up on their first request.
+    -- Emails are stored lowercased (users.email is written lowercased too).
+    --
+    -- expires_at NULL = never expires. revoked_at NULL = still active; revoking
+    -- stamps it rather than deleting the row, so the history of who was comped
+    -- and when survives a re-grant.
+    CREATE TABLE IF NOT EXISTS comp_access (
+      email        TEXT PRIMARY KEY,
+      note         TEXT,
+      expires_at   TIMESTAMPTZ,
+      granted_by   TEXT,
+      granted_at   TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      revoked_at   TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_comp_access_live
+      ON comp_access(email) WHERE revoked_at IS NULL;
+
     -- Churn log. One row per subscription that has ever signalled it is leaving,
     -- written by the Stripe webhook (app/api/stripe/webhook/route.ts).
     --
@@ -2816,19 +2849,97 @@ export interface SessionWithUser {
   email: string;
   is_owner: boolean;
   is_paid: boolean;
+  /** True when is_paid came from a comp_access grant rather than Stripe. Purely
+   *  informational (badges, admin views) -- the gate only ever reads is_paid. */
+  is_comped: boolean;
   expires_at: string;
 }
 
 export async function getSessionWithUser(tokenHash: string): Promise<SessionWithUser | undefined> {
+  // is_paid = a live Stripe subscription OR a live comp_access grant. Both are
+  // "what a paying customer sees"; neither has anything to do with is_owner.
+  // The comp join is written so an expired or revoked row simply doesn't match.
   return queryOne<SessionWithUser>(
     `SELECT s.user_id, u.email, u.is_owner, s.expires_at,
-            COALESCE(sub.status IN ('active','trialing'), FALSE) AS is_paid
+            (COALESCE(sub.status IN ('active','trialing'), FALSE)
+              OR ca.email IS NOT NULL)                       AS is_paid,
+            (ca.email IS NOT NULL)                           AS is_comped
        FROM sessions s
        JOIN users u ON u.id = s.user_id
        LEFT JOIN subscriptions sub ON sub.clerk_user_id = s.user_id
+       LEFT JOIN comp_access ca
+              ON ca.email = LOWER(u.email)
+             AND ca.revoked_at IS NULL
+             AND (ca.expires_at IS NULL OR ca.expires_at > NOW())
       WHERE s.token_hash = ? AND s.expires_at > NOW()`,
     [tokenHash]
   );
+}
+
+// ── Comped access (owner-granted, no Stripe) ─────────────────────────────────
+// See the comp_access CREATE TABLE above for why this is its own table.
+// Everything here is owner-only; the API surface is app/api/admin/comp-access.
+
+export interface CompAccessRow {
+  email: string;
+  note: string | null;
+  expires_at: string | null;
+  granted_at: string;
+  granted_by: string | null;
+  /** users.id if this email has signed up yet, else null ("pending"). */
+  user_id: string | null;
+}
+
+/** Live comps only (not revoked, not expired), newest first. Left-joined to
+ *  users so the admin card can show which grants are still waiting on a signup. */
+export async function listCompAccess(): Promise<CompAccessRow[]> {
+  return queryAll<CompAccessRow>(
+    `SELECT ca.email, ca.note, ca.expires_at, ca.granted_at, ca.granted_by, u.id AS user_id
+       FROM comp_access ca
+       LEFT JOIN users u ON LOWER(u.email) = ca.email
+      WHERE ca.revoked_at IS NULL
+        AND (ca.expires_at IS NULL OR ca.expires_at > NOW())
+      ORDER BY ca.granted_at DESC`
+  );
+}
+
+/** Grant (or re-grant) a comp. Upsert so re-granting a previously revoked or
+ *  expired email revives that row rather than failing on the primary key --
+ *  revoked_at is explicitly cleared for exactly that case. */
+export async function grantCompAccess(
+  email: string,
+  opts: { note?: string | null; expiresAt?: string | null; grantedBy?: string | null } = {}
+): Promise<CompAccessRow | undefined> {
+  const norm = email.trim().toLowerCase();
+  await pgQuery(
+    `INSERT INTO comp_access (email, note, expires_at, granted_by, granted_at, revoked_at)
+     VALUES ($1, $2, $3, $4, NOW(), NULL)
+     ON CONFLICT (email) DO UPDATE
+       SET note       = EXCLUDED.note,
+           expires_at = EXCLUDED.expires_at,
+           granted_by = EXCLUDED.granted_by,
+           granted_at = NOW(),
+           revoked_at = NULL`,
+    [norm, opts.note ?? null, opts.expiresAt ?? null, opts.grantedBy ?? null]
+  );
+  return queryOne<CompAccessRow>(
+    `SELECT ca.email, ca.note, ca.expires_at, ca.granted_at, ca.granted_by, u.id AS user_id
+       FROM comp_access ca
+       LEFT JOIN users u ON LOWER(u.email) = ca.email
+      WHERE ca.email = ?`,
+    [norm]
+  );
+}
+
+/** Revoke by stamping revoked_at (the row stays as history). Access is gone on
+ *  the account's next session-cache miss -- ~8s, see lib/auth/session.ts. */
+export async function revokeCompAccess(email: string): Promise<{ revoked: boolean }> {
+  const res = await pgQuery(
+    `UPDATE comp_access SET revoked_at = NOW()
+      WHERE email = $1 AND revoked_at IS NULL`,
+    [email.trim().toLowerCase()]
+  );
+  return { revoked: (res.rowCount ?? 0) > 0 };
 }
 
 export async function deleteSession(tokenHash: string): Promise<void> {

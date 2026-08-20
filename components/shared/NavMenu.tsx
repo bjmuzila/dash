@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { useAuth } from "@/components/auth/AuthProvider";
+import { useIsOwner } from "@/components/auth/useIsOwner";
 import { HOME_THEME, DOCK_THEME } from "./homeTheme";
 import { useMobileNav } from "./MobileNavContext";
 
@@ -114,16 +115,19 @@ function NavGlyph({ href }: { href: string }) {
 // hamburger button's bounding rect (so the panel lines up under it).
 export default function NavMenu({ anchor }: { anchor: DOMRect | null }) {
   const pathname = usePathname();
-  const { isSignedIn, user, isPaid, isOwnerClaim } = useAuth();
-  // Owner Hub link is owner-only. Baked at build via NEXT_PUBLIC_OWNER_USER_ID
-  // (same value the WS lifecycle uses). If unset, fall back to any signed-in user
-  // so the owner isn't locked out — middleware still hard-blocks /owner/*.
-  const ownerId = (process.env.NEXT_PUBLIC_OWNER_USER_ID || "").trim();
-  const isOwner = ownerId ? user?.id === ownerId : !!isSignedIn;
-  // Full (live) access = owner (either signal) or an active subscription.
+  const { isPaid } = useAuth();
+  // Owner Hub link is owner-only. useIsOwner() FAILS CLOSED — see the comment in
+  // components/auth/useIsOwner.ts. This used to read
+  //   ownerId ? user?.id === ownerId : !!isSignedIn
+  // and NEXT_PUBLIC_OWNER_USER_ID is only a Docker build ARG, so on any build
+  // that shipped without it every signed-in CUSTOMER matched the fallback and
+  // got an "Owner" row in this menu. Middleware still hard-blocks /owner/*, so
+  // it was never reachable — it just should not have been visible.
+  const isOwner = useIsOwner();
+  // Full (live) access = owner or an active subscription.
   // Signed-out visitors don't see this menu item list gated at all here — the
   // page-level middleware redirect handles them before they'd get this far.
-  const hasFullAccess = isOwner || isOwnerClaim || isPaid;
+  const hasFullAccess = isOwner || isPaid;
   const { menuOpen, closeMenu } = useMobileNav();
 
   const [mounted, setMounted] = useState(false);

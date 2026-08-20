@@ -644,6 +644,179 @@ function FeedbackPanel() {
   );
 }
 
+// ─── Comped Access — paid-customer access without Stripe ─────────────────────
+//
+// Writes a `comp_access` row (see lib/db.ts). getSessionWithUser ORs a live row
+// into is_paid, which is the one flag middleware.ts gates every paid route on —
+// so a comp unlocks exactly what a subscriber sees. It never touches
+// users.is_owner, so nothing owner-only opens up.
+//
+// An email can be comped BEFORE it has an account: the row waits, and applies
+// the moment someone signs up with that address. Those rows show as "pending".
+// Access appears/disappears within ~8s (the session validation cache TTL).
+
+interface CompRow {
+  email: string;
+  note: string | null;
+  expires_at: string | null;
+  granted_at: string;
+  granted_by: string | null;
+  user_id: string | null;
+}
+
+function fmtExpiry(iso: string | null): string {
+  if (!iso) return "no expiry";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return `until ${d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+}
+
+function CompAccessPanel() {
+  const [rows, setRows] = useState<CompRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [newEmail, setNewEmail] = useState("");
+  const [newNote, setNewNote] = useState("");
+  const [newExpiry, setNewExpiry] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/comp-access");
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      setRows((j.rows as CompRow[]) ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const grant = async () => {
+    const email = newEmail.trim().toLowerCase();
+    if (!email) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/comp-access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, note: newNote.trim() || null, expiresAt: newExpiry || null }),
+      });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j?.error || `HTTP ${res.status}`); }
+      setNewEmail("");
+      setNewNote("");
+      setNewExpiry("");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Grant failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async (email: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/comp-access?email=${encodeURIComponent(email)}`, { method: "DELETE" });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j?.error || `HTTP ${res.status}`); }
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Revoke failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const inputStyle = {
+    padding: "6px 10px", fontSize: 14, fontFamily: "var(--font-mono)",
+    background: "rgba(0,0,0,0.35)", border: `1px solid ${T.border}`, borderRadius: 6,
+    color: T.text, outline: "none",
+  } as const;
+
+  return (
+    <div style={{ ...homePanelStyle, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
+      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 17, fontWeight: 700, color: T.cyan }}>Comped Access</span>
+        <span style={{ fontSize: 14, padding: "2px 8px", borderRadius: 10, background: `${T.cyan}18`, border: `1px solid ${T.cyan}44`, color: T.cyan, fontWeight: 700 }}>
+          {rows ? rows.length : "—"}
+        </span>
+        <span style={{ fontSize: 14, color: T.textSecondary }}>full customer access, no Stripe · never owner access</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
+          <button onClick={load} disabled={loading} style={{ ...homeSecondaryButtonStyle, padding: "4px 12px", fontSize: 14, opacity: loading ? 0.5 : 1 }}>
+            {loading ? "…" : "↻"}
+          </button>
+        </div>
+      </div>
+
+      {/* Grant */}
+      <div style={{ padding: "10px 16px", borderBottom: `1px solid ${T.border}`, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <input
+          type="email"
+          value={newEmail}
+          onChange={(e) => setNewEmail(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") grant(); }}
+          placeholder="email to comp…"
+          style={{ ...inputStyle, flex: "2 1 220px", minWidth: 0 }}
+        />
+        <input
+          type="text"
+          value={newNote}
+          onChange={(e) => setNewNote(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") grant(); }}
+          placeholder="note (why)…"
+          style={{ ...inputStyle, flex: "1 1 150px", minWidth: 0 }}
+        />
+        <input
+          type="date"
+          value={newExpiry}
+          onChange={(e) => setNewExpiry(e.target.value)}
+          title="Expires at the end of this day (blank = never)"
+          style={{ ...inputStyle, flexShrink: 0 }}
+        />
+        <button onClick={grant} disabled={busy || !newEmail.trim()} style={{ ...homeButtonStyle, padding: "6px 14px", fontSize: 14, opacity: busy || !newEmail.trim() ? 0.5 : 1 }}>
+          Grant
+        </button>
+      </div>
+
+      <div style={{ maxHeight: 300, overflowY: "auto" }}>
+        {error ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.red, fontSize: 14 }}>{error}</div>
+        ) : loading && !rows ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 14 }}>Loading…</div>
+        ) : rows && rows.length === 0 ? (
+          <div style={{ padding: "20px 16px", textAlign: "center", color: T.textSecondary, fontSize: 14 }}>No comped accounts</div>
+        ) : (
+          rows?.map((r) => (
+            <div key={r.email} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 16px", borderBottom: `1px solid rgba(255,255,255,0.04)`, fontSize: 14 }}>
+              <span style={{ flex: 1, minWidth: 0, color: T.text, fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.email}</span>
+              {!r.user_id && (
+                <span title="No account with this email yet — the comp applies the moment they sign up"
+                  style={{ fontSize: 10, padding: "1px 6px", borderRadius: 8, background: `${T.orange}18`, border: `1px solid ${T.orange}44`, color: T.orange, flexShrink: 0 }}>
+                  pending signup
+                </span>
+              )}
+              {r.note && (
+                <span style={{ fontSize: 14, color: T.textSecondary, flexShrink: 0, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.note}</span>
+              )}
+              <span style={{ fontSize: 14, color: r.expires_at ? T.orange : T.muted, flexShrink: 0 }}>{fmtExpiry(r.expires_at)}</span>
+              <span style={{ fontSize: 14, color: T.muted, flexShrink: 0 }}>{fmtRelative(r.granted_at)}</span>
+              <button onClick={() => revoke(r.email)} disabled={busy} title="Revoke comped access" style={{ ...homeSecondaryButtonStyle, padding: "3px 10px", fontSize: 14, flexShrink: 0, opacity: busy ? 0.5 : 1 }}>
+                Revoke
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
 export default function Admin() {
@@ -682,6 +855,11 @@ export default function Admin() {
 
         {/* Customer feedback queue — moved off the Owner → Overview tab. */}
         <FeedbackPanel />
+
+        {/* Hand out full customer access without Stripe (beta testers, friends,
+            support cases). Sits above the lists it explains — a comped email
+            shows up in "Not Paying" below, because it isn't. */}
+        <CompAccessPanel />
 
         {/* Always shown — sourced from Supabase auth, independent of Stripe config. */}
         <NotPayingPanel />
