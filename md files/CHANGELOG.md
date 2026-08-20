@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026-08-20 (j) - Auth: Google sign-in removed, email/password only
+
+Edited: `components/auth/AuthForm.tsx`, `app/api/auth/google/start/route.ts`,
+`app/auth/callback/route.ts`.
+
+Google OAuth kept failing at the consent screen with
+`Error 400: redirect_uri_mismatch`, so the Google path is gone. Sign-in and
+sign-up are now email + password only.
+
+- `AuthForm` lost the "Continue with Google" button, the `or` divider and the
+  `withGoogle()` handler. The email/password form, Turnstile captcha and rate
+  limiting are unchanged — it is just the first thing on the card now.
+- `/api/auth/google/start` and `/auth/callback` are reduced to stubs that
+  redirect to `/sign-in` (the callback also clears any leftover
+  `g_oauth_state` / `g_oauth_next` cookies). Kept rather than deleted so a
+  stale bookmark, a cached bundle, or a consent screen left open in a tab
+  lands on the login page instead of a 404.
+- `middleware.ts` unchanged — those two paths stay public so the stub
+  redirects are reachable without a session.
+- `lib/auth/google.ts` and the `google_sub` column are now unused. Existing
+  Google-only accounts (rows with no `password_hash`) cannot sign in until
+  they set a password via Forgot password.
+
+
+## 2026-08-20 (i) - Options Chain: mirrored strike rail on the right edge
+
+Edited: `components/pages/OptionsChain.tsx`.
+
+The chain grid had one strike ladder, sticky on the left. With a wide expiry
+set the right-hand columns sit far enough from it that naming a row means
+scrolling back — so the same ladder now repeats as a sticky column on the far
+right edge of the grid.
+
+- New `STRIKE_COL`-wide track appended to `gridTemplateColumns`, after the
+  reserved (ghost) tracks, so it is always the outermost column.
+- Header corner, padding rows and data rows each got their mirrored cell.
+- The right rail is a full peer of the left one: same click-to-focus and
+  shift-click-to-isolate handler, same ATM cyan + white inset rule, same EM
+  +/-1s / +/-2s tags, same selection tint and dim behaviour.
+- Geometry is flipped, not restyled: border and selection rule on the LEFT
+  edge, number left-aligned, EM tag pushed to the outer (right) edge.
+- ATM/selection rules stay `box-shadow` insets rather than real borders, for
+  the same reason as the left rail: a real 2px border would make the ATM row
+  taller than its neighbours and the ladder would jump every time spot crossed
+  a strike.
+
 ## 2026-08-20 (h) - Post-Market §3 rebuilt: build-time bars, peak marks, wall path, written-vs-traded
 
 Edited: `components/pages/premarket/PostMarketTab.tsx`, `components/pages/Premarket.tsx`.

@@ -6,7 +6,7 @@ import Link from "next/link";
 import { HOME_THEME as T, homeGlossPanelStyle } from "@/components/shared/homeTheme";
 
 /**
- * Themed email/password + Google auth form.
+ * Themed email/password auth form.
  *
  * Email/password POSTs to the server routes /api/auth/login and
  * /api/auth/signup, which enforce Turnstile CAPTCHA + per-IP rate limiting
@@ -14,8 +14,9 @@ import { HOME_THEME as T, homeGlossPanelStyle } from "@/components/shared/homeTh
  * cookie; on success we hard-navigate to /home so middleware picks up the new
  * session.
  *
- * Google navigates to /api/auth/google/start, which redirects to Google's own
- * consent screen (server-side OAuth code exchange, no client SDK).
+ * Google OAuth was removed (2026-08-20) — email/password is the only sign-in
+ * path. /api/auth/google/start and /auth/callback are retired stubs that
+ * bounce back to /sign-in.
  *
  * Turnstile is only rendered when NEXT_PUBLIC_TURNSTILE_SITE_KEY is set, so
  * local/dev builds without the key keep working (the server also skips captcha
@@ -134,11 +135,6 @@ export default function AuthForm({
     setCaptchaAttempt((n) => n + 1);
   }
 
-  function withGoogle() {
-    setError(null);
-    window.location.assign(`/api/auth/google/start?next=${encodeURIComponent(next)}`);
-  }
-
   async function withEmail(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -225,35 +221,6 @@ export default function AuthForm({
       <p style={{ fontSize: 14, color: "rgba(255,255,255,0.55)", margin: "0 0 22px" }}>
         {isSignup ? "Join CB Edge" : "Welcome back to CB Edge"}
       </p>
-
-      <button
-        onClick={() => void withGoogle()}
-        type="button"
-        style={{
-          width: "100%",
-          padding: "11px",
-          borderRadius: 8,
-          border: `1px solid ${T.border}`,
-          background: "#fff",
-          color: "#111",
-          fontSize: 14,
-          fontWeight: 700,
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 8,
-          marginBottom: 14,
-        }}
-      >
-        <span style={{ fontWeight: 800, color: "#4285F4" }}>G</span> Continue with Google
-      </button>
-
-      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 0 14px" }}>
-        <div style={{ flex: 1, height: 1, background: T.border }} />
-        <span style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>or</span>
-        <div style={{ flex: 1, height: 1, background: T.border }} />
-      </div>
 
       <form onSubmit={withEmail} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <input

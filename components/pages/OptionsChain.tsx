@@ -1269,7 +1269,11 @@ const ChainMatrix = memo(function ChainMatrix({
         .map((i) => (hasDelta15 && columns[i]?.expiration === delta15Exp
           ? "minmax(152px, 1.9fr)"
           : `minmax(${isCountMode ? 84 : 78}px, 1fr)`))
-        .join(" ")}${showTotalCol ? ` minmax(${isCountMode ? 92 : 88}px, 1.15fr)` : ""}${ghostTemplate}`,
+        // …and one more STRIKE_COL track on the far right: the same strike
+        // ladder mirrored, sticky to the right edge, so a cell in the last
+        // expiry column is one glance from its strike instead of a scroll back
+        // to the left rail. See the "mirrored strike rail" comments below.
+        .join(" ")}${showTotalCol ? ` minmax(${isCountMode ? 92 : 88}px, 1.15fr)` : ""}${ghostTemplate} ${STRIKE_COL}px`,
       borderRadius: 12,
       overflow: "clip",
       border: `1px solid ${HT.border}`,
@@ -1341,6 +1345,10 @@ const ChainMatrix = memo(function ChainMatrix({
         </div>
       )}
       {ghostCells("hdr", true)}
+      {/* ── Mirrored strike rail: header corner (sticky right) ── */}
+      <div style={{ position: "sticky", right: 0, top: 0, zIndex: 6, padding: "7px 5px", background: HDR_BG, borderBottom: `1px solid ${HT.border}`, borderLeft: `1px solid ${HT.border}`, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.03em", color: HT.muted, display: "flex", alignItems: "flex-end", justifyContent: "flex-end" }}>
+        Strike
+      </div>
 
       {/* ── One row per shared strike ── */}
       {visibleStrikes.map((strike, rowIdx) => {
@@ -1355,6 +1363,7 @@ const ChainMatrix = memo(function ChainMatrix({
               ))}
               {showTotalCol && <div style={{ padding: "2px 8px", fontSize: 12, borderLeft: `2px solid ${rgba(HT.cyan, 0.25)}` }} />}
               {ghostCells(`pad-${rowIdx}`)}
+              <div style={{ position: "sticky", right: 0, zIndex: 2, padding: "2px 8px", fontSize: 12, minHeight: ROW_MIN_H, background: HDR_BG, borderLeft: `1px solid ${HT.border}` }} />
             </div>
           );
         }
@@ -1623,6 +1632,52 @@ const ChainMatrix = memo(function ChainMatrix({
               );
             })()}
             {ghostCells(`row-${strike}`)}
+            {/* ── Mirrored strike rail (sticky right) ───────────────────────
+                Same strike, same click target, same ATM / EM / selection
+                treatment as the left rail — only the geometry is flipped:
+                border and selection rule on the LEFT edge, number left-aligned,
+                EM tag pushed to the outer (right) edge. Reading a cell in the
+                furthest expiry column no longer means tracking back across the
+                whole grid to name the row. */}
+            <div
+              onClick={(e) => onToggleStrike(strike, e.shiftKey)}
+              title={emTip || "Click to focus this strike (shift-click = only this one)"}
+              style={{
+                position: "sticky", right: 0, zIndex: 2,
+                padding: "2px 5px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "left",
+                minHeight: ROW_MIN_H,
+                color: isATM ? HT.cyan : "#e4e4e7",
+                fontWeight: isATM ? 700 : 400,
+                background: strikeSel
+                  ? `linear-gradient(270deg, ${rgba(HT.cyan, 0.06)}, ${rgba(HT.cyan, 0.30)}), ${HDR_BG}`
+                  : HDR_BG,
+                // Inset, never a real border — identical reasoning to the left
+                // rail: a 2px top/bottom border would make the ATM row taller
+                // than every other row and the ladder would jump each time spot
+                // crossed a strike.
+                boxShadow: [
+                  ...(strikeSel ? [`inset 2px 0 0 ${HT.cyan}`] : []),
+                  ...(isATM ? ["inset 0 2px 0 #ffffff", "inset 0 -2px 0 #ffffff"] : []),
+                ].join(", ") || undefined,
+                borderLeft: `1px solid ${HT.border}`,
+                display: "flex", alignItems: "center", justifyContent: "flex-start", gap: 3,
+                cursor: "pointer",
+                opacity: strikeDim ? 0.28 : 1,
+                transition: "opacity .12s",
+                whiteSpace: "nowrap", overflow: "hidden",
+              }}
+            >
+              {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
+              {emTag && (
+                <span style={{
+                  fontSize: 8, fontWeight: isATM ? 900 : 800, letterSpacing: isATM ? "0.06em" : "0.02em",
+                  padding: isATM ? 0 : "1px 3px", borderRadius: 3, marginLeft: "auto",
+                  fontFamily: isATM ? "sans-serif" : undefined,
+                  background: isATM ? "transparent" : "rgba(255,255,255,0.12)",
+                  color: isATM ? HT.cyan : "#ffffff",
+                }}>{emTag}</span>
+              )}
+            </div>
           </div>
         );
       })}
