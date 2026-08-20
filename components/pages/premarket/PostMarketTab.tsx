@@ -325,29 +325,49 @@ export default function PostMarketTab(p: PostMarketProps) {
   }, [openCol]);
 
   /**
-   * SCALE GUARD. The open ladder and the live chain must be the same basis for a
-   * difference to mean anything — same expiry, same OI+Vol convention. When they
-   * are not (the `anyExpiry=1` merge that shipped first made the recorded side
-   * the whole SPX board while the live side was 0DTE alone), the difference is
-   * not "gamma was added", it is two different books subtracted from each other:
-   * the hatch ran the full width of every row and the delta list printed +$65B.
+   * SCALE GUARD — DIRECTIONAL, because the two directions mean opposite things.
    *
-   * Rather than trust the request shape forever, compare the two over the strikes
-   * they share. More than 4x apart in total magnitude is not a market move, it is
-   * a mismatch — so the overlay is dropped and the reason is shown instead of a
-   * confident wrong number.
+   * ratio = |recorded 09:30| / |live now|, over the strikes the two share.
+   *
+   * A ratio WELL UNDER 1 is the normal shape of a 0DTE day and must not be
+   * blocked. The basis is OI + volume, and at 09:29 today's contracts have
+   * essentially no volume yet — the book that decides the session is written
+   * after the bell. A 5x–20x build from open to close is routine on SPX 0DTE,
+   * and it is exactly the thing this panel exists to show. The first cut of this
+   * guard rejected anything past 4x in EITHER direction, so on a live 0DTE it
+   * saw 0.1x, called a real ten-fold build a "different book", and hid the
+   * overlay, the delta list and the heatmap all at once.
+   *
+   * A ratio WELL OVER 1 is the suspicious one: the recorded side cannot legally
+   * hold more gamma than the live side unless it is a different, larger book —
+   * which is precisely what `anyExpiry=1` used to produce (the whole SPX board
+   * against today's 0DTE alone: ~100x, a hatch across every row, +$65B deltas).
+   *
+   * The far floor stays too. 0.01x is not a build, it is the classic per-1%
+   * convention error (S^2 * 0.01 against S^2) and would quietly halve every
+   * reading; 0.02 sits just above it and well below any real intraday growth.
    */
+  const OPEN_RATIO_MAX = 4;      // recorded bigger than live -> wrong book
+  const OPEN_RATIO_MIN = 0.02;   // 100x apart -> a unit error, not a session
+
   const openScale = useMemo(() => {
-    if (!openByStrikeRaw.size || !perStrike.length) return { ratio: null as number | null, ok: false };
+    if (!openByStrikeRaw.size || !perStrike.length) {
+      return { ratio: null as number | null, ok: false, grew: false };
+    }
     let a = 0, b = 0, n = 0;
     for (const r of perStrike) {
       const o = openByStrikeRaw.get(r.strike);
       if (o == null) continue;
       a += Math.abs(o); b += Math.abs(r.net); n++;
     }
-    if (n < 5 || !(a > 0) || !(b > 0)) return { ratio: null, ok: false };
+    if (n < 5 || !(a > 0) || !(b > 0)) return { ratio: null, ok: false, grew: false };
     const ratio = a / b;
-    return { ratio, ok: ratio > 0.25 && ratio < 4 };
+    return {
+      ratio,
+      ok: ratio >= OPEN_RATIO_MIN && ratio <= OPEN_RATIO_MAX,
+      // Worth SAYING, not hiding: the day wrote most of its own gamma.
+      grew: ratio < 0.6,
+    };
   }, [openByStrikeRaw, perStrike]);
 
   const openByStrike = useMemo(
@@ -668,7 +688,9 @@ export default function PostMarketTab(p: PostMarketProps) {
 
   const histNote =
     histState === "ok" && openByStrikeRaw.size && !openScale.ok
-      ? `The recorded 09:30 ladder is ${openScale.ratio ? `${openScale.ratio.toFixed(1)}×` : "far"} the size of the live one — a different book, not a different day. The open overlay is hidden rather than shown wrong.`
+      ? (openScale.ratio != null && openScale.ratio > OPEN_RATIO_MAX
+          ? `The recorded 09:30 ladder holds ${openScale.ratio.toFixed(1)}× the gamma the live 0DTE chain does — that is a bigger book, not a bigger day. The open overlay is hidden rather than shown wrong.`
+          : `The recorded 09:30 ladder is ${openScale.ratio ? `${(1 / openScale.ratio).toFixed(0)}×` : "far"} smaller than the live one — past what a session can build, so it is being read as a unit mismatch and the overlay is hidden.`)
       : histState === "ok" ? null
       : histState === "loading" ? "Loading today's recorded ladder…"
         : histState === "empty" ? "No per-minute ladder recorded for today — the open-vs-close panels need it. Everything else below is live."
@@ -827,6 +849,13 @@ export default function PostMarketTab(p: PostMarketProps) {
         <div className="sechead">
           <h3><span className="secn">3</span>GEX Evolution — 09:30 vs now</h3>
           <div className="evlegend">
+            {openScale.ok && openScale.ratio != null && (
+              <span style={{ color: openScale.grew ? "var(--amber)" : "var(--dim)" }}>
+                {openScale.grew
+                  ? `book grew ${(1 / openScale.ratio).toFixed(1)}× since 09:30`
+                  : `book ${openScale.ratio >= 1 ? "flat" : `−${Math.round((1 - openScale.ratio) * 100)}%`} vs 09:30`}
+              </span>
+            )}
             <span><i style={{ background: "var(--pos)" }} />now positive</span>
             <span><i style={{ background: "var(--neg)" }} />now negative</span>
             <span><i style={{ background: "#fff", width: 3 }} />09:30 level</span>

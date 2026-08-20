@@ -1000,6 +1000,49 @@ async function ensureAllTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_sub_cancel_user ON subscription_cancellations(clerk_user_id);
     CREATE INDEX IF NOT EXISTS idx_sub_cancel_seen ON subscription_cancellations(first_seen_at DESC);
 
+    -- One row per CARD that has ever started a free trial. Written by the Stripe
+    -- webhook via lib/trialGuard.ts.
+    --
+    -- WHY: the 2-day trial is granted on nothing but a fresh users.id, so a new
+    -- email = a new trial, forever. Stripe's PaymentMethod fingerprint is stable
+    -- for the same physical card ACROSS different customers, emails and
+    -- accounts -- it is the only identity in the flow the customer cannot mint
+    -- for free. fingerprint is therefore the primary key: one trial per card.
+    --
+    -- name_key = cardholder name normalised + token-sorted (see
+    -- normaliseCardName). A SECONDARY signal only: names are not unique, so a
+    -- match across two DIFFERENT cards is flagged and left alone unless
+    -- TRIAL_GUARD_NAME_BLOCK is set. Indexed, deliberately NOT unique.
+    --
+    -- blocked / reuse_count / flagged_name_match are the audit trail -- the row
+    -- keeps the whole history of a card, not just the latest verdict.
+    CREATE TABLE IF NOT EXISTS trial_cards (
+      fingerprint            TEXT PRIMARY KEY,
+      clerk_user_id          TEXT,
+      stripe_customer_id     TEXT,
+      stripe_subscription_id TEXT,
+      cardholder_name        TEXT,
+      name_key               TEXT,
+      last4                  TEXT,
+      brand                  TEXT,
+      exp_month              INTEGER,
+      exp_year               INTEGER,
+      /* TRUE when this card's trial was revoked by the guard. */
+      blocked                BOOLEAN NOT NULL DEFAULT FALSE,
+      /* Earlier user id, when the NAME matched but the card did not. */
+      flagged_name_match     TEXT,
+      /* Times this card came back for another trial after the first. */
+      reuse_count            INTEGER NOT NULL DEFAULT 0,
+      last_reuse_user_id     TEXT,
+      last_reuse_sub_id      TEXT,
+      last_reuse_at          TIMESTAMPTZ,
+      first_seen_at          TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+      updated_at             TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_trial_cards_user  ON trial_cards(clerk_user_id);
+    CREATE INDEX IF NOT EXISTS idx_trial_cards_name  ON trial_cards(name_key);
+    CREATE INDEX IF NOT EXISTS idx_trial_cards_reuse ON trial_cards(reuse_count DESC);
+
     -- Traders Dashboard per-user preferences. One row per Clerk user. schedule and
     -- tasks are JSON arrays the page owns; zip drives the weather card.
     CREATE TABLE IF NOT EXISTS td_user_prefs (
@@ -2405,6 +2448,152 @@ export async function getSubscriptionCancellations(
   return queryAll<SubscriptionCancellationRecord>(
     `SELECT * FROM subscription_cancellations
       ORDER BY COALESCE(ended_at, canceled_at, 0) DESC, first_seen_at DESC
+      LIMIT ?`,
+    [limit]
+  );
+}
+
+// ── Trial abuse guard: one free trial per card ──────────────────────────────
+// See the trial_cards DDL above and lib/trialGuard.ts for the reasoning.
+
+export interface TrialCardRecord {
+  fingerprint: string;
+  clerk_user_id: string | null;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  cardholder_name: string | null;
+  name_key: string | null;
+  last4: string | null;
+  brand: string | null;
+  exp_month: number | null;
+  exp_year: number | null;
+  blocked: boolean;
+  flagged_name_match: string | null;
+  reuse_count: number;
+  last_reuse_user_id: string | null;
+  last_reuse_sub_id: string | null;
+  last_reuse_at: string | null;
+  first_seen_at: string | null;
+  updated_at: string | null;
+}
+
+/** Has this exact card already started a trial? The hard signal. */
+export async function findTrialCardByFingerprint(
+  fingerprint: string
+): Promise<TrialCardRecord | undefined> {
+  if (!fingerprint) return undefined;
+  return queryOne<TrialCardRecord>(
+    "SELECT * FROM trial_cards WHERE fingerprint = ?",
+    [fingerprint]
+  );
+}
+
+/**
+ * Has this cardholder NAME already started a trial under a different user?
+ *
+ * excludeUserId keeps a customer's own second card from matching themselves —
+ * the same person adding a new card is not abuse, and without this every
+ * legitimate card replacement would trip the flag.
+ *
+ * Returns the OLDEST match: the first trial is the one that was legitimately
+ * earned, so that's the row a later attempt should be reported against.
+ */
+export async function findTrialCardByNameKey(
+  nameKey: string,
+  excludeUserId?: string | null
+): Promise<TrialCardRecord | undefined> {
+  if (!nameKey) return undefined;
+  // pgQuery (not queryAll) with explicit ::text casts: Postgres cannot infer the
+  // type of a bare parameter in `$2 IS NULL`, and errors with "could not
+  // determine data type of parameter". The cast settles it.
+  const res = await pgQuery(
+    `SELECT * FROM trial_cards
+      WHERE name_key = $1::text
+        AND ($2::text IS NULL OR clerk_user_id IS DISTINCT FROM $2::text)
+      ORDER BY first_seen_at ASC
+      LIMIT 1`,
+    [nameKey, excludeUserId ?? null]
+  );
+  return res.rows[0] as TrialCardRecord | undefined;
+}
+
+/**
+ * Claim a card for a user's trial.
+ *
+ * ON CONFLICT DO NOTHING, not DO UPDATE: the first user to claim a fingerprint
+ * OWNS it permanently. If a concurrent/redelivered webhook races here, the
+ * loser must not overwrite the original claimant — that would hand the card's
+ * trial entitlement to the second account, which is exactly the thing this
+ * table exists to prevent.
+ */
+export async function recordTrialCard(r: {
+  fingerprint: string;
+  clerk_user_id?: string | null;
+  stripe_customer_id?: string | null;
+  stripe_subscription_id?: string | null;
+  cardholder_name?: string | null;
+  name_key?: string | null;
+  last4?: string | null;
+  brand?: string | null;
+  exp_month?: number | null;
+  exp_year?: number | null;
+  blocked?: boolean;
+  flagged_name_match?: string | null;
+}): Promise<void> {
+  if (!r.fingerprint) return;
+  await pgQuery(
+    `INSERT INTO trial_cards
+       (fingerprint, clerk_user_id, stripe_customer_id, stripe_subscription_id,
+        cardholder_name, name_key, last4, brand, exp_month, exp_year,
+        blocked, flagged_name_match)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     ON CONFLICT (fingerprint) DO NOTHING`,
+    [
+      r.fingerprint,
+      r.clerk_user_id ?? null,
+      r.stripe_customer_id ?? null,
+      r.stripe_subscription_id ?? null,
+      r.cardholder_name ?? null,
+      r.name_key ?? null,
+      r.last4 ?? null,
+      r.brand ?? null,
+      r.exp_month ?? null,
+      r.exp_year ?? null,
+      Boolean(r.blocked),
+      r.flagged_name_match ?? null,
+    ]
+  );
+}
+
+/**
+ * Stamp a repeat attempt on an already-claimed card. Bumps the counter and
+ * records who tried; the original clerk_user_id is never touched.
+ */
+export async function markTrialCardReuse(
+  fingerprint: string,
+  attemptedByUserId: string | null,
+  attemptedSubId: string | null
+): Promise<void> {
+  if (!fingerprint) return;
+  await pgQuery(
+    `UPDATE trial_cards
+        SET reuse_count        = reuse_count + 1,
+            last_reuse_user_id = $2,
+            last_reuse_sub_id  = $3,
+            last_reuse_at      = CURRENT_TIMESTAMP,
+            blocked            = TRUE,
+            updated_at         = CURRENT_TIMESTAMP
+      WHERE fingerprint = $1`,
+    [fingerprint, attemptedByUserId ?? null, attemptedSubId ?? null]
+  );
+}
+
+/** Cards that have been re-presented for a second trial — the abuse report. */
+export async function getTrialCardReuses(limit = 200): Promise<TrialCardRecord[]> {
+  return queryAll<TrialCardRecord>(
+    `SELECT * FROM trial_cards
+      WHERE reuse_count > 0 OR blocked = TRUE OR flagged_name_match IS NOT NULL
+      ORDER BY COALESCE(last_reuse_at, first_seen_at) DESC
       LIMIT ?`,
     [limit]
   );

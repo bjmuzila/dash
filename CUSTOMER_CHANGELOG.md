@@ -3,6 +3,19 @@
 A plain-language log of updates to the dashboard. Each day compiles into one section.
 
 
+## Thursday 8/20/2026
+
+* **The trade journal opens on your calendar now.** The month grid is the first thing you see, colored by how big each day was — click any day to filter the rest of the page.
+
+* **New Post-Market tab on Premarket Prep.** After the close, see how the day graded against the morning map and get tomorrow's walls and flip.
+
+* **Levels rail at the top of Premarket Prep.** Put wall, flip, core, spot and call wall on one price line.
+
+* **The GEX profile scrolls now.** See far strikes and the walls, with a tap to snap back to spot.
+
+* **Phone tab bar: Prep replaces EM.** Premarket and post-market on your phone; Estimated Moves is still on the desktop page.
+
+
 ## Wednesday 8/19/2026
 
 * **New Premarket Prep page.** One screen before the open: gamma regime, call and put walls, the flip, overnight range and gap, expected move, sector heat and today's catalysts — with a one-line plan.

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { getSubscriptionByCustomer, upsertSubscription, claimWelcomeEmail, getUserById, recordSubscriptionCancellation, PAID_STATUSES } from "@/lib/db";
+import { enforceTrialGuard } from "@/lib/trialGuard";
 import { lookupUser, sendTransactional } from "@/lib/emails/send";
 import { founderThankYouEmail, founderThankYouText, FOUNDER_THANKYOU_SUBJECT } from "@/lib/emails/founder-thankyou";
 import { syncDiscordRoleForUser } from "@/lib/discord";
@@ -140,6 +141,38 @@ async function syncSubscription(sub: Stripe.Subscription): Promise<void> {
     current_period_end: item?.current_period_end ?? null,
     cancel_at_period_end: sub.cancel_at_period_end,
   });
+
+  // ── Repeat-free-trial guard ───────────────────────────────────────────────
+  // MUST run before the welcome email and the Discord role below: PAID_STATUSES
+  // counts "trialing" as paid, so a farmed trial would otherwise collect the
+  // founder thank-you and the paid Discord role in the seconds before it's
+  // revoked. Only acts on trials; no-ops for every other event.
+  //
+  // Deliberately placed AFTER upsertSubscription so our row reflects what Stripe
+  // actually sent, whatever the verdict. When the guard ends the trial it
+  // updates the subscription at Stripe, which fires a fresh
+  // customer.subscription.updated carrying the real post-trial status — that
+  // event re-enters here and writes the corrected state. Hence the early return:
+  // there is nothing more to do for a blocked trial on THIS pass.
+  //
+  // enforceTrialGuard never throws (see its contract) — no try/catch needed, and
+  // a guard failure degrades to "trial allowed" rather than failing the webhook.
+  // getStripe() is a memoised singleton, so re-resolving it here (rather than
+  // threading the client through from POST) costs nothing.
+  const guard = await enforceTrialGuard(getStripe(), sub, clerkUserId, customerId);
+  if (guard.action === "blocked") {
+    console.warn(
+      `[stripe/webhook] repeat trial blocked via ${guard.via} — sub ${sub.id}, ` +
+      `user ${clerkUserId}, card first claimed by ${guard.firstUserId ?? "unknown"}`
+    );
+    return;
+  }
+  if (guard.action === "flagged") {
+    console.warn(
+      `[stripe/webhook] trial allowed but cardholder name matches an earlier ` +
+      `trial (user ${guard.firstUserId ?? "unknown"}) — sub ${sub.id}, user ${clerkUserId}`
+    );
+  }
 
   // Fire the one-time founder thank-you the first time this user becomes paid.
   // Non-blocking: any failure is logged but never fails the webhook (Stripe
