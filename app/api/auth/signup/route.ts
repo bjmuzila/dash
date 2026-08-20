@@ -55,6 +55,19 @@ export async function POST(req: NextRequest) {
 
   const existing = await getUserByEmail(email);
   if (existing) {
+    // Accounts created through the retired Google sign-in have no
+    // password_hash, so their owner can neither sign in (no password to type)
+    // nor sign up (this branch). Point them at the reset flow, which sets a
+    // password on the existing row, instead of a dead-end "already exists".
+    if (!existing.password_hash) {
+      return NextResponse.json(
+        {
+          error:
+            "That email was registered with Google sign-in, which has been retired. Use “Forgot password?” on the sign-in page to set a password for it.",
+        },
+        { status: 400 },
+      );
+    }
     // Same generic-error stance as login: don't confirm/deny account existence
     // beyond what's necessary for a usable error message.
     return NextResponse.json({ error: "An account with that email already exists." }, { status: 400 });

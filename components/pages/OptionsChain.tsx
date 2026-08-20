@@ -1634,17 +1634,22 @@ const ChainMatrix = memo(function ChainMatrix({
             {ghostCells(`row-${strike}`)}
             {/* ── Mirrored strike rail (sticky right) ───────────────────────
                 Same strike, same click target, same ATM / EM / selection
-                treatment as the left rail — only the geometry is flipped:
-                border and selection rule on the LEFT edge, number left-aligned,
-                EM tag pushed to the outer (right) edge. Reading a cell in the
-                furthest expiry column no longer means tracking back across the
-                whole grid to name the row. */}
+                treatment as the left rail — only the border and selection rule
+                move to the LEFT edge. The number is RIGHT-aligned against the
+                grid's outer edge (left-aligning it parked the strike hard
+                against the Total column's figure and the two read as one
+                string), with the EM / ATM tag pushed to the inner edge — the
+                same tag-then-number order the left rail uses. Reading a cell in
+                the furthest expiry column no longer means tracking back across
+                the whole grid to name the row. */}
             <div
               onClick={(e) => onToggleStrike(strike, e.shiftKey)}
               title={emTip || "Click to focus this strike (shift-click = only this one)"}
               style={{
                 position: "sticky", right: 0, zIndex: 2,
-                padding: "2px 5px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "left",
+                // Extra left padding keeps the number off the Total column's
+                // value; 5px on the right matches the left rail's inset.
+                padding: "2px 5px 2px 10px", fontSize: 10, fontFamily: "var(--font-mono)", textAlign: "right",
                 minHeight: ROW_MIN_H,
                 color: isATM ? HT.cyan : "#e4e4e7",
                 fontWeight: isATM ? 700 : 400,
@@ -1660,23 +1665,23 @@ const ChainMatrix = memo(function ChainMatrix({
                   ...(isATM ? ["inset 0 2px 0 #ffffff", "inset 0 -2px 0 #ffffff"] : []),
                 ].join(", ") || undefined,
                 borderLeft: `1px solid ${HT.border}`,
-                display: "flex", alignItems: "center", justifyContent: "flex-start", gap: 3,
+                display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 3,
                 cursor: "pointer",
                 opacity: strikeDim ? 0.28 : 1,
                 transition: "opacity .12s",
                 whiteSpace: "nowrap", overflow: "hidden",
               }}
             >
-              {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
               {emTag && (
                 <span style={{
                   fontSize: 8, fontWeight: isATM ? 900 : 800, letterSpacing: isATM ? "0.06em" : "0.02em",
-                  padding: isATM ? 0 : "1px 3px", borderRadius: 3, marginLeft: "auto",
+                  padding: isATM ? 0 : "1px 3px", borderRadius: 3, marginRight: "auto",
                   fontFamily: isATM ? "sans-serif" : undefined,
                   background: isATM ? "transparent" : "rgba(255,255,255,0.12)",
                   color: isATM ? HT.cyan : "#ffffff",
                 }}>{emTag}</span>
               )}
+              {Number.isInteger(strike) ? strike.toFixed(0) : strike.toFixed(2)}
             </div>
           </div>
         );

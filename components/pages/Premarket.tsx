@@ -125,7 +125,7 @@ const CSS = `
 
 /* ── GEX LEVEL RAIL ──────────────────────────────────────────────────────────
    ONE price axis carrying every level the page cares about — put wall, gamma
-   flip, core bullseye, spot, call wall — so their ORDER and SPACING is readable
+   flip, CORE, spot, call wall — so their ORDER and SPACING is readable
    before any of the six cards below are read. It replaces nothing; it is the
    index to the cards.
    Two levels can print a handful of points apart, so the captions alternate
@@ -816,9 +816,9 @@ export default function Premarket() {
     px == null || basis == null ? null : px + basis;
 
   // ── GEX LEVEL RAIL ─────────────────────────────────────────────────────────
-  /** Core Bullseye (CB) — the single strike carrying the most ABSOLUTE gamma in
+  /** CORE (CB) — the single strike carrying the most ABSOLUTE gamma in
    *  the whole chain. Same definition the Board's levels panel uses, so the two
-   *  surfaces can never print a different CB. Deliberately NOT the "0DTE magnet"
+   *  surfaces can never print a different CORE. Deliberately NOT the "0DTE magnet"
    *  card below: that one is capped to the ±12-strike window the profile draws,
    *  which can miss a bigger strike further out. */
   const coreBullseye = useMemo(() => {
@@ -834,7 +834,7 @@ export default function Premarket() {
     };
     add("PW", "Put Wall", putWall, "var(--pos)");
     add("FLIP", "Gamma Flip", flip, "var(--amber)");
-    add("CB", "Core Bullseye", coreBullseye?.strike, "var(--violet)");
+    add("CORE", "max γ strike", coreBullseye?.strike, "var(--violet)");
     add("SPOT", "Spot", spot > 0 ? spot : null, "#ffffff");
     add("CW", "Call Wall", callWall, "var(--neg)");
     if (marks.length < 2) return null;

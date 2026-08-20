@@ -21,7 +21,7 @@
  *
  * DATA SOURCES
  *   props                       everything the Premarket tab already computed off
- *                               the live chain — spot, walls, flip, CB, max pain,
+ *                               the live chain — spot, walls, flip, CORE, max pain,
  *                               per-strike GEX, totals, the ES session bars.
  *   /api/snapshots/option-strike-gex-history
  *                               the per-minute strike ladder the ES chart's bubble
@@ -187,7 +187,12 @@ export const POSTMARKET_CSS = `
 
 /* 4/5/6 */
 .pmk .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
-.pmk .tile{border:1px solid var(--card);border-radius:9px;background:var(--panel2);padding:9px 10px}
+/* Tiles carry the same left accent the scorecard cards do — a card with a bare
+   edge reads as a different kind of thing, and they are all the same thing. */
+.pmk .tile{position:relative;border:1px solid var(--card);border-radius:9px;background:var(--panel2);
+  padding:9px 10px 9px 13px;overflow:hidden}
+.pmk .tile::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;
+  background:var(--tile-accent,var(--line2));border-radius:0 2px 2px 0}
 .pmk .tile .n2{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2)}
 .pmk .tile .v2{font-size:16px;font-weight:640;margin-top:2px;letter-spacing:-.02em}
 .pmk .tile .m2{font-size:10px;color:var(--dim)}
@@ -284,7 +289,7 @@ function fmtUsd(v: number | null | undefined, signed = true): string {
 //  component
 // ─────────────────────────────────────────────────────────────────────────────
 
-type LevelKey = "CW" | "PW" | "FLIP" | "CB" | "MP";
+type LevelKey = "CW" | "PW" | "FLIP" | "CORE" | "MP";
 
 type Grade = {
   key: LevelKey;
@@ -477,7 +482,7 @@ export default function PostMarketTab(p: PostMarketProps) {
    */
   const wallPath = useMemo(() => {
     if (cols.length < 3) return null;
-    const pts = cols.map((c) => {
+    const raw = cols.map((c) => {
       let cw = c.cells[0], pw = c.cells[0], cb = c.cells[0];
       for (const x of c.cells) {
         if (x.net > cw.net) cw = x;
@@ -486,12 +491,59 @@ export default function PostMarketTab(p: PostMarketProps) {
       }
       return { ts: c.ts, spot: c.spot, cw: cw?.strike ?? null, pw: pw?.strike ?? null, cb: cb?.strike ?? null };
     }).filter((p) => p.cw != null && p.pw != null);
-    if (pts.length < 3) return null;
+    if (raw.length < 3) return null;
+
+    /**
+     * ROLLING MODE, not the raw pick.
+     *
+     * CORE is "the biggest |net| strike", and on a minute where the largest
+     * positive and the largest negative strike are within a few percent of each
+     * other it alternates between them — two strikes 60 points apart, flipping
+     * every sample. Drawn as a line that is a picket fence of vertical jumps,
+     * which is what the violet back-and-forth was; the two walls flicker the
+     * same way at the edges of the ladder.
+     *
+     * A level is a discrete strike, so the honest smoother is the MOST COMMON
+     * value in a short window, never an average — averaging would invent
+     * strikes that were never the wall. Five samples kills the alternation and
+     * still turns a genuine roll within one window.
+     */
+    const mode = (vals: (number | null)[], i: number, half = 2): number | null => {
+      const counts = new Map<number, number>();
+      for (let j = Math.max(0, i - half); j <= Math.min(vals.length - 1, i + half); j++) {
+        const v = vals[j];
+        if (v == null) continue;
+        counts.set(v, (counts.get(v) ?? 0) + 1);
+      }
+      let best: number | null = null, bestN = 0;
+      for (const [v, n] of counts) {
+        // Ties break toward the value closest to the raw pick at i, so a real
+        // roll is not held back a sample longer than it has to be.
+        if (n > bestN || (n === bestN && best != null && vals[i] != null &&
+            Math.abs(v - (vals[i] as number)) < Math.abs(best - (vals[i] as number)))) {
+          best = v; bestN = n;
+        }
+      }
+      return best;
+    };
+
+    const cwRaw = raw.map((p) => p.cw);
+    const pwRaw = raw.map((p) => p.pw);
+    const cbRaw = raw.map((p) => p.cb);
+    const pts = raw.map((p, i) => ({
+      ts: p.ts,
+      spot: p.spot,
+      cw: mode(cwRaw, i),
+      pw: mode(pwRaw, i),
+      cb: mode(cbRaw, i),
+    }));
+
     const vals: number[] = [];
     for (const p of pts) {
       if (p.spot > 0) vals.push(p.spot);
       if (p.cw != null) vals.push(p.cw);
       if (p.pw != null) vals.push(p.pw);
+      if (p.cb != null) vals.push(p.cb);
     }
     const lo = Math.min(...vals), hi = Math.max(...vals);
     if (!(hi > lo)) return null;
@@ -684,7 +736,7 @@ export default function PostMarketTab(p: PostMarketProps) {
       withRecorded(build("CW", "Call Wall", "resistance", callWall, "var(--neg)", "above"), "call_wall"),
       withRecorded(build("PW", "Put Wall", "support", putWall, "var(--pos)", "below"), "put_wall"),
       build("FLIP", "Gamma Flip", "regime", flip, "var(--amber)", "cross"),
-      withRecorded(build("CB", "CORE", "max γ", coreBullseye?.strike ?? null, "var(--violet)", "near"), "cb"),
+      withRecorded(build("CORE", "CORE", "max γ", coreBullseye?.strike ?? null, "var(--violet)", "near"), "cb"),
       build("MP", "Max Pain", "OI", maxPain, "var(--blue)", "near"),
     ];
   }, [callWall, putWall, flip, coreBullseye, maxPain, path, spot, closePx, recorded]);
@@ -712,7 +764,7 @@ export default function PostMarketTab(p: PostMarketProps) {
       return { t: "BROKE THE PUT WALL", d: `Low ${fmtPx(rthLo)} lost ${fmtPx(putWall)}. Support was not support.`, neg: true };
     }
     if (pinned) {
-      return { t: "PINNED", d: `Closed ${fmtPts(cb != null ? closePx - cb : null)} from the ${fmtPx(cb)} bullseye, inside the wall band all day.`, neg: false };
+      return { t: "PINNED", d: `Closed ${fmtPts(cb != null ? closePx - cb : null)} from CORE at ${fmtPx(cb)}, inside the wall band all day.`, neg: false };
     }
     if (inside) {
       return { t: "HELD THE RANGE", d: `Whole session between ${fmtPx(putWall)} and ${fmtPx(callWall)}. The morning map was the day.`, neg: false };
@@ -743,7 +795,7 @@ export default function PostMarketTab(p: PostMarketProps) {
     };
     add("PW", "Put Wall", next.putWall, "var(--pos)");
     add("FLIP", "Gamma Flip", next.flip, "var(--amber)");
-    add("CB", "Core Bullseye", next.cb, "var(--violet)");
+    add("CORE", "max γ strike", next.cb, "var(--violet)");
     add("CLOSE", "SPX Close", closePx > 0 ? closePx : null, "#ffffff");
     add("CW", "Call Wall", next.callWall, "var(--neg)");
     if (marks.length < 2) return null;
@@ -835,10 +887,50 @@ export default function PostMarketTab(p: PostMarketProps) {
   const openTag = (strike: number): { text: string; color: string } | null => {
     if (callWall != null && strike === callWall) return { text: "CALL WALL", color: "var(--neg)" };
     if (putWall != null && strike === putWall) return { text: "PUT WALL", color: "var(--pos)" };
-    if (coreBullseye && strike === coreBullseye.strike) return { text: "BULLSEYE", color: "var(--violet)" };
+    if (coreBullseye && strike === coreBullseye.strike) return { text: "CORE", color: "var(--violet)" };
     if (maxPain != null && strike === maxPain) return { text: "MAX PAIN", color: "var(--blue)" };
     return null;
   };
+
+  /**
+   * The ladder renders ±60 strikes, so without this it opens at 7,955 — sixty
+   * strikes above the money, where every bar is a sliver. It centres on the spot
+   * row while pinned and un-pins the moment the reader scrolls, so a far wall
+   * stays put once you go looking at it. Our own scrollTop writes are flagged so
+   * the scroll event they fire is not read as the user's hand.
+   */
+  const evChartRef = useRef<HTMLDivElement | null>(null);
+  const evPinnedRef = useRef(true);
+  const evProgRef = useRef(false);
+  const [evPinned, setEvPinned] = useState(true);
+
+  const evSpotStrike = useMemo(() => {
+    if (!evRows.length || !(spot > 0)) return null;
+    return evRows.reduce((b, r) => (Math.abs(r.strike - spot) < Math.abs(b.strike - spot) ? r : b), evRows[0]).strike;
+  }, [evRows, spot]);
+
+  const centerEv = useCallback(() => {
+    const el = evChartRef.current;
+    if (!el || evSpotStrike == null) return;
+    const i = evRows.findIndex((r) => r.strike === evSpotStrike);
+    if (i < 0) return;
+    evProgRef.current = true;
+    el.scrollTop = Math.max(0, i * 21 + 10.5 - el.clientHeight / 2);
+    requestAnimationFrame(() => { evProgRef.current = false; });
+  }, [evRows, evSpotStrike]);
+
+  useEffect(() => { if (evPinnedRef.current) centerEv(); }, [centerEv]);
+
+  const onEvScroll = useCallback(() => {
+    if (evProgRef.current) return;
+    if (evPinnedRef.current) { evPinnedRef.current = false; setEvPinned(false); }
+  }, []);
+
+  const repinEv = useCallback(() => {
+    evPinnedRef.current = true;
+    setEvPinned(true);
+    centerEv();
+  }, [centerEv]);
 
   const histNote =
     histState === "ok" ? null
@@ -1011,8 +1103,8 @@ export default function PostMarketTab(p: PostMarketProps) {
         {histNote && <div className="warnbar" style={{ marginBottom: 11 }}>{histNote}</div>}
 
         <div className="body" style={{ gridTemplateColumns: "1.35fr 1fr" }}>
-          <div className="col">
-            <div className="chart">
+          <div className="col" style={{ position: "relative" }}>
+            <div className="chart evchart" ref={evChartRef} onScroll={onEvScroll}>
               {evRows.length === 0 && (
                 <div style={{ padding: "30px 0", textAlign: "center", color: "var(--dim)", fontSize: 12 }}>
                   Waiting for the chain…
@@ -1048,7 +1140,11 @@ export default function PostMarketTab(p: PostMarketProps) {
                     ? { left: `calc(${50 + wp}% - 1px)` }
                     : { right: `calc(${50 + wp}% - 1px)` };
 
-                const off = r.offPeakPct;
+                // A strike carrying under 2% of the window's biggest bar is
+                // noise — "−100% 09:32" on a line that never held anything is
+                // false precision, so the row keeps its bar and drops the label.
+                const meaningful = Math.abs(r.net) >= maxAbsBar * 0.02;
+                const off = meaningful ? r.offPeakPct : null;
                 return (
                   <div className={`evrow${tag ? " key" : ""}`} key={r.strike}>
                     <div className="k mono">{nf(r.strike, 0)}</div>
@@ -1058,7 +1154,7 @@ export default function PostMarketTab(p: PostMarketProps) {
                       {peakStyle && <div className="openmk" style={peakStyle} />}
                     </div>
                     <div className="builtcol mono">
-                      {r.dominant && (
+                      {meaningful && r.dominant && (
                         <span style={{ color: r.dominant.color }}>{Math.round(r.dominant.share * 100)}% {r.dominant.label}</span>
                       )}
                       {off != null && (
@@ -1075,6 +1171,9 @@ export default function PostMarketTab(p: PostMarketProps) {
                 );
               })}
             </div>
+            {!evPinned && evRows.length > 0 && (
+              <button type="button" className="recenter" onClick={repinEv}>⤒ back to spot</button>
+            )}
           </div>
 
           <div className="col">
@@ -1082,6 +1181,15 @@ export default function PostMarketTab(p: PostMarketProps) {
             <div className="colhead">
               <h3>Wall migration</h3>
               <span className="tiny">net-basis proxy · {cols.length} min</span>
+            </div>
+            {/* Its own legend. The section legend above is the BUILD-TIME ramp and
+                says nothing about these four series — which is exactly how a
+                violet CORE line reads as an unexplained squiggle. */}
+            <div className="evlegend" style={{ marginBottom: 6 }}>
+              <span><i style={{ background: "var(--neg)" }} />call wall</span>
+              <span><i style={{ background: "var(--violet)" }} />CORE</span>
+              <span><i style={{ background: "var(--pos)" }} />put wall</span>
+              <span><i style={{ background: "#fff" }} />spot</span>
             </div>
             {wallPath ? (
               <>
@@ -1147,22 +1255,22 @@ export default function PostMarketTab(p: PostMarketProps) {
           <span className="tiny">same chain, same formulas as the GEX chart</span>
         </div>
         <div className="tiles">
-          <div className="tile">
+          <div className="tile" style={{ ["--tile-accent" as string]: totals.dex >= 0 ? "var(--pos)" : "var(--neg)" } as CSSProperties}>
             <div className="n2">Net DEX</div>
             <div className="v2 mono">{fmtUsd(totals.dex)}</div>
             <div className="m2">{totals.dex >= 0 ? "dealers long delta" : "dealers short delta"}</div>
           </div>
-          <div className="tile">
+          <div className="tile" style={{ ["--tile-accent" as string]: "var(--blue)" } as CSSProperties}>
             <div className="n2">Net Vanna</div>
             <div className="v2 mono">{fmtUsd(totals.vanna)}</div>
             <div className="m2">{totals.vanna >= 0 ? "vol down helps the tape" : "vol down pressures the tape"}</div>
           </div>
-          <div className="tile">
+          <div className="tile" style={{ ["--tile-accent" as string]: (netGexChg ?? 0) >= 0 ? "var(--pos)" : "var(--neg)" } as CSSProperties}>
             <div className="n2">Net GEX on the day</div>
             <div className="v2 mono">{netGexChg == null ? "—" : fmtUsd(netGexChg)}</div>
             <div className="m2">{netGexChg == null ? "no 09:30 ladder" : netGexChg >= 0 ? "gamma built through the session" : "gamma bled out of the book"}</div>
           </div>
-          <div className="tile">
+          <div className="tile" style={{ ["--tile-accent" as string]: "var(--violet)" } as CSSProperties}>
             <div className="n2">Call vs Put gamma</div>
             <div className="v2 mono">
               {(() => {
@@ -1272,7 +1380,7 @@ export default function PostMarketTab(p: PostMarketProps) {
             </div>
 
             <div className="tiles" style={{ marginTop: 6 }}>
-              <div className="tile">
+              <div className="tile" style={{ ["--tile-accent" as string]: "var(--blue)" } as CSSProperties}>
                 <div className="n2">Wall band</div>
                 <div className="v2 mono">
                   {todayWidth != null && nextWidth != null ? `${nf(todayWidth, 0)} → ${nf(nextWidth, 0)} pts` : nextWidth != null ? `${nf(nextWidth, 0)} pts` : "—"}
@@ -1283,12 +1391,12 @@ export default function PostMarketTab(p: PostMarketProps) {
                     : "structure after the roll"}
                 </div>
               </div>
-              <div className="tile">
+              <div className="tile" style={{ ["--tile-accent" as string]: "var(--amber)" } as CSSProperties}>
                 <div className="n2">Flip moves to</div>
                 <div className="v2 mono">{fmtPx(next?.flip)}</div>
                 <div className="m2">{next?.flip != null && closePx > 0 ? `${fmtPts(next.flip - closePx)} from the close` : "—"}</div>
               </div>
-              <div className="tile">
+              <div className="tile" style={{ ["--tile-accent" as string]: (next?.netGex ?? 0) >= 0 ? "var(--pos)" : "var(--neg)" } as CSSProperties}>
                 <div className="n2">Net GEX rolls to</div>
                 <div className="v2 mono">{fmtUsd(next?.netGex ?? null)}</div>
                 <div className="m2">
@@ -1297,7 +1405,7 @@ export default function PostMarketTab(p: PostMarketProps) {
                     : "next expiry only"}
                 </div>
               </div>
-              <div className="tile">
+              <div className="tile" style={{ ["--tile-accent" as string]: "#ffffff" } as CSSProperties}>
                 <div className="n2">Overnight watch</div>
                 <div className="v2 mono">{fmtPx(rthHi)} / {fmtPx(rthLo)}</div>
                 <div className="m2">today&apos;s RTH high / low{basis != null ? ` · ES basis ${fmtPts(basis)}` : ""}</div>
@@ -1362,7 +1470,7 @@ export default function PostMarketTab(p: PostMarketProps) {
                   <div className="g"><div className="n">Call wall held</div><div className="v mono">{hitRate((r) => r.cw)}</div></div>
                   <div className="g"><div className="n">Put wall held</div><div className="v mono">{hitRate((r) => r.pw)}</div></div>
                   <div className="g"><div className="n">Closed inside</div><div className="v mono">{hitRate((r) => r.inside)}</div></div>
-                  <div className="g"><div className="n">Pinned the CB</div><div className="v mono">{hitRate((r) => r.pinned)}</div></div>
+                  <div className="g"><div className="n">Pinned CORE</div><div className="v mono">{hitRate((r) => r.pinned)}</div></div>
                 </div>
               </>
             )}
@@ -1423,36 +1531,62 @@ export default function PostMarketTab(p: PostMarketProps) {
  */
 function WallChart({
   path,
+  height = 190,
 }: {
   path: { pts: { ts: number; spot: number; cw: number | null; pw: number | null; cb: number | null }[]; lo: number; hi: number };
+  height?: number;
 }) {
-  const H = 150;
   const pad = 8;
   const { pts, lo, hi } = path;
   const x = (i: number) => (i / Math.max(1, pts.length - 1)) * 100;
-  const y = (v: number) => pad + (1 - (v - lo) / (hi - lo)) * (H - pad * 2);
-  const line = (pick: (p: typeof pts[number]) => number | null) =>
+  const y = (v: number) => pad + (1 - (v - lo) / (hi - lo)) * (height - pad * 2);
+
+  /**
+   * STEP, not slope. A wall is a strike: it holds one value, then jumps to
+   * another. A straight interpolation between two samples draws a diagonal
+   * through prices the level never occupied, which is exactly the reading this
+   * panel is for — so each sample gets a horizontal run and the change is a
+   * vertical edge.
+   */
+  const step = (pick: (p: typeof pts[number]) => number | null) => {
+    const out: string[] = [];
+    let prev: number | null = null;
+    pts.forEach((p, i) => {
+      const v = pick(p);
+      if (v == null || !(v > 0)) return;
+      if (prev != null && v !== prev) out.push(`${x(i)},${y(prev)}`);
+      out.push(`${x(i)},${y(v)}`);
+      prev = v;
+    });
+    return out.join(" ");
+  };
+  /** Spot is continuous — it is the one series that should be a real line. */
+  const smooth = (pick: (p: typeof pts[number]) => number | null) =>
     pts.map((p, i) => { const v = pick(p); return v == null || !(v > 0) ? null : `${x(i)},${y(v)}`; })
        .filter(Boolean).join(" ");
 
-  const cw = line((p) => p.cw);
-  const pw = line((p) => p.pw);
-  const cb = line((p) => p.cb);
-  const sp = line((p) => (p.spot > 0 ? p.spot : null));
+  const cw = step((p) => p.cw);
+  const pw = step((p) => p.pw);
+  const cb = step((p) => p.cb);
+  const sp = smooth((p) => (p.spot > 0 ? p.spot : null));
 
   return (
-    <svg viewBox={`0 0 100 ${H}`} height={H} preserveAspectRatio="none" style={{ width: "100%", display: "block" }}>
-      {/* The wall-to-wall band, so the corridor price traded in is readable at a glance. */}
+    <svg viewBox={`0 0 100 ${height}`} height={height} preserveAspectRatio="none"
+      style={{ width: "100%", display: "block" }}>
+      {/* The wall-to-wall corridor, so the room price actually had is readable. */}
       {cw && pw && (
         <polygon
-          points={`${cw} ${pts.map((p, i) => (p.pw == null ? null : `${x(pts.length - 1 - i)},${y(pts[pts.length - 1 - i].pw as number)}`)).filter(Boolean).join(" ")}`}
-          fill="rgba(77,163,255,.07)"
+          points={`${cw} ${pts.slice().reverse().map((p, k) => {
+            const i = pts.length - 1 - k;
+            return p.pw == null ? null : `${x(i)},${y(p.pw)}`;
+          }).filter(Boolean).join(" ")}`}
+          fill="rgba(77,163,255,.06)"
         />
       )}
-      {pw && <polyline points={pw} fill="none" stroke="var(--pos)" strokeWidth={1.6} vectorEffect="non-scaling-stroke" />}
-      {cb && <polyline points={cb} fill="none" stroke="var(--violet)" strokeWidth={1.4} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />}
-      {cw && <polyline points={cw} fill="none" stroke="var(--neg)" strokeWidth={1.6} vectorEffect="non-scaling-stroke" />}
-      {sp && <polyline points={sp} fill="none" stroke="#ffffff" strokeWidth={1.4} vectorEffect="non-scaling-stroke" />}
+      {pw && <polyline points={pw} fill="none" stroke="var(--pos)" strokeWidth={1.7} vectorEffect="non-scaling-stroke" />}
+      {cb && <polyline points={cb} fill="none" stroke="var(--violet)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" opacity={.9} />}
+      {cw && <polyline points={cw} fill="none" stroke="var(--neg)" strokeWidth={1.7} vectorEffect="non-scaling-stroke" />}
+      {sp && <polyline points={sp} fill="none" stroke="#ffffff" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
     </svg>
   );
 }

@@ -55,6 +55,7 @@ export default function AuthForm({
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const [captchaFailed, setCaptchaFailed] = useState(false);
   const [captchaAttempt, setCaptchaAttempt] = useState(0);
+  const [resetBusy, setResetBusy] = useState(false);
 
   const widgetRef = useRef<HTMLDivElement | null>(null);
   const widgetId = useRef<string | null>(null);
@@ -133,6 +134,32 @@ export default function AuthForm({
     setCaptchaToken(null);
     setCaptchaFailed(false);
     setCaptchaAttempt((n) => n + 1);
+  }
+
+  // Sign-in only. Posts whatever is in the email box to the existing
+  // forgot-password route, which always answers generically (no account
+  // enumeration), so the notice below is deliberately non-committal.
+  async function sendReset() {
+    setError(null);
+    setNotice(null);
+    const target = email.trim();
+    if (!target) {
+      setError("Enter your email above first, then click Forgot password.");
+      return;
+    }
+    setResetBusy(true);
+    try {
+      await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: target }),
+      });
+      setNotice("If that email has an account, a reset link is on its way.");
+    } catch {
+      setError("Network error. Please try again.");
+    } finally {
+      setResetBusy(false);
+    }
   }
 
   async function withEmail(e: React.FormEvent) {
@@ -302,10 +329,62 @@ export default function AuthForm({
       {error && <div style={{ color: T.red, fontSize: 12, marginTop: 12 }}>{error}</div>}
       {notice && <div style={{ color: T.green, fontSize: 12, marginTop: 12 }}>{notice}</div>}
 
-      {isSignup && (
+      {isSignup ? (
         <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", marginTop: 20, textAlign: "center" }}>
           Already have an account? <Link href={`/sign-in?next=${encodeURIComponent(next)}`} style={{ color: T.cyan }}>Sign in</Link>
         </div>
+      ) : (
+        <>
+          {/* Sign-in only: a wrong password is a dead end without these two.
+              "Forgot password?" is also the migration path for accounts that
+              were created through the retired Google sign-in and therefore
+              have no password yet. */}
+          <button
+            type="button"
+            onClick={() => void sendReset()}
+            disabled={resetBusy}
+            style={{
+              display: "block",
+              margin: "12px auto 0",
+              background: "transparent",
+              border: "none",
+              padding: 0,
+              color: T.cyan,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: resetBusy ? "default" : "pointer",
+              opacity: resetBusy ? 0.6 : 1,
+            }}
+          >
+            {resetBusy ? "Sending…" : "Forgot password?"}
+          </button>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "18px 0 14px" }}>
+            <div style={{ flex: 1, height: 1, background: T.border }} />
+            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.4)" }}>new here?</span>
+            <div style={{ flex: 1, height: 1, background: T.border }} />
+          </div>
+
+          <Link
+            href={`/sign-up?next=${encodeURIComponent(next)}`}
+            style={{
+              display: "block",
+              width: "100%",
+              padding: "11px",
+              borderRadius: 8,
+              border: `1px solid ${T.border}`,
+              background: "rgba(255,255,255,0.04)",
+              color: T.text,
+              fontSize: 14,
+              fontWeight: 700,
+              textAlign: "center",
+              textDecoration: "none",
+              boxSizing: "border-box",
+            }}
+          >
+            Create an account
+          </Link>
+        </>
       )}
     </div>
   );

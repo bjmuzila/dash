@@ -179,7 +179,7 @@ export default function MobilePrep() {
       .sort((a, b) => a.strike - b.strike);
   }, [g.chain, g.spot]);
 
-  /** CORE / Core Bullseye — the strike carrying the most absolute gamma. */
+  /** CORE (CB) — the strike carrying the most absolute gamma. */
   const cb = useMemo(() => {
     if (!perStrike.length) return null;
     return perStrike.reduce((b, r) => (Math.abs(r.net) > Math.abs(b.net) ? r : b), perStrike[0]);
@@ -247,7 +247,7 @@ export default function MobilePrep() {
       }
     };
     add("CW", "call wall", g.callWall, M_COLOR.neg);
-    add("CB", "core bullseye", cb?.strike, M_COLOR.cb);
+    add("CORE", "max γ strike", cb?.strike, M_COLOR.cb);
     add("SPOT", g.esFut > 0 ? `ES ${fmtPrice(g.esFut, 2)}` : "live", g.spot > 0 ? g.spot : null, M_COLOR.text, true);
     add("FLIP", "gamma flip", g.flip, M_COLOR.orange);
     add("PW", "put wall", g.putWall, M_COLOR.pos);

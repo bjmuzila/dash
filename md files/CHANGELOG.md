@@ -1,50 +1,61 @@
 # Changelog
 
-## 2026-08-20 (j) - Auth: Google sign-in removed, email/password only
+## 2026-08-20 (j) - "Core Bullseye" is CORE everywhere
 
-Edited: `components/auth/AuthForm.tsx`, `app/api/auth/google/start/route.ts`,
-`app/auth/callback/route.ts`.
+Edited: `components/pages/Premarket.tsx`, `components/pages/premarket/PostMarketTab.tsx`,
+`components/pages/premarket/TickerBoard.tsx`, `components/mobile/pages/MobilePrep.tsx`.
 
-Google OAuth kept failing at the consent screen with
-`Error 400: redirect_uri_mismatch`, so the Google path is gone. Sign-in and
-sign-up are now email + password only.
+Every user-facing "Core Bullseye" / "BULLSEYE" / bare "CB" now reads **CORE** —
+the rail cap, the level card, the profile tag, the verdict sentence, tomorrow's
+map, the phone ladder and the accuracy tile. The rail's second line is "max γ
+strike" rather than a second name for the same thing. The scorecard's level key
+went from "CB" to "CORE" with it, so the code and the label match.
 
-- `AuthForm` lost the "Continue with Google" button, the `or` divider and the
-  `withGoogle()` handler. The email/password form, Turnstile captcha and rate
-  limiting are unchanged — it is just the first thing on the card now.
-- `/api/auth/google/start` and `/auth/callback` are reduced to stubs that
-  redirect to `/sign-in` (the callback also clears any leftover
-  `g_oauth_state` / `g_oauth_next` cookies). Kept rather than deleted so a
-  stale bookmark, a cached bundle, or a consent screen left open in a tab
-  lands on the login page instead of a 404.
-- `middleware.ts` unchanged — those two paths stay public so the stub
-  redirects are reachable without a session.
-- `lib/auth/google.ts` and the `google_sub` column are now unused. Existing
-  Google-only accounts (rows with no `password_hash`) cannot sign in until
-  they set a password via Forgot password.
+Kept as-is: the `cb` field on the walls-recorder payload (that is the server's
+name for it, and /level-log reads the same rows) and the `coreBullseye` variable
+in Premarket. Comments say "CORE (CB)" once where the abbreviation still helps.
 
+## 2026-08-20 (i) - Post-Market: wall path de-flickered, §3 opens at spot, tiles get accents
 
-## 2026-08-20 (i) - Options Chain: mirrored strike rail on the right edge
+Edited: `components/pages/premarket/PostMarketTab.tsx`.
 
-Edited: `components/pages/OptionsChain.tsx`.
+### The violet picket fence in Wall Migration
 
-The chain grid had one strike ladder, sticky on the left. With a wide expiry
-set the right-hand columns sit far enough from it that naming a row means
-scrolling back — so the same ladder now repeats as a sticky column on the far
-right edge of the grid.
+CORE is "the biggest |net| strike". On a minute where the largest positive and
+the largest negative strike are within a few percent of each other it ALTERNATES
+between them — two strikes sixty points apart, flipping every sample — and a line
+through that is a picket fence of vertical jumps. The walls flicker the same way
+at the edges of the ladder.
 
-- New `STRIKE_COL`-wide track appended to `gridTemplateColumns`, after the
-  reserved (ghost) tracks, so it is always the outermost column.
-- Header corner, padding rows and data rows each got their mirrored cell.
-- The right rail is a full peer of the left one: same click-to-focus and
-  shift-click-to-isolate handler, same ATM cyan + white inset rule, same EM
-  +/-1s / +/-2s tags, same selection tint and dim behaviour.
-- Geometry is flipped, not restyled: border and selection rule on the LEFT
-  edge, number left-aligned, EM tag pushed to the outer (right) edge.
-- ATM/selection rules stay `box-shadow` insets rather than real borders, for
-  the same reason as the left rail: a real 2px border would make the ATM row
-  taller than its neighbours and the ladder would jump every time spot crossed
-  a strike.
+Two fixes:
+
+- **Rolling MODE, five samples.** A level is a discrete strike, so the honest
+  smoother is the most common value in a short window, never an average —
+  averaging invents strikes that were never the wall. Ties break toward the raw
+  pick so a genuine roll is not held back.
+- **Step lines, not slopes.** A wall holds one strike and then jumps. A straight
+  interpolation draws a diagonal through prices the level never occupied, which
+  is exactly the reading this panel exists for. Spot stays a real line — it is
+  the one continuous series.
+
+And the panel now carries **its own legend** (call wall / CORE / put wall / spot).
+The section legend above it is the build-time ramp and says nothing about those
+four series, which is how a violet line reads as an unexplained squiggle.
+
+### Section 3
+
+- Opens **centred on spot** instead of at +60 strikes, with the same pin /
+  un-pin-on-scroll / "back to spot" behaviour as the premarket profile.
+- The ladder is 520px and sets its row's height, so the panel fills its space.
+- A strike carrying under 2% of the biggest bar drops its label: "−100% 09:32"
+  on a line that never held anything is false precision.
+
+### Accents
+
+`.tile` (positioning, tomorrow's map) now carries the same left accent the
+scorecard cards do, coloured by what the tile says — sign for DEX and the roll,
+amber for the flip, violet for the call/put split. A card with a bare edge reads
+as a different kind of thing, and they are all the same kind of thing.
 
 ## 2026-08-20 (h) - Post-Market §3 rebuilt: build-time bars, peak marks, wall path, written-vs-traded
 

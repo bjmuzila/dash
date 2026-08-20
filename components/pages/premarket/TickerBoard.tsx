@@ -110,7 +110,7 @@ export default function TickerBoard({
     };
     add("PW", "Put Wall", board.putWall, "var(--pos)");
     add("FLIP", "Gamma Flip", board.flip, "var(--amber)");
-    add("CB", "Core Bullseye", board.cb, "var(--violet)");
+    add("CORE", "max γ strike", board.cb, "var(--violet)");
     add("SPOT", "Spot", spot > 0 ? spot : null, "#ffffff");
     add("CW", "Call Wall", board.callWall, "var(--neg)");
     if (marks.length < 2) return null;
@@ -242,7 +242,7 @@ export default function TickerBoard({
         </div>
 
         <div className="lvl magnet">
-          <div className="name">Core Bullseye <em>max γ</em></div>
+          <div className="name">CORE <em>max γ</em></div>
           <div className="px mono">{fmtPx(board.cb, dp)}</div>
           <div className="es mono">{fmtUsd(gexAt(board.rows, board.cb, "net"), false)}</div>
           <div className="dist">
@@ -494,7 +494,7 @@ function tagFor(
 ): { text: string; color: string } | null {
   if (board.callWall != null && strike === board.callWall) return { text: "CALL WALL", color: "var(--neg)" };
   if (board.putWall != null && strike === board.putWall) return { text: "PUT WALL", color: "var(--pos)" };
-  if (board.cb != null && strike === board.cb) return { text: "BULLSEYE", color: "var(--violet)" };
+  if (board.cb != null && strike === board.cb) return { text: "CORE", color: "var(--violet)" };
   if (board.maxPain != null && strike === board.maxPain) return { text: "MAX PAIN", color: "var(--blue)" };
   return null;
 }
