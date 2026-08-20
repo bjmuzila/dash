@@ -3475,6 +3475,15 @@ const basisParam = (sp) => {
   return BASES.has(b) ? b : '';
 };
 
+// `leg` picks which option type's gamma the ladder is made of: net | call |
+// put. Orthogonal to basis, whitelisted for the same reason — it also lands in
+// a SQL identifier downstream.
+const LEGS = new Set(['net', 'call', 'put']);
+const legParam = (sp) => {
+  const l = (sp.get('leg') || '').trim().toLowerCase();
+  return LEGS.has(l) ? l : '';
+};
+
 register('/api/eod-strike-gex-board', {
   auth: 'owner', methods: ['GET'],
   async handler(req, res, ctx) {
@@ -3486,6 +3495,8 @@ register('/api/eod-strike-gex-board', {
     if (date) q.set('date', date);
     const basis = basisParam(sp);
     if (basis) q.set('basis', basis);
+    const leg = legParam(sp);
+    if (leg) q.set('leg', leg);
     const qs = q.toString() ? `?${q}` : '';
     const r = await forwardGet(ctx, `/proxy/eod-strike-gex-board${qs}`);
     send(res, r.status, r.body, { 'Cache-Control': NO_STORE });
@@ -3503,6 +3514,8 @@ register('/api/eod-strike-gex-change', {
     if (date) q.set('date', date);
     const basis = basisParam(sp);
     if (basis) q.set('basis', basis);
+    const leg = legParam(sp);
+    if (leg) q.set('leg', leg);
     const qs = q.toString() ? `?${q}` : '';
     const r = await forwardGet(ctx, `/proxy/eod-strike-gex-change${qs}`);
     send(res, r.status, r.body, { 'Cache-Control': NO_STORE });
@@ -3536,6 +3549,8 @@ register('/api/eod-strike-gex-live', {
     // instead of an OI number under a "direction was measured" header.
     const basis = basisParam(sp);
     if (basis) q.set('basis', basis);
+    const leg = legParam(sp);
+    if (leg) q.set('leg', leg);
     const qs = q.toString() ? `?${q}` : '';
     const r = await forwardGet(ctx, `/proxy/eod-strike-gex-live${qs}`);
     send(res, r.status, r.body, { 'Cache-Control': NO_STORE });
@@ -3556,6 +3571,8 @@ register('/api/eod-strike-gex-dates', {
     // an empty ladder on oi/vol/flow.
     const basis = basisParam(sp);
     if (basis) q.set('basis', basis);
+    const leg = legParam(sp);
+    if (leg) q.set('leg', leg);
     const qs = q.toString() ? `?${q}` : '';
     const r = await forwardGet(ctx, `/proxy/eod-strike-gex-dates${qs}`);
     send(res, r.status, r.body, { 'Cache-Control': NO_STORE });

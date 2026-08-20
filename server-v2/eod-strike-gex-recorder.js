@@ -358,10 +358,27 @@ async function ensureSchema() {
   // "this basis has no data for this session" rather than drawing a flat zero
   // board. Do NOT try to derive oi_gex from net_gex — the split is exactly the
   // information net_gex threw away.
+  // THE FLOW GROSS LEGS — added with the rest on 2026-08-19.
+  //
+  // flow_call_gex is a NET of two opposite events: gamma the dealer took ON by
+  // buying calls from the public, and gamma they took OFF by selling calls to
+  // it. A strike where the dealer bought 5,000 and sold 5,000 nets to zero and
+  // is indistinguishable from a strike nothing traded at — which is exactly the
+  // ambiguity the whole basis split exists to remove, reappearing one level
+  // down. So the four gross components are stored, not just the two nets.
+  //
+  // FULLY ADDITIVE, on purpose:
+  //   flow_call_gex = flow_call_buy_gex + flow_call_sell_gex
+  //   flow_put_gex  = flow_put_buy_gex  + flow_put_sell_gex
+  //   flow_gex      = all four
+  // *_buy_gex is always >= 0 (dealer long that leg) and *_sell_gex always <= 0
+  // (dealer short it), so a reader can add any subset and get something true.
   for (const col of [
     'oi_gex', 'oi_call_gex', 'oi_put_gex',
     'vol_gex', 'vol_call_gex', 'vol_put_gex',
     'flow_gex', 'flow_call_gex', 'flow_put_gex',
+    'flow_call_buy_gex', 'flow_call_sell_gex',
+    'flow_put_buy_gex', 'flow_put_sell_gex',
   ]) {
     // eslint-disable-next-line no-await-in-loop
     await p.query(`ALTER TABLE eod_strike_gex ADD COLUMN IF NOT EXISTS ${col} DOUBLE PRECISION;`);
@@ -782,7 +799,13 @@ async function getFlowLadder(symbol, date, gamma) {
   }
   if (!rows.length) return out;
 
-  // (expiration|strike) → signed dealer position per leg.
+  // (expiration|strike) → dealer position per leg, kept GROSS.
+  //
+  // callLong is contracts the dealer ended up LONG (the public sold them);
+  // callShort is contracts the dealer ended up SHORT (the public bought them).
+  // Netting these here would throw away the distinction between a quiet strike
+  // and a busy two-way one before it ever reached the table — see the schema
+  // comment above the flow gross columns.
   const inv = new Map();
   for (const r of rows) {
     const strike = Number(r.strike);
@@ -790,13 +813,19 @@ async function getFlowLadder(symbol, date, gamma) {
     if (!(strike > 0) || !(vol > 0)) continue;
     const key = `${r.expiration}|${strike}`;
     let v = inv.get(key);
-    if (!v) { v = { callNet: 0, putNet: 0, prints: 0 }; inv.set(key, v); }
+    if (!v) {
+      v = { callLong: 0, callShort: 0, putLong: 0, putShort: 0, prints: 0 };
+      inv.set(key, v);
+    }
     v.prints += Number(r.n) || 0;
-    // Mirror: taker buy leaves the dealer SHORT (negative), taker sell leaves
-    // the dealer LONG (positive).
-    const signed = r.side === 'buy' ? -vol : vol;
-    if (r.type === 'C') v.callNet += signed;
-    else if (r.type === 'P') v.putNet += signed;
+    // Mirror: a taker BUY leaves the dealer SHORT that contract; a taker SELL
+    // leaves the dealer LONG it.
+    const dealerShort = r.side === 'buy';
+    if (r.type === 'C') {
+      if (dealerShort) v.callShort += vol; else v.callLong += vol;
+    } else if (r.type === 'P') {
+      if (dealerShort) v.putShort += vol; else v.putLong += vol;
+    }
   }
 
   for (const [key, v] of inv) {
@@ -808,24 +837,35 @@ async function getFlowLadder(symbol, date, gamma) {
     if (!g) continue;
     const strike = Number(key.split('|')[1]);
     if (!(strike > 0)) continue;
-    // SAME polarity on both legs — the sign is already in the inventory.
-    const callGex = g.cGamma * v.callNet * g.mult;
-    const putGex = g.pGamma * v.putNet * g.mult;
-    if (!Number.isFinite(callGex) || !Number.isFinite(putGex)) continue;
-    const cur = out.get(strike);
-    if (cur) {
-      cur.flowGex += callGex + putGex;
-      cur.flowCallGex += callGex;
-      cur.flowPutGex += putGex;
-      cur.prints += v.prints;
-    } else {
-      out.set(strike, {
-        flowGex: callGex + putGex,
-        flowCallGex: callGex,
-        flowPutGex: putGex,
-        prints: v.prints,
-      });
+    // SAME polarity on both legs — the sign is already in the inventory, so
+    // long is positive and short is negative on calls and puts alike. (The OI
+    // bases negate the put term to turn "customer long puts" into "dealer
+    // implicitly short"; here that conversion has already happened.)
+    const callBuy = g.cGamma * v.callLong * g.mult;
+    const callSell = -g.cGamma * v.callShort * g.mult;
+    const putBuy = g.pGamma * v.putLong * g.mult;
+    const putSell = -g.pGamma * v.putShort * g.mult;
+    if (![callBuy, callSell, putBuy, putSell].every(Number.isFinite)) continue;
+    let cur = out.get(strike);
+    if (!cur) {
+      cur = {
+        flowGex: 0, flowCallGex: 0, flowPutGex: 0,
+        flowCallBuyGex: 0, flowCallSellGex: 0,
+        flowPutBuyGex: 0, flowPutSellGex: 0,
+        prints: 0,
+      };
+      out.set(strike, cur);
     }
+    cur.flowCallBuyGex += callBuy;
+    cur.flowCallSellGex += callSell;
+    cur.flowPutBuyGex += putBuy;
+    cur.flowPutSellGex += putSell;
+    // Rolled up from the gross components, so the additive identity in the
+    // schema comment holds by construction rather than by coincidence.
+    cur.flowCallGex += callBuy + callSell;
+    cur.flowPutGex += putBuy + putSell;
+    cur.flowGex += callBuy + callSell + putBuy + putSell;
+    cur.prints += v.prints;
   }
   return out;
 }
@@ -846,6 +886,8 @@ async function writeRows(date, symbol, spot, expiryCount, rows) {
         r.oiGex ?? null, r.oiCallGex ?? null, r.oiPutGex ?? null,
         r.volGex ?? null, r.volCallGex ?? null, r.volPutGex ?? null,
         r.flowGex ?? null, r.flowCallGex ?? null, r.flowPutGex ?? null,
+        r.flowCallBuyGex ?? null, r.flowCallSellGex ?? null,
+        r.flowPutBuyGex ?? null, r.flowPutSellGex ?? null,
         r.flowPrints ?? null,
       ].map((v) => `$${params.push(v)}`);
       values.push(`($1,$2,${ph[0]},${ph[1]},$3,$4,now(),${ph.slice(2).join(',')})`);
@@ -864,25 +906,31 @@ async function writeRows(date, symbol, spot, expiryCount, rows) {
          (date, symbol, strike, net_gex, spot, expiry_count, ts, call_gex, put_gex,
           oi_gex, oi_call_gex, oi_put_gex,
           vol_gex, vol_call_gex, vol_put_gex,
-          flow_gex, flow_call_gex, flow_put_gex, flow_prints)
+          flow_gex, flow_call_gex, flow_put_gex,
+          flow_call_buy_gex, flow_call_sell_gex,
+          flow_put_buy_gex, flow_put_sell_gex, flow_prints)
        VALUES ${values.join(',')}
        ON CONFLICT (date, symbol, strike) DO UPDATE
-         SET net_gex       = EXCLUDED.net_gex,
-             spot          = EXCLUDED.spot,
-             expiry_count  = EXCLUDED.expiry_count,
-             ts            = EXCLUDED.ts,
-             call_gex      = EXCLUDED.call_gex,
-             put_gex       = EXCLUDED.put_gex,
-             oi_gex        = EXCLUDED.oi_gex,
-             oi_call_gex   = EXCLUDED.oi_call_gex,
-             oi_put_gex    = EXCLUDED.oi_put_gex,
-             vol_gex       = EXCLUDED.vol_gex,
-             vol_call_gex  = EXCLUDED.vol_call_gex,
-             vol_put_gex   = EXCLUDED.vol_put_gex,
-             flow_gex      = EXCLUDED.flow_gex,
-             flow_call_gex = EXCLUDED.flow_call_gex,
-             flow_put_gex  = EXCLUDED.flow_put_gex,
-             flow_prints   = EXCLUDED.flow_prints,
+         SET net_gex            = EXCLUDED.net_gex,
+             spot               = EXCLUDED.spot,
+             expiry_count       = EXCLUDED.expiry_count,
+             ts                 = EXCLUDED.ts,
+             call_gex           = EXCLUDED.call_gex,
+             put_gex            = EXCLUDED.put_gex,
+             oi_gex             = EXCLUDED.oi_gex,
+             oi_call_gex        = EXCLUDED.oi_call_gex,
+             oi_put_gex         = EXCLUDED.oi_put_gex,
+             vol_gex            = EXCLUDED.vol_gex,
+             vol_call_gex       = EXCLUDED.vol_call_gex,
+             vol_put_gex        = EXCLUDED.vol_put_gex,
+             flow_gex           = EXCLUDED.flow_gex,
+             flow_call_gex      = EXCLUDED.flow_call_gex,
+             flow_put_gex       = EXCLUDED.flow_put_gex,
+             flow_call_buy_gex  = EXCLUDED.flow_call_buy_gex,
+             flow_call_sell_gex = EXCLUDED.flow_call_sell_gex,
+             flow_put_buy_gex   = EXCLUDED.flow_put_buy_gex,
+             flow_put_sell_gex  = EXCLUDED.flow_put_sell_gex,
+             flow_prints        = EXCLUDED.flow_prints,
              oi_stamped_date = NULL`,
       params,
     );
@@ -1022,6 +1070,10 @@ async function runSweep({ symbols = null, date = null } = {}) {
                   r.flowGex = f.flowGex;
                   r.flowCallGex = f.flowCallGex;
                   r.flowPutGex = f.flowPutGex;
+                  r.flowCallBuyGex = f.flowCallBuyGex;
+                  r.flowCallSellGex = f.flowCallSellGex;
+                  r.flowPutBuyGex = f.flowPutBuyGex;
+                  r.flowPutSellGex = f.flowPutSellGex;
                   r.flowPrints = f.prints;
                 }
                 flowSymbols += 1;
@@ -1220,29 +1272,86 @@ function normBasis(v) {
 }
 
 /**
+ * LEG — which half of a basis the ladder is made of. Orthogonal to `basis`:
+ * basis picks the contract count, leg picks which option type's gamma.
+ *
+ *   net  — call leg + put leg. The default and the only reading with a
+ *          meaningful zero crossing (see the badge note below).
+ *   call — the call leg alone.
+ *   put  — the put leg alone.
+ *
+ * WHAT THE SIGN MEANS PER BASIS, because it differs and the difference matters:
+ *
+ *   oivol / oi / vol — the legs are signed by CONVENTION, so `call` is always
+ *     >= 0 and `put` always <= 0, everywhere, by construction. A call-leg
+ *     ladder is therefore a one-sided picture of WHERE call gamma sits, not a
+ *     directional read; it can never cross zero and has no flip.
+ *   flow — the legs are signed by MEASUREMENT (dealer long positive, short
+ *     negative), so either leg can take either sign. "Dealers are short call
+ *     gamma at 6400 and long put gamma at 6300" is a sentence only this basis
+ *     can produce, and the leg selector is how you read it.
+ *
+ * On the three unsigned bases `net` is call + put and the sum is lossy in the
+ * documented way; splitting it is exactly how you recover "did the call wall
+ * come off, or did put gamma pile on".
+ */
+const LEG_COLS = { net: 'net', call: 'call', put: 'put' };
+const LEGS = Object.keys(LEG_COLS);
+
+function normLeg(v) {
+  const s = String(v ?? '').trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(LEG_COLS, s) ? s : 'net';
+}
+
+/**
+ * (basis, leg) → the one column the ladder's level/Δ is read from.
+ *
+ * Same security boundary as BASIS_COLS: this is where a request parameter
+ * becomes a SQL identifier, and both inputs come through norm* first, so the
+ * output is always one of twelve literals from that table.
+ */
+function levelCol(bas, leg) {
+  return BASIS_COLS[normBasis(bas)][normLeg(leg)];
+}
+
+/**
+ * The four gross flow components. Only non-NULL on the flow basis, and only for
+ * sessions since the migration — everything else reads them as NULL, which the
+ * client renders as "not recorded" rather than as zero.
+ */
+const FLOW_GROSS_COLS = {
+  callBuy: 'flow_call_buy_gex',
+  callSell: 'flow_call_sell_gex',
+  putBuy: 'flow_put_buy_gex',
+  putSell: 'flow_put_sell_gex',
+};
+
+/**
  * Every session date that has recorded rows, newest first.
  *
  * Backs the ΔGEX Board's date picker. Reads DISTINCT date off
  * idx_eod_strike_gex_date, so it stays an index-only scan as the table grows to
  * a year of the full watchlist — this is a picker populate, not a report.
  */
-async function listStrikeGexDates(limit = 90, { basis = 'oivol' } = {}) {
+async function listStrikeGexDates(limit = 90, { basis = 'oivol', leg = 'net' } = {}) {
   if (!(await ensureSchema())) return { ok: false, error: 'no DB' };
   const p = getPool();
   const n = Math.max(1, Math.min(400, Number(limit) || 90));
   const bas = normBasis(basis);
-  const C = BASIS_COLS[bas];
-  // Basis-scoped: the picker must offer the sessions THIS basis can answer for.
-  // The new columns start at their migration date, so an unfiltered list would
-  // offer a year of dates that render as an empty ladder on `oi`/`vol`/`flow`.
+  const lg = normLeg(leg);
+  // Basis AND leg scoped: the picker must offer the sessions this exact reading
+  // can answer for. Both dimensions have their own migration date — the legs
+  // landed 2026-08-18 and the bases 2026-08-19 — so an unfiltered list would
+  // offer a year of dates that draw an empty ladder on anything but oivol/net.
+  const LVL = levelCol(bas, lg);
   const { rows } = await p.query(
     `SELECT DISTINCT to_char(date, 'YYYY-MM-DD') AS d
        FROM eod_strike_gex
-      WHERE ${C.net} IS NOT NULL
+      WHERE ${LVL} IS NOT NULL
       ORDER BY d DESC LIMIT $1`,
     [n],
   );
-  return { ok: true, basis: bas, dates: rows.map((r) => r.d) };
+  return { ok: true, basis: bas, leg: lg, dates: rows.map((r) => r.d) };
 }
 
 /**
@@ -1274,14 +1383,20 @@ async function listStrikeGexDates(limit = 90, { basis = 'oivol' } = {}) {
  * is null and every chg reads 0 — the client renders that as "no baseline yet"
  * rather than as a board that did not move.
  */
-async function getStrikeGexChange(symbol, { date = null, basis = 'oivol' } = {}) {
+async function getStrikeGexChange(symbol, { date = null, basis = 'oivol', leg = 'net' } = {}) {
   if (!(await ensureSchema())) return { ok: false, error: 'no DB' };
   const p = getPool();
   const sym = String(symbol || '').toUpperCase().trim();
   if (!sym) return { ok: false, error: 'symbol required' };
   const asOf = normDate(date);
   const bas = normBasis(basis);
+  const lg = normLeg(leg);
   const C = BASIS_COLS[bas];
+  // The level/Δ column follows the LEG; the call/put columns beside it are
+  // always the full pair, so the ladder can show "you are reading the call leg,
+  // and here is the put leg it was split from" without a second request.
+  const LVL = levelCol(bas, lg);
+  const gross = bas === 'flow' ? FLOW_GROSS_COLS : null;
 
   // to_char, not the raw DATE: node-postgres turns a DATE into a JS Date at
   // LOCAL midnight, so formatting it back to YYYY-MM-DD shifts by a day on any
@@ -1314,16 +1429,16 @@ async function getStrikeGexChange(symbol, { date = null, basis = 'oivol' } = {})
   // the client must check it before drawing.
   const { rows } = await p.query(
     `SELECT COALESCE(cur.strike, prev.strike)                       AS strike,
-            COALESCE(cur.${C.net}, 0)                               AS net_gex,
-            COALESCE(prev.${C.net}, 0)                              AS prev_net_gex,
-            COALESCE(cur.${C.net}, 0) - COALESCE(prev.${C.net}, 0)  AS chg,
+            COALESCE(cur.${LVL}, 0)                                 AS net_gex,
+            COALESCE(prev.${LVL}, 0)                                AS prev_net_gex,
+            COALESCE(cur.${LVL}, 0) - COALESCE(prev.${LVL}, 0)      AS chg,
             (prev.strike IS NOT NULL)                               AS had_prev,
             -- has_cur/has_prev are the PRE-COALESCE truth. The level columns
             -- above are COALESCEd to 0 for arithmetic, which destroys exactly
             -- the distinction that matters most on the three new bases:
             -- "recorded as zero" vs "never recorded". These two carry it.
-            (cur.${C.net} IS NOT NULL)                              AS has_cur,
-            (prev.${C.net} IS NOT NULL)                             AS has_prev,
+            (cur.${LVL} IS NOT NULL)                                AS has_cur,
+            (prev.${LVL} IS NOT NULL)                               AS has_prev,
             -- Legs stay NULL-able all the way to the client. NOT COALESCEd to
             -- 0: a date recorded before the migration has no legs, and a zero
             -- would render as "no call gamma here" instead of "not recorded".
@@ -1332,6 +1447,20 @@ async function getStrikeGexChange(symbol, { date = null, basis = 'oivol' } = {})
             prev.${C.call}                                          AS prev_call_gex,
             prev.${C.put}                                           AS prev_put_gex,
             cur.flow_prints                                         AS flow_prints,
+            ${gross ? `
+            -- The four GROSS flow components. flow_call_gex is a net of two
+            -- opposite events, so a strike where the dealer bought 5k and sold
+            -- 5k nets to zero and reads identically to one nothing traded at.
+            -- These take that ambiguity back out. Additive:
+            -- call_buy + call_sell = call leg, all four = flow_gex.
+            cur.${gross.callBuy}                                    AS f_call_buy,
+            cur.${gross.callSell}                                   AS f_call_sell,
+            cur.${gross.putBuy}                                     AS f_put_buy,
+            cur.${gross.putSell}                                    AS f_put_sell,
+            prev.${gross.callBuy}                                   AS pf_call_buy,
+            prev.${gross.callSell}                                  AS pf_call_sell,
+            prev.${gross.putBuy}                                    AS pf_put_buy,
+            prev.${gross.putSell}                                   AS pf_put_sell,` : ''}
             MAX(cur.spot)  OVER ()                                  AS cur_spot,
             MAX(prev.spot) OVER ()                                  AS prev_spot,
             -- Settled-OI provenance, both sides. The oi basis is only a true
@@ -1356,6 +1485,7 @@ async function getStrikeGexChange(symbol, { date = null, basis = 'oivol' } = {})
     date: curDate,
     prevDate,
     basis: bas,
+    leg: lg,
     spot: rows.length ? (Number(rows[0].cur_spot) || null) : null,
     prevSpot: rows.length ? (Number(rows[0].prev_spot) || null) : null,
     rows: rows.map((r) => ({
@@ -1370,7 +1500,19 @@ async function getStrikeGexChange(symbol, { date = null, basis = 'oivol' } = {})
       prevPutGex: prevDate ? numOrNull(r.prev_put_gex) : null,
       // Only meaningful on the flow basis: how many classified prints backed
       // this rung. NULL/0 = no tape here, which is not the same as "netted out".
-      ...(bas === 'flow' ? { flowPrints: numOrNull(r.flow_prints) } : {}),
+      ...(bas === 'flow' ? {
+        flowPrints: numOrNull(r.flow_prints),
+        // Gross decomposition — what the net was made of. *Buy is dealer LONG
+        // that leg (>= 0), *Sell is dealer SHORT it (<= 0).
+        callBuyGex: numOrNull(r.f_call_buy),
+        callSellGex: numOrNull(r.f_call_sell),
+        putBuyGex: numOrNull(r.f_put_buy),
+        putSellGex: numOrNull(r.f_put_sell),
+        prevCallBuyGex: prevDate ? numOrNull(r.pf_call_buy) : null,
+        prevCallSellGex: prevDate ? numOrNull(r.pf_call_sell) : null,
+        prevPutBuyGex: prevDate ? numOrNull(r.pf_put_buy) : null,
+        prevPutSellGex: prevDate ? numOrNull(r.pf_put_sell) : null,
+      } : {}),
     })),
     // Whether the split is available on BOTH sides. The client needs one flag,
     // not 81 null checks, to decide between showing the split and explaining
@@ -1383,6 +1525,11 @@ async function getStrikeGexChange(symbol, { date = null, basis = 'oivol' } = {})
     // flow for SPY". The page must branch on this, not on the row values.
     hasBasis,
     hasPrevBasis: !!prevDate && rows.some((r) => r.has_prev),
+    // Whether the gross split is available. Separate from hasBasis: a flow
+    // session recorded before the gross columns shipped has a real net ladder
+    // and NULL components, and the page must offer the net without implying it
+    // can decompose it.
+    hasGross: !!gross && rows.some((r) => r.f_call_buy != null || r.f_put_buy != null),
     // Δ-validity on the `oi` basis. Both stamped → a true session-over-session
     // ΔOI. Either missing → the OI half is lagged and the page must say so.
     oiSettled: !!rows[0]?.cur_settled,
@@ -1434,9 +1581,10 @@ const _liveInflight = new Map();
  * The symbol's most recent recorded session: its date, its ladder and its spot.
  * ONE date, not two — the other side of this comparison is the live chain.
  */
-async function latestRecordedLadder(sym, bas = 'oivol') {
+async function latestRecordedLadder(sym, bas = 'oivol', lg = 'net') {
   if (!(await ensureSchema())) return { prevDate: null, prevSpot: null, prevMap: new Map() };
   const C = BASIS_COLS[normBasis(bas)];
+  const LVL = levelCol(bas, lg);
   const p = getPool();
   // to_char for the same reason getStrikeGexChange uses it — a raw DATE comes
   // back as a JS Date at LOCAL midnight and formats back a day early east of
@@ -1449,7 +1597,7 @@ async function latestRecordedLadder(sym, bas = 'oivol') {
   if (!prevDate) return { prevDate: null, prevSpot: null, prevMap: new Map() };
 
   const { rows } = await p.query(
-    `SELECT strike, ${C.net} AS net_gex, spot, ${C.call} AS call_gex, ${C.put} AS put_gex,
+    `SELECT strike, ${LVL} AS net_gex, spot, ${C.call} AS call_gex, ${C.put} AS put_gex,
             oi_stamped_date
        FROM eod_strike_gex WHERE symbol = $1 AND date = $2::date`,
     [sym, prevDate],
@@ -1480,7 +1628,7 @@ async function latestRecordedLadder(sym, bas = 'oivol') {
  * silent fallback would put an unsigned OI number under a header that says the
  * sign was measured.
  */
-async function computeStrikeGexLive(sym, bas = 'oivol') {
+async function computeStrikeGexLive(sym, bas = 'oivol', lg = 'net') {
   if (bas === 'flow') {
     return {
       ok: false,
@@ -1489,7 +1637,7 @@ async function computeStrikeGexLive(sym, bas = 'oivol') {
   }
   // Recorded side first: it is a cheap indexed read, and if the chain sweep
   // below throws we have paid nothing for it.
-  const { prevDate, prevSpot, prevMap, prevSettled } = await latestRecordedLadder(sym, bas);
+  const { prevDate, prevSpot, prevMap, prevSettled } = await latestRecordedLadder(sym, bas, lg);
 
   // The ex-0DTE board (comparable to the recorded close) and today's 0DTE
   // (which the recorded series structurally cannot contain — see
@@ -1509,11 +1657,18 @@ async function computeStrikeGexLive(sym, bas = 'oivol') {
   const win = windowRows(rows, spot);
   // Which field off the live row this basis reads. The chain carries all three,
   // so the basis is a projection here rather than a different fetch.
-  const pick = bas === 'oi'
+  const basePick = bas === 'oi'
     ? (r) => ({ gex: r.oiGex, callGex: r.oiCallGex, putGex: r.oiPutGex })
     : bas === 'vol'
       ? (r) => ({ gex: r.volGex, callGex: r.volCallGex, putGex: r.volPutGex })
       : (r) => ({ gex: r.gex, callGex: r.callGex, putGex: r.putGex });
+  // …then the LEG projects the level out of that pair. callGex/putGex stay the
+  // full pair regardless, so the ladder can still show what the leg was split
+  // from without a second fetch — same contract as the recorded route.
+  const pick = (r) => {
+    const b = basePick(r);
+    return { ...b, gex: lg === 'call' ? b.callGex : lg === 'put' ? b.putGex : b.gex };
+  };
   const liveMap = new Map(win.map((r) => [r.strike, { ...r, ...pick(r) }]));
 
   // UNION of both windows, not just the live one — the same reason
@@ -1572,6 +1727,10 @@ async function computeStrikeGexLive(sym, bas = 'oivol') {
     hasLegs: true,
     hasPrevLegs: [...prevMap.values()].some((v) => v.callGex != null),
     basis: bas,
+    leg: lg,
+    // Live never has the gross flow split — it only exists on the flow basis,
+    // which has no live read at all.
+    hasGross: false,
     // Live is ALWAYS computed off the chain, so the current side of an `oi`
     // read is whatever OI the feed is carrying right now — which is last
     // night's settled file. It is therefore never "settled for today", and the
@@ -1610,14 +1769,16 @@ async function computeStrikeGexLive(sym, bas = 'oivol') {
  * `force` skips the CACHE but deliberately still joins an in-flight sweep: two
  * fast clicks on ↻ must not fire two full chain sweeps at TastyTrade.
  */
-async function getStrikeGexLive(symbol, { force = false, basis = 'oivol' } = {}) {
+async function getStrikeGexLive(symbol, { force = false, basis = 'oivol', leg = 'net' } = {}) {
   const sym = String(symbol || '').toUpperCase().trim();
   if (!sym) return { ok: false, error: 'symbol required' };
   const bas = normBasis(basis);
-  // The cache and the in-flight de-dupe are keyed by SYMBOL+BASIS, not symbol.
-  // Keying on symbol alone would serve an `oi` ladder to a `vol` request for
-  // the next 60 seconds — the same rungs, silently the wrong number.
-  const key = `${sym}|${bas}`;
+  const lg = normLeg(leg);
+  // The cache and the in-flight de-dupe are keyed by SYMBOL+BASIS+LEG, not
+  // symbol. Keying on symbol alone would serve an `oi` ladder to a `vol`
+  // request for the next 60 seconds — the same rungs, silently the wrong
+  // number — and dropping the leg would do the same for call vs put.
+  const key = `${sym}|${bas}|${lg}`;
 
   const now = Date.now();
   const hit = _liveCache.get(key);
@@ -1627,7 +1788,7 @@ async function getStrikeGexLive(symbol, { force = false, basis = 'oivol' } = {})
 
   let job = _liveInflight.get(key);
   if (!job) {
-    job = computeStrikeGexLive(sym, bas)
+    job = computeStrikeGexLive(sym, bas, lg)
       .then((val) => {
         if (val?.ok) {
           if (_liveCache.size >= LIVE_CACHE_MAX) {
@@ -1681,6 +1842,21 @@ async function getStrikeGexBadges(pairs, bas = 'oivol') {
   if (!pairs.length) return out;
   const p = getPool();
   if (!p) return out;
+  // BASIS-aware, deliberately NOT leg-aware — always the NET column.
+  //
+  // Every figure this function produces (gamma flip, call wall, put wall, sign
+  // flips) is a property of the two legs TOGETHER. The flip is a zero crossing
+  // of the running total, and on the three unsigned bases the call leg is >= 0
+  // and the put leg <= 0 at every strike by construction — so a single-leg
+  // running total is monotonic and can never cross zero. Computing a "flip" on
+  // it would return null for every symbol on the board, or worse, a number from
+  // a curve that has no crossing to find. Walls have the same problem: the call
+  // wall is the largest POSITIVE rung above spot, and on a put-leg ladder there
+  // are none.
+  //
+  // So the badges describe the book, and the ladder beside them describes the
+  // leg you asked for. Those are different questions and the badge answers the
+  // one that still means something.
   const C = BASIS_COLS[normBasis(bas)];
 
   // One query for every (symbol, date) pair the board already resolved, so the
@@ -1826,13 +2002,16 @@ async function getStrikeGexBadges(pairs, bas = 'oivol') {
  * strikes, so the rail can show them as "awaiting baseline" instead of dropping
  * them — their LEVEL figures are still real and still render.
  */
-async function getStrikeGexBoard(topN = 5, { date = null, basis = 'oivol' } = {}) {
+async function getStrikeGexBoard(topN = 5, { date = null, basis = 'oivol', leg = 'net' } = {}) {
   if (!(await ensureSchema())) return { ok: false, error: 'no DB' };
   const p = getPool();
   const top = Math.max(1, Math.min(40, Number(topN) || 5));
   const asOf = normDate(date);
   const bas = normBasis(basis);
-  const C = BASIS_COLS[bas];
+  const lg = normLeg(leg);
+  // The rail ranks on the SAME column the ladder draws — otherwise clicking the
+  // top name on a call-leg board would open a ladder ranked by something else.
+  const LVL = levelCol(bas, lg);
 
   // ONE pass. `d` ranks each symbol's own dates; `cur`/`prv` pick its latest
   // two; `j` FULL JOINs them (full, not left — a strike that fell out of the
@@ -1857,7 +2036,7 @@ async function getStrikeGexBoard(topN = 5, { date = null, basis = 'oivol' } = {}
              dense_rank() OVER (PARTITION BY symbol ORDER BY date DESC) AS rk
         FROM (SELECT DISTINCT symbol, date FROM eod_strike_gex
                WHERE ($2::text IS NULL OR date <= $2::date)
-                 AND ${C.net} IS NOT NULL) s
+                 AND ${LVL} IS NOT NULL) s
     ),
     cur AS (SELECT symbol, date FROM d WHERE rk = 1),
     prv AS (SELECT symbol, date FROM d WHERE rk = 2),
@@ -1866,8 +2045,8 @@ async function getStrikeGexBoard(topN = 5, { date = null, basis = 'oivol' } = {}
     j AS (
       SELECT COALESCE(c.symbol, p.symbol)                          AS symbol,
              COALESCE(c.strike, p.strike)                          AS strike,
-             COALESCE(c.${C.net}, 0) - COALESCE(p.${C.net}, 0)     AS chg,
-             c.${C.net}                                            AS lvl,
+             COALESCE(c.${LVL}, 0) - COALESCE(p.${LVL}, 0)         AS chg,
+             c.${LVL}                                              AS lvl,
              c.spot                                                AS spot,
              c.oi_stamped_date                                     AS cur_stamp,
              p.oi_stamped_date                                     AS prev_stamp
@@ -1960,7 +2139,7 @@ async function getStrikeGexBoard(topN = 5, { date = null, basis = 'oivol' } = {}
     for (const x of symbols) x.badge = null;
   }
 
-  return { ok: true, top, date: asOf, basis: bas, symbols };
+  return { ok: true, top, date: asOf, basis: bas, leg: lg, symbols };
 }
 
 // ── Scheduler ────────────────────────────────────────────────────────────────
@@ -2086,7 +2265,11 @@ module.exports = {
   oiRowsForSymbol,
   windowRows,
   normBasis,
+  normLeg,
+  levelCol,
   BASES,
+  LEGS,
   BASIS_COLS,
+  FLOW_GROSS_COLS,
   FLOW_GEX_SYMBOLS,
 };

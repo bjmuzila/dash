@@ -1,5 +1,97 @@
 # Changelog
 
+## 2026-08-19 (e) - ΔGEX Board: call vs put per strike, and the gross flow split behind the net
+
+Edited: `server-v2/eod-strike-gex-recorder.js`, `server-v2/server-with-proxy.js`,
+`server-v2/api-router.js`, `owner-vite/src/pages/GexGrowth.tsx`.
+
+Follows (d). Two splits, one level below the basis split.
+
+### `leg` — net / call / put, on every basis
+
+New param on all four read routes, orthogonal to `basis`: basis picks the
+contract count, leg picks which option type's gamma. `(basis, leg)` resolves
+through `levelCol()` to one of twelve columns — the only place a request
+parameter becomes a SQL identifier, whitelisted in the recorder (`normLeg`) and
+again at the public hop (`legParam`). Verified: `leg=call, (SELECT 1)` falls
+back to `net`.
+
+`net` is call + put and that sum is lossy — a fall is equally consistent with
+call gamma coming off and put gamma piling on. Compare mode told those apart in
+aggregate; this tells them apart rung by rung.
+
+**The sign means different things per basis, and that is the value:**
+
+- `oivol` / `oi` / `vol` — legs are signed by CONVENTION (calls +, puts −, on an
+  unsigned count), so the call leg is ≥ 0 and the put leg ≤ 0 at *every* strike.
+  A single-leg ladder there maps WHERE that type's gamma sits; it cannot cross
+  zero. The caveat strip says so on screen, because a reader arriving expecting
+  a flip will not find one and the absence is arithmetic, not the book.
+- `flow` — legs are signed by MEASUREMENT, so either can take either sign.
+  "Dealers are short call gamma at 6400 and long put gamma at 6300" is a
+  sentence only this basis can produce.
+
+The rail ranks on the same column the ladder draws. The structural **badges
+(flip, walls, sign flips) deliberately stay on the basis's NET column** whatever
+the leg is set to — every one of them is a property of the two legs together,
+and a monotonic single-leg running total has no crossing to find. Computing a
+"flip" on a call-only ladder would return null for every symbol on the board, or
+worse, a number off a curve with no zero. The badges describe the book; the
+ladder describes the leg you asked for.
+
+Date picker is now basis AND leg scoped: both dimensions have their own
+migration date (legs 2026-08-18, bases 2026-08-19), so `oivol/call` and
+`oivol/net` do not offer the same sessions. Live's cache key went
+`symbol|basis` → `symbol|basis|leg`; without the leg it would serve a call
+ladder to a put request for 60s.
+
+### Flow gross: four columns, because a net of two opposite events hides size
+
+New: `flow_call_buy_gex`, `flow_call_sell_gex`, `flow_put_buy_gex`,
+`flow_put_sell_gex`.
+
+`flow_call_gex` nets two opposite events — gamma the dealer took ON (the public
+sold calls to them) and gamma they took OFF (the public bought). A strike where
+they did 5,000 of each nets to ~zero and reads **identically to a strike nothing
+traded at**. That is the same "a red bar has two stories" ambiguity compare mode
+exists to fix, reappearing inside a single session.
+
+`getFlowLadder()` now keeps the inventory gross (`callLong`/`callShort`/
+`putLong`/`putShort`) instead of netting at ingest, and the legs are rolled up
+FROM the components — so the identities hold by construction, not coincidence:
+
+    call_buy + call_sell = flow_call_gex
+    put_buy  + put_sell  = flow_put_gex
+    all four             = flow_gex
+
+`*_buy_gex` is always ≥ 0 (dealer long that leg), `*_sell_gex` always ≤ 0.
+
+Worked case from the test harness — dealer short 5,000 calls and long 4,900 of
+the same strike:
+
+| reading | value |
+|---|---|
+| call leg NET | −20,000 (looks almost quiet) |
+| call leg GROSS | 1,980,000 (huge two-way size) |
+| directional | 5.3% |
+
+### Page
+
+Leg picker beside the basis picker (re-fetches — the rail must rank on the
+column the ladder draws). Ladder column header appends the leg, so a call
+ladder stops being labelled "Net GEX". Caveat strip names the leg and, on the
+unsigned bases, warns that the ladder is one-sided and has no flip to read.
+
+On `flow`, a "dealer took on" chip row shows the four gross components summed
+over the rows in view (so the ±% band applies), plus a **% directional** line —
+net ÷ gross. Near 1, the flow went one way and the net is the whole story. Near
+0, the dealer took size on both sides and ended up flat: a busy strike a
+net-only ladder draws as a quiet one. `hasGross` is reported separately from
+`hasBasis`, so a flow session recorded before these columns shipped shows its
+real net ladder and says the decomposition was not recorded — rather than
+silently omitting the row.
+
+
 ## 2026-08-19 (d) - ΔGEX Board: four bases, and the day-over-day diff that was double-counting a session
 
 Edited: `server-v2/eod-strike-gex-recorder.js`, `server-v2/server-with-proxy.js`,

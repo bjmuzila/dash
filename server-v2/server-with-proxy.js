@@ -1847,10 +1847,39 @@ async function main() {
       //                     subscribes to — read getFlowLadder()'s four
       //                     caveats in the recorder before trusting it.
       //
-      // Responses echo `basis` and carry `hasBasis`. hasBasis=false means the
-      // basis has NOTHING recorded for that session/symbol — a zero board and
-      // an unrecorded board are indistinguishable once COALESCEd, and the
-      // difference matters, so callers must branch on the flag not the values.
+      // ── `leg` (all four read routes) ─────────────────────────────────────
+      // Orthogonal to basis: basis picks the contract count, leg picks which
+      // option type's gamma. net (default) | call | put. Unrecognised → net.
+      //
+      // What the sign means DIFFERS by basis, and the difference is the point:
+      //   oivol/oi/vol — legs are signed by CONVENTION, so call is always >= 0
+      //     and put always <= 0 at every strike. A single-leg ladder there
+      //     shows WHERE that type's gamma sits; it cannot cross zero and has
+      //     no flip. Splitting the net is how you tell "the call wall came
+      //     off" from "put gamma piled on", which the sum cannot.
+      //   flow — legs are signed by MEASUREMENT, so either can take either
+      //     sign. "Dealers are short call gamma at 6400 and long put gamma at
+      //     6300" is a sentence only this basis can produce.
+      //
+      // The rail ranks on the same column the ladder draws. The structural
+      // BADGES (flip, walls, sign flips) deliberately stay on the NET column
+      // whatever the leg — they are properties of the two legs together, and a
+      // monotonic single-leg running total has no crossing to find.
+      //
+      // On basis=flow the change route additionally returns the four GROSS
+      // components per strike (callBuyGex/callSellGex/putBuyGex/putSellGex,
+      // plus their prev twins) and `hasGross`. flow_call_gex is a net of two
+      // opposite events, so a strike where the dealer bought 5k and sold 5k
+      // nets to zero and reads identically to one nothing traded at; the gross
+      // split takes that ambiguity back out. They are additive:
+      // callBuy + callSell = the call leg, all four = flow_gex.
+      //
+      // Responses echo `basis` and `leg` and carry `hasBasis`. hasBasis=false
+      // means the reading has NOTHING recorded for that session/symbol — a zero
+      // board and an unrecorded board are indistinguishable once COALESCEd, and
+      // the difference matters, so callers must branch on the flag not the
+      // values. `hasGross` is the same statement for the gross split, which has
+      // its own (later) migration date than the flow net.
       //
       // Day-over-day ΔGEX per strike for one symbol, whole board ex-0DTE.
       // Backs the Ticker Lookup card's Δ column.
@@ -1878,6 +1907,7 @@ async function main() {
             const out = await getStrikeGexChange(symbol, {
               date: u.searchParams.get('date'),
               basis: u.searchParams.get('basis'),
+              leg: u.searchParams.get('leg'),
             });
             sendJson(res, out.ok ? 200 : 503, out);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
@@ -1905,7 +1935,11 @@ async function main() {
             const u = new URL(req.url, `http://localhost:${PORT}`);
             const out = await getStrikeGexBoard(
               Number(u.searchParams.get('top') || 5),
-              { date: u.searchParams.get('date'), basis: u.searchParams.get('basis') },
+              {
+                date: u.searchParams.get('date'),
+                basis: u.searchParams.get('basis'),
+                leg: u.searchParams.get('leg'),
+              },
             );
             sendJson(res, out.ok ? 200 : 503, out);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
@@ -1923,7 +1957,7 @@ async function main() {
             const u = new URL(req.url, `http://localhost:${PORT}`);
             const out = await listStrikeGexDates(
               Number(u.searchParams.get('limit') || 90),
-              { basis: u.searchParams.get('basis') },
+              { basis: u.searchParams.get('basis'), leg: u.searchParams.get('leg') },
             );
             sendJson(res, out.ok ? 200 : 503, out);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
@@ -1954,7 +1988,11 @@ async function main() {
             const symbol = (u.searchParams.get('symbol') || '').toUpperCase().trim();
             if (!symbol) { sendJson(res, 400, { ok: false, error: 'symbol required' }); return; }
             const force = /^(1|true|yes)$/i.test(u.searchParams.get('force') || '');
-            const out = await getStrikeGexLive(symbol, { force, basis: u.searchParams.get('basis') });
+            const out = await getStrikeGexLive(symbol, {
+              force,
+              basis: u.searchParams.get('basis'),
+              leg: u.searchParams.get('leg'),
+            });
             sendJson(res, out.ok ? 200 : 503, out);
           } catch (e) { sendJson(res, 502, { ok: false, error: String(e?.message || e) }); }
         })();

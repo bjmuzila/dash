@@ -89,6 +89,28 @@ type Mode = "delta" | "levels" | "compare";
  */
 type Basis = "oivol" | "oi" | "vol" | "flow";
 
+/**
+ * WHICH LEG. Orthogonal to both Mode and Basis: basis picks the contract count,
+ * leg picks which option type's gamma, mode picks level vs Δ.
+ *
+ * `net` is call + put, and that sum is LOSSY in a specific way — "net GEX at
+ * this strike fell" is equally consistent with call gamma coming off and with
+ * put gamma piling on. Compare mode already tells those apart in aggregate;
+ * this tells them apart rung by rung.
+ *
+ * The sign behaves differently per basis and the difference is the whole value:
+ *
+ *   oivol / oi / vol — legs are signed by CONVENTION (calls +, puts −, on an
+ *     unsigned count), so the call leg is ≥ 0 and the put leg ≤ 0 at every
+ *     strike, always. A single-leg ladder is a one-sided map of WHERE that
+ *     type's gamma sits. It cannot cross zero, so it has no flip — which is
+ *     why the structural badges stay on net whatever this is set to.
+ *   flow — legs are signed by MEASUREMENT, so either leg can take either sign.
+ *     "Dealers are short call gamma at 6400 and long put gamma at 6300" is a
+ *     sentence only this basis can produce, and this is how you read it.
+ */
+type Leg = "net" | "call" | "put";
+
 type BoardStrike = { strike: number; chg: number };
 type BoardLevelStrike = { strike: number; gex: number };
 type BoardSymbol = {
@@ -111,7 +133,7 @@ type BoardSymbol = {
   prevOiSettled?: boolean;
 };
 type BoardResp = {
-  ok?: boolean; top?: number; date?: string | null; basis?: Basis;
+  ok?: boolean; top?: number; date?: string | null; basis?: Basis; leg?: Leg;
   symbols?: BoardSymbol[]; error?: string;
 };
 
@@ -126,6 +148,16 @@ type ChangeRow = {
   // is "no tape here", which is a different statement from "flow netted to
   // zero" — the ladder has to be able to tell those apart, so the count ships.
   flowPrints?: number | null;
+  // FLOW BASIS ONLY: the GROSS decomposition. callGex is a net of two opposite
+  // events — gamma the dealer took on by buying calls, and gamma they took off
+  // by selling them — so a strike where they did 5k of each nets to zero and is
+  // indistinguishable from a strike nothing traded at. These take that back
+  // out. *Buy is dealer LONG that leg (≥ 0), *Sell is dealer SHORT it (≤ 0),
+  // and they are additive: callBuy + callSell = callGex, all four = netGex.
+  callBuyGex?: number | null; callSellGex?: number | null;
+  putBuyGex?: number | null; putSellGex?: number | null;
+  prevCallBuyGex?: number | null; prevCallSellGex?: number | null;
+  prevPutBuyGex?: number | null; prevPutSellGex?: number | null;
 };
 
 /** Today's expiry, summarised. Live route only — see the 0DTE note in ReadPanel. */
@@ -159,12 +191,18 @@ type ChangeResp = {
   // never recorded flow for SPY"), so the page branches on this, never on the
   // row values.
   hasBasis?: boolean; hasPrevBasis?: boolean;
+  leg?: Leg;
+  // Whether the four gross flow components are present. Separate from
+  // hasBasis: a flow session recorded before the gross columns shipped has a
+  // real net ladder and NULL components, so the page must show the net without
+  // implying it can decompose it.
+  hasGross?: boolean;
   // `oi` basis only: did the 09:25 re-stamp reach each side? Both true → the Δ
   // is a real session-over-session ΔOI. Either false → that side's OI is the
   // provisional 16:05 read, lagged one session, and the page must say so.
   oiSettled?: boolean; prevOiSettled?: boolean;
 };
-type DatesResp = { ok?: boolean; dates?: string[]; basis?: Basis; error?: string };
+type DatesResp = { ok?: boolean; dates?: string[]; basis?: Basis; leg?: Leg; error?: string };
 
 /** Per-mode wording. Kept in one table so a label can't drift from its number. */
 const MODE_COPY: Record<Mode, {
@@ -260,6 +298,38 @@ const BASIS_COPY: Record<Basis, {
 
 /** Basis order in the picker — legacy first, then honest-est, then signed. */
 const BASES: readonly Basis[] = ["oivol", "oi", "vol", "flow"] as const;
+
+/**
+ * Per-leg wording. `signed` marks whether that leg can take either sign on this
+ * basis — false means the ladder will be entirely one-sided and the reader
+ * should not go looking for a flip in it.
+ */
+const LEG_COPY: Record<Leg, { tab: string; name: string; hint: (b: Basis) => string }> = {
+  net: {
+    tab: "Net",
+    name: "net",
+    hint: () => "Call leg + put leg. The sum is lossy — a fall is equally consistent with call gamma coming off and put gamma piling on. Split it to tell those apart.",
+  },
+  call: {
+    tab: "Calls",
+    name: "call leg",
+    hint: (b) => (b === "flow"
+      ? "Call gamma the dealer actually ended up holding: positive where the public sold calls to them, negative where it bought."
+      : "Call gamma only. Positive at every strike by construction on this basis — a map of where call gamma sits, not a directional read."),
+  },
+  put: {
+    tab: "Puts",
+    name: "put leg",
+    hint: (b) => (b === "flow"
+      ? "Put gamma the dealer actually ended up holding: positive where the public sold puts to them, negative where it bought."
+      : "Put gamma only. Negative at every strike by construction on this basis — a map of where put gamma sits, not a directional read."),
+  },
+};
+
+const LEGS: readonly Leg[] = ["net", "call", "put"] as const;
+
+/** True where the chosen leg can take either sign — i.e. flow, or the net. */
+const legIsSigned = (b: Basis, l: Leg) => b === "flow" || l === "net";
 
 /** Δ readings — everything that needs a baseline session to mean anything. */
 const isDelta = (m: Mode) => m !== "levels";
@@ -1061,13 +1131,18 @@ function RailBars({ items, max }: { items: Array<{ v: number; ghost?: boolean }>
 }
 
 function Ladder({
-  rows, spot, mode, live = false,
+  rows, spot, mode, live = false, leg = "net",
 }: {
   rows: ChangeRow[];
   spot: number | null;
   mode: Mode;
   /** Compare mode reading the LIVE chain — relabels only, the maths is identical. */
   live?: boolean;
+  /** Which leg the server projected these rows through — a LABEL here, not a
+      calculation. `netGex` already holds the chosen leg by the time it lands,
+      so the ladder must not re-derive it; it only has to stop calling a call
+      ladder "Net GEX". */
+  leg?: Leg;
 }) {
   // The ONE place the mode picks a number. Everything below — the bar, the
   // scale, the sign, the colour — reads `val`, so the two views cannot drift
@@ -1100,7 +1175,10 @@ function Ladder({
       <div style={{ display: "grid", gridTemplateColumns: LADDER_COLS, gap: 8, alignItems: "center", paddingBottom: 5 }}>
         <span style={label}>Strike</span>
         <span style={{ ...label, textAlign: "center" }}>{live ? LIVE_COPY.axis : MODE_COPY[mode].axis}</span>
-        <span style={{ ...label, textAlign: "right" }}>{live ? LIVE_COPY.ladderCol : MODE_COPY[mode].ladderCol}</span>
+        <span style={{ ...label, textAlign: "right" }}>
+          {live ? LIVE_COPY.ladderCol : MODE_COPY[mode].ladderCol}
+          {leg !== "net" ? ` · ${LEG_COPY[leg].tab.toLowerCase()}` : ""}
+        </span>
       </div>
       {desc.map((r) => {
         const v = val(r);
@@ -1171,6 +1249,8 @@ export default function GexGrowth() {
   // Which quantity the whole page is made of. Defaults to the legacy basis so
   // the page opens on the series it has always shown and a year of history.
   const [basis, setBasis] = useState<Basis>("oivol");
+  // Which leg of it. Net is the reading every other surface prints.
+  const [leg, setLeg] = useState<Leg>("net");
   // Live is a preference, not a mode — it survives tab-hopping and comes back
   // on when you return to `compare`, which is how a toggle should behave.
   const [live, setLive] = useState(false);
@@ -1200,14 +1280,16 @@ export default function GexGrowth() {
   // unfiltered list would offer a year of sessions that draw an empty ladder.
   const loadDates = useCallback(async () => {
     try {
-      const res = await fetch(`/api/eod-strike-gex-dates?limit=180&basis=${basis}`, { cache: "no-store" });
+      const res = await fetch(`/api/eod-strike-gex-dates?limit=180&basis=${basis}&leg=${leg}`, { cache: "no-store" });
       const json: DatesResp = await res.json();
       if (res.ok && json.ok !== false) setDates(json.dates ?? []);
     } catch { /* the picker just stays on "latest" — not worth an error banner */ }
-  }, [basis]);
+  }, [basis, leg]);
 
   const dateQs = date ? `&date=${date}` : "";
-  const basisQs = `&basis=${basis}`;
+  // One string for both dimensions, so no call site can pick up the basis and
+  // forget the leg — that would draw a call ladder under a net header.
+  const readQs = `&basis=${basis}&leg=${leg}`;
 
   // The one gate. Live only means anything on `compare` (it IS the prior→now
   // reading) and only against the LATEST session — "live vs the 8th" would be
@@ -1223,7 +1305,7 @@ export default function GexGrowth() {
 
   const loadBoard = useCallback(async () => {
     try {
-      const res = await fetch(`/api/eod-strike-gex-board?top=${TOP_N}${dateQs}${basisQs}`, { cache: "no-store" });
+      const res = await fetch(`/api/eod-strike-gex-board?top=${TOP_N}${dateQs}${readQs}`, { cache: "no-store" });
       const json: BoardResp = await res.json();
       if (!res.ok || json.ok === false) throw new Error(json.error || `HTTP ${res.status}`);
       setBoard(json.symbols ?? []);
@@ -1231,12 +1313,12 @@ export default function GexGrowth() {
     } catch (e) {
       setBoardErr(String((e as Error)?.message || e));
     }
-  }, [dateQs, basisQs]);
+  }, [dateQs, readQs]);
 
   useEffect(() => { loadDates(); }, [loadDates]);
 
   /**
-   * Switching basis clears the session pick.
+   * Switching basis OR leg clears the session pick.
    *
    * The picker is basis-scoped — `oi`, `vol` and `flow` only start at their
    * migration date, and `flow` only has sessions where SPX/SPY/QQQ actually
@@ -1246,15 +1328,19 @@ export default function GexGrowth() {
    * visible in the control instead of silently redefining which day is on
    * screen.
    *
-   * Deliberately NOT keyed on `dates`: that array reloads on every basis change
+   * Both dimensions have their own migration date — the legs landed
+   * 2026-08-18 and the bases 2026-08-19 — so `oivol/call` and `oivol/net` do
+   * not offer the same sessions either.
+   *
+   * Deliberately NOT keyed on `dates`: that array reloads on every change here
    * and re-running this on it would stomp a pick the user just made.
    */
-  const basisRef = useRef<Basis>(basis);
+  const readRef = useRef<string>(readQs);
   useEffect(() => {
-    if (basisRef.current === basis) return;
-    basisRef.current = basis;
+    if (readRef.current === readQs) return;
+    readRef.current = readQs;
     setDate("");
-  }, [basis]);
+  }, [readQs]);
 
   useEffect(() => {
     loadBoard();
@@ -1271,8 +1357,8 @@ export default function GexGrowth() {
     setDetailErr(null);
     try {
       const url = liveOn
-        ? `/api/eod-strike-gex-live?symbol=${encodeURIComponent(symbol)}${force ? "&force=1" : ""}${basisQs}`
-        : `/api/eod-strike-gex-change?symbol=${encodeURIComponent(symbol)}${dateQs}${basisQs}`;
+        ? `/api/eod-strike-gex-live?symbol=${encodeURIComponent(symbol)}${force ? "&force=1" : ""}${readQs}`
+        : `/api/eod-strike-gex-change?symbol=${encodeURIComponent(symbol)}${dateQs}${readQs}`;
       const res = await fetch(url, { cache: "no-store" });
       const json: ChangeResp = await res.json();
       if (detailReq.current !== mine) return;
@@ -1285,10 +1371,10 @@ export default function GexGrowth() {
     }
     // liveOn belongs in here, not in a ref: flipping the toggle has to re-read
     // the open name, and keying the effect below on this identity is what makes
-    // that happen without a second effect racing it. Same argument for basisQs
-    // — switching basis MUST re-read the open ladder, or the pane would keep
-    // drawing OI+Vol rungs under an "OI only" header.
-  }, [dateQs, liveOn, basisQs]);
+    // that happen without a second effect racing it. Same argument for readQs
+    // — switching basis or leg MUST re-read the open ladder, or the pane would
+    // keep drawing OI+Vol net rungs under an "OI only / calls" header.
+  }, [dateQs, liveOn, readQs]);
 
   const pickDate = useCallback((d: string) => {
     setDate(d);
@@ -1425,6 +1511,48 @@ export default function GexGrowth() {
   );
   // Labelled so the sign on the value is never a surprise: "built" always adds
   // magnitude on its own side, "pulled" always removes it.
+  /**
+   * FLOW GROSS SPLIT — what the net dealer position at these strikes was made
+   * of, summed over the ladder in view.
+   *
+   * The problem it solves is one level below the basis split. `flow_call_gex`
+   * is a net of two opposite events: gamma the dealer took ON (the public sold
+   * calls to them) and gamma they took OFF (the public bought). A strike where
+   * they did 5,000 of each nets to zero and reads identically to a strike
+   * nothing traded at — the same "a red bar has two stories" ambiguity that
+   * compare mode exists to fix, reappearing inside a single session.
+   *
+   * The four values sum EXACTLY to the net level, because the server rolls the
+   * legs up FROM these components rather than computing them separately.
+   *
+   * Summed over `ladderRows`, so the ±% band filter applies here as it does to
+   * the ladder under it — these describe what is on screen.
+   */
+  const grossChips: Array<{ k: string; v: number; t: string }> = useMemo(() => {
+    if (basis !== "flow" || !detail?.hasGross || !ladderRows.length) return [];
+    const sum = (f: (r: ChangeRow) => number | null | undefined) =>
+      ladderRows.reduce((t, r) => t + (f(r) ?? 0), 0);
+    return [
+      { k: "calls sold to dealer", v: sum((r) => r.callBuyGex), t: "The public SOLD calls; the dealer is long that gamma. Positive." },
+      { k: "calls bought from dealer", v: sum((r) => r.callSellGex), t: "The public BOUGHT calls; the dealer is short that gamma. Negative." },
+      { k: "puts sold to dealer", v: sum((r) => r.putBuyGex), t: "The public SOLD puts; the dealer is long that gamma. Positive." },
+      { k: "puts bought from dealer", v: sum((r) => r.putSellGex), t: "The public BOUGHT puts; the dealer is short that gamma. Negative." },
+    ];
+  }, [basis, detail, ladderRows]);
+
+  /**
+   * TURNOVER vs NET, the number the gross split exists to expose. 1 means every
+   * contract went one way; near 0 means the dealer took size on both sides and
+   * ended up flat. A net of ~0 with a low ratio is a BUSY strike, not a quiet
+   * one, and nothing else on this page can tell you that.
+   */
+  const grossRatio = useMemo(() => {
+    if (!grossChips.length) return null;
+    const gross = grossChips.reduce((t, c) => t + Math.abs(c.v), 0);
+    if (!gross) return null;
+    return Math.abs(grossChips.reduce((t, c) => t + c.v, 0)) / gross;
+  }, [grossChips]);
+
   const splitChips: Array<{ k: string; v: number; t: string }> = split
     ? [
       { k: "+γ built", v: split.posBuilt, t: "Positive (call-dominant) gamma ADDED — net GEX up" },
@@ -1479,6 +1607,29 @@ export default function GexGrowth() {
                 }}
               >
                 {BASIS_COPY[b].tab}
+              </button>
+            ))}
+          </span>
+
+          {/* LEG picker — which half of the basis. Also re-fetches: the rail
+              has to rank on the same column the ladder draws, or clicking the
+              top name on a call board would open a ladder ordered by
+              something else. */}
+          <span style={{ display: "flex", gap: 4, border: `1px solid ${T.border}`, borderRadius: 999, padding: 3 }}>
+            {LEGS.map((l) => (
+              <button
+                key={l}
+                onClick={() => setLeg(l)}
+                aria-pressed={leg === l}
+                title={LEG_COPY[l].hint(basis)}
+                style={{
+                  ...(leg === l ? homeButtonStyle : homeSecondaryButtonStyle),
+                  borderRadius: 999, padding: "5px 12px",
+                  border: leg === l ? undefined : "1px solid transparent",
+                  background: leg === l ? undefined : "transparent",
+                }}
+              >
+                {LEG_COPY[l].tab}
               </button>
             ))}
           </span>
@@ -1621,12 +1772,24 @@ export default function GexGrowth() {
         >
           <span style={{ fontSize: 12, fontWeight: 800, color: LIGHT_BLUE, flexShrink: 0 }}>
             {BASIS_COPY[basis].name}
+            {leg !== "net" ? ` · ${LEG_COPY[leg].name}` : ""}
           </span>
           <span style={{ fontSize: 11, fontFamily: MONO, color: T.textMuted, flexShrink: 0 }}>
             {BASIS_COPY[basis].unit}
           </span>
           <span style={{ fontSize: 11.5, color: T.text, minWidth: 180, flex: 1 }}>
             {BASIS_COPY[basis].caveat}
+            {/* The one-sidedness warning. On the three unsigned bases a single
+                leg cannot change sign, so a reader who arrives expecting a
+                flip or a wall will not find one — and the absence is a
+                property of the arithmetic, not of the book. */}
+            {!legIsSigned(basis, leg) ? (
+              <>
+                {" "}
+                <strong>{LEG_COPY[leg].tab} on this basis are one-sided</strong>{" "}
+                ({leg === "call" ? "always ≥ 0" : "always ≤ 0"}) — there is no flip or crossing to read in this ladder. The badges beside each symbol still describe the whole book.
+              </>
+            ) : null}
           </span>
           {/* Settled-OI provenance. Only meaningful on `oi`, and it is the flag
               that says whether the Δ on screen is a real ΔOI or two
@@ -1866,6 +2029,49 @@ export default function GexGrowth() {
                     </div>
                   ) : null}
 
+                  {/* FLOW GROSS — rendered in addition to the strip above, not
+                      instead of it, because it answers a different question:
+                      that one is "how did the net change", this one is "what
+                      was the net made of". Only on the flow basis, and only
+                      when the session actually has the components. */}
+                  {grossChips.length ? (
+                    <div style={{ margin: "0 0 12px" }}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                        <span style={{ ...label, flexShrink: 0 }}>dealer took on</span>
+                        {grossChips.map((c) => (
+                          <span key={c.k} title={c.t} style={{
+                            display: "flex", alignItems: "baseline", gap: 6,
+                            border: `1px solid ${T.border}`, borderRadius: 999, padding: "3px 10px",
+                            fontFamily: MONO, fontSize: 11.5,
+                          }}>
+                            <span style={{ color: T.text }}>{c.k}</span>
+                            <span style={{ fontWeight: 700, color: col(c.v) }}>{sgn(c.v)}</span>
+                          </span>
+                        ))}
+                      </div>
+                      {grossRatio != null ? (
+                        <div
+                          title="Net ÷ gross. Near 1, the flow went one way and the net tells the whole story. Near 0, the dealer took size on BOTH sides and ended up flat — a busy strike that a net-only ladder draws as a quiet one."
+                          style={{ ...label, marginTop: 5 }}
+                        >
+                          {(grossRatio * 100).toFixed(0)}% directional
+                          {grossRatio < 0.25
+                            ? " — two-way flow, the net is hiding real size on both sides"
+                            : grossRatio > 0.75
+                              ? " — one-way flow, the net is the whole story"
+                              : ""}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : basis === "flow" && detail?.hasBasis && detail.hasGross === false ? (
+                    // Recorded before the gross columns shipped. The net ladder
+                    // below is real; only the decomposition is missing, and
+                    // saying so beats silently omitting the row.
+                    <div style={{ ...label, margin: "0 0 12px" }}>
+                      This session predates the gross split — the net flow ladder below is real, but what it was made of was not recorded.
+                    </div>
+                  ) : null}
+
                   {detailErr ? (
                     <div style={{ color: NEG, fontSize: 13, fontFamily: MONO }}>Ladder failed: {detailErr}</div>
                   ) : detailLoading && !detail ? (
@@ -1913,7 +2119,7 @@ export default function GexGrowth() {
                     // flex:1 + minHeight:0 + overflowY:auto was what trapped the
                     // ladder in a ~400px slot inside a fixed-height card.
                     <div style={{ opacity: detailLoading ? 0.55 : 1, transition: "opacity .12s" }}>
-                      <Ladder rows={ladderRows} spot={detail.spot ?? null} mode={mode} live={showLive} />
+                      <Ladder rows={ladderRows} spot={detail.spot ?? null} mode={mode} live={showLive} leg={leg} />
                       {band && ladderRows.length < (detail.rows?.length ?? 0) ? (
                         // Never truncate silently: a reader who forgot the band
                         // is on would read a missing wall as a wall that left.
