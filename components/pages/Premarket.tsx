@@ -48,6 +48,7 @@ import { useEsCandles } from "@/hooks/useEsCandles";
 import { useEconCalendar } from "@/hooks/useEconCalendar";
 import { isStale } from "@/lib/econCalendar";
 import PostMarketTab, { POSTMARKET_CSS } from "@/components/pages/premarket/PostMarketTab";
+import TickerBoard from "@/components/pages/premarket/TickerBoard";
 import {
   netGEXOf,
   callGEXOf,
@@ -287,6 +288,18 @@ const RTH_CLOSE_MIN = 16 * 60;
 const EOD_KEY = "cb-premarket-eod-v1";
 /** Which tab the user last chose, for this browser session only. */
 const TAB_KEY = "cb-premarket-tab-v1";
+/** Which SYMBOL the user last chose, same session-only scope. */
+const SYM_KEY = "cb-premarket-sym-v1";
+
+/**
+ * SPX is the live board — it owns the socket, the ES basis, the overnight
+ * window and the per-minute recorded ladder. SPY and QQQ ride /api/chains on a
+ * poll and render through TickerBoard, which carries only the panels that path
+ * can honestly fill. Adding a symbol here is one line plus whatever the chain
+ * supports; it is NOT a way to give a new symbol the SPX panels.
+ */
+const SYMBOLS = ["SPX", "SPY", "QQQ"] as const;
+type Symbol_ = (typeof SYMBOLS)[number];
 
 /** ET wall clock: calendar date + minutes since midnight. */
 function etWall(now = Date.now()): { date: string; minutes: number } {
@@ -880,6 +893,26 @@ export default function Premarket() {
     try { sessionStorage.setItem(TAB_KEY, t); } catch { /* nothing to do */ }
   }, []);
 
+  // ── SYMBOL ─────────────────────────────────────────────────────────────────
+  // Remembered for the session like the tab. Only the MARKUP switches: this
+  // component's hooks (useMobileGex / useEsCandles) run whatever symbol is
+  // selected, so the SPX feed keeps flowing while you read SPY and switching
+  // back is instant with no reconnect. That costs nothing extra — gexSocket is
+  // one refcounted connection shared with the toolbar and every other consumer,
+  // and it would stay open for them anyway. TickerBoard's own poll only starts
+  // when it mounts, so at most one chain is being polled at a time.
+  const [sym, setSym] = useState<Symbol_>("SPX");
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem(SYM_KEY) as Symbol_ | null;
+      if (saved && (SYMBOLS as readonly string[]).includes(saved)) setSym(saved);
+    } catch { /* private mode — SPX it is */ }
+  }, []);
+  const pickSym = useCallback((v: Symbol_) => {
+    setSym(v);
+    try { sessionStorage.setItem(SYM_KEY, v); } catch { /* nothing to do */ }
+  }, []);
+
   return (
     <div className="pmk" style={{ flex: 1, minHeight: 0 }}>
       <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS }} />
@@ -887,8 +920,15 @@ export default function Premarket() {
 
         <div className="pagehead">
           <h1>{tab === "post" ? "Post-Market Recap" : "Premarket Prep"}</h1>
+          <div className="tabs">
+            {SYMBOLS.map((s2) => (
+              <button key={s2} className={sym === s2 ? "on" : ""} onClick={() => pickSym(s2)}>{s2}</button>
+            ))}
+          </div>
           <span className="badge-concept">
-            {isZeroDte ? "0DTE" : "FRONT"} {expiry || "—"} · {feedLabel} · {openLabel}
+            {sym === "SPX"
+              ? `${isZeroDte ? "0DTE" : "FRONT"} ${expiry || "—"} · ${feedLabel} · ${openLabel}`
+              : `${sym} · CHAIN POLL · ${openLabel}`}
           </span>
           <div className="tabs" style={{ marginLeft: "auto" }}>
             <button className={tab === "pre" ? "on" : ""} onClick={() => pickTab("pre")}>Premarket</button>
@@ -899,7 +939,9 @@ export default function Premarket() {
           </div>
         </div>
 
-        {tab === "post" ? (
+        {sym !== "SPX" ? (
+          <TickerBoard ticker={sym} view={tab} etDate={etDate} />
+        ) : tab === "post" ? (
           <PostMarketTab
             spot={spot}
             esFut={esFut}

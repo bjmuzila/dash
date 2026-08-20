@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-08-20 (g) - Premarket: SPY and QQQ boards
+
+Added: `components/pages/premarket/TickerBoard.tsx`.
+Edited: `components/pages/premarket/postMarketData.ts`, `components/pages/Premarket.tsx`.
+
+A SPX / SPY / QQQ switch sits next to the page title and is remembered for the
+session. SPX is unchanged. The other two render `TickerBoard`, in the same `.pmk`
+theme, with the same PRE / POST split.
+
+### Why SPY and QQQ cannot just be a prop on the SPX page
+
+`lib/gexSocket` carries ONE symbol and `useMobileGex` pins it to SPX's front
+expiry, so these two cannot ride the live feed — and half the SPX panels exist
+only because SPX has ES futures behind it and a recorder writing its ladder every
+minute (ES basis, overnight range, the gap, open-vs-now, replay). A ticker prop
+would have produced a page where a third of the cards said "—" forever.
+
+What SPY and QQQ DO have, and what the board therefore carries:
+
+| Source | Panel |
+|---|---|
+| `/api/expirations` + `/api/chains` (the path `useDualTickerGex` already uses) | regime, level rail, five level cards, scrolling GEX profile, expected range, playbook |
+| `/proxy/walls?symbol=SPY\|QQQ` | the SAME saved, server-classified post-market grade SPX gets — both are quick tickers on /level-log |
+| the next expiry's chain | tomorrow's structure |
+
+`parseTickerBoard` computes walls / flip / CORE / max pain / EM off the raw legs
+at gamma x (OI + volume) x S^2 x 0.01 x 100 — 0.01 x 100 = 1, so it lands on
+exactly the same number as `netGEXOf` and the three boards are directly
+comparable. Strike labels drop to 0dp because SPY/QQQ ladders are $1 wide.
+
+It is a 60-second poll, not a tape, and the board says so — plus one line naming
+the SPX-only panels that are deliberately absent rather than empty. Only the
+markup switches: the SPX hooks keep running (one refcounted socket, shared with
+the toolbar), so switching back is instant, and TickerBoard's poll only exists
+while it is mounted.
+
 ## 2026-08-20 (f) - Post-Market: the scale guard was blocking a REAL 0DTE build
 
 Edited: `components/pages/premarket/PostMarketTab.tsx`.

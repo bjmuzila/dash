@@ -372,3 +372,200 @@ export function useRecordedWalls(date: string, symbol = "SPX") {
   return { log, events, byLevel, state };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  SPY / QQQ — the same board, off REST instead of the socket
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The live socket is SPX-only: lib/gexSocket carries one symbol's frames and
+ * useMobileGex pins them to SPX's front expiry. SPY and QQQ therefore cannot
+ * ride it, and pushing two more symbols through it is a server change, not a
+ * page change.
+ *
+ * What they CAN ride is the path the home heatmap's SPY/QQQ columns already use
+ * (hooks/useDualTickerGex): /api/expirations to find the front contract, then
+ * /api/chains for that contract, then the same gamma math on the raw legs. That
+ * is a 60-second poll rather than a live tape — accurate, one cycle behind, and
+ * clearly labelled as such in the UI.
+ *
+ * Scale note: this uses gamma × (OI + volume) × S² × 0.01 × 100, which is the
+ * optionChain.parseExpiration convention. 0.01 × 100 = 1, so it lands on exactly
+ * the same number as lib/calculations netGEXOf (gamma × pos × S²) — the SPX
+ * board and these two are directly comparable. Do NOT "simplify" one side of
+ * that constant away without the other.
+ */
+
+export type TickerRow = {
+  strike: number;
+  call: number;   // +gamma exposure, call side
+  put: number;    // −gamma exposure, put side
+  net: number;
+  callOI: number;
+  putOI: number;
+};
+
+export type TickerBoard = {
+  ticker: string;
+  expiry: string;
+  spot: number;
+  rows: TickerRow[];
+  flip: number | null;
+  callWall: number | null;
+  putWall: number | null;
+  cb: number | null;
+  maxPain: number | null;
+  /** ATM straddle × 0.85 — the same estimate the SPX page uses. */
+  em: number | null;
+  netGex: number;
+  callGex: number;
+  putGex: number;
+  updatedAt: number;
+};
+
+const numOf = (v: unknown) => {
+  const n = parseFloat(String(v ?? 0));
+  return Number.isFinite(n) ? n : 0;
+};
+
+/** Mark, else bid/ask mid, else last/close — the chain payload is inconsistent. */
+function markOf(o: Record<string, unknown> | undefined): number {
+  if (!o) return 0;
+  const m = numOf(o.mark) || numOf(o["mark-price"]);
+  if (m > 0) return m;
+  const b = numOf(o.bid) || numOf(o["bid-price"]);
+  const a = numOf(o.ask) || numOf(o["ask-price"]);
+  if (b > 0 || a > 0) return (b + a) / 2;
+  return numOf(o.last) || numOf(o["last-price"]) || numOf(o.close);
+}
+
+export function parseTickerBoard(
+  ticker: string, items: unknown[], expDate: string, spot: number,
+): TickerBoard | null {
+  const all = items as { "expiration-date"?: string; strikes?: unknown[] }[];
+  const groups = all.filter((g) => String(g["expiration-date"] ?? "").slice(0, 10) === expDate.slice(0, 10));
+  const use = groups.length ? groups : all;
+  if (!use.length || !(spot > 0)) return null;
+
+  const rows: TickerRow[] = [];
+  let atm: { d: number; straddle: number } | null = null;
+  const K = spot * spot * 0.01 * 100;
+
+  for (const g of use) {
+    for (const item of g.strikes ?? []) {
+      const it = item as Record<string, unknown>;
+      const strike = numOf(it["strike-price"]);
+      if (!strike) continue;
+      const c = it.call as Record<string, unknown> | undefined;
+      const p = it.put as Record<string, unknown> | undefined;
+      const pos = (o: Record<string, unknown> | undefined) =>
+        !o ? 0 : (parseInt(String(o["open-interest"] ?? o.openInterest ?? 0), 10) || 0)
+                 + (parseInt(String(o.volume ?? 0), 10) || 0);
+      const oi = (o: Record<string, unknown> | undefined) =>
+        !o ? 0 : parseInt(String(o["open-interest"] ?? o.openInterest ?? 0), 10) || 0;
+
+      const call = Math.abs(numOf(c?.gamma)) * pos(c) * K;
+      const put = -(Math.abs(numOf(p?.gamma)) * pos(p) * K);
+      if (!Number.isFinite(call) || !Number.isFinite(put)) continue;
+      rows.push({ strike, call, put, net: call + put, callOI: oi(c), putOI: oi(p) });
+
+      const d = Math.abs(strike - spot);
+      const straddle = markOf(c) + markOf(p);
+      if (straddle > 0 && (atm == null || d < atm.d)) atm = { d, straddle };
+    }
+  }
+  if (rows.length < 5) return null;
+  rows.sort((a, b) => a.strike - b.strike);
+
+  const cw = rows.reduce((b, r) => (r.call > b.call ? r : b), rows[0]);
+  const pw = rows.reduce((b, r) => (Math.abs(r.put) > Math.abs(b.put) ? r : b), rows[0]);
+  const cb = rows.reduce((b, r) => (Math.abs(r.net) > Math.abs(b.net) ? r : b), rows[0]);
+
+  // Classic max pain: the strike where total in-the-money OI value is smallest.
+  let maxPain: number | null = null;
+  const withOi = rows.filter((r) => r.callOI > 0 || r.putOI > 0);
+  if (withOi.length >= 5) {
+    let bestVal = Infinity;
+    for (const t of withOi) {
+      let v = 0;
+      for (const r of withOi) {
+        if (t.strike > r.strike) v += (t.strike - r.strike) * r.callOI;
+        if (t.strike < r.strike) v += (r.strike - t.strike) * r.putOI;
+      }
+      if (v < bestVal) { bestVal = v; maxPain = t.strike; }
+    }
+  }
+
+  return {
+    ticker,
+    expiry: expDate,
+    spot,
+    rows,
+    flip: findGEXFlip(rows.map((r) => ({ strike: r.strike, netGEX: r.net, netVolGEX: 0 } as ChainRow)), spot),
+    callWall: cw.call > 0 ? cw.strike : null,
+    putWall: pw.put < 0 ? pw.strike : null,
+    cb: cb.strike,
+    maxPain,
+    em: atm ? atm.straddle * 0.85 : null,
+    netGex: rows.reduce((s, r) => s + r.net, 0),
+    callGex: rows.reduce((s, r) => s + r.call, 0),
+    putGex: rows.reduce((s, r) => s + r.put, 0),
+    updatedAt: Date.now(),
+  };
+}
+
+/**
+ * One ticker's front-expiry board, polled. `enabled` is false while the tab is
+ * showing a different symbol, so switching away stops the poll rather than
+ * leaving three chains refreshing behind one visible board.
+ */
+export function useTickerBoard(ticker: string, enabled: boolean, refreshMs = 60_000) {
+  const [board, setBoard] = useState<TickerBoard | null>(null);
+  const [state, setState] = useState<HistState>("loading");
+
+  useEffect(() => {
+    if (!enabled || !ticker) return;
+    let cancelled = false;
+    const ctrl = new AbortController();
+
+    const load = async () => {
+      try {
+        const today = etDay(Date.now());
+        const er = await fetch(`/api/expirations?ticker=${encodeURIComponent(ticker)}`,
+          { cache: "no-store", signal: ctrl.signal });
+        if (!er.ok) { if (!cancelled) setState("error"); return; }
+        const ej = await er.json();
+        const dates: string[] = [...new Set(
+          (ej?.data?.items ?? []).map((i: Record<string, unknown>) =>
+            String(i["expiration-date"] ?? "").slice(0, 10)).filter(Boolean),
+        )].sort() as string[];
+        // FRONT = the nearest listing on or after today. On a 0DTE name that is
+        // today; on a name that does not list today it is the next one out, and
+        // the UI says which date it actually got.
+        const front = dates.find((d) => d >= today);
+        if (!front) { if (!cancelled) setState("empty"); return; }
+
+        const cr = await fetch(
+          `/api/chains?ticker=${encodeURIComponent(ticker)}&expiration=${encodeURIComponent(front)}&range=all`,
+          { cache: "no-store", signal: ctrl.signal },
+        );
+        if (!cr.ok) { if (!cancelled) setState("error"); return; }
+        const cj = await cr.json();
+        const spot = numOf(cj?.data?.underlyingPrice);
+        const built = parseTickerBoard(ticker, cj?.data?.items ?? [], front, spot);
+        if (cancelled) return;
+        if (!built) { setState("empty"); return; }
+        setBoard(built);
+        setState("ok");
+      } catch {
+        // An abort on unmount lands here too — nothing to report either way.
+        if (!cancelled && !ctrl.signal.aborted) setState("error");
+      }
+    };
+
+    void load();
+    const id = setInterval(load, refreshMs);
+    return () => { cancelled = true; ctrl.abort(); clearInterval(id); };
+  }, [ticker, enabled, refreshMs]);
+
+  return { board, state };
+}
