@@ -1,19 +1,503 @@
 # Changelog
 
-## 2026-08-19 (d) - GEX levels ladder: spot caret dropped, spot line dashed
+## 2026-08-19 (i) - Research: does the gamma book predict next-day price action?
 
-Edited: `components/pages/Analytics.tsx` (`TlLadder`).
+Added: `server-v2/scripts/gex-move-study.mjs`. Reads `eod_strike_gex`, writes
+nothing, needs no other table.
 
-The `◀` spot caret beside the strike is gone. At `fontSize: 9` the UI font draws
-that glyph as a small solid cyan block, so it read as an unexplained square
-sitting where a level tag goes rather than as an arrow — and the spot line added
-earlier today already says the same thing, drawn at the PRICE instead of on the
-nearest rung. The spot row still lights cyan and still bolds its strike, so
-which rung price is closest to is not lost.
+### The outcome variable was already in the table
 
-The spot line itself is now `1px dashed` rather than solid, matching the
-chain-ladder replay it was modelled on: dashed reads as a marker laid over the
-ladder, solid read as another one of its rules.
+`eod_strike_gex.spot` is the underlying at the 16:05 sweep for every
+`(date, symbol)`, across the whole ~400-session retention. Next-day return is
+`spot(T+1)/spot(T) − 1` with no join.
+
+The part that matters more than convenience: **feature and outcome are stamped
+by the same sweep at the same instant**, so everything the study ranks on is
+fully known when the return window opens. No lookahead anywhere, by
+construction — which is not the usual situation for this kind of study.
+
+### What it can answer today
+
+| column | sessions |
+|---|---|
+| `net_gex`, `spot` | ~400 |
+| `call_gex` / `put_gex` | 1 |
+| `oi_*`, `vol_*`, `flow_*` | 0 — start with tonight's sweep |
+
+So the LEVELS study (flip distance, gravity, one-sidedness, wall room,
+concentration) runs on the full history. The Δ features run off `Δnet_gex`,
+which is the contaminated one — magnitude is a real activity signal, **sign is
+not**, and sign is what predicts direction. Those results print under a
+CONTAMINATED banner and are a hypothesis to re-test once `oi_*` has ~60
+sessions.
+
+### The four traps, and what the script does about each
+
+1. **GEX moves because price moved.** Gamma is a function of spot, so ΔGEX is
+   largely the footprint of a big day-T move; regress on it alone and you
+   rediscover price autocorrelation in a GEX costume. Day-T return is a control
+   in every specification.
+2. **169 symbols on one day are not 169 observations.** Fama-MacBeth — one
+   cross-sectional regression per day, t-test on the time series of slopes, so
+   n = days not rows. The report prints the naive pooled t beside it purely so
+   the inflation is visible.
+3. **Splits.** `spot` is unadjusted; a 10:1 prints −90%. Dropped above 25% and
+   the drops are listed, not silently filtered.
+4. **"Next day" must be the next *recorded* session.** Pairs are consecutive
+   recorded dates; anything spanning >5 calendar days is dropped.
+
+Plus a Bonferroni line, because at 16 tests |t| = 2.0 is not the bar.
+
+### The self-test is the point
+
+`--selftest` (no DB, 1.3s) verifies the estimator against data whose answer is
+known before it is pointed at data whose answer is not.
+
+**It immediately caught a bug in itself.** The first synthetic generator used a
+glibc LCG with Box-Muller drawing every field from one sequence. Its marginals
+were flawless — mean 0.009, sd 1.008, lag-1 autocorrelation −0.011 — and it was
+badly broken: an LCG's successive pairs lie on parallel hyperplanes, and
+Box-Muller maps that lattice into a relationship between normals drawn at a
+fixed *stride*. `noise` sat 4 draws after the one inside `fwd_ret` and carried a
+real −0.012 correlation with it.
+
+The estimator then correctly reported that at t ≈ 3, and the calibration check
+read **sd(t) = 10.7 and a 53% false-positive rate** where 1.0 and 5% are
+correct. Nothing was wrong with the statistics; the test data had a signal in
+it. Fixed with mulberry32 + Marsaglia polar and one independent stream per
+variable. Now:
+
+    null t: mean 0.002 · sd 0.892 · 1.3% rejected at |t| > 1.96
+    planted 8.0bp/SD recovered as 8.02bp over 25 runs (0.3% off)
+    pooled t 140.8 vs Fama-MacBeth −1.56 on the same null feature
+
+A single null run would have passed by luck and hidden all of it — which is why
+the shipped check runs 80 independent nulls and asserts on the *shape* of the
+t-distribution rather than on one draw.
+
+### Run it
+
+    ssh vps; cd /path/to/app
+    node server-v2/scripts/gex-move-study.mjs --selftest   # verify first
+    node server-v2/scripts/gex-move-study.mjs              # then the real thing
+
+
+## 2026-08-19 (h) - ΔGEX Board: Structural Range strip under "which leg moved"
+
+Edited: `owner-vite/src/pages/GexGrowth.tsx`. Client only.
+
+Two regime zones spanning put wall → call wall, spot as a rule through them, and
+the landmarks direct-labelled underneath. Sits directly under *which leg moved*
+because it answers the next question: that block says WHAT changed, this says
+where price is relative to the structure that changed. Renders in every mode —
+it needs no baseline session, only the current ladder, so it reads on `levels`
+and on a symbol's first day.
+
+### The ordering trap this had to avoid
+
+An earlier mockup laid out three zones as `putWall < flip < magnet < callWall`.
+**That ordering is not guaranteed and the layout would have drawn nonsense the
+first put-heavy session it saw.** `findWall` filters by side before picking, so
+the only thing the code may assume is
+
+    putWall < spot < callWall
+
+The flip is a zero crossing of the running total and can land anywhere,
+including outside both walls. The heaviest rung can be below spot. Neither is
+safe as a boundary.
+
+So **the flip is the one divider** — two zones, AMPLIFY below and DAMPEN above —
+and everything else is a marker.
+
+### One-sided books collapse, they do not clamp
+
+When the flip falls outside the span or there is none, the strip renders a
+SINGLE band named by the sign of the book, with `· no flip in range` on the
+header. It deliberately does not pin the divider to the nearest wall: that draws
+a boundary at a strike where nothing happens, and the entire value of the band
+widths is that they are real.
+
+### "Magnet" was two labels on one strike
+
+The mockup's MAGNET (largest |gamma| anywhere) and CALL WALL (largest positive
+rung above spot) are **the same strike on any call-dominant book**. Drawing both
+would put two labels on one tick most days and imply a distinction that is not
+there.
+
+New `Analysis.heaviest` is an **attribute**, not a landmark: `{strike, now, at}`
+where `at` is `"call"` / `"put"` when it coincides with that wall, else null.
+The strip rings whichever landmark it lands on (★ + glow) and only draws a
+standalone HEAVIEST tick when it is neither — which is exactly when it is
+telling you something new. The fact this adds is one the walls alone cannot
+give: whether the wall you are looking at is *the* wall, or merely the best one
+on its side.
+
+A loose HEAVIEST within 7% of the span of a wall or the flip is suppressed —
+the labels are ~9 characters and would smear together, and at that distance the
+wall already tells you where the weight is.
+
+Also new: `Analysis.gravity` — share of |gamma| below vs above spot, drawn as a
+proportional bar. Where the book's WEIGHT is, which is a different question from
+where its walls are; two boards with identical walls can distribute mass
+completely differently between them.
+
+### Colour
+
+`RANGE_COLORS` was snapped to pass the dataviz six-check validator against the
+panel surface (#0D1119) in dark mode — lightness band, chroma floor, CVD
+separation (worst adjacent ΔE 18.6 protan), normal-vision floor (ΔE 25.0) and
+contrast ≥ 3:1 all PASS. The obvious vivid picks (#EF4444 / #8B5CF6 / #22D3EE)
+FAIL the lightness band at L 0.77–0.83 against a 0.48–0.67 band, which is why
+they bloom on a dark panel. Kept local and named for the same reason POS/NEG
+are: they are an encoding, not chrome, and the theme has no token meaning "put
+support".
+
+### Verified by rendering, not by reading
+
+The component was rendered to static markup across eight cases — heaviest on
+each wall, heaviest loose, flip below the span, flip above the span, no flip, no
+put wall, no spot. The last two correctly render **nothing** rather than a
+broken strip. Caught in that pass: the spot rule was a zero-height sibling
+*after* the zones and painted behind their fills — invisible, which is a bad way
+to lose the one mark the whole strip is oriented around. It now lives inside the
+zone wrapper with a z-index.
+
+
+## 2026-08-19 (g) - ΔGEX Board: every basis carries its own "run at" timestamp
+
+Edited: `server-v2/eod-strike-gex-recorder.js`, `server-v2/server-with-proxy.js`,
+`owner-vite/src/pages/GexGrowth.tsx`.
+
+### There is no single "when was this row run"
+
+`ts` is the INSERT clock and always has been. That is not the same fact as *when
+this data was true*, and on this table the two diverge two different ways:
+
+- The sweep **paces** across ~169 symbols over several minutes, so the write
+  clock is minutes later than the read for most of them.
+- After the 09:25 re-stamp, `oi_*` on a row was read **the next morning** while
+  `vol_*` on that same row was read at yesterday's 16:05 sweep. One row, two
+  values, a full session apart.
+
+So a single row timestamp is wrong for at least one basis every single day.
+
+### Three capture columns
+
+| column | stamps | set by |
+|---|---|---|
+| `captured_at` | oivol, vol, and oi while provisional | evening sweep |
+| `oi_captured_at` | oi once settled | 09:25 re-stamp |
+| `flow_captured_at` | flow | the `flow_prints` aggregate |
+
+All three are the moment the **read started**, not the write finished — a symbol
+whose chain sweep takes 40s describes the book as of when the fetch went out, and
+stamping the INSERT would date it 40s late every time. `flow_captured_at` is its
+own moment because the flow aggregate runs after that symbol's chain sweep
+finishes, even though both land in one INSERT.
+
+`flowCapturedAt` is reset to null when the flow read lands nothing or throws —
+an absence does not get a timestamp.
+
+### Resolution
+
+`BASIS_STAMP` maps each basis to its COALESCE chain, and `stampExpr(basis, alias)`
+builds the SQL:
+
+    oivol / vol  →  COALESCE(captured_at, ts)
+    oi           →  COALESCE(oi_captured_at, captured_at, ts)
+    flow         →  COALESCE(flow_captured_at, captured_at, ts)
+
+The `ts` tail is the fallback for rows written before these columns existed — a
+coarser answer, but a true one, and better than a NULL the page has to explain.
+
+Change route returns `capturedAt` + `prevCapturedAt` (so a Δ names both moments
+it compares). Board returns a **per-symbol** `capturedAt` — the sweep paces, so a
+name whose chain failed at 16:05 genuinely is reading an older moment than the
+rows above it in the rail. Live sets `capturedAt` to now by definition and keeps
+the prior side's recorded stamp.
+
+Re-firing the evening sweep clears **both** `oi_stamped_date` and
+`oi_captured_at` — the row is provisional again, and leaving the morning stamp
+behind would date a provisional read to a pass that no longer applies to it.
+
+### Page
+
+New `fmtEtStamp` prints date *and* time, deliberately unlike the existing
+time-only `fmtEtTime`: a bare `09:25:14` would hide exactly the
+session-apart difference these stamps exist to expose. Rendered as a `run
+YYYY-MM-DD HH:MM:SS ET` pill in the basis strip — always visible, not a tooltip —
+with the prior session's stamp on hover.
+
+Also fixed while here: `stampExpr` replaced a first cut that built the alias
+prefix with chained `.replace(/\(/g, ...)` on the COALESCE string. It worked and
+was unreadable; the column list is now explicit data.
+
+
+## 2026-08-19 (f) - ΔGEX Board: Split — calls and puts on the same rung
+
+Edited: `owner-vite/src/pages/GexGrowth.tsx`. **Client only** — no server, no
+schema, no new request.
+
+The leg picker was exclusive (Net / Calls / Puts), which meant comparing the two
+legs at one strike required toggling and holding a number in your head. That is
+the same "the sum is lossy, so squint and remember" problem the basis split
+exists to kill, one level down.
+
+### Why it costs nothing
+
+The ladder is already a centred diverging bar with a rail down the middle:
+negatives draw left, positives right. On `oivol` / `oi` / `vol` the call leg is
+≥ 0 and the put leg ≤ 0 at *every* strike by construction — so the two legs
+occupy opposite halves of the row and **cannot collide**. Drawing both is one
+row, same height, no overlap, and it is the standard gamma-profile-by-strike
+picture.
+
+New leg setting `split`, alongside the existing three. Calls and Puts stay, so
+the rail can still be ranked by one leg alone.
+
+### No fetch
+
+`split` is the only leg that is not a server-side projection. Every response
+already carries the full `callGex`/`putGex` pair *alongside* whichever leg was
+asked for, so Split sends `leg=net` and renders what came back. The rail
+therefore still ranks by net under it — which is right, not a workaround: Split
+is a decomposition OF the net, not a different ordering.
+
+### `RailBars` grew a side
+
+`{ v }` → `{ left, right }`, each drawn independently, so a row can carry a bar
+on both sides. Single-value callers pass `{ left: min(v,0), right: max(v,0) }`,
+which is byte-for-byte the old rendering — verified by rendering the component
+to static markup across all seven mode × leg combinations. Colour still comes
+from the SIDE, not the leg, so a bar left of the rail is red everywhere on this
+page.
+
+### Per-mode and per-basis
+
+| combination | rendering |
+|---|---|
+| split, unsigned basis, levels/delta | ONE row — puts left, calls right |
+| split, unsigned basis, compare | TWO rows (was → is), each carrying both legs |
+| split, `flow`, levels/delta | TWO rows, one per leg — either leg can be negative there, so they cannot share a rung's sides |
+| split, `flow`, compare | **not offered** — four rows a strike. The button is not rendered, same as Live on flow, rather than left lit and quietly doing something else |
+
+Value column shows both numbers, calls over puts, matching the bars. Axis header
+reads `← puts · calls →` when the legs share a row.
+
+**Bug caught by the render harness:** compare mode drew the ghost row from prior
+LEVELS but the solid row from leg DELTAS — two different quantities on one rung
+at two different scales. `legPair` now keys on `mode === "delta"` rather than
+`!== "levels"`, so compare is level-vs-level exactly as it is for net. `isDelta`
+still treats compare as a Δ mode for the rail, which is correct there and was
+the source of the confusion.
+
+`splitBlocked()` guards the flow+compare case, and `effLeg` degrades a
+already-selected `split` to `net` if the mode changes under it — so the page can
+never sit in a state its own controls do not offer.
+
+
+## 2026-08-19 (e) - ΔGEX Board: call vs put per strike, and the gross flow split behind the net
+
+Edited: `server-v2/eod-strike-gex-recorder.js`, `server-v2/server-with-proxy.js`,
+`server-v2/api-router.js`, `owner-vite/src/pages/GexGrowth.tsx`.
+
+Follows (d). Two splits, one level below the basis split.
+
+### `leg` — net / call / put, on every basis
+
+New param on all four read routes, orthogonal to `basis`: basis picks the
+contract count, leg picks which option type's gamma. `(basis, leg)` resolves
+through `levelCol()` to one of twelve columns — the only place a request
+parameter becomes a SQL identifier, whitelisted in the recorder (`normLeg`) and
+again at the public hop (`legParam`). Verified: `leg=call, (SELECT 1)` falls
+back to `net`.
+
+`net` is call + put and that sum is lossy — a fall is equally consistent with
+call gamma coming off and put gamma piling on. Compare mode told those apart in
+aggregate; this tells them apart rung by rung.
+
+**The sign means different things per basis, and that is the value:**
+
+- `oivol` / `oi` / `vol` — legs are signed by CONVENTION (calls +, puts −, on an
+  unsigned count), so the call leg is ≥ 0 and the put leg ≤ 0 at *every* strike.
+  A single-leg ladder there maps WHERE that type's gamma sits; it cannot cross
+  zero. The caveat strip says so on screen, because a reader arriving expecting
+  a flip will not find one and the absence is arithmetic, not the book.
+- `flow` — legs are signed by MEASUREMENT, so either can take either sign.
+  "Dealers are short call gamma at 6400 and long put gamma at 6300" is a
+  sentence only this basis can produce.
+
+The rail ranks on the same column the ladder draws. The structural **badges
+(flip, walls, sign flips) deliberately stay on the basis's NET column** whatever
+the leg is set to — every one of them is a property of the two legs together,
+and a monotonic single-leg running total has no crossing to find. Computing a
+"flip" on a call-only ladder would return null for every symbol on the board, or
+worse, a number off a curve with no zero. The badges describe the book; the
+ladder describes the leg you asked for.
+
+Date picker is now basis AND leg scoped: both dimensions have their own
+migration date (legs 2026-08-18, bases 2026-08-19), so `oivol/call` and
+`oivol/net` do not offer the same sessions. Live's cache key went
+`symbol|basis` → `symbol|basis|leg`; without the leg it would serve a call
+ladder to a put request for 60s.
+
+### Flow gross: four columns, because a net of two opposite events hides size
+
+New: `flow_call_buy_gex`, `flow_call_sell_gex`, `flow_put_buy_gex`,
+`flow_put_sell_gex`.
+
+`flow_call_gex` nets two opposite events — gamma the dealer took ON (the public
+sold calls to them) and gamma they took OFF (the public bought). A strike where
+they did 5,000 of each nets to ~zero and reads **identically to a strike nothing
+traded at**. That is the same "a red bar has two stories" ambiguity compare mode
+exists to fix, reappearing inside a single session.
+
+`getFlowLadder()` now keeps the inventory gross (`callLong`/`callShort`/
+`putLong`/`putShort`) instead of netting at ingest, and the legs are rolled up
+FROM the components — so the identities hold by construction, not coincidence:
+
+    call_buy + call_sell = flow_call_gex
+    put_buy  + put_sell  = flow_put_gex
+    all four             = flow_gex
+
+`*_buy_gex` is always ≥ 0 (dealer long that leg), `*_sell_gex` always ≤ 0.
+
+Worked case from the test harness — dealer short 5,000 calls and long 4,900 of
+the same strike:
+
+| reading | value |
+|---|---|
+| call leg NET | −20,000 (looks almost quiet) |
+| call leg GROSS | 1,980,000 (huge two-way size) |
+| directional | 5.3% |
+
+### Page
+
+Leg picker beside the basis picker (re-fetches — the rail must rank on the
+column the ladder draws). Ladder column header appends the leg, so a call
+ladder stops being labelled "Net GEX". Caveat strip names the leg and, on the
+unsigned bases, warns that the ladder is one-sided and has no flip to read.
+
+On `flow`, a "dealer took on" chip row shows the four gross components summed
+over the rows in view (so the ±% band applies), plus a **% directional** line —
+net ÷ gross. Near 1, the flow went one way and the net is the whole story. Near
+0, the dealer took size on both sides and ended up flat: a busy strike a
+net-only ladder draws as a quiet one. `hasGross` is reported separately from
+`hasBasis`, so a flow session recorded before these columns shipped shows its
+real net ladder and says the decomposition was not recorded — rather than
+silently omitting the row.
+
+
+## 2026-08-19 (d) - ΔGEX Board: four bases, and the day-over-day diff that was double-counting a session
+
+Edited: `server-v2/eod-strike-gex-recorder.js`, `server-v2/server-with-proxy.js`,
+`server-v2/api-router.js`, `owner-vite/src/pages/GexGrowth.tsx`.
+
+### The bug
+
+`eod_strike_gex` stored ONE number per strike: `net_gex`, on the OI+Vol basis
+(`|γ| × (open_interest + volume)`). Its day-over-day diff was not slightly
+early — it was counting a session twice.
+
+Open interest does not settle at the close. OCC publishes overnight, so the OI
+the chain carries at 16:05 on session T is the file settled through **T−1**.
+Volume on the same response is **T**'s. A row is `OI(T−1) + Vol(T)`, so:
+
+    row(T) − row(T−1) = [OI(T−1) − OI(T−2)] + [Vol(T) − Vol(T−1)]
+
+The left bracket is the NET result of session T−1's trading. The right bracket
+SUBTRACTS `Vol(T−1)` — the GROSS of that same session. T−1 appears in the Δ
+twice, once net and once gross, with opposite signs. A name that traded heavy
+Tuesday and quiet Wednesday printed a big negative Δ on Wednesday about nothing
+that happened on Wednesday.
+
+No scheduling change fixes that. The halves had to be stored apart.
+
+### Four bases
+
+New columns (all NULLABLE, **no backfill** — the chains are gone and the split
+is exactly what `net_gex` threw away). `basis` is now a param on all four read
+routes; anything unrecognised reads as `oivol`, so old clients are byte-identical.
+
+| basis | column | what it is | honest Δ? |
+|-------|--------|-----------|-----------|
+| `oivol` | `net_gex` | `\|γ\| × (OI + volume)` — the original series, ~a year of history, still the default | no (the double-count above) |
+| `oi` | `oi_gex` | `\|γ\| × open interest`, re-stamped next morning | **yes** |
+| `vol` | `vol_gex` | `\|γ\| × volume` — same-session, so the LEVEL is the read | no (second difference) |
+| `flow` | `flow_gex` | signed **dealer inventory** × γ, from the tape | no (session, not book) |
+
+`net_gex` / `call_gex` / `put_gex` are still computed by the UNCHANGED
+expressions, so the legacy series is bit-for-bit what it was. Consequence,
+stated because someone will assert on it: `oi_gex + vol_gex` agrees with
+`net_gex` only to float noise, not exactly. History continuity beat additivity.
+
+### The 09:25 OI re-stamp
+
+New pass (`runOiRestamp`, `POST /proxy/eod-strike-gex-restamp`) rewrites the
+**previous** session's `oi_*` columns off the freshly settled file and stamps
+`oi_stamped_date`. That is what makes `oi` a real ΔOI — without it `oi_gex` on
+row(T) is `OI(T−1)` and the diff describes the wrong day.
+
+UPDATE, never INSERT, and it touches nothing but `oi_*`: the evening's
+`net_gex`/`vol_*` are a record of a settled close and stay as recorded. Refuses
+any date ≥ today (today's OI settles tonight; stamping it "settled" would be a
+load-bearing lie). Re-stamps the latest RECORDED session, not "yesterday" by
+calendar, so holidays and long weekends resolve correctly. Costs one more full
+chain sweep — there is no cheaper source for settled OI than the chain.
+
+### Flow basis — the only one that knows direction
+
+The other three sign their legs by CONVENTION (calls +, puts −, on an unsigned
+count). Open interest carries no side: 40k OI on the 6400 calls is dealer-short
+or dealer-long depending on who opened it, and no OI arithmetic can tell those
+apart. `flow` is built from bid/ask-classified prints in `flow_prints`, mirrored
+(public buys → dealer short, public sells → dealer long), so its sign is
+**measured**. Both legs use the same polarity — the conversion the OI bases do
+by negating the put term is already baked into the inventory's sign.
+
+Per-expiry gamma is captured during the same chain sweep (`gammaAcc` keyed
+`exp|strike`) so each expiry's inventory multiplies by ITS OWN gamma before
+folding into the strike — a weekly and a LEAP at one strike are not the same γ.
+
+Four limits, documented on screen and in `getFlowLadder()`: SPX/SPY/QQQ only
+(`EOD_STRIKE_GEX_FLOW_SYMBOLS`); premium-floored, so block flow not the whole
+tape; for SPY/QQQ only the near-spot front-expiry window the streamer
+subscribes to; and inventory resets each morning, so it is a SESSION not a book.
+Unclassified (`bucket='neutral'`) prints are dropped, not guessed — including
+them would bias the whole ladder short.
+
+### Reads
+
+`basis` selects a column trio through `BASIS_COLS`, the only place a basis
+becomes a column name. `normBasis()` whitelists it in the recorder and
+`basisParam()` again in `api-router` — these identifiers are interpolated into
+SQL (Postgres has no parameter form for a column name), so the gate nearest the
+internet must not be the missing one. Verified: an injection string falls back
+to `oivol`.
+
+Date resolution is basis-scoped everywhere (board CTE, `listStrikeGexDates`), or
+every new basis would look like it had a year of history the day it shipped, and
+`flow` would list 169 names of flat zeros instead of three real ones.
+
+`hasBasis` / `hasPrevBasis` ship pre-COALESCE, because a zero board and an
+unrecorded board are pixel-identical once COALESCEd and the difference is the
+whole point — "SPY had no flow" is not "we never recorded flow for SPY".
+
+Live (`getStrikeGexLive`) serves `oivol`/`oi`/`vol` off the chain and **refuses**
+`flow` rather than downgrading — a silent fallback would put an unsigned OI
+number under a header claiming the sign was measured. Its cache is now keyed
+`symbol|basis`; keyed on symbol alone it would serve an `oi` ladder to a `vol`
+request for 60s.
+
+### Page
+
+Basis picker beside the mode tabs (it re-fetches — four columns, not four views
+of one payload). The caveat for the active basis renders ON SCREEN, not in a
+tooltip, and the strip turns gold on a Δ tab whose basis cannot honestly be
+differenced — that is the exact mistake this change exists to stop. On `oi`, a
+SETTLED / PROVISIONAL chip says whether the re-stamp reached both sides of the
+diff. Live is hidden (not disabled) on `flow`. Switching basis clears the
+session pick, since the picker is basis-scoped.
 
 
 ## 2026-08-19 (b) - GEX levels replay: a white spot line across the ladder
