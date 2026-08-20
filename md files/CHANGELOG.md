@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-08-20 (h) - Post-Market §3 rebuilt: build-time bars, peak marks, wall path, written-vs-traded
+
+Edited: `components/pages/premarket/PostMarketTab.tsx`, `components/pages/Premarket.tsx`.
+
+"09:30 vs now" is a dead question on 0DTE. The open book is ~2% of the close, so
+every strike reads "+100% added" and the delta chart is a copy of the profile
+sitting next to the profile. The section now asks a question the session can
+answer: HOW was the book built, and is it still there.
+
+### The profile row carries three facts
+
+- **Build-time bar** — the same bar, segmented by WHEN its gamma arrived:
+  blue 09:30–12:00, violet 12:00–15:00, amber 15:00–close, laid from the centre
+  outwards in time order. The profile keeps its shape and the colour composition
+  IS the change. Shares are normalised over the ABSOLUTE moves, so a strike that
+  built and gave some back reads as its two moves rather than >100%.
+- **High-water mark** — a tick at the strike's intraday peak, with the gamma it
+  gave back hatched between mark and bar. At its peak = live level; well short of
+  its own mark = abandoned, do not carry it into tomorrow.
+- **The label** — "62% AM · at peak" / "71% PM · −34% 13:10".
+
+### Three new panels
+
+- **Wall migration** (`WallChart`) — call wall / CORE / put wall / spot over the
+  session on one price axis. A level that sits while price travels is the one to
+  fade; one that moves with price is dealers chasing. These are NET-basis proxies
+  off the recorded ladder (the recorder stores net per strike only) and the panel
+  says so — /proxy/walls in section 2 is the classified truth.
+- **Written vs traded** — gamma added per strike against minutes spent at that
+  strike, growing away from a centred label. Peaks that line up are a pin; peaks
+  that separate mean the level was pulling.
+- **Positioned vs written** (section 4) — the share of each strike's gamma that
+  came from settled OI rather than today's volume. Aggregate says "mostly volume"
+  and is useless; per strike it separates levels set up before the bell from ones
+  written from nothing after lunch. It reads the LIVE CHAIN only, so it is the one
+  panel here that still works on a day the recorder missed.
+
+The open-vs-now overlay, its scale guard and the Δ heatmap are gone with the
+question they answered. `PostMarketTab` now takes the raw `chain` prop for the
+OI/volume split.
+
 ## 2026-08-20 (g) - Premarket: SPY and QQQ boards
 
 Added: `components/pages/premarket/TickerBoard.tsx`.

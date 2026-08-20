@@ -8,8 +8,16 @@
  * the three questions that only exist after the close:
  *
  *   1. Did the morning map hold?      → snapshot + level scorecard
- *   2. What changed inside the day?   → GEX evolution + flow/positioning
+ *   2. How was the book actually built? → build-time bars + peak marks, the wall
+ *                                       path, written-vs-traded, and the
+ *                                       positioned-vs-written split
  *   3. What does tomorrow look like?  → next-expiry structure, after 0DTE rolls off
+ *
+ * Section 2 deliberately does NOT ask "what changed since 09:30". On 0DTE the
+ * open book is ~2% of the close, so that question always answers "everything"
+ * and its delta chart is a copy of the profile. Each strike is instead reduced
+ * to WHEN its gamma arrived (three buckets, coloured along the bar) and WHETHER
+ * IT IS STILL THERE (a high-water mark, with the given-back part hatched).
  *
  * DATA SOURCES
  *   props                       everything the Premarket tab already computed off
@@ -52,7 +60,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { findGEXFlip, type ChainRow } from "@/lib/calculations/calculations";
+import { findGEXFlip, netGEXOf, type ChainRow } from "@/lib/calculations/calculations";
 import {
   etHm,
   RTH_CLOSE_MIN,
@@ -97,10 +105,15 @@ export const POSTMARKET_CSS = `
 /* 1 — snapshot. Every column carries a min-width: the captions under the range
    bar are absolutely positioned, and without a floor the grid squeezes a column
    until a caption lands on top of the pill in the next one. */
+/* SEVEN tracks and SEVEN children — the row shipped with six, so the verdict
+   card landed in the 1px divider track and wrapped one word per line while the
+   spare divider drew a stray line under the row. Count them together when
+   either changes: close | vr | range | vr | net gex | vr | verdict. */
 .pmk .snap{display:grid;
-  grid-template-columns:minmax(190px,auto) 1px minmax(280px,1.2fr) 1px minmax(230px,1fr) 1px minmax(230px,auto);
+  grid-template-columns:minmax(180px,auto) 1px minmax(300px,1.3fr) 1px minmax(240px,1fr) 1px minmax(240px,300px);
   align-items:start;row-gap:14px}
 .pmk .snap .vr{align-self:center}
+.pmk .snap .bias{justify-self:stretch;max-width:none;text-align:left}
 .pmk .rangebar{position:relative;height:42px;margin-top:8px}
 .pmk .rangebar .wallband{position:absolute;left:0;right:0;top:16px;height:14px;border-radius:7px;
   background:linear-gradient(90deg,rgba(46,204,143,.22),rgba(255,255,255,.05),rgba(255,92,108,.22));border:1px solid var(--line)}
@@ -112,14 +125,14 @@ export const POSTMARKET_CSS = `
 
 /* 2 — scorecard */
 .pmk .scorecard{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
-.pmk .sc{position:relative;border:1px solid var(--card);border-radius:var(--r);background:var(--panel2);
-  padding:10px 11px 11px;overflow:hidden}
-/* The accent is an ELEMENT, not a ::before with tone classes. The tone classes
-   only ever fired when the grade resolved, so a card whose level had no verdict
-   yet drew a grey edge and the row read as unstyled. Every card now carries its
-   LEVEL's colour on the edge — call wall red, put wall green, CORE violet — and
-   the verdict shows in the pill, which is the thing that actually changes. */
-.pmk .sc .accent{position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:0 2px 2px 0}
+/* The accent is the card's own LEFT BORDER, set inline from the level's colour.
+   It started as a ::before painted by tone classes (invisible until a verdict
+   resolved), then as an absolutely-positioned <i> (one stacking-context or
+   overflow rule away from vanishing). A border cannot be lost: it is part of the
+   box. The colour says WHICH level — call wall red, put wall green, CORE violet
+   — and the pill says what the level did, which is the part that changes. */
+.pmk .sc{position:relative;border:1px solid var(--card);border-left-width:4px;
+  border-radius:var(--r);background:var(--panel2);padding:10px 11px 11px}
 .pmk .sc .src{font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim2);margin-top:6px}
 .pmk .sc .nm{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim2);
   display:flex;justify-content:space-between;align-items:center;gap:6px}
@@ -133,16 +146,41 @@ export const POSTMARKET_CSS = `
 
 /* 3 — evolution. ONE bar (now) + a caret where 09:30 was + a hatch for the
    change between them. Drawing both profiles as filled shapes was unreadable. */
-.pmk .evrow{display:grid;grid-template-columns:54px 1fr 92px;align-items:center;height:20px;gap:8px}
+.pmk .evrow{display:grid;grid-template-columns:54px 1fr 132px 84px;align-items:center;height:21px;gap:8px}
+/* Build-time segments: the bar keeps the profile's shape and its COLOUR
+   composition is the change — blue morning, violet midday, amber power hour.
+   Laid from the centre outwards in time order, so a bar reads left to right the
+   way the day ran. Shares are normalised over the ABSOLUTE moves, so a strike
+   that built and then gave some back reads as its two moves, not as >100%. */
+.pmk .evrow .seg{position:absolute;top:3px;bottom:3px}
+.pmk .evrow .seg:first-of-type{border-radius:2px 0 0 2px}
+.pmk .builtcol{font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
+.pmk .builtcol .sep{color:var(--dim2)}
 .pmk .evrow .k{font-size:10.5px;text-align:right;color:var(--dim)}
 .pmk .evrow.key .k{color:var(--txt);font-weight:700}
 .pmk .evrow .chg{position:absolute;top:1px;bottom:1px;border-radius:2px;
   background:repeating-linear-gradient(45deg,rgba(255,255,255,.22) 0 3px,rgba(255,255,255,.06) 3px 6px)}
+/* High-water mark: where the strike PEAKED today. A bar sitting at its peak is a
+   live level; one well short of its own mark was abandoned, and the hatch
+   between the two is the gamma that left. */
 .pmk .evrow .openmk{position:absolute;top:0;bottom:0;width:2px;background:#fff;opacity:.9;border-radius:1px}
 .pmk .evrow .tagcol{font-size:9px;letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
 .pmk .evlegend{display:flex;gap:14px;flex-wrap:wrap;font-size:9.5px;letter-spacing:.05em;
   text-transform:uppercase;color:var(--dim2)}
 .pmk .evlegend i{display:inline-block;width:9px;height:8px;border-radius:2px;margin-right:5px;vertical-align:middle}
+/* Written vs traded — two bars growing away from a centred strike label. */
+.pmk .mrow{display:grid;grid-template-columns:1fr 52px 1fr;align-items:center;height:18px;gap:6px}
+.pmk .mrow .mleft{display:flex;justify-content:flex-end}
+.pmk .mrow .mbar{height:11px;border-radius:2px}
+.pmk .mrow .mk3{font-size:10px;text-align:center;color:var(--dim)}
+
+/* Positioned vs written — one stacked bar per strike, OI then volume. */
+.pmk .srow{display:grid;grid-template-columns:54px 1fr 128px;align-items:center;height:22px;gap:9px}
+.pmk .srow .k{font-size:10.5px;text-align:right;color:var(--dim)}
+.pmk .srow .v{font-size:10.5px;text-align:right;white-space:nowrap}
+.pmk .stack{display:flex;height:13px;border-radius:3px;overflow:hidden;background:#141b26}
+.pmk .stack i{display:block;height:100%}
+
 .pmk .heat{display:grid;gap:2px;margin-top:6px}
 .pmk .heat i{height:22px;border-radius:3px;background:#1a2230}
 .pmk .heatx{display:flex;justify-content:space-between;font-size:9px;color:var(--dim2);margin-top:4px}
@@ -203,6 +241,8 @@ export type PostMarketProps = {
   putWall: number | null;
   totalNetGex: number | null;
   perStrike: { strike: number; net: number }[];
+  /** The raw chain — the positioned-vs-written split needs the per-side legs. */
+  chain: ChainRow[];
   coreBullseye: { strike: number; net: number } | null;
   maxPain: number | null;
   em: number | null;
@@ -263,7 +303,7 @@ type Grade = {
 
 export default function PostMarketTab(p: PostMarketProps) {
   const {
-    spot, esFut, basis, flip, callWall, putWall, totalNetGex, perStrike,
+    spot, esFut, basis, flip, callWall, putWall, totalNetGex, perStrike, chain,
     coreBullseye, maxPain, em, totals, overnight, candles, expiry, etDate, etMin, hasData,
   } = p;
 
@@ -318,62 +358,39 @@ export default function PostMarketTab(p: PostMarketProps) {
     return findGEXFlip(openCol.cells.map((c) => ({ strike: c.strike, netGEX: c.net } as ChainRow)), openCol.spot || spot);
   }, [openCol, spot]);
 
-  const openByStrikeRaw = useMemo(() => {
-    const m = new Map<number, number>();
-    if (openCol) for (const c of openCol.cells) m.set(c.strike, c.net);
-    return m;
-  }, [openCol]);
-
   /**
-   * SCALE GUARD — DIRECTIONAL, because the two directions mean opposite things.
+   * PER-STRIKE INTRADAY SERIES — the spine of section 3.
    *
-   * ratio = |recorded 09:30| / |live now|, over the strikes the two share.
-   *
-   * A ratio WELL UNDER 1 is the normal shape of a 0DTE day and must not be
-   * blocked. The basis is OI + volume, and at 09:29 today's contracts have
-   * essentially no volume yet — the book that decides the session is written
-   * after the bell. A 5x–20x build from open to close is routine on SPX 0DTE,
-   * and it is exactly the thing this panel exists to show. The first cut of this
-   * guard rejected anything past 4x in EITHER direction, so on a live 0DTE it
-   * saw 0.1x, called a real ten-fold build a "different book", and hid the
-   * overlay, the delta list and the heatmap all at once.
-   *
-   * A ratio WELL OVER 1 is the suspicious one: the recorded side cannot legally
-   * hold more gamma than the live side unless it is a different, larger book —
-   * which is precisely what `anyExpiry=1` used to produce (the whole SPX board
-   * against today's 0DTE alone: ~100x, a hatch across every row, +$65B deltas).
-   *
-   * The far floor stays too. 0.01x is not a build, it is the classic per-1%
-   * convention error (S^2 * 0.01 against S^2) and would quietly halve every
-   * reading; 0.02 sits just above it and well below any real intraday growth.
+   * The panel used to draw "09:30 vs now". On 0DTE that is a dead question: the
+   * open book is ~2% of the close, so every strike reads "+100% added" and the
+   * delta chart is a copy of the profile. What has signal per strike is WHEN the
+   * gamma arrived and WHETHER IT IS STILL THERE — so each strike is reduced to
+   * three build buckets and a high-water mark instead.
    */
-  const OPEN_RATIO_MAX = 4;      // recorded bigger than live -> wrong book
-  const OPEN_RATIO_MIN = 0.02;   // 100x apart -> a unit error, not a session
+  const series = useMemo(() => {
+    const m = new Map<number, { vals: number[]; ts: number[] }>();
+    if (!cols.length) return m;
+    cols.forEach((c, i) => {
+      for (const cell of c.cells) {
+        let e = m.get(cell.strike);
+        if (!e) { e = { vals: new Array(cols.length).fill(0), ts: [] }; m.set(cell.strike, e); }
+        e.vals[i] = cell.net;
+      }
+    });
+    for (const e of m.values()) e.ts = cols.map((c) => c.ts);
+    return m;
+  }, [cols]);
 
-  const openScale = useMemo(() => {
-    if (!openByStrikeRaw.size || !perStrike.length) {
-      return { ratio: null as number | null, ok: false, grew: false };
-    }
-    let a = 0, b = 0, n = 0;
-    for (const r of perStrike) {
-      const o = openByStrikeRaw.get(r.strike);
-      if (o == null) continue;
-      a += Math.abs(o); b += Math.abs(r.net); n++;
-    }
-    if (n < 5 || !(a > 0) || !(b > 0)) return { ratio: null, ok: false, grew: false };
-    const ratio = a / b;
-    return {
-      ratio,
-      ok: ratio >= OPEN_RATIO_MIN && ratio <= OPEN_RATIO_MAX,
-      // Worth SAYING, not hiding: the day wrote most of its own gamma.
-      grew: ratio < 0.6,
-    };
-  }, [openByStrikeRaw, perStrike]);
-
-  const openByStrike = useMemo(
-    () => (openScale.ok ? openByStrikeRaw : new Map<number, number>()),
-    [openScale.ok, openByStrikeRaw],
-  );
+  /** Column index nearest a given ET minute-of-day, for the bucket boundaries. */
+  const idxAtMin = useCallback((mins: number) => {
+    if (!cols.length) return -1;
+    let best = -1, bestD = Infinity;
+    cols.forEach((c, i) => {
+      const d = Math.abs(etMinutes(c.ts) - mins);
+      if (d < bestD) { bestD = d; best = i; }
+    });
+    return best;
+  }, [cols]);
 
   /**
    * Same two-window rule as the premarket profile: ±12 sets the bar SCALE (so a
@@ -389,15 +406,152 @@ export default function PostMarketTab(p: PostMarketProps) {
   const evNear = useMemo(() => evWindow(12), [evWindow]);
   const evBars = useMemo(() => evWindow(60), [evWindow]);
 
-  const strikeDeltas = useMemo(() => {
-    if (!openByStrike.size) return [];
-    return perStrike
-      .filter((r) => openByStrike.has(r.strike))
-      .map((r) => ({ strike: r.strike, delta: r.net - (openByStrike.get(r.strike) ?? 0) }))
-      .filter((r) => Number.isFinite(r.delta) && r.delta !== 0)
-      .sort((a, z) => Math.abs(z.delta) - Math.abs(a.delta))
-      .slice(0, 5);
-  }, [perStrike, openByStrike]);
+  /**
+   * One row of the evolution profile: the live value, the day's high-water mark,
+   * and how the bar splits by when its gamma arrived.
+   *
+   * Bucket shares are normalised over the ABSOLUTE moves, not the signed ones —
+   * a strike that built +$4B in the morning and gave back $1B at lunch should
+   * read as two thirds morning, not as 133%. The segments therefore always fill
+   * the bar exactly.
+   */
+  type EvRow = {
+    strike: number;
+    net: number;
+    peak: number | null;
+    peakTs: number | null;
+    offPeakPct: number | null;
+    segs: { share: number; color: string; label: string }[];
+    dominant: { share: number; color: string; label: string } | null;
+  };
+
+  const BUCKET_DEFS = [
+    { until: 12 * 60, color: "var(--blue)", label: "AM" },
+    { until: 15 * 60, color: "var(--violet)", label: "MID" },
+    { until: RTH_CLOSE_MIN, color: "var(--amber)", label: "PM" },
+  ];
+
+  const evRows = useMemo<EvRow[]>(() => {
+    const noonI = idxAtMin(12 * 60);
+    const threeI = idxAtMin(15 * 60);
+    return evBars.map((b) => {
+      const e = series.get(b.strike);
+      const base: EvRow = {
+        strike: b.strike, net: b.net, peak: null, peakTs: null,
+        offPeakPct: null, segs: [], dominant: null,
+      };
+      if (!e || e.vals.length < 3 || noonI < 0 || threeI < 0) return base;
+
+      let peak = e.vals[0], peakI = 0;
+      e.vals.forEach((v, i) => { if (Math.abs(v) > Math.abs(peak)) { peak = v; peakI = i; } });
+
+      const cuts = [0, noonI, threeI, e.vals.length - 1];
+      const moves = [0, 1, 2].map((i) => Math.abs(e.vals[cuts[i + 1]] - e.vals[cuts[i]]));
+      const total = moves.reduce((a, c) => a + c, 0);
+      const segs = total > 0
+        ? moves.map((mv, i) => ({ share: mv / total, color: BUCKET_DEFS[i].color, label: BUCKET_DEFS[i].label }))
+        : [];
+      const dominant = segs.length ? segs.reduce((bb, x) => (x.share > bb.share ? x : bb), segs[0]) : null;
+
+      return {
+        ...base,
+        peak,
+        peakTs: e.ts[peakI] ?? null,
+        offPeakPct: Math.abs(peak) > 0 ? (1 - Math.abs(b.net) / Math.abs(peak)) * 100 : null,
+        segs,
+        dominant,
+      };
+    });
+  }, [evBars, series, idxAtMin]);
+
+  /**
+   * WALL MIGRATION — where the levels sat, minute by minute, against spot.
+   *
+   * The recorder stores NET per strike only, so these are net-basis proxies: the
+   * most positive strike is the call wall, the most negative the put wall, the
+   * largest magnitude CORE. That is the same definition the live board uses for
+   * CORE and a close stand-in for the two walls (which are per-side live). It is
+   * labelled as a proxy on the panel rather than passed off as the wall log's
+   * own numbers — /proxy/walls is the 15-minute classified truth and it is right
+   * above this in section 2.
+   */
+  const wallPath = useMemo(() => {
+    if (cols.length < 3) return null;
+    const pts = cols.map((c) => {
+      let cw = c.cells[0], pw = c.cells[0], cb = c.cells[0];
+      for (const x of c.cells) {
+        if (x.net > cw.net) cw = x;
+        if (x.net < pw.net) pw = x;
+        if (Math.abs(x.net) > Math.abs(cb.net)) cb = x;
+      }
+      return { ts: c.ts, spot: c.spot, cw: cw?.strike ?? null, pw: pw?.strike ?? null, cb: cb?.strike ?? null };
+    }).filter((p) => p.cw != null && p.pw != null);
+    if (pts.length < 3) return null;
+    const vals: number[] = [];
+    for (const p of pts) {
+      if (p.spot > 0) vals.push(p.spot);
+      if (p.cw != null) vals.push(p.cw);
+      if (p.pw != null) vals.push(p.pw);
+    }
+    const lo = Math.min(...vals), hi = Math.max(...vals);
+    if (!(hi > lo)) return null;
+    return { pts, lo, hi };
+  }, [cols]);
+
+  /**
+   * WRITTEN vs TRADED — did the book form around price, or ahead of it?
+   *
+   * Left: how much gamma each strike gained across the session. Right: how many
+   * recorded minutes spot spent at that strike. Peaks that line up are a pin;
+   * peaks that separate mean the level was pulling price toward it.
+   */
+  const writtenVsTraded = useMemo(() => {
+    if (!cols.length || !evNear.length) return [];
+    const strikes = evNear.map((b) => b.strike);
+    const step = strikes.length > 1 ? Math.abs(strikes[0] - strikes[1]) : 5;
+    const minutesAt = new Map<number, number>();
+    for (const c of cols) {
+      if (!(c.spot > 0)) continue;
+      const near = strikes.reduce((b, k) => (Math.abs(k - c.spot) < Math.abs(b - c.spot) ? k : b), strikes[0]);
+      if (Math.abs(near - c.spot) <= step) minutesAt.set(near, (minutesAt.get(near) ?? 0) + 1);
+    }
+    return strikes.map((k) => {
+      const e = series.get(k);
+      const added = e ? Math.abs(e.vals[e.vals.length - 1] - e.vals[0]) : 0;
+      return { strike: k, added, minutes: minutesAt.get(k) ?? 0 };
+    });
+  }, [cols, evNear, series]);
+
+  /**
+   * POSITIONED vs WRITTEN — the share of a strike's gamma that came from settled
+   * OI rather than today's volume.
+   *
+   * The only panel here that needs no history at all: it reads the live chain's
+   * per-side OI and volume. On 0DTE the aggregate answer is always "mostly
+   * volume" and is useless; per strike it separates levels that were set up
+   * before the bell (and behaved like real levels all day) from ones written
+   * from nothing after lunch.
+   */
+  const oiSplit = useMemo(() => {
+    if (!chain.length || !(spot > 0)) return [];
+    return chain
+      .map((r) => {
+        const cg = Math.abs(r.callGamma ?? 0), pg = Math.abs(r.putGamma ?? 0);
+        const oiPart = cg * (r.callOI ?? 0) + pg * (r.putOI ?? 0);
+        const volPart = cg * (r.callVolume ?? 0) + pg * (r.putVolume ?? 0);
+        const tot = oiPart + volPart;
+        return {
+          strike: r.strike,
+          net: netGEXOf(r, "net", spot),
+          oiShare: tot > 0 ? oiPart / tot : null,
+        };
+      })
+      .filter((r) => r.oiShare != null && Number.isFinite(r.net) && r.net !== 0)
+      .sort((a, z) => Math.abs(z.net) - Math.abs(a.net))
+      .slice(0, 9)
+      .sort((a, z) => z.strike - a.strike);
+  }, [chain, spot]);
+
 
   // ── level scorecard ────────────────────────────────────────────────────────
   const grades = useMemo<Grade[]>(() => {
@@ -687,14 +841,10 @@ export default function PostMarketTab(p: PostMarketProps) {
   };
 
   const histNote =
-    histState === "ok" && openByStrikeRaw.size && !openScale.ok
-      ? (openScale.ratio != null && openScale.ratio > OPEN_RATIO_MAX
-          ? `The recorded 09:30 ladder holds ${openScale.ratio.toFixed(1)}× the gamma the live 0DTE chain does — that is a bigger book, not a bigger day. The open overlay is hidden rather than shown wrong.`
-          : `The recorded 09:30 ladder is ${openScale.ratio ? `${(1 / openScale.ratio).toFixed(0)}×` : "far"} smaller than the live one — past what a session can build, so it is being read as a unit mismatch and the overlay is hidden.`)
-      : histState === "ok" ? null
+    histState === "ok" ? null
       : histState === "loading" ? "Loading today's recorded ladder…"
-        : histState === "empty" ? "No per-minute ladder recorded for today — the open-vs-close panels need it. Everything else below is live."
-          : "The intraday recorder did not answer. Open-vs-close and replay are unavailable; the rest is live.";
+        : histState === "empty" ? "No per-minute ladder recorded for today — the build-time bars, the wall path and the written-vs-traded read all need it. Everything else below is live."
+          : "The intraday recorder did not answer, so section 3 and the replay have nothing to read. Everything above and below them is live.";
 
   return (
     <section className="prep is-post">
@@ -774,6 +924,8 @@ export default function PostMarketTab(p: PostMarketProps) {
             </div>
           </div>
 
+          <div className="vr" />
+
           <div className={`bias${verdict.neg ? " neg" : ""}`}>
             <div className="t">{verdict.t}</div>
             <div className="d">{verdict.d}</div>
@@ -792,8 +944,7 @@ export default function PostMarketTab(p: PostMarketProps) {
         </div>
         <div className="scorecard">
           {grades.map((g) => (
-            <div className="sc" key={g.key}>
-              <i className="accent" style={{ background: g.color }} />
+            <div className="sc" key={g.key} style={{ borderLeftColor: g.color }}>
               <div className="nm">
                 <span style={{ color: g.color }}>{g.name}</span>
                 <span className={`pill${g.tone === "ok" ? " cool" : g.tone === "bad" ? " hot" : g.tone === "warn" ? " warn" : ""}`}
@@ -844,22 +995,16 @@ export default function PostMarketTab(p: PostMarketProps) {
         )}
       </div>
 
-      {/* ── 3. GEX EVOLUTION ─────────────────────────────────────────────── */}
+      {/* ── 3. HOW THE BOOK WAS BUILT ────────────────────────────────────── */}
       <div className="sec">
         <div className="sechead">
-          <h3><span className="secn">3</span>GEX Evolution — 09:30 vs now</h3>
+          <h3><span className="secn">3</span>How the book was built</h3>
           <div className="evlegend">
-            {openScale.ok && openScale.ratio != null && (
-              <span style={{ color: openScale.grew ? "var(--amber)" : "var(--dim)" }}>
-                {openScale.grew
-                  ? `book grew ${(1 / openScale.ratio).toFixed(1)}× since 09:30`
-                  : `book ${openScale.ratio >= 1 ? "flat" : `−${Math.round((1 - openScale.ratio) * 100)}%`} vs 09:30`}
-              </span>
-            )}
-            <span><i style={{ background: "var(--pos)" }} />now positive</span>
-            <span><i style={{ background: "var(--neg)" }} />now negative</span>
-            <span><i style={{ background: "#fff", width: 3 }} />09:30 level</span>
-            <span><i style={{ background: "repeating-linear-gradient(45deg,rgba(255,255,255,.5) 0 2px,rgba(255,255,255,.12) 2px 4px)" }} />added / lost</span>
+            <span><i style={{ background: "var(--blue)" }} />09:30–12:00</span>
+            <span><i style={{ background: "var(--violet)" }} />12:00–15:00</span>
+            <span><i style={{ background: "var(--amber)" }} />15:00–close</span>
+            <span><i style={{ background: "#fff", width: 3 }} />day&apos;s peak</span>
+            <span><i style={{ background: "repeating-linear-gradient(45deg,rgba(255,255,255,.5) 0 2px,rgba(255,255,255,.12) 2px 4px)" }} />given back</span>
           </div>
         </div>
 
@@ -868,96 +1013,128 @@ export default function PostMarketTab(p: PostMarketProps) {
         <div className="body" style={{ gridTemplateColumns: "1.35fr 1fr" }}>
           <div className="col">
             <div className="chart">
-            {evBars.length === 0 && (
-              <div style={{ padding: "30px 0", textAlign: "center", color: "var(--dim)", fontSize: 12 }}>
-                Waiting for the chain…
-              </div>
-            )}
-            {evBars.map((b) => {
-              const openNet = openByStrike.get(b.strike);
-              const pos = b.net >= 0;
-              const w = (Math.abs(b.net) / maxAbsBar) * 46;
-              // Clamped: a caret can never be drawn outside the track, so a bad
-              // scale shows as a pegged marker rather than a row-wide smear.
-              const wo = openNet == null ? null : Math.min(46, (Math.abs(openNet) / maxAbsBar) * 46);
-              const lo = wo == null ? null : Math.min(w, wo);
-              const hi = wo == null ? null : Math.max(w, wo);
-              const tag = openTag(b.strike);
-              // Anchored from the centre line outwards on the bar's own side —
-              // left for positive rows, right for negative — so the caret and the
-              // hatch can never cross into the other half of the track.
-              const chgStyle: CSSProperties | null = lo == null || hi == null || hi <= lo
-                ? null
-                : pos
-                  ? { left: `${50 + lo}%`, width: `${hi - lo}%` }
-                  : { right: `${50 + lo}%`, width: `${hi - lo}%` };
-              const openStyle: CSSProperties | null = wo == null
-                ? null
-                : pos
-                  ? { left: `calc(${50 + wo}% - 1px)` }
-                  : { right: `calc(${50 + wo}% - 1px)` };
-              return (
-                <div className={`evrow${tag ? " key" : ""}`} key={b.strike}>
-                  <div className="k mono">{nf(b.strike, 0)}</div>
-                  <div className="track">
-                    <div className={`bar ${pos ? "p" : "n"}`} style={{ width: `${w}%` }} />
-                    {chgStyle && <div className="chg" style={chgStyle} />}
-                    {openStyle && <div className="openmk" style={openStyle} />}
-                  </div>
-                  <div className="tagcol" style={{ color: tag ? tag.color : "transparent" }}>{tag ? tag.text : ""}</div>
+              {evRows.length === 0 && (
+                <div style={{ padding: "30px 0", textAlign: "center", color: "var(--dim)", fontSize: 12 }}>
+                  Waiting for the chain…
                 </div>
-              );
-            })}
+              )}
+              {evRows.map((r) => {
+                const pos = r.net >= 0;
+                const w = (Math.abs(r.net) / maxAbsBar) * 46;
+                const wp = r.peak == null ? null : Math.min(46, (Math.abs(r.peak) / maxAbsBar) * 46);
+                const side: "left" | "right" = pos ? "left" : "right";
+                const tag = openTag(r.strike);
+
+                // Segments are laid from the centre outwards in time order, so a
+                // bar reads left-to-right as the day did.
+                let acc = 0;
+                const segs = r.segs.map((sg, i) => {
+                  const startPct = acc;
+                  acc += sg.share * w;
+                  const st: CSSProperties = side === "left"
+                    ? { left: `${50 + startPct}%`, width: `${sg.share * w}%` }
+                    : { right: `${50 + startPct}%`, width: `${sg.share * w}%` };
+                  return <div className="seg" key={i} style={{ ...st, background: sg.color, opacity: pos ? .95 : .82 }} />;
+                });
+
+                const ghost: CSSProperties | null = wp == null || wp <= w
+                  ? null
+                  : side === "left"
+                    ? { left: `${50 + w}%`, width: `${wp - w}%` }
+                    : { right: `${50 + w}%`, width: `${wp - w}%` };
+                const peakStyle: CSSProperties | null = wp == null
+                  ? null
+                  : side === "left"
+                    ? { left: `calc(${50 + wp}% - 1px)` }
+                    : { right: `calc(${50 + wp}% - 1px)` };
+
+                const off = r.offPeakPct;
+                return (
+                  <div className={`evrow${tag ? " key" : ""}`} key={r.strike}>
+                    <div className="k mono">{nf(r.strike, 0)}</div>
+                    <div className="track">
+                      {segs.length ? segs : <div className={`bar ${pos ? "p" : "n"}`} style={{ width: `${w}%` }} />}
+                      {ghost && <div className="chg" style={ghost} />}
+                      {peakStyle && <div className="openmk" style={peakStyle} />}
+                    </div>
+                    <div className="builtcol mono">
+                      {r.dominant && (
+                        <span style={{ color: r.dominant.color }}>{Math.round(r.dominant.share * 100)}% {r.dominant.label}</span>
+                      )}
+                      {off != null && (
+                        <>
+                          <span className="sep"> · </span>
+                          <span style={{ color: off < 3 ? "var(--pos)" : off > 25 ? "var(--neg)" : "var(--dim)" }}>
+                            {off < 3 ? "at peak" : `−${off.toFixed(0)}%${r.peakTs ? ` ${etHm(r.peakTs)}` : ""}`}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                    <div className="tagcol" style={{ color: tag ? tag.color : "transparent" }}>{tag ? tag.text : ""}</div>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
           <div className="col">
-            <div className="colhead"><h3>Biggest strike changes</h3><span className="tiny">since 09:30</span></div>
-            {strikeDeltas.length === 0 && <div className="tiny">No 09:30 ladder — nothing to difference.</div>}
-            {strikeDeltas.map((d) => {
-              const maxD = Math.max(...strikeDeltas.map((x) => Math.abs(x.delta)));
-              const w = (Math.abs(d.delta) / maxD) * 100;
-              return (
-                <div className="deltas" key={d.strike}>
-                  <div className="d">
-                    <div className="s mono">{nf(d.strike, 0)}</div>
-                    <div className="t">
-                      <i style={{
-                        left: 0, width: `${w}%`,
-                        background: d.delta >= 0
-                          ? "linear-gradient(90deg,var(--posDim),var(--pos))"
-                          : "linear-gradient(270deg,var(--negDim),var(--neg))",
-                      }} />
-                    </div>
-                    <div className={`v mono ${d.delta >= 0 ? "chg-pos" : "chg-neg"}`}>{fmtUsd(d.delta)}</div>
-                  </div>
-                </div>
-              );
-            })}
-
-            <div className="colhead" style={{ marginTop: 14 }}><h3>Δ GEX by strike</h3><span className="tiny">green = gamma added</span></div>
-            {evNear.length > 0 && openByStrike.size > 0 ? (
+            {/* WALL MIGRATION */}
+            <div className="colhead">
+              <h3>Wall migration</h3>
+              <span className="tiny">net-basis proxy · {cols.length} min</span>
+            </div>
+            {wallPath ? (
               <>
-                <div className="heat" style={{ gridTemplateColumns: `repeat(${evNear.length}, 1fr)` }}>
-                  {evNear.slice().reverse().map((b) => {
-                    const o = openByStrike.get(b.strike);
-                    const d = o == null ? 0 : b.net - o;
-                    const maxD = Math.max(1, ...evNear.map((x) => {
-                      const ox = openByStrike.get(x.strike);
-                      return ox == null ? 0 : Math.abs(x.net - ox);
-                    }));
-                    const a = Math.max(.1, Math.min(.9, Math.abs(d) / maxD));
-                    return <i key={b.strike} style={{ background: d === 0 ? "#1a2230" : d > 0 ? `rgba(46,204,143,${a})` : `rgba(255,92,108,${a})` }} />;
-                  })}
-                </div>
+                <WallChart path={wallPath} />
                 <div className="heatx">
-                  <span>{fmtPx(evNear[evNear.length - 1]?.strike)}</span>
-                  <span>{fmtPx(spot)}</span>
-                  <span>{fmtPx(evNear[0]?.strike)}</span>
+                  <span>{etHm(wallPath.pts[0].ts)}</span>
+                  <span>{etHm(wallPath.pts[Math.floor(wallPath.pts.length / 2)].ts)}</span>
+                  <span>{etHm(wallPath.pts[wallPath.pts.length - 1].ts)}</span>
+                </div>
+                <div className="tiny" style={{ marginTop: 6, letterSpacing: 0, textTransform: "none" }}>
+                  A level that sits while price travels is the one to fade; one that moves with price is
+                  dealers chasing. Section 2 above carries the wall log&apos;s own classified verdict.
                 </div>
               </>
             ) : (
-              <div className="tiny">Needs the 09:30 ladder.</div>
+              <div className="tiny">Needs the recorded ladder.</div>
+            )}
+
+            {/* WRITTEN vs TRADED */}
+            <div className="colhead" style={{ marginTop: 16 }}>
+              <h3>Written vs traded</h3>
+              <span className="tiny">gamma added ↔ time at price</span>
+            </div>
+            {writtenVsTraded.length ? (
+              <>
+                {(() => {
+                  const maxA = Math.max(1, ...writtenVsTraded.map((r) => r.added));
+                  const maxM = Math.max(1, ...writtenVsTraded.map((r) => r.minutes));
+                  return writtenVsTraded.map((r) => (
+                    <div className="mrow" key={r.strike}>
+                      <div className="mleft">
+                        <div className="mbar" style={{
+                          width: `${(r.added / maxA) * 100}%`,
+                          background: "linear-gradient(270deg,var(--violet),rgba(167,139,250,.3))",
+                        }} />
+                      </div>
+                      <div className="mk3 mono">{nf(r.strike, 0)}</div>
+                      <div>
+                        <div className="mbar" style={{
+                          width: `${(r.minutes / maxM) * 100}%`,
+                          background: "linear-gradient(90deg,var(--blue),rgba(77,163,255,.3))",
+                        }} />
+                      </div>
+                    </div>
+                  ));
+                })()}
+                <div className="heatx">
+                  <span>← gamma written</span>
+                  <span>minutes at price →</span>
+                </div>
+              </>
+            ) : (
+              <div className="tiny">Needs the recorded ladder.</div>
             )}
           </div>
         </div>
@@ -1009,6 +1186,53 @@ export default function PostMarketTab(p: PostMarketProps) {
           </div>
         </div>
       </div>
+
+        {oiSplit.length > 0 && (
+          <div className="body" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 12 }}>
+            <div className="col">
+              <div className="colhead">
+                <h3>Positioned vs written</h3>
+                <span className="tiny">top strikes by gamma</span>
+              </div>
+              <div className="evlegend" style={{ marginBottom: 7 }}>
+                <span><i style={{ background: "var(--blue)" }} />settled OI</span>
+                <span><i style={{ background: "var(--amber)" }} />today&apos;s volume</span>
+              </div>
+              {(() => {
+                const maxN2 = Math.max(1, ...oiSplit.map((r) => Math.abs(r.net)));
+                return oiSplit.map((r) => (
+                  <div className="srow" key={r.strike}>
+                    <div className="k mono">{nf(r.strike, 0)}</div>
+                    <div>
+                      <div className="stack" style={{ width: `${(Math.abs(r.net) / maxN2) * 100}%` }}>
+                        <i style={{ width: `${(r.oiShare ?? 0) * 100}%`, background: "linear-gradient(90deg,rgba(77,163,255,.5),var(--blue))" }} />
+                        <i style={{ width: `${(1 - (r.oiShare ?? 0)) * 100}%`, background: "linear-gradient(90deg,rgba(245,185,66,.5),var(--amber))" }} />
+                      </div>
+                    </div>
+                    <div className="v mono">
+                      {fmtUsd(r.net, false)}{" "}
+                      <span style={{ color: "var(--blue)" }}>{Math.round((r.oiShare ?? 0) * 100)}%</span>
+                      <span style={{ color: "var(--dim2)" }}> OI</span>
+                    </div>
+                  </div>
+                ));
+              })()}
+            </div>
+            <div className="col">
+              <div className="colhead"><h3>What that means</h3><span className="tiny">no history needed</span></div>
+              <div className="tiny" style={{ letterSpacing: 0, textTransform: "none", lineHeight: 1.5 }}>
+                A strike with a high OI share was <b style={{ color: "var(--txt)" }}>positioned before the bell</b> —
+                it was a level all day and it is still one tomorrow if the contracts survive. A strike that is
+                almost all volume was <b style={{ color: "var(--txt)" }}>written today</b>, out of nothing, and
+                expires with the session.
+                <br /><br />
+                On 0DTE the aggregate answer is always &quot;mostly volume&quot; and says nothing. Per strike it
+                separates the two kinds of level, and it is the only panel on this tab that works on a day the
+                recorder missed — it reads the live chain alone.
+              </div>
+            </div>
+          </div>
+        )}
 
       {/* ── 5. TOMORROW'S MAP ────────────────────────────────────────────── */}
       <div className="sec">
@@ -1188,5 +1412,47 @@ export default function PostMarketTab(p: PostMarketProps) {
         </span>
       </div>
     </section>
+  );
+}
+
+
+/**
+ * WallChart — call wall / CORE / put wall / spot over the session, one price
+ * axis. Deliberately an inline SVG with no library: four polylines and a band,
+ * on a fixed 100x viewBox that scales to whatever width the column has.
+ */
+function WallChart({
+  path,
+}: {
+  path: { pts: { ts: number; spot: number; cw: number | null; pw: number | null; cb: number | null }[]; lo: number; hi: number };
+}) {
+  const H = 150;
+  const pad = 8;
+  const { pts, lo, hi } = path;
+  const x = (i: number) => (i / Math.max(1, pts.length - 1)) * 100;
+  const y = (v: number) => pad + (1 - (v - lo) / (hi - lo)) * (H - pad * 2);
+  const line = (pick: (p: typeof pts[number]) => number | null) =>
+    pts.map((p, i) => { const v = pick(p); return v == null || !(v > 0) ? null : `${x(i)},${y(v)}`; })
+       .filter(Boolean).join(" ");
+
+  const cw = line((p) => p.cw);
+  const pw = line((p) => p.pw);
+  const cb = line((p) => p.cb);
+  const sp = line((p) => (p.spot > 0 ? p.spot : null));
+
+  return (
+    <svg viewBox={`0 0 100 ${H}`} height={H} preserveAspectRatio="none" style={{ width: "100%", display: "block" }}>
+      {/* The wall-to-wall band, so the corridor price traded in is readable at a glance. */}
+      {cw && pw && (
+        <polygon
+          points={`${cw} ${pts.map((p, i) => (p.pw == null ? null : `${x(pts.length - 1 - i)},${y(pts[pts.length - 1 - i].pw as number)}`)).filter(Boolean).join(" ")}`}
+          fill="rgba(77,163,255,.07)"
+        />
+      )}
+      {pw && <polyline points={pw} fill="none" stroke="var(--pos)" strokeWidth={1.6} vectorEffect="non-scaling-stroke" />}
+      {cb && <polyline points={cb} fill="none" stroke="var(--violet)" strokeWidth={1.4} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />}
+      {cw && <polyline points={cw} fill="none" stroke="var(--neg)" strokeWidth={1.6} vectorEffect="non-scaling-stroke" />}
+      {sp && <polyline points={sp} fill="none" stroke="#ffffff" strokeWidth={1.4} vectorEffect="non-scaling-stroke" />}
+    </svg>
   );
 }

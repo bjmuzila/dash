@@ -395,8 +395,7 @@ export default function TickerBoard({
                     const tone = rx ? REACTION_TONE[rx] : null;
                     const color = lvl === "call_wall" ? "var(--neg)" : lvl === "put_wall" ? "var(--pos)" : "var(--violet)";
                     return (
-                      <div className="sc" key={lvl}>
-                        <i className="accent" style={{ background: color }} />
+                      <div className="sc" key={lvl} style={{ borderLeftColor: color }}>
                         <div className="nm">
                           <span style={{ color }}>{LEVEL_LABEL[lvl]}</span>
                           <span className={`pill${tone === "ok" ? " cool" : tone === "bad" ? " hot" : tone === "warn" ? " warn" : ""}`}>

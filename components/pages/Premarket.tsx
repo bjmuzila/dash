@@ -951,6 +951,7 @@ export default function Premarket() {
             putWall={putWall}
             totalNetGex={totalNetGex ?? null}
             perStrike={perStrike}
+            chain={chain}
             coreBullseye={coreBullseye}
             maxPain={maxPain}
             em={em}
