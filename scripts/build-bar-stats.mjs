@@ -15,6 +15,12 @@
  *   node scripts/build-bar-stats.mjs --sym ES --from-db
  *   npm run bars:es / bars:nq / bars      # both symbols, --all-hours, no paths
  *
+ * RUN THIS ON THE DEV BOX, NOT THE VPS. public/data/bars-<SYM>.json is a
+ * COMMITTED artifact: it reaches production through git + "docker compose
+ * build" (the Dockerfile does COPY . .). A copy written into a checkout on the
+ * server sits outside the running container and is discarded by the next
+ * deploy. Build locally → commit public/data/bars-*.json → push.
+ *
  * WHAT THE DEPLOYED FILES WERE BUILT FROM (2026-07-20)
  *   ES: "ESU6 - 1 min - ETH.csv"   24h · 2,883 sessions · 2017-04-17 → 2026-07-19
  *   NQ: "NQU6 - 1 min - ETH.csv"   24h · 2,842 sessions · 2017-04-17 → 2026-07-19
@@ -85,6 +91,7 @@
  */
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const argv = process.argv.slice(2);
@@ -126,12 +133,16 @@ try {
  * ─────────────────────────────────────────────────────────────────────────── */
 const CANDLE_TABLE = { ES: "es_candles", NQ: "nq_candles" }[SYM];
 
-/** folders searched for a tape, in order */
+/** folders searched for a tape, in order. ~/Downloads is last and is there on
+ *  purpose: these tapes are broker exports that land in Downloads and are far
+ *  too big to move into the repo, so leaving one where it landed should just
+ *  work. Only files matching a tape name are ever considered. */
 const csvDirs = [
   process.env.BAR_STATS_CSV_DIR,
   path.join(process.cwd(), "public", "data"),
   path.join(process.cwd(), "data"),
   process.cwd(),
+  path.join(os.homedir(), "Downloads"),
 ].filter(Boolean);
 
 /** what the file already on disk was built from, so a rebuild can find the
@@ -150,10 +161,18 @@ const csvCandidates = [
   process.env[`BAR_STATS_${SYM}_CSV`],
   ...(priorSource ? csvDirs.map((d) => path.join(d, priorSource)) : []),
   ...csvDirs.map((d) => path.join(d, `${SYM}_1min.csv`)),
-  // last resort: anything in those folders that reads like a 1-minute tape
+  // last resort: anything in those folders that reads like a 1-minute tape.
+  // Browser-duplicate names ("… ETH (1).csv") go last — they're a re-download
+  // of the file next to them, and picking one silently is how you end up
+  // rebuilding from a half-finished copy. ETH sorts before RTH, which is the
+  // right default given the deployed books are 24h.
   ...csvDirs.flatMap((d) => {
-    try { return fs.readdirSync(d).filter(looksLikeTape).sort().map((f) => path.join(d, f)); }
-    catch { return []; }
+    try {
+      return fs.readdirSync(d)
+        .filter(looksLikeTape)
+        .sort((a, b) => Number(/\(\d+\)/.test(a)) - Number(/\(\d+\)/.test(b)) || a.localeCompare(b))
+        .map((f) => path.join(d, f));
+    } catch { return []; }
   }),
 ].filter(Boolean);
 
@@ -170,7 +189,12 @@ if (!FROM_DB && !IN) {
     console.error(`  (either works as a shell variable or as a line in .env.local)\n`);
     console.error(`tried, in order:`);
     for (const p of csvCandidates) console.error(`  ${p}`);
-    console.error("");
+    console.error(`\nWHICH MACHINE: run this where the tape lives — the dev box, not the VPS.`);
+    console.error(`  public/data/bars-${SYM}.json is a COMMITTED artifact. It reaches the VPS`);
+    console.error(`  through git + "docker compose build" (the Dockerfile does COPY . .), so a`);
+    console.error(`  copy written into a checkout on the server is outside the running`);
+    console.error(`  container AND is discarded by the next deploy. Build it locally, commit`);
+    console.error(`  public/data/bars-${SYM}.json, push.\n`);
     process.exit(1);
   }
   console.log(`resolved ${SYM} CSV → ${IN}   (pass --in or --from-db to override)`);

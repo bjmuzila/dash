@@ -1,5 +1,82 @@
 # Changelog
 
+## 2026-08-20 (f) - Stat Prompter: Daily timeframe, and a build path that can actually be run
+
+Edited: `components/scanner/StatPrompterTab.tsx`, `scripts/build-bar-stats.mjs`,
+`package.json`, `.gitignore`.
+
+(Re-logged - the earlier entries for this work were lost when CHANGELOG.md was
+overwritten by a concurrent edit.)
+
+### The feature
+
+**Daily** is now an option in the Timeframe dropdown of the "Autocorrelation,
+variance ratio & streaks - is this thing trending or reverting?" prompt (Bar
+Stats), alongside 1 / 5 / 15 / 30 min.
+
+- The builder rolls the same 1-minute tape up to one bar per session (open =
+  first bar's open, high/low = session extremes, close = last bar's close,
+  volume summed) and writes it as `auto.D`.
+- **Daily returns cross the session boundary on purpose.** Every intraday series
+  in that script refuses to pair across sessions; daily is the one exception,
+  because the overnight gap IS part of a close-to-close daily return. Noted in
+  the file's methodology header so it doesn't get "fixed".
+- **Daily streaks span sessions** and are measured close-to-CLOSE, not
+  green/red candle - the same quantity the daily ACF and VR are built on, so the
+  three views can't disagree about which days were up. (Intraday keeps the
+  green-bar definition with a run that resets at the open.) Verified on a
+  fixture where every session is green intraday but closes alternate up/down:
+  daily reports run=1 only at 0% continuation while the 5m book still shows
+  unbroken runs.
+- **Sample-size guards:** daily ACF lags are capped at one-tenth of the sample,
+  and a VR horizon is only emitted with >= 12 non-overlapping windows.
+- UI units follow the timeframe - "3 days" instead of a NaN minute count, "bar"
+  becomes "day", the ACF `n` column shows sessions, and each view carries a
+  daily caveat (gap inclusion, the ~+/-2/sqrt(N) noise band, how few independent
+  observations a 16-day VR really has). A book built before this change shows a
+  "rebuild with this command" note rather than the generic "no bar stats" one.
+
+### Being able to rebuild it
+
+The stat book was only reachable by retyping a full CSV path, which is why it
+never got rebuilt. `npm run bars:es` / `bars:nq` / `bars` now exist, pass
+`--all-hours`, and resolve the tape themselves. `--in` still wins when given.
+
+- **How the deployed files were actually built** (they record it themselves):
+  `ESU6 - 1 min - ETH.csv` and `NQU6 - 1 min - ETH.csv`, 24h, ~2,880 sessions,
+  2017-04-17 -> 2026-07-19, on 2026-07-20. Reproduce that and you are only
+  ADDING the daily series; build from anything thinner and you quietly replace
+  every number in the tab.
+- **Search order:** `--in`, then `$BAR_STATS_<SYM>_CSV`, then - in
+  `$BAR_STATS_CSV_DIR`, `public/data`, `data`, cwd, and `~/Downloads` - the
+  exact filename the existing book names in its `source` field, then
+  `<SYM>_1min.csv`, then anything matching `<SYM>... 1 min....csv`. Duplicate
+  downloads (`"... ETH (1).csv"`) sort last. `~/Downloads` is included because
+  these are 165 MB / 67 MB broker exports that land there and are far too big to
+  move into the repo.
+- **`--from-db`** reads 1-minute rows from `es_candles` over `DATABASE_URL`.
+  Byte-identical output over the same bars (verified against a real Postgres
+  with the production DDL) - but NOT the same bars: `es_candles` holds ~2 years,
+  RTH-only at the backfill's default. Convenient source, not the complete one.
+  NQ stays on CSV: `nq_candles` is keyed `UNIQUE("slotKey")` with no interval in
+  the key, so it is a 5-minute table and `--from-db` refuses it.
+- **Three guards.** A build that is shorter or narrower than the book on disk
+  refuses to overwrite it (`--force` to override), printing both rows and the
+  specific fix. `--all-hours` on a source with no overnight bars is a hard error
+  instead of a file stamped `24h` containing none. A table with no 1-minute rows
+  errors with the intervals it does have.
+- **Wrong-machine note.** `npm run bars` was first run on the VPS
+  (`/opt/dashboard`). The tapes aren't there, and `public/data/bars-*.json` is a
+  committed artifact that reaches production via git + `docker compose build`
+  (`COPY . .`) - a copy written into a server checkout is outside the running
+  container and is discarded by the next deploy. The failure message now says
+  so. Build locally -> commit `public/data/bars-*.json` -> push.
+- **`.gitignore`:** `public/data/*_1min.csv`, `data/*_1min.csv`, `/*_1min.csv`,
+  so a parked tape can't be committed.
+
+**To populate Daily:** `npm run bars` on the laptop, then commit
+`public/data/bars-ES.json` / `bars-NQ.json` and push.
+
 ## 2026-08-20 (e) - Phone build: PREP tab replaces EM
 
 Added: `components/mobile/pages/MobilePrep.tsx`, `components/pages/premarket/postMarketData.ts`,
