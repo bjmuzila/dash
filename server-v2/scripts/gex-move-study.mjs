@@ -55,10 +55,18 @@
  *      --selftest demonstrates the inflation directly, on data with a known
  *      answer, so this is not taken on faith.
  *
- * 3. SPLITS. `spot` is raw and unadjusted, so a 10:1 split prints a −90%
- *    "return" that will dominate any bucket it lands in.
- *    → |ret| > MAX_ABS_RET is dropped, and the count of drops is REPORTED. A
- *      silent filter here would quietly delete real crash days too.
+ * 3. SPLITS — AND THE OVERCORRECTION THAT IS WORSE THAN THEM. `spot` is raw and
+ *    unadjusted, so a 10:1 split prints −90%. The first version dropped
+ *    anything over ±25% for that reason, and on the very first live run it
+ *    deleted MRNA +166% on 2026-08-19 — which was not a split but real Phase 3
+ *    melanoma data. For a study of whether BIG MOVES matter, dropping the
+ *    biggest moves is selection bias pointed straight at the variable of
+ *    interest, and does more damage than the splits ever would.
+ *    → The hard drop now only catches the physically implausible (>500%). The
+ *      tail is WINSORIZED per day instead, so an extreme session keeps its rank
+ *      and its sign and stays in the sample while its leverage is capped. Every
+ *      session over ±35% is PRINTED, kept, and left for a human to judge — a
+ *      clean ratio is a split, anything else is probably a real event.
  *
  * 4. "NEXT DAY" MUST MEAN THE NEXT RECORDED SESSION. Dates are not contiguous:
  *    holidays, weekends, and any symbol whose chain failed at 16:05.
@@ -97,9 +105,33 @@ const LOOKBACK_DAYS = Number(flag('days', 400));
  *  are dropped — with 8 symbols the daily slope is noise that the outer t-test
  *  would then treat as an equal-weight observation. */
 const MIN_SYMBOLS_PER_DAY = Number(flag('min-symbols', 25));
-/** Split guard. 25% in a session is possible for a single name but rare; the
- *  report prints what was dropped so this stays a judgement call, not a hide. */
-const MAX_ABS_RET = Number(flag('max-abs-ret', 0.25));
+/**
+ * HARD DROP — only for values a real session cannot produce.
+ *
+ * This started at 25% and was WRONG, in the specific way that matters most
+ * here. On the first live run it deleted MRNA 2026-08-19 (+166%), which was not
+ * a split: Moderna genuinely moved ~177% on positive Phase 3 melanoma data. The
+ * guard threw away the single largest real observation in the panel.
+ *
+ * For a study about whether BIG MOVES predict anything, dropping the biggest
+ * moves is selection bias aimed exactly at the variable of interest — far more
+ * damaging than the split contamination it was defending against. Biotech
+ * binary events routinely produce 50–200% sessions and they are real data.
+ *
+ * So the hard drop is now reserved for the physically implausible (a 10:1 split
+ * prints +900%), and the tail is WINSORIZED instead — see WINSOR_Q.
+ */
+const HARD_DROP_RET = Number(flag('hard-drop', 5.0));
+/**
+ * Winsorize the daily cross-section of returns at this quantile and its mirror.
+ * 1% of ~169 symbols ≈ 1.7 names a tail. This is the standard treatment in the
+ * Fama-MacBeth literature and it is the right one: an extreme day keeps its
+ * RANK and its sign — it stays the biggest mover, and stays in the sample —
+ * while its leverage over a mean is capped. Dropping changes the sample;
+ * winsorizing changes only the magnitude of the tail.
+ * Set --winsor 0 to disable.
+ */
+const WINSOR_Q = Number(flag('winsor', 0.01));
 /** Calendar days a "next session" pair may span. 5 covers a normal weekend and
  *  a Monday holiday; more than that is not a next-day test. */
 const MAX_GAP_DAYS = Number(flag('max-gap', 5));
@@ -288,8 +320,23 @@ function buildPanel(bySymbol, diag) {
       const fwd_ret = f1.spot / f0.spot - 1;
       const ret_t = gapPrev <= MAX_GAP_DAYS ? f0.spot / fPrev.spot - 1 : null;
       if (!Number.isFinite(fwd_ret)) continue;
-      if (Math.abs(fwd_ret) > MAX_ABS_RET) { diag.splitDrops.push({ symbol, date: d0, fwd_ret }); continue; }
-      if (ret_t != null && Math.abs(ret_t) > MAX_ABS_RET) { diag.splitDrops.push({ symbol, date: dPrev, fwd_ret: ret_t }); continue; }
+      // Reported with BOTH dates and BOTH spots. The first version logged only
+      // the feature date (d0) and the return, which pointed at 2026-08-18 when
+      // the anomalous price was on the 19th — actively misleading when the
+      // whole purpose of the line is to let someone go look at the print.
+      if (Math.abs(fwd_ret) > HARD_DROP_RET) {
+        diag.hardDrops.push({ symbol, from: d0, to: d1, fromSpot: f0.spot, toSpot: f1.spot, ret: fwd_ret });
+        continue;
+      }
+      if (ret_t != null && Math.abs(ret_t) > HARD_DROP_RET) {
+        diag.hardDrops.push({ symbol, from: dPrev, to: d0, fromSpot: fPrev.spot, toSpot: f0.spot, ret: ret_t });
+        continue;
+      }
+      // Everything else is kept — including the 166% ones. Extremes are logged
+      // for eyeballing, not removed.
+      if (Math.abs(fwd_ret) > 0.35) {
+        diag.extremes.push({ symbol, from: d0, to: d1, fromSpot: f0.spot, toSpot: f1.spot, ret: fwd_ret });
+      }
 
       // Δ z-score over the trailing window, this symbol only.
       const win = dnets.slice(Math.max(0, i - DZ_WINDOW), i);
@@ -310,6 +357,47 @@ function buildPanel(bySymbol, diag) {
     }
   }
   return panel;
+}
+
+/**
+ * Cap the daily cross-sectional tails of the outcome at WINSOR_Q / 1−WINSOR_Q.
+ *
+ * Per DAY, not pooled: the thing being tamed is one name's leverage over that
+ * day's cross-sectional slope, which is the unit Fama-MacBeth actually averages.
+ * A pooled winsorization would also flatten genuinely volatile whole-market
+ * days, which are real and are not outliers.
+ *
+ * fwd_abs is recomputed from the capped return rather than winsorized
+ * separately, so |fwd_ret| and fwd_abs cannot disagree about the same row.
+ */
+function winsorize(panel, q) {
+  if (!(q > 0)) return { capped: 0 };
+  const byDate = new Map();
+  for (const r of panel) {
+    if (!byDate.has(r.date)) byDate.set(r.date, []);
+    byDate.get(r.date).push(r);
+  }
+  let capped = 0;
+  for (const [, rows] of byDate) {
+    if (rows.length < 20) continue;
+    const sorted = rows.map((r) => r.fwd_ret).sort((a, b) => a - b);
+    // k = how many observations to pull in from EACH end. Interpolating a
+    // quantile index instead lands on the extremes themselves for small n —
+    // at n=100, q=0.01 gives floor(0.99)=0 and ceil(98.01)=99, i.e. lo=min and
+    // hi=max, and nothing is capped at all. Counting inward is unambiguous.
+    // k < 1 means the cross-section is too thin to identify a tail, so that day
+    // is left alone rather than having its single most extreme name clipped on
+    // no evidence.
+    const k = Math.floor(q * sorted.length);
+    if (k < 1) continue;
+    const lo = sorted[k];
+    const hi = sorted[sorted.length - 1 - k];
+    for (const r of rows) {
+      const v = Math.min(hi, Math.max(lo, r.fwd_ret));
+      if (v !== r.fwd_ret) { r.fwd_ret = v; r.fwd_abs = Math.abs(v); capped++; }
+    }
+  }
+  return { capped };
 }
 
 // ── Fama-MacBeth ────────────────────────────────────────────────────────────
@@ -472,8 +560,9 @@ async function main() {
   }
   await pool.end();
 
-  const diag = { gapDrops: 0, splitDrops: [] };
+  const diag = { gapDrops: 0, hardDrops: [], extremes: [] };
   const panel = buildPanel(bySymbol, diag);
+  diag.winsor = winsorize(panel, WINSOR_Q);
   report(panel, diag, bySymbol.size);
 }
 
@@ -484,11 +573,19 @@ function report(panel, diag, nSymbols) {
   console.log(`\n${'═'.repeat(78)}\nPANEL`);
   console.log(`  symbols ${nSymbols} · days ${days.size} · rows ${panel.length}`);
   console.log(`  dropped: ${diag.gapDrops} pairs spanning >${MAX_GAP_DAYS} calendar days`);
-  console.log(`  dropped: ${diag.splitDrops.length} rows with |ret| > ${(MAX_ABS_RET * 100).toFixed(0)}% (probable splits)`);
-  for (const d of diag.splitDrops.slice(0, 8)) {
-    console.log(`           ${d.symbol} ${d.date} ${(d.fwd_ret * 100).toFixed(1)}%`);
+  console.log(`  dropped: ${diag.hardDrops.length} rows with |ret| > ${(HARD_DROP_RET * 100).toFixed(0)}% (implausible — splits/bad prints)`);
+  for (const d of (diag.hardDrops || []).slice(0, 8)) {
+    console.log(`           ${d.symbol}  ${d.from} ${d.fromSpot} → ${d.to} ${d.toSpot}  ${(d.ret * 100).toFixed(1)}%`);
   }
-  if (diag.splitDrops.length > 8) console.log(`           … and ${diag.splitDrops.length - 8} more`);
+  console.log(`  winsorized: ${diag.winsor?.capped ?? 0} rows at the ${(WINSOR_Q * 100).toFixed(0)}/${(100 - WINSOR_Q * 100).toFixed(0)} daily quantiles`);
+  if (diag.extremes?.length) {
+    console.log(`  KEPT, for eyeballing — ${diag.extremes.length} sessions over ±35%:`);
+    for (const d of [...diag.extremes].sort((a, b) => Math.abs(b.ret) - Math.abs(a.ret)).slice(0, 8)) {
+      console.log(`           ${d.symbol}  ${d.from} ${d.fromSpot} → ${d.to} ${d.toSpot}  ${(d.ret * 100).toFixed(1)}%`);
+    }
+    console.log(`           A clean ratio (×2, ×0.5, ×10) is a split. Anything else is probably real —`);
+    console.log(`           MRNA +166% on 2026-08-19 was Phase 3 melanoma data, not a split.`);
+  }
 
   console.log(`\nBASE RATE — what next day does unconditionally`);
   console.log(`  mean ${bp(mean(rets))} bp · median ${bp(median(rets))} bp · sd ${bp(sd(rets))} bp`);
@@ -724,23 +821,63 @@ function selftest() {
     Math.abs(pt) > Math.abs(fm.t) * 3,
     `pooled ${pt.toFixed(1)} vs FM ${fm.t.toFixed(2)}`);
 
-  // 4. guards
-  const diag = { gapDrops: 0, splitDrops: [] };
-  const bySym = new Map([['X', new Map([
-    ['2026-01-02', { spot: 100, ladder: [{ strike: 95, gex: -5 }, { strike: 98, gex: -2 }, { strike: 100, gex: 1 }, { strike: 102, gex: 4 }, { strike: 105, gex: 6 }] }],
-    ['2026-01-05', { spot: 101, ladder: [{ strike: 95, gex: -5 }, { strike: 98, gex: -2 }, { strike: 100, gex: 1 }, { strike: 102, gex: 4 }, { strike: 105, gex: 6 }] }],
-    ['2026-01-06', { spot: 10, ladder: [{ strike: 95, gex: -5 }, { strike: 98, gex: -2 }, { strike: 100, gex: 1 }, { strike: 102, gex: 4 }, { strike: 105, gex: 6 }] }],
-  ])]]);
-  buildPanel(bySym, diag);
-  check('split guard fires on a 10:1', diag.splitDrops.length === 1,
-    `${diag.splitDrops.length} dropped`);
+  // 4. GUARDS — and the asymmetry that makes filtering by magnitude hopeless.
+  //
+  //    A 1:10 REVERSE split prints +900% and is caught. A 10:1 FORWARD split
+  //    prints −90% and is NOT, because a real biotech failure prints −85% and
+  //    there is no magnitude that separates them. That is not a gap in the
+  //    guard, it is the reason the guard was replaced with winsorizing: you
+  //    cannot classify these by size, so the honest move is to keep them, cap
+  //    their leverage, and print them for a human.
+  const LAD = [{ strike: 95, gex: -5 }, { strike: 98, gex: -2 }, { strike: 100, gex: 1 },
+    { strike: 102, gex: 4 }, { strike: 105, gex: 6 }];
+  const mkDiag = () => ({ gapDrops: 0, hardDrops: [], extremes: [] });
 
-  const diag2 = { gapDrops: 0, splitDrops: [] };
-  const lad = [{ strike: 95, gex: -5 }, { strike: 98, gex: -2 }, { strike: 100, gex: 1 }, { strike: 102, gex: 4 }, { strike: 105, gex: 6 }];
+  const dRev = mkDiag();
   buildPanel(new Map([['X', new Map([
-    ['2026-01-02', { spot: 100, ladder: lad }],
-    ['2026-01-05', { spot: 101, ladder: lad }],
-    ['2026-02-20', { spot: 102, ladder: lad }],
+    ['2026-01-02', { spot: 10, ladder: LAD }],
+    ['2026-01-05', { spot: 10.1, ladder: LAD }],
+    ['2026-01-06', { spot: 101, ladder: LAD }],   // 1:10 reverse — +900%
+  ])]]), dRev);
+  check('hard drop catches a 1:10 reverse split', dRev.hardDrops.length === 1,
+    `${dRev.hardDrops.length} dropped`);
+
+  const dReal = mkDiag();
+  const pReal = buildPanel(new Map([['X', new Map([
+    ['2026-01-02', { spot: 100, ladder: LAD }],
+    ['2026-01-05', { spot: 101, ladder: LAD }],
+    ['2026-01-06', { spot: 38, ladder: LAD }],    // −62%: real collapse, or a split
+  ])]]), dReal);
+  check('a −62% session is KEPT, not deleted', dReal.hardDrops.length === 0 && pReal.length === 1,
+    `${dReal.hardDrops.length} dropped, ${pReal.length} rows kept`);
+  check('…and flagged for eyeballing', dReal.extremes.length === 1,
+    `${dReal.extremes.length} flagged`);
+  check('…with both dates and both spots, not just the feature date',
+    dReal.extremes[0]?.from === '2026-01-05' && dReal.extremes[0]?.to === '2026-01-06'
+    && dReal.extremes[0]?.toSpot === 38,
+    `${dReal.extremes[0]?.from} ${dReal.extremes[0]?.fromSpot} → ${dReal.extremes[0]?.to} ${dReal.extremes[0]?.toSpot}`);
+
+  // Winsorizing must cap the tail WITHOUT changing the sample size, and must
+  // leave the extreme row still the most extreme — that is the whole point.
+  const wp = synth({ days: 40, symbols: 100, beta: 0, seed: 3 });
+  const before = wp.length;
+  const target = wp[0]; target.fwd_ret = 4.0; target.fwd_abs = 4.0;
+  const wres = winsorize(wp, 0.01);
+  const dayRows = wp.filter((r) => r.date === target.date);
+  const stillMax = Math.max(...dayRows.map((r) => r.fwd_ret)) === target.fwd_ret;
+  check('winsorize keeps every row', wp.length === before, `${wp.length} rows`);
+  check('winsorize caps the tail', wres.capped > 0 && target.fwd_ret < 4.0,
+    `${wres.capped} capped, 400% → ${(target.fwd_ret * 100).toFixed(1)}%`);
+  check('winsorized extreme is still the day\'s largest', stillMax,
+    'rank preserved');
+  check('fwd_abs stays consistent with fwd_ret',
+    Math.abs(target.fwd_abs - Math.abs(target.fwd_ret)) < 1e-12, 'in sync');
+
+  const diag2 = mkDiag();
+  buildPanel(new Map([['X', new Map([
+    ['2026-01-02', { spot: 100, ladder: LAD }],
+    ['2026-01-05', { spot: 101, ladder: LAD }],
+    ['2026-02-20', { spot: 102, ladder: LAD }],
   ])]]), diag2);
   check('gap guard drops a 46-day "next session"', diag2.gapDrops === 1, `${diag2.gapDrops} dropped`);
 
