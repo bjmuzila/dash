@@ -105,6 +105,22 @@ const MAX_ABS_RET = Number(flag('max-abs-ret', 0.25));
 const MAX_GAP_DAYS = Number(flag('max-gap', 5));
 /** Trailing window for the per-symbol Δ z-score — "big for THIS name". */
 const DZ_WINDOW = Number(flag('dz-window', 60));
+/**
+ * Below this many usable days the script prints a verdict and NO tables.
+ *
+ * Learned the hard way on the first live run: the table was 6 sessions old, the
+ * Fama-MacBeth column correctly printed "—" for every feature, and the pooled-t
+ * column beside it printed 4.89, 4.09 and −3.88 — three publishable-looking
+ * numbers produced by 169 correlated symbols across 4 days being counted as 674
+ * independent observations. A dash and a false positive sitting in the same row
+ * is worse than no output: the eye lands on the number that isn't blank.
+ *
+ * 20 is the floor for showing anything at all; 60 is the floor for believing
+ * it. --force overrides, for when you want to watch the shape develop and know
+ * exactly what you are looking at.
+ */
+const MIN_STUDY_DAYS = Number(flag('min-days', 20));
+const TRUSTWORTHY_DAYS = 60;
 
 // ── tiny stats ──────────────────────────────────────────────────────────────
 const mean = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : NaN);
@@ -479,6 +495,38 @@ function report(panel, diag, nSymbols) {
   console.log(`  mean |ret| ${bp(mean(panel.map((r) => r.fwd_abs)))} bp`);
   console.log(`  up days ${pc(rets.filter((x) => x > 0).length / rets.length)}`);
   console.log(`  → any feature below has to beat THIS, not zero.`);
+
+  // ── NOT-ENOUGH-DATA GATE ─────────────────────────────────────────────────
+  if (days.size < MIN_STUDY_DAYS && !has('force')) {
+    const short = TRUSTWORTHY_DAYS - days.size;
+    const weeks = Math.ceil(short / 5);
+    const ready = new Date(Date.now() + weeks * 7 * 86400000).toISOString().slice(0, 10);
+    console.log(`\n${'═'.repeat(78)}`);
+    console.log(`  NOT ENOUGH DATA — ${days.size} usable day${days.size === 1 ? '' : 's'}, need ~${TRUSTWORTHY_DAYS}.`);
+    console.log(`${'═'.repeat(78)}`);
+    console.log(`  No feature table is printed, deliberately. With this few days the`);
+    console.log(`  Fama-MacBeth column can only print "—", and the pooled column beside`);
+    console.log(`  it would still print numbers — inflated ones, because a handful of`);
+    console.log(`  days of 169 correlated symbols is not a sample. A dash and a false`);
+    console.log(`  positive in the same row is worse than no output.`);
+    console.log(``);
+    console.log(`  Nothing is wrong with the recorder. Coverage is complete:`);
+    console.log(`  ${nSymbols} symbols, ${panel.length} rows, ${diag.gapDrops} gap drops. It is just young.`);
+    console.log(``);
+    console.log(`  ~${short} more sessions ≈ ${weeks} weeks → re-run around ${ready}.`);
+    console.log(`  By then the oi_* series will be the same age as net_gex, so run it`);
+    console.log(`  on the SETTLED basis and ignore the contaminated Δ entirely.`);
+    console.log(``);
+    console.log(`  --force prints the tables anyway, if you want to watch the shape`);
+    console.log(`  develop and know exactly what you are looking at.`);
+    console.log(`${'═'.repeat(78)}`);
+    return;
+  }
+
+  if (days.size < TRUSTWORTHY_DAYS) {
+    console.log(`\n  ⚠ ${days.size} days is thin — treat everything below as provisional.`);
+    console.log(`    ~${TRUSTWORTHY_DAYS} days before any of it is worth acting on.`);
+  }
 
   section('LEVELS — clean on the full history', LEVEL_FEATURES, panel,
     '  These read net_gex LEVELS, which are sound for the whole retention.\n'

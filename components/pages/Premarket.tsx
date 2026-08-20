@@ -47,6 +47,7 @@ import { useMobileGex } from "@/hooks/useMobileGex";
 import { useEsCandles } from "@/hooks/useEsCandles";
 import { useEconCalendar } from "@/hooks/useEconCalendar";
 import { isStale } from "@/lib/econCalendar";
+import PostMarketTab, { POSTMARKET_CSS } from "@/components/pages/premarket/PostMarketTab";
 import {
   netGEXOf,
   callGEXOf,
@@ -268,6 +269,8 @@ const CSS = `
 const RTH_OPEN_MIN = 9 * 60 + 30;
 const RTH_CLOSE_MIN = 16 * 60;
 const EOD_KEY = "cb-premarket-eod-v1";
+/** Which tab the user last chose, for this browser session only. */
+const TAB_KEY = "cb-premarket-tab-v1";
 
 /** ET wall clock: calendar date + minutes since midnight. */
 function etWall(now = Date.now()): { date: string; minutes: number } {
@@ -773,18 +776,73 @@ export default function Premarket() {
 
   const feedLabel = source === "live" ? (connected ? "LIVE" : "RECONNECTING") : source === "rest" ? "REST FALLBACK" : "PAUSED";
 
+  // ── PRE / POST tab ─────────────────────────────────────────────────────────
+  // The page answers a different question before the open than it does after the
+  // close, so it carries both and picks the one that matches the clock: Premarket
+  // until 09:30, Post-Market from 16:05 (the settle, not the bell — the last
+  // frames still land in those five minutes). Between them either is defensible,
+  // so the last manual choice wins and is remembered for the session; once the
+  // user picks a tab, the clock never moves it again.
+  const afterClose = etMin >= RTH_CLOSE_MIN + 5;
+  const [tab, setTab] = useState<"pre" | "post">("pre");
+  const tabPinned = useRef(false);
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem(TAB_KEY);
+      if (saved === "pre" || saved === "post") { tabPinned.current = true; setTab(saved); }
+    } catch { /* private mode — fall through to the clock */ }
+  }, []);
+  useEffect(() => {
+    if (tabPinned.current) return;
+    setTab(afterClose ? "post" : "pre");
+  }, [afterClose]);
+  const pickTab = useCallback((t: "pre" | "post") => {
+    tabPinned.current = true;
+    setTab(t);
+    try { sessionStorage.setItem(TAB_KEY, t); } catch { /* nothing to do */ }
+  }, []);
+
   return (
     <div className="pmk" style={{ flex: 1, minHeight: 0 }}>
-      <style dangerouslySetInnerHTML={{ __html: CSS }} />
+      <style dangerouslySetInnerHTML={{ __html: CSS + POSTMARKET_CSS }} />
       <div className="wrap">
 
         <div className="pagehead">
-          <h1>Premarket Prep</h1>
+          <h1>{tab === "post" ? "Post-Market Recap" : "Premarket Prep"}</h1>
           <span className="badge-concept">
             {isZeroDte ? "0DTE" : "FRONT"} {expiry || "—"} · {feedLabel} · {openLabel}
           </span>
+          <div className="tabs" style={{ marginLeft: "auto" }}>
+            <button className={tab === "pre" ? "on" : ""} onClick={() => pickTab("pre")}>Premarket</button>
+            <button className={tab === "post" ? "on" : ""} onClick={() => pickTab("post")}>
+              <span className="tdot" style={{ background: afterClose ? "var(--blue)" : "#55606e" }} />
+              Post-Market
+            </button>
+          </div>
         </div>
 
+        {tab === "post" ? (
+          <PostMarketTab
+            spot={spot}
+            esFut={esFut}
+            basis={basis}
+            flip={flip}
+            callWall={callWall}
+            putWall={putWall}
+            totalNetGex={totalNetGex ?? null}
+            perStrike={perStrike}
+            coreBullseye={coreBullseye}
+            maxPain={maxPain}
+            em={em}
+            totals={totals}
+            overnight={overnight}
+            candles={sessionCandles}
+            expiry={expiry || ""}
+            etDate={etDate}
+            etMin={etMin}
+            hasData={hasData}
+          />
+        ) : (
         <section className={`prep${posGamma ? "" : " is-neg"}`}>
 
           {/* ── 1. REGIME ─────────────────────────────────────────────────── */}
@@ -1358,6 +1416,7 @@ export default function Premarket() {
             </div>
           </div>
         </section>
+        )}
       </div>
     </div>
   );

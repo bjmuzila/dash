@@ -1104,17 +1104,60 @@ function StructuralRange({ a, spot }: { a: Analysis; spot: number | null }) {
   const ringCall = heaviest?.at === "call";
   const ringPut = heaviest?.at === "put";
 
-  const tick = (v: number, color: string, cap: string, ring: boolean, tip: string) => (
+  /**
+   * Assign each tick a row, left to right, dropping to row 1 when it would sit
+   * within MIN_TICK_GAP of the one before it.
+   *
+   * The threshold is a fraction of the AXIS, while the thing it is protecting
+   * against (label overlap) is a px quantity — so it is calibrated for the pane
+   * this actually renders in (~1,200px, where a ~50px label is ~4%) with head
+   * room. On a much narrower card it will stagger a little more eagerly than
+   * strictly needed, which costs 26px of height and no information.
+   */
+  const MIN_TICK_GAP = 7;
+  const TICK_ROW_H = 26;
+  const placed = (() => {
+    const list = [
+      { v: putWall.strike, color: RANGE_COLORS.put, cap: "PUT SUPP", ring: ringPut,
+        tip: `Largest negative rung below spot${ringPut ? " — and the heaviest gamma on the whole board" : ""}. Where dealer hedging buys into weakness.` },
+      ...(flipIn ? [{ v: flipNow as number, color: RANGE_COLORS.flip, cap: "FLIP", ring: false,
+        tip: "Zero crossing of the cumulative ladder. Above it dealers dampen; below, they amplify." }] : []),
+      ...(heavyLoose ? [{ v: heavyLoose.strike, color: T.gold, cap: "HEAVIEST", ring: true,
+        tip: "The largest |gamma| rung on the board — and it is neither wall, so it is pinning weight the walls do not name." }] : []),
+      { v: callWall.strike, color: RANGE_COLORS.wall, cap: "CALL WALL", ring: ringCall,
+        tip: `Largest positive rung above spot${ringCall ? " — and the heaviest gamma on the whole board" : ""}. Where dealer hedging sells into strength.` },
+    ].sort((a, b) => a.v - b.v);
+    let lastPct = -Infinity, lastRow = 1, rows = 0;
+    const ticks = list.map((t) => {
+      const p = clamp(pct(t.v));
+      // Alternate rather than always-1: three crowded ticks in a row need
+      // 0,1,0 to stay apart, not 0,1,1.
+      const row = p - lastPct < MIN_TICK_GAP ? 1 - lastRow : 0;
+      lastPct = p; lastRow = row;
+      if (row > rows) rows = row;
+      return { ...t, row };
+    });
+    return { ticks, rows };
+  })();
+
+  const tick = (v: number, color: string, cap: string, ring: boolean, tip: string, row = 0) => (
     <div
       key={cap}
       title={tip}
-      style={{ position: "absolute", left: `${clamp(pct(v))}%`, top: 0, transform: "translateX(-50%)" }}
+      style={{ position: "absolute", left: `${clamp(pct(v))}%`, top: row * TICK_ROW_H, transform: "translateX(-50%)" }}
     >
       <div style={{
         fontFamily: MONO, fontSize: 14, fontWeight: 800, color, textAlign: "center",
         whiteSpace: "nowrap", lineHeight: 1.2,
       }}>
-        {ring ? "★ " : ""}{v.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+        {/* Decimals scaled to the price, not fixed at 2. The walls are real
+            strikes and land round, but the FLIP is interpolated, so on a 7,800
+            index it printed "7,823.64" — eight characters of which the last
+            three are 0.008% of the number. It was both the widest label on the
+            axis and the least informative part of it. ~0.01% resolution is the
+            rule: 0dp above 2,000, 1dp above 200, 2dp below. */}
+        {ring ? "★ " : ""}
+        {v.toLocaleString("en-US", { maximumFractionDigits: v >= 2000 ? 0 : v >= 200 ? 1 : 2 })}
       </div>
       <div style={{
         width: ring ? 4 : 2.5, height: 15, margin: "3px auto 0", borderRadius: 2, background: color,
@@ -1139,6 +1182,25 @@ function StructuralRange({ a, spot }: { a: Analysis; spot: number | null }) {
           {lo.toLocaleString("en-US")} — {hi.toLocaleString("en-US")}
         </span>
       </div>
+
+      {/* ── THE AXIS, INSET FROM THE CARD ──────────────────────────────────
+          The span IS wall-to-wall, so the two wall ticks sit at exactly 0% and
+          100% and their labels — centred on the tick — hung half outside the
+          card and clipped. Insetting the whole axis fixes it at the source
+          rather than by special-casing the end labels' alignment, which would
+          leave them visibly off-centre from their own ticks.
+
+          ONE wrapper around BOTH the zone strip and the tick row, so the two
+          share a coordinate space and the flip tick lands exactly on the
+          AMPLIFY/DAMPEN seam. Padding them separately would drift them apart.
+          (It has to be margin on a shared wrapper, not padding: `left: %` on an
+          absolutely positioned child resolves against the ancestor's PADDING
+          box, so padding here would offset the zones and not the ticks.)
+
+          clamp() rather than a flat %: the overhang it has to absorb is half a
+          label, which is a px quantity, so a bare 6% is too little on a narrow
+          card and pointlessly wide on a big one. */}
+      <div style={{ margin: "0 clamp(30px, 6%, 64px)" }}>
 
       {/* Zones. flex-grow is the point-span, so the widths are to scale — an
           evenly-divided strip would be a lie about where the flip sits.
@@ -1176,16 +1238,19 @@ function StructuralRange({ a, spot }: { a: Analysis; spot: number | null }) {
         ))}
       </div>
 
-      <div style={{ position: "relative", height: 52, marginTop: 6 }}>
-        {tick(putWall.strike, RANGE_COLORS.put, "PUT SUPP", ringPut,
-          `Largest negative rung below spot${ringPut ? " — and the heaviest gamma on the whole board" : ""}. Where dealer hedging buys into weakness.`)}
-        {flipIn && tick(flipNow as number, RANGE_COLORS.flip, "FLIP", false,
-          "Zero crossing of the cumulative ladder. Above it dealers dampen; below, they amplify.")}
-        {heavyLoose && tick(heavyLoose.strike, T.gold, "HEAVIEST", true,
-          "The largest |gamma| rung on the board — and it is neither wall, so it is pinning weight the walls do not name.")}
-        {tick(callWall.strike, RANGE_COLORS.wall, "CALL WALL", ringCall,
-          `Largest positive rung above spot${ringCall ? " — and the heaviest gamma on the whole board" : ""}. Where dealer hedging sells into strength.`)}
+      {/* Ticks, STAGGERED when they crowd.
+          The flip can legitimately sit right on top of a wall — a book whose
+          crossing has walked up to the call wall is a real and interesting
+          state — and two centred labels ~50px wide cannot share the same 7% of
+          the axis. Rather than drop one (the flip is the divider; losing it is
+          worse than any layout) a crowded tick falls to a second row.
+          Everything stays on screen and stays readable, and the container grows
+          only when a stagger actually happened. */}
+      <div style={{ position: "relative", height: 52 + placed.rows * TICK_ROW_H, marginTop: 6 }}>
+        {placed.ticks.map((t) => tick(t.v, t.color, t.cap, t.ring, t.tip, t.row))}
       </div>
+
+      </div>{/* /axis inset */}
 
       {gravity ? (
         <div
