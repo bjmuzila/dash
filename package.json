@@ -1,6 +1,6 @@
 {
     "name":  "bzila-dashboard",
-    "version":  "v8.20.3",
+    "version":  "v8.20.4",
     "private":  true,
     "workspaces":  [
 
@@ -13,6 +13,9 @@
                     "analyze":  "node -e \"process.env.ANALYZE=\u0027true\u0027;require(\u0027child_process\u0027).execSync(\u0027next build --no-lint\u0027,{stdio:\u0027inherit\u0027,env:process.env})\"",
                     "test":  "tsx --test tests/**/*.test.ts",
                     "test:snapshot":  "node scripts/snapshot-fixtures.mjs",
+                    "bars:es":  "node scripts/build-bar-stats.mjs --sym ES --all-hours",
+                    "bars:nq":  "node scripts/build-bar-stats.mjs --sym NQ --all-hours",
+                    "bars":  "npm run bars:es \u0026\u0026 npm run bars:nq",
                     "start":  "node server-v2/server-with-proxy.js",
                     "bot":  "node discord-bot.js",
                     "bot:register":  "node register-commands.js"

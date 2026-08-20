@@ -44,7 +44,11 @@ export const MOBILE_TABS: MobileTab[] = [
   { id: "heatmap", path: "/m/heatmap", label: "Heat",  title: "GEX Heatmap",        icon: "grid",     accent: ORANGE },
   { id: "es",      path: "/m/es",      label: "ES",    title: "ES Candles",         icon: "candles",  accent: BLUE },
   { id: "chain",   path: "/m/chain",   label: "Chain", title: "Option Chain",       icon: "chain",    accent: GREEN },
-  { id: "em",      path: "/m/em",      label: "EM",    title: "Estimated Moves",    icon: "moves",    accent: SKY },
+  // Replaced the Estimated Moves tab on 2026-08-20. EM was one number a day and
+  // it still has a phone page at /m/em (route kept, just not in the bar) plus
+  // the desktop /em page; this slot now carries the screen you actually open
+  // before the bell and again after the close.
+  { id: "prep",    path: "/m/prep",    label: "Prep",  title: "Premarket Prep",     icon: "moves",    accent: SKY },
   { id: "econ",    path: "/m/econ",    label: "Cal",   title: "Economic Calendar",  icon: "calendar", accent: ORANGE },
 ];
 
@@ -65,6 +69,7 @@ export const DESKTOP_TO_MOBILE: Record<string, string> = {
   "/es-candles": "/m/es",
   "/options-chain": "/m/chain",
   "/em": "/m/em",
+  "/premarket": "/m/prep",
   "/economic-calendar": "/m/econ",
 };
 
@@ -75,6 +80,7 @@ export const MOBILE_TO_DESKTOP: Record<string, string> = {
   "/m/es": "/es-candles",
   "/m/chain": "/options-chain",
   "/m/em": "/em",
+  "/m/prep": "/premarket",
   "/m/econ": "/economic-calendar",
 };
 

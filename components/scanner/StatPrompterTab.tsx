@@ -192,7 +192,7 @@ const TF_OPT = {
 const MISSING = (sym: string): Result => ({
   headline: `No bar stats for ${sym} yet.`,
   rows: [],
-  caveat: `Run:  node scripts/build-bar-stats.mjs --sym ${sym} --in "<path-to-${sym}-1min.csv>"  — it writes public/data/bars-${sym}.json from your raw 1-minute CSV. The browser never loads the CSV itself, only the aggregates.`,
+  caveat: `Run:  npm run bars:${sym.toLowerCase()}  (or  node scripts/build-bar-stats.mjs --sym ${sym} --in "<path-to-${sym}-1min.csv>"  to point at the tape explicitly) — it writes public/data/bars-${sym}.json from your raw 1-minute CSV. The browser never loads the CSV itself, only the aggregates.`,
 });
 
 /* small predicates over the slim day */
@@ -1578,7 +1578,7 @@ const PROMPTS: Prompt[] = [
           ? {
               headline: `No daily stat book for ${B.symbol} yet.`,
               rows: [],
-              caveat: `Daily bars were added to the builder after this ${B.symbol} export was written. Rebuild it:  node scripts/build-bar-stats.mjs --sym ${B.symbol} --in "<path-to-${B.symbol}-1min.csv>"  — the daily series is rolled up from the same 1-minute CSV, so nothing else changes.`,
+              caveat: `Daily bars were added to the builder after this ${B.symbol} export was written. Rebuild it with  npm run bars:${B.symbol.toLowerCase()}  (or  node scripts/build-bar-stats.mjs --sym ${B.symbol} --in "<path-to-${B.symbol}-1min.csv>"  if the CSV isn't in one of the default spots yet). The daily series is rolled up from the same 1-minute tape, so nothing else in the file changes.`,
             }
           : MISSING(B.symbol);
       /** one step at this timeframe, in words — "15 min" intraday, "3 days" daily */
@@ -1615,7 +1615,7 @@ const PROMPTS: Prompt[] = [
           verdict:
             "The RATE column answers it directly: at 2 in a row, that's your odds of a 3rd; at 3, your odds of a 4th; and so on. On index futures each step sits within a point or two of 50%, so the streak itself carries almost no directional edge — but 'reach from fresh' still falls off fast because you're multiplying near-coin-flips (≈50% → 25% → 12%…). If a single step is meaningfully off 50, check the bar count before trusting it.",
           caveat: isD
-            ? `A run here is consecutive UP or DOWN closes and it spans sessions — that's the point of a daily streak. Watch the n column: with ~${B.sessions} sessions there are only a few hundred daily observations total, so the 5-and-6-in-a-row rows are a handful of samples and mean nothing. ${dailyNote}`
+            ? `A run here is consecutive higher (or lower) CLOSES — close-to-close, not green/red candles — and it spans sessions, which is the point of a daily streak. That's the same definition the VR and ACF views use, so the three agree on which days were up. Watch the n column: ~${B.sessions} sessions is only a few hundred observations in total, so the 5- and 6-in-a-row rows are a handful of samples and mean nothing. ${dailyNote}`
             : undefined,
         };
       }

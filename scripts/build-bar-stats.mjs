@@ -9,13 +9,55 @@
  *   node scripts/build-bar-stats.mjs --sym ES --in "C:\path\to\ES_1min.csv"
  *   node scripts/build-bar-stats.mjs --sym NQ --in "C:\path\to\NQ_1min.csv" --all-hours
  *
+ * …or skip the CSV entirely and read the app's own database, which already has
+ * the tape:
+ *
+ *   node scripts/build-bar-stats.mjs --sym ES --from-db
+ *   npm run bars:es / bars:nq / bars      # both symbols, --all-hours, no paths
+ *
+ * WHAT THE DEPLOYED FILES WERE BUILT FROM (2026-07-20)
+ *   ES: "ESU6 - 1 min - ETH.csv"   24h · 2,883 sessions · 2017-04-17 → 2026-07-19
+ *   NQ: "NQU6 - 1 min - ETH.csv"   24h · 2,842 sessions · 2017-04-17 → 2026-07-19
+ * Nine years of overnight-inclusive tape. Reproduce that and you are only
+ * ADDING the daily series; build from anything thinner and you are quietly
+ * replacing every number in the tab. The npm scripts pass --all-hours for that
+ * reason, auto-resolution prefers the exact file the existing book names in its
+ * `source` field, and a build that comes out shorter or narrower than the file
+ * already on disk refuses to overwrite it without --force.
+ *
+ * SOURCE RESOLUTION
+ *   --in <csv>  an explicit raw 1-minute CSV. Always wins if given.
+ *   --from-db   1-minute rows from es_candles / nq_candles via DATABASE_URL
+ *               (.env.local). Nothing to download — but see the caveat below.
+ *   neither     search $BAR_STATS_<SYM>_CSV, then, in $BAR_STATS_CSV_DIR /
+ *               public/data / data / cwd: the filename the existing book was
+ *               built from, then <SYM>_1min.csv, then anything matching
+ *               "<SYM>… 1 min….csv" (so "ESU6 - 1 min - ETH.csv" is found).
+ *               Those folders are gitignored for *_1min.csv — the raw tapes are
+ *               hundreds of MB and must never reach the repo or the VPS.
+ *
+ * Both sources produce a byte-identical file apart from the `source` field —
+ * over the same bars. They do NOT hold the same bars: es_candles only goes back
+ * as far as dxFeed would serve scripts/backfill-es-1m.js (~2 years, and RTH
+ * only at its default BACKFILL_RTH_ONLY=1), against nine years of 24h tape in
+ * the CSVs. --from-db is the convenient source, not the complete one.
+ *
+ * WHY NQ IS STILL A CSV: nq_candles is keyed UNIQUE("slotKey") with no interval
+ * in the key, so it only ever holds 5-minute bars — a 1-minute write would
+ * collide with the 5-minute row of the same clock time. es_candles got the
+ * composite key (scripts/migrate-es-candles-composite-key.sql) and holds 1m.
+ * --from-db refuses a table with no 1-minute rows rather than silently building
+ * a file whose every timeframe label is a lie.
+ *
  * INPUT FORMAT (same as lib/ibStats.ts parseCsv — whatever you feed
  * ib-backtest-esu6.html will work):
  *     YYYYMMDD HHMMSS,open,high,low,close,volume
  *
  * FLAGS
  *   --sym ES|NQ        symbol label (default ES)
- *   --in <path>        the CSV (required)
+ *   --from-db          read 1m bars from es_candles / nq_candles (DATABASE_URL)
+ *   --in <path>        the CSV (optional — see the resolution order above)
+ *   --force            overwrite an existing book with a shorter/narrower one
  *   --all-hours        keep the full 24h session (default: RTH 09:30–16:00 only)
  *   --out <path>       override the output file
  *
@@ -51,23 +93,172 @@ const arg = (k, d = null) => {
   return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : d;
 };
 const SYM = (arg("sym", "ES") || "ES").toUpperCase();
-const IN = arg("in");
 const ALL_HOURS = argv.includes("--all-hours");
 const OUT = arg("out", path.join(process.cwd(), "public", "data", `bars-${SYM}.json`));
+const FROM_DB = argv.includes("--from-db");
+const FORCE = argv.includes("--force");
 
-if (!IN) {
-  console.error("usage: node scripts/build-bar-stats.mjs --sym ES --in <path-to-1min.csv>");
-  process.exit(1);
+const RTH_OPEN = 570;   // 09:30 ET
+const RTH_CLOSE = 960;  // 16:00 ET
+
+try {
+  // .env.local is where the rest of the repo keeps DATABASE_URL and local paths.
+  const dotenv = await import("dotenv");
+  dotenv.default.config({ path: path.join(process.cwd(), ".env.local"), quiet: true });
+} catch {
+  /* dotenv absent or no .env.local — env vars still work, defaults still work */
 }
-if (!fs.existsSync(IN)) {
+
+/* ── where the bars come from ───────────────────────────────────────────────
+ * Two sources, and the app's own database is the default one:
+ *
+ *   --from-db   read 1-minute bars straight out of es_candles / nq_candles.
+ *               This is what `npm run bars` uses. No file to find, no path to
+ *               remember, and it picks up whatever the recorders and
+ *               scripts/backfill-es-1m.js have accumulated.
+ *   --in <csv>  the original path — a raw 1-minute CSV export. Still wins if
+ *               given, and still the only way to build from a tape that was
+ *               never loaded into the DB.
+ *
+ * With neither, we look for a CSV in a few conventional spots so a parked file
+ * Just Works. Those spots are gitignored: the raw tapes are hundreds of MB and
+ * must never reach the repo or the VPS.
+ * ─────────────────────────────────────────────────────────────────────────── */
+const CANDLE_TABLE = { ES: "es_candles", NQ: "nq_candles" }[SYM];
+
+/** folders searched for a tape, in order */
+const csvDirs = [
+  process.env.BAR_STATS_CSV_DIR,
+  path.join(process.cwd(), "public", "data"),
+  path.join(process.cwd(), "data"),
+  process.cwd(),
+].filter(Boolean);
+
+/** what the file already on disk was built from, so a rebuild can find the
+ *  SAME tape rather than a different one that happens to be lying around */
+const priorSource = (() => {
+  try {
+    const s = JSON.parse(fs.readFileSync(OUT, "utf8")).source;
+    return typeof s === "string" && s.toLowerCase().endsWith(".csv") ? s : null;
+  } catch { return null; }
+})();
+
+/** "ESU6 - 1 min - ETH.csv", "NQU6 - 1 min - RTH.csv", "ES_1min.csv", … */
+const looksLikeTape = (f) => new RegExp(`^${SYM}[A-Z]?\\d*[ _-]*(-\\s*)?1\\s*_?min`, "i").test(f) && /\.csv$/i.test(f);
+
+const csvCandidates = [
+  process.env[`BAR_STATS_${SYM}_CSV`],
+  ...(priorSource ? csvDirs.map((d) => path.join(d, priorSource)) : []),
+  ...csvDirs.map((d) => path.join(d, `${SYM}_1min.csv`)),
+  // last resort: anything in those folders that reads like a 1-minute tape
+  ...csvDirs.flatMap((d) => {
+    try { return fs.readdirSync(d).filter(looksLikeTape).sort().map((f) => path.join(d, f)); }
+    catch { return []; }
+  }),
+].filter(Boolean);
+
+let IN = arg("in");
+if (!FROM_DB && !IN) {
+  IN = csvCandidates.find((p) => fs.existsSync(p)) || null;
+  if (!IN) {
+    console.error(`\nno source for ${SYM}. Pick one:\n`);
+    console.error(`  node scripts/build-bar-stats.mjs --sym ${SYM} --from-db          # read ${CANDLE_TABLE || "the candle table"}`);
+    console.error(`  node scripts/build-bar-stats.mjs --sym ${SYM} --in "<path-to-${SYM}-1min.csv>"\n`);
+    console.error(`…or park a CSV once and use "npm run bars:${SYM.toLowerCase()}" from then on:\n`);
+    console.error(`  BAR_STATS_${SYM}_CSV=<full path to the CSV>        # one symbol`);
+    console.error(`  BAR_STATS_CSV_DIR=<folder holding ${SYM}_1min.csv>   # both symbols`);
+    console.error(`  (either works as a shell variable or as a line in .env.local)\n`);
+    console.error(`tried, in order:`);
+    for (const p of csvCandidates) console.error(`  ${p}`);
+    console.error("");
+    process.exit(1);
+  }
+  console.log(`resolved ${SYM} CSV → ${IN}   (pass --in or --from-db to override)`);
+}
+if (IN && !fs.existsSync(IN)) {
   console.error(`no such file: ${IN}`);
   process.exit(1);
 }
 
-/* ── parse ────────────────────────────────────────────────────────────────── */
+/**
+ * Pull 1-minute bars out of the app database.
+ *
+ * The candle tables already store ET wall-clock in `date` (YYYY-MM-DD) and
+ * `time` (HH:MM), written by the recorders and by scripts/backfill-es-1m.js —
+ * so there is NO timezone conversion here, exactly as with the text CSV
+ * formats. Converting a stamp that is already ET would shift the whole session
+ * and silently move the open.
+ *
+ * ONE-MINUTE ONLY, deliberately. Everything downstream — the 1m time-of-day
+ * grid, ranges @1m, ACF @1m, and the resample() bucket math — assumes the input
+ * is 1-minute bars. Handing it 5-minute rows would produce a file that looks
+ * right and is wrong at every timeframe label, so a table with no 1m rows is a
+ * hard error that prints what it DOES have instead of quietly proceeding.
+ *
+ * NOTE on nq_candles: it is keyed UNIQUE("slotKey") with no interval in the
+ * key, unlike es_candles' composite key. If 1-minute NQ was ever written there
+ * it would collide with the 5-minute row of the same clock time, so in practice
+ * NQ is a 5-minute table and --from-db will (correctly) refuse it. Build NQ
+ * from a CSV until that table gets the same migration es_candles got.
+ */
+async function loadFromDb() {
+  if (!CANDLE_TABLE) {
+    console.error(`--from-db knows about ES and NQ only (got "${SYM}"). Use --in <csv>.`);
+    process.exit(1);
+  }
+  if (!process.env.DATABASE_URL) {
+    console.error(`\n--from-db needs DATABASE_URL. Put it in .env.local (same value the server uses),`);
+    console.error(`or build from a CSV instead:  --in "<path-to-${SYM}-1min.csv>"\n`);
+    process.exit(1);
+  }
+  const { default: pg } = await import("pg");
+  const pool = new pg.Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? undefined : { rejectUnauthorized: false },
+  });
+  const out = [];
+  try {
+    const { rows: have } = await pool.query(
+      `SELECT "intervalMinutes" AS iv, COUNT(*)::int AS n, MIN(date) AS lo, MAX(date) AS hi
+         FROM ${CANDLE_TABLE} GROUP BY 1 ORDER BY 1`
+    );
+    const oneMin = have.find((r) => Number(r.iv) === 1);
+    if (!oneMin || !oneMin.n) {
+      console.error(`\n${CANDLE_TABLE} has no 1-minute rows — this script cannot build from coarser bars.`);
+      console.error(`what's in there now:`);
+      for (const r of have) console.error(`  intervalMinutes=${r.iv ?? "NULL"}  ${Number(r.n).toLocaleString()} rows  ${r.lo} → ${r.hi}`);
+      if (SYM === "ES") console.error(`\nbackfill 1m first:  node scripts/backfill-es-1m.js`);
+      else console.error(`\nnq_candles is a 5-minute table (see the note above this function) — build NQ from a CSV with --in.`);
+      console.error("");
+      await pool.end();
+      process.exit(1);
+    }
+    console.log(`reading ${CANDLE_TABLE} @ 1m … (${oneMin.n.toLocaleString()} rows, ${oneMin.lo} → ${oneMin.hi})`);
+    const { rows } = await pool.query(
+      `SELECT date, time, open, high, low, close, volume
+         FROM ${CANDLE_TABLE}
+        WHERE "intervalMinutes" = 1
+        ORDER BY timestamp ASC`
+    );
+    let dropped = 0;
+    for (const r of rows) {
+      const m = /^(\d{2}):(\d{2})/.exec(String(r.time || ""));
+      if (!m || !/^\d{4}-\d{2}-\d{2}$/.test(String(r.date || ""))) { dropped++; continue; }
+      const min = +m[1] * 60 + +m[2];
+      if (!ALL_HOURS && (min < RTH_OPEN || min >= RTH_CLOSE)) continue;
+      const o = +r.open, h = +r.high, l = +r.low, c = +r.close;
+      if (![o, h, l, c].every(Number.isFinite) || h < l) { dropped++; continue; }
+      const v = Number(r.volume);
+      out.push({ date: r.date, min, o, h, l, c, v: Number.isFinite(v) ? v : 0 });
+    }
+    console.log(`  source: ${CANDLE_TABLE} · ${dropped.toLocaleString()} rows skipped (bad time/date/corrupt)`);
+  } finally {
+    await pool.end();
+  }
+  return out;
+}
 
-const RTH_OPEN = 570;   // 09:30 ET
-const RTH_CLOSE = 960;  // 16:00 ET
+/* ── parse ────────────────────────────────────────────────────────────────── */
 
 /**
  * Timestamp parsing — deliberately permissive, because every vendor exports a
@@ -116,57 +307,69 @@ function parseStamp(s) {
   return null;
 }
 
-console.log(`reading ${IN} …`);
-const text = fs.readFileSync(IN, "utf8");
-const lines = text.split(/\r?\n/);
-const delim = (lines.find((l) => l.trim()) || "").includes(";") ? ";" : ",";
+function parseCsv(file) {
+  console.log(`reading ${file} …`);
+  const text = fs.readFileSync(file, "utf8");
+  const lines = text.split(/\r?\n/);
+  const delim = (lines.find((l) => l.trim()) || "").includes(";") ? ";" : ",";
 
-/* Column layout: read it off the header if there is one, else assume the
- * classic positional ts,o,h,l,c,v. A header named "Volume" in column 9 is
- * exactly how you end up with garbage volume stats, so this is worth doing. */
-const head = (lines.find((l) => l.trim()) || "").split(delim).map((x) => x.trim().toLowerCase().replace(/^["']|["']$/g, ""));
-const hasHeader = head.some((h) => /^(open|high|low|close|time|date|datetime|timestamp)$/.test(h));
-const find = (...names) => head.findIndex((h) => names.includes(h));
-const IX = hasHeader
-  ? {
-      t: Math.max(0, find("time", "date", "datetime", "timestamp")),
-      o: find("open"), h: find("high"), l: find("low"), c: find("close"),
-      v: find("volume", "vol", "tickvolume", "tick volume"),
-      // a date+time split across two columns (Sierra does this)
-      t2: find("time") >= 0 && find("date") >= 0 ? find("time") : -1,
-    }
-  : { t: 0, o: 1, h: 2, l: 3, c: 4, v: 5, t2: -1 };
-const DATE_IX = hasHeader && IX.t2 >= 0 ? find("date") : IX.t;
+  /* Column layout: read it off the header if there is one, else assume the
+   * classic positional ts,o,h,l,c,v. A header named "Volume" in column 9 is
+   * exactly how you end up with garbage volume stats, so this is worth doing. */
+  const head = (lines.find((l) => l.trim()) || "").split(delim).map((x) => x.trim().toLowerCase().replace(/^["']|["']$/g, ""));
+  const hasHeader = head.some((h) => /^(open|high|low|close|time|date|datetime|timestamp)$/.test(h));
+  const find = (...names) => head.findIndex((h) => names.includes(h));
+  const IX = hasHeader
+    ? {
+        t: Math.max(0, find("time", "date", "datetime", "timestamp")),
+        o: find("open"), h: find("high"), l: find("low"), c: find("close"),
+        v: find("volume", "vol", "tickvolume", "tick volume"),
+        // a date+time split across two columns (Sierra does this)
+        t2: find("time") >= 0 && find("date") >= 0 ? find("time") : -1,
+      }
+    : { t: 0, o: 1, h: 2, l: 3, c: 4, v: 5, t2: -1 };
+  const DATE_IX = hasHeader && IX.t2 >= 0 ? find("date") : IX.t;
 
-const bars = [];
-let skipped = 0;
-for (const raw of lines) {
-  const line = raw.trim();
-  if (!line) continue;
-  const p = line.split(delim);
-  if (p.length < 5) continue;
+  const out = [];
+  let skipped = 0;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    const p = line.split(delim);
+    if (p.length < 5) continue;
 
-  const stamp = IX.t2 >= 0 ? `${p[DATE_IX]} ${p[IX.t2]}` : p[DATE_IX];
-  const ts = parseStamp(stamp ?? "");
-  if (!ts) { skipped++; continue; }                       // header row lands here too
-  if (!ALL_HOURS && (ts.min < RTH_OPEN || ts.min >= RTH_CLOSE)) continue;
+    const stamp = IX.t2 >= 0 ? `${p[DATE_IX]} ${p[IX.t2]}` : p[DATE_IX];
+    const ts = parseStamp(stamp ?? "");
+    if (!ts) { skipped++; continue; }                       // header row lands here too
+    if (!ALL_HOURS && (ts.min < RTH_OPEN || ts.min >= RTH_CLOSE)) continue;
 
-  const o = +p[IX.o], h = +p[IX.h], l = +p[IX.l], c = +p[IX.c];
-  const v = IX.v >= 0 ? +p[IX.v] : 0;
-  if (![o, h, l, c].every(Number.isFinite)) { skipped++; continue; }
-  if (h < l) { skipped++; continue; }                     // corrupt bar
+    const o = +p[IX.o], h = +p[IX.h], l = +p[IX.l], c = +p[IX.c];
+    const v = IX.v >= 0 ? +p[IX.v] : 0;
+    if (![o, h, l, c].every(Number.isFinite)) { skipped++; continue; }
+    if (h < l) { skipped++; continue; }                     // corrupt bar
 
-  bars.push({ date: ts.date, min: ts.min, o, h, l, c, v: Number.isFinite(v) ? v : 0 });
+    out.push({ date: ts.date, min: ts.min, o, h, l, c, v: Number.isFinite(v) ? v : 0 });
+  }
+
+  if (!out.length) {
+    console.error(`\nparsed 0 bars from ${file}`);
+    console.error(`  delimiter: "${delim}"   header detected: ${hasHeader}`);
+    console.error(`  first line: ${(lines.find((l) => l.trim()) || "").slice(0, 120)}`);
+    console.error(`\nSupported timestamps: "20240102 093000", "2024-01-02 09:30:00", ISO, "01/02/2024 09:30", unix epoch.`);
+    process.exit(1);
+  }
+  console.log(`  format: ${hasHeader ? "header row" : "positional"} · delim "${delim}" · ${skipped.toLocaleString()} lines skipped (header/bad/corrupt)`);
+  return out;
 }
+
+const bars = FROM_DB ? await loadFromDb() : parseCsv(IN);
+/** what the output file records as its origin */
+const SOURCE = FROM_DB ? `${CANDLE_TABLE}@1m` : path.basename(IN);
 
 if (!bars.length) {
-  console.error(`\nparsed 0 bars from ${IN}`);
-  console.error(`  delimiter: "${delim}"   header detected: ${hasHeader}`);
-  console.error(`  first line: ${(lines.find((l) => l.trim()) || "").slice(0, 120)}`);
-  console.error(`\nSupported timestamps: "20240102 093000", "2024-01-02 09:30:00", ISO, "01/02/2024 09:30", unix epoch.`);
+  console.error(`\nno usable bars for ${SYM}${FROM_DB ? ` in ${CANDLE_TABLE}` : ` in ${IN}`}.`);
   process.exit(1);
 }
-console.log(`  format: ${hasHeader ? "header row" : "positional"} · delim "${delim}" · ${skipped.toLocaleString()} lines skipped (header/bad/corrupt)`);
 
 /* group into sessions */
 const byDay = new Map();
@@ -180,6 +383,21 @@ const sessions = [...byDay.entries()]
   .filter((s) => s.bars.length >= 60);   // drop half-days / broken feeds
 
 console.log(`${bars.length.toLocaleString()} bars · ${sessions.length} sessions · ${sessions[0].date} → ${sessions[sessions.length - 1].date}`);
+
+/* --all-hours only says "keep the overnight bars"; it cannot create them. An
+ * RTH-only source (es_candles filled by scripts/backfill-es-1m.js at its
+ * default BACKFILL_RTH_ONLY=1, or an "- RTH" export) would sail straight
+ * through and write a file stamped hours:"24h" containing no overnight data —
+ * a label that lies to every consumer and to the overwrite guard below. */
+if (ALL_HOURS && !bars.some((b) => b.min < RTH_OPEN || b.min >= RTH_CLOSE)) {
+  console.error(`\n--all-hours was passed but every bar is inside RTH (09:30–16:00 ET).`);
+  console.error(`  source: ${SOURCE}`);
+  console.error(`\nThis source has no overnight session, so a 24h build is impossible.`);
+  if (FROM_DB) console.error(`  → ${CANDLE_TABLE} was filled RTH-only. Re-run the backfill with BACKFILL_RTH_ONLY=0.`);
+  else console.error(`  → point --in at an ETH export rather than an RTH one.`);
+  console.error(`  → or drop --all-hours and build the RTH book instead.\n`);
+  process.exit(1);
+}
 
 /* ── helpers ──────────────────────────────────────────────────────────────── */
 
@@ -430,19 +648,26 @@ function varianceRatio(seqs, q) {
  *  `groups` is a list of bar arrays a run may never cross — one per session for
  *  the intraday timeframes, and a SINGLE array for the daily series, where the
  *  run is supposed to span sessions because that is what a daily streak is. */
-function streaksOver(groups, withHour = true) {
+function streaksOver(groups, { withHour = true, closeToClose = false } = {}) {
   const out = new Map();       // k → { cont, n }
   const byHour = new Map();    // "k|hour" → { cont, n }
   for (const B of groups) {
+    // Intraday a bar is "up" if it closed above its OWN open (a green bar).
+    // Daily it is "up" if it closed above the PREVIOUS close — that's what an
+    // up day means, and it's the same quantity the daily ACF/VR are built on,
+    // so the three views can't disagree about which days were up.
+    const dirAt = (i) =>
+      closeToClose
+        ? (i === 0 ? 0 : B[i].c > B[i - 1].c ? 1 : B[i].c < B[i - 1].c ? -1 : 0)
+        : B[i].c > B[i].o ? 1 : B[i].c < B[i].o ? -1 : 0;
     let run = 0, dir = 0;
     for (let i = 0; i < B.length - 1; i++) {
-      const d = B[i].c > B[i].o ? 1 : B[i].c < B[i].o ? -1 : 0;
+      const d = dirAt(i);
       if (d === 0) { run = 0; dir = 0; continue; }
       run = d === dir ? run + 1 : 1;
       dir = d;
       if (run < 1 || run > 6) continue;
-      const nx = B[i + 1];
-      const nd = nx.c > nx.o ? 1 : nx.c < nx.o ? -1 : 0;
+      const nd = dirAt(i + 1);
       if (nd === 0) continue;
       const cont = nd === dir;
       const targets = withHour
@@ -467,7 +692,7 @@ function streaksOver(groups, withHour = true) {
   };
 }
 
-const streaks = (tf) => streaksOver(RS[tf].map((s) => s.bars), true);
+const streaks = (tf) => streaksOver(RS[tf].map((s) => s.bars), { withHour: true });
 
 /* ── DAILY series ───────────────────────────────────────────────────────────
  * One bar per session, rolled up from the same 1m tape: open = first bar's
@@ -527,7 +752,7 @@ for (const tf of [1, 5, 15, 30]) {
     acf: Array.from({ length: maxLag }, (_, i) => ({ lag: i + 1, v: acf(seqs, i + 1) })),
     acfAbs: Array.from({ length: maxLag }, (_, i) => ({ lag: i + 1, v: acf(abs, i + 1) })),
     vr: [2, 4, 8, 16].filter((q) => n / q >= 12).map((q) => ({ q, v: varianceRatio(seqs, q) })),
-    streaks: streaksOver([dailyBars], false),
+    streaks: streaksOver([dailyBars], { withHour: false, closeToClose: true }),
   };
   console.log(`  daily: ${dailyBars.length} sessions → ${n} close-to-close returns · ACF to lag ${maxLag} · VR @ ${auto.D.vr.map((x) => x.q).join("/") || "none (too few days)"}`);
 }
@@ -601,7 +826,7 @@ console.log(`  ref candles: 08:00 both=${refCandles.am8.both}/${refCandles.am8.n
 const out = {
   symbol: SYM,
   generated: new Date().toISOString(),
-  source: path.basename(IN),
+  source: SOURCE,
   hours: ALL_HOURS ? "24h" : "RTH 09:30–16:00 ET",
   sessions: sessions.length,
   bars: bars.length,
@@ -649,6 +874,42 @@ for (const [name, tf, cells] of [["hour", 60, tod.hour], ["min30", 30, tod.min30
   }
 }
 console.log(`  sanity: bucket grids intact (${tod.hour.length}h / ${tod.min30.length}×30m / ${tod.min5.length}×5m / ${tod.min1.length}×1m cells)`);
+
+/* ── don't silently shrink the book that's already deployed ─────────────────
+ * The shipped bars-*.json were built on 2026-07-20 from nine years of 24h tape
+ * ("ESU6 - 1 min - ETH.csv", 2017-04-17 → 2026-07-19, ~2,900 sessions). Two
+ * ways to accidentally replace that with something much thinner:
+ *
+ *   • --from-db. es_candles only holds what dxFeed would serve the backfill,
+ *     which caps around two years — a fine series, an eighth of the history.
+ *   • forgetting --all-hours. An RTH build drops every premarket bar, which
+ *     also empties refCandles.am8 (the 08:00 reference candle prompt) and
+ *     changes every time-of-day, ACF and VR number in the tab.
+ *
+ * Neither is wrong on purpose, but neither is "just adding the Daily view", so
+ * a build that is shorter or narrower than the file on disk stops here.
+ * ─────────────────────────────────────────────────────────────────────────── */
+if (fs.existsSync(OUT) && !FORCE) {
+  let prev = null;
+  try { prev = JSON.parse(fs.readFileSync(OUT, "utf8")); } catch { /* unreadable → just overwrite */ }
+  const shorter = prev && Number(prev.sessions) > out.sessions;
+  const narrower = prev && prev.hours && prev.hours !== out.hours;
+  if (shorter || narrower) {
+    const line = (t, x) => `  ${t.padEnd(9)} ${String(x.hours).padEnd(4)} · ${String(x.sessions).padStart(5)} sessions · ${x.from} → ${x.to} · from ${x.source}`;
+    console.error(`\nthis build is ${shorter ? "SHORTER" : ""}${shorter && narrower ? " and " : ""}${narrower ? "NARROWER" : ""} than the ${path.basename(OUT)} already on disk:\n`);
+    console.error(line("existing:", prev));
+    console.error(line("new:", out));
+    if (narrower && prev.hours === "24h") {
+      console.error(`\n  → add --all-hours to keep the overnight session (and refCandles.am8, the 08:00 prompt).`);
+    }
+    if (shorter && FROM_DB) {
+      console.error(`  → --from-db is capped at what es_candles holds. The original build used a`);
+      console.error(`    full-history CSV export ("${prev.source}"); point --in at it to keep all ${prev.sessions} sessions.`);
+    }
+    console.error(`\nrefusing to overwrite. Re-run with --force if the smaller book is what you want.\n`);
+    process.exit(1);
+  }
+}
 
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, JSON.stringify(out));

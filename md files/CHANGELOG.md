@@ -1,539 +1,221 @@
 # Changelog
 
-## 2026-08-20 (e) - Stat Prompter: Daily timeframe on the autocorrelation / VR / streaks prompt
-
-Edited: `components/scanner/StatPrompterTab.tsx`, `scripts/build-bar-stats.mjs`.
-
-The "Autocorrelation, variance ratio & streaks - is this thing trending or
-reverting?" prompt (Bar Stats) now has **Daily** in its Timeframe dropdown,
-alongside 1 / 5 / 15 / 30 min.
-
-- **Builder (`build-bar-stats.mjs`)** rolls the same 1-minute CSV up to one bar
-  per session (open = first bar's open, high/low = session extremes, close =
-  last bar's close, volume summed) and writes it as `auto.D` in
-  `public/data/bars-<SYM>.json`. No new input file - it is the existing tape.
-- **Daily returns cross the session boundary on purpose.** Every intraday
-  series in that script refuses to pair across sessions; the daily series is
-  the one exception, because the overnight gap *is* part of a close-to-close
-  daily return. Documented in the file's methodology header so the next reader
-  doesn't "fix" it.
-- **Daily streaks also span sessions** - 3 up days in a row is the point.
-  `streaks(tf)` was generalised to `streaksOver(groups, withHour)`; intraday
-  passes one group per session, daily passes a single group and skips the
-  by-hour breakdown (meaningless at this horizon).
-- **Sample-size guards:** daily ACF lags are capped at one-tenth of the sample
-  (so a short export shows fewer than 20 rows instead of 20 rows of noise), and
-  a VR horizon is only emitted if there are >= 12 non-overlapping windows.
-- **UI units follow the timeframe.** VR/ACF row labels read "3 days" instead of
-  a NaN minute count, "bar" becomes "day" in the copy, the ACF `n` column shows
-  sessions rather than 1-minute bars, and each view gains a daily-specific
-  caveat (gap inclusion, the ~+/-2/sqrt(N) ACF noise band, and how few
-  independent observations a 16-day VR actually has).
-- **Graceful on stale data:** a `bars-<SYM>.json` built before this change has
-  no `auto.D`, so picking Daily shows a "rebuild with this command" note rather
-  than the generic "no bar stats" one.
-
-**Action required to see numbers:** rebuild the stat book -
-`node scripts/build-bar-stats.mjs --sym ES --in "<path-to-ES-1min.csv>"`
-(add `--all-hours` for the globex build). Nothing else changes in the output.
-
-## 2026-08-20 (d) - Multi Greek: SPX spot/ATM now derived from ES
-
-Edited: `app/mult-greek/MultGreekClient.tsx`.
-
-The SPX panel's header price and ATM row came from `/api/chains`
-`underlyingPrice`, which only moves when the 15s chain loop runs - and out of
-cash hours does not move at all. SPX sat at the 16:00 print all night while ES
-traded.
-
-- **New `useSpxFromEs()` hook** (local to the page). Subscribes to the shared
-  `/ws/gex` socket with `topics: ["spot", "aux"]` and derives SPX from the live
-  ES future using the repo's standard convention: `basis = ES - SPX`, so
-  `SPX = ES - basis`.
-- **Basis ladder**, same shape as `EsChartCard`'s `effectiveBasis` minus the
-  chart-only tiers: live ws `basis` (server holds the last good one when one leg
-  goes stale) -> the roll-corrected daily anchor from `/proxy/es-spx-basis`
-  (polled every 30 min) -> server `spotDisplay` -> raw `spot`.
-- **Cash hours are untouched.** While `isCashOpen()` and the feed has an SPX
-  print, that print IS the index and wins outright - no conversion.
-- `isPlausibleBasis` / `isCashOpen` are imported from
-  `components/dashboard/es-candles/chartMath` rather than re-implemented, so
-  there is one definition of what a real basis is.
-- **Only SPX is touched.** SPY / QQQ / the 4th slot keep their chain price. A
-  new `effectiveSpots` memo (`spots` with SPX overridden) is what the header,
-  the ATM row, `strikeGex`, the GEX-history sampler and the level snapshot all
-  read, so they can never disagree about where spot is.
-- **Render cost bounded:** ES frames land in refs; one 2s publish tick promotes
-  the value to state, and only when the 2dp value actually changed.
-- Delayed/static viewers and replay mode are unaffected - static never opens a
-  socket, replay still renders each frame's recorded spot.
-
-## 2026-08-20 (c) - Social Media: GEX chart basis toggle (OI + VOL / VOL)
-
-Edited: `owner-vite/src/pages/SocialMedia.tsx`.
-
-Every live GEX chart on owner.cbedge.net -> Social Media can now be weighted
-two ways, and SPX opens on volume-only before the bell.
-
-- **New `BasisToggle`** (OI + VOL | VOL) + a `useChartBasis(ticker)` hook, both
-  local to `SocialMedia.tsx`. The toggle maps to the `GexChart` `dataMode` prop
-  that already existed (`"oi-vol"` / `"vol-only"`), so no chart or calc code
-  changed - `owner-vite/src/gex/GexChart.tsx` and `calc.ts` are untouched.
-- **Wired into all three chart sites:** the GEX Image Card ("Live GEX profile",
-  chart card only - the heatmap has no basis), the Post Generator's attached
-  GEX profile, and the Day Posts inline GEX visual. Each keeps its own pick.
-- **Premarket default:** `defaultChartBasis()` returns `"vol"` when the ticker
-  is SPX and it is before 09:30 ET, otherwise `"oivol"`. Rationale: overnight
-  the OI leg is still yesterday's book, so premarket the volume leg is the only
-  fresh signal. After the bell it reverts to OI + VOL.
-- The default re-evaluates when the ticker changes, but **only until the user
-  clicks the toggle** - a manual pick sticks for the session.
-- The Explainer tab's existing `gexBasis` (which re-pulls `/api/social-media/
-  daily-input`) now seeds from the same `defaultChartBasis()` rule instead of
-  hardcoded `"oivol"`, so the two surfaces agree premarket. Its toggle is
-  unchanged.
-
-## 2026-08-20 (b) - Calendar pane: Option A (heat grid) built
-
-Edited: `components/pages/Trading.tsx`.
-
-Picked from the four mockups in `generated/2026-08-20-journal-calendar-options.html`.
-The Calendar pane's grid is now the heat grid, replacing the flat 52px cells.
-
-- **Tint = size.** Cell background is the day's tone at `0.10 + 0.30 *
-  (|pnl| / calMaxAbs)`, so a $2k day and a $60 day no longer read alike.
-  `calMaxAbs` is the biggest |P&L| in the MONTH ON SCREEN — the heat is
-  relative to that month, not to an absolute dollar ramp, and it re-scales as
-  you page. Floored at 1 so a flat month can't divide by zero; alpha floors at
-  .10 so a small day is still legibly green/red.
-- **Cells** are 78px, radius 9: day number + trade dots on top (capped at 6),
-  P&L at 15px/800 and `{n}T · {win}%` beneath. Untraded days drop to 0.42
-  opacity with an em dash — present, but not competing.
-- `calCells` now carries `trades` and `winRate`. Win rate is **trade-weighted**
-  across the day's rows (a day can hold two accounts, or a manual row beside an
-  imported one) — averaging the percentages would let a 1-trade row outvote a
-  20-trade one.
-- **Selected-day strip** under the grid: date, Net P&L, Trades, Win %, Per
-  trade, Clear. The click already filtered every other pane; this makes the
-  filter readable without leaving the calendar.
-- Hover lift is `hoverDay` state, not CSS `:hover` — the page root carries
-  `.no-card-lift` and the cells are inline-styled with no class name a
-  stylesheet can reach.
-- Colors come from `T.green` / `T.red` through the existing local `rgba()`
-  helper (previously dead code). No new hex literals.
-
-## 2026-08-20 (a) - Trade journal opens on the calendar
-
-Edited: `components/pages/Trading.tsx`.
-Added: `generated/2026-08-20-journal-calendar-options.html` (mockup, not wired).
-
-The journaling page (`/app/trading`) opened on the **Leaks** pane, and the
-Session Calendar sat at the bottom of the **Journal** pane — four scrolls down.
-The first thing a journaling page shows should be the month, not a leak card.
-
-- New **Calendar** pane, first in `PANES`, and the page's default (`useState<PaneKey>("calendar")`).
-- The calendar `Card` moved out of the Journal pane into that pane on its own;
-  cells grew from 52px to 72px and the P&L figure from 12px to 14px now that the
-  grid is not competing with three tables above it.
-- Journal pane keeps By Account / Session vs Targets / Journal Log / Trades.
-- Clicking a day still sets `selectedDay`, which filters every other pane — the
-  calendar is the entry point into the page, not a dead-end view.
-
-Mockup with four calendar designs (heat grid / ledger + weekly totals / column
-cells / chips) rendered to `generated/` for a design pick. None of them are wired
-into the page yet — the pane above still uses the existing grid.
-
-## 2026-08-19 (n) - Structural Range: GEX % replaces Gravity
-
-Edited: `owner-vite/src/pages/GexGrowth.tsx`.
-
-Gravity was the share of |gamma| sitting below vs above spot. The home page GEX
-chart already draws the distribution around price, so the strip was repeating a
-picture that exists two clicks away.
-
-Replaced with **GEX %** — the share of |gamma| carried by call-dominant rungs vs
-put-dominant ones. Split by the SIGN of each strike rather than by which side of
-spot it sits on, so it answers the other question: not *where the weight is*,
-but *which way the book leans*. Same two-tone meter, `+γ 68% / 32% −γ`, with a
-one-word read beside it so the number does not need interpreting.
-
-The "balanced" band is ±5 points around 50. 51/49 is not a lean, and calling it
-one would make the label flicker daily.
-
-### Noted in the code because it will otherwise get re-added
-
-GEX % is **exactly `net_norm` rescaled** — `posShare = (net_norm + 1) / 2`,
-algebraically, always. `gex-move-study.mjs` already tests that quantity under
-the name `net_norm`. They are one number in two dresses: do not display both,
-and do not put both in a regression. Verified across five ladders (all-positive,
-all-negative, balanced, call lean, put lean); the identity holds to 1e-12 and
-the two shares sum to 1 in every case.
-
-`Analysis.gravity` is gone rather than kept alongside — two ways of saying "the
-book leans" sitting in the same card is how a page starts contradicting itself.
-
-Rendered at call-dominant / balanced / put-dominant to confirm the label switches
-where it should and the meter tracks the split.
-
-
-## 2026-08-19 (m) - Research: what price did AT the level, not whether it predicts
-
-Added: `server-v2/scripts/gex-level-reaction.mjs`.
-
-Different question from (i), and one the data can answer **today**.
-
-`gex-move-study.mjs` asks whether a level *predicts* the next day — a claim about
-a population, needing ~60 sessions before a t-stat means anything. With 6
-sessions it correctly refuses to print.
-
-This asks what price *did* at a level: reached it or not, held or broke, how far
-past, how long it sat there, and whether it marked the day's extreme. Those are
-events that either happened or didn't. One session is already a real
-observation.
-
-### The data was already there
-
-`etf_candles` carries **1-minute OHLC** for SPY, QQQ, NDX, VIX, AAPL, AMD, AMZN,
-GOOGL, META, MSFT, NVDA, SPCX and TSLA. Twelve of those also have recorded GEX
-levels in `eod_strike_gex`. The intersection is the coverage, and the script
-reports it first rather than assuming it.
-
-### No lookahead, by construction
-
-Session T is measured against levels from **T−1's 16:05 sweep** — on the board,
-unchangeable, before T opened. Using T's own recorded levels would be circular:
-that snapshot is taken after the price action it is being asked to explain and
-already contains it.
-
-### Measured per level per day
-
-Each level is classified by which side of the prior close it sits on, because
-that decides what "reached" and "held" mean at all — above is resistance, below
-is support. Then: `reached`, `held` (no more than 0.1% past), `excursion`,
-`pinned` (minutes closing within 0.25%), `closed_beyond`, and `extreme_gap` —
-how close the level was to the day's actual high or low. That last one is the
-strongest thing a wall can do and is **completely invisible to a close-to-close
-study**.
-
-Two deliberate choices in the output:
-
-- **Counts, not rates.** "18 of 31 held" is a fact; "58% hold rate" invites a
-  conclusion this sample cannot carry.
-- **Banded by starting distance.** A level 0.1% from the prior close is reached
-  by accident nearly every day. NEAR/MID/FAR keeps that from being counted as
-  evidence that levels get reached, and the extreme-gap table excludes NEAR
-  entirely for the same reason.
-
-Stated in the header and worth repeating: *held* is not causation. Price
-stopping at a wall is equally consistent with the wall causing it and with the
-wall having formed where resistance already was.
-
-### Self-test
-
-18 assertions against sessions whose shape is obvious by construction — a rally
-that stops dead on the level, one that blows through to +3%, one that never
-arrives, the support mirror, and a plunge *before* the touch that must not count
-against the level.
-
-Caught one bug in the test fixture rather than the code: HEAVIEST can only be
-"neither wall" when it is a **positive** rung below spot or a negative one above
-— anything else is by definition one of the two walls. The original fixture
-asked for an impossible case.
-
+## 2026-08-20 (e) - Phone build: PREP tab replaces EM
+
+Added: `components/mobile/pages/MobilePrep.tsx`, `components/pages/premarket/postMarketData.ts`,
+`app/app/m/prep/route.ts`.
+Edited: `components/mobile/mobileNav.ts`, `app-vite/src/App.tsx`,
+`components/pages/premarket/PostMarketTab.tsx`.
+
+The Estimated Moves tab in the bottom bar is now **Prep** — Premarket Prep and
+the Post-Market Recap on one phone screen, with the same PRE / POST switch as the
+desktop page. EM was one number a day; this is the screen you actually open
+before the bell and again after the close.
 
-## 2026-08-19 (l) - gex-move-study: the split guard was deleting real events
-
-Edited: `server-v2/scripts/gex-move-study.mjs`.
+All three registry edits were made (the ones mobileNav's header lists): the tab,
+the `lazy()` route in `App.tsx`, and `app/app/m/prep/route.ts` — miss the third
+and the tab works in-app but the URL 404s on a hard refresh.
+
+### The data layer came out of the desktop tab
+
+`postMarketData.ts` is new but not new code: the recorded-ladder hook, the SAVED
+wall grades (`/proxy/walls`) and the next-expiry structure were lifted out of
+`PostMarketTab.tsx` the moment a second surface needed them. Both screens now
+read the same hooks, so the phone can never disagree with the laptop about how
+the day went — and the phone chunk does not pull the desktop tab's markup in to
+get at them.
+
+### Phone-specific, not a squeezed desktop page
+
+- The desktop's horizontal level rail becomes a VERTICAL ladder: CW / CB / SPOT /
+  FLIP / PW as rows, sorted high to low, distance from spot on the right. Five
+  labels across 358px overlap; five rows do not, and they need no legend.
+- PRE carries regime, the shared `LevelsBar`, the ladder, expected range, the
+  overnight card and one base-case sentence.
+- POST carries the verdict, net GEX open → now, the three recorded level grades
+  (with the recorder's own reaction badge), and tomorrow's map after the roll.
+- Every grid goes through `gridCols()` — the GLOBAL GRID COLLAPSE in globals.css
+  would otherwise flatten them.
+- The POST hooks live in a child component, so the phone spends no request on the
+  recap while you are reading the morning map.
+
+`/m/em` stays routed and `MobileEm` stays in the build — old links and bookmarks
+still work, EM just no longer holds a slot in the six-tab bar. `/premarket` now
+redirects a phone to `/m/prep`.
+
+## 2026-08-20 (d) - Premarket: the GEX profile scrolls
 
-The first live run reported one dropped row: `MRNA 2026-08-18 166.0%`. That was
-not a split. **Moderna genuinely moved ~177% on 2026-08-19 on positive Phase 3
-melanoma data.** The ±25% guard threw away the single largest real observation
-in the panel.
-
-For a study asking whether BIG MOVES predict next-day action, dropping the
-biggest moves is selection bias aimed exactly at the variable of interest — a
-worse problem than the split contamination it was defending against. Biotech
-binary events routinely produce 50–200% sessions and they are real data.
-
-### Filtering by magnitude cannot work, and that is the point
-
-A 1:10 **reverse** split prints +900%. A 10:1 **forward** split prints −90% —
-and a real biotech failure also prints −85%. There is no threshold that
-separates them, so the honest design is not a better threshold:
-
-- **Hard drop** now only catches the physically implausible (>500%), which in
-  practice means reverse splits and broken prints.
-- **The tail is winsorized per day** at the 1%/99% cross-sectional quantiles.
-  An extreme session keeps its rank, its sign, and its place in the sample while
-  its leverage over the daily slope is capped. Dropping changes the sample;
-  winsorizing changes only the magnitude of the tail. This is the standard
-  treatment in the Fama-MacBeth literature.
-- **Every session over ±35% is printed and kept**, with both dates and both
-  spots, for a human to judge. A clean ratio (×2, ×0.5, ×10) is a split;
-  anything else is probably real.
-
-### Two bugs found while fixing it
-
-**The diagnostic pointed at the wrong date.** It logged the row's *feature* date
-(`d0`) and the return, so a bad print on the 19th was reported as `2026-08-18`.
-Actively misleading when the entire purpose of the line is to send someone to go
-look at the print. Now prints `SYMBOL from-date spot → to-date spot pct`.
-
-**Winsorizing capped nothing.** Interpolating a quantile index lands on the
-extremes themselves at small n: with 100 names and q=0.01,
-`floor(0.01 × 99) = 0` and `ceil(0.99 × 99) = 99` — lo=min, hi=max, zero rows
-capped. Caught by a self-test assertion that a 400% row must come down; it
-reported `0 capped, 400% → 400.0%`. Now counts k observations inward from each
-end, and skips days where `k < 1` rather than clipping the most extreme name of
-a thin cross-section on no evidence.
-
-Self-test grew from 9 assertions to 16, including that a −62% session is kept
-rather than deleted, that a winsorized extreme is still the day's largest, and
-that `fwd_abs` stays consistent with the capped `fwd_ret`.
+Edited: `components/pages/Premarket.tsx`, `components/pages/premarket/PostMarketTab.tsx`.
 
-
-## 2026-08-19 (k) - gex-move-study: refuse to print a table when the data is too young
-
-Edited: `server-v2/scripts/gex-move-study.mjs`.
-
-First live run found `eod_strike_gex` is **6 sessions old** — first date
-2026-08-12, 169 symbols every day, `no_spot = 0`, nothing pruned. The recorder's
-own comment claiming "~a year of rows" was wrong, and I repeated it in (i).
-Coverage is perfect; the table is just new.
-
-### Why this needed a code change and not just a note
-
-With 4 usable days the Fama-MacBeth column correctly printed `—` for all eight
-features. The pooled column beside it printed **4.89, 4.09 and −3.88** — three
-publishable-looking numbers from 169 correlated symbols across 4 days being
-counted as 674 independent observations.
-
-A dash and a false positive in the same row is worse than no output: the eye
-lands on the number that isn't blank. The pooled column exists to be compared
-*against* a real Fama-MacBeth t; standing alone it is just the wrong answer,
-printed confidently.
-
-So below `--min-days` (20) the script now prints a verdict and **no feature
-tables at all**: how many days it has, how many it needs, roughly when that
-lands, and that the recorder is healthy so nobody goes looking for a bug that
-isn't there. `--force` overrides. Between 20 and 60 days the tables print with a
-provisional warning.
-
-### The contamination tradeoff evaporated
-
-The script was built around "levels have ~400 sessions and are clean, Δ has the
-same history but is contaminated". With 6 sessions that premise is gone: every
-basis is equally young. The `oi_*` series starts only 6 sessions behind
-`net_gex`, so by the time there is enough data to study, it will exist on the
-**settled** basis. The contaminated Δ is now irrelevant to this study rather
-than a necessary compromise — the verdict text says so.
-
-### Also seen
-
-MRNA printed **+166% on 2026-08-18**. The split guard caught it. A 166% session
-is not a split, so it is most likely a bad `underlyingPrice` landing in `spot`.
-One bad print in ~1,000 symbol-days, worth knowing the rate of before trusting
-the return series later.
-
-
-## 2026-08-19 (j) - Structural Range: walls were pinned to the card edges
-
-Edited: `owner-vite/src/pages/GexGrowth.tsx` (`StructuralRange`).
-
-The span IS wall-to-wall, so `pct(putWall)` and `pct(callWall)` were exactly 0%
-and 100%. With labels centred on their ticks, half of "7,550" and half of
-"7,900" hung outside the card and clipped.
-
-Fixed at the source by insetting the whole axis — `margin: 0 clamp(30px, 6%,
-64px)` on ONE wrapper around both the zone strip and the tick row, so the two
-keep a shared coordinate space and the flip tick still lands exactly on the
-AMPLIFY/DAMPEN seam. It has to be margin on a shared wrapper rather than padding:
-`left: %` on an absolutely positioned child resolves against the ancestor's
-*padding* box, so padding would have shifted the zones and not the ticks.
-`clamp()` rather than a flat %, because the overhang being absorbed is half a
-label — a px quantity — so a bare 6% is too little on a narrow card and
-pointlessly wide on a big one.
-
-Two related things caught while verifying:
-
-**Tick decimals now scale to the price.** The flip is interpolated, so on a
-7,800 index it printed `7,823.64` — the widest label on the axis, whose last
-three characters are 0.008% of the number. Now 0dp above 2,000, 1dp above 200,
-2dp below, so SPY still reads `395.2`.
-
-**Crowded ticks stagger instead of overlapping.** The flip can legitimately walk
-right up to a wall, and two centred ~50px labels cannot share 7% of the axis.
-Dropping one is wrong — the flip is the divider — so a tick within
-`MIN_TICK_GAP` of the previous one falls to a second row, alternating (0,1,0)
-so three crowded ticks still separate. The container grows only when a stagger
-actually happened.
-
-Verified by rendering at 1210px and 520px, with the flip on the wall and with
-three ticks bunched.
-
-
-## 2026-08-19 (i) - Research: does the gamma book predict next-day price action?
-
-Added: `server-v2/scripts/gex-move-study.mjs`. Reads `eod_strike_gex`, writes
-nothing, needs no other table.
-
-### The outcome variable was already in the table
-
-`eod_strike_gex.spot` is the underlying at the 16:05 sweep for every
-`(date, symbol)`, across the whole ~400-session retention. Next-day return is
-`spot(T+1)/spot(T) − 1` with no join.
-
-The part that matters more than convenience: **feature and outcome are stamped
-by the same sweep at the same instant**, so everything the study ranks on is
-fully known when the return window opens. No lookahead anywhere, by
-construction — which is not the usual situation for this kind of study.
-
-### What it can answer today
-
-| column | sessions |
-|---|---|
-| `net_gex`, `spot` | ~400 |
-| `call_gex` / `put_gex` | 1 |
-| `oi_*`, `vol_*`, `flow_*` | 0 — start with tonight's sweep |
-
-So the LEVELS study (flip distance, gravity, one-sidedness, wall room,
-concentration) runs on the full history. The Δ features run off `Δnet_gex`,
-which is the contaminated one — magnitude is a real activity signal, **sign is
-not**, and sign is what predicts direction. Those results print under a
-CONTAMINATED banner and are a hypothesis to re-test once `oi_*` has ~60
-sessions.
-
-### The four traps, and what the script does about each
-
-1. **GEX moves because price moved.** Gamma is a function of spot, so ΔGEX is
-   largely the footprint of a big day-T move; regress on it alone and you
-   rediscover price autocorrelation in a GEX costume. Day-T return is a control
-   in every specification.
-2. **169 symbols on one day are not 169 observations.** Fama-MacBeth — one
-   cross-sectional regression per day, t-test on the time series of slopes, so
-   n = days not rows. The report prints the naive pooled t beside it purely so
-   the inflation is visible.
-3. **Splits.** `spot` is unadjusted; a 10:1 prints −90%. Dropped above 25% and
-   the drops are listed, not silently filtered.
-4. **"Next day" must be the next *recorded* session.** Pairs are consecutive
-   recorded dates; anything spanning >5 calendar days is dropped.
-
-Plus a Bonferroni line, because at 16 tests |t| = 2.0 is not the bar.
-
-### The self-test is the point
-
-`--selftest` (no DB, 1.3s) verifies the estimator against data whose answer is
-known before it is pointed at data whose answer is not.
-
-**It immediately caught a bug in itself.** The first synthetic generator used a
-glibc LCG with Box-Muller drawing every field from one sequence. Its marginals
-were flawless — mean 0.009, sd 1.008, lag-1 autocorrelation −0.011 — and it was
-badly broken: an LCG's successive pairs lie on parallel hyperplanes, and
-Box-Muller maps that lattice into a relationship between normals drawn at a
-fixed *stride*. `noise` sat 4 draws after the one inside `fwd_ret` and carried a
-real −0.012 correlation with it.
-
-The estimator then correctly reported that at t ≈ 3, and the calibration check
-read **sd(t) = 10.7 and a 53% false-positive rate** where 1.0 and 5% are
-correct. Nothing was wrong with the statistics; the test data had a signal in
-it. Fixed with mulberry32 + Marsaglia polar and one independent stream per
-variable. Now:
-
-    null t: mean 0.002 · sd 0.892 · 1.3% rejected at |t| > 1.96
-    planted 8.0bp/SD recovered as 8.02bp over 25 runs (0.3% off)
-    pooled t 140.8 vs Fama-MacBeth −1.56 on the same null feature
-
-A single null run would have passed by luck and hidden all of it — which is why
-the shipped check runs 80 independent nulls and asserts on the *shape* of the
-t-distribution rather than on one draw.
-
-### Run it
-
-    ssh vps; cd /path/to/app
-    node server-v2/scripts/gex-move-study.mjs --selftest   # verify first
-    node server-v2/scripts/gex-move-study.mjs              # then the real thing
-
-
-## 2026-08-19 (h) - ΔGEX Board: Structural Range strip under "which leg moved"
-
-Edited: `owner-vite/src/pages/GexGrowth.tsx`. Client only.
-
-Two regime zones spanning put wall → call wall, spot as a rule through them, and
-the landmarks direct-labelled underneath. Sits directly under *which leg moved*
-because it answers the next question: that block says WHAT changed, this says
-where price is relative to the structure that changed. Renders in every mode —
-it needs no baseline session, only the current ladder, so it reads on `levels`
-and on a symbol's first day.
-
-### The ordering trap this had to avoid
-
-An earlier mockup laid out three zones as `putWall < flip < magnet < callWall`.
-**That ordering is not guaranteed and the layout would have drawn nonsense the
-first put-heavy session it saw.** `findWall` filters by side before picking, so
-the only thing the code may assume is
-
-    putWall < spot < callWall
-
-The flip is a zero crossing of the running total and can land anywhere,
-including outside both walls. The heaviest rung can be below spot. Neither is
-safe as a boundary.
-
-So **the flip is the one divider** — two zones, AMPLIFY below and DAMPEN above —
-and everything else is a marker.
-
-### One-sided books collapse, they do not clamp
-
-When the flip falls outside the span or there is none, the strip renders a
-SINGLE band named by the sign of the book, with `· no flip in range` on the
-header. It deliberately does not pin the divider to the nearest wall: that draws
-a boundary at a strike where nothing happens, and the entire value of the band
-widths is that they are real.
-
-### "Magnet" was two labels on one strike
-
-The mockup's MAGNET (largest |gamma| anywhere) and CALL WALL (largest positive
-rung above spot) are **the same strike on any call-dominant book**. Drawing both
-would put two labels on one tick most days and imply a distinction that is not
-there.
-
-New `Analysis.heaviest` is an **attribute**, not a landmark: `{strike, now, at}`
-where `at` is `"call"` / `"put"` when it coincides with that wall, else null.
-The strip rings whichever landmark it lands on (★ + glow) and only draws a
-standalone HEAVIEST tick when it is neither — which is exactly when it is
-telling you something new. The fact this adds is one the walls alone cannot
-give: whether the wall you are looking at is *the* wall, or merely the best one
-on its side.
-
-A loose HEAVIEST within 7% of the span of a wall or the flip is suppressed —
-the labels are ~9 characters and would smear together, and at that distance the
-wall already tells you where the weight is.
-
-Also new: `Analysis.gravity` — share of |gamma| below vs above spot, drawn as a
-proportional bar. Where the book's WEIGHT is, which is a different question from
-where its walls are; two boards with identical walls can distribute mass
-completely differently between them.
-
-### Colour
-
-`RANGE_COLORS` was snapped to pass the dataviz six-check validator against the
-panel surface (#0D1119) in dark mode — lightness band, chroma floor, CVD
-separation (worst adjacent ΔE 18.6 protan), normal-vision floor (ΔE 25.0) and
-contrast ≥ 3:1 all PASS. The obvious vivid picks (#EF4444 / #8B5CF6 / #22D3EE)
-FAIL the lightness band at L 0.77–0.83 against a 0.48–0.67 band, which is why
-they bloom on a dark panel. Kept local and named for the same reason POS/NEG
-are: they are an encoding, not chrome, and the theme has no token meaning "put
-support".
-
-### Verified by rendering, not by reading
-
-The component was rendered to static markup across eight cases — heaviest on
-each wall, heaviest loose, flip below the span, flip above the span, no flip, no
-put wall, no spot. The last two correctly render **nothing** rather than a
-broken strip. Caught in that pass: the spot rule was a zero-height sibling
-*after* the zones and painted behind their fills — invisible, which is a bad way
-to lose the one mark the whole strip is oriented around. It now lives inside the
-zone wrapper with a z-index.
-
+"GEX Profile by Strike" showed ±12 strikes and nothing else existed. The walls
+routinely sit outside that window, which is exactly when you want to look at
+them. The panel is now the scroll container and renders ±60.
+
+### Two windows, on purpose
+
+Widening the single window would have changed what the chart MEANS:
+
+- `nearBars` (±12) still sets the bar widths and still owns the 0DTE magnet. One
+  monster strike 200 points out would otherwise flatten every bar near the money
+  and steal the magnet tag.
+- `bars` (±60) renders. The rows cost nothing until you scroll to them.
+
+`.spotline` / `.flipline` are absolutely positioned inside the scroll box, so
+they travel with their rows instead of floating over whatever happens to be in
+view. `overscroll-behavior: contain` stops a flick at the end of the ladder from
+scrolling the page behind it.
+
+### Centring that does not fight you
+
+The panel loads centred on spot and STAYS centred while it is pinned. The first
+scroll by hand un-pins it, so reading a far wall is never yanked back to the
+money by the next live frame; a "back to spot" button appears and re-pins. Our
+own `scrollTop` writes are flagged so the scroll event they fire is not mistaken
+for the user's hand.
+
+The post-market GEX-evolution ladder gets the same treatment (same two windows,
+same scroll box). Its Δ heatmap deliberately stays on the ±12 window — 121 cells
+in one row is a smear, not a heatmap.
+
+## 2026-08-20 (c) - Post-Market tab: graded off the SAVED wall log, and the evolution panel un-broken
+
+Edited: `components/pages/premarket/PostMarketTab.tsx`.
+
+### The GEX evolution panel was comparing two different books
+
+`useIntradayLadder` copied `anyExpiry=1` from the bubble-trail hook. That flag
+exists so a multi-DAY backfill can span expiries (each day is written under its
+own front expiry); here it dropped the expiry filter and merged EVERY expiry in
+the window into one slot, so the "09:30 profile" was the whole SPX board while
+the live side was today's 0DTE alone. ~100x apart: the change hatch ran the full
+width of every row and the biggest-strike list printed +$65B deltas.
+
+Three fixes, deliberately overlapping:
+
+1. Ask for the expiry by name — no `anyExpiry`. (`top` was never a parameter this
+   route understands; heatmap mode always returns the full ladder. Dropped.)
+2. Dedupe cells per strike per slot, so a strike written twice in one 5-minute
+   bucket cannot be counted twice.
+3. A SCALE GUARD that does not trust the request shape: compare the recorded and
+   live ladders over the strikes they share, and if total magnitude is more than
+   4x apart, hide the overlay and say why instead of drawing a confident wrong
+   number. The caret width is clamped to the track as a last resort.
+
+### The card accents had no colour
+
+The accent was a `::before` painted by tone classes, so a card whose level had no
+verdict yet drew grey and the row read as unstyled. It is now an element carrying
+the LEVEL's own colour — call wall red, put wall green, CORE violet — with the
+verdict in the pill, which is the part that actually changes.
+
+### SPX core values are graded from the log that already saves them
+
+`server-v2/walls-recorder.js` captures SPX's call wall / put wall / CORE at 09:29
+and every 15 minutes to 16:00, writes only when a level MOVES, and classifies
+every touch four slots later — reject / break <5 / break / broke-and-consolidated
+/ new wall / pinned / rolled over. That is a real server-side grade of the day and
+it was already stored; the tab was busy inventing a worse one from the last frame.
+
+`useRecordedWalls` now reads `/proxy/walls?date&symbol=SPX` (same endpoint and
+shape as `/level-log`) and the recorder's verdict WINS for those three cards:
+status is the classified reaction, the line under it reads
+`7,750 → 7,745 · moved 2x · 3 tags`, and the foot carries excursion, reclaim
+minutes and attempts. Gamma flip and max pain are not recorded, so those two stay
+path-derived. Each card states which it is. Under the scorecard, every level MOVE
+of the day is listed with its prev → new strike and the spot at the time.
+
+When the log has nothing for the date, the three cards fall back to the derived
+grade and say so.
+
+## 2026-08-20 (b) - Premarket: POST-MARKET tab
+
+Edited: `components/pages/Premarket.tsx`.
+Added: `components/pages/premarket/PostMarketTab.tsx`.
+
+/premarket now carries two tabs on one page. The premarket tab is unchanged. The
+new one answers the questions that only exist after the close: did the morning
+map hold, what changed inside the day, and what does tomorrow look like once
+0DTE rolls off.
+
+### The tab itself
+
+Auto-selects by the clock — Premarket until 09:30, Post-Market from 16:05 (the
+settle, not the bell; the last frames land in those five minutes). Either is
+defensible in between, so the FIRST manual click pins the choice into
+`sessionStorage` and the clock never moves it again for that session.
+
+### Six sections, no invented numbers
+
+| # | Section | Comes from |
+|---|---|---|
+| 1 | Day snapshot + verdict | live chain + ES session bars |
+| 2 | Level scorecard (CW/PW/flip/CB/max pain) | the intraday spot path |
+| 3 | GEX evolution, 09:30 vs now | the recorded per-minute ladder |
+| 4 | Positioning at the close | the same DEX/vanna/call-put math the page already runs |
+| 5 | Tomorrow's map | the NEXT expiry's chain |
+| 6 | Journal, level accuracy, replay | localStorage + the recorded ladder |
+
+**The unlock is `/api/snapshots/option-strike-gex-history`** — the per-minute
+ladder the ES chart's bubble trail already backfills from. The live socket keeps
+no history, so without it there is no 09:30 profile and no intraday spot path,
+and half of this tab could only be faked. `useIntradayLadder` reuses that hook's
+two hard-won guards rather than rediscovering them: the route answers HTTP 200
+even when it threw (an `error` key and no `columns`), and "today" is the newest
+NON-WEEKEND day present, because the recorder has no market-hours gate and
+rewrites a frozen copy of Friday all weekend. It asks for `top=60` instead of 8 —
+this tab draws the whole profile, not a handful of bubbles.
+
+**Tomorrow's map is the only panel that needs a second chain.** `/api/gex`
+ignores its `expiry` param (it mirrors whatever the socket is pinned to), so the
+next expiry comes from `/api/expirations` + `/api/chains` and the walls are
+computed here. `structureFromChain` COPIES the per-strike formula out of
+`parseExpiration` — gamma x (OI + volume) x S^2 x 0.01 x 100, put side negated —
+rather than calling it, because that helper returns only the net per strike and a
+call wall is per-side by definition. Same constants, so tomorrow's walls are
+computed exactly the way today's are. Fetched once per tab-open, never polled.
+
+**Nothing renders a plausible-looking placeholder.** A number that cannot be
+derived shows "—" or an explicit "not recorded today" note. The scorecard is only
+worth reading if a green pill means the level actually held.
+
+### Notes
+
+- No new socket and no new topics — the tab is fed by props off the same
+  `useMobileGex` frame the premarket tab uses.
+- The 09:30-vs-now profile draws ONE bar (now), a white caret at the 09:30 level
+  and a hatched segment between them. The first design drew both profiles as
+  filled shapes and was unreadable.
+- Level accuracy writes one row per session to localStorage after 16:05 and keeps
+  20; it starts empty and fills in with use.
+- The journal is per-date localStorage on that device — not synced, not a server
+  record.
+
+## 2026-08-20 (a) - Premarket: one GEX level rail above the cards
+
+Edited: `components/pages/Premarket.tsx`.
+
+The two mockup strips (OVERNIGHT CONTEXT / EXPECTED RANGE) each drew their own
+axis, so the same price sat at two different x positions one card apart. This
+collapses the idea into ONE rail, mounted between the regime row and the KEY
+LEVELS grid (directly above the Call Wall card): put wall, gamma flip, core
+bullseye, spot, call wall, all on a single shared price domain.
+
+- **CB = Core Bullseye** — the strike carrying the most *absolute* gamma across
+  the WHOLE chain, the same definition `Board.tsx`'s levels panel uses, so the
+  two surfaces can never print a different CB. It is deliberately not the "0DTE
+  Magnet" card, which is capped to the +/-12-strike window the profile draws and
+  can therefore miss a larger strike further out.
+- Domain = min..max of the five levels + 14% padding; the put-wall..call-wall
+  span is washed in behind the track.
+- Captions alternate above/below in PRICE order (not by code) and are clamped to
+  4%..96%, because two levels can print a few points apart and would otherwise
+  overprint or run off the card edge.
+- Each caption carries the level's price plus its distance from spot; SPOT
+  carries its ES equivalent through the existing `basis`.
+- Under 1180px the long level name is dropped and only the code remains.
+
+No new data source: everything comes off the chain `useMobileGex` already
+delivers, so the rail cannot disagree with the cards under it.
 
 ## 2026-08-19 (g) - ΔGEX Board: every basis carries its own "run at" timestamp
 

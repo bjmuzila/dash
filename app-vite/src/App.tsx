@@ -48,7 +48,7 @@ const LevelLog     = lazy(() => import('@/components/pages/LevelLog'))
 const Guide        = lazy(() => import('@/app/guide/page'))
 
 // ── Phone build (/m/*) ────────────────────────────────────────────────────────
-// Six purpose-built views for a 390px iPhone, each in its own chunk so a phone
+// Seven purpose-built views for a 390px iPhone, each in its own chunk so a phone
 // never downloads the desktop page it replaces. MobileRedirect (mounted below)
 // sends phones here from the matching desktop route; see components/mobile/
 // mobileNav.ts for the tab registry and the desktop<->mobile route map.
@@ -57,6 +57,8 @@ const MHeatmap = lazy(() => import('@/components/mobile/pages/MobileHeatmap'))
 const MEs      = lazy(() => import('@/components/mobile/pages/MobileEsCandles'))
 const MChain   = lazy(() => import('@/components/mobile/pages/MobileChain'))
 const MEm      = lazy(() => import('@/components/mobile/pages/MobileEm'))
+// /m/prep replaced EM in the tab bar; /m/em stays routed so old links still work.
+const MPrep    = lazy(() => import('@/components/mobile/pages/MobilePrep'))
 const MEcon    = lazy(() => import('@/components/mobile/pages/MobileEcon'))
 
 const S = (el: ReactNode) => <Suspense fallback={null}>{el}</Suspense>
@@ -107,6 +109,7 @@ export default function App() {
               <Route path="/m/es" element={S(<MEs />)} />
               <Route path="/m/chain" element={S(<MChain />)} />
               <Route path="/m/em" element={S(<MEm />)} />
+              <Route path="/m/prep" element={S(<MPrep />)} />
               <Route path="/m/econ" element={S(<MEcon />)} />
               <Route path="*" element={<Navigate to="/traders-dashboard" replace />} />
             </Routes>

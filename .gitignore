@@ -46,3 +46,9 @@ state/
 
 # generated images/assets from Claude sessions (local only, never deployed)
 generated/
+
+# raw 1-minute tapes for scripts/build-bar-stats.mjs (npm run bars)
+# hundreds of MB each - local only, never committed or deployed
+public/data/*_1min.csv
+data/*_1min.csv
+/*_1min.csv
