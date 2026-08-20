@@ -121,6 +121,32 @@ const CSS = `
 .pmk .bias.neg .t{color:var(--neg)}
 .pmk .bias .d{font-size:11px;color:var(--dim);margin-top:2px}
 
+/* ── GEX LEVEL RAIL ──────────────────────────────────────────────────────────
+   ONE price axis carrying every level the page cares about — put wall, gamma
+   flip, core bullseye, spot, call wall — so their ORDER and SPACING is readable
+   before any of the six cards below are read. It replaces nothing; it is the
+   index to the cards.
+   Two levels can print a handful of points apart, so the captions alternate
+   above / below the rail in PRICE order (not by code) instead of overprinting.
+   Captions are absolutely positioned with translateX(-50%) and clamped to
+   4%..96%, and the outer domain carries 14% padding, so a cap can never run off
+   the card. */
+.pmk .gexrail{padding:15px 18px 12px;border-bottom:1px solid var(--line)}
+.pmk .gexrail .rh{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.pmk .gexrail .rh h3{margin:0;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);font-weight:600}
+.pmk .rail{position:relative;height:120px;margin-top:2px}
+.pmk .rail .track2{position:absolute;left:0;right:0;top:54px;height:10px;border-radius:6px;background:#1a2230;border:1px solid var(--line)}
+.pmk .rail .band{position:absolute;top:-1px;bottom:-1px;border-radius:6px;background:linear-gradient(90deg,rgba(46,204,143,.30),rgba(77,163,255,.14),rgba(255,92,108,.30))}
+.pmk .rail .mk2{position:absolute;top:44px;width:2px;height:30px;border-radius:2px;transform:translateX(-50%)}
+.pmk .rail .mk2.spot{width:3px;height:34px;top:42px;box-shadow:0 0 0 3px rgba(255,255,255,.10)}
+.pmk .rail .cap2{position:absolute;transform:translateX(-50%);text-align:center;white-space:nowrap;line-height:1.25}
+.pmk .rail .cap2.up{top:4px}
+.pmk .rail .cap2.dn{top:78px}
+.pmk .rail .cap2 .n2{font-size:9px;letter-spacing:.07em;text-transform:uppercase}
+.pmk .rail .cap2 .v2{font-size:14px;font-weight:660;letter-spacing:-.02em;color:var(--txt)}
+.pmk .rail .cap2 .d2{font-size:9.5px;color:var(--dim)}
+.pmk .rail-empty{height:120px;display:grid;place-items:center;font-size:12px;color:var(--dim)}
+
 .pmk .levels{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
 .pmk .lvl{position:relative;border:1px solid var(--card);border-radius:var(--r);background:var(--panel2);padding:10px 11px 11px;overflow:hidden}
 .pmk .lvl .name{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim2);display:flex;justify-content:space-between;align-items:center;gap:6px}
@@ -230,7 +256,9 @@ const CSS = `
 .pmk .chip.on{background:#1e2836;color:var(--txt);border-color:#33404f}
 
 @media (max-width:1180px){ .pmk .body{grid-template-columns:1fr} .pmk .col{border-right:0;border-bottom:1px solid var(--line)}
-  .pmk .levels{grid-template-columns:repeat(3,1fr)} .pmk .regime{grid-template-columns:1fr;gap:12px} .pmk .vr{display:none} .pmk .bias{justify-self:start;text-align:left;max-width:none} }
+  .pmk .levels{grid-template-columns:repeat(3,1fr)} .pmk .regime{grid-template-columns:1fr;gap:12px} .pmk .vr{display:none} .pmk .bias{justify-self:start;text-align:left;max-width:none}
+  /* Five caps on a narrow rail: keep the code, drop the long name. */
+  .pmk .rail .cap2 .ln{display:none} }
 `;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -693,6 +721,56 @@ export default function Premarket() {
   const es = (px: number | null | undefined) =>
     px == null || basis == null ? null : px + basis;
 
+  // ── GEX LEVEL RAIL ─────────────────────────────────────────────────────────
+  /** Core Bullseye (CB) — the single strike carrying the most ABSOLUTE gamma in
+   *  the whole chain. Same definition the Board's levels panel uses, so the two
+   *  surfaces can never print a different CB. Deliberately NOT the "0DTE magnet"
+   *  card below: that one is capped to the ±12-strike window the profile draws,
+   *  which can miss a bigger strike further out. */
+  const coreBullseye = useMemo(() => {
+    if (!perStrike.length) return null;
+    return perStrike.reduce((b, r) => (Math.abs(r.net) > Math.abs(b.net) ? r : b), perStrike[0]);
+  }, [perStrike]);
+
+  /** Everything the rail needs: the five levels on ONE shared price domain. */
+  const rail = useMemo(() => {
+    const marks: { code: string; name: string; px: number; color: string }[] = [];
+    const add = (code: string, name: string, px: number | null | undefined, color: string) => {
+      if (px != null && Number.isFinite(px) && px > 0) marks.push({ code, name, px, color });
+    };
+    add("PW", "Put Wall", putWall, "var(--pos)");
+    add("FLIP", "Gamma Flip", flip, "var(--amber)");
+    add("CB", "Core Bullseye", coreBullseye?.strike, "var(--violet)");
+    add("SPOT", "Spot", spot > 0 ? spot : null, "#ffffff");
+    add("CW", "Call Wall", callWall, "var(--neg)");
+    if (marks.length < 2) return null;
+
+    const lo = Math.min(...marks.map((m) => m.px));
+    const hi = Math.max(...marks.map((m) => m.px));
+    const span = hi - lo;
+    if (!(span > 0)) return null;
+    const pad = span * 0.14;                       // room for the outermost caps
+    const dLo = lo - pad, dHi = hi + pad;
+    const pos = (px: number) => ((px - dLo) / (dHi - dLo)) * 100;
+
+    const placed = marks
+      .slice()
+      .sort((a, b) => a.px - b.px)
+      .map((m, i) => ({
+        ...m,
+        pos: pos(m.px),
+        side: i % 2 === 0 ? "dn" : "up",           // alternate in PRICE order
+        dist: spot > 0 && m.code !== "SPOT" ? m.px - spot : null,
+      }));
+
+    const band =
+      putWall != null && callWall != null && putWall > 0 && callWall > 0 && callWall !== putWall
+        ? { left: Math.min(pos(putWall), pos(callWall)), width: Math.abs(pos(callWall) - pos(putWall)) }
+        : null;
+
+    return { marks: placed, band, lo, hi, span };
+  }, [putWall, callWall, flip, coreBullseye, spot]);
+
   const feedLabel = source === "live" ? (connected ? "LIVE" : "RECONNECTING") : source === "rest" ? "REST FALLBACK" : "PAUSED";
 
   return (
@@ -763,6 +841,53 @@ export default function Premarket() {
                     : `Acceleration regime until ${fmtPx(flip, 0)} is reclaimed.`}`}
               </div>
             </div>
+          </div>
+
+          {/* ── 1b. GEX LEVEL RAIL — every level on one axis ───────────────── */}
+          <div className="gexrail">
+            <div className="rh">
+              <h3>GEX Levels · one axis</h3>
+              <span className="tiny">
+                {rail
+                  ? `${fmtPx(rail.lo, 0)} – ${fmtPx(rail.hi, 0)} · ${nf(rail.span, 0)} pts`
+                  : "waiting for the chain"}
+              </span>
+            </div>
+
+            {rail ? (
+              <div className="rail">
+                <div className="track2">
+                  {rail.band && (
+                    <div className="band" style={{ left: `${rail.band.left}%`, width: `${rail.band.width}%` }} />
+                  )}
+                </div>
+
+                {rail.marks.map((m) => (
+                  <div key={m.code}>
+                    <div
+                      className={`mk2${m.code === "SPOT" ? " spot" : ""}`}
+                      style={{ left: `${m.pos}%`, background: m.color }}
+                    />
+                    <div
+                      className={`cap2 ${m.side}`}
+                      style={{ left: `${Math.max(4, Math.min(96, m.pos))}%` }}
+                    >
+                      <div className="n2" style={{ color: m.color }}>
+                        {m.code}<span className="ln"> · {m.name}</span>
+                      </div>
+                      <div className="v2 mono">{fmtPx(m.px, 0)}</div>
+                      <div className="d2 mono">
+                        {m.code === "SPOT"
+                          ? (es(m.px) != null ? `ES ${fmtPx(es(m.px), 0)}` : "live")
+                          : fmtPts(m.dist)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rail-empty">Waiting for the chain…</div>
+            )}
           </div>
 
           {/* ── 2. KEY LEVELS ─────────────────────────────────────────────── */}

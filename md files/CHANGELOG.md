@@ -1,5 +1,165 @@
 # Changelog
 
+## 2026-08-20 (a) - Premarket: one GEX level rail above the cards
+
+Edited: `components/pages/Premarket.tsx`.
+
+The two mockup strips (OVERNIGHT CONTEXT / EXPECTED RANGE) each drew their own
+axis, so the same price sat at two different x positions one card apart. This
+collapses the idea into ONE rail, mounted between the regime row and the KEY
+LEVELS grid (directly above the Call Wall card): put wall, gamma flip, core
+bullseye, spot, call wall, all on a single shared price domain.
+
+- **CB = Core Bullseye** — the strike carrying the most *absolute* gamma across
+  the WHOLE chain, the same definition `Board.tsx`'s levels panel uses, so the
+  two surfaces can never print a different CB. It is deliberately not the "0DTE
+  Magnet" card, which is capped to the +/-12-strike window the profile draws and
+  can therefore miss a larger strike further out.
+- Domain = min..max of the five levels + 14% padding; the put-wall..call-wall
+  span is washed in behind the track.
+- Captions alternate above/below in PRICE order (not by code) and are clamped to
+  4%..96%, because two levels can print a few points apart and would otherwise
+  overprint or run off the card edge.
+- Each caption carries the level's price plus its distance from spot; SPOT
+  carries its ES equivalent through the existing `basis`.
+- Under 1180px the long level name is dropped and only the code remains.
+
+No new data source: everything comes off the chain `useMobileGex` already
+delivers, so the rail cannot disagree with the cards under it.
+
+## 2026-08-19 (g) - ΔGEX Board: every basis carries its own "run at" timestamp
+
+Edited: `server-v2/eod-strike-gex-recorder.js`, `server-v2/server-with-proxy.js`,
+`owner-vite/src/pages/GexGrowth.tsx`.
+
+### There is no single "when was this row run"
+
+`ts` is the INSERT clock and always has been. That is not the same fact as *when
+this data was true*, and on this table the two diverge two different ways:
+
+- The sweep **paces** across ~169 symbols over several minutes, so the write
+  clock is minutes later than the read for most of them.
+- After the 09:25 re-stamp, `oi_*` on a row was read **the next morning** while
+  `vol_*` on that same row was read at yesterday's 16:05 sweep. One row, two
+  values, a full session apart.
+
+So a single row timestamp is wrong for at least one basis every single day.
+
+### Three capture columns
+
+| column | stamps | set by |
+|---|---|---|
+| `captured_at` | oivol, vol, and oi while provisional | evening sweep |
+| `oi_captured_at` | oi once settled | 09:25 re-stamp |
+| `flow_captured_at` | flow | the `flow_prints` aggregate |
+
+All three are the moment the **read started**, not the write finished — a symbol
+whose chain sweep takes 40s describes the book as of when the fetch went out, and
+stamping the INSERT would date it 40s late every time. `flow_captured_at` is its
+own moment because the flow aggregate runs after that symbol's chain sweep
+finishes, even though both land in one INSERT.
+
+`flowCapturedAt` is reset to null when the flow read lands nothing or throws —
+an absence does not get a timestamp.
+
+### Resolution
+
+`BASIS_STAMP` maps each basis to its COALESCE chain, and `stampExpr(basis, alias)`
+builds the SQL:
+
+    oivol / vol  →  COALESCE(captured_at, ts)
+    oi           →  COALESCE(oi_captured_at, captured_at, ts)
+    flow         →  COALESCE(flow_captured_at, captured_at, ts)
+
+The `ts` tail is the fallback for rows written before these columns existed — a
+coarser answer, but a true one, and better than a NULL the page has to explain.
+
+Change route returns `capturedAt` + `prevCapturedAt` (so a Δ names both moments
+it compares). Board returns a **per-symbol** `capturedAt` — the sweep paces, so a
+name whose chain failed at 16:05 genuinely is reading an older moment than the
+rows above it in the rail. Live sets `capturedAt` to now by definition and keeps
+the prior side's recorded stamp.
+
+Re-firing the evening sweep clears **both** `oi_stamped_date` and
+`oi_captured_at` — the row is provisional again, and leaving the morning stamp
+behind would date a provisional read to a pass that no longer applies to it.
+
+### Page
+
+New `fmtEtStamp` prints date *and* time, deliberately unlike the existing
+time-only `fmtEtTime`: a bare `09:25:14` would hide exactly the
+session-apart difference these stamps exist to expose. Rendered as a `run
+YYYY-MM-DD HH:MM:SS ET` pill in the basis strip — always visible, not a tooltip —
+with the prior session's stamp on hover.
+
+Also fixed while here: `stampExpr` replaced a first cut that built the alias
+prefix with chained `.replace(/\(/g, ...)` on the COALESCE string. It worked and
+was unreadable; the column list is now explicit data.
+
+
+## 2026-08-19 (f) - ΔGEX Board: Split — calls and puts on the same rung
+
+Edited: `owner-vite/src/pages/GexGrowth.tsx`. **Client only** — no server, no
+schema, no new request.
+
+The leg picker was exclusive (Net / Calls / Puts), which meant comparing the two
+legs at one strike required toggling and holding a number in your head. That is
+the same "the sum is lossy, so squint and remember" problem the basis split
+exists to kill, one level down.
+
+### Why it costs nothing
+
+The ladder is already a centred diverging bar with a rail down the middle:
+negatives draw left, positives right. On `oivol` / `oi` / `vol` the call leg is
+≥ 0 and the put leg ≤ 0 at *every* strike by construction — so the two legs
+occupy opposite halves of the row and **cannot collide**. Drawing both is one
+row, same height, no overlap, and it is the standard gamma-profile-by-strike
+picture.
+
+New leg setting `split`, alongside the existing three. Calls and Puts stay, so
+the rail can still be ranked by one leg alone.
+
+### No fetch
+
+`split` is the only leg that is not a server-side projection. Every response
+already carries the full `callGex`/`putGex` pair *alongside* whichever leg was
+asked for, so Split sends `leg=net` and renders what came back. The rail
+therefore still ranks by net under it — which is right, not a workaround: Split
+is a decomposition OF the net, not a different ordering.
+
+### `RailBars` grew a side
+
+`{ v }` → `{ left, right }`, each drawn independently, so a row can carry a bar
+on both sides. Single-value callers pass `{ left: min(v,0), right: max(v,0) }`,
+which is byte-for-byte the old rendering — verified by rendering the component
+to static markup across all seven mode × leg combinations. Colour still comes
+from the SIDE, not the leg, so a bar left of the rail is red everywhere on this
+page.
+
+### Per-mode and per-basis
+
+| combination | rendering |
+|---|---|
+| split, unsigned basis, levels/delta | ONE row — puts left, calls right |
+| split, unsigned basis, compare | TWO rows (was → is), each carrying both legs |
+| split, `flow`, levels/delta | TWO rows, one per leg — either leg can be negative there, so they cannot share a rung's sides |
+| split, `flow`, compare | **not offered** — four rows a strike. The button is not rendered, same as Live on flow, rather than left lit and quietly doing something else |
+
+Value column shows both numbers, calls over puts, matching the bars. Axis header
+reads `← puts · calls →` when the legs share a row.
+
+**Bug caught by the render harness:** compare mode drew the ghost row from prior
+LEVELS but the solid row from leg DELTAS — two different quantities on one rung
+at two different scales. `legPair` now keys on `mode === "delta"` rather than
+`!== "levels"`, so compare is level-vs-level exactly as it is for net. `isDelta`
+still treats compare as a Δ mode for the rail, which is correct there and was
+the source of the confusion.
+
+`splitBlocked()` guards the flow+compare case, and `effLeg` degrades a
+already-selected `split` to `net` if the mode changes under it — so the page can
+never sit in a state its own controls do not offer.
+
+
 ## 2026-08-19 (e) - ΔGEX Board: call vs put per strike, and the gross flow split behind the net
 
 Edited: `server-v2/eod-strike-gex-recorder.js`, `server-v2/server-with-proxy.js`,

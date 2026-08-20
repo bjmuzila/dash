@@ -108,8 +108,15 @@ type Basis = "oivol" | "oi" | "vol" | "flow";
  *   flow — legs are signed by MEASUREMENT, so either leg can take either sign.
  *     "Dealers are short call gamma at 6400 and long put gamma at 6300" is a
  *     sentence only this basis can produce, and this is how you read it.
+ *
+ * `split` is the fourth setting and the only one that is NOT a server-side
+ * projection: it draws both legs on the same rung. Nothing has to be fetched
+ * for it — every response already carries the full call/put pair alongside
+ * whichever leg was asked for, so `split` sends `leg=net` and renders what came
+ * back. The rail therefore still ranks by net under it, which is correct:
+ * split is a decomposition OF the net, not a different ranking.
  */
-type Leg = "net" | "call" | "put";
+type Leg = "net" | "split" | "call" | "put";
 
 type BoardStrike = { strike: number; chg: number };
 type BoardLevelStrike = { strike: number; gex: number };
@@ -131,6 +138,9 @@ type BoardSymbol = {
   // `oi` basis only — see ChangeResp.oiSettled.
   oiSettled?: boolean;
   prevOiSettled?: boolean;
+  /** Per-symbol as-of for the active basis — a name whose chain failed at 16:05
+      is reading an older moment than the rows above it in the rail. */
+  capturedAt?: string | null;
 };
 type BoardResp = {
   ok?: boolean; top?: number; date?: string | null; basis?: Basis; leg?: Leg;
@@ -201,6 +211,17 @@ type ChangeResp = {
   // is a real session-over-session ΔOI. Either false → that side's OI is the
   // provisional 16:05 read, lagged one session, and the page must say so.
   oiSettled?: boolean; prevOiSettled?: boolean;
+  /**
+   * WHEN THIS BASIS WAS ACTUALLY RUN — not when the row was written.
+   *
+   * The four bases are four reads of different sources at different moments and
+   * they can be a full session apart inside ONE row: `vol` was captured at the
+   * 16:05 chain sweep, while `oi` on the same row was re-read from the settled
+   * file at 09:25 the next morning. Printing the row's write clock under all
+   * four would be wrong for at least one of them every day, so the server
+   * resolves the stamp per basis and the page prints THAT.
+   */
+  capturedAt?: string | null; prevCapturedAt?: string | null;
 };
 type DatesResp = { ok?: boolean; dates?: string[]; basis?: Basis; leg?: Leg; error?: string };
 
@@ -310,6 +331,13 @@ const LEG_COPY: Record<Leg, { tab: string; name: string; hint: (b: Basis) => str
     name: "net",
     hint: () => "Call leg + put leg. The sum is lossy — a fall is equally consistent with call gamma coming off and put gamma piling on. Split it to tell those apart.",
   },
+  split: {
+    tab: "Split",
+    name: "call + put",
+    hint: (b) => (b === "flow"
+      ? "Both legs, one above the other — on this basis either leg can take either sign, so they cannot share a rung's two sides."
+      : "Both legs on the same rung: calls right of the rail, puts left. They occupy opposite halves by construction on this basis, so this costs no height and never overlaps."),
+  },
   call: {
     tab: "Calls",
     name: "call leg",
@@ -326,10 +354,23 @@ const LEG_COPY: Record<Leg, { tab: string; name: string; hint: (b: Basis) => str
   },
 };
 
-const LEGS: readonly Leg[] = ["net", "call", "put"] as const;
+const LEGS: readonly Leg[] = ["net", "split", "call", "put"] as const;
 
-/** True where the chosen leg can take either sign — i.e. flow, or the net. */
-const legIsSigned = (b: Basis, l: Leg) => b === "flow" || l === "net";
+/**
+ * True where the chosen leg can take either sign. Only meaningful for the two
+ * SINGLE-leg settings — net and split both show the whole book, so neither can
+ * be "one-sided" in the sense the warning is about.
+ */
+const legIsSigned = (b: Basis, l: Leg) => b === "flow" || l === "net" || l === "split";
+
+/**
+ * Split needs a row per leg on `flow` (both legs can be negative, so they
+ * cannot share a rung's two sides), and compare mode already spends its two
+ * rows on prior vs now. Four rows a strike is unreadable, so the combination is
+ * refused — the button is not rendered, the same way Live is not rendered on
+ * flow, rather than left lit and quietly doing something else.
+ */
+const splitBlocked = (b: Basis, m: Mode) => b === "flow" && m === "compare";
 
 /** Δ readings — everything that needs a baseline session to mean anything. */
 const isDelta = (m: Mode) => m !== "levels";
@@ -361,6 +402,27 @@ const LIVE_COPY = {
   ladderCol: "Δ vs close",
   bigLabel: "net Δ vs close",
   axis: "← lighter · heavier →",
+};
+
+/**
+ * Full ET stamp — date AND time — for the per-basis "run at".
+ *
+ * Deliberately not fmtEtTime's time-only format. The whole point of the basis
+ * stamps is that they can be a SESSION apart inside one row: `vol` captured at
+ * yesterday's 16:05 sweep, `oi` re-read from the settled file at 09:25 this
+ * morning. A bare "09:25:14" would make that difference invisible, which is the
+ * exact confusion the stamps exist to remove.
+ */
+const fmtEtStamp = (iso?: string | null) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? ""
+    : new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/New_York", hourCycle: "h23",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    }).format(d).replace(", ", " ") + " ET";
 };
 
 /** ET wall clock for the "as of" stamp — the table's own timezone. */
@@ -1098,30 +1160,56 @@ const LADDER_COLS = "82px 1fr 78px";
  * two-bar rung would read as two adjacent strikes instead of one strike
  * measured twice.
  */
-function RailBars({ items, max }: { items: Array<{ v: number; ghost?: boolean }>; max: number }) {
+/**
+ * One row = one bar pair: `left` draws leftward from the centre rail, `right`
+ * draws rightward. Each is drawn on its own, so a row can carry a bar on BOTH
+ * sides at once — which is what makes the Split leg free.
+ *
+ * WHY left/right AND NOT a single signed value (which is what this took
+ * before): with one number per row, the sign chose the side, so a row could
+ * only ever be half-occupied. Split needs the call leg and the put leg on the
+ * same rung, and on the three unsigned bases those are guaranteed to be ≥ 0 and
+ * ≤ 0 respectively — opposite sides, never overlapping, no extra height.
+ *
+ * The single-value callers did not change behaviour: they pass
+ * `{ left: min(v,0), right: max(v,0) }`, which is exactly the old rendering.
+ *
+ * Colour still comes from the SIDE, not from which leg it is: a bar left of the
+ * rail is red and one right of it is green, everywhere on this page. On Split
+ * that reads correctly without a legend on the unsigned bases (calls are always
+ * the green side, puts always the red one), and on flow it keeps meaning
+ * "negative gamma" / "positive gamma", which is the thing a trader is actually
+ * looking for.
+ */
+type Bar = { left: number; right: number; ghost?: boolean };
+
+/** The old single-value shape, in the new one. */
+const oneBar = (v: number, ghost = false): Bar => ({ left: Math.min(v, 0), right: Math.max(v, 0), ghost });
+
+function RailBars({ items, max }: { items: Bar[]; max: number }) {
   const h = items.length > 1 ? 8 : 12;
   return (
     <span style={{ position: "relative", display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
       <span aria-hidden style={{ position: "absolute", left: "50%", top: -2, bottom: -2, width: 1, background: T.border }} />
       {items.map((it, i) => {
-        const pos = it.v >= 0;
         // A 2% floor keeps a real-but-tiny value visible; a true zero draws
         // nothing, so "no change" and "a rounding crumb" stay distinguishable.
-        const pct = it.v === 0 ? 0 : Math.max(2, (Math.abs(it.v) / max) * 100);
-        const c = pos ? POS : NEG;
+        const pctOf = (v: number) => (v === 0 ? 0 : Math.max(2, (Math.abs(v) / max) * 100));
+        const lPct = pctOf(it.left);
+        const rPct = pctOf(it.right);
         // Outline + wash for the prior session. Two solid bars would compete;
         // the eye should land on TODAY and use yesterday as the reference edge.
-        const skin: CSSProperties = it.ghost
+        const skin = (c: string): CSSProperties => (it.ghost
           ? { border: `1px solid ${c}`, background: `${c}26`, boxSizing: "border-box" }
-          : { background: c, boxSizing: "border-box" };
+          : { background: c, boxSizing: "border-box" });
         return (
           <span key={i} style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
             <span style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
-              {!pos && pct > 0 && <span style={{ width: `${pct}%`, height: h, borderRadius: "4px 0 0 4px", ...skin }} />}
+              {lPct > 0 && <span style={{ width: `${lPct}%`, height: h, borderRadius: "4px 0 0 4px", ...skin(NEG) }} />}
             </span>
             <span style={{ width: 1, flexShrink: 0, margin: "0 2px" }} />
             <span style={{ flex: 1, display: "flex" }}>
-              {pos && pct > 0 && <span style={{ width: `${pct}%`, height: h, borderRadius: "0 4px 4px 0", ...skin }} />}
+              {rPct > 0 && <span style={{ width: `${rPct}%`, height: h, borderRadius: "0 4px 4px 0", ...skin(POS) }} />}
             </span>
           </span>
         );
@@ -1131,30 +1219,70 @@ function RailBars({ items, max }: { items: Array<{ v: number; ghost?: boolean }>
 }
 
 function Ladder({
-  rows, spot, mode, live = false, leg = "net",
+  rows, spot, mode, live = false, leg = "net", splitNeedsRows = false,
 }: {
   rows: ChangeRow[];
   spot: number | null;
   mode: Mode;
   /** Compare mode reading the LIVE chain — relabels only, the maths is identical. */
   live?: boolean;
-  /** Which leg the server projected these rows through — a LABEL here, not a
-      calculation. `netGex` already holds the chosen leg by the time it lands,
-      so the ladder must not re-derive it; it only has to stop calling a call
-      ladder "Net GEX". */
+  /** Which leg the server projected these rows through. For net/call/put this
+      is a LABEL only — `netGex` already holds the chosen leg by the time it
+      lands, so the ladder must not re-derive it and only has to stop calling a
+      call ladder "Net GEX". `split` is the exception: it is a RENDERING, drawn
+      here from the call/put pair every response carries. */
   leg?: Leg;
+  /** Split draws a row per leg instead of sharing one rung's two sides — set
+      on flow, where either leg can take either sign. */
+  splitNeedsRows?: boolean;
 }) {
   // The ONE place the mode picks a number. Everything below — the bar, the
   // scale, the sign, the colour — reads `val`, so the two views cannot drift
   // into drawing one number and labelling it as the other.
   const cmp = mode === "compare";
   const val = (r: ChangeRow) => (mode === "levels" ? r.netGex : r.chg);
+
+  // ── SPLIT ────────────────────────────────────────────────────────────────
+  // Both legs on the rung. `netGex`/`chg` already hold whichever leg the server
+  // projected, but callGex/putGex always come back as the FULL pair regardless,
+  // so split needs no extra request — it reads the pair the payload was already
+  // carrying.
+  const split = leg === "split";
+  // Which quantity the legs carry, and it follows MODE exactly as the net does:
+  //
+  //   levels  — each leg's level.
+  //   delta   — each leg's own change. This is the whole reason to split a Δ:
+  //             "net fell" resolves into "the call wall came off" or "put gamma
+  //             piled on", which the single bar cannot distinguish.
+  //   compare — LEVELS, not deltas. Compare draws prior and current on the same
+  //             rung, so its solid row must be the current LEVEL to match the
+  //             ghost beside it. Treating compare as a Δ mode here (which
+  //             isDelta does, correctly, for the rail) drew a ghost of prior
+  //             levels against a solid of leg deltas — two different quantities
+  //             on one rung, at two different scales.
+  const legPair = (r: ChangeRow): { call: number; put: number } => (mode === "delta"
+    ? { call: (r.callGex ?? 0) - (r.prevCallGex ?? 0), put: (r.putGex ?? 0) - (r.prevPutGex ?? 0) }
+    : { call: r.callGex ?? 0, put: r.putGex ?? 0 });
+  // On the unsigned bases the call leg is >= 0 and the put leg <= 0 at every
+  // strike, so they land on opposite sides of the rail and share ONE row. On
+  // flow either leg can take either sign, so sharing a row would let them
+  // overlap on the same side — they get a row each there.
+  const splitStacks = split && splitNeedsRows;
+
   // Compare draws two LEVELS per rung, so its scale has to cover both of them
   // rather than the (much smaller) Δ between them — otherwise every bar pegs.
-  const max = rows.reduce(
-    (m, r) => Math.max(m, cmp ? Math.max(Math.abs(r.prevNetGex), Math.abs(r.netGex)) : Math.abs(val(r))),
-    0,
-  ) || 1;
+  // Split scales on the LEGS, which are individually larger than their net.
+  const max = rows.reduce((m, r) => {
+    if (split) {
+      const { call, put } = legPair(r);
+      const cur = Math.max(Math.abs(call), Math.abs(put));
+      if (!cmp) return Math.max(m, cur);
+      // Compare + split: the ghost row carries the prior legs, so the scale has
+      // to cover those too or yesterday's bars peg against today's.
+      return Math.max(m, cur, Math.abs(r.prevCallGex ?? 0), Math.abs(r.prevPutGex ?? 0));
+    }
+    return Math.max(m, cmp ? Math.max(Math.abs(r.prevNetGex), Math.abs(r.netGex)) : Math.abs(val(r)));
+  }, 0) || 1;
   // The rung price is actually sitting on — marked, not sorted to the middle.
   const spotStrike = spot == null || !rows.length
     ? null
@@ -1174,20 +1302,40 @@ function Ladder({
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       <div style={{ display: "grid", gridTemplateColumns: LADDER_COLS, gap: 8, alignItems: "center", paddingBottom: 5 }}>
         <span style={label}>Strike</span>
-        <span style={{ ...label, textAlign: "center" }}>{live ? LIVE_COPY.axis : MODE_COPY[mode].axis}</span>
+        <span style={{ ...label, textAlign: "center" }}>
+          {split && !splitStacks
+            ? "← puts · calls →"
+            : live ? LIVE_COPY.axis : MODE_COPY[mode].axis}
+        </span>
         <span style={{ ...label, textAlign: "right" }}>
-          {live ? LIVE_COPY.ladderCol : MODE_COPY[mode].ladderCol}
-          {leg !== "net" ? ` · ${LEG_COPY[leg].tab.toLowerCase()}` : ""}
+          {split
+            ? "calls / puts"
+            : `${live ? LIVE_COPY.ladderCol : MODE_COPY[mode].ladderCol}${leg !== "net" ? ` · ${LEG_COPY[leg].tab.toLowerCase()}` : ""}`}
         </span>
       </div>
       {desc.map((r) => {
         const v = val(r);
         const isSpot = spotStrike != null && r.strike === spotStrike;
+        const pair = split ? legPair(r) : null;
         // Prior first so it sits ABOVE today — the rung reads top-to-bottom as
         // "was → is", which is the direction the tab name promises.
-        const bars = cmp
-          ? [{ v: r.prevNetGex, ghost: true }, { v: r.netGex }]
-          : [{ v }];
+        const bars: Bar[] = pair
+          ? splitStacks
+            // Flow: a row per leg, each diverging normally, because either can
+            // take either sign here.
+            ? [oneBar(pair.call), oneBar(pair.put)]
+            : cmp
+              // Unsigned + compare: still two rows (was → is), but each row now
+              // carries BOTH legs, since they cannot collide.
+              ? [
+                { left: r.prevPutGex ?? 0, right: r.prevCallGex ?? 0, ghost: true },
+                { left: pair.put, right: pair.call },
+              ]
+              // The free case: one row, calls right, puts left.
+              : [{ left: pair.put, right: pair.call }]
+          : cmp
+            ? [oneBar(r.prevNetGex, true), oneBar(r.netGex)]
+            : [oneBar(v)];
         return (
           <div
             key={r.strike}
@@ -1206,9 +1354,23 @@ function Ladder({
               {isSpot && <span style={{ fontSize: 9, fontWeight: 800, color: T.cyan }}>◀</span>}
             </span>
             <RailBars items={bars} max={max} />
-            <span style={{ ...oneLine, textAlign: "right", fontFamily: MONO, fontSize: 12.5, fontWeight: 700, color: col(v) }}>
-              {sgn(v)}
-            </span>
+            {pair ? (
+              // Two numbers, calls over puts, matching the bars beside them.
+              // NOT the net: the net is already the other three settings, and
+              // printing it here would leave the two bars unlabelled.
+              <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", lineHeight: 1.25 }}>
+                <span style={{ ...oneLine, fontFamily: MONO, fontSize: 11, fontWeight: 700, color: col(pair.call) }}>
+                  {sgn(pair.call)}
+                </span>
+                <span style={{ ...oneLine, fontFamily: MONO, fontSize: 11, fontWeight: 700, color: col(pair.put) }}>
+                  {sgn(pair.put)}
+                </span>
+              </span>
+            ) : (
+              <span style={{ ...oneLine, textAlign: "right", fontFamily: MONO, fontSize: 12.5, fontWeight: 700, color: col(v) }}>
+                {sgn(v)}
+              </span>
+            )}
           </div>
         );
       })}
@@ -1274,22 +1436,37 @@ export default function GexGrowth() {
   // must not let an earlier name's ladder land under a later name's header.
   const detailReq = useRef(0);
 
+  const dateQs = date ? `&date=${date}` : "";
+  /**
+   * Split is refused on flow + compare (four rows a strike). Rather than let
+   * the page sit in a state the control does not offer, it degrades to net —
+   * and because the picker hides the button in that combination, the leg can
+   * only get here by being set before the mode changed under it.
+   */
+  const effLeg: Leg = splitBlocked(basis, mode) && leg === "split" ? "net" : leg;
+  /**
+   * Split is drawn client-side from the call/put pair every response already
+   * carries, so it asks the server for the NET — and that is not a workaround,
+   * it is the correct ranking: the rail should order by the net that the split
+   * decomposes, not by one of its halves.
+   */
+  const qsLeg: Leg = effLeg === "split" ? "net" : effLeg;
+  // One string for both dimensions, so no call site can pick up the basis and
+  // forget the leg — that would draw a call ladder under a net header.
+  const readQs = `&basis=${basis}&leg=${qsLeg}`;
+
   // Session list. Loaded once — a new date only appears at 16:05 ET, and the ↻
   // button re-reads it along with everything else.
   // Basis-scoped: oi_/vol_/flow_ start at their migration date, so an
   // unfiltered list would offer a year of sessions that draw an empty ladder.
   const loadDates = useCallback(async () => {
     try {
-      const res = await fetch(`/api/eod-strike-gex-dates?limit=180&basis=${basis}&leg=${leg}`, { cache: "no-store" });
+      const res = await fetch(`/api/eod-strike-gex-dates?limit=180&basis=${basis}&leg=${qsLeg}`, { cache: "no-store" });
       const json: DatesResp = await res.json();
       if (res.ok && json.ok !== false) setDates(json.dates ?? []);
     } catch { /* the picker just stays on "latest" — not worth an error banner */ }
-  }, [basis, leg]);
+  }, [basis, qsLeg]);
 
-  const dateQs = date ? `&date=${date}` : "";
-  // One string for both dimensions, so no call site can pick up the basis and
-  // forget the leg — that would draw a call ladder under a net header.
-  const readQs = `&basis=${basis}&leg=${leg}`;
 
   // The one gate. Live only means anything on `compare` (it IS the prior→now
   // reading) and only against the LATEST session — "live vs the 8th" would be
@@ -1616,17 +1793,17 @@ export default function GexGrowth() {
               top name on a call board would open a ladder ordered by
               something else. */}
           <span style={{ display: "flex", gap: 4, border: `1px solid ${T.border}`, borderRadius: 999, padding: 3 }}>
-            {LEGS.map((l) => (
+            {LEGS.filter((l) => !(l === "split" && splitBlocked(basis, mode))).map((l) => (
               <button
                 key={l}
                 onClick={() => setLeg(l)}
-                aria-pressed={leg === l}
+                aria-pressed={effLeg === l}
                 title={LEG_COPY[l].hint(basis)}
                 style={{
-                  ...(leg === l ? homeButtonStyle : homeSecondaryButtonStyle),
+                  ...(effLeg === l ? homeButtonStyle : homeSecondaryButtonStyle),
                   borderRadius: 999, padding: "5px 12px",
-                  border: leg === l ? undefined : "1px solid transparent",
-                  background: leg === l ? undefined : "transparent",
+                  border: effLeg === l ? undefined : "1px solid transparent",
+                  background: effLeg === l ? undefined : "transparent",
                 }}
               >
                 {LEG_COPY[l].tab}
@@ -1772,7 +1949,7 @@ export default function GexGrowth() {
         >
           <span style={{ fontSize: 12, fontWeight: 800, color: LIGHT_BLUE, flexShrink: 0 }}>
             {BASIS_COPY[basis].name}
-            {leg !== "net" ? ` · ${LEG_COPY[leg].name}` : ""}
+            {effLeg !== "net" ? ` · ${LEG_COPY[effLeg].name}` : ""}
           </span>
           <span style={{ fontSize: 11, fontFamily: MONO, color: T.textMuted, flexShrink: 0 }}>
             {BASIS_COPY[basis].unit}
@@ -1783,14 +1960,33 @@ export default function GexGrowth() {
                 leg cannot change sign, so a reader who arrives expecting a
                 flip or a wall will not find one — and the absence is a
                 property of the arithmetic, not of the book. */}
-            {!legIsSigned(basis, leg) ? (
+            {!legIsSigned(basis, effLeg) ? (
               <>
                 {" "}
-                <strong>{LEG_COPY[leg].tab} on this basis are one-sided</strong>{" "}
-                ({leg === "call" ? "always ≥ 0" : "always ≤ 0"}) — there is no flip or crossing to read in this ladder. The badges beside each symbol still describe the whole book.
+                <strong>{LEG_COPY[effLeg].tab} on this basis are one-sided</strong>{" "}
+                ({effLeg === "call" ? "always ≥ 0" : "always ≤ 0"}) — there is no flip or crossing to read in this ladder. The badges beside each symbol still describe the whole book.
               </>
             ) : null}
           </span>
+          {/* WHEN THIS BASIS WAS RUN. Always shown, never a tooltip: the four
+              bases are captured at different moments and can differ by a whole
+              session inside one row (vol at yesterday's 16:05 sweep, oi from
+              this morning's settled file). A reader comparing two bases has to
+              be able to see that without hunting for it. */}
+          {detail?.capturedAt ? (
+            <span
+              title={detail.prevCapturedAt
+                ? `Prior session's ${BASIS_COPY[basis].name} was captured ${fmtEtStamp(detail.prevCapturedAt)}. A Δ compares these two moments.`
+                : "No prior session on file to compare against."}
+              style={{
+                fontFamily: MONO, fontSize: 10, color: T.textMuted, flexShrink: 0,
+                border: `1px solid ${T.border}`, borderRadius: 999, padding: "2px 8px",
+              }}
+            >
+              run {fmtEtStamp(detail.capturedAt)}
+            </span>
+          ) : null}
+
           {/* Settled-OI provenance. Only meaningful on `oi`, and it is the flag
               that says whether the Δ on screen is a real ΔOI or two
               provisional reads subtracted. */}
@@ -2119,7 +2315,14 @@ export default function GexGrowth() {
                     // flex:1 + minHeight:0 + overflowY:auto was what trapped the
                     // ladder in a ~400px slot inside a fixed-height card.
                     <div style={{ opacity: detailLoading ? 0.55 : 1, transition: "opacity .12s" }}>
-                      <Ladder rows={ladderRows} spot={detail.spot ?? null} mode={mode} live={showLive} leg={leg} />
+                      <Ladder
+                        rows={ladderRows}
+                        spot={detail.spot ?? null}
+                        mode={mode}
+                        live={showLive}
+                        leg={effLeg}
+                        splitNeedsRows={basis === "flow"}
+                      />
                       {band && ladderRows.length < (detail.rows?.length ?? 0) ? (
                         // Never truncate silently: a reader who forgot the band
                         // is on would read a missing wall as a wall that left.

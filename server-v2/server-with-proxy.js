@@ -1874,6 +1874,26 @@ async function main() {
       // split takes that ambiguity back out. They are additive:
       // callBuy + callSell = the call leg, all four = flow_gex.
       //
+      // ── WHEN WAS IT RUN ──────────────────────────────────────────────────
+      // Every response carries `capturedAt` (and `prevCapturedAt` on the change
+      // route) resolved FOR THE ACTIVE BASIS — not the row's write clock.
+      //
+      // This matters because the four bases are four reads of different sources
+      // at different moments, and two of them can be a full session apart
+      // INSIDE ONE ROW: `vol` was captured at the 16:05 chain sweep, while
+      // `oi` on that same row was re-read from the settled OCC file at 09:25
+      // the next morning. There is no single "when was this row run".
+      //
+      //   oivol / vol  → captured_at        (chain read start for that symbol)
+      //   oi           → oi_captured_at, else captured_at while provisional
+      //   flow         → flow_captured_at   (the flow_prints aggregate)
+      // all falling back to `ts` for rows written before these columns existed.
+      //
+      // Read START, not write finish: a symbol whose sweep takes 40s describes
+      // the book as of when the fetch went out. The board route carries a
+      // per-SYMBOL `capturedAt` for the same reason — the sweep paces across
+      // ~169 names over several minutes, so they genuinely differ.
+      //
       // Responses echo `basis` and `leg` and carry `hasBasis`. hasBasis=false
       // means the reading has NOTHING recorded for that session/symbol — a zero
       // board and an unrecorded board are indistinguishable once COALESCEd, and
