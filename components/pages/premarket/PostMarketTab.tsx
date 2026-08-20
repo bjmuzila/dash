@@ -98,8 +98,15 @@ export const POSTMARKET_CSS = `
 /* Section headers: title, then whatever the section's legend is, then a spacer.
    The legend belongs BESIDE the thing it explains — flung to the far right of a
    1560px header it reads as unrelated chrome, and on the build-time ramp that
-   is five swatches nobody connects to the bars under them. `.sechead .right`
-   opts a trailing item back out to the right edge. */
+   is five swatches nobody connects to the bars under them. A trailing item opts
+   back out to the right edge with the .right class below.
+
+   NOTE — NO BACKTICKS IN THIS COMMENT, or anywhere in this string. It is a
+   template literal: one stray backtick ends it and turns everything after into
+   a property access on a string, which is exactly how this block shipped broken
+   ("Cannot read properties of undefined (reading 'right')" — the text after the
+   stray backtick was a .sechead .right selector mentioned in prose).
+   Premarket.tsx carries the same warning on its own CSS for the same reason. */
 .pmk .sechead{display:flex;align-items:baseline;justify-content:flex-start;gap:14px;margin-bottom:11px;flex-wrap:wrap}
 .pmk .sechead .right{margin-left:auto}
 .pmk .sechead h3{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);margin:0;font-weight:600}

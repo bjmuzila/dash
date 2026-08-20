@@ -1,195 +1,172 @@
 # Changelog
 
-## 2026-08-20 (m) - Comped access: grant paid-customer access from the Admin page
+## 2026-08-20 (n) - Premarket crashed on a BACKTICK IN A CSS COMMENT
 
-Added: `app/api/admin/comp-access/route.ts`, `comp_access` table.
-Edited: `lib/db.ts`, `owner-vite/src/pages/Admin.tsx`,
-`scripts/grant-paid-access.mjs` (rewritten onto the new mechanism).
+Edited: `components/pages/premarket/PostMarketTab.tsx`.
 
-There was no way to hand someone full customer access short of running SQL. The
-owner Admin page now has a **Comped Access** card: email + optional note +
-optional expiry → Grant, with a list and a Revoke button (same shape as the
-Unsubscribes card directly below it).
+    Uncaught TypeError: Cannot read properties of undefined (reading 'right')
 
-**Storage — its own table, not a fake Stripe row.**
-`subscriptions` is the mirror of Stripe. A hand-written `status='active'` row
-there is indistinguishable from a real customer to everything that reads that
-table, and the Stripe webhook would clobber it the moment that person actually
-subscribed. So comps live in `comp_access`:
+`POSTMARKET_CSS` is a template literal. The comment added with the left-aligned
+section legends mentioned a selector in prose and wrapped it in backticks — which
+ENDED the string. Everything after it parsed as code: the string literal followed
+by a property access, so the bundle evaluated something like
+`"...css...".sechead.right` and threw on first render, taking the whole
+/premarket route down.
 
-    comp_access (email PK, note, expires_at, granted_by, granted_at, revoked_at)
+Premarket.tsx's own CSS block has carried a warning about exactly this since the
+last time it shipped ("no backticks anywhere in this string"). POSTMARKET_CSS now
+carries the same warning, naming this crash.
 
-- **Keyed on email, not user_id**, so a comp can be granted BEFORE the person
-  has an account. The row waits; the join picks it up on their first request
-  after signup. Those rows render as `pending signup` in the card.
-- `expires_at` NULL = never. A date from the picker expires at the END of that
-  day, EST-anchored — deliberately an hour generous in summer rather than an
-  hour short, because a comp that ends early reads as a broken account.
-- Revoke stamps `revoked_at` instead of deleting, so the history of who was
-  comped and when survives a re-grant. Re-granting a revoked email revives the
-  row (`ON CONFLICT ... SET revoked_at = NULL`).
+### And a type-check harness, because esbuild cannot see this class of bug
 
-**The gate — one line, one place.** `getSessionWithUser()` in `lib/db.ts` now
-computes `is_paid` as *(Stripe active/trialing)* **OR** *(live comp row)*. That
-is the only flag `middleware.ts` gates paid routes on, so a comp unlocks exactly
-what a subscriber sees. It does not touch `users.is_owner`, so `/owner/*`,
-`/social-media`, `/home3`, `/v3` and every `ownerApiGate` endpoint still reject
-a comped account. A new `is_comped` field rides along for display only.
+A bundler resolves the syntax and moves on; the error only appears at runtime.
+The four files were checked with `tsc --strict` against small stubs for the `@/`
+imports — that is what found it (TS2339: Property 'sechead' does not exist on
+type '"\n.pmk .tabs{...}"'), and it now also confirms the CORE rename, the wall
+colour tokens and the two-role wall chart are type-clean end to end.
 
-**API.** `/api/admin/comp-access` — GET (live comps) / POST (grant) / DELETE
-(revoke). Owner-session only, fails CLOSED like its `/api/admin/*` siblings, and
-deliberately NOT wired to the `INTERNAL_API_TOKEN` bypass: this endpoint hands
-out paid access and has no automated caller.
+## 2026-08-20 (m) - Wall migration: two ROLES, not three levels
 
-**Deliberately left on Next, not ported to `server-v2/api-router.js`.** The
-router requires `_lib-db.cjs`, an esbuild bundle of `lib/db.ts` that is
-committed rather than rebuilt on deploy — a route registered there would call
-`libDb.listCompAccess` and find it missing until someone regenerates the bundle.
-Unregistered paths fall through to Next, which imports `lib/db.ts` directly, so
-the Next route is the live one. (Regenerating the bundle is still worthwhile
-housekeeping: `esbuild lib/db.ts --bundle --platform=node --format=cjs
---external:pg --outfile=server-v2/_lib-db.cjs`.)
+Edited: `components/pages/premarket/PostMarketTab.tsx`.
 
-**Table creation** happens through `ensureAllTables()` on the first `getDb()` in
-the Next process, which every gated request already hits. No migration to run.
+Three lines (call wall, put wall, CORE) always drew CORE on top of one of the
+other two — because CORE IS one of them, whichever is carrying more gamma. The
+chart spent a colour and a legend entry saying the same thing twice, and the
+reader had to work out which wall was hiding under the violet.
 
-**Script.** `scripts/grant-paid-access.mjs` was rewritten to write `comp_access`
-instead of a fake subscription. It gained `--note`, `--until YYYY-MM-DD`,
-`--list`, and `--check` — the last one reports leftover `status='active'`
-subscription rows with no Stripe id, i.e. grants made by the previous version of
-this script, so they can be migrated and deleted.
+Now two series, defined as ROLES rather than levels:
 
-KNOWN GAP: `listAllUsersForBroadcast()` still derives `paid` from Stripe alone,
-so a comped account shows up in the Admin page's "Not Paying" list and in
-upsell broadcast audiences. Left as-is — folding comps in there changes what
-that list means for revenue.
+- **CORE** — the heavier of the two walls at that minute (violet, thicker).
+- **the other wall** — the lighter one (dim white).
 
+When they swap, the lines swap, which is the event actually worth seeing: the
+day's dominant level changing sides. The caption states how much of the session
+the call side held CORE. Spot stays as the price reference.
 
-## 2026-08-20 (l) - Owner-only UI was visible to every signed-in customer
+The roles are what get smoothed, not the walls — mode-filtering call and put
+separately and THEN comparing would let a smoothed strike fight an unsmoothed
+magnitude and flicker the roles straight back.
 
-Added: `components/auth/useIsOwner.ts`.
-Edited: `components/shared/NavMenu.tsx`, `components/shared/DataBox.tsx`,
-`components/shared/EconCalendarDiscordBtn.tsx`, `components/shared/TopBar.tsx`.
+### Section legends are left-aligned
 
-Four components each carried their own copy of the client-side owner check, and
-all four had the same fallback:
+`.sechead` is `justify-content: flex-start`, so a section's legend sits beside
+the title it belongs to instead of being flung to the far right of a 1560px
+header, where five build-time swatches read as unrelated chrome. A trailing meta
+line opts back out to the right edge with `.right`.
 
-    const ownerId = process.env.NEXT_PUBLIC_OWNER_USER_ID;
-    const isOwner = ownerId ? user?.id === ownerId : !!isSignedIn;   // <- bug
+## 2026-08-20 (l) - Post-Market §7: strike paths
 
-`NEXT_PUBLIC_OWNER_USER_ID` is only a Docker build ARG. On any build where it
-was not passed, the ternary took the `!!isSignedIn` branch and promoted EVERY
-signed-in paying customer to "owner". That is why a plain customer account saw
-the **Owner** row in the hamburger nav and the Discord share buttons on panel
-headers. Nothing was actually reachable — `middleware.ts` blocks `/owner/*` and
-`/api/discord-share` does its own owner check — but the UI advertised it.
+Edited: `components/pages/premarket/PostMarketTab.tsx`.
 
-- New `useIsOwner()` hook is the single client-side owner check, and it FAILS
-  CLOSED: `isOwnerClaim || (ownerId && user.id === ownerId)`, never a bare
-  "is signed in". `isOwnerClaim` is server truth (`users.is_owner`, delivered
-  by `/api/auth/me`), so the env fallback is no longer load-bearing and an
-  unconfigured build now hides owner UI from everyone instead of showing it to
-  everyone.
-- `NavMenu` — the **Owner** row (`https://owner.cbedge.net`) now renders only
-  for a real owner. `hasFullAccess` folded the redundant `isOwnerClaim` term
-  into `isOwner`.
-- `DataBox` — `BoxDiscordBtn` is what every panel-header Discord button renders
-  through (`GexToolbar`, `SnapshotPanel`, and every `DataBox showDiscord`), so
-  this one change covers all of them.
-- `EconCalendarDiscordBtn` — both the Discord post and template-copy buttons.
-- `TopBar` — the `ownerOnly` nav filter. (This component is currently
-  unreferenced; fixed for consistency.)
-- Untouched on purpose: `UserMenu`'s "Join Discord" link is gated on
-  `isPaid || isOwnerClaim` — that is the customer Discord-community link, not an
-  owner tool. `EconCalendarPanel`, `GlobalToolbar`, `GexDock`, `BzilaAlerts`,
-  `TradersDashboard` and `WhatsNewClient` already used the strict form.
-- `components/NavMenu.tsx` (repo-root duplicate) still has the old fallback and
-  was left alone — nothing imports it.
+A new bottom section: one sparkline per strike around spot — that strike's gamma,
+minute by minute, off the ladder the tab already fetches. Treatment A from the
+options mockup, on its own, because it answers a different question from the
+profile above it: the profile ranks strikes AGAINST EACH OTHER, this ranks each
+strike against ITS OWN day.
 
-NOTE: because the check now prefers the server claim, the owner account must
-have `users.is_owner = TRUE` in Postgres, not just a matching
-`OWNER_USER_ID`/`NEXT_PUBLIC_OWNER_USER_ID` env value:
+Each line is scaled to its own peak, on purpose. A shared scale flattens every
+strike outside the biggest two or three into a straight line at zero — which is
+exactly the set whose SHAPE is worth seeing: a strike that built at 10:00 and was
+gone by noon would read identically to one that never traded. Magnitude is not
+lost; it is printed beside the line and the profile above is the ranked view.
 
-    UPDATE users SET is_owner = TRUE WHERE lower(email) = '<owner email>';
+Cards carry the level's colour on the left edge and its tag underneath, so CALL
+WALL / PUT WALL / CORE / MAX PAIN are findable in the grid at a glance. The grid
+is `auto-fill`, so it uses whatever width the page has instead of a fixed column
+count that gutters at 1440 and clips at 1100.
 
+## 2026-08-20 (k) - Call wall GREEN, put wall RED, everywhere; SPY/QQQ profile opens at spot
 
-## 2026-08-20 (k) - New script: grant comped paid-customer access by email
+Edited: `components/pages/Premarket.tsx`, `components/pages/premarket/PostMarketTab.tsx`,
+`components/pages/premarket/TickerBoard.tsx`, `components/mobile/pages/MobilePrep.tsx`.
 
-Added: `scripts/grant-paid-access.mjs`. No app code touched.
+### The walls get their own two colours
 
-There was no way to hand someone full customer access without running them
-through Stripe. This is that switch — and only that switch.
+`--cw` and `--pw` are new tokens on `.pmk`, deliberately separate from
+`--pos` / `--neg`. Those two mean "positive or negative GAMMA" and belong to the
+bars and the heat ramp; the walls are LEVELS. Until now they shared tokens, which
+meant flipping the wall convention would have re-coloured every bar on the page.
 
-- The paywall reads exactly one thing: `getSessionWithUser()` in `lib/db.ts`
-  computes `is_paid` as `sub.status IN ('active','trialing')` off the
-  `subscriptions` row keyed by the user's id, and `middleware.ts` gates every
-  protected route on it. The script upserts that row with `status='active'`.
-- `users.is_owner` is deliberately untouched, so the account stays a plain
-  customer: `/owner/*`, `/social-media`, `/home3`, `/v3` and every
-  `ownerApiGate` endpoint keep rejecting it. The script prints `is_owner` back
-  after the write as a check, and warns if it is somehow true.
-- Writes no `stripe_customer_id` / `stripe_subscription_id` / `price_id`, so a
-  comp never reads as real revenue and the Stripe webhook has nothing to
-  collide with if that account ever does subscribe for real.
-- Stamps `welcome_email_sent_at` so the founder auto-welcome does not fire at
-  a comped account.
-- `current_period_end` is set to 2100-01-01 (epoch 4102444800) so anything
-  doing renewal-date display or grace-window math treats it as current.
-- `--revoke` flips the row to `canceled` — same gate, reversed.
-- The account must already exist; the script exits 2 with a "sign up first"
-  message if the email has no `users` row. Since 2026-08-20 (j) that means
-  email + password at `/sign-up`, not Google.
-- Takes effect within ~8s (the `lib/auth/session.ts` validation cache TTL), or
-  instantly on re-login.
-- Header of the script carries the `docker exec` invocation for the VPS and a
-  plain-SQL equivalent for psql.
+Call wall now reads green and put wall red on every ticker and every surface —
+rails, level cards, profile tags, range bar, wall-migration lines and legend,
+tomorrow's map, the level-move log, and the phone board (`CW_COLOR` / `PW_COLOR`,
+the same split in the mobile palette). One place to change it: those two tokens.
 
+The phone Prep page also drops the shared `LevelsBar`: it showed the same four
+numbers as the ladder directly under it, and it paints the walls on the CHART's
+blue/red pole ramp — which would have put two different wall colours on one
+screen.
 
-## 2026-08-20 (j) - Auth: Google sign-in removed, email/password only
+### Level-grade accents
 
-Edited: `components/auth/AuthForm.tsx`, `app/api/auth/google/start/route.ts`,
-`app/auth/callback/route.ts`.
+The accent had become an inline `borderLeftColor` on a card whose border is 1px,
+so it was a hairline nobody could see. It is now the full `borderLeft`
+shorthand — 4px, from the level's own colour — so the width cannot depend on the
+CSS block having reached the page, which is what left the SPY/QQQ grade cards
+bare.
 
-Google OAuth kept failing at the consent screen with
-`Error 400: redirect_uri_mismatch`, so the Google path is gone. Sign-in and
-sign-up are now email + password only.
+### SPY / QQQ profile
 
-- `AuthForm` lost the "Continue with Google" button, the `or` divider and the
-  `withGoogle()` handler. The email/password form, Turnstile captcha and rate
-  limiting are unchanged — it is just the first thing on the card now.
-- `/api/auth/google/start` and `/auth/callback` are reduced to stubs that
-  redirect to `/sign-in` (the callback also clears any leftover
-  `g_oauth_state` / `g_oauth_next` cookies). Kept rather than deleted so a
-  stale bookmark, a cached bundle, or a consent screen left open in a tab
-  lands on the login page instead of a 404.
-- `middleware.ts` unchanged — those two paths stay public so the stub
-  redirects are reachable without a session.
-- `lib/auth/google.ts` and the `google_sub` column are now unused. Existing
-  Google-only accounts (rows with no `password_hash`) cannot sign in until
-  they set a password via Forgot password.
+Opens centred on spot with the same pin / un-pin-on-scroll / "back to spot"
+behaviour as the SPX profile, instead of at +60 strikes where every bar is a
+sliver.
 
+## 2026-08-20 (j) - "Core Bullseye" is CORE everywhere
 
-## 2026-08-20 (i) - Options Chain: mirrored strike rail on the right edge
+Edited: `components/pages/Premarket.tsx`, `components/pages/premarket/PostMarketTab.tsx`,
+`components/pages/premarket/TickerBoard.tsx`, `components/mobile/pages/MobilePrep.tsx`.
 
-Edited: `components/pages/OptionsChain.tsx`.
+Every user-facing "Core Bullseye" / "BULLSEYE" / bare "CB" now reads **CORE** —
+the rail cap, the level card, the profile tag, the verdict sentence, tomorrow's
+map, the phone ladder and the accuracy tile. The rail's second line is "max γ
+strike" rather than a second name for the same thing. The scorecard's level key
+went from "CB" to "CORE" with it, so the code and the label match.
 
-The chain grid had one strike ladder, sticky on the left. With a wide expiry
-set the right-hand columns sit far enough from it that naming a row means
-scrolling back — so the same ladder now repeats as a sticky column on the far
-right edge of the grid.
+Kept as-is: the `cb` field on the walls-recorder payload (that is the server's
+name for it, and /level-log reads the same rows) and the `coreBullseye` variable
+in Premarket. Comments say "CORE (CB)" once where the abbreviation still helps.
 
-- New `STRIKE_COL`-wide track appended to `gridTemplateColumns`, after the
-  reserved (ghost) tracks, so it is always the outermost column.
-- Header corner, padding rows and data rows each got their mirrored cell.
-- The right rail is a full peer of the left one: same click-to-focus and
-  shift-click-to-isolate handler, same ATM cyan + white inset rule, same EM
-  +/-1s / +/-2s tags, same selection tint and dim behaviour.
-- Geometry is flipped, not restyled: border and selection rule on the LEFT
-  edge, number left-aligned, EM tag pushed to the outer (right) edge.
-- ATM/selection rules stay `box-shadow` insets rather than real borders, for
-  the same reason as the left rail: a real 2px border would make the ATM row
-  taller than its neighbours and the ladder would jump every time spot crossed
-  a strike.
+## 2026-08-20 (i) - Post-Market: wall path de-flickered, §3 opens at spot, tiles get accents
+
+Edited: `components/pages/premarket/PostMarketTab.tsx`.
+
+### The violet picket fence in Wall Migration
+
+CORE is "the biggest |net| strike". On a minute where the largest positive and
+the largest negative strike are within a few percent of each other it ALTERNATES
+between them — two strikes sixty points apart, flipping every sample — and a line
+through that is a picket fence of vertical jumps. The walls flicker the same way
+at the edges of the ladder.
+
+Two fixes:
+
+- **Rolling MODE, five samples.** A level is a discrete strike, so the honest
+  smoother is the most common value in a short window, never an average —
+  averaging invents strikes that were never the wall. Ties break toward the raw
+  pick so a genuine roll is not held back.
+- **Step lines, not slopes.** A wall holds one strike and then jumps. A straight
+  interpolation draws a diagonal through prices the level never occupied, which
+  is exactly the reading this panel exists for. Spot stays a real line — it is
+  the one continuous series.
+
+And the panel now carries **its own legend** (call wall / CORE / put wall / spot).
+The section legend above it is the build-time ramp and says nothing about those
+four series, which is how a violet line reads as an unexplained squiggle.
+
+### Section 3
+
+- Opens **centred on spot** instead of at +60 strikes, with the same pin /
+  un-pin-on-scroll / "back to spot" behaviour as the premarket profile.
+- The ladder is 520px and sets its row's height, so the panel fills its space.
+- A strike carrying under 2% of the biggest bar drops its label: "−100% 09:32"
+  on a line that never held anything is false precision.
+
+### Accents
+
+`.tile` (positioning, tomorrow's map) now carries the same left accent the
+scorecard cards do, coloured by what the tile says — sign for DEX and the roll,
+amber for the flip, violet for the call/put split. A card with a bare edge reads
+as a different kind of thing, and they are all the same kind of thing.
 
 ## 2026-08-20 (h) - Post-Market §3 rebuilt: build-time bars, peak marks, wall path, written-vs-traded
 
