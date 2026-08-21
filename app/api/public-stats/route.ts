@@ -296,6 +296,48 @@ async function ibBehaviour(): Promise<PublicStat | null> {
   };
 }
 
+/**
+ * IB break bias — the ONE directional call the IB scoreboard makes, graded.
+ *
+ * `bias` is set at 10:30 ET in lib/ibDaily.ts from the IB close against the IB
+ * midpoint (close > mid -> H, close < mid -> L, exactly on mid -> no bias, and
+ * that row is excluded here). `first_touch_side` is the side price actually
+ * took out first after 10:30. Correct = the two agree. It is Rule 1 of the
+ * 14-rule scoreboard, "Midpoint Close Bias".
+ *
+ * This is a DIFFERENT KIND of claim from IB_METRIC above, and both are honest.
+ * IB_METRIC (retest) describes what breaks do once they have happened — it is
+ * decision-relevant but it predicts nothing. This one is a call made before the
+ * outcome and scored against it, which is the only sort of number a visitor
+ * reads as "were they right". Publish both; do not merge them.
+ *
+ * ES only — NQ writes its own row per date and the two correlate hard, so
+ * pooling them near-doubles n without adding independent evidence. Same
+ * reasoning as the MIN_PERIODS floor elsewhere in this file.
+ */
+async function ibBias(): Promise<PublicStat | null> {
+  const pool = await getDb();
+  const { rows } = await pool.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE first_touch_side = bias)::int AS correct,
+      COUNT(*)::int                                        AS resolved,
+      MIN(date)                                            AS since
+    FROM ib_daily_results
+    WHERE symbol = 'ES' AND bias IS NOT NULL AND first_touch_side IS NOT NULL
+  `);
+  const r = rows[0];
+  const n = Number(r?.resolved ?? 0);
+  if (n < MIN_N) return null;
+  return {
+    key: "ib-bias",
+    label: "IB break bias called correctly",
+    sublabel: `Called at 10:30 from the IB close vs its midpoint, graded on which side broke first — ES, ${n} resolved sessions`,
+    pct: Math.round((Number(r.correct) / n) * 1000) / 10,
+    n,
+    since: r?.since ?? null,
+  };
+}
+
 export async function GET(req: Request) {
   const fresh = new URL(req.url).searchParams.has("fresh");
   if (!fresh && cache && Date.now() - cache.at < CACHE_MS) {
@@ -304,14 +346,14 @@ export async function GET(req: Request) {
 
   try {
     // allSettled: one empty/missing table must not blank the whole strip.
-    const settled = await Promise.allSettled([emZones(), ictSetups(), cbReach(), ibBehaviour()]);
+    const settled = await Promise.allSettled([emZones(), ictSetups(), cbReach(), ibBehaviour(), ibBias()]);
 
     // WHY a stat is absent matters when you're staring at a missing card. A
     // rejected promise (table doesn't exist, bad column) and a null return
     // (real data, under the floor) look identical in `stats` — so say which,
     // out loud, in the payload. This is the difference between "the query is
     // broken" and "come back in three weeks".
-    const keys = ["em", "ict", "cb", "ib"];
+    const keys = ["em", "ict", "cb", "ib", "ib-bias"];
     const suppressed = settled
       .map((s, i) =>
         s.status === "rejected"

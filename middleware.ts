@@ -25,6 +25,15 @@ const PUBLIC_PATTERNS: RegExp[] = [
   /^\/api\/auth\/internal-session$/,
   /^\/api\/auth\/google(\/.*)?$/,
   /^\/api\/waitlist(\/.*)?$/,
+  // Landing-page data, read by signed-OUT visitors: /api/public-stats (graded
+  // percentages), /api/public-ledger (the rows behind them) and
+  // /api/public-levels (the free SPX level tile). All three are registered
+  // auth:'public' in server-v2/api-router.js, which intercepts /api/* before
+  // middleware runs in production — this entry is what keeps them reachable if
+  // the API_ROUTER kill-switch is ever flipped off. Without it a signed-out
+  // visitor gets a 307 to "/" and the landing page renders an empty hero.
+  /^\/api\/public-[a-z-]+$/,
+
   /^\/api\/unsubscribe(\/.*)?$/,
   /^\/unsubscribe$/,
   /^\/api\/stripe\/webhook$/,

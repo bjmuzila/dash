@@ -6122,17 +6122,248 @@ if (libDb) {
         pct: Math.round((Number(r.touched) / n) * 1000) / 10, n, since: r?.since ?? null,
       };
     };
+    // IB break bias — the ONE directional call the IB scoreboard makes, graded.
+    //
+    // `bias` is set at 10:30 ET in lib/ibDaily.ts from the IB close against the
+    // IB midpoint (close > mid -> H, close < mid -> L, exactly on mid -> no
+    // bias, row excluded). `first_touch_side` is the side price actually took
+    // out first after 10:30. Correct = the two agree. That is Rule 1 of the
+    // 14-rule scoreboard ("Midpoint Close Bias") and the only IB column that is
+    // a PREDICTION — retest / extension / failure describe what breaks do once
+    // they happen, so publishing one of those as a success rate would be a
+    // description dressed as a call. See the IB_METRIC essay in
+    // app/api/public-stats/route.ts for why the 90.6% retest number is a
+    // different kind of claim.
+    //
+    // ES only. NQ writes its own row per date and the two correlate hard, so
+    // pooling them would near-double n without adding independent evidence —
+    // the same reasoning as the MIN_PERIODS floor on the other stats.
+    const ibBias = async () => {
+      const pool = await libDb.getDb();
+      const { rows } = await pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE first_touch_side = bias)::int AS correct,
+          COUNT(*)::int                                        AS resolved,
+          MIN(date)                                            AS since
+        FROM ib_daily_results
+        WHERE symbol = 'ES' AND bias IS NOT NULL AND first_touch_side IS NOT NULL`);
+      const r = rows[0];
+      const n = Number(r?.resolved ?? 0);
+      if (n < MIN_N) return null;
+      return {
+        key: 'ib-bias', label: 'IB break bias called correctly',
+        sublabel: `Called at 10:30 from the IB close vs its midpoint, graded on which side broke first — ES, ${n} resolved sessions`,
+        pct: Math.round((Number(r.correct) / n) * 1000) / 10, n, since: r?.since ?? null,
+      };
+    };
     register('/api/public-stats', {
       auth: 'public', methods: ['GET'],
       async handler(req, res) {
         if (psCache && Date.now() - psCache.at < PS_TTL_MS) { send(res, 200, psCache.payload); return; }
         try {
-          const settled = await Promise.allSettled([emZones(), ictSetups(), cbReach()]);
+          const settled = await Promise.allSettled([emZones(), ictSetups(), cbReach(), ibBias()]);
           const stats = settled.map((s) => (s.status === 'fulfilled' ? s.value : null)).filter((s) => s != null).sort((a, b) => b.n - a.n);
           const payload = { stats, computedAt: new Date().toISOString() };
           psCache = { at: Date.now(), payload };
           send(res, 200, payload);
         } catch { send(res, 200, { stats: [], computedAt: new Date().toISOString() }); }
+      },
+    });
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // /api/public-levels — UNGATED SPX level tile for the landing page.
+  //
+  // This is the one number CB Edge gives away. A cold visitor sees a real gamma
+  // flip, the two walls and the Core Bullseye before there is any account, any
+  // card or any email — the argument the landing page makes is "here it is",
+  // not "trust the screenshot".
+  //
+  // Deliberately NARROW, because it is the free tier and the paid pages have to
+  // stay worth paying for:
+  //   • SPX only. No ticker param exists, so no other root is reachable here.
+  //   • Front expiry, oi+vol basis. No dte / gexBasis params.
+  //   • Four scalars + spot. No ladder, no per-strike rows, no rate of change,
+  //     no history, no totals beyond one net-GEX figure.
+  // Adding any of those to THIS route gives the product away. They belong on the
+  // subscriber routes that already serve them.
+  //
+  // The 15s module cache doubles as the rate limit: anonymous traffic can hammer
+  // this endpoint and /proxy/gex still sees at most four reads a minute. It also
+  // means every visitor in a 15s window is looking at the same numbers, which is
+  // what makes the `asOf` stamp honest.
+  {
+    const PL_TTL_MS = 15_000;
+    let plCache = null; // { at, payload }
+
+    // Local copies of the two helpers /api/social-media/daily-input keeps inside
+    // its own handler. Copied rather than hoisted on purpose: that route is
+    // owner-only and hot-path sensitive, and a shared refactor to serve an
+    // ungated route is how a gate gets widened by accident later.
+    const rowNet = (o) => {
+      const oi = Number(o.netGEX ?? o.netGex ?? 0);
+      const vol = Number(o.netVolGEX ?? o.netVolGex ?? 0);
+      return (Number.isFinite(oi) ? oi : 0) + (Number.isFinite(vol) ? vol : 0);
+    };
+    // Zero-crossing of net GEX, interpolated between the two straddling strikes,
+    // then the crossing nearest spot. Same routine the owner card uses — the
+    // landing page must not print a flip computed a second way.
+    const flipOf = (gexRows, spot) => {
+      if (!Array.isArray(gexRows)) return null;
+      const sorted = gexRows
+        .map((r) => { const o = r ?? {}; return { strike: Number(o.strike ?? 0), netGEX: rowNet(o) }; })
+        .filter((r) => r.strike > 0 && Number.isFinite(r.netGEX))
+        .sort((a, b) => a.strike - b.strike);
+      if (!sorted.length) return null;
+      const crossings = [];
+      for (let i = 0; i < sorted.length - 1; i++) {
+        const a = sorted[i].netGEX, b = sorted[i + 1].netGEX;
+        if (a === 0) { crossings.push(sorted[i].strike); continue; }
+        if (b === 0) { crossings.push(sorted[i + 1].strike); continue; }
+        if ((a > 0 && b < 0) || (a < 0 && b > 0)) {
+          const sA = sorted[i].strike, sB = sorted[i + 1].strike;
+          const zero = sA + (sB - sA) * (Math.abs(a) / (Math.abs(a) + Math.abs(b)));
+          if (Number.isFinite(zero)) crossings.push(Math.round(zero * 10) / 10);
+        }
+      }
+      if (!crossings.length) return null;
+      const best = spot > 0
+        ? crossings.reduce((bst, c) => (Math.abs(c - spot) < Math.abs(bst - spot) ? c : bst))
+        : crossings[0];
+      return Number.isFinite(best) && best > 0 ? best : null;
+    };
+    // Core Bullseye = the largest |net GEX| strike on the board, the same
+    // definition the Multi Greek toolbar and the heatmap legend use.
+    const coreOf = (gexRows) => {
+      if (!Array.isArray(gexRows)) return null;
+      let best = null, bestAbs = 0;
+      for (const r of gexRows) {
+        const strike = Number(r?.strike ?? 0);
+        if (!(strike > 0)) continue;
+        const abs = Math.abs(rowNet(r ?? {}));
+        if (abs > bestAbs) { bestAbs = abs; best = strike; }
+      }
+      return best;
+    };
+
+    register('/api/public-levels', {
+      auth: 'public', methods: ['GET'],
+      async handler(req, res, ctx) {
+        if (plCache && Date.now() - plCache.at < PL_TTL_MS) {
+          send(res, 200, plCache.payload, { 'Cache-Control': 'public, max-age=15' });
+          return;
+        }
+        // Never 500s. The landing page renders the whole panel or renders
+        // nothing — a half-populated level tile on a page whose pitch is "these
+        // are real" is worse than an absent one.
+        const empty = {
+          ok: false, ticker: 'SPX',
+          spot: null, gammaFlip: null, callWall: null, putWall: null,
+          coreBullseye: null, netGexB: null, regime: null, asOf: Date.now(),
+        };
+        try {
+          const r = await ctx.internalFetch('/proxy/gex', { cache: 'no-store' });
+          if (!r.ok) { send(res, 200, empty); return; }
+          const p = await r.json();
+          const spot = Number(p?.spot ?? 0);
+          const totals = p?.totals ?? null;
+          const totalGex = totals
+            ? Number(totals.totalGEXOiVol ?? totals.totalGEX ?? 0)
+            : Number(p?.totalNetGex ?? 0);
+          const flip = flipOf(p?.gexRows, spot) ?? (p?.gexFlip != null ? Number(p.gexFlip) || null : null);
+          const payload = {
+            ok: true,
+            ticker: 'SPX',
+            spot: spot > 0 ? spot : null,
+            gammaFlip: flip,
+            callWall: p?.callWall != null ? Number(p.callWall) || null : null,
+            putWall: p?.putWall != null ? Number(p.putWall) || null : null,
+            coreBullseye: coreOf(p?.gexRows),
+            netGexB: Number.isFinite(totalGex) && totalGex !== 0 ? totalGex / 1e9 : null,
+            // Regime is read off spot vs the flip, not off the sign of total
+            // GEX: the flip is the line the page is actually about, and the two
+            // can disagree when the board is lopsided away from the money.
+            regime: spot > 0 && flip != null ? (spot >= flip ? 'positive' : 'negative') : null,
+            asOf: Number(p?.updatedAt ?? Date.now()),
+          };
+          plCache = { at: Date.now(), payload };
+          send(res, 200, payload, { 'Cache-Control': 'public, max-age=15' });
+        } catch {
+          send(res, 200, empty);
+        }
+      },
+    });
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // /api/public-ledger — UNGATED row-level receipts for the landing page.
+  //
+  // /api/public-stats publishes the PERCENTAGES. This publishes the ROWS behind
+  // one of them: the most recent graded Core Bullseye calls, hits and misses in
+  // the order they happened. The percentage answers "how often"; the ledger
+  // answers "show me", which is the objection that actually stops a signup.
+  //
+  // Reads confidence_log, the same table cbReach() aggregates, so the strip and
+  // the ledger can never tell different stories — a page that publishes its
+  // misses cannot afford two sources that drift.
+  //
+  // A row is only eligible once graded_at is set (the next session has printed).
+  // Ungraded and today's pending call are invisible here by construction, so
+  // there is no way for a bad day to sit un-published while a good one ships.
+  {
+    const PL_TTL_MS = 3_600_000; // 1h — the grader writes once a day
+    let ledgerCache = null; // { at, payload }
+    const MAX_ROWS = 8;
+
+    register('/api/public-ledger', {
+      auth: 'public', methods: ['GET'],
+      async handler(req, res) {
+        if (ledgerCache && Date.now() - ledgerCache.at < PL_TTL_MS) {
+          send(res, 200, ledgerCache.payload, { 'Cache-Control': 'public, max-age=1800' });
+          return;
+        }
+        try {
+          const pool = await libDb.getDb();
+          const { rows } = await pool.query(
+            `SELECT date, level, touched, held, broke, actual_outcome
+               FROM confidence_log
+              WHERE graded_at IS NOT NULL AND level > 0
+              ORDER BY date DESC
+              LIMIT $1`, [MAX_ROWS]);
+          const out = rows.map((r) => {
+            const touched = !!r.touched;
+            const held = !!r.held;
+            const broke = !!r.broke;
+            // One sentence, generated from the graded booleans — never written
+            // by hand, so it cannot flatter the row it describes.
+            const what = !touched
+              ? 'Never reached — price stayed away from the level all session'
+              : held
+                ? 'Reached and held — price turned at the level'
+                : broke
+                  ? 'Reached and broke — level gave way'
+                  : 'Reached; outcome inconclusive';
+            return {
+              date: String(r.date),
+              level: Math.round(Number(r.level) || 0),
+              type: 'Core Bullseye',
+              what,
+              // HIT tracks the published claim exactly: cbReach() grades
+              // "CB levels reached intraday", so reached = hit. Grading it any
+              // other way here would make the ledger and the percentage above it
+              // contradict each other.
+              hit: touched,
+              outcome: r.actual_outcome ?? null,
+            };
+          });
+          const payload = { rows: out, computedAt: new Date().toISOString() };
+          ledgerCache = { at: Date.now(), payload };
+          send(res, 200, payload, { 'Cache-Control': 'public, max-age=1800' });
+        } catch {
+          // Empty ledger renders nothing. Same rule as the receipts strip:
+          // better a missing section than a padded one.
+          send(res, 200, { rows: [], computedAt: new Date().toISOString() });
+        }
       },
     });
   }

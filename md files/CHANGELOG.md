@@ -1,5 +1,76 @@
 # Changelog
 
+## 2026-08-21 (i) - Landing page rebuilt: free live level + the graded ledger
+
+The landing page was getting ~300 views a day and converting nothing. It wasn't
+under-optimised — it wasn't making an argument. Rebuilt around the two things
+that are actually differentiated, and both of them now read LIVE data instead of
+being described in prose.
+
+Edited: `components/landing/LandingClient.tsx`, `server-v2/api-router.js`,
+`app/api/public-stats/route.ts`, `middleware.ts`.
+New: `components/landing/LiveLevelPanel.tsx`, `components/landing/GradedLedger.tsx`.
+
+**The fold is now the product, not the brand.** The 210px logo is gone (the logo
+lives in PublicNav, where a logo belongs) and the right half of the hero is a
+live SPX gamma flip — real number, off the real chain, refreshed every 15s, with
+no account, no card and no email. The pitch line under it says so out loud. The
+free tile stays free forever; the trial unlocks history, rate of change, flow and
+alerts.
+
+**`/api/public-levels`** (new, `auth: 'public'`) — SPX only, front expiry,
+oi+vol, four scalars plus spot. No ladder, no rate of change, no history, no
+ticker/dte/basis params, because that is the product. A 15s module cache doubles
+as the rate limit: anonymous traffic can hammer it and `/proxy/gex` still sees at
+most four reads a minute. Never 500s — the panel renders whole or renders an
+honest "resumes at the next session" state, never a level with a dash next to it.
+
+**`/api/public-ledger`** (new, `auth: 'public'`) — the ROWS behind the
+percentages: the last 8 graded Core Bullseye calls in date order, hits and misses
+together, read from `confidence_log`, the same table `cbReach()` aggregates. Only
+`graded_at IS NOT NULL` rows are eligible, so there is no mechanism by which a
+bad day can sit unpublished while a good one ships. The "what happened" sentence
+is generated from the graded booleans, never hand-written. 1h cache.
+
+**IB break bias is now a published stat.** `ibBias()` added to `/api/public-stats`
+(and the Next fallback route for parity): `bias` (set at 10:30 from the IB close
+vs its midpoint) graded against `first_touch_side` — Rule 1 of the 14-rule
+scoreboard. ES only; NQ writes its own row per date and the two correlate hard,
+so pooling would near-double n without adding evidence. It sits alongside — not
+instead of — the existing `IB_METRIC` retest stat: retest describes what breaks
+do, bias is a call made before the outcome. Both honest, different claims.
+
+**Page order is the fix, and it's documented in the file header.** Hero ("is this
+real?") → receipts + ledger ("is he full of it?") → capture + features ("what is
+it?") → close ("what do I do?"). The receipts moved from four small tiles below
+six feature cards to section two — publishing misses is the whole moat and it was
+carrying a footnote's weight.
+
+**Tradeify demoted.** It was the second-loudest thing on the page, in contrasting
+orange, in the visual centre, monetising someone else's product against our own
+offer. Now a quiet strip below the close CTA. Still orange (third-party offers
+are not cyan), still not a link.
+
+**Trial stays at 2 days**, deliberately. It works because the free panel exists:
+the visitor evaluates the tool before signing up, so the two days get spent using
+it rather than deciding about it. Every CTA carries "No charge up front · Cancel
+anytime" so the shortness never reads alone.
+
+`middleware.ts` gains `/^\/api\/public-[a-z-]+$/` so all three public endpoints
+stay reachable signed-out if the API_ROUTER kill-switch is ever flipped off —
+without it a signed-out visitor 307s to `/` and the hero renders empty.
+
+**Not built:** the nightly "yesterday's tape" replay section from the mock. It
+needs a job that snapshots the session's levels + OHLC and writes the beats.
+Shipping it with hand-written example numbers would make this page a liar about
+the one thing it claims, so it stays out until that job exists.
+
+**No proxy files were touched.** `/api/public-levels` reads `/proxy/gex` through
+`ctx.internalFetch`, exactly as `/api/insights/gex` and
+`/api/social-media/daily-input` already do. `proxy-tastytrade.js`,
+`proxy-thetadata.js` and `server-with-proxy.js` are unchanged.
+
+
 ## 2026-08-21 (h) - Level Log: an ALL view, walls + CORE on one timeline
 
 Edited: `components/pages/LevelLog.tsx`.

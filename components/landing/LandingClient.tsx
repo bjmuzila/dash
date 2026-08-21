@@ -2,12 +2,56 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { HOME_THEME as T } from "@/components/shared/homeTheme";
+import { HOME_THEME as T, REFRESH_GREEN } from "@/components/shared/homeTheme";
 import PublicNav from "@/components/landing/PublicNav";
 import HeroVideo from "@/components/landing/HeroVideo";
 import ReceiptsStrip from "@/components/landing/ReceiptsStrip";
+import LiveLevelPanel from "@/components/landing/LiveLevelPanel";
+import GradedLedger from "@/components/landing/GradedLedger";
 
 const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "CB Edge";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE LANDING PAGE — read this before moving anything.
+//
+// The previous version got ~300 views a day and converted nothing. It failed in
+// a specific, diagnosable way, and the order of this page is the fix. Each
+// section answers ONE question, in the order a cold visitor actually asks them:
+//
+//   1. HERO — "is this real?"      A live SPX gamma flip, free, no account.
+//   2. RECEIPTS — "is he full of it?"  Graded percentages AND the rows behind
+//      them, hits and misses, from the same tables the app grades itself with.
+//   3. PRODUCT — "what is it?"     The capture, then the feature grid.
+//   4. CLOSE — "what do I do?"     One CTA, the same words as the first one.
+//
+// What was wrong, so it doesn't come back:
+//
+//   • The fold was a 210px logo and a sentence every competitor also writes.
+//     Brand-first only works on a brand the visitor already knows. The logo now
+//     lives in PublicNav where a logo belongs; the fold sells the trade.
+//   • The one CTA routed to /pricing. That asks for a purchase decision from
+//     someone who has seen a still image. It still routes there (that is where
+//     the trial starts) but it is now the FOURTH thing on the page instead of
+//     the first, and by then they have used the product for free.
+//   • The Tradeify partner card sat in the visual centre in contrasting orange
+//     — the second-loudest thing on the page, monetising someone else's
+//     product, competing with our own offer. It is now a quiet strip at the
+//     bottom. Do not move it back above the fold.
+//   • The receipts — auto-graded hits AND misses, which nobody else in this
+//     space publishes — were four small tiles below everything. That is the
+//     whole pitch, given a footnote's weight. It is now section 2 with the
+//     row-level ledger under it.
+//
+// The 2-day trial length is deliberate and unchanged. It works BECAUSE the free
+// live panel exists: the visitor evaluates the tool before signing up, so the
+// two days get spent using it rather than deciding about it. Every CTA says
+// "No charge up front · Cancel anytime" so the shortness never reads alone.
+//
+// Not built yet: the nightly "yesterday's tape" replay section. It needs a job
+// that snapshots the session's levels + OHLC and writes the beats. Shipping it
+// with hand-written example numbers would make this page a liar about the one
+// thing it claims — so it stays out until the job exists.
+// ─────────────────────────────────────────────────────────────────────────────
 
 const FEATURES = [
   { slug: "gex", t: "Real-time SPX GEX", d: "Live gamma exposure profiles and flip levels straight from the options chain." },
@@ -18,222 +62,69 @@ const FEATURES = [
   { slug: "tpo", t: "TPO & Market Structure", d: "Market Profile live — POC, value area, single prints — plus a full-day profile forecast from the open." },
 ];
 
+// The value strip under the hero. Deliberately four FACTS, not four adjectives:
+// each one is checkable and none of them is a performance claim (those live in
+// the receipts section where they are graded).
+const STRIP = [
+  { n: "15s", l: "Chain-to-screen latency", s: "Direct feed, no polling delay" },
+  { n: "ES + NQ", l: "Futures structure, graded", s: "IB, TPO and ICT on both roots" },
+  { n: "Daily", l: "Auto-graded scoreboard", s: "Hits and misses, published" },
+  { n: "$45", l: "Per month, everything", s: "No tiers, no per-symbol upsell" },
+];
+
 export default function LandingClient() {
   const [xHover, setXHover] = useState(false);
 
-  // NOTE: the newsletter/waitlist capture used to live here, ABOVE the trial
-  // CTA. It was intercepting the warmest traffic on the page — visitors ready
-  // to start handed over an email and left instead of entering the product.
-  // /api/waitlist is untouched and still serves the other capture points; it
-  // just no longer competes with the primary action on the landing page.
-
   return (
-    <div
-      className="explore-root"
-      style={{
-        // Same ownership rule as /pricing: the bare LayoutShell wrapper is a
-        // flex column with overflow:hidden, so THIS root must own the scroll.
-        // Without it the card is trapped in a clipped box and any growth (the
-        // hero + receipts) pushes the logo up under the sticky toolbar with no
-        // way to scroll back to it.
-        flex: 1,
-        minHeight: 0,
-        overflowY: "auto",
-        fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
-        color: T.text,
-      }}
-    >
-      {/* Mobile: shrink the card so it fits an iPhone viewport without scrolling */}
+    <div className="explore-root" style={root}>
       <style>{`
-        .launch-badge { position: relative; overflow: visible; }
-        .fireworks { position: absolute; inset: 0; pointer-events: none; }
-        .fw { position: absolute; width: 3px; height: 3px; border-radius: 50%; opacity: 0; }
-        .fw1 { top: 50%; left: 12px; box-shadow: 0 0 0 #E0162B, 9px -9px 0 #FFFFFF, -9px -9px 0 #3C6FE0, 11px 0 0 #3C6FE0, -11px 0 0 #E0162B, 9px 9px 0 #FFFFFF, -9px 9px 0 #E0162B; animation: fwBurst 1.8s ease-out infinite; }
-        .fw2 { top: 28%; left: 24px; box-shadow: 0 0 0 #3C6FE0, 8px -8px 0 #E0162B, -8px -8px 0 #FFFFFF, 10px 0 0 #FFFFFF, -10px 0 0 #E0162B, 8px 8px 0 #3C6FE0; animation: fwBurst 1.8s ease-out infinite; animation-delay: .9s; }
-        .fw3 { top: 74%; left: 21px; box-shadow: 0 -10px 0 #FFFFFF, 8px -5px 0 #3C6FE0, -8px -5px 0 #E0162B; animation: fwBurst 1.8s ease-out infinite; animation-delay: 1.4s; }
-        @keyframes fwBurst {
-          0% { opacity: 0; transform: translateY(-50%) scale(0.2); }
-          15% { opacity: 1; }
-          60% { opacity: 1; transform: translateY(-50%) scale(1.1); }
-          100% { opacity: 0; transform: translateY(-50%) scale(1.3); }
-        }
-        @media (prefers-reduced-motion: reduce) { .fw { animation: none !important; opacity: 1; } }
-        .landing-feature { transition: border-color .18s, box-shadow .18s, transform .18s; cursor: pointer; }
+        /* ── Receipts strip, re-laid-out for this page ───────────────────
+           ReceiptsStrip ships a 2x2 grid because it was built for a narrow
+           column. Here it spans the card, so it goes 4-up and loses its own
+           border — the section it now sits in provides the frame. The
+           component is untouched so it still works at its natural size
+           wherever else it is used. */
+        .landing-receipts .receipts { margin-top: 0 !important; border: none !important; background: transparent !important; padding: 0 !important; }
+        .landing-receipts .receipts-grid { grid-template-columns: repeat(4, 1fr) !important; }
+        .landing-receipts .receipts > div:first-child { display: none !important; }
+
+        .landing-feature { transition: border-color .18s, box-shadow .18s, transform .18s; }
         .landing-feature:hover { border-color: rgba(33,158,188,0.45) !important; box-shadow: 0 0 18px rgba(33,158,188,0.25); transform: translateY(-2px); }
-        .tradeify-card { transition: border-color .18s, box-shadow .18s; }
-        /* Column mechanics for the two-up block.
-           The receipts strip and the product shot have to read as ONE pair:
-           same top edge, same height, same bottom edge. That is done here in
-           CSS rather than in the two components, so ReceiptsStrip and
-           HeroVideo stay usable elsewhere at their natural sizes.
-             1. Each column is a flex column.
-             2. The header row (trial CTA / Tradeify code card) is pinned to one
-                fixed height in BOTH columns — that is what puts the two cards
-                below them on the same line.
-             3. The two cards take flex:1, so they end on the same line too.
-                The hero's 16:9 spacer is collapsed to absolute here; without
-                that it would drive its own height and break the match. */
-        .landing-top .landing-col { display: flex; flex-direction: column; min-width: 0; }
-        .landing-top .landing-cta,
-        .landing-top .tradeify-card { height: 78px; flex: 0 0 78px; margin: 0 0 16px !important; max-width: none !important; }
-        .landing-top .receipts { flex: 1 1 auto; display: flex; flex-direction: column; margin-top: 0 !important; }
-        .landing-top .receipts-grid { flex: 1 1 auto; }
-        .landing-top .hero-frame { flex: 1 1 auto; margin-bottom: 0 !important; }
-        .landing-top .hero-frame > div:first-child { position: absolute !important; inset: 0; padding-top: 0 !important; }
-        /* Below the two-column breakpoint the card goes back to a single
-           stacked column and the feature grid drops from 3-up to 2-up. */
+        .landing-cta { transition: transform .14s, box-shadow .14s; }
+        .landing-cta:hover { transform: translateY(-1px); box-shadow: 0 10px 30px -6px rgba(33,158,188,0.6); }
+
         @media (max-width: 900px) {
-          .landing-card .landing-top { grid-template-columns: 1fr !important; gap: 0 !important; }
-          .landing-card .landing-features { grid-template-columns: 1fr 1fr !important; }
-          /* Stacked: nothing to match heights WITH, so everything goes back to
-             its natural size and the hero gets its aspect ratio back. */
-          .landing-top .landing-cta,
-          .landing-top .tradeify-card { height: auto; flex: 0 0 auto; padding: 12px 14px !important; }
-          .landing-top .receipts,
-          .landing-top .hero-frame { flex: 0 0 auto; }
-          .landing-top .hero-frame { margin-bottom: 16px !important; }
-          .landing-top .hero-frame > div:first-child { position: relative !important; padding-top: 56.25% !important; }
-          .landing-top .landing-col + .landing-col { margin-top: 16px; }
+          .landing-hero { grid-template-columns: 1fr !important; }
+          .landing-strip { grid-template-columns: 1fr 1fr !important; }
+          .landing-features { grid-template-columns: 1fr 1fr !important; }
+          .landing-receipts .receipts-grid { grid-template-columns: 1fr 1fr !important; }
         }
-        @media (max-width: 640px) {
-          .landing-card .landing-logo { max-height: 96px !important; margin: 8px 0 10px !important; }
-          .landing-card .landing-intro { font-size: 14px !important; margin: 0 0 12px !important; line-height: 1.4 !important; }
-          .landing-card .landing-cta { font-size: 15px !important; padding: 12px 14px !important; margin-bottom: 12px !important; }
-          .landing-card .landing-features { gap: 8px !important; }
-          .landing-card .landing-feature { padding: 9px !important; }
-          .landing-card .landing-feature-t { font-size: 12px !important; margin-bottom: 2px !important; }
-          .landing-card .landing-feature-d { font-size: 12px !important; line-height: 1.35 !important; }
-          .landing-card .receipts { margin-top: 14px !important; padding: 12px 10px 9px !important; }
-          .landing-card .receipts-grid { grid-template-columns: 1fr 1fr !important; gap: 7px !important; }
-          .landing-card .receipts-cell { padding: 8px 9px !important; }
-          .landing-card .hero-frame { margin-bottom: 14px !important; }
-          .landing-card .tradeify-card { padding: 10px 12px !important; gap: 10px !important; }
-          .landing-card .tradeify-copy { font-size: 11px !important; }
-        }
-        @media (max-width: 640px) and (max-height: 750px) {
-          /* Short viewports: the feature grid is the first thing to go. The
-             hero and the receipts stay — they are what actually convert. */
-          .landing-card .landing-features { display: none !important; }
-          .landing-card .landing-logo { max-height: 80px !important; }
+        @media (max-width: 620px) {
+          .landing-features { grid-template-columns: 1fr !important; }
+          .landing-strip { grid-template-columns: 1fr !important; }
+          .landing-receipts .receipts-grid { grid-template-columns: 1fr !important; }
+          .landing-cta { width: 100%; }
         }
       `}</style>
-      {/* Blurred dashboard behind glass — fixed so it stays put when card scrolls */}
-      <div style={{ position: "fixed", inset: 0, filter: "blur(7px)", transform: "scale(1.04)", zIndex: 0 }}>
-        <img
-          src="/landing-bg.png"
-          alt=""
-          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-        />
+
+      {/* Blurred dashboard behind glass — fixed so it stays put while the page
+          scrolls. Unchanged from the previous landing. */}
+      <div style={bgWrap}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/landing-bg.png" alt="" style={bgImg} />
       </div>
-      {/* Dark scrim */}
-      <div
-        style={{
-          position: "fixed",
-          inset: 0,
-          zIndex: 0,
-          background:
-            "radial-gradient(circle at 50% 40%, rgba(5,6,10,0.55) 0%, rgba(5,6,10,0.82) 70%, rgba(5,6,10,0.92) 100%)",
-        }}
-      />
+      <div style={scrim} />
 
       {/* Same dock as /pricing, /docs and /explore/* — one toolbar everywhere. */}
       <div style={{ position: "relative", zIndex: 4 }}>
         <PublicNav active="Overview" />
       </div>
 
-      {/* Centered explainer card.
-          minHeight (not height) + no inner overflow: the container grows past
-          the viewport instead of clipping, and the root above does the
-          scrolling. Centered when it fits, fully reachable when it doesn't.
-          No manual top padding — PublicNav is sticky and holds its own space. */}
-      <div
-        style={{
-          position: "relative",
-          zIndex: 2,
-          minHeight: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "20px 20px 76px",
-        }}
-      >
-        <div style={card} className="landing-card">
-          {/* Accent glow bleeding through the glass */}
+      <div style={shell}>
+
+        {/* ═══ 1 · HERO — "is this real?" ═══════════════════════════════ */}
+        <section style={card}>
           <div style={cardGlow} aria-hidden />
-
-          {/* Two columns on desktop: pitch + proof on the left, product shot on
-              the right. Stacking all of it vertically pushed the card well past
-              the viewport; side by side it lands in one screen with no scroll. */}
-          {/* Logo is the masthead now: full card width, centered, above BOTH
-              columns. It used to sit inside the left column, capped at half the
-              card width. */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/cb-edge-logo.png" alt={APP_NAME} style={logo} className="landing-logo" />
-
-          {/* The pitch runs the full card width under the masthead instead of
-              being boxed into the left column at maxWidth 520. */}
-          <p className="landing-intro" style={intro}>
-            A real-time SPX gamma-exposure &amp; options-flow dashboard for serious 0DTE and index
-            traders. See dealer positioning, flow, and key levels the moment they move.
-          </p>
-
-          <div style={topGrid} className="landing-top">
-            <div className="landing-col">
-              {/* ONE primary action, and it sits in the first screen next to the
-                  product shot. It used to live at the very bottom of the card,
-                  below six feature tiles — anyone who didn't scroll never saw
-                  the offer. The trial badge that used to sit above the pitch is
-                  gone: the button says the same thing, better. */}
-              <Link href="/pricing?from=landing&trial=1" style={{ ...ctaBtn, textDecoration: "none" }} className="landing-cta">
-                <span>Start your 2-day free trial</span>
-                <span style={{ fontSize: 12, fontWeight: 700, opacity: 0.85, letterSpacing: "0.04em" }}>
-                  No charge up front · Cancel anytime
-                </span>
-              </Link>
-
-              {/* Proof lands right under the click, so the button is backed the
-                  moment it's read. */}
-              <ReceiptsStrip />
-            </div>
-
-            {/* Show the product before asking for anything. Drop /hero-loop.mp4
-                into public/ and this becomes a live capture; until then it holds
-                the frame with the existing still. */}
-            <div className="landing-col">
-              {/* Tradeify partner code — sits directly above the product shot,
-                  in the slot the free Bzila card used to hold. Badge only: no
-                  link, nothing to click, so it cannot compete with the trial
-                  CTA opposite it. */}
-              <div style={tradeifyCard} className="tradeify-card">
-                <div style={{ minWidth: 0 }}>
-                  <div style={tradeifyLabel}>Tradeify partner code</div>
-                  <div className="tradeify-copy" style={{ color: T.muted, opacity: 0.7, fontSize: 12, lineHeight: 1.35 }}>
-                    Funding an account? Use this code for the best available offer.
-                  </div>
-                </div>
-                <span style={tradeifyCode}>BZILA</span>
-              </div>
-
-              <HeroVideo />
-            </div>
-          </div>
-
-          <div style={featureGrid} className="landing-features">
-            {FEATURES.map((f) => (
-              <Link
-                key={f.t}
-                href={`/explore/${f.slug}`}
-                style={{ ...featureCell, display: "block", textDecoration: "none", color: "inherit" }}
-                className="landing-feature"
-              >
-                <div className="landing-feature-t" style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{f.t}</div>
-                <div className="landing-feature-d" style={{ color: T.muted, fontSize: 12, lineHeight: 1.45 }}>{f.d}</div>
-                <div style={{ marginTop: 8, fontSize: 12, fontWeight: 700, color: T.cyan, letterSpacing: "0.04em" }}>
-                  Explore →
-                </div>
-              </Link>
-            ))}
-          </div>
 
           <a
             href="https://x.com/bzilatrades"
@@ -243,38 +134,156 @@ export default function LandingClient() {
             title="Follow @bzilatrades on X"
             onMouseEnter={() => setXHover(true)}
             onMouseLeave={() => setXHover(false)}
-            style={{
-              ...xFollow,
-              ...(xHover
-                ? {
-                    color: T.cyan,
-                    borderColor: "rgba(33,158,188,0.5)",
-                    boxShadow: "0 0 14px rgba(33,158,188,0.45)",
-                  }
-                : {}),
-            }}
+            style={{ ...xFollow, ...(xHover ? xFollowHover : {}) }}
           >
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
               <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
             </svg>
           </a>
 
-          {/* MONTH / YEAR promo codes + the $45/$500 price used to sit here.
-              Both are gone on purpose: discounting before the visitor knows
-              what the product is anchors the value low and reads as desperate.
-              Price belongs on /pricing, AFTER the pitch has landed. */}
+          <div style={{ ...pad, ...heroGrid }} className="landing-hero">
+            <div>
+              <div style={liveTag}>
+                <i style={liveDot} /> Live · SPX 0DTE
+              </div>
+              <h1 style={h1}>
+                Know where the market <em style={h1Em}>has</em> to turn — before it turns.
+              </h1>
+              <p style={heroSub}>
+                Dealers are forced buyers below the gamma flip and forced sellers above it.
+                {" "}{APP_NAME} computes that line off the live SPX chain every 15 seconds —{" "}
+                <b style={{ color: T.text, fontWeight: 600 }}>
+                  and shows it to you right here, free, before you ever make an account.
+                </b>
+              </p>
 
-          {/* Sign-in demoted to a quiet text link — it's for people who already
-              have an account, not a second choice competing with the trial. */}
-          <Link href="/sign-in" style={signInLink}>
-            Already a member? Sign in
-          </Link>
+              <div style={ctaRow}>
+                <Link href="/pricing?from=landing&trial=1" style={ctaBtn} className="landing-cta">
+                  <span>Start your 2-day free trial</span>
+                  <span style={ctaSub}>No charge up front · Cancel anytime</span>
+                </Link>
+                <a href="#record" style={ghostBtn}>See the record ↓</a>
+              </div>
+
+              <p style={ctaNote}>
+                The live level panel is <b style={{ color: GREEN, fontWeight: 700 }}>free forever</b> — no card, no email.
+                The trial unlocks history, rate of change, flow, alerts and every other page.
+              </p>
+            </div>
+
+            <LiveLevelPanel />
+          </div>
+
+          <div style={strip} className="landing-strip">
+            {STRIP.map((s) => (
+              <div key={s.l} style={stripCell}>
+                <div style={stripN}>{s.n}</div>
+                <div style={stripL}>{s.l}</div>
+                <div style={stripS}>{s.s}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* ═══ 2 · RECEIPTS — "is he full of it?" ═══════════════════════ */}
+        <section id="record" style={card} className="landing-receipts">
+          <div style={pad}>
+            <div style={{ textAlign: "center", marginBottom: 24 }}>
+              <span style={badge}>◆ We publish the losses too</span>
+              <h2 style={h2}>
+                Every level we call is <em style={h2Em}>graded</em>. In public.
+              </h2>
+              <p style={sectionLede}>
+                Anyone can post a screenshot of a winner. {APP_NAME} auto-scores every level it
+                prints — hit or miss, no hand-entry, no cherry-picking — and the scoreboard is
+                right here. Read it before you give us anything.
+              </p>
+            </div>
+
+            {/* Percentages (ReceiptsStrip) then the rows behind them
+                (GradedLedger). Both render nothing when their data is under the
+                honesty floor, so this section degrades to just its heading
+                rather than to a padded one. */}
+            <ReceiptsStrip />
+
+            <div style={{ marginTop: 18 }}>
+              <GradedLedger />
+            </div>
+
+            <div style={{ textAlign: "center", marginTop: 24 }}>
+              <p style={pullQuote}>
+                If a service won&apos;t show you its bad days,{" "}
+                <em style={{ fontStyle: "normal", color: GREEN }}>
+                  it has bad days it doesn&apos;t want you to see.
+                </em>
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* ═══ 3 · PRODUCT — "what is it?" ══════════════════════════════ */}
+        <section style={card}>
+          <div style={pad}>
+            <HeroVideo />
+            <div style={featureGrid} className="landing-features">
+              {FEATURES.map((f) => (
+                <Link
+                  key={f.t}
+                  href={`/explore/${f.slug}`}
+                  style={featureCell}
+                  className="landing-feature"
+                >
+                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{f.t}</div>
+                  <div style={{ color: T.muted, opacity: 0.75, fontSize: 12, lineHeight: 1.45 }}>{f.d}</div>
+                  <div style={featureGo}>Explore →</div>
+                </Link>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* ═══ 4 · CLOSE — "what do I do?" ══════════════════════════════ */}
+        <section style={card}>
+          <div style={{ ...pad, textAlign: "center" }}>
+            <h2 style={{ ...h2, maxWidth: "24ch" }}>Tomorrow&apos;s levels print at 9:30 ET.</h2>
+            <p style={{ ...sectionLede, marginBottom: 22 }}>
+              You&apos;ve seen today&apos;s flip and the graded record — without an account. Two days is
+              all it takes to see whether the rest of it belongs on your screen.
+            </p>
+            <Link href="/pricing?from=landing&trial=1" style={ctaBtn} className="landing-cta">
+              <span>Start your 2-day free trial</span>
+              <span style={ctaSub}>No charge up front · Cancel anytime</span>
+            </Link>
+            <div style={trialLine}>
+              <span>✓ <b style={trialB}>Full access</b>, every page</span>
+              <span>✓ Cancel in <b style={trialB}>one click</b></span>
+              <span>✓ Free live level <b style={trialB}>stays free</b> either way</span>
+            </div>
+            <Link href="/sign-in" style={signInLink}>Already a member? Sign in</Link>
+          </div>
+        </section>
+
+        {/* Tradeify partner code. Demoted out of the fold on purpose — see the
+            header comment. It is a third-party offer, so it keeps the orange
+            accent (the cyan family is reserved for things that click through to
+            our product) and stays a badge with nothing to click, so it cannot
+            compete with the trial CTA above it. */}
+        <div style={tradeifyCard}>
+          <div style={{ minWidth: 0 }}>
+            <div style={tradeifyLabel}>Tradeify partner code</div>
+            <div style={{ color: T.muted, opacity: 0.7, fontSize: 12, lineHeight: 1.35 }}>
+              Funding an account? Use this code for the best available offer.
+            </div>
+          </div>
+          <span style={tradeifyCode}>BZILA</span>
         </div>
       </div>
 
       {/* Legal footer — visible pre-auth so visitors (and app stores / payment
-          processors) can reach the policies before signing up. */}
-      <div style={legalFooter} className="landing-legal-footer">
+          processors) can reach the policies before signing up. Static, not
+          fixed: the page scrolls now, and a pinned bar would sit on top of the
+          close CTA for the whole scroll. */}
+      <div style={legalFooter}>
         <Link href="/terms" style={legalLink}>Terms</Link>
         <span style={legalDot}>·</span>
         <Link href="/risk-disclosure" style={legalLink}>Risk Disclosure</Link>
@@ -288,56 +297,71 @@ export default function LandingClient() {
 }
 
 /* ── styles ───────────────────────────────────────────────────────────── */
+/* Colors come from HOME_THEME. cyanA()/greenA() are the only place an rgba is
+   assembled, and both build off the theme's own hex — never paste a literal. */
 
-const legalFooter: React.CSSProperties = {
+const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+
+function hexA(hex: string, a: number): string {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+// REFRESH_GREEN is the app's "up / success" green. HOME_THEME.green is a LIGHT
+// BLUE (#8ECAE6) despite the name — see homeTheme.ts. Anything that has to READ
+// as a win on this page uses GREEN; T.green stays a decorative accent.
+const GREEN = REFRESH_GREEN;
+const cyanA = (a: number) => hexA(T.cyan, a);
+const greenA = (a: number) => hexA(GREEN, a);
+
+const root: React.CSSProperties = {
+  // Same ownership rule as /pricing: the bare LayoutShell wrapper is a flex
+  // column with overflow:hidden, so THIS root must own the scroll.
+  flex: 1,
+  minHeight: 0,
+  overflowY: "auto",
+  fontFamily: "var(--font-inter),'Inter','Helvetica Neue',Arial,sans-serif",
+  color: T.text,
+};
+
+const bgWrap: React.CSSProperties = {
+  position: "fixed", inset: 0, zIndex: 0, filter: "blur(7px)", transform: "scale(1.04)",
+};
+
+const bgImg: React.CSSProperties = {
+  width: "100%", height: "100%", objectFit: "cover", display: "block",
+};
+
+const scrim: React.CSSProperties = {
   position: "fixed",
-  bottom: 0,
-  left: 0,
-  right: 0,
-  zIndex: 3,
+  inset: 0,
+  zIndex: 0,
+  background:
+    "radial-gradient(circle at 50% 40%, rgba(5,6,10,0.55) 0%, rgba(5,6,10,0.86) 70%, rgba(5,6,10,0.95) 100%)",
+};
+
+const shell: React.CSSProperties = {
+  position: "relative",
+  zIndex: 2,
   display: "flex",
+  flexDirection: "column",
   alignItems: "center",
-  justifyContent: "center",
-  gap: 8,
-  flexWrap: "wrap",
-  padding: "12px 16px calc(12px + env(safe-area-inset-bottom, 0px))",
-  fontSize: 12,
-  color: T.muted,
-  background: "linear-gradient(180deg, transparent, rgba(5,6,10,0.7))",
-  // Fixed strip sits above the scrolling card (zIndex 2) — without this, its
-  // full-width hit box swallows clicks on whatever card content scrolls under
-  // it (e.g. the Join now button), even over the "transparent" gradient part.
-  pointerEvents: "none",
+  gap: 18,
+  padding: "6px clamp(14px, 3vw, 28px) 0",
 };
-
-const legalLink: React.CSSProperties = {
-  color: T.muted,
-  textDecoration: "none",
-  fontWeight: 600,
-  letterSpacing: "0.02em",
-  pointerEvents: "auto",
-};
-
-const legalDot: React.CSSProperties = {
-  color: "rgba(139,148,167,0.5)",
-};
-
-// trialBadge / trialDot removed — the CTA moved up to where the badge was and
-// carries the same words ("2-day free trial · no charge up front"). Two of them
-// stacked was the same promise twice in three lines.
 
 const card: React.CSSProperties = {
   position: "relative",
+  width: "min(1140px, 100%)",
   overflow: "hidden",
-  width: "min(1080px, 100%)",
-  background: "linear-gradient(180deg, rgba(13,17,25,0.78), rgba(7,9,14,0.86))",
+  background: "linear-gradient(180deg, rgba(13,17,25,0.80), rgba(7,9,14,0.88))",
   backdropFilter: "blur(22px)",
   WebkitBackdropFilter: "blur(22px)",
-  border: "1px solid rgba(33,158,188,0.14)",
+  border: `1px solid ${cyanA(0.14)}`,
   borderRadius: 20,
-  padding: "clamp(16px, 3vw, 30px)",
-  boxShadow:
-    "0 30px 80px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px rgba(33,158,188,0.04)",
+  boxShadow: `0 30px 80px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px ${cyanA(0.04)}`,
 };
 
 const cardGlow: React.CSSProperties = {
@@ -347,146 +371,251 @@ const cardGlow: React.CSSProperties = {
   transform: "translateX(-50%)",
   width: 420,
   height: 220,
-  background:
-    "radial-gradient(circle, rgba(33,158,188,0.16) 0%, rgba(18,103,131,0.08) 45%, transparent 70%)",
   pointerEvents: "none",
   filter: "blur(10px)",
+  background: `radial-gradient(circle, ${cyanA(0.16)} 0%, ${hexA(T.purple, 0.08)} 45%, transparent 70%)`,
 };
 
-// Masthead: centered across the whole card, sized off the card width rather
-// than the old half-width column, so it reads as the page's title.
-const logo: React.CSSProperties = {
+const pad: React.CSSProperties = { padding: "clamp(20px, 3vw, 34px)" };
+
+const heroGrid: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: "clamp(22px, 3vw, 42px)",
+  alignItems: "center",
+};
+
+const liveTag: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 7,
+  fontFamily: MONO,
+  fontSize: 10,
+  fontWeight: 800,
+  letterSpacing: "0.14em",
+  textTransform: "uppercase",
+  color: GREEN,
+};
+
+const liveDot: React.CSSProperties = {
+  width: 7, height: 7, borderRadius: "50%", background: GREEN,
+  boxShadow: `0 0 10px ${greenA(0.9)}`, display: "inline-block",
+};
+
+const h1: React.CSSProperties = {
+  fontSize: "clamp(30px, 3.6vw, 46px)",
+  lineHeight: 1.03,
+  letterSpacing: "-0.035em",
+  fontWeight: 900,
+  margin: "14px 0 16px",
+};
+
+const h1Em: React.CSSProperties = { fontStyle: "normal", color: T.cyan };
+
+const heroSub: React.CSSProperties = {
+  fontSize: 16, color: T.muted, opacity: 0.82, lineHeight: 1.55, margin: "0 0 24px", maxWidth: "46ch",
+};
+
+const ctaRow: React.CSSProperties = {
+  display: "flex", gap: 12, alignItems: "stretch", flexWrap: "wrap",
+};
+
+const btnBase: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  borderRadius: 12,
+  fontWeight: 800,
+  textDecoration: "none",
+  color: T.text,
+  lineHeight: 1.3,
+};
+
+const ctaBtn: React.CSSProperties = {
+  ...btnBase,
+  flexDirection: "column",
+  gap: 3,
+  textAlign: "center",
+  minWidth: 280,
+  padding: "14px 22px",
+  fontSize: 16,
+  border: `1px solid ${cyanA(0.65)}`,
+  background: `linear-gradient(180deg, ${cyanA(0.42)}, ${cyanA(0.2)})`,
+  boxShadow: `0 0 22px ${cyanA(0.28)}`,
+};
+
+const ctaSub: React.CSSProperties = {
+  fontSize: 12, fontWeight: 700, opacity: 0.85, letterSpacing: "0.04em",
+};
+
+const ghostBtn: React.CSSProperties = {
+  ...btnBase,
+  padding: "14px 22px",
+  fontSize: 16,
+  border: `1px solid ${T.border}`,
+  background: "rgba(255,255,255,0.04)",
+};
+
+const ctaNote: React.CSSProperties = {
+  fontSize: 12, color: T.muted, opacity: 0.6, lineHeight: 1.5, margin: "13px 0 0", maxWidth: "48ch",
+};
+
+const strip: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(4, 1fr)",
+  borderTop: `1px solid ${T.border}`,
+  background: "rgba(13,17,25,0.35)",
+};
+
+const stripCell: React.CSSProperties = {
+  padding: "18px 20px", borderRight: `1px solid ${T.border}`,
+};
+
+const stripN: React.CSSProperties = {
+  fontFamily: MONO, fontSize: 22, fontWeight: 800, color: T.green, lineHeight: 1, // light-blue accent
+};
+
+const stripL: React.CSSProperties = { fontSize: 12, fontWeight: 600, margin: "7px 0 3px" };
+
+const stripS: React.CSSProperties = { fontSize: 10.5, color: T.muted, opacity: 0.55, lineHeight: 1.4 };
+
+const badge: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "7px 14px",
+  borderRadius: 999,
+  border: `1px solid ${greenA(0.35)}`,
+  background: greenA(0.08),
+  fontFamily: MONO,
+  fontSize: 10,
+  fontWeight: 800,
+  letterSpacing: "0.14em",
+  textTransform: "uppercase",
+  color: GREEN,
+  marginBottom: 16,
+};
+
+const h2: React.CSSProperties = {
+  fontSize: "clamp(24px, 3vw, 34px)",
+  fontWeight: 900,
+  letterSpacing: "-0.03em",
+  lineHeight: 1.07,
+  margin: "0 auto 12px",
+  maxWidth: "21ch",
+};
+
+const h2Em: React.CSSProperties = { fontStyle: "normal", color: GREEN };
+
+const sectionLede: React.CSSProperties = {
+  fontSize: 15, color: T.muted, opacity: 0.8, maxWidth: "66ch", margin: "0 auto", lineHeight: 1.55,
+};
+
+const pullQuote: React.CSSProperties = {
+  fontSize: 16.5, maxWidth: "58ch", margin: "0 auto", lineHeight: 1.55, fontWeight: 500,
+};
+
+const featureGrid: React.CSSProperties = {
+  display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginTop: 18,
+};
+
+const featureCell: React.CSSProperties = {
   display: "block",
-  width: "min(620px, 100%)",
-  maxWidth: "100%",
-  height: "auto",
-  maxHeight: 210,
-  objectFit: "contain",
-  margin: "0 auto 20px",
-  filter: "drop-shadow(0 6px 20px rgba(33,158,188,0.25))",
+  textDecoration: "none",
+  color: "inherit",
+  background: `linear-gradient(180deg, ${cyanA(0.04)}, rgba(255,255,255,0.02))`,
+  border: `1px solid ${cyanA(0.1)}`,
+  borderRadius: 12,
+  padding: 14,
 };
 
-// Tradeify partner code — replaced the free "Bzila" card in the right column,
-// directly above the product shot. Orange accent (T.orange) so it reads as a
-// separate, third-party offer rather than another CB Edge action: the cyan
-// family on this page is reserved for things that click through to the product.
-// Not a link, so it stays quieter than the trial button opposite it.
+const featureGo: React.CSSProperties = {
+  marginTop: 8, fontSize: 12, fontWeight: 700, color: T.cyan, letterSpacing: "0.04em",
+};
+
+const trialLine: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 18,
+  flexWrap: "wrap",
+  justifyContent: "center",
+  marginTop: 16,
+  fontSize: 12,
+  color: T.muted,
+  opacity: 0.6,
+};
+
+const trialB: React.CSSProperties = { color: GREEN, fontWeight: 700 };
+
+const signInLink: React.CSSProperties = {
+  display: "block",
+  marginTop: 18,
+  fontSize: 14,
+  fontWeight: 600,
+  color: T.muted,
+  opacity: 0.8,
+  textDecoration: "none",
+};
+
 const tradeifyCard: React.CSSProperties = {
+  width: "min(1140px, 100%)",
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
   gap: 12,
-  marginBottom: 14,
-  padding: "12px 14px",
+  padding: "12px 16px",
   borderRadius: 12,
-  border: "1px solid rgba(251,133,1,0.24)",
-  background: "linear-gradient(180deg, rgba(251,133,1,0.09), rgba(255,255,255,0.02))",
+  border: `1px solid ${hexA(T.orange, 0.24)}`,
+  background: `linear-gradient(180deg, ${hexA(T.orange, 0.09)}, rgba(255,255,255,0.02))`,
 };
 
 const tradeifyLabel: React.CSSProperties = {
   fontWeight: 800,
-  fontSize: 13,
-  letterSpacing: "0.10em",
+  fontSize: 12,
+  letterSpacing: "0.1em",
   textTransform: "uppercase",
   color: T.orange,
   marginBottom: 3,
 };
 
-// The code itself — monospace and boxed so it reads as something to type.
 const tradeifyCode: React.CSSProperties = {
   flexShrink: 0,
   padding: "7px 14px",
   borderRadius: 10,
-  border: "1px solid rgba(251,133,1,0.5)",
-  background: "rgba(251,133,1,0.16)",
+  border: `1px solid ${hexA(T.orange, 0.5)}`,
+  background: hexA(T.orange, 0.16),
   color: T.orange,
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+  fontFamily: MONO,
   fontSize: 16,
   fontWeight: 800,
   letterSpacing: "0.16em",
   whiteSpace: "nowrap",
 };
 
-// Three across on purpose: six features in two rows instead of three keeps the
-// whole card inside one viewport.
-const featureGrid: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(3, 1fr)",
-  gap: 12,
-  marginTop: 18,
-};
-
-// alignItems: stretch (not "start") — both columns get the same row height,
-// which is what lets the receipts strip and the product shot line up.
-const topGrid: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
-  gap: 26,
-  alignItems: "stretch",
-  textAlign: "left",
-};
-
-// Full card width, centered under the masthead.
-const intro: React.CSSProperties = {
-  color: T.muted,
-  opacity: 0.85,
-  fontSize: 17,
-  lineHeight: 1.55,
-  textAlign: "center",
-  maxWidth: "none",
-  margin: "0 auto 22px",
-};
-
-const featureCell: React.CSSProperties = {
-  background: "linear-gradient(180deg, rgba(33,158,188,0.04), rgba(255,255,255,0.02))",
-  border: "1px solid rgba(33,158,188,0.10)",
-  borderRadius: 12,
-  padding: 14,
-};
-
-// emailInput / notifyBtn / divider / primaryBtn removed with the waitlist form
-// and the twin CTA row — see the comments in the component body.
-
-// The one primary action on the page. Full-width and visually unambiguous:
-// nothing else on the landing is styled to compete with it.
-const ctaBtn: React.CSSProperties = {
-  width: "100%",
-  maxWidth: 520,
-  margin: "0 0 16px",
-  padding: "14px 18px",
-  borderRadius: 12,
-  border: "1px solid rgba(33,158,188,0.65)",
-  background: "linear-gradient(180deg, rgba(33,158,188,0.42), rgba(33,158,188,0.20))",
-  color: T.text,
-  fontSize: 17,
-  fontWeight: 800,
-  cursor: "pointer",
+const legalFooter: React.CSSProperties = {
+  position: "relative",
+  zIndex: 2,
   display: "flex",
-  flexDirection: "column",
   alignItems: "center",
   justifyContent: "center",
-  gap: 3,
-  textAlign: "center",
-  lineHeight: 1.3,
-  boxShadow: "0 0 22px rgba(33,158,188,0.28)",
+  gap: 8,
+  flexWrap: "wrap",
+  padding: "26px 16px calc(30px + env(safe-area-inset-bottom, 0px))",
+  fontSize: 12,
+  color: T.muted,
+  opacity: 0.7,
 };
 
-// Deliberately quiet — a wayfinding link for existing members, not an option
-// being weighed against the trial.
-const signInLink: React.CSSProperties = {
-  display: "block",
-  marginTop: 10,
-  textAlign: "center",
-  fontSize: 14,
-  fontWeight: 600,
-  color: T.muted,
-  textDecoration: "none",
+const legalLink: React.CSSProperties = {
+  color: T.muted, textDecoration: "none", fontWeight: 600, letterSpacing: "0.02em",
 };
+
+const legalDot: React.CSSProperties = { color: "rgba(139,148,167,0.5)" };
 
 const xFollow: React.CSSProperties = {
   position: "absolute",
-  top: "clamp(24px, 4vw, 40px)",
-  right: "clamp(24px, 4vw, 40px)",
+  top: "clamp(20px, 3vw, 30px)",
+  right: "clamp(20px, 3vw, 30px)",
   zIndex: 3,
   display: "inline-flex",
   alignItems: "center",
@@ -500,4 +629,10 @@ const xFollow: React.CSSProperties = {
   color: T.text,
   textDecoration: "none",
   transition: "color 0.2s, border-color 0.2s, box-shadow 0.2s",
+};
+
+const xFollowHover: React.CSSProperties = {
+  color: T.cyan,
+  borderColor: cyanA(0.5),
+  boxShadow: `0 0 14px ${cyanA(0.45)}`,
 };
